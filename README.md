@@ -1,46 +1,65 @@
-# Giga LED Project
+# SlyLED
 
-Arduino Giga R1 WiFi project for onboard RGB LED effects. The sketch cycles the built-in LED through rainbow colors using [FastLED](https://github.com/FastLED/FastLED).
+Arduino Giga R1 WiFi project for onboard RGB LED effects with a WiFi web interface.
+
+- Control LED patterns from any browser on the local network
+- Module-based architecture — easy to add new patterns and hardware modules
+- SPA + JSON API — single-page app polls status every 2 s; button presses use AJAX
+- Two-thread Mbed RTOS design — LED animation runs on a dedicated thread, completely independent of WiFi I/O
+
+## Current patterns
+
+| Pattern | Description |
+|---------|-------------|
+| **Rainbow** | Smooth hue cycle through the full colour spectrum |
+| **Siren** | Alternating red and blue, 350 ms per phase |
 
 ## Hardware
 
 - **Board:** Arduino Giga R1 WiFi (`arduino:mbed_giga:giga`)
-- **LED:** Onboard RGB on pins LEDR, LEDG, LEDB (active-low)
+- **LED:** Onboard RGB — pins LEDR (86), LEDG (87), LEDB (88), active-low
 
-## Setup
+## Quick start
 
-1. **Arduino CLI**  
-   Install [arduino-cli](https://arduino.github.io/arduino-cli/) and the Giga core:
+1. Copy `main/arduino_secrets.h.example` to `main/arduino_secrets.h` and fill in your WiFi credentials
+2. Double-press the reset button to enter bootloader mode
+3. Run the build script (auto-increments the minor version on every compile):
 
-   ```bash
-   arduino-cli core update-index
-   arduino-cli core install arduino:mbed_giga
-   ```
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File build.ps1 -Port COM7
+```
 
-2. **FastLED**  
-   From this project folder (so the library installs into `./libraries`):
-
-   ```powershell
-   $env:ARDUINO_DIRECTORIES_USER = (Get-Location).Path
-   arduino-cli lib install "FastLED"
-   ```
-
-## Build & upload
-
-- **Compile only:**  
-  `.\test.ps1`
-
-- **Compile and upload to connected Giga:**  
-  `.\test.ps1 -Upload`
-
-The script uses this project as the Arduino user directory so `./libraries` (e.g. FastLED) is found. Optionally, run from this folder with `arduino-cli.yaml` in place so the same path is used.
+4. Open `http://<board-ip>/` in a browser
 
 ## Project layout
 
-- `main/main.ino` — Rainbow cycle sketch
-- `test.ps1` — Build/test script (compile ± upload)
-- `arduino-cli.yaml` — Config for project-local user directory
-- `libraries/` — Local libraries (FastLED); not in git (see Setup)
+```
+main/
+  main.ino          — Sketch (SPA server + LED animation)
+  version.h         — APP_MAJOR / APP_MINOR (build.ps1 auto-increments minor)
+  arduino_secrets.h — WiFi credentials (gitignored)
+tests/
+  test_web.py       — HTTP/JSON API test suite (75 tests)
+docs/
+  ARCHITECTURE.md   — Threading model, module design, code structure
+  API.md            — Complete HTTP API reference
+  HARDWARE.md       — Hardware setup, pin reference, known quirks
+  PATTERNS.md       — LED pattern reference and guide for adding new patterns
+build.ps1           — PowerShell build/upload script
+arduino-cli.yaml    — Sets project folder as Arduino user directory
+```
+
+## Running the tests
+
+From WSL (WSL2 cannot reach the Windows WiFi adapter directly):
+
+```powershell
+powershell.exe -Command "python -X utf8 tests/test_web.py 192.168.10.219"
+```
+
+## Documentation
+
+See the [`docs/`](docs/) folder for full technical documentation.
 
 ## License
 
