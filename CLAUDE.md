@@ -42,40 +42,66 @@ The `arduino-cli.yaml` config sets this project folder as the Arduino user direc
 
 ## Architecture
 
-The sketch (`main/main.ino`) is a **SPA + JSON API** design. The browser loads a single HTML page and communicates with the board via `XMLHttpRequest` — no page navigation on button press, no favicon race condition.
+The sketch (`main/main.ino`) uses a **two-thread Mbed RTOS architecture** with a **SPA + JSON API** web interface.
+
+### Threading model
+
+| Thread | Responsibility |
+|--------|---------------|
+| **LED thread** (`rtos::Thread ledThread`) | All `digitalWrite` / PWM calls — never touches WiFi |
+| **Main thread** (`loop()`) | All WiFi / HTTP — never touches LED pins |
+
+Shared state is `volatile bool ledRainbowOn` and `volatile bool ledSirenOn`. Bool writes are atomic on ARM Cortex-M7; `volatile` prevents the compiler from caching values in registers. Requires `#include <mbed.h>`.
+
+This eliminates the two classic problems of single-threaded LED+WiFi sketches:
+- **No rainbow blanks** — network I/O no longer interrupts the PWM loop
+- **No siren phase stalls** — `handleClient()` blocking never affects phase timing
 
 ### HTTP routes
 
 | Method | Path | Response |
 |--------|------|----------|
 | GET | `/` | Full SPA (HTML + CSS + JS) |
-| GET | `/status` | `{"onboard_led":{"active":true/false}}` |
-| POST | `/led/on` | `{"ok":true}` — enable rainbow |
-| POST | `/led/off` | `{"ok":true}` — disable rainbow |
+| GET | `/status` | `{"onboard_led":{"active":bool,"feature":"rainbow\|siren\|none"}}` |
+| POST | `/led/on` | `{"ok":true}` — enable Rainbow |
+| POST | `/led/siren/on` | `{"ok":true}` — enable Siren (disables Rainbow) |
+| POST | `/led/off` | `{"ok":true}` — disable all |
 | GET | `/log` | Event log HTML page |
 | GET | `/favicon.ico` | 404 (fast, keeps connection slot free) |
 
 ### SPA UI structure
 
 - **Header (`#hdr`)** — app name + `#hdr-status` line; auto-updates via `/status` poll every 2 s
-- **Module cards** — one card per module (currently: Onboard LED / Rainbow). Each card has an `Enable`/`Disable` button that calls `setLed(1/0)` via XHR; response updates badge + header immediately
+- **Onboard LED card** — one row per pattern (Rainbow, Siren); each row has a badge (`id='badge-rainbow'` / `id='badge-siren'`) and an Enable button; single Disable button turns off all patterns
 - **Footer** — version string from `APP_MAJOR`/`APP_MINOR`
-- **View Log** anchor — `<a href='/log'>` (plain GET; no state side-effect)
+- **View Log** anchor — `<a href='/log'>` (plain GET)
 
 ### Key functions
 
-1. `hueToRGB(hue, r, g, b)` — maps hue 0–255 to RGB using 6 linear segments
-2. `pwmCycle(r, g, b)` — one 256-step software PWM cycle (~2 ms); drives active-low pins
-3. `setRGBFor(r, g, b)` — repeats `pwmCycle` for `DISPLAY_MS` ms to hold a color visibly
-4. `serveClient(client, waitMs)` — reads first request line, routes to correct handler
-5. `handleClient()` — accepts client with 500 ms patience, then drains any additional parallel connections (favicon, XHR) in a tight loop
-6. `loop()` — steps hue across 0–255, calling `setRGBFor` + `handleClient` each step
+| Function | Purpose |
+|----------|---------|
+| `ledTask()` | LED thread body — runs Rainbow, Siren, or off state; owns all pin writes |
+| `hueToRGB(hue, r, g, b)` | Maps hue 0–255 to RGB using 6 linear segments |
+| `pwmCycle(r, g, b)` | One 256-step software PWM cycle (~2 ms); drives active-low pins |
+| `setRGBFor(r, g, b)` | Repeats `pwmCycle` for `DISPLAY_MS` ms to hold a colour visibly |
+| `serveClient(client, waitMs)` | Reads first request line, routes to correct handler; never writes LED pins |
+| `handleClient()` | Accepts client (500 ms patience), drains parallel connections (favicon, XHR) |
+| `loop()` | Main thread: `printStatus()` + `handleClient()` + `delay(10)` |
+
+### Onboard LED patterns
+
+| Pattern | Route to enable | Behaviour |
+|---------|----------------|-----------|
+| **Rainbow** | `POST /led/on` | Smooth hue cycle via software PWM |
+| **Siren** | `POST /led/siren/on` | Alternating red / blue, 350 ms per phase |
+
+Enabling one pattern automatically disables the other (`ledRainbowOn` and `ledSirenOn` are mutually exclusive — enforced in `serveClient`).
 
 ### Module state
 
-`bool ledRainbowOn` — global controlling whether the rainbow pattern runs. New modules add their own state variables and a matching card in `sendMain()`.
+`volatile bool ledRainbowOn`, `volatile bool ledSirenOn` — LED thread reads these on every iteration; main thread writes them in `serveClient()`. Adding a new pattern means: add a `volatile bool`, add a route in `serveClient()`, add a pattern row in `sendMain()`, add a branch in `ledTask()`.
 
-**Event log:** Circular buffer (50 entries) stores timestamp, on/off state, source (Boot/Web), and client IP. NTP-synced timestamps via `pool.ntp.org`.
+**Event log:** Circular buffer (50 entries) stores timestamp, `LedFeature` (FEAT_NONE / FEAT_RAINBOW / FEAT_SIREN), source (Boot/Web), and client IP. NTP-synced timestamps via `pool.ntp.org`.
 
 **Test suite:** `python tests/test_web.py [host]` — run before every upload. From WSL use `powershell.exe -Command "python -X utf8 tests/test_web.py 192.168.10.219"`.
 
@@ -84,13 +110,12 @@ The sketch (`main/main.ino`) is a **SPA + JSON API** design. The browser loads a
 - Remote: `https://github.com/SlyWombat/Giga-LED-Project`
 - After a successful upload, offer to sync: `git add . && git commit -m "<message>" && git push origin main`
 - `arduino_secrets.h` is gitignored — never commit credentials or WiFi passwords
-- Commit messages should follow the pattern: `feat: <short description of LED behavior change>`
+- Commit messages follow: `feat: <short description>`
 
 
 # Arduino Web App Performance Rules
 
 ## Core Architectural Principles
-- **Offload Static Assets**: Do not embed large HTML/CSS/JS in PROGMEM. Host assets on a CDN or SD card. 
 - **Data-Only API**: Use the Arduino as a JSON/XML API endpoint. The web UI should be a Single Page Application (SPA) that fetches only raw data.
 - **Minimal TCP Overhead**: Consolidate `client.print()` calls. Buffer responses to reduce the number of packets sent.
 
@@ -99,17 +124,16 @@ The sketch (`main/main.ino`) is a **SPA + JSON API** design. The browser loads a
 - **SRAM Optimization**: Force use of the `F()` macro for all literal strings (e.g., `client.print(F("HTTP/1.1 200 OK"));`).
 - **Smallest Data Types**: Always use `uint8_t` or `int8_t` for values under 255. Use `const` or `constexpr` for all fixed values.
 - **Integer Math Only**: Avoid `float` or `double`. Use fixed-point arithmetic or integer scaling for sensor data.
-- **Direct Register I/O**: For high-frequency operations, prefer direct port manipulation over `digitalWrite()`.
 
 ## AI Workflow Instructions
 - **Check Constraints First**: Before generating code, analyze SRAM and Flash impact.
-- **Manual Verification**: Include a step to verify memory usage with `millis()` or free-RAM checking functions.
 - **Refactor Cycle**: If code exceeds 500 lines, break it into modular, specialized files.
 
 ## Known Arduino Giga / Mbed GCC quirks
 - **Auto-prototype generator** fails on functions whose parameters use `enum` types — use `uint8_t` in the signature and cast internally (e.g. `e.source = (LogSource)src`).
 - **`static` functions** can conflict with auto-generated prototypes — omit `static` from sketch-level functions.
 - **`Serial.print()` blocks forever** on Mbed OS if no USB CDC terminal is connected — guard every print with `if (Serial)`.
-- **`WiFi.setHostname()`** must be called *before* `WiFi.begin()` so the hostname appears in DHCP DISCOVER/REQUEST packets (option 12). Calling it after `begin()` means the first DHCP handshake goes out without the hostname.
-- **Browser prefetch / favicon race**: Chrome/Edge open a second TCP connection for `favicon.ico` when loading any page. With a single-slot WiFiServer this consumed the connection slot before button responses could be served. Fixed by the **SPA+AJAX architecture** — buttons use `XMLHttpRequest`, no page navigation, no favicon request on button press.
-
+- **`WiFi.setHostname()`** must be called *before* `WiFi.begin()` so the hostname appears in DHCP DISCOVER/REQUEST packets (option 12).
+- **Browser prefetch / favicon race**: Chrome/Edge open a second TCP connection for `favicon.ico` when loading any page. Fixed by the **SPA+AJAX architecture** — buttons use `XMLHttpRequest`, no page navigation, no favicon request on button press.
+- **`rtos::Thread` requires `#include <mbed.h>`** — not pulled in automatically by Arduino.h on the Giga.
+- **`volatile bool` for cross-thread state** — bool writes are atomic on Cortex-M7; `volatile` prevents register caching. Sufficient for simple flag sharing between two threads without a mutex.
