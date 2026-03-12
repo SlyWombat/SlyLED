@@ -1,0 +1,56 @@
+# Arduino / C++ build & cache
+build/
+bin/
+.arduinoIDE/
+*.elf
+*.hex
+*.eep
+*.map
+*.lst
+*.lss
+*.sym
+arduino-core-cache/
+arduino-sketch-*/
+
+# Compiled objects & libs
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.exe
+*.out
+*.app
+
+# CMake
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+install_manifest.txt
+
+# IDE & editors
+.idea/
+*.iml
+.vscode/
+*.vcxproj
+*.vcxproj.filters
+.DS_Store
+.directory
+
+# Sensitive / secrets (never commit)
+secrets.h
+.env
+*.local
+
+# Debug / coverage
+*.gcda
+*.gcno
+*.gcov
+
+# Generated
+Makefile
+Makefile.*
+moc_*.cpp
+ui_*.h
