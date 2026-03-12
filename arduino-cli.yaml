@@ -1,0 +1,6 @@
+# Use this project folder for Arduino user directory (libraries live in ./libraries)
+board_manager:
+  additional_urls: []
+
+directories:
+  user: .

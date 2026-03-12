@@ -39,6 +39,9 @@ install_manifest.txt
 .DS_Store
 .directory
 
+# Project-installed libraries (install with: arduino-cli lib install FastLED, with ARDUINO_DIRECTORIES_USER set to this project)
+libraries/
+
 # Sensitive / secrets (never commit)
 secrets.h
 .env
