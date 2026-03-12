@@ -91,31 +91,47 @@ def log_row_count(body):
     return body.count("<tr><td>")
 
 
+def led_feature(st):
+    """Extract onboard_led.feature from a /status dict."""
+    if st is None:
+        return None
+    return st.get("onboard_led", {}).get("feature")
+
+
+def led_active(st):
+    """Extract onboard_led.active from a /status dict."""
+    if st is None:
+        return None
+    return st.get("onboard_led", {}).get("active")
+
+
 # ── Connectivity ──────────────────────────────────────────────────────────────
 
 section(f"Connectivity  ({HOST})")
 code, body = get("/")
 if not check("Board reachable", code == 200, f"HTTP {code}: {body[:80]}"):
-    print(f"\n  {RED}Cannot reach board — aborting.{RESET}\n")
+    print(f"\n  {RED}Cannot reach board - aborting.{RESET}\n")
     sys.exit(1)
 
 # ── SPA main page ─────────────────────────────────────────────────────────────
 
 section("SPA main page  GET /")
-check("HTTP 200",                 code == 200,              f"got {code}")
-check("Title contains SlyLED",    "SlyLED"      in body)
-check("Has header element",       "id='hdr'"    in body or 'id="hdr"' in body)
-check("Has status element",       "hdr-status"  in body)
-check("Has badge element",        "id='badge'"  in body or 'id="badge"' in body)
-check("Has Enable button",        "Enable"      in body)
-check("Has Disable button",       "Disable"     in body)
-check("Has /led/on in JS",        "/led/on"     in body)
-check("Has /led/off in JS",       "/led/off"    in body)
-check("Has /status poll in JS",   "/status"     in body)
-check("Has View Log link",        "href='/log'" in body or 'href="/log"' in body)
-check("Has version string",       "v1." in body or "v2." in body)
-check("No old form /on action",   "action='/on'"  not in body and 'action="/on"'  not in body)
-check("No old form /off action",  "action='/off'" not in body and 'action="/off"' not in body)
+check("HTTP 200",                    code == 200,              f"got {code}")
+check("Title contains SlyLED",       "SlyLED"       in body)
+check("Has header element",          "id='hdr'"     in body or 'id="hdr"'     in body)
+check("Has status element",          "hdr-status"   in body)
+check("Has badge-rainbow element",   "id='badge-rainbow'" in body or 'id="badge-rainbow"' in body)
+check("Has badge-siren element",     "id='badge-siren'"   in body or 'id="badge-siren"'   in body)
+check("Has Enable button",           "Enable"       in body)
+check("Has Disable button",          "Disable"      in body)
+check("Has /led/on in JS",           "/led/on"      in body)
+check("Has /led/off in JS",          "/led/off"     in body)
+check("Has /led/siren/on in JS",     "/led/siren/on" in body)
+check("Has /status poll in JS",      "/status"      in body)
+check("Has View Log link",           "href='/log'"  in body or 'href="/log"'  in body)
+check("Has version string",          "v1." in body or "v2." in body)
+check("No old form /on action",      "action='/on'"  not in body and 'action="/on"'  not in body)
+check("No old form /off action",     "action='/off'" not in body and 'action="/off"' not in body)
 
 # ── Cache-Control headers ─────────────────────────────────────────────────────
 
@@ -136,11 +152,15 @@ except Exception as e:
 
 section("Status endpoint  GET /status")
 code, data = get_json("/status")
-check("HTTP 200",                  code == 200,                    f"got {code}")
-check("Valid JSON",                data is not None,               "failed to parse JSON")
-check("Has onboard_led key",       data is not None and "onboard_led" in data)
+check("HTTP 200",                   code == 200,                     f"got {code}")
+check("Valid JSON",                 data is not None,                "failed to parse JSON")
+check("Has onboard_led key",        data is not None and "onboard_led" in data)
 check("onboard_led.active is bool",
-      data is not None and isinstance(data.get("onboard_led", {}).get("active"), bool))
+      data is not None and isinstance(led_active(data), bool))
+check("onboard_led.feature is str",
+      data is not None and isinstance(led_feature(data), str))
+check("feature is rainbow/siren/none",
+      led_feature(data) in ("rainbow", "siren", "none"))
 
 # ── Enable rainbow  POST /led/on ──────────────────────────────────────────────
 
@@ -150,36 +170,68 @@ check("HTTP 200",         code == 200,                               f"got {code
 check("Returns ok:true",  data is not None and data.get("ok") is True)
 time.sleep(0.4)
 _, st = get_json("/status")
-check("/status shows active:true",
-      st is not None and st.get("onboard_led", {}).get("active") is True,
-      f"status: {st}")
+check("/status feature=rainbow",
+      led_feature(st) == "rainbow",                                  f"status: {st}")
+check("/status active=true",
+      led_active(st) is True,                                        f"status: {st}")
 
-# ── Disable rainbow  POST /led/off ────────────────────────────────────────────
+# ── Disable  POST /led/off ────────────────────────────────────────────────────
 
-section("Disable rainbow  POST /led/off")
+section("Disable  POST /led/off")
 code, data = post_json("/led/off")
-check("HTTP 200",          code == 200,                               f"got {code}")
+check("HTTP 200",          code == 200,                              f"got {code}")
 check("Returns ok:true",   data is not None and data.get("ok") is True)
 time.sleep(0.4)
 _, st = get_json("/status")
-check("/status shows active:false",
-      st is not None and st.get("onboard_led", {}).get("active") is False,
-      f"status: {st}")
+check("/status feature=none",
+      led_feature(st) == "none",                                     f"status: {st}")
+check("/status active=false",
+      led_active(st) is False,                                       f"status: {st}")
+
+# ── Enable siren  POST /led/siren/on ─────────────────────────────────────────
+
+section("Enable siren  POST /led/siren/on")
+code, data = post_json("/led/siren/on")
+check("HTTP 200",         code == 200,                               f"got {code}")
+check("Returns ok:true",  data is not None and data.get("ok") is True)
+time.sleep(0.4)
+_, st = get_json("/status")
+check("/status feature=siren",
+      led_feature(st) == "siren",                                    f"status: {st}")
+check("/status active=true after siren",
+      led_active(st) is True,                                        f"status: {st}")
+
+# ── Mutual exclusion — siren disables rainbow ─────────────────────────────────
+
+section("Mutual exclusion")
+post_json("/led/on"); time.sleep(0.3)
+_, st = get_json("/status")
+check("Rainbow active before siren",  led_feature(st) == "rainbow", f"status: {st}")
+
+post_json("/led/siren/on"); time.sleep(0.3)
+_, st = get_json("/status")
+check("Siren replaces rainbow",       led_feature(st) == "siren",   f"status: {st}")
+check("Only one active (siren on)",   led_active(st) is True,       f"status: {st}")
+
+post_json("/led/on"); time.sleep(0.3)
+_, st = get_json("/status")
+check("Rainbow replaces siren",       led_feature(st) == "rainbow", f"status: {st}")
+check("Only one active (rainbow on)", led_active(st) is True,       f"status: {st}")
 
 # ── State toggle sequence ─────────────────────────────────────────────────────
 
 section("State toggle sequence")
 post_json("/led/off"); time.sleep(0.3)
 _, st = get_json("/status")
-check("After /led/off: active=false", st is not None and st.get("onboard_led", {}).get("active") is False)
+check("After /led/off: active=false",    led_active(st) is False)
 
 post_json("/led/on");  time.sleep(0.3)
 _, st = get_json("/status")
-check("After /led/on:  active=true",  st is not None and st.get("onboard_led", {}).get("active") is True)
+check("After /led/on: feature=rainbow",  led_feature(st) == "rainbow")
 
 post_json("/led/off"); time.sleep(0.3)
 _, st = get_json("/status")
-check("After /led/off again: active=false", st is not None and st.get("onboard_led", {}).get("active") is False)
+check("After /led/off again: active=false", led_active(st) is False)
 
 # Re-enable for subsequent tests
 post_json("/led/on"); time.sleep(0.3)
@@ -194,45 +246,57 @@ for _ in range(5):
 check("5x POST /led/on all return ok:true", all(results), f"results: {results}")
 time.sleep(0.3)
 _, st = get_json("/status")
-check("Status active after rapid-fire", st is not None and st.get("onboard_led", {}).get("active") is True)
+check("Status active after rapid-fire", led_active(st) is True)
 
 # ── Log page — structure ──────────────────────────────────────────────────────
 
 section("Log page  GET /log")
 code, body = get("/log")
-check("HTTP 200",               code == 200,   f"got {code}")
-check("Contains 'Event Log'",   "Event Log" in body)
-check("Has <table>",            "<table>"   in body)
-check("Has Source column",      ">Source<"  in body)
-check("Has IP column",          ">IP<"      in body)
-check("Back is anchor href=/",  "href='/'"  in body or 'href="/"' in body)
+check("HTTP 200",               code == 200,    f"got {code}")
+check("Contains 'Event Log'",   "Event Log"  in body)
+check("Has <table>",            "<table>"    in body)
+check("Has Feature column",     ">Feature<"  in body)
+check("Has Source column",      ">Source<"   in body)
+check("Has IP column",          ">IP<"       in body)
+check("Back is anchor href=/",  "href='/'"   in body or 'href="/"'  in body)
 check("No POST form on log",    "action='/'" not in body and 'action="/"' not in body)
 
 # ── Log page — entries ────────────────────────────────────────────────────────
 
-section("Log page — entries")
+section("Log page - entries")
 post("/led/off"); time.sleep(0.3)
 post("/led/on");  time.sleep(0.3)
 post("/led/off"); time.sleep(0.3)
 post("/led/on");  time.sleep(0.3)
 
 code, body = get("/log")
-check("HTTP 200",             code == 200, f"got {code}")
-check("Has ON  entry",        ">ON<"  in body)
-check("Has OFF entry",        ">OFF<" in body)
+check("HTTP 200",             code == 200,  f"got {code}")
+check("Has ON  entry",        ">ON<"   in body)
+check("Has OFF entry",        ">OFF<"  in body)
 row_count = log_row_count(body)
-check("Has 4+ entries",       row_count >= 4, f"found {row_count} data rows")
+check("Has 4+ entries",       row_count >= 4,  f"found {row_count} data rows")
 check("Has source labels",    ">Web<" in body or ">Boot<" in body)
 check("Has IP address",       any(f"{i}." in body for i in range(1, 255)))
+check("Has feature label",    ">Rainbow<" in body or ">Siren<" in body)
 
 first_on  = body.find(">ON<")
 first_off = body.find(">OFF<")
 check("Newest entry is ON (last action was /led/on)",
       first_on < first_off if first_on >= 0 and first_off >= 0 else False)
 
+# ── Siren log entries ─────────────────────────────────────────────────────────
+
+section("Siren log entries")
+post("/led/siren/on"); time.sleep(0.3)
+post("/led/off");      time.sleep(0.3)
+code, body = get("/log")
+check("HTTP 200",                 code == 200,        f"got {code}")
+check("Has Siren feature label",  ">Siren<" in body)
+check("Has Rainbow feature label",">Rainbow<" in body)
+
 # ── Log entry count — multiple presses ───────────────────────────────────────
 
-section("Log entry counting — multiple presses")
+section("Log entry counting - multiple presses")
 _, before = get("/log")
 count_before = log_row_count(before)
 
@@ -250,7 +314,7 @@ check("3x off + 2x on = 5 new log entries", delta == 5,
 
 # ── Log consistency — repeated fetches ───────────────────────────────────────
 
-section("Log consistency — repeated fetches")
+section("Log consistency - repeated fetches")
 all_logs = True
 for i in range(5):
     _, lb = get("/log")

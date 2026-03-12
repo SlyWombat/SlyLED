@@ -1,20 +1,30 @@
 /*
  * SlyLED — Arduino Giga R1 WiFi
  * Module-based LED controller with WiFi web interface (SPA + JSON API).
- * No analogWrite (crashes Mbed on LED pins). Active-low: LOW = on.
+ *
+ * Two-thread architecture (Mbed RTOS on M7):
+ *   LED thread  — pure animation, no WiFi calls, no blanks or stalls
+ *   Main thread — pure WiFi / HTTP, no LED pin writes
+ *
+ * Shared state: volatile bool ledRainbowOn / ledSirenOn
+ *   Written by main thread (serveClient), read by LED thread.
+ *   Bool assignments are atomic on ARM Cortex-M7; volatile prevents
+ *   compiler optimisation from caching the value in a register.
  *
  * Routes:
- *   GET  /           — SPA main page (HTML + CSS + JS)
- *   GET  /status     — JSON module status (polled every 2 s by the SPA)
- *   POST /led/on     — enable Onboard LED rainbow, returns {"ok":true}
- *   POST /led/off    — disable Onboard LED rainbow, returns {"ok":true}
- *   GET  /log        — event log page (HTML)
+ *   GET  /              — SPA main page (HTML + CSS + JS)
+ *   GET  /status        — JSON module status (polled every 2 s by the SPA)
+ *   POST /led/on        — enable rainbow
+ *   POST /led/siren/on  — enable siren (disables rainbow)
+ *   POST /led/off       — disable all onboard LED features
+ *   GET  /log           — event log page (HTML)
  *
  * NOTE: All Serial prints are guarded with `if (Serial)` — on Mbed OS,
  * writing to USB CDC without a connected terminal blocks indefinitely.
  */
 
 #include "version.h"
+#include <mbed.h>
 #include <WiFi.h>
 #include <WiFiUDP.h>
 #include <time.h>
@@ -22,23 +32,25 @@
 
 // ── Pins & LED constants ──────────────────────────────────────────────────────
 
-constexpr int     PIN_LEDR     = LEDR;
-constexpr int     PIN_LEDG     = LEDG;
-constexpr int     PIN_LEDB     = LEDB;
-constexpr uint8_t HUE_STEP     = 2;
-constexpr int     DISPLAY_MS   = 35;
-constexpr int     PWM_CYCLE_US = 2048;
-constexpr int     PWM_STEPS    = 256;
-constexpr int     STEP_US      = PWM_CYCLE_US / PWM_STEPS;
+constexpr int     PIN_LEDR      = LEDR;
+constexpr int     PIN_LEDG      = LEDG;
+constexpr int     PIN_LEDB      = LEDB;
+constexpr uint8_t HUE_STEP      = 2;
+constexpr int     DISPLAY_MS    = 35;
+constexpr int     PWM_CYCLE_US  = 2048;
+constexpr int     PWM_STEPS     = 256;
+constexpr int     STEP_US       = PWM_CYCLE_US / PWM_STEPS;
+constexpr int     SIREN_HALF_MS = 350;   // ms per colour in siren flash
 
 // ── WiFi & server ─────────────────────────────────────────────────────────────
 
 constexpr char HOSTNAME[] = "slyled";
 WiFiServer server(80);
 
-// ── Module state ──────────────────────────────────────────────────────────────
+// ── Shared module state (volatile — written by WiFi thread, read by LED thread) ──
 
-bool ledRainbowOn = true;  // Onboard LED — rainbow pattern active
+volatile bool ledRainbowOn = true;
+volatile bool ledSirenOn   = false;
 
 // ── NTP ───────────────────────────────────────────────────────────────────────
 
@@ -85,12 +97,13 @@ void formatTime(unsigned long epoch, char* buf, uint8_t len) {
 
 // ── Event log ─────────────────────────────────────────────────────────────────
 
-enum LogSource : uint8_t { SRC_WEB = 0, SRC_BOOT = 1 };
+enum LogSource  : uint8_t { SRC_WEB = 0, SRC_BOOT = 1 };
+enum LedFeature : uint8_t { FEAT_NONE = 0, FEAT_RAINBOW = 1, FEAT_SIREN = 2 };
 
 struct LogEntry {
   unsigned long epoch;
   uint8_t       ip[4];
-  bool          on;
+  uint8_t       feature;   // LedFeature — what was turned on (FEAT_NONE = off)
   LogSource     source;
 };
 
@@ -99,10 +112,12 @@ LogEntry logBuf[MAX_LOG];
 uint8_t  logCount = 0;
 uint8_t  logNext  = 0;
 
-void addLog(bool state, uint8_t src, uint8_t ip0, uint8_t ip1, uint8_t ip2, uint8_t ip3) {
+// src and feat are uint8_t (not enum) to avoid Arduino auto-prototype breakage
+void addLog(uint8_t feat, uint8_t src, uint8_t ip0, uint8_t ip1, uint8_t ip2, uint8_t ip3) {
   LogEntry& e = logBuf[logNext % MAX_LOG];
-  e.epoch = currentEpoch();
-  e.on = state; e.source = (LogSource)src;
+  e.epoch   = currentEpoch();
+  e.feature = feat;
+  e.source  = (LogSource)src;
   e.ip[0] = ip0; e.ip[1] = ip1; e.ip[2] = ip2; e.ip[3] = ip3;
   logNext++;
   if (logCount < MAX_LOG) logCount++;
@@ -134,9 +149,9 @@ void sendStatus(WiFiClient& c) {
             "Connection: close\r\n"
             "Cache-Control: no-cache, no-store\r\n"
             "\r\n"));
-  c.print(ledRainbowOn
-    ? F("{\"onboard_led\":{\"active\":true}}")
-    : F("{\"onboard_led\":{\"active\":false}}"));
+  const char* feat   = ledRainbowOn ? "rainbow" : (ledSirenOn ? "siren" : "none");
+  const char* active = (ledRainbowOn || ledSirenOn) ? "true" : "false";
+  sendBuf(c, "{\"onboard_led\":{\"active\":%s,\"feature\":\"%s\"}}", active, feat);
   c.flush();
 }
 
@@ -161,8 +176,9 @@ void sendMain(WiFiClient& c) {
             ".card{background:#1e1e1e;border:1px solid #333;border-radius:10px;"
             "padding:1.2em 1.5em;margin-bottom:1em;max-width:480px}"
             ".card-title{font-size:1.1em;font-weight:bold;color:#ccc;margin-bottom:.9em}"
-            ".pattern-row{display:flex;align-items:center;justify-content:space-between;gap:.5em}"
-            ".pattern-name{font-weight:bold;font-size:1em}"
+            ".pattern-row{display:flex;align-items:center;justify-content:space-between;"
+            "gap:.5em;margin-bottom:.5em}"
+            ".pattern-name{font-weight:bold;font-size:1em;min-width:80px}"
             ".badge{display:inline-block;padding:.25em .8em;border-radius:10px;"
             "font-size:.85em;font-weight:bold;margin-right:.3em}"
             ".bon{background:#1a4d1a;color:#4c4}"
@@ -174,10 +190,7 @@ void sendMain(WiFiClient& c) {
             ".btn-on{background:#2a2;color:#fff}.btn-off{background:#a22;color:#fff}"
             ".btn-nav{background:#446;color:#fff;text-decoration:none;padding:.6em 1.6em}"
             ".footer{padding:1em 2em;font-size:.72em;color:#444}"));
-  c.print(F("table{margin:1.5em auto;border-collapse:collapse}"
-            "th,td{padding:.5em 1.2em;border:1px solid #444;text-align:left}"
-            "th{background:#222}tr:nth-child(even){background:#1a1a1a}"
-            "</style></head><body>"
+  c.print(F("</style></head><body>"
             "<div id='hdr'>"
             "<h1>SlyLED</h1>"
             "<div id='hdr-status'>Connecting...</div>"
@@ -188,36 +201,50 @@ void sendMain(WiFiClient& c) {
             "<div class='pattern-row'>"
             "<span class='pattern-name'>Rainbow</span>"
             "<span>"
-            "<span class='badge boff' id='badge'>OFF</span>"
-            "<button class='btn btn-on'  onclick='setLed(1)'>Enable</button>"
-            "<button class='btn btn-off' onclick='setLed(0)'>Disable</button>"
-            "</span></div></div></div>"
+            "<span class='badge boff' id='badge-rainbow'>OFF</span>"
+            "<button class='btn btn-on' onclick='setFeature(\"rainbow\")'>Enable</button>"
+            "</span></div>"
+            "<div class='pattern-row'>"
+            "<span class='pattern-name'>Siren</span>"
+            "<span>"
+            "<span class='badge boff' id='badge-siren'>OFF</span>"
+            "<button class='btn btn-on' onclick='setFeature(\"siren\")'>Enable</button>"
+            "</span></div>"
+            "<div class='pattern-row' style='justify-content:flex-end;margin-top:.3em'>"
+            "<button class='btn btn-off' onclick='setFeature(\"off\")'>Disable</button>"
+            "</div></div></div>"
             "<div style='padding:0 1.5em'>"
             "<a class='btn btn-nav' href='/log'>View Log</a>"
             "</div>"));
   sendBuf(c, "<div class='footer'>v%d.%d</div>", APP_MAJOR, APP_MINOR);
   c.print(F("<script>"
-            "function applyState(a){"
-            "var b=document.getElementById('badge');"
-            "b.textContent=a?'ON':'OFF';"
-            "b.className='badge '+(a?'bon':'boff');"
+            "function applyState(d){"
+            "var f=d.onboard_led.feature;"
+            "var br=document.getElementById('badge-rainbow');"
+            "br.textContent=f==='rainbow'?'ON':'OFF';"
+            "br.className='badge '+(f==='rainbow'?'bon':'boff');"
+            "var bs=document.getElementById('badge-siren');"
+            "bs.textContent=f==='siren'?'ON':'OFF';"
+            "bs.className='badge '+(f==='siren'?'bon':'boff');"
             "var h=document.getElementById('hdr-status');"
-            "h.textContent='Onboard LED - Rainbow '+(a?'ON':'OFF');"
-            "h.style.color=a?'#4c4':'#c44';"
+            "if(f==='rainbow'){h.textContent='Onboard LED - Rainbow ON';h.style.color='#4c4';}"
+            "else if(f==='siren'){h.textContent='Onboard LED - Siren ON';h.style.color='#48f';}"
+            "else{h.textContent='Onboard LED - OFF';h.style.color='#c44';}"
             "}"
             "function poll(){"
             "var x=new XMLHttpRequest();"
             "x.open('GET','/status',true);"
             "x.onload=function(){"
-            "if(x.status===200){try{applyState(JSON.parse(x.responseText).onboard_led.active);}catch(e){}}"
+            "if(x.status===200){try{applyState(JSON.parse(x.responseText));}catch(e){}}"
             "};"
             "x.send();"
             "}"
-            "function setLed(on){"
+            "function setFeature(f){"
+            "var path=f==='rainbow'?'/led/on':(f==='siren'?'/led/siren/on':'/led/off');"
             "var x=new XMLHttpRequest();"
-            "x.open('POST',on?'/led/on':'/led/off',true);"
+            "x.open('POST',path,true);"
             "x.onload=function(){"
-            "if(x.status===200){try{if(JSON.parse(x.responseText).ok)applyState(on===1);}catch(e){}}"
+            "if(x.status===200){try{if(JSON.parse(x.responseText).ok)poll();}catch(e){}}"
             "};"
             "x.send();"
             "}"
@@ -252,14 +279,23 @@ void sendLog(WiFiClient& c) {
   if (logCount == 0) {
     c.print(F("<p style='color:#888'>No events recorded yet.</p>"));
   } else {
-    c.print(F("<table><tr><th>#</th><th>Timestamp</th><th>State</th><th>Source</th><th>IP</th></tr>"));
+    c.print(F("<table><tr><th>#</th><th>Timestamp</th><th>Feature</th>"
+              "<th>State</th><th>Source</th><th>IP</th></tr>"));
     uint8_t startIdx = (logNext - logCount + MAX_LOG * 2) % MAX_LOG;
     for (int8_t i = logCount - 1; i >= 0; i--) {
       uint8_t idx = (startIdx + i) % MAX_LOG;
       char ts[40];
       formatTime(logBuf[idx].epoch, ts, sizeof(ts));
-      const char* color  = logBuf[idx].on ? "#4c4" : "#c44";
-      const char* label  = logBuf[idx].on ? "ON"   : "OFF";
+      const char* featLabel;
+      const char* color;
+      const char* label;
+      if (logBuf[idx].feature == FEAT_RAINBOW) {
+        featLabel = "Rainbow"; color = "#4c4"; label = "ON";
+      } else if (logBuf[idx].feature == FEAT_SIREN) {
+        featLabel = "Siren";   color = "#48f"; label = "ON";
+      } else {
+        featLabel = "-";       color = "#c44"; label = "OFF";
+      }
       const char* source = logBuf[idx].source == SRC_BOOT ? "Boot" : "Web";
       char ipStr[16];
       if (logBuf[idx].source == SRC_BOOT) {
@@ -269,10 +305,10 @@ void sendLog(WiFiClient& c) {
                  logBuf[idx].ip[0], logBuf[idx].ip[1],
                  logBuf[idx].ip[2], logBuf[idx].ip[3]);
       }
-      sendBuf(c, "<tr><td>%d</td><td>%s</td>"
+      sendBuf(c, "<tr><td>%d</td><td>%s</td><td>%s</td>"
                  "<td style='color:%s'><strong>%s</strong></td>"
                  "<td>%s</td><td>%s</td></tr>",
-              logCount - i, ts, color, label, source, ipStr);
+              logCount - i, ts, featLabel, color, label, source, ipStr);
     }
     c.print(F("</table>"));
     c.flush();
@@ -295,21 +331,24 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
 
   if (strstr(req, " /status ")) {
     sendStatus(client);
+  } else if (strstr(req, " /led/siren/on ")) {
+    ledRainbowOn = false;
+    ledSirenOn   = true;
+    addLog(FEAT_SIREN, SRC_WEB, ip0, ip1, ip2, ip3);
+    sendJsonOk(client);
   } else if (strstr(req, " /led/on ")) {
+    ledSirenOn   = false;
     ledRainbowOn = true;
-    addLog(true, SRC_WEB, ip0, ip1, ip2, ip3);
+    addLog(FEAT_RAINBOW, SRC_WEB, ip0, ip1, ip2, ip3);
     sendJsonOk(client);
   } else if (strstr(req, " /led/off ")) {
     ledRainbowOn = false;
-    digitalWrite(PIN_LEDR, HIGH);
-    digitalWrite(PIN_LEDG, HIGH);
-    digitalWrite(PIN_LEDB, HIGH);
-    addLog(false, SRC_WEB, ip0, ip1, ip2, ip3);
+    ledSirenOn   = false;
+    addLog(FEAT_NONE, SRC_WEB, ip0, ip1, ip2, ip3);
     sendJsonOk(client);
   } else if (strstr(req, " /log ")) {
     sendLog(client);
   } else if (strstr(req, " /favicon.ico ")) {
-    // Respond quickly so favicon doesn't occupy the connection slot on page load
     client.print(F("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
     client.flush();
   } else {
@@ -387,6 +426,65 @@ void setRGBFor(uint8_t r, uint8_t g, uint8_t b) {
   }
 }
 
+// ── LED thread — runs independently of WiFi ───────────────────────────────────
+
+rtos::Thread ledThread;
+
+void ledTask() {
+  uint8_t       sirenPhase      = 0;
+  unsigned long sirenPhaseStart = 0;
+  bool          prevSirenOn     = false;
+
+  while (true) {
+    bool siren   = ledSirenOn;
+    bool rainbow = ledRainbowOn;
+
+    if (siren) {
+      // Reset phase timing whenever siren is first activated
+      if (!prevSirenOn) {
+        sirenPhase      = 0;
+        sirenPhaseStart = millis();
+        digitalWrite(PIN_LEDR, LOW);
+        digitalWrite(PIN_LEDG, HIGH);
+        digitalWrite(PIN_LEDB, HIGH);
+      }
+      prevSirenOn = true;
+
+      unsigned long now = millis();
+      if (now - sirenPhaseStart >= (unsigned long)SIREN_HALF_MS) {
+        sirenPhase ^= 1;
+        sirenPhaseStart = now;
+        if (sirenPhase == 0) {
+          digitalWrite(PIN_LEDR, LOW);   // red
+          digitalWrite(PIN_LEDG, HIGH);
+          digitalWrite(PIN_LEDB, HIGH);
+        } else {
+          digitalWrite(PIN_LEDR, HIGH);
+          digitalWrite(PIN_LEDG, HIGH);
+          digitalWrite(PIN_LEDB, LOW);   // blue
+        }
+      }
+      delay(5);
+
+    } else if (rainbow) {
+      prevSirenOn = false;
+      for (int hue = 0; hue < 256; hue += HUE_STEP) {
+        if (!ledRainbowOn || ledSirenOn) break;
+        uint8_t r, g, b;
+        hueToRGB((uint8_t)hue, r, g, b);
+        setRGBFor(r, g, b);
+      }
+
+    } else {
+      prevSirenOn = false;
+      digitalWrite(PIN_LEDR, HIGH);
+      digitalWrite(PIN_LEDG, HIGH);
+      digitalWrite(PIN_LEDB, HIGH);
+      delay(10);
+    }
+  }
+}
+
 // ── Status print (serial) ─────────────────────────────────────────────────────
 
 void printStatus() {
@@ -396,7 +494,8 @@ void printStatus() {
     last = millis();
     Serial.print(F("IP: "));     Serial.print(WiFi.localIP());
     Serial.print(F("  WiFi: ")); Serial.print(WiFi.status() == WL_CONNECTED ? "OK" : "DISCONNECTED");
-    Serial.print(F("  LED: "));  Serial.println(ledRainbowOn ? "ON" : "OFF");
+    const char* feat = ledRainbowOn ? "Rainbow" : (ledSirenOn ? "Siren" : "OFF");
+    Serial.print(F("  LED: "));  Serial.println(feat);
   }
 }
 
@@ -410,24 +509,15 @@ void setup() {
   pinMode(PIN_LEDR, OUTPUT); pinMode(PIN_LEDG, OUTPUT); pinMode(PIN_LEDB, OUTPUT);
   digitalWrite(PIN_LEDR, HIGH); digitalWrite(PIN_LEDG, HIGH); digitalWrite(PIN_LEDB, HIGH);
 
+  // Start LED animation thread before WiFi so the LED is active during connect
+  ledThread.start(ledTask);
+
   connectWiFi();
-  addLog(true, SRC_BOOT, 0, 0, 0, 0);
+  addLog(FEAT_RAINBOW, SRC_BOOT, 0, 0, 0, 0);
 }
 
 void loop() {
   printStatus();
-
-  if (!ledRainbowOn) {
-    handleClient();
-    delay(10);
-    return;
-  }
-
-  for (int hue = 0; hue < 256; hue += HUE_STEP) {
-    if (!ledRainbowOn) break;
-    uint8_t r, g, b;
-    hueToRGB((uint8_t)hue, r, g, b);
-    setRGBFor(r, g, b);
-    handleClient();
-  }
+  handleClient();
+  delay(10);
 }
