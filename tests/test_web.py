@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 SlyLED Web Interface Test Suite
-Tests the HTTP interface running on the Arduino Giga R1 WiFi.
+Tests the HTTP/JSON API running on the Arduino Giga R1 WiFi.
 
 Usage:
     python3 tests/test_web.py [host]
@@ -10,6 +10,7 @@ Usage:
 
 import sys
 import time
+import json
 import urllib.request
 import urllib.error
 
@@ -50,6 +51,24 @@ def post(path):
         return 0, str(e)
 
 
+def get_json(path):
+    """GET a path and parse JSON body. Returns (status_code, dict or None)."""
+    code, body = get(path)
+    try:
+        return code, json.loads(body)
+    except Exception:
+        return code, None
+
+
+def post_json(path):
+    """POST a path and parse JSON body. Returns (status_code, dict or None)."""
+    code, body = post(path)
+    try:
+        return code, json.loads(body)
+    except Exception:
+        return code, None
+
+
 def check(name, condition, detail=""):
     global passed, failed
     if condition:
@@ -68,25 +87,7 @@ def section(title):
     print(f"{BOLD}{'-' * 58}{RESET}")
 
 
-def snippet(body, keyword, width=60):
-    i = body.find(keyword)
-    if i < 0:
-        return f"'{keyword}' not found in response"
-    start = max(0, i - 15)
-    end   = min(len(body), i + len(keyword) + 15)
-    return repr(body[start:end])
-
-
-def is_on(body):
-    return "#4c4'>" in body or "'#4c4'>" in body
-
-
-def is_off(body):
-    return "#c44'>" in body or "'#c44'>" in body
-
-
 def log_row_count(body):
-    """Count data rows in the log table (each starts with <tr><td>)."""
     return body.count("<tr><td>")
 
 
@@ -98,102 +99,122 @@ if not check("Board reachable", code == 200, f"HTTP {code}: {body[:80]}"):
     print(f"\n  {RED}Cannot reach board — aborting.{RESET}\n")
     sys.exit(1)
 
-# ── Main page ─────────────────────────────────────────────────────────────────
+# ── SPA main page ─────────────────────────────────────────────────────────────
 
-section("Main page  GET /")
-check("HTTP 200",              code == 200,              f"got {code}")
-check("Title contains SlyLED", "SlyLED"      in body)
-check("Shows 'Rainbow is'",    "Rainbow is"  in body)
-check("Has Turn On button",    "Turn On"     in body)
-check("Has Turn Off button",   "Turn Off"    in body)
-check("Has /log link",         "href='/log'" in body or 'href="/log"' in body)
-check("Has version string",    "APP_VERSION" not in body and ("v1." in body or "v2." in body),
-      "Expected version like 'v1.x' in page")
-check("Turn On is POST form",  "action='/on'"  in body or 'action="/on"'  in body)
-check("Turn Off is POST form", "action='/off'" in body or 'action="/off"' in body)
+section("SPA main page  GET /")
+check("HTTP 200",                 code == 200,              f"got {code}")
+check("Title contains SlyLED",    "SlyLED"      in body)
+check("Has header element",       "id='hdr'"    in body or 'id="hdr"' in body)
+check("Has status element",       "hdr-status"  in body)
+check("Has badge element",        "id='badge'"  in body or 'id="badge"' in body)
+check("Has Enable button",        "Enable"      in body)
+check("Has Disable button",       "Disable"     in body)
+check("Has /led/on in JS",        "/led/on"     in body)
+check("Has /led/off in JS",       "/led/off"    in body)
+check("Has /status poll in JS",   "/status"     in body)
+check("Has View Log link",        "href='/log'" in body or 'href="/log"' in body)
+check("Has version string",       "v1." in body or "v2." in body)
+check("No old form /on action",   "action='/on'"  not in body and 'action="/on"'  not in body)
+check("No old form /off action",  "action='/off'" not in body and 'action="/off"' not in body)
 
 # ── Cache-Control headers ─────────────────────────────────────────────────────
 
 section("Cache-Control headers")
 try:
-    req = urllib.request.Request(BASE + "/")
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+    with urllib.request.urlopen(BASE + "/", timeout=TIMEOUT) as r:
         cc = r.headers.get("Cache-Control", "")
-        check("/ has no-cache header",    "no-cache" in cc.lower(), f"Cache-Control: '{cc}'")
-        check("/ has no-store directive", "no-store" in cc.lower(), f"Cache-Control: '{cc}'")
-    req2 = urllib.request.Request(BASE + "/log")
-    with urllib.request.urlopen(req2, timeout=TIMEOUT) as r2:
+        check("/ has no-cache",  "no-cache" in cc.lower(), f"Cache-Control: '{cc}'")
+        check("/ has no-store",  "no-store" in cc.lower(), f"Cache-Control: '{cc}'")
+    with urllib.request.urlopen(BASE + "/log", timeout=TIMEOUT) as r2:
         cc2 = r2.headers.get("Cache-Control", "")
-        check("/log has no-cache header",    "no-cache" in cc2.lower(), f"Cache-Control: '{cc2}'")
-        check("/log has no-store directive", "no-store" in cc2.lower(), f"Cache-Control: '{cc2}'")
+        check("/log has no-cache", "no-cache" in cc2.lower(), f"Cache-Control: '{cc2}'")
+        check("/log has no-store", "no-store" in cc2.lower(), f"Cache-Control: '{cc2}'")
 except Exception as e:
     check("Cache-Control header fetch", False, str(e))
 
-# ── Turn On (GET — backward compat) ──────────────────────────────────────────
+# ── GET /status ───────────────────────────────────────────────────────────────
 
-section("Turn On  GET /on")
-code, body = get("/on")
-check("HTTP 200",       code == 200, f"got {code}")
-check("Shows ON state", is_on(body),  snippet(body, "Rainbow is"))
-check("Has Turn Off button", "Turn Off" in body)
-check("Has /log link",  "href='/log'" in body or 'href="/log"' in body)
+section("Status endpoint  GET /status")
+code, data = get_json("/status")
+check("HTTP 200",                  code == 200,                    f"got {code}")
+check("Valid JSON",                data is not None,               "failed to parse JSON")
+check("Has onboard_led key",       data is not None and "onboard_led" in data)
+check("onboard_led.active is bool",
+      data is not None and isinstance(data.get("onboard_led", {}).get("active"), bool))
 
-# ── Turn Off (GET — backward compat) ─────────────────────────────────────────
+# ── Enable rainbow  POST /led/on ──────────────────────────────────────────────
 
-section("Turn Off  GET /off")
-code, body = get("/off")
-check("HTTP 200",        code == 200, f"got {code}")
-check("Shows OFF state", is_off(body), snippet(body, "Rainbow is"))
-check("Has Turn On button", "Turn On" in body)
+section("Enable rainbow  POST /led/on")
+code, data = post_json("/led/on")
+check("HTTP 200",         code == 200,                               f"got {code}")
+check("Returns ok:true",  data is not None and data.get("ok") is True)
+time.sleep(0.4)
+_, st = get_json("/status")
+check("/status shows active:true",
+      st is not None and st.get("onboard_led", {}).get("active") is True,
+      f"status: {st}")
 
+# ── Disable rainbow  POST /led/off ────────────────────────────────────────────
+
+section("Disable rainbow  POST /led/off")
+code, data = post_json("/led/off")
+check("HTTP 200",          code == 200,                               f"got {code}")
+check("Returns ok:true",   data is not None and data.get("ok") is True)
+time.sleep(0.4)
+_, st = get_json("/status")
+check("/status shows active:false",
+      st is not None and st.get("onboard_led", {}).get("active") is False,
+      f"status: {st}")
+
+# ── State toggle sequence ─────────────────────────────────────────────────────
+
+section("State toggle sequence")
+post_json("/led/off"); time.sleep(0.3)
+_, st = get_json("/status")
+check("After /led/off: active=false", st is not None and st.get("onboard_led", {}).get("active") is False)
+
+post_json("/led/on");  time.sleep(0.3)
+_, st = get_json("/status")
+check("After /led/on:  active=true",  st is not None and st.get("onboard_led", {}).get("active") is True)
+
+post_json("/led/off"); time.sleep(0.3)
+_, st = get_json("/status")
+check("After /led/off again: active=false", st is not None and st.get("onboard_led", {}).get("active") is False)
+
+# Re-enable for subsequent tests
+post_json("/led/on"); time.sleep(0.3)
+
+# ── Rapid-fire AJAX commands ──────────────────────────────────────────────────
+
+section("Rapid-fire AJAX commands (no sleep)")
+results = []
+for _ in range(5):
+    c2, d2 = post_json("/led/on")
+    results.append(c2 == 200 and d2 is not None and d2.get("ok") is True)
+check("5x POST /led/on all return ok:true", all(results), f"results: {results}")
 time.sleep(0.3)
-code2, body2 = get("/")
-check("Main page still shows OFF", is_off(body2), snippet(body2, "Rainbow is"))
-
-# ── Turn On again (GET) ───────────────────────────────────────────────────────
-
-section("Turn On again  GET /on")
-code, body = get("/on")
-check("HTTP 200",       code == 200, f"got {code}")
-check("Shows ON state", is_on(body),  snippet(body, "Rainbow is"))
-
-time.sleep(0.3)
-code2, body2 = get("/")
-check("Main page shows ON", is_on(body2), snippet(body2, "Rainbow is"))
-
-# ── Turn Off via POST (browser form submission) ───────────────────────────────
-
-section("Turn Off  POST /off  (form submission)")
-code, body = post("/off")
-check("HTTP 200",        code == 200, f"got {code}")
-check("Shows OFF state", is_off(body), snippet(body, "Rainbow is"))
-
-# ── Turn On via POST ──────────────────────────────────────────────────────────
-
-section("Turn On  POST /on  (form submission)")
-code, body = post("/on")
-check("HTTP 200",       code == 200, f"got {code}")
-check("Shows ON state", is_on(body), snippet(body, "Rainbow is"))
+_, st = get_json("/status")
+check("Status active after rapid-fire", st is not None and st.get("onboard_led", {}).get("active") is True)
 
 # ── Log page — structure ──────────────────────────────────────────────────────
 
 section("Log page  GET /log")
 code, body = get("/log")
-check("HTTP 200",              code == 200,    f"got {code}")
-check("Contains 'Event Log'",  "Event Log" in body)
-check("Has <table>",           "<table>"   in body)
-check("Has Source column",     "<th>Source</th>" in body or ">Source<" in body)
-check("Has Back link (href='/')", "href='/'" in body or 'href="/"' in body)
+check("HTTP 200",               code == 200,   f"got {code}")
+check("Contains 'Event Log'",   "Event Log" in body)
+check("Has <table>",            "<table>"   in body)
+check("Has Source column",      ">Source<"  in body)
+check("Has IP column",          ">IP<"      in body)
+check("Back is anchor href=/",  "href='/'"  in body or 'href="/"' in body)
+check("No POST form on log",    "action='/'" not in body and 'action="/"' not in body)
 
 # ── Log page — entries ────────────────────────────────────────────────────────
 
 section("Log page — entries")
-
-# Generate a known sequence: off → on → off → on
-get("/off"); time.sleep(0.3)
-get("/on");  time.sleep(0.3)
-get("/off"); time.sleep(0.3)
-get("/on");  time.sleep(0.3)
+post("/led/off"); time.sleep(0.3)
+post("/led/on");  time.sleep(0.3)
+post("/led/off"); time.sleep(0.3)
+post("/led/on");  time.sleep(0.3)
 
 code, body = get("/log")
 check("HTTP 200",             code == 200, f"got {code}")
@@ -201,79 +222,62 @@ check("Has ON  entry",        ">ON<"  in body)
 check("Has OFF entry",        ">OFF<" in body)
 row_count = log_row_count(body)
 check("Has 4+ entries",       row_count >= 4, f"found {row_count} data rows")
-check("Has source labels (Web or Boot)", ">Web<" in body or ">Boot<" in body,
-      "Expected source label in log rows")
+check("Has source labels",    ">Web<" in body or ">Boot<" in body)
+check("Has IP address",       any(f"{i}." in body for i in range(1, 255)))
 
-# Newest entry should be ON (last action was /on)
-first_row_on  = body.find(">ON<")
-first_row_off = body.find(">OFF<")
-check("Newest entry is ON (row 1)",
-      first_row_on < first_row_off if first_row_on >= 0 and first_row_off >= 0 else False,
-      "Expected ON to appear before OFF in newest-first order")
+first_on  = body.find(">ON<")
+first_off = body.find(">OFF<")
+check("Newest entry is ON (last action was /led/on)",
+      first_on < first_off if first_on >= 0 and first_off >= 0 else False)
 
-# ── Log entry counting — multiple presses ─────────────────────────────────────
+# ── Log entry count — multiple presses ───────────────────────────────────────
 
 section("Log entry counting — multiple presses")
+_, before = get("/log")
+count_before = log_row_count(before)
 
-# Snapshot current count, then fire 3 OFF presses and 2 ON presses
-_, body_before = get("/log")
-count_before = log_row_count(body_before)
+post("/led/off"); time.sleep(0.3)
+post("/led/off"); time.sleep(0.3)
+post("/led/off"); time.sleep(0.3)
+post("/led/on");  time.sleep(0.3)
+post("/led/on");  time.sleep(0.3)
 
-post("/off"); time.sleep(0.3)
-post("/off"); time.sleep(0.3)
-post("/off"); time.sleep(0.3)
-post("/on");  time.sleep(0.3)
-post("/on");  time.sleep(0.3)
+_, after = get("/log")
+count_after = log_row_count(after)
+delta = count_after - count_before
+check("3x off + 2x on = 5 new log entries", delta == 5,
+      f"before={count_before}, after={count_after}, delta={delta}")
 
-_, body_after = get("/log")
-count_after = log_row_count(body_after)
-new_entries = count_after - count_before
-
-check("3× POST /off + 2× POST /on → 5 new log entries",
-      new_entries == 5,
-      f"before={count_before}, after={count_after}, delta={new_entries} (expected 5)")
-
-# Verify the newest two entries are ON (last two presses were /on)
-# In newest-first order, first >ON< should appear before first >OFF<
-on_pos  = body_after.find(">ON<")
-off_pos = body_after.find(">OFF<")
-check("Last two presses (ON) appear first in log",
-      on_pos >= 0 and on_pos < off_pos,
-      f"ON at {on_pos}, OFF at {off_pos}")
-
-# ── Log consistency — repeated fetches return log not main page ───────────────
+# ── Log consistency — repeated fetches ───────────────────────────────────────
 
 section("Log consistency — repeated fetches")
-
-# Fetch /log 5 times in a row; each must return log page, not main page
 all_logs = True
 for i in range(5):
     _, lb = get("/log")
     if "Event Log" not in lb or "<table>" not in lb:
         all_logs = False
-        print(f"         {YELLOW}fetch #{i+1}: got main page instead of log{RESET}")
+        print(f"         {YELLOW}fetch #{i+1}: got wrong page{RESET}")
     time.sleep(0.1)
 check("/log returns log page on 5 consecutive fetches", all_logs)
 
-# Rapid-fire: no delay between fetches
 all_rapid = True
 for i in range(3):
     _, lb = get("/log")
     if "Event Log" not in lb:
         all_rapid = False
-        print(f"         {YELLOW}rapid fetch #{i+1}: got main page{RESET}")
-check("/log returns log on 3 rapid consecutive fetches (no delay)", all_rapid)
+        print(f"         {YELLOW}rapid fetch #{i+1}: got wrong page{RESET}")
+check("/log returns log on 3 rapid fetches (no delay)", all_rapid)
 
 # ── Navigation ────────────────────────────────────────────────────────────────
 
 section("Navigation")
 code_log, body_log = get("/log")
-check("/log loads from link",  code_log == 200)
-check("Back link on /log page", "href='/'" in body_log or 'href="/"' in body_log)
+check("/log loads",               code_log == 200)
+check("Back anchor on /log",      "href='/'" in body_log or 'href="/"' in body_log)
 
 code_main, body_main = get("/")
-check("/ loads from Back",     code_main == 200)
-check("View Log link on /",    "href='/log'" in body_main or 'href="/log"' in body_main)
+check("/ loads",                  code_main == 200)
+check("View Log link on /",       "href='/log'" in body_main or 'href="/log"' in body_main)
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 

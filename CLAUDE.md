@@ -17,25 +17,22 @@ Find the board port:
 & "$env:LOCALAPPDATA\Arduino\arduino-cli.exe" board list
 ```
 
-Compile and upload (the Giga typically appears on COM8):
+Compile and upload using the build script (auto-increments minor version):
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File build.ps1 -Port COM7
+```
+
+Or manually (the Giga appears on COM7):
 ```powershell
 $env:ARDUINO_DIRECTORIES_USER = (Get-Location).Path
-& "$env:LOCALAPPDATA\Arduino\arduino-cli.exe" compile --upload --port COM8 --fqbn arduino:mbed_giga:giga main
+& "$env:LOCALAPPDATA\Arduino\arduino-cli.exe" compile --upload --port COM7 --fqbn arduino:mbed_giga:giga main
 ```
 
 The `arduino-cli.yaml` config sets this project folder as the Arduino user directory, so `./libraries` is automatically found. Always set `ARDUINO_DIRECTORIES_USER` to the project root before compiling.
 
 **First-time Windows setup:** The Giga's DFU bootloader (USB ID `2341:0366`) requires the WinUSB driver installed via [Zadig](https://zadig.akeo.ie) before uploads will work. Double-press reset to enter bootloader mode, then install the driver once.
 
-markdown## 📚 CRITICAL DOCUMENTATION PATTERN
-**ALWAYS ADD IMPORTANT DOCS HERE!** When you create or discover:
-- Architecture diagrams → docs/ARCHITECTURE.md
-- Database schemas → /docs/DATABASE_ARCHITECTURE.md  
-- Problem solutions → /docs/PROBLEM_SOLUTIONS.md
-- Setup guides → /docs/SETUP.md
-- Feature Requests → /docs/enhancements/README.md
-
-This prevents context loss! Update this file IMMEDIATELY when creating important docs.
+**Versioning:** `main/version.h` holds `APP_MAJOR` / `APP_MINOR`. `build.ps1` increments `APP_MINOR` automatically on every compile.
 
 ## Critical hardware quirks
 
@@ -45,12 +42,42 @@ This prevents context loss! Update this file IMMEDIATELY when creating important
 
 ## Architecture
 
-The sketch (`main/main.ino`) implements a rainbow cycle on the onboard RGB LED without any external library:
+The sketch (`main/main.ino`) is a **SPA + JSON API** design. The browser loads a single HTML page and communicates with the board via `XMLHttpRequest` — no page navigation on button press, no favicon race condition.
 
-1. `hueToRGB(hue, r, g, b)` — maps hue 0–255 to RGB values using 6 linear segments
-2. `pwmCycle(r, g, b)` — one 256-step software PWM cycle (~2 ms total, 8 µs per step); drives active-low pins
-3. `setRGBFor(r, g, b)` — repeats `pwmCycle` for `DISPLAY_MS` milliseconds to hold a color visibly
-4. `loop()` — steps hue by `HUE_STEP` across the full range, calling `setRGBFor` each step
+### HTTP routes
+
+| Method | Path | Response |
+|--------|------|----------|
+| GET | `/` | Full SPA (HTML + CSS + JS) |
+| GET | `/status` | `{"onboard_led":{"active":true/false}}` |
+| POST | `/led/on` | `{"ok":true}` — enable rainbow |
+| POST | `/led/off` | `{"ok":true}` — disable rainbow |
+| GET | `/log` | Event log HTML page |
+| GET | `/favicon.ico` | 404 (fast, keeps connection slot free) |
+
+### SPA UI structure
+
+- **Header (`#hdr`)** — app name + `#hdr-status` line; auto-updates via `/status` poll every 2 s
+- **Module cards** — one card per module (currently: Onboard LED / Rainbow). Each card has an `Enable`/`Disable` button that calls `setLed(1/0)` via XHR; response updates badge + header immediately
+- **Footer** — version string from `APP_MAJOR`/`APP_MINOR`
+- **View Log** anchor — `<a href='/log'>` (plain GET; no state side-effect)
+
+### Key functions
+
+1. `hueToRGB(hue, r, g, b)` — maps hue 0–255 to RGB using 6 linear segments
+2. `pwmCycle(r, g, b)` — one 256-step software PWM cycle (~2 ms); drives active-low pins
+3. `setRGBFor(r, g, b)` — repeats `pwmCycle` for `DISPLAY_MS` ms to hold a color visibly
+4. `serveClient(client, waitMs)` — reads first request line, routes to correct handler
+5. `handleClient()` — accepts client with 500 ms patience, then drains any additional parallel connections (favicon, XHR) in a tight loop
+6. `loop()` — steps hue across 0–255, calling `setRGBFor` + `handleClient` each step
+
+### Module state
+
+`bool ledRainbowOn` — global controlling whether the rainbow pattern runs. New modules add their own state variables and a matching card in `sendMain()`.
+
+**Event log:** Circular buffer (50 entries) stores timestamp, on/off state, source (Boot/Web), and client IP. NTP-synced timestamps via `pool.ntp.org`.
+
+**Test suite:** `python tests/test_web.py [host]` — run before every upload. From WSL use `powershell.exe -Command "python -X utf8 tests/test_web.py 192.168.10.219"`.
 
 ## Git / GitHub
 
@@ -78,4 +105,11 @@ The sketch (`main/main.ino`) implements a rainbow cycle on the onboard RGB LED w
 - **Check Constraints First**: Before generating code, analyze SRAM and Flash impact.
 - **Manual Verification**: Include a step to verify memory usage with `millis()` or free-RAM checking functions.
 - **Refactor Cycle**: If code exceeds 500 lines, break it into modular, specialized files.
+
+## Known Arduino Giga / Mbed GCC quirks
+- **Auto-prototype generator** fails on functions whose parameters use `enum` types — use `uint8_t` in the signature and cast internally (e.g. `e.source = (LogSource)src`).
+- **`static` functions** can conflict with auto-generated prototypes — omit `static` from sketch-level functions.
+- **`Serial.print()` blocks forever** on Mbed OS if no USB CDC terminal is connected — guard every print with `if (Serial)`.
+- **`WiFi.setHostname()`** must be called *before* `WiFi.begin()` so the hostname appears in DHCP DISCOVER/REQUEST packets (option 12). Calling it after `begin()` means the first DHCP handshake goes out without the hostname.
+- **Browser prefetch / favicon race**: Chrome/Edge open a second TCP connection for `favicon.ico` when loading any page. With a single-slot WiFiServer this consumed the connection slot before button responses could be served. Fixed by the **SPA+AJAX architecture** — buttons use `XMLHttpRequest`, no page navigation, no favicon request on button press.
 
