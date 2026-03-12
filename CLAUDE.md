@@ -27,6 +27,16 @@ The `arduino-cli.yaml` config sets this project folder as the Arduino user direc
 
 **First-time Windows setup:** The Giga's DFU bootloader (USB ID `2341:0366`) requires the WinUSB driver installed via [Zadig](https://zadig.akeo.ie) before uploads will work. Double-press reset to enter bootloader mode, then install the driver once.
 
+markdown## 📚 CRITICAL DOCUMENTATION PATTERN
+**ALWAYS ADD IMPORTANT DOCS HERE!** When you create or discover:
+- Architecture diagrams → docs/ARCHITECTURE.md
+- Database schemas → /docs/DATABASE_ARCHITECTURE.md  
+- Problem solutions → /docs/PROBLEM_SOLUTIONS.md
+- Setup guides → /docs/SETUP.md
+- Feature Requests → /docs/enhancements/README.md
+
+This prevents context loss! Update this file IMMEDIATELY when creating important docs.
+
 ## Critical hardware quirks
 
 - **Never use `analogWrite()`** on the onboard LED pins — it crashes Mbed OS (symptom: red LED blinks 4 fast + 4 slow).
@@ -48,3 +58,24 @@ The sketch (`main/main.ino`) implements a rainbow cycle on the onboard RGB LED w
 - After a successful upload, offer to sync: `git add . && git commit -m "<message>" && git push origin main`
 - `arduino_secrets.h` is gitignored — never commit credentials or WiFi passwords
 - Commit messages should follow the pattern: `feat: <short description of LED behavior change>`
+
+
+# Arduino Web App Performance Rules
+
+## Core Architectural Principles
+- **Offload Static Assets**: Do not embed large HTML/CSS/JS in PROGMEM. Host assets on a CDN or SD card. 
+- **Data-Only API**: Use the Arduino as a JSON/XML API endpoint. The web UI should be a Single Page Application (SPA) that fetches only raw data.
+- **Minimal TCP Overhead**: Consolidate `client.print()` calls. Buffer responses to reduce the number of packets sent.
+
+## Code Constraints for Memory & Speed
+- **Zero Dynamic Allocation**: Strictly avoid `malloc()`, `new`, or `String` objects to prevent heap fragmentation. Use fixed-size `char` buffers.
+- **SRAM Optimization**: Force use of the `F()` macro for all literal strings (e.g., `client.print(F("HTTP/1.1 200 OK"));`).
+- **Smallest Data Types**: Always use `uint8_t` or `int8_t` for values under 255. Use `const` or `constexpr` for all fixed values.
+- **Integer Math Only**: Avoid `float` or `double`. Use fixed-point arithmetic or integer scaling for sensor data.
+- **Direct Register I/O**: For high-frequency operations, prefer direct port manipulation over `digitalWrite()`.
+
+## AI Workflow Instructions
+- **Check Constraints First**: Before generating code, analyze SRAM and Flash impact.
+- **Manual Verification**: Include a step to verify memory usage with `millis()` or free-RAM checking functions.
+- **Refactor Cycle**: If code exceeds 500 lines, break it into modular, specialized files.
+
