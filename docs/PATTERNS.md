@@ -4,7 +4,12 @@
 
 ### Rainbow
 
-Smooth hue cycle through the full colour spectrum using software PWM.
+Smooth hue cycle through the full colour spectrum.
+
+**Enable:** `POST /led/on`
+**Status feature field:** `"rainbow"`
+
+#### Giga R1 — software PWM
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
@@ -16,12 +21,29 @@ Smooth hue cycle through the full colour spectrum using software PWM.
 
 Full cycle duration: 128 steps × 35 ms ≈ **4.5 seconds** per rainbow loop.
 
-**Enable:** `POST /led/on`
-**Status feature field:** `"rainbow"`
+Implemented via `hueToRGB()` + `pwmCycle()` + `setRGBFor()` in `ledTask()`. See [Software PWM reference](#software-pwm-reference) below.
+
+#### ESP32 / D1 Mini — FastLED
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `RAINBOW_DELAY` | 20 ms | Delay between hue steps |
+| Hue increment | 1 per frame | Advances `hue` by 1 each step |
+
+**ESP32** — `fill_rainbow(leds, NUM_LEDS, hue, 255/NUM_LEDS)` spreads the full spectrum across all 8 LEDs simultaneously. Runs in a FreeRTOS task on Core 0 with `delay(RAINBOW_DELAY)`.
+
+**D1 Mini** — same `fill_rainbow()` call, but runs non-blocking via `updateLED()`. `lastFrame` tracks `millis()`; advances only when `RAINBOW_DELAY` has elapsed. Called from `loop()` and from inside all HTTP wait loops so animation continues while serving clients.
+
+Full cycle: 256 hue steps × 20 ms ≈ **5.1 seconds** per loop.
+
+---
 
 ### Siren
 
 Alternating red and blue flashes.
+
+**Enable:** `POST /led/siren/on`
+**Status feature field:** `"siren"`
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
@@ -29,14 +51,23 @@ Alternating red and blue flashes.
 
 Full cycle: 700 ms (≈ 1.4 Hz).
 
-**Enable:** `POST /led/siren/on`
-**Status feature field:** `"siren"`
+#### Giga R1 — software PWM
+
+Each phase calls `setRGBFor(255, 0, 0)` then `setRGBFor(0, 0, 255)` in `ledTask()`. Active-low pins: red = LEDR LOW, blue = LEDB LOW.
+
+#### ESP32 — FastLED
+
+`fill_solid(leds, NUM_LEDS, CRGB::Red)` / `fill_solid(leds, NUM_LEDS, CRGB::Blue)` + `FastLED.show()` with `delay(SIREN_HALF_MS)`. Runs in the dedicated FreeRTOS task on Core 0.
+
+#### D1 Mini — FastLED non-blocking
+
+`sirenPhase` and `sirenStart` track which colour is active and when the phase started. `updateLED()` flips the phase when `millis() - sirenStart >= SIREN_HALF_MS`. No blocking delay.
 
 ---
 
 ## How to add a new pattern
 
-This is a checklist for adding a new pattern to the **Onboard LED** module. Adding a completely new module (e.g. external LEDs on GPIO pins) follows the same steps plus adding a new card section in `sendMain()`.
+This checklist adds a new pattern to the **LED module**. All three boards must be handled.
 
 ### 1. Add the state flag (global scope)
 
@@ -63,32 +94,49 @@ Add before the `/led/on` branch:
     sendJsonOk(client);
 ```
 
-Also clear the new flag in the `/led/off` branch:
+Also clear the new flag in `/led/off`, `/led/on`, and `/led/siren/on`:
 ```cpp
 ledPulseOn = false;
 ```
 
-And in the `/led/on` and `/led/siren/on` branches:
-```cpp
-ledPulseOn = false;
-```
+### 4. Add the animation code
 
-### 4. Add the animation branch in `ledTask()`
-
-Add before the `rainbow` branch so it takes priority:
+#### Giga — add branch in `ledTask()`
 
 ```cpp
 } else if (ledPulseOn) {
-    prevSirenOn = false;
-    // ... animation code using only digitalWrite / pwmCycle / setRGBFor
+    // animation using only digitalWrite / pwmCycle / setRGBFor
+    // do NOT call WiFi or handleClient here
     delay(5);
 ```
 
-The LED thread owns all pin writes. Do not call `handleClient()` or any WiFi function here.
+#### ESP32 — add branch in `ledTask(void*)`
+
+```cpp
+} else if (ledPulseOn) {
+    // animation using fill_solid / FastLED.show / delay
+    // delay() is fine here — this is a dedicated FreeRTOS task on Core 0
+```
+
+#### D1 Mini — add branch in `updateLED()`
+
+Add static timing variables and use `millis()` — no `delay()`:
+
+```cpp
+} else if (ledPulseOn) {
+    static unsigned long pulseStart = 0;
+    static uint8_t       pulsePhase = 0;
+    if (millis() - pulseStart >= PULSE_HALF_MS) {
+        pulseStart = millis();
+        pulsePhase ^= 1;
+        fill_solid(leds, NUM_LEDS, pulsePhase ? CRGB::White : CRGB::Black);
+        FastLED.show();
+    }
+```
 
 ### 5. Add a pattern row in `sendMain()` HTML
 
-In the Onboard LED card:
+In the LED card:
 
 ```html
 <div class='pattern-row'>
@@ -122,7 +170,7 @@ bp.className   = 'badge ' + (pOn ? 'bon' : 'boff');
 
 Add a header status case:
 ```javascript
-else if(f==='pulse'){h.textContent='Onboard LED - Pulse ON';h.style.color='#fa0';}
+else if(f==='pulse'){h.textContent='LED - Pulse ON';h.style.color='#fa0';}
 ```
 
 ### 8. Update `sendStatus()`
@@ -157,9 +205,9 @@ check("/status feature=pulse", led_feature(st) == "pulse", f"status: {st}")
 
 ---
 
-## Software PWM reference
+## Software PWM reference (Giga only)
 
-The onboard LED pins do not support hardware PWM from Mbed OS (and `analogWrite()` crashes). All brightness control uses software PWM:
+The Giga onboard LED pins do not support hardware PWM from Mbed OS — `analogWrite()` crashes (symptom: 4 fast + 4 slow red blinks). All brightness control uses software PWM:
 
 ```
 pwmCycle(r, g, b):
@@ -173,3 +221,31 @@ pwmCycle(r, g, b):
 One cycle = 256 steps × 8 µs = **2.048 ms**. `setRGBFor(r, g, b)` repeats cycles for `DISPLAY_MS` ms (default 35 ms ≈ 17 cycles per colour hold).
 
 Human eye flicker fusion threshold is ~50 Hz (20 ms). At 2 ms/cycle the PWM is invisible — the LED appears as a smooth mixed colour.
+
+---
+
+## FastLED reference (ESP32 / D1 Mini)
+
+Both ESP boards use FastLED with **WS2812B** LEDs, colour order **GRB**, 8 LEDs on **GPIO 2**.
+
+```cpp
+#define DATA_PIN    2
+#define NUM_LEDS    8
+#define LED_TYPE    WS2812B
+#define COLOR_ORDER GRB
+CRGB leds[NUM_LEDS];
+
+// In setup():
+FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
+FastLED.setBrightness(200);
+```
+
+Key functions:
+
+| Function | Description |
+|----------|-------------|
+| `fill_rainbow(leds, NUM_LEDS, hue, deltaHue)` | Spread a rainbow across all LEDs starting at `hue` |
+| `fill_solid(leds, NUM_LEDS, colour)` | Set all LEDs to a single colour |
+| `FastLED.show()` | Push the `leds` array to the strip (required after every change) |
+
+On ESP32, `FastLED.show()` is called from the dedicated Core 0 task — no interference with WiFi on Core 1. On D1 Mini, `FastLED.show()` is called only when state changes (not every loop tick) to minimise blocking time in the single-threaded environment.

@@ -2,9 +2,29 @@
 
 ## Overview
 
-SlyLED runs on the Arduino Giga R1 WiFi (STM32H747, dual Cortex-M7 + M4). The sketch runs entirely on the M7 core under Mbed OS and uses two Mbed RTOS threads to decouple LED animation from WiFi I/O.
+SlyLED is a single sketch that compiles for three boards. Board-specific sections are wrapped in `#ifdef BOARD_GIGA` / `#ifdef BOARD_ESP32` / `#ifdef BOARD_D1MINI`. The HTTP/SPA/log/NTP code (~80% of the file) is shared and identical across all boards.
+
+## Board detection
+
+```cpp
+#if defined(ESP32)
+  #define BOARD_ESP32
+#elif defined(ESP8266) || defined(ARDUINO_ARCH_ESP8266)
+  #define BOARD_D1MINI
+#elif defined(ARDUINO_GIGA) || ...
+  #define BOARD_GIGA
+#endif
+
+#if defined(BOARD_ESP32) || defined(BOARD_D1MINI)
+  #define BOARD_FASTLED   // both use FastLED
+#endif
+```
 
 ## Threading model
+
+Each board uses a different approach to keep LED animation independent of WiFi I/O:
+
+### Giga — Mbed RTOS dedicated thread
 
 ```
 ┌─────────────────────────────────────┐  ┌─────────────────────────────────────┐
@@ -25,51 +45,70 @@ SlyLED runs on the Arduino Giga R1 WiFi (STM32H747, dual Cortex-M7 + M4). The sk
                    volatile bool ledSirenOn
 ```
 
-**Why two threads?**
-In a single-threaded sketch, `handleClient()` blocks for up to 500 ms waiting for an HTTP request. During that time the LED pins are held at whatever state they were last left in — causing visible blanks in the rainbow and irregular siren phase timing. The RTOS thread runs the animation loop continuously regardless of what the main thread is doing.
+Bool writes are atomic on ARM Cortex-M7. `volatile` prevents register caching. No mutex required.
 
-**Thread safety:**
-Bool writes are atomic on ARM Cortex-M7 (single-instruction store). `volatile` prevents the compiler from caching the value in a register between loop iterations. No mutex is required for simple flag reads/writes between two threads.
+### ESP32 — FreeRTOS task pinned to Core 0
+
+```
+Core 0                          Core 1
+──────────────────────────      ──────────────────────────
+ledTask(void*)                  loop()
+  fill_rainbow / fill_solid       handleClient()
+  FastLED.show()                  printStatus()
+  delay(20)
+```
+
+WiFi stack runs on Core 1 (Arduino default). LED task pinned to Core 0 via `xTaskCreatePinnedToCore()`. Zero interference between animation and network I/O.
+
+### D1 Mini — non-blocking loop (single core)
+
+The ESP8266 is single-core; FreeRTOS task pinning is not available. `updateLED()` is called from `loop()` on every iteration using `millis()`-based timing:
+
+```
+loop():
+  printStatus()
+  updateLED()      ← non-blocking; advances animation if RAINBOW_DELAY elapsed
+  handleClient()   ← may block briefly while serving a request
+  yield()          ← feeds ESP8266 WiFi/OS scheduler
+```
+
+`updateLED()` is also called inside the HTTP client wait loops and the post-response drain delay, so animation continues even while serving requests.
 
 ## Web interface
 
-The board serves a **Single Page Application** (SPA). The browser loads the full HTML/CSS/JS once, then communicates via `XMLHttpRequest`:
+The board serves a **Single Page Application** (SPA). The browser loads HTML/CSS/JS once, then communicates via `XMLHttpRequest`:
 
 - **`/status`** — polled every 2 s to update badges and header
 - **`/led/on`**, **`/led/siren/on`**, **`/led/off`** — button press handlers
 
-No page navigation occurs on button press. This eliminates the favicon race condition that plagued earlier form-POST architectures (see [HARDWARE.md](HARDWARE.md#wifi-server-quirks)).
-
 ```
-Browser                           Board (M7)
+Browser                           Board
   │                                   │
   │  GET /                            │
   │──────────────────────────────────>│  sendMain() — full SPA HTML
   │<──────────────────────────────────│
   │                                   │
   │  XHR GET /status  (every 2 s)     │
-  │──────────────────────────────────>│  sendStatus() — JSON
+  │──────────────────────────────────>│  sendStatus() — JSON + Content-Length
   │<──────────────────────────────────│
   │                                   │
   │  XHR POST /led/siren/on           │  serveClient():
   │──────────────────────────────────>│    ledRainbowOn = false
-  │                                   │    ledSirenOn   = true  ← LED thread picks up
+  │                                   │    ledSirenOn   = true
   │  {"ok":true}                      │    addLog(FEAT_SIREN, ...)
-  │<──────────────────────────────────│    sendJsonOk()
-  │                                   │
-  │  XHR GET /status                  │
-  │──────────────────────────────────>│  {"onboard_led":{"active":true,"feature":"siren"}}
-  │<──────────────────────────────────│
+  │<──────────────────────────────────│    sendJsonOk()  ← Content-Length: 11
 ```
+
+JSON responses (`sendJsonOk`, `sendStatus`) include a `Content-Length` header. This lets HTTP clients read the exact byte count without waiting for the connection to close, which avoids issues with ESP8266's RST-on-close behaviour.
 
 ## Module pattern
 
-Each controllable LED behaviour is a **module**. The current module is **Onboard LED** with two patterns (Rainbow, Siren). Future modules could control external LEDs wired to GPIO pins.
+Each controllable LED behaviour is a **module**. The current module is **LED** (onboard RGB on Giga, WS2812B strip on ESP32/D1 Mini) with two patterns (Rainbow, Siren).
 
 Each module requires:
 - One or more `volatile bool` state flags
 - A route in `serveClient()` that sets/clears the flags and calls `addLog()`
-- A branch in `ledTask()` that runs the animation when the flag is set
+- Board-specific animation code in `ledTask()` / `updateLED()`
 - A card in `sendMain()` with pattern rows, badges, and buttons
 - A JSON field in `sendStatus()`
 
@@ -88,27 +127,41 @@ struct LogEntry {
 };
 ```
 
-Entries are written by `addLog()` (called from `serveClient()` and `setup()`). The log page renders them newest-first with columns: #, Timestamp, Feature, State, Source, IP.
+Entries are written by `addLog()` (called from `serveClient()` and `setup()`). The log page renders them newest-first.
 
-## Memory usage (v2.0 / sketch v1.17)
+## Memory usage (v2.6)
 
+### Arduino Giga R1 WiFi
 | Resource | Used | Available |
 |----------|------|-----------|
 | Flash | 277 KB (14%) | 1966 KB |
 | SRAM | 63 KB (12%) | 524 KB |
 
-Flash is dominated by the embedded SPA HTML/CSS/JS. SRAM is dominated by the log buffer (50 × ~20 bytes = ~1 KB) and WiFi stack (~50 KB).
+### ESP32 Dev Module
+| Resource | Used | Available |
+|----------|------|-----------|
+| Flash | 1006 KB (78%) | 1280 KB |
+| SRAM | 50 KB (15%) | 320 KB |
+
+### LOLIN D1 Mini
+| Resource | Used | Available |
+|----------|------|-----------|
+| Flash (IROM) | 268 KB (25%) | 1024 KB |
+| IRAM | 27 KB (91%) | 30 KB |
+| RAM | 35 KB (44%) | 80 KB |
+
+IRAM on D1 Mini is high (91%) due to FastLED's clockless driver. Sufficient headroom remains but monitor when adding features.
 
 ## File structure
 
 ```
 main/
-  main.ino      — All sketch code (single file, <450 lines)
+  main.ino      — All sketch code; board sections in #ifdef blocks
   version.h     — APP_MAJOR / APP_MINOR
   arduino_secrets.h  — SECRET_SSID / SECRET_PASS (gitignored)
 tests/
-  test_web.py   — Python test suite (75 tests, no dependencies beyond stdlib)
+  test_web.py   — Python test suite (75 tests, board-agnostic)
 docs/           — This folder
-build.ps1       — Bumps APP_MINOR, compiles, uploads via arduino-cli
+build.ps1       — Bumps APP_MINOR on upload; -Board giga|esp32|d1mini
 arduino-cli.yaml — Sets project root as Arduino user dir (finds ./libraries)
 ```
