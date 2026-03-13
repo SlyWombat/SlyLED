@@ -1,34 +1,74 @@
-# build.ps1 — increment minor version, compile, and upload to Arduino Giga R1
-# Usage: .\build.ps1 [-Port COM7] [-NoUpload]
+# build.ps1 — increment minor version, compile, and upload
+# Usage: .\build.ps1 [-Port COM7] [-Board giga|esp32|d1mini] [-NoUpload]
+#
+# -Board : "giga"   → arduino:mbed_giga:giga    (Arduino Giga R1 WiFi)
+#          "esp32"  → esp32:esp32:esp32           (ESP32 Dev Module)
+#          "d1mini" → esp8266:esp8266:d1_mini     (LOLIN D1 Mini / D1 R2)
+#          (omit)   → auto-detect from connected board
+# -NoUpload : compile only (no upload, no version bump)
 param(
-    [string]$Port = "COM7",
+    [string]$Port    = "COM7",
+    [string]$Board   = "",
     [switch]$NoUpload
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# ── Bump minor version ────────────────────────────────────────────────────────
+$cli = "$env:LOCALAPPDATA\Arduino\arduino-cli.exe"
+$env:ARDUINO_DIRECTORIES_USER = $PSScriptRoot
+
+# ── Resolve target board ───────────────────────────────────────────────────────
+if ($Board -eq "") {
+    Write-Host "Auto-detecting board..." -ForegroundColor Cyan
+    $boardList = & $cli board list 2>&1
+    if ($boardList -match "arduino:mbed_giga:giga") {
+        $Board = "giga"
+        Write-Host "Detected: Arduino Giga R1 WiFi" -ForegroundColor Cyan
+    } elseif ($boardList -match "esp32:esp32") {
+        $Board = "esp32"
+        Write-Host "Detected: ESP32 Dev Module" -ForegroundColor Cyan
+    } elseif ($boardList -match "esp8266:esp8266") {
+        $Board = "d1mini"
+        Write-Host "Detected: LOLIN D1 Mini (ESP8266)" -ForegroundColor Cyan
+    } else {
+        Write-Error "No supported board detected. Use -Board giga, esp32, or d1mini"
+    }
+}
+
+switch ($Board.ToLower()) {
+    "giga"   { $fqbn = "arduino:mbed_giga:giga" }
+    "esp32"  { $fqbn = "esp32:esp32:esp32" }
+    "d1mini" { $fqbn = "esp8266:esp8266:d1_mini" }
+    default  { Write-Error "Unknown board '$Board'. Use 'giga', 'esp32', or 'd1mini'" }
+}
+
+Write-Host "Target: $fqbn" -ForegroundColor Cyan
+
+# ── Bump minor version (upload only) ─────────────────────────────────────────
 $versionFile = "$PSScriptRoot\main\version.h"
 $content = Get-Content $versionFile -Raw
 
-if ($content -match '#define APP_MINOR (\d+)') {
-    $oldMinor = [int]$Matches[1]
-    $newMinor = $oldMinor + 1
-    $content = $content -replace "#define APP_MINOR $oldMinor", "#define APP_MINOR $newMinor"
-    Set-Content $versionFile $content -NoNewline
-    $major = if ($content -match '#define APP_MAJOR (\d+)') { $Matches[1] } else { "?" }
-    Write-Host "Version bumped to $major.$newMinor" -ForegroundColor Cyan
+if (-not $NoUpload) {
+    if ($content -match '#define APP_MINOR (\d+)') {
+        $oldMinor = [int]$Matches[1]
+        $newMinor = $oldMinor + 1
+        $content = $content -replace "#define APP_MINOR $oldMinor", "#define APP_MINOR $newMinor"
+        Set-Content $versionFile $content -NoNewline
+        $major = if ($content -match '#define APP_MAJOR (\d+)') { $Matches[1] } else { "?" }
+        Write-Host "Version bumped to $major.$newMinor" -ForegroundColor Cyan
+    } else {
+        Write-Error "Could not parse APP_MINOR from $versionFile"
+    }
 } else {
-    Write-Error "Could not parse APP_MINOR from $versionFile"
+    $minor = if ($content -match '#define APP_MINOR (\d+)') { $Matches[1] } else { "?" }
+    $major = if ($content -match '#define APP_MAJOR (\d+)') { $Matches[1] } else { "?" }
+    Write-Host "Compile check (no version bump) - current: $major.$minor" -ForegroundColor Yellow
 }
 
 # ── Compile (and upload) ──────────────────────────────────────────────────────
-$env:ARDUINO_DIRECTORIES_USER = $PSScriptRoot
-$cli = "$env:LOCALAPPDATA\Arduino\arduino-cli.exe"
-
 if ($NoUpload) {
-    & $cli compile --fqbn arduino:mbed_giga:giga main
+    & $cli compile --fqbn $fqbn main
 } else {
-    & $cli compile --upload --port $Port --fqbn arduino:mbed_giga:giga main
+    & $cli compile --upload --port $Port --fqbn $fqbn main
 }

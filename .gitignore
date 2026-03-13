@@ -44,6 +44,8 @@ libraries/
 
 # Sensitive / secrets (never commit)
 secrets.h
+arduino_secrets.h
+main/arduino_secrets.h
 .env
 *.local
 
