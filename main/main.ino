@@ -1,25 +1,36 @@
 /*
  * SlyLED — multi-board sketch
+ * Phase 2a: UDP command channel, parent child registry, child self-config
  *
  * Supported targets:
- *   Arduino Giga R1 WiFi  (arduino:mbed_giga:giga)    — onboard RGB, software PWM, Mbed RTOS thread
- *   ESP32 Dev Module      (esp32:esp32:esp32)           — WS2812B strip, FastLED, FreeRTOS task Core 0
- *   LOLIN D1 Mini         (esp8266:esp8266:d1_mini)    — WS2812B strip, FastLED, single-threaded loop
+ *   Arduino Giga R1 WiFi  (arduino:mbed_giga:giga)    — parent: child registry, no LEDs
+ *   ESP32 Dev Module      (esp32:esp32:esp32)           — child: WS2812B strip, FastLED
+ *   LOLIN D1 Mini         (esp8266:esp8266:d1_mini)    — child: WS2812B strip, FastLED
  *
  * Threading model:
  *   Giga / ESP32 : dedicated LED thread independent of WiFi — zero animation jitter
  *   D1 Mini      : non-blocking updateLED() called from loop() — minimal jitter
  *
- * Shared state: volatile bool ledRainbowOn / ledSirenOn
- *   Written by WiFi task/loop, read by LED task/function.
+ * Phase 2a adds:
+ *   - UDP command channel on port 4210 (all boards)
+ *   - CMD_PING / CMD_PONG: parent broadcasts, children respond with full config
+ *   - CMD_STATUS_REQ / CMD_STATUS_RESP: parent queries, children reply
+ *   - Child self-config: hostname SLYC-XXXX from MAC; string count/length/direction
+ *   - Parent child registry: children[] array, registerChild(), 30 s auto-discovery
+ *   - GET  /api/children — JSON list of known children
+ *   - POST /api/children — register a child by IP: body {"ip":"x.x.x.x"}
  *
- * Routes:
- *   GET  /              — SPA main page (HTML + CSS + JS)
- *   GET  /status        — JSON module status (polled every 2 s by the SPA)
- *   POST /led/on        — enable rainbow
- *   POST /led/siren/on  — enable siren (disables rainbow)
+ * HTTP routes (all boards):
+ *   GET  /              — SPA main page
+ *   GET  /status        — JSON LED status
+ *   POST /led/on        — enable Rainbow
+ *   POST /led/siren/on  — enable Siren
  *   POST /led/off       — disable all
- *   GET  /log           — event log page (HTML)
+ *   GET  /log           — event log HTML
+ *
+ * Additional routes (Giga parent only):
+ *   GET  /api/children  — JSON array of registered children
+ *   POST /api/children  — register child by IP
  */
 
 #include "version.h"
@@ -37,7 +48,7 @@
   #error "Unsupported board. Target: arduino:mbed_giga:giga | esp32:esp32:esp32 | esp8266:esp8266:d1_mini"
 #endif
 
-// Helper: boards that use FastLED (ESP32 and D1 Mini)
+// Helper: boards that use FastLED (ESP32 and D1 Mini — these are the children)
 #if defined(BOARD_ESP32) || defined(BOARD_D1MINI)
   #define BOARD_FASTLED
 #endif
@@ -64,51 +75,190 @@
 // ── LED hardware constants ────────────────────────────────────────────────────
 
 #ifdef BOARD_GIGA
-  // Active-low onboard RGB (LEDR/LEDG/LEDB macros provided by Giga core)
-  constexpr uint8_t  HUE_STEP   = 2;    // hue advance per cycle (0–255 range)
-  constexpr int      DISPLAY_MS = 35;   // ms per colour hold (~17 PWM cycles)
+  constexpr uint8_t  HUE_STEP   = 2;
+  constexpr int      DISPLAY_MS = 35;
   constexpr uint16_t PWM_STEPS  = 256;
-  constexpr uint8_t  STEP_US    = 8;    // µs per PWM step → 2.048 ms/cycle
+  constexpr uint8_t  STEP_US    = 8;
   #define CARD_TITLE "Onboard LED"
 
 #else  // FastLED boards (ESP32 / D1 Mini)
   #ifdef BOARD_D1MINI
-    #define DATA_PIN  2   // GPIO2 — confirmed working in QuinLED reference sketch
+    #define DATA_PIN  2
   #else
-    #define DATA_PIN  2   // GPIO2 on ESP32
+    #define DATA_PIN  2
   #endif
   #define NUM_LEDS      8
-  #define LED_TYPE      WS2812B  // WS2812B timing; NEOPIXEL is an alias for this
+  #define LED_TYPE      WS2812B
   #define COLOR_ORDER   GRB
   constexpr uint8_t LED_BRIGHTNESS = 200;
-  constexpr uint8_t RAINBOW_DELTA  = 256 / NUM_LEDS;  // hue spread per LED (32)
-  constexpr int     RAINBOW_DELAY  = 20;               // ms per frame (~50 fps)
+  constexpr uint8_t RAINBOW_DELTA  = 256 / NUM_LEDS;
+  constexpr int     RAINBOW_DELAY  = 20;
   CRGB leds[NUM_LEDS];
   #define CARD_TITLE "LED Strip"
 #endif
 
-// Shared timing constant
-constexpr int SIREN_HALF_MS = 350;  // ms per colour phase
+constexpr int SIREN_HALF_MS = 350;
 
-// ── WiFi & server ─────────────────────────────────────────────────────────────
+// ── Phase 2: UDP protocol constants ──────────────────────────────────────────
+// Port 4210 is used by all nodes. Parent broadcasts CMD_PING; children respond
+// with CMD_PONG containing their full self-config.
+
+constexpr uint16_t UDP_PORT    = 4210;
+constexpr uint16_t UDP_MAGIC   = 0x534C;  // 'S','L' — identifies SlyLED packets
+constexpr uint8_t  UDP_VERSION = 2;
+
+// Shared string-field sizes (must match on parent and all children)
+constexpr uint8_t HOSTNAME_LEN   = 10;   // "SLYC-XXXX\0"
+constexpr uint8_t CHILD_NAME_LEN = 16;   // user-set alternate name, incl. null
+constexpr uint8_t CHILD_DESC_LEN = 32;   // user-set description, incl. null
+constexpr uint8_t MAX_STR_PER_CHILD = 4; // max LED strings per child node
+
+// UDP command codes
+// uint8_t (not enum) to avoid Mbed auto-prototype generator issue with enum params
+constexpr uint8_t CMD_PING        = 0x01; // parent → broadcast: discover children
+constexpr uint8_t CMD_PONG        = 0x02; // child  → parent:    I'm here + config
+constexpr uint8_t CMD_STATUS_REQ  = 0x40; // parent → child:     send status
+constexpr uint8_t CMD_STATUS_RESP = 0x41; // child  → parent:    status reply
+
+// ── Phase 2: UDP packet structures ───────────────────────────────────────────
+// __attribute__((packed)) ensures no padding so sizeof() is reliable and
+// memcpy between buffer and struct is safe on all three platforms.
+
+struct __attribute__((packed)) UdpHeader {
+  uint16_t magic;    // UDP_MAGIC
+  uint8_t  version;  // UDP_VERSION
+  uint8_t  cmd;      // CMD_* constant
+  uint32_t epoch;    // sender's current Unix timestamp
+};  // 8 bytes
+
+// Wire format for one LED string in a PONG packet
+struct __attribute__((packed)) PongString {
+  uint16_t ledCount;  // number of LEDs
+  uint16_t lengthMm;  // physical strip length in mm
+  uint8_t  ledType;   // 0=WS2812B, 1=WS2811, 2=APA102
+  uint8_t  cableDir;  // 0=E,1=N,2=W,3=S — cable from node to strip start
+  uint16_t cableMm;   // cable length in mm
+  uint8_t  stripDir;  // 0=E,1=N,2=W,3=S — direction strip runs
+};  // 9 bytes
+
+// Payload of a CMD_PONG packet (follows UdpHeader)
+struct __attribute__((packed)) PongPayload {
+  char       hostname[HOSTNAME_LEN];       // "SLYC-XXXX\0" auto from MAC
+  char       altName[CHILD_NAME_LEN];      // user-set name
+  char       description[CHILD_DESC_LEN];  // user-set description
+  uint8_t    stringCount;
+  PongString strings[MAX_STR_PER_CHILD];   // 4 × 9 = 36 bytes
+};  // 10+16+32+1+36 = 95 bytes
+
+// Total PongPacket = UdpHeader(8) + PongPayload(95) = 103 bytes
+
+// Payload of a CMD_STATUS_RESP packet (follows UdpHeader)
+struct __attribute__((packed)) StatusRespPayload {
+  uint8_t  activeAction;  // 0=off, 1=rainbow, 2=siren
+  uint8_t  runnerActive;  // 0 or 1
+  uint8_t  currentStep;   // runner step index
+  uint8_t  wifiRssi;      // abs(RSSI) e.g. 70 means -70 dBm
+  uint32_t uptimeS;       // seconds since boot
+};  // 8 bytes
+
+// ── WiFi, server, and UDP ─────────────────────────────────────────────────────
 
 constexpr char HOSTNAME[] = "slyled";
 WiFiServer server(80);
+WiFiUDP    ntpUDP;   // temporary, opened/closed around NTP syncs
+WiFiUDP    cmdUDP;   // persistent, port 4210, open after WiFi connects
+uint8_t    udpBuf[128]; // shared send/receive buffer — covers largest packet (103 B)
 
-// ── Shared module state (volatile — written by WiFi path, read by LED path) ──
+// ── Shared module state ───────────────────────────────────────────────────────
 
 volatile bool ledRainbowOn = true;
 volatile bool ledSirenOn   = false;
 
-// ── Giga: LED thread handle (must be global so it outlives setup()) ───────────
+// ── Giga: Mbed RTOS LED thread ────────────────────────────────────────────────
 
 #ifdef BOARD_GIGA
 rtos::Thread ledThread;
 #endif
 
+// ── Parent data structures (Giga only) ───────────────────────────────────────
+
+#ifdef BOARD_GIGA
+
+constexpr uint8_t MAX_CHILDREN = 8;
+
+// Status of a child node as seen by the parent
+// Using uint8_t values rather than an enum to avoid prototype generator issues
+constexpr uint8_t CHILD_UNKNOWN = 0;
+constexpr uint8_t CHILD_ONLINE  = 1;
+constexpr uint8_t CHILD_OFFLINE = 2;
+
+// One LED string as stored in the parent registry
+struct StringInfo {       // 9 bytes (packed-equivalent — no padding with these types)
+  uint16_t ledCount;
+  uint16_t lengthMm;
+  uint8_t  ledType;
+  uint8_t  cableDir;
+  uint16_t cableMm;
+  uint8_t  stripDir;
+};
+
+// One registered child node
+struct ChildNode {
+  uint8_t    ip[4];
+  char       hostname[HOSTNAME_LEN];
+  char       name[CHILD_NAME_LEN];
+  char       description[CHILD_DESC_LEN];
+  int16_t    xMm, yMm, zMm;          // canvas position (set in Phase 2b)
+  uint8_t    stringCount;
+  StringInfo strings[MAX_STR_PER_CHILD];
+  uint8_t    status;                  // CHILD_UNKNOWN / ONLINE / OFFLINE
+  uint32_t   lastSeenEpoch;
+  bool       configFetched;
+  bool       inUse;
+};
+
+ChildNode children[MAX_CHILDREN];
+
+#endif  // BOARD_GIGA
+
+// ── Child self-config data (ESP32 / D1 Mini only) ────────────────────────────
+
+#ifdef BOARD_FASTLED
+
+// Direction constants — 0=E(+X), 1=N(+Y), 2=W(-X), 3=S(-Y)
+constexpr uint8_t DIR_E = 0;
+constexpr uint8_t DIR_N = 1;
+constexpr uint8_t DIR_W = 2;
+constexpr uint8_t DIR_S = 3;
+
+// LED strip hardware type
+constexpr uint8_t LEDTYPE_WS2812B = 0;
+constexpr uint8_t LEDTYPE_WS2811  = 1;
+constexpr uint8_t LEDTYPE_APA102  = 2;
+
+struct ChildStringCfg {
+  uint16_t ledCount;
+  uint16_t lengthMm;
+  uint8_t  ledType;
+  uint8_t  cableDir;
+  uint16_t cableMm;
+  uint8_t  stripDir;
+};
+
+struct ChildSelfConfig {
+  char           hostname[HOSTNAME_LEN];
+  char           altName[CHILD_NAME_LEN];
+  char           description[CHILD_DESC_LEN];
+  uint8_t        stringCount;
+  ChildStringCfg strings[MAX_STR_PER_CHILD];
+};
+
+ChildSelfConfig childCfg;
+
+#endif  // BOARD_FASTLED
+
 // ── NTP ───────────────────────────────────────────────────────────────────────
 
-WiFiUDP ntpUDP;
 unsigned long ntpEpoch  = 0;
 unsigned long ntpMillis = 0;
 
@@ -194,6 +344,17 @@ void sendJsonOk(WiFiClient& c) {
           "Connection: close\r\n"
           "\r\n"
           "{\"ok\":true}");
+  c.flush();
+}
+
+void sendJsonErr(WiFiClient& c, const char* msg) {
+  char body[64];
+  int blen = snprintf(body, sizeof(body), "{\"ok\":false,\"err\":\"%s\"}", msg);
+  sendBuf(c, "HTTP/1.1 400 Bad Request\r\n"
+             "Content-Type: application/json\r\n"
+             "Connection: close\r\n"
+             "Content-Length: %d\r\n\r\n", blen);
+  c.print(body);
   c.flush();
 }
 
@@ -373,19 +534,24 @@ void sendLog(WiFiClient& c) {
   c.print("<br><a class='btn-nav' href='/'>Back</a></body></html>");
 }
 
-// Forward declaration — updateLED() is defined later but called from serveClient()
+// ── Forward declarations ──────────────────────────────────────────────────────
+
 #ifdef BOARD_D1MINI
 void updateLED();
+#endif
+
+#ifdef BOARD_FASTLED
+void sendPong(IPAddress dest);
+void sendStatusResp(IPAddress dest);
 #endif
 
 // ── Web request handler ───────────────────────────────────────────────────────
 
 void serveClient(WiFiClient& client, unsigned int waitMs) {
   unsigned long t = millis();
-  // yield() keeps the ESP8266 WiFi stack fed during the wait
   while (!client.available() && millis() - t < waitMs) {
 #ifdef BOARD_D1MINI
-    updateLED();  // keep animation running while waiting for request data
+    updateLED();
 #endif
     yield();
   }
@@ -393,40 +559,103 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
   IPAddress remoteIP = client.remoteIP();
   uint8_t ip0 = remoteIP[0], ip1 = remoteIP[1], ip2 = remoteIP[2], ip3 = remoteIP[3];
 
+  // Read request line
   char req[128] = {};
   client.readBytesUntil('\n', req, sizeof(req) - 1);
-  while (client.available()) client.read();  // drain remaining request headers
+
+  // Read headers; capture Content-Length for POST routes that need a body
+  int contentLen = 0;
+  {
+    char hdr[80];
+    while (true) {
+      int n = client.readBytesUntil('\n', hdr, sizeof(hdr) - 1);
+      if (n <= 1) break;           // blank line = end of headers
+      hdr[n] = '\0';
+      if (strncmp(hdr, "Content-Length:", 15) == 0) {
+        contentLen = atoi(hdr + 15);
+      }
+    }
+  }
+
+  // Detect method: req starts with "GET " or "POST "
+  bool isPost = (req[0] == 'P');
+
+  // ── Route dispatch ────────────────────────────────────────────────────────
 
   if (strstr(req, " /status ")) {
     sendStatus(client);
+
   } else if (strstr(req, " /led/siren/on ")) {
     ledRainbowOn = false;
     ledSirenOn   = true;
     addLog(FEAT_SIREN, SRC_WEB, ip0, ip1, ip2, ip3);
     sendJsonOk(client);
+
   } else if (strstr(req, " /led/on ")) {
     ledSirenOn   = false;
     ledRainbowOn = true;
     addLog(FEAT_RAINBOW, SRC_WEB, ip0, ip1, ip2, ip3);
     sendJsonOk(client);
+
   } else if (strstr(req, " /led/off ")) {
     ledRainbowOn = false;
     ledSirenOn   = false;
     addLog(FEAT_NONE, SRC_WEB, ip0, ip1, ip2, ip3);
     sendJsonOk(client);
+
   } else if (strstr(req, " /log ")) {
     sendLog(client);
+
   } else if (strstr(req, " /favicon.ico ")) {
     client.print("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
     client.flush();
+
+#ifdef BOARD_GIGA
+  } else if (strstr(req, " /api/children ")) {
+    if (isPost) {
+      // Read body: {"ip":"x.x.x.x"}
+      char body[32] = {};
+      if (contentLen > 0 && contentLen < (int)sizeof(body)) {
+        client.readBytes(body, contentLen);
+      }
+      // Extract IP from body
+      char* p = strstr(body, "\"ip\":");
+      if (p) {
+        p += 5;
+        while (*p == ' ' || *p == '"') p++;
+        int a = 0, b = 0, cc = 0, d = 0;
+        if (sscanf(p, "%d.%d.%d.%d", &a, &b, &cc, &d) == 4
+            && a >= 0 && a <= 255 && b >= 0 && b <= 255
+            && cc >= 0 && cc <= 255 && d >= 0 && d <= 255) {
+          // Send a directed ping; child will respond with CMD_PONG
+          IPAddress dest(a, b, cc, d);
+          UdpHeader hdr;
+          hdr.magic   = UDP_MAGIC;
+          hdr.version = UDP_VERSION;
+          hdr.cmd     = CMD_PING;
+          hdr.epoch   = (uint32_t)currentEpoch();
+          memcpy(udpBuf, &hdr, sizeof(hdr));
+          cmdUDP.beginPacket(dest, UDP_PORT);
+          cmdUDP.write(udpBuf, sizeof(hdr));
+          cmdUDP.endPacket();
+          sendJsonOk(client);
+        } else {
+          sendJsonErr(client, "bad-ip");
+        }
+      } else {
+        sendJsonErr(client, "no-ip");
+      }
+    } else {
+      sendApiChildren(client);
+    }
+#endif  // BOARD_GIGA
+
   } else {
     sendMain(client);
   }
 
   client.flush();
 #ifdef BOARD_D1MINI
-  // Give lwIP 200 ms to transmit all buffered response data and receive ACKs.
-  // Without this, tcp_close() finds un-ACKed data and falls back to tcp_abort() → RST.
   { unsigned long d = millis(); while (millis() - d < 200) { updateLED(); yield(); } }
 #else
   delay(5);
@@ -439,7 +668,7 @@ void handleClient() {
   if (!client) return;
 
 #ifdef BOARD_D1MINI
-  serveClient(client, 100);  // shorter wait; ESP8266 clients send headers fast
+  serveClient(client, 100);
   { unsigned long d = millis(); while (millis() - d < 20) { updateLED(); yield(); } }
   while ((client = server.available())) {
     serveClient(client, 50);
@@ -453,13 +682,252 @@ void handleClient() {
 #endif
 }
 
+// ── Parent UDP functions (Giga only) ─────────────────────────────────────────
+
+#ifdef BOARD_GIGA
+
+// Broadcast CMD_PING to discover children on the LAN.
+void sendPing(IPAddress dest) {
+  UdpHeader hdr;
+  hdr.magic   = UDP_MAGIC;
+  hdr.version = UDP_VERSION;
+  hdr.cmd     = CMD_PING;
+  hdr.epoch   = (uint32_t)currentEpoch();
+  memcpy(udpBuf, &hdr, sizeof(hdr));
+  cmdUDP.beginPacket(dest, UDP_PORT);
+  cmdUDP.write(udpBuf, sizeof(hdr));
+  cmdUDP.endPacket();
+}
+
+// Add or update a child in the registry from a received PongPayload.
+void registerChild(IPAddress ip, const PongPayload* pong) {
+  // Search for existing child with the same hostname (hostname is stable across reboots)
+  for (uint8_t i = 0; i < MAX_CHILDREN; i++) {
+    if (children[i].inUse
+        && strncmp(children[i].hostname, pong->hostname, HOSTNAME_LEN) == 0) {
+      for (uint8_t j = 0; j < 4; j++) children[i].ip[j] = ip[j];
+      strncpy(children[i].name,        pong->altName,     CHILD_NAME_LEN - 1);
+      strncpy(children[i].description, pong->description, CHILD_DESC_LEN - 1);
+      uint8_t sc = (pong->stringCount < MAX_STR_PER_CHILD)
+                 ? pong->stringCount : MAX_STR_PER_CHILD;
+      children[i].stringCount = sc;
+      for (uint8_t j = 0; j < sc; j++) {
+        children[i].strings[j].ledCount = pong->strings[j].ledCount;
+        children[i].strings[j].lengthMm = pong->strings[j].lengthMm;
+        children[i].strings[j].ledType  = pong->strings[j].ledType;
+        children[i].strings[j].cableDir = pong->strings[j].cableDir;
+        children[i].strings[j].cableMm  = pong->strings[j].cableMm;
+        children[i].strings[j].stripDir = pong->strings[j].stripDir;
+      }
+      children[i].status        = CHILD_ONLINE;
+      children[i].lastSeenEpoch = currentEpoch();
+      children[i].configFetched = true;
+      if (Serial) { Serial.print(F("Child updated: ")); Serial.println(pong->hostname); }
+      return;
+    }
+  }
+  // Find an empty slot
+  for (uint8_t i = 0; i < MAX_CHILDREN; i++) {
+    if (!children[i].inUse) {
+      children[i].inUse = true;
+      for (uint8_t j = 0; j < 4; j++) children[i].ip[j] = ip[j];
+      strncpy(children[i].hostname,    pong->hostname,    HOSTNAME_LEN   - 1);
+      children[i].hostname[HOSTNAME_LEN - 1] = '\0';
+      strncpy(children[i].name,        pong->altName,     CHILD_NAME_LEN - 1);
+      children[i].name[CHILD_NAME_LEN - 1] = '\0';
+      strncpy(children[i].description, pong->description, CHILD_DESC_LEN - 1);
+      children[i].description[CHILD_DESC_LEN - 1] = '\0';
+      children[i].xMm = 0; children[i].yMm = 0; children[i].zMm = 0;
+      uint8_t sc = (pong->stringCount < MAX_STR_PER_CHILD)
+                 ? pong->stringCount : MAX_STR_PER_CHILD;
+      children[i].stringCount = sc;
+      for (uint8_t j = 0; j < sc; j++) {
+        children[i].strings[j].ledCount = pong->strings[j].ledCount;
+        children[i].strings[j].lengthMm = pong->strings[j].lengthMm;
+        children[i].strings[j].ledType  = pong->strings[j].ledType;
+        children[i].strings[j].cableDir = pong->strings[j].cableDir;
+        children[i].strings[j].cableMm  = pong->strings[j].cableMm;
+        children[i].strings[j].stripDir = pong->strings[j].stripDir;
+      }
+      children[i].status        = CHILD_ONLINE;
+      children[i].lastSeenEpoch = currentEpoch();
+      children[i].configFetched = true;
+      if (Serial) { Serial.print(F("Child added: ")); Serial.println(pong->hostname); }
+      return;
+    }
+  }
+  if (Serial) Serial.println(F("Child registry full."));
+}
+
+// Serve GET /api/children — JSON array of all registered children.
+// Response format per child:
+//   {"id":N,"hostname":"SLYC-XXXX","name":"...","desc":"...","ip":"x.x.x.x",
+//    "status":N,"sc":N,"seen":epoch}
+void sendApiChildren(WiFiClient& c) {
+  static char jsonBuf[1400];
+  char* p   = jsonBuf;
+  char* end = jsonBuf + sizeof(jsonBuf) - 2;
+  *p++ = '[';
+  bool first = true;
+  for (uint8_t i = 0; i < MAX_CHILDREN; i++) {
+    if (!children[i].inUse) continue;
+    if (!first) { *p++ = ','; }
+    first = false;
+    char ipStr[16];
+    snprintf(ipStr, sizeof(ipStr), "%u.%u.%u.%u",
+             children[i].ip[0], children[i].ip[1],
+             children[i].ip[2], children[i].ip[3]);
+    p += snprintf(p, end - p,
+      "{\"id\":%u,\"hostname\":\"%s\",\"name\":\"%s\","
+      "\"desc\":\"%s\",\"ip\":\"%s\",\"status\":%u,"
+      "\"sc\":%u,\"seen\":%lu}",
+      (unsigned)i,
+      children[i].hostname, children[i].name, children[i].description,
+      ipStr, (unsigned)children[i].status,
+      (unsigned)children[i].stringCount,
+      (unsigned long)children[i].lastSeenEpoch);
+  }
+  *p++ = ']';
+  *p   = '\0';
+  int blen = (int)(p - jsonBuf);
+  sendBuf(c, "HTTP/1.1 200 OK\r\n"
+             "Content-Type: application/json\r\n"
+             "Connection: close\r\n"
+             "Cache-Control: no-cache, no-store\r\n"
+             "Content-Length: %d\r\n\r\n", blen);
+  c.print(jsonBuf);
+  c.flush();
+}
+
+#endif  // BOARD_GIGA
+
+// ── Child UDP functions (ESP32 / D1 Mini only) ────────────────────────────────
+
+#ifdef BOARD_FASTLED
+
+// Populate childCfg with defaults and generate hostname from MAC.
+// Must be called after WiFi.begin() so macAddress() is available.
+void initChildConfig() {
+  memset(&childCfg, 0, sizeof(childCfg));
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  snprintf(childCfg.hostname, HOSTNAME_LEN, "SLYC-%02X%02X", mac[4], mac[5]);
+
+  // Default: 1 string, NUM_LEDS LEDs, WS2812B, 500 mm strip, all East
+  childCfg.stringCount         = 1;
+  childCfg.strings[0].ledCount = NUM_LEDS;
+  childCfg.strings[0].lengthMm = 500;
+  childCfg.strings[0].ledType  = LEDTYPE_WS2812B;
+  childCfg.strings[0].cableDir = DIR_E;
+  childCfg.strings[0].cableMm  = 0;
+  childCfg.strings[0].stripDir = DIR_E;
+
+  if (Serial) { Serial.print(F("Child hostname: ")); Serial.println(childCfg.hostname); }
+}
+
+// Send CMD_PONG to dest with our full self-config.
+void sendPong(IPAddress dest) {
+  UdpHeader hdr;
+  hdr.magic   = UDP_MAGIC;
+  hdr.version = UDP_VERSION;
+  hdr.cmd     = CMD_PONG;
+  hdr.epoch   = (uint32_t)currentEpoch();
+
+  PongPayload pong;
+  memset(&pong, 0, sizeof(pong));
+  strncpy(pong.hostname,    childCfg.hostname,    HOSTNAME_LEN   - 1);
+  strncpy(pong.altName,     childCfg.altName,     CHILD_NAME_LEN - 1);
+  strncpy(pong.description, childCfg.description, CHILD_DESC_LEN - 1);
+  pong.stringCount = childCfg.stringCount;
+  uint8_t sc = (childCfg.stringCount < MAX_STR_PER_CHILD)
+             ? childCfg.stringCount : MAX_STR_PER_CHILD;
+  for (uint8_t j = 0; j < sc; j++) {
+    pong.strings[j].ledCount = childCfg.strings[j].ledCount;
+    pong.strings[j].lengthMm = childCfg.strings[j].lengthMm;
+    pong.strings[j].ledType  = childCfg.strings[j].ledType;
+    pong.strings[j].cableDir = childCfg.strings[j].cableDir;
+    pong.strings[j].cableMm  = childCfg.strings[j].cableMm;
+    pong.strings[j].stripDir = childCfg.strings[j].stripDir;
+  }
+
+  memcpy(udpBuf,                &hdr,  sizeof(hdr));
+  memcpy(udpBuf + sizeof(hdr),  &pong, sizeof(pong));
+  cmdUDP.beginPacket(dest, UDP_PORT);
+  cmdUDP.write(udpBuf, sizeof(hdr) + sizeof(pong));
+  cmdUDP.endPacket();
+}
+
+// Send CMD_STATUS_RESP to dest with current LED state.
+void sendStatusResp(IPAddress dest) {
+  UdpHeader hdr;
+  hdr.magic   = UDP_MAGIC;
+  hdr.version = UDP_VERSION;
+  hdr.cmd     = CMD_STATUS_RESP;
+  hdr.epoch   = (uint32_t)currentEpoch();
+
+  StatusRespPayload resp;
+  resp.activeAction = ledRainbowOn ? 1 : (ledSirenOn ? 2 : 0);
+  resp.runnerActive = 0;
+  resp.currentStep  = 0;
+  int32_t rssi = WiFi.RSSI();
+  resp.wifiRssi = (rssi < 0) ? (uint8_t)(-rssi) : 0;
+  resp.uptimeS  = (uint32_t)(millis() / 1000);
+
+  memcpy(udpBuf,                &hdr,  sizeof(hdr));
+  memcpy(udpBuf + sizeof(hdr),  &resp, sizeof(resp));
+  cmdUDP.beginPacket(dest, UDP_PORT);
+  cmdUDP.write(udpBuf, sizeof(hdr) + sizeof(resp));
+  cmdUDP.endPacket();
+}
+
+#endif  // BOARD_FASTLED
+
+// ── Shared UDP receive handler (all boards) ───────────────────────────────────
+
+// Dispatch an incoming UDP packet based on its command byte.
+// Called by pollUDP() after the header has been validated.
+void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) {
+#ifdef BOARD_GIGA
+  if (cmd == CMD_PONG && plen >= (int)sizeof(PongPayload)) {
+    PongPayload pong;
+    memcpy(&pong, payload, sizeof(pong));
+    registerChild(sender, &pong);
+  }
+  // CMD_STATUS_RESP will be used in Phase 2b for /api/children/:id/status
+
+#else  // children
+  if (cmd == CMD_PING) {
+    sendPong(sender);
+  } else if (cmd == CMD_STATUS_REQ) {
+    sendStatusResp(sender);
+  }
+  (void)plen;
+#endif
+}
+
+// Check cmdUDP for incoming packets; validate header; dispatch.
+void pollUDP() {
+  int plen = cmdUDP.parsePacket();
+  if (plen <= 0 || plen > (int)sizeof(udpBuf)) return;
+
+  IPAddress sender = cmdUDP.remoteIP();
+  int n = cmdUDP.read(udpBuf, sizeof(udpBuf));
+  if (n < (int)sizeof(UdpHeader)) return;
+
+  UdpHeader hdr;
+  memcpy(&hdr, udpBuf, sizeof(hdr));
+  if (hdr.magic != UDP_MAGIC || hdr.version != UDP_VERSION) return;
+
+  handleUdpPacket(hdr.cmd, sender, udpBuf + sizeof(hdr), n - (int)sizeof(hdr));
+}
+
 // ── WiFi connect ──────────────────────────────────────────────────────────────
 
 void connectWiFi() {
   Serial.print("Connecting to "); Serial.println(SECRET_SSID);
 #ifdef BOARD_D1MINI
-  WiFi.mode(WIFI_STA);      // force station mode; ESP8266 can default to AP+STA
-  WiFi.hostname(HOSTNAME);  // ESP8266: hostname() not setHostname()
+  WiFi.mode(WIFI_STA);
+  WiFi.hostname(HOSTNAME);
 #else
   WiFi.setHostname(HOSTNAME);
 #endif
@@ -474,6 +942,21 @@ void connectWiFi() {
   Serial.print("Connected. IP: "); Serial.println(WiFi.localIP());
   server.begin();
   syncNTP();
+
+  // Start persistent UDP command channel
+  cmdUDP.begin(UDP_PORT);
+  if (Serial) Serial.println(F("UDP command channel open on port 4210."));
+
+#ifdef BOARD_FASTLED
+  // Generate child hostname from MAC now that WiFi is up
+  initChildConfig();
+  // Override the WiFi hostname to the SLYC-XXXX name
+#ifdef BOARD_D1MINI
+  WiFi.hostname(childCfg.hostname);
+#else
+  WiFi.setHostname(childCfg.hostname);
+#endif
+#endif
 }
 
 // ── Status print (serial) ─────────────────────────────────────────────────────
@@ -490,8 +973,6 @@ void printStatus() {
 }
 
 // ── LED implementation — Arduino Giga R1 WiFi ─────────────────────────────────
-// Software PWM on active-low onboard RGB pins. Runs in a dedicated Mbed RTOS
-// thread (ledThread) so animation is never interrupted by WiFi I/O.
 
 #ifdef BOARD_GIGA
 
@@ -563,8 +1044,6 @@ void ledTask() {
 #endif  // BOARD_GIGA
 
 // ── LED implementation — ESP32 (FreeRTOS task, Core 0) ───────────────────────
-// FastLED fill_rainbow / fill_solid. Pinned to Core 0 so WiFi on Core 1
-// never causes a frame drop.
 
 #ifdef BOARD_ESP32
 
@@ -610,8 +1089,6 @@ void ledTask(void* parameter) {
 #endif  // BOARD_ESP32
 
 // ── LED implementation — D1 Mini (single-threaded, non-blocking) ──────────────
-// Called from loop() on every iteration. Uses static state and millis() timing
-// so it never blocks — WiFi requests are served between frames.
 
 #ifdef BOARD_D1MINI
 
@@ -648,7 +1125,7 @@ void updateLED() {
     }
 
   } else {
-    if (prevSirenOn || hue != 0) {  // only update when state changes
+    if (prevSirenOn || hue != 0) {
       prevSirenOn = false;
       hue = 0;
       fill_solid(leds, NUM_LEDS, CRGB::Black);
@@ -667,14 +1144,13 @@ void setup() {
   Serial.println("=== BOOT ===");
 
 #ifdef BOARD_GIGA
-  // Active-low onboard RGB — start HIGH (off), then launch LED thread
   pinMode(LEDR, OUTPUT); digitalWrite(LEDR, HIGH);
   pinMode(LEDG, OUTPUT); digitalWrite(LEDG, HIGH);
   pinMode(LEDB, OUTPUT); digitalWrite(LEDB, HIGH);
   ledThread.start(mbed::callback(ledTask));
+  memset(children, 0, sizeof(children));  // clear child registry
 
 #elif defined(BOARD_ESP32)
-  // Initialise WS2812B strip; pin LED task to Core 0 (WiFi/loop on Core 1)
   FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
   FastLED.setBrightness(LED_BRIGHTNESS);
   FastLED.clear();
@@ -682,7 +1158,6 @@ void setup() {
   xTaskCreatePinnedToCore(ledTask, "LED", 4096, NULL, 1, NULL, 0);
 
 #else  // D1 Mini
-  // Initialise WS2812B strip; updateLED() will be called from loop()
   FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
   FastLED.setBrightness(LED_BRIGHTNESS);
   FastLED.clear();
@@ -691,15 +1166,33 @@ void setup() {
 
   connectWiFi();
   addLog(FEAT_RAINBOW, SRC_BOOT, 0, 0, 0, 0);
+
+#ifdef BOARD_GIGA
+  // Initial discovery broadcast — children already on the network will respond
+  sendPing(IPAddress(255, 255, 255, 255));
+#endif
 }
 
 void loop() {
   printStatus();
-#ifdef BOARD_D1MINI
+  pollUDP();
+
+#ifdef BOARD_GIGA
+  // Re-broadcast discovery ping every 30 s to catch children that rebooted
+  static unsigned long lastPing = 0;
+  if (millis() - lastPing >= 30000UL) {
+    lastPing = millis();
+    sendPing(IPAddress(255, 255, 255, 255));
+  }
+  handleClient();
+  delay(10);
+
+#elif defined(BOARD_D1MINI)
   updateLED();
   handleClient();
   yield();
-#else
+
+#else  // ESP32
   handleClient();
   delay(10);
 #endif
