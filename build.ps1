@@ -67,8 +67,11 @@ if (-not $NoUpload) {
 }
 
 # ── Compile (and upload) ──────────────────────────────────────────────────────
+$buildPath = "$PSScriptRoot\build\$Board"
+New-Item -ItemType Directory -Force -Path $buildPath | Out-Null
+
 if ($NoUpload) {
-    & $cli compile --fqbn $fqbn main
+    & $cli compile --fqbn $fqbn --build-path $buildPath main
 } else {
-    & $cli compile --upload --port $Port --fqbn $fqbn main
+    & $cli compile --upload --port $Port --fqbn $fqbn --build-path $buildPath main
 }

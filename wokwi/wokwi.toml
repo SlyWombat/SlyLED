@@ -1,0 +1,17 @@
+[wokwi]
+version = 1
+elf = "../build/esp32/main.ino.elf"
+firmware = "../build/esp32/main.ino.elf"
+
+# Port forwarding (requires wokwigw private gateway)
+# Host port → simulated ESP32 port
+
+[[net.incoming]]
+from = "localhost:18080"
+to = "target:80"
+protocol = "tcp"
+
+[[net.incoming]]
+from = "localhost:14210"
+to = "target:4210"
+protocol = "udp"
