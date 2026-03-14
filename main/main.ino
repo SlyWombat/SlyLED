@@ -454,6 +454,7 @@ void sendApiSettings(WiFiClient& c);
 void handlePostSettings(WiFiClient& c, int contentLen);
 void sendApiChildrenExport(WiFiClient& c);
 void handleChildIdRoute(WiFiClient& c, const char* req, bool isPost, bool isDel, int contentLen);
+void handleApiChildrenImport(WiFiClient& c, int contentLen);
 void sendPing(IPAddress dest);
 void handleApiAction(WiFiClient& c, int contentLen);
 void handleApiActionStop(WiFiClient& c, int contentLen);
@@ -512,6 +513,9 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     client.flush();
 
 #ifdef BOARD_GIGA
+  } else if (isPost && strstr(req, " /api/children/import")) {
+    handleApiChildrenImport(client, contentLen);
+
   } else if (strstr(req, " /api/children/export")) {
     sendApiChildrenExport(client);
 
@@ -652,9 +656,36 @@ void sendParentSPA(WiFiClient& c) {
           "input,select{background:#222;color:#eee;border:1px solid #444;"
           "border-radius:4px;padding:.35em .5em;margin:.2em 0}"
           "label{color:#999;font-size:.88em;display:block;margin-top:.6em}"
-          ".footer{padding:.8em 2em;font-size:.7em;color:#444}");
+          ".footer{padding:.8em 2em;font-size:.7em;color:#444}"
+          ".modal-bg{display:none;position:fixed;top:0;left:0;width:100%;height:100%;"
+          "background:rgba(0,0,0,.75);z-index:100;overflow:auto}"
+          ".modal-box{background:#1e1e1e;border:1px solid #444;border-radius:10px;"
+          "max-width:540px;margin:3em auto;padding:1.5em}"
+          ".modal-hdr{display:flex;justify-content:space-between;align-items:center;"
+          "margin-bottom:.8em}"
+          ".modal-close{background:none;border:none;color:#aaa;font-size:1.3em;"
+          "cursor:pointer;line-height:1}"
+          ".prog-bar{height:8px;background:#2a2a2a;border-radius:4px;margin-top:.4em}"
+          ".prog-fill{height:100%;background:#66f;border-radius:4px;transition:width .5s}"
+          "body.light{background:#f0f2f5;color:#222}"
+          "body.light #hdr{background:#e8eaf0;border-bottom-color:#ccc}"
+          "body.light nav{background:#eaeaf5;border-bottom-color:#ccc}"
+          "body.light .tnav{color:#555}"
+          "body.light .tnav:hover{color:#111}"
+          "body.light .tact{color:#111;border-bottom-color:#66f}"
+          "body.light .card{background:#fff;border-color:#ccc}"
+          "body.light .card-title{color:#333}"
+          "body.light .tbl th{background:#f0f0f0;color:#555}"
+          "body.light .tbl td{color:#333}"
+          "body.light .tbl tr:nth-child(even){background:#f9f9f9}"
+          "body.light .modal-box{background:#fff;border-color:#ccc}"
+          "body.light input,body.light select{background:#fff;color:#111;border-color:#bbb}"
+          "body.light label{color:#555}"
+          "body.light #hs{color:#555}"
+          "body.light .footer{color:#aaa}"
+          "body.light .prog-bar{background:#ddd}");
 
-  c.print("</style></head><body>"
+  c.print("</style></head><body id='app'>"
           "<div id='hdr'><h1>SlyLED</h1><div id='hs'>Loading...</div></div>"
           "<nav>"
           "<button id='n-dash' class='tnav tact' onclick='showTab(\"dash\")'>Dashboard</button>"
@@ -747,16 +778,27 @@ void sendParentSPA(WiFiClient& c) {
           "<input id='s-cw' type='number' min='1000' max='100000' style='width:120px'>"
           "<label>Canvas Height (mm)</label>"
           "<input id='s-ch' type='number' min='1000' max='100000' style='width:120px'>"
+          "<label style='display:flex;align-items:center;gap:.5em;margin-top:.8em'>"
+          "<input type='checkbox' id='s-dm'> Dark Mode"
+          "</label>"
           "<div style='margin-top:1em'>"
           "<button class='btn btn-on' onclick='saveSettings()'>Save Settings</button>"
           "</div></div></div>");
 
+  c.print("<div id='modal' class='modal-bg' onclick='if(event.target===this)closeModal()'>"
+          "<div class='modal-box'>"
+          "<div class='modal-hdr'>"
+          "<span id='modal-title' style='font-weight:bold;color:#ccc'></span>"
+          "<button class='modal-close' onclick='closeModal()'>&#x2715;</button>"
+          "</div>"
+          "<div id='modal-body'></div>"
+          "</div></div>");
   sendBuf(c, "<div class='footer'>v%d.%d &mdash; Parent</div>", APP_MAJOR, APP_MINOR);
   c.flush();
 
   // ── JavaScript ──────────────────────────────────────────────────────────
   c.print("<script>"
-          "var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0;"
+          "var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0,units=0;"
           "var curRid=-1,curRname='',curRsteps=[];"
           "function showTab(t){"
           "ctab=t;"
@@ -781,7 +823,9 @@ void sendParentSPA(WiFiClient& c) {
           "x.send(b?JSON.stringify(b):null);"
           "}");
 
-  c.print("function loadDash(){"
+  c.print("var dashRunnerTimer=null;"
+          "function loadDash(){"
+          "if(dashRunnerTimer)clearInterval(dashRunnerTimer);"
           "ra('GET','/api/children',null,function(d){"
           "var h='<table class=\"tbl\"><tr>"
           "<th>Hostname</th><th>Name</th><th>IP</th>"
@@ -799,9 +843,37 @@ void sendParentSPA(WiFiClient& c) {
           "h+='<tr><td colspan=\"6\" style=\"color:#888;text-align:center\">"
           "No children registered</td></tr>';"
           "}"
-          "document.getElementById('t-dash').innerHTML=h+'</table>';"
+          "h+='</table><div id=\"dash-runner\" style=\"margin-top:1em\"></div>';"
+          "document.getElementById('t-dash').innerHTML=h;"
           "document.getElementById('hs').textContent="
           "d&&d.length?d.length+' child'+(d.length>1?'ren':'')+' registered':'No children';"
+          "refreshRunnerStatus();"
+          "dashRunnerTimer=setInterval(refreshRunnerStatus,3000);"
+          "});"
+          "}"
+          "function refreshRunnerStatus(){"
+          "ra('GET','/api/settings',null,function(s){"
+          "var el=document.getElementById('dash-runner');if(!el)return;"
+          "if(!s||!s.runnerRunning||s.activeRunner<0){"
+          "el.innerHTML='<p style=\"color:#888;font-size:.85em\">No runner active.</p>';"
+          "return;"
+          "}"
+          "ra('GET','/api/runners/'+s.activeRunner,null,function(r){"
+          "var el2=document.getElementById('dash-runner');if(!el2)return;"
+          "if(!r){el2.innerHTML='';return;}"
+          "var total=0;"
+          "r.steps.forEach(function(st){total+=st.durationS||0;});"
+          "var h='<div class=\"card\" style=\"max-width:420px\">';"
+          "h+='<div class=\"card-title\">&#9654; Runner: '+r.name+'</div>';"
+          "if(total>0){"
+          "var pct=Math.min(100,Math.round(s.runnerElapsed*100/total));"
+          "h+='<div class=\"prog-bar\"><div class=\"prog-fill\" id=\"pf\" style=\"width:'+pct+'%\"></div></div>';"
+          "}"
+          "h+='<div style=\"margin-top:.6em\">';"
+          "h+='<button class=\"btn btn-off\" onclick=\"stopRunners()\" style=\"margin-right:.5em\">Stop</button>';"
+          "h+='</div></div>';"
+          "el2.innerHTML=h;"
+          "});"
           "});"
           "}");
 
@@ -811,6 +883,9 @@ void sendParentSPA(WiFiClient& c) {
           "<input id=\"aip\" placeholder=\"Child IP (x.x.x.x)\" style=\"width:160px\">"
           "<button class=\"btn btn-on\" onclick=\"addChild()\" style=\"margin-left:.5em\">Add Child</button>"
           "<a class=\"btn btn-nav\" href=\"/api/children/export\" style=\"margin-left:.5em\">Export JSON</a>"
+          "<label class=\"btn btn-nav\" style=\"cursor:pointer;margin-left:.5em\">Import JSON"
+          "<input type=\"file\" accept=\".json\" style=\"display:none\" onchange=\"importChildren(this)\">"
+          "</label>"
           "</div>"
           "<table class=\"tbl\"><tr>"
           "<th>Hostname</th><th>Name</th><th>IP</th><th>Status</th><th>Strings</th><th>Actions</th>"
@@ -819,7 +894,9 @@ void sendParentSPA(WiFiClient& c) {
           "d.forEach(function(c){"
           "h+='<tr><td>'+c.hostname+'</td><td>'+(c.name||'-')+'</td><td>'"
           "+c.ip+'</td><td>'+(c.status===1?'Online':'Offline')+'</td><td>'+c.sc+'</td><td>'"
-          "+'<button class=\"btn btn-on\" onclick=\"refreshChild('+c.id+')\">Refresh</button>'"
+          "+'<button class=\"btn\" onclick=\"showDetails('+c.id+')\""
+          " style=\"background:#446;color:#fff\">Details</button>'"
+          "+' <button class=\"btn btn-on\" onclick=\"refreshChild('+c.id+')\">Refresh</button>'"
           "+' <button class=\"btn btn-off\" onclick=\"removeChild('+c.id+')\">Remove</button></td></tr>';"
           "});"
           "}else{"
@@ -845,14 +922,76 @@ void sendParentSPA(WiFiClient& c) {
           "ra('POST','/api/children/'+id+'/refresh',{},function(){"
           "setTimeout(loadSetup,700);"
           "});"
+          "}"
+          "function closeModal(){"
+          "document.getElementById('modal').style.display='none';"
+          "}"
+          "function showDetails(id){"
+          "ra('GET','/api/children/export',null,function(d){"
+          "if(!d)return;"
+          "var c=null;"
+          "for(var i=0;i<d.length;i++){if(d[i].id===id){c=d[i];break;}}"
+          "if(!c)return;"
+          "var dirs=['E','N','W','S'];"
+          "var types=['WS2812B','WS2811','APA102'];"
+          "var h='<p style=\"font-size:.85em;margin-bottom:.6em\">';"
+          "h+='IP: <a href=\"http://'+c.ip+'/config\" target=\"_blank\""
+          " style=\"color:#88f\">'+c.ip+'/config</a>';"
+          "if(c.desc)h+=' &mdash; '+c.desc;"
+          "h+='</p>';"
+          "h+='<table class=\"tbl\" style=\"font-size:.8em\">';"
+          "h+='<tr><th>#</th><th>LEDs</th><th>Len mm</th><th>Type</th>"
+          "<th>Cable Dir</th><th>Cable mm</th><th>Strip Dir</th></tr>';"
+          "(c.strings||[]).forEach(function(s,i){"
+          "h+='<tr><td>'+(i+1)+'</td>';"
+          "h+='<td>'+s.leds+'</td><td>'+s.mm+'</td>';"
+          "h+='<td>'+(types[s.type]||s.type)+'</td>';"
+          "h+='<td>'+(dirs[s.cdir]||s.cdir)+'</td>';"
+          "h+='<td>'+s.cmm+'</td>';"
+          "h+='<td>'+(dirs[s.sdir]||s.sdir)+'</td></tr>';"
+          "});"
+          "h+='</table>';"
+          "document.getElementById('modal-title').textContent="
+          "c.hostname+(c.name&&c.name!==c.hostname?' ('+c.name+')':'');"
+          "document.getElementById('modal-body').innerHTML=h;"
+          "document.getElementById('modal').style.display='block';"
+          "});"
+          "}"
+          "function importChildren(input){"
+          "var f=input.files[0];if(!f)return;"
+          "var rd=new FileReader();"
+          "rd.onload=function(e){"
+          "try{var data=JSON.parse(e.target.result);}catch(ex){alert('Invalid JSON');return;}"
+          "var x=new XMLHttpRequest();"
+          "x.open('POST','/api/children/import',true);"
+          "x.setRequestHeader('Content-Type','application/json');"
+          "x.onload=function(){"
+          "try{"
+          "var r=JSON.parse(x.responseText);"
+          "if(r.ok){"
+          "document.getElementById('hs').textContent="
+          "'Imported: +'+r.added+' updated '+r.updated+' skipped '+r.skipped;"
+          "loadSetup();"
+          "}"
+          "}catch(ex){}"
+          "};"
+          "x.send(JSON.stringify(data));"
+          "};"
+          "rd.readAsText(f);"
+          "input.value='';"
           "}");
 
   c.print("function loadLayout(){"
+          "ra('GET','/api/settings',null,function(s){if(s)units=s.units||0;});"
           "ra('GET','/api/layout',null,function(d){"
           "if(!d)return;"
           "ld=d;phW=d.canvasW||10000;phH=d.canvasH||5000;"
           "drawLayout();"
           "});"
+          "}"
+          "function fmtCoord(mm){"
+          "if(units===1)return (mm/25.4).toFixed(1)+'\"';"
+          "return mm+'mm';"
           "}"
           "function drawLayout(){"
           "var cv=document.getElementById('lcv');"
@@ -875,10 +1014,11 @@ void sendParentSPA(WiFiClient& c) {
           "ctx.lineWidth=1.5;ctx.stroke();"
           "ctx.fillStyle='#eee';ctx.font='10px sans-serif';ctx.textAlign='center';"
           "ctx.fillText(c.hostname,cx,cy+22);"
-          "if(c.name&&c.name!==c.hostname){"
-          "ctx.fillStyle='#aaa';ctx.font='9px sans-serif';"
-          "ctx.fillText(c.name,cx,cy+33);"
-          "}"
+          "var lbl2=c.name&&c.name!==c.hostname?c.name:'';"
+          "var coordStr='('+fmtCoord(c.x)+','+fmtCoord(c.y)+')';"
+          "ctx.fillStyle='#888';ctx.font='9px sans-serif';"
+          "if(lbl2){ctx.fillText(lbl2,cx,cy+33);ctx.fillText(coordStr,cx,cy+44);}"
+          "else{ctx.fillText(coordStr,cx,cy+33);}"
           "});"
           "}");
 
@@ -1149,24 +1289,38 @@ void sendParentSPA(WiFiClient& c) {
           "});"
           "}");
 
-  c.print("function loadSettings(){"
+  c.print("function applyDarkMode(dm){"
+          "var b=document.getElementById('app');"
+          "if(dm)b.classList.remove('light');"
+          "else b.classList.add('light');"
+          "}"
+          "function loadSettings(){"
           "ra('GET','/api/settings',null,function(d){"
           "if(!d)return;"
           "document.getElementById('s-nm').value=d.name||'';"
           "document.getElementById('s-un').value=d.units||0;"
           "document.getElementById('s-cw').value=d.canvasW||10000;"
           "document.getElementById('s-ch').value=d.canvasH||5000;"
+          "var cb=document.getElementById('s-dm');"
+          "if(cb)cb.checked=(d.darkMode!==0);"
+          "applyDarkMode(d.darkMode!==0);"
           "});"
           "}"
           "function saveSettings(){"
+          "var dm=document.getElementById('s-dm').checked?1:0;"
+          "applyDarkMode(dm);"
           "ra('POST','/api/settings',{"
           "name:document.getElementById('s-nm').value.trim(),"
           "units:parseInt(document.getElementById('s-un').value)||0,"
           "canvasW:parseInt(document.getElementById('s-cw').value)||10000,"
-          "canvasH:parseInt(document.getElementById('s-ch').value)||5000"
-          "},function(r){if(r&&r.ok)alert('Settings saved.');});"
+          "canvasH:parseInt(document.getElementById('s-ch').value)||5000,"
+          "darkMode:dm"
+          "},function(r){if(r&&r.ok)document.getElementById('hs').textContent='Settings saved';});"
           "}"
+          "ra('GET','/api/settings',null,function(d){"
+          "applyDarkMode(!d||d.darkMode!==0);"
           "showTab('dash');"
+          "});"
           "</script></body></html>");
   c.flush();
 }
@@ -1468,13 +1622,17 @@ void handlePostLayout(WiFiClient& c, int contentLen) {
 }
 
 void sendApiSettings(WiFiClient& c) {
-  char body[128];
+  char body[192];
   int blen = snprintf(body, sizeof(body),
-    "{\"name\":\"%s\",\"units\":%u,\"canvasW\":%u,\"canvasH\":%u}",
+    "{\"name\":\"%s\",\"units\":%u,\"canvasW\":%u,\"canvasH\":%u"
+    ",\"darkMode\":%u,\"runnerRunning\":%s,\"activeRunner\":%d}",
     settings.parentName,
     (unsigned)settings.units,
     (unsigned)settings.canvasWidthMm,
-    (unsigned)settings.canvasHeightMm);
+    (unsigned)settings.canvasHeightMm,
+    (unsigned)settings.darkMode,
+    settings.runnerRunning ? "true" : "false",
+    (settings.activeRunner == 0xFF) ? -1 : (int)settings.activeRunner);
   sendBuf(c, "HTTP/1.1 200 OK\r\n"
              "Content-Type: application/json\r\n"
              "Connection: close\r\n"
@@ -1485,12 +1643,14 @@ void sendApiSettings(WiFiClient& c) {
 }
 
 void handlePostSettings(WiFiClient& c, int contentLen) {
-  char body[128] = {};
+  char body[160] = {};
   if (contentLen > 0 && contentLen < (int)sizeof(body))
     c.readBytes(body, contentLen);
   jsonGetStr(body, "name", settings.parentName, sizeof(settings.parentName));
-  int u = jsonGetInt(body, "units", (int)settings.units);
-  settings.units = (uint8_t)(u & 1);
+  int u  = jsonGetInt(body, "units",    (int)settings.units);
+  int dm = jsonGetInt(body, "darkMode", (int)settings.darkMode);
+  settings.units    = (uint8_t)(u & 1);
+  settings.darkMode = (uint8_t)(dm ? 1 : 0);
   int cw = jsonGetInt(body, "canvasW", (int)settings.canvasWidthMm);
   int ch = jsonGetInt(body, "canvasH", (int)settings.canvasHeightMm);
   if (cw >= 1000 && cw <= 100000) settings.canvasWidthMm  = (uint16_t)cw;
@@ -1591,6 +1751,88 @@ void handleApiActionStop(WiFiClient& c, int contentLen) {
     sendCmdActionStop(dest);
   }
   sendJsonOk(c);
+}
+
+// POST /api/children/import — body is JSON array in same format as export
+void handleApiChildrenImport(WiFiClient& c, int contentLen) {
+  static char body[1800];
+  memset(body, 0, sizeof(body));
+  int readLen = (contentLen < (int)sizeof(body) - 1) ? contentLen : (int)sizeof(body) - 1;
+  if (readLen > 0) c.readBytes(body, readLen);
+
+  uint8_t added = 0, updated = 0, skipped = 0;
+
+  const char* p = body;
+  while ((p = strchr(p, '{')) != NULL) {
+    int depth = 0;
+    const char* ep = p;
+    while (*ep) {
+      if (*ep == '{') depth++;
+      else if (*ep == '}') { if (--depth == 0) { ep++; break; } }
+      ep++;
+    }
+    char obj[320] = {};
+    int olen = (int)(ep - p);
+    if (olen >= (int)sizeof(obj)) { p = ep; skipped++; continue; }
+    memcpy(obj, p, olen);
+
+    char hn[HOSTNAME_LEN]   = {};
+    char nm[CHILD_NAME_LEN] = {};
+    char ds[CHILD_DESC_LEN] = {};
+    char ip[16]             = {};
+    jsonGetStr(obj, "hostname", hn, sizeof(hn));
+    jsonGetStr(obj, "name",     nm, sizeof(nm));
+    jsonGetStr(obj, "desc",     ds, sizeof(ds));
+    jsonGetStr(obj, "ip",       ip, sizeof(ip));
+    if (hn[0] == '\0') { p = ep; skipped++; continue; }
+
+    // Match by hostname — update if found, add if not
+    uint8_t slot = 0xFF;
+    for (uint8_t i = 0; i < MAX_CHILDREN; i++) {
+      if (children[i].inUse &&
+          strncmp(children[i].hostname, hn, HOSTNAME_LEN - 1) == 0) {
+        slot = i; break;
+      }
+    }
+    bool isNew = (slot == 0xFF);
+    if (isNew) {
+      for (uint8_t i = 0; i < MAX_CHILDREN; i++) {
+        if (!children[i].inUse) { slot = i; break; }
+      }
+      if (slot == 0xFF) { skipped++; p = ep; continue; }
+      memset(&children[slot], 0, sizeof(ChildNode));
+      children[slot].inUse = true;
+      strncpy(children[slot].hostname, hn, HOSTNAME_LEN - 1);
+      added++;
+    } else {
+      updated++;
+    }
+    if (nm[0]) strncpy(children[slot].name,        nm, CHILD_NAME_LEN - 1);
+    if (ds[0]) strncpy(children[slot].description, ds, CHILD_DESC_LEN - 1);
+    int a = 0, b = 0, cc = 0, d = 0;
+    if (sscanf(ip, "%d.%d.%d.%d", &a, &b, &cc, &d) == 4) {
+      children[slot].ip[0] = (uint8_t)a; children[slot].ip[1] = (uint8_t)b;
+      children[slot].ip[2] = (uint8_t)cc; children[slot].ip[3] = (uint8_t)d;
+    }
+    int x = jsonGetInt(obj, "x", 0);
+    int y = jsonGetInt(obj, "y", 0);
+    if (x < -30000) x = -30000; if (x > 30000) x = 30000;
+    if (y < -30000) y = -30000; if (y > 30000) y = 30000;
+    children[slot].xMm = (int16_t)x;
+    children[slot].yMm = (int16_t)y;
+    p = ep;
+  }
+
+  char resp[80];
+  int rlen = snprintf(resp, sizeof(resp),
+    "{\"ok\":true,\"added\":%u,\"updated\":%u,\"skipped\":%u}",
+    (unsigned)added, (unsigned)updated, (unsigned)skipped);
+  sendBuf(c, "HTTP/1.1 200 OK\r\n"
+             "Content-Type: application/json\r\n"
+             "Connection: close\r\n"
+             "Content-Length: %d\r\n\r\n", rlen);
+  c.print(resp);
+  c.flush();
 }
 
 // ── Runner API (Phase 2d) ─────────────────────────────────────────────────────
