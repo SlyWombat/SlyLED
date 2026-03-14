@@ -425,6 +425,7 @@ void sendApiRunners(WiFiClient& c);
 void sendApiRunner(WiFiClient& c, uint8_t id);
 void handlePostRunners(WiFiClient& c, int contentLen);
 void handleRunnerIdRoute(WiFiClient& c, const char* req, bool isGet, bool isPut, bool isDel, int contentLen);
+void computeRunner(uint8_t id);
 #endif
 
 // ── Web request handler ───────────────────────────────────────────────────────
@@ -927,6 +928,8 @@ void sendParentSPA(WiFiClient& c) {
           "+(r.computed?' \u2713':'')+' )</span></span>';"
           "h+='<button class=\"btn btn-on\" onclick=\"showRunner('+r.id+')\""
           " style=\"padding:.3em .8em\">Edit</button>';"
+          "h+=' <button class=\"btn\" onclick=\"doCompute('+r.id+')\""
+          " style=\"background:#446;color:#fff;padding:.3em .8em\">Compute</button>';"
           "h+=' <button class=\"btn btn-off\" onclick=\"delRunner('+r.id+')\""
           " style=\"padding:.3em .8em\">Del</button>';"
           "h+='</div>';"
@@ -1069,6 +1072,15 @@ void sendParentSPA(WiFiClient& c) {
           "}}catch(e){}"
           "};"
           "x.send(JSON.stringify({name:curRname,steps:steps}));"
+          "}"
+          "function doCompute(id){"
+          "document.getElementById('hs').textContent='Computing...';"
+          "ra('POST','/api/runners/'+id+'/compute',null,function(r){"
+          "if(r&&r.ok){"
+          "document.getElementById('hs').textContent='Runner computed \u2713';"
+          "loadRuntime();"
+          "}"
+          "});"
           "}");
 
   c.print("function loadSettings(){"
@@ -1608,7 +1620,73 @@ void handlePostRunners(WiFiClient& c, int contentLen) {
   c.flush();
 }
 
-// Handle GET / PUT / DELETE /api/runners/:id
+// ── Pre-computation algorithm (Phase 2e) ─────────────────────────────────────
+
+// Direction unit vectors indexed by DIR_E/N/W/S (0/1/2/3)
+// dx[DIR_E]=+1, dx[DIR_N]=0, dx[DIR_W]=-1, dx[DIR_S]=0
+// dy[DIR_E]=0,  dy[DIR_N]=+1, dy[DIR_W]=0,  dy[DIR_S]=-1
+static const int8_t DIR_DX[4] = {  1,  0, -1,  0 };
+static const int8_t DIR_DY[4] = {  0,  1,  0, -1 };
+
+void computeRunner(uint8_t id) {
+  if (id >= MAX_RUNNERS || !runners[id].inUse) return;
+  Runner& r = runners[id];
+
+  // Clear all payloads to 0xFF (= string not affected)
+  memset(r.payload, 0xFF, sizeof(r.payload));
+
+  for (uint8_t s = 0; s < r.stepCount; s++) {
+    RunnerStep& step = r.steps[s];
+
+    // Area of effect in mm — integer arithmetic, no float
+    int32_t axMin = ((int32_t)step.area.x0 * settings.canvasWidthMm)  / 10000;
+    int32_t axMax = ((int32_t)step.area.x1 * settings.canvasWidthMm)  / 10000;
+    int32_t ayMin = ((int32_t)step.area.y0 * settings.canvasHeightMm) / 10000;
+    int32_t ayMax = ((int32_t)step.area.y1 * settings.canvasHeightMm) / 10000;
+
+    for (uint8_t c = 0; c < MAX_CHILDREN; c++) {
+      if (!children[c].inUse) continue;
+      ChildStepPayload& pl = r.payload[s][c];
+
+      for (uint8_t j = 0; j < children[c].stringCount && j < MAX_STR_PER_CHILD; j++) {
+        StringInfo& str = children[c].strings[j];
+        uint16_t lc = str.ledCount;
+        if (lc == 0) continue;
+
+        // String origin in mm: child position + cable offset
+        uint8_t cd = str.cableDir & 3;
+        int32_t sx = (int32_t)children[c].xMm + (int32_t)str.cableMm * DIR_DX[cd];
+        int32_t sy = (int32_t)children[c].yMm + (int32_t)str.cableMm * DIR_DY[cd];
+
+        uint8_t sd   = str.stripDir & 3;
+        uint16_t lm  = str.lengthMm;
+        int32_t  div = (lc > 1) ? (int32_t)(lc - 1) : 1;
+
+        uint8_t first = 0xFF;
+        uint8_t last  = 0xFF;
+
+        for (uint16_t i = 0; i < lc; i++) {
+          // LED position: multiply before divide to preserve integer precision
+          int32_t lx = sx + (int32_t)i * lm * DIR_DX[sd] / div;
+          int32_t ly = sy + (int32_t)i * lm * DIR_DY[sd] / div;
+
+          if (lx >= axMin && lx <= axMax && ly >= ayMin && ly <= ayMax) {
+            uint8_t idx = (i > 254) ? 254 : (uint8_t)i;  // clamp to uint8_t range
+            if (first == 0xFF) first = idx;
+            last = idx;
+          }
+        }
+        pl.ledStart[j] = first;
+        pl.ledEnd[j]   = last;
+      }
+    }
+  }
+
+  r.computed = true;
+  if (Serial) { Serial.print(F("Runner computed: ")); Serial.println(id); }
+}
+
+// Handle GET / PUT / DELETE / POST(compute) /api/runners/:id
 void handleRunnerIdRoute(WiFiClient& c, const char* req, bool isGet, bool isPut, bool isDel, int contentLen) {
   const char* idStart = strstr(req, "/api/runners/");
   if (!idStart) { sendJsonErr(c, "bad-route"); return; }
@@ -1616,7 +1694,13 @@ void handleRunnerIdRoute(WiFiClient& c, const char* req, bool isGet, bool isPut,
   int id = atoi(idStart);
   if (id < 0 || id >= MAX_RUNNERS) { sendJsonErr(c, "bad-id"); return; }
 
-  if (isDel) {
+  bool isCompute = (strstr(idStart, "/compute") != NULL);
+
+  if (isCompute) {
+    if (!runners[id].inUse) { sendJsonErr(c, "not-found"); return; }
+    computeRunner((uint8_t)id);
+    sendJsonOk(c);
+  } else if (isDel) {
     if (!runners[id].inUse) { sendJsonErr(c, "not-found"); return; }
     memset(&runners[id], 0, sizeof(Runner));
     sendJsonOk(c);
