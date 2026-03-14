@@ -432,10 +432,13 @@ int jsonGetInt(const char* json, const char* key, int defVal) {
 
 void jsonGetStr(const char* json, const char* key, char* out, uint8_t len) {
   char needle[28];
-  snprintf(needle, sizeof(needle), "\"%s\":\"", key);
+  snprintf(needle, sizeof(needle), "\"%s\":", key);
   const char* p = strstr(json, needle);
   if (!p) { out[0] = '\0'; return; }
   p += strlen(needle);
+  while (*p == ' ' || *p == '\t') p++;
+  if (*p != '"') { out[0] = '\0'; return; }
+  p++;
   uint8_t i = 0;
   while (*p && *p != '"' && i < len - 1) out[i++] = *p++;
   out[i] = '\0';
@@ -630,6 +633,20 @@ void handleClient() {
 
 #ifdef BOARD_GIGA
 
+// Send a string in 384-byte chunks; avoids WiFiClient TX-buffer overflow.
+void spa(WiFiClient& c, const char* s) {
+  const uint8_t* p = (const uint8_t*)s;
+  size_t rem = strlen(s);
+  while (rem > 0) {
+    size_t chunk = (rem > 384) ? 384 : rem;
+    size_t sent = c.write(p, chunk);
+    if (sent == 0) break;
+    p += sent;
+    rem -= sent;
+    c.flush();
+  }
+}
+
 void sendParentSPA(WiFiClient& c) {
   c.print("HTTP/1.1 200 OK\r\n"
           "Content-Type: text/html\r\n"
@@ -656,6 +673,7 @@ void sendParentSPA(WiFiClient& c) {
           ".card{background:#1e1e1e;border:1px solid #333;border-radius:10px;"
           "padding:1.2em 1.5em;margin-bottom:1em;max-width:480px}"
           ".card-title{font-size:1.05em;font-weight:bold;color:#ccc;margin-bottom:.8em}");
+  c.flush();
 
   c.print(".tbl{border-collapse:collapse;width:100%;max-width:900px}"
           ".tbl th,.tbl td{padding:.4em .7em;border:1px solid #2a2a2a;text-align:left;font-size:.85em}"
@@ -703,6 +721,7 @@ void sendParentSPA(WiFiClient& c) {
           "body.light #hs{color:#555}"
           "body.light .footer{color:#aaa}"
           "body.light .prog-bar{background:#ddd}");
+  c.flush();
 
   c.print("</style></head><body id='app'>"
           "<div id='hdr'><h1>SlyLED</h1><div id='hs'>Loading...</div></div>"
@@ -762,6 +781,7 @@ void sendParentSPA(WiFiClient& c) {
           "<button class='btn btn-on' onclick='applyAct()'>Apply</button>"
           "<button class='btn btn-off' onclick='stopAct()' style='margin-left:.5em'>Stop All</button>"
           "</div></div></div>");
+  c.flush();
 
   // Runtime tab
   c.print("<div id='t-runtime' class='tab' style='display:none'>"
@@ -782,6 +802,7 @@ void sendParentSPA(WiFiClient& c) {
           "<button class='btn btn-on' onclick='addStep()'>+ Add Step</button>"
           "<button class='btn btn-on' onclick='saveRunner()' style='margin-left:.5em'>Save Runner</button>"
           "</div></div></div>");
+  c.flush();
 
   c.print("<div id='t-settings' class='tab' style='display:none'>"
           "<div class='card'>"
@@ -833,6 +854,7 @@ void sendParentSPA(WiFiClient& c) {
           "else if(t==='runtime')loadRuntime();"
           "else if(t==='settings')loadSettings();"
           "}");
+  c.flush();
 
   c.print("function ra(m,p,b,cb){"
           "var x=new XMLHttpRequest();"
@@ -841,6 +863,7 @@ void sendParentSPA(WiFiClient& c) {
           "x.onload=function(){try{if(cb)cb(JSON.parse(x.responseText));}catch(e){if(cb)cb(null);}};"
           "x.send(b?JSON.stringify(b):null);"
           "}");
+  c.flush();
 
   c.print("var dashRunnerTimer=null;"
           "function loadDash(){"
@@ -895,6 +918,7 @@ void sendParentSPA(WiFiClient& c) {
           "});"
           "});"
           "}");
+  c.flush();
 
   c.print("function loadSetup(){"
           "ra('GET','/api/children',null,function(d){"
@@ -924,8 +948,9 @@ void sendParentSPA(WiFiClient& c) {
           "document.getElementById('t-setup').innerHTML=h+'</table>';"
           "});"
           "}");
+  c.flush();
 
-  c.print("function addChild(){"
+  spa(c, "function addChild(){"
           "var ip=document.getElementById('aip').value.trim();"
           "if(!ip)return;"
           "ra('POST','/api/children',{ip:ip},function(){loadSetup();});"
@@ -999,6 +1024,7 @@ void sendParentSPA(WiFiClient& c) {
           "rd.readAsText(f);"
           "input.value='';"
           "}");
+  c.flush();
 
   c.print("function loadLayout(){"
           "ra('GET','/api/settings',null,function(s){if(s)units=s.units||0;});"
@@ -1040,6 +1066,7 @@ void sendParentSPA(WiFiClient& c) {
           "else{ctx.fillText(coordStr,cx,cy+33);}"
           "});"
           "}");
+  c.flush();
 
   c.print("function saveLayout(){"
           "if(!ld||!ld.children)return;"
@@ -1076,8 +1103,9 @@ void sendParentSPA(WiFiClient& c) {
           "drawLayout();"
           "}"
           "function cvUp(){drag=null;}");
+  c.flush();
 
-  c.print("function loadActions(){"
+  spa(c, "function loadActions(){"
           "ra('GET','/api/children',null,function(d){"
           "var s=document.getElementById('a-tg');"
           "while(s.options.length>1)s.remove(1);"
@@ -1117,6 +1145,7 @@ void sendParentSPA(WiFiClient& c) {
           "{target:document.getElementById('a-tg').value},"
           "function(r){if(r&&r.ok)document.getElementById('hs').textContent='Action stopped';});"
           "}");
+  c.flush();
 
   // ── Runtime tab JavaScript ───────────────────────────────────────────────
   c.print("function loadRuntime(){"
@@ -1147,6 +1176,7 @@ void sendParentSPA(WiFiClient& c) {
           "document.getElementById('rn-list').innerHTML=h;"
           "});"
           "}");
+  c.flush();
 
   c.print("function newRunner(){"
           "var nm=prompt('Runner name:','Runner');"
@@ -1177,6 +1207,7 @@ void sendParentSPA(WiFiClient& c) {
           "document.getElementById('rt-list').style.display='block';"
           "document.getElementById('rt-edit').style.display='none';"
           "}");
+  c.flush();
 
   c.print("function rgb2h(r,g,b){"
           "return'#'+('0'+r.toString(16)).slice(-2)"
@@ -1237,8 +1268,9 @@ void sendParentSPA(WiFiClient& c) {
           "}else{h='<p style=\"color:#888;margin:.5em 0\">No steps. Add one below.</p>';}"
           "document.getElementById('re-steps').innerHTML=h;"
           "}");
+  c.flush();
 
-  c.print("function addStep(){"
+  spa(c, "function addStep(){"
           "curRsteps.push({type:1,r:255,g:0,b:0,onMs:500,offMs:500,"
           "wdir:0,wspd:50,x0:0,y0:0,x1:10000,y1:10000,durationS:5});"
           "renderSteps();"
@@ -1307,6 +1339,7 @@ void sendParentSPA(WiFiClient& c) {
           "if(r&&r.ok)document.getElementById('hs').textContent='Runners stopped';"
           "});"
           "}");
+  c.flush();
 
   c.print("function applyDarkMode(dm){"
           "var b=document.getElementById('app');"
@@ -1629,7 +1662,12 @@ void handleApiChildStatus(WiFiClient& c, uint8_t id) {
     }
     if (!got) delay(5);
   }
-  if (!got) { sendJsonErr(c, "timeout"); return; }
+  if (!got) {
+    c.print("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            "Content-Length: 28\r\nConnection: close\r\n\r\n"
+            "{\"ok\":false,\"err\":\"timeout\"}");
+    c.flush(); return;
+  }
   char body[96];
   int blen = snprintf(body, sizeof(body),
     "{\"ok\":true,\"action\":%u,\"runner\":%s,\"step\":%u,\"rssi\":-%u,\"uptime\":%lu}",
@@ -2203,9 +2241,9 @@ void handleRunnerIdRoute(WiFiClient& c, const char* req, bool isGet, bool isPut,
     if (nm[0] != '\0') strncpy(runners[id].name, nm, RUNNER_NAME_LEN - 1);
 
     // Parse steps array
-    const char* sa = strstr(body, "\"steps\":[");
+    const char* sa = NULL;
+    { const char* sp = strstr(body, "\"steps\":"); if (sp) { sp += 8; while (*sp == ' ' || *sp == '\t') sp++; if (*sp == '[') sa = sp + 1; } }
     if (sa) {
-      sa += 9;
       uint8_t sc = 0;
       while (*sa && sc < MAX_STEPS) {
         // Skip to next '{'

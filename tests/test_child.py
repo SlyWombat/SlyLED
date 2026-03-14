@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """
-test_child.py — Automated tests for the SlyLED child firmware (ESP32).
-
-Runs against a Wokwi simulation via the wokwigw private gateway:
-  HTTP → localhost:18080 (forwarded to sim port 80)
-  UDP  → localhost:14210 (forwarded to sim port 4210)
+test_child.py — Automated tests for the SlyLED child firmware (ESP32 / D1 Mini).
 
 Usage:
     python tests/test_child.py [host] [http_port] [udp_port]
 
-Defaults: host=127.0.0.1  http_port=18080  udp_port=14210
+If host is omitted, the script broadcasts a UDP PING and auto-discovers the
+first child on the network.
 
-For real hardware:
-    python tests/test_child.py 192.168.10.x 80 4210
+Defaults: http_port=80  udp_port=4210
+
+For Wokwi simulation:
+    python tests/test_child.py 127.0.0.1 18080 14210
 """
 
 import socket
@@ -25,9 +24,44 @@ import urllib.error
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-HOST      = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
-HTTP_PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 18080
-UDP_PORT  = int(sys.argv[3]) if len(sys.argv) > 3 else 14210
+_arg_host = sys.argv[1] if len(sys.argv) > 1 else None
+HTTP_PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 80
+UDP_PORT  = int(sys.argv[3]) if len(sys.argv) > 3 else 4210
+
+# Auto-discover if no host given
+if _arg_host is None:
+    print("No host specified — broadcasting UDP PING to discover children...")
+    _disc_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    _disc_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    _disc_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    _disc_sock.settimeout(0.2)
+    _disc_sock.bind(("", UDP_PORT))  # children reply to UDP_PORT, not sender's ephemeral port
+    _ping = struct.pack("<HBBI", 0x534C, 2, 0x01, int(time.time()) & 0xFFFFFFFF)
+    _disc_sock.sendto(_ping, ("255.255.255.255", UDP_PORT))
+    _found = {}
+    _deadline = time.time() + 3.0
+    while time.time() < _deadline:
+        try:
+            _data, (_ip, _) = _disc_sock.recvfrom(256)
+            if len(_data) >= 103:
+                _magic, _ver, _cmd, _ = struct.unpack_from("<HBBI", _data, 0)
+                if _magic == 0x534C and _cmd == 0x02 and _ip not in _found:
+                    _hn = _data[8:18].rstrip(b'\x00').decode("ascii", errors="replace")
+                    _found[_ip] = _hn
+        except socket.timeout:
+            pass
+    _disc_sock.close()
+    if not _found:
+        print("  No children found via broadcast. Pass IP as first argument.")
+        sys.exit(2)
+    if len(_found) > 1:
+        print(f"  Multiple children found: {list(_found.keys())}")
+        print("  Pass the target IP as first argument.")
+        sys.exit(2)
+    _arg_host, _hn = next(iter(_found.items()))
+    print(f"  Found: {_arg_host}  ({_hn})\n")
+
+HOST = _arg_host
 
 # ── UDP protocol constants ────────────────────────────────────────────────────
 
@@ -83,6 +117,7 @@ def http_get(path, timeout=5):
     url = f"http://{HOST}:{HTTP_PORT}{path}"
     try:
         req = urllib.request.Request(url)
+        req.add_header("Connection", "close")
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, r.read().decode("utf-8", errors="replace"), dict(r.headers)
     except urllib.error.HTTPError as e:
@@ -90,22 +125,28 @@ def http_get(path, timeout=5):
     except Exception as e:
         return 0, str(e), {}
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Raise HTTPError instead of following 3xx redirects."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+
+_no_redirect_opener  = urllib.request.build_opener(_NoRedirect())
+_yes_redirect_opener = urllib.request.build_opener(urllib.request.HTTPRedirectHandler())
+
 def http_post(path, body="", content_type="application/x-www-form-urlencoded",
               timeout=5, follow_redirects=False):
     url = f"http://{HOST}:{HTTP_PORT}{path}"
     data = body.encode() if isinstance(body, str) else body
     try:
         req = urllib.request.Request(url, data=data, method="POST")
+        req.add_header("Connection", "close")
         req.add_header("Content-Type", content_type)
         req.add_header("Content-Length", str(len(data)))
-        opener = urllib.request.build_opener(
-            urllib.request.HTTPRedirectHandler() if follow_redirects
-            else urllib.request.BaseHandler()
-        )
+        opener = _yes_redirect_opener if follow_redirects else _no_redirect_opener
         with opener.open(req, timeout=timeout) as r:
             return r.status, r.read().decode("utf-8", errors="replace"), dict(r.headers)
     except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8", errors="replace"), {}
+        return e.code, e.read().decode("utf-8", errors="replace"), dict(e.headers)
     except Exception as e:
         return 0, str(e), {}
 
@@ -118,9 +159,15 @@ def udp_header(cmd, epoch=None):
     return struct.pack("<HBBI", UDP_MAGIC, UDP_VERSION, cmd, epoch)
 
 def udp_send_recv(pkt, timeout=2.0, recv_size=256):
-    """Send a UDP packet and wait for a reply. Returns bytes or None."""
+    """Send a UDP packet and wait for a reply. Returns bytes or None.
+
+    The child always replies to (sender_ip, UDP_PORT=4210) — the same port it
+    listens on — so we must bind our socket to that port to receive responses.
+    """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.settimeout(timeout)
+    sock.bind(("", UDP_PORT))
     try:
         sock.sendto(pkt, (HOST, UDP_PORT))
         data, _ = sock.recvfrom(recv_size)
@@ -131,7 +178,7 @@ def udp_send_recv(pkt, timeout=2.0, recv_size=256):
         sock.close()
 
 def udp_send(pkt):
-    """Fire-and-forget UDP send."""
+    """Fire-and-forget UDP send (no reply expected)."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.sendto(pkt, (HOST, UDP_PORT))
@@ -176,7 +223,8 @@ def parse_status_resp(data):
         return None
     payload = data[8:]
     active_action, runner_active, current_step, wifi_rssi, uptime_s = \
-        struct.unpack_from("<BBBbI", payload, 0)
+        struct.unpack_from("<BBBBI", payload, 0)
+    # wifiRssi is stored as uint8 absolute magnitude (e.g. 69 means -69 dBm)
     return {
         "activeAction": active_action,
         "runnerActive": bool(runner_active),
@@ -240,10 +288,11 @@ def test_http_basic():
     # GET /
     code, body, hdrs = http_get("/")
     check("GET / returns 200", code == 200, f"got {code}")
-    check("GET / body contains hostname", "SLYC-" in body or "slyc-" in body.lower(),
-          "hostname pattern not found")
-    check("GET / has Content-Length", "Content-Length" in hdrs,
-          f"headers: {list(hdrs.keys())}")
+    # Hostname is loaded via XHR from /status — not embedded in the static HTML.
+    # Just confirm the page is valid HTML with the expected title.
+    check("GET / body is SlyLED child page",
+          "SlyLED" in body and "Child" in body, body[:80])
+    # Child sendMain() does not include Content-Length (chunked response) — skip that check.
 
     # GET /status
     code, body, hdrs = http_get("/status")
@@ -257,10 +306,10 @@ def test_http_basic():
     code, body, _ = http_get("/config")
     check("GET /config returns 200", code == 200, f"got {code}")
     check("GET /config is HTML form", "<form" in body.lower(), body[:120])
-    check("GET /config has altName field", 'name="altName"' in body or "altName" in body,
-          body[:200])
-    check("GET /config has stringCount field", "stringCount" in body, body[:200])
-    check("GET /config has ledCount field", "ledCount" in body, body[:200])
+    # Form field names: altName→'an', stringCount→'sc', ledCount→'lc0'..'lc3'
+    check("GET /config has altName field (name='an')", "name='an'" in body, body[:200])
+    check("GET /config has stringCount field (name='sc')", "name='sc'" in body, body[:200])
+    check("GET /config has ledCount field (name='lc0')", "name='lc0'" in body, body[:200])
 
     # GET /favicon.ico
     code, _, _ = http_get("/favicon.ico")
@@ -270,17 +319,17 @@ def test_http_basic():
 def test_http_config_post():
     section("HTTP POST /config")
 
-    # Post a minimal config update
+    # Post a minimal config update (field names match the form: an, desc, sc, lc/lm/lt/cd/cm/sd)
     form_data = urllib.parse.urlencode({
-        "altName":     "TestNode",
-        "desc":        "Automated test",
-        "stringCount": "1",
-        "lc0":         "8",
-        "len0":        "1000",
-        "lt0":         "0",
-        "cd0":         "0",
-        "cm0":         "100",
-        "sd0":         "0",
+        "an":   "TestNode",
+        "desc": "Automated test",
+        "sc":   "1",
+        "lc0":  "8",
+        "lm0":  "1000",
+        "lt0":  "0",
+        "cd0":  "0",
+        "cm0":  "100",
+        "sd0":  "0",
     })
     code, body, hdrs = http_post("/config", form_data)
     # Expect 303 redirect back to /config
@@ -289,13 +338,13 @@ def test_http_config_post():
     check("POST /config redirects to /config", "/config" in location,
           f"Location: {location}")
 
-    # Verify the change persisted
+    # Verify the change persisted (values appear as input value attributes)
     time.sleep(0.5)
     code, body, _ = http_get("/config")
     check("GET /config after POST shows updated altName",
-          "TestNode" in body, body[:300])
+          "TestNode" in body, body[:400])
     check("GET /config after POST shows updated desc",
-          "Automated test" in body, body[:300])
+          "Automated test" in body, body[:400])
 
 
 def test_udp_ping_pong():
@@ -470,8 +519,8 @@ def test_udp_status_req():
           0 <= status["activeAction"] <= 3,
           f"got {status['activeAction']}")
     check("uptimeS > 0", status["uptimeS"] > 0, f"got {status['uptimeS']}")
-    check("wifiRssi <= 0 (negative dBm or 0)",
-          status["wifiRssi"] <= 0,
+    check("wifiRssi > 0 (absolute dBm magnitude, e.g. 69 means -69 dBm)",
+          status["wifiRssi"] > 0,
           f"got {status['wifiRssi']}")
 
 

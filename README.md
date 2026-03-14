@@ -8,11 +8,14 @@ Multi-board Arduino LED controller with a parent/child architecture. One parent 
 
 | Role | Board | LEDs |
 |------|-------|------|
-| Parent | Arduino Giga R1 WiFi (STM32H747) | None |
+| Parent | Windows 11 x64 | None |
+| Parent Runtime | Arduino Giga R1 WiFi (STM32H747) | None |
 | Child | ESP32 (QuinLED Quad / Uno) | Up to 4× WS2812B strips, GPIO 2 |
 | Child | ESP8266 D1 Mini (LOLIN/WEMOS) | Up to 4× WS2812B strips, GPIO 2 |
 
 ## Architecture
+
+The Parent runs on a windows machine, a future design is that once the layout and runner is designed, it can be saved and a runtime version of the parent will work on the Giga board with a minimal UI for status and start, stop.
 
 All three boards share one sketch (`main/main.ino`) with `#ifdef BOARD_GIGA / BOARD_ESP32 / BOARD_D1MINI` guards.
 

@@ -42,6 +42,14 @@ install_manifest.txt
 # Project-installed libraries (install with: arduino-cli lib install FastLED, with ARDUINO_DIRECTORIES_USER set to this project)
 libraries/
 
+# Desktop parent runtime data (JSON persistence — user-specific, not committed)
+desktop/shared/data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
 # Sensitive / secrets (never commit)
 secrets.h
 arduino_secrets.h

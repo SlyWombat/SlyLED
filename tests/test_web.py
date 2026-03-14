@@ -88,7 +88,10 @@ def delete(path):
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
             return r.status, json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
-        return e.code, None
+        try:
+            return e.code, json.loads(e.read().decode("utf-8", errors="replace"))
+        except Exception:
+            return e.code, None
     except Exception as e:
         return 0, None
 
@@ -135,7 +138,7 @@ check("Title contains SlyLED",       "SlyLED"    in body)
 check("Has header element",          "id='hdr'"  in body or 'id="hdr"' in body)
 check("Has nav tabs",                "Dashboard" in body and "Setup" in body
                                      and "Layout" in body and "Runtime" in body)
-check("Has version string",          "v2." in body)
+check("Has version string",          "v3." in body)
 check("No old rainbow badge",        "badge-rainbow" not in body)
 check("No old siren route",          "/led/siren/on" not in body)
 check("Has /api/children in JS",     "/api/children" in body)
