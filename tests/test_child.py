@@ -295,12 +295,10 @@ def wait_for_boot(max_wait=30):
 def test_http_basic():
     section("HTTP basic routes")
 
-    # GET / — child root redirects to /config (302)
-    code, body, hdrs = http_get("/", follow_redirects=False)
-    check("GET / returns 302 redirect to /config", code == 302, f"got {code}")
-    location = hdrs.get("Location", "")
-    check("GET / Location header points to /config", "/config" in location,
-          f"Location: {location}")
+    # GET / — child root serves config page directly
+    code, body, _ = http_get("/", follow_redirects=False)
+    check("GET / returns 200 (serves config page)", code == 200, f"got {code}")
+    check("GET / returns HTML config page", "<form" in body.lower(), body[:120])
 
     # GET /status
     code, body, hdrs = http_get("/status")
@@ -486,8 +484,11 @@ def test_udp_runner():
         ack_idx = resp1[8] if len(resp1) > 8 else -1
         check("ACK step index = 1", ack_idx == 1, f"got {ack_idx}")
 
-    # Start runner 2 seconds from now
-    start_epoch = int(time.time()) + 2
+    # Read child's current epoch from STATUS_RESP header (hdr.epoch = currentEpoch()
+    # on the child).  This is correct whether NTP has synced or not.
+    _sr = udp_send_recv(udp_header(CMD_STATUS_REQ), timeout=2.0)
+    _child_epoch = parse_header(_sr)[3] if _sr else int(time.time())
+    start_epoch = _child_epoch + 2
     go_pkt = udp_header(CMD_RUNNER_GO) + struct.pack("<I", start_epoch)
     udp_send(go_pkt)
 

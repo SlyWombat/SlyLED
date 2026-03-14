@@ -229,11 +229,7 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
 
   } else {
 #ifdef BOARD_FASTLED
-    client.print("HTTP/1.1 302 Found\r\n"
-                 "Location: /config\r\n"
-                 "Content-Length: 0\r\n"
-                 "Connection: close\r\n\r\n");
-    client.flush();
+    sendChildConfigPage(client);
 #else
     sendParentSPA(client);
 #endif
