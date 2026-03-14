@@ -1,167 +1,265 @@
-# SlyLED Architecture
+# SlyLED Architecture — v3.0
 
 ## Overview
 
-SlyLED is a single sketch that compiles for three boards. Board-specific sections are wrapped in `#ifdef BOARD_GIGA` / `#ifdef BOARD_ESP32` / `#ifdef BOARD_D1MINI`. The HTTP/SPA/log/NTP code (~80% of the file) is shared and identical across all boards.
+SlyLED is a multi-board LED controller. One **parent** board (Arduino Giga R1 WiFi) serves a browser UI and coordinates timing; one or more **child** boards (ESP32 / D1 Mini) own the physical LED strips and execute actions locally.
 
-## Board detection
+All three boards share a single sketch (`main/main.ino`) gated by preprocessor guards:
 
 ```cpp
-#if defined(ESP32)
-  #define BOARD_ESP32
-#elif defined(ESP8266) || defined(ARDUINO_ARCH_ESP8266)
-  #define BOARD_D1MINI
-#elif defined(ARDUINO_GIGA) || ...
-  #define BOARD_GIGA
-#endif
-
-#if defined(BOARD_ESP32) || defined(BOARD_D1MINI)
-  #define BOARD_FASTLED   // both use FastLED
-#endif
+#ifdef BOARD_GIGA    // parent — Giga R1 WiFi
+#ifdef BOARD_ESP32   // child  — ESP32 (QuinLED)
+#ifdef BOARD_D1MINI  // child  — ESP8266 D1 Mini
+#ifdef BOARD_FASTLED // child  — either ESP32 or D1 Mini
 ```
+
+---
+
+## Board roles
+
+| Board | Role | LEDs |
+|-------|------|------|
+| Arduino Giga R1 WiFi (STM32H747) | **Parent** — serves SPA, manages children, computes runners, dispatches UDP | None |
+| ESP32 (QuinLED Quad / Uno) | **Child** — executes LED actions, FreeRTOS task on Core 0 | Up to 4× WS2812B on GPIO 2 |
+| ESP8266 D1 Mini (LOLIN/WEMOS) | **Child** — same but single-threaded non-blocking loop | Up to 4× WS2812B on GPIO 2 |
+
+---
 
 ## Threading model
 
-Each board uses a different approach to keep LED animation independent of WiFi I/O:
+### Giga (parent)
 
-### Giga — Mbed RTOS dedicated thread
-
-```
-┌─────────────────────────────────────┐  ┌─────────────────────────────────────┐
-│           LED Thread                │  │           Main Thread               │
-│  (rtos::Thread ledThread)           │  │           (loop())                  │
-│                                     │  │                                     │
-│  ledTask()                          │  │  handleClient()                     │
-│    ├── Siren: red/blue toggle       │  │    ├── serveClient(client, 500ms)   │
-│    ├── Rainbow: hue cycle + PWM     │  │    └── drain parallel connections   │
-│    └── Off: pins HIGH, sleep        │  │                                     │
-│                                     │  │  printStatus() [serial debug]       │
-│  Owns: all digitalWrite / pwmCycle  │  │  Owns: all WiFi / HTTP              │
-└──────────────┬──────────────────────┘  └──────────────┬──────────────────────┘
-               │  reads volatile flags                   │  writes volatile flags
-               └──────────────┬──────────────────────────┘
-                              │
-                   volatile bool ledRainbowOn
-                   volatile bool ledSirenOn
-```
-
-Bool writes are atomic on ARM Cortex-M7. `volatile` prevents register caching. No mutex required.
-
-### ESP32 — FreeRTOS task pinned to Core 0
+Single `loop()` thread. No LED code at all.
 
 ```
-Core 0                          Core 1
-──────────────────────────      ──────────────────────────
-ledTask(void*)                  loop()
-  fill_rainbow / fill_solid       handleClient()
-  FastLED.show()                  printStatus()
-  delay(20)
+loop()
+  └── printStatus()       — serial heartbeat
+  └── pollUDP()           — receive and dispatch UDP packets
+  └── sendPing()          — broadcast every 30 s
+  └── handleClient()      — accept HTTP, route to handler, respond
 ```
 
-WiFi stack runs on Core 1 (Arduino default). LED task pinned to Core 0 via `xTaskCreatePinnedToCore()`. Zero interference between animation and network I/O.
+### ESP32 (child)
 
-### D1 Mini — non-blocking loop (single core)
-
-The ESP8266 is single-core; FreeRTOS task pinning is not available. `updateLED()` is called from `loop()` on every iteration using `millis()`-based timing:
+Two FreeRTOS tasks on separate cores:
 
 ```
-loop():
-  printStatus()
-  updateLED()      ← non-blocking; advances animation if RAINBOW_DELAY elapsed
-  handleClient()   ← may block briefly while serving a request
-  yield()          ← feeds ESP8266 WiFi/OS scheduler
+Core 1 — main task (loop())        Core 0 — LED task (ledTask())
+  pollUDP()                           if childRunnerActive → applyRunnerStep()
+  handleClient()                      else if childActType → immediate action
+  delay(10)                           else → black / idle
 ```
 
-`updateLED()` is also called inside the HTTP client wait loops and the post-response drain delay, so animation continues even while serving requests.
+Volatile flags (`childActType`, `childRunnerArmed`, `childRunnerActive`, etc.) cross the core boundary safely — bool writes are atomic on Xtensa LX6; `volatile` prevents register caching.
 
-## Web interface
+### D1 Mini (child)
 
-The board serves a **Single Page Application** (SPA). The browser loads HTML/CSS/JS once, then communicates via `XMLHttpRequest`:
-
-- **`/status`** — polled every 2 s to update badges and header
-- **`/led/on`**, **`/led/siren/on`**, **`/led/off`** — button press handlers
+Single `loop()` thread. `updateLED()` is called on every iteration (non-blocking, all state in `static` locals) and also yielded to during HTTP request handling.
 
 ```
-Browser                           Board
-  │                                   │
-  │  GET /                            │
-  │──────────────────────────────────>│  sendMain() — full SPA HTML
-  │<──────────────────────────────────│
-  │                                   │
-  │  XHR GET /status  (every 2 s)     │
-  │──────────────────────────────────>│  sendStatus() — JSON + Content-Length
-  │<──────────────────────────────────│
-  │                                   │
-  │  XHR POST /led/siren/on           │  serveClient():
-  │──────────────────────────────────>│    ledRainbowOn = false
-  │                                   │    ledSirenOn   = true
-  │  {"ok":true}                      │    addLog(FEAT_SIREN, ...)
-  │<──────────────────────────────────│    sendJsonOk()  ← Content-Length: 11
+loop()
+  └── pollUDP()
+  └── updateLED()    — non-blocking LED state machine
+  └── handleClient() — calls updateLED() and yield() while waiting
 ```
 
-JSON responses (`sendJsonOk`, `sendStatus`) include a `Content-Length` header. This lets HTTP clients read the exact byte count without waiting for the connection to close, which avoids issues with ESP8266's RST-on-close behaviour.
+---
 
-## Module pattern
+## Communication
 
-Each controllable LED behaviour is a **module**. The current module is **LED** (onboard RGB on Giga, WS2812B strip on ESP32/D1 Mini) with two patterns (Rainbow, Siren).
+### UDP protocol (port 4210)
 
-Each module requires:
-- One or more `volatile bool` state flags
-- A route in `serveClient()` that sets/clears the flags and calls `addLog()`
-- Board-specific animation code in `ledTask()` / `updateLED()`
-- A card in `sendMain()` with pattern rows, badges, and buttons
-- A JSON field in `sendStatus()`
+All packets: `UdpHeader (8 bytes) + payload`. Magic `0x534C`, version `2`.
 
-See [PATTERNS.md](PATTERNS.md) for a step-by-step guide.
+| Command | Hex | Direction | Payload |
+|---------|-----|-----------|---------|
+| CMD_PING | 0x01 | parent → broadcast | none |
+| CMD_PONG | 0x02 | child → parent | `PongPayload` (95 B) — hostname, altName, desc, string configs |
+| CMD_ACTION | 0x10 | parent → child | `ActionPayload` (18 B) |
+| CMD_ACTION_STOP | 0x11 | parent → child | none |
+| CMD_LOAD_STEP | 0x20 | parent → child | `LoadStepPayload` (22 B) |
+| CMD_LOAD_ACK | 0x21 | child → parent | 1 byte (step index) |
+| CMD_RUNNER_GO | 0x30 | parent → child | 4 bytes (uint32_t startEpoch) |
+| CMD_RUNNER_STOP | 0x31 | parent → child | none |
+| CMD_STATUS_REQ | 0x40 | parent → child | none |
+| CMD_STATUS_RESP | 0x41 | child → parent | `StatusRespPayload` (8 B) |
 
-## Event log
+### NTP time sync
 
-Circular buffer of 50 `LogEntry` structs:
+All boards sync to `pool.ntp.org` on boot. Epoch timestamps in UDP headers and `CMD_RUNNER_GO` make runner execution deterministic across children without a dedicated sync protocol. Typical LAN jitter is ±10–50 ms.
+
+---
+
+## Parent HTTP API
+
+Routes matched in order (longest/most-specific first):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/` | Full 6-tab SPA |
+| GET | `/status` | `{"role":"parent","hostname":"slyled"}` |
+| GET/POST | `/api/children/import` | Import JSON array; dedup by hostname |
+| GET | `/api/children/export` | Export all children as JSON |
+| GET/POST/DELETE | `/api/children/:id/...` | Child CRUD, refresh, status poll |
+| GET/POST | `/api/children` | List / add by IP |
+| GET/POST | `/api/layout` | Canvas positions |
+| GET/POST | `/api/settings` | App settings |
+| POST | `/api/action/stop` | Stop immediate action on all/one child |
+| POST | `/api/action` | Send immediate action |
+| POST | `/api/runners/stop` | Broadcast CMD_RUNNER_STOP |
+| GET/POST/PUT/DELETE | `/api/runners/:id/...` | Runner compute / sync / start |
+| GET/POST | `/api/runners` | List / create runners |
+
+**Route order matters:** `/api/runners/stop` is checked before `/api/runners/`; `/api/children/import` before `/api/children/export` before `/api/children/`.
+
+### GET /api/children/:id/status
+
+Sends `CMD_STATUS_REQ` to the child's IP and polls UDP for up to 300 ms. Returns `{"ok":true,"action":N,"runner":bool,"step":N,"rssi":-N,"uptime":N}` or `{"ok":false,"err":"timeout"}`.
+
+---
+
+## Child HTTP routes
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/` | Status page (hostname, current action) |
+| GET | `/status` | `{"role":"child","hostname":"SLYC-XXXX","action":N}` |
+| GET | `/config` | Self-config form |
+| POST | `/config` | Save config to EEPROM, broadcast CMD_PONG, redirect 303 |
+
+---
+
+## Parent data structures
+
+```
+ChildNode      — ip[4], hostname, altName, desc, xMm/yMm/zMm,
+                 stringCount, strings[4] (StringInfo), status, lastSeenEpoch
+AppSettings    — units, darkMode, canvasWidthMm, canvasHeightMm,
+                 parentName, activeRunner, runnerRunning
+RunnerStep(20) — RunnerAction(10) + AreaRect(8) + durationS(2)
+Runner(~1363B) — name, stepCount, computed, steps[16], payload[16][8]
+
+children[8]    — 896 bytes
+runners[4]     — ~5452 bytes
+AppSettings    — 24 bytes
+```
+
+## Child data structures
+
+```
+ChildSelfConfig  — hostname[10], altName[16], description[32],
+                   stringCount, strings[4] (ChildStringCfg, 10 B each)
+
+// Volatile immediate action state (written by UDP handler, read by LED task):
+childActType, childActR/G/B, childActOnMs/OffMs,
+childActWDir/WSpd, childActSt[4]/En[4], childActSeq
+
+// Volatile runner state:
+childRunner[16] (ChildRunnerStep, 20 B each)
+childStepCount, childRunnerStart, childRunnerArmed, childRunnerActive
+```
+
+Runner priority in LED task: **runner active > immediate action > idle black**
+
+---
+
+## Action types
 
 ```cpp
-struct LogEntry {
-  unsigned long epoch;    // Unix timestamp (NTP-synced)
-  uint8_t       ip[4];   // Client IP (0.0.0.0 for boot entries)
-  uint8_t       feature; // LedFeature enum: FEAT_NONE / FEAT_RAINBOW / FEAT_SIREN
-  LogSource     source;  // SRC_WEB / SRC_BOOT
-};
+ACT_OFF   = 0   // turn off (black)
+ACT_SOLID = 1   // solid colour
+ACT_FLASH = 2   // on/off blink with configurable onMs / offMs
+ACT_WIPE  = 3   // leading-edge wipe across the string range
 ```
 
-Entries are written by `addLog()` (called from `serveClient()` and `setup()`). The log page renders them newest-first.
+Wipe direction: `DIR_E=0 (+X)`, `DIR_N=1 (+Y)`, `DIR_W=2 (-X)`, `DIR_S=3 (-Y)`.
 
-## Memory usage (v2.6)
+---
 
-### Arduino Giga R1 WiFi
-| Resource | Used | Available |
-|----------|------|-----------|
-| Flash | 277 KB (14%) | 1966 KB |
-| SRAM | 63 KB (12%) | 524 KB |
+## Runner pre-computation
 
-### ESP32 Dev Module
-| Resource | Used | Available |
-|----------|------|-----------|
-| Flash | 1006 KB (78%) | 1280 KB |
-| SRAM | 50 KB (15%) | 320 KB |
+Triggered by `POST /api/runners/:id/compute`. For each step × child × string:
 
-### LOLIN D1 Mini
-| Resource | Used | Available |
-|----------|------|-----------|
-| Flash (IROM) | 268 KB (25%) | 1024 KB |
-| IRAM | 27 KB (91%) | 30 KB |
-| RAM | 35 KB (44%) | 80 KB |
+1. Convert area-of-effect (0–10000 units) to mm using canvas dimensions
+2. Compute string origin: `childX + cableMm × dx[cableDir]`
+3. Walk LEDs: `pos = origin + i × lengthMm × dx[stripDir] / (ledCount-1)`
+4. Record first/last LED index inside AoE as `ledStart[j]` / `ledEnd[j]`
+5. `0xFF` = string not in AoE
 
-IRAM on D1 Mini is high (91%) due to FastLED's clockless driver. Sufficient headroom remains but monitor when adding features.
+Results stored in `runners[id].payload[step][child]`. Integer arithmetic only — no float.
 
-## File structure
+---
+
+## Runner execution sequence
 
 ```
-main/
-  main.ino      — All sketch code; board sections in #ifdef blocks
-  version.h     — APP_MAJOR / APP_MINOR
-  arduino_secrets.h  — SECRET_SSID / SECRET_PASS (gitignored)
-tests/
-  test_web.py   — Python test suite (75 tests, board-agnostic)
-docs/           — This folder
-build.ps1       — Bumps APP_MINOR on upload; -Board giga|esp32|d1mini
-arduino-cli.yaml — Sets project root as Arduino user dir (finds ./libraries)
+Parent                               Children
+  POST /api/runners/:id/sync
+  → CMD_LOAD_STEP (step 0) ────────►
+  ◄──────────── CMD_LOAD_ACK ────────
+  → CMD_LOAD_STEP (step 1) ────────►
+  ◄──────────── CMD_LOAD_ACK ────────
+  ...
+
+  POST /api/runners/:id/start
+  → CMD_RUNNER_GO (epoch + 2s) ────►
+                    (at startEpoch)
+                    child executes step 0,
+                    advances by durationS,
+                    loops or stops
 ```
+
+---
+
+## Child EEPROM persistence
+
+Config survives power cycles. Layout:
+
+```
+Byte  0     : magic 0xA5 (uninitialised = skip load)
+Bytes 1..N  : ChildSelfConfig struct (sizeof(childCfg) bytes)
+```
+
+- **ESP32**: `Preferences` library (NVS namespace `"slyled"`)
+- **D1 Mini**: `EEPROM.h` (byte-addressed)
+
+Hostname is **always** regenerated from the last 2 MAC octets (`SLYC-XXXX`) — never stored. First boot writes defaults automatically.
+
+---
+
+## SPA structure
+
+Six tabs, all served as one HTML response with inline CSS and JS:
+
+| Tab | Data source | Key actions |
+|-----|-------------|-------------|
+| Dashboard | GET /api/children, GET /api/settings | Stop / Go runner |
+| Setup | GET /api/children, GET /api/settings | Add/remove/refresh children, details modal, JSON import/export |
+| Layout | GET /api/layout, GET /api/children | Drag canvas, save positions |
+| Actions | — | Send immediate Solid/Flash/Wipe/Off |
+| Runtime | GET /api/runners | Create/edit runners, Compute/Sync/Start |
+| Settings | GET /api/settings | Dark mode, units, canvas size, parent name |
+
+Dark mode: `body#app` CSS class `light` toggled by `applyDarkMode()`. Persisted in `settings.darkMode`. Applied before first tab renders.
+
+---
+
+## Flash usage (v3.0)
+
+| Board | Flash | RAM |
+|-------|-------|-----|
+| Giga | ~310 KB / 1966 KB (16%) | ~81 KB / 524 KB (15%) |
+| ESP32 | ~1030 KB / 1311 KB (79%) | ~50 KB / 328 KB (15%) |
+| D1 Mini | ~270 KB / 1049 KB (26%) | ~32 KB / 80 KB (40%) |
+
+ESP32 flash is the tightest constraint. Each new feature should be checked after compile.
+
+---
+
+## Known GCC / Mbed quirks
+
+- **No `static` on sketch-level functions** — conflicts with Mbed's auto-prototype generator.
+- **No enum in function signatures** — use `uint8_t` and cast internally; auto-prototype generator fails on enum parameters.
+- **`volatile bool` for cross-thread state** — sufficient for simple flags; bool writes are atomic on both Cortex-M7 and Xtensa LX6.
+- **`WiFi.setHostname()` before `WiFi.begin()`** — required for DHCP option 12 (hostname).
+- **`Serial.print()` guards** — always `if (Serial)` on Mbed OS; blocks forever if no USB CDC terminal is connected.

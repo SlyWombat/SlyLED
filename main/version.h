@@ -1,3 +1,3 @@
 #pragma once
-#define APP_MAJOR 2
-#define APP_MINOR 10
+#define APP_MAJOR 3
+#define APP_MINOR 0

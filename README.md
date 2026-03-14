@@ -2,7 +2,7 @@
 
 Multi-board Arduino LED controller with a parent/child architecture. One parent board (Giga R1 WiFi) serves a browser UI and coordinates timing; child boards (ESP32 / D1 Mini) own the LED strips and execute actions locally in NTP-synchronized time.
 
-**Current version: v2.10**
+**Current version: v3.0**
 
 ## Hardware
 
