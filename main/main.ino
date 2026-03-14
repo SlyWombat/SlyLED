@@ -1,31 +1,32 @@
 /*
  * SlyLED — multi-board sketch
- * Phase 2b: Multi-tab parent SPA (Dashboard/Setup/Layout/Settings),
- *           layout/settings API, child management (remove/refresh/export)
+ * Phase 2d: Remove rainbow/siren; add Runner data structures and RUNTIME tab
  *
- * Supported targets:
- *   Arduino Giga R1 WiFi  (arduino:mbed_giga:giga)    — parent: no LEDs, SPA UI
- *   ESP32 Dev Module      (esp32:esp32:esp32)           — child: WS2812B strip, FastLED
- *   LOLIN D1 Mini         (esp8266:esp8266:d1_mini)    — child: WS2812B strip, FastLED
+ * Parent (Giga R1 WiFi): no LEDs, serves multi-tab SPA, manages children
+ * Children (ESP32 / D1 Mini): execute UDP actions; idle = LEDs off
  *
  * HTTP routes (all boards):
  *   GET  /              — SPA main page
- *   GET  /status        — JSON LED status
- *   POST /led/on        — enable Rainbow
- *   POST /led/siren/on  — enable Siren
- *   POST /led/off       — disable all
- *   GET  /log           — event log HTML
+ *   GET  /status        — JSON status
+ *   GET  /favicon.ico   — 404
  *
  * HTTP routes (Giga parent only):
- *   GET  /api/children              — JSON array of registered children
- *   POST /api/children              — register child by IP: {"ip":"x.x.x.x"}
- *   GET  /api/children/export       — download full children JSON
- *   DELETE /api/children/:id        — remove child from registry
- *   POST   /api/children/:id/refresh — re-ping a specific child
- *   GET  /api/layout                — JSON canvas positions
- *   POST /api/layout                — update child canvas positions
- *   GET  /api/settings              — JSON app settings
+ *   GET  /api/children              — child list
+ *   POST /api/children              — add child by IP
+ *   GET  /api/children/export       — download children JSON
+ *   DELETE /api/children/:id        — remove child
+ *   POST   /api/children/:id/refresh — re-ping child
+ *   GET  /api/layout                — canvas positions
+ *   POST /api/layout                — update canvas positions
+ *   GET  /api/settings              — app settings
  *   POST /api/settings              — update app settings
+ *   POST /api/action                — send immediate action to child(ren)
+ *   POST /api/action/stop           — stop immediate action
+ *   GET  /api/runners               — runner list
+ *   POST /api/runners               — create runner
+ *   GET  /api/runners/:id           — full runner with steps
+ *   PUT  /api/runners/:id           — update runner steps
+ *   DELETE /api/runners/:id         — delete runner
  */
 
 #include "version.h"
@@ -43,7 +44,6 @@
   #error "Unsupported board. Target: arduino:mbed_giga:giga | esp32:esp32:esp32 | esp8266:esp8266:d1_mini"
 #endif
 
-// Helper: boards that use FastLED (ESP32 and D1 Mini — these are the children)
 #if defined(BOARD_ESP32) || defined(BOARD_D1MINI)
   #define BOARD_FASTLED
 #endif
@@ -67,30 +67,18 @@
   #include <time.h>
 #endif
 
-// ── LED hardware constants ────────────────────────────────────────────────────
+// ── LED hardware constants (FastLED children only) ────────────────────────────
 
-#ifdef BOARD_GIGA
-  constexpr uint8_t  HUE_STEP   = 2;
-  constexpr int      DISPLAY_MS = 35;
-  constexpr uint16_t PWM_STEPS  = 256;
-  constexpr uint8_t  STEP_US    = 8;
-  #define CARD_TITLE "Onboard LED"
-
-#else  // FastLED boards (ESP32 / D1 Mini)
+#ifdef BOARD_FASTLED
   #define DATA_PIN      2
   #define NUM_LEDS      8
   #define LED_TYPE      WS2812B
   #define COLOR_ORDER   GRB
   constexpr uint8_t LED_BRIGHTNESS = 200;
-  constexpr uint8_t RAINBOW_DELTA  = 256 / NUM_LEDS;
-  constexpr int     RAINBOW_DELAY  = 20;
   CRGB leds[NUM_LEDS];
-  #define CARD_TITLE "LED Strip"
 #endif
 
-constexpr int SIREN_HALF_MS = 350;
-
-// ── Phase 2: UDP protocol constants ──────────────────────────────────────────
+// ── Phase 2 UDP protocol constants ───────────────────────────────────────────
 
 constexpr uint16_t UDP_PORT    = 4210;
 constexpr uint16_t UDP_MAGIC   = 0x534C;
@@ -103,16 +91,22 @@ constexpr uint8_t MAX_STR_PER_CHILD = 4;
 
 constexpr uint8_t CMD_PING        = 0x01;
 constexpr uint8_t CMD_PONG        = 0x02;
-constexpr uint8_t CMD_ACTION      = 0x10;  // parent → child: run action immediately
-constexpr uint8_t CMD_ACTION_STOP = 0x11;  // parent → child: stop action, return to local
+constexpr uint8_t CMD_ACTION      = 0x10;
+constexpr uint8_t CMD_ACTION_STOP = 0x11;
 constexpr uint8_t CMD_STATUS_REQ  = 0x40;
 constexpr uint8_t CMD_STATUS_RESP = 0x41;
 
-// Action type codes (stored as uint8_t to avoid Mbed prototype-generator issues with enums)
+// Action type codes (uint8_t to avoid Mbed prototype-generator issues with enums)
 constexpr uint8_t ACT_OFF   = 0;
 constexpr uint8_t ACT_SOLID = 1;
 constexpr uint8_t ACT_FLASH = 2;
 constexpr uint8_t ACT_WIPE  = 3;
+
+// Wipe direction codes
+constexpr uint8_t DIR_E = 0;
+constexpr uint8_t DIR_N = 1;
+constexpr uint8_t DIR_W = 2;
+constexpr uint8_t DIR_S = 3;
 
 // ── UDP packet structures ─────────────────────────────────────────────────────
 
@@ -148,16 +142,15 @@ struct __attribute__((packed)) StatusRespPayload {
   uint32_t uptimeS;
 };  // 8 bytes
 
-// Payload of CMD_ACTION (follows UdpHeader) — 18 bytes, total packet = 26 bytes
 struct __attribute__((packed)) ActionPayload {
-  uint8_t  actionType;                     // ACT_OFF/SOLID/FLASH/WIPE
-  uint8_t  r, g, b;                        // colour
-  uint16_t onMs;                           // FLASH: on duration
-  uint16_t offMs;                          // FLASH: off duration
-  uint8_t  wipeDir;                        // WIPE: 0=E,1=N,2=W,3=S
-  uint8_t  wipeSpeedPct;                   // WIPE: % of strip per second (1–100)
-  uint8_t  ledStart[MAX_STR_PER_CHILD];    // first LED per string (0xFF = string not affected)
-  uint8_t  ledEnd[MAX_STR_PER_CHILD];      // last LED per string (0xFF = to end of strip)
+  uint8_t  actionType;
+  uint8_t  r, g, b;
+  uint16_t onMs;
+  uint16_t offMs;
+  uint8_t  wipeDir;
+  uint8_t  wipeSpeedPct;
+  uint8_t  ledStart[MAX_STR_PER_CHILD];
+  uint8_t  ledEnd[MAX_STR_PER_CHILD];
 };  // 18 bytes
 
 // ── WiFi, server, UDP ─────────────────────────────────────────────────────────
@@ -168,22 +161,11 @@ WiFiUDP    ntpUDP;
 WiFiUDP    cmdUDP;
 uint8_t    udpBuf[128];
 
-// ── Shared module state ───────────────────────────────────────────────────────
-
-volatile bool ledRainbowOn = true;
-volatile bool ledSirenOn   = false;
-
-// ── Giga: Mbed RTOS LED thread ────────────────────────────────────────────────
-
-#ifdef BOARD_GIGA
-rtos::Thread ledThread;
-#endif
-
 // ── Parent data structures (Giga only) ───────────────────────────────────────
 
 #ifdef BOARD_GIGA
 
-constexpr uint8_t MAX_CHILDREN = 8;
+constexpr uint8_t MAX_CHILDREN  = 8;
 constexpr uint8_t CHILD_UNKNOWN = 0;
 constexpr uint8_t CHILD_ONLINE  = 1;
 constexpr uint8_t CHILD_OFFLINE = 2;
@@ -211,31 +193,62 @@ struct ChildNode {
   bool       inUse;
 };
 
-ChildNode children[MAX_CHILDREN];
-
-// App-level settings stored in RAM (no EEPROM yet — Phase 2h)
 struct AppSettings {
-  uint8_t  units;           // 0=metric, 1=imperial
-  uint8_t  darkMode;        // reserved, always 1 (dark)
-  uint16_t canvasWidthMm;   // default 10000
-  uint16_t canvasHeightMm;  // default 5000
-  char     parentName[16];  // user label for this parent
-  uint8_t  activeRunner;    // 0xFF = none (Phase 2d+)
-  bool     runnerRunning;   // (Phase 2f+)
+  uint8_t  units;
+  uint8_t  darkMode;
+  uint16_t canvasWidthMm;
+  uint16_t canvasHeightMm;
+  char     parentName[16];
+  uint8_t  activeRunner;
+  bool     runnerRunning;
 };
 
+// ── Runner data structures (Phase 2d) ────────────────────────────────────────
+
+constexpr uint8_t MAX_RUNNERS     = 4;
+constexpr uint8_t MAX_STEPS       = 16;
+constexpr uint8_t RUNNER_NAME_LEN = 16;
+
+struct RunnerAction {
+  uint8_t  type;
+  uint8_t  r, g, b;
+  uint16_t onMs, offMs;
+  uint8_t  wipeDir, wipeSpeedPct;
+};  // 10 bytes
+
+struct AreaRect {
+  uint16_t x0, y0, x1, y1;  // 0–10000 (units of 0.01%)
+};  // 8 bytes
+
+struct RunnerStep {
+  RunnerAction action;
+  AreaRect     area;
+  uint16_t     durationS;
+};  // 20 bytes
+
+struct ChildStepPayload {
+  uint8_t ledStart[MAX_STR_PER_CHILD];
+  uint8_t ledEnd[MAX_STR_PER_CHILD];
+};  // 8 bytes
+
+struct Runner {
+  char             name[RUNNER_NAME_LEN];
+  uint8_t          stepCount;
+  bool             computed;
+  bool             inUse;
+  RunnerStep       steps[MAX_STEPS];                    // 320 bytes
+  ChildStepPayload payload[MAX_STEPS][MAX_CHILDREN];    // 1024 bytes
+};  // ~1363 bytes each; 4 runners = ~5452 bytes
+
+ChildNode children[MAX_CHILDREN];
 AppSettings settings;
+Runner runners[MAX_RUNNERS];
 
 #endif  // BOARD_GIGA
 
 // ── Child self-config data (ESP32 / D1 Mini only) ────────────────────────────
 
 #ifdef BOARD_FASTLED
-
-constexpr uint8_t DIR_E = 0;
-constexpr uint8_t DIR_N = 1;
-constexpr uint8_t DIR_W = 2;
-constexpr uint8_t DIR_S = 3;
 
 constexpr uint8_t LEDTYPE_WS2812B = 0;
 constexpr uint8_t LEDTYPE_WS2811  = 1;
@@ -261,9 +274,7 @@ struct ChildSelfConfig {
 ChildSelfConfig childCfg;
 
 // Volatile action state — written by UDP handler (main thread), read by LED task
-// Sequence counter increments on every new CMD_ACTION / CMD_ACTION_STOP so the
-// LED task can detect a change and reset timing without missing rapid updates.
-volatile uint8_t  childActType  = 0;      // ACT_OFF by default
+volatile uint8_t  childActType  = 0;
 volatile uint8_t  childActR     = 0;
 volatile uint8_t  childActG     = 0;
 volatile uint8_t  childActB     = 0;
@@ -271,9 +282,9 @@ volatile uint16_t childActOnMs  = 500;
 volatile uint16_t childActOffMs = 500;
 volatile uint8_t  childActWDir  = 0;
 volatile uint8_t  childActWSpd  = 50;
-volatile uint8_t  childActSeq   = 0;      // incremented on each new action
-volatile uint8_t  childActSt[MAX_STR_PER_CHILD];  // ledStart per string
-volatile uint8_t  childActEn[MAX_STR_PER_CHILD];  // ledEnd per string
+volatile uint8_t  childActSeq   = 0;
+volatile uint8_t  childActSt[MAX_STR_PER_CHILD];
+volatile uint8_t  childActEn[MAX_STR_PER_CHILD];
 
 #endif  // BOARD_FASTLED
 
@@ -312,40 +323,6 @@ unsigned long currentEpoch() {
   return ntpEpoch + (millis() - ntpMillis) / 1000;
 }
 
-void formatTime(unsigned long epoch, char* buf, uint8_t len) {
-  if (ntpEpoch == 0) { snprintf(buf, len, "T+%lus", epoch); return; }
-  time_t t = (time_t)epoch;
-  struct tm* ti = gmtime(&t);
-  strftime(buf, len, "%Y-%m-%d %H:%M:%S UTC", ti);
-}
-
-// ── Event log ─────────────────────────────────────────────────────────────────
-
-enum LogSource  : uint8_t { SRC_WEB = 0, SRC_BOOT = 1 };
-enum LedFeature : uint8_t { FEAT_NONE = 0, FEAT_RAINBOW = 1, FEAT_SIREN = 2 };
-
-struct LogEntry {
-  unsigned long epoch;
-  uint8_t       ip[4];
-  uint8_t       feature;
-  LogSource     source;
-};
-
-constexpr uint8_t MAX_LOG = 50;
-LogEntry logBuf[MAX_LOG];
-uint8_t  logCount = 0;
-uint8_t  logNext  = 0;
-
-void addLog(uint8_t feat, uint8_t src, uint8_t ip0, uint8_t ip1, uint8_t ip2, uint8_t ip3) {
-  LogEntry& e = logBuf[logNext % MAX_LOG];
-  e.epoch   = currentEpoch();
-  e.feature = feat;
-  e.source  = (LogSource)src;
-  e.ip[0] = ip0; e.ip[1] = ip1; e.ip[2] = ip2; e.ip[3] = ip3;
-  logNext++;
-  if (logCount < MAX_LOG) logCount++;
-}
-
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 
 char _txbuf[256];
@@ -379,11 +356,15 @@ void sendJsonErr(WiFiClient& c, const char* msg) {
 }
 
 void sendStatus(WiFiClient& c) {
-  const char* feat   = ledRainbowOn ? "rainbow" : (ledSirenOn ? "siren" : "none");
-  const char* active = (ledRainbowOn || ledSirenOn) ? "true" : "false";
-  char body[64];
-  int blen = snprintf(body, sizeof(body),
-    "{\"onboard_led\":{\"active\":%s,\"feature\":\"%s\"}}", active, feat);
+  char body[96];
+  int blen;
+#ifdef BOARD_GIGA
+  blen = snprintf(body, sizeof(body), "{\"role\":\"parent\",\"hostname\":\"slyled\"}");
+#else
+  blen = snprintf(body, sizeof(body),
+    "{\"role\":\"child\",\"hostname\":\"%s\",\"action\":%u}",
+    childCfg.hostname, (unsigned)childActType);
+#endif
   sendBuf(c, "HTTP/1.1 200 OK\r\n"
              "Content-Type: application/json\r\n"
              "Connection: close\r\n"
@@ -395,7 +376,6 @@ void sendStatus(WiFiClient& c) {
 
 // ── JSON parse helpers ────────────────────────────────────────────────────────
 
-// Extract an integer value from a flat JSON object: "key":N
 int jsonGetInt(const char* json, const char* key, int defVal) {
   char needle[28];
   snprintf(needle, sizeof(needle), "\"%s\":", key);
@@ -407,7 +387,6 @@ int jsonGetInt(const char* json, const char* key, int defVal) {
   return defVal;
 }
 
-// Extract a string value from a flat JSON object: "key":"value"
 void jsonGetStr(const char* json, const char* key, char* out, uint8_t len) {
   char needle[28];
   snprintf(needle, sizeof(needle), "\"%s\":\"", key);
@@ -432,6 +411,7 @@ void sendStatusResp(IPAddress dest);
 
 #ifdef BOARD_GIGA
 void sendParentSPA(WiFiClient& c);
+void sendApiChildren(WiFiClient& c);
 void sendApiLayout(WiFiClient& c);
 void handlePostLayout(WiFiClient& c, int contentLen);
 void sendApiSettings(WiFiClient& c);
@@ -441,6 +421,10 @@ void handleChildIdRoute(WiFiClient& c, const char* req, bool isPost, bool isDel,
 void sendPing(IPAddress dest);
 void handleApiAction(WiFiClient& c, int contentLen);
 void handleApiActionStop(WiFiClient& c, int contentLen);
+void sendApiRunners(WiFiClient& c);
+void sendApiRunner(WiFiClient& c, uint8_t id);
+void handlePostRunners(WiFiClient& c, int contentLen);
+void handleRunnerIdRoute(WiFiClient& c, const char* req, bool isGet, bool isPut, bool isDel, int contentLen);
 #endif
 
 // ── Web request handler ───────────────────────────────────────────────────────
@@ -456,6 +440,7 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
 
   IPAddress remoteIP = client.remoteIP();
   uint8_t ip0 = remoteIP[0], ip1 = remoteIP[1], ip2 = remoteIP[2], ip3 = remoteIP[3];
+  (void)ip0; (void)ip1; (void)ip2; (void)ip3;
 
   char req[128] = {};
   client.readBytesUntil('\n', req, sizeof(req) - 1);
@@ -473,34 +458,14 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     }
   }
 
-  bool isPost = (req[0] == 'P');
-  bool isDel  = (req[0] == 'D');
+  bool isPost = strncmp(req, "POST", 4) == 0;
+  bool isPut  = strncmp(req, "PUT ", 4) == 0;
+  bool isDel  = strncmp(req, "DELE", 4) == 0;
 
   // ── Route dispatch ────────────────────────────────────────────────────────
 
   if (strstr(req, " /status ")) {
     sendStatus(client);
-
-  } else if (strstr(req, " /led/siren/on ")) {
-    ledRainbowOn = false;
-    ledSirenOn   = true;
-    addLog(FEAT_SIREN, SRC_WEB, ip0, ip1, ip2, ip3);
-    sendJsonOk(client);
-
-  } else if (strstr(req, " /led/on ")) {
-    ledSirenOn   = false;
-    ledRainbowOn = true;
-    addLog(FEAT_RAINBOW, SRC_WEB, ip0, ip1, ip2, ip3);
-    sendJsonOk(client);
-
-  } else if (strstr(req, " /led/off ")) {
-    ledRainbowOn = false;
-    ledSirenOn   = false;
-    addLog(FEAT_NONE, SRC_WEB, ip0, ip1, ip2, ip3);
-    sendJsonOk(client);
-
-  } else if (strstr(req, " /log ")) {
-    sendLog(client);
 
   } else if (strstr(req, " /favicon.ico ")) {
     client.print("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
@@ -553,6 +518,13 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
   } else if (strstr(req, " /api/action ")) {
     handleApiAction(client, contentLen);
 
+  } else if (strstr(req, " /api/runners/")) {
+    handleRunnerIdRoute(client, req, !isPost && !isPut && !isDel, isPut, isDel, contentLen);
+
+  } else if (strstr(req, " /api/runners ")) {
+    if (isPost) handlePostRunners(client, contentLen);
+    else        sendApiRunners(client);
+
 #endif  // BOARD_GIGA
 
   } else {
@@ -561,7 +533,7 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
 
   client.flush();
 #ifdef BOARD_D1MINI
-  { unsigned long d = millis(); while (millis() - d < 200) { updateLED(); yield(); } }
+  { unsigned long d2 = millis(); while (millis() - d2 < 200) { updateLED(); yield(); } }
 #else
   delay(5);
 #endif
@@ -574,7 +546,7 @@ void handleClient() {
 
 #ifdef BOARD_D1MINI
   serveClient(client, 100);
-  { unsigned long d = millis(); while (millis() - d < 20) { updateLED(); yield(); } }
+  { unsigned long d2 = millis(); while (millis() - d2 < 20) { updateLED(); yield(); } }
   while ((client = server.available())) {
     serveClient(client, 50);
   }
@@ -618,8 +590,8 @@ void sendParentSPA(WiFiClient& c) {
           "padding:1.2em 1.5em;margin-bottom:1em;max-width:480px}"
           ".card-title{font-size:1.05em;font-weight:bold;color:#ccc;margin-bottom:.8em}");
 
-  c.print(".tbl{border-collapse:collapse;width:100%;max-width:860px}"
-          ".tbl th,.tbl td{padding:.4em .8em;border:1px solid #2a2a2a;text-align:left;font-size:.88em}"
+  c.print(".tbl{border-collapse:collapse;width:100%;max-width:900px}"
+          ".tbl th,.tbl td{padding:.4em .7em;border:1px solid #2a2a2a;text-align:left;font-size:.85em}"
           ".tbl th{background:#1e1e1e;color:#aaa}"
           ".tbl tr:nth-child(even){background:#191919}"
           ".badge{display:inline-block;padding:.2em .7em;border-radius:9px;"
@@ -645,6 +617,7 @@ void sendParentSPA(WiFiClient& c) {
           "<button id='n-setup' class='tnav' onclick='showTab(\"setup\")'>Setup</button>"
           "<button id='n-layout' class='tnav' onclick='showTab(\"layout\")'>Layout</button>"
           "<button id='n-actions' class='tnav' onclick='showTab(\"actions\")'>Actions</button>"
+          "<button id='n-runtime' class='tnav' onclick='showTab(\"runtime\")'>Runtime</button>"
           "<button id='n-settings' class='tnav' onclick='showTab(\"settings\")'>Settings</button>"
           "</nav>");
 
@@ -696,6 +669,25 @@ void sendParentSPA(WiFiClient& c) {
           "<button class='btn btn-off' onclick='stopAct()' style='margin-left:.5em'>Stop All</button>"
           "</div></div></div>");
 
+  // Runtime tab
+  c.print("<div id='t-runtime' class='tab' style='display:none'>"
+          "<div id='rt-list'>"
+          "<div style='margin-bottom:.8em'>"
+          "<button class='btn btn-on' onclick='newRunner()'>+ New Runner</button>"
+          "</div>"
+          "<div id='rn-list'><p style='color:#888'>Loading...</p></div>"
+          "</div>"
+          "<div id='rt-edit' style='display:none'>"
+          "<div style='margin-bottom:.8em;display:flex;align-items:center;gap:.8em'>"
+          "<button class='btn' onclick='backToRunners()' style='background:#446;color:#fff'>&larr; Runners</button>"
+          "<span id='re-nm' style='font-weight:bold;color:#ccc'></span>"
+          "</div>"
+          "<div id='re-steps'></div>"
+          "<div style='margin-top:.8em'>"
+          "<button class='btn btn-on' onclick='addStep()'>+ Add Step</button>"
+          "<button class='btn btn-on' onclick='saveRunner()' style='margin-left:.5em'>Save Runner</button>"
+          "</div></div></div>");
+
   c.print("<div id='t-settings' class='tab' style='display:none'>"
           "<div class='card'>"
           "<div class='card-title'>App Settings</div>"
@@ -720,9 +712,10 @@ void sendParentSPA(WiFiClient& c) {
   // ── JavaScript ──────────────────────────────────────────────────────────
   c.print("<script>"
           "var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0;"
+          "var curRid=-1,curRname='',curRsteps=[];"
           "function showTab(t){"
           "ctab=t;"
-          "['dash','setup','layout','actions','settings'].forEach(function(id){"
+          "['dash','setup','layout','actions','runtime','settings'].forEach(function(id){"
           "document.getElementById('t-'+id).style.display=id===t?'block':'none';"
           "var n=document.getElementById('n-'+id);"
           "n.className='tnav'+(id===t?' tact':'');"
@@ -731,6 +724,7 @@ void sendParentSPA(WiFiClient& c) {
           "else if(t==='setup')loadSetup();"
           "else if(t==='layout')loadLayout();"
           "else if(t==='actions')loadActions();"
+          "else if(t==='runtime')loadRuntime();"
           "else if(t==='settings')loadSettings();"
           "}");
 
@@ -762,7 +756,7 @@ void sendParentSPA(WiFiClient& c) {
           "}"
           "document.getElementById('t-dash').innerHTML=h+'</table>';"
           "document.getElementById('hs').textContent="
-          "d&&d.length?d.length+' child'+(d.length>1?'ren':'')+' online':'No children';"
+          "d&&d.length?d.length+' child'+(d.length>1?'ren':'')+' registered':'No children';"
           "});"
           "}");
 
@@ -879,24 +873,7 @@ void sendParentSPA(WiFiClient& c) {
           "}"
           "function cvUp(){drag=null;}");
 
-  c.print("function loadSettings(){"
-          "ra('GET','/api/settings',null,function(d){"
-          "if(!d)return;"
-          "document.getElementById('s-nm').value=d.name||'';"
-          "document.getElementById('s-un').value=d.units||0;"
-          "document.getElementById('s-cw').value=d.canvasW||10000;"
-          "document.getElementById('s-ch').value=d.canvasH||5000;"
-          "});"
-          "}"
-          "function saveSettings(){"
-          "ra('POST','/api/settings',{"
-          "name:document.getElementById('s-nm').value.trim(),"
-          "units:parseInt(document.getElementById('s-un').value)||0,"
-          "canvasW:parseInt(document.getElementById('s-cw').value)||10000,"
-          "canvasH:parseInt(document.getElementById('s-ch').value)||5000"
-          "},function(r){if(r&&r.ok)alert('Settings saved.');});"
-          "}"
-          "function loadActions(){"
+  c.print("function loadActions(){"
           "ra('GET','/api/children',null,function(d){"
           "var s=document.getElementById('a-tg');"
           "while(s.options.length>1)s.remove(1);"
@@ -935,6 +912,181 @@ void sendParentSPA(WiFiClient& c) {
           "ra('POST','/api/action/stop',"
           "{target:document.getElementById('a-tg').value},"
           "function(r){if(r&&r.ok)document.getElementById('hs').textContent='Action stopped';});"
+          "}");
+
+  // ── Runtime tab JavaScript ───────────────────────────────────────────────
+  c.print("function loadRuntime(){"
+          "ra('GET','/api/runners',null,function(d){"
+          "var h='';"
+          "if(d&&d.length){"
+          "d.forEach(function(r){"
+          "h+='<div style=\"display:flex;align-items:center;gap:.5em;"
+          "padding:.4em 0;border-bottom:1px solid #2a2a2a\">';"
+          "h+='<span style=\"flex:1\">'+r.name"
+          "+'<span style=\"color:#888;font-size:.82em\"> ('+r.steps+' steps"
+          "+(r.computed?' \u2713':'')+' )</span></span>';"
+          "h+='<button class=\"btn btn-on\" onclick=\"showRunner('+r.id+')\""
+          " style=\"padding:.3em .8em\">Edit</button>';"
+          "h+=' <button class=\"btn btn-off\" onclick=\"delRunner('+r.id+')\""
+          " style=\"padding:.3em .8em\">Del</button>';"
+          "h+='</div>';"
+          "});"
+          "}else{h='<p style=\"color:#888\">No runners yet.</p>';}"
+          "document.getElementById('rn-list').innerHTML=h;"
+          "});"
+          "}");
+
+  c.print("function newRunner(){"
+          "var nm=prompt('Runner name:','Runner');"
+          "if(!nm)return;"
+          "ra('POST','/api/runners',{name:nm},function(r){"
+          "if(r&&r.ok){loadRuntime();showRunner(r.id);}"
+          "});"
+          "}"
+          "function delRunner(id){"
+          "if(!confirm('Delete runner?'))return;"
+          "var x=new XMLHttpRequest();"
+          "x.open('DELETE','/api/runners/'+id,true);"
+          "x.onload=function(){backToRunners();loadRuntime();};"
+          "x.send();"
+          "}"
+          "function showRunner(id){"
+          "ra('GET','/api/runners/'+id,null,function(d){"
+          "if(!d)return;"
+          "curRid=d.id;curRname=d.name;"
+          "curRsteps=(d.steps||[]).map(function(s){return Object.assign({},s);});"
+          "document.getElementById('re-nm').textContent=d.name;"
+          "document.getElementById('rt-list').style.display='none';"
+          "document.getElementById('rt-edit').style.display='block';"
+          "renderSteps();"
+          "});"
+          "}"
+          "function backToRunners(){"
+          "document.getElementById('rt-list').style.display='block';"
+          "document.getElementById('rt-edit').style.display='none';"
+          "}");
+
+  c.print("function rgb2h(r,g,b){"
+          "return'#'+('0'+r.toString(16)).slice(-2)"
+          "+('0'+g.toString(16)).slice(-2)"
+          "+('0'+b.toString(16)).slice(-2);"
+          "}"
+          "function renderSteps(){"
+          "var h='';"
+          "if(curRsteps.length>0){"
+          "h+='<div style=\"overflow-x:auto\">"
+          "<table class=\"tbl\" style=\"font-size:.8em\">';"
+          "h+='<tr><th>#</th><th>Type</th><th>Col</th>"
+          "<th>On ms</th><th>Off ms</th><th>WDir</th><th>Spd%</th>"
+          "<th>x0-x1%</th><th>y0-y1%</th><th>Dur s</th><th></th></tr>';"
+          "curRsteps.forEach(function(st,i){"
+          "var col=rgb2h(st.r||0,st.g||0,st.b||0);"
+          "var x0=Math.round((st.x0||0)/100);"
+          "var x1=Math.round((st.x1!=null?st.x1:10000)/100);"
+          "var y0=Math.round((st.y0||0)/100);"
+          "var y1=Math.round((st.y1!=null?st.y1:10000)/100);"
+          "h+='<tr><td>'+(i+1)+'</td>';"
+          "h+='<td><select id=\"s'+i+'t\">';"
+          "['Off','Solid','Flash','Wipe'].forEach(function(n,v){"
+          "h+='<option value=\"'+v+'\"'+(st.type===v?' selected':'')+'>'+n+'</option>';"
+          "});"
+          "h+='</select></td>';"
+          "h+='<td><input type=\"color\" id=\"s'+i+'c\" value=\"'+col+'\""
+          " style=\"width:44px;height:26px\"></td>';"
+          "h+='<td><input type=\"number\" id=\"s'+i+'on\" value=\"'+(st.onMs||500)"
+          "+'\"\tmin=\"50\" max=\"9999\" style=\"width:60px\"></td>';"
+          "h+='<td><input type=\"number\" id=\"s'+i+'of\" value=\"'+(st.offMs||500)"
+          "+'\"\tmin=\"50\" max=\"9999\" style=\"width:60px\"></td>';"
+          "h+='<td><select id=\"s'+i+'wd\">';"
+          "['E','N','W','S'].forEach(function(n,v){"
+          "h+='<option value=\"'+v+'\"'+(st.wdir===v?' selected':'')+'>'+n+'</option>';"
+          "});"
+          "h+='</select></td>';"
+          "h+='<td><input type=\"number\" id=\"s'+i+'ws\" value=\"'+(st.wspd||50)"
+          "+'\"\tmin=\"1\" max=\"100\" style=\"width:48px\"></td>';"
+          "h+='<td style=\"white-space:nowrap\">';"
+          "h+='<input type=\"number\" id=\"s'+i+'x0\" value=\"'+x0"
+          "+'\"\tmin=\"0\" max=\"100\" style=\"width:38px\">-';"
+          "h+='<input type=\"number\" id=\"s'+i+'x1\" value=\"'+x1"
+          "+'\"\tmin=\"0\" max=\"100\" style=\"width:38px\">';"
+          "h+='</td><td style=\"white-space:nowrap\">';"
+          "h+='<input type=\"number\" id=\"s'+i+'y0\" value=\"'+y0"
+          "+'\"\tmin=\"0\" max=\"100\" style=\"width:38px\">-';"
+          "h+='<input type=\"number\" id=\"s'+i+'y1\" value=\"'+y1"
+          "+'\"\tmin=\"0\" max=\"100\" style=\"width:38px\">';"
+          "h+='</td>';"
+          "h+='<td><input type=\"number\" id=\"s'+i+'d\" value=\"'+(st.durationS||5)"
+          "+'\"\tmin=\"1\" max=\"3600\" style=\"width:52px\"></td>';"
+          "h+='<td><button class=\"btn btn-off\" onclick=\"rmStep('+i+')\""
+          " style=\"padding:.2em .5em\">\u00d7</button></td>';"
+          "h+='</tr>';"
+          "});"
+          "h+='</table></div>';"
+          "}else{h='<p style=\"color:#888;margin:.5em 0\">No steps. Add one below.</p>';}"
+          "document.getElementById('re-steps').innerHTML=h;"
+          "}");
+
+  c.print("function addStep(){"
+          "curRsteps.push({type:1,r:255,g:0,b:0,onMs:500,offMs:500,"
+          "wdir:0,wspd:50,x0:0,y0:0,x1:10000,y1:10000,durationS:5});"
+          "renderSteps();"
+          "}"
+          "function rmStep(i){curRsteps.splice(i,1);renderSteps();}"
+          "function gv(id,def){"
+          "var el=document.getElementById(id);"
+          "if(!el)return def;"
+          "var v=parseInt(el.value,10);"
+          "return isNaN(v)?def:v;"
+          "}"
+          "function gcol(id){"
+          "var el=document.getElementById(id);"
+          "if(!el)return{r:0,g:0,b:0};"
+          "var h=el.value;"
+          "return{r:parseInt(h.slice(1,3),16),"
+          "g:parseInt(h.slice(3,5),16),"
+          "b:parseInt(h.slice(5,7),16)};"
+          "}"
+          "function saveRunner(){"
+          "if(curRid<0)return;"
+          "var steps=[];"
+          "for(var i=0;i<curRsteps.length;i++){"
+          "var col=gcol('s'+i+'c');"
+          "steps.push({type:gv('s'+i+'t',1),"
+          "r:col.r,g:col.g,b:col.b,"
+          "onMs:gv('s'+i+'on',500),offMs:gv('s'+i+'of',500),"
+          "wdir:gv('s'+i+'wd',0),wspd:gv('s'+i+'ws',50),"
+          "x0:gv('s'+i+'x0',0)*100,y0:gv('s'+i+'y0',0)*100,"
+          "x1:gv('s'+i+'x1',100)*100,y1:gv('s'+i+'y1',100)*100,"
+          "dur:gv('s'+i+'d',5)});"
+          "}"
+          "var x=new XMLHttpRequest();"
+          "x.open('PUT','/api/runners/'+curRid,true);"
+          "x.setRequestHeader('Content-Type','application/json');"
+          "x.onload=function(){"
+          "try{if(JSON.parse(x.responseText).ok){"
+          "document.getElementById('hs').textContent='Runner saved';"
+          "loadRuntime();"
+          "}}catch(e){}"
+          "};"
+          "x.send(JSON.stringify({name:curRname,steps:steps}));"
+          "}");
+
+  c.print("function loadSettings(){"
+          "ra('GET','/api/settings',null,function(d){"
+          "if(!d)return;"
+          "document.getElementById('s-nm').value=d.name||'';"
+          "document.getElementById('s-un').value=d.units||0;"
+          "document.getElementById('s-cw').value=d.canvasW||10000;"
+          "document.getElementById('s-ch').value=d.canvasH||5000;"
+          "});"
+          "}"
+          "function saveSettings(){"
+          "ra('POST','/api/settings',{"
+          "name:document.getElementById('s-nm').value.trim(),"
+          "units:parseInt(document.getElementById('s-un').value)||0,"
+          "canvasW:parseInt(document.getElementById('s-cw').value)||10000,"
+          "canvasH:parseInt(document.getElementById('s-ch').value)||5000"
+          "},function(r){if(r&&r.ok)alert('Settings saved.');});"
           "}"
           "showTab('dash');"
           "</script></body></html>");
@@ -949,7 +1101,7 @@ void sendMain(WiFiClient& c) {
 #ifdef BOARD_GIGA
   sendParentSPA(c);
 #else
-  // Child SPA — single LED control card
+  // Child SPA — simple status page
   c.print("HTTP/1.1 200 OK\r\n"
           "Content-Type: text/html\r\n"
           "Connection: close\r\n"
@@ -958,158 +1110,43 @@ void sendMain(WiFiClient& c) {
           "<!DOCTYPE html><html><head>"
           "<meta charset='utf-8'>"
           "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-          "<title>SlyLED</title><style>");
-  c.print("*{box-sizing:border-box;margin:0;padding:0}"
-          "body{font-family:sans-serif;background:#111;color:#eee;min-height:100vh}"
-          "#hdr{background:#1a1a2e;padding:1.2em 2em;border-bottom:2px solid #333}"
-          "#hdr h1{font-size:1.8em;margin-bottom:.25em}"
-          "#hdr-status{font-size:.95em;color:#aaa}"
-          ".modules{padding:1.5em}"
-          ".card{background:#1e1e1e;border:1px solid #333;border-radius:10px;"
-          "padding:1.2em 1.5em;margin-bottom:1em;max-width:480px}"
-          ".card-title{font-size:1.1em;font-weight:bold;color:#ccc;margin-bottom:.9em}"
-          ".pattern-row{display:flex;align-items:center;justify-content:space-between;"
-          "gap:.5em;margin-bottom:.5em}"
-          ".pattern-name{font-weight:bold;font-size:1em;min-width:80px}"
-          ".badge{display:inline-block;padding:.25em .8em;border-radius:10px;"
-          "font-size:.85em;font-weight:bold;margin-right:.3em}"
-          ".bon{background:#1a4d1a;color:#4c4}"
-          ".boff{background:#4d1a1a;color:#c44}"
-          ".btn{display:inline-block;padding:.5em 1.4em;border-radius:6px;"
-          "border:none;cursor:pointer;font-size:.9em;font-family:inherit;"
-          "font-weight:bold;margin-left:.3em}"
-          ".btn:hover{opacity:.8}"
-          ".btn-on{background:#2a2;color:#fff}.btn-off{background:#a22;color:#fff}"
-          ".btn-nav{background:#446;color:#fff;text-decoration:none;padding:.6em 1.6em}"
-          ".footer{padding:1em 2em;font-size:.72em;color:#444}");
-  c.print("</style></head><body>"
-          "<div id='hdr'>"
-          "<h1>SlyLED</h1>"
-          "<div id='hdr-status'>Connecting...</div>"
-          "</div>"
-          "<div class='modules'>"
-          "<div class='card'>");
-  sendBuf(c, "<div class='card-title'>%s</div>", CARD_TITLE);
-  c.print("<div class='pattern-row'>"
-          "<span class='pattern-name'>Rainbow</span>"
-          "<span>"
-          "<span class='badge boff' id='badge-rainbow'>OFF</span>"
-          "<button class='btn btn-on' onclick='setFeature(\"rainbow\")'>Enable</button>"
-          "</span></div>"
-          "<div class='pattern-row'>"
-          "<span class='pattern-name'>Siren</span>"
-          "<span>"
-          "<span class='badge boff' id='badge-siren'>OFF</span>"
-          "<button class='btn btn-on' onclick='setFeature(\"siren\")'>Enable</button>"
-          "</span></div>"
-          "<div class='pattern-row' style='justify-content:flex-end;margin-top:.3em'>"
-          "<button class='btn btn-off' onclick='setFeature(\"off\")'>Disable</button>"
-          "</div></div></div>"
-          "<div style='padding:0 1.5em'>"
-          "<a class='btn btn-nav' href='/log'>View Log</a>"
-          "</div>");
+          "<title>SlyLED Child</title><style>"
+          "*{box-sizing:border-box;margin:0;padding:0}"
+          "body{font-family:sans-serif;background:#111;color:#eee;padding:2em}"
+          "h1{font-size:1.6em;margin-bottom:.3em}"
+          ".card{background:#1e1e1e;border:1px solid #333;border-radius:8px;"
+          "padding:1.2em;max-width:360px;margin-top:1em}"
+          ".row{display:flex;justify-content:space-between;padding:.4em 0;"
+          "border-bottom:1px solid #2a2a2a;font-size:.92em}"
+          ".lbl{color:#888}.val{font-weight:bold}"
+          ".footer{margin-top:2em;font-size:.7em;color:#444}"
+          "</style></head><body>"
+          "<h1>SlyLED</h1><p style='color:#888;font-size:.9em'>Child Node</p>"
+          "<div class='card' id='sc'><p style='color:#888'>Loading...</p></div>");
   sendBuf(c, "<div class='footer'>v%d.%d</div>", APP_MAJOR, APP_MINOR);
   c.print("<script>"
-          "function applyState(d){"
-          "var f=d.onboard_led.feature;"
-          "var br=document.getElementById('badge-rainbow');"
-          "br.textContent=f==='rainbow'?'ON':'OFF';"
-          "br.className='badge '+(f==='rainbow'?'bon':'boff');"
-          "var bs=document.getElementById('badge-siren');"
-          "bs.textContent=f==='siren'?'ON':'OFF';"
-          "bs.className='badge '+(f==='siren'?'bon':'boff');"
-          "var h=document.getElementById('hdr-status');"
-          "if(f==='rainbow'){h.textContent='" CARD_TITLE " - Rainbow ON';h.style.color='#4c4';}"
-          "else if(f==='siren'){h.textContent='" CARD_TITLE " - Siren ON';h.style.color='#48f';}"
-          "else{h.textContent='" CARD_TITLE " - OFF';h.style.color='#c44';}"
-          "}"
+          "var actN=['Off','Solid','Flash','Wipe'];"
           "function poll(){"
           "var x=new XMLHttpRequest();"
           "x.open('GET','/status',true);"
           "x.onload=function(){"
-          "if(x.status===200){try{applyState(JSON.parse(x.responseText));}catch(e){}}"
+          "try{"
+          "var d=JSON.parse(x.responseText);"
+          "var h='<div class=\"row\"><span class=\"lbl\">Hostname</span>"
+          "<span class=\"val\">'+d.hostname+'</span></div>'"
+          "+'<div class=\"row\"><span class=\"lbl\">Action</span>"
+          "<span class=\"val\">'+(actN[d.action]||'?')+'</span></div>';"
+          "document.getElementById('sc').innerHTML=h;"
+          "}catch(e){}"
           "};"
           "x.send();"
           "}"
-          "function setFeature(f){"
-          "var path=f==='rainbow'?'/led/on':(f==='siren'?'/led/siren/on':'/led/off');"
-          "var x=new XMLHttpRequest();"
-          "x.open('POST',path,true);"
-          "x.onload=function(){"
-          "if(x.status===200){try{if(JSON.parse(x.responseText).ok)poll();}catch(e){}}"
-          "};"
-          "x.send();"
-          "}"
-          "poll();setInterval(poll,2000);"
+          "poll();setInterval(poll,3000);"
           "</script></body></html>");
-#endif  // BOARD_GIGA
+#endif
 }
 
-// ── Log page ──────────────────────────────────────────────────────────────────
-
-void sendLog(WiFiClient& c) {
-  c.print("HTTP/1.1 200 OK\r\n"
-          "Content-Type: text/html\r\n"
-          "Connection: close\r\n"
-          "Cache-Control: no-cache, no-store\r\n"
-          "\r\n"
-          "<!DOCTYPE html><html><head>"
-          "<meta charset='utf-8'>"
-          "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-          "<title>SlyLED - Log</title><style>");
-  c.print("body{font-family:sans-serif;text-align:center;padding:2em;"
-          "background:#111;color:#eee;margin:0}"
-          "h1{font-size:2em;margin-bottom:.1em}"
-          "h2{font-weight:normal;color:#aaa;margin-top:0}"
-          ".btn-nav{display:inline-block;padding:.6em 1.6em;border-radius:6px;"
-          "background:#446;color:#fff;text-decoration:none;font-weight:bold}"
-          ".btn-nav:hover{opacity:.8}"
-          "table{margin:1.5em auto;border-collapse:collapse}"
-          "th,td{padding:.5em 1.2em;border:1px solid #444;text-align:left}"
-          "th{background:#222}tr:nth-child(even){background:#1a1a1a}"
-          "</style></head><body>"
-          "<h1>SlyLED</h1><h2>Event Log</h2>");
-  if (logCount == 0) {
-    c.print("<p style='color:#888'>No events recorded yet.</p>");
-  } else {
-    c.print("<table><tr><th>#</th><th>Timestamp</th><th>Feature</th>"
-            "<th>State</th><th>Source</th><th>IP</th></tr>");
-    uint8_t startIdx = (logNext - logCount + MAX_LOG * 2) % MAX_LOG;
-    for (int8_t i = logCount - 1; i >= 0; i--) {
-      uint8_t idx = (startIdx + i) % MAX_LOG;
-      char ts[40];
-      formatTime(logBuf[idx].epoch, ts, sizeof(ts));
-      const char* featLabel;
-      const char* color;
-      const char* label;
-      if (logBuf[idx].feature == FEAT_RAINBOW) {
-        featLabel = "Rainbow"; color = "#4c4"; label = "ON";
-      } else if (logBuf[idx].feature == FEAT_SIREN) {
-        featLabel = "Siren";   color = "#48f"; label = "ON";
-      } else {
-        featLabel = "-";       color = "#c44"; label = "OFF";
-      }
-      const char* source = logBuf[idx].source == SRC_BOOT ? "Boot" : "Web";
-      char ipStr[16];
-      if (logBuf[idx].source == SRC_BOOT) {
-        ipStr[0] = '-'; ipStr[1] = '\0';
-      } else {
-        snprintf(ipStr, sizeof(ipStr), "%u.%u.%u.%u",
-                 logBuf[idx].ip[0], logBuf[idx].ip[1],
-                 logBuf[idx].ip[2], logBuf[idx].ip[3]);
-      }
-      sendBuf(c, "<tr><td>%d</td><td>%s</td><td>%s</td>"
-                 "<td style='color:%s'><strong>%s</strong></td>"
-                 "<td>%s</td><td>%s</td></tr>",
-              logCount - i, ts, featLabel, color, label, source, ipStr);
-    }
-    c.print("</table>");
-    c.flush();
-  }
-  c.print("<br><a class='btn-nav' href='/'>Back</a></body></html>");
-}
-
-// ── Parent UDP functions (Giga only) ─────────────────────────────────────────
+// ── Parent UDP + API functions (Giga only) ────────────────────────────────────
 
 #ifdef BOARD_GIGA
 
@@ -1182,7 +1219,6 @@ void registerChild(IPAddress ip, const PongPayload* pong) {
   if (Serial) Serial.println(F("Child registry full."));
 }
 
-// Serve GET /api/children — compact list used by SPA dashboard/setup.
 void sendApiChildren(WiFiClient& c) {
   static char jsonBuf[1400];
   char* p   = jsonBuf;
@@ -1218,7 +1254,6 @@ void sendApiChildren(WiFiClient& c) {
   c.flush();
 }
 
-// Serve GET /api/children/export — full config including string details.
 void sendApiChildrenExport(WiFiClient& c) {
   static char jsonBuf[1800];
   char* p   = jsonBuf;
@@ -1267,12 +1302,11 @@ void sendApiChildrenExport(WiFiClient& c) {
   c.flush();
 }
 
-// Handle DELETE /api/children/:id and POST /api/children/:id/refresh
 void handleChildIdRoute(WiFiClient& c, const char* req, bool isPost, bool isDel, int contentLen) {
   (void)contentLen;
   const char* idStart = strstr(req, "/api/children/");
   if (!idStart) { sendJsonErr(c, "bad-route"); return; }
-  idStart += 14;  // strlen("/api/children/")
+  idStart += 14;
   int id = atoi(idStart);
   if (id < 0 || id >= MAX_CHILDREN) { sendJsonErr(c, "bad-id"); return; }
 
@@ -1300,7 +1334,6 @@ void handleChildIdRoute(WiFiClient& c, const char* req, bool isPost, bool isDel,
   }
 }
 
-// Serve GET /api/layout — canvas dimensions and child positions.
 void sendApiLayout(WiFiClient& c) {
   static char jsonBuf[900];
   char* p   = jsonBuf;
@@ -1332,7 +1365,6 @@ void sendApiLayout(WiFiClient& c) {
   c.flush();
 }
 
-// Handle POST /api/layout — body: {"children":[{"id":N,"x":N,"y":N},...]}
 void handlePostLayout(WiFiClient& c, int contentLen) {
   char body[256] = {};
   if (contentLen > 0 && contentLen < (int)sizeof(body))
@@ -1357,7 +1389,6 @@ void handlePostLayout(WiFiClient& c, int contentLen) {
   sendJsonOk(c);
 }
 
-// Serve GET /api/settings
 void sendApiSettings(WiFiClient& c) {
   char body[128];
   int blen = snprintf(body, sizeof(body),
@@ -1375,7 +1406,6 @@ void sendApiSettings(WiFiClient& c) {
   c.flush();
 }
 
-// Handle POST /api/settings — body: {"name":"...","units":N,"canvasW":N,"canvasH":N}
 void handlePostSettings(WiFiClient& c, int contentLen) {
   char body[128] = {};
   if (contentLen > 0 && contentLen < (int)sizeof(body))
@@ -1390,7 +1420,6 @@ void handlePostSettings(WiFiClient& c, int contentLen) {
   sendJsonOk(c);
 }
 
-// Send CMD_ACTION to one child with the given payload.
 void sendCmdAction(IPAddress dest, const ActionPayload* p) {
   UdpHeader hdr;
   hdr.magic   = UDP_MAGIC;
@@ -1404,7 +1433,6 @@ void sendCmdAction(IPAddress dest, const ActionPayload* p) {
   cmdUDP.endPacket();
 }
 
-// Send CMD_ACTION_STOP to one child (header-only packet).
 void sendCmdActionStop(IPAddress dest) {
   UdpHeader hdr;
   hdr.magic   = UDP_MAGIC;
@@ -1417,8 +1445,6 @@ void sendCmdActionStop(IPAddress dest) {
   cmdUDP.endPacket();
 }
 
-// POST /api/action — body: {"type":N,"r":N,"g":N,"b":N,"onMs":N,"offMs":N,
-//                            "wipeDir":N,"wipeSpeedPct":N,"target":"all"|"N"}
 void handleApiAction(WiFiClient& c, int contentLen) {
   char body[128] = {};
   if (contentLen > 0 && contentLen < (int)sizeof(body))
@@ -1434,13 +1460,11 @@ void handleApiAction(WiFiClient& c, int contentLen) {
   p.offMs        = (uint16_t)jsonGetInt(body, "offMs",       500);
   p.wipeDir      = (uint8_t)jsonGetInt(body, "wipeDir",      0);
   p.wipeSpeedPct = (uint8_t)jsonGetInt(body, "wipeSpeedPct", 50);
-  // All strings, all LEDs (ledStart=0, ledEnd=0xFF means to end of strip)
   for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
     p.ledStart[j] = 0x00;
     p.ledEnd[j]   = 0xFF;
   }
 
-  // If type is off, use ACTION_STOP instead (cleaner semantics)
   char target[8] = {};
   jsonGetStr(body, "target", target, sizeof(target));
 
@@ -1465,7 +1489,6 @@ void handleApiAction(WiFiClient& c, int contentLen) {
   sendJsonOk(c);
 }
 
-// POST /api/action/stop — body (optional): {"target":"all"|"N"}
 void handleApiActionStop(WiFiClient& c, int contentLen) {
   char body[64] = {};
   if (contentLen > 0 && contentLen < (int)sizeof(body))
@@ -1490,6 +1513,179 @@ void handleApiActionStop(WiFiClient& c, int contentLen) {
     sendCmdActionStop(dest);
   }
   sendJsonOk(c);
+}
+
+// ── Runner API (Phase 2d) ─────────────────────────────────────────────────────
+
+// GET /api/runners — compact list
+void sendApiRunners(WiFiClient& c) {
+  static char jsonBuf[512];
+  char* p   = jsonBuf;
+  char* end = jsonBuf + sizeof(jsonBuf) - 2;
+  *p++ = '[';
+  bool first = true;
+  for (uint8_t i = 0; i < MAX_RUNNERS; i++) {
+    if (!runners[i].inUse) continue;
+    if (!first) *p++ = ',';
+    first = false;
+    p += snprintf(p, end - p,
+      "{\"id\":%u,\"name\":\"%s\",\"steps\":%u,\"computed\":%s}",
+      (unsigned)i, runners[i].name,
+      (unsigned)runners[i].stepCount,
+      runners[i].computed ? "true" : "false");
+  }
+  *p++ = ']'; *p = '\0';
+  int blen = (int)(p - jsonBuf);
+  sendBuf(c, "HTTP/1.1 200 OK\r\n"
+             "Content-Type: application/json\r\n"
+             "Connection: close\r\n"
+             "Cache-Control: no-cache, no-store\r\n"
+             "Content-Length: %d\r\n\r\n", blen);
+  c.print(jsonBuf);
+  c.flush();
+}
+
+// GET /api/runners/:id — full runner with steps
+void sendApiRunner(WiFiClient& c, uint8_t id) {
+  if (id >= MAX_RUNNERS || !runners[id].inUse) {
+    sendJsonErr(c, "not-found"); return;
+  }
+  static char jsonBuf[2048];
+  char* p   = jsonBuf;
+  char* end = jsonBuf + sizeof(jsonBuf) - 2;
+  p += snprintf(p, end - p,
+    "{\"id\":%u,\"name\":\"%s\",\"computed\":%s,\"steps\":[",
+    (unsigned)id, runners[id].name,
+    runners[id].computed ? "true" : "false");
+  for (uint8_t s = 0; s < runners[id].stepCount; s++) {
+    if (s > 0) *p++ = ',';
+    RunnerStep& st = runners[id].steps[s];
+    p += snprintf(p, end - p,
+      "{\"type\":%u,\"r\":%u,\"g\":%u,\"b\":%u,"
+      "\"onMs\":%u,\"offMs\":%u,\"wdir\":%u,\"wspd\":%u,"
+      "\"x0\":%u,\"y0\":%u,\"x1\":%u,\"y1\":%u,\"durationS\":%u}",
+      (unsigned)st.action.type,
+      (unsigned)st.action.r, (unsigned)st.action.g, (unsigned)st.action.b,
+      (unsigned)st.action.onMs, (unsigned)st.action.offMs,
+      (unsigned)st.action.wipeDir, (unsigned)st.action.wipeSpeedPct,
+      (unsigned)st.area.x0, (unsigned)st.area.y0,
+      (unsigned)st.area.x1, (unsigned)st.area.y1,
+      (unsigned)st.durationS);
+  }
+  p += snprintf(p, end - p, "]}");
+  int blen = (int)(p - jsonBuf);
+  sendBuf(c, "HTTP/1.1 200 OK\r\n"
+             "Content-Type: application/json\r\n"
+             "Connection: close\r\n"
+             "Cache-Control: no-cache, no-store\r\n"
+             "Content-Length: %d\r\n\r\n", blen);
+  c.print(jsonBuf);
+  c.flush();
+}
+
+// POST /api/runners — body: {"name":"..."}
+void handlePostRunners(WiFiClient& c, int contentLen) {
+  char body[32] = {};
+  if (contentLen > 0 && contentLen < (int)sizeof(body))
+    c.readBytes(body, contentLen);
+  uint8_t slot = 0xFF;
+  for (uint8_t i = 0; i < MAX_RUNNERS; i++) {
+    if (!runners[i].inUse) { slot = i; break; }
+  }
+  if (slot == 0xFF) { sendJsonErr(c, "full"); return; }
+  memset(&runners[slot], 0, sizeof(Runner));
+  runners[slot].inUse = true;
+  jsonGetStr(body, "name", runners[slot].name, RUNNER_NAME_LEN);
+  if (runners[slot].name[0] == '\0')
+    snprintf(runners[slot].name, RUNNER_NAME_LEN, "Runner %u", (unsigned)slot);
+  char resp[32];
+  int rlen = snprintf(resp, sizeof(resp), "{\"ok\":true,\"id\":%u}", (unsigned)slot);
+  sendBuf(c, "HTTP/1.1 200 OK\r\n"
+             "Content-Type: application/json\r\n"
+             "Connection: close\r\n"
+             "Content-Length: %d\r\n\r\n", rlen);
+  c.print(resp);
+  c.flush();
+}
+
+// Handle GET / PUT / DELETE /api/runners/:id
+void handleRunnerIdRoute(WiFiClient& c, const char* req, bool isGet, bool isPut, bool isDel, int contentLen) {
+  const char* idStart = strstr(req, "/api/runners/");
+  if (!idStart) { sendJsonErr(c, "bad-route"); return; }
+  idStart += 13;
+  int id = atoi(idStart);
+  if (id < 0 || id >= MAX_RUNNERS) { sendJsonErr(c, "bad-id"); return; }
+
+  if (isDel) {
+    if (!runners[id].inUse) { sendJsonErr(c, "not-found"); return; }
+    memset(&runners[id], 0, sizeof(Runner));
+    sendJsonOk(c);
+  } else if (isPut) {
+    if (!runners[id].inUse) { sendJsonErr(c, "not-found"); return; }
+    // Read body
+    static char body[2048];
+    memset(body, 0, sizeof(body));
+    int readLen = (contentLen < (int)sizeof(body) - 1) ? contentLen : (int)sizeof(body) - 1;
+    if (readLen > 0) c.readBytes(body, readLen);
+
+    // Update name if provided
+    char nm[RUNNER_NAME_LEN] = {};
+    jsonGetStr(body, "name", nm, sizeof(nm));
+    if (nm[0] != '\0') strncpy(runners[id].name, nm, RUNNER_NAME_LEN - 1);
+
+    // Parse steps array
+    const char* sa = strstr(body, "\"steps\":[");
+    if (sa) {
+      sa += 9;
+      uint8_t sc = 0;
+      while (*sa && sc < MAX_STEPS) {
+        // Skip to next '{'
+        while (*sa && *sa != '{' && *sa != ']') sa++;
+        if (*sa != '{') break;
+        // Find matching '}'
+        int depth = 0;
+        const char* ep = sa;
+        while (*ep) {
+          if (*ep == '{') depth++;
+          else if (*ep == '}') { depth--; if (depth == 0) { ep++; break; } }
+          ep++;
+        }
+        // Extract step object
+        char stepBuf[160] = {};
+        int slen = (int)(ep - sa);
+        if (slen > (int)sizeof(stepBuf) - 1) slen = sizeof(stepBuf) - 1;
+        memcpy(stepBuf, sa, slen);
+
+        RunnerStep& st = runners[id].steps[sc];
+        st.action.type         = (uint8_t)jsonGetInt(stepBuf, "type", 0);
+        st.action.r            = (uint8_t)jsonGetInt(stepBuf, "r",    0);
+        st.action.g            = (uint8_t)jsonGetInt(stepBuf, "g",    0);
+        st.action.b            = (uint8_t)jsonGetInt(stepBuf, "b",    0);
+        st.action.onMs         = (uint16_t)jsonGetInt(stepBuf, "onMs",  500);
+        st.action.offMs        = (uint16_t)jsonGetInt(stepBuf, "offMs", 500);
+        st.action.wipeDir      = (uint8_t)jsonGetInt(stepBuf, "wdir", 0);
+        st.action.wipeSpeedPct = (uint8_t)jsonGetInt(stepBuf, "wspd", 50);
+        int x0 = jsonGetInt(stepBuf, "x0", 0);
+        int y0 = jsonGetInt(stepBuf, "y0", 0);
+        int x1 = jsonGetInt(stepBuf, "x1", 10000);
+        int y1 = jsonGetInt(stepBuf, "y1", 10000);
+        st.area.x0 = (uint16_t)(x0 < 0 ? 0 : (x0 > 10000 ? 10000 : x0));
+        st.area.y0 = (uint16_t)(y0 < 0 ? 0 : (y0 > 10000 ? 10000 : y0));
+        st.area.x1 = (uint16_t)(x1 < 0 ? 0 : (x1 > 10000 ? 10000 : x1));
+        st.area.y1 = (uint16_t)(y1 < 0 ? 0 : (y1 > 10000 ? 10000 : y1));
+        int dur = jsonGetInt(stepBuf, "dur", 5);
+        st.durationS = (uint16_t)(dur < 1 ? 1 : (dur > 65535 ? 65535 : dur));
+
+        sc++;
+        sa = ep;
+      }
+      runners[id].stepCount = sc;
+      runners[id].computed  = false;
+    }
+    sendJsonOk(c);
+  } else {  // GET
+    sendApiRunner(c, (uint8_t)id);
+  }
 }
 
 #endif  // BOARD_GIGA
@@ -1554,7 +1750,7 @@ void sendStatusResp(IPAddress dest) {
   hdr.epoch   = (uint32_t)currentEpoch();
 
   StatusRespPayload resp;
-  resp.activeAction = ledRainbowOn ? 1 : (ledSirenOn ? 2 : 0);
+  resp.activeAction = childActType;
   resp.runnerActive = 0;
   resp.currentStep  = 0;
   int32_t rssi = WiFi.RSSI();
@@ -1599,7 +1795,7 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
       childActSt[j] = ap.ledStart[j];
       childActEn[j] = ap.ledEnd[j];
     }
-    childActSeq++;  // signal LED task to reset timing
+    childActSeq++;
   } else if (cmd == CMD_ACTION_STOP) {
     childActType = ACT_OFF;
     childActSeq++;
@@ -1627,12 +1823,26 @@ void pollUDP() {
 
 void connectWiFi() {
   if (Serial) { Serial.print("Connecting to "); Serial.println(SECRET_SSID); }
+#ifdef BOARD_FASTLED
+  // Derive hostname from MAC before WiFi.begin so DHCP gets the correct name
+  {
+    uint8_t mac[6];
 #ifdef BOARD_D1MINI
-  WiFi.mode(WIFI_STA);
-  WiFi.hostname(HOSTNAME);
+    WiFi.mode(WIFI_STA);
+#endif
+    WiFi.macAddress(mac);
+    char hn[HOSTNAME_LEN];
+    snprintf(hn, sizeof(hn), "SLYC-%02X%02X", mac[4], mac[5]);
+#ifdef BOARD_D1MINI
+    WiFi.hostname(hn);
+#else
+    WiFi.setHostname(hn);
+#endif
+  }
 #else
   WiFi.setHostname(HOSTNAME);
 #endif
+
   WiFi.begin(SECRET_SSID, SECRET_PASS);
   unsigned long t = millis();
   while (WiFi.status() != WL_CONNECTED) {
@@ -1643,17 +1853,11 @@ void connectWiFi() {
   if (Serial) { Serial.println(); Serial.print("Connected. IP: "); Serial.println(WiFi.localIP()); }
   server.begin();
   syncNTP();
-
   cmdUDP.begin(UDP_PORT);
   if (Serial) Serial.println(F("UDP command channel open on port 4210."));
 
 #ifdef BOARD_FASTLED
   initChildConfig();
-#ifdef BOARD_D1MINI
-  WiFi.hostname(childCfg.hostname);
-#else
-  WiFi.setHostname(childCfg.hostname);
-#endif
 #endif
 }
 
@@ -1665,169 +1869,67 @@ void printStatus() {
     last = millis();
     if (!Serial) return;
     Serial.print("IP: ");     Serial.print(WiFi.localIP());
-    Serial.print("  WiFi: "); Serial.print(WiFi.status() == WL_CONNECTED ? "OK" : "DISCONNECTED");
-    const char* feat = ledRainbowOn ? "Rainbow" : (ledSirenOn ? "Siren" : "OFF");
-    Serial.print("  LED: ");  Serial.println(feat);
+    Serial.print("  WiFi: "); Serial.println(WiFi.status() == WL_CONNECTED ? "OK" : "DISCONNECTED");
   }
 }
-
-// ── LED implementation — Arduino Giga R1 WiFi ─────────────────────────────────
-
-#ifdef BOARD_GIGA
-
-void hueToRGB(uint8_t hue, uint8_t& r, uint8_t& g, uint8_t& b) {
-  uint8_t sector = hue / 43;
-  uint8_t frac   = (hue % 43) * 6;
-  switch (sector) {
-    case 0: r=255;      g=frac;     b=0;        break;
-    case 1: r=255-frac; g=255;      b=0;        break;
-    case 2: r=0;        g=255;      b=frac;     break;
-    case 3: r=0;        g=255-frac; b=255;      break;
-    case 4: r=frac;     g=0;        b=255;      break;
-    default: r=255;     g=0;        b=255-frac; break;
-  }
-}
-
-void pwmCycle(uint8_t r, uint8_t g, uint8_t b) {
-  for (uint16_t step = 0; step < PWM_STEPS; step++) {
-    digitalWrite(LEDR, r > step ? LOW : HIGH);
-    digitalWrite(LEDG, g > step ? LOW : HIGH);
-    digitalWrite(LEDB, b > step ? LOW : HIGH);
-    delayMicroseconds(STEP_US);
-  }
-}
-
-void setRGBFor(uint8_t r, uint8_t g, uint8_t b) {
-  unsigned long end = millis() + DISPLAY_MS;
-  while (millis() < end) pwmCycle(r, g, b);
-}
-
-void ledTask() {
-  uint8_t       hue        = 0;
-  uint8_t       sirenPhase = 0;
-  unsigned long sirenStart = 0;
-  bool          prevSirenOn = false;
-
-  while (true) {
-    bool siren   = ledSirenOn;
-    bool rainbow = ledRainbowOn;
-
-    if (siren) {
-      if (!prevSirenOn) { sirenPhase = 0; sirenStart = millis(); }
-      prevSirenOn = true;
-      unsigned long now = millis();
-      if (now - sirenStart >= (unsigned long)SIREN_HALF_MS) {
-        sirenPhase ^= 1;
-        sirenStart  = now;
-      }
-      if (sirenPhase == 0) pwmCycle(255, 0, 0);
-      else                  pwmCycle(0, 0, 255);
-
-    } else if (rainbow) {
-      prevSirenOn = false;
-      uint8_t r, g, b;
-      hueToRGB(hue, r, g, b);
-      setRGBFor(r, g, b);
-      hue += HUE_STEP;
-
-    } else {
-      prevSirenOn = false;
-      digitalWrite(LEDR, HIGH);
-      digitalWrite(LEDG, HIGH);
-      digitalWrite(LEDB, HIGH);
-      delay(5);
-    }
-  }
-}
-
-#endif  // BOARD_GIGA
 
 // ── LED implementation — ESP32 (FreeRTOS task, Core 0) ───────────────────────
 
 #ifdef BOARD_ESP32
 
 void ledTask(void* parameter) {
-  uint8_t       hue          = 0;
-  uint8_t       sirenPhase   = 0;
-  unsigned long sirenStart   = 0;
-  bool          prevSirenOn  = false;
-  uint8_t       prevActSeq   = 0;
-  unsigned long actStart     = 0;
-  uint8_t       flashPhase   = 0;
+  uint8_t       prevActSeq  = 0;
+  unsigned long actStart    = 0;
+  uint8_t       flashPhase  = 0;
+  bool          offRendered = false;
 
   while (true) {
-    // ── Remote action takes priority over local rainbow/siren ────────────────
     uint8_t seq = childActSeq;
-    if (seq != prevActSeq) {   // new action arrived — reset timing
-      prevActSeq = seq;
-      actStart   = millis();
-      flashPhase = 0;
-      prevSirenOn = false;   // force siren state reset when action stops
+    if (seq != prevActSeq) {
+      prevActSeq  = seq;
+      actStart    = millis();
+      flashPhase  = 0;
+      offRendered = false;
     }
     uint8_t at = childActType;
-    if (at != ACT_OFF) {
-      uint8_t r = childActR, g = childActG, b = childActB;
-      if (at == ACT_SOLID) {
-        fill_solid(leds, NUM_LEDS, CRGB(r, g, b));
-        FastLED.show();
-        delay(50);
+    uint8_t r  = childActR, g = childActG, b = childActB;
 
-      } else if (at == ACT_FLASH) {
-        unsigned long now = millis();
-        uint16_t period = flashPhase ? childActOffMs : childActOnMs;
-        if (now - actStart >= (unsigned long)period) {
-          flashPhase ^= 1;
-          actStart = now;
-        }
-        fill_solid(leds, NUM_LEDS, flashPhase ? CRGB::Black : CRGB(r, g, b));
-        FastLED.show();
-        delay(5);
+    if (at == ACT_SOLID) {
+      fill_solid(leds, NUM_LEDS, CRGB(r, g, b));
+      FastLED.show();
+      delay(50);
 
-      } else {  // ACT_WIPE
-        uint8_t spd = childActWSpd ? childActWSpd : 1;
-        uint32_t front = (uint32_t)(millis() - actStart) * spd * NUM_LEDS / 100000UL;
-        if (front > NUM_LEDS) front = NUM_LEDS;
-        uint8_t dir = childActWDir;
-        for (uint8_t i = 0; i < NUM_LEDS; i++) {
-          bool lit = (dir == DIR_W || dir == DIR_S)
-                   ? ((NUM_LEDS - 1 - i) < front)
-                   : (i < front);
-          leds[i] = lit ? CRGB(r, g, b) : CRGB::Black;
-        }
-        FastLED.show();
-        delay(10);
-      }
-      continue;  // skip local patterns
-    }
-
-    // ── Local patterns (rainbow / siren / off) ───────────────────────────────
-    bool siren   = ledSirenOn;
-    bool rainbow = ledRainbowOn;
-
-    if (siren) {
-      if (!prevSirenOn) { sirenPhase = 0; sirenStart = millis(); }
-      prevSirenOn = true;
+    } else if (at == ACT_FLASH) {
       unsigned long now = millis();
-      if (now - sirenStart >= (unsigned long)SIREN_HALF_MS) {
-        sirenPhase ^= 1;
-        sirenStart  = now;
+      uint16_t period = flashPhase ? childActOffMs : childActOnMs;
+      if (now - actStart >= (unsigned long)period) {
+        flashPhase ^= 1;
+        actStart    = now;
       }
-      for (int i = 0; i < NUM_LEDS; i++)
-        leds[i] = ((i % 2) == sirenPhase) ? CRGB::Red : CRGB::Blue;
+      fill_solid(leds, NUM_LEDS, flashPhase ? CRGB::Black : CRGB(r, g, b));
       FastLED.show();
       delay(5);
 
-    } else if (rainbow) {
-      prevSirenOn = false;
-      fill_rainbow(leds, NUM_LEDS, hue, RAINBOW_DELTA);
+    } else if (at == ACT_WIPE) {
+      uint8_t spd = childActWSpd ? childActWSpd : 1;
+      uint32_t front = (uint32_t)(millis() - actStart) * spd * NUM_LEDS / 100000UL;
+      if (front > NUM_LEDS) front = NUM_LEDS;
+      uint8_t dir = childActWDir;
+      for (uint8_t i = 0; i < NUM_LEDS; i++) {
+        bool lit = (dir == DIR_W || dir == DIR_S)
+                 ? ((NUM_LEDS - 1 - i) < front)
+                 : (i < front);
+        leds[i] = lit ? CRGB(r, g, b) : CRGB::Black;
+      }
       FastLED.show();
-      hue++;
-      delay(RAINBOW_DELAY);
+      delay(10);
 
-    } else {
-      prevSirenOn = false;
-      fill_solid(leds, NUM_LEDS, CRGB::Black);
-      FastLED.show();
+    } else {  // ACT_OFF — render black once, then idle
+      if (!offRendered) {
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
+        FastLED.show();
+        offRendered = true;
+      }
       delay(10);
     }
   }
@@ -1840,98 +1942,62 @@ void ledTask(void* parameter) {
 #ifdef BOARD_D1MINI
 
 void updateLED() {
-  static uint8_t       hue         = 0;
-  static uint8_t       sirenPhase  = 0;
-  static unsigned long sirenStart  = 0;
-  static unsigned long lastFrame   = 0;
-  static bool          prevSirenOn = false;
   static uint8_t       prevActSeq  = 0;
   static unsigned long actStart    = 0;
   static uint8_t       flashPhase  = 0;
   static bool          actRendered = false;
 
-  // ── Remote action takes priority ─────────────────────────────────────────
   uint8_t seq = childActSeq;
   if (seq != prevActSeq) {
     prevActSeq  = seq;
     actStart    = millis();
     flashPhase  = 0;
     actRendered = false;
-    prevSirenOn = false;
   }
+
   uint8_t at = childActType;
-  if (at != ACT_OFF) {
-    uint8_t r = childActR, g = childActG, b = childActB;
-    if (at == ACT_SOLID) {
-      if (!actRendered) {
-        fill_solid(leds, NUM_LEDS, CRGB(r, g, b));
-        FastLED.show();
-        actRendered = true;
-      }
+  uint8_t r  = childActR, g = childActG, b = childActB;
 
-    } else if (at == ACT_FLASH) {
-      unsigned long now = millis();
-      uint16_t period = flashPhase ? childActOffMs : childActOnMs;
-      if (now - actStart >= (unsigned long)period) {
-        flashPhase ^= 1;
-        actStart = now;
-        fill_solid(leds, NUM_LEDS, flashPhase ? CRGB::Black : CRGB(r, g, b));
-        FastLED.show();
-      }
-
-    } else {  // ACT_WIPE — throttle to every 20 ms
-      static unsigned long lastWipe = 0;
-      unsigned long now = millis();
-      if (now - lastWipe >= 20) {
-        lastWipe = now;
-        uint8_t spd = childActWSpd ? childActWSpd : 1;
-        uint32_t front = (uint32_t)(now - actStart) * spd * NUM_LEDS / 100000UL;
-        if (front > NUM_LEDS) front = NUM_LEDS;
-        uint8_t dir = childActWDir;
-        for (uint8_t i = 0; i < NUM_LEDS; i++) {
-          bool lit = (dir == DIR_W || dir == DIR_S)
-                   ? ((NUM_LEDS - 1 - i) < front)
-                   : (i < front);
-          leds[i] = lit ? CRGB(r, g, b) : CRGB::Black;
-        }
-        FastLED.show();
-      }
-    }
-    return;  // skip local patterns
-  }
-
-  // ── Local patterns ────────────────────────────────────────────────────────
-  bool siren   = ledSirenOn;
-  bool rainbow = ledRainbowOn;
-
-  if (siren) {
-    if (!prevSirenOn) { sirenPhase = 0; sirenStart = millis(); }
-    prevSirenOn = true;
-    unsigned long now = millis();
-    if (now - sirenStart >= (unsigned long)SIREN_HALF_MS) {
-      sirenPhase ^= 1;
-      sirenStart  = now;
-    }
-    for (int i = 0; i < NUM_LEDS; i++)
-      leds[i] = ((i % 2) == sirenPhase) ? CRGB::Red : CRGB::Blue;
-    FastLED.show();
-
-  } else if (rainbow) {
-    prevSirenOn = false;
-    unsigned long now = millis();
-    if (now - lastFrame >= (unsigned long)RAINBOW_DELAY) {
-      lastFrame = now;
-      fill_rainbow(leds, NUM_LEDS, hue, RAINBOW_DELTA);
+  if (at == ACT_SOLID) {
+    if (!actRendered) {
+      fill_solid(leds, NUM_LEDS, CRGB(r, g, b));
       FastLED.show();
-      hue++;
+      actRendered = true;
     }
 
-  } else {
-    if (prevSirenOn || hue != 0) {
-      prevSirenOn = false;
-      hue = 0;
+  } else if (at == ACT_FLASH) {
+    unsigned long now = millis();
+    uint16_t period = flashPhase ? childActOffMs : childActOnMs;
+    if (now - actStart >= (unsigned long)period) {
+      flashPhase ^= 1;
+      actStart = now;
+      fill_solid(leds, NUM_LEDS, flashPhase ? CRGB::Black : CRGB(r, g, b));
+      FastLED.show();
+    }
+
+  } else if (at == ACT_WIPE) {
+    static unsigned long lastWipe = 0;
+    unsigned long now = millis();
+    if (now - lastWipe >= 20) {
+      lastWipe = now;
+      uint8_t spd = childActWSpd ? childActWSpd : 1;
+      uint32_t front = (uint32_t)(now - actStart) * spd * NUM_LEDS / 100000UL;
+      if (front > NUM_LEDS) front = NUM_LEDS;
+      uint8_t dir = childActWDir;
+      for (uint8_t i = 0; i < NUM_LEDS; i++) {
+        bool lit = (dir == DIR_W || dir == DIR_S)
+                 ? ((NUM_LEDS - 1 - i) < front)
+                 : (i < front);
+        leds[i] = lit ? CRGB(r, g, b) : CRGB::Black;
+      }
+      FastLED.show();
+    }
+
+  } else {  // ACT_OFF — render black once
+    if (!actRendered) {
       fill_solid(leds, NUM_LEDS, CRGB::Black);
       FastLED.show();
+      actRendered = true;
     }
   }
 }
@@ -1946,20 +2012,15 @@ void setup() {
   if (Serial) Serial.println("=== BOOT ===");
 
 #ifdef BOARD_GIGA
-  pinMode(LEDR, OUTPUT); digitalWrite(LEDR, HIGH);
-  pinMode(LEDG, OUTPUT); digitalWrite(LEDG, HIGH);
-  pinMode(LEDB, OUTPUT); digitalWrite(LEDB, HIGH);
-  ledThread.start(mbed::callback(ledTask));
   memset(children, 0, sizeof(children));
-
-  // Initialise settings to defaults
+  memset(runners,  0, sizeof(runners));
   memset(&settings, 0, sizeof(settings));
-  settings.units          = 0;    // metric
+  settings.units          = 0;
   settings.darkMode       = 1;
   settings.canvasWidthMm  = 10000;
   settings.canvasHeightMm = 5000;
   strncpy(settings.parentName, "SlyLED Parent", sizeof(settings.parentName) - 1);
-  settings.activeRunner  = 0xFF;  // none
+  settings.activeRunner  = 0xFF;
   settings.runnerRunning = false;
 
 #elif defined(BOARD_ESP32)
@@ -1977,7 +2038,6 @@ void setup() {
 #endif
 
   connectWiFi();
-  addLog(FEAT_RAINBOW, SRC_BOOT, 0, 0, 0, 0);
 
 #ifdef BOARD_GIGA
   sendPing(IPAddress(255, 255, 255, 255));
