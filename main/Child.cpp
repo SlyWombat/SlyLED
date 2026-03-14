@@ -383,18 +383,16 @@ void sendChildConfigPage(WiFiClient& c) {
             "for(var i=0;i<n;i++){"
             "document.getElementById('s'+i).style.display=i==parseInt(v)?'block':'none';}"
             "}"));
-  sendBuf(c,
-          "function scChg(){"
-          "var n=parseInt(document.getElementById('sc').value);"
-          "var ss=document.getElementById('ss');"
-          "ss.innerHTML='';"
-          "for(var i=0;i<n;i++){"
-          "var o=document.createElement('option');"
-          "o.value=i;o.text='String '+(i+1);ss.appendChild(o);}"
-          "for(var i=0;i<%u;i++){"
-          "var el=document.getElementById('s'+i);"
-          "if(el)el.style.display='none';}"
-          "showStr(0);}", (unsigned)CHILD_MAX_STRINGS);
+  c.print(F("function scChg(){"
+            "var n=parseInt(document.getElementById('sc').value);"
+            "var ss=document.getElementById('ss');"
+            "ss.innerHTML='';"
+            "for(var i=0;i<n;i++){"
+            "var o=document.createElement('option');"
+            "o.value=i;o.text='String '+(i+1);ss.appendChild(o);}"));
+  sendBuf(c, "for(var i=0;i<%u;i++){", (unsigned)CHILD_MAX_STRINGS);
+  c.print(F("var el=document.getElementById('s'+i);"
+            "if(el)el.style.display='none';}showStr(0);}"));
   c.print(F("function poll(){"
             "var x=new XMLHttpRequest();"
             "x.open('GET','/status',true);"

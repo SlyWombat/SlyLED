@@ -9,18 +9,7 @@
       "top": 0,
       "left": 0,
       "attrs": {}
-    },
-    {
-      "type": "wokwi-neopixel-strip",
-      "id": "strip1",
-      "top": 220,
-      "left": -60,
-      "attrs": { "length": "8" }
     }
   ],
-  "connections": [
-    [ "esp:D2",    "strip1:DIN", "green", [] ],
-    [ "esp:GND.1", "strip1:GND", "black", [] ],
-    [ "esp:3V3",   "strip1:VCC", "red",   [] ]
-  ]
+  "connections": []
 }

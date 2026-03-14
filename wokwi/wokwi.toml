@@ -1,11 +1,9 @@
 [wokwi]
 version = 1
 elf = "../build/esp32/main.ino.elf"
-firmware = "../build/esp32/main.ino.elf"
+firmware = "../build/esp32/main.ino.bin"
 
 # Port forwarding (requires wokwigw private gateway)
-# Host port → simulated ESP32 port
-
 [[net.incoming]]
 from = "localhost:18080"
 to = "target:80"

@@ -797,6 +797,48 @@ def test_http_config_spa():
     factory_reset()
 
 
+def test_http_javascript():
+    """Verify the config page JS is intact — no sendBuf truncation artifacts."""
+    code, html, _ = http_get("/config")
+    check("js: GET /config returns 200", code == 200, f"got {code}")
+
+    # Extract script block
+    script_start = html.find("<script>")
+    script_end   = html.find("</script>", script_start)
+    check("js: <script> block present", script_start != -1 and script_end != -1,
+          "no <script>...</script> block")
+    if script_start == -1 or script_end == -1:
+        return
+    js = html[script_start + len("<script>") : script_end]
+
+    # All four functions must be declared at the top level
+    section("Config SPA — JavaScript integrity")
+    check("js: showTab() defined",   "function showTab("  in js)
+    check("js: showStr() defined",   "function showStr("  in js)
+    check("js: scChg() defined",     "function scChg("    in js)
+    check("js: poll() defined",      "function poll("     in js)
+
+    # poll() must not appear inside another function's body
+    # (the truncation bug embeds poll inside the open scChg for-loop)
+    scchg_start = js.find("function scChg(")
+    poll_start  = js.find("function poll(")
+    check("js: poll() not nested inside scChg() (truncation check)",
+          poll_start > scchg_start and
+          js[scchg_start:poll_start].count("}") >= js[scchg_start:poll_start].count("{"),
+          f"scChg at {scchg_start}, poll at {poll_start}")
+
+    # Brace balance across the whole script
+    check("js: balanced braces in script block",
+          js.count("{") == js.count("}"),
+          f"open={js.count('{')}, close={js.count('}')}")
+
+    # Initialisation calls present after functions
+    check("js: showTab(0) init call present", "showTab(0)" in js)
+    check("js: showStr(0) init call present", "showStr(0)" in js)
+    check("js: setInterval(poll,...) present",
+          "setInterval(poll," in js or "setInterval(poll," in js)
+
+
 def test_invalid_udp():
     section("UDP invalid / malformed packets")
 
@@ -841,6 +883,7 @@ if __name__ == "__main__":
         sys.exit(2)
 
     test_http_basic()
+    test_http_javascript()
     test_http_config_post()
     test_udp_ping_pong()
     test_udp_status_req()
