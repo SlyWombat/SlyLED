@@ -22,13 +22,16 @@ Compile and upload using the build script (auto-increments minor version):
 powershell.exe -ExecutionPolicy Bypass -File build.ps1 -Port COM7
 ```
 
-Or manually (the Giga appears on COM7):
+Or manually — set `ARDUINO_DIRECTORIES_USER` first so `./libraries` is found:
 ```powershell
 $env:ARDUINO_DIRECTORIES_USER = (Get-Location).Path
+# Giga R1 WiFi (COM7):
 & "$env:LOCALAPPDATA\Arduino\arduino-cli.exe" compile --upload --port COM7 --fqbn arduino:mbed_giga:giga main
+# ESP32:
+& "$env:LOCALAPPDATA\Arduino\arduino-cli.exe" compile --fqbn esp32:esp32:esp32 main
+# D1 Mini:
+& "$env:LOCALAPPDATA\Arduino\arduino-cli.exe" compile --fqbn esp8266:esp8266:d1_mini main
 ```
-
-The `arduino-cli.yaml` config sets this project folder as the Arduino user directory, so `./libraries` is automatically found. Always set `ARDUINO_DIRECTORIES_USER` to the project root before compiling.
 
 **First-time Windows setup:** The Giga's DFU bootloader (USB ID `2341:0366`) requires the WinUSB driver installed via [Zadig](https://zadig.akeo.ie) before uploads will work. Double-press reset to enter bootloader mode, then install the driver once.
 
@@ -98,78 +101,140 @@ All packets share an 8-byte header: `struct.pack("<HBBI", magic=0x534C, version=
 | Cmd byte | Name | Direction | Payload |
 |---------|------|-----------|---------|
 | 0x01 | PING | parent→child | header only |
-| 0x02 | PONG | child→parent | 95 bytes (hostname[10], name[16], desc[32], sc, PongStrings×sc) |
-| 0x03 | STATUS | parent→child | header only |
-| 0x04 | STATUS_RESP | child→parent | 8 bytes `<BBBbI` (aa, ra, cs, rssi, uptime) |
-| 0x10 | ACTION | parent→child | `<BBBBHHBB` + led_start[4] + led_end[4] |
-| 0x11 | LOAD_STEP | parent→child | `<BBBBBBHHBBH` + ls[4] + le[4] |
+| 0x02 | PONG | child→parent | 131 bytes — see PONG layout below |
+| 0x10 | ACTION | parent→child | 26 bytes: `<BBBBHHBB` (10) + led_start[8] + led_end[8] |
+| 0x11 | LOAD_STEP | parent→child | 30 bytes: `<BBBBBBHHBBH` (14) + ls[8] + le[8] |
+| 0x20 | RUNNER_GO | parent→child | 4 bytes (uint32_t startEpoch) |
+| 0x30 | RUNNER_STOP | parent→child | header only |
+| 0x40 | STATUS_REQ | parent→child | header only |
+| 0x41 | STATUS_RESP | child→parent | 8 bytes `<BBBBI` (activeAction, runnerActive, currentStep, rssi, uptime) |
+| 0x21 | LOAD_ACK | child→parent | 1 byte (step index) |
+
+**PONG payload (131 bytes = total packet 139):**
+```
+hostname[10]  altName[16]  description[32]  stringCount(1)  PongStrings×8
+PongString = <HHBBHB>: ledCount(2) + lengthMm(2) + ledType(1) + cableDir(1) + cableMm(2) + stripDir(1) = 9 bytes
+8 × 9 = 72  →  10+16+32+1+72 = 131
+```
+
+**wifiRssi** is stored as `uint8_t` absolute magnitude (e.g. 69 → -69 dBm). Check `> 0`.
 
 ---
 
-## Giga sketch architecture
+## Child node architecture (ESP32 / D1 Mini)
 
-The sketch (`main/main.ino`) uses a **two-thread Mbed RTOS architecture** with a **SPA + JSON API** web interface.
+The same `main/main.ino` sketch compiles for ESP32 and D1 Mini via `#ifdef BOARD_FASTLED`.
 
-### Threading model
+### Per-board limits
 
-| Thread | Responsibility |
-|--------|---------------|
-| **LED thread** (`rtos::Thread ledThread`) | All `digitalWrite` / PWM calls — never touches WiFi |
-| **Main thread** (`loop()`) | All WiFi / HTTP — never touches LED pins |
+| Board | `CHILD_MAX_STRINGS` | EEPROM / storage |
+|-------|---------------------|-----------------|
+| D1 Mini (`BOARD_D1MINI`) | 2 | EEPROM (flash-backed) |
+| ESP32 (`BOARD_ESP32`) | 8 | NVS Preferences (`"slyled"` namespace) |
 
-Shared state is `volatile bool ledRainbowOn` and `volatile bool ledSirenOn`. Bool writes are atomic on ARM Cortex-M7; `volatile` prevents the compiler from caching values in registers. Requires `#include <mbed.h>`.
+`MAX_STR_PER_CHILD = 8` is a **protocol constant** — all protocol structs (PongPayload, ActionPayload, LoadStepPayload) are sized for 8 strings regardless of board. `CHILD_MAX_STRINGS` only affects EEPROM layout and the config UI.
 
-This eliminates the two classic problems of single-threaded LED+WiFi sketches:
-- **No rainbow blanks** — network I/O no longer interrupts the PWM loop
-- **No siren phase stalls** — `handleClient()` blocking never affects phase timing
-
-### HTTP routes
+### HTTP routes (child)
 
 | Method | Path | Response |
 |--------|------|----------|
-| GET | `/` | Full SPA (HTML + CSS + JS) |
-| GET | `/status` | `{"onboard_led":{"active":bool,"feature":"rainbow\|siren\|none"}}` |
-| POST | `/led/on` | `{"ok":true}` — enable Rainbow |
-| POST | `/led/siren/on` | `{"ok":true}` — enable Siren (disables Rainbow) |
-| POST | `/led/off` | `{"ok":true}` — disable all |
-| GET | `/log` | Event log HTML page |
-| GET | `/favicon.ico` | 404 (fast, keeps connection slot free) |
+| GET | `/` | 302 redirect → `/config` |
+| GET | `/status` | JSON: `{"role":"child","hostname":…,"action":…}` |
+| GET | `/config` | 3-tab HTML SPA |
+| POST | `/config` | 303 redirect → `/config` (saves to EEPROM) |
+| POST | `/config/reset` | 303 redirect → `/config` (factory reset) |
+| GET | `/favicon.ico` | 404 |
 
-### SPA UI structure
+### Config SPA (3 tabs)
 
-- **Header (`#hdr`)** — app name + `#hdr-status` line; auto-updates via `/status` poll every 2 s
-- **Onboard LED card** — one row per pattern (Rainbow, Siren); each row has a badge (`id='badge-rainbow'` / `id='badge-siren'`) and an Enable button; single Disable button turns off all patterns
-- **Footer** — version string from `APP_MAJOR`/`APP_MINOR`
-- **View Log** anchor — `<a href='/log'>` (plain GET)
+- **Dashboard** — hostname, altName, stringCount (server-rendered); live action status (XHR poll `/status` every 3 s)
+- **Settings** (inside `<form id='cf' action='/config' method='POST'>`): `name='an'` altName, `name='desc'` description, `name='sc'` string count (1..`CHILD_MAX_STRINGS`)
+- **Config** — string selector dropdown; per-string fieldsets with `lc/lm/lt/sd` (ledCount, lengthMm, ledType, stripDir); no cable fields
+- **Factory Reset** — separate `<form id='rf' action='/config/reset' method='POST'>` (never nested inside `cf`)
 
-### Key functions
+### ChildSelfConfig struct
 
-| Function | Purpose |
-|----------|---------|
-| `ledTask()` | LED thread body — runs Rainbow, Siren, or off state; owns all pin writes |
-| `hueToRGB(hue, r, g, b)` | Maps hue 0–255 to RGB using 6 linear segments |
-| `pwmCycle(r, g, b)` | One 256-step software PWM cycle (~2 ms); drives active-low pins |
-| `setRGBFor(r, g, b)` | Repeats `pwmCycle` for `DISPLAY_MS` ms to hold a colour visibly |
-| `serveClient(client, waitMs)` | Reads first request line, routes to correct handler; never writes LED pins |
-| `handleClient()` | Accepts client (500 ms patience), drains parallel connections (favicon, XHR) |
-| `loop()` | Main thread: `printStatus()` + `handleClient()` + `delay(10)` |
+```cpp
+struct ChildSelfConfig {
+    char hostname[HOSTNAME_LEN];        // "SLYC-XXXX" (MAC-derived)
+    char altName[CHILD_NAME_LEN];       // defaults to hostname if blank
+    char description[CHILD_DESC_LEN];
+    uint8_t stringCount;
+    ChildStringCfg strings[CHILD_MAX_STRINGS];
+};
+struct ChildStringCfg {
+    uint16_t ledCount; uint16_t lengthMm;
+    uint8_t  ledType;  uint8_t  cableDir;  // cableDir always 0
+    uint16_t cableMm;                       // cableMm always 0
+    uint8_t  stripDir;
+};
+```
 
-### Onboard LED patterns
+`EEPROM_MAGIC = 0xA6` — bump when struct layout changes to force re-initialisation.
 
-| Pattern | Route to enable | Behaviour |
-|---------|----------------|-----------|
-| **Rainbow** | `POST /led/on` | Smooth hue cycle via software PWM |
-| **Siren** | `POST /led/siren/on` | Alternating red / blue, 350 ms per phase |
+### Test suite (child)
 
-Enabling one pattern automatically disables the other (`ledRainbowOn` and `ledSirenOn` are mutually exclusive — enforced in `serveClient`).
+```
+powershell.exe -Command "python -X utf8 tests/test_child.py 192.168.10.x"
+# D1 Mini (max 2 strings — default)
+# For ESP32: python tests/test_child.py 192.168.10.x 80 4210 8
+```
 
-### Module state
+Discover children first:
+```
+powershell.exe -Command "python tests/discover.py"
+```
 
-`volatile bool ledRainbowOn`, `volatile bool ledSirenOn` — LED thread reads these on every iteration; main thread writes them in `serveClient()`. Adding a new pattern means: add a `volatile bool`, add a route in `serveClient()`, add a pattern row in `sendMain()`, add a branch in `ledTask()`.
+Tests restore factory state before and after string config tests. If a test run is interrupted, factory-reset the child manually via `POST /config/reset`.
 
-**Event log:** Circular buffer (50 entries) stores timestamp, `LedFeature` (FEAT_NONE / FEAT_RAINBOW / FEAT_SIREN), source (Boot/Web), and client IP. NTP-synced timestamps via `pool.ntp.org`.
+---
 
-**Test suite:** `python tests/test_web.py [host]` — run before every upload. From WSL use `powershell.exe -Command "python -X utf8 tests/test_web.py 192.168.10.219"`.
+## Sketch module structure
+
+The sketch is split into modular `.h`/`.cpp` files, all in `main/`. `main/main.ino` contains only `setup()` and `loop()`.
+
+### Module files
+
+| File | Board(s) | Purpose |
+|------|----------|---------|
+| `BoardConfig.h` | all | Board detection macros (`BOARD_GIGA`, `BOARD_ESP32`, `BOARD_D1MINI`, `BOARD_FASTLED`), board-specific includes, LED hardware constants |
+| `Protocol.h` | all | UDP wire-protocol constants and packed structs (`UdpHeader`, `PongPayload`, `ActionPayload`, `LoadStepPayload`, …) |
+| `Globals.h` / `Globals.cpp` | all | Shared globals: `WiFiServer server`, `WiFiUDP ntpUDP/cmdUDP`, `udpBuf[]`, NTP state |
+| `NetUtils.h` / `NetUtils.cpp` | all | `connectWiFi()`, `syncNTP()`, `currentEpoch()`, `printStatus()` |
+| `HttpUtils.h` / `HttpUtils.cpp` | all | `sendBuf()`, `sendJsonOk()`, `sendJsonErr()`, `sendStatus()` |
+| `JsonUtils.h` / `JsonUtils.cpp` | all | `jsonGetInt()`, `jsonGetStr()` — lightweight JSON field extraction |
+| `UdpCommon.h` / `UdpCommon.cpp` | all | `handleUdpPacket()`, `pollUDP()`, `serveClient()`, `handleClient()` — full HTTP route dispatch and UDP receive loop |
+| `Child.h` / `Child.cpp` | ESP32, D1 Mini | Child config structs, EEPROM load/save, `sendPong()`, `sendStatusResp()`, `sendChildConfigPage()`, `handlePostChildConfig()`, `handleFactoryReset()` |
+| `ChildLED.h` / `ChildLED.cpp` | ESP32, D1 Mini | `applyRunnerStep()` (shared), `ledTask()` (ESP32 FreeRTOS Core 0), `updateLED()` (D1 Mini non-blocking) |
+| `Parent.h` / `Parent.cpp` | Giga | Parent data structures (`ChildNode`, `Runner`, `AppSettings`, …), all `/api/*` handlers, `sendParentSPA()`, runner compute/sync/start/stop |
+
+All board-specific headers use both include guards (`#ifndef FILE_H`) and content guards (`#ifdef BOARD_XXX`) so they are safe to include unconditionally on any board.
+
+### Giga HTTP routes
+
+| Method | Path | Handler |
+|--------|------|---------|
+| GET | `/` | `sendParentSPA()` — full 6-tab SPA |
+| GET | `/status` | `sendStatus()` |
+| GET/POST | `/api/children` | `sendApiChildren()` / inline IP parse → `sendPing()` |
+| GET | `/api/children/export` | `sendApiChildrenExport()` |
+| POST | `/api/children/import` | `handleApiChildrenImport()` |
+| * | `/api/children/:id` | `handleChildIdRoute()` |
+| GET/POST | `/api/layout` | `sendApiLayout()` / `handlePostLayout()` |
+| GET/POST | `/api/settings` | `sendApiSettings()` / `handlePostSettings()` |
+| POST | `/api/action` | `handleApiAction()` |
+| POST | `/api/action/stop` | `handleApiActionStop()` |
+| GET/POST | `/api/runners` | `sendApiRunners()` / `handlePostRunners()` |
+| GET/PUT/DELETE | `/api/runners/:id` | `handleRunnerIdRoute()` |
+| POST | `/api/runners/stop` | `stopAllRunners()` |
+
+### loop() per board
+
+| Board | loop() body |
+|-------|------------|
+| Giga | `printStatus()` → `pollUDP()` → periodic `sendPing(broadcast)` every 30 s → `handleClient()` → `delay(10)` |
+| ESP32 | `printStatus()` → `pollUDP()` → `handleClient()` → `delay(10)` |
+| D1 Mini | `printStatus()` → `pollUDP()` → `updateLED()` → `handleClient()` → `yield()` |
 
 ## Git / GitHub
 
@@ -203,4 +268,5 @@ Enabling one pattern automatically disables the other (`ledRainbowOn` and `ledSi
 - **Browser prefetch / favicon race**: Chrome/Edge open a second TCP connection for `favicon.ico` when loading any page. Fixed by the **SPA+AJAX architecture** — buttons use `XMLHttpRequest`, no page navigation, no favicon request on button press.
 - **`rtos::Thread` requires `#include <mbed.h>`** — not pulled in automatically by Arduino.h on the Giga.
 - **`volatile bool` for cross-thread state** — bool writes are atomic on Cortex-M7; `volatile` prevents register caching. Sufficient for simple flag sharing between two threads without a mutex.
-- **`WiFiClient::print()` silently truncates** strings longer than the internal TX buffer (~280–400 bytes on the Giga R1 WiFi). Data past the limit is **dropped permanently** — `flush()` after the call does NOT recover it. Symptom: SPA JavaScript arrives with mid-string cuts, causing browser syntax errors and pages stuck at "Loading...". **Fix**: use the `spa(WiFiClient&, const char*)` chunked-write helper (defined in `main.ino`) for any `c.print()` call whose string exceeds ~256 bytes. Small strings (JSON responses, HTTP headers) can use `c.print()` safely.
+- **`WiFiClient::print()` silently truncates** strings longer than the internal TX buffer (~280–400 bytes on the Giga R1 WiFi). Data past the limit is **dropped permanently** — `flush()` after the call does NOT recover it. Symptom: SPA JavaScript arrives with mid-string cuts, causing browser syntax errors and pages stuck at "Loading...". **Fix**: use the `spa(WiFiClient&, const char*)` chunked-write helper (in `Parent.cpp`) for any `c.print()` call whose string exceeds ~256 bytes. Small strings (JSON responses, HTTP headers) can use `c.print()` safely.
+- **Never name a sketch header `Network.h`** when targeting ESP32 (Arduino core 3.x). The core ships `libraries/Network/src/Network.h` which defines `network_event_handle_t`, `NetworkEventCb`, etc. used internally by `WiFiGeneric.h`. The sketch directory is searched first, so a custom `Network.h` silently shadows the library header and causes cryptic `'network_event_handle_t' does not name a type` build failures. Use a unique name (e.g. `NetUtils.h`).
