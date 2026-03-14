@@ -3,12 +3,13 @@
 test_child.py — Automated tests for the SlyLED child firmware (ESP32 / D1 Mini).
 
 Usage:
-    python tests/test_child.py [host] [http_port] [udp_port]
+    python tests/test_child.py [host] [http_port] [udp_port] [max_strings]
 
 If host is omitted, the script broadcasts a UDP PING and auto-discovers the
 first child on the network.
 
-Defaults: http_port=80  udp_port=4210
+Defaults: http_port=80  udp_port=4210  max_strings=2 (D1 Mini)
+  Use max_strings=8 for ESP32 targets.
 
 For Wokwi simulation:
     python tests/test_child.py 127.0.0.1 18080 14210
@@ -24,9 +25,10 @@ import urllib.error
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-_arg_host = sys.argv[1] if len(sys.argv) > 1 else None
-HTTP_PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 80
-UDP_PORT  = int(sys.argv[3]) if len(sys.argv) > 3 else 4210
+_arg_host       = sys.argv[1] if len(sys.argv) > 1 else None
+HTTP_PORT       = int(sys.argv[2]) if len(sys.argv) > 2 else 80
+UDP_PORT        = int(sys.argv[3]) if len(sys.argv) > 3 else 4210
+CHILD_MAX_STRINGS = int(sys.argv[4]) if len(sys.argv) > 4 else 2  # D1 Mini=2, ESP32=8
 
 # Auto-discover if no host given
 if _arg_host is None:
@@ -43,7 +45,7 @@ if _arg_host is None:
     while time.time() < _deadline:
         try:
             _data, (_ip, _) = _disc_sock.recvfrom(256)
-            if len(_data) >= 103:
+            if len(_data) >= 139:
                 _magic, _ver, _cmd, _ = struct.unpack_from("<HBBI", _data, 0)
                 if _magic == 0x534C and _cmd == 0x02 and _ip not in _found:
                     _hn = _data[8:18].rstrip(b'\x00').decode("ascii", errors="replace")
@@ -113,15 +115,16 @@ def summary():
 
 # ── HTTP helpers ──────────────────────────────────────────────────────────────
 
-def http_get(path, timeout=5):
+def http_get(path, timeout=5, follow_redirects=True):
     url = f"http://{HOST}:{HTTP_PORT}{path}"
     try:
         req = urllib.request.Request(url)
         req.add_header("Connection", "close")
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        opener = _yes_redirect_opener if follow_redirects else _no_redirect_opener
+        with opener.open(req, timeout=timeout) as r:
             return r.status, r.read().decode("utf-8", errors="replace"), dict(r.headers)
     except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8", errors="replace"), {}
+        return e.code, e.read().decode("utf-8", errors="replace"), dict(e.headers)
     except Exception as e:
         return 0, str(e), {}
 
@@ -192,8 +195,14 @@ def parse_header(data):
     return struct.unpack("<HBBI", data[:8])
 
 def parse_pong(data):
-    """Parse CMD_PONG packet. Returns dict or None."""
-    if len(data) < 8 + 95:
+    """Parse CMD_PONG packet. Returns dict or None.
+
+    PONG payload (131 bytes after 8-byte header = 139 total):
+      hostname[10], altName[16], desc[32], stringCount(1), PongStrings×8
+      Each PongString: <HHBBHB> = ledCount(2)+lengthMm(2)+ledType(1)+cableDir(1)+cableMm(2)+stripDir(1) = 9 bytes
+      8 × 9 = 72  →  10+16+32+1+72 = 131
+    """
+    if len(data) < 8 + 131:
         return None
     payload = data[8:]
     hostname    = payload[0:10].rstrip(b'\x00').decode("ascii", errors="replace")
@@ -202,7 +211,7 @@ def parse_pong(data):
     string_count = payload[58]
     strings = []
     offset = 59
-    for _ in range(4):
+    for _ in range(8):
         led_count, length_mm, led_type, cable_dir, cable_mm, strip_dir = \
             struct.unpack_from("<HHBBHB", payload, offset)
         strings.append({
@@ -236,10 +245,11 @@ def parse_status_resp(data):
 def build_action_pkt(act_type=ACT_SOLID, r=255, g=0, b=0,
                      on_ms=500, off_ms=500, wipe_dir=0, wipe_spd=50,
                      led_start=None, led_end=None):
+    """Build CMD_ACTION packet. led_start/led_end are 8-byte string+LED selectors."""
     if led_start is None:
-        led_start = [0, 0xFF, 0xFF, 0xFF]
+        led_start = [0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
     if led_end is None:
-        led_end = [7, 0xFF, 0xFF, 0xFF]
+        led_end   = [7, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
     hdr = udp_header(CMD_ACTION)
     payload = struct.pack("<BBBBHHBB",
         act_type, r, g, b, on_ms, off_ms, wipe_dir, wipe_spd)
@@ -250,11 +260,11 @@ def build_load_step_pkt(step_index=0, total_steps=1,
                         act_type=ACT_SOLID, r=0, g=255, b=0,
                         on_ms=500, off_ms=500, wipe_dir=0, wipe_spd=50,
                         duration_s=5, led_start=None, led_end=None):
-    """Build CMD_LOAD_STEP packet (header + 22-byte payload)."""
+    """Build CMD_LOAD_STEP packet (header + 30-byte payload)."""
     if led_start is None:
-        led_start = [0, 0xFF, 0xFF, 0xFF]
+        led_start = [0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
     if led_end is None:
-        led_end = [7, 0xFF, 0xFF, 0xFF]
+        led_end   = [7, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
     hdr = udp_header(CMD_LOAD_STEP)
     payload = struct.pack("<BBBBBBHHBBH",
         step_index, total_steps,
@@ -285,14 +295,12 @@ def wait_for_boot(max_wait=30):
 def test_http_basic():
     section("HTTP basic routes")
 
-    # GET /
-    code, body, hdrs = http_get("/")
-    check("GET / returns 200", code == 200, f"got {code}")
-    # Hostname is loaded via XHR from /status — not embedded in the static HTML.
-    # Just confirm the page is valid HTML with the expected title.
-    check("GET / body is SlyLED child page",
-          "SlyLED" in body and "Child" in body, body[:80])
-    # Child sendMain() does not include Content-Length (chunked response) — skip that check.
+    # GET / — child root redirects to /config (302)
+    code, body, hdrs = http_get("/", follow_redirects=False)
+    check("GET / returns 302 redirect to /config", code == 302, f"got {code}")
+    location = hdrs.get("Location", "")
+    check("GET / Location header points to /config", "/config" in location,
+          f"Location: {location}")
 
     # GET /status
     code, body, hdrs = http_get("/status")
@@ -361,7 +369,7 @@ def test_udp_ping_pong():
     check("PONG magic = 0x534C", hdr[0] == UDP_MAGIC, f"got 0x{hdr[0]:04X}")
     check("PONG version = 2", hdr[1] == UDP_VERSION, f"got {hdr[1]}")
     check("PONG cmd = 0x02", hdr[2] == CMD_PONG, f"got 0x{hdr[2]:02X}")
-    check("PONG packet length >= 103 bytes", len(resp) >= 103,
+    check("PONG packet length >= 139 bytes", len(resp) >= 139,
           f"got {len(resp)} bytes")
 
     pong = parse_pong(resp)
@@ -524,6 +532,271 @@ def test_udp_status_req():
           f"got {status['wifiRssi']}")
 
 
+def factory_reset():
+    """POST /config/reset and wait for the child to reboot/re-announce."""
+    http_post("/config/reset", follow_redirects=False)
+    time.sleep(1.5)
+
+
+def test_http_config_strings():
+    section(f"HTTP string config (max={CHILD_MAX_STRINGS})")
+
+    # ── Start from a known state ──────────────────────────────────────────────
+    factory_reset()
+
+    # ── 1 string ─────────────────────────────────────────────────────────────
+    form1 = urllib.parse.urlencode({
+        "an":  "TestNode",
+        "desc": "1-string test",
+        "sc":  "1",
+        "lc0": "30",
+        "lm0": "600",
+        "lt0": "0",   # WS2812B
+        "sd0": "0",
+    })
+    code, _, hdrs = http_post("/config", form1)
+    check("1-string POST /config returns 303", code == 303, f"got {code}")
+    time.sleep(0.5)
+
+    # Verify via PONG
+    resp = udp_send_recv(udp_header(CMD_PING), timeout=3.0)
+    check("1-string: PONG received", resp is not None, "no response")
+    if resp is not None:
+        pong = parse_pong(resp)
+        check("1-string: PONG parses", pong is not None)
+        if pong:
+            check("1-string: stringCount = 1", pong["stringCount"] == 1,
+                  f"got {pong['stringCount']}")
+            check("1-string: strings[0].ledCount = 30",
+                  pong["strings"][0]["ledCount"] == 30,
+                  f"got {pong['strings'][0]['ledCount']}")
+            check("1-string: strings[0].lengthMm = 600",
+                  pong["strings"][0]["lengthMm"] == 600,
+                  f"got {pong['strings'][0]['lengthMm']}")
+            check("1-string: strings[0].ledType = 0 (WS2812B)",
+                  pong["strings"][0]["ledType"] == 0,
+                  f"got {pong['strings'][0]['ledType']}")
+
+    # ── 2 strings (supported by all boards D1+ESP32) ─────────────────────────
+    form2_fields = {
+        "an":  "TestNode2",
+        "desc": "2-string test",
+        "sc":  "2",
+        "lc0": "15",
+        "lm0": "300",
+        "lt0": "0",
+        "sd0": "1",
+        "lc1": "45",
+        "lm1": "900",
+        "lt1": "1",   # WS2811
+        "sd1": "0",
+    }
+    form2 = urllib.parse.urlencode(form2_fields)
+    code, _, _ = http_post("/config", form2)
+    check("2-string POST /config returns 303", code == 303, f"got {code}")
+    time.sleep(0.5)
+
+    resp = udp_send_recv(udp_header(CMD_PING), timeout=3.0)
+    check("2-string: PONG received", resp is not None, "no response")
+    if resp is not None:
+        pong = parse_pong(resp)
+        check("2-string: PONG parses", pong is not None)
+        if pong:
+            check("2-string: stringCount = 2", pong["stringCount"] == 2,
+                  f"got {pong['stringCount']}")
+            check("2-string: strings[0].ledCount = 15",
+                  pong["strings"][0]["ledCount"] == 15,
+                  f"got {pong['strings'][0]['ledCount']}")
+            check("2-string: strings[1].ledCount = 45",
+                  pong["strings"][1]["ledCount"] == 45,
+                  f"got {pong['strings'][1]['ledCount']}")
+            check("2-string: strings[1].lengthMm = 900",
+                  pong["strings"][1]["lengthMm"] == 900,
+                  f"got {pong['strings'][1]['lengthMm']}")
+            check("2-string: strings[1].ledType = 1 (WS2811)",
+                  pong["strings"][1]["ledType"] == 1,
+                  f"got {pong['strings'][1]['ledType']}")
+
+    # ── Over-limit clamp ──────────────────────────────────────────────────────
+    over_fields = {"an": "TestClamp", "desc": "clamp test", "sc": "99"}
+    for i in range(10):
+        over_fields[f"lc{i}"] = "10"
+        over_fields[f"lm{i}"] = "200"
+        over_fields[f"lt{i}"] = "0"
+        over_fields[f"sd{i}"] = "0"
+    code, _, _ = http_post("/config", urllib.parse.urlencode(over_fields))
+    check("clamp: POST sc=99 returns 303", code == 303, f"got {code}")
+    time.sleep(0.5)
+
+    resp = udp_send_recv(udp_header(CMD_PING), timeout=3.0)
+    check("clamp: PONG received", resp is not None, "no response")
+    if resp is not None:
+        pong = parse_pong(resp)
+        if pong:
+            check(f"clamp: stringCount clamped to {CHILD_MAX_STRINGS}",
+                  pong["stringCount"] == CHILD_MAX_STRINGS,
+                  f"got {pong['stringCount']}")
+
+    # ── Teardown: restore factory state ──────────────────────────────────────
+    factory_reset()
+    time.sleep(0.5)
+    resp = udp_send_recv(udp_header(CMD_PING), timeout=3.0)
+    check("teardown: factory reset PONG received", resp is not None, "no response")
+    if resp is not None:
+        pong = parse_pong(resp)
+        if pong:
+            check("teardown: stringCount reset to 1", pong["stringCount"] == 1,
+                  f"got {pong['stringCount']}")
+
+
+def test_http_config_spa():
+    """Verify rendered HTML content of each tab in the 3-tab config SPA."""
+
+    # ── Setup: known config state ─────────────────────────────────────────────
+    factory_reset()
+    time.sleep(0.5)
+    known = {
+        "an":  "TabTest",
+        "desc": "SPA tab test",
+        "sc":  "1",
+        "lc0": "24", "lm0": "480", "lt0": "1", "sd0": "2",  # WS2811, West
+    }
+    http_post("/config", urllib.parse.urlencode(known))
+    time.sleep(0.5)
+
+    code, html, _ = http_get("/config")
+    check("SPA: GET /config returns 200", code == 200, f"got {code}")
+
+    # Helper: extract text between two landmarks (returns "" if not found)
+    def between(s, a, b):
+        i = s.find(a)
+        if i == -1:
+            return ""
+        j = s.find(b, i + len(a))
+        return s[i:j] if j != -1 else s[i:]
+
+    p0 = between(html, "id='p0'", "id='p1'")
+    p1 = between(html, "id='p1'", "id='p2'")
+    p2 = between(html, "id='p2'", "</form>")
+    footer = between(html, "class='ftr'", "</div>")
+
+    # ── Tab navigation ────────────────────────────────────────────────────────
+    section("Config SPA — tab navigation")
+    check("tab nav: 3 tab divs present",
+          html.count("class='tab") >= 3)
+    check("tab nav: Dashboard tab id='n0'",
+          "id='n0'" in html)
+    check("tab nav: Settings tab id='n1'",
+          "id='n1'" in html)
+    check("tab nav: Config tab id='n2'",
+          "id='n2'" in html)
+    check("tab nav: Dashboard label text",
+          ">Dashboard<" in html)
+    check("tab nav: Settings label text",
+          ">Settings<" in html)
+    check("tab nav: Config label text",
+          ">Config<" in html)
+    # Extract full opening tag for n0 (class attribute precedes id in the tag)
+    n0_pos = html.find("id='n0'")
+    n0_tag = html[html.rfind("<", 0, n0_pos) : html.find(">", n0_pos) + 1]
+    check("tab nav: Dashboard is active on load (class tact)",
+          "tact" in n0_tag)
+
+    # ── Dashboard tab (p0) ────────────────────────────────────────────────────
+    section("Config SPA — Dashboard tab")
+    check("dashboard: pane id='p0' present", "id='p0'" in html)
+    check("dashboard: shows hostname (SLYC-)",
+          "SLYC-" in p0)
+    check("dashboard: shows altName (TabTest)",
+          "TabTest" in p0)
+    check("dashboard: shows description (SPA tab test)",
+          "SPA tab test" in p0)
+    check("dashboard: shows string count",
+          ">1<" in p0 or "'1'" in p0 or ">1 <" in p0)
+    check("dashboard: action status element id='act' present",
+          "id='act'" in p0)
+    check("dashboard: no form input fields",
+          "name='an'" not in p0 and "name='sc'" not in p0 and "name='lc0'" not in p0)
+    check("dashboard: no Factory Reset button",
+          "Factory Reset" not in p0)
+
+    # ── Settings tab (p1) ────────────────────────────────────────────────────
+    section("Config SPA — Settings tab")
+    check("settings: pane id='p1' present", "id='p1'" in html)
+    check("settings: name input (name='an') present", "name='an'" in p1)
+    check("settings: name input value is TabTest",
+          "value='TabTest'" in p1)
+    check("settings: desc input (name='desc') present", "name='desc'" in p1)
+    check("settings: desc input value is correct",
+          "SPA tab test" in p1)
+    check("settings: string count select (name='sc') present", "name='sc'" in p1)
+    check("settings: string count option 1 is selected",
+          "value='1' selected" in p1)
+    check("settings: Save Settings button present",
+          "Save Settings" in p1)
+    check("settings: Factory Reset button present in settings pane",
+          "Factory Reset" in p1)
+    check("settings: no per-string fields (lc0 belongs in Config)",
+          "name='lc0'" not in p1)
+
+    # ── Config tab (p2) ───────────────────────────────────────────────────────
+    section("Config SPA — Config tab")
+    check("config: pane id='p2' present", "id='p2'" in html)
+    check("config: string selector id='ss' present", "id='ss'" in p2)
+    check("config: ss has option for String 1",
+          "String 1" in p2)
+    check("config: lc0 input present", "name='lc0'" in p2)
+    check("config: lc0 value is 24",
+          "name='lc0'" in p2 and "value='24'" in p2)
+    check("config: lm0 value is 480",
+          "value='480'" in p2)
+    check("config: lt0 WS2811 option is selected",
+          "value='1' selected" in p2)
+    check("config: sd0 West option is selected",
+          "value='2' selected" in p2)
+    check("config: Save Config button present",
+          "Save Config" in p2)
+    check("config: no Factory Reset in config pane",
+          "Factory Reset" not in p2)
+
+    # ── Factory Reset placement ───────────────────────────────────────────────
+    section("Config SPA — Factory Reset placement")
+    check("factory reset: form id='rf' present",
+          "id='rf'" in html)
+    check("factory reset: form#rf action is /config/reset",
+          "action='/config/reset'" in html)
+    check("factory reset: button present in Settings pane only",
+          "Factory Reset" in p1)
+    check("factory reset: button NOT in footer",
+          "Factory Reset" not in footer)
+    check("factory reset: button NOT in Config pane",
+          "Factory Reset" not in p2)
+    check("factory reset: button NOT in Dashboard pane",
+          "Factory Reset" not in p0)
+
+    # ── Form structure ────────────────────────────────────────────────────────
+    section("Config SPA — form structure")
+    check("forms: main form id='cf' with action=/config",
+          "id='cf'" in html and "action='/config'" in html)
+    check("forms: reset form id='rf' with action=/config/reset",
+          "id='rf'" in html and "action='/config/reset'" in html)
+    check("forms: no nested forms (rf is outside cf)",
+          html.find("id='rf'") > html.find("</form>"))
+    check("forms: Settings and Config share one form (cf wraps p1 and p2)",
+          html.find("id='cf'") < html.find("id='p1'") and
+          html.find("id='p2'") < html.find("</form>"))
+
+    # ── Footer ────────────────────────────────────────────────────────────────
+    section("Config SPA — footer")
+    check("footer: version string present (v)",
+          "v" in footer and "." in footer)
+    check("footer: no Factory Reset in footer",
+          "Factory Reset" not in footer)
+
+    # ── Teardown ──────────────────────────────────────────────────────────────
+    factory_reset()
+
+
 def test_invalid_udp():
     section("UDP invalid / malformed packets")
 
@@ -575,5 +848,10 @@ if __name__ == "__main__":
     test_udp_action_types()
     test_udp_runner()
     test_invalid_udp()
+    test_http_config_strings()
+    test_http_config_spa()
+
+    # Ensure child is left in a clean factory state
+    factory_reset()
 
     summary()

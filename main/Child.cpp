@@ -197,20 +197,31 @@ uint8_t hexVal(char ch) {
 }
 
 int urlGetInt(const char* body, const char* key, int def) {
-  char needle[12];
-  snprintf(needle, sizeof(needle), "%s=", key);
+  char needle[14];
+  // Prefer "&key=" to avoid matching key name as a suffix of another key (e.g. "sc=" inside "desc=")
+  snprintf(needle, sizeof(needle), "&%s=", key);
   const char* p = strstr(body, needle);
-  if (!p) return def;
-  p += strlen(needle);
-  return atoi(p);
+  if (p) { p += strlen(needle); return atoi(p); }
+  // Fall back to "key=" only at the very start of the body
+  snprintf(needle, sizeof(needle), "%s=", key);
+  if (strncmp(body, needle, strlen(needle)) == 0) return atoi(body + strlen(needle));
+  return def;
 }
 
 void urlGetStr(const char* body, const char* key, char* out, uint8_t maxlen) {
-  char needle[12];
-  snprintf(needle, sizeof(needle), "%s=", key);
-  const char* p = strstr(body, needle);
+  char needle[14];
+  const char* p = NULL;
+  // Prefer "&key=" to avoid matching key name as a suffix of another key
+  snprintf(needle, sizeof(needle), "&%s=", key);
+  const char* found = strstr(body, needle);
+  if (found) {
+    p = found + strlen(needle);
+  } else {
+    // Fall back to "key=" only at the very start of the body
+    snprintf(needle, sizeof(needle), "%s=", key);
+    if (strncmp(body, needle, strlen(needle)) == 0) p = body + strlen(needle);
+  }
   if (!p) { out[0] = '\0'; return; }
-  p += strlen(needle);
   uint8_t i = 0;
   while (*p && *p != '&' && i < maxlen - 1) {
     if (*p == '+') { out[i++] = ' '; p++; }
@@ -287,6 +298,9 @@ void sendChildConfigPage(WiFiClient& c) {
              "<span class='v'>%s</span></div>", childCfg.hostname);
   sendBuf(c, "<div class='row'><span class='k'>Name</span>"
              "<span class='v'>%s</span></div>", childCfg.altName);
+  sendBuf(c, "<div class='row'><span class='k'>Description</span>"
+             "<span class='v'>%s</span></div>",
+             childCfg.description[0] ? childCfg.description : "--");
   sendBuf(c, "<div class='row'><span class='k'>Strings</span>"
              "<span class='v'>%u</span></div>", (unsigned)childCfg.stringCount);
   c.print(F("<div class='row'><span class='k'>Action</span>"
@@ -304,7 +318,9 @@ void sendChildConfigPage(WiFiClient& c) {
   for (uint8_t n = 1; n <= CHILD_MAX_STRINGS; n++)
     sendBuf(c, "<option value='%u'%s>%u</option>",
             (unsigned)n, n == childCfg.stringCount ? " selected" : "", (unsigned)n);
-  c.print(F("</select><button class='btn' type='submit'>Save Settings</button>"));
+  c.print(F("</select><button class='btn' type='submit'>Save Settings</button>"
+            "<button class='btn btn-warn' type='button' style='margin-left:.5em'"
+            " onclick=\"document.getElementById('rf').submit()\">Factory Reset</button>"));
   c.print(F("</div>"));
 
   // ── Config pane ────────────────────────────────────────────────────────────
@@ -352,12 +368,8 @@ void sendChildConfigPage(WiFiClient& c) {
   // Factory reset (separate form — HTML forbids nested forms)
   c.print(F("<form id='rf' action='/config/reset' method='POST' style='display:none'></form>"));
 
-  // Footer
-  sendBuf(c, "<div class='ftr'>v%d.%d &mdash; "
-             "<button class='btn btn-warn' type='button'"
-             " onclick=\"document.getElementById('rf').submit()\">Factory Reset</button>"
-             "</div>",
-             APP_MAJOR, APP_MINOR);
+  // Footer — version only; Factory Reset lives in the Settings tab
+  sendBuf(c, "<div class='ftr'>v%d.%d</div>", APP_MAJOR, APP_MINOR);
 
   // JavaScript
   c.print(F("<script>"));
