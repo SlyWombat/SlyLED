@@ -13,8 +13,10 @@ Usage (from project root):
 
 import argparse
 import json
+import os
 import socket
 import struct
+import sys
 import threading
 import time
 import webbrowser
@@ -46,9 +48,19 @@ CMD_STATUS_RESP = 0x41
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
 BASE = Path(__file__).parent
-SPA  = BASE / "spa"
-DATA = BASE / "data"
-DATA.mkdir(exist_ok=True)
+
+# When packaged with PyInstaller --onefile, files land in sys._MEIPASS
+if getattr(sys, "frozen", False):
+    SPA = Path(sys._MEIPASS) / "spa"
+else:
+    SPA = BASE / "spa"
+
+# Persist data under %APPDATA%\SlyLED on Windows; fall back to BASE/data elsewhere
+if os.name == "nt" and os.environ.get("APPDATA"):
+    DATA = Path(os.environ["APPDATA"]) / "SlyLED" / "data"
+else:
+    DATA = BASE / "data"
+DATA.mkdir(parents=True, exist_ok=True)
 
 # ── Persistence ───────────────────────────────────────────────────────────────
 
@@ -99,8 +111,9 @@ def _send_recv(ip, pkt, timeout=1.5, maxb=256):
         return None
 
 def _parse_pong(data, src_ip):
-    # Full PONG packet = 8-byte header + 95-byte PongPayload = 103 bytes
-    if not data or len(data) < 103:
+    # Full PONG = 8-byte header + 131-byte PongPayload = 139 bytes
+    # PongPayload: hostname[10]+altName[16]+desc[32]+stringCount(1)+PongString[8]×9
+    if not data or len(data) < 139:
         return None
     if data[3] != CMD_PONG:
         return None
@@ -111,7 +124,7 @@ def _parse_pong(data, src_ip):
     sc = p[58]
     strings = []
     off = 59
-    for _ in range(4):
+    for _ in range(8):
         leds, mm, tp, cd, cm, sd = struct.unpack_from("<HHBBHB", p, off)
         strings.append({"leds": leds, "mm": mm, "type": tp,
                          "cdir": cd, "cmm": cm, "sdir": sd})
@@ -136,8 +149,9 @@ def _action_pkt(act, child):
     r, g, b = act.get("r", 0), act.get("g", 0), act.get("b", 0)
     on, off  = act.get("onMs", 500), act.get("offMs", 500)
     wd, ws   = act.get("wipeDir", 0), act.get("wipeSpeedPct", 50)
-    ls = bytes([0, 0xFF, 0xFF, 0xFF])
-    le = bytes([max(0, child.get("sc", 1) * 8 - 1), 0xFF, 0xFF, 0xFF])
+    # ledStart/ledEnd must each be 8 bytes (MAX_STR_PER_CHILD=8); 0xFF = unused slot
+    ls = bytes([0,    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+    le = bytes([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
     return _hdr(CMD_ACTION) + struct.pack("<BBBBHHBB", t, r, g, b, on, off, wd, ws) + ls + le
 
 def _load_step_pkt(idx, total, step, child):
@@ -146,8 +160,8 @@ def _load_step_pkt(idx, total, step, child):
     on, off  = step.get("onMs", 500), step.get("offMs", 500)
     wd, ws   = step.get("wdir", 0), step.get("wspd", 50)
     dur      = step.get("durationS", 5)
-    ls = bytes([0, 0xFF, 0xFF, 0xFF])
-    le = bytes([max(0, child.get("sc", 1) * 8 - 1), 0xFF, 0xFF, 0xFF])
+    ls = bytes([0,    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+    le = bytes([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
     pl = struct.pack("<BBBBBBHHBBH", idx, total, t, r, g, b, on, off, wd, ws, dur)
     return _hdr(CMD_LOAD_STEP) + pl + ls + le
 
