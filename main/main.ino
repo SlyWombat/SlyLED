@@ -93,6 +93,10 @@ constexpr uint8_t CMD_PING        = 0x01;
 constexpr uint8_t CMD_PONG        = 0x02;
 constexpr uint8_t CMD_ACTION      = 0x10;
 constexpr uint8_t CMD_ACTION_STOP = 0x11;
+constexpr uint8_t CMD_LOAD_STEP   = 0x20;  // parent→child: load one runner step
+constexpr uint8_t CMD_LOAD_ACK    = 0x21;  // child→parent: step received
+constexpr uint8_t CMD_RUNNER_GO   = 0x30;  // parent→child: start runner at epoch
+constexpr uint8_t CMD_RUNNER_STOP = 0x31;  // parent→child: stop runner
 constexpr uint8_t CMD_STATUS_REQ  = 0x40;
 constexpr uint8_t CMD_STATUS_RESP = 0x41;
 
@@ -152,6 +156,19 @@ struct __attribute__((packed)) ActionPayload {
   uint8_t  ledStart[MAX_STR_PER_CHILD];
   uint8_t  ledEnd[MAX_STR_PER_CHILD];
 };  // 18 bytes
+
+struct __attribute__((packed)) LoadStepPayload {
+  uint8_t  stepIndex;
+  uint8_t  totalSteps;
+  uint8_t  actionType;
+  uint8_t  r, g, b;
+  uint16_t onMs, offMs;
+  uint8_t  wipeDir;
+  uint8_t  wipeSpeedPct;
+  uint16_t durationS;
+  uint8_t  ledStart[MAX_STR_PER_CHILD];
+  uint8_t  ledEnd[MAX_STR_PER_CHILD];
+};  // 22 bytes; packet = 8 + 22 = 30 bytes
 
 // ── WiFi, server, UDP ─────────────────────────────────────────────────────────
 
@@ -286,6 +303,24 @@ volatile uint8_t  childActSeq   = 0;
 volatile uint8_t  childActSt[MAX_STR_PER_CHILD];
 volatile uint8_t  childActEn[MAX_STR_PER_CHILD];
 
+// Runner execution state — written by UDP handler, read by LED task
+constexpr uint8_t MAX_CHILD_STEPS = 16;
+
+struct ChildRunnerStep {
+  uint8_t  actionType, r, g, b;
+  uint16_t onMs, offMs;
+  uint8_t  wipeDir, wipeSpeedPct;
+  uint16_t durationS;
+  uint8_t  ledStart[MAX_STR_PER_CHILD];
+  uint8_t  ledEnd[MAX_STR_PER_CHILD];
+};  // 20 bytes × 16 = 320 bytes
+
+ChildRunnerStep   childRunner[MAX_CHILD_STEPS];
+volatile uint8_t  childStepCount    = 0;
+volatile uint32_t childRunnerStart  = 0;   // epoch when runner should begin
+volatile bool     childRunnerArmed  = false;
+volatile bool     childRunnerActive = false;
+
 #endif  // BOARD_FASTLED
 
 // ── NTP ───────────────────────────────────────────────────────────────────────
@@ -407,6 +442,7 @@ void updateLED();
 #ifdef BOARD_FASTLED
 void sendPong(IPAddress dest);
 void sendStatusResp(IPAddress dest);
+bool applyRunnerStep(const ChildRunnerStep& rs, uint8_t flashPh, unsigned long stepMs);
 #endif
 
 #ifdef BOARD_GIGA
@@ -426,6 +462,9 @@ void sendApiRunner(WiFiClient& c, uint8_t id);
 void handlePostRunners(WiFiClient& c, int contentLen);
 void handleRunnerIdRoute(WiFiClient& c, const char* req, bool isGet, bool isPut, bool isDel, int contentLen);
 void computeRunner(uint8_t id);
+void syncRunner(uint8_t id);
+void startRunner(uint8_t id);
+void stopAllRunners();
 #endif
 
 // ── Web request handler ───────────────────────────────────────────────────────
@@ -518,6 +557,10 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
 
   } else if (strstr(req, " /api/action ")) {
     handleApiAction(client, contentLen);
+
+  } else if (isPost && strstr(req, " /api/runners/stop ")) {
+    stopAllRunners();
+    sendJsonOk(client);
 
   } else if (strstr(req, " /api/runners/")) {
     handleRunnerIdRoute(client, req, !isPost && !isPut && !isDel, isPut, isDel, contentLen);
@@ -675,6 +718,7 @@ void sendParentSPA(WiFiClient& c) {
           "<div id='rt-list'>"
           "<div style='margin-bottom:.8em'>"
           "<button class='btn btn-on' onclick='newRunner()'>+ New Runner</button>"
+          "<button class='btn btn-off' onclick='stopRunners()' style='margin-left:.5em'>Stop All Runners</button>"
           "</div>"
           "<div id='rn-list'><p style='color:#888'>Loading...</p></div>"
           "</div>"
@@ -930,6 +974,12 @@ void sendParentSPA(WiFiClient& c) {
           " style=\"padding:.3em .8em\">Edit</button>';"
           "h+=' <button class=\"btn\" onclick=\"doCompute('+r.id+')\""
           " style=\"background:#446;color:#fff;padding:.3em .8em\">Compute</button>';"
+          "if(r.computed){"
+          "h+=' <button class=\"btn\" onclick=\"doSync('+r.id+')\""
+          " style=\"background:#264;color:#fff;padding:.3em .8em\">Sync</button>';"
+          "h+=' <button class=\"btn btn-on\" onclick=\"doStart('+r.id+')\""
+          " style=\"padding:.3em .8em\">Start</button>';"
+          "}"
           "h+=' <button class=\"btn btn-off\" onclick=\"delRunner('+r.id+')\""
           " style=\"padding:.3em .8em\">Del</button>';"
           "h+='</div>';"
@@ -1080,6 +1130,22 @@ void sendParentSPA(WiFiClient& c) {
           "document.getElementById('hs').textContent='Runner computed \u2713';"
           "loadRuntime();"
           "}"
+          "});"
+          "}"
+          "function doSync(id){"
+          "document.getElementById('hs').textContent='Syncing to children...';"
+          "ra('POST','/api/runners/'+id+'/sync',null,function(r){"
+          "if(r&&r.ok)document.getElementById('hs').textContent='Synced \u2713';"
+          "});"
+          "}"
+          "function doStart(id){"
+          "ra('POST','/api/runners/'+id+'/start',null,function(r){"
+          "if(r&&r.ok)document.getElementById('hs').textContent='Runner started';"
+          "});"
+          "}"
+          "function stopRunners(){"
+          "ra('POST','/api/runners/stop',null,function(r){"
+          "if(r&&r.ok)document.getElementById('hs').textContent='Runners stopped';"
           "});"
           "}");
 
@@ -1686,7 +1752,98 @@ void computeRunner(uint8_t id) {
   if (Serial) { Serial.print(F("Runner computed: ")); Serial.println(id); }
 }
 
-// Handle GET / PUT / DELETE / POST(compute) /api/runners/:id
+// ── Runner sync / start / stop (Phase 2f) ────────────────────────────────────
+
+void sendLoadStep(IPAddress dest, uint8_t stepIdx, uint8_t totalSteps,
+                  const RunnerStep& step, const ChildStepPayload& pl) {
+  UdpHeader hdr;
+  hdr.magic   = UDP_MAGIC;
+  hdr.version = UDP_VERSION;
+  hdr.cmd     = CMD_LOAD_STEP;
+  hdr.epoch   = (uint32_t)currentEpoch();
+
+  LoadStepPayload ls;
+  ls.stepIndex     = stepIdx;
+  ls.totalSteps    = totalSteps;
+  ls.actionType    = step.action.type;
+  ls.r             = step.action.r;
+  ls.g             = step.action.g;
+  ls.b             = step.action.b;
+  ls.onMs          = step.action.onMs;
+  ls.offMs         = step.action.offMs;
+  ls.wipeDir       = step.action.wipeDir;
+  ls.wipeSpeedPct  = step.action.wipeSpeedPct;
+  ls.durationS     = step.durationS;
+  for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
+    ls.ledStart[j] = pl.ledStart[j];
+    ls.ledEnd[j]   = pl.ledEnd[j];
+  }
+  memcpy(udpBuf,               &hdr, sizeof(hdr));
+  memcpy(udpBuf + sizeof(hdr), &ls,  sizeof(ls));
+  cmdUDP.beginPacket(dest, UDP_PORT);
+  cmdUDP.write(udpBuf, sizeof(hdr) + sizeof(ls));
+  cmdUDP.endPacket();
+}
+
+void syncRunner(uint8_t id) {
+  if (id >= MAX_RUNNERS || !runners[id].inUse || !runners[id].computed) return;
+  Runner& r = runners[id];
+  for (uint8_t c = 0; c < MAX_CHILDREN; c++) {
+    if (!children[c].inUse) continue;
+    IPAddress dest(children[c].ip[0], children[c].ip[1],
+                   children[c].ip[2], children[c].ip[3]);
+    for (uint8_t s = 0; s < r.stepCount; s++) {
+      sendLoadStep(dest, s, r.stepCount, r.steps[s], r.payload[s][c]);
+      delay(5);
+    }
+  }
+  if (Serial) { Serial.print(F("Runner synced: ")); Serial.println(id); }
+}
+
+void startRunner(uint8_t id) {
+  if (id >= MAX_RUNNERS || !runners[id].inUse) return;
+  uint32_t startEpoch = (uint32_t)currentEpoch() + 2;
+  settings.activeRunner  = id;
+  settings.runnerRunning = true;
+  for (uint8_t c = 0; c < MAX_CHILDREN; c++) {
+    if (!children[c].inUse) continue;
+    IPAddress dest(children[c].ip[0], children[c].ip[1],
+                   children[c].ip[2], children[c].ip[3]);
+    UdpHeader hdr;
+    hdr.magic   = UDP_MAGIC;
+    hdr.version = UDP_VERSION;
+    hdr.cmd     = CMD_RUNNER_GO;
+    hdr.epoch   = (uint32_t)currentEpoch();
+    memcpy(udpBuf,               &hdr,        sizeof(hdr));
+    memcpy(udpBuf + sizeof(hdr), &startEpoch, 4);
+    cmdUDP.beginPacket(dest, UDP_PORT);
+    cmdUDP.write(udpBuf, sizeof(hdr) + 4);
+    cmdUDP.endPacket();
+  }
+  if (Serial) { Serial.print(F("Runner started: ")); Serial.println(id); }
+}
+
+void stopAllRunners() {
+  settings.runnerRunning = false;
+  settings.activeRunner  = 0xFF;
+  for (uint8_t c = 0; c < MAX_CHILDREN; c++) {
+    if (!children[c].inUse) continue;
+    IPAddress dest(children[c].ip[0], children[c].ip[1],
+                   children[c].ip[2], children[c].ip[3]);
+    UdpHeader hdr;
+    hdr.magic   = UDP_MAGIC;
+    hdr.version = UDP_VERSION;
+    hdr.cmd     = CMD_RUNNER_STOP;
+    hdr.epoch   = (uint32_t)currentEpoch();
+    memcpy(udpBuf, &hdr, sizeof(hdr));
+    cmdUDP.beginPacket(dest, UDP_PORT);
+    cmdUDP.write(udpBuf, sizeof(hdr));
+    cmdUDP.endPacket();
+  }
+  if (Serial) Serial.println(F("All runners stopped."));
+}
+
+// Handle GET / PUT / DELETE / POST(compute/sync/start) /api/runners/:id
 void handleRunnerIdRoute(WiFiClient& c, const char* req, bool isGet, bool isPut, bool isDel, int contentLen) {
   const char* idStart = strstr(req, "/api/runners/");
   if (!idStart) { sendJsonErr(c, "bad-route"); return; }
@@ -1695,8 +1852,18 @@ void handleRunnerIdRoute(WiFiClient& c, const char* req, bool isGet, bool isPut,
   if (id < 0 || id >= MAX_RUNNERS) { sendJsonErr(c, "bad-id"); return; }
 
   bool isCompute = (strstr(idStart, "/compute") != NULL);
+  bool isSync    = (strstr(idStart, "/sync")    != NULL);
+  bool isStart   = (strstr(idStart, "/start")   != NULL);
 
-  if (isCompute) {
+  if (isSync) {
+    if (!runners[id].inUse || !runners[id].computed) { sendJsonErr(c, "not-computed"); return; }
+    syncRunner((uint8_t)id);
+    sendJsonOk(c);
+  } else if (isStart) {
+    if (!runners[id].inUse) { sendJsonErr(c, "not-found"); return; }
+    startRunner((uint8_t)id);
+    sendJsonOk(c);
+  } else if (isCompute) {
     if (!runners[id].inUse) { sendJsonErr(c, "not-found"); return; }
     computeRunner((uint8_t)id);
     sendJsonOk(c);
@@ -1835,8 +2002,18 @@ void sendStatusResp(IPAddress dest) {
 
   StatusRespPayload resp;
   resp.activeAction = childActType;
-  resp.runnerActive = 0;
-  resp.currentStep  = 0;
+  resp.runnerActive = childRunnerActive ? 1 : 0;
+  // Compute current step from elapsed time
+  resp.currentStep = 0;
+  if (childRunnerActive && childStepCount > 0) {
+    uint32_t elapsed = (uint32_t)currentEpoch() - childRunnerStart;
+    uint32_t acc = 0;
+    for (uint8_t i = 0; i < childStepCount; i++) {
+      acc += childRunner[i].durationS;
+      if (elapsed < acc) { resp.currentStep = i; break; }
+      resp.currentStep = childStepCount - 1;
+    }
+  }
   int32_t rssi = WiFi.RSSI();
   resp.wifiRssi = (rssi < 0) ? (uint8_t)(-rssi) : 0;
   resp.uptimeS  = (uint32_t)(millis() / 1000);
@@ -1883,6 +2060,44 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
   } else if (cmd == CMD_ACTION_STOP) {
     childActType = ACT_OFF;
     childActSeq++;
+  } else if (cmd == CMD_LOAD_STEP && plen >= (int)sizeof(LoadStepPayload)) {
+    LoadStepPayload ls;
+    memcpy(&ls, payload, sizeof(ls));
+    if (ls.stepIndex < MAX_CHILD_STEPS) {
+      ChildRunnerStep& cr = childRunner[ls.stepIndex];
+      cr.actionType   = ls.actionType;
+      cr.r            = ls.r; cr.g = ls.g; cr.b = ls.b;
+      cr.onMs         = ls.onMs;  cr.offMs = ls.offMs;
+      cr.wipeDir      = ls.wipeDir;
+      cr.wipeSpeedPct = ls.wipeSpeedPct;
+      cr.durationS    = ls.durationS;
+      for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
+        cr.ledStart[j] = ls.ledStart[j];
+        cr.ledEnd[j]   = ls.ledEnd[j];
+      }
+      if ((uint8_t)(ls.stepIndex + 1) > childStepCount)
+        childStepCount = (uint8_t)(ls.stepIndex + 1);
+      // Send ACK
+      UdpHeader ack;
+      ack.magic   = UDP_MAGIC;
+      ack.version = UDP_VERSION;
+      ack.cmd     = CMD_LOAD_ACK;
+      ack.epoch   = (uint32_t)currentEpoch();
+      memcpy(udpBuf,               &ack,            sizeof(ack));
+      udpBuf[sizeof(ack)] = ls.stepIndex;
+      cmdUDP.beginPacket(sender, UDP_PORT);
+      cmdUDP.write(udpBuf, sizeof(ack) + 1);
+      cmdUDP.endPacket();
+    }
+  } else if (cmd == CMD_RUNNER_GO && plen >= 4) {
+    uint32_t startEpoch;
+    memcpy(&startEpoch, payload, 4);
+    childRunnerStart  = startEpoch;
+    childRunnerArmed  = true;
+    childRunnerActive = false;
+  } else if (cmd == CMD_RUNNER_STOP) {
+    childRunnerActive = false;
+    childRunnerArmed  = false;
   }
   (void)plen;
 #endif
@@ -1957,17 +2172,116 @@ void printStatus() {
   }
 }
 
+// ── LED helpers (shared by ESP32 and D1 Mini) ─────────────────────────────────
+
+#ifdef BOARD_FASTLED
+
+// Apply one runner step to the leds[] array for all affected string ranges.
+bool applyRunnerStep(const ChildRunnerStep& rs, uint8_t flashPh,
+                     unsigned long stepMs) {
+  bool drew = false;
+  for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
+    uint8_t st = rs.ledStart[j], en = rs.ledEnd[j];
+    if (st == 0xFF) continue;
+    if (en >= NUM_LEDS) en = NUM_LEDS - 1;
+    if (st > en) continue;
+    uint8_t rangeLen = en - st + 1;
+
+    if (rs.actionType == ACT_SOLID) {
+      for (uint8_t i = st; i <= en; i++) leds[i] = CRGB(rs.r, rs.g, rs.b);
+      drew = true;
+    } else if (rs.actionType == ACT_FLASH) {
+      if (!flashPh) {
+        for (uint8_t i = st; i <= en; i++) leds[i] = CRGB(rs.r, rs.g, rs.b);
+      }
+      drew = true;
+    } else if (rs.actionType == ACT_WIPE) {
+      uint8_t spd = rs.wipeSpeedPct ? rs.wipeSpeedPct : 1;
+      uint32_t front = (uint32_t)stepMs * spd * rangeLen / 100000UL;
+      if (front > rangeLen) front = rangeLen;
+      uint8_t dir = rs.wipeDir;
+      for (uint8_t i = st; i <= en; i++) {
+        uint8_t ri = i - st;
+        bool lit = (dir == DIR_W || dir == DIR_S)
+                 ? ((rangeLen - 1 - ri) < front)
+                 : (ri < front);
+        if (lit) leds[i] = CRGB(rs.r, rs.g, rs.b);
+      }
+      drew = true;
+    }
+  }
+  return drew;
+}
+
+#endif  // BOARD_FASTLED
+
 // ── LED implementation — ESP32 (FreeRTOS task, Core 0) ───────────────────────
 
 #ifdef BOARD_ESP32
 
 void ledTask(void* parameter) {
+  // Immediate action state
   uint8_t       prevActSeq  = 0;
   unsigned long actStart    = 0;
   uint8_t       flashPhase  = 0;
   bool          offRendered = false;
+  // Runner state
+  uint8_t       prevRunStep = 0xFF;
+  unsigned long stepStartMs = 0;
+  uint8_t       runFlashPh  = 0;
 
   while (true) {
+    // ── 1. Arm runner when epoch reached ───────────────────────────────────
+    if (childRunnerArmed && childStepCount > 0) {
+      if ((uint32_t)currentEpoch() >= childRunnerStart) {
+        childRunnerArmed  = false;
+        childRunnerActive = true;
+        prevRunStep       = 0xFF;
+      }
+    }
+
+    // ── 2. Execute runner ───────────────────────────────────────────────────
+    if (childRunnerActive && childStepCount > 0) {
+      uint32_t elapsed = (uint32_t)currentEpoch() - childRunnerStart;
+      uint8_t  curStep = 0;
+      uint32_t acc     = 0;
+      bool     done    = true;
+      for (uint8_t i = 0; i < childStepCount; i++) {
+        acc += childRunner[i].durationS;
+        if (elapsed < acc) { curStep = i; done = false; break; }
+      }
+      if (done) {
+        childRunnerActive = false;
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
+        FastLED.show();
+        delay(10);
+        continue;
+      }
+      if (curStep != prevRunStep) {
+        prevRunStep = curStep;
+        stepStartMs = millis();
+        runFlashPh  = 0;
+      }
+      const ChildRunnerStep& rs = childRunner[curStep];
+
+      // Flash phase timer (shared across strings in same step)
+      if (rs.actionType == ACT_FLASH) {
+        unsigned long now = millis();
+        uint16_t period = runFlashPh ? rs.offMs : rs.onMs;
+        if (now - stepStartMs >= (unsigned long)period) {
+          runFlashPh ^= 1;
+          stepStartMs = now;
+        }
+      }
+      fill_solid(leds, NUM_LEDS, CRGB::Black);
+      applyRunnerStep(rs, runFlashPh, millis() - stepStartMs);
+      FastLED.show();
+      delay(rs.actionType == ACT_FLASH ? 5 :
+            rs.actionType == ACT_WIPE  ? 10 : 50);
+      continue;  // skip immediate action
+    }
+
+    // ── 3. Immediate action ─────────────────────────────────────────────────
     uint8_t seq = childActSeq;
     if (seq != prevActSeq) {
       prevActSeq  = seq;
@@ -2026,11 +2340,88 @@ void ledTask(void* parameter) {
 #ifdef BOARD_D1MINI
 
 void updateLED() {
-  static uint8_t       prevActSeq  = 0;
-  static unsigned long actStart    = 0;
-  static uint8_t       flashPhase  = 0;
-  static bool          actRendered = false;
+  // Immediate action state
+  static uint8_t       prevActSeq   = 0;
+  static unsigned long actStart     = 0;
+  static uint8_t       flashPhase   = 0;
+  static bool          actRendered  = false;
+  // Runner state
+  static uint8_t       prevRunStep  = 0xFF;
+  static unsigned long stepStartMs  = 0;
+  static uint8_t       runFlashPh   = 0;
+  static uint8_t       lastSolidSt  = 0xFF;  // step index when solid was last rendered
+  static unsigned long lastWipe     = 0;
 
+  // ── 1. Arm runner when epoch reached ─────────────────────────────────────
+  if (childRunnerArmed && childStepCount > 0) {
+    if ((uint32_t)currentEpoch() >= childRunnerStart) {
+      childRunnerArmed  = false;
+      childRunnerActive = true;
+      prevRunStep       = 0xFF;
+      lastSolidSt       = 0xFF;
+    }
+  }
+
+  // ── 2. Execute runner ─────────────────────────────────────────────────────
+  if (childRunnerActive && childStepCount > 0) {
+    uint32_t elapsed = (uint32_t)currentEpoch() - childRunnerStart;
+    uint8_t  curStep = 0;
+    uint32_t acc     = 0;
+    bool     done    = true;
+    for (uint8_t i = 0; i < childStepCount; i++) {
+      acc += childRunner[i].durationS;
+      if (elapsed < acc) { curStep = i; done = false; break; }
+    }
+    if (done) {
+      childRunnerActive = false;
+      fill_solid(leds, NUM_LEDS, CRGB::Black);
+      FastLED.show();
+      return;
+    }
+    if (curStep != prevRunStep) {
+      prevRunStep = curStep;
+      stepStartMs = millis();
+      runFlashPh  = 0;
+      lastSolidSt = 0xFF;
+    }
+    const ChildRunnerStep& rs = childRunner[curStep];
+
+    if (rs.actionType == ACT_SOLID) {
+      if (curStep != lastSolidSt) {
+        lastSolidSt = curStep;
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
+        applyRunnerStep(rs, 0, 0);
+        FastLED.show();
+      }
+    } else if (rs.actionType == ACT_FLASH) {
+      unsigned long now = millis();
+      uint16_t period = runFlashPh ? rs.offMs : rs.onMs;
+      if (now - stepStartMs >= (unsigned long)period) {
+        runFlashPh ^= 1;
+        stepStartMs = now;
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
+        applyRunnerStep(rs, runFlashPh, 0);
+        FastLED.show();
+      }
+    } else if (rs.actionType == ACT_WIPE) {
+      unsigned long now = millis();
+      if (now - lastWipe >= 20) {
+        lastWipe = now;
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
+        applyRunnerStep(rs, 0, now - stepStartMs);
+        FastLED.show();
+      }
+    } else {  // ACT_OFF — black once per step
+      if (curStep != lastSolidSt) {
+        lastSolidSt = curStep;
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
+        FastLED.show();
+      }
+    }
+    return;  // skip immediate action
+  }
+
+  // ── 3. Immediate action ───────────────────────────────────────────────────
   uint8_t seq = childActSeq;
   if (seq != prevActSeq) {
     prevActSeq  = seq;
@@ -2060,7 +2451,6 @@ void updateLED() {
     }
 
   } else if (at == ACT_WIPE) {
-    static unsigned long lastWipe = 0;
     unsigned long now = millis();
     if (now - lastWipe >= 20) {
       lastWipe = now;
