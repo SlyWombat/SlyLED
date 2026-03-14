@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SlyLED Phase 2 Web API Test Suite
+SlyLED Phase 2h Web API Test Suite
 Tests the HTTP/JSON API running on the Arduino Giga R1 WiFi (parent node).
 
 Usage:
@@ -9,6 +9,7 @@ Usage:
 
 All tests are non-destructive or clean up after themselves.
 No registered children are required — runner lifecycle tests run fine on an empty board.
+Child-status test uses a dummy child IP (10.0.0.99) and expects a timeout error.
 """
 
 import sys
@@ -231,6 +232,46 @@ if found_id is not None:
     check("Imported child removed (cleanup)", del_code == 200
           and del_data is not None and del_data.get("ok") is True,
           f"HTTP {del_code} data={del_data}")
+
+# ── GET /api/children/:id/status (Phase 2h) ───────────────────────────────────
+
+section("Child status  GET /api/children/:id/status")
+# Import a temporary child to get a valid slot id; IP won't respond so expect timeout
+_sc, _sd = post_json("/api/children/import",
+    [{"hostname": "SLYC-STAT", "name": "Status Test",
+      "desc": "status route test", "ip": "10.0.0.98"}])
+status_id = None
+_, _sk = get_json("/api/children")
+if isinstance(_sk, list):
+    for k in _sk:
+        if k.get("hostname") == "SLYC-STAT":
+            status_id = k.get("id")
+            break
+
+if status_id is not None:
+    code, data = get_json(f"/api/children/{status_id}/status")
+    check("HTTP 200 (route exists)", code == 200,            f"got {code}")
+    check("Returns JSON",            data is not None,       "failed to parse JSON")
+    check("Has ok field",            data is not None and "ok" in data)
+    check("ok is bool",              data is not None and isinstance(data.get("ok"), bool))
+    if data is not None and data.get("ok") is True:
+        check("Success has action field", "action" in data)
+        check("Success has runner field", "runner" in data)
+        check("Success has uptime field", "uptime" in data)
+    else:
+        # Unreachable IP — timeout error is expected
+        check("Timeout has err field",
+              data is not None and data.get("err") is not None, f"data={data}")
+    # Clean up
+    delete(f"/api/children/{status_id}")
+else:
+    print(f"  {YELLOW}SKIP{RESET}  Child status test — import failed")
+
+# Bad id for status
+code, data = get_json("/api/children/99/status")
+check("GET /api/children/99/status returns error",
+      data is not None and (data.get("ok") is False or data.get("err") is not None),
+      f"data={data}")
 
 # ── GET /api/layout ───────────────────────────────────────────────────────────
 

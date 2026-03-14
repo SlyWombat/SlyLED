@@ -6,9 +6,13 @@
  * Children (ESP32 / D1 Mini): execute UDP actions; idle = LEDs off
  *
  * HTTP routes (all boards):
- *   GET  /              — SPA main page
+ *   GET  /              — SPA main page (parent) or status page (child)
  *   GET  /status        — JSON status
  *   GET  /favicon.ico   — 404
+ *
+ * HTTP routes (child boards only):
+ *   GET  /config        — child self-config form (altName, desc, strings)
+ *   POST /config        — save config to EEPROM, notify parent via CMD_PONG
  *
  * HTTP routes (Giga parent only):
  *   GET  /api/children              — child list
@@ -60,11 +64,13 @@
   #include <WiFi.h>
   #include <WiFiUdp.h>
   #include <time.h>
+  #include <Preferences.h>
 #else  // D1 Mini
   #include <FastLED.h>
   #include <ESP8266WiFi.h>
   #include <WiFiUdp.h>
   #include <time.h>
+  #include <EEPROM.h>
 #endif
 
 // ── LED hardware constants (FastLED children only) ────────────────────────────
@@ -271,6 +277,8 @@ constexpr uint8_t LEDTYPE_WS2812B = 0;
 constexpr uint8_t LEDTYPE_WS2811  = 1;
 constexpr uint8_t LEDTYPE_APA102  = 2;
 
+constexpr uint8_t EEPROM_MAGIC = 0xA5;  // written at byte 0; indicates valid config
+
 struct ChildStringCfg {
   uint16_t ledCount;
   uint16_t lengthMm;
@@ -443,6 +451,10 @@ void updateLED();
 void sendPong(IPAddress dest);
 void sendStatusResp(IPAddress dest);
 bool applyRunnerStep(const ChildRunnerStep& rs, uint8_t flashPh, unsigned long stepMs);
+void loadChildConfig();
+void saveChildConfig();
+void sendChildConfigPage(WiFiClient& c);
+void handlePostChildConfig(WiFiClient& c, int contentLen);
 #endif
 
 #ifdef BOARD_GIGA
@@ -466,6 +478,7 @@ void computeRunner(uint8_t id);
 void syncRunner(uint8_t id);
 void startRunner(uint8_t id);
 void stopAllRunners();
+void handleApiChildStatus(WiFiClient& c, uint8_t id);
 #endif
 
 // ── Web request handler ───────────────────────────────────────────────────────
@@ -574,6 +587,12 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     else        sendApiRunners(client);
 
 #endif  // BOARD_GIGA
+
+#ifdef BOARD_FASTLED
+  } else if (strstr(req, " /config ")) {
+    if (isPost) handlePostChildConfig(client, contentLen);
+    else        sendChildConfigPage(client);
+#endif  // BOARD_FASTLED
 
   } else {
     sendMain(client);
@@ -1543,8 +1562,9 @@ void handleChildIdRoute(WiFiClient& c, const char* req, bool isPost, bool isDel,
   if (id < 0 || id >= MAX_CHILDREN) { sendJsonErr(c, "bad-id"); return; }
 
   bool isRefresh = (strstr(idStart, "/refresh") != NULL);
+  bool isStatus  = (strstr(idStart, "/status")  != NULL);
 
-  if (isDel && !isRefresh) {
+  if (isDel && !isRefresh && !isStatus) {
     if (children[id].inUse) {
       memset(&children[id], 0, sizeof(ChildNode));
       if (Serial) { Serial.print(F("Child removed: ")); Serial.println(id); }
@@ -1561,9 +1581,65 @@ void handleChildIdRoute(WiFiClient& c, const char* req, bool isPost, bool isDel,
     } else {
       sendJsonErr(c, "not-found");
     }
+  } else if (!isPost && !isDel && isStatus) {
+    handleApiChildStatus(c, (uint8_t)id);
   } else {
     sendJsonErr(c, "method");
   }
+}
+
+void handleApiChildStatus(WiFiClient& c, uint8_t id) {
+  if (id >= MAX_CHILDREN || !children[id].inUse) { sendJsonErr(c, "bad-id"); return; }
+  IPAddress dest(children[id].ip[0], children[id].ip[1],
+                 children[id].ip[2], children[id].ip[3]);
+  // Send CMD_STATUS_REQ
+  UdpHeader hdr;
+  hdr.magic   = UDP_MAGIC;
+  hdr.version = UDP_VERSION;
+  hdr.cmd     = CMD_STATUS_REQ;
+  hdr.epoch   = (uint32_t)currentEpoch();
+  memcpy(udpBuf, &hdr, sizeof(hdr));
+  cmdUDP.beginPacket(dest, UDP_PORT);
+  cmdUDP.write(udpBuf, sizeof(hdr));
+  cmdUDP.endPacket();
+  // Poll for CMD_STATUS_RESP from this child (up to 300 ms)
+  StatusRespPayload resp;
+  memset(&resp, 0, sizeof(resp));
+  bool got = false;
+  unsigned long t = millis();
+  while (millis() - t < 300 && !got) {
+    int n = cmdUDP.parsePacket();
+    if (n > 0 && n <= (int)sizeof(udpBuf)) {
+      IPAddress from = cmdUDP.remoteIP();
+      int nn = cmdUDP.read(udpBuf, sizeof(udpBuf));
+      if (nn >= (int)(sizeof(UdpHeader) + sizeof(StatusRespPayload))) {
+        UdpHeader rh;
+        memcpy(&rh, udpBuf, sizeof(rh));
+        if (rh.magic == UDP_MAGIC && rh.version == UDP_VERSION
+            && rh.cmd == CMD_STATUS_RESP
+            && from[0] == children[id].ip[0] && from[1] == children[id].ip[1]
+            && from[2] == children[id].ip[2] && from[3] == children[id].ip[3]) {
+          memcpy(&resp, udpBuf + sizeof(rh), sizeof(resp));
+          got = true;
+        } else if (rh.magic == UDP_MAGIC && rh.version == UDP_VERSION) {
+          // Other packet arrived — dispatch normally so nothing is lost
+          handleUdpPacket(rh.cmd, from, udpBuf + sizeof(rh), nn - (int)sizeof(rh));
+        }
+      }
+    }
+    if (!got) delay(5);
+  }
+  if (!got) { sendJsonErr(c, "timeout"); return; }
+  char body[96];
+  int blen = snprintf(body, sizeof(body),
+    "{\"ok\":true,\"action\":%u,\"runner\":%s,\"step\":%u,\"rssi\":-%u,\"uptime\":%lu}",
+    (unsigned)resp.activeAction, resp.runnerActive ? "true" : "false",
+    (unsigned)resp.currentStep, (unsigned)resp.wifiRssi,
+    (unsigned long)resp.uptimeS);
+  sendBuf(c, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+             "Content-Length: %d\r\nConnection: close\r\n\r\n", blen);
+  c.print(body);
+  c.flush();
 }
 
 void sendApiLayout(WiFiClient& c) {
@@ -2188,11 +2264,8 @@ void handleRunnerIdRoute(WiFiClient& c, const char* req, bool isGet, bool isPut,
 #ifdef BOARD_FASTLED
 
 void initChildConfig() {
+  // Set RAM defaults first (loadChildConfig overwrites if EEPROM is valid)
   memset(&childCfg, 0, sizeof(childCfg));
-  uint8_t mac[6];
-  WiFi.macAddress(mac);
-  snprintf(childCfg.hostname, HOSTNAME_LEN, "SLYC-%02X%02X", mac[4], mac[5]);
-
   childCfg.stringCount         = 1;
   childCfg.strings[0].ledCount = NUM_LEDS;
   childCfg.strings[0].lengthMm = 500;
@@ -2200,6 +2273,9 @@ void initChildConfig() {
   childCfg.strings[0].cableDir = DIR_E;
   childCfg.strings[0].cableMm  = 0;
   childCfg.strings[0].stripDir = DIR_E;
+
+  // Load from EEPROM (always regenerates hostname from MAC)
+  loadChildConfig();
 
   if (Serial) { Serial.print(F("Child hostname: ")); Serial.println(childCfg.hostname); }
 }
@@ -2265,6 +2341,229 @@ void sendStatusResp(IPAddress dest) {
   cmdUDP.beginPacket(dest, UDP_PORT);
   cmdUDP.write(udpBuf, sizeof(hdr) + sizeof(resp));
   cmdUDP.endPacket();
+}
+
+// ── Child EEPROM helpers ──────────────────────────────────────────────────────
+
+void loadChildConfig() {
+  bool loaded = false;
+#ifdef BOARD_ESP32
+  Preferences prefs;
+  prefs.begin("slyled", true);  // read-only
+  if (prefs.getUChar("magic", 0) == EEPROM_MAGIC) {
+    prefs.getBytes("cfg", &childCfg, sizeof(childCfg));
+    loaded = true;
+  }
+  prefs.end();
+#else
+  EEPROM.begin(1 + (int)sizeof(childCfg));
+  if (EEPROM.read(0) == EEPROM_MAGIC) {
+    uint8_t* p = (uint8_t*)&childCfg;
+    for (int i = 0; i < (int)sizeof(childCfg); i++) p[i] = EEPROM.read(1 + i);
+    loaded = true;
+  }
+  EEPROM.end();
+#endif
+  // Hostname is always derived from MAC (cannot be misconfigured via form)
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  snprintf(childCfg.hostname, HOSTNAME_LEN, "SLYC-%02X%02X", mac[4], mac[5]);
+  if (!loaded) {
+    saveChildConfig();  // first boot: write defaults so next power-cycle loads them
+    if (Serial) Serial.println(F("EEPROM: first boot, defaults saved."));
+  }
+}
+
+void saveChildConfig() {
+#ifdef BOARD_ESP32
+  Preferences prefs;
+  prefs.begin("slyled", false);  // read-write
+  prefs.putUChar("magic", EEPROM_MAGIC);
+  prefs.putBytes("cfg", &childCfg, sizeof(childCfg));
+  prefs.end();
+#else
+  EEPROM.begin(1 + (int)sizeof(childCfg));
+  EEPROM.write(0, EEPROM_MAGIC);
+  uint8_t* p = (uint8_t*)&childCfg;
+  for (int i = 0; i < (int)sizeof(childCfg); i++) EEPROM.write(1 + i, p[i]);
+  EEPROM.commit();
+  EEPROM.end();
+#endif
+  if (Serial) Serial.println(F("Config saved to EEPROM."));
+}
+
+// ── Child config form URL helpers ─────────────────────────────────────────────
+
+uint8_t hexVal(char ch) {
+  if (ch >= '0' && ch <= '9') return (uint8_t)(ch - '0');
+  if (ch >= 'a' && ch <= 'f') return (uint8_t)(ch - 'a' + 10);
+  if (ch >= 'A' && ch <= 'F') return (uint8_t)(ch - 'A' + 10);
+  return 0;
+}
+
+int urlGetInt(const char* body, const char* key, int def) {
+  char needle[12];
+  snprintf(needle, sizeof(needle), "%s=", key);
+  const char* p = strstr(body, needle);
+  if (!p) return def;
+  p += strlen(needle);
+  return atoi(p);
+}
+
+void urlGetStr(const char* body, const char* key, char* out, uint8_t maxlen) {
+  char needle[12];
+  snprintf(needle, sizeof(needle), "%s=", key);
+  const char* p = strstr(body, needle);
+  if (!p) { out[0] = '\0'; return; }
+  p += strlen(needle);
+  uint8_t i = 0;
+  while (*p && *p != '&' && i < maxlen - 1) {
+    if (*p == '+') { out[i++] = ' '; p++; }
+    else if (*p == '%' && *(p+1) && *(p+2)) {
+      out[i++] = (char)((hexVal(*(p+1)) << 4) | hexVal(*(p+2)));
+      p += 3;
+    } else { out[i++] = *p++; }
+  }
+  out[i] = '\0';
+}
+
+// ── Child config page (GET /config) ──────────────────────────────────────────
+
+void sendChildConfigPage(WiFiClient& c) {
+  c.print(F("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n"
+            "Cache-Control: no-cache, no-store\r\n\r\n"
+            "<!DOCTYPE html><html><head>"
+            "<meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<title>SlyLED Config</title><style>"
+            "*{box-sizing:border-box;margin:0;padding:0}"
+            "body{font-family:sans-serif;background:#111;color:#eee;padding:1.5em}"
+            "h1{margin-bottom:.2em}"
+            "fieldset{border:1px solid #333;border-radius:6px;padding:.8em;margin-bottom:.8em}"
+            "legend{color:#aaa;padding:0 .4em}"
+            "label{display:block;font-size:.82em;color:#aaa;margin:.5em 0 .15em}"
+            "input,select{width:100%;background:#222;color:#eee;border:1px solid #444;"
+            "border-radius:4px;padding:.3em .5em;font-size:.88em}"
+            ".btn{margin-top:.8em;padding:.45em 1.4em;background:#446;color:#fff;"
+            "border:none;border-radius:5px;cursor:pointer;font-size:.95em}"
+            "</style></head><body>"));
+  sendBuf(c, "<h1>SlyLED</h1>"
+             "<p style='color:#888;font-size:.88em;margin-bottom:1em'>%s &mdash; Config</p>"
+             "<form method='POST' action='/config'>"
+             "<fieldset><legend>General</legend>"
+             "<label>Alternate name</label><input name='an' value='",
+             childCfg.hostname);
+  c.print(childCfg.altName);
+  c.print(F("' maxlength='15'>"
+            "<label>Description</label><input name='desc' value='"));
+  c.print(childCfg.description);
+  c.print(F("' maxlength='31'>"
+            "<label>Strings</label><select name='sc'>"));
+  for (uint8_t n = 1; n <= MAX_STR_PER_CHILD; n++)
+    sendBuf(c, "<option value='%u'%s>%u</option>",
+            (unsigned)n, n == childCfg.stringCount ? " selected" : "", (unsigned)n);
+  c.print(F("</select></fieldset>"));
+  for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
+    sendBuf(c, "<fieldset><legend>String %u</legend>"
+               "<label>LED count</label>"
+               "<input name='lc%u' type='number' min='1' max='254' value='%u'>",
+               (unsigned)(j + 1), (unsigned)j,
+               (unsigned)childCfg.strings[j].ledCount);
+    sendBuf(c, "<label>Strip length (mm)</label>"
+               "<input name='lm%u' type='number' min='1' max='65535' value='%u'>",
+               (unsigned)j, (unsigned)childCfg.strings[j].lengthMm);
+    sendBuf(c, "<label>LED type</label>"
+               "<select name='lt%u'>"
+               "<option value='0'%s>WS2812B</option>"
+               "<option value='1'%s>WS2811</option>"
+               "<option value='2'%s>APA102</option></select>",
+               (unsigned)j,
+               childCfg.strings[j].ledType == 0 ? " selected" : "",
+               childCfg.strings[j].ledType == 1 ? " selected" : "",
+               childCfg.strings[j].ledType == 2 ? " selected" : "");
+    sendBuf(c, "<label>Cable direction</label>"
+               "<select name='cd%u'>"
+               "<option value='0'%s>E(+X)</option>"
+               "<option value='1'%s>N(+Y)</option>"
+               "<option value='2'%s>W(-X)</option>"
+               "<option value='3'%s>S(-Y)</option></select>",
+               (unsigned)j,
+               childCfg.strings[j].cableDir == 0 ? " selected" : "",
+               childCfg.strings[j].cableDir == 1 ? " selected" : "",
+               childCfg.strings[j].cableDir == 2 ? " selected" : "",
+               childCfg.strings[j].cableDir == 3 ? " selected" : "");
+    sendBuf(c, "<label>Cable length (mm)</label>"
+               "<input name='cm%u' type='number' min='0' max='65535' value='%u'>",
+               (unsigned)j, (unsigned)childCfg.strings[j].cableMm);
+    sendBuf(c, "<label>Strip direction</label>"
+               "<select name='sd%u'>"
+               "<option value='0'%s>E(+X)</option>"
+               "<option value='1'%s>N(+Y)</option>"
+               "<option value='2'%s>W(-X)</option>"
+               "<option value='3'%s>S(-Y)</option></select></fieldset>",
+               (unsigned)j,
+               childCfg.strings[j].stripDir == 0 ? " selected" : "",
+               childCfg.strings[j].stripDir == 1 ? " selected" : "",
+               childCfg.strings[j].stripDir == 2 ? " selected" : "",
+               childCfg.strings[j].stripDir == 3 ? " selected" : "");
+  }
+  c.print(F("<button class='btn' type='submit'>Save</button></form>"));
+  sendBuf(c, "<p style='margin-top:1.5em;font-size:.7em;color:#444'>v%d.%d</p>"
+             "</body></html>",
+             APP_MAJOR, APP_MINOR);
+  c.flush();
+}
+
+// ── Child config POST handler (POST /config) ──────────────────────────────────
+
+void handlePostChildConfig(WiFiClient& c, int contentLen) {
+  static char body[256];
+  int rlen = (contentLen > 0 && contentLen < (int)sizeof(body) - 1)
+             ? contentLen : (int)sizeof(body) - 1;
+  c.readBytes(body, rlen);
+  body[rlen] = '\0';
+
+  char tmp[CHILD_DESC_LEN];
+  urlGetStr(body, "an",   tmp, CHILD_NAME_LEN);  strncpy(childCfg.altName,     tmp, CHILD_NAME_LEN - 1);
+  childCfg.altName[CHILD_NAME_LEN - 1] = '\0';
+  urlGetStr(body, "desc", tmp, CHILD_DESC_LEN);  strncpy(childCfg.description, tmp, CHILD_DESC_LEN - 1);
+  childCfg.description[CHILD_DESC_LEN - 1] = '\0';
+
+  int sc = urlGetInt(body, "sc", 1);
+  if (sc < 1) sc = 1;
+  if (sc > MAX_STR_PER_CHILD) sc = MAX_STR_PER_CHILD;
+  childCfg.stringCount = (uint8_t)sc;
+
+  char key[8];
+  for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
+    snprintf(key, sizeof(key), "lc%u", (unsigned)j);
+    int lc = urlGetInt(body, key, 8); if (lc < 1) lc = 1; if (lc > 254) lc = 254;
+    childCfg.strings[j].ledCount = (uint16_t)lc;
+    snprintf(key, sizeof(key), "lm%u", (unsigned)j);
+    int lm = urlGetInt(body, key, 500); if (lm < 1) lm = 1;
+    childCfg.strings[j].lengthMm = (uint16_t)lm;
+    snprintf(key, sizeof(key), "lt%u", (unsigned)j);
+    int lt = urlGetInt(body, key, 0); if (lt < 0) lt = 0; if (lt > 2) lt = 2;
+    childCfg.strings[j].ledType  = (uint8_t)lt;
+    snprintf(key, sizeof(key), "cd%u", (unsigned)j);
+    int cd = urlGetInt(body, key, 0); if (cd < 0) cd = 0; if (cd > 3) cd = 3;
+    childCfg.strings[j].cableDir = (uint8_t)cd;
+    snprintf(key, sizeof(key), "cm%u", (unsigned)j);
+    int cm = urlGetInt(body, key, 0); if (cm < 0) cm = 0;
+    childCfg.strings[j].cableMm  = (uint16_t)cm;
+    snprintf(key, sizeof(key), "sd%u", (unsigned)j);
+    int sd = urlGetInt(body, key, 0); if (sd < 0) sd = 0; if (sd > 3) sd = 3;
+    childCfg.strings[j].stripDir = (uint8_t)sd;
+  }
+
+  saveChildConfig();
+  sendPong(IPAddress(255, 255, 255, 255));  // notify parent of updated config
+
+  c.print(F("HTTP/1.1 303 See Other\r\n"
+            "Location: /config\r\n"
+            "Content-Length: 0\r\n"
+            "Connection: close\r\n\r\n"));
+  c.flush();
 }
 
 #endif  // BOARD_FASTLED

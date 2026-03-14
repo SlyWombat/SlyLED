@@ -1,116 +1,110 @@
 # SlyLED
 
-SlyLED runs on multiple Arduino boards:
--  the Arduino Giga R1 WiFi (STM32H747, dual Cortex-M7 + M4) the parent
--  the Arduino ESP32 on a QuinLED Quad and Uno board a child
--  the Arduino ESP8266 on 6 year old QinLED Duo with a LOLIN(WEMOS) D1 R2 & mini board a child
+Multi-board Arduino LED controller with a parent/child architecture. One parent board (Giga R1 WiFi) serves a browser UI and coordinates timing; child boards (ESP32 / D1 Mini) own the LED strips and execute actions locally in NTP-synchronized time.
 
-This project consists of one parent module, typically running on the Giga board and many children modules that typically run on the ESP32/8266 boards.
-Communication is via a fast wireless communication between the modules, but each module should be running a sync'd clock to the parent, and when actions are given to a child module it runs locally in sync with all the other children.
+**Current version: v2.10**
 
-Parent Module:
+## Hardware
 
-Web interface with multiple tabs, DASHBOARD, SETUP, LAYOUT, ACTIONS, RUNTIME
-No lights connected
+| Role | Board | LEDs |
+|------|-------|------|
+| Parent | Arduino Giga R1 WiFi (STM32H747) | None |
+| Child | ESP32 (QuinLED Quad / Uno) | Up to 4× WS2812B strips, GPIO 2 |
+| Child | ESP8266 D1 Mini (LOLIN/WEMOS) | Up to 4× WS2812B strips, GPIO 2 |
 
-Dashboard:
+## Architecture
 
-table of all the known children and their current status
-thumbnail of any action that is currently in effect and remaining time
-Stop button and a Go button
+All three boards share one sketch (`main/main.ino`) with `#ifdef BOARD_GIGA / BOARD_ESP32 / BOARD_D1MINI` guards.
 
-Setup:
+**Parent (Giga)** — serves a 6-tab SPA, manages a child registry, positions children on a 2D canvas, defines runners, pre-computes per-child LED ranges, and dispatches commands via UDP.
 
-Should list all known children in a table with key information (see child definition)
-Has functions for:
-- add child
-- remove child
-- show details
-- refresh (from child)
+**Children (ESP32 / D1 Mini)** — receive UDP commands, execute LED actions (Solid / Flash / Wipe / Off) against assigned LED ranges, and run pre-loaded runner steps triggered by a synchronized epoch timestamp. Config and string layout are persisted in EEPROM and reported to the parent via CMD_PONG.
 
-Separate section for saving all children information to download locally and for uploading the same information, on upload and download you should be able to select which children
+### Communication
 
-Should have an option to view logs, separate page, listing key information that has been polled/gathered
+- **UDP port 4210** — binary protocol with 8-byte header (magic `0x534C`, version, command, epoch). Commands: PING/PONG (discovery), ACTION/ACTION_STOP (immediate), LOAD_STEP/LOAD_ACK (runner loading), RUNNER_GO/RUNNER_STOP (synchronized execution), STATUS_REQ/STATUS_RESP.
+- **NTP** — all boards sync to `pool.ntp.org`; epoch timestamps make runner execution deterministic across children (±50 ms jitter tolerable).
 
-Support for general app settings, dark mode, units etc
+### Parent SPA tabs
 
-Layout:
+| Tab | Function |
+|-----|----------|
+| Dashboard | Children table, runner progress bar, Stop / Go buttons |
+| Setup | Add / remove / refresh children, details modal, JSON import/export, app settings (dark mode, units, canvas size) |
+| Layout | Drag-and-drop canvas positioning of children and their LED strings (metric or imperial) |
+| Actions | Send immediate Solid / Flash / Wipe / Off to any child |
+| Runtime | Create runners, add/edit steps (action + area-of-effect + duration), Compute / Sync / Start |
+| Settings | Dark mode, units, canvas dimensions, parent name |
 
-Each child needs to be graphically represented in 3d space with the attributes gathered from the child correctly interpreted, attributes from the child are how many light strings are attached and how long each string is. The direction of the strings and distances from the child node are also gathered from the child.
-The parent has layout capability in the tab to move the children around relative to each other with a choice of metric or imperial units (from setup page)
-This relationship between each of the children and the light strings needs to be stored in a optimized manner so that timed sequences can be created, then sent to each child for execution. The responsibility of the creation of the optimized data structure is on the parent. Child have low computer power.
+### Child config page
 
-Once the layout is complete, consider this the canvas of the entire project, so when actions are performed it is across the entire canvas
+Each child serves `GET /config` — a self-contained HTML form for configuring the node:
 
-Actions:
+- Alternate name and description
+- Number of LED strings (1–4)
+- Per string: LED count, strip length (mm), LED type (WS2812B / WS2811 / APA102), cable direction and length from node, strip direction
 
-These are hard coded actions that have attributes specific to the action. Initial simple actions are:
-
-Solid: attributes are picking a colour from a colour wheel or enter a #
-Flash: attributes are same as solid, but adding a time on/time off attributes
-Wipe: attributes are direction (left, right, up, down), colour, speed
-Off: no attributes
-
-Runtime:
-
-This allows to define a number of actions to be performed in sequence, so you have the ability to create a named "Runner" and add as many actions as user wants, each action that is added has a duration and an area of effect (area of effect is percentage based on the canvas with 0,0 bottom left and 100,100 upper right). Area defaults to "All", duration defaults to 5s
-
-Multiple runners can be defined, and once saved they can be computed to optimize what needs to be send to the children, once computed there can be sync option to send to all the children. 
-Only one runner can be enabled at a time.
-
-Child module:
-
-receives command and control from the parent. it creates a unique hostname with SLYC as a prefix and a number of fixed digits from the mac address. 
-
-The user can create an alternate name as well as a description for this child (e.g. UPPER 1 - upper left corner strings)
-
-it has a minimal webpage that allows for the description of how many lights are connected, how many lights, how long the string is, the type of light string, the cable direction and length from the node to the string start, and the direction the string runs.
-
-- Module-based architecture — easy to add new patterns and hardware modules
-- SPA + JSON API — single-page app polls status every 2 s; button presses use AJAX
-- Two-thread Mbed RTOS design — LED animation runs on a dedicated thread, completely independent of WiFi I/O
+`POST /config` saves to EEPROM (Preferences on ESP32, EEPROM.h on D1 Mini) and broadcasts an updated CMD_PONG so the parent refreshes automatically. Settings survive power cycles; hostname is always auto-generated from MAC.
 
 ## Quick start
 
-1. Copy `main/arduino_secrets.h.example` to `main/arduino_secrets.h` and fill in your WiFi credentials
-2. Double-press the reset button to enter bootloader mode
-3. Run the build script (auto-increments the minor version on every compile):
+1. Copy `main/arduino_secrets.h.example` to `main/arduino_secrets.h` and fill in your WiFi credentials.
 
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File build.ps1 -Port COM7
-```
+2. **Giga** — double-press reset to enter bootloader, then upload:
+   ```powershell
+   powershell.exe -ExecutionPolicy Bypass -File build.ps1 -Board giga -Port COM7
+   ```
 
-4. Open `http://<board-ip>/` in a browser
+3. **ESP32** — connect via USB, then upload:
+   ```powershell
+   powershell.exe -ExecutionPolicy Bypass -File build.ps1 -Board esp32 -Port COM8
+   ```
+
+4. **D1 Mini** — connect via USB, then upload:
+   ```powershell
+   powershell.exe -ExecutionPolicy Bypass -File build.ps1 -Board d1mini -Port COM9
+   ```
+
+5. Open `http://slyled/` (or `http://<giga-ip>/`) in a browser.
+
+6. On each child, open `http://<child-ip>/config` to set its name, description, and LED string layout.
+
+> **Compile only (no upload):** add `-NoUpload` to any build command.
+> `build.ps1` auto-increments `APP_MINOR` in `main/version.h` on every compile.
 
 ## Project layout
 
 ```
 main/
-  main.ino          — Sketch (SPA server + LED animation)
-  version.h         — APP_MAJOR / APP_MINOR (build.ps1 auto-increments minor)
-  arduino_secrets.h — WiFi credentials (gitignored)
+  main.ino              — Single sketch for all three boards
+  version.h             — APP_MAJOR / APP_MINOR
+  arduino_secrets.h     — WiFi credentials (gitignored)
+  arduino_secrets.h.example
 tests/
-  test_web.py       — HTTP/JSON API test suite (75 tests)
+  test_web.py           — HTTP/JSON API test suite (~70 checks, parent only)
 docs/
-  ARCHITECTURE.md   — Threading model, module design, code structure
-  API.md            — Complete HTTP API reference
-  HARDWARE.md       — Hardware setup, pin reference, known quirks
-  PATTERNS.md       — LED pattern reference and guide for adding new patterns
-build.ps1           — PowerShell build/upload script
-arduino-cli.yaml    — Sets project folder as Arduino user directory
+  PHASE2_DESIGN.md      — Full protocol, data structures, and implementation roadmap
+build.ps1               — PowerShell build/upload script (-Board giga|esp32|d1mini)
+arduino-cli.yaml        — Sets project folder as Arduino user directory
 ```
 
 ## Running the tests
 
-From WSL (WSL2 cannot reach the Windows WiFi adapter directly):
+Tests run against the parent (Giga). From WSL:
 
 ```powershell
 powershell.exe -Command "python -X utf8 tests/test_web.py 192.168.10.219"
 ```
 
-## Documentation
+Covers: connectivity, SPA structure, `/status`, children CRUD + import/export + status poll, layout, settings round-trip, full runner lifecycle (create / PUT steps / compute / stop / delete), error handling, max-runner overflow, Content-Length headers.
 
-See the [`docs/`](docs/) folder for full technical documentation.
+## Flash usage (v2.10)
+
+| Board | Flash | RAM |
+|-------|-------|-----|
+| Giga | ~310 KB / 1966 KB (16%) | ~81 KB / 524 KB (15%) |
+| ESP32 | ~1030 KB / 1311 KB (79%) | ~50 KB / 328 KB (15%) |
+| D1 Mini | ~270 KB / 1049 KB (26%) | ~32 KB / 80 KB (40%) |
 
 ## License
 
