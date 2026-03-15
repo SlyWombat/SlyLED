@@ -650,6 +650,7 @@ function loadRuntime(){
         h+='<button class="btn btn-on" onclick="showRunner('+r.id+')" style="padding:.3em .8em">Edit</button>';
         h+=' <button class="btn" onclick="doCompute('+r.id+')" style="background:#446;color:#fff;padding:.3em .8em">Compute</button>';
         if(r.computed){
+          h+=' <button class="btn" onclick="showTimeline('+r.id+')" style="background:#363;color:#fff;padding:.3em .8em">Timeline</button>';
           h+=' <button class="btn" onclick="doSync('+r.id+')" style="background:#264;color:#fff;padding:.3em .8em">Sync</button>';
           h+=' <button class="btn btn-on" onclick="doStart('+r.id+')" style="padding:.3em .8em">Start</button>';
         }
@@ -806,6 +807,101 @@ function stopRunners(){
   ra('POST','/api/runners/stop',null,function(r){
     if(r&&r.ok)document.getElementById('hs').textContent='Runners stopped';
   });
+}
+
+function showTimeline(rid){
+  // Fetch runner details, actions, and children to build Gantt chart
+  ra('GET','/api/actions',null,function(acts){
+    _acts=acts||[];
+    ra('GET','/api/runners/'+rid,null,function(rn){
+      if(!rn||!rn.steps||!rn.steps.length){alert('No steps in runner');return;}
+      ra('GET','/api/layout',null,function(lay){
+        var children=(lay&&lay.children||[]).filter(function(c){return c.positioned||c._placed;});
+        if(!children.length)children=[{hostname:'(all children)',id:-1}];
+        _drawTimeline(rn,_acts,children,lay);
+      });
+    });
+  });
+}
+
+function _drawTimeline(rn,acts,children,lay){
+  var actMap={};acts.forEach(function(a){actMap[a.id]=a;});
+  var steps=rn.steps||[];
+  var totalS=0;steps.forEach(function(s){totalS+=s.durationS||0;});
+  if(totalS<=0){alert('Runner has zero duration');return;}
+
+  var rowH=32,labelW=120,padT=36,padB=20,padR=16;
+  var chartW=700,chartH=children.length*rowH;
+  var cvW=labelW+chartW+padR,cvH=padT+chartH+padB;
+
+  var h='<canvas id="tl-cv" width="'+cvW+'" height="'+cvH+'" style="display:block;background:#0d0d0d;border:1px solid #444;max-width:100%"></canvas>';
+  document.getElementById('modal-title').textContent='Timeline: '+rn.name+' ('+totalS+'s)';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+
+  var cv=document.getElementById('tl-cv');if(!cv)return;
+  var ctx=cv.getContext('2d');
+
+  // Time axis header
+  ctx.fillStyle='#aaa';ctx.font='10px sans-serif';ctx.textAlign='center';
+  var tickS=totalS<=10?1:totalS<=30?2:totalS<=60?5:totalS<=300?10:30;
+  for(var t=0;t<=totalS;t+=tickS){
+    var tx=labelW+Math.round(t*chartW/totalS);
+    ctx.fillText(t+'s',tx,padT-8);
+    ctx.strokeStyle='#2a2a2a';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(tx,padT);ctx.lineTo(tx,padT+chartH);ctx.stroke();
+  }
+
+  // Row backgrounds and labels
+  children.forEach(function(c,ci){
+    var y=padT+ci*rowH;
+    if(ci%2===0){ctx.fillStyle='#161616';ctx.fillRect(labelW,y,chartW,rowH);}
+    // Row label
+    ctx.fillStyle='#ccc';ctx.font='10px sans-serif';ctx.textAlign='right';
+    var lbl=c.hostname||c.name||('ID '+c.id);
+    if(lbl.length>14)lbl=lbl.slice(0,13)+'\u2026';
+    ctx.fillText(lbl,labelW-6,y+rowH/2+4);
+  });
+
+  // Draw step bars
+  var tOff=0;
+  steps.forEach(function(st){
+    var dur=st.durationS||0;if(dur<=0){tOff+=dur;return;}
+    var act=actMap[st.actionId];
+    var col=act?rgb2h(act.r||0,act.g||0,act.b||0):'#555';
+    var aName=act?act.name:'?';
+    var x0pct=(st.x0||0)/10000,x1pct=(st.x1!=null?st.x1:10000)/10000;
+    var y0pct=(st.y0||0)/10000,y1pct=(st.y1!=null?st.y1:10000)/10000;
+    var px=labelW+Math.round(tOff*chartW/totalS);
+    var pw=Math.max(2,Math.round(dur*chartW/totalS));
+
+    children.forEach(function(c,ci){
+      // Check if child is within area-of-effect (simple % check on canvas position)
+      var inAoE=true;
+      if(c.id>=0&&lay){
+        var cxPct=(c.x||0)/((lay&&lay.canvasW)||10000);
+        var cyPct=(c.y||0)/((lay&&lay.canvasH)||5000);
+        inAoE=(cxPct>=x0pct-0.01&&cxPct<=x1pct+0.01&&cyPct>=y0pct-0.01&&cyPct<=y1pct+0.01);
+      }
+      if(!inAoE)return;
+      var y=padT+ci*rowH+4;
+      var bh=rowH-8;
+      ctx.fillStyle=col;ctx.globalAlpha=0.7;
+      ctx.fillRect(px,y,pw,bh);
+      ctx.globalAlpha=1;
+      ctx.strokeStyle='#fff';ctx.lineWidth=0.5;ctx.strokeRect(px,y,pw,bh);
+      // Action name if bar wide enough
+      if(pw>30){
+        ctx.fillStyle='#fff';ctx.font='9px sans-serif';ctx.textAlign='left';
+        ctx.fillText(aName,px+3,y+bh/2+3);
+      }
+    });
+    tOff+=dur;
+  });
+
+  // Border
+  ctx.strokeStyle='#444';ctx.lineWidth=1;
+  ctx.strokeRect(labelW,padT,chartW,chartH);
 }
 
 function applyDarkMode(dm){
