@@ -936,6 +936,56 @@ if test_act_id is not None and test_run_id is not None:
 else:
     skip("Actions+Runner integration", "create failed")
 
+section("Action ID 0 round-trip (falsy-value regression)")
+# First action created after factory reset gets id=0. Verify it persists correctly.
+_, a0 = post_json("/api/actions", {"name": "ZeroId", "type": 1, "r": 100, "g": 50, "b": 25})
+a0_id = (a0 or {}).get("id")
+_, r0 = post_json("/api/runners", {"name": "ZeroTest"})
+r0_id = (r0 or {}).get("id")
+if a0_id is not None and r0_id is not None:
+    pu_code, pu_data = put_json(f"/api/runners/{r0_id}",
+                                {"name": "ZeroTest",
+                                 "steps": [{"actionId": a0_id,
+                                            "x0": 0, "y0": 0, "x1": 10000, "y1": 10000,
+                                            "durationS": 2}]})
+    check("PUT with actionId="+str(a0_id)+" ok", pu_data is not None and pu_data.get("ok") is True)
+    _, rget = get_json(f"/api/runners/{r0_id}")
+    saved_aid = rget["steps"][0].get("actionId") if rget and rget.get("steps") else None
+    check("actionId persisted (not -1)",
+          saved_aid == a0_id,
+          f"expected={a0_id} got={saved_aid}")
+
+    # Compute + sync should not error
+    _, comp = post_json(f"/api/runners/{r0_id}/compute")
+    check("Compute ok", comp is not None and comp.get("ok") is True)
+    _, sync = post_json(f"/api/runners/{r0_id}/sync")
+    check("Sync ok (no children = no error)",
+          sync is not None and sync.get("ok") is True)
+
+    delete(f"/api/runners/{r0_id}")
+    delete(f"/api/actions/{a0_id}")
+else:
+    skip("Action ID 0 round-trip", "create failed")
+
+section("Runner sync with missing action → error")
+_, bad_r = post_json("/api/runners", {"name": "BadRef"})
+bad_rid = (bad_r or {}).get("id")
+if bad_rid is not None:
+    put_json(f"/api/runners/{bad_rid}",
+             {"name": "BadRef", "steps": [{"actionId": 99999,
+              "x0": 0, "y0": 0, "x1": 10000, "y1": 10000, "durationS": 1}]})
+    post_json(f"/api/runners/{bad_rid}/compute")
+    sc, sd = post_json(f"/api/runners/{bad_rid}/sync")
+    check("Sync with missing action returns error",
+          sd is not None and sd.get("ok") is False,
+          f"data={sd}")
+    delete(f"/api/runners/{bad_rid}")
+
+section("SPA references _syncSteps with isNaN guard")
+code, body = get("/")
+check("SPA _syncSteps uses isNaN (not ||)",
+      "isNaN(v)?-1:v" in body, "falsy-zero bug guard missing")
+
 # ── Layout API ────────────────────────────────────────────────────────────────
 
 section("Layout API  POST /api/layout (empty)")

@@ -51,6 +51,13 @@
 
 void setup() {
   Serial.begin(115200);
+#ifdef BOARD_FASTLED
+  // Drive data pin low immediately to prevent WS2812B power-on glitch
+  // (GPIO2 is pulled high during ESP boot → strip reads garbage → white flash)
+  pinMode(DATA_PIN, OUTPUT);
+  digitalWrite(DATA_PIN, LOW);
+  delay(1);           // 1 ms reset pulse for WS2812B
+#endif
   delay(500);
   if (Serial) Serial.println("=== BOOT ===");
 
