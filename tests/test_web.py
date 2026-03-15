@@ -1025,6 +1025,10 @@ post_json("/api/layout", {"children": (orig_layout or {}).get("children", [])})
 # ── MAX_RUNNERS overflow ──────────────────────────────────────────────────────
 
 section("Multiple runners (up to MAX_RUNNERS=4)")
+# Clean up any stale runners from previous tests
+_, _stale = get_json("/api/runners")
+for _sr in (_stale or []):
+    delete(f"/api/runners/{_sr['id']}")
 created_ids = []
 for i in range(4):
     _, d = post_json("/api/runners", {"name": f"R{i}"})

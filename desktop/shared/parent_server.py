@@ -81,6 +81,7 @@ _children = _load("children", [])
 _settings = _load("settings", {
     "name": "SlyLED", "units": 0, "canvasW": 10000, "canvasH": 5000,
     "darkMode": 1, "runnerRunning": False, "activeRunner": -1, "runnerElapsed": 0,
+    "runnerLoop": True,
 })
 _layout  = _load("layout",  {"canvasW": 10000, "canvasH": 5000, "children": []})
 _runners = _load("runners", [])
@@ -226,14 +227,27 @@ def _discover():
             break
     return list(found.values())
 
+def _child_led_ranges(child):
+    """Build ledStart[8] / ledEnd[8] arrays from child's string config.
+    For each configured string: start=0, end=ledCount-1.
+    For unconfigured strings: 0xFF (not included)."""
+    ls = [0xFF] * 8
+    le = [0xFF] * 8
+    sc = child.get("sc", 0)
+    strings = child.get("strings", [])
+    for j in range(min(sc, len(strings), 8)):
+        leds = strings[j].get("leds", 0)
+        if leds > 0:
+            ls[j] = 0
+            le[j] = min(leds - 1, 254)   # clamp to uint8, 0xFF=unused sentinel
+    return bytes(ls), bytes(le)
+
 def _action_pkt(act, child):
     t   = act.get("type", 0)
     r, g, b = act.get("r", 0), act.get("g", 0), act.get("b", 0)
     on, off  = act.get("onMs", 500), act.get("offMs", 500)
     wd, ws   = act.get("wipeDir", 0), act.get("wipeSpeedPct", 50)
-    # ledStart/ledEnd must each be 8 bytes (MAX_STR_PER_CHILD=8); 0xFF = unused slot
-    ls = bytes([0,    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
-    le = bytes([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+    ls, le = _child_led_ranges(child)
     return _hdr(CMD_ACTION) + struct.pack("<BBBBHHBB", t, r, g, b, on, off, wd, ws) + ls + le
 
 def _load_step_pkt(idx, total, step, child):
@@ -242,8 +256,7 @@ def _load_step_pkt(idx, total, step, child):
     on, off  = step.get("onMs", 500), step.get("offMs", 500)
     wd, ws   = step.get("wdir", 0), step.get("wspd", 50)
     dur      = step.get("durationS", 5)
-    ls = bytes([0,    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
-    le = bytes([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+    ls, le = _child_led_ranges(child)
     pl = struct.pack("<BBBBBBHHBBH", idx, total, t, r, g, b, on, off, wd, ws, dur)
     return _hdr(CMD_LOAD_STEP) + pl + ls + le
 
@@ -383,7 +396,7 @@ def api_settings_get():
 def api_settings_save():
     body = request.get_json(silent=True) or {}
     with _lock:
-        for k in ("name", "units", "canvasW", "canvasH", "darkMode"):
+        for k in ("name", "units", "canvasW", "canvasH", "darkMode", "runnerLoop"):
             if k in body:
                 _settings[k] = body[k]
         _layout["canvasW"] = _settings["canvasW"]
@@ -605,6 +618,7 @@ def api_runner_start(rid):
 _DEFAULT_SETTINGS = {
     "name": "SlyLED", "units": 0, "canvasW": 10000, "canvasH": 5000,
     "darkMode": 1, "runnerRunning": False, "activeRunner": -1, "runnerElapsed": 0,
+    "runnerLoop": True,
 }
 _DEFAULT_LAYOUT = {"canvasW": 10000, "canvasH": 5000, "children": []}
 

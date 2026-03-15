@@ -109,9 +109,12 @@ body.light .li:hover{border-color:#888}
 
 <div id='t-runtime' class='tab' style='display:none'>
   <div id='rt-list'>
-    <div style='margin-bottom:.8em'>
+    <div style='margin-bottom:.8em;display:flex;align-items:center;gap:.8em;flex-wrap:wrap'>
       <button class='btn btn-on'  onclick='newRunner()'>+ New Runner</button>
-      <button class='btn btn-off' onclick='stopRunners()' style='margin-left:.5em'>Stop All Runners</button>
+      <button class='btn btn-off' onclick='stopRunners()'>Stop All Runners</button>
+      <label style='color:#888;font-size:.85em;display:flex;align-items:center;gap:.3em'>
+        <input type='checkbox' id='rt-loop' checked onchange='saveLoopSetting()'> Loop
+      </label>
     </div>
     <div id='rn-list'><p style='color:#888'>Loading...</p></div>
   </div>
@@ -634,10 +637,18 @@ function delAction(id){
 }
 
 // ── Runners ─────────────────────────────────────────────────────────────────
+function saveLoopSetting(){
+  var lp=document.getElementById('rt-loop');
+  ra('POST','/api/settings',{runnerLoop:lp&&lp.checked?true:false},null);
+}
+
 function loadRuntime(){
   // Always show list view (hide edit view)
   document.getElementById('rt-list').style.display='block';
   document.getElementById('rt-edit').style.display='none';
+  ra('GET','/api/settings',null,function(s){
+    if(s){var lp=document.getElementById('rt-loop');if(lp)lp.checked=s.runnerLoop!==false;}
+  });
   ra('GET','/api/actions',null,function(a){_acts=a||[];});
   ra('GET','/api/runners',null,function(d){
     var h='';
