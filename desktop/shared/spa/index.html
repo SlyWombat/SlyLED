@@ -327,14 +327,20 @@ function showDetails(id){
     var h='<p style="font-size:.85em;margin-bottom:.6em">';
     h+='IP: <a href="http://'+cleanIp+'/" target="_blank" style="color:#88f">'+cleanIp+'</a>';
     if(c.desc)h+=' &mdash; '+c.desc;
-    h+='</p><table class="tbl" style="font-size:.8em">';
-    h+='<tr><th>#</th><th>LEDs</th><th>Len mm</th><th>Type</th><th>Cable Dir</th><th>Cable mm</th><th>Strip Dir</th></tr>';
-    (c.strings||[]).forEach(function(s,i){
-      h+='<tr><td>'+(i+1)+'</td><td>'+s.leds+'</td><td>'+s.mm+'</td>';
-      h+='<td>'+(types[s.type]||s.type)+'</td><td>'+(dirs[s.cdir]||s.cdir)+'</td>';
-      h+='<td>'+s.cmm+'</td><td>'+(dirs[s.sdir]||s.sdir)+'</td></tr>';
-    });
-    h+='</table>';
+    h+='</p>';
+    var sc=c.sc||0;
+    h+='<p style="font-size:.85em;color:#aaa;margin-bottom:.4em">'+sc+' string'+(sc!==1?'s':'')+'</p>';
+    if(sc>0&&c.strings&&c.strings.length){
+      h+='<table class="tbl" style="font-size:.8em">';
+      h+='<tr><th>#</th><th>LEDs</th><th>Len mm</th><th>Type</th><th>Cable Dir</th><th>Cable mm</th><th>Strip Dir</th></tr>';
+      for(var si=0;si<sc&&si<c.strings.length;si++){
+        var s=c.strings[si];
+        h+='<tr><td>'+(si+1)+'</td><td>'+s.leds+'</td><td>'+s.mm+'</td>';
+        h+='<td>'+(types[s.type]||s.type)+'</td><td>'+(dirs[s.cdir]||s.cdir)+'</td>';
+        h+='<td>'+s.cmm+'</td><td>'+(dirs[s.sdir]||s.sdir)+'</td></tr>';
+      }
+      h+='</table>';
+    }
     document.getElementById('modal-title').textContent=c.hostname+(c.name&&c.name!==c.hostname?' ('+c.name+')':'');
     document.getElementById('modal-body').innerHTML=h;
     document.getElementById('modal').style.display='block';
@@ -734,7 +740,7 @@ function rmStep(i){curRsteps.splice(i,1);renderSteps();}
 function gv(id,def){var el=document.getElementById(id);if(!el)return def;var v=parseInt(el.value,10);return isNaN(v)?def:v;}
 
 function saveRunner(){
-  if(curRid<0)return;
+  if(curRid<0){document.getElementById('hs').textContent='No runner selected';return;}
   var steps=[];
   for(var i=0;i<curRsteps.length;i++){
     steps.push({actionId:gv('s'+i+'a',-1),
@@ -742,10 +748,14 @@ function saveRunner(){
       x1:gv('s'+i+'x1',100)*100,y1:gv('s'+i+'y1',100)*100,
       durationS:gv('s'+i+'d',5)});
   }
-  var x=new XMLHttpRequest();x.open('PUT','/api/runners/'+curRid,true);
-  x.setRequestHeader('Content-Type','application/json');
-  x.onload=function(){try{if(JSON.parse(x.responseText).ok){document.getElementById('hs').textContent='Runner saved';loadRuntime();}}catch(e){}};
-  x.send(JSON.stringify({name:curRname,steps:steps}));
+  document.getElementById('hs').textContent='Saving...';
+  ra('PUT','/api/runners/'+curRid,{name:curRname,steps:steps},function(r){
+    if(r&&r.ok){
+      document.getElementById('hs').textContent='Runner "'+curRname+'" saved ('+steps.length+' steps)';
+    }else{
+      document.getElementById('hs').textContent='Save failed: '+(r&&r.err||'unknown error');
+    }
+  });
 }
 
 function doCompute(id){

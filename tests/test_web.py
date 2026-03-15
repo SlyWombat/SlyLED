@@ -835,19 +835,12 @@ if act_id is not None:
     # Update
     code2, udata = post_json(f"/api/actions/{act_id}", {"name": "Blue Flash", "type": 2,
                               "r": 0, "g": 0, "b": 255, "onMs": 200, "offMs": 300})
-    # PUT via ra helper
-    import urllib.request as _ur2
-    req = urllib.request.Request(BASE + f"/api/actions/{act_id}", method="PUT",
-                                 data=json.dumps({"name": "Blue Flash", "type": 2,
-                                                   "r": 0, "g": 0, "b": 255,
-                                                   "onMs": 200, "offMs": 300}).encode(),
-                                 headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            ub = json.loads(resp.read())
-            check("PUT action ok:true", ub is not None and ub.get("ok") is True)
-    except Exception as e:
-        check("PUT action ok:true", False, str(e))
+    # Update via PUT
+    pu_code, pu_data = put_json(f"/api/actions/{act_id}",
+                                {"name": "Blue Flash", "type": 2,
+                                 "r": 0, "g": 0, "b": 255, "onMs": 200, "offMs": 300})
+    check("PUT action HTTP 200", pu_code == 200, f"got {pu_code}")
+    check("PUT action ok:true", pu_data is not None and pu_data.get("ok") is True)
 
     _, vdata = get_json(f"/api/actions/{act_id}")
     check("Name updated after PUT", vdata is not None and vdata.get("name") == "Blue Flash")
@@ -882,19 +875,16 @@ test_act_id = (a_data or {}).get("id")
 _, r_data = post_json("/api/runners", {"name": "ActRefRunner"})
 test_run_id = (r_data or {}).get("id")
 if test_act_id is not None and test_run_id is not None:
-    req = urllib.request.Request(BASE + f"/api/runners/{test_run_id}", method="PUT",
-                                 data=json.dumps({"name": "ActRefRunner",
-                                                   "steps": [{"actionId": test_act_id,
-                                                               "x0": 0, "y0": 0,
-                                                               "x1": 10000, "y1": 10000,
-                                                               "durationS": 3}]}).encode(),
-                                 headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            ub = json.loads(resp.read())
-            check("PUT runner with actionId ok", ub is not None and ub.get("ok") is True)
-    except Exception as e:
-        check("PUT runner with actionId ok", False, str(e))
+    # Save runner with 1 step referencing the action
+    pu_code, pu_data = put_json(f"/api/runners/{test_run_id}",
+                                {"name": "ActRefRunner",
+                                 "steps": [{"actionId": test_act_id,
+                                            "x0": 0, "y0": 0,
+                                            "x1": 10000, "y1": 10000,
+                                            "durationS": 3}]})
+    check("PUT runner with actionId HTTP 200", pu_code == 200, f"got {pu_code}")
+    check("PUT runner with actionId ok:true",
+          pu_data is not None and pu_data.get("ok") is True)
 
     _, rget = get_json(f"/api/runners/{test_run_id}")
     check("Runner step has actionId",
@@ -907,6 +897,38 @@ if test_act_id is not None and test_run_id is not None:
     check("Runner list has totalDurationS",
           rentry is not None and rentry.get("totalDurationS") == 3,
           f"entry={rentry}")
+
+    # Add a second step and re-save — verify multiple steps persist
+    pu2_code, pu2_data = put_json(f"/api/runners/{test_run_id}",
+                                  {"name": "ActRefRunner",
+                                   "steps": [{"actionId": test_act_id,
+                                              "x0": 0, "y0": 0, "x1": 5000, "y1": 10000,
+                                              "durationS": 3},
+                                             {"actionId": test_act_id,
+                                              "x0": 5000, "y0": 0, "x1": 10000, "y1": 10000,
+                                              "durationS": 7}]})
+    check("PUT runner 2 steps ok", pu2_data is not None and pu2_data.get("ok") is True)
+
+    _, rget2 = get_json(f"/api/runners/{test_run_id}")
+    check("Runner has 2 steps after re-save",
+          rget2 is not None and len(rget2.get("steps", [])) == 2)
+    check("Step 2 durationS persisted",
+          rget2 is not None and rget2["steps"][1].get("durationS") == 7)
+
+    # Runner list reflects updated totalDurationS
+    _, rlist2 = get_json("/api/runners")
+    re2 = next((r for r in (rlist2 or []) if r.get("id") == test_run_id), None)
+    check("Updated totalDurationS = 10",
+          re2 is not None and re2.get("totalDurationS") == 10,
+          f"entry={re2}")
+
+    # Save empty steps — should also work
+    pu3_code, pu3_data = put_json(f"/api/runners/{test_run_id}",
+                                  {"name": "ActRefRunner", "steps": []})
+    check("PUT runner empty steps ok", pu3_data is not None and pu3_data.get("ok") is True)
+    _, rget3 = get_json(f"/api/runners/{test_run_id}")
+    check("Runner has 0 steps after empty save",
+          rget3 is not None and len(rget3.get("steps", [])) == 0)
 
     # Cleanup
     delete(f"/api/runners/{test_run_id}")

@@ -133,7 +133,7 @@ cd tests
 python test_web.py localhost:8080
 ```
 
-Covers: connectivity, SPA structure, cache headers, `/status`, children CRUD + import/export + status poll + IP sanitization, actions library CRUD + validation + runner integration, layout `positioned` flag + multi-child placement/removal round-trip, settings round-trip, full runner lifecycle with action references (create / PUT steps / compute / stop / delete), error handling, MAX_RUNNERS overflow, Content-Length headers, mock UDP child (PING/PONG/ACTION/STATUS). **207 checks.**
+Covers: connectivity, SPA structure, cache headers, `/status`, children CRUD + import/export + status poll + IP sanitization, actions library CRUD + validation + runner integration, layout `positioned` flag + multi-child placement/removal round-trip, settings round-trip, full runner lifecycle with action references (create / PUT steps / compute / stop / delete), error handling, MAX_RUNNERS overflow, Content-Length headers, mock UDP child (PING/PONG/ACTION/STATUS). **215 checks.**
 
 ### Child (ESP32 / D1 Mini)
 
