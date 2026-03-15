@@ -87,6 +87,7 @@ extern volatile uint8_t  childStepCount;
 extern volatile uint32_t childRunnerStart;
 extern volatile bool     childRunnerArmed;
 extern volatile bool     childRunnerActive;
+extern volatile uint8_t  childSyncBlink;   // >0 = blink white N times after sync
 
 // ── Function declarations ─────────────────────────────────────────────────────
 

@@ -67,6 +67,20 @@ void ledTask(void* parameter) {
   uint8_t       runFlashPh  = 0;
 
   while (true) {
+    // ── 0. Sync blink confirmation ────────────────────────────────────────────
+    if (childSyncBlink > 0) {
+      uint8_t n = childSyncBlink;
+      childSyncBlink = 0;
+      for (uint8_t b = 0; b < n; b++) {
+        fill_solid(leds, NUM_LEDS, CRGB::White);
+        FastLED.show(); delay(200);
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
+        FastLED.show(); delay(200);
+      }
+      offRendered = true;
+      continue;
+    }
+
     // ── 1. Arm runner when epoch reached ─────────────────────────────────────
     if (childRunnerArmed && childStepCount > 0) {
       if ((uint32_t)currentEpoch() >= childRunnerStart) {
@@ -184,6 +198,39 @@ void updateLED() {
   static uint8_t       runFlashPh   = 0;
   static uint8_t       lastSolidSt  = 0xFF;
   static unsigned long lastWipe     = 0;
+  static uint8_t       blinkRemain  = 0;
+  static unsigned long blinkTs      = 0;
+  static bool          blinkOn      = false;
+
+  // ── 0. Sync blink confirmation (non-blocking) ──────────────────────────
+  if (childSyncBlink > 0) {
+    blinkRemain = childSyncBlink;
+    childSyncBlink = 0;
+    blinkOn = true;
+    blinkTs = millis();
+    fill_solid(leds, NUM_LEDS, CRGB::White);
+    FastLED.show();
+    actRendered = true;
+    return;
+  }
+  if (blinkRemain > 0) {
+    if (millis() - blinkTs >= 200) {
+      blinkTs = millis();
+      if (blinkOn) {
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
+        FastLED.show();
+        blinkOn = false;
+      } else {
+        blinkRemain--;
+        if (blinkRemain > 0) {
+          fill_solid(leds, NUM_LEDS, CRGB::White);
+          FastLED.show();
+          blinkOn = true;
+        }
+      }
+    }
+    return;
+  }
 
   // ── 1. Arm runner when epoch reached ─────────────────────────────────────
   if (childRunnerArmed && childStepCount > 0) {

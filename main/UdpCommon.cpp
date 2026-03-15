@@ -80,6 +80,9 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
       cmdUDP.beginPacket(sender, UDP_PORT);
       cmdUDP.write(udpBuf, sizeof(ack) + 1);
       cmdUDP.endPacket();
+      // Last step received → blink confirmation (stepIndex is 0-based, totalSteps is count)
+      if (ls.stepIndex + 1 == ls.totalSteps)
+        childSyncBlink = ls.totalSteps;
     }
   } else if (cmd == CMD_RUNNER_GO && plen >= 4) {
     uint32_t startEpoch;
@@ -90,6 +93,8 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
   } else if (cmd == CMD_RUNNER_STOP) {
     childRunnerActive = false;
     childRunnerArmed  = false;
+    childActType = ACT_OFF;
+    childActSeq++;
   }
   (void)plen;
 #endif
