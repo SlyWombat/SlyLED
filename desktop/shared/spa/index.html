@@ -635,6 +635,9 @@ function delAction(id){
 
 // ── Runners ─────────────────────────────────────────────────────────────────
 function loadRuntime(){
+  // Always show list view (hide edit view)
+  document.getElementById('rt-list').style.display='block';
+  document.getElementById('rt-edit').style.display='none';
   ra('GET','/api/actions',null,function(a){_acts=a||[];});
   ra('GET','/api/runners',null,function(d){
     var h='';
@@ -695,6 +698,18 @@ function _actName(id){
   return null;
 }
 
+function _syncSteps(){
+  // Read current DOM values back into curRsteps before re-rendering
+  for(var i=0;i<curRsteps.length;i++){
+    var el=document.getElementById('s'+i+'a');if(el)curRsteps[i].actionId=parseInt(el.value)||-1;
+    var x0=document.getElementById('s'+i+'x0');if(x0)curRsteps[i].x0=(parseInt(x0.value)||0)*100;
+    var x1=document.getElementById('s'+i+'x1');if(x1)curRsteps[i].x1=(parseInt(x1.value)||100)*100;
+    var y0=document.getElementById('s'+i+'y0');if(y0)curRsteps[i].y0=(parseInt(y0.value)||0)*100;
+    var y1=document.getElementById('s'+i+'y1');if(y1)curRsteps[i].y1=(parseInt(y1.value)||100)*100;
+    var d=document.getElementById('s'+i+'d');if(d)curRsteps[i].durationS=parseInt(d.value)||5;
+  }
+}
+
 function renderSteps(){
   var h='';
   if(!_acts.length){h='<p style="color:#c66;margin:.5em 0">No actions defined. Create actions in the Actions tab first.</p>';
@@ -730,28 +745,32 @@ function renderSteps(){
 }
 
 function addStep(){
+  _syncSteps();
   var defAct=_acts.length>0?_acts[0].id:-1;
   curRsteps.push({actionId:defAct,x0:0,y0:0,x1:10000,y1:10000,durationS:5});
   renderSteps();
 }
 
-function rmStep(i){curRsteps.splice(i,1);renderSteps();}
+function rmStep(i){_syncSteps();curRsteps.splice(i,1);renderSteps();}
 
 function gv(id,def){var el=document.getElementById(id);if(!el)return def;var v=parseInt(el.value,10);return isNaN(v)?def:v;}
 
 function saveRunner(){
   if(curRid<0){document.getElementById('hs').textContent='No runner selected';return;}
+  _syncSteps();
   var steps=[];
   for(var i=0;i<curRsteps.length;i++){
-    steps.push({actionId:gv('s'+i+'a',-1),
-      x0:gv('s'+i+'x0',0)*100,y0:gv('s'+i+'y0',0)*100,
-      x1:gv('s'+i+'x1',100)*100,y1:gv('s'+i+'y1',100)*100,
-      durationS:gv('s'+i+'d',5)});
+    steps.push({actionId:curRsteps[i].actionId,
+      x0:curRsteps[i].x0||0,y0:curRsteps[i].y0||0,
+      x1:curRsteps[i].x1!=null?curRsteps[i].x1:10000,
+      y1:curRsteps[i].y1!=null?curRsteps[i].y1:10000,
+      durationS:curRsteps[i].durationS||5});
   }
   document.getElementById('hs').textContent='Saving...';
   ra('PUT','/api/runners/'+curRid,{name:curRname,steps:steps},function(r){
     if(r&&r.ok){
       document.getElementById('hs').textContent='Runner "'+curRname+'" saved ('+steps.length+' steps)';
+      backToRunners();loadRuntime();
     }else{
       document.getElementById('hs').textContent='Save failed: '+(r&&r.err||'unknown error');
     }
