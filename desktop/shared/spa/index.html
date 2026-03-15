@@ -716,7 +716,7 @@ function renderSteps(){
     document.getElementById('re-steps').innerHTML=h;return;}
   if(curRsteps.length>0){
     h+='<div style="overflow-x:auto"><table class="tbl" style="font-size:.8em">';
-    h+='<tr><th>#</th><th>Action</th><th>x0-x1%</th><th>y0-y1%</th><th>Dur s</th><th></th></tr>';
+    h+='<tr><th>#</th><th>Action</th><th>x0-x1%</th><th>y0-y1%</th><th>Dur s</th><th>Move / Del</th></tr>';
     curRsteps.forEach(function(st,i){
       var x0=Math.round((st.x0||0)/100),x1=Math.round((st.x1!=null?st.x1:10000)/100);
       var y0=Math.round((st.y0||0)/100),y1=Math.round((st.y1!=null?st.y1:10000)/100);
@@ -736,7 +736,10 @@ function renderSteps(){
       h+='<input type="number" id="s'+i+'y0" value="'+y0+'" min="0" max="100" style="width:38px">-';
       h+='<input type="number" id="s'+i+'y1" value="'+y1+'" min="0" max="100" style="width:38px"></td>';
       h+='<td><input type="number" id="s'+i+'d" value="'+(st.durationS||5)+'" min="1" max="3600" style="width:52px"></td>';
-      h+='<td><button class="btn btn-off" onclick="rmStep('+i+')" style="padding:.2em .5em">\u00d7</button></td>';
+      h+='<td style="white-space:nowrap">';
+      if(i>0)h+='<button class="btn" onclick="mvStep('+i+',-1)" style="background:#446;color:#fff;padding:.2em .4em">\u25b2</button>';
+      if(i<curRsteps.length-1)h+='<button class="btn" onclick="mvStep('+i+',1)" style="background:#446;color:#fff;padding:.2em .4em">\u25bc</button>';
+      h+=' <button class="btn btn-off" onclick="rmStep('+i+')" style="padding:.2em .5em">\u00d7</button></td>';
       h+='</tr>';
     });
     h+='</table></div>';
@@ -752,6 +755,7 @@ function addStep(){
 }
 
 function rmStep(i){_syncSteps();curRsteps.splice(i,1);renderSteps();}
+function mvStep(i,dir){_syncSteps();var j=i+dir;if(j<0||j>=curRsteps.length)return;var t=curRsteps[i];curRsteps[i]=curRsteps[j];curRsteps[j]=t;renderSteps();}
 
 function gv(id,def){var el=document.getElementById(id);if(!el)return def;var v=parseInt(el.value,10);return isNaN(v)?def:v;}
 
