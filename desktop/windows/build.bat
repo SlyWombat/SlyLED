@@ -54,10 +54,16 @@ echo.
 echo Executable: %WINDIR%dist\SlyLED.exe
 
 rem ── 6. Inno Setup (optional) ─────────────────────────────────────────────────
-where iscc >nul 2>&1
-if not errorlevel 1 (
+rem  Check PATH first, then the default winget user-install location
+set "ISCC="
+where iscc >nul 2>&1 && set "ISCC=iscc"
+if not defined ISCC (
+    set "_ISCC_DEFAULT=%LOCALAPPDATA%\Programs\Inno Setup 6\iscc.exe"
+    if exist "!_ISCC_DEFAULT!" set "ISCC=!_ISCC_DEFAULT!"
+)
+if defined ISCC (
     echo Building installer...
-    iscc "%WINDIR%installer.iss"
+    "!ISCC!" "%WINDIR%installer.iss"
     if errorlevel 1 (
         echo ERROR: Inno Setup failed.
         call "%WINDIR%.venv\Scripts\deactivate.bat" 2>nul
@@ -65,9 +71,8 @@ if not errorlevel 1 (
     )
     echo Installer: %WINDIR%dist\SlyLED-Parent-Setup.exe
 ) else (
-    echo NOTE: Inno Setup ^(iscc.exe^) not on PATH — skipping installer.
-    echo       Install from https://jrsoftware.org/isinfo.php
-    echo       Then re-run build.bat or run: iscc installer.iss
+    echo NOTE: Inno Setup ^(iscc.exe^) not found — skipping installer.
+    echo       Install via: winget install JRSoftware.InnoSetup
 )
 
 call "%WINDIR%.venv\Scripts\deactivate.bat" 2>nul

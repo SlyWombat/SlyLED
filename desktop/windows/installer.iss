@@ -27,7 +27,6 @@ OutputBaseFilename=SlyLED-Parent-Setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-MinVersion=10.0   ; Windows 10+
 
 DisableProgramGroupPage=yes
 
