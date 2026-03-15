@@ -863,6 +863,79 @@ if act_id is not None:
 else:
     skip("Actions CRUD checks", "create did not return id")
 
+section("Actions — all 9 types create + persist fields")
+_test_actions = [
+    {"name": "T-Blackout", "type": 0},
+    {"name": "T-Solid", "type": 1, "r": 255, "g": 128, "b": 64},
+    {"name": "T-Fade", "type": 2, "r": 255, "g": 0, "b": 0, "r2": 0, "g2": 0, "b2": 255, "speedMs": 2000},
+    {"name": "T-Breathe", "type": 3, "r": 0, "g": 255, "b": 0, "periodMs": 3000, "minBri": 10},
+    {"name": "T-Chase", "type": 4, "r": 255, "g": 255, "b": 0, "speedMs": 100, "spacing": 4, "direction": 1},
+    {"name": "T-Rainbow", "type": 5, "speedMs": 50, "paletteId": 2, "direction": 0},
+    {"name": "T-Fire", "type": 6, "r": 255, "g": 80, "b": 0, "speedMs": 15, "cooling": 55, "sparking": 120},
+    {"name": "T-Comet", "type": 7, "r": 0, "g": 200, "b": 255, "speedMs": 30, "tailLen": 8, "direction": 2, "decay": 75},
+    {"name": "T-Twinkle", "type": 8, "r": 255, "g": 255, "b": 255, "spawnMs": 60, "density": 5, "fadeSpeed": 20},
+]
+_test_act_ids = []
+for ta in _test_actions:
+    _, td = post_json("/api/actions", ta)
+    ok = td is not None and td.get("ok") is True
+    check(f"Create {ta['name']} (type {ta['type']})", ok, f"data={td}")
+    if ok:
+        _test_act_ids.append(td["id"])
+    else:
+        _test_act_ids.append(None)
+
+# Verify Fade second colour persisted
+if _test_act_ids[2] is not None:
+    _, fade = get_json(f"/api/actions/{_test_act_ids[2]}")
+    check("Fade r2 persisted", fade is not None and fade.get("r2") == 0, f"r2={fade.get('r2') if fade else None}")
+    check("Fade g2 persisted", fade is not None and fade.get("g2") == 0, f"g2={fade.get('g2') if fade else None}")
+    check("Fade b2 persisted", fade is not None and fade.get("b2") == 255, f"b2={fade.get('b2') if fade else None}")
+    check("Fade speedMs persisted", fade is not None and fade.get("speedMs") == 2000)
+
+# Verify Chase fields
+if _test_act_ids[4] is not None:
+    _, chase = get_json(f"/api/actions/{_test_act_ids[4]}")
+    check("Chase spacing persisted", chase is not None and chase.get("spacing") == 4)
+    check("Chase direction persisted", chase is not None and chase.get("direction") == 1)
+
+# Verify Rainbow palette
+if _test_act_ids[5] is not None:
+    _, rain = get_json(f"/api/actions/{_test_act_ids[5]}")
+    check("Rainbow paletteId persisted", rain is not None and rain.get("paletteId") == 2)
+
+# Verify Fire fields
+if _test_act_ids[6] is not None:
+    _, fire = get_json(f"/api/actions/{_test_act_ids[6]}")
+    check("Fire cooling persisted", fire is not None and fire.get("cooling") == 55)
+    check("Fire sparking persisted", fire is not None and fire.get("sparking") == 120)
+
+# Verify Comet fields
+if _test_act_ids[7] is not None:
+    _, comet = get_json(f"/api/actions/{_test_act_ids[7]}")
+    check("Comet tailLen persisted", comet is not None and comet.get("tailLen") == 8)
+    check("Comet decay persisted", comet is not None and comet.get("decay") == 75)
+
+# Verify Twinkle fields
+if _test_act_ids[8] is not None:
+    _, twink = get_json(f"/api/actions/{_test_act_ids[8]}")
+    check("Twinkle density persisted", twink is not None and twink.get("density") == 5)
+    check("Twinkle fadeSpeed persisted", twink is not None and twink.get("fadeSpeed") == 20)
+
+# Verify PUT preserves new fields (Fade second colour update)
+if _test_act_ids[2] is not None:
+    pu_code, pu_data = put_json(f"/api/actions/{_test_act_ids[2]}",
+                                {"r2": 128, "g2": 64, "b2": 32})
+    check("PUT Fade second colour ok", pu_data is not None and pu_data.get("ok") is True)
+    _, fade2 = get_json(f"/api/actions/{_test_act_ids[2]}")
+    check("Fade r2 updated after PUT", fade2 is not None and fade2.get("r2") == 128)
+    check("Fade b2 updated after PUT", fade2 is not None and fade2.get("b2") == 32)
+
+# Cleanup all test actions
+for aid in _test_act_ids:
+    if aid is not None:
+        delete(f"/api/actions/{aid}")
+
 section("Actions API — validation")
 code, data = post_json("/api/actions", {"name": "", "type": 1})
 check("Empty name → 400", code == 400, f"got {code}")

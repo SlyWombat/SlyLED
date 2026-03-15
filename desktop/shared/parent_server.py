@@ -443,6 +443,15 @@ def api_action_stop():
 def api_actions():
     return jsonify(_actions)
 
+_ACTION_FIELDS = ("name", "type", "r", "g", "b",
+                  "r2", "g2", "b2",           # Fade second colour
+                  "speedMs", "periodMs", "spawnMs",  # timing
+                  "minBri", "spacing", "paletteId",  # Breathe/Chase/Rainbow
+                  "cooling", "sparking",              # Fire
+                  "direction", "tailLen", "density",  # Chase/Comet/Twinkle
+                  "decay", "fadeSpeed",               # Comet/Twinkle
+                  "onMs", "offMs", "wipeDir", "wipeSpeedPct")  # legacy compat
+
 @app.post("/api/actions")
 def api_actions_create():
     global _nxt_a
@@ -453,11 +462,12 @@ def api_actions_create():
     with _lock:
         if len(_actions) >= MAX_ACTIONS:
             return jsonify(ok=False, err="max actions reached"), 400
-        a = {"id": _nxt_a, "name": name,
-             "type": body.get("type", 1),
-             "r": body.get("r", 255), "g": body.get("g", 0), "b": body.get("b", 0),
-             "onMs": body.get("onMs", 500), "offMs": body.get("offMs", 500),
-             "wipeDir": body.get("wipeDir", 0), "wipeSpeedPct": body.get("wipeSpeedPct", 50)}
+        a = {"id": _nxt_a}
+        for k in _ACTION_FIELDS:
+            if k in body:
+                a[k] = body[k]
+        a.setdefault("name", name)
+        a.setdefault("type", 1)
         _actions.append(a)
         _nxt_a += 1
         _save("actions", _actions)
@@ -477,7 +487,7 @@ def api_action_put(aid):
         return jsonify(ok=False, err="not found"), 404
     body = request.get_json(silent=True) or {}
     with _lock:
-        for k in ("name", "type", "r", "g", "b", "onMs", "offMs", "wipeDir", "wipeSpeedPct"):
+        for k in _ACTION_FIELDS:
             if k in body:
                 a[k] = body[k]
         _save("actions", _actions)

@@ -90,7 +90,7 @@ body.light .li:hover{border-color:#888}
         ondragover='event.preventDefault()' ondrop='cvDrop(event)'
         ondblclick='cvDbl(event)'></canvas>
       <div style='margin-top:.6em'>
-        <button class='btn btn-on' onclick='saveLayout()'>Save Layout</button>
+        <button class='btn btn-on' id='btn-lay-save' onclick='saveLayout(this)'>Save Layout</button>
       </div>
     </div>
     <div style='width:180px;flex-shrink:0'>
@@ -126,7 +126,7 @@ body.light .li:hover{border-color:#888}
     <div id='re-steps'></div>
     <div style='margin-top:.8em'>
       <button class='btn btn-on' onclick='addStep()'>+ Add Step</button>
-      <button class='btn btn-on' onclick='saveRunner()' style='margin-left:.5em'>Save Runner</button>
+      <button class='btn btn-on' onclick='saveRunner(this)' style='margin-left:.5em'>Save Runner</button>
     </div>
   </div>
 </div>
@@ -146,7 +146,7 @@ body.light .li:hover{border-color:#888}
       <input type='checkbox' id='s-dm'> Dark Mode
     </label>
     <div style='margin-top:1em'>
-      <button class='btn btn-on' onclick='saveSettings()'>Save Settings</button>
+      <button class='btn btn-on' onclick='saveSettings(this)'>Save Settings</button>
     </div>
   </div>
   <div class='card' style='max-width:480px;border-color:#622'>
@@ -191,6 +191,9 @@ function showTab(t){
   else if(t==='runtime')loadRuntime();
   else if(t==='settings')loadSettings();
 }
+
+function _btnSaving(btn){if(!btn)return;btn.dataset.orig=btn.textContent;btn.textContent='Saving...';btn.disabled=true;btn.style.background='#555';}
+function _btnSaved(btn,ok){if(!btn)return;btn.textContent=ok?'Saved!':'Error';btn.style.background=ok?'#2a2':'#a22';setTimeout(function(){btn.textContent=btn.dataset.orig||'Save';btn.style.background='';btn.disabled=false;},1200);}
 
 function ra(m,p,b,cb){
   var x=new XMLHttpRequest();
@@ -529,16 +532,14 @@ function drawLayout(){
   });
 }
 
-function saveLayout(){
+function saveLayout(btn){
   if(!ld||!ld.children)return;
+  _btnSaving(btn);
   var toSave=ld.children.filter(_isPlaced);
   ra('POST','/api/layout',{children:toSave.map(function(c){return{id:c.id,x:c.x,y:c.y};})},
     function(r){
-      if(r&&r.ok){
-        document.getElementById('hs').textContent='Layout saved';
-        toSave.forEach(function(c){c.positioned=true;c._placed=false;});
-        renderSidebar();
-      }
+      _btnSaved(btn,r&&r.ok);
+      if(r&&r.ok){toSave.forEach(function(c){c.positioned=true;c._placed=false;});renderSidebar();}
     });
 }
 
@@ -659,7 +660,7 @@ function _showActModal(a){
   h+=' <label style="display:inline;margin-left:.5em">Density</label><input type="number" id="ae-tden" value="'+(a?a.density||3:3)+'" min="1" max="20" style="width:50px">';
   h+=' <label style="display:inline;margin-left:.5em">Fade Speed</label><input type="number" id="ae-tfad" value="'+(a?a.fadeSpeed||15:15)+'" min="1" max="100" style="width:50px">';
   h+='</div>';
-  h+='<div style="margin-top:1em"><button class="btn btn-on" onclick="_aeSubmit('+(isNew?-1:a.id)+')">Save Action</button></div>';
+  h+='<div style="margin-top:1em"><button class="btn btn-on" id="ae-save" onclick="_aeSubmit('+(isNew?-1:a.id)+',this)">Save Action</button></div>';
   document.getElementById('modal-title').textContent=isNew?'New Action':'Edit Action';
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
@@ -677,7 +678,7 @@ function _aeTypeChg(){
   document.getElementById('ae-twinkle').style.display=t===8?'block':'none';
 }
 
-function _aeSubmit(id){
+function _aeSubmit(id,btn){
   var nm=document.getElementById('ae-nm').value.trim();if(!nm){alert('Name required');return;}
   var t=parseInt(document.getElementById('ae-tp').value)||0;
   var col=t>0&&t!==5?h2r(document.getElementById('ae-cl').value):{r:0,g:0,b:0};
@@ -689,10 +690,12 @@ function _aeSubmit(id){
   if(t===6){body.speedMs=parseInt(document.getElementById('ae-fspd').value)||15;body.cooling=parseInt(document.getElementById('ae-cool').value)||55;body.sparking=parseInt(document.getElementById('ae-spark').value)||120;}
   if(t===7){body.speedMs=parseInt(document.getElementById('ae-mspd').value)||30;body.tailLen=parseInt(document.getElementById('ae-tail').value)||10;body.decay=parseInt(document.getElementById('ae-dec').value)||80;body.direction=parseInt(document.getElementById('ae-mdir').value)||0;}
   if(t===8){body.spawnMs=parseInt(document.getElementById('ae-tspn').value)||50;body.density=parseInt(document.getElementById('ae-tden').value)||3;body.fadeSpeed=parseInt(document.getElementById('ae-tfad').value)||15;}
+  _btnSaving(btn);
   var method=id<0?'POST':'PUT';
   var url=id<0?'/api/actions':'/api/actions/'+id;
   ra(method,url,body,function(r){
-    if(r&&r.ok){closeModal();loadActions();document.getElementById('hs').textContent='Action saved';}
+    _btnSaved(btn,r&&r.ok);
+    if(r&&r.ok){setTimeout(function(){closeModal();loadActions();},800);}
   });
 }
 
@@ -839,8 +842,9 @@ function mvStep(i,dir){_syncSteps();var j=i+dir;if(j<0||j>=curRsteps.length)retu
 
 function gv(id,def){var el=document.getElementById(id);if(!el)return def;var v=parseInt(el.value,10);return isNaN(v)?def:v;}
 
-function saveRunner(){
+function saveRunner(btn){
   if(curRid<0){document.getElementById('hs').textContent='No runner selected';return;}
+  _btnSaving(btn);
   _syncSteps();
   var steps=[];
   for(var i=0;i<curRsteps.length;i++){
@@ -850,14 +854,9 @@ function saveRunner(){
       y1:curRsteps[i].y1!=null?curRsteps[i].y1:10000,
       durationS:curRsteps[i].durationS||5});
   }
-  document.getElementById('hs').textContent='Saving...';
   ra('PUT','/api/runners/'+curRid,{name:curRname,steps:steps},function(r){
-    if(r&&r.ok){
-      document.getElementById('hs').textContent='Runner "'+curRname+'" saved ('+steps.length+' steps)';
-      backToRunners();loadRuntime();
-    }else{
-      document.getElementById('hs').textContent='Save failed: '+(r&&r.err||'unknown error');
-    }
+    _btnSaved(btn,r&&r.ok);
+    if(r&&r.ok){setTimeout(function(){backToRunners();loadRuntime();},1000);}
   });
 }
 
@@ -1016,7 +1015,8 @@ function shutdownService(){
   x.send('{}');
 }
 
-function saveSettings(){
+function saveSettings(btn){
+  _btnSaving(btn);
   var dm=document.getElementById('s-dm').checked?1:0;
   applyDarkMode(dm);
   ra('POST','/api/settings',{
@@ -1025,7 +1025,7 @@ function saveSettings(){
     canvasW:parseInt(document.getElementById('s-cw').value)||10000,
     canvasH:parseInt(document.getElementById('s-ch').value)||5000,
     darkMode:dm
-  },function(r){if(r&&r.ok)document.getElementById('hs').textContent='Settings saved';});
+  },function(r){_btnSaved(btn,r&&r.ok);});
 }
 
 // Init
