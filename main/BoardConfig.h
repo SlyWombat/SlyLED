@@ -49,10 +49,15 @@
 
 #ifdef BOARD_FASTLED
   #define DATA_PIN      2
-  #define NUM_LEDS      8
   #define LED_TYPE      WS2812B
   #define COLOR_ORDER   GRB
   constexpr uint8_t LED_BRIGHTNESS = 200;
+  #ifdef BOARD_ESP32
+    #define MAX_LEDS    255       // max per string — 765 bytes CRGB
+  #else
+    #define MAX_LEDS    150       // D1 Mini — 450 bytes, fits in 80K RAM
+  #endif
+  #define NUM_LEDS MAX_LEDS       // FastLED array size (runtime count from EEPROM)
 #endif
 
 #endif  // BOARDCONFIG_H
