@@ -455,13 +455,20 @@ void handlePostChildConfig(WiFiClient& c, int contentLen) {
   }
 
   saveChildConfig();
-  sendPong(IPAddress(255, 255, 255, 255));  // notify parent of updated config
 
+  // Send 303 redirect BEFORE the broadcast PONG — the PONG triggers a
+  // UDP send that can stall on the D1 Mini, causing the browser to
+  // timeout waiting for the HTTP response.
   c.print(F("HTTP/1.1 303 See Other\r\n"
             "Location: /config\r\n"
             "Content-Length: 0\r\n"
             "Connection: close\r\n\r\n"));
   c.flush();
+  // Give the browser time to read the response before closing
+  delay(50);
+  c.stop();
+
+  sendPong(IPAddress(255, 255, 255, 255));  // notify parent of updated config
 }
 
 #endif  // BOARD_FASTLED
