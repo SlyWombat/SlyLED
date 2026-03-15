@@ -1,13 +1,13 @@
-# SlyLED Architecture — v3.0
+# SlyLED Architecture — v3.6
 
 ## Overview
 
-SlyLED is a multi-board LED controller. One **parent** board (Arduino Giga R1 WiFi) serves a browser UI and coordinates timing; one or more **child** boards (ESP32 / D1 Mini) own the physical LED strips and execute actions locally.
+SlyLED is a multi-board LED controller. One **parent** (Windows app or Giga R1 WiFi) serves a browser UI and coordinates timing; one or more **child** boards (ESP32 / D1 Mini) own the physical LED strips and execute actions locally.
 
-All three boards share a single sketch (`main/main.ino`) gated by preprocessor guards:
+The child boards share a single sketch (`main/main.ino`) gated by preprocessor guards:
 
 ```cpp
-#ifdef BOARD_GIGA    // parent — Giga R1 WiFi
+#ifdef BOARD_GIGA    // parent runtime — Giga R1 WiFi (future)
 #ifdef BOARD_ESP32   // child  — ESP32 (QuinLED)
 #ifdef BOARD_D1MINI  // child  — ESP8266 D1 Mini
 #ifdef BOARD_FASTLED // child  — either ESP32 or D1 Mini
@@ -15,11 +15,12 @@ All three boards share a single sketch (`main/main.ino`) gated by preprocessor g
 
 ---
 
-## Board roles
+## Board / process roles
 
-| Board | Role | LEDs |
-|-------|------|------|
-| Arduino Giga R1 WiFi (STM32H747) | **Parent** — serves SPA, manages children, computes runners, dispatches UDP | None |
+| Target | Role | LEDs |
+|--------|------|------|
+| **Windows (SlyLED.exe)** | **Primary Parent** — Flask app + tray icon; serves SPA on :8080, manages children, computes runners, dispatches UDP | None |
+| Arduino Giga R1 WiFi (STM32H747) | **Runtime Parent** *(future)* — minimal SPA for start/stop once layout is designed | None |
 | ESP32 (QuinLED Quad / Uno) | **Child** — executes LED actions, FreeRTOS task on Core 0 | Up to 4× WS2812B on GPIO 2 |
 | ESP8266 D1 Mini (LOLIN/WEMOS) | **Child** — same but single-threaded non-blocking loop | Up to 4× WS2812B on GPIO 2 |
 
@@ -27,7 +28,23 @@ All three boards share a single sketch (`main/main.ino`) gated by preprocessor g
 
 ## Threading model
 
-### Giga (parent)
+### Windows Parent (SlyLED.exe)
+
+Two threads:
+
+```
+Main thread — pystray icon.run()
+  └── tray menu (Open / Quit)
+
+Daemon thread — Flask app.run()
+  └── HTTP :8080 (threaded=True)
+        └── REST API handlers
+        └── UDP send helpers (inline, no background thread)
+```
+
+UDP discovery and dispatch happen synchronously inside API request handlers. `CMD_STATUS_REQ` polls for up to 300 ms inside the `/api/children/:id/status` handler.
+
+### Giga (parent runtime — future)
 
 Single `loop()` thread. No LED code at all.
 
@@ -74,8 +91,8 @@ All packets: `UdpHeader (8 bytes) + payload`. Magic `0x534C`, version `2`.
 | Command | Hex | Direction | Payload |
 |---------|-----|-----------|---------|
 | CMD_PING | 0x01 | parent → broadcast | none |
-| CMD_PONG | 0x02 | child → parent | `PongPayload` (95 B) — hostname, altName, desc, string configs |
-| CMD_ACTION | 0x10 | parent → child | `ActionPayload` (18 B) |
+| CMD_PONG | 0x02 | child → parent | `PongPayload` (131 B) — hostname[10], altName[16], desc[32], stringCount(1), PongString[8]×9 |
+| CMD_ACTION | 0x10 | parent → child | `ActionPayload` (26 B) — type, r/g/b, onMs, offMs, wDir, wSpd, ledStart[8], ledEnd[8] |
 | CMD_ACTION_STOP | 0x11 | parent → child | none |
 | CMD_LOAD_STEP | 0x20 | parent → child | `LoadStepPayload` (22 B) |
 | CMD_LOAD_ACK | 0x21 | child → parent | 1 byte (step index) |
@@ -244,7 +261,7 @@ Dark mode: `body#app` CSS class `light` toggled by `applyDarkMode()`. Persisted 
 
 ---
 
-## Flash usage (v3.0)
+## Flash usage (v3.6)
 
 | Board | Flash | RAM |
 |-------|-------|-----|
