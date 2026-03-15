@@ -1,4 +1,4 @@
-# SlyLED Architecture — v3.6
+# SlyLED Architecture — v4.0
 
 ## Overview
 
@@ -184,14 +184,21 @@ Runner priority in LED task: **runner active > immediate action > idle black**
 
 ---
 
-## Action types
+## Action types (v4.0)
 
 ```cpp
-ACT_OFF   = 0   // turn off (black)
-ACT_SOLID = 1   // solid colour
-ACT_FLASH = 2   // on/off blink with configurable onMs / offMs
-ACT_WIPE  = 3   // leading-edge wipe across the string range
+ACT_BLACKOUT = 0   // all LEDs off
+ACT_SOLID    = 1   // solid colour
+ACT_FADE     = 2   // linear fade between two colours
+ACT_BREATHE  = 3   // single colour brightness sine wave
+ACT_CHASE    = 4   // theater chase (every Nth pixel lit, shifts)
+ACT_RAINBOW  = 5   // HSV rainbow cycle (8 palettes: Classic/Ocean/Lava/Forest/Party/Heat/Cool/Pastel)
+ACT_FIRE     = 6   // fire / Perlin noise (cooling + sparking params)
+ACT_COMET    = 7   // shooting comet with fading tail
+ACT_TWINKLE  = 8   // random sparkle + fade
 ```
+
+ActionPayload uses generic parameter fields (p16a, p8a-p8d) reinterpreted per type — see Protocol.h comments for the per-type mapping.
 
 Wipe direction: `DIR_E=0 (+X)`, `DIR_N=1 (+Y)`, `DIR_W=2 (-X)`, `DIR_S=3 (-Y)`.
 

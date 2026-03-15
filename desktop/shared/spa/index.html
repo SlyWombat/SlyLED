@@ -171,7 +171,7 @@ body.light .li:hover{border-color:#888}
   </div>
 </div>
 
-<div class='footer' id='fv'>SlyLED v3.6 &mdash; Windows Parent</div>
+<div class='footer' id='fv'>SlyLED v4.0 &mdash; Windows Parent</div>
 
 <script>
 var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0,units=0,_cvW=900,_cvH=450;
@@ -569,8 +569,9 @@ function cvUp(){drag=null;}
 
 // ── Actions library ──────────────────────────────────────────────────────────
 var _acts=[];
-var _typeNames=['Off','Solid','Flash','Wipe'];
+var _typeNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle'];
 var _dirNames=['East','North','West','South'];
+var _palNames=['Classic','Ocean','Lava','Forest','Party','Heat','Cool','Pastel'];
 function rgb2h(r,g,b){return'#'+('0'+r.toString(16)).slice(-2)+('0'+g.toString(16)).slice(-2)+('0'+b.toString(16)).slice(-2);}
 function h2r(h){return{r:parseInt(h.slice(1,3),16),g:parseInt(h.slice(3,5),16),b:parseInt(h.slice(5,7),16)};}
 
@@ -583,8 +584,13 @@ function loadActions(){
     _acts.forEach(function(a){
       var col=a.type>0?rgb2h(a.r||0,a.g||0,a.b||0):'#000';
       var det='';
-      if(a.type===2)det='On:'+a.onMs+'ms Off:'+a.offMs+'ms';
-      if(a.type===3)det=(_dirNames[a.wipeDir]||'?')+' '+a.wipeSpeedPct+'%';
+      if(a.type===2)det=(a.speedMs||1000)+'ms → '+rgb2h(a.r2||0,a.g2||0,a.b2||0);
+      if(a.type===3)det='Period:'+(a.periodMs||2000)+'ms Min:'+(a.minBri||0)+'%';
+      if(a.type===4)det=(_dirNames[a.direction]||'E')+' spd:'+(a.speedMs||100)+'ms gap:'+(a.spacing||3);
+      if(a.type===5)det=(_palNames[a.paletteId]||'Classic')+' '+(a.speedMs||50)+'ms';
+      if(a.type===6)det='Cool:'+(a.cooling||55)+' Spark:'+(a.sparking||120);
+      if(a.type===7)det=(_dirNames[a.direction]||'E')+' tail:'+(a.tailLen||10)+' '+(a.speedMs||30)+'ms';
+      if(a.type===8)det='Den:'+(a.density||3)+' Fade:'+(a.fadeSpeed||15);
       h+='<tr><td><b>'+a.name+'</b></td><td>'+(_typeNames[a.type]||a.type)+'</td>';
       h+='<td><span style="display:inline-block;width:24px;height:16px;border-radius:3px;background:'+col+';border:1px solid #555;vertical-align:middle"></span> '+col+'</td>';
       h+='<td style="font-size:.82em;color:#888">'+det+'</td>';
@@ -600,20 +606,58 @@ function editAction(id){var a=null;_acts.forEach(function(x){if(x.id===id)a=x;})
 
 function _showActModal(a){
   var isNew=!a;
-  var h='<label>Name</label><input id="ae-nm" value="'+(a?a.name:'')+'" style="width:200px" placeholder="e.g. Red Wipe">';
+  var t=a?a.type:1;
+  var h='<label>Name</label><input id="ae-nm" value="'+(a?a.name:'')+'" style="width:240px" placeholder="e.g. Red Wipe">';
   h+='<label>Type</label><select id="ae-tp" onchange="_aeTypeChg()">';
-  for(var i=0;i<4;i++)h+='<option value="'+i+'"'+(a&&a.type===i?' selected':'')+'>'+_typeNames[i]+'</option>';
+  for(var i=0;i<9;i++)h+='<option value="'+i+'"'+(t===i?' selected':'')+'>'+_typeNames[i]+'</option>';
   h+='</select>';
-  h+='<div id="ae-cr"'+((!a||a.type===0)?' style="display:none"':'')+'><label>Colour</label><input type="color" id="ae-cl" value="'+(a&&a.type>0?rgb2h(a.r,a.g,a.b):'#ff0000')+'"></div>';
-  h+='<div id="ae-fr"'+((a&&a.type===2)?'':' style="display:none"')+'>';
-  h+='<label>On (ms)</label><input type="number" id="ae-on" value="'+(a?a.onMs:500)+'" min="50" max="9999" style="width:80px">';
-  h+=' <label style="display:inline;margin-left:.5em">Off (ms)</label><input type="number" id="ae-of" value="'+(a?a.offMs:500)+'" min="50" max="9999" style="width:80px">';
+  // Colour picker (all types except Blackout and Rainbow)
+  h+='<div id="ae-cr"'+(t===0||t===5?' style="display:none"':'')+'><label>Colour</label><input type="color" id="ae-cl" value="'+(a&&t>0?rgb2h(a.r||0,a.g||0,a.b||0):'#ff0000')+'"></div>';
+  // Fade: second colour
+  h+='<div id="ae-fade"'+(t===2?'':' style="display:none"')+'>';
+  h+='<label>Colour 2</label><input type="color" id="ae-c2" value="'+(a?rgb2h(a.r2||0,a.g2||0,a.b2||0):'#0000ff')+'">';
+  h+='<label>Speed (ms)</label><input type="number" id="ae-spd" value="'+(a?a.speedMs||1000:1000)+'" min="100" max="30000" style="width:80px">';
   h+='</div>';
-  h+='<div id="ae-wr"'+((a&&a.type===3)?'':' style="display:none"')+'>';
-  h+='<label>Direction</label><select id="ae-wd">';
-  for(var d=0;d<4;d++)h+='<option value="'+d+'"'+(a&&a.wipeDir===d?' selected':'')+'>'+_dirNames[d]+'</option>';
+  // Breathe: period + min brightness
+  h+='<div id="ae-breathe"'+(t===3?'':' style="display:none"')+'>';
+  h+='<label>Period (ms)</label><input type="number" id="ae-per" value="'+(a?a.periodMs||2000:2000)+'" min="200" max="30000" style="width:80px">';
+  h+=' <label style="display:inline;margin-left:.5em">Min Brightness %</label><input type="number" id="ae-mbr" value="'+(a?a.minBri||0:0)+'" min="0" max="100" style="width:50px">';
+  h+='</div>';
+  // Chase: speed + spacing + direction
+  h+='<div id="ae-chase"'+(t===4?'':' style="display:none"')+'>';
+  h+='<label>Speed (ms per shift)</label><input type="number" id="ae-cspd" value="'+(a?a.speedMs||100:100)+'" min="10" max="5000" style="width:80px">';
+  h+=' <label style="display:inline;margin-left:.5em">Spacing</label><input type="number" id="ae-cspc" value="'+(a?a.spacing||3:3)+'" min="2" max="20" style="width:50px">';
+  h+='<label>Direction</label><select id="ae-cdir">';
+  for(var d=0;d<4;d++)h+='<option value="'+d+'"'+(a&&a.direction===d?' selected':'')+'>'+_dirNames[d]+'</option>';
+  h+='</select></div>';
+  // Rainbow: speed + palette + direction
+  h+='<div id="ae-rainbow"'+(t===5?'':' style="display:none"')+'>';
+  h+='<label>Speed (ms)</label><input type="number" id="ae-rspd" value="'+(a?a.speedMs||50:50)+'" min="1" max="5000" style="width:80px">';
+  h+='<label>Palette</label><select id="ae-pal">';
+  for(var p=0;p<8;p++)h+='<option value="'+p+'"'+(a&&a.paletteId===p?' selected':'')+'>'+_palNames[p]+'</option>';
   h+='</select>';
-  h+=' <label style="display:inline;margin-left:.5em">Speed %</label><input type="number" id="ae-ws" value="'+(a?a.wipeSpeedPct:50)+'" min="1" max="100" style="width:60px">';
+  h+='<label>Direction</label><select id="ae-rdir">';
+  for(var d=0;d<4;d++)h+='<option value="'+d+'"'+(a&&a.direction===d?' selected':'')+'>'+_dirNames[d]+'</option>';
+  h+='</select></div>';
+  // Fire: speed + cooling + sparking
+  h+='<div id="ae-fire"'+(t===6?'':' style="display:none"')+'>';
+  h+='<label>Speed (ms)</label><input type="number" id="ae-fspd" value="'+(a?a.speedMs||15:15)+'" min="1" max="1000" style="width:60px">';
+  h+=' <label style="display:inline;margin-left:.5em">Cooling</label><input type="number" id="ae-cool" value="'+(a?a.cooling||55:55)+'" min="1" max="255" style="width:50px">';
+  h+=' <label style="display:inline;margin-left:.5em">Sparking</label><input type="number" id="ae-spark" value="'+(a?a.sparking||120:120)+'" min="1" max="255" style="width:50px">';
+  h+='</div>';
+  // Comet: speed + tail + direction + decay
+  h+='<div id="ae-comet"'+(t===7?'':' style="display:none"')+'>';
+  h+='<label>Speed (ms)</label><input type="number" id="ae-mspd" value="'+(a?a.speedMs||30:30)+'" min="1" max="5000" style="width:60px">';
+  h+=' <label style="display:inline;margin-left:.5em">Tail</label><input type="number" id="ae-tail" value="'+(a?a.tailLen||10:10)+'" min="1" max="50" style="width:50px">';
+  h+=' <label style="display:inline;margin-left:.5em">Decay %</label><input type="number" id="ae-dec" value="'+(a?a.decay||80:80)+'" min="1" max="99" style="width:50px">';
+  h+='<label>Direction</label><select id="ae-mdir">';
+  for(var d=0;d<4;d++)h+='<option value="'+d+'"'+(a&&a.direction===d?' selected':'')+'>'+_dirNames[d]+'</option>';
+  h+='</select></div>';
+  // Twinkle: spawn + density + fade
+  h+='<div id="ae-twinkle"'+(t===8?'':' style="display:none"')+'>';
+  h+='<label>Spawn (ms)</label><input type="number" id="ae-tspn" value="'+(a?a.spawnMs||50:50)+'" min="1" max="5000" style="width:60px">';
+  h+=' <label style="display:inline;margin-left:.5em">Density</label><input type="number" id="ae-tden" value="'+(a?a.density||3:3)+'" min="1" max="20" style="width:50px">';
+  h+=' <label style="display:inline;margin-left:.5em">Fade Speed</label><input type="number" id="ae-tfad" value="'+(a?a.fadeSpeed||15:15)+'" min="1" max="100" style="width:50px">';
   h+='</div>';
   h+='<div style="margin-top:1em"><button class="btn btn-on" onclick="_aeSubmit('+(isNew?-1:a.id)+')">Save Action</button></div>';
   document.getElementById('modal-title').textContent=isNew?'New Action':'Edit Action';
@@ -623,20 +667,28 @@ function _showActModal(a){
 
 function _aeTypeChg(){
   var t=parseInt(document.getElementById('ae-tp').value);
-  document.getElementById('ae-cr').style.display=t===0?'none':'block';
-  document.getElementById('ae-fr').style.display=t===2?'block':'none';
-  document.getElementById('ae-wr').style.display=t===3?'block':'none';
+  document.getElementById('ae-cr').style.display=(t===0||t===5)?'none':'block';
+  document.getElementById('ae-fade').style.display=t===2?'block':'none';
+  document.getElementById('ae-breathe').style.display=t===3?'block':'none';
+  document.getElementById('ae-chase').style.display=t===4?'block':'none';
+  document.getElementById('ae-rainbow').style.display=t===5?'block':'none';
+  document.getElementById('ae-fire').style.display=t===6?'block':'none';
+  document.getElementById('ae-comet').style.display=t===7?'block':'none';
+  document.getElementById('ae-twinkle').style.display=t===8?'block':'none';
 }
 
 function _aeSubmit(id){
   var nm=document.getElementById('ae-nm').value.trim();if(!nm){alert('Name required');return;}
   var t=parseInt(document.getElementById('ae-tp').value)||0;
-  var col=t>0?h2r(document.getElementById('ae-cl').value):{r:0,g:0,b:0};
-  var body={name:nm,type:t,r:col.r,g:col.g,b:col.b,
-    onMs:parseInt(document.getElementById('ae-on').value)||500,
-    offMs:parseInt(document.getElementById('ae-of').value)||500,
-    wipeDir:parseInt(document.getElementById('ae-wd').value)||0,
-    wipeSpeedPct:parseInt(document.getElementById('ae-ws').value)||50};
+  var col=t>0&&t!==5?h2r(document.getElementById('ae-cl').value):{r:0,g:0,b:0};
+  var body={name:nm,type:t,r:col.r,g:col.g,b:col.b};
+  if(t===2){var c2=h2r(document.getElementById('ae-c2').value);body.r2=c2.r;body.g2=c2.g;body.b2=c2.b;body.speedMs=parseInt(document.getElementById('ae-spd').value)||1000;}
+  if(t===3){body.periodMs=parseInt(document.getElementById('ae-per').value)||2000;body.minBri=parseInt(document.getElementById('ae-mbr').value)||0;}
+  if(t===4){body.speedMs=parseInt(document.getElementById('ae-cspd').value)||100;body.spacing=parseInt(document.getElementById('ae-cspc').value)||3;body.direction=parseInt(document.getElementById('ae-cdir').value)||0;}
+  if(t===5){body.speedMs=parseInt(document.getElementById('ae-rspd').value)||50;body.paletteId=parseInt(document.getElementById('ae-pal').value)||0;body.direction=parseInt(document.getElementById('ae-rdir').value)||0;}
+  if(t===6){body.speedMs=parseInt(document.getElementById('ae-fspd').value)||15;body.cooling=parseInt(document.getElementById('ae-cool').value)||55;body.sparking=parseInt(document.getElementById('ae-spark').value)||120;}
+  if(t===7){body.speedMs=parseInt(document.getElementById('ae-mspd').value)||30;body.tailLen=parseInt(document.getElementById('ae-tail').value)||10;body.decay=parseInt(document.getElementById('ae-dec').value)||80;body.direction=parseInt(document.getElementById('ae-mdir').value)||0;}
+  if(t===8){body.spawnMs=parseInt(document.getElementById('ae-tspn').value)||50;body.density=parseInt(document.getElementById('ae-tden').value)||3;body.fadeSpeed=parseInt(document.getElementById('ae-tfad').value)||15;}
   var method=id<0?'POST':'PUT';
   var url=id<0?'/api/actions':'/api/actions/'+id;
   ra(method,url,body,function(r){

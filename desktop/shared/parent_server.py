@@ -27,12 +27,12 @@ from flask import Flask, abort, jsonify, request, send_from_directory
 
 # ── Version ───────────────────────────────────────────────────────────────────
 
-VERSION = "3.6"
+VERSION = "4.0"
 
 # ── UDP protocol ──────────────────────────────────────────────────────────────
 
 UDP_MAGIC   = 0x534C
-UDP_VERSION = 2
+UDP_VERSION = 3
 UDP_PORT    = 4210
 
 CMD_PING        = 0x01
@@ -242,22 +242,29 @@ def _child_led_ranges(child):
             le[j] = min(leds - 1, 254)   # clamp to uint8, 0xFF=unused sentinel
     return bytes(ls), bytes(le)
 
-def _action_pkt(act, child):
-    t   = act.get("type", 0)
+def _act_params(act):
+    """Extract generic param fields from an action dict."""
+    t = act.get("type", 0)
     r, g, b = act.get("r", 0), act.get("g", 0), act.get("b", 0)
-    on, off  = act.get("onMs", 500), act.get("offMs", 500)
-    wd, ws   = act.get("wipeDir", 0), act.get("wipeSpeedPct", 50)
+    p16a = act.get("speedMs", act.get("periodMs", act.get("spawnMs", 500)))
+    p8a = act.get("p8a", act.get("r2", act.get("minBri", act.get("spacing",
+           act.get("paletteId", act.get("cooling", act.get("tailLen",
+           act.get("density", 0))))))))
+    p8b = act.get("p8b", act.get("g2", act.get("sparking", 0)))
+    p8c = act.get("p8c", act.get("b2", act.get("direction", 0)))
+    p8d = act.get("p8d", act.get("decay", act.get("fadeSpeed", 0)))
+    return t, r, g, b, p16a, p8a, p8b, p8c, p8d
+
+def _action_pkt(act, child):
+    t, r, g, b, p16a, p8a, p8b, p8c, p8d = _act_params(act)
     ls, le = _child_led_ranges(child)
-    return _hdr(CMD_ACTION) + struct.pack("<BBBBHHBB", t, r, g, b, on, off, wd, ws) + ls + le
+    return _hdr(CMD_ACTION) + struct.pack("<BBBBHBBBB", t, r, g, b, p16a, p8a, p8b, p8c, p8d) + ls + le
 
 def _load_step_pkt(idx, total, step, child):
-    t    = step.get("type", 1)
-    r, g, b = step.get("r", 255), step.get("g", 0), step.get("b", 0)
-    on, off  = step.get("onMs", 500), step.get("offMs", 500)
-    wd, ws   = step.get("wdir", 0), step.get("wspd", 50)
-    dur      = step.get("durationS", 5)
+    t, r, g, b, p16a, p8a, p8b, p8c, p8d = _act_params(step)
+    dur = step.get("durationS", 5)
     ls, le = _child_led_ranges(child)
-    pl = struct.pack("<BBBBBBHHBBH", idx, total, t, r, g, b, on, off, wd, ws, dur)
+    pl = struct.pack("<BBBBBBHBBBBH", idx, total, t, r, g, b, p16a, p8a, p8b, p8c, p8d, dur)
     return _hdr(CMD_LOAD_STEP) + pl + ls + le
 
 # ── Flask application ─────────────────────────────────────────────────────────
@@ -574,9 +581,16 @@ def _resolve_step(step):
         act = next((a for a in _actions if a["id"] == step["actionId"]), None)
         if not act:
             return None
-        return {**step, "type": act["type"], "r": act["r"], "g": act["g"], "b": act["b"],
-                "onMs": act["onMs"], "offMs": act["offMs"],
-                "wdir": act.get("wipeDir", 0), "wspd": act.get("wipeSpeedPct", 50)}
+        # Merge all action fields into the step (step's area/duration preserved)
+        merged = dict(step)
+        for k in ("type", "r", "g", "b", "speedMs", "periodMs", "spawnMs",
+                  "p8a", "p8b", "p8c", "p8d", "r2", "g2", "b2", "minBri",
+                  "spacing", "paletteId", "cooling", "sparking", "direction",
+                  "tailLen", "density", "decay", "fadeSpeed",
+                  "onMs", "offMs", "wipeDir", "wipeSpeedPct"):
+            if k in act:
+                merged[k] = act[k]
+        return merged
     return step  # legacy inline format
 
 @app.post("/api/runners/<int:rid>/sync")

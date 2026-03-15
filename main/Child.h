@@ -53,8 +53,8 @@ struct ChildSelfConfig {
 
 struct ChildRunnerStep {
   uint8_t  actionType, r, g, b;
-  uint16_t onMs, offMs;
-  uint8_t  wipeDir, wipeSpeedPct;
+  uint16_t p16a;
+  uint8_t  p8a, p8b, p8c, p8d;
   uint16_t durationS;
   uint8_t  ledStart[MAX_STR_PER_CHILD];
   uint8_t  ledEnd[MAX_STR_PER_CHILD];
@@ -73,13 +73,15 @@ extern volatile uint8_t  childActType;
 extern volatile uint8_t  childActR;
 extern volatile uint8_t  childActG;
 extern volatile uint8_t  childActB;
-extern volatile uint16_t childActOnMs;
-extern volatile uint16_t childActOffMs;
-extern volatile uint8_t  childActWDir;
-extern volatile uint8_t  childActWSpd;
+extern volatile uint16_t childActP16a;   // speedMs / periodMs / spawnMs
+extern volatile uint8_t  childActP8a;    // r2 / minBri / spacing / palette / cooling / tailLen / density
+extern volatile uint8_t  childActP8b;    // g2 / sparking
+extern volatile uint8_t  childActP8c;    // b2 / direction
+extern volatile uint8_t  childActP8d;    // actionSeqId / decay / fadeSpeed
 extern volatile uint8_t  childActSeq;
 extern volatile uint8_t  childActSt[MAX_STR_PER_CHILD];
 extern volatile uint8_t  childActEn[MAX_STR_PER_CHILD];
+extern volatile uint8_t  childBrightness; // global brightness 0-255
 
 // Runner execution state — written by UDP handler, read by LED task
 extern ChildRunnerStep   childRunner[MAX_CHILD_STEPS];

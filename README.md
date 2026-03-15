@@ -2,7 +2,7 @@
 
 Multi-board LED controller with a parent/child architecture. The **Windows Parent** serves a browser UI, coordinates timing, and dispatches commands; **child boards** (ESP32 / D1 Mini) own the physical LED strips and execute actions locally in NTP-synchronized time.
 
-**Current version: v3.6**
+**Current version: v4.0**
 
 ## Hardware
 
@@ -35,7 +35,7 @@ All three board targets share one sketch (`main/main.ino`) with `#ifdef BOARD_GI
 | Dashboard | Children table, runner progress bar, Stop / Go buttons |
 | Setup | **Discover** children on the network (UDP broadcast, shows unregistered nodes), add / remove / refresh, details modal, JSON import/export |
 | Layout | Sidebar lists unplaced children; drag onto 900×450 canvas to position; detailed view shows LED strings with direction/length; double-click node to edit position or remove; metric or imperial |
-| Actions | Reusable action library — create named presets (Solid / Flash / Wipe / Off) with colour, timing, direction; no live hardware changes |
+| Actions | Reusable action library — 9 effect types: Blackout, Solid, Fade, Breathe, Chase, Rainbow (8 palettes), Fire, Comet, Twinkle; per-type params (speed, colour 2, palette, direction, etc.) |
 | Runtime | Create runners from action library steps; each step = action + area-of-effect + duration; Compute / Sync / Start; runner list shows step count + total duration |
 | Settings | Dark mode, units, canvas dimensions, parent name; **Factory Reset** clears all children / runners / layout |
 

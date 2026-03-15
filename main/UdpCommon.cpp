@@ -40,10 +40,11 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
     childActR     = ap.r;
     childActG     = ap.g;
     childActB     = ap.b;
-    childActOnMs  = ap.onMs  ? ap.onMs  : 500;
-    childActOffMs = ap.offMs ? ap.offMs : 500;
-    childActWDir  = ap.wipeDir;
-    childActWSpd  = ap.wipeSpeedPct ? ap.wipeSpeedPct : 50;
+    childActP16a  = ap.p16a ? ap.p16a : 500;
+    childActP8a   = ap.p8a;
+    childActP8b   = ap.p8b;
+    childActP8c   = ap.p8c;
+    childActP8d   = ap.p8d;
     for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
       childActSt[j] = ap.ledStart[j];
       childActEn[j] = ap.ledEnd[j];
@@ -59,9 +60,9 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
       ChildRunnerStep& cr = childRunner[ls.stepIndex];
       cr.actionType   = ls.actionType;
       cr.r            = ls.r; cr.g = ls.g; cr.b = ls.b;
-      cr.onMs         = ls.onMs;  cr.offMs = ls.offMs;
-      cr.wipeDir      = ls.wipeDir;
-      cr.wipeSpeedPct = ls.wipeSpeedPct;
+      cr.p16a         = ls.p16a;
+      cr.p8a = ls.p8a; cr.p8b = ls.p8b;
+      cr.p8c = ls.p8c; cr.p8d = ls.p8d;
       cr.durationS    = ls.durationS;
       for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
         cr.ledStart[j] = ls.ledStart[j];
@@ -95,6 +96,8 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
     childRunnerArmed  = false;
     childActType = ACT_OFF;
     childActSeq++;
+  } else if (cmd == CMD_SET_BRIGHTNESS && plen >= 1) {
+    childBrightness = payload[0];
   }
   (void)plen;
 #endif
@@ -231,10 +234,10 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     sendJsonOk(client);
   } else if (isPost && strstr(req, " /test ")) {
     // Wipe red across all configured LEDs on string 0
-    childActType  = ACT_WIPE;
+    childActType  = ACT_COMET;
     childActR = 255; childActG = 0; childActB = 0;
-    childActOnMs = 500; childActOffMs = 500;
-    childActWDir = DIR_E; childActWSpd = 30;
+    childActP16a = 30; childActP8a = 10;
+    childActP8b = 0; childActP8c = DIR_E; childActP8d = 80;
     for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
       if (j < childCfg.stringCount && childCfg.strings[j].ledCount > 0) {
         childActSt[j] = 0;
