@@ -249,13 +249,82 @@ Save settings (partial updates accepted — omitted fields are unchanged).
 
 ---
 
+## Actions Library API
+
+Actions are reusable presets (type, colour, timing, direction) that are referenced by runner steps. Creating or editing actions does NOT send anything to hardware.
+
+### GET /api/actions
+
+List all actions.
+
+**Response:** `200 OK`, array of action objects.
+
+```json
+[
+  {
+    "id": 0, "name": "Red Wipe", "type": 3,
+    "r": 255, "g": 0, "b": 0,
+    "onMs": 500, "offMs": 500,
+    "wipeDir": 0, "wipeSpeedPct": 75
+  }
+]
+```
+
+| Field | Description |
+|-------|-------------|
+| `type` | `0`=Off, `1`=Solid, `2`=Flash, `3`=Wipe |
+| `r/g/b` | Colour (0–255) |
+| `onMs/offMs` | Flash timing in ms (type=2) |
+| `wipeDir` | Wipe direction: `0`=E, `1`=N, `2`=W, `3`=S (type=3) |
+| `wipeSpeedPct` | Wipe speed 1–100 (type=3) |
+
+---
+
+### POST /api/actions
+
+Create a new action. Maximum 32 actions.
+
+**Request body:** `{ "name": "Red Wipe", "type": 3, "r": 255, "g": 0, "b": 0, "wipeDir": 0, "wipeSpeedPct": 75 }`
+
+**Response:** `200 OK`, `{"ok": true, "id": 0}`
+
+---
+
+### GET /api/actions/:id
+
+Get a single action. Error if not found: 404.
+
+---
+
+### PUT /api/actions/:id
+
+Update an action (partial updates accepted).
+
+**Response:** `200 OK`, `{"ok": true}`
+
+---
+
+### DELETE /api/actions/:id
+
+Delete an action. Error if not found: 404.
+
+**Response:** `200 OK`, `{"ok": true}`
+
+---
+
 ## Runners API
 
 ### GET /api/runners
 
-List all runners.
+List all runners. Includes step count and total duration.
 
-**Response:** `200 OK`, array of runner objects.
+**Response:** `200 OK`, array of runner summary objects.
+
+```json
+[
+  {"id": 0, "name": "Sunrise", "steps": 3, "totalDurationS": 15, "computed": true}
+]
+```
 
 ```json
 [
@@ -300,15 +369,17 @@ Replace a runner's steps. Resets `computed` to `false`.
   "name": "Sunrise",
   "steps": [
     {
-      "action": {"type": 1, "r": 255, "g": 128, "b": 0, "onMs": 0, "offMs": 0, "wDir": 0, "wSpd": 10},
-      "area": {"x1": 0, "y1": 0, "x2": 5000, "y2": 5000},
+      "actionId": 0,
+      "x0": 0, "y0": 0, "x1": 10000, "y1": 10000,
       "durationS": 5
     }
   ]
 }
 ```
 
-**Response:** `200 OK`, `{"ok": true, "stepCount": 1}`
+Each step references an action from the library by `actionId`. Area-of-effect (`x0/y0/x1/y1`) is in units of 0–10000 (percentage × 100 of canvas dimensions).
+
+**Response:** `200 OK`, `{"ok": true, "steps": 1}`
 
 ---
 
@@ -356,7 +427,7 @@ Broadcast `CMD_RUNNER_STOP` to all children. Updates `runnerRunning = false`.
 
 ### POST /api/reset
 
-Clear all children, runners, and layout data, and restore default settings. This is equivalent to a full wipe — the operation is **not reversible**.
+Clear all children, runners, actions, and layout data, and restore default settings. This is equivalent to a full wipe — the operation is **not reversible**.
 
 **Request body:** `{}` (empty)
 

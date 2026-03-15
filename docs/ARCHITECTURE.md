@@ -127,7 +127,9 @@ Routes matched in order (longest/most-specific first):
 | POST | `/api/runners/stop` | Broadcast CMD_RUNNER_STOP |
 | GET/POST/PUT/DELETE | `/api/runners/:id/...` | Runner compute / sync / start |
 | GET/POST | `/api/runners` | List / create runners |
-| POST | `/api/reset` | Factory reset — clear all children, runners, layout, settings |
+| GET/POST | `/api/actions` | List / create actions (reusable presets) |
+| GET/PUT/DELETE | `/api/actions/:id` | Get / update / delete action |
+| POST | `/api/reset` | Factory reset — clear all children, runners, actions, layout, settings |
 
 **Route order matters:** `/api/runners/stop` is checked before `/api/runners/`; `/api/children/import` before `/api/children/export` before `/api/children/`.
 
@@ -255,8 +257,8 @@ Six tabs, all served as one HTML response with inline CSS and JS:
 | Dashboard | GET /api/children, GET /api/settings | Stop / Go runner |
 | Setup | GET /api/children, GET /api/settings | **Discover** (broadcast PING, list new children), Add/remove/refresh, details modal, JSON import/export |
 | Layout | GET /api/layout | Sidebar lists unplaced children (drag onto canvas); 900×450 canvas with detailed string view (direction + length) or simple icon mode; double-click node to edit position or remove from canvas; labels flip above when near bottom |
-| Actions | — | Send immediate Solid/Flash/Wipe/Off |
-| Runtime | GET /api/runners | Create/edit runners, Compute/Sync/Start |
+| Actions | GET /api/actions | Reusable action library — create/edit/delete named presets (no live hardware changes) |
+| Runtime | GET /api/runners, GET /api/actions | Create runners from library actions; steps = action ref + area-of-effect + duration; Compute/Sync/Start/Stop |
 | Settings | GET /api/settings | Dark mode, units, canvas size, parent name; **Factory Reset** (POST /api/reset — clears all data) |
 
 Dark mode: `body#app` CSS class `light` toggled by `applyDarkMode()`. Persisted in `settings.darkMode`. Applied before first tab renders.

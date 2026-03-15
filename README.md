@@ -35,8 +35,8 @@ All three board targets share one sketch (`main/main.ino`) with `#ifdef BOARD_GI
 | Dashboard | Children table, runner progress bar, Stop / Go buttons |
 | Setup | **Discover** children on the network (UDP broadcast, shows unregistered nodes), add / remove / refresh, details modal, JSON import/export |
 | Layout | Sidebar lists unplaced children; drag onto 900×450 canvas to position; detailed view shows LED strings with direction/length; double-click node to edit position or remove; metric or imperial |
-| Actions | Send immediate Solid / Flash / Wipe / Off to any child |
-| Runtime | Create runners, add/edit steps (action + area-of-effect + duration), Compute / Sync / Start |
+| Actions | Reusable action library — create named presets (Solid / Flash / Wipe / Off) with colour, timing, direction; no live hardware changes |
+| Runtime | Create runners from action library steps; each step = action + area-of-effect + duration; Compute / Sync / Start; runner list shows step count + total duration |
 | Settings | Dark mode, units, canvas dimensions, parent name; **Factory Reset** clears all children / runners / layout |
 
 ### Child config page
@@ -133,7 +133,7 @@ cd tests
 python test_web.py localhost:8080
 ```
 
-Covers: connectivity, SPA structure (sidebar, canvas, drag-drop), cache headers, `/status`, children CRUD + import/export + status poll + IP sanitization, layout `positioned` flag + multi-child placement/removal round-trip, settings round-trip, full runner lifecycle (create / PUT steps / compute / stop / delete), error handling, MAX_RUNNERS overflow, Content-Length headers, mock UDP child (PING/PONG/ACTION/STATUS). **184 checks.**
+Covers: connectivity, SPA structure, cache headers, `/status`, children CRUD + import/export + status poll + IP sanitization, actions library CRUD + validation + runner integration, layout `positioned` flag + multi-child placement/removal round-trip, settings round-trip, full runner lifecycle with action references (create / PUT steps / compute / stop / delete), error handling, MAX_RUNNERS overflow, Content-Length headers, mock UDP child (PING/PONG/ACTION/STATUS). **207 checks.**
 
 ### Child (ESP32 / D1 Mini)
 

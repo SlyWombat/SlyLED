@@ -276,7 +276,7 @@ check("No old rainbow badge",        "badge-rainbow" not in body)
 check("No old siren route",          "/led/siren/on" not in body)
 check("Has /api/children in JS",     "/api/children" in body)
 check("Has /api/runners in JS",      "/api/runners"  in body)
-check("Has /api/action in JS",       "/api/action"   in body)
+check("Has /api/actions in JS",      "/api/actions"  in body)
 check("SPA does not expose /log",    "href='/log'" not in body
                                      and 'href="/log"' not in body)
 check("SPA has Discover button",     "discoverChildren" in body)
@@ -804,6 +804,115 @@ check("Bad target → error", data is not None and
 code, data = post_json("/api/action/stop", {"target": "99"})
 check("Bad target stop → error", data is not None and
       (data.get("ok") is False or data.get("err") is not None), f"data={data}")
+
+# ── Actions library API ───────────────────────────────────────────────────────
+
+section("Actions API  GET /api/actions (initial)")
+code, data = get_json("/api/actions")
+check("HTTP 200",       code == 200,             f"got {code}")
+check("Valid JSON",     data is not None)
+check("Returns array",  isinstance(data, list))
+
+section("Actions API — CRUD lifecycle")
+# Create
+code, data = post_json("/api/actions", {"name": "Red Wipe", "type": 3, "r": 255, "g": 0, "b": 0,
+                                        "wipeDir": 0, "wipeSpeedPct": 75})
+check("Create HTTP 200",     code == 200,                              f"got {code}")
+check("Create ok:true",      data is not None and data.get("ok") is True)
+check("Returns id",          data is not None and "id" in data, f"data={data}")
+act_id = data.get("id") if data else None
+
+# Read
+if act_id is not None:
+    code, adata = get_json(f"/api/actions/{act_id}")
+    check("GET action HTTP 200", code == 200, f"got {code}")
+    check("Name matches",       adata is not None and adata.get("name") == "Red Wipe")
+    check("Type matches",       adata is not None and adata.get("type") == 3)
+    check("r matches",          adata is not None and adata.get("r") == 255)
+    check("wipeDir matches",    adata is not None and adata.get("wipeDir") == 0)
+    check("wipeSpeedPct matches", adata is not None and adata.get("wipeSpeedPct") == 75)
+
+    # Update
+    code2, udata = post_json(f"/api/actions/{act_id}", {"name": "Blue Flash", "type": 2,
+                              "r": 0, "g": 0, "b": 255, "onMs": 200, "offMs": 300})
+    # PUT via ra helper
+    import urllib.request as _ur2
+    req = urllib.request.Request(BASE + f"/api/actions/{act_id}", method="PUT",
+                                 data=json.dumps({"name": "Blue Flash", "type": 2,
+                                                   "r": 0, "g": 0, "b": 255,
+                                                   "onMs": 200, "offMs": 300}).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            ub = json.loads(resp.read())
+            check("PUT action ok:true", ub is not None and ub.get("ok") is True)
+    except Exception as e:
+        check("PUT action ok:true", False, str(e))
+
+    _, vdata = get_json(f"/api/actions/{act_id}")
+    check("Name updated after PUT", vdata is not None and vdata.get("name") == "Blue Flash")
+    check("Type updated after PUT", vdata is not None and vdata.get("type") == 2)
+
+    # Appears in list
+    _, alist = get_json("/api/actions")
+    check("Action in list", any(a.get("id") == act_id for a in (alist or [])))
+
+    # Delete
+    del_code, del_data = delete(f"/api/actions/{act_id}")
+    check("DELETE action ok:true", del_code == 200 and del_data is not None
+          and del_data.get("ok") is True, f"HTTP {del_code} data={del_data}")
+
+    _, alist2 = get_json("/api/actions")
+    check("Action removed after delete",
+          not any(a.get("id") == act_id for a in (alist2 or [])))
+else:
+    skip("Actions CRUD checks", "create did not return id")
+
+section("Actions API — validation")
+code, data = post_json("/api/actions", {"name": "", "type": 1})
+check("Empty name → 400", code == 400, f"got {code}")
+
+code, data = get_json("/api/actions/99999")
+check("GET missing action → 404", code == 404, f"got {code}")
+
+section("Actions + Runner steps integration")
+# Create an action, then a runner with a step referencing it
+_, a_data = post_json("/api/actions", {"name": "TestSolid", "type": 1, "r": 128, "g": 64, "b": 32})
+test_act_id = (a_data or {}).get("id")
+_, r_data = post_json("/api/runners", {"name": "ActRefRunner"})
+test_run_id = (r_data or {}).get("id")
+if test_act_id is not None and test_run_id is not None:
+    req = urllib.request.Request(BASE + f"/api/runners/{test_run_id}", method="PUT",
+                                 data=json.dumps({"name": "ActRefRunner",
+                                                   "steps": [{"actionId": test_act_id,
+                                                               "x0": 0, "y0": 0,
+                                                               "x1": 10000, "y1": 10000,
+                                                               "durationS": 3}]}).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            ub = json.loads(resp.read())
+            check("PUT runner with actionId ok", ub is not None and ub.get("ok") is True)
+    except Exception as e:
+        check("PUT runner with actionId ok", False, str(e))
+
+    _, rget = get_json(f"/api/runners/{test_run_id}")
+    check("Runner step has actionId",
+          rget is not None and len(rget.get("steps", [])) == 1
+          and rget["steps"][0].get("actionId") == test_act_id)
+
+    # Runner list shows totalDurationS
+    _, rlist = get_json("/api/runners")
+    rentry = next((r for r in (rlist or []) if r.get("id") == test_run_id), None)
+    check("Runner list has totalDurationS",
+          rentry is not None and rentry.get("totalDurationS") == 3,
+          f"entry={rentry}")
+
+    # Cleanup
+    delete(f"/api/runners/{test_run_id}")
+    delete(f"/api/actions/{test_act_id}")
+else:
+    skip("Actions+Runner integration", "create failed")
 
 # ── Layout API ────────────────────────────────────────────────────────────────
 

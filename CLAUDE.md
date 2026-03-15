@@ -87,6 +87,8 @@ ESP32 / D1 Mini children              ← LED execution nodes
 | GET/POST | `/api/settings` | App settings (dark mode etc.) |
 | POST | `/api/action` | Send ACTION packet to child |
 | POST | `/api/action/stop` | Send STOP to all children |
+| GET/POST | `/api/actions` | List / create action presets (library) |
+| GET/PUT/DELETE | `/api/actions/<id>` | Get / update / delete action preset |
 | GET/POST | `/api/runners` | List / create runners |
 | GET/PUT/DELETE | `/api/runners/<id>` | Get / update / delete runner |
 | POST | `/api/runners/<id>/compute` | Compute runner steps |

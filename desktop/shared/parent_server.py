@@ -84,11 +84,14 @@ _settings = _load("settings", {
 })
 _layout  = _load("layout",  {"canvasW": 10000, "canvasH": 5000, "children": []})
 _runners = _load("runners", [])
+_actions = _load("actions", [])
 
 MAX_RUNNERS = 4
+MAX_ACTIONS = 32
 
 _nxt_c = max((c["id"] for c in _children), default=-1) + 1
 _nxt_r = max((r["id"] for r in _runners),  default=-1) + 1
+_nxt_a = max((a["id"] for a in _actions),  default=-1) + 1
 _lock  = threading.Lock()
 
 # ── UDP helpers ───────────────────────────────────────────────────────────────
@@ -414,6 +417,63 @@ def api_action_stop():
         _send(c["ip"], _hdr(CMD_ACTION_STOP))
     return jsonify(ok=True)
 
+# ── Actions library ───────────────────────────────────────────────────────────
+
+@app.get("/api/actions")
+def api_actions():
+    return jsonify(_actions)
+
+@app.post("/api/actions")
+def api_actions_create():
+    global _nxt_a
+    body = request.get_json(silent=True) or {}
+    name = body.get("name", "").strip()
+    if not name:
+        return jsonify(ok=False, err="name required"), 400
+    with _lock:
+        if len(_actions) >= MAX_ACTIONS:
+            return jsonify(ok=False, err="max actions reached"), 400
+        a = {"id": _nxt_a, "name": name,
+             "type": body.get("type", 1),
+             "r": body.get("r", 255), "g": body.get("g", 0), "b": body.get("b", 0),
+             "onMs": body.get("onMs", 500), "offMs": body.get("offMs", 500),
+             "wipeDir": body.get("wipeDir", 0), "wipeSpeedPct": body.get("wipeSpeedPct", 50)}
+        _actions.append(a)
+        _nxt_a += 1
+        _save("actions", _actions)
+    return jsonify(ok=True, id=a["id"])
+
+@app.get("/api/actions/<int:aid>")
+def api_action_get(aid):
+    a = next((x for x in _actions if x["id"] == aid), None)
+    if not a:
+        return jsonify(ok=False, err="not found"), 404
+    return jsonify(a)
+
+@app.put("/api/actions/<int:aid>")
+def api_action_put(aid):
+    a = next((x for x in _actions if x["id"] == aid), None)
+    if not a:
+        return jsonify(ok=False, err="not found"), 404
+    body = request.get_json(silent=True) or {}
+    with _lock:
+        for k in ("name", "type", "r", "g", "b", "onMs", "offMs", "wipeDir", "wipeSpeedPct"):
+            if k in body:
+                a[k] = body[k]
+        _save("actions", _actions)
+    return jsonify(ok=True)
+
+@app.delete("/api/actions/<int:aid>")
+def api_action_delete(aid):
+    global _actions
+    with _lock:
+        n = len(_actions)
+        _actions = [x for x in _actions if x["id"] != aid]
+        if len(_actions) == n:
+            return jsonify(ok=False, err="not found"), 404
+        _save("actions", _actions)
+    return jsonify(ok=True)
+
 # ── Runners ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/runners")
@@ -421,6 +481,7 @@ def api_runners():
     return jsonify([
         {"id": r["id"], "name": r["name"],
          "steps": len(r.get("steps", [])),
+         "totalDurationS": sum(s.get("durationS", 0) for s in r.get("steps", [])),
          "computed": r.get("computed", False)}
         for r in _runners
     ])
@@ -493,17 +554,32 @@ def api_runner_compute(rid):
         _save("runners", _runners)
     return jsonify(ok=True)
 
+def _resolve_step(step):
+    """Merge action library fields into a step for packet building.
+    Supports both new (actionId) and legacy (inline type/r/g/b) formats."""
+    if "actionId" in step:
+        act = next((a for a in _actions if a["id"] == step["actionId"]), None)
+        if not act:
+            return None
+        return {**step, "type": act["type"], "r": act["r"], "g": act["g"], "b": act["b"],
+                "onMs": act["onMs"], "offMs": act["offMs"],
+                "wdir": act.get("wipeDir", 0), "wspd": act.get("wipeSpeedPct", 50)}
+    return step  # legacy inline format
+
 @app.post("/api/runners/<int:rid>/sync")
 def api_runner_sync(rid):
     r = next((x for x in _runners if x["id"] == rid), None)
     if not r or not r.get("computed"):
         return jsonify(ok=False, err="not computed"), 400
     steps = r.get("steps", [])
+    resolved = [_resolve_step(s) for s in steps]
+    if any(rs is None for rs in resolved):
+        return jsonify(ok=False, err="step references missing action"), 400
     for child in _children:
         if child["status"] != 1:
             continue
-        for i, step in enumerate(steps):
-            _send_recv(child["ip"], _load_step_pkt(i, len(steps), step, child),
+        for i, step in enumerate(resolved):
+            _send_recv(child["ip"], _load_step_pkt(i, len(resolved), step, child),
                        timeout=0.5)
     return jsonify(ok=True)
 
@@ -534,17 +610,20 @@ _DEFAULT_LAYOUT = {"canvasW": 10000, "canvasH": 5000, "children": []}
 
 @app.post("/api/reset")
 def api_reset():
-    """Clear all children, runners, layout and restore default settings."""
-    global _children, _settings, _layout, _runners, _nxt_c, _nxt_r
+    """Clear all children, runners, actions, layout and restore default settings."""
+    global _children, _settings, _layout, _runners, _actions, _nxt_c, _nxt_r, _nxt_a
     with _lock:
         _children = []
         _runners  = []
+        _actions  = []
         _layout   = dict(_DEFAULT_LAYOUT)
         _settings = dict(_DEFAULT_SETTINGS)
         _nxt_c = 0
         _nxt_r = 0
+        _nxt_a = 0
         _save("children", _children)
         _save("runners",  _runners)
+        _save("actions",  _actions)
         _save("layout",   _layout)
         _save("settings", _settings)
     return jsonify(ok=True)

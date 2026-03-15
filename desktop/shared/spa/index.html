@@ -101,38 +101,10 @@ body.light .li:hover{border-color:#888}
 </div>
 
 <div id='t-actions' class='tab' style='display:none'>
-  <div class='card' style='max-width:480px'>
-    <div class='card-title'>Immediate Action</div>
-    <label>Type</label>
-    <select id='at' onchange='onAtC()'>
-      <option value='0'>Off (Stop)</option>
-      <option value='1' selected>Solid</option>
-      <option value='2'>Flash</option>
-      <option value='3'>Wipe</option>
-    </select>
-    <div id='a-cr'><label>Colour</label><input type='color' id='ac' value='#ff0000'></div>
-    <div id='a-fr' style='display:none'>
-      <label>On (ms)</label><input type='number' id='a-on' value='500' min='50' max='5000' style='width:90px'>
-      <label>Off (ms)</label><input type='number' id='a-of' value='500' min='50' max='5000' style='width:90px'>
-    </div>
-    <div id='a-wr' style='display:none'>
-      <label>Direction</label>
-      <select id='a-wd'>
-        <option value='0'>East (+X)</option>
-        <option value='1'>North (+Y)</option>
-        <option value='2'>West (-X)</option>
-        <option value='3'>South (-Y)</option>
-      </select>
-      <label>Speed (% of strip / second)</label>
-      <input type='number' id='a-ws' value='50' min='1' max='100' style='width:80px'>
-    </div>
-    <label>Target</label>
-    <select id='a-tg'><option value='all'>All Children</option></select>
-    <div style='margin-top:1em'>
-      <button class='btn btn-on'  onclick='applyAct()'>Apply</button>
-      <button class='btn btn-off' onclick='stopAct()' style='margin-left:.5em'>Stop All</button>
-    </div>
+  <div style='margin-bottom:.8em'>
+    <button class='btn btn-on' onclick='newAction()'>+ New Action</button>
   </div>
+  <div id='act-list'><p style='color:#888'>Loading...</p></div>
 </div>
 
 <div id='t-runtime' class='tab' style='display:none'>
@@ -570,58 +542,109 @@ function cvMove(e){
 
 function cvUp(){drag=null;}
 
-function loadActions(){
-  ra('GET','/api/children',null,function(d){
-    var s=document.getElementById('a-tg');
-    while(s.options.length>1)s.remove(1);
-    if(d&&d.length)d.forEach(function(c){
-      var o=document.createElement('option');
-      o.value=String(c.id);o.text=c.hostname+(c.name?(' ('+c.name+')'):'');s.add(o);
-    });
-  });
-}
-
-function onAtC(){
-  var t=parseInt(document.getElementById('at').value);
-  document.getElementById('a-cr').style.display=t===0?'none':'block';
-  document.getElementById('a-fr').style.display=t===2?'block':'none';
-  document.getElementById('a-wr').style.display=t===3?'block':'none';
-}
-
+// ── Actions library ──────────────────────────────────────────────────────────
+var _acts=[];
+var _typeNames=['Off','Solid','Flash','Wipe'];
+var _dirNames=['East','North','West','South'];
+function rgb2h(r,g,b){return'#'+('0'+r.toString(16)).slice(-2)+('0'+g.toString(16)).slice(-2)+('0'+b.toString(16)).slice(-2);}
 function h2r(h){return{r:parseInt(h.slice(1,3),16),g:parseInt(h.slice(3,5),16),b:parseInt(h.slice(5,7),16)};}
 
-function applyAct(){
-  var t=parseInt(document.getElementById('at').value);
-  var col=t>0?h2r(document.getElementById('ac').value):{r:0,g:0,b:0};
-  var body={type:t,r:col.r,g:col.g,b:col.b,
-    onMs:parseInt(document.getElementById('a-on').value)||500,
-    offMs:parseInt(document.getElementById('a-of').value)||500,
-    wipeDir:parseInt(document.getElementById('a-wd').value)||0,
-    wipeSpeedPct:parseInt(document.getElementById('a-ws').value)||50,
-    target:document.getElementById('a-tg').value};
-  ra('POST','/api/action',body,function(r){
-    if(r&&r.ok)document.getElementById('hs').textContent=t===0?'Action: off':'Action applied';
+function loadActions(){
+  ra('GET','/api/actions',null,function(d){
+    _acts=d||[];
+    var el=document.getElementById('act-list');if(!el)return;
+    if(!_acts.length){el.innerHTML='<p style="color:#888">No actions defined yet. Click + New Action to create one.</p>';return;}
+    var h='<table class="tbl" style="max-width:700px"><tr><th>Name</th><th>Type</th><th>Colour</th><th>Details</th><th>Actions</th></tr>';
+    _acts.forEach(function(a){
+      var col=a.type>0?rgb2h(a.r||0,a.g||0,a.b||0):'#000';
+      var det='';
+      if(a.type===2)det='On:'+a.onMs+'ms Off:'+a.offMs+'ms';
+      if(a.type===3)det=(_dirNames[a.wipeDir]||'?')+' '+a.wipeSpeedPct+'%';
+      h+='<tr><td><b>'+a.name+'</b></td><td>'+(_typeNames[a.type]||a.type)+'</td>';
+      h+='<td><span style="display:inline-block;width:24px;height:16px;border-radius:3px;background:'+col+';border:1px solid #555;vertical-align:middle"></span> '+col+'</td>';
+      h+='<td style="font-size:.82em;color:#888">'+det+'</td>';
+      h+='<td><button class="btn" onclick="editAction('+a.id+')" style="background:#446;color:#fff;padding:.2em .6em">Edit</button>';
+      h+=' <button class="btn btn-off" onclick="delAction('+a.id+')" style="padding:.2em .6em">Del</button></td></tr>';
+    });
+    el.innerHTML=h+'</table>';
   });
 }
 
-function stopAct(){
-  ra('POST','/api/action/stop',{target:document.getElementById('a-tg').value},
-    function(r){if(r&&r.ok)document.getElementById('hs').textContent='Action stopped';});
+function newAction(){_showActModal(null);}
+function editAction(id){var a=null;_acts.forEach(function(x){if(x.id===id)a=x;});if(a)_showActModal(a);}
+
+function _showActModal(a){
+  var isNew=!a;
+  var h='<label>Name</label><input id="ae-nm" value="'+(a?a.name:'')+'" style="width:200px" placeholder="e.g. Red Wipe">';
+  h+='<label>Type</label><select id="ae-tp" onchange="_aeTypeChg()">';
+  for(var i=0;i<4;i++)h+='<option value="'+i+'"'+(a&&a.type===i?' selected':'')+'>'+_typeNames[i]+'</option>';
+  h+='</select>';
+  h+='<div id="ae-cr"'+((!a||a.type===0)?' style="display:none"':'')+'><label>Colour</label><input type="color" id="ae-cl" value="'+(a&&a.type>0?rgb2h(a.r,a.g,a.b):'#ff0000')+'"></div>';
+  h+='<div id="ae-fr"'+((a&&a.type===2)?'':' style="display:none"')+'>';
+  h+='<label>On (ms)</label><input type="number" id="ae-on" value="'+(a?a.onMs:500)+'" min="50" max="9999" style="width:80px">';
+  h+=' <label style="display:inline;margin-left:.5em">Off (ms)</label><input type="number" id="ae-of" value="'+(a?a.offMs:500)+'" min="50" max="9999" style="width:80px">';
+  h+='</div>';
+  h+='<div id="ae-wr"'+((a&&a.type===3)?'':' style="display:none"')+'>';
+  h+='<label>Direction</label><select id="ae-wd">';
+  for(var d=0;d<4;d++)h+='<option value="'+d+'"'+(a&&a.wipeDir===d?' selected':'')+'>'+_dirNames[d]+'</option>';
+  h+='</select>';
+  h+=' <label style="display:inline;margin-left:.5em">Speed %</label><input type="number" id="ae-ws" value="'+(a?a.wipeSpeedPct:50)+'" min="1" max="100" style="width:60px">';
+  h+='</div>';
+  h+='<div style="margin-top:1em"><button class="btn btn-on" onclick="_aeSubmit('+(isNew?-1:a.id)+')">Save Action</button></div>';
+  document.getElementById('modal-title').textContent=isNew?'New Action':'Edit Action';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
 }
 
+function _aeTypeChg(){
+  var t=parseInt(document.getElementById('ae-tp').value);
+  document.getElementById('ae-cr').style.display=t===0?'none':'block';
+  document.getElementById('ae-fr').style.display=t===2?'block':'none';
+  document.getElementById('ae-wr').style.display=t===3?'block':'none';
+}
+
+function _aeSubmit(id){
+  var nm=document.getElementById('ae-nm').value.trim();if(!nm){alert('Name required');return;}
+  var t=parseInt(document.getElementById('ae-tp').value)||0;
+  var col=t>0?h2r(document.getElementById('ae-cl').value):{r:0,g:0,b:0};
+  var body={name:nm,type:t,r:col.r,g:col.g,b:col.b,
+    onMs:parseInt(document.getElementById('ae-on').value)||500,
+    offMs:parseInt(document.getElementById('ae-of').value)||500,
+    wipeDir:parseInt(document.getElementById('ae-wd').value)||0,
+    wipeSpeedPct:parseInt(document.getElementById('ae-ws').value)||50};
+  var method=id<0?'POST':'PUT';
+  var url=id<0?'/api/actions':'/api/actions/'+id;
+  ra(method,url,body,function(r){
+    if(r&&r.ok){closeModal();loadActions();document.getElementById('hs').textContent='Action saved';}
+  });
+}
+
+function delAction(id){
+  if(!confirm('Delete this action?'))return;
+  var x=new XMLHttpRequest();x.open('DELETE','/api/actions/'+id,true);
+  x.onload=function(){loadActions();document.getElementById('hs').textContent='Action deleted';};
+  x.onerror=function(){document.getElementById('hs').textContent='Delete failed';};
+  x.send();
+}
+
+// ── Runners ─────────────────────────────────────────────────────────────────
 function loadRuntime(){
+  ra('GET','/api/actions',null,function(a){_acts=a||[];});
   ra('GET','/api/runners',null,function(d){
     var h='';
     if(d&&d.length){
       d.forEach(function(r){
+        var durTxt='';
+        if(r.totalDurationS)durTxt=', '+r.totalDurationS+'s';
         h+='<div style="display:flex;align-items:center;gap:.5em;padding:.4em 0;border-bottom:1px solid #2a2a2a">';
-        h+='<span style="flex:1">'+r.name+'<span style="color:#888;font-size:.82em"> ('+r.steps+' steps'+(r.computed?' \u2713':'')+' )</span></span>';
+        h+='<span style="flex:1">'+r.name+'<span style="color:#888;font-size:.82em"> ('+r.steps+' steps'+durTxt+(r.computed?' \u2713':'')+' )</span></span>';
         h+='<button class="btn btn-on" onclick="showRunner('+r.id+')" style="padding:.3em .8em">Edit</button>';
         h+=' <button class="btn" onclick="doCompute('+r.id+')" style="background:#446;color:#fff;padding:.3em .8em">Compute</button>';
         if(r.computed){
           h+=' <button class="btn" onclick="doSync('+r.id+')" style="background:#264;color:#fff;padding:.3em .8em">Sync</button>';
           h+=' <button class="btn btn-on" onclick="doStart('+r.id+')" style="padding:.3em .8em">Start</button>';
         }
+        h+=' <button class="btn btn-off" onclick="stopRunners()" style="padding:.3em .8em">Stop</button>';
         h+=' <button class="btn btn-off" onclick="delRunner('+r.id+')" style="padding:.3em .8em">Del</button>';
         h+='</div>';
       });
@@ -642,14 +665,17 @@ function delRunner(id){
 }
 
 function showRunner(id){
-  ra('GET','/api/runners/'+id,null,function(d){
-    if(!d)return;
-    curRid=d.id;curRname=d.name;
-    curRsteps=(d.steps||[]).map(function(s){return Object.assign({},s);});
-    document.getElementById('re-nm').textContent=d.name;
-    document.getElementById('rt-list').style.display='none';
-    document.getElementById('rt-edit').style.display='block';
-    renderSteps();
+  ra('GET','/api/actions',null,function(a){
+    _acts=a||[];
+    ra('GET','/api/runners/'+id,null,function(d){
+      if(!d)return;
+      curRid=d.id;curRname=d.name;
+      curRsteps=(d.steps||[]).map(function(s){return Object.assign({},s);});
+      document.getElementById('re-nm').textContent=d.name;
+      document.getElementById('rt-list').style.display='none';
+      document.getElementById('rt-edit').style.display='block';
+      renderSteps();
+    });
   });
 }
 
@@ -658,30 +684,30 @@ function backToRunners(){
   document.getElementById('rt-edit').style.display='none';
 }
 
-function rgb2h(r,g,b){
-  return'#'+('0'+r.toString(16)).slice(-2)+('0'+g.toString(16)).slice(-2)+('0'+b.toString(16)).slice(-2);
+function _actName(id){
+  for(var i=0;i<_acts.length;i++){if(_acts[i].id===id)return _acts[i].name;}
+  return null;
 }
 
 function renderSteps(){
   var h='';
+  if(!_acts.length){h='<p style="color:#c66;margin:.5em 0">No actions defined. Create actions in the Actions tab first.</p>';
+    document.getElementById('re-steps').innerHTML=h;return;}
   if(curRsteps.length>0){
     h+='<div style="overflow-x:auto"><table class="tbl" style="font-size:.8em">';
-    h+='<tr><th>#</th><th>Type</th><th>Col</th><th>On ms</th><th>Off ms</th><th>WDir</th><th>Spd%</th><th>x0-x1%</th><th>y0-y1%</th><th>Dur s</th><th></th></tr>';
+    h+='<tr><th>#</th><th>Action</th><th>x0-x1%</th><th>y0-y1%</th><th>Dur s</th><th></th></tr>';
     curRsteps.forEach(function(st,i){
-      var col=rgb2h(st.r||0,st.g||0,st.b||0);
       var x0=Math.round((st.x0||0)/100),x1=Math.round((st.x1!=null?st.x1:10000)/100);
       var y0=Math.round((st.y0||0)/100),y1=Math.round((st.y1!=null?st.y1:10000)/100);
       h+='<tr><td>'+(i+1)+'</td>';
-      h+='<td><select id="s'+i+'t">';
-      ['Off','Solid','Flash','Wipe'].forEach(function(n,v){h+='<option value="'+v+'"'+(st.type===v?' selected':'')+'>'+n+'</option>';});
+      h+='<td><select id="s'+i+'a">';
+      var found=false;
+      _acts.forEach(function(a){
+        var sel=(st.actionId===a.id);if(sel)found=true;
+        h+='<option value="'+a.id+'"'+(sel?' selected':'')+'>'+a.name+'</option>';
+      });
+      if(!found&&st.actionId!=null)h+='<option value="'+st.actionId+'" selected style="color:#c44">[Missing #'+st.actionId+']</option>';
       h+='</select></td>';
-      h+='<td><input type="color" id="s'+i+'c" value="'+col+'" style="width:44px;height:26px"></td>';
-      h+='<td><input type="number" id="s'+i+'on" value="'+(st.onMs||500)+'" min="50" max="9999" style="width:60px"></td>';
-      h+='<td><input type="number" id="s'+i+'of" value="'+(st.offMs||500)+'" min="50" max="9999" style="width:60px"></td>';
-      h+='<td><select id="s'+i+'wd">';
-      ['E','N','W','S'].forEach(function(n,v){h+='<option value="'+v+'"'+(st.wdir===v?' selected':'')+'>'+n+'</option>';});
-      h+='</select></td>';
-      h+='<td><input type="number" id="s'+i+'ws" value="'+(st.wspd||50)+'" min="1" max="100" style="width:48px"></td>';
       h+='<td style="white-space:nowrap">';
       h+='<input type="number" id="s'+i+'x0" value="'+x0+'" min="0" max="100" style="width:38px">-';
       h+='<input type="number" id="s'+i+'x1" value="'+x1+'" min="0" max="100" style="width:38px"></td>';
@@ -698,7 +724,8 @@ function renderSteps(){
 }
 
 function addStep(){
-  curRsteps.push({type:1,r:255,g:0,b:0,onMs:500,offMs:500,wdir:0,wspd:50,x0:0,y0:0,x1:10000,y1:10000,durationS:5});
+  var defAct=_acts.length>0?_acts[0].id:-1;
+  curRsteps.push({actionId:defAct,x0:0,y0:0,x1:10000,y1:10000,durationS:5});
   renderSteps();
 }
 
@@ -706,20 +733,11 @@ function rmStep(i){curRsteps.splice(i,1);renderSteps();}
 
 function gv(id,def){var el=document.getElementById(id);if(!el)return def;var v=parseInt(el.value,10);return isNaN(v)?def:v;}
 
-function gcol(id){
-  var el=document.getElementById(id);if(!el)return{r:0,g:0,b:0};
-  var h=el.value;
-  return{r:parseInt(h.slice(1,3),16),g:parseInt(h.slice(3,5),16),b:parseInt(h.slice(5,7),16)};
-}
-
 function saveRunner(){
   if(curRid<0)return;
   var steps=[];
   for(var i=0;i<curRsteps.length;i++){
-    var col=gcol('s'+i+'c');
-    steps.push({type:gv('s'+i+'t',1),r:col.r,g:col.g,b:col.b,
-      onMs:gv('s'+i+'on',500),offMs:gv('s'+i+'of',500),
-      wdir:gv('s'+i+'wd',0),wspd:gv('s'+i+'ws',50),
+    steps.push({actionId:gv('s'+i+'a',-1),
       x0:gv('s'+i+'x0',0)*100,y0:gv('s'+i+'y0',0)*100,
       x1:gv('s'+i+'x1',100)*100,y1:gv('s'+i+'y1',100)*100,
       durationS:gv('s'+i+'d',5)});
@@ -741,6 +759,7 @@ function doSync(id){
   document.getElementById('hs').textContent='Syncing to children...';
   ra('POST','/api/runners/'+id+'/sync',null,function(r){
     if(r&&r.ok)document.getElementById('hs').textContent='Synced \u2713';
+    else document.getElementById('hs').textContent='Sync failed: '+(r&&r.err||'unknown');
   });
 }
 
