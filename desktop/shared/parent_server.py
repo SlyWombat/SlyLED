@@ -588,13 +588,15 @@ def api_runner_sync(rid):
     resolved = [_resolve_step(s) for s in steps]
     if any(rs is None for rs in resolved):
         return jsonify(ok=False, err="step references missing action"), 400
+    sent = 0
     for child in _children:
         if child["status"] != 1:
             continue
         for i, step in enumerate(resolved):
-            _send_recv(child["ip"], _load_step_pkt(i, len(resolved), step, child),
-                       timeout=0.5)
-    return jsonify(ok=True)
+            _send(child["ip"], _load_step_pkt(i, len(resolved), step, child))
+            sent += 1
+            time.sleep(0.05)   # 50 ms between steps — give child time to process
+    return jsonify(ok=True, sent=sent)
 
 @app.post("/api/runners/<int:rid>/start")
 def api_runner_start(rid):

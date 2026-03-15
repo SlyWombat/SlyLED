@@ -113,7 +113,7 @@ void initChildConfig() {
   // Set RAM defaults first (loadChildConfig overwrites if EEPROM is valid)
   memset(&childCfg, 0, sizeof(childCfg));
   childCfg.stringCount         = 1;
-  childCfg.strings[0].ledCount = NUM_LEDS;
+  childCfg.strings[0].ledCount = 30;
   childCfg.strings[0].lengthMm = 500;
   childCfg.strings[0].ledType  = LEDTYPE_WS2812B;
   childCfg.strings[0].cableDir = DIR_E;
@@ -240,7 +240,7 @@ void handleFactoryReset(WiFiClient& c) {
   clearChildConfig();
   memset(&childCfg, 0, sizeof(childCfg));
   childCfg.stringCount         = 1;
-  childCfg.strings[0].ledCount = NUM_LEDS;
+  childCfg.strings[0].ledCount = 30;
   childCfg.strings[0].lengthMm = 500;
   childCfg.strings[0].ledType  = LEDTYPE_WS2812B;
   childCfg.strings[0].stripDir = DIR_E;

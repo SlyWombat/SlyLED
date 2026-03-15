@@ -736,6 +736,8 @@ else:
     code, data = post_json(f"/api/runners/{runner_id}/sync")
     check("Sync HTTP 200",        code == 200, f"got {code}")
     check("Sync returns ok:true", data is not None and data.get("ok") is True)
+    check("Sync has sent count",  data is not None and isinstance(data.get("sent"), int),
+          f"sent={data.get('sent') if data else None}")
 
     section(f"Runner lifecycle — POST /api/runners/stop")
     code, data = post_json("/api/runners/stop")
@@ -961,6 +963,8 @@ if a0_id is not None and r0_id is not None:
     _, sync = post_json(f"/api/runners/{r0_id}/sync")
     check("Sync ok (no children = no error)",
           sync is not None and sync.get("ok") is True)
+    check("Sync has sent count",
+          sync is not None and isinstance(sync.get("sent"), int))
 
     delete(f"/api/runners/{r0_id}")
     delete(f"/api/actions/{a0_id}")
