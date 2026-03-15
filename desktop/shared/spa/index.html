@@ -245,12 +245,28 @@ function refreshRunnerStatus(){
   });
 }
 
+function refreshAllChildren(cb){
+  ra('GET','/api/children',null,function(d){
+    if(!d||!d.length){if(cb)cb();return;}
+    var pending=d.length;
+    d.forEach(function(c){
+      ra('POST','/api/children/'+c.id+'/refresh',{},function(){pending--;if(pending<=0&&cb)cb();});
+    });
+  });
+}
+
 function loadSetup(){
+  document.getElementById('t-setup').innerHTML='<p style="color:#888">Refreshing children...</p>';
+  refreshAllChildren(function(){_renderSetup();});
+}
+
+function _renderSetup(){
   ra('GET','/api/children',null,function(d){
     var h='<div style="margin-bottom:.6em">'
       +'<button class="btn btn-nav" onclick="discoverChildren()" id="disc-btn">Discover</button>'
       +'<input id="aip" placeholder="Manual IP (x.x.x.x)" style="width:150px;margin-left:.5em">'
       +'<button class="btn btn-on" onclick="addChild()" style="margin-left:.3em">Add</button>'
+      +'<button class="btn btn-nav" onclick="loadSetup()" style="margin-left:.5em">Refresh All</button>'
       +'<a class="btn btn-nav" href="/api/children/export" style="margin-left:.5em">Export JSON</a>'
       +'<label class="btn btn-nav" style="cursor:pointer;margin-left:.5em">Import JSON'
       +'<input type="file" accept=".json" style="display:none" onchange="importChildren(this)"></label>'
