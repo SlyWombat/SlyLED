@@ -397,7 +397,11 @@ def api_layout_save():
 
 @app.get("/api/settings")
 def api_settings_get():
-    return jsonify(_settings)
+    s = dict(_settings)
+    # Compute elapsed dynamically from start epoch
+    if s.get("runnerRunning") and s.get("runnerStartEpoch"):
+        s["runnerElapsed"] = max(0, int(time.time()) - s["runnerStartEpoch"])
+    return jsonify(s)
 
 @app.post("/api/settings")
 def api_settings_save():
@@ -541,6 +545,8 @@ def api_runners_stop():
     with _lock:
         _settings["runnerRunning"] = False
         _settings["activeRunner"] = -1
+        _settings["runnerStartEpoch"] = 0
+        _settings["runnerElapsed"] = 0
         _save("settings", _settings)
     return jsonify(ok=True)
 
@@ -635,6 +641,7 @@ def api_runner_start(rid):
     with _lock:
         _settings["runnerRunning"] = True
         _settings["activeRunner"]  = rid
+        _settings["runnerStartEpoch"] = go_epoch
         _settings["runnerElapsed"] = 0
         _save("settings", _settings)
     return jsonify(ok=True)
