@@ -187,7 +187,7 @@ Returns canvas dimensions and the position of every registered child. Children w
 }
 ```
 
-`positioned: false` means no layout position has been explicitly saved for that child yet. The SPA auto-spreads unpositioned children across the canvas on first view so they are visible and draggable.
+`positioned: false` means no layout position has been explicitly saved for that child yet. The SPA shows unpositioned children in a sidebar list; drag them onto the canvas to place them. Each child object also includes full `strings` data (LED count, length, direction) which the canvas uses to render detailed string visualizations.
 
 ---
 

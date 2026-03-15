@@ -54,6 +54,10 @@ body.light label{color:#555}
 body.light #hs{color:#555}
 body.light .footer{color:#aaa}
 body.light .prog-bar{background:#ddd}
+.li{background:#1e1e1e;border:1px solid #333;border-radius:6px;padding:.5em .7em;margin-bottom:.4em;cursor:grab;font-size:.82em}
+.li:hover{border-color:#555}
+body.light .li{background:#fff;border-color:#ccc}
+body.light .li:hover{border-color:#888}
 </style>
 </head>
 <body id='app'>
@@ -71,13 +75,28 @@ body.light .prog-bar{background:#ddd}
 <div id='t-setup'   class='tab' style='display:none'></div>
 
 <div id='t-layout' class='tab' style='display:none'>
-  <p style='color:#888;font-size:.85em;margin-bottom:.6em'>Drag nodes to position. (0,0)=bottom-left. New children are auto-spread until saved.</p>
-  <canvas id='lcv' width='900' height='450'
-    style='border:1px solid #444;cursor:grab;display:block;background:#0d0d0d;max-width:100%'
-    onmousedown='cvDown(event)' onmousemove='cvMove(event)'
-    onmouseup='cvUp()' onmouseleave='cvUp()'></canvas>
-  <div style='margin-top:.6em'>
-    <button class='btn btn-on' onclick='saveLayout()'>Save Layout</button>
+  <div style='display:flex;gap:1em;align-items:flex-start'>
+    <div style='flex:1;min-width:0'>
+      <div style='display:flex;align-items:center;gap:1em;margin-bottom:.4em'>
+        <span style='color:#888;font-size:.82em;flex:1'>Drag children from sidebar onto canvas. Double-click a node to edit. (0,0)=bottom-left.</span>
+        <label style='color:#888;font-size:.82em;white-space:nowrap;display:flex;align-items:center;gap:.3em'>
+          <input type='checkbox' id='lay-detail' checked onchange='drawLayout()'> Show strings
+        </label>
+      </div>
+      <canvas id='lcv' width='900' height='450'
+        style='border:1px solid #444;cursor:grab;display:block;background:#0d0d0d;max-width:100%'
+        onmousedown='cvDown(event)' onmousemove='cvMove(event)'
+        onmouseup='cvUp()' onmouseleave='cvUp()'
+        ondragover='event.preventDefault()' ondrop='cvDrop(event)'
+        ondblclick='cvDbl(event)'></canvas>
+      <div style='margin-top:.6em'>
+        <button class='btn btn-on' onclick='saveLayout()'>Save Layout</button>
+      </div>
+    </div>
+    <div style='width:180px;flex-shrink:0'>
+      <div style='font-size:.9em;font-weight:bold;color:#aaa;margin-bottom:.4em'>Unplaced</div>
+      <div id='lay-unplaced'></div>
+    </div>
   </div>
 </div>
 
@@ -312,7 +331,12 @@ function addDiscovered(ip){
 function removeChild(id){
   if(!confirm('Remove this child?'))return;
   var x=new XMLHttpRequest();x.open('DELETE','/api/children/'+id,true);
-  x.onload=function(){loadSetup();};x.send();
+  x.onload=function(){
+    if(x.status>=200&&x.status<300){loadSetup();document.getElementById('hs').textContent='Child removed';}
+    else{document.getElementById('hs').textContent='Remove failed ('+x.status+')';loadSetup();}
+  };
+  x.onerror=function(){document.getElementById('hs').textContent='Remove failed: network error';};
+  x.send();
 }
 
 function refreshChild(id){
@@ -327,8 +351,9 @@ function showDetails(id){
     var c=null;for(var i=0;i<d.length;i++){if(d[i].id===id){c=d[i];break;}}
     if(!c)return;
     var dirs=['E','N','W','S'],types=['WS2812B','WS2811','APA102'];
+    var cleanIp=(c.ip||'').replace(/^https?:\/\//,'').replace(/\/.*$/,'');
     var h='<p style="font-size:.85em;margin-bottom:.6em">';
-    h+='IP: <a href="http://'+c.ip+'" target="_blank" style="color:#88f">http://'+c.ip+'</a>';
+    h+='IP: <a href="http://'+cleanIp+'/" target="_blank" style="color:#88f">'+cleanIp+'</a>';
     if(c.desc)h+=' &mdash; '+c.desc;
     h+='</p><table class="tbl" style="font-size:.8em">';
     h+='<tr><th>#</th><th>LEDs</th><th>Len mm</th><th>Type</th><th>Cable Dir</th><th>Cable mm</th><th>Strip Dir</th></tr>';
@@ -359,20 +384,98 @@ function importChildren(input){
   rd.readAsText(f);input.value='';
 }
 
+var _strCol=['#0ff','#f0f','#ff0','#0f0','#f80','#08f','#f08','#8f0'];
+var _dirDx=[1,0,-1,0],_dirDy=[0,-1,0,1]; // E,N,W,S in canvas-Y-down coords
+var _layDragId=null;
+
+function _isPlaced(c){return c.positioned||c._placed;}
+
 function loadLayout(){
   ra('GET','/api/settings',null,function(s){
     if(s)units=s.units||0;
     ra('GET','/api/layout',null,function(d){
       if(!d)return;ld=d;phW=d.canvasW||10000;phH=d.canvasH||5000;
-      // Auto-spread nodes that have no saved position
-      var unpos=(ld.children||[]).filter(function(c){return !c.positioned;});
-      if(unpos.length>0){
-        var step=phW/(unpos.length+1);
-        unpos.forEach(function(c,i){c.x=Math.round(step*(i+1));c.y=Math.round(phH*0.5);});
-      }
-      drawLayout();
+      drawLayout();renderSidebar();
     });
   });
+}
+
+function renderSidebar(){
+  var el=document.getElementById('lay-unplaced');if(!el||!ld)return;
+  var unpl=(ld.children||[]).filter(function(c){return !_isPlaced(c);});
+  if(!unpl.length){el.innerHTML='<p style="color:#555;font-size:.8em">All children placed.</p>';return;}
+  var h='';
+  unpl.forEach(function(c){
+    h+='<div class="li" draggable="true" ondragstart="layDS(event,'+c.id+')">'
+      +'<div style="color:#ccc;font-weight:bold">'+c.hostname+'</div>';
+    if(c.name&&c.name!==c.hostname)h+='<div style="color:#888;font-size:.9em">'+c.name+'</div>';
+    h+='<div style="color:#666;font-size:.85em">'+c.sc+' string'+(c.sc!==1?'s':'')+'</div></div>';
+  });
+  el.innerHTML=h;
+}
+
+function layDS(e,id){_layDragId=id;e.dataTransfer.setData('text/plain',String(id));e.dataTransfer.effectAllowed='move';}
+
+function cvDrop(e){
+  e.preventDefault();
+  if(_layDragId===null)return;
+  var cv=document.getElementById('lcv'),rect=cv.getBoundingClientRect();
+  var W=cv.width,H=cv.height;
+  var px=e.clientX-rect.left,py=e.clientY-rect.top;
+  var physX=Math.max(0,Math.min(phW,Math.round(px*phW/W)));
+  var physY=Math.max(0,Math.min(phH,Math.round((H-py)*phH/H)));
+  var ch=null;(ld.children||[]).forEach(function(c){if(c.id===_layDragId)ch=c;});
+  if(ch){ch.x=physX;ch.y=physY;ch._placed=true;drawLayout();renderSidebar();}
+  _layDragId=null;
+}
+
+function cvDbl(e){
+  var cv=document.getElementById('lcv'),rect=cv.getBoundingClientRect();
+  var mx=e.clientX-rect.left,my=e.clientY-rect.top,W=cv.width,H=cv.height;
+  if(!ld||!ld.children)return;
+  var placed=(ld.children||[]).filter(_isPlaced);
+  for(var i=0;i<placed.length;i++){
+    var c=placed[i];
+    var cx=Math.round(c.x*W/phW),cy=H-Math.round(c.y*H/phH);
+    if(Math.abs(mx-cx)<=16&&Math.abs(my-cy)<=16){showNodeEdit(c);return;}
+  }
+}
+
+function showNodeEdit(c){
+  var dirs=['East (+X)','North (+Y)','West (-X)','South (-Y)'];
+  var types=['WS2812B','WS2811','APA102'];
+  var h='<div style="margin-bottom:.8em">';
+  h+='<label>X (mm)</label><input id="ne-x" type="number" value="'+c.x+'" min="0" max="'+phW+'" style="width:120px">';
+  h+=' <label style="display:inline;margin-left:1em">Y (mm)</label><input id="ne-y" type="number" value="'+c.y+'" min="0" max="'+phH+'" style="width:120px">';
+  h+='</div>';
+  if(c.sc>0&&c.strings&&c.strings.length){
+    h+='<table class="tbl" style="font-size:.8em;margin-bottom:.8em"><tr><th>#</th><th>LEDs</th><th>Length</th><th>Dir</th><th>Type</th></tr>';
+    for(var i=0;i<c.sc&&i<c.strings.length;i++){
+      var s=c.strings[i];
+      h+='<tr><td>'+(i+1)+'</td><td>'+s.leds+'</td><td>'+s.mm+'mm</td><td>'+(dirs[s.sdir]||'?')+'</td><td>'+(types[s.type]||s.type)+'</td></tr>';
+    }
+    h+='</table>';
+  }
+  h+='<div style="display:flex;gap:.5em">';
+  h+='<button class="btn btn-on" onclick="applyNodePos('+c.id+')">Set Position</button>';
+  h+='<button class="btn btn-off" onclick="removeFromCanvas('+c.id+')">Remove from Canvas</button>';
+  h+='</div>';
+  document.getElementById('modal-title').textContent=c.hostname+(c.name&&c.name!==c.hostname?' ('+c.name+')':'');
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+}
+
+function applyNodePos(id){
+  var nx=parseInt(document.getElementById('ne-x').value)||0;
+  var ny=parseInt(document.getElementById('ne-y').value)||0;
+  nx=Math.max(0,Math.min(phW,nx));ny=Math.max(0,Math.min(phH,ny));
+  (ld.children||[]).forEach(function(c){if(c.id===id){c.x=nx;c.y=ny;c._placed=true;}});
+  closeModal();drawLayout();renderSidebar();
+}
+
+function removeFromCanvas(id){
+  (ld.children||[]).forEach(function(c){if(c.id===id){c.x=0;c.y=0;c._placed=false;c.positioned=false;}});
+  closeModal();drawLayout();renderSidebar();
 }
 
 function fmtCoord(mm){
@@ -382,44 +485,73 @@ function fmtCoord(mm){
 function drawLayout(){
   var cv=document.getElementById('lcv');if(!cv||!ld)return;
   var W=cv.width,H=cv.height,ctx=cv.getContext('2d');
+  var det=document.getElementById('lay-detail');
+  var showStr=det&&det.checked;
   ctx.fillStyle='#0d0d0d';ctx.fillRect(0,0,W,H);
   ctx.strokeStyle='#1e1e1e';ctx.lineWidth=1;
   for(var gx=0;gx<=W;gx+=90){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}
   for(var gy=0;gy<=H;gy+=45){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
   ctx.strokeStyle='#2a2a2a';ctx.lineWidth=1;ctx.strokeRect(0,0,W,H);
-  if(!ld.children||!ld.children.length){
+  var placed=(ld.children||[]).filter(_isPlaced);
+  if(!placed.length){
     ctx.fillStyle='#555';ctx.font='13px sans-serif';ctx.textAlign='center';
-    ctx.fillText('No children registered. Add children in the Setup tab.',W/2,H/2);
+    ctx.fillText('Drag children from the sidebar to place them.',W/2,H/2);
     return;
   }
-  ld.children.forEach(function(c){
+  placed.forEach(function(c){
     var cx=Math.round(c.x*W/phW),cy=H-Math.round(c.y*H/phH);
-    ctx.beginPath();ctx.arc(cx,cy,12,0,2*Math.PI);
-    ctx.fillStyle=c.status===1?'#1a6b3a':'#444';ctx.fill();
-    ctx.strokeStyle=c.status===1?'#4c4':'#888';ctx.lineWidth=1.5;ctx.stroke();
-    // flip labels above node if circle is near the bottom edge
+    // Draw strings in detailed mode
+    if(showStr&&c.strings&&c.sc>0){
+      for(var si=0;si<c.sc&&si<c.strings.length;si++){
+        var s=c.strings[si];if(!s||!s.leds)continue;
+        var col=_strCol[si%_strCol.length];
+        var dx=_dirDx[s.sdir||0],dy=_dirDy[s.sdir||0];
+        var pxL=dx!==0?(s.mm||0)*W/phW:(s.mm||0)*H/phH;
+        var ex=cx+dx*pxL,ey=cy+dy*pxL;
+        ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(ex,ey);
+        ctx.strokeStyle=col;ctx.lineWidth=3;ctx.stroke();
+        // LED count at string end
+        ctx.fillStyle=col;ctx.font='8px sans-serif';ctx.textAlign='center';
+        var lx=ex+(dx!==0?dx*10:0),ly=ey+(dy!==0?dy*10:(dx>0?-6:6));
+        ctx.fillText(s.leds,lx,ly);
+      }
+    }
+    // Node circle
+    ctx.beginPath();ctx.arc(cx,cy,10,0,2*Math.PI);
+    ctx.fillStyle=c.status===1?'#1a6b3a':'#333';ctx.fill();
+    ctx.strokeStyle=c.status===1?'#4c4':'#666';ctx.lineWidth=2;ctx.stroke();
+    // Labels
     var lblDir=(cy+50>H)?-1:1;
+    ctx.fillStyle='#eee';ctx.font='10px sans-serif';ctx.textAlign='center';
+    ctx.fillText(c.hostname||c.name||('ID '+c.id),cx,cy+lblDir*20);
     var lbl2=c.name&&c.name!==c.hostname?c.name:'';
     var coordStr='('+fmtCoord(c.x)+','+fmtCoord(c.y)+')';
-    ctx.fillStyle='#eee';ctx.font='10px sans-serif';ctx.textAlign='center';
-    ctx.fillText(c.hostname||(c.name)||('ID '+c.id),cx,cy+lblDir*22);
     ctx.fillStyle='#888';ctx.font='9px sans-serif';
-    if(lbl2){ctx.fillText(lbl2,cx,cy+lblDir*33);ctx.fillText(coordStr,cx,cy+lblDir*44);}
-    else{ctx.fillText(coordStr,cx,cy+lblDir*33);}
+    if(lbl2){ctx.fillText(lbl2,cx,cy+lblDir*31);ctx.fillText(coordStr,cx,cy+lblDir*42);}
+    else{ctx.fillText(coordStr,cx,cy+lblDir*31);}
   });
 }
 
 function saveLayout(){
   if(!ld||!ld.children)return;
-  ra('POST','/api/layout',{children:ld.children.map(function(c){return{id:c.id,x:c.x,y:c.y};})},
-    function(r){if(r&&r.ok)document.getElementById('hs').textContent='Layout saved';});
+  var toSave=ld.children.filter(_isPlaced);
+  ra('POST','/api/layout',{children:toSave.map(function(c){return{id:c.id,x:c.x,y:c.y};})},
+    function(r){
+      if(r&&r.ok){
+        document.getElementById('hs').textContent='Layout saved';
+        toSave.forEach(function(c){c.positioned=true;c._placed=false;});
+        renderSidebar();
+      }
+    });
 }
 
 function cvDown(e){
+  if(e.button!==0)return;
   var cv=document.getElementById('lcv'),r=cv.getBoundingClientRect();
   var mx=e.clientX-r.left,my=e.clientY-r.top,W=cv.width,H=cv.height;
   if(!ld||!ld.children)return;drag=null;
   ld.children.forEach(function(c,i){
+    if(!_isPlaced(c))return;
     var cx=Math.round(c.x*W/phW),cy=H-Math.round(c.y*H/phH);
     if(Math.abs(mx-cx)<=14&&Math.abs(my-cy)<=14){drag=i;dox=mx-cx;doy=my-cy;}
   });

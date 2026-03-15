@@ -281,6 +281,11 @@ check("SPA does not expose /log",    "href='/log'" not in body
                                      and 'href="/log"' not in body)
 check("SPA has Discover button",     "discoverChildren" in body)
 check("SPA has shutdown button",     "shutdownService" in body)
+check("SPA has layout sidebar",      "lay-unplaced" in body)
+check("SPA has Show strings checkbox","lay-detail" in body)
+check("SPA has ondrop for canvas",   "cvDrop" in body)
+check("SPA has ondblclick for canvas","cvDbl" in body)
+check("SPA sanitizes IP in details", "cleanIp" in body or "replace(/^https" in body)
 
 # ── Cache-Control ──────────────────────────────────────────────────────────────
 
@@ -415,6 +420,23 @@ if offline_id is not None:
     check("Refresh offline returns ok:true", rd is not None and rd.get("ok") is True)
     # Clean up
     delete(f"/api/children/{offline_id}")
+
+# ── POST /api/children — IP sanitization ─────────────────────────────────────
+
+section("Add child — IP sanitization (strip protocol + path)")
+code, data = post_json("/api/children", {"ip": "http://10.0.0.253/config"})
+check("HTTP 200",        code == 200,                              f"got {code}")
+check("Returns ok:true", data is not None and data.get("ok") is True)
+san_id = data.get("id") if data else None
+if san_id is not None:
+    _, oc = get_json("/api/children")
+    sc = next((c for c in (oc or []) if c.get("id") == san_id), None)
+    check("IP sanitized to bare address",
+          sc is not None and sc.get("ip") == "10.0.0.253",
+          f"ip={sc.get('ip') if sc else None}")
+    delete(f"/api/children/{san_id}")
+else:
+    skip("IP sanitization verify", "add did not return id")
 
 # ── Mock child: add, status, refresh, action ──────────────────────────────────
 # The mock child binds a UDP socket on the WSL/test machine.  When the server
@@ -848,6 +870,17 @@ if id1 is not None and id2 is not None:
           f"positioned={c2.get('positioned')}")
     check("LA02 x=7000 persisted", c2.get("x") == 7000, f"x={c2.get('x')}")
     check("LA02 y=3000 persisted", c2.get("y") == 3000, f"y={c2.get('y')}")
+
+    # Remove one child from layout (save only LA01), verify LA02 becomes unpositioned
+    _, pdata2 = post_json("/api/layout", {"children": [{"id": id1, "x": 2000, "y": 1500}]})
+    check("Save layout with only LA01 ok", pdata2 is not None and pdata2.get("ok") is True)
+    _, lay3 = get_json("/api/layout")
+    lay3_kids = {c["hostname"]: c for c in (lay3 or {}).get("children", [])}
+    c2b = lay3_kids.get("SLYC-LA02", {})
+    check("LA02 unpositioned after removal from layout",
+          c2b.get("positioned") is False,
+          f"positioned={c2b.get('positioned')}")
+    check("LA02 x=0 after removal", c2b.get("x") == 0, f"x={c2b.get('x')}")
 else:
     skip("Layout positioned-after-save checks", "import did not return child ids")
 

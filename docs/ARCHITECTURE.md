@@ -254,7 +254,7 @@ Six tabs, all served as one HTML response with inline CSS and JS:
 |-----|-------------|-------------|
 | Dashboard | GET /api/children, GET /api/settings | Stop / Go runner |
 | Setup | GET /api/children, GET /api/settings | **Discover** (broadcast PING, list new children), Add/remove/refresh, details modal, JSON import/export |
-| Layout | GET /api/layout | Drag-and-drop 900×450 canvas; unpositioned children auto-spread at load; labels flip above node when near bottom edge; Save Layout |
+| Layout | GET /api/layout | Sidebar lists unplaced children (drag onto canvas); 900×450 canvas with detailed string view (direction + length) or simple icon mode; double-click node to edit position or remove from canvas; labels flip above when near bottom |
 | Actions | — | Send immediate Solid/Flash/Wipe/Off |
 | Runtime | GET /api/runners | Create/edit runners, Compute/Sync/Start |
 | Settings | GET /api/settings | Dark mode, units, canvas size, parent name; **Factory Reset** (POST /api/reset — clears all data) |

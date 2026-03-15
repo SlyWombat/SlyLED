@@ -276,6 +276,8 @@ def api_children_export():
 def api_children_add():
     global _nxt_c
     ip = (request.get_json(silent=True) or {}).get("ip", "").strip()
+    # Sanitize: strip protocol prefix and any path/port suffix
+    ip = ip.replace("https://", "").replace("http://", "").split("/")[0].strip()
     if not ip:
         return jsonify(ok=False, err="ip required"), 400
     child = {"ip": ip, "hostname": ip, "name": ip,
