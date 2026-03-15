@@ -400,7 +400,14 @@ def api_settings_get():
     s = dict(_settings)
     # Compute elapsed dynamically from start epoch
     if s.get("runnerRunning") and s.get("runnerStartEpoch"):
-        s["runnerElapsed"] = max(0, int(time.time()) - s["runnerStartEpoch"])
+        elapsed = max(0, int(time.time()) - s["runnerStartEpoch"])
+        # Compute total duration of active runner for loop detection
+        rid = s.get("activeRunner", -1)
+        rn = next((r for r in _runners if r["id"] == rid), None)
+        total = sum(st.get("durationS", 0) for st in rn.get("steps", [])) if rn else 0
+        if total > 0 and s.get("runnerLoop") and elapsed >= total:
+            elapsed = elapsed % total   # wrap for looping
+        s["runnerElapsed"] = elapsed
     return jsonify(s)
 
 @app.post("/api/settings")

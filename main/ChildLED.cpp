@@ -284,9 +284,11 @@ void ledTask(void* parameter) {
       continue;
     }
 
-    // ── 1. Arm runner when epoch reached ──────────────────────────────────
+    // ── 1. Arm runner when epoch reached (or immediately if NTP failed) ──
     if (childRunnerArmed && childStepCount > 0) {
-      if ((uint32_t)currentEpoch() >= childRunnerStart) {
+      uint32_t now = (uint32_t)currentEpoch();
+      // If NTP failed (epoch < year 2020), start immediately
+      if (now < 1577836800UL || now >= childRunnerStart) {
         childRunnerArmed  = false;
         childRunnerActive = true;
         prevRunStep       = 0xFF;

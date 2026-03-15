@@ -367,8 +367,21 @@ void sendChildConfigPage(WiFiClient& c) {
     c.print(F("</div>"));
   }
   c.print(F("<button class='btn' type='button' id='sb2' onclick='doSave(this)'>Save Config</button>"
-            " <button class='btn' type='button' style='background:#363' onclick='doTest()'>Test LEDs</button>"
+            "<div style='margin-top:.8em;padding:.6em;background:#1a1a1a;border:1px solid #333;border-radius:5px'>"
+            "<label style='margin-top:0'>Test Effect</label>"
+            "<select id='tt'>"
+            "<option value='1'>Solid</option>"
+            "<option value='2'>Fade</option>"
+            "<option value='3'>Breathe</option>"
+            "<option value='4'>Chase</option>"
+            "<option value='5' selected>Rainbow</option>"
+            "<option value='6'>Fire</option>"
+            "<option value='7'>Comet</option>"
+            "<option value='8'>Twinkle</option>"
+            "</select>"
+            "<button class='btn' type='button' style='background:#363;margin-left:.3em' onclick='doTest()'>Run</button>"
             " <button class='btn btn-warn' type='button' onclick='doTestStop()'>Stop</button>"
+            "</div>"
             "</div>"));
   c.print(F("</form>"));
 
@@ -421,7 +434,8 @@ void sendChildConfigPage(WiFiClient& c) {
             "x.onerror=function(){btn.textContent='Error';btn.style.background='#a22';};"
             "x.send(new URLSearchParams(fd));}"));
   c.print(F("function doTest(){"
-            "var x=new XMLHttpRequest();x.open('POST','/test',true);"
+            "var t=document.getElementById('tt').value;"
+            "var x=new XMLHttpRequest();x.open('GET','/test?t='+t,true);"
             "x.send();}"));
   c.print(F("function doTestStop(){"
             "var x=new XMLHttpRequest();x.open('POST','/test/stop',true);"
