@@ -14,6 +14,7 @@ Usage (from project root):
 import argparse
 import json
 import os
+import signal
 import socket
 import struct
 import sys
@@ -103,14 +104,44 @@ def _send(ip, pkt):
     except Exception:
         pass
 
-def _send_recv(ip, pkt, timeout=1.5, maxb=256):
+def _local_broadcasts():
+    """Return subnet-directed broadcast addresses for all non-loopback interfaces."""
+    bcs = []
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.settimeout(timeout)
-            s.sendto(pkt, (ip, UDP_PORT))
-            return s.recvfrom(maxb)[0]
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip.startswith("127.") or ip.startswith("169.254."):
+                continue
+            parts = ip.rsplit(".", 1)
+            if len(parts) == 2:
+                bc = parts[0] + ".255"
+                if bc not in bcs:
+                    bcs.append(bc)
     except Exception:
-        return None
+        pass
+    return bcs
+
+def _send_recv(ip, pkt, timeout=1.5, maxb=256):
+    """Send UDP packet and wait for reply.
+    Binds to UDP_PORT (with SO_REUSEADDR) so the child replies to the
+    firewall-allowed port 4210.  Falls back to an ephemeral port if 4210
+    is momentarily busy.
+    """
+    for bind_port in (UDP_PORT, 0):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.settimeout(timeout)
+                s.bind(("", bind_port))
+                s.sendto(pkt, (ip, UDP_PORT))
+                return s.recvfrom(maxb)[0]
+        except OSError:
+            if bind_port == 0:
+                return None   # ephemeral port also failed
+            continue          # port 4210 busy — retry with ephemeral
+        except Exception:
+            return None
+    return None
 
 def _parse_pong(data, src_ip):
     # Full PONG = 8-byte header + 131-byte PongPayload = 139 bytes
@@ -137,14 +168,60 @@ def _parse_pong(data, src_ip):
         "status": 1, "seen": int(time.time()),
     }
 
-def _ping(child):
-    resp = _send_recv(child["ip"], _hdr(CMD_PING))
-    info = _parse_pong(resp, child["ip"])
-    if info:
-        child.update({k: v for k, v in info.items() if k != "id"})
-        return True
+def _ping(child, retries=2):
+    """Send CMD_PING and update child from PONG response.
+    Retries up to `retries` times on timeout before marking offline.
+    """
+    pkt = _hdr(CMD_PING)
+    for _ in range(retries + 1):
+        resp = _send_recv(child["ip"], pkt)
+        info = _parse_pong(resp, child["ip"])
+        if info:
+            child.update({k: v for k, v in info.items() if k != "id"})
+            return True
     child["status"] = 0
     return False
+
+def _discover():
+    """Broadcast PING and collect PONGs for ~2 s.
+    Sends to 255.255.255.255 and all subnet-directed broadcast addresses.
+    Binds to UDP_PORT so replies arrive on the firewall-allowed port.
+    Excludes IPs already registered as children.
+    """
+    found = {}
+    known_ips = {c["ip"] for c in _children}
+    broadcasts = ["255.255.255.255"] + _local_broadcasts()
+    for bind_port in (UDP_PORT, 0):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.settimeout(0.1)
+                s.bind(("", bind_port))
+                for bc in broadcasts:
+                    try:
+                        s.sendto(_hdr(CMD_PING), (bc, UDP_PORT))
+                    except Exception:
+                        pass
+                deadline = time.time() + 2.0
+                while time.time() < deadline:
+                    try:
+                        data, addr = s.recvfrom(256)
+                        src_ip = addr[0]
+                        if src_ip not in found and src_ip not in known_ips:
+                            info = _parse_pong(data, src_ip)
+                            if info:
+                                found[src_ip] = info
+                    except socket.timeout:
+                        pass
+            break   # socket opened successfully
+        except OSError:
+            if bind_port == 0:
+                break
+            continue   # port 4210 busy — retry with ephemeral
+        except Exception:
+            break
+    return list(found.values())
 
 def _action_pkt(act, child):
     t   = act.get("type", 0)
@@ -187,6 +264,10 @@ def status():
 def api_children():
     return jsonify(_children)
 
+@app.get("/api/children/discover")
+def api_children_discover():
+    return jsonify(_discover())
+
 @app.get("/api/children/export")
 def api_children_export():
     return jsonify(_children)
@@ -197,12 +278,15 @@ def api_children_add():
     ip = (request.get_json(silent=True) or {}).get("ip", "").strip()
     if not ip:
         return jsonify(ok=False, err="ip required"), 400
+    child = {"ip": ip, "hostname": ip, "name": ip,
+             "desc": "", "sc": 0, "strings": [], "status": 0, "seen": 0}
     with _lock:
-        child = {"id": _nxt_c, "ip": ip, "hostname": ip, "name": ip,
-                 "desc": "", "sc": 0, "strings": [], "status": 0, "seen": 0}
-        _ping(child)
-        _children.append(child)
+        child["id"] = _nxt_c
         _nxt_c += 1
+        _children.append(child)
+        _save("children", _children)
+    _ping(child)          # ping outside lock so DELETE/other requests aren't blocked
+    with _lock:
         _save("children", _children)
     return jsonify(ok=True, id=child["id"])
 
@@ -222,8 +306,8 @@ def api_children_refresh(cid):
     child = next((c for c in _children if c["id"] == cid), None)
     if not child:
         abort(404)
+    _ping(child)          # ping outside lock so DELETE/other requests aren't blocked
     with _lock:
-        _ping(child)
         _save("children", _children)
     return jsonify(ok=True)
 
@@ -271,7 +355,8 @@ def api_layout_get():
     layout["children"] = [
         {**c,
          "x": pos_map.get(c["id"], {}).get("x", 0),
-         "y": pos_map.get(c["id"], {}).get("y", 0)}
+         "y": pos_map.get(c["id"], {}).get("y", 0),
+         "positioned": c["id"] in pos_map}
         for c in _children
     ]
     return jsonify(layout)
@@ -435,6 +520,42 @@ def api_runner_start(rid):
         _settings["activeRunner"]  = rid
         _settings["runnerElapsed"] = 0
         _save("settings", _settings)
+    return jsonify(ok=True)
+
+# ── Factory reset ─────────────────────────────────────────────────────────────
+
+_DEFAULT_SETTINGS = {
+    "name": "SlyLED", "units": 0, "canvasW": 10000, "canvasH": 5000,
+    "darkMode": 1, "runnerRunning": False, "activeRunner": -1, "runnerElapsed": 0,
+}
+_DEFAULT_LAYOUT = {"canvasW": 10000, "canvasH": 5000, "children": []}
+
+@app.post("/api/reset")
+def api_reset():
+    """Clear all children, runners, layout and restore default settings."""
+    global _children, _settings, _layout, _runners, _nxt_c, _nxt_r
+    with _lock:
+        _children = []
+        _runners  = []
+        _layout   = dict(_DEFAULT_LAYOUT)
+        _settings = dict(_DEFAULT_SETTINGS)
+        _nxt_c = 0
+        _nxt_r = 0
+        _save("children", _children)
+        _save("runners",  _runners)
+        _save("layout",   _layout)
+        _save("settings", _settings)
+    return jsonify(ok=True)
+
+# ── Shutdown ──────────────────────────────────────────────────────────────────
+
+@app.post("/api/shutdown")
+def api_shutdown():
+    """Terminate the parent process after sending the response."""
+    def _kill():
+        time.sleep(0.3)
+        os._exit(0)
+    threading.Thread(target=_kill, daemon=True).start()
     return jsonify(ok=True)
 
 # ── SPA fallback — must be last ───────────────────────────────────────────────

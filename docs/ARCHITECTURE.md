@@ -115,6 +115,7 @@ Routes matched in order (longest/most-specific first):
 |--------|------|-------------|
 | GET | `/` | Full 6-tab SPA |
 | GET | `/status` | `{"role":"parent","hostname":"slyled"}` |
+| GET | `/api/children/discover` | Broadcast PING, return unregistered children found within 1.5 s |
 | GET/POST | `/api/children/import` | Import JSON array; dedup by hostname |
 | GET | `/api/children/export` | Export all children as JSON |
 | GET/POST/DELETE | `/api/children/:id/...` | Child CRUD, refresh, status poll |
@@ -126,6 +127,7 @@ Routes matched in order (longest/most-specific first):
 | POST | `/api/runners/stop` | Broadcast CMD_RUNNER_STOP |
 | GET/POST/PUT/DELETE | `/api/runners/:id/...` | Runner compute / sync / start |
 | GET/POST | `/api/runners` | List / create runners |
+| POST | `/api/reset` | Factory reset — clear all children, runners, layout, settings |
 
 **Route order matters:** `/api/runners/stop` is checked before `/api/runners/`; `/api/children/import` before `/api/children/export` before `/api/children/`.
 
@@ -251,11 +253,11 @@ Six tabs, all served as one HTML response with inline CSS and JS:
 | Tab | Data source | Key actions |
 |-----|-------------|-------------|
 | Dashboard | GET /api/children, GET /api/settings | Stop / Go runner |
-| Setup | GET /api/children, GET /api/settings | Add/remove/refresh children, details modal, JSON import/export |
-| Layout | GET /api/layout, GET /api/children | Drag canvas, save positions |
+| Setup | GET /api/children, GET /api/settings | **Discover** (broadcast PING, list new children), Add/remove/refresh, details modal, JSON import/export |
+| Layout | GET /api/layout | Drag-and-drop 900×450 canvas; unpositioned children auto-spread at load; labels flip above node when near bottom edge; Save Layout |
 | Actions | — | Send immediate Solid/Flash/Wipe/Off |
 | Runtime | GET /api/runners | Create/edit runners, Compute/Sync/Start |
-| Settings | GET /api/settings | Dark mode, units, canvas size, parent name |
+| Settings | GET /api/settings | Dark mode, units, canvas size, parent name; **Factory Reset** (POST /api/reset — clears all data) |
 
 Dark mode: `body#app` CSS class `light` toggled by `applyDarkMode()`. Persisted in `settings.darkMode`. Applied before first tab renders.
 

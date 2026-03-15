@@ -57,7 +57,7 @@ body.light .prog-bar{background:#ddd}
 </style>
 </head>
 <body id='app'>
-<div id='hdr'><h1>SlyLED</h1><div id='hs'>Loading...</div></div>
+<div id='hdr' style='display:flex;align-items:center;gap:.8em'><img src='data:image/png;base64,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' style='height:48px;width:auto;flex-shrink:0' alt='SlyLED'><div><h1>SlyLED</h1><div id='hs'>Loading...</div></div></div>
 <nav>
   <button id='n-dash'     class='tnav tact' onclick='showTab("dash")'>Dashboard</button>
   <button id='n-setup'    class='tnav'      onclick='showTab("setup")'>Setup</button>
@@ -71,9 +71,9 @@ body.light .prog-bar{background:#ddd}
 <div id='t-setup'   class='tab' style='display:none'></div>
 
 <div id='t-layout' class='tab' style='display:none'>
-  <p style='color:#888;font-size:.85em;margin-bottom:.6em'>Drag nodes to position. (0,0)=bottom-left.</p>
-  <canvas id='lcv' width='640' height='320'
-    style='border:1px solid #444;cursor:grab;display:block;background:#0d0d0d'
+  <p style='color:#888;font-size:.85em;margin-bottom:.6em'>Drag nodes to position. (0,0)=bottom-left. New children are auto-spread until saved.</p>
+  <canvas id='lcv' width='900' height='450'
+    style='border:1px solid #444;cursor:grab;display:block;background:#0d0d0d;max-width:100%'
     onmousedown='cvDown(event)' onmousemove='cvMove(event)'
     onmouseup='cvUp()' onmouseleave='cvUp()'></canvas>
   <div style='margin-top:.6em'>
@@ -155,6 +155,16 @@ body.light .prog-bar{background:#ddd}
       <button class='btn btn-on' onclick='saveSettings()'>Save Settings</button>
     </div>
   </div>
+  <div class='card' style='max-width:480px;border-color:#622'>
+    <div class='card-title' style='color:#c66'>Factory Reset</div>
+    <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Remove all children, runners and layout data, and restore default settings.</p>
+    <button class='btn btn-off' onclick='factoryReset()'>Factory Reset</button>
+  </div>
+  <div class='card' style='max-width:480px;border-color:#622'>
+    <div class='card-title' style='color:#c66'>Service</div>
+    <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Stop the SlyLED parent service and close the application.</p>
+    <button class='btn btn-off' onclick='shutdownService()'>Shutdown Service</button>
+  </div>
 </div>
 
 <div id='modal' class='modal-bg' onclick='if(event.target===this)closeModal()'>
@@ -170,7 +180,7 @@ body.light .prog-bar{background:#ddd}
 <div class='footer' id='fv'>SlyLED v3.6 &mdash; Windows Parent</div>
 
 <script>
-var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0,units=0;
+var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0,units=0,_cvW=900,_cvH=450;
 var curRid=-1,curRname='',curRsteps=[];
 
 function showTab(t){
@@ -243,13 +253,15 @@ function refreshRunnerStatus(){
 
 function loadSetup(){
   ra('GET','/api/children',null,function(d){
-    var h='<div style="margin-bottom:1em">'
-      +'<input id="aip" placeholder="Child IP (x.x.x.x)" style="width:160px">'
-      +'<button class="btn btn-on" onclick="addChild()" style="margin-left:.5em">Add Child</button>'
+    var h='<div style="margin-bottom:.6em">'
+      +'<button class="btn btn-nav" onclick="discoverChildren()" id="disc-btn">Discover</button>'
+      +'<input id="aip" placeholder="Manual IP (x.x.x.x)" style="width:150px;margin-left:.5em">'
+      +'<button class="btn btn-on" onclick="addChild()" style="margin-left:.3em">Add</button>'
       +'<a class="btn btn-nav" href="/api/children/export" style="margin-left:.5em">Export JSON</a>'
       +'<label class="btn btn-nav" style="cursor:pointer;margin-left:.5em">Import JSON'
       +'<input type="file" accept=".json" style="display:none" onchange="importChildren(this)"></label>'
       +'</div>'
+      +'<div id="disc-results" style="display:none;margin-bottom:.8em"></div>'
       +'<table class="tbl"><tr><th>Hostname</th><th>Name</th><th>IP</th><th>Status</th><th>Strings</th><th>Actions</th></tr>';
     if(d&&d.length){
       d.forEach(function(c){
@@ -268,6 +280,32 @@ function loadSetup(){
 function addChild(){
   var ip=document.getElementById('aip').value.trim();
   if(!ip)return;
+  ra('POST','/api/children',{ip:ip},function(){loadSetup();});
+}
+
+function discoverChildren(){
+  var btn=document.getElementById('disc-btn');
+  if(btn){btn.disabled=true;btn.textContent='Scanning...';}
+  ra('GET','/api/children/discover',null,function(d){
+    if(btn){btn.disabled=false;btn.textContent='Discover';}
+    var el=document.getElementById('disc-results');
+    if(!el)return;
+    if(!d||!d.length){
+      el.innerHTML='<p style="color:#888;font-size:.85em;padding:.3em 0">No new children found on network.</p>';
+      el.style.display='block';return;
+    }
+    var h='<p style="color:#aaa;font-size:.85em;margin-bottom:.4em">Found — click Add to register:</p>'
+      +'<table class="tbl" style="max-width:700px"><tr><th>Hostname</th><th>Name</th><th>IP</th><th>Strings</th><th></th></tr>';
+    d.forEach(function(c){
+      h+='<tr><td>'+c.hostname+'</td><td>'+(c.name||'-')+'</td><td>'+c.ip+'</td><td>'+c.sc+'</td>'
+        +'<td><button class="btn btn-on" onclick="addDiscovered(\''+c.ip+'\')">Add</button></td></tr>';
+    });
+    el.innerHTML=h+'</table>';
+    el.style.display='block';
+  });
+}
+
+function addDiscovered(ip){
   ra('POST','/api/children',{ip:ip},function(){loadSetup();});
 }
 
@@ -290,7 +328,7 @@ function showDetails(id){
     if(!c)return;
     var dirs=['E','N','W','S'],types=['WS2812B','WS2811','APA102'];
     var h='<p style="font-size:.85em;margin-bottom:.6em">';
-    h+='IP: <a href="http://'+c.ip+'/config" target="_blank" style="color:#88f">'+c.ip+'/config</a>';
+    h+='IP: <a href="http://'+c.ip+'" target="_blank" style="color:#88f">http://'+c.ip+'</a>';
     if(c.desc)h+=' &mdash; '+c.desc;
     h+='</p><table class="tbl" style="font-size:.8em">';
     h+='<tr><th>#</th><th>LEDs</th><th>Len mm</th><th>Type</th><th>Cable Dir</th><th>Cable mm</th><th>Strip Dir</th></tr>';
@@ -322,9 +360,18 @@ function importChildren(input){
 }
 
 function loadLayout(){
-  ra('GET','/api/settings',null,function(s){if(s)units=s.units||0;});
-  ra('GET','/api/layout',null,function(d){
-    if(!d)return;ld=d;phW=d.canvasW||10000;phH=d.canvasH||5000;drawLayout();
+  ra('GET','/api/settings',null,function(s){
+    if(s)units=s.units||0;
+    ra('GET','/api/layout',null,function(d){
+      if(!d)return;ld=d;phW=d.canvasW||10000;phH=d.canvasH||5000;
+      // Auto-spread nodes that have no saved position
+      var unpos=(ld.children||[]).filter(function(c){return !c.positioned;});
+      if(unpos.length>0){
+        var step=phW/(unpos.length+1);
+        unpos.forEach(function(c,i){c.x=Math.round(step*(i+1));c.y=Math.round(phH*0.5);});
+      }
+      drawLayout();
+    });
   });
 }
 
@@ -337,22 +384,28 @@ function drawLayout(){
   var W=cv.width,H=cv.height,ctx=cv.getContext('2d');
   ctx.fillStyle='#0d0d0d';ctx.fillRect(0,0,W,H);
   ctx.strokeStyle='#1e1e1e';ctx.lineWidth=1;
-  for(var gx=0;gx<=W;gx+=64){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}
-  for(var gy=0;gy<=H;gy+=32){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
+  for(var gx=0;gx<=W;gx+=90){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}
+  for(var gy=0;gy<=H;gy+=45){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
   ctx.strokeStyle='#2a2a2a';ctx.lineWidth=1;ctx.strokeRect(0,0,W,H);
-  if(!ld.children)return;
+  if(!ld.children||!ld.children.length){
+    ctx.fillStyle='#555';ctx.font='13px sans-serif';ctx.textAlign='center';
+    ctx.fillText('No children registered. Add children in the Setup tab.',W/2,H/2);
+    return;
+  }
   ld.children.forEach(function(c){
     var cx=Math.round(c.x*W/phW),cy=H-Math.round(c.y*H/phH);
     ctx.beginPath();ctx.arc(cx,cy,12,0,2*Math.PI);
     ctx.fillStyle=c.status===1?'#1a6b3a':'#444';ctx.fill();
     ctx.strokeStyle=c.status===1?'#4c4':'#888';ctx.lineWidth=1.5;ctx.stroke();
-    ctx.fillStyle='#eee';ctx.font='10px sans-serif';ctx.textAlign='center';
-    ctx.fillText(c.hostname,cx,cy+22);
+    // flip labels above node if circle is near the bottom edge
+    var lblDir=(cy+50>H)?-1:1;
     var lbl2=c.name&&c.name!==c.hostname?c.name:'';
     var coordStr='('+fmtCoord(c.x)+','+fmtCoord(c.y)+')';
+    ctx.fillStyle='#eee';ctx.font='10px sans-serif';ctx.textAlign='center';
+    ctx.fillText(c.hostname||(c.name)||('ID '+c.id),cx,cy+lblDir*22);
     ctx.fillStyle='#888';ctx.font='9px sans-serif';
-    if(lbl2){ctx.fillText(lbl2,cx,cy+33);ctx.fillText(coordStr,cx,cy+44);}
-    else{ctx.fillText(coordStr,cx,cy+33);}
+    if(lbl2){ctx.fillText(lbl2,cx,cy+lblDir*33);ctx.fillText(coordStr,cx,cy+lblDir*44);}
+    else{ctx.fillText(coordStr,cx,cy+lblDir*33);}
   });
 }
 
@@ -586,6 +639,22 @@ function loadSettings(){
     var cb=document.getElementById('s-dm');if(cb)cb.checked=(d.darkMode!==0);
     applyDarkMode(d.darkMode!==0);
   });
+}
+
+function factoryReset(){
+  if(!confirm('Factory reset? This will delete ALL children, runners and layout data and cannot be undone.'))return;
+  ra('POST','/api/reset',{},function(d){
+    if(d&&d.ok){loadSettings();loadDash();}
+  });
+}
+
+function shutdownService(){
+  if(!confirm('Stop the SlyLED service? The browser will lose connection.'))return;
+  var x=new XMLHttpRequest();x.open('POST','/api/shutdown',true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.onload=function(){document.getElementById('hs').textContent='Service stopped. You may close this tab.';};
+  x.onerror=function(){document.getElementById('hs').textContent='Service stopped.';};
+  x.send('{}');
 }
 
 function saveSettings(){

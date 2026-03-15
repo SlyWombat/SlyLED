@@ -11,6 +11,7 @@ import PyInstaller.__main__
 HERE   = pathlib.Path(__file__).resolve().parent
 SHARED = (HERE / ".." / "shared").resolve()
 SPA    = SHARED / "spa"
+ICO    = (HERE / ".." / ".." / "images" / "slyled.ico").resolve()
 
 PyInstaller.__main__.run([
     "--onefile",
@@ -19,6 +20,7 @@ PyInstaller.__main__.run([
     "--distpath", str(HERE / "dist"),
     "--workpath", str(HERE / "build"),
     "--specpath", str(HERE),
+    "--icon", str(ICO),
     "--add-data", f"{SPA};spa",
     "--hidden-import=pystray",
     "--hidden-import=PIL._tkinter_finder",

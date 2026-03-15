@@ -27,6 +27,8 @@ OutputBaseFilename=SlyLED-Parent-Setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\..\images\slyled.ico
+UninstallDisplayIcon={app}\SlyLED.exe
 
 DisableProgramGroupPage=yes
 

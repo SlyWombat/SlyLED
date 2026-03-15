@@ -22,7 +22,7 @@ Unknown URL paths also return the SPA (client-side routing).
 **Response:** `200 OK`, `application/json`
 
 ```json
-{"role": "parent", "hostname": "WIN-HOSTNAME"}
+{"role": "parent", "hostname": "WIN-HOSTNAME", "version": "3.6"}
 ```
 
 ---
@@ -63,14 +63,14 @@ List all known children.
 
 ### POST /api/children
 
-Add a child by IP (parent sends CMD_PING and waits for CMD_PONG).
+Add a child by IP (parent sends CMD_PING and waits for CMD_PONG). The ping runs outside the request lock so concurrent requests are not blocked.
 
 **Request body:** `{"ip": "192.168.1.100"}`
 
 **Response:** `200 OK`
 
 ```json
-{"ok": true}
+{"ok": true, "id": 0}
 ```
 
 ---
@@ -113,6 +113,31 @@ Re-send CMD_PING to a specific child IP to refresh its PONG data.
 
 ---
 
+### GET /api/children/discover
+
+Broadcast a `CMD_PING` to `255.255.255.255:4210` and collect `CMD_PONG` responses for 1.5 seconds. Returns children found on the network that are **not** already in the known-children table (filtered by IP address).
+
+**Response:** `200 OK`, array of child objects (same schema as `GET /api/children`, no `id` field — children are not added automatically).
+
+```json
+[
+  {
+    "ip": "192.168.1.105",
+    "hostname": "SLYC-C3D4",
+    "name": "SLYC-C3D4",
+    "desc": "",
+    "sc": 2,
+    "strings": [...],
+    "status": 1,
+    "seen": 1710000000
+  }
+]
+```
+
+Returns an empty array if no new children respond within 1.5 seconds.
+
+---
+
 ### GET /api/children/export
 
 Export all children as a JSON array (for backup / transfer).
@@ -139,6 +164,8 @@ Import a JSON array of children; deduplicates by hostname (existing entry is upd
 
 ### GET /api/layout
 
+Returns canvas dimensions and the position of every registered child. Children without a saved position default to `x=0, y=0` with `positioned=false`.
+
 **Response:** `200 OK`
 
 ```json
@@ -146,18 +173,38 @@ Import a JSON array of children; deduplicates by hostname (existing entry is upd
   "canvasW": 10000,
   "canvasH": 5000,
   "children": [
-    {"id": 0, "xMm": 1000, "yMm": 500}
+    {
+      "id": 0, "hostname": "SLYC-A1B2", "name": "Front strip",
+      "x": 2000, "y": 1500,
+      "positioned": true
+    },
+    {
+      "id": 1, "hostname": "SLYC-C3D4", "name": "SLYC-C3D4",
+      "x": 0, "y": 0,
+      "positioned": false
+    }
   ]
 }
 ```
+
+`positioned: false` means no layout position has been explicitly saved for that child yet. The SPA auto-spreads unpositioned children across the canvas on first view so they are visible and draggable.
 
 ---
 
 ### POST /api/layout
 
-Save canvas positions for all children.
+Save canvas positions for all children. Only `id`, `x`, and `y` are read from each element; other fields are ignored.
 
-**Request body:** same schema as GET response
+**Request body:**
+
+```json
+{
+  "children": [
+    {"id": 0, "x": 2000, "y": 1500},
+    {"id": 1, "x": 7000, "y": 3000}
+  ]
+}
+```
 
 **Response:** `200 OK`, `{"ok": true}`
 
@@ -305,6 +352,24 @@ Broadcast `CMD_RUNNER_STOP` to all children. Updates `runnerRunning = false`.
 
 ---
 
+## Factory Reset
+
+### POST /api/reset
+
+Clear all children, runners, and layout data, and restore default settings. This is equivalent to a full wipe — the operation is **not reversible**.
+
+**Request body:** `{}` (empty)
+
+**Response:** `200 OK`
+
+```json
+{"ok": true}
+```
+
+Default settings restored: `name="SlyLED"`, `units=0`, `canvasW=10000`, `canvasH=5000`, `darkMode=1`, `runnerRunning=false`, `activeRunner=-1`.
+
+---
+
 ## Action API
 
 ### POST /api/action
@@ -359,12 +424,14 @@ Children expose a minimal HTTP interface on **port 80**.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/` | Config form (same as `/config`) |
+| GET | `/` | 302 redirect → `/config` |
 | GET | `/status` | `{"role":"child","hostname":"SLYC-XXXX","action":N}` |
-| GET | `/config` | Self-config HTML form |
-| POST | `/config` | Save config to EEPROM, broadcast CMD_PONG |
+| GET | `/config` | 3-tab self-config SPA (Dashboard / Settings / Config) |
+| POST | `/config` | Save config to EEPROM, broadcast CMD_PONG, 303 redirect |
+| POST | `/config/reset` | Factory reset to defaults, 303 redirect |
+| GET | `/favicon.ico` | 404 |
 
-`POST /config` form fields: `an` (altName), `de` (description), `sc` (stringCount), `s0`–`s3` (active string index), per-string: `lc` (ledCount), `ll` (lengthMm), `lt` (ledType), `cd` (cableDir), `cm` (cableMm), `sd` (stripDir).
+`POST /config` form fields: `an` (altName), `desc` (description), `sc` (stringCount 1–`CHILD_MAX_STRINGS`); per-string: `lc` (ledCount), `lm` (lengthMm), `lt` (ledType), `sd` (stripDir).
 
 ---
 

@@ -33,11 +33,11 @@ All three board targets share one sketch (`main/main.ino`) with `#ifdef BOARD_GI
 | Tab | Function |
 |-----|----------|
 | Dashboard | Children table, runner progress bar, Stop / Go buttons |
-| Setup | Add / remove / refresh children, details modal, JSON import/export |
-| Layout | Drag-and-drop canvas positioning of children and their LED strings (metric or imperial) |
+| Setup | **Discover** children on the network (UDP broadcast, shows unregistered nodes), add / remove / refresh, details modal, JSON import/export |
+| Layout | 900×450 drag-and-drop canvas; unpositioned children auto-spread so they're visible immediately; metric or imperial coordinates |
 | Actions | Send immediate Solid / Flash / Wipe / Off to any child |
 | Runtime | Create runners, add/edit steps (action + area-of-effect + duration), Compute / Sync / Start |
-| Settings | Dark mode, units, canvas dimensions, parent name |
+| Settings | Dark mode, units, canvas dimensions, parent name; **Factory Reset** clears all children / runners / layout |
 
 ### Child config page
 
@@ -133,7 +133,7 @@ cd tests
 python test_web.py localhost:8080
 ```
 
-Covers: connectivity, SPA structure, cache headers, `/status`, children CRUD + import/export + status poll, layout, settings round-trip, full runner lifecycle (create / PUT steps / compute / stop / delete), error handling, MAX_RUNNERS overflow, Content-Length headers. **105 checks.**
+Covers: connectivity, SPA structure, cache headers, `/status`, children CRUD + import/export + status poll, layout `positioned` flag + multi-child round-trip, settings round-trip, full runner lifecycle (create / PUT steps / compute / stop / delete), error handling, MAX_RUNNERS overflow, Content-Length headers, mock UDP child (PING/PONG/ACTION/STATUS). **173 checks.**
 
 ### Child (ESP32 / D1 Mini)
 
