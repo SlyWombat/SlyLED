@@ -225,6 +225,24 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
 #endif  // BOARD_GIGA
 
 #ifdef BOARD_FASTLED
+  } else if (isPost && strstr(req, " /test/stop ")) {
+    childActType = ACT_OFF;
+    childActSeq++;
+    sendJsonOk(client);
+  } else if (isPost && strstr(req, " /test ")) {
+    // Wipe red across all configured LEDs on string 0
+    childActType  = ACT_WIPE;
+    childActR = 255; childActG = 0; childActB = 0;
+    childActOnMs = 500; childActOffMs = 500;
+    childActWDir = DIR_E; childActWSpd = 30;
+    for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
+      if (j < childCfg.stringCount && childCfg.strings[j].ledCount > 0) {
+        childActSt[j] = 0;
+        childActEn[j] = childCfg.strings[j].ledCount - 1;
+      } else { childActSt[j] = 0xFF; childActEn[j] = 0xFF; }
+    }
+    childActSeq++;
+    sendJsonOk(client);
   } else if (isPost && strstr(req, " /config/reset ")) {
     handleFactoryReset(client);
   } else if (strstr(req, " /config ")) {

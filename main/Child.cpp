@@ -280,6 +280,7 @@ void sendChildConfigPage(WiFiClient& c) {
             ".btn{display:inline-block;padding:.4em 1.2em;background:#446;color:#fff;"
             "border:none;border-radius:5px;cursor:pointer;font-size:.9em;margin-top:.6em}"
             ".btn-warn{background:#633}"
+            ".btn:active{transform:scale(.95);opacity:.7}"
             ".ftr{margin-top:1.5em;font-size:.7em;color:#444}"
             "</style></head><body>"));
 
@@ -319,7 +320,7 @@ void sendChildConfigPage(WiFiClient& c) {
   for (uint8_t n = 1; n <= CHILD_MAX_STRINGS; n++)
     sendBuf(c, "<option value='%u'%s>%u</option>",
             (unsigned)n, n == childCfg.stringCount ? " selected" : "", (unsigned)n);
-  c.print(F("</select><button class='btn' type='submit'>Save Settings</button>"
+  c.print(F("</select><button class='btn' type='button' id='sb1' onclick='doSave(this)'>Save Settings</button>"
             "<button class='btn btn-warn' type='button' style='margin-left:.5em'"
             " onclick=\"document.getElementById('rf').submit()\">Factory Reset</button>"));
   c.print(F("</div>"));
@@ -363,7 +364,10 @@ void sendChildConfigPage(WiFiClient& c) {
                childCfg.strings[j].stripDir == 3 ? " selected" : "");
     c.print(F("</div>"));
   }
-  c.print(F("<button class='btn' type='submit'>Save Config</button></div>"));
+  c.print(F("<button class='btn' type='button' id='sb2' onclick='doSave(this)'>Save Config</button>"
+            " <button class='btn' type='button' style='background:#363' onclick='doTest()'>Test LEDs</button>"
+            " <button class='btn btn-warn' type='button' onclick='doTestStop()'>Stop</button>"
+            "</div>"));
   c.print(F("</form>"));
 
   // Factory reset (separate form — HTML forbids nested forms)
@@ -402,6 +406,23 @@ void sendChildConfigPage(WiFiClient& c) {
             "var n=['Off','Solid','Flash','Wipe'];"
             "document.getElementById('act').textContent=n[d.action]||'?';"
             "}catch(e){}};"
+            "x.send();}"));
+  c.print(F("function doSave(btn){"
+            "var orig=btn.textContent;btn.textContent='Saving...';btn.disabled=true;"
+            "btn.style.background='#555';"
+            "var fd=new FormData(document.getElementById('cf'));"
+            "var x=new XMLHttpRequest();"
+            "x.open('POST','/config',true);"
+            "x.onload=function(){"
+            "btn.textContent='Saved!';btn.style.background='#2a2';"
+            "setTimeout(function(){location.reload();},800);};"
+            "x.onerror=function(){btn.textContent='Error';btn.style.background='#a22';};"
+            "x.send(new URLSearchParams(fd));}"));
+  c.print(F("function doTest(){"
+            "var x=new XMLHttpRequest();x.open('POST','/test',true);"
+            "x.send();}"));
+  c.print(F("function doTestStop(){"
+            "var x=new XMLHttpRequest();x.open('POST','/test/stop',true);"
             "x.send();}"));
   c.print(F("showTab(0);showStr(0);poll();setInterval(poll,3000);"
             "</script></body></html>"));
