@@ -84,6 +84,8 @@ _settings = _load("settings", {
 _layout  = _load("layout",  {"canvasW": 10000, "canvasH": 5000, "children": []})
 _runners = _load("runners", [])
 
+MAX_RUNNERS = 4
+
 _nxt_c = max((c["id"] for c in _children), default=-1) + 1
 _nxt_r = max((r["id"] for r in _runners),  default=-1) + 1
 _lock  = threading.Lock()
@@ -307,6 +309,8 @@ def api_action():
     tgt = str(act.get("target", "all"))
     targets = (_children if tgt == "all"
                 else [c for c in _children if str(c["id"]) == tgt])
+    if tgt != "all" and not targets:
+        return jsonify(ok=False, err="target not found"), 404
     for c in targets:
         _send(c["ip"], _action_pkt(act, c))
     return jsonify(ok=True)
@@ -339,6 +343,8 @@ def api_runners_create():
     global _nxt_r
     body = request.get_json(silent=True) or {}
     with _lock:
+        if len(_runners) >= MAX_RUNNERS:
+            return jsonify(ok=False, err="max runners reached"), 400
         r = {"id": _nxt_r, "name": body.get("name", "Runner"),
              "computed": False, "steps": []}
         _runners.append(r)
@@ -438,7 +444,10 @@ def api_runner_start(rid):
 def spa_fallback(path):
     if path.startswith("api/") or path in ("status", "favicon.ico"):
         abort(404)
-    return send_from_directory(str(SPA), "index.html")
+    resp = send_from_directory(str(SPA), "index.html")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
