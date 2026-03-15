@@ -39,22 +39,9 @@ rem ── 4. Clean previous artefacts ─────────────�
 if exist "%WINDIR%dist\SlyLED.exe"  del /f /q "%WINDIR%dist\SlyLED.exe"
 if exist "%WINDIR%build\SlyLED"     rmdir /s /q "%WINDIR%build\SlyLED"
 
-rem ── 5. PyInstaller ────────────────────────────────────────────────────────────
+rem ── 5. PyInstaller (via build.py to avoid cmd quoting issues with spaces) ───
 echo Building executable...
-python -m PyInstaller ^
-  --onefile ^
-  --windowed ^
-  --name SlyLED ^
-  --distpath "%WINDIR%dist" ^
-  --workpath "%WINDIR%build" ^
-  --specpath "%WINDIR%" ^
-  --add-data "%SPA%;spa" ^
-  --hidden-import=pystray ^
-  --hidden-import=PIL._tkinter_finder ^
-  --collect-submodules flask ^
-  --collect-submodules werkzeug ^
-  --paths "%SHARED%" ^
-  "%SHARED%\main.py"
+python "%WINDIR%build.py"
 
 if errorlevel 1 (
     echo.

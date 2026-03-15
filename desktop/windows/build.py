@@ -1,0 +1,29 @@
+"""build.py — PyInstaller helper for SlyLED Parent.
+
+Called by build.bat to avoid Windows cmd ^ line-continuation quoting issues
+with paths that contain spaces.
+"""
+import pathlib
+import sys
+
+import PyInstaller.__main__
+
+HERE   = pathlib.Path(__file__).resolve().parent
+SHARED = (HERE / ".." / "shared").resolve()
+SPA    = SHARED / "spa"
+
+PyInstaller.__main__.run([
+    "--onefile",
+    "--windowed",
+    "--name", "SlyLED",
+    "--distpath", str(HERE / "dist"),
+    "--workpath", str(HERE / "build"),
+    "--specpath", str(HERE),
+    "--add-data", f"{SPA};spa",
+    "--hidden-import=pystray",
+    "--hidden-import=PIL._tkinter_finder",
+    "--collect-submodules=flask",
+    "--collect-submodules=werkzeug",
+    "--paths", str(SHARED),
+    str(SHARED / "main.py"),
+])
