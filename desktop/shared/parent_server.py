@@ -749,8 +749,10 @@ try:
 except ImportError:
     _fw_available = False
 
-# Firmware directory: shipped alongside the app or in data dir
-_FW_DIR = BASE / "firmware"
+# Firmware directory: check project root, then alongside app, then PyInstaller bundle
+_FW_DIR = BASE.parent.parent / "firmware"   # project root: ../../firmware from desktop/shared/
+if not _FW_DIR.exists():
+    _FW_DIR = BASE / "firmware"              # alongside parent_server.py
 if not _FW_DIR.exists() and getattr(sys, "frozen", False):
     _FW_DIR = Path(sys._MEIPASS) / "firmware"
 
