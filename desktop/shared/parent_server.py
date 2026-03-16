@@ -260,11 +260,11 @@ def _action_pkt(act, child):
     ls, le = _child_led_ranges(child)
     return _hdr(CMD_ACTION) + struct.pack("<BBBBHBBBB", t, r, g, b, p16a, p8a, p8b, p8c, p8d) + ls + le
 
-def _load_step_pkt(idx, total, step, child):
+def _load_step_pkt(idx, total, step, child, delay_ms=0):
     t, r, g, b, p16a, p8a, p8b, p8c, p8d = _act_params(step)
     dur = step.get("durationS", 5)
     ls, le = _child_led_ranges(child)
-    pl = struct.pack("<BBBBBBHBBBBH", idx, total, t, r, g, b, p16a, p8a, p8b, p8c, p8d, dur)
+    pl = struct.pack("<BBBBBBHBBBBHH", idx, total, t, r, g, b, p16a, p8a, p8b, p8c, p8d, dur, delay_ms)
     return _hdr(CMD_LOAD_STEP) + pl + ls + le
 
 # ── Flask application ─────────────────────────────────────────────────────────
@@ -461,7 +461,7 @@ def api_action_stop():
 def api_actions():
     return jsonify(_actions)
 
-_ACTION_FIELDS = ("name", "type", "r", "g", "b",
+_ACTION_FIELDS = ("name", "type", "scope", "canvasEffect", "r", "g", "b",
                   "r2", "g2", "b2",           # Fade second colour
                   "speedMs", "periodMs", "spawnMs",  # timing
                   "minBri", "spacing", "paletteId",  # Breathe/Chase/Rainbow
@@ -605,8 +605,37 @@ def api_runner_compute(rid):
     r = next((x for x in _runners if x["id"] == rid), None)
     if not r:
         return jsonify(ok=False, err="not found"), 404
+    # Compute per-child delays for canvas-scoped steps
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    child_offsets = []   # list of dicts: {childId: delayMs} per step
+    for step in r.get("steps", []):
+        offsets = {}
+        act = next((a for a in _actions if a["id"] == step.get("actionId")), None)
+        if act and act.get("scope") == "canvas":
+            dur_ms = step.get("durationS", 5) * 1000
+            direction = act.get("direction", 0)  # 0=E, 1=N, 2=W, 3=S
+            aoe_x0 = step.get("x0", 0) / 10000.0
+            aoe_x1 = step.get("x1", 10000) / 10000.0
+            aoe_y0 = step.get("y0", 0) / 10000.0
+            aoe_y1 = step.get("y1", 10000) / 10000.0
+            cw = _layout.get("canvasW", 10000)
+            ch = _layout.get("canvasH", 5000)
+            for c in _children:
+                pos = pos_map.get(c["id"], {})
+                cx = pos.get("x", 0) / cw if cw else 0
+                cy = pos.get("y", 0) / ch if ch else 0
+                # Project onto effect axis
+                if direction == 0:   norm = (cx - aoe_x0) / max(aoe_x1 - aoe_x0, 0.001)  # East
+                elif direction == 1: norm = (cy - aoe_y0) / max(aoe_y1 - aoe_y0, 0.001)  # North
+                elif direction == 2: norm = (aoe_x1 - cx) / max(aoe_x1 - aoe_x0, 0.001)  # West
+                else:                norm = (aoe_y1 - cy) / max(aoe_y1 - aoe_y0, 0.001)  # South
+                norm = max(0.0, min(1.0, norm))
+                # Use 80% of duration for staggering, 20% for actual effect
+                offsets[c["id"]] = int(norm * dur_ms * 0.8)
+        child_offsets.append(offsets)
     with _lock:
         r["computed"] = True
+        r["childOffsets"] = child_offsets
         _save("runners", _runners)
     return jsonify(ok=True)
 
@@ -638,6 +667,7 @@ def api_runner_sync(rid):
     resolved = [_resolve_step(s) for s in steps]
     if any(rs is None for rs in resolved):
         return jsonify(ok=False, err="step references missing action"), 400
+    child_offsets = r.get("childOffsets", [])
     sent = 0
     acked = 0
     for child in _children:
@@ -645,7 +675,8 @@ def api_runner_sync(rid):
             continue
         child_acks = True   # assume ACKs work until first failure
         for i, step in enumerate(resolved):
-            pkt = _load_step_pkt(i, len(resolved), step, child)
+            delay_ms = child_offsets[i].get(child["id"], 0) if i < len(child_offsets) else 0
+            pkt = _load_step_pkt(i, len(resolved), step, child, delay_ms)
             sent += 1
             if child_acks:
                 resp = _send_recv(child["ip"], pkt, timeout=0.5)

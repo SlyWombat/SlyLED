@@ -64,6 +64,7 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
       cr.p8a = ls.p8a; cr.p8b = ls.p8b;
       cr.p8c = ls.p8c; cr.p8d = ls.p8d;
       cr.durationS    = ls.durationS;
+      cr.delayMs      = ls.delayMs;
       for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
         cr.ledStart[j] = ls.ledStart[j];
         cr.ledEnd[j]   = ls.ledEnd[j];

@@ -371,10 +371,16 @@ void ledTask(void* parameter) {
         prevRunStep = curStep;
         stepStartMs = millis();
       }
-      fill_solid(leds, NUM_LEDS, CRGB::Black);
-      applyRunnerStep(childRunner[curStep], 0, millis() - stepStartMs);
-      showSafe();
-      delay(actionDelay(childRunner[curStep].actionType));
+      {
+        unsigned long elapsed = millis() - stepStartMs;
+        uint16_t dly = childRunner[curStep].delayMs;
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
+        if (elapsed >= dly) {
+          applyRunnerStep(childRunner[curStep], 0, elapsed - dly);
+        }
+        showSafe();
+        delay(actionDelay(childRunner[curStep].actionType));
+      }
       continue;
     }
 
@@ -488,11 +494,15 @@ void updateLED() {
       stepStartMs = millis();
     }
     unsigned long now = millis();
-    uint8_t dly = actionDelay(childRunner[curStep].actionType);
-    if (now - lastFrame >= dly) {
+    uint8_t frameDly = actionDelay(childRunner[curStep].actionType);
+    if (now - lastFrame >= frameDly) {
       lastFrame = now;
+      unsigned long elapsed = now - stepStartMs;
+      uint16_t stepDly = childRunner[curStep].delayMs;
       fill_solid(leds, NUM_LEDS, CRGB::Black);
-      applyRunnerStep(childRunner[curStep], 0, now - stepStartMs);
+      if (elapsed >= stepDly) {
+        applyRunnerStep(childRunner[curStep], 0, elapsed - stepDly);
+      }
       showSafe();
     }
     return;

@@ -58,9 +58,10 @@ struct ChildRunnerStep {
   uint16_t p16a;
   uint8_t  p8a, p8b, p8c, p8d;
   uint16_t durationS;
+  uint16_t delayMs;             // canvas-scope: ms to wait before executing
   uint8_t  ledStart[MAX_STR_PER_CHILD];
   uint8_t  ledEnd[MAX_STR_PER_CHILD];
-};  // 20 bytes × 16 = 320 bytes
+};  // 22 bytes × 16 = 352 bytes
 
 // ── FastLED pixel array ───────────────────────────────────────────────────────
 

@@ -641,6 +641,7 @@ function loadActions(){
     var h='<table class="tbl" style="max-width:700px"><tr><th>Name</th><th>Type</th><th>Colour</th><th>Details</th><th>Actions</th></tr>';
     _acts.forEach(function(a){
       var col=a.type>0?rgb2h(a.r||0,a.g||0,a.b||0):'#000';
+      var scopeLbl=a.scope==='canvas'?'<span style="color:#6af;font-size:.8em"> [canvas]</span>':'';
       var det='';
       if(a.type===2)det=(a.speedMs||1000)+'ms → '+rgb2h(a.r2||0,a.g2||0,a.b2||0);
       if(a.type===3)det='Period:'+(a.periodMs||2000)+'ms Min:'+(a.minBri||0)+'%';
@@ -649,7 +650,7 @@ function loadActions(){
       if(a.type===6)det='Cool:'+(a.cooling||55)+' Spark:'+(a.sparking||120);
       if(a.type===7)det=(_dirNames[a.direction]||'E')+' tail:'+(a.tailLen||10)+' '+(a.speedMs||30)+'ms';
       if(a.type===8)det='Den:'+(a.density||3)+' Fade:'+(a.fadeSpeed||15);
-      h+='<tr><td><b>'+a.name+'</b></td><td>'+(_typeNames[a.type]||a.type)+'</td>';
+      h+='<tr><td><b>'+a.name+'</b>'+scopeLbl+'</td><td>'+(_typeNames[a.type]||a.type)+'</td>';
       h+='<td><span style="display:inline-block;width:24px;height:16px;border-radius:3px;background:'+col+';border:1px solid #555;vertical-align:middle"></span> '+col+'</td>';
       h+='<td style="font-size:.82em;color:#888">'+det+'</td>';
       h+='<td><button class="btn" onclick="editAction('+a.id+')" style="background:#446;color:#fff;padding:.2em .6em">Edit</button>';
@@ -665,7 +666,17 @@ function editAction(id){var a=null;_acts.forEach(function(x){if(x.id===id)a=x;})
 function _showActModal(a){
   var isNew=!a;
   var t=a?a.type:1;
+  var sc=a?a.scope||'performer':'performer';
   var h='<label>Name</label><input id="ae-nm" value="'+(a?a.name:'')+'" style="width:240px" placeholder="e.g. Red Wipe">';
+  h+='<label>Scope</label><select id="ae-scope" onchange="_aeScopeChg()">';
+  h+='<option value="performer"'+(sc==='performer'?' selected':'')+'>Performer (per-child)</option>';
+  h+='<option value="canvas"'+(sc==='canvas'?' selected':'')+'>Canvas (spatial sweep)</option>';
+  h+='</select>';
+  h+='<div id="ae-canvas-opts"'+(sc==='canvas'?'':' style="display:none"')+'>';
+  h+='<label>Canvas Effect</label><select id="ae-ceffect"><option value="wipe" selected>Wipe</option></select>';
+  h+='<label>Direction</label><select id="ae-csdir">';
+  for(var d=0;d<4;d++)h+='<option value="'+d+'"'+(a&&a.direction===d?' selected':'')+'>'+_dirNames[d]+'</option>';
+  h+='</select></div>';
   h+='<label>Type</label><select id="ae-tp" onchange="_aeTypeChg()">';
   for(var i=0;i<9;i++)h+='<option value="'+i+'"'+(t===i?' selected':'')+'>'+_typeNames[i]+'</option>';
   h+='</select>';
@@ -723,6 +734,11 @@ function _showActModal(a){
   document.getElementById('modal').style.display='block';
 }
 
+function _aeScopeChg(){
+  var s=document.getElementById('ae-scope').value;
+  document.getElementById('ae-canvas-opts').style.display=s==='canvas'?'block':'none';
+}
+
 function _aeTypeChg(){
   var t=parseInt(document.getElementById('ae-tp').value);
   document.getElementById('ae-cr').style.display=(t===0||t===5)?'none':'block';
@@ -739,7 +755,12 @@ function _aeSubmit(id,btn){
   var nm=document.getElementById('ae-nm').value.trim();if(!nm){alert('Name required');return;}
   var t=parseInt(document.getElementById('ae-tp').value)||0;
   var col=t>0&&t!==5?h2r(document.getElementById('ae-cl').value):{r:0,g:0,b:0};
-  var body={name:nm,type:t,r:col.r,g:col.g,b:col.b};
+  var scope=document.getElementById('ae-scope').value;
+  var body={name:nm,type:t,r:col.r,g:col.g,b:col.b,scope:scope};
+  if(scope==='canvas'){
+    body.canvasEffect=document.getElementById('ae-ceffect').value;
+    body.direction=parseInt(document.getElementById('ae-csdir').value)||0;
+  }
   if(t===2){var c2=h2r(document.getElementById('ae-c2').value);body.r2=c2.r;body.g2=c2.g;body.b2=c2.b;body.speedMs=parseInt(document.getElementById('ae-spd').value)||1000;}
   if(t===3){body.periodMs=parseInt(document.getElementById('ae-per').value)||2000;body.minBri=parseInt(document.getElementById('ae-mbr').value)||0;}
   if(t===4){body.speedMs=parseInt(document.getElementById('ae-cspd').value)||100;body.spacing=parseInt(document.getElementById('ae-cspc').value)||3;body.direction=parseInt(document.getElementById('ae-cdir').value)||0;}

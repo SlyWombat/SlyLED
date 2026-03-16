@@ -136,9 +136,10 @@ struct __attribute__((packed)) LoadStepPayload {
   uint16_t p16a;
   uint8_t  p8a, p8b, p8c, p8d;
   uint16_t durationS;
+  uint16_t delayMs;             // canvas-scope: per-child start delay (0 = immediate)
   uint8_t  ledStart[MAX_STR_PER_CHILD];
   uint8_t  ledEnd[MAX_STR_PER_CHILD];
-};  // 14+8+8 = 30 bytes; total packet = 8+30 = 38
+};  // 16+8+8 = 32 bytes; total packet = 8+32 = 40
 
 // ActionEventPayload — child→parent broadcast (3 bytes)
 struct __attribute__((packed)) ActionEventPayload {
