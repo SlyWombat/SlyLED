@@ -630,16 +630,19 @@ def api_runner_sync(rid):
     for child in _children:
         if child["status"] != 1:
             continue
+        child_acks = True   # assume ACKs work until first failure
         for i, step in enumerate(resolved):
             pkt = _load_step_pkt(i, len(resolved), step, child)
-            # Try up to 3 times with ACK wait
-            for attempt in range(3):
-                resp = _send_recv(child["ip"], pkt, timeout=0.8)
-                sent += 1
+            sent += 1
+            if child_acks:
+                resp = _send_recv(child["ip"], pkt, timeout=0.5)
                 if resp and len(resp) >= 9 and resp[3] == CMD_LOAD_ACK:
                     acked += 1
-                    break
-                time.sleep(0.1)
+                else:
+                    child_acks = False   # fallback to fire-and-forget for rest
+            else:
+                _send(child["ip"], pkt)
+                time.sleep(0.05)
     return jsonify(ok=True, sent=sent, acked=acked)
 
 @app.post("/api/runners/<int:rid>/start")
@@ -648,7 +651,8 @@ def api_runner_start(rid):
     if not r:
         return jsonify(ok=False, err="not found"), 404
     go_epoch = int(time.time()) + 5      # 5 s from now — time for UDP to reach all children
-    pkt = _hdr(CMD_RUNNER_GO, go_epoch)
+    # CMD_RUNNER_GO requires 4-byte startEpoch as PAYLOAD (not in header)
+    pkt = _hdr(CMD_RUNNER_GO) + struct.pack("<I", go_epoch)
     for c in _children:
         if c["status"] == 1:
             _send(c["ip"], pkt)
