@@ -472,13 +472,9 @@ function cvDrop(e){
 
 function cvDbl(e){
   var cv=document.getElementById('lcv'),rect=cv.getBoundingClientRect();
-  var mx=e.clientX-rect.left,my=e.clientY-rect.top,W=cv.width,H=cv.height;
-  if(!ld||!ld.children)return;
-  var placed=(ld.children||[]).filter(_isPlaced);
-  for(var i=0;i<placed.length;i++){
-    var c=placed[i];
-    var cx=Math.round(c.x*W/phW),cy=H-Math.round(c.y*H/phH);
-    if(Math.abs(mx-cx)<=16&&Math.abs(my-cy)<=16){showNodeEdit(c);return;}
+  var mx=e.clientX-rect.left,my=e.clientY-rect.top;
+  var hit=_hitNode(mx,my,cv.width,cv.height);
+  if(hit>=0){showNodeEdit(ld.children[hit]);return;
   }
 }
 
@@ -584,30 +580,50 @@ function saveLayout(btn){
     });
 }
 
+function _hitNode(mx,my,W,H){
+  if(!ld||!ld.children)return -1;
+  var best=-1,bestD=625; // 25px radius squared
+  var placed=ld.children;
+  for(var i=0;i<placed.length;i++){
+    if(!_isPlaced(placed[i]))continue;
+    var cx=Math.round(placed[i].x*W/phW),cy=H-Math.round(placed[i].y*H/phH);
+    var dx=mx-cx,dy=my-cy,d2=dx*dx+dy*dy;
+    if(d2<bestD){bestD=d2;best=i;}
+  }
+  return best;
+}
+
 function cvDown(e){
   if(e.button!==0)return;
   var cv=document.getElementById('lcv'),r=cv.getBoundingClientRect();
-  var mx=e.clientX-r.left,my=e.clientY-r.top,W=cv.width,H=cv.height;
-  if(!ld||!ld.children)return;drag=null;
-  ld.children.forEach(function(c,i){
-    if(!_isPlaced(c))return;
-    var cx=Math.round(c.x*W/phW),cy=H-Math.round(c.y*H/phH);
-    if(Math.abs(mx-cx)<=14&&Math.abs(my-cy)<=14){drag=i;dox=mx-cx;doy=my-cy;}
-  });
+  var mx=e.clientX-r.left,my=e.clientY-r.top;
+  drag=_hitNode(mx,my,cv.width,cv.height);
+  if(drag>=0){
+    var c=ld.children[drag];
+    var cx=Math.round(c.x*cv.width/phW),cy=cv.height-Math.round(c.y*cv.height/phH);
+    dox=mx-cx;doy=my-cy;
+    cv.style.cursor='grabbing';
+  }
 }
 
 function cvMove(e){
-  if(drag===null)return;
   var cv=document.getElementById('lcv'),r=cv.getBoundingClientRect();
+  var mx=e.clientX-r.left,my=e.clientY-r.top;
+  if(drag===null||drag<0){
+    // Hover: change cursor when over a node
+    var hit=_hitNode(mx,my,cv.width,cv.height);
+    cv.style.cursor=hit>=0?'pointer':'grab';
+    return;
+  }
   var W=cv.width,H=cv.height;
-  var mx=Math.max(0,Math.min(W,e.clientX-r.left-dox));
-  var my=Math.max(0,Math.min(H,e.clientY-r.top-doy));
-  ld.children[drag].x=Math.round(mx*phW/W);
-  ld.children[drag].y=Math.round((H-my)*phH/H);
+  var px=Math.max(0,Math.min(W,mx-dox));
+  var py=Math.max(0,Math.min(H,my-doy));
+  ld.children[drag].x=Math.round(px*phW/W);
+  ld.children[drag].y=Math.round((H-py)*phH/H);
   drawLayout();
 }
 
-function cvUp(){drag=null;}
+function cvUp(){drag=null;var cv=document.getElementById('lcv');if(cv)cv.style.cursor='grab';}
 
 // ── Actions library ──────────────────────────────────────────────────────────
 var _acts=[];
