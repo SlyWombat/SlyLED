@@ -919,12 +919,30 @@ def spa_fallback(path):
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+def _check_single_instance(port):
+    """Check if another instance is already running on this port."""
+    try:
+        import urllib.request
+        resp = urllib.request.urlopen(f"http://localhost:{port}/status", timeout=2)
+        data = resp.read().decode()
+        if "parent" in data or "SlyLED" in data:
+            return True   # another instance is running
+    except Exception:
+        pass
+    return False
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="SlyLED Parent Server")
     ap.add_argument("--port",       type=int, default=8080)
     ap.add_argument("--host",       default="0.0.0.0")
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
+
+    if _check_single_instance(args.port):
+        print(f"SlyLED Orchestrator is already running on port {args.port}.")
+        print(f"Opening browser to existing instance...")
+        webbrowser.open(f"http://localhost:{args.port}")
+        sys.exit(0)
 
     if not args.no_browser:
         def _open():

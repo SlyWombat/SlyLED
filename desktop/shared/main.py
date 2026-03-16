@@ -180,9 +180,24 @@ def _make_icon():
     return Image.open(io.BytesIO(data)).convert("RGBA")
 
 
+def _already_running(port):
+    """Check if another SlyLED instance is on this port."""
+    try:
+        import urllib.request
+        resp = urllib.request.urlopen(f"http://localhost:{port}/status", timeout=2)
+        data = resp.read().decode()
+        return "parent" in data or "SlyLED" in data
+    except Exception:
+        return False
+
 def main():
     args = _parse()
     url  = f"http://localhost:{args.port}"
+
+    if _already_running(args.port):
+        print(f"SlyLED Orchestrator already running on port {args.port} — opening browser.")
+        webbrowser.open(url)
+        sys.exit(0)
 
     # Suppress Werkzeug request logging (keeps the --windowed exe quiet)
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
