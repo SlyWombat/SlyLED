@@ -22,13 +22,17 @@
 static void showSafe() {
   // Disable interrupts during WS2812B output to prevent WiFi IRQs
   // from corrupting the 800kHz timing signal.
+  FastLED.setBrightness(childBrightness);
   noInterrupts();
-  FastLED[0].showLeds(childBrightness);
+  FastLED.show();
   interrupts();
 }
 
 static inline void clearAndShow() {
   fill_solid(leds, NUM_LEDS, CRGB::Black);
+  showSafe();
+  // Double-send to ensure the strip latches cleanly
+  delayMicroseconds(300);
   showSafe();
 }
 #endif
@@ -291,6 +295,11 @@ bool applyRunnerStep(const ChildRunnerStep& rs, uint8_t /*flashPh*/,
 
 // ── Delay per action type ─────────────────────────────────────────────────
 
+// Effects that rely on previous frame data (fade trails, random sparks)
+static bool actionNeedsPersist(uint8_t at) {
+  return at == ACT_COMET || at == ACT_TWINKLE || at == ACT_FIRE;
+}
+
 static uint8_t actionDelay(uint8_t at) {
   switch (at) {
     case ACT_SOLID:   return 50;
@@ -376,7 +385,8 @@ void ledTask(void* parameter) {
       {
         unsigned long elapsed = millis() - stepStartMs;
         uint16_t dly = childRunner[curStep].delayMs;
-        fill_solid(leds, NUM_LEDS, CRGB::Black);
+        if (!actionNeedsPersist(childRunner[curStep].actionType))
+          fill_solid(leds, NUM_LEDS, CRGB::Black);
         if (elapsed >= dly) {
           applyRunnerStep(childRunner[curStep], 0, elapsed - dly);
         }
@@ -396,7 +406,8 @@ void ledTask(void* parameter) {
     uint8_t at = childActType;
 
     if (at != ACT_OFF) {
-      fill_solid(leds, NUM_LEDS, CRGB::Black);
+      if (!actionNeedsPersist(at))
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
       applyAction(at, childActR, childActG, childActB,
                   childActP16a, childActP8a, childActP8b,
                   childActP8c, childActP8d,
@@ -501,7 +512,8 @@ void updateLED() {
       lastFrame = now;
       unsigned long elapsed = now - stepStartMs;
       uint16_t stepDly = childRunner[curStep].delayMs;
-      fill_solid(leds, NUM_LEDS, CRGB::Black);
+      if (!actionNeedsPersist(childRunner[curStep].actionType))
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
       if (elapsed >= stepDly) {
         applyRunnerStep(childRunner[curStep], 0, elapsed - stepDly);
       }
@@ -525,7 +537,8 @@ void updateLED() {
     uint8_t dly = actionDelay(at);
     if (now - lastFrame >= dly) {
       lastFrame = now;
-      fill_solid(leds, NUM_LEDS, CRGB::Black);
+      if (!actionNeedsPersist(at))
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
       applyAction(at, childActR, childActG, childActB,
                   childActP16a, childActP8a, childActP8b,
                   childActP8c, childActP8d,

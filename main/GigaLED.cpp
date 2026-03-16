@@ -68,10 +68,15 @@ void showSafe() {
   uint8_t r = (uint16_t)c.r * _brightness / 255;
   uint8_t g = (uint16_t)c.g * _brightness / 255;
   uint8_t b = (uint16_t)c.b * _brightness / 255;
-  // Active-low: LOW = on, HIGH = off; threshold at 128 for on/off
-  digitalWrite(PIN_LEDR, r >= 128 ? LOW : HIGH);
-  digitalWrite(PIN_LEDG, g >= 128 ? LOW : HIGH);
-  digitalWrite(PIN_LEDB, b >= 128 ? LOW : HIGH);
+  // Active-low: LOW = on, HIGH = off
+  // Simple software PWM: on for (value/255 * 1ms), off for rest
+  // This gives ~256 brightness levels within the 20ms frame period
+  if (r > 0) { digitalWrite(PIN_LEDR, LOW); delayMicroseconds(r * 4); digitalWrite(PIN_LEDR, HIGH); }
+  else { digitalWrite(PIN_LEDR, HIGH); }
+  if (g > 0) { digitalWrite(PIN_LEDG, LOW); delayMicroseconds(g * 4); digitalWrite(PIN_LEDG, HIGH); }
+  else { digitalWrite(PIN_LEDG, HIGH); }
+  if (b > 0) { digitalWrite(PIN_LEDB, LOW); delayMicroseconds(b * 4); digitalWrite(PIN_LEDB, HIGH); }
+  else { digitalWrite(PIN_LEDB, HIGH); }
 }
 
 void clearAndShow() {

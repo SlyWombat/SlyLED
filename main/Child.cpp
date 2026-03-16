@@ -452,7 +452,8 @@ void sendChildConfigPage(WiFiClient& c) {
             "document.getElementById('act').textContent=n[d.action]||'?';"
             "}catch(e){}};"
             "x.send();}"));
-  c.print(F("function doSave(btn){"
+  c.print(F("var _curTab=0;"
+            "function doSave(btn){"
             "var orig=btn.textContent;btn.textContent='Saving...';btn.disabled=true;"
             "btn.style.background='#555';"
             "var fd=new FormData(document.getElementById('cf'));"
@@ -460,7 +461,7 @@ void sendChildConfigPage(WiFiClient& c) {
             "x.open('POST','/config',true);"
             "x.onload=function(){"
             "btn.textContent='Saved!';btn.style.background='#2a2';"
-            "setTimeout(function(){location.reload();},800);};"
+            "setTimeout(function(){btn.textContent=orig;btn.style.background='';btn.disabled=false;},1200);};"
             "x.onerror=function(){btn.textContent='Error';btn.style.background='#a22';};"
             "x.send(new URLSearchParams(fd));}"));
   c.print(F("function doTest(){"
