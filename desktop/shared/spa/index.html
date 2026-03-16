@@ -1146,8 +1146,11 @@ function loadFirmware(){
           var bName=p.fwBoard||p.boardName;
           h+='<tr><td>'+p.port+'</td><td>'+bName+'</td><td>'+(p.vid_pid||'-')+'</td>';
           var wifiSt='-';
-          if(p.wifiMatch===true)wifiSt='<span style="color:#4c4">\u2705 Match</span>';
-          else if(p.wifiMatch===false)wifiSt='<span style="color:#c44">\u26a0 Mismatch — reflash needed</span>';
+          if(p.wifiMatch===true)wifiSt='<span style="color:#4c4">\u2705</span>';
+          else if(p.wifiMatch===false){
+            var wfwId=updateFwId||'';
+            wifiSt='<span style="color:#c44">\u26a0</span> <button class="btn btn-on" style="padding:.15em .5em;font-size:.75em" onclick="quickFlash(\''+p.port+'\',\''+(p.board||'')+'\',\''+wfwId+'\',this)">Update WiFi</button>';
+          }
           h+='<td>'+fwVer+updateBtn+'</td><td>'+wifiSt+'</td></tr>';
           var o=document.createElement('option');o.value=p.port;o.text=p.port+' ('+p.boardName+')';sel.add(o);
           if(p.board){document.getElementById('fw-board').value=p.board;}
