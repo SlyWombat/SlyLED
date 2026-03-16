@@ -116,6 +116,9 @@ body.light .li:hover{border-color:#888}
       <label style='color:#888;font-size:.85em;display:flex;align-items:center;gap:.3em'>
         <input type='checkbox' id='rt-loop' checked onchange='saveLoopSetting()'> Loop
       </label>
+      <label style='color:#888;font-size:.85em;display:flex;align-items:center;gap:.3em'>
+        Brightness <input type='range' id='rt-bri' min='0' max='255' value='255' style='width:100px' oninput='setBrightness(this.value)'> <span id='rt-bri-val'>100%</span>
+      </label>
     </div>
     <div id='rn-list'><p style='color:#888'>Loading...</p></div>
   </div>
@@ -871,6 +874,12 @@ function delAction(id){
 }
 
 // ── Runners ─────────────────────────────────────────────────────────────────
+function setBrightness(val){
+  val=parseInt(val)||255;
+  document.getElementById('rt-bri-val').textContent=Math.round(val*100/255)+'%';
+  ra('POST','/api/settings',{globalBrightness:val},null);
+}
+
 function saveLoopSetting(){
   var lp=document.getElementById('rt-loop');
   ra('POST','/api/settings',{runnerLoop:lp&&lp.checked?true:false},null);
@@ -881,7 +890,12 @@ function loadRuntime(){
   document.getElementById('rt-list').style.display='block';
   document.getElementById('rt-edit').style.display='none';
   ra('GET','/api/settings',null,function(s){
-    if(s){var lp=document.getElementById('rt-loop');if(lp)lp.checked=s.runnerLoop!==false;}
+    if(s){
+      var lp=document.getElementById('rt-loop');if(lp)lp.checked=s.runnerLoop!==false;
+      var bri=s.globalBrightness!=null?s.globalBrightness:255;
+      var bs=document.getElementById('rt-bri');if(bs)bs.value=bri;
+      var bv=document.getElementById('rt-bri-val');if(bv)bv.textContent=Math.round(bri*100/255)+'%';
+    }
   });
   ra('GET','/api/actions',null,function(a){_acts=a||[];});
   ra('GET','/api/runners',null,function(d){

@@ -39,9 +39,10 @@ CMD_PING        = 0x01
 CMD_PONG        = 0x02
 CMD_ACTION      = 0x10
 CMD_ACTION_STOP = 0x11
-CMD_LOAD_STEP   = 0x20
-CMD_LOAD_ACK    = 0x21
-CMD_RUNNER_GO   = 0x30
+CMD_LOAD_STEP       = 0x20
+CMD_LOAD_ACK        = 0x21
+CMD_SET_BRIGHTNESS  = 0x22
+CMD_RUNNER_GO       = 0x30
 CMD_RUNNER_STOP = 0x31
 CMD_STATUS_REQ  = 0x40
 CMD_STATUS_RESP = 0x41
@@ -427,7 +428,7 @@ def api_settings_get():
 def api_settings_save():
     body = request.get_json(silent=True) or {}
     with _lock:
-        for k in ("name", "units", "canvasW", "canvasH", "darkMode", "runnerLoop"):
+        for k in ("name", "units", "canvasW", "canvasH", "darkMode", "runnerLoop", "globalBrightness"):
             if k in body:
                 _settings[k] = body[k]
         _layout["canvasW"] = _settings["canvasW"]
@@ -674,11 +675,15 @@ def api_runner_sync(rid):
     if any(rs is None for rs in resolved):
         return jsonify(ok=False, err="step references missing action"), 400
     child_offsets = r.get("childOffsets", [])
+    # Send global brightness to all online children before steps
+    bri = _settings.get("globalBrightness", 255)
+    bri_pkt = _hdr(CMD_SET_BRIGHTNESS) + bytes([bri & 0xFF])
     sent = 0
     acked = 0
     for child in _children:
         if child["status"] != 1:
             continue
+        _send(child["ip"], bri_pkt)
         child_acks = True   # assume ACKs work until first failure
         for i, step in enumerate(resolved):
             delay_ms = child_offsets[i].get(child["id"], 0) if i < len(child_offsets) else 0
