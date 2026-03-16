@@ -201,27 +201,52 @@ static void renderTwinkle(uint8_t r, uint8_t g, uint8_t b,
   }
 }
 
+// ── Fold mirror — for folded strings, mirror first half onto second half ──
+
+static void applyFold(uint8_t st, uint8_t en) {
+  // A folded strip: LEDs go out half-way then fold back.
+  // LED 0 pairs with LED N-1, LED 1 with N-2, etc.
+  // We render to the first half, then mirror to the second half.
+  uint8_t total = en - st + 1;
+  uint8_t half = total / 2;
+  for (uint8_t i = 0; i < half; i++) {
+    leds[st + total - 1 - i] = leds[st + i];
+  }
+  // If odd count, the middle LED (fold point) keeps its value
+}
+
 // ── applyAction — render one action type across a string range ────────────
 
 static bool applyAction(uint8_t at, uint8_t r, uint8_t g, uint8_t b,
                          uint16_t p16a, uint8_t p8a, uint8_t p8b,
                          uint8_t p8c, uint8_t p8d,
                          unsigned long elapsedMs,
-                         uint8_t st, uint8_t en) {
+                         uint8_t st, uint8_t en, bool folded) {
   if (st == 0xFF || en < st) return false;
   if (en >= NUM_LEDS) en = NUM_LEDS - 1;
 
+  // For folded strings, render to virtual half-length then mirror
+  uint8_t realEn = en;
+  if (folded) {
+    uint8_t total = en - st + 1;
+    uint8_t half = (total + 1) / 2;  // ceil — includes fold LED if odd
+    en = st + half - 1;
+  }
+
   switch (at) {
-    case ACT_SOLID:    renderSolid(r, g, b, st, en); return true;
-    case ACT_FADE:     renderFade(r, g, b, p8a, p8b, p8c, p16a, elapsedMs, st, en); return true;
-    case ACT_BREATHE:  renderBreathe(r, g, b, p16a, p8a, elapsedMs, st, en); return true;
-    case ACT_CHASE:    renderChase(r, g, b, p16a, p8a, p8c, elapsedMs, st, en); return true;
-    case ACT_RAINBOW:  renderRainbow(p16a, p8a, p8c, elapsedMs, st, en); return true;
-    case ACT_FIRE:     renderFire(r, g, b, p16a, p8a, p8b, elapsedMs, st, en); return true;
-    case ACT_COMET:    renderComet(r, g, b, p16a, p8a, p8c, p8d, elapsedMs, st, en); return true;
-    case ACT_TWINKLE:  renderTwinkle(r, g, b, p16a, p8a, p8d, elapsedMs, st, en); return true;
+    case ACT_SOLID:    renderSolid(r, g, b, st, en); break;
+    case ACT_FADE:     renderFade(r, g, b, p8a, p8b, p8c, p16a, elapsedMs, st, en); break;
+    case ACT_BREATHE:  renderBreathe(r, g, b, p16a, p8a, elapsedMs, st, en); break;
+    case ACT_CHASE:    renderChase(r, g, b, p16a, p8a, p8c, elapsedMs, st, en); break;
+    case ACT_RAINBOW:  renderRainbow(p16a, p8a, p8c, elapsedMs, st, en); break;
+    case ACT_FIRE:     renderFire(r, g, b, p16a, p8a, p8b, elapsedMs, st, en); break;
+    case ACT_COMET:    renderComet(r, g, b, p16a, p8a, p8c, p8d, elapsedMs, st, en); break;
+    case ACT_TWINKLE:  renderTwinkle(r, g, b, p16a, p8a, p8d, elapsedMs, st, en); break;
     default: return false;
   }
+
+  if (folded) applyFold(st, realEn);
+  return true;
 }
 
 // ── applyRunnerStep — shared by both ESP32 and D1 Mini ───────────────────
@@ -230,9 +255,11 @@ bool applyRunnerStep(const ChildRunnerStep& rs, uint8_t /*flashPh*/,
                      unsigned long stepMs) {
   bool drew = false;
   for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
+    bool folded = (j < childCfg.stringCount) &&
+                  (childCfg.strings[j].flags & STR_FLAG_FOLDED);
     if (applyAction(rs.actionType, rs.r, rs.g, rs.b,
                     rs.p16a, rs.p8a, rs.p8b, rs.p8c, rs.p8d,
-                    stepMs, rs.ledStart[j], rs.ledEnd[j]))
+                    stepMs, rs.ledStart[j], rs.ledEnd[j], folded))
       drew = true;
   }
   return drew;
@@ -337,7 +364,8 @@ void ledTask(void* parameter) {
       applyAction(at, childActR, childActG, childActB,
                   childActP16a, childActP8a, childActP8b,
                   childActP8c, childActP8d,
-                  millis() - actStart, 0, NUM_LEDS - 1);
+                  millis() - actStart, 0, NUM_LEDS - 1,
+                  childCfg.stringCount > 0 && (childCfg.strings[0].flags & STR_FLAG_FOLDED));
       FastLED.show();
       delay(actionDelay(at));
     } else {
@@ -456,7 +484,8 @@ void updateLED() {
       applyAction(at, childActR, childActG, childActB,
                   childActP16a, childActP8a, childActP8b,
                   childActP8c, childActP8d,
-                  now - actStart, 0, NUM_LEDS - 1);
+                  now - actStart, 0, NUM_LEDS - 1,
+                  childCfg.stringCount > 0 && (childCfg.strings[0].flags & STR_FLAG_FOLDED));
       FastLED.show();
     }
   } else {

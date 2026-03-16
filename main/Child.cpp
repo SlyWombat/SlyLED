@@ -118,7 +118,7 @@ void initChildConfig() {
   childCfg.strings[0].ledCount = 30;
   childCfg.strings[0].lengthMm = 500;
   childCfg.strings[0].ledType  = LEDTYPE_WS2812B;
-  childCfg.strings[0].cableDir = DIR_E;
+  childCfg.strings[0].flags    = 0;   // not folded
   childCfg.strings[0].cableMm  = 0;
   childCfg.strings[0].stripDir = DIR_E;
 
@@ -148,7 +148,7 @@ void sendPong(IPAddress dest) {
     pong.strings[j].ledCount = childCfg.strings[j].ledCount;
     pong.strings[j].lengthMm = childCfg.strings[j].lengthMm;
     pong.strings[j].ledType  = childCfg.strings[j].ledType;
-    pong.strings[j].cableDir = childCfg.strings[j].cableDir;
+    pong.strings[j].cableDir = childCfg.strings[j].flags;  // cableDir byte carries flags (bit0=folded)
     pong.strings[j].cableMm  = childCfg.strings[j].cableMm;
     pong.strings[j].stripDir = childCfg.strings[j].stripDir;
   }
@@ -364,6 +364,10 @@ void sendChildConfigPage(WiFiClient& c) {
                childCfg.strings[j].stripDir == 1 ? " selected" : "",
                childCfg.strings[j].stripDir == 2 ? " selected" : "",
                childCfg.strings[j].stripDir == 3 ? " selected" : "");
+    sendBuf(c, "<label style='display:flex;align-items:center;gap:.4em;margin-top:.5em'>"
+               "<input type='checkbox' name='fd%u' value='1'%s> Folded (strip goes out and back)</label>",
+               (unsigned)j,
+               (childCfg.strings[j].flags & STR_FLAG_FOLDED) ? " checked" : "");
     c.print(F("</div>"));
   }
   c.print(F("<button class='btn' type='button' id='sb2' onclick='doSave(this)'>Save Config</button>"
@@ -486,8 +490,9 @@ void handlePostChildConfig(WiFiClient& c, int contentLen) {
     snprintf(key, sizeof(key), "sd%u", (unsigned)j);
     int sd = urlGetInt(body, key, 0); if (sd < 0) sd = 0; if (sd > 3) sd = 3;
     childCfg.strings[j].stripDir = (uint8_t)sd;
-    // Cable fields not in UI — always zero
-    childCfg.strings[j].cableDir = 0;
+    // Folded checkbox: present in POST body as fd0=1, fd1=1 etc.
+    snprintf(key, sizeof(key), "fd%u", (unsigned)j);
+    childCfg.strings[j].flags = urlGetInt(body, key, 0) ? STR_FLAG_FOLDED : 0;
     childCfg.strings[j].cableMm  = 0;
   }
 

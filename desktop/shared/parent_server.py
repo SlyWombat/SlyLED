@@ -164,7 +164,8 @@ def _parse_pong(data, src_ip):
     for _ in range(8):
         leds, mm, tp, cd, cm, sd = struct.unpack_from("<HHBBHB", p, off)
         strings.append({"leds": leds, "mm": mm, "type": tp,
-                         "cdir": cd, "cmm": cm, "sdir": sd})
+                         "cdir": cd, "cmm": cm, "sdir": sd,
+                         "folded": bool(cd & 0x01)})
         off += 9
     return {
         "hostname": hn, "name": nm or hn, "desc": ds, "sc": sc,

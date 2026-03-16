@@ -27,7 +27,7 @@ constexpr uint8_t LEDTYPE_APA102  = 2;
   constexpr uint8_t CHILD_MAX_STRINGS = 8;
 #endif
 
-constexpr uint8_t EEPROM_MAGIC    = 0xA6;   // bump whenever ChildSelfConfig layout changes
+constexpr uint8_t EEPROM_MAGIC    = 0xA7;   // bumped: cableDir → flags (bit0=folded)
 constexpr uint8_t MAX_CHILD_STEPS = 16;
 
 // ── Child config structs ──────────────────────────────────────────────────────
@@ -36,10 +36,12 @@ struct ChildStringCfg {
   uint16_t ledCount;
   uint16_t lengthMm;
   uint8_t  ledType;
-  uint8_t  cableDir;   // always 0 — not exposed in config UI
+  uint8_t  flags;      // bit 0 = folded (strip goes out and back)
   uint16_t cableMm;    // always 0 — not exposed in config UI
   uint8_t  stripDir;
 };
+
+constexpr uint8_t STR_FLAG_FOLDED = 0x01;
 
 struct ChildSelfConfig {
   char           hostname[HOSTNAME_LEN];
