@@ -78,7 +78,7 @@ body.light .li:hover{border-color:#888}
   <div style='display:flex;gap:1em;align-items:flex-start'>
     <div style='flex:1;min-width:0'>
       <div style='display:flex;align-items:center;gap:1em;margin-bottom:.4em'>
-        <span style='color:#888;font-size:.82em;flex:1'>Drag children from sidebar onto canvas. Double-click a node to edit. (0,0)=bottom-left.</span>
+        <span style='color:#888;font-size:.82em;flex:1'>Drag performers from sidebar onto canvas. Double-click a node to edit. (0,0)=bottom-left.</span>
         <label style='color:#888;font-size:.82em;white-space:nowrap;display:flex;align-items:center;gap:.3em'>
           <input type='checkbox' id='lay-detail' checked onchange='drawLayout()'> Show strings
         </label>
@@ -134,7 +134,7 @@ body.light .li:hover{border-color:#888}
 <div id='t-settings' class='tab' style='display:none'>
   <div class='card'>
     <div class='card-title'>App Settings</div>
-    <label>Parent Name</label><input id='s-nm' maxlength='15' style='width:200px'>
+    <label>Orchestrator Name</label><input id='s-nm' maxlength='15' style='width:200px'>
     <label>Units</label>
     <select id='s-un'>
       <option value='0'>Metric (mm)</option>
@@ -151,12 +151,12 @@ body.light .li:hover{border-color:#888}
   </div>
   <div class='card' style='max-width:480px;border-color:#622'>
     <div class='card-title' style='color:#c66'>Factory Reset</div>
-    <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Remove all children, runners and layout data, and restore default settings.</p>
+    <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Remove all performers, runners and layout data, and restore default settings.</p>
     <button class='btn btn-off' onclick='factoryReset()'>Factory Reset</button>
   </div>
   <div class='card' style='max-width:480px;border-color:#622'>
     <div class='card-title' style='color:#c66'>Service</div>
-    <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Stop the SlyLED parent service and close the application.</p>
+    <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Stop the SlyLED Orchestrator service and close the application.</p>
     <button class='btn btn-off' onclick='shutdownService()'>Shutdown Service</button>
   </div>
 </div>
@@ -171,7 +171,7 @@ body.light .li:hover{border-color:#888}
   </div>
 </div>
 
-<div class='footer' id='fv'>SlyLED v4.0 &mdash; Windows Parent</div>
+<div class='footer' id='fv'>SlyLED v4.0 &mdash; The Orchestrator</div>
 
 <script>
 var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0,units=0,_cvW=900,_cvH=450;
@@ -217,11 +217,11 @@ function loadDash(){
         h+='<tr><td>'+c.hostname+'</td><td>'+(c.name||'-')+'</td><td>'+c.ip+'</td><td>'+st+'</td><td>'+c.sc+'</td><td>'+ts+'</td></tr>';
       });
     }else{
-      h+='<tr><td colspan="6" style="color:#888;text-align:center">No children registered</td></tr>';
+      h+='<tr><td colspan="6" style="color:#888;text-align:center">No performers registered</td></tr>';
     }
     h+='</table><div id="dash-runner" style="margin-top:1em"></div>';
     document.getElementById('t-dash').innerHTML=h;
-    document.getElementById('hs').textContent=d&&d.length?d.length+' child'+(d.length>1?'ren':'')+' registered':'No children';
+    document.getElementById('hs').textContent=d&&d.length?d.length+' performer'+(d.length>1?'s':'')+' registered':'No performers';
     refreshRunnerStatus();
     dashRunnerTimer=setInterval(refreshRunnerStatus,1000);
   });
@@ -300,7 +300,7 @@ function refreshAllChildren(cb){
 }
 
 function loadSetup(){
-  document.getElementById('t-setup').innerHTML='<p style="color:#888">Refreshing children...</p>';
+  document.getElementById('t-setup').innerHTML='<p style="color:#888">Refreshing performers...</p>';
   refreshAllChildren(function(){_renderSetup();});
 }
 
@@ -325,7 +325,7 @@ function _renderSetup(){
           +' <button class="btn btn-off" onclick="removeChild('+c.id+')">Remove</button></td></tr>';
       });
     }else{
-      h+='<tr><td colspan="6" style="color:#888;text-align:center">No children</td></tr>';
+      h+='<tr><td colspan="6" style="color:#888;text-align:center">No performers</td></tr>';
     }
     document.getElementById('t-setup').innerHTML=h+'</table>';
   });
@@ -345,7 +345,7 @@ function discoverChildren(){
     var el=document.getElementById('disc-results');
     if(!el)return;
     if(!d||!d.length){
-      el.innerHTML='<p style="color:#888;font-size:.85em;padding:.3em 0">No new children found on network.</p>';
+      el.innerHTML='<p style="color:#888;font-size:.85em;padding:.3em 0">No new performers found on network.</p>';
       el.style.display='block';return;
     }
     var h='<p style="color:#aaa;font-size:.85em;margin-bottom:.4em">Found — click Add to register:</p>'
@@ -364,10 +364,10 @@ function addDiscovered(ip){
 }
 
 function removeChild(id){
-  if(!confirm('Remove this child?'))return;
+  if(!confirm('Remove this performer?'))return;
   var x=new XMLHttpRequest();x.open('DELETE','/api/children/'+id,true);
   x.onload=function(){
-    if(x.status>=200&&x.status<300){loadSetup();document.getElementById('hs').textContent='Child removed';}
+    if(x.status>=200&&x.status<300){loadSetup();document.getElementById('hs').textContent='Performer removed';}
     else{document.getElementById('hs').textContent='Remove failed ('+x.status+')';loadSetup();}
   };
   x.onerror=function(){document.getElementById('hs').textContent='Remove failed: network error';};
@@ -444,7 +444,7 @@ function loadLayout(){
 function renderSidebar(){
   var el=document.getElementById('lay-unplaced');if(!el||!ld)return;
   var unpl=(ld.children||[]).filter(function(c){return !_isPlaced(c);});
-  if(!unpl.length){el.innerHTML='<p style="color:#555;font-size:.8em">All children placed.</p>';return;}
+  if(!unpl.length){el.innerHTML='<p style="color:#555;font-size:.8em">All performers placed.</p>';return;}
   var h='';
   unpl.forEach(function(c){
     h+='<div class="li" draggable="true" ondragstart="layDS(event,'+c.id+')">'
@@ -536,7 +536,7 @@ function drawLayout(){
   var placed=(ld.children||[]).filter(_isPlaced);
   if(!placed.length){
     ctx.fillStyle='#555';ctx.font='13px sans-serif';ctx.textAlign='center';
-    ctx.fillText('Drag children from the sidebar to place them.',W/2,H/2);
+    ctx.fillText('Drag performers from the sidebar to place them.',W/2,H/2);
     return;
   }
   placed.forEach(function(c){
@@ -909,7 +909,7 @@ function doCompute(id){
 }
 
 function doSync(id){
-  document.getElementById('hs').textContent='Syncing to children...';
+  document.getElementById('hs').textContent='Syncing to performers...';
   ra('POST','/api/runners/'+id+'/sync',null,function(r){
     if(r&&r.ok)document.getElementById('hs').textContent='Synced \u2713';
     else document.getElementById('hs').textContent='Sync failed: '+(r&&r.err||'unknown');
@@ -936,7 +936,7 @@ function showTimeline(rid){
       if(!rn||!rn.steps||!rn.steps.length){alert('No steps in runner');return;}
       ra('GET','/api/layout',null,function(lay){
         var children=(lay&&lay.children||[]).filter(function(c){return c.positioned||c._placed;});
-        if(!children.length)children=[{hostname:'(all children)',id:-1}];
+        if(!children.length)children=[{hostname:'(all performers)',id:-1}];
         _drawTimeline(rn,_acts,children,lay);
       });
     });
@@ -1041,7 +1041,7 @@ function loadSettings(){
 }
 
 function factoryReset(){
-  if(!confirm('Factory reset? This will delete ALL children, runners and layout data and cannot be undone.'))return;
+  if(!confirm('Factory reset? This will delete ALL performers, runners and layout data and cannot be undone.'))return;
   ra('POST','/api/reset',{},function(d){
     if(d&&d.ok){loadSettings();loadDash();}
   });
@@ -1073,7 +1073,7 @@ function saveSettings(btn){
 ra('GET','/api/status',null,function(d){
   if(d&&d.version){
     var fv=document.getElementById('fv');
-    if(fv)fv.textContent='SlyLED v'+d.version+' \u2014 Windows Parent';
+    if(fv)fv.textContent='SlyLED v'+d.version+' \u2014 The Orchestrator';
   }
 });
 ra('GET','/api/settings',null,function(d){

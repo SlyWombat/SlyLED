@@ -215,16 +215,16 @@ def main():
         menu = pystray.Menu(
             pystray.MenuItem("Open SlyLED", _on_open, default=True),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem(f"SlyLED Parent  v{VERSION}", None, enabled=False),
+            pystray.MenuItem(f"SlyLED Orchestrator  v{VERSION}", None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", _on_quit),
         )
-        icon = pystray.Icon("SlyLED", _make_icon(), "SlyLED Parent", menu)
+        icon = pystray.Icon("SlyLED", _make_icon(), "SlyLED Orchestrator", menu)
         icon.run()   # blocks main thread; daemon Flask thread exits when tray quits
 
     else:
         # No tray available — just block until Ctrl+C
-        print(f"SlyLED Parent v{VERSION}  →  {url}")
+        print(f"SlyLED Orchestrator v{VERSION}  →  {url}")
         print("No system tray. Press Ctrl+C to stop.")
         try:
             while True:

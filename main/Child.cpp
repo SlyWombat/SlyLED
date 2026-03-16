@@ -288,7 +288,7 @@ void sendChildConfigPage(WiFiClient& c) {
             "</style></head><body>"));
 
   // Header
-  sendBuf(c, "<h1>SlyLED</h1><h2>%s</h2>", childCfg.altName);
+  sendBuf(c, "<h1>SlyLED Performer</h1><h2>%s</h2>", childCfg.altName);
 
   // Tab nav
   c.print(F("<div class='tabs'>"

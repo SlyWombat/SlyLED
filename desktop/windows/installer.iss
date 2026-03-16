@@ -2,8 +2,8 @@
 ; Build: iscc installer.iss  (from desktop\windows\)
 ; Or:    run build.bat — it calls iscc automatically if available.
 
-#define AppName      "SlyLED Parent"
-#define AppVersion   "3.6"
+#define AppName      "SlyLED Orchestrator"
+#define AppVersion   "4.0"
 #define AppPublisher "SlyWombat"
 #define AppExeName   "SlyLED.exe"
 ; Unique GUID for this app — keep fixed across releases so updates overwrite
