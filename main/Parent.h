@@ -62,8 +62,10 @@ struct AppSettings {
 struct RunnerAction {
   uint8_t  type;
   uint8_t  r, g, b;
-  uint16_t onMs, offMs;
-  uint8_t  wipeDir, wipeSpeedPct;
+  uint16_t onMs;          // legacy — maps to p16a in protocol
+  uint8_t  p8a, p8b;
+  uint8_t  wipeDir;       // legacy — maps to p8c
+  uint8_t  wipeSpeedPct;  // legacy — maps to p8d
 };  // 10 bytes
 
 struct AreaRect {

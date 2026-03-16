@@ -824,11 +824,13 @@ void sendLoadStep(IPAddress dest, uint8_t stepIdx, uint8_t totalSteps,
   ls.r             = step.action.r;
   ls.g             = step.action.g;
   ls.b             = step.action.b;
-  ls.onMs          = step.action.onMs;
-  ls.offMs         = step.action.offMs;
-  ls.wipeDir       = step.action.wipeDir;
-  ls.wipeSpeedPct  = step.action.wipeSpeedPct;
+  ls.p16a          = step.action.onMs;
+  ls.p8a           = 0;
+  ls.p8b           = 0;
+  ls.p8c           = step.action.wipeDir;
+  ls.p8d           = step.action.wipeSpeedPct;
   ls.durationS     = step.durationS;
+  ls.delayMs       = 0;
   for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
     ls.ledStart[j] = pl.ledStart[j];
     ls.ledEnd[j]   = pl.ledEnd[j];
@@ -1269,10 +1271,11 @@ void handleApiAction(WiFiClient& c, int contentLen) {
   p.r            = (uint8_t)jsonGetInt(body, "r",            0);
   p.g            = (uint8_t)jsonGetInt(body, "g",            0);
   p.b            = (uint8_t)jsonGetInt(body, "b",            0);
-  p.onMs         = (uint16_t)jsonGetInt(body, "onMs",        500);
-  p.offMs        = (uint16_t)jsonGetInt(body, "offMs",       500);
-  p.wipeDir      = (uint8_t)jsonGetInt(body, "wipeDir",      0);
-  p.wipeSpeedPct = (uint8_t)jsonGetInt(body, "wipeSpeedPct", 50);
+  p.p16a         = (uint16_t)jsonGetInt(body, "speedMs",     500);
+  p.p8a          = 0;
+  p.p8b          = 0;
+  p.p8c          = (uint8_t)jsonGetInt(body, "direction",    0);
+  p.p8d          = 0;
   for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
     p.ledStart[j] = 0x00;
     p.ledEnd[j]   = 0xFF;
@@ -1376,7 +1379,7 @@ void sendApiRunner(WiFiClient& c, uint8_t id) {
       "\"x0\":%u,\"y0\":%u,\"x1\":%u,\"y1\":%u,\"durationS\":%u}",
       (unsigned)st.action.type,
       (unsigned)st.action.r, (unsigned)st.action.g, (unsigned)st.action.b,
-      (unsigned)st.action.onMs, (unsigned)st.action.offMs,
+      (unsigned)st.action.onMs, (unsigned)0,
       (unsigned)st.action.wipeDir, (unsigned)st.action.wipeSpeedPct,
       (unsigned)st.area.x0, (unsigned)st.area.y0,
       (unsigned)st.area.x1, (unsigned)st.area.y1,
@@ -1600,7 +1603,8 @@ void handleRunnerIdRoute(WiFiClient& c, const char* req, bool isGet, bool isPut,
         st.action.g            = (uint8_t)jsonGetInt(stepBuf, "g",    0);
         st.action.b            = (uint8_t)jsonGetInt(stepBuf, "b",    0);
         st.action.onMs         = (uint16_t)jsonGetInt(stepBuf, "onMs",  500);
-        st.action.offMs        = (uint16_t)jsonGetInt(stepBuf, "offMs", 500);
+        st.action.p8a          = 0;
+        st.action.p8b          = 0;
         st.action.wipeDir      = (uint8_t)jsonGetInt(stepBuf, "wdir", 0);
         st.action.wipeSpeedPct = (uint8_t)jsonGetInt(stepBuf, "wspd", 50);
         int x0 = jsonGetInt(stepBuf, "x0", 0);

@@ -9,19 +9,19 @@
 #include <Arduino.h>
 #include "BoardConfig.h"
 
-#ifdef BOARD_FASTLED
+#ifdef BOARD_CHILD
 
 #include "Protocol.h"
 #include "NetUtils.h"
 #include "Child.h"
 #include "ChildLED.h"
 
-// ── Interrupt-safe show + clear helpers ───────────────────────────────────
+// ── Show + clear helpers ──────────────────────────────────────────────────
 
+#ifdef BOARD_FASTLED
 static void showSafe() {
-  // Send LED data with interrupts disabled to prevent WiFi IRQs
-  // from corrupting the WS2812B 800kHz timing signal.
-  // For 150 LEDs this blocks ~4.5ms — acceptable.
+  // Disable interrupts during WS2812B output to prevent WiFi IRQs
+  // from corrupting the 800kHz timing signal.
   noInterrupts();
   FastLED[0].showLeds(childBrightness);
   interrupts();
@@ -31,6 +31,8 @@ static inline void clearAndShow() {
   fill_solid(leds, NUM_LEDS, CRGB::Black);
   showSafe();
 }
+#endif
+// BOARD_GIGA_CHILD: showSafe() and clearAndShow() defined in GigaLED.cpp
 
 // ── Sin lookup table (256 entries, 0-255 representing 0-2π) ────────────────
 
@@ -303,9 +305,9 @@ static uint8_t actionDelay(uint8_t at) {
   }
 }
 
-// ── ESP32: FreeRTOS task (Core 0) ─────────────────────────────────────────
+// ── ESP32 / Giga-child: blocking LED task ─────────────────────────────────
 
-#ifdef BOARD_ESP32
+#if defined(BOARD_ESP32) || defined(BOARD_GIGA_CHILD)
 
 void ledTask(void* parameter) {
   (void)parameter;
@@ -413,7 +415,7 @@ void ledTask(void* parameter) {
   }
 }
 
-#endif  // BOARD_ESP32
+#endif  // BOARD_ESP32 || BOARD_GIGA_CHILD
 
 // ── D1 Mini: non-blocking updateLED() ────────────────────────────────────
 
@@ -542,4 +544,4 @@ void updateLED() {
 
 #endif  // BOARD_D1MINI
 
-#endif  // BOARD_FASTLED
+#endif  // BOARD_CHILD

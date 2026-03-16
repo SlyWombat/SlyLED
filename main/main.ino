@@ -42,7 +42,7 @@
 #include "Parent.h"
 #endif
 
-#ifdef BOARD_FASTLED
+#ifdef BOARD_CHILD
 #include "Child.h"
 #include "ChildLED.h"
 #endif
@@ -69,9 +69,16 @@ void setup() {
   settings.darkMode       = 1;
   settings.canvasWidthMm  = 10000;
   settings.canvasHeightMm = 5000;
-  strncpy(settings.parentName, "SlyLED Parent", sizeof(settings.parentName) - 1);
+  strncpy(settings.parentName, "SlyLED Orchestrator", sizeof(settings.parentName) - 1);
   settings.activeRunner  = 0xFF;
   settings.runnerRunning = false;
+
+#elif defined(BOARD_GIGA_CHILD)
+  gigaLedInit();
+  clearAndShow();
+  // LED task runs as Mbed thread
+  static rtos::Thread ledThread(osPriorityNormal, 4096);
+  ledThread.start([]{ ledTask(nullptr); });
 
 #elif defined(BOARD_ESP32)
   FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
@@ -87,7 +94,7 @@ void setup() {
   FastLED.show();
 #endif
 
-  connectWiFi();
+  connectWiFi();   // also calls initChildConfig() for BOARD_CHILD
 
 #ifdef BOARD_GIGA
   sendPing(IPAddress(255, 255, 255, 255));
@@ -106,6 +113,11 @@ void loop() {
     lastPing = millis();
     sendPing(IPAddress(255, 255, 255, 255));
   }
+  handleClient();
+  delay(10);
+
+#elif defined(BOARD_GIGA_CHILD)
+  // LED task runs in a Mbed thread — main loop just handles network
   handleClient();
   delay(10);
 

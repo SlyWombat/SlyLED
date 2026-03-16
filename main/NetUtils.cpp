@@ -47,7 +47,7 @@ unsigned long currentEpoch() {
 void connectWiFi() {
   if (Serial) { Serial.print("Connecting to "); Serial.println(SECRET_SSID); }
 
-#ifdef BOARD_FASTLED
+#ifdef BOARD_CHILD
   // Derive hostname from MAC before WiFi.begin so DHCP gets the correct name
   {
     uint8_t mac[6];
@@ -63,7 +63,7 @@ void connectWiFi() {
     WiFi.setHostname(hn);
 #endif
   }
-#else  // BOARD_GIGA
+#elif defined(BOARD_GIGA)
   // WiFi.setHostname() must be called before WiFi.begin() for DHCP option 12
   WiFi.setHostname(HOSTNAME);
 #endif
@@ -81,7 +81,7 @@ void connectWiFi() {
   cmdUDP.begin(UDP_PORT);
   if (Serial) Serial.println(F("UDP command channel open on port 4210."));
 
-#ifdef BOARD_FASTLED
+#ifdef BOARD_CHILD
   initChildConfig();
 #endif
 }

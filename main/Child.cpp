@@ -7,7 +7,7 @@
 #include "BoardConfig.h"
 #include "version.h"
 
-#ifdef BOARD_FASTLED
+#ifdef BOARD_CHILD
 
 #include "Protocol.h"
 #include "Globals.h"
@@ -18,7 +18,9 @@
 
 // ── Global data definitions ───────────────────────────────────────────────────
 
-CRGB leds[NUM_LEDS];
+#ifdef BOARD_FASTLED
+CRGB leds[NUM_LEDS];   // Giga child: leds[] defined in GigaLED.cpp
+#endif
 
 ChildSelfConfig childCfg;
 
@@ -48,7 +50,10 @@ volatile bool     childRunnerLoop   = true;
 
 void loadChildConfig() {
   bool loaded = false;
-#ifdef BOARD_ESP32
+#ifdef BOARD_GIGA_CHILD
+  // Giga child: no persistent storage — always use RAM defaults
+  // Config is fixed: 1 string, 1 LED, 4mm (onboard RGB)
+#elif defined(BOARD_ESP32)
   Preferences prefs;
   prefs.begin("slyled", true);  // read-only
   if (prefs.getUChar("magic", 0) == EEPROM_MAGIC) {
@@ -81,7 +86,11 @@ void loadChildConfig() {
 }
 
 void saveChildConfig() {
-#ifdef BOARD_ESP32
+#ifdef BOARD_GIGA_CHILD
+  // No persistent storage on Giga child
+  if (Serial) Serial.println(F("Config saved (RAM only)."));
+  return;
+#elif defined(BOARD_ESP32)
   Preferences prefs;
   prefs.begin("slyled", false);  // read-write
   prefs.putUChar("magic", EEPROM_MAGIC);
@@ -99,7 +108,10 @@ void saveChildConfig() {
 }
 
 void clearChildConfig() {
-#ifdef BOARD_ESP32
+#ifdef BOARD_GIGA_CHILD
+  // No persistent storage to clear
+  return;
+#elif defined(BOARD_ESP32)
   Preferences prefs;
   prefs.begin("slyled", false);
   prefs.clear();
@@ -117,8 +129,13 @@ void initChildConfig() {
   // Set RAM defaults first (loadChildConfig overwrites if EEPROM is valid)
   memset(&childCfg, 0, sizeof(childCfg));
   childCfg.stringCount         = 1;
+#ifdef BOARD_GIGA_CHILD
+  childCfg.strings[0].ledCount = 1;    // onboard RGB = 1 pixel
+  childCfg.strings[0].lengthMm = 4;    // ~4mm LED package
+#else
   childCfg.strings[0].ledCount = 30;
   childCfg.strings[0].lengthMm = 500;
+#endif
   childCfg.strings[0].ledType  = LEDTYPE_WS2812B;
   childCfg.strings[0].flags    = 0;   // not folded
   childCfg.strings[0].cableMm  = 0;
@@ -246,8 +263,13 @@ void handleFactoryReset(WiFiClient& c) {
   clearChildConfig();
   memset(&childCfg, 0, sizeof(childCfg));
   childCfg.stringCount         = 1;
+#ifdef BOARD_GIGA_CHILD
+  childCfg.strings[0].ledCount = 1;    // onboard RGB = 1 pixel
+  childCfg.strings[0].lengthMm = 4;    // ~4mm LED package
+#else
   childCfg.strings[0].ledCount = 30;
   childCfg.strings[0].lengthMm = 500;
+#endif
   childCfg.strings[0].ledType  = LEDTYPE_WS2812B;
   childCfg.strings[0].stripDir = DIR_E;
   loadChildConfig();  // regenerates hostname, defaults altName, saves to EEPROM
@@ -517,4 +539,4 @@ void handlePostChildConfig(WiFiClient& c, int contentLen) {
   sendPong(IPAddress(255, 255, 255, 255));  // notify parent of updated config
 }
 
-#endif  // BOARD_FASTLED
+#endif  // BOARD_CHILD

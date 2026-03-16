@@ -14,7 +14,7 @@
 #include "Parent.h"
 #endif
 
-#ifdef BOARD_FASTLED
+#ifdef BOARD_CHILD
 #include "Child.h"
 #include "ChildLED.h"
 #endif
@@ -229,7 +229,7 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
 
 #endif  // BOARD_GIGA
 
-#ifdef BOARD_FASTLED
+#ifdef BOARD_CHILD
   } else if (isPost && strstr(req, " /test/stop ")) {
     childActType = ACT_OFF;
     childActSeq++;
@@ -266,10 +266,10 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
   } else if (strstr(req, " /config ")) {
     if (isPost) handlePostChildConfig(client, contentLen);
     else        sendChildConfigPage(client);
-#endif  // BOARD_FASTLED
+#endif  // BOARD_CHILD
 
   } else {
-#ifdef BOARD_FASTLED
+#ifdef BOARD_CHILD
     sendChildConfigPage(client);
 #else
     sendParentSPA(client);

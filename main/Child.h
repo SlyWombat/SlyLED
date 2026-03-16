@@ -1,8 +1,8 @@
 /*
- * Child.h — Child node (ESP32 / D1 Mini) config structs, volatile action state,
- *           runner state, and function declarations.
+ * Child.h — Child node (ESP32 / D1 Mini / Giga-child) config structs,
+ *           volatile action state, runner state, and function declarations.
  *
- * All content is guarded by #ifdef BOARD_FASTLED — safe to include on any board.
+ * All content is guarded by #ifdef BOARD_CHILD — safe to include on any board.
  */
 
 #ifndef CHILD_H
@@ -11,7 +11,11 @@
 #include "BoardConfig.h"
 #include "Protocol.h"
 
-#ifdef BOARD_FASTLED
+#ifdef BOARD_CHILD
+
+#ifdef BOARD_GIGA_CHILD
+  #include "GigaLED.h"       // provides CRGB, leds[], showSafe(), fill_solid()
+#endif
 
 // ── Child-specific constants ──────────────────────────────────────────────────
 
@@ -112,6 +116,6 @@ uint8_t hexVal(char ch);
 int     urlGetInt(const char* body, const char* key, int def);
 void    urlGetStr(const char* body, const char* key, char* out, uint8_t maxlen);
 
-#endif  // BOARD_FASTLED
+#endif  // BOARD_CHILD
 
 #endif  // CHILD_H
