@@ -239,18 +239,18 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     if (tq) testType = (uint8_t)atoi(tq + 3);
     childActType = testType;
     childActR = 255; childActG = 0; childActB = 50;
-    childActP16a = 50;   // speed for animated effects
+    childActP16a = 200;  // speed for animated effects (slower default)
     childActP8a  = 3;    // spacing/palette/cooling/tail/density
     childActP8b  = 120;  // sparking
     childActP8c  = DIR_E; childActP8d = 80; // direction/decay
     // Set reasonable defaults per type
-    if (testType == ACT_FADE)    { childActP8a = 0; childActP8b = 0; childActP8c = 255; childActP16a = 2000; }
-    if (testType == ACT_BREATHE) { childActP16a = 2000; childActP8a = 10; }
-    if (testType == ACT_CHASE)   { childActP16a = 100; childActP8a = 3; }
-    if (testType == ACT_RAINBOW) { childActP16a = 30; childActP8a = 0; }
-    if (testType == ACT_FIRE)    { childActP16a = 15; childActP8a = 55; childActP8b = 120; }
-    if (testType == ACT_COMET)   { childActP16a = 30; childActP8a = 10; childActP8d = 80; }
-    if (testType == ACT_TWINKLE) { childActP16a = 50; childActP8a = 5; childActP8d = 15; }
+    if (testType == ACT_FADE)    { childActP8a = 0; childActP8b = 0; childActP8c = 255; childActP16a = 3000; }
+    if (testType == ACT_BREATHE) { childActP16a = 3000; childActP8a = 10; }
+    if (testType == ACT_CHASE)   { childActP16a = 200; childActP8a = 3; }
+    if (testType == ACT_RAINBOW) { childActP16a = 80; childActP8a = 0; }
+    if (testType == ACT_FIRE)    { childActP16a = 30; childActP8a = 55; childActP8b = 120; }
+    if (testType == ACT_COMET)   { childActP16a = 60; childActP8a = 10; childActP8d = 80; }
+    if (testType == ACT_TWINKLE) { childActP16a = 100; childActP8a = 3; childActP8d = 10; }
     for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
       if (j < childCfg.stringCount && childCfg.strings[j].ledCount > 0) {
         childActSt[j] = 0;

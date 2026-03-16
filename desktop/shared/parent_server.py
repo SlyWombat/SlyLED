@@ -626,21 +626,28 @@ def api_runner_sync(rid):
     if any(rs is None for rs in resolved):
         return jsonify(ok=False, err="step references missing action"), 400
     sent = 0
+    acked = 0
     for child in _children:
         if child["status"] != 1:
             continue
         for i, step in enumerate(resolved):
-            _send(child["ip"], _load_step_pkt(i, len(resolved), step, child))
-            sent += 1
-            time.sleep(0.05)   # 50 ms between steps — give child time to process
-    return jsonify(ok=True, sent=sent)
+            pkt = _load_step_pkt(i, len(resolved), step, child)
+            # Try up to 3 times with ACK wait
+            for attempt in range(3):
+                resp = _send_recv(child["ip"], pkt, timeout=0.8)
+                sent += 1
+                if resp and len(resp) >= 9 and resp[3] == CMD_LOAD_ACK:
+                    acked += 1
+                    break
+                time.sleep(0.1)
+    return jsonify(ok=True, sent=sent, acked=acked)
 
 @app.post("/api/runners/<int:rid>/start")
 def api_runner_start(rid):
     r = next((x for x in _runners if x["id"] == rid), None)
     if not r:
         return jsonify(ok=False, err="not found"), 404
-    go_epoch = int(time.time()) + 2      # 2 s from now — time for UDP to reach children
+    go_epoch = int(time.time()) + 5      # 5 s from now — time for UDP to reach all children
     pkt = _hdr(CMD_RUNNER_GO, go_epoch)
     for c in _children:
         if c["status"] == 1:
