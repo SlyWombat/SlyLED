@@ -1109,54 +1109,51 @@ function loadFirmware(){
       if(st)st.style.color=d.hasPassword?'#4c4':'#c66';
     }
   });
-  // Load ports + cross-reference with registered performers for version info
+  // Load ports fast, then async-query each board port for version + wifi
   ra('GET','/api/firmware/ports',null,function(ports){
-    ra('GET','/api/children',null,function(kids){
-      ra('GET','/api/firmware/registry',null,function(reg){
-        _fwRegistry=reg&&reg.firmware?reg.firmware:[];
-        var el=document.getElementById('fw-ports');
-        var sel=document.getElementById('fw-port');
-        if(!ports||!ports.length){el.innerHTML='<p style="color:#888">No COM ports detected.</p>';return;}
-        // Build a map of registered performers by hostname prefix for matching
-        var kidMap={};(kids||[]).forEach(function(k){kidMap[k.hostname]=k;});
-        var h='<table class="tbl"><tr><th>Port</th><th>Board</th><th>VID:PID</th><th>Firmware</th><th>WiFi</th></tr>';
-        sel.innerHTML='';
-        ports.forEach(function(p){
-          var fwVer='-',needsUpdate=false,updateFwId='';
-          // Try to find a matching performer (by board type + any registered child)
-          var matchedKid=null;
-          (kids||[]).forEach(function(k){
-            if(k.fwVersion&&!matchedKid)matchedKid=k;
-          });
-          // Find latest registry version for this board
-          var latestVer='0.0';
-          _fwRegistry.forEach(function(f){
-            if(f.board===p.board&&f.version>latestVer){latestVer=f.version;updateFwId=f.id;}
-          });
-          // Show version: prefer serial query, fall back to network PONG
-          if(p.fwVersion){
-            fwVer='v'+p.fwVersion;
-            if(latestVer>p.fwVersion)needsUpdate=true;
-          } else if(matchedKid&&matchedKid.fwVersion){
-            fwVer='v'+matchedKid.fwVersion;
-            if(latestVer>matchedKid.fwVersion)needsUpdate=true;
+    ra('GET','/api/firmware/registry',null,function(reg){
+      _fwRegistry=reg&&reg.firmware?reg.firmware:[];
+      var el=document.getElementById('fw-ports');
+      var sel=document.getElementById('fw-port');
+      if(!ports||!ports.length){el.innerHTML='<p style="color:#888">No COM ports detected.</p>';return;}
+      // Render table immediately with spinners for board ports
+      sel.innerHTML='';
+      var boardPorts=[];
+      var h='<table class="tbl" id="fw-tbl"><tr><th>Port</th><th>Board</th><th>VID:PID</th><th>Firmware</th><th>WiFi</th></tr>';
+      ports.forEach(function(p,idx){
+        var hasBoard=p.board||p.candidates&&p.candidates.length>0;
+        var fwCell=hasBoard?'<span class="fw-q" id="fwq-'+idx+'" style="color:#888">\u23f3</span>':'-';
+        var wfCell=hasBoard?'<span id="wfq-'+idx+'" style="color:#888">\u23f3</span>':'-';
+        h+='<tr><td>'+p.port+'</td><td>'+p.boardName+'</td><td>'+(p.vid_pid||'-')+'</td>';
+        h+='<td>'+fwCell+'</td><td>'+wfCell+'</td></tr>';
+        var o=document.createElement('option');o.value=p.port;o.text=p.port+' ('+p.boardName+')';sel.add(o);
+        if(p.board){document.getElementById('fw-board').value=p.board;}
+        if(hasBoard)boardPorts.push({port:p.port,idx:idx,board:p.board});
+      });
+      el.innerHTML=h+'</table>';
+      updateFwImages();
+      // Async query each board port
+      boardPorts.forEach(function(bp){
+        ra('POST','/api/firmware/query',{port:bp.port},function(r){
+          var fwEl=document.getElementById('fwq-'+bp.idx);
+          var wfEl=document.getElementById('wfq-'+bp.idx);
+          if(!r||!r.ok){if(fwEl)fwEl.textContent='-';if(wfEl)wfEl.textContent='-';return;}
+          // Firmware version
+          var ver=r.fwVersion?'v'+r.fwVersion:'-';
+          var latestVer='0.0',updateFwId='';
+          var brd=r.board||bp.board;
+          _fwRegistry.forEach(function(f){if(f.board===brd&&f.version>latestVer){latestVer=f.version;updateFwId=f.id;}});
+          if(r.fwVersion&&latestVer>r.fwVersion)ver+=' <button class="btn btn-on" style="padding:.15em .4em;font-size:.72em" onclick="quickFlash(\''+bp.port+'\',\''+brd+'\',\''+updateFwId+'\',this)">\u2191 v'+latestVer+'</button>';
+          if(fwEl)fwEl.innerHTML=ver;
+          // WiFi match
+          if(wfEl){
+            if(r.wifiMatch===true)wfEl.innerHTML='<span style="color:#4c4">\u2705</span>';
+            else if(r.wifiMatch===false)wfEl.innerHTML='<span style="color:#c44">\u26a0</span> <button class="btn btn-on" style="padding:.12em .4em;font-size:.72em" onclick="quickFlash(\''+bp.port+'\',\''+brd+'\',\''+updateFwId+'\',this)">Update WiFi</button>';
+            else wfEl.textContent='-';
           }
-          var updateBtn='';
-          if(needsUpdate&&p.board)updateBtn=' <button class="btn btn-on" style="padding:.2em .5em;font-size:.78em" onclick="quickFlash(\''+p.port+'\',\''+p.board+'\',\''+updateFwId+'\',this)">Update to v'+latestVer+'</button>';
-          var bName=p.fwBoard||p.boardName;
-          h+='<tr><td>'+p.port+'</td><td>'+bName+'</td><td>'+(p.vid_pid||'-')+'</td>';
-          var wifiSt='-';
-          if(p.wifiMatch===true)wifiSt='<span style="color:#4c4">\u2705</span>';
-          else if(p.wifiMatch===false){
-            var wfwId=updateFwId||'';
-            wifiSt='<span style="color:#c44">\u26a0</span> <button class="btn btn-on" style="padding:.15em .5em;font-size:.75em" onclick="quickFlash(\''+p.port+'\',\''+(p.board||'')+'\',\''+wfwId+'\',this)">Update WiFi</button>';
-          }
-          h+='<td>'+fwVer+updateBtn+'</td><td>'+wifiSt+'</td></tr>';
-          var o=document.createElement('option');o.value=p.port;o.text=p.port+' ('+p.boardName+')';sel.add(o);
-          if(p.board){document.getElementById('fw-board').value=p.board;}
+          // Update board name if resolved
+          if(r.fwBoard){var row=fwEl&&fwEl.closest?fwEl.closest('tr'):null;if(row&&row.cells[1])row.cells[1].textContent=r.fwBoard;}
         });
-        el.innerHTML=h+'</table>';
-        updateFwImages();
       });
     });
   });

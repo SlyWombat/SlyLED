@@ -1232,6 +1232,54 @@ for k in (kids or []):
     if k.get("hostname", "").startswith("SLYC-BK"):
         delete(f"/api/children/{k['id']}")
 
+# ── Firmware management API ───────────────────────────────────────────────────
+
+section("Firmware API  GET /api/firmware/ports")
+code, data = get_json("/api/firmware/ports")
+check("Ports HTTP 200", code == 200, f"got {code}")
+check("Returns array", isinstance(data, list))
+if data:
+    check("Port has 'port' field", "port" in data[0])
+    check("Port has 'boardName' field", "boardName" in data[0])
+
+section("Firmware API  GET /api/firmware/registry")
+code, data = get_json("/api/firmware/registry")
+check("Registry HTTP 200", code == 200, f"got {code}")
+check("Has firmware array", isinstance(data, dict) and isinstance(data.get("firmware"), list))
+check("Registry has entries", len(data.get("firmware", [])) > 0,
+      f"count={len(data.get('firmware', []))}")
+if data.get("firmware"):
+    fw = data["firmware"][0]
+    check("Entry has id", "id" in fw)
+    check("Entry has name", "name" in fw)
+    check("Entry has board", "board" in fw)
+    check("Entry has version", "version" in fw)
+
+section("WiFi credentials API")
+# Save
+code, data = post_json("/api/wifi", {"ssid": "TestNet", "password": "TestPass123"})
+check("Save WiFi ok", code == 200 and data is not None and data.get("ok") is True)
+# Read
+code, data = get_json("/api/wifi")
+check("GET WiFi ok", code == 200)
+check("SSID returned", data is not None and data.get("ssid") == "TestNet")
+check("Password not exposed", data is not None and "password" not in data)
+check("hasPassword is true", data is not None and data.get("hasPassword") is True)
+# Clear password
+post_json("/api/wifi", {"ssid": "", "password": ""})
+
+section("Firmware API  POST /api/firmware/query (no port)")
+code, data = post_json("/api/firmware/query", {"port": ""})
+check("Empty port → 400", code == 400, f"got {code}")
+
+section("SPA Firmware tab structure")
+code, body = get("/")
+check("SPA has Firmware tab button", "n-firmware" in body)
+check("SPA has fw-ports element", "fw-ports" in body)
+check("SPA has fw-ssid element", "fw-ssid" in body)
+check("SPA has DFU bootloader note", "fw-dfu-note" in body)
+check("SPA has firmware query logic", "api/firmware/query" in body)
+
 # ── Content-Length headers ────────────────────────────────────────────────────
 
 section("Content-Length on JSON responses")

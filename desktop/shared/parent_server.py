@@ -801,30 +801,31 @@ def _parent_wifi_hash():
 
 @app.get("/api/firmware/ports")
 def api_fw_ports():
+    """Fast port list — no serial queries. Use /api/firmware/query for per-port info."""
     if not _fw_available:
         return jsonify(ok=False, err="pyserial not installed"), 500
-    ports = list_ports()
-    # Query each known-board port for firmware version via serial
-    for p in ports:
-        if p.get("candidates"):
-            try:
-                info = query_serial(p["port"], timeout=3.0)
-                if info:
-                    p["fwVersion"] = info.get("version")
-                    p["fwBoard"] = info.get("board")
-                    p["wifiHash"] = info.get("wifiHash")
-                    # Compare wifi hash with parent's stored credentials
-                    parent_hash = _parent_wifi_hash()
-                    p["wifiMatch"] = (info.get("wifiHash") == parent_hash) if info.get("wifiHash") else None
-                    # Resolve ambiguous board from serial response
-                    if info.get("board") and not p.get("board"):
-                        bmap = {"esp32": "esp32", "d1mini": "d1mini",
-                                "giga-child": "giga", "giga-parent": "giga"}
-                        p["board"] = bmap.get(info["board"], p.get("board"))
-                        p["boardName"] = info["board"]
-            except Exception:
-                pass
-    return jsonify(ports)
+    return jsonify(list_ports())
+
+@app.post("/api/firmware/query")
+def api_fw_query_port():
+    """Query a single port via serial for version + wifi hash. Slow (~2s)."""
+    if not _fw_available:
+        return jsonify(ok=False, err="pyserial not available"), 500
+    body = request.get_json(silent=True) or {}
+    port = body.get("port", "")
+    if not port:
+        return jsonify(ok=False, err="port required"), 400
+    info = query_serial(port, timeout=2.0)
+    if not info:
+        return jsonify(ok=True, fwVersion=None, fwBoard=None, wifiMatch=None)
+    parent_hash = _parent_wifi_hash()
+    bmap = {"esp32": "esp32", "d1mini": "d1mini", "giga-child": "giga", "giga-parent": "giga"}
+    return jsonify(ok=True,
+                   fwVersion=info.get("version"),
+                   fwBoard=info.get("board"),
+                   board=bmap.get(info.get("board", ""), None),
+                   wifiHash=info.get("wifiHash"),
+                   wifiMatch=(info.get("wifiHash") == parent_hash) if info.get("wifiHash") else None)
 
 @app.get("/api/firmware/registry")
 def api_fw_registry():
