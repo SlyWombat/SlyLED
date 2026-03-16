@@ -364,8 +364,8 @@ void sendChildConfigPage(WiFiClient& c) {
                childCfg.strings[j].stripDir == 1 ? " selected" : "",
                childCfg.strings[j].stripDir == 2 ? " selected" : "",
                childCfg.strings[j].stripDir == 3 ? " selected" : "");
-    sendBuf(c, "<label style='display:flex;align-items:center;gap:.4em;margin-top:.5em'>"
-               "<input type='checkbox' name='fd%u' value='1'%s> Folded (strip goes out and back)</label>",
+    sendBuf(c, "<label style='display:inline-flex;align-items:center;gap:.3em;margin-top:.5em'>"
+               "<input type='checkbox' name='fd%u' value='1' style='width:auto'%s> Folded</label>",
                (unsigned)j,
                (childCfg.strings[j].flags & STR_FLAG_FOLDED) ? " checked" : "");
     c.print(F("</div>"));
