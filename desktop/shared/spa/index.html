@@ -419,7 +419,7 @@ function removeChild(id){
 }
 
 function refreshChild(id){
-  ra('POST','/api/children/'+id+'/refresh',{},function(){setTimeout(loadSetup,700);});
+  ra('POST','/api/children/'+id+'/refresh',{},function(){setTimeout(_renderSetup,700);});
 }
 
 function closeModal(){document.getElementById('modal').style.display='none';}
@@ -439,12 +439,12 @@ function showDetails(id){
     h+='<p style="font-size:.85em;color:#aaa;margin-bottom:.4em">'+sc+' string'+(sc!==1?'s':'')+'</p>';
     if(sc>0&&c.strings&&c.strings.length){
       h+='<table class="tbl" style="font-size:.8em">';
-      h+='<tr><th>#</th><th>LEDs</th><th>Len mm</th><th>Type</th><th>Cable Dir</th><th>Cable mm</th><th>Strip Dir</th></tr>';
+      h+='<tr><th>#</th><th>LEDs</th><th>Len mm</th><th>Type</th><th>Dir</th><th>Folded</th></tr>';
       for(var si=0;si<sc&&si<c.strings.length;si++){
         var s=c.strings[si];
         h+='<tr><td>'+(si+1)+'</td><td>'+s.leds+'</td><td>'+s.mm+'</td>';
-        h+='<td>'+(types[s.type]||s.type)+'</td><td>'+(dirs[s.cdir]||s.cdir)+'</td>';
-        h+='<td>'+s.cmm+'</td><td>'+(dirs[s.sdir]||s.sdir)+'</td></tr>';
+        h+='<td>'+(types[s.type]||s.type)+'</td><td>'+(dirs[s.sdir]||s.sdir)+'</td>';
+        h+='<td>'+(s.folded?'\u2705':'—')+'</td></tr>';
       }
       h+='</table>';
     }
@@ -1040,15 +1040,16 @@ function stopRunners(){
 }
 
 function showTimeline(rid){
-  // Fetch runner details, actions, and children to build Gantt chart
+  // Fetch runner details, actions, and ALL registered children
   ra('GET','/api/actions',null,function(acts){
     _acts=acts||[];
     ra('GET','/api/runners/'+rid,null,function(rn){
       if(!rn||!rn.steps||!rn.steps.length){alert('No steps in runner');return;}
-      ra('GET','/api/layout',null,function(lay){
-        var children=(lay&&lay.children||[]).filter(function(c){return c.positioned||c._placed;});
-        if(!children.length)children=[{hostname:'(all performers)',id:-1}];
-        _drawTimeline(rn,_acts,children,lay);
+      ra('GET','/api/children',null,function(kids){
+        ra('GET','/api/layout',null,function(lay){
+          var children=(kids&&kids.length)?kids:[{hostname:'(all performers)',id:-1}];
+          _drawTimeline(rn,_acts,children,lay);
+        });
       });
     });
   });
@@ -1106,14 +1107,7 @@ function _drawTimeline(rn,acts,children,lay){
     var pw=Math.max(2,Math.round(dur*chartW/totalS));
 
     children.forEach(function(c,ci){
-      // Check if child is within area-of-effect (simple % check on canvas position)
-      var inAoE=true;
-      if(c.id>=0&&lay){
-        var cxPct=(c.x||0)/((lay&&lay.canvasW)||10000);
-        var cyPct=(c.y||0)/((lay&&lay.canvasH)||5000);
-        inAoE=(cxPct>=x0pct-0.01&&cxPct<=x1pct+0.01&&cyPct>=y0pct-0.01&&cyPct<=y1pct+0.01);
-      }
-      if(!inAoE)return;
+      // All children are included (area-of-effect is always full canvas now)
       var y=padT+ci*rowH+4;
       var bh=rowH-8;
       ctx.fillStyle=col;ctx.globalAlpha=0.7;
