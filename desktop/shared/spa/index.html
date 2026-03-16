@@ -167,7 +167,8 @@ body.light .li:hover{border-color:#888}
     <div class='card-title'>WiFi Credentials</div>
     <p style='font-size:.82em;color:#888;margin-bottom:.5em'>Stored on the Orchestrator and pushed to performers during flashing.</p>
     <label>SSID</label><input id='fw-ssid' style='width:200px'>
-    <label>Password</label><input id='fw-pass' type='password' style='width:200px'>
+    <label>Password</label><input id='fw-pass' type='password' style='width:200px' placeholder='Enter new password'>
+    <span id='fw-pw-status' style='font-size:.8em;color:#888;margin-left:.5em'></span>
     <div style='margin-top:.5em'><button class='btn btn-on' onclick='saveWifi(this)'>Save WiFi</button></div>
   </div>
   <div class='card' style='max-width:700px'>
@@ -1100,7 +1101,13 @@ function _drawTimeline(rn,acts,children,lay){
 function loadFirmware(){
   // Load WiFi creds
   ra('GET','/api/wifi',null,function(d){
-    if(d){document.getElementById('fw-ssid').value=d.ssid||'';document.getElementById('fw-pass').value='';}
+    if(d){
+      document.getElementById('fw-ssid').value=d.ssid||'';
+      document.getElementById('fw-pass').value='';
+      var st=document.getElementById('fw-pw-status');
+      if(st)st.textContent=d.hasPassword?'\u2705 Password stored (encrypted)':'\u26a0 No password set';
+      if(st)st.style.color=d.hasPassword?'#4c4':'#c66';
+    }
   });
   // Load ports + cross-reference with registered performers for version info
   ra('GET','/api/firmware/ports',null,function(ports){

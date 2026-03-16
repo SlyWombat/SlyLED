@@ -726,9 +726,34 @@ _DEFAULT_LAYOUT = {"canvasW": 10000, "canvasH": 5000, "children": []}
 
 # ── WiFi credentials ─────────────────────────────────────────────────────────
 
+import base64, hashlib
+
+def _wifi_key():
+    """Derive an encryption key from machine identity (not portable, but protects at rest)."""
+    seed = (socket.gethostname() + "-slyled-wifi").encode()
+    return hashlib.sha256(seed).digest()
+
+def _encrypt_pw(plain):
+    if not plain:
+        return ""
+    key = _wifi_key()
+    out = bytes(b ^ key[i % len(key)] for i, b in enumerate(plain.encode("utf-8")))
+    return base64.b64encode(out).decode("ascii")
+
+def _decrypt_pw(enc):
+    if not enc:
+        return ""
+    try:
+        key = _wifi_key()
+        raw = base64.b64decode(enc)
+        return bytes(b ^ key[i % len(key)] for i, b in enumerate(raw)).decode("utf-8")
+    except Exception:
+        return enc   # fallback: return as-is if decryption fails (old unencrypted data)
+
 @app.get("/api/wifi")
 def api_wifi_get():
-    return jsonify({"ssid": _wifi.get("ssid", ""), "hasPassword": bool(_wifi.get("password"))})
+    return jsonify({"ssid": _wifi.get("ssid", ""),
+                    "hasPassword": bool(_wifi.get("password"))})
 
 @app.post("/api/wifi")
 def api_wifi_save():
@@ -737,9 +762,13 @@ def api_wifi_save():
         if "ssid" in body:
             _wifi["ssid"] = body["ssid"]
         if "password" in body:
-            _wifi["password"] = body["password"]
+            _wifi["password"] = _encrypt_pw(body["password"])
         _save("wifi", _wifi)
     return jsonify(ok=True)
+
+def get_wifi_password():
+    """Get decrypted WiFi password (for firmware flashing)."""
+    return _decrypt_pw(_wifi.get("password", ""))
 
 # ── Firmware management ──────────────────────────────────────────────────────
 
