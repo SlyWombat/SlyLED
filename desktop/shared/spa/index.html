@@ -580,7 +580,7 @@ function drawLayout(){
     return;
   }
   placed.forEach(function(c){
-    var cx=Math.round(c.x*W/phW),cy=H-Math.round(c.y*H/phH);
+    var np=_nodePos(c,W,H),cx=np.cx,cy=np.cy;
     // Draw strings in detailed mode
     if(showStr&&c.strings&&c.sc>0){
       for(var si=0;si<c.sc&&si<c.strings.length;si++){
@@ -624,14 +624,22 @@ function saveLayout(btn){
     });
 }
 
+function _nodePos(c,W,H){
+  // Clamp draw position so node is always accessible (at least 14px inside canvas)
+  var cx=Math.round(c.x*W/phW),cy=H-Math.round(c.y*H/phH);
+  cx=Math.max(14,Math.min(W-14,cx));
+  cy=Math.max(14,Math.min(H-14,cy));
+  return{cx:cx,cy:cy};
+}
+
 function _hitNode(mx,my,W,H){
   if(!ld||!ld.children)return -1;
-  var best=-1,bestD=625; // 25px radius squared
+  var best=-1,bestD=900; // 30px radius squared
   var placed=ld.children;
   for(var i=0;i<placed.length;i++){
     if(!_isPlaced(placed[i]))continue;
-    var cx=Math.round(placed[i].x*W/phW),cy=H-Math.round(placed[i].y*H/phH);
-    var dx=mx-cx,dy=my-cy,d2=dx*dx+dy*dy;
+    var p=_nodePos(placed[i],W,H);
+    var dx=mx-p.cx,dy=my-p.cy,d2=dx*dx+dy*dy;
     if(d2<bestD){bestD=d2;best=i;}
   }
   return best;
@@ -643,9 +651,8 @@ function cvDown(e){
   var mx=e.clientX-r.left,my=e.clientY-r.top;
   drag=_hitNode(mx,my,cv.width,cv.height);
   if(drag>=0){
-    var c=ld.children[drag];
-    var cx=Math.round(c.x*cv.width/phW),cy=cv.height-Math.round(c.y*cv.height/phH);
-    dox=mx-cx;doy=my-cy;
+    var np=_nodePos(ld.children[drag],cv.width,cv.height);
+    dox=mx-np.cx;doy=my-np.cy;
     cv.style.cursor='grabbing';
   }
 }
