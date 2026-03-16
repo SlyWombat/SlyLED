@@ -284,8 +284,15 @@ def status():
 
 # ── Children ──────────────────────────────────────────────────────────────────
 
+CHILD_STALE_S = 120   # mark offline if not seen for 2 minutes
+
 @app.get("/api/children")
 def api_children():
+    now = int(time.time())
+    for c in _children:
+        if c.get("status") == 1 and c.get("seen", 0) > 0:
+            if now - c["seen"] > CHILD_STALE_S:
+                c["status"] = 0
     return jsonify(_children)
 
 @app.get("/api/children/discover")
