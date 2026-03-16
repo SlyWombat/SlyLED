@@ -12,6 +12,12 @@
 
 #ifdef BOARD_CHILD
 
+// Render a single action type to a range within leds[].
+bool applyAction(uint8_t at, uint8_t r, uint8_t g, uint8_t b,
+                 uint16_t p16a, uint8_t p8a, uint8_t p8b,
+                 uint8_t p8c, uint8_t p8d,
+                 unsigned long elapsedMs, uint8_t st, uint8_t en, bool folded);
+
 // Applies one ChildRunnerStep to the leds[] array for all affected string ranges.
 bool applyRunnerStep(const ChildRunnerStep& rs, uint8_t flashPh, unsigned long stepMs);
 

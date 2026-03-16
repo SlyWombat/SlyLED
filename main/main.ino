@@ -118,22 +118,25 @@ void loop() {
   delay(10);
 
 #elif defined(BOARD_GIGA_CHILD)
-  // Giga child: simple inline LED — set colour from action state
+  // Giga child: full action rendering on single onboard RGB pixel
   {
     static uint8_t prevSeq = 0;
+    static unsigned long actStart = 0;
     static bool offDone = false;
     uint8_t seq = childActSeq;
-    if (seq != prevSeq) { prevSeq = seq; offDone = false; }
+    if (seq != prevSeq) { prevSeq = seq; actStart = millis(); offDone = false; }
     uint8_t at = childActType;
-    if (at == ACT_SOLID || at == ACT_FADE || at == ACT_BREATHE ||
-        at == ACT_CHASE || at == ACT_RAINBOW || at == ACT_FIRE ||
-        at == ACT_COMET || at == ACT_TWINKLE) {
-      leds[0] = CRGB(childActR, childActG, childActB);
+    if (at != ACT_OFF) {
+      leds[0] = CRGB(0, 0, 0);
+      applyAction(at, childActR, childActG, childActB,
+                  childActP16a, childActP8a, childActP8b,
+                  childActP8c, childActP8d,
+                  millis() - actStart, 0, 0, false);
       showSafe();
-    } else if (!offDone) { clearAndShow(); offDone = true; }
+      delay(20);
+    } else if (!offDone) { clearAndShow(); offDone = true; delay(10); }
   }
   handleClient();
-  delay(50);
 
 #elif defined(BOARD_D1MINI)
   updateLED();

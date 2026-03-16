@@ -241,9 +241,9 @@ static void applyFold(uint8_t st, uint8_t en) {
 
 // ── applyAction — render one action type across a string range ────────────
 
-static bool applyAction(uint8_t at, uint8_t r, uint8_t g, uint8_t b,
-                         uint16_t p16a, uint8_t p8a, uint8_t p8b,
-                         uint8_t p8c, uint8_t p8d,
+bool applyAction(uint8_t at, uint8_t r, uint8_t g, uint8_t b,
+                  uint16_t p16a, uint8_t p8a, uint8_t p8b,
+                  uint8_t p8c, uint8_t p8d,
                          unsigned long elapsedMs,
                          uint8_t st, uint8_t en, bool folded) {
   if (st == 0xFF || en < st) return false;
