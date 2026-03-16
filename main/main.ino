@@ -102,9 +102,54 @@ void setup() {
 #endif
 }
 
+// ── Serial command handler (all boards) ───────────────────────────────────────
+
+static void checkSerialCmd() {
+  if (!Serial || !Serial.available()) return;
+  static char cmdBuf[16];
+  static uint8_t cmdPos = 0;
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (cmdPos > 0) {
+        cmdBuf[cmdPos] = '\0';
+        if (strcmp(cmdBuf, "VERSION") == 0) {
+          Serial.print("SLYLED:");
+          Serial.print(APP_MAJOR);
+          Serial.print('.');
+          Serial.println(APP_MINOR);
+        } else if (strcmp(cmdBuf, "WIFIHASH") == 0) {
+          // Simple hash of SSID+password so parent can detect changes
+          uint32_t h = 5381;
+          for (const char* p = SECRET_SSID; *p; p++) h = h * 33 + *p;
+          for (const char* p = SECRET_PASS; *p; p++) h = h * 33 + *p;
+          Serial.print("WIFIHASH:");
+          Serial.println(h, HEX);
+        } else if (strcmp(cmdBuf, "BOARD") == 0) {
+#ifdef BOARD_GIGA
+          Serial.println("BOARD:giga-parent");
+#elif defined(BOARD_GIGA_CHILD)
+          Serial.println("BOARD:giga-child");
+#elif defined(BOARD_ESP32)
+          Serial.println("BOARD:esp32");
+#elif defined(BOARD_D1MINI)
+          Serial.println("BOARD:d1mini");
+#else
+          Serial.println("BOARD:unknown");
+#endif
+        }
+        cmdPos = 0;
+      }
+    } else if (cmdPos < sizeof(cmdBuf) - 1) {
+      cmdBuf[cmdPos++] = c;
+    }
+  }
+}
+
 // ── loop ──────────────────────────────────────────────────────────────────────
 
 void loop() {
+  checkSerialCmd();
   printStatus();
   pollUDP();
 

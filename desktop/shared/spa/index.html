@@ -1119,7 +1119,7 @@ function loadFirmware(){
         if(!ports||!ports.length){el.innerHTML='<p style="color:#888">No COM ports detected.</p>';return;}
         // Build a map of registered performers by hostname prefix for matching
         var kidMap={};(kids||[]).forEach(function(k){kidMap[k.hostname]=k;});
-        var h='<table class="tbl"><tr><th>Port</th><th>Board</th><th>VID:PID</th><th>Firmware</th><th></th></tr>';
+        var h='<table class="tbl"><tr><th>Port</th><th>Board</th><th>VID:PID</th><th>Firmware</th><th>WiFi</th></tr>';
         sel.innerHTML='';
         ports.forEach(function(p){
           var fwVer='-',needsUpdate=false,updateFwId='';
@@ -1133,15 +1133,22 @@ function loadFirmware(){
           _fwRegistry.forEach(function(f){
             if(f.board===p.board&&f.version>latestVer){latestVer=f.version;updateFwId=f.id;}
           });
-          // Show version from matched performer if available
-          if(matchedKid&&matchedKid.fwVersion){
+          // Show version: prefer serial query, fall back to network PONG
+          if(p.fwVersion){
+            fwVer='v'+p.fwVersion;
+            if(latestVer>p.fwVersion)needsUpdate=true;
+          } else if(matchedKid&&matchedKid.fwVersion){
             fwVer='v'+matchedKid.fwVersion;
             if(latestVer>matchedKid.fwVersion)needsUpdate=true;
           }
           var updateBtn='';
           if(needsUpdate&&p.board)updateBtn=' <button class="btn btn-on" style="padding:.2em .5em;font-size:.78em" onclick="quickFlash(\''+p.port+'\',\''+p.board+'\',\''+updateFwId+'\',this)">Update to v'+latestVer+'</button>';
-          h+='<tr><td>'+p.port+'</td><td>'+p.boardName+'</td><td>'+(p.vid_pid||'-')+'</td>';
-          h+='<td>'+fwVer+updateBtn+'</td><td></td></tr>';
+          var bName=p.fwBoard||p.boardName;
+          h+='<tr><td>'+p.port+'</td><td>'+bName+'</td><td>'+(p.vid_pid||'-')+'</td>';
+          var wifiSt='-';
+          if(p.wifiMatch===true)wifiSt='<span style="color:#4c4">\u2705 Match</span>';
+          else if(p.wifiMatch===false)wifiSt='<span style="color:#c44">\u26a0 Mismatch — reflash needed</span>';
+          h+='<td>'+fwVer+updateBtn+'</td><td>'+wifiSt+'</td></tr>';
           var o=document.createElement('option');o.value=p.port;o.text=p.port+' ('+p.boardName+')';sel.add(o);
           if(p.board){document.getElementById('fw-board').value=p.board;}
         });

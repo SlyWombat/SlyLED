@@ -773,7 +773,7 @@ def get_wifi_password():
 # ── Firmware management ──────────────────────────────────────────────────────
 
 try:
-    from firmware_manager import list_ports, load_registry, flash_board, get_flash_status, detect_chip
+    from firmware_manager import list_ports, load_registry, flash_board, get_flash_status, detect_chip, query_serial
     _fw_available = True
 except ImportError:
     _fw_available = False
@@ -785,11 +785,43 @@ if not _FW_DIR.exists():
 if not _FW_DIR.exists() and getattr(sys, "frozen", False):
     _FW_DIR = Path(sys._MEIPASS) / "firmware"
 
+def _parent_wifi_hash():
+    """Compute the same djb2 hash as the firmware for SSID+password comparison."""
+    ssid = _wifi.get("ssid", "")
+    pw = _decrypt_pw(_wifi.get("password", ""))
+    h = 5381
+    for c in ssid:
+        h = (h * 33 + ord(c)) & 0xFFFFFFFF
+    for c in pw:
+        h = (h * 33 + ord(c)) & 0xFFFFFFFF
+    return format(h, 'X')
+
 @app.get("/api/firmware/ports")
 def api_fw_ports():
     if not _fw_available:
         return jsonify(ok=False, err="pyserial not installed"), 500
-    return jsonify(list_ports())
+    ports = list_ports()
+    # Query each known-board port for firmware version via serial
+    for p in ports:
+        if p.get("candidates"):
+            try:
+                info = query_serial(p["port"], timeout=3.0)
+                if info:
+                    p["fwVersion"] = info.get("version")
+                    p["fwBoard"] = info.get("board")
+                    p["wifiHash"] = info.get("wifiHash")
+                    # Compare wifi hash with parent's stored credentials
+                    parent_hash = _parent_wifi_hash()
+                    p["wifiMatch"] = (info.get("wifiHash") == parent_hash) if info.get("wifiHash") else None
+                    # Resolve ambiguous board from serial response
+                    if info.get("board") and not p.get("board"):
+                        bmap = {"esp32": "esp32", "d1mini": "d1mini",
+                                "giga-child": "giga", "giga-parent": "giga"}
+                        p["board"] = bmap.get(info["board"], p.get("board"))
+                        p["boardName"] = info["board"]
+            except Exception:
+                pass
+    return jsonify(ports)
 
 @app.get("/api/firmware/registry")
 def api_fw_registry():

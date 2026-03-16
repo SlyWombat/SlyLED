@@ -78,6 +78,46 @@ def detect_chip(port):
         pass
     return None
 
+# ── Serial version + board query ───────────────────────────────────────────────
+
+def query_serial(port, timeout=3.0):
+    """Query a board via serial for VERSION, BOARD, and WIFIHASH.
+    Returns {"version": "4.9", "board": "d1mini", "wifiHash": "A1B2C3D4"} or None."""
+    import time as _time
+    try:
+        import serial
+        with serial.Serial(port, 115200, timeout=1) as s:
+            _time.sleep(0.3)
+            s.reset_input_buffer()
+            # Send all queries
+            s.write(b"VERSION\n")
+            s.flush()
+            _time.sleep(0.1)
+            s.write(b"BOARD\n")
+            s.flush()
+            _time.sleep(0.1)
+            s.write(b"WIFIHASH\n")
+            s.flush()
+            version = None
+            board = None
+            wifi_hash = None
+            deadline = _time.time() + timeout
+            while _time.time() < deadline:
+                line = s.readline().decode("ascii", "replace").strip()
+                if line.startswith("SLYLED:"):
+                    version = line[7:]
+                elif line.startswith("BOARD:"):
+                    board = line[6:]
+                elif line.startswith("WIFIHASH:"):
+                    wifi_hash = line[9:]
+                if version and board and wifi_hash:
+                    break
+            if version:
+                return {"version": version, "board": board, "wifiHash": wifi_hash}
+    except Exception:
+        pass
+    return None
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 def load_registry(firmware_dir):
