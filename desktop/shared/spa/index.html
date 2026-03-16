@@ -167,8 +167,15 @@ body.light .li:hover{border-color:#888}
     <div class='card-title'>WiFi Credentials</div>
     <p style='font-size:.82em;color:#888;margin-bottom:.5em'>Stored on the Orchestrator and pushed to performers during flashing.</p>
     <label>SSID</label><input id='fw-ssid' style='width:200px'>
-    <label>Password</label><input id='fw-pass' type='password' style='width:200px' placeholder='Enter new password'>
-    <span id='fw-pw-status' style='font-size:.8em;color:#888;margin-left:.5em'></span>
+    <label>Password</label>
+    <div style='display:flex;align-items:center;gap:.3em'>
+      <input id='fw-pass' type='password' style='width:200px' placeholder='Enter new password'>
+      <button type='button' class='btn' style='padding:.25em .5em;background:#333;font-size:.8em'
+        onmousedown='document.getElementById("fw-pass").type="text"'
+        onmouseup='document.getElementById("fw-pass").type="password"'
+        onmouseleave='document.getElementById("fw-pass").type="password"'>&#128065;</button>
+      <span id='fw-pw-status' style='font-size:.8em;color:#888'></span>
+    </div>
     <div style='margin-top:.5em'><button class='btn btn-on' onclick='saveWifi(this)'>Save WiFi</button></div>
   </div>
   <div class='card' style='max-width:700px'>
@@ -1182,8 +1189,21 @@ function updateFwImages(){
 
 function saveWifi(btn){
   _btnSaving(btn);
-  ra('POST','/api/wifi',{ssid:document.getElementById('fw-ssid').value,password:document.getElementById('fw-pass').value},
-    function(r){_btnSaved(btn,r&&r.ok);});
+  var pw=document.getElementById('fw-pass').value;
+  ra('POST','/api/wifi',{ssid:document.getElementById('fw-ssid').value,password:pw},
+    function(r){
+      _btnSaved(btn,r&&r.ok);
+      if(r&&r.ok){
+        // Refresh status indicator
+        var st=document.getElementById('fw-pw-status');
+        if(st){
+          st.textContent=pw?'\u2705 Password stored (encrypted)':'\u26a0 No password set';
+          st.style.color=pw?'#4c4':'#c66';
+        }
+        document.getElementById('fw-pass').value='';
+        document.getElementById('fw-pass').type='password';
+      }
+    });
 }
 
 var _flashPoll=null;
