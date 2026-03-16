@@ -16,6 +16,22 @@
 #include "Child.h"
 #include "ChildLED.h"
 
+// ── Interrupt-safe show + clear helpers ───────────────────────────────────
+
+static void showSafe() {
+  // Send LED data with interrupts disabled to prevent WiFi IRQs
+  // from corrupting the WS2812B 800kHz timing signal.
+  // For 150 LEDs this blocks ~4.5ms — acceptable.
+  noInterrupts();
+  FastLED[0].showLeds(childBrightness);
+  interrupts();
+}
+
+static inline void clearAndShow() {
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  showSafe();
+}
+
 // ── Sin lookup table (256 entries, 0-255 representing 0-2π) ────────────────
 
 static const uint8_t PROGMEM _sin8[] = {
@@ -301,7 +317,7 @@ void ledTask(void* parameter) {
   unsigned long stepStartMs = 0;
 
   while (true) {
-    FastLED.setBrightness(childBrightness);
+
 
     // ── 0. Sync blink confirmation ────────────────────────────────────────
     if (childSyncBlink > 0) {
@@ -309,9 +325,9 @@ void ledTask(void* parameter) {
       childSyncBlink = 0;
       for (uint8_t b = 0; b < n; b++) {
         fill_solid(leds, NUM_LEDS, CRGB::White);
-        FastLED.show(); delay(200);
+        showSafe(); delay(200);
         fill_solid(leds, NUM_LEDS, CRGB::Black);
-        FastLED.show(); delay(200);
+        showSafe(); delay(200);
       }
       offRendered = true;
       continue;
@@ -341,7 +357,7 @@ void ledTask(void* parameter) {
       if (done) {
         childRunnerActive = false;
         fill_solid(leds, NUM_LEDS, CRGB::Black);
-        FastLED.show();
+        showSafe();
         delay(10);
         continue;
       }
@@ -351,7 +367,7 @@ void ledTask(void* parameter) {
       }
       fill_solid(leds, NUM_LEDS, CRGB::Black);
       applyRunnerStep(childRunner[curStep], 0, millis() - stepStartMs);
-      FastLED.show();
+      showSafe();
       delay(actionDelay(childRunner[curStep].actionType));
       continue;
     }
@@ -372,12 +388,12 @@ void ledTask(void* parameter) {
                   childActP8c, childActP8d,
                   millis() - actStart, 0, NUM_LEDS - 1,
                   childCfg.stringCount > 0 && (childCfg.strings[0].flags & STR_FLAG_FOLDED));
-      FastLED.show();
+      showSafe();
       delay(actionDelay(at));
     } else {
       if (!offRendered) {
         fill_solid(leds, NUM_LEDS, CRGB::Black);
-        FastLED.show();
+        showSafe();
         offRendered = true;
       }
       delay(10);
@@ -411,7 +427,7 @@ void updateLED() {
     blinkOn = true;
     blinkTs = millis();
     fill_solid(leds, NUM_LEDS, CRGB::White);
-    FastLED.show();
+    showSafe();
     actRendered = true;
     return;
   }
@@ -420,12 +436,12 @@ void updateLED() {
       blinkTs = millis();
       if (blinkOn) {
         fill_solid(leds, NUM_LEDS, CRGB::Black);
-        FastLED.show(); blinkOn = false;
+        showSafe(); blinkOn = false;
       } else {
         blinkRemain--;
         if (blinkRemain > 0) {
           fill_solid(leds, NUM_LEDS, CRGB::White);
-          FastLED.show(); blinkOn = true;
+          showSafe(); blinkOn = true;
         }
       }
     }
@@ -454,7 +470,7 @@ void updateLED() {
     if (done) {
       childRunnerActive = false;
       fill_solid(leds, NUM_LEDS, CRGB::Black);
-      FastLED.show(); return;
+      showSafe(); return;
     }
     if (curStep != prevRunStep) {
       prevRunStep = curStep;
@@ -466,7 +482,7 @@ void updateLED() {
       lastFrame = now;
       fill_solid(leds, NUM_LEDS, CRGB::Black);
       applyRunnerStep(childRunner[curStep], 0, now - stepStartMs);
-      FastLED.show();
+      showSafe();
     }
     return;
   }
@@ -492,12 +508,12 @@ void updateLED() {
                   childActP8c, childActP8d,
                   now - actStart, 0, NUM_LEDS - 1,
                   childCfg.stringCount > 0 && (childCfg.strings[0].flags & STR_FLAG_FOLDED));
-      FastLED.show();
+      showSafe();
     }
   } else {
     if (!actRendered) {
       fill_solid(leds, NUM_LEDS, CRGB::Black);
-      FastLED.show();
+      showSafe();
       actRendered = true;
     }
   }
