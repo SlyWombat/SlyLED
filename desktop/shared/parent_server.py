@@ -553,10 +553,18 @@ def api_runners_create():
 # doesn't try to cast "stop" as an integer.
 @app.post("/api/runners/stop")
 def api_runners_stop():
-    pkt = _hdr(CMD_RUNNER_STOP)
+    pkt_stop = _hdr(CMD_RUNNER_STOP)
+    pkt_off  = _hdr(CMD_ACTION_STOP)
     for c in _children:
         if c["status"] == 1:
-            _send(c["ip"], pkt)
+            _send(c["ip"], pkt_stop)
+            _send(c["ip"], pkt_off)   # belt-and-suspenders: also stop immediate action
+    # Retry once after brief delay for reliability
+    time.sleep(0.1)
+    for c in _children:
+        if c["status"] == 1:
+            _send(c["ip"], pkt_stop)
+            _send(c["ip"], pkt_off)
     with _lock:
         _settings["runnerRunning"] = False
         _settings["activeRunner"] = -1
