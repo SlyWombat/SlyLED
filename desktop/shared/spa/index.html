@@ -948,11 +948,8 @@ function _syncSteps(){
   // Read current DOM values back into curRsteps before re-rendering
   for(var i=0;i<curRsteps.length;i++){
     var el=document.getElementById('s'+i+'a');if(el){var v=parseInt(el.value);curRsteps[i].actionId=isNaN(v)?-1:v;}
-    var x0=document.getElementById('s'+i+'x0');if(x0)curRsteps[i].x0=gv('s'+i+'x0',0)*100;
-    var x1=document.getElementById('s'+i+'x1');if(x1)curRsteps[i].x1=gv('s'+i+'x1',100)*100;
-    var y0=document.getElementById('s'+i+'y0');if(y0)curRsteps[i].y0=gv('s'+i+'y0',0)*100;
-    var y1=document.getElementById('s'+i+'y1');if(y1)curRsteps[i].y1=gv('s'+i+'y1',100)*100;
-    var d=document.getElementById('s'+i+'d');if(d)curRsteps[i].durationS=gv('s'+i+'d',5);
+    var d=document.getElementById('s'+i+'d');
+    if(d){var ds=parseFloat(d.value);curRsteps[i].durationS=isNaN(ds)?5:Math.round(ds*10)/10;}
   }
 }
 
@@ -962,10 +959,10 @@ function renderSteps(){
     document.getElementById('re-steps').innerHTML=h;return;}
   if(curRsteps.length>0){
     h+='<div style="overflow-x:auto"><table class="tbl" style="font-size:.8em">';
-    h+='<tr><th>#</th><th>Action</th><th>x0-x1%</th><th>y0-y1%</th><th>Dur s</th><th>Move / Del</th></tr>';
+    h+='<tr><th>#</th><th>Action</th><th>Duration (s)</th><th>Move / Del</th></tr>';
     curRsteps.forEach(function(st,i){
-      var x0=Math.round((st.x0||0)/100),x1=Math.round((st.x1!=null?st.x1:10000)/100);
-      var y0=Math.round((st.y0||0)/100),y1=Math.round((st.y1!=null?st.y1:10000)/100);
+      // Duration: stored as durationS (integer seconds) — show as decimal seconds
+      var durSec=st.durationS||5;
       h+='<tr><td>'+(i+1)+'</td>';
       h+='<td><select id="s'+i+'a">';
       var found=false;
@@ -975,13 +972,7 @@ function renderSteps(){
       });
       if(!found&&st.actionId!=null)h+='<option value="'+st.actionId+'" selected style="color:#c44">[Missing #'+st.actionId+']</option>';
       h+='</select></td>';
-      h+='<td style="white-space:nowrap">';
-      h+='<input type="number" id="s'+i+'x0" value="'+x0+'" min="0" max="100" style="width:38px">-';
-      h+='<input type="number" id="s'+i+'x1" value="'+x1+'" min="0" max="100" style="width:38px"></td>';
-      h+='<td style="white-space:nowrap">';
-      h+='<input type="number" id="s'+i+'y0" value="'+y0+'" min="0" max="100" style="width:38px">-';
-      h+='<input type="number" id="s'+i+'y1" value="'+y1+'" min="0" max="100" style="width:38px"></td>';
-      h+='<td><input type="number" id="s'+i+'d" value="'+(st.durationS||5)+'" min="1" max="3600" style="width:52px"></td>';
+      h+='<td><input type="number" id="s'+i+'d" value="'+durSec+'" min="0.1" max="3600" step="0.1" style="width:70px"></td>';
       h+='<td style="white-space:nowrap">';
       if(i>0)h+='<button class="btn" onclick="mvStep('+i+',-1)" style="background:#446;color:#fff;padding:.2em .4em">\u25b2</button>';
       if(i<curRsteps.length-1)h+='<button class="btn" onclick="mvStep('+i+',1)" style="background:#446;color:#fff;padding:.2em .4em">\u25bc</button>';
@@ -996,7 +987,7 @@ function renderSteps(){
 function addStep(){
   _syncSteps();
   var defAct=_acts.length>0?_acts[0].id:-1;
-  curRsteps.push({actionId:defAct,x0:0,y0:0,x1:10000,y1:10000,durationS:5});
+  curRsteps.push({actionId:defAct,durationS:5});
   renderSteps();
 }
 
@@ -1012,9 +1003,7 @@ function saveRunner(btn){
   var steps=[];
   for(var i=0;i<curRsteps.length;i++){
     steps.push({actionId:curRsteps[i].actionId,
-      x0:curRsteps[i].x0||0,y0:curRsteps[i].y0||0,
-      x1:curRsteps[i].x1!=null?curRsteps[i].x1:10000,
-      y1:curRsteps[i].y1!=null?curRsteps[i].y1:10000,
+      x0:0,y0:0,x1:10000,y1:10000,
       durationS:curRsteps[i].durationS||5});
   }
   ra('PUT','/api/runners/'+curRid,{name:curRname,steps:steps},function(r){
