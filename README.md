@@ -8,36 +8,35 @@ Multi-board LED controller with a parent/child architecture. The **Windows Paren
 
 | Role | Board | LEDs |
 |------|-------|------|
-| Parent | Windows 11 x64 (SlyLED.exe) | None |
-| Parent Runtime *(future)* | Arduino Giga R1 WiFi (STM32H747) | None |
-| Child | ESP32 (QuinLED Quad / Uno) | Up to 4× WS2812B strips |
-| Child | ESP8266 D1 Mini (LOLIN/WEMOS) | Up to 4× WS2812B strips |
+| Orchestrator (Parent) | Windows 11 x64 (SlyLED.exe) | None |
+| Performer (Child) | Arduino Giga R1 WiFi (STM32H747) | 1× onboard RGB LED (software PWM) |
+| Performer (Child) | ESP32 (QuinLED Quad / Uno) | Up to 4× WS2812B strips |
+| Performer (Child) | ESP8266 D1 Mini (LOLIN/WEMOS) | Up to 4× WS2812B strips |
 
 ## Architecture
 
-The **Windows Parent** runs as a system-tray app (`SlyLED.exe`). It serves a 6-tab SPA on HTTP port 8080, manages a child registry, positions children on a 2D canvas, defines runners, pre-computes per-child LED ranges, and dispatches commands via UDP port 4210.
+**The Orchestrator** (Windows Parent) runs as a system-tray app (`SlyLED.exe`). It serves a 7-tab SPA on HTTP port 8080, manages a performer registry, positions performers on a 2D canvas, defines runners with canvas-scoped actions and per-child delay computation, and dispatches commands via UDP port 4210. Single-instance detection prevents duplicate servers on the same port.
 
-A future runtime version of the parent will run on the Giga board with a minimal UI — useful once the layout and runner are designed and saved.
+All board targets share one sketch (`main/main.ino`) with `#ifdef BOARD_GIGA / BOARD_GIGA_CHILD / BOARD_ESP32 / BOARD_D1MINI` guards. The Giga R1 can act as either a runtime parent (`BOARD_GIGA`) or an LED performer (`BOARD_GIGA_CHILD`) using its onboard RGB LED with software PWM.
 
-All three board targets share one sketch (`main/main.ino`) with `#ifdef BOARD_GIGA / BOARD_ESP32 / BOARD_D1MINI` guards.
-
-**Children (ESP32 / D1 Mini)** — receive UDP commands, execute LED actions (Solid / Flash / Wipe / Off) against assigned LED ranges, and run pre-loaded runner steps triggered by a synchronized epoch timestamp. Config and string layout are persisted in EEPROM and reported to the parent via CMD_PONG.
+**Performers (ESP32 / D1 Mini / Giga Child)** — receive UDP commands, execute 9 LED action types (Blackout, Solid, Fade, Breathe, Chase, Rainbow, Fire, Comet, Twinkle) against assigned LED ranges, and run pre-loaded runner steps triggered by a synchronized epoch timestamp. Config and string layout are persisted in EEPROM/NVS and reported to the parent via CMD_PONG (including firmware version).
 
 ### Communication
 
-- **UDP port 4210** — binary protocol with 8-byte header (magic `0x534C`, version 2, command, epoch). Commands: PING/PONG (discovery), ACTION/ACTION_STOP (immediate), LOAD_STEP/LOAD_ACK (runner loading), RUNNER_GO/RUNNER_STOP (synchronized execution), STATUS_REQ/STATUS_RESP.
+- **UDP port 4210** — binary protocol v3 with 8-byte header (magic `0x534C`, version 3, command, epoch). Commands: PING/PONG (discovery, includes firmware version), ACTION/ACTION_STOP (immediate with generic params), LOAD_STEP/LOAD_ACK (runner loading with delayMs field), RUNNER_GO/RUNNER_STOP (synchronized execution with loop flag), STATUS_REQ/STATUS_RESP, SET_BRIGHTNESS.
 - **NTP** — all boards sync to `pool.ntp.org` on boot; epoch timestamps make runner execution deterministic across children (±50 ms jitter tolerable).
 
 ### Parent SPA tabs
 
 | Tab | Function |
 |-----|----------|
-| Dashboard | Children table, runner progress bar, Stop / Go buttons |
-| Setup | **Discover** children on the network (UDP broadcast, shows unregistered nodes), add / remove / refresh, details modal, JSON import/export |
-| Layout | Sidebar lists unplaced children; drag onto 900×450 canvas to position; detailed view shows LED strings with direction/length; double-click node to edit position or remove; metric or imperial |
-| Actions | Reusable action library — 9 effect types: Blackout, Solid, Fade, Breathe, Chase, Rainbow (8 palettes), Fire, Comet, Twinkle; per-type params (speed, colour 2, palette, direction, etc.) |
-| Runtime | Create runners from action library steps; each step = action + area-of-effect + duration; Compute / Sync / Start; runner list shows step count + total duration |
-| Settings | Dark mode, units, canvas dimensions, parent name; **Factory Reset** clears all children / runners / layout |
+| Dashboard | Performers table, real-time runner progress bar with elapsed/total time, Stop / Go buttons |
+| Setup | **Discover** performers on the network (UDP broadcast, shows unregistered nodes), add / remove / refresh, details modal (shows firmware version), JSON import/export |
+| Layout | Sidebar lists unplaced performers; drag onto 900×450 canvas to position; detailed view shows LED strings with direction/length and folded-string support; double-click node to edit position or remove; metric or imperial |
+| Actions | Reusable action library — 9 effect types: Blackout, Solid, Fade, Breathe, Chase, Rainbow (8 palettes), Fire, Comet, Twinkle; per-type params (speed, colour 2, palette, direction, etc.); canvas-scoped actions with per-child delay computation |
+| Runtime | Create runners from action library steps; each step = action + area-of-effect + duration; Compute / Sync / Start; runner list shows step count + total duration; runner loop controlled by parent setting |
+| Settings | Dark mode, units, canvas dimensions, parent name; WiFi credential management; **Factory Reset** clears all children / runners / layout |
+| Firmware | Board detection by USB VID:PID; serial version query and WiFi hash comparison; flash ESP32/D1 Mini via esptool; flash Giga via arduino-cli DFU; firmware registry with binary management |
 
 ### Child config page
 
@@ -101,17 +100,21 @@ main/
   arduino_secrets.h.example
 desktop/
   shared/
-    parent_server.py    — Flask REST API + UDP parent
+    parent_server.py    — Flask REST API + UDP parent (The Orchestrator)
+    firmware_manager.py — Board detection, serial query, esptool/arduino-cli flash
     main.py             — System tray launcher (pystray)
     spa/
-      index.html        — 6-tab SPA (inline CSS + JS)
+      index.html        — 7-tab SPA (inline CSS + JS)
   windows/
     build.bat           — Build SlyLED.exe + installer
     build.py            — PyInstaller helper (avoids path-with-spaces issues)
     installer.iss       — Inno Setup 6 script
-    requirements.txt    — flask, pystray, pillow
+    requirements.txt    — flask, pystray, pillow, pyserial, esptool
+firmware/
+  registry.json         — Firmware binary registry (board, version, file)
+  *.bin                 — Pre-compiled firmware binaries
 tests/
-  test_web.py           — 105-check HTTP/JSON API test suite (parent)
+  test_web.py           — 278-check HTTP/JSON API test suite (parent)
   test_child.py         — Child firmware tests (JS integrity, UDP, runners)
 docs/
   ARCHITECTURE.md       — Full design: threading, UDP protocol, data structures
@@ -133,7 +136,7 @@ cd tests
 python test_web.py localhost:8080
 ```
 
-Covers: connectivity, SPA structure, cache headers, `/status`, children CRUD + import/export + status poll + IP sanitization, actions library CRUD + validation + runner integration, layout `positioned` flag + multi-child placement/removal round-trip, settings round-trip, full runner lifecycle with action references (create / PUT steps / compute / stop / delete), error handling, MAX_RUNNERS overflow, Content-Length headers, mock UDP child (PING/PONG/ACTION/STATUS). **256 checks.**
+Covers: connectivity, SPA structure, cache headers, `/status`, children CRUD + import/export + status poll + IP sanitization, actions library CRUD + validation + runner integration, layout `positioned` flag + multi-child placement/removal round-trip, settings round-trip (including runnerLoop), full runner lifecycle with action references (create / PUT steps / compute / stop / delete), error handling, MAX_RUNNERS overflow, Content-Length headers, mock UDP child (PING/PONG/ACTION/STATUS), firmware API endpoints, WiFi credential management, factory reset, shutdown API. **278 checks.**
 
 ### Child (ESP32 / D1 Mini)
 
@@ -160,8 +163,9 @@ Covers: config page JS integrity (sendBuf truncation detection), HTTP routes, UD
 | Sync time per step | ~0.5s (with ACK) | Falls back to fire-and-forget if ACK fails |
 | Runner start delay | 5 seconds | Time for all performers to receive GO command |
 | Performer stale timeout | 120 seconds | Auto-marks offline if no PONG received |
-| UDP protocol version | 3 | Wire-compatible payload sizes with v2 |
+| UDP protocol version | 3 | Generic params, delayMs, firmware version in PONG |
 | Global brightness | 0–255 | Sent via CMD_SET_BRIGHTNESS |
+| PONG payload size | 133 bytes (v4.0) | Includes fwMajor + fwMinor; total packet 141 bytes |
 
 ## Flash usage (v4.0)
 

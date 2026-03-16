@@ -9,7 +9,7 @@ All HTML responses include `Cache-Control: no-cache, no-store, must-revalidate`.
 
 ### GET /
 
-Returns the 6-tab Single Page Application.
+Returns the 7-tab Single Page Application.
 
 **Response:** `200 OK`, `text/html`
 
@@ -22,7 +22,7 @@ Unknown URL paths also return the SPA (client-side routing).
 **Response:** `200 OK`, `application/json`
 
 ```json
-{"role": "parent", "hostname": "WIN-HOSTNAME", "version": "3.6"}
+{"role": "parent", "hostname": "WIN-HOSTNAME", "version": "4.0"}
 ```
 
 ---
@@ -224,7 +224,9 @@ Save canvas positions for all children. Only `id`, `x`, and `y` are read from ea
   "canvasH": 5000,
   "darkMode": true,
   "runnerRunning": false,
-  "activeRunner": -1
+  "activeRunner": -1,
+  "runnerElapsed": 0,
+  "runnerLoop": true
 }
 ```
 
@@ -236,6 +238,8 @@ Save canvas positions for all children. Only `id`, `x`, and `y` are read from ea
 | `darkMode` | bool | UI dark mode |
 | `runnerRunning` | bool | Whether a runner is currently executing |
 | `activeRunner` | int | ID of the active runner, or `-1` |
+| `runnerElapsed` | int | Seconds elapsed in current runner (computed dynamically, wraps on loop) |
+| `runnerLoop` | bool | Whether runners loop continuously (`true` by default) |
 
 ---
 
@@ -272,11 +276,23 @@ List all actions.
 
 | Field | Description |
 |-------|-------------|
-| `type` | `0`=Off, `1`=Solid, `2`=Flash, `3`=Wipe |
-| `r/g/b` | Colour (0–255) |
-| `onMs/offMs` | Flash timing in ms (type=2) |
-| `wipeDir` | Wipe direction: `0`=E, `1`=N, `2`=W, `3`=S (type=3) |
-| `wipeSpeedPct` | Wipe speed 1–100 (type=3) |
+| `type` | `0`=Blackout, `1`=Solid, `2`=Fade, `3`=Breathe, `4`=Chase, `5`=Rainbow, `6`=Fire, `7`=Comet, `8`=Twinkle |
+| `r/g/b` | Primary colour (0–255) |
+| `r2/g2/b2` | Second colour (Fade) |
+| `speedMs` | Speed/period in ms (Fade, Chase, Rainbow, Fire, Comet) |
+| `periodMs` | Breathe period in ms |
+| `spawnMs` | Twinkle spawn interval in ms |
+| `minBri` | Minimum brightness % (Breathe) |
+| `spacing` | Pixel spacing (Chase) |
+| `paletteId` | Rainbow palette: 0=Classic, 1=Ocean, 2=Lava, 3=Forest, 4=Party, 5=Heat, 6=Cool, 7=Pastel |
+| `cooling/sparking` | Fire params |
+| `direction` | Direction: `0`=E, `1`=N, `2`=W, `3`=S (Chase, Rainbow, Comet) |
+| `tailLen` | Comet tail length |
+| `density` | Twinkle density |
+| `decay/fadeSpeed` | Comet decay % / Twinkle fade speed |
+| `scope` | `"canvas"` for canvas-scoped actions (per-child delay computation) |
+| `onMs/offMs` | Legacy compatibility fields |
+| `wipeDir/wipeSpeedPct` | Legacy compatibility fields |
 
 ---
 
@@ -437,7 +453,7 @@ Clear all children, runners, actions, and layout data, and restore default setti
 {"ok": true}
 ```
 
-Default settings restored: `name="SlyLED"`, `units=0`, `canvasW=10000`, `canvasH=5000`, `darkMode=1`, `runnerRunning=false`, `activeRunner=-1`.
+Default settings restored: `name="SlyLED"`, `units=0`, `canvasW=10000`, `canvasH=5000`, `darkMode=1`, `runnerRunning=false`, `activeRunner=-1`, `runnerElapsed=0`, `runnerLoop=true`.
 
 ---
 
@@ -464,11 +480,9 @@ Send an immediate action to one child or all children.
 | Field | Description |
 |-------|-------------|
 | `target` | `"all"` or child ID as string (e.g. `"0"`) |
-| `type` | `0`=Off, `1`=Solid, `2`=Flash, `3`=Wipe |
-| `r/g/b` | Colour (0–255) |
-| `onMs/offMs` | Flash timing in milliseconds |
-| `wDir` | Wipe direction: `0`=E, `1`=N, `2`=W, `3`=S |
-| `wSpd` | Wipe speed (LEDs/s) |
+| `type` | `0`=Blackout, `1`=Solid, `2`=Fade, `3`=Breathe, `4`=Chase, `5`=Rainbow, `6`=Fire, `7`=Comet, `8`=Twinkle |
+| `r/g/b` | Primary colour (0–255) |
+| Various params | See Actions Library API for per-type fields |
 | `ledStart/ledEnd` | 8-byte arrays: per-string start/end LED index; `0xFF` = string not included |
 
 **Response:** `200 OK`, `{"ok": true}`
@@ -489,9 +503,128 @@ Error if specific target not found: `{"ok": false, "err": "target not found"}` (
 
 ---
 
+## WiFi API
+
+### GET /api/wifi
+
+Returns WiFi SSID and whether a password is stored (never returns the plaintext password).
+
+**Response:** `200 OK`
+
+```json
+{"ssid": "MyNetwork", "hasPassword": true}
+```
+
+---
+
+### POST /api/wifi
+
+Save WiFi credentials. The password is encrypted at rest using a machine-derived key.
+
+**Request body:** `{"ssid": "MyNetwork", "password": "secret"}`
+
+**Response:** `200 OK`, `{"ok": true}`
+
+---
+
+## Firmware API
+
+### GET /api/firmware/ports
+
+List connected COM ports with detected board type (by USB VID:PID). Fast operation (no serial I/O).
+
+**Response:** `200 OK`, array of port objects.
+
+```json
+[
+  {
+    "port": "COM8",
+    "description": "Silicon Labs CP210x",
+    "vid_pid": "10C4:EA60",
+    "candidates": [{"board": "esp32", "chip": "CP2102", "name": "ESP32 (CP2102)"}],
+    "board": "esp32",
+    "boardName": "ESP32 (CP2102)"
+  }
+]
+```
+
+---
+
+### POST /api/firmware/query
+
+Query a single port via serial for firmware version, board type, and WiFi hash. Slow (~2 s).
+
+**Request body:** `{"port": "COM8"}`
+
+**Response:** `200 OK`
+
+```json
+{"ok": true, "fwVersion": "4.11", "fwBoard": "esp32", "board": "esp32", "wifiHash": "A1B2C3D4", "wifiMatch": true}
+```
+
+`wifiMatch` compares the firmware's WiFi hash against the parent's stored credentials.
+
+---
+
+### GET /api/firmware/registry
+
+List available firmware binaries from the firmware directory.
+
+**Response:** `200 OK`
+
+```json
+{"firmware": [{"id": "esp32-child-4.11", "board": "esp32", "version": "4.11", "file": "esp32-child-4.11.bin"}]}
+```
+
+---
+
+### POST /api/firmware/detect
+
+Detect chip type on an ambiguous port using esptool.
+
+**Request body:** `{"port": "COM8"}`
+
+**Response:** `200 OK`, `{"ok": true, "board": "esp32"}`
+
+---
+
+### POST /api/firmware/flash
+
+Start flashing firmware in a background thread.
+
+**Request body:** `{"port": "COM8", "firmwareId": "esp32-child-4.11", "board": "esp32"}`
+
+**Response:** `200 OK`, `{"ok": true, "message": "Flashing started"}`
+
+---
+
+### GET /api/firmware/flash/status
+
+Poll flash progress.
+
+**Response:** `200 OK`
+
+```json
+{"running": true, "progress": 45, "message": "Writing... 45%", "error": null}
+```
+
+---
+
+## Shutdown API
+
+### POST /api/shutdown
+
+Terminate the parent process. Response is sent before exit.
+
+**Request body:** `{}` (empty)
+
+**Response:** `200 OK`, `{"ok": true}`
+
+---
+
 ## Child HTTP Routes
 
-Children expose a minimal HTTP interface on **port 80**.
+Children (Performers) expose a minimal HTTP interface on **port 80**.
 
 | Method | Path | Description |
 |--------|------|-------------|
