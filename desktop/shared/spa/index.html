@@ -117,7 +117,7 @@ body.light .li:hover{border-color:#888}
         <input type='checkbox' id='rt-loop' checked onchange='saveLoopSetting()'> Loop
       </label>
       <label style='color:#888;font-size:.85em;display:flex;align-items:center;gap:.3em'>
-        Brightness <input type='range' id='rt-bri' min='0' max='255' value='255' style='width:100px' oninput='setBrightness(this.value)'> <span id='rt-bri-val'>100%</span>
+        Brightness <input type='range' id='rt-bri' min='0' max='255' value='255' style='width:120px;vertical-align:middle' oninput='setBrightness(this.value)'> <span id='rt-bri-val'>100%</span>
       </label>
     </div>
     <div id='rn-list'><p style='color:#888'>Loading...</p></div>
@@ -699,12 +699,13 @@ function loadActions(){
       if(a.scope==='canvas')scopeLbl='<span style="color:#6af;font-size:.8em"> [canvas]</span>';
       else if(a.scope==='performer-selected')scopeLbl='<span style="color:#fa6;font-size:.8em"> [selected]</span>';
       var det='';
-      if(a.type===2)det=(a.speedMs||1000)+'ms → '+rgb2h(a.r2||0,a.g2||0,a.b2||0);
-      if(a.type===3)det='Period:'+(a.periodMs||2000)+'ms Min:'+(a.minBri||0)+'%';
-      if(a.type===4)det=(_dirNames[a.direction]||'E')+' spd:'+(a.speedMs||100)+'ms gap:'+(a.spacing||3);
-      if(a.type===5)det=(_palNames[a.paletteId]||'Classic')+' '+(a.speedMs||50)+'ms';
+      function _ms2s(v){return((v||0)/1000).toFixed(2)+'s';}
+      if(a.type===2)det=_ms2s(a.speedMs)+' → '+rgb2h(a.r2||0,a.g2||0,a.b2||0);
+      if(a.type===3)det='Period:'+_ms2s(a.periodMs)+' Min:'+(a.minBri||0)+'%';
+      if(a.type===4)det=(_dirNames[a.direction]||'E')+' '+_ms2s(a.speedMs)+' gap:'+(a.spacing||3);
+      if(a.type===5)det=(_palNames[a.paletteId]||'Classic')+' '+_ms2s(a.speedMs);
       if(a.type===6)det='Cool:'+(a.cooling||55)+' Spark:'+(a.sparking||120);
-      if(a.type===7)det=(_dirNames[a.direction]||'E')+' tail:'+(a.tailLen||10)+' '+(a.speedMs||30)+'ms';
+      if(a.type===7)det=(_dirNames[a.direction]||'E')+' tail:'+(a.tailLen||10)+' '+_ms2s(a.speedMs);
       if(a.type===8)det='Den:'+(a.density||3)+' Fade:'+(a.fadeSpeed||15);
       h+='<tr><td><b>'+a.name+'</b>'+scopeLbl+'</td><td>'+(_typeNames[a.type]||a.type)+'</td>';
       h+='<td><span style="display:inline-block;width:24px;height:16px;border-radius:3px;background:'+col+';border:1px solid #555;vertical-align:middle"></span> '+col+'</td>';
@@ -748,23 +749,23 @@ function _showActModal(a){
   // Fade: second colour
   h+='<div id="ae-fade"'+(t===2?'':' style="display:none"')+'>';
   h+='<label>Colour 2</label><input type="color" id="ae-c2" value="'+(a?rgb2h(a.r2||0,a.g2||0,a.b2||0):'#0000ff')+'">';
-  h+='<label>Speed (ms)</label><input type="number" id="ae-spd" value="'+(a?a.speedMs||1000:1000)+'" min="100" max="30000" style="width:80px">';
+  h+='<label>Speed (s)</label><input type="number" id="ae-spd" value="'+((a?a.speedMs||1000:1000)/1000)+'" min="0.1" max="30" step="0.1" style="width:80px">';
   h+='</div>';
   // Breathe: period + min brightness
   h+='<div id="ae-breathe"'+(t===3?'':' style="display:none"')+'>';
-  h+='<label>Period (ms)</label><input type="number" id="ae-per" value="'+(a?a.periodMs||2000:2000)+'" min="200" max="30000" style="width:80px">';
+  h+='<label>Period (s)</label><input type="number" id="ae-per" value="'+((a?a.periodMs||2000:2000)/1000)+'" min="0.2" max="30" step="0.1" style="width:80px">';
   h+=' <label style="display:inline;margin-left:.5em">Min Brightness %</label><input type="number" id="ae-mbr" value="'+(a?a.minBri||0:0)+'" min="0" max="100" style="width:50px">';
   h+='</div>';
   // Chase: speed + spacing + direction
   h+='<div id="ae-chase"'+(t===4?'':' style="display:none"')+'>';
-  h+='<label>Speed (ms per shift)</label><input type="number" id="ae-cspd" value="'+(a?a.speedMs||100:100)+'" min="10" max="5000" style="width:80px">';
+  h+='<label>Speed (s per shift)</label><input type="number" id="ae-cspd" value="'+((a?a.speedMs||100:100)/1000)+'" min="0.01" max="5" step="0.01" style="width:80px">';
   h+=' <label style="display:inline;margin-left:.5em">Spacing</label><input type="number" id="ae-cspc" value="'+(a?a.spacing||3:3)+'" min="2" max="20" style="width:50px">';
   h+='<label>Direction</label><select id="ae-cdir">';
   for(var d=0;d<4;d++)h+='<option value="'+d+'"'+(a&&a.direction===d?' selected':'')+'>'+_dirNames[d]+'</option>';
   h+='</select></div>';
   // Rainbow: speed + palette + direction
   h+='<div id="ae-rainbow"'+(t===5?'':' style="display:none"')+'>';
-  h+='<label>Speed (ms)</label><input type="number" id="ae-rspd" value="'+(a?a.speedMs||50:50)+'" min="1" max="5000" style="width:80px">';
+  h+='<label>Speed (s)</label><input type="number" id="ae-rspd" value="'+((a?a.speedMs||50:50)/1000)+'" min="0.001" max="5" step="0.01" style="width:80px">';
   h+='<label>Palette</label><select id="ae-pal">';
   for(var p=0;p<8;p++)h+='<option value="'+p+'"'+(a&&a.paletteId===p?' selected':'')+'>'+_palNames[p]+'</option>';
   h+='</select>';
@@ -773,13 +774,13 @@ function _showActModal(a){
   h+='</select></div>';
   // Fire: speed + cooling + sparking
   h+='<div id="ae-fire"'+(t===6?'':' style="display:none"')+'>';
-  h+='<label>Speed (ms)</label><input type="number" id="ae-fspd" value="'+(a?a.speedMs||15:15)+'" min="1" max="1000" style="width:60px">';
+  h+='<label>Speed (s)</label><input type="number" id="ae-fspd" value="'+((a?a.speedMs||15:15)/1000)+'" min="0.001" max="1" step="0.001" style="width:80px">';
   h+=' <label style="display:inline;margin-left:.5em">Cooling</label><input type="number" id="ae-cool" value="'+(a?a.cooling||55:55)+'" min="1" max="255" style="width:50px">';
   h+=' <label style="display:inline;margin-left:.5em">Sparking</label><input type="number" id="ae-spark" value="'+(a?a.sparking||120:120)+'" min="1" max="255" style="width:50px">';
   h+='</div>';
   // Comet: speed + tail + direction + decay
   h+='<div id="ae-comet"'+(t===7?'':' style="display:none"')+'>';
-  h+='<label>Speed (ms)</label><input type="number" id="ae-mspd" value="'+(a?a.speedMs||30:30)+'" min="1" max="5000" style="width:60px">';
+  h+='<label>Speed (s)</label><input type="number" id="ae-mspd" value="'+((a?a.speedMs||30:30)/1000)+'" min="0.001" max="5" step="0.01" style="width:80px">';
   h+=' <label style="display:inline;margin-left:.5em">Tail</label><input type="number" id="ae-tail" value="'+(a?a.tailLen||10:10)+'" min="1" max="50" style="width:50px">';
   h+=' <label style="display:inline;margin-left:.5em">Decay %</label><input type="number" id="ae-dec" value="'+(a?a.decay||80:80)+'" min="1" max="99" style="width:50px">';
   h+='<label>Direction</label><select id="ae-mdir">';
@@ -787,7 +788,7 @@ function _showActModal(a){
   h+='</select></div>';
   // Twinkle: spawn + density + fade
   h+='<div id="ae-twinkle"'+(t===8?'':' style="display:none"')+'>';
-  h+='<label>Spawn (ms)</label><input type="number" id="ae-tspn" value="'+(a?a.spawnMs||50:50)+'" min="1" max="5000" style="width:60px">';
+  h+='<label>Spawn (s)</label><input type="number" id="ae-tspn" value="'+((a?a.spawnMs||50:50)/1000)+'" min="0.001" max="5" step="0.01" style="width:80px">';
   h+=' <label style="display:inline;margin-left:.5em">Density</label><input type="number" id="ae-tden" value="'+(a?a.density||3:3)+'" min="1" max="20" style="width:50px">';
   h+=' <label style="display:inline;margin-left:.5em">Fade Speed</label><input type="number" id="ae-tfad" value="'+(a?a.fadeSpeed||15:15)+'" min="1" max="100" style="width:50px">';
   h+='</div>';
@@ -849,13 +850,15 @@ function _aeSubmit(id,btn){
     body.canvasEffect=document.getElementById('ae-ceffect').value;
     body.direction=parseInt(document.getElementById('ae-csdir').value)||0;
   }
-  if(t===2){var c2=h2r(document.getElementById('ae-c2').value);body.r2=c2.r;body.g2=c2.g;body.b2=c2.b;body.speedMs=parseInt(document.getElementById('ae-spd').value)||1000;}
-  if(t===3){body.periodMs=parseInt(document.getElementById('ae-per').value)||2000;body.minBri=parseInt(document.getElementById('ae-mbr').value)||0;}
-  if(t===4){body.speedMs=parseInt(document.getElementById('ae-cspd').value)||100;body.spacing=parseInt(document.getElementById('ae-cspc').value)||3;body.direction=parseInt(document.getElementById('ae-cdir').value)||0;}
-  if(t===5){body.speedMs=parseInt(document.getElementById('ae-rspd').value)||50;body.paletteId=parseInt(document.getElementById('ae-pal').value)||0;body.direction=parseInt(document.getElementById('ae-rdir').value)||0;}
-  if(t===6){body.speedMs=parseInt(document.getElementById('ae-fspd').value)||15;body.cooling=parseInt(document.getElementById('ae-cool').value)||55;body.sparking=parseInt(document.getElementById('ae-spark').value)||120;}
-  if(t===7){body.speedMs=parseInt(document.getElementById('ae-mspd').value)||30;body.tailLen=parseInt(document.getElementById('ae-tail').value)||10;body.decay=parseInt(document.getElementById('ae-dec').value)||80;body.direction=parseInt(document.getElementById('ae-mdir').value)||0;}
-  if(t===8){body.spawnMs=parseInt(document.getElementById('ae-tspn').value)||50;body.density=parseInt(document.getElementById('ae-tden').value)||3;body.fadeSpeed=parseInt(document.getElementById('ae-tfad').value)||15;}
+  // Convert seconds input → ms for internal storage
+  function _s2ms(id,def){var v=parseFloat(document.getElementById(id).value);return isNaN(v)?def:Math.round(v*1000);}
+  if(t===2){var c2=h2r(document.getElementById('ae-c2').value);body.r2=c2.r;body.g2=c2.g;body.b2=c2.b;body.speedMs=_s2ms('ae-spd',1000);}
+  if(t===3){body.periodMs=_s2ms('ae-per',2000);body.minBri=parseInt(document.getElementById('ae-mbr').value)||0;}
+  if(t===4){body.speedMs=_s2ms('ae-cspd',100);body.spacing=parseInt(document.getElementById('ae-cspc').value)||3;body.direction=parseInt(document.getElementById('ae-cdir').value)||0;}
+  if(t===5){body.speedMs=_s2ms('ae-rspd',50);body.paletteId=parseInt(document.getElementById('ae-pal').value)||0;body.direction=parseInt(document.getElementById('ae-rdir').value)||0;}
+  if(t===6){body.speedMs=_s2ms('ae-fspd',15);body.cooling=parseInt(document.getElementById('ae-cool').value)||55;body.sparking=parseInt(document.getElementById('ae-spark').value)||120;}
+  if(t===7){body.speedMs=_s2ms('ae-mspd',30);body.tailLen=parseInt(document.getElementById('ae-tail').value)||10;body.decay=parseInt(document.getElementById('ae-dec').value)||80;body.direction=parseInt(document.getElementById('ae-mdir').value)||0;}
+  if(t===8){body.spawnMs=_s2ms('ae-tspn',50);body.density=parseInt(document.getElementById('ae-tden').value)||3;body.fadeSpeed=parseInt(document.getElementById('ae-tfad').value)||15;}
   _btnSaving(btn);
   var method=id<0?'POST':'PUT';
   var url=id<0?'/api/actions':'/api/actions/'+id;
