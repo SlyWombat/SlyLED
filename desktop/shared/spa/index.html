@@ -183,6 +183,9 @@ body.light .li:hover{border-color:#888}
       <option value='giga'>Giga R1</option>
     </select>
     <label>Firmware</label><select id='fw-image'></select>
+    <div id='fw-dfu-note' style='display:none;margin-top:.5em;padding:.5em;background:#332;border:1px solid #553;border-radius:5px;font-size:.82em;color:#cc6'>
+      <b>Giga R1:</b> Double-press the reset button to enter DFU bootloader mode before flashing. The board LED should pulse.
+    </div>
     <div style='margin-top:.6em'>
       <button class='btn btn-on' id='fw-flash-btn' onclick='doFlash(this)'>Flash</button>
     </div>
@@ -1123,6 +1126,8 @@ function loadFirmware(){
 var _fwRegistry=[];
 function updateFwImages(){
   var board=document.getElementById('fw-board').value;
+  var dfuNote=document.getElementById('fw-dfu-note');
+  if(dfuNote)dfuNote.style.display=board==='giga'?'block':'none';
   var sel=document.getElementById('fw-image');sel.innerHTML='';
   _fwRegistry.forEach(function(f){
     if(f.board===board){

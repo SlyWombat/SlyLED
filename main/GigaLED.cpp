@@ -11,7 +11,6 @@
 #ifdef BOARD_GIGA_CHILD
 
 #include "GigaLED.h"
-#include <mbed.h>
 
 // ── Static instances ─────────────────────────────────────────────────────────
 
@@ -19,10 +18,6 @@ const CRGB CRGB::Black = CRGB(0, 0, 0);
 const CRGB CRGB::White = CRGB(255, 255, 255);
 
 CRGB leds[NUM_LEDS];
-
-static mbed::PwmOut* _pwmR = nullptr;
-static mbed::PwmOut* _pwmG = nullptr;
-static mbed::PwmOut* _pwmB = nullptr;
 
 static uint8_t _brightness = 255;
 
@@ -55,17 +50,17 @@ uint8_t qadd8(uint8_t a, uint8_t b) { uint16_t t = a + b; return t > 255 ? 255 :
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 void gigaLedInit() {
-  // PwmOut on the active-low RGB pins (1.0 = off, 0.0 = full on)
-  _pwmR = new mbed::PwmOut(digitalPinToPinName(PIN_LEDR));
-  _pwmG = new mbed::PwmOut(digitalPinToPinName(PIN_LEDG));
-  _pwmB = new mbed::PwmOut(digitalPinToPinName(PIN_LEDB));
-  _pwmR->period_us(500);  // 2kHz PWM
-  _pwmG->period_us(500);
-  _pwmB->period_us(500);
+  // Active-low GPIO: HIGH = off
+  pinMode(PIN_LEDR, OUTPUT);
+  pinMode(PIN_LEDG, OUTPUT);
+  pinMode(PIN_LEDB, OUTPUT);
+  digitalWrite(PIN_LEDR, HIGH);
+  digitalWrite(PIN_LEDG, HIGH);
+  digitalWrite(PIN_LEDB, HIGH);
   clearAndShow();
 }
 
-// ── Show — write leds[0] to hardware ─────────────────────────────────────────
+// ── Show — write leds[0] to hardware using on/off thresholding ───────────────
 
 void showSafe() {
   CRGB c = leds[0];
@@ -73,10 +68,10 @@ void showSafe() {
   uint8_t r = (uint16_t)c.r * _brightness / 255;
   uint8_t g = (uint16_t)c.g * _brightness / 255;
   uint8_t b = (uint16_t)c.b * _brightness / 255;
-  // Active-low: 1.0 = off, 0.0 = full brightness
-  if (_pwmR) _pwmR->write(1.0f - r / 255.0f);
-  if (_pwmG) _pwmG->write(1.0f - g / 255.0f);
-  if (_pwmB) _pwmB->write(1.0f - b / 255.0f);
+  // Active-low: LOW = on, HIGH = off; threshold at 128 for on/off
+  digitalWrite(PIN_LEDR, r >= 128 ? LOW : HIGH);
+  digitalWrite(PIN_LEDG, g >= 128 ? LOW : HIGH);
+  digitalWrite(PIN_LEDB, b >= 128 ? LOW : HIGH);
 }
 
 void clearAndShow() {
