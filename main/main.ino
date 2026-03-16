@@ -75,10 +75,11 @@ void setup() {
 
 #elif defined(BOARD_GIGA_CHILD)
   gigaLedInit();
+  // Blink onboard LED to confirm boot
+  leds[0] = CRGB(255, 0, 0); showSafe(); delay(300);
+  leds[0] = CRGB(0, 255, 0); showSafe(); delay(300);
+  leds[0] = CRGB(0, 0, 255); showSafe(); delay(300);
   clearAndShow();
-  // LED task runs as Mbed thread
-  static rtos::Thread ledThread(osPriorityNormal, 4096);
-  ledThread.start([]{ ledTask(nullptr); });
 
 #elif defined(BOARD_ESP32)
   FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
@@ -117,9 +118,22 @@ void loop() {
   delay(10);
 
 #elif defined(BOARD_GIGA_CHILD)
-  // LED task runs in a Mbed thread — main loop just handles network
+  // Giga child: simple inline LED — set colour from action state
+  {
+    static uint8_t prevSeq = 0;
+    static bool offDone = false;
+    uint8_t seq = childActSeq;
+    if (seq != prevSeq) { prevSeq = seq; offDone = false; }
+    uint8_t at = childActType;
+    if (at == ACT_SOLID || at == ACT_FADE || at == ACT_BREATHE ||
+        at == ACT_CHASE || at == ACT_RAINBOW || at == ACT_FIRE ||
+        at == ACT_COMET || at == ACT_TWINKLE) {
+      leds[0] = CRGB(childActR, childActG, childActB);
+      showSafe();
+    } else if (!offDone) { clearAndShow(); offDone = true; }
+  }
   handleClient();
-  delay(10);
+  delay(50);
 
 #elif defined(BOARD_D1MINI)
   updateLED();
