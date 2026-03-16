@@ -152,7 +152,7 @@ Covers: config page JS integrity (sendBuf truncation detection), HTTP routes, UD
 | Performers (children) | Unlimited (tested 8) | Limited by network bandwidth during sync |
 | Strings per performer | 2 (D1 Mini) / 8 (ESP32) | Protocol always sends 8 slots |
 | LEDs per string | 150 (D1 Mini) / 255 (ESP32) | `MAX_LEDS` in BoardConfig.h |
-| Action presets | 32 (`MAX_ACTIONS`) | Stored in `actions.json` |
+| Action presets | Unlimited (tested 50) | Stored in `actions.json` |
 | Runners | 4 (`MAX_RUNNERS`) | Stored in `runners.json` |
 | Steps per runner | 16 (`MAX_CHILD_STEPS`) | Synced via CMD_LOAD_STEP packets |
 | Action types | 9 | Blackout, Solid, Fade, Breathe, Chase, Rainbow, Fire, Comet, Twinkle |

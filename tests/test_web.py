@@ -1177,21 +1177,20 @@ check("Runners list empty after cleanup",
 
 # ── MAX_ACTIONS overflow ──────────────────────────────────────────────────────
 
-section("Multiple actions (up to MAX_ACTIONS=32)")
+section("Actions — no hard limit (create 50)")
 _, _stale_a = get_json("/api/actions")
 for _sa in (_stale_a or []):
     delete(f"/api/actions/{_sa['id']}")
 act_ids = []
-for i in range(32):
-    _, d = post_json("/api/actions", {"name": f"A{i}", "type": 1, "r": i*8 % 256})
+for i in range(50):
+    _, d = post_json("/api/actions", {"name": f"A{i}", "type": i % 9, "r": i*5 % 256})
     if d and d.get("ok"):
         act_ids.append(d["id"])
-check(f"Created {len(act_ids)} actions (max 32)",
-      len(act_ids) == 32, f"count={len(act_ids)}")
-_, d33 = post_json("/api/actions", {"name": "Overflow", "type": 1})
-check("33rd action returns error (full)",
-      d33 is not None and (d33.get("ok") is False or d33.get("err") is not None),
-      f"data={d33}")
+check(f"Created {len(act_ids)} actions (no hard limit)",
+      len(act_ids) == 50, f"count={len(act_ids)}")
+_, alist = get_json("/api/actions")
+check("All 50 in GET /api/actions", isinstance(alist, list) and len(alist) == 50,
+      f"count={len(alist) if alist else 0}")
 for aid in act_ids:
     delete(f"/api/actions/{aid}")
 

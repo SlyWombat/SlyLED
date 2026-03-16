@@ -88,7 +88,6 @@ _runners = _load("runners", [])
 _actions = _load("actions", [])
 
 MAX_RUNNERS = 4
-MAX_ACTIONS = 32
 
 _nxt_c = max((c["id"] for c in _children), default=-1) + 1
 _nxt_r = max((r["id"] for r in _runners),  default=-1) + 1
@@ -479,8 +478,6 @@ def api_actions_create():
     if not name:
         return jsonify(ok=False, err="name required"), 400
     with _lock:
-        if len(_actions) >= MAX_ACTIONS:
-            return jsonify(ok=False, err="max actions reached"), 400
         a = {"id": _nxt_a}
         for k in _ACTION_FIELDS:
             if k in body:
