@@ -1102,19 +1102,46 @@ function loadFirmware(){
   ra('GET','/api/wifi',null,function(d){
     if(d){document.getElementById('fw-ssid').value=d.ssid||'';document.getElementById('fw-pass').value='';}
   });
-  // Load ports
-  ra('GET','/api/firmware/ports',null,function(d){
-    var el=document.getElementById('fw-ports');
-    var sel=document.getElementById('fw-port');
-    if(!d||!d.length){el.innerHTML='<p style="color:#888">No COM ports detected.</p>';return;}
-    var h='<table class="tbl"><tr><th>Port</th><th>Board</th><th>VID:PID</th></tr>';
-    sel.innerHTML='';
-    d.forEach(function(p){
-      h+='<tr><td>'+p.port+'</td><td>'+p.boardName+'</td><td>'+(p.vid_pid||'-')+'</td></tr>';
-      var o=document.createElement('option');o.value=p.port;o.text=p.port+' ('+p.boardName+')';sel.add(o);
-      if(p.board){document.getElementById('fw-board').value=p.board;updateFwImages();}
+  // Load ports + cross-reference with registered performers for version info
+  ra('GET','/api/firmware/ports',null,function(ports){
+    ra('GET','/api/children',null,function(kids){
+      ra('GET','/api/firmware/registry',null,function(reg){
+        _fwRegistry=reg&&reg.firmware?reg.firmware:[];
+        var el=document.getElementById('fw-ports');
+        var sel=document.getElementById('fw-port');
+        if(!ports||!ports.length){el.innerHTML='<p style="color:#888">No COM ports detected.</p>';return;}
+        // Build a map of registered performers by hostname prefix for matching
+        var kidMap={};(kids||[]).forEach(function(k){kidMap[k.hostname]=k;});
+        var h='<table class="tbl"><tr><th>Port</th><th>Board</th><th>VID:PID</th><th>Firmware</th><th></th></tr>';
+        sel.innerHTML='';
+        ports.forEach(function(p){
+          var fwVer='-',needsUpdate=false,updateFwId='';
+          // Try to find a matching performer (by board type + any registered child)
+          var matchedKid=null;
+          (kids||[]).forEach(function(k){
+            if(k.fwVersion&&!matchedKid)matchedKid=k;
+          });
+          // Find latest registry version for this board
+          var latestVer='0.0';
+          _fwRegistry.forEach(function(f){
+            if(f.board===p.board&&f.version>latestVer){latestVer=f.version;updateFwId=f.id;}
+          });
+          // Show version from matched performer if available
+          if(matchedKid&&matchedKid.fwVersion){
+            fwVer='v'+matchedKid.fwVersion;
+            if(latestVer>matchedKid.fwVersion)needsUpdate=true;
+          }
+          var updateBtn='';
+          if(needsUpdate&&p.board)updateBtn=' <button class="btn btn-on" style="padding:.2em .5em;font-size:.78em" onclick="quickFlash(\''+p.port+'\',\''+p.board+'\',\''+updateFwId+'\',this)">Update to v'+latestVer+'</button>';
+          h+='<tr><td>'+p.port+'</td><td>'+p.boardName+'</td><td>'+(p.vid_pid||'-')+'</td>';
+          h+='<td>'+fwVer+updateBtn+'</td><td></td></tr>';
+          var o=document.createElement('option');o.value=p.port;o.text=p.port+' ('+p.boardName+')';sel.add(o);
+          if(p.board){document.getElementById('fw-board').value=p.board;}
+        });
+        el.innerHTML=h+'</table>';
+        updateFwImages();
+      });
     });
-    el.innerHTML=h+'</table>';
   });
   // Load firmware registry
   ra('GET','/api/firmware/registry',null,function(d){
@@ -1164,6 +1191,28 @@ function doFlash(btn){
           clearInterval(_flashPoll);_flashPoll=null;
           _btnSaved(btn,!s.error);
           if(s.error)document.getElementById('fw-prog-msg').textContent='Error: '+s.error;
+        }
+      });
+    },500);
+  });
+}
+
+function quickFlash(port,board,fwId,btn){
+  if(!confirm('Flash firmware '+fwId+' to '+port+'?'))return;
+  _btnSaving(btn);
+  document.getElementById('fw-progress').style.display='block';
+  ra('POST','/api/firmware/flash',{port:port,board:board,firmwareId:fwId},function(r){
+    if(!r||!r.ok){_btnSaved(btn,false);return;}
+    _flashPoll=setInterval(function(){
+      ra('GET','/api/firmware/flash/status',null,function(s){
+        if(!s)return;
+        document.getElementById('fw-prog-fill').style.width=s.progress+'%';
+        document.getElementById('fw-prog-msg').textContent=s.message||'';
+        if(!s.running){
+          clearInterval(_flashPoll);_flashPoll=null;
+          _btnSaved(btn,!s.error);
+          if(s.error)document.getElementById('fw-prog-msg').textContent='Error: '+s.error;
+          else setTimeout(loadFirmware,2000);
         }
       });
     },500);
