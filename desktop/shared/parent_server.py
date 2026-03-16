@@ -467,7 +467,7 @@ def api_action_stop():
 def api_actions():
     return jsonify(_actions)
 
-_ACTION_FIELDS = ("name", "type", "scope", "canvasEffect", "r", "g", "b",
+_ACTION_FIELDS = ("name", "type", "scope", "canvasEffect", "targetIds", "r", "g", "b",
                   "r2", "g2", "b2",           # Fade second colour
                   "speedMs", "periodMs", "spawnMs",  # timing
                   "minBri", "spacing", "paletteId",  # Breathe/Chase/Rainbow

@@ -692,7 +692,9 @@ function loadActions(){
     var h='<table class="tbl" style="max-width:700px"><tr><th>Name</th><th>Type</th><th>Colour</th><th>Details</th><th>Actions</th></tr>';
     _acts.forEach(function(a){
       var col=a.type>0?rgb2h(a.r||0,a.g||0,a.b||0):'#000';
-      var scopeLbl=a.scope==='canvas'?'<span style="color:#6af;font-size:.8em"> [canvas]</span>':'';
+      var scopeLbl='';
+      if(a.scope==='canvas')scopeLbl='<span style="color:#6af;font-size:.8em"> [canvas]</span>';
+      else if(a.scope==='performer-selected')scopeLbl='<span style="color:#fa6;font-size:.8em"> [selected]</span>';
       var det='';
       if(a.type===2)det=(a.speedMs||1000)+'ms → '+rgb2h(a.r2||0,a.g2||0,a.b2||0);
       if(a.type===3)det='Period:'+(a.periodMs||2000)+'ms Min:'+(a.minBri||0)+'%';
@@ -718,11 +720,18 @@ function _showActModal(a){
   var isNew=!a;
   var t=a?a.type:1;
   var sc=a?a.scope||'performer':'performer';
+  var selIds=a&&a.targetIds?a.targetIds:[];
   var h='<label>Name</label><input id="ae-nm" value="'+(a?a.name:'')+'" style="width:240px" placeholder="e.g. Red Wipe">';
   h+='<label>Scope</label><select id="ae-scope" onchange="_aeScopeChg()">';
-  h+='<option value="performer"'+(sc==='performer'?' selected':'')+'>Performer (per-child)</option>';
+  h+='<option value="performer"'+(sc==='performer'?' selected':'')+'>All Performers</option>';
+  h+='<option value="performer-selected"'+(sc==='performer-selected'?' selected':'')+'>Selected Performers</option>';
   h+='<option value="canvas"'+(sc==='canvas'?' selected':'')+'>Canvas (spatial sweep)</option>';
   h+='</select>';
+  // Selected performers picker
+  h+='<div id="ae-perf-select"'+(sc==='performer-selected'?'':' style="display:none"')+'>';
+  h+='<label>Select Performers</label><div id="ae-perf-list" style="max-height:120px;overflow-y:auto;border:1px solid #333;border-radius:4px;padding:.3em;background:#1a1a1a">';
+  h+='<p style="color:#888;font-size:.8em">Loading...</p></div></div>';
+  // Canvas options
   h+='<div id="ae-canvas-opts"'+(sc==='canvas'?'':' style="display:none"')+'>';
   h+='<label>Canvas Effect</label><select id="ae-ceffect"><option value="wipe" selected>Wipe</option></select>';
   h+='<label>Direction</label><select id="ae-csdir">';
@@ -783,12 +792,32 @@ function _showActModal(a){
   document.getElementById('modal-title').textContent=isNew?'New Action':'Edit Action';
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
+  _aePerfIds=selIds.slice();
+  if(sc==='performer-selected')_loadPerfPicker();
 }
 
 function _aeScopeChg(){
   var s=document.getElementById('ae-scope').value;
   document.getElementById('ae-canvas-opts').style.display=s==='canvas'?'block':'none';
+  document.getElementById('ae-perf-select').style.display=s==='performer-selected'?'block':'none';
+  if(s==='performer-selected')_loadPerfPicker();
 }
+
+function _loadPerfPicker(){
+  ra('GET','/api/children',null,function(d){
+    var el=document.getElementById('ae-perf-list');if(!el)return;
+    if(!d||!d.length){el.innerHTML='<p style="color:#888;font-size:.8em">No performers registered.</p>';return;}
+    var h='';
+    d.forEach(function(c){
+      var checked=(_aePerfIds&&_aePerfIds.indexOf(c.id)>=0)?' checked':'';
+      h+='<label style="display:flex;align-items:center;gap:.3em;font-size:.85em;padding:.15em 0">';
+      h+='<input type="checkbox" class="ae-perf-cb" value="'+c.id+'"'+checked+'> ';
+      h+=c.hostname+(c.name&&c.name!==c.hostname?' ('+c.name+')':'')+'</label>';
+    });
+    el.innerHTML=h;
+  });
+}
+var _aePerfIds=[];
 
 function _aeTypeChg(){
   var t=parseInt(document.getElementById('ae-tp').value);
@@ -808,6 +837,11 @@ function _aeSubmit(id,btn){
   var col=t>0&&t!==5?h2r(document.getElementById('ae-cl').value):{r:0,g:0,b:0};
   var scope=document.getElementById('ae-scope').value;
   var body={name:nm,type:t,r:col.r,g:col.g,b:col.b,scope:scope};
+  if(scope==='performer-selected'){
+    var cbs=document.querySelectorAll('.ae-perf-cb:checked');
+    var ids=[];cbs.forEach(function(cb){ids.push(parseInt(cb.value));});
+    body.targetIds=ids;
+  }
   if(scope==='canvas'){
     body.canvasEffect=document.getElementById('ae-ceffect').value;
     body.direction=parseInt(document.getElementById('ae-csdir').value)||0;
