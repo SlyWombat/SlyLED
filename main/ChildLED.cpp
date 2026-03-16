@@ -82,8 +82,14 @@ static void renderFade(uint8_t r1, uint8_t g1, uint8_t b1,
                         uint16_t speedMs, unsigned long elapsedMs,
                         uint8_t st, uint8_t en) {
   if (speedMs == 0) speedMs = 1;
-  uint16_t t = (uint16_t)(elapsedMs % (uint32_t)speedMs);
-  uint8_t frac = (uint8_t)((uint32_t)t * 255 / speedMs);
+  // Ping-pong: fade out to colour2 then back to colour1 (no abrupt wrap)
+  uint32_t cycle = (uint32_t)speedMs * 2;
+  uint32_t t = elapsedMs % cycle;
+  uint8_t frac;
+  if (t < speedMs)
+    frac = (uint8_t)((uint32_t)t * 255 / speedMs);         // 0→255
+  else
+    frac = (uint8_t)((uint32_t)(cycle - t) * 255 / speedMs); // 255→0
   uint8_t r = (uint8_t)((r1 * (255 - frac) + r2 * frac) / 255);
   uint8_t g = (uint8_t)((g1 * (255 - frac) + g2 * frac) / 255);
   uint8_t b = (uint8_t)((b1 * (255 - frac) + b2 * frac) / 255);

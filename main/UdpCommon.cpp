@@ -238,7 +238,7 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     char* tq = strstr(req, "?t=");
     if (tq) testType = (uint8_t)atoi(tq + 3);
     childActType = testType;
-    childActR = 255; childActG = 0; childActB = 50;
+    childActR = 255; childActG = 0; childActB = 0;
     childActP16a = 200;  // speed for animated effects (slower default)
     childActP8a  = 3;    // spacing/palette/cooling/tail/density
     childActP8b  = 120;  // sparking

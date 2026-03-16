@@ -32,12 +32,17 @@
   #include <WiFiUdp.h>
   #include <time.h>
 #elif defined(BOARD_ESP32)
+  #define FASTLED_ALLOW_INTERRUPTS 0
   #include <FastLED.h>
   #include <WiFi.h>
   #include <WiFiUdp.h>
   #include <time.h>
   #include <Preferences.h>
 #else  // D1 Mini
+  // Disable interrupts during FastLED.show() — prevents WiFi IRQs from
+  // corrupting WS2812B timing signal (causes random pixel flashes).
+  // 150 LEDs × 30μs = 4.5ms interrupt blackout — acceptable.
+  #define FASTLED_ALLOW_INTERRUPTS 0
   #include <FastLED.h>
   #include <ESP8266WiFi.h>
   #include <WiFiUdp.h>
