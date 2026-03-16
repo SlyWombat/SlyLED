@@ -1,0 +1,37 @@
+{
+  "firmware": [
+    {
+      "id": "child-led-esp32",
+      "name": "LED Performer",
+      "description": "WS2812B / WS2811 / APA102 LED strip controller with 9 effects",
+      "board": "esp32",
+      "fqbn": "esp32:esp32:esp32",
+      "version": "4.0",
+      "file": "esp32/child-led.bin",
+      "flashMethod": "esptool",
+      "buildDefines": ["BOARD_ESP32"]
+    },
+    {
+      "id": "child-led-d1mini",
+      "name": "LED Performer",
+      "description": "WS2812B / WS2811 / APA102 LED strip controller with 9 effects",
+      "board": "d1mini",
+      "fqbn": "esp8266:esp8266:d1_mini",
+      "version": "4.0",
+      "file": "d1mini/child-led.bin",
+      "flashMethod": "esptool",
+      "buildDefines": ["BOARD_D1MINI"]
+    },
+    {
+      "id": "parent-giga",
+      "name": "Orchestrator Runtime",
+      "description": "Minimal runtime parent for Giga R1 WiFi (future)",
+      "board": "giga",
+      "fqbn": "arduino:mbed_giga:giga",
+      "version": "4.0",
+      "file": "giga/parent.bin",
+      "flashMethod": "dfu",
+      "buildDefines": ["BOARD_GIGA"]
+    }
+  ]
+}

@@ -86,6 +86,7 @@ _settings = _load("settings", {
 _layout  = _load("layout",  {"canvasW": 10000, "canvasH": 5000, "children": []})
 _runners = _load("runners", [])
 _actions = _load("actions", [])
+_wifi    = _load("wifi",    {"ssid": "", "password": ""})
 
 MAX_RUNNERS = 4
 
@@ -147,9 +148,9 @@ def _send_recv(ip, pkt, timeout=1.5, maxb=256):
     return None
 
 def _parse_pong(data, src_ip):
-    # Full PONG = 8-byte header + 131-byte PongPayload = 139 bytes
-    # PongPayload: hostname[10]+altName[16]+desc[32]+stringCount(1)+PongString[8]×9
-    if not data or len(data) < 139:
+    # PONG v4: 8-byte header + 133-byte PongPayload = 141 bytes (v3: 139 bytes)
+    # PongPayload: hostname[10]+altName[16]+desc[32]+stringCount(1)+PongString[8]×9+fwMajor(1)+fwMinor(1)
+    if not data or len(data) < 139:  # backward compat: accept v3 (139) and v4 (141)
         return None
     if data[3] != CMD_PONG:
         return None
@@ -166,10 +167,15 @@ def _parse_pong(data, src_ip):
                          "cdir": cd, "cmm": cm, "sdir": sd,
                          "folded": bool(cd & 0x01)})
         off += 9
+    # Firmware version (added in v4.0 — 141-byte PONG)
+    fw_ver = None
+    if len(data) >= 141:
+        fw_ver = f"{p[131]}.{p[132]}"
     return {
         "hostname": hn, "name": nm or hn, "desc": ds, "sc": sc,
         "strings": strings, "ip": src_ip,
         "status": 1, "seen": int(time.time()),
+        "fwVersion": fw_ver,
     }
 
 def _ping(child, retries=2):
@@ -717,6 +723,89 @@ _DEFAULT_SETTINGS = {
     "runnerLoop": True,
 }
 _DEFAULT_LAYOUT = {"canvasW": 10000, "canvasH": 5000, "children": []}
+
+# ── WiFi credentials ─────────────────────────────────────────────────────────
+
+@app.get("/api/wifi")
+def api_wifi_get():
+    return jsonify({"ssid": _wifi.get("ssid", ""), "hasPassword": bool(_wifi.get("password"))})
+
+@app.post("/api/wifi")
+def api_wifi_save():
+    body = request.get_json(silent=True) or {}
+    with _lock:
+        if "ssid" in body:
+            _wifi["ssid"] = body["ssid"]
+        if "password" in body:
+            _wifi["password"] = body["password"]
+        _save("wifi", _wifi)
+    return jsonify(ok=True)
+
+# ── Firmware management ──────────────────────────────────────────────────────
+
+try:
+    from firmware_manager import list_ports, load_registry, flash_board, get_flash_status, detect_chip
+    _fw_available = True
+except ImportError:
+    _fw_available = False
+
+# Firmware directory: shipped alongside the app or in data dir
+_FW_DIR = BASE / "firmware"
+if not _FW_DIR.exists() and getattr(sys, "frozen", False):
+    _FW_DIR = Path(sys._MEIPASS) / "firmware"
+
+@app.get("/api/firmware/ports")
+def api_fw_ports():
+    if not _fw_available:
+        return jsonify(ok=False, err="pyserial not installed"), 500
+    return jsonify(list_ports())
+
+@app.get("/api/firmware/registry")
+def api_fw_registry():
+    return jsonify(load_registry(_FW_DIR))
+
+@app.post("/api/firmware/detect")
+def api_fw_detect():
+    """Detect chip type on an ambiguous port."""
+    if not _fw_available:
+        return jsonify(ok=False, err="esptool not available"), 500
+    body = request.get_json(silent=True) or {}
+    port = body.get("port", "")
+    if not port:
+        return jsonify(ok=False, err="port required"), 400
+    chip = detect_chip(port)
+    return jsonify(ok=True, board=chip)
+
+@app.post("/api/firmware/flash")
+def api_fw_flash():
+    """Flash firmware to a board in a background thread."""
+    if not _fw_available:
+        return jsonify(ok=False, err="esptool not available"), 500
+    body = request.get_json(silent=True) or {}
+    port = body.get("port", "")
+    fw_id = body.get("firmwareId", "")
+    board = body.get("board", "")
+    if not port or not fw_id:
+        return jsonify(ok=False, err="port and firmwareId required"), 400
+    reg = load_registry(_FW_DIR)
+    fw = next((f for f in reg.get("firmware", []) if f["id"] == fw_id), None)
+    if not fw:
+        return jsonify(ok=False, err="firmware not found in registry"), 404
+    bin_path = _FW_DIR / fw["file"]
+    if not bin_path.exists():
+        return jsonify(ok=False, err=f"binary not found: {fw['file']}"), 404
+    # Flash in background thread
+    def _do_flash():
+        flash_board(port, str(bin_path), board or fw["board"],
+                    wifi_ssid=_wifi.get("ssid"), wifi_pass=_wifi.get("password"))
+    threading.Thread(target=_do_flash, daemon=True).start()
+    return jsonify(ok=True, message="Flashing started")
+
+@app.get("/api/firmware/flash/status")
+def api_fw_flash_status():
+    if not _fw_available:
+        return jsonify(running=False, progress=0, message="not available")
+    return jsonify(get_flash_status())
 
 @app.post("/api/reset")
 def api_reset():

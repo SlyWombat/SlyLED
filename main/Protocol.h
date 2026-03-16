@@ -94,7 +94,9 @@ struct __attribute__((packed)) PongPayload {
   char       description[CHILD_DESC_LEN];
   uint8_t    stringCount;
   PongString strings[MAX_STR_PER_CHILD];
-};  // 10+16+32+1+(9×8)=131 bytes; total packet = 8+131 = 139
+  uint8_t    fwMajor;               // firmware version (added v4.0)
+  uint8_t    fwMinor;
+};  // 10+16+32+1+(9×8)+2=133 bytes; total packet = 8+133 = 141
 
 struct __attribute__((packed)) StatusRespPayload {
   uint8_t  activeAction;

@@ -69,6 +69,7 @@ body.light .li:hover{border-color:#888}
   <button id='n-actions'  class='tnav'      onclick='showTab("actions")'>Actions</button>
   <button id='n-runtime'  class='tnav'      onclick='showTab("runtime")'>Runtime</button>
   <button id='n-settings' class='tnav'      onclick='showTab("settings")'>Settings</button>
+  <button id='n-firmware' class='tnav'      onclick='showTab("firmware")'>Firmware</button>
 </nav>
 
 <div id='t-dash'    class='tab'><p style='color:#888'>Loading...</p></div>
@@ -161,6 +162,37 @@ body.light .li:hover{border-color:#888}
   </div>
 </div>
 
+<div id='t-firmware' class='tab' style='display:none'>
+  <div class='card'>
+    <div class='card-title'>WiFi Credentials</div>
+    <p style='font-size:.82em;color:#888;margin-bottom:.5em'>Stored on the Orchestrator and pushed to performers during flashing.</p>
+    <label>SSID</label><input id='fw-ssid' style='width:200px'>
+    <label>Password</label><input id='fw-pass' type='password' style='width:200px'>
+    <div style='margin-top:.5em'><button class='btn btn-on' onclick='saveWifi(this)'>Save WiFi</button></div>
+  </div>
+  <div class='card' style='max-width:700px'>
+    <div class='card-title'>Connected Boards</div>
+    <div id='fw-ports'><p style='color:#888'>Scanning...</p></div>
+  </div>
+  <div class='card' style='max-width:700px'>
+    <div class='card-title'>Flash Firmware</div>
+    <label>Port</label><select id='fw-port'></select>
+    <label>Board</label><select id='fw-board'>
+      <option value='esp32'>ESP32</option>
+      <option value='d1mini'>D1 Mini</option>
+      <option value='giga'>Giga R1</option>
+    </select>
+    <label>Firmware</label><select id='fw-image'></select>
+    <div style='margin-top:.6em'>
+      <button class='btn btn-on' id='fw-flash-btn' onclick='doFlash(this)'>Flash</button>
+    </div>
+    <div id='fw-progress' style='display:none;margin-top:.6em'>
+      <div class='prog-bar' style='height:10px'><div class='prog-fill' id='fw-prog-fill' style='width:0%'></div></div>
+      <div id='fw-prog-msg' style='font-size:.82em;color:#aaa;margin-top:.3em'></div>
+    </div>
+  </div>
+</div>
+
 <div id='modal' class='modal-bg' onclick='if(event.target===this)closeModal()'>
   <div class='modal-box'>
     <div class='modal-hdr'>
@@ -179,7 +211,7 @@ var curRid=-1,curRname='',curRsteps=[];
 
 function showTab(t){
   ctab=t;
-  ['dash','setup','layout','actions','runtime','settings'].forEach(function(id){
+  ['dash','setup','layout','actions','runtime','settings','firmware'].forEach(function(id){
     document.getElementById('t-'+id).style.display=id===t?'block':'none';
     var n=document.getElementById('n-'+id);
     n.className='tnav'+(id===t?' tact':'');
@@ -190,6 +222,7 @@ function showTab(t){
   else if(t==='actions')loadActions();
   else if(t==='runtime')loadRuntime();
   else if(t==='settings')loadSettings();
+  else if(t==='firmware')loadFirmware();
 }
 
 function _btnSaving(btn){if(!btn)return;btn.dataset.orig=btn.textContent;btn.textContent='Saving...';btn.disabled=true;btn.style.background='#555';}
@@ -209,15 +242,15 @@ function loadDash(){
   if(dashRunnerTimer)clearInterval(dashRunnerTimer);
   ra('GET','/api/actions',null,function(a){_acts=a||[];});
   ra('GET','/api/children',null,function(d){
-    var h='<table class="tbl"><tr><th>Hostname</th><th>Name</th><th>IP</th><th>Status</th><th>Strings</th><th>Last Seen</th></tr>';
+    var h='<table class="tbl"><tr><th>Hostname</th><th>Name</th><th>IP</th><th>Status</th><th>FW</th><th>Strings</th><th>Last Seen</th></tr>';
     if(d&&d.length){
       d.forEach(function(c){
         var st=c.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
         var ts=c.seen>0?new Date(c.seen*1000).toLocaleString():'-';
-        h+='<tr><td>'+c.hostname+'</td><td>'+(c.name||'-')+'</td><td>'+c.ip+'</td><td>'+st+'</td><td>'+c.sc+'</td><td>'+ts+'</td></tr>';
+        h+='<tr><td>'+c.hostname+'</td><td>'+(c.name||'-')+'</td><td>'+c.ip+'</td><td>'+st+'</td><td>'+(c.fwVersion||'-')+'</td><td>'+c.sc+'</td><td>'+ts+'</td></tr>';
       });
     }else{
-      h+='<tr><td colspan="6" style="color:#888;text-align:center">No performers registered</td></tr>';
+      h+='<tr><td colspan="7" style="color:#888;text-align:center">No performers registered</td></tr>';
     }
     h+='</table><div id="dash-runner" style="margin-top:1em"></div>';
     document.getElementById('t-dash').innerHTML=h;
@@ -1058,6 +1091,66 @@ function _drawTimeline(rn,acts,children,lay){
   // Border
   ctx.strokeStyle='#444';ctx.lineWidth=1;
   ctx.strokeRect(labelW,padT,chartW,chartH);
+}
+
+// ── Firmware management ──────────────────────────────────────────────────────
+function loadFirmware(){
+  // Load WiFi creds
+  ra('GET','/api/wifi',null,function(d){
+    if(d){document.getElementById('fw-ssid').value=d.ssid||'';document.getElementById('fw-pass').value='';}
+  });
+  // Load ports
+  ra('GET','/api/firmware/ports',null,function(d){
+    var el=document.getElementById('fw-ports');
+    var sel=document.getElementById('fw-port');
+    if(!d||!d.length){el.innerHTML='<p style="color:#888">No COM ports detected.</p>';return;}
+    var h='<table class="tbl"><tr><th>Port</th><th>Board</th><th>VID:PID</th></tr>';
+    sel.innerHTML='';
+    d.forEach(function(p){
+      h+='<tr><td>'+p.port+'</td><td>'+p.boardName+'</td><td>'+(p.vid_pid||'-')+'</td></tr>';
+      var o=document.createElement('option');o.value=p.port;o.text=p.port+' ('+p.boardName+')';sel.add(o);
+      if(p.board){document.getElementById('fw-board').value=p.board;}
+    });
+    el.innerHTML=h+'</table>';
+  });
+  // Load firmware registry
+  ra('GET','/api/firmware/registry',null,function(d){
+    var sel=document.getElementById('fw-image');sel.innerHTML='';
+    if(d&&d.firmware){d.firmware.forEach(function(f){
+      var o=document.createElement('option');o.value=f.id;o.text=f.name+' ('+f.board+') v'+f.version;sel.add(o);
+    });}
+  });
+}
+
+function saveWifi(btn){
+  _btnSaving(btn);
+  ra('POST','/api/wifi',{ssid:document.getElementById('fw-ssid').value,password:document.getElementById('fw-pass').value},
+    function(r){_btnSaved(btn,r&&r.ok);});
+}
+
+var _flashPoll=null;
+function doFlash(btn){
+  var port=document.getElementById('fw-port').value;
+  var board=document.getElementById('fw-board').value;
+  var fwId=document.getElementById('fw-image').value;
+  if(!port||!fwId){alert('Select a port and firmware');return;}
+  _btnSaving(btn);
+  document.getElementById('fw-progress').style.display='block';
+  ra('POST','/api/firmware/flash',{port:port,board:board,firmwareId:fwId},function(r){
+    if(!r||!r.ok){_btnSaved(btn,false);return;}
+    _flashPoll=setInterval(function(){
+      ra('GET','/api/firmware/flash/status',null,function(s){
+        if(!s)return;
+        document.getElementById('fw-prog-fill').style.width=s.progress+'%';
+        document.getElementById('fw-prog-msg').textContent=s.message||'';
+        if(!s.running){
+          clearInterval(_flashPoll);_flashPoll=null;
+          _btnSaved(btn,!s.error);
+          if(s.error)document.getElementById('fw-prog-msg').textContent='Error: '+s.error;
+        }
+      });
+    },500);
+  });
 }
 
 function applyDarkMode(dm){

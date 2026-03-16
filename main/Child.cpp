@@ -5,6 +5,7 @@
 
 #include <Arduino.h>
 #include "BoardConfig.h"
+#include "version.h"
 
 #ifdef BOARD_FASTLED
 
@@ -153,6 +154,8 @@ void sendPong(IPAddress dest) {
     pong.strings[j].cableMm  = childCfg.strings[j].cableMm;
     pong.strings[j].stripDir = childCfg.strings[j].stripDir;
   }
+  pong.fwMajor = APP_MAJOR;
+  pong.fwMinor = APP_MINOR;
   memcpy(udpBuf,               &hdr,  sizeof(hdr));
   memcpy(udpBuf + sizeof(hdr), &pong, sizeof(pong));
   cmdUDP.beginPacket(dest, UDP_PORT);

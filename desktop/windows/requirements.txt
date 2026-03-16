@@ -1,3 +1,5 @@
 flask>=3.0
 pystray>=0.19
 pillow>=10.0
+pyserial>=3.5
+esptool>=4.7
