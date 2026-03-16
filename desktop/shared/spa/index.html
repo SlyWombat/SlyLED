@@ -177,7 +177,7 @@ body.light .li:hover{border-color:#888}
   <div class='card' style='max-width:700px'>
     <div class='card-title'>Flash Firmware</div>
     <label>Port</label><select id='fw-port'></select>
-    <label>Board</label><select id='fw-board'>
+    <label>Board</label><select id='fw-board' onchange='updateFwImages()'>
       <option value='esp32'>ESP32</option>
       <option value='d1mini'>D1 Mini</option>
       <option value='giga'>Giga R1</option>
@@ -1109,17 +1109,29 @@ function loadFirmware(){
     d.forEach(function(p){
       h+='<tr><td>'+p.port+'</td><td>'+p.boardName+'</td><td>'+(p.vid_pid||'-')+'</td></tr>';
       var o=document.createElement('option');o.value=p.port;o.text=p.port+' ('+p.boardName+')';sel.add(o);
-      if(p.board){document.getElementById('fw-board').value=p.board;}
+      if(p.board){document.getElementById('fw-board').value=p.board;updateFwImages();}
     });
     el.innerHTML=h+'</table>';
   });
   // Load firmware registry
   ra('GET','/api/firmware/registry',null,function(d){
-    var sel=document.getElementById('fw-image');sel.innerHTML='';
-    if(d&&d.firmware){d.firmware.forEach(function(f){
-      var o=document.createElement('option');o.value=f.id;o.text=f.name+' ('+f.board+') v'+f.version;sel.add(o);
-    });}
+    _fwRegistry=d&&d.firmware?d.firmware:[];
+    updateFwImages();
   });
+}
+
+var _fwRegistry=[];
+function updateFwImages(){
+  var board=document.getElementById('fw-board').value;
+  var sel=document.getElementById('fw-image');sel.innerHTML='';
+  _fwRegistry.forEach(function(f){
+    if(f.board===board){
+      var o=document.createElement('option');o.value=f.id;o.text=f.name+' v'+f.version;sel.add(o);
+    }
+  });
+  if(!sel.options.length){
+    var o=document.createElement('option');o.value='';o.text='No firmware available for '+board;sel.add(o);
+  }
 }
 
 function saveWifi(btn){
