@@ -180,15 +180,81 @@ def flash_esp(port, bin_path, board="esp32", progress_cb=None):
         with _flash_lock:
             _flash_status["running"] = False
 
+def _find_arduino_cli():
+    """Find arduino-cli executable."""
+    import os
+    # Check %LOCALAPPDATA%\Arduino\arduino-cli.exe (Windows standard)
+    local = os.path.expandvars(r"%LOCALAPPDATA%\Arduino\arduino-cli.exe")
+    if os.path.isfile(local):
+        return local
+    # Check PATH
+    for p in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = os.path.join(p, "arduino-cli.exe" if os.name == "nt" else "arduino-cli")
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+def flash_giga(port, bin_path, progress_cb=None):
+    """Flash a Giga R1 WiFi via arduino-cli (DFU mode required)."""
+    with _flash_lock:
+        _flash_status.update(running=True, progress=0, message="Looking for arduino-cli...", error=None)
+
+    cli = _find_arduino_cli()
+    if not cli:
+        with _flash_lock:
+            _flash_status.update(error="arduino-cli not found. Install from arduino.cc or via winget.", message="Error")
+        return False
+
+    try:
+        with _flash_lock:
+            _flash_status.update(message="Uploading via DFU...")
+
+        # arduino-cli upload requires the sketch dir, but we can use --input-file for precompiled
+        cmd = [cli, "upload", "--port", port, "--fqbn", "arduino:mbed_giga:giga",
+               "--input-file", str(bin_path)]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for line in proc.stdout:
+            line = line.strip()
+            if "%" in line:
+                try:
+                    pct = int(line.split("]")[0].split("[")[1].strip().replace("=", "").replace(" ", "").replace("%", ""))
+                except Exception:
+                    try:
+                        # Try "Download [====     ] 40%" format
+                        if "%" in line:
+                            pct = int(line.split("%")[0].split()[-1])
+                            with _flash_lock:
+                                _flash_status["progress"] = min(pct, 100)
+                                _flash_status["message"] = f"Writing... {pct}%"
+                    except Exception:
+                        pass
+            if "File downloaded successfully" in line:
+                with _flash_lock:
+                    _flash_status.update(progress=100, message="Upload complete")
+            if progress_cb:
+                progress_cb(line)
+        proc.wait()
+        if proc.returncode != 0:
+            with _flash_lock:
+                _flash_status.update(error="Upload failed (is the board in DFU bootloader mode?)", message="Error")
+            return False
+        with _flash_lock:
+            _flash_status.update(progress=100, message="Complete — press reset to boot")
+        return True
+    except Exception as e:
+        with _flash_lock:
+            _flash_status.update(error=str(e), message="Error")
+        return False
+    finally:
+        with _flash_lock:
+            _flash_status["running"] = False
+
 def flash_board(port, bin_path, board, wifi_ssid=None, wifi_pass=None, progress_cb=None):
     """Flash firmware to a board. Dispatches to the correct method."""
     if board in ("esp32", "d1mini"):
         return flash_esp(port, bin_path, board, progress_cb)
     elif board == "giga":
-        # Giga uses DFU or arduino-cli — not yet implemented
-        with _flash_lock:
-            _flash_status.update(error="Giga flash not yet supported", message="Error", running=False)
-        return False
+        return flash_giga(port, bin_path, progress_cb)
     else:
         with _flash_lock:
             _flash_status.update(error=f"Unknown board: {board}", message="Error", running=False)
