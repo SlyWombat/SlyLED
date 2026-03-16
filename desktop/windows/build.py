@@ -12,8 +12,9 @@ HERE   = pathlib.Path(__file__).resolve().parent
 SHARED = (HERE / ".." / "shared").resolve()
 SPA    = SHARED / "spa"
 ICO    = (HERE / ".." / ".." / "images" / "slyled.ico").resolve()
+FWDIR  = (HERE / ".." / ".." / "firmware").resolve()
 
-PyInstaller.__main__.run([
+args = [
     "--onefile",
     "--windowed",
     "--name", "SlyLED",
@@ -26,6 +27,15 @@ PyInstaller.__main__.run([
     "--hidden-import=PIL._tkinter_finder",
     "--collect-submodules=flask",
     "--collect-submodules=werkzeug",
+    "--collect-submodules=esptool",
     "--paths", str(SHARED),
-    str(SHARED / "main.py"),
-])
+]
+
+# Bundle firmware registry if it exists
+if FWDIR.exists():
+    args.append("--add-data")
+    args.append(f"{FWDIR};firmware")
+
+args.append(str(SHARED / "main.py"))
+
+PyInstaller.__main__.run(args)

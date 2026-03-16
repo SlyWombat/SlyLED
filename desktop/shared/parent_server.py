@@ -778,12 +778,15 @@ try:
 except ImportError:
     _fw_available = False
 
-# Firmware directory: check project root, then alongside app, then PyInstaller bundle
-_FW_DIR = BASE.parent.parent / "firmware"   # project root: ../../firmware from desktop/shared/
-if not _FW_DIR.exists():
-    _FW_DIR = BASE / "firmware"              # alongside parent_server.py
-if not _FW_DIR.exists() and getattr(sys, "frozen", False):
+# Firmware directory: check PyInstaller bundle first, then project root, then alongside exe
+if getattr(sys, "frozen", False):
     _FW_DIR = Path(sys._MEIPASS) / "firmware"
+    if not _FW_DIR.exists():
+        _FW_DIR = Path(sys.executable).parent / "firmware"
+else:
+    _FW_DIR = BASE.parent.parent / "firmware"   # project root: ../../firmware from desktop/shared/
+    if not _FW_DIR.exists():
+        _FW_DIR = BASE / "firmware"
 
 def _parent_wifi_hash():
     """Compute the same djb2 hash as the firmware for SSID+password comparison."""
