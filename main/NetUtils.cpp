@@ -47,8 +47,8 @@ unsigned long currentEpoch() {
 void connectWiFi() {
   if (Serial) { Serial.print("Connecting to "); Serial.println(SECRET_SSID); }
 
-#ifdef BOARD_CHILD
-  // Derive hostname from MAC before WiFi.begin so DHCP gets the correct name
+#if defined(BOARD_FASTLED)
+  // ESP boards: derive hostname from MAC before WiFi.begin
   {
     uint8_t mac[6];
 #ifdef BOARD_D1MINI
@@ -63,6 +63,9 @@ void connectWiFi() {
     WiFi.setHostname(hn);
 #endif
   }
+#elif defined(BOARD_GIGA_CHILD)
+  // Giga child: WiFi.macAddress() returns zeros before begin(),
+  // so we set hostname after connect in initChildConfig()
 #elif defined(BOARD_GIGA)
   // WiFi.setHostname() must be called before WiFi.begin() for DHCP option 12
   WiFi.setHostname(HOSTNAME);
