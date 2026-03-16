@@ -91,6 +91,7 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
     childRunnerStart  = startEpoch;
     childRunnerArmed  = true;
     childRunnerActive = false;
+    childRunnerLoop   = (plen >= 5) ? (payload[4] != 0) : true;
   } else if (cmd == CMD_RUNNER_STOP) {
     childRunnerActive = false;
     childRunnerArmed  = false;

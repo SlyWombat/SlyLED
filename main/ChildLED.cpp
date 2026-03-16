@@ -355,7 +355,13 @@ void ledTask(void* parameter) {
         if (elapsed < acc) { curStep = i; done = false; break; }
       }
       if (done) {
-        childRunnerActive = false;
+        if (childRunnerLoop) {
+          // Loop: reset start time so runner repeats from step 0
+          childRunnerStart += acc;
+          prevRunStep = 0xFF;
+        } else {
+          childRunnerActive = false;
+        }
         fill_solid(leds, NUM_LEDS, CRGB::Black);
         showSafe();
         delay(10);
@@ -468,7 +474,12 @@ void updateLED() {
       if (elapsed < acc) { curStep = i; done = false; break; }
     }
     if (done) {
-      childRunnerActive = false;
+      if (childRunnerLoop) {
+        childRunnerStart += acc;
+        prevRunStep = 0xFF;
+      } else {
+        childRunnerActive = false;
+      }
       fill_solid(leds, NUM_LEDS, CRGB::Black);
       showSafe(); return;
     }

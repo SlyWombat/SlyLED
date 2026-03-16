@@ -652,8 +652,9 @@ def api_runner_start(rid):
     if not r:
         return jsonify(ok=False, err="not found"), 404
     go_epoch = int(time.time()) + 5      # 5 s from now — time for UDP to reach all children
-    # CMD_RUNNER_GO requires 4-byte startEpoch as PAYLOAD (not in header)
-    pkt = _hdr(CMD_RUNNER_GO) + struct.pack("<I", go_epoch)
+    # CMD_RUNNER_GO: 4-byte startEpoch + 1-byte loop flag as PAYLOAD
+    loop_flag = 1 if _settings.get("runnerLoop", True) else 0
+    pkt = _hdr(CMD_RUNNER_GO) + struct.pack("<IB", go_epoch, loop_flag)
     for c in _children:
         if c["status"] == 1:
             _send(c["ip"], pkt)

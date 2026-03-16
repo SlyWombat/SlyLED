@@ -92,6 +92,7 @@ extern volatile uint32_t childRunnerStart;
 extern volatile bool     childRunnerArmed;
 extern volatile bool     childRunnerActive;
 extern volatile uint8_t  childSyncBlink;   // >0 = blink white N times after sync
+extern volatile bool     childRunnerLoop;  // true = loop runner, false = stop after last step
 
 // ── Function declarations ─────────────────────────────────────────────────────
 
