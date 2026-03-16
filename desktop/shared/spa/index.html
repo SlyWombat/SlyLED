@@ -179,7 +179,7 @@ body.light .li:hover{border-color:#888}
     <div style='margin-top:.5em'><button class='btn btn-on' onclick='saveWifi(this)'>Save WiFi</button></div>
   </div>
   <div class='card' style='max-width:700px'>
-    <div class='card-title'>Connected Boards</div>
+    <div class='card-title' style='display:flex;align-items:center;gap:.5em'>Connected Boards <button class='btn' onclick='loadFirmware()' style='padding:.15em .5em;background:#333;font-size:.8em'>&#x21bb; Refresh</button></div>
     <div id='fw-ports'><p style='color:#888'>Scanning...</p></div>
   </div>
   <div class='card' style='max-width:700px'>
