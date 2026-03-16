@@ -907,17 +907,20 @@ function loadRuntime(){
       d.forEach(function(r){
         var durTxt='';
         if(r.totalDurationS)durTxt=', '+r.totalDurationS+'s';
-        h+='<div style="display:flex;align-items:center;gap:.5em;padding:.4em 0;border-bottom:1px solid #2a2a2a">';
+        h+='<div style="padding:.4em 0;border-bottom:1px solid #2a2a2a">';
+        h+='<div style="display:flex;align-items:center;gap:.5em">';
         h+='<span style="flex:1">'+r.name+'<span style="color:#888;font-size:.82em"> ('+r.steps+' steps'+durTxt+(r.computed?' \u2713':'')+' )</span></span>';
         h+='<button class="btn btn-on" onclick="showRunner('+r.id+')" style="padding:.3em .8em">Edit</button>';
         h+=' <button class="btn" onclick="doCompute('+r.id+')" style="background:#446;color:#fff;padding:.3em .8em">Compute</button>';
         if(r.computed){
-          h+=' <button class="btn" onclick="showTimeline('+r.id+')" style="background:#363;color:#fff;padding:.3em .8em">Timeline</button>';
+          h+=' <button class="btn" onclick="toggleTimeline('+r.id+')" style="background:#363;color:#fff;padding:.3em .8em">\u25bc Timeline</button>';
           h+=' <button class="btn" onclick="doSync('+r.id+')" style="background:#264;color:#fff;padding:.3em .8em">Sync</button>';
           h+=' <button class="btn btn-on" onclick="doStart('+r.id+')" style="padding:.3em .8em">Start</button>';
         }
         h+=' <button class="btn btn-off" onclick="stopRunners()" style="padding:.3em .8em">Stop</button>';
         h+=' <button class="btn btn-off" onclick="delRunner('+r.id+')" style="padding:.3em .8em">Del</button>';
+        h+='</div>';
+        h+='<div id="tl-'+r.id+'" style="display:none"></div>';
         h+='</div>';
       });
     }else{h='<p style="color:#888">No runners yet.</p>';}
@@ -1056,92 +1059,100 @@ function stopRunners(){
   });
 }
 
-function showTimeline(rid){
-  // Fetch runner details, actions, and ALL registered children
+function toggleTimeline(rid){
+  var el=document.getElementById('tl-'+rid);
+  if(!el)return;
+  if(el.style.display!=='none'){el.style.display='none';return;}
+  el.innerHTML='<p style="color:#888;font-size:.82em">Loading timeline...</p>';
+  el.style.display='block';
   ra('GET','/api/actions',null,function(acts){
     _acts=acts||[];
     ra('GET','/api/runners/'+rid,null,function(rn){
-      if(!rn||!rn.steps||!rn.steps.length){alert('No steps in runner');return;}
+      if(!rn||!rn.steps||!rn.steps.length){el.innerHTML='<p style="color:#888">No steps.</p>';return;}
       ra('GET','/api/children',null,function(kids){
         ra('GET','/api/layout',null,function(lay){
           var children=(kids&&kids.length)?kids:[{hostname:'(all performers)',id:-1}];
-          _drawTimeline(rn,_acts,children,lay);
+          _drawTimelineInline(el,rn,_acts,children,lay);
         });
       });
     });
   });
 }
 
-function _drawTimeline(rn,acts,children,lay){
+function _childTargeted(act,childId){
+  // Check if a child is targeted by an action based on its scope
+  if(!act)return true;
+  if(act.scope==='performer-selected'){
+    var ids=act.targetIds||[];
+    return ids.indexOf(childId)>=0;
+  }
+  // 'performer' (all) or 'canvas' → all children
+  return true;
+}
+
+function _drawTimelineInline(container,rn,acts,children,lay){
   var actMap={};acts.forEach(function(a){actMap[a.id]=a;});
   var steps=rn.steps||[];
   var totalS=0;steps.forEach(function(s){totalS+=s.durationS||0;});
-  if(totalS<=0){alert('Runner has zero duration');return;}
+  if(totalS<=0){container.innerHTML='<p style="color:#888">No duration.</p>';return;}
 
-  var rowH=32,labelW=120,padT=36,padB=20,padR=16;
-  var chartW=700,chartH=children.length*rowH;
+  var rowH=28,labelW=130,padT=30,padB=10,padR=10;
+  var chartW=600,chartH=children.length*rowH;
   var cvW=labelW+chartW+padR,cvH=padT+chartH+padB;
 
-  var h='<canvas id="tl-cv" width="'+cvW+'" height="'+cvH+'" style="display:block;background:#0d0d0d;border:1px solid #444;max-width:100%"></canvas>';
-  document.getElementById('modal-title').textContent='Timeline: '+rn.name+' ('+totalS+'s)';
-  document.getElementById('modal-body').innerHTML=h;
-  document.getElementById('modal').style.display='block';
+  container.innerHTML='<canvas id="tl-cv-'+rn.id+'" width="'+cvW+'" height="'+cvH
+    +'" style="display:block;background:#0d0d0d;border:1px solid #333;border-radius:4px;margin-top:.4em;max-width:100%"></canvas>';
 
-  var cv=document.getElementById('tl-cv');if(!cv)return;
+  var cv=document.getElementById('tl-cv-'+rn.id);if(!cv)return;
   var ctx=cv.getContext('2d');
 
-  // Time axis header
-  ctx.fillStyle='#aaa';ctx.font='10px sans-serif';ctx.textAlign='center';
+  // Time axis
+  ctx.fillStyle='#888';ctx.font='9px sans-serif';ctx.textAlign='center';
   var tickS=totalS<=10?1:totalS<=30?2:totalS<=60?5:totalS<=300?10:30;
   for(var t=0;t<=totalS;t+=tickS){
     var tx=labelW+Math.round(t*chartW/totalS);
-    ctx.fillText(t+'s',tx,padT-8);
-    ctx.strokeStyle='#2a2a2a';ctx.lineWidth=1;
+    ctx.fillText(t+'s',tx,padT-6);
+    ctx.strokeStyle='#222';ctx.lineWidth=1;
     ctx.beginPath();ctx.moveTo(tx,padT);ctx.lineTo(tx,padT+chartH);ctx.stroke();
   }
 
-  // Row backgrounds and labels
+  // Row labels — use name (fallback to hostname)
   children.forEach(function(c,ci){
     var y=padT+ci*rowH;
-    if(ci%2===0){ctx.fillStyle='#161616';ctx.fillRect(labelW,y,chartW,rowH);}
-    // Row label
+    if(ci%2===0){ctx.fillStyle='#141414';ctx.fillRect(labelW,y,chartW,rowH);}
     ctx.fillStyle='#ccc';ctx.font='10px sans-serif';ctx.textAlign='right';
-    var lbl=c.hostname||c.name||('ID '+c.id);
-    if(lbl.length>14)lbl=lbl.slice(0,13)+'\u2026';
+    var lbl=(c.name&&c.name!==c.hostname)?c.name:c.hostname||('ID '+c.id);
+    if(lbl.length>16)lbl=lbl.slice(0,15)+'\u2026';
     ctx.fillText(lbl,labelW-6,y+rowH/2+4);
   });
 
-  // Draw step bars
+  // Draw step bars — check action scope per child
   var tOff=0;
   steps.forEach(function(st){
     var dur=st.durationS||0;if(dur<=0){tOff+=dur;return;}
     var act=actMap[st.actionId];
     var col=act?rgb2h(act.r||0,act.g||0,act.b||0):'#555';
     var aName=act?act.name:'?';
-    var x0pct=(st.x0||0)/10000,x1pct=(st.x1!=null?st.x1:10000)/10000;
-    var y0pct=(st.y0||0)/10000,y1pct=(st.y1!=null?st.y1:10000)/10000;
     var px=labelW+Math.round(tOff*chartW/totalS);
     var pw=Math.max(2,Math.round(dur*chartW/totalS));
 
     children.forEach(function(c,ci){
-      // All children are included (area-of-effect is always full canvas now)
-      var y=padT+ci*rowH+4;
-      var bh=rowH-8;
+      if(!_childTargeted(act,c.id))return; // skip non-targeted children
+      var y=padT+ci*rowH+3;
+      var bh=rowH-6;
       ctx.fillStyle=col;ctx.globalAlpha=0.7;
       ctx.fillRect(px,y,pw,bh);
       ctx.globalAlpha=1;
-      ctx.strokeStyle='#fff';ctx.lineWidth=0.5;ctx.strokeRect(px,y,pw,bh);
-      // Action name if bar wide enough
-      if(pw>30){
-        ctx.fillStyle='#fff';ctx.font='9px sans-serif';ctx.textAlign='left';
+      ctx.strokeStyle='#555';ctx.lineWidth=0.5;ctx.strokeRect(px,y,pw,bh);
+      if(pw>40){
+        ctx.fillStyle='#fff';ctx.font='8px sans-serif';ctx.textAlign='left';
         ctx.fillText(aName,px+3,y+bh/2+3);
       }
     });
     tOff+=dur;
   });
 
-  // Border
-  ctx.strokeStyle='#444';ctx.lineWidth=1;
+  ctx.strokeStyle='#333';ctx.lineWidth=1;
   ctx.strokeRect(labelW,padT,chartW,chartH);
 }
 
