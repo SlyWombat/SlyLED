@@ -133,7 +133,7 @@ cd tests
 python test_web.py localhost:8080
 ```
 
-Covers: connectivity, SPA structure, cache headers, `/status`, children CRUD + import/export + status poll + IP sanitization, actions library CRUD + validation + runner integration, layout `positioned` flag + multi-child placement/removal round-trip, settings round-trip, full runner lifecycle with action references (create / PUT steps / compute / stop / delete), error handling, MAX_RUNNERS overflow, Content-Length headers, mock UDP child (PING/PONG/ACTION/STATUS). **215 checks.**
+Covers: connectivity, SPA structure, cache headers, `/status`, children CRUD + import/export + status poll + IP sanitization, actions library CRUD + validation + runner integration, layout `positioned` flag + multi-child placement/removal round-trip, settings round-trip, full runner lifecycle with action references (create / PUT steps / compute / stop / delete), error handling, MAX_RUNNERS overflow, Content-Length headers, mock UDP child (PING/PONG/ACTION/STATUS). **256 checks.**
 
 ### Child (ESP32 / D1 Mini)
 
@@ -145,13 +145,31 @@ python tests/test_child.py <child-ip>
 
 Covers: config page JS integrity (sendBuf truncation detection), HTTP routes, UDP ping/pong, action dispatch, runner loading and epoch-synchronized start.
 
-## Flash usage (v3.6)
+## System limits (v4.0)
+
+| Resource | Maximum | Notes |
+|----------|---------|-------|
+| Performers (children) | Unlimited (tested 8) | Limited by network bandwidth during sync |
+| Strings per performer | 2 (D1 Mini) / 8 (ESP32) | Protocol always sends 8 slots |
+| LEDs per string | 150 (D1 Mini) / 255 (ESP32) | `MAX_LEDS` in BoardConfig.h |
+| Action presets | 32 (`MAX_ACTIONS`) | Stored in `actions.json` |
+| Runners | 4 (`MAX_RUNNERS`) | Stored in `runners.json` |
+| Steps per runner | 16 (`MAX_CHILD_STEPS`) | Synced via CMD_LOAD_STEP packets |
+| Action types | 9 | Blackout, Solid, Fade, Breathe, Chase, Rainbow, Fire, Comet, Twinkle |
+| Rainbow palettes | 8 | Classic, Ocean, Lava, Forest, Party, Heat, Cool, Pastel |
+| Sync time per step | ~0.5s (with ACK) | Falls back to fire-and-forget if ACK fails |
+| Runner start delay | 5 seconds | Time for all performers to receive GO command |
+| Performer stale timeout | 120 seconds | Auto-marks offline if no PONG received |
+| UDP protocol version | 3 | Wire-compatible payload sizes with v2 |
+| Global brightness | 0–255 | Sent via CMD_SET_BRIGHTNESS |
+
+## Flash usage (v4.0)
 
 | Board | Flash | RAM |
 |-------|-------|-----|
 | Giga | ~310 KB / 1966 KB (16%) | ~81 KB / 524 KB (15%) |
 | ESP32 | ~1030 KB / 1311 KB (79%) | ~50 KB / 328 KB (15%) |
-| D1 Mini | ~270 KB / 1049 KB (26%) | ~32 KB / 80 KB (40%) |
+| D1 Mini | ~305 KB / 1049 KB (29%) | ~32.5 KB / 80 KB (40%) |
 
 ESP32 flash is the tightest constraint. Check usage after every new feature.
 

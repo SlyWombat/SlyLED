@@ -1175,6 +1175,64 @@ _, rlist = get_json("/api/runners")
 check("Runners list empty after cleanup",
       isinstance(rlist, list) and len(rlist) == 0, f"list={rlist}")
 
+# ── MAX_ACTIONS overflow ──────────────────────────────────────────────────────
+
+section("Multiple actions (up to MAX_ACTIONS=32)")
+_, _stale_a = get_json("/api/actions")
+for _sa in (_stale_a or []):
+    delete(f"/api/actions/{_sa['id']}")
+act_ids = []
+for i in range(32):
+    _, d = post_json("/api/actions", {"name": f"A{i}", "type": 1, "r": i*8 % 256})
+    if d and d.get("ok"):
+        act_ids.append(d["id"])
+check(f"Created {len(act_ids)} actions (max 32)",
+      len(act_ids) == 32, f"count={len(act_ids)}")
+_, d33 = post_json("/api/actions", {"name": "Overflow", "type": 1})
+check("33rd action returns error (full)",
+      d33 is not None and (d33.get("ok") is False or d33.get("err") is not None),
+      f"data={d33}")
+for aid in act_ids:
+    delete(f"/api/actions/{aid}")
+
+# ── Runner step limits ───────────────────────────────────────────────────────
+
+section("Runner with maximum steps (16)")
+_, _ta = post_json("/api/actions", {"name": "LimitTest", "type": 1, "r": 255})
+_ta_id = (_ta or {}).get("id")
+_, _tr = post_json("/api/runners", {"name": "StepLimit"})
+_tr_id = (_tr or {}).get("id")
+if _ta_id is not None and _tr_id is not None:
+    steps = [{"actionId": _ta_id, "x0": 0, "y0": 0, "x1": 10000, "y1": 10000,
+              "durationS": i + 1} for i in range(16)]
+    pu_code, pu_data = put_json(f"/api/runners/{_tr_id}", {"name": "StepLimit", "steps": steps})
+    check("PUT 16 steps ok", pu_data is not None and pu_data.get("ok") is True)
+    _, rget = get_json(f"/api/runners/{_tr_id}")
+    check("Runner has 16 steps", rget is not None and len(rget.get("steps", [])) == 16)
+    # Verify totalDurationS = 1+2+...+16 = 136
+    _, rlist = get_json("/api/runners")
+    re = next((r for r in (rlist or []) if r.get("id") == _tr_id), None)
+    check("totalDurationS = 136", re is not None and re.get("totalDurationS") == 136,
+          f"total={re.get('totalDurationS') if re else None}")
+    delete(f"/api/runners/{_tr_id}")
+    delete(f"/api/actions/{_ta_id}")
+
+# ── Children import limit ────────────────────────────────────────────────────
+
+section("Bulk import children (8)")
+bulk = [{"hostname": f"SLYC-BK{i:02d}", "name": f"Bulk{i}", "ip": f"10.99.0.{i}",
+         "desc": "", "sc": 1, "strings": [], "status": 0, "seen": 0} for i in range(8)]
+_, imp = post_json("/api/children/import", bulk)
+check("Import 8 children ok", imp is not None and imp.get("ok") is True)
+check("Added 8", imp is not None and imp.get("added") == 8, f"added={imp.get('added') if imp else None}")
+_, kids = get_json("/api/children")
+bk_count = sum(1 for k in (kids or []) if k.get("hostname", "").startswith("SLYC-BK"))
+check("8 bulk children in list", bk_count == 8, f"count={bk_count}")
+# Cleanup
+for k in (kids or []):
+    if k.get("hostname", "").startswith("SLYC-BK"):
+        delete(f"/api/children/{k['id']}")
+
 # ── Content-Length headers ────────────────────────────────────────────────────
 
 section("Content-Length on JSON responses")
