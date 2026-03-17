@@ -24,6 +24,31 @@ import webbrowser
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, request, send_from_directory
+import logging
+from datetime import datetime
+
+log = logging.getLogger("slyled")
+log.setLevel(logging.DEBUG)
+_log_handler = None   # file handler, created/removed by _apply_logging()
+
+def _apply_logging(enabled):
+    """Enable/disable file logging.  Each enable creates a new timestamped log file."""
+    global _log_handler
+    # Remove existing file handler
+    if _log_handler:
+        log.removeHandler(_log_handler)
+        _log_handler.close()
+        _log_handler = None
+    if enabled:
+        log_dir = DATA / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fh = logging.FileHandler(str(log_dir / f"slyled_{ts}.log"), encoding="utf-8")
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"))
+        log.addHandler(fh)
+        _log_handler = fh
+        log.info("Logging started → %s", fh.baseFilename)
 
 # ── Version ───────────────────────────────────────────────────────────────────
 
@@ -94,6 +119,9 @@ MAX_RUNNERS = 4
 
 # Live action events pushed by children (ip → {actionType, stepIndex, totalSteps, event, ts})
 _live_events = {}
+
+# Apply logging from saved settings on startup
+_apply_logging(_settings.get("logging", False))
 
 _nxt_c = max((c["id"] for c in _children), default=-1) + 1
 _nxt_r = max((r["id"] for r in _runners),  default=-1) + 1
@@ -298,7 +326,7 @@ def _child_led_ranges(child):
     return bytes(ls), bytes(le)
 
 def _act_params(act):
-    """Extract generic param fields from an action dict."""
+    """Extract generic param fields from an action dict, all coerced to int."""
     t = act.get("type", 0)
     r, g, b = act.get("r", 0), act.get("g", 0), act.get("b", 0)
     p16a = act.get("speedMs", act.get("periodMs", act.get("spawnMs", 500)))
@@ -308,7 +336,7 @@ def _act_params(act):
     p8b = act.get("p8b", act.get("g2", act.get("sparking", 0)))
     p8c = act.get("p8c", act.get("b2", act.get("direction", 0)))
     p8d = act.get("p8d", act.get("decay", act.get("fadeSpeed", 0)))
-    return t, r, g, b, p16a, p8a, p8b, p8c, p8d
+    return tuple(int(v or 0) for v in (t, r, g, b, p16a, p8a, p8b, p8c, p8d))
 
 def _action_pkt(act, child):
     t, r, g, b, p16a, p8a, p8b, p8c, p8d = _act_params(act)
@@ -317,9 +345,9 @@ def _action_pkt(act, child):
 
 def _load_step_pkt(idx, total, step, child, delay_ms=0):
     t, r, g, b, p16a, p8a, p8b, p8c, p8d = _act_params(step)
-    dur = step.get("durationS", 5)
+    dur = int(step.get("durationS", 5) or 5)
     ls, le = _child_led_ranges(child)
-    pl = struct.pack("<BBBBBBHBBBBHH", idx, total, t, r, g, b, p16a, p8a, p8b, p8c, p8d, dur, delay_ms)
+    pl = struct.pack("<BBBBBBHBBBBHH", idx, total, t, r, g, b, p16a, p8a, p8b, p8c, p8d, dur, int(delay_ms))
     return _hdr(CMD_LOAD_STEP) + pl + ls + le
 
 # ── Flask application ─────────────────────────────────────────────────────────
@@ -413,16 +441,21 @@ def _udp_listener():
                 "totalSteps": tot, "event": ev,
                 "ts": time.time(),
             }
+            log.debug("ACTION_EVENT from %s: type=%d step=%d/%d event=%s",
+                       ip, at, si, tot, "started" if ev == 0 else "ended")
         elif cmd == CMD_PONG:
             # Handle PONGs from broadcast/direct pings
             info = _parse_pong(data, ip)
             if info:
+                log.debug("PONG from %s (%s) fw=%s", ip, info.get("hostname"), info.get("fwVersion"))
                 matched = False
                 for c in _children:
                     if c.get("ip") == ip or c.get("hostname") == info.get("hostname"):
                         c.update({k: v for k, v in info.items() if k != "id"})
                         matched = True
                         break
+        else:
+            log.debug("UDP cmd=0x%02X from %s (%d bytes)", cmd, ip, len(data))
 
 def start_background_tasks():
     """Call once after import to kick off periodic ping and UDP listener threads."""
@@ -591,12 +624,15 @@ def api_settings_get():
 def api_settings_save():
     body = request.get_json(silent=True) or {}
     with _lock:
-        for k in ("name", "units", "canvasW", "canvasH", "darkMode", "runnerLoop", "globalBrightness"):
+        for k in ("name", "units", "canvasW", "canvasH", "darkMode", "runnerLoop", "globalBrightness", "logging"):
             if k in body:
                 _settings[k] = body[k]
         _layout["canvasW"] = _settings["canvasW"]
         _layout["canvasH"] = _settings["canvasH"]
         _save("settings", _settings)
+    # Toggle file logging if changed
+    if "logging" in body:
+        _apply_logging(body["logging"])
     return jsonify(ok=True)
 
 # ── Action ────────────────────────────────────────────────────────────────────
@@ -894,18 +930,37 @@ def api_runner_sync(rid):
         return jsonify(ok=True, sent=0, acked=0, online=0,
                        warn="no performers online" if _children else None)
     child_offsets = r.get("childOffsets", [])
+    # Stop all children before loading new steps
+    pkt_stop = _hdr(CMD_RUNNER_STOP)
+    pkt_off  = _hdr(CMD_ACTION_STOP)
+    for child in online:
+        log.info("SYNC: sending STOP to %s (%s)", child["ip"], child.get("hostname"))
+        _send(child["ip"], pkt_stop)
+        _send(child["ip"], pkt_off)
+    time.sleep(0.1)
     # Send global brightness to all online children before steps
     bri = _settings.get("globalBrightness", 255)
     bri_pkt = _hdr(CMD_SET_BRIGHTNESS) + bytes([bri & 0xFF])
     sent = 0
-    for child in online:
-        _send(child["ip"], bri_pkt)
-        for i, step in enumerate(resolved):
-            delay_ms = child_offsets[i].get(child["id"], 0) if i < len(child_offsets) else 0
-            pkt = _load_step_pkt(i, len(resolved), step, child, delay_ms)
-            _send(child["ip"], pkt)
-            sent += 1
-            time.sleep(0.03)   # 30ms gap between packets for reliable delivery
+    try:
+        for child in online:
+            _send(child["ip"], bri_pkt)
+            log.info("SYNC: loading %d steps to %s (%s)", len(resolved), child["ip"], child.get("hostname"))
+            for i, step in enumerate(resolved):
+                offsets = child_offsets[i] if i < len(child_offsets) else {}
+                # JSON round-trip may stringify int keys — try both
+                cid = child["id"]
+                delay_ms = offsets.get(cid, offsets.get(str(cid), 0))
+                pkt = _load_step_pkt(i, len(resolved), step, child, delay_ms)
+                _send(child["ip"], pkt)
+                sent += 1
+                log.debug("  step %d/%d type=%d delay=%dms → %s",
+                          i, len(resolved), int(step.get("type", 0) or 0), int(delay_ms), child["ip"])
+                time.sleep(0.03)   # 30ms gap between packets for reliable delivery
+    except Exception as e:
+        log.error("SYNC failed: %s", e, exc_info=True)
+        return jsonify(ok=False, err=str(e)), 500
+    log.info("SYNC complete: %d packets to %d children", sent, len(online))
     return jsonify(ok=True, sent=sent, online=len(online))
 
 @app.post("/api/runners/<int:rid>/start")
@@ -919,7 +974,9 @@ def api_runner_start(rid):
     pkt = _hdr(CMD_RUNNER_GO) + struct.pack("<IB", go_epoch, loop_flag)
     online = [c for c in _children if c["status"] == 1]
     for c in online:
+        log.info("START: RUNNER_GO epoch=%d loop=%d → %s (%s)", go_epoch, loop_flag, c["ip"], c.get("hostname"))
         _send(c["ip"], pkt)
+    log.info("START: sent to %d children, go_epoch=%d (in %ds)", len(online), go_epoch, go_epoch - int(time.time()))
     with _lock:
         _settings["runnerRunning"] = True
         _settings["activeRunner"]  = rid
@@ -933,7 +990,7 @@ def api_runner_start(rid):
 _DEFAULT_SETTINGS = {
     "name": "SlyLED", "units": 0, "canvasW": 10000, "canvasH": 5000,
     "darkMode": 1, "runnerRunning": False, "activeRunner": -1, "runnerElapsed": 0,
-    "runnerLoop": True,
+    "runnerLoop": True, "logging": False,
 }
 _DEFAULT_LAYOUT = {"canvasW": 10000, "canvasH": 5000, "children": []}
 

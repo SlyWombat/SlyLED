@@ -149,6 +149,10 @@ body.light .li:hover{border-color:#888}
     <label style='display:flex;align-items:center;gap:.5em;margin-top:.8em'>
       <input type='checkbox' id='s-dm'> Dark Mode
     </label>
+    <label style='display:flex;align-items:center;gap:.5em;margin-top:.4em'>
+      <input type='checkbox' id='s-log'> Enable Logging
+    </label>
+    <div id='s-log-path' style='font-size:.72em;color:#666;margin-top:.2em'></div>
     <div style='margin-top:1em'>
       <button class='btn btn-on' onclick='saveSettings(this)'>Save Settings</button>
     </div>
@@ -1448,6 +1452,9 @@ function loadSettings(){
     document.getElementById('s-cw').value=d.canvasW||10000;
     document.getElementById('s-ch').value=d.canvasH||5000;
     var cb=document.getElementById('s-dm');if(cb)cb.checked=(d.darkMode!==0);
+    var lg=document.getElementById('s-log');if(lg)lg.checked=!!d.logging;
+    var lp=document.getElementById('s-log-path');
+    if(lp)lp.textContent=d.logging?'Logs saved to data/logs/ folder':'';
     applyDarkMode(d.darkMode!==0);
   });
 }
@@ -1472,13 +1479,19 @@ function saveSettings(btn){
   _btnSaving(btn);
   var dm=document.getElementById('s-dm').checked?1:0;
   applyDarkMode(dm);
+  var logOn=document.getElementById('s-log').checked;
   ra('POST','/api/settings',{
     name:document.getElementById('s-nm').value.trim(),
     units:parseInt(document.getElementById('s-un').value)||0,
     canvasW:parseInt(document.getElementById('s-cw').value)||10000,
     canvasH:parseInt(document.getElementById('s-ch').value)||5000,
-    darkMode:dm
-  },function(r){_btnSaved(btn,r&&r.ok);});
+    darkMode:dm,
+    logging:logOn
+  },function(r){
+    _btnSaved(btn,r&&r.ok);
+    var lp=document.getElementById('s-log-path');
+    if(lp)lp.textContent=logOn?'Logs saved to data/logs/ folder':'';
+  });
 }
 
 // Init
