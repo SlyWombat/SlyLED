@@ -1280,6 +1280,63 @@ check("SPA has fw-ssid element", "fw-ssid" in body)
 check("SPA has DFU bootloader note", "fw-dfu-note" in body)
 check("SPA has firmware query logic", "api/firmware/query" in body)
 
+# ── Action scope persistence ──────────────────────────────────────────────────
+
+section("Action scope — canvas + performer-selected persistence")
+_, ca = post_json("/api/actions", {"name": "CanvasWipe", "type": 3, "scope": "canvas",
+                                    "canvasEffect": "wipe", "direction": 2, "r": 100})
+ca_id = (ca or {}).get("id")
+if ca_id is not None:
+    _, cg = get_json(f"/api/actions/{ca_id}")
+    check("Canvas scope persisted", cg is not None and cg.get("scope") == "canvas")
+    check("Canvas effect persisted", cg is not None and cg.get("canvasEffect") == "wipe")
+    check("Canvas direction persisted", cg is not None and cg.get("direction") == 2)
+    delete(f"/api/actions/{ca_id}")
+
+_, sa = post_json("/api/actions", {"name": "Selected", "type": 1, "scope": "performer-selected",
+                                    "targetIds": [10, 20, 30], "r": 200})
+sa_id = (sa or {}).get("id")
+if sa_id is not None:
+    _, sg = get_json(f"/api/actions/{sa_id}")
+    check("Performer-selected scope persisted", sg is not None and sg.get("scope") == "performer-selected")
+    check("targetIds persisted", sg is not None and sg.get("targetIds") == [10, 20, 30])
+    delete(f"/api/actions/{sa_id}")
+
+# ── Settings round-trip ──────────────────────────────────────────────────────
+
+section("Settings — globalBrightness + runnerLoop round-trip")
+post_json("/api/settings", {"globalBrightness": 128, "runnerLoop": False})
+_, s = get_json("/api/settings")
+check("globalBrightness persisted", s is not None and s.get("globalBrightness") == 128)
+check("runnerLoop=false persisted", s is not None and s.get("runnerLoop") is False)
+# Restore defaults
+post_json("/api/settings", {"globalBrightness": 255, "runnerLoop": True})
+
+# ── Factory reset clears everything ──────────────────────────────────────────
+
+section("Factory reset clears actions + wifi + settings")
+post_json("/api/actions", {"name": "ResetTest", "type": 1})
+post_json("/api/wifi", {"ssid": "ResetNet", "password": "resetpw"})
+_, pre_acts = get_json("/api/actions")
+check("Pre-reset has actions", len(pre_acts or []) > 0)
+post_json("/api/reset")
+_, post_acts = get_json("/api/actions")
+check("Post-reset actions empty", isinstance(post_acts, list) and len(post_acts) == 0)
+_, post_wifi = get_json("/api/wifi")
+check("Post-reset wifi cleared", post_wifi is not None and post_wifi.get("ssid") == "")
+_, post_set = get_json("/api/settings")
+check("Post-reset runnerLoop default true", post_set is not None and post_set.get("runnerLoop") is not False)
+
+# ── SPA structure — timeline + brightness ────────────────────────────────────
+
+section("SPA structure — timeline inline + brightness slider")
+code, body = get("/")
+check("SPA has toggleTimeline function", "toggleTimeline" in body)
+check("SPA has _childTargeted function", "_childTargeted" in body)
+check("SPA has brightness slider", "rt-bri" in body)
+check("SPA has _s2ms helper", "_s2ms" in body)
+check("SPA has no ms labels in action editor", "(ms)" not in body)
+
 # ── Content-Length headers ────────────────────────────────────────────────────
 
 section("Content-Length on JSON responses")

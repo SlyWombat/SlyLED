@@ -23,7 +23,7 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog commandline
 
 OutputDir=dist
-OutputBaseFilename=SlyLED-Parent-Setup
+OutputBaseFilename=SlyLED-Setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern

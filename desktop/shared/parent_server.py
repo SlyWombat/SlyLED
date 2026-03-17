@@ -881,12 +881,13 @@ def api_fw_flash_status():
 
 @app.post("/api/reset")
 def api_reset():
-    """Clear all children, runners, actions, layout and restore default settings."""
-    global _children, _settings, _layout, _runners, _actions, _nxt_c, _nxt_r, _nxt_a
+    """Clear all children, runners, actions, layout, wifi and restore default settings."""
+    global _children, _settings, _layout, _runners, _actions, _wifi, _nxt_c, _nxt_r, _nxt_a
     with _lock:
         _children = []
         _runners  = []
         _actions  = []
+        _wifi     = {"ssid": "", "password": ""}
         _layout   = dict(_DEFAULT_LAYOUT)
         _settings = dict(_DEFAULT_SETTINGS)
         _nxt_c = 0
@@ -895,6 +896,7 @@ def api_reset():
         _save("children", _children)
         _save("runners",  _runners)
         _save("actions",  _actions)
+        _save("wifi",     _wifi)
         _save("layout",   _layout)
         _save("settings", _settings)
     return jsonify(ok=True)
