@@ -143,10 +143,11 @@ struct __attribute__((packed)) LoadStepPayload {
   uint8_t  ledEnd[MAX_STR_PER_CHILD];
 };  // 16+8+8 = 32 bytes; total packet = 8+32 = 40
 
-// ActionEventPayload — child→parent broadcast (3 bytes)
+// ActionEventPayload — child→parent (4 bytes)
 struct __attribute__((packed)) ActionEventPayload {
   uint8_t  actionType;
-  uint8_t  actionSeqId;
+  uint8_t  stepIndex;
+  uint8_t  totalSteps;
   uint8_t  event;          // 0=started, 1=ended
 };
 

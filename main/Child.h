@@ -100,6 +100,18 @@ extern volatile uint8_t  childSyncBlink;   // >0 = blink white N times after syn
 extern volatile bool     childRunnerLoop;  // true = loop runner, false = stop after last step
 extern volatile bool     childBootDone;   // false until bootAnimation() completes
 
+// Parent IP (set when CMD_RUNNER_GO received — used for ACTION_EVENT replies)
+extern volatile uint32_t childParentIP;
+
+// Event-pending flags — LED task sets these, main loop sends the UDP packet
+extern volatile bool    childEvtPending;
+extern volatile uint8_t childEvtType;
+extern volatile uint8_t childEvtStep;
+extern volatile uint8_t childEvtTotal;
+extern volatile uint8_t childEvtEvent;   // 0=started, 1=ended
+
+void sendActionEvent();
+
 // ── Function declarations ─────────────────────────────────────────────────────
 
 void initChildConfig();

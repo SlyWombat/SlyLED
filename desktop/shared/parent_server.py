@@ -44,6 +44,7 @@ CMD_LOAD_ACK        = 0x21
 CMD_SET_BRIGHTNESS  = 0x22
 CMD_RUNNER_GO       = 0x30
 CMD_RUNNER_STOP = 0x31
+CMD_ACTION_EVENT = 0x12
 CMD_STATUS_REQ  = 0x40
 CMD_STATUS_RESP = 0x41
 
@@ -90,6 +91,9 @@ _actions = _load("actions", [])
 _wifi    = _load("wifi",    {"ssid": "", "password": ""})
 
 MAX_RUNNERS = 4
+
+# Live action events pushed by children (ip → {actionType, stepIndex, totalSteps, event, ts})
+_live_events = {}
 
 _nxt_c = max((c["id"] for c in _children), default=-1) + 1
 _nxt_r = max((r["id"] for r in _runners),  default=-1) + 1
@@ -338,30 +342,92 @@ CHILD_STALE_S = 120   # mark offline if not seen for 2 minutes
 _startup_check_done = False
 
 def _periodic_ping():
-    """Background thread: ping all children periodically to keep status fresh.
-    First sweep at startup (with retry to catch children still booting),
-    then every 30 seconds."""
+    """Background thread: broadcast PING periodically.  The UDP listener
+    daemon picks up PONGs and updates child records — no per-child
+    send_recv needed, so there are no port conflicts."""
     global _startup_check_done
-    # Startup sweep: try twice with a gap to catch children still in boot animation
-    for attempt in range(2):
+    def _broadcast_ping():
+        pkt = _hdr(CMD_PING)
+        # Also direct-ping each known child for reliability
         for c in list(_children):
-            _ping(c, retries=1)
-        with _lock:
-            _save("children", _children)
-        if attempt == 0:
-            _startup_check_done = True
-            time.sleep(5)   # wait for slow-booting children (e.g. 3s boot animation)
+            _send(c["ip"], pkt)
+        # Broadcast for any new/moved children
+        for bc in ["255.255.255.255"] + _local_broadcasts():
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                    s.sendto(pkt, (bc, UDP_PORT))
+            except Exception:
+                pass
+    # Startup sweep: ping twice with a gap for slow booters
+    _broadcast_ping()
+    _startup_check_done = True
+    time.sleep(5)
+    _broadcast_ping()
+    with _lock:
+        # Mark children not seen recently as offline
+        now = int(time.time())
+        for c in _children:
+            if c.get("seen", 0) > 0 and now - c["seen"] > CHILD_STALE_S:
+                c["status"] = 0
+        _save("children", _children)
     # Periodic sweep every 30 seconds
     while True:
         time.sleep(30)
-        for c in list(_children):
-            _ping(c, retries=1)
+        _broadcast_ping()
+        time.sleep(2)   # allow PONGs to arrive
         with _lock:
+            now = int(time.time())
+            for c in _children:
+                if c.get("seen", 0) > 0 and now - c["seen"] > CHILD_STALE_S:
+                    c["status"] = 0
             _save("children", _children)
 
+def _udp_listener():
+    """Background daemon: persistent bind on UDP_PORT, receives ACTION_EVENT packets from children."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("", UDP_PORT))
+        s.settimeout(1.0)
+    except OSError as e:
+        print(f"[udp-listener] Could not bind port {UDP_PORT}: {e}")
+        return
+    while True:
+        try:
+            data, addr = s.recvfrom(256)
+        except socket.timeout:
+            continue
+        except Exception:
+            continue
+        if len(data) < 8:
+            continue
+        magic, ver, cmd = struct.unpack_from("<HBB", data, 0)
+        if magic != UDP_MAGIC or ver != UDP_VERSION:
+            continue
+        ip = addr[0]
+        if cmd == CMD_ACTION_EVENT and len(data) >= 12:
+            at, si, tot, ev = struct.unpack_from("<BBBB", data, 8)
+            _live_events[ip] = {
+                "actionType": at, "stepIndex": si,
+                "totalSteps": tot, "event": ev,
+                "ts": time.time(),
+            }
+        elif cmd == CMD_PONG:
+            # Handle PONGs from broadcast/direct pings
+            info = _parse_pong(data, ip)
+            if info:
+                matched = False
+                for c in _children:
+                    if c.get("ip") == ip or c.get("hostname") == info.get("hostname"):
+                        c.update({k: v for k, v in info.items() if k != "id"})
+                        matched = True
+                        break
+
 def start_background_tasks():
-    """Call once after import to kick off periodic ping thread."""
+    """Call once after import to kick off periodic ping and UDP listener threads."""
     global _startup_check_done
+    threading.Thread(target=_udp_listener, daemon=True).start()
     if _children:
         threading.Thread(target=_periodic_ping, daemon=True).start()
     else:
@@ -666,6 +732,7 @@ def api_runners_stop():
         if c["status"] == 1:
             _send(c["ip"], pkt_stop)
             _send(c["ip"], pkt_off)
+    _live_events.clear()
     with _lock:
         _settings["runnerRunning"] = False
         _settings["activeRunner"] = -1
@@ -673,6 +740,27 @@ def api_runners_stop():
         _settings["runnerElapsed"] = 0
         _save("settings", _settings)
     return jsonify(ok=True)
+
+@app.get("/api/runners/live")
+def api_runners_live():
+    """Return per-child live action state from pushed ACTION_EVENT packets."""
+    now = time.time()
+    result = []
+    for c in _children:
+        ip = c.get("ip")
+        ev = _live_events.get(ip)
+        if ev and now - ev["ts"] < 30:
+            result.append({
+                "id": c["id"], "ip": ip,
+                "actionType": ev["actionType"],
+                "stepIndex": ev["stepIndex"],
+                "totalSteps": ev["totalSteps"],
+                "event": ev["event"],
+                "age": round(now - ev["ts"], 1),
+            })
+        else:
+            result.append({"id": c["id"], "ip": ip, "actionType": None})
+    return jsonify(result)
 
 @app.get("/api/runners/<int:rid>")
 def api_runner_get(rid):

@@ -307,66 +307,145 @@ function dashRefresh(btn){
   });
 }
 
+var _dashRunner=null,_dashChildren=null;
 function refreshRunnerStatus(){
   ra('GET','/api/settings',null,function(s){
     var el=document.getElementById('dash-runner');if(!el)return;
     if(!s||!s.runnerRunning||s.activeRunner<0){
-      el.innerHTML='<p style="color:#888;font-size:.85em">No runner active.</p>';return;
+      el.innerHTML='<p style="color:#888;font-size:.85em">No runner active.</p>';
+      _dashRunner=null;return;
     }
-    ra('GET','/api/runners/'+s.activeRunner,null,function(r){
-      var el2=document.getElementById('dash-runner');if(!el2)return;
-      if(!r){el2.innerHTML='';return;}
-      var total=0;r.steps.forEach(function(st){total+=st.durationS||0;});
-      var elapsed=s.runnerElapsed||0;
-      var pct=total>0?Math.min(100,Math.round(elapsed*100/total)):0;
-      var h='<div class="card" style="max-width:600px">';
-      h+='<div class="card-title">&#9654; Runner: '+r.name+'</div>';
-      // Time display
-      h+='<div style="font-size:.82em;color:#aaa;margin-bottom:.4em">'+elapsed+'s / '+total+'s';
-      if(total>0&&elapsed>=total)h+=' <span style="color:#4c4">(complete)</span>';
-      h+='</div>';
-      // Progress bar with step markers
-      if(total>0){
-        h+='<div class="prog-bar" style="position:relative;height:12px">';
-        h+='<div class="prog-fill" style="width:'+pct+'%;height:100%"></div>';
-        // Step boundaries
-        var acc=0;
-        r.steps.forEach(function(st,i){
-          acc+=st.durationS||0;
-          if(i<r.steps.length-1){
-            var mx=Math.round(acc*100/total);
-            h+='<div style="position:absolute;top:0;left:'+mx+'%;width:1px;height:100%;background:#555"></div>';
-          }
+    // Cache runner + children on first call or runner change
+    var rid=s.activeRunner;
+    function _gotRunner(r){
+      _dashRunner=r;
+      function _gotChildren(ch){
+        _dashChildren=ch||[];
+        // Now fetch live events (the only per-tick poll)
+        ra('GET','/api/runners/live',null,function(live){
+          _renderLiveDash(el,s,r,live||[]);
         });
-        // Playhead marker
-        h+='<div style="position:absolute;top:-2px;left:'+pct+'%;width:2px;height:16px;background:#fff;border-radius:1px"></div>';
-        h+='</div>';
-        // Step labels below
-        h+='<div style="display:flex;font-size:.7em;color:#666;margin-top:2px">';
-        r.steps.forEach(function(st,i){
-          var w=total>0?Math.round((st.durationS||0)*100/total):0;
-          var aName='';
-          if(st.actionId!=null){for(var a=0;a<_acts.length;a++){if(_acts[a].id===st.actionId){aName=_acts[a].name;break;}}}
-          h+='<div style="width:'+w+'%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 1px">'+(aName||'#'+(i+1))+'</div>';
-        });
-        h+='</div>';
       }
-      // Current step info
-      if(total>0&&elapsed<total){
-        var stepAcc=0,curIdx=0;
-        for(var i=0;i<r.steps.length;i++){
-          stepAcc+=r.steps[i].durationS||0;
-          if(elapsed<stepAcc){curIdx=i;break;}
-        }
-        var curStep=r.steps[curIdx];
-        var aName='Step '+(curIdx+1);
-        if(curStep&&curStep.actionId!=null){for(var a=0;a<_acts.length;a++){if(_acts[a].id===curStep.actionId){aName=_acts[a].name;break;}}}
-        h+='<div style="font-size:.85em;color:#ccc;margin-top:.5em">Current: <b>'+aName+'</b> (step '+(curIdx+1)+'/'+r.steps.length+')</div>';
+      if(_dashChildren)_gotChildren(_dashChildren);
+      else ra('GET','/api/children',null,_gotChildren);
+    }
+    if(_dashRunner&&_dashRunner.id===rid)_gotRunner(_dashRunner);
+    else{ _dashChildren=null; ra('GET','/api/runners/'+rid,null,_gotRunner); }
+  });
+}
+
+function _renderLiveDash(el,settings,runner,liveEvents){
+  var steps=runner.steps||[];
+  var totalS=0;steps.forEach(function(st){totalS+=st.durationS||0;});
+  var elapsed=settings.runnerElapsed||0;
+  var children=_dashChildren||[];
+  var onlineChildren=children.filter(function(c){return c.status===1;});
+
+  // Build action map
+  var actMap={};_acts.forEach(function(a){actMap[a.id]=a;});
+  // Build live event map by child id
+  var liveMap={};liveEvents.forEach(function(e){liveMap[e.id]=e;});
+
+  var h='<div class="card" style="max-width:700px">';
+  h+='<div class="card-title">&#9654; Runner: '+runner.name+'</div>';
+  h+='<div style="font-size:.82em;color:#aaa;margin-bottom:.4em">'+elapsed+'s / '+totalS+'s';
+  if(totalS>0&&elapsed>=totalS)h+=' <span style="color:#4c4">(complete)</span>';
+  h+='</div>';
+
+  // Canvas-based per-child timeline
+  if(totalS>0&&onlineChildren.length>0){
+    h+='<canvas id="dash-tl" style="display:block;max-width:100%"></canvas>';
+  }
+
+  h+='<div style="margin-top:.6em"><button class="btn btn-off" onclick="stopRunners()">Stop</button></div></div>';
+  el.innerHTML=h;
+
+  // Draw canvas timeline
+  var cv=document.getElementById('dash-tl');
+  if(!cv||totalS<=0||onlineChildren.length<=0)return;
+
+  var rowH=28,labelW=120,padT=28,padB=6,padR=10;
+  var chartW=Math.min(560,Math.max(300,el.clientWidth-labelW-padR-30));
+  var chartH=onlineChildren.length*rowH;
+  cv.width=labelW+chartW+padR;
+  cv.height=padT+chartH+padB;
+  var ctx=cv.getContext('2d');
+
+  // Background
+  ctx.fillStyle='#0d0d0d';ctx.fillRect(0,0,cv.width,cv.height);
+
+  // Time axis ticks
+  ctx.fillStyle='#888';ctx.font='9px sans-serif';ctx.textAlign='center';
+  var tickS=totalS<=10?1:totalS<=30?2:totalS<=60?5:totalS<=300?10:30;
+  for(var t=0;t<=totalS;t+=tickS){
+    var tx=labelW+Math.round(t*chartW/totalS);
+    ctx.fillText(t+'s',tx,padT-6);
+    ctx.strokeStyle='#222';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(tx,padT);ctx.lineTo(tx,padT+chartH);ctx.stroke();
+  }
+
+  // Row labels + step blocks per child
+  onlineChildren.forEach(function(c,ci){
+    var y=padT+ci*rowH;
+    if(ci%2===0){ctx.fillStyle='#141414';ctx.fillRect(labelW,y,chartW,rowH);}
+    // Label
+    ctx.fillStyle='#ccc';ctx.font='10px sans-serif';ctx.textAlign='right';
+    var lbl=(c.name&&c.name!==c.hostname)?c.name:c.hostname||('ID '+c.id);
+    if(lbl.length>15)lbl=lbl.slice(0,14)+'\u2026';
+    ctx.fillText(lbl,labelW-6,y+rowH/2+4);
+
+    // Live event for this child
+    var le=liveMap[c.id];
+    var liveStep=(le&&le.actionType!=null)?le.stepIndex:-1;
+
+    // Draw step blocks
+    var tOff=0;
+    steps.forEach(function(st,si){
+      var dur=st.durationS||0;if(dur<=0){tOff+=dur;return;}
+      var act=actMap[st.actionId];
+      if(act&&!_childTargeted(act,c.id)){tOff+=dur;return;}
+      var col=act?rgb2h(act.r||0,act.g||0,act.b||0):'#555';
+      var px=labelW+Math.round(tOff*chartW/totalS);
+      var pw=Math.max(2,Math.round(dur*chartW/totalS));
+      var by=y+3,bh=rowH-6;
+
+      var isActive=(si===liveStep&&le&&le.event===0);
+      ctx.globalAlpha=isActive?0.9:0.25;
+      ctx.fillStyle=col;
+      ctx.fillRect(px,by,pw,bh);
+      ctx.globalAlpha=1;
+
+      if(isActive){
+        ctx.strokeStyle='#fff';ctx.lineWidth=1.5;
+        ctx.strokeRect(px+0.5,by+0.5,pw-1,bh-1);
+      }else{
+        ctx.strokeStyle='#444';ctx.lineWidth=0.5;
+        ctx.strokeRect(px,by,pw,bh);
       }
-      h+='<div style="margin-top:.6em"><button class="btn btn-off" onclick="stopRunners()">Stop</button></div></div>';
-      el2.innerHTML=h;
+
+      // Label if wide enough
+      if(pw>40){
+        ctx.fillStyle=isActive?'#fff':'#888';
+        ctx.font=(isActive?'bold ':'')+' 8px sans-serif';ctx.textAlign='left';
+        ctx.fillText(act?act.name:'?',px+3,by+bh/2+3);
+      }
+      tOff+=dur;
     });
   });
+
+  // Playhead
+  if(elapsed<=totalS){
+    var px=labelW+Math.round(elapsed*chartW/totalS);
+    ctx.strokeStyle='#fff';ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(px,padT-2);ctx.lineTo(px,padT+chartH+2);ctx.stroke();
+    // Triangle marker
+    ctx.fillStyle='#fff';
+    ctx.beginPath();ctx.moveTo(px-4,padT-2);ctx.lineTo(px+4,padT-2);ctx.lineTo(px,padT+4);ctx.fill();
+  }
+
+  // Border
+  ctx.strokeStyle='#333';ctx.lineWidth=1;
+  ctx.strokeRect(labelW,padT,chartW,chartH);
 }
 
 function refreshAllChildren(cb){
@@ -1104,6 +1183,7 @@ function doStart(id){
 }
 
 function stopRunners(){
+  _dashRunner=null;_dashChildren=null;
   ra('POST','/api/runners/stop',null,function(r){
     if(r&&r.ok)document.getElementById('hs').textContent='Runners stopped';
   });

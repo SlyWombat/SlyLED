@@ -93,6 +93,10 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
     childRunnerArmed  = true;
     childRunnerActive = false;
     childRunnerLoop   = (plen >= 5) ? (payload[4] != 0) : true;
+    // Store parent IP for ACTION_EVENT replies
+    uint32_t sip = (uint32_t)sender[0] | ((uint32_t)sender[1] << 8)
+                 | ((uint32_t)sender[2] << 16) | ((uint32_t)sender[3] << 24);
+    childParentIP = sip;
   } else if (cmd == CMD_RUNNER_STOP) {
     childRunnerActive = false;
     childRunnerArmed  = false;
@@ -108,6 +112,14 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
 // ── pollUDP ───────────────────────────────────────────────────────────────────
 
 void pollUDP() {
+#ifdef BOARD_CHILD
+  // Drain pending ACTION_EVENT from LED task (must send from main thread)
+  if (childEvtPending) {
+    childEvtPending = false;
+    sendActionEvent();
+  }
+#endif
+
   int plen = cmdUDP.parsePacket();
   if (plen <= 0 || plen > (int)sizeof(udpBuf)) return;
 

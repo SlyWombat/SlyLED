@@ -47,6 +47,13 @@ volatile uint8_t  childSyncBlink    = 0;
 volatile bool     childRunnerLoop   = true;
 volatile bool     childBootDone    = false;
 
+volatile uint32_t childParentIP    = 0;
+volatile bool     childEvtPending  = false;
+volatile uint8_t  childEvtType     = 0;
+volatile uint8_t  childEvtStep     = 0;
+volatile uint8_t  childEvtTotal    = 0;
+volatile uint8_t  childEvtEvent    = 0;
+
 // ── EEPROM / NVS helpers ──────────────────────────────────────────────────────
 
 void loadChildConfig() {
@@ -209,6 +216,31 @@ void sendStatusResp(IPAddress dest) {
   memcpy(udpBuf + sizeof(hdr), &resp, sizeof(resp));
   cmdUDP.beginPacket(dest, UDP_PORT);
   cmdUDP.write(udpBuf, sizeof(hdr) + sizeof(resp));
+  cmdUDP.endPacket();
+}
+
+void sendActionEvent() {
+  uint32_t ip = childParentIP;
+  if (ip == 0) return;
+  UdpHeader hdr;
+  hdr.magic   = UDP_MAGIC;
+  hdr.version = UDP_VERSION;
+  hdr.cmd     = CMD_ACTION_EVENT;
+  hdr.epoch   = (uint32_t)currentEpoch();
+
+  ActionEventPayload evt;
+  evt.actionType = childEvtType;
+  evt.stepIndex  = childEvtStep;
+  evt.totalSteps = childEvtTotal;
+  evt.event      = childEvtEvent;
+
+  memcpy(udpBuf,               &hdr, sizeof(hdr));
+  memcpy(udpBuf + sizeof(hdr), &evt, sizeof(evt));
+
+  IPAddress dest((uint8_t)(ip & 0xFF), (uint8_t)((ip >> 8) & 0xFF),
+                 (uint8_t)((ip >> 16) & 0xFF), (uint8_t)((ip >> 24) & 0xFF));
+  cmdUDP.beginPacket(dest, UDP_PORT);
+  cmdUDP.write(udpBuf, sizeof(hdr) + sizeof(evt));
   cmdUDP.endPacket();
 }
 

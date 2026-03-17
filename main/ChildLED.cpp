@@ -431,6 +431,12 @@ void ledTask(void* parameter) {
         if (elapsed < acc) { curStep = i; done = false; break; }
       }
       if (done) {
+        // Signal runner ended event
+        childEvtType  = childRunner[childStepCount - 1].actionType;
+        childEvtStep  = childStepCount - 1;
+        childEvtTotal = childStepCount;
+        childEvtEvent = 1;  // ended
+        childEvtPending = true;
         if (childRunnerLoop) {
           // Loop: reset start time so runner repeats from step 0
           childRunnerStart += acc;
@@ -446,6 +452,12 @@ void ledTask(void* parameter) {
       if (curStep != prevRunStep) {
         prevRunStep = curStep;
         stepStartMs = millis();
+        // Signal step-started event
+        childEvtType  = childRunner[curStep].actionType;
+        childEvtStep  = curStep;
+        childEvtTotal = childStepCount;
+        childEvtEvent = 0;  // started
+        childEvtPending = true;
       }
       {
         unsigned long elapsed = millis() - stepStartMs;
@@ -560,6 +572,11 @@ void updateLED() {
       if (elapsed < acc) { curStep = i; done = false; break; }
     }
     if (done) {
+      childEvtType  = childRunner[childStepCount - 1].actionType;
+      childEvtStep  = childStepCount - 1;
+      childEvtTotal = childStepCount;
+      childEvtEvent = 1;
+      childEvtPending = true;
       if (childRunnerLoop) {
         childRunnerStart += acc;
         prevRunStep = 0xFF;
@@ -572,6 +589,11 @@ void updateLED() {
     if (curStep != prevRunStep) {
       prevRunStep = curStep;
       stepStartMs = millis();
+      childEvtType  = childRunner[curStep].actionType;
+      childEvtStep  = curStep;
+      childEvtTotal = childStepCount;
+      childEvtEvent = 0;
+      childEvtPending = true;
     }
     unsigned long now = millis();
     uint8_t frameDly = actionDelay(childRunner[curStep].actionType);
