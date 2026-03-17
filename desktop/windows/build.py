@@ -28,6 +28,8 @@ args = [
     "--collect-submodules=flask",
     "--collect-submodules=werkzeug",
     "--collect-submodules=esptool",
+    "--hidden-import=parent_server",
+    "--hidden-import=firmware_manager",
     "--paths", str(SHARED),
 ]
 
