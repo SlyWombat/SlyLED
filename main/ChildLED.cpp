@@ -243,6 +243,69 @@ static void applyFold(uint8_t st, uint8_t en) {
   // If odd count, the middle LED (fold point) keeps its value
 }
 
+// ── Boot animation ──────────────────────────────────────────────────────
+
+void bootAnimation() {
+#ifdef BOARD_FASTLED
+  // Ensure LEDs are off first, then wait 3 seconds
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  showSafe();
+  delay(3000);
+
+  uint8_t sc = childCfg.stringCount;
+  if (sc > 0) {
+    // Rainbow sweep across all configured strings
+    // Compute total LED count across all strings
+    uint16_t totalLeds = 0;
+    for (uint8_t s = 0; s < sc; s++) {
+      uint16_t lc = childCfg.strings[s].ledCount;
+      if (lc > 0 && totalLeds + lc <= NUM_LEDS)
+        totalLeds += lc;
+    }
+    if (totalLeds == 0) totalLeds = NUM_LEDS;
+    // Progressive rainbow fill: light each LED one at a time
+    uint16_t delayPer = 1500 / totalLeds;  // ~1.5s total sweep
+    if (delayPer < 2) delayPer = 2;
+    for (uint16_t i = 0; i < totalLeds; i++) {
+      uint8_t hue = (uint8_t)((uint32_t)i * 255 / totalLeds);
+      CHSV hsv(hue, 255, 255);
+      CRGB rgb;
+      hsv2rgb_rainbow(hsv, rgb);
+      leds[i] = rgb;
+      showSafe();
+      delay(delayPer);
+    }
+    // Hold for 500ms then fade to black
+    delay(500);
+  } else {
+    // No strings configured: flash red across 150 LEDs
+    uint16_t count = NUM_LEDS < 150 ? NUM_LEDS : 150;
+    fill_solid(leds, count, CRGB(255, 0, 0));
+    showSafe();
+    delay(800);
+  }
+  // All off
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  showSafe();
+
+#elif defined(BOARD_GIGA_CHILD)
+  // Giga child: 3-second wait then rainbow cycle on single onboard LED
+  clearAndShow();
+  delay(3000);
+  for (uint16_t h = 0; h < 256; h += 4) {
+    CHSV hsv((uint8_t)h, 255, 255);
+    CRGB rgb;
+    hsv2rgb_rainbow(hsv, rgb);
+    leds[0] = rgb;
+    showSafe();
+    delay(6);  // ~384ms total
+  }
+  delay(200);
+  clearAndShow();
+#endif
+  childBootDone = true;
+}
+
 // ── applyAction — render one action type across a string range ────────────
 
 bool applyAction(uint8_t at, uint8_t r, uint8_t g, uint8_t b,
@@ -321,6 +384,9 @@ static uint8_t actionDelay(uint8_t at) {
 void ledTask(void* parameter) {
   (void)parameter;
 
+  // Wait for boot animation to complete before rendering
+  while (!childBootDone) delay(50);
+
   uint8_t       prevActSeq  = 0;
   unsigned long actStart    = 0;
   bool          offRendered = false;
@@ -328,7 +394,6 @@ void ledTask(void* parameter) {
   unsigned long stepStartMs = 0;
 
   while (true) {
-
 
     // ── 0. Sync blink confirmation ────────────────────────────────────────
     if (childSyncBlink > 0) {
@@ -433,6 +498,8 @@ void ledTask(void* parameter) {
 #ifdef BOARD_D1MINI
 
 void updateLED() {
+  if (!childBootDone) return;   // boot animation still running
+
   static uint8_t       prevActSeq   = 0;
   static unsigned long actStart     = 0;
   static bool          actRendered  = false;

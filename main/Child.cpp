@@ -45,6 +45,7 @@ volatile bool     childRunnerArmed  = false;
 volatile bool     childRunnerActive = false;
 volatile uint8_t  childSyncBlink    = 0;
 volatile bool     childRunnerLoop   = true;
+volatile bool     childBootDone    = false;
 
 // ── EEPROM / NVS helpers ──────────────────────────────────────────────────────
 

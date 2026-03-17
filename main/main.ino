@@ -75,10 +75,6 @@ void setup() {
 
 #elif defined(BOARD_GIGA_CHILD)
   gigaLedInit();
-  // Blink onboard LED to confirm boot
-  leds[0] = CRGB(255, 0, 0); showSafe(); delay(300);
-  leds[0] = CRGB(0, 255, 0); showSafe(); delay(300);
-  leds[0] = CRGB(0, 0, 255); showSafe(); delay(300);
   clearAndShow();
 
 #elif defined(BOARD_ESP32)
@@ -96,6 +92,10 @@ void setup() {
 #endif
 
   connectWiFi();   // also calls initChildConfig() for BOARD_CHILD
+
+#ifdef BOARD_CHILD
+  bootAnimation();
+#endif
 
 #ifdef BOARD_GIGA
   sendPing(IPAddress(255, 255, 255, 255));
@@ -164,6 +164,7 @@ void loop() {
 
 #elif defined(BOARD_GIGA_CHILD)
   // Giga child: sync blink + action rendering on onboard RGB pixel
+  if (!childBootDone) { delay(10); goto giga_end; }
   {
     // Sync blink confirmation
     if (childSyncBlink > 0) {

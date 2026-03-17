@@ -12,6 +12,11 @@
 
 #ifdef BOARD_CHILD
 
+// Boot animation — call once after WiFi + config loaded.
+// If strings configured: single rainbow sweep across all strings.
+// If no strings: single red flash across 150 LEDs.
+void bootAnimation();
+
 // Render a single action type to a range within leds[].
 bool applyAction(uint8_t at, uint8_t r, uint8_t g, uint8_t b,
                  uint16_t p16a, uint8_t p8a, uint8_t p8b,
