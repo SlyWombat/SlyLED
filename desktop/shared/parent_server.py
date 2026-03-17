@@ -337,20 +337,33 @@ def status():
 CHILD_STALE_S = 120   # mark offline if not seen for 2 minutes
 _startup_check_done = False
 
-def _startup_ping_sweep():
-    """Background thread: ping all children once at startup to refresh status."""
+def _periodic_ping():
+    """Background thread: ping all children periodically to keep status fresh.
+    First sweep at startup (with retry to catch children still booting),
+    then every 30 seconds."""
     global _startup_check_done
-    for c in list(_children):
-        _ping(c, retries=1)
-    with _lock:
-        _save("children", _children)
-    _startup_check_done = True
+    # Startup sweep: try twice with a gap to catch children still in boot animation
+    for attempt in range(2):
+        for c in list(_children):
+            _ping(c, retries=1)
+        with _lock:
+            _save("children", _children)
+        if attempt == 0:
+            _startup_check_done = True
+            time.sleep(5)   # wait for slow-booting children (e.g. 3s boot animation)
+    # Periodic sweep every 30 seconds
+    while True:
+        time.sleep(30)
+        for c in list(_children):
+            _ping(c, retries=1)
+        with _lock:
+            _save("children", _children)
 
 def start_background_tasks():
-    """Call once after import to kick off startup ping sweep."""
+    """Call once after import to kick off periodic ping thread."""
     global _startup_check_done
     if _children:
-        threading.Thread(target=_startup_ping_sweep, daemon=True).start()
+        threading.Thread(target=_periodic_ping, daemon=True).start()
     else:
         _startup_check_done = True
 
