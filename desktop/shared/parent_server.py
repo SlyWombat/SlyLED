@@ -1058,7 +1058,6 @@ if __name__ == "__main__":
         sys.exit(0)
 
     # Start background ping sweep to refresh all children status
-    global _startup_check_done
     if _children:
         threading.Thread(target=_startup_ping_sweep, daemon=True).start()
     else:

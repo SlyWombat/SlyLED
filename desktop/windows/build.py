@@ -23,13 +23,14 @@ args = [
     "--specpath", str(HERE),
     "--icon", str(ICO),
     "--add-data", f"{SPA};spa",
+    # Bundle local modules alongside the exe so they're importable
+    "--add-data", f"{SHARED / 'parent_server.py'};.",
+    "--add-data", f"{SHARED / 'firmware_manager.py'};.",
     "--hidden-import=pystray",
     "--hidden-import=PIL._tkinter_finder",
     "--collect-submodules=flask",
     "--collect-submodules=werkzeug",
     "--collect-submodules=esptool",
-    "--hidden-import=parent_server",
-    "--hidden-import=firmware_manager",
     "--paths", str(SHARED),
 ]
 

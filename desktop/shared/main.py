@@ -14,9 +14,19 @@ import argparse
 import base64
 import io
 import logging
+import os
+import sys
 import threading
 import time
 import webbrowser
+
+# When frozen by PyInstaller, local modules (parent_server, firmware_manager)
+# are bundled as data files into sys._MEIPASS.  Add that to sys.path so
+# they can be imported normally.
+if getattr(sys, "frozen", False):
+    sys.path.insert(0, sys._MEIPASS)
+
+from parent_server import app, VERSION
 
 # ── System-tray (optional — graceful fallback if pystray/Pillow unavailable) ──
 
@@ -201,9 +211,6 @@ def main():
 
     # Suppress Werkzeug request logging (keeps the --windowed exe quiet)
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
-
-    # Import after arg-parse so Werkzeug sees the right environment
-    from parent_server import app, VERSION
 
     # ── Flask thread ──────────────────────────────────────────────────────────
     def _run_flask():
