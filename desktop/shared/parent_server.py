@@ -800,14 +800,9 @@ def api_runner_sync(rid):
     resolved = [_resolve_step(s) for s in steps]
     if any(rs is None for rs in resolved):
         return jsonify(ok=False, err="step references missing action"), 400
-    # Refresh all children status before syncing
-    for c in list(_children):
-        if c.get("status") != 1:
-            _ping(c, retries=1)
+    # Use cached status from background ping thread (avoids UDP port conflicts)
     online = [c for c in _children if c.get("status") == 1]
     if not online:
-        with _lock:
-            _save("children", _children)
         return jsonify(ok=True, sent=0, acked=0, online=0,
                        warn="no performers online" if _children else None)
     child_offsets = r.get("childOffsets", [])
@@ -815,26 +810,15 @@ def api_runner_sync(rid):
     bri = _settings.get("globalBrightness", 255)
     bri_pkt = _hdr(CMD_SET_BRIGHTNESS) + bytes([bri & 0xFF])
     sent = 0
-    acked = 0
     for child in online:
         _send(child["ip"], bri_pkt)
-        child_acks = True   # assume ACKs work until first failure
         for i, step in enumerate(resolved):
             delay_ms = child_offsets[i].get(child["id"], 0) if i < len(child_offsets) else 0
             pkt = _load_step_pkt(i, len(resolved), step, child, delay_ms)
+            _send(child["ip"], pkt)
             sent += 1
-            if child_acks:
-                resp = _send_recv(child["ip"], pkt, timeout=0.5)
-                if resp and len(resp) >= 9 and resp[3] == CMD_LOAD_ACK:
-                    acked += 1
-                else:
-                    child_acks = False   # fallback to fire-and-forget for rest
-            else:
-                _send(child["ip"], pkt)
-                time.sleep(0.05)
-    with _lock:
-        _save("children", _children)
-    return jsonify(ok=True, sent=sent, acked=acked, online=len(online))
+            time.sleep(0.03)   # 30ms gap between packets for reliable delivery
+    return jsonify(ok=True, sent=sent, online=len(online))
 
 @app.post("/api/runners/<int:rid>/start")
 def api_runner_start(rid):

@@ -1081,11 +1081,11 @@ function doCompute(id){
 }
 
 function doSync(id){
-  document.getElementById('hs').textContent='Syncing to performers (refreshing status)...';
+  document.getElementById('hs').textContent='Syncing to performers...';
   ra('POST','/api/runners/'+id+'/sync',null,function(r){
     if(r&&r.ok){
       if(r.warn)document.getElementById('hs').textContent='Sync: '+r.warn;
-      else document.getElementById('hs').textContent='Synced \u2713 ('+r.online+' online, '+r.sent+' sent, '+r.acked+' acked)';
+      else document.getElementById('hs').textContent='Synced \u2713 ('+r.online+' online, '+r.sent+' packets sent)';
     }else document.getElementById('hs').textContent='Sync failed: '+(r&&r.err||'unknown');
     loadRuntime();
   });
