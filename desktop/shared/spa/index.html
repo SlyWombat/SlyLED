@@ -251,10 +251,19 @@ function ra(m,p,b,cb){
   x.send(b?JSON.stringify(b):null);
 }
 
-var dashRunnerTimer=null;
+var dashRunnerTimer=null,_dashFirstLoad=true;
 function loadDash(){
   if(dashRunnerTimer)clearInterval(dashRunnerTimer);
   ra('GET','/api/actions',null,function(a){_acts=a||[];});
+  // On tab switch (not first page load), refresh children to get latest PONG data
+  if(!_dashFirstLoad){
+    ra('POST','/api/children/refresh-all',{},function(){_renderDash();});
+    return;
+  }
+  _dashFirstLoad=false;
+  _renderDash();
+}
+function _renderDash(){
   ra('GET','/api/children',null,function(d){
     var startupDone=!d||!d.length||d[0].startupDone!==false;
     var h='<div style="margin-bottom:.6em;display:flex;align-items:center;gap:.6em">';
