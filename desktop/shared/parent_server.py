@@ -127,10 +127,10 @@ def _local_broadcasts():
     return bcs
 
 def _send_recv(ip, pkt, timeout=1.5, maxb=256):
-    """Send UDP packet and wait for reply.
+    """Send UDP packet and wait for reply from the specified IP only.
     Binds to UDP_PORT (with SO_REUSEADDR) so the child replies to the
     firewall-allowed port 4210.  Falls back to an ephemeral port if 4210
-    is momentarily busy.
+    is momentarily busy.  Discards packets from other sources.
     """
     for bind_port in (UDP_PORT, 0):
         try:
@@ -139,7 +139,16 @@ def _send_recv(ip, pkt, timeout=1.5, maxb=256):
                 s.settimeout(timeout)
                 s.bind(("", bind_port))
                 s.sendto(pkt, (ip, UDP_PORT))
-                return s.recvfrom(maxb)[0]
+                deadline = time.time() + timeout
+                while True:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        return None
+                    s.settimeout(remaining)
+                    data, addr = s.recvfrom(maxb)
+                    if addr[0] == ip:
+                        return data
+                    # else: discard stale packet from different source
         except OSError:
             if bind_port == 0:
                 return None   # ephemeral port also failed
@@ -336,6 +345,14 @@ def _startup_ping_sweep():
     with _lock:
         _save("children", _children)
     _startup_check_done = True
+
+def start_background_tasks():
+    """Call once after import to kick off startup ping sweep."""
+    global _startup_check_done
+    if _children:
+        threading.Thread(target=_startup_ping_sweep, daemon=True).start()
+    else:
+        _startup_check_done = True
 
 @app.get("/api/children")
 def api_children():
@@ -1057,11 +1074,7 @@ if __name__ == "__main__":
         webbrowser.open(f"http://localhost:{args.port}")
         sys.exit(0)
 
-    # Start background ping sweep to refresh all children status
-    if _children:
-        threading.Thread(target=_startup_ping_sweep, daemon=True).start()
-    else:
-        _startup_check_done = True
+    start_background_tasks()
 
     if not args.no_browser:
         def _open():

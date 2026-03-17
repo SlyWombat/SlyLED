@@ -26,7 +26,7 @@ import webbrowser
 if getattr(sys, "frozen", False):
     sys.path.insert(0, sys._MEIPASS)
 
-from parent_server import app, VERSION
+from parent_server import app, VERSION, start_background_tasks
 
 # ── System-tray (optional — graceful fallback if pystray/Pillow unavailable) ──
 
@@ -211,6 +211,8 @@ def main():
 
     # Suppress Werkzeug request logging (keeps the --windowed exe quiet)
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
+
+    start_background_tasks()
 
     # ── Flask thread ──────────────────────────────────────────────────────────
     def _run_flask():
