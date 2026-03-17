@@ -31,7 +31,7 @@ constexpr uint8_t LEDTYPE_APA102  = 2;
   constexpr uint8_t CHILD_MAX_STRINGS = 8;
 #endif
 
-constexpr uint8_t EEPROM_MAGIC    = 0xA7;   // bumped: cableDir → flags (bit0=folded)
+constexpr uint8_t EEPROM_MAGIC    = 0xA8;   // bumped: added dataPin to ChildStringCfg
 constexpr uint8_t MAX_CHILD_STEPS = 16;
 
 // ── Child config structs ──────────────────────────────────────────────────────
@@ -43,9 +43,17 @@ struct ChildStringCfg {
   uint8_t  flags;      // bit 0 = folded (strip goes out and back)
   uint16_t cableMm;    // always 0 — not exposed in config UI
   uint8_t  stripDir;
+  uint8_t  dataPin;    // GPIO pin for LED data (ESP32 only; 0 = default GPIO 2)
 };
 
 constexpr uint8_t STR_FLAG_FOLDED = 0x01;
+
+#ifdef BOARD_ESP32
+  constexpr uint8_t DEFAULT_DATA_PIN = 2;
+  constexpr uint8_t ESP32_SAFE_PINS[] = {2, 4, 5, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27};
+  constexpr uint8_t ESP32_SAFE_PIN_COUNT = sizeof(ESP32_SAFE_PINS) / sizeof(ESP32_SAFE_PINS[0]);
+  void esp32InitLeds();
+#endif
 
 struct ChildSelfConfig {
   char           hostname[HOSTNAME_LEN];

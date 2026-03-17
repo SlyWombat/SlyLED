@@ -51,12 +51,17 @@
 
 void setup() {
   Serial.begin(115200);
-#ifdef BOARD_FASTLED
+#ifdef BOARD_D1MINI
   // Drive data pin low immediately to prevent WS2812B power-on glitch
   // (GPIO2 is pulled high during ESP boot → strip reads garbage → white flash)
   pinMode(DATA_PIN, OUTPUT);
   digitalWrite(DATA_PIN, LOW);
   delay(1);           // 1 ms reset pulse for WS2812B
+#elif defined(BOARD_ESP32)
+  // Default pin low for glitch prevention; real pins configured after config loads
+  pinMode(2, OUTPUT);
+  digitalWrite(2, LOW);
+  delay(1);
 #endif
   delay(500);
   if (Serial) Serial.println("=== BOOT ===");
@@ -77,14 +82,7 @@ void setup() {
   gigaLedInit();
   clearAndShow();
 
-#elif defined(BOARD_ESP32)
-  FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
-  FastLED.setBrightness(LED_BRIGHTNESS);
-  FastLED.clear();
-  FastLED.show();
-  xTaskCreatePinnedToCore(ledTask, "LED", 4096, NULL, 1, NULL, 0);
-
-#else  // D1 Mini
+#elif defined(BOARD_D1MINI)
   FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_LEDS);
   FastLED.setBrightness(LED_BRIGHTNESS);
   FastLED.clear();
@@ -92,6 +90,15 @@ void setup() {
 #endif
 
   connectWiFi();   // also calls initChildConfig() for BOARD_CHILD
+
+#ifdef BOARD_ESP32
+  // Config now loaded from NVS — init FastLED with per-string GPIO pins
+  esp32InitLeds();
+  FastLED.setBrightness(LED_BRIGHTNESS);
+  FastLED.clear();
+  FastLED.show();
+  xTaskCreatePinnedToCore(ledTask, "LED", 4096, NULL, 1, NULL, 0);
+#endif
 
 #ifdef BOARD_CHILD
   bootAnimation();

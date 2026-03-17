@@ -148,6 +148,7 @@ void initChildConfig() {
   childCfg.strings[0].flags    = 0;   // not folded
   childCfg.strings[0].cableMm  = 0;
   childCfg.strings[0].stripDir = DIR_E;
+  childCfg.strings[0].dataPin  = 2;   // default GPIO 2
 
   loadChildConfig();  // always regenerates hostname from MAC
 
@@ -244,6 +245,55 @@ void sendActionEvent() {
   cmdUDP.endPacket();
 }
 
+// ── ESP32 multi-pin FastLED init ──────────────────────────────────────────────
+
+#ifdef BOARD_ESP32
+
+static void addLedsForPin(uint8_t pin, CRGB* data, uint16_t count) {
+  switch (pin) {
+    case  2: FastLED.addLeds<WS2812B,  2, GRB>(data, count); break;
+    case  4: FastLED.addLeds<WS2812B,  4, GRB>(data, count); break;
+    case  5: FastLED.addLeds<WS2812B,  5, GRB>(data, count); break;
+    case 13: FastLED.addLeds<WS2812B, 13, GRB>(data, count); break;
+    case 14: FastLED.addLeds<WS2812B, 14, GRB>(data, count); break;
+    case 15: FastLED.addLeds<WS2812B, 15, GRB>(data, count); break;
+    case 16: FastLED.addLeds<WS2812B, 16, GRB>(data, count); break;
+    case 17: FastLED.addLeds<WS2812B, 17, GRB>(data, count); break;
+    case 18: FastLED.addLeds<WS2812B, 18, GRB>(data, count); break;
+    case 19: FastLED.addLeds<WS2812B, 19, GRB>(data, count); break;
+    case 21: FastLED.addLeds<WS2812B, 21, GRB>(data, count); break;
+    case 22: FastLED.addLeds<WS2812B, 22, GRB>(data, count); break;
+    case 23: FastLED.addLeds<WS2812B, 23, GRB>(data, count); break;
+    case 25: FastLED.addLeds<WS2812B, 25, GRB>(data, count); break;
+    case 26: FastLED.addLeds<WS2812B, 26, GRB>(data, count); break;
+    case 27: FastLED.addLeds<WS2812B, 27, GRB>(data, count); break;
+    default: FastLED.addLeds<WS2812B,  2, GRB>(data, count); break;
+  }
+}
+
+void esp32InitLeds() {
+  uint16_t offset = 0;
+  for (uint8_t s = 0; s < childCfg.stringCount; s++) {
+    uint16_t count = childCfg.strings[s].ledCount;
+    if (offset + count > NUM_LEDS) count = NUM_LEDS - offset;
+    if (count == 0) break;
+    uint8_t pin = childCfg.strings[s].dataPin;
+    if (pin == 0) pin = DEFAULT_DATA_PIN;
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, LOW);
+    addLedsForPin(pin, &leds[offset], count);
+    if (Serial) {
+      Serial.print(F("String ")); Serial.print(s);
+      Serial.print(F(": GPIO ")); Serial.print(pin);
+      Serial.print(F(", LEDs ")); Serial.print(offset);
+      Serial.print(F("..")); Serial.println(offset + count - 1);
+    }
+    offset += count;
+  }
+}
+
+#endif  // BOARD_ESP32
+
 // ── URL-encoded form helpers ──────────────────────────────────────────────────
 
 uint8_t hexVal(char ch) {
@@ -305,6 +355,7 @@ void handleFactoryReset(WiFiClient& c) {
 #endif
   childCfg.strings[0].ledType  = LEDTYPE_WS2812B;
   childCfg.strings[0].stripDir = DIR_E;
+  childCfg.strings[0].dataPin  = 2;
   loadChildConfig();  // regenerates hostname, defaults altName, saves to EEPROM
   sendPong(IPAddress(255, 255, 255, 255));
   c.print(F("HTTP/1.1 303 See Other\r\n"
@@ -427,6 +478,16 @@ void sendChildConfigPage(WiFiClient& c) {
                "<input type='checkbox' name='fd%u' value='1' style='width:auto'%s> Folded</label>",
                (unsigned)j,
                (childCfg.strings[j].flags & STR_FLAG_FOLDED) ? " checked" : "");
+#ifdef BOARD_ESP32
+    sendBuf(c, "<label>Data Pin (GPIO)</label><select name='dp%u'>", (unsigned)j);
+    for (uint8_t p = 0; p < ESP32_SAFE_PIN_COUNT; p++) {
+      sendBuf(c, "<option value='%u'%s>GPIO %u</option>",
+              (unsigned)ESP32_SAFE_PINS[p],
+              childCfg.strings[j].dataPin == ESP32_SAFE_PINS[p] ? " selected" : "",
+              (unsigned)ESP32_SAFE_PINS[p]);
+    }
+    c.print(F("</select>"));
+#endif
     c.print(F("</div>"));
   }
   c.print(F("<button class='btn' type='button' id='sb2' onclick='doSave(this)'>Save Config</button>"
@@ -512,7 +573,7 @@ void sendChildConfigPage(WiFiClient& c) {
 // ── POST /config ──────────────────────────────────────────────────────────────
 
 void handlePostChildConfig(WiFiClient& c, int contentLen) {
-  static char body[320];
+  static char body[400];
   int rlen = (contentLen > 0 && contentLen < (int)sizeof(body) - 1)
              ? contentLen : (int)sizeof(body) - 1;
   c.readBytes(body, rlen);
@@ -554,6 +615,17 @@ void handlePostChildConfig(WiFiClient& c, int contentLen) {
     snprintf(key, sizeof(key), "fd%u", (unsigned)j);
     childCfg.strings[j].flags = urlGetInt(body, key, 0) ? STR_FLAG_FOLDED : 0;
     childCfg.strings[j].cableMm  = 0;
+#ifdef BOARD_ESP32
+    snprintf(key, sizeof(key), "dp%u", (unsigned)j);
+    int dp = urlGetInt(body, key, DEFAULT_DATA_PIN);
+    bool pinOk = false;
+    for (uint8_t p = 0; p < ESP32_SAFE_PIN_COUNT; p++) {
+      if (dp == ESP32_SAFE_PINS[p]) { pinOk = true; break; }
+    }
+    childCfg.strings[j].dataPin = pinOk ? (uint8_t)dp : DEFAULT_DATA_PIN;
+#else
+    childCfg.strings[j].dataPin = 2;
+#endif
   }
 
   saveChildConfig();

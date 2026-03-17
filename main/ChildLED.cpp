@@ -20,12 +20,18 @@
 
 #ifdef BOARD_FASTLED
 static void showSafe() {
-  // Disable interrupts during WS2812B output to prevent WiFi IRQs
-  // from corrupting the 800kHz timing signal.
   FastLED.setBrightness(childBrightness);
+#ifdef BOARD_D1MINI
+  // D1 Mini: bit-banged output needs interrupts disabled to prevent
+  // WiFi IRQs from corrupting the 800kHz WS2812B timing signal.
   noInterrupts();
   FastLED.show();
   interrupts();
+#else
+  // ESP32: RMT peripheral handles timing in hardware — no need to
+  // disable interrupts (doing so triggers WDT with WiFi active).
+  FastLED.show();
+#endif
 }
 
 static inline void clearAndShow() {
