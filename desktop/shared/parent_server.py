@@ -193,6 +193,41 @@ def _ping(child, retries=2):
     child["status"] = 0
     return False
 
+def _discover_all():
+    """Broadcast PING and collect PONGs for ~2 s, keyed by hostname.
+    Includes all responders (even known children) for IP-change detection."""
+    found = {}
+    broadcasts = ["255.255.255.255"] + _local_broadcasts()
+    for bind_port in (UDP_PORT, 0):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.settimeout(0.1)
+                s.bind(("", bind_port))
+                for bc in broadcasts:
+                    try:
+                        s.sendto(_hdr(CMD_PING), (bc, UDP_PORT))
+                    except Exception:
+                        pass
+                deadline = time.time() + 2.0
+                while time.time() < deadline:
+                    try:
+                        data, addr = s.recvfrom(256)
+                        info = _parse_pong(data, addr[0])
+                        if info and info.get("hostname"):
+                            found[info["hostname"]] = info
+                    except socket.timeout:
+                        pass
+            break
+        except OSError:
+            if bind_port == 0:
+                break
+            continue
+        except Exception:
+            break
+    return found
+
 def _discover():
     """Broadcast PING and collect PONGs for ~2 s.
     Sends to 255.255.255.255 and all subnet-directed broadcast addresses.
@@ -291,6 +326,16 @@ def status():
 # ── Children ──────────────────────────────────────────────────────────────────
 
 CHILD_STALE_S = 120   # mark offline if not seen for 2 minutes
+_startup_check_done = False
+
+def _startup_ping_sweep():
+    """Background thread: ping all children once at startup to refresh status."""
+    global _startup_check_done
+    for c in list(_children):
+        _ping(c, retries=1)
+    with _lock:
+        _save("children", _children)
+    _startup_check_done = True
 
 @app.get("/api/children")
 def api_children():
@@ -299,7 +344,7 @@ def api_children():
         if c.get("status") == 1 and c.get("seen", 0) > 0:
             if now - c["seen"] > CHILD_STALE_S:
                 c["status"] = 0
-    return jsonify(_children)
+    return jsonify([dict(c, startupDone=_startup_check_done) for c in _children])
 
 @app.get("/api/children/discover")
 def api_children_discover():
@@ -349,6 +394,28 @@ def api_children_refresh(cid):
     with _lock:
         _save("children", _children)
     return jsonify(ok=True)
+
+@app.post("/api/children/refresh-all")
+def api_children_refresh_all():
+    """Ping all children to update their status. Also tries to find children
+    that may have changed IP by doing a broadcast discovery."""
+    # First try direct ping of known IPs
+    for c in list(_children):
+        _ping(c, retries=1)
+    # For any offline children, try to match by hostname from a broadcast discover
+    offline = [c for c in _children if c.get("status") != 1]
+    if offline:
+        found = _discover_all()   # discover including known IPs
+        for c in offline:
+            match = found.get(c.get("hostname"))
+            if match and match["ip"] != c["ip"]:
+                # Child moved to a new IP
+                c["ip"] = match["ip"]
+                _ping(c, retries=1)
+    with _lock:
+        _save("children", _children)
+    online = sum(1 for c in _children if c.get("status") == 1)
+    return jsonify(ok=True, total=len(_children), online=online)
 
 @app.get("/api/children/<int:cid>/status")
 def api_child_status(cid):
@@ -668,21 +735,58 @@ def _resolve_step(step):
 @app.post("/api/runners/<int:rid>/sync")
 def api_runner_sync(rid):
     r = next((x for x in _runners if x["id"] == rid), None)
-    if not r or not r.get("computed"):
-        return jsonify(ok=False, err="not computed"), 400
+    if not r:
+        return jsonify(ok=False, err="not found"), 404
+    # Auto-compute if not already computed
+    if not r.get("computed"):
+        pos_map = {p["id"]: p for p in _layout.get("children", [])}
+        child_offsets = []
+        for step in r.get("steps", []):
+            offsets = {}
+            act = next((a for a in _actions if a["id"] == step.get("actionId")), None)
+            if act and act.get("scope") == "canvas":
+                dur_ms = step.get("durationS", 5) * 1000
+                direction = act.get("direction", 0)
+                cw = _layout.get("canvasW", 10000)
+                ch = _layout.get("canvasH", 5000)
+                for c in _children:
+                    pos = pos_map.get(c["id"], {})
+                    cx = pos.get("x", 0) / cw if cw else 0
+                    cy = pos.get("y", 0) / ch if ch else 0
+                    if direction == 0:   norm = cx
+                    elif direction == 1: norm = cy
+                    elif direction == 2: norm = 1.0 - cx
+                    else:                norm = 1.0 - cy
+                    norm = max(0.0, min(1.0, norm))
+                    offsets[c["id"]] = int(norm * dur_ms * 0.8)
+            child_offsets.append(offsets)
+        with _lock:
+            r["computed"] = True
+            r["childOffsets"] = child_offsets
+            _save("runners", _runners)
     steps = r.get("steps", [])
+    if not steps:
+        return jsonify(ok=False, err="no steps"), 400
     resolved = [_resolve_step(s) for s in steps]
     if any(rs is None for rs in resolved):
         return jsonify(ok=False, err="step references missing action"), 400
+    # Refresh all children status before syncing
+    for c in list(_children):
+        if c.get("status") != 1:
+            _ping(c, retries=1)
+    online = [c for c in _children if c.get("status") == 1]
+    if not online:
+        with _lock:
+            _save("children", _children)
+        return jsonify(ok=True, sent=0, acked=0, online=0,
+                       warn="no performers online" if _children else None)
     child_offsets = r.get("childOffsets", [])
     # Send global brightness to all online children before steps
     bri = _settings.get("globalBrightness", 255)
     bri_pkt = _hdr(CMD_SET_BRIGHTNESS) + bytes([bri & 0xFF])
     sent = 0
     acked = 0
-    for child in _children:
-        if child["status"] != 1:
-            continue
+    for child in online:
         _send(child["ip"], bri_pkt)
         child_acks = True   # assume ACKs work until first failure
         for i, step in enumerate(resolved):
@@ -698,7 +802,9 @@ def api_runner_sync(rid):
             else:
                 _send(child["ip"], pkt)
                 time.sleep(0.05)
-    return jsonify(ok=True, sent=sent, acked=acked)
+    with _lock:
+        _save("children", _children)
+    return jsonify(ok=True, sent=sent, acked=acked, online=len(online))
 
 @app.post("/api/runners/<int:rid>/start")
 def api_runner_start(rid):
@@ -709,9 +815,9 @@ def api_runner_start(rid):
     # CMD_RUNNER_GO: 4-byte startEpoch + 1-byte loop flag as PAYLOAD
     loop_flag = 1 if _settings.get("runnerLoop", True) else 0
     pkt = _hdr(CMD_RUNNER_GO) + struct.pack("<IB", go_epoch, loop_flag)
-    for c in _children:
-        if c["status"] == 1:
-            _send(c["ip"], pkt)
+    online = [c for c in _children if c["status"] == 1]
+    for c in online:
+        _send(c["ip"], pkt)
     with _lock:
         _settings["runnerRunning"] = True
         _settings["activeRunner"]  = rid
@@ -950,6 +1056,13 @@ if __name__ == "__main__":
         print(f"Opening browser to existing instance...")
         webbrowser.open(f"http://localhost:{args.port}")
         sys.exit(0)
+
+    # Start background ping sweep to refresh all children status
+    global _startup_check_done
+    if _children:
+        threading.Thread(target=_startup_ping_sweep, daemon=True).start()
+    else:
+        _startup_check_done = True
 
     if not args.no_browser:
         def _open():

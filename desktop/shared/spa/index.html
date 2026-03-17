@@ -256,10 +256,17 @@ function loadDash(){
   if(dashRunnerTimer)clearInterval(dashRunnerTimer);
   ra('GET','/api/actions',null,function(a){_acts=a||[];});
   ra('GET','/api/children',null,function(d){
-    var h='<table class="tbl"><tr><th>Hostname</th><th>Name</th><th>IP</th><th>Status</th><th>FW</th><th>Strings</th><th>Last Seen</th></tr>';
+    var startupDone=!d||!d.length||d[0].startupDone!==false;
+    var h='<div style="margin-bottom:.6em;display:flex;align-items:center;gap:.6em">';
+    h+='<button class="btn" id="dash-refresh" onclick="dashRefresh(this)" style="background:#446;color:#fff;padding:.3em .8em">&#x21bb; Refresh All</button>';
+    if(!startupDone)h+='<span id="dash-startup" style="color:#fa6;font-size:.82em">&#x23f3; Checking performers...</span>';
+    h+='</div>';
+    h+='<table class="tbl"><tr><th>Hostname</th><th>Name</th><th>IP</th><th>Status</th><th>FW</th><th>Strings</th><th>Last Seen</th></tr>';
     if(d&&d.length){
       d.forEach(function(c){
-        var st=c.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
+        var st;
+        if(!startupDone&&c.status!==1)st='<span class="badge" style="background:#333;color:#888">Checking...</span>';
+        else st=c.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
         var ts=c.seen>0?new Date(c.seen*1000).toLocaleString():'-';
         h+='<tr><td>'+c.hostname+'</td><td>'+(c.name||'-')+'</td><td>'+c.ip+'</td><td>'+st+'</td><td>'+(c.fwVersion||'-')+'</td><td>'+c.sc+'</td><td>'+ts+'</td></tr>';
       });
@@ -268,9 +275,34 @@ function loadDash(){
     }
     h+='</table><div id="dash-runner" style="margin-top:1em"></div>';
     document.getElementById('t-dash').innerHTML=h;
-    document.getElementById('hs').textContent=d&&d.length?d.length+' performer'+(d.length>1?'s':'')+' registered':'No performers';
+    var onCnt=d?d.filter(function(c){return c.status===1;}).length:0;
+    document.getElementById('hs').textContent=d&&d.length?onCnt+'/'+d.length+' performer'+(d.length>1?'s':'')+' online':'No performers';
     refreshRunnerStatus();
     dashRunnerTimer=setInterval(refreshRunnerStatus,1000);
+    // If startup not done, poll until it is
+    if(!startupDone)_pollStartup();
+  });
+}
+
+function _pollStartup(){
+  setTimeout(function(){
+    ra('GET','/api/children',null,function(d){
+      if(!d||!d.length)return;
+      if(d[0].startupDone===false){_pollStartup();return;}
+      // Startup done — reload dashboard
+      loadDash();
+    });
+  },2000);
+}
+
+function dashRefresh(btn){
+  if(btn){btn.disabled=true;btn.textContent='Refreshing...';}
+  ra('POST','/api/children/refresh-all',{},function(r){
+    if(btn){btn.disabled=false;btn.innerHTML='&#x21bb; Refresh All';}
+    if(r&&r.ok){
+      document.getElementById('hs').textContent=r.online+'/'+r.total+' performers online';
+      loadDash();
+    }
   });
 }
 
@@ -1040,10 +1072,13 @@ function doCompute(id){
 }
 
 function doSync(id){
-  document.getElementById('hs').textContent='Syncing to performers...';
+  document.getElementById('hs').textContent='Syncing to performers (refreshing status)...';
   ra('POST','/api/runners/'+id+'/sync',null,function(r){
-    if(r&&r.ok)document.getElementById('hs').textContent='Synced \u2713';
-    else document.getElementById('hs').textContent='Sync failed: '+(r&&r.err||'unknown');
+    if(r&&r.ok){
+      if(r.warn)document.getElementById('hs').textContent='Sync: '+r.warn;
+      else document.getElementById('hs').textContent='Synced \u2713 ('+r.online+' online, '+r.sent+' sent, '+r.acked+' acked)';
+    }else document.getElementById('hs').textContent='Sync failed: '+(r&&r.err||'unknown');
+    loadRuntime();
   });
 }
 
