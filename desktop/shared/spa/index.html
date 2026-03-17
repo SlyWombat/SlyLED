@@ -548,20 +548,20 @@ function layDS(e,id){_layDragId=id;e.dataTransfer.setData('text/plain',String(id
 function cvDrop(e){
   e.preventDefault();
   if(_layDragId===null)return;
-  var cv=document.getElementById('lcv'),rect=cv.getBoundingClientRect();
+  var cv=document.getElementById('lcv');
+  var m=_cvMouse(e,cv);
   var W=cv.width,H=cv.height;
-  var px=e.clientX-rect.left,py=e.clientY-rect.top;
-  var physX=Math.max(0,Math.min(phW,Math.round(px*phW/W)));
-  var physY=Math.max(0,Math.min(phH,Math.round((H-py)*phH/H)));
+  var physX=Math.max(0,Math.min(phW,Math.round(m.x*phW/W)));
+  var physY=Math.max(0,Math.min(phH,Math.round((H-m.y)*phH/H)));
   var ch=null;(ld.children||[]).forEach(function(c){if(c.id===_layDragId)ch=c;});
   if(ch){ch.x=physX;ch.y=physY;ch._placed=true;drawLayout();renderSidebar();}
   _layDragId=null;
 }
 
 function cvDbl(e){
-  var cv=document.getElementById('lcv'),rect=cv.getBoundingClientRect();
-  var mx=e.clientX-rect.left,my=e.clientY-rect.top;
-  var hit=_hitNode(mx,my,cv.width,cv.height);
+  var cv=document.getElementById('lcv');
+  var m=_cvMouse(e,cv);
+  var hit=_hitNode(m.x,m.y,cv.width,cv.height);
   if(hit>=0){showNodeEdit(ld.children[hit]);return;
   }
 }
@@ -689,30 +689,36 @@ function _hitNode(mx,my,W,H){
   return best;
 }
 
+function _cvMouse(e,cv){
+  // Convert CSS pixel coords to canvas pixel coords (handles CSS scaling from max-width:100%)
+  var r=cv.getBoundingClientRect();
+  var sx=cv.width/r.width,sy=cv.height/r.height;
+  return{x:(e.clientX-r.left)*sx, y:(e.clientY-r.top)*sy};
+}
+
 function cvDown(e){
   if(e.button!==0)return;
-  var cv=document.getElementById('lcv'),r=cv.getBoundingClientRect();
-  var mx=e.clientX-r.left,my=e.clientY-r.top;
-  drag=_hitNode(mx,my,cv.width,cv.height);
+  var cv=document.getElementById('lcv');
+  var m=_cvMouse(e,cv);
+  drag=_hitNode(m.x,m.y,cv.width,cv.height);
   if(drag>=0){
     var np=_nodePos(ld.children[drag],cv.width,cv.height);
-    dox=mx-np.cx;doy=my-np.cy;
+    dox=m.x-np.cx;doy=m.y-np.cy;
     cv.style.cursor='grabbing';
   }
 }
 
 function cvMove(e){
-  var cv=document.getElementById('lcv'),r=cv.getBoundingClientRect();
-  var mx=e.clientX-r.left,my=e.clientY-r.top;
+  var cv=document.getElementById('lcv');
+  var m=_cvMouse(e,cv);
   if(drag===null||drag<0){
-    // Hover: change cursor when over a node
-    var hit=_hitNode(mx,my,cv.width,cv.height);
+    var hit=_hitNode(m.x,m.y,cv.width,cv.height);
     cv.style.cursor=hit>=0?'pointer':'grab';
     return;
   }
   var W=cv.width,H=cv.height;
-  var px=Math.max(0,Math.min(W,mx-dox));
-  var py=Math.max(0,Math.min(H,my-doy));
+  var px=Math.max(0,Math.min(W,m.x-dox));
+  var py=Math.max(0,Math.min(H,m.y-doy));
   ld.children[drag].x=Math.round(px*phW/W);
   ld.children[drag].y=Math.round((H-py)*phH/H);
   drawLayout();
