@@ -474,7 +474,7 @@ function _renderSetup(){
       +'<input id="aip" placeholder="Manual IP (x.x.x.x)" style="width:150px;margin-left:.5em">'
       +'<button class="btn btn-on" onclick="addChild()" style="margin-left:.3em">Add</button>'
       +'<button class="btn btn-nav" onclick="setupRefreshAll(this)" style="margin-left:.5em">Refresh All</button>'
-      +'<a class="btn btn-nav" href="/api/children/export" style="margin-left:.5em">Export JSON</a>'
+      +'<button class="btn btn-nav" onclick="exportChildren()" style="margin-left:.5em">Export JSON</button>'
       +'<label class="btn btn-nav" style="cursor:pointer;margin-left:.5em">Import JSON'
       +'<input type="file" accept=".json" style="display:none" onchange="importChildren(this)"></label>'
       +'</div>'
@@ -538,6 +538,18 @@ function removeChild(id){
   };
   x.onerror=function(){document.getElementById('hs').textContent='Remove failed: network error';loadSetup();};
   x.send();
+}
+
+function exportChildren(){
+  ra('GET','/api/children/export',null,function(d){
+    if(!d)return;
+    var blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='slyled-performers.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
 }
 
 function refreshChild(id){
