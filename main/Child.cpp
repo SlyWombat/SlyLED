@@ -251,7 +251,9 @@ void sendActionEvent() {
 
 static void addLedsForPin(uint8_t pin, CRGB* data, uint16_t count) {
   switch (pin) {
+    case  1: FastLED.addLeds<WS2812B,  1, GRB>(data, count); break;
     case  2: FastLED.addLeds<WS2812B,  2, GRB>(data, count); break;
+    case  3: FastLED.addLeds<WS2812B,  3, GRB>(data, count); break;
     case  4: FastLED.addLeds<WS2812B,  4, GRB>(data, count); break;
     case  5: FastLED.addLeds<WS2812B,  5, GRB>(data, count); break;
     case 13: FastLED.addLeds<WS2812B, 13, GRB>(data, count); break;
@@ -550,16 +552,30 @@ void sendChildConfigPage(WiFiClient& c) {
             "document.getElementById('act').textContent=n[d.action]||'?';"
             "}catch(e){}};"
             "x.send();}"));
-  c.print(F("var _curTab=0;"
-            "function doSave(btn){"
+  // Store initial pin values for change detection
+  c.print(F("var _curTab=0;var _oldPins={};"));
+  for (uint8_t j = 0; j < childCfg.stringCount; j++)
+    sendBuf(c, "_oldPins[%u]=%u;", (unsigned)j, (unsigned)childCfg.strings[j].dataPin);
+  c.print(F("function doSave(btn){"
             "var orig=btn.textContent;btn.textContent='Saving...';btn.disabled=true;"
             "btn.style.background='#555';"
             "var fd=new FormData(document.getElementById('cf'));"
-            "var x=new XMLHttpRequest();"
+            "var pinChanged=false;"));
+#ifdef BOARD_ESP32
+  c.print(F("for(var k in _oldPins){"
+            "var sel=document.getElementById('dp'+k);"
+            "if(sel&&parseInt(sel.value)!==_oldPins[k]){pinChanged=true;break;}}"));
+#endif
+  c.print(F("var x=new XMLHttpRequest();"
             "x.open('POST','/config',true);"
             "x.onload=function(){"
+            "if(pinChanged){"
+            "btn.textContent='Rebooting...';btn.style.background='#c60';"
+            "setTimeout(function(){var r=new XMLHttpRequest();r.open('POST','/reboot',true);"
+            "r.send();setTimeout(function(){location.reload();},5000);},800);"
+            "}else{"
             "btn.textContent='Saved!';btn.style.background='#2a2';"
-            "setTimeout(function(){btn.textContent=orig;btn.style.background='';btn.disabled=false;},1200);};"
+            "setTimeout(function(){btn.textContent=orig;btn.style.background='';btn.disabled=false;},1200);}};"
             "x.onerror=function(){btn.textContent='Error';btn.style.background='#a22';};"
             "x.send(new URLSearchParams(fd));}"));
   c.print(F("function doTest(){"

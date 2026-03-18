@@ -485,6 +485,7 @@ function _renderSetup(){
         h+='<tr><td>'+c.hostname+'</td><td>'+(c.name||'-')+'</td><td>'+c.ip+'</td><td>'+(c.status===1?'Online':'Offline')+'</td><td>'+c.sc+'</td><td>'
           +'<button class="btn" onclick="showDetails('+c.id+')" style="background:#446;color:#fff">Details</button>'
           +' <button class="btn btn-on" onclick="refreshChild('+c.id+')">Refresh</button>'
+          +' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff">Reboot</button>'
           +' <button class="btn btn-off" onclick="removeChild('+c.id+')">Remove</button></td></tr>';
       });
     }else{
@@ -539,6 +540,16 @@ function removeChild(id){
 
 function refreshChild(id){
   ra('POST','/api/children/'+id+'/refresh',{},function(){setTimeout(_renderSetup,700);});
+}
+
+function rebootChild(id){
+  if(!confirm('Reboot this performer? It will be offline for a few seconds.'))return;
+  document.getElementById('hs').textContent='Rebooting performer...';
+  ra('POST','/api/children/'+id+'/reboot',{},function(r){
+    if(r&&r.ok)document.getElementById('hs').textContent='Reboot sent. Waiting for reconnect...';
+    else document.getElementById('hs').textContent='Reboot failed: '+(r&&r.err||'unreachable');
+    setTimeout(_renderSetup,8000);
+  });
 }
 
 function setupRefreshAll(btn){

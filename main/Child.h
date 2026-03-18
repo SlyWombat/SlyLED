@@ -50,7 +50,7 @@ constexpr uint8_t STR_FLAG_FOLDED = 0x01;
 
 #ifdef BOARD_ESP32
   constexpr uint8_t DEFAULT_DATA_PIN = 2;
-  constexpr uint8_t ESP32_SAFE_PINS[] = {2, 4, 5, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27};
+  constexpr uint8_t ESP32_SAFE_PINS[] = {1, 2, 3, 4, 5, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27};
   constexpr uint8_t ESP32_SAFE_PIN_COUNT = sizeof(ESP32_SAFE_PINS) / sizeof(ESP32_SAFE_PINS[0]);
   void esp32InitLeds();
 #endif

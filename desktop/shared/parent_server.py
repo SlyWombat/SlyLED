@@ -524,6 +524,25 @@ def api_children_refresh(cid):
         _save("children", _children)
     return jsonify(ok=True)
 
+@app.post("/api/children/<int:cid>/reboot")
+def api_children_reboot(cid):
+    """Send HTTP POST /reboot to a child, causing it to restart."""
+    child = next((c for c in _children if c["id"] == cid), None)
+    if not child:
+        abort(404)
+    ip = child["ip"]
+    log.info("REBOOT: sending to %s (%s)", ip, child.get("hostname"))
+    try:
+        import urllib.request
+        req = urllib.request.Request(f"http://{ip}/reboot", method="POST", data=b"")
+        urllib.request.urlopen(req, timeout=3)
+    except Exception:
+        pass  # child reboots immediately, response may not arrive
+    child["status"] = 0
+    with _lock:
+        _save("children", _children)
+    return jsonify(ok=True)
+
 @app.post("/api/children/refresh-all")
 def api_children_refresh_all():
     """Ping all children to update their status. Also tries to find children

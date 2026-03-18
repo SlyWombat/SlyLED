@@ -243,6 +243,16 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
 #endif  // BOARD_GIGA
 
 #ifdef BOARD_CHILD
+  } else if (isPost && strstr(req, " /reboot ")) {
+    sendJsonOk(client);
+    client.flush();
+    delay(200);
+#ifdef BOARD_GIGA_CHILD
+    NVIC_SystemReset();
+#else
+    ESP.restart();
+#endif
+
 #ifdef BOARD_ESP32
   } else if (strstr(req, " /test/pin")) {
     // Pin test: /test/pin?p=16 — flashes a single pixel red on the given GPIO
