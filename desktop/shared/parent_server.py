@@ -120,6 +120,9 @@ MAX_RUNNERS = 4
 # Live action events pushed by children (ip → {actionType, stepIndex, totalSteps, event, ts})
 _live_events = {}
 
+# Recent PONGs seen by UDP listener (ip → parsed pong info) — used by discover
+_recent_pongs = {}
+
 # Apply logging from saved settings on startup
 _apply_logging(_settings.get("logging", False))
 
@@ -234,81 +237,37 @@ def _ping(child, retries=2):
     child["status"] = 0
     return False
 
-def _discover_all():
-    """Broadcast PING and collect PONGs for ~2 s, keyed by hostname.
-    Includes all responders (even known children) for IP-change detection."""
-    found = {}
-    broadcasts = ["255.255.255.255"] + _local_broadcasts()
-    for bind_port in (UDP_PORT, 0):
+def _broadcast_ping_all():
+    """Send broadcast PINGs + direct pings to all known children.
+    The UDP listener daemon handles incoming PONGs → _recent_pongs."""
+    pkt = _hdr(CMD_PING)
+    for c in list(_children):
+        _send(c["ip"], pkt)
+    for bc in ["255.255.255.255"] + _local_broadcasts():
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.settimeout(0.1)
-                s.bind(("", bind_port))
-                for bc in broadcasts:
-                    try:
-                        s.sendto(_hdr(CMD_PING), (bc, UDP_PORT))
-                    except Exception:
-                        pass
-                deadline = time.time() + 2.0
-                while time.time() < deadline:
-                    try:
-                        data, addr = s.recvfrom(256)
-                        info = _parse_pong(data, addr[0])
-                        if info and info.get("hostname"):
-                            found[info["hostname"]] = info
-                    except socket.timeout:
-                        pass
-            break
-        except OSError:
-            if bind_port == 0:
-                break
-            continue
+                s.sendto(pkt, (bc, UDP_PORT))
         except Exception:
-            break
-    return found
+            pass
+
+def _discover_all():
+    """Broadcast PING, wait for listener to collect PONGs, return all by hostname."""
+    _recent_pongs.clear()
+    _broadcast_ping_all()
+    time.sleep(2.0)
+    return {info.get("hostname"): info for ip, info in _recent_pongs.items()
+            if info.get("hostname")}
 
 def _discover():
-    """Broadcast PING and collect PONGs for ~2 s.
-    Sends to 255.255.255.255 and all subnet-directed broadcast addresses.
-    Binds to UDP_PORT so replies arrive on the firewall-allowed port.
-    Excludes IPs already registered as children.
-    """
-    found = {}
+    """Broadcast PING, wait for listener to collect PONGs, return unknown performers."""
     known_ips = {c["ip"] for c in _children}
-    broadcasts = ["255.255.255.255"] + _local_broadcasts()
-    for bind_port in (UDP_PORT, 0):
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.settimeout(0.1)
-                s.bind(("", bind_port))
-                for bc in broadcasts:
-                    try:
-                        s.sendto(_hdr(CMD_PING), (bc, UDP_PORT))
-                    except Exception:
-                        pass
-                deadline = time.time() + 2.0
-                while time.time() < deadline:
-                    try:
-                        data, addr = s.recvfrom(256)
-                        src_ip = addr[0]
-                        if src_ip not in found and src_ip not in known_ips:
-                            info = _parse_pong(data, src_ip)
-                            if info:
-                                found[src_ip] = info
-                    except socket.timeout:
-                        pass
-            break   # socket opened successfully
-        except OSError:
-            if bind_port == 0:
-                break
-            continue   # port 4210 busy — retry with ephemeral
-        except Exception:
-            break
-    return list(found.values())
+    known_hosts = {c.get("hostname") for c in _children}
+    _recent_pongs.clear()
+    _broadcast_ping_all()
+    time.sleep(2.0)
+    return [info for ip, info in _recent_pongs.items()
+            if ip not in known_ips and info.get("hostname") not in known_hosts]
 
 def _child_led_ranges(child):
     """Build ledStart[8] / ledEnd[8] arrays from child's string config.
@@ -374,24 +333,11 @@ def _periodic_ping():
     daemon picks up PONGs and updates child records — no per-child
     send_recv needed, so there are no port conflicts."""
     global _startup_check_done
-    def _broadcast_ping():
-        pkt = _hdr(CMD_PING)
-        # Also direct-ping each known child for reliability
-        for c in list(_children):
-            _send(c["ip"], pkt)
-        # Broadcast for any new/moved children
-        for bc in ["255.255.255.255"] + _local_broadcasts():
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                    s.sendto(pkt, (bc, UDP_PORT))
-            except Exception:
-                pass
     # Startup sweep: ping twice with a gap for slow booters
-    _broadcast_ping()
+    _broadcast_ping_all()
     _startup_check_done = True
     time.sleep(5)
-    _broadcast_ping()
+    _broadcast_ping_all()
     with _lock:
         # Mark children not seen recently as offline
         now = int(time.time())
@@ -402,7 +348,7 @@ def _periodic_ping():
     # Periodic sweep every 30 seconds
     while True:
         time.sleep(30)
-        _broadcast_ping()
+        _broadcast_ping_all()
         time.sleep(2)   # allow PONGs to arrive
         with _lock:
             now = int(time.time())
@@ -448,11 +394,12 @@ def _udp_listener():
             info = _parse_pong(data, ip)
             if info:
                 log.debug("PONG from %s (%s) fw=%s", ip, info.get("hostname"), info.get("fwVersion"))
-                matched = False
+                # Store for discover to find
+                _recent_pongs[ip] = info
+                # Update known children
                 for c in _children:
                     if c.get("ip") == ip or c.get("hostname") == info.get("hostname"):
                         c.update({k: v for k, v in info.items() if k != "id"})
-                        matched = True
                         break
         else:
             log.debug("UDP cmd=0x%02X from %s (%d bytes)", cmd, ip, len(data))
@@ -545,21 +492,19 @@ def api_children_reboot(cid):
 
 @app.post("/api/children/refresh-all")
 def api_children_refresh_all():
-    """Ping all children to update their status. Also tries to find children
-    that may have changed IP by doing a broadcast discovery."""
-    # First try direct ping of known IPs
-    for c in list(_children):
-        _ping(c, retries=1)
-    # For any offline children, try to match by hostname from a broadcast discover
-    offline = [c for c in _children if c.get("status") != 1]
-    if offline:
-        found = _discover_all()   # discover including known IPs
-        for c in offline:
-            match = found.get(c.get("hostname"))
-            if match and match["ip"] != c["ip"]:
-                # Child moved to a new IP
-                c["ip"] = match["ip"]
-                _ping(c, retries=1)
+    """Broadcast ping all children. The UDP listener updates their status
+    from PONGs. Also detects IP changes for offline children."""
+    _recent_pongs.clear()
+    _broadcast_ping_all()
+    time.sleep(2.0)
+    # Update offline children that may have changed IP
+    for c in _children:
+        if c.get("status") != 1:
+            for ip, info in _recent_pongs.items():
+                if info.get("hostname") == c.get("hostname") and ip != c["ip"]:
+                    c["ip"] = ip
+                    c.update({k: v for k, v in info.items() if k != "id"})
+                    break
     with _lock:
         _save("children", _children)
     online = sum(1 for c in _children if c.get("status") == 1)

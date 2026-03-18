@@ -123,6 +123,7 @@ void pollUDP() {
 
   int plen = cmdUDP.parsePacket();
   if (plen <= 0 || plen > (int)sizeof(udpBuf)) return;
+  udpRxCount++;
 
   IPAddress sender = cmdUDP.remoteIP();
   int n = cmdUDP.read(udpBuf, sizeof(udpBuf));

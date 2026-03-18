@@ -102,6 +102,8 @@ void setup() {
 
 #ifdef BOARD_CHILD
   bootAnimation();
+  // Announce ourselves to any listening parent
+  sendPong(IPAddress(255, 255, 255, 255));
 #endif
 
 #ifdef BOARD_GIGA

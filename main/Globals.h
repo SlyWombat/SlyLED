@@ -18,6 +18,7 @@ extern uint8_t       udpBuf[160];   // header(8) + PongPayload(131) = 139 max; 1
 extern char          _txbuf[256];   // scratch buffer for sendBuf()
 extern unsigned long ntpEpoch;
 extern unsigned long ntpMillis;
+extern volatile uint32_t udpRxCount;   // total UDP packets received (debug)
 
 #ifdef BOARD_GIGA
 extern const char HOSTNAME[];       // "slyled"

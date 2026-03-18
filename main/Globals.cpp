@@ -13,6 +13,7 @@ uint8_t      udpBuf[160];
 char         _txbuf[256];
 unsigned long ntpEpoch  = 0;
 unsigned long ntpMillis = 0;
+volatile uint32_t udpRxCount = 0;
 
 #ifdef BOARD_GIGA
 const char HOSTNAME[] = "slyled";

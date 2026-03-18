@@ -45,14 +45,14 @@ void sendJsonErr(WiFiClient& c, const char* msg) {
 // ── GET /status ───────────────────────────────────────────────────────────────
 
 void sendStatus(WiFiClient& c) {
-  char body[96];
+  char body[128];
   int blen;
 #ifdef BOARD_GIGA
   blen = snprintf(body, sizeof(body), "{\"role\":\"parent\",\"hostname\":\"slyled\"}");
 #else
   blen = snprintf(body, sizeof(body),
-    "{\"role\":\"child\",\"hostname\":\"%s\",\"action\":%u}",
-    childCfg.hostname, (unsigned)childActType);
+    "{\"role\":\"child\",\"hostname\":\"%s\",\"action\":%u,\"udpRx\":%lu}",
+    childCfg.hostname, (unsigned)childActType, (unsigned long)udpRxCount);
 #endif
   sendBuf(c, "HTTP/1.1 200 OK\r\n"
              "Content-Type: application/json\r\n"
