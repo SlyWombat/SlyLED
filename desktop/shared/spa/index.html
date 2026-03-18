@@ -479,17 +479,18 @@ function _renderSetup(){
       +'<input type="file" accept=".json" style="display:none" onchange="importChildren(this)"></label>'
       +'</div>'
       +'<div id="disc-results" style="display:none;margin-bottom:.8em"></div>'
-      +'<table class="tbl"><tr><th>Hostname</th><th>Name</th><th>IP</th><th>Status</th><th>Strings</th><th>Actions</th></tr>';
+      +'<table class="tbl"><tr><th>Hostname</th><th>Name</th><th>IP</th><th>Status</th><th>FW</th><th>Strings</th><th>Actions</th></tr>';
     if(d&&d.length){
       d.forEach(function(c){
-        h+='<tr><td>'+c.hostname+'</td><td>'+(c.name||'-')+'</td><td>'+c.ip+'</td><td>'+(c.status===1?'Online':'Offline')+'</td><td>'+c.sc+'</td><td>'
+        var st=c.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
+        h+='<tr><td>'+c.hostname+'</td><td>'+(c.name||'-')+'</td><td>'+c.ip+'</td><td>'+st+'</td><td>'+(c.fwVersion||'-')+'</td><td>'+c.sc+'</td><td>'
           +'<button class="btn" onclick="showDetails('+c.id+')" style="background:#446;color:#fff">Details</button>'
           +' <button class="btn btn-on" onclick="refreshChild('+c.id+')">Refresh</button>'
           +' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff">Reboot</button>'
           +' <button class="btn btn-off" onclick="removeChild('+c.id+')">Remove</button></td></tr>';
       });
     }else{
-      h+='<tr><td colspan="6" style="color:#888;text-align:center">No performers</td></tr>';
+      h+='<tr><td colspan="7" style="color:#888;text-align:center">No performers</td></tr>';
     }
     document.getElementById('t-setup').innerHTML=h+'</table>';
   });
