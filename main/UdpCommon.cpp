@@ -243,6 +243,22 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
 #endif  // BOARD_GIGA
 
 #ifdef BOARD_CHILD
+#ifdef BOARD_ESP32
+  } else if (strstr(req, " /test/pin")) {
+    // Pin test: /test/pin?p=16 — flashes a single pixel red on the given GPIO
+    // Uses neopixelWrite() (ESP32 core RMT) — no FastLED, works on any pin
+    uint8_t pin = 2;
+    char* pp = strstr(req, "?p=");
+    if (pp) pin = (uint8_t)atoi(pp + 3);
+    neopixelWrite(pin, 255, 0, 0);   // red
+    delay(500);
+    neopixelWrite(pin, 0, 255, 0);   // green
+    delay(500);
+    neopixelWrite(pin, 0, 0, 255);   // blue
+    delay(500);
+    neopixelWrite(pin, 0, 0, 0);     // off
+    sendJsonOk(client);
+#endif
   } else if (isPost && strstr(req, " /test/stop ")) {
     childActType = ACT_OFF;
     childActSeq++;

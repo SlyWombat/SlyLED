@@ -479,14 +479,18 @@ void sendChildConfigPage(WiFiClient& c) {
                (unsigned)j,
                (childCfg.strings[j].flags & STR_FLAG_FOLDED) ? " checked" : "");
 #ifdef BOARD_ESP32
-    sendBuf(c, "<label>Data Pin (GPIO)</label><select name='dp%u'>", (unsigned)j);
+    sendBuf(c, "<label>Data Pin (GPIO)</label>"
+               "<div style='display:flex;gap:.4em;align-items:center'>"
+               "<select name='dp%u' id='dp%u' style='flex:1'>", (unsigned)j, (unsigned)j);
     for (uint8_t p = 0; p < ESP32_SAFE_PIN_COUNT; p++) {
       sendBuf(c, "<option value='%u'%s>GPIO %u</option>",
               (unsigned)ESP32_SAFE_PINS[p],
               childCfg.strings[j].dataPin == ESP32_SAFE_PINS[p] ? " selected" : "",
               (unsigned)ESP32_SAFE_PINS[p]);
     }
-    c.print(F("</select>"));
+    sendBuf(c, "</select>"
+               "<button class='btn' type='button' style='background:#363;padding:.2em .6em;font-size:.8em'"
+               " onclick='testPin(%u)'>Test</button></div>", (unsigned)j);
 #endif
     c.print(F("</div>"));
   }
@@ -565,6 +569,11 @@ void sendChildConfigPage(WiFiClient& c) {
   c.print(F("function doTestStop(){"
             "var x=new XMLHttpRequest();x.open('POST','/test/stop',true);"
             "x.send();}"));
+  c.print(F("function testPin(s){"
+            "var sel=document.getElementById('dp'+s);"
+            "if(!sel)return;var p=sel.value;"
+            "var x=new XMLHttpRequest();"
+            "x.open('GET','/test/pin?p='+p,true);x.send();}"));
   c.print(F("showTab(0);showStr(0);poll();setInterval(poll,3000);"
             "</script></body></html>"));
   c.flush();
