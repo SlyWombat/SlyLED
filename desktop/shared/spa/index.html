@@ -529,13 +529,14 @@ function addDiscovered(ip){
 }
 
 function removeChild(id){
-  if(!confirm('Remove this performer?'))return;
+  if(!confirm('Remove performer #'+id+'?'))return;
+  document.getElementById('hs').textContent='Removing #'+id+'...';
   var x=new XMLHttpRequest();x.open('DELETE','/api/children/'+id,true);
   x.onload=function(){
-    if(x.status>=200&&x.status<300){loadSetup();document.getElementById('hs').textContent='Performer removed';}
-    else{document.getElementById('hs').textContent='Remove failed ('+x.status+')';loadSetup();}
+    document.getElementById('hs').textContent=x.status<300?'Performer removed':'Remove failed ('+x.status+': '+x.responseText+')';
+    loadSetup();
   };
-  x.onerror=function(){document.getElementById('hs').textContent='Remove failed: network error';};
+  x.onerror=function(){document.getElementById('hs').textContent='Remove failed: network error';loadSetup();};
   x.send();
 }
 

@@ -438,6 +438,10 @@ def api_children_add():
     ip = ip.replace("https://", "").replace("http://", "").split("/")[0].strip()
     if not ip:
         return jsonify(ok=False, err="ip required"), 400
+    # Prevent duplicate IP entries
+    existing = next((c for c in _children if c.get("ip") == ip), None)
+    if existing:
+        return jsonify(ok=True, id=existing["id"], duplicate=True)
     child = {"ip": ip, "hostname": ip, "name": ip,
              "desc": "", "sc": 0, "strings": [], "status": 0, "seen": 0}
     with _lock:
