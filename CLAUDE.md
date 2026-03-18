@@ -87,6 +87,7 @@ Performers (ESP32 / D1 Mini / Giga Child)  ← LED execution nodes
 | GET/POST | `/api/children` | List / add performer nodes |
 | GET | `/api/children/<id>/status` | Poll performer via UDP STATUS |
 | DELETE/POST | `/api/children/<id>` | Remove / refresh performer |
+| POST | `/api/children/<id>/reboot` | Remote reboot performer via HTTP |
 | GET | `/api/children/discover` | Broadcast PING, return unregistered performers |
 | GET/POST | `/api/children/export` | Bulk export/import JSON |
 | GET/POST | `/api/layout` | LED layout config |
@@ -100,6 +101,7 @@ Performers (ESP32 / D1 Mini / Giga Child)  ← LED execution nodes
 | POST | `/api/runners/<id>/compute` | Compute runner steps (canvas-scoped delays) |
 | POST | `/api/runners/<id>/sync` | Sync runner to performer via LOAD_STEP |
 | POST | `/api/runners/<id>/start` | Start runner on performer (with loop flag) |
+| GET | `/api/runners/live` | Per-child live action state (from pushed ACTION_EVENTs) |
 | POST | `/api/runners/stop` | Stop all runners |
 | GET/POST | `/api/wifi` | WiFi credential management (encrypted storage) |
 | GET | `/api/firmware/ports` | List COM ports with board detection |
@@ -121,7 +123,7 @@ All packets share an 8-byte header: `struct.pack("<HBBI", magic=0x534C, version=
 | 0x02 | PONG | child→parent | 133 bytes — see PONG layout below |
 | 0x10 | ACTION | parent→child | 26 bytes: type(1)+r/g/b(3)+p16a(2)+p8a-p8d(4)+ledStart[8]+ledEnd[8] |
 | 0x11 | ACTION_STOP | parent→child | header only |
-| 0x12 | ACTION_EVENT | child→parent | 3 bytes (actionType, actionSeqId, event) |
+| 0x12 | ACTION_EVENT | child→parent | 4 bytes (actionType, stepIndex, totalSteps, event) |
 | 0x20 | LOAD_STEP | parent→child | 32 bytes: idx/total/type/r/g/b/p16a/p8a-d/durS/delayMs + ls[8]+le[8] |
 | 0x21 | LOAD_ACK | child→parent | 1 byte (step index) |
 | 0x22 | SET_BRIGHTNESS | parent→child | 1 byte (brightness 0–255) |
@@ -161,17 +163,19 @@ The same `main/main.ino` sketch compiles for ESP32, D1 Mini, and Giga Child via 
 | Method | Path | Response |
 |--------|------|----------|
 | GET | `/` | 302 redirect → `/config` |
-| GET | `/status` | JSON: `{"role":"child","hostname":…,"action":…}` |
+| GET | `/status` | JSON: `{"role":"child","hostname":…,"action":…,"udpRx":…}` |
 | GET | `/config` | 3-tab HTML SPA |
-| POST | `/config` | 303 redirect → `/config` (saves to EEPROM) |
+| POST | `/config` | 200 JSON (saves to EEPROM; auto-reboots if pin changed) |
 | POST | `/config/reset` | 303 redirect → `/config` (factory reset) |
+| POST | `/reboot` | 200 JSON then ESP.restart() / NVIC_SystemReset() |
+| GET | `/test/pin?p=16` | ESP32 only: flash single pixel R/G/B on GPIO (neopixelWrite) |
 | GET | `/favicon.ico` | 404 |
 
 ### Config SPA (3 tabs)
 
 - **Dashboard** — hostname, altName, stringCount (server-rendered); live action status (XHR poll `/status` every 3 s)
 - **Settings** (inside `<form id='cf' action='/config' method='POST'>`): `name='an'` altName, `name='desc'` description, `name='sc'` string count (1..`CHILD_MAX_STRINGS`)
-- **Config** — string selector dropdown; per-string fieldsets with `lc/lm/lt/sd` (ledCount, lengthMm, ledType, stripDir); no cable fields
+- **Config** — string selector dropdown; per-string fieldsets with `lc/lm/lt/sd/dp` (ledCount, lengthMm, ledType, stripDir, dataPin); GPIO pin dropdown (ESP32 only) with Test button; auto-reboots on pin change
 - **Factory Reset** — separate `<form id='rf' action='/config/reset' method='POST'>` (never nested inside `cf`)
 
 ### ChildSelfConfig struct
@@ -186,13 +190,14 @@ struct ChildSelfConfig {
 };
 struct ChildStringCfg {
     uint16_t ledCount; uint16_t lengthMm;
-    uint8_t  ledType;  uint8_t  cableDir;  // cableDir always 0
+    uint8_t  ledType;  uint8_t  flags;     // bit 0 = folded
     uint16_t cableMm;                       // cableMm always 0
     uint8_t  stripDir;
+    uint8_t  dataPin;                       // GPIO pin (ESP32 only; 0 = default GPIO 2)
 };
 ```
 
-`EEPROM_MAGIC = 0xA6` — bump when struct layout changes to force re-initialisation.
+`EEPROM_MAGIC = 0xA8` — bump when struct layout changes to force re-initialisation.
 
 ### Test suite (child)
 
@@ -226,7 +231,7 @@ The sketch is split into modular `.h`/`.cpp` files, all in `main/`. `main/main.i
 | `HttpUtils.h` / `HttpUtils.cpp` | all | `sendBuf()`, `sendJsonOk()`, `sendJsonErr()`, `sendStatus()` |
 | `JsonUtils.h` / `JsonUtils.cpp` | all | `jsonGetInt()`, `jsonGetStr()` — lightweight JSON field extraction |
 | `UdpCommon.h` / `UdpCommon.cpp` | all | `handleUdpPacket()`, `pollUDP()`, `serveClient()`, `handleClient()` — full HTTP route dispatch and UDP receive loop |
-| `Child.h` / `Child.cpp` | ESP32, D1 Mini, Giga Child | Child config structs, EEPROM load/save, `sendPong()` (includes fwMajor/fwMinor), `sendStatusResp()`, `sendChildConfigPage()`, `handlePostChildConfig()`, `handleFactoryReset()` |
+| `Child.h` / `Child.cpp` | ESP32, D1 Mini, Giga Child | Child config structs, EEPROM load/save, `sendPong()`, `sendStatusResp()`, `sendActionEvent()`, `esp32InitLeds()` (ESP32 multi-pin FastLED init), `sendChildConfigPage()`, `handlePostChildConfig()`, `handleFactoryReset()` |
 | `ChildLED.h` / `ChildLED.cpp` | ESP32, D1 Mini, Giga Child | `applyRunnerStep()` (shared), `ledTask()` (ESP32 FreeRTOS Core 0), `updateLED()` (D1 Mini non-blocking); 9 action types with generic params |
 | `GigaLED.h` / `GigaLED.cpp` | Giga Child | CRGB-compatible struct, `hsv2rgb_rainbow()`, `showSafe()` (software PWM on active-low RGB pins), `fill_solid()`, random helpers |
 | `Parent.h` / `Parent.cpp` | Giga | Parent data structures (`ChildNode`, `Runner`, `AppSettings`, …), all `/api/*` handlers, `sendParentSPA()`, runner compute/sync/start/stop |
@@ -257,12 +262,12 @@ All board-specific headers use both include guards (`#ifndef FILE_H`) and conten
 |-------|------------|
 | Giga (parent) | `printStatus()` → `pollUDP()` → periodic `sendPing(broadcast)` every 30 s → `handleClient()` → `delay(10)` |
 | Giga (child) | `printStatus()` → `pollUDP()` → `updateLED()` → `handleClient()` → `delay(10)` |
-| ESP32 | `printStatus()` → `pollUDP()` → `handleClient()` → `delay(10)` |
+| ESP32 | `printStatus()` → `pollUDP()` (drains ACTION_EVENT) → `handleClient()` → `delay(10)` |
 | D1 Mini | `printStatus()` → `pollUDP()` → `updateLED()` → `handleClient()` → `yield()` |
 
 ## Git / GitHub
 
-- Remote: `https://github.com/SlyWombat/Giga-LED-Project`
+- Remote: `https://github.com/SlyWombat/SlyLED`
 - After a successful upload, offer to sync: `git add . && git commit -m "<message>" && git push origin main`
 - `arduino_secrets.h` is gitignored — never commit credentials or WiFi passwords
 - Commit messages follow: `feat: <short description>`
@@ -293,4 +298,7 @@ All board-specific headers use both include guards (`#ifndef FILE_H`) and conten
 - **`rtos::Thread` requires `#include <mbed.h>`** — not pulled in automatically by Arduino.h on the Giga.
 - **`volatile bool` for cross-thread state** — bool writes are atomic on Cortex-M7; `volatile` prevents register caching. Sufficient for simple flag sharing between two threads without a mutex.
 - **`WiFiClient::print()` silently truncates** strings longer than the internal TX buffer (~280–400 bytes on the Giga R1 WiFi). Data past the limit is **dropped permanently** — `flush()` after the call does NOT recover it. Symptom: SPA JavaScript arrives with mid-string cuts, causing browser syntax errors and pages stuck at "Loading...". **Fix**: use the `spa(WiFiClient&, const char*)` chunked-write helper (in `Parent.cpp`) for any `c.print()` call whose string exceeds ~256 bytes. Small strings (JSON responses, HTTP headers) can use `c.print()` safely.
+- **ESP32: never use `noInterrupts()` around `FastLED.show()`** — the ESP32 RMT peripheral handles WS2812B timing in hardware. Disabling interrupts with WiFi active triggers an Interrupt WDT timeout on CPU1. Only D1 Mini needs `noInterrupts()` (bit-banged output). The `showSafe()` function in `ChildLED.cpp` is split by board.
+- **ESP32: FastLED init must happen after WiFi/config loads** — `esp32InitLeds()` reads per-string GPIO pin assignments from NVS, so it runs after `connectWiFi()` → `initChildConfig()`. D1 Mini inits FastLED before WiFi (hardcoded GPIO 2).
+- **ESP32: `neopixelWrite(pin, r, g, b)`** is available in ESP32 Arduino core 3.x for driving a single WS2812B pixel on any GPIO without FastLED. Used by the `/test/pin` endpoint for GPIO testing.
 - **Never name a sketch header `Network.h`** when targeting ESP32 (Arduino core 3.x). The core ships `libraries/Network/src/Network.h` which defines `network_event_handle_t`, `NetworkEventCb`, etc. used internally by `WiFiGeneric.h`. The sketch directory is searched first, so a custom `Network.h` silently shadows the library header and causes cryptic `'network_event_handle_t' does not name a type` build failures. Use a unique name (e.g. `NetUtils.h`).
