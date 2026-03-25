@@ -27,6 +27,8 @@ from flask import Flask, abort, jsonify, request, send_from_directory
 import logging
 from datetime import datetime
 
+from wled_bridge import wled_probe, wled_set_state, wled_map_action, wled_map_step, wled_stop, wled_get_effects
+
 log = logging.getLogger("slyled")
 log.setLevel(logging.DEBUG)
 _log_handler = None   # file handler, created/removed by _apply_logging()
@@ -349,11 +351,21 @@ def _periodic_ping():
     while True:
         time.sleep(30)
         _broadcast_ping_all()
+        # Also probe WLED devices via HTTP
+        for c in list(_children):
+            if c.get("type") == "wled":
+                info = wled_probe(c["ip"], timeout=2.0)
+                if info:
+                    c["status"] = 1
+                    c["seen"] = int(time.time())
+                    c["fwVersion"] = info.get("ver")
+                else:
+                    c["status"] = 0
         time.sleep(2)   # allow PONGs to arrive
         with _lock:
             now = int(time.time())
             for c in _children:
-                if c.get("seen", 0) > 0 and now - c["seen"] > CHILD_STALE_S:
+                if c.get("type") != "wled" and c.get("seen", 0) > 0 and now - c["seen"] > CHILD_STALE_S:
                     c["status"] = 0
             _save("children", _children)
 
@@ -443,16 +455,34 @@ def api_children_add():
     if existing:
         return jsonify(ok=True, id=existing["id"], duplicate=True)
     child = {"ip": ip, "hostname": ip, "name": ip,
-             "desc": "", "sc": 0, "strings": [], "status": 0, "seen": 0}
+             "desc": "", "sc": 0, "strings": [], "status": 0, "seen": 0,
+             "type": "slyled"}
     with _lock:
         child["id"] = _nxt_c
         _nxt_c += 1
         _children.append(child)
         _save("children", _children)
-    _ping(child)          # ping outside lock so DELETE/other requests aren't blocked
+    # Try SlyLED PING first
+    _ping(child)
+    # If SlyLED ping failed, try WLED probe
+    if child.get("status") != 1:
+        wled_info = wled_probe(ip)
+        if wled_info:
+            child["type"] = "wled"
+            child["hostname"] = wled_info["name"]
+            child["name"] = wled_info["name"]
+            child["sc"] = 1
+            child["strings"] = [{"leds": wled_info["ledCount"], "mm": 0,
+                                  "type": 0, "cdir": 0, "cmm": 0, "sdir": 0, "folded": False}]
+            child["status"] = 1
+            child["seen"] = int(time.time())
+            child["fwVersion"] = wled_info["ver"]
+            child["wled"] = wled_info
+            log.info("WLED device found at %s: %s (%d LEDs, v%s)",
+                     ip, wled_info["name"], wled_info["ledCount"], wled_info["ver"])
     with _lock:
         _save("children", _children)
-    return jsonify(ok=True, id=child["id"])
+    return jsonify(ok=True, id=child["id"], type=child.get("type", "slyled"))
 
 @app.delete("/api/children/<int:cid>")
 def api_children_delete(cid):
@@ -614,7 +644,10 @@ def api_action():
     if tgt != "all" and not targets:
         return jsonify(ok=False, err="target not found"), 404
     for c in targets:
-        _send(c["ip"], _action_pkt(act, c))
+        if c.get("type") == "wled":
+            wled_set_state(c["ip"], wled_map_action(act))
+        else:
+            _send(c["ip"], _action_pkt(act, c))
     return jsonify(ok=True)
 
 @app.post("/api/action/stop")
@@ -626,7 +659,10 @@ def api_action_stop():
     if not targets and tgt != "all":
         return jsonify(ok=False, err="target not found"), 404
     for c in targets:
-        _send(c["ip"], _hdr(CMD_ACTION_STOP))
+        if c.get("type") == "wled":
+            wled_stop(c["ip"])
+        else:
+            _send(c["ip"], _hdr(CMD_ACTION_STOP))
     return jsonify(ok=True)
 
 # ── Actions library ───────────────────────────────────────────────────────────
@@ -724,16 +760,20 @@ def api_runners_create():
 # doesn't try to cast "stop" as an integer.
 @app.post("/api/runners/stop")
 def api_runners_stop():
+    _wled_runner_stop.set()  # signal WLED runner thread to stop
     pkt_stop = _hdr(CMD_RUNNER_STOP)
     pkt_off  = _hdr(CMD_ACTION_STOP)
     for c in _children:
         if c["status"] == 1:
-            _send(c["ip"], pkt_stop)
-            _send(c["ip"], pkt_off)   # belt-and-suspenders: also stop immediate action
+            if c.get("type") == "wled":
+                wled_stop(c["ip"])
+            else:
+                _send(c["ip"], pkt_stop)
+                _send(c["ip"], pkt_off)
     # Retry once after brief delay for reliability
     time.sleep(0.1)
     for c in _children:
-        if c["status"] == 1:
+        if c["status"] == 1 and c.get("type") != "wled":
             _send(c["ip"], pkt_stop)
             _send(c["ip"], pkt_off)
     _live_events.clear()
@@ -931,6 +971,61 @@ def api_runner_sync(rid):
     log.info("SYNC complete: %d packets to %d children", sent, len(online))
     return jsonify(ok=True, sent=sent, online=len(online))
 
+_wled_runner_stop = threading.Event()
+
+def _start_wled_runner(runner, wled_children, go_epoch, loop):
+    """Launch a background thread that drives WLED devices through runner steps."""
+    _wled_runner_stop.clear()
+
+    def _run():
+        steps = runner.get("steps", [])
+        resolved = [_resolve_step(s) for s in steps]
+        resolved = [r for r in resolved if r]
+        if not resolved:
+            return
+        offsets_list = runner.get("childOffsets", [])
+        bri = _settings.get("globalBrightness", 255)
+
+        # Wait until go_epoch
+        wait = go_epoch - time.time()
+        if wait > 0:
+            if _wled_runner_stop.wait(wait):
+                return
+
+        while not _wled_runner_stop.is_set():
+            for i, step in enumerate(resolved):
+                if _wled_runner_stop.is_set():
+                    return
+                offsets = offsets_list[i] if i < len(offsets_list) else {}
+                dur = int(step.get("durationS", 5) or 5)
+                state = wled_map_step(step, bri)
+
+                # Send to each WLED child with its delay offset
+                for c in wled_children:
+                    cid = c["id"]
+                    delay_ms = offsets.get(cid, offsets.get(str(cid), 0))
+                    if delay_ms > 0:
+                        # Schedule delayed send
+                        def _delayed(ip, st, d):
+                            if not _wled_runner_stop.wait(d / 1000.0):
+                                wled_set_state(ip, st)
+                        threading.Thread(target=_delayed, args=(c["ip"], state, delay_ms), daemon=True).start()
+                    else:
+                        wled_set_state(c["ip"], state)
+
+                # Wait for step duration
+                if _wled_runner_stop.wait(dur):
+                    return
+
+            if not loop:
+                break
+
+        # Blackout WLED devices at end
+        for c in wled_children:
+            wled_stop(c["ip"])
+
+    threading.Thread(target=_run, daemon=True).start()
+
 @app.post("/api/runners/<int:rid>/start")
 def api_runner_start(rid):
     r = next((x for x in _runners if x["id"] == rid), None)
@@ -941,10 +1036,15 @@ def api_runner_start(rid):
     loop_flag = 1 if _settings.get("runnerLoop", True) else 0
     pkt = _hdr(CMD_RUNNER_GO) + struct.pack("<IB", go_epoch, loop_flag)
     online = [c for c in _children if c["status"] == 1]
-    for c in online:
+    slyled_children = [c for c in online if c.get("type") != "wled"]
+    wled_children = [c for c in online if c.get("type") == "wled"]
+    for c in slyled_children:
         log.info("START: RUNNER_GO epoch=%d loop=%d → %s (%s)", go_epoch, loop_flag, c["ip"], c.get("hostname"))
         _send(c["ip"], pkt)
-    log.info("START: sent to %d children, go_epoch=%d (in %ds)", len(online), go_epoch, go_epoch - int(time.time()))
+    # Start WLED runner thread for WLED devices
+    if wled_children:
+        _start_wled_runner(r, wled_children, go_epoch, bool(loop_flag))
+    log.info("START: sent to %d SlyLED + %d WLED children", len(slyled_children), len(wled_children))
     with _lock:
         _settings["runnerRunning"] = True
         _settings["activeRunner"]  = rid
