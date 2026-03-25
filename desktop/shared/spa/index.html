@@ -891,7 +891,7 @@ function cvUp(){drag=null;var cv=document.getElementById('lcv');if(cv)cv.style.c
 
 // ── Actions library ──────────────────────────────────────────────────────────
 var _acts=[];
-var _typeNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle'];
+var _typeNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Color Wipe','Scanner','Sparkle','Gradient'];
 var _dirNames=['East','North','West','South'];
 var _palNames=['Classic','Ocean','Lava','Forest','Party','Heat','Cool','Pastel'];
 function rgb2h(r,g,b){return'#'+('0'+r.toString(16)).slice(-2)+('0'+g.toString(16)).slice(-2)+('0'+b.toString(16)).slice(-2);}
@@ -952,7 +952,7 @@ function _showActModal(a){
   for(var d=0;d<4;d++)h+='<option value="'+d+'"'+(a&&a.direction===d?' selected':'')+'>'+_dirNames[d]+'</option>';
   h+='</select></div>';
   h+='<label>Type</label><select id="ae-tp" onchange="_aeTypeChg()">';
-  for(var i=0;i<9;i++)h+='<option value="'+i+'"'+(t===i?' selected':'')+'>'+_typeNames[i]+'</option>';
+  for(var i=0;i<_typeNames.length;i++)h+='<option value="'+i+'"'+(t===i?' selected':'')+'>'+_typeNames[i]+'</option>';
   h+='</select>';
   // Colour picker (all types except Blackout and Rainbow)
   h+='<div id="ae-cr"'+(t===0||t===5?' style="display:none"':'')+'><label>Colour</label><input type="color" id="ae-cl" value="'+(a&&t>0?rgb2h(a.r||0,a.g||0,a.b||0):'#ff0000')+'"></div>';
@@ -1036,13 +1036,13 @@ var _aePerfIds=[];
 function _aeTypeChg(){
   var t=parseInt(document.getElementById('ae-tp').value);
   document.getElementById('ae-cr').style.display=(t===0||t===5)?'none':'block';
-  document.getElementById('ae-fade').style.display=t===2?'block':'none';
+  document.getElementById('ae-fade').style.display=(t===2||t===13)?'block':'none';  // Fade + Gradient use 2nd color
   document.getElementById('ae-breathe').style.display=t===3?'block':'none';
-  document.getElementById('ae-chase').style.display=t===4?'block':'none';
+  document.getElementById('ae-chase').style.display=(t===4||t===10)?'block':'none'; // Chase + Wipe use direction
   document.getElementById('ae-rainbow').style.display=t===5?'block':'none';
   document.getElementById('ae-fire').style.display=t===6?'block':'none';
-  document.getElementById('ae-comet').style.display=t===7?'block':'none';
-  document.getElementById('ae-twinkle').style.display=t===8?'block':'none';
+  document.getElementById('ae-comet').style.display=(t===7||t===11)?'block':'none'; // Comet + Scanner
+  document.getElementById('ae-twinkle').style.display=(t===8||t===12)?'block':'none'; // Twinkle + Sparkle
 }
 
 function _aeSubmit(id,btn){

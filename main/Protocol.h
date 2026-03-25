@@ -48,6 +48,11 @@ constexpr uint8_t ACT_RAINBOW  = 5;   // HSV rainbow cycle (8 palettes)
 constexpr uint8_t ACT_FIRE     = 6;   // fire / Perlin noise effect
 constexpr uint8_t ACT_COMET    = 7;   // shooting comet with fading tail
 constexpr uint8_t ACT_TWINKLE  = 8;   // random sparkle + fade
+constexpr uint8_t ACT_STROBE   = 9;   // rapid on/off flash
+constexpr uint8_t ACT_WIPE_SEQ = 10;  // sequential pixel fill (color wipe)
+constexpr uint8_t ACT_SCANNER  = 11;  // bouncing KITT / Knight Rider bar
+constexpr uint8_t ACT_SPARKLE  = 12;  // random white sparkles on solid bg
+constexpr uint8_t ACT_GRADIENT = 13;  // static two-colour gradient
 constexpr uint8_t ACT_OFF      = 0;   // alias for ACT_BLACKOUT
 
 // Legacy aliases (for backward compatibility in existing code)
@@ -117,6 +122,11 @@ struct __attribute__((packed)) StatusRespPayload {
 //   Fire:    r,g,b = base tint; p16a = speedMs; p8a = cooling; p8b = sparking
 //   Comet:   r,g,b = colour; p16a = speedMs; p8a = tailLen; p8c = direction; p8d = decay%
 //   Twinkle: r,g,b = colour; p16a = spawnMs; p8a = density; p8d = fadeSpeed
+//   Strobe:  r,g,b = colour; p16a = periodMs (full cycle); p8a = duty% (0-100)
+//   WipeSeq: r,g,b = colour; p16a = speedMs (per pixel); p8c = direction
+//   Scanner: r,g,b = colour; p16a = speedMs; p8a = barWidth
+//   Sparkle: r,g,b = bg colour; p16a = spawnMs; p8a = density
+//   Gradient:r,g,b = colour1; p8a/p8b/p8c = r2,g2,b2
 //   Blackout: all zeros
 struct __attribute__((packed)) ActionPayload {
   uint8_t  actionType;

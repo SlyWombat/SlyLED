@@ -25,6 +25,11 @@ WLED_EFFECT_MAP = {
     6: 66,         # Fire → Fire 2012 (fx=66)
     7: 75,         # Comet → Comet (fx=75)
     8: 74,         # Twinkle → Twinkle (fx=74)
+    9: 15,         # Strobe → Strobe (fx=15)
+    10: 22,        # Color Wipe → Color Wipe (fx=22)
+    11: 10,        # Scanner → Scanner (fx=10)
+    12: 82,        # Sparkle → Sparkle (fx=82)
+    13: 46,        # Gradient → Gradient (fx=46)
 }
 
 
@@ -160,6 +165,27 @@ def wled_map_action(act):
 
     if t == 8:  # Twinkle — map density and fade
         seg["ix"] = act.get("density", act.get("p8a", 3)) * 30
+
+    if t == 9:  # Strobe — map duty cycle to intensity
+        duty = act.get("duty", act.get("p8a", 50))
+        seg["ix"] = max(0, min(255, duty * 255 // 100))
+
+    if t == 10:  # Color Wipe — map direction
+        direction = act.get("direction", act.get("p8c", 0))
+        seg["rev"] = direction in (2, 3)
+
+    if t == 11:  # Scanner — map bar width to intensity
+        bar_w = act.get("barWidth", act.get("p8a", 3))
+        seg["ix"] = max(0, min(255, bar_w * 30))
+
+    if t == 12:  # Sparkle — density to intensity
+        seg["ix"] = act.get("density", act.get("p8a", 3)) * 30
+
+    if t == 13:  # Gradient — second color
+        r2 = act.get("r2", act.get("p8a", 0))
+        g2 = act.get("g2", act.get("p8b", 0))
+        b2 = act.get("b2", act.get("p8c", 0))
+        seg["col"] = [[r, g, b], [r2, g2, b2]]
 
     return {"on": True, "bri": 255, "seg": [seg]}
 

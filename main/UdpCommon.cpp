@@ -293,6 +293,11 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     if (testType == ACT_FIRE)    { childActP16a = 30; childActP8a = 55; childActP8b = 120; }
     if (testType == ACT_COMET)   { childActP16a = 60; childActP8a = 10; childActP8d = 80; }
     if (testType == ACT_TWINKLE) { childActP16a = 100; childActP8a = 3; childActP8d = 10; }
+    if (testType == ACT_STROBE)   { childActP16a = 200; childActP8a = 50; }  // 200ms period, 50% duty
+    if (testType == ACT_WIPE_SEQ) { childActP16a = 50; childActP8c = DIR_E; }
+    if (testType == ACT_SCANNER)  { childActP16a = 30; childActP8a = 3; }    // 30ms speed, 3-pixel bar
+    if (testType == ACT_SPARKLE)  { childActP16a = 50; childActP8a = 3; }
+    if (testType == ACT_GRADIENT) { childActP8a = 0; childActP8b = 0; childActP8c = 255; }  // red→blue
     for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
       if (j < childCfg.stringCount && childCfg.strings[j].ledCount > 0) {
         childActSt[j] = 0;

@@ -235,6 +235,86 @@ static void renderTwinkle(uint8_t r, uint8_t g, uint8_t b,
   }
 }
 
+static void renderStrobe(uint8_t r, uint8_t g, uint8_t b,
+                          uint16_t periodMs, uint8_t dutyPct,
+                          unsigned long elapsedMs,
+                          uint8_t st, uint8_t en) {
+  if (periodMs == 0) periodMs = 200;
+  if (dutyPct > 100) dutyPct = 50;
+  uint32_t phase = elapsedMs % (uint32_t)periodMs;
+  uint32_t onMs = (uint32_t)periodMs * dutyPct / 100;
+  bool on = (phase < onMs);
+  for (uint8_t i = st; i <= en; i++)
+    leds[i] = on ? CRGB(r, g, b) : CRGB::Black;
+}
+
+static void renderWipeSeq(uint8_t r, uint8_t g, uint8_t b,
+                           uint16_t speedMs, uint8_t dir,
+                           unsigned long elapsedMs,
+                           uint8_t st, uint8_t en) {
+  uint8_t rangeLen = en - st + 1;
+  if (speedMs == 0) speedMs = 50;
+  // Number of pixels filled so far (wraps around for continuous wipe)
+  uint8_t filled = (uint8_t)((elapsedMs / speedMs) % (rangeLen * 2));
+  bool filling = (filled < rangeLen);
+  uint8_t count = filling ? filled : (rangeLen * 2 - filled);
+  for (uint8_t i = 0; i < rangeLen; i++) {
+    uint8_t idx = (dir == DIR_W || dir == DIR_S) ? (rangeLen - 1 - i) : i;
+    leds[st + idx] = (i < count) ? (filling ? CRGB(r, g, b) : CRGB::Black)
+                                 : (filling ? CRGB::Black : CRGB(r, g, b));
+  }
+}
+
+static void renderScanner(uint8_t r, uint8_t g, uint8_t b,
+                            uint16_t speedMs, uint8_t barWidth,
+                            unsigned long elapsedMs,
+                            uint8_t st, uint8_t en) {
+  uint8_t rangeLen = en - st + 1;
+  if (speedMs == 0) speedMs = 30;
+  if (barWidth < 1) barWidth = 3;
+  if (barWidth > rangeLen) barWidth = rangeLen;
+  // Ping-pong position
+  uint8_t travel = rangeLen - barWidth;
+  if (travel == 0) travel = 1;
+  uint32_t cycle = (uint32_t)travel * 2;
+  uint32_t pos = (elapsedMs / speedMs) % cycle;
+  if (pos >= travel) pos = cycle - pos;
+  // Fade all
+  for (uint8_t i = st; i <= en; i++) leds[i].nscale8(200);
+  // Draw bar
+  for (uint8_t w = 0; w < barWidth && (pos + w) < rangeLen; w++)
+    leds[st + pos + w] = CRGB(r, g, b);
+}
+
+static void renderSparkle(uint8_t r, uint8_t g, uint8_t b,
+                            uint16_t spawnMs, uint8_t density,
+                            unsigned long elapsedMs,
+                            uint8_t st, uint8_t en) {
+  uint8_t rangeLen = en - st + 1;
+  // Solid background
+  for (uint8_t i = st; i <= en; i++) leds[i] = CRGB(r, g, b);
+  // Random white sparkles
+  uint8_t dens = density ? density : 2;
+  for (uint8_t d = 0; d < dens; d++) {
+    if (random8() < 60)
+      leds[st + random8(rangeLen)] = CRGB::White;
+  }
+}
+
+static void renderGradient(uint8_t r1, uint8_t g1, uint8_t b1,
+                            uint8_t r2, uint8_t g2, uint8_t b2,
+                            uint8_t st, uint8_t en) {
+  uint8_t rangeLen = en - st + 1;
+  if (rangeLen <= 1) { leds[st] = CRGB(r1, g1, b1); return; }
+  for (uint8_t i = 0; i < rangeLen; i++) {
+    uint8_t frac = (uint8_t)((uint16_t)i * 255 / (rangeLen - 1));
+    leds[st + i] = CRGB(
+      (uint8_t)((r1 * (255 - frac) + r2 * frac) / 255),
+      (uint8_t)((g1 * (255 - frac) + g2 * frac) / 255),
+      (uint8_t)((b1 * (255 - frac) + b2 * frac) / 255));
+  }
+}
+
 // ── Fold mirror — for folded strings, mirror first half onto second half ──
 
 static void applyFold(uint8_t st, uint8_t en) {
@@ -339,6 +419,11 @@ bool applyAction(uint8_t at, uint8_t r, uint8_t g, uint8_t b,
     case ACT_FIRE:     renderFire(r, g, b, p16a, p8a, p8b, elapsedMs, st, en); break;
     case ACT_COMET:    renderComet(r, g, b, p16a, p8a, p8c, p8d, elapsedMs, st, en); break;
     case ACT_TWINKLE:  renderTwinkle(r, g, b, p16a, p8a, p8d, elapsedMs, st, en); break;
+    case ACT_STROBE:   renderStrobe(r, g, b, p16a, p8a, elapsedMs, st, en); break;
+    case ACT_WIPE_SEQ: renderWipeSeq(r, g, b, p16a, p8c, elapsedMs, st, en); break;
+    case ACT_SCANNER:  renderScanner(r, g, b, p16a, p8a, elapsedMs, st, en); break;
+    case ACT_SPARKLE:  renderSparkle(r, g, b, p16a, p8a, elapsedMs, st, en); break;
+    case ACT_GRADIENT: renderGradient(r, g, b, p8a, p8b, p8c, st, en); break;
     default: return false;
   }
 
@@ -366,20 +451,26 @@ bool applyRunnerStep(const ChildRunnerStep& rs, uint8_t /*flashPh*/,
 
 // Effects that rely on previous frame data (fade trails, random sparks)
 static bool actionNeedsPersist(uint8_t at) {
-  return at == ACT_COMET || at == ACT_TWINKLE || at == ACT_FIRE;
+  return at == ACT_COMET || at == ACT_TWINKLE || at == ACT_FIRE
+      || at == ACT_SCANNER || at == ACT_SPARKLE;
 }
 
 static uint8_t actionDelay(uint8_t at) {
   switch (at) {
-    case ACT_SOLID:   return 50;
-    case ACT_FADE:    return 20;
-    case ACT_BREATHE: return 15;
-    case ACT_CHASE:   return 10;
-    case ACT_RAINBOW: return 10;
-    case ACT_FIRE:    return 15;
-    case ACT_COMET:   return 10;
-    case ACT_TWINKLE: return 10;
-    default:          return 10;
+    case ACT_SOLID:    return 50;
+    case ACT_FADE:     return 20;
+    case ACT_BREATHE:  return 15;
+    case ACT_CHASE:    return 10;
+    case ACT_RAINBOW:  return 10;
+    case ACT_FIRE:     return 15;
+    case ACT_COMET:    return 10;
+    case ACT_TWINKLE:  return 10;
+    case ACT_STROBE:   return 5;
+    case ACT_WIPE_SEQ: return 10;
+    case ACT_SCANNER:  return 10;
+    case ACT_SPARKLE:  return 15;
+    case ACT_GRADIENT: return 100;  // static — no need to refresh fast
+    default:           return 10;
   }
 }
 
