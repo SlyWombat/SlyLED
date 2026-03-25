@@ -74,6 +74,7 @@ Performers (ESP32 / D1 Mini / Giga Child)  ← LED execution nodes
 | `desktop/windows/requirements.txt` | `flask, pystray, pillow, pyserial, esptool` |
 | `desktop/mac/run.sh` | Bash launcher — installs deps, starts server |
 | `desktop/mac/requirements.txt` | `flask>=3.0` |
+| `desktop/shared/wled_bridge.py` | WLED device HTTP communication (probe, state, action mapping) |
 | `firmware/registry.json` | Firmware binary registry (board, version, file) |
 
 **Running on Windows:** `powershell.exe -ExecutionPolicy Bypass -File desktop\windows\run.ps1`
@@ -199,6 +200,14 @@ struct ChildStringCfg {
 
 `EEPROM_MAGIC = 0xA8` — bump when struct layout changes to force re-initialisation.
 
+### Test suite (parent — 90 tests)
+
+```
+powershell.exe -Command "python -X utf8 tests/test_parent.py"
+```
+
+Covers all API endpoints, all 14 action types, WLED bridge mapping, children CRUD, runners lifecycle, settings, WiFi, layout, action dispatch, edge cases, and factory reset.
+
 ### Test suite (child)
 
 ```
@@ -232,7 +241,7 @@ The sketch is split into modular `.h`/`.cpp` files, all in `main/`. `main/main.i
 | `JsonUtils.h` / `JsonUtils.cpp` | all | `jsonGetInt()`, `jsonGetStr()` — lightweight JSON field extraction |
 | `UdpCommon.h` / `UdpCommon.cpp` | all | `handleUdpPacket()`, `pollUDP()`, `serveClient()`, `handleClient()` — full HTTP route dispatch and UDP receive loop |
 | `Child.h` / `Child.cpp` | ESP32, D1 Mini, Giga Child | Child config structs, EEPROM load/save, `sendPong()`, `sendStatusResp()`, `sendActionEvent()`, `esp32InitLeds()` (ESP32 multi-pin FastLED init), `sendChildConfigPage()`, `handlePostChildConfig()`, `handleFactoryReset()` |
-| `ChildLED.h` / `ChildLED.cpp` | ESP32, D1 Mini, Giga Child | `applyRunnerStep()` (shared), `ledTask()` (ESP32 FreeRTOS Core 0), `updateLED()` (D1 Mini non-blocking); 9 action types with generic params |
+| `ChildLED.h` / `ChildLED.cpp` | ESP32, D1 Mini, Giga Child | `applyRunnerStep()` (shared), `ledTask()` (ESP32 FreeRTOS Core 0), `updateLED()` (D1 Mini non-blocking); 14 action types with generic params |
 | `GigaLED.h` / `GigaLED.cpp` | Giga Child | CRGB-compatible struct, `hsv2rgb_rainbow()`, `showSafe()` (software PWM on active-low RGB pins), `fill_solid()`, random helpers |
 | `Parent.h` / `Parent.cpp` | Giga | Parent data structures (`ChildNode`, `Runner`, `AppSettings`, …), all `/api/*` handlers, `sendParentSPA()`, runner compute/sync/start/stop |
 
