@@ -1747,6 +1747,38 @@ def api_fw_download():
         log.error("Download failed: %s", e)
         return jsonify(ok=False, err=str(e)), 502
 
+@app.get("/api/firmware/binary/<board>")
+def api_fw_binary(board):
+    """Serve a firmware binary for OTA — child downloads from parent over plain HTTP."""
+    file_map = {"esp32": "esp32/main.ino.merged.bin", "d1mini": "d1mini/main.ino.bin"}
+    rel_path = file_map.get(board)
+    if not rel_path:
+        return jsonify(ok=False, err=f"unknown board: {board}"), 404
+    bin_path = _FW_DIR / rel_path
+    if not bin_path.exists():
+        # Try downloading from GitHub first
+        rel = _fetch_github_release()
+        if rel:
+            asset_name = {"esp32": "esp32-firmware-merged.bin", "d1mini": "d1mini-firmware.bin"}.get(board)
+            for a in rel.get("assets", []):
+                if a["name"] == asset_name:
+                    try:
+                        import urllib.request as _ur
+                        log.info("Downloading %s from GitHub for proxy serve", asset_name)
+                        req = _ur.Request(a["url"], headers={"User-Agent": "SlyLED-Parent"})
+                        resp = _ur.urlopen(req, timeout=60)
+                        data = resp.read()
+                        bin_path.parent.mkdir(parents=True, exist_ok=True)
+                        bin_path.write_bytes(data)
+                    except Exception as e:
+                        log.error("Download failed: %s", e)
+                        return jsonify(ok=False, err="download from GitHub failed"), 502
+                    break
+    if not bin_path.exists():
+        return jsonify(ok=False, err="firmware binary not available"), 404
+    return send_file(str(bin_path), mimetype="application/octet-stream",
+                     download_name=f"slyled-{board}.bin")
+
 @app.post("/api/firmware/detect")
 def api_fw_detect():
     """Detect chip type on an ambiguous port."""
@@ -1961,12 +1993,21 @@ def api_firmware_ota(cid):
     except (ValueError, IndexError):
         return jsonify(ok=False, err="invalid version format"), 500
 
-    # Send OTA command to child via HTTP POST /ota
+    # Send OTA command — use parent as proxy (child can't do HTTPS to GitHub)
     ip = child["ip"]
-    log.info("OTA: triggering update on %s (%s) to v%s from %s", ip, child.get("hostname"), latest, download_url)
+    # Determine parent's LAN IP for the proxy URL
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        parent_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        parent_ip = "127.0.0.1"
+    proxy_url = f"http://{parent_ip}:8080/api/firmware/binary/{board}"
+    log.info("OTA: triggering update on %s (%s) to v%s via proxy %s", ip, child.get("hostname"), latest, proxy_url)
     try:
         import urllib.request as _ur
-        body = json.dumps({"url": download_url, "sha256": "", "major": new_major, "minor": new_minor, "patch": new_patch}).encode()
+        body = json.dumps({"url": proxy_url, "sha256": "", "major": new_major, "minor": new_minor, "patch": new_patch}).encode()
         req = _ur.Request(f"http://{ip}/ota", data=body, method="POST",
                           headers={"Content-Type": "application/json"})
         _ur.urlopen(req, timeout=5)
