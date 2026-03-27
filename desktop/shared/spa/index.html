@@ -686,7 +686,16 @@ function _renderSetup(){
 function addChild(){
   var ip=document.getElementById('aip').value.trim();
   if(!ip)return;
-  ra('POST','/api/children',{ip:ip},function(){loadSetup();});
+  document.getElementById('hs').textContent='Adding '+ip+'...';
+  ra('POST','/api/children',{ip:ip},function(r){
+    if(r&&r.ok){
+      document.getElementById('hs').textContent=r.duplicate?'Already registered':'Added '+ip+(r.type==='wled'?' (WLED)':'');
+    }else{
+      document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
+    }
+    document.getElementById('aip').value='';
+    loadSetup();
+  });
 }
 
 function discoverChildren(){
@@ -712,19 +721,27 @@ function discoverChildren(){
 }
 
 function addDiscovered(ip){
-  ra('POST','/api/children',{ip:ip},function(){loadSetup();});
+  document.getElementById('hs').textContent='Adding '+ip+'...';
+  ra('POST','/api/children',{ip:ip},function(r){
+    if(r&&r.ok){
+      document.getElementById('hs').textContent='Added '+ip;
+    }else{
+      document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
+    }
+    loadSetup();
+  });
 }
 
 function removeChild(id){
-  if(!confirm('Remove performer #'+id+'?'))return;
-  document.getElementById('hs').textContent='Removing #'+id+'...';
-  var x=new XMLHttpRequest();x.open('DELETE','/api/children/'+id,true);
-  x.onload=function(){
-    document.getElementById('hs').textContent=x.status<300?'Performer removed':'Remove failed ('+x.status+': '+x.responseText+')';
+  if(!confirm('Remove this performer?'))return;
+  document.getElementById('hs').textContent='Removing performer...';
+  api('DELETE','/api/children/'+id).then(function(){
+    document.getElementById('hs').textContent='Performer removed';
     loadSetup();
-  };
-  x.onerror=function(){document.getElementById('hs').textContent='Remove failed: network error';loadSetup();};
-  x.send();
+  }).catch(function(){
+    document.getElementById('hs').textContent='Remove failed — check server logs';
+    loadSetup();
+  });
 }
 
 function refreshChild(id){
