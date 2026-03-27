@@ -1699,6 +1699,50 @@ def api_fw_query_port():
 def api_fw_registry():
     return jsonify(load_registry(_FW_DIR))
 
+@app.post("/api/firmware/download")
+def api_fw_download():
+    """Download latest firmware from GitHub Releases and save locally for USB flashing."""
+    body = request.get_json(silent=True) or {}
+    board = body.get("board", "")
+    if board not in ("esp32", "d1mini"):
+        return jsonify(ok=False, err="board must be esp32 or d1mini"), 400
+    rel = _fetch_github_release()
+    if not rel:
+        return jsonify(ok=False, err="Could not fetch release info"), 502
+    asset_map = {"esp32": "esp32-firmware-merged.bin", "d1mini": "d1mini-firmware.bin"}
+    target_map = {"esp32": "esp32/main.ino.merged.bin", "d1mini": "d1mini/main.ino.bin"}
+    asset_name = asset_map[board]
+    download_url = None
+    for a in rel.get("assets", []):
+        if a["name"] == asset_name:
+            download_url = a["url"]
+            break
+    if not download_url:
+        return jsonify(ok=False, err=f"No {asset_name} in release"), 404
+    # Download to firmware directory
+    import urllib.request as _ur
+    try:
+        log.info("Downloading %s from %s", asset_name, download_url)
+        req = _ur.Request(download_url, headers={"User-Agent": "SlyLED-Parent"})
+        resp = _ur.urlopen(req, timeout=60)
+        data = resp.read()
+        dest = _FW_DIR / target_map[board]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        # Update local registry version
+        reg_path = _FW_DIR / "registry.json"
+        if reg_path.exists():
+            reg = json.loads(reg_path.read_text())
+            for fw in reg.get("firmware", []):
+                if fw.get("board") == board and "child" in fw.get("id", ""):
+                    fw["version"] = rel["version"]
+            reg_path.write_text(json.dumps(reg, indent=2))
+        log.info("Downloaded %s (%d bytes) → %s", asset_name, len(data), dest)
+        return jsonify(ok=True, version=rel["version"], size=len(data))
+    except Exception as e:
+        log.error("Download failed: %s", e)
+        return jsonify(ok=False, err=str(e)), 502
+
 @app.post("/api/firmware/detect")
 def api_fw_detect():
     """Detect chip type on an ambiguous port."""

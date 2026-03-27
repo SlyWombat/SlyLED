@@ -1882,6 +1882,7 @@ function otaUpdateAll(){
 function loadFirmware(){
   // Auto-check OTA updates when Firmware tab opens
   checkOtaUpdates();
+  _fetchGithubFirmware();
   // Load WiFi creds
   ra('GET','/api/wifi',null,function(d){
     if(d){
@@ -1948,19 +1949,51 @@ function loadFirmware(){
 }
 
 var _fwRegistry=[];
+var _fwGithubRelease=null;
 function updateFwImages(){
   var board=document.getElementById('fw-board').value;
   var dfuNote=document.getElementById('fw-dfu-note');
   if(dfuNote)dfuNote.style.display=board==='giga'?'block':'none';
   var sel=document.getElementById('fw-image');sel.innerHTML='';
+  // Add local firmware from registry
   _fwRegistry.forEach(function(f){
     if(f.board===board){
-      var o=document.createElement('option');o.value=f.id;o.text=f.name+' v'+f.version;sel.add(o);
+      var o=document.createElement('option');o.value=f.id;o.text=f.name+' v'+f.version+' (local)';sel.add(o);
     }
   });
+  // Add latest from GitHub if available and newer
+  if(_fwGithubRelease){
+    var assetMap={'esp32':'esp32-firmware-merged.bin','d1mini':'d1mini-firmware.bin'};
+    var assetName=assetMap[board];
+    if(assetName){
+      var found=false;
+      _fwGithubRelease.assets.forEach(function(a){if(a.name===assetName)found=true;});
+      if(found){
+        var o=document.createElement('option');
+        o.value='github:'+board;
+        o.text='Latest v'+_fwGithubRelease.version+' (download from GitHub)';
+        sel.add(o);
+        // Select GitHub option if it's newer than local
+        var localVer='0.0';
+        _fwRegistry.forEach(function(f){if(f.board===board)localVer=f.version;});
+        try{
+          var lp=localVer.split('.').map(Number);
+          var gp=_fwGithubRelease.version.split('.').map(Number);
+          if(gp[0]>lp[0]||(gp[0]===lp[0]&&(gp[1]||0)>(lp[1]||0)))sel.value='github:'+board;
+        }catch(e){}
+      }
+    }
+  }
   if(!sel.options.length){
     var o=document.createElement('option');o.value='';o.text='No firmware available for '+board;sel.add(o);
   }
+}
+// Fetch GitHub release info on firmware tab load
+function _fetchGithubFirmware(){
+  api('GET','/api/firmware/latest').then(function(d){
+    _fwGithubRelease=d;
+    updateFwImages();
+  }).catch(function(){});
 }
 
 function saveWifi(btn){
@@ -1990,6 +2023,31 @@ function doFlash(btn){
   if(!port||!fwId){alert('Select a port and firmware');return;}
   _btnSaving(btn);
   document.getElementById('fw-progress').style.display='block';
+  // If GitHub firmware selected, download first then flash
+  if(fwId.indexOf('github:')===0){
+    document.getElementById('fw-prog-msg').textContent='Downloading latest from GitHub...';
+    document.getElementById('fw-prog-fill').style.width='10%';
+    api('POST','/api/firmware/download',{board:board}).then(function(r){
+      document.getElementById('fw-prog-msg').textContent='Downloaded v'+r.version+' — flashing...';
+      document.getElementById('fw-prog-fill').style.width='20%';
+      // Find the local registry ID for this board
+      var localId='';
+      _fwRegistry.forEach(function(f){if(f.board===board)localId=f.id;});
+      if(!localId){_btnSaved(btn,false);document.getElementById('fw-prog-msg').textContent='No local firmware ID found';return;}
+      // Reload registry then flash
+      ra('GET','/api/firmware/registry',null,function(reg){
+        _fwRegistry=reg&&reg.firmware?reg.firmware:_fwRegistry;
+        _doFlashLocal(btn,port,board,localId);
+      });
+    }).catch(function(e){
+      _btnSaved(btn,false);
+      document.getElementById('fw-prog-msg').textContent='Download failed: '+e.message;
+    });
+    return;
+  }
+  _doFlashLocal(btn,port,board,fwId);
+}
+function _doFlashLocal(btn,port,board,fwId){
   ra('POST','/api/firmware/flash',{port:port,board:board,firmwareId:fwId},function(r){
     if(!r||!r.ok){_btnSaved(btn,false);return;}
     _flashPoll=setInterval(function(){
