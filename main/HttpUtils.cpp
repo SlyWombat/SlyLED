@@ -50,9 +50,19 @@ void sendStatus(WiFiClient& c) {
 #ifdef BOARD_GIGA
   blen = snprintf(body, sizeof(body), "{\"role\":\"parent\",\"hostname\":\"slyled\"}");
 #else
+  const char* boardName =
+#ifdef BOARD_ESP32
+    "esp32";
+#elif defined(BOARD_D1MINI)
+    "d1mini";
+#elif defined(BOARD_GIGA_CHILD)
+    "giga-child";
+#else
+    "unknown";
+#endif
   blen = snprintf(body, sizeof(body),
-    "{\"role\":\"child\",\"hostname\":\"%s\",\"action\":%u,\"udpRx\":%lu}",
-    childCfg.hostname, (unsigned)childActType, (unsigned long)udpRxCount);
+    "{\"role\":\"child\",\"hostname\":\"%s\",\"board\":\"%s\",\"action\":%u,\"udpRx\":%lu}",
+    childCfg.hostname, boardName, (unsigned)childActType, (unsigned long)udpRxCount);
 #endif
   sendBuf(c, "HTTP/1.1 200 OK\r\n"
              "Content-Type: application/json\r\n"

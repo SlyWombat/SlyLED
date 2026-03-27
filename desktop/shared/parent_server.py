@@ -232,6 +232,20 @@ def _parse_pong(data, src_ip):
         "fwVersion": fw_ver,
     }
 
+def _probe_board_type(child):
+    """Fetch board type from child's HTTP /status endpoint."""
+    try:
+        import urllib.request as _ur
+        req = _ur.Request(f"http://{child['ip']}/status", method="GET")
+        resp = _ur.urlopen(req, timeout=2)
+        data = json.loads(resp.read().decode("utf-8"))
+        board = data.get("board")
+        if board:
+            board_map = {"esp32": "ESP32", "d1mini": "D1 Mini", "giga-child": "Giga"}
+            child["boardType"] = board_map.get(board, board)
+    except Exception:
+        pass
+
 def _ping(child, retries=2):
     """Send CMD_PING and update child from PONG response.
     Retries up to `retries` times on timeout before marking offline.
@@ -242,6 +256,8 @@ def _ping(child, retries=2):
         info = _parse_pong(resp, child["ip"])
         if info:
             child.update({k: v for k, v in info.items() if k != "id"})
+            if not child.get("boardType"):
+                _probe_board_type(child)
             return True
     child["status"] = 0
     return False
@@ -419,6 +435,8 @@ def _udp_listener():
                 for c in _children:
                     if c.get("ip") == ip or c.get("hostname") == info.get("hostname"):
                         c.update({k: v for k, v in info.items() if k != "id"})
+                        if not c.get("boardType"):
+                            _probe_board_type(c)
                         break
         else:
             log.debug("UDP cmd=0x%02X from %s (%d bytes)", cmd, ip, len(data))

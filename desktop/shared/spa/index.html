@@ -429,11 +429,12 @@ function loadDash(){
         if(!startupDone&&c.status!==1)st='<span class="badge" style="background:#333;color:#888">Checking...</span>';
         else st=c.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
         // Infer board type from child data
-        var board='SlyLED';
+        var board=c.boardType||'SlyLED';
         if(c.type==='wled')board='WLED';
-        else if(c.sc<=1&&c.strings&&c.strings.length&&c.strings[0].leds<=1)board='Giga';
-        else if(c.sc<=2)board='D1 Mini';
-        else board='ESP32';
+        else if(!c.boardType){
+          if(c.sc<=1&&c.strings&&c.strings.length&&c.strings[0].leds<=1)board='Giga';
+          else board='ESP32';
+        }
         var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b'};
         var bc=boardColors[board]||'#446';
         var tp='<span class="badge" style="background:'+bc+';color:#fff">'+board+'</span>';
@@ -662,11 +663,12 @@ function _renderSetup(){
     if(d&&d.length){
       d.forEach(function(c){
         var st=c.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
-        var board='SlyLED';
+        var board=c.boardType||'SlyLED';
         if(c.type==='wled')board='WLED';
-        else if(c.sc<=1&&c.strings&&c.strings.length&&c.strings[0].leds<=1)board='Giga';
-        else if(c.sc<=2)board='D1 Mini';
-        else board='ESP32';
+        else if(!c.boardType){
+          if(c.sc<=1&&c.strings&&c.strings.length&&c.strings[0].leds<=1)board='Giga';
+          else board='ESP32';
+        }
         var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b'};
         var tp='<span class="badge" style="background:'+(boardColors[board]||'#446')+';color:#fff">'+board+'</span>';
         var totalLeds=0;if(c.strings)c.strings.forEach(function(s,i){if(i<c.sc)totalLeds+=(s.leds||0);});
