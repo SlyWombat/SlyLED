@@ -57,7 +57,7 @@ def _apply_logging(enabled):
 
 # ── Version ───────────────────────────────────────────────────────────────────
 
-VERSION = "5.2"
+VERSION = "5.3.2"
 
 # ── UDP protocol ──────────────────────────────────────────────────────────────
 
@@ -233,7 +233,7 @@ def _parse_pong(data, src_ip):
     }
 
 def _probe_board_type(child):
-    """Fetch board type from child's HTTP /status endpoint."""
+    """Fetch board type and full version from child's HTTP /status endpoint."""
     try:
         import urllib.request as _ur
         req = _ur.Request(f"http://{child['ip']}/status", method="GET")
@@ -243,6 +243,10 @@ def _probe_board_type(child):
         if board:
             board_map = {"esp32": "ESP32", "d1mini": "D1 Mini", "giga-child": "Giga"}
             child["boardType"] = board_map.get(board, board)
+        # Full version from /status (3-part: 5.3.2) overrides PONG's 2-part version
+        version = data.get("version")
+        if version:
+            child["fwVersion"] = version
     except Exception:
         pass
 
@@ -1872,10 +1876,18 @@ def api_firmware_check():
             needs_update = lat_parts > cur_parts
         except (ValueError, IndexError):
             needs_update = fw != latest
-        # Determine download URL for this child's board type
-        board = "esp32" if c.get("sc", 0) > 2 else "d1mini" if c.get("sc", 0) <= 2 else "unknown"
+        # Determine board type from stored boardType (from /status probe) or fallback
+        bt = c.get("boardType", "")
         if c.get("type") == "wled":
             board = "wled"
+        elif bt in ("ESP32", "esp32"):
+            board = "esp32"
+        elif bt in ("D1 Mini", "d1mini"):
+            board = "d1mini"
+        elif bt in ("Giga", "giga-child"):
+            board = "giga"
+        else:
+            board = "esp32"  # default fallback
         asset_map = {"esp32": "esp32-firmware-merged.bin", "d1mini": "d1mini-firmware.bin"}
         asset_name = asset_map.get(board)
         download_url = ""
@@ -1927,8 +1939,9 @@ def api_firmware_ota(cid):
         return jsonify(ok=False, err="Could not fetch release info"), 502
     latest = rel.get("version", "0.0")
 
-    # Determine the right binary URL
-    board = "esp32" if child.get("sc", 0) > 2 else "d1mini"
+    # Determine board type from stored boardType
+    bt = child.get("boardType", "")
+    board = "esp32" if bt in ("ESP32", "esp32") else "d1mini" if bt in ("D1 Mini", "d1mini") else "esp32"
     asset_map = {"esp32": "esp32-firmware-merged.bin", "d1mini": "d1mini-firmware.bin"}
     asset_name = asset_map.get(board)
     download_url = ""

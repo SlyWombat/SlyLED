@@ -9,6 +9,7 @@
 #include "Globals.h"
 #include "HttpUtils.h"
 #include "Child.h"   // childCfg, childActType — guarded inside Child.h
+#include "version.h"
 
 // ── Formatted print into shared tx buffer ────────────────────────────────────
 
@@ -45,7 +46,7 @@ void sendJsonErr(WiFiClient& c, const char* msg) {
 // ── GET /status ───────────────────────────────────────────────────────────────
 
 void sendStatus(WiFiClient& c) {
-  char body[128];
+  char body[256];
   int blen;
 #ifdef BOARD_GIGA
   blen = snprintf(body, sizeof(body), "{\"role\":\"parent\",\"hostname\":\"slyled\"}");
@@ -61,8 +62,13 @@ void sendStatus(WiFiClient& c) {
     "unknown";
 #endif
   blen = snprintf(body, sizeof(body),
-    "{\"role\":\"child\",\"hostname\":\"%s\",\"board\":\"%s\",\"action\":%u,\"udpRx\":%lu}",
-    childCfg.hostname, boardName, (unsigned)childActType, (unsigned long)udpRxCount);
+    "{\"role\":\"child\",\"hostname\":\"%s\",\"board\":\"%s\","
+    "\"version\":\"%u.%u.%u\",\"action\":%u,\"udpRx\":%lu,"
+    "\"freeHeap\":%lu,\"uptime\":%lu}",
+    childCfg.hostname, boardName,
+    (unsigned)APP_MAJOR, (unsigned)APP_MINOR, (unsigned)APP_PATCH,
+    (unsigned)childActType, (unsigned long)udpRxCount,
+    (unsigned long)ESP.getFreeHeap(), (unsigned long)(millis() / 1000));
 #endif
   sendBuf(c, "HTTP/1.1 200 OK\r\n"
              "Content-Type: application/json\r\n"

@@ -419,11 +419,41 @@ void sendChildConfigPage(WiFiClient& c) {
              childCfg.description[0] ? childCfg.description : "--");
   sendBuf(c, "<div class='row'><span class='k'>Strings</span>"
              "<span class='v'>%u</span></div>", (unsigned)childCfg.stringCount);
+  // Total LEDs across all strings
+  {
+    uint16_t totalLeds = 0;
+    for (uint8_t i = 0; i < childCfg.stringCount; i++) totalLeds += childCfg.strings[i].ledCount;
+    sendBuf(c, "<div class='row'><span class='k'>Total LEDs</span>"
+               "<span class='v'>%u</span></div>", (unsigned)totalLeds);
+  }
   c.print(F("<div class='row'><span class='k'>Action</span>"
             "<span class='v' id='act'>--</span></div>"));
+  // Board info
+#ifdef BOARD_ESP32
+  c.print(F("<div class='row'><span class='k'>Board</span>"
+            "<span class='v'>ESP32</span></div>"));
+#elif defined(BOARD_D1MINI)
+  c.print(F("<div class='row'><span class='k'>Board</span>"
+            "<span class='v'>D1 Mini (ESP8266)</span></div>"));
+#elif defined(BOARD_GIGA_CHILD)
+  c.print(F("<div class='row'><span class='k'>Board</span>"
+            "<span class='v'>Giga R1 WiFi</span></div>"));
+#endif
   sendBuf(c, "<div class='row'><span class='k'>Firmware</span>"
-             "<span class='v'>v%u.%u</span></div>",
-             (unsigned)APP_MAJOR, (unsigned)APP_MINOR);
+             "<span class='v'>v%u.%u.%u</span></div>",
+             (unsigned)APP_MAJOR, (unsigned)APP_MINOR, (unsigned)APP_PATCH);
+  sendBuf(c, "<div class='row'><span class='k'>Free Heap</span>"
+             "<span class='v'>%lu bytes</span></div>",
+             (unsigned long)ESP.getFreeHeap());
+  sendBuf(c, "<div class='row'><span class='k'>WiFi RSSI</span>"
+             "<span class='v'>%d dBm</span></div>",
+             (int)WiFi.RSSI());
+  sendBuf(c, "<div class='row'><span class='k'>IP Address</span>"
+             "<span class='v'>%s</span></div>",
+             WiFi.localIP().toString().c_str());
+  sendBuf(c, "<div class='row'><span class='k'>Uptime</span>"
+             "<span class='v' id='upt'>%lu s</span></div>",
+             (unsigned long)(millis() / 1000));
   c.print(F("<div style='margin-top:.8em;padding:.6em;background:#1a1a1a;"
             "border:1px solid #333;border-radius:5px'>"
             "<div style='display:flex;align-items:center;gap:.5em'>"
@@ -620,21 +650,22 @@ void sendChildConfigPage(WiFiClient& c) {
             "x.onload=function(){"
             "try{var d=JSON.parse(x.responseText);"
             "var tag=d.tag_name||'';var ver=tag.replace('v','');"
-            "var parts=ver.split('.');var rmaj=parseInt(parts[0])||0;var rmin=parseInt(parts[1])||0;"));
+            "var parts=ver.split('.');var rmaj=parseInt(parts[0])||0;var rmin=parseInt(parts[1])||0;var rpat=parseInt(parts[2])||0;"));
   sendBuf(c,
-            "var cmaj=%u;var cmin=%u;"
-            "if(rmaj>cmaj||(rmaj===cmaj&&rmin>cmin)){"
+            "var cmaj=%u;var cmin=%u;var cpat=%u;"
+            "var rver=rmaj*10000+rmin*100+rpat;var cver=cmaj*10000+cmin*100+cpat;"
+            "if(rver>cver){"
             "st.innerHTML='<b style=\"color:#f60\">v'+ver+' available!</b>';"
             "btn.textContent='Install Update';"
             "btn.disabled=false;"
             "btn.onclick=function(){doOta(d);};"
             "}else{"
-            "st.textContent='Up to date (v'+cmaj+'.'+cmin+')';"
+            "st.textContent='Up to date (v'+cmaj+'.'+cmin+'.'+cpat+')';"
             "btn.textContent='Check for Updates';btn.disabled=false;}"
             "}catch(e){st.textContent='Check failed';btn.textContent='Check for Updates';btn.disabled=false;}};"
             "x.onerror=function(){st.textContent='Cannot reach GitHub';btn.textContent='Check for Updates';btn.disabled=false;};"
             "x.send();}",
-            (unsigned)APP_MAJOR, (unsigned)APP_MINOR);
+            (unsigned)APP_MAJOR, (unsigned)APP_MINOR, (unsigned)APP_PATCH);
   c.print(F("function doOta(rel){"
             "var btn=document.getElementById('upd-btn');"
             "var st=document.getElementById('upd-status');"
