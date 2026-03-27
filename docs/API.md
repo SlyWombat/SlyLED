@@ -22,7 +22,7 @@ Unknown URL paths also return the SPA (client-side routing).
 **Response:** `200 OK`, `application/json`
 
 ```json
-{"role": "parent", "hostname": "WIN-HOSTNAME", "version": "5.1"}
+{"role": "parent", "hostname": "WIN-HOSTNAME", "version": "5.3.2"}
 ```
 
 ---

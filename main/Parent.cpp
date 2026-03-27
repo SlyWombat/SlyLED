@@ -227,7 +227,7 @@ void sendParentSPA(WiFiClient& c) {
           "</div>"
           "<div id='modal-body'></div>"
           "</div></div>");
-  sendBuf(c, "<div class='footer'>v%d.%d &mdash; Parent</div>", APP_MAJOR, APP_MINOR);
+  sendBuf(c, "<div class='footer'>v%d.%d.%d &mdash; Parent</div>", APP_MAJOR, APP_MINOR, APP_PATCH);
   c.flush();
 
   // ── JavaScript ──────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-# SlyLED Architecture — v5.1
+# SlyLED Architecture — v5.3
 
 ## Overview
 
@@ -122,7 +122,7 @@ Routes matched in order (longest/most-specific first):
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/` | Full 7-tab SPA |
-| GET | `/status` | `{"role":"parent","hostname":"...","version":"5.0"}` |
+| GET | `/status` | `{"role":"parent","hostname":"...","version":"5.3.2"}` |
 | GET | `/api/children/discover` | Broadcast PING, return unregistered performers found within 2 s |
 | GET/POST | `/api/children/import` | Import JSON array; dedup by hostname |
 | GET | `/api/children/export` | Export all performers as JSON |
@@ -216,7 +216,7 @@ Runner priority in LED task: **runner active > immediate action > idle black**
 
 ---
 
-## Action types (v5.1)
+## Action types (v5.3)
 
 ```cpp
 ACT_BLACKOUT = 0    // all LEDs off
@@ -340,7 +340,7 @@ Dark mode: `body#app` CSS class `light` toggled by `applyDarkMode()`. Persisted 
 
 ---
 
-## Flights and Shows (v5.1)
+## Flights and Shows (v5.3)
 
 **Flights** group a runner with a set of performers and a priority level. A flight says "run this runner on these performers."
 
@@ -421,7 +421,7 @@ Feature tracking: [github.com/SlyWombat/SlyLED/issues](https://github.com/SlyWom
 | High | mDNS/Zeroconf auto-discovery | [#1](https://github.com/SlyWombat/SlyLED/issues/1) |
 | High | Smart shows — moods and themes | [#3](https://github.com/SlyWombat/SlyLED/issues/3) |
 | High | Dashboard Gantt timeline | [#6](https://github.com/SlyWombat/SlyLED/issues/6) |
-| Medium | Giga R1 parent firmware sync to v5.1 | [#4](https://github.com/SlyWombat/SlyLED/issues/4) |
+| Medium | Giga R1 parent firmware sync to v5.3 | [#4](https://github.com/SlyWombat/SlyLED/issues/4) |
 | Medium | WLED bridge — deeper integration | [#7](https://github.com/SlyWombat/SlyLED/issues/7) |
 | Medium | Mac desktop parent polish | [#8](https://github.com/SlyWombat/SlyLED/issues/8) |
 | Medium | Layout canvas pixel visualization | [#9](https://github.com/SlyWombat/SlyLED/issues/9) |
@@ -431,7 +431,7 @@ Feature tracking: [github.com/SlyWombat/SlyLED/issues](https://github.com/SlyWom
 
 ---
 
-## Flash usage (v5.1)
+## Flash usage (v5.3)
 
 | Board | Flash | RAM |
 |-------|-------|-----|

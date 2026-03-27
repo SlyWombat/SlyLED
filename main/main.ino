@@ -128,7 +128,9 @@ static void checkSerialCmd() {
           Serial.print("SLYLED:");
           Serial.print(APP_MAJOR);
           Serial.print('.');
-          Serial.println(APP_MINOR);
+          Serial.print(APP_MINOR);
+          Serial.print('.');
+          Serial.println(APP_PATCH);
         } else if (strcmp(cmdBuf, "WIFIHASH") == 0) {
           // Simple hash of SSID+password so parent can detect changes
           uint32_t h = 5381;

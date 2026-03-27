@@ -569,7 +569,7 @@ void sendChildConfigPage(WiFiClient& c) {
   c.print(F("<form id='rf' action='/config/reset' method='POST' style='display:none'></form>"));
 
   // Footer — version only; Factory Reset lives in the Settings tab
-  sendBuf(c, "<div class='ftr'>v%d.%d</div>", APP_MAJOR, APP_MINOR);
+  sendBuf(c, "<div class='ftr'>v%d.%d.%d</div>", APP_MAJOR, APP_MINOR, APP_PATCH);
 
   // JavaScript
   c.print(F("<script>"));
