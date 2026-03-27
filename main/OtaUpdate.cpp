@@ -29,10 +29,13 @@ static unsigned long otaBootTime = 0;
 static bool otaConfirmed = false;
 
 bool otaStartUpdate(const char* url, const char* expectedSha256,
-                    uint8_t newMajor, uint8_t newMinor) {
-    if (newMajor < APP_MAJOR || (newMajor == APP_MAJOR && newMinor <= APP_MINOR)) {
-        if (Serial) Serial.printf("OTA: rejected v%d.%d (current v%d.%d)\n",
-                                   newMajor, newMinor, APP_MAJOR, APP_MINOR);
+                    uint8_t newMajor, uint8_t newMinor, uint8_t newPatch) {
+    // Anti-rollback: compare full 3-part version
+    uint32_t newVer = (uint32_t)newMajor * 10000 + (uint32_t)newMinor * 100 + newPatch;
+    uint32_t curVer = (uint32_t)APP_MAJOR * 10000 + (uint32_t)APP_MINOR * 100 + APP_PATCH;
+    if (newVer <= curVer) {
+        if (Serial) Serial.printf("OTA: rejected v%d.%d.%d (current v%d.%d.%d)\n",
+                                   newMajor, newMinor, newPatch, APP_MAJOR, APP_MINOR, APP_PATCH);
         otaStatus = OTA_STATUS_REJECTED;
         return false;
     }
@@ -101,10 +104,13 @@ void otaCheckConfirm() {
 #include <ESP8266WiFi.h>
 
 bool otaStartUpdate(const char* url, const char* expectedSha256,
-                    uint8_t newMajor, uint8_t newMinor) {
-    if (newMajor < APP_MAJOR || (newMajor == APP_MAJOR && newMinor <= APP_MINOR)) {
-        if (Serial) Serial.printf("OTA: rejected v%d.%d (current v%d.%d)\n",
-                                   newMajor, newMinor, APP_MAJOR, APP_MINOR);
+                    uint8_t newMajor, uint8_t newMinor, uint8_t newPatch) {
+    // Anti-rollback: compare full 3-part version
+    uint32_t newVer = (uint32_t)newMajor * 10000 + (uint32_t)newMinor * 100 + newPatch;
+    uint32_t curVer = (uint32_t)APP_MAJOR * 10000 + (uint32_t)APP_MINOR * 100 + APP_PATCH;
+    if (newVer <= curVer) {
+        if (Serial) Serial.printf("OTA: rejected v%d.%d.%d (current v%d.%d.%d)\n",
+                                   newMajor, newMinor, newPatch, APP_MAJOR, APP_MINOR, APP_PATCH);
         otaStatus = OTA_STATUS_REJECTED;
         return false;
     }
@@ -143,7 +149,7 @@ void otaCheckConfirm() {}
 
 #elif defined(BOARD_GIGA_CHILD)
 
-bool otaStartUpdate(const char*, const char*, uint8_t, uint8_t) { return false; }
+bool otaStartUpdate(const char*, const char*, uint8_t, uint8_t, uint8_t) { return false; }
 void otaConfirmBoot() {}
 bool otaIsNewFirmware() { return false; }
 void otaCheckConfirm() {}

@@ -1957,6 +1957,7 @@ def api_firmware_ota(cid):
         parts = latest.split(".")
         new_major = int(parts[0])
         new_minor = int(parts[1]) if len(parts) > 1 else 0
+        new_patch = int(parts[2]) if len(parts) > 2 else 0
     except (ValueError, IndexError):
         return jsonify(ok=False, err="invalid version format"), 500
 
@@ -1965,7 +1966,7 @@ def api_firmware_ota(cid):
     log.info("OTA: triggering update on %s (%s) to v%s from %s", ip, child.get("hostname"), latest, download_url)
     try:
         import urllib.request as _ur
-        body = json.dumps({"url": download_url, "sha256": "", "major": new_major, "minor": new_minor}).encode()
+        body = json.dumps({"url": download_url, "sha256": "", "major": new_major, "minor": new_minor, "patch": new_patch}).encode()
         req = _ur.Request(f"http://{ip}/ota", data=body, method="POST",
                           headers={"Content-Type": "application/json"})
         _ur.urlopen(req, timeout=5)

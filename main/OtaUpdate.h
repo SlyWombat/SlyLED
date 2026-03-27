@@ -32,9 +32,9 @@ extern volatile uint8_t otaProgress;  // 0-100
 // Start an OTA update. Returns true if update was applied (caller should reboot).
 // url: HTTP URL to firmware binary
 // expectedSha256: 64-char hex string (or empty to skip verification)
-// newMajor/newMinor: version of the incoming firmware (for anti-rollback)
+// newMajor/newMinor/newPatch: version of the incoming firmware (for anti-rollback)
 bool otaStartUpdate(const char* url, const char* expectedSha256,
-                    uint8_t newMajor, uint8_t newMinor);
+                    uint8_t newMajor, uint8_t newMinor, uint8_t newPatch);
 
 // Called from setup() after boot — ESP32: marks OTA partition as valid after
 // stable operation. D1 Mini: no-op (single slot).

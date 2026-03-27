@@ -106,24 +106,25 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
     childActSeq++;
   } else if (cmd == CMD_SET_BRIGHTNESS && plen >= 1) {
     childBrightness = payload[0];
-  } else if (cmd == CMD_OTA_UPDATE && plen > 4) {
-    // Payload: newMajor(1) + newMinor(1) + urlLen(2) + url(N) + sha256(64)
+  } else if (cmd == CMD_OTA_UPDATE && plen > 5) {
+    // Payload: newMajor(1) + newMinor(1) + newPatch(1) + urlLen(2) + url(N) + sha256(64)
     uint8_t newMaj = payload[0];
     uint8_t newMin = payload[1];
-    uint16_t urlLen = payload[2] | (payload[3] << 8);
-    if (urlLen > 0 && urlLen < (uint16_t)(plen - 4)) {
+    uint8_t newPat = payload[2];
+    uint16_t urlLen = payload[3] | (payload[4] << 8);
+    if (urlLen > 0 && urlLen < (uint16_t)(plen - 5)) {
       char otaUrl[256];
       uint16_t copyLen = urlLen < 255 ? urlLen : 255;
-      memcpy(otaUrl, &payload[4], copyLen);
+      memcpy(otaUrl, &payload[5], copyLen);
       otaUrl[copyLen] = '\0';
       char otaSha[65] = {0};
-      uint16_t shaOff = 4 + urlLen;
+      uint16_t shaOff = 5 + urlLen;
       if (shaOff + 64 <= (uint16_t)plen) {
         memcpy(otaSha, &payload[shaOff], 64);
         otaSha[64] = '\0';
       }
-      if (Serial) Serial.printf("OTA: received update cmd v%d.%d url=%s\n", newMaj, newMin, otaUrl);
-      bool ok = otaStartUpdate(otaUrl, otaSha, newMaj, newMin);
+      if (Serial) Serial.printf("OTA: received update cmd v%d.%d.%d url=%s\n", newMaj, newMin, newPat, otaUrl);
+      bool ok = otaStartUpdate(otaUrl, otaSha, newMaj, newMin, newPat);
       if (ok) {
         delay(500);
         #ifdef BOARD_ESP32
@@ -299,18 +300,20 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     char* shaStart = strstr(otaBody, "\"sha256\"");
     char* majStart = strstr(otaBody, "\"major\"");
     char* minStart = strstr(otaBody, "\"minor\"");
+    char* patStart = strstr(otaBody, "\"patch\"");
     char otaUrl[256] = {0};
     char otaSha[65] = {0};
-    uint8_t otaMaj = 0, otaMin = 0;
+    uint8_t otaMaj = 0, otaMin = 0, otaPat = 0;
     if (urlStart) { char* v = strchr(urlStart + 5, '"'); if (v) { char* e = strchr(v + 1, '"'); if (e && e - v - 1 < 255) { memcpy(otaUrl, v + 1, e - v - 1); } } }
     if (shaStart) { char* v = strchr(shaStart + 8, '"'); if (v) { char* e = strchr(v + 1, '"'); if (e && e - v - 1 <= 64) { memcpy(otaSha, v + 1, e - v - 1); } } }
     if (majStart) { char* v = strchr(majStart + 7, ':'); if (v) otaMaj = (uint8_t)atoi(v + 1); }
     if (minStart) { char* v = strchr(minStart + 7, ':'); if (v) otaMin = (uint8_t)atoi(v + 1); }
+    if (patStart) { char* v = strchr(patStart + 7, ':'); if (v) otaPat = (uint8_t)atoi(v + 1); }
     if (otaUrl[0]) {
       sendJsonOk(client);
       client.flush();
       delay(200);
-      bool ok = otaStartUpdate(otaUrl, otaSha, otaMaj, otaMin);
+      bool ok = otaStartUpdate(otaUrl, otaSha, otaMaj, otaMin, otaPat);
       if (ok) {
         delay(500);
         #ifdef BOARD_ESP32

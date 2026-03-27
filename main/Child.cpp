@@ -687,7 +687,7 @@ void sendChildConfigPage(WiFiClient& c) {
   c.print(F("if(!url){msg.textContent='No firmware binary found in release';btn.disabled=false;return;}"
             "bar.style.width='20%';msg.textContent='Sending update command...';"
             "var tag=rel.tag_name||'';var ver=tag.replace('v','');"
-            "var parts=ver.split('.');var maj=parseInt(parts[0])||0;var mn=parseInt(parts[1])||0;"
+            "var parts=ver.split('.');var maj=parseInt(parts[0])||0;var mn=parseInt(parts[1])||0;var pt=parseInt(parts[2])||0;"
             "var x=new XMLHttpRequest();"
             "x.open('POST','/ota',true);"
             "x.setRequestHeader('Content-Type','application/json');"
@@ -697,7 +697,7 @@ void sendChildConfigPage(WiFiClient& c) {
             "setTimeout(function(){bar.style.width='100%';msg.textContent='Update complete — refreshing...';location.reload();},20000);};"
             "x.onerror=function(){msg.textContent='Update failed — device may be rebooting';bar.style.width='100%';"
             "setTimeout(function(){location.reload();},15000);};"
-            "x.send(JSON.stringify({url:url,sha256:'',major:maj,minor:mn}));}"));
+            "x.send(JSON.stringify({url:url,sha256:'',major:maj,minor:mn,patch:pt}));}"));
   c.print(F("showTab(0);showStr(0);poll();setInterval(poll,3000);"
             "</script></body></html>"));
   c.flush();
