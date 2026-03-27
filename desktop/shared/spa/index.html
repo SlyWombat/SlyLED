@@ -422,21 +422,46 @@ function loadDash(){
     h+='<button class="btn" id="dash-refresh" onclick="dashRefresh(this)" style="background:#446;color:#fff;padding:.3em .8em" data-tip="dashRefresh">&#x21bb; Refresh All</button>';
     if(!startupDone)h+='<span id="dash-startup" style="color:#fa6;font-size:.82em">&#x23f3; Checking performers...</span>';
     h+='</div>';
-    h+='<table class="tbl"><tr><th>Hostname</th><th>Name</th><th>Type</th><th>IP</th><th>Status</th><th>FW</th><th>Strings</th><th>Last Seen</th></tr>';
+    h+='<table class="tbl"><tr><th>Hostname</th><th>Name</th><th>Board</th><th>IP</th><th>Status</th><th>FW</th><th>LEDs</th><th>Last Seen</th></tr>';
     if(d&&d.length){
       d.forEach(function(c){
         var st;
         if(!startupDone&&c.status!==1)st='<span class="badge" style="background:#333;color:#888">Checking...</span>';
         else st=c.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
-        var tp=c.type==='wled'?'<span class="badge" style="background:#f60;color:#fff">WLED</span>':'<span class="badge" style="background:#446;color:#fff">SlyLED</span>';
+        // Infer board type from child data
+        var board='SlyLED';
+        if(c.type==='wled')board='WLED';
+        else if(c.sc<=1&&c.strings&&c.strings.length&&c.strings[0].leds<=1)board='Giga';
+        else if(c.sc<=2)board='D1 Mini';
+        else board='ESP32';
+        var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b'};
+        var bc=boardColors[board]||'#446';
+        var tp='<span class="badge" style="background:'+bc+';color:#fff">'+board+'</span>';
+        // Total LED count across all configured strings
+        var totalLeds=0;
+        if(c.strings)c.strings.forEach(function(s,i){if(i<c.sc)totalLeds+=(s.leds||0);});
+        var ledInfo=c.sc+'&times;'+totalLeds;
         var ts=c.seen>0?new Date(c.seen*1000).toLocaleString():'-';
-        h+='<tr><td>'+escapeHtml(c.hostname)+'</td><td>'+escapeHtml(c.name||'-')+'</td><td>'+tp+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+escapeHtml(c.fwVersion||'-')+'</td><td>'+c.sc+'</td><td>'+ts+'</td></tr>';
+        h+='<tr><td>'+escapeHtml(c.hostname)+'</td><td>'+escapeHtml(c.name||'-')+'</td><td>'+tp+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td><span id="fw-'+c.id+'">'+escapeHtml(c.fwVersion||'-')+'</span></td><td>'+ledInfo+'</td><td>'+ts+'</td></tr>';
       });
     }else{
       h+='<tr><td colspan="8" style="color:#888;text-align:center">No performers registered</td></tr>';
     }
     h+='</table><div id="dash-runner" style="margin-top:1em"></div>';
     document.getElementById('t-dash').innerHTML=h;
+    // Check for firmware updates
+    api('GET','/api/firmware/check').then(function(chk){
+      if(!chk||!chk.children)return;
+      chk.children.forEach(function(u){
+        var el=document.getElementById('fw-'+u.id);
+        if(!el)return;
+        if(u.needsUpdate&&u.board!=='wled'){
+          el.innerHTML=escapeHtml(u.currentVersion)+' <button class="btn" onclick="otaTrigger('+u.id+')" style="background:#f60;color:#fff;padding:.1em .4em;font-size:.8em">Update to v'+escapeHtml(u.latestVersion)+'</button>';
+        }else if(!u.needsUpdate&&u.currentVersion!=='0.0'){
+          el.innerHTML=escapeHtml(u.currentVersion)+' <span style="color:#4c4;font-size:.8em">&#x2713;</span>';
+        }
+      });
+    }).catch(function(){});
     var onCnt=d?d.filter(function(c){return c.status===1;}).length:0;
     document.getElementById('hs').textContent=d&&d.length?onCnt+'/'+d.length+' performer'+(d.length>1?'s':'')+' online':'No performers';
     refreshRunnerStatus();
@@ -633,12 +658,19 @@ function _renderSetup(){
       +'<button class="btn btn-nav" onclick="setupRefreshAll(this)" style="margin-left:.5em" data-tip="setupRefreshAll">Refresh All</button>'
       +'</div>'
       +'<div id="disc-results" style="display:none;margin-bottom:.8em"></div>'
-      +'<table class="tbl"><tr><th>Hostname</th><th>Name</th><th>Type</th><th>IP</th><th>Status</th><th>FW</th><th>Strings</th><th>Actions</th></tr>';
+      +'<table class="tbl"><tr><th>Hostname</th><th>Name</th><th>Board</th><th>IP</th><th>Status</th><th>FW</th><th>LEDs</th><th>Actions</th></tr>';
     if(d&&d.length){
       d.forEach(function(c){
         var st=c.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
-        var tp=c.type==='wled'?'<span class="badge" style="background:#f60;color:#fff">WLED</span>':'<span class="badge" style="background:#446;color:#fff">SlyLED</span>';
-        h+='<tr><td>'+escapeHtml(c.hostname)+'</td><td>'+escapeHtml(c.name||'-')+'</td><td>'+tp+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+escapeHtml(c.fwVersion||'-')+'</td><td>'+c.sc+'</td><td>'
+        var board='SlyLED';
+        if(c.type==='wled')board='WLED';
+        else if(c.sc<=1&&c.strings&&c.strings.length&&c.strings[0].leds<=1)board='Giga';
+        else if(c.sc<=2)board='D1 Mini';
+        else board='ESP32';
+        var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b'};
+        var tp='<span class="badge" style="background:'+(boardColors[board]||'#446')+';color:#fff">'+board+'</span>';
+        var totalLeds=0;if(c.strings)c.strings.forEach(function(s,i){if(i<c.sc)totalLeds+=(s.leds||0);});
+        h+='<tr><td>'+escapeHtml(c.hostname)+'</td><td>'+escapeHtml(c.name||'-')+'</td><td>'+tp+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+escapeHtml(c.fwVersion||'-')+'</td><td>'+c.sc+'&times;'+totalLeds+'</td><td>'
           +'<button class="btn" onclick="showDetails('+c.id+')" style="background:#446;color:#fff" data-tip="setupDetails">Details</button>'
           +' <button class="btn btn-on" onclick="refreshChild('+c.id+')" data-tip="setupRefresh">Refresh</button>'
           +' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff" data-tip="setupReboot">Reboot</button>'
@@ -1885,6 +1917,17 @@ function shutdownService(){
   x.onload=function(){document.getElementById('hs').textContent='Service stopped. You may close this tab.';};
   x.onerror=function(){document.getElementById('hs').textContent='Service stopped.';};
   x.send('{}');
+}
+
+function otaTrigger(childId){
+  if(!confirm('Update this performer to the latest firmware? It will reboot during the update.'))return;
+  document.getElementById('hs').textContent='Sending OTA update command...';
+  api('POST','/api/firmware/ota/'+childId).then(function(r){
+    document.getElementById('hs').textContent='OTA update triggered (v'+r.version+') — performer will reboot when complete';
+    setTimeout(loadDash,15000);
+  }).catch(function(){
+    document.getElementById('hs').textContent='OTA update failed — check server logs';
+  });
 }
 
 function showQrCode(){

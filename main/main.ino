@@ -45,6 +45,7 @@
 #ifdef BOARD_CHILD
 #include "Child.h"
 #include "ChildLED.h"
+#include "OtaUpdate.h"
 #endif
 
 // ── setup ─────────────────────────────────────────────────────────────────────
@@ -101,6 +102,7 @@ void setup() {
 #endif
 
 #ifdef BOARD_CHILD
+  otaConfirmBoot();  // ESP32: start 60s watchdog for OTA rollback safety
   bootAnimation();
   // Announce ourselves to any listening parent
   sendPong(IPAddress(255, 255, 255, 255));
@@ -242,10 +244,12 @@ void loop() {
 #elif defined(BOARD_D1MINI)
   updateLED();
   handleClient();
+  otaCheckConfirm();
   yield();
 
 #else  // ESP32
   handleClient();
+  otaCheckConfirm();
   delay(10);
 #endif
 }

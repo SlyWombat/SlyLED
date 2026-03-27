@@ -35,6 +35,8 @@ constexpr uint8_t CMD_RUNNER_GO      = 0x30;   // parent→child: start runner a
 constexpr uint8_t CMD_RUNNER_STOP    = 0x31;   // parent→child: stop runner
 constexpr uint8_t CMD_STATUS_REQ     = 0x40;
 constexpr uint8_t CMD_STATUS_RESP    = 0x41;
+constexpr uint8_t CMD_OTA_UPDATE     = 0x50;   // parent→child: trigger OTA (URL + sha256 in payload)
+constexpr uint8_t CMD_OTA_STATUS     = 0x51;   // child→parent: OTA progress/result
 
 // ── Action type codes ─────────────────────────────────────────────────────────
 // (uint8_t — avoids Mbed prototype-generator issues with enums)

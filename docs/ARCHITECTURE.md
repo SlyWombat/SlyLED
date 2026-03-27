@@ -377,6 +377,40 @@ Native Android client at `android/`. Kotlin + Jetpack Compose + Material 3. Cons
 
 ---
 
+## OTA Firmware Updates (v5.2)
+
+Children (ESP32, D1 Mini) can be updated over WiFi. Firmware binaries are hosted on GitHub Releases.
+
+### Architecture
+- **ESP32:** Dual-bank OTA (ota_0 / ota_1 partitions). New firmware downloaded to inactive slot, verified, swapped on reboot. 60-second watchdog — if new firmware crashes before confirmation, bootloader reverts.
+- **D1 Mini:** Single-slot OTA via `ESP8266httpUpdate`. No automatic rollback.
+- **Giga R1:** USB/DFU only — no WiFi OTA.
+
+### Protocol
+- `CMD_OTA_UPDATE` (0x50): parent→child with URL + version + SHA-256
+- `CMD_OTA_STATUS` (0x51): child→parent with progress/result
+- HTTP `POST /ota` on child: same trigger via JSON body
+
+### API
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/firmware/latest` | Latest release version from GitHub (1-hour cache) |
+| GET | `/api/firmware/check` | Per-child version comparison against latest |
+| POST | `/api/firmware/ota/<cid>` | Trigger OTA update on a specific child |
+
+### Anti-rollback
+Children reject firmware with version ≤ current. ESP32 confirms new firmware after 60s stable operation via `esp_ota_mark_app_valid_cancel_rollback()`.
+
+### Files
+| File | Purpose |
+|------|---------|
+| `main/OtaUpdate.h` / `OtaUpdate.cpp` | OTA download, verify, apply, rollback |
+| `main/Protocol.h` | CMD_OTA_UPDATE (0x50), CMD_OTA_STATUS (0x51) |
+| `main/UdpCommon.cpp` | UDP + HTTP OTA handlers |
+| `main/main.ino` | Boot confirmation + loop check |
+
+---
+
 ## Roadmap
 
 Feature tracking: [github.com/SlyWombat/SlyLED/issues](https://github.com/SlyWombat/SlyLED/issues)
@@ -392,7 +426,7 @@ Feature tracking: [github.com/SlyWombat/SlyLED/issues](https://github.com/SlyWom
 | Medium | Mac desktop parent polish | [#8](https://github.com/SlyWombat/SlyLED/issues/8) |
 | Medium | Layout canvas pixel visualization | [#9](https://github.com/SlyWombat/SlyLED/issues/9) |
 | Future | WebSocket real-time pixel streaming | [#2](https://github.com/SlyWombat/SlyLED/issues/2) |
-| Future | OTA firmware updates over WiFi | [#5](https://github.com/SlyWombat/SlyLED/issues/5) |
+| ~~Done~~ | ~~OTA firmware updates over WiFi~~ | [#5](https://github.com/SlyWombat/SlyLED/issues/5) ✅ |
 | Future | Multi-language localization | [#10](https://github.com/SlyWombat/SlyLED/issues/10) |
 
 ---

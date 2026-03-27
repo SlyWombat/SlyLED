@@ -57,7 +57,7 @@ def _apply_logging(enabled):
 
 # ── Version ───────────────────────────────────────────────────────────────────
 
-VERSION = "5.1"
+VERSION = "5.2"
 
 # ── UDP protocol ──────────────────────────────────────────────────────────────
 
@@ -1734,6 +1734,138 @@ def api_reset():
         _save("layout",   _layout)
         _save("settings", _settings)
     return jsonify(ok=True)
+
+# ── OTA firmware update ───────────────────────────────────────────────────────
+
+_github_release_cache = {"data": None, "ts": 0}
+_GITHUB_RELEASE_TTL = 3600  # 1 hour cache
+
+def _fetch_github_release():
+    """Fetch latest release info from GitHub API. Returns dict or None."""
+    import urllib.request as _ur
+    now = time.time()
+    if _github_release_cache["data"] and now - _github_release_cache["ts"] < _GITHUB_RELEASE_TTL:
+        return _github_release_cache["data"]
+    try:
+        req = _ur.Request(
+            "https://api.github.com/repos/SlyWombat/SlyLED/releases/latest",
+            headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "SlyLED-Parent"})
+        resp = _ur.urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode("utf-8"))
+        tag = data.get("tag_name", "").lstrip("v")
+        assets = []
+        for a in data.get("assets", []):
+            assets.append({
+                "name": a["name"],
+                "size": a.get("size", 0),
+                "url": a.get("browser_download_url", ""),
+            })
+        result = {"version": tag, "tag": data.get("tag_name", ""), "assets": assets,
+                  "url": data.get("html_url", "")}
+        _github_release_cache["data"] = result
+        _github_release_cache["ts"] = now
+        log.info("GitHub release: v%s (%d assets)", tag, len(assets))
+        return result
+    except Exception as e:
+        log.debug("GitHub release fetch failed: %s", e)
+        return _github_release_cache.get("data")  # return stale cache if available
+
+@app.get("/api/firmware/latest")
+def api_firmware_latest():
+    """Return latest firmware version from GitHub Releases."""
+    rel = _fetch_github_release()
+    if not rel:
+        return jsonify(ok=False, err="Could not fetch release info from GitHub"), 502
+    return jsonify(rel)
+
+@app.get("/api/firmware/check")
+def api_firmware_check():
+    """Compare all children firmware against latest release. Returns per-child update status."""
+    rel = _fetch_github_release()
+    if not rel:
+        return jsonify(ok=False, err="Could not fetch release info"), 502
+    latest = rel.get("version", "0.0")
+    results = []
+    for c in _children:
+        fw = c.get("fwVersion", "0.0") or "0.0"
+        needs_update = False
+        try:
+            cur_parts = [int(x) for x in fw.split(".")]
+            lat_parts = [int(x) for x in latest.split(".")]
+            needs_update = lat_parts > cur_parts
+        except (ValueError, IndexError):
+            needs_update = fw != latest
+        # Determine download URL for this child's board type
+        board = "esp32" if c.get("sc", 0) > 2 else "d1mini" if c.get("sc", 0) <= 2 else "unknown"
+        if c.get("type") == "wled":
+            board = "wled"
+        asset_map = {"esp32": "esp32-firmware-merged.bin", "d1mini": "d1mini-firmware.bin"}
+        asset_name = asset_map.get(board)
+        download_url = ""
+        if asset_name:
+            for a in rel.get("assets", []):
+                if a["name"] == asset_name:
+                    download_url = a["url"]
+                    break
+        results.append({
+            "id": c["id"], "hostname": c.get("hostname"),
+            "currentVersion": fw, "latestVersion": latest,
+            "needsUpdate": needs_update, "board": board,
+            "downloadUrl": download_url,
+        })
+    return jsonify({"latest": latest, "children": results})
+
+@app.post("/api/firmware/ota/<int:cid>")
+def api_firmware_ota(cid):
+    """Trigger OTA update on a specific child."""
+    child = next((c for c in _children if c["id"] == cid), None)
+    if not child:
+        return jsonify(ok=False, err="child not found"), 404
+    if child.get("type") == "wled":
+        return jsonify(ok=False, err="WLED devices update through their own UI"), 400
+    if child.get("status") != 1:
+        return jsonify(ok=False, err="child is offline"), 400
+
+    rel = _fetch_github_release()
+    if not rel:
+        return jsonify(ok=False, err="Could not fetch release info"), 502
+    latest = rel.get("version", "0.0")
+
+    # Determine the right binary URL
+    board = "esp32" if child.get("sc", 0) > 2 else "d1mini"
+    asset_map = {"esp32": "esp32-firmware-merged.bin", "d1mini": "d1mini-firmware.bin"}
+    asset_name = asset_map.get(board)
+    download_url = ""
+    for a in rel.get("assets", []):
+        if a["name"] == asset_name:
+            download_url = a["url"]
+            break
+    if not download_url:
+        return jsonify(ok=False, err=f"no firmware binary for {board}"), 404
+
+    # Parse version
+    try:
+        parts = latest.split(".")
+        new_major = int(parts[0])
+        new_minor = int(parts[1]) if len(parts) > 1 else 0
+    except (ValueError, IndexError):
+        return jsonify(ok=False, err="invalid version format"), 500
+
+    # Send OTA command to child via HTTP POST /ota
+    ip = child["ip"]
+    log.info("OTA: triggering update on %s (%s) to v%s from %s", ip, child.get("hostname"), latest, download_url)
+    try:
+        import urllib.request as _ur
+        body = json.dumps({"url": download_url, "sha256": "", "major": new_major, "minor": new_minor}).encode()
+        req = _ur.Request(f"http://{ip}/ota", data=body, method="POST",
+                          headers={"Content-Type": "application/json"})
+        _ur.urlopen(req, timeout=5)
+    except Exception as e:
+        log.warning("OTA trigger to %s failed: %s", ip, e)
+        # Child may have already started updating and dropped the connection — that's OK
+        pass
+
+    return jsonify(ok=True, version=latest, board=board)
 
 # ── QR code for mobile app ────────────────────────────────────────────────────
 

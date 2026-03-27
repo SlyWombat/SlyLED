@@ -454,6 +454,33 @@ def run():
         ok('Demo no-perf flight has empty performerIds',
            len(flights) == 1 and flights[0].get('performerIds') == [])
 
+        # ── OTA firmware endpoints ─────────────────────────────────
+        # /api/firmware/latest — may fail if no internet, but should not crash
+        r = c.get('/api/firmware/latest')
+        ok('GET /api/firmware/latest returns JSON', r.status_code in (200, 502))
+
+        # /api/firmware/check — needs children, add one
+        c.post('/api/children', json={'ip': '10.0.0.88'})
+        r = c.get('/api/firmware/check')
+        if r.status_code == 200:
+            d = r.get_json()
+            ok('Firmware check has children list', 'children' in d)
+            ok('Firmware check has latest version', 'latest' in d)
+        else:
+            ok('Firmware check (no internet)', r.status_code == 502)
+
+        # /api/firmware/ota — child not found
+        r = c.post('/api/firmware/ota/9999')
+        ok('OTA unknown child → 404', r.status_code == 404)
+
+        # /api/firmware/ota — child offline
+        children_list = c.get('/api/children').get_json()
+        if children_list:
+            test_cid = children_list[-1]['id']
+            r = c.post(f'/api/firmware/ota/{test_cid}')
+            ok('OTA offline child → 400', r.status_code == 400)
+            c.delete(f'/api/children/{test_cid}')
+
         # ── Shutdown (don't actually call it) ───────────────────────
         # r = c.post('/api/shutdown')  # skip — would kill process
 
