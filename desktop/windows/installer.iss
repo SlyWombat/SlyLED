@@ -81,6 +81,17 @@ Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED H
 Type: dirifempty; Name: "{app}"
 
 [Code]
+// Kill running SlyLED.exe before install/upgrade
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  Result := '';
+  Exec('taskkill', '/f /im SlyLED.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // Small delay to let the process fully exit and release file locks
+  Sleep(1000);
+end;
+
 // Ask whether to delete saved state (children, runners, settings) on uninstall
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var

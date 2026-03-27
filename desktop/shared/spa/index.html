@@ -2075,12 +2075,46 @@ function _doFlashLocal(btn,port,board,fwId){
             document.getElementById('fw-prog-msg').textContent='Error: '+s.error;
             document.getElementById('fw-prog-fill').style.background='#a22';
           }else{
-            document.getElementById('fw-prog-msg').textContent='Flash complete — board is rebooting';
+            document.getElementById('fw-prog-msg').textContent='Flash complete — waiting for board to come online...';
+            _waitForBoardOnline(port);
           }
         }
       });
     },500);
   });
+}
+
+function _waitForBoardOnline(port){
+  // Poll port list until the board reappears, then rescan
+  var attempts=0;
+  var maxAttempts=15; // 15 x 2s = 30s max
+  var poller=setInterval(function(){
+    attempts++;
+    ra('GET','/api/firmware/ports',null,function(d){
+      if(!d)return;
+      var found=false;
+      d.forEach(function(p){if(p.port===port)found=true;});
+      var msg=document.getElementById('fw-prog-msg');
+      if(found){
+        clearInterval(poller);
+        if(msg)msg.textContent='Board back online on '+port;
+        // Rescan ports and refresh OTA status
+        setTimeout(function(){
+          loadFirmware();
+          document.getElementById('fw-progress').style.display='none';
+        },2000);
+      }else if(attempts>=maxAttempts){
+        clearInterval(poller);
+        if(msg)msg.textContent='Board did not reappear on '+port+' — check connection';
+        setTimeout(function(){
+          loadFirmware();
+          document.getElementById('fw-progress').style.display='none';
+        },3000);
+      }else{
+        if(msg)msg.textContent='Waiting for board on '+port+'... ('+attempts+'/'+maxAttempts+')';
+      }
+    });
+  },2000);
 }
 
 function quickFlash(port,board,fwId,btn){
@@ -2272,7 +2306,7 @@ function loadDemoShow(){
 }
 
 // Init
-ra('GET','/api/status',null,function(d){
+ra('GET','/status',null,function(d){
   if(d&&d.version){
     var fv=document.getElementById('fv');
     if(fv)fv.textContent='SlyLED v'+d.version+' \u2014 The Orchestrator';
