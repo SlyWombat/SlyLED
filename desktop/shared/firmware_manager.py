@@ -139,61 +139,16 @@ def get_flash_status():
     with _flash_lock:
         return dict(_flash_status)
 
-def _find_python_with_esptool():
-    """Find a Python interpreter that has esptool installed."""
-    import shutil
-
-    def _has_esptool(python_path):
-        """Check if a Python interpreter has esptool available."""
-        try:
-            result = subprocess.run(
-                [python_path, "-c", "import esptool; print('ok')"],
-                capture_output=True, text=True, timeout=5)
-            return result.returncode == 0 and "ok" in result.stdout
-        except Exception:
-            return False
-
-    # If not frozen (dev mode), sys.executable has esptool
-    if not getattr(sys, "frozen", False):
-        return sys.executable
-
-    # PyInstaller: find the venv Python that built us (next to the .exe or up in project)
-    exe_dir = Path(sys.executable).parent
-    # Check for venv in common locations relative to exe
-    venv_candidates = [
-        exe_dir / ".venv" / "Scripts" / "python.exe",           # next to exe
-        exe_dir.parent / ".venv" / "Scripts" / "python.exe",    # one up
-        exe_dir.parent.parent / ".venv" / "Scripts" / "python.exe",
-        # The actual project venv path
-        exe_dir.parent / "desktop" / "windows" / ".venv" / "Scripts" / "python.exe",
-    ]
-    for venv_py in venv_candidates:
-        if venv_py.is_file() and _has_esptool(str(venv_py)):
-            return str(venv_py)
-
-    # Check PATH for any Python with esptool
-    for name in ("python", "python3", "python.exe"):
-        found = shutil.which(name)
-        if found and "SlyLED" not in found and _has_esptool(found):
-            return found
-
-    # Check common Windows install paths
-    for ver in ("314", "313", "312", "311", "310", "39"):
-        candidate = os.path.expandvars(rf"%LOCALAPPDATA%\Programs\Python\Python{ver}\python.exe")
-        if os.path.isfile(candidate) and _has_esptool(candidate):
-            return candidate
-
-    return None
-
 def flash_esp(port, bin_path, board="esp32", progress_cb=None):
-    """Flash an ESP32 or ESP8266 using esptool via a real Python subprocess."""
+    """Flash an ESP32 or ESP8266 using esptool in-process (no subprocess needed)."""
     with _flash_lock:
-        _flash_status.update(running=True, progress=0, message="Locating Python + esptool...", error=None)
+        _flash_status.update(running=True, progress=0, message="Preparing esptool...", error=None)
 
-    python = _find_python_with_esptool()
-    if not python:
+    try:
+        import esptool
+    except ImportError:
         with _flash_lock:
-            _flash_status.update(error="No Python with esptool found. Run: pip install esptool", message="Error", running=False)
+            _flash_status.update(error="esptool not available in this build", message="Error", running=False)
         return False
 
     try:
@@ -206,51 +161,84 @@ def flash_esp(port, bin_path, board="esp32", progress_cb=None):
             _flash_status.update(progress=5, message=f"Connecting to {port}...")
 
         baud = "460800" if board == "d1mini" else "921600"
-        cmd = [python, "-m", "esptool", "--port", port, "--baud", baud,
-               "write_flash", "0x0", str(bin_path)]
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        last_lines = []
-        for line in proc.stdout:
-            line = line.strip()
-            if line:
-                last_lines.append(line)
-                if len(last_lines) > 20:
-                    last_lines.pop(0)
-            if "Connecting" in line:
-                with _flash_lock:
-                    _flash_status.update(progress=10, message="Connecting to board...")
-            elif "Chip is" in line or "Detecting" in line:
-                with _flash_lock:
-                    _flash_status.update(progress=15, message=line)
-            elif "Erasing" in line or "Compressed" in line:
-                with _flash_lock:
-                    _flash_status.update(progress=20, message="Erasing flash...")
-            elif "%" in line and "Writing" in line:
-                try:
-                    pct = int(line.split("(")[1].split("%")[0].strip())
-                    scaled = 20 + int(pct * 0.75)
-                    with _flash_lock:
-                        _flash_status["progress"] = scaled
-                        _flash_status["message"] = f"Writing... {pct}%"
-                except Exception:
-                    pass
-            elif "Hash of data verified" in line:
-                with _flash_lock:
-                    _flash_status.update(progress=98, message="Verifying hash...")
-            elif "Hard resetting" in line:
-                with _flash_lock:
-                    _flash_status.update(progress=100, message="Resetting board...")
-            if progress_cb:
-                progress_cb(line)
-        proc.wait()
-        if proc.returncode != 0:
-            detail = "\n".join(last_lines[-5:]) if last_lines else "Unknown error"
+        args = ["--port", port, "--baud", baud, "write_flash", "0x0", str(bin_path)]
+
+        # Capture esptool output by redirecting stdout/stderr to a pipe
+        import io
+        captured = io.StringIO()
+        exit_code = 0
+
+        # esptool.main() manipulates sys.argv and calls sys.exit()
+        # We override both and capture output via a background reader
+        old_argv = sys.argv
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+
+        # Use a tee writer that captures output AND updates progress
+        class ProgressWriter:
+            def __init__(self, status_lock, status_dict):
+                self._lock = status_lock
+                self._status = status_dict
+                self._buf = []
+            def write(self, text):
+                captured.write(text)
+                for line in text.split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    self._buf.append(line)
+                    if "Connecting" in line:
+                        with self._lock:
+                            self._status.update(progress=10, message="Connecting to board...")
+                    elif "Chip is" in line or "Detecting" in line:
+                        with self._lock:
+                            self._status.update(progress=15, message=line[:60])
+                    elif "Erasing" in line or "Compressed" in line:
+                        with self._lock:
+                            self._status.update(progress=20, message="Erasing flash...")
+                    elif "%" in line and ("Writing" in line or "wrote" in line.lower()):
+                        try:
+                            pct = int(line.split("(")[1].split("%")[0].strip())
+                            scaled = 20 + int(pct * 0.75)
+                            with self._lock:
+                                self._status["progress"] = scaled
+                                self._status["message"] = f"Writing... {pct}%"
+                        except Exception:
+                            pass
+                    elif "Hash of data verified" in line:
+                        with self._lock:
+                            self._status.update(progress=98, message="Verifying hash...")
+                    elif "Hard resetting" in line:
+                        with self._lock:
+                            self._status.update(progress=100, message="Resetting board...")
+            def flush(self):
+                pass
+            def last_lines(self, n=5):
+                return self._buf[-n:] if self._buf else []
+
+        writer = ProgressWriter(_flash_lock, _flash_status)
+        sys.argv = ["esptool"] + args
+        sys.stdout = writer
+        sys.stderr = writer
+        try:
+            esptool.main()
+        except SystemExit as e:
+            exit_code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
+        finally:
+            sys.argv = old_argv
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+
+        if exit_code != 0:
+            detail = "\n".join(writer.last_lines(5))
             with _flash_lock:
-                _flash_status.update(error=f"Flash failed (exit {proc.returncode}): {detail}", message="Error")
+                _flash_status.update(error=f"Flash failed: {detail}", message="Error")
             return False
+
         with _flash_lock:
             _flash_status.update(progress=100, message="Flash complete — board is rebooting")
         return True
+
     except Exception as e:
         with _flash_lock:
             _flash_status.update(error=str(e), message="Error")
