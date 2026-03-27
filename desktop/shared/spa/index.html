@@ -733,15 +733,22 @@ function addDiscovered(ip){
 }
 
 function removeChild(id){
-  if(!confirm('Remove this performer?'))return;
-  document.getElementById('hs').textContent='Removing performer...';
-  api('DELETE','/api/children/'+id).then(function(){
-    document.getElementById('hs').textContent='Performer removed';
+  if(!confirm('Remove this performer (#'+id+')?'))return;
+  document.getElementById('hs').textContent='Removing performer #'+id+'...';
+  var x=new XMLHttpRequest();
+  x.open('DELETE','/api/children/'+id,true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.onload=function(){
+    var ok=false;
+    try{var r=JSON.parse(x.responseText);ok=r&&r.ok;}catch(e){}
+    document.getElementById('hs').textContent=ok?'Performer removed':'Remove failed (HTTP '+x.status+')';
     loadSetup();
-  }).catch(function(){
-    document.getElementById('hs').textContent='Remove failed — check server logs';
+  };
+  x.onerror=function(){
+    document.getElementById('hs').textContent='Remove failed: network error';
     loadSetup();
-  });
+  };
+  x.send(null);
 }
 
 function refreshChild(id){
