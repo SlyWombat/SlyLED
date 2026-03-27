@@ -108,19 +108,24 @@ The interface uses a "dark-ops" aesthetic with high contrast in critical control
 Orchestrator (Desktop Flask / Giga R1)
     |  UDP port 4210 binary protocol v3
     |  HTTP JSON API for WLED devices
+    |  HTTP REST API ← Android app / browser SPA
     v
 Performers (SlyLED: ESP32/D1 Mini/Giga Child | WLED devices)
 ```
 
+### Client Platforms
+- **Desktop SPA** — 7-tab HTML/JS served by Flask (`desktop/shared/spa/index.html`)
+- **Android app** — Kotlin/Compose native client consuming the same REST API (`android/`)
+
 ### Protocol Layers
 - **UDP Binary (port 4210):** PING/PONG, ACTION, LOAD_STEP, RUNNER_GO/STOP, ACTION_EVENT, STATUS
 - **HTTP JSON:** WLED device control via `/json/state`, device info via `/json/info`
-- **WebSocket (future):** Real-time pixel streaming for advanced effects
+- **WebSocket (future):** Real-time pixel streaming for advanced effects ([#2](https://github.com/SlyWombat/SlyLED/issues/2))
 
 ### Discovery
 - **SlyLED devices:** UDP broadcast PING on port 4210, persistent listener collects PONGs
 - **WLED devices:** HTTP probe of `/json/info` on manual IP add
-- **Future:** mDNS/Zeroconf browsing for `_wled._tcp` and `_slyled._tcp`
+- **Planned:** mDNS/Zeroconf browsing for `_wled._tcp` and `_slyled._tcp` ([#1](https://github.com/SlyWombat/SlyLED/issues/1))
 
 ### Sync-Clock
 - NTP-synced epoch timestamps in RUNNER_GO packets
@@ -132,9 +137,9 @@ Performers (SlyLED: ESP32/D1 Mini/Giga Child | WLED devices)
 | Tab | Purpose | Key Components |
 |-----|---------|---------------|
 | Dashboard | System overview | Performer table, live runner timeline canvas |
-| Setup | Device management | Add/discover/remove/reboot performers, export/import |
+| Setup | Device management | Add/discover/remove/reboot performers |
 | Layout | Spatial mapping | Drag-and-drop canvas, string visualization, live preview |
 | Actions | Effect library | Create/edit 14 action types with parameter editors |
-| Runtime | Show control | Runner list, sync/start/stop, timeline preview |
-| Settings | App config | Name, units, canvas size, dark mode, logging |
-| Firmware | OTA updates | Port detection, version query, flash management |
+| Runtime | Show control | Runners, flights, shows; sync/start/stop; step overrides; global brightness |
+| Settings | App config | Name, units, canvas size, dark mode; save/load config & shows; demo show generator |
+| Firmware | OTA updates | Port detection, version query, flash management, WiFi credentials |

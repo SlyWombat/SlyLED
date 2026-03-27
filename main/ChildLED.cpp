@@ -16,6 +16,94 @@
 #include "Child.h"
 #include "ChildLED.h"
 
+// ── Named constants (Issue #28 — replace magic numbers) ──────────────────
+
+// Chase defaults
+constexpr uint8_t  CHASE_MIN_SPACING       = 2;
+constexpr uint8_t  CHASE_DEFAULT_SPACING    = 3;
+
+// Fire effect
+constexpr uint8_t  FIRE_COOL_BASE_ADD      = 2;    // added to cooling divisor
+constexpr uint8_t  FIRE_SPARK_ZONE_MAX     = 7;    // max spark spawn pixel
+constexpr uint8_t  FIRE_SPARK_TEMP_MIN     = 160;  // min spark temperature
+constexpr uint8_t  FIRE_SPARK_TEMP_MAX     = 255;  // max spark temperature (exclusive)
+constexpr uint8_t  FIRE_HUE_ORANGE         = 85;   // heat threshold: red → orange
+constexpr uint8_t  FIRE_HUE_YELLOW         = 170;  // heat threshold: orange → yellow
+constexpr uint8_t  FIRE_HEAT_SCALE         = 3;    // multiplier for heat-to-RGB mapping
+constexpr uint16_t FIRE_COOL_SCALE         = 10;   // numerator for cooling calculation
+
+// Comet effect
+constexpr uint8_t  COMET_DEFAULT_TAIL      = 5;
+constexpr uint8_t  COMET_DEFAULT_FADE      = 200;  // nscale8 fade when no decay specified
+constexpr uint8_t  COMET_DECAY_SCALE       = 100;  // divisor for decay percentage
+
+// Twinkle effect
+constexpr uint8_t  TWINKLE_DEFAULT_FADE    = 240;  // nscale8 fade when no fadeSpeed specified
+constexpr uint8_t  TWINKLE_DEFAULT_DENSITY = 3;
+constexpr uint8_t  TWINKLE_SPAWN_CHANCE    = 40;   // random8() threshold for spawning
+constexpr uint8_t  TWINKLE_BRI_MIN         = 128;  // minimum brightness for new twinkle
+constexpr uint8_t  TWINKLE_BRI_MAX         = 255;  // max brightness (exclusive)
+
+// Strobe defaults
+constexpr uint16_t STROBE_DEFAULT_PERIOD   = 200;
+constexpr uint8_t  STROBE_DEFAULT_DUTY     = 50;
+constexpr uint8_t  STROBE_MAX_DUTY         = 100;
+
+// Wipe sequence
+constexpr uint16_t WIPE_DEFAULT_SPEED      = 50;
+constexpr uint8_t  WIPE_CYCLE_MULTIPLIER   = 2;    // fill + unfill = 2x range length
+
+// Scanner
+constexpr uint16_t SCANNER_DEFAULT_SPEED   = 30;
+constexpr uint8_t  SCANNER_DEFAULT_BAR     = 3;
+constexpr uint8_t  SCANNER_TRAIL_FADE      = 200;  // nscale8 trail fade
+
+// Sparkle
+constexpr uint8_t  SPARKLE_DEFAULT_DENSITY = 2;
+constexpr uint8_t  SPARKLE_SPAWN_CHANCE    = 60;   // random8() threshold
+
+// Boot animation
+constexpr uint16_t BOOT_WAIT_MS           = 3000;
+constexpr uint16_t BOOT_SWEEP_MS          = 1500;  // total rainbow sweep duration
+constexpr uint8_t  BOOT_MIN_DELAY         = 2;     // minimum per-pixel delay
+constexpr uint16_t BOOT_HOLD_MS           = 500;   // hold after sweep
+constexpr uint16_t BOOT_FLASH_COUNT       = 150;   // LED count for no-string flash
+constexpr uint16_t BOOT_FLASH_MS          = 800;
+constexpr uint8_t  BOOT_GIGA_HUE_STEP     = 4;     // hue increment per frame
+constexpr uint8_t  BOOT_GIGA_FRAME_MS     = 6;     // ms per frame
+constexpr uint16_t BOOT_GIGA_HOLD_MS      = 200;
+
+// Sync blink
+constexpr uint16_t SYNC_BLINK_MS          = 200;
+
+// Frame delays (ms per action type)
+constexpr uint8_t FRAME_DELAY_SOLID       = 50;
+constexpr uint8_t FRAME_DELAY_FADE        = 20;
+constexpr uint8_t FRAME_DELAY_BREATHE     = 15;
+constexpr uint8_t FRAME_DELAY_CHASE       = 10;
+constexpr uint8_t FRAME_DELAY_RAINBOW     = 10;
+constexpr uint8_t FRAME_DELAY_FIRE        = 15;
+constexpr uint8_t FRAME_DELAY_COMET       = 10;
+constexpr uint8_t FRAME_DELAY_TWINKLE     = 10;
+constexpr uint8_t FRAME_DELAY_STROBE      = 5;
+constexpr uint8_t FRAME_DELAY_WIPE_SEQ    = 10;
+constexpr uint8_t FRAME_DELAY_SCANNER     = 10;
+constexpr uint8_t FRAME_DELAY_SPARKLE     = 15;
+constexpr uint8_t FRAME_DELAY_GRADIENT    = 100;
+constexpr uint8_t FRAME_DELAY_DEFAULT     = 10;
+constexpr uint8_t FRAME_DELAY_OFF         = 10;
+
+// Boot animation wait loop
+constexpr uint8_t BOOT_POLL_MS            = 50;
+
+// Palette constants (Heat palette thresholds reuse FIRE_HUE_*)
+constexpr uint8_t PAL_HEAT_THRESH1        = 85;
+constexpr uint8_t PAL_HEAT_THRESH2        = 170;
+constexpr uint8_t PAL_HEAT_SCALE          = 3;
+
+// NTP epoch threshold: January 1, 2020 — if currentEpoch() < this, NTP failed
+constexpr uint32_t NTP_EPOCH_2020         = 1577836800UL;
+
 // ── Show + clear helpers ──────────────────────────────────────────────────
 
 #ifdef BOARD_FASTLED
@@ -89,9 +177,9 @@ static CRGB paletteColor(uint8_t palId, uint8_t idx) {
     case PAL_PARTY:   return hsvToRgb((uint8_t)(idx*3), 255, 255);
     case PAL_HEAT: {
       uint8_t t = idx;
-      if (t < 85) return CRGB(t*3, 0, 0);
-      if (t < 170) return CRGB(255, (uint8_t)((t-85)*3), 0);
-      return CRGB(255, 255, (uint8_t)((t-170)*3));
+      if (t < PAL_HEAT_THRESH1) return CRGB(t*PAL_HEAT_SCALE, 0, 0);
+      if (t < PAL_HEAT_THRESH2) return CRGB(255, (uint8_t)((t-PAL_HEAT_THRESH1)*PAL_HEAT_SCALE), 0);
+      return CRGB(255, 255, (uint8_t)((t-PAL_HEAT_THRESH2)*PAL_HEAT_SCALE));
     }
     case PAL_COOL:    return hsvToRgb((uint8_t)(idx/2 + 140), 180, (uint8_t)(180 + idx/4));
     case PAL_PASTEL:  return hsvToRgb(idx, 100, 255);
@@ -144,7 +232,7 @@ static void renderChase(uint8_t r, uint8_t g, uint8_t b,
                          unsigned long elapsedMs,
                          uint8_t st, uint8_t en) {
   if (speedMs == 0) speedMs = 1;
-  if (spacing < 2) spacing = 3;
+  if (spacing < CHASE_MIN_SPACING) spacing = CHASE_DEFAULT_SPACING;
   uint8_t rangeLen = en - st + 1;
   uint8_t offset = (uint8_t)((elapsedMs / speedMs) % spacing);
   for (uint8_t i = 0; i < rangeLen; i++) {
@@ -174,7 +262,7 @@ static void renderFire(uint8_t r, uint8_t g, uint8_t b,
   uint8_t rangeLen = en - st + 1;
   // Cool down
   for (uint8_t i = 0; i < rangeLen; i++) {
-    uint8_t cool = random8(0, ((uint16_t)cooling * 10 / rangeLen) + 2);
+    uint8_t cool = random8(0, ((uint16_t)cooling * FIRE_COOL_SCALE / rangeLen) + FIRE_COOL_BASE_ADD);
     heat[i] = (heat[i] > cool) ? heat[i] - cool : 0;
   }
   // Heat rises
@@ -183,16 +271,16 @@ static void renderFire(uint8_t r, uint8_t g, uint8_t b,
   }
   // Sparks
   if (random8() < sparking) {
-    uint8_t y = random8(min((uint8_t)7, rangeLen));
-    heat[y] = qadd8(heat[y], random8(160, 255));
+    uint8_t y = random8(min(FIRE_SPARK_ZONE_MAX, rangeLen));
+    heat[y] = qadd8(heat[y], random8(FIRE_SPARK_TEMP_MIN, FIRE_SPARK_TEMP_MAX));
   }
   // Map heat to colour
   for (uint8_t j = 0; j < rangeLen; j++) {
     uint8_t t = heat[j];
     uint8_t rr, gg, bb;
-    if (t < 85)       { rr = (uint8_t)((uint16_t)r*t*3/255); gg = 0; bb = 0; }
-    else if (t < 170) { rr = r; gg = (uint8_t)((uint16_t)g*(t-85)*3/255); bb = 0; }
-    else              { rr = r; gg = g; bb = (uint8_t)((uint16_t)b*(t-170)*3/255); }
+    if (t < FIRE_HUE_ORANGE)       { rr = (uint8_t)((uint16_t)r*t*FIRE_HEAT_SCALE/255); gg = 0; bb = 0; }
+    else if (t < FIRE_HUE_YELLOW)  { rr = r; gg = (uint8_t)((uint16_t)g*(t-FIRE_HUE_ORANGE)*FIRE_HEAT_SCALE/255); bb = 0; }
+    else                           { rr = r; gg = g; bb = (uint8_t)((uint16_t)b*(t-FIRE_HUE_YELLOW)*FIRE_HEAT_SCALE/255); }
     leds[st + j] = CRGB(rr, gg, bb);
   }
 }
@@ -203,10 +291,10 @@ static void renderComet(uint8_t r, uint8_t g, uint8_t b,
                          uint8_t st, uint8_t en) {
   uint8_t rangeLen = en - st + 1;
   if (speedMs == 0) speedMs = 1;
-  if (tailLen < 1) tailLen = 5;
+  if (tailLen < 1) tailLen = COMET_DEFAULT_TAIL;
   uint8_t headPos = (uint8_t)((elapsedMs / speedMs) % (rangeLen + tailLen));
   // Fade all
-  uint8_t fade = decayPct ? (uint8_t)(256 - decayPct * 256 / 100) : 200;
+  uint8_t fade = decayPct ? (uint8_t)(256 - decayPct * 256 / COMET_DECAY_SCALE) : COMET_DEFAULT_FADE;
   for (uint8_t i = st; i <= en; i++) leds[i].nscale8(fade);
   // Draw head
   uint8_t pos = (dir == DIR_W || dir == DIR_S) ? (rangeLen - 1 - headPos % rangeLen) : (headPos % rangeLen);
@@ -219,15 +307,15 @@ static void renderTwinkle(uint8_t r, uint8_t g, uint8_t b,
                            uint8_t st, uint8_t en) {
   uint8_t rangeLen = en - st + 1;
   // Fade existing
-  uint8_t fade = fadeSpeed ? (uint8_t)(255 - fadeSpeed) : 240;
+  uint8_t fade = fadeSpeed ? (uint8_t)(255 - fadeSpeed) : TWINKLE_DEFAULT_FADE;
   for (uint8_t i = st; i <= en; i++) leds[i].nscale8(fade);
   // Spawn new
-  uint8_t dens = density ? density : 3;
+  uint8_t dens = density ? density : TWINKLE_DEFAULT_DENSITY;
   if (spawnMs == 0) spawnMs = 1;
   for (uint8_t d = 0; d < dens; d++) {
-    if (random8() < 40) {
+    if (random8() < TWINKLE_SPAWN_CHANCE) {
       uint8_t pos = random8(rangeLen);
-      uint8_t bri = random8(128, 255);
+      uint8_t bri = random8(TWINKLE_BRI_MIN, TWINKLE_BRI_MAX);
       leds[st + pos] = CRGB((uint8_t)((uint16_t)r*bri/255),
                              (uint8_t)((uint16_t)g*bri/255),
                              (uint8_t)((uint16_t)b*bri/255));
@@ -239,8 +327,8 @@ static void renderStrobe(uint8_t r, uint8_t g, uint8_t b,
                           uint16_t periodMs, uint8_t dutyPct,
                           unsigned long elapsedMs,
                           uint8_t st, uint8_t en) {
-  if (periodMs == 0) periodMs = 200;
-  if (dutyPct > 100) dutyPct = 50;
+  if (periodMs == 0) periodMs = STROBE_DEFAULT_PERIOD;
+  if (dutyPct > STROBE_MAX_DUTY) dutyPct = STROBE_DEFAULT_DUTY;
   uint32_t phase = elapsedMs % (uint32_t)periodMs;
   uint32_t onMs = (uint32_t)periodMs * dutyPct / 100;
   bool on = (phase < onMs);
@@ -253,11 +341,11 @@ static void renderWipeSeq(uint8_t r, uint8_t g, uint8_t b,
                            unsigned long elapsedMs,
                            uint8_t st, uint8_t en) {
   uint8_t rangeLen = en - st + 1;
-  if (speedMs == 0) speedMs = 50;
+  if (speedMs == 0) speedMs = WIPE_DEFAULT_SPEED;
   // Number of pixels filled so far (wraps around for continuous wipe)
-  uint8_t filled = (uint8_t)((elapsedMs / speedMs) % (rangeLen * 2));
+  uint8_t filled = (uint8_t)((elapsedMs / speedMs) % (rangeLen * WIPE_CYCLE_MULTIPLIER));
   bool filling = (filled < rangeLen);
-  uint8_t count = filling ? filled : (rangeLen * 2 - filled);
+  uint8_t count = filling ? filled : (rangeLen * WIPE_CYCLE_MULTIPLIER - filled);
   for (uint8_t i = 0; i < rangeLen; i++) {
     uint8_t idx = (dir == DIR_W || dir == DIR_S) ? (rangeLen - 1 - i) : i;
     leds[st + idx] = (i < count) ? (filling ? CRGB(r, g, b) : CRGB::Black)
@@ -270,8 +358,8 @@ static void renderScanner(uint8_t r, uint8_t g, uint8_t b,
                             unsigned long elapsedMs,
                             uint8_t st, uint8_t en) {
   uint8_t rangeLen = en - st + 1;
-  if (speedMs == 0) speedMs = 30;
-  if (barWidth < 1) barWidth = 3;
+  if (speedMs == 0) speedMs = SCANNER_DEFAULT_SPEED;
+  if (barWidth < 1) barWidth = SCANNER_DEFAULT_BAR;
   if (barWidth > rangeLen) barWidth = rangeLen;
   // Ping-pong position
   uint8_t travel = rangeLen - barWidth;
@@ -280,7 +368,7 @@ static void renderScanner(uint8_t r, uint8_t g, uint8_t b,
   uint32_t pos = (elapsedMs / speedMs) % cycle;
   if (pos >= travel) pos = cycle - pos;
   // Fade all
-  for (uint8_t i = st; i <= en; i++) leds[i].nscale8(200);
+  for (uint8_t i = st; i <= en; i++) leds[i].nscale8(SCANNER_TRAIL_FADE);
   // Draw bar
   for (uint8_t w = 0; w < barWidth && (pos + w) < rangeLen; w++)
     leds[st + pos + w] = CRGB(r, g, b);
@@ -294,9 +382,9 @@ static void renderSparkle(uint8_t r, uint8_t g, uint8_t b,
   // Solid background
   for (uint8_t i = st; i <= en; i++) leds[i] = CRGB(r, g, b);
   // Random white sparkles
-  uint8_t dens = density ? density : 2;
+  uint8_t dens = density ? density : SPARKLE_DEFAULT_DENSITY;
   for (uint8_t d = 0; d < dens; d++) {
-    if (random8() < 60)
+    if (random8() < SPARKLE_SPAWN_CHANCE)
       leds[st + random8(rangeLen)] = CRGB::White;
   }
 }
@@ -336,7 +424,7 @@ void bootAnimation() {
   // Ensure LEDs are off first, then wait 3 seconds
   fill_solid(leds, NUM_LEDS, CRGB::Black);
   showSafe();
-  delay(3000);
+  delay(BOOT_WAIT_MS);
 
   uint8_t sc = childCfg.stringCount;
   if (sc > 0) {
@@ -350,8 +438,8 @@ void bootAnimation() {
     }
     if (totalLeds == 0) totalLeds = NUM_LEDS;
     // Progressive rainbow fill: light each LED one at a time
-    uint16_t delayPer = 1500 / totalLeds;  // ~1.5s total sweep
-    if (delayPer < 2) delayPer = 2;
+    uint16_t delayPer = BOOT_SWEEP_MS / totalLeds;
+    if (delayPer < BOOT_MIN_DELAY) delayPer = BOOT_MIN_DELAY;
     for (uint16_t i = 0; i < totalLeds; i++) {
       uint8_t hue = (uint8_t)((uint32_t)i * 255 / totalLeds);
       CHSV hsv(hue, 255, 255);
@@ -361,32 +449,32 @@ void bootAnimation() {
       showSafe();
       delay(delayPer);
     }
-    // Hold for 500ms then fade to black
-    delay(500);
+    // Hold then fade to black
+    delay(BOOT_HOLD_MS);
   } else {
-    // No strings configured: flash red across 150 LEDs
-    uint16_t count = NUM_LEDS < 150 ? NUM_LEDS : 150;
+    // No strings configured: flash red across BOOT_FLASH_COUNT LEDs
+    uint16_t count = NUM_LEDS < BOOT_FLASH_COUNT ? NUM_LEDS : BOOT_FLASH_COUNT;
     fill_solid(leds, count, CRGB(255, 0, 0));
     showSafe();
-    delay(800);
+    delay(BOOT_FLASH_MS);
   }
   // All off
   fill_solid(leds, NUM_LEDS, CRGB::Black);
   showSafe();
 
 #elif defined(BOARD_GIGA_CHILD)
-  // Giga child: 3-second wait then rainbow cycle on single onboard LED
+  // Giga child: wait then rainbow cycle on single onboard LED
   clearAndShow();
-  delay(3000);
-  for (uint16_t h = 0; h < 256; h += 4) {
+  delay(BOOT_WAIT_MS);
+  for (uint16_t h = 0; h < 256; h += BOOT_GIGA_HUE_STEP) {
     CHSV hsv((uint8_t)h, 255, 255);
     CRGB rgb;
     hsv2rgb_rainbow(hsv, rgb);
     leds[0] = rgb;
     showSafe();
-    delay(6);  // ~384ms total
+    delay(BOOT_GIGA_FRAME_MS);
   }
-  delay(200);
+  delay(BOOT_GIGA_HOLD_MS);
   clearAndShow();
 #endif
   childBootDone = true;
@@ -457,20 +545,20 @@ static bool actionNeedsPersist(uint8_t at) {
 
 static uint8_t actionDelay(uint8_t at) {
   switch (at) {
-    case ACT_SOLID:    return 50;
-    case ACT_FADE:     return 20;
-    case ACT_BREATHE:  return 15;
-    case ACT_CHASE:    return 10;
-    case ACT_RAINBOW:  return 10;
-    case ACT_FIRE:     return 15;
-    case ACT_COMET:    return 10;
-    case ACT_TWINKLE:  return 10;
-    case ACT_STROBE:   return 5;
-    case ACT_WIPE_SEQ: return 10;
-    case ACT_SCANNER:  return 10;
-    case ACT_SPARKLE:  return 15;
-    case ACT_GRADIENT: return 100;  // static — no need to refresh fast
-    default:           return 10;
+    case ACT_SOLID:    return FRAME_DELAY_SOLID;
+    case ACT_FADE:     return FRAME_DELAY_FADE;
+    case ACT_BREATHE:  return FRAME_DELAY_BREATHE;
+    case ACT_CHASE:    return FRAME_DELAY_CHASE;
+    case ACT_RAINBOW:  return FRAME_DELAY_RAINBOW;
+    case ACT_FIRE:     return FRAME_DELAY_FIRE;
+    case ACT_COMET:    return FRAME_DELAY_COMET;
+    case ACT_TWINKLE:  return FRAME_DELAY_TWINKLE;
+    case ACT_STROBE:   return FRAME_DELAY_STROBE;
+    case ACT_WIPE_SEQ: return FRAME_DELAY_WIPE_SEQ;
+    case ACT_SCANNER:  return FRAME_DELAY_SCANNER;
+    case ACT_SPARKLE:  return FRAME_DELAY_SPARKLE;
+    case ACT_GRADIENT: return FRAME_DELAY_GRADIENT;  // static — no need to refresh fast
+    default:           return FRAME_DELAY_DEFAULT;
   }
 }
 
@@ -482,7 +570,7 @@ void ledTask(void* parameter) {
   (void)parameter;
 
   // Wait for boot animation to complete before rendering
-  while (!childBootDone) delay(50);
+  while (!childBootDone) delay(BOOT_POLL_MS);
 
   uint8_t       prevActSeq  = 0;
   unsigned long actStart    = 0;
@@ -498,9 +586,9 @@ void ledTask(void* parameter) {
       childSyncBlink = 0;
       for (uint8_t b = 0; b < n; b++) {
         fill_solid(leds, NUM_LEDS, CRGB::White);
-        showSafe(); delay(200);
+        showSafe(); delay(SYNC_BLINK_MS);
         fill_solid(leds, NUM_LEDS, CRGB::Black);
-        showSafe(); delay(200);
+        showSafe(); delay(SYNC_BLINK_MS);
       }
       offRendered = true;
       continue;
@@ -510,7 +598,7 @@ void ledTask(void* parameter) {
     if (childRunnerArmed && childStepCount > 0) {
       uint32_t now = (uint32_t)currentEpoch();
       // If NTP failed (epoch < year 2020), start immediately
-      if (now < 1577836800UL || now >= childRunnerStart) {
+      if (now < NTP_EPOCH_2020 || now >= childRunnerStart) {
         childRunnerArmed  = false;
         childRunnerActive = true;
         prevRunStep       = 0xFF;
@@ -571,31 +659,44 @@ void ledTask(void* parameter) {
     }
 
     // ── 3. Immediate action ───────────────────────────────────────────────
+    // Snapshot volatile fields atomically on seq change (Issue #27)
+    static uint8_t  locAt = ACT_OFF, locR = 0, locG = 0, locB = 0;
+    static uint16_t locP16a = 0;
+    static uint8_t  locP8a = 0, locP8b = 0, locP8c = 0, locP8d = 0;
+
     uint8_t seq = childActSeq;
     if (seq != prevActSeq) {
-      prevActSeq  = seq;
+      prevActSeq = seq;
+      locAt   = childActType;
+      locR    = childActR;
+      locG    = childActG;
+      locB    = childActB;
+      locP16a = childActP16a;
+      locP8a  = childActP8a;
+      locP8b  = childActP8b;
+      locP8c  = childActP8c;
+      locP8d  = childActP8d;
       actStart    = millis();
       offRendered = false;
     }
-    uint8_t at = childActType;
 
-    if (at != ACT_OFF) {
-      if (!actionNeedsPersist(at))
+    if (locAt != ACT_OFF) {
+      if (!actionNeedsPersist(locAt))
         fill_solid(leds, NUM_LEDS, CRGB::Black);
-      applyAction(at, childActR, childActG, childActB,
-                  childActP16a, childActP8a, childActP8b,
-                  childActP8c, childActP8d,
+      applyAction(locAt, locR, locG, locB,
+                  locP16a, locP8a, locP8b,
+                  locP8c, locP8d,
                   millis() - actStart, 0, NUM_LEDS - 1,
                   childCfg.stringCount > 0 && (childCfg.strings[0].flags & STR_FLAG_FOLDED));
       showSafe();
-      delay(actionDelay(at));
+      delay(actionDelay(locAt));
     } else {
       if (!offRendered) {
         fill_solid(leds, NUM_LEDS, CRGB::Black);
         showSafe();
         offRendered = true;
       }
-      delay(10);
+      delay(FRAME_DELAY_OFF);
     }
   }
 }
@@ -633,7 +734,7 @@ void updateLED() {
     return;
   }
   if (blinkRemain > 0) {
-    if (millis() - blinkTs >= 200) {
+    if (millis() - blinkTs >= SYNC_BLINK_MS) {
       blinkTs = millis();
       if (blinkOn) {
         fill_solid(leds, NUM_LEDS, CRGB::Black);
@@ -709,25 +810,38 @@ void updateLED() {
   }
 
   // ── 3. Immediate action ─────────────────────────────────────────────────
+  // Snapshot volatile fields atomically on seq change (Issue #27)
+  static uint8_t  locAt = ACT_OFF, locR = 0, locG = 0, locB = 0;
+  static uint16_t locP16a = 0;
+  static uint8_t  locP8a = 0, locP8b = 0, locP8c = 0, locP8d = 0;
+
   uint8_t seq = childActSeq;
   if (seq != prevActSeq) {
-    prevActSeq  = seq;
+    prevActSeq = seq;
+    locAt   = childActType;
+    locR    = childActR;
+    locG    = childActG;
+    locB    = childActB;
+    locP16a = childActP16a;
+    locP8a  = childActP8a;
+    locP8b  = childActP8b;
+    locP8c  = childActP8c;
+    locP8d  = childActP8d;
     actStart    = millis();
     actRendered = false;
     lastFrame   = 0;
   }
-  uint8_t at = childActType;
 
-  if (at != ACT_OFF) {
+  if (locAt != ACT_OFF) {
     unsigned long now = millis();
-    uint8_t dly = actionDelay(at);
+    uint8_t dly = actionDelay(locAt);
     if (now - lastFrame >= dly) {
       lastFrame = now;
-      if (!actionNeedsPersist(at))
+      if (!actionNeedsPersist(locAt))
         fill_solid(leds, NUM_LEDS, CRGB::Black);
-      applyAction(at, childActR, childActG, childActB,
-                  childActP16a, childActP8a, childActP8b,
-                  childActP8c, childActP8d,
+      applyAction(locAt, locR, locG, locB,
+                  locP16a, locP8a, locP8b,
+                  locP8c, locP8d,
                   now - actStart, 0, NUM_LEDS - 1,
                   childCfg.stringCount > 0 && (childCfg.strings[0].flags & STR_FLAG_FOLDED));
       showSafe();

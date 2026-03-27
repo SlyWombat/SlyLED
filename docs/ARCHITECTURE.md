@@ -1,4 +1,4 @@
-# SlyLED Architecture — v4.0
+# SlyLED Architecture — v5.1
 
 ## Overview
 
@@ -122,21 +122,33 @@ Routes matched in order (longest/most-specific first):
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/` | Full 7-tab SPA |
-| GET | `/status` | `{"role":"parent","hostname":"...","version":"4.0"}` |
+| GET | `/status` | `{"role":"parent","hostname":"...","version":"5.0"}` |
 | GET | `/api/children/discover` | Broadcast PING, return unregistered performers found within 2 s |
 | GET/POST | `/api/children/import` | Import JSON array; dedup by hostname |
 | GET | `/api/children/export` | Export all performers as JSON |
-| GET/POST/DELETE | `/api/children/:id/...` | Performer CRUD, refresh, status poll |
+| GET/POST/DELETE | `/api/children/:id/...` | Performer CRUD, refresh, reboot, status poll |
 | GET/POST | `/api/children` | List / add by IP |
 | GET/POST | `/api/layout` | Canvas positions |
 | GET/POST | `/api/settings` | App settings (includes runnerLoop) |
 | POST | `/api/action/stop` | Stop immediate action on all/one performer |
-| POST | `/api/action` | Send immediate action (9 types, generic params) |
+| POST | `/api/action` | Send immediate action (14 types, generic params) |
 | POST | `/api/runners/stop` | Broadcast CMD_RUNNER_STOP + CMD_ACTION_STOP |
+| GET | `/api/runners/live` | Per-child live action state (from pushed ACTION_EVENTs) |
 | GET/POST/PUT/DELETE | `/api/runners/:id/...` | Runner compute (canvas-scoped delays) / sync / start |
 | GET/POST | `/api/runners` | List / create runners |
 | GET/POST | `/api/actions` | List / create actions (reusable presets) |
 | GET/PUT/DELETE | `/api/actions/:id` | Get / update / delete action |
+| GET/POST | `/api/flights` | List / create flights (performer + runner grouping) |
+| GET/PUT/DELETE | `/api/flights/:id` | Get / update / delete flight |
+| GET/POST | `/api/shows` | List / create shows (ordered flight sequences) |
+| GET/PUT/DELETE | `/api/shows/:id` | Get / update / delete show |
+| POST | `/api/shows/:id/start` | Start show execution (syncs all flights) |
+| POST | `/api/shows/stop` | Stop all running shows |
+| GET | `/api/config/export` | Bundle children + layout as `slyled-config` JSON |
+| POST | `/api/config/import` | Merge children by hostname, replace layout with ID remapping |
+| GET | `/api/show/export` | Bundle actions + runners + flights + shows as `slyled-show` JSON |
+| POST | `/api/show/import` | Replace all show data with ID reassignment and cross-ref remapping |
+| POST | `/api/show/demo` | Generate demo show from current children/layout (mood presets) |
 | GET/POST | `/api/wifi` | WiFi credential management (encrypted storage, hash comparison) |
 | GET | `/api/firmware/ports` | List COM ports with board detection by USB VID:PID |
 | POST | `/api/firmware/query` | Serial version + WiFi hash query on a port (~2 s) |
@@ -204,18 +216,23 @@ Runner priority in LED task: **runner active > immediate action > idle black**
 
 ---
 
-## Action types (v4.0)
+## Action types (v5.1)
 
 ```cpp
-ACT_BLACKOUT = 0   // all LEDs off
-ACT_SOLID    = 1   // solid colour
-ACT_FADE     = 2   // linear fade between two colours
-ACT_BREATHE  = 3   // single colour brightness sine wave
-ACT_CHASE    = 4   // theater chase (every Nth pixel lit, shifts)
-ACT_RAINBOW  = 5   // HSV rainbow cycle (8 palettes: Classic/Ocean/Lava/Forest/Party/Heat/Cool/Pastel)
-ACT_FIRE     = 6   // fire / Perlin noise (cooling + sparking params)
-ACT_COMET    = 7   // shooting comet with fading tail
-ACT_TWINKLE  = 8   // random sparkle + fade
+ACT_BLACKOUT = 0    // all LEDs off
+ACT_SOLID    = 1    // solid colour
+ACT_FADE     = 2    // linear fade between two colours
+ACT_BREATHE  = 3    // single colour brightness sine wave
+ACT_CHASE    = 4    // theater chase (every Nth pixel lit, shifts)
+ACT_RAINBOW  = 5    // HSV rainbow cycle (8 palettes: Classic/Ocean/Lava/Forest/Party/Heat/Cool/Pastel)
+ACT_FIRE     = 6    // fire / Perlin noise (cooling + sparking params)
+ACT_COMET    = 7    // shooting comet with fading tail
+ACT_TWINKLE  = 8    // random sparkle + fade
+ACT_STROBE   = 9    // on/off flash at configurable rate
+ACT_WIPE     = 10   // sequential colour wipe across strip
+ACT_SCANNER  = 11   // Larson scanner (bouncing light)
+ACT_SPARKLE  = 12   // random pixel sparkle overlay
+ACT_GRADIENT = 13   // two-colour gradient fill
 ```
 
 ActionPayload uses generic parameter fields (p16a, p8a-p8d) reinterpreted per type — see Protocol.h comments for the per-type mapping.
@@ -311,19 +328,76 @@ Seven tabs, all served as one HTML response with inline CSS and JS:
 
 | Tab | Data source | Key actions |
 |-----|-------------|-------------|
-| Dashboard | GET /api/children, GET /api/settings | Stop / Go runner; real-time progress bar with elapsed/total time |
-| Setup | GET /api/children, GET /api/settings | **Discover** (broadcast PING, list new performers), Add/remove/refresh, details modal (shows firmware version), JSON import/export |
-| Layout | GET /api/layout | Sidebar lists unplaced performers (drag onto canvas); 900×450 canvas with detailed string view (direction + length, folded-string support) or simple icon mode; double-click node to edit position or remove from canvas; labels flip above when near bottom |
-| Actions | GET /api/actions | Reusable action library — 9 effect types with per-type params; canvas-scoped actions; create/edit/delete named presets (no live hardware changes) |
-| Runtime | GET /api/runners, GET /api/actions | Create runners from library actions; steps = action ref + area-of-effect + duration; Compute (with per-child delay for canvas scope)/Sync/Start/Stop; runner loop toggle |
-| Settings | GET /api/settings, GET/POST /api/wifi | Dark mode, units, canvas size, parent name, runner loop; WiFi credential management (encrypted storage); **Factory Reset** (POST /api/reset — clears all data) |
-| Firmware | GET /api/firmware/ports, /registry | Board detection by USB VID:PID; serial version query + WiFi hash comparison; flash ESP32/D1 Mini via esptool; flash Giga via arduino-cli DFU; progress polling |
+| Dashboard | GET /api/children, GET /api/settings, GET /api/runners/live | Stop / Go runner; real-time progress bar; live ACTION_EVENT timeline per performer |
+| Setup | GET /api/children, GET /api/settings | **Discover** (broadcast PING, list new performers), Add/remove/refresh/reboot, details modal (shows firmware version) |
+| Layout | GET /api/layout | Sidebar lists unplaced performers (drag onto canvas); 900×450 canvas with detailed string view (direction + length, folded-string support); double-click node to edit; live preview mode |
+| Actions | GET /api/actions | Reusable action library — 14 effect types with per-type params; canvas-scoped actions; create/edit/delete named presets |
+| Runtime | GET /api/runners, /api/actions, /api/flights, /api/shows | Runners (steps + compute/sync/start); Flights (performer + runner grouping); Shows (ordered flight sequences with loop); step-level parameter overrides; global brightness |
+| Settings | GET /api/settings | Dark mode, units, canvas size, parent name; **Save/Load Config** (children + layout); **Save/Load Show** (actions + runners + flights + shows) with demo show generator; **Factory Reset**; **Shutdown** |
+| Firmware | GET /api/firmware/ports, /registry, /api/wifi | Board detection by USB VID:PID; serial version query + WiFi hash comparison; flash ESP32/D1 Mini via esptool; flash Giga via arduino-cli DFU; WiFi credential management |
 
 Dark mode: `body#app` CSS class `light` toggled by `applyDarkMode()`. Persisted in `settings.darkMode`. Applied before first tab renders.
 
 ---
 
-## Flash usage (v4.0)
+## Flights and Shows (v5.1)
+
+**Flights** group a runner with a set of performers and a priority level. A flight says "run this runner on these performers."
+
+**Shows** sequence multiple flights for coordinated playback. When a show starts, all its flights are synced and started simultaneously. Shows can loop.
+
+**Config / Show export-import:** Settings tab provides independent save/load for:
+- **Configuration** (children + layout) — `slyled-config` JSON bundle
+- **Shows** (actions + runners + flights + shows) — `slyled-show` JSON bundle
+
+Import handles ID reassignment: children merged by hostname, show entities get fresh IDs with all cross-references (runner→actionId, flight→runnerId, show→flightIds) remapped.
+
+**Demo show generator:** `POST /api/show/demo` auto-creates 8 actions (one per type), a runner, a flight targeting all performers, and a show. Accepts `{mood:"default"}` — extensibility point for future mood/theme-based generation (see [#3](https://github.com/SlyWombat/SlyLED/issues/3)).
+
+---
+
+## Android app
+
+Native Android client at `android/`. Kotlin + Jetpack Compose + Material 3. Consumes the same REST API as the desktop SPA — no new server endpoints needed (except QR code in Phase 5).
+
+| Component | Path |
+|-----------|------|
+| Data models | `android/app/src/main/java/com/slywombat/slyled/data/model/Models.kt` |
+| Retrofit API | `android/app/src/main/java/com/slywombat/slyled/data/api/SlyLedApi.kt` |
+| Repository | `android/app/src/main/java/com/slywombat/slyled/data/repository/SlyLedRepository.kt` |
+| DI (Hilt) | `android/app/src/main/java/com/slywombat/slyled/di/NetworkModule.kt` |
+| Navigation | `android/app/src/main/java/com/slywombat/slyled/ui/navigation/Navigation.kt` |
+| Screens | `android/app/src/main/java/com/slywombat/slyled/ui/screens/{connection,dashboard,setup,layout,actions,runtime,settings}/` |
+
+**Server discovery:** QR code scan (Phase 4) + manual IP:port + saved last-used server.
+
+**6 tabs:** Dashboard, Setup, Layout, Actions, Runtime, Settings. Firmware tab excluded from v1.
+
+**Build:** Requires JDK 17 + Android SDK 35. See `CLAUDE.md` for build commands.
+
+---
+
+## Roadmap
+
+Feature tracking: [github.com/SlyWombat/SlyLED/issues](https://github.com/SlyWombat/SlyLED/issues)
+
+| Priority | Feature | Issue |
+|----------|---------|-------|
+| High | Android app — Phase 2-5 | [#11](https://github.com/SlyWombat/SlyLED/issues/11) ([#15](https://github.com/SlyWombat/SlyLED/issues/15)–[#19](https://github.com/SlyWombat/SlyLED/issues/19)) |
+| High | mDNS/Zeroconf auto-discovery | [#1](https://github.com/SlyWombat/SlyLED/issues/1) |
+| High | Smart shows — moods and themes | [#3](https://github.com/SlyWombat/SlyLED/issues/3) |
+| High | Dashboard Gantt timeline | [#6](https://github.com/SlyWombat/SlyLED/issues/6) |
+| Medium | Giga R1 parent firmware sync to v5.1 | [#4](https://github.com/SlyWombat/SlyLED/issues/4) |
+| Medium | WLED bridge — deeper integration | [#7](https://github.com/SlyWombat/SlyLED/issues/7) |
+| Medium | Mac desktop parent polish | [#8](https://github.com/SlyWombat/SlyLED/issues/8) |
+| Medium | Layout canvas pixel visualization | [#9](https://github.com/SlyWombat/SlyLED/issues/9) |
+| Future | WebSocket real-time pixel streaming | [#2](https://github.com/SlyWombat/SlyLED/issues/2) |
+| Future | OTA firmware updates over WiFi | [#5](https://github.com/SlyWombat/SlyLED/issues/5) |
+| Future | Multi-language localization | [#10](https://github.com/SlyWombat/SlyLED/issues/10) |
+
+---
+
+## Flash usage (v5.1)
 
 | Board | Flash | RAM |
 |-------|-------|-----|

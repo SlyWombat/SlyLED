@@ -182,6 +182,24 @@ body.light .li:hover{border-color:#3b82f6}
       <button class='btn btn-on' onclick='saveSettings(this)'>Save Settings</button>
     </div>
   </div>
+  <div class='card' style='max-width:480px'>
+    <div class='card-title'>Configuration (Performers + Layout)</div>
+    <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Save or load performer registration and layout positioning.</p>
+    <div style='display:flex;gap:.5em;flex-wrap:wrap'>
+      <button class='btn btn-nav' onclick='exportConfig(this)' data-tip='setExportConfig'>Save Config</button>
+      <label class='btn btn-nav' style='cursor:pointer' data-tip='setLoadConfig'>Load Config
+        <input type='file' accept='.json' style='display:none' onchange='importConfig(this)'>
+      </label>
+    </div>
+  </div>
+  <div class='card' style='max-width:480px'>
+    <div class='card-title'>Show (Actions + Runners + Flights + Shows)</div>
+    <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Save or load show programming. Loading replaces all current show data.</p>
+    <div style='display:flex;gap:.5em;flex-wrap:wrap'>
+      <button class='btn btn-nav' onclick='exportShow(this)' data-tip='setExportShow'>Save Show</button>
+      <button class='btn btn-nav' onclick='openLoadShowModal()' data-tip='setLoadShow'>Load Show</button>
+    </div>
+  </div>
   <div class='card' style='max-width:480px;border-color:#622'>
     <div class='card-title' style='color:#c66'>Factory Reset</div>
     <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Remove all performers, runners and layout data, and restore default settings.</p>
@@ -190,7 +208,11 @@ body.light .li:hover{border-color:#3b82f6}
   <div class='card' style='max-width:480px;border-color:#622'>
     <div class='card-title' style='color:#c66'>Service</div>
     <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Stop the SlyLED Orchestrator service and close the application.</p>
-    <button class='btn btn-off' onclick='shutdownService()'>Shutdown Service</button>
+    <div style='display:flex;gap:.5em;flex-wrap:wrap;align-items:flex-start'>
+      <button class='btn btn-off' onclick='shutdownService()'>Shutdown Service</button>
+      <button class='btn btn-nav' onclick='showQrCode()' data-tip='setQr'>Mobile App QR</button>
+    </div>
+    <div id='qr-container' style='text-align:center;margin-top:.8em'></div>
   </div>
 </div>
 
@@ -250,6 +272,7 @@ body.light .li:hover{border-color:#3b82f6}
 
 <script>
 // ── Localization string table (swap for i18n) ─────────────────────────────
+function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 var L={
   // Tab navigation
   tabDash:'View live status of all connected performers',
@@ -265,8 +288,6 @@ var L={
   setupDiscover:'Broadcast scan for new performers on the network',
   setupAdd:'Register a performer by its IP address',
   setupRefreshAll:'Ping all registered performers to update status',
-  setupExport:'Download performer list as a JSON file',
-  setupImport:'Load performers from a previously exported JSON file',
   setupDetails:'View detailed configuration and string info',
   setupRefresh:'Ping this performer to update its status',
   setupReboot:'Restart this performer remotely (brief offline)',
@@ -310,6 +331,11 @@ var L={
   setSave:'Save all settings to persistent storage',
   setReset:'Delete ALL data and restore factory defaults (cannot be undone)',
   setShutdown:'Stop the SlyLED service and close the application',
+  setExportConfig:'Save performer and layout data as a JSON file',
+  setLoadConfig:'Load performers and layout from a previously saved file',
+  setExportShow:'Save all actions, runners, flights, and shows as a JSON file',
+  setLoadShow:'Load show data from a file or generate a demo show',
+  setQr:'Display QR code for the SlyLED Android app to scan and connect',
   // Firmware
   fwSaveWifi:'Store WiFi credentials for performer provisioning',
   fwRefresh:'Rescan for connected boards on USB/serial ports',
@@ -369,21 +395,28 @@ function showTab(t){
 function _btnSaving(btn){if(!btn)return;btn.dataset.orig=btn.textContent;btn.textContent='Saving...';btn.disabled=true;btn.style.background='#555';}
 function _btnSaved(btn,ok){if(!btn)return;btn.textContent=ok?'Saved!':'Error';btn.style.background=ok?'#2a2':'#a22';setTimeout(function(){btn.textContent=btn.dataset.orig||'Save';btn.style.background='';btn.disabled=false;},1200);}
 
-function ra(m,p,b,cb){
+function ra(method,path,body,callback){
   var x=new XMLHttpRequest();
-  x.open(m,p,true);
-  if(b)x.setRequestHeader('Content-Type','application/json');
-  x.onload=function(){try{if(cb)cb(JSON.parse(x.responseText));}catch(e){if(cb)cb(null);}};
-  x.onerror=function(){if(cb)cb(null);};
-  x.send(b?JSON.stringify(b):null);
+  x.open(method,path,true);
+  if(body)x.setRequestHeader('Content-Type','application/json');
+  x.onload=function(){try{if(callback)callback(JSON.parse(x.responseText));}catch(e){if(callback)callback(null);}};
+  x.onerror=function(){if(callback)callback(null);};
+  x.send(body?JSON.stringify(body):null);
+}
+function api(method,path,body){
+  return new Promise(function(resolve,reject){
+    ra(method,path,body,function(data){
+      if(data!==null)resolve(data);else reject(new Error('Request failed: '+method+' '+path));
+    });
+  });
 }
 
 var dashRunnerTimer=null;
 function loadDash(){
   if(dashRunnerTimer)clearInterval(dashRunnerTimer);
-  ra('GET','/api/actions',null,function(a){_acts=a||[];});
+  api('GET','/api/actions').then(function(a){_acts=a||[];}).catch(function(){});
   // Always render from current server state — background ping thread keeps it fresh
-  ra('GET','/api/children',null,function(d){
+  api('GET','/api/children').then(function(d){
     var startupDone=!d||!d.length||d[0].startupDone!==false;
     var h='<div style="margin-bottom:.6em;display:flex;align-items:center;gap:.6em">';
     h+='<button class="btn" id="dash-refresh" onclick="dashRefresh(this)" style="background:#446;color:#fff;padding:.3em .8em" data-tip="dashRefresh">&#x21bb; Refresh All</button>';
@@ -397,7 +430,7 @@ function loadDash(){
         else st=c.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
         var tp=c.type==='wled'?'<span class="badge" style="background:#f60;color:#fff">WLED</span>':'<span class="badge" style="background:#446;color:#fff">SlyLED</span>';
         var ts=c.seen>0?new Date(c.seen*1000).toLocaleString():'-';
-        h+='<tr><td>'+c.hostname+'</td><td>'+(c.name||'-')+'</td><td>'+tp+'</td><td>'+c.ip+'</td><td>'+st+'</td><td>'+(c.fwVersion||'-')+'</td><td>'+c.sc+'</td><td>'+ts+'</td></tr>';
+        h+='<tr><td>'+escapeHtml(c.hostname)+'</td><td>'+escapeHtml(c.name||'-')+'</td><td>'+tp+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+escapeHtml(c.fwVersion||'-')+'</td><td>'+c.sc+'</td><td>'+ts+'</td></tr>';
       });
     }else{
       h+='<tr><td colspan="8" style="color:#888;text-align:center">No performers registered</td></tr>';
@@ -408,8 +441,9 @@ function loadDash(){
     document.getElementById('hs').textContent=d&&d.length?onCnt+'/'+d.length+' performer'+(d.length>1?'s':'')+' online':'No performers';
     refreshRunnerStatus();
     dashRunnerTimer=setInterval(refreshRunnerStatus,1000);
-    // If startup not done, poll until it is
     if(!startupDone)_pollStartup();
+  }).catch(function(){
+    document.getElementById('t-dash').innerHTML='<p style="color:#f66">Failed to load dashboard.</p>';
   });
 }
 
@@ -437,7 +471,7 @@ function dashRefresh(btn){
 
 var _dashRunner=null,_dashChildren=null;
 function refreshRunnerStatus(){
-  ra('GET','/api/settings',null,function(s){
+  api('GET','/api/settings').then(function(s){
     var el=document.getElementById('dash-runner');if(!el)return;
     if(!s||!s.runnerRunning||s.activeRunner<0){
       el.innerHTML='<p style="color:#888;font-size:.85em">No runner active.</p>';
@@ -445,21 +479,20 @@ function refreshRunnerStatus(){
     }
     // Cache runner + children on first call or runner change
     var rid=s.activeRunner;
-    function _gotRunner(r){
+    var runnerP=(_dashRunner&&_dashRunner.id===rid)
+      ? Promise.resolve(_dashRunner)
+      : api('GET','/api/runners/'+rid).then(function(r){_dashChildren=null;return r;});
+    return runnerP.then(function(r){
       _dashRunner=r;
-      function _gotChildren(ch){
+      var childP=_dashChildren?Promise.resolve(_dashChildren):api('GET','/api/children');
+      return childP.then(function(ch){
         _dashChildren=ch||[];
-        // Now fetch live events (the only per-tick poll)
-        ra('GET','/api/runners/live',null,function(live){
-          _renderLiveDash(el,s,r,live||[]);
-        });
-      }
-      if(_dashChildren)_gotChildren(_dashChildren);
-      else ra('GET','/api/children',null,_gotChildren);
-    }
-    if(_dashRunner&&_dashRunner.id===rid)_gotRunner(_dashRunner);
-    else{ _dashChildren=null; ra('GET','/api/runners/'+rid,null,_gotRunner); }
-  });
+        return api('GET','/api/runners/live');
+      }).then(function(live){
+        _renderLiveDash(el,s,r,live||[]);
+      });
+    });
+  }).catch(function(){});
 }
 
 function _renderLiveDash(el,settings,runner,liveEvents){
@@ -475,7 +508,7 @@ function _renderLiveDash(el,settings,runner,liveEvents){
   var liveMap={};liveEvents.forEach(function(e){liveMap[e.id]=e;});
 
   var h='<div class="card" style="max-width:700px">';
-  h+='<div class="card-title">&#9654; Runner: '+runner.name+'</div>';
+  h+='<div class="card-title">&#9654; Runner: '+escapeHtml(runner.name)+'</div>';
   h+='<div style="font-size:.82em;color:#aaa;margin-bottom:.4em">'+elapsed+'s / '+totalS+'s';
   if(totalS>0&&elapsed>=totalS)h+=' <span style="color:#4c4">(complete)</span>';
   h+='</div>';
@@ -598,9 +631,6 @@ function _renderSetup(){
       +'<input id="aip" placeholder="Manual IP (x.x.x.x)" style="width:150px;margin-left:.5em">'
       +'<button class="btn btn-on" onclick="addChild()" style="margin-left:.3em" data-tip="setupAdd">Add</button>'
       +'<button class="btn btn-nav" onclick="setupRefreshAll(this)" style="margin-left:.5em" data-tip="setupRefreshAll">Refresh All</button>'
-      +'<button class="btn btn-nav" onclick="exportChildren()" style="margin-left:.5em" data-tip="setupExport">Export JSON</button>'
-      +'<label class="btn btn-nav" style="cursor:pointer;margin-left:.5em">Import JSON'
-      +'<input type="file" accept=".json" style="display:none" onchange="importChildren(this)"></label>'
       +'</div>'
       +'<div id="disc-results" style="display:none;margin-bottom:.8em"></div>'
       +'<table class="tbl"><tr><th>Hostname</th><th>Name</th><th>Type</th><th>IP</th><th>Status</th><th>FW</th><th>Strings</th><th>Actions</th></tr>';
@@ -608,7 +638,7 @@ function _renderSetup(){
       d.forEach(function(c){
         var st=c.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
         var tp=c.type==='wled'?'<span class="badge" style="background:#f60;color:#fff">WLED</span>':'<span class="badge" style="background:#446;color:#fff">SlyLED</span>';
-        h+='<tr><td>'+c.hostname+'</td><td>'+(c.name||'-')+'</td><td>'+tp+'</td><td>'+c.ip+'</td><td>'+st+'</td><td>'+(c.fwVersion||'-')+'</td><td>'+c.sc+'</td><td>'
+        h+='<tr><td>'+escapeHtml(c.hostname)+'</td><td>'+escapeHtml(c.name||'-')+'</td><td>'+tp+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+escapeHtml(c.fwVersion||'-')+'</td><td>'+c.sc+'</td><td>'
           +'<button class="btn" onclick="showDetails('+c.id+')" style="background:#446;color:#fff" data-tip="setupDetails">Details</button>'
           +' <button class="btn btn-on" onclick="refreshChild('+c.id+')" data-tip="setupRefresh">Refresh</button>'
           +' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff" data-tip="setupReboot">Reboot</button>'
@@ -641,7 +671,7 @@ function discoverChildren(){
     var h='<p style="color:#aaa;font-size:.85em;margin-bottom:.4em">Found — click Add to register:</p>'
       +'<table class="tbl" style="max-width:700px"><tr><th>Hostname</th><th>Name</th><th>IP</th><th>Strings</th><th></th></tr>';
     d.forEach(function(c){
-      h+='<tr><td>'+c.hostname+'</td><td>'+(c.name||'-')+'</td><td>'+c.ip+'</td><td>'+c.sc+'</td>'
+      h+='<tr><td>'+escapeHtml(c.hostname)+'</td><td>'+escapeHtml(c.name||'-')+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+c.sc+'</td>'
         +'<td><button class="btn btn-on" onclick="addDiscovered(\''+c.ip+'\')">Add</button></td></tr>';
     });
     el.innerHTML=h+'</table>';
@@ -663,18 +693,6 @@ function removeChild(id){
   };
   x.onerror=function(){document.getElementById('hs').textContent='Remove failed: network error';loadSetup();};
   x.send();
-}
-
-function exportChildren(){
-  ra('GET','/api/children/export',null,function(d){
-    if(!d)return;
-    var blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});
-    var a=document.createElement('a');
-    a.href=URL.createObjectURL(blob);
-    a.download='slyled-performers.json';
-    a.click();
-    URL.revokeObjectURL(a.href);
-  });
 }
 
 function refreshChild(id){
@@ -702,15 +720,15 @@ function setupRefreshAll(btn){
 function closeModal(){document.getElementById('modal').style.display='none';}
 
 function showDetails(id){
-  ra('GET','/api/children/export',null,function(d){
+  ra('GET','/api/children',null,function(d){
     if(!d)return;
     var c=null;for(var i=0;i<d.length;i++){if(d[i].id===id){c=d[i];break;}}
     if(!c)return;
     var dirs=['E','N','W','S'],types=['WS2812B','WS2811','APA102'];
     var cleanIp=(c.ip||'').replace(/^https?:\/\//,'').replace(/\/.*$/,'');
     var h='<p style="font-size:.85em;margin-bottom:.6em">';
-    h+='IP: <a href="http://'+cleanIp+'/" target="_blank" style="color:#88f">'+cleanIp+'</a>';
-    if(c.desc)h+=' &mdash; '+c.desc;
+    h+='IP: <a href="http://'+escapeHtml(cleanIp)+'/" target="_blank" style="color:#88f">'+escapeHtml(cleanIp)+'</a>';
+    if(c.desc)h+=' &mdash; '+escapeHtml(c.desc);
     h+='</p>';
     var sc=c.sc||0;
     h+='<p style="font-size:.85em;color:#aaa;margin-bottom:.4em">'+sc+' string'+(sc!==1?'s':'')+'</p>';
@@ -729,21 +747,6 @@ function showDetails(id){
     document.getElementById('modal-body').innerHTML=h;
     document.getElementById('modal').style.display='block';
   });
-}
-
-function importChildren(input){
-  var f=input.files[0];if(!f)return;
-  var rd=new FileReader();
-  rd.onload=function(e){
-    try{var data=JSON.parse(e.target.result);}catch(ex){alert('Invalid JSON');return;}
-    var x=new XMLHttpRequest();x.open('POST','/api/children/import',true);
-    x.setRequestHeader('Content-Type','application/json');
-    x.onload=function(){
-      try{var r=JSON.parse(x.responseText);if(r.ok){document.getElementById('hs').textContent='Imported: +'+r.added+' updated '+r.updated+' skipped '+r.skipped;loadSetup();}}catch(ex){}
-    };
-    x.send(JSON.stringify(data));
-  };
-  rd.readAsText(f);input.value='';
 }
 
 var _strCol=['#0ff','#f0f','#ff0','#0f0','#f80','#08f','#f08','#8f0'];
@@ -771,8 +774,8 @@ function renderSidebar(){
   var h='';
   unpl.forEach(function(c){
     h+='<div class="li" draggable="true" ondragstart="layDS(event,'+c.id+')">'
-      +'<div style="color:#ccc;font-weight:bold">'+c.hostname+'</div>';
-    if(c.name&&c.name!==c.hostname)h+='<div style="color:#888;font-size:.9em">'+c.name+'</div>';
+      +'<div style="color:#ccc;font-weight:bold">'+escapeHtml(c.hostname)+'</div>';
+    if(c.name&&c.name!==c.hostname)h+='<div style="color:#888;font-size:.9em">'+escapeHtml(c.name)+'</div>';
     h+='<div style="color:#666;font-size:.85em">'+c.sc+' string'+(c.sc!==1?'s':'')+'</div></div>';
   });
   el.innerHTML=h;
@@ -1035,7 +1038,7 @@ function loadActions(){
       if(a.type===6)det='Cool:'+(a.cooling||55)+' Spark:'+(a.sparking||120);
       if(a.type===7)det=(_dirNames[a.direction]||'E')+' tail:'+(a.tailLen||10)+' '+_ms2s(a.speedMs);
       if(a.type===8)det='Den:'+(a.density||3)+' Fade:'+(a.fadeSpeed||15);
-      h+='<tr><td><b>'+a.name+'</b>'+scopeLbl+'</td><td>'+(_typeNames[a.type]||a.type)+'</td>';
+      h+='<tr><td><b>'+escapeHtml(a.name)+'</b>'+scopeLbl+'</td><td>'+(_typeNames[a.type]||a.type)+'</td>';
       h+='<td><span style="display:inline-block;width:24px;height:16px;border-radius:3px;background:'+col+';border:1px solid #555;vertical-align:middle"></span> '+col+'</td>';
       h+='<td style="font-size:.82em;color:#888">'+det+'</td>';
       h+='<td><button class="btn" onclick="editAction('+a.id+')" style="background:#446;color:#fff;padding:.2em .6em">Edit</button>';
@@ -1053,7 +1056,7 @@ function _showActModal(a){
   var t=a?a.type:1;
   var sc=a?a.scope||'performer':'performer';
   var selIds=a&&a.targetIds?a.targetIds:[];
-  var h='<label>Name</label><input id="ae-nm" value="'+(a?a.name:'')+'" style="width:240px" placeholder="e.g. Red Wipe">';
+  var h='<label>Name</label><input id="ae-nm" value="'+escapeHtml(a?a.name:'')+'" style="width:240px" placeholder="e.g. Red Wipe">';
   h+='<label>Scope</label><select id="ae-scope" onchange="_aeScopeChg()">';
   h+='<option value="performer"'+(sc==='performer'?' selected':'')+'>All Performers</option>';
   h+='<option value="performer-selected"'+(sc==='performer-selected'?' selected':'')+'>Selected Performers</option>';
@@ -1120,12 +1123,56 @@ function _showActModal(a){
   h+=' <label style="display:inline;margin-left:.5em">Density</label><input type="number" id="ae-tden" value="'+(a?a.density||3:3)+'" min="1" max="20" style="width:50px">';
   h+=' <label style="display:inline;margin-left:.5em">Fade Speed</label><input type="number" id="ae-tfad" value="'+(a?a.fadeSpeed||15:15)+'" min="1" max="100" style="width:50px">';
   h+='</div>';
+  // WLED Overrides section (hidden by default, shown if WLED devices exist)
+  h+='<div id="ae-wled-section" style="display:none;margin-top:1em;border:1px solid #444;border-radius:6px;padding:.6em">';
+  h+='<div onclick="var el=document.getElementById(\'ae-wled-inner\');el.style.display=el.style.display===\'none\'?\'block\':\'none\'" style="cursor:pointer;font-weight:bold;color:#f60">';
+  h+='&#9660; WLED Overrides <span style="font-weight:normal;font-size:.8em;color:#888">(optional — override auto-mapped effect)</span></div>';
+  h+='<div id="ae-wled-inner" style="display:none;padding-top:.5em">';
+  h+='<label>WLED Effect</label><select id="ae-wled-fx" style="width:260px"><option value="">Auto (mapped from type)</option></select>';
+  h+='<label>WLED Palette</label><select id="ae-wled-pal" style="width:260px"><option value="">Auto</option></select>';
+  h+='<label>Segment</label><select id="ae-wled-seg" style="width:260px"><option value="">All Segments</option></select>';
+  h+='</div></div>';
   h+='<div style="margin-top:1em"><button class="btn btn-on" id="ae-save" onclick="_aeSubmit('+(isNew?-1:a.id)+',this)">Save Action</button></div>';
   document.getElementById('modal-title').textContent=isNew?'New Action':'Edit Action';
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
   _aePerfIds=selIds.slice();
   if(sc==='performer-selected')_loadPerfPicker();
+  // Detect WLED devices and populate overrides
+  ra('GET','/api/children',null,function(children){
+    var wc=null;
+    if(children)children.forEach(function(c){if(c.type==='wled'&&!wc)wc=c;});
+    if(!wc)return;
+    document.getElementById('ae-wled-section').style.display='block';
+    ra('GET','/api/wled/effects/'+wc.id,null,function(fx){
+      if(!fx||!fx.length)return;
+      var sel=document.getElementById('ae-wled-fx');
+      fx.forEach(function(name,i){
+        var o=document.createElement('option');o.value=i;o.textContent=i+': '+name;
+        if(a&&a.wledFxOverride===i)o.selected=true;
+        sel.appendChild(o);
+      });
+    });
+    ra('GET','/api/wled/palettes/'+wc.id,null,function(pal){
+      if(!pal||!pal.length)return;
+      var sel=document.getElementById('ae-wled-pal');
+      pal.forEach(function(name,i){
+        var o=document.createElement('option');o.value=i;o.textContent=i+': '+name;
+        if(a&&a.wledPalOverride===i)o.selected=true;
+        sel.appendChild(o);
+      });
+    });
+    ra('GET','/api/wled/segments/'+wc.id,null,function(segs){
+      if(!segs||!segs.length||segs.length<2)return;
+      var sel=document.getElementById('ae-wled-seg');
+      segs.forEach(function(s){
+        var o=document.createElement('option');o.value=s.id;
+        o.textContent='Segment '+s.id+' (LEDs '+s.start+'\u2013'+s.stop+')';
+        if(a&&a.wledSegId===s.id)o.selected=true;
+        sel.appendChild(o);
+      });
+    });
+  });
 }
 
 function _aeScopeChg(){
@@ -1144,7 +1191,7 @@ function _loadPerfPicker(){
       var checked=(_aePerfIds&&_aePerfIds.indexOf(c.id)>=0)?' checked':'';
       h+='<label style="display:flex;align-items:center;gap:.3em;font-size:.85em;padding:.15em 0">';
       h+='<input type="checkbox" class="ae-perf-cb" value="'+c.id+'"'+checked+'> ';
-      h+=c.hostname+(c.name&&c.name!==c.hostname?' ('+c.name+')':'')+'</label>';
+      h+=escapeHtml(c.hostname)+(c.name&&c.name!==c.hostname?' ('+escapeHtml(c.name)+')':'')+'</label>';
     });
     el.innerHTML=h;
   });
@@ -1187,6 +1234,13 @@ function _aeSubmit(id,btn){
   if(t===6){body.speedMs=_s2ms('ae-fspd',15);body.cooling=parseInt(document.getElementById('ae-cool').value)||55;body.sparking=parseInt(document.getElementById('ae-spark').value)||120;}
   if(t===7){body.speedMs=_s2ms('ae-mspd',30);body.tailLen=parseInt(document.getElementById('ae-tail').value)||10;body.decay=parseInt(document.getElementById('ae-dec').value)||80;body.direction=parseInt(document.getElementById('ae-mdir').value)||0;}
   if(t===8){body.spawnMs=_s2ms('ae-tspn',50);body.density=parseInt(document.getElementById('ae-tden').value)||3;body.fadeSpeed=parseInt(document.getElementById('ae-tfad').value)||15;}
+  // WLED overrides (optional)
+  var wfx=document.getElementById('ae-wled-fx');
+  if(wfx&&wfx.value!=='')body.wledFxOverride=parseInt(wfx.value);
+  var wpal=document.getElementById('ae-wled-pal');
+  if(wpal&&wpal.value!=='')body.wledPalOverride=parseInt(wpal.value);
+  var wseg=document.getElementById('ae-wled-seg');
+  if(wseg&&wseg.value!=='')body.wledSegId=parseInt(wseg.value);
   _btnSaving(btn);
   var method=id<0?'POST':'PUT';
   var url=id<0?'/api/actions':'/api/actions/'+id;
@@ -1237,7 +1291,7 @@ function loadRuntime(){
         if(r.totalDurationS)durTxt=', '+r.totalDurationS+'s';
         h+='<div style="padding:.4em 0;border-bottom:1px solid #2a2a2a">';
         h+='<div style="display:flex;align-items:center;gap:.5em">';
-        h+='<span style="flex:1">'+r.name+'<span style="color:#888;font-size:.82em"> ('+r.steps+' steps'+durTxt+(r.computed?' \u2713':'')+' )</span></span>';
+        h+='<span style="flex:1">'+escapeHtml(r.name)+'<span style="color:#888;font-size:.82em"> ('+r.steps+' steps'+durTxt+(r.computed?' \u2713':'')+' )</span></span>';
         h+='<button class="btn btn-on" onclick="showRunner('+r.id+')" style="padding:.3em .8em" data-tip="runEdit">Edit</button>';
         h+=' <button class="btn" onclick="doCompute('+r.id+')" style="background:#446;color:#fff;padding:.3em .8em" data-tip="runCompute">Compute</button>';
         if(r.computed){
@@ -1282,8 +1336,8 @@ function _renderFlights(flights,runners,children){
     });
     h+='<div style="padding:.5em 0;border-bottom:1px solid rgba(51,65,85,.2);display:flex;align-items:center;gap:.5em">';
     h+='<div style="flex:1">';
-    h+='<b>'+f.name+'</b>';
-    h+='<div style="font-size:.78em;color:#94a3b8">Runner: '+(rn?rn.name:'(none)')+' | Performers: '+(perfNames.length?perfNames.join(', '):'none')+'</div>';
+    h+='<b>'+escapeHtml(f.name)+'</b>';
+    h+='<div style="font-size:.78em;color:#94a3b8">Runner: '+escapeHtml(rn?rn.name:'(none)')+' | Performers: '+(perfNames.length?escapeHtml(perfNames.join(', ')):'none')+'</div>';
     h+='</div>';
     h+='<button class="btn btn-nav" onclick="editFlight('+f.id+')" style="padding:.2em .6em;font-size:.75em" data-tip="flEdit">Edit</button>';
     h+='<button class="btn btn-off" onclick="delFlight('+f.id+')" style="padding:.2em .6em;font-size:.75em" data-tip="flDel">Del</button>';
@@ -1303,8 +1357,8 @@ function _renderShows(shows,flights){
     });
     h+='<div style="padding:.5em 0;border-bottom:1px solid rgba(51,65,85,.2);display:flex;align-items:center;gap:.5em">';
     h+='<div style="flex:1">';
-    h+='<b>'+s.name+'</b>';
-    h+='<div style="font-size:.78em;color:#94a3b8">Flights: '+(flNames.length?flNames.join(', '):'none')+' | Loop: '+(s.loop?'Yes':'No')+'</div>';
+    h+='<b>'+escapeHtml(s.name)+'</b>';
+    h+='<div style="font-size:.78em;color:#94a3b8">Flights: '+(flNames.length?escapeHtml(flNames.join(', ')):'none')+' | Loop: '+(s.loop?'Yes':'No')+'</div>';
     h+='</div>';
     h+='<button class="btn btn-on" onclick="startShow('+s.id+')" style="padding:.2em .6em;font-size:.75em" data-tip="shStart">Start</button>';
     h+='<button class="btn btn-nav" onclick="editShow('+s.id+')" style="padding:.2em .6em;font-size:.75em" data-tip="shEdit">Edit</button>';
@@ -1332,17 +1386,17 @@ function editFlight(fid){
 
 function _showFlightModal(f,runners,children){
   var m=document.getElementById('modal');
-  var h='<div class="modal-hdr"><h3>Edit Flight: '+f.name+'</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>';
-  h+='<label>Name</label><input id="fl-nm" value="'+f.name+'" style="width:100%">';
+  var h='<div class="modal-hdr"><h3>Edit Flight: '+escapeHtml(f.name)+'</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>';
+  h+='<label>Name</label><input id="fl-nm" value="'+escapeHtml(f.name)+'" style="width:100%">';
   h+='<label>Runner</label><select id="fl-rn" style="width:100%">';
   h+='<option value="">-- Select Runner --</option>';
-  runners.forEach(function(r){h+='<option value="'+r.id+'"'+(f.runnerId===r.id?' selected':'')+'>'+r.name+' ('+r.steps+' steps)</option>';});
+  runners.forEach(function(r){h+='<option value="'+r.id+'"'+(f.runnerId===r.id?' selected':'')+'>'+escapeHtml(r.name)+' ('+r.steps+' steps)</option>';});
   h+='</select>';
   h+='<label>Performers</label>';
   children.forEach(function(c){
     var checked=(f.performerIds||[]).indexOf(c.id)>=0;
     var tp=c.type==='wled'?'WLED':'SlyLED';
-    h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.3em"><input type="checkbox" class="fl-perf" value="'+c.id+'"'+(checked?' checked':'')+'> '+(c.name||c.hostname)+' <span style="font-size:.72em;color:#64748b">('+tp+')</span></label>';
+    h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.3em"><input type="checkbox" class="fl-perf" value="'+c.id+'"'+(checked?' checked':'')+'> '+escapeHtml(c.name||c.hostname)+' <span style="font-size:.72em;color:#64748b">('+tp+')</span></label>';
   });
   h+='<label>Priority</label><input id="fl-pri" type="number" min="1" max="10" value="'+(f.priority||1)+'" style="width:60px">';
   h+='<div style="margin-top:1em"><button class="btn btn-on" onclick="saveFlightModal('+f.id+')">Save Flight</button></div>';
@@ -1381,12 +1435,12 @@ function editShow(sid){
 
 function _showShowModal(s,flights){
   var m=document.getElementById('modal');
-  var h='<div class="modal-hdr"><h3>Edit Show: '+s.name+'</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>';
-  h+='<label>Name</label><input id="sh-nm" value="'+s.name+'" style="width:100%">';
+  var h='<div class="modal-hdr"><h3>Edit Show: '+escapeHtml(s.name)+'</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>';
+  h+='<label>Name</label><input id="sh-nm" value="'+escapeHtml(s.name)+'" style="width:100%">';
   h+='<label>Flights</label>';
   flights.forEach(function(f){
     var checked=(s.flightIds||[]).indexOf(f.id)>=0;
-    h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.3em"><input type="checkbox" class="sh-fl" value="'+f.id+'"'+(checked?' checked':'')+'> '+f.name+'</label>';
+    h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.3em"><input type="checkbox" class="sh-fl" value="'+f.id+'"'+(checked?' checked':'')+'> '+escapeHtml(f.name)+'</label>';
   });
   h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.5em"><input type="checkbox" id="sh-loop"'+(s.loop!==false?' checked':'')+'> Loop</label>';
   h+='<div style="margin-top:1em"><button class="btn btn-on" onclick="saveShowModal('+s.id+')">Save Show</button></div>';
@@ -1476,7 +1530,7 @@ function renderSteps(){
       var found=false;
       _acts.forEach(function(a){
         var sel=(st.actionId===a.id);if(sel)found=true;
-        h+='<option value="'+a.id+'"'+(sel?' selected':'')+'>'+a.name+'</option>';
+        h+='<option value="'+a.id+'"'+(sel?' selected':'')+'>'+escapeHtml(a.name)+'</option>';
       });
       if(!found&&st.actionId!=null)h+='<option value="'+st.actionId+'" selected style="color:#c44">[Missing #'+st.actionId+']</option>';
       h+='</select></td>';
@@ -1833,6 +1887,24 @@ function shutdownService(){
   x.send('{}');
 }
 
+function showQrCode(){
+  var el=document.getElementById('qr-container');
+  el.innerHTML='<p style="color:#888;font-size:.85em">Loading...</p>';
+  var img=new Image();
+  img.onload=function(){
+    el.innerHTML='';
+    img.style.borderRadius='8px';
+    img.style.maxWidth='240px';
+    el.appendChild(img);
+    var p=document.createElement('p');
+    p.style.cssText='font-size:.75em;color:#888;margin-top:.5em';
+    p.textContent='Scan with the SlyLED Android app to connect';
+    el.appendChild(p);
+  };
+  img.onerror=function(){el.innerHTML='<p style="color:#c66;font-size:.85em">QR generation failed — install qrcode package</p>';};
+  img.src='/api/qr';
+}
+
 function saveSettings(btn){
   _btnSaving(btn);
   var dm=document.getElementById('s-dm').checked?1:0;
@@ -1849,6 +1921,88 @@ function saveSettings(btn){
     _btnSaved(btn,r&&r.ok);
     var lp=document.getElementById('s-log-path');
     if(lp)lp.textContent=logOn?'Logs saved to data/logs/ folder':'';
+  });
+}
+
+// ── Config / Show save-load ──────────────────────────────────────────────
+function exportConfig(btn){
+  _btnSaving(btn);
+  ra('GET','/api/config/export',null,function(d){
+    _btnSaved(btn,!!d);
+    if(!d)return;
+    var blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='slyled-config.json';
+    a.click();URL.revokeObjectURL(a.href);
+  });
+}
+function importConfig(input){
+  var f=input.files[0];if(!f)return;
+  var rd=new FileReader();
+  rd.onload=function(e){
+    try{var data=JSON.parse(e.target.result);}catch(ex){alert('Invalid JSON');return;}
+    if(data.type!=='slyled-config'){alert('Not a SlyLED config file');return;}
+    if(!confirm('Load configuration? This will merge performers and replace layout.'))return;
+    ra('POST','/api/config/import',data,function(r){
+      if(r&&r.ok){document.getElementById('hs').textContent='Config loaded: +'+r.added+' new, '+r.updated+' updated';}
+      else{document.getElementById('hs').textContent='Config load failed: '+(r&&r.err||'unknown error');}
+    });
+  };
+  rd.readAsText(f);input.value='';
+}
+function exportShow(btn){
+  _btnSaving(btn);
+  ra('GET','/api/show/export',null,function(d){
+    _btnSaved(btn,!!d);
+    if(!d)return;
+    var blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='slyled-show.json';
+    a.click();URL.revokeObjectURL(a.href);
+  });
+}
+function openLoadShowModal(){
+  document.getElementById('modal-title').textContent='Load Show';
+  var h='<p style="font-size:.85em;color:#aaa;margin-bottom:1em">Choose a source:</p>';
+  h+='<div style="display:flex;flex-direction:column;gap:.8em">';
+  h+='<div class="card" style="margin:0;cursor:pointer;border-color:#3b82f6" onclick="document.getElementById(\'show-file-input\').click()">';
+  h+='<b style="color:#93c5fd">From File</b>';
+  h+='<p style="font-size:.82em;color:#94a3b8;margin-top:.3em">Load a previously saved .json show file</p>';
+  h+='<input type="file" id="show-file-input" accept=".json" style="display:none" onchange="importShowFile(this)">';
+  h+='</div>';
+  h+='<div class="card" style="margin:0;cursor:pointer;border-color:#22c55e" onclick="loadDemoShow()">';
+  h+='<b style="color:#86efac">Demo Show</b>';
+  h+='<p style="font-size:.82em;color:#94a3b8;margin-top:.3em">Auto-generate a demo using all connected performers</p>';
+  h+='</div>';
+  h+='</div>';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='flex';
+}
+function importShowFile(input){
+  var f=input.files[0];if(!f)return;
+  var rd=new FileReader();
+  rd.onload=function(e){
+    try{var data=JSON.parse(e.target.result);}catch(ex){alert('Invalid JSON');return;}
+    if(data.type!=='slyled-show'){alert('Not a SlyLED show file');return;}
+    if(!confirm('Load show? This replaces ALL current actions, runners, flights, and shows.'))return;
+    ra('POST','/api/show/import',data,function(r){
+      closeModal();
+      if(r&&r.ok){
+        document.getElementById('hs').textContent='Show loaded: '+r.actions+' actions, '+r.runners+' runners, '+r.flights+' flights, '+r.shows+' shows';
+        if(r.warning)alert(r.warning);
+      }else{document.getElementById('hs').textContent='Show load failed: '+(r&&r.err||'unknown');}
+    });
+  };
+  rd.readAsText(f);input.value='';
+}
+function loadDemoShow(){
+  if(!confirm('Generate demo show? This replaces all current show data (actions, runners, flights, shows).'))return;
+  ra('POST','/api/show/demo',{mood:'default'},function(r){
+    closeModal();
+    if(r&&r.ok){document.getElementById('hs').textContent='Demo show loaded: '+r.actions+' actions, '+r.runners+' runners';}
+    else{document.getElementById('hs').textContent='Demo failed: '+(r&&r.err||'no performers?');}
   });
 }
 

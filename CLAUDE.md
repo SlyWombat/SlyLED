@@ -280,7 +280,26 @@ All board-specific headers use both include guards (`#ifndef FILE_H`) and conten
 - After a successful upload, offer to sync: `git add . && git commit -m "<message>" && git push origin main`
 - `arduino_secrets.h` is gitignored — never commit credentials or WiFi passwords
 - Commit messages follow: `feat: <short description>`
+- **Feature tracking:** All features and enhancements are managed via [GitHub Issues](https://github.com/SlyWombat/SlyLED/issues). Reference issues in commits where applicable (e.g. `feat: mDNS discovery (closes #1)`)
+- **Releases:** Published via `gh release create` with firmware binaries attached. Tags: `v2.0`, `v3.0`, `v4.19`, `v5.0`, `v5.1`
 
+## Android app
+
+Native Android client at `android/`. Kotlin + Jetpack Compose + Material 3. Consumes the same REST API as the desktop SPA.
+
+**Build (from project root):**
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot'
+$env:ANDROID_SDK_ROOT = 'C:\Android\Sdk'
+cd android
+.\gradlew.bat assembleDebug --no-daemon
+```
+
+**APK output:** `android/app/build/outputs/apk/debug/app-debug.apk`
+
+**Structure:** `android/app/src/main/java/com/slywombat/slyled/` — data layer (Retrofit API, models, repository), DI (Hilt), UI screens (6 tabs: Dashboard, Setup, Layout, Actions, Runtime, Settings), ViewModels.
+
+**Phase tracking:** Issues #15–#19.
 
 # Arduino Web App Performance Rules
 

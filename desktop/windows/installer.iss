@@ -3,7 +3,7 @@
 ; Or:    run build.bat — it calls iscc automatically if available.
 
 #define AppName      "SlyLED Orchestrator"
-#define AppVersion   "4.0"
+#define AppVersion   "5.1"
 #define AppPublisher "SlyWombat"
 #define AppExeName   "SlyLED.exe"
 ; Unique GUID for this app — keep fixed across releases so updates overwrite
@@ -14,7 +14,7 @@ AppId={#AppId}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
-AppUpdatesURL=https://github.com/SlyWombat/Giga-LED-Project
+AppUpdatesURL=https://github.com/SlyWombat/SlyLED
 
 ; Install without elevation when possible (no UAC for user-space install)
 DefaultDirName={autopf}\SlyLED
@@ -70,11 +70,11 @@ Filename: "netsh"; \
 
 [UninstallRun]
 ; Kill any running instance before uninstalling
-Filename: "taskkill"; Parameters: "/f /im SlyLED.exe"; Flags: runhidden
+Filename: "taskkill"; Parameters: "/f /im SlyLED.exe"; Flags: runhidden; RunOnceId: "KillSlyLED"
 
 ; Remove firewall rules
-Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED UDP 4210"""; Flags: runhidden
-Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED HTTP 8080"""; Flags: runhidden
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED UDP 4210"""; Flags: runhidden; RunOnceId: "FwUDP4210"
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED HTTP 8080"""; Flags: runhidden; RunOnceId: "FwTCP8080"
 
 [UninstallDelete]
 ; Remove the install directory if it's empty after uninstall

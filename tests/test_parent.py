@@ -331,6 +331,129 @@ def run():
         c.delete(f'/api/runners/{or_id}')
         c.delete(f'/api/actions/{oa_id}')
 
+        # ── Config export/import ──────────────────────────────────────
+        # Add a child + layout for testing
+        r = c.post('/api/children', json={'ip': '10.0.0.50'})
+        cfg_cid = r.get_json().get('id')
+        c.post('/api/layout', json={'canvasW': 8000, 'canvasH': 4000,
+               'children': [{'id': cfg_cid, 'x': 500, 'y': 300}]})
+
+        r = c.get('/api/config/export')
+        d = r.get_json()
+        ok('Config export type', d.get('type') == 'slyled-config')
+        ok('Config export version', d.get('version') == 1)
+        ok('Config export has children', len(d.get('children', [])) >= 1)
+        ok('Config export has layout', 'canvasW' in d.get('layout', {}))
+        config_bundle = d
+
+        # Bad type rejected
+        r = c.post('/api/config/import', json={'type': 'wrong'})
+        ok('Config import bad type → 400', r.status_code == 400)
+
+        # Import with a new child
+        new_cfg = {'type': 'slyled-config', 'version': 1,
+                   'children': [{'id': 99, 'hostname': 'IMPORT-TEST', 'ip': '10.0.0.77',
+                                 'name': 'Imported', 'desc': '', 'sc': 0, 'strings': [], 'status': 0}],
+                   'layout': {'canvasW': 10000, 'canvasH': 5000,
+                              'children': [{'id': 99, 'x': 200, 'y': 400}]}}
+        r = c.post('/api/config/import', json=new_cfg)
+        d = r.get_json()
+        ok('Config import ok', d.get('ok'))
+        ok('Config import added 1', d.get('added') == 1)
+
+        # Re-import updates
+        r = c.post('/api/config/import', json=new_cfg)
+        d = r.get_json()
+        ok('Config import update', d.get('updated') == 1 and d.get('added') == 0)
+
+        # Layout IDs remapped
+        r = c.get('/api/layout')
+        lay = r.get_json()
+        lay_ids = [lc['id'] for lc in lay.get('children', [])]
+        ok('Config import layout remapped', 99 not in lay_ids, f'layout ids: {lay_ids}')
+
+        # Clean up imported child
+        r = c.get('/api/children')
+        for ch in r.get_json():
+            if ch.get('hostname') == 'IMPORT-TEST':
+                c.delete(f'/api/children/{ch["id"]}')
+
+        # ── Show export/import ────────────────────────────────────────
+        r = c.get('/api/show/export')
+        d = r.get_json()
+        ok('Show export type', d.get('type') == 'slyled-show')
+        ok('Show export version', d.get('version') == 1)
+        ok('Show export has actions', isinstance(d.get('actions'), list))
+        ok('Show export has runners', isinstance(d.get('runners'), list))
+        ok('Show export has flights', isinstance(d.get('flights'), list))
+        ok('Show export has shows', isinstance(d.get('shows'), list))
+
+        # Bad type rejected
+        r = c.post('/api/show/import', json={'type': 'wrong'})
+        ok('Show import bad type → 400', r.status_code == 400)
+
+        # Import a small show bundle
+        show_bundle = {'type': 'slyled-show', 'version': 1,
+                       'actions': [{'id': 0, 'name': 'TestSolid', 'type': 1, 'r': 255, 'g': 0, 'b': 0}],
+                       'runners': [{'id': 0, 'name': 'TestRunner', 'computed': False,
+                                    'steps': [{'actionId': 0, 'durationS': 5}]}],
+                       'flights': [{'id': 0, 'name': 'TestFlight', 'performerIds': [999],
+                                    'runnerId': 0, 'priority': 1}],
+                       'shows': [{'id': 0, 'name': 'TestShow', 'flightIds': [0], 'loop': False}]}
+        r = c.post('/api/show/import', json=show_bundle)
+        d = r.get_json()
+        ok('Show import ok', d.get('ok'))
+        ok('Show import actions count', d.get('actions') == 1)
+        ok('Show import runners count', d.get('runners') == 1)
+        ok('Show import flights count', d.get('flights') == 1)
+        ok('Show import shows count', d.get('shows') == 1)
+        ok('Show import orphan warning', 'warning' in d)
+
+        # Verify ID remapping — runner step.actionId should point to new action ID
+        r = c.get('/api/runners')
+        runners = r.get_json()
+        ok('Show import runner exists', len(runners) == 1)
+        if runners:
+            # GET /api/runners returns step count; fetch full runner for steps
+            full_r = c.get(f'/api/runners/{runners[0]["id"]}').get_json()
+            r_steps = full_r.get('steps', [])
+            r_actions = c.get('/api/actions').get_json()
+            if r_actions and r_steps and isinstance(r_steps[0], dict):
+                ok('Show import actionId remapped', r_steps[0].get('actionId') == r_actions[0]['id'])
+            else:
+                ok('Show import actionId remapped', False, f'steps={r_steps}, actions={r_actions}')
+
+        # ── Demo show ─────────────────────────────────────────────────
+        r = c.post('/api/show/demo', json={'mood': 'default'})
+        d = r.get_json()
+        ok('Demo show ok', d.get('ok'))
+        ok('Demo show 8 actions', d.get('actions') == 8)
+        ok('Demo show 1 runner', d.get('runners') == 1)
+        ok('Demo show 1 flight', d.get('flights') == 1)
+        ok('Demo show 1 show', d.get('shows') == 1)
+
+        # Verify demo data is queryable
+        r = c.get('/api/actions')
+        ok('Demo actions in store', len(r.get_json()) == 8)
+        r = c.get('/api/shows')
+        ok('Demo show in store', len(r.get_json()) == 1 and r.get_json()[0].get('name') == 'Demo Show')
+
+        # Clean up test child
+        c.delete(f'/api/children/{cfg_cid}')
+
+        # Demo with no children — should still create actions/runner/show
+        c.post('/api/reset')
+        r = c.post('/api/show/demo', json={})
+        d = r.get_json()
+        ok('Demo show no performers → 200', r.status_code == 200 and d.get('ok'))
+        ok('Demo no-perf creates 8 actions', d.get('actions') == 8)
+        ok('Demo no-perf creates 1 runner', d.get('runners') == 1)
+        ok('Demo no-perf creates 1 show', d.get('shows') == 1)
+        r = c.get('/api/flights')
+        flights = r.get_json()
+        ok('Demo no-perf flight has empty performerIds',
+           len(flights) == 1 and flights[0].get('performerIds') == [])
+
         # ── Shutdown (don't actually call it) ───────────────────────
         # r = c.post('/api/shutdown')  # skip — would kill process
 

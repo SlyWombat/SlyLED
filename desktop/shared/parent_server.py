@@ -12,6 +12,7 @@ Usage (from project root):
 """
 
 import argparse
+import copy
 import json
 import os
 import signal
@@ -23,11 +24,13 @@ import time
 import webbrowser
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, request, send_from_directory
+import io
+from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 import logging
 from datetime import datetime
 
-from wled_bridge import wled_probe, wled_set_state, wled_map_action, wled_map_step, wled_stop, wled_get_effects
+from wled_bridge import (wled_probe, wled_set_state, wled_map_action, wled_map_step,
+                         wled_stop, wled_get_effects, wled_get_palettes, wled_get_segments)
 
 log = logging.getLogger("slyled")
 log.setLevel(logging.DEBUG)
@@ -54,7 +57,7 @@ def _apply_logging(enabled):
 
 # ── Version ───────────────────────────────────────────────────────────────────
 
-VERSION = "5.0"
+VERSION = "5.1"
 
 # ── UDP protocol ──────────────────────────────────────────────────────────────
 
@@ -583,6 +586,57 @@ def api_children_import():
         _save("children", _children)
     return jsonify(ok=True, added=added, updated=updated, skipped=skipped)
 
+# ── WLED device API ───────────────────────────────────────────────────────────
+
+_wled_cache = {}   # child_id → {"effects": [...], "palettes": [...], "ts": epoch}
+_WLED_CACHE_TTL = 300  # 5 minutes
+
+@app.get("/api/wled/effects/<int:cid>")
+def api_wled_effects(cid):
+    child = next((c for c in _children if c["id"] == cid and c.get("type") == "wled"), None)
+    if not child:
+        return jsonify(ok=False, err="WLED device not found"), 404
+    now = time.time()
+    cached = _wled_cache.get(cid)
+    if cached and cached.get("effects") and now - cached.get("ts", 0) < _WLED_CACHE_TTL:
+        return jsonify(cached["effects"])
+    effects = wled_get_effects(child["ip"])
+    if effects is None:
+        return jsonify(ok=False, err="device unreachable"), 502
+    _wled_cache.setdefault(cid, {})["effects"] = effects
+    _wled_cache[cid]["ts"] = now
+    return jsonify(effects)
+
+@app.get("/api/wled/palettes/<int:cid>")
+def api_wled_palettes(cid):
+    child = next((c for c in _children if c["id"] == cid and c.get("type") == "wled"), None)
+    if not child:
+        return jsonify(ok=False, err="WLED device not found"), 404
+    now = time.time()
+    cached = _wled_cache.get(cid)
+    if cached and cached.get("palettes") and now - cached.get("ts", 0) < _WLED_CACHE_TTL:
+        return jsonify(cached["palettes"])
+    palettes = wled_get_palettes(child["ip"])
+    if palettes is None:
+        return jsonify(ok=False, err="device unreachable"), 502
+    _wled_cache.setdefault(cid, {})["palettes"] = palettes
+    _wled_cache[cid]["ts"] = now
+    return jsonify(palettes)
+
+@app.get("/api/wled/segments/<int:cid>")
+def api_wled_segments(cid):
+    child = next((c for c in _children if c["id"] == cid and c.get("type") == "wled"), None)
+    if not child:
+        return jsonify(ok=False, err="WLED device not found"), 404
+    # Try cached segments from probe first
+    segs = child.get("wled", {}).get("segments")
+    if segs:
+        return jsonify(segs)
+    segs = wled_get_segments(child["ip"])
+    if segs is None:
+        return jsonify(ok=False, err="device unreachable"), 502
+    return jsonify(segs)
+
 # ── Layout ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/layout")
@@ -682,7 +736,8 @@ _ACTION_FIELDS = ("name", "type", "scope", "canvasEffect", "targetIds", "r", "g"
                   "cooling", "sparking",              # Fire
                   "direction", "tailLen", "density",  # Chase/Comet/Twinkle
                   "decay", "fadeSpeed",               # Comet/Twinkle
-                  "onMs", "offMs", "wipeDir", "wipeSpeedPct")  # legacy compat
+                  "onMs", "offMs", "wipeDir", "wipeSpeedPct",  # legacy compat
+                  "wledFxOverride", "wledPalOverride", "wledSegId")  # WLED overrides
 
 @app.post("/api/actions")
 def api_actions_create():
@@ -1265,6 +1320,236 @@ def _stop_all_shows():
         _settings["runnerElapsed"] = 0
         _save("settings", _settings)
 
+# ── Config / Show export-import ───────────────────────────────────────────────
+
+@app.get("/api/config/export")
+def api_config_export():
+    """Bundle children + layout as a portable config file."""
+    return jsonify({"type": "slyled-config", "version": 1,
+                    "children": _children, "layout": _layout})
+
+@app.post("/api/config/import")
+def api_config_import():
+    """Merge children by hostname, replace layout with ID remapping."""
+    global _nxt_c, _layout
+    data = request.get_json(silent=True) or {}
+    if data.get("type") != "slyled-config":
+        return jsonify(ok=False, err="not a slyled-config file"), 400
+    imported_children = data.get("children", [])
+    imported_layout = data.get("layout")
+    added = updated = 0
+    id_map = {}  # old_id -> new_id
+    with _lock:
+        for c in imported_children:
+            old_id = c.get("id", -1)
+            ex = next((x for x in _children
+                        if x.get("hostname") == c.get("hostname")), None)
+            if ex:
+                id_map[old_id] = ex["id"]
+                ex.update({k: v for k, v in c.items() if k != "id"})
+                updated += 1
+            else:
+                c = dict(c)
+                c["id"] = _nxt_c
+                id_map[old_id] = _nxt_c
+                _nxt_c += 1
+                _children.append(c)
+                added += 1
+        _save("children", _children)
+        if imported_layout:
+            _layout = imported_layout
+            for lc in _layout.get("children", []):
+                lc["id"] = id_map.get(lc.get("id"), lc.get("id"))
+            _save("layout", _layout)
+    return jsonify(ok=True, added=added, updated=updated)
+
+@app.get("/api/show/export")
+def api_show_export():
+    """Bundle actions + runners + flights + shows as a portable show file."""
+    return jsonify({"type": "slyled-show", "version": 1,
+                    "actions": _actions, "runners": _runners,
+                    "flights": _flights, "shows": _shows})
+
+def _install_show_bundle(bundle):
+    """Replace all show data with the given bundle, reassigning IDs.
+    Returns a list of orphan detail dicts (empty if none)."""
+    global _actions, _runners, _flights, _shows
+    global _nxt_a, _nxt_r, _nxt_f, _nxt_s
+
+    _stop_all_shows()
+
+    with _lock:
+        # Action ID remap
+        a_map = {}
+        new_actions = []
+        for a in bundle.get("actions", []):
+            old_id = a.get("id", -1)
+            a = copy.deepcopy(a)
+            a["id"] = _nxt_a
+            a_map[old_id] = _nxt_a
+            _nxt_a += 1
+            new_actions.append(a)
+
+        # Runner ID remap + fix actionId refs in steps
+        r_map = {}
+        new_runners = []
+        for r in bundle.get("runners", []):
+            old_id = r.get("id", -1)
+            r = copy.deepcopy(r)
+            r["id"] = _nxt_r
+            r_map[old_id] = _nxt_r
+            _nxt_r += 1
+            for step in r.get("steps", []):
+                if "actionId" in step:
+                    step["actionId"] = a_map.get(step["actionId"], step["actionId"])
+            new_runners.append(r)
+
+        # Flight ID remap + fix runnerId refs
+        f_map = {}
+        new_flights = []
+        current_child_ids = {c["id"] for c in _children}
+        orphan_details = []
+        for f in bundle.get("flights", []):
+            old_id = f.get("id", -1)
+            f = copy.deepcopy(f)
+            f["id"] = _nxt_f
+            f_map[old_id] = _nxt_f
+            _nxt_f += 1
+            if f.get("runnerId") is not None:
+                f["runnerId"] = r_map.get(f["runnerId"], f["runnerId"])
+            if f.get("performerIds"):
+                missing = [p for p in f["performerIds"] if p not in current_child_ids]
+                if missing:
+                    orphan_details.append({"flightName": f.get("name"), "missingIds": missing})
+            new_flights.append(f)
+
+        # Show ID remap + fix flightIds refs
+        new_shows = []
+        for s in bundle.get("shows", []):
+            s = copy.deepcopy(s)
+            s["id"] = _nxt_s
+            _nxt_s += 1
+            s["flightIds"] = [f_map.get(fid, fid) for fid in s.get("flightIds", [])]
+            new_shows.append(s)
+
+        _actions = new_actions
+        _runners = new_runners
+        _flights = new_flights
+        _shows = new_shows
+        _save("actions", _actions)
+        _save("runners", _runners)
+        _save("flights", _flights)
+        _save("shows", _shows)
+
+    return orphan_details
+
+@app.post("/api/show/import")
+def api_show_import():
+    """Import a show bundle, replacing all current show data."""
+    data = request.get_json(silent=True) or {}
+    if data.get("type") != "slyled-show":
+        return jsonify(ok=False, err="not a slyled-show file"), 400
+    orphan_details = _install_show_bundle(data)
+    resp = {"ok": True, "actions": len(_actions), "runners": len(_runners),
+            "flights": len(_flights), "shows": len(_shows)}
+    if orphan_details:
+        names = ", ".join(d["flightName"] or "(unnamed)" for d in orphan_details)
+        resp["warning"] = (f"Flights with missing performers: {names}. "
+                           "Re-assign them in the Runtime tab.")
+        resp["orphanDetails"] = orphan_details
+    return jsonify(resp)
+
+_TYPE_NAMES = {0: "Blackout", 1: "Solid", 2: "Fade", 3: "Breathe",
+               4: "Chase", 5: "Rainbow", 6: "Fire", 7: "Comet",
+               8: "Twinkle", 9: "Strobe", 10: "Wipe", 11: "Scanner",
+               12: "Sparkle", 13: "Gradient"}
+
+# ── Demo show generator ─────────────────────────────────────────────────────
+
+# Mood presets — extensibility point for future smart-show / theme system.
+# Each preset defines colors, durations, action types, and type-specific params.
+MOOD_PRESETS = {
+    "default": {
+        "name": "Demo Show",
+        "colors": [
+            (255, 0, 0), (0, 200, 255), (0, 255, 60), (255, 140, 0),
+            (180, 0, 255), (0, 255, 200), (255, 255, 0), (255, 0, 120),
+        ],
+        "durations": [6, 8, 10, 5, 7, 8, 6, 5],
+        "action_types": [1, 2, 3, 4, 5, 6, 7, 8],
+    },
+    # Future: "calm", "party", "ambient", "holiday", etc.
+}
+
+def _demo_action_defaults(atype, color, color2):
+    """Return type-specific default params for the demo generator."""
+    r, g, b = color
+    base = {"r": r, "g": g, "b": b, "scope": "performer"}
+    if atype == 2:   # Fade
+        base.update({"r2": color2[0], "g2": color2[1], "b2": color2[2], "speedMs": 2000})
+    elif atype == 3: # Breathe
+        base.update({"periodMs": 3000, "minBri": 20})
+    elif atype == 4: # Chase
+        base.update({"speedMs": 80, "spacing": 4, "direction": 0})
+    elif atype == 5: # Rainbow
+        base.update({"speedMs": 40, "paletteId": 0, "direction": 0})
+    elif atype == 6: # Fire
+        base.update({"speedMs": 15, "cooling": 55, "sparking": 120})
+    elif atype == 7: # Comet
+        base.update({"speedMs": 25, "tailLen": 12, "direction": 0, "decay": 80})
+    elif atype == 8: # Twinkle
+        base.update({"spawnMs": 50, "density": 4, "fadeSpeed": 15})
+    return base
+
+def _generate_demo_show(mood="default"):
+    """Generate a demo show. Works with or without registered performers.
+    Actions, runners, and shows are always created. The flight targets
+    all current performers (empty list if none registered)."""
+    preset = MOOD_PRESETS.get(mood, MOOD_PRESETS["default"])
+    colors = preset["colors"]
+    durations = preset["durations"]
+
+    # Build actions
+    actions = []
+    for i, atype in enumerate(preset["action_types"]):
+        color = colors[i % len(colors)]
+        color2 = colors[(i + 1) % len(colors)]
+        a = {"id": i, "name": "Demo %s" % _TYPE_NAMES.get(atype, "Action"),
+             "type": atype}
+        a.update(_demo_action_defaults(atype, color, color2))
+        actions.append(a)
+
+    # Build runner with steps cycling through actions
+    steps = []
+    for i, a in enumerate(actions):
+        steps.append({"actionId": a["id"],
+                       "durationS": durations[i % len(durations)]})
+    runner = {"id": 0, "name": "Demo Runner", "computed": False, "steps": steps}
+
+    # Build one flight targeting all performers (empty if none registered)
+    child_ids = [c["id"] for c in _children]
+    flight = {"id": 0, "name": "Demo Flight — All Performers",
+              "performerIds": child_ids, "runnerId": 0, "priority": 1}
+
+    # Build show
+    show = {"id": 0, "name": preset["name"],
+            "flightIds": [0], "loop": True}
+
+    return {"actions": actions, "runners": [runner],
+            "flights": [flight], "shows": [show]}
+
+@app.post("/api/show/demo")
+def api_show_demo():
+    """Generate and install a demo show from current children/layout."""
+    body = request.get_json(silent=True) or {}
+    mood = body.get("mood", "default")
+    bundle = _generate_demo_show(mood)
+    _install_show_bundle(bundle)
+    return jsonify(ok=True, actions=len(bundle["actions"]),
+                   runners=len(bundle["runners"]),
+                   flights=len(bundle["flights"]),
+                   shows=len(bundle["shows"]))
+
 # ── Factory reset ─────────────────────────────────────────────────────────────
 
 _DEFAULT_SETTINGS = {
@@ -1449,6 +1734,40 @@ def api_reset():
         _save("layout",   _layout)
         _save("settings", _settings)
     return jsonify(ok=True)
+
+# ── QR code for mobile app ────────────────────────────────────────────────────
+
+@app.get("/api/qr")
+def api_qr():
+    """Generate a QR code PNG encoding slyled://{host}:{port} for the mobile app."""
+    try:
+        import qrcode
+    except ImportError:
+        return jsonify(ok=False, err="qrcode package not installed"), 500
+    # Use the machine's LAN IP, not request.host (which may be localhost)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        host = s.getsockname()[0]
+        s.close()
+    except Exception:
+        host = request.host.split(":")[0]
+    port = request.host.split(":")[-1] if ":" in request.host else "8080"
+    url = f"slyled://{host}:{port}"
+    img = qrcode.make(url, box_size=8, border=2)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png", download_name="slyled-qr.png")
+
+# ── CORS ─────────────────────────────────────────────────────────────────────
+
+@app.after_request
+def add_cors(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
 
 # ── Shutdown ──────────────────────────────────────────────────────────────────
 

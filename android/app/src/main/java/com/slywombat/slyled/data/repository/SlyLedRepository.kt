@@ -1,0 +1,130 @@
+package com.slywombat.slyled.data.repository
+
+import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
+import com.slywombat.slyled.data.api.SlyLedApi
+import com.slywombat.slyled.data.model.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import retrofit2.Retrofit
+import javax.inject.Inject
+import javax.inject.Singleton
+
+@Singleton
+class SlyLedRepository @Inject constructor(
+    private val okHttpClient: OkHttpClient
+) {
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    private var api: SlyLedApi? = null
+    var baseUrl: String? = null
+        private set
+
+    val isConnected: Boolean get() = api != null
+
+    fun connect(host: String, port: Int): SlyLedApi {
+        val url = "http://$host:$port/"
+        baseUrl = url
+        val retrofit = Retrofit.Builder()
+            .baseUrl(url)
+            .client(okHttpClient)
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+        api = retrofit.create(SlyLedApi::class.java)
+        return api!!
+    }
+
+    fun disconnect() {
+        api = null
+        baseUrl = null
+    }
+
+    private fun requireApi(): SlyLedApi = api ?: throw IllegalStateException("Not connected")
+
+    // Polling flows
+    fun childrenFlow(intervalMs: Long = 5000): Flow<Result<List<Child>>> = flow {
+        while (true) {
+            emit(runCatching { requireApi().getChildren() })
+            delay(intervalMs)
+        }
+    }
+
+    fun settingsFlow(intervalMs: Long = 3000): Flow<Result<Settings>> = flow {
+        while (true) {
+            emit(runCatching { requireApi().getSettings() })
+            delay(intervalMs)
+        }
+    }
+
+    fun liveEventsFlow(intervalMs: Long = 1000): Flow<Result<List<LiveEvent>>> = flow {
+        while (true) {
+            emit(runCatching { requireApi().getLiveEvents() })
+            delay(intervalMs)
+        }
+    }
+
+    // Status
+    suspend fun getStatus() = requireApi().getStatus()
+
+    // Children
+    suspend fun getChildren() = requireApi().getChildren()
+    suspend fun discoverChildren() = requireApi().discoverChildren()
+    suspend fun addChild(ip: String) = requireApi().addChild(AddChildRequest(ip))
+    suspend fun deleteChild(id: Int) = requireApi().deleteChild(id)
+    suspend fun refreshChild(id: Int) = requireApi().refreshChild(id)
+    suspend fun rebootChild(id: Int) = requireApi().rebootChild(id)
+    suspend fun refreshAllChildren() = requireApi().refreshAllChildren()
+    suspend fun getChildStatus(id: Int) = requireApi().getChildStatus(id)
+
+    // Layout
+    suspend fun getLayout() = requireApi().getLayout()
+    suspend fun saveLayout(layout: Layout) = requireApi().saveLayout(layout)
+
+    // Settings
+    suspend fun getSettings() = requireApi().getSettings()
+    suspend fun saveSettings(settings: Map<String, Any>) = requireApi().saveSettings(settings)
+
+    // Actions
+    suspend fun getActions() = requireApi().getActions()
+    suspend fun createAction(action: Action) = requireApi().createAction(action)
+    suspend fun updateAction(id: Int, action: Action) = requireApi().updateAction(id, action)
+    suspend fun deleteAction(id: Int) = requireApi().deleteAction(id)
+
+    // Runners
+    suspend fun getRunners() = requireApi().getRunners()
+    suspend fun getRunner(id: Int) = requireApi().getRunner(id)
+    suspend fun createRunner(name: String) = requireApi().createRunner(CreateRunnerRequest(name))
+    suspend fun updateRunner(id: Int, runner: Runner) = requireApi().updateRunner(id, runner)
+    suspend fun deleteRunner(id: Int) = requireApi().deleteRunner(id)
+    suspend fun computeRunner(id: Int) = requireApi().computeRunner(id)
+    suspend fun syncRunner(id: Int) = requireApi().syncRunner(id)
+    suspend fun startRunner(id: Int) = requireApi().startRunner(id)
+    suspend fun stopRunners() = requireApi().stopRunners()
+
+    // Flights
+    suspend fun getFlights() = requireApi().getFlights()
+    suspend fun createFlight(flight: Flight) = requireApi().createFlight(flight)
+    suspend fun updateFlight(id: Int, flight: Flight) = requireApi().updateFlight(id, flight)
+    suspend fun deleteFlight(id: Int) = requireApi().deleteFlight(id)
+
+    // Shows
+    suspend fun getShows() = requireApi().getShows()
+    suspend fun createShow(show: Show) = requireApi().createShow(show)
+    suspend fun updateShow(id: Int, show: Show) = requireApi().updateShow(id, show)
+    suspend fun deleteShow(id: Int) = requireApi().deleteShow(id)
+    suspend fun startShow(id: Int) = requireApi().startShow(id)
+    suspend fun stopShows() = requireApi().stopShows()
+
+    // Config/Show
+    suspend fun exportConfig() = requireApi().exportConfig()
+    suspend fun importConfig(data: JsonObject) = requireApi().importConfig(data)
+    suspend fun exportShow() = requireApi().exportShow()
+    suspend fun importShow(data: JsonObject) = requireApi().importShow(data)
+    suspend fun generateDemo() = requireApi().generateDemo()
+
+    // Reset
+    suspend fun factoryReset() = requireApi().factoryReset()
+}

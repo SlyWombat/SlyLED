@@ -62,6 +62,21 @@ main/arduino_secrets.h
 *.gcno
 *.gcov
 
+# Android build artifacts
+android/.gradle/
+android/app/build/
+android/local.properties
+android/SlyLED-debug.apk
+
+# Desktop Windows build artifacts
+desktop/windows/build/
+desktop/windows/dist/
+desktop/windows/.venv/
+desktop/windows/SlyLED.spec
+desktop/windows/null
+desktop/windows/6.3
+null
+
 # Generated
 Makefile
 Makefile.*

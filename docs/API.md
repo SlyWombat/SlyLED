@@ -22,7 +22,7 @@ Unknown URL paths also return the SPA (client-side routing).
 **Response:** `200 OK`, `application/json`
 
 ```json
-{"role": "parent", "hostname": "WIN-HOSTNAME", "version": "4.0"}
+{"role": "parent", "hostname": "WIN-HOSTNAME", "version": "5.1"}
 ```
 
 ---
@@ -436,6 +436,138 @@ Broadcast `CMD_RUNNER_GO` with `epoch + 2` seconds so all children start simulta
 Broadcast `CMD_RUNNER_STOP` to all children. Updates `runnerRunning = false`.
 
 **Response:** `200 OK`, `{"ok": true}`
+
+---
+
+## Flights API
+
+### GET /api/flights
+
+List all flights.
+
+**Response:** `200 OK`, JSON array of flights.
+
+### POST /api/flights
+
+Create a new flight.
+
+**Request body:**
+
+```json
+{"name": "Main Flight", "performerIds": [0, 1], "runnerId": 0, "priority": 1}
+```
+
+**Response:** `200 OK`, `{"ok": true, "id": 0}`
+
+### GET /api/flights/:id
+
+**Response:** `200 OK`, flight object.
+
+### PUT /api/flights/:id
+
+Update flight fields (name, performerIds, runnerId, priority).
+
+### DELETE /api/flights/:id
+
+**Response:** `200 OK`, `{"ok": true}`
+
+---
+
+## Shows API
+
+### GET /api/shows
+
+List all shows.
+
+### POST /api/shows
+
+Create a new show.
+
+**Request body:**
+
+```json
+{"name": "Evening Show", "flightIds": [0, 1], "loop": true}
+```
+
+**Response:** `200 OK`, `{"ok": true, "id": 0}`
+
+### GET /api/shows/:id
+
+**Response:** `200 OK`, show object.
+
+### PUT /api/shows/:id
+
+Update show fields (name, flightIds, loop).
+
+### DELETE /api/shows/:id
+
+**Response:** `200 OK`, `{"ok": true}`
+
+### POST /api/shows/:id/start
+
+Start show execution — syncs and starts all flights simultaneously.
+
+**Response:** `200 OK`, `{"ok": true, "flights": 2}`
+
+### POST /api/shows/stop
+
+Stop all running shows, runners, and WLED threads.
+
+**Response:** `200 OK`, `{"ok": true}`
+
+---
+
+## Config / Show Export-Import API
+
+### GET /api/config/export
+
+Bundle children + layout as a portable config file.
+
+**Response:** `200 OK`
+
+```json
+{"type": "slyled-config", "version": 1, "children": [...], "layout": {...}}
+```
+
+### POST /api/config/import
+
+Merge children by hostname and replace layout with ID remapping.
+
+**Request body:** A `slyled-config` JSON bundle (as returned by export).
+
+**Response:** `200 OK`, `{"ok": true, "added": 1, "updated": 0}`
+
+### GET /api/show/export
+
+Bundle actions + runners + flights + shows as a portable show file.
+
+**Response:** `200 OK`
+
+```json
+{"type": "slyled-show", "version": 1, "actions": [...], "runners": [...], "flights": [...], "shows": [...]}
+```
+
+### POST /api/show/import
+
+Replace all show data with the imported bundle. Reassigns all IDs and remaps cross-references (runner steps → actionId, flights → runnerId, shows → flightIds). Warns if any flight.performerIds reference children not in the current configuration.
+
+**Request body:** A `slyled-show` JSON bundle.
+
+**Response:** `200 OK`
+
+```json
+{"ok": true, "actions": 8, "runners": 1, "flights": 1, "shows": 1, "warning": "Some flights reference performers not in this configuration."}
+```
+
+### POST /api/show/demo
+
+Generate and install a demo show from current children/layout.
+
+**Request body:** `{"mood": "default"}` (mood parameter reserved for future smart show presets)
+
+**Response:** `200 OK`, `{"ok": true, "actions": 8, "runners": 1, "flights": 1, "shows": 1}`
+
+**Error (no performers):** `400`, `{"ok": false, "err": "No performers registered"}`
 
 ---
 
