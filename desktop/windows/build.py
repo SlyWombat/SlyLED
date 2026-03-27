@@ -31,6 +31,7 @@ args = [
     "--collect-submodules=flask",
     "--collect-submodules=werkzeug",
     "--collect-submodules=esptool",
+    "--collect-data=esptool",
     "--paths", str(SHARED),
 ]
 

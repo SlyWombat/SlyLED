@@ -236,6 +236,7 @@ body.light .li:hover{border-color:#3b82f6}
     <div class='card-title' style='display:flex;align-items:center;gap:.5em'>
       OTA Updates (WiFi)
       <button class='btn' onclick='checkOtaUpdates()' style='padding:.15em .5em;background:#333;font-size:.8em'>Check for Updates</button>
+      <button class='btn' onclick='setupRefreshAll(null);setTimeout(checkOtaUpdates,3000)' style='padding:.15em .5em;background:#333;font-size:.8em'>&#x21bb; Refresh Status</button>
       <button class='btn' id='ota-update-all' onclick='otaUpdateAll()' style='padding:.15em .5em;background:#f60;color:#fff;font-size:.8em;display:none'>Update All</button>
     </div>
     <div id='ota-children'><p style='color:#888'>Click "Check for Updates" to scan performers.</p></div>
@@ -1794,9 +1795,13 @@ function _renderOtaTable(d){
     var bc=boardColors[c.board]||boardColors[boardLabel]||'#446';
     var tp='<span class="badge" style="background:'+bc+';color:#fff">'+escapeHtml(boardLabel)+'</span>';
     var st,act;
+    var isOnline=c.status===1;
     if(c.board==='wled'){
       st='<span style="color:#888">WLED — update via device UI</span>';
       act='';
+    }else if(!isOnline){
+      st='<span class="badge boff">Offline</span>';
+      act='<span style="color:#666">—</span>';
     }else if(c.needsUpdate){
       st='<span class="badge" style="background:#f60;color:#fff">v'+escapeHtml(d.latest)+' available</span>';
       act='<button class="btn btn-on" id="ota-btn-'+c.id+'" onclick="otaSingleUpdate('+c.id+')">Update</button>';

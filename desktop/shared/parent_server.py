@@ -1889,6 +1889,7 @@ def api_firmware_check():
             "ip": c.get("ip", ""),
             "currentVersion": fw, "latestVersion": latest,
             "needsUpdate": needs_update, "board": board,
+            "status": c.get("status", 0),
             "downloadUrl": download_url,
         })
     return jsonify({"latest": latest, "children": results})
