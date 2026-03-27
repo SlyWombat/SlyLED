@@ -139,25 +139,50 @@ def get_flash_status():
     with _flash_lock:
         return dict(_flash_status)
 
-def _find_python():
-    """Find a real Python interpreter (not the PyInstaller exe)."""
-    # Check common locations
+def _find_python_with_esptool():
+    """Find a Python interpreter that has esptool installed."""
     import shutil
-    for name in ("python", "python3", "python.exe"):
-        found = shutil.which(name)
-        if found and "SlyLED" not in found:
-            return found
-    # Windows: check known install paths
-    for ver in ("314", "313", "312", "311", "310"):
-        candidate = os.path.expandvars(rf"%LOCALAPPDATA%\Programs\Python\Python{ver}\python.exe")
-        if os.path.isfile(candidate):
-            return candidate
-    candidate = os.path.expandvars(r"%LOCALAPPDATA%\Programs\Python\Launcher\py.exe")
-    if os.path.isfile(candidate):
-        return candidate
-    # Fallback: check if sys.executable is real Python (not PyInstaller)
+
+    def _has_esptool(python_path):
+        """Check if a Python interpreter has esptool available."""
+        try:
+            result = subprocess.run(
+                [python_path, "-c", "import esptool; print('ok')"],
+                capture_output=True, text=True, timeout=5)
+            return result.returncode == 0 and "ok" in result.stdout
+        except Exception:
+            return False
+
+    # If not frozen (dev mode), sys.executable has esptool
     if not getattr(sys, "frozen", False):
         return sys.executable
+
+    # PyInstaller: find the venv Python that built us (next to the .exe or up in project)
+    exe_dir = Path(sys.executable).parent
+    # Check for venv in common locations relative to exe
+    venv_candidates = [
+        exe_dir / ".venv" / "Scripts" / "python.exe",           # next to exe
+        exe_dir.parent / ".venv" / "Scripts" / "python.exe",    # one up
+        exe_dir.parent.parent / ".venv" / "Scripts" / "python.exe",
+        # The actual project venv path
+        exe_dir.parent / "desktop" / "windows" / ".venv" / "Scripts" / "python.exe",
+    ]
+    for venv_py in venv_candidates:
+        if venv_py.is_file() and _has_esptool(str(venv_py)):
+            return str(venv_py)
+
+    # Check PATH for any Python with esptool
+    for name in ("python", "python3", "python.exe"):
+        found = shutil.which(name)
+        if found and "SlyLED" not in found and _has_esptool(found):
+            return found
+
+    # Check common Windows install paths
+    for ver in ("314", "313", "312", "311", "310", "39"):
+        candidate = os.path.expandvars(rf"%LOCALAPPDATA%\Programs\Python\Python{ver}\python.exe")
+        if os.path.isfile(candidate) and _has_esptool(candidate):
+            return candidate
+
     return None
 
 def flash_esp(port, bin_path, board="esp32", progress_cb=None):
@@ -165,10 +190,10 @@ def flash_esp(port, bin_path, board="esp32", progress_cb=None):
     with _flash_lock:
         _flash_status.update(running=True, progress=0, message="Locating Python + esptool...", error=None)
 
-    python = _find_python()
+    python = _find_python_with_esptool()
     if not python:
         with _flash_lock:
-            _flash_status.update(error="Python not found. Install Python 3.10+ and esptool.", message="Error", running=False)
+            _flash_status.update(error="No Python with esptool found. Run: pip install esptool", message="Error", running=False)
         return False
 
     try:
