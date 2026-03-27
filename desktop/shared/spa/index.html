@@ -232,8 +232,16 @@ body.light .li:hover{border-color:#3b82f6}
     </div>
     <div style='margin-top:.5em'><button class='btn btn-on' onclick='saveWifi(this)'>Save WiFi</button></div>
   </div>
+  <div class='card' style='max-width:800px'>
+    <div class='card-title' style='display:flex;align-items:center;gap:.5em'>
+      OTA Updates (WiFi)
+      <button class='btn' onclick='checkOtaUpdates()' style='padding:.15em .5em;background:#333;font-size:.8em'>Check for Updates</button>
+      <button class='btn' id='ota-update-all' onclick='otaUpdateAll()' style='padding:.15em .5em;background:#f60;color:#fff;font-size:.8em;display:none'>Update All</button>
+    </div>
+    <div id='ota-children'><p style='color:#888'>Click "Check for Updates" to scan performers.</p></div>
+  </div>
   <div class='card' style='max-width:700px'>
-    <div class='card-title' style='display:flex;align-items:center;gap:.5em'>Connected Boards <button class='btn' onclick='loadFirmware()' style='padding:.15em .5em;background:#333;font-size:.8em'>&#x21bb; Refresh</button></div>
+    <div class='card-title' style='display:flex;align-items:center;gap:.5em'>USB Flash (Connected Boards) <button class='btn' onclick='loadFirmware()' style='padding:.15em .5em;background:#333;font-size:.8em'>&#x21bb; Refresh</button></div>
     <div id='fw-ports'><p style='color:#888'>Scanning...</p></div>
   </div>
   <div class='card' style='max-width:700px'>
@@ -268,7 +276,7 @@ body.light .li:hover{border-color:#3b82f6}
   </div>
 </div>
 
-<div class='footer' id='fv'>SlyLED v4.0 &mdash; The Orchestrator</div>
+<div class='footer' id='fv'>SlyLED &mdash; The Orchestrator</div>
 
 <script>
 // ── Localization string table (swap for i18n) ─────────────────────────────
@@ -737,20 +745,15 @@ function addDiscovered(ip){
 function removeChild(id){
   if(!confirm('Remove this performer (#'+id+')?'))return;
   document.getElementById('hs').textContent='Removing performer #'+id+'...';
-  var x=new XMLHttpRequest();
-  x.open('DELETE','/api/children/'+id,true);
-  x.setRequestHeader('Content-Type','application/json');
-  x.onload=function(){
-    var ok=false;
-    try{var r=JSON.parse(x.responseText);ok=r&&r.ok;}catch(e){}
-    document.getElementById('hs').textContent=ok?'Performer removed':'Remove failed (HTTP '+x.status+')';
+  fetch('/api/children/'+id,{method:'DELETE'}).then(function(resp){
+    return resp.json();
+  }).then(function(r){
+    document.getElementById('hs').textContent=(r&&r.ok)?'Performer removed':'Remove failed';
     loadSetup();
-  };
-  x.onerror=function(){
-    document.getElementById('hs').textContent='Remove failed: network error';
+  }).catch(function(e){
+    document.getElementById('hs').textContent='Remove failed: '+e.message;
     loadSetup();
-  };
-  x.send(null);
+  });
 }
 
 function refreshChild(id){
@@ -1761,7 +1764,122 @@ function _drawTimelineInline(container,rn,acts,children,lay){
 }
 
 // ── Firmware management ──────────────────────────────────────────────────────
+// ── OTA update controls on Firmware tab ──────────────────────────────────
+var _otaChecked=null; // cached check result
+function checkOtaUpdates(){
+  var el=document.getElementById('ota-children');
+  el.innerHTML='<p style="color:#888">Checking GitHub releases...</p>';
+  api('GET','/api/firmware/check').then(function(d){
+    _otaChecked=d;
+    _renderOtaTable(d);
+  }).catch(function(){
+    el.innerHTML='<p style="color:#f66">Failed to check — is the server online?</p>';
+  });
+}
+function _renderOtaTable(d){
+  var el=document.getElementById('ota-children');
+  if(!d||!d.children||!d.children.length){
+    el.innerHTML='<p style="color:#888">No performers registered.</p>';
+    document.getElementById('ota-update-all').style.display='none';
+    return;
+  }
+  var outdated=d.children.filter(function(c){return c.needsUpdate&&c.board!=='wled';});
+  document.getElementById('ota-update-all').style.display=outdated.length>0?'inline-block':'none';
+  var h='<p style="font-size:.82em;color:#aaa;margin-bottom:.5em">Latest: v'+escapeHtml(d.latest)+'</p>';
+  h+='<table class="tbl"><tr><th>Hostname</th><th>Board</th><th>IP</th><th>Current</th><th>Status</th><th>Action</th></tr>';
+  d.children.forEach(function(c){
+    var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b','d1mini':'#7c3aed','esp32':'#2563eb'};
+    var boardLabel=c.board==='esp32'?'ESP32':c.board==='d1mini'?'D1 Mini':c.board==='wled'?'WLED':c.board;
+    var bc=boardColors[c.board]||boardColors[boardLabel]||'#446';
+    var tp='<span class="badge" style="background:'+bc+';color:#fff">'+escapeHtml(boardLabel)+'</span>';
+    var st,act;
+    if(c.board==='wled'){
+      st='<span style="color:#888">WLED — update via device UI</span>';
+      act='';
+    }else if(c.needsUpdate){
+      st='<span class="badge" style="background:#f60;color:#fff">v'+escapeHtml(d.latest)+' available</span>';
+      act='<button class="btn btn-on" id="ota-btn-'+c.id+'" onclick="otaSingleUpdate('+c.id+')">Update</button>';
+    }else{
+      st='<span class="badge bon">Up to date</span>';
+      act='<span style="color:#4c4">&#x2713;</span>';
+    }
+    h+='<tr><td>'+escapeHtml(c.hostname||'')+'</td><td>'+tp+'</td><td>'+escapeHtml(c.id)+'</td>';
+    h+='<td>v'+escapeHtml(c.currentVersion)+'</td><td><span id="ota-st-'+c.id+'">'+st+'</span></td>';
+    h+='<td><span id="ota-act-'+c.id+'">'+act+'</span></td></tr>';
+  });
+  el.innerHTML=h+'</table>';
+}
+function otaSingleUpdate(cid){
+  if(!confirm('Update this performer to the latest firmware? It will reboot.'))return;
+  _startOtaForChild(cid);
+}
+function _startOtaForChild(cid){
+  var stEl=document.getElementById('ota-st-'+cid);
+  var actEl=document.getElementById('ota-act-'+cid);
+  if(stEl)stEl.innerHTML='<span class="badge" style="background:#2563eb;color:#fff">Sending update...</span>';
+  if(actEl)actEl.innerHTML='<div class="prog-bar" style="height:6px;width:100px;display:inline-block"><div class="prog-fill" id="ota-prog-'+cid+'" style="width:0%"></div></div>';
+  api('POST','/api/firmware/ota/'+cid).then(function(r){
+    if(stEl)stEl.innerHTML='<span class="badge" style="background:#7c3aed;color:#fff">Downloading...</span>';
+    _pollOtaProgress(cid,0);
+  }).catch(function(e){
+    if(stEl)stEl.innerHTML='<span class="badge boff">Failed</span>';
+    if(actEl)actEl.innerHTML='<button class="btn btn-on" onclick="otaSingleUpdate('+cid+')">Retry</button>';
+  });
+}
+function _pollOtaProgress(cid,attempt){
+  // Poll the child's status to detect reboot and version change
+  // After OTA, child reboots — so it'll go offline briefly then come back
+  setTimeout(function(){
+    api('GET','/api/firmware/check').then(function(d){
+      var c=null;
+      if(d&&d.children)d.children.forEach(function(x){if(x.id===cid)c=x;});
+      var stEl=document.getElementById('ota-st-'+cid);
+      var actEl=document.getElementById('ota-act-'+cid);
+      var progEl=document.getElementById('ota-prog-'+cid);
+      if(!c){
+        if(attempt<20)_pollOtaProgress(cid,attempt+1);
+        return;
+      }
+      if(progEl)progEl.style.width=Math.min(100,(attempt+1)*10)+'%';
+      if(!c.needsUpdate&&c.currentVersion===d.latest){
+        // Success — updated!
+        if(stEl)stEl.innerHTML='<span class="badge bon">Updated to v'+escapeHtml(d.latest)+'</span>';
+        if(actEl)actEl.innerHTML='<span style="color:#4c4">&#x2713; Done</span>';
+      }else if(attempt<20){
+        if(attempt>5&&stEl)stEl.innerHTML='<span class="badge" style="background:#059669;color:#fff">Rebooting...</span>';
+        _pollOtaProgress(cid,attempt+1);
+      }else{
+        if(stEl)stEl.innerHTML='<span class="badge boff">Timeout — check device</span>';
+        if(actEl)actEl.innerHTML='<button class="btn btn-on" onclick="otaSingleUpdate('+cid+')">Retry</button>';
+      }
+    }).catch(function(){
+      if(attempt<20)_pollOtaProgress(cid,attempt+1);
+    });
+  },3000); // poll every 3s
+}
+function otaUpdateAll(){
+  if(!confirm('Update ALL outdated performers? They will reboot sequentially.'))return;
+  if(!_otaChecked||!_otaChecked.children)return;
+  var outdated=_otaChecked.children.filter(function(c){return c.needsUpdate&&c.board!=='wled';});
+  if(!outdated.length){document.getElementById('hs').textContent='All performers are up to date';return;}
+  document.getElementById('hs').textContent='Updating '+outdated.length+' performer(s)...';
+  // Sequential update — one at a time
+  var i=0;
+  function _next(){
+    if(i>=outdated.length){
+      document.getElementById('hs').textContent='All updates sent — monitoring progress';
+      return;
+    }
+    _startOtaForChild(outdated[i].id);
+    i++;
+    setTimeout(_next,5000); // stagger by 5s
+  }
+  _next();
+}
+
 function loadFirmware(){
+  // Auto-check OTA updates when Firmware tab opens
+  checkOtaUpdates();
   // Load WiFi creds
   ra('GET','/api/wifi',null,function(d){
     if(d){

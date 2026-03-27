@@ -420,7 +420,22 @@ void sendChildConfigPage(WiFiClient& c) {
   sendBuf(c, "<div class='row'><span class='k'>Strings</span>"
              "<span class='v'>%u</span></div>", (unsigned)childCfg.stringCount);
   c.print(F("<div class='row'><span class='k'>Action</span>"
-            "<span class='v' id='act'>--</span></div>"
+            "<span class='v' id='act'>--</span></div>"));
+  sendBuf(c, "<div class='row'><span class='k'>Firmware</span>"
+             "<span class='v'>v%u.%u</span></div>",
+             (unsigned)APP_MAJOR, (unsigned)APP_MINOR);
+  c.print(F("<div style='margin-top:.8em;padding:.6em;background:#1a1a1a;"
+            "border:1px solid #333;border-radius:5px'>"
+            "<div style='display:flex;align-items:center;gap:.5em'>"
+            "<button class='btn' type='button' onclick='checkUpdate()' id='upd-btn'>"
+            "Check for Updates</button>"
+            "<span id='upd-status' style='font-size:.82em;color:#888'></span></div>"
+            "<div id='upd-progress' style='display:none;margin-top:.5em'>"
+            "<div style='background:#333;border-radius:3px;height:6px;width:100%'>"
+            "<div id='upd-bar' style='background:#4c4;height:6px;border-radius:3px;"
+            "width:0%;transition:width .3s'></div></div>"
+            "<div id='upd-msg' style='font-size:.75em;color:#aaa;margin-top:.2em'></div>"
+            "</div></div>"
             "</div>"));
 
   // ── Settings pane (inside the main form) ───────────────────────────────────
@@ -595,6 +610,63 @@ void sendChildConfigPage(WiFiClient& c) {
             "if(!sel)return;var p=sel.value;"
             "var x=new XMLHttpRequest();"
             "x.open('GET','/test/pin?p='+p,true);x.send();}"));
+  c.print(F("function checkUpdate(){"
+            "var btn=document.getElementById('upd-btn');"
+            "var st=document.getElementById('upd-status');"
+            "btn.disabled=true;btn.textContent='Checking...';"
+            "st.textContent='';"
+            "var x=new XMLHttpRequest();"
+            "x.open('GET','https://api.github.com/repos/SlyWombat/SlyLED/releases/latest',true);"
+            "x.onload=function(){"
+            "try{var d=JSON.parse(x.responseText);"
+            "var tag=d.tag_name||'';var ver=tag.replace('v','');"
+            "var parts=ver.split('.');var rmaj=parseInt(parts[0])||0;var rmin=parseInt(parts[1])||0;"));
+  sendBuf(c,
+            "var cmaj=%u;var cmin=%u;"
+            "if(rmaj>cmaj||(rmaj===cmaj&&rmin>cmin)){"
+            "st.innerHTML='<b style=\"color:#f60\">v'+ver+' available!</b>';"
+            "btn.textContent='Install Update';"
+            "btn.disabled=false;"
+            "btn.onclick=function(){doOta(d);};"
+            "}else{"
+            "st.textContent='Up to date (v'+cmaj+'.'+cmin+')';"
+            "btn.textContent='Check for Updates';btn.disabled=false;}"
+            "}catch(e){st.textContent='Check failed';btn.textContent='Check for Updates';btn.disabled=false;}};"
+            "x.onerror=function(){st.textContent='Cannot reach GitHub';btn.textContent='Check for Updates';btn.disabled=false;};"
+            "x.send();}",
+            (unsigned)APP_MAJOR, (unsigned)APP_MINOR);
+  c.print(F("function doOta(rel){"
+            "var btn=document.getElementById('upd-btn');"
+            "var st=document.getElementById('upd-status');"
+            "var prog=document.getElementById('upd-progress');"
+            "var bar=document.getElementById('upd-bar');"
+            "var msg=document.getElementById('upd-msg');"
+            "btn.disabled=true;btn.textContent='Updating...';"
+            "prog.style.display='block';bar.style.width='10%';msg.textContent='Finding binary...';"
+            // Find the right asset for this board
+            "var assets=rel.assets||[];var url=null;"
+            "for(var i=0;i<assets.length;i++){"));
+#ifdef BOARD_ESP32
+  c.print(F(  "if(assets[i].name==='esp32-firmware-merged.bin'){url=assets[i].browser_download_url;break;}}"));
+#elif defined(BOARD_D1MINI)
+  c.print(F(  "if(assets[i].name==='d1mini-firmware.bin'){url=assets[i].browser_download_url;break;}}"));
+#else
+  c.print(F(  "}"));
+#endif
+  c.print(F("if(!url){msg.textContent='No firmware binary found in release';btn.disabled=false;return;}"
+            "bar.style.width='20%';msg.textContent='Sending update command...';"
+            "var tag=rel.tag_name||'';var ver=tag.replace('v','');"
+            "var parts=ver.split('.');var maj=parseInt(parts[0])||0;var mn=parseInt(parts[1])||0;"
+            "var x=new XMLHttpRequest();"
+            "x.open('POST','/ota',true);"
+            "x.setRequestHeader('Content-Type','application/json');"
+            "x.onload=function(){"
+            "bar.style.width='50%';msg.textContent='Downloading firmware... device will reboot';"
+            "setTimeout(function(){bar.style.width='80%';msg.textContent='Rebooting...';},5000);"
+            "setTimeout(function(){bar.style.width='100%';msg.textContent='Update complete — refreshing...';location.reload();},20000);};"
+            "x.onerror=function(){msg.textContent='Update failed — device may be rebooting';bar.style.width='100%';"
+            "setTimeout(function(){location.reload();},15000);};"
+            "x.send(JSON.stringify({url:url,sha256:'',major:maj,minor:mn}));}"));
   c.print(F("showTab(0);showStr(0);poll();setInterval(poll,3000);"
             "</script></body></html>"));
   c.flush();
