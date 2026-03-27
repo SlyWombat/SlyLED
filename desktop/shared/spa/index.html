@@ -696,7 +696,7 @@ function _renderSetup(){
 function addChild(){
   var ip=document.getElementById('aip').value.trim();
   if(!ip)return;
-  document.getElementById('hs').textContent='Adding '+ip+'...';
+  document.getElementById('hs').textContent='Adding '+ip+' (probing device...)';
   ra('POST','/api/children',{ip:ip},function(r){
     if(r&&r.ok){
       document.getElementById('hs').textContent=r.duplicate?'Already registered':'Added '+ip+(r.type==='wled'?' (WLED)':'');
@@ -704,7 +704,8 @@ function addChild(){
       document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
     }
     document.getElementById('aip').value='';
-    loadSetup();
+    // Delay reload to allow background ping to update status
+    setTimeout(loadSetup,2000);
   });
 }
 
@@ -731,14 +732,14 @@ function discoverChildren(){
 }
 
 function addDiscovered(ip){
-  document.getElementById('hs').textContent='Adding '+ip+'...';
+  document.getElementById('hs').textContent='Adding '+ip+' (probing device...)';
   ra('POST','/api/children',{ip:ip},function(r){
     if(r&&r.ok){
       document.getElementById('hs').textContent='Added '+ip;
     }else{
       document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
     }
-    loadSetup();
+    setTimeout(loadSetup,2000);
   });
 }
 
@@ -1786,7 +1787,7 @@ function _renderOtaTable(d){
   var outdated=d.children.filter(function(c){return c.needsUpdate&&c.board!=='wled';});
   document.getElementById('ota-update-all').style.display=outdated.length>0?'inline-block':'none';
   var h='<p style="font-size:.82em;color:#aaa;margin-bottom:.5em">Latest: v'+escapeHtml(d.latest)+'</p>';
-  h+='<table class="tbl"><tr><th>Hostname</th><th>Board</th><th>IP</th><th>Current</th><th>Status</th><th>Action</th></tr>';
+  h+='<table class="tbl"><tr><th>Hostname</th><th>Name</th><th>Board</th><th>IP</th><th>Current</th><th>Status</th><th>Action</th></tr>';
   d.children.forEach(function(c){
     var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b','d1mini':'#7c3aed','esp32':'#2563eb'};
     var boardLabel=c.board==='esp32'?'ESP32':c.board==='d1mini'?'D1 Mini':c.board==='wled'?'WLED':c.board;
@@ -1803,7 +1804,8 @@ function _renderOtaTable(d){
       st='<span class="badge bon">Up to date</span>';
       act='<span style="color:#4c4">&#x2713;</span>';
     }
-    h+='<tr><td>'+escapeHtml(c.hostname||'')+'</td><td>'+tp+'</td><td>'+escapeHtml(c.id)+'</td>';
+    var cname=(c.name&&c.name!==c.hostname)?escapeHtml(c.name):'-';
+    h+='<tr><td>'+escapeHtml(c.hostname||'')+'</td><td>'+cname+'</td><td>'+tp+'</td><td>'+escapeHtml(c.ip||'')+'</td>';
     h+='<td>v'+escapeHtml(c.currentVersion)+'</td><td><span id="ota-st-'+c.id+'">'+st+'</span></td>';
     h+='<td><span id="ota-act-'+c.id+'">'+act+'</span></td></tr>';
   });

@@ -555,15 +555,30 @@ def api_children_refresh_all():
     from PONGs. Also detects IP changes for offline children."""
     _recent_pongs.clear()
     _broadcast_ping_all()
-    time.sleep(2.0)
-    # Update offline children that may have changed IP
+    time.sleep(2.5)
+    # Record which children responded
+    responded_ips = set(_recent_pongs.keys())
+    responded_hostnames = {info.get("hostname") for info in _recent_pongs.values()}
     for c in _children:
-        if c.get("status") != 1:
+        if c.get("type") == "wled":
+            # WLED: probe via HTTP
+            wled_info = wled_probe(c["ip"], timeout=2.0)
+            if wled_info:
+                c["status"] = 1
+                c["seen"] = int(time.time())
+            else:
+                c["status"] = 0
+        elif c["ip"] in responded_ips or c.get("hostname") in responded_hostnames:
+            # SlyLED child responded to ping
             for ip, info in _recent_pongs.items():
-                if info.get("hostname") == c.get("hostname") and ip != c["ip"]:
-                    c["ip"] = ip
+                if info.get("hostname") == c.get("hostname"):
+                    if ip != c["ip"]:
+                        c["ip"] = ip  # IP change detected
                     c.update({k: v for k, v in info.items() if k != "id"})
                     break
+        else:
+            # No response — mark offline
+            c["status"] = 0
     with _lock:
         _save("children", _children)
     online = sum(1 for c in _children if c.get("status") == 1)
@@ -1826,7 +1841,8 @@ def api_firmware_check():
                     download_url = a["url"]
                     break
         results.append({
-            "id": c["id"], "hostname": c.get("hostname"),
+            "id": c["id"], "hostname": c.get("hostname"), "name": c.get("name", ""),
+            "ip": c.get("ip", ""),
             "currentVersion": fw, "latestVersion": latest,
             "needsUpdate": needs_update, "board": board,
             "downloadUrl": download_url,
@@ -1843,6 +1859,23 @@ def api_firmware_ota(cid):
         return jsonify(ok=False, err="WLED devices update through their own UI"), 400
     if child.get("status") != 1:
         return jsonify(ok=False, err="child is offline"), 400
+
+    # Require WiFi credentials to be configured before OTA
+    if not _wifi.get("ssid"):
+        return jsonify(ok=False, err="WiFi credentials not configured — set them on the Firmware tab first"), 400
+
+    # Push WiFi credentials to child before OTA (so new firmware can reconnect)
+    ip = child["ip"]
+    try:
+        import urllib.request as _ur
+        wifi_body = json.dumps({"ssid": _wifi["ssid"],
+                                "password": _decrypt_pw(_wifi.get("password", ""))}).encode()
+        wifi_req = _ur.Request(f"http://{ip}/wifi", data=wifi_body, method="POST",
+                               headers={"Content-Type": "application/json"})
+        _ur.urlopen(wifi_req, timeout=3)
+        log.info("OTA: pushed WiFi credentials to %s", ip)
+    except Exception as e:
+        log.warning("OTA: failed to push WiFi to %s: %s (continuing anyway)", ip, e)
 
     rel = _fetch_github_release()
     if not rel:

@@ -42,10 +42,111 @@ unsigned long currentEpoch() {
   return ntpEpoch + (millis() - ntpMillis) / 1000;
 }
 
+// ── WiFi credential storage (survives OTA + power cycles) ────────────────────
+
+#ifdef BOARD_ESP32
+#include <Preferences.h>
+
+void loadWiFiCredentials(char* ssid, size_t ssidLen, char* pass, size_t passLen) {
+  Preferences prefs;
+  prefs.begin("slyled-wifi", true);  // read-only
+  String s = prefs.getString("ssid", "");
+  String p = prefs.getString("pass", "");
+  prefs.end();
+  if (s.length() > 0) {
+    strncpy(ssid, s.c_str(), ssidLen - 1); ssid[ssidLen - 1] = '\0';
+    strncpy(pass, p.c_str(), passLen - 1); pass[passLen - 1] = '\0';
+  } else {
+    // No stored credentials — use compiled defaults and save them
+    strncpy(ssid, SECRET_SSID, ssidLen - 1); ssid[ssidLen - 1] = '\0';
+    strncpy(pass, SECRET_PASS, passLen - 1); pass[passLen - 1] = '\0';
+    saveWiFiCredentials(ssid, pass);
+  }
+}
+
+void saveWiFiCredentials(const char* ssid, const char* pass) {
+  Preferences prefs;
+  prefs.begin("slyled-wifi", false);
+  prefs.putString("ssid", ssid);
+  prefs.putString("pass", pass);
+  prefs.end();
+  if (Serial) Serial.println(F("WiFi credentials saved to NVS."));
+}
+
+bool hasStoredWiFiCredentials() {
+  Preferences prefs;
+  prefs.begin("slyled-wifi", true);
+  String s = prefs.getString("ssid", "");
+  prefs.end();
+  return s.length() > 0;
+}
+
+#elif defined(BOARD_D1MINI)
+
+// D1 Mini: store WiFi creds at EEPROM offset after childCfg
+// Layout: [0]=magic, [1..sizeof(childCfg)]=config, [next]=wifi_magic, ssid[33], pass[65]
+#include <EEPROM.h>
+
+static constexpr int WIFI_EEPROM_OFFSET = 1 + (int)sizeof(ChildSelfConfig) + 4;  // skip config + padding
+static constexpr uint8_t WIFI_MAGIC = 0xB7;
+
+void loadWiFiCredentials(char* ssid, size_t ssidLen, char* pass, size_t passLen) {
+  EEPROM.begin(WIFI_EEPROM_OFFSET + 1 + 33 + 65);
+  if (EEPROM.read(WIFI_EEPROM_OFFSET) == WIFI_MAGIC) {
+    for (size_t i = 0; i < 33 && i < ssidLen; i++) ssid[i] = EEPROM.read(WIFI_EEPROM_OFFSET + 1 + i);
+    ssid[ssidLen - 1] = '\0';
+    for (size_t i = 0; i < 65 && i < passLen; i++) pass[i] = EEPROM.read(WIFI_EEPROM_OFFSET + 34 + i);
+    pass[passLen - 1] = '\0';
+  } else {
+    strncpy(ssid, SECRET_SSID, ssidLen - 1); ssid[ssidLen - 1] = '\0';
+    strncpy(pass, SECRET_PASS, passLen - 1); pass[passLen - 1] = '\0';
+    // Save compiled defaults so they persist across OTA
+    EEPROM.write(WIFI_EEPROM_OFFSET, WIFI_MAGIC);
+    for (size_t i = 0; i < 33; i++) EEPROM.write(WIFI_EEPROM_OFFSET + 1 + i, i < strlen(ssid) ? ssid[i] : 0);
+    for (size_t i = 0; i < 65; i++) EEPROM.write(WIFI_EEPROM_OFFSET + 34 + i, i < strlen(pass) ? pass[i] : 0);
+    EEPROM.commit();
+  }
+  EEPROM.end();
+}
+
+void saveWiFiCredentials(const char* ssid, const char* pass) {
+  EEPROM.begin(WIFI_EEPROM_OFFSET + 1 + 33 + 65);
+  EEPROM.write(WIFI_EEPROM_OFFSET, WIFI_MAGIC);
+  for (size_t i = 0; i < 33; i++) EEPROM.write(WIFI_EEPROM_OFFSET + 1 + i, i < strlen(ssid) ? ssid[i] : 0);
+  for (size_t i = 0; i < 65; i++) EEPROM.write(WIFI_EEPROM_OFFSET + 34 + i, i < strlen(pass) ? pass[i] : 0);
+  EEPROM.commit();
+  EEPROM.end();
+  if (Serial) Serial.println(F("WiFi credentials saved to EEPROM."));
+}
+
+bool hasStoredWiFiCredentials() {
+  EEPROM.begin(WIFI_EEPROM_OFFSET + 1);
+  bool has = EEPROM.read(WIFI_EEPROM_OFFSET) == WIFI_MAGIC;
+  EEPROM.end();
+  return has;
+}
+
+#else  // Giga (parent or child)
+
+void loadWiFiCredentials(char* ssid, size_t ssidLen, char* pass, size_t passLen) {
+  strncpy(ssid, SECRET_SSID, ssidLen - 1); ssid[ssidLen - 1] = '\0';
+  strncpy(pass, SECRET_PASS, passLen - 1); pass[passLen - 1] = '\0';
+}
+void saveWiFiCredentials(const char*, const char*) {}
+bool hasStoredWiFiCredentials() { return true; }
+
+#endif
+
 // ── WiFi connect ──────────────────────────────────────────────────────────────
 
 void connectWiFi() {
-  if (Serial) { Serial.print("Connecting to "); Serial.println(SECRET_SSID); }
+  // Load credentials from persistent storage (NVS/EEPROM)
+  // First boot: uses compiled defaults from arduino_secrets.h and saves them
+  char wifiSSID[33] = {};
+  char wifiPASS[65] = {};
+  loadWiFiCredentials(wifiSSID, sizeof(wifiSSID), wifiPASS, sizeof(wifiPASS));
+
+  if (Serial) { Serial.print("Connecting to "); Serial.println(wifiSSID); }
 
 #if defined(BOARD_FASTLED)
   // ESP boards: derive hostname from MAC before WiFi.begin
@@ -71,7 +172,7 @@ void connectWiFi() {
   WiFi.setHostname(HOSTNAME);
 #endif
 
-  WiFi.begin(SECRET_SSID, SECRET_PASS);
+  WiFi.begin(wifiSSID, wifiPASS);
   unsigned long t = millis();
   while (WiFi.status() != WL_CONNECTED) {
     if (millis() - t > 20000) { if (Serial) Serial.println("\r\nWiFi timeout."); return; }

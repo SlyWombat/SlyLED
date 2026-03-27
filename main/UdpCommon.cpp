@@ -272,6 +272,24 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
 #endif  // BOARD_GIGA
 
 #ifdef BOARD_CHILD
+  } else if (isPost && strstr(req, " /wifi ")) {
+    // Save WiFi credentials: POST /wifi {"ssid":"...","password":"..."}
+    char wfBody[128] = {0};
+    if (contentLen > 0 && contentLen < (int)sizeof(wfBody))
+      client.readBytes(wfBody, contentLen);
+    char newSSID[33] = {0};
+    char newPASS[65] = {0};
+    char* ss = strstr(wfBody, "\"ssid\"");
+    char* pp = strstr(wfBody, "\"password\"");
+    if (ss) { char* v = strchr(ss + 6, '"'); if (v) { char* e = strchr(v + 1, '"'); if (e && e - v - 1 < 33) memcpy(newSSID, v + 1, e - v - 1); } }
+    if (pp) { char* v = strchr(pp + 10, '"'); if (v) { char* e = strchr(v + 1, '"'); if (e && e - v - 1 < 65) memcpy(newPASS, v + 1, e - v - 1); } }
+    if (newSSID[0]) {
+      saveWiFiCredentials(newSSID, newPASS);
+      sendJsonOk(client);
+    } else {
+      sendJsonErr(client, "ssid required");
+    }
+
   } else if (isPost && strstr(req, " /ota ")) {
     // OTA update: POST /ota with JSON body {"url":"...","sha256":"...","major":5,"minor":2}
     char otaBody[512] = {0};
