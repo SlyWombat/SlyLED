@@ -139,39 +139,39 @@ def get_flash_status():
     with _flash_lock:
         return dict(_flash_status)
 
-def _find_esptool():
-    """Find esptool executable — works both in dev and PyInstaller."""
-    # Try as Python module first
-    try:
-        import esptool  # noqa
-        return [sys.executable, "-m", "esptool"]
-    except ImportError:
-        pass
-    # Try esptool.exe on PATH
-    for p in os.environ.get("PATH", "").split(os.pathsep):
-        for name in ("esptool.exe", "esptool"):
-            candidate = os.path.join(p, name)
-            if os.path.isfile(candidate):
-                return [candidate]
-    # PyInstaller bundle: try Scripts/ next to executable
-    scripts = os.path.join(os.path.dirname(sys.executable), "Scripts", "esptool.exe")
-    if os.path.isfile(scripts):
-        return [scripts]
+def _find_python():
+    """Find a real Python interpreter (not the PyInstaller exe)."""
+    # Check common locations
+    import shutil
+    for name in ("python", "python3", "python.exe"):
+        found = shutil.which(name)
+        if found and "SlyLED" not in found:
+            return found
+    # Windows: check known install paths
+    for ver in ("314", "313", "312", "311", "310"):
+        candidate = os.path.expandvars(rf"%LOCALAPPDATA%\Programs\Python\Python{ver}\python.exe")
+        if os.path.isfile(candidate):
+            return candidate
+    candidate = os.path.expandvars(r"%LOCALAPPDATA%\Programs\Python\Launcher\py.exe")
+    if os.path.isfile(candidate):
+        return candidate
+    # Fallback: check if sys.executable is real Python (not PyInstaller)
+    if not getattr(sys, "frozen", False):
+        return sys.executable
     return None
 
 def flash_esp(port, bin_path, board="esp32", progress_cb=None):
-    """Flash an ESP32 or ESP8266 using esptool."""
+    """Flash an ESP32 or ESP8266 using esptool via a real Python subprocess."""
     with _flash_lock:
-        _flash_status.update(running=True, progress=0, message="Locating esptool...", error=None)
+        _flash_status.update(running=True, progress=0, message="Locating Python + esptool...", error=None)
 
-    esptool_cmd = _find_esptool()
-    if not esptool_cmd:
+    python = _find_python()
+    if not python:
         with _flash_lock:
-            _flash_status.update(error="esptool not found. Install via: pip install esptool", message="Error", running=False)
+            _flash_status.update(error="Python not found. Install Python 3.10+ and esptool.", message="Error", running=False)
         return False
 
     try:
-        # Validate binary exists
         if not os.path.isfile(bin_path):
             with _flash_lock:
                 _flash_status.update(error=f"Binary not found: {bin_path}", message="Error", running=False)
@@ -181,7 +181,8 @@ def flash_esp(port, bin_path, board="esp32", progress_cb=None):
             _flash_status.update(progress=5, message=f"Connecting to {port}...")
 
         baud = "460800" if board == "d1mini" else "921600"
-        cmd = esptool_cmd + ["--port", port, "--baud", baud, "write_flash", "0x0", str(bin_path)]
+        cmd = [python, "-m", "esptool", "--port", port, "--baud", baud,
+               "write_flash", "0x0", str(bin_path)]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         last_lines = []
         for line in proc.stdout:
@@ -190,20 +191,18 @@ def flash_esp(port, bin_path, board="esp32", progress_cb=None):
                 last_lines.append(line)
                 if len(last_lines) > 20:
                     last_lines.pop(0)
-            # Detect connection phase
             if "Connecting" in line:
                 with _flash_lock:
                     _flash_status.update(progress=10, message="Connecting to board...")
             elif "Chip is" in line or "Detecting" in line:
                 with _flash_lock:
                     _flash_status.update(progress=15, message=line)
-            elif "Erasing" in line:
+            elif "Erasing" in line or "Compressed" in line:
                 with _flash_lock:
                     _flash_status.update(progress=20, message="Erasing flash...")
-            elif "%" in line:
+            elif "%" in line and "Writing" in line:
                 try:
                     pct = int(line.split("(")[1].split("%")[0].strip())
-                    # Scale to 20-95% range
                     scaled = 20 + int(pct * 0.75)
                     with _flash_lock:
                         _flash_status["progress"] = scaled
