@@ -240,27 +240,27 @@ body.light .li:hover{border-color:#3b82f6}
     </div>
     <div id='ota-children'><p style='color:#888'>Click "Check for Updates" to scan performers.</p></div>
   </div>
-  <div class='card' style='max-width:700px'>
-    <div class='card-title' style='display:flex;align-items:center;gap:.5em'>USB Flash (Connected Boards) <button class='btn' onclick='loadFirmware()' style='padding:.15em .5em;background:#333;font-size:.8em'>&#x21bb; Refresh</button></div>
-    <div id='fw-ports'><p style='color:#888'>Scanning...</p></div>
-  </div>
-  <div class='card' style='max-width:700px'>
-    <div class='card-title'>Flash Firmware</div>
-    <label>Port</label><select id='fw-port'></select>
-    <label>Board</label><select id='fw-board' onchange='updateFwImages()'>
-      <option value='esp32'>ESP32</option>
-      <option value='d1mini'>D1 Mini</option>
-      <option value='giga'>Giga R1</option>
-    </select>
-    <label>Firmware</label><select id='fw-image'></select>
+  <div class='card' style='max-width:800px'>
+    <div class='card-title' style='display:flex;align-items:center;gap:.5em'>
+      USB Flash
+      <button class='btn' onclick='loadFirmware()' style='padding:.15em .5em;background:#333;font-size:.8em'>&#x21bb; Scan Ports</button>
+    </div>
+    <div id='fw-ports' style='margin-bottom:.8em'><p style='color:#888'>Scanning USB ports...</p></div>
+    <div style='display:flex;gap:1em;flex-wrap:wrap;align-items:flex-end'>
+      <div><label>Port</label><select id='fw-port' style='width:120px'></select></div>
+      <div><label>Board</label><select id='fw-board' onchange='updateFwImages()' style='width:120px'>
+        <option value='esp32'>ESP32</option>
+        <option value='d1mini'>D1 Mini</option>
+        <option value='giga'>Giga R1</option>
+      </select></div>
+      <div style='flex:1;min-width:200px'><label>Firmware</label><select id='fw-image' style='width:100%'></select></div>
+      <div><button class='btn btn-on' id='fw-flash-btn' onclick='doFlash(this)' style='margin-bottom:2px'>Flash</button></div>
+    </div>
     <div id='fw-dfu-note' style='display:none;margin-top:.5em;padding:.5em;background:#332;border:1px solid #553;border-radius:5px;font-size:.82em;color:#cc6'>
-      <b>Giga R1:</b> Double-press the reset button to enter DFU bootloader mode before flashing. The board LED should pulse.
+      <b>Giga R1:</b> Double-press the reset button to enter DFU bootloader mode before flashing.
     </div>
-    <div style='margin-top:.6em'>
-      <button class='btn btn-on' id='fw-flash-btn' onclick='doFlash(this)'>Flash</button>
-    </div>
-    <div id='fw-progress' style='display:none;margin-top:.6em'>
-      <div class='prog-bar' style='height:10px'><div class='prog-fill' id='fw-prog-fill' style='width:0%'></div></div>
+    <div id='fw-progress' style='display:none;margin-top:.8em'>
+      <div class='prog-bar' style='height:10px'><div class='prog-fill' id='fw-prog-fill' style='width:0%;transition:width .3s'></div></div>
       <div id='fw-prog-msg' style='font-size:.82em;color:#aaa;margin-top:.3em'></div>
     </div>
   </div>
@@ -2048,8 +2048,16 @@ function doFlash(btn){
   _doFlashLocal(btn,port,board,fwId);
 }
 function _doFlashLocal(btn,port,board,fwId){
+  document.getElementById('fw-progress').style.display='block';
+  document.getElementById('fw-prog-fill').style.width='2%';
+  document.getElementById('fw-prog-msg').textContent='Initiating flash on '+port+'...';
   ra('POST','/api/firmware/flash',{port:port,board:board,firmwareId:fwId},function(r){
-    if(!r||!r.ok){_btnSaved(btn,false);return;}
+    if(!r||!r.ok){
+      _btnSaved(btn,false);
+      document.getElementById('fw-prog-msg').textContent='Flash failed: '+(r&&r.err||'server rejected request');
+      document.getElementById('fw-prog-fill').style.width='0%';
+      return;
+    }
     _flashPoll=setInterval(function(){
       ra('GET','/api/firmware/flash/status',null,function(s){
         if(!s)return;
@@ -2058,7 +2066,12 @@ function _doFlashLocal(btn,port,board,fwId){
         if(!s.running){
           clearInterval(_flashPoll);_flashPoll=null;
           _btnSaved(btn,!s.error);
-          if(s.error)document.getElementById('fw-prog-msg').textContent='Error: '+s.error;
+          if(s.error){
+            document.getElementById('fw-prog-msg').textContent='Error: '+s.error;
+            document.getElementById('fw-prog-fill').style.background='#a22';
+          }else{
+            document.getElementById('fw-prog-msg').textContent='Flash complete — board is rebooting';
+          }
         }
       });
     },500);

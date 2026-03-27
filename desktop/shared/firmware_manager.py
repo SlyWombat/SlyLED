@@ -139,38 +139,93 @@ def get_flash_status():
     with _flash_lock:
         return dict(_flash_status)
 
+def _find_esptool():
+    """Find esptool executable — works both in dev and PyInstaller."""
+    # Try as Python module first
+    try:
+        import esptool  # noqa
+        return [sys.executable, "-m", "esptool"]
+    except ImportError:
+        pass
+    # Try esptool.exe on PATH
+    for p in os.environ.get("PATH", "").split(os.pathsep):
+        for name in ("esptool.exe", "esptool"):
+            candidate = os.path.join(p, name)
+            if os.path.isfile(candidate):
+                return [candidate]
+    # PyInstaller bundle: try Scripts/ next to executable
+    scripts = os.path.join(os.path.dirname(sys.executable), "Scripts", "esptool.exe")
+    if os.path.isfile(scripts):
+        return [scripts]
+    return None
+
 def flash_esp(port, bin_path, board="esp32", progress_cb=None):
     """Flash an ESP32 or ESP8266 using esptool."""
     with _flash_lock:
-        _flash_status.update(running=True, progress=0, message="Starting...", error=None)
+        _flash_status.update(running=True, progress=0, message="Locating esptool...", error=None)
+
+    esptool_cmd = _find_esptool()
+    if not esptool_cmd:
+        with _flash_lock:
+            _flash_status.update(error="esptool not found. Install via: pip install esptool", message="Error", running=False)
+        return False
 
     try:
+        # Validate binary exists
+        if not os.path.isfile(bin_path):
+            with _flash_lock:
+                _flash_status.update(error=f"Binary not found: {bin_path}", message="Error", running=False)
+            return False
+
+        with _flash_lock:
+            _flash_status.update(progress=5, message=f"Connecting to {port}...")
+
         baud = "460800" if board == "d1mini" else "921600"
-        cmd = [
-            sys.executable, "-m", "esptool",
-            "--port", port, "--baud", baud,
-            "write_flash", "0x0", str(bin_path)
-        ]
+        cmd = esptool_cmd + ["--port", port, "--baud", baud, "write_flash", "0x0", str(bin_path)]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        last_lines = []
         for line in proc.stdout:
             line = line.strip()
-            if "%" in line:
+            if line:
+                last_lines.append(line)
+                if len(last_lines) > 20:
+                    last_lines.pop(0)
+            # Detect connection phase
+            if "Connecting" in line:
+                with _flash_lock:
+                    _flash_status.update(progress=10, message="Connecting to board...")
+            elif "Chip is" in line or "Detecting" in line:
+                with _flash_lock:
+                    _flash_status.update(progress=15, message=line)
+            elif "Erasing" in line:
+                with _flash_lock:
+                    _flash_status.update(progress=20, message="Erasing flash...")
+            elif "%" in line:
                 try:
                     pct = int(line.split("(")[1].split("%")[0].strip())
+                    # Scale to 20-95% range
+                    scaled = 20 + int(pct * 0.75)
                     with _flash_lock:
-                        _flash_status["progress"] = pct
+                        _flash_status["progress"] = scaled
                         _flash_status["message"] = f"Writing... {pct}%"
                 except Exception:
                     pass
+            elif "Hash of data verified" in line:
+                with _flash_lock:
+                    _flash_status.update(progress=98, message="Verifying hash...")
+            elif "Hard resetting" in line:
+                with _flash_lock:
+                    _flash_status.update(progress=100, message="Resetting board...")
             if progress_cb:
                 progress_cb(line)
         proc.wait()
         if proc.returncode != 0:
+            detail = "\n".join(last_lines[-5:]) if last_lines else "Unknown error"
             with _flash_lock:
-                _flash_status.update(error="Flash failed", message="Error")
+                _flash_status.update(error=f"Flash failed (exit {proc.returncode}): {detail}", message="Error")
             return False
         with _flash_lock:
-            _flash_status.update(progress=100, message="Complete")
+            _flash_status.update(progress=100, message="Flash complete — board is rebooting")
         return True
     except Exception as e:
         with _flash_lock:
