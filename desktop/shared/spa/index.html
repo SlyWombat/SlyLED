@@ -121,15 +121,31 @@ body.light .li:hover{border-color:#3b82f6}
   <div id='rt-list'>
     <div style='margin-bottom:.8em;display:flex;align-items:center;gap:.8em;flex-wrap:wrap'>
       <button class='btn btn-on'  onclick='newRunner()'>+ New Runner</button>
-      <button class='btn btn-off' onclick='stopRunners()'>Stop All Runners</button>
-      <label style='color:#888;font-size:.85em;display:flex;align-items:center;gap:.3em'>
+      <button class='btn btn-off' onclick='stopRunners()'>Stop All</button>
+      <label style='color:#94a3b8;font-size:.82em;display:flex;align-items:center;gap:.3em'>
         <input type='checkbox' id='rt-loop' checked onchange='saveLoopSetting()'> Loop
       </label>
-      <label style='color:#888;font-size:.85em;display:flex;align-items:center;gap:.3em'>
+      <label style='color:#94a3b8;font-size:.82em;display:flex;align-items:center;gap:.3em'>
         Brightness <input type='range' id='rt-bri' min='0' max='255' value='255' style='width:120px;vertical-align:middle' oninput='setBrightness(this.value)'> <span id='rt-bri-val'>100%</span>
       </label>
     </div>
-    <div id='rn-list'><p style='color:#888'>Loading...</p></div>
+    <div id='rn-list'><p style='color:#94a3b8'>Loading...</p></div>
+    <!-- Flights -->
+    <div class='card' style='max-width:700px;margin-top:1.5em'>
+      <div class='card-title' style='display:flex;justify-content:space-between;align-items:center'>
+        Flights
+        <button class='btn btn-on' onclick='newFlight()' style='font-size:.75em;padding:.3em .8em'>+ New Flight</button>
+      </div>
+      <div id='fl-list'></div>
+    </div>
+    <!-- Shows -->
+    <div class='card' style='max-width:700px;margin-top:1em'>
+      <div class='card-title' style='display:flex;justify-content:space-between;align-items:center'>
+        Shows
+        <button class='btn btn-on' onclick='newShow()' style='font-size:.75em;padding:.3em .8em'>+ New Show</button>
+      </div>
+      <div id='sh-list'></div>
+    </div>
   </div>
   <div id='rt-edit' style='display:none'>
     <div style='margin-bottom:.8em;display:flex;align-items:center;gap:.8em'>
@@ -1139,8 +1155,168 @@ function loadRuntime(){
         h+='<div id="tl-'+r.id+'" style="display:none"></div>';
         h+='</div>';
       });
-    }else{h='<p style="color:#888">No runners yet.</p>';}
+    }else{h='<p style="color:#94a3b8">No runners yet.</p>';}
     document.getElementById('rn-list').innerHTML=h;
+  });
+  // Load flights
+  ra('GET','/api/flights',null,function(fl){
+    ra('GET','/api/runners',null,function(rns){
+      ra('GET','/api/children',null,function(ch){
+        _renderFlights(fl||[],rns||[],ch||[]);
+      });
+    });
+  });
+  // Load shows
+  ra('GET','/api/shows',null,function(sh){
+    ra('GET','/api/flights',null,function(fl){
+      _renderShows(sh||[],fl||[]);
+    });
+  });
+}
+
+function _renderFlights(flights,runners,children){
+  var el=document.getElementById('fl-list');if(!el)return;
+  if(!flights.length){el.innerHTML='<p style="color:#94a3b8;font-size:.85em">No flights. Create one to group performers with a runner.</p>';return;}
+  var h='';
+  flights.forEach(function(f){
+    var rn=null;for(var i=0;i<runners.length;i++){if(runners[i].id===f.runnerId){rn=runners[i];break;}}
+    var perfNames=[];
+    (f.performerIds||[]).forEach(function(pid){
+      for(var i=0;i<children.length;i++){if(children[i].id===pid){perfNames.push(children[i].name||children[i].hostname);break;}}
+    });
+    h+='<div style="padding:.5em 0;border-bottom:1px solid rgba(51,65,85,.2);display:flex;align-items:center;gap:.5em">';
+    h+='<div style="flex:1">';
+    h+='<b>'+f.name+'</b>';
+    h+='<div style="font-size:.78em;color:#94a3b8">Runner: '+(rn?rn.name:'(none)')+' | Performers: '+(perfNames.length?perfNames.join(', '):'none')+'</div>';
+    h+='</div>';
+    h+='<button class="btn btn-nav" onclick="editFlight('+f.id+')" style="padding:.2em .6em;font-size:.75em">Edit</button>';
+    h+='<button class="btn btn-off" onclick="delFlight('+f.id+')" style="padding:.2em .6em;font-size:.75em">Del</button>';
+    h+='</div>';
+  });
+  el.innerHTML=h;
+}
+
+function _renderShows(shows,flights){
+  var el=document.getElementById('sh-list');if(!el)return;
+  if(!shows.length){el.innerHTML='<p style="color:#94a3b8;font-size:.85em">No shows. Create one to run multiple flights simultaneously.</p>';return;}
+  var h='';
+  shows.forEach(function(s){
+    var flNames=[];
+    (s.flightIds||[]).forEach(function(fid){
+      for(var i=0;i<flights.length;i++){if(flights[i].id===fid){flNames.push(flights[i].name);break;}}
+    });
+    h+='<div style="padding:.5em 0;border-bottom:1px solid rgba(51,65,85,.2);display:flex;align-items:center;gap:.5em">';
+    h+='<div style="flex:1">';
+    h+='<b>'+s.name+'</b>';
+    h+='<div style="font-size:.78em;color:#94a3b8">Flights: '+(flNames.length?flNames.join(', '):'none')+' | Loop: '+(s.loop?'Yes':'No')+'</div>';
+    h+='</div>';
+    h+='<button class="btn btn-on" onclick="startShow('+s.id+')" style="padding:.2em .6em;font-size:.75em">Start</button>';
+    h+='<button class="btn btn-nav" onclick="editShow('+s.id+')" style="padding:.2em .6em;font-size:.75em">Edit</button>';
+    h+='<button class="btn btn-off" onclick="delShow('+s.id+')" style="padding:.2em .6em;font-size:.75em">Del</button>';
+    h+='</div>';
+  });
+  el.innerHTML=h;
+}
+
+function newFlight(){
+  var nm=prompt('Flight name:');if(!nm)return;
+  ra('POST','/api/flights',{name:nm},function(r){if(r&&r.ok){editFlight(r.id);}});
+}
+
+function editFlight(fid){
+  // Load flight, runners, and children for the edit modal
+  ra('GET','/api/flights/'+fid,null,function(f){
+    ra('GET','/api/runners',null,function(rns){
+      ra('GET','/api/children',null,function(ch){
+        _showFlightModal(f,rns||[],ch||[]);
+      });
+    });
+  });
+}
+
+function _showFlightModal(f,runners,children){
+  var m=document.getElementById('modal');
+  var h='<div class="modal-hdr"><h3>Edit Flight: '+f.name+'</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>';
+  h+='<label>Name</label><input id="fl-nm" value="'+f.name+'" style="width:100%">';
+  h+='<label>Runner</label><select id="fl-rn" style="width:100%">';
+  h+='<option value="">-- Select Runner --</option>';
+  runners.forEach(function(r){h+='<option value="'+r.id+'"'+(f.runnerId===r.id?' selected':'')+'>'+r.name+' ('+r.steps+' steps)</option>';});
+  h+='</select>';
+  h+='<label>Performers</label>';
+  children.forEach(function(c){
+    var checked=(f.performerIds||[]).indexOf(c.id)>=0;
+    var tp=c.type==='wled'?'WLED':'SlyLED';
+    h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.3em"><input type="checkbox" class="fl-perf" value="'+c.id+'"'+(checked?' checked':'')+'> '+(c.name||c.hostname)+' <span style="font-size:.72em;color:#64748b">('+tp+')</span></label>';
+  });
+  h+='<label>Priority</label><input id="fl-pri" type="number" min="1" max="10" value="'+(f.priority||1)+'" style="width:60px">';
+  h+='<div style="margin-top:1em"><button class="btn btn-on" onclick="saveFlightModal('+f.id+')">Save Flight</button></div>';
+  document.getElementById('modal-body').innerHTML=h;
+  m.style.display='block';
+}
+
+function saveFlightModal(fid){
+  var ids=[];document.querySelectorAll('.fl-perf:checked').forEach(function(cb){ids.push(parseInt(cb.value));});
+  var rnId=document.getElementById('fl-rn').value;
+  ra('PUT','/api/flights/'+fid,{
+    name:document.getElementById('fl-nm').value.trim(),
+    performerIds:ids,
+    runnerId:rnId?parseInt(rnId):null,
+    priority:parseInt(document.getElementById('fl-pri').value)||1
+  },function(r){closeModal();loadRuntime();});
+}
+
+function delFlight(fid){
+  if(!confirm('Delete this flight?'))return;
+  ra('DELETE','/api/flights/'+fid,null,function(){loadRuntime();});
+}
+
+function newShow(){
+  var nm=prompt('Show name:');if(!nm)return;
+  ra('POST','/api/shows',{name:nm},function(r){if(r&&r.ok){editShow(r.id);}});
+}
+
+function editShow(sid){
+  ra('GET','/api/shows/'+sid,null,function(s){
+    ra('GET','/api/flights',null,function(fl){
+      _showShowModal(s,fl||[]);
+    });
+  });
+}
+
+function _showShowModal(s,flights){
+  var m=document.getElementById('modal');
+  var h='<div class="modal-hdr"><h3>Edit Show: '+s.name+'</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>';
+  h+='<label>Name</label><input id="sh-nm" value="'+s.name+'" style="width:100%">';
+  h+='<label>Flights</label>';
+  flights.forEach(function(f){
+    var checked=(s.flightIds||[]).indexOf(f.id)>=0;
+    h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.3em"><input type="checkbox" class="sh-fl" value="'+f.id+'"'+(checked?' checked':'')+'> '+f.name+'</label>';
+  });
+  h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.5em"><input type="checkbox" id="sh-loop"'+(s.loop!==false?' checked':'')+'> Loop</label>';
+  h+='<div style="margin-top:1em"><button class="btn btn-on" onclick="saveShowModal('+s.id+')">Save Show</button></div>';
+  document.getElementById('modal-body').innerHTML=h;
+  m.style.display='block';
+}
+
+function saveShowModal(sid){
+  var fids=[];document.querySelectorAll('.sh-fl:checked').forEach(function(cb){fids.push(parseInt(cb.value));});
+  ra('PUT','/api/shows/'+sid,{
+    name:document.getElementById('sh-nm').value.trim(),
+    flightIds:fids,
+    loop:document.getElementById('sh-loop').checked
+  },function(r){closeModal();loadRuntime();});
+}
+
+function delShow(sid){
+  if(!confirm('Delete this show?'))return;
+  ra('DELETE','/api/shows/'+sid,null,function(){loadRuntime();});
+}
+
+function startShow(sid){
+  document.getElementById('hs').textContent='Starting show...';
+  ra('POST','/api/shows/'+sid+'/start',null,function(r){
+    if(r&&r.ok)document.getElementById('hs').textContent='Show started ('+r.flights+' flights)';
+    else document.getElementById('hs').textContent='Show start failed: '+(r&&r.err||'unknown');
   });
 }
 

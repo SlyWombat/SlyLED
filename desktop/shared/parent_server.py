@@ -54,7 +54,7 @@ def _apply_logging(enabled):
 
 # ── Version ───────────────────────────────────────────────────────────────────
 
-VERSION = "4.0"
+VERSION = "5.0"
 
 # ── UDP protocol ──────────────────────────────────────────────────────────────
 
@@ -115,6 +115,8 @@ _settings = _load("settings", {
 _layout  = _load("layout",  {"canvasW": 10000, "canvasH": 5000, "children": []})
 _runners = _load("runners", [])
 _actions = _load("actions", [])
+_flights = _load("flights", [])
+_shows   = _load("shows",   [])
 _wifi    = _load("wifi",    {"ssid": "", "password": ""})
 
 MAX_RUNNERS = 4
@@ -131,6 +133,8 @@ _apply_logging(_settings.get("logging", False))
 _nxt_c = max((c["id"] for c in _children), default=-1) + 1
 _nxt_r = max((r["id"] for r in _runners),  default=-1) + 1
 _nxt_a = max((a["id"] for a in _actions),  default=-1) + 1
+_nxt_f = max((f["id"] for f in _flights),  default=-1) + 1
+_nxt_s = max((s["id"] for s in _shows),    default=-1) + 1
 _lock  = threading.Lock()
 
 # ── UDP helpers ───────────────────────────────────────────────────────────────
@@ -760,29 +764,7 @@ def api_runners_create():
 # doesn't try to cast "stop" as an integer.
 @app.post("/api/runners/stop")
 def api_runners_stop():
-    _wled_runner_stop.set()  # signal WLED runner thread to stop
-    pkt_stop = _hdr(CMD_RUNNER_STOP)
-    pkt_off  = _hdr(CMD_ACTION_STOP)
-    for c in _children:
-        if c["status"] == 1:
-            if c.get("type") == "wled":
-                wled_stop(c["ip"])
-            else:
-                _send(c["ip"], pkt_stop)
-                _send(c["ip"], pkt_off)
-    # Retry once after brief delay for reliability
-    time.sleep(0.1)
-    for c in _children:
-        if c["status"] == 1 and c.get("type") != "wled":
-            _send(c["ip"], pkt_stop)
-            _send(c["ip"], pkt_off)
-    _live_events.clear()
-    with _lock:
-        _settings["runnerRunning"] = False
-        _settings["activeRunner"] = -1
-        _settings["runnerStartEpoch"] = 0
-        _settings["runnerElapsed"] = 0
-        _save("settings", _settings)
+    _stop_all_shows()
     return jsonify(ok=True)
 
 @app.get("/api/runners/live")
@@ -877,20 +859,29 @@ def api_runner_compute(rid):
 
 def _resolve_step(step):
     """Merge action library fields into a step for packet building.
+    Step-level overrides (speedMs, direction, brightness, r/g/b) take priority.
     Supports both new (actionId) and legacy (inline type/r/g/b) formats."""
     if "actionId" in step:
         act = next((a for a in _actions if a["id"] == step["actionId"]), None)
         if not act:
             return None
-        # Merge all action fields into the step (step's area/duration preserved)
-        merged = dict(step)
+        # Start with action fields, then overlay step-level overrides
+        merged = {}
         for k in ("type", "r", "g", "b", "speedMs", "periodMs", "spawnMs",
                   "p8a", "p8b", "p8c", "p8d", "r2", "g2", "b2", "minBri",
                   "spacing", "paletteId", "cooling", "sparking", "direction",
                   "tailLen", "density", "decay", "fadeSpeed",
-                  "onMs", "offMs", "wipeDir", "wipeSpeedPct"):
+                  "onMs", "offMs", "wipeDir", "wipeSpeedPct", "scope"):
             if k in act:
                 merged[k] = act[k]
+        # Step-level overrides take priority over action defaults
+        for k in ("durationS", "targets", "brightness", "speedMs",
+                  "direction", "scope", "r", "g", "b"):
+            if k in step and step[k] is not None:
+                merged[k] = step[k]
+        # Preserve step metadata
+        merged["actionId"] = step["actionId"]
+        merged["durationS"] = step.get("durationS", merged.get("durationS", 5))
         return merged
     return step  # legacy inline format
 
@@ -1053,12 +1044,233 @@ def api_runner_start(rid):
         _save("settings", _settings)
     return jsonify(ok=True)
 
+# ── Flights ───────────────────────────────────────────────────────────────────
+
+@app.get("/api/flights")
+def api_flights():
+    return jsonify(_flights)
+
+@app.post("/api/flights")
+def api_flights_create():
+    global _nxt_f
+    body = request.get_json(silent=True) or {}
+    name = body.get("name", "").strip()
+    if not name:
+        return jsonify(ok=False, err="name required"), 400
+    with _lock:
+        f = {"id": _nxt_f, "name": name,
+             "performerIds": body.get("performerIds", []),
+             "runnerId": body.get("runnerId"),
+             "priority": body.get("priority", 1)}
+        _flights.append(f)
+        _nxt_f += 1
+        _save("flights", _flights)
+    return jsonify(ok=True, id=f["id"])
+
+@app.get("/api/flights/<int:fid>")
+def api_flight_get(fid):
+    f = next((x for x in _flights if x["id"] == fid), None)
+    if not f:
+        return jsonify(ok=False, err="not found"), 404
+    return jsonify(f)
+
+@app.put("/api/flights/<int:fid>")
+def api_flight_put(fid):
+    f = next((x for x in _flights if x["id"] == fid), None)
+    if not f:
+        return jsonify(ok=False, err="not found"), 404
+    body = request.get_json(silent=True) or {}
+    with _lock:
+        for k in ("name", "performerIds", "runnerId", "priority"):
+            if k in body:
+                f[k] = body[k]
+        _save("flights", _flights)
+    return jsonify(ok=True)
+
+@app.delete("/api/flights/<int:fid>")
+def api_flight_delete(fid):
+    global _flights
+    with _lock:
+        n = len(_flights)
+        _flights = [x for x in _flights if x["id"] != fid]
+        if len(_flights) == n:
+            return jsonify(ok=False, err="not found"), 404
+        _save("flights", _flights)
+    return jsonify(ok=True)
+
+# ── Shows ─────────────────────────────────────────────────────────────────────
+
+_active_show_threads = []
+
+@app.get("/api/shows")
+def api_shows():
+    return jsonify(_shows)
+
+@app.post("/api/shows")
+def api_shows_create():
+    global _nxt_s
+    body = request.get_json(silent=True) or {}
+    name = body.get("name", "").strip()
+    if not name:
+        return jsonify(ok=False, err="name required"), 400
+    with _lock:
+        s = {"id": _nxt_s, "name": name,
+             "flightIds": body.get("flightIds", []),
+             "loop": body.get("loop", True)}
+        _shows.append(s)
+        _nxt_s += 1
+        _save("shows", _shows)
+    return jsonify(ok=True, id=s["id"])
+
+@app.get("/api/shows/<int:sid>")
+def api_show_get(sid):
+    s = next((x for x in _shows if x["id"] == sid), None)
+    if not s:
+        return jsonify(ok=False, err="not found"), 404
+    return jsonify(s)
+
+@app.put("/api/shows/<int:sid>")
+def api_show_put(sid):
+    s = next((x for x in _shows if x["id"] == sid), None)
+    if not s:
+        return jsonify(ok=False, err="not found"), 404
+    body = request.get_json(silent=True) or {}
+    with _lock:
+        for k in ("name", "flightIds", "loop"):
+            if k in body:
+                s[k] = body[k]
+        _save("shows", _shows)
+    return jsonify(ok=True)
+
+@app.delete("/api/shows/<int:sid>")
+def api_show_delete(sid):
+    global _shows
+    with _lock:
+        n = len(_shows)
+        _shows = [x for x in _shows if x["id"] != sid]
+        if len(_shows) == n:
+            return jsonify(ok=False, err="not found"), 404
+        _save("shows", _shows)
+    return jsonify(ok=True)
+
+@app.post("/api/shows/<int:sid>/start")
+def api_show_start(sid):
+    """Start a show — syncs and starts all flights simultaneously."""
+    s = next((x for x in _shows if x["id"] == sid), None)
+    if not s:
+        return jsonify(ok=False, err="not found"), 404
+
+    # Stop any running show/runners first
+    _stop_all_shows()
+
+    show_flights = [f for f in _flights if f["id"] in s.get("flightIds", [])]
+    if not show_flights:
+        return jsonify(ok=False, err="no flights in show"), 400
+
+    go_epoch = int(time.time()) + 5
+    loop_flag = 1 if s.get("loop", True) else 0
+    bri = _settings.get("globalBrightness", 255)
+    bri_pkt = _hdr(CMD_SET_BRIGHTNESS) + bytes([bri & 0xFF])
+
+    synced_flights = 0
+    for flight in show_flights:
+        runner = next((r for r in _runners if r["id"] == flight.get("runnerId")), None)
+        if not runner:
+            continue
+
+        # Get performers for this flight
+        perf_ids = set(flight.get("performerIds", []))
+        flight_children = [c for c in _children if c.get("status") == 1 and c["id"] in perf_ids]
+        if not flight_children:
+            continue
+
+        steps = runner.get("steps", [])
+        resolved = [_resolve_step(st) for st in steps]
+        resolved = [r for r in resolved if r]
+        if not resolved:
+            continue
+
+        child_offsets = runner.get("childOffsets", [])
+        slyled_children = [c for c in flight_children if c.get("type") != "wled"]
+        wled_children = [c for c in flight_children if c.get("type") == "wled"]
+
+        # Sync SlyLED children
+        for child in slyled_children:
+            _send(child["ip"], _hdr(CMD_RUNNER_STOP))
+            _send(child["ip"], _hdr(CMD_ACTION_STOP))
+        time.sleep(0.05)
+        for child in slyled_children:
+            _send(child["ip"], bri_pkt)
+            for i, step in enumerate(resolved):
+                offsets = child_offsets[i] if i < len(child_offsets) else {}
+                cid = child["id"]
+                delay_ms = offsets.get(cid, offsets.get(str(cid), 0))
+                pkt = _load_step_pkt(i, len(resolved), step, child, delay_ms)
+                _send(child["ip"], pkt)
+                time.sleep(0.03)
+
+        # Send RUNNER_GO to SlyLED children
+        pkt_go = _hdr(CMD_RUNNER_GO) + struct.pack("<IB", go_epoch, loop_flag)
+        for child in slyled_children:
+            _send(child["ip"], pkt_go)
+
+        # Start WLED runner thread
+        if wled_children:
+            _start_wled_runner(runner, wled_children, go_epoch, bool(loop_flag))
+
+        synced_flights += 1
+        log.info("SHOW: flight '%s' synced (%d SlyLED + %d WLED children)",
+                 flight.get("name"), len(slyled_children), len(wled_children))
+
+    with _lock:
+        _settings["runnerRunning"] = True
+        _settings["activeRunner"] = -1
+        _settings["activeShow"] = sid
+        _settings["runnerStartEpoch"] = go_epoch
+        _settings["runnerElapsed"] = 0
+        _settings["runnerLoop"] = s.get("loop", True)
+        _save("settings", _settings)
+
+    log.info("SHOW '%s' started: %d flights, go_epoch=%d", s.get("name"), synced_flights, go_epoch)
+    return jsonify(ok=True, flights=synced_flights)
+
+@app.post("/api/shows/stop")
+def api_shows_stop():
+    _stop_all_shows()
+    return jsonify(ok=True)
+
+def _stop_all_shows():
+    """Stop all running shows, runners, and WLED threads."""
+    _wled_runner_stop.set()
+    pkt_stop = _hdr(CMD_RUNNER_STOP)
+    pkt_off  = _hdr(CMD_ACTION_STOP)
+    for c in _children:
+        if c.get("status") == 1:
+            if c.get("type") == "wled":
+                wled_stop(c["ip"])
+            else:
+                _send(c["ip"], pkt_stop)
+                _send(c["ip"], pkt_off)
+    time.sleep(0.1)
+    for c in _children:
+        if c.get("status") == 1 and c.get("type") != "wled":
+            _send(c["ip"], pkt_stop)
+            _send(c["ip"], pkt_off)
+    _live_events.clear()
+    with _lock:
+        _settings["runnerRunning"] = False
+        _settings["activeRunner"] = -1
+        _settings["activeShow"] = -1
+        _settings["runnerStartEpoch"] = 0
+        _settings["runnerElapsed"] = 0
+        _save("settings", _settings)
+
 # ── Factory reset ─────────────────────────────────────────────────────────────
 
 _DEFAULT_SETTINGS = {
     "name": "SlyLED", "units": 0, "canvasW": 10000, "canvasH": 5000,
-    "darkMode": 1, "runnerRunning": False, "activeRunner": -1, "runnerElapsed": 0,
-    "runnerLoop": True, "logging": False,
+    "darkMode": 1, "runnerRunning": False, "activeRunner": -1, "activeShow": -1,
+    "runnerElapsed": 0, "runnerLoop": True, "logging": False,
 }
 _DEFAULT_LAYOUT = {"canvasW": 10000, "canvasH": 5000, "children": []}
 
@@ -1214,21 +1426,25 @@ def api_fw_flash_status():
 
 @app.post("/api/reset")
 def api_reset():
-    """Clear all children, runners, actions, layout, wifi and restore default settings."""
-    global _children, _settings, _layout, _runners, _actions, _wifi, _nxt_c, _nxt_r, _nxt_a
+    """Clear all data and restore default settings."""
+    global _children, _settings, _layout, _runners, _actions, _flights, _shows
+    global _wifi, _nxt_c, _nxt_r, _nxt_a, _nxt_f, _nxt_s
+    _stop_all_shows()
     with _lock:
         _children = []
         _runners  = []
         _actions  = []
+        _flights  = []
+        _shows    = []
         _wifi     = {"ssid": "", "password": ""}
         _layout   = dict(_DEFAULT_LAYOUT)
         _settings = dict(_DEFAULT_SETTINGS)
-        _nxt_c = 0
-        _nxt_r = 0
-        _nxt_a = 0
+        _nxt_c = _nxt_r = _nxt_a = _nxt_f = _nxt_s = 0
         _save("children", _children)
         _save("runners",  _runners)
         _save("actions",  _actions)
+        _save("flights",  _flights)
+        _save("shows",    _shows)
         _save("wifi",     _wifi)
         _save("layout",   _layout)
         _save("settings", _settings)

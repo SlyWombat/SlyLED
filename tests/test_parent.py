@@ -249,6 +249,88 @@ def run():
         r = c.get('/nonexistent/path')
         ok('GET unknown path → SPA fallback', r.status_code == 200)
 
+        # ── Flights ──────────────────────────────────────────────────
+        r = c.post('/api/flights', json={'name': 'Ceiling', 'performerIds': [0, 1], 'runnerId': 0, 'priority': 1})
+        ok('POST create flight', r.status_code == 200 and r.get_json().get('ok'))
+        fid = r.get_json().get('id')
+
+        r = c.post('/api/flights', json={'name': 'Floor', 'performerIds': [2], 'runnerId': 0, 'priority': 2})
+        ok('POST create flight 2', r.status_code == 200)
+        fid2 = r.get_json().get('id')
+
+        r = c.post('/api/flights', json={'name': ''})
+        ok('Flight no name → 400', r.status_code == 400)
+
+        r = c.get('/api/flights')
+        ok('GET flights', r.status_code == 200 and len(r.get_json()) >= 2)
+
+        r = c.get(f'/api/flights/{fid}')
+        ok('GET flight by id', r.status_code == 200 and r.get_json().get('name') == 'Ceiling')
+
+        r = c.put(f'/api/flights/{fid}', json={'name': 'Ceiling Updated', 'performerIds': [0, 1, 3]})
+        ok('PUT update flight', r.status_code == 200)
+
+        r = c.get(f'/api/flights/{fid}')
+        ok('Flight update persisted', r.get_json().get('name') == 'Ceiling Updated')
+
+        r = c.delete(f'/api/flights/{fid2}')
+        ok('DELETE flight', r.status_code == 200)
+
+        r = c.delete(f'/api/flights/{fid2}')
+        ok('DELETE nonexistent flight → 404', r.status_code == 404)
+
+        # ── Shows ───────────────────────────────────────────────────
+        r = c.post('/api/shows', json={'name': 'Evening Show', 'flightIds': [fid], 'loop': True})
+        ok('POST create show', r.status_code == 200 and r.get_json().get('ok'))
+        show_id = r.get_json().get('id')
+
+        r = c.post('/api/shows', json={'name': ''})
+        ok('Show no name → 400', r.status_code == 400)
+
+        r = c.get('/api/shows')
+        ok('GET shows', r.status_code == 200 and len(r.get_json()) >= 1)
+
+        r = c.get(f'/api/shows/{show_id}')
+        ok('GET show by id', r.status_code == 200 and r.get_json().get('name') == 'Evening Show')
+
+        r = c.put(f'/api/shows/{show_id}', json={'name': 'Night Show', 'loop': False})
+        ok('PUT update show', r.status_code == 200)
+
+        r = c.get(f'/api/shows/{show_id}')
+        ok('Show update persisted', r.get_json().get('name') == 'Night Show')
+
+        r = c.post(f'/api/shows/{show_id}/start')
+        ok('POST start show (no online children)', r.status_code == 200)
+
+        r = c.post('/api/shows/stop')
+        ok('POST stop shows', r.status_code == 200)
+
+        r = c.delete(f'/api/shows/{show_id}')
+        ok('DELETE show', r.status_code == 200)
+
+        r = c.delete(f'/api/shows/{show_id}')
+        ok('DELETE nonexistent show → 404', r.status_code == 404)
+
+        # Clean up remaining flight
+        c.delete(f'/api/flights/{fid}')
+
+        # ── Step-level overrides ────────────────────────────────────
+        # Create an action and runner to test step overrides
+        r = c.post('/api/actions', json={'name': 'Override Test', 'type': 5, 'speedMs': 100})
+        oa_id = r.get_json().get('id')
+        r = c.post('/api/runners', json={'name': 'Override Runner'})
+        or_id = r.get_json().get('id')
+        r = c.put(f'/api/runners/{or_id}', json={'steps': [
+            {'actionId': oa_id, 'durationS': 5, 'targets': [0, 1], 'brightness': 128, 'speedMs': 500},
+            {'actionId': oa_id, 'durationS': 10, 'direction': 2},
+        ]})
+        ok('PUT runner with step overrides', r.status_code == 200)
+        r = c.get(f'/api/runners/{or_id}')
+        steps = r.get_json().get('steps', [])
+        ok('Step overrides preserved', len(steps) == 2 and steps[0].get('brightness') == 128)
+        c.delete(f'/api/runners/{or_id}')
+        c.delete(f'/api/actions/{oa_id}')
+
         # ── Shutdown (don't actually call it) ───────────────────────
         # r = c.post('/api/shutdown')  # skip — would kill process
 
@@ -264,6 +346,12 @@ def run():
 
         r = c.get('/api/actions')
         ok('Reset cleared actions', len(r.get_json()) == 0)
+
+        r = c.get('/api/flights')
+        ok('Reset cleared flights', len(r.get_json()) == 0)
+
+        r = c.get('/api/shows')
+        ok('Reset cleared shows', len(r.get_json()) == 0)
 
     # ── Print results ───────────────────────────────────────────────
     passed = sum(1 for _, v, _ in results if v)
