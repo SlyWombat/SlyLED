@@ -24,8 +24,21 @@ try:
         if iss_new != iss:
             iss_path.write_text(iss_new, encoding="utf-8")
             print(f"[build.py] Updated installer.iss AppVersion → {version}")
+        # Also sync firmware/registry.json for ESP32 and D1 Mini entries
+        import json as _json
+        reg_path = (HERE / ".." / ".." / "firmware" / "registry.json").resolve()
+        if reg_path.exists():
+            reg = _json.loads(reg_path.read_text(encoding="utf-8"))
+            changed = False
+            for fw in reg.get("firmware", []):
+                if fw.get("board") in ("esp32", "d1mini") and fw.get("version") != version:
+                    fw["version"] = version
+                    changed = True
+            if changed:
+                reg_path.write_text(_json.dumps(reg, indent=2) + "\n", encoding="utf-8")
+                print(f"[build.py] Updated firmware/registry.json → {version}")
 except Exception as e:
-    print(f"[build.py] Warning: could not sync installer version: {e}")
+    print(f"[build.py] Warning: could not sync versions: {e}")
 SPA    = SHARED / "spa"
 ICO    = (HERE / ".." / ".." / "images" / "slyled.ico").resolve()
 FWDIR  = (HERE / ".." / ".." / "firmware").resolve()

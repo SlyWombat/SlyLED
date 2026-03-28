@@ -1866,34 +1866,40 @@ function _startOtaForChild(cid){
 }
 function _pollOtaProgress(cid,attempt){
   // Poll the child's status to detect reboot and version change
-  // After OTA, child reboots — so it'll go offline briefly then come back
+  // OTA download ~30s, flash ~10s, reboot ~10s, WiFi reconnect ~10s = ~60s typical
+  var maxAttempts=40; // 40 x 5s = 200s (3+ min max wait)
   setTimeout(function(){
+    // First try probing the child directly for fast detection
+    var stEl=document.getElementById('ota-st-'+cid);
+    var actEl=document.getElementById('ota-act-'+cid);
+    var progEl=document.getElementById('ota-prog-'+cid);
+    if(progEl)progEl.style.width=Math.min(95,(attempt+1)*100/maxAttempts)+'%';
+    // Phase messages
+    if(attempt<=3&&stEl)stEl.innerHTML='<span class="badge" style="background:#7c3aed;color:#fff">Downloading firmware...</span>';
+    else if(attempt<=8&&stEl)stEl.innerHTML='<span class="badge" style="background:#2563eb;color:#fff">Flashing...</span>';
+    else if(attempt<=15&&stEl)stEl.innerHTML='<span class="badge" style="background:#059669;color:#fff">Rebooting...</span>';
+    else if(stEl)stEl.innerHTML='<span class="badge" style="background:#059669;color:#fff">Waiting for reconnect...</span>';
     api('GET','/api/firmware/check').then(function(d){
       var c=null;
       if(d&&d.children)d.children.forEach(function(x){if(x.id===cid)c=x;});
-      var stEl=document.getElementById('ota-st-'+cid);
-      var actEl=document.getElementById('ota-act-'+cid);
-      var progEl=document.getElementById('ota-prog-'+cid);
       if(!c){
-        if(attempt<20)_pollOtaProgress(cid,attempt+1);
+        if(attempt<maxAttempts)_pollOtaProgress(cid,attempt+1);
         return;
       }
-      if(progEl)progEl.style.width=Math.min(100,(attempt+1)*10)+'%';
       if(!c.needsUpdate&&c.currentVersion===d.latest){
-        // Success — updated!
+        if(progEl)progEl.style.width='100%';
         if(stEl)stEl.innerHTML='<span class="badge bon">Updated to v'+escapeHtml(d.latest)+'</span>';
         if(actEl)actEl.innerHTML='<span style="color:#4c4">&#x2713; Done</span>';
-      }else if(attempt<20){
-        if(attempt>5&&stEl)stEl.innerHTML='<span class="badge" style="background:#059669;color:#fff">Rebooting...</span>';
+      }else if(attempt<maxAttempts){
         _pollOtaProgress(cid,attempt+1);
       }else{
-        if(stEl)stEl.innerHTML='<span class="badge boff">Timeout — check device</span>';
-        if(actEl)actEl.innerHTML='<button class="btn btn-on" onclick="otaSingleUpdate('+cid+')">Retry</button>';
+        if(stEl)stEl.innerHTML='<span class="badge boff">Timeout — device may still be updating</span>';
+        if(actEl)actEl.innerHTML='<button class="btn btn-on" onclick="checkOtaUpdates()">Recheck</button>';
       }
     }).catch(function(){
-      if(attempt<20)_pollOtaProgress(cid,attempt+1);
+      if(attempt<maxAttempts)_pollOtaProgress(cid,attempt+1);
     });
-  },3000); // poll every 3s
+  },5000); // poll every 5s
 }
 function otaUpdateAll(){
   if(!confirm('Update ALL outdated performers? They will reboot sequentially.'))return;
