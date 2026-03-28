@@ -442,9 +442,25 @@ void sendChildConfigPage(WiFiClient& c) {
   sendBuf(c, "<div class='row'><span class='k'>Firmware</span>"
              "<span class='v'>v%u.%u.%u</span></div>",
              (unsigned)APP_MAJOR, (unsigned)APP_MINOR, (unsigned)APP_PATCH);
+  // Chip details
+#ifdef BOARD_ESP32
+  sendBuf(c, "<div class='row'><span class='k'>Chip</span>"
+             "<span class='v'>%s</span></div>", ESP.getChipModel());
+  sendBuf(c, "<div class='row'><span class='k'>Chip Temp</span>"
+             "<span class='v'>%d &deg;C</span></div>", (int)temperatureRead());
+#elif defined(BOARD_D1MINI)
+  c.print(F("<div class='row'><span class='k'>Chip</span>"
+            "<span class='v'>ESP8266</span></div>"));
+#endif
+  sendBuf(c, "<div class='row'><span class='k'>Flash</span>"
+             "<span class='v'>%lu KB</span></div>",
+             (unsigned long)(ESP.getFlashChipSize() / 1024));
   sendBuf(c, "<div class='row'><span class='k'>Free Heap</span>"
              "<span class='v'>%lu bytes</span></div>",
              (unsigned long)ESP.getFreeHeap());
+  sendBuf(c, "<div class='row'><span class='k'>SDK</span>"
+             "<span class='v'>%s</span></div>", ESP.getSdkVersion());
+  // Network details
   sendBuf(c, "<div class='row'><span class='k'>WiFi RSSI</span>"
              "<span class='v'>%d dBm</span></div>",
              (int)WiFi.RSSI());

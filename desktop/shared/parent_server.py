@@ -57,7 +57,7 @@ def _apply_logging(enabled):
 
 # ── Version ───────────────────────────────────────────────────────────────────
 
-VERSION = "5.3.4"
+VERSION = "5.3.5"
 
 # ── UDP protocol ──────────────────────────────────────────────────────────────
 
@@ -233,7 +233,7 @@ def _parse_pong(data, src_ip):
     }
 
 def _probe_board_type(child):
-    """Fetch board type and full version from child's HTTP /status endpoint."""
+    """Fetch board type, version, and telemetry from child's HTTP /status endpoint."""
     try:
         import urllib.request as _ur
         req = _ur.Request(f"http://{child['ip']}/status", method="GET")
@@ -247,6 +247,11 @@ def _probe_board_type(child):
         version = data.get("version")
         if version:
             child["fwVersion"] = version
+        # Extended telemetry
+        for key in ("rssi", "chipModel", "chipTemp", "flashSize", "freeHeap",
+                     "sdkVersion", "uptime"):
+            if key in data:
+                child[key] = data[key]
     except Exception:
         pass
 

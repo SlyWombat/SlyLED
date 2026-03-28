@@ -46,7 +46,7 @@ void sendJsonErr(WiFiClient& c, const char* msg) {
 // ── GET /status ───────────────────────────────────────────────────────────────
 
 void sendStatus(WiFiClient& c) {
-  char body[256];
+  char body[512];
   int blen;
 #ifdef BOARD_GIGA
   blen = snprintf(body, sizeof(body), "{\"role\":\"parent\",\"hostname\":\"slyled\"}");
@@ -61,14 +61,36 @@ void sendStatus(WiFiClient& c) {
 #else
     "unknown";
 #endif
+
+  // Gather chip-specific telemetry
+  const char* chipModel = "unknown";
+  int chipTemp = -999;  // sentinel: not available
+  uint32_t flashSize = 0;
+  const char* sdkVer = "";
+#ifdef BOARD_ESP32
+  chipModel = ESP.getChipModel();
+  chipTemp = (int)temperatureRead();
+  flashSize = ESP.getFlashChipSize();
+  sdkVer = ESP.getSdkVersion();
+#elif defined(BOARD_D1MINI)
+  chipModel = "ESP8266";
+  // ESP8266 has no internal temperature sensor
+  flashSize = ESP.getFlashChipSize();
+  sdkVer = ESP.getSdkVersion();
+#endif
+
   blen = snprintf(body, sizeof(body),
     "{\"role\":\"child\",\"hostname\":\"%s\",\"board\":\"%s\","
     "\"version\":\"%u.%u.%u\",\"action\":%u,\"udpRx\":%lu,"
-    "\"freeHeap\":%lu,\"uptime\":%lu}",
+    "\"freeHeap\":%lu,\"uptime\":%lu,"
+    "\"rssi\":%d,\"chipModel\":\"%s\",\"flashSize\":%lu,\"sdkVersion\":\"%s\""
+    "%s}",
     childCfg.hostname, boardName,
     (unsigned)APP_MAJOR, (unsigned)APP_MINOR, (unsigned)APP_PATCH,
     (unsigned)childActType, (unsigned long)udpRxCount,
-    (unsigned long)ESP.getFreeHeap(), (unsigned long)(millis() / 1000));
+    (unsigned long)ESP.getFreeHeap(), (unsigned long)(millis() / 1000),
+    (int)WiFi.RSSI(), chipModel, (unsigned long)flashSize, sdkVer,
+    chipTemp != -999 ? (String(",\"chipTemp\":") + String(chipTemp)).c_str() : "");
 #endif
   sendBuf(c, "HTTP/1.1 200 OK\r\n"
              "Content-Type: application/json\r\n"
