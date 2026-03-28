@@ -235,8 +235,8 @@ body.light .li:hover{border-color:#3b82f6}
   <div class='card' style='max-width:800px'>
     <div class='card-title' style='display:flex;align-items:center;gap:.5em'>
       OTA Updates (WiFi)
-      <button class='btn' onclick='checkOtaUpdates()' style='padding:.15em .5em;background:#333;font-size:.8em'>Check for Updates</button>
-      <button class='btn' onclick='setupRefreshAll(null);setTimeout(checkOtaUpdates,3000)' style='padding:.15em .5em;background:#333;font-size:.8em'>&#x21bb; Refresh Status</button>
+      <button class='btn btn-on' onclick='checkOtaUpdates()' style='padding:.15em .5em;font-size:.8em'>Check for Updates</button>
+      <button class='btn btn-nav' onclick='setupRefreshAll(null);setTimeout(checkOtaUpdates,3000)' style='padding:.15em .5em;font-size:.8em'>&#x21bb; Refresh Status</button>
       <button class='btn' id='ota-update-all' onclick='otaUpdateAll()' style='padding:.15em .5em;background:#f60;color:#fff;font-size:.8em;display:none'>Update All</button>
     </div>
     <div id='ota-children'><p style='color:#888'>Click "Check for Updates" to scan performers.</p></div>
@@ -1790,8 +1790,18 @@ function _drawTimelineInline(container,rn,acts,children,lay){
 var _otaChecked=null; // cached check result
 function checkOtaUpdates(){
   var el=document.getElementById('ota-children');
-  el.innerHTML='<p style="color:#888">Checking GitHub releases...</p>';
-  api('GET','/api/firmware/check').then(function(d){
+  el.innerHTML='<p style="color:#888">Checking GitHub releases and downloading latest firmware...</p>';
+  // Force-download latest firmware from GitHub before checking
+  Promise.all([
+    api('POST','/api/firmware/download',{board:'esp32'}).catch(function(){return null;}),
+    api('POST','/api/firmware/download',{board:'d1mini'}).catch(function(){return null;})
+  ]).then(function(){
+    el.innerHTML='<p style="color:#888">Refreshing performer status...</p>';
+    // Now probe all children for current version via HTTP /status
+    return api('POST','/api/children/refresh-all').catch(function(){return null;});
+  }).then(function(){
+    return api('GET','/api/firmware/check');
+  }).then(function(d){
     _otaChecked=d;
     _renderOtaTable(d);
   }).catch(function(){
