@@ -4,8 +4,11 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("com.google.dagger.hilt.android")
-    id("com.google.devtools.ksp")
+    kotlin("kapt")
 }
+
+// Redirect build output outside OneDrive to avoid file lock issues
+layout.buildDirectory = file("C:/Android/build/slyled-app")
 
 android {
     namespace = "com.slywombat.slyled"
@@ -65,7 +68,7 @@ dependencies {
 
     // Hilt DI
     implementation("com.google.dagger:hilt-android:2.51.1")
-    ksp("com.google.dagger:hilt-compiler:2.51.1")
+    kapt("com.google.dagger:hilt-compiler:2.51.1")
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
 
     // Camera + QR
