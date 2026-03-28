@@ -6,10 +6,12 @@
       "description": "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
       "board": "esp32",
       "fqbn": "esp32:esp32:esp32",
-      "version": "5.3.5",
+      "version": "5.3.6",
       "file": "esp32/main.ino.merged.bin",
       "flashMethod": "esptool",
-      "buildDefines": ["BOARD_ESP32"]
+      "buildDefines": [
+        "BOARD_ESP32"
+      ]
     },
     {
       "id": "child-led-d1mini",
@@ -17,21 +19,25 @@
       "description": "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
       "board": "d1mini",
       "fqbn": "esp8266:esp8266:d1_mini",
-      "version": "5.3.5",
+      "version": "5.3.6",
       "file": "d1mini/main.ino.bin",
       "flashMethod": "esptool",
-      "buildDefines": ["BOARD_D1MINI"]
+      "buildDefines": [
+        "BOARD_D1MINI"
+      ]
     },
     {
       "id": "child-led-giga",
       "name": "LED Performer (Giga R1)",
-      "description": "Onboard RGB LED performer — 1 pixel, all 14 effects",
+      "description": "Onboard RGB LED performer \u2014 1 pixel, all 14 effects",
       "board": "giga",
       "fqbn": "arduino:mbed_giga:giga",
       "version": "4.0",
       "file": "giga/child-led.bin",
       "flashMethod": "dfu",
-      "buildDefines": ["GIGA_CHILD"],
+      "buildDefines": [
+        "GIGA_CHILD"
+      ],
       "buildFlags": "-DGIGA_CHILD"
     },
     {
@@ -43,7 +49,9 @@
       "version": "4.0",
       "file": "giga/parent.bin",
       "flashMethod": "dfu",
-      "buildDefines": ["BOARD_GIGA"]
+      "buildDefines": [
+        "BOARD_GIGA"
+      ]
     }
   ]
 }
