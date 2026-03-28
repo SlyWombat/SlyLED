@@ -200,14 +200,15 @@ private fun PerformerCard(child: Child) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
+                    val displayName = if (child.name.isNotBlank() && child.name != child.hostname) child.name else child.hostname
                     Text(
-                        child.hostname,
+                        displayName,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
-                    if (child.name.isNotEmpty() && child.name != child.hostname) {
+                    if (child.name.isNotBlank() && child.name != child.hostname) {
                         Text(
-                            child.name,
+                            child.hostname,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

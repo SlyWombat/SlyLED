@@ -372,7 +372,9 @@ private fun FlightsTab(
             items(flights, key = { it.id }) { flight ->
                 val runnerName = runners.find { it.id == flight.runnerId }?.name ?: "None"
                 val performerNames = flight.performerIds.mapNotNull { pid ->
-                    children.find { it.id == pid }?.let { it.name.ifBlank { it.hostname } }
+                    children.find { it.id == pid }?.let {
+                        if (it.name.isNotBlank() && it.name != it.hostname) it.name else it.hostname
+                    }
                 }
 
                 Card(modifier = Modifier.fillMaxWidth()) {
@@ -587,7 +589,7 @@ private fun FlightEditorDialog(
                 // Performer checkboxes
                 Text("Performers", style = MaterialTheme.typography.labelMedium)
                 children.forEach { child ->
-                    val label = child.name.ifBlank { child.hostname }
+                    val label = if (child.name.isNotBlank() && child.name != child.hostname) child.name else child.hostname
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(
                             checked = child.id in selectedPerformers,

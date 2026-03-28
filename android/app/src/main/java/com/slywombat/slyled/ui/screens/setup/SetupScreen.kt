@@ -23,6 +23,11 @@ import com.slywombat.slyled.ui.theme.OrangeWled
 import com.slywombat.slyled.ui.theme.RedError
 import com.slywombat.slyled.viewmodel.SetupViewModel
 import kotlinx.coroutines.flow.collectLatest
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextDecoration
 
 @Composable
 fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
@@ -176,6 +181,7 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                             AnimatedVisibility(visible = showDiscovered) {
                                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     discovered.forEach { child ->
+                                        val discDisplayName = if (child.name.isNotBlank() && child.name != child.hostname) child.name else child.hostname
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -183,9 +189,16 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                                         ) {
                                             Column {
                                                 Text(
-                                                    child.hostname,
+                                                    discDisplayName,
                                                     style = MaterialTheme.typography.bodyMedium
                                                 )
+                                                if (child.name.isNotBlank() && child.name != child.hostname) {
+                                                    Text(
+                                                        child.hostname,
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
                                                 Text(
                                                     child.ip,
                                                     style = MaterialTheme.typography.bodySmall,
@@ -262,7 +275,12 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
         AlertDialog(
             onDismissRequest = { confirmRemoveId = null },
             title = { Text("Remove Performer") },
-            text = { Text("Remove ${child?.hostname ?: "performer #$id"}? It will need to be re-added.") },
+            text = {
+                val removeName = child?.let {
+                    if (it.name.isNotBlank() && it.name != it.hostname) it.name else it.hostname
+                } ?: "performer #$id"
+                Text("Remove $removeName? It will need to be re-added.")
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -288,7 +306,12 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
         AlertDialog(
             onDismissRequest = { confirmRebootId = null },
             title = { Text("Reboot Performer") },
-            text = { Text("Reboot ${child?.hostname ?: "performer #$id"}? It will be offline briefly.") },
+            text = {
+                val rebootName = child?.let {
+                    if (it.name.isNotBlank() && it.name != it.hostname) it.name else it.hostname
+                } ?: "performer #$id"
+                Text("Reboot $rebootName? It will be offline briefly.")
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -327,14 +350,15 @@ private fun SetupPerformerCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
+                    val displayName = if (child.name.isNotBlank() && child.name != child.hostname) child.name else child.hostname
                     Text(
-                        child.hostname,
+                        displayName,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
-                    if (child.name.isNotEmpty() && child.name != child.hostname) {
+                    if (child.name.isNotBlank() && child.name != child.hostname) {
                         Text(
-                            child.name,
+                            child.hostname,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -360,6 +384,7 @@ private fun SetupPerformerCard(
                 }
             }
             Spacer(Modifier.height(4.dp))
+            val context = LocalContext.current
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -367,7 +392,11 @@ private fun SetupPerformerCard(
                 Text(
                     child.ip,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.primary,
+                    textDecoration = TextDecoration.Underline,
+                    modifier = Modifier.clickable {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("http://${child.ip}")))
+                    }
                 )
                 if (child.fwVersion != null) {
                     Text(
@@ -425,7 +454,8 @@ private fun ChildDetailsDialog(child: Child, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text("${child.hostname} Details")
+            val detailTitle = if (child.name.isNotBlank() && child.name != child.hostname) child.name else child.hostname
+            Text("$detailTitle Details")
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
