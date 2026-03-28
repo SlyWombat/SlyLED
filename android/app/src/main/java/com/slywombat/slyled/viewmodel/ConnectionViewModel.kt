@@ -2,6 +2,7 @@ package com.slywombat.slyled.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.slywombat.slyled.data.repository.ServerPreferences
 import com.slywombat.slyled.data.repository.SlyLedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.TimeoutCancellationException
@@ -20,7 +21,8 @@ import javax.inject.Inject
 
 @HiltViewModel
 class ConnectionViewModel @Inject constructor(
-    private val repository: SlyLedRepository
+    private val repository: SlyLedRepository,
+    private val serverPrefs: ServerPreferences
 ) : ViewModel() {
 
     enum class State { DISCONNECTED, CONNECTING, CONNECTED }
@@ -33,11 +35,31 @@ class ConnectionViewModel @Inject constructor(
     private val _serverInfo = MutableStateFlow("")
     val serverInfo: StateFlow<String> = _serverInfo
 
-    // One-shot error events (SharedFlow so they don't replay on recomposition)
     private val _errorEvent = MutableSharedFlow<String>()
     val errorEvent: SharedFlow<String> = _errorEvent
 
+    // Saved connection for the connection screen to pre-fill
+    private val _savedHost = MutableStateFlow("")
+    val savedHost: StateFlow<String> = _savedHost
+
+    private val _savedPort = MutableStateFlow(8080)
+    val savedPort: StateFlow<Int> = _savedPort
+
     private val connectMutex = Mutex()
+
+    init {
+        // Try auto-reconnect from saved preferences
+        if (!repository.isConnected) {
+            viewModelScope.launch {
+                val saved = serverPrefs.load()
+                if (saved != null) {
+                    _savedHost.value = saved.first
+                    _savedPort.value = saved.second
+                    connect(saved.first, saved.second)
+                }
+            }
+        }
+    }
 
     fun connect(host: String, port: Int) {
         viewModelScope.launch {
@@ -52,6 +74,10 @@ class ConnectionViewModel @Inject constructor(
                         if (status.role == "parent") {
                             _serverInfo.value = "${status.hostname} ($host:$port) v${status.version}"
                             _state.value = State.CONNECTED
+                            // Persist connection on success
+                            serverPrefs.save(host, port)
+                            _savedHost.value = host
+                            _savedPort.value = port
                         } else {
                             _errorEvent.emit("Server responded but is not a SlyLED orchestrator")
                             repository.disconnect()
@@ -88,5 +114,6 @@ class ConnectionViewModel @Inject constructor(
         repository.disconnect()
         _state.value = State.DISCONNECTED
         _serverInfo.value = ""
+        viewModelScope.launch { serverPrefs.clear() }
     }
 }

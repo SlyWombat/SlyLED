@@ -1,5 +1,6 @@
 package com.slywombat.slyled.ui.screens.actions
 
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -28,6 +29,9 @@ import kotlin.math.roundToInt
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ActionsScreen(viewModel: ActionsViewModel = hiltViewModel()) {
+    // Reload on every screen visit
+    LaunchedEffect(Unit) { viewModel.loadActions() }
+
     val actions by viewModel.actions.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()

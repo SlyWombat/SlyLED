@@ -1,5 +1,6 @@
 package com.slywombat.slyled.ui.screens.setup
 
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -25,6 +26,9 @@ import kotlinx.coroutines.flow.collectLatest
 
 @Composable
 fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
+    // Reload on every screen visit
+    LaunchedEffect(Unit) { viewModel.loadChildren() }
+
     val children by viewModel.children.collectAsState()
     val discovered by viewModel.discovered.collectAsState()
     val isDiscovering by viewModel.isDiscovering.collectAsState()

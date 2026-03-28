@@ -120,6 +120,10 @@ fun MainScaffold(connectionVm: ConnectionViewModel, onDisconnect: () -> Unit) {
                         label = { Text(tab.label, style = MaterialTheme.typography.labelSmall) },
                         selected = currentDestination?.hierarchy?.any { it.route == tab.route } == true,
                         onClick = {
+                            // Auto-close settings if open
+                            if (isOnSettings) {
+                                navController.popBackStack("settings", inclusive = true)
+                            }
                             navController.navigate(tab.route) {
                                 popUpTo(navController.graph.findStartDestination().id) { saveState = true }
                                 launchSingleTop = true

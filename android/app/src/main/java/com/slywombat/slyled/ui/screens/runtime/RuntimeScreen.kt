@@ -1,5 +1,6 @@
 package com.slywombat.slyled.ui.screens.runtime
 
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -24,6 +25,9 @@ import kotlin.math.roundToInt
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RuntimeScreen(viewModel: RuntimeViewModel = hiltViewModel()) {
+    // Reload on every screen visit
+    LaunchedEffect(Unit) { viewModel.loadAll() }
+
     val runners by viewModel.runners.collectAsState()
     val flights by viewModel.flights.collectAsState()
     val shows by viewModel.shows.collectAsState()

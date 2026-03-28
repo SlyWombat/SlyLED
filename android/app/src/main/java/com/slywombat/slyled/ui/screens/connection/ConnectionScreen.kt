@@ -38,9 +38,19 @@ import java.util.concurrent.Executors
 
 @Composable
 fun ConnectionScreen(viewModel: ConnectionViewModel) {
+    val savedHost by viewModel.savedHost.collectAsState()
+    val savedPort by viewModel.savedPort.collectAsState()
     var host by remember { mutableStateOf("") }
     var port by remember { mutableStateOf("8080") }
     var showScanner by remember { mutableStateOf(false) }
+
+    // Pre-fill from saved connection
+    LaunchedEffect(savedHost, savedPort) {
+        if (savedHost.isNotEmpty() && host.isEmpty()) {
+            host = savedHost
+            port = savedPort.toString()
+        }
+    }
 
     val connState by viewModel.state.collectAsState()
     val isConnecting = connState == ConnectionViewModel.State.CONNECTING
