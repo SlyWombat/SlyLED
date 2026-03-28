@@ -2153,6 +2153,6 @@ if __name__ == "__main__":
         threading.Thread(target=_open, daemon=True).start()
 
     print(f"SlyLED Orchestrator  v{VERSION}")
-    print(f"  UI   →  http://localhost:{args.port}")
-    print(f"  Data →  {DATA}")
+    print(f"  UI   -> http://localhost:{args.port}")
+    print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)

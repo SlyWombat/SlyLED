@@ -580,9 +580,9 @@ def run():
         r = c.get('/api/firmware/registry')
         reg = r.get_json()
         esp_fw = next((f for f in reg.get('firmware', []) if f['id'] == 'child-led-esp32'), None)
-        ok('Registry ESP32 version is 5.3.9', esp_fw and esp_fw['version'] == '5.3.9')
+        ok('Registry ESP32 version is 5.3.10', esp_fw and esp_fw['version'] == '5.3.10')
         d1_fw = next((f for f in reg.get('firmware', []) if f['id'] == 'child-led-d1mini'), None)
-        ok('Registry D1 Mini version is 5.3.9', d1_fw and d1_fw['version'] == '5.3.9')
+        ok('Registry D1 Mini version is 5.3.10', d1_fw and d1_fw['version'] == '5.3.10')
 
         # Clean up OTA test children
         c.delete(f'/api/children/{ota_cid}')

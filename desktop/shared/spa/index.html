@@ -234,35 +234,38 @@ body.light .li:hover{border-color:#3b82f6}
   </div>
   <div class='card' style='max-width:800px'>
     <div class='card-title' style='display:flex;align-items:center;gap:.5em'>
-      OTA Updates (WiFi)
+      Firmware Updates
       <button class='btn btn-on' onclick='checkOtaUpdates()' style='padding:.15em .5em;font-size:.8em'>Check for Updates</button>
-      <button class='btn btn-nav' onclick='setupRefreshAll(null);setTimeout(checkOtaUpdates,3000)' style='padding:.15em .5em;font-size:.8em'>&#x21bb; Refresh Status</button>
-      <button class='btn' id='ota-update-all' onclick='otaUpdateAll()' style='padding:.15em .5em;background:#f60;color:#fff;font-size:.8em;display:none'>Update All</button>
+      <button class='btn btn-nav' onclick='setupRefreshAll(null);setTimeout(checkOtaUpdates,3000)' style='padding:.15em .5em;font-size:.8em'>&#x21bb; Refresh</button>
+      <button class='btn' id='ota-update-all' onclick='otaUpdateAll()' style='padding:.15em .5em;background:#f60;color:#fff;font-size:.8em;display:none'>Update All (OTA)</button>
     </div>
-    <div id='ota-children'><p style='color:#888'>Click "Check for Updates" to scan performers.</p></div>
-  </div>
-  <div class='card' style='max-width:800px'>
-    <div class='card-title' style='display:flex;align-items:center;gap:.5em'>
-      USB Flash
-      <button class='btn' onclick='loadFirmware()' style='padding:.15em .5em;background:#333;font-size:.8em'>&#x21bb; Scan Ports</button>
+    <div style='margin-bottom:1em'>
+      <div style='font-size:.85em;font-weight:bold;color:#aaa;margin-bottom:.3em'>OTA (WiFi)</div>
+      <div id='ota-children'><p style='color:#888'>Click "Check for Updates" to scan performers.</p></div>
     </div>
-    <div id='fw-ports' style='margin-bottom:.8em'><p style='color:#888'>Scanning USB ports...</p></div>
-    <div style='display:flex;gap:1em;flex-wrap:wrap;align-items:flex-end'>
-      <div><label>Port</label><select id='fw-port' style='width:120px'></select></div>
-      <div><label>Board</label><select id='fw-board' onchange='updateFwImages()' style='width:120px'>
-        <option value='esp32'>ESP32</option>
-        <option value='d1mini'>D1 Mini</option>
-        <option value='giga'>Giga R1</option>
-      </select></div>
-      <div style='flex:1;min-width:200px'><label>Firmware</label><select id='fw-image' style='width:100%'></select></div>
-      <div><button class='btn btn-on' id='fw-flash-btn' onclick='doFlash(this)' style='margin-bottom:2px'>Flash</button></div>
-    </div>
-    <div id='fw-dfu-note' style='display:none;margin-top:.5em;padding:.5em;background:#332;border:1px solid #553;border-radius:5px;font-size:.82em;color:#cc6'>
-      <b>Giga R1:</b> Double-press the reset button to enter DFU bootloader mode before flashing.
-    </div>
-    <div id='fw-progress' style='display:none;margin-top:.8em'>
-      <div class='prog-bar' style='height:10px'><div class='prog-fill' id='fw-prog-fill' style='width:0%;transition:width .3s'></div></div>
-      <div id='fw-prog-msg' style='font-size:.82em;color:#aaa;margin-top:.3em'></div>
+    <div style='border-top:1px solid #333;padding-top:.8em'>
+      <div style='display:flex;align-items:center;gap:.5em;margin-bottom:.5em'>
+        <span style='font-size:.85em;font-weight:bold;color:#aaa'>USB (Serial)</span>
+        <button class='btn' onclick='loadFirmwarePorts()' style='padding:.1em .4em;background:#333;font-size:.75em'>&#x21bb; Scan Ports</button>
+      </div>
+      <div id='fw-ports' style='margin-bottom:.8em'><p style='color:#888'>Scanning USB ports...</p></div>
+      <div style='display:flex;gap:1em;flex-wrap:wrap;align-items:flex-end'>
+        <div><label>Port</label><select id='fw-port' style='width:120px'></select></div>
+        <div><label>Board</label><select id='fw-board' onchange='updateFwImages()' style='width:120px'>
+          <option value='esp32'>ESP32</option>
+          <option value='d1mini'>D1 Mini</option>
+          <option value='giga'>Giga R1</option>
+        </select></div>
+        <div style='flex:1;min-width:200px'><label>Firmware</label><select id='fw-image' style='width:100%'></select></div>
+        <div><button class='btn btn-on' id='fw-flash-btn' onclick='doFlash(this)' style='margin-bottom:2px'>Flash</button></div>
+      </div>
+      <div id='fw-dfu-note' style='display:none;margin-top:.5em;padding:.5em;background:#332;border:1px solid #553;border-radius:5px;font-size:.82em;color:#cc6'>
+        <b>Giga R1:</b> Double-press the reset button to enter DFU bootloader mode before flashing.
+      </div>
+      <div id='fw-progress' style='display:none;margin-top:.8em'>
+        <div class='prog-bar' style='height:10px'><div class='prog-fill' id='fw-prog-fill' style='width:0%;transition:width .3s'></div></div>
+        <div id='fw-prog-msg' style='font-size:.82em;color:#aaa;margin-top:.3em'></div>
+      </div>
     </div>
   </div>
 </div>
@@ -1786,6 +1789,17 @@ function _drawTimelineInline(container,rn,acts,children,lay){
 }
 
 // ── Firmware management ──────────────────────────────────────────────────────
+// ── Semver compare: returns -1, 0, or 1 ─────────────────────────────────
+function _cmpVer(a,b){
+  // Compare "5.3.10" vs "5.3.9" correctly (not string compare)
+  if(!a)return b?-1:0; if(!b)return 1;
+  var ap=a.split('.').map(Number),bp=b.split('.').map(Number);
+  for(var i=0;i<Math.max(ap.length,bp.length);i++){
+    var ai=ap[i]||0,bi=bp[i]||0;
+    if(ai<bi)return -1; if(ai>bi)return 1;
+  }
+  return 0;
+}
 // ── OTA update controls on Firmware tab ──────────────────────────────────
 var _otaChecked=null; // cached check result
 function checkOtaUpdates(){
@@ -1796,6 +1810,9 @@ function checkOtaUpdates(){
     api('POST','/api/firmware/download',{board:'esp32'}).catch(function(){return null;}),
     api('POST','/api/firmware/download',{board:'d1mini'}).catch(function(){return null;})
   ]).then(function(){
+    // Refresh USB section — registry was updated by download
+    _fetchGithubFirmware();
+    loadFirmwarePorts();
     el.innerHTML='<p style="color:#888">Refreshing performer status...</p>';
     // Now probe all children for current version via HTTP /status
     return api('POST','/api/children/refresh-all').catch(function(){return null;});
@@ -1922,7 +1939,7 @@ function otaUpdateAll(){
 }
 
 function loadFirmware(){
-  // Auto-check OTA updates when Firmware tab opens
+  // Full firmware tab load — OTA + USB + WiFi
   checkOtaUpdates();
   _fetchGithubFirmware();
   // Load WiFi creds
@@ -1935,14 +1952,16 @@ function loadFirmware(){
       if(st)st.style.color=d.hasPassword?'#4c4':'#c66';
     }
   });
-  // Load ports fast, then async-query each board port for version + wifi
+  loadFirmwarePorts();
+}
+function loadFirmwarePorts(){
+  // Scan USB ports, query each for version + wifi
   ra('GET','/api/firmware/ports',null,function(ports){
     ra('GET','/api/firmware/registry',null,function(reg){
       _fwRegistry=reg&&reg.firmware?reg.firmware:[];
       var el=document.getElementById('fw-ports');
       var sel=document.getElementById('fw-port');
       if(!ports||!ports.length){el.innerHTML='<p style="color:#888">No COM ports detected.</p>';return;}
-      // Render table immediately with spinners for board ports
       sel.innerHTML='';
       var boardPorts=[];
       var h='<table class="tbl" id="fw-tbl"><tr><th>Port</th><th>Board</th><th>VID:PID</th><th>Firmware</th><th>WiFi</th></tr>';
@@ -1958,35 +1977,27 @@ function loadFirmware(){
       });
       el.innerHTML=h+'</table>';
       updateFwImages();
-      // Async query each board port
+      // Async query each board port for version + wifi
       boardPorts.forEach(function(bp){
         ra('POST','/api/firmware/query',{port:bp.port},function(r){
           var fwEl=document.getElementById('fwq-'+bp.idx);
           var wfEl=document.getElementById('wfq-'+bp.idx);
           if(!r||!r.ok){if(fwEl)fwEl.textContent='-';if(wfEl)wfEl.textContent='-';return;}
-          // Firmware version
           var ver=r.fwVersion?'v'+r.fwVersion:'-';
           var latestVer='0.0',updateFwId='';
           var brd=r.board||bp.board;
-          _fwRegistry.forEach(function(f){if(f.board===brd&&f.version>latestVer){latestVer=f.version;updateFwId=f.id;}});
-          if(r.fwVersion&&latestVer>r.fwVersion)ver+=' <button class="btn btn-on" style="padding:.15em .4em;font-size:.72em" onclick="quickFlash(\''+bp.port+'\',\''+brd+'\',\''+updateFwId+'\',this)">\u2191 v'+latestVer+'</button>';
+          _fwRegistry.forEach(function(f){if(f.board===brd&&_cmpVer(f.version,latestVer)>0){latestVer=f.version;updateFwId=f.id;}});
+          if(r.fwVersion&&_cmpVer(latestVer,r.fwVersion)>0)ver+=' <button class="btn btn-on" style="padding:.15em .4em;font-size:.72em" onclick="quickFlash(\''+bp.port+'\',\''+brd+'\',\''+updateFwId+'\',this)">\u2191 v'+latestVer+'</button>';
           if(fwEl)fwEl.innerHTML=ver;
-          // WiFi match
           if(wfEl){
             if(r.wifiMatch===true)wfEl.innerHTML='<span style="color:#4c4">\u2705</span>';
             else if(r.wifiMatch===false)wfEl.innerHTML='<span style="color:#c44">\u26a0</span> <button class="btn btn-on" style="padding:.12em .4em;font-size:.72em" onclick="quickFlash(\''+bp.port+'\',\''+brd+'\',\''+updateFwId+'\',this)">Update WiFi</button>';
             else wfEl.textContent='-';
           }
-          // Update board name if resolved
           if(r.fwBoard){var row=fwEl&&fwEl.closest?fwEl.closest('tr'):null;if(row&&row.cells[1])row.cells[1].textContent=r.fwBoard;}
         });
       });
     });
-  });
-  // Load firmware registry
-  ra('GET','/api/firmware/registry',null,function(d){
-    _fwRegistry=d&&d.firmware?d.firmware:[];
-    updateFwImages();
   });
 }
 
@@ -2018,11 +2029,7 @@ function updateFwImages(){
         // Select GitHub option if it's newer than local
         var localVer='0.0';
         _fwRegistry.forEach(function(f){if(f.board===board)localVer=f.version;});
-        try{
-          var lp=localVer.split('.').map(Number);
-          var gp=_fwGithubRelease.version.split('.').map(Number);
-          if(gp[0]>lp[0]||(gp[0]===lp[0]&&(gp[1]||0)>(lp[1]||0)))sel.value='github:'+board;
-        }catch(e){}
+        if(_cmpVer(_fwGithubRelease.version,localVer)>0)sel.value='github:'+board;
       }
     }
   }
