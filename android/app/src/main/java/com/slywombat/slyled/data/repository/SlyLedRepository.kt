@@ -85,7 +85,7 @@ class SlyLedRepository @Inject constructor(
 
     // Settings
     suspend fun getSettings() = requireApi().getSettings()
-    suspend fun saveSettings(settings: Map<String, Any>) = requireApi().saveSettings(settings)
+    suspend fun saveSettings(settings: Settings) = requireApi().saveSettings(settings)
 
     // Actions
     suspend fun getActions() = requireApi().getActions()

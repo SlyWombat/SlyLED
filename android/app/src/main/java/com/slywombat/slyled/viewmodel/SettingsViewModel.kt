@@ -48,13 +48,13 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             _isSaving.value = true
             try {
-                val body = mapOf<String, Any>(
-                    "name" to name,
-                    "units" to units,
-                    "canvasW" to canvasW,
-                    "canvasH" to canvasH,
-                    "darkMode" to darkMode,
-                    "logging" to logging
+                val body = Settings(
+                    name = name,
+                    units = units,
+                    canvasW = canvasW,
+                    canvasH = canvasH,
+                    darkMode = darkMode,
+                    logging = logging
                 )
                 val resp = repository.saveSettings(body)
                 if (resp.ok) {

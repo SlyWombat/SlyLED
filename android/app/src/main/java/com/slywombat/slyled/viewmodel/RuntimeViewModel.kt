@@ -256,11 +256,10 @@ class RuntimeViewModel @Inject constructor(
     fun saveSettings(brightness: Int, loop: Boolean) {
         viewModelScope.launch {
             try {
-                val body = mapOf<String, Any>(
-                    "globalBrightness" to brightness,
-                    "runnerLoop" to loop
-                )
-                repository.saveSettings(body)
+                repository.saveSettings(Settings(
+                    globalBrightness = brightness,
+                    runnerLoop = loop
+                ))
             } catch (e: Exception) {
                 _error.value = e.message ?: "Failed to save settings"
             }

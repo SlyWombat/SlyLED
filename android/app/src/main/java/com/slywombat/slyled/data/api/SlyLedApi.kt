@@ -46,7 +46,7 @@ interface SlyLedApi {
     suspend fun getSettings(): Settings
 
     @POST("api/settings")
-    suspend fun saveSettings(@Body body: Map<String, @JvmSuppressWildcards Any>): OkResponse
+    suspend fun saveSettings(@Body body: Settings): OkResponse
 
     // Actions
     @GET("api/actions")
