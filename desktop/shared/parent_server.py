@@ -1763,8 +1763,9 @@ def api_fw_download():
 
 @app.get("/api/firmware/binary/<board>")
 def api_fw_binary(board):
-    """Serve a firmware binary for OTA — child downloads from parent over plain HTTP."""
-    file_map = {"esp32": "esp32/main.ino.merged.bin", "d1mini": "d1mini/main.ino.bin"}
+    """Serve a firmware binary for OTA — child downloads from parent over plain HTTP.
+    ESP32 OTA needs app-only binary (main.ino.bin), NOT the merged binary."""
+    file_map = {"esp32": "esp32/main.ino.bin", "d1mini": "d1mini/main.ino.bin"}
     rel_path = file_map.get(board)
     if not rel_path:
         return jsonify(ok=False, err=f"unknown board: {board}"), 404
@@ -1773,7 +1774,14 @@ def api_fw_binary(board):
         # Try downloading from GitHub first
         rel = _fetch_github_release()
         if rel:
-            asset_name = {"esp32": "esp32-firmware-merged.bin", "d1mini": "d1mini-firmware.bin"}.get(board)
+            # OTA needs app-only binary; try esp32-firmware-app.bin first, fallback to merged
+            asset_names = {"esp32": ["esp32-firmware-app.bin", "esp32-firmware-merged.bin"],
+                           "d1mini": ["d1mini-firmware.bin"]}
+            asset_name = None
+            for name in asset_names.get(board, []):
+                if any(a["name"] == name for a in rel.get("assets", [])):
+                    asset_name = name
+                    break
             for a in rel.get("assets", []):
                 if a["name"] == asset_name:
                     try:

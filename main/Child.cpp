@@ -670,19 +670,23 @@ void sendChildConfigPage(WiFiClient& c) {
             "var parts=ver.split('.');var rmaj=parseInt(parts[0])||0;var rmin=parseInt(parts[1])||0;var rpat=parseInt(parts[2])||0;"));
   sendBuf(c,
             "var cmaj=%u;var cmin=%u;var cpat=%u;"
-            "var rver=rmaj*10000+rmin*100+rpat;var cver=cmaj*10000+cmin*100+cpat;"
-            "if(rver>cver){"
+            "var rver=rmaj*10000+rmin*100+rpat;var cver=cmaj*10000+cmin*100+cpat;",
+            (unsigned)APP_MAJOR, (unsigned)APP_MINOR, (unsigned)APP_PATCH);
+  c.flush();
+  c.print(F("if(rver>cver){"
             "st.innerHTML='<b style=\"color:#f60\">v'+ver+' available!</b>';"
             "btn.textContent='Install Update';"
             "btn.disabled=false;"
             "btn.onclick=function(){doOta(d);};"
-            "}else{"
-            "st.textContent='Up to date (v'+cmaj+'.'+cmin+'.'+cpat+')';"
+            "}else{"));
+  c.flush();
+  c.print(F("st.textContent='Up to date (v'+cmaj+'.'+cmin+'.'+cpat+')';"
             "btn.textContent='Check for Updates';btn.disabled=false;}"
-            "}catch(e){st.textContent='Check failed';btn.textContent='Check for Updates';btn.disabled=false;}};"
-            "x.onerror=function(){st.textContent='Cannot reach cloud';btn.textContent='Check for Updates';btn.disabled=false;};"
-            "x.send();}",
-            (unsigned)APP_MAJOR, (unsigned)APP_MINOR, (unsigned)APP_PATCH);
+            "}catch(e){st.textContent='Check failed';btn.textContent='Check for Updates';btn.disabled=false;}};"));
+  c.flush();
+  c.print(F("x.onerror=function(){st.textContent='Cannot reach cloud';btn.textContent='Check for Updates';btn.disabled=false;};"
+            "x.send();}"));
+  c.flush();
   c.print(F("function doOta(rel){"
             "var btn=document.getElementById('upd-btn');"
             "var st=document.getElementById('upd-status');"
@@ -701,10 +705,12 @@ void sendChildConfigPage(WiFiClient& c) {
 #else
   c.print(F(  "}"));
 #endif
+  c.flush();
   c.print(F("if(!url){msg.textContent='No firmware binary found in release';btn.disabled=false;return;}"
             "bar.style.width='20%';msg.textContent='Sending update command...';"
-            "var tag=rel.tag_name||'';var ver=tag.replace('v','');"
-            "var parts=ver.split('.');var maj=parseInt(parts[0])||0;var mn=parseInt(parts[1])||0;var pt=parseInt(parts[2])||0;"
+            "var tag=rel.tag_name||'';var ver=tag.replace('v','');"));
+  c.flush();
+  c.print(F("var parts=ver.split('.');var maj=parseInt(parts[0])||0;var mn=parseInt(parts[1])||0;var pt=parseInt(parts[2])||0;"
             "var x=new XMLHttpRequest();"
             "x.open('POST','/ota',true);"
             "x.setRequestHeader('Content-Type','application/json');"
