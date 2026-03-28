@@ -9,7 +9,8 @@ Usage:
 import sys, os, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 
-from parent_server import app, _children, _settings
+import parent_server
+from parent_server import app, _children, _settings, _github_release_cache
 
 results = []
 
@@ -480,6 +481,115 @@ def run():
             r = c.post(f'/api/firmware/ota/{test_cid}')
             ok('OTA offline child → 400', r.status_code == 400)
             c.delete(f'/api/children/{test_cid}')
+
+        # ── OTA asset map + proxy URL tests (mocked release) ────────
+        # Seed the GitHub release cache so these tests don't need internet
+        import time as _time
+        _github_release_cache["data"] = {
+            "version": "5.4.0",
+            "assets": [
+                {"name": "esp32-firmware-app.bin", "url": "https://example.com/esp32-app.bin"},
+                {"name": "esp32-firmware-merged.bin", "url": "https://example.com/esp32-merged.bin"},
+                {"name": "d1mini-firmware.bin", "url": "https://example.com/d1mini.bin"},
+            ]
+        }
+        _github_release_cache["ts"] = _time.time()
+
+        # Add children with known firmware version and boardType for check tests
+        # NOTE: use parent_server._children (not the imported _children) because
+        # child DELETE rebinds the module-level list, making the import stale.
+        r = c.post('/api/children', json={'ip': '10.99.0.50'})
+        ota_cid = r.get_json().get('id')
+        # Patch the child inline to simulate an online ESP32
+        for ch in parent_server._children:
+            if ch['id'] == ota_cid:
+                ch['fwVersion'] = '5.3.9'
+                ch['boardType'] = 'ESP32'
+                ch['status'] = 1
+                break
+
+        # /api/firmware/check should prefer app-only binary for ESP32
+        r = c.get('/api/firmware/check')
+        d = r.get_json()
+        esp_child = next((x for x in d['children'] if x['id'] == ota_cid), None)
+        ok('OTA check: ESP32 needs update', esp_child and esp_child['needsUpdate'])
+        ok('OTA check: ESP32 downloadUrl is app-only',
+           esp_child and 'esp32-app.bin' in esp_child.get('downloadUrl', ''))
+        ok('OTA check: ESP32 downloadUrl is NOT merged',
+           esp_child and 'merged' not in esp_child.get('downloadUrl', ''))
+
+        # Add a D1 Mini child
+        r = c.post('/api/children', json={'ip': '10.99.0.51'})
+        d1_cid = r.get_json().get('id')
+        for ch in parent_server._children:
+            if ch['id'] == d1_cid:
+                ch['fwVersion'] = '5.3.9'
+                ch['boardType'] = 'D1 Mini'
+                ch['status'] = 1
+                break
+
+        r = c.get('/api/firmware/check')
+        d = r.get_json()
+        d1_child = next((x for x in d['children'] if x['id'] == d1_cid), None)
+        ok('OTA check: D1 Mini downloadUrl correct',
+           d1_child and 'd1mini.bin' in d1_child.get('downloadUrl', ''))
+
+        # Test that when only merged binary is available (no app), it falls back
+        _github_release_cache["data"]["assets"] = [
+            {"name": "esp32-firmware-merged.bin", "url": "https://example.com/esp32-merged.bin"},
+            {"name": "d1mini-firmware.bin", "url": "https://example.com/d1mini.bin"},
+        ]
+        _github_release_cache["ts"] = _time.time()
+        r = c.get('/api/firmware/check')
+        d = r.get_json()
+        esp_child2 = next((x for x in d['children'] if x['id'] == ota_cid), None)
+        ok('OTA check: ESP32 falls back to merged when no app-only',
+           esp_child2 and 'esp32-merged.bin' in esp_child2.get('downloadUrl', ''))
+
+        # Restore full asset list for OTA trigger test
+        _github_release_cache["data"]["assets"] = [
+            {"name": "esp32-firmware-app.bin", "url": "https://example.com/esp32-app.bin"},
+            {"name": "esp32-firmware-merged.bin", "url": "https://example.com/esp32-merged.bin"},
+            {"name": "d1mini-firmware.bin", "url": "https://example.com/d1mini.bin"},
+        ]
+        _github_release_cache["ts"] = _time.time()
+
+        # /api/firmware/ota — requires WiFi credentials
+        # Clear WiFi first to test the guard
+        c.post('/api/wifi', json={'ssid': '', 'password': ''})
+        r = c.post(f'/api/firmware/ota/{ota_cid}')
+        ok('OTA trigger without WiFi → 400',
+           r.status_code == 400 and 'WiFi' in r.get_json().get('err', ''))
+
+        # Set WiFi credentials so OTA can proceed (trigger will fail at HTTP to child, which is OK)
+        c.post('/api/wifi', json={'ssid': 'TestNet', 'password': 'pass123'})
+        r = c.post(f'/api/firmware/ota/{ota_cid}')
+        d = r.get_json()
+        # The trigger may succeed (returns ok:True) or fail connecting to fake IP — either is acceptable
+        # What matters is it doesn't crash and board detection works
+        ok('OTA trigger does not crash', r.status_code in (200, 500))
+        if r.status_code == 200:
+            ok('OTA trigger returns board=esp32', d.get('board') == 'esp32')
+            ok('OTA trigger returns version', d.get('version') == '5.4.0')
+
+        # /api/firmware/binary/<board> — serves binary or tries to download
+        r = c.get('/api/firmware/binary/unknown')
+        ok('OTA binary unknown board → 404', r.status_code == 404)
+
+        # /api/firmware/registry — check versions updated
+        r = c.get('/api/firmware/registry')
+        reg = r.get_json()
+        esp_fw = next((f for f in reg.get('firmware', []) if f['id'] == 'child-led-esp32'), None)
+        ok('Registry ESP32 version is 5.3.9', esp_fw and esp_fw['version'] == '5.3.9')
+        d1_fw = next((f for f in reg.get('firmware', []) if f['id'] == 'child-led-d1mini'), None)
+        ok('Registry D1 Mini version is 5.3.9', d1_fw and d1_fw['version'] == '5.3.9')
+
+        # Clean up OTA test children
+        c.delete(f'/api/children/{ota_cid}')
+        c.delete(f'/api/children/{d1_cid}')
+        # Clear release cache
+        _github_release_cache["data"] = None
+        _github_release_cache["ts"] = 0
 
         # ── Shutdown (don't actually call it) ───────────────────────
         # r = c.post('/api/shutdown')  # skip — would kill process

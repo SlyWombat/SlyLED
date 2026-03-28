@@ -1727,26 +1727,38 @@ def api_fw_download():
     rel = _fetch_github_release()
     if not rel:
         return jsonify(ok=False, err="Could not fetch release info"), 502
-    asset_map = {"esp32": "esp32-firmware-merged.bin", "d1mini": "d1mini-firmware.bin"}
-    target_map = {"esp32": "esp32/main.ino.merged.bin", "d1mini": "d1mini/main.ino.bin"}
-    asset_name = asset_map[board]
-    download_url = None
-    for a in rel.get("assets", []):
-        if a["name"] == asset_name:
-            download_url = a["url"]
-            break
-    if not download_url:
-        return jsonify(ok=False, err=f"No {asset_name} in release"), 404
-    # Download to firmware directory
+    # USB flash needs merged binary; OTA needs app-only. Download both for ESP32.
+    # For D1 Mini there's only one binary that works for both.
+    downloads = {
+        "esp32": [
+            ("esp32-firmware-merged.bin", "esp32/main.ino.merged.bin"),
+            ("esp32-firmware-app.bin",    "esp32/main.ino.bin"),
+        ],
+        "d1mini": [
+            ("d1mini-firmware.bin", "d1mini/main.ino.bin"),
+        ],
+    }
+    assets_available = {a["name"]: a["url"] for a in rel.get("assets", [])}
+    pairs = downloads.get(board, [])
+    downloaded = 0
     import urllib.request as _ur
     try:
-        log.info("Downloading %s from %s", asset_name, download_url)
-        req = _ur.Request(download_url, headers={"User-Agent": "SlyLED-Parent"})
-        resp = _ur.urlopen(req, timeout=60)
-        data = resp.read()
-        dest = _FW_DIR / target_map[board]
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(data)
+        for asset_name, target_path in pairs:
+            url = assets_available.get(asset_name)
+            if not url:
+                log.warning("Asset %s not in release, skipping", asset_name)
+                continue
+            log.info("Downloading %s from %s", asset_name, url)
+            req = _ur.Request(url, headers={"User-Agent": "SlyLED-Parent"})
+            resp = _ur.urlopen(req, timeout=60)
+            data = resp.read()
+            dest = _FW_DIR / target_path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+            log.info("Downloaded %s (%d bytes) → %s", asset_name, len(data), dest)
+            downloaded += 1
+        if downloaded == 0:
+            return jsonify(ok=False, err=f"No firmware assets for {board} in release"), 404
         # Update local registry version
         reg_path = _FW_DIR / "registry.json"
         if reg_path.exists():
@@ -1755,8 +1767,7 @@ def api_fw_download():
                 if fw.get("board") == board and "child" in fw.get("id", ""):
                     fw["version"] = rel["version"]
             reg_path.write_text(json.dumps(reg, indent=2))
-        log.info("Downloaded %s (%d bytes) → %s", asset_name, len(data), dest)
-        return jsonify(ok=True, version=rel["version"], size=len(data))
+        return jsonify(ok=True, version=rel["version"], downloaded=downloaded)
     except Exception as e:
         log.error("Download failed: %s", e)
         return jsonify(ok=False, err=str(e)), 502
@@ -1942,14 +1953,17 @@ def api_firmware_check():
             board = "giga"
         else:
             board = "esp32"  # default fallback
-        asset_map = {"esp32": "esp32-firmware-merged.bin", "d1mini": "d1mini-firmware.bin"}
-        asset_name = asset_map.get(board)
+        # OTA needs app-only binary for ESP32; try app first, fallback to merged
+        asset_prefs = {"esp32": ["esp32-firmware-app.bin", "esp32-firmware-merged.bin"],
+                       "d1mini": ["d1mini-firmware.bin"]}
         download_url = ""
-        if asset_name:
+        for name in asset_prefs.get(board, []):
             for a in rel.get("assets", []):
-                if a["name"] == asset_name:
+                if a["name"] == name:
                     download_url = a["url"]
                     break
+            if download_url:
+                break
         results.append({
             "id": c["id"], "hostname": c.get("hostname"), "name": c.get("name", ""),
             "ip": c.get("ip", ""),
@@ -1996,12 +2010,16 @@ def api_firmware_ota(cid):
     # Determine board type from stored boardType
     bt = child.get("boardType", "")
     board = "esp32" if bt in ("ESP32", "esp32") else "d1mini" if bt in ("D1 Mini", "d1mini") else "esp32"
-    asset_map = {"esp32": "esp32-firmware-merged.bin", "d1mini": "d1mini-firmware.bin"}
-    asset_name = asset_map.get(board)
+    # OTA needs app-only binary for ESP32; try app first, fallback to merged
+    asset_prefs = {"esp32": ["esp32-firmware-app.bin", "esp32-firmware-merged.bin"],
+                   "d1mini": ["d1mini-firmware.bin"]}
     download_url = ""
-    for a in rel.get("assets", []):
-        if a["name"] == asset_name:
-            download_url = a["url"]
+    for name in asset_prefs.get(board, []):
+        for a in rel.get("assets", []):
+            if a["name"] == name:
+                download_url = a["url"]
+                break
+        if download_url:
             break
     if not download_url:
         return jsonify(ok=False, err=f"no firmware binary for {board}"), 404
@@ -2025,7 +2043,9 @@ def api_firmware_ota(cid):
         s.close()
     except Exception:
         parent_ip = "127.0.0.1"
-    proxy_url = f"http://{parent_ip}:8080/api/firmware/binary/{board}"
+    # Use the actual Flask port from the incoming request (not hardcoded 8080)
+    parent_port = request.host.split(":")[-1] if ":" in request.host else "8080"
+    proxy_url = f"http://{parent_ip}:{parent_port}/api/firmware/binary/{board}"
     log.info("OTA: triggering update on %s (%s) to v%s via proxy %s", ip, child.get("hostname"), latest, proxy_url)
     try:
         import urllib.request as _ur
