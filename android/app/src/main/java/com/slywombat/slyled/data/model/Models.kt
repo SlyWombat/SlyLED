@@ -49,7 +49,7 @@ enum class OnlineStatus {
 
 @Serializable
 data class Child(
-    val id: Int,
+    val id: Int = -1,
     val ip: String = "",
     val hostname: String = "",
     val name: String = "",

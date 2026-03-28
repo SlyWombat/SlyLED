@@ -461,7 +461,23 @@ private fun ChildDetailsDialog(child: Child, onDismiss: () -> Unit) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (child.name.isNotEmpty()) DetailRow("Name", child.name)
                 if (child.desc.isNotEmpty()) DetailRow("Description", child.desc)
-                DetailRow("IP", child.ip)
+                // Clickable IP to open child config in browser
+                val context = LocalContext.current
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("IP", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        child.ip,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        textDecoration = TextDecoration.Underline,
+                        modifier = Modifier.clickable {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("http://${child.ip}")))
+                        }
+                    )
+                }
                 DetailRow("Type", child.type)
                 if (child.fwVersion != null) DetailRow("Firmware", "v${child.fwVersion}")
                 DetailRow("Strings", "${child.sc}")
