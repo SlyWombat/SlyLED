@@ -103,7 +103,8 @@ struct __attribute__((packed)) PongPayload {
   PongString strings[MAX_STR_PER_CHILD];
   uint8_t    fwMajor;               // firmware version (added v4.0)
   uint8_t    fwMinor;
-};  // 10+16+32+1+(9×8)+2=133 bytes; total packet = 8+133 = 141
+  uint8_t    fwPatch;              // firmware patch version (added v5.3.6)
+};  // 10+16+32+1+(9×8)+3=134 bytes; total packet = 8+134 = 142
 
 struct __attribute__((packed)) StatusRespPayload {
   uint8_t  activeAction;

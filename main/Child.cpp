@@ -182,6 +182,7 @@ void sendPong(IPAddress dest) {
   }
   pong.fwMajor = APP_MAJOR;
   pong.fwMinor = APP_MINOR;
+  pong.fwPatch = APP_PATCH;
   memcpy(udpBuf,               &hdr,  sizeof(hdr));
   memcpy(udpBuf + sizeof(hdr), &pong, sizeof(pong));
   cmdUDP.beginPacket(dest, UDP_PORT);

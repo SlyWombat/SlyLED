@@ -221,9 +221,11 @@ def _parse_pong(data, src_ip):
                          "cdir": cd, "cmm": cm, "sdir": sd,
                          "folded": bool(cd & 0x01)})
         off += 9
-    # Firmware version (added in v4.0 — 141-byte PONG)
+    # Firmware version: v4.0 added fwMajor+fwMinor (141 bytes), v5.3.6+ adds fwPatch (142 bytes)
     fw_ver = None
-    if len(data) >= 141:
+    if len(data) >= 142:
+        fw_ver = f"{p[131]}.{p[132]}.{p[133]}"
+    elif len(data) >= 141:
         fw_ver = f"{p[131]}.{p[132]}"
     return {
         "hostname": hn, "name": nm or hn, "desc": ds, "sc": sc,
@@ -264,9 +266,13 @@ def _ping(child, retries=2):
         resp = _send_recv(child["ip"], pkt)
         info = _parse_pong(resp, child["ip"])
         if info:
+            # Don't let PONG's 2-digit fwVersion overwrite a more detailed 3-digit version
+            saved_fw = child.get("fwVersion", "")
             child.update({k: v for k, v in info.items() if k != "id"})
-            if not child.get("boardType"):
-                _probe_board_type(child)
+            if saved_fw and saved_fw.count(".") >= 2 and info.get("fwVersion", "").count(".") < 2:
+                child["fwVersion"] = saved_fw
+            # Always probe for full telemetry (version, board type, RSSI, etc.)
+            _probe_board_type(child)
             return True
     child["status"] = 0
     return False
@@ -443,9 +449,12 @@ def _udp_listener():
                 # Update known children
                 for c in _children:
                     if c.get("ip") == ip or c.get("hostname") == info.get("hostname"):
+                        saved_fw = c.get("fwVersion", "")
                         c.update({k: v for k, v in info.items() if k != "id"})
-                        if not c.get("boardType"):
-                            _probe_board_type(c)
+                        # Preserve 3-digit version over PONG's 2-digit
+                        if saved_fw and saved_fw.count(".") >= 2 and info.get("fwVersion", "").count(".") < 2:
+                            c["fwVersion"] = saved_fw
+                        _probe_board_type(c)
                         break
         else:
             log.debug("UDP cmd=0x%02X from %s (%d bytes)", cmd, ip, len(data))
