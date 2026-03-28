@@ -82,3 +82,4 @@ Makefile
 Makefile.*
 moc_*.cpp
 ui_*.h
+main/arduino_secrets.h.bak
