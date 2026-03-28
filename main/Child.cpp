@@ -679,7 +679,7 @@ void sendChildConfigPage(WiFiClient& c) {
             "st.textContent='Up to date (v'+cmaj+'.'+cmin+'.'+cpat+')';"
             "btn.textContent='Check for Updates';btn.disabled=false;}"
             "}catch(e){st.textContent='Check failed';btn.textContent='Check for Updates';btn.disabled=false;}};"
-            "x.onerror=function(){st.textContent='Cannot reach GitHub';btn.textContent='Check for Updates';btn.disabled=false;};"
+            "x.onerror=function(){st.textContent='Cannot reach cloud';btn.textContent='Check for Updates';btn.disabled=false;};"
             "x.send();}",
             (unsigned)APP_MAJOR, (unsigned)APP_MINOR, (unsigned)APP_PATCH);
   c.print(F("function doOta(rel){"

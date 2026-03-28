@@ -1790,7 +1790,7 @@ function _drawTimelineInline(container,rn,acts,children,lay){
 var _otaChecked=null; // cached check result
 function checkOtaUpdates(){
   var el=document.getElementById('ota-children');
-  el.innerHTML='<p style="color:#888">Checking GitHub releases and downloading latest firmware...</p>';
+  el.innerHTML='<p style="color:#888">Checking cloud for latest firmware...</p>';
   // Force-download latest firmware from GitHub before checking
   Promise.all([
     api('POST','/api/firmware/download',{board:'esp32'}).catch(function(){return null;}),
@@ -2007,7 +2007,7 @@ function updateFwImages(){
       if(found){
         var o=document.createElement('option');
         o.value='github:'+board;
-        o.text='Latest v'+_fwGithubRelease.version+' (download from GitHub)';
+        o.text='Latest v'+_fwGithubRelease.version+' (download from cloud)';
         sel.add(o);
         // Select GitHub option if it's newer than local
         var localVer='0.0';
@@ -2061,7 +2061,7 @@ function doFlash(btn){
   document.getElementById('fw-progress').style.display='block';
   // If GitHub firmware selected, download first then flash
   if(fwId.indexOf('github:')===0){
-    document.getElementById('fw-prog-msg').textContent='Downloading latest from GitHub...';
+    document.getElementById('fw-prog-msg').textContent='Downloading latest from cloud...';
     document.getElementById('fw-prog-fill').style.width='10%';
     api('POST','/api/firmware/download',{board:board}).then(function(r){
       document.getElementById('fw-prog-msg').textContent='Downloaded v'+r.version+' — flashing...';
