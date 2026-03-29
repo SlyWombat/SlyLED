@@ -1031,8 +1031,18 @@ def api_timeline_frame(tid):
         return jsonify(err="Not found"), 404
     t = float(request.args.get("t", 0))
 
+    # Expand allPerformers tracks
+    raw_tracks = tl.get("tracks", [])
+    tracks = []
+    for track in raw_tracks:
+        if track.get("allPerformers"):
+            for f in _fixtures:
+                tracks.append({"fixtureId": f["id"], "clips": list(track.get("clips", []))})
+        else:
+            tracks.append(track)
+
     result = {}  # fixture_id → [r,g,b] array
-    for track in tl.get("tracks", []):
+    for track in tracks:
         fix_id = track.get("fixtureId")
         fixture = next((f for f in _fixtures if f["id"] == fix_id), None)
         if not fixture:

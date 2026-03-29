@@ -95,12 +95,22 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
     fx_map = {f["id"]: f for f in spatial_fx}
     act_map = {a["id"]: a for a in (actions or [])}
 
+    # Pre-process: expand "allPerformers" tracks into per-fixture tracks
+    raw_tracks = timeline.get("tracks", [])
+    tracks = []
+    for track in raw_tracks:
+        if track.get("allPerformers"):
+            # Duplicate this track's clips for every fixture
+            for f in fixtures:
+                tracks.append({"fixtureId": f["id"], "clips": list(track.get("clips", []))})
+        else:
+            tracks.append(track)
+
     # Per-fixture resolved data
     fixture_data = {}  # fix_id → {pixels: [[x,y,z],...], pixelCount: N}
-    tracks = timeline.get("tracks", [])
 
     if progress:
-        progress.total_fixtures = len(tracks)
+        progress.total_fixtures = len(set(t.get("fixtureId") for t in tracks))
 
     for track in tracks:
         fix_id = track.get("fixtureId")

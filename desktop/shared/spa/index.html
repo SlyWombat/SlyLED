@@ -1738,9 +1738,8 @@ function renderTimeline(){
   var tracks=_curTl.tracks||[];
   var th='';
   tracks.forEach(function(trk,ti){
-    var fixName='Track '+(ti+1);
-    var fix=null;_fixtures.forEach(function(f){if(f.id===trk.fixtureId)fix=f;});
-    if(fix)fixName=fix.name||fixName;
+    var fixName=trk.allPerformers?'\u2605 Stage (All)':'Track '+(ti+1);
+    if(!trk.allPerformers){var fix=null;_fixtures.forEach(function(f){if(f.id===trk.fixtureId)fix=f;});if(fix)fixName=fix.name||fixName;}
     th+='<div style="display:flex;height:40px;border-bottom:1px solid #1e293b">';
     th+='<div style="width:60px;flex-shrink:0;padding:2px 4px;font-size:.65em;color:#94a3b8;overflow:hidden;border-right:1px solid #1e293b;display:flex;flex-direction:column;justify-content:center"><span style="white-space:nowrap">'+escapeHtml(fixName)+'</span><span style="cursor:pointer;color:#3b82f6;font-size:.9em" onclick="tlAddClipToTrack('+ti+')" title="Add clip">+ clip</span></div>';
     th+='<div style="flex:1;position:relative;min-width:'+(trackW-60)+'px" id="tl-tr-'+ti+'">';
@@ -1767,10 +1766,9 @@ function renderTimeline(){
 function tlAddTrack(){
   if(!_curTl)return;
   if(!_curTl.tracks)_curTl.tracks=[];
-  // Pick fixture
-  var opts='';_fixtures.forEach(function(f){opts+='<option value="'+f.id+'">'+escapeHtml(f.name||('Fixture '+f.id))+'</option>';});
-  if(!opts){alert('No fixtures defined. Add performers in Setup and fixtures will be auto-created.');return;}
-  var h='<label>Fixture</label><select id="trk-fix">'+opts+'</select>';
+  var opts='<option value="all">All Performers (Stage)</option>';
+  _fixtures.forEach(function(f){opts+='<option value="'+f.id+'">'+escapeHtml(f.name||('Fixture '+f.id))+'</option>';});
+  var h='<label>Target</label><select id="trk-fix">'+opts+'</select>';
   h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="tlAddTrackConfirm()">Add</button></div>';
   document.getElementById('modal-title').textContent='Add Track';
   document.getElementById('modal-body').innerHTML=h;
@@ -1778,8 +1776,11 @@ function tlAddTrack(){
 }
 
 function tlAddTrackConfirm(){
-  var fixId=parseInt(document.getElementById('trk-fix').value);
-  _curTl.tracks.push({fixtureId:fixId,clips:[]});
+  var val=document.getElementById('trk-fix').value;
+  var track={clips:[]};
+  if(val==='all'){track.allPerformers=true;}
+  else{track.fixtureId=parseInt(val);}
+  _curTl.tracks.push(track);
   closeModal();
   ra('PUT','/api/timelines/'+_curTl.id,_curTl,function(){renderTimeline();});
 }
