@@ -52,10 +52,10 @@ class ApiIntegrationTest {
 
     @Test
     fun `GET status returns parent info`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"role":"parent","hostname":"WIN-PC","version":"5.3.4"}"""))
+        server.enqueue(MockResponse().setBody("""{"role":"parent","hostname":"WIN-PC","version":"6.0.0"}"""))
         val status = api.getStatus()
         assertEquals("parent", status.role)
-        assertEquals("5.3.4", status.version)
+        assertEquals("6.0.0", status.version)
         assertEquals("/status", server.takeRequest().path)
     }
 
@@ -64,7 +64,7 @@ class ApiIntegrationTest {
     @Test
     fun `GET children returns list`() = runBlocking {
         server.enqueue(MockResponse().setBody("""[
-            {"id":0,"ip":"192.168.10.219","hostname":"SLYC-1152","name":"Room1","sc":2,"strings":[],"status":1,"type":"slyled","fwVersion":"5.3.2"},
+            {"id":0,"ip":"192.168.10.219","hostname":"SLYC-1152","name":"Room1","sc":2,"strings":[],"status":1,"type":"slyled","fwVersion":"6.0.0"},
             {"id":1,"ip":"192.168.10.223","hostname":"SLYC-6992","name":"Room2","sc":1,"strings":[],"status":0,"type":"slyled"}
         ]"""))
         val children = api.getChildren()
@@ -254,7 +254,7 @@ class ApiIntegrationTest {
     fun `repository connect and disconnect`() = runBlocking {
         val host = server.hostName
         val port = server.port
-        server.enqueue(MockResponse().setBody("""{"role":"parent","hostname":"TEST","version":"5.3.4"}"""))
+        server.enqueue(MockResponse().setBody("""{"role":"parent","hostname":"TEST","version":"6.0.0"}"""))
 
         assertFalse(repository.isConnected)
         repository.connect(host, port)

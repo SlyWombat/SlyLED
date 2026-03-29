@@ -1,4 +1,4 @@
-# LED Action Types — v5.3
+# LED Action Types — v6.0
 
 SlyLED supports 14 action types, all implemented in `main/ChildLED.cpp` with per-type render functions. Actions are dispatched from the Orchestrator via UDP `CMD_ACTION` (immediate) or `CMD_LOAD_STEP` (runner steps).
 

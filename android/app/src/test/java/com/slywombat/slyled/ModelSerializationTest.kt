@@ -10,7 +10,7 @@ class ModelSerializationTest {
 
     @Test
     fun `deserialize Child with all fields`() {
-        val input = """{"id":0,"ip":"192.168.10.219","hostname":"SLYC-1152","name":"My LED","desc":"Living room","sc":2,"strings":[{"leds":30,"mm":500,"type":0,"cdir":0,"cmm":0,"sdir":0,"folded":false}],"status":1,"seen":1711555200,"type":"slyled","fwVersion":"5.3.2","boardType":"ESP32"}"""
+        val input = """{"id":0,"ip":"192.168.10.219","hostname":"SLYC-1152","name":"My LED","desc":"Living room","sc":2,"strings":[{"leds":30,"mm":500,"type":0,"cdir":0,"cmm":0,"sdir":0,"folded":false}],"status":1,"seen":1711555200,"type":"slyled","fwVersion":"6.0.0","boardType":"ESP32"}"""
         val child = json.decodeFromString<Child>(input)
         assertEquals(0, child.id)
         assertEquals("SLYC-1152", child.hostname)
@@ -18,7 +18,7 @@ class ModelSerializationTest {
         assertEquals(2, child.sc)
         assertEquals(1, child.status)
         assertEquals(OnlineStatus.ONLINE, child.onlineStatus)
-        assertEquals("5.3.2", child.fwVersion)
+        assertEquals("6.0.0", child.fwVersion)
         assertEquals(1, child.strings.size)
         assertEquals(30, child.strings[0].leds)
     }
@@ -144,10 +144,10 @@ class ModelSerializationTest {
 
     @Test
     fun `deserialize StatusResponse`() {
-        val input = """{"role":"parent","hostname":"WIN-PC","version":"5.3.4"}"""
+        val input = """{"role":"parent","hostname":"WIN-PC","version":"6.0.0"}"""
         val status = json.decodeFromString<StatusResponse>(input)
         assertEquals("parent", status.role)
-        assertEquals("5.3.4", status.version)
+        assertEquals("6.0.0", status.version)
     }
 
     @Test

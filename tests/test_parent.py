@@ -486,7 +486,7 @@ def run():
         # Seed the GitHub release cache so these tests don't need internet
         import time as _time
         _github_release_cache["data"] = {
-            "version": "5.4.0",
+            "version": "6.1.0",
             "assets": [
                 {"name": "esp32-firmware-app.bin", "url": "https://example.com/esp32-app.bin"},
                 {"name": "esp32-firmware-merged.bin", "url": "https://example.com/esp32-merged.bin"},
@@ -513,7 +513,7 @@ def run():
         # Patch the child inline to simulate an online ESP32
         for ch in parent_server._children:
             if ch['id'] == ota_cid:
-                ch['fwVersion'] = '5.3.9'
+                ch['fwVersion'] = '6.0.0'
                 ch['boardType'] = 'ESP32'
                 ch['status'] = 1
                 break
@@ -533,7 +533,7 @@ def run():
         d1_cid = r.get_json().get('id')
         for ch in parent_server._children:
             if ch['id'] == d1_cid:
-                ch['fwVersion'] = '5.3.9'
+                ch['fwVersion'] = '6.0.0'
                 ch['boardType'] = 'D1 Mini'
                 ch['status'] = 1
                 break
@@ -580,7 +580,7 @@ def run():
         ok('OTA trigger does not crash', r.status_code in (200, 500))
         if r.status_code == 200:
             ok('OTA trigger returns board=esp32', d.get('board') == 'esp32')
-            ok('OTA trigger returns version', d.get('version') == '5.4.0')
+            ok('OTA trigger returns version', d.get('version') == '6.1.0')
 
         # /api/firmware/binary/<board> — serves binary or tries to download
         r = c.get('/api/firmware/binary/unknown')
@@ -590,9 +590,9 @@ def run():
         r = c.get('/api/firmware/registry')
         reg = r.get_json()
         esp_fw = next((f for f in reg.get('firmware', []) if f['id'] == 'child-led-esp32'), None)
-        ok('Registry ESP32 version is 5.3.10', esp_fw and esp_fw['version'] == '5.3.10')
+        ok('Registry ESP32 version is 5.3.10', esp_fw and esp_fw['version'] == '6.0.0')
         d1_fw = next((f for f in reg.get('firmware', []) if f['id'] == 'child-led-d1mini'), None)
-        ok('Registry D1 Mini version is 5.3.10', d1_fw and d1_fw['version'] == '5.3.10')
+        ok('Registry D1 Mini version is 5.3.10', d1_fw and d1_fw['version'] == '6.0.0')
 
         # Clean up OTA test children
         c.delete(f'/api/children/{ota_cid}')

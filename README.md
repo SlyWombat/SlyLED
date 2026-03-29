@@ -2,7 +2,7 @@
 
 Multi-board LED controller with a parent/child architecture. The **Windows Parent** serves a browser UI, coordinates timing, and dispatches commands; **child boards** (ESP32 / D1 Mini) own the physical LED strips and execute actions locally in NTP-synchronized time.
 
-**Current version: v4.0**
+**Current version: v6.0**
 
 ## Hardware
 

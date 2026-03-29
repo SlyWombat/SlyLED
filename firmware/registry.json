@@ -6,7 +6,7 @@
       "description": "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
       "board": "esp32",
       "fqbn": "esp32:esp32:esp32",
-      "version": "5.3.10",
+      "version": "6.0.0",
       "file": "esp32/main.ino.merged.bin",
       "flashMethod": "esptool",
       "buildDefines": [
@@ -19,7 +19,7 @@
       "description": "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
       "board": "d1mini",
       "fqbn": "esp8266:esp8266:d1_mini",
-      "version": "5.3.10",
+      "version": "6.0.0",
       "file": "d1mini/main.ino.bin",
       "flashMethod": "esptool",
       "buildDefines": [
@@ -32,7 +32,7 @@
       "description": "Onboard RGB LED performer \u2014 1 pixel, all 14 effects",
       "board": "giga",
       "fqbn": "arduino:mbed_giga:giga",
-      "version": "4.0",
+      "version": "6.0.0",
       "file": "giga/child-led.bin",
       "flashMethod": "dfu",
       "buildDefines": [
@@ -46,7 +46,7 @@
       "description": "Minimal runtime parent for Giga R1 WiFi",
       "board": "giga",
       "fqbn": "arduino:mbed_giga:giga",
-      "version": "4.0",
+      "version": "6.0.0",
       "file": "giga/parent.bin",
       "flashMethod": "dfu",
       "buildDefines": [
