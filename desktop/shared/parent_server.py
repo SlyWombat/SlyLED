@@ -2753,6 +2753,9 @@ def api_firmware_check():
         try:
             cur_parts = [int(x) for x in fw.split(".")]
             lat_parts = [int(x) for x in latest.split(".")]
+            # Pad to 3 parts for consistent comparison (7.0 → 7.0.0)
+            while len(cur_parts) < 3: cur_parts.append(0)
+            while len(lat_parts) < 3: lat_parts.append(0)
             needs_update = lat_parts > cur_parts
         except (ValueError, IndexError):
             needs_update = fw != latest
