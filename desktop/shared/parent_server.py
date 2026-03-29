@@ -57,7 +57,7 @@ def _apply_logging(enabled):
 
 # ── Version ───────────────────────────────────────────────────────────────────
 
-VERSION = "5.3.9"
+VERSION = "5.3.10"
 
 # ── UDP protocol ──────────────────────────────────────────────────────────────
 
@@ -110,6 +110,9 @@ def _save(name, obj):
 # ── In-memory state ───────────────────────────────────────────────────────────
 
 _children = _load("children", [])
+# Reset all children to offline on startup — ping sweep will restore responsive ones
+for _c in _children:
+    _c["status"] = 0
 _settings = _load("settings", {
     "name": "SlyLED", "units": 0, "canvasW": 10000, "canvasH": 5000,
     "darkMode": 1, "runnerRunning": False, "activeRunner": -1, "runnerElapsed": 0,
