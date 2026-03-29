@@ -1051,6 +1051,15 @@ def api_timeline_frame(tid):
             cs = clip.get("startS", 0)
             cd = clip.get("durationS", 1)
             if cs <= t < cs + cd:
+                # Handle classic action clips — fill all pixels with action color
+                aid = clip.get("actionId")
+                if aid is not None:
+                    act = next((a for a in _actions if a["id"] == aid), None)
+                    if act:
+                        col = [act.get("r", 0), act.get("g", 0), act.get("b", 0)]
+                        layers.append([col] * len(pixels))
+                        modes.append("replace")
+                    continue
                 # Get the spatial effect
                 eid = clip.get("effectId")
                 fx = next((f for f in _spatial_fx if f["id"] == eid), None)
@@ -1110,6 +1119,7 @@ def api_timeline_bake(tid):
                 evaluate_fn=evaluate_spatial_effect,
                 blend_fn=blend_pixel_layers,
                 progress=_bake_progress,
+                actions=_actions,
             )
             # Store result (strip raw frame data to save memory, keep segments + LSQ)
             _bake_result[tid] = {

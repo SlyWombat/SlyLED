@@ -1748,8 +1748,12 @@ function renderTimeline(){
     (trk.clips||[]).forEach(function(clip,ci){
       var lx=clip.startS*_tlPxPerSec;
       var w=clip.durationS*_tlPxPerSec;
-      var fxn='';var fxcol='#3b82f6';
-      _spatialFx.forEach(function(f){if(f.id===clip.effectId){fxn=f.name;fxcol=rgb2h(f.r||100,f.g||100,f.b||255);}});
+      var fxn='',fxcol='#3b82f6';
+      if(clip.actionId!=null){
+        _acts.forEach(function(a){if(a.id===clip.actionId){fxn='\u25b6 '+a.name;fxcol=rgb2h(a.r||100,a.g||100,a.b||255);}});
+      } else {
+        _spatialFx.forEach(function(f){if(f.id===clip.effectId){fxn=f.name;fxcol=rgb2h(f.r||100,f.g||100,f.b||255);}});
+      }
       th+='<div style="position:absolute;left:'+lx+'px;top:4px;width:'+Math.max(w,8)+'px;height:28px;background:'+fxcol+'33;border:1px solid '+fxcol+';border-radius:3px;cursor:pointer;overflow:hidden;font-size:.65em;color:#e2e8f0;padding:2px 4px;white-space:nowrap" ';
       th+='onclick="editClip('+ti+','+ci+')" title="'+escapeHtml(fxn)+' ('+clip.durationS+'s)">';
       th+=escapeHtml(fxn||'?')+'</div>';
@@ -1780,12 +1784,36 @@ function tlAddTrackConfirm(){
   ra('PUT','/api/timelines/'+_curTl.id,_curTl,function(){renderTimeline();});
 }
 
+function _clipPickerOpts(selectedVal){
+  // Combined dropdown: spatial effects + classic actions
+  // Values: "sfx:ID" for spatial, "act:ID" for classic action
+  var h='<optgroup label="Spatial Effects">';
+  _spatialFx.forEach(function(f){h+='<option value="sfx:'+f.id+'"'+(selectedVal==='sfx:'+f.id?' selected':'')+'>'+escapeHtml(f.name)+'</option>';});
+  h+='</optgroup><optgroup label="Classic Actions">';
+  var aNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Wipe','Scanner','Sparkle','Gradient'];
+  _acts.forEach(function(a){
+    var tn=aNames[a.type]||'Type '+a.type;
+    h+='<option value="act:'+a.id+'"'+(selectedVal==='act:'+a.id?' selected':'')+'>'+escapeHtml(a.name)+' ('+tn+')</option>';
+  });
+  h+='</optgroup>';
+  return h;
+}
+function _clipPickerVal(clip){
+  if(clip.actionId!=null)return 'act:'+clip.actionId;
+  return 'sfx:'+(clip.effectId||0);
+}
+function _clipParseVal(val){
+  // Returns {effectId:N} or {actionId:N}
+  if(!val)return{effectId:0};
+  var parts=val.split(':');
+  if(parts[0]==='act')return{actionId:parseInt(parts[1])};
+  return{effectId:parseInt(parts[1])};
+}
+
 function editClip(ti,ci){
   if(!_curTl||!_curTl.tracks||!_curTl.tracks[ti])return;
   var clip=_curTl.tracks[ti].clips[ci];
-  var h='<label>Effect</label><select id="clip-fx">';
-  _spatialFx.forEach(function(f){h+='<option value="'+f.id+'"'+(f.id===clip.effectId?' selected':'')+'>'+escapeHtml(f.name)+'</option>';});
-  h+='</select>';
+  var h='<label>Effect / Action</label><select id="clip-fx">'+_clipPickerOpts(_clipPickerVal(clip))+'</select>';
   h+='<label>Start (s)</label><input id="clip-start" type="number" min="0" step="0.1" value="'+clip.startS+'" style="width:100px">';
   h+='<label>Duration (s)</label><input id="clip-dur" type="number" min="0.1" step="0.1" value="'+clip.durationS+'" style="width:100px">';
   h+='<div style="margin-top:.8em;display:flex;gap:.5em">';
@@ -1799,7 +1827,10 @@ function editClip(ti,ci){
 
 function saveClip(ti,ci){
   var clip=_curTl.tracks[ti].clips[ci];
-  clip.effectId=parseInt(document.getElementById('clip-fx').value);
+  var parsed=_clipParseVal(document.getElementById('clip-fx').value);
+  delete clip.effectId;delete clip.actionId;
+  if(parsed.actionId!=null)clip.actionId=parsed.actionId;
+  else clip.effectId=parsed.effectId;
   clip.startS=parseFloat(document.getElementById('clip-start').value)||0;
   clip.durationS=parseFloat(document.getElementById('clip-dur').value)||1;
   closeModal();
@@ -1814,10 +1845,8 @@ function removeClip(ti,ci){
 
 // Add clip via double-click on track row (future enhancement stub)
 function tlAddClipToTrack(ti){
-  if(!_curTl||!_spatialFx.length)return;
-  var h='<label>Effect</label><select id="clip-fx">';
-  _spatialFx.forEach(function(f){h+='<option value="'+f.id+'">'+escapeHtml(f.name)+'</option>';});
-  h+='</select>';
+  if(!_curTl||(!_spatialFx.length&&!_acts.length)){alert('Create effects or actions first.');return;}
+  var h='<label>Effect / Action</label><select id="clip-fx">'+_clipPickerOpts('')+'</select>';
   h+='<label>Start (s)</label><input id="clip-start" type="number" min="0" step="0.1" value="0" style="width:100px">';
   h+='<label>Duration (s)</label><input id="clip-dur" type="number" min="0.1" step="0.1" value="5" style="width:100px">';
   h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="tlAddClipConfirm('+ti+')">Add Clip</button></div>';
@@ -1827,11 +1856,13 @@ function tlAddClipToTrack(ti){
 }
 
 function tlAddClipConfirm(ti){
+  var parsed=_clipParseVal(document.getElementById('clip-fx').value);
   var clip={
-    effectId:parseInt(document.getElementById('clip-fx').value),
     startS:parseFloat(document.getElementById('clip-start').value)||0,
     durationS:parseFloat(document.getElementById('clip-dur').value)||5
   };
+  if(parsed.actionId!=null)clip.actionId=parsed.actionId;
+  else clip.effectId=parsed.effectId;
   _curTl.tracks[ti].clips.push(clip);
   closeModal();
   ra('PUT','/api/timelines/'+_curTl.id,_curTl,function(){renderTimeline();});

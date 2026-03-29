@@ -60,7 +60,7 @@ class BakeProgress:
         }
 
 
-def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_fn, blend_fn, progress=None):
+def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_fn, blend_fn, progress=None, actions=None):
     """Bake a timeline into per-fixture action sequences.
 
     Args:
@@ -72,6 +72,7 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
         evaluate_fn: function(effect, pixels, t) → [[r,g,b],...]
         blend_fn: function(layers, modes) → [[r,g,b],...]
         progress: BakeProgress instance (optional)
+        actions: list of classic action dicts (optional, for actionId clips)
 
     Returns:
         dict: {
@@ -92,6 +93,7 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
     fix_map = {f["id"]: f for f in fixtures}
     pos_map = {p["id"]: p for p in layout.get("children", [])}
     fx_map = {f["id"]: f for f in spatial_fx}
+    act_map = {a["id"]: a for a in (actions or [])}
 
     # Per-fixture resolved data
     fixture_data = {}  # fix_id → {pixels: [[x,y,z],...], pixelCount: N}
@@ -170,12 +172,45 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
     if progress:
         progress.status = "segmenting actions"
 
+    # Build direct action segments from actionId clips (bypass frame analysis)
+    direct_segments = {}  # fix_id → list of segments from classic action clips
+    for track in tracks:
+        fix_id = track.get("fixtureId")
+        if fix_id not in fixture_data:
+            continue
+        direct = []
+        for clip in track.get("clips", []):
+            aid = clip.get("actionId")
+            if aid is None:
+                continue
+            act = act_map.get(aid)
+            if not act:
+                continue
+            direct.append({
+                "type": act.get("type", 0),
+                "params": {k: act.get(k, 0) for k in ("r","g","b","r2","g2","b2","speedMs","periodMs",
+                           "spawnMs","minBri","spacing","paletteId","cooling","sparking",
+                           "direction","tailLen","density","decay","fadeSpeed")},
+                "startFrame": int(clip.get("startS", 0) * BAKE_FPS),
+                "endFrame": int((clip.get("startS", 0) + clip.get("durationS", 1)) * BAKE_FPS),
+                "startS": clip.get("startS", 0),
+                "durationS": clip.get("durationS", 1),
+            })
+        direct_segments[fix_id] = direct
+
     # Action segmentation and LSQ generation
     result = {"fixtures": {}, "lsq_files": {}, "totalFrames": n_frames, "fps": BAKE_FPS}
 
     for fix_id, frames in per_fixture_frames.items():
         pixel_count = fixture_data[fix_id]["pixelCount"]
-        segments = _segment_actions(frames, pixel_count)
+        # Merge frame-analyzed segments with direct action segments
+        frame_segments = _segment_actions(frames, pixel_count)
+        action_segments = direct_segments.get(fix_id, [])
+        # Combine: action clips override frame segments in their time range
+        if action_segments:
+            segments = _merge_segments(frame_segments, action_segments, n_frames)
+        else:
+            segments = frame_segments
         lsq = _pack_lsq(fix_id, frames, pixel_count)
 
         result["fixtures"][fix_id] = {
@@ -195,6 +230,26 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
         progress.done = True
 
     return result
+
+
+def _merge_segments(frame_segments, action_segments, n_frames):
+    """Merge frame-analyzed segments with direct action segments.
+    Action segments take priority — they replace frame segments in their time range.
+    Result is sorted by startS and capped at 16 total."""
+    # Build a time-sorted list of all segments
+    all_segs = list(action_segments)  # action clips first (priority)
+    # Add frame segments that don't overlap with any action segment
+    for fs in frame_segments:
+        overlaps = False
+        for a in action_segments:
+            # Check overlap
+            if fs["startS"] < a["startS"] + a["durationS"] and fs["startS"] + fs["durationS"] > a["startS"]:
+                overlaps = True
+                break
+        if not overlaps:
+            all_segs.append(fs)
+    all_segs.sort(key=lambda s: s["startS"])
+    return all_segs[:16]
 
 
 def _dominant_color(frame_pixels):
