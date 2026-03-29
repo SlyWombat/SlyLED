@@ -460,7 +460,7 @@ def run():
         r = c.get('/api/firmware/latest')
         ok('GET /api/firmware/latest returns JSON', r.status_code in (200, 502))
 
-        # /api/firmware/check — needs children, add one
+        # /api/firmware/check — needs children and WiFi
         c.post('/api/children', json={'ip': '10.0.0.88'})
         r = c.get('/api/firmware/check')
         if r.status_code == 200:
@@ -468,7 +468,7 @@ def run():
             ok('Firmware check has children list', 'children' in d)
             ok('Firmware check has latest version', 'latest' in d)
         else:
-            ok('Firmware check (no internet)', r.status_code == 502)
+            ok('Firmware check blocked (no WiFi or no internet)', r.status_code in (400, 502))
 
         # /api/firmware/ota — child not found
         r = c.post('/api/firmware/ota/9999')
@@ -494,6 +494,16 @@ def run():
             ]
         }
         _github_release_cache["ts"] = _time.time()
+
+        # WiFi must be configured for firmware check/flash/OTA
+        # Test guards: clear WiFi, verify check and flash are blocked
+        c.post('/api/wifi', json={'ssid': '', 'password': ''})
+        r = c.get('/api/firmware/check')
+        ok('Firmware check without WiFi -> 400', r.status_code == 400)
+        r = c.post('/api/firmware/flash', json={'port': 'COM99', 'firmwareId': 'test', 'board': 'esp32'})
+        ok('USB flash without WiFi -> 400', r.status_code == 400)
+        # Set WiFi for remaining tests
+        c.post('/api/wifi', json={'ssid': 'TestNet', 'password': 'testpass'})
 
         # Add children with known firmware version and boardType for check tests
         # NOTE: use parent_server._children (not the imported _children) because

@@ -1832,6 +1832,8 @@ def api_fw_flash():
     """Flash firmware to a board in a background thread."""
     if not _fw_available:
         return jsonify(ok=False, err="esptool not available"), 500
+    if not _wifi.get("ssid") or not _wifi.get("password"):
+        return jsonify(ok=False, err="WiFi credentials required before flashing — set them on the Firmware tab first"), 400
     body = request.get_json(silent=True) or {}
     port = body.get("port", "")
     fw_id = body.get("firmwareId", "")
@@ -1930,6 +1932,8 @@ def api_firmware_latest():
 @app.get("/api/firmware/check")
 def api_firmware_check():
     """Compare all children firmware against latest release. Returns per-child update status."""
+    if not _wifi.get("ssid") or not _wifi.get("password"):
+        return jsonify(ok=False, err="WiFi credentials required — set them on the Firmware tab before checking for updates"), 400
     rel = _fetch_github_release()
     if not rel:
         return jsonify(ok=False, err="Could not fetch release info"), 502

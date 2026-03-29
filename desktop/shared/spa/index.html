@@ -1804,25 +1804,31 @@ function _cmpVer(a,b){
 var _otaChecked=null; // cached check result
 function checkOtaUpdates(){
   var el=document.getElementById('ota-children');
-  el.innerHTML='<p style="color:#888">Checking cloud for latest firmware...</p>';
-  // Force-download latest firmware from GitHub before checking
-  Promise.all([
-    api('POST','/api/firmware/download',{board:'esp32'}).catch(function(){return null;}),
-    api('POST','/api/firmware/download',{board:'d1mini'}).catch(function(){return null;})
-  ]).then(function(){
-    // Refresh USB section — registry was updated by download
-    _fetchGithubFirmware();
-    loadFirmwarePorts();
-    el.innerHTML='<p style="color:#888">Refreshing performer status...</p>';
-    // Now probe all children for current version via HTTP /status
-    return api('POST','/api/children/refresh-all').catch(function(){return null;});
-  }).then(function(){
-    return api('GET','/api/firmware/check');
-  }).then(function(d){
-    _otaChecked=d;
-    _renderOtaTable(d);
-  }).catch(function(){
-    el.innerHTML='<p style="color:#f66">Failed to check — is the server online?</p>';
+  // Check WiFi is configured first
+  ra('GET','/api/wifi',null,function(w){
+    if(!w||!w.ssid||!w.hasPassword){
+      el.innerHTML='<p style="color:#f66">WiFi credentials must be configured and saved before checking for updates.</p>';
+      return;
+    }
+    el.innerHTML='<p style="color:#888">Checking cloud for latest firmware...</p>';
+    // Force-download latest firmware from GitHub before checking
+    Promise.all([
+      api('POST','/api/firmware/download',{board:'esp32'}).catch(function(){return null;}),
+      api('POST','/api/firmware/download',{board:'d1mini'}).catch(function(){return null;})
+    ]).then(function(){
+      // Refresh USB section — registry was updated by download
+      _fetchGithubFirmware();
+      loadFirmwarePorts();
+      el.innerHTML='<p style="color:#888">Refreshing performer status...</p>';
+      return api('POST','/api/children/refresh-all').catch(function(){return null;});
+    }).then(function(){
+      return api('GET','/api/firmware/check');
+    }).then(function(d){
+      _otaChecked=d;
+      _renderOtaTable(d);
+    }).catch(function(e){
+      el.innerHTML='<p style="color:#f66">'+(e&&e.message?escapeHtml(e.message):'Failed to check — is the server online?')+'</p>';
+    });
   });
 }
 function _renderOtaTable(d){
@@ -2070,6 +2076,9 @@ function doFlash(btn){
   var board=document.getElementById('fw-board').value;
   var fwId=document.getElementById('fw-image').value;
   if(!port||!fwId){alert('Select a port and firmware');return;}
+  // WiFi must be configured before flashing
+  var ssid=document.getElementById('fw-ssid').value;
+  if(!ssid){alert('WiFi credentials must be configured before flashing.\nEnter SSID and password above, then click Save WiFi.');return;}
   _btnSaving(btn);
   document.getElementById('fw-progress').style.display='block';
   // If GitHub firmware selected, download first then flash
@@ -2162,6 +2171,8 @@ function _waitForBoardOnline(port){
 }
 
 function quickFlash(port,board,fwId,btn){
+  var ssid=document.getElementById('fw-ssid').value;
+  if(!ssid){alert('WiFi credentials must be configured before flashing.\nEnter SSID and password above, then click Save WiFi.');return;}
   if(!confirm('Flash firmware '+fwId+' to '+port+'?'))return;
   _btnSaving(btn);
   document.getElementById('fw-progress').style.display='block';
