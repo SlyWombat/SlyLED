@@ -3643,13 +3643,15 @@ function openLoadShowModal(){
   h+='<p style="font-size:.82em;color:#94a3b8;margin-top:.3em">Load a previously saved .json show file</p>';
   h+='<input type="file" id="show-file-input" accept=".json" style="display:none" onchange="importShowFile(this)">';
   h+='</div>';
-  h+='<div class="card" style="margin:0;cursor:pointer;border-color:#22c55e" onclick="loadDemoShow()">';
-  h+='<b style="color:#86efac">Demo Show</b>';
-  h+='<p style="font-size:.82em;color:#94a3b8;margin-top:.3em">Auto-generate a demo using all connected performers</p>';
+  h+='<div class="card" style="margin:0;border-color:#22c55e">';
+  h+='<b style="color:#86efac">Preset Shows</b>';
+  h+='<p style="font-size:.82em;color:#94a3b8;margin-top:.3em">Load a pre-built show onto the timeline</p>';
+  h+='<div id="preset-list" style="margin-top:.5em"><p style="color:#555;font-size:.82em">Loading...</p></div>';
   h+='</div>';
   h+='</div>';
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='flex';
+  loadPresetList();
 }
 function importShowFile(input){
   var f=input.files[0];if(!f)return;
@@ -3668,12 +3670,27 @@ function importShowFile(input){
   };
   rd.readAsText(f);input.value='';
 }
-function loadDemoShow(){
-  if(!confirm('Generate demo show? This replaces all current show data (actions, runners, flights, shows).'))return;
-  ra('POST','/api/show/demo',{mood:'default'},function(r){
+function loadPresetList(){
+  ra('GET','/api/show/presets',null,function(presets){
+    var el=document.getElementById('preset-list');if(!el)return;
+    if(!presets||!presets.length){el.innerHTML='<p style="color:#555">No presets available</p>';return;}
+    var h='<div style="display:flex;flex-wrap:wrap;gap:.4em">';
+    presets.forEach(function(p){
+      h+='<button class="btn" onclick="loadPreset(\''+p.id+'\')" style="background:#14532d;color:#86efac;font-size:.75em;padding:.3em .6em" title="'+escapeHtml(p.desc)+'">'+escapeHtml(p.name)+'</button>';
+    });
+    h+='</div>';el.innerHTML=h;
+  });
+}
+function loadPreset(id){
+  ra('POST','/api/show/preset',{id:id},function(r){
     closeModal();
-    if(r&&r.ok){document.getElementById('hs').textContent='Demo show loaded: '+r.actions+' actions, '+r.runners+' runners';}
-    else{document.getElementById('hs').textContent='Demo failed: '+(r&&r.err||'no performers?');}
+    if(r&&r.ok){
+      document.getElementById('hs').textContent='Loaded "'+r.name+'" — '+r.actions+' actions, '+r.effects+' effects. Go to Runtime tab to play.';
+      // Switch to runtime tab
+      showTab('runtime');
+    }else{
+      document.getElementById('hs').textContent='Load failed: '+(r&&r.err||'?');
+    }
   });
 }
 

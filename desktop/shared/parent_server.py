@@ -62,7 +62,7 @@ def _apply_logging(enabled):
 
 # ── Version ───────────────────────────────────────────────────────────────────
 
-VERSION = "7.0.0"
+VERSION = "7.0.2"
 
 # ── UDP protocol ──────────────────────────────────────────────────────────────
 
@@ -2265,17 +2265,155 @@ def _generate_demo_show(mood="default"):
     return {"actions": actions, "runners": [runner],
             "flights": [flight], "shows": [show]}
 
-@app.post("/api/show/demo")
-def api_show_demo():
-    """Generate and install a demo show from current children/layout."""
+@app.post("/api/show/preset")
+def api_show_preset():
+    """Install a preset show as a timeline with spatial effects and actions."""
+    global _nxt_a, _nxt_sfx, _nxt_tl
     body = request.get_json(silent=True) or {}
-    mood = body.get("mood", "default")
-    bundle = _generate_demo_show(mood)
-    _install_show_bundle(bundle)
-    return jsonify(ok=True, actions=len(bundle["actions"]),
-                   runners=len(bundle["runners"]),
-                   flights=len(bundle["flights"]),
-                   shows=len(bundle["shows"]))
+    preset_id = body.get("id", "")
+
+    PRESETS = {
+        "rainbow-up": {
+            "name": "Rainbow Up",
+            "durationS": 30,
+            "effects": [{"name": "Rainbow Plane Rise", "category": "spatial-field", "shape": "plane",
+                         "r": 255, "g": 0, "b": 100, "size": {"normal": [0,1,0], "thickness": 600},
+                         "motion": {"startPos": [1500,0,0], "endPos": [1500,3000,0], "durationS": 30, "easing": "linear"},
+                         "blend": "replace"}],
+        },
+        "rainbow-across": {
+            "name": "Rainbow Across",
+            "durationS": 30,
+            "effects": [{"name": "Rainbow Sphere Sweep", "category": "spatial-field", "shape": "sphere",
+                         "r": 100, "g": 0, "b": 255, "size": {"radius": 1200},
+                         "motion": {"startPos": [0,1000,0], "endPos": [3000,1000,0], "durationS": 30, "easing": "linear"},
+                         "blend": "replace"}],
+        },
+        "slow-fire": {
+            "name": "Slow Fire",
+            "durationS": 60,
+            "actions": [{"name": "Fire Effect", "type": 6, "r": 255, "g": 80, "b": 0,
+                         "speedMs": 40, "cooling": 45, "sparking": 100}],
+        },
+        "disco": {
+            "name": "Disco",
+            "durationS": 60,
+            "actions": [{"name": "Disco Twinkle", "type": 8, "r": 200, "g": 100, "b": 255,
+                         "spawnMs": 80, "density": 5, "fadeSpeed": 15}],
+        },
+        "ocean-wave": {
+            "name": "Ocean Wave",
+            "durationS": 40,
+            "effects": [{"name": "Blue Wave", "category": "spatial-field", "shape": "plane",
+                         "r": 0, "g": 80, "b": 220, "size": {"normal": [1,0,0], "thickness": 800},
+                         "motion": {"startPos": [0,1000,0], "endPos": [3000,1000,0], "durationS": 10, "easing": "ease-in-out"},
+                         "blend": "add"},
+                        {"name": "Teal Wash", "category": "spatial-field", "shape": "sphere",
+                         "r": 0, "g": 180, "b": 160, "size": {"radius": 1500},
+                         "motion": {"startPos": [3000,500,0], "endPos": [0,1500,0], "durationS": 12, "easing": "ease-in-out"},
+                         "blend": "screen"}],
+        },
+        "sunset": {
+            "name": "Sunset Glow",
+            "durationS": 45,
+            "actions": [{"name": "Warm Breathe", "type": 3, "r": 255, "g": 100, "b": 20,
+                         "periodMs": 4000, "minBri": 30}],
+            "effects": [{"name": "Golden Sweep", "category": "spatial-field", "shape": "plane",
+                         "r": 255, "g": 160, "b": 30, "size": {"normal": [0,1,0], "thickness": 500},
+                         "motion": {"startPos": [1500,2000,0], "endPos": [1500,0,0], "durationS": 20, "easing": "ease-out"},
+                         "blend": "screen"}],
+        },
+        "police": {
+            "name": "Police Lights",
+            "durationS": 30,
+            "actions": [{"name": "Red Strobe", "type": 9, "r": 255, "g": 0, "b": 0,
+                         "periodMs": 200, "p8a": 50}],
+            "effects": [{"name": "Blue Flash Sweep", "category": "spatial-field", "shape": "box",
+                         "r": 0, "g": 0, "b": 255, "size": {"width": 1000, "height": 3000, "depth": 2000},
+                         "motion": {"startPos": [0,1000,0], "endPos": [3000,1000,0], "durationS": 2, "easing": "linear"},
+                         "blend": "add"}],
+        },
+        "starfield": {
+            "name": "Starfield",
+            "durationS": 60,
+            "actions": [{"name": "Star Sparkle", "type": 12, "r": 5, "g": 5, "b": 20,
+                         "spawnMs": 60, "density": 4}],
+        },
+        "aurora": {
+            "name": "Aurora Borealis",
+            "durationS": 40,
+            "effects": [{"name": "Green Curtain", "category": "spatial-field", "shape": "plane",
+                         "r": 0, "g": 255, "b": 80, "size": {"normal": [1,0.3,0], "thickness": 700},
+                         "motion": {"startPos": [0,1500,0], "endPos": [3000,1800,0], "durationS": 15, "easing": "ease-in-out"},
+                         "blend": "screen"},
+                        {"name": "Purple Shimmer", "category": "spatial-field", "shape": "sphere",
+                         "r": 120, "g": 0, "b": 200, "size": {"radius": 1000},
+                         "motion": {"startPos": [2000,2000,0], "endPos": [500,1000,0], "durationS": 12, "easing": "ease-in-out"},
+                         "blend": "add"}],
+        },
+    }
+
+    preset = PRESETS.get(preset_id)
+    if not preset:
+        return jsonify(ok=False, err=f"Unknown preset: {preset_id}"), 404
+
+    # Create actions from preset
+    action_ids = []
+    for a in preset.get("actions", []):
+        act = {"id": _nxt_a, **a}
+        _actions.append(act)
+        action_ids.append(_nxt_a)
+        _nxt_a += 1
+    _save("actions", _actions)
+
+    # Create spatial effects from preset
+    effect_ids = []
+    for fx in preset.get("effects", []):
+        fx_rec = {"id": _nxt_sfx, **fx}
+        fx_rec.setdefault("fixtureIds", [])
+        _spatial_fx.append(fx_rec)
+        effect_ids.append(_nxt_sfx)
+        _nxt_sfx += 1
+    _save("spatial_fx", _spatial_fx)
+
+    # Build timeline with one "all performers" track
+    clips = []
+    t = 0
+    for aid in action_ids:
+        dur = preset.get("durationS", 30)
+        clips.append({"actionId": aid, "startS": 0, "durationS": dur})
+    for eid in effect_ids:
+        dur = preset.get("durationS", 30)
+        clips.append({"effectId": eid, "startS": 0, "durationS": dur})
+
+    tl = {
+        "id": _nxt_tl, "name": preset["name"],
+        "durationS": preset.get("durationS", 30),
+        "tracks": [{"allPerformers": True, "clips": clips}],
+        "loop": True,
+    }
+    _timelines.append(tl)
+    _nxt_tl += 1
+    _save("timelines", _timelines)
+
+    return jsonify(ok=True, name=preset["name"], timelineId=tl["id"],
+                   actions=len(action_ids), effects=len(effect_ids))
+
+@app.get("/api/show/presets")
+def api_show_presets():
+    """List available preset shows."""
+    presets = [
+        {"id": "rainbow-up",     "name": "Rainbow Up",       "desc": "Moving rainbow from floor to ceiling"},
+        {"id": "rainbow-across", "name": "Rainbow Across",   "desc": "Moving rainbow from stage left to right"},
+        {"id": "slow-fire",      "name": "Slow Fire",        "desc": "Warm fire effect across all fixtures"},
+        {"id": "disco",          "name": "Disco",            "desc": "Random pastel twinkles on all fixtures"},
+        {"id": "ocean-wave",     "name": "Ocean Wave",       "desc": "Blue wave sweeping across the stage"},
+        {"id": "sunset",         "name": "Sunset Glow",      "desc": "Warm orange breathe with golden sweep"},
+        {"id": "police",         "name": "Police Lights",    "desc": "Red strobe with blue flash sweep"},
+        {"id": "starfield",      "name": "Starfield",        "desc": "White sparkles on dark background"},
+        {"id": "aurora",         "name": "Aurora Borealis",  "desc": "Green curtain with purple shimmer"},
+    ]
+    return jsonify(presets)
 
 # ── Factory reset ─────────────────────────────────────────────────────────────
 
