@@ -515,7 +515,14 @@ bool applyAction(uint8_t at, uint8_t r, uint8_t g, uint8_t b,
     default: return false;
   }
 
-  if (folded) applyFold(st, realEn);
+  if (folded) {
+    // Clear the mirrored half before folding — prevents stale pixels
+    // from corrupting persistence-based effects (comet, twinkle, fire)
+    uint16_t total = realEn - st + 1;
+    uint16_t half = (total + 1) / 2;
+    for (uint16_t i = st + half; i <= realEn; i++) leds[i] = CRGB::Black;
+    applyFold(st, realEn);
+  }
   return true;
 }
 
