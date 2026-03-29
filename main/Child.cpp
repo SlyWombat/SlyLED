@@ -653,10 +653,8 @@ void sendChildConfigPage(WiFiClient& c) {
             "var x=new XMLHttpRequest();x.open('POST','/test/stop',true);"
             "x.send();}"));
   c.print(F("function testPin(s){"
-            "var sel=document.getElementById('dp'+s);"
-            "if(!sel)return;var p=sel.value;"
             "var x=new XMLHttpRequest();"
-            "x.open('GET','/test/pin?p='+p,true);x.send();}"));
+            "x.open('GET','/test/pin?s='+s,true);x.send();}"));
   c.print(F("function checkUpdate(){"
             "var btn=document.getElementById('upd-btn');"
             "var st=document.getElementById('upd-status');"

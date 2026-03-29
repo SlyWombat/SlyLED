@@ -683,11 +683,13 @@ void ledTask(void* parameter) {
     if (locAt != ACT_OFF) {
       if (!actionNeedsPersist(locAt))
         fill_solid(leds, NUM_LEDS, CRGB::Black);
-      applyAction(locAt, locR, locG, locB,
-                  locP16a, locP8a, locP8b,
-                  locP8c, locP8d,
-                  millis() - actStart, 0, NUM_LEDS - 1,
-                  childCfg.stringCount > 0 && (childCfg.strings[0].flags & STR_FLAG_FOLDED));
+      // Apply action per-string using correct LED ranges and per-string fold flag
+      for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
+        bool fold = (j < childCfg.stringCount) && (childCfg.strings[j].flags & STR_FLAG_FOLDED);
+        applyAction(locAt, locR, locG, locB,
+                    locP16a, locP8a, locP8b, locP8c, locP8d,
+                    millis() - actStart, childActSt[j], childActEn[j], fold);
+      }
       showSafe();
       delay(actionDelay(locAt));
     } else {
@@ -839,11 +841,12 @@ void updateLED() {
       lastFrame = now;
       if (!actionNeedsPersist(locAt))
         fill_solid(leds, NUM_LEDS, CRGB::Black);
-      applyAction(locAt, locR, locG, locB,
-                  locP16a, locP8a, locP8b,
-                  locP8c, locP8d,
-                  now - actStart, 0, NUM_LEDS - 1,
-                  childCfg.stringCount > 0 && (childCfg.strings[0].flags & STR_FLAG_FOLDED));
+      for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
+        bool fold = (j < childCfg.stringCount) && (childCfg.strings[j].flags & STR_FLAG_FOLDED);
+        applyAction(locAt, locR, locG, locB,
+                    locP16a, locP8a, locP8b, locP8c, locP8d,
+                    now - actStart, childActSt[j], childActEn[j], fold);
+      }
       showSafe();
     }
   } else {
