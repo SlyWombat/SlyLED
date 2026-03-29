@@ -34,8 +34,8 @@ volatile uint8_t  childActP8b   = 0;
 volatile uint8_t  childActP8c   = 0;
 volatile uint8_t  childActP8d   = 0;
 volatile uint8_t  childActSeq   = 0;
-volatile uint8_t  childActSt[MAX_STR_PER_CHILD];
-volatile uint8_t  childActEn[MAX_STR_PER_CHILD];
+volatile uint16_t childActSt[MAX_STR_PER_CHILD];
+volatile uint16_t childActEn[MAX_STR_PER_CHILD];
 volatile uint8_t  childBrightness = 255;
 
 ChildRunnerStep   childRunner[MAX_CHILD_STEPS];

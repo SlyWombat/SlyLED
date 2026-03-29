@@ -4,6 +4,9 @@
 <meta name='viewport' content='width=device-width,initial-scale=1'>
 <title>SlyLED</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/three@0.137.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.137.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.137.0/examples/js/controls/TransformControls.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Inter',sans-serif;background:#020617;color:#f1f5f9;min-height:100vh}
@@ -67,7 +70,12 @@ body.light .li:hover{border-color:#3b82f6}
 </style>
 </head>
 <body id='app'>
-<div id='hdr' style='display:flex;align-items:center;gap:.8em'><img src='data:image/png;base64,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' style='height:48px;width:auto;flex-shrink:0' alt='SlyLED'><div><h1>Sly<span>LED</span></h1><div id='hs'>Loading...</div></div></div>
+<div id='hdr' style='display:flex;align-items:center;gap:.8em'><button onclick='toggleHelp()' style='position:fixed;top:12px;right:16px;z-index:200;background:#1e3a5f;color:#93c5fd;border:1px solid #334155;border-radius:50%;width:32px;height:32px;font-size:1em;cursor:pointer;font-weight:bold' title='Help'>?</button>
+<div id='help-panel' style='display:none;position:fixed;top:0;right:0;width:360px;height:100%;background:#0f172a;border-left:1px solid #334155;z-index:150;overflow-y:auto;padding:1.2em;box-shadow:-4px 0 20px rgba(0,0,0,.5)'>
+<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:1em'><span style='font-family:Space Grotesk;font-weight:600;color:#e2e8f0'>Help</span><button onclick='toggleHelp()' style='background:none;border:none;color:#64748b;font-size:1.3em;cursor:pointer'>&times;</button></div>
+<div id='help-body' style='font-size:.85em;color:#94a3b8;line-height:1.6'><p>Select a tab to see contextual help.</p></div>
+</div>
+<img src='data:image/png;base64,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' style='height:48px;width:auto;flex-shrink:0' alt='SlyLED'><div><h1>Sly<span>LED</span></h1><div id='hs'>Loading...</div></div></div>
 <nav>
   <button id='n-dash'     class='tnav tact' onclick='showTab("dash")' data-tip='tabDash'>Dashboard</button>
   <button id='n-setup'    class='tnav'      onclick='showTab("setup")' data-tip='tabSetup'>Setup</button>
@@ -85,32 +93,67 @@ body.light .li:hover{border-color:#3b82f6}
   <div style='display:flex;gap:1em;align-items:flex-start'>
     <div style='flex:1;min-width:0'>
       <div style='display:flex;align-items:center;gap:1em;margin-bottom:.4em'>
-        <span style='color:#888;font-size:.82em;flex:1'>Drag performers from sidebar onto canvas. Double-click a node to edit. (0,0)=bottom-left.</span>
-        <label style='color:#888;font-size:.82em;white-space:nowrap;display:flex;align-items:center;gap:.3em'>
+        <div style='display:flex;gap:0;border:1px solid #334155;border-radius:4px;overflow:hidden;flex-shrink:0'>
+          <button id='lay-mode-2d' class='btn' onclick='setLayoutMode("2d")' style='border-radius:0;border:none;margin:0;padding:.35em .9em;background:#14532d;color:#86efac;font-size:.75em'>2D Canvas</button>
+          <button id='lay-mode-3d' class='btn' onclick='setLayoutMode("3d")' style='border-radius:0;border:none;margin:0;padding:.35em .9em;background:transparent;color:#64748b;font-size:.75em'>3D Viewport</button>
+        </div>
+        <span id='lay-hint' style='color:#888;font-size:.82em;flex:1'>Drag performers from sidebar onto canvas. Double-click a node to edit. (0,0)=bottom-left.</span>
+        <label id='lay-detail-wrap' style='color:#888;font-size:.82em;white-space:nowrap;display:flex;align-items:center;gap:.3em'>
           <input type='checkbox' id='lay-detail' checked onchange='drawLayout()' data-tip='layDetail'> Show strings
         </label>
         <label style='color:#888;font-size:.82em;white-space:nowrap;display:flex;align-items:center;gap:.3em'>
           <input type='checkbox' id='lay-preview' onchange='togglePreview()' data-tip='layPreview'> Live Preview
         </label>
       </div>
-      <canvas id='lcv' width='900' height='450'
-        style='border:1px solid #444;cursor:grab;display:block;background:#0d0d0d;max-width:100%'
-        onmousedown='cvDown(event)' onmousemove='cvMove(event)'
-        onmouseup='cvUp()' onmouseleave='cvUp()'
-        ondragover='event.preventDefault()' ondrop='cvDrop(event)'
-        ondblclick='cvDbl(event)'></canvas>
+      <!-- 2D Canvas (default) -->
+      <div id='lay-2d-wrap'>
+        <canvas id='lcv' width='900' height='450'
+          style='border:1px solid #444;cursor:grab;display:block;background:#0d0d0d;max-width:100%'
+          onmousedown='cvDown(event)' onmousemove='cvMove(event)'
+          onmouseup='cvUp()' onmouseleave='cvUp()'
+          ondragover='event.preventDefault()' ondrop='cvDrop(event)'
+          ondblclick='cvDbl(event)'></canvas>
+      </div>
+      <!-- 3D Viewport -->
+      <div id='lay-3d-wrap' style='display:none;position:relative'>
+        <div id='stage3d' style='width:900px;height:500px;border:1px solid #444;background:#080810;max-width:100%'></div>
+        <div id='s3d-info' style='position:absolute;top:8px;left:8px;color:#64748b;font-size:.72em;pointer-events:none'></div>
+      </div>
       <div style='margin-top:.6em'>
         <button class='btn btn-on' id='btn-lay-save' onclick='saveLayout(this)' data-tip='laySave'>Save Layout</button>
       </div>
     </div>
-    <div style='width:180px;flex-shrink:0'>
+    <div style='width:200px;flex-shrink:0'>
       <div style='font-size:.9em;font-weight:bold;color:#aaa;margin-bottom:.4em'>Unplaced</div>
       <div id='lay-unplaced'></div>
+      <div style='margin-top:1em;border-top:1px solid #1e293b;padding-top:.8em'>
+        <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:.4em'>
+          <span style='font-size:.9em;font-weight:bold;color:#aaa'>Fixtures</span>
+          <button class='btn btn-on' onclick='autoCreateFixtures()' style='font-size:.65em;padding:.2em .5em'>Auto-create</button>
+        </div>
+        <div id='lay-fixtures' style='font-size:.82em;color:#94a3b8'>Loading...</div>
+      </div>
+      <div style='margin-top:1em;border-top:1px solid #1e293b;padding-top:.8em'>
+        <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:.4em'>
+          <span style='font-size:.9em;font-weight:bold;color:#aaa'>Surfaces</span>
+          <button class='btn btn-on' onclick='newSurface()' style='font-size:.65em;padding:.2em .5em'>+ Add</button>
+        </div>
+        <div id='lay-surfaces' style='font-size:.82em;color:#94a3b8'></div>
+      </div>
     </div>
   </div>
 </div>
 
 <div id='t-actions' class='tab' style='display:none'>
+  <!-- Spatial Effects (Phase 3) -->
+  <div class='card' style='max-width:700px;margin-bottom:1.2em'>
+    <div class='card-title' style='display:flex;justify-content:space-between;align-items:center'>
+      Spatial Effects (3D)
+      <button class='btn btn-on' onclick='newSpatialFx()' style='font-size:.75em;padding:.3em .8em'>+ New Spatial Effect</button>
+    </div>
+    <div id='sfx-list' style='font-size:.85em;color:#94a3b8'>Loading...</div>
+  </div>
+  <!-- Classic Actions -->
   <div style='margin-bottom:.8em'>
     <button class='btn btn-on' onclick='newAction()'>+ New Action</button>
   </div>
@@ -118,44 +161,37 @@ body.light .li:hover{border-color:#3b82f6}
 </div>
 
 <div id='t-runtime' class='tab' style='display:none'>
-  <div id='rt-list'>
-    <div style='margin-bottom:.8em;display:flex;align-items:center;gap:.8em;flex-wrap:wrap'>
-      <button class='btn btn-on' onclick='newRunner()' data-tip='runNew'>+ New Runner</button>
-      <button class='btn btn-off' onclick='stopRunners()' data-tip='runStop'>Stop All</button>
-      <label style='color:#94a3b8;font-size:.82em;display:flex;align-items:center;gap:.3em'>
-        <input type='checkbox' id='rt-loop' checked onchange='saveLoopSetting()' data-tip='runLoop'> Loop
-      </label>
-      <label style='color:#94a3b8;font-size:.82em;display:flex;align-items:center;gap:.3em' data-tip='runBri'>
-        Brightness <input type='range' id='rt-bri' min='0' max='255' value='255' style='width:120px;vertical-align:middle' oninput='setBrightness(this.value)'> <span id='rt-bri-val'>100%</span>
-      </label>
+  <!-- Timeline mode -->
+  <div id='rt-timeline'>
+    <div style='display:flex;align-items:center;gap:.8em;margin-bottom:.6em;flex-wrap:wrap'>
+      <button class='btn btn-on' onclick='newTimeline()'>+ New Timeline</button>
+      <select id='tl-select' onchange='loadTimelineDetail()' style='min-width:150px'><option value=''>Select timeline...</option></select>
+      <button class='btn' onclick='deleteTimeline()' style='background:#7f1d1d;color:#fca5a5'>Delete</button>
     </div>
-    <div id='rn-list'><p style='color:#94a3b8'>Loading...</p></div>
-    <!-- Flights -->
-    <div class='card' style='max-width:700px;margin-top:1.5em'>
-      <div class='card-title' style='display:flex;justify-content:space-between;align-items:center'>
-        Flights
-        <button class='btn btn-on' onclick='newFlight()' style='font-size:.75em;padding:.3em .8em' data-tip='flNew'>+ New Flight</button>
+    <div id='tl-detail' style='display:none'>
+      <div style='display:flex;align-items:center;gap:.8em;margin-bottom:.6em'>
+        <label style='color:#94a3b8;font-size:.82em'>Name</label><input id='tl-name' style='width:150px'>
+        <label style='color:#94a3b8;font-size:.82em'>Duration (s)</label><input id='tl-dur' type='number' min='1' max='3600' style='width:80px'>
+        <label style='color:#94a3b8;font-size:.82em;display:flex;align-items:center;gap:.3em'><input type='checkbox' id='tl-loop'> Loop</label>
+        <button class='btn btn-on' onclick='saveTimeline(this)'>Save</button>
       </div>
-      <div id='fl-list'></div>
-    </div>
-    <!-- Shows -->
-    <div class='card' style='max-width:700px;margin-top:1em'>
-      <div class='card-title' style='display:flex;justify-content:space-between;align-items:center'>
-        Shows
-        <button class='btn btn-on' onclick='newShow()' style='font-size:.75em;padding:.3em .8em' data-tip='shNew'>+ New Show</button>
+      <!-- Track timeline area -->
+      <div id='tl-tracks' style='border:1px solid #334155;border-radius:4px;background:#0a0f1a;min-height:200px;position:relative;overflow-x:auto'>
+        <div id='tl-ruler' style='height:24px;border-bottom:1px solid #1e293b;position:relative;background:#0f172a'></div>
+        <div id='tl-track-rows'></div>
+        <!-- Playhead -->
+        <div id='tl-playhead' style='position:absolute;top:0;left:60px;width:2px;height:100%;background:#22d3ee;pointer-events:none;z-index:10;transition:left 0.1s'></div>
       </div>
-      <div id='sh-list'></div>
-    </div>
-  </div>
-  <div id='rt-edit' style='display:none'>
-    <div style='margin-bottom:.8em;display:flex;align-items:center;gap:.8em'>
-      <button class='btn' onclick='backToRunners()' style='background:#446;color:#fff'>&larr; Runners</button>
-      <span id='re-nm' style='font-weight:bold;color:#ccc'></span>
-    </div>
-    <div id='re-steps'></div>
-    <div style='margin-top:.8em'>
-      <button class='btn btn-on' onclick='addStep()'>+ Add Step</button>
-      <button class='btn btn-on' onclick='saveRunner(this)' style='margin-left:.5em'>Save Runner</button>
+      <div style='margin-top:.6em;display:flex;align-items:center;gap:.5em'>
+        <button class='btn' onclick='tlAddTrack()' style='background:#1e3a5f;color:#93c5fd'>+ Add Track</button>
+        <button class='btn btn-on' id='tl-play-btn' onclick='tlTogglePreview()'>&#9654; Preview</button>
+        <button class='btn btn-off' onclick='tlStopPreview()'>&#9632; Stop</button>
+        <span id='tl-time' style='color:#64748b;font-size:.82em;font-family:monospace'>00:00.0</span>
+        <span style='flex:1'></span>
+        <button class='btn' onclick='tlBake()' style='background:#4a2080;color:#c4b5fd'>Bake</button>
+        <button class='btn btn-on' onclick='tlSyncAndStart()'>Sync &amp; Start</button>
+        <button class='btn btn-off' onclick='tlStopShow()'>Stop Show</button>
+      </div>
     </div>
   </div>
 </div>
@@ -193,7 +229,7 @@ body.light .li:hover{border-color:#3b82f6}
     </div>
   </div>
   <div class='card' style='max-width:480px'>
-    <div class='card-title'>Show (Actions + Runners + Flights + Shows)</div>
+    <div class='card-title'>Show (Actions + Timelines)</div>
     <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Save or load show programming. Loading replaces all current show data.</p>
     <div style='display:flex;gap:.5em;flex-wrap:wrap'>
       <button class='btn btn-nav' onclick='exportShow(this)' data-tip='setExportShow'>Save Show</button>
@@ -301,7 +337,7 @@ var L={
   tabSetup:'Register, discover, and manage LED performer nodes',
   tabLayout:'Arrange performers in physical space on canvas',
   tabActions:'Create and manage reusable animation presets',
-  tabRuntime:'Build runners, flights, and shows for playback',
+  tabRuntime:'Design and play timelines for LED shows',
   tabSettings:'Configure app settings, dark mode, and logging',
   tabFirmware:'Flash firmware to boards and manage WiFi credentials',
   // Dashboard
@@ -319,6 +355,8 @@ var L={
   layPreview:'Show live effect colors on performers during playback',
   laySave:'Save the current performer positions to storage',
   layCanvas:'Drag performers to position. Double-click to edit coordinates. (0,0) = bottom-left.',
+  lay2d:'Switch to 2D canvas view',
+  lay3d:'Switch to interactive 3D viewport (Three.js)',
   // Actions
   actNew:'Create a new action preset (effect type + parameters)',
   actEdit:'Modify this action\'s type, color, and parameters',
@@ -524,15 +562,32 @@ function dashRefresh(btn){
   });
 }
 
-var _dashRunner=null,_dashChildren=null;
+var _dashRunner=null,_dashChildren=null,_dashTimeline=null;
 function refreshRunnerStatus(){
   api('GET','/api/settings').then(function(s){
     var el=document.getElementById('dash-runner');if(!el)return;
-    if(!s||!s.runnerRunning||s.activeRunner<0){
-      el.innerHTML='<p style="color:#888;font-size:.85em">No runner active.</p>';
+    if(!s||!s.runnerRunning){
+      el.innerHTML='<p style="color:#888;font-size:.85em">No active show.</p>';
+      _dashRunner=null;_dashTimeline=null;return;
+    }
+    // Timeline-based playback
+    var tid=s.activeTimeline;
+    if(tid!=null&&tid>=0){
+      return api('GET','/api/timelines/'+tid+'/status').then(function(st){
+        if(!_dashTimeline||_dashTimeline.id!==tid)_dashChildren=null;
+        _dashTimeline=st;
+        var childP=_dashChildren?Promise.resolve(_dashChildren):api('GET','/api/children');
+        return childP.then(function(ch){
+          _dashChildren=ch||[];
+          _renderTimelineDash(el,s,st);
+        });
+      });
+    }
+    // Legacy runner-based playback
+    if(s.activeRunner<0){
+      el.innerHTML='<p style="color:#888;font-size:.85em">No active show.</p>';
       _dashRunner=null;return;
     }
-    // Cache runner + children on first call or runner change
     var rid=s.activeRunner;
     var runnerP=(_dashRunner&&_dashRunner.id===rid)
       ? Promise.resolve(_dashRunner)
@@ -548,6 +603,48 @@ function refreshRunnerStatus(){
       });
     });
   }).catch(function(){});
+}
+
+function _renderTimelineDash(el,settings,tlStatus){
+  var name=tlStatus.name||'Timeline';
+  var totalS=tlStatus.durationS||0;
+  var elapsed=tlStatus.elapsed||0;
+  var loop=tlStatus.loop;
+  var children=_dashChildren||[];
+  var onlineChildren=children.filter(function(c){return c.status===1;});
+
+  var h='<div class="card" style="max-width:700px">';
+  h+='<div class="card-title">&#9654; Timeline: '+escapeHtml(name)+'</div>';
+  h+='<div style="font-size:.82em;color:#aaa;margin-bottom:.4em">';
+  if(totalS>0){
+    if(loop&&elapsed>=totalS)elapsed=elapsed%totalS;
+    h+=elapsed+'s / '+totalS+'s';
+    if(!loop&&elapsed>=totalS)h+=' <span style="color:#4c4">(complete)</span>';
+    if(loop)h+=' <span style="color:#22d3ee">(looping)</span>';
+  }else{
+    h+='Running...';
+  }
+  h+='</div>';
+
+  // Progress bar
+  if(totalS>0){
+    var pct=Math.min(100,Math.round(elapsed*100/totalS));
+    h+='<div style="background:#1e293b;border-radius:4px;height:8px;max-width:500px;overflow:hidden;margin-bottom:.5em">';
+    h+='<div style="background:#22d3ee;height:100%;width:'+pct+'%;transition:width .3s"></div></div>';
+  }
+
+  // Performer count
+  h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.5em">'+onlineChildren.length+' performer'+(onlineChildren.length!==1?'s':'')+' online</div>';
+
+  var tid=settings.activeTimeline;
+  h+='<div style="margin-top:.6em"><button class="btn btn-off" onclick="tlDashStop('+tid+')">Stop Show</button></div></div>';
+  el.innerHTML=h;
+}
+
+function tlDashStop(tid){
+  ra('POST','/api/timelines/'+tid+'/stop',{},function(r){
+    if(r&&r.ok)document.getElementById('hs').textContent='Show stopped';
+  });
 }
 
 function _renderLiveDash(el,settings,runner,liveEvents){
@@ -708,7 +805,7 @@ function _renderSetup(){
           +'<button class="btn" onclick="showDetails('+c.id+')" style="background:#446;color:#fff" data-tip="setupDetails">Details</button>'
           +' <button class="btn btn-on" onclick="refreshChild('+c.id+')" data-tip="setupRefresh">Refresh</button>'
           +' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff" data-tip="setupReboot">Reboot</button>'
-          +' <button class="btn btn-off" onclick="removeChild('+c.id+')" data-tip="setupRemove">Remove</button></td></tr>';
+          +' <button class="btn btn-off" onclick="removePerformer('+c.id+',\''+escapeHtml(c.name||c.hostname).replace(/'/g,"\\'")+'\')\" data-tip="setupRemove">Remove</button></td></tr>';
       });
     }else{
       h+='<tr><td colspan="7" style="color:#888;text-align:center">No performers</td></tr>';
@@ -767,16 +864,11 @@ function addDiscovered(ip){
   });
 }
 
-function removeChild(id){
-  if(!confirm('Remove this performer (#'+id+')?'))return;
-  document.getElementById('hs').textContent='Removing performer #'+id+'...';
-  fetch('/api/children/'+id,{method:'DELETE'}).then(function(resp){
-    return resp.json();
-  }).then(function(r){
+function removePerformer(id,name){
+  if(!confirm('Remove "'+name+'" from the orchestrator?'))return;
+  document.getElementById('hs').textContent='Removing '+name+'...';
+  ra('DELETE','/api/children/'+id,null,function(r){
     document.getElementById('hs').textContent=(r&&r.ok)?'Performer removed':'Remove failed';
-    loadSetup();
-  }).catch(function(e){
-    document.getElementById('hs').textContent='Remove failed: '+e.message;
     loadSetup();
   });
 }
@@ -840,8 +932,1105 @@ var _dirDx=[1,0,-1,0],_dirDy=[0,-1,0,1]; // E,N,W,S in canvas-Y-down coords
 var _layDragId=null;
 var _previewState={};
 var _previewTimer=null;
+var _layMode='2d'; // '2d' or '3d'
 
 function _isPlaced(c){return c.positioned||c._placed;}
+
+// ── 3D Viewport (Three.js) ─────────────────────────────────────────────────
+var _s3d={
+  inited:false,scene:null,camera:null,renderer:null,controls:null,
+  tctl:null,nodes:[],lines:[],labels:[],selected:null,raycaster:null,mouse:null,
+  animId:null,stageW:10,stageH:5,stageD:10
+};
+
+function s3dInit(){
+  if(_s3d.inited)return;
+  if(typeof THREE==='undefined'){console.warn('Three.js not loaded');return;}
+  var el=document.getElementById('stage3d');if(!el)return;
+  var W=el.clientWidth||900,H=el.clientHeight||500;
+
+  _s3d.scene=new THREE.Scene();
+  _s3d.scene.background=new THREE.Color(0x080810);
+  _s3d.scene.fog=new THREE.Fog(0x080810,30,60);
+
+  _s3d.camera=new THREE.PerspectiveCamera(50,W/H,0.1,100);
+  _s3d.camera.position.set(8,6,12);
+  _s3d.camera.lookAt(0,0,0);
+
+  _s3d.renderer=new THREE.WebGLRenderer({antialias:true});
+  _s3d.renderer.setSize(W,H);
+  _s3d.renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+  el.appendChild(_s3d.renderer.domElement);
+
+  // Orbit controls
+  _s3d.controls=new THREE.OrbitControls(_s3d.camera,_s3d.renderer.domElement);
+  _s3d.controls.enableDamping=true;_s3d.controls.dampingFactor=0.08;
+  _s3d.controls.target.set(0,0,0);
+
+  // Transform controls for moving nodes
+  _s3d.tctl=new THREE.TransformControls(_s3d.camera,_s3d.renderer.domElement);
+  _s3d.tctl.setMode('translate');_s3d.tctl.setSize(0.6);
+  _s3d.tctl.addEventListener('dragging-changed',function(e){
+    _s3d.controls.enabled=!e.value;
+    if(!e.value)_s3dSyncToLd(); // sync position to ld when gizmo drag ends
+  });
+  _s3d.scene.add(_s3d.tctl);
+
+  // Ground grid
+  var grid=new THREE.GridHelper(20,20,0x1a2744,0x111828);
+  _s3d.scene.add(grid);
+
+  // Axis helper
+  var axes=new THREE.AxesHelper(1.5);
+  axes.position.set(-0.5,0,-0.5);
+  _s3d.scene.add(axes);
+
+  // Ambient + directional light
+  _s3d.scene.add(new THREE.AmbientLight(0x334466,0.8));
+  var dl=new THREE.DirectionalLight(0xffffff,0.6);dl.position.set(5,10,7);
+  _s3d.scene.add(dl);
+
+  // Raycaster
+  _s3d.raycaster=new THREE.Raycaster();
+  _s3d.mouse=new THREE.Vector2();
+
+  // Click to select
+  _s3d.renderer.domElement.addEventListener('click',s3dClick);
+  // Double-click to edit
+  _s3d.renderer.domElement.addEventListener('dblclick',s3dDblClick);
+  // Drop from sidebar
+  _s3d.renderer.domElement.addEventListener('dragover',function(e){e.preventDefault();});
+  _s3d.renderer.domElement.addEventListener('drop',s3dDrop);
+
+  _s3d.inited=true;
+  s3dAnimate();
+}
+
+function s3dAnimate(){
+  _s3d.animId=requestAnimationFrame(s3dAnimate);
+  if(_s3d.controls)_s3d.controls.update();
+  if(_s3d.renderer&&_s3d.scene&&_s3d.camera)_s3d.renderer.render(_s3d.scene,_s3d.camera);
+  // Info overlay
+  var info=document.getElementById('s3d-info');
+  if(info&&ld){
+    var placed=(ld.children||[]).filter(_isPlaced).length;
+    info.textContent='Stage: '+_s3d.stageW+'m x '+_s3d.stageH+'m x '+_s3d.stageD+'m | '+placed+' performers placed | Scroll=zoom, Drag=orbit, Right-drag=pan';
+  }
+}
+
+function s3dDispose(){
+  if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
+}
+
+function s3dLoadChildren(){
+  if(!_s3d.inited||!ld)return;
+  // Clear old nodes
+  _s3d.nodes.forEach(function(m){_s3d.scene.remove(m);});
+  _s3d.lines.forEach(function(m){_s3d.scene.remove(m);});
+  _s3d.labels.forEach(function(m){_s3d.scene.remove(m);});
+  _s3d.nodes=[];_s3d.lines=[];_s3d.labels=[];
+  if(_s3d.tctl)_s3d.tctl.detach();_s3d.selected=null;
+
+  // Fetch stage dimensions
+  ra('GET','/api/stage',null,function(st){
+    if(st){_s3d.stageW=st.w||10;_s3d.stageH=st.h||5;_s3d.stageD=st.d||10;}
+    // Draw stage boundary box
+    _s3d.scene.children.forEach(function(c){if(c.userData.stageBox)_s3d.scene.remove(c);});
+    var boxGeo=new THREE.BoxGeometry(_s3d.stageW,_s3d.stageH,_s3d.stageD);
+    var boxEdge=new THREE.EdgesGeometry(boxGeo);
+    var boxLine=new THREE.LineSegments(boxEdge,new THREE.LineBasicMaterial({color:0x1e3a5f,opacity:0.4,transparent:true}));
+    boxLine.position.set(_s3d.stageW/2,_s3d.stageH/2,_s3d.stageD/2);
+    boxLine.userData.stageBox=true;
+    _s3d.scene.add(boxLine);
+
+    // Position camera to see stage
+    _s3d.controls.target.set(_s3d.stageW/2,_s3d.stageH/4,_s3d.stageD/2);
+    _s3d.camera.position.set(_s3d.stageW*1.2,_s3d.stageH*1.0,_s3d.stageD*1.5);
+
+    // Load surfaces THEN render them (async — must wait for data)
+    loadSurfaces(function(){_s3dRenderSurfaces();});
+
+    var placed=(ld.children||[]).filter(_isPlaced);
+    placed.forEach(function(c){
+      var pos=_s3dPos(c);
+      var col=c.type==='wled'?0xff6600:(c.status===1?0x22cc66:0x555555);
+
+      // Group — everything moves together when dragged
+      var grp=new THREE.Group();
+      grp.position.copy(pos);
+      grp.userData.childId=c.id;
+
+      // Sphere node (at group origin)
+      var geo=new THREE.SphereGeometry(0.15,16,12);
+      var mat=new THREE.MeshStandardMaterial({color:col,emissive:col,emissiveIntensity:0.4});
+      var sphere=new THREE.Mesh(geo,mat);
+      grp.add(sphere);
+
+      // Glow ring
+      var ringGeo=new THREE.RingGeometry(0.18,0.22,24);
+      var ringMat=new THREE.MeshBasicMaterial({color:col,side:THREE.DoubleSide,opacity:0.3,transparent:true});
+      var ring=new THREE.Mesh(ringGeo,ringMat);
+      ring.rotation.x=-Math.PI/2;
+      grp.add(ring);
+
+      // LED string lines + dots (positions relative to group origin = 0,0,0)
+      if(c.strings&&c.sc>0){
+        for(var si=0;si<c.sc&&si<c.strings.length;si++){
+          var s=c.strings[si];if(!s||!s.leds)continue;
+          var strCol=new THREE.Color(_strCol[si%_strCol.length]);
+          var lenMm=s.mm||0;if(lenMm<500)lenMm=Math.max(s.leds*16,500);
+          var lenM=lenMm/1000;
+          var dir=_s3dDir(s.sdir||0);
+          var endLocal=new THREE.Vector3(dir.x*lenM,dir.y*lenM,dir.z*lenM);
+          var pts=[new THREE.Vector3(0,0,0),endLocal];
+          var lineGeo=new THREE.BufferGeometry().setFromPoints(pts);
+          var lineMat=new THREE.LineBasicMaterial({color:strCol,linewidth:2});
+          grp.add(new THREE.Line(lineGeo,lineMat));
+
+          // LED dots along string
+          var dotCount=Math.min(s.leds,50);
+          for(var di=0;di<dotCount;di++){
+            var t=(di+0.5)/dotCount;
+            var dp=new THREE.Vector3().lerpVectors(pts[0],endLocal,t);
+            var dotGeo=new THREE.SphereGeometry(0.03,4,4);
+            var dotMat=new THREE.MeshBasicMaterial({color:strCol});
+            var dot=new THREE.Mesh(dotGeo,dotMat);
+            dot.position.copy(dp);
+            grp.add(dot);
+          }
+        }
+      }
+
+      // Text label (sprite, above group)
+      var label=_s3dLabel(c.name||(c.hostname||'ID '+c.id));
+      label.position.set(0,0.35,0);
+      grp.add(label);
+
+      _s3d.scene.add(grp);
+      _s3d.nodes.push(grp);
+    });
+  });
+}
+
+function _s3dRenderSurfaces(){
+  if(!_s3d.inited)return;
+  // Remove old surfaces
+  var toRemove=[];
+  _s3d.scene.children.forEach(function(c){if(c.userData.surfaceObj)toRemove.push(c);});
+  toRemove.forEach(function(c){_s3d.scene.remove(c);});
+  // Render each surface as a draggable group
+  (_surfaces||[]).forEach(function(s){
+    var t=s.transform||{pos:[0,0,0],scale:[2000,1500,1]};
+    var sw=(t.scale[0]||2000)/1000,sh=(t.scale[1]||1500)/1000;
+    var col=new THREE.Color(s.color||'#334155');
+
+    var grp=new THREE.Group();
+    grp.userData.surfaceObj=true;
+    grp.userData.surfaceId=s.id;
+    grp.position.set((t.pos[0]||0)/1000,(t.pos[1]||0)/1000,(t.pos[2]||0)/1000);
+
+    // Filled plane
+    var geo=new THREE.PlaneGeometry(sw,sh);
+    var mat=new THREE.MeshBasicMaterial({color:col,side:THREE.DoubleSide,opacity:(s.opacity||30)/100,transparent:true});
+    var mesh=new THREE.Mesh(geo,mat);
+    mesh.position.set(sw/2,sh/2,0);
+    grp.add(mesh);
+
+    // Border edges
+    var edgeMat=new THREE.LineBasicMaterial({color:col,opacity:0.8,transparent:true});
+    var edge=new THREE.LineSegments(new THREE.EdgesGeometry(geo),edgeMat);
+    edge.position.copy(mesh.position);
+    grp.add(edge);
+
+    // Label
+    var lbl=_s3dLabel(s.name||'Surface');
+    lbl.position.set(sw/2,sh+0.15,0);
+    grp.add(lbl);
+
+    _s3d.scene.add(grp);
+    _s3d.nodes.push(grp); // make it selectable/draggable alongside fixtures
+  });
+}
+
+function _s3dPos(c){
+  // Direct mapping: layout X→3D X, layout Y→3D Y (height), layout Z→3D Z (depth)
+  // 2D canvas is the front view (XY plane), 3D adds depth on Z
+  return new THREE.Vector3((c.x||0)/1000,(c.y||0)/1000,(c.z||0)/1000);
+}
+function _s3dToMm(pos){
+  return{x:Math.round(pos.x*1000),y:Math.round(pos.y*1000),z:Math.round(pos.z*1000)};
+}
+function _s3dDir(sdir){
+  // E=+X, N=+Y(up), W=-X, S=-Y(down)
+  var dirs=[new THREE.Vector3(1,0,0),new THREE.Vector3(0,1,0),new THREE.Vector3(-1,0,0),new THREE.Vector3(0,-1,0)];
+  return dirs[sdir]||dirs[0];
+}
+function _s3dSyncToLd(){
+  // Write 3D group positions back into ld.children and surfaces
+  if(!_s3d.inited||!ld)return;
+  _s3d.nodes.forEach(function(grp){
+    if(grp.userData.childId!==undefined){
+      var cid=grp.userData.childId;
+      var mm=_s3dToMm(grp.position);
+      (ld.children||[]).forEach(function(c){if(c.id===cid){c.x=mm.x;c.y=mm.y;c.z=mm.z;}});
+    }
+    if(grp.userData.surfaceObj&&grp.userData.surfaceId!==undefined){
+      var sid=grp.userData.surfaceId;
+      var mm=_s3dToMm(grp.position);
+      (_surfaces||[]).forEach(function(s){
+        if(s.id===sid){
+          if(!s.transform)s.transform={pos:[0,0,0],rot:[0,0,0],scale:[2000,1500,1]};
+          s.transform.pos=[mm.x,mm.y,mm.z];
+        }
+      });
+    }
+  });
+}
+
+function _s3dLabel(text){
+  var canvas=document.createElement('canvas');canvas.width=256;canvas.height=64;
+  var ctx=canvas.getContext('2d');
+  ctx.font='bold 24px Inter,sans-serif';ctx.fillStyle='#e2e8f0';ctx.textAlign='center';
+  ctx.fillText(text,128,40);
+  var tex=new THREE.CanvasTexture(canvas);
+  var mat=new THREE.SpriteMaterial({map:tex,transparent:true,depthTest:false});
+  var sprite=new THREE.Sprite(mat);
+  sprite.scale.set(1,0.25,1);
+  return sprite;
+}
+
+function _s3dHitGroup(e){
+  // Raycast into all group children, return the parent group (fixture or surface)
+  var rect=_s3d.renderer.domElement.getBoundingClientRect();
+  _s3d.mouse.x=((e.clientX-rect.left)/rect.width)*2-1;
+  _s3d.mouse.y=-((e.clientY-rect.top)/rect.height)*2+1;
+  _s3d.raycaster.setFromCamera(_s3d.mouse,_s3d.camera);
+  var allMeshes=[];
+  _s3d.nodes.forEach(function(grp){grp.traverse(function(obj){if(obj.isMesh)allMeshes.push(obj);});});
+  var hits=_s3d.raycaster.intersectObjects(allMeshes);
+  if(hits.length>0){
+    var obj=hits[0].object;
+    while(obj.parent&&!obj.userData.childId&&!obj.userData.surfaceObj)obj=obj.parent;
+    if(obj.userData.childId!==undefined||obj.userData.surfaceObj)return obj;
+  }
+  return null;
+}
+
+function s3dClick(e){
+  if(!_s3d.inited)return;
+  var grp=_s3dHitGroup(e);
+  if(grp){
+    _s3d.selected=grp;
+    _s3d.tctl.attach(grp);
+  } else {
+    _s3d.tctl.detach();_s3d.selected=null;
+  }
+}
+
+function s3dDblClick(e){
+  if(!_s3d.inited||!ld)return;
+  var grp=_s3dHitGroup(e);
+  if(!grp)return;
+  if(grp.userData.childId!==undefined){
+    var ch=null;(ld.children||[]).forEach(function(c){if(c.id===grp.userData.childId)ch=c;});
+    if(ch)showNodeEdit3D(ch);
+  } else if(grp.userData.surfaceObj){
+    var sf=null;(_surfaces||[]).forEach(function(s){if(s.id===grp.userData.surfaceId)sf=s;});
+    if(sf)editSurface(sf.id);
+  }
+}
+
+function showNodeEdit3D(c){
+  var dirs=['East (+X)','North (+Y)','West (-X)','South (-Y)'];
+  var types=['WS2812B','WS2811','APA102'];
+  var h='<div style="margin-bottom:.8em">';
+  h+='<label>X (mm)</label><input id="ne-x" type="number" value="'+c.x+'" min="0" style="width:120px">';
+  h+=' <label style="display:inline;margin-left:1em">Y (mm)</label><input id="ne-y" type="number" value="'+c.y+'" min="0" style="width:120px">';
+  h+=' <label style="display:inline;margin-left:1em">Z (mm)</label><input id="ne-z" type="number" value="'+(c.z||0)+'" min="0" style="width:120px">';
+  h+='</div>';
+  if(c.sc>0&&c.strings&&c.strings.length){
+    h+='<table class="tbl" style="font-size:.8em;margin-bottom:.8em"><tr><th>#</th><th>LEDs</th><th>Length</th><th>Dir</th><th>Type</th></tr>';
+    for(var i=0;i<c.sc&&i<c.strings.length;i++){
+      var s=c.strings[i];
+      h+='<tr><td>'+(i+1)+'</td><td>'+s.leds+'</td><td>'+s.mm+'mm</td><td>'+(dirs[s.sdir]||'?')+'</td><td>'+(types[s.type]||s.type)+'</td></tr>';
+    }
+    h+='</table>';
+  }
+  h+='<div style="display:flex;gap:.5em">';
+  h+='<button class="btn btn-on" onclick="applyNodePos3D('+c.id+')">Set Position</button>';
+  h+='<button class="btn btn-off" onclick="removeFromCanvas('+c.id+')">Remove from Canvas</button>';
+  h+='</div>';
+  document.getElementById('modal-title').textContent=c.hostname+(c.name&&c.name!==c.hostname?' ('+c.name+')':'');
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+}
+
+function applyNodePos3D(id){
+  var nx=parseInt(document.getElementById('ne-x').value)||0;
+  var ny=parseInt(document.getElementById('ne-y').value)||0;
+  var nz=parseInt(document.getElementById('ne-z').value)||0;
+  (ld.children||[]).forEach(function(c){if(c.id===id){c.x=nx;c.y=ny;c.z=nz;c._placed=true;}});
+  closeModal();s3dLoadChildren();renderSidebar();
+}
+
+function s3dDrop(e){
+  e.preventDefault();
+  if(_layDragId===null||!_s3d.inited)return;
+  // Raycast to ground plane (y=0)
+  var rect=_s3d.renderer.domElement.getBoundingClientRect();
+  _s3d.mouse.x=((e.clientX-rect.left)/rect.width)*2-1;
+  _s3d.mouse.y=-((e.clientY-rect.top)/rect.height)*2+1;
+  _s3d.raycaster.setFromCamera(_s3d.mouse,_s3d.camera);
+  var plane=new THREE.Plane(new THREE.Vector3(0,1,0),0);
+  var pt=new THREE.Vector3();
+  _s3d.raycaster.ray.intersectPlane(plane,pt);
+  if(pt){
+    var mm=_s3dToMm(pt);
+    mm.x=Math.max(0,mm.x);mm.y=Math.max(0,mm.y);mm.z=Math.max(0,mm.z);
+    var ch=null;(ld.children||[]).forEach(function(c){if(c.id===_layDragId)ch=c;});
+    if(ch){ch.x=mm.x;ch.y=mm.y;ch.z=mm.z;ch._placed=true;s3dLoadChildren();renderSidebar();}
+  }
+  _layDragId=null;
+}
+
+function setLayoutMode(mode){
+  _layMode=mode;
+  var b2d=document.getElementById('lay-mode-2d'),b3d=document.getElementById('lay-mode-3d');
+  var w2d=document.getElementById('lay-2d-wrap'),w3d=document.getElementById('lay-3d-wrap');
+  var hint=document.getElementById('lay-hint'),detWrap=document.getElementById('lay-detail-wrap');
+  if(mode==='3d'){
+    b2d.style.background='transparent';b2d.style.color='#64748b';
+    b3d.style.background='#14532d';b3d.style.color='#86efac';
+    w2d.style.display='none';w3d.style.display='block';
+    if(hint)hint.textContent='Click to select. Drag gizmo to move. Double-click to edit. Scroll=zoom, Drag=orbit.';
+    if(detWrap)detWrap.style.display='none';
+    s3dInit();s3dLoadChildren(); // reads from ld (already current from 2D edits)
+  } else {
+    _s3dSyncToLd(); // write 3D gizmo moves back to ld before switching
+    b3d.style.background='transparent';b3d.style.color='#64748b';
+    b2d.style.background='#14532d';b2d.style.color='#86efac';
+    w3d.style.display='none';w2d.style.display='block';
+    if(hint)hint.textContent='Drag performers from sidebar onto canvas. Double-click a node to edit. (0,0)=bottom-left.';
+    if(detWrap)detWrap.style.display='flex';
+    drawLayout();renderSidebar();
+  }
+}
+
+// ── Phase 2: Fixtures ───────────────────────────────────────────────────────
+var _fixtures=[];
+
+function loadFixtures(cb){
+  ra('GET','/api/fixtures',null,function(d){_fixtures=d||[];renderFixturesSidebar();if(cb)cb();});
+}
+
+function renderFixturesSidebar(){
+  var el=document.getElementById('lay-fixtures');if(!el)return;
+  if(!_fixtures.length){el.innerHTML='<p style="color:#555;font-size:.82em">No fixtures. Click Auto-create.</p>';return;}
+  var h='';
+  _fixtures.forEach(function(f){
+    var icon=f.type==='point'?'\u2b24':f.type==='group'?'\u25a3':'\u2501';
+    var rot=f.rotation||[0,0,0];
+    var rotTxt=(rot[0]||rot[1]||rot[2])?(' R:'+rot[0]+','+rot[1]+','+rot[2]):'';
+    h+='<div style="padding:.3em 0;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:.4em">';
+    h+='<span style="font-size:.9em">'+icon+'</span>';
+    h+='<span style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer" title="'+escapeHtml(f.name)+rotTxt+'" onclick="selectOnCanvas(\'fixture\','+f.childId+')">'+escapeHtml(f.name)+'</span>';
+    h+='<span style="cursor:pointer;color:#3b82f6;font-size:.8em" onclick="editFixture('+f.id+')" title="Edit">\u270e</span>';
+    h+='<span style="cursor:pointer;color:#f66;font-size:.8em" onclick="delFixture('+f.id+')" title="Delete">\u2715</span>';
+    h+='</div>';
+  });
+  el.innerHTML=h;
+}
+
+function autoCreateFixtures(){
+  ra('POST','/api/migrate/layout',{},function(r){
+    if(r&&r.ok){
+      document.getElementById('hs').textContent='Created '+r.created+' fixtures from children';
+      loadFixtures();
+    }
+  });
+}
+
+function editFixture(id){
+  var f=null;_fixtures.forEach(function(fx){if(fx.id===id)f=fx;});
+  if(!f)return;
+  var h='<label>Name</label><input id="fx-name" value="'+escapeHtml(f.name)+'" style="width:100%">';
+  h+='<label>Type</label><select id="fx-type"><option value="linear"'+(f.type==='linear'?' selected':'')+'>Linear</option><option value="point"'+(f.type==='point'?' selected':'')+'>Point</option><option value="group"'+(f.type==='group'?' selected':'')+'>Group</option></select>';
+  h+='<label>Rotation Override (degrees)</label>';
+  var rot=f.rotation||[0,0,0];
+  h+='<div style="display:flex;gap:.3em"><label style="font-size:.75em">RX</label><input id="fx-rx" type="number" value="'+rot[0]+'" style="width:70px"> <label style="font-size:.75em">RY</label><input id="fx-ry" type="number" value="'+rot[1]+'" style="width:70px"> <label style="font-size:.75em">RZ</label><input id="fx-rz" type="number" value="'+rot[2]+'" style="width:70px"></div>';
+  h+='<p style="color:#64748b;font-size:.75em;margin-top:.3em">E.g., RZ=90 rotates an east string to vertical</p>';
+  h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="saveFixture('+id+')">Save</button></div>';
+  document.getElementById('modal-title').textContent='Edit Fixture: '+f.name;
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+}
+
+function saveFixture(id){
+  var body={
+    name:document.getElementById('fx-name').value,
+    type:document.getElementById('fx-type').value,
+    rotation:[parseFloat(document.getElementById('fx-rx').value)||0,parseFloat(document.getElementById('fx-ry').value)||0,parseFloat(document.getElementById('fx-rz').value)||0]
+  };
+  ra('PUT','/api/fixtures/'+id,body,function(r){closeModal();if(r&&r.ok)loadFixtures();});
+}
+
+function delFixture(id){
+  if(!confirm('Delete this fixture?'))return;
+  ra('DELETE','/api/fixtures/'+id,null,function(){loadFixtures();});
+}
+
+function selectOnCanvas(type,id){
+  if(!_s3d.inited){setLayoutMode('3d');setTimeout(function(){selectOnCanvas(type,id);},500);return;}
+  _s3d.nodes.forEach(function(grp){
+    if(type==='fixture'&&grp.userData.childId===id){_s3d.selected=grp;_s3d.tctl.attach(grp);}
+    if(type==='surface'&&grp.userData.surfaceId===id){_s3d.selected=grp;_s3d.tctl.attach(grp);}
+  });
+}
+
+// ── Surfaces (projection targets) ──────────────────────────────────────────
+var _surfaces=[];
+
+function loadSurfaces(cb){
+  ra('GET','/api/surfaces',null,function(d){_surfaces=d||[];renderSurfacesSidebar();if(cb)cb();});
+}
+
+function renderSurfacesSidebar(){
+  var el=document.getElementById('lay-surfaces');if(!el)return;
+  if(!_surfaces.length){el.innerHTML='<p style="color:#555;font-size:.82em">No surfaces.</p>';return;}
+  var h='';
+  _surfaces.forEach(function(s){
+    var col=s.color||'#334155';
+    var icons={wall:'\u2b1b',floor:'\u2b1c',truss:'\u2501',screen:'\u25fb',custom:'\u25a1'};
+    var icon=icons[s.surfaceType||'custom']||'\u25a1';
+    h+='<div style="padding:.3em 0;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:.4em">';
+    h+='<span style="color:'+col+';font-size:.9em;flex-shrink:0">'+icon+'</span>';
+    h+='<span style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer" onclick="selectOnCanvas(\'surface\','+s.id+')">'+escapeHtml(s.name)+'</span>';
+    h+='<span style="cursor:pointer;color:#3b82f6;font-size:.8em" onclick="editSurface('+s.id+')">\u270e</span>';
+    h+='<span style="cursor:pointer;color:#f66;font-size:.8em" onclick="delSurface('+s.id+')">\u2715</span>';
+    h+='</div>';
+  });
+  el.innerHTML=h;
+}
+
+function newSurface(){
+  var h='<label>Type</label><select id="sf-type" onchange="sfTypeChange()">';
+  h+='<option value="wall">Wall / Backdrop</option>';
+  h+='<option value="floor">Floor / Platform</option>';
+  h+='<option value="truss">Truss / Bar</option>';
+  h+='<option value="screen">Projection Screen</option>';
+  h+='<option value="custom">Custom Surface</option>';
+  h+='</select>';
+  h+='<label>Name</label><input id="sf-name" value="" style="width:100%">';
+  h+='<label>Color</label><input id="sf-color" type="color" value="#334155">';
+  h+='<label>Position X (mm)</label><input id="sf-x" type="number" value="0" style="width:100px">';
+  h+=' <label style="display:inline;margin-left:.5em">Y (mm)</label><input id="sf-y" type="number" value="0" style="width:100px">';
+  h+=' <label style="display:inline;margin-left:.5em">Z (mm)</label><input id="sf-z" type="number" value="0" style="width:100px">';
+  h+='<label>Width (mm)</label><input id="sf-w" type="number" value="3000" min="100" style="width:100px">';
+  h+=' <label style="display:inline;margin-left:.5em">Height (mm)</label><input id="sf-h" type="number" value="2000" min="100" style="width:100px">';
+  h+=' <label style="display:inline;margin-left:.5em">Depth (mm)</label><input id="sf-d" type="number" value="100" min="0" style="width:100px">';
+  h+='<label>Opacity <span id="sf-op-val">30%</span></label><input id="sf-op" type="range" min="10" max="100" value="30" style="width:120px" oninput="document.getElementById(\'sf-op-val\').textContent=this.value+\'%\'">';
+  h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="createSurface()">Add to Stage</button></div>';
+  document.getElementById('modal-title').textContent='New Projection Surface';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+}
+
+function sfTypeChange(){
+  var t=document.getElementById('sf-type').value;
+  var presets={
+    wall:  {name:'Back Wall',   color:'#334155',w:3000,h:2000,op:25},
+    floor: {name:'Stage Floor', color:'#1a2744',w:3000,h:100, op:20},
+    truss: {name:'Truss Bar',   color:'#555555',w:3000,h:50,  op:60},
+    screen:{name:'Projection',  color:'#0f172a',w:2000,h:1500,op:40},
+    custom:{name:'Surface',     color:'#334155',w:2000,h:1500,op:30},
+  };
+  var p=presets[t]||presets.custom;
+  var n=document.getElementById('sf-name');if(n&&!n.value)n.value=p.name;
+  var c=document.getElementById('sf-color');if(c)c.value=p.color;
+  var w=document.getElementById('sf-w');if(w)w.value=p.w;
+  var h=document.getElementById('sf-h');if(h)h.value=p.h;
+  var o=document.getElementById('sf-op');if(o){o.value=p.op;var ov=document.getElementById('sf-op-val');if(ov)ov.textContent=p.op+'%';}
+}
+
+function createSurface(){
+  var body={
+    name:document.getElementById('sf-name').value||'Surface',
+    color:document.getElementById('sf-color').value,
+    surfaceType:document.getElementById('sf-type')?document.getElementById('sf-type').value:'custom',
+    transform:{
+      pos:[parseInt(document.getElementById('sf-x').value)||0,parseInt(document.getElementById('sf-y').value)||0,parseInt(document.getElementById('sf-z').value)||0],
+      rot:[0,0,0],
+      scale:[parseInt(document.getElementById('sf-w').value)||2000,parseInt(document.getElementById('sf-h').value)||1500,parseInt(document.getElementById('sf-d').value)||100]
+    },
+    opacity:parseInt(document.getElementById('sf-op').value)||30,
+  };
+  ra('POST','/api/surfaces',body,function(r){
+    closeModal();if(r&&r.ok){loadSurfaces();drawLayout();if(_s3d.inited)s3dLoadChildren();}
+  });
+}
+
+function editSurface(id){
+  var s=null;_surfaces.forEach(function(sf){if(sf.id===id)s=sf;});
+  if(!s)return;
+  var t=s.transform||{pos:[0,0,0],rot:[0,0,0],scale:[2000,1500,1]};
+  var h='<label>Name</label><input id="sf-name" value="'+escapeHtml(s.name)+'" style="width:100%">';
+  h+='<label>Color</label><input id="sf-color" type="color" value="'+(s.color||'#334155')+'">';
+  h+='<label>Position X (mm)</label><input id="sf-x" type="number" value="'+(t.pos[0]||0)+'" style="width:100px">';
+  h+=' <label style="display:inline;margin-left:.5em">Y</label><input id="sf-y" type="number" value="'+(t.pos[1]||0)+'" style="width:100px">';
+  h+=' <label style="display:inline;margin-left:.5em">Z</label><input id="sf-z" type="number" value="'+(t.pos[2]||0)+'" style="width:100px">';
+  h+='<label>Width (mm)</label><input id="sf-w" type="number" value="'+(t.scale[0]||2000)+'" min="100" style="width:100px">';
+  h+=' <label style="display:inline;margin-left:.5em">Height</label><input id="sf-h" type="number" value="'+(t.scale[1]||1500)+'" min="100" style="width:100px">';
+  h+=' <label style="display:inline;margin-left:.5em">Depth</label><input id="sf-d" type="number" value="'+(t.scale[2]||100)+'" min="0" style="width:100px">';
+  h+='<label>Opacity</label><input id="sf-op" type="range" min="10" max="100" value="'+(s.opacity||30)+'" style="width:120px">';
+  h+='<div style="margin-top:.8em;display:flex;gap:.5em">';
+  h+='<button class="btn btn-on" onclick="updateSurface('+id+')">Save</button>';
+  h+='<button class="btn btn-off" onclick="delSurface('+id+')">Delete</button>';
+  h+='</div>';
+  document.getElementById('modal-title').textContent='Edit Surface: '+s.name;
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+}
+
+function updateSurface(id){
+  var body={
+    name:document.getElementById('sf-name').value,
+    color:document.getElementById('sf-color').value,
+    transform:{
+      pos:[parseInt(document.getElementById('sf-x').value)||0,parseInt(document.getElementById('sf-y').value)||0,parseInt(document.getElementById('sf-z').value)||0],
+      rot:[0,0,0],
+      scale:[parseInt(document.getElementById('sf-w').value)||2000,parseInt(document.getElementById('sf-h').value)||1500,parseInt(document.getElementById('sf-d').value)||100]
+    },
+    opacity:parseInt(document.getElementById('sf-op').value)||30,
+  };
+  // Delete and recreate (simple approach since surfaces API doesn't have PUT)
+  ra('DELETE','/api/surfaces/'+id,null,function(){
+    ra('POST','/api/surfaces',body,function(r){
+      closeModal();loadSurfaces();drawLayout();if(_s3d.inited)s3dLoadChildren();
+    });
+  });
+}
+
+function delSurface(id){
+  if(!confirm('Delete this surface?'))return;
+  ra('DELETE','/api/surfaces/'+id,null,function(){
+    closeModal();loadSurfaces();drawLayout();if(_s3d.inited)s3dLoadChildren();
+  });
+}
+
+// ── Phase 3: Spatial Effects ────────────────────────────────────────────────
+var _spatialFx=[];
+
+function loadSpatialFx(cb){
+  ra('GET','/api/spatial-effects',null,function(d){_spatialFx=d||[];renderSfxList();if(cb)cb();});
+}
+
+function renderSfxList(){
+  var el=document.getElementById('sfx-list');if(!el)return;
+  if(!_spatialFx.length){el.innerHTML='<p style="color:#555;font-size:.85em">No spatial effects yet.</p>';return;}
+  var h='<table class="tbl" style="max-width:700px"><tr><th>Name</th><th>Category</th><th>Shape</th><th>Color</th><th>Actions</th></tr>';
+  _spatialFx.forEach(function(fx){
+    var col=rgb2h(fx.r||0,fx.g||0,fx.b||0);
+    var shape=fx.category==='fixture-local'?('Action #'+(fx.actionType||0)):((fx.shape||'sphere'));
+    h+='<tr><td>'+escapeHtml(fx.name)+'</td>';
+    h+='<td><span class="badge '+(fx.category==='spatial-field'?'bon':'boff')+'">'+fx.category+'</span></td>';
+    h+='<td>'+shape+'</td>';
+    h+='<td><span style="display:inline-block;width:16px;height:16px;border-radius:3px;background:'+col+';vertical-align:middle"></span> '+col+'</td>';
+    h+='<td><button class="btn" onclick="editSpatialFx('+fx.id+')" style="background:#446;color:#fff;font-size:.75em">Edit</button> ';
+    h+='<button class="btn btn-off" onclick="delSpatialFx('+fx.id+')" style="font-size:.75em">Del</button></td></tr>';
+  });
+  h+='</table>';el.innerHTML=h;
+}
+
+function newSpatialFx(){
+  var h='<label>Name</label><input id="sfx-name" style="width:100%">';
+  h+='<label>Category</label><select id="sfx-cat" onchange="sfxCatChange()" style="width:100%"><option value="spatial-field">Spatial Field</option><option value="fixture-local">Fixture-Local</option></select>';
+  h+='<div id="sfx-field-opts">';
+  h+='<label>Shape</label><select id="sfx-shape"><option>sphere</option><option>plane</option><option>box</option></select>';
+  h+='<label>Color</label><div style="display:flex;gap:.3em"><input id="sfx-r" type="number" min="0" max="255" value="255" style="width:60px" placeholder="R"><input id="sfx-g" type="number" min="0" max="255" value="0" style="width:60px" placeholder="G"><input id="sfx-b" type="number" min="0" max="255" value="0" style="width:60px" placeholder="B"></div>';
+  h+='<label>Radius / Size (mm)</label><input id="sfx-radius" type="number" value="1000" style="width:120px">';
+  h+='<label>Motion Start (x,y,z mm)</label><div style="display:flex;gap:.3em"><input id="sfx-sx" type="number" value="0" style="width:80px"><input id="sfx-sy" type="number" value="0" style="width:80px"><input id="sfx-sz" type="number" value="0" style="width:80px"></div>';
+  h+='<label>Motion End (x,y,z mm)</label><div style="display:flex;gap:.3em"><input id="sfx-ex" type="number" value="5000" style="width:80px"><input id="sfx-ey" type="number" value="0" style="width:80px"><input id="sfx-ez" type="number" value="0" style="width:80px"></div>';
+  h+='<label>Duration (s)</label><input id="sfx-dur" type="number" value="5" min="0.1" step="0.1" style="width:80px">';
+  h+='<label>Easing</label><select id="sfx-ease"><option>linear</option><option>ease-in</option><option>ease-out</option><option>ease-in-out</option></select>';
+  h+='<label>Blend</label><select id="sfx-blend"><option>replace</option><option>add</option><option>multiply</option><option>screen</option></select>';
+  h+='</div>';
+  h+='<div id="sfx-local-opts" style="display:none"><label>Action Type</label><select id="sfx-atype">';
+  var aNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Wipe','Scanner','Sparkle','Gradient'];
+  aNames.forEach(function(n,i){h+='<option value="'+i+'">'+n+'</option>';});
+  h+='</select></div>';
+  h+='<div style="margin-top:1em"><button class="btn btn-on" onclick="saveSpatialFx()">Create</button></div>';
+  document.getElementById('modal-title').textContent='New Spatial Effect';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+}
+
+function sfxCatChange(){
+  var cat=document.getElementById('sfx-cat').value;
+  document.getElementById('sfx-field-opts').style.display=cat==='spatial-field'?'block':'none';
+  document.getElementById('sfx-local-opts').style.display=cat==='fixture-local'?'block':'none';
+}
+
+function saveSpatialFx(){
+  var body={
+    name:document.getElementById('sfx-name').value,
+    category:document.getElementById('sfx-cat').value,
+  };
+  if(body.category==='spatial-field'){
+    body.shape=document.getElementById('sfx-shape').value;
+    body.r=parseInt(document.getElementById('sfx-r').value)||0;
+    body.g=parseInt(document.getElementById('sfx-g').value)||0;
+    body.b=parseInt(document.getElementById('sfx-b').value)||0;
+    body.size={radius:parseInt(document.getElementById('sfx-radius').value)||1000};
+    body.motion={
+      startPos:[parseInt(document.getElementById('sfx-sx').value)||0,parseInt(document.getElementById('sfx-sy').value)||0,parseInt(document.getElementById('sfx-sz').value)||0],
+      endPos:[parseInt(document.getElementById('sfx-ex').value)||0,parseInt(document.getElementById('sfx-ey').value)||0,parseInt(document.getElementById('sfx-ez').value)||0],
+      durationS:parseFloat(document.getElementById('sfx-dur').value)||5,
+      easing:document.getElementById('sfx-ease').value
+    };
+    body.blend=document.getElementById('sfx-blend').value;
+  } else {
+    body.actionType=parseInt(document.getElementById('sfx-atype').value)||0;
+  }
+  ra('POST','/api/spatial-effects',body,function(r){
+    closeModal();if(r&&r.ok)loadSpatialFx();
+  });
+}
+
+function editSpatialFx(id){
+  var fx=null;_spatialFx.forEach(function(f){if(f.id===id)fx=f;});
+  if(!fx)return;
+  // Re-use create modal with pre-filled values
+  newSpatialFx();
+  setTimeout(function(){
+    document.getElementById('modal-title').textContent='Edit: '+fx.name;
+    document.getElementById('sfx-name').value=fx.name||'';
+    document.getElementById('sfx-cat').value=fx.category||'spatial-field';
+    sfxCatChange();
+    if(fx.category==='spatial-field'){
+      document.getElementById('sfx-shape').value=fx.shape||'sphere';
+      document.getElementById('sfx-r').value=fx.r||0;
+      document.getElementById('sfx-g').value=fx.g||0;
+      document.getElementById('sfx-b').value=fx.b||0;
+      document.getElementById('sfx-radius').value=(fx.size||{}).radius||1000;
+      var m=fx.motion||{};var sp=m.startPos||[0,0,0];var ep=m.endPos||[0,0,0];
+      document.getElementById('sfx-sx').value=sp[0];document.getElementById('sfx-sy').value=sp[1];document.getElementById('sfx-sz').value=sp[2];
+      document.getElementById('sfx-ex').value=ep[0];document.getElementById('sfx-ey').value=ep[1];document.getElementById('sfx-ez').value=ep[2];
+      document.getElementById('sfx-dur').value=m.durationS||5;
+      document.getElementById('sfx-ease').value=m.easing||'linear';
+      document.getElementById('sfx-blend').value=fx.blend||'replace';
+    } else {
+      document.getElementById('sfx-atype').value=fx.actionType||0;
+    }
+    // Override save to PUT
+    var saveBtn=document.querySelector('#modal .btn-on');
+    if(saveBtn){saveBtn.textContent='Update';saveBtn.onclick=function(){
+      var body={name:document.getElementById('sfx-name').value,category:document.getElementById('sfx-cat').value};
+      if(body.category==='spatial-field'){
+        body.shape=document.getElementById('sfx-shape').value;
+        body.r=parseInt(document.getElementById('sfx-r').value)||0;body.g=parseInt(document.getElementById('sfx-g').value)||0;body.b=parseInt(document.getElementById('sfx-b').value)||0;
+        body.size={radius:parseInt(document.getElementById('sfx-radius').value)||1000};
+        body.motion={startPos:[parseInt(document.getElementById('sfx-sx').value)||0,parseInt(document.getElementById('sfx-sy').value)||0,parseInt(document.getElementById('sfx-sz').value)||0],
+          endPos:[parseInt(document.getElementById('sfx-ex').value)||0,parseInt(document.getElementById('sfx-ey').value)||0,parseInt(document.getElementById('sfx-ez').value)||0],
+          durationS:parseFloat(document.getElementById('sfx-dur').value)||5,easing:document.getElementById('sfx-ease').value};
+        body.blend=document.getElementById('sfx-blend').value;
+      } else {body.actionType=parseInt(document.getElementById('sfx-atype').value)||0;}
+      ra('PUT','/api/spatial-effects/'+id,body,function(r){closeModal();if(r&&r.ok)loadSpatialFx();});
+    };}
+  },50);
+}
+
+function delSpatialFx(id){
+  if(!confirm('Delete this spatial effect?'))return;
+  ra('DELETE','/api/spatial-effects/'+id,null,function(){loadSpatialFx();});
+}
+
+// ── Phase 4: Timeline Editor ────────────────────────────────────────────────
+var _rtMode='timeline';
+var _timelines=[], _curTl=null;
+var _tlPlaying=false, _tlPlayT=0, _tlPlayTimer=null;
+var _tlPxPerSec=12; // pixels per second in the timeline
+
+function setRuntimeMode(mode){
+  // Timeline is now the only mode — kept for API compatibility
+  _rtMode='timeline';
+  loadTimelines();
+}
+
+function loadTimelines(){
+  ra('GET','/api/timelines',null,function(d){
+    _timelines=d||[];
+    var sel=document.getElementById('tl-select');if(!sel)return;
+    var cv=sel.value;
+    sel.innerHTML='<option value="">Select timeline...</option>';
+    _timelines.forEach(function(t){
+      sel.innerHTML+='<option value="'+t.id+'">'+escapeHtml(t.name)+' ('+t.durationS+'s)</option>';
+    });
+    if(cv)sel.value=cv;
+    loadSpatialFx();loadFixtures();
+  });
+}
+
+function newTimeline(){
+  var name=prompt('Timeline name:');
+  if(!name)return;
+  var dur=parseInt(prompt('Duration in seconds:','60'))||60;
+  ra('POST','/api/timelines',{name:name,durationS:dur},function(r){
+    if(r&&r.ok){loadTimelines();setTimeout(function(){
+      var sel=document.getElementById('tl-select');if(sel)sel.value=r.id;loadTimelineDetail();
+    },200);}
+  });
+}
+
+function deleteTimeline(){
+  var sel=document.getElementById('tl-select');
+  var id=sel?parseInt(sel.value):null;
+  if(!id&&id!==0)return;
+  if(!confirm('Delete this timeline?'))return;
+  ra('DELETE','/api/timelines/'+id,null,function(){_curTl=null;document.getElementById('tl-detail').style.display='none';loadTimelines();});
+}
+
+function loadTimelineDetail(){
+  var sel=document.getElementById('tl-select');
+  var id=sel?parseInt(sel.value):null;
+  if(isNaN(id)){document.getElementById('tl-detail').style.display='none';return;}
+  ra('GET','/api/timelines/'+id,null,function(tl){
+    if(!tl){document.getElementById('tl-detail').style.display='none';return;}
+    _curTl=tl;
+    document.getElementById('tl-detail').style.display='block';
+    document.getElementById('tl-name').value=tl.name||'';
+    document.getElementById('tl-dur').value=tl.durationS||60;
+    document.getElementById('tl-loop').checked=!!tl.loop;
+    renderTimeline();
+  });
+}
+
+function saveTimeline(btn){
+  if(!_curTl)return;
+  _btnSaving(btn);
+  _curTl.name=document.getElementById('tl-name').value;
+  _curTl.durationS=parseInt(document.getElementById('tl-dur').value)||60;
+  _curTl.loop=document.getElementById('tl-loop').checked;
+  ra('PUT','/api/timelines/'+_curTl.id,_curTl,function(r){
+    _btnSaved(btn,r&&r.ok);
+    var sel=document.getElementById('tl-select');
+    if(sel){var opt=sel.querySelector('option[value="'+_curTl.id+'"]');if(opt)opt.textContent=_curTl.name+' ('+_curTl.durationS+'s)';}
+  });
+}
+
+function renderTimeline(){
+  if(!_curTl)return;
+  var dur=_curTl.durationS||60;
+  var trackW=60+dur*_tlPxPerSec;
+  var ruler=document.getElementById('tl-ruler');
+  var rows=document.getElementById('tl-track-rows');
+  if(!ruler||!rows)return;
+
+  // Ruler
+  var rh='';
+  for(var s=0;s<=dur;s+=5){
+    var x=60+s*_tlPxPerSec;
+    rh+='<span style="position:absolute;left:'+x+'px;top:4px;font-size:.65em;color:#475569">'+s+'s</span>';
+    rh+='<span style="position:absolute;left:'+x+'px;top:16px;width:1px;height:8px;background:#1e293b"></span>';
+  }
+  ruler.style.width=trackW+'px';ruler.innerHTML=rh;
+
+  // Tracks
+  var tracks=_curTl.tracks||[];
+  var th='';
+  tracks.forEach(function(trk,ti){
+    var fixName='Track '+(ti+1);
+    var fix=null;_fixtures.forEach(function(f){if(f.id===trk.fixtureId)fix=f;});
+    if(fix)fixName=fix.name||fixName;
+    th+='<div style="display:flex;height:40px;border-bottom:1px solid #1e293b">';
+    th+='<div style="width:60px;flex-shrink:0;padding:2px 4px;font-size:.65em;color:#94a3b8;overflow:hidden;border-right:1px solid #1e293b;display:flex;flex-direction:column;justify-content:center"><span style="white-space:nowrap">'+escapeHtml(fixName)+'</span><span style="cursor:pointer;color:#3b82f6;font-size:.9em" onclick="tlAddClipToTrack('+ti+')" title="Add clip">+ clip</span></div>';
+    th+='<div style="flex:1;position:relative;min-width:'+(trackW-60)+'px" id="tl-tr-'+ti+'">';
+    // Render clips
+    (trk.clips||[]).forEach(function(clip,ci){
+      var lx=clip.startS*_tlPxPerSec;
+      var w=clip.durationS*_tlPxPerSec;
+      var fxn='';var fxcol='#3b82f6';
+      _spatialFx.forEach(function(f){if(f.id===clip.effectId){fxn=f.name;fxcol=rgb2h(f.r||100,f.g||100,f.b||255);}});
+      th+='<div style="position:absolute;left:'+lx+'px;top:4px;width:'+Math.max(w,8)+'px;height:28px;background:'+fxcol+'33;border:1px solid '+fxcol+';border-radius:3px;cursor:pointer;overflow:hidden;font-size:.65em;color:#e2e8f0;padding:2px 4px;white-space:nowrap" ';
+      th+='onclick="editClip('+ti+','+ci+')" title="'+escapeHtml(fxn)+' ('+clip.durationS+'s)">';
+      th+=escapeHtml(fxn||'?')+'</div>';
+    });
+    th+='</div></div>';
+  });
+  if(!tracks.length)th='<p style="color:#475569;font-size:.82em;padding:.6em">No tracks. Click + Add Track to begin.</p>';
+  rows.style.width=trackW+'px';rows.innerHTML=th;
+}
+
+function tlAddTrack(){
+  if(!_curTl)return;
+  if(!_curTl.tracks)_curTl.tracks=[];
+  // Pick fixture
+  var opts='';_fixtures.forEach(function(f){opts+='<option value="'+f.id+'">'+escapeHtml(f.name||('Fixture '+f.id))+'</option>';});
+  if(!opts){alert('No fixtures defined. Add performers in Setup and fixtures will be auto-created.');return;}
+  var h='<label>Fixture</label><select id="trk-fix">'+opts+'</select>';
+  h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="tlAddTrackConfirm()">Add</button></div>';
+  document.getElementById('modal-title').textContent='Add Track';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+}
+
+function tlAddTrackConfirm(){
+  var fixId=parseInt(document.getElementById('trk-fix').value);
+  _curTl.tracks.push({fixtureId:fixId,clips:[]});
+  closeModal();
+  ra('PUT','/api/timelines/'+_curTl.id,_curTl,function(){renderTimeline();});
+}
+
+function editClip(ti,ci){
+  if(!_curTl||!_curTl.tracks||!_curTl.tracks[ti])return;
+  var clip=_curTl.tracks[ti].clips[ci];
+  var h='<label>Effect</label><select id="clip-fx">';
+  _spatialFx.forEach(function(f){h+='<option value="'+f.id+'"'+(f.id===clip.effectId?' selected':'')+'>'+escapeHtml(f.name)+'</option>';});
+  h+='</select>';
+  h+='<label>Start (s)</label><input id="clip-start" type="number" min="0" step="0.1" value="'+clip.startS+'" style="width:100px">';
+  h+='<label>Duration (s)</label><input id="clip-dur" type="number" min="0.1" step="0.1" value="'+clip.durationS+'" style="width:100px">';
+  h+='<div style="margin-top:.8em;display:flex;gap:.5em">';
+  h+='<button class="btn btn-on" onclick="saveClip('+ti+','+ci+')">Save</button>';
+  h+='<button class="btn btn-off" onclick="removeClip('+ti+','+ci+')">Remove</button>';
+  h+='</div>';
+  document.getElementById('modal-title').textContent='Edit Clip';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+}
+
+function saveClip(ti,ci){
+  var clip=_curTl.tracks[ti].clips[ci];
+  clip.effectId=parseInt(document.getElementById('clip-fx').value);
+  clip.startS=parseFloat(document.getElementById('clip-start').value)||0;
+  clip.durationS=parseFloat(document.getElementById('clip-dur').value)||1;
+  closeModal();
+  ra('PUT','/api/timelines/'+_curTl.id,_curTl,function(){renderTimeline();});
+}
+
+function removeClip(ti,ci){
+  _curTl.tracks[ti].clips.splice(ci,1);
+  closeModal();
+  ra('PUT','/api/timelines/'+_curTl.id,_curTl,function(){renderTimeline();});
+}
+
+// Add clip via double-click on track row (future enhancement stub)
+function tlAddClipToTrack(ti){
+  if(!_curTl||!_spatialFx.length)return;
+  var h='<label>Effect</label><select id="clip-fx">';
+  _spatialFx.forEach(function(f){h+='<option value="'+f.id+'">'+escapeHtml(f.name)+'</option>';});
+  h+='</select>';
+  h+='<label>Start (s)</label><input id="clip-start" type="number" min="0" step="0.1" value="0" style="width:100px">';
+  h+='<label>Duration (s)</label><input id="clip-dur" type="number" min="0.1" step="0.1" value="5" style="width:100px">';
+  h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="tlAddClipConfirm('+ti+')">Add Clip</button></div>';
+  document.getElementById('modal-title').textContent='Add Clip to Track '+(ti+1);
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+}
+
+function tlAddClipConfirm(ti){
+  var clip={
+    effectId:parseInt(document.getElementById('clip-fx').value),
+    startS:parseFloat(document.getElementById('clip-start').value)||0,
+    durationS:parseFloat(document.getElementById('clip-dur').value)||5
+  };
+  _curTl.tracks[ti].clips.push(clip);
+  closeModal();
+  ra('PUT','/api/timelines/'+_curTl.id,_curTl,function(){renderTimeline();});
+}
+
+// Timeline playback preview
+function tlTogglePreview(){
+  if(_tlPlaying){tlStopPreview();return;}
+  if(!_curTl)return;
+  _tlPlaying=true;_tlPlayT=0;
+  document.getElementById('tl-play-btn').textContent='\u23f8 Pause';
+  _tlPlayTimer=setInterval(function(){
+    _tlPlayT+=0.1;
+    var dur=_curTl.durationS||60;
+    if(_tlPlayT>=dur){
+      if(_curTl.loop){_tlPlayT=0;}
+      else{tlStopPreview();return;}
+    }
+    // Update playhead
+    var ph=document.getElementById('tl-playhead');
+    if(ph)ph.style.left=(60+_tlPlayT*_tlPxPerSec)+'px';
+    // Update time display
+    var td=document.getElementById('tl-time');
+    if(td){var m=Math.floor(_tlPlayT/60),s=(_tlPlayT%60).toFixed(1);td.textContent=(m<10?'0':'')+m+':'+(s<10?'0':'')+s;}
+  },100);
+}
+
+function tlStopPreview(){
+  _tlPlaying=false;_tlPlayT=0;
+  if(_tlPlayTimer){clearInterval(_tlPlayTimer);_tlPlayTimer=null;}
+  var btn=document.getElementById('tl-play-btn');if(btn)btn.textContent='\u25b6 Preview';
+  var ph=document.getElementById('tl-playhead');if(ph)ph.style.left='60px';
+  var td=document.getElementById('tl-time');if(td)td.textContent='00:00.0';
+}
+
+// ── Phase 5: Baking ─────────────────────────────────────────────────────────
+function tlBake(){
+  if(!_curTl){alert('No timeline selected');return;}
+  // Show progress modal
+  var h='<div id="bake-status" style="font-size:.85em;color:#94a3b8">Starting bake...</div>';
+  h+='<div class="prog-bar" style="margin:.8em 0"><div class="prog-fill" id="bake-prog" style="width:0%"></div></div>';
+  h+='<div id="bake-detail" style="font-size:.8em;color:#64748b"></div>';
+  document.getElementById('modal-title').textContent='Baking: '+_curTl.name;
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+
+  ra('POST','/api/timelines/'+_curTl.id+'/bake',{},function(r){
+    if(!r||!r.ok){document.getElementById('bake-status').textContent='Error: '+(r&&r.err||'failed');return;}
+    // Poll progress
+    var poll=setInterval(function(){
+      ra('GET','/api/timelines/'+_curTl.id+'/baked/status',null,function(s){
+        if(!s)return;
+        var bar=document.getElementById('bake-prog');
+        var stat=document.getElementById('bake-status');
+        var det=document.getElementById('bake-detail');
+        if(bar)bar.style.width=s.progress+'%';
+        if(stat)stat.textContent=s.status+' — Frame '+s.frame+' / '+s.totalFrames;
+        if(det){
+          var segs='';for(var k in s.segments||{}){segs+='Fixture '+k+': '+s.segments[k]+' segments. ';}
+          det.textContent=segs;
+        }
+        if(s.done||s.error){
+          clearInterval(poll);
+          if(s.error){if(stat)stat.textContent='Error: '+s.error;}
+          else{
+            if(stat)stat.textContent='Bake complete! Syncing to performers...';
+            if(det)det.textContent=segs;
+            // Auto-sync to performers after bake
+            ra('POST','/api/timelines/'+_curTl.id+'/baked/sync',null,function(sr){
+              if(sr&&sr.ok){
+                if(stat)stat.textContent='Synced to '+sr.synced+' performer(s). Ready to start.';
+              } else {
+                if(stat)stat.textContent='Bake done but sync failed: '+(sr&&sr.err||sr&&sr.warn||'?');
+              }
+            });
+          }
+        }
+      });
+    },500);
+  });
+}
+
+// ── Phase 6: Show Execution ─────────────────────────────────────────────────
+function tlSyncAndStart(){
+  if(!_curTl){alert('No timeline selected');return;}
+
+  // Show sync progress modal
+  var h='<div id="sync-phase" style="font-size:.9em;color:#22d3ee;font-weight:bold;margin-bottom:.6em">Phase 1: Baking...</div>';
+  h+='<div class="prog-bar" style="margin-bottom:.8em"><div class="prog-fill" id="sync-prog" style="width:0%"></div></div>';
+  h+='<div id="sync-performers" style="font-size:.82em"></div>';
+  h+='<div id="sync-actions" style="margin-top:1em;display:none">';
+  h+='<button class="btn btn-on" id="sync-go-btn" onclick="tlGoAfterSync()" disabled>Start Show</button>';
+  h+=' <button class="btn btn-off" onclick="closeModal()">Cancel</button>';
+  h+='</div>';
+  document.getElementById('modal-title').textContent='Sync & Start: '+_curTl.name;
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+
+  var tlId=_curTl.id;
+
+  // Phase 1: Bake
+  ra('POST','/api/timelines/'+tlId+'/bake',{},function(br){
+    if(!br||!br.ok){_syncPhase('Bake failed: '+(br&&br.err||'?'));return;}
+    var bakePoll=setInterval(function(){
+      ra('GET','/api/timelines/'+tlId+'/baked/status',null,function(s){
+        if(!s)return;
+        _syncProg(s.progress||0);
+        if(s.done){
+          clearInterval(bakePoll);
+          if(s.error){_syncPhase('Bake error: '+s.error);return;}
+          _syncPhase('Phase 2: Syncing to performers...');_syncProg(0);
+          // Phase 2: Sync
+          ra('POST','/api/timelines/'+tlId+'/baked/sync',{},function(sr){
+            if(!sr||!sr.ok){_syncPhase('Sync failed');return;}
+            // Poll sync progress
+            var syncPoll=setInterval(function(){
+              ra('GET','/api/timelines/'+tlId+'/sync/status',null,function(sp){
+                if(!sp)return;
+                _renderSyncPerformers(sp);
+                var total=sp.totalPerformers||1;
+                var ready=sp.readyCount||0;
+                _syncProg(Math.round(ready/total*100));
+                if(sp.done){
+                  clearInterval(syncPoll);
+                  if(sp.allReady){
+                    _syncPhase('All performers ready!');_syncProg(100);
+                    document.getElementById('sync-actions').style.display='block';
+                    document.getElementById('sync-go-btn').disabled=false;
+                  } else {
+                    _syncPhase('Warning: Not all performers verified');
+                    document.getElementById('sync-actions').style.display='block';
+                    document.getElementById('sync-go-btn').disabled=false;
+                    document.getElementById('sync-go-btn').textContent='Start Anyway';
+                  }
+                }
+              });
+            },400);
+          });
+        }
+      });
+    },500);
+  });
+}
+
+function _syncPhase(text){var el=document.getElementById('sync-phase');if(el)el.textContent=text;}
+function _syncProg(pct){var el=document.getElementById('sync-prog');if(el)el.style.width=pct+'%';}
+
+function _renderSyncPerformers(sp){
+  var el=document.getElementById('sync-performers');if(!el)return;
+  var perfs=sp.performers||{};
+  var h='';
+  for(var cid in perfs){
+    var p=perfs[cid];
+    var icon={pending:'\u23f3',syncing:'\u25b6',verifying:'\ud83d\udd0d',ready:'\u2705',unverified:'\u26a0',failed:'\u274c'}[p.status]||'\u2022';
+    var detail='';
+    if(p.status==='syncing')detail=' Step '+p.stepsLoaded+'/'+p.totalSteps;
+    if(p.status==='verifying')detail=' Verifying...';
+    if(p.retries>0)detail+=' (retry '+p.retries+')';
+    if(p.error)detail=' '+p.error;
+    var col={ready:'#86efac',failed:'#fca5a5',unverified:'#fbbf24'}[p.status]||'#94a3b8';
+    h+='<div style="padding:.25em 0;color:'+col+'">'+icon+' <b>'+escapeHtml(p.name)+'</b> <span style="color:#64748b">'+p.ip+'</span>'+detail+'</div>';
+  }
+  el.innerHTML=h;
+}
+
+function tlGoAfterSync(){
+  if(!_curTl)return;
+  closeModal();
+  ra('POST','/api/timelines/'+_curTl.id+'/start',{},function(r){
+    if(r&&r.ok){
+      document.getElementById('hs').textContent='Show started — '+r.started+' performers, go in 5s';
+    } else {
+      document.getElementById('hs').textContent='Start failed: '+(r&&r.err||'?');
+    }
+  });
+}
+
+function tlStopShow(){
+  if(!_curTl)return;
+  ra('POST','/api/timelines/'+_curTl.id+'/stop',{},function(r){
+    if(r&&r.ok)document.getElementById('hs').textContent='Show stopped — '+r.stopped+' performers';
+  });
+}
+
+// ── Phase 7: Help Panel ─────────────────────────────────────────────────────
+function toggleHelp(){
+  var panel=document.getElementById('help-panel');
+  if(!panel)return;
+  if(panel.style.display==='block'){panel.style.display='none';return;}
+  panel.style.display='block';
+  // Load context-sensitive help
+  var section=ctab;
+  if(section==='actions')section='spatial-effects';
+  if(section==='runtime')section='timeline';
+  ra('GET','/api/help/'+section,null,function(d){
+    var body=document.getElementById('help-body');
+    if(body)body.innerHTML=d&&d.html?d.html:'<p style="color:#888">Help content not available.</p>';
+  });
+}
 
 function loadLayout(){
   ra('GET','/api/settings',null,function(s){
@@ -849,6 +2038,7 @@ function loadLayout(){
     ra('GET','/api/layout',null,function(d){
       if(!d)return;ld=d;phW=d.canvasW||10000;phH=d.canvasH||5000;
       drawLayout();renderSidebar();
+      loadFixtures();loadSurfaces();
     });
   });
 }
@@ -896,6 +2086,7 @@ function showNodeEdit(c){
   var h='<div style="margin-bottom:.8em">';
   h+='<label>X (mm)</label><input id="ne-x" type="number" value="'+c.x+'" min="0" max="'+phW+'" style="width:120px">';
   h+=' <label style="display:inline;margin-left:1em">Y (mm)</label><input id="ne-y" type="number" value="'+c.y+'" min="0" max="'+phH+'" style="width:120px">';
+  h+=' <label style="display:inline;margin-left:1em">Z (mm)</label><input id="ne-z" type="number" value="'+(c.z||0)+'" min="0" style="width:120px">';
   h+='</div>';
   if(c.sc>0&&c.strings&&c.strings.length){
     h+='<table class="tbl" style="font-size:.8em;margin-bottom:.8em"><tr><th>#</th><th>LEDs</th><th>Length</th><th>Dir</th><th>Type</th></tr>';
@@ -917,14 +2108,17 @@ function showNodeEdit(c){
 function applyNodePos(id){
   var nx=parseInt(document.getElementById('ne-x').value)||0;
   var ny=parseInt(document.getElementById('ne-y').value)||0;
-  nx=Math.max(0,Math.min(phW,nx));ny=Math.max(0,Math.min(phH,ny));
-  (ld.children||[]).forEach(function(c){if(c.id===id){c.x=nx;c.y=ny;c._placed=true;}});
+  var nz=parseInt(document.getElementById('ne-z').value)||0;
+  nx=Math.max(0,Math.min(phW,nx));ny=Math.max(0,Math.min(phH,ny));nz=Math.max(0,nz);
+  (ld.children||[]).forEach(function(c){if(c.id===id){c.x=nx;c.y=ny;c.z=nz;c._placed=true;}});
   closeModal();drawLayout();renderSidebar();
 }
 
 function removeFromCanvas(id){
-  (ld.children||[]).forEach(function(c){if(c.id===id){c.x=0;c.y=0;c._placed=false;c.positioned=false;}});
-  closeModal();drawLayout();renderSidebar();
+  (ld.children||[]).forEach(function(c){if(c.id===id){c.x=0;c.y=0;c.z=0;c._placed=false;c.positioned=false;}});
+  closeModal();
+  if(_layMode==='3d'){s3dLoadChildren();}else{drawLayout();}
+  renderSidebar();
 }
 
 function fmtCoord(mm){
@@ -940,9 +2134,28 @@ function drawLayout(){
   ctx.strokeStyle='#1e1e1e';ctx.lineWidth=1;
   for(var gx=0;gx<=W;gx+=90){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}
   for(var gy=0;gy<=H;gy+=45){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
-  ctx.strokeStyle='#2a2a2a';ctx.lineWidth=1;ctx.strokeRect(0,0,W,H);
+  // Stage boundary with dimensions label
+  ctx.strokeStyle='#1e3a5f';ctx.lineWidth=2;ctx.strokeRect(1,1,W-2,H-2);
+  ctx.fillStyle='#1e3a5f';ctx.font='10px sans-serif';ctx.textAlign='left';
+  ctx.fillText('Stage: '+fmtCoord(phW)+' x '+fmtCoord(phH),6,14);
+  ctx.textAlign='right';
+  ctx.fillText('(0,0)',8,H-4);
+  // Draw projection surfaces
+  (_surfaces||[]).forEach(function(s){
+    var t=s.transform||{pos:[0,0,0],scale:[2000,1500,1]};
+    var sx=t.pos[0]*W/phW,sy=H-t.pos[1]*H/phH;
+    var sw=t.scale[0]*W/phW,sh=t.scale[1]*H/phH;
+    ctx.globalAlpha=(s.opacity||30)/100;
+    ctx.fillStyle=s.color||'#334155';
+    ctx.fillRect(sx,sy-sh,sw,sh);
+    ctx.globalAlpha=0.6;
+    ctx.strokeStyle=s.color||'#334155';ctx.lineWidth=1;ctx.strokeRect(sx,sy-sh,sw,sh);
+    ctx.globalAlpha=1;
+    ctx.fillStyle='#aaa';ctx.font='9px sans-serif';ctx.textAlign='left';
+    ctx.fillText(s.name||'Surface',sx+4,sy-sh+12);
+  });
   var placed=(ld.children||[]).filter(_isPlaced);
-  if(!placed.length){
+  if(!placed.length&&!_surfaces.length){
     ctx.fillStyle='#555';ctx.font='13px sans-serif';ctx.textAlign='center';
     ctx.fillText('Drag performers from the sidebar to place them.',W/2,H/2);
     return;
@@ -953,16 +2166,33 @@ function drawLayout(){
     if(showStr&&c.strings&&c.sc>0){
       for(var si=0;si<c.sc&&si<c.strings.length;si++){
         var s=c.strings[si];if(!s||!s.leds)continue;
-        var col=_strCol[si%_strCol.length];
+        var pv=_previewState[c.id];
+        var col=(pv&&pv.active)?'rgb('+pv.r+','+pv.g+','+pv.b+')':_strCol[si%_strCol.length];
         var dx=_dirDx[s.sdir||0],dy=_dirDy[s.sdir||0];
-        var pxL=dx!==0?(s.mm||0)*W/phW:(s.mm||0)*H/phH;
+        // Use physical mm if > 500mm, otherwise estimate from LED count (16mm/LED typical)
+        var lenMm=s.mm||0;
+        if(lenMm<500)lenMm=Math.max(s.leds*16,500);
+        var pxL=dx!==0?lenMm*W/phW:lenMm*H/phH;
+        pxL=Math.max(pxL,30); // minimum 30px visible length
         var ex=cx+dx*pxL,ey=cy+dy*pxL;
+        // Draw string as a thick colored line with LED dots
+        var lineW=(pv&&pv.active)?6:4;
         ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(ex,ey);
-        ctx.strokeStyle=col;ctx.lineWidth=3;ctx.stroke();
-        // LED count at string end
-        ctx.fillStyle=col;ctx.font='8px sans-serif';ctx.textAlign='center';
-        var lx=ex+(dx!==0?dx*10:0),ly=ey+(dy!==0?dy*10:(dx>0?-6:6));
-        ctx.fillText(s.leds,lx,ly);
+        ctx.strokeStyle=col;ctx.lineWidth=lineW;ctx.stroke();
+        // Draw LED dots along the string — glow when preview active
+        var dotR=(pv&&pv.active)?2.5:1.5;
+        var dotCount=Math.min(s.leds,Math.floor(pxL/3));
+        for(var di=0;di<dotCount;di++){
+          var t=(di+0.5)/dotCount;
+          var dpx=cx+dx*pxL*t,dpy=cy+dy*pxL*t;
+          ctx.beginPath();ctx.arc(dpx,dpy,dotR,0,2*Math.PI);
+          ctx.fillStyle=col;ctx.fill();
+        }
+        // LED count label at string end
+        ctx.fillStyle=(pv&&pv.active)?col:_strCol[si%_strCol.length];
+        ctx.font='9px sans-serif';ctx.textAlign='center';
+        var lx=ex+(dx!==0?dx*12:0),ly=ey+(dy!==0?dy*12:(dx>0?-8:8));
+        ctx.fillText(s.leds+' LEDs',lx,ly);
       }
     }
     // Preview glow (from live runner or action preview)
@@ -978,15 +2208,19 @@ function drawLayout(){
     ctx.beginPath();ctx.arc(cx,cy,10,0,2*Math.PI);
     ctx.fillStyle=c.status===1?nodeCol:'#333';ctx.fill();
     ctx.strokeStyle=c.status===1?nodeBdr:'#666';ctx.lineWidth=2;ctx.stroke();
-    // Labels
+    // Labels — name first (user-friendly), hostname secondary
     var lblDir=(cy+50>H)?-1:1;
-    ctx.fillStyle='#eee';ctx.font='10px sans-serif';ctx.textAlign='center';
-    ctx.fillText(c.hostname||c.name||('ID '+c.id),cx,cy+lblDir*20);
-    var lbl2=c.name&&c.name!==c.hostname?c.name:'';
+    var dispName=c.name||c.hostname||('ID '+c.id);
+    ctx.fillStyle='#eee';ctx.font='bold 10px sans-serif';ctx.textAlign='center';
+    ctx.fillText(dispName,cx,cy+lblDir*20);
     var coordStr='('+fmtCoord(c.x)+','+fmtCoord(c.y)+')';
     ctx.fillStyle='#888';ctx.font='9px sans-serif';
-    if(lbl2){ctx.fillText(lbl2,cx,cy+lblDir*31);ctx.fillText(coordStr,cx,cy+lblDir*42);}
-    else{ctx.fillText(coordStr,cx,cy+lblDir*31);}
+    if(c.name&&c.name!==c.hostname){
+      ctx.fillText(c.hostname,cx,cy+lblDir*31);
+      ctx.fillText(coordStr,cx,cy+lblDir*42);
+    } else {
+      ctx.fillText(coordStr,cx,cy+lblDir*31);
+    }
   });
 }
 
@@ -994,31 +2228,77 @@ function startLivePreview(){
   if(_previewTimer)clearInterval(_previewTimer);
   _previewTimer=setInterval(function(){
     ra('GET','/api/settings',null,function(s){
-      if(!s||!s.runnerRunning){_previewState={};drawLayout();return;}
-      ra('GET','/api/runners/live',null,function(live){
-        if(!live){return;}
-        // Get runner to resolve step colors
-        ra('GET','/api/runners/'+s.activeRunner,null,function(rn){
-          if(!rn)return;
-          live.forEach(function(ev){
-            if(ev.actionType==null||ev.stepIndex==null){_previewState[ev.id]={r:0,g:0,b:0,active:false};return;}
-            var step=rn.steps?rn.steps[ev.stepIndex]:null;
-            if(step&&step.actionId!=null){
-              var act=null;for(var a=0;a<_acts.length;a++){if(_acts[a].id===step.actionId){act=_acts[a];break;}}
-              if(act){_previewState[ev.id]={r:act.r||0,g:act.g||0,b:act.b||0,active:ev.event===0};}
+      if(!s||!s.runnerRunning){_previewState={};drawLayout();_s3dUpdatePreview();return;}
+      var tlId=s.activeTimeline;
+      if(tlId==null||tlId<0){_previewState={};drawLayout();return;}
+      // Get timeline status for elapsed time
+      ra('GET','/api/timelines/'+tlId+'/status',null,function(st){
+        if(!st||!st.running){_previewState={};drawLayout();return;}
+        var elapsed=st.elapsed||0;
+        // Get baked data to find current segment colors
+        ra('GET','/api/timelines/'+tlId+'/baked',null,function(baked){
+          if(!baked||!baked.fixtures){return;}
+          // For each fixture, find the active segment at elapsed time
+          for(var fid in baked.fixtures){
+            var fd=baked.fixtures[fid];
+            var segs=fd.segments||[];
+            var color={r:0,g:0,b:0,active:false};
+            for(var si=0;si<segs.length;si++){
+              var seg=segs[si];
+              if(elapsed>=seg.startS&&elapsed<seg.startS+seg.durationS){
+                var p=seg.params||{};
+                if(seg.type===0){color={r:0,g:0,b:0,active:false};}
+                else if(seg.type===2){
+                  // Fade: interpolate between start and end color
+                  var t=seg.durationS>0?(elapsed-seg.startS)/seg.durationS:0;
+                  color={r:Math.round((p.r||0)+(((p.r2||0)-(p.r||0))*t)),
+                         g:Math.round((p.g||0)+(((p.g2||0)-(p.g||0))*t)),
+                         b:Math.round((p.b||0)+(((p.b2||0)-(p.b||0))*t)),active:true};
+                } else {
+                  color={r:p.r||0,g:p.g||0,b:p.b||0,active:true};
+                }
+                break;
+              }
             }
-          });
-          if(ctab==='layout')drawLayout();
+            // Map fixture → child ID
+            var fix=null;_fixtures.forEach(function(f){if(String(f.id)===fid)fix=f;});
+            if(fix&&fix.childId!=null)_previewState[fix.childId]=color;
+          }
+          if(ctab==='layout'){drawLayout();_s3dUpdatePreview();}
         });
       });
     });
-  },800);
+  },500);
+}
+
+function _s3dUpdatePreview(){
+  // Color the 3D fixture nodes based on preview state
+  if(!_s3d.inited)return;
+  _s3d.nodes.forEach(function(grp){
+    var cid=grp.userData.childId;
+    if(cid===undefined)return;
+    var pv=_previewState[cid];
+    if(!pv||!pv.active)return;
+    // Color all LED dot meshes in this group
+    grp.traverse(function(obj){
+      if(obj.isMesh&&obj.geometry&&obj.geometry.type==='SphereGeometry'&&obj.geometry.parameters.radius<0.1){
+        obj.material.color.setRGB(pv.r/255,pv.g/255,pv.b/255);
+        obj.material.emissive&&obj.material.emissive.setRGB(pv.r/255,pv.g/255,pv.b/255);
+      }
+    });
+    // Also color the string lines
+    grp.traverse(function(obj){
+      if(obj.isLine){
+        obj.material.color.setRGB(pv.r/255,pv.g/255,pv.b/255);
+      }
+    });
+  });
 }
 
 function stopLivePreview(){
   if(_previewTimer){clearInterval(_previewTimer);_previewTimer=null;}
   _previewState={};
-  if(ctab==='layout')drawLayout();
+  if(ctab==='layout'){drawLayout();if(_s3d.inited)s3dLoadChildren();}
 }
 
 function togglePreview(){
@@ -1030,11 +2310,25 @@ function togglePreview(){
 function saveLayout(btn){
   if(!ld||!ld.children)return;
   _btnSaving(btn);
+  // Sync 3D positions back to data
+  if(_layMode==='3d'&&_s3d.inited)_s3dSyncToLd();
   var toSave=ld.children.filter(_isPlaced);
-  ra('POST','/api/layout',{children:toSave.map(function(c){return{id:c.id,x:c.x,y:c.y};})},
+  ra('POST','/api/layout',{children:toSave.map(function(c){return{id:c.id,x:c.x,y:c.y,z:c.z||0};})},
     function(r){
-      _btnSaved(btn,r&&r.ok);
-      if(r&&r.ok){toSave.forEach(function(c){c.positioned=true;c._placed=false;});renderSidebar();}
+      if(!r||!r.ok){_btnSaved(btn,false);return;}
+      toSave.forEach(function(c){c.positioned=true;c._placed=false;});
+      // Also save any moved surfaces
+      var pending=0;
+      (_surfaces||[]).forEach(function(s){
+        if(s.transform){
+          pending++;
+          ra('DELETE','/api/surfaces/'+s.id,null,function(){
+            ra('POST','/api/surfaces',s,function(){pending--;if(!pending)_btnSaved(btn,true);});
+          });
+        }
+      });
+      if(!pending)_btnSaved(btn,true);
+      renderSidebar();
     });
 }
 
@@ -1105,6 +2399,7 @@ function rgb2h(r,g,b){return'#'+('0'+r.toString(16)).slice(-2)+('0'+g.toString(1
 function h2r(h){return{r:parseInt(h.slice(1,3),16),g:parseInt(h.slice(3,5),16),b:parseInt(h.slice(5,7),16)};}
 
 function loadActions(){
+  loadSpatialFx();
   ra('GET','/api/actions',null,function(d){
     _acts=d||[];
     var el=document.getElementById('act-list');if(!el)return;
@@ -1347,7 +2642,7 @@ function delAction(id){
 // ── Runners ─────────────────────────────────────────────────────────────────
 function setBrightness(val){
   val=parseInt(val)||255;
-  document.getElementById('rt-bri-val').textContent=Math.round(val*100/255)+'%';
+  var bv=document.getElementById('rt-bri-val');if(bv)bv.textContent=Math.round(val*100/255)+'%';
   ra('POST','/api/settings',{globalBrightness:val},null);
 }
 
@@ -1357,57 +2652,7 @@ function saveLoopSetting(){
 }
 
 function loadRuntime(){
-  // Always show list view (hide edit view)
-  document.getElementById('rt-list').style.display='block';
-  document.getElementById('rt-edit').style.display='none';
-  ra('GET','/api/settings',null,function(s){
-    if(s){
-      var lp=document.getElementById('rt-loop');if(lp)lp.checked=s.runnerLoop!==false;
-      var bri=s.globalBrightness!=null?s.globalBrightness:255;
-      var bs=document.getElementById('rt-bri');if(bs)bs.value=bri;
-      var bv=document.getElementById('rt-bri-val');if(bv)bv.textContent=Math.round(bri*100/255)+'%';
-    }
-  });
-  ra('GET','/api/actions',null,function(a){_acts=a||[];});
-  ra('GET','/api/runners',null,function(d){
-    var h='';
-    if(d&&d.length){
-      d.forEach(function(r){
-        var durTxt='';
-        if(r.totalDurationS)durTxt=', '+r.totalDurationS+'s';
-        h+='<div style="padding:.4em 0;border-bottom:1px solid #2a2a2a">';
-        h+='<div style="display:flex;align-items:center;gap:.5em">';
-        h+='<span style="flex:1">'+escapeHtml(r.name)+'<span style="color:#888;font-size:.82em"> ('+r.steps+' steps'+durTxt+(r.computed?' \u2713':'')+' )</span></span>';
-        h+='<button class="btn btn-on" onclick="showRunner('+r.id+')" style="padding:.3em .8em" data-tip="runEdit">Edit</button>';
-        h+=' <button class="btn" onclick="doCompute('+r.id+')" style="background:#446;color:#fff;padding:.3em .8em" data-tip="runCompute">Compute</button>';
-        if(r.computed){
-          h+=' <button class="btn" onclick="toggleTimeline('+r.id+')" style="background:#363;color:#fff;padding:.3em .8em" data-tip="runTimeline">\u25bc Timeline</button>';
-          h+=' <button class="btn" onclick="doSync('+r.id+')" style="background:#264;color:#fff;padding:.3em .8em" data-tip="runSync">Sync</button>';
-          h+=' <button class="btn btn-on" onclick="doStart('+r.id+')" style="padding:.3em .8em" data-tip="runStart">Start</button>';
-        }
-        h+=' <button class="btn btn-off" onclick="stopRunners()" style="padding:.3em .8em" data-tip="runStop">Stop</button>';
-        h+=' <button class="btn btn-off" onclick="delRunner('+r.id+')" style="padding:.3em .8em" data-tip="runDel">Del</button>';
-        h+='</div>';
-        h+='<div id="tl-'+r.id+'" style="display:none"></div>';
-        h+='</div>';
-      });
-    }else{h='<p style="color:#94a3b8">No runners yet.</p>';}
-    document.getElementById('rn-list').innerHTML=h;
-  });
-  // Load flights
-  ra('GET','/api/flights',null,function(fl){
-    ra('GET','/api/runners',null,function(rns){
-      ra('GET','/api/children',null,function(ch){
-        _renderFlights(fl||[],rns||[],ch||[]);
-      });
-    });
-  });
-  // Load shows
-  ra('GET','/api/shows',null,function(sh){
-    ra('GET','/api/flights',null,function(fl){
-      _renderShows(sh||[],fl||[]);
-    });
-  });
+  loadTimelines();
 }
 
 function _renderFlights(flights,runners,children){
@@ -1568,23 +2813,11 @@ function delRunner(id){
 }
 
 function showRunner(id){
-  ra('GET','/api/actions',null,function(a){
-    _acts=a||[];
-    ra('GET','/api/runners/'+id,null,function(d){
-      if(!d)return;
-      curRid=d.id;curRname=d.name;
-      curRsteps=(d.steps||[]).map(function(s){return Object.assign({},s);});
-      document.getElementById('re-nm').textContent=d.name;
-      document.getElementById('rt-list').style.display='none';
-      document.getElementById('rt-edit').style.display='block';
-      renderSteps();
-    });
-  });
+  // Classic runner edit removed — timeline is now the only mode
 }
 
 function backToRunners(){
-  document.getElementById('rt-list').style.display='block';
-  document.getElementById('rt-edit').style.display='none';
+  // Classic runner list removed — timeline is now the only mode
 }
 
 function _actName(id){
@@ -1602,9 +2835,10 @@ function _syncSteps(){
 }
 
 function renderSteps(){
+  var el=document.getElementById('re-steps');if(!el)return;
   var h='';
   if(!_acts.length){h='<p style="color:#c66;margin:.5em 0">No actions defined. Create actions in the Actions tab first.</p>';
-    document.getElementById('re-steps').innerHTML=h;return;}
+    el.innerHTML=h;return;}
   if(curRsteps.length>0){
     h+='<div style="overflow-x:auto"><table class="tbl" style="font-size:.8em">';
     h+='<tr><th>#</th><th>Action</th><th>Duration (s)</th><th>Move / Del</th></tr>';
@@ -1629,7 +2863,7 @@ function renderSteps(){
     });
     h+='</table></div>';
   }else{h='<p style="color:#888;margin:.5em 0">No steps. Add one below.</p>';}
-  document.getElementById('re-steps').innerHTML=h;
+  el.innerHTML=h;
 }
 
 function addStep(){

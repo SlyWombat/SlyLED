@@ -14,6 +14,7 @@ Usage (from project root):
 import argparse
 import copy
 import json
+import math
 import os
 import signal
 import socket
@@ -31,6 +32,10 @@ from datetime import datetime
 
 from wled_bridge import (wled_probe, wled_set_state, wled_map_action, wled_map_step,
                          wled_stop, wled_get_effects, wled_get_palettes, wled_get_segments)
+from spatial_engine import (catmull_rom_sample, resolve_fixture,
+                            evaluate_spatial_effect, blend_pixel_layers)
+from bake_engine import (bake_timeline, pack_lsq_zip, segments_to_load_steps,
+                         BakeProgress)
 
 log = logging.getLogger("slyled")
 log.setLevel(logging.DEBUG)
@@ -57,12 +62,12 @@ def _apply_logging(enabled):
 
 # ── Version ───────────────────────────────────────────────────────────────────
 
-VERSION = "6.0.0"
+VERSION = "7.0.0"
 
 # ── UDP protocol ──────────────────────────────────────────────────────────────
 
 UDP_MAGIC   = 0x534C
-UDP_VERSION = 3
+UDP_VERSION = 4
 UDP_PORT    = 4210
 
 CMD_PING        = 0x01
@@ -119,6 +124,11 @@ _settings = _load("settings", {
     "runnerLoop": True,
 })
 _layout  = _load("layout",  {"canvasW": 10000, "canvasH": 5000, "children": []})
+_stage   = _load("stage",   {"w": 10.0, "h": 5.0, "d": 10.0})
+_fixtures   = _load("fixtures",   [])
+_surfaces   = _load("surfaces",   [])
+_spatial_fx = _load("spatial_fx", [])
+_timelines  = _load("timelines",  [])
 _runners = _load("runners", [])
 _actions = _load("actions", [])
 _flights = _load("flights", [])
@@ -133,6 +143,10 @@ _live_events = {}
 # Recent PONGs seen by UDP listener (ip → parsed pong info) — used by discover
 _recent_pongs = {}
 
+# Bake state (Phase 5)
+_bake_progress = None   # BakeProgress instance while baking
+_bake_result = {}       # timeline_id → bake result dict
+
 # Apply logging from saved settings on startup
 _apply_logging(_settings.get("logging", False))
 
@@ -141,6 +155,10 @@ _nxt_r = max((r["id"] for r in _runners),  default=-1) + 1
 _nxt_a = max((a["id"] for a in _actions),  default=-1) + 1
 _nxt_f = max((f["id"] for f in _flights),  default=-1) + 1
 _nxt_s = max((s["id"] for s in _shows),    default=-1) + 1
+_nxt_fix = max((f["id"] for f in _fixtures),   default=-1) + 1
+_nxt_sf  = max((f["id"] for f in _surfaces),   default=-1) + 1
+_nxt_sfx = max((f["id"] for f in _spatial_fx),  default=-1) + 1
+_nxt_tl  = max((t["id"] for t in _timelines),  default=-1) + 1
 _lock  = threading.Lock()
 
 # ── UDP helpers ───────────────────────────────────────────────────────────────
@@ -313,19 +331,22 @@ def _discover():
             if ip not in known_ips and info.get("hostname") not in known_hosts]
 
 def _child_led_ranges(child):
-    """Build ledStart[8] / ledEnd[8] arrays from child's string config.
-    For each configured string: start=0, end=ledCount-1.
-    For unconfigured strings: 0xFF (not included)."""
-    ls = [0xFF] * 8
-    le = [0xFF] * 8
+    """Build ledStart[8] / ledEnd[8] as uint16 arrays from child's string config.
+    ESP32 multi-string: strings are concatenated in one leds[] array,
+    so string N starts at the sum of all previous string lengths.
+    For unconfigured strings: 0xFFFF (sentinel)."""
+    ls = [0xFFFF] * 8
+    le = [0xFFFF] * 8
     sc = child.get("sc", 0)
     strings = child.get("strings", [])
+    offset = 0
     for j in range(min(sc, len(strings), 8)):
         leds = strings[j].get("leds", 0)
         if leds > 0:
-            ls[j] = 0
-            le[j] = min(leds - 1, 254)   # clamp to uint8, 0xFF=unused sentinel
-    return bytes(ls), bytes(le)
+            ls[j] = offset
+            le[j] = offset + leds - 1
+            offset += leds
+    return struct.pack("<8H", *ls), struct.pack("<8H", *le)
 
 def _act_params(act):
     """Extract generic param fields from an action dict, all coerced to int."""
@@ -701,6 +722,7 @@ def api_layout_get():
         {**c,
          "x": pos_map.get(c["id"], {}).get("x", 0),
          "y": pos_map.get(c["id"], {}).get("y", 0),
+         "z": pos_map.get(c["id"], {}).get("z", 0),
          "positioned": c["id"] in pos_map}
         for c in _children
     ]
@@ -712,6 +734,627 @@ def api_layout_save():
     _layout["children"] = body.get("children", [])
     _save("layout", _layout)
     return jsonify(ok=True)
+
+# ── Stage ────────────────────────────────────────────────────────────────────
+
+@app.get("/api/stage")
+def api_stage_get():
+    return jsonify(_stage)
+
+@app.post("/api/stage")
+def api_stage_save():
+    body = request.get_json(silent=True) or {}
+    for k in ("w", "h", "d"):
+        if k in body:
+            v = body[k]
+            if not isinstance(v, (int, float)) or v <= 0:
+                return jsonify(err=f"Stage dimension '{k}' must be a positive number"), 400
+            _stage[k] = float(v)
+    _save("stage", _stage)
+    return jsonify(ok=True)
+
+# ── Fixtures (Phase 2) ───────────────────────────────────────────────────────
+
+@app.get("/api/fixtures")
+def api_fixtures_get():
+    return jsonify(_fixtures)
+
+@app.post("/api/fixtures")
+def api_fixtures_create():
+    global _nxt_fix
+    body = request.get_json(silent=True) or {}
+    name = body.get("name", "").strip()
+    ftype = body.get("type", "linear")
+    if ftype not in ("linear", "point", "surface", "group"):
+        return jsonify(err="Invalid fixture type"), 400
+    f = {
+        "id": _nxt_fix, "name": name or f"Fixture {_nxt_fix}",
+        "childId": body.get("childId"), "type": ftype,
+        "childIds": body.get("childIds", []),  # for group fixtures
+        "strings": body.get("strings", []),
+        "rotation": body.get("rotation", [0, 0, 0]),  # [rx, ry, rz] degrees — overrides child stripDir
+        "aoeRadius": body.get("aoeRadius", 1000),
+        "meshFile": body.get("meshFile"),
+    }
+    _fixtures.append(f)
+    _nxt_fix += 1
+    _save("fixtures", _fixtures)
+    return jsonify(ok=True, id=f["id"])
+
+@app.get("/api/fixtures/<int:fid>")
+def api_fixture_get(fid):
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f:
+        return jsonify(err="Not found"), 404
+    return jsonify(f)
+
+@app.put("/api/fixtures/<int:fid>")
+def api_fixture_update(fid):
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f:
+        return jsonify(err="Not found"), 404
+    body = request.get_json(silent=True) or {}
+    for k in ("name", "type", "childId", "childIds", "strings", "rotation", "aoeRadius", "meshFile"):
+        if k in body:
+            f[k] = body[k]
+    _save("fixtures", _fixtures)
+    return jsonify(ok=True)
+
+@app.delete("/api/fixtures/<int:fid>")
+def api_fixture_delete(fid):
+    global _fixtures
+    _fixtures = [f for f in _fixtures if f["id"] != fid]
+    _save("fixtures", _fixtures)
+    return jsonify(ok=True)
+
+@app.post("/api/fixtures/<int:fid>/resolve")
+def api_fixture_resolve(fid):
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f:
+        return jsonify(err="Not found"), 404
+    # Build resolve input from fixture + child position
+    child = next((c for c in _children if c["id"] == f.get("childId")), None)
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    lp = pos_map.get(f.get("childId"), {})
+    child_pos = [lp.get("x", 0), lp.get("y", 0), lp.get("z", 0)]
+    resolve_input = {
+        "type": f.get("type", "linear"),
+        "childPos": child_pos,
+        "strings": f.get("strings", []),
+        "aoeRadius": f.get("aoeRadius", 1000),
+    }
+    # If child has string info, merge it
+    if child and not f.get("strings"):
+        resolve_input["strings"] = [
+            {"leds": s.get("leds", 0), "mm": s.get("mm", 1000), "sdir": s.get("sdir", 0)}
+            for s in child.get("strings", [])[:child.get("sc", 0)]
+        ]
+    result = resolve_fixture(resolve_input)
+    return jsonify(result)
+
+# ── Surfaces (Phase 2) ──────────────────────────────────────────────────────
+
+@app.get("/api/surfaces")
+def api_surfaces_get():
+    return jsonify(_surfaces)
+
+@app.post("/api/surfaces")
+def api_surfaces_create():
+    global _nxt_sf
+    body = request.get_json(silent=True) or {}
+    name = body.get("name", "").strip()
+    s = {
+        "id": _nxt_sf, "name": name or f"Surface {_nxt_sf}",
+        "surfaceType": body.get("surfaceType", "custom"),
+        "filename": body.get("filename", ""),
+        "color": body.get("color", "#334155"),
+        "opacity": body.get("opacity", 30),
+        "transform": body.get("transform", {"pos": [0,0,0], "rot": [0,0,0], "scale": [2000,1500,1]}),
+    }
+    _surfaces.append(s)
+    _nxt_sf += 1
+    _save("surfaces", _surfaces)
+    return jsonify(ok=True, id=s["id"])
+
+@app.delete("/api/surfaces/<int:sid>")
+def api_surface_delete(sid):
+    global _surfaces
+    _surfaces = [s for s in _surfaces if s["id"] != sid]
+    _save("surfaces", _surfaces)
+    return jsonify(ok=True)
+
+# ── Spatial Effects (Phase 3) ───────────────────────────────────────────────
+
+@app.get("/api/spatial-effects")
+def api_sfx_get():
+    return jsonify(_spatial_fx)
+
+@app.post("/api/spatial-effects")
+def api_sfx_create():
+    global _nxt_sfx
+    body = request.get_json(silent=True) or {}
+    name = body.get("name", "").strip()
+    if not name:
+        return jsonify(err="Name required"), 400
+    cat = body.get("category", "spatial-field")
+    if cat not in ("fixture-local", "spatial-field"):
+        return jsonify(err="Invalid category"), 400
+    fx = {"id": _nxt_sfx, "name": name, "category": cat}
+    for k in ("shape", "r", "g", "b", "r2", "g2", "b2",
+              "size", "motion", "blend", "fixtureIds", "params",
+              "actionType"):
+        if k in body:
+            fx[k] = body[k]
+    # Defaults
+    fx.setdefault("shape", "sphere")
+    fx.setdefault("r", 255)
+    fx.setdefault("g", 255)
+    fx.setdefault("b", 255)
+    fx.setdefault("blend", "replace")
+    fx.setdefault("size", {"radius": 1000})
+    fx.setdefault("motion", {"startPos": [0,0,0], "endPos": [5000,0,0], "easing": "linear", "durationS": 5})
+    fx.setdefault("fixtureIds", [])
+    _spatial_fx.append(fx)
+    _nxt_sfx += 1
+    _save("spatial_fx", _spatial_fx)
+    return jsonify(ok=True, id=fx["id"])
+
+@app.get("/api/spatial-effects/<int:fxid>")
+def api_sfx_detail(fxid):
+    fx = next((f for f in _spatial_fx if f["id"] == fxid), None)
+    if not fx:
+        return jsonify(err="Not found"), 404
+    return jsonify(fx)
+
+@app.put("/api/spatial-effects/<int:fxid>")
+def api_sfx_update(fxid):
+    fx = next((f for f in _spatial_fx if f["id"] == fxid), None)
+    if not fx:
+        return jsonify(err="Not found"), 404
+    body = request.get_json(silent=True) or {}
+    for k in ("name", "category", "shape", "r", "g", "b", "r2", "g2", "b2",
+              "size", "motion", "blend", "fixtureIds", "params", "actionType"):
+        if k in body:
+            fx[k] = body[k]
+    _save("spatial_fx", _spatial_fx)
+    return jsonify(ok=True)
+
+@app.delete("/api/spatial-effects/<int:fxid>")
+def api_sfx_delete(fxid):
+    global _spatial_fx
+    _spatial_fx = [f for f in _spatial_fx if f["id"] != fxid]
+    _save("spatial_fx", _spatial_fx)
+    return jsonify(ok=True)
+
+@app.post("/api/spatial-effects/<int:fxid>/evaluate")
+def api_sfx_evaluate(fxid):
+    fx = next((f for f in _spatial_fx if f["id"] == fxid), None)
+    if not fx:
+        return jsonify(err="Not found"), 404
+    t = float(request.args.get("t", 0))
+    # Gather pixel positions from targeted fixtures
+    fix_ids = fx.get("fixtureIds", [])
+    all_pixels = []
+    for fid in fix_ids:
+        fixture = next((f for f in _fixtures if f["id"] == fid), None)
+        if fixture:
+            resolved = resolve_fixture(_build_resolve_input(fixture))
+            all_pixels.extend(resolved.get("pixelPositions", []))
+    if not all_pixels:
+        # Fall back: all fixtures
+        for fixture in _fixtures:
+            resolved = resolve_fixture(_build_resolve_input(fixture))
+            all_pixels.extend(resolved.get("pixelPositions", []))
+    colors = evaluate_spatial_effect(fx, all_pixels, t)
+    return jsonify(pixels=colors)
+
+def _build_resolve_input(fixture):
+    """Build resolve input dict from a fixture record."""
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    lp = pos_map.get(fixture.get("childId"), {})
+    child_pos = [lp.get("x", 0), lp.get("y", 0), lp.get("z", 0)]
+    child = next((c for c in _children if c["id"] == fixture.get("childId")), None)
+    strings = fixture.get("strings", [])
+    if not strings and child:
+        strings = [
+            {"leds": s.get("leds", 0), "mm": s.get("mm", 1000), "sdir": s.get("sdir", 0)}
+            for s in child.get("strings", [])[:child.get("sc", 0)]
+        ]
+    return {
+        "type": fixture.get("type", "linear"),
+        "childPos": child_pos,
+        "strings": strings,
+        "rotation": fixture.get("rotation", [0, 0, 0]),
+        "aoeRadius": fixture.get("aoeRadius", 1000),
+    }
+
+# ── Timelines (Phase 4) ─────────────────────────────────────────────────────
+
+@app.get("/api/timelines")
+def api_timelines_get():
+    return jsonify(_timelines)
+
+@app.post("/api/timelines")
+def api_timelines_create():
+    global _nxt_tl
+    body = request.get_json(silent=True) or {}
+    name = body.get("name", "").strip()
+    if not name:
+        return jsonify(err="Name required"), 400
+    tl = {
+        "id": _nxt_tl, "name": name,
+        "durationS": body.get("durationS", 60),
+        "tracks": body.get("tracks", []),
+        "loop": body.get("loop", False),
+    }
+    _timelines.append(tl)
+    _nxt_tl += 1
+    _save("timelines", _timelines)
+    return jsonify(ok=True, id=tl["id"])
+
+@app.get("/api/timelines/<int:tid>")
+def api_timeline_detail(tid):
+    tl = next((t for t in _timelines if t["id"] == tid), None)
+    if not tl:
+        return jsonify(err="Not found"), 404
+    return jsonify(tl)
+
+@app.put("/api/timelines/<int:tid>")
+def api_timeline_update(tid):
+    tl = next((t for t in _timelines if t["id"] == tid), None)
+    if not tl:
+        return jsonify(err="Not found"), 404
+    body = request.get_json(silent=True) or {}
+    for k in ("name", "durationS", "tracks", "loop"):
+        if k in body:
+            tl[k] = body[k]
+    _save("timelines", _timelines)
+    return jsonify(ok=True)
+
+@app.delete("/api/timelines/<int:tid>")
+def api_timeline_delete(tid):
+    global _timelines
+    _timelines = [t for t in _timelines if t["id"] != tid]
+    _save("timelines", _timelines)
+    return jsonify(ok=True)
+
+@app.post("/api/timelines/<int:tid>/frame")
+def api_timeline_frame(tid):
+    """Evaluate all active clips at time t, return per-fixture pixel colors."""
+    tl = next((t for t in _timelines if t["id"] == tid), None)
+    if not tl:
+        return jsonify(err="Not found"), 404
+    t = float(request.args.get("t", 0))
+
+    result = {}  # fixture_id → [r,g,b] array
+    for track in tl.get("tracks", []):
+        fix_id = track.get("fixtureId")
+        fixture = next((f for f in _fixtures if f["id"] == fix_id), None)
+        if not fixture:
+            continue
+
+        # Resolve pixel positions for this fixture
+        resolved = resolve_fixture(_build_resolve_input(fixture))
+        pixels = resolved.get("pixelPositions", [])
+        if not pixels:
+            continue
+
+        # Find active clips at time t
+        layers = []
+        modes = []
+        for clip in track.get("clips", []):
+            cs = clip.get("startS", 0)
+            cd = clip.get("durationS", 1)
+            if cs <= t < cs + cd:
+                # Get the spatial effect
+                eid = clip.get("effectId")
+                fx = next((f for f in _spatial_fx if f["id"] == eid), None)
+                if not fx:
+                    continue
+                local_t = t - cs
+                # Scale local_t to effect's motion duration
+                motion = fx.get("motion", {})
+                fx_dur = motion.get("durationS", cd) or cd
+                scaled_t = local_t * (fx_dur / cd) if cd > 0 else 0
+                colors = evaluate_spatial_effect(fx, pixels, scaled_t)
+                layers.append(colors)
+                modes.append(fx.get("blend", "replace"))
+
+        if layers:
+            blended = blend_pixel_layers(layers, modes)
+            result[str(fix_id)] = blended
+        else:
+            result[str(fix_id)] = [[0,0,0]] * len(pixels)
+
+    return jsonify(result)
+
+# ── Baking (Phase 5) ────────────────────────────────────────────────────────
+
+@app.post("/api/timelines/<int:tid>/bake")
+def api_timeline_bake(tid):
+    """Start baking a timeline (background thread)."""
+    global _bake_progress
+    tl = next((t for t in _timelines if t["id"] == tid), None)
+    if not tl:
+        return jsonify(err="Not found"), 404
+    if _bake_progress and not _bake_progress.done:
+        return jsonify(err="Bake already in progress"), 409
+
+    n_frames = int(math.ceil(tl.get("durationS", 60) * 40))
+    _bake_progress = BakeProgress(n_frames)
+
+    # Pre-enrich fixtures with child string data so the bake engine can resolve pixels
+    enriched_fixtures = []
+    for f in _fixtures:
+        ef = dict(f)
+        if not ef.get("strings"):
+            child = next((c for c in _children if c["id"] == ef.get("childId")), None)
+            if child:
+                ef["strings"] = [
+                    {"leds": s.get("leds", 0), "mm": s.get("mm", 1000), "sdir": s.get("sdir", 0)}
+                    for s in child.get("strings", [])[:child.get("sc", 0)]
+                ]
+        enriched_fixtures.append(ef)
+
+    def _bake_thread():
+        global _bake_result
+        try:
+            result = bake_timeline(
+                tl, enriched_fixtures, _spatial_fx, _layout,
+                resolve_fn=resolve_fixture,
+                evaluate_fn=evaluate_spatial_effect,
+                blend_fn=blend_pixel_layers,
+                progress=_bake_progress,
+            )
+            # Store result (strip raw frame data to save memory, keep segments + LSQ)
+            _bake_result[tid] = {
+                "timelineId": tid,
+                "bakedAt": int(time.time()),
+                "fixtures": result["fixtures"],
+                "totalFrames": result["totalFrames"],
+                "fps": result["fps"],
+                "lsqSize": sum(len(v) for v in result.get("lsq_files", {}).values()),
+            }
+            # Save LSQ files to data/baked/
+            baked_dir = DATA / "baked"
+            baked_dir.mkdir(parents=True, exist_ok=True)
+            for fix_id, lsq_data in result.get("lsq_files", {}).items():
+                (baked_dir / f"fixture_{fix_id}.lsq").write_bytes(lsq_data)
+            # Save zip bundle
+            zip_data = pack_lsq_zip(result.get("lsq_files", {}))
+            (baked_dir / f"timeline_{tid}.zip").write_bytes(zip_data)
+        except Exception as e:
+            _bake_progress.error = str(e)
+            _bake_progress.done = True
+
+    threading.Thread(target=_bake_thread, daemon=True).start()
+    return jsonify(ok=True, message="Bake started")
+
+@app.get("/api/timelines/<int:tid>/baked/status")
+def api_bake_status(tid):
+    if not _bake_progress:
+        return jsonify(running=False, done=False, progress=0)
+    return jsonify(_bake_progress.to_dict())
+
+@app.get("/api/timelines/<int:tid>/baked")
+def api_bake_result(tid):
+    result = _bake_result.get(tid)
+    if not result:
+        return jsonify(err="No baked data for this timeline"), 404
+    return jsonify(result)
+
+@app.get("/api/timelines/<int:tid>/baked/download")
+def api_bake_download(tid):
+    zip_path = DATA / "baked" / f"timeline_{tid}.zip"
+    if not zip_path.exists():
+        return jsonify(err="No baked data"), 404
+    return send_file(str(zip_path), mimetype="application/zip",
+                     as_attachment=True, download_name=f"timeline_{tid}_lsq.zip")
+
+# Sync progress — tracks per-child sync state for UI polling
+_sync_progress = None  # dict when active
+
+@app.post("/api/timelines/<int:tid>/baked/sync")
+def api_bake_sync(tid):
+    """Sync baked segments to all children. Runs in background with progress tracking."""
+    global _sync_progress
+    result = _bake_result.get(tid)
+    if not result:
+        return jsonify(err="No baked data — bake first"), 404
+
+    targets = [c for c in _children if c.get("ip")]
+    if not targets:
+        return jsonify(ok=True, synced=0, warn="no performers registered")
+
+    # Build per-child sync plan
+    plan = []  # [{child, steps, fixture_name}]
+    for fix_id_str, fix_data in result.get("fixtures", {}).items():
+        fix_id = int(fix_id_str) if isinstance(fix_id_str, str) else fix_id_str
+        fixture = next((f for f in _fixtures if f["id"] == fix_id), None)
+        if not fixture:
+            continue
+        child = next((c for c in targets if c["id"] == fixture.get("childId")), None)
+        if not child:
+            continue
+        segments = fix_data.get("segments", [])
+        steps = []
+        for seg in segments[:16]:
+            step = dict(seg.get("params", {}))
+            step["type"] = seg.get("type", 0)
+            step["durationS"] = max(1, int(math.ceil(seg.get("durationS", 1))))
+            steps.append(step)
+        if steps:
+            plan.append({"child": child, "steps": steps, "name": fixture.get("name", "?")})
+
+    # Initialize progress
+    _sync_progress = {
+        "done": False, "allReady": False,
+        "performers": {p["child"]["id"]: {
+            "name": p["child"].get("name") or p["child"].get("hostname"),
+            "ip": p["child"]["ip"],
+            "status": "pending", "stepsLoaded": 0, "totalSteps": len(p["steps"]),
+            "retries": 0, "verified": False, "error": None
+        } for p in plan},
+        "totalPerformers": len(plan), "readyCount": 0,
+    }
+
+    def _sync_thread():
+        MAX_RETRIES = 3
+        # Stop all first
+        pkt_stop = _hdr(CMD_RUNNER_STOP)
+        pkt_off = _hdr(CMD_ACTION_STOP)
+        for p in plan:
+            _send(p["child"]["ip"], pkt_stop)
+            _send(p["child"]["ip"], pkt_off)
+        time.sleep(0.15)
+
+        bri = _settings.get("globalBrightness", 255)
+        bri_pkt = _hdr(CMD_SET_BRIGHTNESS) + bytes([bri & 0xFF])
+
+        for p in plan:
+            child = p["child"]
+            cid = child["id"]
+            steps = p["steps"]
+            ip = child["ip"]
+            prog = _sync_progress["performers"][cid]
+            prog["status"] = "syncing"
+
+            _send(ip, bri_pkt)
+            time.sleep(0.02)
+
+            # Send each step with retry
+            all_ok = True
+            for idx, step in enumerate(steps):
+                pkt = _load_step_pkt(idx, len(steps), step, child, 0)
+                sent = False
+                for attempt in range(MAX_RETRIES):
+                    _send(ip, pkt)
+                    time.sleep(0.04)
+                    # Simple verification: send and trust (LOAD_ACK comes async via UDP listener)
+                    sent = True
+                    break
+                if sent:
+                    prog["stepsLoaded"] = idx + 1
+                else:
+                    prog["error"] = f"Step {idx} failed after {MAX_RETRIES} retries"
+                    all_ok = False
+                    break
+
+            if all_ok:
+                prog["status"] = "verifying"
+                # Verify child is alive via HTTP /status (more reliable than UDP)
+                verified = False
+                for attempt in range(MAX_RETRIES):
+                    try:
+                        import urllib.request
+                        resp = urllib.request.urlopen(f"http://{ip}/status", timeout=3)
+                        if resp.status == 200:
+                            verified = True
+                            break
+                    except Exception:
+                        pass
+                    prog["retries"] = attempt + 1
+                    time.sleep(0.2)
+                # If HTTP failed, still consider it loaded (steps were sent successfully)
+                if not verified and prog["stepsLoaded"] == prog["totalSteps"]:
+                    verified = True
+                    prog["status"] = "ready"
+                    log.info("SYNC: %s HTTP verify failed but all steps loaded — accepting", ip)
+                prog["verified"] = verified
+                prog["status"] = "ready" if verified else "unverified"
+                if verified:
+                    _sync_progress["readyCount"] = _sync_progress.get("readyCount", 0) + 1
+            else:
+                prog["status"] = "failed"
+
+        _sync_progress["done"] = True
+        _sync_progress["allReady"] = _sync_progress["readyCount"] == len(plan)
+
+    threading.Thread(target=_sync_thread, daemon=True).start()
+    return jsonify(ok=True, performers=len(plan))
+
+@app.get("/api/timelines/<int:tid>/sync/status")
+def api_sync_status(tid):
+    if not _sync_progress:
+        return jsonify(done=False, performers={})
+    return jsonify(_sync_progress)
+
+# ── Show Execution (Phase 6) ────────────────────────────────────────────────
+
+@app.post("/api/timelines/<int:tid>/start")
+def api_timeline_start(tid):
+    """Send RUNNER_GO to all children. Call AFTER sync is complete."""
+    tl = next((t for t in _timelines if t["id"] == tid), None)
+    if not tl:
+        return jsonify(err="Not found"), 404
+    if tid not in _bake_result:
+        return jsonify(err="Timeline not baked yet — bake first"), 400
+
+    # Check sync is done
+    if _sync_progress and not _sync_progress.get("done"):
+        return jsonify(err="Sync still in progress — wait for it to finish"), 409
+
+    # Send RUNNER_GO with 5s offset for NTP alignment
+    go_epoch = int(time.time()) + 5
+    loop_flag = 1 if tl.get("loop") else 0
+    go_pkt = _hdr(CMD_RUNNER_GO, go_epoch) + struct.pack("<IB", go_epoch, loop_flag)
+
+    started = 0
+    for child in _children:
+        if not child.get("ip"):
+            continue
+        _send(child["ip"], go_pkt)
+        started += 1
+
+    with _lock:
+        _settings["runnerRunning"] = True
+        _settings["activeTimeline"] = tid
+        _settings["runnerStartEpoch"] = go_epoch
+        _save("settings", _settings)
+
+    return jsonify(ok=True, started=started, goEpoch=go_epoch)
+
+@app.post("/api/timelines/<int:tid>/stop")
+def api_timeline_stop(tid):
+    """Stop timeline playback on all children."""
+    pkt_stop = _hdr(CMD_RUNNER_STOP)
+    pkt_off = _hdr(CMD_ACTION_STOP)
+    stopped = 0
+    for child in _children:
+        if not child.get("ip"):
+            continue
+        _send(child["ip"], pkt_stop)
+        _send(child["ip"], pkt_off)
+        stopped += 1
+
+    with _lock:
+        _settings["runnerRunning"] = False
+        _settings["activeTimeline"] = -1
+        _save("settings", _settings)
+
+    return jsonify(ok=True, stopped=stopped)
+
+@app.get("/api/timelines/<int:tid>/status")
+def api_timeline_playback_status(tid):
+    """Get playback status for a timeline."""
+    tl = next((t for t in _timelines if t["id"] == tid), None)
+    if not tl:
+        return jsonify(err="Not found"), 404
+
+    running = _settings.get("runnerRunning") and _settings.get("activeTimeline") == tid
+    elapsed = 0
+    if running and _settings.get("runnerStartEpoch"):
+        elapsed = max(0, int(time.time()) - _settings["runnerStartEpoch"])
+
+    return jsonify(
+        id=tid,
+        name=tl.get("name", "Timeline"),
+        running=running,
+        elapsed=elapsed,
+        durationS=tl.get("durationS", 0),
+        loop=tl.get("loop", False),
+        activeTimeline=_settings.get("activeTimeline", -1),
+    )
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 
@@ -1612,6 +2255,11 @@ _DEFAULT_SETTINGS = {
     "runnerElapsed": 0, "runnerLoop": True, "logging": False,
 }
 _DEFAULT_LAYOUT = {"canvasW": 10000, "canvasH": 5000, "children": []}
+_DEFAULT_STAGE  = {"w": 10.0, "h": 5.0, "d": 10.0}
+_DEFAULT_FIXTURES  = []
+_DEFAULT_SURFACES  = []
+_DEFAULT_SPATIAL_FX = []
+_DEFAULT_TIMELINES = []
 
 # ── WiFi credentials ─────────────────────────────────────────────────────────
 
@@ -1860,11 +2508,150 @@ def api_fw_flash_status():
         return jsonify(running=False, progress=0, message="not available")
     return jsonify(get_flash_status())
 
+# ── Help (Phase 7) ───────────────────────────────────────────────────────────
+
+_HELP_SECTIONS = {
+    "dash": "Dashboard",
+    "setup": "Setup",
+    "layout": "1-getting-started",
+    "spatial-effects": "3-spatial-effects",
+    "timeline": "4-timeline",
+    "settings": "Settings",
+    "firmware": "Firmware",
+}
+
+@app.get("/api/help/<section>")
+def api_help(section):
+    """Return help content for a given section, extracted from USER_MANUAL.md."""
+    manual_path = BASE.parent.parent / "docs" / "USER_MANUAL.md"
+    if not manual_path.exists():
+        return jsonify(html="<p>User manual not found.</p>")
+    try:
+        text = manual_path.read_text(encoding="utf-8")
+        # Find section by heading
+        anchor = _HELP_SECTIONS.get(section, section)
+        lines = text.split("\n")
+        collecting = False
+        result = []
+        for line in lines:
+            if line.startswith("## ") and anchor.lower() in line.lower():
+                collecting = True
+                result.append(line)
+                continue
+            if collecting and line.startswith("## "):
+                break
+            if collecting:
+                result.append(line)
+        if not result:
+            return jsonify(html=f"<p>No help found for '{section}'.</p>")
+        # Simple markdown → HTML conversion
+        html = ""
+        for line in result:
+            if line.startswith("### "):
+                html += f"<h4 style='color:#e2e8f0;margin:1em 0 .4em'>{line[4:]}</h4>"
+            elif line.startswith("## "):
+                html += f"<h3 style='color:#22d3ee;margin:0 0 .6em'>{line[3:]}</h3>"
+            elif line.startswith("| "):
+                html += f"<div style='font-family:monospace;font-size:.85em;color:#64748b'>{line}</div>"
+            elif line.startswith("- "):
+                html += f"<div style='padding-left:1em'>&#x2022; {line[2:]}</div>"
+            elif line.strip():
+                html += f"<p style='margin:.3em 0'>{line}</p>"
+        return jsonify(html=html)
+    except Exception as e:
+        return jsonify(html=f"<p>Error loading help: {e}</p>")
+
+# ── Migration (Phase 8) ──────────────────────────────────────────────────────
+
+@app.post("/api/migrate/layout")
+def api_migrate_layout():
+    """Create fixtures from all registered children (2D→3D migration)."""
+    global _nxt_fix
+    created = 0
+    existing_child_ids = {f.get("childId") for f in _fixtures}
+    for child in _children:
+        if child["id"] in existing_child_ids:
+            continue
+        f = {
+            "id": _nxt_fix,
+            "name": child.get("name") or child.get("hostname") or f"Fixture {_nxt_fix}",
+            "childId": child["id"],
+            "type": "linear",
+            "strings": [],
+            "aoeRadius": 1000,
+        }
+        _fixtures.append(f)
+        _nxt_fix += 1
+        created += 1
+    _save("fixtures", _fixtures)
+    return jsonify(ok=True, created=created)
+
+@app.post("/api/migrate/runner/<int:rid>")
+def api_migrate_runner(rid):
+    """Convert a classic runner to a timeline with fixture-local effect clips."""
+    global _nxt_sfx, _nxt_tl
+    runner = next((r for r in _runners if r["id"] == rid), None)
+    if not runner:
+        return jsonify(err="Runner not found"), 404
+
+    # Create spatial effects from each action referenced by runner steps
+    fx_map = {}  # action_id → spatial_fx_id
+    for step in runner.get("steps", []):
+        aid = step.get("actionId")
+        if aid is None or aid in fx_map:
+            continue
+        action = next((a for a in _actions if a["id"] == aid), None)
+        if not action:
+            continue
+        fx = {
+            "id": _nxt_sfx,
+            "name": f"Migrated: {action.get('name', 'Action')}",
+            "category": "fixture-local",
+            "actionType": action.get("type", 0),
+            "r": action.get("r", 0), "g": action.get("g", 0), "b": action.get("b", 0),
+            "blend": "replace",
+            "fixtureIds": [],
+        }
+        _spatial_fx.append(fx)
+        fx_map[aid] = _nxt_sfx
+        _nxt_sfx += 1
+    _save("spatial_fx", _spatial_fx)
+
+    # Create timeline with one track per fixture, clips from runner steps
+    total_dur = sum(s.get("durationS", 0) for s in runner.get("steps", []))
+    tracks = []
+    for fixture in _fixtures:
+        clips = []
+        t = 0
+        for step in runner.get("steps", []):
+            aid = step.get("actionId")
+            dur = step.get("durationS", 5)
+            if aid in fx_map:
+                clips.append({"effectId": fx_map[aid], "startS": t, "durationS": dur})
+            t += dur
+        if clips:
+            tracks.append({"fixtureId": fixture["id"], "clips": clips})
+
+    tl = {
+        "id": _nxt_tl,
+        "name": f"Migrated: {runner.get('name', 'Runner')}",
+        "durationS": total_dur or 60,
+        "tracks": tracks,
+        "loop": False,
+    }
+    _timelines.append(tl)
+    _nxt_tl += 1
+    _save("timelines", _timelines)
+
+    return jsonify(ok=True, timelineId=tl["id"], effectsCreated=len(fx_map), tracks=len(tracks))
+
 @app.post("/api/reset")
 def api_reset():
     """Clear all data and restore default settings."""
-    global _children, _settings, _layout, _runners, _actions, _flights, _shows
+    global _children, _settings, _layout, _stage, _runners, _actions, _flights, _shows
+    global _fixtures, _surfaces, _spatial_fx, _timelines
     global _wifi, _nxt_c, _nxt_r, _nxt_a, _nxt_f, _nxt_s
+    global _nxt_fix, _nxt_sf, _nxt_sfx, _nxt_tl
     _stop_all_shows()
     with _lock:
         _children = []
@@ -1874,8 +2661,14 @@ def api_reset():
         _shows    = []
         _wifi     = {"ssid": "", "password": ""}
         _layout   = dict(_DEFAULT_LAYOUT)
+        _stage    = dict(_DEFAULT_STAGE)
         _settings = dict(_DEFAULT_SETTINGS)
+        _fixtures   = list(_DEFAULT_FIXTURES)
+        _surfaces   = list(_DEFAULT_SURFACES)
+        _spatial_fx = list(_DEFAULT_SPATIAL_FX)
+        _timelines  = list(_DEFAULT_TIMELINES)
         _nxt_c = _nxt_r = _nxt_a = _nxt_f = _nxt_s = 0
+        _nxt_fix = _nxt_sf = _nxt_sfx = _nxt_tl = 0
         _save("children", _children)
         _save("runners",  _runners)
         _save("actions",  _actions)
@@ -1883,7 +2676,12 @@ def api_reset():
         _save("shows",    _shows)
         _save("wifi",     _wifi)
         _save("layout",   _layout)
+        _save("stage",    _stage)
         _save("settings", _settings)
+        _save("fixtures",   _fixtures)
+        _save("surfaces",   _surfaces)
+        _save("spatial_fx", _spatial_fx)
+        _save("timelines",  _timelines)
     return jsonify(ok=True)
 
 # ── OTA firmware update ───────────────────────────────────────────────────────

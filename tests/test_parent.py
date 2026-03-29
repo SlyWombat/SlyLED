@@ -105,6 +105,227 @@ def run():
         r = c.post('/api/layout', json={'children': [{'id': 0, 'x': 1000, 'y': 2000}]})
         ok('POST /api/layout', r.status_code == 200 and r.get_json().get('ok'))
 
+        # Layout z-axis support
+        r = c.post('/api/layout', json={'children': [{'id': 0, 'x': 1000, 'y': 2000, 'z': 500}]})
+        ok('POST /api/layout with z', r.status_code == 200 and r.get_json().get('ok'))
+
+        r = c.get('/api/layout')
+        lch = r.get_json().get('children', [])
+        z_val = next((ch.get('z', -1) for ch in lch if ch.get('id') == 0), -1)
+        ok('GET /api/layout returns z', z_val == 500)
+
+        # z defaults to 0 for children without z
+        r = c.post('/api/layout', json={'children': [{'id': 0, 'x': 1000, 'y': 2000}]})
+        r = c.get('/api/layout')
+        z_def = next((ch.get('z', -1) for ch in r.get_json().get('children', []) if ch.get('id') == 0), -1)
+        ok('Layout z defaults to 0', z_def == 0)
+
+        # ── Stage ──────────────────────────────────────────────────────
+        r = c.get('/api/stage')
+        ok('GET /api/stage', r.status_code == 200 and 'w' in r.get_json())
+
+        r = c.post('/api/stage', json={'w': 12.0, 'h': 6.0, 'd': 8.0})
+        ok('POST /api/stage', r.status_code == 200 and r.get_json().get('ok'))
+
+        r = c.get('/api/stage')
+        sd = r.get_json()
+        ok('Stage persists', sd.get('w') == 12.0 and sd.get('h') == 6.0 and sd.get('d') == 8.0)
+
+        r = c.post('/api/stage', json={'w': -1})
+        ok('Stage rejects negative', r.status_code == 400)
+
+        r = c.post('/api/stage', json={'w': 0})
+        ok('Stage rejects zero', r.status_code == 400)
+
+        # ── Fixtures (Phase 2) ─────────────────────────────────────────
+        r = c.get('/api/fixtures')
+        ok('GET /api/fixtures', r.status_code == 200 and isinstance(r.get_json(), list))
+
+        r = c.post('/api/fixtures', json={'name': 'Test Linear', 'type': 'linear', 'childId': 0})
+        ok('POST create fixture', r.status_code == 200 and r.get_json().get('ok'))
+        fix_id = r.get_json().get('id')
+
+        r = c.get('/api/fixtures/' + str(fix_id))
+        ok('GET fixture by id', r.status_code == 200 and r.get_json().get('type') == 'linear')
+
+        r = c.put('/api/fixtures/' + str(fix_id), json={'name': 'Updated Fixture'})
+        ok('PUT update fixture', r.status_code == 200 and r.get_json().get('ok'))
+
+        r = c.post('/api/fixtures', json={'name': 'Point Fix', 'type': 'point'})
+        ok('POST point fixture', r.status_code == 200)
+        fix_id2 = r.get_json().get('id')
+
+        r = c.post('/api/fixtures', json={'name': 'Bad', 'type': 'invalid'})
+        ok('Fixture bad type → 400', r.status_code == 400)
+
+        r = c.post('/api/fixtures/' + str(fix_id) + '/resolve')
+        ok('POST fixture resolve', r.status_code == 200 and 'pixelPositions' in r.get_json())
+
+        r = c.delete('/api/fixtures/' + str(fix_id2))
+        ok('DELETE fixture', r.status_code == 200)
+
+        # ── Surfaces (Phase 2) ─────────────────────────────────────────
+        r = c.get('/api/surfaces')
+        ok('GET /api/surfaces', r.status_code == 200)
+
+        r = c.post('/api/surfaces', json={'name': 'Test Surface'})
+        ok('POST create surface', r.status_code == 200 and r.get_json().get('ok'))
+        surf_id = r.get_json().get('id')
+
+        r = c.delete('/api/surfaces/' + str(surf_id))
+        ok('DELETE surface', r.status_code == 200)
+
+        # ── Spatial Effects (Phase 3) ──────────────────────────────────
+        r = c.get('/api/spatial-effects')
+        ok('GET /api/spatial-effects', r.status_code == 200 and isinstance(r.get_json(), list))
+
+        r = c.post('/api/spatial-effects', json={
+            'name': 'Red Sphere', 'category': 'spatial-field',
+            'shape': 'sphere', 'r': 255, 'g': 0, 'b': 0,
+            'size': {'radius': 1000},
+            'motion': {'startPos': [0,0,0], 'endPos': [5000,0,0], 'durationS': 5, 'easing': 'linear'},
+            'blend': 'replace'
+        })
+        ok('POST create spatial effect', r.status_code == 200 and r.get_json().get('ok'))
+        sfx_id = r.get_json().get('id')
+
+        r = c.get('/api/spatial-effects/' + str(sfx_id))
+        ok('GET spatial effect by id', r.status_code == 200 and r.get_json().get('shape') == 'sphere')
+
+        r = c.put('/api/spatial-effects/' + str(sfx_id), json={'name': 'Blue Sphere', 'r': 0, 'b': 255})
+        ok('PUT update spatial effect', r.status_code == 200)
+
+        r = c.post('/api/spatial-effects', json={'name': '', 'category': 'spatial-field'})
+        ok('Spatial effect no name → 400', r.status_code == 400)
+
+        r = c.post('/api/spatial-effects', json={'name': 'Bad Cat', 'category': 'invalid'})
+        ok('Spatial effect bad category → 400', r.status_code == 400)
+
+        r = c.post('/api/spatial-effects/' + str(sfx_id) + '/evaluate?t=2.5')
+        ok('POST evaluate spatial effect', r.status_code == 200 and 'pixels' in r.get_json())
+
+        # Fixture-local spatial effect
+        r = c.post('/api/spatial-effects', json={
+            'name': 'Local Chase', 'category': 'fixture-local', 'actionType': 4
+        })
+        ok('POST fixture-local effect', r.status_code == 200)
+        sfx_id2 = r.get_json().get('id')
+
+        r = c.delete('/api/spatial-effects/' + str(sfx_id2))
+        ok('DELETE spatial effect', r.status_code == 200)
+
+        # ── Timelines (Phase 4) ────────────────────────────────────────
+        r = c.get('/api/timelines')
+        ok('GET /api/timelines', r.status_code == 200 and isinstance(r.get_json(), list))
+
+        r = c.post('/api/timelines', json={'name': 'Test Show', 'durationS': 30})
+        ok('POST create timeline', r.status_code == 200 and r.get_json().get('ok'))
+        tl_id = r.get_json().get('id')
+
+        r = c.get('/api/timelines/' + str(tl_id))
+        ok('GET timeline by id', r.status_code == 200 and r.get_json().get('durationS') == 30)
+
+        r = c.put('/api/timelines/' + str(tl_id), json={
+            'name': 'Updated Show', 'durationS': 60,
+            'tracks': [{'fixtureId': fix_id, 'clips': [
+                {'effectId': sfx_id, 'startS': 0, 'durationS': 10}
+            ]}],
+            'loop': True
+        })
+        ok('PUT update timeline with tracks', r.status_code == 200)
+
+        r = c.post('/api/timelines/' + str(tl_id) + '/frame?t=5.0')
+        ok('POST timeline frame evaluation', r.status_code == 200)
+
+        r = c.post('/api/timelines', json={'name': '', 'durationS': 30})
+        ok('Timeline no name → 400', r.status_code == 400)
+
+        r = c.delete('/api/timelines/' + str(tl_id))
+        ok('DELETE timeline', r.status_code == 200)
+
+        # Clean up spatial effect
+        r = c.delete('/api/spatial-effects/' + str(sfx_id))
+        ok('DELETE spatial effect cleanup', r.status_code == 200)
+
+        # Clean up fixture
+        r = c.delete('/api/fixtures/' + str(fix_id))
+        ok('DELETE fixture cleanup', r.status_code == 200)
+
+        # ── Baking (Phase 5) ───────────────────────────────────────────
+        # Need a fixture + spatial effect + timeline to bake
+        r = c.post('/api/fixtures', json={'name': 'Bake Fix', 'type': 'linear', 'childId': 0})
+        bfix = r.get_json().get('id')
+        r = c.post('/api/spatial-effects', json={
+            'name': 'Bake FX', 'category': 'spatial-field',
+            'shape': 'sphere', 'r': 200, 'g': 50, 'b': 0,
+            'size': {'radius': 2000},
+            'motion': {'startPos': [0,0,0], 'endPos': [5000,0,0], 'durationS': 3, 'easing': 'linear'},
+            'blend': 'replace'
+        })
+        bsfx = r.get_json().get('id')
+        r = c.post('/api/timelines', json={'name': 'Bake Test', 'durationS': 3})
+        btl = r.get_json().get('id')
+        r = c.put('/api/timelines/' + str(btl), json={
+            'name': 'Bake Test', 'durationS': 3,
+            'tracks': [{'fixtureId': bfix, 'clips': [
+                {'effectId': bsfx, 'startS': 0, 'durationS': 3}
+            ]}]
+        })
+        ok('Setup bake timeline', r.status_code == 200)
+
+        r = c.post('/api/timelines/' + str(btl) + '/bake')
+        ok('POST bake timeline', r.status_code == 200 and r.get_json().get('ok'))
+
+        # Poll for completion (max 10 attempts)
+        import time as _time
+        for _ in range(10):
+            _time.sleep(0.3)
+            r = c.get('/api/timelines/' + str(btl) + '/baked/status')
+            if r.get_json().get('done'):
+                break
+        ok('Bake completes', r.get_json().get('done'))
+
+        r = c.get('/api/timelines/' + str(btl) + '/baked')
+        ok('GET baked result', r.status_code == 200 and 'fixtures' in r.get_json())
+
+        r = c.get('/api/timelines/' + str(btl) + '/baked/download')
+        ok('GET baked download (zip)', r.status_code == 200)
+
+        r = c.post('/api/timelines/' + str(btl) + '/baked/sync')
+        ok('POST baked sync', r.status_code == 200 and r.get_json().get('ok'))
+
+        # ── Show Execution (Phase 6) ───────────────────────────────────
+        r = c.post('/api/timelines/' + str(btl) + '/start')
+        ok('POST timeline start', r.status_code == 200 and r.get_json().get('ok'))
+
+        r = c.get('/api/timelines/' + str(btl) + '/status')
+        ok('GET timeline status', r.status_code == 200 and 'running' in r.get_json())
+
+        r = c.post('/api/timelines/' + str(btl) + '/stop')
+        ok('POST timeline stop', r.status_code == 200 and r.get_json().get('ok'))
+
+        # Start without bake should fail for non-baked timeline
+        r = c.post('/api/timelines', json={'name': 'No Bake', 'durationS': 5})
+        nb_id = r.get_json().get('id')
+        r = c.post('/api/timelines/' + str(nb_id) + '/start')
+        ok('Start unbaked timeline \u2192 400', r.status_code == 400)
+
+        # ── Help (Phase 7) ─────────────────────────────────────────────
+        r = c.get('/api/help/layout')
+        ok('GET /api/help/layout', r.status_code == 200 and 'html' in r.get_json())
+
+        r = c.get('/api/help/timeline')
+        ok('GET /api/help/timeline', r.status_code == 200)
+
+        r = c.get('/api/help/nonexistent')
+        ok('GET /api/help/nonexistent returns html', r.status_code == 200 and r.get_json().get('html'))
+
+        # ── Cleanup bake test data ─────────────────────────────────────
+        c.delete('/api/timelines/' + str(btl))
+        c.delete('/api/timelines/' + str(nb_id))
+        c.delete('/api/spatial-effects/' + str(bsfx))
+        c.delete('/api/fixtures/' + str(bfix))
+
         # ── Actions library ─────────────────────────────────────────
         r = c.post('/api/actions', json={'name': 'Test Solid', 'type': 1, 'r': 255, 'g': 0, 'b': 0})
         ok('POST create action', r.status_code == 200 and r.get_json().get('ok'))

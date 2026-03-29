@@ -189,14 +189,14 @@ static CRGB paletteColor(uint8_t palId, uint8_t idx) {
 // ── Render helpers (operate on a range st..en within leds[]) ──────────────
 
 static void renderSolid(uint8_t r, uint8_t g, uint8_t b,
-                         uint8_t st, uint8_t en) {
-  for (uint8_t i = st; i <= en; i++) leds[i] = CRGB(r, g, b);
+                         uint16_t st, uint16_t en) {
+  for (uint16_t i = st; i <= en; i++) leds[i] = CRGB(r, g, b);
 }
 
 static void renderFade(uint8_t r1, uint8_t g1, uint8_t b1,
                         uint8_t r2, uint8_t g2, uint8_t b2,
                         uint16_t speedMs, unsigned long elapsedMs,
-                        uint8_t st, uint8_t en) {
+                        uint16_t st, uint16_t en) {
   if (speedMs == 0) speedMs = 1;
   // Ping-pong: fade out to colour2 then back to colour1 (no abrupt wrap)
   uint32_t cycle = (uint32_t)speedMs * 2;
@@ -209,13 +209,13 @@ static void renderFade(uint8_t r1, uint8_t g1, uint8_t b1,
   uint8_t r = (uint8_t)((r1 * (255 - frac) + r2 * frac) / 255);
   uint8_t g = (uint8_t)((g1 * (255 - frac) + g2 * frac) / 255);
   uint8_t b = (uint8_t)((b1 * (255 - frac) + b2 * frac) / 255);
-  for (uint8_t i = st; i <= en; i++) leds[i] = CRGB(r, g, b);
+  for (uint16_t i = st; i <= en; i++) leds[i] = CRGB(r, g, b);
 }
 
 static void renderBreathe(uint8_t r, uint8_t g, uint8_t b,
                            uint16_t periodMs, uint8_t minBriPct,
                            unsigned long elapsedMs,
-                           uint8_t st, uint8_t en) {
+                           uint16_t st, uint16_t en) {
   if (periodMs == 0) periodMs = 1;
   uint8_t phase = (uint8_t)((elapsedMs % (uint32_t)periodMs) * 256 / periodMs);
   uint8_t sVal = sinLut(phase);  // 0-255
@@ -224,32 +224,32 @@ static void renderBreathe(uint8_t r, uint8_t g, uint8_t b,
   uint8_t rr = (uint8_t)((uint16_t)r * bri / 255);
   uint8_t gg = (uint8_t)((uint16_t)g * bri / 255);
   uint8_t bb = (uint8_t)((uint16_t)b * bri / 255);
-  for (uint8_t i = st; i <= en; i++) leds[i] = CRGB(rr, gg, bb);
+  for (uint16_t i = st; i <= en; i++) leds[i] = CRGB(rr, gg, bb);
 }
 
 static void renderChase(uint8_t r, uint8_t g, uint8_t b,
                          uint16_t speedMs, uint8_t spacing, uint8_t dir,
                          unsigned long elapsedMs,
-                         uint8_t st, uint8_t en) {
+                         uint16_t st, uint16_t en) {
   if (speedMs == 0) speedMs = 1;
   if (spacing < CHASE_MIN_SPACING) spacing = CHASE_DEFAULT_SPACING;
-  uint8_t rangeLen = en - st + 1;
-  uint8_t offset = (uint8_t)((elapsedMs / speedMs) % spacing);
-  for (uint8_t i = 0; i < rangeLen; i++) {
-    uint8_t idx = (dir == DIR_W || dir == DIR_S) ? (rangeLen - 1 - i) : i;
+  uint16_t rangeLen = en - st + 1;
+  uint16_t offset = (uint16_t)((elapsedMs / speedMs) % spacing);
+  for (uint16_t i = 0; i < rangeLen; i++) {
+    uint16_t idx = (dir == DIR_W || dir == DIR_S) ? (rangeLen - 1 - i) : i;
     leds[st + idx] = ((i + offset) % spacing == 0) ? CRGB(r, g, b) : CRGB::Black;
   }
 }
 
 static void renderRainbow(uint16_t speedMs, uint8_t palId, uint8_t dir,
                            unsigned long elapsedMs,
-                           uint8_t st, uint8_t en) {
+                           uint16_t st, uint16_t en) {
   if (speedMs == 0) speedMs = 1;
-  uint8_t rangeLen = en - st + 1;
+  uint16_t rangeLen = en - st + 1;
   uint8_t timeOff = (uint8_t)(elapsedMs / speedMs);
-  for (uint8_t i = 0; i < rangeLen; i++) {
-    uint8_t idx = (dir == DIR_W || dir == DIR_S) ? (rangeLen - 1 - i) : i;
-    uint8_t hue = (uint8_t)((uint16_t)i * 255 / rangeLen + timeOff);
+  for (uint16_t i = 0; i < rangeLen; i++) {
+    uint16_t idx = (dir == DIR_W || dir == DIR_S) ? (rangeLen - 1 - i) : i;
+    uint8_t hue = (uint8_t)((uint32_t)i * 255 / rangeLen + timeOff);
     leds[st + idx] = paletteColor(palId, hue);
   }
 }
@@ -257,25 +257,25 @@ static void renderRainbow(uint16_t speedMs, uint8_t palId, uint8_t dir,
 static void renderFire(uint8_t r, uint8_t g, uint8_t b,
                         uint16_t speedMs, uint8_t cooling, uint8_t sparking,
                         unsigned long elapsedMs,
-                        uint8_t st, uint8_t en) {
+                        uint16_t st, uint16_t en) {
   static uint8_t heat[MAX_LEDS];
-  uint8_t rangeLen = en - st + 1;
+  uint16_t rangeLen = en - st + 1;
   // Cool down
-  for (uint8_t i = 0; i < rangeLen; i++) {
+  for (uint16_t i = 0; i < rangeLen; i++) {
     uint8_t cool = random8(0, ((uint16_t)cooling * FIRE_COOL_SCALE / rangeLen) + FIRE_COOL_BASE_ADD);
     heat[i] = (heat[i] > cool) ? heat[i] - cool : 0;
   }
   // Heat rises
-  for (uint8_t k = rangeLen - 1; k >= 2; k--) {
+  for (uint16_t k = rangeLen - 1; k >= 2; k--) {
     heat[k] = ((uint16_t)heat[k-1] + heat[k-2] + heat[k-2]) / 3;
   }
   // Sparks
   if (random8() < sparking) {
-    uint8_t y = random8(min(FIRE_SPARK_ZONE_MAX, rangeLen));
+    uint16_t y = random8(min(FIRE_SPARK_ZONE_MAX, (uint8_t)rangeLen));
     heat[y] = qadd8(heat[y], random8(FIRE_SPARK_TEMP_MIN, FIRE_SPARK_TEMP_MAX));
   }
   // Map heat to colour
-  for (uint8_t j = 0; j < rangeLen; j++) {
+  for (uint16_t j = 0; j < rangeLen; j++) {
     uint8_t t = heat[j];
     uint8_t rr, gg, bb;
     if (t < FIRE_HUE_ORANGE)       { rr = (uint8_t)((uint16_t)r*t*FIRE_HEAT_SCALE/255); gg = 0; bb = 0; }
@@ -288,33 +288,33 @@ static void renderFire(uint8_t r, uint8_t g, uint8_t b,
 static void renderComet(uint8_t r, uint8_t g, uint8_t b,
                          uint16_t speedMs, uint8_t tailLen, uint8_t dir,
                          uint8_t decayPct, unsigned long elapsedMs,
-                         uint8_t st, uint8_t en) {
-  uint8_t rangeLen = en - st + 1;
+                         uint16_t st, uint16_t en) {
+  uint16_t rangeLen = en - st + 1;
   if (speedMs == 0) speedMs = 1;
   if (tailLen < 1) tailLen = COMET_DEFAULT_TAIL;
-  uint8_t headPos = (uint8_t)((elapsedMs / speedMs) % (rangeLen + tailLen));
+  uint16_t headPos = (uint16_t)((elapsedMs / speedMs) % (rangeLen + tailLen));
   // Fade all
   uint8_t fade = decayPct ? (uint8_t)(256 - decayPct * 256 / COMET_DECAY_SCALE) : COMET_DEFAULT_FADE;
-  for (uint8_t i = st; i <= en; i++) leds[i].nscale8(fade);
+  for (uint16_t i = st; i <= en; i++) leds[i].nscale8(fade);
   // Draw head
-  uint8_t pos = (dir == DIR_W || dir == DIR_S) ? (rangeLen - 1 - headPos % rangeLen) : (headPos % rangeLen);
+  uint16_t pos = (dir == DIR_W || dir == DIR_S) ? (rangeLen - 1 - headPos % rangeLen) : (headPos % rangeLen);
   if (headPos < rangeLen) leds[st + pos] = CRGB(r, g, b);
 }
 
 static void renderTwinkle(uint8_t r, uint8_t g, uint8_t b,
                            uint16_t spawnMs, uint8_t density,
                            uint8_t fadeSpeed, unsigned long elapsedMs,
-                           uint8_t st, uint8_t en) {
-  uint8_t rangeLen = en - st + 1;
+                           uint16_t st, uint16_t en) {
+  uint16_t rangeLen = en - st + 1;
   // Fade existing
   uint8_t fade = fadeSpeed ? (uint8_t)(255 - fadeSpeed) : TWINKLE_DEFAULT_FADE;
-  for (uint8_t i = st; i <= en; i++) leds[i].nscale8(fade);
+  for (uint16_t i = st; i <= en; i++) leds[i].nscale8(fade);
   // Spawn new
   uint8_t dens = density ? density : TWINKLE_DEFAULT_DENSITY;
   if (spawnMs == 0) spawnMs = 1;
   for (uint8_t d = 0; d < dens; d++) {
     if (random8() < TWINKLE_SPAWN_CHANCE) {
-      uint8_t pos = random8(rangeLen);
+      uint16_t pos = random16(rangeLen);
       uint8_t bri = random8(TWINKLE_BRI_MIN, TWINKLE_BRI_MAX);
       leds[st + pos] = CRGB((uint8_t)((uint16_t)r*bri/255),
                              (uint8_t)((uint16_t)g*bri/255),
@@ -326,28 +326,28 @@ static void renderTwinkle(uint8_t r, uint8_t g, uint8_t b,
 static void renderStrobe(uint8_t r, uint8_t g, uint8_t b,
                           uint16_t periodMs, uint8_t dutyPct,
                           unsigned long elapsedMs,
-                          uint8_t st, uint8_t en) {
+                          uint16_t st, uint16_t en) {
   if (periodMs == 0) periodMs = STROBE_DEFAULT_PERIOD;
   if (dutyPct > STROBE_MAX_DUTY) dutyPct = STROBE_DEFAULT_DUTY;
   uint32_t phase = elapsedMs % (uint32_t)periodMs;
   uint32_t onMs = (uint32_t)periodMs * dutyPct / 100;
   bool on = (phase < onMs);
-  for (uint8_t i = st; i <= en; i++)
+  for (uint16_t i = st; i <= en; i++)
     leds[i] = on ? CRGB(r, g, b) : CRGB::Black;
 }
 
 static void renderWipeSeq(uint8_t r, uint8_t g, uint8_t b,
                            uint16_t speedMs, uint8_t dir,
                            unsigned long elapsedMs,
-                           uint8_t st, uint8_t en) {
-  uint8_t rangeLen = en - st + 1;
+                           uint16_t st, uint16_t en) {
+  uint16_t rangeLen = en - st + 1;
   if (speedMs == 0) speedMs = WIPE_DEFAULT_SPEED;
   // Number of pixels filled so far (wraps around for continuous wipe)
-  uint8_t filled = (uint8_t)((elapsedMs / speedMs) % (rangeLen * WIPE_CYCLE_MULTIPLIER));
+  uint16_t filled = (uint16_t)((elapsedMs / speedMs) % (rangeLen * WIPE_CYCLE_MULTIPLIER));
   bool filling = (filled < rangeLen);
-  uint8_t count = filling ? filled : (rangeLen * WIPE_CYCLE_MULTIPLIER - filled);
-  for (uint8_t i = 0; i < rangeLen; i++) {
-    uint8_t idx = (dir == DIR_W || dir == DIR_S) ? (rangeLen - 1 - i) : i;
+  uint16_t count = filling ? filled : (rangeLen * WIPE_CYCLE_MULTIPLIER - filled);
+  for (uint16_t i = 0; i < rangeLen; i++) {
+    uint16_t idx = (dir == DIR_W || dir == DIR_S) ? (rangeLen - 1 - i) : i;
     leds[st + idx] = (i < count) ? (filling ? CRGB(r, g, b) : CRGB::Black)
                                  : (filling ? CRGB::Black : CRGB(r, g, b));
   }
@@ -356,46 +356,46 @@ static void renderWipeSeq(uint8_t r, uint8_t g, uint8_t b,
 static void renderScanner(uint8_t r, uint8_t g, uint8_t b,
                             uint16_t speedMs, uint8_t barWidth,
                             unsigned long elapsedMs,
-                            uint8_t st, uint8_t en) {
-  uint8_t rangeLen = en - st + 1;
+                            uint16_t st, uint16_t en) {
+  uint16_t rangeLen = en - st + 1;
   if (speedMs == 0) speedMs = SCANNER_DEFAULT_SPEED;
   if (barWidth < 1) barWidth = SCANNER_DEFAULT_BAR;
   if (barWidth > rangeLen) barWidth = rangeLen;
   // Ping-pong position
-  uint8_t travel = rangeLen - barWidth;
+  uint16_t travel = rangeLen - barWidth;
   if (travel == 0) travel = 1;
   uint32_t cycle = (uint32_t)travel * 2;
   uint32_t pos = (elapsedMs / speedMs) % cycle;
   if (pos >= travel) pos = cycle - pos;
   // Fade all
-  for (uint8_t i = st; i <= en; i++) leds[i].nscale8(SCANNER_TRAIL_FADE);
+  for (uint16_t i = st; i <= en; i++) leds[i].nscale8(SCANNER_TRAIL_FADE);
   // Draw bar
-  for (uint8_t w = 0; w < barWidth && (pos + w) < rangeLen; w++)
+  for (uint16_t w = 0; w < barWidth && (pos + w) < rangeLen; w++)
     leds[st + pos + w] = CRGB(r, g, b);
 }
 
 static void renderSparkle(uint8_t r, uint8_t g, uint8_t b,
                             uint16_t spawnMs, uint8_t density,
                             unsigned long elapsedMs,
-                            uint8_t st, uint8_t en) {
-  uint8_t rangeLen = en - st + 1;
+                            uint16_t st, uint16_t en) {
+  uint16_t rangeLen = en - st + 1;
   // Solid background
-  for (uint8_t i = st; i <= en; i++) leds[i] = CRGB(r, g, b);
+  for (uint16_t i = st; i <= en; i++) leds[i] = CRGB(r, g, b);
   // Random white sparkles
   uint8_t dens = density ? density : SPARKLE_DEFAULT_DENSITY;
   for (uint8_t d = 0; d < dens; d++) {
     if (random8() < SPARKLE_SPAWN_CHANCE)
-      leds[st + random8(rangeLen)] = CRGB::White;
+      leds[st + random16(rangeLen)] = CRGB::White;
   }
 }
 
 static void renderGradient(uint8_t r1, uint8_t g1, uint8_t b1,
                             uint8_t r2, uint8_t g2, uint8_t b2,
-                            uint8_t st, uint8_t en) {
-  uint8_t rangeLen = en - st + 1;
+                            uint16_t st, uint16_t en) {
+  uint16_t rangeLen = en - st + 1;
   if (rangeLen <= 1) { leds[st] = CRGB(r1, g1, b1); return; }
-  for (uint8_t i = 0; i < rangeLen; i++) {
-    uint8_t frac = (uint8_t)((uint16_t)i * 255 / (rangeLen - 1));
+  for (uint16_t i = 0; i < rangeLen; i++) {
+    uint8_t frac = (uint8_t)((uint32_t)i * 255 / (rangeLen - 1));
     leds[st + i] = CRGB(
       (uint8_t)((r1 * (255 - frac) + r2 * frac) / 255),
       (uint8_t)((g1 * (255 - frac) + g2 * frac) / 255),
@@ -405,13 +405,13 @@ static void renderGradient(uint8_t r1, uint8_t g1, uint8_t b1,
 
 // ── Fold mirror — for folded strings, mirror first half onto second half ──
 
-static void applyFold(uint8_t st, uint8_t en) {
+static void applyFold(uint16_t st, uint16_t en) {
   // A folded strip: LEDs go out half-way then fold back.
   // LED 0 pairs with LED N-1, LED 1 with N-2, etc.
   // We render to the first half, then mirror to the second half.
-  uint8_t total = en - st + 1;
-  uint8_t half = total / 2;
-  for (uint8_t i = 0; i < half; i++) {
+  uint16_t total = en - st + 1;
+  uint16_t half = total / 2;
+  for (uint16_t i = 0; i < half; i++) {
     leds[st + total - 1 - i] = leds[st + i];
   }
   // If odd count, the middle LED (fold point) keeps its value
@@ -486,15 +486,15 @@ bool applyAction(uint8_t at, uint8_t r, uint8_t g, uint8_t b,
                   uint16_t p16a, uint8_t p8a, uint8_t p8b,
                   uint8_t p8c, uint8_t p8d,
                          unsigned long elapsedMs,
-                         uint8_t st, uint8_t en, bool folded) {
-  if (st == 0xFF || en < st) return false;
+                         uint16_t st, uint16_t en, bool folded) {
+  if (st == 0xFFFF || en < st) return false;
   if (en >= NUM_LEDS) en = NUM_LEDS - 1;
 
   // For folded strings, render to virtual half-length then mirror
-  uint8_t realEn = en;
+  uint16_t realEn = en;
   if (folded) {
-    uint8_t total = en - st + 1;
-    uint8_t half = (total + 1) / 2;  // ceil — includes fold LED if odd
+    uint16_t total = en - st + 1;
+    uint16_t half = (total + 1) / 2;  // ceil — includes fold LED if odd
     en = st + half - 1;
   }
 

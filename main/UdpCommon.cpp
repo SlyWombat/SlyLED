@@ -380,12 +380,14 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     if (testType == ACT_SCANNER)  { childActP16a = 30; childActP8a = 3; }    // 30ms speed, 3-pixel bar
     if (testType == ACT_SPARKLE)  { childActP16a = 50; childActP8a = 3; }
     if (testType == ACT_GRADIENT) { childActP8a = 0; childActP8b = 0; childActP8c = 255; }  // red→blue
+    { uint16_t off = 0;
     for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
       if (j < childCfg.stringCount && childCfg.strings[j].ledCount > 0) {
-        childActSt[j] = 0;
-        childActEn[j] = childCfg.strings[j].ledCount - 1;
-      } else { childActSt[j] = 0xFF; childActEn[j] = 0xFF; }
-    }
+        childActSt[j] = off;
+        childActEn[j] = off + childCfg.strings[j].ledCount - 1;
+        off += childCfg.strings[j].ledCount;
+      } else { childActSt[j] = 0xFFFF; childActEn[j] = 0xFFFF; }
+    } }
     childActSeq++;
     sendJsonOk(client);
   } else if (isPost && strstr(req, " /config/reset ")) {
