@@ -300,15 +300,20 @@ def _ping(child, retries=2):
 
 def _broadcast_ping_all():
     """Send broadcast PINGs + direct pings to all known children.
+    Sends both v3 and v4 PINGs so old and new firmware both respond.
     The UDP listener daemon handles incoming PONGs → _recent_pongs."""
-    pkt = _hdr(CMD_PING)
+    pkt4 = _hdr(CMD_PING)
+    # Also send v3 ping for backward compat during OTA transition
+    pkt3 = struct.pack("<HBBI", UDP_MAGIC, 3, CMD_PING, int(time.time()) & 0xFFFFFFFF)
     for c in list(_children):
-        _send(c["ip"], pkt)
+        _send(c["ip"], pkt4)
+        _send(c["ip"], pkt3)
     for bc in ["255.255.255.255"] + _local_broadcasts():
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                s.sendto(pkt, (bc, UDP_PORT))
+                s.sendto(pkt4, (bc, UDP_PORT))
+                s.sendto(pkt3, (bc, UDP_PORT))
         except Exception:
             pass
 
@@ -451,7 +456,7 @@ def _udp_listener():
         if len(data) < 8:
             continue
         magic, ver, cmd = struct.unpack_from("<HBB", data, 0)
-        if magic != UDP_MAGIC or ver != UDP_VERSION:
+        if magic != UDP_MAGIC or ver not in (3, UDP_VERSION):
             continue
         ip = addr[0]
         if cmd == CMD_ACTION_EVENT and len(data) >= 12:
@@ -1200,12 +1205,17 @@ def api_bake_sync(tid):
 
     def _sync_thread():
         MAX_RETRIES = 3
-        # Stop all first
+        # Stop any running show first — both on children and server state
         pkt_stop = _hdr(CMD_RUNNER_STOP)
         pkt_off = _hdr(CMD_ACTION_STOP)
-        for p in plan:
-            _send(p["child"]["ip"], pkt_stop)
-            _send(p["child"]["ip"], pkt_off)
+        for c in _children:
+            if c.get("ip"):
+                _send(c["ip"], pkt_stop)
+                _send(c["ip"], pkt_off)
+        with _lock:
+            _settings["runnerRunning"] = False
+            _settings["activeTimeline"] = -1
+            _save("settings", _settings)
         time.sleep(0.15)
 
         bri = _settings.get("globalBrightness", 255)
