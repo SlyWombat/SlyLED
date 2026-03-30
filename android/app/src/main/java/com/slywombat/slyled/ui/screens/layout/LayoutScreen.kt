@@ -11,6 +11,6 @@ import androidx.compose.ui.Modifier
 @Composable
 fun LayoutScreen() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("Layout — Phase 4", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Stage & Fixtures", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

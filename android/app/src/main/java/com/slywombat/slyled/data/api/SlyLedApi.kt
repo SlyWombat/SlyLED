@@ -150,4 +150,99 @@ interface SlyLedApi {
     // Factory reset
     @POST("api/reset")
     suspend fun factoryReset(): OkResponse
+
+    // ── Stage ──────────────────────────────────────────────────────────
+    @GET("api/stage")
+    suspend fun getStage(): Stage
+
+    @POST("api/stage")
+    suspend fun saveStage(@Body stage: Stage): OkResponse
+
+    // ── Fixtures ───────────────────────────────────────────────────────
+    @GET("api/fixtures")
+    suspend fun getFixtures(): List<Fixture>
+
+    @POST("api/fixtures")
+    suspend fun createFixture(@Body fixture: Fixture): OkResponse
+
+    @PUT("api/fixtures/{id}")
+    suspend fun updateFixture(@Path("id") id: Int, @Body fixture: Fixture): OkResponse
+
+    @DELETE("api/fixtures/{id}")
+    suspend fun deleteFixture(@Path("id") id: Int): OkResponse
+
+    @POST("api/fixtures/{id}/resolve")
+    suspend fun resolveFixture(@Path("id") id: Int): Map<String, Any>
+
+    // ── Surfaces ───────────────────────────────────────────────────────
+    @GET("api/surfaces")
+    suspend fun getSurfaces(): List<Surface>
+
+    @POST("api/surfaces")
+    suspend fun createSurface(@Body surface: Surface): OkResponse
+
+    @DELETE("api/surfaces/{id}")
+    suspend fun deleteSurface(@Path("id") id: Int): OkResponse
+
+    // ── Spatial Effects ────────────────────────────────────────────────
+    @GET("api/spatial-effects")
+    suspend fun getSpatialEffects(): List<SpatialEffect>
+
+    @POST("api/spatial-effects")
+    suspend fun createSpatialEffect(@Body effect: SpatialEffect): OkResponse
+
+    @PUT("api/spatial-effects/{id}")
+    suspend fun updateSpatialEffect(@Path("id") id: Int, @Body effect: SpatialEffect): OkResponse
+
+    @DELETE("api/spatial-effects/{id}")
+    suspend fun deleteSpatialEffect(@Path("id") id: Int): OkResponse
+
+    // ── Timelines ──────────────────────────────────────────────────────
+    @GET("api/timelines")
+    suspend fun getTimelines(): List<Timeline>
+
+    @POST("api/timelines")
+    suspend fun createTimeline(@Body timeline: Timeline): OkResponse
+
+    @GET("api/timelines/{id}")
+    suspend fun getTimeline(@Path("id") id: Int): Timeline
+
+    @PUT("api/timelines/{id}")
+    suspend fun updateTimeline(@Path("id") id: Int, @Body timeline: Timeline): OkResponse
+
+    @DELETE("api/timelines/{id}")
+    suspend fun deleteTimeline(@Path("id") id: Int): OkResponse
+
+    // ── Bake & Sync ────────────────────────────────────────────────────
+    @POST("api/timelines/{id}/bake")
+    suspend fun bakeTimeline(@Path("id") id: Int): OkResponse
+
+    @GET("api/timelines/{id}/baked/status")
+    suspend fun getBakeStatus(@Path("id") id: Int): BakeStatus
+
+    @POST("api/timelines/{id}/baked/sync")
+    suspend fun syncBaked(@Path("id") id: Int): OkResponse
+
+    @GET("api/timelines/{id}/sync/status")
+    suspend fun getSyncStatus(@Path("id") id: Int): SyncStatus
+
+    @POST("api/timelines/{id}/start")
+    suspend fun startTimeline(@Path("id") id: Int): OkResponse
+
+    @POST("api/timelines/{id}/stop")
+    suspend fun stopTimeline(@Path("id") id: Int): OkResponse
+
+    @GET("api/timelines/{id}/status")
+    suspend fun getTimelineStatus(@Path("id") id: Int): TimelineStatus
+
+    // ── Presets ────────────────────────────────────────────────────────
+    @GET("api/show/presets")
+    suspend fun getShowPresets(): List<ShowPreset>
+
+    @POST("api/show/preset")
+    suspend fun loadPreset(@Body body: Map<String, String>): OkResponse
+
+    // ── Migration ──────────────────────────────────────────────────────
+    @POST("api/migrate/layout")
+    suspend fun migrateLayout(): OkResponse
 }

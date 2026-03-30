@@ -5,267 +5,150 @@ import androidx.lifecycle.viewModelScope
 import com.slywombat.slyled.data.model.*
 import com.slywombat.slyled.data.repository.SlyLedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class RuntimeViewModel @Inject constructor(
-    private val repository: SlyLedRepository
+    private val repository: SlyLedRepository,
 ) : ViewModel() {
 
-    private val _runners = MutableStateFlow<List<RunnerSummary>>(emptyList())
-    val runners: StateFlow<List<RunnerSummary>> = _runners.asStateFlow()
+    private val _timelines = MutableStateFlow<List<Timeline>>(emptyList())
+    val timelines = _timelines.asStateFlow()
 
-    private val _flights = MutableStateFlow<List<Flight>>(emptyList())
-    val flights: StateFlow<List<Flight>> = _flights.asStateFlow()
+    private val _selectedTimeline = MutableStateFlow<Timeline?>(null)
+    val selectedTimeline = _selectedTimeline.asStateFlow()
 
-    private val _shows = MutableStateFlow<List<Show>>(emptyList())
-    val shows: StateFlow<List<Show>> = _shows.asStateFlow()
+    private val _bakeStatus = MutableStateFlow<BakeStatus?>(null)
+    val bakeStatus = _bakeStatus.asStateFlow()
 
-    private val _children = MutableStateFlow<List<Child>>(emptyList())
-    val children: StateFlow<List<Child>> = _children.asStateFlow()
+    private val _syncStatus = MutableStateFlow<SyncStatus?>(null)
+    val syncStatus = _syncStatus.asStateFlow()
 
-    val settings: StateFlow<Settings> = repository.settingsFlow(3000)
-        .map { it.getOrDefault(Settings()) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), Settings())
-
-    private val _isLoading = MutableStateFlow(false)
-    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
-
-    private val _error = MutableStateFlow<String?>(null)
-    val error: StateFlow<String?> = _error.asStateFlow()
+    private val _timelineStatus = MutableStateFlow<TimelineStatus?>(null)
+    val timelineStatus = _timelineStatus.asStateFlow()
 
     private val _message = MutableStateFlow<String?>(null)
-    val message: StateFlow<String?> = _message.asStateFlow()
+    val message = _message.asStateFlow()
 
-    init {
-        loadAll()
-    }
+    private val _presets = MutableStateFlow<List<ShowPreset>>(emptyList())
+    val presets = _presets.asStateFlow()
 
-    fun loadAll() {
+    fun load() {
         viewModelScope.launch {
-            _isLoading.value = true
-            _error.value = null
             try {
-                _runners.value = repository.getRunners()
-                _flights.value = repository.getFlights()
-                _shows.value = repository.getShows()
-                _children.value = repository.getChildren()
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to load data"
-            } finally {
-                _isLoading.value = false
+                _timelines.value = repository.getTimelines()
+                _presets.value = repository.getShowPresets()
+            } catch (_: Exception) {}
+        }
+        // Poll timeline status
+        viewModelScope.launch {
+            while (true) {
+                try {
+                    val settings = repository.getSettings()
+                    val tlId = settings.activeTimeline
+                    if (tlId != null && tlId >= 0 && settings.runnerRunning) {
+                        _timelineStatus.value = repository.getTimelineStatus(tlId)
+                    } else {
+                        _timelineStatus.value = null
+                    }
+                } catch (_: Exception) {}
+                delay(3000)
             }
         }
     }
 
-    fun loadRunners() {
-        viewModelScope.launch {
-            try {
-                _runners.value = repository.getRunners()
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to load runners"
-            }
-        }
-    }
-
-    fun loadFlights() {
-        viewModelScope.launch {
-            try {
-                _flights.value = repository.getFlights()
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to load flights"
-            }
-        }
-    }
-
-    fun loadShows() {
-        viewModelScope.launch {
-            try {
-                _shows.value = repository.getShows()
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to load shows"
-            }
-        }
-    }
-
-    fun createRunner(name: String) {
-        viewModelScope.launch {
-            try {
-                repository.createRunner(name)
-                loadRunners()
-                _message.value = "Runner created"
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to create runner"
-            }
-        }
-    }
-
-    fun deleteRunner(id: Int) {
-        viewModelScope.launch {
-            try {
-                repository.deleteRunner(id)
-                loadRunners()
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to delete runner"
-            }
-        }
-    }
-
-    fun computeRunner(id: Int) {
-        viewModelScope.launch {
-            try {
-                repository.computeRunner(id)
-                loadRunners()
-                _message.value = "Runner computed"
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to compute runner"
-            }
-        }
-    }
-
-    fun syncRunner(id: Int) {
-        viewModelScope.launch {
-            try {
-                repository.syncRunner(id)
-                _message.value = "Runner synced to performers"
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to sync runner"
-            }
-        }
-    }
-
-    fun startRunner(id: Int) {
-        viewModelScope.launch {
-            try {
-                repository.startRunner(id)
-                _message.value = "Runner started"
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to start runner"
-            }
-        }
-    }
-
-    fun stopRunners() {
-        viewModelScope.launch {
-            try {
-                repository.stopRunners()
-                _message.value = "All runners stopped"
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to stop runners"
-            }
-        }
-    }
-
-    fun createFlight(flight: Flight) {
-        viewModelScope.launch {
-            try {
-                repository.createFlight(flight)
-                loadFlights()
-                _message.value = "Flight created"
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to create flight"
-            }
-        }
-    }
-
-    fun updateFlight(id: Int, flight: Flight) {
-        viewModelScope.launch {
-            try {
-                repository.updateFlight(id, flight)
-                loadFlights()
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to update flight"
-            }
-        }
-    }
-
-    fun deleteFlight(id: Int) {
-        viewModelScope.launch {
-            try {
-                repository.deleteFlight(id)
-                loadFlights()
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to delete flight"
-            }
-        }
-    }
-
-    fun createShow(show: Show) {
-        viewModelScope.launch {
-            try {
-                repository.createShow(show)
-                loadShows()
-                _message.value = "Show created"
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to create show"
-            }
-        }
-    }
-
-    fun updateShow(id: Int, show: Show) {
-        viewModelScope.launch {
-            try {
-                repository.updateShow(id, show)
-                loadShows()
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to update show"
-            }
-        }
-    }
-
-    fun deleteShow(id: Int) {
-        viewModelScope.launch {
-            try {
-                repository.deleteShow(id)
-                loadShows()
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to delete show"
-            }
-        }
-    }
-
-    fun startShow(id: Int) {
-        viewModelScope.launch {
-            try {
-                repository.startShow(id)
-                _message.value = "Show started"
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to start show"
-            }
-        }
-    }
-
-    fun stopShows() {
-        viewModelScope.launch {
-            try {
-                repository.stopShows()
-                _message.value = "All shows stopped"
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to stop shows"
-            }
-        }
-    }
-
-    fun saveSettings(brightness: Int, loop: Boolean) {
-        viewModelScope.launch {
-            try {
-                repository.saveSettings(Settings(
-                    globalBrightness = brightness,
-                    runnerLoop = loop
-                ))
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to save settings"
-            }
-        }
-    }
-
-    fun clearError() { _error.value = null }
     fun clearMessage() { _message.value = null }
+
+    fun selectTimeline(id: Int) {
+        viewModelScope.launch {
+            try {
+                _selectedTimeline.value = repository.getTimeline(id)
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun createTimeline(name: String, durationS: Int) {
+        viewModelScope.launch {
+            try {
+                val r = repository.createTimeline(Timeline(name = name, durationS = durationS))
+                if (r.ok) {
+                    _message.value = "Timeline created"
+                    _timelines.value = repository.getTimelines()
+                }
+            } catch (e: Exception) { _message.value = "Error: ${e.message}" }
+        }
+    }
+
+    fun deleteTimeline(id: Int) {
+        viewModelScope.launch {
+            try {
+                repository.deleteTimeline(id)
+                _timelines.value = repository.getTimelines()
+                if (_selectedTimeline.value?.id == id) _selectedTimeline.value = null
+            } catch (e: Exception) { _message.value = "Error: ${e.message}" }
+        }
+    }
+
+    fun bakeAndStart(id: Int) {
+        viewModelScope.launch {
+            try {
+                _message.value = "Baking..."
+                repository.bakeTimeline(id)
+                // Poll bake
+                while (true) {
+                    delay(500)
+                    val bs = repository.getBakeStatus(id)
+                    _bakeStatus.value = bs
+                    if (bs.done) {
+                        if (bs.error != null) { _message.value = "Bake error: ${bs.error}"; return@launch }
+                        break
+                    }
+                }
+                _message.value = "Syncing..."
+                repository.syncBaked(id)
+                // Poll sync
+                while (true) {
+                    delay(400)
+                    val ss = repository.getSyncStatus(id)
+                    _syncStatus.value = ss
+                    if (ss.done) break
+                }
+                if (_syncStatus.value?.allReady == true) {
+                    _message.value = "Starting..."
+                    val r = repository.startTimeline(id)
+                    _message.value = if (r.ok) "Show started!" else "Start failed"
+                } else {
+                    _message.value = "Not all performers ready"
+                }
+                _bakeStatus.value = null
+                _syncStatus.value = null
+            } catch (e: Exception) { _message.value = "Error: ${e.message}" }
+        }
+    }
+
+    fun stopTimeline(id: Int) {
+        viewModelScope.launch {
+            try {
+                repository.stopTimeline(id)
+                _timelineStatus.value = null
+                _message.value = "Show stopped"
+            } catch (e: Exception) { _message.value = "Error: ${e.message}" }
+        }
+    }
+
+    fun loadPreset(presetId: String) {
+        viewModelScope.launch {
+            try {
+                val r = repository.loadPreset(mapOf("id" to presetId))
+                if (r.ok) {
+                    _message.value = "Preset loaded"
+                    _timelines.value = repository.getTimelines()
+                }
+            } catch (e: Exception) { _message.value = "Error: ${e.message}" }
+        }
+    }
 }

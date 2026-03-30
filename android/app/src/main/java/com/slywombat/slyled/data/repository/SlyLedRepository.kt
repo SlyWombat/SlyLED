@@ -125,6 +125,23 @@ class SlyLedRepository @Inject constructor(
     suspend fun importShow(data: JsonObject) = requireApi().importShow(data)
     suspend fun generateDemo() = requireApi().generateDemo()
 
+    // Timelines
+    suspend fun getTimelines() = requireApi().getTimelines()
+    suspend fun getTimeline(id: Int) = requireApi().getTimeline(id)
+    suspend fun createTimeline(timeline: Timeline) = requireApi().createTimeline(timeline)
+    suspend fun deleteTimeline(id: Int) = requireApi().deleteTimeline(id)
+    suspend fun bakeTimeline(id: Int) = requireApi().bakeTimeline(id)
+    suspend fun getBakeStatus(id: Int) = requireApi().getBakeStatus(id)
+    suspend fun syncBaked(id: Int) = requireApi().syncBaked(id)
+    suspend fun getSyncStatus(id: Int) = requireApi().getSyncStatus(id)
+    suspend fun startTimeline(id: Int) = requireApi().startTimeline(id)
+    suspend fun stopTimeline(id: Int) = requireApi().stopTimeline(id)
+    suspend fun getTimelineStatus(id: Int) = requireApi().getTimelineStatus(id)
+
+    // Presets
+    suspend fun getShowPresets() = requireApi().getShowPresets()
+    suspend fun loadPreset(body: Map<String, String>) = requireApi().loadPreset(body)
+
     // Reset
     suspend fun factoryReset() = requireApi().factoryReset()
 }
