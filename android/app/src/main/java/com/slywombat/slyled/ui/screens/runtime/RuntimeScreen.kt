@@ -148,8 +148,9 @@ fun RuntimeScreen(viewModel: RuntimeViewModel = hiltViewModel()) {
         )
     }
 
-    // Preset dialog
+    // Preset dialog — fetch presets when opened
     if (showPresetDialog) {
+        LaunchedEffect(Unit) { viewModel.loadPresets() }
         PresetDialog(
             presets = presets,
             onDismiss = { showPresetDialog = false },
@@ -264,15 +265,26 @@ fun PresetDialog(presets: List<ShowPreset>, onDismiss: () -> Unit, onSelect: (St
         onDismissRequest = onDismiss,
         title = { Text("Load Preset Show") },
         text = {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(presets) { p ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth().clickable { onSelect(p.id) },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text(p.name, fontWeight = FontWeight.Bold)
-                            Text(p.desc, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (presets.isEmpty()) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                    Spacer(Modifier.height(8.dp))
+                    Text("Loading presets...", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(presets) { p ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().clickable { onSelect(p.id) },
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(p.name, fontWeight = FontWeight.Bold)
+                                Text(p.desc, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }

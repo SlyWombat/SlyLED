@@ -140,6 +140,13 @@ class RuntimeViewModel @Inject constructor(
         }
     }
 
+    fun loadPresets() {
+        viewModelScope.launch {
+            try { _presets.value = repository.getShowPresets() }
+            catch (_: Exception) { _message.value = "Could not load presets" }
+        }
+    }
+
     fun loadPreset(presetId: String) {
         viewModelScope.launch {
             try {
