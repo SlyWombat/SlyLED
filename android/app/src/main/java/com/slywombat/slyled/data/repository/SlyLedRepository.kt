@@ -137,6 +137,7 @@ class SlyLedRepository @Inject constructor(
     suspend fun startTimeline(id: Int) = requireApi().startTimeline(id)
     suspend fun stopTimeline(id: Int) = requireApi().stopTimeline(id)
     suspend fun getTimelineStatus(id: Int) = requireApi().getTimelineStatus(id)
+    suspend fun getBakePreview(id: Int) = requireApi().getBakePreview(id)
 
     // Presets
     suspend fun getShowPresets() = requireApi().getShowPresets()

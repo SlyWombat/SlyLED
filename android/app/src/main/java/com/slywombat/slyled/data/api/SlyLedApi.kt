@@ -235,6 +235,9 @@ interface SlyLedApi {
     @GET("api/timelines/{id}/status")
     suspend fun getTimelineStatus(@Path("id") id: Int): TimelineStatus
 
+    @GET("api/timelines/{id}/baked/preview")
+    suspend fun getBakePreview(@Path("id") id: Int): Map<String, List<List<List<Int>>>>
+
     // ── Presets ────────────────────────────────────────────────────────
     @GET("api/show/presets")
     suspend fun getShowPresets(): List<ShowPreset>

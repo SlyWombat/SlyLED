@@ -43,6 +43,12 @@ class RuntimeViewModel @Inject constructor(
     private val _spatialEffects = MutableStateFlow<List<SpatialEffect>>(emptyList())
     val spatialEffects = _spatialEffects.asStateFlow()
 
+    private val _previewData = MutableStateFlow<Map<String, List<List<List<Int>>>>>(emptyMap())
+    val previewData = _previewData.asStateFlow()
+
+    private val _previewSecond = MutableStateFlow(0)
+    val previewSecond = _previewSecond.asStateFlow()
+
     fun load() {
         viewModelScope.launch {
             try { _timelines.value = repository.getTimelines() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getTimelines failed", e) }
@@ -127,6 +133,10 @@ class RuntimeViewModel @Inject constructor(
                     _message.value = "Starting..."
                     val r = repository.startTimeline(id)
                     _message.value = if (r.ok) "Show started!" else "Start failed"
+                    // Load preview for emulator
+                    try { _previewData.value = repository.getBakePreview(id) } catch (_: Exception) {}
+                    // Start emulator polling
+                    startEmulator(id)
                 } else {
                     _message.value = "Not all performers ready"
                 }
@@ -136,11 +146,27 @@ class RuntimeViewModel @Inject constructor(
         }
     }
 
+    private fun startEmulator(tlId: Int) {
+        viewModelScope.launch {
+            while (true) {
+                delay(1000)
+                try {
+                    val settings = repository.getSettings()
+                    if (!settings.runnerRunning) { _previewData.value = emptyMap(); break }
+                    val epoch = settings.runnerStartEpoch ?: continue
+                    _previewSecond.value = maxOf(0, (System.currentTimeMillis() / 1000 - epoch).toInt())
+                } catch (_: Exception) { break }
+            }
+        }
+    }
+
     fun stopTimeline(id: Int) {
         viewModelScope.launch {
             try {
                 repository.stopTimeline(id)
                 _timelineStatus.value = null
+                _previewData.value = emptyMap()
+                _previewSecond.value = 0
                 _message.value = "Show stopped"
             } catch (e: Exception) { _message.value = "Error: ${e.message}" }
         }

@@ -249,6 +249,25 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
             progress.fixtures_done += 1
             progress.segments[str(fix_id)] = len(segments)
 
+    # Generate preview data: 1 color per string per second
+    preview = {}
+    for fix_id, frames in per_fixture_frames.items():
+        sinfo = fixture_data[fix_id].get("strings", [])
+        fix_preview = []
+        for sec in range(0, n_frames, BAKE_FPS):
+            frame = frames[min(sec, len(frames) - 1)]
+            string_colors = []
+            if sinfo:
+                for si in sinfo:
+                    off, cnt = si["offset"], si["count"]
+                    spx = frame[off:off+cnt] if off+cnt <= len(frame) else []
+                    string_colors.append(_dominant_color(spx) if spx else [0,0,0])
+            else:
+                string_colors.append(_dominant_color(frame))
+            fix_preview.append(string_colors)
+        preview[fix_id] = fix_preview
+    result["preview"] = preview
+
     if progress:
         progress.status = "complete"
         progress.current_frame = n_frames

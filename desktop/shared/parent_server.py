@@ -1150,6 +1150,7 @@ def api_timeline_bake(tid):
                 "totalFrames": result["totalFrames"],
                 "fps": result["fps"],
                 "lsqSize": sum(len(v) for v in result.get("lsq_files", {}).values()),
+                "preview": result.get("preview", {}),
             }
             # Save LSQ files to data/baked/
             baked_dir = DATA / "baked"
@@ -1186,6 +1187,13 @@ def api_bake_download(tid):
         return jsonify(err="No baked data"), 404
     return send_file(str(zip_path), mimetype="application/zip",
                      as_attachment=True, download_name=f"timeline_{tid}_lsq.zip")
+
+@app.get("/api/timelines/<int:tid>/baked/preview")
+def api_bake_preview(tid):
+    result = _bake_result.get(tid)
+    if not result:
+        return jsonify(err="No baked data"), 404
+    return jsonify(result.get("preview", {}))
 
 # Sync progress — tracks per-child sync state for UI polling
 _sync_progress = None  # dict when active

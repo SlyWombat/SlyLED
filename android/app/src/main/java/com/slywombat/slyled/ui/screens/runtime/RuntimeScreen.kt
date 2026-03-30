@@ -1,5 +1,7 @@
 package com.slywombat.slyled.ui.screens.runtime
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -13,6 +15,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -30,6 +35,8 @@ fun RuntimeScreen(viewModel: RuntimeViewModel = hiltViewModel()) {
     val timelineStatus by viewModel.timelineStatus.collectAsState()
     val message by viewModel.message.collectAsState()
     val presets by viewModel.presets.collectAsState()
+    val previewData by viewModel.previewData.collectAsState()
+    val previewSecond by viewModel.previewSecond.collectAsState()
     var showNewDialog by remember { mutableStateOf(false) }
     var showPresetDialog by remember { mutableStateOf(false) }
 
@@ -104,6 +111,17 @@ fun RuntimeScreen(viewModel: RuntimeViewModel = hiltViewModel()) {
             }
         }
 
+        // Show emulator canvas
+        if (previewData.isNotEmpty()) {
+            item {
+                ShowEmulatorCanvas(
+                    previewData = previewData,
+                    second = previewSecond,
+                    durationS = timelineStatus?.durationS ?: 30,
+                )
+            }
+        }
+
         // Timeline list
         items(timelines) { tl ->
             TimelineCard(
@@ -159,6 +177,81 @@ fun RuntimeScreen(viewModel: RuntimeViewModel = hiltViewModel()) {
                 showPresetDialog = false
             }
         )
+    }
+}
+
+@Composable
+fun ShowEmulatorCanvas(
+    previewData: Map<String, List<List<List<Int>>>>,
+    second: Int,
+    durationS: Int,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text("Show Preview", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Spacer(Modifier.height(6.dp))
+
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(120.dp)
+                    .background(Color(0xFF0A0F1A))
+            ) {
+                val w = size.width
+                val h = size.height
+
+                // Stage border
+                drawRect(Color(0xFF1E3A5F), style = Stroke(1f))
+
+                // Distribute fixtures evenly across the canvas
+                val fixIds = previewData.keys.toList()
+                if (fixIds.isEmpty()) return@Canvas
+
+                fixIds.forEachIndexed { idx, fid ->
+                    val frames = previewData[fid] ?: return@forEachIndexed
+                    val dur = frames.size
+                    if (dur == 0) return@forEachIndexed
+                    val sec = second % dur
+                    val colors = if (sec < frames.size) frames[sec] else emptyList()
+
+                    // Position fixture evenly
+                    val cx = (idx + 0.5f) * w / fixIds.size
+                    val cy = h / 2
+
+                    // Draw each string as a colored line
+                    colors.forEachIndexed { si, rgb ->
+                        if (rgb.size < 3) return@forEachIndexed
+                        val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
+                        if (r + g + b < 5) return@forEachIndexed
+
+                        val angle = if (colors.size > 1) (si.toFloat() / colors.size * Math.PI).toFloat() else 0f
+                        val len = 30f
+                        val ex = cx + kotlin.math.cos(angle.toDouble()).toFloat() * len
+                        val ey = cy - kotlin.math.sin(angle.toDouble()).toFloat() * len
+
+                        drawLine(
+                            Color(r, g, b),
+                            Offset(cx, cy), Offset(ex, ey),
+                            strokeWidth = 8f
+                        )
+                        // Glow
+                        drawCircle(Color(r, g, b, 100), 12f, Offset((cx + ex) / 2, (cy + ey) / 2))
+                    }
+
+                    // Node
+                    drawCircle(Color(0xFF22CC66), 6f, Offset(cx, cy))
+                }
+            }
+
+            // Time display
+            val m = second / 60
+            val s = second % 60
+            Text(
+                "%02d:%02d / %02d:%02d".format(m, s, durationS / 60, durationS % 60),
+                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
     }
 }
 

@@ -101,9 +101,6 @@ body.light .li:hover{border-color:#3b82f6}
         <label id='lay-detail-wrap' style='color:#888;font-size:.82em;white-space:nowrap;display:flex;align-items:center;gap:.3em'>
           <input type='checkbox' id='lay-detail' checked onchange='drawLayout()' data-tip='layDetail'> Show strings
         </label>
-        <label style='color:#888;font-size:.82em;white-space:nowrap;display:flex;align-items:center;gap:.3em'>
-          <input type='checkbox' id='lay-preview' onchange='togglePreview()' data-tip='layPreview'> Live Preview
-        </label>
       </div>
       <!-- 2D Canvas (default) -->
       <div id='lay-2d-wrap'>
@@ -192,6 +189,11 @@ body.light .li:hover{border-color:#3b82f6}
         <button class='btn btn-on' onclick='tlSyncAndStart()'>Sync &amp; Start</button>
         <button class='btn btn-off' onclick='tlStopShow()'>Stop Show</button>
       </div>
+    </div>
+    <div id='tl-emulator' style='display:none;margin-top:1em'>
+      <div style='font-size:.82em;color:#94a3b8;margin-bottom:.3em'>Show Preview</div>
+      <canvas id='emu-cv' width='600' height='200' style='border:1px solid #334155;background:#0a0f1a;display:block;max-width:100%'></canvas>
+      <div id='emu-time' style='font-size:.72em;color:#64748b;margin-top:.2em'></div>
     </div>
   </div>
 </div>
@@ -441,8 +443,6 @@ function showTab(t){
     var n=document.getElementById('n-'+id);
     n.className='tnav'+(id===t?' tact':'');
   });
-  // Stop live preview when leaving layout
-  if(t!=='layout'&&_previewTimer){stopLivePreview();var pc=document.getElementById('lay-preview');if(pc)pc.checked=false;}
   if(t==='dash')loadDash();
   else if(t==='setup')loadSetup();
   else if(t==='layout')loadLayout();
@@ -930,8 +930,6 @@ function showDetails(id){
 var _strCol=['#0ff','#f0f','#ff0','#0f0','#f80','#08f','#f08','#8f0'];
 var _dirDx=[1,0,-1,0],_dirDy=[0,-1,0,1]; // E,N,W,S in canvas-Y-down coords
 var _layDragId=null;
-var _previewState={};
-var _previewTimer=null;
 var _layMode='2d'; // '2d' or '3d'
 
 function _isPlaced(c){return c.positioned||c._placed;}
@@ -2033,10 +2031,12 @@ function _renderSyncPerformers(sp){
 
 function tlGoAfterSync(){
   if(!_curTl)return;
+  var tlId=_curTl.id;
   closeModal();
-  ra('POST','/api/timelines/'+_curTl.id+'/start',{},function(r){
+  ra('POST','/api/timelines/'+tlId+'/start',{},function(r){
     if(r&&r.ok){
       document.getElementById('hs').textContent='Show started — '+r.started+' performers, go in 5s';
+      emuStart(tlId);
     } else {
       document.getElementById('hs').textContent='Start failed: '+(r&&r.err||'?');
     }
@@ -2045,6 +2045,7 @@ function tlGoAfterSync(){
 
 function tlStopShow(){
   if(!_curTl)return;
+  emuStop();
   ra('POST','/api/timelines/'+_curTl.id+'/stop',{},function(r){
     if(r&&r.ok)document.getElementById('hs').textContent='Show stopped — '+r.stopped+' performers';
   });
@@ -2200,8 +2201,7 @@ function drawLayout(){
     if(showStr&&c.strings&&c.sc>0){
       for(var si=0;si<c.sc&&si<c.strings.length;si++){
         var s=c.strings[si];if(!s||!s.leds)continue;
-        var pv=_previewState[c.id];
-        var col=(pv&&pv.active)?'rgb('+pv.r+','+pv.g+','+pv.b+')':_strCol[si%_strCol.length];
+        var col=_strCol[si%_strCol.length];
         var dx=_dirDx[s.sdir||0],dy=_dirDy[s.sdir||0];
         // Use physical mm if > 500mm, otherwise estimate from LED count (16mm/LED typical)
         var lenMm=s.mm||0;
@@ -2210,31 +2210,22 @@ function drawLayout(){
         pxL=Math.max(pxL,30); // minimum 30px visible length
         var ex=cx+dx*pxL,ey=cy+dy*pxL;
         // Draw string as a thick colored line with LED dots
-        var lineW=(pv&&pv.active)?6:4;
         ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(ex,ey);
-        ctx.strokeStyle=col;ctx.lineWidth=lineW;ctx.stroke();
-        // Draw LED dots along the string — glow when preview active
-        var dotR=(pv&&pv.active)?2.5:1.5;
+        ctx.strokeStyle=col;ctx.lineWidth=4;ctx.stroke();
+        // Draw LED dots along the string
         var dotCount=Math.min(s.leds,Math.floor(pxL/3));
         for(var di=0;di<dotCount;di++){
           var t=(di+0.5)/dotCount;
           var dpx=cx+dx*pxL*t,dpy=cy+dy*pxL*t;
-          ctx.beginPath();ctx.arc(dpx,dpy,dotR,0,2*Math.PI);
+          ctx.beginPath();ctx.arc(dpx,dpy,1.5,0,2*Math.PI);
           ctx.fillStyle=col;ctx.fill();
         }
         // LED count label at string end
-        ctx.fillStyle=(pv&&pv.active)?col:_strCol[si%_strCol.length];
+        ctx.fillStyle=_strCol[si%_strCol.length];
         ctx.font='9px sans-serif';ctx.textAlign='center';
         var lx=ex+(dx!==0?dx*12:0),ly=ey+(dy!==0?dy*12:(dx>0?-8:8));
         ctx.fillText(s.leds+' LEDs',lx,ly);
       }
-    }
-    // Preview glow (from live runner or action preview)
-    var pv=_previewState[c.id];
-    if(pv&&pv.active){
-      ctx.beginPath();ctx.arc(cx,cy,18,0,2*Math.PI);
-      ctx.fillStyle='rgba('+pv.r+','+pv.g+','+pv.b+',0.5)';ctx.fill();
-      ctx.strokeStyle='rgba('+pv.r+','+pv.g+','+pv.b+',0.8)';ctx.lineWidth=2;ctx.stroke();
     }
     // Node circle
     var nodeCol=c.type==='wled'?'#663300':'#1a6b3a';
@@ -2258,87 +2249,102 @@ function drawLayout(){
   });
 }
 
-function startLivePreview(){
-  if(_previewTimer)clearInterval(_previewTimer);
-  _previewTimer=setInterval(function(){
-    ra('GET','/api/settings',null,function(s){
-      if(!s||!s.runnerRunning){_previewState={};drawLayout();_s3dUpdatePreview();return;}
-      var tlId=s.activeTimeline;
-      if(tlId==null||tlId<0){_previewState={};drawLayout();return;}
-      // Get timeline status for elapsed time
-      ra('GET','/api/timelines/'+tlId+'/status',null,function(st){
-        if(!st||!st.running){_previewState={};drawLayout();return;}
-        var elapsed=st.elapsed||0;
-        // Get baked data to find current segment colors
-        ra('GET','/api/timelines/'+tlId+'/baked',null,function(baked){
-          if(!baked||!baked.fixtures){return;}
-          // For each fixture, find the active segment at elapsed time
-          for(var fid in baked.fixtures){
-            var fd=baked.fixtures[fid];
-            var segs=fd.segments||[];
-            var color={r:0,g:0,b:0,active:false};
-            for(var si=0;si<segs.length;si++){
-              var seg=segs[si];
-              if(elapsed>=seg.startS&&elapsed<seg.startS+seg.durationS){
-                var p=seg.params||{};
-                if(seg.type===0){color={r:0,g:0,b:0,active:false};}
-                else if(seg.type===2){
-                  // Fade: interpolate between start and end color
-                  var t=seg.durationS>0?(elapsed-seg.startS)/seg.durationS:0;
-                  color={r:Math.round((p.r||0)+(((p.r2||0)-(p.r||0))*t)),
-                         g:Math.round((p.g||0)+(((p.g2||0)-(p.g||0))*t)),
-                         b:Math.round((p.b||0)+(((p.b2||0)-(p.b||0))*t)),active:true};
-                } else {
-                  color={r:p.r||0,g:p.g||0,b:p.b||0,active:true};
-                }
-                break;
-              }
-            }
-            // Map fixture → child ID
-            var fix=null;_fixtures.forEach(function(f){if(String(f.id)===fid)fix=f;});
-            if(fix&&fix.childId!=null)_previewState[fix.childId]=color;
-          }
-          if(ctab==='layout'){drawLayout();_s3dUpdatePreview();}
-        });
-      });
-    });
-  },500);
-}
+// -- Show Emulator -------------------------------------------------------
+var _emuData=null, _emuTimer=null, _emuT=0;
 
-function _s3dUpdatePreview(){
-  // Color the 3D fixture nodes based on preview state
-  if(!_s3d.inited)return;
-  _s3d.nodes.forEach(function(grp){
-    var cid=grp.userData.childId;
-    if(cid===undefined)return;
-    var pv=_previewState[cid];
-    if(!pv||!pv.active)return;
-    // Color all LED dot meshes in this group
-    grp.traverse(function(obj){
-      if(obj.isMesh&&obj.geometry&&obj.geometry.type==='SphereGeometry'&&obj.geometry.parameters.radius<0.1){
-        obj.material.color.setRGB(pv.r/255,pv.g/255,pv.b/255);
-        obj.material.emissive&&obj.material.emissive.setRGB(pv.r/255,pv.g/255,pv.b/255);
-      }
-    });
-    // Also color the string lines
-    grp.traverse(function(obj){
-      if(obj.isLine){
-        obj.material.color.setRGB(pv.r/255,pv.g/255,pv.b/255);
-      }
-    });
+function emuStart(tlId){
+  emuStop();
+  ra('GET','/api/timelines/'+tlId+'/baked/preview',null,function(d){
+    if(!d||typeof d!=='object'){return;}
+    _emuData={preview:d,tlId:tlId};
+    _emuT=0;
+    document.getElementById('tl-emulator').style.display='block';
+    _emuTimer=setInterval(function(){
+      _emuT++;
+      // Check if show is still running
+      ra('GET','/api/settings',null,function(s){
+        if(!s||!s.runnerRunning){emuStop();return;}
+        if(s.runnerStartEpoch){
+          _emuT=Math.max(0,Math.floor(Date.now()/1000)-s.runnerStartEpoch);
+        }
+      });
+      emuDraw();
+    },1000);
+    emuDraw();
   });
 }
 
-function stopLivePreview(){
-  if(_previewTimer){clearInterval(_previewTimer);_previewTimer=null;}
-  _previewState={};
-  if(ctab==='layout'){drawLayout();if(_s3d.inited)s3dLoadChildren();}
+function emuStop(){
+  if(_emuTimer){clearInterval(_emuTimer);_emuTimer=null;}
+  _emuData=null;_emuT=0;
+  var el=document.getElementById('tl-emulator');if(el)el.style.display='none';
 }
 
-function togglePreview(){
-  var cb=document.getElementById('lay-preview');
-  if(cb&&cb.checked)startLivePreview();
-  else stopLivePreview();
+function emuDraw(){
+  var cv=document.getElementById('emu-cv');if(!cv||!_emuData)return;
+  var ctx=cv.getContext('2d');
+  var W=cv.width,H=cv.height;
+  ctx.fillStyle='#0a0f1a';ctx.fillRect(0,0,W,H);
+
+  // Get layout data for positioning
+  var preview=_emuData.preview;
+  var fixIds=Object.keys(preview);
+  if(!fixIds.length)return;
+
+  // Draw stage border
+  ctx.strokeStyle='#1e3a5f';ctx.lineWidth=1;ctx.strokeRect(1,1,W-2,H-2);
+
+  // For each fixture, draw its strings at the correct canvas position
+  var cw=phW||10000,ch=phH||5000;
+  fixIds.forEach(function(fid){
+    var frames=preview[fid];
+    if(!frames||!frames.length)return;
+    // Get the timeline second (loop if needed)
+    var dur=frames.length;
+    var sec=_emuT%dur;
+    var colors=frames[sec]||[];
+
+    // Find fixture position from layout
+    var fix=null;_fixtures.forEach(function(f){if(String(f.id)===fid)fix=f;});
+    if(!fix)return;
+    var lc=null;if(ld&&ld.children)ld.children.forEach(function(c){if(c.id===fix.childId)lc=c;});
+    if(!lc)return;
+
+    var cx=lc.x*W/cw,cy=H-lc.y*H/ch;
+
+    // Draw each string as a glowing line
+    colors.forEach(function(rgb,si){
+      if(!rgb)return;
+      var r=rgb[0]||0,g=rgb[1]||0,b=rgb[2]||0;
+      var bri=r+g+b;
+      if(bri<5)return; // skip dark strings
+
+      // Estimate direction from string index
+      var angle=si*Math.PI/colors.length;
+      var len=60;
+      var ex=cx+Math.cos(angle)*len;
+      var ey=cy-Math.sin(angle)*len;
+
+      ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(ex,ey);
+      ctx.strokeStyle='rgb('+r+','+g+','+b+')';
+      ctx.lineWidth=6;ctx.stroke();
+
+      // Glow
+      ctx.beginPath();ctx.arc((cx+ex)/2,(cy+ey)/2,8,0,2*Math.PI);
+      ctx.fillStyle='rgba('+r+','+g+','+b+',0.4)';ctx.fill();
+    });
+
+    // Node dot
+    ctx.beginPath();ctx.arc(cx,cy,5,0,2*Math.PI);
+    ctx.fillStyle='#22cc66';ctx.fill();
+  });
+
+  // Time display
+  var td=document.getElementById('emu-time');
+  if(td){
+    var m=Math.floor(_emuT/60),s=_emuT%60;
+    td.textContent='Preview: '+(m<10?'0':'')+m+':'+(s<10?'0':'')+s;
+  }
 }
 
 function saveLayout(btn){
