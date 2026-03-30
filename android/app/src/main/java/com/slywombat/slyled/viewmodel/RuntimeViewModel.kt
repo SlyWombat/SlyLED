@@ -34,7 +34,7 @@ class RuntimeViewModel @Inject constructor(
     private val _message = MutableStateFlow<String?>(null)
     val message = _message.asStateFlow()
 
-    private val _presets = MutableStateFlow<List<ShowPreset>>(emptyList())
+    private val _presets = MutableStateFlow<List<ShowPreset>?>(null) // null = loading, empty = error/none
     val presets = _presets.asStateFlow()
 
     private val _actions = MutableStateFlow<List<Action>>(emptyList())
@@ -45,12 +45,10 @@ class RuntimeViewModel @Inject constructor(
 
     fun load() {
         viewModelScope.launch {
-            try {
-                _timelines.value = repository.getTimelines()
-                _presets.value = repository.getShowPresets()
-                _actions.value = repository.getActions()
-                _spatialEffects.value = repository.getSpatialEffects()
-            } catch (_: Exception) {}
+            try { _timelines.value = repository.getTimelines() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getTimelines failed", e) }
+            try { _presets.value = repository.getShowPresets() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getPresets failed", e) }
+            try { _actions.value = repository.getActions() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getActions failed", e) }
+            try { _spatialEffects.value = repository.getSpatialEffects() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getSpatialEffects failed", e) }
         }
         // Poll timeline status
         viewModelScope.launch {
@@ -149,9 +147,17 @@ class RuntimeViewModel @Inject constructor(
     }
 
     fun loadPresets() {
+        _presets.value = null // reset to loading state
         viewModelScope.launch {
-            try { _presets.value = repository.getShowPresets() }
-            catch (_: Exception) { _message.value = "Could not load presets" }
+            try {
+                val result = repository.getShowPresets()
+                android.util.Log.d("RuntimeVM", "Loaded ${result.size} presets")
+                _presets.value = result
+            } catch (e: Exception) {
+                android.util.Log.e("RuntimeVM", "loadPresets failed", e)
+                _message.value = "Could not load presets: ${e.message}"
+                _presets.value = emptyList() // empty = error, stops spinner
+            }
         }
     }
 
