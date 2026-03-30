@@ -263,13 +263,34 @@ def _merge_segments(frame_segments, action_segments, n_frames):
 
 
 def _dominant_color(frame_pixels):
-    """Get the average color of all pixels in a single frame."""
+    """Get the dominant color — average of pixels with the most brightness.
+
+    Instead of averaging ALL pixels (which dilutes spatial effects like sweeps),
+    find the peak brightness and average only pixels at >= 50% of that peak.
+    This gives cleaner colors when a spatial effect only illuminates part of the strip.
+    """
     if not frame_pixels:
         return [0, 0, 0]
-    r = sum(p[0] for p in frame_pixels) // len(frame_pixels)
-    g = sum(p[1] for p in frame_pixels) // len(frame_pixels)
-    b = sum(p[2] for p in frame_pixels) // len(frame_pixels)
-    return [r, g, b]
+    # Find the brightest pixel
+    max_bri = 0
+    best = [0, 0, 0]
+    for p in frame_pixels:
+        bri = p[0] + p[1] + p[2]
+        if bri > max_bri:
+            max_bri = bri
+            best = list(p)
+    if max_bri == 0:
+        return [0, 0, 0]
+    # Average all pixels that are at least 50% of peak brightness
+    threshold = max_bri * 0.5
+    total_r, total_g, total_b, count = 0, 0, 0, 0
+    for p in frame_pixels:
+        if p[0] + p[1] + p[2] >= threshold:
+            total_r += p[0]; total_g += p[1]; total_b += p[2]
+            count += 1
+    if count == 0:
+        return best
+    return [total_r // count, total_g // count, total_b // count]
 
 
 def _color_distance(a, b):

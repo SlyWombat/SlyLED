@@ -196,6 +196,15 @@ fun TimelineCard(
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
+            // Clip editor when selected
+            if (isSelected) {
+                Spacer(Modifier.height(8.dp))
+                timeline.tracks.forEachIndexed { ti, track ->
+                    val trackName = if (track.allPerformers) "★ Stage" else "Track ${ti + 1}"
+                    Text("$trackName: ${track.clips.size} clips", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
             // Bake/sync progress (when selected)
             if (isSelected && bakeStatus != null && bakeStatus.running) {
                 Spacer(Modifier.height(8.dp))
@@ -291,6 +300,157 @@ fun PresetDialog(presets: List<ShowPreset>, onDismiss: () -> Unit, onSelect: (St
             }
         },
         confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ClipEditorSection(
+    timeline: Timeline,
+    actions: List<Action>,
+    spatialEffects: List<SpatialEffect>,
+    onAddClip: (trackIdx: Int, TimelineClip) -> Unit,
+    onRemoveClip: (trackIdx: Int, clipIdx: Int) -> Unit,
+) {
+    var showAddDialog by remember { mutableStateOf(false) }
+    var addTrackIdx by remember { mutableIntStateOf(0) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text("Tracks & Clips", fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
+
+        timeline.tracks.forEachIndexed { ti, track ->
+            val trackName = if (track.allPerformers) "★ Stage (All)" else "Track ${ti + 1}"
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(trackName, fontWeight = FontWeight.Bold, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { addTrackIdx = ti; showAddDialog = true }) {
+                            Text("+ Clip", fontSize = 12.sp)
+                        }
+                    }
+                    track.clips.forEachIndexed { ci, clip ->
+                        val clipName = when {
+                            clip.actionId != null -> actions.find { it.id == clip.actionId }?.name ?: "Action #${clip.actionId}"
+                            clip.effectId != null -> spatialEffects.find { it.id == clip.effectId }?.name ?: "Effect #${clip.effectId}"
+                            else -> "?"
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val isAction = clip.actionId != null
+                            val icon = if (isAction) "▶" else "◆"
+                            Text("$icon $clipName", fontSize = 12.sp, modifier = Modifier.weight(1f))
+                            Text("${clip.startS}s → ${clip.startS + clip.durationS}s", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            IconButton(onClick = { onRemoveClip(ti, ci) }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Default.Close, null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                    if (track.clips.isEmpty()) {
+                        Text("No clips — tap + Clip to add", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+
+        if (timeline.tracks.isEmpty()) {
+            Text("No tracks yet. Add a track from the web interface.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+
+    if (showAddDialog) {
+        AddClipDialog(
+            actions = actions,
+            spatialEffects = spatialEffects,
+            onDismiss = { showAddDialog = false },
+            onAdd = { clip ->
+                onAddClip(addTrackIdx, clip)
+                showAddDialog = false
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AddClipDialog(
+    actions: List<Action>,
+    spatialEffects: List<SpatialEffect>,
+    onDismiss: () -> Unit,
+    onAdd: (TimelineClip) -> Unit,
+) {
+    var startS by remember { mutableStateOf("0") }
+    var durationS by remember { mutableStateOf("5") }
+    var selectedType by remember { mutableStateOf("action") }
+    var selectedId by remember { mutableIntStateOf(actions.firstOrNull()?.id ?: 0) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add Clip") },
+        text = {
+            Column {
+                // Type selector
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = selectedType == "action", onClick = { selectedType = "action" }, label = { Text("Action") })
+                    FilterChip(selected = selectedType == "effect", onClick = { selectedType = "effect" }, label = { Text("Spatial Effect") })
+                }
+                Spacer(Modifier.height(8.dp))
+
+                // Item selector
+                if (selectedType == "action" && actions.isNotEmpty()) {
+                    var expanded by remember { mutableStateOf(false) }
+                    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+                        OutlinedTextField(
+                            value = actions.find { it.id == selectedId }?.name ?: "",
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Action") },
+                            modifier = Modifier.menuAnchor()
+                        )
+                        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                            actions.forEach { a ->
+                                DropdownMenuItem(text = { Text(a.name) }, onClick = { selectedId = a.id; expanded = false })
+                            }
+                        }
+                    }
+                } else if (selectedType == "effect" && spatialEffects.isNotEmpty()) {
+                    var expanded by remember { mutableStateOf(false) }
+                    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+                        OutlinedTextField(
+                            value = spatialEffects.find { it.id == selectedId }?.name ?: "",
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Effect") },
+                            modifier = Modifier.menuAnchor()
+                        )
+                        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                            spatialEffects.forEach { f ->
+                                DropdownMenuItem(text = { Text(f.name) }, onClick = { selectedId = f.id; expanded = false })
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(value = startS, onValueChange = { startS = it }, label = { Text("Start (s)") })
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(value = durationS, onValueChange = { durationS = it }, label = { Text("Duration (s)") })
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val clip = if (selectedType == "action")
+                    TimelineClip(actionId = selectedId, startS = startS.toDoubleOrNull() ?: 0.0, durationS = durationS.toDoubleOrNull() ?: 5.0)
+                else
+                    TimelineClip(effectId = selectedId, startS = startS.toDoubleOrNull() ?: 0.0, durationS = durationS.toDoubleOrNull() ?: 5.0)
+                onAdd(clip)
+            }) { Text("Add") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }

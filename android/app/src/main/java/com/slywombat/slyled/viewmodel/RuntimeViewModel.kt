@@ -37,11 +37,19 @@ class RuntimeViewModel @Inject constructor(
     private val _presets = MutableStateFlow<List<ShowPreset>>(emptyList())
     val presets = _presets.asStateFlow()
 
+    private val _actions = MutableStateFlow<List<Action>>(emptyList())
+    val actions = _actions.asStateFlow()
+
+    private val _spatialEffects = MutableStateFlow<List<SpatialEffect>>(emptyList())
+    val spatialEffects = _spatialEffects.asStateFlow()
+
     fun load() {
         viewModelScope.launch {
             try {
                 _timelines.value = repository.getTimelines()
                 _presets.value = repository.getShowPresets()
+                _actions.value = repository.getActions()
+                _spatialEffects.value = repository.getSpatialEffects()
             } catch (_: Exception) {}
         }
         // Poll timeline status
@@ -153,6 +161,41 @@ class RuntimeViewModel @Inject constructor(
                 val r = repository.loadPreset(mapOf("id" to presetId))
                 if (r.ok) {
                     _message.value = "Preset loaded"
+                    _timelines.value = repository.getTimelines()
+                }
+            } catch (e: Exception) { _message.value = "Error: ${e.message}" }
+        }
+    }
+
+    fun addClipToTimeline(timelineId: Int, trackIdx: Int, clip: TimelineClip) {
+        viewModelScope.launch {
+            try {
+                val tl = repository.getTimeline(timelineId)
+                val tracks = tl.tracks.toMutableList()
+                if (trackIdx < tracks.size) {
+                    val track = tracks[trackIdx]
+                    tracks[trackIdx] = track.copy(clips = track.clips + clip)
+                    repository.updateTimeline(timelineId, tl.copy(tracks = tracks))
+                    _selectedTimeline.value = repository.getTimeline(timelineId)
+                    _timelines.value = repository.getTimelines()
+                    _message.value = "Clip added"
+                }
+            } catch (e: Exception) { _message.value = "Error: ${e.message}" }
+        }
+    }
+
+    fun removeClipFromTimeline(timelineId: Int, trackIdx: Int, clipIdx: Int) {
+        viewModelScope.launch {
+            try {
+                val tl = repository.getTimeline(timelineId)
+                val tracks = tl.tracks.toMutableList()
+                if (trackIdx < tracks.size) {
+                    val track = tracks[trackIdx]
+                    val clips = track.clips.toMutableList()
+                    if (clipIdx < clips.size) clips.removeAt(clipIdx)
+                    tracks[trackIdx] = track.copy(clips = clips)
+                    repository.updateTimeline(timelineId, tl.copy(tracks = tracks))
+                    _selectedTimeline.value = repository.getTimeline(timelineId)
                     _timelines.value = repository.getTimelines()
                 }
             } catch (e: Exception) { _message.value = "Error: ${e.message}" }

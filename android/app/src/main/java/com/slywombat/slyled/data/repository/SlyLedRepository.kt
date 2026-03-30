@@ -142,6 +142,24 @@ class SlyLedRepository @Inject constructor(
     suspend fun getShowPresets() = requireApi().getShowPresets()
     suspend fun loadPreset(body: Map<String, String>) = requireApi().loadPreset(body)
 
+    // Stage
+    suspend fun getStage() = requireApi().getStage()
+
+    // Fixtures
+    suspend fun getFixtures() = requireApi().getFixtures()
+
+    // Surfaces
+    suspend fun getSurfaces() = requireApi().getSurfaces()
+
+    // Spatial Effects
+    suspend fun getSpatialEffects() = requireApi().getSpatialEffects()
+
+    // Timeline update
+    suspend fun updateTimeline(id: Int, timeline: Timeline) = requireApi().updateTimeline(id, timeline)
+
+    // Migration
+    suspend fun migrateLayout() = requireApi().migrateLayout()
+
     // Reset
     suspend fun factoryReset() = requireApi().factoryReset()
 }

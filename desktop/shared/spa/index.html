@@ -1129,11 +1129,13 @@ function _s3dRenderSurfaces(){
     grp.userData.surfaceId=s.id;
     grp.position.set((t.pos[0]||0)/1000,(t.pos[1]||0)/1000,(t.pos[2]||0)/1000);
 
-    // Filled plane
-    var geo=new THREE.PlaneGeometry(sw,sh);
+    var sd=(t.scale[2]||1)/1000;
+    var useBox=((t.scale[2]||1)>100); // >10cm depth → box
+    var geo=useBox?new THREE.BoxGeometry(sw,sh,sd):new THREE.PlaneGeometry(sw,sh);
     var mat=new THREE.MeshBasicMaterial({color:col,side:THREE.DoubleSide,opacity:(s.opacity||30)/100,transparent:true});
     var mesh=new THREE.Mesh(geo,mat);
-    mesh.position.set(sw/2,sh/2,0);
+    // Position so bottom-front corner is at the surface origin
+    mesh.position.set(sw/2,sh/2,useBox?(-sd/2):0);
     grp.add(mesh);
 
     // Border edges
@@ -1144,7 +1146,7 @@ function _s3dRenderSurfaces(){
 
     // Label
     var lbl=_s3dLabel(s.name||'Surface');
-    lbl.position.set(sw/2,sh+0.15,0);
+    lbl.position.set(sw/2,sh+0.15,useBox?(-sd/2):0);
     grp.add(lbl);
 
     _s3d.scene.add(grp);
