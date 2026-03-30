@@ -374,7 +374,18 @@ def _action_pkt(act, child):
 def _load_step_pkt(idx, total, step, child, delay_ms=0):
     t, r, g, b, p16a, p8a, p8b, p8c, p8d = _act_params(step)
     dur = int(step.get("durationS", 5) or 5)
-    ls, le = _child_led_ranges(child)
+    # Check for per-string LED range override from bake
+    if "_ledOffset" in step:
+        # Target specific string's LED range only
+        ls = [0xFFFF] * 8
+        le = [0xFFFF] * 8
+        si = step.get("_stringIndex", 0)
+        ls[si] = step["_ledOffset"]
+        le[si] = step["_ledOffset"] + step["_ledCount"] - 1
+        ls = struct.pack("<8H", *ls)
+        le = struct.pack("<8H", *le)
+    else:
+        ls, le = _child_led_ranges(child)
     pl = struct.pack("<BBBBBBHBBBBHH", idx, total, t, r, g, b, p16a, p8a, p8b, p8c, p8d, dur, int(delay_ms))
     return _hdr(CMD_LOAD_STEP) + pl + ls + le
 
@@ -1207,6 +1218,11 @@ def api_bake_sync(tid):
             step = dict(seg.get("params", {}))
             step["type"] = seg.get("type", 0)
             step["durationS"] = max(1, int(math.ceil(seg.get("durationS", 1))))
+            # Per-string LED range override from bake
+            if "ledOffset" in seg:
+                step["_ledOffset"] = seg["ledOffset"]
+                step["_ledCount"] = seg["ledCount"]
+                step["_stringIndex"] = seg.get("stringIndex", 0)
             steps.append(step)
         if steps:
             plan.append({"child": child, "steps": steps, "name": fixture.get("name", "?")})

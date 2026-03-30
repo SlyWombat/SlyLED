@@ -130,7 +130,15 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
         }
         resolved = resolve_fn(resolve_input)
         pixels = resolved.get("pixelPositions", [])
-        fixture_data[fix_id] = {"pixels": pixels, "pixelCount": len(pixels)}
+        # Store per-string pixel ranges for per-string segmentation
+        strings_info = []
+        offset = 0
+        for s in resolve_input.get("strings", []):
+            leds = s.get("leds", 0)
+            if leds > 0:
+                strings_info.append({"offset": offset, "count": leds, "sdir": s.get("sdir", 0)})
+                offset += leds
+        fixture_data[fix_id] = {"pixels": pixels, "pixelCount": len(pixels), "strings": strings_info}
 
     if progress:
         progress.status = "baking frames"
@@ -213,20 +221,27 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
 
     for fix_id, frames in per_fixture_frames.items():
         pixel_count = fixture_data[fix_id]["pixelCount"]
-        # Merge frame-analyzed segments with direct action segments
-        frame_segments = _segment_actions(frames, pixel_count)
-        action_segments = direct_segments.get(fix_id, [])
-        # Combine: action clips override frame segments in their time range
-        if action_segments:
-            segments = _merge_segments(frame_segments, action_segments, n_frames)
+        string_info = fixture_data[fix_id].get("strings", [])
+
+        # Per-string segmentation: analyze each string's pixels separately
+        # so spatial sweeps create timed segments per string
+        if len(string_info) > 1:
+            segments = _segment_per_string(frames, string_info, n_frames)
         else:
-            segments = frame_segments
+            segments = _segment_actions(frames, pixel_count)
+
+        # Merge with direct action segments
+        action_segments = direct_segments.get(fix_id, [])
+        if action_segments:
+            segments = _merge_segments(segments, action_segments, n_frames)
+
         lsq = _pack_lsq(fix_id, frames, pixel_count)
 
         result["fixtures"][fix_id] = {
             "segments": segments,
             "pixelCount": pixel_count,
             "frameCount": len(frames),
+            "stringCount": len(string_info),
         }
         result["lsq_files"][fix_id] = lsq
 
@@ -240,6 +255,47 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
         progress.done = True
 
     return result
+
+
+def _segment_per_string(frames, string_info, n_frames, max_per_string=8):
+    """Segment frames per-string: analyze each string's pixels separately.
+
+    For multi-string fixtures, a spatial sweep hitting string 0 first then
+    string 1 will produce different segments for each string with correct timing.
+
+    Each segment includes ledStartOverride/ledEndOverride to target specific strings.
+    """
+    if not frames or not string_info:
+        return []
+
+    all_segments = []
+    steps_per_string = max(1, 16 // max(len(string_info), 1))
+
+    for si, sinfo in enumerate(string_info):
+        offset = sinfo["offset"]
+        count = sinfo["count"]
+        if count <= 0:
+            continue
+
+        # Extract this string's pixels from each frame
+        string_frames = []
+        for frame in frames:
+            string_pixels = frame[offset:offset + count] if offset + count <= len(frame) else []
+            string_frames.append(string_pixels)
+
+        # Segment this string independently
+        segs = _segment_actions(string_frames, count, max_segments=steps_per_string)
+
+        # Tag each segment with the string's LED range
+        for seg in segs:
+            seg["stringIndex"] = si
+            seg["ledOffset"] = offset
+            seg["ledCount"] = count
+        all_segments.extend(segs)
+
+    # Sort by start time, cap at 16
+    all_segments.sort(key=lambda s: (s["startS"], s.get("stringIndex", 0)))
+    return all_segments[:16]
 
 
 def _merge_segments(frame_segments, action_segments, n_frames):
