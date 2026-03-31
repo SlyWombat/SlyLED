@@ -2254,23 +2254,26 @@ var _emuData=null, _emuTimer=null, _emuT=0;
 
 function emuStart(tlId){
   emuStop();
-  ra('GET','/api/timelines/'+tlId+'/baked/preview',null,function(d){
-    if(!d||typeof d!=='object'){return;}
-    _emuData={preview:d,tlId:tlId};
-    _emuT=0;
-    document.getElementById('tl-emulator').style.display='block';
-    _emuTimer=setInterval(function(){
-      _emuT++;
-      // Check if show is still running
-      ra('GET','/api/settings',null,function(s){
-        if(!s||!s.runnerRunning){emuStop();return;}
-        if(s.runnerStartEpoch){
-          _emuT=Math.max(0,Math.floor(Date.now()/1000)-s.runnerStartEpoch);
-        }
+  // Load all data needed for the emulator: preview, layout, children, fixtures
+  ra('GET','/api/timelines/'+tlId+'/baked/preview',null,function(preview){
+    if(!preview||typeof preview!=='object')return;
+    ra('GET','/api/layout',null,function(lay){
+      ra('GET','/api/children',null,function(children){
+        ra('GET','/api/fixtures',null,function(fixtures){
+          _emuData={preview:preview,layout:lay,children:children||[],fixtures:fixtures||[],tlId:tlId};
+          _emuT=0;
+          document.getElementById('tl-emulator').style.display='block';
+          _emuTimer=setInterval(function(){
+            ra('GET','/api/settings',null,function(s){
+              if(!s||!s.runnerRunning){emuStop();return;}
+              if(s.runnerStartEpoch){_emuT=Math.max(0,Math.floor(Date.now()/1000)-s.runnerStartEpoch);}
+            });
+            emuDraw();
+          },1000);
+          emuDraw();
+        });
       });
-      emuDraw();
-    },1000);
-    emuDraw();
+    });
   });
 }
 
@@ -2286,57 +2289,98 @@ function emuDraw(){
   var W=cv.width,H=cv.height;
   ctx.fillStyle='#0a0f1a';ctx.fillRect(0,0,W,H);
 
-  // Get layout data for positioning
   var preview=_emuData.preview;
+  var layout=_emuData.layout;
+  var children=_emuData.children;
+  var fixtures=_emuData.fixtures;
   var fixIds=Object.keys(preview);
   if(!fixIds.length)return;
 
-  // Draw stage border
-  ctx.strokeStyle='#1e3a5f';ctx.lineWidth=1;ctx.strokeRect(1,1,W-2,H-2);
+  var cw=(layout&&layout.canvasW)||10000;
+  var ch=(layout&&layout.canvasH)||5000;
+  var layChildren=(layout&&layout.children)||[];
 
-  // For each fixture, draw its strings at the correct canvas position
-  var cw=phW||10000,ch=phH||5000;
+  // Stage border + grid
+  ctx.strokeStyle='#1e3a5f';ctx.lineWidth=1;ctx.strokeRect(1,1,W-2,H-2);
+  ctx.strokeStyle='#111828';ctx.lineWidth=0.5;
+  for(var gx=0;gx<10;gx++){var x=gx*W/10;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+  for(var gy=0;gy<5;gy++){var y=gy*H/5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+
+  // Direction vectors: E=+X, N=+Y(up on canvas), W=-X, S=-Y
+  var dirDx=[1,0,-1,0],dirDy=[0,-1,0,1];
+
   fixIds.forEach(function(fid){
     var frames=preview[fid];
     if(!frames||!frames.length)return;
-    // Get the timeline second (loop if needed)
     var dur=frames.length;
     var sec=_emuT%dur;
     var colors=frames[sec]||[];
 
-    // Find fixture position from layout
-    var fix=null;_fixtures.forEach(function(f){if(String(f.id)===fid)fix=f;});
+    // Find fixture → child → layout position
+    var fix=null;fixtures.forEach(function(f){if(String(f.id)===fid)fix=f;});
     if(!fix)return;
-    var lc=null;if(ld&&ld.children)ld.children.forEach(function(c){if(c.id===fix.childId)lc=c;});
-    if(!lc)return;
+    var child=null;children.forEach(function(c){if(c.id===fix.childId)child=c;});
+    var lc=null;layChildren.forEach(function(c){if(c.id===fix.childId)lc=c;});
+    if(!lc){
+      // Not placed — put at center
+      lc={x:cw/2,y:ch/2};
+    }
 
     var cx=lc.x*W/cw,cy=H-lc.y*H/ch;
+    // Clamp to canvas
+    cx=Math.max(10,Math.min(W-10,cx));cy=Math.max(10,Math.min(H-10,cy));
 
-    // Draw each string as a glowing line
+    // Get string directions from child config
+    var sc=child?child.sc:0;
+    var strings=child?child.strings:[];
+
     colors.forEach(function(rgb,si){
-      if(!rgb)return;
-      var r=rgb[0]||0,g=rgb[1]||0,b=rgb[2]||0;
+      if(!rgb||rgb.length<3)return;
+      var r=rgb[0],g=rgb[1],b=rgb[2];
+
+      // Get direction from child string config
+      var sdir=0;
+      if(si<sc&&si<strings.length)sdir=strings[si].sdir||0;
+      var dx=dirDx[sdir]||0,dy=dirDy[sdir]||0;
+
+      // String length — estimate from LED count
+      var leds=(si<sc&&si<strings.length)?strings[si].leds:50;
+      var lenMm=Math.max(leds*16,500);
+      var pxLen=dx!==0?lenMm*W/cw:lenMm*H/ch;
+      pxLen=Math.max(pxLen,20);
+
+      var ex=cx+dx*pxLen,ey=cy+dy*pxLen;
+
+      // Always draw the string line (dim gray if dark)
       var bri=r+g+b;
-      if(bri<5)return; // skip dark strings
-
-      // Estimate direction from string index
-      var angle=si*Math.PI/colors.length;
-      var len=60;
-      var ex=cx+Math.cos(angle)*len;
-      var ey=cy-Math.sin(angle)*len;
-
-      ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(ex,ey);
-      ctx.strokeStyle='rgb('+r+','+g+','+b+')';
-      ctx.lineWidth=6;ctx.stroke();
-
-      // Glow
-      ctx.beginPath();ctx.arc((cx+ex)/2,(cy+ey)/2,8,0,2*Math.PI);
-      ctx.fillStyle='rgba('+r+','+g+','+b+',0.4)';ctx.fill();
+      if(bri<3){
+        ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(ex,ey);
+        ctx.strokeStyle='#1a1a2a';ctx.lineWidth=2;ctx.stroke();
+      } else {
+        // Bright colored string
+        ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(ex,ey);
+        ctx.strokeStyle='rgb('+r+','+g+','+b+')';ctx.lineWidth=5;ctx.stroke();
+        // Glow along string
+        var dots=Math.min(leds,Math.floor(pxLen/4));
+        for(var di=0;di<dots;di++){
+          var t=(di+0.5)/dots;
+          var dpx=cx+dx*pxLen*t,dpy=cy+dy*pxLen*t;
+          ctx.beginPath();ctx.arc(dpx,dpy,3,0,2*Math.PI);
+          ctx.fillStyle='rgba('+r+','+g+','+b+',0.6)';ctx.fill();
+        }
+      }
     });
 
-    // Node dot
-    ctx.beginPath();ctx.arc(cx,cy,5,0,2*Math.PI);
-    ctx.fillStyle='#22cc66';ctx.fill();
+    // Node circle
+    var nodeOn=child&&child.status===1;
+    ctx.beginPath();ctx.arc(cx,cy,6,0,2*Math.PI);
+    ctx.fillStyle=nodeOn?'#22cc66':'#555';ctx.fill();
+    ctx.strokeStyle=nodeOn?'#4c4':'#666';ctx.lineWidth=1.5;ctx.stroke();
+
+    // Label
+    var name=child?(child.name||child.hostname):'Fixture '+fid;
+    ctx.fillStyle='#aaa';ctx.font='9px sans-serif';ctx.textAlign='center';
+    ctx.fillText(name,cx,cy+16);
   });
 
   // Time display

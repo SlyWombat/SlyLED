@@ -250,12 +250,34 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
             progress.segments[str(fix_id)] = len(segments)
 
     # Generate preview data: 1 color per string per second
+    # For action-type clips, use the action's RGB directly (frames are black for actions)
     preview = {}
     for fix_id, frames in per_fixture_frames.items():
         sinfo = fixture_data[fix_id].get("strings", [])
+        n_strings = max(len(sinfo), 1)
+
+        # Build a per-second action color map from direct_segments
+        action_color_at = {}  # second → [r,g,b]
+        for seg in direct_segments.get(fix_id, []):
+            p = seg.get("params", {})
+            col = [p.get("r", 0), p.get("g", 0), p.get("b", 0)]
+            if sum(col) == 0:
+                col = [128, 128, 128]  # non-black placeholder for non-color actions (fire, twinkle)
+            for s in range(int(seg.get("startS", 0)), int(seg.get("startS", 0) + seg.get("durationS", 0)) + 1):
+                action_color_at[s] = col
+
         fix_preview = []
-        for sec in range(0, n_frames, BAKE_FPS):
-            frame = frames[min(sec, len(frames) - 1)]
+        for sec_frame in range(0, n_frames, BAKE_FPS):
+            sec = sec_frame // BAKE_FPS
+            frame = frames[min(sec_frame, len(frames) - 1)]
+
+            # Check if an action clip is active at this second
+            act_col = action_color_at.get(sec)
+            if act_col:
+                fix_preview.append([list(act_col)] * n_strings)
+                continue
+
+            # Spatial effect: use frame pixel data per-string
             string_colors = []
             if sinfo:
                 for si in sinfo:
