@@ -1266,7 +1266,15 @@ def api_bake_sync(tid):
         if not child:
             continue
         segments = fix_data.get("segments", [])
+        fix_strings = fixture.get("strings", [])
         steps = []
+        # Per-pixel effect types where speedMs = time per pixel step
+        PER_PIXEL_TYPES = {4, 7, 10, 11}  # CHASE, COMET, WIPE, SCANNER
+        # Directional effect types (use direction param)
+        DIR_TYPES = {4, 5, 7, 10, 11}  # CHASE, RAINBOW, COMET, WIPE, SCANNER
+        # Direction flip map: E↔W, N↔S
+        DIR_FLIP = {0: 2, 1: 3, 2: 0, 3: 1}
+        REF_PITCH_MM = 16.67  # 60 LEDs/m reference density
         for seg in segments[:16]:
             step = dict(seg.get("params", {}))
             step["type"] = seg.get("type", 0)
@@ -1276,6 +1284,23 @@ def api_bake_sync(tid):
                 step["_ledOffset"] = seg["ledOffset"]
                 step["_ledCount"] = seg["ledCount"]
                 step["_stringIndex"] = seg.get("stringIndex", 0)
+            si = seg.get("stringIndex", 0)
+            sinfo = fix_strings[si] if si < len(fix_strings) else {}
+            # Map action direction to string physical direction:
+            # if string faces W or S, flip the effect direction so the
+            # visual sweep matches physical orientation
+            if step["type"] in DIR_TYPES:
+                sdir = sinfo.get("sdir", 0)
+                if sdir in (2, 3):  # West or South — flip direction
+                    step["direction"] = DIR_FLIP.get(step.get("direction", 0), 0)
+            # Normalize speedMs for per-pixel effects so physical speed is
+            # consistent regardless of LED density (50 LEDs/1m = 150 LEDs/1m)
+            if step["type"] in PER_PIXEL_TYPES and step.get("speedMs", 0) > 0:
+                leds = sinfo.get("leds", 0)
+                mm = sinfo.get("mm", 0)
+                if leds > 0 and mm > 0:
+                    pitch = mm / leds
+                    step["speedMs"] = max(1, round(step["speedMs"] * pitch / REF_PITCH_MM))
             steps.append(step)
         # Append final blackout so LEDs turn off when the show ends
         if steps and steps[-1].get("type", 0) != 0 and len(steps) < 16:
