@@ -1,25 +1,26 @@
 """
-SlyLED Bake Engine — compile timelines into per-fixture binary sequences.
+SlyLED Bake Engine — compile timelines into per-fixture action sequences.
 
-The baking pipeline:
-1. Iterate timeline at 40Hz frame rate
-2. Evaluate all active effects per frame per fixture
-3. Analyze RGB streams to detect matching action types (action segmentation)
-4. Output per-fixture action sequences compatible with existing LoadStepPayload
-5. Pack raw frame data into .LSQ binary files
+The compilation pipeline:
+1. For each clip, analyze the spatial relationship between the effect and each fixture
+2. Compute per-string timed instructions directly from spatial math
+3. Output the minimal set of action steps each child needs to execute locally
+4. No per-frame rendering needed — children run native action types
 
-The key innovation: baked sequences compile DOWN to the same 14 action types
-children already understand. No firmware changes needed.
+Each clip produces per-string instructions like:
+  "at t=5.2s, run WIPE_SEQ color=#6400ff speed=67ms/px dir=East for 10s"
+
+This is fundamentally different from rendering frames and trying to detect patterns.
+The children already know how to run WIPE, SOLID, FADE etc — we just compute WHEN and HOW.
 """
 
 import io
 import math
-import os
 import struct
 import time
 import zipfile
 
-BAKE_FPS = 40
+BAKE_FPS = 40  # only used for preview generation
 LSQ_MAGIC = b"LSQ\x00"
 LSQ_VERSION = 1
 
@@ -30,18 +31,25 @@ ACT_FADE = 2
 ACT_BREATHE = 3
 ACT_CHASE = 4
 ACT_RAINBOW = 5
+ACT_FIRE = 6
+ACT_COMET = 7
+ACT_TWINKLE = 8
+ACT_STROBE = 9
 ACT_WIPE = 10
+ACT_SCANNER = 11
+ACT_SPARKLE = 12
+ACT_GRADIENT = 13
 
 
 class BakeProgress:
-    """Thread-safe bake progress tracker."""
-    def __init__(self, total_frames):
-        self.total_frames = total_frames
+    """Bake progress tracker."""
+    def __init__(self, total_steps=0):
+        self.total_frames = total_steps
         self.current_frame = 0
         self.status = "starting"
         self.fixtures_done = 0
         self.total_fixtures = 0
-        self.segments = {}  # fixture_id → segment count
+        self.segments = {}
         self.error = None
         self.done = False
 
@@ -60,77 +68,307 @@ class BakeProgress:
         }
 
 
-def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_fn, blend_fn, progress=None, actions=None):
-    """Bake a timeline into per-fixture action sequences.
+# ── Spatial math helpers ─────────────────────────────────────────────────────
 
-    Args:
-        timeline: dict with durationS, tracks, loop
-        fixtures: list of fixture dicts
-        spatial_fx: list of spatial effect dicts
-        layout: layout dict with children positions
-        resolve_fn: function(fixture_input) → {pixelPositions: [...]}
-        evaluate_fn: function(effect, pixels, t) → [[r,g,b],...]
-        blend_fn: function(layers, modes) → [[r,g,b],...]
-        progress: BakeProgress instance (optional)
-        actions: list of classic action dicts (optional, for actionId clips)
+def _ease(t, easing):
+    t = max(0.0, min(1.0, t))
+    if easing == "ease-in": return t * t
+    if easing == "ease-out": return t * (2 - t)
+    if easing == "ease-in-out": return t * t * (3 - 2 * t)
+    return t
 
-    Returns:
-        dict: {
-            fixtures: {fixture_id: {frames: [...], segments: [...], pixelCount: N}},
-            lsq_files: {fixture_id: bytes},
-            totalFrames: N,
-            fps: 40
-        }
+def _lerp(a, b, t):
+    return a + (b - a) * t
+
+def _dist(a, b):
+    return math.sqrt(sum((a[i] - b[i])**2 for i in range(min(len(a), len(b)))))
+
+
+def _sphere_intersection_time(pixel_pos, start_pos, end_pos, radius, duration, easing="linear"):
+    """Compute when a sphere's center is closest to a pixel (peak brightness time).
+    Returns (t_enter, t_peak, t_exit) in seconds, or None if never intersected."""
+    # Binary search for closest approach along the motion path
+    best_t = 0
+    best_dist = float('inf')
+    steps = 100
+    for i in range(steps + 1):
+        raw_t = i / steps
+        eased_t = _ease(raw_t, easing)
+        center = [_lerp(start_pos[j], end_pos[j], eased_t) for j in range(3)]
+        d = _dist(pixel_pos, center)
+        if d < best_dist:
+            best_dist = d
+            best_t = raw_t
+
+    if best_dist > radius:
+        return None  # never intersected
+
+    t_peak = best_t * duration
+
+    # Find enter/exit by scanning outward from peak
+    t_enter = t_peak
+    t_exit = t_peak
+    for i in range(steps + 1):
+        raw_t = max(0, best_t - i / steps)
+        eased_t = _ease(raw_t, easing)
+        center = [_lerp(start_pos[j], end_pos[j], eased_t) for j in range(3)]
+        if _dist(pixel_pos, center) <= radius:
+            t_enter = raw_t * duration
+        else:
+            break
+    for i in range(steps + 1):
+        raw_t = min(1, best_t + i / steps)
+        eased_t = _ease(raw_t, easing)
+        center = [_lerp(start_pos[j], end_pos[j], eased_t) for j in range(3)]
+        if _dist(pixel_pos, center) <= radius:
+            t_exit = raw_t * duration
+        else:
+            break
+
+    return (t_enter, t_peak, t_exit)
+
+
+def _compile_clip_for_string(clip, effect, pixel_positions, string_offset, string_count, duration):
+    """Compile a spatial effect clip into action steps for a single string.
+
+    Analyzes the spatial relationship between the effect's motion path and
+    the string's pixel positions to determine the optimal action type.
+
+    Returns list of action step dicts with timing.
+    """
+    if not pixel_positions or not effect:
+        return []
+
+    shape = effect.get("shape", "sphere")
+    motion = effect.get("motion", {})
+    start_pos = motion.get("startPos", [0, 0, 0])
+    end_pos = motion.get("endPos", [0, 0, 0])
+    fx_dur = motion.get("durationS", duration) or duration
+    easing = motion.get("easing", "linear")
+    color = [effect.get("r", 255), effect.get("g", 255), effect.get("b", 255)]
+    size = effect.get("size", {})
+
+    if shape == "sphere":
+        radius = size.get("radius", 1000)
+        return _compile_sphere_sweep(
+            pixel_positions, start_pos, end_pos, radius, color,
+            clip.get("startS", 0), clip.get("durationS", duration),
+            fx_dur, easing, string_offset, string_count
+        )
+
+    elif shape == "plane":
+        normal = size.get("normal", [0, 1, 0])
+        thickness = size.get("thickness", 400)
+        return _compile_plane_sweep(
+            pixel_positions, start_pos, end_pos, normal, thickness, color,
+            clip.get("startS", 0), clip.get("durationS", duration),
+            fx_dur, easing, string_offset, string_count
+        )
+
+    elif shape == "box":
+        return _compile_box(
+            pixel_positions, start_pos, end_pos, size, color,
+            clip.get("startS", 0), clip.get("durationS", duration),
+            fx_dur, easing, string_offset, string_count
+        )
+
+    return []
+
+
+def _compile_sphere_sweep(pixels, start_pos, end_pos, radius, color,
+                          clip_start, clip_dur, fx_dur, easing, str_offset, str_count):
+    """Compile a sphere sweep into WIPE_SEQ or SOLID steps."""
+    n = len(pixels)
+    if n == 0:
+        return []
+
+    # Compute peak time for first and last pixel
+    time_scale = clip_dur / fx_dur if fx_dur > 0 else 1
+
+    first_peak = _sphere_intersection_time(pixels[0], start_pos, end_pos, radius, fx_dur, easing)
+    last_peak = _sphere_intersection_time(pixels[-1], start_pos, end_pos, radius, fx_dur, easing)
+
+    # If neither pixel is ever intersected, this string is out of range
+    if first_peak is None and last_peak is None:
+        return []
+
+    # Check middle pixel too
+    mid_peak = _sphere_intersection_time(pixels[n // 2], start_pos, end_pos, radius, fx_dur, easing)
+
+    # Determine if this is a sweep (peaks at different times) or simultaneous
+    peak_times = []
+    if first_peak: peak_times.append(("first", 0, first_peak))
+    if mid_peak: peak_times.append(("mid", n // 2, mid_peak))
+    if last_peak: peak_times.append(("last", n - 1, last_peak))
+
+    if len(peak_times) < 2:
+        # Only one pixel hit — emit SOLID for the lit duration
+        pt = peak_times[0][2] if peak_times else (0, 0, clip_dur)
+        enter = clip_start + pt[0] * time_scale
+        exit_t = clip_start + pt[2] * time_scale
+        return [{
+            "type": ACT_SOLID,
+            "params": {"r": color[0], "g": color[1], "b": color[2]},
+            "startS": round(enter, 2), "durationS": round(max(1, exit_t - enter), 2),
+            "ledOffset": str_offset, "ledCount": str_count, "stringIndex": 0,
+        }]
+
+    # Check if peaks are spread out (sweep) or clustered (simultaneous)
+    t_first = peak_times[0][2][1]  # peak time of first pixel
+    t_last = peak_times[-1][2][1]  # peak time of last pixel
+    sweep_duration = abs(t_last - t_first)
+
+    if sweep_duration < 0.5:
+        # All pixels peak within 0.5s — treat as SOLID (whole string at once)
+        enter = clip_start + min(p[2][0] for p in peak_times) * time_scale
+        exit_t = clip_start + max(p[2][2] for p in peak_times) * time_scale
+        return [{
+            "type": ACT_SOLID,
+            "params": {"r": color[0], "g": color[1], "b": color[2]},
+            "startS": round(enter, 2), "durationS": round(max(1, exit_t - enter), 2),
+            "ledOffset": str_offset, "ledCount": str_count, "stringIndex": 0,
+        }]
+
+    # It's a sweep! Compute WIPE_SEQ parameters
+    # Direction: which pixel peaks first?
+    if t_first < t_last:
+        direction = 0  # East (forward: pixel 0 → pixel N)
+    else:
+        direction = 2  # West (reverse: pixel N → pixel 0)
+
+    # Speed: time per pixel
+    speed_ms = max(5, int(sweep_duration * time_scale * 1000 / n))
+
+    # Start time: when first pixel enters
+    enter_times = [p[2][0] for p in peak_times]
+    t_start = clip_start + min(enter_times) * time_scale
+
+    # Duration: from first enter to last exit
+    exit_times = [p[2][2] for p in peak_times]
+    t_end = clip_start + max(exit_times) * time_scale
+
+    return [{
+        "type": ACT_WIPE,
+        "params": {
+            "r": color[0], "g": color[1], "b": color[2],
+            "speedMs": speed_ms, "direction": direction,
+        },
+        "startS": round(t_start, 2), "durationS": round(max(1, t_end - t_start), 2),
+        "ledOffset": str_offset, "ledCount": str_count, "stringIndex": 0,
+    }]
+
+
+def _compile_plane_sweep(pixels, start_pos, end_pos, normal, thickness, color,
+                         clip_start, clip_dur, fx_dur, easing, str_offset, str_count):
+    """Compile a plane sweep — similar logic to sphere but with planar distance."""
+    n = len(pixels)
+    if n == 0:
+        return []
+
+    # Normalize normal
+    mag = math.sqrt(sum(x * x for x in normal)) or 1
+    norm = [x / mag for x in normal]
+
+    time_scale = clip_dur / fx_dur if fx_dur > 0 else 1
+
+    # Compute when the plane passes each pixel
+    def plane_peak_time(px):
+        # The plane moves with the motion path. Find when dot(plane_center, normal) = dot(pixel, normal)
+        px_proj = sum(px[i] * norm[i] for i in range(3))
+        best_t, best_d = 0, float('inf')
+        for step in range(101):
+            raw_t = step / 100
+            eased = _ease(raw_t, easing)
+            center = [_lerp(start_pos[j], end_pos[j], eased) for j in range(3)]
+            plane_offset = sum(center[i] * norm[i] for i in range(3))
+            d = abs(px_proj - plane_offset)
+            if d < best_d:
+                best_d = d
+                best_t = raw_t
+        if best_d > thickness:
+            return None
+        return best_t * fx_dur
+
+    first_t = plane_peak_time(pixels[0])
+    last_t = plane_peak_time(pixels[-1])
+
+    if first_t is None and last_t is None:
+        return []
+
+    # Same sweep logic as sphere
+    if first_t is not None and last_t is not None:
+        sweep = abs(last_t - first_t)
+        if sweep > 0.5:
+            direction = 0 if first_t < last_t else 2
+            speed_ms = max(5, int(sweep * time_scale * 1000 / n))
+            t_start = clip_start + min(first_t, last_t) * time_scale
+            return [{
+                "type": ACT_WIPE,
+                "params": {"r": color[0], "g": color[1], "b": color[2],
+                           "speedMs": speed_ms, "direction": direction},
+                "startS": round(t_start, 2),
+                "durationS": round(max(1, sweep * time_scale + thickness / 500), 2),
+                "ledOffset": str_offset, "ledCount": str_count, "stringIndex": 0,
+            }]
+
+    # No sweep — SOLID
+    t = first_t if first_t is not None else last_t
+    return [{
+        "type": ACT_SOLID,
+        "params": {"r": color[0], "g": color[1], "b": color[2]},
+        "startS": round(clip_start + (t or 0) * time_scale, 2),
+        "durationS": round(max(1, clip_dur), 2),
+        "ledOffset": str_offset, "ledCount": str_count, "stringIndex": 0,
+    }]
+
+
+def _compile_box(pixels, start_pos, end_pos, size, color,
+                 clip_start, clip_dur, fx_dur, easing, str_offset, str_count):
+    """Compile a box field — SOLID for the duration it covers the string."""
+    # Simplified: just emit SOLID for the clip duration
+    return [{
+        "type": ACT_SOLID,
+        "params": {"r": color[0], "g": color[1], "b": color[2]},
+        "startS": round(clip_start, 2), "durationS": round(max(1, clip_dur), 2),
+        "ledOffset": str_offset, "ledCount": str_count, "stringIndex": 0,
+    }]
+
+
+# ── Main bake function ───────────────────────────────────────────────────────
+
+def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_fn, blend_fn,
+                  progress=None, actions=None):
+    """Compile a timeline into per-fixture action sequences.
+
+    Instead of rendering 40Hz frames, this directly analyzes each clip's spatial
+    relationship with each fixture's pixel positions and computes the optimal
+    action type + parameters + timing.
     """
     duration = timeline.get("durationS", 60)
-    n_frames = int(math.ceil(duration * BAKE_FPS))
 
     if progress:
-        progress.total_frames = n_frames
         progress.status = "resolving fixtures"
 
-    # Build fixture map and resolve pixel positions
     fix_map = {f["id"]: f for f in fixtures}
     pos_map = {p["id"]: p for p in layout.get("children", [])}
     fx_map = {f["id"]: f for f in spatial_fx}
     act_map = {a["id"]: a for a in (actions or [])}
 
-    # Pre-process: expand "allPerformers" tracks into per-fixture tracks
-    raw_tracks = timeline.get("tracks", [])
-    tracks = []
-    for track in raw_tracks:
-        if track.get("allPerformers"):
-            # Duplicate this track's clips for every fixture
-            for f in fixtures:
-                tracks.append({"fixtureId": f["id"], "clips": list(track.get("clips", []))})
-        else:
-            tracks.append(track)
-
-    # Per-fixture resolved data
-    fixture_data = {}  # fix_id → {pixels: [[x,y,z],...], pixelCount: N}
-
-    if progress:
-        progress.total_fixtures = len(set(t.get("fixtureId") for t in tracks))
-
-    for track in tracks:
-        fix_id = track.get("fixtureId")
-        fixture = fix_map.get(fix_id)
-        if not fixture or fix_id in fixture_data:
-            continue
-
-        # Build resolve input
-        lp = pos_map.get(fixture.get("childId"), {})
+    # Resolve pixel positions and string info per fixture
+    fixture_data = {}
+    for f in fixtures:
+        fid = f["id"]
+        lp = pos_map.get(f.get("childId"), {})
         child_pos = [lp.get("x", 0), lp.get("y", 0), lp.get("z", 0)]
         resolve_input = {
-            "type": fixture.get("type", "linear"),
+            "type": f.get("type", "linear"),
             "childPos": child_pos,
-            "strings": fixture.get("strings", []),
-            "rotation": fixture.get("rotation", [0, 0, 0]),
-            "aoeRadius": fixture.get("aoeRadius", 1000),
+            "strings": f.get("strings", []),
+            "rotation": f.get("rotation", [0, 0, 0]),
+            "aoeRadius": f.get("aoeRadius", 1000),
         }
         resolved = resolve_fn(resolve_input)
         pixels = resolved.get("pixelPositions", [])
-        # Store per-string pixel ranges for per-string segmentation
         strings_info = []
         offset = 0
         for s in resolve_input.get("strings", []):
@@ -138,17 +376,20 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
             if leds > 0:
                 strings_info.append({"offset": offset, "count": leds, "sdir": s.get("sdir", 0)})
                 offset += leds
-        fixture_data[fix_id] = {"pixels": pixels, "pixelCount": len(pixels), "strings": strings_info}
+        fixture_data[fid] = {"pixels": pixels, "pixelCount": len(pixels), "strings": strings_info}
 
-    if progress:
-        progress.status = "baking frames"
+    # Expand allPerformers tracks
+    raw_tracks = timeline.get("tracks", [])
+    tracks = []
+    for track in raw_tracks:
+        if track.get("allPerformers"):
+            for f in fixtures:
+                tracks.append({"fixtureId": f["id"], "clips": list(track.get("clips", []))})
+        else:
+            tracks.append(track)
 
-    # Bake frame-by-frame
-    # Structure: per_fixture_frames[fix_id][frame_idx] = [[r,g,b], ...]
-    per_fixture_frames = {fid: [] for fid in fixture_data}
-
-    # Merge clips from all tracks per fixture (handles allPerformers duplicates)
-    merged_clips = {}  # fix_id -> [clip, clip, ...]
+    # Merge clips per fixture
+    merged_clips = {}
     for track in tracks:
         fid = track.get("fixtureId")
         if fid not in fixture_data:
@@ -157,378 +398,131 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
             merged_clips[fid] = []
         merged_clips[fid].extend(track.get("clips", []))
 
-    for frame_idx in range(n_frames):
-        t = frame_idx / BAKE_FPS
-        if progress:
-            progress.current_frame = frame_idx
-
-        for fix_id, clips in merged_clips.items():
-            pixels = fixture_data[fix_id]["pixels"]
-            if not pixels:
-                per_fixture_frames[fix_id].append([[0,0,0]] * max(len(pixels), 1))
-                continue
-
-            # Evaluate active clips
-            layers = []
-            modes = []
-            for clip in clips:
-                cs = clip.get("startS", 0)
-                cd = clip.get("durationS", 1)
-                if cs <= t < cs + cd:
-                    eid = clip.get("effectId")
-                    fx = fx_map.get(eid)
-                    if not fx:
-                        continue
-                    local_t = t - cs
-                    motion = fx.get("motion", {})
-                    fx_dur = motion.get("durationS", cd) or cd
-                    scaled_t = local_t * (fx_dur / cd) if cd > 0 else 0
-                    colors = evaluate_fn(fx, pixels, scaled_t)
-                    layers.append(colors)
-                    modes.append(fx.get("blend", "replace"))
-
-            if layers:
-                blended = blend_fn(layers, modes)
-                per_fixture_frames[fix_id].append(blended)
-            else:
-                per_fixture_frames[fix_id].append([[0,0,0]] * len(pixels))
-
     if progress:
-        progress.status = "segmenting actions"
+        progress.total_fixtures = len(merged_clips)
+        progress.total_frames = len(merged_clips) * 10  # rough estimate
+        progress.status = "compiling"
 
-    # Build direct action segments from actionId clips (bypass frame analysis)
-    direct_segments = {}  # fix_id → list of segments from classic action clips
-    for track in tracks:
-        fix_id = track.get("fixtureId")
-        if fix_id not in fixture_data:
-            continue
-        direct = []
-        for clip in track.get("clips", []):
+    result = {"fixtures": {}, "lsq_files": {}, "totalFrames": 0, "fps": BAKE_FPS}
+
+    for fid, clips in merged_clips.items():
+        fdata = fixture_data.get(fid, {})
+        pixels = fdata.get("pixels", [])
+        strings = fdata.get("strings", [])
+        all_segments = []
+
+        for clip in clips:
+            # Action-type clips: emit directly
             aid = clip.get("actionId")
-            if aid is None:
+            if aid is not None:
+                act = act_map.get(aid)
+                if act:
+                    seg = {
+                        "type": act.get("type", 0),
+                        "params": {k: act.get(k, 0) for k in (
+                            "r", "g", "b", "r2", "g2", "b2", "speedMs", "periodMs",
+                            "spawnMs", "minBri", "spacing", "paletteId", "cooling",
+                            "sparking", "direction", "tailLen", "density", "decay", "fadeSpeed")},
+                        "startS": clip.get("startS", 0),
+                        "durationS": clip.get("durationS", 1),
+                    }
+                    all_segments.append(seg)
                 continue
-            act = act_map.get(aid)
-            if not act:
+
+            # Spatial effect clips: compile from spatial math
+            eid = clip.get("effectId")
+            fx = fx_map.get(eid)
+            if not fx:
                 continue
-            direct.append({
-                "type": act.get("type", 0),
-                "params": {k: act.get(k, 0) for k in ("r","g","b","r2","g2","b2","speedMs","periodMs",
-                           "spawnMs","minBri","spacing","paletteId","cooling","sparking",
-                           "direction","tailLen","density","decay","fadeSpeed")},
-                "startFrame": int(clip.get("startS", 0) * BAKE_FPS),
-                "endFrame": int((clip.get("startS", 0) + clip.get("durationS", 1)) * BAKE_FPS),
-                "startS": clip.get("startS", 0),
-                "durationS": clip.get("durationS", 1),
-            })
-        direct_segments[fix_id] = direct
 
-    # Action segmentation and LSQ generation
-    result = {"fixtures": {}, "lsq_files": {}, "totalFrames": n_frames, "fps": BAKE_FPS}
+            if strings:
+                # Multi-string: compile per-string
+                for si, sinfo in enumerate(strings):
+                    off = sinfo["offset"]
+                    cnt = sinfo["count"]
+                    str_pixels = pixels[off:off + cnt]
+                    steps = _compile_clip_for_string(clip, fx, str_pixels, off, cnt, duration)
+                    for step in steps:
+                        step["stringIndex"] = si
+                    all_segments.extend(steps)
+            elif pixels:
+                # Single string
+                steps = _compile_clip_for_string(clip, fx, pixels, 0, len(pixels), duration)
+                all_segments.extend(steps)
 
-    for fix_id, frames in per_fixture_frames.items():
-        pixel_count = fixture_data[fix_id]["pixelCount"]
-        string_info = fixture_data[fix_id].get("strings", [])
+        # Sort by start time, cap at 16
+        all_segments.sort(key=lambda s: s.get("startS", 0))
+        all_segments = all_segments[:16]
 
-        # Per-string segmentation: analyze each string's pixels separately
-        # so spatial sweeps create timed segments per string
-        if len(string_info) > 1:
-            segments = _segment_per_string(frames, string_info, n_frames)
-        else:
-            segments = _segment_actions(frames, pixel_count)
-
-        # Merge with direct action segments
-        action_segments = direct_segments.get(fix_id, [])
-        if action_segments:
-            segments = _merge_segments(segments, action_segments, n_frames)
-
-        lsq = _pack_lsq(fix_id, frames, pixel_count)
-
-        result["fixtures"][fix_id] = {
-            "segments": segments,
-            "pixelCount": pixel_count,
-            "frameCount": len(frames),
-            "stringCount": len(string_info),
+        result["fixtures"][fid] = {
+            "segments": all_segments,
+            "pixelCount": len(pixels),
+            "stringCount": len(strings),
         }
-        result["lsq_files"][fix_id] = lsq
+        result["lsq_files"][fid] = b""  # no raw frame data in smart bake
 
         if progress:
             progress.fixtures_done += 1
-            progress.segments[str(fix_id)] = len(segments)
+            progress.current_frame = progress.fixtures_done * 10
+            progress.segments[str(fid)] = len(all_segments)
 
-    # Generate preview data: 1 color per string per second
-    # For action-type clips, use the action's RGB directly (frames are black for actions)
+    # Generate preview data for emulator (1 color per string per second)
     preview = {}
-    for fix_id, frames in per_fixture_frames.items():
-        sinfo = fixture_data[fix_id].get("strings", [])
-        n_strings = max(len(sinfo), 1)
-
-        # Build a per-second action color map from direct_segments
-        action_color_at = {}  # second → [r,g,b]
-        for seg in direct_segments.get(fix_id, []):
-            p = seg.get("params", {})
-            col = [p.get("r", 0), p.get("g", 0), p.get("b", 0)]
-            if sum(col) == 0:
-                col = [128, 128, 128]  # non-black placeholder for non-color actions (fire, twinkle)
-            for s in range(int(seg.get("startS", 0)), int(seg.get("startS", 0) + seg.get("durationS", 0)) + 1):
-                action_color_at[s] = col
+    n_seconds = int(math.ceil(duration))
+    for fid, clips in merged_clips.items():
+        fdata = fixture_data.get(fid, {})
+        strings = fdata.get("strings", [])
+        pixels = fdata.get("pixels", [])
+        n_strings = max(len(strings), 1)
+        fix_segments = result["fixtures"].get(fid, {}).get("segments", [])
 
         fix_preview = []
-        for sec_frame in range(0, n_frames, BAKE_FPS):
-            sec = sec_frame // BAKE_FPS
-            frame = frames[min(sec_frame, len(frames) - 1)]
-
-            # Check if an action clip is active at this second
-            act_col = action_color_at.get(sec)
-            if act_col:
-                fix_preview.append([list(act_col)] * n_strings)
-                continue
-
-            # Spatial effect: use frame pixel data per-string
+        for sec in range(n_seconds):
             string_colors = []
-            if sinfo:
-                for si in sinfo:
-                    off, cnt = si["offset"], si["count"]
-                    spx = frame[off:off+cnt] if off+cnt <= len(frame) else []
-                    string_colors.append(_dominant_color(spx) if spx else [0,0,0])
-            else:
-                string_colors.append(_dominant_color(frame))
+            for si in range(n_strings):
+                # Find active segment for this string at this second
+                color = [0, 0, 0]
+                for seg in fix_segments:
+                    seg_si = seg.get("stringIndex")
+                    # Match: either no string index (whole fixture) or matching string
+                    if seg_si is not None and seg_si != si:
+                        continue
+                    ss = seg.get("startS", 0)
+                    sd = seg.get("durationS", 1)
+                    if ss <= sec < ss + sd:
+                        p = seg.get("params", {})
+                        color = [p.get("r", 0), p.get("g", 0), p.get("b", 0)]
+                        if sum(color) == 0 and seg.get("type", 0) > 0:
+                            color = [128, 128, 128]  # placeholder for non-color actions
+                        break
+                string_colors.append(color)
             fix_preview.append(string_colors)
-        preview[fix_id] = fix_preview
+        preview[fid] = fix_preview
     result["preview"] = preview
 
     if progress:
         progress.status = "complete"
-        progress.current_frame = n_frames
+        progress.current_frame = progress.total_frames
         progress.done = True
 
     return result
 
 
-def _segment_per_string(frames, string_info, n_frames, max_per_string=8):
-    """Segment frames per-string: analyze each string's pixels separately.
-
-    For multi-string fixtures, a spatial sweep hitting string 0 first then
-    string 1 will produce different segments for each string with correct timing.
-
-    Each segment includes ledStartOverride/ledEndOverride to target specific strings.
-    """
-    if not frames or not string_info:
-        return []
-
-    all_segments = []
-    steps_per_string = max(1, 16 // max(len(string_info), 1))
-
-    for si, sinfo in enumerate(string_info):
-        offset = sinfo["offset"]
-        count = sinfo["count"]
-        if count <= 0:
-            continue
-
-        # Extract this string's pixels from each frame
-        string_frames = []
-        for frame in frames:
-            string_pixels = frame[offset:offset + count] if offset + count <= len(frame) else []
-            string_frames.append(string_pixels)
-
-        # Segment this string independently
-        segs = _segment_actions(string_frames, count, max_segments=steps_per_string)
-
-        # Tag each segment with the string's LED range
-        for seg in segs:
-            seg["stringIndex"] = si
-            seg["ledOffset"] = offset
-            seg["ledCount"] = count
-        all_segments.extend(segs)
-
-    # Sort by start time, cap at 16
-    all_segments.sort(key=lambda s: (s["startS"], s.get("stringIndex", 0)))
-    return all_segments[:16]
-
-
-def _merge_segments(frame_segments, action_segments, n_frames):
-    """Merge frame-analyzed segments with direct action segments.
-    Action segments take priority — they replace frame segments in their time range.
-    Result is sorted by startS and capped at 16 total."""
-    # Build a time-sorted list of all segments
-    all_segs = list(action_segments)  # action clips first (priority)
-    # Add frame segments that don't overlap with any action segment
-    for fs in frame_segments:
-        overlaps = False
-        for a in action_segments:
-            # Check overlap
-            if fs["startS"] < a["startS"] + a["durationS"] and fs["startS"] + fs["durationS"] > a["startS"]:
-                overlaps = True
-                break
-        if not overlaps:
-            all_segs.append(fs)
-    all_segs.sort(key=lambda s: s["startS"])
-    return all_segs[:16]
-
-
-def _dominant_color(frame_pixels):
-    """Get the dominant color — average of pixels with the most brightness.
-
-    Instead of averaging ALL pixels (which dilutes spatial effects like sweeps),
-    find the peak brightness and average only pixels at >= 50% of that peak.
-    This gives cleaner colors when a spatial effect only illuminates part of the strip.
-    """
-    if not frame_pixels:
-        return [0, 0, 0]
-    # Find the brightest pixel
-    max_bri = 0
-    best = [0, 0, 0]
-    for p in frame_pixels:
-        bri = p[0] + p[1] + p[2]
-        if bri > max_bri:
-            max_bri = bri
-            best = list(p)
-    if max_bri == 0:
-        return [0, 0, 0]
-    # Average all pixels that are at least 50% of peak brightness
-    threshold = max_bri * 0.5
-    total_r, total_g, total_b, count = 0, 0, 0, 0
-    for p in frame_pixels:
-        if p[0] + p[1] + p[2] >= threshold:
-            total_r += p[0]; total_g += p[1]; total_b += p[2]
-            count += 1
-    if count == 0:
-        return best
-    return [total_r // count, total_g // count, total_b // count]
-
-
-def _color_distance(a, b):
-    return abs(a[0]-b[0]) + abs(a[1]-b[1]) + abs(a[2]-b[2])
-
-
-def _segment_actions(frames, pixel_count, max_segments=16):
-    """Analyze frame sequence and produce coarse action segments that fit the 16-step limit.
-
-    Strategy: divide the timeline into max_segments equal windows. For each window,
-    compute the dominant color at the start and end. If they differ significantly,
-    emit a FADE; if both are dark, emit BLACKOUT; otherwise emit SOLID with the
-    average color. This guarantees at most max_segments outputs.
-
-    Returns list of segments:
-        [{type, params, startFrame, endFrame, startS, durationS}, ...]
-    """
-    if not frames:
-        return []
-
-    n = len(frames)
-    # Determine window size — divide frames evenly into max_segments windows
-    window = max(1, n // max_segments)
-    segments = []
-
-    i = 0
-    while i < n:
-        j = min(i + window, n)
-        start_color = _dominant_color(frames[i])
-        end_color = _dominant_color(frames[j - 1])
-        mid_color = _dominant_color(frames[(i + j) // 2])
-        avg_color = [(start_color[c] + mid_color[c] + end_color[c]) // 3 for c in range(3)]
-
-        start_s = round(i / BAKE_FPS, 3)
-        dur_s = round((j - i) / BAKE_FPS, 3)
-
-        # Check for blackout (all dark)
-        if all(c < 8 for c in avg_color):
-            segments.append({
-                "type": ACT_BLACKOUT, "params": {},
-                "startFrame": i, "endFrame": j,
-                "startS": start_s, "durationS": dur_s,
-            })
-        # Check for fade (start and end colors differ significantly)
-        elif _color_distance(start_color, end_color) > 60:
-            segments.append({
-                "type": ACT_FADE,
-                "params": {
-                    "r": start_color[0], "g": start_color[1], "b": start_color[2],
-                    "r2": end_color[0], "g2": end_color[1], "b2": end_color[2],
-                    "speedMs": int(dur_s * 1000),
-                },
-                "startFrame": i, "endFrame": j,
-                "startS": start_s, "durationS": dur_s,
-            })
-        # Otherwise solid with the average color
-        else:
-            segments.append({
-                "type": ACT_SOLID,
-                "params": {"r": avg_color[0], "g": avg_color[1], "b": avg_color[2]},
-                "startFrame": i, "endFrame": j,
-                "startS": start_s, "durationS": dur_s,
-            })
-
-        i = j
-
-    return segments[:max_segments]
-
-
-def _pack_lsq(fixture_id, frames, pixel_count):
-    """Pack frames into LSQ binary format.
-
-    Header (16 bytes):
-        magic:      4 bytes "LSQ\x00"
-        version:    uint8  (1)
-        fixtureId:  uint8
-        frameCount: uint32
-        fps:        uint8  (40)
-        pixelCount: uint16
-        reserved:   3 bytes
-
-    Frame data:
-        frameCount * pixelCount * 3 bytes (RGB per pixel per frame)
-    """
-    header = struct.pack("<4sBBIBH3s",
-        LSQ_MAGIC,
-        LSQ_VERSION,
-        fixture_id & 0xFF,
-        len(frames),
-        BAKE_FPS,
-        pixel_count & 0xFFFF,
-        b"\x00\x00\x00"
-    )
-
-    frame_data = bytearray()
-    for frame in frames:
-        for pi in range(pixel_count):
-            if pi < len(frame):
-                px = frame[pi]
-                frame_data.append(min(255, max(0, px[0])))
-                frame_data.append(min(255, max(0, px[1])))
-                frame_data.append(min(255, max(0, px[2])))
-            else:
-                frame_data.extend(b"\x00\x00\x00")
-
-    return bytes(header) + bytes(frame_data)
-
-
 def pack_lsq_zip(lsq_files):
-    """Pack multiple LSQ files into a zip archive.
-
-    Args:
-        lsq_files: dict of fixture_id → bytes
-
-    Returns:
-        bytes (zip file content)
-    """
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for fix_id, data in lsq_files.items():
-            zf.writestr(f"fixture_{fix_id}.lsq", data)
+            if data:
+                zf.writestr(f"fixture_{fix_id}.lsq", data)
     return buf.getvalue()
 
 
 def segments_to_load_steps(segments, max_steps=16):
-    """Convert baked segments to LoadStepPayload-compatible dicts.
-
-    Returns list of step dicts compatible with the existing runner sync protocol.
-    Each step has: actionType, r, g, b, params, durationS, delayMs
-    """
     steps = []
     for seg in segments[:max_steps]:
         step = {
             "actionType": seg["type"],
-            "durationS": max(1, int(math.ceil(seg["durationS"]))),
+            "durationS": max(1, int(math.ceil(seg.get("durationS", 1)))),
             "delayMs": 0,
             "r": seg["params"].get("r", 0),
             "g": seg["params"].get("g", 0),
@@ -539,5 +533,13 @@ def segments_to_load_steps(segments, max_steps=16):
             step["g2"] = seg["params"].get("g2", 0)
             step["b2"] = seg["params"].get("b2", 0)
             step["speedMs"] = seg["params"].get("speedMs", 1000)
+        if seg["type"] == ACT_WIPE:
+            step["speedMs"] = seg["params"].get("speedMs", 50)
+            step["direction"] = seg["params"].get("direction", 0)
+        # Pass through per-string targeting
+        if "ledOffset" in seg:
+            step["_ledOffset"] = seg["ledOffset"]
+            step["_ledCount"] = seg["ledCount"]
+            step["_stringIndex"] = seg.get("stringIndex", 0)
         steps.append(step)
     return steps
