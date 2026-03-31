@@ -58,9 +58,8 @@ volatile uint8_t  childEvtEvent    = 0;
 
 void loadChildConfig() {
   bool loaded = false;
-#ifdef BOARD_GIGA_CHILD
-  // Giga child: no persistent storage — always use RAM defaults
-  // Config is fixed: 1 string, 1 LED, 4mm (onboard RGB)
+#if defined(BOARD_GIGA_CHILD) || defined(BOARD_GIGA_DMX)
+  // Giga: no persistent storage — always use RAM defaults
 #elif defined(BOARD_ESP32)
   Preferences prefs;
   prefs.begin("slyled", true);  // read-only
@@ -94,8 +93,7 @@ void loadChildConfig() {
 }
 
 void saveChildConfig() {
-#ifdef BOARD_GIGA_CHILD
-  // No persistent storage on Giga child
+#if defined(BOARD_GIGA_CHILD) || defined(BOARD_GIGA_DMX)
   if (Serial) Serial.println(F("Config saved (RAM only)."));
   return;
 #elif defined(BOARD_ESP32)
@@ -116,8 +114,7 @@ void saveChildConfig() {
 }
 
 void clearChildConfig() {
-#ifdef BOARD_GIGA_CHILD
-  // No persistent storage to clear
+#if defined(BOARD_GIGA_CHILD) || defined(BOARD_GIGA_DMX)
   return;
 #elif defined(BOARD_ESP32)
   Preferences prefs;
@@ -407,6 +404,9 @@ void sendChildConfigPage(WiFiClient& c) {
             "<div class='tab tact' id='n0' onclick='showTab(0)'>Dashboard</div>"
             "<div class='tab' id='n1' onclick='showTab(1)'>Settings</div>"
             "<div class='tab' id='n2' onclick='showTab(2)'>Config</div>"
+#ifdef BOARD_DMX_BRIDGE
+            "<div class='tab' id='n3' onclick='showTab(3)'>DMX Test</div>"
+#endif
             "</div>"));
 
   // ── Dashboard pane ─────────────────────────────────────────────────────────
@@ -453,14 +453,21 @@ void sendChildConfigPage(WiFiClient& c) {
   c.print(F("<div class='row'><span class='k'>Chip</span>"
             "<span class='v'>ESP8266</span></div>"));
 #endif
+#if !defined(BOARD_GIGA_DMX) && !defined(BOARD_GIGA_CHILD)
   sendBuf(c, "<div class='row'><span class='k'>Flash</span>"
              "<span class='v'>%lu KB</span></div>",
              (unsigned long)(ESP.getFlashChipSize() / 1024));
   sendBuf(c, "<div class='row'><span class='k'>Free Heap</span>"
              "<span class='v'>%lu bytes</span></div>",
              (unsigned long)ESP.getFreeHeap());
+#endif
+#if defined(BOARD_GIGA_DMX) || defined(BOARD_GIGA_CHILD)
+  sendBuf(c, "<div class='row'><span class='k'>SDK</span>"
+             "<span class='v'>mbed</span></div>");
+#else
   sendBuf(c, "<div class='row'><span class='k'>SDK</span>"
              "<span class='v'>%s</span></div>", ESP.getSdkVersion());
+#endif
   // Network details
   sendBuf(c, "<div class='row'><span class='k'>WiFi RSSI</span>"
              "<span class='v'>%d dBm</span></div>",
@@ -585,15 +592,45 @@ void sendChildConfigPage(WiFiClient& c) {
   // Factory reset (separate form — HTML forbids nested forms)
   c.print(F("<form id='rf' action='/config/reset' method='POST' style='display:none'></form>"));
 
+#ifdef BOARD_DMX_BRIDGE
+  // ── DMX Test pane ─────────────────────────────────────────────────────────
+  c.print(F("<div class='pane' id='p3' style='display:none'>"));
+  c.print(F("<h3>DMX Channel Test</h3>"
+            "<div style='margin:.5em 0'>"
+            "<label>Start Address</label>"
+            "<input type='number' id='dmx-sa' min='1' max='512' style='width:80px'> "
+            "<label>Ch/Fixture</label>"
+            "<input type='number' id='dmx-cpf' min='1' max='8' style='width:60px'> "
+            "<label>Fixtures</label>"
+            "<input type='number' id='dmx-fc' min='1' max='170' style='width:60px'> "
+            "<button class='btn' onclick='dmxSaveCfg()'>Apply</button>"
+            "</div>"));
+  c.print(F("<div style='margin:.5em 0;display:flex;gap:.3em;flex-wrap:wrap'>"
+            "<button class='btn' style='background:#c33' onclick='dmxBlackout()'>Blackout</button>"
+            "<button class='btn' style='background:#933' onclick='dmxPreset(255,0,0)'>Red</button>"
+            "<button class='btn' style='background:#393' onclick='dmxPreset(0,255,0)'>Green</button>"
+            "<button class='btn' style='background:#339' onclick='dmxPreset(0,0,255)'>Blue</button>"
+            "<button class='btn' style='background:#999' onclick='dmxPreset(255,255,255)'>White</button>"
+            "<button class='btn' style='background:#963' onclick='dmxPreset(255,140,0)'>Amber</button>"
+            "</div>"));
+  c.print(F("<div id='dmx-sliders' style='margin:.5em 0'></div>"));
+  c.print(F("</div>"));
+#endif
+
   // Footer — version only; Factory Reset lives in the Settings tab
   sendBuf(c, "<div class='ftr'>v%d.%d.%d</div>", APP_MAJOR, APP_MINOR, APP_PATCH);
 
   // JavaScript
   c.print(F("<script>"));
+#ifdef BOARD_DMX_BRIDGE
+  c.print(F("var _dmxTabCount=4;"));
+#else
+  c.print(F("var _dmxTabCount=3;"));
+#endif
   c.print(F("function showTab(t){"
-            "for(var i=0;i<3;i++){"
-            "document.getElementById('p'+i).style.display=i==t?'block':'none';"
-            "document.getElementById('n'+i).className='tab'+(i==t?' tact':'');}"
+            "for(var i=0;i<_dmxTabCount;i++){"
+            "var p=document.getElementById('p'+i);if(p)p.style.display=i==t?'block':'none';"
+            "var n=document.getElementById('n'+i);if(n)n.className='tab'+(i==t?' tact':'');}"
             "}"));
   c.print(F("function showStr(v){"
             "var n=parseInt(document.getElementById('sc').value);"
@@ -719,6 +756,47 @@ void sendChildConfigPage(WiFiClient& c) {
             "x.onerror=function(){msg.textContent='Update failed — device may be rebooting';bar.style.width='100%';"
             "setTimeout(function(){location.reload();},15000);};"
             "x.send(JSON.stringify({url:url,sha256:'',major:maj,minor:mn,patch:pt}));}"));
+#ifdef BOARD_DMX_BRIDGE
+  c.print(F(
+    "function dmxBlackout(){fetch('/dmx/blackout',{method:'POST'}).then(function(){dmxRefresh();});}"
+    "function dmxPreset(r,g,b){"
+    "var sa=parseInt(document.getElementById('dmx-sa').value)||1;"
+    "var cpf=parseInt(document.getElementById('dmx-cpf').value)||3;"
+    "var fc=parseInt(document.getElementById('dmx-fc').value)||1;"
+    "var d={};for(var i=0;i<fc;i++){var a=sa+i*cpf;"
+    "if(cpf>=1)d[a]=r;if(cpf>=2)d[a+1]=g;if(cpf>=3)d[a+2]=b;if(cpf>=4)d[a+3]=255;}"
+    "fetch('/dmx/set',{method:'POST',body:JSON.stringify(d)}).then(function(){dmxRefresh();});}"
+    "function dmxSaveCfg(){"
+    "var b={startAddr:parseInt(document.getElementById('dmx-sa').value)||1,"
+    "chPerFix:parseInt(document.getElementById('dmx-cpf').value)||3,"
+    "fixCount:parseInt(document.getElementById('dmx-fc').value)||1};"
+    "fetch('/dmx/config',{method:'POST',body:JSON.stringify(b)}).then(function(){dmxRefresh();});}"
+  ));
+  c.flush();
+  c.print(F(
+    "function dmxRefresh(){"
+    "fetch('/dmx/channels').then(function(r){return r.json();}).then(function(d){"
+    "document.getElementById('dmx-sa').value=d.start;"
+    "document.getElementById('dmx-cpf').value=d.chPerFix;"
+    "document.getElementById('dmx-fc').value=d.fixCount;"
+    "var el=document.getElementById('dmx-sliders');var h='';"
+    "var n=Math.min(d.ch.length,d.start+d.fixCount*d.chPerFix-1);"
+    "for(var i=d.start-1;i<n;i++){"
+    "var ch=i+1;var v=d.ch[i];"
+    "h+='<div style=\"display:flex;align-items:center;gap:.3em;margin:.15em 0\">';"
+    "h+='<span style=\"width:30px;font-size:.75em;color:#64748b\">'+ch+'</span>';"
+    "h+='<input type=\"range\" min=\"0\" max=\"255\" value=\"'+v+'\" style=\"flex:1\" ';"
+    "h+='oninput=\"dmxCh('+ch+',this.value)\">';"
+    "h+='<span id=\"dv'+ch+'\" style=\"width:28px;font-size:.75em;color:#94a3b8\">'+v+'</span>';"
+    "h+='</div>';}"
+    "el.innerHTML=h;});}"
+    "function dmxCh(ch,v){"
+    "var s=document.getElementById('dv'+ch);if(s)s.textContent=v;"
+    "var d={};d[ch]=parseInt(v);fetch('/dmx/set',{method:'POST',body:JSON.stringify(d)});}"
+  ));
+  c.flush();
+  c.print(F("dmxRefresh();"));
+#endif
   c.print(F("showTab(0);showStr(0);poll();setInterval(poll,3000);"
             "</script></body></html>"));
   c.flush();

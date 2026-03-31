@@ -27,7 +27,11 @@ extern CRGB leds[NUM_LEDS]; // virtual LED array for action rendering
 
 void dmxInit();
 void dmxSendFrame();
-void dmxUpdateFromLeds();  // copy leds[] → dmxBuf channels
+void dmxUpdateFromLeds();
+void dmxSetChannel(uint16_t channel, uint8_t value);
+void dmxBlackout();
+void dmxLoadConfig();
+void dmxSaveConfig();
 void clearAndShow();
 void fill_solid(CRGB* arr, uint16_t count, CRGB color);
 

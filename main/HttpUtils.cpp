@@ -52,7 +52,9 @@ void sendStatus(WiFiClient& c) {
   blen = snprintf(body, sizeof(body), "{\"role\":\"parent\",\"hostname\":\"slyled\"}");
 #else
   const char* boardName =
-#ifdef BOARD_DMX_BRIDGE
+#ifdef BOARD_GIGA_DMX
+    "giga-dmx";
+#elif defined(BOARD_DMX_BRIDGE)
     "dmx-bridge";
 #elif defined(BOARD_ESP32)
     "esp32";
@@ -69,14 +71,16 @@ void sendStatus(WiFiClient& c) {
   int chipTemp = -999;  // sentinel: not available
   uint32_t flashSize = 0;
   const char* sdkVer = "";
-#ifdef BOARD_ESP32
+#ifdef BOARD_GIGA_DMX
+  chipModel = "STM32H747XI";
+  sdkVer = "mbed";
+#elif defined(BOARD_ESP32)
   chipModel = ESP.getChipModel();
   chipTemp = (int)temperatureRead();
   flashSize = ESP.getFlashChipSize();
   sdkVer = ESP.getSdkVersion();
 #elif defined(BOARD_D1MINI)
   chipModel = "ESP8266";
-  // ESP8266 has no internal temperature sensor
   flashSize = ESP.getFlashChipSize();
   sdkVer = ESP.getSdkVersion();
 #endif
@@ -98,7 +102,11 @@ void sendStatus(WiFiClient& c) {
     childCfg.hostname, boardName, boardType,
     (unsigned)APP_MAJOR, (unsigned)APP_MINOR, (unsigned)APP_PATCH,
     (unsigned)childActType, (unsigned long)udpRxCount,
+#ifdef BOARD_GIGA_DMX
+    0UL, (unsigned long)(millis() / 1000),
+#else
     (unsigned long)ESP.getFreeHeap(), (unsigned long)(millis() / 1000),
+#endif
     (int)WiFi.RSSI(), chipModel, (unsigned long)flashSize, sdkVer,
     chipTemp != -999 ? (String(",\"chipTemp\":") + String(chipTemp)).c_str() : "");
 #endif

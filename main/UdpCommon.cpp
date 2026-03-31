@@ -8,6 +8,7 @@
 #include "Globals.h"
 #include "NetUtils.h"
 #include "HttpUtils.h"
+#include "JsonUtils.h"
 #include "UdpCommon.h"
 
 #ifdef BOARD_GIGA
@@ -106,6 +107,7 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
     childActSeq++;
   } else if (cmd == CMD_SET_BRIGHTNESS && plen >= 1) {
     childBrightness = payload[0];
+#if !defined(BOARD_GIGA_DMX) && !defined(BOARD_GIGA_CHILD)
   } else if (cmd == CMD_OTA_UPDATE && plen > 5) {
     // Payload: newMajor(1) + newMinor(1) + newPatch(1) + urlLen(2) + url(N) + sha256(64)
     uint8_t newMaj = payload[0];
@@ -134,6 +136,7 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
         #endif
       }
     }
+#endif  // !BOARD_GIGA_DMX && !BOARD_GIGA_CHILD
   }
   (void)plen;
 #endif
@@ -330,7 +333,7 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     sendJsonOk(client);
     client.flush();
     delay(200);
-#ifdef BOARD_GIGA_CHILD
+#if defined(BOARD_GIGA_CHILD) || defined(BOARD_GIGA_DMX)
     NVIC_SystemReset();
 #else
     ESP.restart();
@@ -360,6 +363,63 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     FastLED.show(); delay(500);
     fill_solid(leds, NUM_LEDS, CRGB::Black);
     FastLED.show();
+    sendJsonOk(client);
+#endif
+#ifdef BOARD_DMX_BRIDGE
+  } else if (isPost && strstr(req, " /dmx/set ")) {
+    // Set DMX channels: JSON body {"1":255,"2":128,...}
+    char* body = strstr(req, "\r\n\r\n");
+    if (body) {
+      body += 4;
+      // Simple JSON parser for {"ch":val,...}
+      char* p = body;
+      while (*p) {
+        if (*p == '"') {
+          uint16_t ch = (uint16_t)atoi(p + 1);
+          char* colon = strchr(p + 1, ':');
+          if (colon && ch >= 1 && ch <= DMX_UNIVERSE_MAX) {
+            uint8_t val = (uint8_t)atoi(colon + 1);
+            dmxSetChannel(ch, val);
+          }
+          char* next = strchr(p + 1, ',');
+          if (!next) break;
+          p = next + 1;
+        } else p++;
+      }
+      dmxSendFrame();
+    }
+    sendJsonOk(client);
+  } else if (strstr(req, " /dmx/channels")) {
+    // Return first N channels as JSON array
+    uint16_t n = dmxCfg.startAddress + dmxCfg.fixtureCount * dmxCfg.channelsPerFixture;
+    if (n > DMX_UNIVERSE_MAX) n = DMX_UNIVERSE_MAX;
+    if (n < 16) n = 16;
+    char buf[2048];
+    int pos = snprintf(buf, sizeof(buf), "{\"start\":%u,\"chPerFix\":%u,\"fixCount\":%u,\"ch\":[",
+                       dmxCfg.startAddress, dmxCfg.channelsPerFixture, dmxCfg.fixtureCount);
+    for (uint16_t i = 1; i <= n && pos < (int)sizeof(buf) - 8; i++) {
+      pos += snprintf(buf + pos, sizeof(buf) - pos, "%s%u", i > 1 ? "," : "", dmxBuf[i]);
+    }
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "]}");
+    sendBuf(client, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: %d\r\n\r\n", pos);
+    client.print(buf);
+    client.flush();
+  } else if (isPost && strstr(req, " /dmx/blackout ")) {
+    dmxBlackout();
+    sendJsonOk(client);
+  } else if (isPost && strstr(req, " /dmx/config ")) {
+    // Update DMX config: {"startAddr":1,"chPerFix":3,"fixCount":10}
+    char* body = strstr(req, "\r\n\r\n");
+    if (body) {
+      body += 4;
+      int sa = jsonGetInt(body, "startAddr", -1);
+      int cpf = jsonGetInt(body, "chPerFix", -1);
+      int fc = jsonGetInt(body, "fixCount", -1);
+      if (sa >= 1 && sa <= 512) dmxCfg.startAddress = (uint16_t)sa;
+      if (cpf >= 1 && cpf <= 8) dmxCfg.channelsPerFixture = (uint8_t)cpf;
+      if (fc >= 1 && fc <= 170) dmxCfg.fixtureCount = (uint8_t)fc;
+      dmxSaveConfig();
+    }
     sendJsonOk(client);
 #endif
   } else if (isPost && strstr(req, " /test/stop ")) {

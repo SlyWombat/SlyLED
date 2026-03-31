@@ -18,7 +18,10 @@
   #define BOARD_D1MINI
 #elif defined(ARDUINO_GIGA) || defined(ARDUINO_ARDUINO_GIGA) || \
       defined(ARDUINO_ARCH_MBED_GIGA) || defined(ARDUINO_ARCH_MBED)
-  #ifdef GIGA_CHILD
+  #ifdef GIGA_DMX
+    #define BOARD_GIGA_DMX       // Giga R1 as DMX bridge
+    #define BOARD_DMX_BRIDGE     // shared DMX bridge logic
+  #elif defined(GIGA_CHILD)
     #define BOARD_GIGA_CHILD   // Giga R1 as LED child (onboard RGB LED)
   #else
     #define BOARD_GIGA          // Giga R1 as parent (Orchestrator runtime)
@@ -37,6 +40,14 @@
   #define BOARD_CHILD
 #endif
 
+// Giga DMX shares Giga child's mbed/WiFi stack
+#ifdef BOARD_GIGA_DMX
+  #define BOARD_GIGA_CHILD_OR_DMX
+#endif
+#ifdef BOARD_GIGA_CHILD
+  #define BOARD_GIGA_CHILD_OR_DMX
+#endif
+
 // ── Board-specific includes ───────────────────────────────────────────────────
 
 #ifdef BOARD_GIGA
@@ -44,7 +55,7 @@
   #include <WiFi.h>
   #include <WiFiUdp.h>
   #include <time.h>
-#elif defined(BOARD_GIGA_CHILD)
+#elif defined(BOARD_GIGA_CHILD) || defined(BOARD_GIGA_DMX)
   #include <mbed.h>
   #include <WiFi.h>
   #include <WiFiUdp.h>
@@ -101,16 +112,23 @@
 #endif
 
 #ifdef BOARD_DMX_BRIDGE
-  // DMX-512 output via UART2 + RS-485 transceiver (CQRobot shield)
-  constexpr uint8_t  DMX_TX_PIN      = 17;  // GPIO17 = UART2 TX → RS-485 DI
-  constexpr uint8_t  DMX_EN_PIN      = 4;   // GPIO4  = RS-485 DE/RE enable
+  // DMX-512 constants (shared by ESP32 and Giga DMX bridges)
   constexpr uint16_t DMX_UNIVERSE_MAX = 512; // DMX-512 channels per universe
-  constexpr uint16_t DMX_BAUD        = 250000;
+  constexpr uint32_t DMX_BAUD        = 250000;
   constexpr uint8_t  DMX_FRAME_HZ    = 40;  // output frame rate
   // Virtual LED array for action system compatibility
   #define NUM_LEDS  170    // 512/3 = 170 RGB fixtures max
   #define MAX_LEDS  170
   constexpr uint8_t LED_BRIGHTNESS = 255;
+
+  #ifdef BOARD_GIGA_DMX
+    // Giga R1: Serial1 on TX1(pin 1)/RX1(pin 0), DE/RE on digital pin 2
+    constexpr uint8_t DMX_EN_PIN = 2;
+  #else
+    // ESP32: UART2 TX on GPIO17, DE/RE on GPIO4
+    constexpr uint8_t DMX_TX_PIN = 17;
+    constexpr uint8_t DMX_EN_PIN = 4;
+  #endif
 #endif
 
 #endif  // BOARDCONFIG_H

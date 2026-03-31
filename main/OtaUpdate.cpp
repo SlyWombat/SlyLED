@@ -147,7 +147,7 @@ void otaCheckConfirm() {}
 
 // ── Giga Child stub ──────────────────────────────────────────────────────────
 
-#elif defined(BOARD_GIGA_CHILD)
+#elif defined(BOARD_GIGA_CHILD) || defined(BOARD_GIGA_DMX)
 
 bool otaStartUpdate(const char*, const char*, uint8_t, uint8_t, uint8_t) { return false; }
 void otaConfirmBoot() {}

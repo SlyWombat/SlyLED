@@ -147,6 +147,8 @@ static void checkSerialCmd() {
         } else if (strcmp(cmdBuf, "BOARD") == 0) {
 #ifdef BOARD_GIGA
           Serial.println("BOARD:giga-parent");
+#elif defined(BOARD_GIGA_DMX)
+          Serial.println("BOARD:giga-dmx");
 #elif defined(BOARD_GIGA_CHILD)
           Serial.println("BOARD:giga-child");
 #elif defined(BOARD_DMX_BRIDGE)
