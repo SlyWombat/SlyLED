@@ -264,8 +264,13 @@ def _probe_board_type(child):
         data = json.loads(resp.read().decode("utf-8"))
         board = data.get("board")
         if board:
-            board_map = {"esp32": "ESP32", "d1mini": "D1 Mini", "giga-child": "Giga"}
+            board_map = {"esp32": "ESP32", "d1mini": "D1 Mini", "giga-child": "Giga",
+                         "dmx-bridge": "DMX Bridge"}
             child["boardType"] = board_map.get(board, board)
+        # Detect DMX bridge from boardType field in /status
+        bt = data.get("boardType")
+        if bt == "dmx":
+            child["type"] = "dmx"
         # Full version from /status (3-part: 5.3.2) overrides PONG's 2-part version
         version = data.get("version")
         if version:

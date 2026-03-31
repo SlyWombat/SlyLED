@@ -8,20 +8,14 @@
 
 #include "BoardConfig.h"
 
-#ifdef BOARD_GIGA_CHILD
+// ── Shared CRGB/CHSV support (Giga-child + DMX bridge — no FastLED) ──────────
+
+#if defined(BOARD_GIGA_CHILD) || defined(BOARD_DMX_BRIDGE)
 
 #include "GigaLED.h"
 
-// ── Static instances ─────────────────────────────────────────────────────────
-
 const CRGB CRGB::Black = CRGB(0, 0, 0);
 const CRGB CRGB::White = CRGB(255, 255, 255);
-
-CRGB leds[NUM_LEDS];
-
-static uint8_t _brightness = 255;
-
-// ── HSV to RGB (rainbow wheel) ───────────────────────────────────────────────
 
 void hsv2rgb_rainbow(const CHSV& hsv, CRGB& rgb) {
   uint8_t h = hsv.h, s = hsv.s, v = hsv.v;
@@ -40,14 +34,21 @@ void hsv2rgb_rainbow(const CHSV& hsv, CRGB& rgb) {
   }
 }
 
-// ── Random helpers ───────────────────────────────────────────────────────────
+uint8_t  random8() { return (uint8_t)(rand() & 0xFF); }
+uint8_t  random8(uint8_t lim) { return lim ? random8() % lim : 0; }
+uint8_t  random8(uint8_t lo, uint8_t hi) { return lo + random8(hi - lo); }
+uint16_t random16(uint16_t lim) { return lim ? (uint16_t)(rand() % lim) : 0; }
+uint8_t  qadd8(uint8_t a, uint8_t b) { uint16_t t = a + b; return t > 255 ? 255 : (uint8_t)t; }
 
-uint8_t random8() { return (uint8_t)(rand() & 0xFF); }
-uint8_t random8(uint8_t lim) { return lim ? random8() % lim : 0; }
-uint8_t random8(uint8_t lo, uint8_t hi) { return lo + random8(hi - lo); }
-uint8_t qadd8(uint8_t a, uint8_t b) { uint16_t t = a + b; return t > 255 ? 255 : (uint8_t)t; }
+#endif  // BOARD_GIGA_CHILD || BOARD_DMX_BRIDGE
 
-// ── Init ─────────────────────────────────────────────────────────────────────
+// ── Giga-child only: onboard RGB LED driver ──────────────────────────────────
+
+#ifdef BOARD_GIGA_CHILD
+
+CRGB leds[NUM_LEDS];
+
+static uint8_t _brightness = 255;
 
 void gigaLedInit() {
   // Active-low GPIO: HIGH = off

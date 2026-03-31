@@ -52,7 +52,9 @@ void sendStatus(WiFiClient& c) {
   blen = snprintf(body, sizeof(body), "{\"role\":\"parent\",\"hostname\":\"slyled\"}");
 #else
   const char* boardName =
-#ifdef BOARD_ESP32
+#ifdef BOARD_DMX_BRIDGE
+    "dmx-bridge";
+#elif defined(BOARD_ESP32)
     "esp32";
 #elif defined(BOARD_D1MINI)
     "d1mini";
@@ -79,13 +81,21 @@ void sendStatus(WiFiClient& c) {
   sdkVer = ESP.getSdkVersion();
 #endif
 
+  const char* boardType =
+#ifdef BOARD_DMX_BRIDGE
+    "dmx";
+#else
+    "led";
+#endif
+
   blen = snprintf(body, sizeof(body),
     "{\"role\":\"child\",\"hostname\":\"%s\",\"board\":\"%s\","
+    "\"boardType\":\"%s\","
     "\"version\":\"%u.%u.%u\",\"action\":%u,\"udpRx\":%lu,"
     "\"freeHeap\":%lu,\"uptime\":%lu,"
     "\"rssi\":%d,\"chipModel\":\"%s\",\"flashSize\":%lu,\"sdkVersion\":\"%s\""
     "%s}",
-    childCfg.hostname, boardName,
+    childCfg.hostname, boardName, boardType,
     (unsigned)APP_MAJOR, (unsigned)APP_MINOR, (unsigned)APP_PATCH,
     (unsigned)childActType, (unsigned long)udpRxCount,
     (unsigned long)ESP.getFreeHeap(), (unsigned long)(millis() / 1000),

@@ -9,7 +9,10 @@
 
 // ── Board detection ───────────────────────────────────────────────────────────
 
-#if defined(ESP32)
+#if defined(ESP32) && defined(DMX_BRIDGE)
+  #define BOARD_ESP32
+  #define BOARD_DMX_BRIDGE
+#elif defined(ESP32)
   #define BOARD_ESP32
 #elif defined(ESP8266) || defined(ARDUINO_ARCH_ESP8266)
   #define BOARD_D1MINI
@@ -25,12 +28,12 @@
 #endif
 
 // BOARD_FASTLED = child with WS2812B/addressable strips via FastLED
-#if defined(BOARD_ESP32) || defined(BOARD_D1MINI)
+#if (defined(BOARD_ESP32) || defined(BOARD_D1MINI)) && !defined(BOARD_DMX_BRIDGE)
   #define BOARD_FASTLED
 #endif
 
 // BOARD_CHILD = any board acting as a child/performer
-#if defined(BOARD_FASTLED) || defined(BOARD_GIGA_CHILD)
+#if defined(BOARD_FASTLED) || defined(BOARD_GIGA_CHILD) || defined(BOARD_DMX_BRIDGE)
   #define BOARD_CHILD
 #endif
 
@@ -46,6 +49,12 @@
   #include <WiFi.h>
   #include <WiFiUdp.h>
   #include <time.h>
+#elif defined(BOARD_DMX_BRIDGE)
+  #include <WiFi.h>
+  #include <WiFiUdp.h>
+  #include <time.h>
+  #include <Preferences.h>
+  #include <HardwareSerial.h>
 #elif defined(BOARD_ESP32)
   #define FASTLED_ALLOW_INTERRUPTS 0
   #include <FastLED.h>
@@ -88,6 +97,19 @@
   #define PIN_LEDB      LEDB
   #define NUM_LEDS      1         // 1 RGB pixel (the onboard LED)
   #define MAX_LEDS      1
+  constexpr uint8_t LED_BRIGHTNESS = 255;
+#endif
+
+#ifdef BOARD_DMX_BRIDGE
+  // DMX-512 output via UART2 + RS-485 transceiver (CQRobot shield)
+  constexpr uint8_t  DMX_TX_PIN      = 17;  // GPIO17 = UART2 TX → RS-485 DI
+  constexpr uint8_t  DMX_EN_PIN      = 4;   // GPIO4  = RS-485 DE/RE enable
+  constexpr uint16_t DMX_UNIVERSE_MAX = 512; // DMX-512 channels per universe
+  constexpr uint16_t DMX_BAUD        = 250000;
+  constexpr uint8_t  DMX_FRAME_HZ    = 40;  // output frame rate
+  // Virtual LED array for action system compatibility
+  #define NUM_LEDS  170    // 512/3 = 170 RGB fixtures max
+  #define MAX_LEDS  170
   constexpr uint8_t LED_BRIGHTNESS = 255;
 #endif
 

@@ -248,7 +248,7 @@ void sendActionEvent() {
 
 // ── ESP32 multi-pin FastLED init ──────────────────────────────────────────────
 
-#ifdef BOARD_ESP32
+#if defined(BOARD_ESP32) && !defined(BOARD_DMX_BRIDGE)
 
 static void addLedsForPin(uint8_t pin, CRGB* data, uint16_t count) {
   switch (pin) {

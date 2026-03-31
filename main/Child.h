@@ -15,6 +15,8 @@
 
 #ifdef BOARD_GIGA_CHILD
   #include "GigaLED.h"       // provides CRGB, leds[], showSafe(), fill_solid()
+#elif defined(BOARD_DMX_BRIDGE)
+  #include "DmxBridge.h"     // provides CRGB, leds[], dmxBuf, dmxSendFrame()
 #endif
 
 // ── Child-specific constants ──────────────────────────────────────────────────
@@ -25,7 +27,9 @@ constexpr uint8_t LEDTYPE_APA102  = 2;
 
 // Per-board maximum strings (config UI and EEPROM only;
 // all boards always send 8-slot PONGs so the protocol is uniform)
-#if defined(BOARD_D1MINI)
+#if defined(BOARD_DMX_BRIDGE)
+  constexpr uint8_t CHILD_MAX_STRINGS = 1;  // DMX bridge: 1 "string" = the DMX universe
+#elif defined(BOARD_D1MINI)
   constexpr uint8_t CHILD_MAX_STRINGS = 2;
 #else  // BOARD_ESP32
   constexpr uint8_t CHILD_MAX_STRINGS = 8;

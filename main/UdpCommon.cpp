@@ -336,7 +336,7 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     ESP.restart();
 #endif
 
-#ifdef BOARD_ESP32
+#if defined(BOARD_ESP32) && !defined(BOARD_DMX_BRIDGE)
   } else if (strstr(req, " /test/pin")) {
     // Pin test: /test/pin?s=0 — flashes ONLY the selected string via FastLED
     // Uses string index (not GPIO pin) to address the correct LED range

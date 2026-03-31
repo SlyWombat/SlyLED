@@ -477,6 +477,17 @@ void bootAnimation() {
   }
   delay(BOOT_GIGA_HOLD_MS);
   clearAndShow();
+
+#elif defined(BOARD_DMX_BRIDGE)
+  // DMX bridge: brief red flash on DMX output to confirm wiring
+  clearAndShow();
+  delay(1000);
+  memset(dmxBuf, 0, sizeof(dmxBuf));
+  uint16_t addr = dmxCfg.startAddress;
+  if (addr <= DMX_UNIVERSE_MAX) dmxBuf[addr] = 255;
+  dmxSendFrame();
+  delay(500);
+  clearAndShow();
 #endif
   childBootDone = true;
 }
@@ -572,7 +583,7 @@ static uint8_t actionDelay(uint8_t at) {
 
 // ── ESP32 / Giga-child: blocking LED task ─────────────────────────────────
 
-#if defined(BOARD_ESP32) || defined(BOARD_GIGA_CHILD)
+#if (defined(BOARD_ESP32) && !defined(BOARD_DMX_BRIDGE)) || defined(BOARD_GIGA_CHILD)
 
 void ledTask(void* parameter) {
   (void)parameter;

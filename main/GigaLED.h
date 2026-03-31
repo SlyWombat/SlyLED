@@ -8,7 +8,8 @@
 #ifndef GIGALED_H
 #define GIGALED_H
 
-#ifdef BOARD_GIGA_CHILD
+// CRGB/CHSV types needed by Giga-child AND DMX bridge (no FastLED available)
+#if defined(BOARD_GIGA_CHILD) || defined(BOARD_DMX_BRIDGE)
 
 #include <Arduino.h>
 
@@ -36,19 +37,24 @@ struct CHSV {
 
 void hsv2rgb_rainbow(const CHSV& hsv, CRGB& rgb);
 
-// ── LED array and helpers ────────────────────────────────────────────────────
+// FastLED-compatible random helpers
+uint8_t  random8();
+uint8_t  random8(uint8_t lim);
+uint8_t  random8(uint8_t lo, uint8_t hi);
+uint16_t random16(uint16_t lim);
+uint8_t  qadd8(uint8_t a, uint8_t b);
+
+#endif  // BOARD_GIGA_CHILD || BOARD_DMX_BRIDGE
+
+#ifdef BOARD_GIGA_CHILD
+
+// ── LED array and Giga-specific helpers ─────────────────────────────────────
 
 extern CRGB leds[NUM_LEDS];
 
 inline void fill_solid(CRGB* arr, int count, CRGB color) {
   for (int i = 0; i < count; i++) arr[i] = color;
 }
-
-// FastLED-compatible random helpers
-uint8_t random8();
-uint8_t random8(uint8_t lim);
-uint8_t random8(uint8_t lo, uint8_t hi);
-uint8_t qadd8(uint8_t a, uint8_t b);
 
 // ── showSafe — output leds[0] to the onboard RGB pins via software PWM ───────
 

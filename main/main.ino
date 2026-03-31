@@ -48,6 +48,10 @@
 #include "OtaUpdate.h"
 #endif
 
+#ifdef BOARD_DMX_BRIDGE
+#include "DmxBridge.h"
+#endif
+
 // ── setup ─────────────────────────────────────────────────────────────────────
 
 void setup() {
@@ -58,7 +62,7 @@ void setup() {
   pinMode(DATA_PIN, OUTPUT);
   digitalWrite(DATA_PIN, LOW);
   delay(1);           // 1 ms reset pulse for WS2812B
-#elif defined(BOARD_ESP32)
+#elif defined(BOARD_ESP32) && !defined(BOARD_DMX_BRIDGE)
   // Default pin low for glitch prevention; real pins configured after config loads
   pinMode(2, OUTPUT);
   digitalWrite(2, LOW);
@@ -92,7 +96,9 @@ void setup() {
 
   connectWiFi();   // also calls initChildConfig() for BOARD_CHILD
 
-#ifdef BOARD_ESP32
+#ifdef BOARD_DMX_BRIDGE
+  dmxInit();
+#elif defined(BOARD_ESP32)
   // Config now loaded from NVS — init FastLED with per-string GPIO pins
   esp32InitLeds();
   FastLED.setBrightness(LED_BRIGHTNESS);
@@ -143,6 +149,8 @@ static void checkSerialCmd() {
           Serial.println("BOARD:giga-parent");
 #elif defined(BOARD_GIGA_CHILD)
           Serial.println("BOARD:giga-child");
+#elif defined(BOARD_DMX_BRIDGE)
+          Serial.println("BOARD:dmx-bridge");
 #elif defined(BOARD_ESP32)
           Serial.println("BOARD:esp32");
 #elif defined(BOARD_D1MINI)
@@ -248,6 +256,74 @@ void loop() {
   handleClient();
   otaCheckConfirm();
   yield();
+
+#elif defined(BOARD_DMX_BRIDGE)
+  // DMX bridge: render actions → leds[], copy to dmxBuf, send DMX frame at 40Hz
+  {
+    static unsigned long lastFrame = 0;
+    static uint8_t prevSeq = 0;
+    static unsigned long actStart = 0;
+
+    // Runner execution
+    if (childRunnerArmed && childStepCount > 0) {
+      uint32_t now = (uint32_t)currentEpoch();
+      if (now < 1577836800UL || now >= childRunnerStart) {
+        childRunnerArmed = false;
+        childRunnerActive = true;
+      }
+    }
+    if (childRunnerActive && childStepCount > 0) {
+      static uint8_t prevStep = 0xFF;
+      static unsigned long stepStart = 0;
+      uint32_t elapsed = (uint32_t)currentEpoch() - childRunnerStart;
+      uint8_t curStep = 0; uint32_t acc = 0; bool done = true;
+      for (uint8_t i = 0; i < childStepCount; i++) {
+        acc += childRunner[i].durationS;
+        if (elapsed < acc) { curStep = i; done = false; break; }
+      }
+      if (done) {
+        if (childRunnerLoop) { childRunnerStart += acc; prevStep = 0xFF; }
+        else { childRunnerActive = false; memset(leds, 0, sizeof(CRGB) * NUM_LEDS); }
+      } else {
+        if (curStep != prevStep) { prevStep = curStep; stepStart = millis(); }
+        memset(leds, 0, sizeof(CRGB) * NUM_LEDS);
+        unsigned long se = millis() - stepStart;
+        uint16_t dly = childRunner[curStep].delayMs;
+        if (se >= dly) {
+          applyAction(childRunner[curStep].actionType,
+                      childRunner[curStep].r, childRunner[curStep].g, childRunner[curStep].b,
+                      childRunner[curStep].p16a, childRunner[curStep].p8a,
+                      childRunner[curStep].p8b, childRunner[curStep].p8c, childRunner[curStep].p8d,
+                      se - dly, 0, dmxCfg.fixtureCount > 0 ? dmxCfg.fixtureCount - 1 : 0, false);
+        }
+      }
+    } else {
+      // Immediate action
+      uint8_t seq = childActSeq;
+      if (seq != prevSeq) { prevSeq = seq; actStart = millis(); }
+      uint8_t at = childActType;
+      if (at != ACT_OFF) {
+        memset(leds, 0, sizeof(CRGB) * NUM_LEDS);
+        applyAction(at, childActR, childActG, childActB,
+                    childActP16a, childActP8a, childActP8b,
+                    childActP8c, childActP8d,
+                    millis() - actStart, 0,
+                    dmxCfg.fixtureCount > 0 ? dmxCfg.fixtureCount - 1 : 0, false);
+      } else {
+        memset(leds, 0, sizeof(CRGB) * NUM_LEDS);
+      }
+    }
+
+    // Output DMX frame at 40Hz
+    if (millis() - lastFrame >= (1000 / DMX_FRAME_HZ)) {
+      lastFrame = millis();
+      dmxUpdateFromLeds();
+      dmxSendFrame();
+    }
+  }
+  handleClient();
+  otaCheckConfirm();
+  delay(5);
 
 #else  // ESP32
   handleClient();

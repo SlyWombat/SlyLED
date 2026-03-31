@@ -27,6 +27,20 @@
       ]
     },
     {
+      "id": "dmx-bridge-esp32",
+      "name": "DMX Bridge (ESP32)",
+      "description": "DMX-512 output via RS-485 transceiver — receives SlyLED actions, outputs DMX frames at 40Hz",
+      "board": "esp32",
+      "fqbn": "esp32:esp32:esp32",
+      "version": "7.4.0",
+      "file": "esp32-dmx/main.ino.merged.bin",
+      "flashMethod": "esptool",
+      "buildDefines": [
+        "DMX_BRIDGE"
+      ],
+      "buildFlags": "-DDMX_BRIDGE"
+    },
+    {
       "id": "child-led-giga",
       "name": "LED Performer (Giga R1)",
       "description": "Onboard RGB LED performer \u2014 1 pixel, all 14 effects",
