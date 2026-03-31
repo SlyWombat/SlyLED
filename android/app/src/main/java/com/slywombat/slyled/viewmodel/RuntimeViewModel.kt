@@ -52,6 +52,12 @@ class RuntimeViewModel @Inject constructor(
     private val _stageChildren = MutableStateFlow<List<Child>>(emptyList())
     val stageChildren = _stageChildren.asStateFlow()
 
+    private val _stageLayout = MutableStateFlow<Layout?>(null)
+    val stageLayout = _stageLayout.asStateFlow()
+
+    private val _stageFixtures = MutableStateFlow<List<Fixture>>(emptyList())
+    val stageFixtures = _stageFixtures.asStateFlow()
+
     fun load() {
         viewModelScope.launch {
             try { _timelines.value = repository.getTimelines() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getTimelines failed", e) }
@@ -59,6 +65,8 @@ class RuntimeViewModel @Inject constructor(
             try { _actions.value = repository.getActions() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getActions failed", e) }
             try { _spatialEffects.value = repository.getSpatialEffects() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getSpatialEffects failed", e) }
             try { _stageChildren.value = repository.getChildren() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getChildren failed", e) }
+            try { _stageLayout.value = repository.getLayout() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getLayout failed", e) }
+            try { _stageFixtures.value = repository.getFixtures() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getFixtures failed", e) }
         }
         // Poll timeline status
         viewModelScope.launch {

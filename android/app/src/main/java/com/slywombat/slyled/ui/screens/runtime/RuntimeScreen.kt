@@ -118,6 +118,8 @@ fun RuntimeScreen(viewModel: RuntimeViewModel = hiltViewModel()) {
                 second = previewSecond,
                 durationS = timelineStatus?.durationS ?: 0,
                 children = viewModel.stageChildren.collectAsState().value,
+                layout = viewModel.stageLayout.collectAsState().value,
+                fixtures = viewModel.stageFixtures.collectAsState().value,
             )
         }
 
@@ -185,6 +187,8 @@ fun ShowEmulatorCanvas(
     second: Int,
     durationS: Int,
     children: List<Child> = emptyList(),
+    layout: Layout? = null,
+    fixtures: List<Fixture> = emptyList(),
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -199,32 +203,39 @@ fun ShowEmulatorCanvas(
             ) {
                 val w = size.width
                 val h = size.height
+                val cw = (layout?.canvasW ?: 10000).toFloat()
+                val ch = (layout?.canvasH ?: 5000).toFloat()
+                val layChildren = layout?.children ?: emptyList()
 
-                // Stage border
+                // Stage border + grid
                 drawRect(Color(0xFF1E3A5F), style = Stroke(1f))
+                for (gx in 1..9) drawLine(Color(0xFF0C1222), Offset(gx * w / 10, 0f), Offset(gx * w / 10, h), 0.5f)
+                for (gy in 1..4) drawLine(Color(0xFF0C1222), Offset(0f, gy * h / 5), Offset(w, gy * h / 5), 0.5f)
 
                 if (children.isEmpty()) return@Canvas
 
-                // Direction vectors: E=+X, N=-Y(up), W=-X, S=+Y
                 val dirDx = floatArrayOf(1f, 0f, -1f, 0f)
                 val dirDy = floatArrayOf(0f, -1f, 0f, 1f)
-                val grayOff = Color(40, 40, 45)
 
-                // Distribute children evenly for now
-                children.forEachIndexed { idx, child ->
-                    val cx = (idx + 0.5f) * w / children.size
-                    val cy = h * 0.45f
+                children.forEach { child ->
+                    // Get position from layout
+                    val lc = layChildren.find { it.id == child.id }
+                    if (lc == null || (lc.x == 0 && lc.y == 0)) return@forEach
+
+                    val cx = (lc.x * w / cw).coerceIn(12f, w - 12f)
+                    val cy = (h - lc.y * h / ch).coerceIn(12f, h - 12f)
                     val sc = child.sc.coerceAtMost(child.strings.size)
 
-                    // Find preview colors for this child
+                    // Find preview colors for this child via fixture mapping
                     var previewColors: List<List<Int>>? = null
                     if (previewData.isNotEmpty()) {
-                        previewData.forEach { (_, frames) ->
-                            if (frames.isNotEmpty()) {
+                        val fix = fixtures.find { it.childId == child.id }
+                        if (fix != null) {
+                            val frames = previewData[fix.id.toString()]
+                            if (frames != null && frames.isNotEmpty()) {
                                 val dur = frames.size
                                 val sec = if (dur > 0) second % dur else 0
-                                if (previewColors == null && sec < frames.size)
-                                    previewColors = frames[sec]
+                                if (sec < frames.size) previewColors = frames[sec]
                             }
                         }
                     }
@@ -236,9 +247,8 @@ fun ShowEmulatorCanvas(
                         val dx = dirDx[sdir]
                         val dy = dirDy[sdir]
                         val lenMm = if (s.lengthMm < 500) (s.leds * 16).coerceAtLeast(500) else s.lengthMm
-                        val pxLen = (lenMm * w / 10000f).coerceAtLeast(25f)
+                        val pxLen = (if (dx != 0f) lenMm * w / cw else lenMm * h / ch).coerceAtLeast(20f)
 
-                        // Get color (gray if no show, preview color if running)
                         var r = 40; var g = 40; var b = 45; var lit = false
                         if (previewColors != null && si < previewColors!!.size) {
                             val pc = previewColors!![si]
@@ -247,7 +257,6 @@ fun ShowEmulatorCanvas(
                             }
                         }
 
-                        // Draw LED pixel dots
                         val dotCount = s.leds.coerceAtMost((pxLen / 3).toInt()).coerceAtLeast(5)
                         for (di in 0 until dotCount) {
                             val t = (di + 0.5f) / dotCount
@@ -259,13 +268,11 @@ fun ShowEmulatorCanvas(
                         }
                     }
 
-                    // Node
                     val nodeCol = if (child.status == 1) Color(0xFF22CC66) else Color(0xFF444444)
                     drawCircle(nodeCol, 5f, Offset(cx, cy))
                 }
             }
 
-            // Time display (only when running)
             if (durationS > 0) {
                 val m = second / 60; val s = second % 60
                 Text(
