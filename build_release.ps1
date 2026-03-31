@@ -78,9 +78,9 @@ if (-not $SkipAndroid) {
     $env:JAVA_HOME = 'C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot'
     $env:ANDROID_SDK_ROOT = 'C:\Android\Sdk'
     Set-Location "$root\android"
-    .\gradlew.bat assembleDebug --no-daemon
+    .\gradlew.bat assembleRelease --no-daemon
     if ($LASTEXITCODE -ne 0) { Write-Host "Android FAILED" -ForegroundColor Red; exit 1 }
-    $apkPath = Get-ChildItem -Path "C:\Android\build\slyled-app" -Recurse -Filter "app-debug.apk" | Select-Object -First 1
+    $apkPath = Get-ChildItem -Path "C:\Android\build\slyled-app" -Recurse -Filter "app-release.apk" | Select-Object -First 1
     if ($apkPath) {
         $apkSize = $apkPath.Length
         Write-Host "APK: $([math]::Round($apkSize/1MB, 1)) MB at $($apkPath.FullName)" -ForegroundColor Green
@@ -92,7 +92,7 @@ if (-not $SkipAndroid) {
 Write-Host "`n=== Build Complete: v$version ===" -ForegroundColor Cyan
 Write-Host "  Firmware:  firmware\esp32\main.ino.bin, firmware\d1mini\main.ino.bin"
 Write-Host "  Windows:   desktop\windows\dist\SlyLED.exe"
-Write-Host "  Android:   C:\Android\build\slyled-app\outputs\apk\debug\app-debug.apk"
+Write-Host "  Android:   C:\Android\build\slyled-app\outputs\apk\debug\app-release.apk"
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  git add -A && git commit -m 'feat: v$version' && git push origin 3d"

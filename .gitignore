@@ -83,3 +83,8 @@ Makefile.*
 moc_*.cpp
 ui_*.h
 main/arduino_secrets.h.bak
+
+# Android signing (never commit)
+android/*.jks
+android/*.keystore
+android/keystore.properties
