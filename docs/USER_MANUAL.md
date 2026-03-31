@@ -163,13 +163,22 @@ The editor shows:
 ## 5. Baking & Playback
 
 ### What Is Baking?
-Baking is the process of pre-computing a show. The system:
-1. Steps through every frame of the timeline (at 40 frames/second)
-2. Evaluates all active spatial effects for every pixel
-3. Analyzes the resulting color streams to find matching action types
-4. Outputs per-fixture action sequences that children already understand
+Baking compiles a timeline into minimal action instructions for each performer. The smart bake engine analyzes each clip's spatial geometry directly — it does NOT render frames.
 
-**Why bake?** High-density LED layouts have too many pixels to stream in real-time over WiFi. Baking pre-computes the show so each child runs its part independently.
+**How it works:**
+1. For each spatial effect clip, compute the intersection timing between the effect volume and each pixel's 3D position
+2. Detect sweep patterns (brightness moving along a string) → emit WIPE_SEQ with computed speed per pixel and direction
+3. For stationary effects → emit SOLID or FADE
+4. For classic action clips → pass the action type directly (children already know how to run Chase, Fire, Rainbow, etc.)
+
+**Example: Rainbow Across (sphere sweeping left to right)**
+- ESP Dual string 0 (West): `WIPE_SEQ direction=West, speed=34ms/pixel` — pixels light up sequentially from end toward node
+- ESP Dual string 1 (East): `WIPE_SEQ direction=East, speed=65ms/pixel` — pixels light up from node outward
+- D1 Mini: `WIPE_SEQ at t=13.2s, speed=34ms/pixel` — starts later as sphere reaches it
+
+This produces **2-3 instructions per fixture** instead of 16 averaged color blocks. Each child runs the action locally — the actual per-pixel sweep happens on the hardware.
+
+**Why bake?** Children can't receive per-pixel streaming over WiFi. Baking pre-computes the optimal action type + parameters + timing so each child runs its part independently. Bake time is ~200ms regardless of show duration.
 
 ### Starting a Bake
 1. Open a timeline in the Runtime tab
