@@ -551,4 +551,8 @@ def segments_to_load_steps(segments, max_steps=16):
             step["_ledCount"] = seg["ledCount"]
             step["_stringIndex"] = seg.get("stringIndex", 0)
         steps.append(step)
+    # Append a final blackout so LEDs turn off when the show ends naturally
+    if steps and steps[-1]["actionType"] != ACT_BLACKOUT and len(steps) < max_steps:
+        steps.append({"actionType": ACT_BLACKOUT, "durationS": 1, "delayMs": 0,
+                       "r": 0, "g": 0, "b": 0})
     return steps

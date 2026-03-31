@@ -1277,6 +1277,9 @@ def api_bake_sync(tid):
                 step["_ledCount"] = seg["ledCount"]
                 step["_stringIndex"] = seg.get("stringIndex", 0)
             steps.append(step)
+        # Append final blackout so LEDs turn off when the show ends
+        if steps and steps[-1].get("type", 0) != 0 and len(steps) < 16:
+            steps.append({"type": 0, "durationS": 1, "r": 0, "g": 0, "b": 0})
         if steps:
             plan.append({"child": child, "steps": steps, "name": fixture.get("name", "?")})
 
@@ -1419,16 +1422,20 @@ def api_timeline_stop(tid):
     pkt_stop = _hdr(CMD_RUNNER_STOP)
     pkt_off = _hdr(CMD_ACTION_STOP)
     stopped = 0
-    for child in _children:
-        if not child.get("ip"):
-            continue
-        _send(child["ip"], pkt_stop)
-        _send(child["ip"], pkt_off)
-        stopped += 1
+    # Send stop packets 3 times for UDP reliability
+    for _attempt in range(3):
+        for child in _children:
+            if not child.get("ip"):
+                continue
+            _send(child["ip"], pkt_stop)
+            _send(child["ip"], pkt_off)
+            if _attempt == 0:
+                stopped += 1
 
     with _lock:
         _settings["runnerRunning"] = False
         _settings["activeTimeline"] = -1
+        _settings["runnerStartEpoch"] = 0
         _save("settings", _settings)
 
     return jsonify(ok=True, stopped=stopped)
@@ -2116,6 +2123,7 @@ def _stop_all_shows():
         _settings["runnerRunning"] = False
         _settings["activeRunner"] = -1
         _settings["activeShow"] = -1
+        _settings["activeTimeline"] = -1
         _settings["runnerStartEpoch"] = 0
         _settings["runnerElapsed"] = 0
         _save("settings", _settings)

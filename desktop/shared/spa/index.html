@@ -2283,9 +2283,20 @@ function emuLoadStage(){
           });
         }
         if(s.runnerStartEpoch)_emuT=Math.max(0,Math.floor(Date.now()/1000)-s.runnerStartEpoch);
+        // Sync timeline editor playhead to server elapsed time
+        var elapsed=_emuT;
+        var dur=_curTl?(_curTl.durationS||0):0;
+        if(dur>0&&elapsed>=dur){elapsed=(_curTl&&_curTl.loop)?elapsed%dur:dur;}
+        var ph=document.getElementById('tl-playhead');
+        if(ph)ph.style.left=(60+elapsed*_tlPxPerSec)+'px';
+        var td=document.getElementById('tl-time');
+        if(td){var m=Math.floor(elapsed/60),sec=elapsed%60;td.textContent=(m<10?'0':'')+m+':'+(sec<10?'0':'')+sec.toFixed(0);}
       } else if(_emuRunning){
         _emuRunning=false;_emuPreview=null;_emuT=0;
         if(_emuAnimId){cancelAnimationFrame(_emuAnimId);_emuAnimId=null;}
+        // Reset playhead
+        var ph=document.getElementById('tl-playhead');if(ph)ph.style.left='60px';
+        var td=document.getElementById('tl-time');if(td)td.textContent='00:00.0';
       }
     });
     emuDraw();
