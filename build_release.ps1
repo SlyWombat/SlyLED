@@ -69,6 +69,22 @@ if (-not $SkipWindows) {
     if ($LASTEXITCODE -ne 0) { Write-Host "Windows build FAILED" -ForegroundColor Red; exit 1 }
     $exeSize = (Get-Item "$root\desktop\windows\dist\SlyLED.exe").Length
     Write-Host "SlyLED.exe: $([math]::Round($exeSize/1MB, 1)) MB" -ForegroundColor Green
+
+    # Build installer via Inno Setup
+    $iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+    if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" }
+    if (Test-Path $iscc) {
+        Write-Host "Building installer..." -ForegroundColor Yellow
+        & $iscc "$root\desktop\windows\installer.iss"
+        if ($LASTEXITCODE -eq 0) {
+            $setupSize = (Get-Item "$root\desktop\windows\dist\SlyLED-Setup.exe").Length
+            Write-Host "SlyLED-Setup.exe: $([math]::Round($setupSize/1MB, 1)) MB" -ForegroundColor Green
+        } else {
+            Write-Host "Installer build FAILED (non-fatal)" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "Inno Setup not found — skipping installer (exe still available)" -ForegroundColor Yellow
+    }
     Set-Location $root
 }
 
@@ -92,7 +108,8 @@ if (-not $SkipAndroid) {
 Write-Host "`n=== Build Complete: v$version ===" -ForegroundColor Cyan
 Write-Host "  Firmware:  firmware\esp32\main.ino.bin, firmware\d1mini\main.ino.bin"
 Write-Host "  Windows:   desktop\windows\dist\SlyLED.exe"
-Write-Host "  Android:   C:\Android\build\slyled-app\outputs\apk\debug\app-release.apk"
+Write-Host "  Installer: desktop\windows\dist\SlyLED-Setup.exe"
+Write-Host "  Android:   C:\Android\build\slyled-app\outputs\apk\release\app-release.apk"
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  git add -A && git commit -m 'feat: v$version' && git push origin 3d"
