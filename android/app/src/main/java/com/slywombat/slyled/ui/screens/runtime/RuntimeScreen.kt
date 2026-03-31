@@ -1,731 +1,589 @@
 package com.slywombat.slyled.ui.screens.runtime
 
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.slywombat.slyled.data.model.*
 import com.slywombat.slyled.viewmodel.RuntimeViewModel
-import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RuntimeScreen(viewModel: RuntimeViewModel = hiltViewModel()) {
-    // Reload on every screen visit
-    LaunchedEffect(Unit) { viewModel.loadAll() }
-
-    val runners by viewModel.runners.collectAsState()
-    val flights by viewModel.flights.collectAsState()
-    val shows by viewModel.shows.collectAsState()
-    val children by viewModel.children.collectAsState()
-    val settings by viewModel.settings.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
-    val error by viewModel.error.collectAsState()
+    val timelines by viewModel.timelines.collectAsState()
+    val selectedTimeline by viewModel.selectedTimeline.collectAsState()
+    val bakeStatus by viewModel.bakeStatus.collectAsState()
+    val syncStatus by viewModel.syncStatus.collectAsState()
+    val timelineStatus by viewModel.timelineStatus.collectAsState()
     val message by viewModel.message.collectAsState()
+    val presets by viewModel.presets.collectAsState()
+    val previewData by viewModel.previewData.collectAsState()
+    val previewSecond by viewModel.previewSecond.collectAsState()
+    var showNewDialog by remember { mutableStateOf(false) }
+    var showPresetDialog by remember { mutableStateOf(false) }
 
-    var selectedTab by remember { mutableIntStateOf(0) }
-    val tabTitles = listOf("Runners", "Flights", "Shows")
+    LaunchedEffect(Unit) { viewModel.load() }
 
-    // Dialogs
-    var showNewRunner by remember { mutableStateOf(false) }
-    var showNewFlight by remember { mutableStateOf(false) }
-    var editingFlight by remember { mutableStateOf<Flight?>(null) }
-    var showNewShow by remember { mutableStateOf(false) }
-    var editingShow by remember { mutableStateOf<Show?>(null) }
-    var deleteConfirm by remember { mutableStateOf<Triple<String, Int, String>?>(null) }
-
-    // Brightness / loop local state synced from settings
-    var brightness by remember { mutableIntStateOf(settings.globalBrightness ?: 255) }
-    var loop by remember { mutableStateOf(settings.runnerLoop) }
-    LaunchedEffect(settings) {
-        brightness = settings.globalBrightness ?: 255
-        loop = settings.runnerLoop
-    }
-
-    // Snackbar for messages
-    val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(message) {
-        message?.let {
-            snackbarHostState.showSnackbar(it)
+    // Show snackbar messages
+    message?.let {
+        LaunchedEffect(it) {
+            delay(3000)
             viewModel.clearMessage()
         }
     }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        floatingActionButton = {
-            FloatingActionButton(onClick = {
-                when (selectedTab) {
-                    0 -> showNewRunner = true
-                    1 -> { editingFlight = null; showNewFlight = true }
-                    2 -> { editingShow = null; showNewShow = true }
-                }
-            }) {
-                Icon(Icons.Default.Add, contentDescription = "New")
-            }
-        }
-    ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            // Error banner
-            error?.let { msg ->
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp).fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(msg, color = MaterialTheme.colorScheme.onErrorContainer,
-                            modifier = Modifier.weight(1f))
-                        TextButton(onClick = { viewModel.clearError() }) { Text("Dismiss") }
-                    }
-                }
-            }
-
-            // Tab row
-            TabRow(selectedTabIndex = selectedTab) {
-                tabTitles.forEachIndexed { idx, title ->
-                    Tab(selected = selectedTab == idx, onClick = { selectedTab = idx },
-                        text = { Text(title) })
-                }
-            }
-
-            if (isLoading && runners.isEmpty() && flights.isEmpty() && shows.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            } else {
-                when (selectedTab) {
-                    0 -> RunnersTab(
-                        runners = runners,
-                        brightness = brightness,
-                        loop = loop,
-                        onBrightnessChange = { brightness = it },
-                        onBrightnessFinished = { viewModel.saveSettings(brightness, loop) },
-                        onLoopChange = { loop = it; viewModel.saveSettings(brightness, it) },
-                        onCompute = { viewModel.computeRunner(it) },
-                        onSync = { viewModel.syncRunner(it) },
-                        onStart = { viewModel.startRunner(it) },
-                        onStopAll = { viewModel.stopRunners() },
-                        onDelete = { id, name ->
-                            deleteConfirm = Triple("runner", id, name)
-                        }
-                    )
-                    1 -> FlightsTab(
-                        flights = flights,
-                        runners = runners,
-                        children = children,
-                        onEdit = { editingFlight = it; showNewFlight = true },
-                        onDelete = { id, name ->
-                            deleteConfirm = Triple("flight", id, name)
-                        }
-                    )
-                    2 -> ShowsTab(
-                        shows = shows,
-                        flights = flights,
-                        onStart = { viewModel.startShow(it) },
-                        onStopAll = { viewModel.stopShows() },
-                        onEdit = { editingShow = it; showNewShow = true },
-                        onDelete = { id, name ->
-                            deleteConfirm = Triple("show", id, name)
-                        }
-                    )
-                }
-            }
-        }
-    }
-
-    // Delete confirmation
-    deleteConfirm?.let { (kind, id, name) ->
-        AlertDialog(
-            onDismissRequest = { deleteConfirm = null },
-            title = { Text("Delete ${kind.replaceFirstChar { it.uppercase() }}") },
-            text = { Text("Delete \"$name\"?") },
-            confirmButton = {
-                TextButton(onClick = {
-                    when (kind) {
-                        "runner" -> viewModel.deleteRunner(id)
-                        "flight" -> viewModel.deleteFlight(id)
-                        "show" -> viewModel.deleteShow(id)
-                    }
-                    deleteConfirm = null
-                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { deleteConfirm = null }) { Text("Cancel") }
-            }
-        )
-    }
-
-    // New runner dialog
-    if (showNewRunner) {
-        NewRunnerDialog(
-            onConfirm = { viewModel.createRunner(it); showNewRunner = false },
-            onDismiss = { showNewRunner = false }
-        )
-    }
-
-    // Flight editor dialog
-    if (showNewFlight) {
-        FlightEditorDialog(
-            initial = editingFlight,
-            runners = runners,
-            children = children,
-            onSave = { flight ->
-                if (editingFlight != null) {
-                    viewModel.updateFlight(editingFlight!!.id, flight)
-                } else {
-                    viewModel.createFlight(flight)
-                }
-                showNewFlight = false
-                editingFlight = null
-            },
-            onDismiss = { showNewFlight = false; editingFlight = null }
-        )
-    }
-
-    // Show editor dialog
-    if (showNewShow) {
-        ShowEditorDialog(
-            initial = editingShow,
-            flights = flights,
-            onSave = { show ->
-                if (editingShow != null) {
-                    viewModel.updateShow(editingShow!!.id, show)
-                } else {
-                    viewModel.createShow(show)
-                }
-                showNewShow = false
-                editingShow = null
-            },
-            onDismiss = { showNewShow = false; editingShow = null }
-        )
-    }
-}
-
-// ── Runners Tab ──────────────────────────────────────────────────────────────
-
-@Composable
-private fun RunnersTab(
-    runners: List<RunnerSummary>,
-    brightness: Int,
-    loop: Boolean,
-    onBrightnessChange: (Int) -> Unit,
-    onBrightnessFinished: () -> Unit,
-    onLoopChange: (Boolean) -> Unit,
-    onCompute: (Int) -> Unit,
-    onSync: (Int) -> Unit,
-    onStart: (Int) -> Unit,
-    onStopAll: () -> Unit,
-    onDelete: (Int, String) -> Unit
-) {
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        // Global controls
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Text("Global Controls", style = MaterialTheme.typography.titleSmall)
-                Spacer(Modifier.height(8.dp))
-
-                Text("Brightness: $brightness", style = MaterialTheme.typography.bodySmall)
-                Slider(
-                    value = brightness.toFloat(),
-                    onValueChange = { onBrightnessChange(it.roundToInt()) },
-                    onValueChangeFinished = onBrightnessFinished,
-                    valueRange = 0f..255f,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Loop", modifier = Modifier.weight(1f))
-                    Switch(checked = loop, onCheckedChange = onLoopChange)
-                }
-
-                Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = onStopAll,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error),
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("Stop All Runners") }
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        if (runners.isEmpty()) {
-            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                Text("No runners yet. Tap + to create one.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        } else {
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f)
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Header
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                items(runners, key = { it.id }) { runner ->
-                    RunnerCard(
-                        runner = runner,
-                        onCompute = { onCompute(runner.id) },
-                        onSync = { onSync(runner.id) },
-                        onStart = { onStart(runner.id) },
-                        onDelete = { onDelete(runner.id, runner.name) }
-                    )
+                Text("Timelines", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                FilledTonalButton(onClick = { showPresetDialog = true }) {
+                    Icon(Icons.Default.AutoAwesome, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Presets")
+                }
+                FilledTonalButton(onClick = { showNewDialog = true }) {
+                    Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("New")
+                }
+            }
+        }
+
+        // Active show status
+        if (timelineStatus != null && timelineStatus!!.running) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Now Playing: ${timelineStatus!!.name}", fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        val elapsed = timelineStatus!!.elapsed
+                        val total = timelineStatus!!.durationS
+                        val progress = if (total > 0) elapsed.toFloat() / total else 0f
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp))
+                        )
+                        Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                            Text("${elapsed}s / ${total}s", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.weight(1f))
+                            if (timelineStatus!!.loop) Text("Loop", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = { viewModel.stopTimeline(timelineStatus!!.id) },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        ) { Text("Stop Show") }
+                    }
+                }
+            }
+        }
+
+        // Stage preview canvas — always visible, gray pixels when idle
+        item {
+            ShowEmulatorCanvas(
+                previewData = previewData,
+                second = previewSecond,
+                durationS = timelineStatus?.durationS ?: 0,
+                children = viewModel.stageChildren.collectAsState().value,
+                layout = viewModel.stageLayout.collectAsState().value,
+                fixtures = viewModel.stageFixtures.collectAsState().value,
+            )
+        }
+
+        // Timeline list
+        items(timelines) { tl ->
+            TimelineCard(
+                timeline = tl,
+                isSelected = selectedTimeline?.id == tl.id,
+                onSelect = { viewModel.selectTimeline(tl.id) },
+                onDelete = { viewModel.deleteTimeline(tl.id) },
+                onBakeAndStart = { viewModel.bakeAndStart(tl.id) },
+                bakeStatus = if (selectedTimeline?.id == tl.id) bakeStatus else null,
+                syncStatus = if (selectedTimeline?.id == tl.id) syncStatus else null,
+            )
+        }
+
+        if (timelines.isEmpty()) {
+            item {
+                Text(
+                    "No timelines yet. Create one or load a preset.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(32.dp)
+                )
+            }
+        }
+
+        // Message
+        message?.let { msg ->
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
+                    Text(msg, modifier = Modifier.padding(12.dp), fontSize = 13.sp)
                 }
             }
         }
     }
+
+    // New timeline dialog
+    if (showNewDialog) {
+        NewTimelineDialog(
+            onDismiss = { showNewDialog = false },
+            onCreate = { name, dur ->
+                viewModel.createTimeline(name, dur)
+                showNewDialog = false
+            }
+        )
+    }
+
+    // Preset dialog — fetch presets when opened
+    if (showPresetDialog) {
+        LaunchedEffect(Unit) { viewModel.loadPresets() }
+        PresetDialog(
+            presets = presets,
+            onDismiss = { showPresetDialog = false },
+            onSelect = { id ->
+                viewModel.loadPreset(id)
+                showPresetDialog = false
+            }
+        )
+    }
 }
 
 @Composable
-private fun RunnerCard(
-    runner: RunnerSummary,
-    onCompute: () -> Unit,
-    onSync: () -> Unit,
-    onStart: () -> Unit,
-    onDelete: () -> Unit
+fun ShowEmulatorCanvas(
+    previewData: Map<String, List<List<List<Int>>>>,
+    second: Int,
+    durationS: Int,
+    children: List<Child> = emptyList(),
+    layout: Layout? = null,
+    fixtures: List<Fixture> = emptyList(),
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            Text("Stage Preview", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Spacer(Modifier.height(6.dp))
+
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(150.dp)
+                    .background(Color(0xFF060A12))
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(runner.name.ifBlank { "Untitled" },
-                        style = MaterialTheme.typography.titleSmall)
-                    Text("${runner.steps} steps / ${runner.totalDurationS}s",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                if (runner.computed) {
-                    SuggestionChip(
-                        onClick = {},
-                        label = { Text("Computed", style = MaterialTheme.typography.labelSmall) },
-                        colors = SuggestionChipDefaults.suggestionChipColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer)
-                    )
+                val w = size.width
+                val h = size.height
+                val cw = (layout?.canvasW ?: 10000).toFloat()
+                val ch = (layout?.canvasH ?: 5000).toFloat()
+                val layChildren = layout?.children ?: emptyList()
+
+                // Stage border + grid
+                drawRect(Color(0xFF1E3A5F), style = Stroke(1f))
+                for (gx in 1..9) drawLine(Color(0xFF0C1222), Offset(gx * w / 10, 0f), Offset(gx * w / 10, h), 0.5f)
+                for (gy in 1..4) drawLine(Color(0xFF0C1222), Offset(0f, gy * h / 5), Offset(w, gy * h / 5), 0.5f)
+
+                if (children.isEmpty()) return@Canvas
+
+                val dirDx = floatArrayOf(1f, 0f, -1f, 0f)
+                val dirDy = floatArrayOf(0f, -1f, 0f, 1f)
+
+                children.forEach { child ->
+                    // Get position from layout
+                    val lc = layChildren.find { it.id == child.id }
+                    if (lc == null || (lc.x == 0 && lc.y == 0)) return@forEach
+
+                    val cx = (lc.x * w / cw).coerceIn(12f, w - 12f)
+                    val cy = (h - lc.y * h / ch).coerceIn(12f, h - 12f)
+                    val sc = child.sc.coerceAtMost(child.strings.size)
+
+                    // Find preview colors for this child via fixture mapping
+                    var previewColors: List<List<Int>>? = null
+                    if (previewData.isNotEmpty()) {
+                        val fix = fixtures.find { it.childId == child.id }
+                        if (fix != null) {
+                            val frames = previewData[fix.id.toString()]
+                            if (frames != null && frames.isNotEmpty()) {
+                                val dur = frames.size
+                                val sec = if (dur > 0) second % dur else 0
+                                if (sec < frames.size) previewColors = frames[sec]
+                            }
+                        }
+                    }
+
+                    for (si in 0 until sc) {
+                        val s = child.strings[si]
+                        if (s.leds <= 0) continue
+                        val sdir = s.stripDirection.coerceIn(0, 3)
+                        val dx = dirDx[sdir]
+                        val dy = dirDy[sdir]
+                        val lenMm = if (s.lengthMm < 500) (s.leds * 16).coerceAtLeast(500) else s.lengthMm
+                        val pxLen = (if (dx != 0f) lenMm * w / cw else lenMm * h / ch).coerceAtLeast(20f)
+
+                        var r = 40; var g = 40; var b = 45; var lit = false
+                        if (previewColors != null && si < previewColors!!.size) {
+                            val pc = previewColors!![si]
+                            if (pc.size >= 3 && pc[0] + pc[1] + pc[2] > 3) {
+                                r = pc[0]; g = pc[1]; b = pc[2]; lit = true
+                            }
+                        }
+
+                        val dotCount = s.leds.coerceAtMost((pxLen / 3).toInt()).coerceAtLeast(5)
+                        for (di in 0 until dotCount) {
+                            val t = (di + 0.5f) / dotCount
+                            val dpx = cx + dx * pxLen * t
+                            val dpy = cy + dy * pxLen * t
+                            val dotR = if (lit) 3f else 1.8f
+                            drawCircle(Color(r, g, b), dotR, Offset(dpx, dpy))
+                            if (lit) drawCircle(Color(r, g, b, 30), 5f, Offset(dpx, dpy))
+                        }
+                    }
+
+                    val nodeCol = if (child.status == 1) Color(0xFF22CC66) else Color(0xFF444444)
+                    drawCircle(nodeCol, 5f, Offset(cx, cy))
                 }
             }
+
+            if (durationS > 0) {
+                val m = second / 60; val s = second % 60
+                Text(
+                    "%02d:%02d / %02d:%02d".format(m, s, durationS / 60, durationS % 60),
+                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun TimelineCard(
+    timeline: Timeline,
+    isSelected: Boolean,
+    onSelect: () -> Unit,
+    onDelete: () -> Unit,
+    onBakeAndStart: () -> Unit,
+    bakeStatus: BakeStatus?,
+    syncStatus: SyncStatus?,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onSelect() }
+            .then(if (isSelected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp)) else Modifier),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(timeline.name, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("${timeline.durationS}s", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (timeline.loop) {
+                    Spacer(Modifier.width(6.dp))
+                    Icon(Icons.Default.Loop, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+
+            val trackCount = timeline.tracks.size
+            val clipCount = timeline.tracks.sumOf { it.clips.size }
+            val hasStage = timeline.tracks.any { it.allPerformers }
+            Text(
+                "$trackCount tracks, $clipCount clips${if (hasStage) " (stage)" else ""}",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // Clip editor when selected
+            if (isSelected) {
+                Spacer(Modifier.height(8.dp))
+                timeline.tracks.forEachIndexed { ti, track ->
+                    val trackName = if (track.allPerformers) "★ Stage" else "Track ${ti + 1}"
+                    Text("$trackName: ${track.clips.size} clips", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            // Bake/sync progress (when selected)
+            if (isSelected && bakeStatus != null && bakeStatus.running) {
+                Spacer(Modifier.height(8.dp))
+                Text("Baking: ${bakeStatus.status}", fontSize = 12.sp)
+                LinearProgressIndicator(
+                    progress = { (bakeStatus.progress.toFloat() / 100f).coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                )
+            }
+
+            if (isSelected && syncStatus != null && !syncStatus.done) {
+                Spacer(Modifier.height(8.dp))
+                Text("Syncing: ${syncStatus.readyCount}/${syncStatus.totalPerformers} ready", fontSize = 12.sp)
+                syncStatus.performers.forEach { (_, p) ->
+                    Row(modifier = Modifier.padding(start = 8.dp, top = 2.dp)) {
+                        val icon = when (p.status) {
+                            "ready" -> "\u2705"
+                            "syncing" -> "\u25b6"
+                            "verifying" -> "\ud83d\udd0d"
+                            "failed" -> "\u274c"
+                            else -> "\u23f3"
+                        }
+                        Text("$icon ${p.name}: ${p.status}", fontSize = 11.sp)
+                    }
+                }
+            }
+
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                FilledTonalButton(onClick = onCompute, modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
-                    Text("Compute", style = MaterialTheme.typography.labelSmall)
-                }
-                FilledTonalButton(onClick = onSync, modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
-                    Text("Sync", style = MaterialTheme.typography.labelSmall)
-                }
-                Button(onClick = onStart, modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null,
-                        modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(2.dp))
-                    Text("Start", style = MaterialTheme.typography.labelSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onBakeAndStart, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Sync & Start")
                 }
                 IconButton(onClick = onDelete) {
-                    Icon(Icons.Default.Delete, contentDescription = "Delete",
-                        tint = MaterialTheme.colorScheme.error)
+                    Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
                 }
             }
         }
     }
 }
 
-// ── Flights Tab ──────────────────────────────────────────────────────────────
-
 @Composable
-private fun FlightsTab(
-    flights: List<Flight>,
-    runners: List<RunnerSummary>,
-    children: List<Child>,
-    onEdit: (Flight) -> Unit,
-    onDelete: (Int, String) -> Unit
-) {
-    if (flights.isEmpty()) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No flights yet. Tap + to create one.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    } else {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(flights, key = { it.id }) { flight ->
-                val runnerName = runners.find { it.id == flight.runnerId }?.name ?: "None"
-                val performerNames = flight.performerIds.mapNotNull { pid ->
-                    children.find { it.id == pid }?.let {
-                        if (it.name.isNotBlank() && it.name != it.hostname) it.name else it.hostname
-                    }
-                }
-
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.padding(12.dp).fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(flight.name.ifBlank { "Untitled" },
-                                style = MaterialTheme.typography.titleSmall)
-                            Text("Runner: $runnerName",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            if (performerNames.isNotEmpty()) {
-                                Text("Performers: ${performerNames.joinToString(", ")}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            Text("Priority: ${flight.priority}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        IconButton(onClick = { onEdit(flight) }) {
-                            Icon(Icons.Default.Edit, contentDescription = "Edit",
-                                tint = MaterialTheme.colorScheme.primary)
-                        }
-                        IconButton(onClick = { onDelete(flight.id, flight.name) }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Delete",
-                                tint = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ── Shows Tab ────────────────────────────────────────────────────────────────
-
-@Composable
-private fun ShowsTab(
-    shows: List<Show>,
-    flights: List<Flight>,
-    onStart: (Int) -> Unit,
-    onStopAll: () -> Unit,
-    onEdit: (Show) -> Unit,
-    onDelete: (Int, String) -> Unit
-) {
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Button(
-            onClick = onStopAll,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.error),
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("Stop All Shows") }
-
-        Spacer(Modifier.height(12.dp))
-
-        if (shows.isEmpty()) {
-            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                Text("No shows yet. Tap + to create one.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        } else {
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                items(shows, key = { it.id }) { show ->
-                    val flightNames = show.flightIds.mapNotNull { fid ->
-                        flights.find { it.id == fid }?.name
-                    }
-
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(show.name.ifBlank { "Untitled" },
-                                        style = MaterialTheme.typography.titleSmall)
-                                    if (flightNames.isNotEmpty()) {
-                                        Text("Flights: ${flightNames.joinToString(", ")}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                }
-                                if (show.loop) {
-                                    SuggestionChip(
-                                        onClick = {},
-                                        label = { Text("Loop", style = MaterialTheme.typography.labelSmall) }
-                                    )
-                                }
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Button(onClick = { onStart(show.id) },
-                                    modifier = Modifier.weight(1f)) {
-                                    Icon(Icons.Default.PlayArrow, contentDescription = null,
-                                        modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Start")
-                                }
-                                IconButton(onClick = { onEdit(show) }) {
-                                    Icon(Icons.Default.Edit, contentDescription = "Edit",
-                                        tint = MaterialTheme.colorScheme.primary)
-                                }
-                                IconButton(onClick = { onDelete(show.id, show.name) }) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Delete",
-                                        tint = MaterialTheme.colorScheme.error)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ── Dialogs ──────────────────────────────────────────────────────────────────
-
-@Composable
-private fun NewRunnerDialog(onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+fun NewTimelineDialog(onDismiss: () -> Unit, onCreate: (String, Int) -> Unit) {
     var name by remember { mutableStateOf("") }
+    var duration by remember { mutableStateOf("30") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("New Runner") },
+        title = { Text("New Timeline") },
         text = {
-            OutlinedTextField(
-                value = name,
-                onValueChange = { name = it },
-                label = { Text("Runner name") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(name) }, enabled = name.isNotBlank()) {
-                Text("Create")
+            Column {
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") })
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(value = duration, onValueChange = { duration = it }, label = { Text("Duration (s)") })
             }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
+        confirmButton = {
+            TextButton(onClick = { onCreate(name, duration.toIntOrNull() ?: 30) }) { Text("Create") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+fun PresetDialog(presets: List<ShowPreset>?, onDismiss: () -> Unit, onSelect: (String) -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Load Preset Show") },
+        text = {
+            when {
+                presets == null -> {
+                    // Loading state
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                        Spacer(Modifier.height(8.dp))
+                        Text("Loading presets...", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                presets.isEmpty() -> {
+                    // Error/empty state
+                    Text("No presets available. Check server connection.",
+                        color = MaterialTheme.colorScheme.error, fontSize = 13.sp,
+                        modifier = Modifier.padding(16.dp))
+                }
+                else -> {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(presets) { p ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth().clickable { onSelect(p.id) },
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(p.name, fontWeight = FontWeight.Bold)
+                                    Text(p.desc, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FlightEditorDialog(
-    initial: Flight?,
-    runners: List<RunnerSummary>,
-    children: List<Child>,
-    onSave: (Flight) -> Unit,
-    onDismiss: () -> Unit
+fun ClipEditorSection(
+    timeline: Timeline,
+    actions: List<Action>,
+    spatialEffects: List<SpatialEffect>,
+    onAddClip: (trackIdx: Int, TimelineClip) -> Unit,
+    onRemoveClip: (trackIdx: Int, clipIdx: Int) -> Unit,
 ) {
-    var name by remember { mutableStateOf(initial?.name ?: "") }
-    var runnerId by remember { mutableStateOf(initial?.runnerId) }
-    var selectedPerformers by remember {
-        mutableStateOf(initial?.performerIds?.toSet() ?: emptySet())
-    }
-    var priority by remember { mutableIntStateOf(initial?.priority ?: 1) }
-    var runnerExpanded by remember { mutableStateOf(false) }
+    var showAddDialog by remember { mutableStateOf(false) }
+    var addTrackIdx by remember { mutableIntStateOf(0) }
 
-    val isEditing = initial != null
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text("Tracks & Clips", fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (isEditing) "Edit Flight" else "New Flight") },
-        text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+        timeline.tracks.forEachIndexed { ti, track ->
+            val trackName = if (track.allPerformers) "★ Stage (All)" else "Track ${ti + 1}"
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
             ) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Flight name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                // Runner picker
-                ExposedDropdownMenuBox(
-                    expanded = runnerExpanded,
-                    onExpandedChange = { runnerExpanded = it }
-                ) {
-                    OutlinedTextField(
-                        value = runners.find { it.id == runnerId }?.name ?: "Select runner",
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Runner") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(runnerExpanded) },
-                        modifier = Modifier.fillMaxWidth().menuAnchor()
-                    )
-                    ExposedDropdownMenu(
-                        expanded = runnerExpanded,
-                        onDismissRequest = { runnerExpanded = false }
-                    ) {
-                        runners.forEach { runner ->
-                            DropdownMenuItem(
-                                text = { Text(runner.name) },
-                                onClick = { runnerId = runner.id; runnerExpanded = false }
-                            )
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(trackName, fontWeight = FontWeight.Bold, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { addTrackIdx = ti; showAddDialog = true }) {
+                            Text("+ Clip", fontSize = 12.sp)
                         }
                     }
-                }
-
-                // Performer checkboxes
-                Text("Performers", style = MaterialTheme.typography.labelMedium)
-                children.forEach { child ->
-                    val label = if (child.name.isNotBlank() && child.name != child.hostname) child.name else child.hostname
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = child.id in selectedPerformers,
-                            onCheckedChange = { checked ->
-                                selectedPerformers = if (checked) {
-                                    selectedPerformers + child.id
-                                } else {
-                                    selectedPerformers - child.id
-                                }
+                    track.clips.forEachIndexed { ci, clip ->
+                        val clipName = when {
+                            clip.actionId != null -> actions.find { it.id == clip.actionId }?.name ?: "Action #${clip.actionId}"
+                            clip.effectId != null -> spatialEffects.find { it.id == clip.effectId }?.name ?: "Effect #${clip.effectId}"
+                            else -> "?"
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val isAction = clip.actionId != null
+                            val icon = if (isAction) "▶" else "◆"
+                            Text("$icon $clipName", fontSize = 12.sp, modifier = Modifier.weight(1f))
+                            Text("${clip.startS}s → ${clip.startS + clip.durationS}s", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            IconButton(onClick = { onRemoveClip(ti, ci) }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Default.Close, null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.error)
                             }
-                        )
-                        Text(label, modifier = Modifier.clickable {
-                            selectedPerformers = if (child.id in selectedPerformers) {
-                                selectedPerformers - child.id
-                            } else {
-                                selectedPerformers + child.id
-                            }
-                        })
+                        }
+                    }
+                    if (track.clips.isEmpty()) {
+                        Text("No clips — tap + Clip to add", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-
-                // Priority
-                Text("Priority: $priority", style = MaterialTheme.typography.bodySmall)
-                Slider(
-                    value = priority.toFloat(),
-                    onValueChange = { priority = it.roundToInt() },
-                    valueRange = 1f..10f,
-                    steps = 8,
-                    modifier = Modifier.fillMaxWidth()
-                )
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    onSave(Flight(
-                        id = initial?.id ?: -1,
-                        name = name,
-                        runnerId = runnerId,
-                        performerIds = selectedPerformers.toList(),
-                        priority = priority
-                    ))
-                },
-                enabled = name.isNotBlank()
-            ) { Text("Save") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
         }
-    )
+
+        if (timeline.tracks.isEmpty()) {
+            Text("No tracks yet. Add a track from the web interface.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+
+    if (showAddDialog) {
+        AddClipDialog(
+            actions = actions,
+            spatialEffects = spatialEffects,
+            onDismiss = { showAddDialog = false },
+            onAdd = { clip ->
+                onAddClip(addTrackIdx, clip)
+                showAddDialog = false
+            }
+        )
+    }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ShowEditorDialog(
-    initial: Show?,
-    flights: List<Flight>,
-    onSave: (Show) -> Unit,
-    onDismiss: () -> Unit
+fun AddClipDialog(
+    actions: List<Action>,
+    spatialEffects: List<SpatialEffect>,
+    onDismiss: () -> Unit,
+    onAdd: (TimelineClip) -> Unit,
 ) {
-    var name by remember { mutableStateOf(initial?.name ?: "") }
-    var selectedFlights by remember {
-        mutableStateOf(initial?.flightIds?.toSet() ?: emptySet())
-    }
-    var loop by remember { mutableStateOf(initial?.loop ?: true) }
-
-    val isEditing = initial != null
+    var startS by remember { mutableStateOf("0") }
+    var durationS by remember { mutableStateOf("5") }
+    var selectedType by remember { mutableStateOf("action") }
+    var selectedId by remember { mutableIntStateOf(actions.firstOrNull()?.id ?: 0) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (isEditing) "Edit Show" else "New Show") },
+        title = { Text("Add Clip") },
         text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Show name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+            Column {
+                // Type selector
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = selectedType == "action", onClick = { selectedType = "action" }, label = { Text("Action") })
+                    FilterChip(selected = selectedType == "effect", onClick = { selectedType = "effect" }, label = { Text("Spatial Effect") })
+                }
+                Spacer(Modifier.height(8.dp))
 
-                // Flight checkboxes
-                Text("Flights", style = MaterialTheme.typography.labelMedium)
-                if (flights.isEmpty()) {
-                    Text("No flights available",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    flights.forEach { flight ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(
-                                checked = flight.id in selectedFlights,
-                                onCheckedChange = { checked ->
-                                    selectedFlights = if (checked) {
-                                        selectedFlights + flight.id
-                                    } else {
-                                        selectedFlights - flight.id
-                                    }
-                                }
-                            )
-                            Text(flight.name.ifBlank { "Flight #${flight.id}" },
-                                modifier = Modifier.clickable {
-                                    selectedFlights = if (flight.id in selectedFlights) {
-                                        selectedFlights - flight.id
-                                    } else {
-                                        selectedFlights + flight.id
-                                    }
-                                })
+                // Item selector
+                if (selectedType == "action" && actions.isNotEmpty()) {
+                    var expanded by remember { mutableStateOf(false) }
+                    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+                        OutlinedTextField(
+                            value = actions.find { it.id == selectedId }?.name ?: "",
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Action") },
+                            modifier = Modifier.menuAnchor()
+                        )
+                        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                            actions.forEach { a ->
+                                DropdownMenuItem(text = { Text(a.name) }, onClick = { selectedId = a.id; expanded = false })
+                            }
+                        }
+                    }
+                } else if (selectedType == "effect" && spatialEffects.isNotEmpty()) {
+                    var expanded by remember { mutableStateOf(false) }
+                    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+                        OutlinedTextField(
+                            value = spatialEffects.find { it.id == selectedId }?.name ?: "",
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Effect") },
+                            modifier = Modifier.menuAnchor()
+                        )
+                        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                            spatialEffects.forEach { f ->
+                                DropdownMenuItem(text = { Text(f.name) }, onClick = { selectedId = f.id; expanded = false })
+                            }
                         }
                     }
                 }
 
-                // Loop toggle
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Loop", modifier = Modifier.weight(1f))
-                    Switch(checked = loop, onCheckedChange = { loop = it })
-                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(value = startS, onValueChange = { startS = it }, label = { Text("Start (s)") })
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(value = durationS, onValueChange = { durationS = it }, label = { Text("Duration (s)") })
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = {
-                    onSave(Show(
-                        id = initial?.id ?: -1,
-                        name = name,
-                        flightIds = selectedFlights.toList(),
-                        loop = loop
-                    ))
-                },
-                enabled = name.isNotBlank()
-            ) { Text("Save") }
+            TextButton(onClick = {
+                val clip = if (selectedType == "action")
+                    TimelineClip(actionId = selectedId, startS = startS.toDoubleOrNull() ?: 0.0, durationS = durationS.toDoubleOrNull() ?: 5.0)
+                else
+                    TimelineClip(effectId = selectedId, startS = startS.toDoubleOrNull() ?: 0.0, durationS = durationS.toDoubleOrNull() ?: 5.0)
+                onAdd(clip)
+            }) { Text("Add") }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }

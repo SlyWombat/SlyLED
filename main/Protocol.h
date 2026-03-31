@@ -20,7 +20,7 @@ constexpr uint8_t MAX_STR_PER_CHILD = 8;    // protocol constant — same on all
 
 constexpr uint16_t UDP_PORT    = 4210;
 constexpr uint16_t UDP_MAGIC   = 0x534C;
-constexpr uint8_t  UDP_VERSION = 3;         // v3: 9 action types, generic params
+constexpr uint8_t  UDP_VERSION = 4;         // v4: uint16 LED ranges for multi-string
 
 // Command bytes
 constexpr uint8_t CMD_PING           = 0x01;
@@ -139,9 +139,9 @@ struct __attribute__((packed)) ActionPayload {
   uint8_t  p8b;             // g2 / sparking
   uint8_t  p8c;             // b2 / direction
   uint8_t  p8d;             // actionSeqId / decay / fadeSpeed
-  uint8_t  ledStart[MAX_STR_PER_CHILD];
-  uint8_t  ledEnd[MAX_STR_PER_CHILD];
-};  // 10+8+8 = 26 bytes
+  uint16_t ledStart[MAX_STR_PER_CHILD];
+  uint16_t ledEnd[MAX_STR_PER_CHILD];
+};  // 10+16+16 = 42 bytes
 
 struct __attribute__((packed)) LoadStepPayload {
   uint8_t  stepIndex;
@@ -152,9 +152,9 @@ struct __attribute__((packed)) LoadStepPayload {
   uint8_t  p8a, p8b, p8c, p8d;
   uint16_t durationS;
   uint16_t delayMs;             // canvas-scope: per-child start delay (0 = immediate)
-  uint8_t  ledStart[MAX_STR_PER_CHILD];
-  uint8_t  ledEnd[MAX_STR_PER_CHILD];
-};  // 16+8+8 = 32 bytes; total packet = 8+32 = 40
+  uint16_t ledStart[MAX_STR_PER_CHILD];
+  uint16_t ledEnd[MAX_STR_PER_CHILD];
+};  // 16+16+16 = 48 bytes; total packet = 8+48 = 56
 
 // ActionEventPayload — child→parent (4 bytes)
 struct __attribute__((packed)) ActionEventPayload {

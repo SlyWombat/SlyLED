@@ -125,6 +125,42 @@ class SlyLedRepository @Inject constructor(
     suspend fun importShow(data: JsonObject) = requireApi().importShow(data)
     suspend fun generateDemo() = requireApi().generateDemo()
 
+    // Timelines
+    suspend fun getTimelines() = requireApi().getTimelines()
+    suspend fun getTimeline(id: Int) = requireApi().getTimeline(id)
+    suspend fun createTimeline(timeline: Timeline) = requireApi().createTimeline(timeline)
+    suspend fun deleteTimeline(id: Int) = requireApi().deleteTimeline(id)
+    suspend fun bakeTimeline(id: Int) = requireApi().bakeTimeline(id)
+    suspend fun getBakeStatus(id: Int) = requireApi().getBakeStatus(id)
+    suspend fun syncBaked(id: Int) = requireApi().syncBaked(id)
+    suspend fun getSyncStatus(id: Int) = requireApi().getSyncStatus(id)
+    suspend fun startTimeline(id: Int) = requireApi().startTimeline(id)
+    suspend fun stopTimeline(id: Int) = requireApi().stopTimeline(id)
+    suspend fun getTimelineStatus(id: Int) = requireApi().getTimelineStatus(id)
+    suspend fun getBakePreview(id: Int) = requireApi().getBakePreview(id)
+
+    // Presets
+    suspend fun getShowPresets() = requireApi().getShowPresets()
+    suspend fun loadPreset(body: Map<String, String>) = requireApi().loadPreset(body)
+
+    // Stage
+    suspend fun getStage() = requireApi().getStage()
+
+    // Fixtures
+    suspend fun getFixtures() = requireApi().getFixtures()
+
+    // Surfaces
+    suspend fun getSurfaces() = requireApi().getSurfaces()
+
+    // Spatial Effects
+    suspend fun getSpatialEffects() = requireApi().getSpatialEffects()
+
+    // Timeline update
+    suspend fun updateTimeline(id: Int, timeline: Timeline) = requireApi().updateTimeline(id, timeline)
+
+    // Migration
+    suspend fun migrateLayout() = requireApi().migrateLayout()
+
     // Reset
     suspend fun factoryReset() = requireApi().factoryReset()
 }

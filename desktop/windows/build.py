@@ -55,6 +55,9 @@ args = [
     # Bundle local modules alongside the exe so they're importable
     "--add-data", f"{SHARED / 'parent_server.py'};.",
     "--add-data", f"{SHARED / 'firmware_manager.py'};.",
+    "--add-data", f"{SHARED / 'spatial_engine.py'};.",
+    "--add-data", f"{SHARED / 'bake_engine.py'};.",
+    "--add-data", f"{SHARED / 'wled_bridge.py'};.",
     "--hidden-import=pystray",
     "--hidden-import=PIL._tkinter_finder",
     "--collect-submodules=flask",

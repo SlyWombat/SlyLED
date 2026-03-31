@@ -338,18 +338,28 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
 
 #ifdef BOARD_ESP32
   } else if (strstr(req, " /test/pin")) {
-    // Pin test: /test/pin?p=16 — flashes a single pixel red on the given GPIO
-    // Uses neopixelWrite() (ESP32 core RMT) — no FastLED, works on any pin
-    uint8_t pin = 2;
-    char* pp = strstr(req, "?p=");
-    if (pp) pin = (uint8_t)atoi(pp + 3);
-    neopixelWrite(pin, 255, 0, 0);   // red
-    delay(500);
-    neopixelWrite(pin, 0, 255, 0);   // green
-    delay(500);
-    neopixelWrite(pin, 0, 0, 255);   // blue
-    delay(500);
-    neopixelWrite(pin, 0, 0, 0);     // off
+    // Pin test: /test/pin?s=0 — flashes ONLY the selected string via FastLED
+    // Uses string index (not GPIO pin) to address the correct LED range
+    uint8_t si = 0;
+    char* pp = strstr(req, "?s=");
+    if (pp) si = (uint8_t)atoi(pp + 3);
+    // Compute LED range for this string
+    uint16_t st = 0, en = 0;
+    for (uint8_t j = 0; j < childCfg.stringCount && j <= si; j++) {
+      if (j == si) { en = st + childCfg.strings[j].ledCount - 1; break; }
+      st += childCfg.strings[j].ledCount;
+    }
+    if (en >= NUM_LEDS) en = NUM_LEDS - 1;
+    // Flash R/G/B on just this string's LEDs
+    fill_solid(leds, NUM_LEDS, CRGB::Black);
+    for (uint16_t i = st; i <= en; i++) leds[i] = CRGB(255, 0, 0);
+    FastLED.show(); delay(500);
+    for (uint16_t i = st; i <= en; i++) leds[i] = CRGB(0, 255, 0);
+    FastLED.show(); delay(500);
+    for (uint16_t i = st; i <= en; i++) leds[i] = CRGB(0, 0, 255);
+    FastLED.show(); delay(500);
+    fill_solid(leds, NUM_LEDS, CRGB::Black);
+    FastLED.show();
     sendJsonOk(client);
 #endif
   } else if (isPost && strstr(req, " /test/stop ")) {
@@ -380,12 +390,14 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     if (testType == ACT_SCANNER)  { childActP16a = 30; childActP8a = 3; }    // 30ms speed, 3-pixel bar
     if (testType == ACT_SPARKLE)  { childActP16a = 50; childActP8a = 3; }
     if (testType == ACT_GRADIENT) { childActP8a = 0; childActP8b = 0; childActP8c = 255; }  // red→blue
+    { uint16_t off = 0;
     for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
       if (j < childCfg.stringCount && childCfg.strings[j].ledCount > 0) {
-        childActSt[j] = 0;
-        childActEn[j] = childCfg.strings[j].ledCount - 1;
-      } else { childActSt[j] = 0xFF; childActEn[j] = 0xFF; }
-    }
+        childActSt[j] = off;
+        childActEn[j] = off + childCfg.strings[j].ledCount - 1;
+        off += childCfg.strings[j].ledCount;
+      } else { childActSt[j] = 0xFFFF; childActEn[j] = 0xFFFF; }
+    } }
     childActSeq++;
     sendJsonOk(client);
   } else if (isPost && strstr(req, " /config/reset ")) {

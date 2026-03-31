@@ -79,9 +79,9 @@ struct RunnerStep {
 };  // 20 bytes
 
 struct ChildStepPayload {
-  uint8_t ledStart[MAX_STR_PER_CHILD];
-  uint8_t ledEnd[MAX_STR_PER_CHILD];
-};  // 16 bytes
+  uint16_t ledStart[MAX_STR_PER_CHILD];
+  uint16_t ledEnd[MAX_STR_PER_CHILD];
+};  // 32 bytes
 
 struct Runner {
   char             name[RUNNER_NAME_LEN];

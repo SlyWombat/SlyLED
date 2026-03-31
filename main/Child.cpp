@@ -34,8 +34,8 @@ volatile uint8_t  childActP8b   = 0;
 volatile uint8_t  childActP8c   = 0;
 volatile uint8_t  childActP8d   = 0;
 volatile uint8_t  childActSeq   = 0;
-volatile uint8_t  childActSt[MAX_STR_PER_CHILD];
-volatile uint8_t  childActEn[MAX_STR_PER_CHILD];
+volatile uint16_t childActSt[MAX_STR_PER_CHILD];
+volatile uint16_t childActEn[MAX_STR_PER_CHILD];
 volatile uint8_t  childBrightness = 255;
 
 ChildRunnerStep   childRunner[MAX_CHILD_STEPS];
@@ -653,10 +653,8 @@ void sendChildConfigPage(WiFiClient& c) {
             "var x=new XMLHttpRequest();x.open('POST','/test/stop',true);"
             "x.send();}"));
   c.print(F("function testPin(s){"
-            "var sel=document.getElementById('dp'+s);"
-            "if(!sel)return;var p=sel.value;"
             "var x=new XMLHttpRequest();"
-            "x.open('GET','/test/pin?p='+p,true);x.send();}"));
+            "x.open('GET','/test/pin?s='+s,true);x.send();}"));
   c.print(F("function checkUpdate(){"
             "var btn=document.getElementById('upd-btn');"
             "var st=document.getElementById('upd-status');"

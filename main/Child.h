@@ -71,9 +71,9 @@ struct ChildRunnerStep {
   uint8_t  p8a, p8b, p8c, p8d;
   uint16_t durationS;
   uint16_t delayMs;             // canvas-scope: ms to wait before executing
-  uint8_t  ledStart[MAX_STR_PER_CHILD];
-  uint8_t  ledEnd[MAX_STR_PER_CHILD];
-};  // 22 bytes × 16 = 352 bytes
+  uint16_t ledStart[MAX_STR_PER_CHILD];
+  uint16_t ledEnd[MAX_STR_PER_CHILD];
+};  // 38 bytes × 16 = 608 bytes
 
 // ── FastLED pixel array ───────────────────────────────────────────────────────
 
@@ -94,8 +94,8 @@ extern volatile uint8_t  childActP8b;    // g2 / sparking
 extern volatile uint8_t  childActP8c;    // b2 / direction
 extern volatile uint8_t  childActP8d;    // actionSeqId / decay / fadeSpeed
 extern volatile uint8_t  childActSeq;
-extern volatile uint8_t  childActSt[MAX_STR_PER_CHILD];
-extern volatile uint8_t  childActEn[MAX_STR_PER_CHILD];
+extern volatile uint16_t childActSt[MAX_STR_PER_CHILD];
+extern volatile uint16_t childActEn[MAX_STR_PER_CHILD];
 extern volatile uint8_t  childBrightness; // global brightness 0-255
 
 // Runner execution state — written by UDP handler, read by LED task

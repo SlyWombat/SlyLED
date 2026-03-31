@@ -1277,8 +1277,8 @@ void handleApiAction(WiFiClient& c, int contentLen) {
   p.p8c          = (uint8_t)jsonGetInt(body, "direction",    0);
   p.p8d          = 0;
   for (uint8_t j = 0; j < MAX_STR_PER_CHILD; j++) {
-    p.ledStart[j] = 0x00;
-    p.ledEnd[j]   = 0xFF;
+    p.ledStart[j] = 0x0000;
+    p.ledEnd[j]   = 0xFFFE;
   }
   char target[8] = {};
   jsonGetStr(body, "target", target, sizeof(target));
@@ -1457,16 +1457,15 @@ void computeRunner(uint8_t id) {
         uint16_t lm  = str.lengthMm;
         int32_t  div = (lc > 1) ? (int32_t)(lc - 1) : 1;
 
-        uint8_t first = 0xFF;
-        uint8_t last  = 0xFF;
+        uint16_t first = 0xFFFF;
+        uint16_t last  = 0xFFFF;
 
         for (uint16_t i = 0; i < lc; i++) {
           int32_t lx = sx + (int32_t)i * lm * DIR_DX[sd] / div;
           int32_t ly = sy + (int32_t)i * lm * DIR_DY[sd] / div;
           if (lx >= axMin && lx <= axMax && ly >= ayMin && ly <= ayMax) {
-            uint8_t idx = (i > 254) ? 254 : (uint8_t)i;
-            if (first == 0xFF) first = idx;
-            last = idx;
+            if (first == 0xFFFF) first = i;
+            last = i;
           }
         }
         pl.ledStart[j] = first;
