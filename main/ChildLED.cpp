@@ -260,6 +260,7 @@ static void renderFire(uint8_t r, uint8_t g, uint8_t b,
                         uint16_t st, uint16_t en) {
   static uint8_t heat[MAX_LEDS];
   uint16_t rangeLen = en - st + 1;
+  if (rangeLen < 3) return;
   // Cool down
   for (uint16_t i = 0; i < rangeLen; i++) {
     uint8_t cool = random8(0, ((uint16_t)cooling * FIRE_COOL_SCALE / rangeLen) + FIRE_COOL_BASE_ADD);

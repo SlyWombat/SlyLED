@@ -62,7 +62,7 @@ def _apply_logging(enabled):
 
 # ── Version ───────────────────────────────────────────────────────────────────
 
-VERSION = "7.2.0"
+VERSION = "7.2.1"
 
 # ── UDP protocol ──────────────────────────────────────────────────────────────
 
@@ -533,6 +533,13 @@ def api_children_add():
     ip = ip.replace("https://", "").replace("http://", "").split("/")[0].strip()
     if not ip:
         return jsonify(ok=False, err="ip required"), 400
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(ip)
+        if not addr.is_private:
+            return jsonify(ok=False, err="Only private/LAN IP addresses allowed"), 400
+    except ValueError:
+        return jsonify(ok=False, err="Invalid IP address"), 400
     # Prevent duplicate IP entries
     existing = next((c for c in _children if c.get("ip") == ip), None)
     if existing:
@@ -783,18 +790,19 @@ def api_fixtures_create():
     ftype = body.get("type", "linear")
     if ftype not in ("linear", "point", "surface", "group"):
         return jsonify(err="Invalid fixture type"), 400
-    f = {
-        "id": _nxt_fix, "name": name or f"Fixture {_nxt_fix}",
-        "childId": body.get("childId"), "type": ftype,
-        "childIds": body.get("childIds", []),  # for group fixtures
-        "strings": body.get("strings", []),
-        "rotation": body.get("rotation", [0, 0, 0]),  # [rx, ry, rz] degrees — overrides child stripDir
-        "aoeRadius": body.get("aoeRadius", 1000),
-        "meshFile": body.get("meshFile"),
-    }
-    _fixtures.append(f)
-    _nxt_fix += 1
-    _save("fixtures", _fixtures)
+    with _lock:
+        f = {
+            "id": _nxt_fix, "name": name or f"Fixture {_nxt_fix}",
+            "childId": body.get("childId"), "type": ftype,
+            "childIds": body.get("childIds", []),  # for group fixtures
+            "strings": body.get("strings", []),
+            "rotation": body.get("rotation", [0, 0, 0]),  # [rx, ry, rz] degrees — overrides child stripDir
+            "aoeRadius": body.get("aoeRadius", 1000),
+            "meshFile": body.get("meshFile"),
+        }
+        _fixtures.append(f)
+        _nxt_fix += 1
+        _save("fixtures", _fixtures)
     return jsonify(ok=True, id=f["id"])
 
 @app.get("/api/fixtures/<int:fid>")
@@ -859,17 +867,18 @@ def api_surfaces_create():
     global _nxt_sf
     body = request.get_json(silent=True) or {}
     name = body.get("name", "").strip()
-    s = {
-        "id": _nxt_sf, "name": name or f"Surface {_nxt_sf}",
-        "surfaceType": body.get("surfaceType", "custom"),
-        "filename": body.get("filename", ""),
-        "color": body.get("color", "#334155"),
-        "opacity": body.get("opacity", 30),
-        "transform": body.get("transform", {"pos": [0,0,0], "rot": [0,0,0], "scale": [2000,1500,1]}),
-    }
-    _surfaces.append(s)
-    _nxt_sf += 1
-    _save("surfaces", _surfaces)
+    with _lock:
+        s = {
+            "id": _nxt_sf, "name": name or f"Surface {_nxt_sf}",
+            "surfaceType": body.get("surfaceType", "custom"),
+            "filename": body.get("filename", ""),
+            "color": body.get("color", "#334155"),
+            "opacity": body.get("opacity", 30),
+            "transform": body.get("transform", {"pos": [0,0,0], "rot": [0,0,0], "scale": [2000,1500,1]}),
+        }
+        _surfaces.append(s)
+        _nxt_sf += 1
+        _save("surfaces", _surfaces)
     return jsonify(ok=True, id=s["id"])
 
 @app.delete("/api/surfaces/<int:sid>")
@@ -895,24 +904,25 @@ def api_sfx_create():
     cat = body.get("category", "spatial-field")
     if cat not in ("fixture-local", "spatial-field"):
         return jsonify(err="Invalid category"), 400
-    fx = {"id": _nxt_sfx, "name": name, "category": cat}
-    for k in ("shape", "r", "g", "b", "r2", "g2", "b2",
-              "size", "motion", "blend", "fixtureIds", "params",
-              "actionType"):
-        if k in body:
-            fx[k] = body[k]
-    # Defaults
-    fx.setdefault("shape", "sphere")
-    fx.setdefault("r", 255)
-    fx.setdefault("g", 255)
-    fx.setdefault("b", 255)
-    fx.setdefault("blend", "replace")
-    fx.setdefault("size", {"radius": 1000})
-    fx.setdefault("motion", {"startPos": [0,0,0], "endPos": [5000,0,0], "easing": "linear", "durationS": 5})
-    fx.setdefault("fixtureIds", [])
-    _spatial_fx.append(fx)
-    _nxt_sfx += 1
-    _save("spatial_fx", _spatial_fx)
+    with _lock:
+        fx = {"id": _nxt_sfx, "name": name, "category": cat}
+        for k in ("shape", "r", "g", "b", "r2", "g2", "b2",
+                  "size", "motion", "blend", "fixtureIds", "params",
+                  "actionType"):
+            if k in body:
+                fx[k] = body[k]
+        # Defaults
+        fx.setdefault("shape", "sphere")
+        fx.setdefault("r", 255)
+        fx.setdefault("g", 255)
+        fx.setdefault("b", 255)
+        fx.setdefault("blend", "replace")
+        fx.setdefault("size", {"radius": 1000})
+        fx.setdefault("motion", {"startPos": [0,0,0], "endPos": [5000,0,0], "easing": "linear", "durationS": 5})
+        fx.setdefault("fixtureIds", [])
+        _spatial_fx.append(fx)
+        _nxt_sfx += 1
+        _save("spatial_fx", _spatial_fx)
     return jsonify(ok=True, id=fx["id"])
 
 @app.get("/api/spatial-effects/<int:fxid>")
@@ -997,15 +1007,16 @@ def api_timelines_create():
     name = body.get("name", "").strip()
     if not name:
         return jsonify(err="Name required"), 400
-    tl = {
-        "id": _nxt_tl, "name": name,
-        "durationS": body.get("durationS", 60),
-        "tracks": body.get("tracks", []),
-        "loop": body.get("loop", False),
-    }
-    _timelines.append(tl)
-    _nxt_tl += 1
-    _save("timelines", _timelines)
+    with _lock:
+        tl = {
+            "id": _nxt_tl, "name": name,
+            "durationS": body.get("durationS", 60),
+            "tracks": body.get("tracks", []),
+            "loop": body.get("loop", False),
+        }
+        _timelines.append(tl)
+        _nxt_tl += 1
+        _save("timelines", _timelines)
     return jsonify(ok=True, id=tl["id"])
 
 @app.get("/api/timelines/<int:tid>")
@@ -2381,44 +2392,45 @@ def api_show_preset():
     if not preset:
         return jsonify(ok=False, err=f"Unknown preset: {preset_id}"), 404
 
-    # Create actions from preset
-    action_ids = []
-    for a in preset.get("actions", []):
-        act = {"id": _nxt_a, **a}
-        _actions.append(act)
-        action_ids.append(_nxt_a)
-        _nxt_a += 1
-    _save("actions", _actions)
+    with _lock:
+        # Create actions from preset
+        action_ids = []
+        for a in preset.get("actions", []):
+            act = {"id": _nxt_a, **a}
+            _actions.append(act)
+            action_ids.append(_nxt_a)
+            _nxt_a += 1
+        _save("actions", _actions)
 
-    # Create spatial effects from preset
-    effect_ids = []
-    for fx in preset.get("effects", []):
-        fx_rec = {"id": _nxt_sfx, **fx}
-        fx_rec.setdefault("fixtureIds", [])
-        _spatial_fx.append(fx_rec)
-        effect_ids.append(_nxt_sfx)
-        _nxt_sfx += 1
-    _save("spatial_fx", _spatial_fx)
+        # Create spatial effects from preset
+        effect_ids = []
+        for fx in preset.get("effects", []):
+            fx_rec = {"id": _nxt_sfx, **fx}
+            fx_rec.setdefault("fixtureIds", [])
+            _spatial_fx.append(fx_rec)
+            effect_ids.append(_nxt_sfx)
+            _nxt_sfx += 1
+        _save("spatial_fx", _spatial_fx)
 
-    # Build timeline with one "all performers" track
-    clips = []
-    t = 0
-    for aid in action_ids:
-        dur = preset.get("durationS", 30)
-        clips.append({"actionId": aid, "startS": 0, "durationS": dur})
-    for eid in effect_ids:
-        dur = preset.get("durationS", 30)
-        clips.append({"effectId": eid, "startS": 0, "durationS": dur})
+        # Build timeline with one "all performers" track
+        clips = []
+        t = 0
+        for aid in action_ids:
+            dur = preset.get("durationS", 30)
+            clips.append({"actionId": aid, "startS": 0, "durationS": dur})
+        for eid in effect_ids:
+            dur = preset.get("durationS", 30)
+            clips.append({"effectId": eid, "startS": 0, "durationS": dur})
 
-    tl = {
-        "id": _nxt_tl, "name": preset["name"],
-        "durationS": preset.get("durationS", 30),
-        "tracks": [{"allPerformers": True, "clips": clips}],
-        "loop": True,
-    }
-    _timelines.append(tl)
-    _nxt_tl += 1
-    _save("timelines", _timelines)
+        tl = {
+            "id": _nxt_tl, "name": preset["name"],
+            "durationS": preset.get("durationS", 30),
+            "tracks": [{"allPerformers": True, "clips": clips}],
+            "loop": True,
+        }
+        _timelines.append(tl)
+        _nxt_tl += 1
+        _save("timelines", _timelines)
 
     return jsonify(ok=True, name=preset["name"], timelineId=tl["id"],
                    actions=len(action_ids), effects=len(effect_ids))
@@ -2690,7 +2702,7 @@ def api_fw_flash():
     # Flash in background thread
     def _do_flash():
         flash_board(port, str(bin_path), board or fw["board"],
-                    wifi_ssid=_wifi.get("ssid"), wifi_pass=_wifi.get("password"))
+                    wifi_ssid=_wifi.get("ssid"), wifi_pass=_decrypt_pw(_wifi.get("password", "")))
     threading.Thread(target=_do_flash, daemon=True).start()
     return jsonify(ok=True, message="Flashing started")
 
@@ -2761,21 +2773,22 @@ def api_migrate_layout():
     global _nxt_fix
     created = 0
     existing_child_ids = {f.get("childId") for f in _fixtures}
-    for child in _children:
-        if child["id"] in existing_child_ids:
-            continue
-        f = {
-            "id": _nxt_fix,
-            "name": child.get("name") or child.get("hostname") or f"Fixture {_nxt_fix}",
-            "childId": child["id"],
-            "type": "linear",
-            "strings": [],
-            "aoeRadius": 1000,
-        }
-        _fixtures.append(f)
-        _nxt_fix += 1
-        created += 1
-    _save("fixtures", _fixtures)
+    with _lock:
+        for child in _children:
+            if child["id"] in existing_child_ids:
+                continue
+            f = {
+                "id": _nxt_fix,
+                "name": child.get("name") or child.get("hostname") or f"Fixture {_nxt_fix}",
+                "childId": child["id"],
+                "type": "linear",
+                "strings": [],
+                "aoeRadius": 1000,
+            }
+            _fixtures.append(f)
+            _nxt_fix += 1
+            created += 1
+        _save("fixtures", _fixtures)
     return jsonify(ok=True, created=created)
 
 @app.post("/api/migrate/runner/<int:rid>")
@@ -2786,60 +2799,64 @@ def api_migrate_runner(rid):
     if not runner:
         return jsonify(err="Runner not found"), 404
 
-    # Create spatial effects from each action referenced by runner steps
-    fx_map = {}  # action_id → spatial_fx_id
-    for step in runner.get("steps", []):
-        aid = step.get("actionId")
-        if aid is None or aid in fx_map:
-            continue
-        action = next((a for a in _actions if a["id"] == aid), None)
-        if not action:
-            continue
-        fx = {
-            "id": _nxt_sfx,
-            "name": f"Migrated: {action.get('name', 'Action')}",
-            "category": "fixture-local",
-            "actionType": action.get("type", 0),
-            "r": action.get("r", 0), "g": action.get("g", 0), "b": action.get("b", 0),
-            "blend": "replace",
-            "fixtureIds": [],
-        }
-        _spatial_fx.append(fx)
-        fx_map[aid] = _nxt_sfx
-        _nxt_sfx += 1
-    _save("spatial_fx", _spatial_fx)
-
-    # Create timeline with one track per fixture, clips from runner steps
-    total_dur = sum(s.get("durationS", 0) for s in runner.get("steps", []))
-    tracks = []
-    for fixture in _fixtures:
-        clips = []
-        t = 0
+    with _lock:
+        # Create spatial effects from each action referenced by runner steps
+        fx_map = {}  # action_id → spatial_fx_id
         for step in runner.get("steps", []):
             aid = step.get("actionId")
-            dur = step.get("durationS", 5)
-            if aid in fx_map:
-                clips.append({"effectId": fx_map[aid], "startS": t, "durationS": dur})
-            t += dur
-        if clips:
-            tracks.append({"fixtureId": fixture["id"], "clips": clips})
+            if aid is None or aid in fx_map:
+                continue
+            action = next((a for a in _actions if a["id"] == aid), None)
+            if not action:
+                continue
+            fx = {
+                "id": _nxt_sfx,
+                "name": f"Migrated: {action.get('name', 'Action')}",
+                "category": "fixture-local",
+                "actionType": action.get("type", 0),
+                "r": action.get("r", 0), "g": action.get("g", 0), "b": action.get("b", 0),
+                "blend": "replace",
+                "fixtureIds": [],
+            }
+            _spatial_fx.append(fx)
+            fx_map[aid] = _nxt_sfx
+            _nxt_sfx += 1
+        _save("spatial_fx", _spatial_fx)
 
-    tl = {
-        "id": _nxt_tl,
-        "name": f"Migrated: {runner.get('name', 'Runner')}",
-        "durationS": total_dur or 60,
-        "tracks": tracks,
-        "loop": False,
-    }
-    _timelines.append(tl)
-    _nxt_tl += 1
-    _save("timelines", _timelines)
+        # Create timeline with one track per fixture, clips from runner steps
+        total_dur = sum(s.get("durationS", 0) for s in runner.get("steps", []))
+        tracks = []
+        for fixture in _fixtures:
+            clips = []
+            t = 0
+            for step in runner.get("steps", []):
+                aid = step.get("actionId")
+                dur = step.get("durationS", 5)
+                if aid in fx_map:
+                    clips.append({"effectId": fx_map[aid], "startS": t, "durationS": dur})
+                t += dur
+            if clips:
+                tracks.append({"fixtureId": fixture["id"], "clips": clips})
+
+        tl = {
+            "id": _nxt_tl,
+            "name": f"Migrated: {runner.get('name', 'Runner')}",
+            "durationS": total_dur or 60,
+            "tracks": tracks,
+            "loop": False,
+        }
+        _timelines.append(tl)
+        _nxt_tl += 1
+        _save("timelines", _timelines)
 
     return jsonify(ok=True, timelineId=tl["id"], effectsCreated=len(fx_map), tracks=len(tracks))
 
 @app.post("/api/reset")
 def api_reset():
     """Clear all data and restore default settings."""
+    # Require confirmation header to prevent CSRF
+    if request.headers.get("X-SlyLED-Confirm") != "true":
+        return jsonify(err="Missing confirmation header"), 403
     global _children, _settings, _layout, _stage, _runners, _actions, _flights, _shows
     global _fixtures, _surfaces, _spatial_fx, _timelines
     global _wifi, _nxt_c, _nxt_r, _nxt_a, _nxt_f, _nxt_s
@@ -3089,9 +3106,14 @@ def api_qr():
 
 @app.after_request
 def add_cors(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
+    # Allow same-origin and Android app connections from LAN
+    origin = request.headers.get("Origin", "")
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+    else:
+        response.headers["Access-Control-Allow-Origin"] = request.host_url.rstrip("/")
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-SlyLED-Confirm"
     return response
 
 # ── Shutdown ──────────────────────────────────────────────────────────────────
@@ -3099,6 +3121,9 @@ def add_cors(response):
 @app.post("/api/shutdown")
 def api_shutdown():
     """Terminate the parent process after sending the response."""
+    # Require confirmation header to prevent CSRF
+    if request.headers.get("X-SlyLED-Confirm") != "true":
+        return jsonify(err="Missing confirmation header"), 403
     def _kill():
         time.sleep(0.3)
         os._exit(0)

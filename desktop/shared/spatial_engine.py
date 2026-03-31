@@ -202,7 +202,7 @@ def _ease(t, easing):
     if easing == "ease-out":
         return t * (2 - t)
     if easing == "ease-in-out":
-        return 3*t*t - 2*t*t*t if t < 0.5 else 3*t*t - 2*t*t*t  # smoothstep
+        return t * t * (3 - 2 * t)  # smoothstep
     return t  # linear
 
 def _smoothstep(t):
@@ -237,9 +237,11 @@ def sphere_field_evaluate(center, radius, pixel_positions, color, blend="replace
         list of [r, g, b] per pixel (0 if outside)
     """
     result = []
+    radius_sq = radius * radius
     for px in pixel_positions:
-        dist = _dist3(px, center)
-        if dist <= radius:
+        dist_sq = sum((px[i] - center[i])**2 for i in range(3))
+        if dist_sq <= radius_sq:
+            dist = math.sqrt(dist_sq)  # only sqrt when inside
             intensity = 1.0 - (dist / radius) if falloff and radius > 0 else 1.0
             c = [int(color[i] * intensity) for i in range(3)]
             result.append(c)

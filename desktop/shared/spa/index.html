@@ -1022,8 +1022,11 @@ function s3dDispose(){
 
 function s3dLoadChildren(){
   if(!_s3d.inited||!ld)return;
-  // Clear old nodes
-  _s3d.nodes.forEach(function(m){_s3d.scene.remove(m);});
+  // Dispose old geometry/materials before removing nodes
+  _s3d.nodes.forEach(function(grp){grp.traverse(function(obj){
+    if(obj.geometry)obj.geometry.dispose();
+    if(obj.material){if(obj.material.map)obj.material.map.dispose();obj.material.dispose();}
+  });_s3d.scene.remove(grp);});
   _s3d.lines.forEach(function(m){_s3d.scene.remove(m);});
   _s3d.labels.forEach(function(m){_s3d.scene.remove(m);});
   _s3d.nodes=[];_s3d.lines=[];_s3d.labels=[];
@@ -1112,10 +1115,13 @@ function s3dLoadChildren(){
 
 function _s3dRenderSurfaces(){
   if(!_s3d.inited)return;
-  // Remove old surfaces
+  // Remove old surfaces (dispose geometry/materials)
   var toRemove=[];
   _s3d.scene.children.forEach(function(c){if(c.userData.surfaceObj)toRemove.push(c);});
-  toRemove.forEach(function(c){_s3d.scene.remove(c);});
+  toRemove.forEach(function(c){c.traverse(function(obj){
+    if(obj.geometry)obj.geometry.dispose();
+    if(obj.material){if(obj.material.map)obj.material.map.dispose();obj.material.dispose();}
+  });_s3d.scene.remove(c);});
   // Render each surface as a draggable group
   (_surfaces||[]).forEach(function(s){
     var t=s.transform||{pos:[0,0,0],scale:[2000,1500,1]};
@@ -2063,7 +2069,9 @@ function toggleHelp(){
   if(section==='runtime')section='timeline';
   ra('GET','/api/help/'+section,null,function(d){
     var body=document.getElementById('help-body');
-    if(body)body.innerHTML=d&&d.html?d.html:'<p style="color:#888">Help content not available.</p>';
+    var raw=d&&d.html?d.html:'<p style="color:#888">Help content not available.</p>';
+    raw=raw.replace(/<script[^>]*>[\s\S]*?<\/script>/gi,'');
+    if(body)body.innerHTML=raw;
   });
 }
 
@@ -3585,15 +3593,18 @@ function loadSettings(){
 
 function factoryReset(){
   if(!confirm('Factory reset? This will delete ALL performers, runners and layout data and cannot be undone.'))return;
-  ra('POST','/api/reset',{},function(d){
-    if(d&&d.ok){loadSettings();loadDash();}
-  });
+  var x=new XMLHttpRequest();x.open('POST','/api/reset',true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.setRequestHeader('X-SlyLED-Confirm','true');
+  x.onload=function(){try{var d=JSON.parse(x.responseText);if(d&&d.ok){loadSettings();loadDash();}}catch(e){}};
+  x.send('{}');
 }
 
 function shutdownService(){
   if(!confirm('Stop the SlyLED service? The browser will lose connection.'))return;
   var x=new XMLHttpRequest();x.open('POST','/api/shutdown',true);
   x.setRequestHeader('Content-Type','application/json');
+  x.setRequestHeader('X-SlyLED-Confirm','true');
   x.onload=function(){document.getElementById('hs').textContent='Service stopped. You may close this tab.';};
   x.onerror=function(){document.getElementById('hs').textContent='Service stopped.';};
   x.send('{}');

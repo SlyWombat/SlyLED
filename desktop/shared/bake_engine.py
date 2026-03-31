@@ -147,16 +147,22 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
     # Structure: per_fixture_frames[fix_id][frame_idx] = [[r,g,b], ...]
     per_fixture_frames = {fid: [] for fid in fixture_data}
 
+    # Merge clips from all tracks per fixture (handles allPerformers duplicates)
+    merged_clips = {}  # fix_id -> [clip, clip, ...]
+    for track in tracks:
+        fid = track.get("fixtureId")
+        if fid not in fixture_data:
+            continue
+        if fid not in merged_clips:
+            merged_clips[fid] = []
+        merged_clips[fid].extend(track.get("clips", []))
+
     for frame_idx in range(n_frames):
         t = frame_idx / BAKE_FPS
         if progress:
             progress.current_frame = frame_idx
 
-        for track in tracks:
-            fix_id = track.get("fixtureId")
-            if fix_id not in fixture_data:
-                continue
-
+        for fix_id, clips in merged_clips.items():
             pixels = fixture_data[fix_id]["pixels"]
             if not pixels:
                 per_fixture_frames[fix_id].append([[0,0,0]] * max(len(pixels), 1))
@@ -165,7 +171,7 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
             # Evaluate active clips
             layers = []
             modes = []
-            for clip in track.get("clips", []):
+            for clip in clips:
                 cs = clip.get("startS", 0)
                 cd = clip.get("durationS", 1)
                 if cs <= t < cs + cd:
@@ -454,7 +460,7 @@ def _segment_actions(frames, pixel_count, max_segments=16):
 
         i = j
 
-    return segments
+    return segments[:max_segments]
 
 
 def _pack_lsq(fixture_id, frames, pixel_count):
