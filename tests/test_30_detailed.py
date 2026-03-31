@@ -27,30 +27,60 @@ def ok(name, result):
     else: F += 1; ISSUES.append(name)
 
 # ── Setup ─────────────────────────────────────────────────────────────────
-print("Setting up...")
-api("POST", "/api/migrate/layout")
-children = api("GET", "/api/children")
-fixtures = api("GET", "/api/fixtures")
-if not isinstance(children, list): children = []
-if not isinstance(fixtures, list): fixtures = []
+print("Setting up synthetic test fixtures with varied string configs...")
 
-positions = [{"id": c["id"], "x": int((i+0.5)*4000/max(len(children),1)), "y": 1000, "z": 0}
-             for i, c in enumerate(children)]
+# Delete existing fixtures to start clean
+for f in (api("GET", "/api/fixtures") or []):
+    if isinstance(f, dict): api("DELETE", f"/api/fixtures/{f['id']}")
+
+# Create 8 synthetic fixtures with diverse multi-string configurations
+# These represent what different real children would look like
+SYNTH_FIXTURES = [
+    {"name": "F1-East100",      "x": 250,  "y": 1000, "strings": [{"leds": 100, "mm": 1600, "sdir": 0}]},
+    {"name": "F2-DualEW",       "x": 1000, "y": 1000, "strings": [{"leds": 150, "mm": 2400, "sdir": 2}, {"leds": 150, "mm": 2400, "sdir": 0}]},
+    {"name": "F3-North120",     "x": 1800, "y": 500,  "strings": [{"leds": 120, "mm": 1920, "sdir": 1}]},
+    {"name": "F4-DualNS",       "x": 2500, "y": 1500, "strings": [{"leds": 80, "mm": 1280, "sdir": 1}, {"leds": 80, "mm": 1280, "sdir": 3}]},
+    {"name": "F5-TriENW",       "x": 500,  "y": 1800, "strings": [{"leds": 50, "mm": 800, "sdir": 0}, {"leds": 50, "mm": 800, "sdir": 1}, {"leds": 50, "mm": 800, "sdir": 2}]},
+    {"name": "F6-Long200E",     "x": 3000, "y": 1000, "strings": [{"leds": 200, "mm": 3200, "sdir": 0}]},
+    {"name": "F7-QuadENWS",     "x": 2000, "y": 1000, "strings": [{"leds": 30, "mm": 480, "sdir": 0}, {"leds": 30, "mm": 480, "sdir": 1}, {"leds": 30, "mm": 480, "sdir": 2}, {"leds": 30, "mm": 480, "sdir": 3}]},
+    {"name": "F8-West80",       "x": 3500, "y": 500,  "strings": [{"leds": 80, "mm": 1280, "sdir": 2}]},
+]
+
+fix_ids = []
+fix_leds = {}
+total_stage_leds = 0
+for sf in SYNTH_FIXTURES:
+    r = api("POST", "/api/fixtures", {"name": sf["name"], "type": "linear", "strings": sf["strings"]})
+    fid = r.get("id")
+    fix_ids.append(fid)
+    string_leds = [s["leds"] for s in sf["strings"]]
+    fix_leds[str(fid)] = string_leds
+    total_stage_leds += sum(string_leds)
+
+# We need matching "children" in the layout for the fixtures to resolve pixel positions
+# Use existing children or create layout entries that map to fixture positions
+children = api("GET", "/api/children") or []
+# Create layout entries — use fixture positions directly since fixtures have their own strings
+positions = []
+for i, sf in enumerate(SYNTH_FIXTURES):
+    # Map fixture to a child if available, otherwise just use the fixture position
+    cid = children[i]["id"] if i < len(children) else i + 100
+    positions.append({"id": cid, "x": sf["x"], "y": sf["y"], "z": 0})
+    # Update fixture childId to match
+    if fix_ids[i]:
+        api("PUT", f"/api/fixtures/{fix_ids[i]}", {"childId": cid if i < len(children) else None})
+
 api("POST", "/api/layout", {"children": positions})
 
-# Build child LED count map: fixture_id → {string_idx → led_count}
-fix_leds = {}
-for f in fixtures:
-    child = next((c for c in children if c["id"] == f.get("childId")), None)
-    if child:
-        string_leds = []
-        for si in range(child.get("sc", 0)):
-            if si < len(child.get("strings", [])):
-                string_leds.append(child["strings"][si].get("leds", 0))
-        fix_leds[str(f["id"])] = string_leds
+# For fixtures without a real child, the strings field in the fixture itself provides LED data
+# The bake uses fixture.strings when present
 
-print(f"  {len(children)} children, {len(fixtures)} fixtures")
-print(f"  LED counts per fixture: {fix_leds}")
+fixtures = api("GET", "/api/fixtures") or []
+print(f"  {len(fixtures)} fixtures, {total_stage_leds} total LEDs")
+for f in fixtures:
+    strs = f.get("strings", [])
+    desc = " + ".join(f"{s['leds']}{['E','N','W','S'][s.get('sdir',0)]}" for s in strs)
+    print(f"    #{f['id']} {f['name']}: {desc} ({sum(s['leds'] for s in strs)} LEDs)")
 
 # Create actions + effects
 acts = {}
