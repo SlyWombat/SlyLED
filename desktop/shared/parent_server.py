@@ -2357,18 +2357,14 @@ def api_show_preset():
         "rainbow-up": {
             "name": "Rainbow Up",
             "durationS": 30,
-            "effects": [{"name": "Rainbow Plane Rise", "category": "spatial-field", "shape": "plane",
-                         "r": 255, "g": 0, "b": 100, "size": {"normal": [0,1,0], "thickness": 600},
-                         "motion": {"startPos": [1500,0,0], "endPos": [1500,3000,0], "durationS": 30, "easing": "linear"},
-                         "blend": "replace"}],
+            "actions": [{"name": "Rainbow Classic", "type": 5, "speedMs": 60,
+                         "paletteId": 0, "direction": 1}],
         },
         "rainbow-across": {
             "name": "Rainbow Across",
             "durationS": 30,
-            "effects": [{"name": "Rainbow Sphere Sweep", "category": "spatial-field", "shape": "sphere",
-                         "r": 100, "g": 0, "b": 255, "size": {"radius": 1200},
-                         "motion": {"startPos": [0,1000,0], "endPos": [3000,1000,0], "durationS": 30, "easing": "linear"},
-                         "blend": "replace"}],
+            "actions": [{"name": "Rainbow Classic", "type": 5, "speedMs": 50,
+                         "paletteId": 0, "direction": 0}],
         },
         "slow-fire": {
             "name": "Slow Fire",
