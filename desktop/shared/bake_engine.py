@@ -492,8 +492,33 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
                     if ss <= sec < ss + sd:
                         p = seg.get("params", {})
                         color = [p.get("r", 0), p.get("g", 0), p.get("b", 0)]
-                        if sum(color) == 0 and seg.get("type", 0) > 0:
-                            color = [128, 128, 128]  # placeholder for non-color actions
+                        stype = seg.get("type", 0)
+                        if sum(color) == 0 and stype > 0:
+                            # Generate representative preview color for procedural effects
+                            elapsed = sec - ss
+                            if stype == ACT_RAINBOW:
+                                # Cycle through hue over time
+                                hue = (elapsed * 30) % 360
+                                if hue < 60: color = [255, int(hue*255/60), 0]
+                                elif hue < 120: color = [int((120-hue)*255/60), 255, 0]
+                                elif hue < 180: color = [0, 255, int((hue-120)*255/60)]
+                                elif hue < 240: color = [0, int((240-hue)*255/60), 255]
+                                elif hue < 300: color = [int((hue-240)*255/60), 0, 255]
+                                else: color = [255, 0, int((360-hue)*255/60)]
+                            elif stype == ACT_FIRE:
+                                color = [255, 80 + int(elapsed * 3) % 80, 0]
+                            elif stype == ACT_TWINKLE:
+                                color = [200 + (elapsed * 17) % 55, 200 + (elapsed * 13) % 55, 200 + (elapsed * 19) % 55]
+                            elif stype == ACT_SPARKLE:
+                                color = [180, 180, 220]
+                            elif stype == ACT_CHASE:
+                                color = [p.get("r", 0) or 100, p.get("g", 0) or 200, p.get("b", 0) or 255]
+                            elif stype == ACT_BREATHE:
+                                base = [p.get("r", 200), p.get("g", 100), p.get("b", 255)]
+                                bri = 0.5 + 0.5 * math.sin(elapsed * math.pi / max(p.get("periodMs", 3000) / 1000, 1))
+                                color = [int(c * bri) for c in base]
+                            else:
+                                color = [128, 128, 128]
                         break
                 string_colors.append(color)
             fix_preview.append(string_colors)
