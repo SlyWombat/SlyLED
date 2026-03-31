@@ -49,12 +49,16 @@ class RuntimeViewModel @Inject constructor(
     private val _previewSecond = MutableStateFlow(0)
     val previewSecond = _previewSecond.asStateFlow()
 
+    private val _stageChildren = MutableStateFlow<List<Child>>(emptyList())
+    val stageChildren = _stageChildren.asStateFlow()
+
     fun load() {
         viewModelScope.launch {
             try { _timelines.value = repository.getTimelines() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getTimelines failed", e) }
             try { _presets.value = repository.getShowPresets() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getPresets failed", e) }
             try { _actions.value = repository.getActions() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getActions failed", e) }
             try { _spatialEffects.value = repository.getSpatialEffects() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getSpatialEffects failed", e) }
+            try { _stageChildren.value = repository.getChildren() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getChildren failed", e) }
         }
         // Poll timeline status
         viewModelScope.launch {

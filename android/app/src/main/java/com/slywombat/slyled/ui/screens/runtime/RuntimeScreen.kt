@@ -111,15 +111,14 @@ fun RuntimeScreen(viewModel: RuntimeViewModel = hiltViewModel()) {
             }
         }
 
-        // Show emulator canvas
-        if (previewData.isNotEmpty()) {
-            item {
-                ShowEmulatorCanvas(
-                    previewData = previewData,
-                    second = previewSecond,
-                    durationS = timelineStatus?.durationS ?: 30,
-                )
-            }
+        // Stage preview canvas — always visible, gray pixels when idle
+        item {
+            ShowEmulatorCanvas(
+                previewData = previewData,
+                second = previewSecond,
+                durationS = timelineStatus?.durationS ?: 0,
+                children = viewModel.stageChildren.collectAsState().value,
+            )
         }
 
         // Timeline list
@@ -185,17 +184,18 @@ fun ShowEmulatorCanvas(
     previewData: Map<String, List<List<List<Int>>>>,
     second: Int,
     durationS: Int,
+    children: List<Child> = emptyList(),
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
-            Text("Show Preview", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Text("Stage Preview", fontWeight = FontWeight.Bold, fontSize = 13.sp)
             Spacer(Modifier.height(6.dp))
 
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(120.dp)
-                    .background(Color(0xFF0A0F1A))
+                    .height(150.dp)
+                    .background(Color(0xFF060A12))
             ) {
                 val w = size.width
                 val h = size.height
@@ -203,54 +203,77 @@ fun ShowEmulatorCanvas(
                 // Stage border
                 drawRect(Color(0xFF1E3A5F), style = Stroke(1f))
 
-                // Distribute fixtures evenly across the canvas
-                val fixIds = previewData.keys.toList()
-                if (fixIds.isEmpty()) return@Canvas
+                if (children.isEmpty()) return@Canvas
 
-                fixIds.forEachIndexed { idx, fid ->
-                    val frames = previewData[fid] ?: return@forEachIndexed
-                    val dur = frames.size
-                    if (dur == 0) return@forEachIndexed
-                    val sec = second % dur
-                    val colors = if (sec < frames.size) frames[sec] else emptyList()
+                // Direction vectors: E=+X, N=-Y(up), W=-X, S=+Y
+                val dirDx = floatArrayOf(1f, 0f, -1f, 0f)
+                val dirDy = floatArrayOf(0f, -1f, 0f, 1f)
+                val grayOff = Color(40, 40, 45)
 
-                    // Position fixture evenly
-                    val cx = (idx + 0.5f) * w / fixIds.size
-                    val cy = h / 2
+                // Distribute children evenly for now
+                children.forEachIndexed { idx, child ->
+                    val cx = (idx + 0.5f) * w / children.size
+                    val cy = h * 0.45f
+                    val sc = child.sc.coerceAtMost(child.strings.size)
 
-                    // Draw each string as a colored line
-                    colors.forEachIndexed { si, rgb ->
-                        if (rgb.size < 3) return@forEachIndexed
-                        val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
-                        if (r + g + b < 5) return@forEachIndexed
+                    // Find preview colors for this child
+                    var previewColors: List<List<Int>>? = null
+                    if (previewData.isNotEmpty()) {
+                        previewData.forEach { (_, frames) ->
+                            if (frames.isNotEmpty()) {
+                                val dur = frames.size
+                                val sec = if (dur > 0) second % dur else 0
+                                if (previewColors == null && sec < frames.size)
+                                    previewColors = frames[sec]
+                            }
+                        }
+                    }
 
-                        val angle = if (colors.size > 1) (si.toFloat() / colors.size * Math.PI).toFloat() else 0f
-                        val len = 30f
-                        val ex = cx + kotlin.math.cos(angle.toDouble()).toFloat() * len
-                        val ey = cy - kotlin.math.sin(angle.toDouble()).toFloat() * len
+                    for (si in 0 until sc) {
+                        val s = child.strings[si]
+                        if (s.leds <= 0) continue
+                        val sdir = s.stripDirection.coerceIn(0, 3)
+                        val dx = dirDx[sdir]
+                        val dy = dirDy[sdir]
+                        val lenMm = if (s.lengthMm < 500) (s.leds * 16).coerceAtLeast(500) else s.lengthMm
+                        val pxLen = (lenMm * w / 10000f).coerceAtLeast(25f)
 
-                        drawLine(
-                            Color(r, g, b),
-                            Offset(cx, cy), Offset(ex, ey),
-                            strokeWidth = 8f
-                        )
-                        // Glow
-                        drawCircle(Color(r, g, b, 100), 12f, Offset((cx + ex) / 2, (cy + ey) / 2))
+                        // Get color (gray if no show, preview color if running)
+                        var r = 40; var g = 40; var b = 45; var lit = false
+                        if (previewColors != null && si < previewColors!!.size) {
+                            val pc = previewColors!![si]
+                            if (pc.size >= 3 && pc[0] + pc[1] + pc[2] > 3) {
+                                r = pc[0]; g = pc[1]; b = pc[2]; lit = true
+                            }
+                        }
+
+                        // Draw LED pixel dots
+                        val dotCount = s.leds.coerceAtMost((pxLen / 3).toInt()).coerceAtLeast(5)
+                        for (di in 0 until dotCount) {
+                            val t = (di + 0.5f) / dotCount
+                            val dpx = cx + dx * pxLen * t
+                            val dpy = cy + dy * pxLen * t
+                            val dotR = if (lit) 3f else 1.8f
+                            drawCircle(Color(r, g, b), dotR, Offset(dpx, dpy))
+                            if (lit) drawCircle(Color(r, g, b, 30), 5f, Offset(dpx, dpy))
+                        }
                     }
 
                     // Node
-                    drawCircle(Color(0xFF22CC66), 6f, Offset(cx, cy))
+                    val nodeCol = if (child.status == 1) Color(0xFF22CC66) else Color(0xFF444444)
+                    drawCircle(nodeCol, 5f, Offset(cx, cy))
                 }
             }
 
-            // Time display
-            val m = second / 60
-            val s = second % 60
-            Text(
-                "%02d:%02d / %02d:%02d".format(m, s, durationS / 60, durationS % 60),
-                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp)
-            )
+            // Time display (only when running)
+            if (durationS > 0) {
+                val m = second / 60; val s = second % 60
+                Text(
+                    "%02d:%02d / %02d:%02d".format(m, s, durationS / 60, durationS % 60),
+                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
         }
     }
 }

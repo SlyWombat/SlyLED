@@ -190,9 +190,9 @@ body.light .li:hover{border-color:#3b82f6}
         <button class='btn btn-off' onclick='tlStopShow()'>Stop Show</button>
       </div>
     </div>
-    <div id='tl-emulator' style='display:none;margin-top:1em'>
-      <div style='font-size:.82em;color:#94a3b8;margin-bottom:.3em'>Show Preview</div>
-      <canvas id='emu-cv' width='600' height='200' style='border:1px solid #334155;background:#0a0f1a;display:block;max-width:100%'></canvas>
+    <div id='tl-emulator' style='margin-top:1em'>
+      <div style='font-size:.82em;color:#94a3b8;margin-bottom:.3em'>Stage Preview</div>
+      <canvas id='emu-cv' width='800' height='280' style='border:1px solid #334155;background:#060a12;display:block;max-width:100%;border-radius:4px'></canvas>
       <div id='emu-time' style='font-size:.72em;color:#64748b;margin-top:.2em'></div>
     </div>
   </div>
@@ -1663,6 +1663,7 @@ function setRuntimeMode(mode){
 }
 
 function loadTimelines(){
+  emuLoadStage(); // always refresh stage canvas
   ra('GET','/api/timelines',null,function(d){
     _timelines=d||[];
     var sel=document.getElementById('tl-select');if(!sel)return;
@@ -2257,52 +2258,63 @@ function drawLayout(){
   });
 }
 
-// -- Show Emulator -------------------------------------------------------
-var _emuData=null, _emuTimer=null, _emuT=0;
+// -- Stage Preview (always visible, per-pixel) ----------------------------
+var _emuStage=null, _emuPreview=null, _emuTimer=null, _emuT=0, _emuRunning=false;
 
-function emuStart(tlId){
-  emuStop();
-  // Load all data needed for the emulator: preview, layout, children, fixtures
-  ra('GET','/api/timelines/'+tlId+'/baked/preview',null,function(preview){
-    if(!preview||typeof preview!=='object')return;
-    ra('GET','/api/layout',null,function(lay){
-      ra('GET','/api/children',null,function(children){
-        ra('GET','/api/fixtures',null,function(fixtures){
-          _emuData={preview:preview,layout:lay,children:children||[],fixtures:fixtures||[],tlId:tlId};
-          _emuT=0;
-          document.getElementById('tl-emulator').style.display='block';
-          _emuTimer=setInterval(function(){
-            ra('GET','/api/settings',null,function(s){
-              if(!s||!s.runnerRunning){emuStop();return;}
-              if(s.runnerStartEpoch){_emuT=Math.max(0,Math.floor(Date.now()/1000)-s.runnerStartEpoch);}
-            });
-            emuDraw();
-          },1000);
-          emuDraw();
-        });
+function emuLoadStage(){
+  ra('GET','/api/layout',null,function(lay){
+    ra('GET','/api/children',null,function(ch){
+      ra('GET','/api/fixtures',null,function(fx){
+        _emuStage={layout:lay,children:ch||[],fixtures:fx||[]};
+        emuDraw();
       });
     });
+  });
+  // Start polling for show state
+  if(_emuTimer)clearInterval(_emuTimer);
+  _emuTimer=setInterval(function(){
+    ra('GET','/api/settings',null,function(s){
+      if(s&&s.runnerRunning&&s.activeTimeline>=0){
+        if(!_emuRunning){
+          _emuRunning=true;
+          ra('GET','/api/timelines/'+s.activeTimeline+'/baked/preview',null,function(p){
+            if(p&&typeof p==='object')_emuPreview=p;
+          });
+        }
+        if(s.runnerStartEpoch)_emuT=Math.max(0,Math.floor(Date.now()/1000)-s.runnerStartEpoch);
+      } else if(_emuRunning){
+        _emuRunning=false;_emuPreview=null;_emuT=0;
+      }
+    });
+    emuDraw();
+  },1000);
+  emuDraw();
+}
+
+function emuStart(tlId){
+  _emuRunning=true;_emuT=0;
+  ra('GET','/api/timelines/'+tlId+'/baked/preview',null,function(p){
+    if(p&&typeof p==='object')_emuPreview=p;
+    emuDraw();
   });
 }
 
 function emuStop(){
-  if(_emuTimer){clearInterval(_emuTimer);_emuTimer=null;}
-  _emuData=null;_emuT=0;
-  var el=document.getElementById('tl-emulator');if(el)el.style.display='none';
+  _emuRunning=false;_emuPreview=null;_emuT=0;
+  emuDraw();
 }
 
 function emuDraw(){
-  var cv=document.getElementById('emu-cv');if(!cv||!_emuData)return;
+  var cv=document.getElementById('emu-cv');if(!cv)return;
   var ctx=cv.getContext('2d');
   var W=cv.width,H=cv.height;
-  ctx.fillStyle='#0a0f1a';ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#060a12';ctx.fillRect(0,0,W,H);
 
-  var preview=_emuData.preview;
-  var layout=_emuData.layout;
-  var children=_emuData.children;
-  var fixtures=_emuData.fixtures;
-  var fixIds=Object.keys(preview);
-  if(!fixIds.length)return;
+  if(!_emuStage)return;
+  var layout=_emuStage.layout;
+  var children=_emuStage.children;
+  var fixtures=_emuStage.fixtures;
+  if(!children.length)return;
 
   var cw=(layout&&layout.canvasW)||10000;
   var ch=(layout&&layout.canvasH)||5000;
@@ -2310,85 +2322,87 @@ function emuDraw(){
 
   // Stage border + grid
   ctx.strokeStyle='#1e3a5f';ctx.lineWidth=1;ctx.strokeRect(1,1,W-2,H-2);
-  ctx.strokeStyle='#111828';ctx.lineWidth=0.5;
-  for(var gx=0;gx<10;gx++){var x=gx*W/10;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
-  for(var gy=0;gy<5;gy++){var y=gy*H/5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+  ctx.strokeStyle='#0c1222';ctx.lineWidth=0.5;
+  for(var gx=1;gx<10;gx++){var x=gx*W/10;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+  for(var gy=1;gy<5;gy++){var y=gy*H/5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
 
-  // Direction vectors: E=+X, N=+Y(up on canvas), W=-X, S=-Y
   var dirDx=[1,0,-1,0],dirDy=[0,-1,0,1];
 
-  fixIds.forEach(function(fid){
-    var frames=preview[fid];
-    if(!frames||!frames.length)return;
-    var dur=frames.length;
-    var sec=_emuT%dur;
-    var colors=frames[sec]||[];
-
-    // Find fixture → child → layout position
-    var fix=null;fixtures.forEach(function(f){if(String(f.id)===fid)fix=f;});
-    if(!fix)return;
-    var child=null;children.forEach(function(c){if(c.id===fix.childId)child=c;});
-    var lc=null;layChildren.forEach(function(c){if(c.id===fix.childId)lc=c;});
-    if(!lc){
-      // Not placed — put at center
-      lc={x:cw/2,y:ch/2};
-    }
+  // Iterate ALL children (not just fixtures with preview data)
+  children.forEach(function(child){
+    var lc=null;layChildren.forEach(function(c){if(c.id===child.id)lc=c;});
+    if(!lc||(!lc.x&&!lc.y))return; // skip unplaced
 
     var cx=lc.x*W/cw,cy=H-lc.y*H/ch;
-    // Clamp to canvas
-    cx=Math.max(10,Math.min(W-10,cx));cy=Math.max(10,Math.min(H-10,cy));
+    cx=Math.max(12,Math.min(W-12,cx));cy=Math.max(12,Math.min(H-12,cy));
 
-    // Get string directions from child config
-    var sc=child?child.sc:0;
-    var strings=child?child.strings:[];
+    var sc=child.sc||0;
+    var strings=child.strings||[];
 
-    colors.forEach(function(rgb,si){
-      if(!rgb||rgb.length<3)return;
-      var r=rgb[0],g=rgb[1],b=rgb[2];
+    // Find preview colors for this child's fixture
+    var previewColors=null;
+    if(_emuPreview&&_emuRunning){
+      fixtures.forEach(function(f){
+        if(f.childId===child.id&&_emuPreview[String(f.id)]){
+          var frames=_emuPreview[String(f.id)];
+          var dur=frames.length;
+          if(dur>0){previewColors=frames[_emuT%dur];}
+        }
+      });
+    }
 
-      // Get direction from child string config
-      var sdir=0;
-      if(si<sc&&si<strings.length)sdir=strings[si].sdir||0;
+    // Draw each string with individual LED pixels
+    for(var si=0;si<sc&&si<strings.length;si++){
+      var s=strings[si];if(!s||!s.leds)continue;
+      var sdir=s.sdir||0;
       var dx=dirDx[sdir]||0,dy=dirDy[sdir]||0;
-
-      // String length — estimate from LED count
-      var leds=(si<sc&&si<strings.length)?strings[si].leds:50;
-      var lenMm=Math.max(leds*16,500);
+      var leds=s.leds;
+      var lenMm=s.mm||0;if(lenMm<500)lenMm=Math.max(leds*16,500);
       var pxLen=dx!==0?lenMm*W/cw:lenMm*H/ch;
-      pxLen=Math.max(pxLen,20);
+      pxLen=Math.max(pxLen,25);
 
-      var ex=cx+dx*pxLen,ey=cy+dy*pxLen;
+      // Get string color from preview (or gray if no show)
+      var r=40,g=40,b=45; // default gray (off)
+      var lit=false;
+      if(previewColors&&si<previewColors.length){
+        var pc=previewColors[si];
+        if(pc&&(pc[0]+pc[1]+pc[2])>3){r=pc[0];g=pc[1];b=pc[2];lit=true;}
+      }
 
-      // Always draw the string line (dim gray if dark)
-      var bri=r+g+b;
-      if(bri<3){
-        ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(ex,ey);
-        ctx.strokeStyle='#1a1a2a';ctx.lineWidth=2;ctx.stroke();
-      } else {
-        // Bright colored string
-        ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(ex,ey);
-        ctx.strokeStyle='rgb('+r+','+g+','+b+')';ctx.lineWidth=5;ctx.stroke();
-        // Glow along string
-        var dots=Math.min(leds,Math.floor(pxLen/4));
-        for(var di=0;di<dots;di++){
-          var t=(di+0.5)/dots;
-          var dpx=cx+dx*pxLen*t,dpy=cy+dy*pxLen*t;
-          ctx.beginPath();ctx.arc(dpx,dpy,3,0,2*Math.PI);
-          ctx.fillStyle='rgba('+r+','+g+','+b+',0.6)';ctx.fill();
+      // Draw LED pixels along the string
+      var dotCount=Math.min(leds,Math.floor(pxLen/3));
+      dotCount=Math.max(dotCount,5);
+      for(var di=0;di<dotCount;di++){
+        var t=(di+0.5)/dotCount;
+        var dpx=cx+dx*pxLen*t,dpy=cy+dy*pxLen*t;
+        var dotR=lit?2.5:1.5;
+        ctx.beginPath();ctx.arc(dpx,dpy,dotR,0,2*Math.PI);
+        if(lit){
+          ctx.fillStyle='rgb('+r+','+g+','+b+')';ctx.fill();
+          // Subtle glow
+          ctx.beginPath();ctx.arc(dpx,dpy,4,0,2*Math.PI);
+          ctx.fillStyle='rgba('+r+','+g+','+b+',0.15)';ctx.fill();
+        } else {
+          ctx.fillStyle='rgb('+r+','+g+','+b+')';ctx.fill();
         }
       }
-    });
+
+      // LED count label at end
+      var ex=cx+dx*pxLen,ey=cy+dy*pxLen;
+      ctx.fillStyle='#334';ctx.font='7px sans-serif';ctx.textAlign='center';
+      ctx.fillText(leds,ex+(dx!==0?dx*8:0),ey+(dy!==0?dy*8:0));
+    }
 
     // Node circle
-    var nodeOn=child&&child.status===1;
-    ctx.beginPath();ctx.arc(cx,cy,6,0,2*Math.PI);
-    ctx.fillStyle=nodeOn?'#22cc66':'#555';ctx.fill();
-    ctx.strokeStyle=nodeOn?'#4c4':'#666';ctx.lineWidth=1.5;ctx.stroke();
+    var nodeOn=child.status===1;
+    ctx.beginPath();ctx.arc(cx,cy,5,0,2*Math.PI);
+    ctx.fillStyle=nodeOn?'#22cc66':'#444';ctx.fill();
+    ctx.strokeStyle=nodeOn?'#4c4':'#555';ctx.lineWidth=1;ctx.stroke();
 
     // Label
-    var name=child?(child.name||child.hostname):'Fixture '+fid;
-    ctx.fillStyle='#aaa';ctx.font='9px sans-serif';ctx.textAlign='center';
-    ctx.fillText(name,cx,cy+16);
+    var name=child.name||child.hostname||'';
+    ctx.fillStyle='#78889a';ctx.font='8px sans-serif';ctx.textAlign='center';
+    ctx.fillText(name,cx,cy+14);
   });
 
   // Time display
