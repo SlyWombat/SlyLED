@@ -89,19 +89,24 @@ for preset in presets:
         # Check frames have per-string colors
         if frames:
             ok(f"{pname}: preview fix {fid} has string colors", len(frames[0]) > 0)
-            # Check that at least some seconds have non-zero colors
-            has_visible = any(
-                any(sum(rgb) > 0 for rgb in sec)
-                for sec in frames
-            )
-            ok(f"{pname}: preview fix {fid} has visible colors", has_visible)
+            # Check that at least some seconds have non-zero / non-empty entries
+            # Entries may be [r,g,b] arrays or {"t":..,"p":..,"e":..} action metadata
+            has_visible = False
+            all_valid_colors = True
+            for sec in frames:
+                for entry in sec:
+                    if isinstance(entry, dict) and "t" in entry:
+                        # Action metadata — always counts as visible
+                        if entry.get("t", 0) > 0:
+                            has_visible = True
+                    elif isinstance(entry, list):
+                        if sum(entry) > 0:
+                            has_visible = True
+                        if not all(0 <= c <= 255 for c in entry):
+                            all_valid_colors = False
 
-            # Verify color values are in valid range
-            all_valid_colors = all(
-                all(0 <= c <= 255 for rgb in sec for c in rgb)
-                for sec in frames
-            )
-            ok(f"{pname}: preview fix {fid} colors in 0-255 range", all_valid_colors)
+            ok(f"{pname}: preview fix {fid} has visible colors", has_visible)
+            ok(f"{pname}: preview fix {fid} colors in valid range", all_valid_colors)
 
     # Clean up (delete the timeline)
     api("DELETE", f"/api/timelines/{tl_id}")
