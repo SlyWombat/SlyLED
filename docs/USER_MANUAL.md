@@ -1,4 +1,4 @@
-# SlyLED User Manual — 3D Volumetric Lighting System
+# SlyLED User Manual — 3D Volumetric Lighting System (v7.2)
 
 ## Table of Contents
 1. [Getting Started with 3D Stage Design](#1-getting-started)
@@ -6,8 +6,10 @@
 3. [Creating Spatial Effects](#3-spatial-effects)
 4. [Building a Timeline](#4-timeline)
 5. [Baking & Playback](#5-baking)
-6. [Classic Mode](#6-classic-mode)
-7. [Troubleshooting](#7-troubleshooting)
+6. [Show Preview Emulator](#6-show-preview)
+7. [Preset Shows](#7-presets)
+8. [System Limits](#8-limits)
+9. [Troubleshooting](#9-troubleshooting)
 
 ---
 
@@ -199,31 +201,74 @@ Shows with more than 16 steps per fixture are automatically "paged" — the pare
 
 ---
 
-## 6. Classic Mode
+## 6. Show Preview Emulator
 
-### When to Use Classic Mode
-Classic runners are ideal for:
-- Simple sequential shows (one effect after another)
-- Quick testing of individual effects
-- Shows that don't need spatial awareness
-- Backward compatibility with existing setups
+Both the desktop SPA and Android app include a real-time show preview emulator on the Runtime tab.
 
-### Classic Workflow
-1. **Actions tab**: Create action presets (Solid, Chase, Rainbow, etc.)
-2. **Runtime tab** (Classic mode): Create a runner with sequential steps
-3. **Compute**: Calculate per-performer delays for canvas-scoped effects
-4. **Sync**: Load steps to all performers
-5. **Start**: Begin synchronized execution
+### How It Works
+- The bake engine generates preview data: 1 dominant color per string per second
+- When a show starts, the emulator renders a canvas showing all fixtures at their layout positions
+- Per-string colored lines update every second, synced to the server's elapsed time
+- Time counter shows current position vs total duration
 
-### Flights and Shows
-- **Flights**: Assign a runner to a group of performers with priority
-- **Shows**: Run multiple flights simultaneously
+### Desktop SPA
+The emulator canvas appears below the timeline detail section after clicking "Sync & Start". Fixtures use actual string directions from the child config. Dark strings show as dim gray lines.
 
-All classic features continue to work unchanged alongside the new 3D system.
+### Android App
+The `ShowEmulatorCanvas` card appears between the "Now Playing" progress card and the timeline list. Fixtures are distributed across the canvas with colored lines and glow effects.
 
 ---
 
-## 7. Troubleshooting
+## 7. Preset Shows
+
+Nine pre-built shows are available from Settings → Load Show → Preset Shows:
+
+| Preset | Type | Description |
+|--------|------|-------------|
+| Rainbow Up | Spatial plane | Moving rainbow from floor to ceiling |
+| Rainbow Across | Spatial sphere | Rainbow sweeping left to right |
+| Slow Fire | Classic action | Warm fire effect on all fixtures |
+| Disco | Classic action | Pastel twinkle sparkles |
+| Ocean Wave | Spatial (2 effects) | Blue wave sweep with teal wash |
+| Sunset Glow | Mixed | Warm breathe with golden plane sweep |
+| Police Lights | Mixed | Red strobe with blue box flash sweep |
+| Starfield | Classic action | White sparkles on dark background |
+| Aurora Borealis | Spatial (2 effects) | Green curtain with purple shimmer |
+
+Each preset creates a timeline with an "All Performers" stage track. Classic actions run on every fixture simultaneously. Spatial effects sweep across the stage based on fixture positions.
+
+---
+
+## 8. System Limits
+
+| Resource | Limit | Notes |
+|----------|-------|-------|
+| Children (performers) | 8 max | Protocol constant `MAX_STR_PER_CHILD` |
+| Strings per child | 8 max | ESP32 supports up to 8 GPIO pins |
+| LEDs per string | 65535 max | uint16_t addressing (protocol v4) |
+| Total LEDs per child | 255 max | `NUM_LEDS` / `MAX_LEDS` in firmware |
+| Steps per runner | 16 max | `LoadStepPayload` array limit |
+| Timelines | Unlimited | Stored in JSON |
+| Tracks per timeline | Unlimited | Expanded per-fixture during bake |
+| Clips per track | Unlimited | |
+| Bake frame rate | 40 Hz | `BAKE_FPS` constant |
+| Bake segments per fixture | 16 max | Fits in runner step limit |
+| Per-string segments | 8 max per string | `16 / string_count` |
+| Preview resolution | 1 fps | 1 color per string per second |
+| Show duration | No hard limit | Memory scales with duration × pixels |
+| Sync verify retries | 3 | HTTP status check per performer |
+| NTP sync offset | 5 seconds | GO command sent with future epoch |
+| UDP packet size | 56 bytes | `LoadStepPayload` (protocol v4) |
+| WiFi performers | ~8 practical | UDP broadcast bandwidth limit |
+
+### Memory Estimates
+- **Bake RAM**: `duration_s × 40 × pixel_count × 3 bytes` (e.g., 60s × 40fps × 300px = 2.2 MB)
+- **Preview RAM**: `duration_s × string_count × 3 bytes` (e.g., 60s × 3 strings = 540 bytes)
+- **LSQ file size**: `frames × pixels × 3 bytes` (e.g., 2400 frames × 300px = 2.1 MB)
+
+---
+
+## 9. Troubleshooting
 
 ### 3D Viewport Not Rendering
 - **Cause**: Browser doesn't support WebGL
