@@ -207,8 +207,8 @@ body.light .li:hover{border-color:#3b82f6}
       <option value='0'>Metric (mm)</option>
       <option value='1'>Imperial (in)</option>
     </select>
-    <label>Canvas Width (mm)</label><input id='s-cw' type='number' min='1000' max='100000' style='width:120px'>
-    <label>Canvas Height (mm)</label><input id='s-ch' type='number' min='1000' max='100000' style='width:120px'>
+    <label>Stage Width (mm)</label><input id='s-cw' type='number' min='1000' max='100000' style='width:120px'>
+    <label>Stage Height (mm)</label><input id='s-ch' type='number' min='1000' max='100000' style='width:120px'>
     <label style='display:flex;align-items:center;gap:.5em;margin-top:.8em'>
       <input type='checkbox' id='s-dm' data-tip='setDark'> Dark Mode
     </label>
@@ -386,8 +386,8 @@ var L={
   // Settings
   setName:'Display name for this SlyLED orchestrator instance',
   setUnits:'Choose between metric (mm) and imperial (inches)',
-  setCW:'Physical width of the layout canvas in millimeters',
-  setCH:'Physical height of the layout canvas in millimeters',
+  setCW:'Physical width of the stage in millimeters',
+  setCH:'Physical height of the stage in millimeters',
   setDark:'Switch between dark and light UI themes',
   setLog:'Write debug logs to a timestamped file in the data folder',
   setSave:'Save all settings to persistent storage',

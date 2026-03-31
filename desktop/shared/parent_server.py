@@ -62,7 +62,7 @@ def _apply_logging(enabled):
 
 # ── Version ───────────────────────────────────────────────────────────────────
 
-VERSION = "7.2.2"
+VERSION = "7.2.3"
 
 # ── UDP protocol ──────────────────────────────────────────────────────────────
 
@@ -774,7 +774,37 @@ def api_stage_save():
                 return jsonify(err=f"Stage dimension '{k}' must be a positive number"), 400
             _stage[k] = float(v)
     _save("stage", _stage)
+    # Sync canvas dimensions (mm) from stage (meters)
+    with _lock:
+        _settings["canvasW"] = int(_stage["w"] * 1000)
+        _settings["canvasH"] = int(_stage["h"] * 1000)
+        _layout["canvasW"] = _settings["canvasW"]
+        _layout["canvasH"] = _settings["canvasH"]
+        _save("settings", _settings)
+        _save("layout", _layout)
     return jsonify(ok=True)
+
+def _auto_create_fixtures():
+    """Auto-create linear fixtures from all registered children."""
+    global _nxt_fix
+    with _lock:
+        existing = {f.get("childId") for f in _fixtures}
+        for child in _children:
+            if child["id"] in existing:
+                continue
+            f = {
+                "id": _nxt_fix,
+                "name": child.get("name") or child.get("hostname") or f"Fixture {_nxt_fix}",
+                "childId": child["id"],
+                "type": "linear",
+                "strings": [],
+                "rotation": [0, 0, 0],
+                "childIds": [],
+                "aoeRadius": 1000,
+            }
+            _fixtures.append(f)
+            _nxt_fix += 1
+        _save("fixtures", _fixtures)
 
 # ── Fixtures (Phase 2) ───────────────────────────────────────────────────────
 
@@ -1129,6 +1159,10 @@ def api_timeline_bake(tid):
     n_frames = int(math.ceil(tl.get("durationS", 60) * 40))
     _bake_progress = BakeProgress(n_frames)
 
+    # Auto-create fixtures from children if none exist
+    if not _fixtures:
+        _auto_create_fixtures()
+
     # Pre-enrich fixtures with child string data so the bake engine can resolve pixels
     enriched_fixtures = []
     for f in _fixtures:
@@ -1448,6 +1482,10 @@ def api_settings_save():
         _layout["canvasW"] = _settings["canvasW"]
         _layout["canvasH"] = _settings["canvasH"]
         _save("settings", _settings)
+        # Sync stage dimensions (meters) from canvas (mm)
+        _stage["w"] = _settings["canvasW"] / 1000.0
+        _stage["h"] = _settings["canvasH"] / 1000.0
+        _save("stage", _stage)
     # Toggle file logging if changed
     if "logging" in body:
         _apply_logging(body["logging"])

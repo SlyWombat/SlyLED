@@ -121,7 +121,7 @@ fun SettingsScreen(
                     }
                     Spacer(Modifier.height(8.dp))
 
-                    // Canvas dimensions
+                    // Stage dimensions
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -129,7 +129,7 @@ fun SettingsScreen(
                         OutlinedTextField(
                             value = canvasW,
                             onValueChange = { canvasW = it.filter { c -> c.isDigit() } },
-                            label = { Text("Canvas W") },
+                            label = { Text("Stage W") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
                             modifier = Modifier.weight(1f)
@@ -137,7 +137,7 @@ fun SettingsScreen(
                         OutlinedTextField(
                             value = canvasH,
                             onValueChange = { canvasH = it.filter { c -> c.isDigit() } },
-                            label = { Text("Canvas H") },
+                            label = { Text("Stage H") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
                             modifier = Modifier.weight(1f)
