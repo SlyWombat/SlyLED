@@ -208,19 +208,20 @@ void dmxSendFrame() {
 #ifdef BOARD_GIGA_DMX
   if (!dmxUart) return;
 
-  // Step 1: Switch to slow baud and send 0x00 to generate BREAK
+  // Step 1: BREAK — switch to slow baud, re-apply 8N2 format, send 0x00
   // At 76923 baud, 0x00 = start(low) + 8×0(low) + 2×stop(high) = ~117μs low + ~26μs high
-  // This exceeds the DMX-512 minimum: BREAK ≥88μs, MAB ≥8μs
   dmxUart->baud(DMX_BREAK_BAUD);
+  dmxUart->format(8, mbed::SerialBase::None, 2);
   uint8_t brk = 0x00;
   dmxUart->write(&brk, 1);
-  // Wait for break byte to transmit: 11 bits / 76923 = ~143μs
+  // Wait for break byte to finish: 11 bits / 76923 = ~143μs
   delayMicroseconds(180);
 
-  // Step 2: Switch to DMX baud and send start code + 512 channels
+  // Step 2: DATA — switch to DMX baud, re-apply 8N2, send start code + 512 channels
   dmxUart->baud(DMX_BAUD);
-  dmxUart->format(8, mbed::SerialBase::None, 2);  // re-apply 8N2 after baud change
+  dmxUart->format(8, mbed::SerialBase::None, 2);
   dmxUart->write(dmxBuf, DMX_UNIVERSE_MAX + 1);
+  delayMicroseconds(800);  // inter-frame gap
 
 #else
   // ESP32: pin-toggle break
