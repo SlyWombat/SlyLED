@@ -398,9 +398,9 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
         n = dmxCfg.startAddress + dmxCfg.channelsPerFixture - 1;
     char buf[3072];
     int pos = snprintf(buf, sizeof(buf),
-      "{\"universe\":%u,\"start\":%u,\"chPerFix\":%u,\"fixCount\":%u,"
+      "{\"subnet\":%u,\"universe\":%u,\"start\":%u,\"chPerFix\":%u,\"fixCount\":%u,"
       "\"frames\":%lu,\"active\":%s,\"selfTest\":%s,\"dePin\":%u,\"names\":[",
-      dmxCfg.universe, dmxCfg.startAddress, dmxCfg.channelsPerFixture,
+      (unsigned)dmxCfg.subnet, (unsigned)dmxCfg.universe, dmxCfg.startAddress, dmxCfg.channelsPerFixture,
       dmxCfg.fixtureCount, (unsigned long)dmxFrameCount,
       dmxOutputActive ? "true" : "false",
       dmxSelfTestOk ? "true" : "false",
@@ -431,11 +431,13 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
       int sa = jsonGetInt(body, "startAddr", -1);
       int cpf = jsonGetInt(body, "chPerFix", -1);
       int fc = jsonGetInt(body, "fixCount", -1);
+      int sn = jsonGetInt(body, "subnet", -1);
       int uni = jsonGetInt(body, "universe", -1);
       if (sa >= 1 && sa <= 512) dmxCfg.startAddress = (uint16_t)sa;
       if (cpf >= 1 && cpf <= DMX_MAX_CH_PER_FIX) dmxCfg.channelsPerFixture = (uint8_t)cpf;
       if (fc >= 1 && fc <= 170) dmxCfg.fixtureCount = (uint8_t)fc;
-      if (uni >= 0 && uni <= 32767) dmxCfg.universe = (uint16_t)uni;
+      if (sn >= 0 && sn <= 15) dmxCfg.subnet = (uint8_t)sn;
+      if (uni >= 0 && uni <= 15) dmxCfg.universe = (uint8_t)uni;
       // Parse channel names from "names":["Motor","Dim",...]
       char* namesArr = strstr(body, "\"names\"");
       if (namesArr) {

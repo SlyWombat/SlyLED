@@ -77,6 +77,7 @@ void dmxLoadConfig() {
     if (Serial) Serial.println(F("[DMX] Config loaded from flash"));
   } else {
     // First boot defaults
+    dmxCfg.subnet             = 0;
     dmxCfg.universe           = 0;
     dmxCfg.startAddress       = 1;
     dmxCfg.channelsPerFixture = 13;
@@ -117,7 +118,8 @@ void dmxSaveConfig() {
 void dmxLoadConfig() {
   Preferences prefs;
   prefs.begin(NVS_NS, true);
-  dmxCfg.universe           = prefs.getUShort("universe", 0);
+  dmxCfg.subnet             = prefs.getUChar("subnet", 0);
+  dmxCfg.universe           = prefs.getUChar("universe", 0);
   dmxCfg.startAddress       = prefs.getUShort("startAddr", 1);
   dmxCfg.channelsPerFixture = prefs.getUChar("chPerFix", 13);
   dmxCfg.fixtureCount       = prefs.getUChar("fixCount", 1);
@@ -135,7 +137,8 @@ void dmxLoadConfig() {
 void dmxSaveConfig() {
   Preferences prefs;
   prefs.begin(NVS_NS, false);
-  prefs.putUShort("universe", dmxCfg.universe);
+  prefs.putUChar("subnet", dmxCfg.subnet);
+  prefs.putUChar("universe", dmxCfg.universe);
   prefs.putUShort("startAddr", dmxCfg.startAddress);
   prefs.putUChar("chPerFix", dmxCfg.channelsPerFixture);
   prefs.putUChar("fixCount", dmxCfg.fixtureCount);
@@ -156,6 +159,8 @@ void dmxInit() {
   dmxFrameCount = 0;
 
   dmxLoadConfig();
+  if (dmxCfg.subnet > 15) dmxCfg.subnet = 0;
+  if (dmxCfg.universe > 15) dmxCfg.universe = 0;
   if (dmxCfg.startAddress < 1) dmxCfg.startAddress = 1;
   if (dmxCfg.channelsPerFixture < 1) dmxCfg.channelsPerFixture = 13;
   if (dmxCfg.fixtureCount < 1) dmxCfg.fixtureCount = 1;

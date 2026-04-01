@@ -19,7 +19,8 @@ constexpr uint8_t DMX_MAX_CH_PER_FIX = 24;  // max channels per fixture profile
 
 // DMX bridge config (persisted to NVS on ESP32, RAM-only on Giga)
 struct DmxBridgeConfig {
-  uint16_t universe;                              // Art-Net universe (0-based)
+  uint8_t  subnet;                                // Art-Net subnet (0-15, default 0)
+  uint8_t  universe;                              // Art-Net universe (0-15, default 0)
   uint16_t startAddress;                          // DMX start address (1-512)
   uint8_t  channelsPerFixture;                    // channels per fixture (e.g., 13)
   uint8_t  fixtureCount;                          // number of fixtures addressed
