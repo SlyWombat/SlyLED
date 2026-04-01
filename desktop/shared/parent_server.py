@@ -1771,9 +1771,85 @@ def api_sync_status(tid):
 
 #  "  "  Show Execution (Phase 6)  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
+_dmx_playback_stop = threading.Event()
+
+def _dmx_playback_loop(tid, go_epoch, duration, loop):
+    """Background thread: stream DMX channel data during show playback."""
+    result = _bake_result.get(tid)
+    if not result:
+        return
+    # Collect DMX fixtures with their baked segments
+    dmx_fixtures = []
+    for f in _fixtures:
+        if f.get("fixtureType") != "dmx":
+            continue
+        fid = f["id"]
+        segs = result.get("fixtures", {}).get(fid, {}).get("segments", [])
+        if not segs:
+            continue
+        uni = f.get("dmxUniverse", 1)
+        addr = f.get("dmxStartAddr", 1)
+        pid = f.get("dmxProfileId")
+        ch_map = _profile_lib.channel_map(pid) if pid else None
+        dmx_fixtures.append({"uni": uni, "addr": addr, "ch_map": ch_map, "segs": segs})
+    if not dmx_fixtures:
+        return
+    # Auto-start Art-Net engine if not running
+    proto = _dmx_settings.get("protocol", "artnet")
+    engine = _artnet if proto == "artnet" else _sacn
+    if not engine.running:
+        engine.start()
+    # Wait until go_epoch
+    wait = go_epoch - time.time()
+    if wait > 0:
+        _dmx_playback_stop.wait(timeout=wait)
+    if _dmx_playback_stop.is_set():
+        return
+    # 40Hz playback loop
+    interval = 0.025
+    next_frame = time.monotonic()
+    while not _dmx_playback_stop.is_set():
+        now_mono = time.monotonic()
+        if now_mono < next_frame:
+            _dmx_playback_stop.wait(timeout=next_frame - now_mono)
+            if _dmx_playback_stop.is_set():
+                break
+            continue
+        next_frame += interval
+        if next_frame < now_mono:
+            next_frame = now_mono + interval
+        elapsed = time.time() - go_epoch
+        if elapsed < 0:
+            continue
+        if loop and duration > 0:
+            elapsed = elapsed % duration
+        elif elapsed > duration:
+            break  # show ended
+        # Evaluate each DMX fixture
+        for fx in dmx_fixtures:
+            r, g, b, dim = 0, 0, 0, 255
+            for seg in fx["segs"]:
+                ss = seg.get("startS", 0)
+                sd = seg.get("durationS", 1)
+                if ss <= elapsed < ss + sd:
+                    p = seg.get("params", {})
+                    r, g, b = p.get("r", 0), p.get("g", 0), p.get("b", 0)
+                    dim = 255
+                    break
+            profile = {"channel_map": fx["ch_map"]} if fx["ch_map"] else None
+            engine.set_fixture_rgb(fx["uni"], fx["addr"], r, g, b, profile)
+            if fx["ch_map"] and "dimmer" in fx["ch_map"]:
+                engine.get_universe(fx["uni"]).set_fixture_dimmer(fx["addr"], dim, profile)
+    # Blackout DMX fixtures on stop
+    for fx in dmx_fixtures:
+        profile = {"channel_map": fx["ch_map"]} if fx["ch_map"] else None
+        engine.set_fixture_rgb(fx["uni"], fx["addr"], 0, 0, 0, profile)
+        if fx["ch_map"] and "dimmer" in fx["ch_map"]:
+            engine.get_universe(fx["uni"]).set_fixture_dimmer(fx["addr"], 0, profile)
+
 @app.post("/api/timelines/<int:tid>/start")
 def api_timeline_start(tid):
-    """Send RUNNER_GO to all children. Call AFTER sync is complete."""
+    """Send RUNNER_GO to all children + start DMX playback thread."""
     tl = next((t for t in _timelines if t["id"] == tid), None)
     if not tl:
         return jsonify(err="Not found"), 404
@@ -1802,15 +1878,24 @@ def api_timeline_start(tid):
         _settings["runnerStartEpoch"] = go_epoch
         _save("settings", _settings)
 
+    # Start DMX playback thread for DMX fixtures
+    _dmx_playback_stop.clear()
+    duration = tl.get("durationS", 60)
+    loop = tl.get("loop", False)
+    threading.Thread(target=_dmx_playback_loop, args=(tid, go_epoch, duration, loop),
+                     daemon=True).start()
+
     return jsonify(ok=True, started=started, goEpoch=go_epoch)
 
 @app.post("/api/timelines/<int:tid>/stop")
 def api_timeline_stop(tid):
-    """Stop timeline playback on all children."""
+    """Stop timeline playback on all children + DMX playback thread."""
+    # Stop DMX playback thread
+    _dmx_playback_stop.set()
+
     pkt_stop = _hdr(CMD_RUNNER_STOP)
     pkt_off = _hdr(CMD_ACTION_STOP)
     stopped = 0
-    # Send stop packets 3 times for UDP reliability
     for _attempt in range(3):
         for child in _children:
             if not child.get("ip"):

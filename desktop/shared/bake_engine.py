@@ -358,25 +358,35 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
     fixture_data = {}
     for f in fixtures:
         fid = f["id"]
-        lp = pos_map.get(f.get("childId"), {})
+        # Look up position by fixture ID first, then childId
+        lp = pos_map.get(fid, pos_map.get(f.get("childId"), {}))
         child_pos = [lp.get("x", 0), lp.get("y", 0), lp.get("z", 0)]
-        resolve_input = {
-            "type": f.get("type", "linear"),
-            "childPos": child_pos,
-            "strings": f.get("strings", []),
-            "rotation": f.get("rotation", [0, 0, 0]),
-            "aoeRadius": f.get("aoeRadius", 1000),
+        ft = f.get("fixtureType", "led")
+        if ft == "dmx":
+            # DMX fixture: single pixel at its stage position
+            pixels = [child_pos]
+            strings_info = [{"offset": 0, "count": 1, "sdir": 0}]
+        else:
+            resolve_input = {
+                "type": f.get("type", "linear"),
+                "childPos": child_pos,
+                "strings": f.get("strings", []),
+                "rotation": f.get("rotation", [0, 0, 0]),
+                "aoeRadius": f.get("aoeRadius", 1000),
+            }
+            resolved = resolve_fn(resolve_input)
+            pixels = resolved.get("pixelPositions", [])
+            strings_info = []
+            offset = 0
+            for s in resolve_input.get("strings", []):
+                leds = s.get("leds", 0)
+                if leds > 0:
+                    strings_info.append({"offset": offset, "count": leds, "sdir": s.get("sdir", 0)})
+                    offset += leds
+        fixture_data[fid] = {
+            "pixels": pixels, "pixelCount": len(pixels), "strings": strings_info,
+            "fixtureType": ft,
         }
-        resolved = resolve_fn(resolve_input)
-        pixels = resolved.get("pixelPositions", [])
-        strings_info = []
-        offset = 0
-        for s in resolve_input.get("strings", []):
-            leds = s.get("leds", 0)
-            if leds > 0:
-                strings_info.append({"offset": offset, "count": leds, "sdir": s.get("sdir", 0)})
-                offset += leds
-        fixture_data[fid] = {"pixels": pixels, "pixelCount": len(pixels), "strings": strings_info}
 
     # Expand allPerformers tracks
     raw_tracks = timeline.get("tracks", [])
