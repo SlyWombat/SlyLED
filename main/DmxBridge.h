@@ -31,6 +31,7 @@ extern uint8_t dmxBuf[DMX_UNIVERSE_MAX + 1];      // start code + 512 channels
 extern CRGB leds[NUM_LEDS];                       // virtual LED array
 extern volatile uint32_t dmxFrameCount;           // frames sent (diagnostic)
 extern volatile bool dmxOutputActive;             // true if DMX output is running
+extern volatile bool dmxSelfTestOk;              // true if boot self-test passed
 
 void dmxInit();
 void dmxSendFrame();

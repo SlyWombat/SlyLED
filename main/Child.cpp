@@ -496,6 +496,7 @@ void sendChildConfigPage(WiFiClient& c) {
             "<div class='row'><span class='k'>Address</span><span class='v' id='dmx-addr-v'>--</span></div>"
             "<div class='row'><span class='k'>Channels</span><span class='v' id='dmx-ch-v'>--</span></div>"
             "<div class='row'><span class='k'>Frames Sent</span><span class='v' id='dmx-frames'>--</span></div>"
+            "<div class='row'><span class='k'>Self Test</span><span class='v' id='dmx-selftest'>--</span></div>"
             "<div class='row'><span class='k'>DE/RE Pin</span><span class='v'>"));
   sendBuf(c, "%u", (unsigned)DMX_EN_PIN);
   c.print(F("</span></div></div>"));
@@ -843,6 +844,7 @@ void sendChildConfigPage(WiFiClient& c) {
     "var da=document.getElementById('dmx-addr-v');if(da)da.textContent=d.start;"
     "var dc=document.getElementById('dmx-ch-v');if(dc)dc.textContent=d.chPerFix+' x '+d.fixCount;"
     "var df=document.getElementById('dmx-frames');if(df)df.textContent=d.frames;"
+    "var dt=document.getElementById('dmx-selftest');if(dt){dt.textContent=d.selfTest?'PASS':'FAIL';dt.style.color=d.selfTest?'#4c9':'#f44';}"
   ));
   c.flush();
   c.print(F(

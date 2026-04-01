@@ -399,10 +399,12 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     char buf[3072];
     int pos = snprintf(buf, sizeof(buf),
       "{\"universe\":%u,\"start\":%u,\"chPerFix\":%u,\"fixCount\":%u,"
-      "\"frames\":%lu,\"active\":%s,\"names\":[",
+      "\"frames\":%lu,\"active\":%s,\"selfTest\":%s,\"dePin\":%u,\"names\":[",
       dmxCfg.universe, dmxCfg.startAddress, dmxCfg.channelsPerFixture,
       dmxCfg.fixtureCount, (unsigned long)dmxFrameCount,
-      dmxOutputActive ? "true" : "false");
+      dmxOutputActive ? "true" : "false",
+      dmxSelfTestOk ? "true" : "false",
+      (unsigned)DMX_EN_PIN);
     for (uint8_t i = 0; i < dmxCfg.channelsPerFixture && i < DMX_MAX_CH_PER_FIX && pos < (int)sizeof(buf) - 40; i++) {
       pos += snprintf(buf + pos, sizeof(buf) - pos, "%s\"%s\"", i > 0 ? "," : "", dmxCfg.channelNames[i]);
     }
