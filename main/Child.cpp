@@ -624,6 +624,8 @@ void sendChildConfigPage(WiFiClient& c) {
             "<td style='padding:.15em .5em;border:1px solid #334'><b style='color:#4c9'>EN</b></td>"
             "<td style='padding:.15em .5em;border:1px solid #334;color:#556'>RS-485 chip enabled</td></tr>"
             "</table>"
+            "<p style='font-size:.75em;color:#c9a;margin:.3em 0'>"
+            "&#9888; Set EN to <b>not-EN</b> before uploading firmware (DFU conflicts with RS-485 chip).</p>"
             "<div id='dmx-diag' style='font-size:.8em;color:#64748b;margin:.3em 0'></div>"
             "</div>"));
   c.flush();
