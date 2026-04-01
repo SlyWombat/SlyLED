@@ -643,6 +643,7 @@ void sendChildConfigPage(WiFiClient& c) {
             "<label>Start Address</label><input type='number' id='dmx-sa' min='1' max='512' style='width:80px'>"
             "<label>Channels/Fixture</label><input type='number' id='dmx-cpf' min='1' max='24' style='width:80px'>"
             "</div>"
+            "<input type='hidden' id='dmx-fc' value='1'>"
             "<div id='dmx-names' style='margin:.3em 0;font-size:.85em'></div>"
             "<button class='btn' onclick='dmxSaveNames()' style='margin:.3em 0'>Save Names &amp; Apply</button>"
             "<div style='margin:.5em 0;display:flex;gap:.3em;flex-wrap:wrap'>"

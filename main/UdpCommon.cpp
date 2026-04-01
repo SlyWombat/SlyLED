@@ -193,7 +193,7 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
       int n = client.readBytesUntil('\n', hdr, sizeof(hdr) - 1);
       if (n <= 1) break;
       hdr[n] = '\0';
-      if (strncmp(hdr, "Content-Length:", 15) == 0) {
+      if (strncasecmp(hdr, "Content-Length:", 15) == 0) {
         contentLen = atoi(hdr + 15);
       }
     }
@@ -421,7 +421,9 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     // Update DMX config: {"startAddr":1,"chPerFix":13,"fixCount":1,"universe":0,"names":["Motor","Dim",...]}
     {
       char body[1024] = {};
-      int toRead = contentLen < (int)sizeof(body) - 1 ? contentLen : (int)sizeof(body) - 1;
+      int toRead = contentLen;
+      if (toRead <= 0) { delay(20); toRead = client.available(); }  // fallback if Content-Length missing
+      if (toRead > (int)sizeof(body) - 1) toRead = (int)sizeof(body) - 1;
       if (toRead > 0) client.readBytes(body, toRead);
       body[toRead] = '\0';
       int sa = jsonGetInt(body, "startAddr", -1);
