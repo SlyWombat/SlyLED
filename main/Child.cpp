@@ -404,9 +404,6 @@ void sendChildConfigPage(WiFiClient& c) {
             "<div class='tab tact' id='n0' onclick='showTab(0)'>Dashboard</div>"
             "<div class='tab' id='n1' onclick='showTab(1)'>Settings</div>"
             "<div class='tab' id='n2' onclick='showTab(2)'>Config</div>"
-#ifdef BOARD_DMX_BRIDGE
-            "<div class='tab' id='n3' onclick='showTab(3)'>DMX Test</div>"
-#endif
             "</div>"));
 
   // ── Dashboard pane ─────────────────────────────────────────────────────────
@@ -520,7 +517,8 @@ void sendChildConfigPage(WiFiClient& c) {
             " onclick=\"document.getElementById('rf').submit()\">Factory Reset</button>"));
   c.print(F("</div>"));
 
-  // ── Config pane ────────────────────────────────────────────────────────────
+#ifndef BOARD_DMX_BRIDGE
+  // ── Config pane (LED strings — not shown for DMX bridge) ───────────────────
   c.print(F("<div class='pane' id='p2'>"));
   c.print(F("<label>String</label>"
             "<select id='ss' onchange='showStr(this.value)'>"));
@@ -603,17 +601,29 @@ void sendChildConfigPage(WiFiClient& c) {
 
   // Factory reset (separate form — HTML forbids nested forms)
   c.print(F("<form id='rf' action='/config/reset' method='POST' style='display:none'></form>"));
+#endif  // !BOARD_DMX_BRIDGE
 
 #ifdef BOARD_DMX_BRIDGE
-  // ── DMX Test pane ─────────────────────────────────────────────────────────
-  c.print(F("<div class='pane' id='p3' style='display:none'>"));
+  // ── DMX Config pane (replaces LED config pane p2 for DMX bridge) ──────────
+  c.print(F("<div class='pane' id='p2'>"));
   // Section 1: DMX Output Hardware
   c.print(F("<div class='card'><h3>DMX Output</h3>"
             "<p style='font-size:.8em;color:#94a3b8;margin:.2em 0'>"
-            "CQRobot Ocean DMX shield on Serial1 (TX1). "
-            "Set shield jumpers: <b>EN</b> to pin 2, <b>TX</b> to TX1, <b>RX</b> to RX1. "
-            "Switch to <b>Master/TX</b> mode (check silk screen). "
-            "DMX output at 250kbaud, 40Hz frame rate.</p>"
+            "CQRobot Ocean DMX shield on Serial1 (TX1). 250kbaud, 40Hz.</p>"
+            "<table style='font-size:.78em;color:#94a3b8;border-collapse:collapse;margin:.3em 0'>"
+            "<tr><td style='padding:.15em .5em;border:1px solid #334'>TX</td>"
+            "<td style='padding:.15em .5em;border:1px solid #334'><b style='color:#4c9'>tx-uart</b></td>"
+            "<td style='padding:.15em .5em;border:1px solid #334;color:#556'>Serial1 drives RS-485</td></tr>"
+            "<tr><td style='padding:.15em .5em;border:1px solid #334'>RX</td>"
+            "<td style='padding:.15em .5em;border:1px solid #334'><b style='color:#4c9'>rx-uart</b></td>"
+            "<td style='padding:.15em .5em;border:1px solid #334;color:#556'>For future receive</td></tr>"
+            "<tr><td style='padding:.15em .5em;border:1px solid #334'>Slave/DE</td>"
+            "<td style='padding:.15em .5em;border:1px solid #334'><b style='color:#4c9'>DE</b></td>"
+            "<td style='padding:.15em .5em;border:1px solid #334;color:#556'>Direction enable = transmit</td></tr>"
+            "<tr><td style='padding:.15em .5em;border:1px solid #334'>EN/not-EN</td>"
+            "<td style='padding:.15em .5em;border:1px solid #334'><b style='color:#4c9'>EN</b></td>"
+            "<td style='padding:.15em .5em;border:1px solid #334;color:#556'>RS-485 chip enabled</td></tr>"
+            "</table>"
             "<div id='dmx-diag' style='font-size:.8em;color:#64748b;margin:.3em 0'></div>"
             "</div>"));
   c.flush();
@@ -651,13 +661,8 @@ void sendChildConfigPage(WiFiClient& c) {
 
   // JavaScript
   c.print(F("<script>"));
-#ifdef BOARD_DMX_BRIDGE
-  c.print(F("var _dmxTabCount=4;"));
-#else
-  c.print(F("var _dmxTabCount=3;"));
-#endif
   c.print(F("function showTab(t){"
-            "for(var i=0;i<_dmxTabCount;i++){"
+            "for(var i=0;i<3;i++){"
             "var p=document.getElementById('p'+i);if(p)p.style.display=i==t?'block':'none';"
             "var n=document.getElementById('n'+i);if(n)n.className='tab'+(i==t?' tact':'');}"
             "}"));
