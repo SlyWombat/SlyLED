@@ -4069,10 +4069,20 @@ function loadDmxSettings(){
       _dmxUcastNodes=ucast;
       dmxUcastToggle();
       dmxProtoChange();
-      // Load discovered Art-Net nodes
-      ra('GET','/api/dmx/discovered',null,function(nodes){
-        _dmxUcastNodes=Object.assign({},ucast);
-        dmxRenderUcast(nodes||{},ucast);
+      // Load DMX children as unicast targets + any Art-Net discovered nodes
+      ra('GET','/api/children',null,function(children){
+        var targets={};
+        // Add registered DMX bridge children
+        (children||[]).forEach(function(c){
+          if(c.type==='dmx'||c.boardType==='DMX Bridge')
+            targets[c.ip]={shortName:c.name||c.hostname||c.ip, type:'SlyLED DMX Bridge'};
+        });
+        // Merge Art-Net discovered nodes
+        ra('GET','/api/dmx/discovered',null,function(nodes){
+          for(var ip in (nodes||{}))
+            targets[ip]=targets[ip]||nodes[ip];
+          dmxRenderUcast(targets,ucast);
+        });
       });
       // Engine status
       ra('GET','/api/dmx/status',null,function(st){
@@ -4091,24 +4101,22 @@ function dmxUcastToggle(){
   document.getElementById('dmx-ucast-wrap').style.display=on?'':'none';
 }
 
-function dmxRenderUcast(discovered,saved){
+function dmxRenderUcast(targets,saved){
   var el=document.getElementById('dmx-ucast-list');if(!el)return;
-  var allIps={};
-  // Merge discovered nodes and saved targets
-  for(var ip in discovered)allIps[ip]=discovered[ip].shortName||discovered[ip].longName||ip;
-  for(var uni in saved)allIps[saved[uni]]=allIps[saved[uni]]||('Universe '+uni);
-  if(!Object.keys(allIps).length){
-    el.innerHTML='<span style="color:#555">No Art-Net nodes discovered. Start the engine and poll will find them.</span>';
+  if(!Object.keys(targets).length){
+    el.innerHTML='<span style="color:#555">No DMX nodes found. Register a DMX bridge in Setup, or start Art-Net to discover nodes.</span>';
     return;
   }
   var h='<div style="font-size:.75em;color:#64748b;margin-bottom:.3em">Select unicast target:</div>';
-  for(var ip in allIps){
+  for(var ip in targets){
+    var info=targets[ip];
+    var name=info.shortName||info.longName||info.type||'';
     var checked=false;
     for(var u in saved){if(saved[u]===ip)checked=true;}
     h+='<label style="display:flex;align-items:center;gap:.4em;margin:.15em 0">'
       +'<input type="checkbox" data-ip="'+escapeHtml(ip)+'" class="dmx-ucast-cb"'+(checked?' checked':'')+'>'
-      +'<span>'+escapeHtml(ip)+'</span>'
-      +'<span style="color:#556;font-size:.9em">'+escapeHtml(allIps[ip])+'</span></label>';
+      +'<span style="font-weight:bold">'+escapeHtml(ip)+'</span>'
+      +'<span style="color:#556;font-size:.9em">'+escapeHtml(name)+'</span></label>';
   }
   el.innerHTML=h;
 }
