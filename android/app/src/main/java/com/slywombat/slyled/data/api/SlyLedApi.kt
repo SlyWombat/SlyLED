@@ -193,6 +193,18 @@ interface SlyLedApi {
     @POST("/api/dmx/blackout")
     suspend fun dmxBlackout(): OkResponse
 
+    @GET("/api/dmx/fixture/{id}/channels")
+    suspend fun getDmxFixtureChannels(@Path("id") id: Int): JsonObject
+
+    @POST("/api/dmx/fixture/{id}/test")
+    suspend fun testDmxFixture(@Path("id") id: Int, @Body body: JsonObject): OkResponse
+
+    @GET("/api/dmx/settings")
+    suspend fun getDmxSettings(): JsonObject
+
+    @POST("/api/dmx/settings")
+    suspend fun saveDmxSettings(@Body body: JsonObject): OkResponse
+
     // ── Surfaces ───────────────────────────────────────────────────────
     @GET("api/surfaces")
     suspend fun getSurfaces(): List<Surface>

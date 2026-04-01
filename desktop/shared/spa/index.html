@@ -231,6 +231,31 @@ body.light .li:hover{border-color:#3b82f6}
       <button class='btn btn-nav' onclick='openLoadShowModal()' data-tip='setLoadShow'>Load Show</button>
     </div>
   </div>
+  <div class='card' style='max-width:480px'>
+    <div class='card-title'>DMX Output</div>
+    <label>Protocol</label>
+    <div style='display:flex;gap:1em;margin-bottom:.4em'>
+      <label style='display:flex;align-items:center;gap:.3em'><input type='radio' name='dmx-proto' value='artnet' checked onchange='dmxProtoChange()'>Art-Net</label>
+      <label style='display:flex;align-items:center;gap:.3em'><input type='radio' name='dmx-proto' value='sacn' onchange='dmxProtoChange()'>sACN</label>
+    </div>
+    <label>Frame Rate (Hz)</label><input id='dmx-fps' type='number' min='1' max='44' value='40' style='width:100px'>
+    <label>Bind IP</label><input id='dmx-bind' value='0.0.0.0' style='width:200px'>
+    <div id='dmx-sacn-opts' style='display:none'>
+      <label>sACN Priority <span id='dmx-pri-val' style='color:#64748b;font-size:.75em'>100</span></label>
+      <input id='dmx-pri' type='range' min='0' max='200' value='100' style='width:200px' oninput="document.getElementById('dmx-pri-val').textContent=this.value">
+      <label>sACN Source Name</label><input id='dmx-src' value='SlyLED' style='width:200px'>
+    </div>
+    <div id='dmx-artnet-opts'>
+      <label>Unicast Targets <span style='color:#64748b;font-size:.75em'>(universe:ip per line)</span></label>
+      <textarea id='dmx-ucast' rows='3' style='width:100%;font-size:.82em;font-family:monospace' placeholder='1:192.168.1.100&#10;2:192.168.1.101'></textarea>
+    </div>
+    <div style='margin-top:.8em;display:flex;gap:.5em;flex-wrap:wrap;align-items:center'>
+      <button class='btn btn-on' onclick='saveDmxSettings()'>Save DMX Settings</button>
+      <button class='btn btn-on' onclick='dmxEngineStart()'>Start</button>
+      <button class='btn btn-off' onclick='dmxEngineStop()'>Stop</button>
+    </div>
+    <div id='dmx-status' style='font-size:.78em;color:#64748b;margin-top:.5em'></div>
+  </div>
   <div class='card' style='max-width:480px;border-color:#622'>
     <div class='card-title' style='color:#c66'>Factory Reset</div>
     <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Remove all performers, runners and layout data, and restore default settings.</p>
@@ -448,7 +473,7 @@ function showTab(t){
   else if(t==='layout')loadLayout();
   else if(t==='actions')loadActions();
   else if(t==='runtime')loadRuntime();
-  else if(t==='settings')loadSettings();
+  else if(t==='settings'){loadSettings();loadDmxSettings();}
   else if(t==='firmware')loadFirmware();
 }
 
@@ -1508,6 +1533,13 @@ function editFixture(id){
     h+='<label>Channel Count</label><input id="fx-ch" type="number" value="'+(f.dmxChannelCount||3)+'" min="1" style="width:100%;margin-bottom:.4em">';
     h+='<label>Profile ID <span style="color:#64748b;font-size:.75em">(optional)</span></label>';
     h+='<input id="fx-prof" value="'+escapeHtml(f.dmxProfileId||'')+'" style="width:100%">';
+    h+='<div style="margin-top:.8em;border-top:1px solid #1e293b;padding-top:.6em">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:center">';
+    h+='<span style="font-weight:bold;font-size:.85em">Test Channels</span>';
+    h+='<button class="btn btn-on" onclick="loadFixtureChannels('+id+')" style="font-size:.65em">Load</button>';
+    h+='</div>';
+    h+='<div id="fx-test-ch"></div>';
+    h+='</div>';
   }
   h+='<label>Rotation Override (degrees)</label>';
   var rot=f.rotation||[0,0,0];
@@ -1537,6 +1569,38 @@ function saveFixture(id,ft){
 function delFixture(id){
   if(!confirm('Delete this fixture?'))return;
   ra('DELETE','/api/fixtures/'+id,null,function(){loadFixtures();});
+}
+
+function loadFixtureChannels(fid){
+  ra('GET','/api/dmx/fixture/'+fid+'/channels',null,function(d){
+    if(!d||!d.channels)return;
+    var el=document.getElementById('fx-test-ch');if(!el)return;
+    var h='<div style="font-size:.75em;color:#64748b;margin:.4em 0">Universe '+d.universe+' @ addr '+d.startAddr+'</div>';
+    d.channels.forEach(function(ch){
+      h+='<div style="display:flex;align-items:center;gap:.5em;margin:.2em 0">';
+      h+='<span style="width:80px;font-size:.75em;color:#94a3b8">'+escapeHtml(ch.name)+'</span>';
+      h+='<input type="range" min="0" max="255" value="'+ch.value+'" style="flex:1" '
+        +'oninput="this.nextElementSibling.textContent=this.value;dmxTestCh('+fid+','+ch.offset+',parseInt(this.value))">';
+      h+='<span style="width:28px;font-size:.75em;text-align:right">'+ch.value+'</span>';
+      h+='</div>';
+    });
+    h+='<button class="btn btn-off" onclick="dmxTestBlackout('+fid+')" style="font-size:.7em;margin-top:.4em">Blackout</button>';
+    el.innerHTML=h;
+  });
+}
+
+function dmxTestCh(fid,offset,value){
+  ra('POST','/api/dmx/fixture/'+fid+'/test',{channels:[{offset:offset,value:value}]},function(){});
+}
+
+function dmxTestBlackout(fid){
+  var sliders=document.querySelectorAll('#fx-test-ch input[type=range]');
+  sliders.forEach(function(s){s.value=0;s.nextElementSibling.textContent='0';});
+  ra('GET','/api/dmx/fixture/'+fid+'/channels',null,function(d){
+    if(!d)return;
+    var chs=d.channels.map(function(ch){return{offset:ch.offset,value:0};});
+    ra('POST','/api/dmx/fixture/'+fid+'/test',{channels:chs},function(){});
+  });
 }
 
 function selectOnCanvas(type,id){
@@ -3955,6 +4019,67 @@ function saveSettings(btn){
     _btnSaved(btn,r&&r.ok);
     var lp=document.getElementById('s-log-path');
     if(lp)lp.textContent=logOn?'Logs saved to data/logs/ folder':'';
+  });
+}
+
+function dmxProtoChange(){
+  var proto='artnet';
+  var radios=document.getElementsByName('dmx-proto');
+  for(var i=0;i<radios.length;i++){if(radios[i].checked){proto=radios[i].value;break;}}
+  document.getElementById('dmx-sacn-opts').style.display=(proto==='sacn')?'':'none';
+  document.getElementById('dmx-artnet-opts').style.display=(proto==='artnet')?'':'none';
+}
+
+function loadDmxSettings(){
+  ra('GET','/api/dmx/settings',null,function(d){
+    if(!d)return;
+    var proto=d.protocol||'artnet';
+    var radios=document.getElementsByName('dmx-proto');
+    for(var i=0;i<radios.length;i++){radios[i].checked=(radios[i].value===proto);}
+    document.getElementById('dmx-fps').value=d.frameRate||40;
+    document.getElementById('dmx-bind').value=d.bindIp||'0.0.0.0';
+    document.getElementById('dmx-pri').value=d.sacnPriority||100;
+    document.getElementById('dmx-pri-val').textContent=d.sacnPriority||100;
+    document.getElementById('dmx-src').value=d.sacnSourceName||'SlyLED';
+    var ucast=d.unicastTargets||[];
+    document.getElementById('dmx-ucast').value=ucast.join('\n');
+    dmxProtoChange();
+    if(d.engineState){
+      document.getElementById('dmx-status').textContent='Engine: '+d.engineState;
+    }
+  });
+}
+
+function saveDmxSettings(){
+  var proto='artnet';
+  var radios=document.getElementsByName('dmx-proto');
+  for(var i=0;i<radios.length;i++){if(radios[i].checked){proto=radios[i].value;break;}}
+  var ucastText=document.getElementById('dmx-ucast').value.trim();
+  var ucast=ucastText?ucastText.split('\n').map(function(l){return l.trim();}).filter(function(l){return l.length>0;}):[];
+  var body={
+    protocol:proto,
+    frameRate:parseInt(document.getElementById('dmx-fps').value)||40,
+    bindIp:document.getElementById('dmx-bind').value.trim()||'0.0.0.0',
+    sacnPriority:parseInt(document.getElementById('dmx-pri').value)||100,
+    sacnSourceName:document.getElementById('dmx-src').value.trim()||'SlyLED',
+    unicastTargets:ucast
+  };
+  ra('POST','/api/dmx/settings',body,function(r){
+    document.getElementById('dmx-status').textContent=r&&r.ok?'Settings saved':'Save failed';
+  });
+}
+
+function dmxEngineStart(){
+  var proto=document.querySelector('input[name=dmx-proto]:checked');
+  var p=proto?proto.value:'artnet';
+  ra('POST','/api/dmx/start',{protocol:p},function(r){
+    document.getElementById('dmx-status').textContent=r&&r.ok?'Engine: running ('+p+')':'Start failed';
+  });
+}
+
+function dmxEngineStop(){
+  ra('POST','/api/dmx/stop',{},function(r){
+    document.getElementById('dmx-status').textContent=r&&r.ok?'Engine: stopped':'Stop failed';
   });
 }
 

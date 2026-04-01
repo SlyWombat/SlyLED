@@ -158,6 +158,10 @@ class SlyLedRepository @Inject constructor(
     suspend fun startDmx(body: JsonObject) = requireApi().startDmx(body)
     suspend fun stopDmx() = requireApi().stopDmx()
     suspend fun dmxBlackout() = requireApi().dmxBlackout()
+    suspend fun getDmxFixtureChannels(id: Int) = requireApi().getDmxFixtureChannels(id)
+    suspend fun testDmxFixture(id: Int, body: JsonObject) = requireApi().testDmxFixture(id, body)
+    suspend fun getDmxSettings() = requireApi().getDmxSettings()
+    suspend fun saveDmxSettings(body: JsonObject) = requireApi().saveDmxSettings(body)
 
     // Surfaces
     suspend fun getSurfaces() = requireApi().getSurfaces()

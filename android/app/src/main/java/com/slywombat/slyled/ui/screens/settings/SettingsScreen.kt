@@ -25,9 +25,11 @@ import com.slywombat.slyled.data.model.DmxProfile
 import com.slywombat.slyled.ui.theme.RedError
 import com.slywombat.slyled.viewmodel.SettingsViewModel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -379,14 +381,30 @@ fun SettingsScreen(
 @Composable
 private fun DmxControlSection(viewModel: SettingsViewModel) {
     val dmxStatus by viewModel.dmxStatus.collectAsState()
-    var selectedProtocol by remember { mutableStateOf("artnet") }
+    val dmxSettings by viewModel.dmxSettings.collectAsState()
     var showProfileDialog by remember { mutableStateOf(false) }
 
     // Extract status fields from JsonObject
     val running = dmxStatus?.get("running")?.jsonPrimitive?.booleanOrNull ?: false
     val universes = dmxStatus?.get("universes")?.jsonPrimitive?.intOrNull ?: 0
-    val frameRate = dmxStatus?.get("frameRate")?.jsonPrimitive?.intOrNull ?: 40
+    val statusFrameRate = dmxStatus?.get("frameRate")?.jsonPrimitive?.intOrNull ?: 40
     val nodes = dmxStatus?.get("nodes")?.jsonPrimitive?.intOrNull
+
+    // Local state initialized from settings
+    val settingsProtocol = dmxSettings?.get("protocol")?.jsonPrimitive?.contentOrNull ?: "artnet"
+    val settingsFrameRate = dmxSettings?.get("frameRate")?.jsonPrimitive?.intOrNull ?: 40
+    val settingsBindIp = dmxSettings?.get("bindIp")?.jsonPrimitive?.contentOrNull ?: "0.0.0.0"
+    val settingsSacnPriority = dmxSettings?.get("sacnPriority")?.jsonPrimitive?.intOrNull ?: 100
+    val settingsSacnSourceName = dmxSettings?.get("sacnSourceName")?.jsonPrimitive?.contentOrNull ?: ""
+    val settingsUnicastTargets = dmxSettings?.get("unicastTargets")?.jsonObject
+    val initialUnicastText = settingsUnicastTargets?.entries?.joinToString("\n") { "${it.key}:${it.value.jsonPrimitive.content}" } ?: ""
+
+    var selectedProtocol by remember(settingsProtocol) { mutableStateOf(settingsProtocol) }
+    var frameRateText by remember(settingsFrameRate) { mutableStateOf(settingsFrameRate.toString()) }
+    var bindIp by remember(settingsBindIp) { mutableStateOf(settingsBindIp) }
+    var sacnPriority by remember(settingsSacnPriority) { mutableStateOf(settingsSacnPriority.toFloat()) }
+    var sacnSourceName by remember(settingsSacnSourceName) { mutableStateOf(settingsSacnSourceName) }
+    var unicastTargetsText by remember(initialUnicastText) { mutableStateOf(initialUnicastText) }
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -419,6 +437,100 @@ private fun DmxControlSection(viewModel: SettingsViewModel) {
             }
             Spacer(Modifier.height(8.dp))
 
+            // Frame Rate
+            OutlinedTextField(
+                value = frameRateText,
+                onValueChange = { frameRateText = it.filter { c -> c.isDigit() } },
+                label = { Text("Frame Rate (1-44 Hz)") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+
+            // Bind IP
+            OutlinedTextField(
+                value = bindIp,
+                onValueChange = { bindIp = it },
+                label = { Text("Bind IP") },
+                placeholder = { Text("0.0.0.0") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+
+            // sACN-specific fields
+            if (selectedProtocol == "sacn") {
+                // sACN Priority slider
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("sACN Priority", style = MaterialTheme.typography.bodyMedium)
+                        Text("${sacnPriority.toInt()}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Slider(
+                        value = sacnPriority,
+                        onValueChange = { sacnPriority = it },
+                        valueRange = 0f..200f,
+                        steps = 0,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+
+                // sACN Source Name
+                OutlinedTextField(
+                    value = sacnSourceName,
+                    onValueChange = { sacnSourceName = it },
+                    label = { Text("sACN Source Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+
+            // Art-Net unicast targets
+            if (selectedProtocol == "artnet") {
+                OutlinedTextField(
+                    value = unicastTargetsText,
+                    onValueChange = { unicastTargetsText = it },
+                    label = { Text("Unicast Targets") },
+                    placeholder = { Text("1:192.168.1.100") },
+                    supportingText = { Text("One per line: universe:ip") },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+
+            // Save Settings button
+            Button(
+                onClick = {
+                    val targets = mutableMapOf<String, String>()
+                    unicastTargetsText.lines().filter { it.contains(":") }.forEach { line ->
+                        val parts = line.split(":", limit = 2)
+                        if (parts.size == 2) {
+                            targets[parts[0].trim()] = parts[1].trim()
+                        }
+                    }
+                    viewModel.saveDmxSettings(
+                        protocol = selectedProtocol,
+                        frameRate = (frameRateText.toIntOrNull() ?: 40).coerceIn(1, 44),
+                        bindIp = bindIp.ifBlank { "0.0.0.0" },
+                        sacnPriority = sacnPriority.toInt(),
+                        sacnSourceName = sacnSourceName,
+                        unicastTargets = targets
+                    )
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Save DMX Settings")
+            }
+            Spacer(Modifier.height(12.dp))
+
             // Status display
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -448,7 +560,7 @@ private fun DmxControlSection(viewModel: SettingsViewModel) {
                 )
                 AssistChip(
                     onClick = {},
-                    label = { Text("$frameRate Hz") }
+                    label = { Text("$statusFrameRate Hz") }
                 )
                 if (selectedProtocol == "artnet" && nodes != null) {
                     AssistChip(

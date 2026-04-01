@@ -177,15 +177,18 @@ def parse_artpoll_reply(data):
 class ArtNetEngine:
     """Art-Net 4 output engine with ArtPoll discovery and 40Hz ArtDMX output."""
 
-    def __init__(self, bind_ip="0.0.0.0", unicast_targets=None):
+    def __init__(self, bind_ip="0.0.0.0", unicast_targets=None, frame_rate=40):
         """
         Args:
             bind_ip: IP to bind the UDP socket to (default: all interfaces)
             unicast_targets: dict of universe→ip for unicast mode.
                              If None, broadcasts to 255.255.255.255.
+            frame_rate: output frame rate in Hz (default 40)
         """
         self._bind_ip = bind_ip
         self._unicast = unicast_targets or {}
+        self._frame_rate = max(1, min(44, frame_rate))
+        self._frame_interval = 1.0 / self._frame_rate
         self._universes = {}  # universe_num → DMXUniverse
         self._sequences = {}  # universe_num → rolling 1-255
         self._running = False
@@ -194,6 +197,16 @@ class ArtNetEngine:
         self._lock = threading.Lock()
         self._discovered = {}  # ip → ArtPollReply info
         self._local_ip = "0.0.0.0"
+
+    def configure(self, bind_ip=None, unicast_targets=None, frame_rate=None):
+        """Update configuration. Takes effect on next start()."""
+        if bind_ip is not None:
+            self._bind_ip = bind_ip
+        if unicast_targets is not None:
+            self._unicast = unicast_targets
+        if frame_rate is not None:
+            self._frame_rate = max(1, min(44, frame_rate))
+            self._frame_interval = 1.0 / self._frame_rate
 
     # ── Universe management ──────────────────────────────────────
 
@@ -296,13 +309,12 @@ class ArtNetEngine:
                 self.poll()
                 next_poll = now + poll_interval
 
-            # Send DMX frames at 40Hz
+            # Send DMX frames
             if now >= next_frame:
                 self._send_all_universes()
-                next_frame += FRAME_INTERVAL
-                # Prevent drift accumulation
+                next_frame += self._frame_interval
                 if next_frame < now:
-                    next_frame = now + FRAME_INTERVAL
+                    next_frame = now + self._frame_interval
 
             # Sleep until next event
             sleep_time = min(next_frame - time.monotonic(), 0.005)
@@ -370,7 +382,9 @@ class ArtNetEngine:
             "running": self._running,
             "protocol": "artnet",
             "localIp": self._local_ip,
+            "bindIp": self._bind_ip,
+            "unicastTargets": self._unicast,
             "universes": list(self._universes.keys()),
             "discoveredNodes": len(self._discovered),
-            "frameRate": FRAME_RATE_HZ,
+            "frameRate": self._frame_rate,
         }

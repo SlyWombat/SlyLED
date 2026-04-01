@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.JsonPrimitive
 import javax.inject.Inject
 
 @HiltViewModel
@@ -36,12 +37,16 @@ class SettingsViewModel @Inject constructor(
     private val _dmxStatus = MutableStateFlow<JsonObject?>(null)
     val dmxStatus: StateFlow<JsonObject?> = _dmxStatus
 
+    private val _dmxSettings = MutableStateFlow<JsonObject?>(null)
+    val dmxSettings: StateFlow<JsonObject?> = _dmxSettings
+
     private val _dmxProfiles = MutableStateFlow<List<DmxProfile>>(emptyList())
     val dmxProfiles: StateFlow<List<DmxProfile>> = _dmxProfiles
 
     init {
         loadSettings()
         loadDmxStatus()
+        loadDmxSettings()
     }
 
     fun loadSettings() {
@@ -170,6 +175,47 @@ class SettingsViewModel @Inject constructor(
     }
 
     // ── DMX Control ────────────────────────────────────────────────────
+
+    fun loadDmxSettings() {
+        viewModelScope.launch {
+            try {
+                _dmxSettings.value = repository.getDmxSettings()
+            } catch (_: Exception) {
+                _dmxSettings.value = null
+            }
+        }
+    }
+
+    fun saveDmxSettings(
+        protocol: String,
+        frameRate: Int,
+        bindIp: String,
+        sacnPriority: Int,
+        sacnSourceName: String,
+        unicastTargets: Map<String, String>
+    ) {
+        viewModelScope.launch {
+            try {
+                val body = buildJsonObject {
+                    put("protocol", protocol)
+                    put("frameRate", frameRate)
+                    put("bindIp", bindIp)
+                    put("sacnPriority", sacnPriority)
+                    put("sacnSourceName", sacnSourceName)
+                    put("unicastTargets", buildJsonObject {
+                        unicastTargets.forEach { (k, v) -> put(k, v) }
+                    })
+                }
+                val resp = repository.saveDmxSettings(body)
+                if (resp.ok) _message.emit("DMX settings saved")
+                else _message.emit(resp.err ?: "Save failed")
+                loadDmxSettings()
+                loadDmxStatus()
+            } catch (e: Exception) {
+                _message.emit("Save failed: ${e.message}")
+            }
+        }
+    }
 
     fun loadDmxStatus() {
         viewModelScope.launch {

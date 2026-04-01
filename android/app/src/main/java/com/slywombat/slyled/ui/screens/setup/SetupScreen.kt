@@ -1,6 +1,7 @@
 package com.slywombat.slyled.ui.screens.setup
 
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -25,6 +26,12 @@ import com.slywombat.slyled.ui.theme.OrangeWled
 import com.slywombat.slyled.ui.theme.RedError
 import com.slywombat.slyled.viewmodel.SetupViewModel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.intOrNull
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.clickable
@@ -411,6 +418,7 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
             fixture = null,
             children = children,
             dmxProfiles = dmxProfiles,
+            viewModel = viewModel,
             onDismiss = { showCreateFixture = false },
             onConfirm = { fixture ->
                 viewModel.createFixture(fixture)
@@ -426,6 +434,7 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
             fixture = fixture,
             children = children,
             dmxProfiles = dmxProfiles,
+            viewModel = viewModel,
             onDismiss = { editFixture = null },
             onConfirm = { updated ->
                 viewModel.updateFixture(fixture.id, updated)
@@ -760,6 +769,7 @@ private fun FixtureFormDialog(
     fixture: Fixture?,
     children: List<Child>,
     dmxProfiles: List<DmxProfile>,
+    viewModel: SetupViewModel,
     onDismiss: () -> Unit,
     onConfirm: (Fixture) -> Unit
 ) {
@@ -771,6 +781,12 @@ private fun FixtureFormDialog(
     var dmxStartAddr by remember { mutableStateOf(fixture?.dmxStartAddr?.toString() ?: "1") }
     var dmxChannelCount by remember { mutableStateOf(fixture?.dmxChannelCount?.toString() ?: "") }
     var selectedProfileId by remember { mutableStateOf(fixture?.dmxProfileId ?: "") }
+
+    // Test channels state
+    var testChannelsData by remember { mutableStateOf<JsonObject?>(null) }
+    var testChannelValues by remember { mutableStateOf<Map<Int, Int>>(emptyMap()) }
+    var isLoadingChannels by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
 
     val typeOptions = listOf("linear", "point", "surface", "group")
     var typeExpanded by remember { mutableStateOf(false) }
@@ -933,6 +949,118 @@ private fun FixtureFormDialog(
                                         }
                                         profileExpanded = false
                                     }
+                                )
+                            }
+                        }
+                    }
+
+                    // Test Channels section (only for existing DMX fixtures)
+                    if (fixture != null && fixture.id > 0) {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        Text(
+                            "Test Channels",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilledTonalButton(
+                                onClick = {
+                                    isLoadingChannels = true
+                                    coroutineScope.launch {
+                                        val data = viewModel.loadFixtureChannels(fixture.id)
+                                        testChannelsData = data
+                                        // Initialize slider values from response
+                                        if (data != null) {
+                                            val channels = data["channels"]?.jsonArray
+                                            val values = mutableMapOf<Int, Int>()
+                                            channels?.forEach { ch ->
+                                                val obj = ch.jsonObject
+                                                val offset = obj["offset"]?.jsonPrimitive?.intOrNull ?: 0
+                                                val value = obj["value"]?.jsonPrimitive?.intOrNull ?: 0
+                                                values[offset] = value
+                                            }
+                                            testChannelValues = values
+                                        }
+                                        isLoadingChannels = false
+                                    }
+                                },
+                                enabled = !isLoadingChannels,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                if (isLoadingChannels) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                }
+                                Text("Load Channels")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    // Send blackout (all channels to 0)
+                                    val channels = testChannelsData?.get("channels")?.jsonArray
+                                    if (channels != null) {
+                                        val zeroed = mutableMapOf<Int, Int>()
+                                        channels.forEach { ch ->
+                                            val offset = ch.jsonObject["offset"]?.jsonPrimitive?.intOrNull ?: 0
+                                            zeroed[offset] = 0
+                                        }
+                                        testChannelValues = zeroed
+                                        coroutineScope.launch {
+                                            zeroed.forEach { (offset, _) ->
+                                                viewModel.testFixtureChannel(fixture.id, offset, 0)
+                                            }
+                                        }
+                                    }
+                                },
+                                enabled = testChannelsData != null
+                            ) {
+                                Text("Blackout")
+                            }
+                        }
+
+                        // Channel sliders
+                        testChannelsData?.get("channels")?.jsonArray?.forEach { ch ->
+                            val obj = ch.jsonObject
+                            val offset = obj["offset"]?.jsonPrimitive?.intOrNull ?: 0
+                            val chName = obj["name"]?.jsonPrimitive?.content ?: "Ch $offset"
+                            val currentValue = testChannelValues[offset] ?: 0
+
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        chName,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    Text(
+                                        "$currentValue",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Slider(
+                                    value = currentValue.toFloat(),
+                                    onValueChange = { newVal ->
+                                        val intVal = newVal.toInt()
+                                        testChannelValues = testChannelValues.toMutableMap().apply { put(offset, intVal) }
+                                    },
+                                    onValueChangeFinished = {
+                                        val finalVal = testChannelValues[offset] ?: 0
+                                        coroutineScope.launch {
+                                            viewModel.testFixtureChannel(fixture.id, offset, finalVal)
+                                        }
+                                    },
+                                    valueRange = 0f..255f,
+                                    steps = 0,
+                                    modifier = Modifier.fillMaxWidth()
                                 )
                             }
                         }

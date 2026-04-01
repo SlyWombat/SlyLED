@@ -12,6 +12,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import javax.inject.Inject
 
 @HiltViewModel
@@ -205,6 +209,25 @@ class SetupViewModel @Inject constructor(
                 _message.emit("Reboot failed: ${e.message}")
             }
         }
+    }
+
+    suspend fun loadFixtureChannels(fixtureId: Int): JsonObject? {
+        return try {
+            repository.getDmxFixtureChannels(fixtureId)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun testFixtureChannel(fixtureId: Int, offset: Int, value: Int) {
+        try {
+            val body = buildJsonObject {
+                put("channels", buildJsonArray {
+                    add(buildJsonObject { put("offset", offset); put("value", value) })
+                })
+            }
+            repository.testDmxFixture(fixtureId, body)
+        } catch (_: Exception) {}
     }
 
     fun refreshAll() {

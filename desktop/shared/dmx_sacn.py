@@ -144,16 +144,20 @@ def parse_sacn_data(data):
 class sACNEngine:
     """sACN E1.31 output engine with 40Hz multicast output."""
 
-    def __init__(self, source_name="SlyLED", priority=DEFAULT_PRIORITY, bind_ip="0.0.0.0"):
+    def __init__(self, source_name="SlyLED", priority=DEFAULT_PRIORITY, bind_ip="0.0.0.0",
+                 frame_rate=40):
         """
         Args:
             source_name: human-readable source name (max 63 chars)
             priority: sACN priority level (0-200, higher wins)
             bind_ip: IP to bind the send socket to
+            frame_rate: output frame rate in Hz (default 40)
         """
         self._source_name = source_name
         self._priority = priority
         self._bind_ip = bind_ip
+        self._frame_rate = max(1, min(44, frame_rate))
+        self._frame_interval = 1.0 / self._frame_rate
         self._cid = uuid.uuid4().bytes  # 16-byte component identifier
         self._universes = {}  # universe_num → DMXUniverse
         self._sequences = {}  # universe_num → rolling 0-255
@@ -161,6 +165,18 @@ class sACNEngine:
         self._thread = None
         self._sock = None
         self._lock = threading.Lock()
+
+    def configure(self, source_name=None, priority=None, bind_ip=None, frame_rate=None):
+        """Update configuration. Takes effect on next start()."""
+        if source_name is not None:
+            self._source_name = source_name[:63]
+        if priority is not None:
+            self._priority = max(0, min(200, int(priority)))
+        if bind_ip is not None:
+            self._bind_ip = bind_ip
+        if frame_rate is not None:
+            self._frame_rate = max(1, min(44, frame_rate))
+            self._frame_interval = 1.0 / self._frame_rate
 
     # ── Universe management ──────────────────────────────────────
 
@@ -211,7 +227,7 @@ class sACNEngine:
         for _ in range(3):
             for uni_num in list(self._universes.keys()):
                 self._send_universe(uni_num, blackout=True)
-            time.sleep(FRAME_INTERVAL)
+            time.sleep(self._frame_interval)
         self._running = False
         if self._thread:
             self._thread.join(timeout=2)
@@ -242,9 +258,9 @@ class sACNEngine:
             now = time.monotonic()
             if now >= next_frame:
                 self._send_all_universes()
-                next_frame += FRAME_INTERVAL
+                next_frame += self._frame_interval
                 if next_frame < now:
-                    next_frame = now + FRAME_INTERVAL
+                    next_frame = now + self._frame_interval
             sleep_time = min(next_frame - time.monotonic(), 0.005)
             if sleep_time > 0:
                 time.sleep(sleep_time)
@@ -290,5 +306,6 @@ class sACNEngine:
             "multicastAddresses": {
                 u: multicast_addr(u) for u in self._universes
             },
-            "frameRate": FRAME_RATE_HZ,
+            "bindIp": self._bind_ip,
+            "frameRate": self._frame_rate,
         }
