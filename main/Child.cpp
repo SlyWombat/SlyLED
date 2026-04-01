@@ -654,6 +654,11 @@ void sendChildConfigPage(WiFiClient& c) {
             "<div id='dmx-sliders' style='margin:.5em 0'></div>"
             "</div>"));
   c.print(F("</div>"));
+  // DMX Channel Monitor Grid (32 channels)
+  c.print(F("<div class='card' style='margin-top:.5em'>"
+            "<h3>DMX Monitor</h3>"
+            "<div id='dmx-grid' style='display:grid;grid-template-columns:repeat(8,1fr);gap:3px;font-size:.7em'></div>"
+            "</div>"));
 #endif
 
   // Footer — version only; Factory Reset lives in the Settings tab
@@ -793,7 +798,7 @@ void sendChildConfigPage(WiFiClient& c) {
 #ifdef BOARD_DMX_BRIDGE
   c.print(F(
     "var _dmxNames=[];"
-    "function dmxBlackout(){fetch('/dmx/blackout',{method:'POST'}).then(function(){dmxRefresh();});}"
+    "function dmxBlackout(){fetch('/dmx/blackout',{method:'POST'}).then(function(){setTimeout(dmxRefresh,100);});}"
   ));
   c.flush();
   c.print(F(
@@ -843,17 +848,27 @@ void sendChildConfigPage(WiFiClient& c) {
     "h+='oninput=\"dmxCh('+ch+',this.value)\">';"
     "h+='<span id=\"dv'+ch+'\" style=\"width:24px;font-size:.75em;color:#94a3b8;text-align:right\">'+v+'</span>';"
     "h+='</div>';}"
-    "el.innerHTML=h;});}"
+    "el.innerHTML=h;dmxGrid(d);});}"
   ));
   c.flush();
   c.print(F(
     "function dmxCh(ch,v){"
     "var s=document.getElementById('dv'+ch);if(s)s.textContent=v;"
     "var d={};d[ch]=parseInt(v);fetch('/dmx/set',{method:'POST',body:JSON.stringify(d)});}"
-    "dmxRefresh();setInterval(function(){var df=document.getElementById('dmx-frames');"
-    "if(df)fetch('/dmx/channels').then(function(r){return r.json();}).then(function(d){"
-    "df.textContent=d.frames;"
-    "var ds=document.getElementById('dmx-status');if(ds)ds.textContent=d.active?'Active':'Stopped';});},3000);"
+    "function dmxGrid(d){"
+    "var g=document.getElementById('dmx-grid');if(!g)return;"
+    "var h='';for(var i=0;i<32;i++){"
+    "var ch=d.start+i;var v=(i<d.ch.length)?d.ch[i]:0;"
+    "var bg=v>0?'rgba(76,153,76,'+(v/255*0.6+0.1)+')':'#1a1a2e';"
+    "h+='<div style=\"background:'+bg+';border:1px solid #333;border-radius:3px;padding:3px;text-align:center\">';"
+    "h+='<div style=\"color:#64748b\">'+ch+'</div>';"
+    "h+='<div style=\"color:#e2e8f0;font-weight:bold\">'+v+'</div></div>';}"
+    "g.innerHTML=h;}"
+    "dmxRefresh();setInterval(function(){"
+    "fetch('/dmx/channels').then(function(r){return r.json();}).then(function(d){"
+    "var df=document.getElementById('dmx-frames');if(df)df.textContent=d.frames;"
+    "var ds=document.getElementById('dmx-status');if(ds)ds.textContent=d.active?'Active':'Stopped';"
+    "dmxGrid(d);});},2000);"
   ));
   c.flush();
 #endif
