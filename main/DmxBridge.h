@@ -11,19 +11,26 @@
 
 #ifdef BOARD_DMX_BRIDGE
 
-#include "GigaLED.h"  // provides CRGB, CHSV, hsv2rgb_rainbow (shared with Giga-child)
+#include "GigaLED.h"  // provides CRGB, CHSV, hsv2rgb_rainbow
 
-// DMX bridge config (persisted to NVS)
+// Per-channel name length and max channels per fixture
+constexpr uint8_t DMX_CH_NAME_LEN    = 12;
+constexpr uint8_t DMX_MAX_CH_PER_FIX = 24;  // max channels per fixture profile
+
+// DMX bridge config (persisted to NVS on ESP32, RAM-only on Giga)
 struct DmxBridgeConfig {
-  uint16_t universe;      // Art-Net universe (0-based)
-  uint16_t startAddress;  // DMX start address (1-512)
-  uint8_t  channelsPerFixture; // 3 (RGB) or 4 (RGBD) or custom
-  uint8_t  fixtureCount;  // number of RGB fixtures addressed
+  uint16_t universe;                              // Art-Net universe (0-based)
+  uint16_t startAddress;                          // DMX start address (1-512)
+  uint8_t  channelsPerFixture;                    // channels per fixture (e.g., 13)
+  uint8_t  fixtureCount;                          // number of fixtures addressed
+  char     channelNames[DMX_MAX_CH_PER_FIX][DMX_CH_NAME_LEN]; // per-channel labels
 };
 
 extern DmxBridgeConfig dmxCfg;
-extern uint8_t dmxBuf[DMX_UNIVERSE_MAX + 1]; // start code + 512 channels
-extern CRGB leds[NUM_LEDS]; // virtual LED array for action rendering
+extern uint8_t dmxBuf[DMX_UNIVERSE_MAX + 1];      // start code + 512 channels
+extern CRGB leds[NUM_LEDS];                       // virtual LED array
+extern volatile uint32_t dmxFrameCount;           // frames sent (diagnostic)
+extern volatile bool dmxOutputActive;             // true if DMX output is running
 
 void dmxInit();
 void dmxSendFrame();

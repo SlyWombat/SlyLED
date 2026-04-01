@@ -164,8 +164,8 @@ void connectWiFi() {
     WiFi.setHostname(hn);
 #endif
   }
-#elif defined(BOARD_GIGA_CHILD)
-  // Giga child: WiFi.macAddress() returns zeros before begin(),
+#elif defined(BOARD_GIGA_CHILD) || defined(BOARD_GIGA_DMX)
+  // Giga child/DMX: WiFi.macAddress() returns zeros before begin(),
   // so we set hostname after connect in initChildConfig()
 #elif defined(BOARD_GIGA)
   // WiFi.setHostname() must be called before WiFi.begin() for DHCP option 12

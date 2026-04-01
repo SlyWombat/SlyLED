@@ -1,13 +1,10 @@
 /*
  * DmxBridge.cpp — DMX-512 output via UART + RS-485 transceiver.
  *
- * Supports both ESP32 (UART2) and Giga R1 (Serial1).
+ * Giga R1: uses mbed::BufferedSerial on PA_0 (TX1) with manual break.
+ * ESP32:   uses HardwareSerial(2) on GPIO17.
  *
- * DMX-512 frame format:
- *   BREAK  (>=88us low)
- *   MAB    (>=8us high / mark-after-break)
- *   START  (0x00 start code, 8N2)
- *   DATA   (1-512 channel bytes, 8N2)
+ * DMX-512 frame: BREAK (>=88us low) + MAB (>=8us high) + start code + 512 data bytes
  */
 
 #include "DmxBridge.h"
@@ -17,33 +14,53 @@
 // ── Globals ──────────────────────────────────────────────────────────────────
 
 DmxBridgeConfig dmxCfg;
-uint8_t dmxBuf[DMX_UNIVERSE_MAX + 1]; // [0] = start code, [1..512] = channels
+uint8_t dmxBuf[DMX_UNIVERSE_MAX + 1]; // [0] = start code (0x00), [1..512] = channels
 CRGB leds[NUM_LEDS];                  // virtual LED array for action rendering
+volatile uint32_t dmxFrameCount = 0;  // diagnostic counter
+volatile bool dmxOutputActive = false;
 
 // ── Platform-specific UART ───────────────────────────────────────────────────
 
 #ifdef BOARD_GIGA_DMX
-  // Giga R1: Serial1 on TX1 (pin 1) / RX1 (pin 0)
-  #define DMX_SERIAL Serial1
-  #define DMX_TX_PIN_GIGA 1   // TX1 on Giga header
+  // Giga R1: use mbed BufferedSerial for precise UART control
+  // CQRobot shield wiring: TX1 (PA_0) -> DI, DE/RE on digital pin 2
+  #include <mbed.h>
+  static mbed::BufferedSerial* dmxSerial = nullptr;
+  // TX1 on Giga R1 = PA_0 (Arduino pin 1), RX1 = PI_9 (Arduino pin 0)
+  #define DMX_MBED_TX PA_0
+  #define DMX_MBED_RX PI_9
 #else
   // ESP32: UART2
   #include <HardwareSerial.h>
   static HardwareSerial DmxSerial(2);
-  #define DMX_SERIAL DmxSerial
 #endif
 
 // ── Config persistence ───────────────────────────────────────────────────────
 
 #ifdef BOARD_GIGA_DMX
-// Giga has no NVS — store in RAM, defaults on reboot
 void dmxLoadConfig() {
+  // Giga: RAM only defaults (no NVS)
   dmxCfg.universe           = 0;
   dmxCfg.startAddress       = 1;
-  dmxCfg.channelsPerFixture = 3;
+  dmxCfg.channelsPerFixture = 13;
   dmxCfg.fixtureCount       = 1;
+  memset(dmxCfg.channelNames, 0, sizeof(dmxCfg.channelNames));
+  // Default channel names for a typical moving head
+  strncpy(dmxCfg.channelNames[0], "Motor 1", DMX_CH_NAME_LEN - 1);
+  strncpy(dmxCfg.channelNames[1], "Motor 2", DMX_CH_NAME_LEN - 1);
+  strncpy(dmxCfg.channelNames[2], "Motor 3", DMX_CH_NAME_LEN - 1);
+  strncpy(dmxCfg.channelNames[3], "Dimmer", DMX_CH_NAME_LEN - 1);
+  strncpy(dmxCfg.channelNames[4], "Strobe", DMX_CH_NAME_LEN - 1);
+  strncpy(dmxCfg.channelNames[5], "Red", DMX_CH_NAME_LEN - 1);
+  strncpy(dmxCfg.channelNames[6], "Green", DMX_CH_NAME_LEN - 1);
+  strncpy(dmxCfg.channelNames[7], "Blue", DMX_CH_NAME_LEN - 1);
+  strncpy(dmxCfg.channelNames[8], "White", DMX_CH_NAME_LEN - 1);
+  strncpy(dmxCfg.channelNames[9], "Ch 10", DMX_CH_NAME_LEN - 1);
+  strncpy(dmxCfg.channelNames[10], "Ch 11", DMX_CH_NAME_LEN - 1);
+  strncpy(dmxCfg.channelNames[11], "Ch 12", DMX_CH_NAME_LEN - 1);
+  strncpy(dmxCfg.channelNames[12], "Ch 13", DMX_CH_NAME_LEN - 1);
 }
-void dmxSaveConfig() { /* RAM only on Giga — persists until reboot */ }
+void dmxSaveConfig() { /* RAM only on Giga */ }
 #else
 #include <Preferences.h>
 static const char* NVS_NS = "slydmx";
@@ -52,8 +69,15 @@ void dmxLoadConfig() {
   prefs.begin(NVS_NS, true);
   dmxCfg.universe           = prefs.getUShort("universe", 0);
   dmxCfg.startAddress       = prefs.getUShort("startAddr", 1);
-  dmxCfg.channelsPerFixture = prefs.getUChar("chPerFix", 3);
+  dmxCfg.channelsPerFixture = prefs.getUChar("chPerFix", 13);
   dmxCfg.fixtureCount       = prefs.getUChar("fixCount", 1);
+  for (uint8_t i = 0; i < DMX_MAX_CH_PER_FIX; i++) {
+    char key[8];
+    snprintf(key, sizeof(key), "cn%u", i);
+    String name = prefs.getString(key, "");
+    if (name.length() > 0)
+      strncpy(dmxCfg.channelNames[i], name.c_str(), DMX_CH_NAME_LEN - 1);
+  }
   prefs.end();
 }
 void dmxSaveConfig() {
@@ -63,6 +87,11 @@ void dmxSaveConfig() {
   prefs.putUShort("startAddr", dmxCfg.startAddress);
   prefs.putUChar("chPerFix", dmxCfg.channelsPerFixture);
   prefs.putUChar("fixCount", dmxCfg.fixtureCount);
+  for (uint8_t i = 0; i < DMX_MAX_CH_PER_FIX; i++) {
+    char key[8];
+    snprintf(key, sizeof(key), "cn%u", i);
+    prefs.putString(key, dmxCfg.channelNames[i]);
+  }
   prefs.end();
 }
 #endif
@@ -72,21 +101,26 @@ void dmxSaveConfig() {
 void dmxInit() {
   memset(dmxBuf, 0, sizeof(dmxBuf));
   memset(leds, 0, sizeof(leds));
+  dmxFrameCount = 0;
 
   dmxLoadConfig();
   if (dmxCfg.startAddress < 1) dmxCfg.startAddress = 1;
-  if (dmxCfg.channelsPerFixture < 1) dmxCfg.channelsPerFixture = 3;
+  if (dmxCfg.channelsPerFixture < 1) dmxCfg.channelsPerFixture = 13;
   if (dmxCfg.fixtureCount < 1) dmxCfg.fixtureCount = 1;
 
-  // RS-485 direction enable pin (HIGH = transmit)
+  // RS-485 direction enable (HIGH = transmit)
   pinMode(DMX_EN_PIN, OUTPUT);
   digitalWrite(DMX_EN_PIN, HIGH);
 
-  // Configure UART for DMX: 250kbaud, 8N2
 #ifdef BOARD_GIGA_DMX
-  DMX_SERIAL.begin(DMX_BAUD);
+  // Giga: create mbed BufferedSerial at 250kbaud
+  dmxSerial = new mbed::BufferedSerial(DMX_MBED_TX, DMX_MBED_RX, DMX_BAUD);
+  dmxSerial->set_format(8, mbed::BufferedSerial::None, 2); // 8N2
+  dmxOutputActive = true;
 #else
-  DMX_SERIAL.begin(DMX_BAUD, SERIAL_8N2, -1, DMX_TX_PIN);
+  // ESP32: UART2
+  DmxSerial.begin(DMX_BAUD, SERIAL_8N2, -1, DMX_TX_PIN);
+  dmxOutputActive = true;
 #endif
 
   if (Serial) {
@@ -105,28 +139,47 @@ void dmxInit() {
 
 void dmxSendFrame() {
 #ifdef BOARD_GIGA_DMX
-  // Giga: generate break by driving TX1 pin low manually
-  DMX_SERIAL.end();
-  pinMode(DMX_TX_PIN_GIGA, OUTPUT);
-  digitalWrite(DMX_TX_PIN_GIGA, LOW);
+  if (!dmxSerial) return;
+
+  // Close serial to manually drive TX pin for BREAK
+  delete dmxSerial;
+  dmxSerial = nullptr;
+
+  // BREAK: drive TX low for 120us
+  pinMode(1, OUTPUT);         // Arduino pin 1 = TX1
+  digitalWrite(1, LOW);
   delayMicroseconds(120);
-  digitalWrite(DMX_TX_PIN_GIGA, HIGH);
+
+  // MAB: drive TX high for 12us
+  digitalWrite(1, HIGH);
   delayMicroseconds(12);
-  DMX_SERIAL.begin(DMX_BAUD);
+
+  // Re-open serial and send frame
+  dmxSerial = new mbed::BufferedSerial(DMX_MBED_TX, DMX_MBED_RX, DMX_BAUD);
+  dmxSerial->set_format(8, mbed::BufferedSerial::None, 2); // 8N2
+
+  // Send start code + all 512 channels
+  dmxSerial->write(dmxBuf, DMX_UNIVERSE_MAX + 1);
+
+  // Wait for UART TX to complete (~22ms for 513 bytes at 250kbaud)
+  // Each byte = 11 bits (start + 8 data + 2 stop) = 44us per byte
+  // 513 * 44us ≈ 22.6ms
+  delayMicroseconds(100);  // small extra margin
+
 #else
   // ESP32: toggle TX pin for break/MAB
-  DMX_SERIAL.end();
+  DmxSerial.end();
   pinMode(DMX_TX_PIN, OUTPUT);
   digitalWrite(DMX_TX_PIN, LOW);
   delayMicroseconds(120);
   digitalWrite(DMX_TX_PIN, HIGH);
   delayMicroseconds(12);
-  DMX_SERIAL.begin(DMX_BAUD, SERIAL_8N2, -1, DMX_TX_PIN);
+  DmxSerial.begin(DMX_BAUD, SERIAL_8N2, -1, DMX_TX_PIN);
+  DmxSerial.write(dmxBuf, DMX_UNIVERSE_MAX + 1);
+  DmxSerial.flush();
 #endif
 
-  // Send start code + all 512 channels
-  DMX_SERIAL.write(dmxBuf, DMX_UNIVERSE_MAX + 1);
-  DMX_SERIAL.flush();
+  dmxFrameCount++;
 }
 
 // ── Copy virtual leds[] to DMX channel buffer ────────────────────────────────
@@ -140,14 +193,15 @@ void dmxUpdateFromLeds() {
   for (uint16_t i = 0; i < maxFix; i++) {
     uint16_t slot = addr + (uint16_t)i * cpf;
     if (slot > DMX_UNIVERSE_MAX) break;
+    // Map CRGB to the RGB channels within the fixture profile
+    // For multi-channel fixtures, RGB maps to channels at offsets within the fixture
     if (cpf >= 1 && slot <= DMX_UNIVERSE_MAX) dmxBuf[slot]     = leds[i].r;
     if (cpf >= 2 && slot + 1 <= DMX_UNIVERSE_MAX) dmxBuf[slot + 1] = leds[i].g;
     if (cpf >= 3 && slot + 2 <= DMX_UNIVERSE_MAX) dmxBuf[slot + 2] = leds[i].b;
-    if (cpf >= 4 && slot + 3 <= DMX_UNIVERSE_MAX) dmxBuf[slot + 3] = 255;
   }
 }
 
-// ── Set a single DMX channel directly (for test UI sliders) ──────────────────
+// ── Direct channel control (for test UI) ─────────────────────────────────────
 
 void dmxSetChannel(uint16_t channel, uint8_t value) {
   if (channel >= 1 && channel <= DMX_UNIVERSE_MAX)

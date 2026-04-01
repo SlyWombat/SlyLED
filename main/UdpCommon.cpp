@@ -368,10 +368,11 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
 #ifdef BOARD_DMX_BRIDGE
   } else if (isPost && strstr(req, " /dmx/set ")) {
     // Set DMX channels: JSON body {"1":255,"2":128,...}
-    char* body = strstr(req, "\r\n\r\n");
-    if (body) {
-      body += 4;
-      // Simple JSON parser for {"ch":val,...}
+    {
+      char body[512] = {};
+      int toRead = contentLen < (int)sizeof(body) - 1 ? contentLen : (int)sizeof(body) - 1;
+      if (toRead > 0) client.readBytes(body, toRead);
+      body[toRead] = '\0';
       char* p = body;
       while (*p) {
         if (*p == '"') {
@@ -390,15 +391,24 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     }
     sendJsonOk(client);
   } else if (strstr(req, " /dmx/channels")) {
-    // Return first N channels as JSON array
-    uint16_t n = dmxCfg.startAddress + dmxCfg.fixtureCount * dmxCfg.channelsPerFixture;
+    // Return DMX state + config + channel names as JSON
+    uint16_t n = dmxCfg.startAddress + (uint16_t)dmxCfg.fixtureCount * dmxCfg.channelsPerFixture - 1;
     if (n > DMX_UNIVERSE_MAX) n = DMX_UNIVERSE_MAX;
-    if (n < 16) n = 16;
-    char buf[2048];
-    int pos = snprintf(buf, sizeof(buf), "{\"start\":%u,\"chPerFix\":%u,\"fixCount\":%u,\"ch\":[",
-                       dmxCfg.startAddress, dmxCfg.channelsPerFixture, dmxCfg.fixtureCount);
-    for (uint16_t i = 1; i <= n && pos < (int)sizeof(buf) - 8; i++) {
-      pos += snprintf(buf + pos, sizeof(buf) - pos, "%s%u", i > 1 ? "," : "", dmxBuf[i]);
+    if (n < dmxCfg.startAddress + dmxCfg.channelsPerFixture - 1)
+        n = dmxCfg.startAddress + dmxCfg.channelsPerFixture - 1;
+    char buf[3072];
+    int pos = snprintf(buf, sizeof(buf),
+      "{\"universe\":%u,\"start\":%u,\"chPerFix\":%u,\"fixCount\":%u,"
+      "\"frames\":%lu,\"active\":%s,\"names\":[",
+      dmxCfg.universe, dmxCfg.startAddress, dmxCfg.channelsPerFixture,
+      dmxCfg.fixtureCount, (unsigned long)dmxFrameCount,
+      dmxOutputActive ? "true" : "false");
+    for (uint8_t i = 0; i < dmxCfg.channelsPerFixture && i < DMX_MAX_CH_PER_FIX && pos < (int)sizeof(buf) - 40; i++) {
+      pos += snprintf(buf + pos, sizeof(buf) - pos, "%s\"%s\"", i > 0 ? "," : "", dmxCfg.channelNames[i]);
+    }
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "],\"ch\":[");
+    for (uint16_t i = dmxCfg.startAddress; i <= n && pos < (int)sizeof(buf) - 8; i++) {
+      pos += snprintf(buf + pos, sizeof(buf) - pos, "%s%u", i > dmxCfg.startAddress ? "," : "", dmxBuf[i]);
     }
     pos += snprintf(buf + pos, sizeof(buf) - pos, "]}");
     sendBuf(client, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: %d\r\n\r\n", pos);
@@ -408,16 +418,43 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     dmxBlackout();
     sendJsonOk(client);
   } else if (isPost && strstr(req, " /dmx/config ")) {
-    // Update DMX config: {"startAddr":1,"chPerFix":3,"fixCount":10}
-    char* body = strstr(req, "\r\n\r\n");
-    if (body) {
-      body += 4;
+    // Update DMX config: {"startAddr":1,"chPerFix":13,"fixCount":1,"universe":0,"names":["Motor","Dim",...]}
+    {
+      char body[1024] = {};
+      int toRead = contentLen < (int)sizeof(body) - 1 ? contentLen : (int)sizeof(body) - 1;
+      if (toRead > 0) client.readBytes(body, toRead);
+      body[toRead] = '\0';
       int sa = jsonGetInt(body, "startAddr", -1);
       int cpf = jsonGetInt(body, "chPerFix", -1);
       int fc = jsonGetInt(body, "fixCount", -1);
+      int uni = jsonGetInt(body, "universe", -1);
       if (sa >= 1 && sa <= 512) dmxCfg.startAddress = (uint16_t)sa;
-      if (cpf >= 1 && cpf <= 8) dmxCfg.channelsPerFixture = (uint8_t)cpf;
+      if (cpf >= 1 && cpf <= DMX_MAX_CH_PER_FIX) dmxCfg.channelsPerFixture = (uint8_t)cpf;
       if (fc >= 1 && fc <= 170) dmxCfg.fixtureCount = (uint8_t)fc;
+      if (uni >= 0 && uni <= 32767) dmxCfg.universe = (uint16_t)uni;
+      // Parse channel names from "names":["Motor","Dim",...]
+      char* namesArr = strstr(body, "\"names\"");
+      if (namesArr) {
+        char* bracket = strchr(namesArr, '[');
+        if (bracket) {
+          char* p = bracket + 1;
+          for (uint8_t i = 0; i < DMX_MAX_CH_PER_FIX && *p; i++) {
+            while (*p == ' ' || *p == ',') p++;
+            if (*p == ']') break;
+            if (*p == '"') {
+              p++;
+              char* end = strchr(p, '"');
+              if (end) {
+                uint8_t len = (uint8_t)(end - p);
+                if (len >= DMX_CH_NAME_LEN) len = DMX_CH_NAME_LEN - 1;
+                memset(dmxCfg.channelNames[i], 0, DMX_CH_NAME_LEN);
+                memcpy(dmxCfg.channelNames[i], p, len);
+                p = end + 1;
+              } else break;
+            } else break;
+          }
+        }
+      }
       dmxSaveConfig();
     }
     sendJsonOk(client);

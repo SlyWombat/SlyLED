@@ -491,6 +491,18 @@ void sendChildConfigPage(WiFiClient& c) {
             "<div id='upd-msg' style='font-size:.75em;color:#aaa;margin-top:.2em'></div>"
             "</div></div>"
             "</div>"));
+#ifdef BOARD_DMX_BRIDGE
+  c.print(F("<div class='card' style='margin-top:.5em'>"
+            "<h3>DMX Output</h3>"
+            "<div class='row'><span class='k'>Status</span><span class='v' id='dmx-status'>--</span></div>"
+            "<div class='row'><span class='k'>Universe</span><span class='v' id='dmx-uni-v'>--</span></div>"
+            "<div class='row'><span class='k'>Address</span><span class='v' id='dmx-addr-v'>--</span></div>"
+            "<div class='row'><span class='k'>Channels</span><span class='v' id='dmx-ch-v'>--</span></div>"
+            "<div class='row'><span class='k'>Frames Sent</span><span class='v' id='dmx-frames'>--</span></div>"
+            "<div class='row'><span class='k'>DE/RE Pin</span><span class='v'>"));
+  sendBuf(c, "%u", (unsigned)DMX_EN_PIN);
+  c.print(F("</span></div></div>"));
+#endif
 
   // ── Settings pane (inside the main form) ───────────────────────────────────
   c.print(F("<form id='cf' action='/config' method='POST'>"));
@@ -595,25 +607,42 @@ void sendChildConfigPage(WiFiClient& c) {
 #ifdef BOARD_DMX_BRIDGE
   // ── DMX Test pane ─────────────────────────────────────────────────────────
   c.print(F("<div class='pane' id='p3' style='display:none'>"));
-  c.print(F("<h3>DMX Channel Test</h3>"
-            "<div style='margin:.5em 0'>"
-            "<label>Start Address</label>"
-            "<input type='number' id='dmx-sa' min='1' max='512' style='width:80px'> "
-            "<label>Ch/Fixture</label>"
-            "<input type='number' id='dmx-cpf' min='1' max='8' style='width:60px'> "
-            "<label>Fixtures</label>"
-            "<input type='number' id='dmx-fc' min='1' max='170' style='width:60px'> "
-            "<button class='btn' onclick='dmxSaveCfg()'>Apply</button>"
+  // Section 1: DMX Output Hardware
+  c.print(F("<div class='card'><h3>DMX Output</h3>"
+            "<p style='font-size:.8em;color:#94a3b8;margin:.2em 0'>"
+            "CQRobot Ocean DMX shield on Serial1 (TX1). "
+            "Set shield jumpers: <b>EN</b> to pin 2, <b>TX</b> to TX1, <b>RX</b> to RX1. "
+            "Switch to <b>Master/TX</b> mode (check silk screen). "
+            "DMX output at 250kbaud, 40Hz frame rate.</p>"
+            "<div id='dmx-diag' style='font-size:.8em;color:#64748b;margin:.3em 0'></div>"
             "</div>"));
-  c.print(F("<div style='margin:.5em 0;display:flex;gap:.3em;flex-wrap:wrap'>"
+  c.flush();
+  // Section 2: Gateway Configuration
+  c.print(F("<div class='card' style='margin-top:.5em'><h3>Gateway Configuration</h3>"
+            "<div style='display:grid;grid-template-columns:auto 1fr;gap:.3em .6em;align-items:center;margin:.5em 0'>"
+            "<label>Art-Net Universe</label><input type='number' id='dmx-uni' min='0' max='32767' style='width:80px'>"
+            "</div>"
+            "<button class='btn' onclick='dmxSaveGw()' style='margin:.3em 0'>Save Gateway</button>"
+            "</div>"));
+  c.flush();
+  // Section 3: Fixture Test
+  c.print(F("<div class='card' style='margin-top:.5em'><h3>Fixture Test</h3>"
+            "<div style='display:grid;grid-template-columns:auto 1fr;gap:.3em .6em;align-items:center;margin:.5em 0'>"
+            "<label>Start Address</label><input type='number' id='dmx-sa' min='1' max='512' style='width:80px'>"
+            "<label>Channels/Fixture</label><input type='number' id='dmx-cpf' min='1' max='24' style='width:80px'>"
+            "</div>"
+            "<div id='dmx-names' style='margin:.3em 0;font-size:.85em'></div>"
+            "<button class='btn' onclick='dmxSaveNames()' style='margin:.3em 0'>Save Names &amp; Apply</button>"
+            "<div style='margin:.5em 0;display:flex;gap:.3em;flex-wrap:wrap'>"
             "<button class='btn' style='background:#c33' onclick='dmxBlackout()'>Blackout</button>"
-            "<button class='btn' style='background:#933' onclick='dmxPreset(255,0,0)'>Red</button>"
-            "<button class='btn' style='background:#393' onclick='dmxPreset(0,255,0)'>Green</button>"
-            "<button class='btn' style='background:#339' onclick='dmxPreset(0,0,255)'>Blue</button>"
-            "<button class='btn' style='background:#999' onclick='dmxPreset(255,255,255)'>White</button>"
-            "<button class='btn' style='background:#963' onclick='dmxPreset(255,140,0)'>Amber</button>"
+            "<button class='btn' style='background:#933' onclick='dmxPresetRGB(255,0,0)'>Red</button>"
+            "<button class='btn' style='background:#393' onclick='dmxPresetRGB(0,255,0)'>Green</button>"
+            "<button class='btn' style='background:#339' onclick='dmxPresetRGB(0,0,255)'>Blue</button>"
+            "<button class='btn' style='background:#999' onclick='dmxPresetRGB(255,255,255)'>White</button>"
+            "<button class='btn' style='background:#653' onclick='dmxAll(255)'>All 255</button>"
+            "</div>"
+            "<div id='dmx-sliders' style='margin:.5em 0'></div>"
             "</div>"));
-  c.print(F("<div id='dmx-sliders' style='margin:.5em 0'></div>"));
   c.print(F("</div>"));
 #endif
 
@@ -758,44 +787,94 @@ void sendChildConfigPage(WiFiClient& c) {
             "x.send(JSON.stringify({url:url,sha256:'',major:maj,minor:mn,patch:pt}));}"));
 #ifdef BOARD_DMX_BRIDGE
   c.print(F(
+    "var _dmxNames=[];"
     "function dmxBlackout(){fetch('/dmx/blackout',{method:'POST'}).then(function(){dmxRefresh();});}"
-    "function dmxPreset(r,g,b){"
+    "function dmxAll(v){var sa=parseInt(document.getElementById('dmx-sa').value)||1;"
+    "var cpf=parseInt(document.getElementById('dmx-cpf').value)||13;"
+    "var d={};for(var i=0;i<cpf;i++)d[sa+i]=v;"
+    "fetch('/dmx/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)}).then(function(){dmxRefresh();});}"
+    "function dmxPresetRGB(r,g,b){dmxBlackout();setTimeout(function(){"
     "var sa=parseInt(document.getElementById('dmx-sa').value)||1;"
-    "var cpf=parseInt(document.getElementById('dmx-cpf').value)||3;"
-    "var fc=parseInt(document.getElementById('dmx-fc').value)||1;"
-    "var d={};for(var i=0;i<fc;i++){var a=sa+i*cpf;"
-    "if(cpf>=1)d[a]=r;if(cpf>=2)d[a+1]=g;if(cpf>=3)d[a+2]=b;if(cpf>=4)d[a+3]=255;}"
-    "fetch('/dmx/set',{method:'POST',body:JSON.stringify(d)}).then(function(){dmxRefresh();});}"
-    "function dmxSaveCfg(){"
-    "var b={startAddr:parseInt(document.getElementById('dmx-sa').value)||1,"
-    "chPerFix:parseInt(document.getElementById('dmx-cpf').value)||3,"
-    "fixCount:parseInt(document.getElementById('dmx-fc').value)||1};"
-    "fetch('/dmx/config',{method:'POST',body:JSON.stringify(b)}).then(function(){dmxRefresh();});}"
+    "var d={};for(var i=0;i<_dmxNames.length;i++){var n=_dmxNames[i].toLowerCase();"
+    "if(n.indexOf('red')>=0||n==='r')d[sa+i]=r;"
+    "else if(n.indexOf('green')>=0||n==='g')d[sa+i]=g;"
+    "else if(n.indexOf('blue')>=0||n==='b')d[sa+i]=b;"
+    "else if(n.indexOf('white')>=0||n==='w')d[sa+i]=Math.min(r,g,b);"
+    "else if(n.indexOf('dim')>=0)d[sa+i]=255;}"
+    "fetch('/dmx/set',{method:'POST',body:JSON.stringify(d)}).then(function(){dmxRefresh();});},200);}"
+  ));
+  c.flush();
+  c.print(F(
+    "function dmxSaveGw(){"
+    "var b={universe:parseInt(document.getElementById('dmx-uni').value)||0};"
+    "fetch('/dmx/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(function(){dmxRefresh();});}"
+    "function dmxSaveNames(){"
+    "var cpf=parseInt(document.getElementById('dmx-cpf').value)||13;"
+    "var sa=parseInt(document.getElementById('dmx-sa').value)||1;"
+    "var names=[];for(var i=0;i<cpf;i++){var el=document.getElementById('cn'+i);"
+    "names.push(el?el.value:'Ch '+(i+1));}"
+    "fetch('/dmx/config',{method:'POST',headers:{'Content-Type':'application/json'},"
+    "body:JSON.stringify({startAddr:sa,chPerFix:cpf,fixCount:1,names:names})}).then(function(){dmxRefresh();});}"
   ));
   c.flush();
   c.print(F(
     "function dmxRefresh(){"
     "fetch('/dmx/channels').then(function(r){return r.json();}).then(function(d){"
+    "document.getElementById('dmx-uni').value=d.universe;"
     "document.getElementById('dmx-sa').value=d.start;"
     "document.getElementById('dmx-cpf').value=d.chPerFix;"
     "document.getElementById('dmx-fc').value=d.fixCount;"
+    "_dmxNames=d.names||[];"
+    "var diag=document.getElementById('dmx-diag');"
+    "if(diag)diag.textContent='Frames: '+d.frames+(d.active?' (active)':' (stopped)');"
+  ));
+  c.flush();
+  c.print(F(
+    "var ds=document.getElementById('dmx-status');if(ds)ds.textContent=d.active?'Active':'Stopped';"
+    "var du=document.getElementById('dmx-uni-v');if(du)du.textContent=d.universe;"
+    "var da=document.getElementById('dmx-addr-v');if(da)da.textContent=d.start;"
+    "var dc=document.getElementById('dmx-ch-v');if(dc)dc.textContent=d.chPerFix+' x '+d.fixCount;"
+    "var df=document.getElementById('dmx-frames');if(df)df.textContent=d.frames;"
+  ));
+  c.flush();
+  c.print(F(
+    "var ne=document.getElementById('dmx-names');var nh='';"
+    "for(var i=0;i<d.chPerFix;i++){"
+    "var nm=d.names[i]||('Ch '+(i+1));"
+    "nh+='<div style=\"display:flex;gap:.3em;align-items:center;margin:.1em 0\">';"
+    "nh+='<span style=\"width:24px;color:#64748b\">'+(i+1)+'</span>';"
+    "nh+='<input id=\"cn'+i+'\" value=\"'+nm+'\" style=\"width:100px;font-size:.8em\">';"
+    "nh+='</div>';}"
+    "if(ne)ne.innerHTML=nh;"
+  ));
+  c.flush();
+  c.print(F(
     "var el=document.getElementById('dmx-sliders');var h='';"
-    "var n=Math.min(d.ch.length,d.start+d.fixCount*d.chPerFix-1);"
-    "for(var i=d.start-1;i<n;i++){"
-    "var ch=i+1;var v=d.ch[i];"
-    "h+='<div style=\"display:flex;align-items:center;gap:.3em;margin:.15em 0\">';"
-    "h+='<span style=\"width:30px;font-size:.75em;color:#64748b\">'+ch+'</span>';"
+    "for(var i=0;i<d.ch.length&&i<d.chPerFix*d.fixCount;i++){"
+    "var ch=d.start+i;var v=d.ch[i];"
+    "var nm=d.names[i%d.chPerFix]||('Ch '+(i+1));"
+    "var fi=Math.floor(i/d.chPerFix);"
+    "if(i%d.chPerFix===0&&d.fixCount>1)h+='<div style=\"margin-top:.5em;font-size:.8em;color:#4c9;font-weight:bold\">Fixture '+(fi+1)+'</div>';"
+    "h+='<div style=\"display:flex;align-items:center;gap:.3em;margin:.12em 0\">';"
+    "h+='<span style=\"width:24px;font-size:.7em;color:#556;text-align:right\">'+ch+'</span>';"
+    "h+='<span style=\"width:60px;font-size:.75em;color:#94a3b8\">'+nm+'</span>';"
     "h+='<input type=\"range\" min=\"0\" max=\"255\" value=\"'+v+'\" style=\"flex:1\" ';"
     "h+='oninput=\"dmxCh('+ch+',this.value)\">';"
-    "h+='<span id=\"dv'+ch+'\" style=\"width:28px;font-size:.75em;color:#94a3b8\">'+v+'</span>';"
+    "h+='<span id=\"dv'+ch+'\" style=\"width:24px;font-size:.75em;color:#94a3b8;text-align:right\">'+v+'</span>';"
     "h+='</div>';}"
     "el.innerHTML=h;});}"
+  ));
+  c.flush();
+  c.print(F(
     "function dmxCh(ch,v){"
     "var s=document.getElementById('dv'+ch);if(s)s.textContent=v;"
     "var d={};d[ch]=parseInt(v);fetch('/dmx/set',{method:'POST',body:JSON.stringify(d)});}"
+    "dmxRefresh();setInterval(function(){var df=document.getElementById('dmx-frames');"
+    "if(df)fetch('/dmx/channels').then(function(r){return r.json();}).then(function(d){"
+    "df.textContent=d.frames;"
+    "var ds=document.getElementById('dmx-status');if(ds)ds.textContent=d.active?'Active':'Stopped';});},3000);"
   ));
   c.flush();
-  c.print(F("dmxRefresh();"));
 #endif
   c.print(F("showTab(0);showStr(0);poll();setInterval(poll,3000);"
             "</script></body></html>"));

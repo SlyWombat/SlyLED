@@ -68,6 +68,11 @@ void setup() {
   digitalWrite(2, LOW);
   delay(1);
 #endif
+#ifdef BOARD_GIGA_DMX
+  // Onboard LED diagnostics: RED = booting
+  pinMode(LEDR, OUTPUT); pinMode(LEDG, OUTPUT); pinMode(LEDB, OUTPUT);
+  digitalWrite(LEDR, LOW); digitalWrite(LEDG, HIGH); digitalWrite(LEDB, HIGH); // RED on
+#endif
   delay(500);
   if (Serial) Serial.println("=== BOOT ===");
 
@@ -95,6 +100,10 @@ void setup() {
 #endif
 
   connectWiFi();   // also calls initChildConfig() for BOARD_CHILD
+#ifdef BOARD_GIGA_DMX
+  // GREEN = WiFi connected
+  digitalWrite(LEDR, HIGH); digitalWrite(LEDG, LOW); // GREEN on
+#endif
 
 #ifdef BOARD_DMX_BRIDGE
   dmxInit();
@@ -112,6 +121,11 @@ void setup() {
   bootAnimation();
   // Announce ourselves to any listening parent
   sendPong(IPAddress(255, 255, 255, 255));
+#endif
+#ifdef BOARD_GIGA_DMX
+  // BLUE = fully initialized, PONG sent
+  digitalWrite(LEDG, HIGH); digitalWrite(LEDB, LOW); // BLUE on
+  if (Serial) { Serial.print(F("[DMX] Ready. IP: ")); Serial.println(WiFi.localIP()); }
 #endif
 
 #ifdef BOARD_GIGA
