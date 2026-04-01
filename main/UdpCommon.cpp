@@ -21,6 +21,10 @@
 #include "OtaUpdate.h"
 #endif
 
+#ifdef BOARD_DMX_BRIDGE
+#include "ArtNetRecv.h"
+#endif
+
 // ── handleUdpPacket ───────────────────────────────────────────────────────────
 
 void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) {
@@ -412,7 +416,9 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     for (uint16_t i = dmxCfg.startAddress; i <= n && pos < (int)sizeof(buf) - 8; i++) {
       pos += snprintf(buf + pos, sizeof(buf) - pos, "%s%u", i > dmxCfg.startAddress ? "," : "", dmxBuf[i]);
     }
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "]}");
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "],"
+      "\"artnetRx\":%lu,\"artnetPps\":%lu,\"artnetSender\":\"%s\"}",
+      (unsigned long)artnetRxCount, (unsigned long)artnetPps, artnetLastSender);
     sendBuf(client, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: %d\r\n\r\n", pos);
     client.print(buf);
     client.flush();

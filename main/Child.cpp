@@ -494,8 +494,14 @@ void sendChildConfigPage(WiFiClient& c) {
             "<div class='row'><span class='k'>Status</span><span class='v' id='dmx-status'>--</span></div>"
             "<div class='row'><span class='k'>Address</span><span class='v' id='dmx-addr-v'>--</span></div>"
             "<div class='row'><span class='k'>Channels</span><span class='v' id='dmx-ch-v'>--</span></div>"
-            "<div class='row'><span class='k'>Packets</span><span class='v' id='dmx-frames'>0</span></div>"
+            "<div class='row'><span class='k'>TX Packets</span><span class='v' id='dmx-frames'>0</span></div>"
             "<div class='row'><span class='k'>Self Test</span><span class='v' id='dmx-selftest'>--</span></div>"
+            "</div>"
+            "<div class='card' style='margin-top:.5em'>"
+            "<h3>Art-Net Input</h3>"
+            "<div class='row'><span class='k'>RX Packets</span><span class='v' id='an-rx'>0</span></div>"
+            "<div class='row'><span class='k'>Rate</span><span class='v' id='an-pps'>0 pps</span></div>"
+            "<div class='row'><span class='k'>Source</span><span class='v' id='an-src'>--</span></div>"
             "</div>"));
 #endif
 
@@ -868,6 +874,9 @@ void sendChildConfigPage(WiFiClient& c) {
     "fetch('/dmx/channels').then(function(r){return r.json();}).then(function(d){"
     "var df=document.getElementById('dmx-frames');if(df)df.textContent=d.frames;"
     "var ds=document.getElementById('dmx-status');if(ds)ds.textContent=d.active?'Active':'Stopped';"
+    "var ar=document.getElementById('an-rx');if(ar)ar.textContent=d.artnetRx||0;"
+    "var ap=document.getElementById('an-pps');if(ap)ap.textContent=(d.artnetPps||0)+' pps';"
+    "var as2=document.getElementById('an-src');if(as2)as2.textContent=d.artnetSender||'--';"
     "dmxGrid(d);});},2000);"
   ));
   c.flush();

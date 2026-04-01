@@ -8,6 +8,7 @@
 #include "Globals.h"
 #include "NetUtils.h"
 #include "Child.h"          // initChildConfig() — guarded by #ifdef BOARD_FASTLED inside Child.h
+#include "ArtNetRecv.h"     // artnetInit() — guarded by #ifdef BOARD_DMX_BRIDGE
 #include "arduino_secrets.h"
 
 // ── NTP ───────────────────────────────────────────────────────────────────────
@@ -184,6 +185,10 @@ void connectWiFi() {
   syncNTP();
   cmdUDP.begin(UDP_PORT);
   if (Serial) Serial.println(F("UDP command channel open on port 4210."));
+
+#ifdef BOARD_DMX_BRIDGE
+  artnetInit();
+#endif
 
 #ifdef BOARD_CHILD
   initChildConfig();

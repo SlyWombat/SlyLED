@@ -50,6 +50,7 @@
 
 #ifdef BOARD_DMX_BRIDGE
 #include "DmxBridge.h"
+#include "ArtNetRecv.h"
 #endif
 
 // ── setup ─────────────────────────────────────────────────────────────────────
@@ -286,6 +287,7 @@ void loop() {
       dmxSendFrame();
     }
   }
+  pollArtNet();     // Art-Net — ArtDMX → dmxBuf, ArtPoll → reply
   pollUDP();        // SlyLED protocol — config, PING/PONG, status
   handleClient();   // HTTP — config UI, /dmx/set, /dmx/channels
   delay(5);
