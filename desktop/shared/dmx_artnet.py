@@ -43,7 +43,7 @@ def build_artpoll():
     pkt = bytearray(ARTNET_HEADER)
     pkt += struct.pack("<H", OP_POLL)           # opcode (LE)
     pkt += struct.pack(">H", ARTNET_VERSION)    # protocol version (BE)
-    pkt += bytes([0x00, 0x00])                  # flags + diagnostics priority
+    pkt += bytes([0x06, 0x00])                  # TalkToMe: send reply on change + diag
     return bytes(pkt)
 
 
@@ -280,10 +280,17 @@ class ArtNetEngine:
         if not self._sock:
             return
         pkt = build_artpoll()
+        # Broadcast
         try:
             self._sock.sendto(pkt, ("255.255.255.255", ARTNET_PORT))
         except Exception:
             pass
+        # Also unicast to known targets (some bridges only respond to unicast)
+        for ip in set(self._unicast.values()):
+            try:
+                self._sock.sendto(pkt, (ip, ARTNET_PORT))
+            except Exception:
+                pass
 
     @property
     def discovered_nodes(self):
@@ -322,33 +329,37 @@ class ArtNetEngine:
                 time.sleep(sleep_time)
 
     def _recv(self):
-        """Non-blocking receive for ArtPollReply and other packets."""
+        """Non-blocking receive — drain all pending packets."""
         if not self._sock:
             return
-        try:
-            data, addr = self._sock.recvfrom(1024)
-        except (socket.timeout, BlockingIOError, OSError):
-            return
-        hdr = parse_artnet_header(data)
-        if not hdr:
-            return
-        opcode = hdr[0]
-        if opcode == OP_POLL_REPLY:
-            info = parse_artpoll_reply(data)
-            if info:
-                self._discovered[info["ip"]] = info
-        elif opcode == OP_POLL:
-            # Respond to ArtPoll from other controllers
-            universes = list(self._universes.keys()) or [1]
-            reply = build_artpoll_reply(
-                self._local_ip, ARTNET_PORT,
-                short_name="SlyLED", long_name="SlyLED Parent Server",
-                universes=universes,
-            )
+        for _ in range(50):  # drain up to 50 packets per call
             try:
-                self._sock.sendto(reply, addr)
-            except Exception:
-                pass
+                data, addr = self._sock.recvfrom(2048)
+            except (socket.timeout, BlockingIOError, OSError):
+                return
+            # Skip our own packets
+            if addr[0] == self._local_ip:
+                continue
+            hdr = parse_artnet_header(data)
+            if not hdr:
+                continue
+            opcode = hdr[0]
+            if opcode == OP_POLL_REPLY:
+                info = parse_artpoll_reply(data)
+                if info:
+                    self._discovered[info["ip"]] = info
+            elif opcode == OP_POLL:
+                # Respond to ArtPoll from other controllers
+                universes = list(self._universes.keys()) or [1]
+                reply = build_artpoll_reply(
+                    self._local_ip, ARTNET_PORT,
+                    short_name="SlyLED", long_name="SlyLED Parent Server",
+                    universes=universes,
+                )
+                try:
+                    self._sock.sendto(reply, addr)
+                except Exception:
+                    pass
 
     def _send_all_universes(self):
         """Send ArtDMX for all active universes."""
