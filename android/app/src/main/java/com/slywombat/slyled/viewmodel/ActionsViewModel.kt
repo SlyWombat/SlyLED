@@ -3,6 +3,7 @@ package com.slywombat.slyled.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.slywombat.slyled.data.model.Action
+import com.slywombat.slyled.data.model.Child
 import com.slywombat.slyled.data.repository.SlyLedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +20,9 @@ class ActionsViewModel @Inject constructor(
     private val _actions = MutableStateFlow<List<Action>>(emptyList())
     val actions: StateFlow<List<Action>> = _actions.asStateFlow()
 
+    private val _children = MutableStateFlow<List<Child>>(emptyList())
+    val children: StateFlow<List<Child>> = _children.asStateFlow()
+
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -27,6 +31,7 @@ class ActionsViewModel @Inject constructor(
 
     init {
         loadActions()
+        loadChildren()
     }
 
     fun loadActions() {
@@ -39,6 +44,16 @@ class ActionsViewModel @Inject constructor(
                 _error.value = e.message ?: "Failed to load actions"
             } finally {
                 _isLoading.value = false
+            }
+        }
+    }
+
+    private fun loadChildren() {
+        viewModelScope.launch {
+            try {
+                _children.value = repository.getChildren()
+            } catch (_: Exception) {
+                // Non-critical — children list is for scope picker only
             }
         }
     }

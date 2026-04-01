@@ -37,8 +37,11 @@ fun RuntimeScreen(viewModel: RuntimeViewModel = hiltViewModel()) {
     val presets by viewModel.presets.collectAsState()
     val previewData by viewModel.previewData.collectAsState()
     val previewSecond by viewModel.previewSecond.collectAsState()
+    val actions by viewModel.actions.collectAsState()
+    val spatialEffects by viewModel.spatialEffects.collectAsState()
     var showNewDialog by remember { mutableStateOf(false) }
     var showPresetDialog by remember { mutableStateOf(false) }
+    var brightnessValue by remember { mutableStateOf(255f) }
 
     LaunchedEffect(Unit) { viewModel.load() }
 
@@ -71,6 +74,28 @@ fun RuntimeScreen(viewModel: RuntimeViewModel = hiltViewModel()) {
                     Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("New")
+                }
+            }
+        }
+
+        // Global brightness slider
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.WbSunny, null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Brightness", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        Text("${brightnessValue.toInt()}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Slider(
+                        value = brightnessValue,
+                        onValueChange = { brightnessValue = it },
+                        onValueChangeFinished = { viewModel.setBrightness(brightnessValue.toInt()) },
+                        valueRange = 0f..255f,
+                        steps = 0,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
         }
@@ -128,9 +153,16 @@ fun RuntimeScreen(viewModel: RuntimeViewModel = hiltViewModel()) {
             TimelineCard(
                 timeline = tl,
                 isSelected = selectedTimeline?.id == tl.id,
+                selectedTimeline = if (selectedTimeline?.id == tl.id) selectedTimeline else null,
                 onSelect = { viewModel.selectTimeline(tl.id) },
                 onDelete = { viewModel.deleteTimeline(tl.id) },
                 onBakeAndStart = { viewModel.bakeAndStart(tl.id) },
+                onUpdateTimeline = { name, dur, loop -> viewModel.updateTimeline(tl.id, name, dur, loop) },
+                onAddTrack = { viewModel.addTrackToTimeline(tl.id) },
+                onAddClip = { trackIdx, clip -> viewModel.addClipToTimeline(tl.id, trackIdx, clip) },
+                onRemoveClip = { trackIdx, clipIdx -> viewModel.removeClipFromTimeline(tl.id, trackIdx, clipIdx) },
+                actions = actions,
+                spatialEffects = spatialEffects,
                 bakeStatus = if (selectedTimeline?.id == tl.id) bakeStatus else null,
                 syncStatus = if (selectedTimeline?.id == tl.id) syncStatus else null,
             )
@@ -289,12 +321,21 @@ fun ShowEmulatorCanvas(
 fun TimelineCard(
     timeline: Timeline,
     isSelected: Boolean,
+    selectedTimeline: Timeline?,
     onSelect: () -> Unit,
     onDelete: () -> Unit,
     onBakeAndStart: () -> Unit,
+    onUpdateTimeline: (name: String, durationS: Int, loop: Boolean) -> Unit,
+    onAddTrack: () -> Unit,
+    onAddClip: (trackIdx: Int, TimelineClip) -> Unit,
+    onRemoveClip: (trackIdx: Int, clipIdx: Int) -> Unit,
+    actions: List<Action>,
+    spatialEffects: List<SpatialEffect>,
     bakeStatus: BakeStatus?,
     syncStatus: SyncStatus?,
 ) {
+    var showEditDialog by remember { mutableStateOf(false) }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -309,6 +350,12 @@ fun TimelineCard(
                     Spacer(Modifier.width(6.dp))
                     Icon(Icons.Default.Loop, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
                 }
+                if (isSelected) {
+                    Spacer(Modifier.width(4.dp))
+                    IconButton(onClick = { showEditDialog = true }, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
             }
 
             val trackCount = timeline.tracks.size
@@ -319,12 +366,22 @@ fun TimelineCard(
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            // Clip editor when selected
+            // Clip editor when selected — use the full detail from selectedTimeline
             if (isSelected) {
+                val displayTimeline = selectedTimeline ?: timeline
                 Spacer(Modifier.height(8.dp))
-                timeline.tracks.forEachIndexed { ti, track ->
-                    val trackName = if (track.allPerformers) "★ Stage" else "Track ${ti + 1}"
-                    Text("$trackName: ${track.clips.size} clips", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                ClipEditorSection(
+                    timeline = displayTimeline,
+                    actions = actions,
+                    spatialEffects = spatialEffects,
+                    onAddClip = onAddClip,
+                    onRemoveClip = onRemoveClip,
+                )
+                Spacer(Modifier.height(4.dp))
+                TextButton(onClick = onAddTrack) {
+                    Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Add Track")
                 }
             }
 
@@ -368,6 +425,18 @@ fun TimelineCard(
             }
         }
     }
+
+    // Edit timeline dialog
+    if (showEditDialog) {
+        EditTimelineDialog(
+            timeline = timeline,
+            onDismiss = { showEditDialog = false },
+            onSave = { name, dur, loop ->
+                onUpdateTimeline(name, dur, loop)
+                showEditDialog = false
+            }
+        )
+    }
 }
 
 @Composable
@@ -386,6 +455,33 @@ fun NewTimelineDialog(onDismiss: () -> Unit, onCreate: (String, Int) -> Unit) {
         },
         confirmButton = {
             TextButton(onClick = { onCreate(name, duration.toIntOrNull() ?: 30) }) { Text("Create") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+fun EditTimelineDialog(timeline: Timeline, onDismiss: () -> Unit, onSave: (String, Int, Boolean) -> Unit) {
+    var name by remember { mutableStateOf(timeline.name) }
+    var duration by remember { mutableStateOf(timeline.durationS.toString()) }
+    var loop by remember { mutableStateOf(timeline.loop) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit Timeline") },
+        text = {
+            Column {
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") })
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(value = duration, onValueChange = { duration = it }, label = { Text("Duration (s)") })
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Loop", modifier = Modifier.weight(1f))
+                    Switch(checked = loop, onCheckedChange = { loop = it })
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(name, duration.toIntOrNull() ?: timeline.durationS, loop) }) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )

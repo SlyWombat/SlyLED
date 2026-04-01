@@ -37,46 +37,52 @@ class LayoutViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 _children.value = repository.getChildren()
-                _layout.value = repository.getLayout()
+                val layoutResp = repository.getLayout()
+                _layout.value = layoutResp
+                // Use fixtures from layout response (server now returns fixtures[] in layout GET)
+                _fixtures.value = layoutResp.fixtures
                 _surfaces.value = repository.getSurfaces()
-                _fixtures.value = repository.getFixtures()
                 _stage.value = repository.getStage()
             } catch (e: Exception) { _message.value = "Load error: ${e.message}" }
         }
     }
 
-    fun moveChild(id: Int, x: Int, y: Int) {
-        val current = _layout.value ?: return
-        val children = current.children.toMutableList()
-        val idx = children.indexOfFirst { it.id == id }
-        if (idx >= 0) children[idx] = children[idx].copy(x = x, y = y)
-        else children.add(LayoutChild(id = id, x = x, y = y))
-        _layout.value = current.copy(children = children)
+    fun moveFixture(fixtureId: Int, x: Int, y: Int) {
+        val list = _fixtures.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == fixtureId }
+        if (idx >= 0) {
+            list[idx] = list[idx].copy(x = x, y = y, positioned = true)
+            _fixtures.value = list
+        }
     }
 
-    fun placeChild(id: Int, x: Int, y: Int) {
-        moveChild(id, x, y)
-        _message.value = "Performer placed — drag to reposition, then Save"
+    fun placeFixture(fixtureId: Int) {
+        val list = _fixtures.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == fixtureId }
+        if (idx >= 0) {
+            list[idx] = list[idx].copy(x = 5000, y = 2500, positioned = true)
+            _fixtures.value = list
+            _message.value = "Fixture placed — drag to reposition, then Save"
+        }
+    }
+
+    fun updateFixturePosition(fixtureId: Int, x: Int, y: Int, z: Int) {
+        val list = _fixtures.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == fixtureId }
+        if (idx >= 0) {
+            list[idx] = list[idx].copy(x = x, y = y, z = z, positioned = true)
+            _fixtures.value = list
+        }
     }
 
     fun saveLayout() {
         val current = _layout.value ?: return
         viewModelScope.launch {
             try {
-                val placed = current.children.filter { it.x != 0 || it.y != 0 }
-                repository.saveLayout(current.copy(children = placed))
+                val placedFixtures = _fixtures.value.filter { it.positioned }
+                repository.saveLayout(current.copy(fixtures = placedFixtures))
                 _message.value = "Layout saved"
             } catch (e: Exception) { _message.value = "Save failed: ${e.message}" }
-        }
-    }
-
-    fun autoCreateFixtures() {
-        viewModelScope.launch {
-            try {
-                val r = repository.migrateLayout()
-                _message.value = "Fixtures created: ${r.added ?: 0}"
-                _fixtures.value = repository.getFixtures()
-            } catch (e: Exception) { _message.value = "Error: ${e.message}" }
         }
     }
 }

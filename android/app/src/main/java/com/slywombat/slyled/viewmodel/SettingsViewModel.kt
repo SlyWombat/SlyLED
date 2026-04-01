@@ -2,6 +2,7 @@ package com.slywombat.slyled.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.slywombat.slyled.data.model.DmxProfile
 import com.slywombat.slyled.data.model.Settings
 import com.slywombat.slyled.data.repository.SlyLedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -11,6 +12,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import javax.inject.Inject
 
 @HiltViewModel
@@ -30,8 +33,15 @@ class SettingsViewModel @Inject constructor(
     private val _message = MutableSharedFlow<String>()
     val message: SharedFlow<String> = _message
 
+    private val _dmxStatus = MutableStateFlow<JsonObject?>(null)
+    val dmxStatus: StateFlow<JsonObject?> = _dmxStatus
+
+    private val _dmxProfiles = MutableStateFlow<List<DmxProfile>>(emptyList())
+    val dmxProfiles: StateFlow<List<DmxProfile>> = _dmxProfiles
+
     init {
         loadSettings()
+        loadDmxStatus()
     }
 
     fun loadSettings() {
@@ -95,6 +105,39 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun importConfig(json: String) {
+        viewModelScope.launch {
+            try {
+                val obj = kotlinx.serialization.json.Json.parseToJsonElement(json) as JsonObject
+                val resp = repository.importConfig(obj)
+                if (resp.ok) {
+                    _message.emit("Config imported (${resp.added ?: 0} added, ${resp.updated ?: 0} updated)")
+                    loadSettings()
+                } else {
+                    _message.emit(resp.err ?: "Import failed")
+                }
+            } catch (e: Exception) {
+                _message.emit("Import failed: ${e.message}")
+            }
+        }
+    }
+
+    fun importShow(json: String) {
+        viewModelScope.launch {
+            try {
+                val obj = kotlinx.serialization.json.Json.parseToJsonElement(json) as JsonObject
+                val resp = repository.importShow(obj)
+                if (resp.ok) {
+                    _message.emit("Show imported (${resp.actions ?: 0} actions, ${resp.runners ?: 0} runners)")
+                } else {
+                    _message.emit(resp.err ?: "Import failed")
+                }
+            } catch (e: Exception) {
+                _message.emit("Import failed: ${e.message}")
+            }
+        }
+    }
+
     fun generateDemo() {
         viewModelScope.launch {
             try {
@@ -122,6 +165,76 @@ class SettingsViewModel @Inject constructor(
                 }
             } catch (e: Exception) {
                 _message.emit("Reset failed: ${e.message}")
+            }
+        }
+    }
+
+    // ── DMX Control ────────────────────────────────────────────────────
+
+    fun loadDmxStatus() {
+        viewModelScope.launch {
+            try {
+                _dmxStatus.value = repository.getDmxStatus()
+            } catch (_: Exception) {
+                _dmxStatus.value = null
+            }
+        }
+    }
+
+    fun startDmx(protocol: String) {
+        viewModelScope.launch {
+            try {
+                val body = buildJsonObject { put("protocol", protocol) }
+                val resp = repository.startDmx(body)
+                if (resp.ok) {
+                    _message.emit("DMX engine started ($protocol)")
+                    loadDmxStatus()
+                } else {
+                    _message.emit(resp.err ?: "Failed to start DMX")
+                }
+            } catch (e: Exception) {
+                _message.emit("Start DMX failed: ${e.message}")
+            }
+        }
+    }
+
+    fun stopDmx() {
+        viewModelScope.launch {
+            try {
+                val resp = repository.stopDmx()
+                if (resp.ok) {
+                    _message.emit("DMX engine stopped")
+                    loadDmxStatus()
+                } else {
+                    _message.emit(resp.err ?: "Failed to stop DMX")
+                }
+            } catch (e: Exception) {
+                _message.emit("Stop DMX failed: ${e.message}")
+            }
+        }
+    }
+
+    fun dmxBlackout() {
+        viewModelScope.launch {
+            try {
+                val resp = repository.dmxBlackout()
+                if (resp.ok) {
+                    _message.emit("DMX blackout sent")
+                } else {
+                    _message.emit(resp.err ?: "Blackout failed")
+                }
+            } catch (e: Exception) {
+                _message.emit("Blackout failed: ${e.message}")
+            }
+        }
+    }
+
+    fun loadDmxProfiles(category: String? = null) {
+        viewModelScope.launch {
+            try {
+                _dmxProfiles.value = repository.getDmxProfiles(category)
+            } catch (e: Exception) {
+                _message.emit("Failed to load profiles: ${e.message}")
             }
         }
     }

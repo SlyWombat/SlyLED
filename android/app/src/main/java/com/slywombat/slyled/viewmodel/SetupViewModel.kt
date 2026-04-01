@@ -3,6 +3,8 @@ package com.slywombat.slyled.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.slywombat.slyled.data.model.Child
+import com.slywombat.slyled.data.model.DmxProfile
+import com.slywombat.slyled.data.model.Fixture
 import com.slywombat.slyled.data.repository.SlyLedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -32,6 +34,12 @@ class SetupViewModel @Inject constructor(
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing
 
+    private val _fixtures = MutableStateFlow<List<Fixture>>(emptyList())
+    val fixtures: StateFlow<List<Fixture>> = _fixtures
+
+    private val _dmxProfiles = MutableStateFlow<List<DmxProfile>>(emptyList())
+    val dmxProfiles: StateFlow<List<DmxProfile>> = _dmxProfiles
+
     private val _message = MutableSharedFlow<String>()
     val message: SharedFlow<String> = _message
 
@@ -45,6 +53,76 @@ class SetupViewModel @Inject constructor(
                 _children.value = repository.getChildren()
             } catch (e: Exception) {
                 _message.emit("Failed to load children: ${e.message}")
+            }
+        }
+        loadFixtures()
+        loadDmxProfiles()
+    }
+
+    fun loadFixtures() {
+        viewModelScope.launch {
+            try {
+                _fixtures.value = repository.getFixtures()
+            } catch (e: Exception) {
+                _message.emit("Failed to load fixtures: ${e.message}")
+            }
+        }
+    }
+
+    fun loadDmxProfiles() {
+        viewModelScope.launch {
+            try {
+                _dmxProfiles.value = repository.getDmxProfiles()
+            } catch (e: Exception) {
+                _message.emit("Failed to load DMX profiles: ${e.message}")
+            }
+        }
+    }
+
+    fun createFixture(fixture: Fixture) {
+        viewModelScope.launch {
+            try {
+                val resp = repository.createFixture(fixture)
+                if (resp.ok) {
+                    _message.emit("Fixture created")
+                    loadFixtures()
+                } else {
+                    _message.emit(resp.err ?: "Failed to create fixture")
+                }
+            } catch (e: Exception) {
+                _message.emit("Create fixture failed: ${e.message}")
+            }
+        }
+    }
+
+    fun updateFixture(id: Int, fixture: Fixture) {
+        viewModelScope.launch {
+            try {
+                val resp = repository.updateFixture(id, fixture)
+                if (resp.ok) {
+                    _message.emit("Fixture updated")
+                    loadFixtures()
+                } else {
+                    _message.emit(resp.err ?: "Failed to update fixture")
+                }
+            } catch (e: Exception) {
+                _message.emit("Update fixture failed: ${e.message}")
+            }
+        }
+    }
+
+    fun deleteFixture(id: Int) {
+        viewModelScope.launch {
+            try {
+                val resp = repository.deleteFixture(id)
+                if (resp.ok) {
+                    _message.emit("Fixture deleted")
+                    loadFixtures()
+                } else {
+                    _message.emit(resp.err ?: "Failed to delete fixture")
+                }
+            } catch (e: Exception) {
+                _message.emit("Delete fixture failed: ${e.message}")
             }
         }
     }

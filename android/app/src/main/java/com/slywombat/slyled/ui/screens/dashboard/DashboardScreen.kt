@@ -219,7 +219,19 @@ private fun PerformerCard(child: Child) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     BoardBadge(type = child.type)
-                    StatusBadge(online = isOnline)
+                    if (!child.startupDone) {
+                        SuggestionChip(
+                            onClick = {},
+                            label = { Text("Checking\u2026", style = MaterialTheme.typography.labelSmall) },
+                            colors = SuggestionChipDefaults.suggestionChipColors(
+                                containerColor = Color(0xFF3B82F6).copy(alpha = 0.15f),
+                                labelColor = Color(0xFF3B82F6)
+                            ),
+                            border = null
+                        )
+                    } else {
+                        StatusBadge(online = isOnline)
+                    }
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -236,6 +248,12 @@ private fun PerformerCard(child: Child) {
                 Column(horizontalAlignment = Alignment.End) {
                     if (totalLeds > 0) {
                         DetailLabel("LEDs", "$totalLeds (${child.sc} string${if (child.sc != 1) "s" else ""})")
+                    }
+                    if (child.rssi != null && child.rssi > 0) {
+                        val bars = child.signalBars
+                        val barStr = "\u2582".repeat(bars.coerceAtLeast(1)) + "\u2582".repeat((4 - bars).coerceAtLeast(0)).let { dim -> "" }
+                        val barChars = (1..4).map { if (it <= bars) "\u2588" else "\u2581" }.joinToString("")
+                        DetailLabel("RSSI", "${child.rssiDbm} dBm $barChars")
                     }
                     if (child.seen > 0) {
                         DetailLabel("Last seen", formatTimestamp(child.seen))

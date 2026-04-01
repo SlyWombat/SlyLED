@@ -16,6 +16,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.slywombat.slyled.data.model.Child
 import com.slywombat.slyled.data.model.ChildStringConfig
+import com.slywombat.slyled.data.model.DmxProfile
+import com.slywombat.slyled.data.model.Fixture
 import com.slywombat.slyled.data.model.OnlineStatus
 import com.slywombat.slyled.ui.theme.CyanSecondary
 import com.slywombat.slyled.ui.theme.GreenOnline
@@ -36,6 +38,8 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
 
     val children by viewModel.children.collectAsState()
     val discovered by viewModel.discovered.collectAsState()
+    val fixtures by viewModel.fixtures.collectAsState()
+    val dmxProfiles by viewModel.dmxProfiles.collectAsState()
     val isDiscovering by viewModel.isDiscovering.collectAsState()
     val isAdding by viewModel.isAdding.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
@@ -45,6 +49,9 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
     var detailChild by remember { mutableStateOf<Child?>(null) }
     var confirmRemoveId by remember { mutableStateOf<Int?>(null) }
     var confirmRebootId by remember { mutableStateOf<Int?>(null) }
+    var showCreateFixture by remember { mutableStateOf(false) }
+    var editFixture by remember { mutableStateOf<Fixture?>(null) }
+    var confirmDeleteFixtureId by remember { mutableStateOf<Int?>(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -258,6 +265,48 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                     }
                 }
             }
+
+            // ── Fixtures section ──────────────────────────────────────────
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Fixtures (${fixtures.size})",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = { showCreateFixture = true }) {
+                        Icon(Icons.Default.Add, contentDescription = "Add Fixture")
+                    }
+                }
+            }
+
+            if (fixtures.isEmpty()) {
+                item {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "No fixtures — tap + to create one",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+
+            items(fixtures, key = { it.id }) { fixture ->
+                FixtureCard(
+                    fixture = fixture,
+                    children = children,
+                    onEdit = { editFixture = fixture },
+                    onDelete = { confirmDeleteFixtureId = fixture.id }
+                )
+            }
         }
     }
 
@@ -327,6 +376,60 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                 TextButton(onClick = { confirmRebootId = null }) {
                     Text("Cancel")
                 }
+            }
+        )
+    }
+
+    // Confirm delete fixture dialog
+    confirmDeleteFixtureId?.let { id ->
+        val fixture = fixtures.find { it.id == id }
+        AlertDialog(
+            onDismissRequest = { confirmDeleteFixtureId = null },
+            title = { Text("Delete Fixture") },
+            text = {
+                Text("Delete \"${fixture?.name ?: "fixture #$id"}\"? This cannot be undone.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.deleteFixture(id)
+                        confirmDeleteFixtureId = null
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = RedError)
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteFixtureId = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // Create fixture dialog
+    if (showCreateFixture) {
+        FixtureFormDialog(
+            title = "Create Fixture",
+            fixture = null,
+            children = children,
+            dmxProfiles = dmxProfiles,
+            onDismiss = { showCreateFixture = false },
+            onConfirm = { fixture ->
+                viewModel.createFixture(fixture)
+                showCreateFixture = false
+            }
+        )
+    }
+
+    // Edit fixture dialog
+    editFixture?.let { fixture ->
+        FixtureFormDialog(
+            title = "Edit Fixture",
+            fixture = fixture,
+            children = children,
+            dmxProfiles = dmxProfiles,
+            onDismiss = { editFixture = null },
+            onConfirm = { updated ->
+                viewModel.updateFixture(fixture.id, updated)
+                editFixture = null
             }
         )
     }
@@ -538,4 +641,329 @@ private fun StringConfigSection(
         DetailRow("Direction", if (dirIdx in dirNames.indices) dirNames[dirIdx] else "Unknown ($dirIdx)")
         if (config.folded) DetailRow("Folded", "Yes")
     }
+}
+
+// ── Fixture Card ──────────────────────────────────────────────────────
+@Composable
+private fun FixtureCard(
+    fixture: Fixture,
+    children: List<Child>,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val childName = fixture.childId?.let { cid ->
+        children.find { it.id == cid }?.let { c ->
+            if (c.name.isNotBlank() && c.name != c.hostname) c.name else c.hostname
+        }
+    }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        fixture.name.ifBlank { "Fixture #${fixture.id}" },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (childName != null) {
+                        Text(
+                            childName,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    FixtureTypeBadge(fixture.type)
+                    FixtureModeBadge(fixture.fixtureType)
+                }
+            }
+            // DMX details row
+            if (fixture.fixtureType == "dmx") {
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    fixture.dmxUniverse?.let {
+                        Text("U:$it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    fixture.dmxStartAddr?.let {
+                        Text("Addr:$it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    fixture.dmxChannelCount?.let {
+                        Text("Ch:$it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onEdit) { Text("Edit") }
+                TextButton(
+                    onClick = onDelete,
+                    colors = ButtonDefaults.textButtonColors(contentColor = RedError)
+                ) { Text("Delete") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FixtureTypeBadge(type: String) {
+    val label = when (type.lowercase()) {
+        "linear" -> "Linear"
+        "point" -> "Point"
+        "surface" -> "Surface"
+        "group" -> "Group"
+        else -> type.replaceFirstChar { it.uppercase() }
+    }
+    SuggestionChip(
+        onClick = {},
+        label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+        colors = SuggestionChipDefaults.suggestionChipColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            labelColor = MaterialTheme.colorScheme.onSecondaryContainer
+        ),
+        border = null
+    )
+}
+
+@Composable
+private fun FixtureModeBadge(fixtureType: String) {
+    val isDmx = fixtureType == "dmx"
+    val label = if (isDmx) "DMX" else "LED"
+    val color = if (isDmx) OrangeWled else GreenOnline
+    SuggestionChip(
+        onClick = {},
+        label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+        colors = SuggestionChipDefaults.suggestionChipColors(
+            containerColor = color.copy(alpha = 0.15f),
+            labelColor = color
+        ),
+        border = null
+    )
+}
+
+// ── Fixture Form Dialog (Create / Edit) ───────────────────────────────
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FixtureFormDialog(
+    title: String,
+    fixture: Fixture?,
+    children: List<Child>,
+    dmxProfiles: List<DmxProfile>,
+    onDismiss: () -> Unit,
+    onConfirm: (Fixture) -> Unit
+) {
+    var name by remember { mutableStateOf(fixture?.name ?: "") }
+    var type by remember { mutableStateOf(fixture?.type ?: "linear") }
+    var fixtureType by remember { mutableStateOf(fixture?.fixtureType ?: "led") }
+    var selectedChildId by remember { mutableStateOf(fixture?.childId) }
+    var dmxUniverse by remember { mutableStateOf(fixture?.dmxUniverse?.toString() ?: "1") }
+    var dmxStartAddr by remember { mutableStateOf(fixture?.dmxStartAddr?.toString() ?: "1") }
+    var dmxChannelCount by remember { mutableStateOf(fixture?.dmxChannelCount?.toString() ?: "") }
+    var selectedProfileId by remember { mutableStateOf(fixture?.dmxProfileId ?: "") }
+
+    val typeOptions = listOf("linear", "point", "surface", "group")
+    var typeExpanded by remember { mutableStateOf(false) }
+    var childExpanded by remember { mutableStateOf(false) }
+    var profileExpanded by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Name
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Type dropdown
+                ExposedDropdownMenuBox(
+                    expanded = typeExpanded,
+                    onExpandedChange = { typeExpanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = type.replaceFirstChar { it.uppercase() },
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Type") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = typeExpanded) },
+                        modifier = Modifier.fillMaxWidth().menuAnchor()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = typeExpanded,
+                        onDismissRequest = { typeExpanded = false }
+                    ) {
+                        typeOptions.forEach { opt ->
+                            DropdownMenuItem(
+                                text = { Text(opt.replaceFirstChar { it.uppercase() }) },
+                                onClick = { type = opt; typeExpanded = false }
+                            )
+                        }
+                    }
+                }
+
+                // Fixture type toggle (LED / DMX)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Mode:", style = MaterialTheme.typography.bodyMedium)
+                    FilterChip(
+                        selected = fixtureType == "led",
+                        onClick = { fixtureType = "led" },
+                        label = { Text("LED") }
+                    )
+                    FilterChip(
+                        selected = fixtureType == "dmx",
+                        onClick = { fixtureType = "dmx" },
+                        label = { Text("DMX") }
+                    )
+                }
+
+                // Child dropdown
+                if (fixtureType == "led") {
+                    ExposedDropdownMenuBox(
+                        expanded = childExpanded,
+                        onExpandedChange = { childExpanded = it }
+                    ) {
+                        val childLabel = selectedChildId?.let { cid ->
+                            children.find { it.id == cid }?.let { c ->
+                                if (c.name.isNotBlank() && c.name != c.hostname) c.name else c.hostname
+                            } ?: "Child #$cid"
+                        } ?: "None"
+                        OutlinedTextField(
+                            value = childLabel,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Performer") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = childExpanded) },
+                            modifier = Modifier.fillMaxWidth().menuAnchor()
+                        )
+                        ExposedDropdownMenu(
+                            expanded = childExpanded,
+                            onDismissRequest = { childExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("None") },
+                                onClick = { selectedChildId = null; childExpanded = false }
+                            )
+                            children.forEach { child ->
+                                val cName = if (child.name.isNotBlank() && child.name != child.hostname) child.name else child.hostname
+                                DropdownMenuItem(
+                                    text = { Text("$cName (${child.ip})") },
+                                    onClick = { selectedChildId = child.id; childExpanded = false }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // DMX fields
+                if (fixtureType == "dmx") {
+                    OutlinedTextField(
+                        value = dmxUniverse,
+                        onValueChange = { dmxUniverse = it.filter { c -> c.isDigit() } },
+                        label = { Text("Universe") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = dmxStartAddr,
+                        onValueChange = { dmxStartAddr = it.filter { c -> c.isDigit() } },
+                        label = { Text("Start Address") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = dmxChannelCount,
+                        onValueChange = { dmxChannelCount = it.filter { c -> c.isDigit() } },
+                        label = { Text("Channel Count") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    // Profile dropdown
+                    ExposedDropdownMenuBox(
+                        expanded = profileExpanded,
+                        onExpandedChange = { profileExpanded = it }
+                    ) {
+                        val profileLabel = dmxProfiles.find { it.id == selectedProfileId }?.name ?: "None"
+                        OutlinedTextField(
+                            value = profileLabel,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("DMX Profile") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = profileExpanded) },
+                            modifier = Modifier.fillMaxWidth().menuAnchor()
+                        )
+                        ExposedDropdownMenu(
+                            expanded = profileExpanded,
+                            onDismissRequest = { profileExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("None") },
+                                onClick = { selectedProfileId = ""; profileExpanded = false }
+                            )
+                            dmxProfiles.forEach { profile ->
+                                DropdownMenuItem(
+                                    text = { Text("${profile.name} (${profile.channelCount}ch)") },
+                                    onClick = {
+                                        selectedProfileId = profile.id
+                                        if (dmxChannelCount.isBlank() || dmxChannelCount == "0") {
+                                            dmxChannelCount = profile.channelCount.toString()
+                                        }
+                                        profileExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val result = Fixture(
+                        id = fixture?.id ?: 0,
+                        name = name.trim(),
+                        type = type,
+                        fixtureType = fixtureType,
+                        childId = if (fixtureType == "led") selectedChildId else null,
+                        dmxUniverse = if (fixtureType == "dmx") dmxUniverse.toIntOrNull() else null,
+                        dmxStartAddr = if (fixtureType == "dmx") dmxStartAddr.toIntOrNull() else null,
+                        dmxChannelCount = if (fixtureType == "dmx") dmxChannelCount.toIntOrNull() else null,
+                        dmxProfileId = if (fixtureType == "dmx" && selectedProfileId.isNotBlank()) selectedProfileId else null,
+                        strings = fixture?.strings ?: emptyList(),
+                        rotation = fixture?.rotation ?: listOf(0.0, 0.0, 0.0),
+                        aoeRadius = fixture?.aoeRadius ?: 1000
+                    )
+                    onConfirm(result)
+                },
+                enabled = name.isNotBlank()
+            ) { Text(if (fixture == null) "Create" else "Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
 }

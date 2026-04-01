@@ -59,9 +59,24 @@ data class Child(
     val status: Int = 0,
     val seen: Long = 0,
     val type: String = "slyled",
-    val fwVersion: String? = null
+    val fwVersion: String? = null,
+    val rssi: Int? = null,
+    val startupDone: Boolean = true
 ) {
     val onlineStatus: OnlineStatus get() = OnlineStatus.fromInt(status)
+    /** RSSI as dBm (server stores as positive magnitude, e.g. 69 → -69 dBm). */
+    val rssiDbm: Int? get() = rssi?.let { if (it > 0) -it else it }
+    /** Signal bars 0-4 from RSSI. */
+    val signalBars: Int get() {
+        val dbm = rssiDbm ?: return 0
+        return when {
+            dbm >= -50 -> 4
+            dbm >= -60 -> 3
+            dbm >= -70 -> 2
+            dbm >= -80 -> 1
+            else -> 0
+        }
+    }
 }
 
 @Serializable
@@ -151,7 +166,8 @@ data class LayoutChild(
 data class Layout(
     val canvasW: Int = 10000,
     val canvasH: Int = 5000,
-    val children: List<LayoutChild> = emptyList()
+    val children: List<LayoutChild> = emptyList(),
+    val fixtures: List<Fixture> = emptyList()
 )
 
 @Serializable
@@ -241,11 +257,34 @@ data class Fixture(
     val name: String = "",
     val childId: Int? = null,
     val type: String = "linear",  // linear, point, surface, group
+    val fixtureType: String = "led",  // "led" or "dmx"
+    val dmxUniverse: Int? = null,
+    val dmxStartAddr: Int? = null,
+    val dmxChannelCount: Int? = null,
+    val dmxProfileId: String? = null,
     val childIds: List<Int> = emptyList(),
     val strings: List<FixtureString> = emptyList(),
     val rotation: List<Double> = listOf(0.0, 0.0, 0.0),
     val aoeRadius: Int = 1000,
     val meshFile: String? = null,
+    val x: Int = 0,
+    val y: Int = 0,
+    val z: Int = 0,
+    val positioned: Boolean = false,
+)
+
+@Serializable
+data class DmxProfile(
+    val id: String = "",
+    val name: String = "",
+    val manufacturer: String = "Generic",
+    val category: String = "par",
+    val channelCount: Int = 0,
+    val colorMode: String = "rgb",
+    val beamWidth: Int = 0,
+    val panRange: Int = 0,
+    val tiltRange: Int = 0,
+    val builtin: Boolean = true
 )
 
 @Serializable

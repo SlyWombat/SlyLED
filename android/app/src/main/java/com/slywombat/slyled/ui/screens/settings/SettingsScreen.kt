@@ -1,7 +1,12 @@
 package com.slywombat.slyled.ui.screens.settings
 
 import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -16,9 +21,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.slywombat.slyled.data.model.DmxProfile
 import com.slywombat.slyled.ui.theme.RedError
 import com.slywombat.slyled.viewmodel.SettingsViewModel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.booleanOrNull
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,6 +48,19 @@ fun SettingsScreen(
 
     var showResetConfirm by remember { mutableStateOf(false) }
     var unitsExpanded by remember { mutableStateOf(false) }
+
+    // File pickers for config/show import
+    fun readFileAsString(uri: Uri): String? {
+        return try {
+            context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText()
+        } catch (_: Exception) { null }
+    }
+    val configPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { readFileAsString(it)?.let { json -> viewModel.importConfig(json) } }
+    }
+    val showPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { readFileAsString(it)?.let { json -> viewModel.importShow(json) } }
+    }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -221,7 +243,7 @@ fun SettingsScreen(
                             Text("Save Config")
                         }
                         OutlinedButton(
-                            onClick = { /* Phase 3: file picker import */ },
+                            onClick = { configPicker.launch("application/json") },
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -254,7 +276,7 @@ fun SettingsScreen(
                             Text("Save Show")
                         }
                         OutlinedButton(
-                            onClick = { /* Phase 3: file picker import */ },
+                            onClick = { showPicker.launch("application/json") },
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -273,6 +295,9 @@ fun SettingsScreen(
                     }
                 }
             }
+
+            // DMX Control Card
+            DmxControlSection(viewModel = viewModel)
 
             // Factory Reset Card
             Card(
@@ -345,5 +370,283 @@ fun SettingsScreen(
                 }
             }
         )
+    }
+}
+
+// ── DMX Control Section ────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DmxControlSection(viewModel: SettingsViewModel) {
+    val dmxStatus by viewModel.dmxStatus.collectAsState()
+    var selectedProtocol by remember { mutableStateOf("artnet") }
+    var showProfileDialog by remember { mutableStateOf(false) }
+
+    // Extract status fields from JsonObject
+    val running = dmxStatus?.get("running")?.jsonPrimitive?.booleanOrNull ?: false
+    val universes = dmxStatus?.get("universes")?.jsonPrimitive?.intOrNull ?: 0
+    val frameRate = dmxStatus?.get("frameRate")?.jsonPrimitive?.intOrNull ?: 40
+    val nodes = dmxStatus?.get("nodes")?.jsonPrimitive?.intOrNull
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "DMX Control",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(12.dp))
+
+            // Protocol selector
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Protocol:", style = MaterialTheme.typography.bodyMedium)
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.weight(1f)) {
+                    SegmentedButton(
+                        selected = selectedProtocol == "artnet",
+                        onClick = { selectedProtocol = "artnet" },
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                    ) { Text("Art-Net") }
+                    SegmentedButton(
+                        selected = selectedProtocol == "sacn",
+                        onClick = { selectedProtocol = "sacn" },
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                    ) { Text("sACN") }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // Status display
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AssistChip(
+                    onClick = { viewModel.loadDmxStatus() },
+                    label = { Text(if (running) "Running" else "Stopped") },
+                    leadingIcon = {
+                        Icon(
+                            if (running) Icons.Default.PlayArrow else Icons.Default.Stop,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = if (running)
+                            MaterialTheme.colorScheme.primaryContainer
+                        else
+                            MaterialTheme.colorScheme.surfaceVariant
+                    )
+                )
+                AssistChip(
+                    onClick = {},
+                    label = { Text("$universes univ") }
+                )
+                AssistChip(
+                    onClick = {},
+                    label = { Text("$frameRate Hz") }
+                )
+                if (selectedProtocol == "artnet" && nodes != null) {
+                    AssistChip(
+                        onClick = {},
+                        label = { Text("$nodes nodes") }
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+
+            // Control buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = { viewModel.startDmx(selectedProtocol) },
+                    enabled = !running,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Start")
+                }
+                Button(
+                    onClick = { viewModel.stopDmx() },
+                    enabled = running,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Stop")
+                }
+                OutlinedButton(
+                    onClick = { viewModel.dmxBlackout() },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.DarkMode, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Blackout")
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+
+            // Browse Profiles button
+            FilledTonalButton(
+                onClick = {
+                    viewModel.loadDmxProfiles()
+                    showProfileDialog = true
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Lightbulb, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Browse Fixture Profiles")
+            }
+        }
+    }
+
+    if (showProfileDialog) {
+        DmxProfileBrowserDialog(
+            viewModel = viewModel,
+            onDismiss = { showProfileDialog = false }
+        )
+    }
+}
+
+// ── DMX Profile Browser Dialog ─────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DmxProfileBrowserDialog(
+    viewModel: SettingsViewModel,
+    onDismiss: () -> Unit
+) {
+    val profiles by viewModel.dmxProfiles.collectAsState()
+    var selectedCategory by remember { mutableStateOf<String?>(null) }
+    var categoryExpanded by remember { mutableStateOf(false) }
+
+    val categories = listOf("All", "par", "wash", "spot", "bar", "moving", "strobe", "laser", "fog", "other")
+    val filteredProfiles = if (selectedCategory == null) profiles
+        else profiles.filter { it.category == selectedCategory }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Fixture Profiles") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // Category filter
+                ExposedDropdownMenuBox(
+                    expanded = categoryExpanded,
+                    onExpandedChange = { categoryExpanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = selectedCategory?.replaceFirstChar { it.uppercase() } ?: "All",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Category") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded) },
+                        modifier = Modifier.fillMaxWidth().menuAnchor()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = categoryExpanded,
+                        onDismissRequest = { categoryExpanded = false }
+                    ) {
+                        categories.forEach { cat ->
+                            DropdownMenuItem(
+                                text = { Text(cat.replaceFirstChar { it.uppercase() }) },
+                                onClick = {
+                                    selectedCategory = if (cat == "All") null else cat
+                                    viewModel.loadDmxProfiles(selectedCategory)
+                                    categoryExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+
+                // Profile list
+                if (filteredProfiles.isEmpty()) {
+                    Text(
+                        "No profiles found",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 400.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(filteredProfiles, key = { it.id }) { profile ->
+                            DmxProfileRow(profile)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
+}
+
+@Composable
+private fun DmxProfileRow(profile: DmxProfile) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    profile.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    profile.manufacturer,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AssistChip(
+                    onClick = {},
+                    label = { Text(profile.category) },
+                    modifier = Modifier.height(24.dp)
+                )
+                Text(
+                    "${profile.channelCount}ch",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (profile.beamWidth > 0) {
+                    Text(
+                        "${profile.beamWidth}\u00B0",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
     }
 }

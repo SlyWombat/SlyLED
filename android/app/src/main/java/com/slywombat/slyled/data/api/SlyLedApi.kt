@@ -174,6 +174,25 @@ interface SlyLedApi {
     @POST("api/fixtures/{id}/resolve")
     suspend fun resolveFixture(@Path("id") id: Int): Map<String, Any>
 
+    // ── DMX Profiles & Control ────────────────────────────────────────
+    @GET("/api/dmx-profiles")
+    suspend fun getDmxProfiles(@Query("category") category: String? = null): List<DmxProfile>
+
+    @GET("/api/dmx-profiles/{id}")
+    suspend fun getDmxProfile(@Path("id") id: String): DmxProfile
+
+    @GET("/api/dmx/status")
+    suspend fun getDmxStatus(): JsonObject
+
+    @POST("/api/dmx/start")
+    suspend fun startDmx(@Body body: JsonObject): OkResponse
+
+    @POST("/api/dmx/stop")
+    suspend fun stopDmx(@Body body: JsonObject = JsonObject(emptyMap())): OkResponse
+
+    @POST("/api/dmx/blackout")
+    suspend fun dmxBlackout(): OkResponse
+
     // ── Surfaces ───────────────────────────────────────────────────────
     @GET("api/surfaces")
     suspend fun getSurfaces(): List<Surface>

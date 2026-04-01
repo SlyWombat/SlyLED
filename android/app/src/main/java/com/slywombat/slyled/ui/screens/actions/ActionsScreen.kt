@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.slywombat.slyled.data.model.Action
 import com.slywombat.slyled.data.model.ActionTypes
+import com.slywombat.slyled.data.model.Child
 import com.slywombat.slyled.viewmodel.ActionsViewModel
 import kotlin.math.roundToInt
 
@@ -33,6 +34,7 @@ fun ActionsScreen(viewModel: ActionsViewModel = hiltViewModel()) {
     LaunchedEffect(Unit) { viewModel.loadActions() }
 
     val actions by viewModel.actions.collectAsState()
+    val children by viewModel.children.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
 
@@ -116,6 +118,7 @@ fun ActionsScreen(viewModel: ActionsViewModel = hiltViewModel()) {
     if (showEditor) {
         ActionEditorDialog(
             initial = editingAction,
+            children = children,
             onSave = { action ->
                 if (editingAction != null) {
                     viewModel.updateAction(editingAction!!.id, action)
@@ -181,6 +184,7 @@ private fun ActionCard(action: Action, onEdit: () -> Unit, onDelete: () -> Unit)
 @Composable
 private fun ActionEditorDialog(
     initial: Action?,
+    children: List<Child> = emptyList(),
     onSave: (Action) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -206,6 +210,10 @@ private fun ActionEditorDialog(
     var density by remember { mutableIntStateOf(initial?.density ?: 80) }
     var decay by remember { mutableIntStateOf(initial?.decay ?: 64) }
     var fadeSpeed by remember { mutableIntStateOf(initial?.fadeSpeed ?: 20) }
+
+    var onMs by remember { mutableIntStateOf(initial?.onMs ?: 50) }
+    var offMs by remember { mutableIntStateOf(initial?.offMs ?: 50) }
+    var targetIds by remember { mutableStateOf(initial?.targetIds?.toSet() ?: emptySet<Int>()) }
 
     var showColorPicker by remember { mutableStateOf(false) }
     var showColor2Picker by remember { mutableStateOf(false) }
@@ -319,6 +327,34 @@ private fun ActionEditorDialog(
                         LabeledSlider("Density", density, 10, 255) { density = it }
                         LabeledSlider("Fade Speed", fadeSpeed, 1, 100) { fadeSpeed = it }
                     }
+                    ActionTypes.STROBE -> {
+                        LabeledSlider("On Duration (ms)", onMs, 10, 1000) { onMs = it }
+                        LabeledSlider("Off Duration (ms)", offMs, 10, 1000) { offMs = it }
+                    }
+                    ActionTypes.WIPE -> {
+                        LabeledSlider("Speed (ms)", speedMs, 10, 2000) { speedMs = it }
+                        DirectionDropdown(direction, directionExpanded,
+                            onExpand = { directionExpanded = it },
+                            onSelect = { direction = it; directionExpanded = false })
+                    }
+                    ActionTypes.SCANNER -> {
+                        LabeledSlider("Speed (ms)", speedMs, 10, 2000) { speedMs = it }
+                        LabeledSlider("Bar Width", tailLen, 1, 50) { tailLen = it }
+                    }
+                    ActionTypes.SPARKLE -> {
+                        LabeledSlider("Spawn (ms)", spawnMs, 10, 500) { spawnMs = it }
+                        LabeledSlider("Density", density, 1, 20) { density = it }
+                    }
+                    ActionTypes.GRADIENT -> {
+                        Text("Second Color", style = MaterialTheme.typography.labelMedium)
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(Color(r2, g2, b2))
+                                .clickable { showColor2Picker = true }
+                        )
+                    }
                 }
 
                 // Scope
@@ -332,6 +368,31 @@ private fun ActionEditorDialog(
                         Text(label, modifier = Modifier.clickable { scope = value })
                     }
                 }
+
+                // Selected performers checkboxes
+                if (scope == "selected" && children.isNotEmpty()) {
+                    Text("Selected Performers", style = MaterialTheme.typography.labelMedium)
+                    Column {
+                        children.forEach { child ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = child.id in targetIds,
+                                    onCheckedChange = { checked ->
+                                        targetIds = if (checked) targetIds + child.id
+                                        else targetIds - child.id
+                                    }
+                                )
+                                Text(
+                                    child.name.ifBlank { child.hostname },
+                                    modifier = Modifier.clickable {
+                                        targetIds = if (child.id in targetIds) targetIds - child.id
+                                        else targetIds + child.id
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
@@ -342,21 +403,24 @@ private fun ActionEditorDialog(
                         name = name,
                         type = type,
                         scope = scope,
+                        targetIds = targetIds.toList().takeIf { scope == "selected" && it.isNotEmpty() },
                         r = r, g = g, b = b,
                         r2 = r2, g2 = g2, b2 = b2,
-                        speedMs = speedMs.takeIf { type in listOf(2, 4, 5, 6, 7) },
+                        speedMs = speedMs.takeIf { type in listOf(2, 4, 5, 6, 7, 10, 11) },
                         periodMs = periodMs.takeIf { type == 3 },
-                        spawnMs = spawnMs.takeIf { type == 8 },
+                        spawnMs = spawnMs.takeIf { type in listOf(8, 12) },
                         minBri = minBri.takeIf { type == 3 },
                         spacing = spacing.takeIf { type == 4 },
                         paletteId = paletteId.takeIf { type == 5 },
                         cooling = cooling.takeIf { type == 6 },
                         sparking = sparking.takeIf { type == 6 },
-                        direction = direction.takeIf { type in listOf(4, 5, 7) },
-                        tailLen = tailLen.takeIf { type == 7 },
-                        density = density.takeIf { type == 8 },
+                        direction = direction.takeIf { type in listOf(4, 5, 7, 10) },
+                        tailLen = tailLen.takeIf { type in listOf(7, 11) },
+                        density = density.takeIf { type in listOf(8, 12) },
                         decay = decay.takeIf { type == 7 },
-                        fadeSpeed = fadeSpeed.takeIf { type == 8 }
+                        fadeSpeed = fadeSpeed.takeIf { type == 8 },
+                        onMs = onMs.takeIf { type == 9 },
+                        offMs = offMs.takeIf { type == 9 }
                     )
                     onSave(action)
                 },

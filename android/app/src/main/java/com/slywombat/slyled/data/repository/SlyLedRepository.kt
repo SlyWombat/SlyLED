@@ -148,6 +148,16 @@ class SlyLedRepository @Inject constructor(
 
     // Fixtures
     suspend fun getFixtures() = requireApi().getFixtures()
+    suspend fun createFixture(fixture: Fixture) = requireApi().createFixture(fixture)
+    suspend fun updateFixture(id: Int, fixture: Fixture) = requireApi().updateFixture(id, fixture)
+    suspend fun deleteFixture(id: Int) = requireApi().deleteFixture(id)
+
+    // DMX Profiles & Control
+    suspend fun getDmxProfiles(category: String? = null) = requireApi().getDmxProfiles(category)
+    suspend fun getDmxStatus() = requireApi().getDmxStatus()
+    suspend fun startDmx(body: JsonObject) = requireApi().startDmx(body)
+    suspend fun stopDmx() = requireApi().stopDmx()
+    suspend fun dmxBlackout() = requireApi().dmxBlackout()
 
     // Surfaces
     suspend fun getSurfaces() = requireApi().getSurfaces()

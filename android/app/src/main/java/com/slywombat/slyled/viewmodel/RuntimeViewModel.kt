@@ -211,6 +211,40 @@ class RuntimeViewModel @Inject constructor(
         }
     }
 
+    fun updateTimeline(id: Int, name: String, durationS: Int, loop: Boolean) {
+        viewModelScope.launch {
+            try {
+                val tl = repository.getTimeline(id)
+                repository.updateTimeline(id, tl.copy(name = name, durationS = durationS, loop = loop))
+                _selectedTimeline.value = repository.getTimeline(id)
+                _timelines.value = repository.getTimelines()
+                _message.value = "Timeline updated"
+            } catch (e: Exception) { _message.value = "Error: ${e.message}" }
+        }
+    }
+
+    fun setBrightness(value: Int) {
+        viewModelScope.launch {
+            try {
+                repository.saveSettings(Settings(globalBrightness = value))
+                _message.value = "Brightness set to $value"
+            } catch (e: Exception) { _message.value = "Error: ${e.message}" }
+        }
+    }
+
+    fun addTrackToTimeline(timelineId: Int) {
+        viewModelScope.launch {
+            try {
+                val tl = repository.getTimeline(timelineId)
+                val newTrack = TimelineTrack(allPerformers = true, clips = emptyList())
+                repository.updateTimeline(timelineId, tl.copy(tracks = tl.tracks + newTrack))
+                _selectedTimeline.value = repository.getTimeline(timelineId)
+                _timelines.value = repository.getTimelines()
+                _message.value = "Track added"
+            } catch (e: Exception) { _message.value = "Error: ${e.message}" }
+        }
+    }
+
     fun addClipToTimeline(timelineId: Int, trackIdx: Int, clip: TimelineClip) {
         viewModelScope.launch {
             try {
