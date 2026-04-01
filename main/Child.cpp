@@ -637,7 +637,7 @@ void sendChildConfigPage(WiFiClient& c) {
             "<label>Subnet</label><input type='number' id='dmx-sn' min='0' max='15' value='0' style='width:80px'>"
             "<label>Universe</label><input type='number' id='dmx-uni' min='0' max='15' value='0' style='width:80px'>"
             "</div>"
-            "<button class='btn' onclick='dmxSaveGw()' style='margin:.3em 0'>Save</button>"
+            "<button type='button' class='btn' onclick='dmxSaveGw()' style='margin:.3em 0'>Save</button>"
             "</div>"));
   c.flush();
   // Section 3: Fixture Test
@@ -647,9 +647,9 @@ void sendChildConfigPage(WiFiClient& c) {
             "<label>Channels</label><input type='number' id='dmx-cpf' min='1' max='24' style='width:80px'>"
             "</div>"
             "<input type='hidden' id='dmx-fc' value='1'>"
-            "<button class='btn' onclick='dmxApplyTest()' style='margin:.3em 0'>OK</button>"
+            "<button type='button' class='btn' onclick='dmxApplyTest()' style='margin:.3em 0'>OK</button>"
             "<div style='margin:.5em 0'>"
-            "<button class='btn' style='background:#c33' onclick='dmxBlackout()'>Blackout</button>"
+            "<button type='button' class='btn' style='background:#c33' onclick='dmxBlackout()'>Blackout</button>"
             "</div>"
             "<div id='dmx-sliders' style='margin:.5em 0'></div>"
             "</div>"));
