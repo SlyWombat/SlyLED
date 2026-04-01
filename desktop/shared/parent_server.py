@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
-SlyLED Parent Server — Windows / Mac desktop parent application.
+SlyLED Parent Server â€” Windows / Mac desktop parent application.
 
 Replaces the Arduino Giga R1 as the full-featured parent.  Once a layout
 and runner set is designed here it can be exported and loaded onto a Giga
@@ -61,13 +61,13 @@ def _apply_logging(enabled):
         fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"))
         log.addHandler(fh)
         _log_handler = fh
-        log.info("Logging started → %s", fh.baseFilename)
+        log.info("Logging started â†’ %s", fh.baseFilename)
 
-# ── Version ───────────────────────────────────────────────────────────────────
+# â”€â”€ Version â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-VERSION = "7.4.0"
+VERSION = "7.5.1"
 
-# ── UDP protocol ──────────────────────────────────────────────────────────────
+# â”€â”€ UDP protocol â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 UDP_MAGIC   = 0x534C
 UDP_VERSION = 4
@@ -86,7 +86,7 @@ CMD_ACTION_EVENT = 0x12
 CMD_STATUS_REQ  = 0x40
 CMD_STATUS_RESP = 0x41
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
+# â”€â”€ Paths â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 BASE = Path(__file__).parent
 
@@ -103,7 +103,7 @@ else:
     DATA = BASE / "data"
 DATA.mkdir(parents=True, exist_ok=True)
 
-# ── Persistence ───────────────────────────────────────────────────────────────
+# â”€â”€ Persistence â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _load(name, default):
     p = DATA / f"{name}.json"
@@ -115,10 +115,10 @@ def _load(name, default):
 def _save(name, obj):
     (DATA / f"{name}.json").write_text(json.dumps(obj, indent=2))
 
-# ── In-memory state ───────────────────────────────────────────────────────────
+# â”€â”€ In-memory state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _children = _load("children", [])
-# Reset all children to offline on startup — ping sweep will restore responsive ones
+# Reset all children to offline on startup â€” ping sweep will restore responsive ones
 for _c in _children:
     _c["status"] = 0
 _settings = _load("settings", {
@@ -130,7 +130,7 @@ _layout  = _load("layout",  {"canvasW": 10000, "canvasH": 5000, "children": []})
 _stage   = _load("stage",   {"w": 10.0, "h": 5.0, "d": 10.0})
 _fixtures   = _load("fixtures",   [])
 
-# ── Fixture migration: backfill fixtureType on old data ─────────────────────
+# â”€â”€ Fixture migration: backfill fixtureType on old data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _fix_patched = False
 for _f in _fixtures:
     if "fixtureType" not in _f:
@@ -151,15 +151,15 @@ _wifi    = _load("wifi",    {"ssid": "", "password": ""})
 
 MAX_RUNNERS = 4
 
-# Live action events pushed by children (ip → {actionType, stepIndex, totalSteps, event, ts})
+# Live action events pushed by children (ip â†’ {actionType, stepIndex, totalSteps, event, ts})
 _live_events = {}
 
-# Recent PONGs seen by UDP listener (ip → parsed pong info) — used by discover
+# Recent PONGs seen by UDP listener (ip â†’ parsed pong info) â€” used by discover
 _recent_pongs = {}
 
 # Bake state (Phase 5)
 _bake_progress = None   # BakeProgress instance while baking
-_bake_result = {}       # timeline_id → bake result dict
+_bake_result = {}       # timeline_id â†’ bake result dict
 
 # Apply logging from saved settings on startup
 _apply_logging(_settings.get("logging", False))
@@ -175,12 +175,12 @@ _nxt_sfx = max((f["id"] for f in _spatial_fx),  default=-1) + 1
 _nxt_tl  = max((t["id"] for t in _timelines),  default=-1) + 1
 _lock  = threading.Lock()
 
-# ── DMX subsystems ───────────────────────────────────────────────────────────
+# â”€â”€ DMX subsystems â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _profile_lib = ProfileLibrary(data_dir=str(DATA))
 _artnet = ArtNetEngine()
 _sacn = sACNEngine()
 
-# ── UDP helpers ───────────────────────────────────────────────────────────────
+# â”€â”€ UDP helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _hdr(cmd, epoch=0):
     return struct.pack("<HBBI", UDP_MAGIC, UDP_VERSION, cmd,
@@ -236,14 +236,14 @@ def _send_recv(ip, pkt, timeout=1.5, maxb=256):
         except OSError:
             if bind_port == 0:
                 return None   # ephemeral port also failed
-            continue          # port 4210 busy — retry with ephemeral
+            continue          # port 4210 busy â€” retry with ephemeral
         except Exception:
             return None
     return None
 
 def _parse_pong(data, src_ip):
     # PONG v4: 8-byte header + 133-byte PongPayload = 141 bytes (v3: 139 bytes)
-    # PongPayload: hostname[10]+altName[16]+desc[32]+stringCount(1)+PongString[8]×9+fwMajor(1)+fwMinor(1)
+    # PongPayload: hostname[10]+altName[16]+desc[32]+stringCount(1)+PongString[8]Ã—9+fwMajor(1)+fwMinor(1)
     if not data or len(data) < 139:  # backward compat: accept v3 (139) and v4 (141)
         return None
     if data[3] != CMD_PONG:
@@ -325,7 +325,7 @@ def _ping(child, retries=2):
 def _broadcast_ping_all():
     """Send broadcast PINGs + direct pings to all known children.
     Sends both v3 and v4 PINGs so old and new firmware both respond.
-    The UDP listener daemon handles incoming PONGs → _recent_pongs."""
+    The UDP listener daemon handles incoming PONGs â†’ _recent_pongs."""
     pkt4 = _hdr(CMD_PING)
     # Also send v3 ping for backward compat during OTA transition
     pkt3 = struct.pack("<HBBI", UDP_MAGIC, 3, CMD_PING, int(time.time()) & 0xFFFFFFFF)
@@ -373,7 +373,7 @@ def _discover():
         results.append(info)
     return results
 
-# ── Async discover / refresh state ───────────────────────────────────────
+# â”€â”€ Async discover / refresh state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _discover_state = {"pending": False, "data": []}
 _refresh_state  = {"pending": False, "data": {}}
 
@@ -470,11 +470,11 @@ def _load_step_pkt(idx, total, step, child, delay_ms=0):
     pl = struct.pack("<BBBBBBHBBBBHH", idx, total, t, r, g, b, p16a, p8a, p8b, p8c, p8d, dur, int(delay_ms))
     return _hdr(CMD_LOAD_STEP) + pl + ls + le
 
-# ── Flask application ─────────────────────────────────────────────────────────
+# â”€â”€ Flask application â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 app = Flask(__name__, static_folder=None)
 
-# ── Status ────────────────────────────────────────────────────────────────────
+# â”€â”€ Status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/favicon.ico")
 def favicon():
@@ -484,14 +484,14 @@ def favicon():
 def status():
     return jsonify(role="parent", hostname=socket.gethostname(), version=VERSION)
 
-# ── Children ──────────────────────────────────────────────────────────────────
+# â”€â”€ Children â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 CHILD_STALE_S = 120   # mark offline if not seen for 2 minutes
 _startup_check_done = False
 
 def _periodic_ping():
     """Background thread: broadcast PING periodically.  The UDP listener
-    daemon picks up PONGs and updates child records — no per-child
+    daemon picks up PONGs and updates child records â€” no per-child
     send_recv needed, so there are no port conflicts."""
     global _startup_check_done
     # Startup sweep: ping twice with a gap for slow booters
@@ -709,7 +709,7 @@ def api_children_reboot(cid):
 
 @app.post("/api/children/refresh-all")
 def api_children_refresh_all():
-    """Broadcast ping all children. Non-blocking — starts background thread."""
+    """Broadcast ping all children. Non-blocking â€” starts background thread."""
     if _refresh_state["pending"]:
         return jsonify(pending=True)
     _refresh_state["pending"] = True
@@ -758,9 +758,9 @@ def api_children_import():
         _save("children", _children)
     return jsonify(ok=True, added=added, updated=updated, skipped=skipped)
 
-# ── WLED device API ───────────────────────────────────────────────────────────
+# â”€â”€ WLED device API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-_wled_cache = {}   # child_id → {"effects": [...], "palettes": [...], "ts": epoch}
+_wled_cache = {}   # child_id â†’ {"effects": [...], "palettes": [...], "ts": epoch}
 _WLED_CACHE_TTL = 300  # 5 minutes
 
 @app.get("/api/wled/effects/<int:cid>")
@@ -809,7 +809,7 @@ def api_wled_segments(cid):
         return jsonify(ok=False, err="device unreachable"), 502
     return jsonify(segs)
 
-# ── Layout ────────────────────────────────────────────────────────────────────
+# â”€â”€ Layout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/api/layout")
 def api_layout_get():
@@ -832,7 +832,7 @@ def api_layout_save():
     _save("layout", _layout)
     return jsonify(ok=True)
 
-# ── Stage ────────────────────────────────────────────────────────────────────
+# â”€â”€ Stage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/api/stage")
 def api_stage_get():
@@ -881,7 +881,7 @@ def _auto_create_fixtures():
             _nxt_fix += 1
         _save("fixtures", _fixtures)
 
-# ── Fixtures (Phase 2) ───────────────────────────────────────────────────────
+# â”€â”€ Fixtures (Phase 2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/api/fixtures")
 def api_fixtures_get():
@@ -897,7 +897,7 @@ def api_fixtures_create():
         return jsonify(err="Invalid fixture type"), 400
     fixture_type = body.get("fixtureType", "led")
     if fixture_type not in ("led", "dmx"):
-        return jsonify(err="Invalid fixtureType — must be 'led' or 'dmx'"), 400
+        return jsonify(err="Invalid fixtureType â€” must be 'led' or 'dmx'"), 400
     # DMX-specific validation
     if fixture_type == "dmx":
         dmx_uni = body.get("dmxUniverse")
@@ -906,7 +906,7 @@ def api_fixtures_create():
         if not isinstance(dmx_uni, int) or dmx_uni < 1:
             return jsonify(err="dmxUniverse must be an integer >= 1"), 400
         if not isinstance(dmx_addr, int) or dmx_addr < 1 or dmx_addr > 512:
-            return jsonify(err="dmxStartAddr must be 1–512"), 400
+            return jsonify(err="dmxStartAddr must be 1â€“512"), 400
         if not isinstance(dmx_ch, int) or dmx_ch < 1:
             return jsonify(err="dmxChannelCount must be an integer >= 1"), 400
     with _lock:
@@ -916,7 +916,7 @@ def api_fixtures_create():
             "childId": body.get("childId"), "type": ftype,
             "childIds": body.get("childIds", []),  # for group fixtures
             "strings": body.get("strings", []),
-            "rotation": body.get("rotation", [0, 0, 0]),  # [rx, ry, rz] degrees — overrides child stripDir
+            "rotation": body.get("rotation", [0, 0, 0]),  # [rx, ry, rz] degrees â€” overrides child stripDir
             "aoeRadius": body.get("aoeRadius", 1000),
             "meshFile": body.get("meshFile"),
         }
@@ -983,7 +983,7 @@ def api_fixture_resolve(fid):
     result = resolve_fixture(resolve_input)
     return jsonify(result)
 
-# ── Surfaces (Phase 2) ──────────────────────────────────────────────────────
+# â”€â”€ Surfaces (Phase 2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/api/surfaces")
 def api_surfaces_get():
@@ -1015,7 +1015,7 @@ def api_surface_delete(sid):
     _save("surfaces", _surfaces)
     return jsonify(ok=True)
 
-# ── DMX Profiles ─────────────────────────────────────────────────────────────
+# â”€â”€ DMX Profiles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/api/dmx-profiles")
 def api_dmx_profiles():
@@ -1045,7 +1045,7 @@ def api_dmx_profile_delete(profile_id):
         return jsonify(ok=True)
     return jsonify(err="Cannot delete (built-in or not found)"), 400
 
-# ── DMX Output Engines ───────────────────────────────────────────────────────
+# â”€â”€ DMX Output Engines â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/api/dmx/status")
 def api_dmx_status():
@@ -1129,7 +1129,7 @@ def api_dmx_discovered():
     """Return Art-Net nodes discovered via ArtPoll."""
     return jsonify(_artnet.discovered_nodes)
 
-# ── Spatial Effects (Phase 3) ───────────────────────────────────────────────
+# â”€â”€ Spatial Effects (Phase 3) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/api/spatial-effects")
 def api_sfx_get():
@@ -1236,7 +1236,7 @@ def _build_resolve_input(fixture):
         "aoeRadius": fixture.get("aoeRadius", 1000),
     }
 
-# ── Timelines (Phase 4) ─────────────────────────────────────────────────────
+# â”€â”€ Timelines (Phase 4) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/api/timelines")
 def api_timelines_get():
@@ -1309,7 +1309,7 @@ def api_timeline_frame(tid):
         else:
             tracks.append(track)
 
-    result = {}  # fixture_id → [r,g,b] array
+    result = {}  # fixture_id â†’ [r,g,b] array
     for track in tracks:
         fix_id = track.get("fixtureId")
         fixture = next((f for f in _fixtures if f["id"] == fix_id), None)
@@ -1329,7 +1329,7 @@ def api_timeline_frame(tid):
             cs = clip.get("startS", 0)
             cd = clip.get("durationS", 1)
             if cs <= t < cs + cd:
-                # Handle classic action clips — fill all pixels with action color
+                # Handle classic action clips â€” fill all pixels with action color
                 aid = clip.get("actionId")
                 if aid is not None:
                     act = next((a for a in _actions if a["id"] == aid), None)
@@ -1360,7 +1360,7 @@ def api_timeline_frame(tid):
 
     return jsonify(result)
 
-# ── Baking (Phase 5) ────────────────────────────────────────────────────────
+# â”€â”€ Baking (Phase 5) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.post("/api/timelines/<int:tid>/bake")
 def api_timeline_bake(tid):
@@ -1458,7 +1458,7 @@ def api_bake_preview(tid):
         return jsonify(err="No baked data"), 404
     return jsonify(result.get("preview", {}))
 
-# Sync progress — tracks per-child sync state for UI polling
+# Sync progress â€” tracks per-child sync state for UI polling
 _sync_progress = None  # dict when active
 
 @app.post("/api/timelines/<int:tid>/baked/sync")
@@ -1467,7 +1467,7 @@ def api_bake_sync(tid):
     global _sync_progress
     result = _bake_result.get(tid)
     if not result:
-        return jsonify(err="No baked data — bake first"), 404
+        return jsonify(err="No baked data â€” bake first"), 404
 
     targets = [c for c in _children if c.get("ip")]
     if not targets:
@@ -1490,7 +1490,7 @@ def api_bake_sync(tid):
         PER_PIXEL_TYPES = {4, 7, 10, 11}  # CHASE, COMET, WIPE, SCANNER
         # Directional effect types (use direction param)
         DIR_TYPES = {4, 5, 7, 10, 11}  # CHASE, RAINBOW, COMET, WIPE, SCANNER
-        # Direction flip map: E↔W, N↔S
+        # Direction flip map: Eâ†”W, Nâ†”S
         DIR_FLIP = {0: 2, 1: 3, 2: 0, 3: 1}
         REF_PITCH_MM = 16.67  # 60 LEDs/m reference density
         for seg in segments[:16]:
@@ -1509,7 +1509,7 @@ def api_bake_sync(tid):
             # visual sweep matches physical orientation
             if step["type"] in DIR_TYPES:
                 sdir = sinfo.get("sdir", 0)
-                if sdir in (2, 3):  # West or South — flip direction
+                if sdir in (2, 3):  # West or South â€” flip direction
                     step["direction"] = DIR_FLIP.get(step.get("direction", 0), 0)
             # Normalize speedMs for per-pixel effects so physical speed is
             # consistent regardless of LED density (50 LEDs/1m = 150 LEDs/1m)
@@ -1540,7 +1540,7 @@ def api_bake_sync(tid):
 
     def _sync_thread():
         MAX_RETRIES = 3
-        # Stop any running show first — both on children and server state
+        # Stop any running show first â€” both on children and server state
         pkt_stop = _hdr(CMD_RUNNER_STOP)
         pkt_off = _hdr(CMD_ACTION_STOP)
         for c in _children:
@@ -1604,7 +1604,7 @@ def api_bake_sync(tid):
                 if not verified and prog["stepsLoaded"] == prog["totalSteps"]:
                     verified = True
                     prog["status"] = "ready"
-                    log.info("SYNC: %s HTTP verify failed but all steps loaded — accepting", ip)
+                    log.info("SYNC: %s HTTP verify failed but all steps loaded â€” accepting", ip)
                 prog["verified"] = verified
                 prog["status"] = "ready" if verified else "unverified"
                 if verified:
@@ -1624,7 +1624,7 @@ def api_sync_status(tid):
         return jsonify(done=False, performers={})
     return jsonify(_sync_progress)
 
-# ── Show Execution (Phase 6) ────────────────────────────────────────────────
+# â”€â”€ Show Execution (Phase 6) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.post("/api/timelines/<int:tid>/start")
 def api_timeline_start(tid):
@@ -1633,11 +1633,11 @@ def api_timeline_start(tid):
     if not tl:
         return jsonify(err="Not found"), 404
     if tid not in _bake_result:
-        return jsonify(err="Timeline not baked yet — bake first"), 400
+        return jsonify(err="Timeline not baked yet â€” bake first"), 400
 
     # Check sync is done
     if _sync_progress and not _sync_progress.get("done"):
-        return jsonify(err="Sync still in progress — wait for it to finish"), 409
+        return jsonify(err="Sync still in progress â€” wait for it to finish"), 409
 
     # Send RUNNER_GO with 5s offset for NTP alignment
     go_epoch = int(time.time()) + 5
@@ -1705,7 +1705,7 @@ def api_timeline_playback_status(tid):
         activeTimeline=_settings.get("activeTimeline", -1),
     )
 
-# ── Settings ──────────────────────────────────────────────────────────────────
+# â”€â”€ Settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/api/settings")
 def api_settings_get():
@@ -1741,7 +1741,7 @@ def api_settings_save():
         _apply_logging(body["logging"])
     return jsonify(ok=True)
 
-# ── Action ────────────────────────────────────────────────────────────────────
+# â”€â”€ Action â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.post("/api/action")
 def api_action():
@@ -1773,7 +1773,7 @@ def api_action_stop():
             _send(c["ip"], _hdr(CMD_ACTION_STOP))
     return jsonify(ok=True)
 
-# ── Actions library ───────────────────────────────────────────────────────────
+# â”€â”€ Actions library â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/api/actions")
 def api_actions():
@@ -1839,7 +1839,7 @@ def api_action_delete(aid):
         _save("actions", _actions)
     return jsonify(ok=True)
 
-# ── Runners ───────────────────────────────────────────────────────────────────
+# â”€â”€ Runners â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/api/runners")
 def api_runners():
@@ -2052,13 +2052,13 @@ def api_runner_sync(rid):
             log.info("SYNC: loading %d steps to %s (%s)", len(resolved), child["ip"], child.get("hostname"))
             for i, step in enumerate(resolved):
                 offsets = child_offsets[i] if i < len(child_offsets) else {}
-                # JSON round-trip may stringify int keys — try both
+                # JSON round-trip may stringify int keys â€” try both
                 cid = child["id"]
                 delay_ms = offsets.get(cid, offsets.get(str(cid), 0))
                 pkt = _load_step_pkt(i, len(resolved), step, child, delay_ms)
                 _send(child["ip"], pkt)
                 sent += 1
-                log.debug("  step %d/%d type=%d delay=%dms → %s",
+                log.debug("  step %d/%d type=%d delay=%dms â†’ %s",
                           i, len(resolved), int(step.get("type", 0) or 0), int(delay_ms), child["ip"])
                 time.sleep(0.03)   # 30ms gap between packets for reliable delivery
     except Exception as e:
@@ -2127,7 +2127,7 @@ def api_runner_start(rid):
     r = next((x for x in _runners if x["id"] == rid), None)
     if not r:
         return jsonify(ok=False, err="not found"), 404
-    go_epoch = int(time.time()) + 5      # 5 s from now — time for UDP to reach all children
+    go_epoch = int(time.time()) + 5      # 5 s from now â€” time for UDP to reach all children
     # CMD_RUNNER_GO: 4-byte startEpoch + 1-byte loop flag as PAYLOAD
     loop_flag = 1 if _settings.get("runnerLoop", True) else 0
     pkt = _hdr(CMD_RUNNER_GO) + struct.pack("<IB", go_epoch, loop_flag)
@@ -2135,7 +2135,7 @@ def api_runner_start(rid):
     slyled_children = [c for c in online if c.get("type") != "wled"]
     wled_children = [c for c in online if c.get("type") == "wled"]
     for c in slyled_children:
-        log.info("START: RUNNER_GO epoch=%d loop=%d → %s (%s)", go_epoch, loop_flag, c["ip"], c.get("hostname"))
+        log.info("START: RUNNER_GO epoch=%d loop=%d â†’ %s (%s)", go_epoch, loop_flag, c["ip"], c.get("hostname"))
         _send(c["ip"], pkt)
     # Start WLED runner thread for WLED devices
     if wled_children:
@@ -2149,7 +2149,7 @@ def api_runner_start(rid):
         _save("settings", _settings)
     return jsonify(ok=True)
 
-# ── Flights ───────────────────────────────────────────────────────────────────
+# â”€â”€ Flights â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/api/flights")
 def api_flights():
@@ -2203,7 +2203,7 @@ def api_flight_delete(fid):
         _save("flights", _flights)
     return jsonify(ok=True)
 
-# ── Shows ─────────────────────────────────────────────────────────────────────
+# â”€â”€ Shows â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _active_show_threads = []
 
@@ -2260,7 +2260,7 @@ def api_show_delete(sid):
 
 @app.post("/api/shows/<int:sid>/start")
 def api_show_start(sid):
-    """Start a show — syncs and starts all flights simultaneously."""
+    """Start a show â€” syncs and starts all flights simultaneously."""
     s = next((x for x in _shows if x["id"] == sid), None)
     if not s:
         return jsonify(ok=False, err="not found"), 404
@@ -2371,7 +2371,7 @@ def _stop_all_shows():
         _settings["runnerElapsed"] = 0
         _save("settings", _settings)
 
-# ── Config / Show export-import ───────────────────────────────────────────────
+# â”€â”€ Config / Show export-import â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/api/config/export")
 def api_config_export():
@@ -2515,9 +2515,9 @@ _TYPE_NAMES = {0: "Blackout", 1: "Solid", 2: "Fade", 3: "Breathe",
                8: "Twinkle", 9: "Strobe", 10: "Wipe", 11: "Scanner",
                12: "Sparkle", 13: "Gradient"}
 
-# ── Demo show generator ─────────────────────────────────────────────────────
+# â”€â”€ Demo show generator â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-# Mood presets — extensibility point for future smart-show / theme system.
+# Mood presets â€” extensibility point for future smart-show / theme system.
 # Each preset defines colors, durations, action types, and type-specific params.
 MOOD_PRESETS = {
     "default": {
@@ -2579,7 +2579,7 @@ def _generate_demo_show(mood="default"):
 
     # Build one flight targeting all performers (empty if none registered)
     child_ids = [c["id"] for c in _children]
-    flight = {"id": 0, "name": "Demo Flight — All Performers",
+    flight = {"id": 0, "name": "Demo Flight â€” All Performers",
               "performerIds": child_ids, "runnerId": 0, "priority": 1}
 
     # Build show
@@ -2736,7 +2736,7 @@ def api_show_presets():
     ]
     return jsonify(presets)
 
-# ── Factory reset ─────────────────────────────────────────────────────────────
+# â”€â”€ Factory reset â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _DEFAULT_SETTINGS = {
     "name": "SlyLED", "units": 0, "canvasW": 10000, "canvasH": 5000,
@@ -2750,7 +2750,7 @@ _DEFAULT_SURFACES  = []
 _DEFAULT_SPATIAL_FX = []
 _DEFAULT_TIMELINES = []
 
-# ── WiFi credentials ─────────────────────────────────────────────────────────
+# â”€â”€ WiFi credentials â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 import base64, hashlib
 from cryptography.fernet import Fernet, InvalidToken
@@ -2805,7 +2805,7 @@ def get_wifi_password():
     """Get decrypted WiFi password (for firmware flashing)."""
     return _decrypt_pw(_wifi.get("password", ""))
 
-# ── Firmware management ──────────────────────────────────────────────────────
+# â”€â”€ Firmware management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 try:
     from firmware_manager import list_ports, load_registry, flash_board, get_flash_status, detect_chip, query_serial
@@ -2836,7 +2836,7 @@ def _parent_wifi_hash():
 
 @app.get("/api/firmware/ports")
 def api_fw_ports():
-    """Fast port list — no serial queries. Use /api/firmware/query for per-port info."""
+    """Fast port list â€” no serial queries. Use /api/firmware/query for per-port info."""
     if not _fw_available:
         return jsonify(ok=False, err="pyserial not installed"), 500
     return jsonify(list_ports())
@@ -2904,7 +2904,7 @@ def api_fw_download():
             dest = _FW_DIR / target_path
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(data)
-            log.info("Downloaded %s (%d bytes) → %s", asset_name, len(data), dest)
+            log.info("Downloaded %s (%d bytes) â†’ %s", asset_name, len(data), dest)
             downloaded += 1
         if downloaded == 0:
             return jsonify(ok=False, err=f"No firmware assets for {board} in release"), 404
@@ -2923,7 +2923,7 @@ def api_fw_download():
 
 @app.get("/api/firmware/binary/<board>")
 def api_fw_binary(board):
-    """Serve a firmware binary for OTA — child downloads from parent over plain HTTP.
+    """Serve a firmware binary for OTA â€” child downloads from parent over plain HTTP.
     ESP32 OTA needs app-only binary (main.ino.bin), NOT the merged binary."""
     file_map = {"esp32": "esp32/main.ino.bin", "d1mini": "d1mini/main.ino.bin"}
     rel_path = file_map.get(board)
@@ -2979,7 +2979,7 @@ def api_fw_flash():
     if not _fw_available:
         return jsonify(ok=False, err="esptool not available"), 500
     if not _wifi.get("ssid") or not _wifi.get("password"):
-        return jsonify(ok=False, err="WiFi credentials required before flashing — set them on the Firmware tab first"), 400
+        return jsonify(ok=False, err="WiFi credentials required before flashing â€” set them on the Firmware tab first"), 400
     body = request.get_json(silent=True) or {}
     port = body.get("port", "")
     fw_id = body.get("firmwareId", "")
@@ -3006,7 +3006,7 @@ def api_fw_flash_status():
         return jsonify(running=False, progress=0, message="not available")
     return jsonify(get_flash_status())
 
-# ── Help (Phase 7) ───────────────────────────────────────────────────────────
+# â”€â”€ Help (Phase 7) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _HELP_SECTIONS = {
     "dash": "Dashboard",
@@ -3042,7 +3042,7 @@ def api_help(section):
                 result.append(line)
         if not result:
             return jsonify(html=f"<p>No help found for '{section}'.</p>")
-        # Simple markdown → HTML conversion
+        # Simple markdown â†’ HTML conversion
         html = ""
         for line in result:
             if line.startswith("### "):
@@ -3059,11 +3059,11 @@ def api_help(section):
     except Exception as e:
         return jsonify(html=f"<p>Error loading help: {e}</p>")
 
-# ── Migration (Phase 8) ──────────────────────────────────────────────────────
+# â”€â”€ Migration (Phase 8) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.post("/api/migrate/layout")
 def api_migrate_layout():
-    """Create fixtures from all registered children (2D→3D migration)."""
+    """Create fixtures from all registered children (2Dâ†’3D migration)."""
     global _nxt_fix
     created = 0
     existing_child_ids = {f.get("childId") for f in _fixtures}
@@ -3095,7 +3095,7 @@ def api_migrate_runner(rid):
 
     with _lock:
         # Create spatial effects from each action referenced by runner steps
-        fx_map = {}  # action_id → spatial_fx_id
+        fx_map = {}  # action_id â†’ spatial_fx_id
         for step in runner.get("steps", []):
             aid = step.get("actionId")
             if aid is None or aid in fx_map:
@@ -3187,7 +3187,7 @@ def api_reset():
         _save("timelines",  _timelines)
     return jsonify(ok=True)
 
-# ── OTA firmware update ───────────────────────────────────────────────────────
+# â”€â”€ OTA firmware update â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _github_release_cache = {"data": None, "ts": 0}
 _GITHUB_RELEASE_TTL = 3600  # 1 hour cache
@@ -3234,7 +3234,7 @@ def api_firmware_latest():
 def api_firmware_check():
     """Compare all children firmware against latest release. Returns per-child update status."""
     if not _wifi.get("ssid") or not _wifi.get("password"):
-        return jsonify(ok=False, err="WiFi credentials required — set them on the Firmware tab before checking for updates"), 400
+        return jsonify(ok=False, err="WiFi credentials required â€” set them on the Firmware tab before checking for updates"), 400
     rel = _fetch_github_release()
     if not rel:
         return jsonify(ok=False, err="Could not fetch release info"), 502
@@ -3246,7 +3246,7 @@ def api_firmware_check():
         try:
             cur_parts = [int(x) for x in fw.split(".")]
             lat_parts = [int(x) for x in latest.split(".")]
-            # Pad to 3 parts for consistent comparison (7.0 → 7.0.0)
+            # Pad to 3 parts for consistent comparison (7.0 â†’ 7.0.0)
             while len(cur_parts) < 3: cur_parts.append(0)
             while len(lat_parts) < 3: lat_parts.append(0)
             needs_update = lat_parts > cur_parts
@@ -3298,7 +3298,7 @@ def api_firmware_ota(cid):
 
     # Require WiFi credentials to be configured before OTA
     if not _wifi.get("ssid"):
-        return jsonify(ok=False, err="WiFi credentials not configured — set them on the Firmware tab first"), 400
+        return jsonify(ok=False, err="WiFi credentials not configured â€” set them on the Firmware tab first"), 400
 
     # Push WiFi credentials to child before OTA (so new firmware can reconnect)
     ip = child["ip"]
@@ -3344,7 +3344,7 @@ def api_firmware_ota(cid):
     except (ValueError, IndexError):
         return jsonify(ok=False, err="invalid version format"), 500
 
-    # Send OTA command — use parent as proxy (child can't do HTTPS to GitHub)
+    # Send OTA command â€” use parent as proxy (child can't do HTTPS to GitHub)
     ip = child["ip"]
     # Determine parent's LAN IP for the proxy URL
     try:
@@ -3366,12 +3366,12 @@ def api_firmware_ota(cid):
         _ur.urlopen(req, timeout=5)
     except Exception as e:
         log.warning("OTA trigger to %s failed: %s", ip, e)
-        # Child may have already started updating and dropped the connection — that's OK
+        # Child may have already started updating and dropped the connection â€” that's OK
         pass
 
     return jsonify(ok=True, version=latest, board=board)
 
-# ── QR code for mobile app ────────────────────────────────────────────────────
+# â”€â”€ QR code for mobile app â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/api/qr")
 def api_qr():
@@ -3396,7 +3396,7 @@ def api_qr():
     buf.seek(0)
     return send_file(buf, mimetype="image/png", download_name="slyled-qr.png")
 
-# ── CORS ─────────────────────────────────────────────────────────────────────
+# â”€â”€ CORS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.after_request
 def add_cors(response):
@@ -3410,7 +3410,7 @@ def add_cors(response):
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-SlyLED-Confirm"
     return response
 
-# ── Shutdown ──────────────────────────────────────────────────────────────────
+# â”€â”€ Shutdown â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.post("/api/shutdown")
 def api_shutdown():
@@ -3424,7 +3424,7 @@ def api_shutdown():
     threading.Thread(target=_kill, daemon=True).start()
     return jsonify(ok=True)
 
-# ── SPA fallback — must be last ───────────────────────────────────────────────
+# â”€â”€ SPA fallback â€” must be last â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
@@ -3436,7 +3436,7 @@ def spa_fallback(path):
     resp.headers["Pragma"] = "no-cache"
     return resp
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# â”€â”€ Entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _check_single_instance(port):
     """Check if another instance is already running on this port."""
@@ -3475,3 +3475,4 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+

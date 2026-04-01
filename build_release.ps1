@@ -83,7 +83,7 @@ if (-not $SkipWindows) {
             Write-Host "Installer build FAILED (non-fatal)" -ForegroundColor Yellow
         }
     } else {
-        Write-Host "Inno Setup not found — skipping installer (exe still available)" -ForegroundColor Yellow
+        Write-Host "Inno Setup not found - skipping installer (exe still available)" -ForegroundColor Yellow
     }
     Set-Location $root
 }
