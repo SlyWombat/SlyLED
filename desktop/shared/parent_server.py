@@ -1802,28 +1802,39 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
     """Background thread: stream DMX channel data during show playback."""
     result = _bake_result.get(tid)
     if not result:
+        log.warning("DMX playback: no bake result for timeline %d", tid)
         return
+    baked_fixtures = result.get("fixtures", {})
     # Collect DMX fixtures with their baked segments
     dmx_fixtures = []
     for f in _fixtures:
         if f.get("fixtureType") != "dmx":
             continue
         fid = f["id"]
-        segs = result.get("fixtures", {}).get(fid, {}).get("segments", [])
-        if not segs:
-            continue
+        # Bake result keys can be int or str depending on JSON round-trip
+        fix_data = baked_fixtures.get(fid) or baked_fixtures.get(str(fid), {})
+        segs = fix_data.get("segments", [])
         uni = f.get("dmxUniverse", 1)
         addr = f.get("dmxStartAddr", 1)
         pid = f.get("dmxProfileId")
         ch_map = _profile_lib.channel_map(pid) if pid else None
-        dmx_fixtures.append({"uni": uni, "addr": addr, "ch_map": ch_map, "segs": segs})
+        log.info("DMX playback: fixture %d '%s' uni=%d addr=%d segs=%d profile=%s",
+                 fid, f.get("name", "?"), uni, addr, len(segs), pid or "none")
+        if not segs:
+            log.warning("DMX playback: fixture %d has 0 segments - skipping", fid)
+            continue
+        dmx_fixtures.append({"fid": fid, "name": f.get("name", "?"),
+                             "uni": uni, "addr": addr, "ch_map": ch_map, "segs": segs})
     if not dmx_fixtures:
+        log.warning("DMX playback: no DMX fixtures with segments found")
         return
+    log.info("DMX playback: %d fixture(s), duration=%ds, loop=%s", len(dmx_fixtures), duration, loop)
     # Auto-start Art-Net engine if not running
     proto = _dmx_settings.get("protocol", "artnet")
     engine = _artnet if proto == "artnet" else _sacn
     if not engine.running:
         engine.start()
+        log.info("DMX playback: auto-started %s engine", proto)
     # Wait until go_epoch
     wait = go_epoch - time.time()
     if wait > 0:
@@ -1833,6 +1844,7 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
     # 40Hz playback loop
     interval = 0.025
     next_frame = time.monotonic()
+    frame_count = 0
     while not _dmx_playback_stop.is_set():
         now_mono = time.monotonic()
         if now_mono < next_frame:
@@ -1852,20 +1864,24 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
             break  # show ended
         # Evaluate each DMX fixture
         for fx in dmx_fixtures:
-            r, g, b, dim = 0, 0, 0, 255
+            r, g, b = 0, 0, 0
             for seg in fx["segs"]:
                 ss = seg.get("startS", 0)
                 sd = seg.get("durationS", 1)
                 if ss <= elapsed < ss + sd:
                     p = seg.get("params", {})
                     r, g, b = p.get("r", 0), p.get("g", 0), p.get("b", 0)
-                    dim = 255
                     break
             profile = {"channel_map": fx["ch_map"]} if fx["ch_map"] else None
             engine.set_fixture_rgb(fx["uni"], fx["addr"], r, g, b, profile)
             if fx["ch_map"] and "dimmer" in fx["ch_map"]:
+                dim = 255 if (r or g or b) else 0
                 engine.get_universe(fx["uni"]).set_fixture_dimmer(fx["addr"], dim, profile)
-    # Blackout DMX fixtures on stop
+        frame_count += 1
+        if frame_count == 1:
+            log.info("DMX playback: first frame sent at elapsed=%.1fs", elapsed)
+    log.info("DMX playback: stopped after %d frames", frame_count)
+    # Blackout DMX fixtures on stop, then remove universes to stop sending
     for fx in dmx_fixtures:
         profile = {"channel_map": fx["ch_map"]} if fx["ch_map"] else None
         engine.set_fixture_rgb(fx["uni"], fx["addr"], 0, 0, 0, profile)

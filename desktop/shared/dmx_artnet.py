@@ -362,25 +362,25 @@ class ArtNetEngine:
                     pass
 
     def _send_all_universes(self):
-        """Send ArtDMX for all active universes."""
+        """Send ArtDMX only for universes that have a route and dirty data."""
         if not self._sock:
             return
-        for uni_num, uni in self._universes.items():
-            # Always send (even if not dirty) to maintain 40Hz heartbeat
+        for uni_num, uni in list(self._universes.items()):
+            # Only send if universe has a unicast route (no broadcast spam)
+            target = self._unicast.get(uni_num)
+            if not target:
+                continue
+            # Only send if data changed (dirty flag)
+            if not uni.dirty:
+                continue
             data = uni.get_data()
             seq = self._sequences.get(uni_num, 0) + 1
             if seq > 255:
                 seq = 1
             self._sequences[uni_num] = seq
             pkt = build_artdmx(uni_num - 1, seq, data)  # Art-Net uses 0-based universe
-
-            target = self._unicast.get(uni_num)
-            if target:
-                dest = (target, ARTNET_PORT)
-            else:
-                dest = ("255.255.255.255", ARTNET_PORT)
             try:
-                self._sock.sendto(pkt, dest)
+                self._sock.sendto(pkt, (target, ARTNET_PORT))
             except Exception:
                 pass
             uni.dirty = False

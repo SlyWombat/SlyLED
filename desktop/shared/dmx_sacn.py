@@ -266,9 +266,11 @@ class sACNEngine:
                 time.sleep(sleep_time)
 
     def _send_all_universes(self):
-        """Send sACN data for all active universes."""
+        """Send sACN data only for dirty universes."""
         for uni_num in list(self._universes.keys()):
-            self._send_universe(uni_num)
+            uni = self._universes.get(uni_num)
+            if uni and uni.dirty:
+                self._send_universe(uni_num)
 
     def _send_universe(self, uni_num, blackout=False):
         """Send one sACN data packet for a universe."""
