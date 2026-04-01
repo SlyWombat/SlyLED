@@ -54,6 +54,7 @@ CHILDREN_CONFIG = [
     {"name": "Emu-Long200",      "strings": [{"leds": 200, "mm": 3200, "sdir": 0}]},
     {"name": "Emu-Folded",       "strings": [{"leds": 150, "mm": 2400, "sdir": 0, "folded": True}, {"leds": 150, "mm": 2400, "sdir": 0}]},
     {"name": "Emu-Quad",         "strings": [{"leds": 30,  "mm": 480,  "sdir": 0}, {"leds": 30,  "mm": 480,  "sdir": 1}, {"leds": 30, "mm": 480, "sdir": 2}, {"leds": 30, "mm": 480, "sdir": 3}]},
+    {"name": "Emu-DMXBridge",   "strings": [], "boardType": "dmx"},
 ]
 
 
@@ -110,10 +111,13 @@ class ChildHTTPHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/status":
+            bt = self.child.cfg.get("boardType", "led")
+            board = "dmx-bridge" if bt == "dmx" else "emulated"
             data = {
                 "role": "child",
                 "hostname": self.child.hostname,
-                "board": "emulated",
+                "board": board,
+                "boardType": bt,
                 "version": "7.3.0",
                 "action": self.child.action_type,
                 "udpRx": 0,

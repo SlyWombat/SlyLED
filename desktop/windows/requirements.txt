@@ -3,4 +3,5 @@ pystray>=0.19
 pillow>=10.0
 pyserial>=3.5
 esptool>=4.7
+cryptography>=41.0
 qrcode>=7.0

@@ -464,7 +464,8 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
         if progress:
             progress.fixtures_done += 1
             progress.current_frame = progress.fixtures_done * 10
-            progress.segments[str(fid)] = len(all_segments)
+            fix_name = fix_map.get(fid, {}).get("name", str(fid))
+            progress.segments[fix_name] = len(all_segments)
 
     # Generate preview data for emulator
     # Solid-colour actions → [r, g, b]
@@ -479,6 +480,8 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
         fdata = fixture_data.get(fid, {})
         strings = fdata.get("strings", [])
         pixels = fdata.get("pixels", [])
+        if not strings and not pixels:
+            continue  # skip fixtures with no LED data
         n_strings = max(len(strings), 1)
         fix_segments = result["fixtures"].get(fid, {}).get("segments", [])
 

@@ -257,27 +257,28 @@ static void renderRainbow(uint16_t speedMs, uint8_t palId, uint8_t dir,
 static void renderFire(uint8_t r, uint8_t g, uint8_t b,
                         uint16_t speedMs, uint8_t cooling, uint8_t sparking,
                         unsigned long elapsedMs,
-                        uint16_t st, uint16_t en) {
-  static uint8_t heat[MAX_LEDS];
+                        uint16_t st, uint16_t en, uint8_t strIdx) {
+  static uint8_t heat[MAX_STR_PER_CHILD][MAX_LEDS];
+  uint8_t* h = heat[strIdx < MAX_STR_PER_CHILD ? strIdx : 0];
   uint16_t rangeLen = en - st + 1;
   if (rangeLen < 3) return;
   // Cool down
   for (uint16_t i = 0; i < rangeLen; i++) {
     uint8_t cool = random8(0, ((uint16_t)cooling * FIRE_COOL_SCALE / rangeLen) + FIRE_COOL_BASE_ADD);
-    heat[i] = (heat[i] > cool) ? heat[i] - cool : 0;
+    h[i] = (h[i] > cool) ? h[i] - cool : 0;
   }
   // Heat rises
   for (uint16_t k = rangeLen - 1; k >= 2; k--) {
-    heat[k] = ((uint16_t)heat[k-1] + heat[k-2] + heat[k-2]) / 3;
+    h[k] = ((uint16_t)h[k-1] + h[k-2] + h[k-2]) / 3;
   }
   // Sparks
   if (random8() < sparking) {
     uint16_t y = random8(min(FIRE_SPARK_ZONE_MAX, (uint8_t)rangeLen));
-    heat[y] = qadd8(heat[y], random8(FIRE_SPARK_TEMP_MIN, FIRE_SPARK_TEMP_MAX));
+    h[y] = qadd8(h[y], random8(FIRE_SPARK_TEMP_MIN, FIRE_SPARK_TEMP_MAX));
   }
   // Map heat to colour
   for (uint16_t j = 0; j < rangeLen; j++) {
-    uint8_t t = heat[j];
+    uint8_t t = h[j];
     uint8_t rr, gg, bb;
     if (t < FIRE_HUE_ORANGE)       { rr = (uint8_t)((uint16_t)r*t*FIRE_HEAT_SCALE/255); gg = 0; bb = 0; }
     else if (t < FIRE_HUE_YELLOW)  { rr = r; gg = (uint8_t)((uint16_t)g*(t-FIRE_HUE_ORANGE)*FIRE_HEAT_SCALE/255); bb = 0; }
@@ -498,7 +499,8 @@ bool applyAction(uint8_t at, uint8_t r, uint8_t g, uint8_t b,
                   uint16_t p16a, uint8_t p8a, uint8_t p8b,
                   uint8_t p8c, uint8_t p8d,
                          unsigned long elapsedMs,
-                         uint16_t st, uint16_t en, bool folded) {
+                         uint16_t st, uint16_t en, bool folded,
+                         uint8_t strIdx) {
   if (st == 0xFFFF || en < st) return false;
   if (en >= NUM_LEDS) en = NUM_LEDS - 1;
 
@@ -516,7 +518,7 @@ bool applyAction(uint8_t at, uint8_t r, uint8_t g, uint8_t b,
     case ACT_BREATHE:  renderBreathe(r, g, b, p16a, p8a, elapsedMs, st, en); break;
     case ACT_CHASE:    renderChase(r, g, b, p16a, p8a, p8c, elapsedMs, st, en); break;
     case ACT_RAINBOW:  renderRainbow(p16a, p8a, p8c, elapsedMs, st, en); break;
-    case ACT_FIRE:     renderFire(r, g, b, p16a, p8a, p8b, elapsedMs, st, en); break;
+    case ACT_FIRE:     renderFire(r, g, b, p16a, p8a, p8b, elapsedMs, st, en, strIdx); break;
     case ACT_COMET:    renderComet(r, g, b, p16a, p8a, p8c, p8d, elapsedMs, st, en); break;
     case ACT_TWINKLE:  renderTwinkle(r, g, b, p16a, p8a, p8d, elapsedMs, st, en); break;
     case ACT_STROBE:   renderStrobe(r, g, b, p16a, p8a, elapsedMs, st, en); break;
@@ -548,7 +550,7 @@ bool applyRunnerStep(const ChildRunnerStep& rs, uint8_t /*flashPh*/,
                   (childCfg.strings[j].flags & STR_FLAG_FOLDED);
     if (applyAction(rs.actionType, rs.r, rs.g, rs.b,
                     rs.p16a, rs.p8a, rs.p8b, rs.p8c, rs.p8d,
-                    stepMs, rs.ledStart[j], rs.ledEnd[j], folded))
+                    stepMs, rs.ledStart[j], rs.ledEnd[j], folded, j))
       drew = true;
   }
   return drew;
@@ -707,7 +709,7 @@ void ledTask(void* parameter) {
         bool fold = (j < childCfg.stringCount) && (childCfg.strings[j].flags & STR_FLAG_FOLDED);
         applyAction(locAt, locR, locG, locB,
                     locP16a, locP8a, locP8b, locP8c, locP8d,
-                    millis() - actStart, childActSt[j], childActEn[j], fold);
+                    millis() - actStart, childActSt[j], childActEn[j], fold, j);
       }
       showSafe();
       delay(actionDelay(locAt));
@@ -771,9 +773,10 @@ void updateLED() {
     return;
   }
 
-  // ── 1. Arm runner when epoch reached ────────────────────────────────────
+  // ── 1. Arm runner when epoch reached (or immediately if NTP failed) ──
   if (childRunnerArmed && childStepCount > 0) {
-    if ((uint32_t)currentEpoch() >= childRunnerStart) {
+    uint32_t now = (uint32_t)currentEpoch();
+    if (now < NTP_EPOCH_2020 || now >= childRunnerStart) {
       childRunnerArmed  = false;
       childRunnerActive = true;
       prevRunStep       = 0xFF;
@@ -864,7 +867,7 @@ void updateLED() {
         bool fold = (j < childCfg.stringCount) && (childCfg.strings[j].flags & STR_FLAG_FOLDED);
         applyAction(locAt, locR, locG, locB,
                     locP16a, locP8a, locP8b, locP8c, locP8d,
-                    now - actStart, childActSt[j], childActEn[j], fold);
+                    now - actStart, childActSt[j], childActEn[j], fold, j);
       }
       showSafe();
     }

@@ -52,7 +52,7 @@ The Orchestrator (Windows/Mac Flask)  ← primary design + control UI + firmware
     desktop/shared/spa/index.html     ← 7-tab SPA
     desktop/windows/run.ps1  (Windows launcher)
     desktop/mac/run.sh        (Mac launcher)
-         │  UDP port 4210 binary protocol v3
+         │  UDP port 4210 binary protocol v4
          ▼
 Performers (ESP32 / D1 Mini / Giga Child)  ← LED execution nodes
     (managed via Setup tab, UDP PING/PONG/ACTION/LOAD_STEP)
@@ -116,22 +116,24 @@ Performers (ESP32 / D1 Mini / Giga Child)  ← LED execution nodes
 
 ### UDP binary protocol (port 4210)
 
-All packets share an 8-byte header: `struct.pack("<HBBI", magic=0x534C, version=3, cmd, epoch)`.
+All packets share an 8-byte header: `struct.pack("<HBBI", magic=0x534C, version=4, cmd, epoch)`.
 
 | Cmd byte | Name | Direction | Payload |
 |---------|------|-----------|---------|
 | 0x01 | PING | parent→child | header only |
 | 0x02 | PONG | child→parent | 133 bytes — see PONG layout below |
-| 0x10 | ACTION | parent→child | 26 bytes: type(1)+r/g/b(3)+p16a(2)+p8a-p8d(4)+ledStart[8]+ledEnd[8] |
+| 0x10 | ACTION | parent→child | 42 bytes: type(1)+r/g/b(3)+p16a(2)+p8a-p8d(4)+ledStart[8×uint16](16)+ledEnd[8×uint16](16) |
 | 0x11 | ACTION_STOP | parent→child | header only |
 | 0x12 | ACTION_EVENT | child→parent | 4 bytes (actionType, stepIndex, totalSteps, event) |
-| 0x20 | LOAD_STEP | parent→child | 32 bytes: idx/total/type/r/g/b/p16a/p8a-d/durS/delayMs + ls[8]+le[8] |
+| 0x20 | LOAD_STEP | parent→child | 48 bytes: idx/total/type/r/g/b/p16a/p8a-d/durS/delayMs(16) + ledStart[8×uint16](16)+ledEnd[8×uint16](16) |
 | 0x21 | LOAD_ACK | child→parent | 1 byte (step index) |
 | 0x22 | SET_BRIGHTNESS | parent→child | 1 byte (brightness 0–255) |
 | 0x30 | RUNNER_GO | parent→child | 5 bytes (uint32_t startEpoch + uint8_t loopFlag) |
 | 0x31 | RUNNER_STOP | parent→child | header only |
 | 0x40 | STATUS_REQ | parent→child | header only |
 | 0x41 | STATUS_RESP | child→parent | 8 bytes `<BBBBI` (activeAction, runnerActive, currentStep, rssi, uptime) |
+
+**v3→v4 change:** `ledStart[]` and `ledEnd[]` upgraded from uint8 to uint16 arrays (8 entries each), adding 16 bytes to ACTION and LOAD_STEP payloads. Parent accepts both v3 and v4 PONGs for backward compatibility.
 
 **PONG payload (133 bytes = total packet 141):**
 ```

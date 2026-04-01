@@ -436,7 +436,14 @@ document.addEventListener('DOMContentLoaded',function(){
 var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0,units=0,_cvW=900,_cvH=450;
 var curRid=-1,curRname='',curRsteps=[];
 
+function _clearTabTimers(){
+  if(typeof dashRunnerTimer!=='undefined'&&dashRunnerTimer){clearInterval(dashRunnerTimer);dashRunnerTimer=null;}
+  if(typeof _emuTimer!=='undefined'&&_emuTimer){clearInterval(_emuTimer);_emuTimer=null;}
+  if(typeof _emuAnimId!=='undefined'&&_emuAnimId){cancelAnimationFrame(_emuAnimId);_emuAnimId=null;}
+  if(typeof _tlPlayTimer!=='undefined'&&_tlPlayTimer){clearInterval(_tlPlayTimer);_tlPlayTimer=null;_tlPlaying=false;}
+}
 function showTab(t){
+  _clearTabTimers();
   ctab=t;
   ['dash','setup','layout','actions','runtime','settings','firmware'].forEach(function(id){
     document.getElementById('t-'+id).style.display=id===t?'block':'none';
@@ -468,6 +475,16 @@ function api(method,path,body){
     ra(method,path,body,function(data){
       if(data!==null)resolve(data);else reject(new Error('Request failed: '+method+' '+path));
     });
+  });
+}
+function pollResults(url){
+  return new Promise(function(resolve){
+    var p=setInterval(function(){
+      ra('GET',url,null,function(r){
+        if(r&&r.pending)return;
+        clearInterval(p);resolve(r);
+      });
+    },500);
   });
 }
 
@@ -553,12 +570,18 @@ function _pollStartup(){
 
 function dashRefresh(btn){
   if(btn){btn.disabled=true;btn.textContent='Refreshing...';}
-  ra('POST','/api/children/refresh-all',{},function(r){
-    if(btn){btn.disabled=false;btn.innerHTML='&#x21bb; Refresh All';}
-    if(r&&r.ok){
-      document.getElementById('hs').textContent=r.online+'/'+r.total+' performers online';
-      loadDash();
-    }
+  ra('POST','/api/children/refresh-all',{},function(){
+    var poll=setInterval(function(){
+      ra('GET','/api/children/refresh-all/results',null,function(r){
+        if(r&&r.pending)return;
+        clearInterval(poll);
+        if(btn){btn.disabled=false;btn.innerHTML='&#x21bb; Refresh All';}
+        if(r&&r.ok){
+          document.getElementById('hs').textContent=r.online+'/'+r.total+' performers online';
+          loadDash();
+        }
+      });
+    },500);
   });
 }
 
@@ -772,83 +795,168 @@ function refreshAllChildren(cb){
 }
 
 function loadSetup(){
-  document.getElementById('t-setup').innerHTML='<p style="color:#888">Loading performers...</p>';
+  document.getElementById('t-setup').innerHTML='<p style="color:#888">Loading fixtures...</p>';
   _renderSetup();
 }
 
+var _setupChildren=[];
 function _renderSetup(){
-  ra('GET','/api/children',null,function(d){
-    var h='<div style="margin-bottom:.6em">'
-      +'<button class="btn btn-nav" onclick="discoverChildren()" id="disc-btn" data-tip="setupDiscover">Discover</button>'
-      +'<input id="aip" placeholder="Manual IP (x.x.x.x)" style="width:150px;margin-left:.5em">'
-      +'<button class="btn btn-on" onclick="addChild()" style="margin-left:.3em" data-tip="setupAdd">Add</button>'
-      +'<button class="btn btn-nav" onclick="setupRefreshAll(this)" style="margin-left:.5em" data-tip="setupRefreshAll">Refresh All</button>'
-      +'</div>'
-      +'<div id="disc-results" style="display:none;margin-bottom:.8em"></div>'
-      +'<table class="tbl"><tr><th>Performer</th><th>Board</th><th>IP</th><th>Status</th><th>RSSI</th><th>FW</th><th>LEDs</th><th>Actions</th></tr>';
-    if(d&&d.length){
-      d.forEach(function(c){
-        var st=c.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
-        var board=c.boardType||'SlyLED';
-        if(c.type==='wled')board='WLED';
-        else if(!c.boardType){
-          if(c.sc<=1&&c.strings&&c.strings.length&&c.strings[0].leds<=1)board='Giga';
-          else board='ESP32';
-        }
-        var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b'};
-        var tp='<span class="badge" style="background:'+(boardColors[board]||'#446')+';color:#fff">'+board+'</span>';
-        var totalLeds=0;if(c.strings)c.strings.forEach(function(s,i){if(i<c.sc)totalLeds+=(s.leds||0);});
-        var displayName=(c.name&&c.name!==c.hostname)?escapeHtml(c.name):escapeHtml(c.hostname);
-        var subtitle=(c.name&&c.name!==c.hostname)?'<span style="font-size:.75em;color:#888">'+escapeHtml(c.hostname)+'</span>':'';
-        var rssi2=c.rssi||0;var rssiBar2=c.status===1&&rssi2?'<span style="color:'+(Math.abs(rssi2)<=50?'#4c4':Math.abs(rssi2)<=70?'#fa6':'#f66')+';font-size:.85em">'+_rssiIcon(rssi2)+'</span>':'<span style="color:#666">—</span>';
-        h+='<tr><td><b>'+displayName+'</b>'+(subtitle?'<br>'+subtitle:'')+'</td><td>'+tp+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+rssiBar2+'</td><td>'+escapeHtml(c.fwVersion||'-')+'</td><td>'+c.sc+'&times;'+totalLeds+'</td><td>'
-          +'<button class="btn" onclick="showDetails('+c.id+')" style="background:#446;color:#fff" data-tip="setupDetails">Details</button>'
-          +' <button class="btn btn-on" onclick="refreshChild('+c.id+')" data-tip="setupRefresh">Refresh</button>'
-          +' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff" data-tip="setupReboot">Reboot</button>'
-          +' <button class="btn btn-off" onclick="removePerformer('+c.id+',\''+escapeHtml(c.name||c.hostname).replace(/'/g,"\\'")+'\')\" data-tip="setupRemove">Remove</button></td></tr>';
-      });
-    }else{
-      h+='<tr><td colspan="7" style="color:#888;text-align:center">No performers</td></tr>';
-    }
-    document.getElementById('t-setup').innerHTML=h+'</table>';
+  // Fetch both fixtures and children so we can resolve LED fixture status
+  ra('GET','/api/fixtures',null,function(fixtures){
+    ra('GET','/api/children',null,function(children){
+      _setupChildren=children||[];
+      var cMap={};(children||[]).forEach(function(c){cMap[c.id]=c;});
+      var h='<div style="margin-bottom:.6em">'
+        +'<button class="btn btn-on" onclick="showAddFixtureModal()" data-tip="setupAdd">Add Fixture</button>'
+        +'<button class="btn btn-nav" onclick="discoverChildren()" id="disc-btn" style="margin-left:.5em" data-tip="setupDiscover">Discover LED Performers</button>'
+        +'<button class="btn btn-nav" onclick="setupRefreshAll(this)" style="margin-left:.5em" data-tip="setupRefreshAll">Refresh All</button>'
+        +'</div>'
+        +'<div id="disc-results" style="display:none;margin-bottom:.8em"></div>'
+        +'<table class="tbl"><tr><th>Fixture</th><th>Type</th><th>Connection</th><th>Status</th><th>Channels / LEDs</th><th>Actions</th></tr>';
+      if(fixtures&&fixtures.length){
+        fixtures.forEach(function(f){
+          var ft=f.fixtureType||'led';
+          var typeBadge=ft==='dmx'
+            ?'<span class="badge" style="background:#7c3aed;color:#fff">DMX</span>'
+            :'<span class="badge" style="background:#059669;color:#fff">LED</span>';
+          var conn='',status='',chLeds='',actions='';
+          if(ft==='led'){
+            var ch=f.childId!=null?cMap[f.childId]:null;
+            if(ch){
+              var board=ch.boardType||'SlyLED';
+              if(ch.type==='wled')board='WLED';
+              else if(!ch.boardType){
+                if(ch.sc<=1&&ch.strings&&ch.strings.length&&ch.strings[0].leds<=1)board='Giga';
+                else board='ESP32';
+              }
+              var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b'};
+              conn=escapeHtml(ch.ip)+' <span class="badge" style="background:'+(boardColors[board]||'#446')+';color:#fff;font-size:.75em">'+board+'</span>';
+              status=ch.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
+              var totalLeds=0;if(ch.strings)ch.strings.forEach(function(s,i){if(i<ch.sc)totalLeds+=(s.leds||0);});
+              chLeds=ch.sc+'&times;'+totalLeds;
+            }else{
+              conn='<span style="color:#666">No child linked</span>';
+              status='<span class="badge boff">Unlinked</span>';
+              chLeds='—';
+            }
+            actions='<button class="btn" onclick="showDetails('+f.childId+')" style="background:#446;color:#fff">Details</button>'
+              +' <button class="btn btn-on" onclick="refreshChild('+f.childId+')">Refresh</button>'
+              +' <button class="btn" onclick="rebootChild('+f.childId+')" style="background:#654;color:#fff">Reboot</button>'
+              +' <button class="btn btn-off" onclick="removeFixture('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
+          }else{
+            conn='U'+f.dmxUniverse+' @ '+(f.dmxStartAddr||1);
+            status='<span class="badge" style="background:#7c3aed;color:#fff">Configured</span>';
+            chLeds=(f.dmxChannelCount||0)+' ch';
+            actions='<button class="btn" onclick="editFixture('+f.id+')" style="background:#446;color:#fff">Edit</button>'
+              +' <button class="btn btn-off" onclick="removeFixture('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
+          }
+          h+='<tr><td><b>'+escapeHtml(f.name)+'</b></td><td>'+typeBadge+'</td><td>'+conn+'</td><td>'+status+'</td><td>'+chLeds+'</td><td>'+actions+'</td></tr>';
+        });
+      }else{
+        h+='<tr><td colspan="6" style="color:#888;text-align:center">No fixtures — click Add Fixture or Discover</td></tr>';
+      }
+      document.getElementById('t-setup').innerHTML=h+'</table>';
+    });
   });
 }
 
-function addChild(){
-  var ip=document.getElementById('aip').value.trim();
-  if(!ip)return;
-  document.getElementById('hs').textContent='Adding '+ip+' (probing device...)';
-  ra('POST','/api/children',{ip:ip},function(r){
-    if(r&&r.ok){
-      document.getElementById('hs').textContent=r.duplicate?'Already registered':'Added '+ip+(r.type==='wled'?' (WLED)':'');
-    }else{
-      document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
-    }
-    document.getElementById('aip').value='';
-    // Delay reload to allow background ping to update status
-    setTimeout(loadSetup,2000);
-  });
+function showAddFixtureModal(){
+  var h='<label>Fixture Type</label>'
+    +'<select id="aft" onchange="_toggleAddFixFields()" style="width:100%;margin-bottom:.6em">'
+    +'<option value="led">SlyLED Performer (LED)</option>'
+    +'<option value="dmx">DMX Fixture</option></select>'
+    +'<div id="af-led">'
+    +'<label>IP Address</label><input id="af-ip" placeholder="x.x.x.x" style="width:100%">'
+    +'</div>'
+    +'<div id="af-dmx" style="display:none">'
+    +'<label>Name</label><input id="af-name" placeholder="Moving Head 1" style="width:100%;margin-bottom:.4em">'
+    +'<label>Universe</label><input id="af-uni" type="number" value="1" min="1" style="width:100%;margin-bottom:.4em">'
+    +'<label>Start Address (1–512)</label><input id="af-addr" type="number" value="1" min="1" max="512" style="width:100%;margin-bottom:.4em">'
+    +'<label>Channel Count</label><input id="af-ch" type="number" value="3" min="1" max="512" style="width:100%;margin-bottom:.4em">'
+    +'<label>Geometry</label><select id="af-geom" style="width:100%;margin-bottom:.4em"><option value="point">Point</option><option value="linear">Linear</option></select>'
+    +'<label>Profile ID <span style="color:#64748b;font-size:.75em">(optional, for future use)</span></label>'
+    +'<input id="af-prof" placeholder="e.g. generic-rgb" style="width:100%">'
+    +'</div>'
+    +'<div style="margin-top:.8em"><button class="btn btn-on" onclick="_submitAddFixture()">Add</button></div>';
+  document.getElementById('modal-title').textContent='Add Fixture';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+}
+function _toggleAddFixFields(){
+  var t=document.getElementById('aft').value;
+  document.getElementById('af-led').style.display=t==='led'?'':'none';
+  document.getElementById('af-dmx').style.display=t==='dmx'?'':'none';
+}
+function _submitAddFixture(){
+  var ft=document.getElementById('aft').value;
+  if(ft==='led'){
+    var ip=document.getElementById('af-ip').value.trim();
+    if(!ip){document.getElementById('hs').textContent='Enter an IP address';return;}
+    document.getElementById('hs').textContent='Adding '+ip+' (probing device...)';
+    closeModal();
+    ra('POST','/api/children',{ip:ip},function(r){
+      if(r&&r.ok){
+        // Auto-create fixture for this child
+        var cid=r.id;
+        var cname=r.name||r.hostname||ip;
+        ra('POST','/api/fixtures',{name:cname,fixtureType:'led',type:'linear',childId:cid},function(fr){
+          document.getElementById('hs').textContent=r.duplicate?'Already registered':'Added LED fixture: '+cname;
+          setTimeout(loadSetup,2000);
+        });
+      }else{
+        document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
+        setTimeout(loadSetup,1000);
+      }
+    });
+  }else{
+    var name=document.getElementById('af-name').value.trim();
+    var uni=parseInt(document.getElementById('af-uni').value)||1;
+    var addr=parseInt(document.getElementById('af-addr').value)||1;
+    var ch=parseInt(document.getElementById('af-ch').value)||3;
+    var geom=document.getElementById('af-geom').value;
+    var prof=document.getElementById('af-prof').value.trim();
+    if(addr<1||addr>512){document.getElementById('hs').textContent='Address must be 1–512';return;}
+    closeModal();
+    var body={name:name||('DMX U'+uni+' @'+addr),fixtureType:'dmx',type:geom,
+      dmxUniverse:uni,dmxStartAddr:addr,dmxChannelCount:ch};
+    if(prof)body.dmxProfileId=prof;
+    ra('POST','/api/fixtures',body,function(r){
+      if(r&&r.ok){
+        document.getElementById('hs').textContent='Added DMX fixture: '+(name||('U'+uni+' @'+addr));
+      }else{
+        document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
+      }
+      loadSetup();
+    });
+  }
 }
 
 function discoverChildren(){
   var btn=document.getElementById('disc-btn');
   if(btn){btn.disabled=true;btn.textContent='Scanning...';}
-  ra('GET','/api/children/discover',null,function(d){
-    if(btn){btn.disabled=false;btn.textContent='Discover';}
-    var el=document.getElementById('disc-results');
-    if(!el)return;
-    if(!d||!d.length){
-      el.innerHTML='<p style="color:#888;font-size:.85em;padding:.3em 0">No new performers found on network.</p>';
-      el.style.display='block';return;
-    }
-    var h='<p style="color:#aaa;font-size:.85em;margin-bottom:.4em">Found — click Add to register:</p>'
-      +'<table class="tbl" style="max-width:700px"><tr><th>Hostname</th><th>Name</th><th>IP</th><th>Strings</th><th></th></tr>';
-    d.forEach(function(c){
-      h+='<tr><td>'+escapeHtml(c.hostname)+'</td><td>'+escapeHtml(c.name||'-')+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+c.sc+'</td>'
-        +'<td><button class="btn btn-on" onclick="addDiscovered(\''+c.ip+'\')">Add</button></td></tr>';
-    });
-    el.innerHTML=h+'</table>';
-    el.style.display='block';
+  ra('GET','/api/children/discover',null,function(){
+    // Poll for results
+    var poll=setInterval(function(){
+      ra('GET','/api/children/discover/results',null,function(d){
+        if(d&&d.pending)return;
+        clearInterval(poll);
+        if(btn){btn.disabled=false;btn.textContent='Discover LED Performers';}
+        var el=document.getElementById('disc-results');
+        if(!el)return;
+        if(!d||!d.length){
+          el.innerHTML='<p style="color:#888;font-size:.85em;padding:.3em 0">No new LED performers found on network.</p>';
+          el.style.display='block';return;
+        }
+        var h='<p style="color:#aaa;font-size:.85em;margin-bottom:.4em">Found — click Add to register:</p>'
+          +'<table class="tbl" style="max-width:700px"><tr><th>Hostname</th><th>Name</th><th>IP</th><th>Strings</th><th></th></tr>';
+        d.forEach(function(c){
+          h+='<tr><td>'+escapeHtml(c.hostname)+'</td><td>'+escapeHtml(c.name||'-')+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+c.sc+'</td>'
+            +'<td><button class="btn btn-on" onclick="addDiscovered(\''+c.ip+'\')">Add</button></td></tr>';
+        });
+        el.innerHTML=h+'</table>';
+        el.style.display='block';
+      });
+    },500);
   });
 }
 
@@ -856,20 +964,34 @@ function addDiscovered(ip){
   document.getElementById('hs').textContent='Adding '+ip+' (probing device...)';
   ra('POST','/api/children',{ip:ip},function(r){
     if(r&&r.ok){
-      document.getElementById('hs').textContent='Added '+ip;
+      var cid=r.id;
+      var cname=r.name||r.hostname||ip;
+      ra('POST','/api/fixtures',{name:cname,fixtureType:'led',type:'linear',childId:cid},function(){
+        document.getElementById('hs').textContent='Added LED fixture: '+cname;
+        setTimeout(loadSetup,2000);
+      });
     }else{
       document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
+      setTimeout(loadSetup,1000);
     }
-    setTimeout(loadSetup,2000);
   });
 }
 
-function removePerformer(id,name){
-  if(!confirm('Remove "'+name+'" from the orchestrator?'))return;
+function removeFixture(id,name){
+  if(!confirm('Remove fixture "'+name+'"?'))return;
   document.getElementById('hs').textContent='Removing '+name+'...';
-  ra('DELETE','/api/children/'+id,null,function(r){
-    document.getElementById('hs').textContent=(r&&r.ok)?'Performer removed':'Remove failed';
-    loadSetup();
+  // For LED fixtures, also find and remove the linked child
+  var fix=null;(_fixtures||[]).forEach(function(f){if(f.id===id)fix=f;});
+  ra('DELETE','/api/fixtures/'+id,null,function(r){
+    if(fix&&(fix.fixtureType||'led')==='led'&&fix.childId!=null){
+      ra('DELETE','/api/children/'+fix.childId,null,function(){
+        document.getElementById('hs').textContent=(r&&r.ok)?'Fixture removed':'Remove failed';
+        loadFixtures();loadSetup();
+      });
+    }else{
+      document.getElementById('hs').textContent=(r&&r.ok)?'Fixture removed':'Remove failed';
+      loadFixtures();loadSetup();
+    }
   });
 }
 
@@ -890,8 +1012,14 @@ function rebootChild(id){
 function setupRefreshAll(btn){
   if(btn){btn.disabled=true;btn.textContent='Refreshing...';}
   ra('POST','/api/children/refresh-all',{},function(){
-    if(btn){btn.disabled=false;btn.textContent='Refresh All';}
-    _renderSetup();
+    var poll=setInterval(function(){
+      ra('GET','/api/children/refresh-all/results',null,function(r){
+        if(r&&r.pending)return;
+        clearInterval(poll);
+        if(btn){btn.disabled=false;btn.textContent='Refresh All';}
+        _renderSetup();
+      });
+    },500);
   });
 }
 
@@ -1334,12 +1462,14 @@ function renderFixturesSidebar(){
   if(!_fixtures.length){el.innerHTML='<p style="color:#555;font-size:.82em">No fixtures. Click Auto-create.</p>';return;}
   var h='';
   _fixtures.forEach(function(f){
+    var ft=f.fixtureType||'led';
     var icon=f.type==='point'?'\u2b24':f.type==='group'?'\u25a3':'\u2501';
+    var ftBadge=ft==='dmx'?'<span style="font-size:.6em;background:#7c3aed;color:#fff;padding:0 3px;border-radius:2px;margin-left:2px">DMX</span>':'';
     var rot=f.rotation||[0,0,0];
     var rotTxt=(rot[0]||rot[1]||rot[2])?(' R:'+rot[0]+','+rot[1]+','+rot[2]):'';
     h+='<div style="padding:.3em 0;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:.4em">';
     h+='<span style="font-size:.9em">'+icon+'</span>';
-    h+='<span style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer" title="'+escapeHtml(f.name)+rotTxt+'" onclick="selectOnCanvas(\'fixture\','+f.childId+')">'+escapeHtml(f.name)+'</span>';
+    h+='<span style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer" title="'+escapeHtml(f.name)+rotTxt+'" onclick="selectOnCanvas(\'fixture\','+f.childId+')">'+escapeHtml(f.name)+ftBadge+'</span>';
     h+='<span style="cursor:pointer;color:#3b82f6;font-size:.8em" onclick="editFixture('+f.id+')" title="Edit">\u270e</span>';
     h+='<span style="cursor:pointer;color:#f66;font-size:.8em" onclick="delFixture('+f.id+')" title="Delete">\u2715</span>';
     h+='</div>';
@@ -1359,25 +1489,39 @@ function autoCreateFixtures(){
 function editFixture(id){
   var f=null;_fixtures.forEach(function(fx){if(fx.id===id)f=fx;});
   if(!f)return;
+  var ft=f.fixtureType||'led';
   var h='<label>Name</label><input id="fx-name" value="'+escapeHtml(f.name)+'" style="width:100%">';
-  h+='<label>Type</label><select id="fx-type"><option value="linear"'+(f.type==='linear'?' selected':'')+'>Linear</option><option value="point"'+(f.type==='point'?' selected':'')+'>Point</option><option value="group"'+(f.type==='group'?' selected':'')+'>Group</option></select>';
+  h+='<label>Geometry</label><select id="fx-type"><option value="linear"'+(f.type==='linear'?' selected':'')+'>Linear</option><option value="point"'+(f.type==='point'?' selected':'')+'>Point</option><option value="group"'+(f.type==='group'?' selected':'')+'>Group</option></select>';
+  if(ft==='dmx'){
+    h+='<label>Universe</label><input id="fx-uni" type="number" value="'+(f.dmxUniverse||1)+'" min="1" style="width:100%;margin-bottom:.4em">';
+    h+='<label>Start Address (1–512)</label><input id="fx-addr" type="number" value="'+(f.dmxStartAddr||1)+'" min="1" max="512" style="width:100%;margin-bottom:.4em">';
+    h+='<label>Channel Count</label><input id="fx-ch" type="number" value="'+(f.dmxChannelCount||3)+'" min="1" style="width:100%;margin-bottom:.4em">';
+    h+='<label>Profile ID <span style="color:#64748b;font-size:.75em">(optional)</span></label>';
+    h+='<input id="fx-prof" value="'+escapeHtml(f.dmxProfileId||'')+'" style="width:100%">';
+  }
   h+='<label>Rotation Override (degrees)</label>';
   var rot=f.rotation||[0,0,0];
   h+='<div style="display:flex;gap:.3em"><label style="font-size:.75em">RX</label><input id="fx-rx" type="number" value="'+rot[0]+'" style="width:70px"> <label style="font-size:.75em">RY</label><input id="fx-ry" type="number" value="'+rot[1]+'" style="width:70px"> <label style="font-size:.75em">RZ</label><input id="fx-rz" type="number" value="'+rot[2]+'" style="width:70px"></div>';
   h+='<p style="color:#64748b;font-size:.75em;margin-top:.3em">E.g., RZ=90 rotates an east string to vertical</p>';
-  h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="saveFixture('+id+')">Save</button></div>';
+  h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="saveFixture('+id+',\''+ft+'\')">Save</button></div>';
   document.getElementById('modal-title').textContent='Edit Fixture: '+f.name;
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
 }
 
-function saveFixture(id){
+function saveFixture(id,ft){
   var body={
     name:document.getElementById('fx-name').value,
     type:document.getElementById('fx-type').value,
     rotation:[parseFloat(document.getElementById('fx-rx').value)||0,parseFloat(document.getElementById('fx-ry').value)||0,parseFloat(document.getElementById('fx-rz').value)||0]
   };
-  ra('PUT','/api/fixtures/'+id,body,function(r){closeModal();if(r&&r.ok)loadFixtures();});
+  if(ft==='dmx'){
+    body.dmxUniverse=parseInt(document.getElementById('fx-uni').value)||1;
+    body.dmxStartAddr=parseInt(document.getElementById('fx-addr').value)||1;
+    body.dmxChannelCount=parseInt(document.getElementById('fx-ch').value)||3;
+    body.dmxProfileId=document.getElementById('fx-prof').value.trim()||null;
+  }
+  ra('PUT','/api/fixtures/'+id,body,function(r){closeModal();if(r&&r.ok){loadFixtures();loadSetup();}});
 }
 
 function delFixture(id){
@@ -3312,7 +3456,7 @@ function checkOtaUpdates(){
       _fetchGithubFirmware();
       loadFirmwarePorts();
       el.innerHTML='<p style="color:#888">Refreshing performer status...</p>';
-      return api('POST','/api/children/refresh-all').catch(function(){return null;});
+      return api('POST','/api/children/refresh-all').then(function(){return pollResults('/api/children/refresh-all/results');}).catch(function(){return null;});
     }).then(function(){
       return api('GET','/api/firmware/check');
     }).then(function(d){

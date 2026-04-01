@@ -80,10 +80,25 @@ def run():
             c.delete(f'/api/children/{cid2}')
 
         r = c.post('/api/children/refresh-all')
-        ok('POST refresh-all', r.status_code == 200 and 'online' in r.get_json())
+        ok('POST refresh-all', r.status_code == 200 and r.get_json().get('pending') is True)
+        # Poll for results (background thread completes quickly in test)
+        import time as _time
+        for _ in range(20):
+            _time.sleep(0.3)
+            rr = c.get('/api/children/refresh-all/results')
+            if not rr.get_json().get('pending'):
+                break
+        ok('POST refresh-all results', rr.status_code == 200 and 'online' in rr.get_json())
 
         r = c.get('/api/children/discover')
-        ok('GET discover', r.status_code == 200 and isinstance(r.get_json(), list))
+        ok('GET discover starts', r.status_code == 200 and r.get_json().get('pending') is True)
+        for _ in range(20):
+            _time.sleep(0.3)
+            dr = c.get('/api/children/discover/results')
+            dj = dr.get_json()
+            if isinstance(dj, list) or not dj.get('pending'):
+                break
+        ok('GET discover results', dr.status_code == 200 and isinstance(dr.get_json(), list))
 
         r = c.get('/api/children/export')
         ok('GET export', r.status_code == 200 and isinstance(r.get_json(), list))
@@ -163,6 +178,85 @@ def run():
 
         r = c.delete('/api/fixtures/' + str(fix_id2))
         ok('DELETE fixture', r.status_code == 200)
+
+        # ── DMX Fixtures (#91) ────────────────────────────────────────
+        # Existing fixture defaults to fixtureType "led"
+        r = c.get('/api/fixtures/' + str(fix_id))
+        ok('Fixture default fixtureType=led', r.get_json().get('fixtureType') == 'led')
+
+        # Create DMX fixture (valid)
+        r = c.post('/api/fixtures', json={
+            'name': 'Moving Head 1', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 13
+        })
+        ok('POST DMX fixture', r.status_code == 200 and r.get_json().get('ok'))
+        dmx_id = r.get_json().get('id')
+
+        # GET DMX fixture — all fields present
+        r = c.get('/api/fixtures/' + str(dmx_id))
+        d = r.get_json()
+        ok('GET DMX fixture fields', d.get('fixtureType') == 'dmx' and d.get('dmxUniverse') == 1
+           and d.get('dmxStartAddr') == 1 and d.get('dmxChannelCount') == 13)
+
+        # PUT DMX fixture — update address
+        r = c.put('/api/fixtures/' + str(dmx_id), json={'dmxStartAddr': 50})
+        ok('PUT DMX fixture addr', r.status_code == 200)
+        r = c.get('/api/fixtures/' + str(dmx_id))
+        ok('DMX addr updated', r.get_json().get('dmxStartAddr') == 50)
+
+        # Create second DMX fixture with profileId
+        r = c.post('/api/fixtures', json={
+            'name': 'RGB Par', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 100, 'dmxChannelCount': 3,
+            'dmxProfileId': 'generic-rgb'
+        })
+        ok('POST DMX fixture with profile', r.status_code == 200)
+        dmx_id2 = r.get_json().get('id')
+
+        # Validation: missing universe
+        r = c.post('/api/fixtures', json={
+            'name': 'Bad', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxStartAddr': 1, 'dmxChannelCount': 3
+        })
+        ok('DMX missing universe → 400', r.status_code == 400)
+
+        # Validation: startAddr 0
+        r = c.post('/api/fixtures', json={
+            'name': 'Bad', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 0, 'dmxChannelCount': 3
+        })
+        ok('DMX startAddr 0 → 400', r.status_code == 400)
+
+        # Validation: startAddr 513
+        r = c.post('/api/fixtures', json={
+            'name': 'Bad', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 513, 'dmxChannelCount': 3
+        })
+        ok('DMX startAddr 513 → 400', r.status_code == 400)
+
+        # Validation: missing channelCount
+        r = c.post('/api/fixtures', json={
+            'name': 'Bad', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 1
+        })
+        ok('DMX missing channelCount → 400', r.status_code == 400)
+
+        # Validation: bad fixtureType
+        r = c.post('/api/fixtures', json={
+            'name': 'Bad', 'type': 'point', 'fixtureType': 'invalid'
+        })
+        ok('Bad fixtureType → 400', r.status_code == 400)
+
+        # Mixed fixture list — check both types
+        r = c.get('/api/fixtures')
+        flist = r.get_json()
+        led_count = sum(1 for f in flist if f.get('fixtureType') == 'led')
+        dmx_count = sum(1 for f in flist if f.get('fixtureType') == 'dmx')
+        ok('Mixed fixture list', led_count >= 1 and dmx_count >= 2)
+
+        # Cleanup DMX fixtures
+        c.delete('/api/fixtures/' + str(dmx_id))
+        c.delete('/api/fixtures/' + str(dmx_id2))
 
         # ── Surfaces (Phase 2) ─────────────────────────────────────────
         r = c.get('/api/surfaces')
@@ -647,7 +741,7 @@ def run():
 
         # ── Demo show ─────────────────────────────────────────────────
         r = c.post('/api/show/demo', json={'mood': 'default'})
-        d = r.get_json()
+        d = r.get_json() or {}
         ok('Demo show ok', d.get('ok'))
         ok('Demo show 8 actions', d.get('actions') == 8)
         ok('Demo show 1 runner', d.get('runners') == 1)
@@ -666,7 +760,7 @@ def run():
         # Demo with no children — should still create actions/runner/show
         c.post('/api/reset')
         r = c.post('/api/show/demo', json={})
-        d = r.get_json()
+        d = r.get_json() or {}
         ok('Demo show no performers → 200', r.status_code == 200 and d.get('ok'))
         ok('Demo no-perf creates 8 actions', d.get('actions') == 8)
         ok('Demo no-perf creates 1 runner', d.get('runners') == 1)

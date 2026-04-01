@@ -36,6 +36,9 @@ from spatial_engine import (catmull_rom_sample, resolve_fixture,
                             evaluate_spatial_effect, blend_pixel_layers)
 from bake_engine import (bake_timeline, pack_lsq_zip, segments_to_load_steps,
                          BakeProgress)
+from dmx_profiles import ProfileLibrary
+from dmx_artnet import ArtNetEngine
+from dmx_sacn import sACNEngine
 
 log = logging.getLogger("slyled")
 log.setLevel(logging.DEBUG)
@@ -126,6 +129,17 @@ _settings = _load("settings", {
 _layout  = _load("layout",  {"canvasW": 10000, "canvasH": 5000, "children": []})
 _stage   = _load("stage",   {"w": 10.0, "h": 5.0, "d": 10.0})
 _fixtures   = _load("fixtures",   [])
+
+# ── Fixture migration: backfill fixtureType on old data ─────────────────────
+_fix_patched = False
+for _f in _fixtures:
+    if "fixtureType" not in _f:
+        _f["fixtureType"] = "led"
+        _fix_patched = True
+if _fix_patched:
+    _save("fixtures", _fixtures)
+del _fix_patched
+
 _surfaces   = _load("surfaces",   [])
 _spatial_fx = _load("spatial_fx", [])
 _timelines  = _load("timelines",  [])
@@ -160,6 +174,11 @@ _nxt_sf  = max((f["id"] for f in _surfaces),   default=-1) + 1
 _nxt_sfx = max((f["id"] for f in _spatial_fx),  default=-1) + 1
 _nxt_tl  = max((t["id"] for t in _timelines),  default=-1) + 1
 _lock  = threading.Lock()
+
+# ── DMX subsystems ───────────────────────────────────────────────────────────
+_profile_lib = ProfileLibrary(data_dir=str(DATA))
+_artnet = ArtNetEngine()
+_sacn = sACNEngine()
 
 # ── UDP helpers ───────────────────────────────────────────────────────────────
 
@@ -331,14 +350,71 @@ def _discover_all():
             if info.get("hostname")}
 
 def _discover():
-    """Broadcast PING, wait for listener to collect PONGs, return unknown performers."""
+    """Broadcast PING, wait for listener to collect PONGs, return unknown LED performers.
+    Excludes DMX bridges (boardType 'dmx') by probing /status on each discovered IP."""
     known_ips = {c["ip"] for c in _children}
     known_hosts = {c.get("hostname") for c in _children}
     _recent_pongs.clear()
     _broadcast_ping_all()
     time.sleep(2.0)
-    return [info for ip, info in _recent_pongs.items()
-            if ip not in known_ips and info.get("hostname") not in known_hosts]
+    results = []
+    for ip, info in _recent_pongs.items():
+        if ip in known_ips or info.get("hostname") in known_hosts:
+            continue
+        # Probe /status to check if this is a DMX bridge
+        try:
+            import urllib.request as _ur
+            resp = _ur.urlopen(f"http://{ip}/status", timeout=2)
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("boardType") == "dmx":
+                continue  # skip DMX bridges
+        except Exception:
+            pass  # if probe fails, include it (probably an LED performer)
+        results.append(info)
+    return results
+
+# ── Async discover / refresh state ───────────────────────────────────────
+_discover_state = {"pending": False, "data": []}
+_refresh_state  = {"pending": False, "data": {}}
+
+def _discover_bg():
+    """Run _discover() in background, store results."""
+    try:
+        _discover_state["data"] = _discover()
+    finally:
+        _discover_state["pending"] = False
+
+def _refresh_bg():
+    """Run refresh-all logic in background, store results."""
+    try:
+        _recent_pongs.clear()
+        _broadcast_ping_all()
+        time.sleep(2.5)
+        responded_ips = set(_recent_pongs.keys())
+        responded_hostnames = {info.get("hostname") for info in _recent_pongs.values()}
+        for c in _children:
+            if c.get("type") == "wled":
+                wled_info = wled_probe(c["ip"], timeout=2.0)
+                if wled_info:
+                    c["status"] = 1
+                    c["seen"] = int(time.time())
+                else:
+                    c["status"] = 0
+            elif c["ip"] in responded_ips or c.get("hostname") in responded_hostnames:
+                for ip, info in _recent_pongs.items():
+                    if info.get("hostname") == c.get("hostname"):
+                        if ip != c["ip"]:
+                            c["ip"] = ip
+                        c.update({k: v for k, v in info.items() if k != "id"})
+                        break
+            else:
+                c["status"] = 0
+        with _lock:
+            _save("children", _children)
+        online = sum(1 for c in _children if c.get("status") == 1)
+        _refresh_state["data"] = {"ok": True, "total": len(_children), "online": online}
+    finally:
+        _refresh_state["pending"] = False
 
 def _child_led_ranges(child):
     """Build ledStart[8] / ledEnd[8] as uint16 arrays from child's string config.
@@ -524,7 +600,19 @@ def api_children():
 
 @app.get("/api/children/discover")
 def api_children_discover():
-    return jsonify(_discover())
+    if _discover_state["pending"]:
+        return jsonify(pending=True)
+    # Start background discovery
+    _discover_state["pending"] = True
+    _discover_state["data"] = []
+    threading.Thread(target=_discover_bg, daemon=True).start()
+    return jsonify(pending=True)
+
+@app.get("/api/children/discover/results")
+def api_children_discover_results():
+    if _discover_state["pending"]:
+        return jsonify(pending=True)
+    return jsonify(_discover_state["data"])
 
 @app.get("/api/children/export")
 def api_children_export():
@@ -621,38 +709,19 @@ def api_children_reboot(cid):
 
 @app.post("/api/children/refresh-all")
 def api_children_refresh_all():
-    """Broadcast ping all children. The UDP listener updates their status
-    from PONGs. Also detects IP changes for offline children."""
-    _recent_pongs.clear()
-    _broadcast_ping_all()
-    time.sleep(2.5)
-    # Record which children responded
-    responded_ips = set(_recent_pongs.keys())
-    responded_hostnames = {info.get("hostname") for info in _recent_pongs.values()}
-    for c in _children:
-        if c.get("type") == "wled":
-            # WLED: probe via HTTP
-            wled_info = wled_probe(c["ip"], timeout=2.0)
-            if wled_info:
-                c["status"] = 1
-                c["seen"] = int(time.time())
-            else:
-                c["status"] = 0
-        elif c["ip"] in responded_ips or c.get("hostname") in responded_hostnames:
-            # SlyLED child responded to ping
-            for ip, info in _recent_pongs.items():
-                if info.get("hostname") == c.get("hostname"):
-                    if ip != c["ip"]:
-                        c["ip"] = ip  # IP change detected
-                    c.update({k: v for k, v in info.items() if k != "id"})
-                    break
-        else:
-            # No response — mark offline
-            c["status"] = 0
-    with _lock:
-        _save("children", _children)
-    online = sum(1 for c in _children if c.get("status") == 1)
-    return jsonify(ok=True, total=len(_children), online=online)
+    """Broadcast ping all children. Non-blocking — starts background thread."""
+    if _refresh_state["pending"]:
+        return jsonify(pending=True)
+    _refresh_state["pending"] = True
+    _refresh_state["data"] = {}
+    threading.Thread(target=_refresh_bg, daemon=True).start()
+    return jsonify(pending=True)
+
+@app.get("/api/children/refresh-all/results")
+def api_children_refresh_all_results():
+    if _refresh_state["pending"]:
+        return jsonify(pending=True)
+    return jsonify(_refresh_state["data"])
 
 @app.get("/api/children/<int:cid>/status")
 def api_child_status(cid):
@@ -800,6 +869,7 @@ def _auto_create_fixtures():
             f = {
                 "id": _nxt_fix,
                 "name": child.get("name") or child.get("hostname") or f"Fixture {_nxt_fix}",
+                "fixtureType": "led",
                 "childId": child["id"],
                 "type": "linear",
                 "strings": [],
@@ -825,9 +895,24 @@ def api_fixtures_create():
     ftype = body.get("type", "linear")
     if ftype not in ("linear", "point", "surface", "group"):
         return jsonify(err="Invalid fixture type"), 400
+    fixture_type = body.get("fixtureType", "led")
+    if fixture_type not in ("led", "dmx"):
+        return jsonify(err="Invalid fixtureType — must be 'led' or 'dmx'"), 400
+    # DMX-specific validation
+    if fixture_type == "dmx":
+        dmx_uni = body.get("dmxUniverse")
+        dmx_addr = body.get("dmxStartAddr")
+        dmx_ch = body.get("dmxChannelCount")
+        if not isinstance(dmx_uni, int) or dmx_uni < 1:
+            return jsonify(err="dmxUniverse must be an integer >= 1"), 400
+        if not isinstance(dmx_addr, int) or dmx_addr < 1 or dmx_addr > 512:
+            return jsonify(err="dmxStartAddr must be 1–512"), 400
+        if not isinstance(dmx_ch, int) or dmx_ch < 1:
+            return jsonify(err="dmxChannelCount must be an integer >= 1"), 400
     with _lock:
         f = {
             "id": _nxt_fix, "name": name or f"Fixture {_nxt_fix}",
+            "fixtureType": fixture_type,
             "childId": body.get("childId"), "type": ftype,
             "childIds": body.get("childIds", []),  # for group fixtures
             "strings": body.get("strings", []),
@@ -835,6 +920,11 @@ def api_fixtures_create():
             "aoeRadius": body.get("aoeRadius", 1000),
             "meshFile": body.get("meshFile"),
         }
+        if fixture_type == "dmx":
+            f["dmxUniverse"] = body["dmxUniverse"]
+            f["dmxStartAddr"] = body["dmxStartAddr"]
+            f["dmxChannelCount"] = body["dmxChannelCount"]
+            f["dmxProfileId"] = body.get("dmxProfileId")
         _fixtures.append(f)
         _nxt_fix += 1
         _save("fixtures", _fixtures)
@@ -853,7 +943,9 @@ def api_fixture_update(fid):
     if not f:
         return jsonify(err="Not found"), 404
     body = request.get_json(silent=True) or {}
-    for k in ("name", "type", "childId", "childIds", "strings", "rotation", "aoeRadius", "meshFile"):
+    for k in ("name", "type", "fixtureType", "childId", "childIds", "strings",
+              "rotation", "aoeRadius", "meshFile",
+              "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId"):
         if k in body:
             f[k] = body[k]
     _save("fixtures", _fixtures)
@@ -922,6 +1014,120 @@ def api_surface_delete(sid):
     _surfaces = [s for s in _surfaces if s["id"] != sid]
     _save("surfaces", _surfaces)
     return jsonify(ok=True)
+
+# ── DMX Profiles ─────────────────────────────────────────────────────────────
+
+@app.get("/api/dmx-profiles")
+def api_dmx_profiles():
+    cat = request.args.get("category")
+    return jsonify(_profile_lib.list_profiles(category=cat))
+
+@app.get("/api/dmx-profiles/<profile_id>")
+def api_dmx_profile_get(profile_id):
+    p = _profile_lib.get_profile(profile_id)
+    if not p:
+        return jsonify(err="Not found"), 404
+    return jsonify(p)
+
+@app.post("/api/dmx-profiles")
+def api_dmx_profile_create():
+    body = request.get_json(silent=True) or {}
+    ok_valid, err = _profile_lib.validate_profile(body)
+    if not ok_valid:
+        return jsonify(err=err), 400
+    if _profile_lib.save_profile(body):
+        return jsonify(ok=True, id=body["id"])
+    return jsonify(err="Failed to save"), 500
+
+@app.delete("/api/dmx-profiles/<profile_id>")
+def api_dmx_profile_delete(profile_id):
+    if _profile_lib.delete_profile(profile_id):
+        return jsonify(ok=True)
+    return jsonify(err="Cannot delete (built-in or not found)"), 400
+
+# ── DMX Output Engines ───────────────────────────────────────────────────────
+
+@app.get("/api/dmx/status")
+def api_dmx_status():
+    return jsonify(
+        artnet=_artnet.status(),
+        sacn=_sacn.status(),
+    )
+
+@app.post("/api/dmx/start")
+def api_dmx_start():
+    body = request.get_json(silent=True) or {}
+    protocol = body.get("protocol", "artnet")
+    if protocol == "artnet":
+        _artnet.start()
+    elif protocol == "sacn":
+        _sacn.start()
+    else:
+        return jsonify(err=f"Unknown protocol: {protocol}"), 400
+    return jsonify(ok=True, protocol=protocol)
+
+@app.post("/api/dmx/stop")
+def api_dmx_stop():
+    body = request.get_json(silent=True) or {}
+    protocol = body.get("protocol")
+    if protocol == "artnet" or protocol is None:
+        _artnet.stop()
+    if protocol == "sacn" or protocol is None:
+        _sacn.stop()
+    return jsonify(ok=True)
+
+@app.post("/api/dmx/blackout")
+def api_dmx_blackout():
+    _artnet.blackout()
+    _sacn.blackout()
+    return jsonify(ok=True)
+
+@app.post("/api/dmx/channel")
+def api_dmx_set_channel():
+    """Set a single DMX channel. Body: {universe, channel, value}."""
+    body = request.get_json(silent=True) or {}
+    uni = body.get("universe", 1)
+    ch = body.get("channel")
+    val = body.get("value", 0)
+    if not ch or ch < 1 or ch > 512:
+        return jsonify(err="channel must be 1-512"), 400
+    if _artnet.running:
+        _artnet.set_channel(uni, ch, val)
+    if _sacn.running:
+        _sacn.set_channel(uni, ch, val)
+    return jsonify(ok=True)
+
+@app.post("/api/dmx/fixture")
+def api_dmx_set_fixture():
+    """Set DMX channels for a fixture by ID. Body: {fixtureId, r, g, b, dimmer}."""
+    body = request.get_json(silent=True) or {}
+    fid = body.get("fixtureId")
+    fixture = next((f for f in _fixtures if f["id"] == fid), None)
+    if not fixture or fixture.get("fixtureType") != "dmx":
+        return jsonify(err="DMX fixture not found"), 404
+    uni = fixture.get("dmxUniverse", 1)
+    addr = fixture.get("dmxStartAddr", 1)
+    pid = fixture.get("dmxProfileId")
+    profile_map = _profile_lib.channel_map(pid) if pid else None
+
+    r = body.get("r", 0)
+    g = body.get("g", 0)
+    b = body.get("b", 0)
+    dimmer = body.get("dimmer")
+
+    for engine in (_artnet, _sacn):
+        if engine.running:
+            engine.set_fixture_rgb(uni, addr, r, g, b,
+                                   {"channel_map": profile_map} if profile_map else None)
+            if dimmer is not None and profile_map and "dimmer" in profile_map:
+                engine.get_universe(uni).set_fixture_dimmer(
+                    addr, dimmer, {"channel_map": profile_map})
+    return jsonify(ok=True)
+
+@app.get("/api/dmx/discovered")
+def api_dmx_discovered():
+    """Return Art-Net nodes discovered via ArtPoll."""
+    return jsonify(_artnet.discovered_nodes)
 
 # ── Spatial Effects (Phase 3) ───────────────────────────────────────────────
 
@@ -1016,7 +1222,8 @@ def _build_resolve_input(fixture):
     child_pos = [lp.get("x", 0), lp.get("y", 0), lp.get("z", 0)]
     child = next((c for c in _children if c["id"] == fixture.get("childId")), None)
     strings = fixture.get("strings", [])
-    if not strings and child:
+    has_leds = strings and any(s.get("leds", 0) > 0 for s in strings)
+    if not has_leds and child:
         strings = [
             {"leds": s.get("leds", 0), "mm": s.get("mm", 1000), "sdir": s.get("sdir", 0)}
             for s in child.get("strings", [])[:child.get("sc", 0)]
@@ -1087,6 +1294,10 @@ def api_timeline_frame(tid):
     if not tl:
         return jsonify(err="Not found"), 404
     t = float(request.args.get("t", 0))
+
+    # Auto-create fixtures from children if none exist (e.g. after factory reset)
+    if not _fixtures and _children:
+        _auto_create_fixtures()
 
     # Expand allPerformers tracks
     raw_tracks = tl.get("tracks", [])
@@ -1172,7 +1383,9 @@ def api_timeline_bake(tid):
     enriched_fixtures = []
     for f in _fixtures:
         ef = dict(f)
-        if not ef.get("strings"):
+        fix_strings = ef.get("strings", [])
+        has_leds = fix_strings and any(s.get("leds", 0) > 0 for s in fix_strings)
+        if not has_leds:
             child = next((c for c in _children if c["id"] == ef.get("childId")), None)
             if child:
                 ef["strings"] = [
@@ -1317,7 +1530,7 @@ def api_bake_sync(tid):
     _sync_progress = {
         "done": False, "allReady": False,
         "performers": {p["child"]["id"]: {
-            "name": p["child"].get("name") or p["child"].get("hostname"),
+            "name": p.get("name") or p["child"].get("name") or p["child"].get("hostname"),
             "ip": p["child"]["ip"],
             "status": "pending", "stepsLoaded": 0, "totalSteps": len(p["steps"]),
             "retries": 0, "verified": False, "error": None
@@ -2413,11 +2626,11 @@ def api_show_preset():
             "durationS": 40,
             "effects": [{"name": "Blue Wave", "category": "spatial-field", "shape": "plane",
                          "r": 0, "g": 80, "b": 220, "size": {"normal": [1,0,0], "thickness": 800},
-                         "motion": {"startPos": [0,1000,0], "endPos": [3000,1000,0], "durationS": 10, "easing": "ease-in-out"},
+                         "motion": {"startPos": [0,2500,0], "endPos": [10000,2500,0], "durationS": 10, "easing": "ease-in-out"},
                          "blend": "add"},
                         {"name": "Teal Wash", "category": "spatial-field", "shape": "sphere",
-                         "r": 0, "g": 180, "b": 160, "size": {"radius": 1500},
-                         "motion": {"startPos": [3000,500,0], "endPos": [0,1500,0], "durationS": 12, "easing": "ease-in-out"},
+                         "r": 0, "g": 180, "b": 160, "size": {"radius": 2500},
+                         "motion": {"startPos": [8000,1000,0], "endPos": [0,3000,0], "durationS": 12, "easing": "ease-in-out"},
                          "blend": "screen"}],
         },
         "sunset": {
@@ -2426,8 +2639,8 @@ def api_show_preset():
             "actions": [{"name": "Warm Breathe", "type": 3, "r": 255, "g": 100, "b": 20,
                          "periodMs": 4000, "minBri": 30}],
             "effects": [{"name": "Golden Sweep", "category": "spatial-field", "shape": "plane",
-                         "r": 255, "g": 160, "b": 30, "size": {"normal": [0,1,0], "thickness": 500},
-                         "motion": {"startPos": [1500,2000,0], "endPos": [1500,0,0], "durationS": 20, "easing": "ease-out"},
+                         "r": 255, "g": 160, "b": 30, "size": {"normal": [0,1,0], "thickness": 1000},
+                         "motion": {"startPos": [5000,5000,0], "endPos": [5000,0,0], "durationS": 20, "easing": "ease-out"},
                          "blend": "screen"}],
         },
         "police": {
@@ -2436,8 +2649,8 @@ def api_show_preset():
             "actions": [{"name": "Red Strobe", "type": 9, "r": 255, "g": 0, "b": 0,
                          "periodMs": 200, "p8a": 50}],
             "effects": [{"name": "Blue Flash Sweep", "category": "spatial-field", "shape": "box",
-                         "r": 0, "g": 0, "b": 255, "size": {"width": 1000, "height": 3000, "depth": 2000},
-                         "motion": {"startPos": [0,1000,0], "endPos": [3000,1000,0], "durationS": 2, "easing": "linear"},
+                         "r": 0, "g": 0, "b": 255, "size": {"width": 2000, "height": 5000, "depth": 3000},
+                         "motion": {"startPos": [0,2500,0], "endPos": [10000,2500,0], "durationS": 2, "easing": "linear"},
                          "blend": "add"}],
         },
         "starfield": {
@@ -2450,12 +2663,12 @@ def api_show_preset():
             "name": "Aurora Borealis",
             "durationS": 40,
             "effects": [{"name": "Green Curtain", "category": "spatial-field", "shape": "plane",
-                         "r": 0, "g": 255, "b": 80, "size": {"normal": [1,0.3,0], "thickness": 700},
-                         "motion": {"startPos": [0,1500,0], "endPos": [3000,1800,0], "durationS": 15, "easing": "ease-in-out"},
+                         "r": 0, "g": 255, "b": 80, "size": {"normal": [1,0.3,0], "thickness": 1500},
+                         "motion": {"startPos": [0,2000,0], "endPos": [10000,3000,0], "durationS": 15, "easing": "ease-in-out"},
                          "blend": "screen"},
                         {"name": "Purple Shimmer", "category": "spatial-field", "shape": "sphere",
-                         "r": 120, "g": 0, "b": 200, "size": {"radius": 1000},
-                         "motion": {"startPos": [2000,2000,0], "endPos": [500,1000,0], "durationS": 12, "easing": "ease-in-out"},
+                         "r": 120, "g": 0, "b": 200, "size": {"radius": 2000},
+                         "motion": {"startPos": [8000,3000,0], "endPos": [1000,1500,0], "durationS": 12, "easing": "ease-in-out"},
                          "blend": "add"}],
         },
     }
@@ -2540,28 +2753,37 @@ _DEFAULT_TIMELINES = []
 # ── WiFi credentials ─────────────────────────────────────────────────────────
 
 import base64, hashlib
+from cryptography.fernet import Fernet, InvalidToken
 
 def _wifi_key():
-    """Derive an encryption key from machine identity (not portable, but protects at rest)."""
+    """Derive a Fernet key from machine identity using PBKDF2."""
     seed = (socket.gethostname() + "-slyled-wifi").encode()
-    return hashlib.sha256(seed).digest()
+    dk = hashlib.pbkdf2_hmac("sha256", seed, b"slyled-salt-v2", 100_000, dklen=32)
+    return base64.urlsafe_b64encode(dk)
 
 def _encrypt_pw(plain):
     if not plain:
         return ""
-    key = _wifi_key()
-    out = bytes(b ^ key[i % len(key)] for i, b in enumerate(plain.encode("utf-8")))
-    return base64.b64encode(out).decode("ascii")
+    f = Fernet(_wifi_key())
+    return f.encrypt(plain.encode("utf-8")).decode("ascii")
 
 def _decrypt_pw(enc):
     if not enc:
         return ""
     try:
-        key = _wifi_key()
-        raw = base64.b64decode(enc)
-        return bytes(b ^ key[i % len(key)] for i, b in enumerate(raw)).decode("utf-8")
-    except Exception:
-        return enc   # fallback: return as-is if decryption fails (old unencrypted data)
+        f = Fernet(_wifi_key())
+        return f.decrypt(enc.encode("ascii")).decode("utf-8")
+    except (InvalidToken, Exception):
+        # Fallback: try legacy XOR decryption for migration
+        try:
+            legacy_seed = (socket.gethostname() + "-slyled-wifi").encode()
+            legacy_key = hashlib.sha256(legacy_seed).digest()
+            raw = base64.b64decode(enc)
+            plain = bytes(b ^ legacy_key[i % len(legacy_key)] for i, b in enumerate(raw)).decode("utf-8")
+            # Re-encrypt with Fernet for auto-migration
+            return plain
+        except Exception:
+            return enc   # last resort: return as-is (old unencrypted data)
 
 @app.get("/api/wifi")
 def api_wifi_get():
