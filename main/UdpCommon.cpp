@@ -420,8 +420,14 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
       "\"artnetRx\":%lu,\"artnetPps\":%lu,\"artnetSender\":\"%s\"}",
       (unsigned long)artnetRxCount, (unsigned long)artnetPps, artnetLastSender);
     sendBuf(client, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: %d\r\n\r\n", pos);
-    client.print(buf);
-    client.flush();
+    // Send in chunks to avoid WiFi TX buffer truncation (~280 bytes limit)
+    for (int sent = 0; sent < pos; ) {
+      int chunk = pos - sent;
+      if (chunk > 240) chunk = 240;
+      client.write((const uint8_t*)(buf + sent), chunk);
+      client.flush();
+      sent += chunk;
+    }
   } else if (isPost && strstr(req, " /dmx/blackout ")) {
     dmxBlackout();
     sendJsonOk(client);

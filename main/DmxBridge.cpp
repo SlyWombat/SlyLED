@@ -43,7 +43,7 @@ volatile bool dmxSelfTestOk = false;
 // ── Config persistence ───────────────────────────────────────────────────────
 
 // Magic + version for flash storage validation
-static constexpr uint32_t DMX_CFG_MAGIC = 0xDC01;
+static constexpr uint32_t DMX_CFG_MAGIC = 0xDC02;  // bumped: subnet field added
 
 #ifdef BOARD_GIGA_DMX
   // Giga: persist config to internal flash via FlashIAP

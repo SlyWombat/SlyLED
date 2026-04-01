@@ -1,10 +1,9 @@
 /*
  * ArtNetRecv.h — Art-Net 4 receiver for DMX bridge.
  *
- * Listens on UDP 6454 for ArtDMX packets and writes to dmxBuf[].
- * Responds to ArtPoll with ArtPollReply for node discovery.
- *
- * Guarded by #ifdef BOARD_DMX_BRIDGE — safe to include on any board.
+ * MUST be included BEFORE any WiFi headers to override WIFI_UDP_BUFFER_SIZE.
+ * ArtDMX packets are 530 bytes (18 header + 512 data), exceeding the
+ * default 508-byte WiFiUDP buffer. We bump it to 580 for safety.
  */
 
 #ifndef ARTNETRECV_H
@@ -14,23 +13,23 @@
 
 #ifdef BOARD_DMX_BRIDGE
 
+// WIFI_UDP_BUFFER_SIZE overridden in BoardConfig.h (580 bytes for ArtDMX)
 #include <WiFiUdp.h>
 
 constexpr uint16_t ARTNET_PORT    = 6454;
-constexpr uint8_t  ARTNET_HDR_LEN = 8;   // "Art-Net\0"
+constexpr uint8_t  ARTNET_HDR_LEN = 8;
 
-// Opcodes
 constexpr uint16_t ARTNET_OP_POLL       = 0x2000;
 constexpr uint16_t ARTNET_OP_POLL_REPLY = 0x2100;
 constexpr uint16_t ARTNET_OP_DMX        = 0x5000;
 
 extern WiFiUDP       artnetUDP;
-extern volatile uint32_t artnetRxCount;     // ArtDMX packets received
-extern volatile uint32_t artnetPps;         // packets per second (rolling)
-extern char          artnetLastSender[16];  // IP of last ArtDMX sender
+extern volatile uint32_t artnetRxCount;
+extern volatile uint32_t artnetPps;
+extern char          artnetLastSender[16];
 
-void artnetInit();       // Bind socket — call after WiFi connected
-void pollArtNet();       // Non-blocking receive — call every loop()
+void artnetInit();
+void pollArtNet();
 
 #endif // BOARD_DMX_BRIDGE
 #endif // ARTNETRECV_H

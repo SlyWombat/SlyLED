@@ -48,6 +48,16 @@
   #define BOARD_GIGA_CHILD_OR_DMX
 #endif
 
+// ── WiFiUDP buffer override for Art-Net (ArtDMX = 530 bytes > default 508) ───
+#ifdef BOARD_DMX_BRIDGE
+  #undef  WIFI_UDP_BUFFER_SIZE
+  #define WIFI_UDP_BUFFER_SIZE 580
+#endif
+#ifdef BOARD_GIGA_DMX
+  #undef  WIFI_UDP_BUFFER_SIZE
+  #define WIFI_UDP_BUFFER_SIZE 580
+#endif
+
 // ── Board-specific includes ───────────────────────────────────────────────────
 
 #ifdef BOARD_GIGA

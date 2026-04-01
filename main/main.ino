@@ -275,22 +275,20 @@ void loop() {
   yield();
 
 #elif defined(BOARD_DMX_BRIDGE)
-  // DMX bridge: dumb node — dmxBuf[] populated by /dmx/set (test UI),
-  // Art-Net receiver (future #108), or sACN receiver (future #109).
-  // No action rendering, no runners. Parent transmits channel data.
+  // DMX bridge: dumb node — Art-Net/sACN → dmxBuf → DMX output
+  // pollArtNet() is highest priority — must run frequently to catch 40Hz stream
+  pollArtNet();
   {
     static unsigned long lastFrame = 0;
-
-    // Output DMX frame at 40Hz
     if (millis() - lastFrame >= (1000 / DMX_FRAME_HZ)) {
       lastFrame = millis();
       dmxSendFrame();
     }
   }
-  pollArtNet();     // Art-Net — ArtDMX → dmxBuf, ArtPoll → reply
+  pollArtNet();     // poll again after frame send
   pollUDP();        // SlyLED protocol — config, PING/PONG, status
+  pollArtNet();     // poll again after UDP
   handleClient();   // HTTP — config UI, /dmx/set, /dmx/channels
-  delay(5);
 
 #else  // ESP32
   handleClient();
