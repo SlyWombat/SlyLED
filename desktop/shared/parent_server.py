@@ -1146,18 +1146,35 @@ _DMX_SETTINGS_DEFAULTS = {
     "protocol": "artnet",
     "frameRate": 40,
     "bindIp": "0.0.0.0",
-    "unicastTargets": {},
+    "universeRoutes": [],     # [{universe: int, destination: ip, label: str}]
     "sacnPriority": 100,
     "sacnSourceName": "SlyLED",
 }
 _dmx_settings = _load("dmx_settings", dict(_DMX_SETTINGS_DEFAULTS))
+# Migrate old unicastTargets to universeRoutes
+if "unicastTargets" in _dmx_settings and not _dmx_settings.get("universeRoutes"):
+    _old = _dmx_settings.pop("unicastTargets", {})
+    _dmx_settings["universeRoutes"] = [
+        {"universe": int(k), "destination": v, "label": ""}
+        for k, v in _old.items() if v
+    ]
+
+def _routes_to_unicast(routes):
+    """Convert universeRoutes list to {universe_int: ip} dict for engine."""
+    result = {}
+    for r in (routes or []):
+        uni = r.get("universe")
+        dest = r.get("destination", "").strip()
+        if uni is not None and dest:
+            result[int(uni)] = dest
+    return result
 
 def _apply_dmx_settings():
     """Apply persisted DMX settings to engines."""
     s = _dmx_settings
     _artnet.configure(
         bind_ip=s.get("bindIp", "0.0.0.0"),
-        unicast_targets={int(k): v for k, v in s.get("unicastTargets", {}).items()},
+        unicast_targets=_routes_to_unicast(s.get("universeRoutes", [])),
         frame_rate=s.get("frameRate", 40),
     )
     _sacn.configure(
@@ -1212,16 +1229,24 @@ def api_dmx_settings_get():
 @app.post("/api/dmx/settings")
 def api_dmx_settings_save():
     body = request.get_json(silent=True) or {}
-    for k in ("protocol", "frameRate", "bindIp", "unicastTargets",
+    for k in ("protocol", "frameRate", "bindIp", "universeRoutes",
               "sacnPriority", "sacnSourceName"):
         if k in body:
             _dmx_settings[k] = body[k]
+    # Remove legacy field
+    _dmx_settings.pop("unicastTargets", None)
     fr = _dmx_settings.get("frameRate", 40)
     if not isinstance(fr, int) or fr < 1 or fr > 44:
         _dmx_settings["frameRate"] = 40
     pri = _dmx_settings.get("sacnPriority", 100)
     if not isinstance(pri, int) or pri < 0 or pri > 200:
         _dmx_settings["sacnPriority"] = 100
+    # Validate routes
+    routes = _dmx_settings.get("universeRoutes", [])
+    _dmx_settings["universeRoutes"] = [
+        r for r in routes
+        if isinstance(r, dict) and r.get("destination")
+    ]
     _save("dmx_settings", _dmx_settings)
     _apply_dmx_settings()
     return jsonify(ok=True)

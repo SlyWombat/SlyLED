@@ -246,12 +246,10 @@ body.light .li:hover{border-color:#3b82f6}
       <label>sACN Source Name</label><input id='dmx-src' value='SlyLED' style='width:200px'>
     </div>
     <div id='dmx-artnet-opts'>
-      <label style='display:flex;align-items:center;gap:.5em'>
-        <input type='checkbox' id='dmx-ucast-on' onchange='dmxUcastToggle()'> Enable Unicast
-      </label>
-      <div id='dmx-ucast-wrap' style='display:none;margin-top:.3em'>
-        <div id='dmx-ucast-list' style='font-size:.82em;color:#94a3b8'>Loading discovered nodes...</div>
-      </div>
+      <div style='margin-top:.5em;font-size:.85em;font-weight:bold;color:#94a3b8'>Universe Routing</div>
+      <div style='font-size:.72em;color:#556;margin-bottom:.3em'>Map universes to specific bridges. Unrouted universes broadcast.</div>
+      <div id='dmx-routes' style='font-size:.82em'></div>
+      <button class='btn' onclick='dmxAddRoute()' style='font-size:.72em;margin-top:.3em'>+ Add Route</button>
     </div>
     <div style='margin-top:.8em;display:flex;gap:.5em;flex-wrap:wrap;align-items:center'>
       <button class='btn btn-on' onclick='saveDmxSettings()'>Save DMX Settings</button>
@@ -4035,111 +4033,112 @@ function dmxProtoChange(){
 }
 
 var _dmxInterfaces=[];
-var _dmxUcastNodes={};
+var _dmxDestinations=[];  // [{ip, label}] from children + discovered
+var _dmxRoutes=[];        // [{universe, destination, label}]
 
 function loadDmxSettings(){
-  // Load network interfaces for bind dropdown
+  // Load network interfaces, destinations, and settings in parallel
   ra('GET','/api/dmx/interfaces',null,function(ifaces){
     _dmxInterfaces=ifaces||[];
     var sel=document.getElementById('dmx-bind');
     if(sel){
       sel.innerHTML='';
       _dmxInterfaces.forEach(function(ifc){
-        var o=document.createElement('option');
-        o.value=ifc.ip;
+        var o=document.createElement('option');o.value=ifc.ip;
         o.textContent=ifc.ip+(ifc.name&&ifc.name!=='All Interfaces'?' ('+ifc.name+')':'');
         sel.appendChild(o);
       });
     }
-    // Now load settings and set the selected value
-    ra('GET','/api/dmx/settings',null,function(d){
-      if(!d)return;
-      var proto=d.protocol||'artnet';
-      var radios=document.getElementsByName('dmx-proto');
-      for(var i=0;i<radios.length;i++){radios[i].checked=(radios[i].value===proto);}
-      document.getElementById('dmx-fps').value=d.frameRate||40;
-      if(sel)sel.value=d.bindIp||'0.0.0.0';
-      document.getElementById('dmx-pri').value=d.sacnPriority||100;
-      document.getElementById('dmx-pri-val').textContent=d.sacnPriority||100;
-      document.getElementById('dmx-src').value=d.sacnSourceName||'SlyLED';
-      // Unicast targets
-      var ucast=d.unicastTargets||{};
-      var hasUcast=Object.keys(ucast).length>0;
-      document.getElementById('dmx-ucast-on').checked=hasUcast;
-      _dmxUcastNodes=ucast;
-      dmxUcastToggle();
-      dmxProtoChange();
-      // Load DMX children as unicast targets + any Art-Net discovered nodes
-      ra('GET','/api/children',null,function(children){
-        var targets={};
-        // Add registered DMX bridge children
-        (children||[]).forEach(function(c){
-          if(c.type==='dmx'||c.boardType==='DMX Bridge')
-            targets[c.ip]={shortName:c.name||c.hostname||c.ip, type:'SlyLED DMX Bridge'};
-        });
-        // Merge Art-Net discovered nodes
-        ra('GET','/api/dmx/discovered',null,function(nodes){
-          for(var ip in (nodes||{}))
-            targets[ip]=targets[ip]||nodes[ip];
-          dmxRenderUcast(targets,ucast);
-        });
+    // Build destination list from children + discovered nodes
+    ra('GET','/api/children',null,function(children){
+      _dmxDestinations=[];
+      (children||[]).forEach(function(c){
+        if(c.type==='dmx'||c.boardType==='DMX Bridge')
+          _dmxDestinations.push({ip:c.ip,label:c.name||c.hostname||c.ip});
       });
-      // Engine status
-      ra('GET','/api/dmx/status',null,function(st){
-        if(!st)return;
-        var a=st.artnet||{},s=st.sacn||{};
-        var running=a.running||s.running;
-        var el=document.getElementById('dmx-status');
-        if(el)el.textContent=running?'Engine: running ('+(a.running?'Art-Net':'sACN')+')':'Engine: stopped';
+      ra('GET','/api/dmx/discovered',null,function(nodes){
+        for(var ip in (nodes||{})){
+          if(!_dmxDestinations.some(function(d){return d.ip===ip;}))
+            _dmxDestinations.push({ip:ip,label:nodes[ip].shortName||ip});
+        }
+        // Now load settings
+        ra('GET','/api/dmx/settings',null,function(d){
+          if(!d)return;
+          var proto=d.protocol||'artnet';
+          var radios=document.getElementsByName('dmx-proto');
+          for(var i=0;i<radios.length;i++){radios[i].checked=(radios[i].value===proto);}
+          document.getElementById('dmx-fps').value=d.frameRate||40;
+          if(sel)sel.value=d.bindIp||'0.0.0.0';
+          document.getElementById('dmx-pri').value=d.sacnPriority||100;
+          document.getElementById('dmx-pri-val').textContent=d.sacnPriority||100;
+          document.getElementById('dmx-src').value=d.sacnSourceName||'SlyLED';
+          _dmxRoutes=d.universeRoutes||[];
+          dmxRenderRoutes();
+          dmxProtoChange();
+          ra('GET','/api/dmx/status',null,function(st){
+            if(!st)return;
+            var a=st.artnet||{},s=st.sacn||{};
+            var running=a.running||s.running;
+            var el=document.getElementById('dmx-status');
+            if(el)el.textContent=running?'Engine: running ('+(a.running?'Art-Net':'sACN')+')':'Engine: stopped';
+          });
+        });
       });
     });
   });
 }
 
-function dmxUcastToggle(){
-  var on=document.getElementById('dmx-ucast-on').checked;
-  document.getElementById('dmx-ucast-wrap').style.display=on?'':'none';
-}
-
-function dmxRenderUcast(targets,saved){
-  var el=document.getElementById('dmx-ucast-list');if(!el)return;
-  if(!Object.keys(targets).length){
-    el.innerHTML='<span style="color:#555">No DMX nodes found. Register a DMX bridge in Setup, or start Art-Net to discover nodes.</span>';
+function dmxRenderRoutes(){
+  var el=document.getElementById('dmx-routes');if(!el)return;
+  if(!_dmxRoutes.length){
+    el.innerHTML='<div style="color:#555;font-size:.82em">No routes. All universes will broadcast.</div>';
     return;
   }
-  var h='<div style="font-size:.75em;color:#64748b;margin-bottom:.3em">Select unicast target:</div>';
-  for(var ip in targets){
-    var info=targets[ip];
-    var name=info.shortName||info.longName||info.type||'';
-    var checked=false;
-    for(var u in saved){if(saved[u]===ip)checked=true;}
-    h+='<label style="display:flex;align-items:center;gap:.4em;margin:.15em 0">'
-      +'<input type="checkbox" data-ip="'+escapeHtml(ip)+'" class="dmx-ucast-cb"'+(checked?' checked':'')+'>'
-      +'<span style="font-weight:bold">'+escapeHtml(ip)+'</span>'
-      +'<span style="color:#556;font-size:.9em">'+escapeHtml(name)+'</span></label>';
-  }
-  el.innerHTML=h;
+  var h='<table style="width:100%;font-size:.82em;border-collapse:collapse">'
+    +'<tr style="color:#64748b"><th style="text-align:left;padding:.2em .3em">Universe</th>'
+    +'<th style="text-align:left;padding:.2em .3em">Destination</th>'
+    +'<th style="text-align:left;padding:.2em .3em">Label</th><th></th></tr>';
+  _dmxRoutes.forEach(function(r,idx){
+    h+='<tr style="border-top:1px solid #1e293b">';
+    h+='<td style="padding:.2em .3em"><input type="number" min="0" max="32767" value="'+(r.universe||0)+'" style="width:50px" onchange="dmxRouteChg('+idx+',\'universe\',parseInt(this.value))"></td>';
+    h+='<td style="padding:.2em .3em"><select style="width:150px" onchange="dmxRouteChg('+idx+',\'destination\',this.value)">';
+    h+='<option value="">Broadcast</option>';
+    _dmxDestinations.forEach(function(d){
+      h+='<option value="'+escapeHtml(d.ip)+'"'+(r.destination===d.ip?' selected':'')+'>'+escapeHtml(d.ip)+' ('+escapeHtml(d.label)+')</option>';
+    });
+    // If saved destination isn't in the list, add it
+    if(r.destination&&!_dmxDestinations.some(function(d){return d.ip===r.destination;}))
+      h+='<option value="'+escapeHtml(r.destination)+'" selected>'+escapeHtml(r.destination)+'</option>';
+    h+='</select></td>';
+    h+='<td style="padding:.2em .3em"><input value="'+escapeHtml(r.label||'')+'" style="width:100px" onchange="dmxRouteChg('+idx+',\'label\',this.value)"></td>';
+    h+='<td style="padding:.2em .3em"><span style="cursor:pointer;color:#f66" onclick="dmxDelRoute('+idx+')">&times;</span></td></tr>';
+  });
+  el.innerHTML=h+'</table>';
 }
+
+function dmxRouteChg(idx,field,val){if(_dmxRoutes[idx])_dmxRoutes[idx][field]=val;}
+
+function dmxAddRoute(){
+  var nextUni=0;
+  if(_dmxRoutes.length)nextUni=Math.max.apply(null,_dmxRoutes.map(function(r){return r.universe||0;}))+1;
+  var defaultDest=_dmxDestinations.length?_dmxDestinations[0].ip:'';
+  _dmxRoutes.push({universe:nextUni,destination:defaultDest,label:''});
+  dmxRenderRoutes();
+}
+
+function dmxDelRoute(idx){_dmxRoutes.splice(idx,1);dmxRenderRoutes();}
 
 function saveDmxSettings(){
   var proto='artnet';
   var radios=document.getElementsByName('dmx-proto');
   for(var i=0;i<radios.length;i++){if(radios[i].checked){proto=radios[i].value;break;}}
-  // Build unicast targets from checked nodes
-  var ucast={};
-  if(document.getElementById('dmx-ucast-on').checked){
-    var cbs=document.querySelectorAll('.dmx-ucast-cb:checked');
-    cbs.forEach(function(cb,idx){
-      ucast[String(idx+1)]=cb.dataset.ip;
-    });
-  }
   var body={
     protocol:proto,
     frameRate:parseInt(document.getElementById('dmx-fps').value)||40,
     bindIp:document.getElementById('dmx-bind').value||'0.0.0.0',
     sacnPriority:parseInt(document.getElementById('dmx-pri').value)||100,
     sacnSourceName:document.getElementById('dmx-src').value.trim()||'SlyLED',
-    unicastTargets:ucast
+    universeRoutes:_dmxRoutes.filter(function(r){return r.destination;})
   };
   ra('POST','/api/dmx/settings',body,function(r){
     document.getElementById('dmx-status').textContent=r&&r.ok?'Settings saved':'Save failed';
