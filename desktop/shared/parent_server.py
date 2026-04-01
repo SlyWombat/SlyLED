@@ -1169,6 +1169,42 @@ def _apply_dmx_settings():
 
 _apply_dmx_settings()
 
+@app.get("/api/dmx/interfaces")
+def api_dmx_interfaces():
+    """List local network interfaces with their IPv4 addresses."""
+    result = [{"name": "All Interfaces", "ip": "0.0.0.0"}]
+    try:
+        # Cross-platform: use socket.getaddrinfo on the hostname
+        import socket as _sock
+        hostname = _sock.gethostname()
+        for info in _sock.getaddrinfo(hostname, None, _sock.AF_INET):
+            ip = info[4][0]
+            if ip and ip != "127.0.0.1" and not any(r["ip"] == ip for r in result):
+                result.append({"name": hostname, "ip": ip})
+        # Also try netifaces if available (gives interface names)
+        try:
+            import netifaces
+            for iface in netifaces.interfaces():
+                addrs = netifaces.ifaddresses(iface)
+                for addr_info in addrs.get(netifaces.AF_INET, []):
+                    ip = addr_info.get("addr", "")
+                    if ip and ip != "127.0.0.1" and not any(r["ip"] == ip for r in result):
+                        result.append({"name": iface, "ip": ip})
+        except ImportError:
+            pass
+    except Exception:
+        pass
+    # Fallback: probe default route
+    if len(result) == 1:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            result.append({"name": "default", "ip": s.getsockname()[0]})
+            s.close()
+        except Exception:
+            pass
+    return jsonify(result)
+
 @app.get("/api/dmx/settings")
 def api_dmx_settings_get():
     return jsonify(_dmx_settings)

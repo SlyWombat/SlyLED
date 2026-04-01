@@ -239,15 +239,19 @@ body.light .li:hover{border-color:#3b82f6}
       <label style='display:flex;align-items:center;gap:.3em'><input type='radio' name='dmx-proto' value='sacn' onchange='dmxProtoChange()'>sACN</label>
     </div>
     <label>Frame Rate (Hz)</label><input id='dmx-fps' type='number' min='1' max='44' value='40' style='width:100px'>
-    <label>Bind IP</label><input id='dmx-bind' value='0.0.0.0' style='width:200px'>
+    <label>Bind Interface</label><select id='dmx-bind' style='width:250px'><option value='0.0.0.0'>Loading...</option></select>
     <div id='dmx-sacn-opts' style='display:none'>
       <label>sACN Priority <span id='dmx-pri-val' style='color:#64748b;font-size:.75em'>100</span></label>
       <input id='dmx-pri' type='range' min='0' max='200' value='100' style='width:200px' oninput="document.getElementById('dmx-pri-val').textContent=this.value">
       <label>sACN Source Name</label><input id='dmx-src' value='SlyLED' style='width:200px'>
     </div>
     <div id='dmx-artnet-opts'>
-      <label>Unicast Targets <span style='color:#64748b;font-size:.75em'>(universe:ip per line)</span></label>
-      <textarea id='dmx-ucast' rows='3' style='width:100%;font-size:.82em;font-family:monospace' placeholder='1:192.168.1.100&#10;2:192.168.1.101'></textarea>
+      <label style='display:flex;align-items:center;gap:.5em'>
+        <input type='checkbox' id='dmx-ucast-on' onchange='dmxUcastToggle()'> Enable Unicast
+      </label>
+      <div id='dmx-ucast-wrap' style='display:none;margin-top:.3em'>
+        <div id='dmx-ucast-list' style='font-size:.82em;color:#94a3b8'>Loading discovered nodes...</div>
+      </div>
     </div>
     <div style='margin-top:.8em;display:flex;gap:.5em;flex-wrap:wrap;align-items:center'>
       <button class='btn btn-on' onclick='saveDmxSettings()'>Save DMX Settings</button>
@@ -4030,36 +4034,101 @@ function dmxProtoChange(){
   document.getElementById('dmx-artnet-opts').style.display=(proto==='artnet')?'':'none';
 }
 
+var _dmxInterfaces=[];
+var _dmxUcastNodes={};
+
 function loadDmxSettings(){
-  ra('GET','/api/dmx/settings',null,function(d){
-    if(!d)return;
-    var proto=d.protocol||'artnet';
-    var radios=document.getElementsByName('dmx-proto');
-    for(var i=0;i<radios.length;i++){radios[i].checked=(radios[i].value===proto);}
-    document.getElementById('dmx-fps').value=d.frameRate||40;
-    document.getElementById('dmx-bind').value=d.bindIp||'0.0.0.0';
-    document.getElementById('dmx-pri').value=d.sacnPriority||100;
-    document.getElementById('dmx-pri-val').textContent=d.sacnPriority||100;
-    document.getElementById('dmx-src').value=d.sacnSourceName||'SlyLED';
-    var ucast=d.unicastTargets||[];
-    document.getElementById('dmx-ucast').value=ucast.join('\n');
-    dmxProtoChange();
-    if(d.engineState){
-      document.getElementById('dmx-status').textContent='Engine: '+d.engineState;
+  // Load network interfaces for bind dropdown
+  ra('GET','/api/dmx/interfaces',null,function(ifaces){
+    _dmxInterfaces=ifaces||[];
+    var sel=document.getElementById('dmx-bind');
+    if(sel){
+      sel.innerHTML='';
+      _dmxInterfaces.forEach(function(ifc){
+        var o=document.createElement('option');
+        o.value=ifc.ip;
+        o.textContent=ifc.ip+(ifc.name&&ifc.name!=='All Interfaces'?' ('+ifc.name+')':'');
+        sel.appendChild(o);
+      });
     }
+    // Now load settings and set the selected value
+    ra('GET','/api/dmx/settings',null,function(d){
+      if(!d)return;
+      var proto=d.protocol||'artnet';
+      var radios=document.getElementsByName('dmx-proto');
+      for(var i=0;i<radios.length;i++){radios[i].checked=(radios[i].value===proto);}
+      document.getElementById('dmx-fps').value=d.frameRate||40;
+      if(sel)sel.value=d.bindIp||'0.0.0.0';
+      document.getElementById('dmx-pri').value=d.sacnPriority||100;
+      document.getElementById('dmx-pri-val').textContent=d.sacnPriority||100;
+      document.getElementById('dmx-src').value=d.sacnSourceName||'SlyLED';
+      // Unicast targets
+      var ucast=d.unicastTargets||{};
+      var hasUcast=Object.keys(ucast).length>0;
+      document.getElementById('dmx-ucast-on').checked=hasUcast;
+      _dmxUcastNodes=ucast;
+      dmxUcastToggle();
+      dmxProtoChange();
+      // Load discovered Art-Net nodes
+      ra('GET','/api/dmx/discovered',null,function(nodes){
+        _dmxUcastNodes=Object.assign({},ucast);
+        dmxRenderUcast(nodes||{},ucast);
+      });
+      // Engine status
+      ra('GET','/api/dmx/status',null,function(st){
+        if(!st)return;
+        var a=st.artnet||{},s=st.sacn||{};
+        var running=a.running||s.running;
+        var el=document.getElementById('dmx-status');
+        if(el)el.textContent=running?'Engine: running ('+(a.running?'Art-Net':'sACN')+')':'Engine: stopped';
+      });
+    });
   });
+}
+
+function dmxUcastToggle(){
+  var on=document.getElementById('dmx-ucast-on').checked;
+  document.getElementById('dmx-ucast-wrap').style.display=on?'':'none';
+}
+
+function dmxRenderUcast(discovered,saved){
+  var el=document.getElementById('dmx-ucast-list');if(!el)return;
+  var allIps={};
+  // Merge discovered nodes and saved targets
+  for(var ip in discovered)allIps[ip]=discovered[ip].shortName||discovered[ip].longName||ip;
+  for(var uni in saved)allIps[saved[uni]]=allIps[saved[uni]]||('Universe '+uni);
+  if(!Object.keys(allIps).length){
+    el.innerHTML='<span style="color:#555">No Art-Net nodes discovered. Start the engine and poll will find them.</span>';
+    return;
+  }
+  var h='<div style="font-size:.75em;color:#64748b;margin-bottom:.3em">Select unicast target:</div>';
+  for(var ip in allIps){
+    var checked=false;
+    for(var u in saved){if(saved[u]===ip)checked=true;}
+    h+='<label style="display:flex;align-items:center;gap:.4em;margin:.15em 0">'
+      +'<input type="checkbox" data-ip="'+escapeHtml(ip)+'" class="dmx-ucast-cb"'+(checked?' checked':'')+'>'
+      +'<span>'+escapeHtml(ip)+'</span>'
+      +'<span style="color:#556;font-size:.9em">'+escapeHtml(allIps[ip])+'</span></label>';
+  }
+  el.innerHTML=h;
 }
 
 function saveDmxSettings(){
   var proto='artnet';
   var radios=document.getElementsByName('dmx-proto');
   for(var i=0;i<radios.length;i++){if(radios[i].checked){proto=radios[i].value;break;}}
-  var ucastText=document.getElementById('dmx-ucast').value.trim();
-  var ucast=ucastText?ucastText.split('\n').map(function(l){return l.trim();}).filter(function(l){return l.length>0;}):[];
+  // Build unicast targets from checked nodes
+  var ucast={};
+  if(document.getElementById('dmx-ucast-on').checked){
+    var cbs=document.querySelectorAll('.dmx-ucast-cb:checked');
+    cbs.forEach(function(cb,idx){
+      ucast[String(idx+1)]=cb.dataset.ip;
+    });
+  }
   var body={
     protocol:proto,
     frameRate:parseInt(document.getElementById('dmx-fps').value)||40,
-    bindIp:document.getElementById('dmx-bind').value.trim()||'0.0.0.0',
+    bindIp:document.getElementById('dmx-bind').value||'0.0.0.0',
     sacnPriority:parseInt(document.getElementById('dmx-pri').value)||100,
     sacnSourceName:document.getElementById('dmx-src').value.trim()||'SlyLED',
     unicastTargets:ucast
