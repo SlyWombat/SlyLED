@@ -25,10 +25,11 @@ volatile bool dmxSelfTestOk = false;
 
 #ifdef BOARD_GIGA_DMX
   #include <mbed.h>
-  // Serial1 pins on Giga R1: TX1 = PA_0, RX1 = PI_9
+  // Serial1 pins on Giga R1: D1 (TX) = PA_9, D0 (RX) = PB_7
+  // CQRobot Ocean DMX shield connects MAX485 DI to D1, RO to D0, DE+/RE to D2
   static mbed::UnbufferedSerial* dmxUart = nullptr;
-  #define DMX_MBED_TX PA_0
-  #define DMX_MBED_RX PI_9
+  #define DMX_MBED_TX PA_9
+  #define DMX_MBED_RX PB_7
   // Slow baud for break: 0x00 at 76923 baud = 11 bits × 13μs = 143μs
   // Start bit (13μs low) + 8 data bits all zero (104μs low) + 2 stop bits (26μs high)
   // Total low = 117μs (exceeds 88μs minimum), stop bits provide MAB (≥8μs)
