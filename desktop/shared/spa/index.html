@@ -97,7 +97,7 @@ body.light .li:hover{border-color:#3b82f6}
           <button id='lay-mode-2d' class='btn' onclick='setLayoutMode("2d")' style='border-radius:0;border:none;margin:0;padding:.35em .9em;background:#14532d;color:#86efac;font-size:.75em'>2D Canvas</button>
           <button id='lay-mode-3d' class='btn' onclick='setLayoutMode("3d")' style='border-radius:0;border:none;margin:0;padding:.35em .9em;background:transparent;color:#64748b;font-size:.75em'>3D Viewport</button>
         </div>
-        <span id='lay-hint' style='color:#888;font-size:.82em;flex:1'>Drag performers from sidebar onto canvas. Double-click a node to edit. (0,0)=bottom-left.</span>
+        <span id='lay-hint' style='color:#888;font-size:.82em;flex:1'>Drag fixtures from sidebar onto stage. Double-click to edit position. (0,0)=bottom-left.</span>
         <label id='lay-detail-wrap' style='color:#888;font-size:.82em;white-space:nowrap;display:flex;align-items:center;gap:.3em'>
           <input type='checkbox' id='lay-detail' checked onchange='drawLayout()' data-tip='layDetail'> Show strings
         </label>
@@ -121,15 +121,8 @@ body.light .li:hover{border-color:#3b82f6}
       </div>
     </div>
     <div style='width:200px;flex-shrink:0'>
-      <div style='font-size:.9em;font-weight:bold;color:#aaa;margin-bottom:.4em'>Unplaced</div>
-      <div id='lay-unplaced'></div>
-      <div style='margin-top:1em;border-top:1px solid #1e293b;padding-top:.8em'>
-        <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:.4em'>
-          <span style='font-size:.9em;font-weight:bold;color:#aaa'>Fixtures</span>
-          <button class='btn btn-on' onclick='autoCreateFixtures()' style='font-size:.65em;padding:.2em .5em'>Auto-create</button>
-        </div>
-        <div id='lay-fixtures' style='font-size:.82em;color:#94a3b8'>Loading...</div>
-      </div>
+      <div style='font-size:.9em;font-weight:bold;color:#aaa;margin-bottom:.4em'>Fixtures</div>
+      <div id='lay-fixtures' style='font-size:.82em;color:#94a3b8'>Loading...</div>
       <div style='margin-top:1em;border-top:1px solid #1e293b;padding-top:.8em'>
         <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:.4em'>
           <span style='font-size:.9em;font-weight:bold;color:#aaa'>Surfaces</span>
@@ -1459,23 +1452,40 @@ function loadFixtures(cb){
 
 function renderFixturesSidebar(){
   var el=document.getElementById('lay-fixtures');if(!el)return;
-  if(!_fixtures.length){el.innerHTML='<p style="color:#555;font-size:.82em">No fixtures. Click Auto-create.</p>';return;}
+  if(!_fixtures.length){el.innerHTML='<p style="color:#555;font-size:.82em">No fixtures. Add fixtures in the Setup tab.</p>';return;}
   var h='';
-  _fixtures.forEach(function(f){
+  // Unplaced fixtures first (draggable)
+  var unplaced=_fixtures.filter(function(f){return !_isFixturePlaced(f);});
+  if(unplaced.length){
+    h+='<div style="color:#64748b;font-size:.75em;margin-bottom:.3em">Drag to place:</div>';
+    unplaced.forEach(function(f){
+      var ft=f.fixtureType||'led';
+      var icon=ft==='dmx'?'<span style="font-size:.6em;background:#7c3aed;color:#fff;padding:0 3px;border-radius:2px">DMX</span>':'';
+      h+='<div class="li" draggable="true" ondragstart="layDS(event,'+f.id+')" style="cursor:grab">'
+        +'<div style="color:#ccc;font-weight:bold;font-size:.85em">'+escapeHtml(f.name)+' '+icon+'</div>'
+        +'<div style="color:#666;font-size:.75em">'+f.type+'</div></div>';
+    });
+  }
+  // Placed fixtures
+  var placed=_fixtures.filter(_isFixturePlaced);
+  if(placed.length){
+    if(unplaced.length)h+='<div style="border-top:1px solid #1e293b;margin:.4em 0"></div>';
+    h+='<div style="color:#64748b;font-size:.75em;margin-bottom:.3em">On stage:</div>';
+  }
+  placed.forEach(function(f){
     var ft=f.fixtureType||'led';
     var icon=f.type==='point'?'\u2b24':f.type==='group'?'\u25a3':'\u2501';
     var ftBadge=ft==='dmx'?'<span style="font-size:.6em;background:#7c3aed;color:#fff;padding:0 3px;border-radius:2px;margin-left:2px">DMX</span>':'';
-    var rot=f.rotation||[0,0,0];
-    var rotTxt=(rot[0]||rot[1]||rot[2])?(' R:'+rot[0]+','+rot[1]+','+rot[2]):'';
-    h+='<div style="padding:.3em 0;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:.4em">';
-    h+='<span style="font-size:.9em">'+icon+'</span>';
-    h+='<span style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer" title="'+escapeHtml(f.name)+rotTxt+'" onclick="selectOnCanvas(\'fixture\','+f.childId+')">'+escapeHtml(f.name)+ftBadge+'</span>';
-    h+='<span style="cursor:pointer;color:#3b82f6;font-size:.8em" onclick="editFixture('+f.id+')" title="Edit">\u270e</span>';
-    h+='<span style="cursor:pointer;color:#f66;font-size:.8em" onclick="delFixture('+f.id+')" title="Delete">\u2715</span>';
+    h+='<div style="padding:.2em 0;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:.3em">';
+    h+='<span style="font-size:.8em">'+icon+'</span>';
+    h+='<span style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer;font-size:.82em" onclick="selectOnCanvas(\'fixture\','+f.id+')">'+escapeHtml(f.name)+ftBadge+'</span>';
+    h+='<span style="cursor:pointer;color:#3b82f6;font-size:.75em" onclick="editFixture('+f.id+')" title="Edit">\u270e</span>';
     h+='</div>';
   });
+  if(!unplaced.length&&placed.length)h+='<p style="color:#555;font-size:.75em;margin-top:.4em">All fixtures placed.</p>';
   el.innerHTML=h;
 }
+function _isFixturePlaced(f){return f.positioned||f._placed;}
 
 function autoCreateFixtures(){
   ra('POST','/api/migrate/layout',{},function(r){
@@ -2225,25 +2235,14 @@ function loadLayout(){
     if(s)units=s.units||0;
     ra('GET','/api/layout',null,function(d){
       if(!d)return;ld=d;phW=d.canvasW||10000;phH=d.canvasH||5000;
-      drawLayout();renderSidebar();
-      loadFixtures();loadSurfaces();
+      _fixtures=d.fixtures||[];
+      drawLayout();renderFixturesSidebar();
+      loadSurfaces();
     });
   });
 }
 
-function renderSidebar(){
-  var el=document.getElementById('lay-unplaced');if(!el||!ld)return;
-  var unpl=(ld.children||[]).filter(function(c){return !_isPlaced(c);});
-  if(!unpl.length){el.innerHTML='<p style="color:#555;font-size:.8em">All performers placed.</p>';return;}
-  var h='';
-  unpl.forEach(function(c){
-    h+='<div class="li" draggable="true" ondragstart="layDS(event,'+c.id+')">'
-      +'<div style="color:#ccc;font-weight:bold">'+escapeHtml(c.hostname)+'</div>';
-    if(c.name&&c.name!==c.hostname)h+='<div style="color:#888;font-size:.9em">'+escapeHtml(c.name)+'</div>';
-    h+='<div style="color:#666;font-size:.85em">'+c.sc+' string'+(c.sc!==1?'s':'')+'</div></div>';
-  });
-  el.innerHTML=h;
-}
+function renderSidebar(){renderFixturesSidebar();}
 
 function layDS(e,id){_layDragId=id;e.dataTransfer.setData('text/plain',String(id));e.dataTransfer.effectAllowed='move';}
 
@@ -2255,8 +2254,8 @@ function cvDrop(e){
   var W=cv.width,H=cv.height;
   var physX=Math.max(0,Math.min(phW,Math.round(m.x*phW/W)));
   var physY=Math.max(0,Math.min(phH,Math.round((H-m.y)*phH/H)));
-  var ch=null;(ld.children||[]).forEach(function(c){if(c.id===_layDragId)ch=c;});
-  if(ch){ch.x=physX;ch.y=physY;ch._placed=true;drawLayout();renderSidebar();}
+  var fx=null;_fixtures.forEach(function(f){if(f.id===_layDragId)fx=f;});
+  if(fx){fx.x=physX;fx.y=physY;fx._placed=true;drawLayout();renderFixturesSidebar();}
   _layDragId=null;
 }
 
@@ -2264,31 +2263,31 @@ function cvDbl(e){
   var cv=document.getElementById('lcv');
   var m=_cvMouse(e,cv);
   var hit=_hitNode(m.x,m.y,cv.width,cv.height);
-  if(hit>=0){showNodeEdit(ld.children[hit]);return;
-  }
+  if(hit>=0){showNodeEdit(_fixtures.filter(_isFixturePlaced)[hit]);return;}
 }
 
-function showNodeEdit(c){
-  var dirs=['East (+X)','North (+Y)','West (-X)','South (-Y)'];
-  var types=['WS2812B','WS2811','APA102'];
+function showNodeEdit(f){
   var h='<div style="margin-bottom:.8em">';
-  h+='<label>X (mm)</label><input id="ne-x" type="number" value="'+c.x+'" min="0" max="'+phW+'" style="width:120px">';
-  h+=' <label style="display:inline;margin-left:1em">Y (mm)</label><input id="ne-y" type="number" value="'+c.y+'" min="0" max="'+phH+'" style="width:120px">';
-  h+=' <label style="display:inline;margin-left:1em">Z (mm)</label><input id="ne-z" type="number" value="'+(c.z||0)+'" min="0" style="width:120px">';
+  h+='<label>X (mm)</label><input id="ne-x" type="number" value="'+f.x+'" min="0" max="'+phW+'" style="width:120px">';
+  h+=' <label style="display:inline;margin-left:1em">Y (mm)</label><input id="ne-y" type="number" value="'+f.y+'" min="0" max="'+phH+'" style="width:120px">';
+  h+=' <label style="display:inline;margin-left:1em">Z (mm)</label><input id="ne-z" type="number" value="'+(f.z||0)+'" min="0" style="width:120px">';
   h+='</div>';
-  if(c.sc>0&&c.strings&&c.strings.length){
-    h+='<table class="tbl" style="font-size:.8em;margin-bottom:.8em"><tr><th>#</th><th>LEDs</th><th>Length</th><th>Dir</th><th>Type</th></tr>';
-    for(var i=0;i<c.sc&&i<c.strings.length;i++){
-      var s=c.strings[i];
-      h+='<tr><td>'+(i+1)+'</td><td>'+s.leds+'</td><td>'+s.mm+'mm</td><td>'+(dirs[s.sdir]||'?')+'</td><td>'+(types[s.type]||s.type)+'</td></tr>';
+  var ft=f.fixtureType||'led';
+  h+='<div style="color:#64748b;font-size:.8em;margin-bottom:.5em">Type: '+f.type+(ft==='dmx'?' (DMX)':'')+' | ID: '+f.id+'</div>';
+  if(f.strings&&f.strings.length){
+    var dirs=['East (+X)','North (+Y)','West (-X)','South (-Y)'];
+    h+='<table class="tbl" style="font-size:.8em;margin-bottom:.8em"><tr><th>#</th><th>LEDs</th><th>Length</th><th>Dir</th></tr>';
+    for(var i=0;i<f.strings.length;i++){
+      var s=f.strings[i];
+      h+='<tr><td>'+(i+1)+'</td><td>'+(s.leds||0)+'</td><td>'+(s.mm||0)+'mm</td><td>'+(dirs[s.sdir]||'?')+'</td></tr>';
     }
     h+='</table>';
   }
   h+='<div style="display:flex;gap:.5em">';
-  h+='<button class="btn btn-on" onclick="applyNodePos('+c.id+')">Set Position</button>';
-  h+='<button class="btn btn-off" onclick="removeFromCanvas('+c.id+')">Remove from Canvas</button>';
+  h+='<button class="btn btn-on" onclick="applyNodePos('+f.id+')">Set Position</button>';
+  h+='<button class="btn btn-off" onclick="removeFromCanvas('+f.id+')">Remove from Stage</button>';
   h+='</div>';
-  document.getElementById('modal-title').textContent=c.hostname+(c.name&&c.name!==c.hostname?' ('+c.name+')':'');
+  document.getElementById('modal-title').textContent=f.name;
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
 }
@@ -2298,15 +2297,15 @@ function applyNodePos(id){
   var ny=parseInt(document.getElementById('ne-y').value)||0;
   var nz=parseInt(document.getElementById('ne-z').value)||0;
   nx=Math.max(0,Math.min(phW,nx));ny=Math.max(0,Math.min(phH,ny));nz=Math.max(0,nz);
-  (ld.children||[]).forEach(function(c){if(c.id===id){c.x=nx;c.y=ny;c.z=nz;c._placed=true;}});
-  closeModal();drawLayout();renderSidebar();
+  _fixtures.forEach(function(f){if(f.id===id){f.x=nx;f.y=ny;f.z=nz;f._placed=true;}});
+  closeModal();drawLayout();renderFixturesSidebar();
 }
 
 function removeFromCanvas(id){
-  (ld.children||[]).forEach(function(c){if(c.id===id){c.x=0;c.y=0;c.z=0;c._placed=false;c.positioned=false;}});
+  _fixtures.forEach(function(f){if(f.id===id){f.x=0;f.y=0;f.z=0;f._placed=false;f.positioned=false;}});
   closeModal();
   if(_layMode==='3d'){s3dLoadChildren();}else{drawLayout();}
-  renderSidebar();
+  renderFixturesSidebar();
 }
 
 function fmtCoord(mm){
@@ -2342,30 +2341,28 @@ function drawLayout(){
     ctx.fillStyle='#aaa';ctx.font='9px sans-serif';ctx.textAlign='left';
     ctx.fillText(s.name||'Surface',sx+4,sy-sh+12);
   });
-  var placed=(ld.children||[]).filter(_isPlaced);
+  var placed=(_fixtures||[]).filter(_isFixturePlaced);
   if(!placed.length&&!_surfaces.length){
     ctx.fillStyle='#555';ctx.font='13px sans-serif';ctx.textAlign='center';
-    ctx.fillText('Drag performers from the sidebar to place them.',W/2,H/2);
+    ctx.fillText('Drag fixtures from the sidebar to place them.',W/2,H/2);
     return;
   }
-  placed.forEach(function(c){
-    var np=_nodePos(c,W,H),cx=np.cx,cy=np.cy;
-    // Draw strings in detailed mode
-    if(showStr&&c.strings&&c.sc>0){
-      for(var si=0;si<c.sc&&si<c.strings.length;si++){
-        var s=c.strings[si];if(!s||!s.leds)continue;
+  placed.forEach(function(f){
+    var np=_nodePos(f,W,H),cx=np.cx,cy=np.cy;
+    var ft=f.fixtureType||'led';
+    // Draw strings in detailed mode (LED fixtures only)
+    if(showStr&&ft!=='dmx'&&f.strings&&f.strings.length){
+      for(var si=0;si<f.strings.length;si++){
+        var s=f.strings[si];if(!s||!s.leds)continue;
         var col=_strCol[si%_strCol.length];
         var dx=_dirDx[s.sdir||0],dy=_dirDy[s.sdir||0];
-        // Use physical mm if > 500mm, otherwise estimate from LED count (16mm/LED typical)
         var lenMm=s.mm||0;
         if(lenMm<500)lenMm=Math.max(s.leds*16,500);
         var pxL=dx!==0?lenMm*W/phW:lenMm*H/phH;
-        pxL=Math.max(pxL,30); // minimum 30px visible length
+        pxL=Math.max(pxL,30);
         var ex=cx+dx*pxL,ey=cy+dy*pxL;
-        // Draw string as a thick colored line with LED dots
         ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(ex,ey);
         ctx.strokeStyle=col;ctx.lineWidth=4;ctx.stroke();
-        // Draw LED dots along the string
         var dotCount=Math.min(s.leds,Math.floor(pxL/3));
         for(var di=0;di<dotCount;di++){
           var t=(di+0.5)/dotCount;
@@ -2373,32 +2370,25 @@ function drawLayout(){
           ctx.beginPath();ctx.arc(dpx,dpy,1.5,0,2*Math.PI);
           ctx.fillStyle=col;ctx.fill();
         }
-        // LED count label at string end
         ctx.fillStyle=_strCol[si%_strCol.length];
         ctx.font='9px sans-serif';ctx.textAlign='center';
         var lx=ex+(dx!==0?dx*12:0),ly=ey+(dy!==0?dy*12:(dx>0?-8:8));
         ctx.fillText(s.leds+' LEDs',lx,ly);
       }
     }
-    // Node circle
-    var nodeCol=c.type==='wled'?'#663300':'#1a6b3a';
-    var nodeBdr=c.type==='wled'?'#f60':'#4c4';
+    // Fixture node
+    var nodeCol=ft==='dmx'?'#3b1f7c':'#1a6b3a';
+    var nodeBdr=ft==='dmx'?'#a78bfa':'#4c4';
+    if(f.type==='point'){nodeCol=ft==='dmx'?'#3b1f7c':'#6b4f1a';nodeBdr=ft==='dmx'?'#a78bfa':'#d4a';}
     ctx.beginPath();ctx.arc(cx,cy,10,0,2*Math.PI);
-    ctx.fillStyle=c.status===1?nodeCol:'#333';ctx.fill();
-    ctx.strokeStyle=c.status===1?nodeBdr:'#666';ctx.lineWidth=2;ctx.stroke();
-    // Labels — name first (user-friendly), hostname secondary
+    ctx.fillStyle=nodeCol;ctx.fill();
+    ctx.strokeStyle=nodeBdr;ctx.lineWidth=2;ctx.stroke();
+    // Labels
     var lblDir=(cy+50>H)?-1:1;
-    var dispName=c.name||c.hostname||('ID '+c.id);
     ctx.fillStyle='#eee';ctx.font='bold 10px sans-serif';ctx.textAlign='center';
-    ctx.fillText(dispName,cx,cy+lblDir*20);
-    var coordStr='('+fmtCoord(c.x)+','+fmtCoord(c.y)+')';
+    ctx.fillText(f.name||('Fixture '+f.id),cx,cy+lblDir*20);
     ctx.fillStyle='#888';ctx.font='9px sans-serif';
-    if(c.name&&c.name!==c.hostname){
-      ctx.fillText(c.hostname,cx,cy+lblDir*31);
-      ctx.fillText(coordStr,cx,cy+lblDir*42);
-    } else {
-      ctx.fillText(coordStr,cx,cy+lblDir*31);
-    }
+    ctx.fillText('('+fmtCoord(f.x)+','+fmtCoord(f.y)+')',cx,cy+lblDir*31);
   });
 }
 
@@ -2710,15 +2700,14 @@ function emuDraw(){
 }
 
 function saveLayout(btn){
-  if(!ld||!ld.children)return;
+  if(!_fixtures)return;
   _btnSaving(btn);
-  // Sync 3D positions back to data
   if(_layMode==='3d'&&_s3d.inited)_s3dSyncToLd();
-  var toSave=ld.children.filter(_isPlaced);
-  ra('POST','/api/layout',{children:toSave.map(function(c){return{id:c.id,x:c.x,y:c.y,z:c.z||0};})},
+  var toSave=_fixtures.filter(_isFixturePlaced);
+  ra('POST','/api/layout',{fixtures:toSave.map(function(f){return{id:f.id,x:f.x,y:f.y,z:f.z||0};})},
     function(r){
       if(!r||!r.ok){_btnSaved(btn,false);return;}
-      toSave.forEach(function(c){c.positioned=true;c._placed=false;});
+      toSave.forEach(function(f){f.positioned=true;f._placed=false;});
       // Also save any moved surfaces
       var pending=0;
       (_surfaces||[]).forEach(function(s){
@@ -2743,11 +2732,10 @@ function _nodePos(c,W,H){
 }
 
 function _hitNode(mx,my,W,H){
-  if(!ld||!ld.children)return -1;
-  var best=-1,bestD=900; // 30px radius squared
-  var placed=ld.children;
+  if(!_fixtures)return -1;
+  var best=-1,bestD=900;
+  var placed=_fixtures.filter(_isFixturePlaced);
   for(var i=0;i<placed.length;i++){
-    if(!_isPlaced(placed[i]))continue;
     var p=_nodePos(placed[i],W,H);
     var dx=mx-p.cx,dy=my-p.cy,d2=dx*dx+dy*dy;
     if(d2<bestD){bestD=d2;best=i;}
@@ -2768,7 +2756,8 @@ function cvDown(e){
   var m=_cvMouse(e,cv);
   drag=_hitNode(m.x,m.y,cv.width,cv.height);
   if(drag>=0){
-    var np=_nodePos(ld.children[drag],cv.width,cv.height);
+    var placed=_fixtures.filter(_isFixturePlaced);
+    var np=_nodePos(placed[drag],cv.width,cv.height);
     dox=m.x-np.cx;doy=m.y-np.cy;
     cv.style.cursor='grabbing';
   }
@@ -2782,11 +2771,12 @@ function cvMove(e){
     cv.style.cursor=hit>=0?'pointer':'grab';
     return;
   }
+  var placed=_fixtures.filter(_isFixturePlaced);
   var W=cv.width,H=cv.height;
   var px=Math.max(0,Math.min(W,m.x-dox));
   var py=Math.max(0,Math.min(H,m.y-doy));
-  ld.children[drag].x=Math.round(px*phW/W);
-  ld.children[drag].y=Math.round((H-py)*phH/H);
+  placed[drag].x=Math.round(px*phW/W);
+  placed[drag].y=Math.round((H-py)*phH/H);
   drawLayout();
 }
 

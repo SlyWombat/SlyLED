@@ -814,21 +814,32 @@ def api_wled_segments(cid):
 @app.get("/api/layout")
 def api_layout_get():
     layout = dict(_layout)
+    # Merge fixture positions into fixture objects for the SPA
     pos_map = {p["id"]: p for p in _layout.get("children", [])}
-    layout["children"] = [
-        {**c,
-         "x": pos_map.get(c["id"], {}).get("x", 0),
-         "y": pos_map.get(c["id"], {}).get("y", 0),
-         "z": pos_map.get(c["id"], {}).get("z", 0),
-         "positioned": c["id"] in pos_map}
-        for c in _children
-    ]
+    layout["fixtures"] = []
+    for f in _fixtures:
+        fid = f["id"]
+        pos = pos_map.get(fid, pos_map.get(f.get("childId"), {}))
+        layout["fixtures"].append({
+            **f,
+            "x": pos.get("x", 0),
+            "y": pos.get("y", 0),
+            "z": pos.get("z", 0),
+            "positioned": fid in pos_map or f.get("childId") in pos_map,
+        })
+    # Legacy: keep children for backward compat with bake/resolve
+    layout["children"] = _layout.get("children", [])
     return jsonify(layout)
 
 @app.post("/api/layout")
 def api_layout_save():
     body = request.get_json(silent=True) or {}
-    _layout["children"] = body.get("children", [])
+    # Accept fixture positions (new) or children positions (legacy)
+    fixtures = body.get("fixtures", [])
+    if fixtures:
+        _layout["children"] = [{"id": f["id"], "x": f.get("x", 0), "y": f.get("y", 0), "z": f.get("z", 0)} for f in fixtures]
+    else:
+        _layout["children"] = body.get("children", [])
     _save("layout", _layout)
     return jsonify(ok=True)
 
@@ -1218,7 +1229,8 @@ def api_sfx_evaluate(fxid):
 def _build_resolve_input(fixture):
     """Build resolve input dict from a fixture record."""
     pos_map = {p["id"]: p for p in _layout.get("children", [])}
-    lp = pos_map.get(fixture.get("childId"), {})
+    # Look up position by fixture ID first, then fall back to childId
+    lp = pos_map.get(fixture["id"], pos_map.get(fixture.get("childId"), {}))
     child_pos = [lp.get("x", 0), lp.get("y", 0), lp.get("z", 0)]
     child = next((c for c in _children if c["id"] == fixture.get("childId")), None)
     strings = fixture.get("strings", [])
