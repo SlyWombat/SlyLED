@@ -97,6 +97,46 @@ class DMXUniverse:
             if off is not None:
                 self.set_channel(start_addr + off, value)
 
+    def set_fixture_pan_tilt(self, start_addr, pan, tilt, profile=None):
+        """Set pan/tilt for a fixture. pan/tilt are normalized 0.0-1.0.
+        Handles 8-bit (0-255) and 16-bit (0-65535) channels automatically."""
+        if not profile:
+            return
+        ch_map = profile.get("channel_map", {})
+        channels = profile.get("channels", [])
+        for axis, value in [("pan", pan), ("tilt", tilt)]:
+            offset = ch_map.get(axis)
+            if offset is None:
+                continue
+            ch_def = next((c for c in channels if c.get("type") == axis), None)
+            bits = ch_def.get("bits", 8) if ch_def else 8
+            if bits == 16:
+                val16 = max(0, min(65535, int(value * 65535)))
+                self.set_channel(start_addr + offset, val16 >> 8)
+                self.set_channel(start_addr + offset + 1, val16 & 0xFF)
+            else:
+                self.set_channel(start_addr + offset, max(0, min(255, int(value * 255))))
+
+    def set_fixture_channels(self, start_addr, channel_values, profile=None):
+        """Set arbitrary named channels. channel_values: {type: value}.
+        Values are 0-255 for 8-bit, 0-65535 for 16-bit channels."""
+        if not profile:
+            return
+        ch_map = profile.get("channel_map", {})
+        channels = profile.get("channels", [])
+        for ch_type, value in channel_values.items():
+            offset = ch_map.get(ch_type)
+            if offset is None:
+                continue
+            ch_def = next((c for c in channels if c.get("type") == ch_type), None)
+            bits = ch_def.get("bits", 8) if ch_def else 8
+            if bits == 16:
+                val16 = max(0, min(65535, int(value)))
+                self.set_channel(start_addr + offset, val16 >> 8)
+                self.set_channel(start_addr + offset + 1, val16 & 0xFF)
+            else:
+                self.set_channel(start_addr + offset, max(0, min(255, int(value))))
+
     def __len__(self):
         return 512
 

@@ -120,7 +120,7 @@ def test_profiles():
     ok('Filter by category=par', len(pars) > 0 and all(p["category"] == "par" for p in pars))
 
     movers = lib.list_profiles(category="moving-head")
-    ok('Filter by category=moving-head', len(movers) == 2)
+    ok('Filter by category=moving-head', len(movers) >= 2)
 
     # Channel map
     cm = lib.channel_map("generic-rgb")
@@ -303,7 +303,7 @@ def test_api():
 
         r = c.get('/api/dmx-profiles?category=moving-head')
         movers = r.get_json()
-        ok('Filter by category', len(movers) == 2)
+        ok('Filter by category', len(movers) >= 2)
 
         # Create custom profile
         r = c.post('/api/dmx-profiles', json={

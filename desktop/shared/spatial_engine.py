@@ -352,6 +352,51 @@ def evaluate_spatial_effect(effect, pixel_positions, t):
     return [[0, 0, 0]] * len(pixel_positions)
 
 
+def compute_pan_tilt(fixture_pos, aim_point, pan_range_deg, tilt_range_deg):
+    """Compute normalized pan/tilt (0.0-1.0) from fixture position to aim point.
+
+    Convention:
+      - Pan 0 = forward (+Z axis), increases clockwise viewed from above
+      - Tilt 0 = horizontal, increases downward
+      - Center of range = 0.5
+
+    Returns:
+        (pan_normalized, tilt_normalized) both 0.0-1.0, or None if ranges are 0
+    """
+    if pan_range_deg <= 0 or tilt_range_deg <= 0:
+        return None
+
+    dx = aim_point[0] - fixture_pos[0]
+    dy = aim_point[1] - fixture_pos[1]
+    dz = aim_point[2] - fixture_pos[2]
+
+    dist_xz = math.sqrt(dx * dx + dz * dz)
+
+    # Pan: angle in XZ plane from +Z axis, clockwise
+    pan_deg = math.degrees(math.atan2(dx, dz)) if dist_xz > 0.001 else 0.0
+
+    # Tilt: angle from horizontal, positive = downward
+    tilt_deg = math.degrees(math.atan2(-dy, dist_xz)) if (dist_xz > 0.001 or abs(dy) > 0.001) else 0.0
+
+    # Map to normalized 0.0-1.0 with center of range at 0.5
+    pan_norm = 0.5 + pan_deg / pan_range_deg
+    tilt_norm = 0.5 + tilt_deg / tilt_range_deg
+
+    return (max(0.0, min(1.0, pan_norm)), max(0.0, min(1.0, tilt_norm)))
+
+
+def effect_aim_point(effect, t):
+    """Return the center position of a spatial effect field at time t.
+    This is where a moving head should aim."""
+    motion = effect.get("motion", {})
+    start_pos = motion.get("startPos", [0, 0, 0])
+    end_pos = motion.get("endPos", [0, 0, 0])
+    duration = motion.get("durationS", 1) or 1
+    easing = motion.get("easing", "linear")
+    progress = _ease(min(t / duration, 1.0), easing)
+    return _lerp3(start_pos, end_pos, progress)
+
+
 def blend_pixel_layers(layers, modes=None):
     """Blend multiple pixel color layers together.
 

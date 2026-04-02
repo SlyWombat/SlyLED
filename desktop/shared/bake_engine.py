@@ -39,6 +39,7 @@ ACT_WIPE = 10
 ACT_SCANNER = 11
 ACT_SPARKLE = 12
 ACT_GRADIENT = 13
+ACT_DMX_SCENE = 14  # DMX fixture: holds all channel values for a time slice
 
 
 class BakeProgress:
@@ -334,6 +335,79 @@ def _compile_box(pixels, start_pos, end_pos, size, color,
     }]
 
 
+def _compile_dmx_fixture(clip, effect, fixture_pos, aim_point, profile_info, duration):
+    """Compile a spatial effect clip for a DMX fixture (moving head / par).
+
+    For moving effects: time-sliced 1-second segments tracking the effect center.
+    For static effects: single segment with static pan/tilt + color.
+    Params include pan/tilt as normalized 0.0-1.0.
+    """
+    from spatial_engine import compute_pan_tilt, effect_aim_point, evaluate_spatial_effect
+
+    if not effect:
+        return []
+
+    motion = effect.get("motion", {})
+    start_pos = motion.get("startPos", [0, 0, 0])
+    end_pos = motion.get("endPos", [0, 0, 0])
+    clip_start = clip.get("startS", 0)
+    clip_dur = clip.get("durationS", duration)
+
+    pan_range = profile_info.get("panRange", 0) if profile_info else 0
+    tilt_range = profile_info.get("tiltRange", 0) if profile_info else 0
+    has_pt = pan_range > 0 and tilt_range > 0
+
+    # Check if effect moves
+    is_moving = _dist(start_pos, end_pos) > 10  # > 10mm
+
+    if is_moving and has_pt:
+        # Time-slice into 1-second segments for smooth tracking
+        segments = []
+        slice_dur = 1.0
+        t = 0
+        while t < clip_dur:
+            seg_dur = min(slice_dur, clip_dur - t)
+            mid_t = t + seg_dur / 2
+            aim = effect_aim_point(effect, mid_t)
+            colors = evaluate_spatial_effect(effect, [fixture_pos], mid_t)
+            c = colors[0] if colors else [0, 0, 0]
+            pt = compute_pan_tilt(fixture_pos, aim, pan_range, tilt_range)
+            segments.append({
+                "type": ACT_DMX_SCENE,
+                "params": {
+                    "r": c[0], "g": c[1], "b": c[2],
+                    "dimmer": 255 if any(v > 0 for v in c) else 0,
+                    "pan": pt[0] if pt else 0.5,
+                    "tilt": pt[1] if pt else 0.5,
+                },
+                "startS": round(clip_start + t, 2),
+                "durationS": round(seg_dur, 2),
+            })
+            t += slice_dur
+        return segments
+    else:
+        # Static: single segment
+        mid_t = clip_dur / 2
+        if has_pt:
+            aim = effect_aim_point(effect, mid_t) if is_moving else aim_point
+            pt = compute_pan_tilt(fixture_pos, aim, pan_range, tilt_range)
+        else:
+            pt = None
+        colors = evaluate_spatial_effect(effect, [fixture_pos], mid_t)
+        c = colors[0] if colors else [0, 0, 0]
+        return [{
+            "type": ACT_DMX_SCENE,
+            "params": {
+                "r": c[0], "g": c[1], "b": c[2],
+                "dimmer": 255 if any(v > 0 for v in c) else 0,
+                "pan": pt[0] if pt else 0.5,
+                "tilt": pt[1] if pt else 0.5,
+            },
+            "startS": round(clip_start, 2),
+            "durationS": round(max(1, clip_dur), 2),
+        }]
+
+
 # ── Main bake function ───────────────────────────────────────────────────────
 
 def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_fn, blend_fn,
@@ -366,6 +440,13 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
             # DMX fixture: single pixel at its stage position
             pixels = [child_pos]
             strings_info = [{"offset": 0, "count": 1, "sdir": 0}]
+            # Store profile info and aim for DMX compilation
+            _dmx_profile_info = None
+            _pid = f.get("dmxProfileId")
+            if _pid:
+                from dmx_profiles import ProfileLibrary
+                _plib = ProfileLibrary()
+                _dmx_profile_info = _plib.channel_info(_pid)
         else:
             resolve_input = {
                 "type": f.get("type", "linear"),
@@ -386,6 +467,8 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
         fixture_data[fid] = {
             "pixels": pixels, "pixelCount": len(pixels), "strings": strings_info,
             "fixtureType": ft,
+            "profileInfo": _dmx_profile_info if ft == "dmx" else None,
+            "aimPoint": f.get("aimPoint", [0, -1000, 0]) if ft == "dmx" else None,
         }
 
     # Expand allPerformers tracks
@@ -445,7 +528,16 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
             if not fx:
                 continue
 
-            if strings:
+            if fdata.get("fixtureType") == "dmx":
+                # DMX fixture: compile with pan/tilt awareness
+                steps = _compile_dmx_fixture(
+                    clip, fx, pixels[0] if pixels else [0, 0, 0],
+                    fdata.get("aimPoint", [0, -1000, 0]),
+                    fdata.get("profileInfo"),
+                    duration,
+                )
+                all_segments.extend(steps)
+            elif strings:
                 # Multi-string: compile per-string
                 for si, sinfo in enumerate(strings):
                     off = sinfo["offset"]
@@ -490,10 +582,34 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
         fdata = fixture_data.get(fid, {})
         strings = fdata.get("strings", [])
         pixels = fdata.get("pixels", [])
+        fix_segments = result["fixtures"].get(fid, {}).get("segments", [])
+
+        # DMX fixtures: emit beam metadata per second (dict, not array)
+        if fdata.get("fixtureType") == "dmx":
+            fix_preview = []
+            prof_info = fdata.get("profileInfo") or {}
+            for sec in range(n_seconds):
+                dmx_entry = {"r": 0, "g": 0, "b": 0, "pan": 0.5, "tilt": 0.5,
+                             "dimmer": 0, "beamWidth": prof_info.get("beamWidth", 15)}
+                for seg in fix_segments:
+                    ss = seg.get("startS", 0)
+                    sd = seg.get("durationS", 1)
+                    if ss <= sec < ss + sd:
+                        p = seg.get("params", {})
+                        dmx_entry = {
+                            "r": p.get("r", 0), "g": p.get("g", 0), "b": p.get("b", 0),
+                            "pan": p.get("pan", 0.5), "tilt": p.get("tilt", 0.5),
+                            "dimmer": p.get("dimmer", 0),
+                            "beamWidth": prof_info.get("beamWidth", 15),
+                        }
+                        break
+                fix_preview.append(dmx_entry)
+            preview[fid] = fix_preview
+            continue
+
         if not strings and not pixels:
             continue  # skip fixtures with no LED data
         n_strings = max(len(strings), 1)
-        fix_segments = result["fixtures"].get(fid, {}).get("segments", [])
 
         fix_preview = []
         for sec in range(n_seconds):

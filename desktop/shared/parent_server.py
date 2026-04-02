@@ -136,6 +136,9 @@ for _f in _fixtures:
     if "fixtureType" not in _f:
         _f["fixtureType"] = "led"
         _fix_patched = True
+    if _f.get("fixtureType") == "dmx" and "aimPoint" not in _f:
+        _f["aimPoint"] = [0, -1000, 0]
+        _fix_patched = True
 if _fix_patched:
     _save("fixtures", _fixtures)
 del _fix_patched
@@ -936,6 +939,7 @@ def api_fixtures_create():
             f["dmxStartAddr"] = body["dmxStartAddr"]
             f["dmxChannelCount"] = body["dmxChannelCount"]
             f["dmxProfileId"] = body.get("dmxProfileId")
+            f["aimPoint"] = body.get("aimPoint", [0, -1000, 0])
         _fixtures.append(f)
         _nxt_fix += 1
         _save("fixtures", _fixtures)
@@ -954,11 +958,49 @@ def api_fixture_update(fid):
     if not f:
         return jsonify(err="Not found"), 404
     body = request.get_json(silent=True) or {}
+    # Validate fixtureType if changing
+    if "fixtureType" in body and body["fixtureType"] not in ("led", "dmx"):
+        return jsonify(err="Invalid fixtureType - must be 'led' or 'dmx'"), 400
+    # Validate geometry type if changing
+    if "type" in body and body["type"] not in ("linear", "point", "surface", "group"):
+        return jsonify(err="Invalid fixture type"), 400
+    # Validate DMX fields
+    ft = body.get("fixtureType", f.get("fixtureType", "led"))
+    if ft == "dmx":
+        addr = body.get("dmxStartAddr", f.get("dmxStartAddr"))
+        if "dmxStartAddr" in body:
+            if not isinstance(addr, int) or addr < 1 or addr > 512:
+                return jsonify(err="dmxStartAddr must be 1-512"), 400
+        uni = body.get("dmxUniverse", f.get("dmxUniverse"))
+        if "dmxUniverse" in body:
+            if not isinstance(uni, int) or uni < 1:
+                return jsonify(err="dmxUniverse must be an integer >= 1"), 400
+        ch = body.get("dmxChannelCount", f.get("dmxChannelCount"))
+        if "dmxChannelCount" in body:
+            if not isinstance(ch, int) or ch < 1:
+                return jsonify(err="dmxChannelCount must be an integer >= 1"), 400
     for k in ("name", "type", "fixtureType", "childId", "childIds", "strings",
               "rotation", "aoeRadius", "meshFile",
-              "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId"):
+              "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId", "aimPoint"):
         if k in body:
             f[k] = body[k]
+    _save("fixtures", _fixtures)
+    return jsonify(ok=True)
+
+@app.put("/api/fixtures/<int:fid>/aim")
+def api_fixture_set_aim(fid):
+    """Set aim point for a DMX fixture."""
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f or f.get("fixtureType") != "dmx":
+        return jsonify(err="DMX fixture not found"), 404
+    body = request.get_json(silent=True) or {}
+    ap = body.get("aimPoint")
+    if not isinstance(ap, list) or len(ap) != 3:
+        return jsonify(err="aimPoint must be [x,y,z]"), 400
+    try:
+        f["aimPoint"] = [float(v) for v in ap]
+    except (TypeError, ValueError):
+        return jsonify(err="aimPoint values must be numbers"), 400
     _save("fixtures", _fixtures)
     return jsonify(ok=True)
 
@@ -1026,19 +1068,12 @@ def api_surface_delete(sid):
     _save("surfaces", _surfaces)
     return jsonify(ok=True)
 
-#  "  "  DMX Profiles  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
+#  "  "  DMX Profiles  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
 @app.get("/api/dmx-profiles")
 def api_dmx_profiles():
     cat = request.args.get("category")
     return jsonify(_profile_lib.list_profiles(category=cat))
-
-@app.get("/api/dmx-profiles/<profile_id>")
-def api_dmx_profile_get(profile_id):
-    p = _profile_lib.get_profile(profile_id)
-    if not p:
-        return jsonify(err="Not found"), 404
-    return jsonify(p)
 
 @app.post("/api/dmx-profiles")
 def api_dmx_profile_create():
@@ -1049,6 +1084,56 @@ def api_dmx_profile_create():
     if _profile_lib.save_profile(body):
         return jsonify(ok=True, id=body["id"])
     return jsonify(err="Failed to save"), 500
+
+# Static sub-paths BEFORE parameterized <profile_id>
+@app.get("/api/dmx-profiles/export")
+def api_dmx_profiles_export():
+    ids = request.args.get("ids")
+    category = request.args.get("category")
+    id_list = [s.strip() for s in ids.split(",") if s.strip()] if ids else None
+    profiles = _profile_lib.export_profiles(ids=id_list, category=category)
+    return jsonify(profiles)
+
+@app.post("/api/dmx-profiles/import")
+def api_dmx_profiles_import():
+    data = request.get_json(silent=True)
+    if not isinstance(data, list):
+        return jsonify(err="Body must be a JSON array of profiles"), 400
+    result = _profile_lib.import_profiles(data)
+    return jsonify(ok=True, **result)
+
+@app.post("/api/dmx-profiles/ofl/import-json")
+def api_dmx_profiles_ofl_import():
+    """Import OFL fixture JSON directly (paste or upload)."""
+    body = request.get_json(silent=True) or {}
+    ofl_json = body.get("ofl") or body
+    mode_idx = body.get("mode")
+    if "ofl" in body:
+        ofl_json = body["ofl"]
+    from ofl_importer import ofl_to_slyled
+    profiles = ofl_to_slyled(ofl_json, mode=mode_idx)
+    if not profiles:
+        return jsonify(err="Could not convert OFL fixture (no valid modes/channels)"), 400
+    result = _profile_lib.import_profiles(profiles)
+    return jsonify(ok=True, profiles=[p["id"] for p in profiles], **result)
+
+# Parameterized routes AFTER static paths
+@app.get("/api/dmx-profiles/<profile_id>")
+def api_dmx_profile_get(profile_id):
+    p = _profile_lib.get_profile(profile_id)
+    if not p:
+        return jsonify(err="Not found"), 404
+    return jsonify(p)
+
+@app.put("/api/dmx-profiles/<profile_id>")
+def api_dmx_profile_update(profile_id):
+    body = request.get_json(silent=True) or {}
+    ok_upd, err = _profile_lib.update_profile(profile_id, body)
+    if not ok_upd:
+        p = _profile_lib.get_profile(profile_id)
+        code = 400 if p else 404
+        return jsonify(err=err), code
+    return jsonify(ok=True)
 
 @app.delete("/api/dmx-profiles/<profile_id>")
 def api_dmx_profile_delete(profile_id):
@@ -1265,10 +1350,13 @@ def api_dmx_fixture_channels(fid):
     uni = fixture.get("dmxUniverse", 1)
     addr = fixture.get("dmxStartAddr", 1)
     if profile:
-        channels = [{"offset": ch["offset"], "name": ch["name"], "type": ch["type"]}
+        channels = [{"offset": ch["offset"], "name": ch["name"], "type": ch["type"],
+                      "capabilities": ch.get("capabilities", [])}
                     for ch in profile.get("channels", [])]
     else:
-        channels = [{"offset": i, "name": f"Ch {i+1}", "type": "dimmer"} for i in range(count)]
+        channels = [{"offset": i, "name": f"Ch {i+1}", "type": "dimmer",
+                      "capabilities": [{"range": [0, 255], "type": "Intensity", "label": f"Ch {i+1} 0-100%"}]}
+                    for i in range(count)]
     # Read current values from universe buffer
     for ch in channels:
         dmx_addr = addr + ch["offset"]
@@ -1817,14 +1905,17 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
         uni = f.get("dmxUniverse", 1)
         addr = f.get("dmxStartAddr", 1)
         pid = f.get("dmxProfileId")
-        ch_map = _profile_lib.channel_map(pid) if pid else None
+        prof_info = _profile_lib.channel_info(pid) if pid else None
+        ch_map = prof_info.get("channel_map") if prof_info else None
+        channels = prof_info.get("channels", []) if prof_info else []
         log.info("DMX playback: fixture %d '%s' uni=%d addr=%d segs=%d profile=%s",
                  fid, f.get("name", "?"), uni, addr, len(segs), pid or "none")
         if not segs:
             log.warning("DMX playback: fixture %d has 0 segments - skipping", fid)
             continue
         dmx_fixtures.append({"fid": fid, "name": f.get("name", "?"),
-                             "uni": uni, "addr": addr, "ch_map": ch_map, "segs": segs})
+                             "uni": uni, "addr": addr, "ch_map": ch_map,
+                             "channels": channels, "segs": segs})
     if not dmx_fixtures:
         log.warning("DMX playback: no DMX fixtures with segments found")
         return
@@ -1865,18 +1956,36 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
         # Evaluate each DMX fixture
         for fx in dmx_fixtures:
             r, g, b = 0, 0, 0
+            pan, tilt, dimmer, strobe, gobo = None, None, None, None, None
             for seg in fx["segs"]:
                 ss = seg.get("startS", 0)
                 sd = seg.get("durationS", 1)
                 if ss <= elapsed < ss + sd:
                     p = seg.get("params", {})
                     r, g, b = p.get("r", 0), p.get("g", 0), p.get("b", 0)
+                    pan = p.get("pan")
+                    tilt = p.get("tilt")
+                    dimmer = p.get("dimmer")
+                    strobe = p.get("strobe")
+                    gobo = p.get("gobo")
                     break
-            profile = {"channel_map": fx["ch_map"]} if fx["ch_map"] else None
-            engine.set_fixture_rgb(fx["uni"], fx["addr"], r, g, b, profile)
+            profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
+            uni_buf = engine.get_universe(fx["uni"])
+            # RGB
+            uni_buf.set_fixture_rgb(fx["addr"], r, g, b, profile)
+            # Dimmer
             if fx["ch_map"] and "dimmer" in fx["ch_map"]:
-                dim = 255 if (r or g or b) else 0
-                engine.get_universe(fx["uni"]).set_fixture_dimmer(fx["addr"], dim, profile)
+                dim = dimmer if dimmer is not None else (255 if (r or g or b) else 0)
+                uni_buf.set_fixture_dimmer(fx["addr"], dim, profile)
+            # Pan/Tilt
+            if pan is not None and tilt is not None and profile:
+                uni_buf.set_fixture_pan_tilt(fx["addr"], pan, tilt, profile)
+            # Strobe
+            if strobe is not None and fx["ch_map"] and "strobe" in fx["ch_map"]:
+                uni_buf.set_fixture_channels(fx["addr"], {"strobe": strobe}, profile)
+            # Gobo
+            if gobo is not None and fx["ch_map"] and "gobo" in fx["ch_map"]:
+                uni_buf.set_fixture_channels(fx["addr"], {"gobo": gobo}, profile)
         frame_count += 1
         if frame_count == 1:
             log.info("DMX playback: first frame sent at elapsed=%.1fs", elapsed)
@@ -2942,6 +3051,118 @@ def api_show_preset():
                          "motion": {"startPos": [8000,3000,0], "endPos": [1000,1500,0], "durationS": 12, "easing": "ease-in-out"},
                          "blend": "add"}],
         },
+        # ── Moving-head-aware presets ──────────────────────────────────
+        # These use spatial effects with motion paths. LED fixtures get
+        # color washes; DMX moving heads also track the effect center
+        # with pan/tilt, creating beam sweeps across the stage.
+        "spotlight-sweep": {
+            "name": "Spotlight Sweep",
+            "durationS": 20,
+            "effects": [
+                {"name": "Sweep Orb", "category": "spatial-field", "shape": "sphere",
+                 "r": 255, "g": 240, "b": 200, "size": {"radius": 1500},
+                 "motion": {"startPos": [0, 0, 5000], "endPos": [10000, 0, 5000],
+                            "durationS": 8, "easing": "ease-in-out"},
+                 "blend": "add"},
+                {"name": "Return Orb", "category": "spatial-field", "shape": "sphere",
+                 "r": 200, "g": 180, "b": 255, "size": {"radius": 1500},
+                 "motion": {"startPos": [10000, 0, 5000], "endPos": [0, 0, 5000],
+                            "durationS": 8, "easing": "ease-in-out"},
+                 "blend": "add"},
+            ],
+        },
+        "concert-wash": {
+            "name": "Concert Wash",
+            "durationS": 30,
+            "actions": [{"name": "Slow Breathe Blue", "type": 3, "r": 0, "g": 40, "b": 200,
+                         "periodMs": 5000, "minBri": 20}],
+            "effects": [
+                {"name": "Magenta Flood", "category": "spatial-field", "shape": "plane",
+                 "r": 220, "g": 0, "b": 180, "size": {"normal": [1, 0, 0], "thickness": 2000},
+                 "motion": {"startPos": [0, 2500, 5000], "endPos": [10000, 2500, 5000],
+                            "durationS": 12, "easing": "ease-in-out"},
+                 "blend": "screen"},
+                {"name": "Amber Spot", "category": "spatial-field", "shape": "sphere",
+                 "r": 255, "g": 160, "b": 40, "size": {"radius": 2000},
+                 "motion": {"startPos": [8000, 0, 3000], "endPos": [2000, 0, 7000],
+                            "durationS": 15, "easing": "ease-in-out"},
+                 "blend": "add"},
+            ],
+        },
+        "figure-eight": {
+            "name": "Figure Eight",
+            "durationS": 24,
+            "effects": [
+                # Two spheres crossing at center stage — moving heads track each
+                {"name": "Cyan Path A", "category": "spatial-field", "shape": "sphere",
+                 "r": 0, "g": 220, "b": 255, "size": {"radius": 1800},
+                 "motion": {"startPos": [1000, 0, 2000], "endPos": [9000, 0, 8000],
+                            "durationS": 6, "easing": "ease-in-out"},
+                 "blend": "add"},
+                {"name": "Cyan Path B", "category": "spatial-field", "shape": "sphere",
+                 "r": 0, "g": 220, "b": 255, "size": {"radius": 1800},
+                 "motion": {"startPos": [9000, 0, 2000], "endPos": [1000, 0, 8000],
+                            "durationS": 6, "easing": "ease-in-out"},
+                 "blend": "add"},
+                {"name": "Gold Return A", "category": "spatial-field", "shape": "sphere",
+                 "r": 255, "g": 200, "b": 50, "size": {"radius": 1800},
+                 "motion": {"startPos": [9000, 0, 8000], "endPos": [1000, 0, 2000],
+                            "durationS": 6, "easing": "ease-in-out"},
+                 "blend": "add"},
+                {"name": "Gold Return B", "category": "spatial-field", "shape": "sphere",
+                 "r": 255, "g": 200, "b": 50, "size": {"radius": 1800},
+                 "motion": {"startPos": [1000, 0, 8000], "endPos": [9000, 0, 2000],
+                            "durationS": 6, "easing": "ease-in-out"},
+                 "blend": "add"},
+            ],
+        },
+        "thunderstorm": {
+            "name": "Thunderstorm",
+            "durationS": 30,
+            "actions": [{"name": "Deep Blue Base", "type": 1, "r": 5, "g": 5, "b": 30}],
+            "effects": [
+                # Lightning bolts — fast-moving spheres that moving heads chase
+                {"name": "Lightning Strike 1", "category": "spatial-field", "shape": "sphere",
+                 "r": 255, "g": 255, "b": 240, "size": {"radius": 3000},
+                 "motion": {"startPos": [3000, 5000, 5000], "endPos": [3000, 0, 5000],
+                            "durationS": 0.3, "easing": "ease-in"},
+                 "blend": "add"},
+                {"name": "Lightning Strike 2", "category": "spatial-field", "shape": "sphere",
+                 "r": 200, "g": 200, "b": 255, "size": {"radius": 2500},
+                 "motion": {"startPos": [7000, 5000, 3000], "endPos": [7000, 0, 3000],
+                            "durationS": 0.3, "easing": "ease-in"},
+                 "blend": "add"},
+                {"name": "Rolling Thunder", "category": "spatial-field", "shape": "plane",
+                 "r": 30, "g": 20, "b": 80, "size": {"normal": [1, 0, 0], "thickness": 3000},
+                 "motion": {"startPos": [0, 2500, 5000], "endPos": [10000, 2500, 5000],
+                            "durationS": 8, "easing": "linear"},
+                 "blend": "screen"},
+            ],
+        },
+        "dance-floor": {
+            "name": "Dance Floor",
+            "durationS": 20,
+            "actions": [{"name": "Chase Pulse", "type": 4, "r": 255, "g": 0, "b": 128,
+                         "speedMs": 30, "spacing": 6, "tailLen": 3, "direction": 0}],
+            "effects": [
+                # Fast orbiting spots — moving heads rapidly track
+                {"name": "Red Orbit", "category": "spatial-field", "shape": "sphere",
+                 "r": 255, "g": 0, "b": 50, "size": {"radius": 1200},
+                 "motion": {"startPos": [1000, 0, 2000], "endPos": [9000, 0, 8000],
+                            "durationS": 3, "easing": "linear"},
+                 "blend": "add"},
+                {"name": "Blue Orbit", "category": "spatial-field", "shape": "sphere",
+                 "r": 50, "g": 0, "b": 255, "size": {"radius": 1200},
+                 "motion": {"startPos": [9000, 0, 2000], "endPos": [1000, 0, 8000],
+                            "durationS": 3, "easing": "linear"},
+                 "blend": "add"},
+                {"name": "Green Flash", "category": "spatial-field", "shape": "sphere",
+                 "r": 0, "g": 255, "b": 80, "size": {"radius": 1500},
+                 "motion": {"startPos": [5000, 5000, 5000], "endPos": [5000, 0, 5000],
+                            "durationS": 2, "easing": "ease-in"},
+                 "blend": "add"},
+            ],
+        },
     }
 
     preset = PRESETS.get(preset_id)
@@ -3004,6 +3225,11 @@ def api_show_presets():
         {"id": "police",         "name": "Police Lights",    "desc": "Red strobe with blue flash sweep"},
         {"id": "starfield",      "name": "Starfield",        "desc": "White sparkles on dark background"},
         {"id": "aurora",         "name": "Aurora Borealis",  "desc": "Green curtain with purple shimmer"},
+        {"id": "spotlight-sweep","name": "Spotlight Sweep", "desc": "Warm orb sweeps stage left-right — moving heads track it"},
+        {"id": "concert-wash",  "name": "Concert Wash",    "desc": "Magenta flood + amber spot — moving heads follow the amber"},
+        {"id": "figure-eight",  "name": "Figure Eight",    "desc": "Crossing cyan/gold orbs — moving heads trace figure-eight paths"},
+        {"id": "thunderstorm",  "name": "Thunderstorm",    "desc": "Lightning bolts on deep blue — moving heads chase the strikes"},
+        {"id": "dance-floor",   "name": "Dance Floor",     "desc": "Fast orbiting spots + chase pulse — moving heads rapid-track"},
     ]
     return jsonify(presets)
 
@@ -3345,9 +3571,12 @@ def api_migrate_layout():
             f = {
                 "id": _nxt_fix,
                 "name": child.get("name") or child.get("hostname") or f"Fixture {_nxt_fix}",
+                "fixtureType": "led",
                 "childId": child["id"],
                 "type": "linear",
                 "strings": [],
+                "childIds": [],
+                "rotation": [0, 0, 0],
                 "aoeRadius": 1000,
             }
             _fixtures.append(f)
