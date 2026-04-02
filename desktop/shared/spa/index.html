@@ -690,7 +690,7 @@ function _renderSetup(){
       var cMap={};(children||[]).forEach(function(c){cMap[c.id]=c;});
       var h='<div style="margin-bottom:.6em">'
         +'<button class="btn btn-on" onclick="showAddFixtureModal()" data-tip="setupAdd">Add Fixture</button>'
-        +'<button class="btn btn-nav" onclick="discoverChildren()" id="disc-btn" style="margin-left:.5em" data-tip="setupDiscover">Discover LED Performers</button>'
+        +'<button class="btn btn-nav" onclick="discoverChildren()" id="disc-btn" style="margin-left:.5em" data-tip="setupDiscover">Discover</button>'
         +'<button class="btn btn-nav" onclick="setupRefreshAll(this)" style="margin-left:.5em" data-tip="setupRefreshAll">Refresh All</button>'
         +'</div>'
         +'<div id="disc-results" style="display:none;margin-bottom:.8em"></div>'
@@ -866,24 +866,35 @@ function discoverChildren(){
       ra('GET','/api/children/discover/results',null,function(d){
         if(d&&d.pending)return;
         clearInterval(poll);
-        if(btn){btn.disabled=false;btn.textContent='Discover LED Performers';}
+        if(btn){btn.disabled=false;btn.textContent='Discover';}
         var el=document.getElementById('disc-results');
         if(!el)return;
         if(!d||!d.length){
-          el.innerHTML='<p style="color:#888;font-size:.85em;padding:.3em 0">No new LED performers found on network.</p>';
+          el.innerHTML='<p style="color:#888;font-size:.85em;padding:.3em 0">No new devices found on network.</p>';
           el.style.display='block';return;
         }
         var h='<p style="color:#aaa;font-size:.85em;margin-bottom:.4em">Found — click Add to register:</p>'
-          +'<table class="tbl" style="max-width:700px"><tr><th>Hostname</th><th>Name</th><th>IP</th><th>Strings</th><th></th></tr>';
+          +'<table class="tbl" style="max-width:800px"><tr><th>Hostname</th><th>Name</th><th>IP</th><th>Type</th><th>Strings</th><th></th></tr>';
         d.forEach(function(c){
-          h+='<tr><td>'+escapeHtml(c.hostname)+'</td><td>'+escapeHtml(c.name||'-')+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+c.sc+'</td>'
-            +'<td><button class="btn btn-on" onclick="addDiscovered(\''+c.ip+'\')">Add</button></td></tr>';
+          var bt=c.boardType||'slyled';
+          var badge=bt==='dmx'?'<span class="badge" style="background:#7c3aed;color:#fff;font-size:.75em">DMX Bridge</span>'
+            :'<span class="badge" style="background:#059669;color:#fff;font-size:.75em">LED</span>';
+          var addBtn=bt==='dmx'
+            ?'<button class="btn" onclick="addDiscoveredDmxBridge(\''+c.ip+'\')" style="background:#7c3aed;color:#fff">Configure</button>'
+            :'<button class="btn btn-on" onclick="addDiscovered(\''+c.ip+'\')">Add</button>';
+          h+='<tr><td>'+escapeHtml(c.hostname)+'</td><td>'+escapeHtml(c.name||'-')+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+badge+'</td><td>'+(bt==='dmx'?'—':c.sc)+'</td>'
+            +'<td>'+addBtn+'</td></tr>';
         });
         el.innerHTML=h+'</table>';
         el.style.display='block';
       });
     },500);
   });
+}
+
+function addDiscoveredDmxBridge(ip){
+  document.getElementById('hs').textContent='Opening DMX bridge config at '+ip+'...';
+  window.open('http://'+ip+'/config','_blank');
 }
 
 function addDiscovered(ip){

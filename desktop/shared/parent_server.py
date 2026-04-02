@@ -338,10 +338,16 @@ def _discover_all():
             if info.get("hostname")}
 
 def _discover():
-    """Broadcast PING, wait for listener to collect PONGs, return unknown LED performers.
-    Excludes DMX bridges (boardType 'dmx') by probing /status on each discovered IP."""
+    """Broadcast PING, wait for listener to collect PONGs, return unknown devices.
+    Includes LED performers and DMX bridges — probes /status for board type."""
     known_ips = {c["ip"] for c in _children}
     known_hosts = {c.get("hostname") for c in _children}
+    # Also exclude IPs that already have a DMX fixture pointing at them
+    known_dmx_ips = set()
+    for f in _fixtures:
+        if f.get("fixtureType") == "dmx":
+            # DMX fixtures don't have IPs directly, but check children
+            pass
     _recent_pongs.clear()
     _broadcast_ping_all()
     time.sleep(2.0)
@@ -349,15 +355,14 @@ def _discover():
     for ip, info in _recent_pongs.items():
         if ip in known_ips or info.get("hostname") in known_hosts:
             continue
-        # Probe /status to check if this is a DMX bridge
+        # Probe /status to detect board type
         try:
             import urllib.request as _ur
             resp = _ur.urlopen(f"http://{ip}/status", timeout=2)
             data = json.loads(resp.read().decode("utf-8"))
-            if data.get("boardType") == "dmx":
-                continue  # skip DMX bridges
+            info["boardType"] = data.get("boardType", "slyled")
         except Exception:
-            pass  # if probe fails, include it (probably an LED performer)
+            info["boardType"] = "slyled"
         results.append(info)
     return results
 
