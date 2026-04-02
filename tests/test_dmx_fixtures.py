@@ -486,48 +486,10 @@ def run():
         # Clean up cascade child
         c.delete(f'/api/children/{cascade_child_id}')
 
-        # ================================================================
-        # 13. MIGRATE/LAYOUT — orphan children get fixtures
-        # ================================================================
-        print('── 13. Migrate layout ──')
-
-        # Count existing fixtures before adding orphan
-        r = c.get('/api/fixtures')
-        pre_count = len(r.get_json())
-
-        # Register orphan child (no fixture linked)
-        r = c.post('/api/children', json={'ip': '10.0.0.60'})
-        orphan_id = r.get_json().get('id')
-
-        # Verify no fixture links to this child yet
-        r = c.get('/api/fixtures')
-        linked = [f for f in r.get_json() if f.get('childId') == orphan_id]
-        ok('Orphan has no fixture yet', len(linked) == 0)
-
-        # Run migration
-        r = c.post('/api/migrate/layout')
-        d = r.get_json()
-        ok('Migrate layout', r.status_code == 200 and d.get('ok'))
-        ok('Migration created fixtures', d.get('created', 0) >= 1,
-           f"created={d.get('created')}")
-
-        # Verify fixture was created for orphan
-        r = c.get('/api/fixtures')
-        linked = [f for f in r.get_json() if f.get('childId') == orphan_id]
-        ok('Orphan now has fixture', len(linked) == 1)
-        ok('Migrated fixture fixtureType=led', linked[0].get('fixtureType') == 'led')
-        ok('Migrated fixture has rotation', linked[0].get('rotation') == [0, 0, 0])
-        ok('Migrated fixture has childIds', linked[0].get('childIds') == [])
-
-        # Run again — should not duplicate
-        r = c.post('/api/migrate/layout')
-        ok('Re-migrate is idempotent', r.get_json().get('created', -1) == 0)
-
-        # Clean up
-        c.delete(f'/api/children/{orphan_id}')
+        # (Migration tests removed in v8.0 — /api/migrate/layout endpoint removed)
 
         # ================================================================
-        # 14. GROUP FIXTURES
+        # 13. GROUP FIXTURES
         # ================================================================
         print('── 14. Group fixtures ──')
 

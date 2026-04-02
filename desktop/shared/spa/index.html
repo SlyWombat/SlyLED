@@ -259,6 +259,15 @@ body.light .li:hover{border-color:#3b82f6}
     </div>
     <div id='dmx-status' style='font-size:.78em;color:#64748b;margin-top:.5em'></div>
   </div>
+  <div class='card' style='max-width:900px'>
+    <div class='card-title'>DMX Universe Patch</div>
+    <p style='font-size:.85em;color:#aaa;margin-bottom:.6em'>Channel address map — see which fixtures use which channels. Red = address conflict.</p>
+    <div style='margin-bottom:.5em'>
+      <label style='font-size:.8em'>Universe:</label>
+      <select id='patch-uni' onchange='renderPatchView()' style='font-size:.8em'></select>
+    </div>
+    <div id='patch-grid' style='overflow-x:auto'></div>
+  </div>
   <div class='card' style='max-width:720px'>
     <div class='card-title'>DMX Fixture Profiles</div>
     <p style='font-size:.85em;color:#aaa;margin-bottom:.6em'>Manage fixture profiles for DMX channel mapping and capabilities.</p>
@@ -738,7 +747,8 @@ function showAddFixtureModal(){
   var h='<label>Fixture Type</label>'
     +'<select id="aft" onchange="_toggleAddFixFields()" style="width:100%;margin-bottom:.6em">'
     +'<option value="led">SlyLED Performer (LED)</option>'
-    +'<option value="dmx">DMX Fixture</option></select>'
+    +'<option value="dmx">DMX Fixture</option>'
+    +'<option value="group">Fixture Group</option></select>'
     +'<div id="af-led">'
     +'<label>IP Address</label><input id="af-ip" placeholder="x.x.x.x" style="width:100%">'
     +'</div>'
@@ -751,6 +761,10 @@ function showAddFixtureModal(){
     +'<label>Profile</label>'
     +'<select id="af-prof" style="width:100%"><option value="">— None (generic channels) —</option></select>'
     +'</div>'
+    +'<div id="af-group" style="display:none">'
+    +'<label>Group Name</label><input id="af-gname" placeholder="Front Wash" style="width:100%;margin-bottom:.4em">'
+    +'<label>Select Members</label><div id="af-members" style="max-height:200px;overflow-y:auto;border:1px solid #334;padding:.3em;margin-bottom:.4em"></div>'
+    +'</div>'
     +'<div style="margin-top:.8em"><button class="btn btn-on" onclick="_submitAddFixture()">Add</button></div>';
   document.getElementById('modal-title').textContent='Add Fixture';
   document.getElementById('modal-body').innerHTML=h;
@@ -760,6 +774,20 @@ function _toggleAddFixFields(){
   var t=document.getElementById('aft').value;
   document.getElementById('af-led').style.display=t==='led'?'':'none';
   document.getElementById('af-dmx').style.display=t==='dmx'?'':'none';
+  document.getElementById('af-group').style.display=t==='group'?'':'none';
+  if(t==='group'){
+    var mel=document.getElementById('af-members');
+    if(mel&&!mel.innerHTML){
+      ra('GET','/api/fixtures',null,function(fxs){
+        var h='';(fxs||[]).forEach(function(f){
+          if(f.type==='group')return;
+          var badge=f.fixtureType==='dmx'?'<span style="color:#a78bfa;font-size:.75em">DMX</span>':'<span style="color:#4ade80;font-size:.75em">LED</span>';
+          h+='<label style="display:block;padding:.15em 0;font-size:.82em"><input type="checkbox" value="'+f.id+'" class="af-member-cb"> '+escapeHtml(f.name)+' '+badge+'</label>';
+        });
+        mel.innerHTML=h||'<span style="color:#556">No fixtures to group</span>';
+      });
+    }
+  }
   if(t==='dmx'){
     var sel=document.getElementById('af-prof');
     if(sel&&sel.options.length<=1){
@@ -793,6 +821,18 @@ function _submitAddFixture(){
         document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
         setTimeout(loadSetup,1000);
       }
+    });
+  }else if(ft==='group'){
+    var gname=document.getElementById('af-gname').value.trim();
+    if(!gname){document.getElementById('hs').textContent='Enter a group name';return;}
+    var cbs=document.querySelectorAll('.af-member-cb:checked');
+    var memberIds=[];cbs.forEach(function(cb){memberIds.push(parseInt(cb.value));});
+    if(!memberIds.length){document.getElementById('hs').textContent='Select at least one member';return;}
+    closeModal();
+    ra('POST','/api/fixtures',{name:gname,fixtureType:'led',type:'group',childIds:memberIds},function(r){
+      if(r&&r.ok)document.getElementById('hs').textContent='Created group: '+gname+' ('+memberIds.length+' members)';
+      else document.getElementById('hs').textContent='Failed: '+(r&&r.err||'unknown');
+      loadSetup();
     });
   }else{
     var name=document.getElementById('af-name').value.trim();
@@ -1560,6 +1600,79 @@ function dmxTestBlackout(fid){
 
 // ── Profile Library UI ───────────────────────────────────────────────────────
 var _profileCatColors={'par':'#059669','wash':'#2563eb','spot':'#7c3aed','moving-head':'#dc2626','strobe':'#f59e0b','fog':'#6b7280','laser':'#ec4899','other':'#446'};
+// ── Universe Patch View ──────────────────────────────────────────────────────
+function loadPatchView(){
+  ra('GET','/api/fixtures',null,function(fixtures){
+    var sel=document.getElementById('patch-uni');if(!sel)return;
+    var unis=new Set();
+    (fixtures||[]).forEach(function(f){if(f.fixtureType==='dmx'&&f.dmxUniverse)unis.add(f.dmxUniverse);});
+    if(!unis.size)unis.add(1);
+    var sorted=Array.from(unis).sort(function(a,b){return a-b;});
+    sel.innerHTML='';
+    sorted.forEach(function(u){var o=document.createElement('option');o.value=u;o.textContent='Universe '+u;sel.appendChild(o);});
+    window._patchFixtures=fixtures||[];
+    renderPatchView();
+  });
+}
+function renderPatchView(){
+  var el=document.getElementById('patch-grid');if(!el)return;
+  var uni=parseInt((document.getElementById('patch-uni')||{}).value)||1;
+  var fixtures=(window._patchFixtures||[]).filter(function(f){return f.fixtureType==='dmx'&&f.dmxUniverse===uni;});
+  // Build channel occupancy map: channel → [fixture names]
+  var occ={};
+  fixtures.forEach(function(f){
+    var start=f.dmxStartAddr||1;
+    var count=f.dmxChannelCount||1;
+    for(var ch=start;ch<start+count&&ch<=512;ch++){
+      if(!occ[ch])occ[ch]=[];
+      occ[ch].push(f.name||('Fixture '+f.id));
+    }
+  });
+  // Render 32-column grid (16 rows of 32 = 512 channels)
+  var h='<table style="font-size:.65em;border-collapse:collapse;width:100%">';
+  h+='<tr><th style="width:30px"></th>';
+  for(var c=0;c<32;c++)h+='<th style="padding:1px 2px;color:#556;text-align:center">'+(c+1)+'</th>';
+  h+='</tr>';
+  for(var row=0;row<16;row++){
+    var base=row*32;
+    h+='<tr><td style="color:#556;text-align:right;padding-right:4px;font-weight:bold">'+(base+1)+'</td>';
+    for(var col=0;col<32;col++){
+      var ch=base+col+1;
+      var names=occ[ch];
+      var conflict=names&&names.length>1;
+      var used=names&&names.length>=1;
+      var bg=conflict?'#7f1d1d':used?'#1e3a5f':'#0f172a';
+      var border=conflict?'#ef4444':used?'#2563eb':'#1e293b';
+      var tip=names?names.join(' + '):'Ch '+ch+' (free)';
+      h+='<td style="background:'+bg+';border:1px solid '+border+';padding:2px 3px;text-align:center;cursor:default" title="'+escapeHtml(tip)+'">';
+      if(conflict)h+='<span style="color:#fca5a5;font-weight:bold">'+ch+'</span>';
+      else if(used)h+='<span style="color:#93c5fd">'+ch+'</span>';
+      else h+='<span style="color:#334155">'+ch+'</span>';
+      h+='</td>';
+    }
+    h+='</tr>';
+  }
+  h+='</table>';
+  // Legend
+  h+='<div style="font-size:.7em;color:#556;margin-top:.4em;display:flex;gap:1em">';
+  h+='<span><span style="display:inline-block;width:10px;height:10px;background:#1e3a5f;border:1px solid #2563eb"></span> Used</span>';
+  h+='<span><span style="display:inline-block;width:10px;height:10px;background:#7f1d1d;border:1px solid #ef4444"></span> Conflict</span>';
+  h+='<span><span style="display:inline-block;width:10px;height:10px;background:#0f172a;border:1px solid #1e293b"></span> Free</span>';
+  h+='</div>';
+  // Fixture summary below
+  if(fixtures.length){
+    h+='<div style="font-size:.75em;margin-top:.5em">';
+    fixtures.forEach(function(f){
+      var start=f.dmxStartAddr||1;var count=f.dmxChannelCount||1;
+      h+='<div style="padding:.15em 0"><span style="color:#93c5fd">'+escapeHtml(f.name)+'</span> <span style="color:#556">Ch '+start+'–'+(start+count-1)+' ('+count+'ch)</span></div>';
+    });
+    h+='</div>';
+  }else{
+    h+='<div style="font-size:.78em;color:#556;margin-top:.4em">No DMX fixtures in Universe '+uni+'</div>';
+  }
+  el.innerHTML=h;
+}
+
 function showProfileBrowser(){
   ra('GET','/api/dmx-profiles',null,function(profiles){
     if(!profiles)return;
@@ -2418,8 +2531,17 @@ function tlSyncAndStart(){
 
   var tlId=_curTl.id;
 
-  // Phase 1: Bake
-  ra('POST','/api/timelines/'+tlId+'/bake',{},function(br){
+  // Phase 1: Check if bake is fresh, skip if so
+  ra('GET','/api/timelines/'+tlId+'/baked',null,function(baked){
+    if(baked&&baked.bakedAt&&!baked.err){
+      // Bake exists — skip to sync
+      _syncPhase('Bake up to date — syncing to performers...');_syncProg(100);
+      _doSyncPhase(tlId);
+      return;
+    }
+    // No bake or stale — bake first
+    _syncPhase('Phase 1: Baking...');
+    ra('POST','/api/timelines/'+tlId+'/bake',{},function(br){
     if(!br||!br.ok){_syncPhase('Bake failed: '+(br&&br.err||'?'));return;}
     var bakePoll=setInterval(function(){
       ra('GET','/api/timelines/'+tlId+'/baked/status',null,function(s){
@@ -2428,37 +2550,38 @@ function tlSyncAndStart(){
         if(s.done){
           clearInterval(bakePoll);
           if(s.error){_syncPhase('Bake error: '+s.error);return;}
-          _syncPhase('Phase 2: Syncing to performers...');_syncProg(0);
-          // Phase 2: Sync
-          ra('POST','/api/timelines/'+tlId+'/baked/sync',{},function(sr){
-            if(!sr||!sr.ok){_syncPhase('Sync failed');return;}
-            // Poll sync progress
-            var syncPoll=setInterval(function(){
-              ra('GET','/api/timelines/'+tlId+'/sync/status',null,function(sp){
-                if(!sp)return;
-                _renderSyncPerformers(sp);
-                var total=sp.totalPerformers||1;
-                var ready=sp.readyCount||0;
-                _syncProg(Math.round(ready/total*100));
-                if(sp.done){
-                  clearInterval(syncPoll);
-                  if(sp.allReady){
-                    _syncPhase('All performers ready!');_syncProg(100);
-                    document.getElementById('sync-actions').style.display='block';
-                    document.getElementById('sync-go-btn').disabled=false;
-                  } else {
-                    _syncPhase('Warning: Not all performers verified');
-                    document.getElementById('sync-actions').style.display='block';
-                    document.getElementById('sync-go-btn').disabled=false;
-                    document.getElementById('sync-go-btn').textContent='Start Anyway';
-                  }
-                }
-              });
-            },400);
-          });
+          _doSyncPhase(tlId);
         }
       });
     },500);
+  });
+  });
+}
+
+function _doSyncPhase(tlId){
+  _syncPhase('Syncing to performers...');_syncProg(0);
+  ra('POST','/api/timelines/'+tlId+'/baked/sync',{},function(sr){
+    if(!sr||!sr.ok){_syncPhase('Sync failed');return;}
+    var syncPoll=setInterval(function(){
+      ra('GET','/api/timelines/'+tlId+'/sync/status',null,function(sp){
+        if(!sp)return;
+        _renderSyncPerformers(sp);
+        var total=sp.totalPerformers||1;
+        var ready=sp.readyCount||0;
+        _syncProg(Math.round(ready/total*100));
+        if(sp.done){
+          clearInterval(syncPoll);
+          if(sp.allReady){
+            _syncPhase('All performers ready!');_syncProg(100);
+          } else {
+            _syncPhase('Warning: Not all performers verified');
+            document.getElementById('sync-go-btn').textContent='Start Anyway';
+          }
+          document.getElementById('sync-actions').style.display='block';
+          document.getElementById('sync-go-btn').disabled=false;
+        }
+      });
+    },400);
   });
 }
 
@@ -3859,6 +3982,7 @@ function loadSettings(){
     if(lp)lp.textContent=d.logging?'Logs saved to data/logs/ folder':'';
     applyDarkMode(d.darkMode!==0);
   });
+  loadPatchView();
 }
 
 function factoryReset(){

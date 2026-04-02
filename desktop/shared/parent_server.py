@@ -317,20 +317,15 @@ def _ping(child, retries=2):
 
 def _broadcast_ping_all():
     """Send broadcast PINGs + direct pings to all known children.
-    Sends both v3 and v4 PINGs so old and new firmware both respond.
     The UDP listener daemon handles incoming PONGs  -' _recent_pongs."""
-    pkt4 = _hdr(CMD_PING)
-    # Also send v3 ping for backward compat during OTA transition
-    pkt3 = struct.pack("<HBBI", UDP_MAGIC, 3, CMD_PING, int(time.time()) & 0xFFFFFFFF)
+    pkt = _hdr(CMD_PING)
     for c in list(_children):
-        _send(c["ip"], pkt4)
-        _send(c["ip"], pkt3)
+        _send(c["ip"], pkt)
     for bc in ["255.255.255.255"] + _local_broadcasts():
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                s.sendto(pkt4, (bc, UDP_PORT))
-                s.sendto(pkt3, (bc, UDP_PORT))
+                s.sendto(pkt, (bc, UDP_PORT))
         except Exception:
             pass
 
@@ -822,12 +817,8 @@ def api_layout_get():
 @app.post("/api/layout")
 def api_layout_save():
     body = request.get_json(silent=True) or {}
-    # Accept fixture positions (new) or children positions (legacy)
-    fixtures = body.get("fixtures", [])
-    if fixtures:
-        _layout["children"] = [{"id": f["id"], "x": f.get("x", 0), "y": f.get("y", 0), "z": f.get("z", 0)} for f in fixtures]
-    else:
-        _layout["children"] = body.get("children", [])
+    fixtures = body.get("fixtures", body.get("children", []))
+    _layout["children"] = [{"id": f["id"], "x": f.get("x", 0), "y": f.get("y", 0), "z": f.get("z", 0)} for f in fixtures]
     _save("layout", _layout)
     return jsonify(ok=True)
 
@@ -857,28 +848,6 @@ def api_stage_save():
         _save("layout", _layout)
     return jsonify(ok=True)
 
-def _auto_create_fixtures():
-    """Auto-create linear fixtures from all registered children."""
-    global _nxt_fix
-    with _lock:
-        existing = {f.get("childId") for f in _fixtures}
-        for child in _children:
-            if child["id"] in existing:
-                continue
-            f = {
-                "id": _nxt_fix,
-                "name": child.get("name") or child.get("hostname") or f"Fixture {_nxt_fix}",
-                "fixtureType": "led",
-                "childId": child["id"],
-                "type": "linear",
-                "strings": [],
-                "rotation": [0, 0, 0],
-                "childIds": [],
-                "aoeRadius": 1000,
-            }
-            _fixtures.append(f)
-            _nxt_fix += 1
-        _save("fixtures", _fixtures)
 
 #  "  "  Fixtures (Phase 2)  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1125,6 +1094,36 @@ def api_dmx_profile_delete(profile_id):
     if _profile_lib.delete_profile(profile_id):
         return jsonify(ok=True)
     return jsonify(err="Cannot delete (built-in or not found)"), 400
+
+#  "  "  DMX Patch / Conflicts  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
+
+@app.get("/api/dmx/patch")
+def api_dmx_patch():
+    """Return DMX address map per universe with conflict detection."""
+    dmx_fixtures = [f for f in _fixtures if f.get("fixtureType") == "dmx"]
+    universes = {}
+    conflicts = []
+    for f in dmx_fixtures:
+        uni = f.get("dmxUniverse", 1)
+        addr = f.get("dmxStartAddr", 1)
+        count = f.get("dmxChannelCount", 1)
+        if uni not in universes:
+            universes[uni] = []
+        entry = {"id": f["id"], "name": f.get("name", "?"), "startAddr": addr,
+                 "channelCount": count, "endAddr": addr + count - 1,
+                 "profileId": f.get("dmxProfileId")}
+        # Check for overlaps within this universe
+        for existing in universes[uni]:
+            if addr <= existing["endAddr"] and existing["startAddr"] <= addr + count - 1:
+                conflicts.append({
+                    "universe": uni,
+                    "fixtures": [existing["name"], entry["name"]],
+                    "overlapStart": max(addr, existing["startAddr"]),
+                    "overlapEnd": min(addr + count - 1, existing["endAddr"]),
+                })
+        universes[uni].append(entry)
+    return jsonify(universes=universes, conflicts=conflicts,
+                   totalFixtures=len(dmx_fixtures), totalConflicts=len(conflicts))
 
 #  "  "  DMX Output Engines  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1538,18 +1537,24 @@ def api_timeline_frame(tid):
         return jsonify(err="Not found"), 404
     t = float(request.args.get("t", 0))
 
-    # Auto-create fixtures from children if none exist (e.g. after factory reset)
-    if not _fixtures and _children:
-        _auto_create_fixtures()
-
-    # Expand allPerformers tracks
+    # Expand allPerformers and group fixtures into per-fixture tracks
+    fix_map_local = {f["id"]: f for f in _fixtures}
     raw_tracks = tl.get("tracks", [])
     tracks = []
     for track in raw_tracks:
         if track.get("allPerformers"):
             for f in _fixtures:
-                tracks.append({"fixtureId": f["id"], "clips": list(track.get("clips", []))})
+                if f.get("type") != "group":
+                    tracks.append({"fixtureId": f["id"], "clips": list(track.get("clips", []))})
         else:
+            # Expand group fixtures to their members
+            fid = track.get("fixtureId")
+            grp = fix_map_local.get(fid)
+            if grp and grp.get("type") == "group" and grp.get("childIds"):
+                for mid in grp["childIds"]:
+                    if mid in fix_map_local:
+                        tracks.append({"fixtureId": mid, "clips": list(track.get("clips", []))})
+                continue
             tracks.append(track)
 
     result = {}  # fixture_id  -' [r,g,b] array
@@ -1617,10 +1622,6 @@ def api_timeline_bake(tid):
 
     n_frames = int(math.ceil(tl.get("durationS", 60) * 40))
     _bake_progress = BakeProgress(n_frames)
-
-    # Auto-create fixtures from children if none exist
-    if not _fixtures:
-        _auto_create_fixtures()
 
     # Pre-enrich fixtures with child string data so the bake engine can resolve pixels
     enriched_fixtures = []
@@ -2795,35 +2796,6 @@ def api_help(section):
     except Exception as e:
         return jsonify(html=f"<p>Error loading help: {e}</p>")
 
-#  "  "  Migration (Phase 8)  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
-
-@app.post("/api/migrate/layout")
-def api_migrate_layout():
-    """Create fixtures from all registered children (2D -'3D migration)."""
-    global _nxt_fix
-    created = 0
-    existing_child_ids = {f.get("childId") for f in _fixtures}
-    with _lock:
-        for child in _children:
-            if child["id"] in existing_child_ids:
-                continue
-            f = {
-                "id": _nxt_fix,
-                "name": child.get("name") or child.get("hostname") or f"Fixture {_nxt_fix}",
-                "fixtureType": "led",
-                "childId": child["id"],
-                "type": "linear",
-                "strings": [],
-                "childIds": [],
-                "rotation": [0, 0, 0],
-                "aoeRadius": 1000,
-            }
-            _fixtures.append(f)
-            _nxt_fix += 1
-            created += 1
-        _save("fixtures", _fixtures)
-    return jsonify(ok=True, created=created)
-
 @app.post("/api/reset")
 def api_reset():
     """Clear all data and restore default settings."""
@@ -2832,10 +2804,18 @@ def api_reset():
         return jsonify(err="Missing confirmation header"), 403
     global _children, _settings, _layout, _stage, _actions
     global _fixtures, _surfaces, _spatial_fx, _timelines
-    global _wifi, _nxt_c, _nxt_a
+    global _wifi, _nxt_c, _nxt_a, _dmx_settings, _bake_result
     global _nxt_fix, _nxt_sf, _nxt_sfx, _nxt_tl
-    # Stop DMX playback
+    # Stop DMX playback + engines
     _dmx_playback_stop.set()
+    try:
+        _artnet.stop()
+    except Exception:
+        pass
+    try:
+        _sacn.stop()
+    except Exception:
+        pass
     # Stop all children
     pkt_stop = _hdr(CMD_RUNNER_STOP)
     pkt_off = _hdr(CMD_ACTION_STOP)
@@ -2847,6 +2827,7 @@ def api_reset():
                 _send(c["ip"], pkt_stop)
                 _send(c["ip"], pkt_off)
     _live_events.clear()
+    _bake_result.clear()
     with _lock:
         _children = []
         _actions  = []
@@ -2858,6 +2839,8 @@ def api_reset():
         _surfaces   = list(_DEFAULT_SURFACES)
         _spatial_fx = list(_DEFAULT_SPATIAL_FX)
         _timelines  = list(_DEFAULT_TIMELINES)
+        _dmx_settings = {"protocol": "artnet", "frameRate": 40, "bindIp": "0.0.0.0",
+                         "universeRoutes": [], "sacnPriority": 100, "sacnSourceName": "SlyLED"}
         _nxt_c = _nxt_a = 0
         _nxt_fix = _nxt_sf = _nxt_sfx = _nxt_tl = 0
         _save("children", _children)
@@ -2870,6 +2853,11 @@ def api_reset():
         _save("surfaces",   _surfaces)
         _save("spatial_fx", _spatial_fx)
         _save("timelines",  _timelines)
+        _save("dmx_settings", _dmx_settings)
+        # Delete custom profiles (keep built-ins)
+        for p in list(_profile_lib._profiles.values()):
+            if not p.get("builtin"):
+                _profile_lib.delete_profile(p["id"])
     return jsonify(ok=True)
 
 #  "  "  OTA firmware update  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 

@@ -473,15 +473,24 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
             "aimPoint": f.get("aimPoint", [0, -1000, 0]) if ft == "dmx" else None,
         }
 
-    # Expand allPerformers tracks
+    # Expand allPerformers and group fixtures into per-fixture tracks
+    _fix_map = {f["id"]: f for f in fixtures}
     raw_tracks = timeline.get("tracks", [])
     tracks = []
     for track in raw_tracks:
         if track.get("allPerformers"):
             for f in fixtures:
-                tracks.append({"fixtureId": f["id"], "clips": list(track.get("clips", []))})
+                if f.get("type") != "group":
+                    tracks.append({"fixtureId": f["id"], "clips": list(track.get("clips", []))})
         else:
-            tracks.append(track)
+            fid = track.get("fixtureId")
+            grp = _fix_map.get(fid)
+            if grp and grp.get("type") == "group" and grp.get("childIds"):
+                for mid in grp["childIds"]:
+                    if mid in _fix_map:
+                        tracks.append({"fixtureId": mid, "clips": list(track.get("clips", []))})
+            else:
+                tracks.append(track)
 
     # Merge clips per fixture
     merged_clips = {}
