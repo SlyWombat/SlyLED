@@ -2914,7 +2914,12 @@ def api_firmware_latest():
     rel = _fetch_github_release()
     if not rel:
         return jsonify(ok=False, err="Could not fetch release info from GitHub"), 502
-    return jsonify(rel)
+    # Include registry firmware version + whether release has firmware binaries
+    registry = load_registry(_FW_DIR)
+    reg_versions = {e.get("board"): e.get("version", "0.0") for e in registry}
+    has_fw = any(a.get("name", "").endswith(".bin") for a in rel.get("assets", []))
+    return jsonify(**rel, registryVersion=max(reg_versions.values(), default="0.0"),
+                   hasFirmware=has_fw)
 
 @app.get("/api/firmware/check")
 def api_firmware_check():
@@ -2924,7 +2929,13 @@ def api_firmware_check():
     rel = _fetch_github_release()
     if not rel:
         return jsonify(ok=False, err="Could not fetch release info"), 502
-    latest = rel.get("version", "0.0")
+    # Use registry.json firmware version, not GitHub tag (desktop releases != firmware releases)
+    registry = load_registry(_FW_DIR)
+    reg_versions = {e.get("board"): e.get("version", "0.0") for e in registry}
+    gh_version = rel.get("version", "0.0")
+    # Only use GitHub version if release has firmware binaries attached
+    has_firmware_assets = any(a.get("name", "").endswith(".bin") for a in rel.get("assets", []))
+    latest = gh_version if has_firmware_assets else max(reg_versions.values(), default="0.0")
     results = []
     for c in _children:
         fw = c.get("fwVersion", "0.0") or "0.0"
