@@ -1,4 +1,4 @@
-# SlyLED User Manual — 3D Volumetric Lighting System (v7.2)
+# SlyLED User Manual — 3D Volumetric Lighting System (v8.0)
 
 ## Table of Contents
 1. [Getting Started with 3D Stage Design](#1-getting-started)
@@ -230,7 +230,7 @@ The `ShowEmulatorCanvas` card appears between the "Now Playing" progress card an
 
 ## 7. Preset Shows
 
-Nine pre-built shows are available from Settings → Load Show → Preset Shows:
+14 pre-built shows are available from the Runtime tab or Settings:
 
 | Preset | Type | Description |
 |--------|------|-------------|
@@ -243,8 +243,13 @@ Nine pre-built shows are available from Settings → Load Show → Preset Shows:
 | Police Lights | Mixed | Red strobe with blue box flash sweep |
 | Starfield | Classic action | White sparkles on dark background |
 | Aurora Borealis | Spatial (2 effects) | Green curtain with purple shimmer |
+| Spotlight Sweep | Spatial (moving heads) | Warm orb sweeps stage — heads track it |
+| Concert Wash | Mixed (moving heads) | Magenta flood + amber tracking spot |
+| Figure Eight | Spatial (moving heads) | Crossing orbs — heads trace X paths |
+| Thunderstorm | Mixed (moving heads) | Lightning strikes — heads chase bolts |
+| Dance Floor | Mixed (moving heads) | Fast orbiting spots — rapid tracking |
 
-Each preset creates a timeline with an "All Performers" stage track. Classic actions run on every fixture simultaneously. Spatial effects sweep across the stage based on fixture positions.
+Each preset creates a timeline with an "All Performers" stage track. Classic actions run on every fixture simultaneously. Spatial effects sweep across the stage based on fixture positions. DMX moving heads automatically track the spatial effect center with pan/tilt.
 
 ---
 
