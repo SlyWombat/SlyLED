@@ -1108,7 +1108,7 @@ var _dirDx=[1,0,-1,0],_dirDy=[0,-1,0,1]; // E,N,W,S in canvas-Y-down coords
 var _layDragId=null;
 var _layMode='2d'; // '2d' or '3d'
 
-function _isPlaced(c){return c.positioned||c._placed;}
+function _isPlaced(c){return c.positioned||c._placed||(c.x>0||c.y>0||c.z>0);}
 
 // ── 3D Viewport (Three.js) ─────────────────────────────────────────────────
 var _s3d={
@@ -1240,10 +1240,11 @@ function s3dLoadChildren(){
     // Load surfaces THEN render them (async — must wait for data)
     loadSurfaces(function(){_s3dRenderSurfaces();});
 
-    var placed=(ld.children||[]).filter(_isPlaced);
+    var placed=(_fixtures||[]).filter(_isFixturePlaced);
     placed.forEach(function(c){
       var pos=_s3dPos(c);
-      var col=c.type==='wled'?0xff6600:(c.status===1?0x22cc66:0x555555);
+      var ft=c.fixtureType||'led';
+      var col=ft==='dmx'?0x7c3aed:(c.status===1?0x22cc66:0x555555);
 
       // Group — everything moves together when dragged
       var grp=new THREE.Group();
@@ -1304,8 +1305,9 @@ function s3dLoadChildren(){
       }
 
       // LED string lines + dots (positions relative to group origin = 0,0,0)
-      if(c.strings&&c.sc>0){
-        for(var si=0;si<c.sc&&si<c.strings.length;si++){
+      var _sc=c.sc||c.strings&&c.strings.length||0;
+      if(c.strings&&_sc>0){
+        for(var si=0;si<_sc&&si<c.strings.length;si++){
           var s=c.strings[si];if(!s||!s.leds)continue;
           var strCol=new THREE.Color(_strCol[si%_strCol.length]);
           var lenMm=s.mm||0;if(lenMm<500)lenMm=Math.max(s.leds*16,500);
@@ -1408,6 +1410,7 @@ function _s3dSyncToLd(){
       var cid=grp.userData.childId;
       var mm=_s3dToMm(grp.position);
       (ld.children||[]).forEach(function(c){if(c.id===cid){c.x=mm.x;c.y=mm.y;c.z=mm.z;}});
+      (_fixtures||[]).forEach(function(f){if(f.id===cid){f.x=mm.x;f.y=mm.y;f.z=mm.z;f._placed=true;}});
     }
     if(grp.userData.surfaceObj&&grp.userData.surfaceId!==undefined){
       var sid=grp.userData.surfaceId;
