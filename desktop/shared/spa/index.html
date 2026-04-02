@@ -1037,12 +1037,17 @@ function s3dInit(){
     _s3d.controls.enabled=!e.value;
     if(!e.value){
       if(_s3dDraggingAim){
-        // Save aim point back to server
+        // Save aim point back to server and update local fixture data
         var obj=_s3d.tctl.object;
         if(obj){
           var wp=new THREE.Vector3();obj.getWorldPosition(wp);
           var aim=[Math.round(wp.x*1000),Math.round(wp.y*1000),Math.round(wp.z*1000)];
-          ra('PUT','/api/fixtures/'+_s3dDraggingAim+'/aim',{aimPoint:aim},function(){});
+          // Update local fixture data so re-render uses new aim
+          var _aimFid=_s3dDraggingAim;
+          (_fixtures||[]).forEach(function(f){if(f.id===_aimFid)f.aimPoint=aim;});
+          ra('PUT','/api/fixtures/'+_aimFid+'/aim',{aimPoint:aim},function(){
+            s3dLoadChildren(); // Re-render beam cone at new aim
+          });
         }
         _s3dDraggingAim=null;
       } else {
@@ -1429,8 +1434,13 @@ function s3dDrop(e){
   if(pt){
     var mm=_s3dToMm(pt);
     mm.x=Math.max(0,mm.x);mm.y=Math.max(0,mm.y);mm.z=Math.max(0,mm.z);
-    var ch=null;(ld.children||[]).forEach(function(c){if(c.id===_layDragId)ch=c;});
-    if(ch){ch.x=mm.x;ch.y=mm.y;ch.z=mm.z;ch._placed=true;s3dLoadChildren();renderSidebar();}
+    var fx=null;(_fixtures||[]).forEach(function(f){if(f.id===_layDragId)fx=f;});
+    if(fx){fx.x=mm.x;fx.y=mm.y;fx.z=mm.z;fx._placed=true;
+      // Also update ld.children position cache
+      var found=false;(ld.children||[]).forEach(function(c){if(c.id===_layDragId){c.x=mm.x;c.y=mm.y;c.z=mm.z;found=true;}});
+      if(!found)(ld.children=ld.children||[]).push({id:_layDragId,x:mm.x,y:mm.y,z:mm.z});
+      s3dLoadChildren();renderSidebar();
+    }
   }
   _layDragId=null;
 }
@@ -2810,6 +2820,26 @@ function drawLayout(){
     ctx.beginPath();ctx.arc(cx,cy,10,0,2*Math.PI);
     ctx.fillStyle=nodeCol;ctx.fill();
     ctx.strokeStyle=nodeBdr;ctx.lineWidth=2;ctx.stroke();
+    // DMX beam direction line (2D top-down: X→horizontal, aim shown as line from fixture to aim XY)
+    if(ft==='dmx'&&f.aimPoint){
+      var ax=f.aimPoint[0]*W/phW,ay=H-f.aimPoint[1]*H/phH;
+      var bLen=Math.sqrt((ax-cx)*(ax-cx)+(ay-cy)*(ay-cy));
+      if(bLen>5){
+        // Draw beam cone triangle (simplified 2D)
+        var bwDeg=15,angle=Math.atan2(ay-cy,ax-cx);
+        var halfW=Math.tan(bwDeg*Math.PI/360)*bLen;
+        var lx2=ax+Math.cos(angle+Math.PI/2)*halfW;
+        var ly2=ay+Math.sin(angle+Math.PI/2)*halfW;
+        var rx2=ax+Math.cos(angle-Math.PI/2)*halfW;
+        var ry2=ay+Math.sin(angle-Math.PI/2)*halfW;
+        ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(lx2,ly2);ctx.lineTo(rx2,ry2);ctx.closePath();
+        ctx.fillStyle='rgba(124,58,237,0.1)';ctx.fill();
+        ctx.strokeStyle='rgba(167,139,250,0.3)';ctx.lineWidth=1;ctx.stroke();
+        // Aim point dot
+        ctx.beginPath();ctx.arc(ax,ay,3,0,2*Math.PI);
+        ctx.fillStyle='#f44';ctx.fill();
+      }
+    }
     // Labels
     var lblDir=(cy+50>H)?-1:1;
     ctx.fillStyle='#eee';ctx.font='bold 10px sans-serif';ctx.textAlign='center';

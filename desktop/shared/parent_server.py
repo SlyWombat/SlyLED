@@ -804,12 +804,20 @@ def api_layout_get():
     layout = dict(_layout)
     # Merge fixture positions into fixture objects for the SPA
     pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    child_map = {c["id"]: c for c in _children}
     layout["fixtures"] = []
     for f in _fixtures:
         fid = f["id"]
         pos = pos_map.get(fid, pos_map.get(f.get("childId"), {}))
+        fixture_data = {**f}
+        # Merge string data from linked child if fixture doesn't have its own
+        if f.get("childId") is not None and not fixture_data.get("strings"):
+            child = child_map.get(f["childId"])
+            if child:
+                fixture_data["strings"] = child.get("strings", [])
+                fixture_data["sc"] = child.get("sc", 0)
         layout["fixtures"].append({
-            **f,
+            **fixture_data,
             "x": pos.get("x", 0),
             "y": pos.get("y", 0),
             "z": pos.get("z", 0),
