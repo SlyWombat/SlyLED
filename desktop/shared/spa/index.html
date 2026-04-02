@@ -3967,7 +3967,7 @@ function dmxRenderRoutes(){
     +'<th style="text-align:left;padding:.2em .3em">Label</th><th></th></tr>';
   _dmxRoutes.forEach(function(r,idx){
     h+='<tr style="border-top:1px solid #1e293b">';
-    h+='<td style="padding:.2em .3em"><input type="number" min="0" max="32767" value="'+(r.universe||0)+'" style="width:50px" onchange="dmxRouteChg('+idx+',\'universe\',parseInt(this.value))"></td>';
+    h+='<td style="padding:.2em .3em"><input type="number" min="1" max="32767" value="'+(r.universe||1)+'" style="width:50px" onchange="dmxRouteChg('+idx+',\'universe\',parseInt(this.value))"></td>';
     h+='<td style="padding:.2em .3em"><select style="width:150px" onchange="dmxRouteChg('+idx+',\'destination\',this.value)">';
     h+='<option value="">Broadcast</option>';
     _dmxDestinations.forEach(function(d){
@@ -3986,8 +3986,8 @@ function dmxRenderRoutes(){
 function dmxRouteChg(idx,field,val){if(_dmxRoutes[idx])_dmxRoutes[idx][field]=val;}
 
 function dmxAddRoute(){
-  var nextUni=0;
-  if(_dmxRoutes.length)nextUni=Math.max.apply(null,_dmxRoutes.map(function(r){return r.universe||0;}))+1;
+  var nextUni=1;
+  if(_dmxRoutes.length)nextUni=Math.max.apply(null,_dmxRoutes.map(function(r){return r.universe||1;}))+1;
   var defaultDest=_dmxDestinations.length?_dmxDestinations[0].ip:'';
   _dmxRoutes.push({universe:nextUni,destination:defaultDest,label:''});
   dmxRenderRoutes();

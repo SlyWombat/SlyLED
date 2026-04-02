@@ -44,9 +44,9 @@ def test_settings_api():
     with app.test_client() as c:
         # Save routes
         routes = [
-            {"universe": 0, "destination": "192.168.10.219", "label": "Giga DMX"},
-            {"universe": 1, "destination": "192.168.10.4", "label": "U16 Port 1"},
-            {"universe": 2, "destination": "192.168.10.4", "label": "U16 Port 2"},
+            {"universe": 1, "destination": "192.168.10.219", "label": "Giga DMX"},
+            {"universe": 2, "destination": "192.168.10.4", "label": "U16 Port 1"},
+            {"universe": 3, "destination": "192.168.10.4", "label": "U16 Port 2"},
         ]
         r = c.post('/api/dmx/settings', json={
             'protocol': 'artnet',
@@ -61,7 +61,7 @@ def test_settings_api():
         d = r.get_json()
         ok('Routes persisted', len(d.get('universeRoutes', [])) == 3)
         ok('Route 0 destination', d['universeRoutes'][0]['destination'] == '192.168.10.219')
-        ok('Route 1 universe', d['universeRoutes'][1]['universe'] == 1)
+        ok('Route 1 universe', d['universeRoutes'][1]['universe'] == 2)
         ok('Route 2 label', d['universeRoutes'][2]['label'] == 'U16 Port 2')
 
         # Empty routes = broadcast
