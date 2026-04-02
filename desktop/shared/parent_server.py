@@ -2,9 +2,8 @@
 """
 SlyLED Parent Server   " Windows / Mac desktop parent application.
 
-Replaces the Arduino Giga R1 as the full-featured parent.  Once a layout
-and runner set is designed here it can be exported and loaded onto a Giga
-running the minimal runtime firmware.
+Replaces the Arduino Giga R1 as the full-featured parent.  Manages layout,
+timelines, spatial effects, and DMX output.
 
 Usage (from project root):
     pip install -r desktop/windows/requirements.txt
@@ -12,7 +11,6 @@ Usage (from project root):
 """
 
 import argparse
-import copy
 import json
 import math
 import os
@@ -30,8 +28,8 @@ from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 import logging
 from datetime import datetime
 
-from wled_bridge import (wled_probe, wled_set_state, wled_map_action, wled_map_step,
-                         wled_stop, wled_get_effects, wled_get_palettes, wled_get_segments)
+from wled_bridge import (wled_probe, wled_stop,
+                         wled_get_effects, wled_get_palettes, wled_get_segments)
 from spatial_engine import (catmull_rom_sample, resolve_fixture,
                             evaluate_spatial_effect, blend_pixel_layers)
 from bake_engine import (bake_timeline, pack_lsq_zip, segments_to_load_steps,
@@ -123,7 +121,7 @@ for _c in _children:
     _c["status"] = 0
 _settings = _load("settings", {
     "name": "SlyLED", "units": 0, "canvasW": 10000, "canvasH": 5000,
-    "darkMode": 1, "runnerRunning": False, "activeRunner": -1, "runnerElapsed": 0,
+    "darkMode": 1, "runnerRunning": False, "runnerElapsed": 0,
     "runnerLoop": True,
 })
 _layout  = _load("layout",  {"canvasW": 10000, "canvasH": 5000, "children": []})
@@ -146,13 +144,8 @@ del _fix_patched
 _surfaces   = _load("surfaces",   [])
 _spatial_fx = _load("spatial_fx", [])
 _timelines  = _load("timelines",  [])
-_runners = _load("runners", [])
 _actions = _load("actions", [])
-_flights = _load("flights", [])
-_shows   = _load("shows",   [])
 _wifi    = _load("wifi",    {"ssid": "", "password": ""})
-
-MAX_RUNNERS = 4
 
 # Live action events pushed by children (ip  -' {actionType, stepIndex, totalSteps, event, ts})
 _live_events = {}
@@ -168,10 +161,7 @@ _bake_result = {}       # timeline_id  -' bake result dict
 _apply_logging(_settings.get("logging", False))
 
 _nxt_c = max((c["id"] for c in _children), default=-1) + 1
-_nxt_r = max((r["id"] for r in _runners),  default=-1) + 1
 _nxt_a = max((a["id"] for a in _actions),  default=-1) + 1
-_nxt_f = max((f["id"] for f in _flights),  default=-1) + 1
-_nxt_s = max((s["id"] for s in _shows),    default=-1) + 1
 _nxt_fix = max((f["id"] for f in _fixtures),   default=-1) + 1
 _nxt_sf  = max((f["id"] for f in _surfaces),   default=-1) + 1
 _nxt_sfx = max((f["id"] for f in _spatial_fx),  default=-1) + 1
@@ -449,11 +439,6 @@ def _act_params(act):
     p8c = act.get("p8c", act.get("b2", act.get("direction", 0)))
     p8d = act.get("p8d", act.get("decay", act.get("fadeSpeed", 0)))
     return tuple(int(v or 0) for v in (t, r, g, b, p16a, p8a, p8b, p8c, p8d))
-
-def _action_pkt(act, child):
-    t, r, g, b, p16a, p8a, p8b, p8c, p8d = _act_params(act)
-    ls, le = _child_led_ranges(child)
-    return _hdr(CMD_ACTION) + struct.pack("<BBBBHBBBB", t, r, g, b, p16a, p8a, p8b, p8c, p8d) + ls + le
 
 def _load_step_pkt(idx, total, step, child, delay_ms=0):
     t, r, g, b, p16a, p8a, p8b, p8c, p8d = _act_params(step)
@@ -2092,14 +2077,7 @@ def api_settings_get():
     s = dict(_settings)
     # Compute elapsed dynamically from start epoch
     if s.get("runnerRunning") and s.get("runnerStartEpoch"):
-        elapsed = max(0, int(time.time()) - s["runnerStartEpoch"])
-        # Compute total duration of active runner for loop detection
-        rid = s.get("activeRunner", -1)
-        rn = next((r for r in _runners if r["id"] == rid), None)
-        total = sum(st.get("durationS", 0) for st in rn.get("steps", [])) if rn else 0
-        if total > 0 and s.get("runnerLoop") and elapsed >= total:
-            elapsed = elapsed % total   # wrap for looping
-        s["runnerElapsed"] = elapsed
+        s["runnerElapsed"] = max(0, int(time.time()) - s["runnerStartEpoch"])
     return jsonify(s)
 
 @app.post("/api/settings")
@@ -2119,38 +2097,6 @@ def api_settings_save():
     # Toggle file logging if changed
     if "logging" in body:
         _apply_logging(body["logging"])
-    return jsonify(ok=True)
-
-#  "  "  Action  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
-
-@app.post("/api/action")
-def api_action():
-    act = request.get_json(silent=True) or {}
-    tgt = str(act.get("target", "all"))
-    targets = (_children if tgt == "all"
-                else [c for c in _children if str(c["id"]) == tgt])
-    if tgt != "all" and not targets:
-        return jsonify(ok=False, err="target not found"), 404
-    for c in targets:
-        if c.get("type") == "wled":
-            wled_set_state(c["ip"], wled_map_action(act))
-        else:
-            _send(c["ip"], _action_pkt(act, c))
-    return jsonify(ok=True)
-
-@app.post("/api/action/stop")
-def api_action_stop():
-    body = request.get_json(silent=True) or {}
-    tgt = str(body.get("target", "all"))
-    targets = (_children if tgt == "all"
-                else [c for c in _children if str(c["id"]) == tgt])
-    if not targets and tgt != "all":
-        return jsonify(ok=False, err="target not found"), 404
-    for c in targets:
-        if c.get("type") == "wled":
-            wled_stop(c["ip"])
-        else:
-            _send(c["ip"], _hdr(CMD_ACTION_STOP))
     return jsonify(ok=True)
 
 #  "  "  Actions library  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
@@ -2219,539 +2165,7 @@ def api_action_delete(aid):
         _save("actions", _actions)
     return jsonify(ok=True)
 
-#  "  "  Runners  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
-
-@app.get("/api/runners")
-def api_runners():
-    return jsonify([
-        {"id": r["id"], "name": r["name"],
-         "steps": len(r.get("steps", [])),
-         "totalDurationS": sum(s.get("durationS", 0) for s in r.get("steps", [])),
-         "computed": r.get("computed", False)}
-        for r in _runners
-    ])
-
-@app.post("/api/runners")
-def api_runners_create():
-    global _nxt_r
-    body = request.get_json(silent=True) or {}
-    with _lock:
-        if len(_runners) >= MAX_RUNNERS:
-            return jsonify(ok=False, err="max runners reached"), 400
-        r = {"id": _nxt_r, "name": body.get("name", "Runner"),
-             "computed": False, "steps": []}
-        _runners.append(r)
-        _nxt_r += 1
-        _save("runners", _runners)
-    return jsonify(ok=True, id=r["id"])
-
-# NOTE: /api/runners/stop must be registered before /<int:rid> so Flask
-# doesn't try to cast "stop" as an integer.
-@app.post("/api/runners/stop")
-def api_runners_stop():
-    _stop_all_shows()
-    return jsonify(ok=True)
-
-@app.get("/api/runners/live")
-def api_runners_live():
-    """Return per-child live action state from pushed ACTION_EVENT packets."""
-    now = time.time()
-    result = []
-    for c in _children:
-        ip = c.get("ip")
-        ev = _live_events.get(ip)
-        if ev and now - ev["ts"] < 30:
-            result.append({
-                "id": c["id"], "ip": ip,
-                "actionType": ev["actionType"],
-                "stepIndex": ev["stepIndex"],
-                "totalSteps": ev["totalSteps"],
-                "event": ev["event"],
-                "age": round(now - ev["ts"], 1),
-            })
-        else:
-            result.append({"id": c["id"], "ip": ip, "actionType": None})
-    return jsonify(result)
-
-@app.get("/api/runners/<int:rid>")
-def api_runner_get(rid):
-    r = next((x for x in _runners if x["id"] == rid), None)
-    if not r:
-        return jsonify(ok=False, err="not found"), 404
-    return jsonify(r)
-
-@app.put("/api/runners/<int:rid>")
-def api_runner_put(rid):
-    r = next((x for x in _runners if x["id"] == rid), None)
-    if not r:
-        return jsonify(ok=False, err="not found"), 404
-    body = request.get_json(silent=True) or {}
-    with _lock:
-        if "name"  in body: r["name"]  = body["name"]
-        if "steps" in body: r["steps"] = body["steps"]; r["computed"] = False
-        _save("runners", _runners)
-    return jsonify(ok=True, steps=len(r.get("steps", [])))
-
-@app.delete("/api/runners/<int:rid>")
-def api_runner_delete(rid):
-    global _runners
-    with _lock:
-        n = len(_runners)
-        _runners = [x for x in _runners if x["id"] != rid]
-        if len(_runners) == n:
-            return jsonify(ok=False, err="not found"), 404
-        _save("runners", _runners)
-    return jsonify(ok=True)
-
-@app.post("/api/runners/<int:rid>/compute")
-def api_runner_compute(rid):
-    r = next((x for x in _runners if x["id"] == rid), None)
-    if not r:
-        return jsonify(ok=False, err="not found"), 404
-    # Compute per-child delays for canvas-scoped steps
-    pos_map = {p["id"]: p for p in _layout.get("children", [])}
-    child_offsets = []   # list of dicts: {childId: delayMs} per step
-    for step in r.get("steps", []):
-        offsets = {}
-        act = next((a for a in _actions if a["id"] == step.get("actionId")), None)
-        if act and act.get("scope") == "canvas":
-            dur_ms = step.get("durationS", 5) * 1000
-            direction = act.get("direction", 0)  # 0=E, 1=N, 2=W, 3=S
-            aoe_x0 = step.get("x0", 0) / 10000.0
-            aoe_x1 = step.get("x1", 10000) / 10000.0
-            aoe_y0 = step.get("y0", 0) / 10000.0
-            aoe_y1 = step.get("y1", 10000) / 10000.0
-            cw = _layout.get("canvasW", 10000)
-            ch = _layout.get("canvasH", 5000)
-            for c in _children:
-                pos = pos_map.get(c["id"], {})
-                cx = pos.get("x", 0) / cw if cw else 0
-                cy = pos.get("y", 0) / ch if ch else 0
-                # Project onto effect axis
-                if direction == 0:   norm = (cx - aoe_x0) / max(aoe_x1 - aoe_x0, 0.001)  # East
-                elif direction == 1: norm = (cy - aoe_y0) / max(aoe_y1 - aoe_y0, 0.001)  # North
-                elif direction == 2: norm = (aoe_x1 - cx) / max(aoe_x1 - aoe_x0, 0.001)  # West
-                else:                norm = (aoe_y1 - cy) / max(aoe_y1 - aoe_y0, 0.001)  # South
-                norm = max(0.0, min(1.0, norm))
-                # Use 80% of duration for staggering, 20% for actual effect
-                offsets[c["id"]] = int(norm * dur_ms * 0.8)
-        child_offsets.append(offsets)
-    with _lock:
-        r["computed"] = True
-        r["childOffsets"] = child_offsets
-        _save("runners", _runners)
-    return jsonify(ok=True)
-
-def _resolve_step(step):
-    """Merge action library fields into a step for packet building.
-    Step-level overrides (speedMs, direction, brightness, r/g/b) take priority.
-    Supports both new (actionId) and legacy (inline type/r/g/b) formats."""
-    if "actionId" in step:
-        act = next((a for a in _actions if a["id"] == step["actionId"]), None)
-        if not act:
-            return None
-        # Start with action fields, then overlay step-level overrides
-        merged = {}
-        for k in ("type", "r", "g", "b", "speedMs", "periodMs", "spawnMs",
-                  "p8a", "p8b", "p8c", "p8d", "r2", "g2", "b2", "minBri",
-                  "spacing", "paletteId", "cooling", "sparking", "direction",
-                  "tailLen", "density", "decay", "fadeSpeed",
-                  "onMs", "offMs", "wipeDir", "wipeSpeedPct", "scope"):
-            if k in act:
-                merged[k] = act[k]
-        # Step-level overrides take priority over action defaults
-        for k in ("durationS", "targets", "brightness", "speedMs",
-                  "direction", "scope", "r", "g", "b"):
-            if k in step and step[k] is not None:
-                merged[k] = step[k]
-        # Preserve step metadata
-        merged["actionId"] = step["actionId"]
-        merged["durationS"] = step.get("durationS", merged.get("durationS", 5))
-        return merged
-    return step  # legacy inline format
-
-@app.post("/api/runners/<int:rid>/sync")
-def api_runner_sync(rid):
-    r = next((x for x in _runners if x["id"] == rid), None)
-    if not r:
-        return jsonify(ok=False, err="not found"), 404
-    # Auto-compute if not already computed
-    if not r.get("computed"):
-        pos_map = {p["id"]: p for p in _layout.get("children", [])}
-        child_offsets = []
-        for step in r.get("steps", []):
-            offsets = {}
-            act = next((a for a in _actions if a["id"] == step.get("actionId")), None)
-            if act and act.get("scope") == "canvas":
-                dur_ms = step.get("durationS", 5) * 1000
-                direction = act.get("direction", 0)
-                cw = _layout.get("canvasW", 10000)
-                ch = _layout.get("canvasH", 5000)
-                for c in _children:
-                    pos = pos_map.get(c["id"], {})
-                    cx = pos.get("x", 0) / cw if cw else 0
-                    cy = pos.get("y", 0) / ch if ch else 0
-                    if direction == 0:   norm = cx
-                    elif direction == 1: norm = cy
-                    elif direction == 2: norm = 1.0 - cx
-                    else:                norm = 1.0 - cy
-                    norm = max(0.0, min(1.0, norm))
-                    offsets[c["id"]] = int(norm * dur_ms * 0.8)
-            child_offsets.append(offsets)
-        with _lock:
-            r["computed"] = True
-            r["childOffsets"] = child_offsets
-            _save("runners", _runners)
-    steps = r.get("steps", [])
-    if not steps:
-        return jsonify(ok=False, err="no steps"), 400
-    resolved = [_resolve_step(s) for s in steps]
-    if any(rs is None for rs in resolved):
-        return jsonify(ok=False, err="step references missing action"), 400
-    # Use cached status from background ping thread (avoids UDP port conflicts)
-    online = [c for c in _children if c.get("status") == 1]
-    if not online:
-        return jsonify(ok=True, sent=0, acked=0, online=0,
-                       warn="no performers online" if _children else None)
-    child_offsets = r.get("childOffsets", [])
-    # Stop all children before loading new steps
-    pkt_stop = _hdr(CMD_RUNNER_STOP)
-    pkt_off  = _hdr(CMD_ACTION_STOP)
-    for child in online:
-        log.info("SYNC: sending STOP to %s (%s)", child["ip"], child.get("hostname"))
-        _send(child["ip"], pkt_stop)
-        _send(child["ip"], pkt_off)
-    time.sleep(0.1)
-    # Send global brightness to all online children before steps
-    bri = _settings.get("globalBrightness", 255)
-    bri_pkt = _hdr(CMD_SET_BRIGHTNESS) + bytes([bri & 0xFF])
-    sent = 0
-    try:
-        for child in online:
-            _send(child["ip"], bri_pkt)
-            log.info("SYNC: loading %d steps to %s (%s)", len(resolved), child["ip"], child.get("hostname"))
-            for i, step in enumerate(resolved):
-                offsets = child_offsets[i] if i < len(child_offsets) else {}
-                # JSON round-trip may stringify int keys   " try both
-                cid = child["id"]
-                delay_ms = offsets.get(cid, offsets.get(str(cid), 0))
-                pkt = _load_step_pkt(i, len(resolved), step, child, delay_ms)
-                _send(child["ip"], pkt)
-                sent += 1
-                log.debug("  step %d/%d type=%d delay=%dms  -' %s",
-                          i, len(resolved), int(step.get("type", 0) or 0), int(delay_ms), child["ip"])
-                time.sleep(0.03)   # 30ms gap between packets for reliable delivery
-    except Exception as e:
-        log.error("SYNC failed: %s", e, exc_info=True)
-        return jsonify(ok=False, err=str(e)), 500
-    log.info("SYNC complete: %d packets to %d children", sent, len(online))
-    return jsonify(ok=True, sent=sent, online=len(online))
-
-_wled_runner_stop = threading.Event()
-
-def _start_wled_runner(runner, wled_children, go_epoch, loop):
-    """Launch a background thread that drives WLED devices through runner steps."""
-    _wled_runner_stop.clear()
-
-    def _run():
-        steps = runner.get("steps", [])
-        resolved = [_resolve_step(s) for s in steps]
-        resolved = [r for r in resolved if r]
-        if not resolved:
-            return
-        offsets_list = runner.get("childOffsets", [])
-        bri = _settings.get("globalBrightness", 255)
-
-        # Wait until go_epoch
-        wait = go_epoch - time.time()
-        if wait > 0:
-            if _wled_runner_stop.wait(wait):
-                return
-
-        while not _wled_runner_stop.is_set():
-            for i, step in enumerate(resolved):
-                if _wled_runner_stop.is_set():
-                    return
-                offsets = offsets_list[i] if i < len(offsets_list) else {}
-                dur = int(step.get("durationS", 5) or 5)
-                state = wled_map_step(step, bri)
-
-                # Send to each WLED child with its delay offset
-                for c in wled_children:
-                    cid = c["id"]
-                    delay_ms = offsets.get(cid, offsets.get(str(cid), 0))
-                    if delay_ms > 0:
-                        # Schedule delayed send
-                        def _delayed(ip, st, d):
-                            if not _wled_runner_stop.wait(d / 1000.0):
-                                wled_set_state(ip, st)
-                        threading.Thread(target=_delayed, args=(c["ip"], state, delay_ms), daemon=True).start()
-                    else:
-                        wled_set_state(c["ip"], state)
-
-                # Wait for step duration
-                if _wled_runner_stop.wait(dur):
-                    return
-
-            if not loop:
-                break
-
-        # Blackout WLED devices at end
-        for c in wled_children:
-            wled_stop(c["ip"])
-
-    threading.Thread(target=_run, daemon=True).start()
-
-@app.post("/api/runners/<int:rid>/start")
-def api_runner_start(rid):
-    r = next((x for x in _runners if x["id"] == rid), None)
-    if not r:
-        return jsonify(ok=False, err="not found"), 404
-    go_epoch = int(time.time()) + 5      # 5 s from now   " time for UDP to reach all children
-    # CMD_RUNNER_GO: 4-byte startEpoch + 1-byte loop flag as PAYLOAD
-    loop_flag = 1 if _settings.get("runnerLoop", True) else 0
-    pkt = _hdr(CMD_RUNNER_GO) + struct.pack("<IB", go_epoch, loop_flag)
-    online = [c for c in _children if c["status"] == 1]
-    slyled_children = [c for c in online if c.get("type") != "wled"]
-    wled_children = [c for c in online if c.get("type") == "wled"]
-    for c in slyled_children:
-        log.info("START: RUNNER_GO epoch=%d loop=%d  -' %s (%s)", go_epoch, loop_flag, c["ip"], c.get("hostname"))
-        _send(c["ip"], pkt)
-    # Start WLED runner thread for WLED devices
-    if wled_children:
-        _start_wled_runner(r, wled_children, go_epoch, bool(loop_flag))
-    log.info("START: sent to %d SlyLED + %d WLED children", len(slyled_children), len(wled_children))
-    with _lock:
-        _settings["runnerRunning"] = True
-        _settings["activeRunner"]  = rid
-        _settings["runnerStartEpoch"] = go_epoch
-        _settings["runnerElapsed"] = 0
-        _save("settings", _settings)
-    return jsonify(ok=True)
-
-#  "  "  Flights  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
-
-@app.get("/api/flights")
-def api_flights():
-    return jsonify(_flights)
-
-@app.post("/api/flights")
-def api_flights_create():
-    global _nxt_f
-    body = request.get_json(silent=True) or {}
-    name = body.get("name", "").strip()
-    if not name:
-        return jsonify(ok=False, err="name required"), 400
-    with _lock:
-        f = {"id": _nxt_f, "name": name,
-             "performerIds": body.get("performerIds", []),
-             "runnerId": body.get("runnerId"),
-             "priority": body.get("priority", 1)}
-        _flights.append(f)
-        _nxt_f += 1
-        _save("flights", _flights)
-    return jsonify(ok=True, id=f["id"])
-
-@app.get("/api/flights/<int:fid>")
-def api_flight_get(fid):
-    f = next((x for x in _flights if x["id"] == fid), None)
-    if not f:
-        return jsonify(ok=False, err="not found"), 404
-    return jsonify(f)
-
-@app.put("/api/flights/<int:fid>")
-def api_flight_put(fid):
-    f = next((x for x in _flights if x["id"] == fid), None)
-    if not f:
-        return jsonify(ok=False, err="not found"), 404
-    body = request.get_json(silent=True) or {}
-    with _lock:
-        for k in ("name", "performerIds", "runnerId", "priority"):
-            if k in body:
-                f[k] = body[k]
-        _save("flights", _flights)
-    return jsonify(ok=True)
-
-@app.delete("/api/flights/<int:fid>")
-def api_flight_delete(fid):
-    global _flights
-    with _lock:
-        n = len(_flights)
-        _flights = [x for x in _flights if x["id"] != fid]
-        if len(_flights) == n:
-            return jsonify(ok=False, err="not found"), 404
-        _save("flights", _flights)
-    return jsonify(ok=True)
-
-#  "  "  Shows  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
-
-_active_show_threads = []
-
-@app.get("/api/shows")
-def api_shows():
-    return jsonify(_shows)
-
-@app.post("/api/shows")
-def api_shows_create():
-    global _nxt_s
-    body = request.get_json(silent=True) or {}
-    name = body.get("name", "").strip()
-    if not name:
-        return jsonify(ok=False, err="name required"), 400
-    with _lock:
-        s = {"id": _nxt_s, "name": name,
-             "flightIds": body.get("flightIds", []),
-             "loop": body.get("loop", True)}
-        _shows.append(s)
-        _nxt_s += 1
-        _save("shows", _shows)
-    return jsonify(ok=True, id=s["id"])
-
-@app.get("/api/shows/<int:sid>")
-def api_show_get(sid):
-    s = next((x for x in _shows if x["id"] == sid), None)
-    if not s:
-        return jsonify(ok=False, err="not found"), 404
-    return jsonify(s)
-
-@app.put("/api/shows/<int:sid>")
-def api_show_put(sid):
-    s = next((x for x in _shows if x["id"] == sid), None)
-    if not s:
-        return jsonify(ok=False, err="not found"), 404
-    body = request.get_json(silent=True) or {}
-    with _lock:
-        for k in ("name", "flightIds", "loop"):
-            if k in body:
-                s[k] = body[k]
-        _save("shows", _shows)
-    return jsonify(ok=True)
-
-@app.delete("/api/shows/<int:sid>")
-def api_show_delete(sid):
-    global _shows
-    with _lock:
-        n = len(_shows)
-        _shows = [x for x in _shows if x["id"] != sid]
-        if len(_shows) == n:
-            return jsonify(ok=False, err="not found"), 404
-        _save("shows", _shows)
-    return jsonify(ok=True)
-
-@app.post("/api/shows/<int:sid>/start")
-def api_show_start(sid):
-    """Start a show - syncs and starts all flights simultaneously."""
-    s = next((x for x in _shows if x["id"] == sid), None)
-    if not s:
-        return jsonify(ok=False, err="not found"), 404
-
-    # Stop any running show/runners first
-    _stop_all_shows()
-
-    show_flights = [f for f in _flights if f["id"] in s.get("flightIds", [])]
-    if not show_flights:
-        return jsonify(ok=False, err="no flights in show"), 400
-
-    go_epoch = int(time.time()) + 5
-    loop_flag = 1 if s.get("loop", True) else 0
-    bri = _settings.get("globalBrightness", 255)
-    bri_pkt = _hdr(CMD_SET_BRIGHTNESS) + bytes([bri & 0xFF])
-
-    synced_flights = 0
-    for flight in show_flights:
-        runner = next((r for r in _runners if r["id"] == flight.get("runnerId")), None)
-        if not runner:
-            continue
-
-        # Get performers for this flight
-        perf_ids = set(flight.get("performerIds", []))
-        flight_children = [c for c in _children if c.get("status") == 1 and c["id"] in perf_ids]
-        if not flight_children:
-            continue
-
-        steps = runner.get("steps", [])
-        resolved = [_resolve_step(st) for st in steps]
-        resolved = [r for r in resolved if r]
-        if not resolved:
-            continue
-
-        child_offsets = runner.get("childOffsets", [])
-        slyled_children = [c for c in flight_children if c.get("type") != "wled"]
-        wled_children = [c for c in flight_children if c.get("type") == "wled"]
-
-        # Sync SlyLED children
-        for child in slyled_children:
-            _send(child["ip"], _hdr(CMD_RUNNER_STOP))
-            _send(child["ip"], _hdr(CMD_ACTION_STOP))
-        time.sleep(0.05)
-        for child in slyled_children:
-            _send(child["ip"], bri_pkt)
-            for i, step in enumerate(resolved):
-                offsets = child_offsets[i] if i < len(child_offsets) else {}
-                cid = child["id"]
-                delay_ms = offsets.get(cid, offsets.get(str(cid), 0))
-                pkt = _load_step_pkt(i, len(resolved), step, child, delay_ms)
-                _send(child["ip"], pkt)
-                time.sleep(0.03)
-
-        # Send RUNNER_GO to SlyLED children
-        pkt_go = _hdr(CMD_RUNNER_GO) + struct.pack("<IB", go_epoch, loop_flag)
-        for child in slyled_children:
-            _send(child["ip"], pkt_go)
-
-        # Start WLED runner thread
-        if wled_children:
-            _start_wled_runner(runner, wled_children, go_epoch, bool(loop_flag))
-
-        synced_flights += 1
-        log.info("SHOW: flight '%s' synced (%d SlyLED + %d WLED children)",
-                 flight.get("name"), len(slyled_children), len(wled_children))
-
-    with _lock:
-        _settings["runnerRunning"] = True
-        _settings["activeRunner"] = -1
-        _settings["activeShow"] = sid
-        _settings["runnerStartEpoch"] = go_epoch
-        _settings["runnerElapsed"] = 0
-        _settings["runnerLoop"] = s.get("loop", True)
-        _save("settings", _settings)
-
-    log.info("SHOW '%s' started: %d flights, go_epoch=%d", s.get("name"), synced_flights, go_epoch)
-    return jsonify(ok=True, flights=synced_flights)
-
-@app.post("/api/shows/stop")
-def api_shows_stop():
-    _stop_all_shows()
-    return jsonify(ok=True)
-
-def _stop_all_shows():
-    """Stop all running shows, runners, and WLED threads."""
-    _wled_runner_stop.set()
-    pkt_stop = _hdr(CMD_RUNNER_STOP)
-    pkt_off  = _hdr(CMD_ACTION_STOP)
-    for c in _children:
-        if c.get("status") == 1:
-            if c.get("type") == "wled":
-                wled_stop(c["ip"])
-            else:
-                _send(c["ip"], pkt_stop)
-                _send(c["ip"], pkt_off)
-    time.sleep(0.1)
-    for c in _children:
-        if c.get("status") == 1 and c.get("type") != "wled":
-            _send(c["ip"], pkt_stop)
-            _send(c["ip"], pkt_off)
-    _live_events.clear()
-    with _lock:
-        _settings["runnerRunning"] = False
-        _settings["activeRunner"] = -1
-        _settings["activeShow"] = -1
-        _settings["activeTimeline"] = -1
-        _settings["runnerStartEpoch"] = 0
-        _settings["runnerElapsed"] = 0
-        _save("settings", _settings)
-
-#  "  "  Config / Show export-import  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
+#  "  "  Config export-import  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
 @app.get("/api/config/export")
 def api_config_export():
@@ -2793,181 +2207,6 @@ def api_config_import():
                 lc["id"] = id_map.get(lc.get("id"), lc.get("id"))
             _save("layout", _layout)
     return jsonify(ok=True, added=added, updated=updated)
-
-@app.get("/api/show/export")
-def api_show_export():
-    """Bundle actions + runners + flights + shows as a portable show file."""
-    return jsonify({"type": "slyled-show", "version": 1,
-                    "actions": _actions, "runners": _runners,
-                    "flights": _flights, "shows": _shows})
-
-def _install_show_bundle(bundle):
-    """Replace all show data with the given bundle, reassigning IDs.
-    Returns a list of orphan detail dicts (empty if none)."""
-    global _actions, _runners, _flights, _shows
-    global _nxt_a, _nxt_r, _nxt_f, _nxt_s
-
-    _stop_all_shows()
-
-    with _lock:
-        # Action ID remap
-        a_map = {}
-        new_actions = []
-        for a in bundle.get("actions", []):
-            old_id = a.get("id", -1)
-            a = copy.deepcopy(a)
-            a["id"] = _nxt_a
-            a_map[old_id] = _nxt_a
-            _nxt_a += 1
-            new_actions.append(a)
-
-        # Runner ID remap + fix actionId refs in steps
-        r_map = {}
-        new_runners = []
-        for r in bundle.get("runners", []):
-            old_id = r.get("id", -1)
-            r = copy.deepcopy(r)
-            r["id"] = _nxt_r
-            r_map[old_id] = _nxt_r
-            _nxt_r += 1
-            for step in r.get("steps", []):
-                if "actionId" in step:
-                    step["actionId"] = a_map.get(step["actionId"], step["actionId"])
-            new_runners.append(r)
-
-        # Flight ID remap + fix runnerId refs
-        f_map = {}
-        new_flights = []
-        current_child_ids = {c["id"] for c in _children}
-        orphan_details = []
-        for f in bundle.get("flights", []):
-            old_id = f.get("id", -1)
-            f = copy.deepcopy(f)
-            f["id"] = _nxt_f
-            f_map[old_id] = _nxt_f
-            _nxt_f += 1
-            if f.get("runnerId") is not None:
-                f["runnerId"] = r_map.get(f["runnerId"], f["runnerId"])
-            if f.get("performerIds"):
-                missing = [p for p in f["performerIds"] if p not in current_child_ids]
-                if missing:
-                    orphan_details.append({"flightName": f.get("name"), "missingIds": missing})
-            new_flights.append(f)
-
-        # Show ID remap + fix flightIds refs
-        new_shows = []
-        for s in bundle.get("shows", []):
-            s = copy.deepcopy(s)
-            s["id"] = _nxt_s
-            _nxt_s += 1
-            s["flightIds"] = [f_map.get(fid, fid) for fid in s.get("flightIds", [])]
-            new_shows.append(s)
-
-        _actions = new_actions
-        _runners = new_runners
-        _flights = new_flights
-        _shows = new_shows
-        _save("actions", _actions)
-        _save("runners", _runners)
-        _save("flights", _flights)
-        _save("shows", _shows)
-
-    return orphan_details
-
-@app.post("/api/show/import")
-def api_show_import():
-    """Import a show bundle, replacing all current show data."""
-    data = request.get_json(silent=True) or {}
-    if data.get("type") != "slyled-show":
-        return jsonify(ok=False, err="not a slyled-show file"), 400
-    orphan_details = _install_show_bundle(data)
-    resp = {"ok": True, "actions": len(_actions), "runners": len(_runners),
-            "flights": len(_flights), "shows": len(_shows)}
-    if orphan_details:
-        names = ", ".join(d["flightName"] or "(unnamed)" for d in orphan_details)
-        resp["warning"] = (f"Flights with missing performers: {names}. "
-                           "Re-assign them in the Runtime tab.")
-        resp["orphanDetails"] = orphan_details
-    return jsonify(resp)
-
-_TYPE_NAMES = {0: "Blackout", 1: "Solid", 2: "Fade", 3: "Breathe",
-               4: "Chase", 5: "Rainbow", 6: "Fire", 7: "Comet",
-               8: "Twinkle", 9: "Strobe", 10: "Wipe", 11: "Scanner",
-               12: "Sparkle", 13: "Gradient"}
-
-#  "  "  Demo show generator  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
-
-# Mood presets   " extensibility point for future smart-show / theme system.
-# Each preset defines colors, durations, action types, and type-specific params.
-MOOD_PRESETS = {
-    "default": {
-        "name": "Demo Show",
-        "colors": [
-            (255, 0, 0), (0, 200, 255), (0, 255, 60), (255, 140, 0),
-            (180, 0, 255), (0, 255, 200), (255, 255, 0), (255, 0, 120),
-        ],
-        "durations": [6, 8, 10, 5, 7, 8, 6, 5],
-        "action_types": [1, 2, 3, 4, 5, 6, 7, 8],
-    },
-    # Future: "calm", "party", "ambient", "holiday", etc.
-}
-
-def _demo_action_defaults(atype, color, color2):
-    """Return type-specific default params for the demo generator."""
-    r, g, b = color
-    base = {"r": r, "g": g, "b": b, "scope": "performer"}
-    if atype == 2:   # Fade
-        base.update({"r2": color2[0], "g2": color2[1], "b2": color2[2], "speedMs": 2000})
-    elif atype == 3: # Breathe
-        base.update({"periodMs": 3000, "minBri": 20})
-    elif atype == 4: # Chase
-        base.update({"speedMs": 80, "spacing": 4, "direction": 0})
-    elif atype == 5: # Rainbow
-        base.update({"speedMs": 40, "paletteId": 0, "direction": 0})
-    elif atype == 6: # Fire
-        base.update({"speedMs": 15, "cooling": 55, "sparking": 120})
-    elif atype == 7: # Comet
-        base.update({"speedMs": 25, "tailLen": 12, "direction": 0, "decay": 80})
-    elif atype == 8: # Twinkle
-        base.update({"spawnMs": 50, "density": 4, "fadeSpeed": 15})
-    return base
-
-def _generate_demo_show(mood="default"):
-    """Generate a demo show. Works with or without registered performers.
-    Actions, runners, and shows are always created. The flight targets
-    all current performers (empty list if none registered)."""
-    preset = MOOD_PRESETS.get(mood, MOOD_PRESETS["default"])
-    colors = preset["colors"]
-    durations = preset["durations"]
-
-    # Build actions
-    actions = []
-    for i, atype in enumerate(preset["action_types"]):
-        color = colors[i % len(colors)]
-        color2 = colors[(i + 1) % len(colors)]
-        a = {"id": i, "name": "Demo %s" % _TYPE_NAMES.get(atype, "Action"),
-             "type": atype}
-        a.update(_demo_action_defaults(atype, color, color2))
-        actions.append(a)
-
-    # Build runner with steps cycling through actions
-    steps = []
-    for i, a in enumerate(actions):
-        steps.append({"actionId": a["id"],
-                       "durationS": durations[i % len(durations)]})
-    runner = {"id": 0, "name": "Demo Runner", "computed": False, "steps": steps}
-
-    # Build one flight targeting all performers (empty if none registered)
-    child_ids = [c["id"] for c in _children]
-    flight = {"id": 0, "name": "Demo Flight - All Performers",
-              "performerIds": child_ids, "runnerId": 0, "priority": 1}
-
-    # Build show
-    show = {"id": 0, "name": preset["name"],
-            "flightIds": [0], "loop": True}
-
-    return {"actions": actions, "runners": [runner],
-            "flights": [flight], "shows": [show]}
 
 @app.post("/api/show/preset")
 def api_show_preset():
@@ -3237,7 +2476,7 @@ def api_show_presets():
 
 _DEFAULT_SETTINGS = {
     "name": "SlyLED", "units": 0, "canvasW": 10000, "canvasH": 5000,
-    "darkMode": 1, "runnerRunning": False, "activeRunner": -1, "activeShow": -1,
+    "darkMode": 1, "runnerRunning": False,
     "runnerElapsed": 0, "runnerLoop": True, "logging": False,
 }
 _DEFAULT_LAYOUT = {"canvasW": 10000, "canvasH": 5000, "children": []}
@@ -3585,83 +2824,32 @@ def api_migrate_layout():
         _save("fixtures", _fixtures)
     return jsonify(ok=True, created=created)
 
-@app.post("/api/migrate/runner/<int:rid>")
-def api_migrate_runner(rid):
-    """Convert a classic runner to a timeline with fixture-local effect clips."""
-    global _nxt_sfx, _nxt_tl
-    runner = next((r for r in _runners if r["id"] == rid), None)
-    if not runner:
-        return jsonify(err="Runner not found"), 404
-
-    with _lock:
-        # Create spatial effects from each action referenced by runner steps
-        fx_map = {}  # action_id  -' spatial_fx_id
-        for step in runner.get("steps", []):
-            aid = step.get("actionId")
-            if aid is None or aid in fx_map:
-                continue
-            action = next((a for a in _actions if a["id"] == aid), None)
-            if not action:
-                continue
-            fx = {
-                "id": _nxt_sfx,
-                "name": f"Migrated: {action.get('name', 'Action')}",
-                "category": "fixture-local",
-                "actionType": action.get("type", 0),
-                "r": action.get("r", 0), "g": action.get("g", 0), "b": action.get("b", 0),
-                "blend": "replace",
-                "fixtureIds": [],
-            }
-            _spatial_fx.append(fx)
-            fx_map[aid] = _nxt_sfx
-            _nxt_sfx += 1
-        _save("spatial_fx", _spatial_fx)
-
-        # Create timeline with one track per fixture, clips from runner steps
-        total_dur = sum(s.get("durationS", 0) for s in runner.get("steps", []))
-        tracks = []
-        for fixture in _fixtures:
-            clips = []
-            t = 0
-            for step in runner.get("steps", []):
-                aid = step.get("actionId")
-                dur = step.get("durationS", 5)
-                if aid in fx_map:
-                    clips.append({"effectId": fx_map[aid], "startS": t, "durationS": dur})
-                t += dur
-            if clips:
-                tracks.append({"fixtureId": fixture["id"], "clips": clips})
-
-        tl = {
-            "id": _nxt_tl,
-            "name": f"Migrated: {runner.get('name', 'Runner')}",
-            "durationS": total_dur or 60,
-            "tracks": tracks,
-            "loop": False,
-        }
-        _timelines.append(tl)
-        _nxt_tl += 1
-        _save("timelines", _timelines)
-
-    return jsonify(ok=True, timelineId=tl["id"], effectsCreated=len(fx_map), tracks=len(tracks))
-
 @app.post("/api/reset")
 def api_reset():
     """Clear all data and restore default settings."""
     # Require confirmation header to prevent CSRF
     if request.headers.get("X-SlyLED-Confirm") != "true":
         return jsonify(err="Missing confirmation header"), 403
-    global _children, _settings, _layout, _stage, _runners, _actions, _flights, _shows
+    global _children, _settings, _layout, _stage, _actions
     global _fixtures, _surfaces, _spatial_fx, _timelines
-    global _wifi, _nxt_c, _nxt_r, _nxt_a, _nxt_f, _nxt_s
+    global _wifi, _nxt_c, _nxt_a
     global _nxt_fix, _nxt_sf, _nxt_sfx, _nxt_tl
-    _stop_all_shows()
+    # Stop DMX playback
+    _dmx_playback_stop.set()
+    # Stop all children
+    pkt_stop = _hdr(CMD_RUNNER_STOP)
+    pkt_off = _hdr(CMD_ACTION_STOP)
+    for c in _children:
+        if c.get("ip"):
+            if c.get("type") == "wled":
+                wled_stop(c["ip"])
+            else:
+                _send(c["ip"], pkt_stop)
+                _send(c["ip"], pkt_off)
+    _live_events.clear()
     with _lock:
         _children = []
-        _runners  = []
         _actions  = []
-        _flights  = []
-        _shows    = []
         _wifi     = {"ssid": "", "password": ""}
         _layout   = dict(_DEFAULT_LAYOUT)
         _stage    = dict(_DEFAULT_STAGE)
@@ -3670,13 +2858,10 @@ def api_reset():
         _surfaces   = list(_DEFAULT_SURFACES)
         _spatial_fx = list(_DEFAULT_SPATIAL_FX)
         _timelines  = list(_DEFAULT_TIMELINES)
-        _nxt_c = _nxt_r = _nxt_a = _nxt_f = _nxt_s = 0
+        _nxt_c = _nxt_a = 0
         _nxt_fix = _nxt_sf = _nxt_sfx = _nxt_tl = 0
         _save("children", _children)
-        _save("runners",  _runners)
         _save("actions",  _actions)
-        _save("flights",  _flights)
-        _save("shows",    _shows)
         _save("wifi",     _wifi)
         _save("layout",   _layout)
         _save("stage",    _stage)

@@ -464,63 +464,7 @@ def run():
         r = c.delete(f'/api/actions/{aid}')
         ok('DELETE nonexistent action → 404', r.status_code == 404)
 
-        # ── Runners ─────────────────────────────────────────────────
-        r = c.post('/api/runners', json={'name': 'Test Runner'})
-        ok('POST create runner', r.status_code == 200)
-        rid = r.get_json().get('id')
-
-        r = c.put(f'/api/runners/{rid}', json={
-            'steps': [{'actionId': aids[1], 'durationS': 5},
-                      {'actionId': aids[5], 'durationS': 10}]
-        })
-        ok('PUT runner steps', r.status_code == 200)
-
-        r = c.get(f'/api/runners/{rid}')
-        d = r.get_json()
-        ok('GET runner', r.status_code == 200 and len(d.get('steps', [])) == 2)
-
-        r = c.get('/api/runners')
-        ok('GET list runners', r.status_code == 200)
-
-        r = c.post(f'/api/runners/{rid}/compute')
-        ok('POST compute', r.status_code == 200 and r.get_json().get('ok'))
-
-        r = c.post(f'/api/runners/{rid}/sync')
-        ok('POST sync (no online children)', r.status_code == 200)
-
-        r = c.post(f'/api/runners/{rid}/start')
-        ok('POST start runner', r.status_code == 200 and r.get_json().get('ok'))
-
-        r = c.get('/api/settings')
-        ok('Runner running in settings', r.get_json().get('runnerRunning') == True)
-
-        r = c.get('/api/runners/live')
-        ok('GET /api/runners/live', r.status_code == 200 and isinstance(r.get_json(), list))
-
-        r = c.post('/api/runners/stop')
-        ok('POST runners/stop', r.status_code == 200 and r.get_json().get('ok'))
-
-        r = c.get('/api/settings')
-        ok('Runner stopped', r.get_json().get('runnerRunning') == False)
-
-        r = c.delete(f'/api/runners/{rid}')
-        ok('DELETE runner', r.status_code == 200)
-
-        r = c.delete(f'/api/runners/{rid}')
-        ok('DELETE nonexistent runner → 404', r.status_code == 404)
-
-        r = c.get(f'/api/runners/99999')
-        ok('GET nonexistent runner → 404', r.status_code == 404)
-
-        # ── Action dispatch ─────────────────────────────────────────
-        r = c.post('/api/action', json={'type': 1, 'r': 255, 'g': 0, 'b': 0, 'target': 'all'})
-        ok('POST /api/action', r.status_code == 200)
-
-        r = c.post('/api/action/stop', json={'target': 'all'})
-        ok('POST /api/action/stop', r.status_code == 200)
-
-        r = c.post('/api/action', json={'type': 1, 'target': '99999'})
-        ok('Action nonexistent target → 404', r.status_code == 404)
+        # (Runners, Flights, Shows removed in v8.0 — timeline system only)
 
         # ── WiFi ────────────────────────────────────────────────────
         r = c.get('/api/wifi')
@@ -551,7 +495,6 @@ def run():
         st = wled_map_step({'type': 5, 'r': 0, 'g': 0, 'b': 0, 'speedMs': 100}, brightness=200)
         ok('WLED map_step brightness', st.get('bri') == 200)
 
-        # Probe fake IP (should return None, not crash)
         result = wled_probe('192.0.2.1', timeout=0.5)
         ok('WLED probe fake IP', result is None)
 
@@ -564,88 +507,6 @@ def run():
 
         r = c.get('/nonexistent/path')
         ok('GET unknown path → SPA fallback', r.status_code == 200)
-
-        # ── Flights ──────────────────────────────────────────────────
-        r = c.post('/api/flights', json={'name': 'Ceiling', 'performerIds': [0, 1], 'runnerId': 0, 'priority': 1})
-        ok('POST create flight', r.status_code == 200 and r.get_json().get('ok'))
-        fid = r.get_json().get('id')
-
-        r = c.post('/api/flights', json={'name': 'Floor', 'performerIds': [2], 'runnerId': 0, 'priority': 2})
-        ok('POST create flight 2', r.status_code == 200)
-        fid2 = r.get_json().get('id')
-
-        r = c.post('/api/flights', json={'name': ''})
-        ok('Flight no name → 400', r.status_code == 400)
-
-        r = c.get('/api/flights')
-        ok('GET flights', r.status_code == 200 and len(r.get_json()) >= 2)
-
-        r = c.get(f'/api/flights/{fid}')
-        ok('GET flight by id', r.status_code == 200 and r.get_json().get('name') == 'Ceiling')
-
-        r = c.put(f'/api/flights/{fid}', json={'name': 'Ceiling Updated', 'performerIds': [0, 1, 3]})
-        ok('PUT update flight', r.status_code == 200)
-
-        r = c.get(f'/api/flights/{fid}')
-        ok('Flight update persisted', r.get_json().get('name') == 'Ceiling Updated')
-
-        r = c.delete(f'/api/flights/{fid2}')
-        ok('DELETE flight', r.status_code == 200)
-
-        r = c.delete(f'/api/flights/{fid2}')
-        ok('DELETE nonexistent flight → 404', r.status_code == 404)
-
-        # ── Shows ───────────────────────────────────────────────────
-        r = c.post('/api/shows', json={'name': 'Evening Show', 'flightIds': [fid], 'loop': True})
-        ok('POST create show', r.status_code == 200 and r.get_json().get('ok'))
-        show_id = r.get_json().get('id')
-
-        r = c.post('/api/shows', json={'name': ''})
-        ok('Show no name → 400', r.status_code == 400)
-
-        r = c.get('/api/shows')
-        ok('GET shows', r.status_code == 200 and len(r.get_json()) >= 1)
-
-        r = c.get(f'/api/shows/{show_id}')
-        ok('GET show by id', r.status_code == 200 and r.get_json().get('name') == 'Evening Show')
-
-        r = c.put(f'/api/shows/{show_id}', json={'name': 'Night Show', 'loop': False})
-        ok('PUT update show', r.status_code == 200)
-
-        r = c.get(f'/api/shows/{show_id}')
-        ok('Show update persisted', r.get_json().get('name') == 'Night Show')
-
-        r = c.post(f'/api/shows/{show_id}/start')
-        ok('POST start show (no online children)', r.status_code == 200)
-
-        r = c.post('/api/shows/stop')
-        ok('POST stop shows', r.status_code == 200)
-
-        r = c.delete(f'/api/shows/{show_id}')
-        ok('DELETE show', r.status_code == 200)
-
-        r = c.delete(f'/api/shows/{show_id}')
-        ok('DELETE nonexistent show → 404', r.status_code == 404)
-
-        # Clean up remaining flight
-        c.delete(f'/api/flights/{fid}')
-
-        # ── Step-level overrides ────────────────────────────────────
-        # Create an action and runner to test step overrides
-        r = c.post('/api/actions', json={'name': 'Override Test', 'type': 5, 'speedMs': 100})
-        oa_id = r.get_json().get('id')
-        r = c.post('/api/runners', json={'name': 'Override Runner'})
-        or_id = r.get_json().get('id')
-        r = c.put(f'/api/runners/{or_id}', json={'steps': [
-            {'actionId': oa_id, 'durationS': 5, 'targets': [0, 1], 'brightness': 128, 'speedMs': 500},
-            {'actionId': oa_id, 'durationS': 10, 'direction': 2},
-        ]})
-        ok('PUT runner with step overrides', r.status_code == 200)
-        r = c.get(f'/api/runners/{or_id}')
-        steps = r.get_json().get('steps', [])
-        ok('Step overrides preserved', len(steps) == 2 and steps[0].get('brightness') == 128)
-        c.delete(f'/api/runners/{or_id}')
-        c.delete(f'/api/actions/{oa_id}')
 
         # ── Config export/import ──────────────────────────────────────
         # Add a child + layout for testing
@@ -694,84 +555,12 @@ def run():
             if ch.get('hostname') == 'IMPORT-TEST':
                 c.delete(f'/api/children/{ch["id"]}')
 
-        # ── Show export/import ────────────────────────────────────────
-        r = c.get('/api/show/export')
-        d = r.get_json()
-        ok('Show export type', d.get('type') == 'slyled-show')
-        ok('Show export version', d.get('version') == 1)
-        ok('Show export has actions', isinstance(d.get('actions'), list))
-        ok('Show export has runners', isinstance(d.get('runners'), list))
-        ok('Show export has flights', isinstance(d.get('flights'), list))
-        ok('Show export has shows', isinstance(d.get('shows'), list))
-
-        # Bad type rejected
-        r = c.post('/api/show/import', json={'type': 'wrong'})
-        ok('Show import bad type → 400', r.status_code == 400)
-
-        # Import a small show bundle
-        show_bundle = {'type': 'slyled-show', 'version': 1,
-                       'actions': [{'id': 0, 'name': 'TestSolid', 'type': 1, 'r': 255, 'g': 0, 'b': 0}],
-                       'runners': [{'id': 0, 'name': 'TestRunner', 'computed': False,
-                                    'steps': [{'actionId': 0, 'durationS': 5}]}],
-                       'flights': [{'id': 0, 'name': 'TestFlight', 'performerIds': [999],
-                                    'runnerId': 0, 'priority': 1}],
-                       'shows': [{'id': 0, 'name': 'TestShow', 'flightIds': [0], 'loop': False}]}
-        r = c.post('/api/show/import', json=show_bundle)
-        d = r.get_json()
-        ok('Show import ok', d.get('ok'))
-        ok('Show import actions count', d.get('actions') == 1)
-        ok('Show import runners count', d.get('runners') == 1)
-        ok('Show import flights count', d.get('flights') == 1)
-        ok('Show import shows count', d.get('shows') == 1)
-        ok('Show import orphan warning', 'warning' in d)
-
-        # Verify ID remapping — runner step.actionId should point to new action ID
-        r = c.get('/api/runners')
-        runners = r.get_json()
-        ok('Show import runner exists', len(runners) == 1)
-        if runners:
-            # GET /api/runners returns step count; fetch full runner for steps
-            full_r = c.get(f'/api/runners/{runners[0]["id"]}').get_json()
-            r_steps = full_r.get('steps', [])
-            r_actions = c.get('/api/actions').get_json()
-            if r_actions and r_steps and isinstance(r_steps[0], dict):
-                ok('Show import actionId remapped', r_steps[0].get('actionId') == r_actions[0]['id'])
-            else:
-                ok('Show import actionId remapped', False, f'steps={r_steps}, actions={r_actions}')
-
-        # ── Demo show ─────────────────────────────────────────────────
-        r = c.post('/api/show/demo', json={'mood': 'default'})
-        d = r.get_json() or {}
-        ok('Demo show ok', d.get('ok'))
-        ok('Demo show 8 actions', d.get('actions') == 8)
-        ok('Demo show 1 runner', d.get('runners') == 1)
-        ok('Demo show 1 flight', d.get('flights') == 1)
-        ok('Demo show 1 show', d.get('shows') == 1)
-
-        # Verify demo data is queryable
-        r = c.get('/api/actions')
-        ok('Demo actions in store', len(r.get_json()) == 8)
-        r = c.get('/api/shows')
-        ok('Demo show in store', len(r.get_json()) == 1 and r.get_json()[0].get('name') == 'Demo Show')
+        # (Show export/import and demo show tests removed in v8.0)
 
         # Clean up test child
         c.delete(f'/api/children/{cfg_cid}')
 
-        # Demo with no children — should still create actions/runner/show
-        c.post('/api/reset')
-        r = c.post('/api/show/demo', json={})
-        d = r.get_json() or {}
-        ok('Demo show no performers → 200', r.status_code == 200 and d.get('ok'))
-        ok('Demo no-perf creates 8 actions', d.get('actions') == 8)
-        ok('Demo no-perf creates 1 runner', d.get('runners') == 1)
-        ok('Demo no-perf creates 1 show', d.get('shows') == 1)
-        r = c.get('/api/flights')
-        flights = r.get_json()
-        ok('Demo no-perf flight has empty performerIds',
-           len(flights) == 1 and flights[0].get('performerIds') == [])
-
         # ── OTA firmware endpoints ─────────────────────────────────
-        # /api/firmware/latest — may fail if no internet, but should not crash
         r = c.get('/api/firmware/latest')
         ok('GET /api/firmware/latest returns JSON', r.status_code in (200, 502))
 
@@ -926,17 +715,8 @@ def run():
         r = c.get('/api/children')
         ok('Reset cleared children', len(r.get_json()) == 0)
 
-        r = c.get('/api/runners')
-        ok('Reset cleared runners', len(r.get_json()) == 0)
-
         r = c.get('/api/actions')
         ok('Reset cleared actions', len(r.get_json()) == 0)
-
-        r = c.get('/api/flights')
-        ok('Reset cleared flights', len(r.get_json()) == 0)
-
-        r = c.get('/api/shows')
-        ok('Reset cleared shows', len(r.get_json()) == 0)
 
     # ── Print results ───────────────────────────────────────────────
     passed = sum(1 for _, v, _ in results if v)

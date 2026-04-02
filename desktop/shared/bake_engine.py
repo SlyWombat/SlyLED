@@ -410,8 +410,9 @@ def _compile_dmx_fixture(clip, effect, fixture_pos, aim_point, profile_info, dur
 
 # ── Main bake function ───────────────────────────────────────────────────────
 
-def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_fn, blend_fn,
-                  progress=None, actions=None):
+def bake_timeline(timeline, fixtures, spatial_fx, layout,
+                  progress=None, actions=None,
+                  resolve_fn=None, evaluate_fn=None, blend_fn=None):
     """Compile a timeline into per-fixture action sequences.
 
     Instead of rendering 40Hz frames, this directly analyzes each clip's spatial
@@ -455,7 +456,8 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout, resolve_fn, evaluate_f
                 "rotation": f.get("rotation", [0, 0, 0]),
                 "aoeRadius": f.get("aoeRadius", 1000),
             }
-            resolved = resolve_fn(resolve_input)
+            from spatial_engine import resolve_fixture as _resolve
+            resolved = (resolve_fn or _resolve)(resolve_input)
             pixels = resolved.get("pixelPositions", [])
             strings_info = []
             offset = 0

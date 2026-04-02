@@ -205,10 +205,6 @@ def _ease(t, easing):
         return t * t * (3 - 2 * t)  # smoothstep
     return t  # linear
 
-def _smoothstep(t):
-    t = max(0.0, min(1.0, t))
-    return t * t * (3 - 2 * t)
-
 def _blend_color(base, effect, mode):
     """Blend effect color onto base color using blend mode. All values 0-255."""
     if mode == "replace":
