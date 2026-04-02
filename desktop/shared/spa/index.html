@@ -175,12 +175,13 @@ body.light .li:hover{border-color:#3b82f6}
       <div style='margin-top:.6em;display:flex;align-items:center;gap:.5em'>
         <button class='btn' onclick='tlAddTrack()' style='background:#1e3a5f;color:#93c5fd'>+ Add Track</button>
         <button class='btn btn-on' id='tl-play-btn' onclick='tlTogglePreview()'>&#9654; Preview</button>
-        <button class='btn btn-off' onclick='tlStopPreview()'>&#9632; Stop</button>
+        <button class='btn' id='tl-pause-btn' onclick='tlPause()' style='background:#334;color:#94a3b8'>&#10074;&#10074; Pause</button>
+        <button class='btn' onclick='tlRewind()' style='background:#223;color:#64748b'>&#9194;</button>
         <span id='tl-time' style='color:#64748b;font-size:.82em;font-family:monospace'>00:00.0</span>
         <span style='flex:1'></span>
         <button class='btn' onclick='tlBake()' style='background:#4a2080;color:#c4b5fd'>Bake</button>
-        <button class='btn btn-on' onclick='tlSyncAndStart()'>Sync &amp; Start</button>
-        <button class='btn btn-off' onclick='tlStopShow()'>Stop Show</button>
+        <button class='btn btn-on' onclick='tlSyncAndStart()'>Start Show</button>
+        <button class='btn btn-off' id='tl-stop-btn' onclick='tlStop()'>&#9632; Stop</button>
       </div>
     </div>
     <div id='tl-emulator' style='margin-top:1em'>
@@ -2288,9 +2289,12 @@ function tlAddClipConfirm(ti){
 
 // Timeline playback preview
 function tlTogglePreview(){
-  if(_tlPlaying){tlStopPreview();return;}
+  if(_tlPlaying){tlPause();return;}
   if(!_curTl)return;
-  _tlPlaying=true;_tlPlayT=0;
+  _tlPlaying=true;
+  // Resume from current position (don't reset to 0 unless at end)
+  var dur=_curTl.durationS||60;
+  if(_tlPlayT>=dur)_tlPlayT=0;
   document.getElementById('tl-play-btn').textContent='\u23f8 Pause';
   _tlPlayTimer=setInterval(function(){
     _tlPlayT+=0.1;
@@ -2308,13 +2312,46 @@ function tlTogglePreview(){
   },100);
 }
 
-function tlStopPreview(){
+function tlPause(){
+  // Pause preview at current position (don't reset)
+  if(!_tlPlaying)return;
+  _tlPlaying=false;
+  if(_tlPlayTimer){clearInterval(_tlPlayTimer);_tlPlayTimer=null;}
+  var btn=document.getElementById('tl-play-btn');if(btn)btn.textContent='\u25b6 Resume';
+}
+
+function tlRewind(){
+  // Reset playhead to start
+  _tlPlayT=0;
+  var ph=document.getElementById('tl-playhead');if(ph)ph.style.left='60px';
+  var td=document.getElementById('tl-time');if(td)td.textContent='00:00.0';
+  if(_tlPlaying){tlPause();}
+  var btn=document.getElementById('tl-play-btn');if(btn)btn.textContent='\u25b6 Preview';
+}
+
+function tlStop(){
+  // Smart stop: stops live show if running, otherwise stops preview
+  if(_emuRunning||_curTl){
+    // Stop live show on hardware + DMX
+    emuStop();
+    if(_curTl){
+      ra('POST','/api/timelines/'+_curTl.id+'/stop',{},function(r){
+        if(r&&r.ok)document.getElementById('hs').textContent='Show stopped';
+        else document.getElementById('hs').textContent='Show stop sent';
+      });
+    }
+  }
+  // Also stop local preview
   _tlPlaying=false;_tlPlayT=0;
   if(_tlPlayTimer){clearInterval(_tlPlayTimer);_tlPlayTimer=null;}
   var btn=document.getElementById('tl-play-btn');if(btn)btn.textContent='\u25b6 Preview';
   var ph=document.getElementById('tl-playhead');if(ph)ph.style.left='60px';
   var td=document.getElementById('tl-time');if(td)td.textContent='00:00.0';
 }
+
+// Keep backward compat name for any internal references
+function tlStopPreview(){tlRewind();}
+function tlStopShow(){tlStop();}
 
 // ── Phase 5: Baking ─────────────────────────────────────────────────────────
 function tlBake(){
