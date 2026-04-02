@@ -641,7 +641,8 @@ void sendChildConfigPage(WiFiClient& c) {
   c.print(F("<div class='card' style='margin-top:.5em'><h3>Art-Net</h3>"
             "<div style='display:grid;grid-template-columns:auto 1fr;gap:.3em .6em;align-items:center;margin:.5em 0'>"
             "<label>Subnet</label><input type='number' id='dmx-sn' min='0' max='15' value='0' style='width:80px'>"
-            "<label>Universe</label><input type='number' id='dmx-uni' min='0' max='15' value='0' style='width:80px'>"
+            "<label>Universe <span style='color:#888;font-size:.75em'>(0=Desktop U1)</span></label>"
+            "<input type='number' id='dmx-uni' min='0' max='15' value='0' style='width:80px'>"
             "</div>"
             "<button type='button' class='btn' onclick='dmxSaveGw()' style='margin:.3em 0'>Save</button>"
             "</div>"));
