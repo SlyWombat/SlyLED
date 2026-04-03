@@ -1,0 +1,323 @@
+{
+  "children": [
+    {
+      "boardType": "ESP32",
+      "chipModel": "ESP32-D0WD-V3",
+      "chipTemp": 48,
+      "desc": "single leaf",
+      "flashSize": 4194304,
+      "freeHeap": 205972,
+      "fwVersion": "7.5.2",
+      "hostname": "SLYC-5194",
+      "id": 2,
+      "ip": "192.168.10.226",
+      "name": "Duo Leaf",
+      "rssi": -69,
+      "sc": 1,
+      "sdkVersion": "v5.5.2-729-g87912cd291",
+      "seen": 1775237144,
+      "status": 1,
+      "strings": [
+        {
+          "cdir": 1,
+          "cmm": 0,
+          "folded": true,
+          "leds": 8,
+          "mm": 500,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        }
+      ],
+      "type": "slyled",
+      "uptime": 92281
+    },
+    {
+      "boardType": "giga-dmx",
+      "chipModel": "STM32H747XI",
+      "desc": "",
+      "flashSize": 0,
+      "freeHeap": 0,
+      "fwVersion": "7.5.20",
+      "hostname": "SLYC-1152",
+      "id": 3,
+      "ip": "192.168.10.219",
+      "name": "SLYC-1152",
+      "rssi": -57,
+      "sc": 1,
+      "sdkVersion": "mbed",
+      "seen": 1775237145,
+      "status": 1,
+      "strings": [
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 30,
+          "mm": 500,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        }
+      ],
+      "type": "dmx",
+      "uptime": 156070
+    },
+    {
+      "boardType": "ESP32",
+      "chipModel": "ESP32-D0WD-V3",
+      "chipTemp": 40,
+      "desc": "2 strings",
+      "flashSize": 4194304,
+      "freeHeap": 204392,
+      "fwVersion": "7.5.2",
+      "hostname": "SLYC-65A8",
+      "id": 4,
+      "ip": "192.168.10.233",
+      "name": "ESP Dual",
+      "rssi": -39,
+      "sc": 2,
+      "sdkVersion": "v5.5.2-729-g87912cd291",
+      "seen": 1775237145,
+      "status": 1,
+      "strings": [
+        {
+          "cdir": 1,
+          "cmm": 0,
+          "folded": true,
+          "leds": 150,
+          "mm": 1000,
+          "sdir": 2,
+          "type": 0
+        },
+        {
+          "cdir": 1,
+          "cmm": 0,
+          "folded": true,
+          "leds": 150,
+          "mm": 1000,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        }
+      ],
+      "type": "slyled",
+      "uptime": 811
+    }
+  ],
+  "layout": {
+    "canvasH": 1000,
+    "canvasW": 3500,
+    "children": [
+      {
+        "id": 5,
+        "x": 833,
+        "y": 635,
+        "z": 452
+      },
+      {
+        "id": 8,
+        "x": 2154,
+        "y": 429,
+        "z": 0
+      },
+      {
+        "id": 9,
+        "x": 1135,
+        "y": 239,
+        "z": 758
+      },
+      {
+        "id": 10,
+        "x": 2198,
+        "y": 0,
+        "z": 0
+      },
+      {
+        "id": 11,
+        "x": 664,
+        "y": 444,
+        "z": 0
+      }
+    ]
+  },
+  "type": "slyled-config",
+  "version": 1
+}

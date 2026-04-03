@@ -42,8 +42,8 @@ log = logging.getLogger("slyled")
 log.setLevel(logging.DEBUG)
 _log_handler = None   # file handler, created/removed by _apply_logging()
 
-def _apply_logging(enabled):
-    """Enable/disable file logging.  Each enable creates a new timestamped log file."""
+def _apply_logging(enabled, log_path=None):
+    """Enable/disable file logging.  Optionally set custom log file path."""
     global _log_handler
     # Remove existing file handler
     if _log_handler:
@@ -51,15 +51,20 @@ def _apply_logging(enabled):
         _log_handler.close()
         _log_handler = None
     if enabled:
-        log_dir = DATA / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        fh = logging.FileHandler(str(log_dir / f"slyled_{ts}.log"), encoding="utf-8")
+        if log_path:
+            log_file = Path(log_path)
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            log_dir = DATA / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_file = log_dir / f"slyled_{ts}.log"
+        fh = logging.FileHandler(str(log_file), encoding="utf-8")
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"))
         log.addHandler(fh)
         _log_handler = fh
-        log.info("Logging started  -' %s", fh.baseFilename)
+        log.info("Logging started -> %s", fh.baseFilename)
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1717,6 +1722,21 @@ def api_timeline_bake(tid):
                 ]
         enriched_fixtures.append(ef)
 
+    log.info("BAKE: timeline %d '%s' dur=%ds frames=%d fixtures=%d clips=%d effects=%d",
+             tid, tl.get("name"), tl.get("durationS", 0), n_frames, len(enriched_fixtures),
+             sum(len(t.get("clips", [])) for t in tl.get("tracks", [])),
+             len(_spatial_fx))
+    for ef in enriched_fixtures:
+        ft = ef.get("fixtureType", "led")
+        strings = ef.get("strings", [])
+        leds = sum(s.get("leds", 0) for s in strings)
+        log.info("  fixture %d '%s' type=%s strings=%d leds=%d aim=%s pos=(%s,%s)",
+                 ef.get("id"), ef.get("name"), ft, len(strings), leds,
+                 ef.get("aimPoint"), ef.get("x", "?"), ef.get("y", "?"))
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    placed = [f for f in enriched_fixtures if f["id"] in pos_map]
+    log.info("BAKE: %d/%d fixtures have layout positions", len(placed), len(enriched_fixtures))
+
     def _bake_thread():
         global _bake_result
         try:
@@ -1728,14 +1748,20 @@ def api_timeline_bake(tid):
                 progress=_bake_progress,
                 actions=_actions,
             )
-            # Store result (strip raw frame data to save memory, keep segments + LSQ)
+            n_fix = len(result.get("fixtures", {}))
+            n_frames_out = result.get("totalFrames", 0)
+            lsq_size = sum(len(v) for v in result.get("lsq_files", {}).values())
+            preview_keys = list(result.get("preview", {}).keys())
+            log.info("BAKE DONE: %d fixtures, %d frames, %d LSQ bytes, preview keys=%s",
+                     n_fix, n_frames_out, lsq_size, preview_keys[:5])
+            # Store result
             _bake_result[tid] = {
                 "timelineId": tid,
                 "bakedAt": int(time.time()),
                 "fixtures": result["fixtures"],
                 "totalFrames": result["totalFrames"],
                 "fps": result["fps"],
-                "lsqSize": sum(len(v) for v in result.get("lsq_files", {}).values()),
+                "lsqSize": lsq_size,
                 "preview": result.get("preview", {}),
             }
             # Save LSQ files to data/baked/
@@ -1743,10 +1769,11 @@ def api_timeline_bake(tid):
             baked_dir.mkdir(parents=True, exist_ok=True)
             for fix_id, lsq_data in result.get("lsq_files", {}).items():
                 (baked_dir / f"fixture_{fix_id}.lsq").write_bytes(lsq_data)
-            # Save zip bundle
             zip_data = pack_lsq_zip(result.get("lsq_files", {}))
             (baked_dir / f"timeline_{tid}.zip").write_bytes(zip_data)
         except Exception as e:
+            import traceback
+            log.error("BAKE FAILED: %s\n%s", e, traceback.format_exc())
             _bake_progress.error = str(e)
             _bake_progress.done = True
 
@@ -1778,8 +1805,12 @@ def api_bake_download(tid):
 def api_bake_preview(tid):
     result = _bake_result.get(tid)
     if not result:
+        log.debug("PREVIEW: no bake result for timeline %d (available: %s)", tid, list(_bake_result.keys()))
         return jsonify(err="No baked data"), 404
-    return jsonify(result.get("preview", {}))
+    preview = result.get("preview", {})
+    log.debug("PREVIEW: timeline %d -> %d fixture keys, sample: %s",
+              tid, len(preview), list(preview.keys())[:3])
+    return jsonify(preview)
 
 # Sync progress   " tracks per-child sync state for UI polling
 _sync_progress = None  # dict when active
@@ -2176,8 +2207,34 @@ def api_settings_save():
         _save("stage", _stage)
     # Toggle file logging if changed
     if "logging" in body:
-        _apply_logging(body["logging"])
+        _apply_logging(body["logging"], body.get("logPath"))
     return jsonify(ok=True)
+
+@app.post("/api/logging/start")
+def api_logging_start():
+    """Start file logging. Optional body: {path: '/path/to/file.log'}."""
+    body = request.get_json(silent=True) or {}
+    log_path = body.get("path")
+    _settings["logging"] = True
+    _save("settings", _settings)
+    _apply_logging(True, log_path)
+    return jsonify(ok=True, path=_log_handler.baseFilename if _log_handler else None)
+
+@app.post("/api/logging/stop")
+def api_logging_stop():
+    """Stop file logging."""
+    _settings["logging"] = False
+    _save("settings", _settings)
+    _apply_logging(False)
+    return jsonify(ok=True)
+
+@app.get("/api/logging/status")
+def api_logging_status():
+    """Return current logging state and file path."""
+    return jsonify(
+        enabled=bool(_log_handler),
+        path=_log_handler.baseFilename if _log_handler else None
+    )
 
 #  "  "  Actions library  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
