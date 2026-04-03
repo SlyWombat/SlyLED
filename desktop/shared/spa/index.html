@@ -713,55 +713,81 @@ function _renderSetup(){
     ra('GET','/api/children',null,function(children){
       _setupChildren=children||[];
       var cMap={};(children||[]).forEach(function(c){cMap[c.id]=c;});
+      // Separate children with fixtures from standalone hardware (DMX bridges, unlinked)
+      var linkedChildIds=new Set();(fixtures||[]).forEach(function(f){if(f.childId!=null)linkedChildIds.add(f.childId);});
+      var standaloneHw=(children||[]).filter(function(c){return !linkedChildIds.has(c.id);});
+
       var h='<div style="margin-bottom:.6em">'
         +'<button class="btn btn-on" onclick="showAddFixtureModal()" data-tip="setupAdd">Add Fixture</button>'
         +'<button class="btn btn-nav" onclick="discoverChildren()" id="disc-btn" style="margin-left:.5em" data-tip="setupDiscover">Discover</button>'
         +'<button class="btn btn-nav" onclick="setupRefreshAll(this)" style="margin-left:.5em" data-tip="setupRefreshAll">Refresh All</button>'
         +'</div>'
-        +'<div id="disc-results" style="display:none;margin-bottom:.8em"></div>'
-        +'<table class="tbl"><tr><th>Fixture</th><th>Type</th><th>Connection</th><th>Status</th><th>Channels / LEDs</th><th>Actions</th></tr>';
-      if(fixtures&&fixtures.length){
-        fixtures.forEach(function(f){
-          var ft=f.fixtureType||'led';
-          var typeBadge=ft==='dmx'
-            ?'<span class="badge" style="background:#7c3aed;color:#fff">DMX</span>'
-            :'<span class="badge" style="background:#059669;color:#fff">LED</span>';
-          var conn='',status='',chLeds='',actions='';
-          if(ft==='led'){
-            var ch=f.childId!=null?cMap[f.childId]:null;
-            if(ch){
-              var board=ch.boardType||'SlyLED';
-              if(ch.type==='wled')board='WLED';
-              else if(!ch.boardType){
-                if(ch.sc<=1&&ch.strings&&ch.strings.length&&ch.strings[0].leds<=1)board='Giga';
-                else board='ESP32';
-              }
-              var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b'};
-              conn=escapeHtml(ch.ip)+' <span class="badge" style="background:'+(boardColors[board]||'#446')+';color:#fff;font-size:.75em">'+board+'</span>';
-              status=ch.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
-              var totalLeds=0;if(ch.strings)ch.strings.forEach(function(s,i){if(i<ch.sc)totalLeds+=(s.leds||0);});
-              chLeds=ch.sc+'&times;'+totalLeds;
-            }else{
-              conn='<span style="color:#666">No child linked</span>';
-              status='<span class="badge boff">Unlinked</span>';
-              chLeds='—';
-            }
-            actions='<button class="btn" onclick="editFixture('+f.id+')" style="background:#446;color:#fff">Edit</button>'
-              +' <button class="btn" onclick="showDetails('+f.childId+')" style="background:#335;color:#fff">Details</button>'
-              +' <button class="btn btn-on" onclick="refreshChild('+f.childId+')">Refresh</button>'
-              +' <button class="btn" onclick="rebootChild('+f.childId+')" style="background:#654;color:#fff">Reboot</button>'
-              +' <button class="btn btn-off" onclick="removeFixture('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
-          }else{
-            conn='U'+f.dmxUniverse+' @ '+(f.dmxStartAddr||1);
-            status='<span class="badge" style="background:#7c3aed;color:#fff">Configured</span>';
-            chLeds=(f.dmxChannelCount||0)+' ch';
-            actions='<button class="btn" onclick="editFixture('+f.id+')" style="background:#446;color:#fff">Edit</button>'
-              +' <button class="btn" onclick="showDmxDetails('+f.id+')" style="background:#3b1f7c;color:#e9d5ff">Details</button>'
-              +' <button class="btn btn-off" onclick="removeFixture('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
-          }
-          h+='<tr><td><b>'+escapeHtml(f.name)+'</b></td><td>'+typeBadge+'</td><td>'+conn+'</td><td>'+status+'</td><td>'+chLeds+'</td><td>'+actions+'</td></tr>';
+        +'<div id="disc-results" style="display:none;margin-bottom:.8em"></div>';
+
+      // ── Hardware section (DMX bridges + standalone children)
+      if(standaloneHw.length){
+        h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">Hardware</h3>'
+          +'<table class="tbl"><tr><th>Device</th><th>Type</th><th>IP</th><th>Status</th><th>Firmware</th><th>Actions</th></tr>';
+        standaloneHw.forEach(function(c){
+          var isDmx=(c.type==='dmx'||c.boardType==='giga-dmx'||c.boardType==='DMX Bridge');
+          var typeBadge=isDmx
+            ?'<span class="badge" style="background:#7c3aed;color:#fff">DMX Bridge</span>'
+            :'<span class="badge" style="background:#446;color:#fff">'+(c.boardType||'SlyLED')+'</span>';
+          var st=c.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
+          var acts='<button class="btn btn-on" onclick="refreshChild('+c.id+')">Refresh</button>';
+          if(isDmx)acts+=' <button class="btn" onclick="window.open(\'http://'+escapeHtml(c.ip)+'/config\',\'_blank\')" style="background:#7c3aed;color:#fff">Configure</button>';
+          acts+=' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff">Reboot</button>';
+          acts+=' <button class="btn btn-off" onclick="removeChild('+c.id+')">Remove</button>';
+          h+='<tr><td><b>'+escapeHtml(c.name||c.hostname)+'</b></td><td>'+typeBadge+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+(c.fwVersion||'—')+'</td><td>'+acts+'</td></tr>';
         });
-      }else{
+        h+='</table>';
+      }
+
+      // ── Fixtures section (LED + DMX fixtures)
+      h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">Fixtures</h3>'
+        +'<table class="tbl"><tr><th>Fixture</th><th>Type</th><th>Connection</th><th>Status</th><th>Channels / LEDs</th><th>Actions</th></tr>';
+      var ledFixtures=(fixtures||[]).filter(function(f){return (f.fixtureType||'led')!=='dmx';});
+      var dmxFixtures=(fixtures||[]).filter(function(f){return f.fixtureType==='dmx';});
+      if(ledFixtures.length){
+        ledFixtures.forEach(function(f){
+          var ch=f.childId!=null?cMap[f.childId]:null;
+          var conn='',status='',chLeds='',actions='';
+          if(ch){
+            var board=ch.boardType||'SlyLED';
+            if(ch.type==='wled')board='WLED';
+            else if(!ch.boardType){
+              if(ch.sc<=1&&ch.strings&&ch.strings.length&&ch.strings[0].leds<=1)board='Giga';
+              else board='ESP32';
+            }
+            var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b'};
+            conn=escapeHtml(ch.ip)+' <span class="badge" style="background:'+(boardColors[board]||'#446')+';color:#fff;font-size:.75em">'+board+'</span>';
+            status=ch.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
+            var totalLeds=0;if(ch.strings)ch.strings.forEach(function(s,i){if(i<ch.sc)totalLeds+=(s.leds||0);});
+            chLeds=ch.sc+'&times;'+totalLeds;
+          }else{
+            conn='<span style="color:#666">No device linked</span>';
+            status='<span class="badge boff">Unlinked</span>';
+            chLeds='—';
+          }
+          actions='<button class="btn" onclick="editFixture('+f.id+')" style="background:#446;color:#fff">Edit</button>';
+          if(ch)actions+=' <button class="btn" onclick="showDetails('+f.childId+')" style="background:#335;color:#fff">Details</button>'
+            +' <button class="btn btn-on" onclick="refreshChild('+f.childId+')">Refresh</button>'
+            +' <button class="btn" onclick="rebootChild('+f.childId+')" style="background:#654;color:#fff">Reboot</button>';
+          actions+=' <button class="btn btn-off" onclick="removeFixture('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
+          h+='<tr><td><b>'+escapeHtml(f.name)+'</b></td><td><span class="badge" style="background:#059669;color:#fff">LED</span></td><td>'+conn+'</td><td>'+status+'</td><td>'+chLeds+'</td><td>'+actions+'</td></tr>';
+        });
+      }
+      if(dmxFixtures.length){
+        dmxFixtures.forEach(function(f){
+          var conn='U'+f.dmxUniverse+' @ '+(f.dmxStartAddr||1);
+          var chLeds=(f.dmxChannelCount||0)+' ch'+(f.dmxProfileId?' ('+f.dmxProfileId+')':'');
+          var actions='<button class="btn" onclick="editFixture('+f.id+')" style="background:#446;color:#fff">Edit</button>'
+            +' <button class="btn" onclick="showDmxDetails('+f.id+')" style="background:#3b1f7c;color:#e9d5ff">Details</button>'
+            +' <button class="btn btn-off" onclick="removeFixture('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
+          h+='<tr><td><b>'+escapeHtml(f.name)+'</b></td><td><span class="badge" style="background:#7c3aed;color:#fff">DMX</span></td><td>'+conn+'</td><td><span class="badge" style="background:#7c3aed;color:#fff">Configured</span></td><td>'+chLeds+'</td><td>'+actions+'</td></tr>';
+        });
+      }
+      if(!ledFixtures.length&&!dmxFixtures.length){
         h+='<tr><td colspan="6" style="color:#888;text-align:center">No fixtures — click Add Fixture or Discover</td></tr>';
       }
       document.getElementById('t-setup').innerHTML=h+'</table>';
@@ -1001,6 +1027,14 @@ function removeFixture(id,name){
       document.getElementById('hs').textContent=(r&&r.ok)?'Fixture removed':'Remove failed';
       loadFixtures();loadSetup();
     }
+  });
+}
+
+function removeChild(id){
+  if(!confirm('Remove this device?'))return;
+  ra('DELETE','/api/children/'+id,null,function(r){
+    document.getElementById('hs').textContent=(r&&r.ok)?'Device removed':'Remove failed';
+    loadSetup();
   });
 }
 
