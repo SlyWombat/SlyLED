@@ -293,6 +293,10 @@ data class FixtureString(
     val leds: Int = 0,
     val mm: Int = 1000,
     val sdir: Int = 0,
+    val type: Int = 0,
+    val cdir: Int = 0,
+    val cmm: Int = 0,
+    val folded: Boolean = false,
     val points: List<List<Double>>? = null,
 )
 
