@@ -53,7 +53,13 @@ def _apply_logging(enabled, log_path=None):
     if enabled:
         if log_path:
             log_file = Path(log_path)
-            log_file.parent.mkdir(parents=True, exist_ok=True)
+            # If path is a directory (or has no extension), treat as directory and add filename
+            if log_file.is_dir() or (log_file.suffix == '' and not log_file.name.endswith('.log')):
+                log_file.mkdir(parents=True, exist_ok=True)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                log_file = log_file / f"slyled_{ts}.log"
+            else:
+                log_file.parent.mkdir(parents=True, exist_ok=True)
         else:
             log_dir = DATA / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
@@ -68,7 +74,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "8.2.3"
+VERSION = "8.2.4"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -3583,6 +3589,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
