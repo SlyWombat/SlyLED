@@ -1,354 +1,331 @@
-# SlyLED User Manual — 3D Volumetric Lighting System (v8.0)
+# SlyLED User Manual — 3D Volumetric Lighting System (v8.1)
 
 ## Table of Contents
-1. [Getting Started with 3D Stage Design](#1-getting-started)
-2. [Fixture Setup](#2-fixture-setup)
-3. [Creating Spatial Effects](#3-spatial-effects)
-4. [Building a Timeline](#4-timeline)
-5. [Baking & Playback](#5-baking)
-6. [Show Preview Emulator](#6-show-preview)
-7. [Preset Shows](#7-presets)
-8. [System Limits](#8-limits)
-9. [Troubleshooting](#9-troubleshooting)
+1. [Getting Started](#1-getting-started)
+2. [Platform Guide](#2-platforms)
+3. [Fixture Setup](#3-fixture-setup)
+4. [Stage Layout](#4-layout)
+5. [Creating Spatial Effects](#5-spatial-effects)
+6. [Building a Timeline](#6-timeline)
+7. [Baking & Playback](#7-baking)
+8. [Show Preview Emulator](#8-show-preview)
+9. [DMX Fixture Profiles](#9-dmx-profiles)
+10. [Preset Shows](#10-presets)
+11. [Firmware & OTA Updates](#11-firmware)
+12. [System Limits](#12-limits)
+13. [Troubleshooting](#13-troubleshooting)
+14. [API Quick Reference](#14-api)
 
 ---
 
-## 1. Getting Started with 3D Stage Design
+## 1. Getting Started
 
-### Switching Between 2D and 3D
-The Layout tab offers two views via the toggle buttons at the top:
-- **2D Canvas**: The original flat layout — drag performers onto a grid. Best for simple setups.
-- **3D Viewport**: An interactive Three.js scene. Best for complex multi-level installations.
+SlyLED is a three-tier LED and DMX lighting control system:
+- **Orchestrator** (Windows/Mac desktop app or Android app) — design shows and control playback
+- **Performers** (ESP32/D1 Mini) — run LED effects on hardware
+- **DMX Bridge** (Giga R1 WiFi) — output Art-Net/sACN to DMX fixtures
 
-Both views share the same position data. Switching between them is instant and non-destructive.
-
-### Navigating the 3D Viewport
-| Action | Control |
-|--------|---------|
-| **Orbit** (rotate view) | Left-click + drag |
-| **Zoom** | Scroll wheel |
-| **Pan** (shift view) | Right-click + drag |
-| **Select performer** | Left-click on a node |
-| **Move performer** | Drag the colored arrows after selecting |
-| **Edit performer** | Double-click on a node |
-| **Place from sidebar** | Drag an unplaced performer into the viewport |
-
-### Coordinate System
-- **X-axis** (red): Width — left to right
-- **Y-axis** (green): Height — ground to ceiling
-- **Z-axis** (blue): Depth — front to back
-- **Origin**: Bottom-left-front corner of the stage
-- **Units**: Internally stored in millimeters; displayed in your chosen unit (Settings tab)
-
-### Stage Dimensions
-The stage is shown as a wireframe box in the 3D viewport. Default size: 10m x 5m x 10m. Configure via the Stage API or from your orchestrator settings. The ground plane grid shows 1-meter squares.
-
-### Saving Positions
-Click **Save Layout** after positioning performers. In 3D mode, positions are read directly from the Three.js scene, including height (Y) and depth (Z).
+### Quick Start
+1. Launch the desktop app: `powershell -File desktop\windows\run.ps1` (Windows) or `bash desktop/mac/run.sh` (Mac)
+2. Open the browser at `http://localhost:8080`
+3. Go to **Setup** tab, click **Discover** to find performers on your network
+4. Go to **Layout** tab to position fixtures on the stage
+5. Go to **Runtime** tab, load a **Preset Show**, click **Bake & Start**
 
 ---
 
-## 2. Fixture Setup
+## 2. Platform Guide
+
+### Windows Desktop (SPA)
+The primary design and control interface. Full-featured 7-tab SPA with 2D/3D layout, timeline editor, spatial effects, DMX profiles, and firmware management.
+
+**Launch:** `powershell -File desktop\windows\run.ps1` or run `SlyLED.exe`
+**Install:** Run `SlyLED-Setup.exe` (includes system tray icon)
+
+### Android App
+Mobile companion for monitoring and playback control. Available on the same WiFi network as the desktop server.
+
+**Install:** Transfer `SlyLED.apk` to your phone and install.
+**Connect:** Enter the server IP address and port (shown on desktop Settings tab).
+
+**Android Features:**
+- **Dashboard** — performer status, online/offline indicators
+- **Setup** — view fixtures, discover performers
+- **Layout** — 2D canvas with pinch-to-zoom, drag-to-reposition, tap-to-place, DMX beam cones, surface visualization
+- **Actions** — browse and create LED effects
+- **Runtime** — show emulator with LED string dots and DMX beam cones, timeline bake/sync/play, preset shows
+- **Settings** — server name, brightness, factory reset
+
+### Firmware Config (ESP32/D1 Mini)
+Each performer serves a 3-tab config page at `http://<device-ip>/config`:
+- **Dashboard** — hostname, firmware version, active action status
+- **Settings** — device name, description, string count
+- **Config** — per-string LED count, length, direction, GPIO pin (ESP32)
+
+---
+
+## 3. Fixture Setup
 
 ### What Are Fixtures?
-A fixture is the primary entity on the 3D stage. It wraps physical hardware and adds stage-level attributes.
+A fixture is the primary entity on the stage. It wraps physical hardware and adds stage-level attributes:
+- **LED fixtures** — linked to a performer child, with LED strings
+- **DMX fixtures** — linked to a DMX universe/address, with a profile and aim point
 
-- **A child IS a fixture** — auto-created when hardware is registered via Setup
-- **Fixtures can override child attributes** — e.g., a string wired as "east" on the ESP32 can be rotated vertical on the stage
-- **Fixtures can also be** DMX lights (future), groups of children, or standalone definitions
-- The **baking engine** uses the fixture's position and rotation, not the child's raw config
+### Adding LED Fixtures
+1. Go to **Setup** tab, click **Discover** to find performers
+2. Click **Add Fixture** → select "LED" type
+3. Link to a performer and configure strings (LED count, length, direction)
+
+### Adding DMX Fixtures
+1. Click **Add Fixture** → select "DMX" type
+2. Set universe, start address, channel count
+3. Choose a DMX profile (Generic RGB, Moving Head, etc.)
+4. Set the aim point — where the beam points in 3D space
 
 ### Fixture Types
-
-| Type | Description | Visual |
-|------|-------------|--------|
-| **Linear** | LED strip/string. Pixels spaced along a path. | Colored dots along a line |
-| **Point** | Single light source with area of effect. | Translucent sphere |
-| **Surface** | 3D mesh (OBJ) as a projection target. | Semi-transparent mesh |
-| **Group** | Named collection of fixtures targeted as one | No direct visual |
-
-### Linear Fixtures
-When a child is registered, a linear fixture is auto-created based on its string configuration:
-- **LED count** and **string length** come from the child's PONG data
-- **Direction** is inferred from the `stripDir` field (E/N/W/S)
-- **Pixel positions** are computed by evenly spacing LEDs along the string path
-
-**Rotation override**: Set `rotation: [rx, ry, rz]` (degrees) on a fixture to override the child's strip direction. Example: a string configured as "east" (horizontal) can be made vertical with `rotation: [0, 0, 90]`.
-
-For curved installations, define custom control points via the Fixture API. The system uses Catmull-Rom spline interpolation to place pixels along smooth curves.
-
-### Point Fixtures
-For spotlights, pars, or single-LED devices. Defined by a position and an area-of-effect radius. Future DMX fixtures will use this type with channel mappings.
-
-### Resolving Pixel Positions
-Use the **Resolve** button (or `POST /api/fixtures/:id/resolve`) to compute the 3D coordinates of every pixel. This must be done before spatial effects can evaluate which pixels they illuminate.
+| Type | Description |
+|------|-------------|
+| **Linear** | LED strip. Pixels along a path. |
+| **Point** | DMX light source with beam cone. |
+| **Group** | Collection of fixtures targeted as one. |
 
 ---
 
-## 3. Creating Spatial Effects
+## 4. Stage Layout
+
+### 2D Canvas
+The Layout tab shows a 2D front view of the stage. Stage dimensions (width × height) are set in Settings.
+
+| Action | Desktop | Android |
+|--------|---------|---------|
+| **Place fixture** | Drag from sidebar | Tap fixture then tap canvas |
+| **Move fixture** | Drag on canvas | Drag on canvas |
+| **Remove fixture** | Double-click → Remove | Tap → Edit → Remove |
+| **Zoom** | Scroll wheel | Pinch gesture |
+| **Pan** | — | Two-finger drag |
+| **Edit coordinates** | Double-click | Tap placed fixture |
+| **Edit surface** | Double-click | Tap surface in list |
+
+**What's rendered:**
+- Grid lines at 1-meter spacing
+- Stage dimension labels
+- **LED fixtures**: Green nodes with colored string lines (direction arrows)
+- **DMX fixtures**: Purple nodes with beam cone triangles toward aim point
+- **Surfaces**: Semi-transparent rectangles with name labels (clipped to stage)
+- **Aim dots**: Red circles at DMX aim points
+
+### 3D Viewport (Desktop Only)
+Toggle to 3D mode for an interactive Three.js scene:
+- Orbit camera with mouse drag
+- Beam cones as 3D geometry
+- Draggable aim spheres for DMX fixtures
+- Surface planes/boxes with transparency
+
+### Coordinate System
+- **aimPoint[0]** = X (horizontal position, mm)
+- **aimPoint[1]** = Y (height from floor, mm) — used for 2D canvas vertical axis
+- **aimPoint[2]** = Z (depth, mm) — used in 3D viewport only
+- **canvasW** = stage width × 1000 (mm)
+- **canvasH** = stage height × 1000 (mm)
+
+---
+
+## 5. Creating Spatial Effects
 
 ### Spatial Effects vs Classic Actions
-- **Classic Actions** (Solid, Chase, Rainbow, etc.): Run locally on each child. Pattern based on pixel index. Good for simple animations.
-- **Spatial Effects**: Operate in 3D space. A sphere of red light sweeping across the stage will illuminate different fixtures at different times based on their physical position.
+- **Classic Actions** (Solid, Chase, Rainbow, etc.): Run locally on each performer. Pattern based on pixel index.
+- **Spatial Effects**: Operate in 3D space. A sphere of light sweeping across the stage illuminates different fixtures at different times.
 
 ### Creating a Spatial Effect
-Navigate to the **Actions tab** and click **+ New Spatial Effect**.
-
-#### Spatial Fields
-A 3D volume that moves through the stage:
+Navigate to **Actions** tab → **+ New Spatial Effect**.
 
 | Field | Description |
 |-------|-------------|
 | **Shape** | Sphere, Plane, or Box |
 | **Color** | RGB color applied to pixels inside the field |
-| **Size** | Radius (sphere), thickness (plane), or width/height/depth (box) |
-| **Motion Start** | Starting position (x, y, z) in millimeters |
-| **Motion End** | Ending position (x, y, z) in millimeters |
-| **Duration** | How long the field takes to travel from start to end |
-| **Easing** | Linear, ease-in, ease-out, or ease-in-out |
-| **Blend** | How this effect combines with others: Replace, Add, Multiply, Screen |
-
-#### Fixture-Local Effects
-Wraps one of the 14 classic action types (Chase, Rainbow, etc.) and targets it to specific fixtures. Used in timelines when you want a classic pattern on specific hardware at specific times.
-
-### Blend Modes
-When multiple effects overlap on the same pixel:
-- **Replace**: Last effect wins completely
-- **Add**: Colors are added (clamps at 255)
-- **Multiply**: Colors are multiplied (darkens)
-- **Screen**: Inverse multiply (brightens)
-
-### Previewing Effects
-After creating an effect, use the 3D viewport to preview it. The viewport shows affected pixels lighting up in real-time as the spatial field moves through the stage.
+| **Size** | Radius (sphere), thickness (plane), or dimensions (box) |
+| **Motion Start/End** | 3D positions in millimeters |
+| **Duration** | Travel time from start to end |
+| **Easing** | Linear, ease-in, ease-out, ease-in-out |
+| **Blend** | Replace, Add, Multiply, Screen |
 
 ---
 
-## 4. Building a Timeline
+## 6. Building a Timeline
 
-### Timeline vs Classic Runners
-- **Classic Runners**: Sequential steps — one action after another. Simple, reliable.
-- **Timelines**: Multi-track, overlapping effects with precise timing. For complex 3D shows.
-
-Switch between modes using the **[Runners (Classic)] [Timeline (3D)]** toggle in the Runtime tab.
-
-### Creating a Timeline
-1. Click **+ New Timeline** and enter a name and duration
-2. Select the timeline from the dropdown to open the editor
-
-### The Timeline Editor
-The editor shows:
-- **Time ruler** at the top (in seconds)
-- **Tracks** stacked vertically — one per fixture
-- **Clips** as colored rectangles on each track
-- **Playhead** — the vertical cyan line showing current time
-
-### Working with Tracks
-- Click **+ Add Track** to add a track for a specific fixture
-- Each track targets one fixture (or fixture group)
-- A "Stage" track can hold global spatial fields that affect all fixtures
-
-### Working with Clips
-- Click **+ clip** in the track header to add an effect clip
-- Each clip references a spatial effect, with a start time and duration
-- Click a clip to edit its timing or change the effect
-- Clips can overlap — they blend according to their effect's blend mode
-
-### Scrubbing and Preview
-- **Play Preview**: Animates the playhead across the timeline, updating the time display
-- **Stop**: Resets playhead to the start
-- The time display shows current position in MM:SS.s format
+1. Go to **Runtime** tab → **+ New Timeline**
+2. Set name and duration
+3. **+ Add Track** for each fixture (or "All Performers")
+4. **+ Add Clip** to assign effects with start time and duration
+5. Clips can overlap — they blend according to their effect's blend mode
 
 ---
 
-## 5. Baking & Playback
+## 7. Baking & Playback
 
-### What Is Baking?
-Baking compiles a timeline into minimal action instructions for each performer. The smart bake engine analyzes each clip's spatial geometry directly — it does NOT render frames.
+### Bake
+Compiles a timeline into minimal action instructions per performer:
+1. Click **Bake** → progress shows frame count and segments
+2. Click **Sync** to push instructions to performers via UDP
+3. Click **Start** for synchronized NTP-timed playback
 
-**How it works:**
-1. For each spatial effect clip, compute the intersection timing between the effect volume and each pixel's 3D position
-2. Detect sweep patterns (brightness moving along a string) → emit WIPE_SEQ with computed speed per pixel and direction
-3. For stationary effects → emit SOLID or FADE
-4. For classic action clips → pass the action type directly (children already know how to run Chase, Fire, Rainbow, etc.)
-
-**Example: Rainbow Across (sphere sweeping left to right)**
-- ESP Dual string 0 (West): `WIPE_SEQ direction=West, speed=34ms/pixel` — pixels light up sequentially from end toward node
-- ESP Dual string 1 (East): `WIPE_SEQ direction=East, speed=65ms/pixel` — pixels light up from node outward
-- D1 Mini: `WIPE_SEQ at t=13.2s, speed=34ms/pixel` — starts later as sphere reaches it
-
-This produces **2-3 instructions per fixture** instead of 16 averaged color blocks. Each child runs the action locally — the actual per-pixel sweep happens on the hardware.
-
-**Why bake?** Children can't receive per-pixel streaming over WiFi. Baking pre-computes the optimal action type + parameters + timing so each child runs its part independently. Bake time is ~200ms regardless of show duration.
-
-### Starting a Bake
-1. Open a timeline in the Runtime tab
-2. Click the **Bake** button
-3. A progress modal shows:
-   - Frame progress (e.g., "Frame 1200 / 2400")
-   - Per-fixture segment counts
-   - Total file size when complete
-
-### Bake Output
-- **LSQ files**: Raw per-pixel RGB data at 40Hz per fixture
-- **Action segments**: Sequences of the 14 classic action types (Solid, Fade, etc.)
-- **ZIP bundle**: Download all LSQ files as a single archive
-
-### Syncing to Performers
-After baking, click **Sync to Performers** to push the baked action sequences to children using the existing UDP `LoadStepPayload` protocol. Children receive the same packets they always have — the intelligence is in the parent's compilation.
-
-### Starting Playback
-Click **Start** to begin synchronized playback:
-1. All children receive a `RUNNER_GO` command with a future timestamp (now + 5 seconds)
-2. Children begin executing their loaded steps at the same NTP-synced moment
-3. The Dashboard shows per-fixture playback status
-
-### Stopping
-Click **Stop** to send `RUNNER_STOP` to all children and halt playback.
-
-### Long Shows
-Shows with more than 16 steps per fixture are automatically "paged" — the parent re-syncs the next batch of steps during playback with overlap for seamless transitions.
+### Output
+- **Action segments**: Sequences of the 14 classic action types
+- **LSQ files**: Raw per-pixel RGB data at 40Hz (downloadable as ZIP)
+- **Preview data**: 1 color per string per second for emulator
 
 ---
 
-## 6. Show Preview Emulator
+## 8. Show Preview Emulator
 
-Both the desktop SPA and Android app include a real-time show preview emulator on the Runtime tab.
-
-### How It Works
-- The bake engine generates preview data: 1 dominant color per string per second
-- When a show starts, the emulator renders a canvas showing all fixtures at their layout positions
-- Per-string colored lines update every second, synced to the server's elapsed time
-- Time counter shows current position vs total duration
+Both desktop and Android include a real-time show preview:
 
 ### Desktop SPA
-The emulator canvas appears below the timeline detail section after clicking "Sync & Start". Fixtures use actual string directions from the child config. Dark strings show as dim gray lines.
+The emulator canvas appears on the Runtime tab below the timeline. Shows:
+- **LED fixtures**: Colored dots along string paths with glow effects
+- **DMX fixtures**: Beam cone triangles with preview-driven colors
+- **Aim dots**: Red circles at aim points
+- **Fixture labels**: Names below each node
+- **Time counter**: MM:SS elapsed / total
 
 ### Android App
-The `ShowEmulatorCanvas` card appears between the "Now Playing" progress card and the timeline list. Fixtures are distributed across the canvas with colored lines and glow effects.
+The `ShowEmulatorCanvas` card shows:
+- Same LED string dots and DMX beam cones as desktop
+- Surfaces rendered as background rectangles
+- Preview colors update every second during playback
+
+### DMX-Only Rigs
+The emulator correctly renders DMX-only setups (no LED performers). Static purple beam cones always visible, with live colors when a show is running.
 
 ---
 
-## 7. Preset Shows
+## 9. DMX Fixture Profiles
 
-14 pre-built shows are available from the Runtime tab or Settings:
+### Built-in Profiles
+| Profile | Channels | Features |
+|---------|----------|----------|
+| Generic RGB | 3 | Red, Green, Blue |
+| Generic RGBW | 5 | Red, Green, Blue, White, Dimmer |
+| Generic Dimmer | 1 | Intensity only |
+| Moving Head 16-bit | 16 | Pan, Tilt, Dimmer, Color, Gobo, Prism |
 
-| Preset | Type | Description |
-|--------|------|-------------|
-| Rainbow Up | Spatial plane | Moving rainbow from floor to ceiling |
-| Rainbow Across | Spatial sphere | Rainbow sweeping left to right |
-| Slow Fire | Classic action | Warm fire effect on all fixtures |
-| Disco | Classic action | Pastel twinkle sparkles |
-| Ocean Wave | Spatial (2 effects) | Blue wave sweep with teal wash |
-| Sunset Glow | Mixed | Warm breathe with golden plane sweep |
-| Police Lights | Mixed | Red strobe with blue box flash sweep |
-| Starfield | Classic action | White sparkles on dark background |
-| Aurora Borealis | Spatial (2 effects) | Green curtain with purple shimmer |
-| Spotlight Sweep | Spatial (moving heads) | Warm orb sweeps stage — heads track it |
-| Concert Wash | Mixed (moving heads) | Magenta flood + amber tracking spot |
-| Figure Eight | Spatial (moving heads) | Crossing orbs — heads trace X paths |
-| Thunderstorm | Mixed (moving heads) | Lightning strikes — heads chase bolts |
-| Dance Floor | Mixed (moving heads) | Fast orbiting spots — rapid tracking |
+### Profile Editor
+Settings tab → **Profiles** → **New Profile** or **Edit**:
+- Define channels with name, type (red/green/blue/dimmer/pan/tilt/etc.), default value
+- Set beam width, pan/tilt range for moving heads
+- Import from Open Fixture Library (OFL) JSON format
 
-Each preset creates a timeline with an "All Performers" stage track. Classic actions run on every fixture simultaneously. Spatial effects sweep across the stage based on fixture positions. DMX moving heads automatically track the spatial effect center with pan/tilt.
+### Import/Export
+- **Import OFL**: Paste JSON from [open-fixture-library.org](https://open-fixture-library.org)
+- **Export**: Download all custom profiles as JSON
+- **Built-in profiles** cannot be edited or deleted
 
 ---
 
-## 8. System Limits
+## 10. Preset Shows
 
-| Resource | Limit | Notes |
-|----------|-------|-------|
-| Children (performers) | 8 max | Protocol constant `MAX_STR_PER_CHILD` |
-| Strings per child | 8 max | ESP32 supports up to 8 GPIO pins |
-| LEDs per string | 65535 max | uint16_t addressing (protocol v4) |
-| Total LEDs per child | 255 max | `NUM_LEDS` / `MAX_LEDS` in firmware |
-| Steps per runner | 16 max | `LoadStepPayload` array limit |
-| Timelines | Unlimited | Stored in JSON |
-| Tracks per timeline | Unlimited | Expanded per-fixture during bake |
-| Clips per track | Unlimited | |
-| Bake frame rate | 40 Hz | `BAKE_FPS` constant |
-| Bake segments per fixture | 16 max | Fits in runner step limit |
-| Per-string segments | 8 max per string | `16 / string_count` |
-| Preview resolution | 1 fps | 1 color per string per second |
-| Show duration | No hard limit | Memory scales with duration × pixels |
-| Sync verify retries | 3 | HTTP status check per performer |
-| NTP sync offset | 5 seconds | GO command sent with future epoch |
-| UDP packet size | 56 bytes | `LoadStepPayload` (protocol v4) |
-| WiFi performers | ~8 practical | UDP broadcast bandwidth limit |
+14 pre-built shows available from Runtime tab → **Load Show** → **Presets**:
 
-### Memory Estimates
-- **Bake RAM**: `duration_s × 40 × pixel_count × 3 bytes` (e.g., 60s × 40fps × 300px = 2.2 MB)
-- **Preview RAM**: `duration_s × string_count × 3 bytes` (e.g., 60s × 3 strings = 540 bytes)
-- **LSQ file size**: `frames × pixels × 3 bytes` (e.g., 2400 frames × 300px = 2.1 MB)
+| Preset | Description |
+|--------|-------------|
+| Rainbow Up | Rainbow plane rising floor to ceiling |
+| Rainbow Across | Rainbow sphere sweeping left to right |
+| Slow Fire | Warm fire effect on all fixtures |
+| Disco | Pastel twinkle sparkles |
+| Ocean Wave | Blue wave sweep with teal wash |
+| Sunset Glow | Warm breathe with golden sweep |
+| Police Lights | Red strobe with blue flash sweep |
+| Starfield | White sparkles on dark background |
+| Aurora Borealis | Green curtain with purple shimmer |
+| Spotlight Sweep | Warm orb — moving heads track it |
+| Concert Wash | Magenta flood + amber tracking spot |
+| Figure Eight | Crossing orbs — heads trace X paths |
+| Thunderstorm | Lightning strikes — heads chase bolts |
+| Dance Floor | Fast orbiting spots — rapid tracking |
 
 ---
 
-## 9. Troubleshooting
+## 11. Firmware & OTA Updates
 
-### 3D Viewport Not Rendering
-- **Cause**: Browser doesn't support WebGL
-- **Fix**: Use Chrome, Firefox, or Edge (latest versions). Safari may have limited WebGL support.
-- **Check**: Open browser console (F12) and look for Three.js errors
+### USB Flash
+1. Go to **Firmware** tab
+2. Select COM port and firmware binary
+3. Click **Flash** — progress shows percentage
 
-### Performers Not Syncing
-- **Cause**: Children are offline or on a different network
-- **Fix**: Check the Setup tab for online status. Ensure all devices are on the same WiFi network.
-- **Check**: Try refreshing children in the Setup tab
+### OTA (Over-the-Air)
+1. Set WiFi credentials on the Firmware tab
+2. Click **Check for Updates** — shows per-device version comparison
+3. Click **Update** on any outdated performer
+4. Device reboots automatically after flash
 
-### Bake Errors
-- **"No fixtures"**: Add fixtures in the Layout/Fixtures section before baking
-- **"No clips"**: Add at least one clip to a track in the timeline
-- **Memory**: Large shows (>1000 pixels, >120 seconds) may need significant RAM
-
-### Preview Is Slow
-- **Reduce pixel count**: Use fewer LEDs per string for testing
-- **Lower preview rate**: The preview polls the server at ~10fps; reduce timeline duration
-- **Close other tabs**: The 3D viewport uses GPU resources
-
-### NTP Sync Issues
-Synchronized playback requires all devices to agree on the current time:
-- All ESP32/D1 Mini children sync via NTP on boot
-- The parent uses system time
-- A 5-second countdown before start allows for NTP alignment
-- If sync is poor, children may start effects slightly out of time
-
-### Factory Reset
-Settings tab -> **Factory Reset** clears all data including fixtures, spatial effects, timelines, and baked files. Use with caution.
+### Firmware Registry
+`firmware/registry.json` lists available binaries with board type and version. The OTA system compares the registry version against each performer's reported firmware.
 
 ---
 
-## API Quick Reference
+## 12. System Limits
+
+| Resource | Tested | Recommended Max |
+|----------|--------|-----------------|
+| DMX fixtures | 120 | 500+ |
+| LED performers | 12 | 50 |
+| Total fixtures | 132 | 500+ |
+| Universes | 4 | 32,768 (Art-Net) |
+| LEDs per string | 65535 | uint16 addressing |
+| Strings per child | 8 | Protocol constant |
+| Timeline clips | 50 | 200+ |
+| Preset shows | 14 | Built-in |
+| API response (132 fixtures) | < 1ms | Sub-millisecond |
+| Memory (132 fixtures) | 46 MB | Flat scaling |
+| Network (132 fixtures) | 221 KB | Per test cycle |
+
+See `docs/STRESS_TEST.md` for full benchmark data.
+
+---
+
+## 13. Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| **Runtime view empty** | Check fixtures are positioned in Layout. DMX-only rigs now render (v8.1 fix). |
+| **Beam cone wrong direction** | aimPoint[1] is height (Y), not depth (Z). Check aim point values. |
+| **Android JSON crash** | Update to v8.1 — aimPoint changed from Int to Double. Factory reset: now requires confirm header. |
+| **Save Show error** | Update to v8.1 — `/api/show/export` endpoint was missing. |
+| **Firmware check fails** | Update to v8.1 — registry.json UTF-8 BOM and dict iteration bugs fixed. |
+| **3D viewport not rendering** | Use Chrome/Firefox/Edge with WebGL support. |
+| **Performers not syncing** | Check all devices on same WiFi network. Refresh in Setup tab. |
+| **Canvas wrong size** | Stage dimensions (Settings) drive canvas size: canvasW = stage.w × 1000. |
+
+---
+
+## 14. API Quick Reference
 
 ### Stage & Layout
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET/POST | `/api/layout` | Layout with x, y, z positions |
+| GET/POST | `/api/layout` | Layout with fixtures and positions |
 | GET/POST | `/api/stage` | Stage dimensions (w, h, d meters) |
+| GET/POST | `/api/surfaces` | Projection surfaces |
 
 ### Fixtures
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET/POST | `/api/fixtures` | List / create fixtures |
+| GET/POST | `/api/fixtures` | List / create |
 | GET/PUT/DELETE | `/api/fixtures/:id` | CRUD |
-| POST | `/api/fixtures/:id/resolve` | Compute pixel positions |
+| PUT | `/api/fixtures/:id/aim` | Set aim point |
 
-### Spatial Effects
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET/POST | `/api/spatial-effects` | List / create |
-| GET/PUT/DELETE | `/api/spatial-effects/:id` | CRUD |
-| POST | `/api/spatial-effects/:id/evaluate?t=` | Evaluate at time t |
-
-### Timelines
+### Shows & Timelines
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET/POST | `/api/timelines` | List / create |
-| GET/PUT/DELETE | `/api/timelines/:id` | CRUD |
-| POST | `/api/timelines/:id/frame?t=` | Evaluate frame |
 | POST | `/api/timelines/:id/bake` | Start baking |
-| GET | `/api/timelines/:id/baked/status` | Bake progress |
-| GET | `/api/timelines/:id/baked` | Bake result |
-| GET | `/api/timelines/:id/baked/download` | Download LSQ zip |
-| POST | `/api/timelines/:id/baked/sync` | Sync to children |
 | POST | `/api/timelines/:id/start` | Start playback |
-| POST | `/api/timelines/:id/stop` | Stop playback |
-| GET | `/api/timelines/:id/status` | Playback status |
+| GET | `/api/show/presets` | List preset shows |
+| GET/POST | `/api/show/export`, `/api/show/import` | Save/load show file |
+
+### DMX
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/dmx-profiles` | List profiles |
+| GET | `/api/dmx/patch` | Universe address map |
+| POST | `/api/dmx/start`, `/api/dmx/stop` | Engine control |

@@ -142,10 +142,10 @@ def populate_data():
         r = c.post('/api/show/preset', json={'id': 'spotlight-sweep'})
         tl_id = r.get_json().get('timelineId')
 
-        # Surfaces
+        # Surfaces — proper transform format
         c.post('/api/surfaces', json={
-            'name': 'Back Wall', 'type': 'wall', 'color': '#1e293b',
-            'x': 5000, 'y': 2500, 'z': 0, 'w': 10000, 'h': 5000, 'd': 100, 'opacity': 0.3
+            'name': 'Back Wall', 'surfaceType': 'wall', 'color': '#1e293b', 'opacity': 30,
+            'transform': {'pos': [0, 0, 0], 'rot': [0, 0, 0], 'scale': [10000, 5000, 100]}
         })
 
     print(f'  Data populated: 5 fixtures, 8 actions, 2 effects, 1 preset show')
@@ -236,9 +236,17 @@ def capture_spa():
         page.evaluate("showTab('actions')")
         snap('spa-actions.png', 1.0)
 
-        # Runtime
+        # Runtime — show emulator canvas with fixtures
         page.evaluate("showTab('runtime')")
         snap('spa-runtime.png', 1.5)
+
+        # Runtime — load show modal
+        try:
+            page.evaluate("openLoadShowModal()")
+            snap('spa-runtime-load-show.png', 1.0)
+            page.evaluate("closeModal()")
+        except Exception:
+            skipped.append('spa-runtime-load-show.png')
 
         # Settings
         page.evaluate("showTab('settings')")
