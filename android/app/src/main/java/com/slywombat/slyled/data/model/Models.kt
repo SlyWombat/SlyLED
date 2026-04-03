@@ -262,6 +262,7 @@ data class Fixture(
     val dmxStartAddr: Int? = null,
     val dmxChannelCount: Int? = null,
     val dmxProfileId: String? = null,
+    val aimPoint: List<Int>? = null,
     val childIds: List<Int> = emptyList(),
     val strings: List<FixtureString> = emptyList(),
     val rotation: List<Double> = listOf(0.0, 0.0, 0.0),

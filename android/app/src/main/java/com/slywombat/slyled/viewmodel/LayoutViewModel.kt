@@ -66,6 +66,16 @@ class LayoutViewModel @Inject constructor(
         }
     }
 
+    fun removeFixture(fixtureId: Int) {
+        val list = _fixtures.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == fixtureId }
+        if (idx >= 0) {
+            list[idx] = list[idx].copy(x = 0, y = 0, z = 0, positioned = false)
+            _fixtures.value = list
+            _message.value = "Fixture removed from layout — Save to persist"
+        }
+    }
+
     fun updateFixturePosition(fixtureId: Int, x: Int, y: Int, z: Int) {
         val list = _fixtures.value.toMutableList()
         val idx = list.indexOfFirst { it.id == fixtureId }

@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -145,6 +146,7 @@ fun RuntimeScreen(viewModel: RuntimeViewModel = hiltViewModel()) {
                 children = viewModel.stageChildren.collectAsState().value,
                 layout = viewModel.stageLayout.collectAsState().value,
                 fixtures = viewModel.stageFixtures.collectAsState().value,
+                surfaces = viewModel.stageSurfaces.collectAsState().value,
             )
         }
 
@@ -221,6 +223,7 @@ fun ShowEmulatorCanvas(
     children: List<Child> = emptyList(),
     layout: Layout? = null,
     fixtures: List<Fixture> = emptyList(),
+    surfaces: List<Surface> = emptyList(),
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -237,71 +240,116 @@ fun ShowEmulatorCanvas(
                 val h = size.height
                 val cw = (layout?.canvasW ?: 10000).toFloat()
                 val ch = (layout?.canvasH ?: 5000).toFloat()
-                val layChildren = layout?.children ?: emptyList()
 
                 // Stage border + grid
                 drawRect(Color(0xFF1E3A5F), style = Stroke(1f))
                 for (gx in 1..9) drawLine(Color(0xFF0C1222), Offset(gx * w / 10, 0f), Offset(gx * w / 10, h), 0.5f)
                 for (gy in 1..4) drawLine(Color(0xFF0C1222), Offset(0f, gy * h / 5), Offset(w, gy * h / 5), 0.5f)
 
-                if (children.isEmpty()) return@Canvas
+                // Surfaces (draw first so fixtures render on top)
+                surfaces.forEach { s ->
+                    val t = s.transform
+                    val sx = t.pos[0] * w / cw
+                    val sy = h - t.pos[1] * h / ch
+                    val sw = t.scale[0] * w / cw
+                    val sh = t.scale[1] * h / ch
+                    val col = try { Color(android.graphics.Color.parseColor(s.color)) } catch (_: Exception) { Color(0xFF334155) }
+                    drawRect(col.copy(alpha = s.opacity / 100f), Offset(sx, sy - sh), androidx.compose.ui.geometry.Size(sw, sh))
+                }
+
+                // Use fixtures from layout response (positioned fixtures have x,y,z)
+                val placedFixtures = layout?.fixtures?.filter { it.positioned } ?: emptyList()
+                if (placedFixtures.isEmpty()) return@Canvas
 
                 val dirDx = floatArrayOf(1f, 0f, -1f, 0f)
                 val dirDy = floatArrayOf(0f, -1f, 0f, 1f)
 
-                children.forEach { child ->
-                    // Get position from layout
-                    val lc = layChildren.find { it.id == child.id }
-                    if (lc == null || (lc.x == 0 && lc.y == 0)) return@forEach
+                // Render each fixture (LED and DMX)
+                placedFixtures.forEach { fixture ->
+                    val cx = (fixture.x * w / cw).coerceIn(12f, w - 12f)
+                    val cy = (h - fixture.y * h / ch).coerceIn(12f, h - 12f)
 
-                    val cx = (lc.x * w / cw).coerceIn(12f, w - 12f)
-                    val cy = (h - lc.y * h / ch).coerceIn(12f, h - 12f)
-                    val sc = child.sc.coerceAtMost(child.strings.size)
-
-                    // Find preview colors for this child via fixture mapping
+                    // Get preview colors for this fixture
                     var previewColors: List<List<Int>>? = null
                     if (previewData.isNotEmpty()) {
-                        val fix = fixtures.find { it.childId == child.id }
-                        if (fix != null) {
-                            val frames = previewData[fix.id.toString()]
-                            if (frames != null && frames.isNotEmpty()) {
-                                val dur = frames.size
-                                val sec = if (dur > 0) second % dur else 0
-                                if (sec < frames.size) previewColors = frames[sec]
-                            }
+                        val frames = previewData[fixture.id.toString()]
+                        if (frames != null && frames.isNotEmpty()) {
+                            val dur = frames.size
+                            val sec = if (dur > 0) second % dur else 0
+                            if (sec < frames.size) previewColors = frames[sec]
                         }
                     }
 
-                    for (si in 0 until sc) {
-                        val s = child.strings[si]
-                        if (s.leds <= 0) continue
-                        val sdir = s.stripDirection.coerceIn(0, 3)
-                        val dx = dirDx[sdir]
-                        val dy = dirDy[sdir]
-                        val lenMm = if (s.lengthMm < 500) (s.leds * 16).coerceAtLeast(500) else s.lengthMm
-                        val pxLen = (if (dx != 0f) lenMm * w / cw else lenMm * h / ch).coerceAtLeast(20f)
+                    if (fixture.fixtureType == "dmx") {
+                        // DMX fixture: draw beam cone toward aim point
+                        val aimX = fixture.aimPoint?.getOrNull(0)?.toFloat()
+                        val aimY = fixture.aimPoint?.getOrNull(1)?.toFloat()
+                        val aimZ = fixture.aimPoint?.getOrNull(2)?.toFloat()
+                        if (aimX != null && aimZ != null) {
+                            val ax = (aimX * w / cw).coerceIn(0f, w)
+                            val ay = (h - (aimZ ?: 0f) * h / ch).coerceIn(0f, h)
+                            val bLen = kotlin.math.sqrt((ax - cx) * (ax - cx) + (ay - cy) * (ay - cy))
+                            if (bLen > 5f) {
+                                val bwRad = 15f * Math.PI.toFloat() / 180f
+                                val halfW = kotlin.math.tan(bwRad / 2) * bLen
+                                val angle = kotlin.math.atan2(ay - cy, ax - cx)
+                                val perpX = -kotlin.math.sin(angle)
+                                val perpY = kotlin.math.cos(angle)
 
-                        var r = 40; var g = 40; var b = 45; var lit = false
-                        if (previewColors != null && si < previewColors!!.size) {
-                            val pc = previewColors!![si]
-                            if (pc.size >= 3 && pc[0] + pc[1] + pc[2] > 3) {
-                                r = pc[0]; g = pc[1]; b = pc[2]; lit = true
+                                // Beam color from preview or default purple
+                                var br = 124; var bg = 58; var bb = 237; var dimmer = 0.12f
+                                if (previewColors != null && previewColors!!.isNotEmpty()) {
+                                    val pc = previewColors!![0]
+                                    if (pc.size >= 3) { br = pc[0]; bg = pc[1]; bb = pc[2] }
+                                    if (pc.size >= 4 && pc[3] > 0) dimmer = (pc[3] / 255f) * 0.3f
+                                    else if (br + bg + bb > 10) dimmer = 0.2f
+                                }
+
+                                val path = Path()
+                                path.moveTo(cx, cy)
+                                path.lineTo(ax + perpX * halfW, ay + perpY * halfW)
+                                path.lineTo(ax - perpX * halfW, ay - perpY * halfW)
+                                path.close()
+                                drawPath(path, Color(br, bg, bb, (dimmer * 255).toInt().coerceIn(0, 255)))
+
+                                // Aim dot
+                                drawCircle(Color(0xFFFF4444), 3f, Offset(ax, ay))
                             }
                         }
+                        // DMX node dot (purple)
+                        drawCircle(Color(0xFF9966FF), 5f, Offset(cx, cy))
+                        drawCircle(Color(0xFF9966FF).copy(alpha = 0.4f), 7f, Offset(cx, cy), style = Stroke(1.5f))
+                    } else {
+                        // LED fixture: draw string dots
+                        fixture.strings.forEachIndexed { si, s ->
+                            if (s.leds <= 0) return@forEachIndexed
+                            val sdir = s.sdir.coerceIn(0, 3)
+                            val dx = dirDx[sdir]
+                            val dy = dirDy[sdir]
+                            val lenMm = if (s.mm < 500) (s.leds * 16).coerceAtLeast(500) else s.mm
+                            val pxLen = (if (dx != 0f) lenMm * w / cw else lenMm * h / ch).coerceAtLeast(20f)
 
-                        val dotCount = s.leds.coerceAtMost((pxLen / 3).toInt()).coerceAtLeast(5)
-                        for (di in 0 until dotCount) {
-                            val t = (di + 0.5f) / dotCount
-                            val dpx = cx + dx * pxLen * t
-                            val dpy = cy + dy * pxLen * t
-                            val dotR = if (lit) 3f else 1.8f
-                            drawCircle(Color(r, g, b), dotR, Offset(dpx, dpy))
-                            if (lit) drawCircle(Color(r, g, b, 30), 5f, Offset(dpx, dpy))
+                            var r = 40; var g = 40; var b = 45; var lit = false
+                            if (previewColors != null && si < previewColors!!.size) {
+                                val pc = previewColors!![si]
+                                if (pc.size >= 3 && pc[0] + pc[1] + pc[2] > 3) {
+                                    r = pc[0]; g = pc[1]; b = pc[2]; lit = true
+                                }
+                            }
+
+                            val dotCount = s.leds.coerceAtMost((pxLen / 3).toInt()).coerceAtLeast(5)
+                            for (di in 0 until dotCount) {
+                                val t = (di + 0.5f) / dotCount
+                                val dpx = cx + dx * pxLen * t
+                                val dpy = cy + dy * pxLen * t
+                                val dotR = if (lit) 3f else 1.8f
+                                drawCircle(Color(r, g, b), dotR, Offset(dpx, dpy))
+                                if (lit) drawCircle(Color(r, g, b, 30), 5f, Offset(dpx, dpy))
+                            }
                         }
+                        // LED node dot (green)
+                        drawCircle(Color(0xFF22CC66), 5f, Offset(cx, cy))
                     }
-
-                    val nodeCol = if (child.status == 1) Color(0xFF22CC66) else Color(0xFF444444)
-                    drawCircle(nodeCol, 5f, Offset(cx, cy))
                 }
             }
 

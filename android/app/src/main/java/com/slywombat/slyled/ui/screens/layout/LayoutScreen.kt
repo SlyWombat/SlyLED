@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.*
@@ -152,6 +153,32 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                     }
                 }
 
+                // DMX beam cone (toward aim point)
+                if (fixture.fixtureType == "dmx" && fixture.aimPoint != null) {
+                    val aimX = fixture.aimPoint.getOrNull(0)?.toFloat()
+                    val aimZ = fixture.aimPoint.getOrNull(2)?.toFloat()
+                    if (aimX != null && aimZ != null) {
+                        val ax = aimX * w / canvasW
+                        val ay = h - aimZ * h / canvasH
+                        val bLen = kotlin.math.sqrt((ax - cx) * (ax - cx) + (ay - cy) * (ay - cy))
+                        if (bLen > 5f) {
+                            val bwRad = 15f * Math.PI.toFloat() / 180f
+                            val halfW = kotlin.math.tan(bwRad / 2) * bLen
+                            val angle = kotlin.math.atan2(ay - cy, ax - cx)
+                            val perpX = -kotlin.math.sin(angle)
+                            val perpY = kotlin.math.cos(angle)
+                            val path = Path()
+                            path.moveTo(cx, cy)
+                            path.lineTo(ax + perpX * halfW, ay + perpY * halfW)
+                            path.lineTo(ax - perpX * halfW, ay - perpY * halfW)
+                            path.close()
+                            drawPath(path, Color(0x1A7C3AED))  // semi-transparent purple
+                            // Aim dot
+                            drawCircle(Color(0xFFFF4444), 5f, Offset(ax, ay))
+                        }
+                    }
+                }
+
                 // Node circle — green for LED, purple for DMX
                 val nodeColor = if (fixture.fixtureType == "dmx") Color(0xFF9966FF) else Color(0xFF22CC66)
                 drawCircle(nodeColor, 10f, Offset(cx, cy))
@@ -271,7 +298,13 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                 }) { Text("OK") }
             },
             dismissButton = {
-                TextButton(onClick = { editFixture = null }) { Text("Cancel") }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
+                        viewModel.removeFixture(fixture.id)
+                        editFixture = null
+                    }) { Text("Remove", color = MaterialTheme.colorScheme.error) }
+                    TextButton(onClick = { editFixture = null }) { Text("Cancel") }
+                }
             }
         )
     }

@@ -800,6 +800,202 @@ def test_firmware_check_fix(page, ids):
         ok(True, 'Firmware check returned response')
 
 
+def test_layout_place_remove(page, ids):
+    """Test fixture placement, repositioning, and removal from layout for all types."""
+    section('Layout — Place / Remove / Point')
+
+    # GET layout — should have positioned fixtures from seed
+    resp = api_json(page, 'GET', '/api/layout')
+    ok(resp is not None and 'fixtures' in resp, 'GET /api/layout returns fixtures')
+    fixtures = resp.get('fixtures', [])
+    positioned = [f for f in fixtures if f.get('positioned')]
+    ok(len(positioned) >= 4, f'Layout has positioned fixtures from seed ({len(positioned)})')
+
+    # Verify LED fixture has position
+    led_fix = next((f for f in fixtures if f.get('id') == ids['fix1']), None)
+    ok(led_fix is not None and led_fix.get('positioned'), 'LED fixture is positioned')
+    ok(led_fix.get('x') == 1000 and led_fix.get('y') == 4500, 'LED fixture has correct coords')
+
+    # Verify DMX fixture has position and aimPoint
+    dmx_fix = next((f for f in fixtures if f.get('id') == ids['dmx1']), None)
+    ok(dmx_fix is not None and dmx_fix.get('positioned'), 'DMX fixture is positioned')
+    ok(dmx_fix.get('aimPoint') is not None, 'DMX fixture has aimPoint')
+
+    # Reposition fixture via layout save
+    new_pos = [{'id': ids['fix1'], 'x': 2000, 'y': 3000, 'z': 100}]
+    resp = api_json(page, 'POST', '/api/layout', {'children': new_pos})
+    ok(resp is not None and resp.get('ok'), 'Save layout with new position')
+
+    # Verify reposition persisted
+    resp = api_json(page, 'GET', '/api/layout')
+    fixtures = resp.get('fixtures', [])
+    led_fix = next((f for f in fixtures if f.get('id') == ids['fix1']), None)
+    ok(led_fix is not None and led_fix.get('x') == 2000, 'LED fixture repositioned to x=2000')
+    ok(led_fix.get('y') == 3000, 'LED fixture repositioned to y=3000')
+
+    # Remove fixture from layout (save without it)
+    empty_layout = [{'id': ids['fix2'], 'x': 9000, 'y': 4500, 'z': 0}]
+    resp = api_json(page, 'POST', '/api/layout', {'children': empty_layout})
+    ok(resp is not None and resp.get('ok'), 'Save layout without fix1')
+
+    resp = api_json(page, 'GET', '/api/layout')
+    fixtures = resp.get('fixtures', [])
+    fix1 = next((f for f in fixtures if f.get('id') == ids['fix1']), None)
+    ok(fix1 is not None and not fix1.get('positioned'), 'Removed fixture is unpositioned')
+    fix2 = next((f for f in fixtures if f.get('id') == ids['fix2']), None)
+    ok(fix2 is not None and fix2.get('positioned'), 'Remaining fixture still positioned')
+
+    # Re-place all fixtures for subsequent tests
+    all_pos = [
+        {'id': ids['fix1'], 'x': 1000, 'y': 4500, 'z': 0},
+        {'id': ids['fix2'], 'x': 9000, 'y': 4500, 'z': 0},
+        {'id': ids['dmx1'], 'x': 2000, 'y': 5000, 'z': 2000},
+        {'id': ids['dmx2'], 'x': 5000, 'y': 4800, 'z': 5000},
+    ]
+    api_json(page, 'POST', '/api/layout', {'children': all_pos})
+
+
+def test_layout_fixture_types(page, ids):
+    """Verify all fixture types render correctly in layout."""
+    section('Layout — Fixture Types')
+
+    resp = api_json(page, 'GET', '/api/layout')
+    fixtures = resp.get('fixtures', [])
+
+    # LED fixtures should have strings
+    led_fixtures = [f for f in fixtures if f.get('fixtureType') == 'led']
+    ok(len(led_fixtures) >= 2, f'Layout has LED fixtures ({len(led_fixtures)})')
+    for f in led_fixtures:
+        ok(len(f.get('strings', [])) > 0 or f.get('childId') is not None,
+           f'LED fixture {f["id"]} has strings or childId')
+
+    # DMX fixtures should have universe, address, aimPoint
+    dmx_fixtures = [f for f in fixtures if f.get('fixtureType') == 'dmx']
+    ok(len(dmx_fixtures) >= 2, f'Layout has DMX fixtures ({len(dmx_fixtures)})')
+    for f in dmx_fixtures:
+        ok(f.get('dmxUniverse') is not None, f'DMX fixture {f["id"]} has universe')
+        ok(f.get('dmxStartAddr') is not None, f'DMX fixture {f["id"]} has start address')
+        ok(f.get('aimPoint') is not None, f'DMX fixture {f["id"]} has aimPoint')
+
+    # Test fixture aim update
+    resp = api_json(page, 'PUT', f'/api/fixtures/{ids["dmx1"]}/aim',
+                    {'aimPoint': [8000, 0, 3000]})
+    ok(resp is not None, 'Update DMX aim point')
+
+    resp = api_json(page, 'GET', f'/api/fixtures/{ids["dmx1"]}')
+    ok(resp.get('aimPoint') == [8000, 0, 3000], 'Aim point persisted')
+
+
+def test_surfaces_in_layout(page, ids):
+    """Verify surfaces render and can be managed."""
+    section('Surfaces in Layout')
+
+    surfs = api_json(page, 'GET', '/api/surfaces')
+    ok(isinstance(surfs, list), 'GET surfaces returns list')
+
+    # Create a surface for illumination testing
+    resp = api_json(page, 'POST', '/api/surfaces', {
+        'name': 'Test Wall', 'surfaceType': 'wall', 'color': '#1e293b',
+        'opacity': 40,
+        'transform': {'pos': [5000, 2500, 0], 'rot': [0, 0, 0], 'scale': [8000, 4000, 100]}
+    })
+    ok(resp is not None and resp.get('id') is not None, 'Create surface for illumination')
+    surf_id = resp.get('id')
+
+    surfs = api_json(page, 'GET', '/api/surfaces')
+    ok(any(s.get('id') == surf_id for s in surfs), 'Surface appears in list')
+
+    # Clean up
+    api_json(page, 'DELETE', f'/api/surfaces/{surf_id}')
+
+
+def test_bake_preview_data(page, ids):
+    """Verify bake produces preview data with per-fixture frames."""
+    section('Bake Preview Data')
+
+    # Ensure we have actions and timeline
+    actions = api_json(page, 'GET', '/api/actions')
+    if not actions:
+        api_json(page, 'POST', '/api/actions',
+                 {'name': 'Preview Solid', 'type': 1, 'r': 255, 'g': 100, 'b': 50})
+        actions = api_json(page, 'GET', '/api/actions')
+
+    timelines = api_json(page, 'GET', '/api/timelines')
+    if not timelines:
+        api_json(page, 'POST', '/api/timelines', {'name': 'Preview TL', 'durationS': 5})
+        timelines = api_json(page, 'GET', '/api/timelines')
+
+    ok(len(actions) > 0, 'Have actions for bake')
+    ok(len(timelines) > 0, 'Have timeline for bake')
+
+    tl_id = timelines[0]['id']
+    act_id = actions[0]['id']
+
+    # Add clip and bake
+    api_json(page, 'PUT', f'/api/timelines/{tl_id}', {
+        'name': 'Preview TL', 'durationS': 5,
+        'clips': [{'fixtureId': ids['fix1'], 'actionId': act_id, 'startS': 0, 'durationS': 5}]
+    })
+
+    resp = api_json(page, 'POST', f'/api/timelines/{tl_id}/bake')
+    ok(resp is not None and resp.get('ok'), 'Bake started')
+
+    # Poll until done
+    for _ in range(50):
+        time.sleep(0.2)
+        status = api_json(page, 'GET', f'/api/timelines/{tl_id}/baked/status')
+        if status and (status.get('done') or status.get('error')):
+            break
+
+    ok(status.get('done'), 'Bake completed')
+
+    # Get preview data
+    preview = api_json(page, 'GET', f'/api/timelines/{tl_id}/baked/preview')
+    ok(preview is not None and 'err' not in preview, 'Preview data returned')
+
+
+def test_layout_canvas_ui(page, ids):
+    """Test the layout canvas renders in the SPA."""
+    section('Layout Canvas UI')
+
+    wait_tab(page, 'layout')
+    time.sleep(0.5)
+
+    # Canvas should exist
+    canvas = page.query_selector('#lay-canvas, #lcv, #t-layout canvas')
+    ok(canvas is not None, 'Layout canvas element exists')
+
+    # Layout tab should have canvas and controls
+    time.sleep(0.5)
+    controls = page.query_selector_all('#t-layout button')
+    ok(len(controls) >= 1, f'Layout tab has buttons ({len(controls)})')
+
+    # 2D/3D mode toggle
+    toggle = page.query_selector('#lay-mode-3d, button[onclick*="setLayoutMode"]')
+    ok(toggle is not None, '2D/3D mode toggle exists')
+
+    # Save button
+    save = page.query_selector('#btn-lay-save')
+    ok(save is not None, 'Save Layout button exists')
+
+
+def test_runtime_emulator_ui(page, ids):
+    """Test the runtime emulator canvas renders in the SPA."""
+    section('Runtime Emulator UI')
+
+    wait_tab(page, 'runtime')
+    time.sleep(0.5)
+
+    # Emulator canvas
+    emu = page.query_selector('#emu-cv')
+    ok(emu is not None, 'Emulator canvas exists')
+
+    # Runtime has content
+    time.sleep(0.5)
+    controls = page.query_selector_all('#t-runtime button')
+    ok(len(controls) >= 1, f'Runtime tab has buttons ({len(controls)})')
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -847,6 +1043,12 @@ def main():
         ('large_payloads', test_large_payloads),
         ('modal_system', test_modal_system),
         ('firmware_fix', test_firmware_check_fix),
+        ('layout_place', test_layout_place_remove),
+        ('layout_types', test_layout_fixture_types),
+        ('surfaces', test_surfaces_in_layout),
+        ('bake_preview', test_bake_preview_data),
+        ('layout_canvas', test_layout_canvas_ui),
+        ('runtime_emu', test_runtime_emulator_ui),
         ('console_errors', test_console_errors),
     ]
 

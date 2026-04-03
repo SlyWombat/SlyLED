@@ -58,6 +58,9 @@ class RuntimeViewModel @Inject constructor(
     private val _stageFixtures = MutableStateFlow<List<Fixture>>(emptyList())
     val stageFixtures = _stageFixtures.asStateFlow()
 
+    private val _stageSurfaces = MutableStateFlow<List<Surface>>(emptyList())
+    val stageSurfaces = _stageSurfaces.asStateFlow()
+
     fun load() {
         viewModelScope.launch {
             try { _timelines.value = repository.getTimelines() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getTimelines failed", e) }
@@ -67,6 +70,7 @@ class RuntimeViewModel @Inject constructor(
             try { _stageChildren.value = repository.getChildren() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getChildren failed", e) }
             try { _stageLayout.value = repository.getLayout() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getLayout failed", e) }
             try { _stageFixtures.value = repository.getFixtures() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getFixtures failed", e) }
+            try { _stageSurfaces.value = repository.getSurfaces() } catch (e: Exception) { android.util.Log.e("RuntimeVM", "getSurfaces failed", e) }
         }
         // Poll timeline status
         viewModelScope.launch {
