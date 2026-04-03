@@ -1363,8 +1363,53 @@ def api_dmx_set_fixture():
 
 @app.get("/api/dmx/discovered")
 def api_dmx_discovered():
-    """Return Art-Net nodes discovered via ArtPoll."""
+    """Return Art-Net nodes discovered via ArtPoll. Sends a poll if engine is running."""
+    if _artnet.running:
+        _artnet.poll()
+    else:
+        # One-shot ArtPoll even when engine is stopped
+        _artnet_oneshot_poll()
     return jsonify(_artnet.discovered_nodes)
+
+def _artnet_oneshot_poll():
+    """Send ArtPoll + listen for replies without starting the full engine."""
+    try:
+        from dmx_artnet import build_artpoll, parse_artnet_header, parse_artpoll_reply, ARTNET_PORT, OP_POLL_REPLY
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.settimeout(0.5)
+        sock.bind(("", 0))
+        pkt = build_artpoll()
+        # Broadcast on all common paths
+        for dest in ("255.255.255.255", "192.168.10.255", "192.168.1.255", "10.0.0.255"):
+            try:
+                sock.sendto(pkt, (dest, ARTNET_PORT))
+            except Exception:
+                pass
+        # Also unicast to known children with type=dmx
+        for c in _children:
+            if c.get("type") == "dmx" and c.get("ip"):
+                try:
+                    sock.sendto(pkt, (c["ip"], ARTNET_PORT))
+                except Exception:
+                    pass
+        # Listen for replies (up to 2 seconds)
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            try:
+                data, addr = sock.recvfrom(2048)
+                hdr = parse_artnet_header(data)
+                if hdr and hdr[0] == OP_POLL_REPLY:
+                    info = parse_artpoll_reply(data)
+                    if info:
+                        _artnet._discovered[info["ip"]] = info
+                        log.info("ArtPoll reply from %s: %s", info["ip"], info.get("shortName"))
+            except (socket.timeout, BlockingIOError, OSError):
+                break
+        sock.close()
+    except Exception as e:
+        log.debug("One-shot ArtPoll failed: %s", e)
 
 # -- DMX Settings (persistent) ------------------------------------------------
 

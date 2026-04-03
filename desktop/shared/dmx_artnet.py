@@ -280,11 +280,20 @@ class ArtNetEngine:
         if not self._sock:
             return
         pkt = build_artpoll()
-        # Broadcast
-        try:
-            self._sock.sendto(pkt, ("255.255.255.255", ARTNET_PORT))
-        except Exception:
-            pass
+        # Broadcast on all common paths
+        for dest in ("255.255.255.255",):
+            try:
+                self._sock.sendto(pkt, (dest, ARTNET_PORT))
+            except Exception:
+                pass
+        # Subnet broadcast based on local IP (e.g. 192.168.10.x → 192.168.10.255)
+        if self._local_ip and self._local_ip != "0.0.0.0" and self._local_ip != "127.0.0.1":
+            parts = self._local_ip.rsplit(".", 1)
+            if len(parts) == 2:
+                try:
+                    self._sock.sendto(pkt, (parts[0] + ".255", ARTNET_PORT))
+                except Exception:
+                    pass
         # Also unicast to known targets (some bridges only respond to unicast)
         for ip in set(self._unicast.values()):
             try:
