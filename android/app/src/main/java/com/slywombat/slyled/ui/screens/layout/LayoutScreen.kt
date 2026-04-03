@@ -181,16 +181,29 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                         style = TextStyle(fontSize = 8.sp, color = Color(0xFF4A6A8F)))
                     drawText(hLabel, topLeft = Offset(4f, h / 2 - hLabel.size.height / 2f))
 
-                    // Surfaces
+                    // Surfaces — clipped to stage bounds, with name labels
                     surfaces.forEach { s ->
                         val t = s.transform
                         val sx = t.pos[0].toFloat() * w / canvasW
                         val sy = h - t.pos[1].toFloat() * h / canvasH
                         val sw = t.scale[0].toFloat() * w / canvasW
                         val sh = t.scale[1].toFloat() * h / canvasH
-                        val col = try { Color(android.graphics.Color.parseColor(s.color)) }
-                                  catch (_: Exception) { Color(0xFF334155) }
-                        drawRect(col.copy(alpha = s.opacity / 100f), Offset(sx, sy - sh), Size(sw, sh))
+                        // Clip to canvas bounds
+                        val clX = sx.coerceAtLeast(0f)
+                        val clY = (sy - sh).coerceAtLeast(0f)
+                        val clW = (sx + sw).coerceAtMost(w) - clX
+                        val clH = sy.coerceAtMost(h) - clY
+                        if (clW > 0 && clH > 0) {
+                            val col = try { Color(android.graphics.Color.parseColor(s.color)) }
+                                      catch (_: Exception) { Color(0xFF334155) }
+                            drawRect(col.copy(alpha = s.opacity / 100f), Offset(clX, clY), Size(clW, clH))
+                            drawRect(col.copy(alpha = 0.5f), Offset(clX, clY), Size(clW, clH), style = Stroke(1f))
+                            // Surface name label
+                            val name = s.name.ifEmpty { "Surface ${s.id}" }
+                            val sLabel = textMeasurer.measure(AnnotatedString(name),
+                                style = TextStyle(fontSize = 8.sp, color = Color(0xFFAAAAAA)))
+                            drawText(sLabel, topLeft = Offset(clX + 4f, clY + 2f))
+                        }
                     }
 
                     // Fixtures
@@ -293,6 +306,29 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                             val tag = if (f.fixtureType == "dmx") "[DMX]" else "[LED]"
                             Text("$tag ${f.name.ifEmpty { "Fixture ${f.id}" }} — tap then tap canvas",
                                 fontSize = 12.sp, color = if (placingFixtureId == f.id) Color(0xFF86EFAC) else Color.Unspecified)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Surfaces list
+        if (surfaces.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text("Surfaces (${surfaces.size})", fontSize = 12.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 80.dp)) {
+                items(surfaces) { s ->
+                    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+                        Row(modifier = Modifier.padding(6.dp).fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically) {
+                            val t = s.transform
+                            val wm = String.format("%.1f", t.scale[0] / 1000.0)
+                            val hm = String.format("%.1f", t.scale[1] / 1000.0)
+                            Text(s.name.ifEmpty { "Surface ${s.id}" }, fontSize = 12.sp)
+                            Text("${wm}m × ${hm}m", fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }

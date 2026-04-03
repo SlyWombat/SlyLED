@@ -128,10 +128,10 @@ def seed_data():
         r = c.post('/api/timelines', json={'name': 'Test Timeline', 'durationS': 30})
         tl_id = r.get_json().get('id')
 
-        # Surface
+        # Surface — transform.pos is left-bottom corner, scale is w×h in mm
         c.post('/api/surfaces', json={
-            'name': 'Back Wall', 'type': 'wall', 'color': '#1e293b',
-            'x': 5000, 'y': 2500, 'z': 0, 'w': 10000, 'h': 5000, 'd': 100, 'opacity': 0.3
+            'name': 'Back Wall', 'surfaceType': 'wall', 'color': '#1e293b', 'opacity': 30,
+            'transform': {'pos': [0, 0, 0], 'rot': [0, 0, 0], 'scale': [10000, 5000, 100]}
         })
 
         # WiFi (needed for firmware tab tests)
@@ -1048,6 +1048,50 @@ def test_canvas_stage_sync(page, ids):
     ]})
 
 
+def test_surface_transform(page, ids):
+    """Verify surfaces have correct transform structure and fit within stage."""
+    section('Surface Transform')
+
+    settings = api_json(page, 'GET', '/api/settings')
+    cw = settings.get('canvasW', 10000)
+    ch = settings.get('canvasH', 5000)
+
+    surfs = api_json(page, 'GET', '/api/surfaces')
+    ok(isinstance(surfs, list), 'Surfaces is a list')
+
+    for s in (surfs or []):
+        t = s.get('transform', {})
+        ok('pos' in t and 'scale' in t, f'Surface {s.get("id")} has pos and scale')
+        pos = t.get('pos', [0, 0, 0])
+        scale = t.get('scale', [0, 0, 0])
+        # Check surface doesn't have nonsensical dimensions
+        ok(scale[0] > 0, f'Surface {s.get("id")} width > 0')
+        ok(scale[1] > 0, f'Surface {s.get("id")} height > 0')
+        # Warn if extends far outside stage (> 2x stage size)
+        right_edge = pos[0] + scale[0]
+        top_edge = pos[1] + scale[1]
+        ok(right_edge <= cw * 2, f'Surface {s.get("id")} right edge within 2x stage ({right_edge} vs {cw})')
+        ok(top_edge <= ch * 2, f'Surface {s.get("id")} top edge within 2x stage ({top_edge} vs {ch})')
+
+    # Create a surface with proper transform and verify
+    resp = api_json(page, 'POST', '/api/surfaces', {
+        'name': 'Test Panel', 'surfaceType': 'wall', 'color': '#444',
+        'opacity': 40,
+        'transform': {'pos': [2000, 1000, 0], 'rot': [0, 0, 0], 'scale': [3000, 2000, 50]}
+    })
+    ok(resp is not None and resp.get('id') is not None, 'Create surface with transform')
+    sid = resp.get('id')
+
+    surfs = api_json(page, 'GET', '/api/surfaces')
+    created = next((s for s in surfs if s.get('id') == sid), None)
+    ok(created is not None, 'Surface exists in list')
+    t = created.get('transform', {})
+    ok(t.get('pos') == [2000, 1000, 0], f'Surface pos correct ({t.get("pos")})')
+    ok(t.get('scale') == [3000, 2000, 50], f'Surface scale correct ({t.get("scale")})')
+
+    api_json(page, 'DELETE', f'/api/surfaces/{sid}')
+
+
 def test_fixture_strings_in_layout(page, ids):
     """Verify LED fixture strings are returned in layout response."""
     section('Fixture Strings in Layout')
@@ -1161,6 +1205,7 @@ def main():
         ('layout_types', test_layout_fixture_types),
         ('surfaces', test_surfaces_in_layout),
         ('canvas_stage', test_canvas_stage_sync),
+        ('surface_transform', test_surface_transform),
         ('fixture_strings', test_fixture_strings_in_layout),
         ('bake_preview', test_bake_preview_data),
         ('json_compat', test_json_model_compat),
