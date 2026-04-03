@@ -29,7 +29,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 740
-        versionName = "8.2.1"
+        versionName = "8.2.2"
     }
 
     signingConfigs {
@@ -119,6 +119,7 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
 }
+
 
 
 
