@@ -335,17 +335,32 @@ def _compile_box(pixels, start_pos, end_pos, size, color,
     }]
 
 
-def _compile_dmx_fixture(clip, effect, fixture_pos, aim_point, profile_info, duration):
+def _compile_dmx_fixture(clip, effect, fixture_pos, aim_point, profile_info, duration,
+                         beam_pixels=None):
     """Compile a spatial effect clip for a DMX fixture (moving head / par).
 
-    For moving effects: time-sliced 1-second segments tracking the effect center.
-    For static effects: single segment with static pan/tilt + color.
-    Params include pan/tilt as normalized 0.0-1.0.
+    beam_pixels: list of [x,y,z] sample points along the beam cone. If provided,
+    the spatial effect is evaluated against all samples and the brightest color is used.
+    This means a spatial sphere passing through the beam cone (not just the fixture
+    position) will trigger the fixture.
     """
     from spatial_engine import compute_pan_tilt, effect_aim_point, evaluate_spatial_effect
 
     if not effect:
         return []
+
+    eval_pixels = beam_pixels or [fixture_pos]
+
+    def _best_color(colors_list):
+        """Return the brightest color from a list of [r,g,b] values."""
+        best = [0, 0, 0]
+        best_sum = 0
+        for c in colors_list:
+            s = c[0] + c[1] + c[2]
+            if s > best_sum:
+                best = c
+                best_sum = s
+        return best
 
     motion = effect.get("motion", {})
     start_pos = motion.get("startPos", [0, 0, 0])
@@ -369,8 +384,8 @@ def _compile_dmx_fixture(clip, effect, fixture_pos, aim_point, profile_info, dur
             seg_dur = min(slice_dur, clip_dur - t)
             mid_t = t + seg_dur / 2
             aim = effect_aim_point(effect, mid_t)
-            colors = evaluate_spatial_effect(effect, [fixture_pos], mid_t)
-            c = colors[0] if colors else [0, 0, 0]
+            colors = evaluate_spatial_effect(effect, eval_pixels, mid_t)
+            c = _best_color(colors) if colors else [0, 0, 0]
             pt = compute_pan_tilt(fixture_pos, aim, pan_range, tilt_range)
             segments.append({
                 "type": ACT_DMX_SCENE,
@@ -386,15 +401,38 @@ def _compile_dmx_fixture(clip, effect, fixture_pos, aim_point, profile_info, dur
             t += slice_dur
         return segments
     else:
+        # Static or no pan/tilt: single or time-sliced segments
+        if is_moving:
+            # Moving effect but no pan/tilt — still time-slice color
+            segments = []
+            slice_dur = 1.0
+            t = 0
+            while t < clip_dur:
+                seg_dur = min(slice_dur, clip_dur - t)
+                mid_t = t + seg_dur / 2
+                colors = evaluate_spatial_effect(effect, eval_pixels, mid_t)
+                c = _best_color(colors) if colors else [0, 0, 0]
+                segments.append({
+                    "type": ACT_DMX_SCENE,
+                    "params": {
+                        "r": c[0], "g": c[1], "b": c[2],
+                        "dimmer": 255 if any(v > 0 for v in c) else 0,
+                        "pan": 0.5, "tilt": 0.5,
+                    },
+                    "startS": round(clip_start + t, 2),
+                    "durationS": round(seg_dur, 2),
+                })
+                t += slice_dur
+            return segments
         # Static: single segment
         mid_t = clip_dur / 2
         if has_pt:
-            aim = effect_aim_point(effect, mid_t) if is_moving else aim_point
+            aim = aim_point
             pt = compute_pan_tilt(fixture_pos, aim, pan_range, tilt_range)
         else:
             pt = None
-        colors = evaluate_spatial_effect(effect, [fixture_pos], mid_t)
-        c = colors[0] if colors else [0, 0, 0]
+        colors = evaluate_spatial_effect(effect, eval_pixels, mid_t)
+        c = _best_color(colors) if colors else [0, 0, 0]
         return [{
             "type": ACT_DMX_SCENE,
             "params": {
@@ -438,16 +476,41 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
         child_pos = [lp.get("x", 0), lp.get("y", 0), lp.get("z", 0)]
         ft = f.get("fixtureType", "led")
         if ft == "dmx":
-            # DMX fixture: single pixel at its stage position
-            pixels = [child_pos]
-            strings_info = [{"offset": 0, "count": 1, "sdir": 0}]
-            # Store profile info and aim for DMX compilation
-            _dmx_profile_info = None
+            # DMX fixture: sample points along beam axis (fixture → aimPoint)
+            # so spatial effects intersecting the beam cone trigger the fixture
+            aim = f.get("aimPoint", [child_pos[0], child_pos[1] - 2000, child_pos[2]])
+            beam_samples = [child_pos]  # fixture position
+            n_samples = 5  # sample along beam at 0%, 25%, 50%, 75%, 100%
+            for si in range(1, n_samples + 1):
+                t_s = si / n_samples
+                beam_samples.append([
+                    child_pos[0] + (aim[0] - child_pos[0]) * t_s,
+                    child_pos[1] + (aim[1] - child_pos[1]) * t_s,
+                    child_pos[2] + (aim[2] - child_pos[2]) * t_s,
+                ])
+            # Also add points at beam width spread at the aim end
             _pid = f.get("dmxProfileId")
+            _dmx_profile_info = None
             if _pid:
                 from dmx_profiles import ProfileLibrary
                 _plib = ProfileLibrary()
                 _dmx_profile_info = _plib.channel_info(_pid)
+            beam_width_deg = 15
+            if _dmx_profile_info:
+                beam_width_deg = _dmx_profile_info.get("beamWidth", 15) or 15
+            import math as _math
+            beam_len = _math.sqrt(sum((aim[i] - child_pos[i])**2 for i in range(3)))
+            half_spread = _math.tan(_math.radians(beam_width_deg / 2)) * beam_len
+            if half_spread > 50:  # only if meaningful spread
+                # Add spread points perpendicular to beam at aim end
+                dx = aim[0] - child_pos[0]
+                dz = aim[2] - child_pos[2]
+                perp_len = _math.sqrt(dx*dx + dz*dz) or 1
+                px, pz = -dz / perp_len * half_spread, dx / perp_len * half_spread
+                beam_samples.append([aim[0] + px, aim[1], aim[2] + pz])
+                beam_samples.append([aim[0] - px, aim[1], aim[2] - pz])
+            pixels = beam_samples
+            strings_info = [{"offset": 0, "count": len(beam_samples), "sdir": 0}]
         else:
             resolve_input = {
                 "type": f.get("type", "linear"),
@@ -540,12 +603,13 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
                 continue
 
             if fdata.get("fixtureType") == "dmx":
-                # DMX fixture: compile with pan/tilt awareness
+                # DMX fixture: compile with beam cone samples for intersection
                 steps = _compile_dmx_fixture(
                     clip, fx, pixels[0] if pixels else [0, 0, 0],
                     fdata.get("aimPoint", [0, -1000, 0]),
                     fdata.get("profileInfo"),
                     duration,
+                    beam_pixels=pixels,
                 )
                 all_segments.extend(steps)
             elif strings:
