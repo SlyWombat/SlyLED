@@ -872,13 +872,13 @@ function _renderSetup(){
 function showAddFixtureModal(){
   var h='<label>Fixture Type</label>'
     +'<select id="aft" onchange="_toggleAddFixFields()" style="width:100%;margin-bottom:.6em">'
-    +'<option value="led">SlyLED Performer (LED)</option>'
     +'<option value="dmx">DMX Fixture</option>'
+    +'<option value="led">SlyLED Performer (LED)</option>'
     +'<option value="group">Fixture Group</option></select>'
-    +'<div id="af-led">'
+    +'<div id="af-led" style="display:none">'
     +'<label>IP Address</label><input id="af-ip" placeholder="x.x.x.x" style="width:100%">'
     +'</div>'
-    +'<div id="af-dmx" style="display:none">'
+    +'<div id="af-dmx">'
     +'<div style="margin-bottom:.6em;padding:.5em;background:#0f172a;border:1px solid #1e3a5f;border-radius:4px">'
     +'<label style="font-size:.82em;color:#93c5fd">Search Fixture Library</label>'
     +'<div style="display:flex;gap:.3em;margin:.3em 0"><input id="af-ofl-q" placeholder="e.g. par, moving head, chauvet..." style="flex:1;padding:.3em;font-size:.85em" onkeydown="if(event.key===\'Enter\')_afOflSearch()">'
@@ -901,6 +901,7 @@ function showAddFixtureModal(){
   document.getElementById('modal-title').textContent='Add Fixture';
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
+  _toggleAddFixFields(); // load DMX profile dropdown since DMX is default
 }
 function _toggleAddFixFields(){
   var t=document.getElementById('aft').value;
