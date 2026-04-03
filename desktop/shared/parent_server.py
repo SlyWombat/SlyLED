@@ -1076,42 +1076,55 @@ def api_dmx_profiles_import():
     result = _profile_lib.import_profiles(data)
     return jsonify(ok=True, **result)
 
-# OFL data cache (fetched once, reused for search/browse)
-_ofl_cache = {"data": None, "ts": 0}
-_OFL_CACHE_TTL = 3600  # 1 hour
+# OFL data cache
+_ofl_mfr_cache = {"data": None, "ts": 0}   # manufacturer index (name + fixtureCount)
+_ofl_fix_cache = {}                          # mfr_key → [fixture dicts]
+_OFL_CACHE_TTL = 3600
 
-def _ofl_fetch_manufacturers():
-    """Fetch and cache the OFL manufacturers+fixtures index."""
+def _ofl_fetch_manufacturer_index():
+    """Fetch manufacturer index (name + fixtureCount only, no fixture lists)."""
     import urllib.request as _ur
     now = time.time()
-    if _ofl_cache["data"] and now - _ofl_cache["ts"] < _OFL_CACHE_TTL:
-        return _ofl_cache["data"]
+    if _ofl_mfr_cache["data"] and now - _ofl_mfr_cache["ts"] < _OFL_CACHE_TTL:
+        return _ofl_mfr_cache["data"]
     url = "https://open-fixture-library.org/api/v1/manufacturers"
     req = _ur.Request(url, headers={"User-Agent": "SlyLED-Parent", "Accept": "application/json"})
     resp = _ur.urlopen(req, timeout=15)
     data = json.loads(resp.read().decode("utf-8"))
-    _ofl_cache["data"] = data
-    _ofl_cache["ts"] = now
-    total = sum(len(m.get("fixtures", [])) for m in data.values() if isinstance(m, dict))
-    log.info("OFL: cached %d manufacturers, %d fixtures", len(data), total)
+    _ofl_mfr_cache["data"] = data
+    _ofl_mfr_cache["ts"] = now
+    log.info("OFL: cached %d manufacturers", len(data))
     return data
+
+def _ofl_fetch_manufacturer_fixtures(mfr_key):
+    """Fetch fixtures for a specific manufacturer (cached)."""
+    import urllib.request as _ur
+    if mfr_key in _ofl_fix_cache:
+        return _ofl_fix_cache[mfr_key]
+    url = f"https://open-fixture-library.org/api/v1/manufacturers/{mfr_key}"
+    req = _ur.Request(url, headers={"User-Agent": "SlyLED-Parent", "Accept": "application/json"})
+    resp = _ur.urlopen(req, timeout=15)
+    data = json.loads(resp.read().decode("utf-8"))
+    fixtures = data.get("fixtures", [])
+    _ofl_fix_cache[mfr_key] = {"name": data.get("name", mfr_key), "fixtures": fixtures}
+    return _ofl_fix_cache[mfr_key]
 
 @app.get("/api/dmx-profiles/ofl/manufacturers")
 def api_ofl_manufacturers():
     """List all OFL manufacturers with fixture counts."""
     try:
-        data = _ofl_fetch_manufacturers()
+        data = _ofl_fetch_manufacturer_index()
         result = []
         for mfr_key, mfr in sorted(data.items()):
             if not isinstance(mfr, dict):
                 continue
-            fixtures = mfr.get("fixtures", [])
-            if not isinstance(fixtures, list) or not fixtures:
+            count = mfr.get("fixtureCount", 0)
+            if count <= 0:
                 continue
             result.append({
                 "key": mfr_key,
                 "name": mfr.get("name", mfr_key),
-                "fixtureCount": len(fixtures),
+                "fixtureCount": count,
             })
         return jsonify(result)
     except Exception as e:
@@ -1121,42 +1134,63 @@ def api_ofl_manufacturers():
 def api_ofl_manufacturer_fixtures(mfr_key):
     """List all fixtures for a specific manufacturer."""
     try:
-        data = _ofl_fetch_manufacturers()
-        mfr = data.get(mfr_key)
-        if not mfr or not isinstance(mfr, dict):
-            return jsonify(err="Manufacturer not found"), 404
-        fixtures = mfr.get("fixtures", [])
+        mfr_data = _ofl_fetch_manufacturer_fixtures(mfr_key)
+        fixtures = mfr_data.get("fixtures", [])
         return jsonify({
             "key": mfr_key,
-            "name": mfr.get("name", mfr_key),
-            "fixtures": [{"key": f, "name": f.replace("-", " ").title()} for f in fixtures],
+            "name": mfr_data.get("name", mfr_key),
+            "fixtures": [{"key": f.get("key", f) if isinstance(f, dict) else f,
+                          "name": f.get("name", f.get("key","?")) if isinstance(f, dict) else f.replace("-"," ").title(),
+                          "categories": f.get("categories", []) if isinstance(f, dict) else []}
+                         for f in fixtures],
         })
     except Exception as e:
         return jsonify(err=f"OFL fetch failed: {e}"), 502
 
 @app.get("/api/dmx-profiles/ofl/search")
 def api_dmx_profiles_ofl_search():
-    """Search OFL fixtures. ?q=query&limit=50."""
+    """Search OFL fixtures across all manufacturers. Fetches fixture lists on demand."""
     q = request.args.get("q", "").strip()
     if not q or len(q) < 2:
         return jsonify(err="Query must be at least 2 characters"), 400
     limit = min(int(request.args.get("limit", 50)), 200)
     try:
-        data = _ofl_fetch_manufacturers()
+        mfr_index = _ofl_fetch_manufacturer_index()
         results = []
         ql = q.lower()
-        for mfr_key, mfr in data.items():
-            if not isinstance(mfr, dict):
+        # Search manufacturer names first (fast, no extra fetches)
+        mfr_matches = []
+        for mfr_key, mfr in mfr_index.items():
+            if not isinstance(mfr, dict) or mfr.get("fixtureCount", 0) <= 0:
                 continue
             mfr_name = mfr.get("name", mfr_key)
-            for fix_key in mfr.get("fixtures", []):
-                if ql in fix_key.lower() or ql in mfr_name.lower():
-                    results.append({
-                        "manufacturer": mfr_key,
-                        "manufacturerName": mfr_name,
-                        "fixture": fix_key,
-                        "name": fix_key.replace("-", " ").title(),
-                    })
+            if ql in mfr_key.lower() or ql in mfr_name.lower():
+                mfr_matches.append(mfr_key)
+        # Fetch fixture lists for matching manufacturers
+        for mfr_key in mfr_matches[:10]:  # limit to 10 manufacturer fetches
+            try:
+                mfr_data = _ofl_fetch_manufacturer_fixtures(mfr_key)
+                mfr_name = mfr_data.get("name", mfr_key)
+                for f in mfr_data.get("fixtures", []):
+                    fkey = f.get("key", f) if isinstance(f, dict) else f
+                    fname = f.get("name", fkey) if isinstance(f, dict) else fkey.replace("-"," ").title()
+                    results.append({"manufacturer": mfr_key, "manufacturerName": mfr_name,
+                                    "fixture": fkey, "name": fname})
+                    if len(results) >= limit:
+                        return jsonify(results)
+            except Exception:
+                continue
+        # Also search fixture names in cached manufacturers
+        for mfr_key, mfr_data in _ofl_fix_cache.items():
+            if mfr_key in mfr_matches:
+                continue
+            mfr_name = mfr_data.get("name", mfr_key)
+            for f in mfr_data.get("fixtures", []):
+                fkey = f.get("key", f) if isinstance(f, dict) else f
+                fname = f.get("name", fkey) if isinstance(f, dict) else fkey.replace("-"," ").title()
+                if ql in fkey.lower() or ql in fname.lower():
+                    results.append({"manufacturer": mfr_key, "manufacturerName": mfr_name,
+                                    "fixture": fkey, "name": fname})
                     if len(results) >= limit:
                         return jsonify(results)
         return jsonify(results)
@@ -1183,11 +1217,9 @@ def api_dmx_profiles_ofl_import_by_id():
         fixture_keys = [fixture]
     else:
         try:
-            data = _ofl_fetch_manufacturers()
-            mfr = data.get(manufacturer)
-            if not mfr:
-                return jsonify(err="Manufacturer not found"), 404
-            fixture_keys = mfr.get("fixtures", [])
+            mfr_data = _ofl_fetch_manufacturer_fixtures(manufacturer)
+            raw_fixtures = mfr_data.get("fixtures", [])
+            fixture_keys = [f.get("key", f) if isinstance(f, dict) else f for f in raw_fixtures]
         except Exception as e:
             return jsonify(err=f"Could not fetch manufacturer: {e}"), 502
 
