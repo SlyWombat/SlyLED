@@ -1076,31 +1076,80 @@ def api_dmx_profiles_import():
     result = _profile_lib.import_profiles(data)
     return jsonify(ok=True, **result)
 
+# OFL data cache (fetched once, reused for search/browse)
+_ofl_cache = {"data": None, "ts": 0}
+_OFL_CACHE_TTL = 3600  # 1 hour
+
+def _ofl_fetch_manufacturers():
+    """Fetch and cache the OFL manufacturers+fixtures index."""
+    import urllib.request as _ur
+    now = time.time()
+    if _ofl_cache["data"] and now - _ofl_cache["ts"] < _OFL_CACHE_TTL:
+        return _ofl_cache["data"]
+    url = "https://open-fixture-library.org/api/v1/manufacturers"
+    req = _ur.Request(url, headers={"User-Agent": "SlyLED-Parent", "Accept": "application/json"})
+    resp = _ur.urlopen(req, timeout=15)
+    data = json.loads(resp.read().decode("utf-8"))
+    _ofl_cache["data"] = data
+    _ofl_cache["ts"] = now
+    total = sum(len(m.get("fixtures", [])) for m in data.values() if isinstance(m, dict))
+    log.info("OFL: cached %d manufacturers, %d fixtures", len(data), total)
+    return data
+
+@app.get("/api/dmx-profiles/ofl/manufacturers")
+def api_ofl_manufacturers():
+    """List all OFL manufacturers with fixture counts."""
+    try:
+        data = _ofl_fetch_manufacturers()
+        result = []
+        for mfr_key, mfr in sorted(data.items()):
+            if not isinstance(mfr, dict):
+                continue
+            fixtures = mfr.get("fixtures", [])
+            if not isinstance(fixtures, list) or not fixtures:
+                continue
+            result.append({
+                "key": mfr_key,
+                "name": mfr.get("name", mfr_key),
+                "fixtureCount": len(fixtures),
+            })
+        return jsonify(result)
+    except Exception as e:
+        return jsonify(err=f"OFL fetch failed: {e}"), 502
+
+@app.get("/api/dmx-profiles/ofl/manufacturer/<mfr_key>")
+def api_ofl_manufacturer_fixtures(mfr_key):
+    """List all fixtures for a specific manufacturer."""
+    try:
+        data = _ofl_fetch_manufacturers()
+        mfr = data.get(mfr_key)
+        if not mfr or not isinstance(mfr, dict):
+            return jsonify(err="Manufacturer not found"), 404
+        fixtures = mfr.get("fixtures", [])
+        return jsonify({
+            "key": mfr_key,
+            "name": mfr.get("name", mfr_key),
+            "fixtures": [{"key": f, "name": f.replace("-", " ").title()} for f in fixtures],
+        })
+    except Exception as e:
+        return jsonify(err=f"OFL fetch failed: {e}"), 502
+
 @app.get("/api/dmx-profiles/ofl/search")
 def api_dmx_profiles_ofl_search():
-    """Search Open Fixture Library for fixtures. Proxies to OFL API."""
-    import urllib.request as _ur
+    """Search OFL fixtures. ?q=query&limit=50."""
     q = request.args.get("q", "").strip()
     if not q or len(q) < 2:
         return jsonify(err="Query must be at least 2 characters"), 400
+    limit = min(int(request.args.get("limit", 50)), 200)
     try:
-        # OFL search API: search across all manufacturers/fixtures
-        url = f"https://open-fixture-library.org/api/v1/manufacturers"
-        req = _ur.Request(url, headers={"User-Agent": "SlyLED-Parent", "Accept": "application/json"})
-        resp = _ur.urlopen(req, timeout=10)
-        data = json.loads(resp.read().decode("utf-8"))
-        # data is {manufacturerKey: {name, website, fixtures: [fixtureKey, ...]}}
+        data = _ofl_fetch_manufacturers()
         results = []
         ql = q.lower()
         for mfr_key, mfr in data.items():
             if not isinstance(mfr, dict):
                 continue
             mfr_name = mfr.get("name", mfr_key)
-            fixtures = mfr.get("fixtures", [])
-            if not isinstance(fixtures, list):
-                continue
-            for fix_key in fixtures:
-                # Match fixture key or manufacturer name against query
+            for fix_key in mfr.get("fixtures", []):
                 if ql in fix_key.lower() or ql in mfr_name.lower():
                     results.append({
                         "manufacturer": mfr_key,
@@ -1108,35 +1157,61 @@ def api_dmx_profiles_ofl_search():
                         "fixture": fix_key,
                         "name": fix_key.replace("-", " ").title(),
                     })
-            if len(results) >= 50:
-                break
-        return jsonify(results[:50])
+                    if len(results) >= limit:
+                        return jsonify(results)
+        return jsonify(results)
     except Exception as e:
         return jsonify(err=f"OFL search failed: {e}"), 502
 
 @app.post("/api/dmx-profiles/ofl/import-by-id")
 def api_dmx_profiles_ofl_import_by_id():
-    """Fetch a fixture from OFL by manufacturer/fixture key and import it."""
+    """Fetch fixture(s) from OFL and import. Body: {manufacturer, fixture} or {manufacturer} for all."""
     import urllib.request as _ur
     body = request.get_json(silent=True) or {}
     manufacturer = body.get("manufacturer", "").strip()
     fixture = body.get("fixture", "").strip()
     mode_idx = body.get("mode")
-    if not manufacturer or not fixture:
-        return jsonify(err="manufacturer and fixture required"), 400
-    try:
-        url = f"https://open-fixture-library.org/{manufacturer}/{fixture}.json"
-        req = _ur.Request(url, headers={"User-Agent": "SlyLED-Parent", "Accept": "application/json"})
-        resp = _ur.urlopen(req, timeout=15)
-        ofl_json = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        return jsonify(err=f"Could not fetch from OFL: {e}"), 502
+    if not manufacturer:
+        return jsonify(err="manufacturer required"), 400
+
     from ofl_importer import ofl_to_slyled
-    profiles = ofl_to_slyled(ofl_json, mode=mode_idx)
-    if not profiles:
-        return jsonify(err="Could not convert OFL fixture (no valid modes/channels)"), 400
-    result = _profile_lib.import_profiles(profiles)
-    return jsonify(ok=True, profiles=[{"id": p["id"], "name": p["name"], "channels": p["channelCount"]} for p in profiles], **result)
+    all_profiles = []
+    errors = []
+
+    # Single fixture or all from manufacturer
+    if fixture:
+        fixture_keys = [fixture]
+    else:
+        try:
+            data = _ofl_fetch_manufacturers()
+            mfr = data.get(manufacturer)
+            if not mfr:
+                return jsonify(err="Manufacturer not found"), 404
+            fixture_keys = mfr.get("fixtures", [])
+        except Exception as e:
+            return jsonify(err=f"Could not fetch manufacturer: {e}"), 502
+
+    for fix_key in fixture_keys:
+        try:
+            url = f"https://open-fixture-library.org/{manufacturer}/{fix_key}.json"
+            req = _ur.Request(url, headers={"User-Agent": "SlyLED-Parent", "Accept": "application/json"})
+            resp = _ur.urlopen(req, timeout=15)
+            ofl_json = json.loads(resp.read().decode("utf-8"))
+            profiles = ofl_to_slyled(ofl_json, mode=mode_idx)
+            all_profiles.extend(profiles)
+        except Exception as e:
+            errors.append(f"{fix_key}: {e}")
+            log.debug("OFL import %s/%s failed: %s", manufacturer, fix_key, e)
+
+    if not all_profiles:
+        return jsonify(err=f"No profiles converted. Errors: {'; '.join(errors[:5])}"), 400
+
+    result = _profile_lib.import_profiles(all_profiles)
+    resp = {"ok": True, **result,
+            "profiles": [{"id": p["id"], "name": p["name"], "channels": p["channelCount"]} for p in all_profiles]}
+    if errors:
+        resp["warnings"] = errors[:10]
+    return jsonify(resp)
 
 @app.post("/api/dmx-profiles/ofl/import-json")
 def api_dmx_profiles_ofl_import():

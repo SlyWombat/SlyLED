@@ -1926,11 +1926,14 @@ function _oflImport(){
   });
 }
 function showOflBrowse(){
-  var h='<p style="font-size:.85em;color:#94a3b8;margin-bottom:.5em">Search the <a href="https://open-fixture-library.org" target="_blank" style="color:#3b82f6">Open Fixture Library</a> (3000+ fixtures)</p>';
-  h+='<div style="display:flex;gap:.5em;margin-bottom:.8em"><input id="ofl-q" type="text" placeholder="Search fixtures..." style="flex:1;padding:.4em" onkeydown="if(event.key===\'Enter\')_oflSearch()">';
-  h+='<button class="btn btn-on" onclick="_oflSearch()">Search</button></div>';
-  h+='<div id="ofl-results" style="max-height:300px;overflow-y:auto"><p style="color:#555;font-size:.82em">Enter a fixture name, manufacturer, or keyword</p></div>';
-  document.getElementById('modal-title').textContent='Browse Open Fixture Library';
+  var h='<p style="font-size:.85em;color:#94a3b8;margin-bottom:.5em">Browse the <a href="https://open-fixture-library.org" target="_blank" style="color:#3b82f6">Open Fixture Library</a></p>';
+  h+='<div style="display:flex;gap:.5em;margin-bottom:.6em">';
+  h+='<input id="ofl-q" type="text" placeholder="Search fixtures..." style="flex:1;padding:.4em" onkeydown="if(event.key===\'Enter\')_oflSearch()">';
+  h+='<button class="btn btn-on" onclick="_oflSearch()">Search</button>';
+  h+='<button class="btn" style="background:#1e293b;color:#94a3b8;font-size:.78em" onclick="_oflShowMfrs()">Manufacturers</button>';
+  h+='</div>';
+  h+='<div id="ofl-results" style="max-height:340px;overflow-y:auto"><p style="color:#555;font-size:.82em">Search by name, or browse by manufacturer</p></div>';
+  document.getElementById('modal-title').textContent='Open Fixture Library';
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='flex';
   setTimeout(function(){document.getElementById('ofl-q').focus();},100);
@@ -1939,19 +1942,68 @@ function _oflSearch(){
   var q=document.getElementById('ofl-q').value.trim();
   if(q.length<2){document.getElementById('ofl-results').innerHTML='<p style="color:#f66;font-size:.82em">Enter at least 2 characters</p>';return;}
   document.getElementById('ofl-results').innerHTML='<p style="color:#888;font-size:.82em">Searching...</p>';
-  ra('GET','/api/dmx-profiles/ofl/search?q='+encodeURIComponent(q),null,function(r){
+  ra('GET','/api/dmx-profiles/ofl/search?q='+encodeURIComponent(q)+'&limit=100',null,function(r){
     var el=document.getElementById('ofl-results');if(!el)return;
     if(!r||r.err){el.innerHTML='<p style="color:#f66;font-size:.82em">'+(r&&r.err||'Search failed')+'</p>';return;}
     if(!r.length){el.innerHTML='<p style="color:#888;font-size:.82em">No results for "'+escapeHtml(q)+'"</p>';return;}
-    var h='<table style="width:100%;font-size:.82em"><tr style="color:#888"><th style="text-align:left">Fixture</th><th style="text-align:left">Manufacturer</th><th></th></tr>';
-    r.forEach(function(f){
-      h+='<tr><td style="padding:.3em .5em">'+escapeHtml(f.name)+'</td>';
-      h+='<td style="padding:.3em .5em;color:#94a3b8">'+escapeHtml(f.manufacturerName)+'</td>';
-      h+='<td><button class="btn" style="font-size:.75em;padding:.2em .5em;background:#14532d;color:#86efac" onclick="_oflImportById(\''+f.manufacturer+'\',\''+f.fixture+'\')">Import</button></td></tr>';
+    _oflRenderResults(r);
+  });
+}
+function _oflRenderResults(r){
+  var el=document.getElementById('ofl-results');if(!el)return;
+  var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3em">';
+  h+='<span style="font-size:.78em;color:#64748b">'+r.length+' fixtures</span>';
+  if(r.length>1)h+='<button class="btn" style="font-size:.7em;padding:.2em .5em;background:#14532d;color:#86efac" onclick="_oflImportAll()">Import All '+r.length+'</button>';
+  h+='</div>';
+  h+='<table style="width:100%;font-size:.82em" id="ofl-table"><tr style="color:#888"><th style="text-align:left">Fixture</th><th style="text-align:left">Manufacturer</th><th></th></tr>';
+  r.forEach(function(f){
+    h+='<tr data-mfr="'+f.manufacturer+'" data-fix="'+f.fixture+'"><td style="padding:.3em .5em">'+escapeHtml(f.name)+'</td>';
+    h+='<td style="padding:.3em .5em;color:#94a3b8">'+escapeHtml(f.manufacturerName)+'</td>';
+    h+='<td><button class="btn" style="font-size:.75em;padding:.2em .5em;background:#14532d;color:#86efac" onclick="_oflImportById(\''+f.manufacturer+'\',\''+f.fixture+'\')">Import</button></td></tr>';
+  });
+  h+='</table>';
+  if(r.length>=100)h+='<p style="color:#888;font-size:.78em;margin-top:.3em">Showing first 100 — refine search for more</p>';
+  el.innerHTML=h;
+  window._oflLastResults=r;
+}
+function _oflShowMfrs(){
+  var el=document.getElementById('ofl-results');if(!el)return;
+  el.innerHTML='<p style="color:#888;font-size:.82em">Loading manufacturers...</p>';
+  ra('GET','/api/dmx-profiles/ofl/manufacturers',null,function(r){
+    if(!r||r.err){el.innerHTML='<p style="color:#f66;font-size:.82em">'+(r&&r.err||'Failed')+'</p>';return;}
+    var total=0;r.forEach(function(m){total+=m.fixtureCount;});
+    var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3em">';
+    h+='<span style="font-size:.78em;color:#64748b">'+r.length+' manufacturers, '+total+' fixtures</span></div>';
+    h+='<div style="display:flex;flex-wrap:wrap;gap:.3em">';
+    r.forEach(function(m){
+      h+='<button class="btn" style="font-size:.72em;padding:.2em .5em;background:#1e293b;color:#e2e8f0" onclick="_oflBrowseMfr(\''+m.key+'\')" title="'+m.fixtureCount+' fixtures">'+escapeHtml(m.name)+' <span style="color:#64748b">('+m.fixtureCount+')</span></button>';
     });
-    h+='</table>';
-    if(r.length>=50)h+='<p style="color:#888;font-size:.78em;margin-top:.3em">Showing first 50 results — refine your search</p>';
+    h+='</div>';
     el.innerHTML=h;
+  });
+}
+function _oflBrowseMfr(key){
+  var el=document.getElementById('ofl-results');if(!el)return;
+  el.innerHTML='<p style="color:#888;font-size:.82em">Loading...</p>';
+  ra('GET','/api/dmx-profiles/ofl/manufacturer/'+key,null,function(r){
+    if(!r||r.err){el.innerHTML='<p style="color:#f66;font-size:.82em">'+(r&&r.err||'Failed')+'</p>';return;}
+    var fixtures=r.fixtures||[];
+    var mapped=fixtures.map(function(f){return{manufacturer:key,manufacturerName:r.name,fixture:f.key,name:f.name};});
+    var h='<div style="margin-bottom:.5em"><button class="btn" style="font-size:.72em;padding:.15em .4em;background:#334155;color:#94a3b8" onclick="_oflShowMfrs()">&larr; Back</button>';
+    h+=' <b style="font-size:.85em">'+escapeHtml(r.name)+'</b> <span style="font-size:.78em;color:#64748b">('+fixtures.length+' fixtures)</span>';
+    if(fixtures.length>1)h+=' <button class="btn" style="font-size:.7em;padding:.2em .5em;background:#14532d;color:#86efac;margin-left:.5em" onclick="_oflImportMfr(\''+key+'\')">Import All</button>';
+    h+='</div>';
+    el.innerHTML=h;
+    window._oflLastResults=mapped;
+    var tbl=document.createElement('div');
+    var th='<table style="width:100%;font-size:.82em" id="ofl-table"><tr style="color:#888"><th style="text-align:left">Fixture</th><th></th></tr>';
+    mapped.forEach(function(f){
+      th+='<tr><td style="padding:.3em .5em">'+escapeHtml(f.name)+'</td>';
+      th+='<td><button class="btn" style="font-size:.75em;padding:.2em .5em;background:#14532d;color:#86efac" onclick="_oflImportById(\''+f.manufacturer+'\',\''+f.fixture+'\')">Import</button></td></tr>';
+    });
+    th+='</table>';
+    tbl.innerHTML=th;
+    el.appendChild(tbl);
   });
 }
 function _oflImportById(mfr,fix){
@@ -1960,10 +2012,38 @@ function _oflImportById(mfr,fix){
     if(r&&r.ok){
       var names=(r.profiles||[]).map(function(p){return p.name;}).join(', ');
       document.getElementById('hs').textContent='Imported: '+names;
-      closeModal();loadDmxProfiles();
+      if(typeof loadDmxProfiles==='function')loadDmxProfiles();
     }else{
       document.getElementById('hs').textContent='Import failed: '+(r&&r.err||'unknown');
     }
+  });
+}
+function _oflImportMfr(mfrKey){
+  document.getElementById('hs').textContent='Importing all fixtures from '+mfrKey+'...';
+  ra('POST','/api/dmx-profiles/ofl/import-by-id',{manufacturer:mfrKey},function(r){
+    if(r&&r.ok){
+      document.getElementById('hs').textContent='Imported '+(r.imported||0)+' profiles from '+mfrKey;
+      closeModal();if(typeof loadDmxProfiles==='function')loadDmxProfiles();
+    }else{
+      document.getElementById('hs').textContent='Import failed: '+(r&&r.err||'unknown');
+    }
+  });
+}
+function _oflImportAll(){
+  var r=window._oflLastResults;if(!r||!r.length)return;
+  if(!confirm('Import all '+r.length+' fixtures? This may take a moment.'))return;
+  document.getElementById('hs').textContent='Importing '+r.length+' fixtures...';
+  var done=0,total=r.length;
+  r.forEach(function(f){
+    ra('POST','/api/dmx-profiles/ofl/import-by-id',{manufacturer:f.manufacturer,fixture:f.fixture},function(){
+      done++;
+      if(done===total){
+        document.getElementById('hs').textContent='Imported '+done+' fixtures';
+        closeModal();if(typeof loadDmxProfiles==='function')loadDmxProfiles();
+      }else if(done%10===0){
+        document.getElementById('hs').textContent='Importing... '+done+'/'+total;
+      }
+    });
   });
 }
 function importProfileBundle(input){

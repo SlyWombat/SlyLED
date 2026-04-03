@@ -216,14 +216,18 @@ Settings tab → **Profiles** → **New Profile** or **Edit**:
 - Import from Open Fixture Library (OFL) JSON format
 
 ### Browsing the Open Fixture Library
-Click **Search OFL** in Settings → Profiles to search 3000+ fixtures from the [Open Fixture Library](https://open-fixture-library.org):
-1. Type a fixture name, manufacturer, or keyword (e.g., "moving head", "chauvet", "par")
-2. Results show fixture name, manufacturer, and an **Import** button
-3. Click **Import** to download and convert the profile automatically
-4. Multi-mode fixtures create one SlyLED profile per mode
+Click **Search OFL** in Settings → Profiles to access 700+ fixtures from the [Open Fixture Library](https://open-fixture-library.org):
+
+**Search**: Type a fixture name, manufacturer, or keyword → results show with Import buttons.
+
+**Browse by Manufacturer**: Click **Manufacturers** to see all brands with fixture counts. Click a manufacturer to see all their fixtures. Click **Import All** to import every fixture from that manufacturer at once.
+
+**Bulk Import**: From search results, click **Import All** to import all matching fixtures. From a manufacturer page, click **Import All** for the entire brand catalog.
+
+Multi-mode fixtures create one SlyLED profile per mode automatically.
 
 ### Import/Export
-- **Search OFL**: Browse and import from the Open Fixture Library online
+- **Search OFL**: Browse, search, and bulk import from the Open Fixture Library
 - **Paste OFL**: Paste raw OFL JSON for offline fixtures
 - **Import Bundle**: Load previously exported profile pack
 - **Export**: Download all custom profiles as JSON

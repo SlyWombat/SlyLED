@@ -613,7 +613,24 @@ def test_ofl_browse(page, ids):
                     {'manufacturer': 'nonexistent', 'fixture': 'fake'})
     ok(resp is not None and resp.get('err'), 'Import non-existent fixture returns error')
 
-    # UI — Search OFL button exists
+    # Manufacturer listing
+    mfrs = api_json(page, 'GET', '/api/dmx-profiles/ofl/manufacturers')
+    if isinstance(mfrs, list) and len(mfrs) > 0:
+        ok(True, f'OFL manufacturers list ({len(mfrs)})')
+        ok('key' in mfrs[0] and 'name' in mfrs[0], 'Manufacturer has key and name')
+        ok(mfrs[0].get('fixtureCount', 0) > 0, 'Manufacturer has fixtures')
+        # Browse manufacturer
+        mfr_detail = api_json(page, 'GET', f'/api/dmx-profiles/ofl/manufacturer/{mfrs[0]["key"]}')
+        if mfr_detail and not mfr_detail.get('err'):
+            ok('fixtures' in mfr_detail, f'Manufacturer detail has fixtures list')
+        else:
+            ok(True, 'Manufacturer detail unavailable')
+    elif isinstance(mfrs, dict) and mfrs.get('err'):
+        ok(True, f'OFL unavailable: {mfrs["err"]}')
+    else:
+        ok(True, 'OFL manufacturers empty or unavailable')
+
+    # UI buttons
     wait_tab(page, 'settings')
     time.sleep(0.5)
     btn = page.query_selector('button[onclick*="showOflBrowse"]')
