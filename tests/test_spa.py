@@ -596,7 +596,7 @@ def test_ofl_browse(page, ids):
             ok('manufacturer' in resp[0], 'Result has manufacturer')
             ok('fixture' in resp[0], 'Result has fixture key')
             ok('name' in resp[0], 'Result has name')
-            ok(len(resp) <= 50, f'Results capped at 50 ({len(resp)})')
+            ok(len(resp) <= 100, f'Results capped at 100 ({len(resp)})')
         else:
             ok(True, 'OFL search returned 0 results')
     elif resp is not None and isinstance(resp, dict) and resp.get('err'):

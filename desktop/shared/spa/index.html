@@ -1075,10 +1075,18 @@ function addDiscovered(ip){
     if(r&&r.ok){
       var cid=r.id;
       var cname=r.name||r.hostname||ip;
-      ra('POST','/api/fixtures',{name:cname,fixtureType:'led',type:'linear',childId:cid},function(){
-        document.getElementById('hs').textContent='Added LED fixture: '+cname;
-        setTimeout(loadSetup,2000);
-      });
+      var ctype=r.type||'';
+      if(ctype==='dmx'){
+        // DMX bridge — register as child only, no fixture created
+        document.getElementById('hs').textContent='Added DMX bridge: '+cname;
+        setTimeout(loadSetup,1000);
+      }else{
+        // LED performer — auto-create fixture
+        ra('POST','/api/fixtures',{name:cname,fixtureType:'led',type:'linear',childId:cid},function(){
+          document.getElementById('hs').textContent='Added LED fixture: '+cname;
+          setTimeout(loadSetup,2000);
+        });
+      }
     }else{
       document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
       setTimeout(loadSetup,1000);
@@ -2168,21 +2176,32 @@ function _oflImport(){
 }
 function showOflBrowse(){
   var h='<p style="font-size:.85em;color:#94a3b8;margin-bottom:.5em">Browse the <a href="https://open-fixture-library.org" target="_blank" style="color:#3b82f6">Open Fixture Library</a></p>';
-  h+='<div style="display:flex;gap:.5em;margin-bottom:.6em">';
-  h+='<input id="ofl-q" type="text" placeholder="Search fixtures..." style="flex:1;padding:.4em" onkeydown="if(event.key===\'Enter\')_oflSearch()">';
+  h+='<div style="display:flex;gap:.4em;margin-bottom:.6em;flex-wrap:wrap">';
+  h+='<input id="ofl-q" type="text" placeholder="Search by fixture name, manufacturer, or category..." style="flex:1;min-width:200px;padding:.4em" onkeydown="if(event.key===\'Enter\')_oflSearch()">';
   h+='<button class="btn btn-on" onclick="_oflSearch()">Search</button>';
   h+='<button class="btn" style="background:#1e293b;color:#94a3b8;font-size:.78em" onclick="_oflShowMfrs()">Manufacturers</button>';
+  h+='<button class="btn" style="background:#1e293b;color:#94a3b8;font-size:.78em" onclick="_oflBrowseAll()">Browse All</button>';
   h+='</div>';
-  h+='<div id="ofl-results" style="max-height:340px;overflow-y:auto"><p style="color:#555;font-size:.82em">Search by name, or browse by manufacturer</p></div>';
+  h+='<div id="ofl-results" style="max-height:340px;overflow-y:auto"><p style="color:#555;font-size:.82em">Search by name (e.g. "par", "moving head"), manufacturer (e.g. "chauvet"), or category (e.g. "Color Changer")</p></div>';
   document.getElementById('modal-title').textContent='Open Fixture Library';
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='flex';
   setTimeout(function(){document.getElementById('ofl-q').focus();},100);
 }
+function _oflBrowseAll(){
+  var el=document.getElementById('ofl-results');if(!el)return;
+  el.innerHTML='<p style="color:#888;font-size:.82em">Loading all fixtures (first load may take a few seconds)...</p>';
+  ra('GET','/api/dmx-profiles/ofl/browse?limit=200',null,function(r){
+    if(!r||r.err){el.innerHTML='<p style="color:#f66;font-size:.82em">'+(r&&r.err||'Failed')+'</p>';return;}
+    var total=r.total||0,fixtures=r.fixtures||[];
+    var h='<div style="font-size:.78em;color:#64748b;margin-bottom:.3em">'+total+' fixtures total (showing '+fixtures.length+')</div>';
+    _oflRenderResults(fixtures);
+  });
+}
 function _oflSearch(){
   var q=document.getElementById('ofl-q').value.trim();
   if(q.length<2){document.getElementById('ofl-results').innerHTML='<p style="color:#f66;font-size:.82em">Enter at least 2 characters</p>';return;}
-  document.getElementById('ofl-results').innerHTML='<p style="color:#888;font-size:.82em">Searching...</p>';
+  document.getElementById('ofl-results').innerHTML='<p style="color:#888;font-size:.82em">Searching all fixtures (first search builds index, may take a few seconds)...</p>';
   ra('GET','/api/dmx-profiles/ofl/search?q='+encodeURIComponent(q)+'&limit=100',null,function(r){
     var el=document.getElementById('ofl-results');if(!el)return;
     if(!r||r.err){el.innerHTML='<p style="color:#f66;font-size:.82em">'+(r&&r.err||'Search failed')+'</p>';return;}
