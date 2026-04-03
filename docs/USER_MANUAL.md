@@ -215,8 +215,17 @@ Settings tab → **Profiles** → **New Profile** or **Edit**:
 - Set beam width, pan/tilt range for moving heads
 - Import from Open Fixture Library (OFL) JSON format
 
+### Browsing the Open Fixture Library
+Click **Search OFL** in Settings → Profiles to search 3000+ fixtures from the [Open Fixture Library](https://open-fixture-library.org):
+1. Type a fixture name, manufacturer, or keyword (e.g., "moving head", "chauvet", "par")
+2. Results show fixture name, manufacturer, and an **Import** button
+3. Click **Import** to download and convert the profile automatically
+4. Multi-mode fixtures create one SlyLED profile per mode
+
 ### Import/Export
-- **Import OFL**: Paste JSON from [open-fixture-library.org](https://open-fixture-library.org)
+- **Search OFL**: Browse and import from the Open Fixture Library online
+- **Paste OFL**: Paste raw OFL JSON for offline fixtures
+- **Import Bundle**: Load previously exported profile pack
 - **Export**: Download all custom profiles as JSON
 - **Built-in profiles** cannot be edited or deleted
 

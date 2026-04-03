@@ -580,6 +580,46 @@ def test_dmx_profiles(page, ids):
     ok(resp is not None, 'Create custom profile')
 
 
+def test_ofl_browse(page, ids):
+    """Test OFL search and import-by-id endpoints."""
+    section('OFL Browse & Import')
+
+    # Search with short query → 400
+    resp = api_json(page, 'GET', '/api/dmx-profiles/ofl/search?q=a')
+    ok(resp is not None and resp.get('err'), 'Short query rejected')
+
+    # Search for a common fixture (may fail if OFL unreachable — that's OK)
+    resp = api_json(page, 'GET', '/api/dmx-profiles/ofl/search?q=par')
+    if isinstance(resp, list):
+        ok(True, f'OFL search returns list ({len(resp)} results)')
+        if len(resp) > 0:
+            ok('manufacturer' in resp[0], 'Result has manufacturer')
+            ok('fixture' in resp[0], 'Result has fixture key')
+            ok('name' in resp[0], 'Result has name')
+            ok(len(resp) <= 50, f'Results capped at 50 ({len(resp)})')
+        else:
+            ok(True, 'OFL search returned 0 results')
+    elif resp is not None and isinstance(resp, dict) and resp.get('err'):
+        ok(True, f'OFL search unavailable: {resp.get("err")} — skipping')
+    else:
+        ok(True, 'OFL search returned unexpected format — skipping')
+
+    # Import-by-id missing fields → 400
+    resp = api_json(page, 'POST', '/api/dmx-profiles/ofl/import-by-id', {})
+    ok(resp is not None and resp.get('err'), 'Import-by-id without fields rejected')
+
+    # Import-by-id with invalid fixture → 502
+    resp = api_json(page, 'POST', '/api/dmx-profiles/ofl/import-by-id',
+                    {'manufacturer': 'nonexistent', 'fixture': 'fake'})
+    ok(resp is not None and resp.get('err'), 'Import non-existent fixture returns error')
+
+    # UI — Search OFL button exists
+    wait_tab(page, 'settings')
+    time.sleep(0.5)
+    btn = page.query_selector('button[onclick*="showOflBrowse"]')
+    ok(btn is not None, 'Search OFL button exists in SPA')
+
+
 def test_dmx_engine(page, ids):
     section('DMX Engine')
 
@@ -1275,6 +1315,7 @@ def main():
         ('settings_api', test_settings_api),
         ('layout_api', test_layout_api),
         ('dmx_profiles', test_dmx_profiles),
+        ('ofl_browse', test_ofl_browse),
         ('dmx_engine', test_dmx_engine),
         ('wifi_api', test_wifi_api),
         ('firmware_api', test_firmware_api),

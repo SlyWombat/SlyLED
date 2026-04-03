@@ -274,7 +274,8 @@ body.light .li:hover{border-color:#3b82f6}
     <div style='display:flex;gap:.5em;flex-wrap:wrap;margin-bottom:.6em'>
       <button class='btn btn-on' onclick='showProfileBrowser()'>Browse Library</button>
       <button class='btn btn-nav' onclick='showProfileEditor()'>New Profile</button>
-      <button class='btn btn-nav' onclick='showOflImport()'>Import OFL</button>
+      <button class='btn btn-nav' onclick='showOflBrowse()' style='background:#1e3a5f;color:#93c5fd'>Search OFL</button>
+      <button class='btn btn-nav' onclick='showOflImport()'>Paste OFL</button>
       <label class='btn btn-nav' style='cursor:pointer'>Import Bundle
         <input type='file' accept='.json' style='display:none' onchange='importProfileBundle(this)'>
       </label>
@@ -1897,6 +1898,47 @@ function _oflImport(){
     if(r&&r.ok){
       document.getElementById('hs').textContent='Imported '+r.imported+' profile(s): '+(r.profiles||[]).join(', ');
       closeModal();
+    }else{
+      document.getElementById('hs').textContent='Import failed: '+(r&&r.err||'unknown');
+    }
+  });
+}
+function showOflBrowse(){
+  var h='<p style="font-size:.85em;color:#94a3b8;margin-bottom:.5em">Search the <a href="https://open-fixture-library.org" target="_blank" style="color:#3b82f6">Open Fixture Library</a> (3000+ fixtures)</p>';
+  h+='<div style="display:flex;gap:.5em;margin-bottom:.8em"><input id="ofl-q" type="text" placeholder="Search fixtures..." style="flex:1;padding:.4em" onkeydown="if(event.key===\'Enter\')_oflSearch()">';
+  h+='<button class="btn btn-on" onclick="_oflSearch()">Search</button></div>';
+  h+='<div id="ofl-results" style="max-height:300px;overflow-y:auto"><p style="color:#555;font-size:.82em">Enter a fixture name, manufacturer, or keyword</p></div>';
+  document.getElementById('modal-title').textContent='Browse Open Fixture Library';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='flex';
+  setTimeout(function(){document.getElementById('ofl-q').focus();},100);
+}
+function _oflSearch(){
+  var q=document.getElementById('ofl-q').value.trim();
+  if(q.length<2){document.getElementById('ofl-results').innerHTML='<p style="color:#f66;font-size:.82em">Enter at least 2 characters</p>';return;}
+  document.getElementById('ofl-results').innerHTML='<p style="color:#888;font-size:.82em">Searching...</p>';
+  ra('GET','/api/dmx-profiles/ofl/search?q='+encodeURIComponent(q),null,function(r){
+    var el=document.getElementById('ofl-results');if(!el)return;
+    if(!r||r.err){el.innerHTML='<p style="color:#f66;font-size:.82em">'+(r&&r.err||'Search failed')+'</p>';return;}
+    if(!r.length){el.innerHTML='<p style="color:#888;font-size:.82em">No results for "'+escapeHtml(q)+'"</p>';return;}
+    var h='<table style="width:100%;font-size:.82em"><tr style="color:#888"><th style="text-align:left">Fixture</th><th style="text-align:left">Manufacturer</th><th></th></tr>';
+    r.forEach(function(f){
+      h+='<tr><td style="padding:.3em .5em">'+escapeHtml(f.name)+'</td>';
+      h+='<td style="padding:.3em .5em;color:#94a3b8">'+escapeHtml(f.manufacturerName)+'</td>';
+      h+='<td><button class="btn" style="font-size:.75em;padding:.2em .5em;background:#14532d;color:#86efac" onclick="_oflImportById(\''+f.manufacturer+'\',\''+f.fixture+'\')">Import</button></td></tr>';
+    });
+    h+='</table>';
+    if(r.length>=50)h+='<p style="color:#888;font-size:.78em;margin-top:.3em">Showing first 50 results — refine your search</p>';
+    el.innerHTML=h;
+  });
+}
+function _oflImportById(mfr,fix){
+  document.getElementById('hs').textContent='Importing '+fix+'...';
+  ra('POST','/api/dmx-profiles/ofl/import-by-id',{manufacturer:mfr,fixture:fix},function(r){
+    if(r&&r.ok){
+      var names=(r.profiles||[]).map(function(p){return p.name;}).join(', ');
+      document.getElementById('hs').textContent='Imported: '+names;
+      closeModal();loadDmxProfiles();
     }else{
       document.getElementById('hs').textContent='Import failed: '+(r&&r.err||'unknown');
     }
