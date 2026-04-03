@@ -50,49 +50,49 @@ def populate_data():
                 c.delete(f'/api/dmx-profiles/{p["id"]}')
 
         # Settings
-        c.post('/api/settings', json={'name': 'SlyLED Demo', 'darkMode': 1,
+        c.post('/api/settings', json={'name': 'Main Stage', 'darkMode': 1,
                                        'canvasW': 10000, 'canvasH': 5000})
 
         # Stage
         c.post('/api/stage', json={'w': 10.0, 'h': 5.0, 'd': 10.0})
 
-        # LED children + fixtures
-        r = c.post('/api/children', json={'ip': '10.0.0.50'})
+        # LED children + fixtures — realistic venue names
+        r = c.post('/api/children', json={'ip': '192.168.10.50'})
         cid1 = r.get_json().get('id')
         r = c.post('/api/fixtures', json={
-            'name': 'Stage Left LED', 'type': 'linear', 'fixtureType': 'led', 'childId': cid1,
+            'name': 'FOH Truss Left', 'type': 'linear', 'fixtureType': 'led', 'childId': cid1,
             'strings': [{'leds': 60, 'mm': 3000, 'sdir': 0}]
         })
         fix1 = r.get_json().get('id')
 
-        r = c.post('/api/children', json={'ip': '10.0.0.51'})
+        r = c.post('/api/children', json={'ip': '192.168.10.51'})
         cid2 = r.get_json().get('id')
         r = c.post('/api/fixtures', json={
-            'name': 'Stage Right LED', 'type': 'linear', 'fixtureType': 'led', 'childId': cid2,
+            'name': 'FOH Truss Right', 'type': 'linear', 'fixtureType': 'led', 'childId': cid2,
             'strings': [{'leds': 60, 'mm': 3000, 'sdir': 2}]
         })
         fix2 = r.get_json().get('id')
 
-        # DMX moving heads
+        # DMX moving heads — realistic product names
         r = c.post('/api/fixtures', json={
-            'name': 'Moving Head SL', 'type': 'point', 'fixtureType': 'dmx',
+            'name': 'Beam 200 Stage Left', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 16,
             'dmxProfileId': 'generic-moving-head-16bit',
-            'aimPoint': [5000, 0, 5000]
+            'aimPoint': [5000, 2000, 5000]
         })
         dmx1 = r.get_json().get('id')
 
         r = c.post('/api/fixtures', json={
-            'name': 'Moving Head SR', 'type': 'point', 'fixtureType': 'dmx',
+            'name': 'Beam 200 Stage Right', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 17, 'dmxChannelCount': 16,
             'dmxProfileId': 'generic-moving-head-16bit',
-            'aimPoint': [5000, 0, 5000]
+            'aimPoint': [5000, 2000, 5000]
         })
         dmx2 = r.get_json().get('id')
 
-        # RGB Par
+        # RGB Par — realistic name
         r = c.post('/api/fixtures', json={
-            'name': 'RGB Par Center', 'type': 'point', 'fixtureType': 'dmx',
+            'name': 'SlimPAR Center Wash', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 33, 'dmxChannelCount': 3,
             'dmxProfileId': 'generic-rgb',
             'aimPoint': [5000, 0, 5000]

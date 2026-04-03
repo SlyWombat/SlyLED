@@ -485,6 +485,21 @@ function showTab(t){
 function _btnSaving(btn){if(!btn)return;btn.dataset.orig=btn.textContent;btn.textContent='Saving...';btn.disabled=true;btn.style.background='#555';}
 function _btnSaved(btn,ok){if(!btn)return;btn.textContent=ok?'Saved!':'Error';btn.style.background=ok?'#2a2':'#a22';setTimeout(function(){btn.textContent=btn.dataset.orig||'Save';btn.style.background='';btn.disabled=false;},1200);}
 
+// API path constants — single source of truth for endpoint URLs
+var API={
+  children:'/api/children',fixtures:'/api/fixtures',layout:'/api/layout',
+  stage:'/api/stage',settings:'/api/settings',actions:'/api/actions',
+  surfaces:'/api/surfaces',timelines:'/api/timelines',wifi:'/api/wifi',
+  profiles:'/api/dmx-profiles',spatialFx:'/api/spatial-effects',
+  dmxSettings:'/api/dmx/settings',dmxStatus:'/api/dmx/status',
+  dmxPatch:'/api/dmx/patch',dmxInterfaces:'/api/dmx/interfaces',
+  showExport:'/api/show/export',showImport:'/api/show/import',
+  showPresets:'/api/show/presets',showPreset:'/api/show/preset',
+  configExport:'/api/config/export',configImport:'/api/config/import',
+  fwRegistry:'/api/firmware/registry',fwPorts:'/api/firmware/ports',
+  fwCheck:'/api/firmware/check',fwLatest:'/api/firmware/latest',
+  oflSearch:'/api/dmx-profiles/ofl/search',oflImport:'/api/dmx-profiles/ofl/import-by-id',
+};
 function ra(method,path,body,callback){
   var x=new XMLHttpRequest();
   x.open(method,path,true);
@@ -1189,13 +1204,20 @@ function s3dLoadChildren(){
           cone.userData.beamCone=true;
           grp.add(cone);
           // Aim point sphere (red, draggable)
-          var aimGeo=new THREE.SphereGeometry(0.12,8,8);
-          var aimMat=new THREE.MeshBasicMaterial({color:0xff4444,opacity:0.6,transparent:true});
+          var aimGeo=new THREE.SphereGeometry(0.25,16,16);
+          var aimMat=new THREE.MeshBasicMaterial({color:0xff4444,opacity:0.8,transparent:true});
           var aimSphere=new THREE.Mesh(aimGeo,aimMat);
           aimSphere.position.copy(aimLocal);
           aimSphere.userData.isAimPoint=true;
           aimSphere.userData.fixtureId=_fix3d.id;
           grp.add(aimSphere);
+          // Glow halo ring
+          var glowGeo=new THREE.RingGeometry(0.3,0.45,24);
+          var glowMat=new THREE.MeshBasicMaterial({color:0xff6666,opacity:0.25,transparent:true,side:THREE.DoubleSide,depthWrite:false});
+          var glow=new THREE.Mesh(glowGeo,glowMat);
+          glow.position.copy(aimLocal);
+          glow.lookAt(_s3d.camera.position);
+          grp.add(glow);
         }
       }
 
@@ -2762,8 +2784,14 @@ function showNodeEdit(f){
     }
     h+='</table>';
   }
-  h+='<div style="display:flex;gap:.5em">';
+  if(ft==='dmx'){
+    var ap=f.aimPoint||[0,-1000,0];
+    h+='<div style="margin-bottom:.5em"><label style="font-size:.82em;color:#94a3b8">Aim Point (mm)</label>';
+    h+=' <span style="font-size:.75em;color:#64748b">('+ap[0]+', '+ap[1]+', '+ap[2]+')</span></div>';
+  }
+  h+='<div style="display:flex;gap:.5em;flex-wrap:wrap">';
   h+='<button class="btn btn-on" onclick="applyNodePos('+f.id+')">Set Position</button>';
+  if(ft==='dmx')h+='<button class="btn" style="background:#1e3a5f;color:#93c5fd" onclick="startAimMode('+f.id+')">Click to Aim</button>';
   h+='<button class="btn btn-off" onclick="removeFromCanvas('+f.id+')">Remove from Stage</button>';
   h+='</div>';
   document.getElementById('modal-title').textContent=f.name;
@@ -3337,10 +3365,21 @@ function _cvMouse(e,cv){
   return{x:(e.clientX-r.left)*sx, y:(e.clientY-r.top)*sy};
 }
 
+var _aimMode=null; // fixture id when in click-to-aim mode
 function cvDown(e){
-  if(e.button!==0)return;
   var cv=document.getElementById('lcv');
   var m=_cvMouse(e,cv);
+  // Click-to-aim mode: any click sets aim point
+  if(_aimMode!==null){
+    var ax=Math.round(m.x*phW/cv.width);
+    var ay=Math.round((cv.height-m.y)*phH/cv.height);
+    var f=null;_fixtures.forEach(function(fx){if(fx.id===_aimMode)f=fx;});
+    if(f){f.aimPoint=[ax,ay,f.aimPoint?f.aimPoint[2]||0:0];drawLayout();}
+    _aimMode=null;cv.style.cursor='grab';
+    document.getElementById('hs').textContent='Aim point set to ('+ax+', '+ay+')';
+    e.preventDefault();return;
+  }
+  if(e.button!==0)return;
   drag=_hitNode(m.x,m.y,cv.width,cv.height);
   if(drag>=0){
     var placed=_fixtures.filter(_isFixturePlaced);
@@ -3348,6 +3387,12 @@ function cvDown(e){
     dox=m.x-np.cx;doy=m.y-np.cy;
     cv.style.cursor='grabbing';
   }
+}
+function startAimMode(fixtureId){
+  _aimMode=fixtureId;
+  var cv=document.getElementById('lcv');if(cv)cv.style.cursor='crosshair';
+  document.getElementById('hs').textContent='Click on the canvas to set aim point';
+  closeModal();
 }
 
 function cvMove(e){
