@@ -3103,7 +3103,8 @@ function drawLayout(){
       var bLen=Math.sqrt((ax-cx)*(ax-cx)+(ay-cy)*(ay-cy));
       if(bLen>5){
         // Draw beam cone triangle (simplified 2D)
-        var bwDeg=15,angle=Math.atan2(ay-cy,ax-cx);
+        var bwDeg=(window._profileCache&&f.dmxProfileId&&window._profileCache[f.dmxProfileId])?window._profileCache[f.dmxProfileId].beamWidth||15:15;
+        var angle=Math.atan2(ay-cy,ax-cx);
         var halfW=Math.tan(bwDeg*Math.PI/360)*bLen;
         var lx2=ax+Math.cos(angle+Math.PI/2)*halfW;
         var ly2=ay+Math.sin(angle+Math.PI/2)*halfW;
@@ -3133,9 +3134,18 @@ function emuLoadStage(){
   ra('GET','/api/layout',null,function(lay){
     ra('GET','/api/children',null,function(ch){
       ra('GET','/api/fixtures',null,function(fx){
-        _emuStage={layout:lay,children:ch||[],fixtures:fx||[],
-          cw:(lay||{}).canvasW||10000,ch:(lay||{}).canvasH||5000};
-        emuDraw();
+        ra('GET','/api/surfaces',null,function(surfs){
+          _emuStage={layout:lay,children:ch||[],fixtures:fx||[],surfaces:surfs||[],
+            cw:(lay||{}).canvasW||10000,ch:(lay||{}).canvasH||5000};
+          // Cache profile beamWidths for beam cone rendering
+          if(!window._profileCache){
+            window._profileCache={};
+            ra('GET','/api/dmx-profiles',null,function(profs){
+              (profs||[]).forEach(function(p){window._profileCache[p.id]=p;});
+              emuDraw();
+            });
+          }else{emuDraw();}
+        });
       });
     });
   });
@@ -3332,6 +3342,12 @@ function emuDraw(){
   var fixtures=_emuStage.fixtures;
   var layoutFixtures=(layout&&layout.fixtures)||[];
   if(!children.length&&!layoutFixtures.length)return;
+  // Debug: log fixture counts on first draw
+  if(!_emuStage._logged){_emuStage._logged=true;
+    var pLed=layoutFixtures.filter(function(f){return f.fixtureType!=='dmx'&&f.positioned;}).length;
+    var pDmx=layoutFixtures.filter(function(f){return f.fixtureType==='dmx'&&f.positioned;}).length;
+    console.log('[SlyLED EMU] '+layoutFixtures.length+' layout fixtures ('+pLed+' LED + '+pDmx+' DMX positioned), '+children.length+' children, '+emuSurfs.length+' surfaces');
+  }
 
   var cw=(layout&&layout.canvasW)||10000;
   var ch=(layout&&layout.canvasH)||5000;
@@ -3342,6 +3358,25 @@ function emuDraw(){
   ctx.strokeStyle='#0c1222';ctx.lineWidth=0.5;
   for(var gx=1;gx<10;gx++){var x=gx*W/10;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
   for(var gy=1;gy<5;gy++){var y=gy*H/5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+
+  // Surfaces (draw behind fixtures)
+  var emuSurfs=(_emuStage&&_emuStage.surfaces)||[];
+  emuSurfs.forEach(function(s){
+    var t=s.transform||{pos:[0,0,0],scale:[2000,1500,1]};
+    var sx=t.pos[0]*W/cw,sy=H-t.pos[1]*H/ch;
+    var sw=t.scale[0]*W/cw,sh=t.scale[1]*H/ch;
+    // Clip to canvas
+    var clX=Math.max(0,sx),clY=Math.max(0,sy-sh);
+    var clW=Math.min(W,sx+sw)-clX,clH=Math.min(H,sy)-clY;
+    if(clW>0&&clH>0){
+      ctx.globalAlpha=(s.opacity||30)/100;
+      ctx.fillStyle=s.color||'#334155';ctx.fillRect(clX,clY,clW,clH);
+      ctx.globalAlpha=0.5;ctx.strokeStyle=s.color||'#334155';ctx.lineWidth=1;ctx.strokeRect(clX,clY,clW,clH);
+      ctx.globalAlpha=1;
+      ctx.fillStyle='#667';ctx.font='7px sans-serif';ctx.textAlign='left';
+      ctx.fillText(s.name||'',clX+3,clY+10);
+    }
+  });
 
   var dirDx=[1,0,-1,0],dirDy=[0,-1,0,1];
 
@@ -3449,10 +3484,16 @@ function emuDraw(){
       if(pd.dimmer>0)dimmer=(pd.dimmer/255)*0.3;
       else if(br+bg+bb>10)dimmer=0.2;
     }
-    // Draw beam cone toward aim point
+    // Draw beam cone toward aim point — beamWidth from profile or default
     var aim=fix.aimPoint||[fix.x,(fix.y||0)-2000,0];
     var ax=aim[0]*W/emuCW,ay=H-aim[1]*H/emuCH;
-    var bwDeg=(pd&&pd.beamWidth)||15;
+    var bwDeg=(fix._beamWidth)||(pd&&pd.beamWidth)||15;
+    // Flood lights have wider beams (>40°), spots are narrow (<20°)
+    if(!fix._beamWidth&&fix.dmxProfileId){
+      // Cache beam width from profile on first access
+      var cachedProf=_profileCache&&_profileCache[fix.dmxProfileId];
+      if(cachedProf)fix._beamWidth=cachedProf.beamWidth||15;
+    }
     var bLen=Math.sqrt((ax-fx)*(ax-fx)+(ay-fy)*(ay-fy));
     if(bLen<2)bLen=80;
     var halfW=Math.tan(bwDeg*Math.PI/360)*bLen;
