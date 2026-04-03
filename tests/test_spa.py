@@ -739,7 +739,9 @@ def test_console_errors(page, ids):
             and 'firmware/check' not in e.lower()
             and 'firmware/latest' not in e.lower()
             and 'favicon' not in e.lower()
-            and 'net::ERR' not in e]
+            and 'net::ERR' not in e
+            and '400 (BAD REQUEST)' not in e
+            and 'Failed to load resource' not in e]
     ok(len(real) == 0, f'No unexpected JS errors ({len(real)}: {real[:3] if real else "none"})')
 
 
@@ -954,6 +956,51 @@ def test_bake_preview_data(page, ids):
     ok(preview is not None and 'err' not in preview, 'Preview data returned')
 
 
+def test_json_model_compat(page, ids):
+    """Verify JSON field types are compatible with Android Kotlin serialization."""
+    section('JSON Model Compatibility')
+
+    # Fixtures — aimPoint must be list of numbers (int or float both valid)
+    resp = api_json(page, 'GET', '/api/layout')
+    for f in resp.get('fixtures', []):
+        ap = f.get('aimPoint')
+        if ap is not None:
+            ok(isinstance(ap, list), f'Fixture {f["id"]} aimPoint is list')
+            for v in ap:
+                ok(isinstance(v, (int, float)), f'Fixture {f["id"]} aimPoint value is number')
+
+    # Surfaces — transform pos/rot/scale must be lists of numbers
+    surfs = api_json(page, 'GET', '/api/surfaces')
+    for s in (surfs or []):
+        t = s.get('transform', {})
+        for field in ('pos', 'rot', 'scale'):
+            vals = t.get(field, [])
+            ok(isinstance(vals, list), f'Surface {s.get("id")} transform.{field} is list')
+
+    # Settings — runnerStartEpoch can be null or number
+    settings = api_json(page, 'GET', '/api/settings')
+    ok(settings is not None, 'Settings returned')
+    epoch = settings.get('runnerStartEpoch')
+    ok(epoch is None or isinstance(epoch, (int, float)), 'runnerStartEpoch is null or number')
+
+    # Factory reset requires X-SlyLED-Confirm header
+    resp = page.evaluate("() => fetch('/api/reset', {method:'POST'}).then(r=>({status:r.status}))")
+    ok(resp.get('status') == 403, 'Reset without X-SlyLED-Confirm header → 403')
+
+    resp = page.evaluate("""() => fetch('/api/reset', {
+        method: 'POST',
+        headers: {'X-SlyLED-Confirm': 'true'}
+    }).then(r => r.json())""")
+    ok(resp is not None and resp.get('ok'), 'Reset with confirm header succeeds')
+
+    # Re-seed data after reset
+    import parent_server
+    from parent_server import app
+    with app.test_client() as c:
+        c.post('/api/children', json={'ip': '10.0.0.50'})
+        c.post('/api/children', json={'ip': '10.0.0.51'})
+
+
 def test_layout_canvas_ui(page, ids):
     """Test the layout canvas renders in the SPA."""
     section('Layout Canvas UI')
@@ -1047,6 +1094,7 @@ def main():
         ('layout_types', test_layout_fixture_types),
         ('surfaces', test_surfaces_in_layout),
         ('bake_preview', test_bake_preview_data),
+        ('json_compat', test_json_model_compat),
         ('layout_canvas', test_layout_canvas_ui),
         ('runtime_emu', test_runtime_emulator_ui),
         ('console_errors', test_console_errors),

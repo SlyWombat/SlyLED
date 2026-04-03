@@ -249,10 +249,10 @@ fun ShowEmulatorCanvas(
                 // Surfaces (draw first so fixtures render on top)
                 surfaces.forEach { s ->
                     val t = s.transform
-                    val sx = t.pos[0] * w / cw
-                    val sy = h - t.pos[1] * h / ch
-                    val sw = t.scale[0] * w / cw
-                    val sh = t.scale[1] * h / ch
+                    val sx = (t.pos[0].toFloat() * w / cw)
+                    val sy = (h - t.pos[1].toFloat() * h / ch)
+                    val sw = (t.scale[0].toFloat() * w / cw)
+                    val sh = (t.scale[1].toFloat() * h / ch)
                     val col = try { Color(android.graphics.Color.parseColor(s.color)) } catch (_: Exception) { Color(0xFF334155) }
                     drawRect(col.copy(alpha = s.opacity / 100f), Offset(sx, sy - sh), androidx.compose.ui.geometry.Size(sw, sh))
                 }

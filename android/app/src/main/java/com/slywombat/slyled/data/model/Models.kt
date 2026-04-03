@@ -262,7 +262,7 @@ data class Fixture(
     val dmxStartAddr: Int? = null,
     val dmxChannelCount: Int? = null,
     val dmxProfileId: String? = null,
-    val aimPoint: List<Int>? = null,
+    val aimPoint: List<Double>? = null,
     val childIds: List<Int> = emptyList(),
     val strings: List<FixtureString> = emptyList(),
     val rotation: List<Double> = listOf(0.0, 0.0, 0.0),
@@ -309,9 +309,9 @@ data class Surface(
 
 @Serializable
 data class SurfaceTransform(
-    val pos: List<Int> = listOf(0, 0, 0),
-    val rot: List<Int> = listOf(0, 0, 0),
-    val scale: List<Int> = listOf(2000, 1500, 100),
+    val pos: List<Double> = listOf(0.0, 0.0, 0.0),
+    val rot: List<Double> = listOf(0.0, 0.0, 0.0),
+    val scale: List<Double> = listOf(2000.0, 1500.0, 100.0),
 )
 
 // ── Spatial Effects (Phase 3) ──────────────────────────────────────────

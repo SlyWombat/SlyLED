@@ -148,6 +148,7 @@ interface SlyLedApi {
     suspend fun generateDemo(@Body body: Map<String, String> = emptyMap()): OkResponse
 
     // Factory reset
+    @Headers("X-SlyLED-Confirm: true")
     @POST("api/reset")
     suspend fun factoryReset(): OkResponse
 
