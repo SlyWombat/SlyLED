@@ -952,9 +952,8 @@ function discoverChildren(){
           var bt=c.boardType||'slyled';
           var badge=bt==='dmx'?'<span class="badge" style="background:#7c3aed;color:#fff;font-size:.75em">DMX Bridge</span>'
             :'<span class="badge" style="background:#059669;color:#fff;font-size:.75em">LED</span>';
-          var addBtn=bt==='dmx'
-            ?'<button class="btn" onclick="addDiscoveredDmxBridge(\''+c.ip+'\')" style="background:#7c3aed;color:#fff">Configure</button>'
-            :'<button class="btn btn-on" onclick="addDiscovered(\''+c.ip+'\')">Add</button>';
+          var addBtn='<button class="btn btn-on" onclick="addDiscovered(\''+c.ip+'\')">Add</button>';
+          if(bt==='dmx')addBtn+=' <button class="btn" onclick="addDiscoveredDmxBridge(\''+c.ip+'\')" style="background:#7c3aed;color:#fff">Configure</button>';
           h+='<tr><td>'+escapeHtml(c.hostname)+'</td><td>'+escapeHtml(c.name||'-')+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+badge+'</td><td>'+(bt==='dmx'?'—':c.sc)+'</td>'
             +'<td>'+addBtn+'</td></tr>';
         });
