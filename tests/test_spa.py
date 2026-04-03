@@ -381,6 +381,40 @@ def test_show_import(page, ids):
     ok(resp is not None and not resp.get('ok'), 'Import bad type rejected')
 
 
+def test_dmx_bridge_no_fixture(page, ids):
+    """DMX bridges must NOT get auto-created LED fixtures on config import."""
+    section('DMX Bridge No Auto-Fixture')
+
+    # Simulate a config with a DMX bridge child that has strings (like Giga)
+    bridge_config = {
+        'type': 'slyled-config', 'version': 1,
+        'children': [{
+            'id': 99, 'ip': '10.99.99.99', 'hostname': 'SLYC-TEST',
+            'name': 'Test Bridge', 'type': 'dmx', 'boardType': 'giga-dmx',
+            'sc': 1, 'strings': [{'leds': 30, 'mm': 500, 'sdir': 0,
+                                   'type': 0, 'cdir': 0, 'cmm': 0, 'folded': False}],
+            'status': 0, 'seen': 0
+        }],
+        'layout': {'canvasW': 10000, 'canvasH': 5000, 'children': []}
+    }
+    resp = api_json(page, 'POST', '/api/config/import', bridge_config)
+    ok(resp is not None and resp.get('ok'), 'Config import with DMX bridge')
+
+    # The bridge should be a child but NOT have an auto-created fixture
+    children = api_json(page, 'GET', '/api/children')
+    bridge = next((c for c in children if c.get('hostname') == 'SLYC-TEST'), None)
+    ok(bridge is not None, 'Bridge child exists')
+    ok(bridge.get('type') == 'dmx', 'Bridge type is dmx')
+
+    fixtures = api_json(page, 'GET', '/api/fixtures')
+    bridge_fixture = next((f for f in fixtures if f.get('childId') == bridge['id']), None)
+    ok(bridge_fixture is None, 'NO fixture auto-created for DMX bridge (was creating LED with 30 LEDs)')
+
+    # Clean up
+    if bridge:
+        api_json(page, 'DELETE', f'/api/children/{bridge["id"]}')
+
+
 def test_config_export_import(page, ids):
     section('Config Export / Import')
 
@@ -1353,6 +1387,7 @@ def main():
         ('bake_preview', test_bake_preview_data),
         ('emu_render', test_emulator_rendering),
         ('beam_dir', test_beam_cone_direction),
+        ('bridge_no_fix', test_dmx_bridge_no_fixture),
         ('json_compat', test_json_model_compat),
         ('layout_canvas', test_layout_canvas_ui),
         ('runtime_emu', test_runtime_emulator_ui),

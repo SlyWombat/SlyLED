@@ -89,10 +89,11 @@ def seed_and_start():
             with open(show_path) as f:
                 show = json.load(f)
         else:
-            # Fallback to test show
-            show_path = os.path.join(os.path.dirname(__file__), 'user', 'test-show.json')
-            with open(show_path) as f:
-                show = json.load(f)
+            # Create minimal show inline
+            show = {'type': 'slyled-show', 'version': 1,
+                    'actions': [{'id': 0, 'name': 'Solid', 'type': 1, 'r': 255, 'g': 0, 'b': 0}],
+                    'spatialEffects': [], 'timelines': [{'id': 0, 'name': 'Test', 'durationS': 10,
+                    'tracks': [{'allPerformers': True, 'clips': [{'actionId': 0, 'startS': 0, 'durationS': 10}]}]}]}
         r = c.post('/api/show/import', json=show)
         ok(r.get_json().get('ok'), 'Show imported successfully')
 

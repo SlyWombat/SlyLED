@@ -74,7 +74,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "8.2.4"
+VERSION = "8.2.5"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -2531,13 +2531,13 @@ def api_config_import():
             # Skip if fixture already exists for this child
             if any(f.get("childId") == cid for f in _fixtures):
                 continue
-            # Create LED fixture if child has strings
+            # DMX bridges never get auto-fixtures (they ARE the transport, not a light)
+            if c.get("type") == "dmx" or c.get("boardType") in ("giga-dmx", "DMX Bridge"):
+                continue
+            # Create LED fixture if child has strings with LEDs
             sc = c.get("sc", 0)
             strings = c.get("strings", [])[:sc]
             if not strings or not any(s.get("leds", 0) > 0 for s in strings):
-                # DMX bridge — create as DMX fixture placeholder
-                if c.get("type") == "dmx":
-                    continue  # bridges don't need auto-fixtures
                 continue
             f = {
                 "id": _nxt_fix,
@@ -3589,6 +3589,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
