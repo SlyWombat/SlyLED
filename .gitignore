@@ -68,6 +68,9 @@ android/app/build/
 android/local.properties
 android/SlyLED-debug.apk
 
+# Top-level dist — testable build outputs (exe, apk, firmware bins)
+dist/
+
 # Desktop Windows build artifacts
 desktop/windows/build/
 desktop/windows/dist/
