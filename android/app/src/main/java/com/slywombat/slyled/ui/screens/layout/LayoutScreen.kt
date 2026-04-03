@@ -229,13 +229,13 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                             }
                         }
 
-                        // DMX beam cone
+                        // DMX beam cone — aimPoint[0]=X, aimPoint[1]=Y (height), matching SPA front view
                         if (fixture.fixtureType == "dmx" && fixture.aimPoint != null) {
                             val aimX = fixture.aimPoint.getOrNull(0)?.toFloat()
-                            val aimZ = fixture.aimPoint.getOrNull(2)?.toFloat()
-                            if (aimX != null && aimZ != null) {
+                            val aimY = fixture.aimPoint.getOrNull(1)?.toFloat()
+                            if (aimX != null && aimY != null) {
                                 val ax = aimX * w / canvasW
-                                val ay = h - aimZ * h / canvasH
+                                val ay = h - aimY * h / canvasH
                                 val bLen = kotlin.math.sqrt((ax - cx) * (ax - cx) + (ay - cy) * (ay - cy))
                                 if (bLen > 5f) {
                                     val halfW = kotlin.math.tan(15f * Math.PI.toFloat() / 360f) * bLen

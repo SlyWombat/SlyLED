@@ -281,13 +281,12 @@ fun ShowEmulatorCanvas(
                     }
 
                     if (fixture.fixtureType == "dmx") {
-                        // DMX fixture: draw beam cone toward aim point
+                        // DMX fixture: draw beam cone — aimPoint[0]=X, aimPoint[1]=Y (height)
                         val aimX = fixture.aimPoint?.getOrNull(0)?.toFloat()
                         val aimY = fixture.aimPoint?.getOrNull(1)?.toFloat()
-                        val aimZ = fixture.aimPoint?.getOrNull(2)?.toFloat()
-                        if (aimX != null && aimZ != null) {
+                        if (aimX != null && aimY != null) {
                             val ax = (aimX * w / cw).coerceIn(0f, w)
-                            val ay = (h - (aimZ ?: 0f) * h / ch).coerceIn(0f, h)
+                            val ay = (h - aimY * h / ch).coerceIn(0f, h)
                             val bLen = kotlin.math.sqrt((ax - cx) * (ax - cx) + (ay - cy) * (ay - cy))
                             if (bLen > 5f) {
                                 val bwRad = 15f * Math.PI.toFloat() / 180f

@@ -3053,7 +3053,8 @@ function emuDraw(){
   var layout=_emuStage.layout;
   var children=_emuStage.children;
   var fixtures=_emuStage.fixtures;
-  if(!children.length)return;
+  var layoutFixtures=(layout&&layout.fixtures)||[];
+  if(!children.length&&!layoutFixtures.length)return;
 
   var cw=(layout&&layout.canvasW)||10000;
   var ch=(layout&&layout.canvasH)||5000;
@@ -3149,48 +3150,91 @@ function emuDraw(){
     ctx.fillText(name,cx,cy+14);
   });
 
-  // DMX fixture beams
-  if(_fixtures&&_emuStage){
-    var cw=_emuStage.cw||10000,ch_=_emuStage.ch||5000;
-    (_fixtures||[]).forEach(function(fix){
-      if(fix.fixtureType!=='dmx')return;
-      // Find fixture position from layout
-      var lp=null;
-      ((_emuStage.layout||{}).children||[]).forEach(function(lc){if(lc.id===fix.id||lc.id===fix.childId)lp=lc;});
-      if(!lp||(!lp.x&&!lp.y))return;
-      var fx=lp.x*W/cw,fy=H-lp.y*H/ch_;
-      // Get preview data
-      var pd=null;
-      if(_emuPreview&&_emuRunning){
-        var frames=_emuPreview[String(fix.id)];
-        if(frames&&frames.length>0){
-          var idx=Math.floor(_emuT)%frames.length;
-          pd=frames[idx];
-        }
+  // DMX fixture beams — render from layout.fixtures (positioned DMX fixtures)
+  var emuCW=_emuStage.cw||10000,emuCH=_emuStage.ch||5000;
+  layoutFixtures.forEach(function(fix){
+    if(fix.fixtureType!=='dmx'||!fix.positioned)return;
+    var fx=fix.x*W/emuCW,fy=H-fix.y*H/emuCH;
+    fx=Math.max(6,Math.min(W-6,fx));fy=Math.max(6,Math.min(H-6,fy));
+    // Get preview data if available
+    var pd=null;
+    if(_emuPreview&&_emuRunning){
+      var frames=_emuPreview[String(fix.id)];
+      if(frames&&frames.length>0){
+        var idx=Math.floor(_emuT)%frames.length;
+        pd=frames[idx];
       }
-      if(!pd||typeof pd!=='object'||!('pan' in pd))return;
-      if(!pd.dimmer)return;
-      // Draw beam triangle toward aim point
-      var aim=fix.aimPoint||[lp.x,(lp.y||0)-2000,lp.z||0];
-      var ax=aim[0]*W/cw,ay=H-aim[1]*H/ch_;
-      var bwDeg=pd.beamWidth||15;
-      var bwRad=bwDeg*Math.PI/180;
-      var bLen=Math.sqrt((ax-fx)*(ax-fx)+(ay-fy)*(ay-fy));
-      if(bLen<2)bLen=80; // minimum visible length
-      var halfW=Math.tan(bwRad/2)*bLen;
-      var angle=Math.atan2(ay-fy,ax-fx);
-      var lx=ax+Math.cos(angle+Math.PI/2)*halfW;
-      var ly=ay+Math.sin(angle+Math.PI/2)*halfW;
-      var rx=ax+Math.cos(angle-Math.PI/2)*halfW;
-      var ry=ay+Math.sin(angle-Math.PI/2)*halfW;
-      var alpha=(pd.dimmer/255)*0.25;
-      ctx.beginPath();ctx.moveTo(fx,fy);ctx.lineTo(lx,ly);ctx.lineTo(rx,ry);ctx.closePath();
-      ctx.fillStyle='rgba('+pd.r+','+pd.g+','+pd.b+','+alpha+')';ctx.fill();
-      // Bright dot at fixture
-      ctx.beginPath();ctx.arc(fx,fy,4,0,2*Math.PI);
-      ctx.fillStyle='rgb('+pd.r+','+pd.g+','+pd.b+')';ctx.fill();
+    }
+    // Beam color: from preview or default purple
+    var br=124,bg=58,bb=237,dimmer=0.12;
+    if(pd&&typeof pd==='object'){
+      if(pd.r!==undefined){br=pd.r;bg=pd.g;bb=pd.b;}
+      if(pd.dimmer>0)dimmer=(pd.dimmer/255)*0.3;
+      else if(br+bg+bb>10)dimmer=0.2;
+    }
+    // Draw beam cone toward aim point
+    var aim=fix.aimPoint||[fix.x,(fix.y||0)-2000,0];
+    var ax=aim[0]*W/emuCW,ay=H-aim[1]*H/emuCH;
+    var bwDeg=(pd&&pd.beamWidth)||15;
+    var bLen=Math.sqrt((ax-fx)*(ax-fx)+(ay-fy)*(ay-fy));
+    if(bLen<2)bLen=80;
+    var halfW=Math.tan(bwDeg*Math.PI/360)*bLen;
+    var angle=Math.atan2(ay-fy,ax-fx);
+    var lx=ax+Math.cos(angle+Math.PI/2)*halfW;
+    var ly=ay+Math.sin(angle+Math.PI/2)*halfW;
+    var rx=ax+Math.cos(angle-Math.PI/2)*halfW;
+    var ry=ay+Math.sin(angle-Math.PI/2)*halfW;
+    ctx.beginPath();ctx.moveTo(fx,fy);ctx.lineTo(lx,ly);ctx.lineTo(rx,ry);ctx.closePath();
+    ctx.fillStyle='rgba('+br+','+bg+','+bb+','+dimmer+')';ctx.fill();
+    // Node dot
+    ctx.beginPath();ctx.arc(fx,fy,4,0,2*Math.PI);
+    ctx.fillStyle='rgba('+br+','+bg+','+bb+',0.8)';ctx.fill();
+    // Aim dot
+    ctx.beginPath();ctx.arc(ax,ay,3,0,2*Math.PI);
+    ctx.fillStyle='rgba(255,68,68,0.6)';ctx.fill();
+    // Label
+    ctx.fillStyle='#78889a';ctx.font='8px sans-serif';ctx.textAlign='center';
+    ctx.fillText(fix.name||'DMX',fx,fy+14);
+  });
+
+  // LED fixtures from layout (positioned LED fixtures with strings)
+  layoutFixtures.forEach(function(fix){
+    if(fix.fixtureType==='dmx'||!fix.positioned)return;
+    if(!fix.strings||!fix.strings.length)return;
+    var fx=fix.x*W/emuCW,fy=H-fix.y*H/emuCH;
+    fx=Math.max(12,Math.min(W-12,fx));fy=Math.max(12,Math.min(H-12,fy));
+    // Preview colors
+    var previewColors=null;
+    if(_emuPreview&&_emuRunning){
+      var frames=_emuPreview[String(fix.id)];
+      if(frames&&frames.length>0){previewColors=frames[_emuT%frames.length];}
+    }
+    fix.strings.forEach(function(s,si){
+      if(!s||!s.leds)return;
+      var sdir=s.sdir||0,dx=dirDx[sdir]||0,dy=dirDy[sdir]||0;
+      var lenMm=s.mm||0;if(lenMm<500)lenMm=Math.max(s.leds*16,500);
+      var pxLen=dx!==0?lenMm*W/emuCW:lenMm*H/emuCH;pxLen=Math.max(pxLen,25);
+      var pc=null;if(previewColors&&si<previewColors.length)pc=previewColors[si];
+      var isAct=(pc&&typeof pc==='object'&&!Array.isArray(pc)&&pc.t!==undefined);
+      var sR=40,sG=40,sB=45,sLit=false;
+      if(pc&&Array.isArray(pc)&&(pc[0]+pc[1]+pc[2])>3){sR=pc[0];sG=pc[1];sB=pc[2];sLit=true;}
+      var dotCount=Math.max(Math.min(s.leds,Math.floor(pxLen/3)),5);
+      var eMs=isAct?((pc.e||0)*1000+(Date.now()%1000)):0;
+      for(var di=0;di<dotCount;di++){
+        var tt=(di+0.5)/dotCount,dpx=fx+dx*pxLen*tt,dpy=fy+dy*pxLen*tt;
+        var r,g,b,lit;
+        if(isAct){var px=_emuPixel(pc,di,dotCount,eMs);if(px){r=px[0];g=px[1];b=px[2];lit=(r+g+b)>3;}else{r=40;g=40;b=45;lit=false;}}
+        else{r=sR;g=sG;b=sB;lit=sLit;}
+        ctx.beginPath();ctx.arc(dpx,dpy,lit?2.5:1.5,0,2*Math.PI);
+        ctx.fillStyle='rgb('+r+','+g+','+b+')';ctx.fill();
+        if(lit){ctx.beginPath();ctx.arc(dpx,dpy,4,0,2*Math.PI);ctx.fillStyle='rgba('+r+','+g+','+b+',0.15)';ctx.fill();}
+      }
     });
-  }
+    // Node
+    ctx.beginPath();ctx.arc(fx,fy,5,0,2*Math.PI);ctx.fillStyle='#22cc66';ctx.fill();
+    ctx.fillStyle='#78889a';ctx.font='8px sans-serif';ctx.textAlign='center';
+    ctx.fillText(fix.name||'LED',fx,fy+14);
+  });
 
   // Time display
   var td=document.getElementById('emu-time');

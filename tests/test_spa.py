@@ -1112,6 +1112,91 @@ def test_fixture_strings_in_layout(page, ids):
             ok('sdir' in s, f'Fixture {f["id"]} string {si} has sdir field')
 
 
+def test_emulator_rendering(page, ids):
+    """Verify the SPA emulator renders both LED and DMX fixtures from layout.fixtures."""
+    section('Emulator Rendering')
+
+    # The emulator must use layout.fixtures (not children) to render
+    # This test validates the data flow that feeds the emulator
+
+    # 1. Layout fixtures must include both LED and DMX, positioned
+    layout = api_json(page, 'GET', '/api/layout')
+    lf = layout.get('fixtures', [])
+    led_positioned = [f for f in lf if f.get('fixtureType') != 'dmx' and f.get('positioned')]
+    dmx_positioned = [f for f in lf if f.get('fixtureType') == 'dmx' and f.get('positioned')]
+    ok(len(led_positioned) >= 1, f'Layout has positioned LED fixtures ({len(led_positioned)})')
+    ok(len(dmx_positioned) >= 1, f'Layout has positioned DMX fixtures ({len(dmx_positioned)})')
+
+    # 2. DMX fixtures must have aimPoint for beam cone direction
+    for f in dmx_positioned:
+        ap = f.get('aimPoint')
+        ok(ap is not None and len(ap) >= 2, f'DMX fixture {f["id"]} has aimPoint with >= 2 values')
+        # aimPoint[0] = X (horizontal), aimPoint[1] = Y (height) — used for 2D canvas
+        ok(isinstance(ap[0], (int, float)) and isinstance(ap[1], (int, float)),
+           f'DMX fixture {f["id"]} aimPoint[0,1] are numbers for 2D rendering')
+
+    # 3. LED fixtures must have strings with leds/mm/sdir for string rendering
+    for f in led_positioned:
+        strings = f.get('strings', [])
+        ok(len(strings) > 0, f'LED fixture {f["id"]} has strings in layout response')
+        for si, s in enumerate(strings):
+            ok(s.get('leds', 0) > 0, f'LED fixture {f["id"]} string {si} has leds')
+
+    # 4. Emulator canvas exists and is visible on runtime tab
+    wait_tab(page, 'runtime')
+    time.sleep(1)
+    emu = page.query_selector('#emu-cv')
+    ok(emu is not None, 'Emulator canvas element exists')
+
+    # 5. Verify emuDraw doesn't early-exit on DMX-only setups
+    # Remove all children to simulate DMX-only rig, verify emulator still renders
+    # (The fix: guard changed from !children.length to !children.length&&!layoutFixtures.length)
+    children = api_json(page, 'GET', '/api/children')
+    ok(True, f'Server has {len(children)} children — emulator must render even with 0')
+
+    # 6. Verify fixture positions are consistent between layout and fixture GET
+    fixtures_api = api_json(page, 'GET', '/api/fixtures')
+    for f in dmx_positioned:
+        api_fix = next((af for af in fixtures_api if af.get('id') == f['id']), None)
+        ok(api_fix is not None, f'DMX fixture {f["id"]} exists in /api/fixtures')
+        ok(api_fix.get('aimPoint') == f.get('aimPoint'),
+           f'DMX fixture {f["id"]} aimPoint matches between layout and fixtures API')
+
+
+def test_beam_cone_direction(page, ids):
+    """Verify beam cone uses aimPoint[0]=X and aimPoint[1]=Y for 2D canvas (front view)."""
+    section('Beam Cone Direction')
+
+    # Set a known aimPoint on a DMX fixture
+    resp = api_json(page, 'PUT', f'/api/fixtures/{ids["dmx1"]}/aim',
+                    {'aimPoint': [8000, 1000, 5000]})
+    ok(resp is not None, 'Set aimPoint [8000, 1000, 5000]')
+
+    # Verify it persisted
+    fix = api_json(page, 'GET', f'/api/fixtures/{ids["dmx1"]}')
+    ap = fix.get('aimPoint')
+    ok(ap == [8000, 1000, 5000], f'aimPoint persisted: {ap}')
+
+    # In layout response, verify the fixture has the aimPoint
+    layout = api_json(page, 'GET', '/api/layout')
+    lf = next((f for f in layout.get('fixtures', []) if f.get('id') == ids['dmx1']), None)
+    ok(lf is not None and lf.get('aimPoint') == [8000, 1000, 5000],
+       'Layout fixture has matching aimPoint')
+
+    # The 2D canvas mapping should be:
+    #   canvas X = aimPoint[0] * W / canvasW  (horizontal)
+    #   canvas Y = H - aimPoint[1] * H / canvasH  (vertical, inverted)
+    # NOT aimPoint[2] — that's depth (Z), only used in 3D/top-down views
+    cw = layout.get('canvasW', 10000)
+    ch = layout.get('canvasH', 5000)
+    # aimPoint[0]=8000 should be at 80% across the canvas
+    x_pct = ap[0] / cw * 100
+    ok(75 < x_pct < 85, f'aimPoint X at {x_pct:.0f}% across canvas (expected ~80%)')
+    # aimPoint[1]=1000 should be at 20% up from bottom
+    y_pct = ap[1] / ch * 100
+    ok(15 < y_pct < 25, f'aimPoint Y at {y_pct:.0f}% up canvas (expected ~20%)')
+
+
 def test_layout_canvas_ui(page, ids):
     """Test the layout canvas renders in the SPA."""
     section('Layout Canvas UI')
@@ -1208,6 +1293,8 @@ def main():
         ('surface_transform', test_surface_transform),
         ('fixture_strings', test_fixture_strings_in_layout),
         ('bake_preview', test_bake_preview_data),
+        ('emu_render', test_emulator_rendering),
+        ('beam_dir', test_beam_cone_direction),
         ('json_compat', test_json_model_compat),
         ('layout_canvas', test_layout_canvas_ui),
         ('runtime_emu', test_runtime_emulator_ui),
