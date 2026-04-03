@@ -4449,13 +4449,13 @@ function _refreshLogStatus(){
 }
 function _startLogging(){
   var path=document.getElementById('s-log-path-input').value.trim();
-  var body={};if(path)body.path=path;
+  var body=path?{path:path}:null;
   ra('POST','/api/logging/start',body,function(r){
     if(r&&r.ok){
-      document.getElementById('hs').textContent='Logging started'+(r.path?' → '+r.path:'');
+      document.getElementById('hs').textContent='Logging started'+(r.path?' \u2192 '+r.path:'');
       var lg=document.getElementById('s-log');if(lg)lg.checked=true;
     }else{
-      document.getElementById('hs').textContent='Failed: '+(r&&r.err||'unknown');
+      document.getElementById('hs').textContent='Start failed: '+(r&&r.err||'server error — check console');
     }
     _refreshLogStatus();
   });

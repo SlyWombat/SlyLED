@@ -2288,12 +2288,15 @@ def api_settings_save():
 @app.post("/api/logging/start")
 def api_logging_start():
     """Start file logging. Optional body: {path: '/path/to/file.log'}."""
-    body = request.get_json(silent=True) or {}
-    log_path = body.get("path")
-    _settings["logging"] = True
-    _save("settings", _settings)
-    _apply_logging(True, log_path)
-    return jsonify(ok=True, path=_log_handler.baseFilename if _log_handler else None)
+    try:
+        body = request.get_json(silent=True) or {}
+        log_path = body.get("path") if isinstance(body, dict) else None
+        _settings["logging"] = True
+        _save("settings", _settings)
+        _apply_logging(True, log_path)
+        return jsonify(ok=True, path=_log_handler.baseFilename if _log_handler else None)
+    except Exception as e:
+        return jsonify(ok=False, err=str(e)), 500
 
 @app.post("/api/logging/stop")
 def api_logging_stop():
