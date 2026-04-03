@@ -165,6 +165,19 @@ class SlyLedRepository @Inject constructor(
 
     // Surfaces
     suspend fun getSurfaces() = requireApi().getSurfaces()
+    suspend fun updateSurface(id: Int, posX: Int, posY: Int, scaleW: Int, scaleH: Int, opacity: Int) {
+        // Server has no PUT for surfaces — delete and recreate
+        val old = getSurfaces().find { it.id == id } ?: return
+        requireApi().deleteSurface(id)
+        requireApi().createSurface(Surface(
+            name = old.name, surfaceType = old.surfaceType, color = old.color, opacity = opacity,
+            transform = SurfaceTransform(
+                pos = listOf(posX.toDouble(), posY.toDouble(), 0.0),
+                rot = listOf(0.0, 0.0, 0.0),
+                scale = listOf(scaleW.toDouble(), scaleH.toDouble(), 100.0))
+        ))
+    }
+    suspend fun deleteSurface(id: Int) = requireApi().deleteSurface(id)
 
     // Spatial Effects
     suspend fun getSpatialEffects() = requireApi().getSpatialEffects()

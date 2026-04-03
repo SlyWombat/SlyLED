@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -41,6 +42,7 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
     var showStrings by remember { mutableStateOf(true) }
     var editFixture by remember { mutableStateOf<Fixture?>(null) }
     var placingFixtureId by remember { mutableIntStateOf(-1) }
+    var editSurface by remember { mutableStateOf<Surface?>(null) }
 
     // Zoom and pan
     var zoom by remember { mutableFloatStateOf(1f) }
@@ -99,11 +101,12 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
 
         val textMeasurer = rememberTextMeasurer()
 
-        // Zoomable + pannable canvas
+        // Zoomable + pannable canvas — clipToBounds prevents zoom overflow into lists
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(canvasW.toFloat() / canvasH)
+                .clipToBounds()
                 .background(Color(0xFF0A0A0A))
                 .transformable(transformState)
         ) {
@@ -312,14 +315,15 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
             }
         }
 
-        // Surfaces list
+        // Surfaces list — tap to edit
         if (surfaces.isNotEmpty()) {
             Spacer(Modifier.height(4.dp))
             Text("Surfaces (${surfaces.size})", fontSize = 12.sp,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
             LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 80.dp)) {
                 items(surfaces) { s ->
-                    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+                    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
+                        onClick = { editSurface = s }) {
                         Row(modifier = Modifier.padding(6.dp).fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically) {
@@ -327,8 +331,8 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                             val wm = String.format("%.1f", t.scale[0] / 1000.0)
                             val hm = String.format("%.1f", t.scale[1] / 1000.0)
                             Text(s.name.ifEmpty { "Surface ${s.id}" }, fontSize = 12.sp)
-                            Text("${wm}m × ${hm}m", fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("${wm}m × ${hm}m  pos(${t.pos[0].toInt()}, ${t.pos[1].toInt()})",
+                                fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -374,6 +378,63 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                         Text("Remove", color = MaterialTheme.colorScheme.error)
                     }
                     TextButton(onClick = { editFixture = null }) { Text("Cancel") }
+                }
+            }
+        )
+    }
+
+    // Surface edit dialog
+    editSurface?.let { surface ->
+        val t = surface.transform
+        var posX by remember(surface.id) { mutableStateOf(t.pos[0].toInt().toString()) }
+        var posY by remember(surface.id) { mutableStateOf(t.pos[1].toInt().toString()) }
+        var scaleW by remember(surface.id) { mutableStateOf(t.scale[0].toInt().toString()) }
+        var scaleH by remember(surface.id) { mutableStateOf(t.scale[1].toInt().toString()) }
+        var opacity by remember(surface.id) { mutableStateOf(surface.opacity.toString()) }
+
+        AlertDialog(
+            onDismissRequest = { editSurface = null },
+            title = { Text(surface.name.ifEmpty { "Surface ${surface.id}" }) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(value = posX, onValueChange = { posX = it },
+                            label = { Text("X (mm)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f))
+                        OutlinedTextField(value = posY, onValueChange = { posY = it },
+                            label = { Text("Y (mm)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f))
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(value = scaleW, onValueChange = { scaleW = it },
+                            label = { Text("Width (mm)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f))
+                        OutlinedTextField(value = scaleH, onValueChange = { scaleH = it },
+                            label = { Text("Height (mm)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f))
+                    }
+                    OutlinedTextField(value = opacity, onValueChange = { opacity = it },
+                        label = { Text("Opacity (0-100)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth())
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.updateSurface(surface.id,
+                        posX.toIntOrNull() ?: t.pos[0].toInt(),
+                        posY.toIntOrNull() ?: t.pos[1].toInt(),
+                        scaleW.toIntOrNull() ?: t.scale[0].toInt(),
+                        scaleH.toIntOrNull() ?: t.scale[1].toInt(),
+                        opacity.toIntOrNull() ?: surface.opacity)
+                    editSurface = null
+                }) { Text("OK") }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { viewModel.deleteSurface(surface.id); editSurface = null }) {
+                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                    }
+                    TextButton(onClick = { editSurface = null }) { Text("Cancel") }
                 }
             }
         )

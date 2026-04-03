@@ -95,4 +95,24 @@ class LayoutViewModel @Inject constructor(
             } catch (e: Exception) { _message.value = "Save failed: ${e.message}" }
         }
     }
+
+    fun updateSurface(id: Int, posX: Int, posY: Int, scaleW: Int, scaleH: Int, opacity: Int) {
+        viewModelScope.launch {
+            try {
+                repository.updateSurface(id, posX, posY, scaleW, scaleH, opacity)
+                _surfaces.value = repository.getSurfaces()
+                _message.value = "Surface updated"
+            } catch (e: Exception) { _message.value = "Update failed: ${e.message}" }
+        }
+    }
+
+    fun deleteSurface(id: Int) {
+        viewModelScope.launch {
+            try {
+                repository.deleteSurface(id)
+                _surfaces.value = repository.getSurfaces()
+                _message.value = "Surface deleted"
+            } catch (e: Exception) { _message.value = "Delete failed: ${e.message}" }
+        }
+    }
 }
