@@ -125,7 +125,7 @@ def load_registry(firmware_dir):
     p = Path(firmware_dir) / "registry.json"
     if p.exists():
         try:
-            return json.loads(p.read_text())
+            return json.loads(p.read_text(encoding="utf-8-sig"))
         except Exception:
             pass
     return {"firmware": []}

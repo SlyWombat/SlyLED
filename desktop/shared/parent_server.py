@@ -974,6 +974,8 @@ def api_fixture_set_aim(fid):
 @app.delete("/api/fixtures/<int:fid>")
 def api_fixture_delete(fid):
     global _fixtures
+    if not any(f["id"] == fid for f in _fixtures):
+        return jsonify(ok=False, err="fixture not found"), 404
     _fixtures = [f for f in _fixtures if f["id"] != fid]
     _save("fixtures", _fixtures)
     return jsonify(ok=True)
@@ -1538,6 +1540,8 @@ def api_timeline_update(tid):
 @app.delete("/api/timelines/<int:tid>")
 def api_timeline_delete(tid):
     global _timelines
+    if not any(t["id"] == tid for t in _timelines):
+        return jsonify(ok=False, err="timeline not found"), 404
     _timelines = [t for t in _timelines if t["id"] != tid]
     _save("timelines", _timelines)
     return jsonify(ok=True)
@@ -2486,6 +2490,34 @@ def api_show_presets():
     ]
     return jsonify(presets)
 
+@app.get("/api/show/export")
+def api_show_export():
+    """Bundle actions + spatial effects + timelines as a portable show file."""
+    return jsonify({"type": "slyled-show", "version": 1,
+                    "actions": _actions, "spatialEffects": _spatial_fx,
+                    "timelines": _timelines})
+
+@app.post("/api/show/import")
+def api_show_import():
+    """Replace all actions, spatial effects, and timelines from a show file."""
+    global _actions, _spatial_fx, _timelines, _nxt_a, _nxt_sfx, _nxt_tl
+    data = request.get_json(silent=True) or {}
+    if data.get("type") != "slyled-show":
+        return jsonify(ok=False, err="not a slyled-show file"), 400
+    with _lock:
+        _actions = data.get("actions", [])
+        _spatial_fx = data.get("spatialEffects", [])
+        _timelines = data.get("timelines", [])
+        _nxt_a = max((a["id"] for a in _actions), default=-1) + 1
+        _nxt_sfx = max((f["id"] for f in _spatial_fx), default=-1) + 1
+        _nxt_tl = max((t["id"] for t in _timelines), default=-1) + 1
+        _save("actions", _actions)
+        _save("spatial_fx", _spatial_fx)
+        _save("timelines", _timelines)
+    return jsonify(ok=True, actions=len(_actions), spatialEffects=len(_spatial_fx),
+                   timelines=len(_timelines),
+                   runners=0, flights=0, shows=0)
+
 #  "  "  Factory reset  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
 _DEFAULT_SETTINGS = {
@@ -2915,7 +2947,7 @@ def api_firmware_latest():
     if not rel:
         return jsonify(ok=False, err="Could not fetch release info from GitHub"), 502
     # Include registry firmware version + whether release has firmware binaries
-    registry = load_registry(_FW_DIR)
+    registry = load_registry(_FW_DIR).get("firmware", [])
     reg_versions = {e.get("board"): e.get("version", "0.0") for e in registry}
     has_fw = any(a.get("name", "").endswith(".bin") for a in rel.get("assets", []))
     return jsonify(**rel, registryVersion=max(reg_versions.values(), default="0.0"),
@@ -2930,7 +2962,7 @@ def api_firmware_check():
     if not rel:
         return jsonify(ok=False, err="Could not fetch release info"), 502
     # Use registry.json firmware version, not GitHub tag (desktop releases != firmware releases)
-    registry = load_registry(_FW_DIR)
+    registry = load_registry(_FW_DIR).get("firmware", [])
     reg_versions = {e.get("board"): e.get("version", "0.0") for e in registry}
     gh_version = rel.get("version", "0.0")
     # Only use GitHub version if release has firmware binaries attached
