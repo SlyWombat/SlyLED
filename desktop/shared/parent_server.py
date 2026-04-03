@@ -2347,7 +2347,7 @@ def api_settings_get():
 def api_settings_save():
     body = request.get_json(silent=True) or {}
     with _lock:
-        for k in ("name", "units", "canvasW", "canvasH", "darkMode", "runnerLoop", "globalBrightness", "logging"):
+        for k in ("name", "units", "canvasW", "canvasH", "darkMode", "runnerLoop", "globalBrightness", "logging", "logPath"):
             if k in body:
                 _settings[k] = body[k]
         _layout["canvasW"] = _settings["canvasW"]
@@ -2461,44 +2461,126 @@ def api_action_delete(aid):
 
 @app.get("/api/config/export")
 def api_config_export():
-    """Bundle children + layout as a portable config file."""
-    return jsonify({"type": "slyled-config", "version": 1,
-                    "children": _children, "layout": _layout})
+    """Bundle children + fixtures + layout as a portable config file."""
+    return jsonify({"type": "slyled-config", "version": 2,
+                    "children": _children, "fixtures": _fixtures, "layout": _layout})
 
 @app.post("/api/config/import")
 def api_config_import():
-    """Merge children by hostname, replace layout with ID remapping."""
-    global _nxt_c, _layout
+    """Merge children by hostname, auto-create fixtures, remap layout IDs."""
+    global _nxt_c, _nxt_fix, _layout
     data = request.get_json(silent=True) or {}
     if data.get("type") != "slyled-config":
         return jsonify(ok=False, err="not a slyled-config file"), 400
     imported_children = data.get("children", [])
     imported_layout = data.get("layout")
-    added = updated = 0
-    id_map = {}  # old_id -> new_id
+    added = updated = fixtures_created = 0
+    child_id_map = {}  # old_child_id -> new_child_id
+    fixture_id_map = {}  # old_layout_id -> new_fixture_id
     with _lock:
+        # Import children
         for c in imported_children:
             old_id = c.get("id", -1)
             ex = next((x for x in _children
                         if x.get("hostname") == c.get("hostname")), None)
             if ex:
-                id_map[old_id] = ex["id"]
+                child_id_map[old_id] = ex["id"]
                 ex.update({k: v for k, v in c.items() if k != "id"})
                 updated += 1
             else:
                 c = dict(c)
                 c["id"] = _nxt_c
-                id_map[old_id] = _nxt_c
+                child_id_map[old_id] = _nxt_c
                 _nxt_c += 1
                 _children.append(c)
                 added += 1
         _save("children", _children)
+
+        # Auto-create fixtures for children that don't already have one
+        for c in _children:
+            cid = c["id"]
+            # Skip if fixture already exists for this child
+            if any(f.get("childId") == cid for f in _fixtures):
+                continue
+            # Create LED fixture if child has strings
+            sc = c.get("sc", 0)
+            strings = c.get("strings", [])[:sc]
+            if not strings or not any(s.get("leds", 0) > 0 for s in strings):
+                # DMX bridge — create as DMX fixture placeholder
+                if c.get("type") == "dmx":
+                    continue  # bridges don't need auto-fixtures
+                continue
+            f = {
+                "id": _nxt_fix,
+                "name": c.get("name") or c.get("hostname") or f"Fixture {_nxt_fix}",
+                "fixtureType": "led", "type": "linear", "childId": cid,
+                "strings": [{"leds": s.get("leds", 0), "mm": s.get("mm", 1000),
+                              "sdir": s.get("sdir", 0)} for s in strings if s.get("leds", 0) > 0],
+                "rotation": [0, 0, 0], "aoeRadius": 1000,
+            }
+            _fixtures.append(f)
+            # Map: if layout had an entry for this child's old ID, remap to new fixture ID
+            for old_cid, new_cid in child_id_map.items():
+                if new_cid == cid:
+                    fixture_id_map[old_cid] = _nxt_fix
+            fixture_id_map[cid] = _nxt_fix
+            _nxt_fix += 1
+            fixtures_created += 1
+        _save("fixtures", _fixtures)
+
+        # Remap layout position IDs
         if imported_layout:
             _layout = imported_layout
             for lc in _layout.get("children", []):
-                lc["id"] = id_map.get(lc.get("id"), lc.get("id"))
+                old_id = lc.get("id")
+                # Try fixture map first (old fixture/child ID → new fixture ID)
+                new_id = fixture_id_map.get(old_id)
+                if new_id is None:
+                    # Try child map
+                    new_cid = child_id_map.get(old_id)
+                    if new_cid is not None:
+                        new_id = fixture_id_map.get(new_cid, new_cid)
+                if new_id is not None:
+                    lc["id"] = new_id
             _save("layout", _layout)
-    return jsonify(ok=True, added=added, updated=updated)
+
+        # Import explicit fixtures from config (v2+ includes fixtures array)
+        imported_fixtures = data.get("fixtures", [])
+        for f in imported_fixtures:
+            old_fid = f.get("id", -1)
+            # Skip if we already auto-created a fixture for this child
+            cid = f.get("childId")
+            if cid is not None:
+                new_cid = child_id_map.get(cid, cid)
+                if any(ef.get("childId") == new_cid for ef in _fixtures):
+                    # Already exists — update fixture_id_map for layout remapping
+                    existing = next(ef for ef in _fixtures if ef.get("childId") == new_cid)
+                    fixture_id_map[old_fid] = existing["id"]
+                    continue
+            # Create the fixture with a new ID
+            f = dict(f)
+            new_fid = _nxt_fix
+            fixture_id_map[old_fid] = new_fid
+            f["id"] = new_fid
+            if cid is not None:
+                f["childId"] = child_id_map.get(cid, cid)
+            _fixtures.append(f)
+            _nxt_fix += 1
+            fixtures_created += 1
+        _save("fixtures", _fixtures)
+
+        # Re-remap layout IDs with the complete fixture_id_map
+        if imported_layout:
+            for lc in _layout.get("children", []):
+                old_id = lc.get("id")
+                new_id = fixture_id_map.get(old_id)
+                if new_id is not None:
+                    lc["id"] = new_id
+            _save("layout", _layout)
+
+    log.info("CONFIG IMPORT: %d children added, %d updated, %d fixtures created, child_map=%s, fix_map=%s",
+             added, updated, fixtures_created, child_id_map, fixture_id_map)
+    return jsonify(ok=True, added=added, updated=updated, fixturesCreated=fixtures_created)
 
 @app.post("/api/show/preset")
 def api_show_preset():

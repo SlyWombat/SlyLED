@@ -206,19 +206,19 @@ body.light .li:hover{border-color:#3b82f6}
     <label style='display:flex;align-items:center;gap:.5em;margin-top:.8em'>
       <input type='checkbox' id='s-dm' data-tip='setDark'> Dark Mode
     </label>
-    <label style='display:flex;align-items:center;gap:.5em;margin-top:.4em'>
-      <input type='checkbox' id='s-log' data-tip='setLog'> Enable Logging
-    </label>
-    <div style='margin-top:.4em'>
-      <label style='font-size:.82em;color:#94a3b8'>Log file path (blank = default)</label>
-      <input id='s-log-path-input' placeholder='e.g. C:\logs\slyled.log' style='width:100%;margin-top:.2em;padding:.3em;font-size:.82em'>
+    <div style='margin-top:.8em;padding:.6em;background:#0f172a;border:1px solid #1e293b;border-radius:4px'>
+      <label style='font-size:.85em;font-weight:bold;color:#e2e8f0'>Debug Logging</label>
+      <div style='margin-top:.3em'>
+        <label style='font-size:.82em;color:#94a3b8'>Log file path (blank = default data/logs/)</label>
+        <input id='s-log-path-input' placeholder='e.g. C:\logs\slyled.log or /tmp/debug.log' style='width:100%;margin-top:.2em;padding:.3em;font-size:.82em'>
+      </div>
+      <div style='margin-top:.5em;display:flex;gap:.5em;align-items:center'>
+        <button class='btn' id='btn-log-start' onclick='_startLogging()' style='font-size:.78em;background:#14532d;color:#86efac'>Start Logging</button>
+        <button class='btn' id='btn-log-stop' onclick='_stopLogging()' style='font-size:.78em;background:#532;color:#fca5a5'>Stop Logging</button>
+        <span id='s-log-status' style='font-size:.75em;color:#666'></span>
+      </div>
+      <div id='s-log-path' style='font-size:.72em;color:#64748b;margin-top:.3em'></div>
     </div>
-    <div style='margin-top:.4em;display:flex;gap:.5em;align-items:center'>
-      <button class='btn' onclick='_startLogging()' style='font-size:.78em;background:#14532d;color:#86efac'>Start Logging</button>
-      <button class='btn' onclick='_stopLogging()' style='font-size:.78em;background:#532;color:#fca5a5'>Stop Logging</button>
-      <span id='s-log-status' style='font-size:.72em;color:#666'></span>
-    </div>
-    <div id='s-log-path' style='font-size:.72em;color:#64748b;margin-top:.2em'></div>
     <div style='margin-top:1em'>
       <button class='btn btn-on' onclick='saveSettings(this)'>Save Settings</button>
     </div>
@@ -4574,8 +4574,10 @@ function loadSettings(){
     document.getElementById('s-cw').value=d.canvasW||10000;
     document.getElementById('s-ch').value=d.canvasH||5000;
     var cb=document.getElementById('s-dm');if(cb)cb.checked=(d.darkMode!==0);
-    var lg=document.getElementById('s-log');if(lg)lg.checked=!!d.logging;
     applyDarkMode(d.darkMode!==0);
+    // Restore saved log path
+    var lpi=document.getElementById('s-log-path-input');
+    if(lpi&&d.logPath)lpi.value=d.logPath;
     _refreshLogStatus();
   });
   loadPatchView();
@@ -4585,20 +4587,28 @@ function _refreshLogStatus(){
     if(!st)return;
     var statusEl=document.getElementById('s-log-status');
     var pathEl=document.getElementById('s-log-path');
-    if(statusEl)statusEl.textContent=st.enabled?'Active':'Stopped';
-    if(statusEl)statusEl.style.color=st.enabled?'#86efac':'#666';
-    if(pathEl)pathEl.textContent=st.path?('Log: '+st.path):'';
+    var startBtn=document.getElementById('btn-log-start');
+    var stopBtn=document.getElementById('btn-log-stop');
+    if(statusEl){
+      statusEl.textContent=st.enabled?'\u25cf Logging Active':'\u25cb Stopped';
+      statusEl.style.color=st.enabled?'#86efac':'#666';
+    }
+    if(pathEl)pathEl.textContent=st.path?('File: '+st.path):'';
+    if(startBtn)startBtn.disabled=!!st.enabled;
+    if(stopBtn)stopBtn.disabled=!st.enabled;
   });
 }
 function _startLogging(){
   var path=document.getElementById('s-log-path-input').value.trim();
-  var body=path?{path:path}:null;
+  // Save the log path to settings so it persists across page loads
+  var body=path?{path:path}:{};
   ra('POST','/api/logging/start',body,function(r){
     if(r&&r.ok){
-      document.getElementById('hs').textContent='Logging started'+(r.path?' \u2192 '+r.path:'');
-      var lg=document.getElementById('s-log');if(lg)lg.checked=true;
+      document.getElementById('hs').textContent='Logging started: '+(r.path||'default');
+      // Persist path in settings
+      if(path)ra('POST','/api/settings',{logPath:path},function(){});
     }else{
-      document.getElementById('hs').textContent='Start failed: '+(r&&r.err||'server error — check console');
+      document.getElementById('hs').textContent='Start failed: '+(r&&r.err||'server error');
     }
     _refreshLogStatus();
   });
@@ -4606,7 +4616,6 @@ function _startLogging(){
 function _stopLogging(){
   ra('POST','/api/logging/stop',null,function(r){
     if(r&&r.ok)document.getElementById('hs').textContent='Logging stopped';
-    var lg=document.getElementById('s-log');if(lg)lg.checked=false;
     _refreshLogStatus();
   });
 }
@@ -4663,18 +4672,16 @@ function saveSettings(btn){
   _btnSaving(btn);
   var dm=document.getElementById('s-dm').checked?1:0;
   applyDarkMode(dm);
-  var logOn=document.getElementById('s-log').checked;
+  var logPath=document.getElementById('s-log-path-input').value.trim();
   ra('POST','/api/settings',{
     name:document.getElementById('s-nm').value.trim(),
     units:parseInt(document.getElementById('s-un').value)||0,
     canvasW:parseInt(document.getElementById('s-cw').value)||10000,
     canvasH:parseInt(document.getElementById('s-ch').value)||5000,
     darkMode:dm,
-    logging:logOn
+    logPath:logPath||''
   },function(r){
     _btnSaved(btn,r&&r.ok);
-    var lp=document.getElementById('s-log-path');
-    if(lp)lp.textContent=logOn?'Logs saved to data/logs/ folder':'';
   });
 }
 
