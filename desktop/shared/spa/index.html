@@ -747,6 +747,7 @@ function _renderSetup(){
             status='<span class="badge" style="background:#7c3aed;color:#fff">Configured</span>';
             chLeds=(f.dmxChannelCount||0)+' ch';
             actions='<button class="btn" onclick="editFixture('+f.id+')" style="background:#446;color:#fff">Edit</button>'
+              +' <button class="btn" onclick="showDmxDetails('+f.id+')" style="background:#3b1f7c;color:#e9d5ff">Details</button>'
               +' <button class="btn btn-off" onclick="removeFixture('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
           }
           h+='<tr><td><b>'+escapeHtml(f.name)+'</b></td><td>'+typeBadge+'</td><td>'+conn+'</td><td>'+status+'</td><td>'+chLeds+'</td><td>'+actions+'</td></tr>';
@@ -769,10 +770,16 @@ function showAddFixtureModal(){
     +'<label>IP Address</label><input id="af-ip" placeholder="x.x.x.x" style="width:100%">'
     +'</div>'
     +'<div id="af-dmx" style="display:none">'
+    +'<div style="margin-bottom:.6em;padding:.5em;background:#0f172a;border:1px solid #1e3a5f;border-radius:4px">'
+    +'<label style="font-size:.82em;color:#93c5fd">Search Fixture Library</label>'
+    +'<div style="display:flex;gap:.3em;margin:.3em 0"><input id="af-ofl-q" placeholder="e.g. par, moving head, chauvet..." style="flex:1;padding:.3em;font-size:.85em" onkeydown="if(event.key===\'Enter\')_afOflSearch()">'
+    +'<button class="btn" style="font-size:.75em;padding:.2em .5em;background:#1e3a5f;color:#93c5fd" onclick="_afOflSearch()">Search</button></div>'
+    +'<div id="af-ofl-results" style="max-height:150px;overflow-y:auto;font-size:.8em"></div>'
+    +'</div>'
     +'<label>Name</label><input id="af-name" placeholder="Moving Head 1" style="width:100%;margin-bottom:.4em">'
-    +'<label>Universe</label><input id="af-uni" type="number" value="1" min="1" style="width:100%;margin-bottom:.4em">'
-    +'<label>Start Address (1–512)</label><input id="af-addr" type="number" value="1" min="1" max="512" style="width:100%;margin-bottom:.4em">'
-    +'<label>Channel Count</label><input id="af-ch" type="number" value="3" min="1" max="512" style="width:100%;margin-bottom:.4em">'
+    +'<div style="display:flex;gap:.5em"><div style="flex:1"><label>Universe</label><input id="af-uni" type="number" value="1" min="1" style="width:100%;margin-bottom:.4em"></div>'
+    +'<div style="flex:1"><label>Start Address</label><input id="af-addr" type="number" value="1" min="1" max="512" style="width:100%;margin-bottom:.4em"></div>'
+    +'<div style="flex:1"><label>Channels</label><input id="af-ch" type="number" value="3" min="1" max="512" style="width:100%;margin-bottom:.4em"></div></div>'
     +'<label>Geometry</label><select id="af-geom" style="width:100%;margin-bottom:.4em"><option value="point">Point</option><option value="linear">Linear</option></select>'
     +'<label>Profile</label>'
     +'<select id="af-prof" style="width:100%"><option value="">— None (generic channels) —</option></select>'
@@ -816,6 +823,47 @@ function _toggleAddFixFields(){
       });
     }
   }
+}
+function _afOflSearch(){
+  var q=document.getElementById('af-ofl-q').value.trim();
+  var el=document.getElementById('af-ofl-results');if(!el)return;
+  if(q.length<2){el.innerHTML='<span style="color:#f66">Enter at least 2 characters</span>';return;}
+  el.innerHTML='<span style="color:#888">Searching OFL...</span>';
+  ra('GET','/api/dmx-profiles/ofl/search?q='+encodeURIComponent(q)+'&limit=20',null,function(r){
+    if(!el)return;
+    if(!r||r.err){el.innerHTML='<span style="color:#f66">'+(r&&r.err||'Search failed')+'</span>';return;}
+    if(!r.length){el.innerHTML='<span style="color:#888">No results</span>';return;}
+    var h='';
+    r.forEach(function(f){
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:.2em 0;border-bottom:1px solid #1e293b">'
+        +'<span>'+escapeHtml(f.name)+' <span style="color:#64748b;font-size:.85em">'+escapeHtml(f.manufacturerName)+'</span></span>'
+        +'<button class="btn" style="font-size:.7em;padding:.15em .4em;background:#14532d;color:#86efac" '
+        +'onclick="_afSelectOfl(\''+f.manufacturer+'\',\''+f.fixture+'\',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Select</button></div>';
+    });
+    el.innerHTML=h;
+  });
+}
+function _afSelectOfl(mfr,fix,displayName){
+  var el=document.getElementById('af-ofl-results');
+  if(el)el.innerHTML='<span style="color:#86efac">Importing '+displayName+'...</span>';
+  ra('POST','/api/dmx-profiles/ofl/import-by-id',{manufacturer:mfr,fixture:fix},function(r){
+    if(r&&r.ok&&r.profiles&&r.profiles.length){
+      var p=r.profiles[0];
+      // Fill form with imported profile data
+      var nameEl=document.getElementById('af-name');if(nameEl&&!nameEl.value)nameEl.value=p.name;
+      var chEl=document.getElementById('af-ch');if(chEl)chEl.value=p.channels;
+      // Add to profile dropdown and select it
+      var sel=document.getElementById('af-prof');
+      if(sel){
+        var exists=false;
+        for(var i=0;i<sel.options.length;i++){if(sel.options[i].value===p.id){sel.selectedIndex=i;exists=true;break;}}
+        if(!exists){var o=document.createElement('option');o.value=p.id;o.textContent=p.name+' ('+p.channels+'ch)';sel.appendChild(o);sel.value=p.id;}
+      }
+      if(el)el.innerHTML='<span style="color:#86efac">Selected: '+escapeHtml(p.name)+' ('+p.channels+'ch)</span>';
+    }else{
+      if(el)el.innerHTML='<span style="color:#f66">Import failed: '+(r&&r.err||'unknown')+'</span>';
+    }
+  });
 }
 function _submitAddFixture(){
   var ft=document.getElementById('aft').value;
@@ -1641,6 +1689,77 @@ function dmxTestBlackout(fid){
     ra('POST','/api/dmx/fixture/'+fid+'/test',{channels:chs},function(){});
   });
 }
+
+function showDmxDetails(fid){
+  var fix=null;(_fixtures||[]).forEach(function(f){if(f.id===fid)fix=f;});
+  if(!fix)return;
+  var h='<div style="margin-bottom:.5em;font-size:.82em;color:#94a3b8">'
+    +'Universe '+fix.dmxUniverse+' | Address '+(fix.dmxStartAddr||1)+' | '+fix.dmxChannelCount+' channels'
+    +(fix.dmxProfileId?' | Profile: <b>'+escapeHtml(fix.dmxProfileId)+'</b>':'')
+    +'</div>';
+  h+='<div id="dmx-detail-ch" style="max-height:350px;overflow-y:auto"><p style="color:#888;font-size:.82em">Loading channels...</p></div>';
+  h+='<div style="margin-top:.6em;display:flex;gap:.5em;flex-wrap:wrap">'
+    +'<button class="btn btn-on" onclick="_dmxDetailAllOn('+fid+')" style="font-size:.78em">All On (255)</button>'
+    +'<button class="btn btn-off" onclick="_dmxDetailBlackout('+fid+')" style="font-size:.78em">Blackout</button>'
+    +'<button class="btn" onclick="_dmxDetailWhite('+fid+')" style="font-size:.78em;background:#554;color:#fed">White</button>'
+    +'<button class="btn" onclick="_dmxDetailRed('+fid+')" style="font-size:.78em;background:#522;color:#f88">Red</button>'
+    +'<button class="btn" onclick="_dmxDetailGreen('+fid+')" style="font-size:.78em;background:#252;color:#8f8">Green</button>'
+    +'<button class="btn" onclick="_dmxDetailBlue('+fid+')" style="font-size:.78em;background:#225;color:#88f">Blue</button>'
+    +'</div>';
+  document.getElementById('modal-title').textContent=fix.name+' — Channel Test';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='flex';
+  // Load channels
+  ra('GET','/api/dmx/fixture/'+fid+'/channels',null,function(d){
+    var el=document.getElementById('dmx-detail-ch');if(!el||!d||!d.channels)return;
+    var ch='';
+    d.channels.forEach(function(c,ci){
+      var caps=c.capabilities||[];
+      var capLbl=_capLabel(caps,c.value);
+      ch+='<div style="display:flex;align-items:center;gap:.4em;margin:.3em 0">'
+        +'<span style="width:100px;font-size:.78em;color:#94a3b8;white-space:nowrap;overflow:hidden">'+escapeHtml(c.name)+'</span>'
+        +'<input type="range" min="0" max="255" value="'+c.value+'" class="dmx-detail-slider" data-offset="'+c.offset+'" style="flex:1" '
+        +'data-caps=\''+JSON.stringify(caps).replace(/'/g,"&#39;")+'\' '
+        +'oninput="this.nextElementSibling.textContent=this.value;var cl=this.parentNode.querySelector(\'.cap-lbl\');if(cl)cl.textContent=_capLabel(JSON.parse(this.dataset.caps),parseInt(this.value));dmxTestCh('+fid+','+c.offset+',parseInt(this.value))">'
+        +'<span style="width:30px;font-size:.78em;text-align:right">'+c.value+'</span>'
+        +'</div>';
+      if(caps.length>1){ch+='<div class="cap-lbl" style="font-size:.65em;color:#7c3aed;margin-left:105px;margin-bottom:.1em">'+escapeHtml(capLbl)+'</div>';}
+    });
+    el.innerHTML=ch;
+  });
+}
+function _dmxDetailSetAll(fid,val){
+  var sliders=document.querySelectorAll('.dmx-detail-slider');
+  var chs=[];
+  sliders.forEach(function(s){s.value=val;s.nextElementSibling.textContent=val;chs.push({offset:parseInt(s.dataset.offset),value:val});});
+  ra('POST','/api/dmx/fixture/'+fid+'/test',{channels:chs},function(){});
+}
+function _dmxDetailAllOn(fid){_dmxDetailSetAll(fid,255);}
+function _dmxDetailBlackout(fid){_dmxDetailSetAll(fid,0);}
+function _dmxDetailColor(fid,chTypes){
+  // Set color channels by type name
+  ra('GET','/api/dmx/fixture/'+fid+'/channels',null,function(d){
+    if(!d||!d.channels)return;
+    var chs=[];
+    d.channels.forEach(function(c){
+      var v=chTypes[c.type]!==undefined?chTypes[c.type]:(c.type==='dimmer'?255:0);
+      chs.push({offset:c.offset,value:v});
+    });
+    ra('POST','/api/dmx/fixture/'+fid+'/test',{channels:chs},function(){
+      // Update sliders
+      var sliders=document.querySelectorAll('.dmx-detail-slider');
+      sliders.forEach(function(s){
+        var off=parseInt(s.dataset.offset);
+        var ch=chs.find(function(c){return c.offset===off;});
+        if(ch){s.value=ch.value;s.nextElementSibling.textContent=ch.value;}
+      });
+    });
+  });
+}
+function _dmxDetailWhite(fid){_dmxDetailColor(fid,{red:255,green:255,blue:255,white:255,dimmer:255});}
+function _dmxDetailRed(fid){_dmxDetailColor(fid,{red:255,green:0,blue:0,white:0,dimmer:255});}
+function _dmxDetailGreen(fid){_dmxDetailColor(fid,{red:0,green:255,blue:0,white:0,dimmer:255});}
+function _dmxDetailBlue(fid){_dmxDetailColor(fid,{red:0,green:0,blue:255,white:0,dimmer:255});}
 
 // ── Profile Library UI ───────────────────────────────────────────────────────
 var _profileCatColors={'par':'#059669','wash':'#2563eb','spot':'#7c3aed','moving-head':'#dc2626','strobe':'#f59e0b','fog':'#6b7280','laser':'#ec4899','other':'#446'};

@@ -78,9 +78,16 @@ A fixture is the primary entity on the stage. It wraps physical hardware and add
 
 ### Adding DMX Fixtures
 1. Click **Add Fixture** → select "DMX" type
-2. Set universe, start address, channel count
-3. Choose a DMX profile (Generic RGB, Moving Head, etc.)
-4. Set the aim point — where the beam points in 3D space
+2. **Search the fixture library**: type a name (e.g., "par", "moving head") to find and import a matching OFL profile — this auto-fills channel count and profile
+3. Set universe, start address, and adjust channel count if needed
+4. Click **Add** — the fixture appears on the Setup list
+
+### Testing DMX Channels
+On the Setup tab, click **Details** on any DMX fixture to open the channel test panel:
+- **Sliders** for every channel with live DMX output
+- **Quick buttons**: All On, Blackout, White, Red, Green, Blue
+- **Capability labels** show what each value range does (e.g., "Strobe slow→fast")
+- Changes take effect immediately on the physical fixture via Art-Net/sACN
 
 ### Fixture Types
 | Type | Description |
