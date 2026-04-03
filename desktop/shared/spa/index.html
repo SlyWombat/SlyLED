@@ -691,7 +691,81 @@ function _renderTimelineDash(el,settings,tlStatus){
 
   var tid=settings.activeTimeline;
   h+='<div style="margin-top:.6em"><button class="btn btn-off" onclick="tlDashStop('+tid+')">Stop Show</button></div></div>';
+  // Stage preview canvas
+  h+='<div class="card" style="max-width:700px;margin-top:.6em">';
+  h+='<div class="card-title">Stage Preview</div>';
+  h+='<canvas id="dash-emu-cv" width="680" height="240" style="width:100%;background:#060a12;border-radius:4px"></canvas>';
+  h+='</div>';
   el.innerHTML=h;
+  // Draw the emulator on the dashboard canvas
+  _dashEmuDraw();
+}
+
+function _dashEmuDraw(){
+  var cv=document.getElementById('dash-emu-cv');if(!cv)return;
+  // Ensure emulator stage data is loaded
+  if(!_emuStage){
+    emuLoadStage();
+    setTimeout(_dashEmuDraw,500);return;
+  }
+  // Reuse the main emuDraw logic by temporarily swapping the canvas ID
+  var origCv=document.getElementById('emu-cv');
+  // Just call emuDraw with the dashboard canvas
+  var ctx=cv.getContext('2d');
+  var W=cv.width,H=cv.height;
+  ctx.fillStyle='#060a12';ctx.fillRect(0,0,W,H);
+  if(!_emuStage)return;
+  var layout=_emuStage.layout;
+  var cw=(layout&&layout.canvasW)||10000;
+  var ch=(layout&&layout.canvasH)||5000;
+  var layoutFixtures=(layout&&layout.fixtures)||[];
+  if(!layoutFixtures.length)return;
+  // Stage border
+  ctx.strokeStyle='#1e3a5f';ctx.lineWidth=1;ctx.strokeRect(1,1,W-2,H-2);
+  // Surfaces
+  (_emuStage.surfaces||[]).forEach(function(s){
+    var t=s.transform||{pos:[0,0,0],scale:[2000,1500,1]};
+    var sx=t.pos[0]*W/cw,sy=H-t.pos[1]*H/ch;
+    var sw=t.scale[0]*W/cw,sh=t.scale[1]*H/ch;
+    ctx.globalAlpha=(s.opacity||30)/100;ctx.fillStyle=s.color||'#334155';
+    ctx.fillRect(Math.max(0,sx),Math.max(0,sy-sh),Math.min(W,sx+sw)-Math.max(0,sx),Math.min(H,sy)-Math.max(0,sy-sh));
+    ctx.globalAlpha=1;
+  });
+  var emuCW=_emuStage.cw||10000,emuCH=_emuStage.ch||5000;
+  // DMX fixtures
+  layoutFixtures.forEach(function(fix){
+    if(fix.fixtureType!=='dmx'||!fix.positioned)return;
+    var fx=fix.x*W/emuCW,fy=H-fix.y*H/emuCH;
+    var aim=fix.aimPoint||[fix.x,(fix.y||0)-2000,0];
+    var ax=aim[0]*W/emuCW,ay=H-aim[1]*H/emuCH;
+    var bLen=Math.sqrt((ax-fx)*(ax-fx)+(ay-fy)*(ay-fy));if(bLen<2)bLen=60;
+    var bwDeg=(window._profileCache&&fix.dmxProfileId&&window._profileCache[fix.dmxProfileId])?window._profileCache[fix.dmxProfileId].beamWidth||15:15;
+    var halfW=Math.tan(bwDeg*Math.PI/360)*bLen;
+    var angle=Math.atan2(ay-fy,ax-fx);
+    ctx.beginPath();ctx.moveTo(fx,fy);
+    ctx.lineTo(ax+Math.cos(angle+Math.PI/2)*halfW,ay+Math.sin(angle+Math.PI/2)*halfW);
+    ctx.lineTo(ax+Math.cos(angle-Math.PI/2)*halfW,ay+Math.sin(angle-Math.PI/2)*halfW);
+    ctx.closePath();ctx.fillStyle='rgba(124,58,237,0.12)';ctx.fill();
+    ctx.beginPath();ctx.arc(fx,fy,3,0,2*Math.PI);ctx.fillStyle='rgba(124,58,237,0.8)';ctx.fill();
+    ctx.fillStyle='#78889a';ctx.font='7px sans-serif';ctx.textAlign='center';ctx.fillText(fix.name||'',fx,fy+12);
+  });
+  // LED fixtures
+  layoutFixtures.forEach(function(fix){
+    if(fix.fixtureType==='dmx'||!fix.positioned||!fix.strings||!fix.strings.length)return;
+    var fx=fix.x*W/emuCW,fy=H-fix.y*H/emuCH;
+    var dirDx=[1,0,-1,0],dirDy=[0,-1,0,1];
+    fix.strings.forEach(function(s){
+      if(!s||!s.leds)return;
+      var dx=dirDx[s.sdir||0]||0,dy=dirDy[s.sdir||0]||0;
+      var lenMm=s.mm||500;var pxLen=dx?lenMm*W/emuCW:lenMm*H/emuCH;pxLen=Math.max(pxLen,15);
+      for(var di=0;di<Math.min(s.leds,30);di++){
+        var t=(di+0.5)/Math.min(s.leds,30);
+        ctx.beginPath();ctx.arc(fx+dx*pxLen*t,fy+dy*pxLen*t,1.5,0,2*Math.PI);ctx.fillStyle='#334';ctx.fill();
+      }
+    });
+    ctx.beginPath();ctx.arc(fx,fy,3,0,2*Math.PI);ctx.fillStyle='#22cc66';ctx.fill();
+    ctx.fillStyle='#78889a';ctx.font='7px sans-serif';ctx.textAlign='center';ctx.fillText(fix.name||'',fx,fy+12);
+  });
 }
 
 function tlDashStop(tid){
@@ -3175,8 +3249,9 @@ function emuLoadStage(){
     ra('GET','/api/children',null,function(ch){
       ra('GET','/api/fixtures',null,function(fx){
         ra('GET','/api/surfaces',null,function(surfs){
+        ra('GET','/api/spatial-effects',null,function(sfx){
           _emuStage={layout:lay,children:ch||[],fixtures:fx||[],surfaces:surfs||[],
-            cw:(lay||{}).canvasW||10000,ch:(lay||{}).canvasH||5000};
+            spatialFx:sfx||[],cw:(lay||{}).canvasW||10000,ch:(lay||{}).canvasH||5000};
           // Cache profile beamWidths for beam cone rendering
           if(!window._profileCache){
             window._profileCache={};
@@ -3185,6 +3260,7 @@ function emuLoadStage(){
               emuDraw();
             });
           }else{emuDraw();}
+        });
         });
       });
     });
@@ -3417,6 +3493,67 @@ function emuDraw(){
       ctx.fillText(s.name||'',clX+3,clY+10);
     }
   });
+
+  // Spatial field sweep visualization (when show is running)
+  if(_emuRunning&&_emuStage&&_emuStage.spatialFx){
+    var sfxMap={};_emuStage.spatialFx.forEach(function(f){sfxMap[f.id]=f;});
+    // Find active timeline clips to know which effects are playing
+    var activeTl=_curTl;
+    if(activeTl){
+      var tlDur=activeTl.durationS||30;
+      var t=activeTl.loop?(_emuT%tlDur):Math.min(_emuT,tlDur);
+      (activeTl.tracks||[]).forEach(function(track){
+        (track.clips||[]).forEach(function(clip){
+          var eid=clip.effectId;if(eid===undefined||eid===null)return;
+          var fx=sfxMap[eid];if(!fx)return;
+          var cs=clip.startS||0,cd=clip.durationS||tlDur;
+          if(t<cs||t>cs+cd)return; // clip not active
+          var motion=fx.motion||{};
+          var dur=motion.durationS||1;
+          var clipT=t-cs;
+          var progress=Math.min(clipT/dur,1.0);
+          // Easing
+          var ease=motion.easing||'linear';
+          if(ease==='ease-in')progress=progress*progress;
+          else if(ease==='ease-out')progress=1-(1-progress)*(1-progress);
+          else if(ease==='ease-in-out')progress=progress<0.5?2*progress*progress:1-2*(1-progress)*(1-progress);
+          var sp=motion.startPos||[0,0,0],ep=motion.endPos||[0,0,0];
+          var px=sp[0]+(ep[0]-sp[0])*progress;
+          var py=sp[1]+(ep[1]-sp[1])*progress;
+          var cx_=px*W/cw,cy_=H-py*H/ch;
+          var size=fx.size||{};
+          var r=fx.r||0,g=fx.g||0,b=fx.b||0;
+          ctx.globalAlpha=0.15;
+          if(fx.shape==='sphere'){
+            var rad=(size.radius||1000)*W/cw;
+            ctx.beginPath();ctx.arc(cx_,cy_,rad,0,2*Math.PI);
+            ctx.fillStyle='rgb('+r+','+g+','+b+')';ctx.fill();
+            ctx.strokeStyle='rgba('+r+','+g+','+b+',0.4)';ctx.lineWidth=1;ctx.stroke();
+          }else if(fx.shape==='plane'){
+            var thick=(size.thickness||200)*H/ch;
+            var n=size.normal||[0,1,0];
+            if(Math.abs(n[1])>0.5){
+              // Horizontal plane — draw as horizontal band
+              ctx.fillStyle='rgb('+r+','+g+','+b+')';
+              ctx.fillRect(0,cy_-thick/2,W,thick);
+            }else{
+              // Vertical plane — draw as vertical band
+              ctx.fillStyle='rgb('+r+','+g+','+b+')';
+              ctx.fillRect(cx_-thick/2,0,thick,H);
+            }
+          }else if(fx.shape==='box'){
+            var bw=(size.width||1000)*W/cw,bh=(size.height||1000)*H/ch;
+            ctx.fillStyle='rgb('+r+','+g+','+b+')';
+            ctx.fillRect(cx_-bw/2,cy_-bh/2,bw,bh);
+          }
+          ctx.globalAlpha=1;
+          // Label
+          ctx.fillStyle='rgba('+r+','+g+','+b+',0.6)';ctx.font='7px sans-serif';ctx.textAlign='center';
+          ctx.fillText(fx.name||'',cx_,cy_-3);
+        });
+      });
+    }
+  }
 
   var dirDx=[1,0,-1,0],dirDy=[0,-1,0,1];
 
