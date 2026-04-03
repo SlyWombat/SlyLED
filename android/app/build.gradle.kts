@@ -29,7 +29,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 740
-        versionName = "7.5.21"
+        versionName = "7.5.23"
     }
 
     signingConfigs {
@@ -112,6 +112,8 @@ dependencies {
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 }
+
+
 
 
 
