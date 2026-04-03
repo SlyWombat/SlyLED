@@ -1273,11 +1273,9 @@ function s3dLoadChildren(){
         var beamLen=aimLocal.length();
         if(beamLen>0.01){
           var bwDeg=15;
-          // Try to get beamWidth from profile
-          if(_fix3d.dmxProfileId){
-            ra('GET','/api/dmx-profiles/'+_fix3d.dmxProfileId,null,function(pr){
-              if(pr&&pr.beamWidth)bwDeg=pr.beamWidth;
-            });
+          // Use cached profile beamWidth (sync) — _profileCache populated by emulator/layout
+          if(_fix3d.dmxProfileId&&window._profileCache&&window._profileCache[_fix3d.dmxProfileId]){
+            bwDeg=window._profileCache[_fix3d.dmxProfileId].beamWidth||15;
           }
           var bwRad=bwDeg*Math.PI/180;
           var topR=Math.tan(bwRad/2)*beamLen;
@@ -1569,7 +1567,15 @@ function setLayoutMode(mode){
     w2d.style.display='none';w3d.style.display='block';
     if(hint)hint.textContent='Click to select. Drag gizmo to move. Double-click to edit. Scroll=zoom, Drag=orbit.';
     if(detWrap)detWrap.style.display='none';
-    s3dInit();s3dLoadChildren(); // reads from ld (already current from 2D edits)
+    s3dInit();
+    // Preload profile cache for beam widths, then render
+    if(!window._profileCache){
+      window._profileCache={};
+      ra('GET','/api/dmx-profiles',null,function(profs){
+        (profs||[]).forEach(function(p){window._profileCache[p.id]=p;});
+        s3dLoadChildren();
+      });
+    } else { s3dLoadChildren(); }
   } else {
     _s3dSyncToLd(); // write 3D gizmo moves back to ld before switching
     b3d.style.background='transparent';b3d.style.color='#64748b';
