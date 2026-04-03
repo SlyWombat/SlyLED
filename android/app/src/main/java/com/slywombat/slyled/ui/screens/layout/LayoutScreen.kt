@@ -2,8 +2,9 @@ package com.slywombat.slyled.ui.screens.layout
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.*
@@ -39,8 +40,9 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
     var dragFixtureId by remember { mutableIntStateOf(-1) }
     var showStrings by remember { mutableStateOf(true) }
     var editFixture by remember { mutableStateOf<Fixture?>(null) }
+    var placingFixtureId by remember { mutableIntStateOf(-1) }
 
-    // Zoom and pan state
+    // Zoom and pan
     var zoom by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
     val transformState = rememberTransformableState { zoomChange, panChange, _ ->
@@ -50,45 +52,48 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
 
     LaunchedEffect(Unit) { viewModel.load() }
 
-    // Use stage dimensions (meters → mm) for the coordinate system
-    // canvasW/H are the logical coordinate space in mm
-    val stageWmm = (stage.w * 1000).toInt().coerceAtLeast(1000)
-    val stageHmm = (stage.d * 1000).toInt().coerceAtLeast(1000)  // d = depth = stage Z axis shown as Y on 2D
-    val canvasW = layout?.canvasW ?: stageWmm
-    val canvasH = layout?.canvasH ?: stageHmm
+    // Canvas coordinate space = canvasW × canvasH in mm
+    // canvasW = stage.w * 1000, canvasH = stage.h * 1000 (synced by server)
+    val canvasW = layout?.canvasW ?: (stage.w * 1000).toInt().coerceAtLeast(1000)
+    val canvasH = layout?.canvasH ?: (stage.h * 1000).toInt().coerceAtLeast(1000)
+    val stageWm = canvasW / 1000f  // meters for labels
+    val stageHm = canvasH / 1000f
 
     Column(modifier = Modifier.fillMaxSize().padding(8.dp)) {
         // Header
         Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("Stage Layout", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-            // Reset zoom
             if (zoom != 1f || panOffset != Offset.Zero) {
-                TextButton(onClick = { zoom = 1f; panOffset = Offset.Zero }) {
-                    Text("Reset", fontSize = 11.sp)
-                }
+                TextButton(onClick = { zoom = 1f; panOffset = Offset.Zero }) { Text("Reset", fontSize = 11.sp) }
             }
-            Button(onClick = { viewModel.saveLayout() }) {
-                Text("Save", fontSize = 12.sp)
-            }
+            Button(onClick = { viewModel.saveLayout() }) { Text("Save", fontSize = 12.sp) }
         }
 
-        // Stage info + show strings toggle
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                "Stage: ${stage.w}m x ${stage.h}m x ${stage.d}m | ${fixtures.size} fixtures",
-                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f)
-            )
+        // Info bar
+        Row(modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("${stageWm}m × ${stageHm}m | ${fixtures.size} fixtures",
+                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = showStrings, onCheckedChange = { showStrings = it })
                 Text("Strings", fontSize = 11.sp)
+            }
+        }
+
+        // Placement mode indicator
+        if (placingFixtureId >= 0) {
+            val pf = fixtures.find { it.id == placingFixtureId }
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A3A1A))
+            ) {
+                Text(
+                    "Tap canvas to place: ${pf?.name ?: "Fixture $placingFixtureId"}",
+                    modifier = Modifier.padding(8.dp), fontSize = 12.sp, color = Color(0xFF86EFAC)
+                )
             }
         }
 
@@ -98,16 +103,30 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
+                .aspectRatio(canvasW.toFloat() / canvasH)
                 .background(Color(0xFF0A0A0A))
                 .transformable(transformState)
         ) {
             Canvas(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(fixtures, zoom, panOffset) {
+                    .pointerInput(fixtures, zoom, panOffset, placingFixtureId) {
                         detectDragGestures(
                             onDragStart = { offset ->
+                                // If in placement mode, place the fixture at tap location
+                                if (placingFixtureId >= 0) {
+                                    val w = size.width.toFloat()
+                                    val h = size.height.toFloat()
+                                    val rawX = (offset.x - panOffset.x) / zoom
+                                    val rawY = (offset.y - panOffset.y) / zoom
+                                    val physX = (rawX * canvasW / w).toInt().coerceIn(0, canvasW)
+                                    val physY = ((h - rawY) * canvasH / h).toInt().coerceIn(0, canvasH)
+                                    viewModel.moveFixture(placingFixtureId, physX, physY)
+                                    placingFixtureId = -1
+                                    dragFixtureId = -1
+                                    return@detectDragGestures
+                                }
+                                // Normal drag mode — find nearest fixture
                                 val w = size.width.toFloat()
                                 val h = size.height.toFloat()
                                 val placed = fixtures.filter { it.positioned }
@@ -122,7 +141,6 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                                     val w = size.width.toFloat()
                                     val h = size.height.toFloat()
                                     val pos = change.position
-                                    // Reverse the zoom+pan transform to get physical coords
                                     val rawX = (pos.x - panOffset.x) / zoom
                                     val rawY = (pos.y - panOffset.y) / zoom
                                     val physX = (rawX * canvasW / w).toInt().coerceIn(0, canvasW)
@@ -141,36 +159,27 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                     translate(panOffset.x, panOffset.y)
                     scale(zoom, zoom, Offset.Zero)
                 }) {
-                    // Grid — scaled to stage dimensions
+                    // Grid — 1m spacing
                     val gridColor = Color(0xFF1A1A1A)
-                    val gridLineColor = Color(0xFF252525)
-                    val gridStepsX = (stage.w).toInt().coerceAtLeast(2)
-                    val gridStepsY = (stage.d).toInt().coerceAtLeast(2)
+                    val gridStepsX = stageWm.toInt().coerceAtLeast(1)
+                    val gridStepsY = stageHm.toInt().coerceAtLeast(1)
                     for (gx in 0..gridStepsX) {
                         val x = gx * w / gridStepsX
-                        drawLine(if (gx == 0 || gx == gridStepsX) gridLineColor else gridColor,
-                            Offset(x, 0f), Offset(x, h), 1f)
+                        drawLine(gridColor, Offset(x, 0f), Offset(x, h), 1f)
                     }
                     for (gy in 0..gridStepsY) {
                         val y = gy * h / gridStepsY
-                        drawLine(if (gy == 0 || gy == gridStepsY) gridLineColor else gridColor,
-                            Offset(0f, y), Offset(w, y), 1f)
+                        drawLine(gridColor, Offset(0f, y), Offset(w, y), 1f)
                     }
-
-                    // Stage border
                     drawRect(Color(0xFF1E3A5F), style = Stroke(2f))
 
-                    // Stage dimension labels
-                    val wLabel = textMeasurer.measure(
-                        AnnotatedString("${stage.w}m"),
-                        style = TextStyle(fontSize = 8.sp, color = Color(0xFF4A6A8F))
-                    )
-                    drawText(wLabel, topLeft = Offset(w / 2 - wLabel.size.width / 2f, 4f))
-                    val dLabel = textMeasurer.measure(
-                        AnnotatedString("${stage.d}m"),
-                        style = TextStyle(fontSize = 8.sp, color = Color(0xFF4A6A8F))
-                    )
-                    drawText(dLabel, topLeft = Offset(4f, h / 2 - dLabel.size.height / 2f))
+                    // Dimension labels
+                    val wLabel = textMeasurer.measure(AnnotatedString("${stageWm}m"),
+                        style = TextStyle(fontSize = 8.sp, color = Color(0xFF4A6A8F)))
+                    drawText(wLabel, topLeft = Offset(w / 2 - wLabel.size.width / 2f, h - wLabel.size.height - 2f))
+                    val hLabel = textMeasurer.measure(AnnotatedString("${stageHm}m"),
+                        style = TextStyle(fontSize = 8.sp, color = Color(0xFF4A6A8F)))
+                    drawText(hLabel, topLeft = Offset(4f, h / 2 - hLabel.size.height / 2f))
 
                     // Surfaces
                     surfaces.forEach { s ->
@@ -182,7 +191,6 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                         val col = try { Color(android.graphics.Color.parseColor(s.color)) }
                                   catch (_: Exception) { Color(0xFF334155) }
                         drawRect(col.copy(alpha = s.opacity / 100f), Offset(sx, sy - sh), Size(sw, sh))
-                        drawRect(col.copy(alpha = 0.6f), Offset(sx, sy - sh), Size(sw, sh), style = Stroke(1f))
                     }
 
                     // Fixtures
@@ -199,10 +207,9 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                                 val dirX = when (s.sdir) { 0 -> 1f; 2 -> -1f; else -> 0f }
                                 val dirY = when (s.sdir) { 1 -> -1f; 3 -> 1f; else -> 0f }
                                 val pxLen = if (dirX != 0f) lenMm * w / canvasW else lenMm * h / canvasH
-                                val endX = cx + dirX * pxLen.coerceAtLeast(20f)
-                                val endY = cy + dirY * pxLen.coerceAtLeast(20f)
-                                val col = strColors[si % strColors.size]
-                                drawLine(col, Offset(cx, cy), Offset(endX, endY), strokeWidth = 3f)
+                                drawLine(strColors[si % strColors.size],
+                                    Offset(cx, cy), Offset(cx + dirX * pxLen.coerceAtLeast(20f), cy + dirY * pxLen.coerceAtLeast(20f)),
+                                    strokeWidth = 3f)
                             }
                         }
 
@@ -211,15 +218,13 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                             val aimX = fixture.aimPoint.getOrNull(0)?.toFloat()
                             val aimZ = fixture.aimPoint.getOrNull(2)?.toFloat()
                             if (aimX != null && aimZ != null) {
-                                val ax = aimX.toFloat() * w / canvasW
-                                val ay = h - aimZ.toFloat() * h / canvasH
+                                val ax = aimX * w / canvasW
+                                val ay = h - aimZ * h / canvasH
                                 val bLen = kotlin.math.sqrt((ax - cx) * (ax - cx) + (ay - cy) * (ay - cy))
                                 if (bLen > 5f) {
-                                    val bwRad = 15f * Math.PI.toFloat() / 180f
-                                    val halfW = kotlin.math.tan(bwRad / 2) * bLen
+                                    val halfW = kotlin.math.tan(15f * Math.PI.toFloat() / 360f) * bLen
                                     val angle = kotlin.math.atan2(ay - cy, ax - cx)
-                                    val perpX = -kotlin.math.sin(angle)
-                                    val perpY = kotlin.math.cos(angle)
+                                    val perpX = -kotlin.math.sin(angle); val perpY = kotlin.math.cos(angle)
                                     val path = Path()
                                     path.moveTo(cx, cy)
                                     path.lineTo(ax + perpX * halfW, ay + perpY * halfW)
@@ -231,72 +236,63 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                             }
                         }
 
-                        // Node circle
+                        // Node
                         val nodeColor = if (fixture.fixtureType == "dmx") Color(0xFF9966FF) else Color(0xFF22CC66)
                         drawCircle(nodeColor, 10f, Offset(cx, cy))
                         drawCircle(nodeColor.copy(alpha = 0.4f), 14f, Offset(cx, cy), style = Stroke(2f))
 
                         // Label
                         val label = fixture.name.ifEmpty { "Fixture ${fixture.id}" }
-                        val textResult = textMeasurer.measure(
-                            AnnotatedString(label),
-                            style = TextStyle(fontSize = 9.sp, color = Color.White)
-                        )
-                        drawText(textResult, topLeft = Offset(cx - textResult.size.width / 2f, cy + 16f))
+                        val tr = textMeasurer.measure(AnnotatedString(label),
+                            style = TextStyle(fontSize = 9.sp, color = Color.White))
+                        drawText(tr, topLeft = Offset(cx - tr.size.width / 2f, cy + 16f))
                     }
                 }
 
-                // Zoom indicator (outside transform so it stays readable)
+                // Zoom indicator
                 if (zoom != 1f) {
-                    val zoomLabel = textMeasurer.measure(
-                        AnnotatedString("${(zoom * 100).toInt()}%"),
-                        style = TextStyle(fontSize = 10.sp, color = Color(0xFF666666))
-                    )
-                    drawText(zoomLabel, topLeft = Offset(w - zoomLabel.size.width - 8f, h - zoomLabel.size.height - 4f))
+                    val zl = textMeasurer.measure(AnnotatedString("${(zoom * 100).toInt()}%"),
+                        style = TextStyle(fontSize = 10.sp, color = Color(0xFF666666)))
+                    drawText(zl, topLeft = Offset(w - zl.size.width - 8f, h - zl.size.height - 4f))
                 }
             }
         }
 
-        // Placed fixtures list
+        // Placed fixtures
         val placed = fixtures.filter { it.positioned }
         if (placed.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
-            Text("Placed (${placed.size})", style = MaterialTheme.typography.titleSmall, fontSize = 12.sp)
-            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 120.dp)) {
+            Spacer(Modifier.height(4.dp))
+            Text("Placed (${placed.size})", fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 100.dp)) {
                 items(placed) { f ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                        onClick = { editFixture = f }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(8.dp).fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            val typeTag = if (f.fixtureType == "dmx") "[DMX]" else "[LED]"
-                            Text("$typeTag ${f.name.ifEmpty { "Fixture ${f.id}" }}", fontSize = 13.sp)
-                            Text("(${f.x}, ${f.y}, ${f.z})", fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp), onClick = { editFixture = f }) {
+                        Row(modifier = Modifier.padding(6.dp).fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            val tag = if (f.fixtureType == "dmx") "[DMX]" else "[LED]"
+                            Text("$tag ${f.name.ifEmpty { "Fixture ${f.id}" }}", fontSize = 12.sp)
+                            Text("(${f.x}, ${f.y})", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
             }
         }
 
-        // Unplaced fixtures
+        // Unplaced fixtures — tap to enter placement mode
         val unplaced = fixtures.filter { !it.positioned }
         if (unplaced.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
-            Text("Unplaced (${unplaced.size})", style = MaterialTheme.typography.titleSmall)
-            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 100.dp)) {
+            Spacer(Modifier.height(4.dp))
+            Text("Unplaced (${unplaced.size})", fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 80.dp)) {
                 items(unplaced) { f ->
                     Card(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                        onClick = { viewModel.placeFixture(f.id) }
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp)
+                            .then(if (placingFixtureId == f.id) Modifier.border(2.dp, Color(0xFF22C55E), MaterialTheme.shapes.medium) else Modifier),
+                        onClick = { placingFixtureId = if (placingFixtureId == f.id) -1 else f.id }
                     ) {
-                        Row(modifier = Modifier.padding(12.dp)) {
-                            val typeTag = if (f.fixtureType == "dmx") "[DMX]" else "[LED]"
-                            Text("$typeTag ${f.name.ifEmpty { "Fixture ${f.id}" }} — tap to place", fontSize = 13.sp)
+                        Row(modifier = Modifier.padding(8.dp)) {
+                            val tag = if (f.fixtureType == "dmx") "[DMX]" else "[LED]"
+                            Text("$tag ${f.name.ifEmpty { "Fixture ${f.id}" }} — tap then tap canvas",
+                                fontSize = 12.sp, color = if (placingFixtureId == f.id) Color(0xFF86EFAC) else Color.Unspecified)
                         }
                     }
                 }
@@ -304,7 +300,7 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
         }
 
         message?.let {
-            Text(it, color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+            Text(it, color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp))
         }
     }
 
@@ -313,41 +309,34 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
         var xText by remember(fixture.id) { mutableStateOf(fixture.x.toString()) }
         var yText by remember(fixture.id) { mutableStateOf(fixture.y.toString()) }
         var zText by remember(fixture.id) { mutableStateOf(fixture.z.toString()) }
-
         AlertDialog(
             onDismissRequest = { editFixture = null },
             title = { Text(fixture.name.ifEmpty { "Fixture ${fixture.id}" }) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(value = xText, onValueChange = { xText = it },
-                        label = { Text("X (mm)") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        label = { Text("X (mm)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(value = yText, onValueChange = { yText = it },
-                        label = { Text("Y (mm)") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        label = { Text("Y (mm)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(value = zText, onValueChange = { zText = it },
-                        label = { Text("Z (mm)") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        label = { Text("Z (mm)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth())
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val x = xText.toIntOrNull() ?: fixture.x
-                    val y = yText.toIntOrNull() ?: fixture.y
-                    val z = zText.toIntOrNull() ?: fixture.z
-                    viewModel.updateFixturePosition(fixture.id, x, y, z)
+                    viewModel.updateFixturePosition(fixture.id,
+                        xText.toIntOrNull() ?: fixture.x, yText.toIntOrNull() ?: fixture.y, zText.toIntOrNull() ?: fixture.z)
                     editFixture = null
                 }) { Text("OK") }
             },
             dismissButton = {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = {
-                        viewModel.removeFixture(fixture.id)
-                        editFixture = null
-                    }) { Text("Remove", color = MaterialTheme.colorScheme.error) }
+                    TextButton(onClick = { viewModel.removeFixture(fixture.id); editFixture = null }) {
+                        Text("Remove", color = MaterialTheme.colorScheme.error)
+                    }
                     TextButton(onClick = { editFixture = null }) { Text("Cancel") }
                 }
             }

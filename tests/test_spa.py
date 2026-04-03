@@ -1001,6 +1001,73 @@ def test_json_model_compat(page, ids):
         c.post('/api/children', json={'ip': '10.0.0.51'})
 
 
+def test_canvas_stage_sync(page, ids):
+    """Verify canvasW/canvasH stays synced with stage.w/stage.h."""
+    section('Canvas ↔ Stage Sync')
+
+    # Set stage to 8m x 3m
+    resp = api_json(page, 'POST', '/api/stage', {'w': 8.0, 'h': 3.0, 'd': 6.0})
+    ok(resp is not None and resp.get('ok'), 'Set stage to 8x3x6m')
+
+    # Verify settings canvasW/H updated
+    settings = api_json(page, 'GET', '/api/settings')
+    ok(settings.get('canvasW') == 8000, f'canvasW synced to 8000 (got {settings.get("canvasW")})')
+    ok(settings.get('canvasH') == 3000, f'canvasH synced to 3000 (got {settings.get("canvasH")})')
+
+    # Verify layout canvasW/H updated
+    layout = api_json(page, 'GET', '/api/layout')
+    ok(layout.get('canvasW') == 8000, f'Layout canvasW = 8000 (got {layout.get("canvasW")})')
+    ok(layout.get('canvasH') == 3000, f'Layout canvasH = 3000 (got {layout.get("canvasH")})')
+
+    # canvasW = stage.w * 1000, canvasH = stage.h * 1000 (NOT stage.d)
+    stage = api_json(page, 'GET', '/api/stage')
+    ok(int(stage.get('w', 0) * 1000) == layout.get('canvasW'),
+       'canvasW = stage.w * 1000')
+    ok(int(stage.get('h', 0) * 1000) == layout.get('canvasH'),
+       'canvasH = stage.h * 1000 (not stage.d)')
+
+    # Fixture at (4000, 1500) should be at center of 8m x 3m stage
+    resp = api_json(page, 'POST', '/api/layout', {
+        'children': [{'id': ids['fix1'], 'x': 4000, 'y': 1500, 'z': 0}]
+    })
+    ok(resp is not None and resp.get('ok'), 'Place fixture at stage center')
+
+    layout = api_json(page, 'GET', '/api/layout')
+    f = next((f for f in layout.get('fixtures', []) if f.get('id') == ids['fix1']), None)
+    ok(f is not None and f.get('x') == 4000, 'Fixture X at center of 8m stage')
+    ok(f is not None and f.get('y') == 1500, 'Fixture Y at center of 3m stage')
+
+    # Restore stage
+    api_json(page, 'POST', '/api/stage', {'w': 10.0, 'h': 5.0, 'd': 10.0})
+    # Restore layout
+    api_json(page, 'POST', '/api/layout', {'children': [
+        {'id': ids['fix1'], 'x': 1000, 'y': 4500, 'z': 0},
+        {'id': ids['fix2'], 'x': 9000, 'y': 4500, 'z': 0},
+        {'id': ids['dmx1'], 'x': 2000, 'y': 5000, 'z': 2000},
+        {'id': ids['dmx2'], 'x': 5000, 'y': 4800, 'z': 5000},
+    ]})
+
+
+def test_fixture_strings_in_layout(page, ids):
+    """Verify LED fixture strings are returned in layout response."""
+    section('Fixture Strings in Layout')
+
+    layout = api_json(page, 'GET', '/api/layout')
+    fixtures = layout.get('fixtures', [])
+
+    # Find LED fixtures
+    led_fixtures = [f for f in fixtures if f.get('fixtureType') == 'led']
+    ok(len(led_fixtures) >= 1, f'Layout has LED fixtures ({len(led_fixtures)})')
+
+    for f in led_fixtures:
+        strings = f.get('strings', [])
+        ok(len(strings) > 0, f'LED fixture {f["id"]} "{f.get("name")}" has strings ({len(strings)})')
+        for si, s in enumerate(strings):
+            ok(s.get('leds', 0) > 0, f'Fixture {f["id"]} string {si} has leds={s.get("leds")}')
+            ok(s.get('mm', 0) > 0, f'Fixture {f["id"]} string {si} has mm={s.get("mm")}')
+            ok('sdir' in s, f'Fixture {f["id"]} string {si} has sdir field')
+
+
 def test_layout_canvas_ui(page, ids):
     """Test the layout canvas renders in the SPA."""
     section('Layout Canvas UI')
@@ -1093,6 +1160,8 @@ def main():
         ('layout_place', test_layout_place_remove),
         ('layout_types', test_layout_fixture_types),
         ('surfaces', test_surfaces_in_layout),
+        ('canvas_stage', test_canvas_stage_sync),
+        ('fixture_strings', test_fixture_strings_in_layout),
         ('bake_preview', test_bake_preview_data),
         ('json_compat', test_json_model_compat),
         ('layout_canvas', test_layout_canvas_ui),
