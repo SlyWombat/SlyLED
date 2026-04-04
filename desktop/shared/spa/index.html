@@ -194,24 +194,39 @@ body.light .li:hover{border-color:#3b82f6}
 </div>
 
 <div id='t-settings' class='tab' style='display:none'>
-  <div class='card'>
-    <div class='card-title'>App Settings</div>
-    <label>Orchestrator Name</label><input id='s-nm' maxlength='15' style='width:200px' data-tip='setName'>
-    <label>Units</label>
-    <select id='s-un' data-tip='setUnits'>
-      <option value='0'>Metric (mm)</option>
-      <option value='1'>Imperial (in)</option>
-    </select>
-    <label>Stage Width (mm)</label><input id='s-cw' type='number' min='1000' max='100000' style='width:120px'>
-    <label>Stage Height (mm)</label><input id='s-ch' type='number' min='1000' max='100000' style='width:120px'>
-    <label style='display:flex;align-items:center;gap:.5em;margin-top:.8em'>
-      <input type='checkbox' id='s-dm' data-tip='setDark'> Dark Mode
-    </label>
-    <div style='margin-top:.8em;padding:.6em;background:#0f172a;border:1px solid #1e293b;border-radius:4px'>
-      <label style='font-size:.85em;font-weight:bold;color:#e2e8f0'>Debug Logging</label>
+  <!-- Settings sub-navigation -->
+  <div style='display:flex;gap:.3em;margin-bottom:1em;flex-wrap:wrap'>
+    <button class='tnav tact' id='sn-general' onclick='_setSection("general")'>General</button>
+    <button class='tnav' id='sn-profiles' onclick='_setSection("profiles")'>Profiles</button>
+    <button class='tnav' id='sn-dmx' onclick='_setSection("dmx")'>DMX Engine</button>
+    <button class='tnav' id='sn-shows' onclick='_setSection("shows")'>Shows</button>
+    <button class='tnav' id='sn-advanced' onclick='_setSection("advanced")'>Advanced</button>
+  </div>
+
+  <!-- GENERAL -->
+  <div id='ss-general'>
+    <div class='card'>
+      <div class='card-title'>App Settings</div>
+      <label>Orchestrator Name</label><input id='s-nm' maxlength='15' style='width:200px' data-tip='setName'>
+      <label>Units</label>
+      <select id='s-un' data-tip='setUnits'>
+        <option value='0'>Metric (mm)</option>
+        <option value='1'>Imperial (in)</option>
+      </select>
+      <label>Stage Width (mm)</label><input id='s-cw' type='number' min='1000' max='100000' style='width:120px'>
+      <label>Stage Height (mm)</label><input id='s-ch' type='number' min='1000' max='100000' style='width:120px'>
+      <label style='display:flex;align-items:center;gap:.5em;margin-top:.8em'>
+        <input type='checkbox' id='s-dm' data-tip='setDark'> Dark Mode
+      </label>
+      <div style='margin-top:1em'>
+        <button class='btn btn-on' onclick='saveSettings(this)'>Save Settings</button>
+      </div>
+    </div>
+    <div class='card'>
+      <div class='card-title'>Debug Logging</div>
       <div style='margin-top:.3em'>
-        <label style='font-size:.82em;color:#94a3b8'>Log file path (blank = default data/logs/)</label>
-        <input id='s-log-path-input' placeholder='e.g. C:\logs\slyled.log or /tmp/debug.log' style='width:100%;margin-top:.2em;padding:.3em;font-size:.82em'>
+        <label style='font-size:.82em;color:#94a3b8'>Log file path (blank = default)</label>
+        <input id='s-log-path-input' placeholder='e.g. C:\logs\slyled.log' style='width:100%;margin-top:.2em;padding:.3em;font-size:.82em'>
       </div>
       <div style='margin-top:.5em;display:flex;gap:.5em;align-items:center'>
         <button class='btn' id='btn-log-start' onclick='_startLogging()' style='font-size:.78em;background:#14532d;color:#86efac'>Start Logging</button>
@@ -220,30 +235,32 @@ body.light .li:hover{border-color:#3b82f6}
       </div>
       <div id='s-log-path' style='font-size:.72em;color:#64748b;margin-top:.3em'></div>
     </div>
-    <div style='margin-top:1em'>
-      <button class='btn btn-on' onclick='saveSettings(this)'>Save Settings</button>
+  </div>
+
+  <!-- PROFILES -->
+  <div id='ss-profiles' style='display:none'>
+    <div class='card' style='max-width:720px'>
+      <div class='card-title'>DMX Fixture Profiles</div>
+      <p style='font-size:.85em;color:#aaa;margin-bottom:.6em'>Manage fixture profiles for DMX channel mapping and capabilities.</p>
+      <div style='display:flex;gap:.5em;flex-wrap:wrap;margin-bottom:.6em'>
+        <button class='btn btn-on' onclick='showProfileBrowser()'>Browse Library</button>
+        <button class='btn btn-nav' onclick='showProfileEditor()'>New Profile</button>
+        <button class='btn' onclick='showCommunityBrowser()' style='background:#7c3aed;color:#e9d5ff'>Community</button>
+        <button class='btn btn-nav' onclick='showOflBrowse()' style='background:#1e3a5f;color:#93c5fd'>Search OFL</button>
+        <button class='btn btn-nav' onclick='showOflImport()'>Paste OFL</button>
+        <label class='btn btn-nav' style='cursor:pointer'>Import Bundle
+          <input type='file' accept='.json' style='display:none' onchange='importProfileBundle(this)'>
+        </label>
+        <button class='btn btn-nav' onclick='exportProfileBundle()'>Export Custom</button>
+      </div>
+      <div id='profile-lib'></div>
     </div>
   </div>
-  <div class='card' style='max-width:480px'>
-    <div class='card-title'>Configuration (Performers + Layout)</div>
-    <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Save or load performer registration and layout positioning.</p>
-    <div style='display:flex;gap:.5em;flex-wrap:wrap'>
-      <button class='btn btn-nav' onclick='exportConfig(this)' data-tip='setExportConfig'>Save Config</button>
-      <label class='btn btn-nav' style='cursor:pointer' data-tip='setLoadConfig'>Load Config
-        <input type='file' accept='.json' style='display:none' onchange='importConfig(this)'>
-      </label>
-    </div>
-  </div>
-  <div class='card' style='max-width:480px'>
-    <div class='card-title'>Show (Actions + Timelines)</div>
-    <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Save or load show programming. Loading replaces all current show data.</p>
-    <div style='display:flex;gap:.5em;flex-wrap:wrap'>
-      <button class='btn btn-nav' onclick='exportShow(this)' data-tip='setExportShow'>Save Show</button>
-      <button class='btn btn-nav' onclick='openLoadShowModal()' data-tip='setLoadShow'>Load Show</button>
-    </div>
-  </div>
-  <div class='card' style='max-width:480px'>
-    <div class='card-title'>DMX Output</div>
+
+  <!-- DMX ENGINE -->
+  <div id='ss-dmx' style='display:none'>
+    <div class='card' style='max-width:480px'>
+      <div class='card-title'>DMX Output</div>
     <label>Protocol</label>
     <div style='display:flex;gap:1em;margin-bottom:.4em'>
       <label style='display:flex;align-items:center;gap:.3em'><input type='radio' name='dmx-proto' value='artnet' checked onchange='dmxProtoChange()'>Art-Net</label>
@@ -282,26 +299,50 @@ body.light .li:hover{border-color:#3b82f6}
     </div>
     <div id='patch-grid' style='overflow-x:auto'></div>
   </div>
-  <div class='card' style='max-width:720px'>
-    <div class='card-title'>DMX Fixture Profiles</div>
-    <p style='font-size:.85em;color:#aaa;margin-bottom:.6em'>Manage fixture profiles for DMX channel mapping and capabilities.</p>
-    <div style='display:flex;gap:.5em;flex-wrap:wrap;margin-bottom:.6em'>
-      <button class='btn btn-on' onclick='showProfileBrowser()'>Browse Library</button>
-      <button class='btn btn-nav' onclick='showProfileEditor()'>New Profile</button>
-      <button class='btn' onclick='showCommunityBrowser()' style='background:#7c3aed;color:#e9d5ff'>Community</button>
-      <button class='btn btn-nav' onclick='showOflBrowse()' style='background:#1e3a5f;color:#93c5fd'>Search OFL</button>
-      <button class='btn btn-nav' onclick='showOflImport()'>Paste OFL</button>
-      <label class='btn btn-nav' style='cursor:pointer'>Import Bundle
-        <input type='file' accept='.json' style='display:none' onchange='importProfileBundle(this)'>
-      </label>
-      <button class='btn btn-nav' onclick='exportProfileBundle()'>Export Custom</button>
-    </div>
-    <div id='profile-lib'></div>
   </div>
-  <div class='card' style='max-width:480px;border-color:#622'>
-    <div class='card-title' style='color:#c66'>Factory Reset</div>
-    <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Remove all performers, runners and layout data, and restore default settings.</p>
-    <button class='btn btn-off' onclick='factoryReset()'>Factory Reset</button>
+
+  <!-- SHOWS -->
+  <div id='ss-shows' style='display:none'>
+    <div class='card' style='max-width:480px'>
+      <div class='card-title'>Configuration (Performers + Layout)</div>
+      <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Save or load performer registration and layout positioning.</p>
+      <div style='display:flex;gap:.5em;flex-wrap:wrap'>
+        <button class='btn btn-nav' onclick='exportConfig(this)' data-tip='setExportConfig'>Save Config</button>
+        <label class='btn btn-nav' style='cursor:pointer' data-tip='setLoadConfig'>Load Config
+          <input type='file' accept='.json' style='display:none' onchange='importConfig(this)'>
+        </label>
+      </div>
+    </div>
+    <div class='card' style='max-width:480px'>
+      <div class='card-title'>Show (Actions + Timelines)</div>
+      <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Save or load show programming. Loading replaces all current show data.</p>
+      <div style='display:flex;gap:.5em;flex-wrap:wrap'>
+        <button class='btn btn-nav' onclick='exportShow(this)' data-tip='setExportShow'>Save Show</button>
+        <button class='btn btn-nav' onclick='openLoadShowModal()' data-tip='setLoadShow'>Load Show</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADVANCED -->
+  <div id='ss-advanced' style='display:none'>
+    <div class='card' style='max-width:480px'>
+      <div class='card-title'>Mobile App</div>
+      <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Scan this QR code with the SlyLED Android app to connect.</p>
+      <button class='btn btn-nav' onclick='showQrCode()'>Show QR Code</button>
+    </div>
+    <div class='card' style='max-width:480px'>
+      <div class='card-title'>Version</div>
+      <p style='font-size:.85em;color:#aaa' id='s-version'></p>
+    </div>
+    <div class='card' style='max-width:480px;border-color:#622'>
+      <div class='card-title' style='color:#c66'>Factory Reset</div>
+      <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Remove all performers, runners and layout data, and restore default settings.</p>
+      <button class='btn btn-off' onclick='factoryReset()'>Factory Reset</button>
+    </div>
+    <div class='card' style='max-width:480px;border-color:#622'>
+      <div class='card-title' style='color:#c66'>Shutdown Server</div>
+      <button class='btn btn-off' onclick='shutdownServer()'>Shutdown</button>
+    </div>
   </div>
   <div class='card' style='max-width:480px;border-color:#622'>
     <div class='card-title' style='color:#c66'>Service</div>
@@ -886,7 +927,7 @@ function showAddFixtureModal(){
     +'<label>IP Address</label><input id="af-ip" placeholder="x.x.x.x" style="width:100%">'
     +'<div style="margin-top:.8em"><button class="btn btn-on" onclick="_submitAddFixture()" style="font-size:.95em;padding:.5em 2em">Add Performer</button></div>'
     +'</div>'
-    +'<div id="af-dmx">';
+    +'<div id="af-dmx">'
     +'<div style="margin-bottom:.6em;padding:.5em;background:#0f172a;border:1px solid #1e3a5f;border-radius:4px">'
     +'<label style="font-size:.82em;color:#93c5fd">Search All Fixtures (Local + Community + OFL)</label>'
     +'<div style="display:flex;gap:.3em;margin:.3em 0"><input id="af-ofl-q" placeholder="e.g. par, moving head, chauvet..." style="flex:1;padding:.3em;font-size:.85em" onkeydown="if(event.key===\'Enter\')_afOflSearch()">'
@@ -4813,6 +4854,16 @@ function applyDarkMode(dm){
   if(dm)b.classList.remove('light');else b.classList.add('light');
 }
 
+var _curSetSection='general';
+function _setSection(s){
+  _curSetSection=s;
+  ['general','profiles','dmx','shows','advanced'].forEach(function(id){
+    var el=document.getElementById('ss-'+id);if(el)el.style.display=id===s?'':'none';
+    var btn=document.getElementById('sn-'+id);if(btn)btn.className='tnav'+(id===s?' tact':'');
+  });
+  if(s==='dmx')loadDmxSettings();
+  if(s==='profiles')loadDmxProfiles();
+}
 function loadSettings(){
   ra('GET','/api/settings',null,function(d){
     if(!d)return;

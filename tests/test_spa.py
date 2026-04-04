@@ -337,6 +337,7 @@ def test_show_export(page, ids):
 
     # UI button test — intercept download
     wait_tab(page, 'settings')
+    page.evaluate("typeof _setSection==='function'&&_setSection('shows')")
     time.sleep(0.3)
     export_btn = page.query_selector('button[onclick*="exportShow"]')
     if export_btn:
@@ -846,6 +847,8 @@ def test_modal_system(page, ids):
 
     # Open via Load Show
     wait_tab(page, 'settings')
+    page.evaluate("typeof _setSection==='function'&&_setSection('shows')")
+    time.sleep(0.3)
     load_btn = page.query_selector('button[onclick*="openLoadShow"]')
     if load_btn:
         load_btn.click()
