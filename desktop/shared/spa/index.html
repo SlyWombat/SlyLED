@@ -890,8 +890,9 @@ function showAddFixtureModal(){
     +'<div style="margin-bottom:.6em;padding:.5em;background:#0f172a;border:1px solid #1e3a5f;border-radius:4px">'
     +'<label style="font-size:.82em;color:#93c5fd">Search All Fixtures (Local + Community + OFL)</label>'
     +'<div style="display:flex;gap:.3em;margin:.3em 0"><input id="af-ofl-q" placeholder="e.g. par, moving head, chauvet..." style="flex:1;padding:.3em;font-size:.85em" onkeydown="if(event.key===\'Enter\')_afOflSearch()">'
-    +'<button class="btn" style="font-size:.75em;padding:.2em .5em;background:#1e3a5f;color:#93c5fd" onclick="_afOflSearch()">Search</button></div>'
-    +'<div id="af-ofl-results" style="max-height:150px;overflow-y:auto;font-size:.8em"></div>'
+    +'<button class="btn" style="font-size:.75em;padding:.2em .5em;background:#1e3a5f;color:#93c5fd" onclick="_afOflSearch()">Search</button>'
+    +'<button class="btn" style="font-size:.75em;padding:.2em .5em;background:#1e293b;color:#94a3b8" onclick="_afBrowseAll()">Browse All</button></div>'
+    +'<div id="af-ofl-results" style="max-height:200px;overflow-y:auto;font-size:.8em"></div>'
     +'</div>'
     +'<label>Name</label><input id="af-name" placeholder="Moving Head 1" style="width:100%;margin-bottom:.4em">'
     +'<div style="display:flex;gap:.5em"><div style="flex:1"><label>Universe</label><input id="af-uni" type="number" value="1" min="1" style="width:100%;margin-bottom:.4em"></div>'
@@ -968,6 +969,23 @@ function _afOflSearch(){
       h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:.3em 0;border-bottom:1px solid #1e293b">'
         +'<span>'+escapeHtml(f.name)+' <span style="color:#64748b;font-size:.82em">'+escapeHtml(f.manufacturer||'')+'</span> '+badge+'</span>'
         +'<button class="btn" style="font-size:.7em;padding:.15em .4em;background:#14532d;color:#86efac" onclick="'+selectFn+'">Select</button></div>';
+    });
+    el.innerHTML=h;
+  });
+}
+function _afBrowseAll(){
+  var el=document.getElementById('af-ofl-results');if(!el)return;
+  el.innerHTML='<span style="color:#888;font-size:.82em">Loading all profiles...</span>';
+  ra('GET','/api/dmx-profiles',null,function(profiles){
+    if(!profiles||!profiles.length){el.innerHTML='<span style="color:#888">No profiles in library</span>';return;}
+    var srcColors={local:'#22c55e'};
+    var h='<div style="font-size:.75em;color:#64748b;margin-bottom:.3em">'+profiles.length+' profiles in library</div>';
+    profiles.forEach(function(p){
+      var badge=p.builtin?'<span style="font-size:.6em;padding:1px 4px;border-radius:8px;background:#33415522;color:#94a3b8">Built-in</span>':'<span style="font-size:.6em;padding:1px 4px;border-radius:8px;background:#22c55e22;color:#22c55e">Custom</span>';
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:.3em 0;border-bottom:1px solid #1e293b">'
+        +'<span>'+escapeHtml(p.name)+' <span style="color:#64748b;font-size:.82em">'+escapeHtml(p.manufacturer||'')+'</span> '+badge+' <span style="color:#64748b;font-size:.75em">'+p.channelCount+'ch</span></span>'
+        +'<button class="btn" style="font-size:.7em;padding:.15em .4em;background:#14532d;color:#86efac" '
+        +'onclick="_afSelectLocal(\''+escapeHtml(p.id)+'\',\''+escapeHtml(p.name).replace(/'/g,"\\'")+'\','+p.channelCount+')">Select</button></div>';
     });
     el.innerHTML=h;
   });
