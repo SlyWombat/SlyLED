@@ -13,6 +13,7 @@ Usage:
 """
 
 import sys, os, re, argparse, subprocess
+from docx.shared import RGBColor
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 
@@ -21,6 +22,16 @@ DOCS = os.path.join(PROJ, 'docs')
 SHOTS = os.path.join(DOCS, 'screenshots')
 MANUAL_MD = os.path.join(DOCS, 'USER_MANUAL.md')
 OUTPUT = os.path.join(DOCS, 'SlyLED_User_Manual.docx')
+LOGO = os.path.join(PROJ, 'images', 'slyled.png')
+
+# Kinetic Prism design palette
+CLR_BG = RGBColor(0x0A, 0x0F, 0x13) if False else None  # can't set page bg in python-docx
+CLR_HEADING = RGBColor(0x38, 0xBD, 0xF8)   # LuminaBlue
+CLR_ACCENT = RGBColor(0x22, 0xD3, 0xEE)    # Cyan accent
+CLR_TEXT = RGBColor(0x33, 0x33, 0x33)        # Dark text (print-friendly)
+CLR_MUTED = RGBColor(0x64, 0x74, 0x8B)      # Muted gray
+CLR_PURPLE = RGBColor(0x7C, 0x3A, 0xED)     # DMX purple
+CLR_GREEN = RGBColor(0x22, 0xC5, 0x5E)      # LED green
 
 
 def build_manual():
@@ -31,15 +42,30 @@ def build_manual():
 
     doc = Document()
 
-    # ── Styles ─────────────────────────────────────────────────
+    # ── Styles — Kinetic Prism theme ──────────────────────────
     style = doc.styles['Normal']
     style.font.name = 'Calibri'
     style.font.size = Pt(11)
-    style.font.color.rgb = RGBColor(0x22, 0x22, 0x22)
+    style.font.color.rgb = CLR_TEXT
 
-    for level in range(1, 4):
-        hs = doc.styles[f'Heading {level}']
-        hs.font.color.rgb = RGBColor(0x1E, 0x3A, 0x5F)
+    # Heading 1: LuminaBlue
+    h1 = doc.styles['Heading 1']
+    h1.font.color.rgb = CLR_HEADING
+    h1.font.name = 'Calibri'
+    h1.font.size = Pt(22)
+    h1.font.bold = True
+
+    # Heading 2: Purple accent
+    h2 = doc.styles['Heading 2']
+    h2.font.color.rgb = CLR_PURPLE
+    h2.font.name = 'Calibri'
+    h2.font.size = Pt(15)
+
+    # Heading 3: Cyan accent
+    h3 = doc.styles['Heading 3']
+    h3.font.color.rgb = CLR_ACCENT
+    h3.font.name = 'Calibri'
+    h3.font.size = Pt(13)
 
     # ── Screenshot mapping: section keyword → screenshot files ──
     SECTION_SHOTS = {
@@ -81,21 +107,55 @@ def build_manual():
         ],
     }
 
-    # ── Title page ─────────────────────────────────────────────
+    # ── Read version from version.h ──────────────────────────
+    version = "8.3"
+    vh_path = os.path.join(PROJ, 'main', 'version.h')
+    if os.path.exists(vh_path):
+        with open(vh_path) as vf:
+            vtxt = vf.read()
+            import re as _re
+            ma = _re.search(r'APP_MAJOR\s+(\d+)', vtxt)
+            mi = _re.search(r'APP_MINOR\s+(\d+)', vtxt)
+            pa = _re.search(r'APP_PATCH\s+(\d+)', vtxt)
+            if ma and mi:
+                version = f"{ma.group(1)}.{mi.group(1)}"
+                if pa:
+                    version += f".{pa.group(1)}"
+
+    # ── Title page — Kinetic Prism styled ─────────────────────
     doc.add_paragraph()
+
+    # Logo
+    if os.path.exists(LOGO):
+        doc.add_picture(LOGO, width=Inches(3.0))
+        doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+
     doc.add_paragraph()
     title = doc.add_heading('SlyLED User Manual', level=0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    sub = doc.add_paragraph('3D Volumetric Lighting System — v7.6')
+    for run in title.runs:
+        run.font.color.rgb = CLR_HEADING
+        run.font.size = Pt(36)
+
+    sub = doc.add_paragraph(f'3D Volumetric Lighting System — v{version}')
     sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
     sub.runs[0].font.size = Pt(16)
-    sub.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+    sub.runs[0].font.color.rgb = CLR_MUTED
+
     doc.add_paragraph()
     desc = doc.add_paragraph(
         'Complete guide to designing, programming, and running LED + DMX lighting shows '
         'with the SlyLED orchestrator, performers, and DMX bridge.'
     )
     desc.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    desc.runs[0].font.color.rgb = CLR_TEXT
+
+    doc.add_paragraph()
+    footer_p = doc.add_paragraph('electricrv.ca/slyled')
+    footer_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    footer_p.runs[0].font.color.rgb = CLR_ACCENT
+    footer_p.runs[0].font.size = Pt(11)
+
     doc.add_page_break()
 
     # ── Table of Contents ──────────────────────────────────────
@@ -130,7 +190,7 @@ def build_manual():
         cap = doc.add_paragraph(caption)
         cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
         cap.runs[0].font.size = Pt(9)
-        cap.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+        cap.runs[0].font.color.rgb = CLR_MUTED
         cap.runs[0].italic = True
 
     def add_table(headers, rows):
@@ -287,6 +347,26 @@ def build_manual():
         '- Moving effects produce time-sliced segments that track the motion\n'
         '- 3D viewport shows beam cones pointing at the effect center'
     )
+
+    doc.add_heading('DMX Action Types', level=2)
+    doc.add_paragraph(
+        'In addition to classic LED actions (Solid, Chase, Rainbow, etc.), four DMX-specific '
+        'action types are available for direct control of DMX features:'
+    )
+    add_table(
+        ['Action Type', 'Description'],
+        [
+            ['DMX Scene', 'Set exact values for dimmer, pan, tilt, strobe, gobo, color wheel, prism'],
+            ['Pan/Tilt Move', 'Animate pan/tilt from start to end position over time'],
+            ['Gobo Select', 'Select a gobo wheel position with optional color'],
+            ['Color Wheel', 'Select a color wheel position'],
+        ]
+    )
+    doc.add_paragraph(
+        'Classic LED actions (Solid, Breathe, Chase, etc.) are automatically converted to '
+        'DMX Scene segments when assigned to DMX fixtures. The dimmer is auto-set to 255 '
+        'when color is active, and pan/tilt default to center (0.5).'
+    )
     doc.add_page_break()
 
     # ── Section 4: Building a Timeline ─────────────────────────
@@ -347,7 +427,13 @@ def build_manual():
 
     # ── Section 7: Preset Shows ───────────────────────────────
     doc.add_heading('7. Preset Shows', level=1)
-    doc.add_paragraph('14 pre-built shows are available from Settings or the Runtime tab:')
+    doc.add_paragraph(
+        '14 themed shows are available from the Runtime tab. Shows are dynamically generated '
+        'based on your actual fixtures — every fixture gets coverage with no dark periods. '
+        'LED fixtures get pattern effects, DMX pars get color washes, and moving heads get '
+        'pan/tilt sweeps that track spatial effects across the stage.\n\n'
+        'Each load produces a unique variation of the theme with randomized timing and positions.'
+    )
 
     add_table(
         ['Preset', 'Type', 'Description'],
@@ -448,7 +534,7 @@ def build_manual():
             ['Strings per child', '8 max', 'ESP32 supports up to 8 GPIO pins'],
             ['LEDs per string', '65535 max', 'uint16_t addressing (protocol v4)'],
             ['Steps per runner', '16 max', 'LoadStepPayload array limit'],
-            ['Bake segments per fixture', '16 max', 'Fits runner step limit'],
+            ['Bake segments per fixture', '64 max', 'Supports PT move time slices'],
             ['Bake frame rate', '40 Hz', 'Art-Net output rate'],
             ['DMX universes', 'Unlimited', 'One Art-Net packet per universe'],
             ['DMX channels per universe', '512', 'DMX-512 standard'],

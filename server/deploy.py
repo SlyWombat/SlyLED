@@ -61,6 +61,9 @@ def upload_file(local_path, remote_dir):
         f'Content-Disposition: form-data; name="dir"\r\n\r\n'
         f'{remote_dir}\r\n'
         f'--{boundary}\r\n'
+        f'Content-Disposition: form-data; name="overwrite"\r\n\r\n'
+        f'1\r\n'
+        f'--{boundary}\r\n'
         f'Content-Disposition: form-data; name="file-1"; filename="{filename}"\r\n'
         f'Content-Type: application/octet-stream\r\n\r\n'
     ).encode() + file_data + f'\r\n--{boundary}--\r\n'.encode()
