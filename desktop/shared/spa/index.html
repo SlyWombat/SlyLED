@@ -2293,13 +2293,14 @@ function _peRenderCaps(chIdx){
     h+='<div style="position:absolute;left:'+pct0+'%;width:'+w+'%;height:100%;background:'+col+';opacity:0.6;border-radius:2px" title="'+c.range[0]+'-'+c.range[1]+': '+(c.label||c.type)+'"></div>';
   });
   h+='</div>';
-  h+='<table class="tbl" style="font-size:.75em"><tr><th>Min</th><th>Max</th><th>Type</th><th>Label</th><th></th></tr>';
+  h+='<table class="tbl" style="font-size:.75em"><tr><th>Min</th><th>Max</th><th>Type</th><th>Label</th><th>Default</th><th></th></tr>';
   (window._peCaps||[]).forEach(function(c,j){
     var tOpts='';_profEditCapTypes.forEach(function(t){tOpts+='<option'+(t===c.type?' selected':'')+'>'+t+'</option>';});
     h+='<tr><td><input type="number" value="'+c.range[0]+'" min="0" max="'+maxVal+'" style="width:55px;font-size:.9em" onchange="window._peCaps['+j+'].range[0]=parseInt(this.value);_peRenderCaps('+chIdx+')"></td>';
     h+='<td><input type="number" value="'+c.range[1]+'" min="0" max="'+maxVal+'" style="width:55px;font-size:.9em" onchange="window._peCaps['+j+'].range[1]=parseInt(this.value);_peRenderCaps('+chIdx+')"></td>';
     h+='<td><select style="font-size:.85em" onchange="window._peCaps['+j+'].type=this.value;_peRenderCaps('+chIdx+')">'+tOpts+'</select></td>';
-    h+='<td><input value="'+escapeHtml(c.label||'')+'" style="width:140px;font-size:.9em" onchange="window._peCaps['+j+'].label=this.value"></td>';
+    h+='<td><input value="'+escapeHtml(c.label||'')+'" style="width:120px;font-size:.9em" onchange="window._peCaps['+j+'].label=this.value"></td>';
+    h+='<td><input type="number" value="'+(c.default!==undefined?c.default:c.range[0])+'" min="'+c.range[0]+'" max="'+c.range[1]+'" style="width:50px;font-size:.9em" onchange="window._peCaps['+j+'].default=parseInt(this.value)"></td>';
     h+='<td><button class="btn btn-off" onclick="window._peCaps.splice('+j+',1);_peRenderCaps('+chIdx+')" style="font-size:.7em">\u2715</button></td></tr>';
   });
   el.innerHTML=h+'</table>';
@@ -2307,7 +2308,7 @@ function _peRenderCaps(chIdx){
 function _peAddCap(chIdx){
   var caps=window._peCaps||[];
   var startVal=caps.length?caps[caps.length-1].range[1]+1:0;
-  caps.push({range:[startVal,255],type:'Intensity',label:''});
+  caps.push({range:[startVal,255],type:'Intensity',label:'',default:startVal});
   _peRenderCaps(chIdx);
 }
 function _peSaveCaps(chIdx){
