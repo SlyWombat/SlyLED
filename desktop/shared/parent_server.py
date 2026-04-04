@@ -74,7 +74,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "8.2.20"
+VERSION = "8.3.0"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -146,7 +146,7 @@ for _f in _fixtures:
         _f["fixtureType"] = "led"
         _fix_patched = True
     if _f.get("fixtureType") == "dmx" and "aimPoint" not in _f:
-        _f["aimPoint"] = [0, -1000, 0]
+        _f["aimPoint"] = [0, 0, int(_stage.get("d", 10) * 1000)]
         _fix_patched = True
 if _fix_patched:
     _save("fixtures", _fixtures)
@@ -919,7 +919,7 @@ def api_fixtures_create():
             f["dmxStartAddr"] = body["dmxStartAddr"]
             f["dmxChannelCount"] = body["dmxChannelCount"]
             f["dmxProfileId"] = body.get("dmxProfileId")
-            f["aimPoint"] = body.get("aimPoint", [0, -1000, 0])
+            f["aimPoint"] = body.get("aimPoint", [0, 0, int(_stage.get("d", 10) * 1000)])
         _fixtures.append(f)
         _nxt_fix += 1
         _save("fixtures", _fixtures)
@@ -2427,6 +2427,7 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
         for fx in dmx_fixtures:
             r, g, b = 0, 0, 0
             pan, tilt, dimmer, strobe, gobo = None, None, None, None, None
+            color_wheel, prism, focus, zoom = None, None, None, None
             for seg in fx["segs"]:
                 ss = seg.get("startS", 0)
                 sd = seg.get("durationS", 1)
@@ -2438,6 +2439,10 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
                     dimmer = p.get("dimmer")
                     strobe = p.get("strobe")
                     gobo = p.get("gobo")
+                    color_wheel = p.get("colorWheel")
+                    prism = p.get("prism")
+                    focus = p.get("focus")
+                    zoom = p.get("zoom")
                     break
             profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
             uni_buf = engine.get_universe(fx["uni"])
@@ -2450,12 +2455,23 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
             # Pan/Tilt
             if pan is not None and tilt is not None and profile:
                 uni_buf.set_fixture_pan_tilt(fx["addr"], pan, tilt, profile)
-            # Strobe
-            if strobe is not None and fx["ch_map"] and "strobe" in fx["ch_map"]:
-                uni_buf.set_fixture_channels(fx["addr"], {"strobe": strobe}, profile)
-            # Gobo
-            if gobo is not None and fx["ch_map"] and "gobo" in fx["ch_map"]:
-                uni_buf.set_fixture_channels(fx["addr"], {"gobo": gobo}, profile)
+            # Extra DMX channels via set_fixture_channels
+            # Channel types use hyphenated names (color-wheel, gobo-rotation)
+            extra_ch = {}
+            if strobe is not None:
+                extra_ch["strobe"] = strobe
+            if gobo is not None:
+                extra_ch["gobo"] = gobo
+            if color_wheel is not None:
+                extra_ch["color-wheel"] = color_wheel
+            if prism is not None:
+                extra_ch["prism"] = prism
+            if focus is not None:
+                extra_ch["focus"] = focus
+            if zoom is not None:
+                extra_ch["zoom"] = zoom
+            if extra_ch and profile:
+                uni_buf.set_fixture_channels(fx["addr"], extra_ch, profile)
         frame_count += 1
         if frame_count == 1:
             log.info("DMX playback: first frame sent at elapsed=%.1fs", elapsed)
@@ -2806,7 +2822,99 @@ def api_config_import():
 
 @app.post("/api/show/preset")
 def api_show_preset():
-    """Install a preset show as a timeline with spatial effects and actions."""
+    """Install a preset show as a timeline with spatial effects and actions.
+
+    Dynamically generates a show based on the selected theme and the user's
+    actual fixtures, positions, and capabilities. Every fixture gets coverage
+    so there are no dark periods.
+    """
+    global _nxt_a, _nxt_sfx, _nxt_tl
+    body = request.get_json(silent=True) or {}
+    preset_id = body.get("id", "")
+
+    from show_generator import generate_show, THEMES
+    if preset_id not in THEMES:
+        return jsonify(ok=False, err=f"Unknown preset: {preset_id}"), 404
+
+    show = generate_show(preset_id, _fixtures, _layout, _stage, _profile_lib)
+    if not show:
+        return jsonify(ok=False, err="Failed to generate show"), 500
+
+    with _lock:
+        dur = show["durationS"]
+
+        # Create action records and build id lookup
+        # action_ref_map: maps python id() of the action_info dict -> assigned action id
+        action_ref_map = {}
+        action_count = 0
+        for act_info in show.get("base_actions", []) + show.get("mover_actions", []):
+            act_data = act_info.get("action", act_info) if isinstance(act_info, dict) and "action" in act_info else act_info
+            act = {"id": _nxt_a, **act_data}
+            _actions.append(act)
+            action_ref_map[id(act_info)] = _nxt_a
+            action_count += 1
+            _nxt_a += 1
+        _save("actions", _actions)
+
+        # Create spatial effect records
+        effect_ref_map = {}  # maps python id() of effect dict -> assigned effect id
+        for fx in show.get("effects", []):
+            fx_rec = {"id": _nxt_sfx, **fx}
+            fx_rec.setdefault("fixtureIds", [])
+            _spatial_fx.append(fx_rec)
+            effect_ref_map[id(fx)] = _nxt_sfx
+            _nxt_sfx += 1
+        _save("spatial_fx", _spatial_fx)
+
+        # Build timeline tracks from generator's track structure
+        # Tracks are ordered: lower index = lower priority (background)
+        tracks = []
+        for gen_track in show.get("tracks", []):
+            track = {}
+            if gen_track.get("allPerformers"):
+                track["allPerformers"] = True
+            elif gen_track.get("fixtureId"):
+                track["fixtureId"] = gen_track["fixtureId"]
+            else:
+                continue
+
+            clips = []
+            for gen_clip in gen_track.get("clips", []):
+                clip = {
+                    "startS": gen_clip.get("startS", 0),
+                    "durationS": gen_clip.get("durationS", dur),
+                }
+                # Resolve action or effect reference
+                aref = gen_clip.get("_action_ref")
+                eref = gen_clip.get("_effect_ref")
+                if aref and id(aref) in action_ref_map:
+                    clip["actionId"] = action_ref_map[id(aref)]
+                elif eref and id(eref) in effect_ref_map:
+                    clip["effectId"] = effect_ref_map[id(eref)]
+                else:
+                    continue  # skip clips with no resolved reference
+                clips.append(clip)
+
+            if clips:
+                track["clips"] = clips
+                tracks.append(track)
+
+        tl = {
+            "id": _nxt_tl, "name": show["name"],
+            "durationS": dur,
+            "tracks": tracks,
+            "loop": True,
+        }
+        _timelines.append(tl)
+        _nxt_tl += 1
+        _save("timelines", _timelines)
+
+    return jsonify(ok=True, name=show["name"], timelineId=tl["id"],
+                   actions=action_count, effects=len(effect_ref_map))
+
+
+def _api_show_preset_old():
+    """LEGACY: hardcoded preset shows — kept as fallback reference."""
     global _nxt_a, _nxt_sfx, _nxt_tl
     body = request.get_json(silent=True) or {}
     preset_id = body.get("id", "")
@@ -2895,13 +3003,13 @@ def api_show_preset():
             "durationS": 20,
             "effects": [
                 {"name": "Sweep Orb", "category": "spatial-field", "shape": "sphere",
-                 "r": 255, "g": 240, "b": 200, "size": {"radius": 1500},
-                 "motion": {"startPos": [0, 0, 5000], "endPos": [10000, 0, 5000],
+                 "r": 255, "g": 240, "b": 200, "size": {"radius": 3000},
+                 "motion": {"startPos": [0, 2500, 2500], "endPos": [10000, 2500, 2500],
                             "durationS": 8, "easing": "ease-in-out"},
                  "blend": "add"},
                 {"name": "Return Orb", "category": "spatial-field", "shape": "sphere",
-                 "r": 200, "g": 180, "b": 255, "size": {"radius": 1500},
-                 "motion": {"startPos": [10000, 0, 5000], "endPos": [0, 0, 5000],
+                 "r": 200, "g": 180, "b": 255, "size": {"radius": 3000},
+                 "motion": {"startPos": [10000, 2500, 2500], "endPos": [0, 2500, 2500],
                             "durationS": 8, "easing": "ease-in-out"},
                  "blend": "add"},
             ],
@@ -2918,8 +3026,8 @@ def api_show_preset():
                             "durationS": 12, "easing": "ease-in-out"},
                  "blend": "screen"},
                 {"name": "Amber Spot", "category": "spatial-field", "shape": "sphere",
-                 "r": 255, "g": 160, "b": 40, "size": {"radius": 2000},
-                 "motion": {"startPos": [8000, 0, 3000], "endPos": [2000, 0, 7000],
+                 "r": 255, "g": 160, "b": 40, "size": {"radius": 3000},
+                 "motion": {"startPos": [8000, 2500, 3000], "endPos": [2000, 2500, 7000],
                             "durationS": 15, "easing": "ease-in-out"},
                  "blend": "add"},
             ],
@@ -2930,23 +3038,23 @@ def api_show_preset():
             "effects": [
                 # Two spheres crossing at center stage — moving heads track each
                 {"name": "Cyan Path A", "category": "spatial-field", "shape": "sphere",
-                 "r": 0, "g": 220, "b": 255, "size": {"radius": 1800},
-                 "motion": {"startPos": [1000, 0, 2000], "endPos": [9000, 0, 8000],
+                 "r": 0, "g": 220, "b": 255, "size": {"radius": 3000},
+                 "motion": {"startPos": [1000, 2500, 2000], "endPos": [9000, 2500, 8000],
                             "durationS": 6, "easing": "ease-in-out"},
                  "blend": "add"},
                 {"name": "Cyan Path B", "category": "spatial-field", "shape": "sphere",
-                 "r": 0, "g": 220, "b": 255, "size": {"radius": 1800},
-                 "motion": {"startPos": [9000, 0, 2000], "endPos": [1000, 0, 8000],
+                 "r": 0, "g": 220, "b": 255, "size": {"radius": 3000},
+                 "motion": {"startPos": [9000, 2500, 2000], "endPos": [1000, 2500, 8000],
                             "durationS": 6, "easing": "ease-in-out"},
                  "blend": "add"},
                 {"name": "Gold Return A", "category": "spatial-field", "shape": "sphere",
-                 "r": 255, "g": 200, "b": 50, "size": {"radius": 1800},
-                 "motion": {"startPos": [9000, 0, 8000], "endPos": [1000, 0, 2000],
+                 "r": 255, "g": 200, "b": 50, "size": {"radius": 3000},
+                 "motion": {"startPos": [9000, 2500, 8000], "endPos": [1000, 2500, 2000],
                             "durationS": 6, "easing": "ease-in-out"},
                  "blend": "add"},
                 {"name": "Gold Return B", "category": "spatial-field", "shape": "sphere",
-                 "r": 255, "g": 200, "b": 50, "size": {"radius": 1800},
-                 "motion": {"startPos": [1000, 0, 8000], "endPos": [9000, 0, 2000],
+                 "r": 255, "g": 200, "b": 50, "size": {"radius": 3000},
+                 "motion": {"startPos": [1000, 2500, 8000], "endPos": [9000, 2500, 2000],
                             "durationS": 6, "easing": "ease-in-out"},
                  "blend": "add"},
             ],
@@ -2982,18 +3090,18 @@ def api_show_preset():
             "effects": [
                 # Fast orbiting spots — moving heads rapidly track
                 {"name": "Red Orbit", "category": "spatial-field", "shape": "sphere",
-                 "r": 255, "g": 0, "b": 50, "size": {"radius": 1200},
-                 "motion": {"startPos": [1000, 0, 2000], "endPos": [9000, 0, 8000],
+                 "r": 255, "g": 0, "b": 50, "size": {"radius": 2500},
+                 "motion": {"startPos": [1000, 2500, 2000], "endPos": [9000, 2500, 8000],
                             "durationS": 3, "easing": "linear"},
                  "blend": "add"},
                 {"name": "Blue Orbit", "category": "spatial-field", "shape": "sphere",
-                 "r": 50, "g": 0, "b": 255, "size": {"radius": 1200},
-                 "motion": {"startPos": [9000, 0, 2000], "endPos": [1000, 0, 8000],
+                 "r": 50, "g": 0, "b": 255, "size": {"radius": 2500},
+                 "motion": {"startPos": [9000, 2500, 2000], "endPos": [1000, 2500, 8000],
                             "durationS": 3, "easing": "linear"},
                  "blend": "add"},
                 {"name": "Green Flash", "category": "spatial-field", "shape": "sphere",
-                 "r": 0, "g": 255, "b": 80, "size": {"radius": 1500},
-                 "motion": {"startPos": [5000, 5000, 5000], "endPos": [5000, 0, 5000],
+                 "r": 0, "g": 255, "b": 80, "size": {"radius": 3000},
+                 "motion": {"startPos": [5000, 5000, 5000], "endPos": [5000, 1000, 5000],
                             "durationS": 2, "easing": "ease-in"},
                  "blend": "add"},
             ],
@@ -3050,22 +3158,8 @@ def api_show_preset():
 @app.get("/api/show/presets")
 def api_show_presets():
     """List available preset shows."""
-    presets = [
-        {"id": "rainbow-up",     "name": "Rainbow Up",       "desc": "Moving rainbow from floor to ceiling"},
-        {"id": "rainbow-across", "name": "Rainbow Across",   "desc": "Moving rainbow from stage left to right"},
-        {"id": "slow-fire",      "name": "Slow Fire",        "desc": "Warm fire effect across all fixtures"},
-        {"id": "disco",          "name": "Disco",            "desc": "Random pastel twinkles on all fixtures"},
-        {"id": "ocean-wave",     "name": "Ocean Wave",       "desc": "Blue wave sweeping across the stage"},
-        {"id": "sunset",         "name": "Sunset Glow",      "desc": "Warm orange breathe with golden sweep"},
-        {"id": "police",         "name": "Police Lights",    "desc": "Red strobe with blue flash sweep"},
-        {"id": "starfield",      "name": "Starfield",        "desc": "White sparkles on dark background"},
-        {"id": "aurora",         "name": "Aurora Borealis",  "desc": "Green curtain with purple shimmer"},
-        {"id": "spotlight-sweep","name": "Spotlight Sweep", "desc": "Warm orb sweeps stage left-right — moving heads track it"},
-        {"id": "concert-wash",  "name": "Concert Wash",    "desc": "Magenta flood + amber spot — moving heads follow the amber"},
-        {"id": "figure-eight",  "name": "Figure Eight",    "desc": "Crossing cyan/gold orbs — moving heads trace figure-eight paths"},
-        {"id": "thunderstorm",  "name": "Thunderstorm",    "desc": "Lightning bolts on deep blue — moving heads chase the strikes"},
-        {"id": "dance-floor",   "name": "Dance Floor",     "desc": "Fast orbiting spots + chase pulse — moving heads rapid-track"},
-    ]
+    from show_generator import list_themes
+    presets = list_themes()
     return jsonify(presets)
 
 @app.get("/api/show/export")
@@ -3782,6 +3876,8 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
 
 
 

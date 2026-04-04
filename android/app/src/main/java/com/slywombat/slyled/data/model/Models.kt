@@ -107,7 +107,21 @@ data class Action(
     val offMs: Int? = null,
     val wledFxOverride: Int? = null,
     val wledPalOverride: Int? = null,
-    val wledSegId: Int? = null
+    val wledSegId: Int? = null,
+    // DMX action params
+    val dimmer: Int? = null,
+    val pan: Double? = null,
+    val tilt: Double? = null,
+    val strobe: Int? = null,
+    val gobo: Int? = null,
+    val colorWheel: Int? = null,
+    val prism: Int? = null,
+    val focus: Int? = null,
+    val zoom: Int? = null,
+    val panStart: Double? = null,
+    val panEnd: Double? = null,
+    val tiltStart: Double? = null,
+    val tiltEnd: Double? = null
 )
 
 @Serializable
@@ -226,11 +240,16 @@ object ActionTypes {
     const val SCANNER = 11
     const val SPARKLE = 12
     const val GRADIENT = 13
+    const val DMX_SCENE = 14
+    const val DMX_PT_MOVE = 15
+    const val DMX_GOBO = 16
+    const val DMX_COLOR_WHEEL = 17
 
     val names = listOf(
         "Blackout", "Solid", "Fade", "Breathe", "Chase",
         "Rainbow", "Fire", "Comet", "Twinkle", "Strobe",
-        "Color Wipe", "Scanner", "Sparkle", "Gradient"
+        "Color Wipe", "Scanner", "Sparkle", "Gradient",
+        "DMX Scene", "Pan/Tilt Move", "Gobo Select", "Color Wheel"
     )
 
     val directionNames = listOf("East", "North", "West", "South")

@@ -40,6 +40,9 @@ ACT_SCANNER = 11
 ACT_SPARKLE = 12
 ACT_GRADIENT = 13
 ACT_DMX_SCENE = 14  # DMX fixture: holds all channel values for a time slice
+ACT_DMX_PT_MOVE = 15  # Pan/Tilt animated move
+ACT_DMX_GOBO = 16  # Gobo select
+ACT_DMX_COLOR_WHEEL = 17  # Color wheel select
 
 
 class BakeProgress:
@@ -533,7 +536,7 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
             "pixels": pixels, "pixelCount": len(pixels), "strings": strings_info,
             "fixtureType": ft,
             "profileInfo": _dmx_profile_info if ft == "dmx" else None,
-            "aimPoint": f.get("aimPoint", [0, -1000, 0]) if ft == "dmx" else None,
+            "aimPoint": f.get("aimPoint", [0, 0, 10000]) if ft == "dmx" else None,
         }
 
     # Expand allPerformers and group fixtures into per-fixture tracks
@@ -555,15 +558,19 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
             else:
                 tracks.append(track)
 
-    # Merge clips per fixture
+    # Merge clips per fixture, stamping each clip with track priority
+    # Higher track index = higher priority (overrides lower tracks at same time)
     merged_clips = {}
-    for track in tracks:
+    for ti, track in enumerate(tracks):
         fid = track.get("fixtureId")
         if fid not in fixture_data:
             continue
         if fid not in merged_clips:
             merged_clips[fid] = []
-        merged_clips[fid].extend(track.get("clips", []))
+        for clip in track.get("clips", []):
+            c = dict(clip)
+            c["_priority"] = ti  # track index as priority
+            merged_clips[fid].append(c)
 
     if progress:
         progress.total_fixtures = len(merged_clips)
@@ -579,21 +586,78 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
         all_segments = []
 
         for clip in clips:
+            clip_pri = clip.get("_priority", 0)
+            _seg_before = len(all_segments)
             # Action-type clips: emit directly
             aid = clip.get("actionId")
             if aid is not None:
                 act = act_map.get(aid)
                 if act:
-                    seg = {
-                        "type": act.get("type", 0),
-                        "params": {k: act.get(k, 0) for k in (
-                            "r", "g", "b", "r2", "g2", "b2", "speedMs", "periodMs",
-                            "spawnMs", "minBri", "spacing", "paletteId", "cooling",
-                            "sparking", "direction", "tailLen", "density", "decay", "fadeSpeed")},
-                        "startS": clip.get("startS", 0),
-                        "durationS": clip.get("durationS", 1),
-                    }
-                    all_segments.append(seg)
+                    act_type = act.get("type", 0)
+                    params = {k: act.get(k, 0) for k in (
+                        "r", "g", "b", "r2", "g2", "b2", "speedMs", "periodMs",
+                        "spawnMs", "minBri", "spacing", "paletteId", "cooling",
+                        "sparking", "direction", "tailLen", "density", "decay", "fadeSpeed")}
+                    # DMX fixtures: convert classic LED actions to DMX scene
+                    if fdata.get("fixtureType") == "dmx" and act_type < ACT_DMX_SCENE:
+                        params["dimmer"] = act.get("dimmer", 255 if (params["r"] or params["g"] or params["b"]) else 0)
+                        params["pan"] = act.get("pan", 0.5)
+                        params["tilt"] = act.get("tilt", 0.5)
+                        if act.get("strobe") is not None:
+                            params["strobe"] = act["strobe"]
+                        if act.get("gobo") is not None:
+                            params["gobo"] = act["gobo"]
+                        act_type = ACT_DMX_SCENE
+                    # DMX Scene actions: pass through all DMX params
+                    if act_type >= ACT_DMX_SCENE:
+                        for k in ("dimmer", "pan", "tilt", "strobe", "gobo",
+                                  "colorWheel", "prism", "focus", "zoom"):
+                            if k not in params and act.get(k) is not None:
+                                params[k] = act[k]
+                    # Pan/Tilt Move: expand into time-sliced DMX_SCENE segments
+                    if act_type == ACT_DMX_PT_MOVE:
+                        clip_start_s = clip.get("startS", 0)
+                        clip_dur_s = clip.get("durationS", 1)
+                        ps = act.get("panStart", 0)
+                        pe = act.get("panEnd", 1)
+                        ts = act.get("tiltStart", 0.5)
+                        te = act.get("tiltEnd", 0.5)
+                        # Scale slice duration to keep segment count reasonable
+                        slice_dur = 1.0 if clip_dur_s > 15 else 0.5
+                        t = 0
+                        while t < clip_dur_s:
+                            sd = min(slice_dur, clip_dur_s - t)
+                            frac = (t + sd / 2) / clip_dur_s if clip_dur_s > 0 else 0
+                            sp = {k: v for k, v in params.items()}
+                            sp["pan"] = ps + (pe - ps) * frac
+                            sp["tilt"] = ts + (te - ts) * frac
+                            all_segments.append({
+                                "type": ACT_DMX_SCENE,
+                                "params": sp,
+                                "startS": round(clip_start_s + t, 2),
+                                "durationS": round(sd, 2),
+                            })
+                            t += slice_dur
+                    # Gobo/Color Wheel: emit as DMX Scene
+                    elif act_type == ACT_DMX_GOBO or act_type == ACT_DMX_COLOR_WHEEL:
+                        seg = {
+                            "type": ACT_DMX_SCENE,
+                            "params": params,
+                            "startS": clip.get("startS", 0),
+                            "durationS": clip.get("durationS", 1),
+                        }
+                        all_segments.append(seg)
+                    else:
+                        seg = {
+                            "type": act_type,
+                            "params": params,
+                            "startS": clip.get("startS", 0),
+                            "durationS": clip.get("durationS", 1),
+                        }
+                        all_segments.append(seg)
+                # Stamp priority on action-produced segments before continuing
+                for _si in range(_seg_before, len(all_segments)):
+                    all_segments[_si]["_pri"] = clip_pri
                 continue
 
             # Spatial effect clips: compile from spatial math
@@ -606,7 +670,7 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
                 # DMX fixture: compile with beam cone samples for intersection
                 steps = _compile_dmx_fixture(
                     clip, fx, pixels[0] if pixels else [0, 0, 0],
-                    fdata.get("aimPoint", [0, -1000, 0]),
+                    fdata.get("aimPoint", [0, 0, 10000]),
                     fdata.get("profileInfo"),
                     duration,
                     beam_pixels=pixels,
@@ -627,9 +691,14 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
                 steps = _compile_clip_for_string(clip, fx, pixels, 0, len(pixels), duration)
                 all_segments.extend(steps)
 
-        # Sort by start time, cap at 16
-        all_segments.sort(key=lambda s: s.get("startS", 0))
-        all_segments = all_segments[:16]
+            # Stamp track priority on all segments produced by this clip
+            for _si in range(_seg_before, len(all_segments)):
+                all_segments[_si]["_pri"] = clip_pri
+
+        # Sort by start time, then by priority descending (higher track overrides)
+        # Playback uses first matching segment, so higher priority must sort first
+        all_segments.sort(key=lambda s: (s.get("startS", 0), -s.get("_pri", 0)))
+        all_segments = all_segments[:64]
 
         result["fixtures"][fid] = {
             "segments": all_segments,

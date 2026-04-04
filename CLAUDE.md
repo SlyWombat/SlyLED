@@ -75,6 +75,11 @@ Performers (ESP32 / D1 Mini / Giga Child)  ← LED execution nodes
 | `desktop/mac/run.sh` | Bash launcher — installs deps, starts server |
 | `desktop/mac/requirements.txt` | `flask>=3.0` |
 | `desktop/shared/wled_bridge.py` | WLED device HTTP communication (probe, state, action mapping) |
+| `desktop/shared/bake_engine.py` | Timeline bake — spatial math, DMX scene conversion, track priority |
+| `desktop/shared/show_generator.py` | Dynamic show generation — 14 themes adapt to actual fixtures |
+| `desktop/shared/dmx_profiles.py` | DMX fixture profile library — CRUD, validation, OFL import |
+| `desktop/shared/dmx_artnet.py` | Art-Net engine — universe buffers, ArtDMX/ArtPoll output |
+| `desktop/shared/community_client.py` | Community profile server client (electricrv.ca) |
 | `firmware/registry.json` | Firmware binary registry (board, version, file) |
 
 **Running on Windows:** `powershell.exe -ExecutionPolicy Bypass -File desktop\windows\run.ps1`
