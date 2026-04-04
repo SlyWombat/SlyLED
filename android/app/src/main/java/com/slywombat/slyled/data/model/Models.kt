@@ -59,6 +59,7 @@ data class Child(
     val status: Int = 0,
     val seen: Long = 0,
     val type: String = "slyled",
+    val boardType: String = "",
     val fwVersion: String? = null,
     val rssi: Int? = null,
     val startupDone: Boolean = true

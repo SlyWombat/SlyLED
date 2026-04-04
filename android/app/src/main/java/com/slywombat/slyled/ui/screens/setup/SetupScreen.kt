@@ -234,20 +234,43 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                 }
             }
 
-            // Registered performers header
-            if (children.isNotEmpty()) {
+            // Split children into DMX bridges and LED performers
+            val dmxBridges = children.filter { it.type == "dmx" || it.boardType == "giga-dmx" || it.boardType == "DMX Bridge" }
+            val ledPerformers = children.filter { it !in dmxBridges }
+
+            // Hardware section (DMX bridges)
+            if (dmxBridges.isNotEmpty()) {
                 item {
                     Text(
-                        "Registered Performers (${children.size})",
+                        "Hardware (${dmxBridges.size})",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+                items(dmxBridges, key = { it.id }) { child ->
+                    SetupPerformerCard(
+                        child = child,
+                        onRefresh = { viewModel.refreshChild(child.id) },
+                        onReboot = { confirmRebootId = child.id },
+                        onRemove = { confirmRemoveId = child.id },
+                        onDetails = { detailChild = child }
+                    )
+                }
+            }
+
+            // LED Performers section
+            if (ledPerformers.isNotEmpty()) {
+                item {
+                    Text(
+                        "Performers (${ledPerformers.size})",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(top = 8.dp)
                     )
                 }
             }
-
-            // Performer list
-            items(children, key = { it.id }) { child ->
+            items(ledPerformers, key = { it.id }) { child ->
                 SetupPerformerCard(
                     child = child,
                     onRefresh = { viewModel.refreshChild(child.id) },
@@ -544,6 +567,7 @@ private fun SetupBoardBadge(type: String) {
         "esp32" -> "ESP32" to CyanSecondary
         "d1mini", "d1_mini" -> "D1 Mini" to OrangeWled
         "giga" -> "Giga" to androidx.compose.ui.graphics.Color(0xFFa78bfa)
+        "giga-dmx", "dmx-bridge", "dmx" -> "DMX Bridge" to androidx.compose.ui.graphics.Color(0xFF7c3aed)
         "wled" -> "WLED" to OrangeWled
         else -> "SlyLED" to MaterialTheme.colorScheme.primary
     }

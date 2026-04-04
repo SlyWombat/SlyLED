@@ -254,4 +254,42 @@ class RenderingDataTest {
         assertNull(s.activeTimeline)
         assertNull(s.runnerStartEpoch)
     }
+
+    // ── DMX Bridge detection ────────────────────────────────────────
+
+    @Test
+    fun `deserialize Child with DMX bridge type and boardType`() {
+        val input = """{"id":3,"ip":"192.168.10.219","hostname":"SLYC-1152",
+            "name":"SLYC-1152","type":"dmx","boardType":"giga-dmx",
+            "sc":1,"strings":[{"leds":30,"mm":500,"sdir":0}],"status":1}"""
+        val child = json.decodeFromString<Child>(input)
+        assertEquals("dmx", child.type)
+        assertEquals("giga-dmx", child.boardType)
+        // This child should be identified as a DMX bridge, not an LED performer
+        val isDmxBridge = child.type == "dmx" || child.boardType == "giga-dmx"
+        assertTrue(isDmxBridge)
+    }
+
+    @Test
+    fun `DMX bridge should NOT be treated as LED performer`() {
+        val bridge = json.decodeFromString<Child>(
+            """{"id":1,"type":"dmx","boardType":"giga-dmx","sc":1,
+            "strings":[{"leds":30,"mm":500,"sdir":0}]}""")
+        val ledPerformer = json.decodeFromString<Child>(
+            """{"id":2,"type":"slyled","boardType":"ESP32","sc":2,
+            "strings":[{"leds":150,"mm":1000,"sdir":0},{"leds":150,"mm":1000,"sdir":2}]}""")
+
+        // Bridge has type=dmx even though it has strings with LEDs
+        assertEquals("dmx", bridge.type)
+        assertEquals("slyled", ledPerformer.type)
+
+        // Filter logic should separate them
+        val allChildren = listOf(bridge, ledPerformer)
+        val bridges = allChildren.filter { it.type == "dmx" || it.boardType == "giga-dmx" }
+        val performers = allChildren.filter { it !in bridges }
+        assertEquals(1, bridges.size)
+        assertEquals(1, performers.size)
+        assertEquals("dmx", bridges[0].type)
+        assertEquals("slyled", performers[0].type)
+    }
 }
