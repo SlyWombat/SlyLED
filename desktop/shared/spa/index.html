@@ -1149,7 +1149,30 @@ function setupRefreshAll(btn){
   });
 }
 
-function closeModal(){document.getElementById('modal').style.display='none';}
+var _modalStack=[];
+function _pushModal(){
+  // Save current modal state before opening a sub-dialog (only if modal is visible)
+  var m=document.getElementById('modal');
+  if(!m||m.style.display==='none')return;
+  var title=document.getElementById('modal-title').textContent;
+  var body=document.getElementById('modal-body').innerHTML;
+  _modalStack.push({title:title,body:body});
+}
+function _popModal(){
+  // Restore parent modal state
+  if(_modalStack.length){
+    var prev=_modalStack.pop();
+    document.getElementById('modal-title').textContent=prev.title;
+    document.getElementById('modal-body').innerHTML=prev.body;
+    return true;
+  }
+  return false;
+}
+function closeModal(){
+  // If there's a parent dialog on the stack, go back to it instead of closing
+  if(_popModal())return;
+  document.getElementById('modal').style.display='none';
+}
 
 function showDetails(id){
   ra('GET','/api/children',null,function(d){
@@ -1968,6 +1991,7 @@ function renderPatchView(){
 }
 
 function showProfileBrowser(){
+  _modalStack=[]; // top-level modal — clear stack
   ra('GET','/api/dmx-profiles',null,function(profiles){
     if(!profiles)return;
     var cats=['','par','wash','spot','moving-head','strobe','fog','laser','other'];
@@ -2001,8 +2025,9 @@ function _filterProfiles(){
   });
 }
 function viewProfile(id){
+  _pushModal(); // save profile browser state
   ra('GET','/api/dmx-profiles/'+id,null,function(p){
-    if(!p)return;
+    if(!p){_popModal();return;}
     var h='<p><b>'+escapeHtml(p.name)+'</b> by '+escapeHtml(p.manufacturer||'?')+'</p>';
     h+='<p style="font-size:.82em;color:#94a3b8">'+escapeHtml(p.category||'other')+' | '+p.channelCount+' ch | Color: '+escapeHtml(p.colorMode||'?')+' | Beam: '+p.beamWidth+'\u00b0';
     if(p.panRange)h+=' | Pan: '+p.panRange+'\u00b0';
@@ -2098,6 +2123,7 @@ function _peRecalcOffsets(){
   _peRenderChs();
 }
 function _peEditCaps(chIdx){
+  _pushModal(); // save profile editor state
   var ch=window._peChannels[chIdx];
   var caps=ch.capabilities||[];
   var h='<p style="font-size:.82em;color:#94a3b8">Channel: '+escapeHtml(ch.name)+' ('+ch.type+')</p>';
@@ -2130,7 +2156,12 @@ function _peAddCap(chIdx){
 }
 function _peSaveCaps(chIdx){
   window._peChannels[chIdx].capabilities=JSON.parse(JSON.stringify(window._peCaps||[]));
-  _openProfileEditor(_peGatherProfile(),!!document.getElementById('pe-id').disabled);
+  // Pop the stack to restore profile editor (re-render channels table)
+  if(_popModal()){
+    _peRenderChs(); // refresh channel table with updated caps
+  }else{
+    _openProfileEditor(_peGatherProfile(),!!document.getElementById('pe-id').disabled);
+  }
 }
 function _peGatherProfile(){
   return{id:(document.getElementById('pe-id')||{}).value||'',name:(document.getElementById('pe-name')||{}).value||'',
