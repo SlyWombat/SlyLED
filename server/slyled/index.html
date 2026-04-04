@@ -28,7 +28,7 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 
 /* Hero */
 .hero{padding:80px 0 60px;text-align:center;position:relative;overflow:hidden}
-.hero::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:radial-gradient(circle at 50% 50%,rgba(9,105,218,.08) 0%,transparent 50%);animation:pulse 8s ease-in-out infinite}
+.hero::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:radial-gradient(circle at 50% 50%,rgba(9,105,218,.08) 0%,transparent 50%);animation:pulse 8s ease-in-out infinite;pointer-events:none}
 @keyframes pulse{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.1);opacity:1}}
 .hero img{height:90px;margin-bottom:20px;filter:drop-shadow(0 0 20px rgba(34,211,238,.3))}
 .hero h1{font-size:3.5em;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--green),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;letter-spacing:-.02em}
