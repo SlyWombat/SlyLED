@@ -63,6 +63,7 @@ main/arduino_secrets.h
 *.gcov
 
 # Android build artifacts
+android/.kotlin/
 android/.gradle/
 android/app/build/
 android/local.properties
