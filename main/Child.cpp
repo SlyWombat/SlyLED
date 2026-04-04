@@ -376,22 +376,22 @@ void sendChildConfigPage(WiFiClient& c) {
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
             "<title>SlyLED</title><style>"
             "*{box-sizing:border-box;margin:0;padding:0}"
-            "body{font-family:sans-serif;background:#111;color:#eee;padding:1.2em;max-width:480px}"));
+            "body{font-family:sans-serif;background:#0A0F13;color:#e2e8f0;padding:1.2em;max-width:480px}"));
   c.print(F("h1{font-size:1.4em;margin-bottom:.1em}"
             "h2{font-size:.8em;color:#888;font-weight:normal;margin-bottom:.8em}"
             ".tabs{display:flex;gap:4px;margin-bottom:1em}"
-            ".tab{flex:1;padding:.4em;background:#1e1e1e;border:1px solid #333;"
+            ".tab{flex:1;padding:.4em;background:#0f172a;border:1px solid #334155;"
             "border-radius:5px;color:#999;font-size:.85em;cursor:pointer;text-align:center}"
-            ".tact{background:#446;border-color:#446;color:#fff}"
+            ".tact{background:#14532d;border-color:#22c55e;color:#86efac}"
             ".pane{display:none}.row{display:flex;justify-content:space-between;"
             "padding:.35em 0;border-bottom:1px solid #222;font-size:.9em}"));
   c.print(F(".k{color:#aaa}.v{font-weight:bold}"
             "label{display:block;font-size:.82em;color:#aaa;margin:.5em 0 .15em}"
-            "input,select{width:100%;background:#222;color:#eee;border:1px solid #444;"
+            "input,select{width:100%;background:#0f172a;color:#e2e8f0;border:1px solid #334155;"
             "border-radius:4px;padding:.3em .5em;font-size:.88em;margin-bottom:.3em}"
-            ".btn{display:inline-block;padding:.4em 1.2em;background:#446;color:#fff;"
+            ".btn{display:inline-block;padding:.4em 1.2em;background:#14532d;color:#86efac;"
             "border:none;border-radius:5px;cursor:pointer;font-size:.9em;margin-top:.6em}"
-            ".btn-warn{background:#633}"
+            ".btn-warn{background:#7f1d1d;color:#fca5a5}"
             ".btn:active{transform:scale(.95);opacity:.7}"
             ".ftr{margin-top:1.5em;font-size:.7em;color:#444}"
             "</style></head><body>"));
