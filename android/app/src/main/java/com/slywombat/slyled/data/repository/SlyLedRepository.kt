@@ -179,6 +179,11 @@ class SlyLedRepository @Inject constructor(
     }
     suspend fun deleteSurface(id: Int) = requireApi().deleteSurface(id)
 
+    // OFL
+    suspend fun oflSearch(query: String) = requireApi().oflSearch(query)
+    suspend fun oflImport(manufacturer: String, fixture: String) =
+        requireApi().oflImport(mapOf("manufacturer" to manufacturer, "fixture" to fixture))
+    suspend fun getDmxPatch() = requireApi().getDmxPatch()
     // Spatial Effects
     suspend fun getSpatialEffects() = requireApi().getSpatialEffects()
 

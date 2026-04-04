@@ -206,6 +206,16 @@ interface SlyLedApi {
     @POST("/api/dmx/settings")
     suspend fun saveDmxSettings(@Body body: JsonObject): OkResponse
 
+    // ── OFL Fixture Library ─────────────────────────────────────────────
+    @GET("api/dmx-profiles/ofl/search")
+    suspend fun oflSearch(@Query("q") query: String, @Query("limit") limit: Int = 30): List<JsonObject>
+
+    @POST("api/dmx-profiles/ofl/import-by-id")
+    suspend fun oflImport(@Body body: Map<String, String>): OkResponse
+
+    @GET("api/dmx/patch")
+    suspend fun getDmxPatch(): JsonObject
+
     // ── Surfaces ───────────────────────────────────────────────────────
     @GET("api/surfaces")
     suspend fun getSurfaces(): List<Surface>

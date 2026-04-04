@@ -243,4 +243,43 @@ class SetupViewModel @Inject constructor(
             }
         }
     }
+
+    // OFL search + import
+    private val _oflResults = MutableStateFlow<List<JsonObject>>(emptyList())
+    val oflResults: StateFlow<List<JsonObject>> = _oflResults
+    private val _oflSearching = MutableStateFlow(false)
+    val oflSearching: StateFlow<Boolean> = _oflSearching
+
+    fun oflSearch(query: String) {
+        viewModelScope.launch {
+            _oflSearching.value = true
+            try {
+                _oflResults.value = repository.oflSearch(query)
+            } catch (e: Exception) {
+                _message.emit("OFL search failed: ${e.message}")
+                _oflResults.value = emptyList()
+            } finally {
+                _oflSearching.value = false
+            }
+        }
+    }
+
+    fun oflImport(manufacturer: String, fixture: String, onDone: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            try {
+                val resp = repository.oflImport(manufacturer, fixture)
+                if (resp.ok) {
+                    _message.emit("Imported fixture profile")
+                    loadDmxProfiles()
+                    onDone(true)
+                } else {
+                    _message.emit("Import failed: ${resp.err ?: "unknown"}")
+                    onDone(false)
+                }
+            } catch (e: Exception) {
+                _message.emit("Import failed: ${e.message}")
+                onDone(false)
+            }
+        }
+    }
 }

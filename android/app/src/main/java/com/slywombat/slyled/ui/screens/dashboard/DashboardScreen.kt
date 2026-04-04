@@ -15,8 +15,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.slywombat.slyled.data.model.Child
-import com.slywombat.slyled.data.model.OnlineStatus
+import com.slywombat.slyled.data.model.*
+import com.slywombat.slyled.ui.screens.runtime.ShowEmulatorCanvas
 import com.slywombat.slyled.ui.theme.CyanSecondary
 import com.slywombat.slyled.ui.theme.GreenOnline
 import com.slywombat.slyled.ui.theme.OrangeWled
@@ -87,14 +87,48 @@ fun DashboardScreen(viewModel: DashboardViewModel = hiltViewModel()) {
                 }
             }
 
-            // Active runner card
+            // Active show card + stage preview
             if (settings.runnerRunning) {
                 item {
-                    ActiveRunnerCard(
-                        activeRunnerId = settings.activeRunner,
-                        elapsed = settings.runnerElapsed,
-                        loop = settings.runnerLoop,
-                        onStop = { viewModel.stopRunners() }
+                    val tlId = settings.activeTimeline
+                    if (tlId != null && tlId >= 0) {
+                        // Timeline-based show
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text("Show Running", fontWeight = FontWeight.Bold,
+                                    color = GreenOnline, style = MaterialTheme.typography.titleSmall)
+                                Spacer(Modifier.height(4.dp))
+                                val elapsed = settings.runnerElapsed
+                                val m = elapsed / 60; val s = elapsed % 60
+                                Text("%02d:%02d".format(m, s), style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(Modifier.height(8.dp))
+                                Button(
+                                    onClick = { viewModel.stopTimeline(tlId) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = RedError)
+                                ) { Text("Stop Show") }
+                            }
+                        }
+                    } else {
+                        ActiveRunnerCard(
+                            activeRunnerId = settings.activeRunner,
+                            elapsed = settings.runnerElapsed,
+                            loop = settings.runnerLoop,
+                            onStop = { viewModel.stopRunners() }
+                        )
+                    }
+                }
+                // Stage preview
+                item {
+                    LaunchedEffect(Unit) { viewModel.loadStageData() }
+                    val layout by viewModel.layout.collectAsState()
+                    val surfaces by viewModel.surfaces.collectAsState()
+                    ShowEmulatorCanvas(
+                        previewData = emptyMap(),
+                        second = settings.runnerElapsed,
+                        durationS = 0,
+                        layout = layout,
+                        surfaces = surfaces
                     )
                 }
             }

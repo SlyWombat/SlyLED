@@ -59,6 +59,7 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
     var showCreateFixture by remember { mutableStateOf(false) }
     var editFixture by remember { mutableStateOf<Fixture?>(null) }
     var confirmDeleteFixtureId by remember { mutableStateOf<Int?>(null) }
+    var dmxTestFixture by remember { mutableStateOf<Fixture?>(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -334,7 +335,8 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                     fixture = fixture,
                     children = children,
                     onEdit = { editFixture = fixture },
-                    onDelete = { confirmDeleteFixtureId = fixture.id }
+                    onDelete = { confirmDeleteFixtureId = fixture.id },
+                    onDmxTest = if (fixture.fixtureType == "dmx") {{ dmxTestFixture = fixture }} else null
                 )
             }
         }
@@ -431,6 +433,15 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
             dismissButton = {
                 TextButton(onClick = { confirmDeleteFixtureId = null }) { Text("Cancel") }
             }
+        )
+    }
+
+    // DMX channel test dialog
+    dmxTestFixture?.let { fixture ->
+        DmxChannelTestDialog(
+            fixture = fixture,
+            viewModel = viewModel,
+            onDismiss = { dmxTestFixture = null }
         )
     }
 
@@ -682,7 +693,8 @@ private fun FixtureCard(
     fixture: Fixture,
     children: List<Child>,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onDmxTest: (() -> Unit)? = null
 ) {
     val childName = fixture.childId?.let { cid ->
         children.find { it.id == cid }?.let { c ->
@@ -740,6 +752,13 @@ private fun FixtureCard(
                 horizontalArrangement = Arrangement.End
             ) {
                 TextButton(onClick = onEdit) { Text("Edit") }
+                if (onDmxTest != null) {
+                    TextButton(
+                        onClick = onDmxTest,
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = androidx.compose.ui.graphics.Color(0xFF7c3aed))
+                    ) { Text("Details") }
+                }
                 TextButton(
                     onClick = onDelete,
                     colors = ButtonDefaults.textButtonColors(contentColor = RedError)
@@ -1116,6 +1135,117 @@ private fun FixtureFormDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+// ── DMX Channel Test Dialog ──────────────────────────────────────────
+@Composable
+private fun DmxChannelTestDialog(
+    fixture: Fixture,
+    viewModel: SetupViewModel,
+    onDismiss: () -> Unit
+) {
+    var channels by remember { mutableStateOf<List<Map<String, Any>>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(fixture.id) {
+        try {
+            val data = viewModel.loadFixtureChannels(fixture.id)
+            if (data != null) {
+                val chArray = data["channels"]?.jsonArray ?: return@LaunchedEffect
+                channels = chArray.map { ch ->
+                    val obj = ch.jsonObject
+                    mapOf(
+                        "offset" to (obj["offset"]?.jsonPrimitive?.intOrNull ?: 0),
+                        "name" to (obj["name"]?.jsonPrimitive?.content ?: "Ch"),
+                        "type" to (obj["type"]?.jsonPrimitive?.content ?: "dimmer"),
+                        "value" to (obj["value"]?.jsonPrimitive?.intOrNull ?: 0)
+                    )
+                }
+            }
+        } catch (_: Exception) {}
+        loading = false
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("${fixture.name} - Channel Test") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "U${fixture.dmxUniverse ?: "?"} @ ${fixture.dmxStartAddr ?: "?"} | ${fixture.dmxChannelCount ?: "?"} channels",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                if (loading) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                } else if (channels.isEmpty()) {
+                    Text("No channels", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    // Channel sliders
+                    Column(
+                        modifier = Modifier.heightIn(max = 300.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        channels.forEachIndexed { idx, ch ->
+                            val offset = ch["offset"] as Int
+                            val name = ch["name"] as String
+                            var value by remember { mutableIntStateOf(ch["value"] as Int) }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(name, modifier = Modifier.width(70.dp),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1)
+                                Slider(
+                                    value = value.toFloat(),
+                                    onValueChange = { value = it.toInt() },
+                                    onValueChangeFinished = {
+                                        scope.launch { viewModel.testFixtureChannel(fixture.id, offset, value) }
+                                    },
+                                    valueRange = 0f..255f,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text("$value", modifier = Modifier.width(30.dp),
+                                    style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    // Quick buttons
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        val quickColors = listOf("White" to Triple(255, 255, 255), "Red" to Triple(255, 0, 0),
+                            "Green" to Triple(0, 255, 0), "Blue" to Triple(0, 0, 255), "Off" to Triple(0, 0, 0))
+                        quickColors.forEach { (label, rgb) ->
+                            FilledTonalButton(
+                                onClick = {
+                                    scope.launch {
+                                        channels.forEach { ch ->
+                                            val off = ch["offset"] as Int
+                                            val type = ch["type"] as String
+                                            val v = when (type) {
+                                                "red" -> rgb.first; "green" -> rgb.second; "blue" -> rgb.third
+                                                "dimmer" -> if (rgb.first + rgb.second + rgb.third > 0) 255 else 0
+                                                else -> 0
+                                            }
+                                            viewModel.testFixtureChannel(fixture.id, off, v)
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(4.dp)
+                            ) { Text(label, style = MaterialTheme.typography.labelSmall) }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
         }
     )
 }

@@ -2,8 +2,7 @@ package com.slywombat.slyled.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.slywombat.slyled.data.model.Child
-import com.slywombat.slyled.data.model.Settings
+import com.slywombat.slyled.data.model.*
 import com.slywombat.slyled.data.repository.SlyLedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,6 +45,19 @@ class DashboardViewModel @Inject constructor(
         }
     }
 
+    private val _layout = MutableStateFlow<Layout?>(null)
+    val layout: StateFlow<Layout?> = _layout
+
+    private val _surfaces = MutableStateFlow<List<Surface>>(emptyList())
+    val surfaces: StateFlow<List<Surface>> = _surfaces
+
+    fun loadStageData() {
+        viewModelScope.launch {
+            try { _layout.value = repository.getLayout() } catch (_: Exception) {}
+            try { _surfaces.value = repository.getSurfaces() } catch (_: Exception) {}
+        }
+    }
+
     fun stopRunners() {
         viewModelScope.launch {
             try {
@@ -54,5 +66,10 @@ class DashboardViewModel @Inject constructor(
                 // ignore
             }
         }
+    }
+
+    fun stopTimeline(id: Int) {
+        viewModelScope.launch {
+            try { repository.stopTimeline(id) } catch (_: Exception) {} }
     }
 }
