@@ -888,7 +888,7 @@ function showAddFixtureModal(){
     +'</div>'
     +'<div id="af-dmx">';
     +'<div style="margin-bottom:.6em;padding:.5em;background:#0f172a;border:1px solid #1e3a5f;border-radius:4px">'
-    +'<label style="font-size:.82em;color:#93c5fd">Search Fixture Library</label>'
+    +'<label style="font-size:.82em;color:#93c5fd">Search All Fixtures (Local + Community + OFL)</label>'
     +'<div style="display:flex;gap:.3em;margin:.3em 0"><input id="af-ofl-q" placeholder="e.g. par, moving head, chauvet..." style="flex:1;padding:.3em;font-size:.85em" onkeydown="if(event.key===\'Enter\')_afOflSearch()">'
     +'<button class="btn" style="font-size:.75em;padding:.2em .5em;background:#1e3a5f;color:#93c5fd" onclick="_afOflSearch()">Search</button></div>'
     +'<div id="af-ofl-results" style="max-height:150px;overflow-y:auto;font-size:.8em"></div>'
@@ -946,19 +946,60 @@ function _afOflSearch(){
   var q=document.getElementById('af-ofl-q').value.trim();
   var el=document.getElementById('af-ofl-results');if(!el)return;
   if(q.length<2){el.innerHTML='<span style="color:#f66">Enter at least 2 characters</span>';return;}
-  el.innerHTML='<span style="color:#888">Searching OFL...</span>';
-  ra('GET','/api/dmx-profiles/ofl/search?q='+encodeURIComponent(q)+'&limit=20',null,function(r){
+  el.innerHTML='<span style="color:#888">Searching local, community &amp; OFL...</span>';
+  ra('GET','/api/dmx-profiles/unified-search?q='+encodeURIComponent(q),null,function(r){
     if(!el)return;
     if(!r||r.err){el.innerHTML='<span style="color:#f66">'+(r&&r.err||'Search failed')+'</span>';return;}
-    if(!r.length){el.innerHTML='<span style="color:#888">No results</span>';return;}
+    if(!r.length){el.innerHTML='<span style="color:#888">No results for "'+escapeHtml(q)+'"</span>';return;}
     var h='';
+    var srcColors={local:'#22c55e',community:'#7c3aed',ofl:'#3b82f6'};
+    var srcLabels={local:'Local',community:'Community',ofl:'OFL'};
     r.forEach(function(f){
-      h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:.2em 0;border-bottom:1px solid #1e293b">'
-        +'<span>'+escapeHtml(f.name)+' <span style="color:#64748b;font-size:.85em">'+escapeHtml(f.manufacturerName)+'</span></span>'
-        +'<button class="btn" style="font-size:.7em;padding:.15em .4em;background:#14532d;color:#86efac" '
-        +'onclick="_afSelectOfl(\''+f.manufacturer+'\',\''+f.fixture+'\',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Select</button></div>';
+      var src=f.source||'ofl';
+      var badge='<span style="font-size:.65em;padding:1px 5px;border-radius:8px;background:'+srcColors[src]+'22;color:'+srcColors[src]+'">'+srcLabels[src]+'</span>';
+      var selectFn;
+      if(src==='local'){
+        selectFn='_afSelectLocal(\''+escapeHtml(f.id)+'\',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\','+(f.channelCount||3)+')';
+      }else if(src==='community'){
+        selectFn='_afSelectCommunity(\''+escapeHtml(f.id)+'\',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')';
+      }else{
+        selectFn='_afSelectOfl(\''+(f.oflMfr||'')+'\',\''+escapeHtml(f.id)+'\',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')';
+      }
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:.3em 0;border-bottom:1px solid #1e293b">'
+        +'<span>'+escapeHtml(f.name)+' <span style="color:#64748b;font-size:.82em">'+escapeHtml(f.manufacturer||'')+'</span> '+badge+'</span>'
+        +'<button class="btn" style="font-size:.7em;padding:.15em .4em;background:#14532d;color:#86efac" onclick="'+selectFn+'">Select</button></div>';
     });
     el.innerHTML=h;
+  });
+}
+function _afSelectLocal(profId,displayName,chCount){
+  // Local profile already exists — just select it in the dropdown
+  var nameEl=document.getElementById('af-name');if(nameEl&&!nameEl.value)nameEl.value=displayName;
+  var chEl=document.getElementById('af-ch');if(chEl)chEl.value=chCount;
+  var sel=document.getElementById('af-prof');
+  if(sel){for(var i=0;i<sel.options.length;i++){if(sel.options[i].value===profId){sel.selectedIndex=i;break;}}}
+  var el=document.getElementById('af-ofl-results');
+  if(el)el.innerHTML='<span style="color:#86efac">Selected local profile: '+escapeHtml(displayName)+'</span>';
+}
+function _afSelectCommunity(slug,displayName){
+  var el=document.getElementById('af-ofl-results');
+  if(el)el.innerHTML='<span style="color:#a78bfa">Downloading '+escapeHtml(displayName)+'...</span>';
+  ra('POST','/api/dmx-profiles/community/download',{slug:slug},function(r){
+    if(r&&r.ok){
+      // Refresh profile dropdown and select
+      ra('GET','/api/dmx-profiles',null,function(profiles){
+        var sel=document.getElementById('af-prof');if(!sel)return;
+        sel.innerHTML='<option value="">— None —</option>';
+        (profiles||[]).forEach(function(p){
+          var o=document.createElement('option');o.value=p.id;o.textContent=p.name+' ('+p.channelCount+'ch)';
+          sel.appendChild(o);if(p.id===slug)sel.value=slug;
+        });
+        var nameEl=document.getElementById('af-name');if(nameEl&&!nameEl.value)nameEl.value=displayName;
+        var matched=profiles.find(function(p){return p.id===slug;});
+        if(matched){var chEl=document.getElementById('af-ch');if(chEl)chEl.value=matched.channelCount;}
+        if(el)el.innerHTML='<span style="color:#86efac">Downloaded: '+escapeHtml(displayName)+'</span>';
+      });
+    }else{if(el)el.innerHTML='<span style="color:#f66">Download failed</span>';}
   });
 }
 function _afSelectOfl(mfr,fix,displayName){
@@ -2198,7 +2239,7 @@ function _peSave(isEdit){
   var method=isEdit?'PUT':'POST';
   var url=isEdit?'/api/dmx-profiles/'+p.id:'/api/dmx-profiles';
   ra(method,url,p,function(r){
-    if(r&&r.ok){document.getElementById('hs').textContent='Profile saved: '+p.name;closeModal();}
+    if(r&&r.ok){document.getElementById('hs').textContent='Profile saved: '+p.name;closeModal();if(typeof loadDmxProfiles==='function')loadDmxProfiles();}
     else document.getElementById('hs').textContent='Save failed: '+(r&&r.err||'unknown');
   });
 }

@@ -74,7 +74,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "8.2.9"
+VERSION = "8.2.10"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1360,6 +1360,51 @@ def api_community_check():
         return jsonify(ok=False, err="Profile not found"), 404
     p = {k: v for k, v in profile.items() if k != "builtin"}
     return jsonify(cc.check_duplicate(p))
+
+@app.get("/api/dmx-profiles/unified-search")
+def api_unified_search():
+    """Search local + community + OFL in one call."""
+    q = request.args.get("q", "").strip()
+    if not q or len(q) < 2:
+        return jsonify(err="Query must be at least 2 characters"), 400
+    ql = q.lower()
+    results = []
+    seen = set()
+    # 1. Local profiles (instant)
+    for p in _profile_lib.list_profiles():
+        if ql in p.get("name", "").lower() or ql in p.get("manufacturer", "").lower() or ql in p.get("id", "").lower():
+            results.append({"id": p["id"], "name": p["name"], "manufacturer": p.get("manufacturer", ""),
+                            "category": p.get("category", ""), "channelCount": p.get("channelCount", 0),
+                            "source": "local", "builtin": p.get("builtin", False)})
+            seen.add(p["id"])
+    # 2. Community (fast)
+    try:
+        import community_client as cc
+        cr = cc.search(q, limit=20)
+        data = cr.get("data", cr)
+        profiles = data.get("profiles", data) if isinstance(data, dict) else data
+        for p in (profiles if isinstance(profiles, list) else []):
+            slug = p.get("slug", "")
+            if slug and slug not in seen:
+                results.append({"id": slug, "name": p.get("name", slug), "manufacturer": p.get("manufacturer", ""),
+                                "channelCount": int(p.get("channel_count", 0)), "source": "community"})
+                seen.add(slug)
+    except Exception:
+        pass
+    # 3. OFL (if still need more)
+    if len(results) < 30:
+        try:
+            for f in _ofl_build_full_index():
+                fk = f.get("fixture", "")
+                if fk in seen: continue
+                if ql in fk.lower() or ql in f.get("name", "").lower() or ql in f.get("manufacturerName", "").lower():
+                    results.append({"id": fk, "name": f.get("name", fk), "manufacturer": f.get("manufacturerName", ""),
+                                    "source": "ofl", "oflMfr": f.get("manufacturer", "")})
+                    seen.add(fk)
+                    if len(results) >= 50: break
+        except Exception:
+            pass
+    return jsonify(results[:50])
 
 # Parameterized routes AFTER static paths
 @app.get("/api/dmx-profiles/<profile_id>")
@@ -3724,6 +3769,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

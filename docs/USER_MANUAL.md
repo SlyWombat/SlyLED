@@ -250,7 +250,19 @@ Click **Search OFL** in Settings → Profiles to access 700+ fixtures from the [
 
 Multi-mode fixtures create one SlyLED profile per mode automatically.
 
+### Community Fixture Library
+Share and discover profiles with other SlyLED users:
+
+1. **Browse**: Click **Community** in Settings > Profiles to search, view recent, or popular
+2. **Download**: Click Download — imported to your local library immediately
+3. **Share**: Click **Share** on any custom profile to upload to the community
+4. **Dedup**: Server detects duplicates by channel fingerprint (same channels = same fixture)
+5. **Unified search**: When adding a DMX fixture, search queries Local + Community + OFL at once
+
+Community server: https://electricrv.ca/api/profiles/
+
 ### Import/Export
+- **Community**: Share/download profiles with other users
 - **Search OFL**: Browse, search, and bulk import from the Open Fixture Library
 - **Paste OFL**: Paste raw OFL JSON for offline fixtures
 - **Import Bundle**: Load previously exported profile pack
