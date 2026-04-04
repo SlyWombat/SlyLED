@@ -1999,6 +1999,7 @@ function showDmxDetails(fid){
     +'<button class="btn" onclick="_dmxDetailRed('+fid+')" style="font-size:.78em;background:#522;color:#f88">Red</button>'
     +'<button class="btn" onclick="_dmxDetailGreen('+fid+')" style="font-size:.78em;background:#252;color:#8f8">Green</button>'
     +'<button class="btn" onclick="_dmxDetailBlue('+fid+')" style="font-size:.78em;background:#225;color:#88f">Blue</button>'
+    +'<button class="btn" onclick="_dmxDetailDefaults('+fid+')" style="font-size:.78em;background:#1e3a5f;color:#93c5fd">Defaults</button>'
     +'</div>';
   document.getElementById('modal-title').textContent=fix.name+' — Channel Test';
   document.getElementById('modal-body').innerHTML=h;
@@ -2054,6 +2055,25 @@ function _dmxDetailWhite(fid){_dmxDetailColor(fid,{red:255,green:255,blue:255,wh
 function _dmxDetailRed(fid){_dmxDetailColor(fid,{red:255,green:0,blue:0,white:0,dimmer:255});}
 function _dmxDetailGreen(fid){_dmxDetailColor(fid,{red:0,green:255,blue:0,white:0,dimmer:255});}
 function _dmxDetailBlue(fid){_dmxDetailColor(fid,{red:0,green:0,blue:255,white:0,dimmer:255});}
+function _dmxDetailDefaults(fid){
+  // Load profile defaults for all channels
+  ra('GET','/api/dmx/fixture/'+fid+'/channels',null,function(d){
+    if(!d||!d.channels)return;
+    var chs=[];
+    d.channels.forEach(function(c){
+      var v=c.default||0;
+      chs.push({offset:c.offset,value:v});
+    });
+    ra('POST','/api/dmx/fixture/'+fid+'/test',{channels:chs},function(){
+      var sliders=document.querySelectorAll('.dmx-detail-slider');
+      sliders.forEach(function(s){
+        var off=parseInt(s.dataset.offset);
+        var ch=d.channels.find(function(c){return c.offset===off;});
+        if(ch){var v=ch.default||0;s.value=v;s.nextElementSibling.textContent=v;}
+      });
+    });
+  });
+}
 
 // ── Profile Library UI ───────────────────────────────────────────────────────
 var _profileCatColors={'par':'#059669','wash':'#2563eb','spot':'#7c3aed','moving-head':'#dc2626','strobe':'#f59e0b','fog':'#6b7280','laser':'#ec4899','other':'#446'};
@@ -2174,7 +2194,7 @@ function viewProfile(id){
     if(p.panRange)h+=' | Pan: '+p.panRange+'\u00b0';
     if(p.tiltRange)h+=' | Tilt: '+p.tiltRange+'\u00b0';
     h+='</p>';
-    h+='<table class="tbl" style="font-size:.78em;margin-top:.5em"><tr><th>Off</th><th>Name</th><th>Type</th><th>Bits</th><th>Capabilities</th></tr>';
+    h+='<table class="tbl" style="font-size:.78em;margin-top:.5em"><tr><th>Off</th><th>Name</th><th>Type</th><th>Bits</th><th>Default</th><th>Capabilities</th></tr>';
     (p.channels||[]).forEach(function(ch){
       var capTxt='';
       if(ch.capabilities&&ch.capabilities.length>1){
@@ -2182,7 +2202,7 @@ function viewProfile(id){
       }else if(ch.capabilities&&ch.capabilities.length===1){
         capTxt=escapeHtml(ch.capabilities[0].label||ch.capabilities[0].type);
       }
-      h+='<tr><td>'+ch.offset+'</td><td>'+escapeHtml(ch.name)+'</td><td><code>'+escapeHtml(ch.type)+'</code></td><td>'+(ch.bits||8)+'</td><td style="font-size:.85em">'+capTxt+'</td></tr>';
+      h+='<tr><td>'+ch.offset+'</td><td>'+escapeHtml(ch.name)+'</td><td><code>'+escapeHtml(ch.type)+'</code></td><td>'+(ch.bits||8)+'</td><td>'+(ch.default!==undefined?ch.default:0)+'</td><td style="font-size:.85em">'+capTxt+'</td></tr>';
     });
     h+='</table>';
     document.getElementById('modal-title').textContent='Profile: '+p.name;
@@ -2240,13 +2260,14 @@ function _openProfileEditor(p,isEdit){
 }
 function _peRenderChs(){
   var el=document.getElementById('pe-chs');if(!el)return;
-  var h='<table class="tbl" style="font-size:.75em"><tr><th>Off</th><th>Name</th><th>Type</th><th>Bits</th><th>Capabilities</th><th></th></tr>';
+  var h='<table class="tbl" style="font-size:.75em"><tr><th>Off</th><th>Name</th><th>Type</th><th>Bits</th><th>Default</th><th>Capabilities</th><th></th></tr>';
   (window._peChannels||[]).forEach(function(ch,i){
     var typeOpts='';_profEditChTypes.forEach(function(t){typeOpts+='<option'+(t===ch.type?' selected':'')+'>'+t+'</option>';});
     var capSummary=(ch.capabilities||[]).length+' cap'+(ch.capabilities&&ch.capabilities.length!==1?'s':'');
     h+='<tr><td>'+ch.offset+'</td><td><input value="'+escapeHtml(ch.name||'')+'" style="width:90px;font-size:.9em" onchange="window._peChannels['+i+'].name=this.value"></td>';
     h+='<td><select style="font-size:.85em" onchange="window._peChannels['+i+'].type=this.value">'+typeOpts+'</select></td>';
     h+='<td><select style="font-size:.85em" onchange="window._peChannels['+i+'].bits=parseInt(this.value);_peRecalcOffsets()"><option'+(ch.bits!==16?' selected':'')+'>8</option><option'+(ch.bits===16?' selected':'')+' value="16">16</option></select></td>';
+    h+='<td><input type="number" value="'+(ch.default!==undefined?ch.default:0)+'" min="0" max="'+(ch.bits===16?65535:255)+'" style="width:50px;font-size:.9em" onchange="window._peChannels['+i+'].default=parseInt(this.value)||0"></td>';
     h+='<td><button class="btn" onclick="_peEditCaps('+i+')" style="font-size:.7em;background:#335;color:#fff">'+capSummary+'</button></td>';
     h+='<td><button class="btn btn-off" onclick="_peDelCh('+i+')" style="font-size:.7em">\u2715</button></td></tr>';
   });

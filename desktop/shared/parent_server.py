@@ -74,7 +74,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "8.3.1"
+VERSION = "8.3.2"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1839,13 +1839,15 @@ def api_dmx_fixture_channels(fid):
     addr = fixture.get("dmxStartAddr", 1)
     if profile:
         channels = [{"offset": ch["offset"], "name": ch["name"], "type": ch["type"],
+                      "default": ch.get("default", 0),
                       "capabilities": ch.get("capabilities", [])}
                     for ch in profile.get("channels", [])]
     else:
         channels = [{"offset": i, "name": f"Ch {i+1}", "type": "dimmer",
+                      "default": 0,
                       "capabilities": [{"range": [0, 255], "type": "Intensity", "label": f"Ch {i+1} 0-100%"}]}
                     for i in range(count)]
-    # Read current values from universe buffer
+    # Read current values from universe buffer; fall back to profile default
     for ch in channels:
         dmx_addr = addr + ch["offset"]
         val = 0
@@ -1853,6 +1855,9 @@ def api_dmx_fixture_channels(fid):
             val = _artnet.get_universe(uni).get_channel(dmx_addr)
         elif _sacn.running:
             val = _sacn.get_universe(uni).get_channel(dmx_addr)
+        # If engine isn't running or channel is 0, use profile default
+        if val == 0 and ch.get("default", 0) > 0:
+            val = ch["default"]
         ch["value"] = val
     return jsonify(universe=uni, startAddr=addr, channels=channels)
 
@@ -3934,6 +3939,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
