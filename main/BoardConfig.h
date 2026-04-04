@@ -103,12 +103,13 @@
   constexpr uint8_t LED_BRIGHTNESS = 200;
   #ifdef BOARD_ESP32
     #define MAX_LEDS    255       // max per string — 765 bytes CRGB
+    #define NUM_LEDS    (MAX_LEDS * 4)  // buffer for up to 4 strings (1020 LEDs, 3060 bytes)
     // DATA_PIN removed — each string uses its own GPIO from config
   #else
     #define DATA_PIN      2       // D1 Mini: hardcoded GPIO 2
     #define MAX_LEDS    150       // D1 Mini — 450 bytes, fits in 80K RAM
+    #define NUM_LEDS    MAX_LEDS  // D1 Mini: single string
   #endif
-  #define NUM_LEDS MAX_LEDS       // FastLED array size (runtime count from EEPROM)
 #endif
 
 #ifdef BOARD_GIGA_CHILD
