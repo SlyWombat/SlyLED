@@ -884,6 +884,7 @@ function showAddFixtureModal(){
     +'<option value="group">Fixture Group</option></select>'
     +'<div id="af-led" style="display:none">'
     +'<label>IP Address</label><input id="af-ip" placeholder="x.x.x.x" style="width:100%">'
+    +'<div style="margin-top:.8em"><button class="btn btn-on" onclick="_submitAddFixture()" style="font-size:.95em;padding:.5em 2em">Add Performer</button></div>'
     +'</div>'
     +'<div id="af-dmx">';
     +'<div style="margin-bottom:.6em;padding:.5em;background:#0f172a;border:1px solid #1e3a5f;border-radius:4px">'
@@ -900,12 +901,13 @@ function showAddFixtureModal(){
     +'<label>Geometry</label><select id="af-geom" style="width:100%;margin-bottom:.4em"><option value="point">Point</option><option value="linear">Linear</option></select>'
     +'<label>Profile</label>'
     +'<select id="af-prof" style="width:100%"><option value="">— None (generic channels) —</option></select>'
+    +'<div style="margin-top:.8em;padding-top:.5em;border-top:1px solid #334155"><button class="btn btn-on" onclick="_submitAddFixture()" style="font-size:.95em;padding:.5em 2em">Add Fixture</button></div>'
     +'</div>'
     +'<div id="af-group" style="display:none">'
     +'<label>Group Name</label><input id="af-gname" placeholder="Front Wash" style="width:100%;margin-bottom:.4em">'
     +'<label>Select Members</label><div id="af-members" style="max-height:200px;overflow-y:auto;border:1px solid #334;padding:.3em;margin-bottom:.4em"></div>'
-    +'</div>'
-    +'<div style="margin-top:.8em"><button class="btn btn-on" onclick="_submitAddFixture()">Add</button></div>';
+    +'<div style="margin-top:.8em"><button class="btn btn-on" onclick="_submitAddFixture()" style="font-size:.95em;padding:.5em 2em">Add Group</button></div>'
+    +'</div>';
   document.getElementById('modal-title').textContent='Add Fixture';
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
