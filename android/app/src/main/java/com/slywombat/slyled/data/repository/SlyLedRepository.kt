@@ -93,31 +93,6 @@ class SlyLedRepository @Inject constructor(
     suspend fun updateAction(id: Int, action: Action) = requireApi().updateAction(id, action)
     suspend fun deleteAction(id: Int) = requireApi().deleteAction(id)
 
-    // Runners
-    suspend fun getRunners() = requireApi().getRunners()
-    suspend fun getRunner(id: Int) = requireApi().getRunner(id)
-    suspend fun createRunner(name: String) = requireApi().createRunner(CreateRunnerRequest(name))
-    suspend fun updateRunner(id: Int, runner: Runner) = requireApi().updateRunner(id, runner)
-    suspend fun deleteRunner(id: Int) = requireApi().deleteRunner(id)
-    suspend fun computeRunner(id: Int) = requireApi().computeRunner(id)
-    suspend fun syncRunner(id: Int) = requireApi().syncRunner(id)
-    suspend fun startRunner(id: Int) = requireApi().startRunner(id)
-    suspend fun stopRunners() = requireApi().stopRunners()
-
-    // Flights
-    suspend fun getFlights() = requireApi().getFlights()
-    suspend fun createFlight(flight: Flight) = requireApi().createFlight(flight)
-    suspend fun updateFlight(id: Int, flight: Flight) = requireApi().updateFlight(id, flight)
-    suspend fun deleteFlight(id: Int) = requireApi().deleteFlight(id)
-
-    // Shows
-    suspend fun getShows() = requireApi().getShows()
-    suspend fun createShow(show: Show) = requireApi().createShow(show)
-    suspend fun updateShow(id: Int, show: Show) = requireApi().updateShow(id, show)
-    suspend fun deleteShow(id: Int) = requireApi().deleteShow(id)
-    suspend fun startShow(id: Int) = requireApi().startShow(id)
-    suspend fun stopShows() = requireApi().stopShows()
-
     // Config/Show
     suspend fun exportConfig() = requireApi().exportConfig()
     suspend fun importConfig(data: JsonObject) = requireApi().importConfig(data)

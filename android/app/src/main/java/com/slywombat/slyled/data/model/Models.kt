@@ -125,51 +125,6 @@ data class Action(
 )
 
 @Serializable
-data class RunnerStep(
-    val actionId: Int? = null,
-    val durationS: Int = 5,
-    val speedMs: Int? = null,
-    val direction: Int? = null,
-    val brightness: Int? = null,
-    val r: Int? = null, val g: Int? = null, val b: Int? = null,
-    val scope: String? = null
-)
-
-@Serializable
-data class RunnerSummary(
-    val id: Int,
-    val name: String = "",
-    val steps: Int = 0,
-    val totalDurationS: Int = 0,
-    val computed: Boolean = false
-)
-
-@Serializable
-data class Runner(
-    val id: Int = -1,
-    val name: String = "",
-    val computed: Boolean = false,
-    val steps: List<RunnerStep> = emptyList()
-)
-
-@Serializable
-data class Flight(
-    val id: Int = -1,
-    val name: String = "",
-    val performerIds: List<Int> = emptyList(),
-    val runnerId: Int? = null,
-    val priority: Int = 1
-)
-
-@Serializable
-data class Show(
-    val id: Int = -1,
-    val name: String = "",
-    val flightIds: List<Int> = emptyList(),
-    val loop: Boolean = true
-)
-
-@Serializable
 data class LayoutChild(
     val id: Int,
     val x: Int = 0,
@@ -201,16 +156,6 @@ data class Settings(
     val logging: Boolean = false,
     val runnerStartEpoch: Long? = null,
     val activeTimeline: Int? = null
-)
-
-@Serializable
-data class LiveEvent(
-    val ip: String = "",
-    val actionType: Int? = null,
-    val stepIndex: Int? = null,
-    val totalSteps: Int? = null,
-    val event: Int? = null,
-    val age: Double? = null
 )
 
 @Serializable
@@ -260,7 +205,7 @@ object ActionTypes {
 data class AddChildRequest(val ip: String)
 
 @Serializable
-data class CreateRunnerRequest(val name: String)
+// Legacy runner/flight/show removed in v8.0 — timeline is the only execution model
 
 // ── Stage (Phase 1) ────────────────────────────────────────────────────
 @Serializable

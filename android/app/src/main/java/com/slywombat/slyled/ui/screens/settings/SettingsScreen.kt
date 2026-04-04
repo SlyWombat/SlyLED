@@ -317,7 +317,7 @@ fun SettingsScreen(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Factory reset deletes all performers, actions, runners, flights, and shows from the server.",
+                        "Factory reset deletes all performers, fixtures, actions, timelines, and effects from the server.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

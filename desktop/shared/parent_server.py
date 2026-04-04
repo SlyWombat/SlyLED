@@ -74,7 +74,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "8.3.3"
+VERSION = "8.3.4"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -2882,6 +2882,12 @@ def api_config_import():
 
 @app.post("/api/show/preset")
 def api_show_preset():
+    """Install a preset show by theme ID from request body."""
+    body = request.get_json(silent=True) or {}
+    preset_id = body.get("id", "")
+    return _install_preset_show(preset_id)
+
+def _install_preset_show(preset_id):
     """Install a preset show as a timeline with spatial effects and actions.
 
     Dynamically generates a show based on the selected theme and the user's
@@ -2889,8 +2895,6 @@ def api_show_preset():
     so there are no dark periods.
     """
     global _nxt_a, _nxt_sfx, _nxt_tl
-    body = request.get_json(silent=True) or {}
-    preset_id = body.get("id", "")
 
     from show_generator import generate_show, THEMES
     if preset_id not in THEMES:
@@ -3224,6 +3228,14 @@ def api_show_presets():
     from show_generator import list_themes
     presets = list_themes()
     return jsonify(presets)
+
+@app.post("/api/show/demo")
+def api_show_demo():
+    """Generate a demo show using a random preset theme and existing fixtures."""
+    from show_generator import THEMES
+    import random
+    theme_id = random.choice(list(THEMES.keys()))
+    return _install_preset_show(theme_id)
 
 @app.get("/api/show/export")
 def api_show_export():
@@ -3939,6 +3951,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
