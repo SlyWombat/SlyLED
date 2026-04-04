@@ -74,7 +74,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "8.2.8"
+VERSION = "8.2.9"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1288,6 +1288,78 @@ def api_dmx_profiles_ofl_import():
         return jsonify(err="Could not convert OFL fixture (no valid modes/channels)"), 400
     result = _profile_lib.import_profiles(profiles)
     return jsonify(ok=True, profiles=[p["id"] for p in profiles], **result)
+
+# ── Community Profile Server ─────────────────────────────────────────────
+
+@app.get("/api/dmx-profiles/community/search")
+def api_community_search():
+    import community_client as cc
+    q = request.args.get("q", "")
+    cat = request.args.get("category")
+    limit = int(request.args.get("limit", 50))
+    return jsonify(cc.search(q, cat, limit))
+
+@app.get("/api/dmx-profiles/community/recent")
+def api_community_recent():
+    import community_client as cc
+    return jsonify(cc.recent(int(request.args.get("limit", 20))))
+
+@app.get("/api/dmx-profiles/community/popular")
+def api_community_popular():
+    import community_client as cc
+    return jsonify(cc.popular(int(request.args.get("limit", 20))))
+
+@app.get("/api/dmx-profiles/community/stats")
+def api_community_stats():
+    import community_client as cc
+    return jsonify(cc.stats())
+
+@app.post("/api/dmx-profiles/community/upload")
+def api_community_upload():
+    """Upload a local profile to the community server."""
+    import community_client as cc
+    body = request.get_json(silent=True) or {}
+    profile_id = body.get("profileId")
+    if not profile_id:
+        return jsonify(ok=False, err="profileId required"), 400
+    profile = _profile_lib.get_profile(profile_id)
+    if not profile:
+        return jsonify(ok=False, err="Profile not found locally"), 404
+    # Strip builtin flag
+    p = {k: v for k, v in profile.items() if k != "builtin"}
+    result = cc.upload(p)
+    return jsonify(result)
+
+@app.post("/api/dmx-profiles/community/download")
+def api_community_download():
+    """Download a community profile and import it locally."""
+    import community_client as cc
+    body = request.get_json(silent=True) or {}
+    slug = body.get("slug", "").strip()
+    if not slug:
+        return jsonify(ok=False, err="slug required"), 400
+    result = cc.get_profile(slug)
+    if not result or not result.get("ok"):
+        return jsonify(ok=False, err=result.get("error", "Fetch failed")), 502
+    profile = result.get("data", result)
+    if isinstance(profile, dict) and "id" in profile:
+        imported = _profile_lib.import_profiles([profile])
+        return jsonify(ok=True, **imported)
+    return jsonify(ok=False, err="Invalid profile data"), 400
+
+@app.post("/api/dmx-profiles/community/check")
+def api_community_check():
+    """Check if a profile would be a duplicate on the community server."""
+    import community_client as cc
+    body = request.get_json(silent=True) or {}
+    profile_id = body.get("profileId")
+    if not profile_id:
+        return jsonify(ok=False, err="profileId required"), 400
+    profile = _profile_lib.get_profile(profile_id)
+    if not profile:
+        return jsonify(ok=False, err="Profile not found"), 404
+    p = {k: v for k, v in profile.items() if k != "builtin"}
+    return jsonify(cc.check_duplicate(p))
 
 # Parameterized routes AFTER static paths
 @app.get("/api/dmx-profiles/<profile_id>")
@@ -3652,6 +3724,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

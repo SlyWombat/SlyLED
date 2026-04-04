@@ -287,6 +287,7 @@ body.light .li:hover{border-color:#3b82f6}
     <div style='display:flex;gap:.5em;flex-wrap:wrap;margin-bottom:.6em'>
       <button class='btn btn-on' onclick='showProfileBrowser()'>Browse Library</button>
       <button class='btn btn-nav' onclick='showProfileEditor()'>New Profile</button>
+      <button class='btn' onclick='showCommunityBrowser()' style='background:#7c3aed;color:#e9d5ff'>Community</button>
       <button class='btn btn-nav' onclick='showOflBrowse()' style='background:#1e3a5f;color:#93c5fd'>Search OFL</button>
       <button class='btn btn-nav' onclick='showOflImport()'>Paste OFL</button>
       <label class='btn btn-nav' style='cursor:pointer'>Import Bundle
@@ -2011,6 +2012,7 @@ function showProfileBrowser(){
       var badge='<span class="badge" style="background:'+(_profileCatColors[p.category]||'#446')+';color:#fff;font-size:.7em">'+escapeHtml(p.category||'other')+'</span>';
       var acts='<button class="btn" onclick="viewProfile(\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#335;color:#fff">View</button>';
       if(!p.builtin)acts+=' <button class="btn" onclick="editProfile(\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#446;color:#fff">Edit</button>'
+        +' <button class="btn" onclick="_commShareProfile(\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#7c3aed;color:#e9d5ff">Share</button>'
         +' <button class="btn btn-off" onclick="deleteProfile(\''+escapeHtml(p.id)+'\',\''+escapeHtml(p.name).replace(/'/g,"\\'")+'\')" style="font-size:.7em">Del</button>';
       else acts+=' <button class="btn" onclick="cloneProfile(\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#446;color:#fff">Clone</button>';
       h+='<tr data-cat="'+escapeHtml(p.category||'')+'" data-name="'+escapeHtml((p.name||'')+(p.manufacturer||'')).toLowerCase()+'"><td>'+escapeHtml(p.name)+'</td><td>'+escapeHtml(p.manufacturer||'')+'</td><td>'+badge+'</td><td>'+p.channelCount+'</td><td>'+src+'</td><td>'+acts+'</td></tr>';
@@ -2355,6 +2357,91 @@ function _oflImportAll(){
     });
   });
 }
+// ── Community Profile Browser ────────────────────────────────────────────
+function showCommunityBrowser(){
+  _modalStack=[];
+  var h='<p style="font-size:.85em;color:#94a3b8;margin-bottom:.5em">Browse and share fixtures with the SlyLED community</p>';
+  h+='<div style="display:flex;gap:.4em;margin-bottom:.6em;flex-wrap:wrap">';
+  h+='<input id="comm-q" type="text" placeholder="Search community fixtures..." style="flex:1;min-width:180px;padding:.4em" onkeydown="if(event.key===\'Enter\')_commSearch()">';
+  h+='<button class="btn btn-on" onclick="_commSearch()">Search</button>';
+  h+='<button class="btn" style="background:#1e293b;color:#94a3b8;font-size:.78em" onclick="_commRecent()">Recent</button>';
+  h+='<button class="btn" style="background:#1e293b;color:#94a3b8;font-size:.78em" onclick="_commPopular()">Popular</button>';
+  h+='</div>';
+  h+='<div id="comm-results" style="max-height:300px;overflow-y:auto"></div>';
+  h+='<div style="border-top:1px solid #1e293b;padding-top:.5em;margin-top:.5em">';
+  h+='<div id="comm-stats" style="font-size:.75em;color:#64748b"></div></div>';
+  document.getElementById('modal-title').textContent='Community Fixture Library';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='flex';
+  ra('GET','/api/dmx-profiles/community/stats',null,function(r){
+    var el=document.getElementById('comm-stats');if(!el||!r||!r.data)return;
+    el.textContent=r.data.total+' profiles shared by the community';
+  });
+  setTimeout(function(){document.getElementById('comm-q').focus();},100);
+}
+function _commSearch(){
+  var q=document.getElementById('comm-q').value.trim();
+  var el=document.getElementById('comm-results');if(!el)return;
+  if(q.length<2){el.innerHTML='<span style="color:#f66;font-size:.82em">Enter at least 2 characters</span>';return;}
+  el.innerHTML='<span style="color:#888;font-size:.82em">Searching...</span>';
+  ra('GET','/api/dmx-profiles/community/search?q='+encodeURIComponent(q),null,function(r){_commRender(r);});
+}
+function _commRecent(){
+  var el=document.getElementById('comm-results');if(el)el.innerHTML='<span style="color:#888;font-size:.82em">Loading...</span>';
+  ra('GET','/api/dmx-profiles/community/recent',null,function(r){
+    if(r&&r.data&&Array.isArray(r.data))_commRenderList(r.data);
+    else if(r&&r.data&&r.data.profiles)_commRenderList(r.data.profiles);
+    else{var el=document.getElementById('comm-results');if(el)el.innerHTML='<span style="color:#888">No results</span>';}
+  });
+}
+function _commPopular(){
+  var el=document.getElementById('comm-results');if(el)el.innerHTML='<span style="color:#888;font-size:.82em">Loading...</span>';
+  ra('GET','/api/dmx-profiles/community/popular',null,function(r){
+    if(r&&r.data&&Array.isArray(r.data))_commRenderList(r.data);
+    else if(r&&r.data&&r.data.profiles)_commRenderList(r.data.profiles);
+    else{var el=document.getElementById('comm-results');if(el)el.innerHTML='<span style="color:#888">No results</span>';}
+  });
+}
+function _commRender(r){
+  if(!r||!r.data){var el=document.getElementById('comm-results');if(el)el.innerHTML='<span style="color:#f66">Failed</span>';return;}
+  var profiles=r.data.profiles||r.data||[];
+  _commRenderList(profiles);
+}
+function _commRenderList(profiles){
+  var el=document.getElementById('comm-results');if(!el)return;
+  if(!profiles.length){el.innerHTML='<span style="color:#888;font-size:.82em">No profiles found</span>';return;}
+  var h='<table style="width:100%;font-size:.82em"><tr style="color:#888"><th style="text-align:left">Fixture</th><th style="text-align:left">Manufacturer</th><th>Ch</th><th>DL</th><th></th></tr>';
+  profiles.forEach(function(p){
+    h+='<tr><td style="padding:.3em .5em">'+escapeHtml(p.name||p.slug)+'</td>';
+    h+='<td style="padding:.3em .5em;color:#94a3b8">'+escapeHtml(p.manufacturer||'')+'</td>';
+    h+='<td style="text-align:center">'+p.channel_count+'</td>';
+    h+='<td style="text-align:center;color:#64748b">'+(p.downloads||0)+'</td>';
+    h+='<td><button class="btn" style="font-size:.72em;padding:.2em .5em;background:#14532d;color:#86efac" onclick="_commDownload(\''+escapeHtml(p.slug)+'\')">Download</button></td></tr>';
+  });
+  el.innerHTML=h+'</table>';
+}
+function _commDownload(slug){
+  document.getElementById('hs').textContent='Downloading '+slug+'...';
+  ra('POST','/api/dmx-profiles/community/download',{slug:slug},function(r){
+    if(r&&r.ok){
+      document.getElementById('hs').textContent='Downloaded and imported: '+slug;
+      if(typeof loadDmxProfiles==='function')loadDmxProfiles();
+    }else{
+      document.getElementById('hs').textContent='Download failed: '+(r&&r.err||'unknown');
+    }
+  });
+}
+function _commShareProfile(profileId){
+  document.getElementById('hs').textContent='Sharing to community...';
+  ra('POST','/api/dmx-profiles/community/upload',{profileId:profileId},function(r){
+    if(r&&r.ok){
+      document.getElementById('hs').textContent='Shared to community: '+profileId;
+    }else{
+      document.getElementById('hs').textContent='Share failed: '+(r&&r.error||r&&r.err||'unknown');
+    }
+  });
+}
+
 function importProfileBundle(input){
   if(!input.files||!input.files[0])return;
   var reader=new FileReader();
