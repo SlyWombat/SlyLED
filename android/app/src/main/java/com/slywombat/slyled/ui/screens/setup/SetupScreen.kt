@@ -248,7 +248,7 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                         modifier = Modifier.padding(top = 8.dp)
                     )
                 }
-                items(dmxBridges, key = { it.id }) { child ->
+                items(dmxBridges, key = { "hw-${it.id}" }) { child ->
                     SetupPerformerCard(
                         child = child,
                         onRefresh = { viewModel.refreshChild(child.id) },
@@ -270,7 +270,7 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                     )
                 }
             }
-            items(ledPerformers, key = { it.id }) { child ->
+            items(ledPerformers, key = { "perf-${it.id}" }) { child ->
                 SetupPerformerCard(
                     child = child,
                     onRefresh = { viewModel.refreshChild(child.id) },
@@ -329,7 +329,7 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                 }
             }
 
-            items(fixtures, key = { it.id }) { fixture ->
+            items(fixtures, key = { "fix-${it.id}" }) { fixture ->
                 FixtureCard(
                     fixture = fixture,
                     children = children,
