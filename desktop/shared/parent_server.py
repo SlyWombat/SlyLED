@@ -74,7 +74,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "8.2.6"
+VERSION = "8.2.7"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1471,6 +1471,69 @@ def _artnet_oneshot_poll():
         sock.close()
     except Exception as e:
         log.debug("One-shot ArtPoll failed: %s", e)
+
+# -- DMX Monitor (live 512-channel view) --------------------------------------
+
+@app.get("/api/dmx/monitor/<int:uni>")
+def api_dmx_monitor(uni):
+    """Return all 512 channel values for a universe as a flat array."""
+    for engine in (_artnet, _sacn):
+        if engine.running and uni in engine._universes:
+            data = engine._universes[uni].get_data()
+            return jsonify({"universe": uni, "channels": list(data)})
+    # No engine running or universe not created — return zeros
+    return jsonify({"universe": uni, "channels": [0] * 512})
+
+@app.post("/api/dmx/monitor/<int:uni>/set")
+def api_dmx_monitor_set(uni):
+    """Set individual channels. Body: {channels: [{addr: 1-512, value: 0-255}]}."""
+    body = request.get_json(silent=True) or {}
+    for ch in body.get("channels", []):
+        addr = ch.get("addr", 0)
+        val = max(0, min(255, int(ch.get("value", 0))))
+        for engine in (_artnet, _sacn):
+            if engine.running:
+                engine.set_channel(uni, addr, val)
+    return jsonify(ok=True)
+
+# -- Fixture Group Control ----------------------------------------------------
+
+@app.post("/api/fixtures/group/<int:gid>/control")
+def api_group_control(gid):
+    """Apply dimmer/color to all members of a fixture group."""
+    group = next((f for f in _fixtures if f["id"] == gid and f.get("type") == "group"), None)
+    if not group:
+        return jsonify(err="Group not found"), 404
+    body = request.get_json(silent=True) or {}
+    r = body.get("r")
+    g = body.get("g")
+    b = body.get("b")
+    dimmer = body.get("dimmer")
+    member_ids = group.get("childIds", [])
+    applied = 0
+    for mid in member_ids:
+        member = next((f for f in _fixtures if f["id"] == mid), None)
+        if not member or member.get("fixtureType") != "dmx":
+            continue
+        uni = member.get("dmxUniverse", 1)
+        addr = member.get("dmxStartAddr", 1)
+        pid = member.get("dmxProfileId")
+        profile_map = None
+        if pid:
+            prof = _profile_lib.get_profile(pid)
+            if prof:
+                profile_map = {}
+                for ch in prof.get("channels", []):
+                    profile_map[ch["type"]] = ch["offset"]
+        for engine in (_artnet, _sacn):
+            if engine.running:
+                if r is not None and g is not None and b is not None:
+                    engine.set_fixture_rgb(uni, addr, r, g, b,
+                                           {"channel_map": profile_map} if profile_map else None)
+                if dimmer is not None and profile_map and "dimmer" in profile_map:
+                    engine.get_universe(uni).set_channel(addr + profile_map["dimmer"], dimmer)
+        applied += 1
+    return jsonify(ok=True, applied=applied)
 
 # -- DMX Settings (persistent) ------------------------------------------------
 
@@ -3589,6 +3652,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

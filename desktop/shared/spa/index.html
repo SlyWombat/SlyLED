@@ -267,6 +267,10 @@ body.light .li:hover{border-color:#3b82f6}
       <button class='btn btn-off' onclick='dmxEngineStop()'>Stop</button>
     </div>
     <div id='dmx-status' style='font-size:.78em;color:#64748b;margin-top:.5em'></div>
+    <div style='margin-top:.8em'>
+      <button class='btn' onclick='showDmxMonitor()' style='background:#1e293b;color:#93c5fd;font-size:.78em'>DMX Monitor</button>
+      <button class='btn' onclick='showGroupControl()' style='background:#1e293b;color:#93c5fd;font-size:.78em;margin-left:.3em'>Group Control</button>
+    </div>
   </div>
   <div class='card' style='max-width:900px'>
     <div class='card-title'>DMX Universe Patch</div>
@@ -792,7 +796,8 @@ function _renderSetup(){
       var standaloneHw=(children||[]).filter(function(c){return !linkedChildIds.has(c.id);});
 
       var h='<div style="margin-bottom:.6em">'
-        +'<button class="btn btn-on" onclick="showAddFixtureModal()" data-tip="setupAdd">Add Fixture</button>'
+        +'<button class="btn btn-on" onclick="showFixtureWizard()" data-tip="setupAdd">+ DMX Fixture</button>'
+        +'<button class="btn btn-nav" onclick="showAddFixtureModal()" style="margin-left:.3em">Add LED / Group</button>'
         +'<button class="btn btn-nav" onclick="discoverChildren()" id="disc-btn" style="margin-left:.5em" data-tip="setupDiscover">Discover</button>'
         +'<button class="btn btn-nav" onclick="setupRefreshAll(this)" style="margin-left:.5em" data-tip="setupRefreshAll">Refresh All</button>'
         +'</div>'
@@ -870,6 +875,7 @@ function _renderSetup(){
 }
 
 function showAddFixtureModal(){
+  _modalStack=[];
   var h='<label>Fixture Type</label>'
     +'<select id="aft" onchange="_toggleAddFixFields()" style="width:100%;margin-bottom:.6em">'
     +'<option value="dmx">DMX Fixture</option>'
@@ -878,7 +884,7 @@ function showAddFixtureModal(){
     +'<div id="af-led" style="display:none">'
     +'<label>IP Address</label><input id="af-ip" placeholder="x.x.x.x" style="width:100%">'
     +'</div>'
-    +'<div id="af-dmx">'
+    +'<div id="af-dmx">';
     +'<div style="margin-bottom:.6em;padding:.5em;background:#0f172a;border:1px solid #1e3a5f;border-radius:4px">'
     +'<label style="font-size:.82em;color:#93c5fd">Search Fixture Library</label>'
     +'<div style="display:flex;gap:.3em;margin:.3em 0"><input id="af-ofl-q" placeholder="e.g. par, moving head, chauvet..." style="flex:1;padding:.3em;font-size:.85em" onkeydown="if(event.key===\'Enter\')_afOflSearch()">'
@@ -2137,12 +2143,23 @@ function _peEditCaps(chIdx){
 }
 function _peRenderCaps(chIdx){
   var el=document.getElementById('pe-caps-list');if(!el)return;
-  var h='<table class="tbl" style="font-size:.75em"><tr><th>Min</th><th>Max</th><th>Type</th><th>Label</th><th></th></tr>';
+  var maxVal=(window._peChannels&&window._peChannels[chIdx]&&window._peChannels[chIdx].bits===16)?65535:255;
+  // Visual range bar + table
+  var h='<div style="position:relative;height:24px;background:#111;border:1px solid #334;border-radius:3px;margin-bottom:.5em">';
+  var capColors={'Intensity':'#3b82f6','ColorIntensity':'#ef4444','Pan':'#22d3ee','Tilt':'#a78bfa','ShutterStrobe':'#f59e0b','WheelSlot':'#10b981','Speed':'#f97316','Generic':'#64748b','NoFunction':'#334155'};
+  (window._peCaps||[]).forEach(function(c,j){
+    var pct0=c.range[0]/maxVal*100,pct1=(c.range[1]+1)/maxVal*100;
+    var w=pct1-pct0;
+    var col=capColors[c.type]||'#64748b';
+    h+='<div style="position:absolute;left:'+pct0+'%;width:'+w+'%;height:100%;background:'+col+';opacity:0.6;border-radius:2px" title="'+c.range[0]+'-'+c.range[1]+': '+(c.label||c.type)+'"></div>';
+  });
+  h+='</div>';
+  h+='<table class="tbl" style="font-size:.75em"><tr><th>Min</th><th>Max</th><th>Type</th><th>Label</th><th></th></tr>';
   (window._peCaps||[]).forEach(function(c,j){
     var tOpts='';_profEditCapTypes.forEach(function(t){tOpts+='<option'+(t===c.type?' selected':'')+'>'+t+'</option>';});
-    h+='<tr><td><input type="number" value="'+c.range[0]+'" min="0" max="65535" style="width:50px;font-size:.9em" onchange="window._peCaps['+j+'].range[0]=parseInt(this.value)"></td>';
-    h+='<td><input type="number" value="'+c.range[1]+'" min="0" max="65535" style="width:50px;font-size:.9em" onchange="window._peCaps['+j+'].range[1]=parseInt(this.value)"></td>';
-    h+='<td><select style="font-size:.85em" onchange="window._peCaps['+j+'].type=this.value">'+tOpts+'</select></td>';
+    h+='<tr><td><input type="number" value="'+c.range[0]+'" min="0" max="'+maxVal+'" style="width:55px;font-size:.9em" onchange="window._peCaps['+j+'].range[0]=parseInt(this.value);_peRenderCaps('+chIdx+')"></td>';
+    h+='<td><input type="number" value="'+c.range[1]+'" min="0" max="'+maxVal+'" style="width:55px;font-size:.9em" onchange="window._peCaps['+j+'].range[1]=parseInt(this.value);_peRenderCaps('+chIdx+')"></td>';
+    h+='<td><select style="font-size:.85em" onchange="window._peCaps['+j+'].type=this.value;_peRenderCaps('+chIdx+')">'+tOpts+'</select></td>';
     h+='<td><input value="'+escapeHtml(c.label||'')+'" style="width:140px;font-size:.9em" onchange="window._peCaps['+j+'].label=this.value"></td>';
     h+='<td><button class="btn btn-off" onclick="window._peCaps.splice('+j+',1);_peRenderCaps('+chIdx+')" style="font-size:.7em">\u2715</button></td></tr>';
   });
@@ -4870,6 +4887,226 @@ function dmxEngineStop(){
     document.getElementById('dmx-status').textContent=r&&r.ok?'Engine: stopped':'Stop failed';
   });
 }
+
+// ── #144: Live DMX Monitor ───────────────────────────────────────────────
+var _dmxMonTimer=null;
+function showDmxMonitor(){
+  _modalStack=[];
+  var h='<div style="display:flex;gap:.5em;align-items:center;margin-bottom:.5em">';
+  h+='<label style="font-size:.82em">Universe:</label><select id="mon-uni" onchange="_dmxMonRefresh()" style="font-size:.85em">';
+  for(var i=1;i<=4;i++)h+='<option value="'+i+'">Universe '+i+'</option>';
+  h+='</select>';
+  h+='<label style="font-size:.75em;color:#64748b;margin-left:1em"><input type="checkbox" id="mon-auto" checked> Auto-refresh</label>';
+  h+='</div>';
+  h+='<div id="mon-grid" style="font-family:monospace;font-size:9px;line-height:1.4;max-height:400px;overflow-y:auto"></div>';
+  document.getElementById('modal-title').textContent='DMX Monitor';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='flex';
+  _dmxMonRefresh();
+  if(_dmxMonTimer)clearInterval(_dmxMonTimer);
+  _dmxMonTimer=setInterval(function(){
+    if(document.getElementById('mon-auto')&&document.getElementById('mon-auto').checked)_dmxMonRefresh();
+  },250);
+}
+function _dmxMonRefresh(){
+  var uni=parseInt(document.getElementById('mon-uni').value)||1;
+  ra('GET','/api/dmx/monitor/'+uni,null,function(d){
+    if(!d||!d.channels)return;
+    var el=document.getElementById('mon-grid');if(!el)return;
+    var ch=d.channels;
+    var h='<table style="border-collapse:collapse;width:100%">';
+    // 32 columns x 16 rows = 512
+    h+='<tr><td></td>';
+    for(var c=0;c<32;c++)h+='<td style="color:#556;text-align:center;padding:0 1px;font-size:7px">'+(c+1)+'</td>';
+    h+='</tr>';
+    for(var row=0;row<16;row++){
+      var addr=row*32+1;
+      h+='<tr><td style="color:#556;padding-right:3px;font-size:7px;text-align:right">'+addr+'</td>';
+      for(var c=0;c<32;c++){
+        var idx=row*32+c;
+        var v=ch[idx]||0;
+        var bg=v>0?'hsl('+Math.round(210-v*0.8)+',60%,'+Math.round(15+v*0.2)+'%)':'#111';
+        var fg=v>128?'#000':'#888';
+        h+='<td style="background:'+bg+';color:'+fg+';text-align:center;padding:1px 2px;border:1px solid #1e293b;cursor:pointer;min-width:18px" '
+          +'onclick="_dmxMonSet('+uni+','+(idx+1)+',this)" title="Ch '+(idx+1)+'">'+v+'</td>';
+      }
+      h+='</tr>';
+    }
+    el.innerHTML=h+'</table>';
+  });
+}
+function _dmxMonSet(uni,addr,cell){
+  var v=prompt('Channel '+addr+' value (0-255):',cell.textContent);
+  if(v===null)return;
+  ra('POST','/api/dmx/monitor/'+uni+'/set',{channels:[{addr:parseInt(addr),value:parseInt(v)||0}]},function(){_dmxMonRefresh();});
+}
+
+// ── #145: Fixture Group Control ──────────────────────────────────────────
+function showGroupControl(){
+  _modalStack=[];
+  ra('GET','/api/fixtures',null,function(fixtures){
+    var groups=(fixtures||[]).filter(function(f){return f.type==='group';});
+    var h='';
+    if(!groups.length){
+      h='<p style="color:#888;font-size:.85em">No fixture groups defined. Create a group from Setup > Add Fixture > Fixture Group.</p>';
+    }else{
+      groups.forEach(function(g){
+        var members=g.childIds||[];
+        h+='<div class="card" style="margin-bottom:.5em">';
+        h+='<b>'+escapeHtml(g.name)+'</b> <span style="color:#64748b;font-size:.8em">('+members.length+' members)</span>';
+        h+='<div style="display:flex;gap:.8em;align-items:center;margin-top:.4em;flex-wrap:wrap">';
+        h+='<label style="font-size:.78em">Dimmer</label><input type="range" min="0" max="255" value="0" style="width:120px" oninput="_grpCtl('+g.id+',{dimmer:parseInt(this.value)})">';
+        h+='<label style="font-size:.78em">R</label><input type="range" min="0" max="255" value="0" class="grp-r" style="width:80px" oninput="_grpColor('+g.id+')">';
+        h+='<label style="font-size:.78em">G</label><input type="range" min="0" max="255" value="0" class="grp-g" style="width:80px" oninput="_grpColor('+g.id+')">';
+        h+='<label style="font-size:.78em">B</label><input type="range" min="0" max="255" value="0" class="grp-b" style="width:80px" oninput="_grpColor('+g.id+')">';
+        h+='</div>';
+        h+='<div style="display:flex;gap:.3em;margin-top:.4em">';
+        h+='<button class="btn" style="font-size:.7em;background:#554;color:#fed" onclick="_grpPreset('+g.id+',255,200,100,255)">Warm</button>';
+        h+='<button class="btn" style="font-size:.7em;background:#225;color:#88f" onclick="_grpPreset('+g.id+',0,100,255,255)">Cool</button>';
+        h+='<button class="btn" style="font-size:.7em;background:#522;color:#f88" onclick="_grpPreset('+g.id+',255,0,0,255)">Red</button>';
+        h+='<button class="btn btn-off" style="font-size:.7em" onclick="_grpPreset('+g.id+',0,0,0,0)">Off</button>';
+        h+='</div></div>';
+      });
+    }
+    document.getElementById('modal-title').textContent='Fixture Group Control';
+    document.getElementById('modal-body').innerHTML=h;
+    document.getElementById('modal').style.display='flex';
+  });
+}
+function _grpCtl(gid,body){ra('POST','/api/fixtures/group/'+gid+'/control',body,function(){});}
+function _grpColor(gid){
+  var card=event.target.closest('.card');if(!card)return;
+  var r=parseInt(card.querySelector('.grp-r').value)||0;
+  var g=parseInt(card.querySelector('.grp-g').value)||0;
+  var b=parseInt(card.querySelector('.grp-b').value)||0;
+  _grpCtl(gid,{r:r,g:g,b:b,dimmer:255});
+}
+function _grpPreset(gid,r,g,b,dim){_grpCtl(gid,{r:r,g:g,b:b,dimmer:dim});}
+
+// ── #142: Fixture Wizard ─────────────────────────────────────────────────
+function showFixtureWizard(){
+  _modalStack=[];
+  window._wiz={step:1,profile:null,name:'',uni:1,addr:1,channels:3,profId:'',geom:'point'};
+  _wizStep1();
+}
+function _wizStep1(){
+  var h='<div style="display:flex;gap:.3em;margin-bottom:.8em">';
+  h+='<div style="flex:1;text-align:center;padding:.3em;border-radius:4px;font-size:.78em;background:#14532d;color:#86efac;font-weight:bold">1. Choose Fixture</div>';
+  h+='<div style="flex:1;text-align:center;padding:.3em;border-radius:4px;font-size:.78em;background:#1e293b;color:#64748b">2. Address</div>';
+  h+='<div style="flex:1;text-align:center;padding:.3em;border-radius:4px;font-size:.78em;background:#1e293b;color:#64748b">3. Confirm</div>';
+  h+='</div>';
+  h+='<p style="font-size:.85em;color:#94a3b8;margin-bottom:.5em">Search the fixture library or create a custom fixture:</p>';
+  h+='<div style="display:flex;gap:.3em;margin-bottom:.5em"><input id="wiz-q" placeholder="Search fixtures (e.g. par, moving head, chauvet)..." style="flex:1;padding:.4em" onkeydown="if(event.key===\'Enter\')_wizSearch()">';
+  h+='<button class="btn btn-on" onclick="_wizSearch()">Search</button></div>';
+  h+='<div id="wiz-results" style="max-height:250px;overflow-y:auto;margin-bottom:.5em"></div>';
+  h+='<div style="border-top:1px solid #1e293b;padding-top:.5em"><button class="btn" onclick="_wizCustom()" style="background:#1e293b;color:#94a3b8;font-size:.82em">Create Custom Fixture (skip library)</button></div>';
+  document.getElementById('modal-title').textContent='Add DMX Fixture';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='flex';
+  setTimeout(function(){var q=document.getElementById('wiz-q');if(q)q.focus();},100);
+}
+function _wizSearch(){
+  var q=document.getElementById('wiz-q').value.trim();var el=document.getElementById('wiz-results');if(!el)return;
+  if(q.length<2){el.innerHTML='<span style="color:#f66;font-size:.82em">Enter at least 2 characters</span>';return;}
+  el.innerHTML='<span style="color:#888;font-size:.82em">Searching (first search builds index)...</span>';
+  ra('GET','/api/dmx-profiles/ofl/search?q='+encodeURIComponent(q)+'&limit=30',null,function(r){
+    if(!el)return;
+    if(!r||r.err||!r.length){el.innerHTML='<span style="color:#888;font-size:.82em">'+(r&&r.err||'No results')+'</span>';return;}
+    var h='';r.forEach(function(f){
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:.3em;border-bottom:1px solid #1e293b">';
+      h+='<div><b style="font-size:.85em">'+escapeHtml(f.name)+'</b> <span style="color:#64748b;font-size:.78em">'+escapeHtml(f.manufacturerName)+'</span></div>';
+      h+='<button class="btn" style="font-size:.72em;padding:.2em .5em;background:#14532d;color:#86efac" onclick=\'_wizSelectOfl("'+f.manufacturer+'","'+f.fixture+'")\'>Select</button></div>';
+    });
+    el.innerHTML=h;
+  });
+}
+function _wizSelectOfl(mfr,fix){
+  document.getElementById('wiz-results').innerHTML='<span style="color:#888">Importing...</span>';
+  ra('POST','/api/dmx-profiles/ofl/import-by-id',{manufacturer:mfr,fixture:fix},function(r){
+    if(r&&r.ok&&r.profiles&&r.profiles.length){
+      var p=r.profiles[0];
+      window._wiz.profId=p.id;window._wiz.name=p.name;window._wiz.channels=p.channels;
+      _wizStep2();
+    }else{document.getElementById('wiz-results').innerHTML='<span style="color:#f66">Import failed</span>';}
+  });
+}
+function _wizCustom(){window._wiz.profId='';window._wiz.name='Custom Fixture';window._wiz.channels=3;_wizStep2();}
+function _wizStep2(){
+  var w=window._wiz;
+  var h='<div style="display:flex;gap:.3em;margin-bottom:.8em">';
+  h+='<div style="flex:1;text-align:center;padding:.3em;border-radius:4px;font-size:.78em;background:#1e293b;color:#4ade80">1. Choose</div>';
+  h+='<div style="flex:1;text-align:center;padding:.3em;border-radius:4px;font-size:.78em;background:#14532d;color:#86efac;font-weight:bold">2. Address</div>';
+  h+='<div style="flex:1;text-align:center;padding:.3em;border-radius:4px;font-size:.78em;background:#1e293b;color:#64748b">3. Confirm</div>';
+  h+='</div>';
+  h+='<p style="font-size:.85em;color:#e2e8f0;margin-bottom:.5em">Fixture: <b>'+escapeHtml(w.name)+'</b>'+(w.profId?' ('+w.channels+' channels)':'')+'</p>';
+  h+='<div style="display:flex;gap:.8em;flex-wrap:wrap;margin-bottom:.5em">';
+  h+='<div><label style="font-size:.82em">Name</label><input id="wiz-name" value="'+escapeHtml(w.name)+'" style="width:200px;display:block"></div>';
+  h+='<div><label style="font-size:.82em">Universe</label><input id="wiz-uni" type="number" value="'+w.uni+'" min="1" style="width:80px;display:block"></div>';
+  h+='<div><label style="font-size:.82em">Start Address</label><input id="wiz-addr" type="number" value="'+w.addr+'" min="1" max="512" style="width:80px;display:block"></div>';
+  if(!w.profId)h+='<div><label style="font-size:.82em">Channels</label><input id="wiz-ch" type="number" value="'+w.channels+'" min="1" style="width:60px;display:block"></div>';
+  h+='</div>';
+  // Address conflict check
+  h+='<div id="wiz-conflict" style="font-size:.78em;margin-bottom:.5em"></div>';
+  h+='<div style="display:flex;gap:.5em"><button class="btn" onclick="_wizStep1()" style="background:#334;color:#aaa">Back</button>';
+  h+='<button class="btn btn-on" onclick="_wizStep3()">Next</button></div>';
+  document.getElementById('modal-title').textContent='Add DMX Fixture - Address';
+  document.getElementById('modal-body').innerHTML=h;
+  // Check conflicts
+  var uniEl=document.getElementById('wiz-uni'),addrEl=document.getElementById('wiz-addr');
+  function checkConflict(){
+    var uni=parseInt(uniEl.value)||1,addr=parseInt(addrEl.value)||1;
+    ra('GET','/api/dmx/patch',null,function(patch){
+      var el=document.getElementById('wiz-conflict');if(!el||!patch)return;
+      var unis=patch.universes||{};var fx=unis[uni]||[];
+      var endAddr=addr+w.channels-1;
+      var conflicts=fx.filter(function(f){return addr<=f.endAddr&&f.startAddr<=endAddr;});
+      if(conflicts.length){
+        el.innerHTML='<span style="color:#fca5a5">Conflict: overlaps with '+conflicts.map(function(c){return escapeHtml(c.name);}).join(', ')+'</span>';
+      }else{el.innerHTML='<span style="color:#4ade80">No conflicts at U'+uni+' @'+addr+'-'+endAddr+'</span>';}
+    });
+  }
+  if(uniEl)uniEl.addEventListener('change',checkConflict);
+  if(addrEl)addrEl.addEventListener('change',checkConflict);
+  checkConflict();
+}
+function _wizStep3(){
+  var w=window._wiz;
+  w.name=document.getElementById('wiz-name').value.trim()||w.name;
+  w.uni=parseInt(document.getElementById('wiz-uni').value)||1;
+  w.addr=parseInt(document.getElementById('wiz-addr').value)||1;
+  if(document.getElementById('wiz-ch'))w.channels=parseInt(document.getElementById('wiz-ch').value)||3;
+  var h='<div style="display:flex;gap:.3em;margin-bottom:.8em">';
+  h+='<div style="flex:1;text-align:center;padding:.3em;border-radius:4px;font-size:.78em;background:#1e293b;color:#4ade80">1. Choose</div>';
+  h+='<div style="flex:1;text-align:center;padding:.3em;border-radius:4px;font-size:.78em;background:#1e293b;color:#4ade80">2. Address</div>';
+  h+='<div style="flex:1;text-align:center;padding:.3em;border-radius:4px;font-size:.78em;background:#14532d;color:#86efac;font-weight:bold">3. Confirm</div>';
+  h+='</div>';
+  h+='<div class="card" style="margin-bottom:.8em"><table style="font-size:.85em;width:100%">';
+  h+='<tr><td style="color:#94a3b8">Name</td><td><b>'+escapeHtml(w.name)+'</b></td></tr>';
+  h+='<tr><td style="color:#94a3b8">Universe</td><td>'+w.uni+'</td></tr>';
+  h+='<tr><td style="color:#94a3b8">Start Address</td><td>'+w.addr+'</td></tr>';
+  h+='<tr><td style="color:#94a3b8">Channels</td><td>'+w.channels+'</td></tr>';
+  if(w.profId)h+='<tr><td style="color:#94a3b8">Profile</td><td>'+escapeHtml(w.profId)+'</td></tr>';
+  h+='</table></div>';
+  h+='<div style="display:flex;gap:.5em"><button class="btn" onclick="_wizStep2()" style="background:#334;color:#aaa">Back</button>';
+  h+='<button class="btn btn-on" onclick="_wizCreate()">Create Fixture</button></div>';
+  document.getElementById('modal-title').textContent='Add DMX Fixture - Confirm';
+  document.getElementById('modal-body').innerHTML=h;
+}
+function _wizCreate(){
+  var w=window._wiz;
+  var body={name:w.name,fixtureType:'dmx',type:w.geom,dmxUniverse:w.uni,dmxStartAddr:w.addr,dmxChannelCount:w.channels};
+  if(w.profId)body.dmxProfileId=w.profId;
+  ra('POST','/api/fixtures',body,function(r){
+    if(r&&r.ok){
+      document.getElementById('hs').textContent='Created: '+w.name+' (U'+w.uni+' @'+w.addr+')';
+      closeModal();loadSetup();
+    }else{document.getElementById('hs').textContent='Failed: '+(r&&r.err||'unknown');}
+  });
+}
+
+// ── #143: Visual Capability Editor ──────────────────────────────────────
+// Enhanced _peRenderCaps with visual range bars
+// (Original renders a text table — this adds colored bars)
 
 // ── Config / Show save-load ──────────────────────────────────────────────
 function exportConfig(btn){
