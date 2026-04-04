@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SlyLED — Community Profiles</title>
+<link rel="icon" type="image/x-icon" href="../slyled.ico">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',sans-serif;background:#0A0F13;color:#e2e8f0;line-height:1.6}
+h1,h2,h3{font-family:'Space Grotesk',sans-serif}
+a{color:#22d3ee;text-decoration:none}a:hover{text-decoration:underline}
+.container{max-width:800px;margin:0 auto;padding:0 20px}
+header{padding:40px 0 30px;text-align:center}
+header .icon{font-size:3em;margin-bottom:12px}
+header h1{font-size:2.2em;color:#7c3aed}
+header p{color:#94a3b8;font-size:1.1em;margin-top:8px;max-width:600px;margin-left:auto;margin-right:auto}
+.back{display:inline-block;margin-top:16px;padding:8px 20px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#94a3b8;font-size:.85em;transition:all .2s}
+.back:hover{border-color:#22d3ee;color:#22d3ee;text-decoration:none}
+.bullets{list-style:none;margin:30px 0;padding:0}
+.bullets li{padding:10px 0 10px 28px;position:relative;color:#94a3b8;font-size:.95em;border-bottom:1px solid #1e293b}
+.bullets li::before{content:'\2713';position:absolute;left:0;color:#7c3aed;font-weight:bold}
+.screenshots{display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:16px;margin:30px 0}
+.screenshots figure{margin:0;border-radius:10px;overflow:hidden;border:1px solid #334155}
+.screenshots img{width:100%;display:block}
+.screenshots figcaption{padding:8px 12px;font-size:.8em;color:#64748b;background:#0f172a}
+.cta{text-align:center;margin:40px 0}
+.cta a{display:inline-block;padding:12px 28px;border-radius:8px;font-weight:700;margin:0 6px}
+.cta-dl{background:linear-gradient(135deg,#0969DA,#22d3ee);color:#fff}
+.cta-demo{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
+footer{text-align:center;padding:30px 0;color:#64748b;font-size:.85em;border-top:1px solid #1e293b}
+</style>
+</head>
+<body>
+<header>
+  <div class="container">
+    <div class="icon">&#x1F310;</div>
+    <h1>Community Profiles</h1>
+    <p>Share and discover fixture profiles</p>
+    <a href="../" class="back">&larr; Back to SlyLED</a>
+  </div>
+</header>
+<div class="container">
+  <p style="font-size:1.05em;margin-bottom:20px">Upload your custom DMX fixture profiles to the community server. Search by name, manufacturer, or category. Automatic duplicate detection using channel fingerprint hashing. Browse 700+ OFL fixtures.</p>
+  <ul class="bullets">
+    <li>Community server at electricrv.ca with REST API</li>
+    <li>Search, recent, popular, and browse endpoints</li>
+    <li>SHA-1 channel hash for duplicate detection</li>
+    <li>Upload custom profiles with 'Share' button</li>
+    <li>Download and auto-import into local library</li>
+    <li>OFL integration: search + browse by manufacturer + bulk import</li>
+  </ul>
+  <div class="screenshots">
+    <figure><img src="../demo/12-settings.png" alt="Community browser in Settings" loading="lazy"><figcaption>Community browser in Settings</figcaption></figure>
+    <figure><img src="../demo/10-actions.png" alt="Profile management" loading="lazy"><figcaption>Profile management</figcaption></figure>
+  </div>
+  <div class="cta">
+    <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="cta-dl">Download SlyLED</a>
+    <a href="../demo/" class="cta-demo">See Full Demo</a>
+  </div>
+</div>
+<footer><p><a href="../">SlyLED Home</a> &bull; <a href="https://github.com/SlyWombat/SlyLED">GitHub</a></p></footer>
+</body>
+</html>
