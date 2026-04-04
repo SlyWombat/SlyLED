@@ -2,14 +2,15 @@
 """
 capture_demo.py — Capture step-by-step demo screenshots for the website.
 
-Populates realistic data and captures each step of the user journey.
+Captures from both the SPA (Playwright) and a live ESP32 device config UI.
 Output: server/slyled/demo/*.png
 
 Usage:
     python tests/capture_demo.py
+    python tests/capture_demo.py --child 192.168.10.233
 """
 
-import sys, os, json, time, threading
+import sys, os, json, time, threading, argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 
 PORT = 18085
@@ -27,7 +28,7 @@ def snap(page, name, delay=0.5):
     print(f'  [{len(captured):2d}] {name}')
 
 
-def populate():
+def populate_and_start():
     import parent_server
     from parent_server import app
     with app.test_client() as c:
@@ -43,11 +44,15 @@ def populate():
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--child', type=str, default='192.168.10.233', help='ESP32 IP for config captures')
+    args = parser.parse_args()
+
     print('SlyLED Demo Capture')
     print('=' * 40)
 
-    print('\nPopulating...')
-    app = populate()
+    print('\nStarting server...')
+    app = populate_and_start()
 
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
@@ -57,42 +62,64 @@ def main():
         page.goto(BASE, wait_until='networkidle', timeout=15000)
         time.sleep(1)
 
-        # Step 1: First launch — empty dashboard
+        # ── Step 1: First launch ─────────────────────────────────────
         print('\nStep 1: First Launch')
         snap(page, '01-first-launch.png', 1)
 
-        # Step 2: Go to Firmware tab
+        # ── Step 2: Firmware tab ─────────────────────────────────────
         print('\nStep 2: Firmware Tab')
         page.evaluate("showTab('firmware')")
         snap(page, '02-firmware-tab.png', 1.5)
 
-        # Step 3: Go to Setup, discover performers
-        print('\nStep 3: Setup — Add Performers')
+        # ── Step 3: ESP32 config UI — Dashboard ─────────────────────
+        print(f'\nStep 3: ESP32 Config Dashboard ({args.child})')
+        child_page = ctx.new_page()
+        try:
+            child_page.goto(f'http://{args.child}/config', wait_until='networkidle', timeout=10000)
+            time.sleep(1)
+            snap(child_page, '03-esp32-dashboard.png', 0.5)
+
+            # ── Step 4: ESP32 config — Settings tab ──────────────────
+            print('\nStep 4: ESP32 Settings')
+            tabs = child_page.query_selector_all('button, .tab, [onclick]')
+            for tab in tabs:
+                txt = (tab.inner_text() or '').lower()
+                if 'setting' in txt:
+                    tab.click()
+                    time.sleep(0.5)
+                    break
+            snap(child_page, '04-esp32-settings.png', 0.5)
+
+            # ── Step 5: ESP32 config — Config tab (strings) ─────────
+            print('\nStep 5: ESP32 String Config')
+            for tab in tabs:
+                txt = (tab.inner_text() or '').lower()
+                if 'config' in txt and 'setting' not in txt:
+                    tab.click()
+                    time.sleep(0.5)
+                    break
+            snap(child_page, '05-esp32-strings.png', 0.5)
+        except Exception as e:
+            print(f'  ESP32 capture failed: {e}')
+            # Fallback — still continue with SPA captures
+        finally:
+            child_page.close()
+
+        # ── Step 6: Setup — Add performer + discover ─────────────────
+        print('\nStep 6: Setup — Performers')
         with app.test_client() as c:
-            r = c.post('/api/children', json={'ip': '192.168.10.50'})
-            cid1 = r.get_json()['id']
+            c.post('/api/children', json={'ip': args.child})
+            r = c.get('/api/children').get_json()
+            cid = r[0]['id'] if r else 0
             c.post('/api/fixtures', json={
-                'name': 'Stage Left LED', 'type': 'linear', 'fixtureType': 'led', 'childId': cid1,
-                'strings': [{'leds': 150, 'mm': 5000, 'sdir': 0}, {'leds': 150, 'mm': 5000, 'sdir': 2}]
+                'name': 'ESP Dual String', 'type': 'linear', 'fixtureType': 'led', 'childId': cid,
+                'strings': [{'leds': 150, 'mm': 5000, 'sdir': 2}, {'leds': 150, 'mm': 5000, 'sdir': 0}]
             })
         page.evaluate("showTab('setup')")
-        snap(page, '03-setup-performer.png', 1.5)
+        snap(page, '06-setup-performer.png', 1.5)
 
-        # Step 4: Add DMX bridge
-        print('\nStep 4: Add DMX Bridge')
-        with app.test_client() as c:
-            r = c.post('/api/children', json={'ip': '192.168.10.219'})
-            # Simulate DMX bridge type
-            for ch in c.get('/api/children').get_json():
-                if ch['ip'] == '192.168.10.219':
-                    ch['type'] = 'dmx'
-                    ch['boardType'] = 'giga-dmx'
-                    ch['name'] = 'Giga DMX Bridge'
-        page.evaluate("showTab('setup')")
-        snap(page, '04-setup-bridge.png', 1)
-
-        # Step 5: Add DMX fixture via wizard
-        print('\nStep 5: Add DMX Fixture')
+        # ── Step 7: Add DMX fixtures ─────────────────────────────────
+        print('\nStep 7: Setup — DMX Fixtures')
         with app.test_client() as c:
             c.post('/api/fixtures', json={
                 'name': 'Chauvet SlimPAR 56', 'type': 'point', 'fixtureType': 'dmx',
@@ -100,57 +127,63 @@ def main():
                 'dmxProfileId': 'generic-wash-7ch', 'aimPoint': [5000, 2000, 5000]
             })
             c.post('/api/fixtures', json={
-                'name': 'ADJ Vizi Beam', 'type': 'point', 'fixtureType': 'dmx',
+                'name': 'ADJ Vizi Beam 5RX', 'type': 'point', 'fixtureType': 'dmx',
                 'dmxUniverse': 1, 'dmxStartAddr': 8, 'dmxChannelCount': 16,
                 'dmxProfileId': 'generic-moving-head-16bit', 'aimPoint': [5000, 0, 5000]
             })
         page.evaluate("showTab('setup')")
-        snap(page, '05-setup-fixtures.png', 1)
+        snap(page, '07-setup-dmx.png', 1)
 
-        # Step 6: Layout — place fixtures
-        print('\nStep 6: Layout')
+        # ── Step 8: Layout — 2D ──────────────────────────────────────
+        print('\nStep 8: Layout 2D')
         with app.test_client() as c:
             c.post('/api/layout', json={'children': [
                 {'id': 0, 'x': 2000, 'y': 4000, 'z': 0},
-                {'id': 2, 'x': 3000, 'y': 5000, 'z': 2000},
-                {'id': 3, 'x': 7000, 'y': 5000, 'z': 2000},
+                {'id': 1, 'x': 4000, 'y': 5000, 'z': 2000},
+                {'id': 2, 'x': 7000, 'y': 5000, 'z': 2000},
             ]})
             c.post('/api/surfaces', json={
                 'name': 'Back Wall', 'surfaceType': 'wall', 'color': '#1e293b', 'opacity': 25,
                 'transform': {'pos': [0, 0, 0], 'rot': [0, 0, 0], 'scale': [10000, 5000, 100]}
             })
         page.evaluate("showTab('layout')")
-        snap(page, '06-layout-2d.png', 1.5)
+        snap(page, '08-layout-2d.png', 1.5)
 
-        # Step 7: 3D Layout
-        print('\nStep 7: 3D Layout')
+        # ── Step 9: Layout — 3D ──────────────────────────────────────
+        print('\nStep 9: Layout 3D')
         try:
             page.evaluate("setLayoutMode('3d')")
-            snap(page, '07-layout-3d.png', 2.5)
+            snap(page, '09-layout-3d.png', 2.5)
             page.evaluate("setLayoutMode('2d')")
         except Exception:
             pass
 
-        # Step 8: Actions
-        print('\nStep 8: Actions')
+        # ── Step 10: Actions ──────────────────────────────────────────
+        print('\nStep 10: Actions')
         with app.test_client() as c:
             c.post('/api/actions', json={'name': 'Warm Wash', 'type': 1, 'r': 255, 'g': 180, 'b': 60})
-            c.post('/api/actions', json={'name': 'Ocean Wave', 'type': 5, 'speedMs': 40})
+            c.post('/api/actions', json={'name': 'Ocean Rainbow', 'type': 5, 'speedMs': 40})
             c.post('/api/actions', json={'name': 'Fire Flicker', 'type': 6, 'r': 255, 'g': 80, 'b': 0})
+            c.post('/api/spatial-effects', json={
+                'name': 'Blue Sweep', 'category': 'spatial-field', 'shape': 'sphere',
+                'r': 0, 'g': 100, 'b': 255, 'size': {'radius': 2500},
+                'motion': {'startPos': [0, 2500, 5000], 'endPos': [10000, 2500, 5000],
+                           'durationS': 12, 'easing': 'linear'}, 'blend': 'add'
+            })
         page.evaluate("showTab('actions')")
-        snap(page, '08-actions.png', 1)
+        snap(page, '10-actions.png', 1)
 
-        # Step 9: Load preset show
-        print('\nStep 9: Runtime — Load Show')
+        # ── Step 11: Runtime — Load preset show ──────────────────────
+        print('\nStep 11: Runtime')
         with app.test_client() as c:
             c.post('/api/show/preset', json={'id': 'spotlight-sweep'})
         page.evaluate("showTab('runtime')")
-        snap(page, '09-runtime.png', 1.5)
+        snap(page, '11-runtime.png', 1.5)
 
-        # Step 10: Settings with DMX
-        print('\nStep 10: Settings + DMX')
+        # ── Step 12: Settings + DMX ──────────────────────────────────
+        print('\nStep 12: Settings')
         page.evaluate("showTab('settings')")
-        snap(page, '10-settings.png', 1)
+        snap(page, '12-settings.png', 1)
 
         browser.close()
 
