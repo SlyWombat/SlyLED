@@ -4,152 +4,208 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SlyLED — 3D Volumetric LED & DMX Lighting Control</title>
-<meta name="description" content="Open-source LED and DMX lighting control system with 3D spatial effects, timeline editor, and Art-Net output. Windows, Android, ESP32.">
+<meta name="description" content="Open-source LED and DMX lighting control with 3D spatial effects, timeline editor, Art-Net output, and 700+ fixture profiles. Windows, Android, ESP32.">
 <meta property="og:title" content="SlyLED — LED & DMX Lighting Control">
 <meta property="og:description" content="Design stunning lighting shows with spatial effects, moving heads, and LED strips. Free and open-source.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://electricrv.ca/slyled/">
+<meta property="og:image" content="https://electricrv.ca/slyled/spa-dashboard.png">
+<meta name="theme-color" content="#0A0F13">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="icon" type="image/x-icon" href="slyled.ico">
+<link rel="icon" type="image/png" sizes="192x192" href="slyled.png">
+<link rel="apple-touch-icon" href="slyled.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-:root{--bg:#0f172a;--surface:#1e293b;--text:#e2e8f0;--dim:#94a3b8;--accent:#22d3ee;--green:#22cc66;--purple:#7c3aed;--red:#ef4444}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.6}
+:root{--bg:#0A0F13;--surface:#0f172a;--surface2:#1e293b;--text:#e2e8f0;--dim:#94a3b8;--accent:#22d3ee;--green:#22cc66;--purple:#7c3aed;--blue:#0969DA;--orange:#f59e0b;--red:#ef4444}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);line-height:1.6;overflow-x:hidden}
+h1,h2,h3{font-family:'Space Grotesk',sans-serif}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
-.container{max-width:960px;margin:0 auto;padding:0 20px}
-header{padding:60px 0 40px;text-align:center}
-header h1{font-size:3em;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-header p{font-size:1.2em;color:var(--dim);margin-top:12px;max-width:600px;margin-left:auto;margin-right:auto}
-.badges{display:flex;gap:10px;justify-content:center;margin-top:20px;flex-wrap:wrap}
-.badge{display:inline-block;padding:6px 14px;border-radius:20px;font-size:.82em;font-weight:600}
-.badge-win{background:#2563eb22;color:#60a5fa;border:1px solid #2563eb44}
-.badge-android{background:#22cc6622;color:#4ade80;border:1px solid #22cc6644}
-.badge-esp{background:#f59e0b22;color:#fbbf24;border:1px solid #f59e0b44}
-.badge-dmx{background:#7c3aed22;color:#a78bfa;border:1px solid #7c3aed44}
-.downloads{display:flex;gap:12px;justify-content:center;margin-top:30px;flex-wrap:wrap}
-.dl-btn{display:inline-flex;align-items:center;gap:8px;padding:12px 24px;border-radius:8px;font-weight:600;font-size:.95em;transition:transform .15s}
-.dl-btn:hover{transform:translateY(-2px);text-decoration:none}
-.dl-win{background:#2563eb;color:#fff}
-.dl-android{background:#22cc66;color:#000}
-.dl-github{background:var(--surface);color:var(--text);border:1px solid #334155}
-section{padding:50px 0}
-.features{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;margin-top:30px}
-.feature{background:var(--surface);padding:24px;border-radius:12px;border:1px solid #334155}
-.feature h3{color:var(--accent);margin-bottom:8px;font-size:1.05em}
-.feature p{color:var(--dim);font-size:.9em}
-.section-title{font-size:1.8em;font-weight:700;text-align:center}
-.screenshots{display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:16px;margin-top:30px}
-.screenshots img{width:100%;border-radius:8px;border:1px solid #334155}
-.community-stats{text-align:center;padding:30px;background:var(--surface);border-radius:12px;margin-top:30px}
-.community-stats .number{font-size:2.5em;font-weight:800;color:var(--purple)}
+.container{max-width:1000px;margin:0 auto;padding:0 20px}
+
+/* Hero */
+.hero{padding:80px 0 60px;text-align:center;position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:radial-gradient(circle at 50% 50%,rgba(9,105,218,.08) 0%,transparent 50%);animation:pulse 8s ease-in-out infinite}
+@keyframes pulse{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.1);opacity:1}}
+.hero img{height:90px;margin-bottom:20px;filter:drop-shadow(0 0 20px rgba(34,211,238,.3))}
+.hero h1{font-size:3.5em;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--green),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;letter-spacing:-.02em}
+.hero .tagline{font-size:1.3em;color:var(--dim);margin-top:12px;max-width:650px;margin-left:auto;margin-right:auto}
+.badges{display:flex;gap:10px;justify-content:center;margin-top:24px;flex-wrap:wrap}
+.badge{padding:6px 16px;border-radius:20px;font-size:.82em;font-weight:600;backdrop-filter:blur(8px)}
+.badge-win{background:rgba(37,99,235,.15);color:#60a5fa;border:1px solid rgba(37,99,235,.3)}
+.badge-android{background:rgba(34,204,102,.15);color:#4ade80;border:1px solid rgba(34,204,102,.3)}
+.badge-esp{background:rgba(245,158,11,.15);color:#fbbf24;border:1px solid rgba(245,158,11,.3)}
+.badge-dmx{background:rgba(124,58,237,.15);color:#a78bfa;border:1px solid rgba(124,58,237,.3)}
+.cta{display:flex;gap:14px;justify-content:center;margin-top:36px;flex-wrap:wrap}
+.cta a{display:inline-flex;align-items:center;gap:8px;padding:14px 28px;border-radius:10px;font-weight:700;font-size:1em;transition:all .2s;box-shadow:0 4px 15px rgba(0,0,0,.3)}
+.cta a:hover{transform:translateY(-3px);box-shadow:0 8px 25px rgba(0,0,0,.4);text-decoration:none}
+.cta-primary{background:linear-gradient(135deg,var(--blue),var(--accent));color:#fff}
+.cta-android{background:linear-gradient(135deg,#059669,var(--green));color:#000}
+.cta-github{background:var(--surface2);color:var(--text);border:1px solid #334155}
+
+/* Screenshots */
+.screenshots{padding:60px 0;background:linear-gradient(180deg,var(--bg),var(--surface))}
+.screenshots h2{text-align:center;font-size:2em;margin-bottom:12px}
+.screenshots .sub{text-align:center;color:var(--dim);margin-bottom:30px}
+.ss-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.ss-grid figure{margin:0;position:relative;overflow:hidden;border-radius:10px;border:1px solid #334155;transition:transform .2s}
+.ss-grid figure:hover{transform:scale(1.02)}
+.ss-grid img{width:100%;display:block}
+.ss-grid figcaption{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,.8));padding:10px 14px;font-size:.8em;color:var(--dim)}
+
+/* Features */
+section{padding:60px 0}
+.section-title{font-size:2em;font-weight:700;text-align:center;margin-bottom:10px}
+.section-sub{text-align:center;color:var(--dim);margin-bottom:36px;font-size:1.05em}
+.features{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px}
+.feature{background:var(--surface);padding:28px;border-radius:12px;border:1px solid #334155;transition:all .2s;position:relative;overflow:hidden}
+.feature:hover{border-color:var(--accent);box-shadow:0 0 20px rgba(34,211,238,.1)}
+.feature::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent),var(--purple));opacity:0;transition:opacity .2s}
+.feature:hover::before{opacity:1}
+.feature h3{color:var(--accent);margin-bottom:10px;font-size:1.1em}
+.feature p{color:var(--dim);font-size:.9em;line-height:1.5}
+.feature .icon{font-size:1.8em;margin-bottom:10px}
+
+/* Hardware */
+.hw-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}
+.hw-card{background:var(--surface);padding:24px;border-radius:12px;border:1px solid #334155;text-align:center;transition:border-color .2s}
+.hw-card:hover{border-color:var(--accent)}
+.hw-card h3{margin-bottom:8px;font-size:1em}
+.hw-card p{color:var(--dim);font-size:.85em}
+
+/* Community */
+.community{background:linear-gradient(135deg,rgba(124,58,237,.08),rgba(34,211,238,.05));padding:60px 0}
+.comm-card{text-align:center;padding:40px;background:var(--surface);border-radius:16px;border:1px solid rgba(124,58,237,.3);max-width:500px;margin:0 auto}
+.comm-card .num{font-size:3.5em;font-weight:800;background:linear-gradient(135deg,var(--purple),var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+
+/* Install */
+.install{background:var(--surface)}
+.install-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:20px;margin-top:30px}
+.step{padding:24px;border-radius:12px;border:1px solid #334155;background:var(--bg)}
+.step .num{display:inline-block;width:32px;height:32px;line-height:32px;text-align:center;border-radius:50%;background:var(--blue);color:#fff;font-weight:700;font-size:.9em;margin-bottom:12px}
+.step h4{margin-bottom:8px}
+.step p{color:var(--dim);font-size:.88em}
+.step code{background:#1e293b;padding:2px 6px;border-radius:3px;font-size:.85em;color:var(--accent)}
+
+/* Footer */
 footer{padding:40px 0;text-align:center;color:var(--dim);font-size:.85em;border-top:1px solid #1e293b}
-@media(max-width:600px){header h1{font-size:2em}header p{font-size:1em}.section-title{font-size:1.4em}}
+footer a{color:var(--accent)}
+
+@media(max-width:600px){.hero h1{font-size:2.2em}.hero .tagline{font-size:1em}.section-title{font-size:1.5em}
+.ss-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 
-<header>
+<!-- HERO -->
+<div class="hero">
   <div class="container">
+    <img src="slyled.png" alt="SlyLED Logo">
     <h1>SlyLED</h1>
-    <p>3D Volumetric LED & DMX Lighting Control System</p>
+    <p class="tagline">Design stunning lighting shows with 3D spatial effects, DMX moving heads, and addressable LED strips. Free and open-source.</p>
     <div class="badges">
-      <span class="badge badge-win">Windows</span>
-      <span class="badge badge-android">Android</span>
-      <span class="badge badge-esp">ESP32 / D1 Mini</span>
-      <span class="badge badge-dmx">DMX / Art-Net</span>
+      <span class="badge badge-win">&#x1F4BB; Windows</span>
+      <span class="badge badge-android">&#x1F4F1; Android</span>
+      <span class="badge badge-esp">&#x26A1; ESP32 / D1 Mini</span>
+      <span class="badge badge-dmx">&#x1F4A1; DMX / Art-Net</span>
     </div>
-    <div class="downloads">
-      <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="dl-btn dl-win">Windows Download</a>
-      <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="dl-btn dl-android">Android APK</a>
-      <a href="https://github.com/SlyWombat/SlyLED" class="dl-btn dl-github">GitHub</a>
+    <div class="cta">
+      <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="cta-primary">Download for Windows</a>
+      <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="cta-android">Android APK</a>
+      <a href="https://github.com/SlyWombat/SlyLED" class="cta-github">View on GitHub</a>
     </div>
   </div>
-</header>
+</div>
 
-<section>
+<!-- SCREENSHOTS -->
+<section class="screenshots">
   <div class="container">
-    <h2 class="section-title">Features</h2>
-    <div class="features">
-      <div class="feature">
-        <h3>3D Spatial Effects</h3>
-        <p>Design lighting shows in 3D space. Spheres, planes, and boxes sweep across your stage, illuminating fixtures based on their physical positions.</p>
-      </div>
-      <div class="feature">
-        <h3>DMX + Art-Net Output</h3>
-        <p>Control moving heads, RGB pars, and dimmers via Art-Net or sACN. Full fixture profiles with OFL library support (700+ fixtures).</p>
-      </div>
-      <div class="feature">
-        <h3>LED Strip Control</h3>
-        <p>WS2812B / WS2811 LED strips on ESP32 and D1 Mini. 14 built-in effects with per-pixel spatial rendering.</p>
-      </div>
-      <div class="feature">
-        <h3>Timeline Editor</h3>
-        <p>Multi-track timeline with clips, spatial effects, and action sequences. Bake to optimized per-fixture instructions.</p>
-      </div>
-      <div class="feature">
-        <h3>Live DMX Monitor</h3>
-        <p>Real-time 512-channel grid per universe. Click any channel to set values. Test fixtures with quick color buttons.</p>
-      </div>
-      <div class="feature">
-        <h3>Community Profiles</h3>
-        <p>Share and download DMX fixture profiles with the SlyLED community. Automatic duplicate detection.</p>
-      </div>
-      <div class="feature">
-        <h3>Cross-Platform</h3>
-        <p>Windows desktop app, Android companion, and ESP32/D1 Mini firmware. All connected over WiFi.</p>
-      </div>
-      <div class="feature">
-        <h3>Open Source</h3>
-        <p>MIT licensed. Full source on GitHub. Built with Flask, Kotlin/Compose, Arduino, and Three.js.</p>
-      </div>
+    <h2 class="section-title">See It In Action</h2>
+    <p class="sub">7-tab SPA with 2D/3D layout, timeline editor, live emulator, and DMX control</p>
+    <div class="ss-grid">
+      <figure><img src="spa-dashboard.png" alt="Dashboard" loading="lazy"><figcaption>Dashboard — performer status, live show preview</figcaption></figure>
+      <figure><img src="spa-layout-3d.png" alt="3D Layout" loading="lazy"><figcaption>3D Layout — beam cones, aim spheres, drag-to-position</figcaption></figure>
+      <figure><img src="spa-runtime.png" alt="Runtime" loading="lazy"><figcaption>Runtime — timeline editor with spatial effects emulator</figcaption></figure>
+      <figure><img src="spa-layout-2d.png" alt="2D Layout" loading="lazy"><figcaption>2D Layout — stage canvas with LED strings and DMX beams</figcaption></figure>
+      <figure><img src="spa-actions.png" alt="Actions" loading="lazy"><figcaption>Actions — 14 built-in LED effects with custom parameters</figcaption></figure>
+      <figure><img src="spa-firmware.png" alt="Firmware" loading="lazy"><figcaption>Firmware — OTA updates, USB flash, WiFi management</figcaption></figure>
     </div>
   </div>
 </section>
 
-<section style="background:#1a1f35">
+<!-- FEATURES -->
+<section>
+  <div class="container">
+    <h2 class="section-title">Everything You Need</h2>
+    <p class="section-sub">From a single LED strip to a full DMX moving head rig</p>
+    <div class="features">
+      <div class="feature"><div class="icon">&#x1F30C;</div><h3>3D Spatial Effects</h3><p>Spheres, planes, and boxes sweep across your stage in 3D. Fixtures light up based on their physical position — automatic pan/tilt tracking for moving heads.</p></div>
+      <div class="feature"><div class="icon">&#x1F4A1;</div><h3>DMX + Art-Net Output</h3><p>Full Art-Net and sACN support. Control moving heads, RGB pars, dimmers, fog machines. Import profiles from the Open Fixture Library (700+ fixtures).</p></div>
+      <div class="feature"><div class="icon">&#x1F308;</div><h3>14 LED Effects</h3><p>Rainbow, Chase, Fire, Comet, Twinkle, Strobe, Wipe, Scanner, Sparkle, Gradient — all with customizable speed, color, and direction.</p></div>
+      <div class="feature"><div class="icon">&#x1F3AC;</div><h3>Timeline Editor</h3><p>Multi-track timeline with clips, spatial effects, and action sequences. Bake to optimized per-fixture instructions. NTP-synced playback.</p></div>
+      <div class="feature"><div class="icon">&#x1F50D;</div><h3>Live DMX Monitor</h3><p>Real-time 512-channel grid per universe. Click any channel to set values. Quick color buttons for testing. Per-channel capability labels.</p></div>
+      <div class="feature"><div class="icon">&#x1F91D;</div><h3>Fixture Groups</h3><p>Group DMX fixtures and control them as one. Master dimmer, RGB sliders, and quick presets. Groups are timeline-targetable.</p></div>
+      <div class="feature"><div class="icon">&#x1F4F1;</div><h3>Android Companion</h3><p>Native Kotlin/Compose app with 2D layout, pinch-to-zoom, emulator preview, DMX channel testing, and preset show loading.</p></div>
+      <div class="feature"><div class="icon">&#x1F310;</div><h3>Community Profiles</h3><p>Share and download fixture profiles with the SlyLED community. Automatic duplicate detection. Browse by manufacturer or search.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- HARDWARE -->
+<section style="background:var(--surface)">
+  <div class="container">
+    <h2 class="section-title">Supported Hardware</h2>
+    <p class="section-sub">WiFi-connected LED performers and DMX bridges</p>
+    <div class="hw-grid">
+      <div class="hw-card"><h3 style="color:var(--orange)">&#x26A1; ESP32</h3><p>Up to 8 LED strings on independent GPIO pins. OTA firmware updates. Multi-pin FastLED.</p></div>
+      <div class="hw-card"><h3 style="color:var(--purple)">&#x1F4E6; D1 Mini</h3><p>Compact single-string controller. Perfect for portable installations. WS2812B on GPIO 2.</p></div>
+      <div class="hw-card"><h3 style="color:var(--green)">&#x1F6E0; Arduino Giga R1</h3><p>DMX-512 bridge via RS-485 transceiver. Art-Net receiver. Onboard RGB LED performer.</p></div>
+      <div class="hw-card"><h3 style="color:var(--accent)">&#x1F4E1; Art-Net Nodes</h3><p>Any Art-Net compatible gateway. Automatic discovery via ArtPoll. Multi-universe routing.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- COMMUNITY -->
+<section class="community">
   <div class="container">
     <h2 class="section-title">Community Fixture Library</h2>
-    <div class="community-stats">
-      <div class="number" id="comm-count">—</div>
+    <p class="section-sub">Share profiles, find your fixtures, grow the ecosystem</p>
+    <div class="comm-card">
+      <div class="num" id="comm-count">&mdash;</div>
       <p style="color:var(--dim);margin-top:8px">Shared fixture profiles</p>
-      <p style="margin-top:16px"><a href="https://electricrv.ca/api/profiles/index.php?action=stats">View API</a></p>
+      <p style="margin-top:20px;font-size:.9em">Search by manufacturer, fixture name, or category. Upload your custom profiles to help others.</p>
+      <p style="margin-top:16px"><a href="https://electricrv.ca/api/profiles/index.php?action=recent" style="color:var(--purple)">Browse the API &rarr;</a></p>
     </div>
   </div>
 </section>
 
-<section>
+<!-- INSTALL -->
+<section class="install">
   <div class="container">
-    <h2 class="section-title">Hardware Support</h2>
-    <div class="features" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
-      <div class="feature" style="text-align:center">
-        <h3 style="color:#f59e0b">ESP32</h3>
-        <p>Up to 8 LED strings, multi-GPIO, OTA updates</p>
-      </div>
-      <div class="feature" style="text-align:center">
-        <h3 style="color:#a78bfa">D1 Mini</h3>
-        <p>Compact single-string controller</p>
-      </div>
-      <div class="feature" style="text-align:center">
-        <h3 style="color:var(--green)">Giga R1 WiFi</h3>
-        <p>DMX bridge with RS-485 output</p>
-      </div>
-      <div class="feature" style="text-align:center">
-        <h3 style="color:var(--accent)">Art-Net Gateway</h3>
-        <p>Any Art-Net compatible node</p>
-      </div>
+    <h2 class="section-title">Get Started in Minutes</h2>
+    <div class="install-steps">
+      <div class="step"><div class="num">1</div><h4>Download & Run</h4><p>Grab <code>SlyLED.exe</code> or <code>SlyLED-Setup.exe</code> from GitHub Releases. No install required for the portable version.</p></div>
+      <div class="step"><div class="num">2</div><h4>Flash Firmware</h4><p>Connect an ESP32 via USB. Go to the Firmware tab, select the port, and click Flash. Done in 30 seconds.</p></div>
+      <div class="step"><div class="num">3</div><h4>Discover & Design</h4><p>Click Discover to find performers on WiFi. Position them on the 2D/3D stage. Load a preset show or build your own timeline.</p></div>
+      <div class="step"><div class="num">4</div><h4>Run the Show</h4><p>Click Bake &rarr; Sync &rarr; Start. All performers execute their parts in NTP-synced unison. Watch the live emulator preview.</p></div>
     </div>
   </div>
 </section>
 
+<!-- FOOTER -->
 <footer>
   <div class="container">
-    <p>SlyLED &copy; 2026 SlyWombat &bull; <a href="https://github.com/SlyWombat/SlyLED">GitHub</a> &bull; MIT License</p>
+    <p style="margin-bottom:8px"><img src="slyled.png" alt="SlyLED" style="height:28px;vertical-align:middle;margin-right:8px">SlyLED &copy; 2026 SlyWombat</p>
+    <p><a href="https://github.com/SlyWombat/SlyLED">GitHub</a> &bull; <a href="https://github.com/SlyWombat/SlyLED/releases">Downloads</a> &bull; <a href="https://github.com/SlyWombat/SlyLED/issues">Issues</a> &bull; MIT License</p>
   </div>
 </footer>
 
 <script>
 fetch('https://electricrv.ca/api/profiles/index.php?action=stats')
-  .then(r=>r.json()).then(d=>{
-    if(d&&d.data)document.getElementById('comm-count').textContent=d.data.total;
-  }).catch(()=>{});
+  .then(r=>r.json()).then(d=>{if(d&&d.data)document.getElementById('comm-count').textContent=d.data.total;}).catch(()=>{});
 </script>
 </body>
 </html>
