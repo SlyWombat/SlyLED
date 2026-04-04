@@ -62,7 +62,8 @@ section{padding:60px 0}
 .section-sub{text-align:center;color:var(--dim);margin-bottom:36px;font-size:1.05em}
 .features{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px}
 .feature{background:var(--surface);padding:28px;border-radius:12px;border:1px solid #334155;transition:all .2s;position:relative;overflow:hidden}
-.feature:hover{border-color:var(--accent);box-shadow:0 0 20px rgba(34,211,238,.1)}
+.feature:hover{border-color:var(--accent);box-shadow:0 0 20px rgba(34,211,238,.1);text-decoration:none}
+a.feature{color:inherit;text-decoration:none;display:block;cursor:pointer}
 .feature::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent),var(--purple));opacity:0;transition:opacity .2s}
 .feature:hover::before{opacity:1}
 .feature h3{color:var(--accent);margin-bottom:10px;font-size:1.1em}
@@ -143,14 +144,14 @@ footer a{color:var(--accent)}
     <h2 class="section-title">Everything You Need</h2>
     <p class="section-sub">From a single LED strip to a full DMX moving head rig</p>
     <div class="features">
-      <div class="feature"><div class="icon">&#x1F30C;</div><h3>3D Spatial Effects</h3><p>Spheres, planes, and boxes sweep across your stage in 3D. Fixtures light up based on their physical position — automatic pan/tilt tracking for moving heads.</p></div>
-      <div class="feature"><div class="icon">&#x1F4A1;</div><h3>DMX + Art-Net Output</h3><p>Full Art-Net and sACN support. Control moving heads, RGB pars, dimmers, fog machines. Import profiles from the Open Fixture Library (700+ fixtures).</p></div>
-      <div class="feature"><div class="icon">&#x1F308;</div><h3>14 LED Effects</h3><p>Rainbow, Chase, Fire, Comet, Twinkle, Strobe, Wipe, Scanner, Sparkle, Gradient — all with customizable speed, color, and direction.</p></div>
-      <div class="feature"><div class="icon">&#x1F3AC;</div><h3>Timeline Editor</h3><p>Multi-track timeline with clips, spatial effects, and action sequences. Bake to optimized per-fixture instructions. NTP-synced playback.</p></div>
-      <div class="feature"><div class="icon">&#x1F50D;</div><h3>Live DMX Monitor</h3><p>Real-time 512-channel grid per universe. Click any channel to set values. Quick color buttons for testing. Per-channel capability labels.</p></div>
-      <div class="feature"><div class="icon">&#x1F91D;</div><h3>Fixture Groups</h3><p>Group DMX fixtures and control them as one. Master dimmer, RGB sliders, and quick presets. Groups are timeline-targetable.</p></div>
-      <div class="feature"><div class="icon">&#x1F4F1;</div><h3>Android Companion</h3><p>Native Kotlin/Compose app with 2D layout, pinch-to-zoom, emulator preview, DMX channel testing, and preset show loading.</p></div>
-      <div class="feature"><div class="icon">&#x1F310;</div><h3>Community Profiles</h3><p>Share and download fixture profiles with the SlyLED community. Automatic duplicate detection. Browse by manufacturer or search.</p></div>
+      <a href="demo/#step9" class="feature"><div class="icon">&#x1F30C;</div><h3>3D Spatial Effects</h3><p>Spheres, planes, and boxes sweep across your stage in 3D. Fixtures light up based on their physical position — automatic pan/tilt tracking for moving heads.</p></a>
+      <a href="demo/#step7" class="feature"><div class="icon">&#x1F4A1;</div><h3>DMX + Art-Net Output</h3><p>Full Art-Net and sACN support. Control moving heads, RGB pars, dimmers, fog machines. Import profiles from the Open Fixture Library (700+ fixtures).</p></a>
+      <a href="demo/#step10" class="feature"><div class="icon">&#x1F308;</div><h3>14 LED Effects</h3><p>Rainbow, Chase, Fire, Comet, Twinkle, Strobe, Wipe, Scanner, Sparkle, Gradient — all with customizable speed, color, and direction.</p></a>
+      <a href="demo/#step11" class="feature"><div class="icon">&#x1F3AC;</div><h3>Timeline Editor</h3><p>Multi-track timeline with clips, spatial effects, and action sequences. Bake to optimized per-fixture instructions. NTP-synced playback.</p></a>
+      <a href="demo/#step12" class="feature"><div class="icon">&#x1F50D;</div><h3>Live DMX Monitor</h3><p>Real-time 512-channel grid per universe. Click any channel to set values. Quick color buttons for testing. Per-channel capability labels.</p></a>
+      <a href="demo/#step12" class="feature"><div class="icon">&#x1F91D;</div><h3>Fixture Groups</h3><p>Group DMX fixtures and control them as one. Master dimmer, RGB sliders, and quick presets. Groups are timeline-targetable.</p></a>
+      <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="feature"><div class="icon">&#x1F4F1;</div><h3>Android Companion</h3><p>Native Kotlin/Compose app with 2D layout, pinch-to-zoom, emulator preview, DMX channel testing, and preset show loading.</p></a>
+      <a href="https://electricrv.ca/api/profiles/index.php?action=stats" class="feature"><div class="icon">&#x1F310;</div><h3>Community Profiles</h3><p>Share and download fixture profiles with the SlyLED community. Automatic duplicate detection. Browse by manufacturer or search.</p></a>
     </div>
   </div>
 </section>

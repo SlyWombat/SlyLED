@@ -45,14 +45,14 @@ footer{text-align:center;padding:40px 0;color:#64748b;font-size:.85em;border-top
 
 <div class="container">
 
-<div class="step">
+<div class="step" id="step1">
   <div class="step-num" style="background:#3b82f6;color:#fff">1</div>
   <h2>First Launch <span class="platform p-win">Windows</span></h2>
   <p>Run SlyLED.exe or SlyLED-Setup.exe. The dashboard opens empty — ready for you to connect hardware.</p>
   <img src="01-first-launch.png" alt="First Launch" loading="lazy">
 </div>
 
-<div class="step">
+<div class="step" id="step2">
   <div class="step-num" style="background:#f59e0b;color:#000">2</div>
   <h2>Flash Firmware <span class="platform p-win">Windows</span></h2>
   <p>Go to the Firmware tab. Connect your ESP32 via USB, select the COM port, enter WiFi credentials, and click Flash.</p>
@@ -60,7 +60,7 @@ footer{text-align:center;padding:40px 0;color:#64748b;font-size:.85em;border-top
   <div class="detail"><b>Supported boards:</b> ESP32-WROOM-32E, D1 Mini, Arduino Giga R1 WiFi. Firmware auto-detects board type.</div>
 </div>
 
-<div class="step">
+<div class="step" id="step3">
   <div class="step-num" style="background:#22c55e;color:#000">3</div>
   <h2>ESP32 Config — Dashboard <span class="platform p-esp">ESP32</span></h2>
   <p>Once flashed, the ESP32 serves a config page at its IP address. The Dashboard tab shows the device hostname, firmware version, and active action status.</p>
@@ -68,7 +68,7 @@ footer{text-align:center;padding:40px 0;color:#64748b;font-size:.85em;border-top
   <div class="detail"><b>Access:</b> Browse to <code>http://192.168.x.x/config</code> — the IP is shown on the SlyLED Setup tab after discovery.</div>
 </div>
 
-<div class="step">
+<div class="step" id="step4">
   <div class="step-num" style="background:#22c55e;color:#000">4</div>
   <h2>ESP32 Config — Settings <span class="platform p-esp">ESP32</span></h2>
   <p>On the Settings tab, give your performer a friendly name and description. Set the number of LED strings connected.</p>
@@ -76,7 +76,7 @@ footer{text-align:center;padding:40px 0;color:#64748b;font-size:.85em;border-top
   <div class="detail"><b>String count:</b> ESP32 supports 1-8 strings on independent GPIO pins. Each string can be a different length and direction.</div>
 </div>
 
-<div class="step">
+<div class="step" id="step5">
   <div class="step-num" style="background:#22c55e;color:#000">5</div>
   <h2>ESP32 Config — LED Strings <span class="platform p-esp">ESP32</span></h2>
   <p>On the Config tab, set each string's LED count, physical length (mm), strip direction, and GPIO data pin. Click Test to verify each string lights up.</p>
@@ -84,7 +84,7 @@ footer{text-align:center;padding:40px 0;color:#64748b;font-size:.85em;border-top
   <div class="detail"><b>Example:</b> String 1: 150 LEDs, 5000mm, West direction, GPIO 16. String 2: 150 LEDs, 5000mm, East direction, GPIO 3.</div>
 </div>
 
-<div class="step">
+<div class="step" id="step6">
   <div class="step-num" style="background:#3b82f6;color:#fff">6</div>
   <h2>Discover & Register Performers <span class="platform p-win">Windows</span></h2>
   <p>Back on the desktop, go to Setup and click Discover. Your configured ESP32 appears with its name and LED count. Click Add to register it.</p>
@@ -92,7 +92,7 @@ footer{text-align:center;padding:40px 0;color:#64748b;font-size:.85em;border-top
   <div class="detail"><b>Auto-detection:</b> SlyLED broadcasts a UDP ping on port 4210. Performers respond with their config including string details and firmware version.</div>
 </div>
 
-<div class="step">
+<div class="step" id="step7">
   <div class="step-num" style="background:#7c3aed;color:#fff">7</div>
   <h2>Add DMX Fixtures <span class="platform p-dmx">DMX</span></h2>
   <p>Click + DMX Fixture to launch the wizard. Search the Open Fixture Library for your model (700+ fixtures), set universe and address, confirm.</p>
@@ -100,7 +100,7 @@ footer{text-align:center;padding:40px 0;color:#64748b;font-size:.85em;border-top
   <div class="detail"><b>Fixtures:</b> Chauvet SlimPAR 56 (7ch wash, U1@1) and ADJ Vizi Beam 5RX (16ch moving head, U1@8). Profiles from OFL.</div>
 </div>
 
-<div class="step">
+<div class="step" id="step8">
   <div class="step-num" style="background:#22d3ee;color:#000">8</div>
   <h2>Stage Layout — 2D Canvas <span class="platform p-win">Windows</span></h2>
   <p>Switch to Layout. Drag fixtures onto the stage. LED strings show as colored lines, DMX fixtures show beam cones toward their aim points. Surfaces render behind.</p>
@@ -108,21 +108,21 @@ footer{text-align:center;padding:40px 0;color:#64748b;font-size:.85em;border-top
   <div class="detail"><b>Coordinates:</b> Stage is 10m &times; 5m. Grid at 1m intervals. Fixtures positioned in millimeters. Double-click to edit or set aim point.</div>
 </div>
 
-<div class="step">
+<div class="step" id="step9">
   <div class="step-num" style="background:#22d3ee;color:#000">9</div>
   <h2>Stage Layout — 3D Viewport <span class="platform p-win">Windows</span></h2>
   <p>Toggle to 3D for an interactive Three.js scene. Orbit with mouse drag, zoom with scroll. Beam cones render as 3D geometry. Drag aim spheres to redirect beams.</p>
   <img src="09-layout-3d.png" alt="3D Layout" loading="lazy">
 </div>
 
-<div class="step">
+<div class="step" id="step10">
   <div class="step-num" style="background:#f59e0b;color:#000">10</div>
   <h2>Create Effects <span class="platform p-win">Windows</span></h2>
   <p>Build your effects library with 14 types: Rainbow, Chase, Fire, Comet, Twinkle, and more. Create spatial effects that sweep across the 3D stage.</p>
   <img src="10-actions.png" alt="Actions" loading="lazy">
 </div>
 
-<div class="step">
+<div class="step" id="step11">
   <div class="step-num" style="background:#22c55e;color:#000">11</div>
   <h2>Run the Show <span class="platform p-win">Windows</span></h2>
   <p>Load a preset show or build a timeline. Click Bake &rarr; Sync &rarr; Start. The emulator previews LED colors and DMX beam positions in real-time.</p>
@@ -130,7 +130,7 @@ footer{text-align:center;padding:40px 0;color:#64748b;font-size:.85em;border-top
   <div class="detail"><b>Spatial fields:</b> During playback, sphere/plane/box shapes animate across the stage preview, showing exactly where the light is.</div>
 </div>
 
-<div class="step">
+<div class="step" id="step12">
   <div class="step-num" style="background:#3b82f6;color:#fff">12</div>
   <h2>Settings & Community <span class="platform p-win">Windows</span></h2>
   <p>Configure Art-Net routing, manage profiles, share fixtures with the community, control groups, and monitor DMX channels live.</p>
@@ -148,3 +148,4 @@ footer{text-align:center;padding:40px 0;color:#64748b;font-size:.85em;border-top
 
 </body>
 </html>
+
