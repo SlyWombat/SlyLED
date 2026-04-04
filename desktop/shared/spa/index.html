@@ -245,13 +245,10 @@ body.light .li:hover{border-color:#3b82f6}
       <div style='display:flex;gap:.5em;flex-wrap:wrap;margin-bottom:.6em'>
         <button class='btn btn-on' onclick='showProfileBrowser()'>Browse Library</button>
         <button class='btn btn-nav' onclick='showProfileEditor()'>New Profile</button>
-        <button class='btn' onclick='showCommunityBrowser()' style='background:#7c3aed;color:#e9d5ff'>Community</button>
-        <button class='btn btn-nav' onclick='showOflBrowse()' style='background:#1e3a5f;color:#93c5fd'>Search OFL</button>
-        <button class='btn btn-nav' onclick='showOflImport()'>Paste OFL</button>
+        <button class='btn btn-nav' onclick='exportProfileBundle()'>Export Custom</button>
         <label class='btn btn-nav' style='cursor:pointer'>Import Bundle
           <input type='file' accept='.json' style='display:none' onchange='importProfileBundle(this)'>
         </label>
-        <button class='btn btn-nav' onclick='exportProfileBundle()'>Export Custom</button>
       </div>
       <div id='profile-lib'></div>
     </div>
@@ -325,6 +322,15 @@ body.light .li:hover{border-color:#3b82f6}
 
   <!-- ADVANCED -->
   <div id='ss-advanced' style='display:none'>
+    <div class='card' style='max-width:480px'>
+      <div class='card-title'>Online Services</div>
+      <p style='font-size:.85em;color:#aaa;margin-bottom:.6em'>Import fixtures from external libraries and share with the community.</p>
+      <div style='display:flex;gap:.5em;flex-wrap:wrap'>
+        <button class='btn' onclick='showCommunityBrowser()' style='background:#7c3aed;color:#e9d5ff'>Community Profiles</button>
+        <button class='btn btn-nav' onclick='showOflBrowse()' style='background:#1e3a5f;color:#93c5fd'>Search OFL</button>
+        <button class='btn btn-nav' onclick='showOflImport()'>Paste OFL JSON</button>
+      </div>
+    </div>
     <div class='card' style='max-width:480px'>
       <div class='card-title'>Mobile App</div>
       <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Scan this QR code with the SlyLED Android app to connect.</p>
@@ -938,10 +944,11 @@ function showAddFixtureModal(){
     +'<label>Name</label><input id="af-name" placeholder="Moving Head 1" style="width:100%;margin-bottom:.4em">'
     +'<div style="display:flex;gap:.5em"><div style="flex:1"><label>Universe</label><input id="af-uni" type="number" value="1" min="1" style="width:100%;margin-bottom:.4em"></div>'
     +'<div style="flex:1"><label>Start Address</label><input id="af-addr" type="number" value="1" min="1" max="512" style="width:100%;margin-bottom:.4em"></div>'
-    +'<div style="flex:1"><label>Channels</label><input id="af-ch" type="number" value="3" min="1" max="512" style="width:100%;margin-bottom:.4em"></div></div>'
+    +'<div style="flex:1"><label>Channels</label><input id="af-ch" type="number" value="3" min="1" max="512" style="width:100%;margin-bottom:.4em" onchange="_afPreviewChannels()"></div></div>'
     +'<label>Geometry</label><select id="af-geom" style="width:100%;margin-bottom:.4em"><option value="point">Point</option><option value="linear">Linear</option></select>'
     +'<label>Profile</label>'
-    +'<select id="af-prof" style="width:100%"><option value="">— None (generic channels) —</option></select>'
+    +'<select id="af-prof" style="width:100%" onchange="_afPreviewChannels()"><option value="">— None (generic channels) —</option></select>'
+    +'<div id="af-ch-preview" style="max-height:120px;overflow-y:auto;font-size:.75em;margin-top:.4em"></div>'
     +'<div style="margin-top:.8em;padding-top:.5em;border-top:1px solid #334155"><button class="btn btn-on" onclick="_submitAddFixture()" style="font-size:.95em;padding:.5em 2em">Add Fixture</button></div>'
     +'</div>'
     +'<div id="af-group" style="display:none">'
@@ -1019,20 +1026,44 @@ function _afOflSearch(){
     el.innerHTML=h;
   });
 }
+function _afPreviewChannels(){
+  var el=document.getElementById('af-ch-preview');if(!el)return;
+  var profId=document.getElementById('af-prof').value;
+  if(!profId){
+    var ch=parseInt(document.getElementById('af-ch').value)||3;
+    var h='<table style="width:100%;border-collapse:collapse"><tr style="color:#64748b"><th style="text-align:left">Ch</th><th style="text-align:left">Name</th><th>Type</th></tr>';
+    for(var i=0;i<ch;i++)h+='<tr style="border-bottom:1px solid #1e293b"><td>'+(i+1)+'</td><td>Channel '+(i+1)+'</td><td style="color:#64748b">dimmer</td></tr>';
+    el.innerHTML=h+'</table>';
+    return;
+  }
+  ra('GET','/api/dmx-profiles/'+profId,null,function(p){
+    if(!p||!p.channels){el.innerHTML='';return;}
+    var h='<table style="width:100%;border-collapse:collapse"><tr style="color:#64748b"><th style="text-align:left">Ch</th><th style="text-align:left">Name</th><th>Type</th><th>Bits</th></tr>';
+    p.channels.forEach(function(c,i){
+      var typeCol={'red':'#f66','green':'#6f6','blue':'#66f','white':'#eee','dimmer':'#fa6','pan':'#6ef','tilt':'#c8f'};
+      h+='<tr style="border-bottom:1px solid #1e293b"><td>'+(c.offset+1)+'</td><td>'+escapeHtml(c.name)+'</td><td style="color:'+(typeCol[c.type]||'#94a3b8')+'">'+c.type+'</td><td>'+(c.bits||8)+'</td></tr>';
+    });
+    el.innerHTML=h+'</table>';
+  });
+}
 function _afBrowseAll(){
   var el=document.getElementById('af-ofl-results');if(!el)return;
   el.innerHTML='<span style="color:#888;font-size:.82em">Loading all profiles...</span>';
   ra('GET','/api/dmx-profiles',null,function(profiles){
     if(!profiles||!profiles.length){el.innerHTML='<span style="color:#888">No profiles in library</span>';return;}
-    var srcColors={local:'#22c55e'};
-    var h='<div style="font-size:.75em;color:#64748b;margin-bottom:.3em">'+profiles.length+' profiles in library</div>';
+    var h='<div style="font-size:.75em;color:#64748b;margin-bottom:.3em">'+profiles.length+' profiles</div>';
+    h+='<table style="width:100%;font-size:.82em;border-collapse:collapse"><tr style="color:#64748b"><th style="text-align:left">Name</th><th style="text-align:left">Manufacturer</th><th>Ch</th><th>Category</th><th></th></tr>';
     profiles.forEach(function(p){
-      var badge=p.builtin?'<span style="font-size:.6em;padding:1px 4px;border-radius:8px;background:#33415522;color:#94a3b8">Built-in</span>':'<span style="font-size:.6em;padding:1px 4px;border-radius:8px;background:#22c55e22;color:#22c55e">Custom</span>';
-      h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:.3em 0;border-bottom:1px solid #1e293b">'
-        +'<span>'+escapeHtml(p.name)+' <span style="color:#64748b;font-size:.82em">'+escapeHtml(p.manufacturer||'')+'</span> '+badge+' <span style="color:#64748b;font-size:.75em">'+p.channelCount+'ch</span></span>'
-        +'<button class="btn" style="font-size:.7em;padding:.15em .4em;background:#14532d;color:#86efac" '
-        +'onclick="_afSelectLocal(\''+escapeHtml(p.id)+'\',\''+escapeHtml(p.name).replace(/'/g,"\\'")+'\','+p.channelCount+')">Select</button></div>';
+      var src=p.builtin?'<span style="color:#64748b;font-size:.75em">built-in</span>':'<span style="color:#22c55e;font-size:.75em">custom</span>';
+      h+='<tr style="border-bottom:1px solid #1e293b">'
+        +'<td style="padding:.2em .3em">'+escapeHtml(p.name)+'</td>'
+        +'<td style="padding:.2em .3em;color:#94a3b8">'+escapeHtml(p.manufacturer||'')+'</td>'
+        +'<td style="text-align:center">'+p.channelCount+'</td>'
+        +'<td style="color:#64748b;font-size:.85em">'+escapeHtml(p.category||'')+'</td>'
+        +'<td><button class="btn" style="font-size:.7em;padding:.15em .4em;background:#14532d;color:#86efac" '
+        +'onclick="_afSelectLocal(\''+escapeHtml(p.id)+'\',\''+escapeHtml(p.name).replace(/'/g,"\\'")+'\','+p.channelCount+')">Select</button></td></tr>';
     });
+    h+='</table>';
     el.innerHTML=h;
   });
 }

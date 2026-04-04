@@ -74,7 +74,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "8.2.17"
+VERSION = "8.2.18"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1697,6 +1697,19 @@ def _apply_dmx_settings():
     )
 
 _apply_dmx_settings()
+
+# Auto-start DMX engine if universe routes are configured
+if _dmx_settings.get("universeRoutes"):
+    _proto = _dmx_settings.get("protocol", "artnet")
+    try:
+        if _proto == "artnet":
+            _artnet.start()
+            log.info("Art-Net auto-started (%d routes)", len(_dmx_settings["universeRoutes"]))
+        elif _proto == "sacn":
+            _sacn.start()
+            log.info("sACN auto-started (%d routes)", len(_dmx_settings["universeRoutes"]))
+    except Exception as e:
+        log.warning("DMX auto-start failed: %s", e)
 
 @app.get("/api/dmx/interfaces")
 def api_dmx_interfaces():
@@ -3769,6 +3782,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
