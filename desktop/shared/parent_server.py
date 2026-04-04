@@ -1325,9 +1325,16 @@ def api_community_upload():
     profile = _profile_lib.get_profile(profile_id)
     if not profile:
         return jsonify(ok=False, err="Profile not found locally"), 404
-    # Strip builtin flag
+    # Strip builtin flag and ensure slug-safe ID
+    import re
     p = {k: v for k, v in profile.items() if k != "builtin"}
+    slug = re.sub(r'[^a-z0-9\-]', '-', p.get("id", "").lower())
+    slug = re.sub(r'-+', '-', slug).strip('-')[:128]
+    if not slug:
+        return jsonify(ok=False, err="Profile ID cannot be converted to a valid slug"), 400
+    p["id"] = slug
     result = cc.upload(p)
+    log.info("Community upload '%s' (slug '%s'): %s", profile_id, slug, result)
     return jsonify(result)
 
 @app.post("/api/dmx-profiles/community/download")
@@ -1363,7 +1370,12 @@ def api_community_check():
     profile = _profile_lib.get_profile(profile_id)
     if not profile:
         return jsonify(ok=False, err="Profile not found"), 404
+    import re as _re
     p = {k: v for k, v in profile.items() if k != "builtin"}
+    slug = _re.sub(r'[^a-z0-9\-]', '-', p.get("id", "").lower())
+    slug = _re.sub(r'-+', '-', slug).strip('-')[:128]
+    if slug:
+        p["id"] = slug
     return jsonify(cc.check_duplicate(p))
 
 @app.get("/api/dmx-profiles/unified-search")

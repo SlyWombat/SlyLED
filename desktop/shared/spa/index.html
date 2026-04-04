@@ -2212,7 +2212,7 @@ var _profEditChTypes=['dimmer','red','green','blue','white','amber','uv','pan','
 var _profEditCapTypes=['ColorIntensity','Intensity','Pan','PanContinuous','Tilt','TiltContinuous','ShutterStrobe','WheelSlot','WheelRotation','Prism','Focus','Zoom','Frost','Speed','Maintenance','Effect','NoFunction','Generic'];
 function _openProfileEditor(p,isEdit){
   var h='<div style="display:flex;gap:.5em;flex-wrap:wrap;margin-bottom:.5em">';
-  h+='<div><label style="font-size:.78em">ID</label><input id="pe-id" value="'+escapeHtml(p.id||'')+'" style="width:180px"'+(isEdit?' disabled':'')+'></div>';
+  h+='<div><label style="font-size:.78em">ID <span style="color:#64748b">(lowercase, hyphens only)</span></label><input id="pe-id" value="'+escapeHtml(p.id||'')+'" style="width:180px" oninput="this.value=this.value.toLowerCase().replace(/[^a-z0-9\\-]/g,\'-\').replace(/-+/g,\'-\').replace(/^-/,\'\')" placeholder="my-fixture-name"'+(isEdit?' disabled':'')+'></div>';
   h+='<div><label style="font-size:.78em">Name</label><input id="pe-name" value="'+escapeHtml(p.name||'')+'" style="width:200px"></div>';
   h+='<div><label style="font-size:.78em">Manufacturer</label><input id="pe-mfr" value="'+escapeHtml(p.manufacturer||'')+'" style="width:150px"></div>';
   h+='</div><div style="display:flex;gap:.5em;flex-wrap:wrap;margin-bottom:.5em">';
@@ -2327,6 +2327,10 @@ function _peGatherProfile(){
 }
 function _peSave(isEdit){
   var p=_peGatherProfile();
+  // Auto-generate slug from name if ID is empty
+  if(!p.id&&p.name){p.id=p.name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,128);}
+  // Ensure ID is a valid slug
+  p.id=(p.id||'').toLowerCase().replace(/[^a-z0-9\-]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
   if(!p.id||!p.name){document.getElementById('hs').textContent='Profile needs an ID and Name';return;}
   var method=isEdit?'PUT':'POST';
   var url=isEdit?'/api/dmx-profiles/'+p.id:'/api/dmx-profiles';
