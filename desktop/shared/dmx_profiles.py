@@ -210,7 +210,7 @@ BUILTIN_PROFILES = [
                 {"range": [0, 65535], "type": "Tilt", "label": "Tilt 0-270\u00b0", "angleStart": 0, "angleEnd": 270},
             ]},
             {"offset": 4,  "name": "Speed",     "type": "speed",       "capabilities": _simple_cap("P/T speed fast-slow", "Speed")},
-            {"offset": 5,  "name": "Dimmer",    "type": "dimmer",      "capabilities": _simple_cap("Dimmer 0-100%")},
+            {"offset": 5,  "name": "Dimmer",    "type": "dimmer",      "default": 255, "capabilities": _simple_cap("Dimmer 0-100%")},
             {"offset": 6,  "name": "Strobe",    "type": "strobe",      "capabilities": [
                 {"range": [0, 3],   "type": "ShutterStrobe", "label": "Open"},
                 {"range": [4, 255], "type": "ShutterStrobe", "label": "Strobe slow-fast"},
@@ -301,7 +301,7 @@ BUILTIN_PROFILES = [
         "manufacturer": "Generic",
         "category": "fog",
         "channels": [
-            {"offset": 0, "name": "Output", "type": "dimmer", "capabilities": _simple_cap("Fog output 0-100%")},
+            {"offset": 0, "name": "Output", "type": "dimmer", "default": 0, "capabilities": _simple_cap("Fog output 0-100%")},
             {"offset": 1, "name": "Fan",    "type": "speed",  "capabilities": _simple_cap("Fan speed", "Speed")},
         ],
         "channelCount": 2,
@@ -316,7 +316,7 @@ BUILTIN_PROFILES = [
         "manufacturer": "Generic",
         "category": "strobe",
         "channels": [
-            {"offset": 0, "name": "Dimmer", "type": "dimmer", "capabilities": _simple_cap("Intensity 0-100%")},
+            {"offset": 0, "name": "Dimmer", "type": "dimmer", "default": 255, "capabilities": _simple_cap("Intensity 0-100%")},
             {"offset": 1, "name": "Rate",   "type": "strobe", "capabilities": [
                 {"range": [0, 3],   "type": "ShutterStrobe", "label": "Open"},
                 {"range": [4, 255], "type": "ShutterStrobe", "label": "Strobe rate slow-fast"},

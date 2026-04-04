@@ -725,8 +725,45 @@ def test_help_api(page, ids):
 
 def test_qr_api(page, ids):
     section('QR Code')
-    resp = page.evaluate("() => fetch('/api/qr').then(r => ({status: r.status}))")
+    # API test
+    resp = page.evaluate("() => fetch('/api/qr').then(r => ({status: r.status, type: r.headers.get('content-type')}))")
     ok(resp is not None, 'QR endpoint responds')
+    ok(resp.get('status') == 200, f'QR returns 200 (got {resp.get("status")})')
+    ok('image/png' in (resp.get('type') or ''), f'QR returns PNG (got {resp.get("type")})')
+
+    # UI test: go to Settings > Advanced, click Show QR Code
+    wait_tab(page, 'settings')
+    page.click('text=Advanced')
+    page.wait_for_timeout(300)
+    qr_btn = page.query_selector('button:has-text("Show QR Code")')
+    ok(qr_btn is not None, 'QR Code button found in Advanced tab')
+    if qr_btn:
+        qr_btn.click()
+        page.wait_for_timeout(1500)
+        # Check if QR image appeared (in container or modal)
+        qr_img = page.query_selector('#qr-container img, #qr-modal-body img')
+        ok(qr_img is not None, 'QR code image rendered')
+
+
+def test_channel_defaults(page, ids):
+    section('Channel Defaults')
+    # Check that DMX fixture channels endpoint returns defaults
+    dmx_fid = ids.get('dmx1')
+    if not dmx_fid:
+        ok(True, 'No DMX fixture to test (skipped)')
+        return
+    resp = page.evaluate(f"() => fetch('/api/dmx/fixture/{dmx_fid}/channels').then(r => r.json())")
+    ok(resp is not None and resp.get('channels'), 'Channels endpoint returns data')
+    if resp and resp.get('channels'):
+        channels = resp['channels']
+        # Check that default field is present
+        has_default = all('default' in ch for ch in channels)
+        ok(has_default, 'All channels have default field')
+        # If profile has dimmer, check its default
+        dimmer = next((ch for ch in channels if ch.get('type') == 'dimmer'), None)
+        if dimmer:
+            ok(dimmer.get('default', 0) == 255, f'Dimmer default=255 (got {dimmer.get("default")})')
+            ok(dimmer.get('value', 0) == 255, f'Dimmer initial value=255 (got {dimmer.get("value")})')
 
 
 def test_tab_navigation(page, ids):
@@ -1375,6 +1412,7 @@ def main():
         ('firmware_api', test_firmware_api),
         ('help_api', test_help_api),
         ('qr_api', test_qr_api),
+        ('channel_defaults', test_channel_defaults),
         ('tab_nav', test_tab_navigation),
         ('error_handling', test_error_handling),
         ('rapid_crud', test_rapid_crud),

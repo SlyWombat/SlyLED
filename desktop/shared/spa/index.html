@@ -332,6 +332,7 @@ body.light .li:hover{border-color:#3b82f6}
       <div class='card-title'>Mobile App</div>
       <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Scan this QR code with the SlyLED Android app to connect.</p>
       <button class='btn btn-nav' onclick='showQrCode()'>Show QR Code</button>
+      <div id='qr-container' style='margin-top:.5em'></div>
     </div>
     <div class='card' style='max-width:480px'>
       <div class='card-title'>Version</div>
@@ -5051,6 +5052,14 @@ function otaTrigger(childId){
 
 function showQrCode(){
   var el=document.getElementById('qr-container');
+  // If container not found/visible, show in modal
+  if(!el||el.offsetParent===null){
+    var h='<div id="qr-modal-body" style="text-align:center"><p style="color:#888">Loading QR code...</p></div>';
+    document.getElementById('modal-title').textContent='Connect Android App';
+    document.getElementById('modal-body').innerHTML=h;
+    document.getElementById('modal').style.display='flex';
+    el=document.getElementById('qr-modal-body');
+  }
   el.innerHTML='<p style="color:#888;font-size:.85em">Loading...</p>';
   var img=new Image();
   img.onload=function(){
@@ -5063,7 +5072,7 @@ function showQrCode(){
     p.textContent='Scan with the SlyLED Android app to connect';
     el.appendChild(p);
   };
-  img.onerror=function(){el.innerHTML='<p style="color:#c66;font-size:.85em">QR generation failed — install qrcode package</p>';};
+  img.onerror=function(){el.innerHTML='<p style="color:#c66;font-size:.85em">QR generation failed. Install: pip install qrcode[pil]</p>';};
   img.src='/api/qr';
 }
 
