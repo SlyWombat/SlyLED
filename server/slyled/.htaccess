@@ -1,0 +1,19 @@
+# Override WordPress rewrite — serve static files directly
+RewriteEngine Off
+
+# Ensure proper MIME types
+<IfModule mime_module>
+  AddType text/html .html
+  AddType text/css .css
+  AddType application/javascript .js
+  AddType image/png .png
+  AddType image/x-icon .ico
+</IfModule>
+
+# Allow directory index
+DirectoryIndex index.html
+
+# No caching during development
+<IfModule mod_headers.c>
+  Header set Cache-Control "no-cache, no-store, must-revalidate"
+</IfModule>
