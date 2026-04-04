@@ -931,14 +931,18 @@ function _toggleAddFixFields(){
     }
   }
   if(t==='dmx'){
+    // Always refresh profile dropdown (custom profiles may have been added)
     var sel=document.getElementById('af-prof');
-    if(sel&&sel.options.length<=1){
+    if(sel){
+      var curVal=sel.value;
       ra('GET','/api/dmx-profiles',null,function(profiles){
         if(!profiles||!sel)return;
+        sel.innerHTML='<option value="">-- None (generic channels) --</option>';
         profiles.forEach(function(p){
           var o=document.createElement('option');o.value=p.id;
           o.textContent=p.name+' ('+p.channelCount+'ch)';sel.appendChild(o);
         });
+        if(curVal)sel.value=curVal;
       });
     }
   }
@@ -2492,13 +2496,40 @@ function _commDownload(slug){
   });
 }
 function _commShareProfile(profileId){
-  document.getElementById('hs').textContent='Sharing to community...';
-  ra('POST','/api/dmx-profiles/community/upload',{profileId:profileId},function(r){
-    if(r&&r.ok){
-      document.getElementById('hs').textContent='Shared to community: '+profileId;
-    }else{
-      document.getElementById('hs').textContent='Share failed: '+(r&&r.error||r&&r.err||'unknown');
+  // Step 1: Check for duplicates first
+  document.getElementById('hs').textContent='Checking for duplicates...';
+  ra('POST','/api/dmx-profiles/community/check',{profileId:profileId},function(r){
+    if(!r||!r.ok||!r.data){
+      document.getElementById('hs').textContent='Check failed: '+(r&&r.error||r&&r.err||'unknown');
+      return;
     }
+    var data=r.data;
+    if(data.duplicate){
+      var msg='This profile has the same channels as "'+escapeHtml(data.duplicate_name||data.duplicate_of)+'" already in the community. Share anyway?';
+      if(!confirm(msg))return;
+    }
+    if(!data.slug_available){
+      document.getElementById('hs').textContent='A profile with this ID already exists in the community.';
+      return;
+    }
+    // Step 2: Confirm upload
+    if(!confirm('Share "'+profileId+'" to the SlyLED community? Other users will be able to download it.'))return;
+    // Step 3: Upload
+    document.getElementById('hs').textContent='Uploading to community...';
+    ra('POST','/api/dmx-profiles/community/upload',{profileId:profileId},function(ur){
+      if(ur&&ur.ok){
+        document.getElementById('hs').textContent='Shared to community! Profile: '+profileId;
+      }else{
+        var err=ur&&(ur.error||ur.err)||'unknown';
+        if(err.indexOf('already exists')>=0){
+          document.getElementById('hs').textContent='This profile ID already exists in the community.';
+        }else if(err.indexOf('Duplicate')>=0){
+          document.getElementById('hs').textContent='Duplicate detected: '+(ur.duplicate_name||err);
+        }else{
+          document.getElementById('hs').textContent='Share failed: '+err;
+        }
+      }
+    });
   });
 }
 
