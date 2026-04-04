@@ -614,7 +614,9 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
                                   "colorWheel", "prism", "focus", "zoom"):
                             if k not in params and act.get(k) is not None:
                                 params[k] = act[k]
-                    # Pan/Tilt Move: expand into time-sliced DMX_SCENE segments
+                    # Pan/Tilt Move: expand into time-sliced DMX_SCENE segments.
+                    # Only carries pan/tilt (+ dimmer if set) — does NOT carry r/g/b
+                    # so color from lower-priority tracks can show through.
                     if act_type == ACT_DMX_PT_MOVE:
                         clip_start_s = clip.get("startS", 0)
                         clip_dur_s = clip.get("durationS", 1)
@@ -622,15 +624,17 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
                         pe = act.get("panEnd", 1)
                         ts = act.get("tiltStart", 0.5)
                         te = act.get("tiltEnd", 0.5)
+                        pt_dimmer = act.get("dimmer")
                         # Scale slice duration to keep segment count reasonable
                         slice_dur = 1.0 if clip_dur_s > 15 else 0.5
                         t = 0
                         while t < clip_dur_s:
                             sd = min(slice_dur, clip_dur_s - t)
                             frac = (t + sd / 2) / clip_dur_s if clip_dur_s > 0 else 0
-                            sp = {k: v for k, v in params.items()}
-                            sp["pan"] = ps + (pe - ps) * frac
-                            sp["tilt"] = ts + (te - ts) * frac
+                            sp = {"pan": ps + (pe - ps) * frac,
+                                  "tilt": ts + (te - ts) * frac}
+                            if pt_dimmer is not None:
+                                sp["dimmer"] = pt_dimmer
                             all_segments.append({
                                 "type": ACT_DMX_SCENE,
                                 "params": sp,

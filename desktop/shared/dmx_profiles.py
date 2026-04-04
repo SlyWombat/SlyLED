@@ -108,7 +108,7 @@ BUILTIN_PROFILES = [
         "manufacturer": "Generic",
         "category": "par",
         "channels": [
-            {"offset": 0, "name": "Dimmer", "type": "dimmer", "capabilities": _simple_cap("Dimmer 0-100%")},
+            {"offset": 0, "name": "Dimmer", "type": "dimmer", "default": 255, "capabilities": _simple_cap("Dimmer 0-100%")},
             {"offset": 1, "name": "Red",    "type": "red",    "capabilities": _color_cap("Red")},
             {"offset": 2, "name": "Green",  "type": "green",  "capabilities": _color_cap("Green")},
             {"offset": 3, "name": "Blue",   "type": "blue",   "capabilities": _color_cap("Blue")},
@@ -125,7 +125,7 @@ BUILTIN_PROFILES = [
         "manufacturer": "Generic",
         "category": "par",
         "channels": [
-            {"offset": 0, "name": "Dimmer", "type": "dimmer", "capabilities": _simple_cap("Dimmer 0-100%")},
+            {"offset": 0, "name": "Dimmer", "type": "dimmer", "default": 255, "capabilities": _simple_cap("Dimmer 0-100%")},
             {"offset": 1, "name": "Red",    "type": "red",    "capabilities": _color_cap("Red")},
             {"offset": 2, "name": "Green",  "type": "green",  "capabilities": _color_cap("Green")},
             {"offset": 3, "name": "Blue",   "type": "blue",   "capabilities": _color_cap("Blue")},
@@ -143,7 +143,7 @@ BUILTIN_PROFILES = [
         "manufacturer": "Generic",
         "category": "other",
         "channels": [
-            {"offset": 0, "name": "Dimmer", "type": "dimmer", "capabilities": _simple_cap("Dimmer 0-100%")},
+            {"offset": 0, "name": "Dimmer", "type": "dimmer", "default": 255, "capabilities": _simple_cap("Dimmer 0-100%")},
         ],
         "channelCount": 1,
         "colorMode": "single",
@@ -157,7 +157,7 @@ BUILTIN_PROFILES = [
         "manufacturer": "Generic",
         "category": "par",
         "channels": [
-            {"offset": 0, "name": "Dimmer", "type": "dimmer", "capabilities": _simple_cap("Dimmer 0-100%")},
+            {"offset": 0, "name": "Dimmer", "type": "dimmer", "default": 255, "capabilities": _simple_cap("Dimmer 0-100%")},
             {"offset": 1, "name": "Red",    "type": "red",    "capabilities": _color_cap("Red")},
             {"offset": 2, "name": "Green",  "type": "green",  "capabilities": _color_cap("Green")},
             {"offset": 3, "name": "Blue",   "type": "blue",   "capabilities": _color_cap("Blue")},
@@ -178,13 +178,13 @@ BUILTIN_PROFILES = [
         "manufacturer": "Generic",
         "category": "moving-head",
         "channels": [
-            {"offset": 0, "name": "Pan",    "type": "pan",    "capabilities": [
+            {"offset": 0, "name": "Pan",    "type": "pan",    "default": 128, "capabilities": [
                 {"range": [0, 255], "type": "Pan", "label": "Pan 0-540\u00b0", "angleStart": 0, "angleEnd": 540},
             ]},
-            {"offset": 1, "name": "Tilt",   "type": "tilt",   "capabilities": [
+            {"offset": 1, "name": "Tilt",   "type": "tilt",   "default": 128, "capabilities": [
                 {"range": [0, 255], "type": "Tilt", "label": "Tilt 0-270\u00b0", "angleStart": 0, "angleEnd": 270},
             ]},
-            {"offset": 2, "name": "Dimmer", "type": "dimmer", "capabilities": _simple_cap("Dimmer 0-100%")},
+            {"offset": 2, "name": "Dimmer", "type": "dimmer", "default": 255, "capabilities": _simple_cap("Dimmer 0-100%")},
             {"offset": 3, "name": "Red",    "type": "red",    "capabilities": _color_cap("Red")},
             {"offset": 4, "name": "Green",  "type": "green",  "capabilities": _color_cap("Green")},
             {"offset": 5, "name": "Blue",   "type": "blue",   "capabilities": _color_cap("Blue")},
@@ -203,10 +203,10 @@ BUILTIN_PROFILES = [
         "manufacturer": "Generic",
         "category": "moving-head",
         "channels": [
-            {"offset": 0,  "name": "Pan",       "type": "pan",         "bits": 16, "capabilities": [
+            {"offset": 0,  "name": "Pan",       "type": "pan",         "bits": 16, "default": 32768, "capabilities": [
                 {"range": [0, 65535], "type": "Pan", "label": "Pan 0-540\u00b0", "angleStart": 0, "angleEnd": 540},
             ]},
-            {"offset": 2,  "name": "Tilt",      "type": "tilt",        "bits": 16, "capabilities": [
+            {"offset": 2,  "name": "Tilt",      "type": "tilt",        "bits": 16, "default": 32768, "capabilities": [
                 {"range": [0, 65535], "type": "Tilt", "label": "Tilt 0-270\u00b0", "angleStart": 0, "angleEnd": 270},
             ]},
             {"offset": 4,  "name": "Speed",     "type": "speed",       "capabilities": _simple_cap("P/T speed fast-slow", "Speed")},
@@ -256,7 +256,7 @@ BUILTIN_PROFILES = [
         "manufacturer": "Generic",
         "category": "spot",
         "channels": [
-            {"offset": 0, "name": "Dimmer", "type": "dimmer", "capabilities": _simple_cap("Dimmer 0-100%")},
+            {"offset": 0, "name": "Dimmer", "type": "dimmer", "default": 255, "capabilities": _simple_cap("Dimmer 0-100%")},
             {"offset": 1, "name": "Red",    "type": "red",    "capabilities": _color_cap("Red")},
             {"offset": 2, "name": "Green",  "type": "green",  "capabilities": _color_cap("Green")},
             {"offset": 3, "name": "Blue",   "type": "blue",   "capabilities": _color_cap("Blue")},
@@ -278,7 +278,7 @@ BUILTIN_PROFILES = [
         "manufacturer": "Generic",
         "category": "wash",
         "channels": [
-            {"offset": 0, "name": "Dimmer", "type": "dimmer", "capabilities": _simple_cap("Dimmer 0-100%")},
+            {"offset": 0, "name": "Dimmer", "type": "dimmer", "default": 255, "capabilities": _simple_cap("Dimmer 0-100%")},
             {"offset": 1, "name": "Red",    "type": "red",    "capabilities": _color_cap("Red")},
             {"offset": 2, "name": "Green",  "type": "green",  "capabilities": _color_cap("Green")},
             {"offset": 3, "name": "Blue",   "type": "blue",   "capabilities": _color_cap("Blue")},
@@ -346,9 +346,12 @@ class ProfileLibrary:
 
     def _load_custom(self, data_dir):
         """Load custom profiles from data_dir/dmx_profiles/*.json."""
+        import logging
+        log = logging.getLogger("slyled")
         profile_dir = Path(data_dir) / "dmx_profiles"
         if not profile_dir.is_dir():
             return
+        loaded = 0
         for f in profile_dir.glob("*.json"):
             try:
                 with open(f, "r", encoding="utf-8") as fh:
@@ -357,8 +360,13 @@ class ProfileLibrary:
                     p["builtin"] = False
                     p["channelCount"] = len(p["channels"])
                     self._profiles[p["id"]] = p
-            except Exception:
-                pass
+                    loaded += 1
+                else:
+                    log.warning("Profile %s: missing id or channels, skipped", f.name)
+            except Exception as e:
+                log.warning("Profile %s: load error: %s", f.name, e)
+        if loaded:
+            log.info("Loaded %d custom profile(s) from %s", loaded, profile_dir)
 
     def list_profiles(self, category=None):
         """Return all profiles, optionally filtered by category."""

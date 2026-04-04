@@ -250,6 +250,11 @@ body.light .li:hover{border-color:#3b82f6}
           <input type='file' accept='.json' style='display:none' onchange='importProfileBundle(this)'>
         </label>
       </div>
+      <div style='display:flex;gap:.5em;flex-wrap:wrap;margin-bottom:.8em;padding:.5em 0;border-top:1px solid #1e293b'>
+        <button class='btn' onclick='showCommunityBrowser()' style='background:#7c3aed;color:#e9d5ff'>Community Profiles</button>
+        <button class='btn btn-nav' onclick='showOflBrowse()' style='background:#1e3a5f;color:#93c5fd'>Search OFL</button>
+        <button class='btn btn-nav' onclick='showOflImport()'>Paste OFL JSON</button>
+      </div>
       <div id='profile-lib'></div>
     </div>
   </div>
@@ -322,15 +327,7 @@ body.light .li:hover{border-color:#3b82f6}
 
   <!-- ADVANCED -->
   <div id='ss-advanced' style='display:none'>
-    <div class='card' style='max-width:480px'>
-      <div class='card-title'>Online Services</div>
-      <p style='font-size:.85em;color:#aaa;margin-bottom:.6em'>Import fixtures from external libraries and share with the community.</p>
-      <div style='display:flex;gap:.5em;flex-wrap:wrap'>
-        <button class='btn' onclick='showCommunityBrowser()' style='background:#7c3aed;color:#e9d5ff'>Community Profiles</button>
-        <button class='btn btn-nav' onclick='showOflBrowse()' style='background:#1e3a5f;color:#93c5fd'>Search OFL</button>
-        <button class='btn btn-nav' onclick='showOflImport()'>Paste OFL JSON</button>
-      </div>
-    </div>
+    <!-- Community/OFL buttons moved to Profiles sub-tab -->
     <div class='card' style='max-width:480px'>
       <div class='card-title'>Mobile App</div>
       <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Scan this QR code with the SlyLED Android app to connect.</p>
@@ -2923,6 +2920,8 @@ function loadTimelines(){
     });
     if(cv)sel.value=cv;
     loadSpatialFx();loadFixtures();
+    // Also refresh actions so clip names resolve (not "?")
+    ra('GET','/api/actions',null,function(d){_acts=d||[];});
   });
 }
 
@@ -3003,10 +3002,10 @@ function renderTimeline(){
     (trk.clips||[]).forEach(function(clip,ci){
       var lx=clip.startS*_tlPxPerSec;
       var w=clip.durationS*_tlPxPerSec;
-      var fxn='',fxcol='#3b82f6';
+      var fxn=clip.name||'',fxcol='#3b82f6';
       if(clip.actionId!=null){
         _acts.forEach(function(a){if(a.id===clip.actionId){fxn='\u25b6 '+a.name;fxcol=rgb2h(a.r||100,a.g||100,a.b||255);}});
-      } else {
+      } else if(clip.effectId!=null){
         _spatialFx.forEach(function(f){if(f.id===clip.effectId){fxn=f.name;fxcol=rgb2h(f.r||100,f.g||100,f.b||255);}});
       }
       th+='<div style="position:absolute;left:'+lx+'px;top:4px;width:'+Math.max(w,8)+'px;height:28px;background:'+fxcol+'33;border:1px solid '+fxcol+';border-radius:3px;cursor:pointer;overflow:hidden;font-size:.65em;color:#e2e8f0;padding:2px 4px;white-space:nowrap" ';

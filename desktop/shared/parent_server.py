@@ -1344,7 +1344,12 @@ def api_community_download():
     profile = result.get("data", result)
     if isinstance(profile, dict) and "id" in profile:
         imported = _profile_lib.import_profiles([profile])
+        log.info("Community download '%s': %s", slug, imported)
+        if imported.get("errors"):
+            log.warning("Community download errors: %s", imported["errors"])
         return jsonify(ok=True, **imported)
+    log.warning("Community download '%s': invalid data — keys=%s", slug,
+                list(profile.keys()) if isinstance(profile, dict) else type(profile).__name__)
     return jsonify(ok=False, err="Invalid profile data"), 400
 
 @app.post("/api/dmx-profiles/community/check")
@@ -1469,14 +1474,43 @@ def api_dmx_status():
         sacn=_sacn.status(),
     )
 
+def _apply_profile_defaults(engine):
+    """Apply profile channel default values to all DMX fixtures."""
+    for f in _fixtures:
+        if f.get("fixtureType") != "dmx":
+            continue
+        pid = f.get("dmxProfileId")
+        if not pid:
+            continue
+        info = _profile_lib.channel_info(pid)
+        if not info:
+            continue
+        uni = f.get("dmxUniverse", 1)
+        addr = f.get("dmxStartAddr", 1)
+        uni_buf = engine.get_universe(uni)
+        profile = {"channel_map": info.get("channel_map", {}), "channels": info.get("channels", [])}
+        for ch in info.get("channels", []):
+            default = ch.get("default")
+            if default is not None and default > 0:
+                offset = ch.get("offset", 0)
+                bits = ch.get("bits", 8)
+                if bits == 16:
+                    val16 = max(0, min(65535, int(default)))
+                    uni_buf.set_channel(addr + offset, val16 >> 8)
+                    uni_buf.set_channel(addr + offset + 1, val16 & 0xFF)
+                else:
+                    uni_buf.set_channel(addr + offset, max(0, min(255, int(default))))
+
 @app.post("/api/dmx/start")
 def api_dmx_start():
     body = request.get_json(silent=True) or {}
     protocol = body.get("protocol", "artnet")
     if protocol == "artnet":
         _artnet.start()
+        _apply_profile_defaults(_artnet)
     elif protocol == "sacn":
         _sacn.start()
+        _apply_profile_defaults(_sacn)
     else:
         return jsonify(err=f"Unknown protocol: {protocol}"), 400
     return jsonify(ok=True, protocol=protocol)
@@ -1704,10 +1738,12 @@ if _dmx_settings.get("universeRoutes"):
     try:
         if _proto == "artnet":
             _artnet.start()
-            log.info("Art-Net auto-started (%d routes)", len(_dmx_settings["universeRoutes"]))
+            _apply_profile_defaults(_artnet)
+            log.info("Art-Net auto-started (%d routes), profile defaults applied", len(_dmx_settings["universeRoutes"]))
         elif _proto == "sacn":
             _sacn.start()
-            log.info("sACN auto-started (%d routes)", len(_dmx_settings["universeRoutes"]))
+            _apply_profile_defaults(_sacn)
+            log.info("sACN auto-started (%d routes), profile defaults applied", len(_dmx_settings["universeRoutes"]))
     except Exception as e:
         log.warning("DMX auto-start failed: %s", e)
 
@@ -2423,27 +2459,34 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
             elapsed = elapsed % duration
         elif elapsed > duration:
             break  # show ended
-        # Evaluate each DMX fixture
+        # Evaluate each DMX fixture — merge ALL matching segments per-channel.
+        # Higher-priority segments (_pri) override lower ones per-channel,
+        # allowing e.g. a PT sweep to control pan/tilt while a base wash
+        # controls color independently.
         for fx in dmx_fixtures:
-            r, g, b = 0, 0, 0
-            pan, tilt, dimmer, strobe, gobo = None, None, None, None, None
-            color_wheel, prism, focus, zoom = None, None, None, None
+            # Collect per-channel values: {channel_name: (value, priority)}
+            ch_vals = {}
             for seg in fx["segs"]:
                 ss = seg.get("startS", 0)
                 sd = seg.get("durationS", 1)
                 if ss <= elapsed < ss + sd:
                     p = seg.get("params", {})
-                    r, g, b = p.get("r", 0), p.get("g", 0), p.get("b", 0)
-                    pan = p.get("pan")
-                    tilt = p.get("tilt")
-                    dimmer = p.get("dimmer")
-                    strobe = p.get("strobe")
-                    gobo = p.get("gobo")
-                    color_wheel = p.get("colorWheel")
-                    prism = p.get("prism")
-                    focus = p.get("focus")
-                    zoom = p.get("zoom")
-                    break
+                    pri = seg.get("_pri", 0)
+                    for k, v in p.items():
+                        if v is not None and (k not in ch_vals or pri >= ch_vals[k][1]):
+                            ch_vals[k] = (v, pri)
+            r = ch_vals.get("r", (0, 0))[0]
+            g = ch_vals.get("g", (0, 0))[0]
+            b = ch_vals.get("b", (0, 0))[0]
+            pan = ch_vals.get("pan", (None, 0))[0]
+            tilt = ch_vals.get("tilt", (None, 0))[0]
+            dimmer = ch_vals.get("dimmer", (None, 0))[0]
+            strobe = ch_vals.get("strobe", (None, 0))[0]
+            gobo = ch_vals.get("gobo", (None, 0))[0]
+            color_wheel = ch_vals.get("colorWheel", (None, 0))[0]
+            prism = ch_vals.get("prism", (None, 0))[0]
+            focus = ch_vals.get("focus", (None, 0))[0]
+            zoom = ch_vals.get("zoom", (None, 0))[0]
             profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
             uni_buf = engine.get_universe(fx["uni"])
             # RGB
@@ -2889,8 +2932,11 @@ def api_show_preset():
                 eref = gen_clip.get("_effect_ref")
                 if aref and id(aref) in action_ref_map:
                     clip["actionId"] = action_ref_map[id(aref)]
+                    act_data = aref.get("action", aref) if isinstance(aref, dict) and "action" in aref else aref
+                    clip["name"] = act_data.get("name", "Action")
                 elif eref and id(eref) in effect_ref_map:
                     clip["effectId"] = effect_ref_map[id(eref)]
+                    clip["name"] = eref.get("name", "Effect")
                 else:
                     continue  # skip clips with no resolved reference
                 clips.append(clip)
