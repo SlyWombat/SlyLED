@@ -21,16 +21,19 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--bg:#0A0F13;--surface:#0f172a;--surface2:#1e293b;--text:#e2e8f0;--dim:#94a3b8;--accent:#22d3ee;--green:#22cc66;--purple:#7c3aed;--blue:#0969DA;--orange:#f59e0b;--red:#ef4444}
-body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);line-height:1.6;overflow-x:hidden}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);line-height:1.6;overflow-x:hidden;background-image:linear-gradient(rgba(34,211,238,.02) 1px,transparent 1px),linear-gradient(90deg,rgba(34,211,238,.02) 1px,transparent 1px);background-size:40px 40px}
 h1,h2,h3{font-family:'Space Grotesk',sans-serif}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .container{max-width:1000px;margin:0 auto;padding:0 20px}
 .hero{padding:80px 0 60px;text-align:center;position:relative;overflow:hidden}
 .hero::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:radial-gradient(circle at 50% 50%,rgba(9,105,218,.08) 0%,transparent 50%);animation:pulse 8s ease-in-out infinite;pointer-events:none}
 @keyframes pulse{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.1);opacity:1}}
-.hero img{height:90px;margin-bottom:20px;filter:drop-shadow(0 0 20px rgba(34,211,238,.3))}
-.hero h1{font-size:3.5em;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--green),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;letter-spacing:-.02em}
-.hero .tagline{font-size:1.3em;color:var(--dim);margin-top:12px;max-width:650px;margin-left:auto;margin-right:auto}
+.hero img{height:90px;margin-bottom:20px;filter:drop-shadow(0 0 20px rgba(34,211,238,.3));animation:float 3s ease-in-out infinite}
+@keyframes float{0%,100%{transform:translateY(0);filter:drop-shadow(0 0 20px rgba(34,211,238,.3))}50%{transform:translateY(-8px);filter:drop-shadow(0 0 30px rgba(34,211,238,.5))}}
+.hero h1{font-size:3.5em;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--green),var(--purple));background-size:200% 200%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;letter-spacing:-.02em;animation:shimmer 4s ease-in-out infinite}
+@keyframes shimmer{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
+.version-badge{display:inline-block;background:linear-gradient(135deg,var(--purple),var(--accent));color:#fff;font-size:.28em;padding:4px 12px;border-radius:20px;vertical-align:super;margin-left:10px;-webkit-text-fill-color:#fff;font-weight:700;letter-spacing:.02em}
+.hero .tagline{font-size:1.35em;color:var(--dim);margin-top:12px;max-width:650px;margin-left:auto;margin-right:auto;text-shadow:0 0 30px rgba(34,211,238,.08)}
 .badges{display:flex;gap:10px;justify-content:center;margin-top:24px;flex-wrap:wrap}
 .badge{padding:6px 16px;border-radius:20px;font-size:.82em;font-weight:600;backdrop-filter:blur(8px)}
 .badge-win{background:rgba(37,99,235,.15);color:#60a5fa;border:1px solid rgba(37,99,235,.3)}
@@ -49,20 +52,18 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .ss-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
 .ss-grid figure{margin:0;position:relative;overflow:hidden;border-radius:10px;border:1px solid #334155;transition:transform .2s}
 .ss-grid figure:hover{transform:scale(1.02)}
-.ss-grid img{width:100%;display:block}
+.ss-grid img{width:100%;display:block;cursor:zoom-in}
 .ss-grid figcaption{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,.8));padding:10px 14px;font-size:.8em;color:var(--dim)}
 section{padding:60px 0}
 .section-title{font-size:2em;font-weight:700;text-align:center;margin-bottom:10px}
 .section-sub{text-align:center;color:var(--dim);margin-bottom:36px;font-size:1.05em}
 .features{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px}
-.feature{background:var(--surface);padding:28px;border-radius:12px;border:1px solid #334155;transition:all .2s;position:relative;overflow:hidden}
-.feature:hover{border-color:var(--accent);box-shadow:0 0 20px rgba(34,211,238,.1);text-decoration:none}
+.feature{background:var(--surface);padding:28px;border-radius:12px;border:1px solid #334155;border-left:3px solid var(--accent);transition:all .3s;position:relative;overflow:hidden}
+.feature:hover{border-left-color:var(--purple);background:linear-gradient(135deg,rgba(34,211,238,.04),transparent);box-shadow:0 4px 24px rgba(34,211,238,.08);text-decoration:none}
 a.feature{color:inherit;text-decoration:none;display:block;cursor:pointer}
-.feature::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent),var(--purple));opacity:0;transition:opacity .2s}
-.feature:hover::before{opacity:1}
 .feature h3{color:var(--accent);margin-bottom:10px;font-size:1.1em}
 .feature p{color:var(--dim);font-size:.9em;line-height:1.5}
-.feature .icon{font-size:1.8em;margin-bottom:10px}
+.feature .icon{font-size:2.2em;margin-bottom:12px;display:inline-flex;align-items:center;justify-content:center;width:52px;height:52px;border-radius:50%;background:rgba(34,211,238,.08);border:1px solid rgba(34,211,238,.15)}
 .hw-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}
 .hw-card{background:var(--surface);padding:24px;border-radius:12px;border:1px solid #334155;text-align:center;transition:border-color .2s}
 .hw-card:hover{border-color:var(--accent)}
@@ -83,6 +84,15 @@ footer a{color:var(--accent)}
 .lang-btn{position:fixed;top:16px;right:16px;z-index:100;background:var(--surface2);border:1px solid #334155;border-radius:8px;padding:6px 12px;color:var(--dim);cursor:pointer;font-size:.85em;display:flex;align-items:center;gap:6px;transition:border-color .2s}
 .lang-btn:hover{border-color:var(--accent);color:var(--text)}
 .lang-btn svg{width:16px;height:16px;fill:currentColor}
+.hero-screenshot{perspective:800px;margin-bottom:24px}
+.hero-screenshot img{width:100%;border-radius:12px;border:1px solid #334155;transition:transform .4s;box-shadow:0 8px 40px rgba(0,0,0,.5);cursor:zoom-in}
+.hero-screenshot:hover img{transform:rotateY(-2deg) rotateX(1deg) scale(1.01)}
+.lightbox{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.92);z-index:200;display:none;align-items:center;justify-content:center;cursor:zoom-out}
+.lightbox.active{display:flex}
+.lightbox img{max-width:95%;max-height:90vh;border-radius:8px;box-shadow:0 0 60px rgba(34,211,238,.2)}
+.lightbox .close{position:absolute;top:20px;right:24px;color:#fff;font-size:2em;cursor:pointer;z-index:201}
+.fade-in{opacity:0;transform:translateY(20px);transition:opacity .6s,transform .6s}
+.fade-in.visible{opacity:1;transform:translateY(0)}
 @media(max-width:600px){.hero h1{font-size:2.2em}.hero .tagline{font-size:1em}.section-title{font-size:1.5em}
 .ss-grid{grid-template-columns:1fr}.lang-btn{top:8px;right:8px;font-size:.75em;padding:4px 8px}}
 </style>
@@ -99,7 +109,7 @@ footer a{color:var(--accent)}
 <div class="hero">
   <div class="container">
     <img src="slyled.png" alt="SlyLED Logo">
-    <h1>SlyLED</h1>
+    <h1>SlyLED<span class="version-badge">v8.5</span></h1>
     <p class="tagline" data-i="tagline"></p>
     <div class="badges">
       <span class="badge badge-win">&#x1F4BB; Windows</span>
@@ -119,42 +129,45 @@ footer a{color:var(--accent)}
 
 <!-- Screenshots: copy from docs/screenshots/ after capture -->
 <!-- SCREENSHOTS -->
-<section class="screenshots">
+<section class="screenshots fade-in">
   <div class="container">
     <h2 class="section-title" data-i="ssTitle"></h2>
     <p class="sub" data-i="ssSub"></p>
+    <div class="hero-screenshot fade-in">
+      <img src="spa-layout-3d.png" alt="3D Stage Layout with beam cones and objects" loading="lazy" onclick="document.getElementById('lb-img').src=this.src;document.getElementById('lightbox').classList.add('active')">
+    </div>
     <div class="ss-grid">
-      <figure><img src="spa-dashboard.png" alt="Dashboard" loading="lazy"><figcaption data-i="ssDash"></figcaption></figure>
-      <figure><img src="spa-layout-3d.png" alt="3D Layout" loading="lazy"><figcaption data-i="ss3d"></figcaption></figure>
-      <figure><img src="spa-runtime.png" alt="Runtime" loading="lazy"><figcaption data-i="ssRuntime"></figcaption></figure>
-      <figure><img src="spa-layout-2d.png" alt="2D Layout" loading="lazy"><figcaption data-i="ss2d"></figcaption></figure>
-      <figure><img src="spa-actions.png" alt="Actions" loading="lazy"><figcaption data-i="ssActions"></figcaption></figure>
-      <figure><img src="spa-firmware.png" alt="Firmware" loading="lazy"><figcaption data-i="ssFirmware"></figcaption></figure>
+      <figure class="fade-in"><img src="spa-dashboard.png" alt="Dashboard" loading="lazy"><figcaption data-i="ssDash"></figcaption></figure>
+      <figure class="fade-in"><img src="spa-layout-3d.png" alt="3D Layout" loading="lazy"><figcaption data-i="ss3d"></figcaption></figure>
+      <figure class="fade-in"><img src="spa-runtime.png" alt="Runtime" loading="lazy"><figcaption data-i="ssRuntime"></figcaption></figure>
+      <figure class="fade-in"><img src="spa-layout-2d.png" alt="2D Layout" loading="lazy"><figcaption data-i="ss2d"></figcaption></figure>
+      <figure class="fade-in"><img src="spa-actions.png" alt="Actions" loading="lazy"><figcaption data-i="ssActions"></figcaption></figure>
+      <figure class="fade-in"><img src="spa-firmware.png" alt="Firmware" loading="lazy"><figcaption data-i="ssFirmware"></figcaption></figure>
     </div>
   </div>
 </section>
 
 <!-- FEATURES -->
-<section>
+<section class="fade-in">
   <div class="container">
     <h2 class="section-title" data-i="featTitle"></h2>
     <p class="section-sub" data-i="featSub"></p>
     <div class="features">
-      <a href="spatial-effects/" class="feature"><div class="icon">&#x1F30C;</div><h3 data-i="feat1t"></h3><p data-i="feat1p"></p></a>
-      <a href="dmx-artnet/" class="feature"><div class="icon">&#x1F4A1;</div><h3 data-i="feat2t"></h3><p data-i="feat2p"></p></a>
-      <a href="led-effects/" class="feature"><div class="icon">&#x1F308;</div><h3 data-i="feat3t"></h3><p data-i="feat3p"></p></a>
-      <a href="timeline/" class="feature"><div class="icon">&#x1F3AC;</div><h3 data-i="feat4t"></h3><p data-i="feat4p"></p></a>
-      <a href="dmx-monitor/" class="feature"><div class="icon">&#x1F50D;</div><h3 data-i="feat5t"></h3><p data-i="feat5p"></p></a>
-      <a href="groups/" class="feature"><div class="icon">&#x1F91D;</div><h3 data-i="feat6t"></h3><p data-i="feat6p"></p></a>
-      <a href="android/" class="feature"><div class="icon">&#x1F4F1;</div><h3 data-i="feat7t"></h3><p data-i="feat7p"></p></a>
-      <a href="community/" class="feature"><div class="icon">&#x1F310;</div><h3 data-i="feat8t"></h3><p data-i="feat8p"></p></a>
-      <a href="demo/" class="feature"><div class="icon">&#x1F3AD;</div><h3 data-i="feat9t"></h3><p data-i="feat9p"></p></a>
+      <a href="spatial-effects/" class="feature fade-in"><div class="icon">&#x1F30C;</div><h3 data-i="feat1t"></h3><p data-i="feat1p"></p></a>
+      <a href="dmx-artnet/" class="feature fade-in"><div class="icon">&#x1F4A1;</div><h3 data-i="feat2t"></h3><p data-i="feat2p"></p></a>
+      <a href="led-effects/" class="feature fade-in"><div class="icon">&#x1F308;</div><h3 data-i="feat3t"></h3><p data-i="feat3p"></p></a>
+      <a href="timeline/" class="feature fade-in"><div class="icon">&#x1F3AC;</div><h3 data-i="feat4t"></h3><p data-i="feat4p"></p></a>
+      <a href="dmx-monitor/" class="feature fade-in"><div class="icon">&#x1F50D;</div><h3 data-i="feat5t"></h3><p data-i="feat5p"></p></a>
+      <a href="groups/" class="feature fade-in"><div class="icon">&#x1F91D;</div><h3 data-i="feat6t"></h3><p data-i="feat6p"></p></a>
+      <a href="android/" class="feature fade-in"><div class="icon">&#x1F4F1;</div><h3 data-i="feat7t"></h3><p data-i="feat7p"></p></a>
+      <a href="community/" class="feature fade-in"><div class="icon">&#x1F310;</div><h3 data-i="feat8t"></h3><p data-i="feat8p"></p></a>
+      <a href="demo/" class="feature fade-in"><div class="icon">&#x1F3AD;</div><h3 data-i="feat9t"></h3><p data-i="feat9p"></p></a>
     </div>
   </div>
 </section>
 
 <!-- HARDWARE -->
-<section style="background:var(--surface)">
+<section class="fade-in" style="background:var(--surface)">
   <div class="container">
     <h2 class="section-title" data-i="hwTitle"></h2>
     <p class="section-sub" data-i="hwSub"></p>
@@ -168,7 +181,7 @@ footer a{color:var(--accent)}
 </section>
 
 <!-- COMMUNITY -->
-<section class="community">
+<section class="community fade-in">
   <div class="container">
     <h2 class="section-title" data-i="commTitle"></h2>
     <p class="section-sub" data-i="commSub"></p>
@@ -182,14 +195,14 @@ footer a{color:var(--accent)}
 </section>
 
 <!-- INSTALL -->
-<section class="install">
+<section class="install fade-in">
   <div class="container">
     <h2 class="section-title" data-i="instTitle"></h2>
     <div class="install-steps">
-      <div class="step"><div class="num">1</div><h4 data-i="inst1t"></h4><p data-i="inst1p"></p></div>
-      <div class="step"><div class="num">2</div><h4 data-i="inst2t"></h4><p data-i="inst2p"></p></div>
-      <div class="step"><div class="num">3</div><h4 data-i="inst3t"></h4><p data-i="inst3p"></p></div>
-      <div class="step"><div class="num">4</div><h4 data-i="inst4t"></h4><p data-i="inst4p"></p></div>
+      <div class="step fade-in"><div class="num">1</div><h4 data-i="inst1t"></h4><p data-i="inst1p"></p></div>
+      <div class="step fade-in"><div class="num">2</div><h4 data-i="inst2t"></h4><p data-i="inst2p"></p></div>
+      <div class="step fade-in"><div class="num">3</div><h4 data-i="inst3t"></h4><p data-i="inst3p"></p></div>
+      <div class="step fade-in"><div class="num">4</div><h4 data-i="inst4t"></h4><p data-i="inst4p"></p></div>
     </div>
   </div>
 </section>
@@ -295,6 +308,28 @@ _applyLang();
 
 fetch('https://electricrv.ca/api/profiles/index.php?action=stats')
   .then(function(r){return r.json();}).then(function(d){if(d&&d.data)document.getElementById('comm-count').textContent=d.data.total;}).catch(function(){});
+
+// ── Lightbox ─────────────────────────────────────────────────────────
+document.querySelectorAll('.ss-grid img').forEach(function(img){
+  img.onclick=function(e){
+    e.stopPropagation();
+    document.getElementById('lb-img').src=this.src;
+    document.getElementById('lightbox').classList.add('active');
+  };
+});
+document.addEventListener('keydown',function(e){if(e.key==='Escape')document.getElementById('lightbox').classList.remove('active');});
+
+// ── Scroll animations ────────────────────────────────────────────────
+var obs=new IntersectionObserver(function(entries){
+  entries.forEach(function(e){if(e.isIntersecting)e.target.classList.add('visible');});
+},{threshold:0.1});
+document.querySelectorAll('.fade-in').forEach(function(el){obs.observe(el);});
 </script>
+
+<div class="lightbox" id="lightbox" onclick="this.classList.remove('active')">
+  <span class="close">&times;</span>
+  <img id="lb-img" src="" alt="">
+</div>
+
 </body>
 </html>
