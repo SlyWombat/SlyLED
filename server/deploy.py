@@ -108,6 +108,26 @@ def deploy_all():
         print(f'  {"OK" if ok else "FAIL"} {local_rel} -> {remote_dir}/')
 
 
+def deploy_website():
+    """Deploy the SlyLED website (slyled/ directory)."""
+    server_dir = os.path.dirname(__file__)
+    slyled_dir = os.path.join(server_dir, 'slyled')
+
+    # Walk the slyled directory and upload all files
+    for root, dirs, filenames in os.walk(slyled_dir):
+        for fn in filenames:
+            local_path = os.path.join(root, fn)
+            # Compute remote directory relative to slyled/
+            rel = os.path.relpath(root, slyled_dir).replace('\\', '/')
+            if rel == '.':
+                remote_dir = '/public_html/slyled'
+            else:
+                remote_dir = f'/public_html/slyled/{rel}'
+            ok = upload_file(local_path, remote_dir)
+            rel_file = os.path.relpath(local_path, slyled_dir).replace('\\', '/')
+            print(f'  {"OK" if ok else "FAIL"} {rel_file} -> {remote_dir}/')
+
+
 def test_connection():
     """Test the cPanel API connection."""
     try:
@@ -145,5 +165,8 @@ if __name__ == '__main__':
     elif cmd == 'deploy':
         print('Deploying server files...')
         deploy_all()
+    elif cmd == 'website':
+        print('Deploying SlyLED website...')
+        deploy_website()
     else:
         print(f'Unknown command: {cmd}')
