@@ -705,6 +705,15 @@ def run():
         # ── SPA / fallback ──────────────────────────────────────────
         r = c.get('/')
         ok('GET / (SPA)', r.status_code == 200)
+        spa = r.data.decode('utf-8', errors='replace')
+        ok('SPA has layout quick-view recenter', 'layViewReset' in spa)
+        ok('SPA has layout quick-view top', 'layViewTop' in spa)
+        ok('SPA has layout quick-view front', 'layViewFront' in spa)
+        ok('SPA has 2D/3D toggle', 'toggleLayoutMode' in spa)
+        ok('SPA has patrol UI', 'sf-pat-en' in spa)
+        ok('SPA has Track action type', "'Track'" in spa or 'Track' in spa)
+        ok('SPA has objects API', '/api/objects' in spa)
+        ok('SPA has temporal support', '/api/objects/temporal' in spa or '_temporal' in spa)
 
         r = c.get('/favicon.ico')
         ok('GET /favicon.ico → 404', r.status_code == 404)

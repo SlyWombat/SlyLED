@@ -13,12 +13,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.VerticalAlignTop
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Vrpano
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -87,6 +90,19 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                 Icon(Icons.Default.Layers, contentDescription = "Toggle 2D/3D mode",
                     tint = if (is3dMode) Color(0xFF86EFAC) else MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            // Quick view controls: recenter, top, front
+            IconButton(onClick = { zoom = 1f; panOffset = Offset.Zero }) {
+                Icon(Icons.Default.CenterFocusStrong, contentDescription = "Recenter view",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            }
+            IconButton(onClick = { /* top view — reserved for 3D */ }) {
+                Icon(Icons.Default.VerticalAlignTop, contentDescription = "Top view",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            }
+            IconButton(onClick = { /* front view — reserved for 3D */ }) {
+                Icon(Icons.Default.Vrpano, contentDescription = "Front view",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            }
             // Show/hide LED strings toggle
             IconButton(onClick = { showStrings = !showStrings }) {
                 Icon(
@@ -94,9 +110,6 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                     contentDescription = "Show/hide LED strings",
                     tint = if (showStrings) Color(0xFF22C55E) else MaterialTheme.colorScheme.onSurfaceVariant
                 )
-            }
-            if (zoom != 1f || panOffset != Offset.Zero) {
-                TextButton(onClick = { zoom = 1f; panOffset = Offset.Zero }) { Text("Reset", fontSize = 11.sp) }
             }
             // Save layout
             IconButton(onClick = { viewModel.saveLayout() }) {
