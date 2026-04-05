@@ -117,6 +117,7 @@ footer a{color:var(--accent)}
   </div>
 </div>
 
+<!-- Screenshots: copy from docs/screenshots/ after capture -->
 <!-- SCREENSHOTS -->
 <section class="screenshots">
   <div class="container">
@@ -147,6 +148,7 @@ footer a{color:var(--accent)}
       <a href="groups/" class="feature"><div class="icon">&#x1F91D;</div><h3 data-i="feat6t"></h3><p data-i="feat6p"></p></a>
       <a href="android/" class="feature"><div class="icon">&#x1F4F1;</div><h3 data-i="feat7t"></h3><p data-i="feat7p"></p></a>
       <a href="community/" class="feature"><div class="icon">&#x1F310;</div><h3 data-i="feat8t"></h3><p data-i="feat8p"></p></a>
+      <a href="demo/" class="feature"><div class="icon">&#x1F3AD;</div><h3 data-i="feat9t"></h3><p data-i="feat9p"></p></a>
     </div>
   </div>
 </section>
@@ -209,16 +211,17 @@ en:{
   ssTitle:"See It In Action",ssSub:"7-tab SPA with 2D/3D layout, timeline editor, live emulator, and DMX control",
   ssDash:"Dashboard \u2014 performer status, live show preview",ss3d:"3D Layout \u2014 beam cones, aim spheres, drag-to-position",
   ssRuntime:"Runtime \u2014 timeline editor with spatial effects emulator",ss2d:"2D Layout \u2014 stage canvas with LED strings and DMX beams",
-  ssActions:"Actions \u2014 14 built-in LED effects with custom parameters",ssFirmware:"Firmware \u2014 OTA updates, USB flash, WiFi management",
+  ssActions:"Actions \u2014 19 action types including Track for moving heads",ssFirmware:"Firmware \u2014 OTA updates, USB flash, WiFi management",
   featTitle:"Everything You Need",featSub:"From a single LED strip to a full DMX moving head rig",
-  feat1t:"3D Spatial Effects",feat1p:"Spheres, planes, and boxes sweep across your stage in 3D. Fixtures light up based on their physical position \u2014 automatic pan/tilt tracking for moving heads.",
+  feat1t:"3D Spatial Effects",feat1p:"Spheres, planes, and boxes sweep across your stage in 3D. Fixtures light up based on their physical position \u2014 automatic pan/tilt tracking for moving heads. Object Patrol makes stage objects patrol back-and-forth automatically, while Track follows them in real-time at 40\u202FHz.",
   feat2t:"DMX + Art-Net Output",feat2p:"Full Art-Net and sACN support. Control moving heads, RGB pars, dimmers, fog machines. Import profiles from the Open Fixture Library (700+ fixtures).",
-  feat3t:"14 LED Effects",feat3p:"Rainbow, Chase, Fire, Comet, Twinkle, Strobe, Wipe, Scanner, Sparkle, Gradient \u2014 all with customizable speed, color, and direction.",
+  feat3t:"19 Action Types",feat3p:"Rainbow, Chase, Fire, Comet, Twinkle, Strobe, Wipe, Scanner, Sparkle, Gradient, DMX Scene, Pan-Tilt, Gobo, Color Wheel \u2014 plus Track for automated moving head following. All with customizable speed, color, and direction.",
   feat4t:"Timeline Editor",feat4p:"Multi-track timeline with clips, spatial effects, and action sequences. Bake to optimized per-fixture instructions. NTP-synced playback.",
   feat5t:"Live DMX Monitor",feat5p:"Real-time 512-channel grid per universe. Click any channel to set values. Quick color buttons for testing. Per-channel capability labels.",
   feat6t:"Fixture Groups",feat6p:"Group DMX fixtures and control them as one. Master dimmer, RGB sliders, and quick presets. Groups are timeline-targetable.",
   feat7t:"Android Companion",feat7p:"Native Kotlin/Compose app with 2D layout, pinch-to-zoom, emulator preview, DMX channel testing, and preset show loading.",
   feat8t:"Community Profiles",feat8p:"Share and download fixture profiles with the SlyLED community. Automatic duplicate detection. Browse by manufacturer or search.",
+  feat9t:"Stage Objects & Patrol",feat9p:"Place walls, floors, and performer props on stage. Moving objects patrol back-and-forth automatically. Moving heads track them in real-time via the Track action.",
   hwTitle:"Supported Hardware",hwSub:"WiFi-connected LED performers and DMX bridges",
   hw1:"Up to 8 LED strings on independent GPIO pins. OTA firmware updates. Multi-pin FastLED.",
   hw2:"Compact single-string controller. Perfect for portable installations. WS2812B on GPIO 2.",
@@ -240,16 +243,17 @@ fr:{
   ssTitle:"Voyez-le en action",ssSub:"SPA 7 onglets avec mise en page 2D/3D, \u00e9diteur de timeline, \u00e9mulateur en direct et contr\u00f4le DMX",
   ssDash:"Tableau de bord \u2014 \u00e9tat des performers, aper\u00e7u du spectacle",ss3d:"Mise en page 3D \u2014 c\u00f4nes de faisceau, sph\u00e8res de vis\u00e9e",
   ssRuntime:"Ex\u00e9cution \u2014 \u00e9diteur de timeline avec \u00e9mulateur d\u2019effets spatiaux",ss2d:"Mise en page 2D \u2014 sc\u00e8ne avec rubans LED et faisceaux DMX",
-  ssActions:"Actions \u2014 14 effets LED int\u00e9gr\u00e9s avec param\u00e8tres personnalisables",ssFirmware:"Firmware \u2014 mises \u00e0 jour OTA, flash USB, gestion WiFi",
+  ssActions:"Actions \u2014 19 types d\u2019actions incluant Track pour les lyres",ssFirmware:"Firmware \u2014 mises \u00e0 jour OTA, flash USB, gestion WiFi",
   featTitle:"Tout ce dont vous avez besoin",featSub:"D\u2019un simple ruban LED \u00e0 une installation compl\u00e8te de lyres DMX",
-  feat1t:"Effets spatiaux 3D",feat1p:"Des sph\u00e8res, plans et bo\u00eetes balaient votre sc\u00e8ne en 3D. Les projecteurs s\u2019allument selon leur position physique \u2014 suivi pan/tilt automatique pour les lyres.",
+  feat1t:"Effets spatiaux 3D",feat1p:"Des sph\u00e8res, plans et bo\u00eetes balaient votre sc\u00e8ne en 3D. Les projecteurs s\u2019allument selon leur position physique \u2014 suivi pan/tilt automatique pour les lyres. La Patrouille d\u2019objets fait patrouiller automatiquement les objets de sc\u00e8ne, tandis que Track les suit en temps r\u00e9el \u00e0 40\u202FHz.",
   feat2t:"Sortie DMX + Art-Net",feat2p:"Support complet Art-Net et sACN. Contr\u00f4lez lyres, PAR RGB, gradateurs, machines \u00e0 brouillard. Importez depuis l\u2019Open Fixture Library (700+ appareils).",
-  feat3t:"14 effets LED",feat3p:"Arc-en-ciel, Chase, Feu, Com\u00e8te, Scintillement, Stroboscope, Balayage, Scanner, \u00c9tincelle, D\u00e9grad\u00e9 \u2014 tous personnalisables en vitesse, couleur et direction.",
+  feat3t:"19 types d\u2019actions",feat3p:"Arc-en-ciel, Chase, Feu, Com\u00e8te, Scintillement, Stroboscope, Balayage, Scanner, \u00c9tincelle, D\u00e9grad\u00e9, Sc\u00e8ne DMX, Pan-Tilt, Gobo, Roue de couleurs \u2014 plus Track pour le suivi automatis\u00e9 des lyres. Tous personnalisables en vitesse, couleur et direction.",
   feat4t:"\u00c9diteur de timeline",feat4p:"Timeline multi-pistes avec clips, effets spatiaux et s\u00e9quences d\u2019actions. Compilation optimis\u00e9e par projecteur. Lecture synchronis\u00e9e NTP.",
   feat5t:"Moniteur DMX en direct",feat5p:"Grille 512 canaux en temps r\u00e9el par univers. Cliquez sur un canal pour d\u00e9finir sa valeur. Boutons couleur rapides pour les tests.",
   feat6t:"Groupes de projecteurs",feat6p:"Regroupez les projecteurs DMX et contr\u00f4lez-les ensemble. Gradateur principal, curseurs RVB et pr\u00e9r\u00e9glages rapides.",
   feat7t:"Application Android",feat7p:"Application native Kotlin/Compose avec mise en page 2D, zoom par pincement, aper\u00e7u de l\u2019\u00e9mulateur, test de canaux DMX.",
   feat8t:"Profils communautaires",feat8p:"Partagez et t\u00e9l\u00e9chargez des profils de projecteurs avec la communaut\u00e9 SlyLED. D\u00e9tection automatique des doublons.",
+  feat9t:"Objets de sc\u00e8ne & Patrouille",feat9p:"Placez murs, sols et accessoires sur sc\u00e8ne. Les objets mobiles patrouillent automatiquement. Les lyres les suivent en temps r\u00e9el via l\u2019action Track.",
   hwTitle:"Mat\u00e9riel support\u00e9",hwSub:"Performers LED et ponts DMX connect\u00e9s en WiFi",
   hw1:"Jusqu\u2019\u00e0 8 rubans LED sur des broches GPIO ind\u00e9pendantes. Mises \u00e0 jour OTA. FastLED multi-broches.",
   hw2:"Contr\u00f4leur compact \u00e0 un ruban. Parfait pour les installations portables. WS2812B sur GPIO 2.",
