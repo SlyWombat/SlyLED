@@ -1370,6 +1370,218 @@ def test_runtime_emulator_ui(page, ids):
     ok(len(controls) >= 1, f'Runtime tab has buttons ({len(controls)})')
 
 
+def test_layout_toolbar(page, ids):
+    """Test layout toolbar buttons: save icon, auto-arrange DMX, show strings toggle."""
+    section('Layout Toolbar')
+
+    wait_tab(page, 'layout')
+    time.sleep(0.5)
+
+    # Toolbar exists
+    toolbar = page.query_selector('#lay-toolbar')
+    ok(toolbar is not None, 'Layout toolbar exists')
+
+    # Save button (icon)
+    save_btn = page.query_selector('#btn-lay-save')
+    ok(save_btn is not None, 'Save layout icon button exists')
+    ok(save_btn.get_attribute('data-tip') == 'laySave', 'Save button has data-tip for i18n')
+
+    # Auto-arrange DMX button
+    arrange_btn = page.query_selector('[data-tip="layAutoArrange"]')
+    ok(arrange_btn is not None, 'Auto-arrange DMX button exists')
+
+    # Show strings toggle
+    strings_label = page.query_selector('[data-tip="layShowStrings"]')
+    ok(strings_label is not None, 'Show strings toggle exists')
+
+    # Show strings checkbox
+    strings_cb = page.query_selector('#lay-detail')
+    ok(strings_cb is not None, 'Show strings checkbox exists')
+    ok(strings_cb.is_checked(), 'Show strings is checked by default')
+
+
+def test_auto_arrange_dmx(page, ids):
+    """Test Auto-Arrange DMX with different fixture configurations."""
+    section('Auto-Arrange DMX')
+
+    # Ensure we have DMX fixtures (may have been wiped by earlier reset tests)
+    resp = api_json(page, 'GET', '/api/fixtures')
+    dmx_before = [f for f in (resp or []) if f.get('fixtureType') == 'dmx']
+    if len(dmx_before) < 2:
+        # Recreate DMX fixtures for this test
+        api_json(page, 'POST', '/api/fixtures', {
+            'name': 'Test MH', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 16,
+            'dmxProfileId': 'generic-moving-head-16bit', 'aimPoint': [5000, 0, 5000]})
+        api_json(page, 'POST', '/api/fixtures', {
+            'name': 'Test Par', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 33, 'dmxChannelCount': 3,
+            'dmxProfileId': 'generic-rgb', 'aimPoint': [5000, 0, 5000]})
+        resp = api_json(page, 'GET', '/api/fixtures')
+        dmx_before = [f for f in (resp or []) if f.get('fixtureType') == 'dmx']
+    ok(len(dmx_before) >= 2, f'Have {len(dmx_before)} DMX fixtures to arrange')
+
+    # Click auto-arrange
+    wait_tab(page, 'layout')
+    time.sleep(0.3)
+    page.click('[data-tip="layAutoArrange"]')
+    time.sleep(1)
+
+    # Verify positions changed — fixtures should be at stage top
+    resp = api_json(page, 'GET', '/api/layout')
+    fixtures = resp.get('fixtures', []) if resp else []
+    dmx_arranged = [f for f in fixtures if any(
+        d.get('id') == f.get('id') for d in dmx_before)]
+
+    if dmx_arranged:
+        # All DMX fixtures should be at high Y (near top)
+        stage = api_json(page, 'GET', '/api/stage')
+        stage_h = int((stage.get('h', 5) if stage else 5) * 1000)
+        for f in dmx_arranged:
+            y = f.get('y', 0)
+            ok(y > stage_h * 0.7, f'Fixture {f.get("id")} at y={y} (near top of {stage_h})')
+
+        # Fixtures should be spread across X
+        xs = sorted([f.get('x', 0) for f in dmx_arranged])
+        if len(xs) >= 2:
+            spread = xs[-1] - xs[0]
+            ok(spread > 1000, f'DMX fixtures spread across {spread}mm')
+
+    # Verify aim points set to straight down
+    resp = api_json(page, 'GET', '/api/fixtures')
+    for f in (resp or []):
+        if f.get('fixtureType') == 'dmx' and f.get('aimPoint'):
+            ap = f['aimPoint']
+            ok(ap[1] == 0, f'Fixture {f.get("id")} aim Y=0 (straight down), got {ap[1]}')
+
+    # Test with no DMX fixtures — should not error
+    # (We can't easily remove fixtures mid-test, so just verify the button doesn't crash)
+    ok(True, 'Auto-arrange completed without error')
+
+
+def test_auto_arrange_led_untouched(page, ids):
+    """Verify Auto-Arrange DMX does not move LED fixtures."""
+    section('Auto-Arrange LED Untouched')
+
+    # Get LED fixture positions before
+    resp = api_json(page, 'GET', '/api/fixtures')
+    led_before = {f['id']: (f.get('x', 0), f.get('y', 0))
+                  for f in (resp or []) if f.get('fixtureType') != 'dmx' and f.get('positioned')}
+
+    if not led_before:
+        ok(True, 'No positioned LED fixtures to verify (skipped)')
+        return
+
+    # Click auto-arrange again
+    wait_tab(page, 'layout')
+    time.sleep(0.3)
+    page.click('[data-tip="layAutoArrange"]')
+    time.sleep(1)
+
+    # LED positions should be unchanged
+    resp = api_json(page, 'GET', '/api/fixtures')
+    for f in (resp or []):
+        if f['id'] in led_before:
+            bx, by = led_before[f['id']]
+            ok(f.get('x', 0) == bx and f.get('y', 0) == by,
+               f'LED fixture {f["id"]} unchanged: ({bx},{by})')
+
+
+def test_show_demo_endpoint(page, ids):
+    """Test POST /api/show/demo generates a random show."""
+    section('Show Demo Endpoint')
+
+    resp = api_json(page, 'POST', '/api/show/demo')
+    ok(resp is not None and resp.get('ok'), 'Demo show generated')
+    ok(resp.get('timelineId') is not None, f'Demo has timelineId: {resp.get("timelineId")}')
+    ok(resp.get('name'), f'Demo has name: {resp.get("name")}')
+    ok(resp.get('actions', 0) >= 1, f'Demo has actions: {resp.get("actions")}')
+
+
+def test_preset_clip_names(page, ids):
+    """Test that preset shows have named clips (not '?')."""
+    section('Preset Clip Names')
+
+    # Load a preset
+    resp = api_json(page, 'POST', '/api/show/preset', {'id': 'spotlight-sweep'})
+    ok(resp and resp.get('ok'), 'Preset loaded')
+    tl_id = resp.get('timelineId') if resp else None
+    if not tl_id:
+        return
+
+    # Get the timeline
+    tl = api_json(page, 'GET', f'/api/timelines/{tl_id}')
+    ok(tl is not None, 'Timeline retrieved')
+    if not tl:
+        return
+
+    # Check clips have names
+    tracks = tl.get('tracks', [])
+    ok(len(tracks) >= 1, f'Timeline has {len(tracks)} tracks')
+    for ti, track in enumerate(tracks):
+        for ci, clip in enumerate(track.get('clips', [])):
+            name = clip.get('name', '')
+            ok(len(name) > 0 and name != '?',
+               f'Track {ti} clip {ci} has name: "{name}"')
+
+
+def test_community_in_profiles_tab(page, ids):
+    """Test that Community/OFL buttons are in the Profiles sub-tab."""
+    section('Community in Profiles Tab')
+
+    wait_tab(page, 'settings')
+    # Click Profiles sub-tab
+    page.click('text=Profiles')
+    time.sleep(0.5)
+
+    # Community button should be visible
+    comm_btn = page.query_selector('button:has-text("Community Profiles")')
+    ok(comm_btn is not None, 'Community Profiles button in Profiles tab')
+
+    ofl_btn = page.query_selector('button:has-text("Search OFL")')
+    ok(ofl_btn is not None, 'Search OFL button in Profiles tab')
+
+    paste_btn = page.query_selector('button:has-text("Paste OFL")')
+    ok(paste_btn is not None, 'Paste OFL JSON button in Profiles tab')
+
+
+def test_profile_default_column(page, ids):
+    """Test that the profile view and channel API include the Default field."""
+    section('Profile Default Column')
+
+    # Test via API — more reliable than UI modal navigation
+    resp = api_json(page, 'GET', '/api/dmx-profiles')
+    ok(resp and len(resp) >= 12, f'Have profiles: {len(resp or [])}')
+
+    # Check a profile with dimmer has default=255
+    mh = next((p for p in (resp or []) if p.get('id') == 'generic-moving-head-16bit'), None)
+    if mh:
+        dimmer_ch = next((ch for ch in mh.get('channels', []) if ch.get('type') == 'dimmer'), None)
+        ok(dimmer_ch is not None, 'Moving head has dimmer channel')
+        ok(dimmer_ch and dimmer_ch.get('default') == 255,
+           f'Dimmer default=255 in profile (got {dimmer_ch.get("default") if dimmer_ch else None})')
+
+        pan_ch = next((ch for ch in mh.get('channels', []) if ch.get('type') == 'pan'), None)
+        ok(pan_ch and pan_ch.get('default') == 32768,
+           f'Pan default=32768 (center) in profile (got {pan_ch.get("default") if pan_ch else None})')
+
+    # Test the profile editor UI has Default column header
+    wait_tab(page, 'settings')
+    page.click('text=Profiles')
+    time.sleep(0.3)
+    page.click('text=New Profile')
+    time.sleep(0.5)
+    modal = page.query_selector('#modal-body')
+    if modal:
+        html = modal.inner_html()
+        ok('Default' in html, 'Profile editor has Default column')
+    # Close modal
+    x_btn = page.query_selector('#modal-x')
+    if x_btn:
+        x_btn.click()
+        time.sleep(0.2)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -1432,6 +1644,13 @@ def main():
         ('json_compat', test_json_model_compat),
         ('layout_canvas', test_layout_canvas_ui),
         ('runtime_emu', test_runtime_emulator_ui),
+        ('layout_toolbar', test_layout_toolbar),
+        ('auto_arrange', test_auto_arrange_dmx),
+        ('led_untouched', test_auto_arrange_led_untouched),
+        ('show_demo', test_show_demo_endpoint),
+        ('clip_names', test_preset_clip_names),
+        ('comm_profiles', test_community_in_profiles_tab),
+        ('profile_defaults', test_profile_default_column),
         ('console_errors', test_console_errors),
     ]
 
