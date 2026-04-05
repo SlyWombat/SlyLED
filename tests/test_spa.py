@@ -1408,7 +1408,8 @@ def test_auto_arrange_dmx(page, ids):
     resp = api_json(page, 'GET', '/api/fixtures')
     dmx_before = [f for f in (resp or []) if f.get('fixtureType') == 'dmx']
     if len(dmx_before) < 2:
-        # Recreate DMX fixtures for this test
+        # Set a known stage size and recreate DMX fixtures for this test
+        api_json(page, 'POST', '/api/stage', {'w': 10.0, 'h': 5.0, 'd': 10.0})
         api_json(page, 'POST', '/api/fixtures', {
             'name': 'Test MH', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 16,
@@ -1523,6 +1524,67 @@ def test_preset_clip_names(page, ids):
             name = clip.get('name', '')
             ok(len(name) > 0 and name != '?',
                f'Track {ti} clip {ci} has name: "{name}"')
+
+
+def test_stage_dimensions(page, ids):
+    """Test stage dimensions UI: metric cm, imperial ft/in, depth field, API sync."""
+    section('Stage Dimensions')
+
+    # API: set stage and verify
+    resp = api_json(page, 'POST', '/api/stage', {'w': 5.0, 'h': 3.0, 'd': 4.0})
+    ok(resp and resp.get('ok'), 'Set stage to 5×3×4m')
+
+    # Verify stage persisted
+    st = api_json(page, 'GET', '/api/stage')
+    ok(st and st.get('w') == 5.0, f'Stage w=5.0 (got {st.get("w") if st else None})')
+    ok(st and st.get('h') == 3.0, f'Stage h=3.0')
+    ok(st and st.get('d') == 4.0, f'Stage d=4.0')
+
+    # Verify canvas synced (mm = meters * 1000)
+    settings = api_json(page, 'GET', '/api/settings')
+    ok(settings and settings.get('canvasW') == 5000, f'canvasW=5000 (got {settings.get("canvasW") if settings else None})')
+    ok(settings and settings.get('canvasH') == 3000, f'canvasH=3000')
+
+    # UI: check stage fields exist
+    wait_tab(page, 'settings')
+    time.sleep(0.5)
+
+    # Metric panel visible by default
+    metric = page.query_selector('#s-stage-metric')
+    ok(metric is not None, 'Metric stage panel exists')
+
+    # Depth field exists
+    depth = page.query_selector('#s-sd')
+    ok(depth is not None, 'Stage depth input exists')
+
+    # Width field
+    width = page.query_selector('#s-sw')
+    ok(width is not None, 'Stage width input exists')
+
+    # Imperial panel exists (hidden)
+    imperial = page.query_selector('#s-stage-imperial')
+    ok(imperial is not None, 'Imperial stage panel exists')
+
+    # Switch to imperial
+    page.select_option('#s-un', '1')
+    time.sleep(0.3)
+
+    # Imperial fields visible
+    ft_w = page.query_selector('#s-sw-ft')
+    in_w = page.query_selector('#s-sw-in')
+    ok(ft_w is not None and in_w is not None, 'Imperial ft/in fields exist')
+
+    # Verify conversion: 500cm = 16ft 4.85in ≈ 16ft 5in
+    if ft_w:
+        ft_val = ft_w.input_value()
+        ok(ft_val == '16', f'500cm width → {ft_val}ft (expected 16)')
+
+    # Switch back to metric
+    page.select_option('#s-un', '0')
+    time.sleep(0.3)
+
+    # Restore original stage
+    api_json(page, 'POST', '/api/stage', {'w': 10.0, 'h': 5.0, 'd': 10.0})
 
 
 def test_community_in_profiles_tab(page, ids):
@@ -1649,6 +1711,7 @@ def main():
         ('led_untouched', test_auto_arrange_led_untouched),
         ('show_demo', test_show_demo_endpoint),
         ('clip_names', test_preset_clip_names),
+        ('stage_dims', test_stage_dimensions),
         ('comm_profiles', test_community_in_profiles_tab),
         ('profile_defaults', test_profile_default_column),
         ('console_errors', test_console_errors),

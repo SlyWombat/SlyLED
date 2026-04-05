@@ -113,6 +113,8 @@ class SlyLedRepository @Inject constructor(
 
     // Stage
     suspend fun getStage() = requireApi().getStage()
+    suspend fun saveStage(w: Double, h: Double, d: Double) =
+        requireApi().saveStage(Stage(w = w, h = h, d = d))
 
     // Fixtures
     suspend fun getFixtures() = requireApi().getFixtures()

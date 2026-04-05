@@ -131,12 +131,12 @@ _children = _load("children", [])
 for _c in _children:
     _c["status"] = 0
 _settings = _load("settings", {
-    "name": "SlyLED", "units": 0, "canvasW": 10000, "canvasH": 5000,
+    "name": "SlyLED", "units": 0, "canvasW": 3000, "canvasH": 2000,
     "darkMode": 1, "runnerRunning": False, "runnerElapsed": 0,
     "runnerLoop": True,
 })
-_layout  = _load("layout",  {"canvasW": 10000, "canvasH": 5000, "children": []})
-_stage   = _load("stage",   {"w": 10.0, "h": 5.0, "d": 10.0})
+_layout  = _load("layout",  {"canvasW": 3000, "canvasH": 2000, "children": []})
+_stage   = _load("stage",   {"w": 3.0, "h": 2.0, "d": 1.5})
 _fixtures   = _load("fixtures",   [])
 
 #  "  "  Fixture migration: backfill fixtureType on old data  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
@@ -3268,11 +3268,11 @@ def api_show_import():
 #  "  "  Factory reset  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
 _DEFAULT_SETTINGS = {
-    "name": "SlyLED", "units": 0, "canvasW": 10000, "canvasH": 5000,
+    "name": "SlyLED", "units": 0, "canvasW": 3000, "canvasH": 2000,
     "darkMode": 1, "runnerRunning": False,
     "runnerElapsed": 0, "runnerLoop": True, "logging": False,
 }
-_DEFAULT_LAYOUT = {"canvasW": 10000, "canvasH": 5000, "children": []}
+_DEFAULT_LAYOUT = {"canvasW": 3000, "canvasH": 2000, "children": []}
 _DEFAULT_STAGE  = {"w": 10.0, "h": 5.0, "d": 10.0}
 _DEFAULT_FIXTURES  = []
 _DEFAULT_SURFACES  = []

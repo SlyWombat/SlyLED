@@ -59,6 +59,16 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    suspend fun getStage(): Stage? {
+        return try { repository.getStage() } catch (_: Exception) { null }
+    }
+
+    fun saveStage(w: Double, h: Double, d: Double) {
+        viewModelScope.launch {
+            try { repository.saveStage(w, h, d) } catch (_: Exception) {}
+        }
+    }
+
     fun saveSettings(name: String, units: Int, canvasW: Int, canvasH: Int, darkMode: Int, logging: Boolean) {
         viewModelScope.launch {
             _isSaving.value = true

@@ -43,8 +43,23 @@ fun SettingsScreen(
 
     var name by remember(settings.name) { mutableStateOf(settings.name) }
     var units by remember(settings.units) { mutableIntStateOf(settings.units) }
-    var canvasW by remember(settings.canvasW) { mutableStateOf(settings.canvasW.toString()) }
-    var canvasH by remember(settings.canvasH) { mutableStateOf(settings.canvasH.toString()) }
+    // Stage dimensions in cm (canvasW/H are mm, divide by 10 for cm display)
+    var stageWcm by remember(settings.canvasW) { mutableStateOf((settings.canvasW / 10).toString()) }
+    var stageHcm by remember(settings.canvasH) { mutableStateOf((settings.canvasH / 10).toString()) }
+    var stageDcm by remember { mutableStateOf("150") }
+
+    // Load stage depth from API
+    LaunchedEffect(Unit) {
+        try {
+            val stage = viewModel.getStage()
+            if (stage != null) {
+                stageDcm = (stage.d * 100).toInt().toString()
+                // Also sync W/H from stage (authoritative source)
+                stageWcm = (stage.w * 100).toInt().toString()
+                stageHcm = (stage.h * 100).toInt().toString()
+            }
+        } catch (_: Exception) {}
+    }
     var darkMode by remember(settings.darkMode) { mutableIntStateOf(settings.darkMode) }
     var logging by remember(settings.logging) { mutableStateOf(settings.logging) }
 
@@ -145,23 +160,34 @@ fun SettingsScreen(
                     }
                     Spacer(Modifier.height(8.dp))
 
-                    // Stage dimensions
+                    // Stage dimensions (cm)
+                    Text("Stage Dimensions (${if (units == 0) "cm" else "approx cm"})",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         OutlinedTextField(
-                            value = canvasW,
-                            onValueChange = { canvasW = it.filter { c -> c.isDigit() } },
-                            label = { Text("Stage W") },
+                            value = stageWcm,
+                            onValueChange = { stageWcm = it.filter { c -> c.isDigit() } },
+                            label = { Text("W") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
                             modifier = Modifier.weight(1f)
                         )
                         OutlinedTextField(
-                            value = canvasH,
-                            onValueChange = { canvasH = it.filter { c -> c.isDigit() } },
-                            label = { Text("Stage H") },
+                            value = stageHcm,
+                            onValueChange = { stageHcm = it.filter { c -> c.isDigit() } },
+                            label = { Text("H") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = stageDcm,
+                            onValueChange = { stageDcm = it.filter { c -> c.isDigit() } },
+                            label = { Text("D") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
                             modifier = Modifier.weight(1f)
@@ -198,14 +224,19 @@ fun SettingsScreen(
 
                     Button(
                         onClick = {
+                            val wCm = stageWcm.toIntOrNull() ?: 300
+                            val hCm = stageHcm.toIntOrNull() ?: 200
+                            val dCm = stageDcm.toIntOrNull() ?: 150
                             viewModel.saveSettings(
                                 name = name,
                                 units = units,
-                                canvasW = canvasW.toIntOrNull() ?: 10000,
-                                canvasH = canvasH.toIntOrNull() ?: 5000,
+                                canvasW = wCm * 10,  // cm → mm
+                                canvasH = hCm * 10,
                                 darkMode = darkMode,
                                 logging = logging
                             )
+                            // Also save stage via stage API (cm → meters)
+                            viewModel.saveStage(wCm / 100.0, hCm / 100.0, dCm / 100.0)
                         },
                         enabled = !isSaving,
                         modifier = Modifier.fillMaxWidth()

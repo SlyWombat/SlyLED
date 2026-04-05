@@ -212,12 +212,30 @@ body.light .li:hover{border-color:#3b82f6}
       <div class='card-title'>App Settings</div>
       <label>Orchestrator Name</label><input id='s-nm' maxlength='15' style='width:200px' data-tip='setName'>
       <label>Units</label>
-      <select id='s-un' data-tip='setUnits'>
-        <option value='0'>Metric (mm)</option>
-        <option value='1'>Imperial (in)</option>
+      <select id='s-un' data-tip='setUnits' onchange='_stageUnitsChange()'>
+        <option value='0'>Metric (cm)</option>
+        <option value='1'>Imperial (ft / in)</option>
       </select>
-      <label>Stage Width (mm)</label><input id='s-cw' type='number' min='1000' max='100000' style='width:120px'>
-      <label>Stage Height (mm)</label><input id='s-ch' type='number' min='1000' max='100000' style='width:120px'>
+      <div id='s-stage-metric'>
+        <label>Stage Dimensions (cm)</label>
+        <div style='display:flex;gap:.5em;align-items:center'>
+          <div><span style='font-size:.7em;color:#64748b'>W</span><input id='s-sw' type='number' min='10' max='10000' style='width:80px' value='300'></div>
+          <span style='color:#444'>&times;</span>
+          <div><span style='font-size:.7em;color:#64748b'>H</span><input id='s-sh' type='number' min='10' max='10000' style='width:80px' value='200'></div>
+          <span style='color:#444'>&times;</span>
+          <div><span style='font-size:.7em;color:#64748b'>D</span><input id='s-sd' type='number' min='10' max='10000' style='width:80px' value='150'></div>
+        </div>
+      </div>
+      <div id='s-stage-imperial' style='display:none'>
+        <label>Stage Dimensions (ft)</label>
+        <div style='display:flex;gap:.5em;align-items:center'>
+          <div><span style='font-size:.7em;color:#64748b'>W</span><input id='s-sw-ft' type='number' min='1' max='300' style='width:60px' value='10'><span style='font-size:.7em;color:#64748b'>ft</span><input id='s-sw-in' type='number' min='0' max='11' style='width:45px' value='0'><span style='font-size:.7em;color:#64748b'>in</span></div>
+          <span style='color:#444'>&times;</span>
+          <div><span style='font-size:.7em;color:#64748b'>H</span><input id='s-sh-ft' type='number' min='1' max='100' style='width:60px' value='6'><span style='font-size:.7em;color:#64748b'>ft</span><input id='s-sh-in' type='number' min='0' max='11' style='width:45px' value='7'><span style='font-size:.7em;color:#64748b'>in</span></div>
+          <span style='color:#444'>&times;</span>
+          <div><span style='font-size:.7em;color:#64748b'>D</span><input id='s-sd-ft' type='number' min='1' max='300' style='width:60px' value='5'><span style='font-size:.7em;color:#64748b'>ft</span><input id='s-sd-in' type='number' min='0' max='11' style='width:45px' value='0'><span style='font-size:.7em;color:#64748b'>in</span></div>
+        </div>
+      </div>
       <label style='display:flex;align-items:center;gap:.5em;margin-top:.8em'>
         <input type='checkbox' id='s-dm' data-tip='setDark'> Dark Mode
       </label>
@@ -467,8 +485,9 @@ var L={
   // Settings
   setName:'Display name for this SlyLED orchestrator instance',
   setUnits:'Choose between metric (mm) and imperial (inches)',
-  setCW:'Physical width of the stage in millimeters',
-  setCH:'Physical height of the stage in millimeters',
+  setCW:'Stage width',
+  setCH:'Stage height',
+  setCD:'Stage depth',
   setDark:'Switch between dark and light UI themes',
   setLog:'Write debug logs to a timestamped file in the data folder',
   setSave:'Save all settings to persistent storage',
@@ -5025,19 +5044,68 @@ function _setSection(s){
   if(s==='dmx')loadDmxSettings();
   if(s==='profiles')loadDmxProfiles();
 }
+function _stageUnitsChange(){
+  var imp=parseInt(document.getElementById('s-un').value)===1;
+  document.getElementById('s-stage-metric').style.display=imp?'none':'';
+  document.getElementById('s-stage-imperial').style.display=imp?'':'none';
+  if(imp){
+    // Convert metric cm to imperial ft/in
+    var w=parseFloat(document.getElementById('s-sw').value)||300;
+    var h=parseFloat(document.getElementById('s-sh').value)||200;
+    var d=parseFloat(document.getElementById('s-sd').value)||150;
+    _cmToFtIn(w,'s-sw');_cmToFtIn(h,'s-sh');_cmToFtIn(d,'s-sd');
+  }else{
+    // Convert imperial to metric cm
+    var w=_ftInToCm('s-sw');var h=_ftInToCm('s-sh');var d=_ftInToCm('s-sd');
+    document.getElementById('s-sw').value=Math.round(w);
+    document.getElementById('s-sh').value=Math.round(h);
+    document.getElementById('s-sd').value=Math.round(d);
+  }
+}
+function _cmToFtIn(cm,prefix){
+  var totalIn=cm/2.54;
+  var ft=Math.floor(totalIn/12);
+  var inn=Math.round(totalIn%12);
+  document.getElementById(prefix+'-ft').value=ft;
+  document.getElementById(prefix+'-in').value=inn;
+}
+function _ftInToCm(prefix){
+  var ft=parseInt(document.getElementById(prefix+'-ft').value)||0;
+  var inn=parseInt(document.getElementById(prefix+'-in').value)||0;
+  return (ft*12+inn)*2.54;
+}
+function _getStageCm(){
+  var imp=parseInt(document.getElementById('s-un').value)===1;
+  if(imp){
+    return{w:_ftInToCm('s-sw'),h:_ftInToCm('s-sh'),d:_ftInToCm('s-sd')};
+  }
+  return{w:parseFloat(document.getElementById('s-sw').value)||300,
+         h:parseFloat(document.getElementById('s-sh').value)||200,
+         d:parseFloat(document.getElementById('s-sd').value)||150};
+}
 function loadSettings(){
   ra('GET','/api/settings',null,function(d){
     if(!d)return;
     document.getElementById('s-nm').value=d.name||'';
     document.getElementById('s-un').value=d.units||0;
-    document.getElementById('s-cw').value=d.canvasW||10000;
-    document.getElementById('s-ch').value=d.canvasH||5000;
     var cb=document.getElementById('s-dm');if(cb)cb.checked=(d.darkMode!==0);
     applyDarkMode(d.darkMode!==0);
-    // Restore saved log path
     var lpi=document.getElementById('s-log-path-input');
     if(lpi&&d.logPath)lpi.value=d.logPath;
     _refreshLogStatus();
+  });
+  // Load stage dimensions (meters → cm for display)
+  ra('GET','/api/stage',null,function(st){
+    if(!st)return;
+    var wCm=Math.round((st.w||3)*100);
+    var hCm=Math.round((st.h||2)*100);
+    var dCm=Math.round((st.d||1.5)*100);
+    document.getElementById('s-sw').value=wCm;
+    document.getElementById('s-sh').value=hCm;
+    document.getElementById('s-sd').value=dCm;
+    // Also populate imperial fields
+    _cmToFtIn(wCm,'s-sw');_cmToFtIn(hCm,'s-sh');_cmToFtIn(dCm,'s-sd');
+    _stageUnitsChange(); // show correct panel
   });
   loadPatchView();
 }
@@ -5140,15 +5208,21 @@ function saveSettings(btn){
   var dm=document.getElementById('s-dm').checked?1:0;
   applyDarkMode(dm);
   var logPath=document.getElementById('s-log-path-input').value.trim();
+  // Save stage dimensions (cm → meters for server)
+  var stg=_getStageCm();
+  var stageM={w:stg.w/100, h:stg.h/100, d:stg.d/100};
+  ra('POST','/api/stage',stageM,function(){});
   ra('POST','/api/settings',{
     name:document.getElementById('s-nm').value.trim(),
     units:parseInt(document.getElementById('s-un').value)||0,
-    canvasW:parseInt(document.getElementById('s-cw').value)||10000,
-    canvasH:parseInt(document.getElementById('s-ch').value)||5000,
+    canvasW:Math.round(stg.w*10),  // cm → mm
+    canvasH:Math.round(stg.h*10),  // cm → mm
     darkMode:dm,
     logPath:logPath||''
   },function(r){
     _btnSaved(btn,r&&r.ok);
+    // Refresh layout canvas with new dimensions
+    if(r&&r.ok){phW=Math.round(stg.w*10);phH=Math.round(stg.h*10);}
   });
 }
 
