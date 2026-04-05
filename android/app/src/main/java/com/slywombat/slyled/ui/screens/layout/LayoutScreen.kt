@@ -12,6 +12,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -69,25 +74,32 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("Stage Layout", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+            // Auto-arrange DMX: evenly space along top, aimed down
             IconButton(onClick = { viewModel.autoArrangeDmx() }) {
-                Text("⊞", fontSize = 18.sp, color = Color(0xFFE9D5FF))
+                Icon(Icons.Default.GridView, contentDescription = "Auto-arrange DMX fixtures",
+                    tint = Color(0xFFE9D5FF))
+            }
+            // Show/hide LED strings toggle
+            IconButton(onClick = { showStrings = !showStrings }) {
+                Icon(
+                    if (showStrings) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                    contentDescription = "Show/hide LED strings",
+                    tint = if (showStrings) Color(0xFF22C55E) else MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             if (zoom != 1f || panOffset != Offset.Zero) {
                 TextButton(onClick = { zoom = 1f; panOffset = Offset.Zero }) { Text("Reset", fontSize = 11.sp) }
             }
+            // Save layout
             IconButton(onClick = { viewModel.saveLayout() }) {
-                Text("💾", fontSize = 16.sp)
+                Icon(Icons.Default.Save, contentDescription = "Save layout")
             }
         }
 
         // Info bar
         Row(modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("${stageWm}m × ${stageHm}m | ${fixtures.size} fixtures",
-                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = showStrings, onCheckedChange = { showStrings = it })
-                Text("Strings", fontSize = 11.sp)
-            }
+                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
         // Placement mode indicator
