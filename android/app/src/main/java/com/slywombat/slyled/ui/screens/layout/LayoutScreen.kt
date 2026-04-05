@@ -13,8 +13,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
@@ -39,15 +41,16 @@ import com.slywombat.slyled.viewmodel.LayoutViewModel
 @Composable
 fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
     val layout by viewModel.layout.collectAsState()
-    val surfaces by viewModel.surfaces.collectAsState()
+    val stageObjects by viewModel.objects.collectAsState()
     val fixtures by viewModel.fixtures.collectAsState()
     val stage by viewModel.stage.collectAsState()
     val message by viewModel.message.collectAsState()
     var dragFixtureId by remember { mutableIntStateOf(-1) }
     var showStrings by remember { mutableStateOf(true) }
+    var is3dMode by remember { mutableStateOf(false) }
     var editFixture by remember { mutableStateOf<Fixture?>(null) }
     var placingFixtureId by remember { mutableIntStateOf(-1) }
-    var editSurface by remember { mutableStateOf<Surface?>(null) }
+    var editObject by remember { mutableStateOf<StageObject?>(null) }
 
     // Zoom and pan
     var zoom by remember { mutableFloatStateOf(1f) }
@@ -78,6 +81,11 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
             IconButton(onClick = { viewModel.autoArrangeDmx() }) {
                 Icon(Icons.Default.GridView, contentDescription = "Auto-arrange DMX fixtures",
                     tint = Color(0xFFE9D5FF))
+            }
+            // 2D/3D mode toggle
+            IconButton(onClick = { is3dMode = !is3dMode }) {
+                Icon(Icons.Default.Layers, contentDescription = "Toggle 2D/3D mode",
+                    tint = if (is3dMode) Color(0xFF86EFAC) else MaterialTheme.colorScheme.onSurfaceVariant)
             }
             // Show/hide LED strings toggle
             IconButton(onClick = { showStrings = !showStrings }) {
@@ -201,8 +209,8 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                         style = TextStyle(fontSize = 8.sp, color = Color(0xFF4A6A8F)))
                     drawText(hLabel, topLeft = Offset(4f, h / 2 - hLabel.size.height / 2f))
 
-                    // Surfaces — clipped to stage bounds, with name labels
-                    surfaces.forEach { s ->
+                    // Stage objects — clipped to stage bounds, with name labels (temporal objects filtered out)
+                    stageObjects.filter { !it.temporal }.forEach { s ->
                         val t = s.transform
                         val sx = t.pos[0].toFloat() * w / canvasW
                         val sy = h - t.pos[1].toFloat() * h / canvasH
@@ -218,8 +226,8 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                                       catch (_: Exception) { Color(0xFF334155) }
                             drawRect(col.copy(alpha = s.opacity / 100f), Offset(clX, clY), Size(clW, clH))
                             drawRect(col.copy(alpha = 0.5f), Offset(clX, clY), Size(clW, clH), style = Stroke(1f))
-                            // Surface name label
-                            val name = s.name.ifEmpty { "Surface ${s.id}" }
+                            // Object name label
+                            val name = s.name.ifEmpty { "Object ${s.id}" }
                             val sLabel = textMeasurer.measure(AnnotatedString(name),
                                 style = TextStyle(fontSize = 8.sp, color = Color(0xFFAAAAAA)))
                             drawText(sLabel, topLeft = Offset(clX + 4f, clY + 2f))
@@ -332,23 +340,28 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
             }
         }
 
-        // Surfaces list — tap to edit
-        if (surfaces.isNotEmpty()) {
+        // Stage objects list — tap to edit (temporal objects filtered out)
+        val visibleObjects = stageObjects.filter { !it.temporal }
+        if (visibleObjects.isNotEmpty()) {
             Spacer(Modifier.height(4.dp))
-            Text("Surfaces (${surfaces.size})", fontSize = 12.sp,
+            Text("Objects (${visibleObjects.size})", fontSize = 12.sp,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
             LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 80.dp)) {
-                items(surfaces) { s ->
+                items(visibleObjects) { s ->
                     Card(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
-                        onClick = { editSurface = s }) {
+                        onClick = { editObject = s }) {
                         Row(modifier = Modifier.padding(6.dp).fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically) {
                             val t = s.transform
                             val wm = String.format("%.1f", t.scale[0] / 1000.0)
                             val hm = String.format("%.1f", t.scale[1] / 1000.0)
-                            Text(s.name.ifEmpty { "Surface ${s.id}" }, fontSize = 12.sp)
-                            Text("${wm}m × ${hm}m  pos(${t.pos[0].toInt()}, ${t.pos[1].toInt()})",
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(s.name.ifEmpty { "Object ${s.id}" }, fontSize = 12.sp)
+                                if (s.stageLocked) Icon(Icons.Default.Lock, contentDescription = "Locked to stage",
+                                    modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Text("${wm}m × ${hm}m  ${s.mobility}  pos(${t.pos[0].toInt()}, ${t.pos[1].toInt()})",
                                 fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
@@ -400,35 +413,48 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
         )
     }
 
-    // Surface edit dialog
-    editSurface?.let { surface ->
-        val t = surface.transform
-        var posX by remember(surface.id) { mutableStateOf(t.pos[0].toInt().toString()) }
-        var posY by remember(surface.id) { mutableStateOf(t.pos[1].toInt().toString()) }
-        var scaleW by remember(surface.id) { mutableStateOf(t.scale[0].toInt().toString()) }
-        var scaleH by remember(surface.id) { mutableStateOf(t.scale[1].toInt().toString()) }
-        var opacity by remember(surface.id) { mutableStateOf(surface.opacity.toString()) }
+    // Object edit dialog
+    editObject?.let { obj ->
+        val t = obj.transform
+        val locked = obj.stageLocked
+        var posX by remember(obj.id) { mutableStateOf(t.pos[0].toInt().toString()) }
+        var posY by remember(obj.id) { mutableStateOf(t.pos[1].toInt().toString()) }
+        var scaleW by remember(obj.id) { mutableStateOf(t.scale[0].toInt().toString()) }
+        var scaleH by remember(obj.id) { mutableStateOf(t.scale[1].toInt().toString()) }
+        var opacity by remember(obj.id) { mutableStateOf(obj.opacity.toString()) }
 
         AlertDialog(
-            onDismissRequest = { editSurface = null },
-            title = { Text(surface.name.ifEmpty { "Surface ${surface.id}" }) },
+            onDismissRequest = { editObject = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(obj.name.ifEmpty { "Object ${obj.id}" })
+                    if (locked) Icon(Icons.Default.Lock, contentDescription = "Locked to stage",
+                        modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Mobility: ${obj.mobility}", fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (locked) {
+                        Text("Dimensions locked to stage size", fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(value = posX, onValueChange = { posX = it },
                             label = { Text("X (mm)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.weight(1f))
+                            modifier = Modifier.weight(1f), enabled = !locked)
                         OutlinedTextField(value = posY, onValueChange = { posY = it },
                             label = { Text("Y (mm)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.weight(1f))
+                            modifier = Modifier.weight(1f), enabled = !locked)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(value = scaleW, onValueChange = { scaleW = it },
                             label = { Text("Width (mm)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.weight(1f))
+                            modifier = Modifier.weight(1f), enabled = !locked)
                         OutlinedTextField(value = scaleH, onValueChange = { scaleH = it },
                             label = { Text("Height (mm)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.weight(1f))
+                            modifier = Modifier.weight(1f), enabled = !locked)
                     }
                     OutlinedTextField(value = opacity, onValueChange = { opacity = it },
                         label = { Text("Opacity (0-100)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -436,22 +462,26 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    viewModel.updateSurface(surface.id,
-                        posX.toIntOrNull() ?: t.pos[0].toInt(),
-                        posY.toIntOrNull() ?: t.pos[1].toInt(),
-                        scaleW.toIntOrNull() ?: t.scale[0].toInt(),
-                        scaleH.toIntOrNull() ?: t.scale[1].toInt(),
-                        opacity.toIntOrNull() ?: surface.opacity)
-                    editSurface = null
-                }) { Text("OK") }
+                if (!locked) {
+                    TextButton(onClick = {
+                        viewModel.updateObject(obj.id,
+                            posX.toIntOrNull() ?: t.pos[0].toInt(),
+                            posY.toIntOrNull() ?: t.pos[1].toInt(),
+                            scaleW.toIntOrNull() ?: t.scale[0].toInt(),
+                            scaleH.toIntOrNull() ?: t.scale[1].toInt(),
+                            opacity.toIntOrNull() ?: obj.opacity)
+                        editObject = null
+                    }) { Text("OK") }
+                } else {
+                    TextButton(onClick = { editObject = null }) { Text("Close") }
+                }
             },
             dismissButton = {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = { viewModel.deleteSurface(surface.id); editSurface = null }) {
+                    TextButton(onClick = { viewModel.deleteObject(obj.id); editObject = null }) {
                         Text("Delete", color = MaterialTheme.colorScheme.error)
                     }
-                    TextButton(onClick = { editSurface = null }) { Text("Cancel") }
+                    if (!locked) TextButton(onClick = { editObject = null }) { Text("Cancel") }
                 }
             }
         )

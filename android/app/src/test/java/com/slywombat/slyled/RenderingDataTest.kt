@@ -95,12 +95,12 @@ class RenderingDataTest {
         }
     }
 
-    // ── SurfaceTransform with float values ──────────────────────────────
+    // ── ObjectTransform with float values ──────────────────────────────
 
     @Test
-    fun `deserialize SurfaceTransform with float pos and scale`() {
+    fun `deserialize ObjectTransform with float pos and scale`() {
         val input = """{"pos":[5000.0,2500.0,0.0],"rot":[0.0,0.0,0.0],"scale":[10000.0,5000.0,100.0]}"""
-        val t = json.decodeFromString<SurfaceTransform>(input)
+        val t = json.decodeFromString<ObjectTransform>(input)
         assertEquals(5000.0, t.pos[0], 0.01)
         assertEquals(2500.0, t.pos[1], 0.01)
         assertEquals(10000.0, t.scale[0], 0.01)
@@ -108,22 +108,127 @@ class RenderingDataTest {
     }
 
     @Test
-    fun `deserialize SurfaceTransform with int values`() {
+    fun `deserialize ObjectTransform with int values`() {
         val input = """{"pos":[0,0,0],"rot":[0,0,0],"scale":[2000,1500,100]}"""
-        val t = json.decodeFromString<SurfaceTransform>(input)
+        val t = json.decodeFromString<ObjectTransform>(input)
         assertEquals(0.0, t.pos[0], 0.01)
         assertEquals(2000.0, t.scale[0], 0.01)
     }
 
     @Test
-    fun `deserialize Surface with full transform`() {
-        val input = """{"id":0,"name":"Back Wall","surfaceType":"wall","color":"#1e293b",
+    fun `deserialize StageObject with full transform`() {
+        val input = """{"id":0,"name":"Back Wall","objectType":"wall","color":"#1e293b",
             "opacity":30,"transform":{"pos":[0,0,0],"rot":[0,0,0],"scale":[10000,5000,100]}}"""
-        val s = json.decodeFromString<Surface>(input)
+        val s = json.decodeFromString<StageObject>(input)
         assertEquals("Back Wall", s.name)
         assertEquals("#1e293b", s.color)
         assertEquals(30, s.opacity)
         assertEquals(10000.0, s.transform.scale[0], 0.01)
+        assertFalse(s.stageLocked)
+        assertEquals("static", s.mobility)
+    }
+
+    @Test
+    fun `deserialize StageObject with stageLocked true`() {
+        val input = """{"id":1,"name":"Back Wall","objectType":"wall","color":"#334155",
+            "opacity":25,"stageLocked":true,
+            "transform":{"pos":[0,0,0],"rot":[0,0,0],"scale":[5000,3000,100]}}"""
+        val s = json.decodeFromString<StageObject>(input)
+        assertTrue(s.stageLocked)
+        assertEquals("wall", s.objectType)
+        assertEquals(5000.0, s.transform.scale[0], 0.01)
+        assertEquals(3000.0, s.transform.scale[1], 0.01)
+    }
+
+    @Test
+    fun `deserialize StageObject floor stageLocked`() {
+        val input = """{"id":2,"name":"Stage Floor","objectType":"floor","color":"#1a2744",
+            "opacity":20,"stageLocked":true,
+            "transform":{"pos":[0,0,0],"rot":[0,0,0],"scale":[5000,3000,100]}}"""
+        val s = json.decodeFromString<StageObject>(input)
+        assertTrue(s.stageLocked)
+        assertEquals("floor", s.objectType)
+        assertEquals(5000.0, s.transform.scale[0], 0.01)
+        assertEquals(3000.0, s.transform.scale[1], 0.01)
+    }
+
+    // ── Mobility field (#185) ───────────────────────────────────────────
+
+    @Test
+    fun `deserialize StageObject with mobility moving`() {
+        val input = """{"id":3,"name":"Singer","objectType":"prop","mobility":"moving",
+            "color":"#FF6B35","opacity":40,
+            "transform":{"pos":[5000,900,3000],"rot":[0,0,0],"scale":[500,1800,500]}}"""
+        val s = json.decodeFromString<StageObject>(input)
+        assertEquals("moving", s.mobility)
+        assertEquals("prop", s.objectType)
+        assertEquals(5000.0, s.transform.pos[0], 0.01)
+    }
+
+    @Test
+    fun `deserialize StageObject mobility defaults to static`() {
+        val input = """{"id":4,"name":"Wall","objectType":"wall"}"""
+        val s = json.decodeFromString<StageObject>(input)
+        assertEquals("static", s.mobility)
+    }
+
+    // ── Temporal objects (#188) ──────────────────────────────────────────
+
+    @Test
+    fun `deserialize temporal StageObject`() {
+        val input = """{"id":10001,"name":"Tracked Person","objectType":"prop","mobility":"moving",
+            "_temporal":true,"ttl":60,"color":"#FF6B35","opacity":40,
+            "transform":{"pos":[5000,900,3000],"rot":[0,0,0],"scale":[500,1800,500]}}"""
+        val s = json.decodeFromString<StageObject>(input)
+        assertTrue(s.temporal)
+        assertEquals(60, s.ttl)
+        assertEquals("moving", s.mobility)
+    }
+
+    @Test
+    fun `deserialize StageObject without temporal defaults to false`() {
+        val input = """{"id":5,"name":"Wall","objectType":"wall"}"""
+        val s = json.decodeFromString<StageObject>(input)
+        assertFalse(s.temporal)
+        assertEquals(0, s.ttl)
+    }
+
+    // ── Patrol config (#194) ───────────────────────────────────────────
+
+    @Test
+    fun `deserialize StageObject with patrol config`() {
+        val input = """{"id":6,"name":"Patrol Singer","objectType":"prop","mobility":"moving",
+            "patrol":{"enabled":true,"axis":"x","speedPreset":"medium","cycleS":10.0,
+            "startPct":10,"endPct":90,"easing":"sine"},
+            "transform":{"pos":[5000,900,4000],"rot":[0,0,0],"scale":[500,1800,500]}}"""
+        val s = json.decodeFromString<StageObject>(input)
+        assertNotNull(s.patrol)
+        assertTrue(s.patrol!!.enabled)
+        assertEquals("x", s.patrol!!.axis)
+        assertEquals("medium", s.patrol!!.speedPreset)
+        assertEquals(10.0, s.patrol!!.cycleS, 0.01)
+        assertEquals(10, s.patrol!!.startPct)
+        assertEquals(90, s.patrol!!.endPct)
+        assertEquals("sine", s.patrol!!.easing)
+    }
+
+    @Test
+    fun `deserialize StageObject without patrol defaults to null`() {
+        val input = """{"id":7,"name":"Wall","objectType":"wall"}"""
+        val s = json.decodeFromString<StageObject>(input)
+        assertNull(s.patrol)
+    }
+
+    @Test
+    fun `deserialize PatrolConfig with custom speed`() {
+        val input = """{"enabled":true,"axis":"z","speedPreset":"custom","cycleS":15.0,
+            "startPct":5,"endPct":95,"easing":"linear"}"""
+        val p = json.decodeFromString<PatrolConfig>(input)
+        assertTrue(p.enabled)
+        assertEquals("z", p.axis)
+        assertEquals("custom", p.speedPreset)
+        assertEquals(15.0, p.cycleS, 0.01)
+        assertEquals("linear", p.easing)
     }
 
     // ── Layout with fixtures (merged strings + positions) ───────────────

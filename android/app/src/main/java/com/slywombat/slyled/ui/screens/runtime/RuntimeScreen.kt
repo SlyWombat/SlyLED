@@ -146,7 +146,7 @@ fun RuntimeScreen(viewModel: RuntimeViewModel = hiltViewModel()) {
                 children = viewModel.stageChildren.collectAsState().value,
                 layout = viewModel.stageLayout.collectAsState().value,
                 fixtures = viewModel.stageFixtures.collectAsState().value,
-                surfaces = viewModel.stageSurfaces.collectAsState().value,
+                stageObjects = viewModel.stageObjects.collectAsState().value,
             )
         }
 
@@ -223,7 +223,7 @@ fun ShowEmulatorCanvas(
     children: List<Child> = emptyList(),
     layout: Layout? = null,
     fixtures: List<Fixture> = emptyList(),
-    surfaces: List<Surface> = emptyList(),
+    stageObjects: List<StageObject> = emptyList(),
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -246,8 +246,8 @@ fun ShowEmulatorCanvas(
                 for (gx in 1..9) drawLine(Color(0xFF0C1222), Offset(gx * w / 10, 0f), Offset(gx * w / 10, h), 0.5f)
                 for (gy in 1..4) drawLine(Color(0xFF0C1222), Offset(0f, gy * h / 5), Offset(w, gy * h / 5), 0.5f)
 
-                // Surfaces (draw first so fixtures render on top)
-                surfaces.forEach { s ->
+                // Stage objects (draw first so fixtures render on top)
+                stageObjects.forEach { s ->
                     val t = s.transform
                     val sx = (t.pos[0].toFloat() * w / cw)
                     val sy = (h - t.pos[1].toFloat() * h / ch)

@@ -31,7 +31,8 @@ from datetime import datetime
 from wled_bridge import (wled_probe, wled_stop,
                          wled_get_effects, wled_get_palettes, wled_get_segments)
 from spatial_engine import (catmull_rom_sample, resolve_fixture,
-                            evaluate_spatial_effect, blend_pixel_layers)
+                            evaluate_spatial_effect, blend_pixel_layers,
+                            compute_pan_tilt)
 from bake_engine import (bake_timeline, pack_lsq_zip, segments_to_load_steps,
                          BakeProgress)
 from dmx_profiles import ProfileLibrary
@@ -74,7 +75,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "8.4.1"
+VERSION = "8.4.3"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -152,7 +153,7 @@ if _fix_patched:
     _save("fixtures", _fixtures)
 del _fix_patched
 
-_surfaces   = _load("surfaces",   [])
+_objects    = _load("objects",     [])
 _spatial_fx = _load("spatial_fx", [])
 _timelines  = _load("timelines",  [])
 _actions = _load("actions", [])
@@ -174,7 +175,9 @@ _apply_logging(_settings.get("logging", False))
 _nxt_c = max((c["id"] for c in _children), default=-1) + 1
 _nxt_a = max((a["id"] for a in _actions),  default=-1) + 1
 _nxt_fix = max((f["id"] for f in _fixtures),   default=-1) + 1
-_nxt_sf  = max((f["id"] for f in _surfaces),   default=-1) + 1
+_nxt_obj = max((f["id"] for f in _objects),    default=-1) + 1
+_temporal_objects = []  # in-memory only, never saved
+_nxt_tmp = 10000       # temporal IDs start at 10000 to avoid collision
 _nxt_sfx = max((f["id"] for f in _spatial_fx),  default=-1) + 1
 _nxt_tl  = max((t["id"] for t in _timelines),  default=-1) + 1
 _lock  = threading.Lock()
@@ -872,6 +875,7 @@ def api_stage_save():
         _layout["canvasH"] = _settings["canvasH"]
         _save("settings", _settings)
         _save("layout", _layout)
+        _sync_locked_objects()
     return jsonify(ok=True)
 
 
@@ -1018,37 +1022,122 @@ def api_fixture_resolve(fid):
     result = resolve_fixture(resolve_input)
     return jsonify(result)
 
-#  "  "  Surfaces (Phase 2)  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
+#  "  "  Objects (Phase 2)  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
+def _apply_stage_lock(s):
+    """Resize a stage-locked object to match current stage dimensions (mm)."""
+    sw = int(_stage["w"] * 1000)
+    sh = int(_stage["h"] * 1000)
+    sd = int(_stage["d"] * 1000)
+    t = s.setdefault("transform", {"pos": [0,0,0], "rot": [0,0,0], "scale": [2000,1500,1]})
+    st = s.get("objectType", "custom")
+    if st == "wall":
+        t["scale"] = [sw, sh, 100]
+        t["pos"] = [0, 0, 0]
+    elif st == "floor":
+        t["scale"] = [sw, sd + 1000, 100]
+        t["pos"] = [0, 0, 0]
+
+def _sync_locked_objects():
+    """Re-apply stage dimensions to all stage-locked objects."""
+    changed = False
+    for s in _objects:
+        if s.get("stageLocked"):
+            _apply_stage_lock(s)
+            changed = True
+    if changed:
+        _save("objects", _objects)
+
+def _reap_temporal_objects():
+    """Remove expired temporal objects."""
+    now = time.time()
+    global _temporal_objects
+    _temporal_objects = [o for o in _temporal_objects if o.get("_expiresAt", 0) > now]
+
+@app.get("/api/objects")
 @app.get("/api/surfaces")
-def api_surfaces_get():
-    return jsonify(_surfaces)
+def api_objects_get():
+    _reap_temporal_objects()
+    return jsonify(_objects + _temporal_objects)
 
+@app.post("/api/objects")
 @app.post("/api/surfaces")
-def api_surfaces_create():
-    global _nxt_sf
+def api_objects_create():
+    global _nxt_obj
     body = request.get_json(silent=True) or {}
     name = body.get("name", "").strip()
     with _lock:
         s = {
-            "id": _nxt_sf, "name": name or f"Surface {_nxt_sf}",
-            "surfaceType": body.get("surfaceType", "custom"),
+            "id": _nxt_obj, "name": name or f"Object {_nxt_obj}",
+            "objectType": body.get("objectType", "custom"),
+            "mobility": body.get("mobility", "static"),
             "filename": body.get("filename", ""),
             "color": body.get("color", "#334155"),
             "opacity": body.get("opacity", 30),
             "transform": body.get("transform", {"pos": [0,0,0], "rot": [0,0,0], "scale": [2000,1500,1]}),
+            "stageLocked": body.get("stageLocked", False),
         }
-        _surfaces.append(s)
-        _nxt_sf += 1
-        _save("surfaces", _surfaces)
+        if "patrol" in body and isinstance(body["patrol"], dict):
+            s["patrol"] = body["patrol"]
+        if s["stageLocked"]:
+            _apply_stage_lock(s)
+        _objects.append(s)
+        _nxt_obj += 1
+        _save("objects", _objects)
     return jsonify(ok=True, id=s["id"])
 
+@app.delete("/api/objects/<int:sid>")
 @app.delete("/api/surfaces/<int:sid>")
-def api_surface_delete(sid):
-    global _surfaces
-    _surfaces = [s for s in _surfaces if s["id"] != sid]
-    _save("surfaces", _surfaces)
+def api_object_delete(sid):
+    global _objects, _temporal_objects
+    before = len(_objects) + len(_temporal_objects)
+    _objects = [s for s in _objects if s["id"] != sid]
+    _temporal_objects = [s for s in _temporal_objects if s["id"] != sid]
+    if len(_objects) + len(_temporal_objects) < before:
+        _save("objects", _objects)
     return jsonify(ok=True)
+
+@app.put("/api/objects/<int:oid>/pos")
+def api_object_pos(oid):
+    body = request.get_json(silent=True) or {}
+    pos = body.get("pos")
+    if not pos or not isinstance(pos, list) or len(pos) != 3:
+        return jsonify(err="pos must be [x, y, z]"), 400
+    with _lock:
+        obj = next((o for o in _objects if o["id"] == oid), None)
+        if not obj:
+            obj = next((o for o in _temporal_objects if o["id"] == oid), None)
+        if not obj:
+            return jsonify(err="not found"), 404
+        obj.setdefault("transform", {"pos": [0,0,0], "rot": [0,0,0], "scale": [2000,1500,1]})["pos"] = [float(p) for p in pos]
+        if obj.get("_temporal") and obj.get("ttl"):
+            obj["_expiresAt"] = time.time() + obj["ttl"]
+    return jsonify(ok=True)
+
+@app.post("/api/objects/temporal")
+def api_objects_temporal_create():
+    global _nxt_tmp
+    body = request.get_json(silent=True) or {}
+    ttl = body.get("ttl")
+    if not isinstance(ttl, (int, float)) or ttl <= 0:
+        return jsonify(err="ttl must be > 0"), 400
+    pos = body.get("pos", [0, 0, 0])
+    scale = body.get("scale", [500, 1800, 500])
+    with _lock:
+        obj = {
+            "id": _nxt_tmp, "name": body.get("name", f"Temporal {_nxt_tmp}"),
+            "objectType": body.get("objectType", "prop"),
+            "mobility": "moving",
+            "_temporal": True,
+            "ttl": ttl,
+            "_expiresAt": time.time() + ttl,
+            "color": body.get("color", "#FF6B35"),
+            "opacity": body.get("opacity", 40),
+            "transform": {"pos": [float(p) for p in pos], "rot": [0,0,0], "scale": [float(s) for s in scale]},
+        }
+        _temporal_objects.append(obj)
+        _nxt_tmp += 1
+    return jsonify(ok=True, id=obj["id"])
 
 #  "  "  DMX Profiles  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
@@ -2409,6 +2498,140 @@ def api_sync_status(tid):
 
 _dmx_playback_stop = threading.Event()
 
+_PATROL_SPEED_PRESETS = {"slow": 20.0, "medium": 10.0, "fast": 5.0}
+
+def _evaluate_object_patrols(elapsed):
+    """Update positions of patrolling objects based on elapsed playback time."""
+    sw = _stage.get("w", 10) * 1000
+    sh = _stage.get("h", 5) * 1000
+    sd = _stage.get("d", 10) * 1000
+    dims = {"x": sw, "y": sh, "z": sd}
+    all_objs = _objects + _temporal_objects
+    for obj in all_objs:
+        if obj.get("mobility") != "moving":
+            continue
+        pat = obj.get("patrol")
+        if not pat or not pat.get("enabled"):
+            continue
+        preset = pat.get("speedPreset", "medium")
+        cycle_s = _PATROL_SPEED_PRESETS.get(preset, pat.get("cycleS", 10.0))
+        if cycle_s <= 0:
+            continue
+        start_pct = pat.get("startPct", 10) / 100.0
+        end_pct = pat.get("endPct", 90) / 100.0
+        easing = pat.get("easing", "sine")
+        # Ping-pong phase: 0→1→0 over one full cycle
+        phase = (elapsed % cycle_s) / cycle_s
+        t = 1.0 - abs(2.0 * phase - 1.0)  # triangle wave 0→1→0
+        if easing == "sine":
+            t = 0.5 - 0.5 * math.cos(t * math.pi)  # smooth ease in/out
+        axis = pat.get("axis", "x")
+        pos = obj.get("transform", {}).get("pos", [0, 0, 0])
+        new_pos = list(pos)
+        for ax in (list(axis) if len(axis) > 1 else [axis]):
+            dim = dims.get(ax, sw)
+            lo = dim * start_pct
+            hi = dim * end_pct
+            val = lo + t * (hi - lo)
+            idx = {"x": 0, "y": 1, "z": 2}.get(ax, 0)
+            new_pos[idx] = val
+        obj.setdefault("transform", {})["pos"] = new_pos
+
+def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
+    """Evaluate active Track actions -- compute real-time pan/tilt for moving heads."""
+    track_actions = [a for a in _actions if a.get("type") == 18]
+    if not track_actions:
+        return
+    all_objects = _objects + _temporal_objects
+    moving_objects = [o for o in all_objects if o.get("mobility") == "moving"]
+    if not moving_objects:
+        return
+    # Build fixture lookup: id -> fixture info (with profile pan/tilt range)
+    fx_lookup = {}
+    for f in _fixtures:
+        if f.get("fixtureType") != "dmx":
+            continue
+        pid = f.get("dmxProfileId")
+        prof = _profile_lib.get_profile(pid) if pid else None
+        pan_range = prof.get("panRange", 0) if prof else 0
+        tilt_range = prof.get("tiltRange", 0) if prof else 0
+        if pan_range > 0 and tilt_range > 0:
+            fx_lookup[f["id"]] = {
+                "fixture": f, "pan_range": pan_range, "tilt_range": tilt_range,
+                "prof_info": _profile_lib.channel_info(pid) if pid else None
+            }
+    if not fx_lookup:
+        return
+    for ta in track_actions:
+        # Resolve target objects
+        target_ids = ta.get("trackObjectIds", [])
+        targets = [o for o in moving_objects if o["id"] in target_ids] if target_ids else moving_objects
+        if not targets:
+            continue
+        # Resolve fixtures
+        fix_ids = ta.get("trackFixtureIds", [])
+        heads = [fx_lookup[fid] for fid in (fix_ids or fx_lookup.keys()) if fid in fx_lookup]
+        if not heads:
+            continue
+        # Global offset
+        g_off = ta.get("trackOffset", [0, 0, 0])
+        per_fx_off = ta.get("trackFixtureOffsets", {})
+        auto_spread = ta.get("trackAutoSpread", False)
+        cycle_ms = ta.get("trackCycleMs", 2000)
+        cycle_s = max(cycle_ms / 1000.0, 0.1)
+        n_heads = len(heads)
+        n_targets = len(targets)
+        for hi, head_info in enumerate(heads):
+            f = head_info["fixture"]
+            fid = f["id"]
+            fx_pos = [f.get("x", 0), f.get("y", 0), f.get("z", 0)]
+            # Assignment
+            if n_heads <= n_targets:
+                # Cycling: this head covers a chunk of targets
+                chunk_size = max(1, n_targets // n_heads)
+                chunk_start = hi * chunk_size
+                chunk = targets[chunk_start:chunk_start + chunk_size]
+                if hi == n_heads - 1:
+                    chunk = targets[chunk_start:]  # last head gets remainder
+                if len(chunk) > 1:
+                    idx = int(elapsed / cycle_s) % len(chunk)
+                    obj = chunk[idx]
+                else:
+                    obj = chunk[0]
+            else:
+                # More heads than targets: spread heads across targets
+                obj = targets[hi % n_targets]
+            obj_pos = obj.get("transform", {}).get("pos", [0, 0, 0])
+            # Apply offsets
+            p_off = per_fx_off.get(str(fid), [0, 0, 0])
+            # Auto-spread when multiple heads on same object
+            spread_off = [0, 0, 0]
+            if auto_spread and n_heads > n_targets:
+                heads_on_this = n_heads // n_targets + (1 if hi % n_targets < n_heads % n_targets else 0)
+                if heads_on_this > 1:
+                    obj_w = obj.get("transform", {}).get("scale", [500, 1800, 500])[0]
+                    local_idx = (hi // n_targets)
+                    spread_off[0] = (local_idx - (heads_on_this - 1) / 2.0) * obj_w / max(heads_on_this, 1)
+            aim = [obj_pos[i] + g_off[i] + p_off[i] + spread_off[i] for i in range(3)]
+            # Clamp to stage bounds
+            sw = _stage.get("w", 10) * 1000
+            sh = _stage.get("h", 5) * 1000
+            sd = _stage.get("d", 10) * 1000
+            aim[0] = max(0, min(sw, aim[0]))
+            aim[1] = max(0, min(sh, aim[1]))
+            aim[2] = max(0, min(sd, aim[2]))
+            # Compute pan/tilt
+            pt = compute_pan_tilt(fx_pos, aim, head_info["pan_range"], head_info["tilt_range"])
+            if pt is None:
+                continue
+            pan, tilt = pt
+            # Write to DMX universe
+            prof_info = head_info["prof_info"]
+            if prof_info:
+                profile = {"channel_map": prof_info.get("channel_map"), "channels": prof_info.get("channels", [])}
+                uni_buf = engine.get_universe(f.get("dmxUniverse", 1))
+                uni_buf.set_fixture_pan_tilt(f.get("dmxStartAddr", 1), pan, tilt, profile)
+
 def _dmx_playback_loop(tid, go_epoch, duration, loop):
     """Background thread: stream DMX channel data during show playback."""
     result = _bake_result.get(tid)
@@ -2532,6 +2755,12 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
                 extra_ch["zoom"] = zoom
             if extra_ch and profile:
                 uni_buf.set_fixture_channels(fx["addr"], extra_ch, profile)
+        # ── Object patrols: update moving object positions ──
+        _evaluate_object_patrols(elapsed)
+        # ── Track action: real-time pan/tilt for moving heads following objects ──
+        if frame_count % 40 == 0:  # reap temporals every 1s
+            _reap_temporal_objects()
+        _evaluate_track_actions(elapsed, engine, dmx_fixtures)
         frame_count += 1
         if frame_count == 1:
             log.info("DMX playback: first frame sent at elapsed=%.1fs", elapsed)
@@ -2703,7 +2932,9 @@ _ACTION_FIELDS = ("name", "type", "scope", "canvasEffect", "targetIds", "r", "g"
                   "direction", "tailLen", "density",  # Chase/Comet/Twinkle
                   "decay", "fadeSpeed",               # Comet/Twinkle
                   "onMs", "offMs", "wipeDir", "wipeSpeedPct",  # legacy compat
-                  "wledFxOverride", "wledPalOverride", "wledSegId")  # WLED overrides
+                  "wledFxOverride", "wledPalOverride", "wledSegId",  # WLED overrides
+                  "trackObjectIds", "trackCycleMs", "trackOffset",  # Track action
+                  "trackFixtureIds", "trackFixtureOffsets", "trackAutoSpread")
 
 @app.post("/api/actions")
 def api_actions_create():
@@ -3275,7 +3506,7 @@ _DEFAULT_SETTINGS = {
 _DEFAULT_LAYOUT = {"canvasW": 3000, "canvasH": 2000, "children": []}
 _DEFAULT_STAGE  = {"w": 10.0, "h": 5.0, "d": 10.0}
 _DEFAULT_FIXTURES  = []
-_DEFAULT_SURFACES  = []
+_DEFAULT_OBJECTS   = []
 _DEFAULT_SPATIAL_FX = []
 _DEFAULT_TIMELINES = []
 
@@ -3595,9 +3826,9 @@ def api_reset():
     if request.headers.get("X-SlyLED-Confirm") != "true":
         return jsonify(err="Missing confirmation header"), 403
     global _children, _settings, _layout, _stage, _actions
-    global _fixtures, _surfaces, _spatial_fx, _timelines
+    global _fixtures, _objects, _temporal_objects, _spatial_fx, _timelines
     global _wifi, _nxt_c, _nxt_a, _dmx_settings, _bake_result
-    global _nxt_fix, _nxt_sf, _nxt_sfx, _nxt_tl
+    global _nxt_fix, _nxt_obj, _nxt_sfx, _nxt_tl
     # Stop DMX playback + engines
     _dmx_playback_stop.set()
     try:
@@ -3628,13 +3859,14 @@ def api_reset():
         _stage    = dict(_DEFAULT_STAGE)
         _settings = dict(_DEFAULT_SETTINGS)
         _fixtures   = list(_DEFAULT_FIXTURES)
-        _surfaces   = list(_DEFAULT_SURFACES)
+        _objects    = list(_DEFAULT_OBJECTS)
+        _temporal_objects.clear()
         _spatial_fx = list(_DEFAULT_SPATIAL_FX)
         _timelines  = list(_DEFAULT_TIMELINES)
         _dmx_settings = {"protocol": "artnet", "frameRate": 40, "bindIp": "0.0.0.0",
                          "universeRoutes": [], "sacnPriority": 100, "sacnSourceName": "SlyLED"}
         _nxt_c = _nxt_a = 0
-        _nxt_fix = _nxt_sf = _nxt_sfx = _nxt_tl = 0
+        _nxt_fix = _nxt_obj = _nxt_sfx = _nxt_tl = 0
         _save("children", _children)
         _save("actions",  _actions)
         _save("wifi",     _wifi)
@@ -3642,7 +3874,7 @@ def api_reset():
         _save("stage",    _stage)
         _save("settings", _settings)
         _save("fixtures",   _fixtures)
-        _save("surfaces",   _surfaces)
+        _save("objects",    _objects)
         _save("spatial_fx", _spatial_fx)
         _save("timelines",  _timelines)
         _save("dmx_settings", _dmx_settings)
@@ -3951,6 +4183,8 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
 
 
 

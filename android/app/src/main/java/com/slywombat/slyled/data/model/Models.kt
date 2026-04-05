@@ -264,19 +264,36 @@ data class FixtureString(
     val points: List<List<Double>>? = null,
 )
 
-// ── Surfaces (Phase 2) ─────────────────────────────────────────────────
+// ── Stage Objects (Phase 2) ────────────────────────────────────────────
 @Serializable
-data class Surface(
+data class StageObject(
     val id: Int = 0,
     val name: String = "",
-    val surfaceType: String = "custom",
+    val objectType: String = "custom",
+    val mobility: String = "static",
     val color: String = "#334155",
     val opacity: Int = 30,
-    val transform: SurfaceTransform = SurfaceTransform(),
+    val transform: ObjectTransform = ObjectTransform(),
+    val stageLocked: Boolean = false,
+    @SerialName("_temporal")
+    val temporal: Boolean = false,
+    val ttl: Int = 0,
+    val patrol: PatrolConfig? = null,
 )
 
 @Serializable
-data class SurfaceTransform(
+data class PatrolConfig(
+    val enabled: Boolean = false,
+    val axis: String = "x",
+    val speedPreset: String = "medium",
+    val cycleS: Double = 10.0,
+    val startPct: Int = 10,
+    val endPct: Int = 90,
+    val easing: String = "sine",
+)
+
+@Serializable
+data class ObjectTransform(
     val pos: List<Double> = listOf(0.0, 0.0, 0.0),
     val rot: List<Double> = listOf(0.0, 0.0, 0.0),
     val scale: List<Double> = listOf(2000.0, 1500.0, 100.0),

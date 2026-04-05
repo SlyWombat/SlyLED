@@ -135,21 +135,22 @@ class SlyLedRepository @Inject constructor(
     suspend fun getDmxSettings() = requireApi().getDmxSettings()
     suspend fun saveDmxSettings(body: JsonObject) = requireApi().saveDmxSettings(body)
 
-    // Surfaces
-    suspend fun getSurfaces() = requireApi().getSurfaces()
-    suspend fun updateSurface(id: Int, posX: Int, posY: Int, scaleW: Int, scaleH: Int, opacity: Int) {
-        // Server has no PUT for surfaces — delete and recreate
-        val old = getSurfaces().find { it.id == id } ?: return
-        requireApi().deleteSurface(id)
-        requireApi().createSurface(Surface(
-            name = old.name, surfaceType = old.surfaceType, color = old.color, opacity = opacity,
-            transform = SurfaceTransform(
+    // Stage Objects
+    suspend fun getObjects() = requireApi().getObjects()
+    suspend fun updateObject(id: Int, posX: Int, posY: Int, scaleW: Int, scaleH: Int, opacity: Int) {
+        // Server has no PUT for objects — delete and recreate
+        val old = getObjects().find { it.id == id } ?: return
+        requireApi().deleteObject(id)
+        requireApi().createObject(StageObject(
+            name = old.name, objectType = old.objectType, mobility = old.mobility,
+            color = old.color, opacity = opacity,
+            transform = ObjectTransform(
                 pos = listOf(posX.toDouble(), posY.toDouble(), 0.0),
                 rot = listOf(0.0, 0.0, 0.0),
                 scale = listOf(scaleW.toDouble(), scaleH.toDouble(), 100.0))
         ))
     }
-    suspend fun deleteSurface(id: Int) = requireApi().deleteSurface(id)
+    suspend fun deleteObject(id: Int) = requireApi().deleteObject(id)
 
     // OFL
     suspend fun oflSearch(query: String) = requireApi().oflSearch(query)

@@ -93,11 +93,7 @@ body.light .li:hover{border-color:#3b82f6}
 <div id='t-layout' class='tab' style='display:none'>
   <div style='display:flex;gap:1em;align-items:flex-start'>
     <div style='flex:1;min-width:0'>
-      <div style='display:flex;align-items:center;gap:1em;margin-bottom:.4em'>
-        <div style='display:flex;gap:0;border:1px solid #334155;border-radius:4px;overflow:hidden;flex-shrink:0'>
-          <button id='lay-mode-2d' class='btn' onclick='setLayoutMode("2d")' style='border-radius:0;border:none;margin:0;padding:.35em .9em;background:#14532d;color:#86efac;font-size:.75em'>2D Canvas</button>
-          <button id='lay-mode-3d' class='btn' onclick='setLayoutMode("3d")' style='border-radius:0;border:none;margin:0;padding:.35em .9em;background:transparent;color:#64748b;font-size:.75em'>3D Viewport</button>
-        </div>
+      <div style='display:flex;align-items:center;gap:.5em;margin-bottom:.4em'>
         <span id='lay-hint' style='color:#888;font-size:.82em;flex:1'>Drag fixtures from sidebar onto stage. Double-click to edit position. (0,0)=bottom-left.</span>
       </div>
       <!-- 2D Canvas (default) -->
@@ -117,6 +113,7 @@ body.light .li:hover{border-color:#3b82f6}
       <div style='margin-top:.5em;display:flex;gap:.2em;align-items:center' id='lay-toolbar'>
         <button class='btn btn-on' id='btn-lay-save' onclick='saveLayout(this)' data-tip='laySave' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 1h10l2 2v11H2V1zm2 1v4h8V2H4zm1 1h6v2H5V3zm-1 6v5h8V9H4z'/></svg></button>
         <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
+        <button class='btn' id='btn-lay-mode' onclick='toggleLayoutMode()' data-tip='layToggleMode' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg id='lay-mode-icon' width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M8 1L1 5v6l7 4 7-4V5L8 1zm0 2l4.5 2.5L8 8 3.5 5.5 8 3z'/></svg></button>
         <button class='btn' onclick='autoArrangeDmx()' data-tip='layAutoArrange' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;background:#3b1f7c;color:#e9d5ff'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M1 2h3v2H1zm5 0h3v2H6zm5 0h3v2H11zM4 5l4 9 4-9H4z' opacity='.8'/></svg></button>
         <label data-tip='layShowStrings' style='cursor:pointer;width:32px;height:32px;display:flex;align-items:center;justify-content:center;border:1px solid #333;border-radius:4px;background:#111'>
           <input type='checkbox' id='lay-detail' checked onchange='_layDetailToggle()' style='display:none'>
@@ -129,10 +126,10 @@ body.light .li:hover{border-color:#3b82f6}
       <div id='lay-fixtures' style='font-size:.82em;color:#94a3b8'>Loading...</div>
       <div style='margin-top:1em;border-top:1px solid #1e293b;padding-top:.8em'>
         <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:.4em'>
-          <span style='font-size:.9em;font-weight:bold;color:#aaa'>Surfaces</span>
-          <button class='btn btn-on' onclick='newSurface()' style='font-size:.65em;padding:.2em .5em'>+ Add</button>
+          <span style='font-size:.9em;font-weight:bold;color:#aaa'>Objects</span>
+          <button class='btn btn-on' onclick='newObject()' style='font-size:.65em;padding:.2em .5em'>+ Add</button>
         </div>
-        <div id='lay-surfaces' style='font-size:.82em;color:#94a3b8'></div>
+        <div id='lay-objects' style='font-size:.82em;color:#94a3b8'></div>
       </div>
     </div>
   </div>
@@ -564,7 +561,7 @@ function _btnSaved(btn,ok){if(!btn)return;btn.textContent=ok?'Saved!':'Error';bt
 var API={
   children:'/api/children',fixtures:'/api/fixtures',layout:'/api/layout',
   stage:'/api/stage',settings:'/api/settings',actions:'/api/actions',
-  surfaces:'/api/surfaces',timelines:'/api/timelines',wifi:'/api/wifi',
+  objects:'/api/objects',timelines:'/api/timelines',wifi:'/api/wifi',
   profiles:'/api/dmx-profiles',spatialFx:'/api/spatial-effects',
   dmxSettings:'/api/dmx/settings',dmxStatus:'/api/dmx/status',
   dmxPatch:'/api/dmx/patch',dmxInterfaces:'/api/dmx/interfaces',
@@ -788,8 +785,8 @@ function _dashEmuDraw(){
   if(!layoutFixtures.length)return;
   // Stage border
   ctx.strokeStyle='#1e3a5f';ctx.lineWidth=1;ctx.strokeRect(1,1,W-2,H-2);
-  // Surfaces
-  (_emuStage.surfaces||[]).forEach(function(s){
+  // Objects
+  (_emuStage.objects||[]).forEach(function(s){
     var t=s.transform||{pos:[0,0,0],scale:[2000,1500,1]};
     var sx=t.pos[0]*W/cw,sy=H-t.pos[1]*H/ch;
     var sw=t.scale[0]*W/cw,sh=t.scale[1]*H/ch;
@@ -1500,8 +1497,8 @@ function s3dLoadChildren(){
     _s3d.controls.target.set(_s3d.stageW/2,_s3d.stageH/4,_s3d.stageD/2);
     _s3d.camera.position.set(_s3d.stageW*1.2,_s3d.stageH*1.0,_s3d.stageD*1.5);
 
-    // Load surfaces THEN render them (async — must wait for data)
-    loadSurfaces(function(){_s3dRenderSurfaces();});
+    // Load objects THEN render them (async — must wait for data)
+    loadObjects(function(){_s3dRenderObjects();});
 
     var placed=(_fixtures||[]).filter(_isFixturePlaced);
     placed.forEach(function(c){
@@ -1613,24 +1610,24 @@ function s3dLoadChildren(){
   });
 }
 
-function _s3dRenderSurfaces(){
+function _s3dRenderObjects(){
   if(!_s3d.inited)return;
-  // Remove old surfaces (dispose geometry/materials)
+  // Remove old objects (dispose geometry/materials)
   var toRemove=[];
-  _s3d.scene.children.forEach(function(c){if(c.userData.surfaceObj)toRemove.push(c);});
+  _s3d.scene.children.forEach(function(c){if(c.userData.stageObj)toRemove.push(c);});
   toRemove.forEach(function(c){c.traverse(function(obj){
     if(obj.geometry)obj.geometry.dispose();
     if(obj.material){if(obj.material.map)obj.material.map.dispose();obj.material.dispose();}
   });_s3d.scene.remove(c);});
-  // Render each surface as a draggable group
-  (_surfaces||[]).forEach(function(s){
+  // Render each object as a draggable group
+  (_objects||[]).forEach(function(s){
     var t=s.transform||{pos:[0,0,0],scale:[2000,1500,1]};
     var sw=(t.scale[0]||2000)/1000,sh=(t.scale[1]||1500)/1000;
     var col=new THREE.Color(s.color||'#334155');
 
     var grp=new THREE.Group();
-    grp.userData.surfaceObj=true;
-    grp.userData.surfaceId=s.id;
+    grp.userData.stageObj=true;
+    grp.userData.stageObjId=s.id;
     grp.position.set((t.pos[0]||0)/1000,(t.pos[1]||0)/1000,(t.pos[2]||0)/1000);
 
     var sd=(t.scale[2]||1)/1000;
@@ -1638,7 +1635,7 @@ function _s3dRenderSurfaces(){
     var geo=useBox?new THREE.BoxGeometry(sw,sh,sd):new THREE.PlaneGeometry(sw,sh);
     var mat=new THREE.MeshBasicMaterial({color:col,side:THREE.DoubleSide,opacity:(s.opacity||30)/100,transparent:true});
     var mesh=new THREE.Mesh(geo,mat);
-    // Position so bottom-front corner is at the surface origin
+    // Position so bottom-front corner is at the object origin
     mesh.position.set(sw/2,sh/2,useBox?(-sd/2):0);
     grp.add(mesh);
 
@@ -1649,7 +1646,7 @@ function _s3dRenderSurfaces(){
     grp.add(edge);
 
     // Label
-    var lbl=_s3dLabel(s.name||'Surface');
+    var lbl=_s3dLabel(s.name||'Object');
     lbl.position.set(sw/2,sh+0.15,useBox?(-sd/2):0);
     grp.add(lbl);
 
@@ -1672,7 +1669,7 @@ function _s3dDir(sdir){
   return dirs[sdir]||dirs[0];
 }
 function _s3dSyncToLd(){
-  // Write 3D group positions back into ld.children and surfaces
+  // Write 3D group positions back into ld.children and objects
   if(!_s3d.inited||!ld)return;
   _s3d.nodes.forEach(function(grp){
     if(grp.userData.childId!==undefined){
@@ -1688,10 +1685,10 @@ function _s3dSyncToLd(){
         f.x=mm.x;f.y=mm.y;f.z=mm.z;f._placed=true;
       }});
     }
-    if(grp.userData.surfaceObj&&grp.userData.surfaceId!==undefined){
-      var sid=grp.userData.surfaceId;
+    if(grp.userData.stageObj&&grp.userData.stageObjId!==undefined){
+      var sid=grp.userData.stageObjId;
       var mm=_s3dToMm(grp.position);
-      (_surfaces||[]).forEach(function(s){
+      (_objects||[]).forEach(function(s){
         if(s.id===sid){
           if(!s.transform)s.transform={pos:[0,0,0],rot:[0,0,0],scale:[2000,1500,1]};
           s.transform.pos=[mm.x,mm.y,mm.z];
@@ -1714,7 +1711,7 @@ function _s3dLabel(text){
 }
 
 function _s3dHitGroup(e){
-  // Raycast into all group children, return the parent group (fixture or surface)
+  // Raycast into all group children, return the parent group (fixture or object)
   var rect=_s3d.renderer.domElement.getBoundingClientRect();
   _s3d.mouse.x=((e.clientX-rect.left)/rect.width)*2-1;
   _s3d.mouse.y=-((e.clientY-rect.top)/rect.height)*2+1;
@@ -1724,8 +1721,8 @@ function _s3dHitGroup(e){
   var hits=_s3d.raycaster.intersectObjects(allMeshes);
   if(hits.length>0){
     var obj=hits[0].object;
-    while(obj.parent&&!obj.userData.childId&&!obj.userData.surfaceObj)obj=obj.parent;
-    if(obj.userData.childId!==undefined||obj.userData.surfaceObj)return obj;
+    while(obj.parent&&!obj.userData.childId&&!obj.userData.stageObj)obj=obj.parent;
+    if(obj.userData.childId!==undefined||obj.userData.stageObj)return obj;
   }
   return null;
 }
@@ -1763,9 +1760,9 @@ function s3dDblClick(e){
   if(grp.userData.childId!==undefined){
     var ch=null;(ld.children||[]).forEach(function(c){if(c.id===grp.userData.childId)ch=c;});
     if(ch)showNodeEdit3D(ch);
-  } else if(grp.userData.surfaceObj){
-    var sf=null;(_surfaces||[]).forEach(function(s){if(s.id===grp.userData.surfaceId)sf=s;});
-    if(sf)editSurface(sf.id);
+  } else if(grp.userData.stageObj){
+    var sf=null;(_objects||[]).forEach(function(s){if(s.id===grp.userData.stageObjId)sf=s;});
+    if(sf)editObject(sf.id);
   }
 }
 
@@ -1827,19 +1824,18 @@ function s3dDrop(e){
   _layDragId=null;
 }
 
+function toggleLayoutMode(){setLayoutMode(_layMode==='3d'?'2d':'3d');}
 function setLayoutMode(mode){
   _layMode=mode;
-  var b2d=document.getElementById('lay-mode-2d'),b3d=document.getElementById('lay-mode-3d');
   var w2d=document.getElementById('lay-2d-wrap'),w3d=document.getElementById('lay-3d-wrap');
   var hint=document.getElementById('lay-hint'),detWrap=document.getElementById('lay-detail-wrap');
+  var btn=document.getElementById('btn-lay-mode');
   if(mode==='3d'){
-    b2d.style.background='transparent';b2d.style.color='#64748b';
-    b3d.style.background='#14532d';b3d.style.color='#86efac';
     w2d.style.display='none';w3d.style.display='block';
+    if(btn){btn.style.background='#14532d';btn.style.color='#86efac';}
     if(hint)hint.textContent='Click to select. Drag gizmo to move. Double-click to edit. Scroll=zoom, Drag=orbit.';
     if(detWrap)detWrap.style.display='none';
     s3dInit();
-    // Preload profile cache for beam widths, then render
     if(!window._profileCache){
       window._profileCache={};
       ra('GET','/api/dmx-profiles',null,function(profs){
@@ -1848,10 +1844,9 @@ function setLayoutMode(mode){
       });
     } else { s3dLoadChildren(); }
   } else {
-    _s3dSyncToLd(); // write 3D gizmo moves back to ld before switching
-    b3d.style.background='transparent';b3d.style.color='#64748b';
-    b2d.style.background='#14532d';b2d.style.color='#86efac';
+    _s3dSyncToLd();
     w3d.style.display='none';w2d.style.display='block';
+    if(btn){btn.style.background='';btn.style.color='';}
     if(hint)hint.textContent='Drag performers from sidebar onto canvas. Double-click a node to edit. (0,0)=bottom-left.';
     if(detWrap)detWrap.style.display='flex';
     drawLayout();renderSidebar();
@@ -2685,137 +2680,251 @@ function selectOnCanvas(type,id){
   if(!_s3d.inited){setLayoutMode('3d');setTimeout(function(){selectOnCanvas(type,id);},500);return;}
   _s3d.nodes.forEach(function(grp){
     if(type==='fixture'&&grp.userData.childId===id){_s3d.selected=grp;_s3d.tctl.attach(grp);}
-    if(type==='surface'&&grp.userData.surfaceId===id){_s3d.selected=grp;_s3d.tctl.attach(grp);}
+    if(type==='object'&&grp.userData.stageObjId===id){_s3d.selected=grp;_s3d.tctl.attach(grp);}
   });
 }
 
-// ── Surfaces (projection targets) ──────────────────────────────────────────
-var _surfaces=[];
+// ── Objects (stage objects) ──────────────────────────────────────────
+var _objects=[];
 
-function loadSurfaces(cb){
-  ra('GET','/api/surfaces',null,function(d){_surfaces=d||[];renderSurfacesSidebar();if(cb)cb();});
+function loadObjects(cb){
+  ra('GET','/api/objects',null,function(d){_objects=d||[];renderObjectsSidebar();if(cb)cb();});
 }
 
-function renderSurfacesSidebar(){
-  var el=document.getElementById('lay-surfaces');if(!el)return;
-  if(!_surfaces.length){el.innerHTML='<p style="color:#555;font-size:.82em">No surfaces.</p>';return;}
+function renderObjectsSidebar(){
+  var el=document.getElementById('lay-objects');if(!el)return;
+  if(!_objects.length){el.innerHTML='<p style="color:#555;font-size:.82em">No objects.</p>';return;}
   var h='';
-  _surfaces.forEach(function(s){
+  _objects.forEach(function(s){
     var col=s.color||'#334155';
-    var icons={wall:'\u2b1b',floor:'\u2b1c',truss:'\u2501',screen:'\u25fb',custom:'\u25a1'};
-    var icon=icons[s.surfaceType||'custom']||'\u25a1';
+    var icons={wall:'\u2b1b',floor:'\u2b1c',truss:'\u2501',screen:'\u25fb',prop:'\u25c6',custom:'\u25a1'};
+    var icon=icons[s.objectType||'custom']||'\u25a1';
+    var lockIcon=s.stageLocked?'<span title="Locked to stage" style="color:#64748b;font-size:.7em">\ud83d\udd12</span>':'';
+    var mobIcon=s.mobility==='moving'?'<span title="Moving" style="color:#f59e0b;font-size:.65em">\u2194</span>':'';
+    var patIcon=(s.patrol&&s.patrol.enabled)?'<span title="Patrol" style="color:#38bdf8;font-size:.65em">\u21c4</span>':'';
     h+='<div style="padding:.3em 0;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:.4em">';
     h+='<span style="color:'+col+';font-size:.9em;flex-shrink:0">'+icon+'</span>';
-    h+='<span style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer" onclick="selectOnCanvas(\'surface\','+s.id+')">'+escapeHtml(s.name)+'</span>';
-    h+='<span style="cursor:pointer;color:#3b82f6;font-size:.8em" onclick="editSurface('+s.id+')">\u270e</span>';
-    h+='<span style="cursor:pointer;color:#f66;font-size:.8em" onclick="delSurface('+s.id+')">\u2715</span>';
+    h+='<span style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer" onclick="selectOnCanvas(\'object\','+s.id+')">'+escapeHtml(s.name)+lockIcon+mobIcon+patIcon+'</span>';
+    h+='<span style="cursor:pointer;color:#3b82f6;font-size:.8em" onclick="editObject('+s.id+')">\u270e</span>';
+    h+='<span style="cursor:pointer;color:#f66;font-size:.8em" onclick="delObject('+s.id+')">\u2715</span>';
     h+='</div>';
   });
   el.innerHTML=h;
 }
 
-function newSurface(){
-  var h='<label>Type</label><select id="sf-type" onchange="sfTypeChange()">';
+function newObject(){
+  var h='<label>Type</label><select id="sf-type" onchange="objTypeChange()">';
   h+='<option value="wall">Wall / Backdrop</option>';
   h+='<option value="floor">Floor / Platform</option>';
   h+='<option value="truss">Truss / Bar</option>';
   h+='<option value="screen">Projection Screen</option>';
-  h+='<option value="custom">Custom Surface</option>';
+  h+='<option value="prop">Prop / Person</option>';
+  h+='<option value="custom">Custom Object</option>';
+  h+='</select>';
+  h+='<label>Mobility</label><select id="sf-mob">';
+  h+='<option value="static">Static</option>';
+  h+='<option value="moving">Moving</option>';
   h+='</select>';
   h+='<label>Name</label><input id="sf-name" value="" style="width:100%">';
   h+='<label>Color</label><input id="sf-color" type="color" value="#334155">';
+  h+='<div style="margin:.5em 0"><label style="cursor:pointer"><input type="checkbox" id="sf-lock" onchange="objLockChange()" checked> Lock to stage dimensions</label></div>';
+  h+='<div id="sf-dims">';
   h+='<label>Position X (mm)</label><input id="sf-x" type="number" value="0" style="width:100px">';
   h+=' <label style="display:inline;margin-left:.5em">Y (mm)</label><input id="sf-y" type="number" value="0" style="width:100px">';
   h+=' <label style="display:inline;margin-left:.5em">Z (mm)</label><input id="sf-z" type="number" value="0" style="width:100px">';
   h+='<label>Width (mm)</label><input id="sf-w" type="number" value="3000" min="100" style="width:100px">';
   h+=' <label style="display:inline;margin-left:.5em">Height (mm)</label><input id="sf-h" type="number" value="2000" min="100" style="width:100px">';
   h+=' <label style="display:inline;margin-left:.5em">Depth (mm)</label><input id="sf-d" type="number" value="100" min="0" style="width:100px">';
+  h+='</div>';
   h+='<label>Opacity <span id="sf-op-val">30%</span></label><input id="sf-op" type="range" min="10" max="100" value="30" style="width:120px" oninput="document.getElementById(\'sf-op-val\').textContent=this.value+\'%\'">';
-  h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="createSurface()">Add to Stage</button></div>';
-  document.getElementById('modal-title').textContent='New Projection Surface';
+  h+='<div id="sf-patrol" style="margin-top:.6em;padding:.5em;border:1px solid #1e293b;border-radius:4px">';
+  h+='<label style="cursor:pointer"><input type="checkbox" id="sf-pat-en" onchange="_patToggle()"> Patrol (auto back-and-forth)</label>';
+  h+='<div id="sf-pat-opts" style="display:none;margin-top:.4em">';
+  h+='<label>Axis</label><select id="sf-pat-axis"><option value="x">Side to side (X)</option><option value="z">Front to back (Z)</option><option value="xz">Diagonal (X+Z)</option></select>';
+  h+='<label>Speed</label><select id="sf-pat-speed" onchange="var c=document.getElementById(\'sf-pat-cyc\');c.style.display=this.value===\'custom\'?\'inline\':\'none\'"><option value="slow">Slow (20s)</option><option value="medium" selected>Medium (10s)</option><option value="fast">Fast (5s)</option><option value="custom">Custom</option></select>';
+  h+=' <input id="sf-pat-cyc" type="number" value="10" min="1" max="120" style="width:60px;display:none"> <span id="sf-pat-cyc-lbl" style="font-size:.8em;color:#666">sec</span>';
+  h+='<label>Range</label><input id="sf-pat-start" type="number" value="10" min="0" max="100" style="width:50px">% to <input id="sf-pat-end" type="number" value="90" min="0" max="100" style="width:50px">% of stage';
+  h+='<label>Easing</label><select id="sf-pat-ease"><option value="sine">Smooth (sine)</option><option value="linear">Linear</option></select>';
+  h+='</div></div>';
+  h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="createObject()">Add to Stage</button></div>';
+  document.getElementById('modal-title').textContent='New Stage Object';
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
+  objTypeChange();
 }
 
-function sfTypeChange(){
+function _sfStageMm(){
+  // Return stage dims in mm from cached _stageData or defaults
+  var s=window._stageData||{w:3,h:2,d:1.5};
+  return {sw:Math.round(s.w*1000),sh:Math.round(s.h*1000),sd:Math.round(s.d*1000)};
+}
+function objTypeChange(){
   var t=document.getElementById('sf-type').value;
+  var sm=_sfStageMm();
+  var lockable=(t==='wall'||t==='floor');
+  var lk=document.getElementById('sf-lock');
+  if(lk){lk.checked=lockable;lk.disabled=!lockable;}
   var presets={
-    wall:  {name:'Back Wall',   color:'#334155',w:3000,h:2000,op:25},
-    floor: {name:'Stage Floor', color:'#1a2744',w:3000,h:100, op:20},
-    truss: {name:'Truss Bar',   color:'#555555',w:3000,h:50,  op:60},
-    screen:{name:'Projection',  color:'#0f172a',w:2000,h:1500,op:40},
-    custom:{name:'Surface',     color:'#334155',w:2000,h:1500,op:30},
+    wall:  {name:'Back Wall',   color:'#334155',w:sm.sw,h:sm.sh,d:100,op:25},
+    floor: {name:'Stage Floor', color:'#1a2744',w:sm.sw,h:sm.sd+1000,d:100,op:20},
+    truss: {name:'Truss Bar',   color:'#555555',w:sm.sw,h:50,d:100,op:60},
+    screen:{name:'Projection',  color:'#0f172a',w:2000,h:1500,d:100,op:40},
+    prop:  {name:'Prop',        color:'#FF6B35',w:500,h:1800,d:500,op:40},
+    custom:{name:'Object',     color:'#334155',w:2000,h:1500,d:100,op:30},
   };
   var p=presets[t]||presets.custom;
   var n=document.getElementById('sf-name');if(n&&!n.value)n.value=p.name;
   var c=document.getElementById('sf-color');if(c)c.value=p.color;
   var w=document.getElementById('sf-w');if(w)w.value=p.w;
   var h=document.getElementById('sf-h');if(h)h.value=p.h;
+  var d=document.getElementById('sf-d');if(d)d.value=p.d;
   var o=document.getElementById('sf-op');if(o){o.value=p.op;var ov=document.getElementById('sf-op-val');if(ov)ov.textContent=p.op+'%';}
+  // Set mobility default based on type
+  var mob=document.getElementById('sf-mob');
+  if(mob){
+    var movingTypes={prop:true,custom:true};
+    mob.value=movingTypes[t]?'moving':'static';
+  }
+  // Show/hide patrol section for moving types
+  var patDiv=document.getElementById('sf-patrol');
+  if(patDiv){
+    var isMoving=mob&&mob.value==='moving';
+    patDiv.style.display=isMoving?'block':'none';
+  }
+  objLockChange();
+  _patToggle();
+}
+function _patToggle(){
+  var en=document.getElementById('sf-pat-en');
+  var opts=document.getElementById('sf-pat-opts');
+  if(en&&opts)opts.style.display=en.checked?'block':'none';
+}
+function objLockChange(){
+  var lk=document.getElementById('sf-lock');
+  var dims=document.getElementById('sf-dims');
+  if(!lk||!dims)return;
+  var locked=lk.checked&&!lk.disabled;
+  dims.style.opacity=locked?'0.5':'1';
+  dims.style.pointerEvents=locked?'none':'auto';
 }
 
-function createSurface(){
+function createObject(){
+  var lk=document.getElementById('sf-lock');
+  var locked=lk&&lk.checked&&!lk.disabled;
   var body={
-    name:document.getElementById('sf-name').value||'Surface',
+    name:document.getElementById('sf-name').value||'Object',
     color:document.getElementById('sf-color').value,
-    surfaceType:document.getElementById('sf-type')?document.getElementById('sf-type').value:'custom',
+    objectType:document.getElementById('sf-type')?document.getElementById('sf-type').value:'custom',
     transform:{
       pos:[parseInt(document.getElementById('sf-x').value)||0,parseInt(document.getElementById('sf-y').value)||0,parseInt(document.getElementById('sf-z').value)||0],
       rot:[0,0,0],
       scale:[parseInt(document.getElementById('sf-w').value)||2000,parseInt(document.getElementById('sf-h').value)||1500,parseInt(document.getElementById('sf-d').value)||100]
     },
     opacity:parseInt(document.getElementById('sf-op').value)||30,
+    mobility:document.getElementById('sf-mob').value||'static',
+    stageLocked:locked,
   };
-  ra('POST','/api/surfaces',body,function(r){
-    closeModal();if(r&&r.ok){loadSurfaces();drawLayout();if(_s3d.inited)s3dLoadChildren();}
+  var patEn=document.getElementById('sf-pat-en');
+  if(patEn&&patEn.checked){
+    var sp=document.getElementById('sf-pat-speed');
+    body.patrol={enabled:true,axis:document.getElementById('sf-pat-axis').value||'x',
+      speedPreset:sp?sp.value:'medium',cycleS:parseFloat(document.getElementById('sf-pat-cyc').value)||10,
+      startPct:parseInt(document.getElementById('sf-pat-start').value)||10,
+      endPct:parseInt(document.getElementById('sf-pat-end').value)||90,
+      easing:document.getElementById('sf-pat-ease').value||'sine'};
+  }
+  ra('POST','/api/objects',body,function(r){
+    closeModal();if(r&&r.ok){loadObjects();drawLayout();if(_s3d.inited)s3dLoadChildren();}
   });
 }
 
-function editSurface(id){
-  var s=null;_surfaces.forEach(function(sf){if(sf.id===id)s=sf;});
+function editObject(id){
+  var s=null;_objects.forEach(function(sf){if(sf.id===id)s=sf;});
   if(!s)return;
   var t=s.transform||{pos:[0,0,0],rot:[0,0,0],scale:[2000,1500,1]};
+  var lockable=(s.objectType==='wall'||s.objectType==='floor');
+  var locked=!!s.stageLocked;
   var h='<label>Name</label><input id="sf-name" value="'+escapeHtml(s.name)+'" style="width:100%">';
   h+='<label>Color</label><input id="sf-color" type="color" value="'+(s.color||'#334155')+'">';
+  if(lockable){
+    h+='<div style="margin:.5em 0"><label style="cursor:pointer"><input type="checkbox" id="sf-lock" onchange="objLockChange()"'+(locked?' checked':'')+'>  Lock to stage dimensions</label></div>';
+  }
+  h+='<div id="sf-dims"'+(locked?' style="opacity:0.5;pointer-events:none"':'')+'>';
   h+='<label>Position X (mm)</label><input id="sf-x" type="number" value="'+(t.pos[0]||0)+'" style="width:100px">';
   h+=' <label style="display:inline;margin-left:.5em">Y</label><input id="sf-y" type="number" value="'+(t.pos[1]||0)+'" style="width:100px">';
   h+=' <label style="display:inline;margin-left:.5em">Z</label><input id="sf-z" type="number" value="'+(t.pos[2]||0)+'" style="width:100px">';
   h+='<label>Width (mm)</label><input id="sf-w" type="number" value="'+(t.scale[0]||2000)+'" min="100" style="width:100px">';
   h+=' <label style="display:inline;margin-left:.5em">Height</label><input id="sf-h" type="number" value="'+(t.scale[1]||1500)+'" min="100" style="width:100px">';
   h+=' <label style="display:inline;margin-left:.5em">Depth</label><input id="sf-d" type="number" value="'+(t.scale[2]||100)+'" min="0" style="width:100px">';
-  h+='<label>Opacity</label><input id="sf-op" type="range" min="10" max="100" value="'+(s.opacity||30)+'" style="width:120px">';
-  h+='<div style="margin-top:.8em;display:flex;gap:.5em">';
-  h+='<button class="btn btn-on" onclick="updateSurface('+id+')">Save</button>';
-  h+='<button class="btn btn-off" onclick="delSurface('+id+')">Delete</button>';
   h+='</div>';
-  document.getElementById('modal-title').textContent='Edit Surface: '+s.name;
+  h+='<label>Opacity</label><input id="sf-op" type="range" min="10" max="100" value="'+(s.opacity||30)+'" style="width:120px">';
+  if(!locked){
+    h+='<label>Mobility</label><select id="sf-mob">';
+    h+='<option value="static"'+((s.mobility||'static')==='static'?' selected':'')+'>Static</option>';
+    h+='<option value="moving"'+((s.mobility||'static')==='moving'?' selected':'')+'>Moving</option>';
+    h+='</select>';
+  }
+  var isMoving=(s.mobility==='moving');
+  var pat=s.patrol||{};
+  if(isMoving){
+    h+='<div id="sf-patrol" style="margin-top:.6em;padding:.5em;border:1px solid #1e293b;border-radius:4px">';
+    h+='<label style="cursor:pointer"><input type="checkbox" id="sf-pat-en" onchange="_patToggle()"'+(pat.enabled?' checked':'')+'>  Patrol (auto back-and-forth)</label>';
+    h+='<div id="sf-pat-opts" style="'+(pat.enabled?'':'display:none;')+'margin-top:.4em">';
+    h+='<label>Axis</label><select id="sf-pat-axis"><option value="x"'+((pat.axis||'x')==='x'?' selected':'')+'>Side to side (X)</option><option value="z"'+((pat.axis)==='z'?' selected':'')+'>Front to back (Z)</option><option value="xz"'+((pat.axis)==='xz'?' selected':'')+'>Diagonal (X+Z)</option></select>';
+    h+='<label>Speed</label><select id="sf-pat-speed" onchange="var c=document.getElementById(\'sf-pat-cyc\');c.style.display=this.value===\'custom\'?\'inline\':\'none\'"><option value="slow"'+((pat.speedPreset)==='slow'?' selected':'')+'>Slow (20s)</option><option value="medium"'+((pat.speedPreset||'medium')==='medium'?' selected':'')+'>Medium (10s)</option><option value="fast"'+((pat.speedPreset)==='fast'?' selected':'')+'>Fast (5s)</option><option value="custom"'+((pat.speedPreset)==='custom'?' selected':'')+'>Custom</option></select>';
+    h+=' <input id="sf-pat-cyc" type="number" value="'+(pat.cycleS||10)+'" min="1" max="120" style="width:60px;'+(pat.speedPreset==='custom'?'':'display:none')+'">';
+    h+='<label>Range</label><input id="sf-pat-start" type="number" value="'+(pat.startPct||10)+'" min="0" max="100" style="width:50px">% to <input id="sf-pat-end" type="number" value="'+(pat.endPct||90)+'" min="0" max="100" style="width:50px">% of stage';
+    h+='<label>Easing</label><select id="sf-pat-ease"><option value="sine"'+((pat.easing||'sine')==='sine'?' selected':'')+'>Smooth (sine)</option><option value="linear"'+((pat.easing)==='linear'?' selected':'')+'>Linear</option></select>';
+    h+='</div></div>';
+  }
+  h+='<div style="margin-top:.8em;display:flex;gap:.5em">';
+  h+='<button class="btn btn-on" onclick="updateObject('+id+')">Save</button>';
+  h+='<button class="btn btn-off" onclick="delObject('+id+')">Delete</button>';
+  h+='</div>';
+  document.getElementById('modal-title').textContent='Edit Object: '+s.name;
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
 }
 
-function updateSurface(id){
+function updateObject(id){
+  var lk=document.getElementById('sf-lock');
+  var locked=lk&&lk.checked;
+  // Preserve objectType from original object
+  var origType='custom';_objects.forEach(function(sf){if(sf.id===id)origType=sf.objectType||'custom';});
   var body={
     name:document.getElementById('sf-name').value,
     color:document.getElementById('sf-color').value,
+    objectType:origType,
     transform:{
       pos:[parseInt(document.getElementById('sf-x').value)||0,parseInt(document.getElementById('sf-y').value)||0,parseInt(document.getElementById('sf-z').value)||0],
       rot:[0,0,0],
       scale:[parseInt(document.getElementById('sf-w').value)||2000,parseInt(document.getElementById('sf-h').value)||1500,parseInt(document.getElementById('sf-d').value)||100]
     },
     opacity:parseInt(document.getElementById('sf-op').value)||30,
+    mobility:(document.getElementById('sf-mob')?document.getElementById('sf-mob').value:null)||'static',
+    stageLocked:!!locked,
   };
-  // Delete and recreate (simple approach since surfaces API doesn't have PUT)
-  ra('DELETE','/api/surfaces/'+id,null,function(){
-    ra('POST','/api/surfaces',body,function(r){
-      closeModal();loadSurfaces();drawLayout();if(_s3d.inited)s3dLoadChildren();
+  var patEn=document.getElementById('sf-pat-en');
+  if(patEn&&patEn.checked){
+    var sp=document.getElementById('sf-pat-speed');
+    body.patrol={enabled:true,axis:document.getElementById('sf-pat-axis').value||'x',
+      speedPreset:sp?sp.value:'medium',cycleS:parseFloat(document.getElementById('sf-pat-cyc').value)||10,
+      startPct:parseInt(document.getElementById('sf-pat-start').value)||10,
+      endPct:parseInt(document.getElementById('sf-pat-end').value)||90,
+      easing:document.getElementById('sf-pat-ease').value||'sine'};
+  }
+  // Delete and recreate (simple approach since objects API doesn't have PUT)
+  ra('DELETE','/api/objects/'+id,null,function(){
+    ra('POST','/api/objects',body,function(r){
+      closeModal();loadObjects();drawLayout();if(_s3d.inited)s3dLoadChildren();
     });
   });
 }
 
-function delSurface(id){
-  if(!confirm('Delete this surface?'))return;
-  ra('DELETE','/api/surfaces/'+id,null,function(){
-    closeModal();loadSurfaces();drawLayout();if(_s3d.inited)s3dLoadChildren();
+function delObject(id){
+  if(!confirm('Delete this object?'))return;
+  ra('DELETE','/api/objects/'+id,null,function(){
+    closeModal();loadObjects();drawLayout();if(_s3d.inited)s3dLoadChildren();
   });
 }
 
@@ -2857,7 +2966,7 @@ function newSpatialFx(){
   h+='<label>Blend</label><select id="sfx-blend"><option>replace</option><option>add</option><option>multiply</option><option>screen</option></select>';
   h+='</div>';
   h+='<div id="sfx-local-opts" style="display:none"><label>Action Type</label><select id="sfx-atype">';
-  var aNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Wipe','Scanner','Sparkle','Gradient','DMX Scene','Pan/Tilt Move','Gobo Select','Color Wheel'];
+  var aNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Wipe','Scanner','Sparkle','Gradient','DMX Scene','Pan/Tilt Move','Gobo Select','Color Wheel','Track'];
   aNames.forEach(function(n,i){h+='<option value="'+i+'">'+n+'</option>';});
   h+='</select></div>';
   h+='<div style="margin-top:1em"><button class="btn btn-on" onclick="saveSpatialFx()">Create</button></div>';
@@ -3096,7 +3205,7 @@ function _clipPickerOpts(selectedVal){
   var h='<optgroup label="Spatial Effects">';
   _spatialFx.forEach(function(f){h+='<option value="sfx:'+f.id+'"'+(selectedVal==='sfx:'+f.id?' selected':'')+'>'+escapeHtml(f.name)+'</option>';});
   h+='</optgroup><optgroup label="Classic Actions">';
-  var aNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Wipe','Scanner','Sparkle','Gradient','DMX Scene','Pan/Tilt Move','Gobo Select','Color Wheel'];
+  var aNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Wipe','Scanner','Sparkle','Gradient','DMX Scene','Pan/Tilt Move','Gobo Select','Color Wheel','Track'];
   _acts.forEach(function(a){
     var tn=aNames[a.type]||'Type '+a.type;
     h+='<option value="act:'+a.id+'"'+(selectedVal==='act:'+a.id?' selected':'')+'>'+escapeHtml(a.name)+' ('+tn+')</option>';
@@ -3423,11 +3532,14 @@ function toggleHelp(){
 function loadLayout(){
   ra('GET','/api/settings',null,function(s){
     if(s)units=s.units||0;
-    ra('GET','/api/layout',null,function(d){
-      if(!d)return;ld=d;phW=d.canvasW||10000;phH=d.canvasH||5000;
-      _fixtures=d.fixtures||[];
-      drawLayout();renderFixturesSidebar();
-      loadSurfaces();
+    ra('GET','/api/stage',null,function(st){
+      if(st)window._stageData=st;
+      ra('GET','/api/layout',null,function(d){
+        if(!d)return;ld=d;phW=d.canvasW||10000;phH=d.canvasH||5000;
+        _fixtures=d.fixtures||[];
+        drawLayout();renderFixturesSidebar();
+        loadObjects();
+      });
     });
   });
 }
@@ -3523,8 +3635,8 @@ function drawLayout(){
   ctx.fillText('Stage: '+fmtCoord(phW)+' x '+fmtCoord(phH),6,14);
   ctx.textAlign='right';
   ctx.fillText('(0,0)',8,H-4);
-  // Draw projection surfaces
-  (_surfaces||[]).forEach(function(s){
+  // Draw stage objects
+  (_objects||[]).forEach(function(s){
     var t=s.transform||{pos:[0,0,0],scale:[2000,1500,1]};
     var sx=t.pos[0]*W/phW,sy=H-t.pos[1]*H/phH;
     var sw=t.scale[0]*W/phW,sh=t.scale[1]*H/phH;
@@ -3532,13 +3644,18 @@ function drawLayout(){
     ctx.fillStyle=s.color||'#334155';
     ctx.fillRect(sx,sy-sh,sw,sh);
     ctx.globalAlpha=0.6;
-    ctx.strokeStyle=s.color||'#334155';ctx.lineWidth=1;ctx.strokeRect(sx,sy-sh,sw,sh);
+    ctx.strokeStyle=s.color||'#334155';ctx.lineWidth=1;
+    if(s._temporal){ctx.setLineDash([5,3]);}
+    ctx.strokeRect(sx,sy-sh,sw,sh);
+    if(s._temporal){ctx.setLineDash([]);}
     ctx.globalAlpha=1;
     ctx.fillStyle='#aaa';ctx.font='9px sans-serif';ctx.textAlign='left';
-    ctx.fillText(s.name||'Surface',sx+4,sy-sh+12);
+    var lbl2d=s.name||'Object';
+    if(s._temporal&&s._ttl!=null){lbl2d+=' ['+s._ttl+'s]';}
+    ctx.fillText(lbl2d,sx+4,sy-sh+12);
   });
   var placed=(_fixtures||[]).filter(_isFixturePlaced);
-  if(!placed.length&&!_surfaces.length){
+  if(!placed.length&&!_objects.length){
     ctx.fillStyle='#555';ctx.font='13px sans-serif';ctx.textAlign='center';
     ctx.fillText('Drag fixtures from the sidebar to place them.',W/2,H/2);
     return;
@@ -3616,9 +3733,9 @@ function emuLoadStage(){
   ra('GET','/api/layout',null,function(lay){
     ra('GET','/api/children',null,function(ch){
       ra('GET','/api/fixtures',null,function(fx){
-        ra('GET','/api/surfaces',null,function(surfs){
+        ra('GET','/api/objects',null,function(surfs){
         ra('GET','/api/spatial-effects',null,function(sfx){
-          _emuStage={layout:lay,children:ch||[],fixtures:fx||[],surfaces:surfs||[],
+          _emuStage={layout:lay,children:ch||[],fixtures:fx||[],objects:surfs||[],
             spatialFx:sfx||[],cw:(lay||{}).canvasW||10000,ch:(lay||{}).canvasH||5000};
           // Cache profile beamWidths for beam cone rendering
           if(!window._profileCache){
@@ -3661,6 +3778,10 @@ function emuLoadStage(){
         var ph=document.getElementById('tl-playhead');if(ph)ph.style.left='60px';
         var td=document.getElementById('tl-time');if(td)td.textContent='00:00.0';
       }
+    });
+    // Refresh objects to include temporal objects
+    ra('GET','/api/objects',null,function(objs){
+      if(_emuStage&&objs)_emuStage.objects=objs;
     });
     emuDraw();
   },1000);
@@ -3830,7 +3951,7 @@ function emuDraw(){
   if(!_emuStage._logged){_emuStage._logged=true;
     var pLed=layoutFixtures.filter(function(f){return f.fixtureType!=='dmx'&&f.positioned;}).length;
     var pDmx=layoutFixtures.filter(function(f){return f.fixtureType==='dmx'&&f.positioned;}).length;
-    console.log('[SlyLED EMU] '+layoutFixtures.length+' layout fixtures ('+pLed+' LED + '+pDmx+' DMX positioned), '+children.length+' children, '+emuSurfs.length+' surfaces');
+    console.log('[SlyLED EMU] '+layoutFixtures.length+' layout fixtures ('+pLed+' LED + '+pDmx+' DMX positioned), '+children.length+' children, '+emuSurfs.length+' objects');
   }
 
   var cw=(layout&&layout.canvasW)||10000;
@@ -3843,8 +3964,8 @@ function emuDraw(){
   for(var gx=1;gx<10;gx++){var x=gx*W/10;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
   for(var gy=1;gy<5;gy++){var y=gy*H/5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
 
-  // Surfaces (draw behind fixtures)
-  var emuSurfs=(_emuStage&&_emuStage.surfaces)||[];
+  // Objects (draw behind fixtures)
+  var emuSurfs=(_emuStage&&_emuStage.objects)||[];
   emuSurfs.forEach(function(s){
     var t=s.transform||{pos:[0,0,0],scale:[2000,1500,1]};
     var sx=t.pos[0]*W/cw,sy=H-t.pos[1]*H/ch;
@@ -3855,10 +3976,15 @@ function emuDraw(){
     if(clW>0&&clH>0){
       ctx.globalAlpha=(s.opacity||30)/100;
       ctx.fillStyle=s.color||'#334155';ctx.fillRect(clX,clY,clW,clH);
-      ctx.globalAlpha=0.5;ctx.strokeStyle=s.color||'#334155';ctx.lineWidth=1;ctx.strokeRect(clX,clY,clW,clH);
+      ctx.globalAlpha=0.5;ctx.strokeStyle=s.color||'#334155';ctx.lineWidth=1;
+      if(s._temporal){ctx.setLineDash([4,3]);}
+      ctx.strokeRect(clX,clY,clW,clH);
+      if(s._temporal){ctx.setLineDash([]);}
       ctx.globalAlpha=1;
       ctx.fillStyle='#667';ctx.font='7px sans-serif';ctx.textAlign='left';
-      ctx.fillText(s.name||'',clX+3,clY+10);
+      var label=s.name||'';
+      if(s._temporal&&s._ttl!=null){label+=' ['+s._ttl+'s]';}
+      ctx.fillText(label,clX+3,clY+10);
     }
   });
 
@@ -4170,13 +4296,13 @@ function saveLayout(btn){
     function(r){
       if(!r||!r.ok){_btnSaved(btn,false);return;}
       toSave.forEach(function(f){f.positioned=true;f._placed=false;});
-      // Also save any moved surfaces
+      // Also save any moved objects
       var pending=0;
-      (_surfaces||[]).forEach(function(s){
+      (_objects||[]).forEach(function(s){
         if(s.transform){
           pending++;
-          ra('DELETE','/api/surfaces/'+s.id,null,function(){
-            ra('POST','/api/surfaces',s,function(){pending--;if(!pending)_btnSaved(btn,true);});
+          ra('DELETE','/api/objects/'+s.id,null,function(){
+            ra('POST','/api/objects',s,function(){pending--;if(!pending)_btnSaved(btn,true);});
           });
         }
       });
@@ -4271,7 +4397,7 @@ function cvUp(){drag=null;var cv=document.getElementById('lcv');if(cv)cv.style.c
 
 // ── Actions library ──────────────────────────────────────────────────────────
 var _acts=[];
-var _typeNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Color Wipe','Scanner','Sparkle','Gradient','DMX Scene','Pan/Tilt Move','Gobo Select','Color Wheel'];
+var _typeNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Color Wipe','Scanner','Sparkle','Gradient','DMX Scene','Pan/Tilt Move','Gobo Select','Color Wheel','Track'];
 var _dirNames=['East','North','West','South'];
 var _palNames=['Classic','Ocean','Lava','Forest','Party','Heat','Cool','Pastel'];
 function rgb2h(r,g,b){return'#'+('0'+r.toString(16)).slice(-2)+('0'+g.toString(16)).slice(-2)+('0'+b.toString(16)).slice(-2);}
@@ -4406,6 +4532,22 @@ function _showActModal(a){
   h+=' <label style="display:inline;margin-left:.5em">End Tilt</label><input type="number" id="ae-pt-et" value="'+(a?a.tiltEnd||0.5:0.5)+'" min="0" max="1" step="0.01" style="width:80px">';
   h+='<label>Speed (s)</label><input type="number" id="ae-pt-spd" value="'+((a?a.speedMs||5000:5000)/1000)+'" min="0.1" max="60" step="0.1" style="width:80px">';
   h+='</div>';
+  // Track: follow moving objects
+  h+='<div id="ae-track"'+(t===18?'':' style="display:none"')+'>';
+  h+='<label>Target Objects (moving)</label><div id="ae-track-objs" style="max-height:120px;overflow-y:auto;border:1px solid #333;border-radius:4px;padding:.3em;background:#1a1a1a">';
+  var trackIds=a&&a.trackTargets?a.trackTargets:[];
+  (_objects||[]).filter(function(o){return o.mobility==='moving';}).forEach(function(o){
+    var chk=trackIds.indexOf(o.id)>=0?' checked':'';
+    h+='<label style="display:block;cursor:pointer;padding:.15em 0"><input type="checkbox" class="ae-track-cb" value="'+o.id+'"'+chk+'> '+escapeHtml(o.name)+'</label>';
+  });
+  if(!(_objects||[]).filter(function(o){return o.mobility==='moving';}).length)h+='<p style="color:#555;font-size:.8em">No moving objects defined.</p>';
+  h+='</div>';
+  h+='<label>Cycle Time (ms)</label><input type="number" id="ae-trk-cycle" value="'+(a?a.cycleMs||2000:2000)+'" min="100" max="60000" style="width:100px">';
+  h+='<label>Offset X (mm)</label><input type="number" id="ae-trk-ox" value="'+(a?a.offsetX||0:0)+'" style="width:80px">';
+  h+=' <label style="display:inline;margin-left:.5em">Y (mm)</label><input type="number" id="ae-trk-oy" value="'+(a?a.offsetY||0:0)+'" style="width:80px">';
+  h+=' <label style="display:inline;margin-left:.5em">Z (mm)</label><input type="number" id="ae-trk-oz" value="'+(a?a.offsetZ||0:0)+'" style="width:80px">';
+  h+='<div style="margin-top:.4em"><label style="cursor:pointer"><input type="checkbox" id="ae-trk-spread"'+(a&&a.autoSpread?' checked':'')+'>  Auto-spread across targets</label></div>';
+  h+='</div>';
   // WLED Overrides section (hidden by default, shown if WLED devices exist)
   h+='<div id="ae-wled-section" style="display:none;margin-top:1em;border:1px solid #444;border-radius:6px;padding:.6em">';
   h+='<div onclick="var el=document.getElementById(\'ae-wled-inner\');el.style.display=el.style.display===\'none\'?\'block\':\'none\'" style="cursor:pointer;font-weight:bold;color:#f60">';
@@ -4493,6 +4635,7 @@ function _aeTypeChg(){
   document.getElementById('ae-twinkle').style.display=(t===8||t===12)?'block':'none'; // Twinkle + Sparkle
   document.getElementById('ae-dmx').style.display=(t>=14&&t<=17)?'block':'none';
   document.getElementById('ae-ptmove').style.display=t===15?'block':'none';
+  document.getElementById('ae-track').style.display=t===18?'block':'none';
 }
 
 function _aeSubmit(id,btn){
@@ -4532,6 +4675,16 @@ function _aeSubmit(id,btn){
   if(t===15){body.panStart=parseFloat(document.getElementById('ae-pt-sp').value)||0;body.tiltStart=parseFloat(document.getElementById('ae-pt-st').value)||0.5;body.panEnd=parseFloat(document.getElementById('ae-pt-ep').value)||1;body.tiltEnd=parseFloat(document.getElementById('ae-pt-et').value)||0.5;body.speedMs=_s2ms('ae-pt-spd',5000);}
   if(t===16){body.gobo=parseInt(document.getElementById('ae-gobo').value)||0;}
   if(t===17){body.colorWheel=parseInt(document.getElementById('ae-colorwheel').value)||0;}
+  if(t===18){
+    var tcbs=document.querySelectorAll('.ae-track-cb:checked');
+    var tids=[];tcbs.forEach(function(cb){tids.push(parseInt(cb.value));});
+    body.trackTargets=tids;
+    body.cycleMs=parseInt(document.getElementById('ae-trk-cycle').value)||2000;
+    body.offsetX=parseInt(document.getElementById('ae-trk-ox').value)||0;
+    body.offsetY=parseInt(document.getElementById('ae-trk-oy').value)||0;
+    body.offsetZ=parseInt(document.getElementById('ae-trk-oz').value)||0;
+    body.autoSpread=!!document.getElementById('ae-trk-spread').checked;
+  }
   // WLED overrides (optional)
   var wfx=document.getElementById('ae-wled-fx');
   if(wfx&&wfx.value!=='')body.wledFxOverride=parseInt(wfx.value);

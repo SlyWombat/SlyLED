@@ -258,16 +258,220 @@ def run():
         c.delete('/api/fixtures/' + str(dmx_id))
         c.delete('/api/fixtures/' + str(dmx_id2))
 
-        # ── Surfaces (Phase 2) ─────────────────────────────────────────
-        r = c.get('/api/surfaces')
-        ok('GET /api/surfaces', r.status_code == 200)
+        # ── Objects (Phase 2 — renamed from Surfaces) ─────────────────
+        r = c.get('/api/objects')
+        ok('GET /api/objects', r.status_code == 200)
 
-        r = c.post('/api/surfaces', json={'name': 'Test Surface'})
-        ok('POST create surface', r.status_code == 200 and r.get_json().get('ok'))
-        surf_id = r.get_json().get('id')
+        # Backward compat alias
+        r2 = c.get('/api/surfaces')
+        ok('GET /api/surfaces alias', r2.status_code == 200)
 
-        r = c.delete('/api/surfaces/' + str(surf_id))
-        ok('DELETE surface', r.status_code == 200)
+        r = c.post('/api/objects', json={'name': 'Test Object'})
+        ok('POST create object', r.status_code == 200 and r.get_json().get('ok'))
+        obj_id = r.get_json().get('id')
+
+        # Verify default mobility
+        objs = c.get('/api/objects').get_json()
+        obj = [o for o in objs if o['id'] == obj_id][0]
+        ok('Object default mobility is static', obj.get('mobility') == 'static')
+        ok('Object has objectType field', 'objectType' in obj)
+
+        r = c.delete('/api/objects/' + str(obj_id))
+        ok('DELETE object', r.status_code == 200)
+
+        # Create object with mobility=moving
+        r = c.post('/api/objects', json={'name': 'Singer', 'objectType': 'prop', 'mobility': 'moving'})
+        ok('POST create moving object', r.status_code == 200)
+        moving_id = r.get_json().get('id')
+        objs = c.get('/api/objects').get_json()
+        mv = [o for o in objs if o['id'] == moving_id][0]
+        ok('Moving object mobility', mv.get('mobility') == 'moving')
+        ok('Moving object type prop', mv.get('objectType') == 'prop')
+
+        # PUT /api/objects/<id>/pos — real-time position update
+        r = c.put('/api/objects/' + str(moving_id) + '/pos', json={'pos': [3000, 900, 2000]})
+        ok('PUT object pos', r.status_code == 200 and r.get_json().get('ok'))
+        objs = c.get('/api/objects').get_json()
+        mv = [o for o in objs if o['id'] == moving_id][0]
+        ok('Object pos updated', mv['transform']['pos'] == [3000.0, 900.0, 2000.0])
+
+        # PUT pos validation
+        r = c.put('/api/objects/' + str(moving_id) + '/pos', json={'pos': [1, 2]})
+        ok('PUT pos rejects 2-element', r.status_code == 400)
+        r = c.put('/api/objects/99999/pos', json={'pos': [0, 0, 0]})
+        ok('PUT pos 404 for unknown', r.status_code == 404)
+
+        c.delete('/api/objects/' + str(moving_id))
+
+        # Stage-locked wall
+        c.post('/api/stage', json={'w': 5.0, 'h': 3.0, 'd': 2.0})
+        r = c.post('/api/objects', json={
+            'name': 'Back Wall', 'objectType': 'wall', 'stageLocked': True})
+        ok('POST create stage-locked wall', r.status_code == 200 and r.get_json().get('ok'))
+        wall_id = r.get_json().get('id')
+        objs = c.get('/api/objects').get_json()
+        wall = [o for o in objs if o['id'] == wall_id][0]
+        ok('Wall locked to stage W', wall['transform']['scale'][0] == 5000)
+        ok('Wall locked to stage H', wall['transform']['scale'][1] == 3000)
+        ok('Wall stageLocked flag', wall.get('stageLocked') is True)
+
+        # Stage-locked floor
+        r = c.post('/api/objects', json={
+            'name': 'Stage Floor', 'objectType': 'floor', 'stageLocked': True})
+        ok('POST create stage-locked floor', r.status_code == 200 and r.get_json().get('ok'))
+        floor_id = r.get_json().get('id')
+        objs = c.get('/api/objects').get_json()
+        floor_o = [o for o in objs if o['id'] == floor_id][0]
+        ok('Floor locked to stage W', floor_o['transform']['scale'][0] == 5000)
+        ok('Floor depth = stage D + 1m', floor_o['transform']['scale'][1] == 3000)
+
+        # Resize stage — locked objects auto-update
+        c.post('/api/stage', json={'w': 8.0, 'h': 4.0, 'd': 3.0})
+        objs = c.get('/api/objects').get_json()
+        wall = [o for o in objs if o['id'] == wall_id][0]
+        floor_o = [o for o in objs if o['id'] == floor_id][0]
+        ok('Wall resized on stage change W', wall['transform']['scale'][0] == 8000)
+        ok('Wall resized on stage change H', wall['transform']['scale'][1] == 4000)
+        ok('Floor resized on stage change W', floor_o['transform']['scale'][0] == 8000)
+        ok('Floor resized on stage change D+1m', floor_o['transform']['scale'][1] == 4000)
+
+        # Cleanup
+        c.delete('/api/objects/' + str(wall_id))
+        c.delete('/api/objects/' + str(floor_id))
+
+        # ── Temporal objects (#188) ───────────────────────────────────
+        r = c.post('/api/objects/temporal', json={'name': 'Person 1', 'pos': [5000, 900, 3000], 'ttl': 60})
+        ok('POST create temporal object', r.status_code == 200 and r.get_json().get('ok'))
+        tmp_id = r.get_json().get('id')
+
+        # Temporal shows in GET /api/objects
+        objs = c.get('/api/objects').get_json()
+        tmp = [o for o in objs if o['id'] == tmp_id]
+        ok('Temporal in GET /api/objects', len(tmp) == 1)
+        ok('Temporal has _temporal flag', tmp[0].get('_temporal') is True)
+        ok('Temporal has ttl', tmp[0].get('ttl') == 60)
+        ok('Temporal mobility is moving', tmp[0].get('mobility') == 'moving')
+        ok('Temporal pos set', tmp[0]['transform']['pos'] == [5000.0, 900.0, 3000.0])
+
+        # TTL validation
+        r = c.post('/api/objects/temporal', json={'name': 'Bad', 'ttl': 0})
+        ok('Temporal ttl=0 rejected', r.status_code == 400)
+        r = c.post('/api/objects/temporal', json={'name': 'Bad', 'ttl': -5})
+        ok('Temporal ttl<0 rejected', r.status_code == 400)
+        r = c.post('/api/objects/temporal', json={'name': 'Bad'})
+        ok('Temporal missing ttl rejected', r.status_code == 400)
+
+        # PUT pos refreshes TTL on temporal
+        r = c.put('/api/objects/' + str(tmp_id) + '/pos', json={'pos': [6000, 900, 3000]})
+        ok('PUT temporal pos', r.status_code == 200)
+        objs = c.get('/api/objects').get_json()
+        tmp = [o for o in objs if o['id'] == tmp_id][0]
+        ok('Temporal pos updated', tmp['transform']['pos'][0] == 6000.0)
+
+        # DELETE temporal
+        r = c.delete('/api/objects/' + str(tmp_id))
+        ok('DELETE temporal object', r.status_code == 200)
+        objs = c.get('/api/objects').get_json()
+        ok('Temporal removed after delete', not any(o['id'] == tmp_id for o in objs))
+
+        # ── Object Patrol (#194) ──────────────────────────────────────
+        c.post('/api/stage', json={'w': 10.0, 'h': 5.0, 'd': 8.0})
+        r = c.post('/api/objects', json={
+            'name': 'Patrol Singer', 'objectType': 'prop', 'mobility': 'moving',
+            'transform': {'pos': [5000, 900, 4000], 'rot': [0,0,0], 'scale': [500, 1800, 500]},
+            'patrol': {'enabled': True, 'axis': 'x', 'speedPreset': 'medium',
+                       'startPct': 10, 'endPct': 90, 'easing': 'sine'}})
+        ok('POST create patrol object', r.status_code == 200 and r.get_json().get('ok'))
+        pat_id = r.get_json().get('id')
+
+        objs = c.get('/api/objects').get_json()
+        pat_obj = [o for o in objs if o['id'] == pat_id][0]
+        ok('Patrol field saved', pat_obj.get('patrol') is not None)
+        ok('Patrol enabled', pat_obj['patrol'].get('enabled') is True)
+        ok('Patrol axis x', pat_obj['patrol'].get('axis') == 'x')
+        ok('Patrol speed medium', pat_obj['patrol'].get('speedPreset') == 'medium')
+        ok('Patrol start 10%', pat_obj['patrol'].get('startPct') == 10)
+        ok('Patrol end 90%', pat_obj['patrol'].get('endPct') == 90)
+        ok('Patrol easing sine', pat_obj['patrol'].get('easing') == 'sine')
+
+        # Object without patrol has no patrol field
+        r = c.post('/api/objects', json={'name': 'Static Wall', 'objectType': 'wall'})
+        no_pat_id = r.get_json().get('id')
+        objs = c.get('/api/objects').get_json()
+        no_pat = [o for o in objs if o['id'] == no_pat_id][0]
+        ok('No patrol on static object', no_pat.get('patrol') is None)
+
+        # Patrol with custom speed
+        r = c.post('/api/objects', json={
+            'name': 'Custom Speed', 'objectType': 'prop', 'mobility': 'moving',
+            'patrol': {'enabled': True, 'axis': 'z', 'speedPreset': 'custom',
+                       'cycleS': 15, 'startPct': 5, 'endPct': 95, 'easing': 'linear'}})
+        ok('POST patrol custom speed', r.status_code == 200)
+        cust_id = r.get_json().get('id')
+        objs = c.get('/api/objects').get_json()
+        cust = [o for o in objs if o['id'] == cust_id][0]
+        ok('Patrol custom cycleS', cust['patrol'].get('cycleS') == 15)
+        ok('Patrol custom axis z', cust['patrol'].get('axis') == 'z')
+        ok('Patrol custom easing linear', cust['patrol'].get('easing') == 'linear')
+
+        # Patrol with diagonal axis
+        r = c.post('/api/objects', json={
+            'name': 'Diagonal', 'objectType': 'prop', 'mobility': 'moving',
+            'patrol': {'enabled': True, 'axis': 'xz', 'speedPreset': 'fast'}})
+        ok('POST patrol diagonal', r.status_code == 200)
+        diag_id = r.get_json().get('id')
+        objs = c.get('/api/objects').get_json()
+        diag = [o for o in objs if o['id'] == diag_id][0]
+        ok('Patrol diagonal axis', diag['patrol'].get('axis') == 'xz')
+
+        # Cleanup patrol objects
+        c.delete('/api/objects/' + str(pat_id))
+        c.delete('/api/objects/' + str(no_pat_id))
+        c.delete('/api/objects/' + str(cust_id))
+        c.delete('/api/objects/' + str(diag_id))
+
+        # ── Track action (#186) ───────────────────────────────────────
+        # Create moving objects and a Track action
+        c.post('/api/stage', json={'w': 10.0, 'h': 5.0, 'd': 8.0})
+        r1 = c.post('/api/objects', json={'name': 'Singer A', 'objectType': 'prop', 'mobility': 'moving',
+            'transform': {'pos': [3000, 900, 4000], 'rot': [0,0,0], 'scale': [500, 1800, 500]}})
+        obj_a = r1.get_json().get('id')
+        r2 = c.post('/api/objects', json={'name': 'Singer B', 'objectType': 'prop', 'mobility': 'moving',
+            'transform': {'pos': [7000, 900, 4000], 'rot': [0,0,0], 'scale': [500, 1800, 500]}})
+        obj_b = r2.get_json().get('id')
+
+        # Create Track action (type 18)
+        r = c.post('/api/actions', json={
+            'name': 'Follow Singers', 'type': 18,
+            'trackObjectIds': [obj_a, obj_b],
+            'trackCycleMs': 2000,
+            'trackOffset': [0, 200, 0],
+            'trackAutoSpread': False})
+        ok('POST create Track action', r.status_code == 200 and r.get_json().get('ok'))
+        track_id = r.get_json().get('id')
+
+        # Verify Track action fields persisted
+        r = c.get('/api/actions/' + str(track_id))
+        ok('GET Track action', r.status_code == 200)
+        ta = r.get_json()
+        ok('Track type is 18', ta.get('type') == 18)
+        ok('Track has objectIds', ta.get('trackObjectIds') == [obj_a, obj_b])
+        ok('Track has cycleMs', ta.get('trackCycleMs') == 2000)
+        ok('Track has offset', ta.get('trackOffset') == [0, 200, 0])
+        ok('Track has autoSpread', ta.get('trackAutoSpread') is False)
+
+        # Update Track action with per-fixture offsets
+        r = c.put('/api/actions/' + str(track_id), json={
+            'trackFixtureOffsets': {'1': [100, 0, 0], '2': [-100, 0, 0]}})
+        ok('PUT Track action offsets', r.status_code == 200)
+        r = c.get('/api/actions/' + str(track_id))
+        ta = r.get_json()
+        ok('Track per-fixture offsets saved', '1' in ta.get('trackFixtureOffsets', {}))
+
+        # Cleanup
+        c.delete('/api/actions/' + str(track_id))
+        c.delete('/api/objects/' + str(obj_a))
+        c.delete('/api/objects/' + str(obj_b))
 
         # ── Spatial Effects (Phase 3) ──────────────────────────────────
         r = c.get('/api/spatial-effects')

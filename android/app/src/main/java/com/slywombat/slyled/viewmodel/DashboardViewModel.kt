@@ -48,13 +48,13 @@ class DashboardViewModel @Inject constructor(
     private val _layout = MutableStateFlow<Layout?>(null)
     val layout: StateFlow<Layout?> = _layout
 
-    private val _surfaces = MutableStateFlow<List<Surface>>(emptyList())
-    val surfaces: StateFlow<List<Surface>> = _surfaces
+    private val _objects = MutableStateFlow<List<StageObject>>(emptyList())
+    val objects: StateFlow<List<StageObject>> = _objects
 
     fun loadStageData() {
         viewModelScope.launch {
             try { _layout.value = repository.getLayout() } catch (_: Exception) {}
-            try { _surfaces.value = repository.getSurfaces() } catch (_: Exception) {}
+            try { _objects.value = repository.getObjects() } catch (_: Exception) {}
         }
     }
 

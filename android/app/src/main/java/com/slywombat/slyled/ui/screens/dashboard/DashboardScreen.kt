@@ -122,13 +122,13 @@ fun DashboardScreen(viewModel: DashboardViewModel = hiltViewModel()) {
                 item {
                     LaunchedEffect(Unit) { viewModel.loadStageData() }
                     val layout by viewModel.layout.collectAsState()
-                    val surfaces by viewModel.surfaces.collectAsState()
+                    val stageObjects by viewModel.objects.collectAsState()
                     ShowEmulatorCanvas(
                         previewData = emptyMap(),
                         second = settings.runnerElapsed,
                         durationS = 0,
                         layout = layout,
-                        surfaces = surfaces
+                        stageObjects = stageObjects
                     )
                 }
             }

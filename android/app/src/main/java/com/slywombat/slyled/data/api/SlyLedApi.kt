@@ -149,15 +149,15 @@ interface SlyLedApi {
     @GET("api/dmx/patch")
     suspend fun getDmxPatch(): JsonObject
 
-    // ── Surfaces ───────────────────────────────────────────────────────
-    @GET("api/surfaces")
-    suspend fun getSurfaces(): List<Surface>
+    // ── Stage Objects ─────────────────────────────────────────────────
+    @GET("api/objects")
+    suspend fun getObjects(): List<StageObject>
 
-    @POST("api/surfaces")
-    suspend fun createSurface(@Body surface: Surface): OkResponse
+    @POST("api/objects")
+    suspend fun createObject(@Body obj: StageObject): OkResponse
 
-    @DELETE("api/surfaces/{id}")
-    suspend fun deleteSurface(@Path("id") id: Int): OkResponse
+    @DELETE("api/objects/{id}")
+    suspend fun deleteObject(@Path("id") id: Int): OkResponse
 
     // ── Spatial Effects ────────────────────────────────────────────────
     @GET("api/spatial-effects")

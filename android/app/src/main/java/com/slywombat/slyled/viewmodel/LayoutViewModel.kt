@@ -21,8 +21,8 @@ class LayoutViewModel @Inject constructor(
     private val _children = MutableStateFlow<List<Child>>(emptyList())
     val children = _children.asStateFlow()
 
-    private val _surfaces = MutableStateFlow<List<Surface>>(emptyList())
-    val surfaces = _surfaces.asStateFlow()
+    private val _objects = MutableStateFlow<List<StageObject>>(emptyList())
+    val objects = _objects.asStateFlow()
 
     private val _fixtures = MutableStateFlow<List<Fixture>>(emptyList())
     val fixtures = _fixtures.asStateFlow()
@@ -41,7 +41,7 @@ class LayoutViewModel @Inject constructor(
                 _layout.value = layoutResp
                 // Use fixtures from layout response (server now returns fixtures[] in layout GET)
                 _fixtures.value = layoutResp.fixtures
-                _surfaces.value = repository.getSurfaces()
+                _objects.value = repository.getObjects()
                 _stage.value = repository.getStage()
             } catch (e: Exception) { _message.value = "Load error: ${e.message}" }
         }
@@ -140,22 +140,22 @@ class LayoutViewModel @Inject constructor(
         }
     }
 
-    fun updateSurface(id: Int, posX: Int, posY: Int, scaleW: Int, scaleH: Int, opacity: Int) {
+    fun updateObject(id: Int, posX: Int, posY: Int, scaleW: Int, scaleH: Int, opacity: Int) {
         viewModelScope.launch {
             try {
-                repository.updateSurface(id, posX, posY, scaleW, scaleH, opacity)
-                _surfaces.value = repository.getSurfaces()
-                _message.value = "Surface updated"
+                repository.updateObject(id, posX, posY, scaleW, scaleH, opacity)
+                _objects.value = repository.getObjects()
+                _message.value = "Object updated"
             } catch (e: Exception) { _message.value = "Update failed: ${e.message}" }
         }
     }
 
-    fun deleteSurface(id: Int) {
+    fun deleteObject(id: Int) {
         viewModelScope.launch {
             try {
-                repository.deleteSurface(id)
-                _surfaces.value = repository.getSurfaces()
-                _message.value = "Surface deleted"
+                repository.deleteObject(id)
+                _objects.value = repository.getObjects()
+                _message.value = "Object deleted"
             } catch (e: Exception) { _message.value = "Delete failed: ${e.message}" }
         }
     }
