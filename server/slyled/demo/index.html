@@ -103,35 +103,51 @@ footer{text-align:center;padding:40px 0;color:#64748b;font-size:.85em;border-top
 <div class="step" id="step8">
   <div class="step-num" style="background:#22d3ee;color:#000">8</div>
   <h2>Stage Layout — 2D Canvas <span class="platform p-win">Windows</span></h2>
-  <p>Switch to Layout. Drag fixtures onto the stage. LED strings show as colored lines, DMX fixtures show beam cones toward their aim points. Surfaces render behind.</p>
+  <p>Switch to Layout. Drag fixtures onto the stage. The sidebar lists Objects (renamed from surfaces) with lock, mobility, and patrol icons. LED strings show as colored lines, DMX fixtures show beam cones toward their aim points. Objects can be static (walls, floors locked to stage) or moving (props, performers with patrol motion).</p>
   <img src="08-layout-2d.png" alt="2D Layout" loading="lazy">
-  <div class="detail"><b>Coordinates:</b> Stage is 10m &times; 5m. Grid at 1m intervals. Fixtures positioned in millimeters. Double-click to edit or set aim point.</div>
+  <div class="detail"><b>Toolbar:</b> Save, 2D/3D text toggle, Recenter, Top view, Front view, Auto-arrange, Show strings. <b>Coordinates:</b> Stage is 10m &times; 5m. Grid at 1m intervals. Fixtures positioned in millimeters. Double-click to edit or set aim point.</div>
 </div>
 
 <div class="step" id="step9">
   <div class="step-num" style="background:#22d3ee;color:#000">9</div>
-  <h2>Stage Layout — 3D Viewport <span class="platform p-win">Windows</span></h2>
-  <p>Toggle to 3D for an interactive Three.js scene. Orbit with mouse drag, zoom with scroll. Beam cones render as 3D geometry. Drag aim spheres to redirect beams.</p>
-  <img src="09-layout-3d.png" alt="3D Layout" loading="lazy">
+  <h2>Stage Objects — Walls, Floors &amp; Props <span class="platform p-win">Windows</span></h2>
+  <p>Objects represent physical elements on stage. Walls and floors auto-size to stage dimensions (stage-locked). Moving objects like performers can patrol back-and-forth automatically during playback.</p>
+  <img src="08-layout-2d.png" alt="Stage Objects" loading="lazy">
+  <div class="detail"><b>objectType:</b> wall, floor, truss, screen, prop, custom. <b>Mobility:</b> static or moving. <b>Patrol settings:</b> axis, speed, range, easing — control how moving objects animate during playback.</div>
 </div>
 
 <div class="step" id="step10">
-  <div class="step-num" style="background:#f59e0b;color:#000">10</div>
-  <h2>Create Effects <span class="platform p-win">Windows</span></h2>
-  <p>Build your effects library with 14 types: Rainbow, Chase, Fire, Comet, Twinkle, and more. Create spatial effects that sweep across the 3D stage.</p>
-  <img src="10-actions.png" alt="Actions" loading="lazy">
+  <div class="step-num" style="background:#22d3ee;color:#000">10</div>
+  <h2>Stage Layout — 3D Viewport <span class="platform p-win">Windows</span></h2>
+  <p>Toggle to 3D for an interactive Three.js scene. Orbit with mouse drag, zoom with scroll. Beam cones render as 3D geometry. Drag aim spheres to redirect beams. Quick-view controls let you recenter, snap to top view, or front view — these auto-switch to 3D mode.</p>
+  <img src="09-layout-3d.png" alt="3D Layout" loading="lazy">
 </div>
 
 <div class="step" id="step11">
-  <div class="step-num" style="background:#22c55e;color:#000">11</div>
+  <div class="step-num" style="background:#f59e0b;color:#000">11</div>
+  <h2>Create Effects <span class="platform p-win">Windows</span></h2>
+  <p>Build your effects library with 19 types including Track: Rainbow, Chase, Fire, Comet, Twinkle, and more. Create spatial effects that sweep across the 3D stage, or use Track to make moving heads follow objects in real-time.</p>
+  <img src="10-actions.png" alt="Actions" loading="lazy">
+</div>
+
+<div class="step" id="step12">
+  <div class="step-num" style="background:#7c3aed;color:#fff">12</div>
+  <h2>Track Action — Moving Heads Follow Objects <span class="platform p-dmx">DMX</span></h2>
+  <p>The Track action (type 18) makes DMX moving heads follow moving objects in real-time at 40Hz. The assignment algorithm distributes heads across targets, with cycling when there are more objects than heads.</p>
+  <img src="10-actions.png" alt="Track Action" loading="lazy">
+  <div class="detail"><b>Parameters:</b> trackObjectIds, trackCycleMs (default 2000ms), trackOffset [x,y,z], trackAutoSpread, per-fixture offsets. Heads smoothly follow patrol paths and custom object motion.</div>
+</div>
+
+<div class="step" id="step13">
+  <div class="step-num" style="background:#22c55e;color:#000">13</div>
   <h2>Run the Show <span class="platform p-win">Windows</span></h2>
   <p>Load a preset show or build a timeline. Click Bake &rarr; Sync &rarr; Start. The emulator previews LED colors and DMX beam positions in real-time.</p>
   <img src="11-runtime.png" alt="Runtime" loading="lazy">
   <div class="detail"><b>Spatial fields:</b> During playback, sphere/plane/box shapes animate across the stage preview, showing exactly where the light is.</div>
 </div>
 
-<div class="step" id="step12">
-  <div class="step-num" style="background:#3b82f6;color:#fff">12</div>
+<div class="step" id="step14">
+  <div class="step-num" style="background:#3b82f6;color:#fff">14</div>
   <h2>Settings & Community <span class="platform p-win">Windows</span></h2>
   <p>Configure Art-Net routing, manage profiles, share fixtures with the community, control groups, and monitor DMX channels live.</p>
   <img src="12-settings.png" alt="Settings" loading="lazy">

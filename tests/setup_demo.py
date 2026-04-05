@@ -51,6 +51,32 @@ print("\n=== Step 2: Configure stage ===")
 r = api("POST", "/api/stage", {"w": 3.0, "h": 2.0, "d": 2.0})
 ok("Stage set to 3m x 2m x 2m", r and r.get("ok"))
 
+# ── Step 2b: Create stage objects ──────────────────────────────────────────
+print("\n=== Step 2b: Create stage objects ===")
+r = api("POST", "/api/objects", {
+    "name": "Back Wall", "objectType": "wall", "stageLocked": True, "mobility": "static"})
+ok("Back Wall (stage-locked)", r and r.get("ok"))
+
+r = api("POST", "/api/objects", {
+    "name": "Stage Floor", "objectType": "floor", "stageLocked": True, "mobility": "static"})
+ok("Stage Floor (stage-locked)", r and r.get("ok"))
+
+r = api("POST", "/api/objects", {
+    "name": "Lead Singer", "objectType": "prop", "mobility": "moving",
+    "color": "#FF6B35", "opacity": 40,
+    "transform": {"pos": [1500, 900, 1000], "rot": [0,0,0], "scale": [500, 1800, 500]},
+    "patrol": {"enabled": True, "axis": "x", "speedPreset": "medium",
+               "startPct": 20, "endPct": 80, "easing": "sine"}})
+ok("Lead Singer (patrol, moving)", r and r.get("ok"))
+singer_id = r["id"] if r else None
+
+r = api("POST", "/api/objects", {
+    "name": "Drummer", "objectType": "prop", "mobility": "moving",
+    "color": "#3B82F6", "opacity": 40,
+    "transform": {"pos": [2200, 900, 500], "rot": [0,0,0], "scale": [500, 1800, 500]}})
+ok("Drummer (stationary moving object)", r and r.get("ok"))
+drummer_id = r["id"] if r else None
+
 # ── Step 3: Place children on layout ────────────────────────────────────────
 print("\n=== Step 3: Place children on canvas ===")
 layout_children = []
@@ -224,6 +250,20 @@ if tl_id is not None:
 
 else:
     print("  Failed to create timeline.")
+
+# ── Step 10b: Create Track action for moving heads ─────────────────────────
+print("\n=== Step 10b: Track action (moving heads follow objects) ===")
+target_ids = [oid for oid in [singer_id, drummer_id] if oid is not None]
+if target_ids:
+    r = api("POST", "/api/actions", {
+        "name": "Follow Performers", "type": 18,
+        "trackObjectIds": target_ids,
+        "trackCycleMs": 2000,
+        "trackOffset": [0, 200, 0],
+        "trackAutoSpread": True})
+    ok(f"Track action created (targets: {target_ids})", r and r.get("ok"))
+else:
+    print("  No moving objects — skipping Track action")
 
 print("\n=== Summary ===")
 print(f"  Children: {len(online)} online")

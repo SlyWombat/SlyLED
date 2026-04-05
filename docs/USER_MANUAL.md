@@ -1,20 +1,22 @@
-# SlyLED User Manual — 3D Volumetric Lighting System (v8.1)
+# SlyLED User Manual — 3D Volumetric Lighting System (v8.5)
 
 ## Table of Contents
 1. [Getting Started](#1-getting-started)
 2. [Platform Guide](#2-platforms)
 3. [Fixture Setup](#3-fixture-setup)
 4. [Stage Layout](#4-layout)
-5. [Creating Spatial Effects](#5-spatial-effects)
-6. [Building a Timeline](#6-timeline)
-7. [Baking & Playback](#7-baking)
-8. [Show Preview Emulator](#8-show-preview)
-9. [DMX Fixture Profiles](#9-dmx-profiles)
-10. [Preset Shows](#10-presets)
-11. [Firmware & OTA Updates](#11-firmware)
-12. [System Limits](#12-limits)
-13. [Troubleshooting](#13-troubleshooting)
-14. [API Quick Reference](#14-api)
+5. [Stage Objects](#5-stage-objects)
+6. [Creating Spatial Effects](#6-spatial-effects)
+7. [Track Action](#7-track-action)
+8. [Building a Timeline](#8-timeline)
+9. [Baking & Playback](#9-baking)
+10. [Show Preview Emulator](#10-show-preview)
+11. [DMX Fixture Profiles](#11-dmx-profiles)
+12. [Preset Shows](#12-presets)
+13. [Firmware & OTA Updates](#13-firmware)
+14. [System Limits](#14-limits)
+15. [Troubleshooting](#15-troubleshooting)
+16. [API Quick Reference](#16-api)
 
 ---
 
@@ -51,7 +53,7 @@ Mobile companion for monitoring and playback control. Available on the same WiFi
 **Android Features:**
 - **Dashboard** — performer status, online/offline indicators
 - **Setup** — view fixtures, discover performers
-- **Layout** — 2D canvas with pinch-to-zoom, drag-to-reposition, tap-to-place, DMX beam cones, surface visualization
+- **Layout** — 2D canvas with pinch-to-zoom, drag-to-reposition, tap-to-place, DMX beam cones, object visualization, layout quick-view buttons, patrol display for moving objects
 - **Actions** — browse and create LED effects
 - **Runtime** — show emulator with LED string dots and DMX beam cones, timeline bake/sync/play, preset shows
 - **Settings** — server name, brightness, factory reset
@@ -109,6 +111,10 @@ On the Setup tab, click **Details** on any DMX fixture to open the channel test 
 ### 2D Canvas
 The Layout tab shows a 2D front view of the stage. Stage dimensions (width × height) are set in Settings.
 
+The layout toolbar provides: Save, 2D/3D mode toggle (shows current mode as text), Recenter, Top view, Front view, Auto-arrange DMX, Show/hide LED strings. Active toggles highlight in green.
+
+Use the `?tab=` URL parameter for deep-linking directly to any tab (e.g., `?tab=layout`).
+
 | Action | Desktop | Android |
 |--------|---------|---------|
 | **Place fixture** | Drag from sidebar | Tap fixture then tap canvas |
@@ -117,14 +123,14 @@ The Layout tab shows a 2D front view of the stage. Stage dimensions (width × he
 | **Zoom** | Scroll wheel | Pinch gesture |
 | **Pan** | — | Two-finger drag |
 | **Edit coordinates** | Double-click | Tap placed fixture |
-| **Edit surface** | Double-click | Tap surface in list |
+| **Edit object** | Double-click | Tap object in list |
 
 **What's rendered:**
 - Grid lines at 1-meter spacing
 - Stage dimension labels
 - **LED fixtures**: Green nodes with colored string lines (direction arrows)
 - **DMX fixtures**: Purple nodes with beam cone triangles toward aim point
-- **Surfaces**: Semi-transparent rectangles with name labels (clipped to stage)
+- **Objects**: Semi-transparent rectangles with name labels (clipped to stage)
 - **Aim dots**: Red circles at DMX aim points
 
 ### 3D Viewport (Desktop Only)
@@ -132,7 +138,7 @@ Toggle to 3D mode for an interactive Three.js scene:
 - Orbit camera with mouse drag
 - Beam cones as 3D geometry
 - Draggable aim spheres for DMX fixtures
-- Surface planes/boxes with transparency
+- Object planes/boxes with transparency
 
 ### Coordinate System
 - **aimPoint[0]** = X (horizontal position, mm)
@@ -143,7 +149,48 @@ Toggle to 3D mode for an interactive Three.js scene:
 
 ---
 
-## 5. Creating Spatial Effects
+## 5. Stage Objects
+
+Objects represent physical elements on the stage — walls, floors, trusses, screens, and props/performers.
+
+### Object Types
+| Type | Default Mobility | Description |
+|------|-----------------|-------------|
+| **Wall** | Static | Back wall, stage-locked to stage width x height |
+| **Floor** | Static | Stage floor, stage-locked to stage width x (depth + 1m) |
+| **Truss** | Static | Lighting truss bar |
+| **Screen** | Static | Projection surface |
+| **Prop** | Moving | Performer, set piece, or mobile element |
+| **Custom** | Moving | User-defined object |
+
+### Stage-Locked Objects
+Wall and floor objects can be locked to stage dimensions. When you change the stage size in Settings, locked objects automatically resize.
+
+### Mobility
+- **Static**: Fixed position. Cannot be tracked by moving heads.
+- **Moving**: Position can change at runtime. Trackable by DMX moving heads via Track action.
+
+### Patrol Motion
+Moving objects can patrol (oscillate) back and forth during playback:
+- **Axis**: Side-to-side (X), front-to-back (Z), or diagonal (X+Z)
+- **Speed presets**: Slow (20s cycle), Medium (10s), Fast (5s), or Custom
+- **Range**: Start/end percentage of stage dimension (default 10%--90%)
+- **Easing**: Smooth (sine) or Linear
+
+Patrol is evaluated at 40Hz in the DMX playback loop, before Track actions read object positions.
+
+### Temporal Objects
+External systems can create short-lived objects via `POST /api/objects/temporal`:
+- Always in-memory (never saved to disk)
+- Require `ttl` > 0 (time-to-live in seconds)
+- Auto-expire when TTL elapses
+- Position updates refresh the TTL
+- Shown in runtime viewer with dashed outline and countdown badge
+- Useful for camera tracking integration
+
+---
+
+## 6. Creating Spatial Effects
 
 ### Spatial Effects vs Classic Actions
 - **Classic Actions** (Solid, Chase, Rainbow, etc.): Run locally on each performer. Pattern based on pixel index. When assigned to DMX fixtures, classic actions are automatically converted to DMX Scene segments with appropriate dimmer, pan/tilt defaults.
@@ -152,7 +199,10 @@ Toggle to 3D mode for an interactive Three.js scene:
   - **Pan/Tilt Move** — Animate pan/tilt from start to end position over time
   - **Gobo Select** — Select a gobo wheel position
   - **Color Wheel** — Select a color wheel position
+  - **Track** (Type 18) — Make moving heads follow moving objects in real-time (see [Track Action](#7-track-action))
 - **Spatial Effects**: Operate in 3D space. A sphere of light sweeping across the stage illuminates different fixtures at different times.
+
+SlyLED supports 19 action types in total: 14 classic LED actions plus 5 DMX/spatial actions (DMX Scene, Pan/Tilt Move, Gobo Select, Color Wheel, Track).
 
 ### Creating a Spatial Effect
 Navigate to **Actions** tab → **+ New Spatial Effect**.
@@ -169,7 +219,35 @@ Navigate to **Actions** tab → **+ New Spatial Effect**.
 
 ---
 
-## 6. Building a Timeline
+## 7. Track Action
+
+### Track Action (Type 18)
+Makes DMX moving heads follow moving objects in real-time during playback.
+
+**How it works:**
+1. Create moving objects (props/performers) on the Layout tab
+2. Create a Track action on the Actions tab
+3. Select target objects and configure assignment
+4. During playback, the 40Hz loop computes pan/tilt for each head
+
+**Assignment algorithm:**
+- Equal heads and objects: 1:1 mapping
+- More heads than objects: Spread evenly across objects
+- More objects than heads: Cycle through objects (default 2s per target)
+
+**Fields:**
+| Field | Description |
+|-------|-------------|
+| trackObjectIds | Target object IDs (empty = all moving objects) |
+| trackCycleMs | Cycle time when cycling (default 2000ms) |
+| trackOffset | Global [x,y,z] offset in mm |
+| trackFixtureIds | Specific fixture IDs (empty = all moving heads) |
+| trackFixtureOffsets | Per-fixture [x,y,z] overrides |
+| trackAutoSpread | Spread multiple heads across object width |
+
+---
+
+## 8. Building a Timeline
 
 1. Go to **Runtime** tab → **+ New Timeline**
 2. Set name and duration
@@ -179,7 +257,7 @@ Navigate to **Actions** tab → **+ New Spatial Effect**.
 
 ---
 
-## 7. Baking & Playback
+## 9. Baking & Playback
 
 ### Bake
 Compiles a timeline into minimal action instructions per performer:
@@ -188,13 +266,13 @@ Compiles a timeline into minimal action instructions per performer:
 3. Click **Start** for synchronized NTP-timed playback
 
 ### Output
-- **Action segments**: Sequences of the 14 classic action types
+- **Action segments**: Sequences of the 19 action types (14 classic + 5 DMX/spatial)
 - **LSQ files**: Raw per-pixel RGB data at 40Hz (downloadable as ZIP)
 - **Preview data**: 1 color per string per second for emulator
 
 ---
 
-## 8. Show Preview Emulator
+## 10. Show Preview Emulator
 
 Both desktop and Android include a real-time show preview:
 
@@ -212,7 +290,7 @@ The emulator canvas appears on the Runtime tab below the timeline. Shows:
 ### Android App
 The `ShowEmulatorCanvas` card shows:
 - Same LED string dots and DMX beam cones as desktop
-- Surfaces rendered as background rectangles
+- Objects rendered as background rectangles
 - Preview colors update every second during playback
 
 ### Spatial Field Visualization
@@ -228,7 +306,7 @@ The emulator correctly renders DMX-only setups (no LED performers). Static purpl
 
 ---
 
-## 9. DMX Fixture Profiles
+## 11. DMX Fixture Profiles
 
 ### Built-in Profiles
 | Profile | Channels | Features |
@@ -276,7 +354,7 @@ Community server: https://electricrv.ca/api/profiles/
 
 ---
 
-## 10. Preset Shows
+## 12. Preset Shows
 
 14 pre-built shows available from Runtime tab → **Load Show** → **Presets**:
 
@@ -299,7 +377,7 @@ Community server: https://electricrv.ca/api/profiles/
 
 ---
 
-## 11. Firmware & OTA Updates
+## 13. Firmware & OTA Updates
 
 ### USB Flash
 1. Go to **Firmware** tab
@@ -317,7 +395,7 @@ Community server: https://electricrv.ca/api/profiles/
 
 ---
 
-## 12. System Limits
+## 14. System Limits
 
 | Resource | Tested | Recommended Max |
 |----------|--------|-----------------|
@@ -328,7 +406,7 @@ Community server: https://electricrv.ca/api/profiles/
 | LEDs per string | 65535 | uint16 addressing |
 | Strings per child | 8 | Protocol constant |
 | Timeline clips | 50 | 200+ |
-| Preset shows | 14 | Built-in |
+| Preset shows | 14 | Built-in (expandable) |
 | API response (132 fixtures) | < 1ms | Sub-millisecond |
 | Memory (132 fixtures) | 46 MB | Flat scaling |
 | Network (132 fixtures) | 221 KB | Per test cycle |
@@ -337,7 +415,7 @@ See `docs/STRESS_TEST.md` for full benchmark data.
 
 ---
 
-## 13. Troubleshooting
+## 15. Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
@@ -352,14 +430,15 @@ See `docs/STRESS_TEST.md` for full benchmark data.
 
 ---
 
-## 14. API Quick Reference
+## 16. API Quick Reference
 
 ### Stage & Layout
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET/POST | `/api/layout` | Layout with fixtures and positions |
 | GET/POST | `/api/stage` | Stage dimensions (w, h, d meters) |
-| GET/POST | `/api/surfaces` | Projection surfaces |
+| GET/POST | `/api/objects` | Stage objects (walls, floors, trusses, props) |
+| POST | `/api/objects/temporal` | Create temporal objects (TTL-based) |
 
 ### Fixtures
 | Method | Endpoint | Description |

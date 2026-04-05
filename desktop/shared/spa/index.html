@@ -5927,9 +5927,10 @@ ra('GET','/status',null,function(d){
     if(fv)fv.textContent='SlyLED v'+d.version+' \u2014 The Orchestrator';
   }
 });
+var _qTab=new URLSearchParams(location.search).get('tab')||location.hash.replace('#','')||'dash';
+showTab(_qTab);
 ra('GET','/api/settings',null,function(d){
   applyDarkMode(!d||d.darkMode!==0);
-  showTab('dash');
 });
 </script>
 </body></html>
