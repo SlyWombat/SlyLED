@@ -35,7 +35,9 @@ $env:ARDUINO_DIRECTORIES_USER = (Get-Location).Path
 
 **First-time Windows setup:** The Giga's DFU bootloader (USB ID `2341:0366`) requires the WinUSB driver installed via [Zadig](https://zadig.akeo.ie) before uploads will work. Double-press reset to enter bootloader mode, then install the driver once.
 
-**Versioning:** `main/version.h` holds `APP_MAJOR` / `APP_MINOR`. `build.ps1` increments `APP_MINOR` automatically on every compile.
+**Versioning — two independent version tracks:**
+- **Firmware version** (`main/version.h`): `APP_MAJOR` / `APP_MINOR` / `APP_PATCH`. Only changes when firmware code (`.ino`, `.h`, `.cpp`) changes. `build.ps1` increments `APP_MINOR` on compile+upload. Firmware registry (`firmware/registry.json`) tracks firmware versions per board.
+- **App version** (orchestrator + Android): Set in `desktop/shared/parent_server.py` (`VERSION`), `android/app/build.gradle.kts` (`versionName`/`versionCode`), `desktop/windows/installer.iss` (`AppVersion`). Changes on app/SPA/server releases. Independent of firmware version.
 
 ## Critical hardware quirks
 
@@ -288,7 +290,7 @@ All board-specific headers use both include guards (`#ifndef FILE_H`) and conten
 - `arduino_secrets.h` is gitignored — never commit credentials or WiFi passwords
 - Commit messages follow: `feat: <short description>`
 - **Feature tracking:** All features and enhancements are managed via [GitHub Issues](https://github.com/SlyWombat/SlyLED/issues). Reference issues in commits where applicable (e.g. `feat: mDNS discovery (closes #1)`)
-- **Releases:** Published via `gh release create` with firmware binaries attached. Tags: `v2.0`, `v3.0`, `v4.19`, `v5.0`, `v5.1`
+- **Releases:** Published via `gh release create` with binaries attached. App version reset to v1.0 (April 2026). Firmware versions track independently per board in `firmware/registry.json`.
 
 ## Android app
 

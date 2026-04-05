@@ -1,4 +1,4 @@
-# Manuel d'utilisation SlyLED — Systeme d'eclairage volumetrique 3D (v8.5)
+# Manuel d'utilisation SlyLED — Systeme d'eclairage volumetrique 3D (v1.0)
 
 ## Table des matieres
 1. [Premiers pas](#1-premiers-pas)

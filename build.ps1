@@ -45,7 +45,10 @@ switch ($Board.ToLower()) {
 
 Write-Host "Target: $fqbn" -ForegroundColor Cyan
 
-# ── Bump minor version (upload only) ─────────────────────────────────────────
+# ── Bump firmware minor version (upload only) ───────────────────────────────
+# NOTE: version.h tracks FIRMWARE version (for ESP32/D1 Mini/Giga child).
+# The app/orchestrator version (parent_server.py, installer, Android) is
+# managed separately — firmware only changes when firmware code changes.
 $versionFile = "$PSScriptRoot\main\version.h"
 $content = Get-Content $versionFile -Raw
 

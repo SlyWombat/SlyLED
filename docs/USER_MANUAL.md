@@ -1,4 +1,4 @@
-# SlyLED User Manual — 3D Volumetric Lighting System (v8.5)
+# SlyLED User Manual — 3D Volumetric Lighting System (v1.0)
 
 ## Table of Contents
 1. [Getting Started](#1-getting-started)
