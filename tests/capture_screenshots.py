@@ -35,13 +35,28 @@ with sync_playwright() as p:
     page.wait_for_timeout(2000)
     page.evaluate("_wizStep1()")
     page.wait_for_timeout(1000)
-    # Type a search and trigger it for a populated result
     page.fill("#wiz-q", "moving head")
     page.evaluate("_wizSearch()")
     page.wait_for_timeout(5000)
-    page.screenshot(path=f"{DEMO}\\07-setup-dmx.png")
+    page.screenshot(path=f"{DEMO}\\07a-dmx-search.png")
     page.screenshot(path=f"{DOCS}\\spa-setup-add-dmx.png")
-    print("  07-setup-dmx.png (DMX wizard with search)")
+    print("  07a-dmx-search.png (wizard step 1 - search)")
+
+    # Init wizard state and go to step 2 (address)
+    page.evaluate("""
+        window._wiz={name:'ADJ Vizi Beam 5RX',profId:'generic-moving-head-8ch',
+            channels:8,geom:'point',uni:1,addr:1};
+        _wizStep2();
+    """)
+    page.wait_for_timeout(2000)
+    page.screenshot(path=f"{DEMO}\\07b-dmx-address.png")
+    print("  07b-dmx-address.png (wizard step 2 - address)")
+
+    # Go to step 3 (confirm)
+    page.evaluate("_wizStep3()")
+    page.wait_for_timeout(1000)
+    page.screenshot(path=f"{DEMO}\\07c-dmx-confirm.png")
+    print("  07c-dmx-confirm.png (wizard step 3 - confirm)")
     page.close()
 
     # Layout 3D

@@ -92,16 +92,32 @@ footer{text-align:center;padding:40px 0;color:#64748b;font-size:.85em;border-top
   <div class="detail"><b>Auto-detection:</b> SlyLED broadcasts a UDP ping on port 4210. Performers respond with their config including string details and firmware version.</div>
 </div>
 
-<div class="step" id="step7">
-  <div class="step-num" style="background:#7c3aed;color:#fff">7</div>
-  <h2>Add DMX Fixtures — 3-Step Wizard <span class="platform p-dmx">DMX</span></h2>
-  <p>Click <b>+ DMX Fixture</b> to open the wizard. In step 1, type your fixture name and SlyLED searches <b>three sources at once</b>: your local library, the community server, and the <a href="https://open-fixture-library.org">Open Fixture Library</a> (700+ manufacturers, thousands of fixtures). One search, instant results — no manual profile creation needed.</p>
-  <img src="07-setup-dmx.png" alt="DMX Fixture Wizard" loading="lazy">
-  <div class="detail"><b>Why this matters:</b> Finding your exact fixture model takes seconds, not hours. Profiles include channel maps, beam widths, pan/tilt ranges, gobo wheels, and color capabilities — all pre-configured. Multi-mode fixtures auto-create one profile per mode. Community sharing means if someone has already set up your fixture, you can download it instantly.</div>
+<div class="step" id="step7a">
+  <div class="step-num" style="background:#7c3aed;color:#fff">7a</div>
+  <h2>DMX Wizard — Step 1: Find Your Fixture <span class="platform p-dmx">DMX</span></h2>
+  <p>Click <b>+ DMX Fixture</b> to open the wizard. Type your fixture name and SlyLED searches <b>three sources at once</b>: your local library, the community server at <a href="https://electricrv.ca">electricrv.ca</a>, and the <a href="https://open-fixture-library.org">Open Fixture Library</a> (700+ manufacturers, thousands of fixtures). One search, instant results.</p>
+  <img src="07a-dmx-search.png" alt="DMX Wizard — Search" loading="lazy">
+  <div class="detail"><b>Why this matters:</b> Finding your exact fixture takes seconds, not hours. Profiles include channel maps, beam widths, pan/tilt ranges, gobo wheels, and color capabilities — all pre-configured. Multi-mode fixtures auto-create one profile per mode. If someone in the community has already set up your fixture, you can download it instantly.</div>
 </div>
 
 <div class="step" id="step7b">
   <div class="step-num" style="background:#7c3aed;color:#fff">7b</div>
+  <h2>DMX Wizard — Step 2: Set Address <span class="platform p-dmx">DMX</span></h2>
+  <p>Select your fixture from the results and set the DMX universe and start address. SlyLED checks for <b>address conflicts in real-time</b> — overlapping fixtures are flagged immediately so you never accidentally double-patch.</p>
+  <img src="07b-dmx-address.png" alt="DMX Wizard — Address" loading="lazy">
+  <div class="detail"><b>Conflict detection:</b> As you type, SlyLED scans all existing fixtures on the selected universe and warns if your address range overlaps. Green = clear, Red = conflict with specific fixture names shown.</div>
+</div>
+
+<div class="step" id="step7c">
+  <div class="step-num" style="background:#7c3aed;color:#fff">7c</div>
+  <h2>DMX Wizard — Step 3: Confirm & Create <span class="platform p-dmx">DMX</span></h2>
+  <p>Review the summary — name, universe, address, channel count, and profile — then click <b>Create Fixture</b>. The fixture appears on the Setup tab ready for layout positioning and testing.</p>
+  <img src="07c-dmx-confirm.png" alt="DMX Wizard — Confirm" loading="lazy">
+  <div class="detail"><b>After creation:</b> Click <b>Details</b> on any DMX fixture to open the live channel test panel with sliders for every channel, quick color buttons, and capability labels showing what each DMX value range does (e.g. "Strobe slow→fast").</div>
+</div>
+
+<div class="step" id="step7d">
+  <div class="step-num" style="background:#7c3aed;color:#fff">7d</div>
   <h2>Fixture Library Highlights <span class="platform p-dmx">DMX</span></h2>
   <p>The unified fixture library is one of SlyLED's most powerful features:</p>
   <img src="05-setup-fixtures.png" alt="DMX Setup" loading="lazy">
