@@ -254,6 +254,73 @@ def run():
         dmx_count = sum(1 for f in flist if f.get('fixtureType') == 'dmx')
         ok('Mixed fixture list', led_count >= 1 and dmx_count >= 2)
 
+        # ── DMX aim points & beam cone data ──────────────────────────
+        # DMX fixtures should have aimPoint in layout response
+        r = c.get('/api/layout')
+        lay = r.get_json()
+        dmx_in_lay = [f for f in lay.get('fixtures', []) if f.get('fixtureType') == 'dmx']
+        ok('DMX fixtures in layout', len(dmx_in_lay) >= 2)
+        ok('DMX fixture has aimPoint', all('aimPoint' in f for f in dmx_in_lay))
+        ok('DMX aimPoint is 3-element list', all(
+            isinstance(f['aimPoint'], list) and len(f['aimPoint']) == 3 for f in dmx_in_lay))
+
+        # Set explicit aim point
+        r = c.put('/api/fixtures/' + str(dmx_id) + '/aim', json={'aimPoint': [5000, 0, 4000]})
+        ok('PUT aim point', r.status_code == 200)
+        r = c.get('/api/layout')
+        dmx_f = [f for f in r.get_json()['fixtures'] if f['id'] == dmx_id][0]
+        ok('Aim point persisted', dmx_f['aimPoint'] == [5000.0, 0.0, 4000.0])
+
+        # Aim point validation
+        r = c.put('/api/fixtures/' + str(dmx_id) + '/aim', json={'aimPoint': [1, 2]})
+        ok('Aim point rejects 2-element', r.status_code == 400)
+        r = c.put('/api/fixtures/' + str(dmx_id) + '/aim', json={'aimPoint': 'bad'})
+        ok('Aim point rejects string', r.status_code == 400)
+
+        # DMX profiles for beam widths
+        r = c.get('/api/dmx-profiles')
+        ok('GET /api/dmx-profiles', r.status_code == 200)
+        profiles = r.get_json()
+        ok('DMX profiles list', isinstance(profiles, list) and len(profiles) > 0)
+        # Check that moving head profile has beamWidth and panRange
+        mh = [p for p in profiles if 'moving' in p.get('id', '').lower() or p.get('panRange', 0) > 0]
+        ok('Moving head profile exists', len(mh) > 0)
+        if mh:
+            ok('Moving head has beamWidth', mh[0].get('beamWidth', 0) > 0)
+            ok('Moving head has panRange', mh[0].get('panRange', 0) > 0)
+            ok('Moving head has tiltRange', mh[0].get('tiltRange', 0) > 0)
+
+        # Create DMX fixture WITH profile and verify aimPoint + layout inclusion
+        mh_id = mh[0]['id'] if mh else 'generic-moving-head-8ch'
+        r = c.post('/api/fixtures', json={
+            'name': 'MH Test', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 50, 'dmxChannelCount': 8,
+            'dmxProfileId': mh_id})
+        ok('POST DMX with profile', r.status_code == 200)
+        mh_fix_id = r.get_json().get('id')
+        # Place it on layout
+        c.post('/api/layout', json={'fixtures': [
+            {'id': dmx_id, 'x': 2000, 'y': 4500, 'z': 6000},
+            {'id': dmx_id2, 'x': 5000, 'y': 4500, 'z': 6000},
+            {'id': mh_fix_id, 'x': 8000, 'y': 4500, 'z': 6000}]})
+        r = c.get('/api/layout')
+        mh_in_lay = [f for f in r.get_json()['fixtures'] if f['id'] == mh_fix_id]
+        ok('Profile fixture in layout', len(mh_in_lay) == 1)
+        ok('Profile fixture has aimPoint', 'aimPoint' in mh_in_lay[0])
+        ok('Profile fixture has profileId', mh_in_lay[0].get('dmxProfileId') == mh_id)
+        ok('Profile fixture positioned', mh_in_lay[0].get('positioned') is True)
+        ok('Profile fixture x correct', mh_in_lay[0].get('x') == 8000)
+
+        # Multiple DMX fixtures all have cones data (aimPoint + position)
+        r = c.get('/api/layout')
+        all_dmx = [f for f in r.get_json()['fixtures'] if f.get('fixtureType') == 'dmx' and f.get('positioned')]
+        ok('All placed DMX have aimPoint', all('aimPoint' in f for f in all_dmx),
+           f'missing: {[f["id"] for f in all_dmx if "aimPoint" not in f]}')
+        ok('All placed DMX have x/y/z', all(f.get('x') is not None for f in all_dmx))
+
+        # Cleanup
+        c.delete('/api/fixtures/' + str(mh_fix_id))
+
         # Cleanup DMX fixtures
         c.delete('/api/fixtures/' + str(dmx_id))
         c.delete('/api/fixtures/' + str(dmx_id2))
@@ -714,6 +781,16 @@ def run():
         ok('SPA has Track action type', "'Track'" in spa or 'Track' in spa)
         ok('SPA has objects API', '/api/objects' in spa)
         ok('SPA has temporal support', '/api/objects/temporal' in spa or '_temporal' in spa)
+        # Toolbar tooltips on all buttons
+        ok('SPA toolbar: save tooltip', "title='Save layout'" in spa)
+        ok('SPA toolbar: mode tooltip', "title='Switch to 3D'" in spa or "title='Switch to 2D'" in spa)
+        ok('SPA toolbar: recenter tooltip', "title='Recenter view'" in spa)
+        ok('SPA toolbar: top tooltip', "title='Top view'" in spa)
+        ok('SPA toolbar: front tooltip', "title='Front view'" in spa)
+        ok('SPA toolbar: arrange tooltip', "title='Auto-arrange DMX fixtures'" in spa)
+        ok('SPA toolbar: strings tooltip', "title='Show/hide LED strings'" in spa)
+        # 2D/3D toggle shows text
+        ok('SPA 2D/3D toggle has text label', "btn.textContent='3D'" in spa and "btn.textContent='2D'" in spa)
 
         r = c.get('/favicon.ico')
         ok('GET /favicon.ico → 404', r.status_code == 404)

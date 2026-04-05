@@ -111,18 +111,15 @@ body.light .li:hover{border-color:#3b82f6}
         <div id='s3d-info' style='position:absolute;top:8px;left:8px;color:#64748b;font-size:.72em;pointer-events:none'></div>
       </div>
       <div style='margin-top:.5em;display:flex;gap:.2em;align-items:center' id='lay-toolbar'>
-        <button class='btn btn-on' id='btn-lay-save' onclick='saveLayout(this)' data-tip='laySave' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 1h10l2 2v11H2V1zm2 1v4h8V2H4zm1 1h6v2H5V3zm-1 6v5h8V9H4z'/></svg></button>
+        <button class='btn btn-on' id='btn-lay-save' onclick='saveLayout(this)' title='Save layout' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 1h10l2 2v11H2V1zm2 1v4h8V2H4zm1 1h6v2H5V3zm-1 6v5h8V9H4z'/></svg></button>
         <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
-        <button class='btn' id='btn-lay-mode' onclick='toggleLayoutMode()' data-tip='layToggleMode' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg id='lay-mode-icon' width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M8 1L1 5v6l7 4 7-4V5L8 1zm0 2l4.5 2.5L8 8 3.5 5.5 8 3z'/></svg></button>
-        <button class='btn' onclick='layViewReset()' data-tip='layRecenter' title='Recenter view' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M8 3a5 5 0 100 10A5 5 0 008 3zm0 2a3 3 0 110 6 3 3 0 010-6zm0 1.5a1.5 1.5 0 100 3 1.5 1.5 0 000-3z'/></svg></button>
-        <button class='btn' onclick='layViewTop()' data-tip='layTopView' title='Top view' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 2h12v12H2V2zm1 1v10h10V3H3zm4 2v3H5l3-4 3 4H9V5H7z' opacity='.85'/></svg></button>
-        <button class='btn' onclick='layViewFront()' data-tip='layFrontView' title='Front view' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 3h12v10H2V3zm1 1v8h10V4H3zm2 6V7h6v3H5z' opacity='.85'/></svg></button>
+        <button class='btn' id='btn-lay-mode' onclick='toggleLayoutMode()' title='Switch to 3D' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;letter-spacing:-0.5px'>2D</button>
+        <button class='btn' onclick='layViewReset()' title='Recenter view' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M8 3a5 5 0 100 10A5 5 0 008 3zm0 2a3 3 0 110 6 3 3 0 010-6zm0 1.5a1.5 1.5 0 100 3 1.5 1.5 0 000-3z'/></svg></button>
+        <button class='btn' onclick='layViewTop()' title='Top view' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 2h12v12H2V2zm1 1v10h10V3H3zm4 2v3H5l3-4 3 4H9V5H7z' opacity='.85'/></svg></button>
+        <button class='btn' onclick='layViewFront()' title='Front view' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 3h12v10H2V3zm1 1v8h10V4H3zm2 6V7h6v3H5z' opacity='.85'/></svg></button>
         <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
-        <button class='btn' onclick='autoArrangeDmx()' data-tip='layAutoArrange' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;background:#3b1f7c;color:#e9d5ff'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M1 2h3v2H1zm5 0h3v2H6zm5 0h3v2H11zM4 5l4 9 4-9H4z' opacity='.8'/></svg></button>
-        <label data-tip='layShowStrings' style='cursor:pointer;width:32px;height:32px;display:flex;align-items:center;justify-content:center;border:1px solid #333;border-radius:4px;background:#111'>
-          <input type='checkbox' id='lay-detail' checked onchange='_layDetailToggle()' style='display:none'>
-          <svg width='16' height='16' viewBox='0 0 16 16' id='lay-detail-svg'><line x1='2' y1='4' x2='14' y2='4' stroke='#22c55e' stroke-width='2'/><line x1='2' y1='8' x2='14' y2='8' stroke='#3b82f6' stroke-width='2'/><line x1='2' y1='12' x2='14' y2='12' stroke='#f59e0b' stroke-width='2'/></svg>
-        </label>
+        <button class='btn' onclick='autoArrangeDmx()' title='Auto-arrange DMX fixtures' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M1 2h3v2H1zm5 0h3v2H6zm5 0h3v2H11zM4 5l4 9 4-9H4z' opacity='.8'/></svg></button>
+        <button class='btn' id='btn-lay-strings' onclick='_layDetailToggle()' title='Show/hide LED strings' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;background:#14532d;color:#86efac'><svg width='16' height='16' viewBox='0 0 16 16' id='lay-detail-svg'><line x1='2' y1='4' x2='14' y2='4' stroke='#22c55e' stroke-width='2'/><line x1='2' y1='8' x2='14' y2='8' stroke='#3b82f6' stroke-width='2'/><line x1='2' y1='12' x2='14' y2='12' stroke='#f59e0b' stroke-width='2'/></svg></button>
       </div>
     </div>
     <div style='width:200px;flex-shrink:0'>
@@ -1832,13 +1829,12 @@ function toggleLayoutMode(){setLayoutMode(_layMode==='3d'?'2d':'3d');}
 function setLayoutMode(mode){
   _layMode=mode;
   var w2d=document.getElementById('lay-2d-wrap'),w3d=document.getElementById('lay-3d-wrap');
-  var hint=document.getElementById('lay-hint'),detWrap=document.getElementById('lay-detail-wrap');
+  var hint=document.getElementById('lay-hint');
   var btn=document.getElementById('btn-lay-mode');
   if(mode==='3d'){
     w2d.style.display='none';w3d.style.display='block';
-    if(btn){btn.style.background='#14532d';btn.style.color='#86efac';}
+    if(btn){btn.textContent='3D';btn.title='Switch to 2D';btn.style.background='#14532d';btn.style.color='#86efac';}
     if(hint)hint.textContent='Click to select. Drag gizmo to move. Double-click to edit. Scroll=zoom, Drag=orbit.';
-    if(detWrap)detWrap.style.display='none';
     s3dInit();
     if(!window._profileCache){
       window._profileCache={};
@@ -1850,9 +1846,8 @@ function setLayoutMode(mode){
   } else {
     _s3dSyncToLd();
     w3d.style.display='none';w2d.style.display='block';
-    if(btn){btn.style.background='';btn.style.color='';}
+    if(btn){btn.textContent='2D';btn.title='Switch to 3D';btn.style.background='';btn.style.color='';}
     if(hint)hint.textContent='Drag performers from sidebar onto canvas. Double-click a node to edit. (0,0)=bottom-left.';
-    if(detWrap)detWrap.style.display='flex';
     drawLayout();renderSidebar();
   }
 }
@@ -3568,6 +3563,13 @@ function loadLayout(){
     if(s)units=s.units||0;
     ra('GET','/api/stage',null,function(st){
       if(st)window._stageData=st;
+      // Pre-load profile cache for beam widths (needed by both 2D and 3D views)
+      if(!window._profileCache){
+        window._profileCache={};
+        ra('GET','/api/dmx-profiles',null,function(profs){
+          (profs||[]).forEach(function(p){window._profileCache[p.id]=p;});
+        });
+      }
       ra('GET','/api/layout',null,function(d){
         if(!d)return;ld=d;phW=d.canvasW||10000;phH=d.canvasH||5000;
         _fixtures=d.fixtures||[];
@@ -3657,8 +3659,7 @@ function fmtCoord(mm){
 function drawLayout(){
   var cv=document.getElementById('lcv');if(!cv||!ld)return;
   var W=cv.width,H=cv.height,ctx=cv.getContext('2d');
-  var det=document.getElementById('lay-detail');
-  var showStr=det&&det.checked;
+  var showStr=_layShowStrings;
   ctx.fillStyle='#0d0d0d';ctx.fillRect(0,0,W,H);
   ctx.strokeStyle='#1e1e1e';ctx.lineWidth=1;
   for(var gx=0;gx<=W;gx+=90){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}
@@ -4267,10 +4268,16 @@ function emuDraw(){
   }
 }
 
+var _layShowStrings=true;
 function _layDetailToggle(){
-  var cb=document.getElementById('lay-detail');
+  _layShowStrings=!_layShowStrings;
+  var btn=document.getElementById('btn-lay-strings');
+  if(btn){
+    btn.style.background=_layShowStrings?'#14532d':'';
+    btn.style.color=_layShowStrings?'#86efac':'';
+  }
   var svg=document.getElementById('lay-detail-svg');
-  if(svg)svg.style.opacity=cb.checked?'1':'0.3';
+  if(svg)svg.style.opacity=_layShowStrings?'1':'0.3';
   drawLayout();
 }
 
