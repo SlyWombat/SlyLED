@@ -204,7 +204,6 @@ object ActionTypes {
 @Serializable
 data class AddChildRequest(val ip: String)
 
-@Serializable
 // Legacy runner/flight/show removed in v8.0 — timeline is the only execution model
 
 // ── Stage (Phase 1) ────────────────────────────────────────────────────

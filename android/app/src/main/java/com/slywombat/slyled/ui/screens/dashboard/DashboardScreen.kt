@@ -114,7 +114,7 @@ fun DashboardScreen(viewModel: DashboardViewModel = hiltViewModel()) {
                             activeRunnerId = settings.activeRunner,
                             elapsed = settings.runnerElapsed,
                             loop = settings.runnerLoop,
-                            onStop = { viewModel.stopRunners() }
+                            onStop = { viewModel.stopAll() }
                         )
                     }
                 }

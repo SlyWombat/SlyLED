@@ -59,13 +59,6 @@ class SlyLedRepository @Inject constructor(
         }
     }
 
-    fun liveEventsFlow(intervalMs: Long = 1000): Flow<Result<List<LiveEvent>>> = flow {
-        while (true) {
-            emit(runCatching { requireApi().getLiveEvents() })
-            delay(intervalMs)
-        }
-    }
-
     // Status
     suspend fun getStatus() = requireApi().getStatus()
 

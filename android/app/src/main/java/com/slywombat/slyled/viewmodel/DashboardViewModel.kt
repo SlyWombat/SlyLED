@@ -58,13 +58,16 @@ class DashboardViewModel @Inject constructor(
         }
     }
 
-    fun stopRunners() {
+    fun stopAll() {
         viewModelScope.launch {
             try {
-                repository.stopRunners()
-            } catch (_: Exception) {
-                // ignore
-            }
+                // Stop any active timeline
+                val settings = repository.getSettings()
+                val tlId = settings.activeTimeline
+                if (tlId != null && tlId >= 0) {
+                    repository.stopTimeline(tlId)
+                }
+            } catch (_: Exception) {}
         }
     }
 
