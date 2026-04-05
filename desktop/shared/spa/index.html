@@ -99,9 +99,6 @@ body.light .li:hover{border-color:#3b82f6}
           <button id='lay-mode-3d' class='btn' onclick='setLayoutMode("3d")' style='border-radius:0;border:none;margin:0;padding:.35em .9em;background:transparent;color:#64748b;font-size:.75em'>3D Viewport</button>
         </div>
         <span id='lay-hint' style='color:#888;font-size:.82em;flex:1'>Drag fixtures from sidebar onto stage. Double-click to edit position. (0,0)=bottom-left.</span>
-        <label id='lay-detail-wrap' style='color:#888;font-size:.82em;white-space:nowrap;display:flex;align-items:center;gap:.3em'>
-          <input type='checkbox' id='lay-detail' checked onchange='drawLayout()' data-tip='layDetail'> Show strings
-        </label>
       </div>
       <!-- 2D Canvas (default) -->
       <div id='lay-2d-wrap'>
@@ -117,8 +114,14 @@ body.light .li:hover{border-color:#3b82f6}
         <div id='stage3d' style='width:900px;height:500px;border:1px solid #444;background:#080810;max-width:100%'></div>
         <div id='s3d-info' style='position:absolute;top:8px;left:8px;color:#64748b;font-size:.72em;pointer-events:none'></div>
       </div>
-      <div style='margin-top:.6em'>
-        <button class='btn btn-on' id='btn-lay-save' onclick='saveLayout(this)' data-tip='laySave'>Save Layout</button>
+      <div style='margin-top:.5em;display:flex;gap:.2em;align-items:center' id='lay-toolbar'>
+        <button class='btn btn-on' id='btn-lay-save' onclick='saveLayout(this)' data-tip='laySave' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 1h10l2 2v11H2V1zm2 1v4h8V2H4zm1 1h6v2H5V3zm-1 6v5h8V9H4z'/></svg></button>
+        <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
+        <button class='btn' onclick='autoArrangeDmx()' data-tip='layAutoArrange' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;background:#3b1f7c;color:#e9d5ff'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M1 2h3v2H1zm5 0h3v2H6zm5 0h3v2H11zM4 5l4 9 4-9H4z' opacity='.8'/></svg></button>
+        <label data-tip='layShowStrings' style='cursor:pointer;width:32px;height:32px;display:flex;align-items:center;justify-content:center;border:1px solid #333;border-radius:4px;background:#111'>
+          <input type='checkbox' id='lay-detail' checked onchange='_layDetailToggle()' style='display:none'>
+          <svg width='16' height='16' viewBox='0 0 16 16' id='lay-detail-svg'><line x1='2' y1='4' x2='14' y2='4' stroke='#22c55e' stroke-width='2'/><line x1='2' y1='8' x2='14' y2='8' stroke='#3b82f6' stroke-width='2'/><line x1='2' y1='12' x2='14' y2='12' stroke='#f59e0b' stroke-width='2'/></svg>
+        </label>
       </div>
     </div>
     <div style='width:200px;flex-shrink:0'>
@@ -452,6 +455,8 @@ var L={
   layDetail:'Show LED string lines and LED counts on the canvas',
   layPreview:'Show live effect colors on performers during playback',
   laySave:'Save the current performer positions to storage',
+  layAutoArrange:'Auto-arrange DMX fixtures: evenly spaced along top of stage, aimed straight down',
+  layShowStrings:'Show/hide LED string detail lines on the canvas',
   layCanvas:'Drag performers to position. Double-click to edit coordinates. (0,0) = bottom-left.',
   lay2d:'Switch to 2D canvas view',
   lay3d:'Switch to interactive 3D viewport (Three.js)',
@@ -4081,6 +4086,60 @@ function emuDraw(){
     var m=Math.floor(_emuT/60),s=_emuT%60;
     td.textContent='Preview: '+(m<10?'0':'')+m+':'+(s<10?'0':'')+s;
   }
+}
+
+function _layDetailToggle(){
+  var cb=document.getElementById('lay-detail');
+  var svg=document.getElementById('lay-detail-svg');
+  if(svg)svg.style.opacity=cb.checked?'1':'0.3';
+  drawLayout();
+}
+
+function autoArrangeDmx(){
+  // Evenly space DMX fixtures along the top of the stage, aimed straight down.
+  // LED fixtures are left untouched.
+  if(!_fixtures||!_fixtures.length){document.getElementById('hs').textContent='No fixtures to arrange';return;}
+  var dmx=_fixtures.filter(function(f){return f.fixtureType==='dmx';});
+  if(!dmx.length){document.getElementById('hs').textContent='No DMX fixtures to arrange';return;}
+  // Fetch stage dimensions for depth
+  ra('GET','/api/stage',null,function(st){
+    var stageW=phW;                          // mm (X axis)
+    var stageH=phH;                          // mm (Y axis = height)
+    var stageD=(st&&st.d?st.d*1000:10000);   // mm (Z axis = depth)
+    var topY=Math.round(stageH*0.9);         // 90% up = near ceiling
+    var backZ=Math.round(stageD*0.8);        // 80% depth = 20% from back wall
+    var n=dmx.length;
+    var margin=stageW*0.1;                   // 10% margin each side
+    var usableW=stageW-2*margin;
+    var spacing=n>1?usableW/(n-1):0;
+    dmx.forEach(function(f,i){
+      f.x=Math.round(margin+i*spacing);
+      f.y=topY;
+      f.z=backZ;
+      f._placed=true;
+      // Aim straight down: same X/Z, Y=0 (floor)
+      f.aimPoint=[f.x,0,f.z];
+    });
+    // Update layout positions
+    var positions=[];
+    _fixtures.forEach(function(f){
+      if(f._placed||f.positioned){
+        positions.push({id:f.id,x:f.x||0,y:f.y||0,z:f.z||0});
+      }
+    });
+    ra('POST','/api/layout',{fixtures:positions},function(r){
+      if(r&&r.ok){
+        // Save aim points for each DMX fixture
+        dmx.forEach(function(f){
+          ra('PUT','/api/fixtures/'+f.id+'/aim',{aimPoint:f.aimPoint});
+        });
+        document.getElementById('hs').textContent='Arranged '+n+' DMX fixture(s) along top of stage';
+        drawLayout();
+        if(_layMode==='3d'&&_s3d.inited)s3dLoadChildren();
+        renderSidebar();
+      }
+    });
+  });
 }
 
 function saveLayout(btn){

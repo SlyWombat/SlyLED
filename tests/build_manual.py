@@ -24,6 +24,67 @@ MANUAL_MD = os.path.join(DOCS, 'USER_MANUAL.md')
 OUTPUT = os.path.join(DOCS, 'SlyLED_User_Manual.docx')
 LOGO = os.path.join(PROJ, 'images', 'slyled.png')
 
+# ── i18n translations ─────────────────────────────────────────────────────
+_LANG = 'en'
+_TR = {
+  'fr': {
+    'User Manual': "Manuel d'utilisation",
+    '3D Volumetric Lighting System': "Syst\u00e8me d'\u00e9clairage volum\u00e9trique 3D",
+    'Complete guide to designing, programming, and running LED + DMX lighting shows with the SlyLED orchestrator, performers, and DMX bridge.':
+        "Guide complet pour concevoir, programmer et ex\u00e9cuter des spectacles lumineux LED + DMX avec l'orchestrateur SlyLED, les performers et le pont DMX.",
+    'Table of Contents': 'Table des mati\u00e8res',
+    '1. Getting Started with 3D Stage Design': '1. D\u00e9marrer avec la conception de sc\u00e8ne 3D',
+    'Overview': 'Aper\u00e7u',
+    'SlyLED is a three-tier lighting system: the Orchestrator (Windows/Mac desktop app) designs and controls shows, Performers (ESP32/D1 Mini boards with LED strings) execute lighting effects, and DMX Bridges (Giga R1 boards) drive professional DMX fixtures over Art-Net.':
+        "SlyLED est un syst\u00e8me d'\u00e9clairage \u00e0 trois niveaux\u00a0: l'Orchestrateur (application Windows/Mac) con\u00e7oit et contr\u00f4le les spectacles, les Performers (cartes ESP32/D1 Mini avec rubans LED) ex\u00e9cutent les effets lumineux, et les Ponts DMX (cartes Giga R1) pilotent les projecteurs DMX professionnels via Art-Net.",
+    'Switching Between 2D and 3D': 'Basculer entre 2D et 3D',
+    'Navigating the 3D Viewport': 'Naviguer dans la vue 3D',
+    'Coordinate System': 'Syst\u00e8me de coordonn\u00e9es',
+    '2. Fixture Setup': '2. Configuration des projecteurs',
+    'What Are Fixtures?': 'Que sont les projecteurs\u00a0?',
+    'Adding an LED Performer': "Ajouter un performer LED",
+    'Adding a DMX Fixture': 'Ajouter un projecteur DMX',
+    'Editing DMX Fixtures': 'Modifier les projecteurs DMX',
+    'Fixture Types': 'Types de projecteurs',
+    '3. Creating Spatial Effects': '3. Cr\u00e9er des effets spatiaux',
+    'Spatial Fields': 'Champs spatiaux',
+    'Moving Heads + Spatial Effects': 'Lyres + effets spatiaux',
+    'DMX Action Types': "Types d'actions DMX",
+    '4. Building a Timeline': '4. Construire une timeline',
+    'Creating a Timeline': 'Cr\u00e9er une timeline',
+    '5. Baking & Playback': '5. Compilation et lecture',
+    'What Is Baking?': "Qu'est-ce que la compilation\u00a0?",
+    'Playback': 'Lecture',
+    '6. Show Preview Emulator': "6. \u00c9mulateur d'aper\u00e7u du spectacle",
+    '7. Preset Shows': '7. Spectacles pr\u00e9d\u00e9finis',
+    '8. DMX Fixture Profiles': '8. Profils de projecteurs DMX',
+    'Viewing a Profile': 'Voir un profil',
+    'Creating Custom Profiles': 'Cr\u00e9er des profils personnalis\u00e9s',
+    'Importing from Open Fixture Library': "Importer depuis l'Open Fixture Library",
+    'Import/Export Bundles': 'Import/export de lots',
+    '9. Settings & Configuration': '9. Param\u00e8tres et configuration',
+    'Firmware': 'Firmware',
+    '10. System Limits': '10. Limites du syst\u00e8me',
+    '11. Troubleshooting': '11. D\u00e9pannage',
+    '12. API Quick Reference': "12. R\u00e9f\u00e9rence rapide de l'API",
+    'Resource': 'Ressource', 'Limit': 'Limite', 'Notes': 'Notes',
+    'Type': 'Type', 'Description': 'Description', 'Use Case': 'Cas d\'utilisation',
+    'Field': 'Champ', 'Action': 'Action', 'Control': 'Contr\u00f4le',
+    'Method': 'M\u00e9thode', 'Endpoint': 'Point d\'acc\u00e8s',
+    'Preset': 'Pr\u00e9r\u00e9glage',
+    'Action Type': "Type d'action",
+    'DMX Scene': 'Sc\u00e8ne DMX',
+    'Pan/Tilt Move': 'Mouvement Pan/Tilt',
+    'Gobo Select': 'S\u00e9lection de gobo',
+    'Color Wheel': 'Roue de couleurs',
+  }
+}
+def T(s):
+    """Translate string s using current language."""
+    if _LANG == 'en':
+        return s
+    return _TR.get(_LANG, {}).get(s, s)
+
 # Kinetic Prism design palette
 CLR_BG = RGBColor(0x0A, 0x0F, 0x13) if False else None  # can't set page bg in python-docx
 CLR_HEADING = RGBColor(0x38, 0xBD, 0xF8)   # LuminaBlue
@@ -108,6 +169,7 @@ def build_manual():
     }
 
     # ── Read version from version.h ──────────────────────────
+    lang_suffix = f'_{_LANG}' if _LANG != 'en' else ''
     version = "8.3"
     vh_path = os.path.join(PROJ, 'main', 'version.h')
     if os.path.exists(vh_path):
@@ -131,22 +193,22 @@ def build_manual():
         doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     doc.add_paragraph()
-    title = doc.add_heading('SlyLED User Manual', level=0)
+    title = doc.add_heading('SlyLED ' + T('User Manual'), level=0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for run in title.runs:
         run.font.color.rgb = CLR_HEADING
         run.font.size = Pt(36)
 
-    sub = doc.add_paragraph(f'3D Volumetric Lighting System — v{version}')
+    sub = doc.add_paragraph(f'{T("3D Volumetric Lighting System")} — v{version}')
     sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
     sub.runs[0].font.size = Pt(16)
     sub.runs[0].font.color.rgb = CLR_MUTED
 
     doc.add_paragraph()
-    desc = doc.add_paragraph(
+    desc = doc.add_paragraph(T(
         'Complete guide to designing, programming, and running LED + DMX lighting shows '
         'with the SlyLED orchestrator, performers, and DMX bridge.'
-    )
+    ))
     desc.alignment = WD_ALIGN_PARAGRAPH.CENTER
     desc.runs[0].font.color.rgb = CLR_TEXT
 
@@ -159,7 +221,7 @@ def build_manual():
     doc.add_page_break()
 
     # ── Table of Contents ──────────────────────────────────────
-    doc.add_heading('Table of Contents', level=1)
+    doc.add_heading(T('Table of Contents'), level=1)
     toc_items = [
         '1. Getting Started with 3D Stage Design',
         '2. Fixture Setup',
@@ -208,9 +270,9 @@ def build_manual():
                 table.rows[ri + 1].cells[ci].text = str(val)
 
     # ── Section 1: Getting Started ─────────────────────────────
-    doc.add_heading('1. Getting Started with 3D Stage Design', level=1)
+    doc.add_heading(T('1. Getting Started with 3D Stage Design'), level=1)
 
-    doc.add_heading('Overview', level=2)
+    doc.add_heading(T('Overview'), level=2)
     doc.add_paragraph(
         'SlyLED is a three-tier lighting system: the Orchestrator (Windows/Mac desktop app) '
         'designs and controls shows, Performers (ESP32/D1 Mini boards with LED strings) execute '
@@ -219,7 +281,7 @@ def build_manual():
 
     add_screenshot('spa-dashboard.png', 'Dashboard — live performer status overview')
 
-    doc.add_heading('Switching Between 2D and 3D', level=2)
+    doc.add_heading(T('Switching Between 2D and 3D'), level=2)
     doc.add_paragraph(
         'The Layout tab offers two views:\n'
         '- 2D Canvas: Flat top-down layout for simple setups\n'
@@ -230,7 +292,7 @@ def build_manual():
     add_screenshot('spa-layout-2d.png', 'Layout tab — 2D Canvas with placed fixtures')
     add_screenshot('spa-layout-3d.png', 'Layout tab — 3D Viewport with stage wireframe, fixtures, and surfaces')
 
-    doc.add_heading('Navigating the 3D Viewport', level=2)
+    doc.add_heading(T('Navigating the 3D Viewport'), level=2)
     add_table(
         ['Action', 'Control'],
         [
@@ -244,7 +306,7 @@ def build_manual():
         ]
     )
 
-    doc.add_heading('Coordinate System', level=2)
+    doc.add_heading(T('Coordinate System'), level=2)
     doc.add_paragraph(
         '- X-axis (red): Width — left to right\n'
         '- Y-axis (green): Height — ground to ceiling\n'
@@ -255,9 +317,9 @@ def build_manual():
     doc.add_page_break()
 
     # ── Section 2: Fixture Setup ───────────────────────────────
-    doc.add_heading('2. Fixture Setup', level=1)
+    doc.add_heading(T('2. Fixture Setup'), level=1)
 
-    doc.add_heading('What Are Fixtures?', level=2)
+    doc.add_heading(T('What Are Fixtures?'), level=2)
     doc.add_paragraph(
         'A fixture is the primary entity on the 3D stage. It wraps physical hardware '
         'and adds stage-level attributes like position, rotation, and aim point.\n\n'
@@ -269,7 +331,7 @@ def build_manual():
 
     add_screenshot('spa-setup.png', 'Setup tab — LED and DMX fixtures with type badges and status')
 
-    doc.add_heading('Adding an LED Performer', level=2)
+    doc.add_heading(T('Adding an LED Performer'), level=2)
     doc.add_paragraph(
         'Click Add Fixture, select "SlyLED Performer (LED)", and enter the device IP address. '
         'The system probes the device via UDP PING and HTTP, registers it as a child, '
@@ -277,7 +339,7 @@ def build_manual():
     )
     add_screenshot('spa-setup-add-led.png', 'Add Fixture — LED performer flow with IP address entry')
 
-    doc.add_heading('Adding a DMX Fixture', level=2)
+    doc.add_heading(T('Adding a DMX Fixture'), level=2)
     doc.add_paragraph(
         'Click Add Fixture, select "DMX Fixture", and configure:\n'
         '- Name: Descriptive label\n'
@@ -289,7 +351,7 @@ def build_manual():
     )
     add_screenshot('spa-setup-add-dmx.png', 'Add Fixture — DMX fixture with profile dropdown')
 
-    doc.add_heading('Editing DMX Fixtures', level=2)
+    doc.add_heading(T('Editing DMX Fixtures'), level=2)
     doc.add_paragraph(
         'Click Edit on a DMX fixture to modify its properties. The edit modal shows:\n'
         '- Universe, Start Address, Channel Count\n'
@@ -300,7 +362,7 @@ def build_manual():
     )
     add_screenshot('spa-setup-edit-dmx.png', 'Edit DMX fixture — aim point, profile, and test channels')
 
-    doc.add_heading('Fixture Types', level=2)
+    doc.add_heading(T('Fixture Types'), level=2)
     add_table(
         ['Type', 'Description', 'Use Case'],
         [
@@ -313,7 +375,7 @@ def build_manual():
     doc.add_page_break()
 
     # ── Section 3: Spatial Effects ─────────────────────────────
-    doc.add_heading('3. Creating Spatial Effects', level=1)
+    doc.add_heading(T('3. Creating Spatial Effects'), level=1)
 
     doc.add_paragraph(
         'Spatial effects operate in 3D space. A sphere of colored light sweeping across the stage '
@@ -323,7 +385,7 @@ def build_manual():
 
     add_screenshot('spa-actions.png', 'Actions tab — spatial effects and classic action library')
 
-    doc.add_heading('Spatial Fields', level=2)
+    doc.add_heading(T('Spatial Fields'), level=2)
     add_table(
         ['Field', 'Description'],
         [
@@ -338,7 +400,7 @@ def build_manual():
         ]
     )
 
-    doc.add_heading('Moving Heads + Spatial Effects', level=2)
+    doc.add_heading(T('Moving Heads + Spatial Effects'), level=2)
     doc.add_paragraph(
         'When a spatial effect is applied to a DMX moving head fixture:\n'
         '- The effect\'s center position becomes the aim target\n'
@@ -348,7 +410,7 @@ def build_manual():
         '- 3D viewport shows beam cones pointing at the effect center'
     )
 
-    doc.add_heading('DMX Action Types', level=2)
+    doc.add_heading(T('DMX Action Types'), level=2)
     doc.add_paragraph(
         'In addition to classic LED actions (Solid, Chase, Rainbow, etc.), four DMX-specific '
         'action types are available for direct control of DMX features:'
@@ -370,7 +432,7 @@ def build_manual():
     doc.add_page_break()
 
     # ── Section 4: Building a Timeline ─────────────────────────
-    doc.add_heading('4. Building a Timeline', level=1)
+    doc.add_heading(T('4. Building a Timeline'), level=1)
 
     doc.add_paragraph(
         'Timelines are multi-track, overlapping effect sequences with precise timing. '
@@ -379,7 +441,7 @@ def build_manual():
 
     add_screenshot('spa-runtime.png', 'Runtime tab — timeline editor')
 
-    doc.add_heading('Creating a Timeline', level=2)
+    doc.add_heading(T('Creating a Timeline'), level=2)
     doc.add_paragraph(
         '1. Click "+ New Timeline" and enter name and duration\n'
         '2. Select the timeline from the dropdown\n'
@@ -390,9 +452,9 @@ def build_manual():
     doc.add_page_break()
 
     # ── Section 5: Baking & Playback ──────────────────────────
-    doc.add_heading('5. Baking & Playback', level=1)
+    doc.add_heading(T('5. Baking & Playback'), level=1)
 
-    doc.add_heading('What Is Baking?', level=2)
+    doc.add_heading(T('What Is Baking?'), level=2)
     doc.add_paragraph(
         'Baking compiles a timeline into minimal action instructions for each performer. '
         'The smart bake engine analyzes each clip\'s spatial geometry directly and computes '
@@ -404,7 +466,7 @@ def build_manual():
         '- Time-sliced segments for smooth moving head tracking'
     )
 
-    doc.add_heading('Playback', level=2)
+    doc.add_heading(T('Playback'), level=2)
     doc.add_paragraph(
         'After baking and syncing:\n'
         '- LED performers receive action steps via UDP and execute locally\n'
@@ -415,7 +477,7 @@ def build_manual():
     doc.add_page_break()
 
     # ── Section 6: Show Preview ───────────────────────────────
-    doc.add_heading('6. Show Preview Emulator', level=1)
+    doc.add_heading(T('6. Show Preview Emulator'), level=1)
     doc.add_paragraph(
         'The emulator shows a real-time preview of your show on the Runtime tab.\n\n'
         '- LED fixtures: Colored dots along string directions, animated per-pixel\n'
@@ -426,7 +488,7 @@ def build_manual():
     doc.add_page_break()
 
     # ── Section 7: Preset Shows ───────────────────────────────
-    doc.add_heading('7. Preset Shows', level=1)
+    doc.add_heading(T('7. Preset Shows'), level=1)
     doc.add_paragraph(
         '14 themed shows are available from the Runtime tab. Shows are dynamically generated '
         'based on your actual fixtures — every fixture gets coverage with no dark periods. '
@@ -457,7 +519,7 @@ def build_manual():
     doc.add_page_break()
 
     # ── Section 8: DMX Fixture Profiles ───────────────────────
-    doc.add_heading('8. DMX Fixture Profiles', level=1)
+    doc.add_heading(T('8. DMX Fixture Profiles'), level=1)
 
     doc.add_paragraph(
         'Profiles define the channel layout and capabilities of DMX fixtures. '
@@ -467,14 +529,14 @@ def build_manual():
 
     add_screenshot('spa-settings-profiles.png', 'Fixture Profile Library — 12 built-in profiles')
 
-    doc.add_heading('Viewing a Profile', level=2)
+    doc.add_heading(T('Viewing a Profile'), level=2)
     doc.add_paragraph(
         'Click View on any profile to see the full channel table with capabilities. '
         'Moving head profiles show pan/tilt ranges, beam width, and color mode.'
     )
     add_screenshot('spa-settings-profile-view.png', 'Moving Head 16-bit profile with 13 channels and capability ranges')
 
-    doc.add_heading('Creating Custom Profiles', level=2)
+    doc.add_heading(T('Creating Custom Profiles'), level=2)
     doc.add_paragraph(
         'Click "New Profile" to open the editor. Define channels with type, name, bits (8/16), '
         'and capability ranges. Click the capabilities button on each channel to define '
@@ -483,7 +545,7 @@ def build_manual():
     add_screenshot('spa-settings-profile-editor.png', 'Profile editor — channel table with type dropdowns')
     add_screenshot('workflow-profile-caps.png', 'Capability range editor for a channel')
 
-    doc.add_heading('Importing from Open Fixture Library', level=2)
+    doc.add_heading(T('Importing from Open Fixture Library'), level=2)
     doc.add_paragraph(
         'Click "Import OFL" to paste fixture JSON from open-fixture-library.org. '
         'The importer converts OFL\'s capability model to SlyLED format, handling '
@@ -491,7 +553,7 @@ def build_manual():
     )
     add_screenshot('spa-settings-ofl-import.png', 'Open Fixture Library import modal')
 
-    doc.add_heading('Import/Export Bundles', level=2)
+    doc.add_heading(T('Import/Export Bundles'), level=2)
     doc.add_paragraph(
         'Export your custom profiles as a JSON bundle file for backup or sharing. '
         'Import bundles to add profiles from other installations.'
@@ -499,7 +561,7 @@ def build_manual():
     doc.add_page_break()
 
     # ── Section 9: Settings ───────────────────────────────────
-    doc.add_heading('9. Settings & Configuration', level=1)
+    doc.add_heading(T('9. Settings & Configuration'), level=1)
     add_screenshot('spa-settings.png', 'Settings tab — app configuration and DMX output')
     doc.add_paragraph(
         'The Settings tab contains:\n'
@@ -514,7 +576,7 @@ def build_manual():
         '- Factory reset'
     )
 
-    doc.add_heading('Firmware', level=2)
+    doc.add_heading(T('Firmware'), level=2)
     add_screenshot('spa-firmware.png', 'Firmware tab — board detection and flash controls')
     doc.add_paragraph(
         'The Firmware tab provides:\n'
@@ -526,7 +588,7 @@ def build_manual():
     doc.add_page_break()
 
     # ── Section 10: System Limits ─────────────────────────────
-    doc.add_heading('10. System Limits', level=1)
+    doc.add_heading(T('10. System Limits'), level=1)
     add_table(
         ['Resource', 'Limit', 'Notes'],
         [
@@ -546,7 +608,7 @@ def build_manual():
     doc.add_page_break()
 
     # ── Section 11: Troubleshooting ───────────────────────────
-    doc.add_heading('11. Troubleshooting', level=1)
+    doc.add_heading(T('11. Troubleshooting'), level=1)
 
     problems = [
         ('3D Viewport Not Rendering', 'Browser doesn\'t support WebGL. Use Chrome, Firefox, or Edge.'),
@@ -567,7 +629,7 @@ def build_manual():
     doc.add_page_break()
 
     # ── Section 12: API Quick Reference ───────────────────────
-    doc.add_heading('12. API Quick Reference', level=1)
+    doc.add_heading(T('12. API Quick Reference'), level=1)
     doc.add_paragraph('All endpoints are served from the Orchestrator at http://localhost:8080.')
 
     api_sections = [
@@ -613,7 +675,14 @@ def main():
     parser = argparse.ArgumentParser(description='Build SlyLED User Manual (Word doc)')
     parser.add_argument('--screenshots', action='store_true',
                         help='Regenerate screenshots before building')
+    parser.add_argument('--lang', default='en', choices=['en', 'fr'],
+                        help='Language: en (default) or fr')
     args = parser.parse_args()
+
+    global _LANG, OUTPUT
+    _LANG = args.lang
+    if _LANG != 'en':
+        OUTPUT = OUTPUT.replace('.docx', f'_{_LANG}.docx')
 
     if args.screenshots:
         print('Regenerating screenshots...')
@@ -621,7 +690,7 @@ def main():
                        check=True)
         print()
 
-    print('Building Word document...')
+    print(f'Building Word document ({_LANG})...')
     path = build_manual()
 
     # Verify screenshots used

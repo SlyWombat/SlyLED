@@ -359,7 +359,7 @@ private fun ActionEditorDialog(
 
                 // Scope
                 Text("Scope", style = MaterialTheme.typography.labelMedium)
-                val scopes = listOf("performer" to "All Performers",
+                val scopes = listOf("performer" to "All Fixtures",
                     "selected" to "Selected", "canvas" to "Canvas")
                 scopes.forEach { (value, label) ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -371,7 +371,7 @@ private fun ActionEditorDialog(
 
                 // Selected performers checkboxes
                 if (scope == "selected" && children.isNotEmpty()) {
-                    Text("Selected Performers", style = MaterialTheme.typography.labelMedium)
+                    Text("Selected Fixtures", style = MaterialTheme.typography.labelMedium)
                     Column {
                         children.forEach { child ->
                             Row(verticalAlignment = Alignment.CenterVertically) {

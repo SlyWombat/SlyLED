@@ -90,7 +90,7 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            "Add Performers",
+                            "Add Devices",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )
@@ -170,7 +170,7 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                 }
             }
 
-            // Discovered performers (expandable)
+            // Discovered devices (expandable)
             if (discovered.isNotEmpty()) {
                 item {
                     Card(modifier = Modifier.fillMaxWidth()) {
@@ -235,15 +235,15 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                 }
             }
 
-            // Split children into DMX bridges and LED performers
+            // Split children into DMX bridges and LED devices
             val dmxBridges = children.filter { it.type == "dmx" || it.boardType == "giga-dmx" || it.boardType == "DMX Bridge" }
-            val ledPerformers = children.filter { it !in dmxBridges }
+            val ledDevices = children.filter { it !in dmxBridges }
 
             // Hardware section (DMX bridges)
             if (dmxBridges.isNotEmpty()) {
                 item {
                     Text(
-                        "Hardware (${dmxBridges.size})",
+                        "DMX Bridges (${dmxBridges.size})",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(top = 8.dp)
@@ -260,18 +260,18 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                 }
             }
 
-            // LED Performers section
-            if (ledPerformers.isNotEmpty()) {
+            // LED Devices section
+            if (ledDevices.isNotEmpty()) {
                 item {
                     Text(
-                        "Performers (${ledPerformers.size})",
+                        "LED Devices (${ledDevices.size})",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(top = 8.dp)
                     )
                 }
             }
-            items(ledPerformers, key = { "perf-${it.id}" }) { child ->
+            items(ledDevices, key = { "dev-${it.id}" }) { child ->
                 SetupPerformerCard(
                     child = child,
                     onRefresh = { viewModel.refreshChild(child.id) },
@@ -289,7 +289,7 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            "No performers registered — use Discover or add manually",
+                            "No devices registered — use Discover or add manually",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodyMedium
                         )
@@ -355,11 +355,11 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
         val child = children.find { it.id == id }
         AlertDialog(
             onDismissRequest = { confirmRemoveId = null },
-            title = { Text("Remove Performer") },
+            title = { Text("Remove Device") },
             text = {
                 val removeName = child?.let {
                     if (it.name.isNotBlank() && it.name != it.hostname) it.name else it.hostname
-                } ?: "performer #$id"
+                } ?: "device #$id"
                 Text("Remove $removeName? It will need to be re-added.")
             },
             confirmButton = {
@@ -386,11 +386,11 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
         val child = children.find { it.id == id }
         AlertDialog(
             onDismissRequest = { confirmRebootId = null },
-            title = { Text("Reboot Performer") },
+            title = { Text("Reboot Device") },
             text = {
                 val rebootName = child?.let {
                     if (it.name.isNotBlank() && it.name != it.hostname) it.name else it.hostname
-                } ?: "performer #$id"
+                } ?: "device #$id"
                 Text("Reboot $rebootName? It will be offline briefly.")
             },
             confirmButton = {
@@ -913,7 +913,7 @@ private fun FixtureFormDialog(
                             value = childLabel,
                             onValueChange = {},
                             readOnly = true,
-                            label = { Text("Performer") },
+                            label = { Text("LED Device") },
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = childExpanded) },
                             modifier = Modifier.fillMaxWidth().menuAnchor()
                         )

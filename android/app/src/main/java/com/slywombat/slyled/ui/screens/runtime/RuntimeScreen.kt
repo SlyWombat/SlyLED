@@ -444,7 +444,7 @@ fun TimelineCard(
 
             if (isSelected && syncStatus != null && !syncStatus.done) {
                 Spacer(Modifier.height(8.dp))
-                Text("Syncing: ${syncStatus.readyCount}/${syncStatus.totalPerformers} ready", fontSize = 12.sp)
+                Text("Syncing: ${syncStatus.readyCount}/${syncStatus.totalPerformers} devices ready", fontSize = 12.sp)
                 syncStatus.performers.forEach { (_, p) ->
                     Row(modifier = Modifier.padding(start = 8.dp, top = 2.dp)) {
                         val icon = when (p.status) {

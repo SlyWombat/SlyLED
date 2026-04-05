@@ -72,7 +72,7 @@ fun DashboardScreen(viewModel: DashboardViewModel = hiltViewModel()) {
                 ) {
                     val online = children.count { it.onlineStatus == OnlineStatus.ONLINE }
                     Text(
-                        "$online / ${children.size} performers online",
+                        "$online / ${children.size} devices online",
                         style = MaterialTheme.typography.titleMedium
                     )
                     FilledTonalButton(onClick = { viewModel.refreshAll() }) {
@@ -141,7 +141,7 @@ fun DashboardScreen(viewModel: DashboardViewModel = hiltViewModel()) {
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            "No performers registered",
+                            "No devices registered",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodyLarge
                         )
