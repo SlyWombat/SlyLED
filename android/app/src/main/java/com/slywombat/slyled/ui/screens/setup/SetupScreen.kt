@@ -235,21 +235,17 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                 }
             }
 
-            // Split children into DMX bridges and LED devices
-            val dmxBridges = children.filter { it.type == "dmx" || it.boardType == "giga-dmx" || it.boardType == "DMX Bridge" }
-            val ledDevices = children.filter { it !in dmxBridges }
-
-            // Hardware section (DMX bridges)
-            if (dmxBridges.isNotEmpty()) {
+            // Hardware section — DMX bridges and standalone devices
+            if (children.isNotEmpty()) {
                 item {
                     Text(
-                        "DMX Bridges (${dmxBridges.size})",
+                        "Hardware (${children.size})",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(top = 8.dp)
                     )
                 }
-                items(dmxBridges, key = { "hw-${it.id}" }) { child ->
+                items(children, key = { "hw-${it.id}" }) { child ->
                     SetupPerformerCard(
                         child = child,
                         onRefresh = { viewModel.refreshChild(child.id) },
@@ -258,38 +254,14 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                         onDetails = { detailChild = child }
                     )
                 }
-            }
-
-            // LED Devices section
-            if (ledDevices.isNotEmpty()) {
-                item {
-                    Text(
-                        "LED Devices (${ledDevices.size})",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
-                }
-            }
-            items(ledDevices, key = { "dev-${it.id}" }) { child ->
-                SetupPerformerCard(
-                    child = child,
-                    onRefresh = { viewModel.refreshChild(child.id) },
-                    onReboot = { confirmRebootId = child.id },
-                    onRemove = { confirmRemoveId = child.id },
-                    onDetails = { detailChild = child }
-                )
-            }
-
-            // Empty state
-            if (children.isEmpty()) {
+            } else {
                 item {
                     Box(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            "No devices registered — use Discover or add manually",
+                            "No hardware registered — use Discover or add manually",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodyMedium
                         )
