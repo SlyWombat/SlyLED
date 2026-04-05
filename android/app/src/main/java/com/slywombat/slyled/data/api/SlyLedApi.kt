@@ -102,6 +102,9 @@ interface SlyLedApi {
     @DELETE("api/fixtures/{id}")
     suspend fun deleteFixture(@Path("id") id: Int): OkResponse
 
+    @PUT("api/fixtures/{id}/aim")
+    suspend fun setAimPoint(@Path("id") id: Int, @Body body: Map<String, @JvmSuppressWildcards Any>): OkResponse
+
     @POST("api/fixtures/{id}/resolve")
     suspend fun resolveFixture(@Path("id") id: Int): Map<String, Any>
 

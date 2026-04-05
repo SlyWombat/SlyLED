@@ -85,6 +85,50 @@ class LayoutViewModel @Inject constructor(
         }
     }
 
+    fun autoArrangeDmx() {
+        viewModelScope.launch {
+            try {
+                val stg = _stage.value
+                val stageW = (stg.w * 1000).toInt()
+                val stageH = (stg.h * 1000).toInt()
+                val stageD = (stg.d * 1000).toInt()
+                val topY = (stageH * 0.9).toInt()
+                val backZ = (stageD * 0.8).toInt()
+                val dmxFixtures = _fixtures.value.filter { it.fixtureType == "dmx" }
+                if (dmxFixtures.isEmpty()) {
+                    _message.value = "No DMX fixtures to arrange"
+                    return@launch
+                }
+                val n = dmxFixtures.size
+                val margin = (stageW * 0.1).toInt()
+                val usableW = stageW - 2 * margin
+                val spacing = if (n > 1) usableW.toDouble() / (n - 1) else 0.0
+
+                val list = _fixtures.value.toMutableList()
+                dmxFixtures.forEachIndexed { i, f ->
+                    val idx = list.indexOfFirst { it.id == f.id }
+                    if (idx >= 0) {
+                        val x = (margin + i * spacing).toInt()
+                        list[idx] = list[idx].copy(
+                            x = x, y = topY, z = backZ, positioned = true,
+                            aimPoint = listOf(x.toDouble(), 0.0, backZ.toDouble())
+                        )
+                    }
+                }
+                _fixtures.value = list
+
+                // Save aim points
+                dmxFixtures.forEachIndexed { i, f ->
+                    val x = (margin + i * spacing).toInt()
+                    try {
+                        repository.setAimPoint(f.id, listOf(x.toDouble(), 0.0, backZ.toDouble()))
+                    } catch (_: Exception) {}
+                }
+                _message.value = "Arranged ${dmxFixtures.size} DMX fixtures"
+            } catch (e: Exception) { _message.value = "Arrange failed: ${e.message}" }
+        }
+    }
+
     fun saveLayout() {
         val current = _layout.value ?: return
         viewModelScope.launch {

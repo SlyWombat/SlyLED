@@ -69,10 +69,15 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("Stage Layout", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+            IconButton(onClick = { viewModel.autoArrangeDmx() }) {
+                Text("⊞", fontSize = 18.sp, color = Color(0xFFE9D5FF))
+            }
             if (zoom != 1f || panOffset != Offset.Zero) {
                 TextButton(onClick = { zoom = 1f; panOffset = Offset.Zero }) { Text("Reset", fontSize = 11.sp) }
             }
-            Button(onClick = { viewModel.saveLayout() }) { Text("Save", fontSize = 12.sp) }
+            IconButton(onClick = { viewModel.saveLayout() }) {
+                Text("💾", fontSize = 16.sp)
+            }
         }
 
         // Info bar

@@ -119,6 +119,8 @@ class SlyLedRepository @Inject constructor(
     suspend fun createFixture(fixture: Fixture) = requireApi().createFixture(fixture)
     suspend fun updateFixture(id: Int, fixture: Fixture) = requireApi().updateFixture(id, fixture)
     suspend fun deleteFixture(id: Int) = requireApi().deleteFixture(id)
+    suspend fun setAimPoint(id: Int, aimPoint: List<Double>) =
+        requireApi().setAimPoint(id, mapOf("aimPoint" to aimPoint))
 
     // DMX Profiles & Control
     suspend fun getDmxProfiles(category: String? = null) = requireApi().getDmxProfiles(category)
