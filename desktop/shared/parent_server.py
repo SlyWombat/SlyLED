@@ -1021,6 +1021,146 @@ def api_fixture_delete(fid):
     _save("fixtures", _fixtures)
     return jsonify(ok=True)
 
+# ── Camera discovery & CRUD ─────────────────────────────────────────────
+
+_cam_discover_state = {"pending": False, "data": []}
+
+def _probe_camera(ip, timeout=2):
+    """Probe a camera node via HTTP GET /status. Returns info dict or None."""
+    import urllib.request as _ur
+    try:
+        resp = _ur.urlopen(f"http://{ip}:5000/status", timeout=timeout)
+        data = json.loads(resp.read().decode("utf-8"))
+        if data.get("role") != "camera":
+            return None
+        return {
+            "ip": ip,
+            "hostname": data.get("hostname", ip),
+            "name": data.get("hostname", ip),
+            "fwVersion": data.get("fwVersion", ""),
+            "fovDeg": data.get("fovDeg"),
+            "resolutionW": data.get("resolutionW"),
+            "resolutionH": data.get("resolutionH"),
+            "capabilities": data.get("capabilities", {}),
+            "cameraUrl": data.get("cameraUrl", ""),
+        }
+    except Exception:
+        return None
+
+def _discover_cameras():
+    """Scan subnet for camera nodes, return unregistered ones."""
+    known_ips = set()
+    for f in _fixtures:
+        if f.get("fixtureType") == "camera" and f.get("cameraIp"):
+            known_ips.add(f["cameraIp"])
+    # Get local subnet(s) and scan common range
+    results = []
+    import socket
+    try:
+        local_ip = socket.gethostbyname(socket.gethostname())
+    except Exception:
+        local_ip = "192.168.1.1"
+    prefix = ".".join(local_ip.split(".")[:3])
+    for i in range(1, 255):
+        ip = f"{prefix}.{i}"
+        if ip in known_ips or ip == local_ip:
+            continue
+        info = _probe_camera(ip, timeout=0.3)
+        if info:
+            results.append(info)
+    return results
+
+def _cam_discover_bg():
+    try:
+        _cam_discover_state["data"] = _discover_cameras()
+    finally:
+        _cam_discover_state["pending"] = False
+
+@app.get("/api/cameras")
+def api_cameras():
+    """List registered camera fixtures with live status."""
+    cams = [f for f in _fixtures if f.get("fixtureType") == "camera"]
+    result = []
+    for c in cams:
+        cam = dict(c)
+        ip = c.get("cameraIp")
+        cam["online"] = False
+        if ip:
+            info = _probe_camera(ip, timeout=1)
+            if info:
+                cam["online"] = True
+                cam["fwVersion"] = info.get("fwVersion", "")
+                cam["capabilities"] = info.get("capabilities", {})
+        result.append(cam)
+    return jsonify(result)
+
+@app.get("/api/cameras/discover")
+def api_cameras_discover():
+    if _cam_discover_state["pending"]:
+        return jsonify(pending=True)
+    _cam_discover_state["pending"] = True
+    _cam_discover_state["data"] = []
+    threading.Thread(target=_cam_discover_bg, daemon=True).start()
+    return jsonify(pending=True)
+
+@app.get("/api/cameras/discover/results")
+def api_cameras_discover_results():
+    if _cam_discover_state["pending"]:
+        return jsonify(pending=True)
+    return jsonify(_cam_discover_state["data"])
+
+@app.post("/api/cameras")
+def api_cameras_register():
+    """Register a camera node — creates a camera fixture."""
+    global _nxt_fix
+    body = request.get_json(silent=True) or {}
+    ip = body.get("ip", "").strip()
+    if not ip:
+        return jsonify(err="ip required"), 400
+    import ipaddress as _ipa
+    try:
+        addr = _ipa.ip_address(ip)
+        if not addr.is_private:
+            return jsonify(err="Only private/LAN IP addresses allowed"), 400
+    except ValueError:
+        return jsonify(err="Invalid IP address"), 400
+    # Prevent duplicate
+    for f in _fixtures:
+        if f.get("fixtureType") == "camera" and f.get("cameraIp") == ip:
+            return jsonify(err="Camera already registered at this IP"), 409
+    # Probe camera for info
+    info = _probe_camera(ip, timeout=3)
+    name = body.get("name") or (info.get("hostname") if info else None) or f"Camera {ip}"
+    with _lock:
+        f = {
+            "id": _nxt_fix, "name": name,
+            "fixtureType": "camera", "type": "point",
+            "childId": None, "childIds": [], "strings": [],
+            "rotation": [0, 0, 0], "aoeRadius": 1000, "meshFile": None,
+            "cameraIp": ip,
+            "aimPoint": [0, 0, int(_stage.get("d", 10) * 1000)],
+            "fovDeg": (info or {}).get("fovDeg") or body.get("fovDeg") or 60,
+            "cameraUrl": (info or {}).get("cameraUrl") or body.get("cameraUrl", ""),
+            "resolutionW": (info or {}).get("resolutionW") or body.get("resolutionW") or 1920,
+            "resolutionH": (info or {}).get("resolutionH") or body.get("resolutionH") or 1080,
+        }
+        _fixtures.append(f)
+        _nxt_fix += 1
+        _save("fixtures", _fixtures)
+    return jsonify(ok=True, id=f["id"]), 201
+
+@app.delete("/api/cameras/<int:fid>")
+def api_cameras_delete(fid):
+    """Unregister a camera — removes the fixture."""
+    global _fixtures
+    f = next((f for f in _fixtures if f["id"] == fid and f.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    with _lock:
+        _fixtures = [x for x in _fixtures if x["id"] != fid]
+        _save("fixtures", _fixtures)
+    return jsonify(ok=True), 200
+
 @app.post("/api/fixtures/<int:fid>/resolve")
 def api_fixture_resolve(fid):
     f = next((f for f in _fixtures if f["id"] == fid), None)

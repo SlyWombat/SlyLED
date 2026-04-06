@@ -108,6 +108,22 @@ interface SlyLedApi {
     @POST("api/fixtures/{id}/resolve")
     suspend fun resolveFixture(@Path("id") id: Int): Map<String, Any>
 
+    // ── Cameras ───────────────────────────────────────────────────────
+    @GET("api/cameras")
+    suspend fun getCameras(): List<Fixture>
+
+    @POST("api/cameras")
+    suspend fun registerCamera(@Body body: Map<String, @JvmSuppressWildcards Any>): OkResponse
+
+    @DELETE("api/cameras/{id}")
+    suspend fun unregisterCamera(@Path("id") id: Int): OkResponse
+
+    @GET("api/cameras/discover")
+    suspend fun discoverCameras(): JsonObject
+
+    @GET("api/cameras/discover/results")
+    suspend fun discoverCamerasResults(): List<JsonObject>
+
     // ── DMX Profiles & Control ────────────────────────────────────────
     @GET("/api/dmx-profiles")
     suspend fun getDmxProfiles(@Query("category") category: String? = null): List<DmxProfile>

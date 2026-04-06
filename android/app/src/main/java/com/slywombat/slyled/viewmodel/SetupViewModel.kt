@@ -44,6 +44,9 @@ class SetupViewModel @Inject constructor(
     private val _dmxProfiles = MutableStateFlow<List<DmxProfile>>(emptyList())
     val dmxProfiles: StateFlow<List<DmxProfile>> = _dmxProfiles
 
+    private val _cameras = MutableStateFlow<List<Fixture>>(emptyList())
+    val cameras: StateFlow<List<Fixture>> = _cameras
+
     private val _message = MutableSharedFlow<String>()
     val message: SharedFlow<String> = _message
 
@@ -61,6 +64,7 @@ class SetupViewModel @Inject constructor(
         }
         loadFixtures()
         loadDmxProfiles()
+        loadCameras()
     }
 
     fun loadFixtures() {
@@ -207,6 +211,48 @@ class SetupViewModel @Inject constructor(
                 }
             } catch (e: Exception) {
                 _message.emit("Reboot failed: ${e.message}")
+            }
+        }
+    }
+
+    fun loadCameras() {
+        viewModelScope.launch {
+            try {
+                _cameras.value = repository.getCameras()
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun registerCamera(ip: String, name: String? = null) {
+        viewModelScope.launch {
+            try {
+                val resp = repository.registerCamera(ip, name)
+                if (resp.ok) {
+                    _message.emit("Camera registered at $ip")
+                    loadFixtures()
+                    loadCameras()
+                } else {
+                    _message.emit(resp.err ?: "Failed to register camera")
+                }
+            } catch (e: Exception) {
+                _message.emit("Register camera failed: ${e.message}")
+            }
+        }
+    }
+
+    fun unregisterCamera(id: Int) {
+        viewModelScope.launch {
+            try {
+                val resp = repository.unregisterCamera(id)
+                if (resp.ok) {
+                    _message.emit("Camera removed")
+                    loadFixtures()
+                    loadCameras()
+                } else {
+                    _message.emit(resp.err ?: "Failed to remove camera")
+                }
+            } catch (e: Exception) {
+                _message.emit("Remove camera failed: ${e.message}")
             }
         }
     }

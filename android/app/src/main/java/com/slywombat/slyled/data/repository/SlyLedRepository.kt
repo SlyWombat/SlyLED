@@ -124,6 +124,15 @@ class SlyLedRepository @Inject constructor(
     suspend fun setAimPoint(id: Int, aimPoint: List<Double>) =
         requireApi().setAimPoint(id, mapOf("aimPoint" to aimPoint))
 
+    // Cameras
+    suspend fun getCameras() = requireApi().getCameras()
+    suspend fun registerCamera(ip: String, name: String? = null): OkResponse {
+        val body = mutableMapOf<String, Any>("ip" to ip)
+        if (!name.isNullOrBlank()) body["name"] = name
+        return requireApi().registerCamera(body)
+    }
+    suspend fun unregisterCamera(id: Int) = requireApi().unregisterCamera(id)
+
     // DMX Profiles & Control
     suspend fun getDmxProfiles(category: String? = null) = requireApi().getDmxProfiles(category)
     suspend fun getDmxStatus() = requireApi().getDmxStatus()

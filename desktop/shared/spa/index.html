@@ -884,8 +884,18 @@ function _renderSetup(){
       // ── Fixtures section (LED + DMX fixtures)
       h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">Fixtures</h3>'
         +'<table class="tbl"><tr><th>Fixture</th><th>Type</th><th>Connection</th><th>Status</th><th>Channels / LEDs</th><th>Actions</th></tr>';
-      var ledFixtures=(fixtures||[]).filter(function(f){return (f.fixtureType||'led')!=='dmx';});
+      var ledFixtures=(fixtures||[]).filter(function(f){return (f.fixtureType||'led')==='led';});
       var dmxFixtures=(fixtures||[]).filter(function(f){return f.fixtureType==='dmx';});
+      var camFixtures=(fixtures||[]).filter(function(f){return f.fixtureType==='camera';});
+      // Async: fetch camera live status (don't block render)
+      if(camFixtures.length){ra('GET','/api/cameras',null,function(cams){
+        if(!cams||!cams.length)return;
+        var tbl=document.querySelector('#t-setup .cam-status-tbl');if(!tbl)return;
+        cams.forEach(function(c){
+          var cell=document.getElementById('cam-st-'+c.id);
+          if(cell)cell.innerHTML=c.online?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
+        });
+      });}
       if(ledFixtures.length){
         ledFixtures.forEach(function(f){
           var ch=f.childId!=null?cMap[f.childId]:null;
@@ -925,10 +935,30 @@ function _renderSetup(){
           h+='<tr><td><b>'+escapeHtml(f.name)+'</b></td><td><span class="badge" style="background:#7c3aed;color:#fff">DMX</span></td><td>'+conn+'</td><td><span class="badge" style="background:#7c3aed;color:#fff">Configured</span></td><td>'+chLeds+'</td><td>'+actions+'</td></tr>';
         });
       }
-      if(!ledFixtures.length&&!dmxFixtures.length){
+      if(!ledFixtures.length&&!dmxFixtures.length&&!camFixtures.length){
         h+='<tr><td colspan="6" style="color:#888;text-align:center">No fixtures — click Add Fixture or Discover</td></tr>';
       }
-      document.getElementById('t-setup').innerHTML=h+'</table>';
+      h+='</table>';
+
+      // ── Cameras section
+      h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">Cameras <button class="btn" onclick="discoverCameras(this)" id="cam-disc-btn" style="font-size:.75em;padding:.15em .5em;margin-left:.5em;background:#0e7490;color:#fff">Discover</button></h3>';
+      h+='<div id="cam-disc-results" style="display:none;margin-bottom:.5em"></div>';
+      if(camFixtures.length){
+        h+='<table class="tbl cam-status-tbl"><tr><th>Camera</th><th>IP</th><th>FOV</th><th>Resolution</th><th>Status</th><th>Actions</th></tr>';
+        camFixtures.forEach(function(f){
+          var ip=f.cameraIp||'—';
+          var fov=(f.fovDeg||60)+'\u00b0';
+          var res=(f.resolutionW||'—')+'x'+(f.resolutionH||'—');
+          var acts='<button class="btn" onclick="editFixture('+f.id+')" style="background:#0e7490;color:#fff">Edit</button>'
+            +' <button class="btn btn-off" onclick="removeCamera('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
+          h+='<tr><td><b>'+escapeHtml(f.name)+'</b></td><td>'+escapeHtml(ip)+'</td><td>'+fov+'</td><td>'+res+'</td><td id="cam-st-'+f.id+'"><span class="badge" style="background:#334;color:#888">Checking...</span></td><td>'+acts+'</td></tr>';
+        });
+        h+='</table>';
+      }else{
+        h+='<p style="color:#555;font-size:.82em">No cameras registered. Click Discover or add via Add Fixture.</p>';
+      }
+
+      document.getElementById('t-setup').innerHTML=h;
     });
   });
 }
@@ -1276,6 +1306,54 @@ function addDiscovered(ip){
       document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
       setTimeout(loadSetup,1000);
     }
+  });
+}
+
+function discoverCameras(btn){
+  if(btn){btn.disabled=true;btn.textContent='Scanning...';}
+  ra('GET','/api/cameras/discover',null,function(){
+    var poll=setInterval(function(){
+      ra('GET','/api/cameras/discover/results',null,function(d){
+        if(d&&d.pending)return;
+        clearInterval(poll);
+        if(btn){btn.disabled=false;btn.textContent='Discover';}
+        var el=document.getElementById('cam-disc-results');
+        if(!el)return;
+        if(!d||!d.length){
+          el.innerHTML='<p style="color:#888;font-size:.85em;padding:.3em 0">No new cameras found on network.</p>';
+          el.style.display='block';return;
+        }
+        var h='<p style="color:#22d3ee;font-size:.85em;margin-bottom:.4em">Found cameras — click Register:</p>'
+          +'<table class="tbl" style="max-width:600px"><tr><th>Name</th><th>IP</th><th>FOV</th><th></th></tr>';
+        d.forEach(function(c){
+          h+='<tr><td>'+escapeHtml(c.hostname||c.name||'Camera')+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+(c.fovDeg||'?')+'&deg;</td>'
+            +'<td><button class="btn" onclick="registerCamera(\''+c.ip+'\',\''+escapeHtml(c.hostname||'').replace(/'/g,"\\'")+'\')" style="background:#0e7490;color:#fff">Register</button></td></tr>';
+        });
+        el.innerHTML=h+'</table>';
+        el.style.display='block';
+      });
+    },500);
+  });
+}
+
+function registerCamera(ip,name){
+  document.getElementById('hs').textContent='Registering camera at '+ip+'...';
+  ra('POST','/api/cameras',{ip:ip,name:name||undefined},function(r){
+    if(r&&r.ok){
+      document.getElementById('hs').textContent='Registered camera: '+(name||ip);
+    }else{
+      document.getElementById('hs').textContent='Register failed: '+(r&&r.err||'unknown');
+    }
+    loadSetup();
+  });
+}
+
+function removeCamera(id,name){
+  if(!confirm('Remove camera "'+name+'"?'))return;
+  document.getElementById('hs').textContent='Removing camera...';
+  ra('DELETE','/api/cameras/'+id,null,function(){
+    document.getElementById('hs').textContent='Removed camera: '+name;
+    loadSetup();
   });
 }
 

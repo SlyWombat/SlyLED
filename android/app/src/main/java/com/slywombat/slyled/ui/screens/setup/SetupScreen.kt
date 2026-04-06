@@ -50,6 +50,7 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
     val isDiscovering by viewModel.isDiscovering.collectAsState()
     val isAdding by viewModel.isAdding.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val cameras by viewModel.cameras.collectAsState()
 
     var manualIp by remember { mutableStateOf("") }
     var showDiscovered by remember { mutableStateOf(false) }
@@ -302,7 +303,7 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                 }
             }
 
-            items(fixtures, key = { "fix-${it.id}" }) { fixture ->
+            items(fixtures.filter { it.fixtureType != "camera" }, key = { "fix-${it.id}" }) { fixture ->
                 FixtureCard(
                     fixture = fixture,
                     children = children,
@@ -310,6 +311,62 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                     onDelete = { confirmDeleteFixtureId = fixture.id },
                     onDmxTest = if (fixture.fixtureType == "dmx") {{ dmxTestFixture = fixture }} else null
                 )
+            }
+
+            // ── Cameras section ──────────────────────────────────────────
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Cameras (${cameras.size})",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            if (cameras.isEmpty()) {
+                item {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "No cameras registered — add via Add Fixture > Camera",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+
+            items(cameras, key = { "cam-${it.id}" }) { cam ->
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp).fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(cam.name.ifEmpty { "Camera ${cam.id}" }, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            val ip = cam.cameraUrl?.takeIf { it.isNotBlank() } ?: "No URL"
+                            Text("IP: ${ip}  FOV: ${cam.fovDeg?.toInt() ?: 60}°", fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(onClick = { editFixture = cam }) { Text("Edit", fontSize = 12.sp) }
+                            TextButton(
+                                onClick = { viewModel.unregisterCamera(cam.id) },
+                                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                            ) { Text("Remove", fontSize = 12.sp) }
+                        }
+                    }
+                }
             }
         }
     }

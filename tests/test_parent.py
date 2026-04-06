@@ -398,6 +398,76 @@ def run():
         c.delete('/api/fixtures/' + str(cam_id))
         c.delete('/api/fixtures/' + str(cam_id2))
 
+        # ── Camera discovery & registration ──────────────────────────
+        # GET /api/cameras (empty initially)
+        r = c.get('/api/cameras')
+        ok('GET /api/cameras', r.status_code == 200)
+        cam_before = len([f for f in r.get_json() if f.get('fixtureType') == 'camera'])
+
+        # POST /api/cameras — register a camera by IP
+        r = c.post('/api/cameras', json={'ip': '192.168.10.200', 'name': 'Test Cam'})
+        ok('POST /api/cameras register', r.status_code == 201 and r.get_json().get('ok'))
+        reg_cam_id = r.get_json().get('id')
+
+        # Verify camera appears in fixtures list
+        r = c.get('/api/fixtures/' + str(reg_cam_id))
+        ok('Registered camera is fixture', r.status_code == 200)
+        rc = r.get_json()
+        ok('Registered camera fixtureType', rc.get('fixtureType') == 'camera')
+        ok('Registered camera has cameraIp', rc.get('cameraIp') == '192.168.10.200')
+        ok('Registered camera has fovDeg', rc.get('fovDeg') == 60)
+        ok('Registered camera has aimPoint', isinstance(rc.get('aimPoint'), list))
+
+        # Duplicate IP → 409
+        r = c.post('/api/cameras', json={'ip': '192.168.10.200'})
+        ok('Camera duplicate IP → 409', r.status_code == 409)
+
+        # Missing IP → 400
+        r = c.post('/api/cameras', json={})
+        ok('Camera missing IP → 400', r.status_code == 400)
+
+        # Invalid IP → 400
+        r = c.post('/api/cameras', json={'ip': 'not-an-ip'})
+        ok('Camera invalid IP → 400', r.status_code == 400)
+
+        # Public IP → 400
+        r = c.post('/api/cameras', json={'ip': '8.8.8.8'})
+        ok('Camera public IP → 400', r.status_code == 400)
+
+        # GET /api/cameras includes registered camera
+        r = c.get('/api/cameras')
+        cam_list = r.get_json()
+        ok('GET /api/cameras has registered', len(cam_list) > cam_before)
+        reg = next((x for x in cam_list if x['id'] == reg_cam_id), None)
+        ok('Registered camera in list', reg is not None)
+        ok('Camera list has online field', 'online' in reg)
+
+        # Camera appears in layout when placed
+        c.post('/api/layout', json={'fixtures': [{'id': reg_cam_id, 'x': 3000, 'y': 4000}]})
+        r = c.get('/api/layout')
+        cam_in_lay = [f for f in r.get_json()['fixtures'] if f['id'] == reg_cam_id]
+        ok('Registered camera in layout', len(cam_in_lay) == 1)
+
+        # Camera can use /aim endpoint
+        r = c.put('/api/fixtures/' + str(reg_cam_id) + '/aim', json={'aimPoint': [1000, 500, 2000]})
+        ok('Registered camera aim point', r.status_code == 200)
+
+        # DELETE /api/cameras/<id> unregisters
+        r = c.delete('/api/cameras/' + str(reg_cam_id))
+        ok('DELETE /api/cameras', r.status_code == 200)
+
+        # Verify camera removed from fixtures
+        r = c.get('/api/fixtures/' + str(reg_cam_id))
+        ok('Camera removed from fixtures', r.status_code == 404)
+
+        # DELETE unknown camera → 404
+        r = c.delete('/api/cameras/99999')
+        ok('DELETE unknown camera → 404', r.status_code == 404)
+
+        # Discover endpoints exist (won't find real cameras in test)
+        r = c.get('/api/cameras/discover')
+        ok('GET /api/cameras/discover', r.status_code == 200)
+
         # ── Objects (Phase 2 — renamed from Surfaces) ─────────────────
         r = c.get('/api/objects')
         ok('GET /api/objects', r.status_code == 200)
