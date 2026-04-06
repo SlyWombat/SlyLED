@@ -221,12 +221,16 @@ data class Fixture(
     val name: String = "",
     val childId: Int? = null,
     val type: String = "linear",  // linear, point, surface, group
-    val fixtureType: String = "led",  // "led" or "dmx"
+    val fixtureType: String = "led",  // "led", "dmx", or "camera"
     val dmxUniverse: Int? = null,
     val dmxStartAddr: Int? = null,
     val dmxChannelCount: Int? = null,
     val dmxProfileId: String? = null,
     val aimPoint: List<Double>? = null,
+    val fovDeg: Double? = null,
+    val cameraUrl: String? = null,
+    val resolutionW: Int? = null,
+    val resolutionH: Int? = null,
     val childIds: List<Int> = emptyList(),
     val strings: List<FixtureString> = emptyList(),
     val rotation: List<Double> = listOf(0.0, 0.0, 0.0),

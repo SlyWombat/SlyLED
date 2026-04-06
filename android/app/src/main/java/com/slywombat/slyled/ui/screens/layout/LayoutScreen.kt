@@ -253,7 +253,7 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                         val cy = h - fixture.y.toFloat() * h / canvasH
 
                         // LED strings
-                        if (showStrings && fixture.fixtureType != "dmx") {
+                        if (showStrings && fixture.fixtureType == "led") {
                             val strColors = listOf(Color.Cyan, Color.Magenta, Color.Yellow, Color.Green)
                             fixture.strings.forEachIndexed { si, s ->
                                 if (s.leds <= 0) return@forEachIndexed
@@ -290,8 +290,36 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                             }
                         }
 
+                        // Camera FOV cone
+                        if (fixture.fixtureType == "camera" && fixture.aimPoint != null) {
+                            val aimX = fixture.aimPoint.getOrNull(0)?.toFloat()
+                            val aimY = fixture.aimPoint.getOrNull(1)?.toFloat()
+                            if (aimX != null && aimY != null) {
+                                val ax = aimX * w / canvasW
+                                val ay = h - aimY * h / canvasH
+                                val bLen = kotlin.math.sqrt((ax - cx) * (ax - cx) + (ay - cy) * (ay - cy))
+                                if (bLen > 5f) {
+                                    val fovDeg = fixture.fovDeg?.toFloat() ?: 60f
+                                    val halfW = kotlin.math.tan(fovDeg * Math.PI.toFloat() / 360f) * bLen
+                                    val angle = kotlin.math.atan2(ay - cy, ax - cx)
+                                    val perpX = -kotlin.math.sin(angle); val perpY = kotlin.math.cos(angle)
+                                    val path = Path()
+                                    path.moveTo(cx, cy)
+                                    path.lineTo(ax + perpX * halfW, ay + perpY * halfW)
+                                    path.lineTo(ax - perpX * halfW, ay - perpY * halfW)
+                                    path.close()
+                                    drawPath(path, Color(0x1A0E7490))
+                                    drawCircle(Color(0xFFFF4444), 5f, Offset(ax, ay))
+                                }
+                            }
+                        }
+
                         // Node
-                        val nodeColor = if (fixture.fixtureType == "dmx") Color(0xFF9966FF) else Color(0xFF22CC66)
+                        val nodeColor = when (fixture.fixtureType) {
+                            "dmx" -> Color(0xFF9966FF)
+                            "camera" -> Color(0xFF22D3EE)
+                            else -> Color(0xFF22CC66)
+                        }
                         drawCircle(nodeColor, 10f, Offset(cx, cy))
                         drawCircle(nodeColor.copy(alpha = 0.4f), 14f, Offset(cx, cy), style = Stroke(2f))
 
@@ -322,7 +350,7 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                     Card(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp), onClick = { editFixture = f }) {
                         Row(modifier = Modifier.padding(6.dp).fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            val tag = if (f.fixtureType == "dmx") "[DMX]" else "[LED]"
+                            val tag = when (f.fixtureType) { "dmx" -> "[DMX]"; "camera" -> "[CAM]"; else -> "[LED]" }
                             Text("$tag ${f.name.ifEmpty { "Fixture ${f.id}" }}", fontSize = 12.sp)
                             Text("(${f.x}, ${f.y})", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -344,7 +372,7 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                         onClick = { placingFixtureId = if (placingFixtureId == f.id) -1 else f.id }
                     ) {
                         Row(modifier = Modifier.padding(8.dp)) {
-                            val tag = if (f.fixtureType == "dmx") "[DMX]" else "[LED]"
+                            val tag = when (f.fixtureType) { "dmx" -> "[DMX]"; "camera" -> "[CAM]"; else -> "[LED]" }
                             Text("$tag ${f.name.ifEmpty { "Fixture ${f.id}" }} — tap then tap canvas",
                                 fontSize = 12.sp, color = if (placingFixtureId == f.id) Color(0xFF86EFAC) else Color.Unspecified)
                         }

@@ -718,6 +718,23 @@ private fun FixtureCard(
                     }
                 }
             }
+            // Camera details row
+            if (fixture.fixtureType == "camera") {
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    fixture.fovDeg?.let {
+                        Text("FOV:${it.toInt()}°", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    fixture.resolutionW?.let { w ->
+                        fixture.resolutionH?.let { h ->
+                            Text("${w}x${h}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
             Spacer(Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -762,9 +779,8 @@ private fun FixtureTypeBadge(type: String) {
 
 @Composable
 private fun FixtureModeBadge(fixtureType: String) {
-    val isDmx = fixtureType == "dmx"
-    val label = if (isDmx) "DMX" else "LED"
-    val color = if (isDmx) OrangeWled else GreenOnline
+    val label = when (fixtureType) { "dmx" -> "DMX"; "camera" -> "CAM"; else -> "LED" }
+    val color = when (fixtureType) { "dmx" -> OrangeWled; "camera" -> Color(0xFF22D3EE); else -> GreenOnline }
     SuggestionChip(
         onClick = {},
         label = { Text(label, style = MaterialTheme.typography.labelSmall) },
@@ -796,6 +812,10 @@ private fun FixtureFormDialog(
     var dmxStartAddr by remember { mutableStateOf(fixture?.dmxStartAddr?.toString() ?: "1") }
     var dmxChannelCount by remember { mutableStateOf(fixture?.dmxChannelCount?.toString() ?: "") }
     var selectedProfileId by remember { mutableStateOf(fixture?.dmxProfileId ?: "") }
+    var cameraFov by remember { mutableStateOf(fixture?.fovDeg?.toInt()?.toString() ?: "60") }
+    var cameraUrl by remember { mutableStateOf(fixture?.cameraUrl ?: "") }
+    var cameraResW by remember { mutableStateOf(fixture?.resolutionW?.toString() ?: "1920") }
+    var cameraResH by remember { mutableStateOf(fixture?.resolutionH?.toString() ?: "1080") }
 
     // Test channels state
     var testChannelsData by remember { mutableStateOf<JsonObject?>(null) }
@@ -867,6 +887,11 @@ private fun FixtureFormDialog(
                         selected = fixtureType == "dmx",
                         onClick = { fixtureType = "dmx" },
                         label = { Text("DMX") }
+                    )
+                    FilterChip(
+                        selected = fixtureType == "camera",
+                        onClick = { fixtureType = "camera" },
+                        label = { Text("Camera") }
                     )
                 }
 
@@ -1081,6 +1106,44 @@ private fun FixtureFormDialog(
                         }
                     }
                 }
+
+                // Camera fields
+                if (fixtureType == "camera") {
+                    OutlinedTextField(
+                        value = cameraFov,
+                        onValueChange = { cameraFov = it.filter { c -> c.isDigit() } },
+                        label = { Text("FOV (degrees)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = cameraUrl,
+                        onValueChange = { cameraUrl = it },
+                        label = { Text("Stream URL") },
+                        placeholder = { Text("rtsp://192.168.1.50:554/stream") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = cameraResW,
+                            onValueChange = { cameraResW = it.filter { c -> c.isDigit() } },
+                            label = { Text("Width (px)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = cameraResH,
+                            onValueChange = { cameraResH = it.filter { c -> c.isDigit() } },
+                            label = { Text("Height (px)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
@@ -1096,6 +1159,10 @@ private fun FixtureFormDialog(
                         dmxStartAddr = if (fixtureType == "dmx") dmxStartAddr.toIntOrNull() else null,
                         dmxChannelCount = if (fixtureType == "dmx") dmxChannelCount.toIntOrNull() else null,
                         dmxProfileId = if (fixtureType == "dmx" && selectedProfileId.isNotBlank()) selectedProfileId else null,
+                        fovDeg = if (fixtureType == "camera") cameraFov.toDoubleOrNull() ?: 60.0 else null,
+                        cameraUrl = if (fixtureType == "camera") cameraUrl.trim().ifBlank { null } else null,
+                        resolutionW = if (fixtureType == "camera") cameraResW.toIntOrNull() ?: 1920 else null,
+                        resolutionH = if (fixtureType == "camera") cameraResH.toIntOrNull() ?: 1080 else null,
                         strings = fixture?.strings ?: emptyList(),
                         rotation = fixture?.rotation ?: listOf(0.0, 0.0, 0.0),
                         aoeRadius = fixture?.aoeRadius ?: 1000

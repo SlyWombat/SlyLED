@@ -815,7 +815,7 @@ function _dashEmuDraw(){
   });
   // LED fixtures
   layoutFixtures.forEach(function(fix){
-    if(fix.fixtureType==='dmx'||!fix.positioned||!fix.strings||!fix.strings.length)return;
+    if(fix.fixtureType!=='led'||!fix.positioned||!fix.strings||!fix.strings.length)return;
     var fx=fix.x*W/emuCW,fy=H-fix.y*H/emuCH;
     var dirDx=[1,0,-1,0],dirDy=[0,-1,0,1];
     fix.strings.forEach(function(s){
@@ -939,6 +939,7 @@ function showAddFixtureModal(){
     +'<select id="aft" onchange="_toggleAddFixFields()" style="width:100%;margin-bottom:.6em">'
     +'<option value="dmx">DMX Fixture</option>'
     +'<option value="led">SlyLED Performer (LED)</option>'
+    +'<option value="camera">Camera</option>'
     +'<option value="group">Fixture Group</option></select>'
     +'<div id="af-led" style="display:none">'
     +'<label>IP Address</label><input id="af-ip" placeholder="x.x.x.x" style="width:100%">'
@@ -962,6 +963,14 @@ function showAddFixtureModal(){
     +'<div id="af-ch-preview" style="max-height:120px;overflow-y:auto;font-size:.75em;margin-top:.4em"></div>'
     +'<div style="margin-top:.8em;padding-top:.5em;border-top:1px solid #334155"><button class="btn btn-on" onclick="_submitAddFixture()" style="font-size:.95em;padding:.5em 2em">Add Fixture</button></div>'
     +'</div>'
+    +'<div id="af-camera" style="display:none">'
+    +'<label>Name</label><input id="af-cam-name" placeholder="Stage Camera 1" style="width:100%;margin-bottom:.4em">'
+    +'<div style="display:flex;gap:.5em"><div style="flex:1"><label>FOV (degrees)</label><input id="af-cam-fov" type="number" value="60" min="1" max="180" style="width:100%;margin-bottom:.4em"></div>'
+    +'<div style="flex:1"><label>Width (px)</label><input id="af-cam-rw" type="number" value="1920" min="1" style="width:100%;margin-bottom:.4em"></div>'
+    +'<div style="flex:1"><label>Height (px)</label><input id="af-cam-rh" type="number" value="1080" min="1" style="width:100%;margin-bottom:.4em"></div></div>'
+    +'<label>Stream URL <span style="color:#64748b;font-size:.75em">(optional)</span></label><input id="af-cam-url" placeholder="rtsp://192.168.1.50:554/stream" style="width:100%;margin-bottom:.4em">'
+    +'<div style="margin-top:.8em"><button class="btn btn-on" onclick="_submitAddFixture()" style="font-size:.95em;padding:.5em 2em">Add Camera</button></div>'
+    +'</div>'
     +'<div id="af-group" style="display:none">'
     +'<label>Group Name</label><input id="af-gname" placeholder="Front Wash" style="width:100%;margin-bottom:.4em">'
     +'<label>Select Members</label><div id="af-members" style="max-height:200px;overflow-y:auto;border:1px solid #334;padding:.3em;margin-bottom:.4em"></div>'
@@ -976,6 +985,7 @@ function _toggleAddFixFields(){
   var t=document.getElementById('aft').value;
   document.getElementById('af-led').style.display=t==='led'?'':'none';
   document.getElementById('af-dmx').style.display=t==='dmx'?'':'none';
+  document.getElementById('af-camera').style.display=t==='camera'?'':'none';
   document.getElementById('af-group').style.display=t==='group'?'':'none';
   if(t==='group'){
     var mel=document.getElementById('af-members');
@@ -983,7 +993,7 @@ function _toggleAddFixFields(){
       ra('GET','/api/fixtures',null,function(fxs){
         var h='';(fxs||[]).forEach(function(f){
           if(f.type==='group')return;
-          var badge=f.fixtureType==='dmx'?'<span style="color:#a78bfa;font-size:.75em">DMX</span>':'<span style="color:#4ade80;font-size:.75em">LED</span>';
+          var badge=f.fixtureType==='dmx'?'<span style="color:#a78bfa;font-size:.75em">DMX</span>':f.fixtureType==='camera'?'<span style="color:#22d3ee;font-size:.75em">CAM</span>':'<span style="color:#4ade80;font-size:.75em">LED</span>';
           h+='<label style="display:block;padding:.15em 0;font-size:.82em"><input type="checkbox" value="'+f.id+'" class="af-member-cb"> '+escapeHtml(f.name)+' '+badge+'</label>';
         });
         mel.innerHTML=h||'<span style="color:#556">No fixtures to group</span>';
@@ -1161,6 +1171,25 @@ function _submitAddFixture(){
     ra('POST','/api/fixtures',{name:gname,fixtureType:'led',type:'group',childIds:memberIds},function(r){
       if(r&&r.ok)document.getElementById('hs').textContent='Created group: '+gname+' ('+memberIds.length+' members)';
       else document.getElementById('hs').textContent='Failed: '+(r&&r.err||'unknown');
+      loadSetup();
+    });
+  }else if(ft==='camera'){
+    var cname=document.getElementById('af-cam-name').value.trim();
+    var fov=parseInt(document.getElementById('af-cam-fov').value)||60;
+    var rw=parseInt(document.getElementById('af-cam-rw').value)||1920;
+    var rh=parseInt(document.getElementById('af-cam-rh').value)||1080;
+    var curl=document.getElementById('af-cam-url').value.trim();
+    if(fov<1||fov>180){document.getElementById('hs').textContent='FOV must be 1–180°';return;}
+    closeModal();
+    var body={name:cname||'Camera',fixtureType:'camera',type:'point',
+      fovDeg:fov,resolutionW:rw,resolutionH:rh};
+    if(curl)body.cameraUrl=curl;
+    ra('POST','/api/fixtures',body,function(r){
+      if(r&&r.ok){
+        document.getElementById('hs').textContent='Added camera: '+(cname||'Camera');
+      }else{
+        document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
+      }
       loadSetup();
     });
   }else{
@@ -1505,7 +1534,7 @@ function s3dLoadChildren(){
     placed.forEach(function(c){
       var pos=_s3dPos(c);
       var ft=c.fixtureType||'led';
-      var col=ft==='dmx'?0x7c3aed:(c.status===1?0x22cc66:0x555555);
+      var col=ft==='dmx'?0x7c3aed:ft==='camera'?0x0e7490:(c.status===1?0x22cc66:0x555555);
 
       // Group — everything moves together when dragged
       var grp=new THREE.Group();
@@ -1528,20 +1557,21 @@ function s3dLoadChildren(){
       // DMX beam cone + aim point (for DMX fixtures with profiles)
       var _fix3d=null;
       (_fixtures||[]).forEach(function(ff){if(ff.childId===c.id||ff.id===c.id)_fix3d=ff;});
-      if(_fix3d&&_fix3d.fixtureType==='dmx'){
+      if(_fix3d&&(_fix3d.fixtureType==='dmx'||_fix3d.fixtureType==='camera')){
         var aim=_fix3d.aimPoint||[c.x||0,0,(_s3d.stageD||10)*1000];
         var aimLocal=new THREE.Vector3((aim[0]-(c.x||0))/1000,(aim[1]-(c.y||0))/1000,(aim[2]-(c.z||0))/1000);
         var beamLen=aimLocal.length();
         if(beamLen>0.01){
-          var bwDeg=15;
+          var bwDeg=_fix3d.fixtureType==='camera'?(_fix3d.fovDeg||60):15;
           // Use cached profile beamWidth (sync) — _profileCache populated by emulator/layout
-          if(_fix3d.dmxProfileId&&window._profileCache&&window._profileCache[_fix3d.dmxProfileId]){
+          if(_fix3d.fixtureType==='dmx'&&_fix3d.dmxProfileId&&window._profileCache&&window._profileCache[_fix3d.dmxProfileId]){
             bwDeg=window._profileCache[_fix3d.dmxProfileId].beamWidth||15;
           }
           var bwRad=bwDeg*Math.PI/180;
           var topR=Math.tan(bwRad/2)*beamLen;
           var coneGeo=new THREE.ConeGeometry(topR,beamLen,16,1,true);
-          var coneMat=new THREE.MeshBasicMaterial({color:0xffff88,opacity:0.12,transparent:true,side:THREE.DoubleSide,depthWrite:false});
+          var coneColor=_fix3d.fixtureType==='camera'?0x22d3ee:0xffff88;
+          var coneMat=new THREE.MeshBasicMaterial({color:coneColor,opacity:0.12,transparent:true,side:THREE.DoubleSide,depthWrite:false});
           var cone=new THREE.Mesh(coneGeo,coneMat);
           // Position cone: midpoint between origin and aim, oriented toward aim
           var midPt=aimLocal.clone().multiplyScalar(0.5);
@@ -1899,7 +1929,7 @@ function renderFixturesSidebar(){
     h+='<div style="color:#64748b;font-size:.75em;margin-bottom:.3em">Drag to place:</div>';
     unplaced.forEach(function(f){
       var ft=f.fixtureType||'led';
-      var icon=ft==='dmx'?'<span style="font-size:.6em;background:#7c3aed;color:#fff;padding:0 3px;border-radius:2px">DMX</span>':'';
+      var icon=ft==='dmx'?'<span style="font-size:.6em;background:#7c3aed;color:#fff;padding:0 3px;border-radius:2px">DMX</span>':ft==='camera'?'<span style="font-size:.6em;background:#0e7490;color:#fff;padding:0 3px;border-radius:2px">CAM</span>':'';
       h+='<div class="li" draggable="true" ondragstart="layDS(event,'+f.id+')" style="cursor:grab">'
         +'<div style="color:#ccc;font-weight:bold;font-size:.85em">'+escapeHtml(f.name)+' '+icon+'</div>'
         +'<div style="color:#666;font-size:.75em">'+f.type+'</div></div>';
@@ -1914,7 +1944,7 @@ function renderFixturesSidebar(){
   placed.forEach(function(f){
     var ft=f.fixtureType||'led';
     var icon=f.type==='point'?'\u2b24':f.type==='group'?'\u25a3':'\u2501';
-    var ftBadge=ft==='dmx'?'<span style="font-size:.6em;background:#7c3aed;color:#fff;padding:0 3px;border-radius:2px;margin-left:2px">DMX</span>':'';
+    var ftBadge=ft==='dmx'?'<span style="font-size:.6em;background:#7c3aed;color:#fff;padding:0 3px;border-radius:2px;margin-left:2px">DMX</span>':ft==='camera'?'<span style="font-size:.6em;background:#0e7490;color:#fff;padding:0 3px;border-radius:2px;margin-left:2px">CAM</span>':'';
     h+='<div style="padding:.2em 0;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:.3em">';
     h+='<span style="font-size:.8em">'+icon+'</span>';
     h+='<span style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer;font-size:.82em" onclick="selectOnCanvas(\'fixture\','+f.id+')">'+escapeHtml(f.name)+ftBadge+'</span>';
@@ -1957,6 +1987,15 @@ function editFixture(id){
     h+='</div>';
     h+='<div id="fx-test-ch"></div>';
     h+='</div>';
+  }else if(ft==='camera'){
+    h+='<label>FOV (degrees)</label><input id="fx-fov" type="number" value="'+(f.fovDeg||60)+'" min="1" max="180" style="width:100%;margin-bottom:.4em">';
+    h+='<label>Stream URL <span style="color:#64748b;font-size:.75em">(optional)</span></label>';
+    h+='<input id="fx-cam-url" value="'+escapeHtml(f.cameraUrl||'')+'" style="width:100%;margin-bottom:.4em">';
+    h+='<div style="display:flex;gap:.5em"><div style="flex:1"><label>Width (px)</label><input id="fx-cam-rw" type="number" value="'+(f.resolutionW||1920)+'" style="width:100%"></div>';
+    h+='<div style="flex:1"><label>Height (px)</label><input id="fx-cam-rh" type="number" value="'+(f.resolutionH||1080)+'" style="width:100%"></div></div>';
+    var ap=f.aimPoint||[f.x||0,0,0];
+    h+='<label>Aim Point (mm) <span style="color:#64748b;font-size:.75em">Where the camera looks</span></label>';
+    h+='<div style="display:flex;gap:.3em"><label style="font-size:.75em">X</label><input id="fx-ax" type="number" value="'+ap[0]+'" style="width:80px"> <label style="font-size:.75em">Y</label><input id="fx-ay" type="number" value="'+ap[1]+'" style="width:80px"> <label style="font-size:.75em">Z</label><input id="fx-az" type="number" value="'+ap[2]+'" style="width:80px"></div>';
   }
   h+='<label>Rotation Override (degrees)</label>';
   var rot=f.rotation||[0,0,0];
@@ -1979,6 +2018,13 @@ function saveFixture(id,ft){
     body.dmxStartAddr=parseInt(document.getElementById('fx-addr').value)||1;
     body.dmxChannelCount=parseInt(document.getElementById('fx-ch').value)||3;
     body.dmxProfileId=document.getElementById('fx-prof').value.trim()||null;
+    var axEl=document.getElementById('fx-ax'),ayEl=document.getElementById('fx-ay'),azEl=document.getElementById('fx-az');
+    if(axEl&&ayEl&&azEl)body.aimPoint=[parseFloat(axEl.value)||0,parseFloat(ayEl.value)||0,parseFloat(azEl.value)||0];
+  }else if(ft==='camera'){
+    body.fovDeg=parseInt(document.getElementById('fx-fov').value)||60;
+    body.cameraUrl=document.getElementById('fx-cam-url').value.trim();
+    body.resolutionW=parseInt(document.getElementById('fx-cam-rw').value)||1920;
+    body.resolutionH=parseInt(document.getElementById('fx-cam-rh').value)||1080;
     var axEl=document.getElementById('fx-ax'),ayEl=document.getElementById('fx-ay'),azEl=document.getElementById('fx-az');
     if(axEl&&ayEl&&azEl)body.aimPoint=[parseFloat(axEl.value)||0,parseFloat(ayEl.value)||0,parseFloat(azEl.value)||0];
   }
@@ -3699,7 +3745,7 @@ function drawLayout(){
     var np=_nodePos(f,W,H),cx=np.cx,cy=np.cy;
     var ft=f.fixtureType||'led';
     // Draw strings in detailed mode (LED fixtures only)
-    if(showStr&&ft!=='dmx'&&f.strings&&f.strings.length){
+    if(showStr&&ft==='led'&&f.strings&&f.strings.length){
       for(var si=0;si<f.strings.length;si++){
         var s=f.strings[si];if(!s||!s.leds)continue;
         var col=_strCol[si%_strCol.length];
@@ -3725,9 +3771,9 @@ function drawLayout(){
       }
     }
     // Fixture node
-    var nodeCol=ft==='dmx'?'#3b1f7c':'#1a6b3a';
-    var nodeBdr=ft==='dmx'?'#a78bfa':'#4c4';
-    if(f.type==='point'){nodeCol=ft==='dmx'?'#3b1f7c':'#6b4f1a';nodeBdr=ft==='dmx'?'#a78bfa':'#d4a';}
+    var nodeCol=ft==='dmx'?'#3b1f7c':ft==='camera'?'#0e7490':'#1a6b3a';
+    var nodeBdr=ft==='dmx'?'#a78bfa':ft==='camera'?'#22d3ee':'#4c4';
+    if(f.type==='point'&&ft!=='camera'){nodeCol=ft==='dmx'?'#3b1f7c':'#6b4f1a';nodeBdr=ft==='dmx'?'#a78bfa':'#d4a';}
     ctx.beginPath();ctx.arc(cx,cy,10,0,2*Math.PI);
     ctx.fillStyle=nodeCol;ctx.fill();
     ctx.strokeStyle=nodeBdr;ctx.lineWidth=2;ctx.stroke();
@@ -3748,6 +3794,25 @@ function drawLayout(){
         ctx.fillStyle='rgba(124,58,237,0.1)';ctx.fill();
         ctx.strokeStyle='rgba(167,139,250,0.3)';ctx.lineWidth=1;ctx.stroke();
         // Aim point dot
+        ctx.beginPath();ctx.arc(ax,ay,3,0,2*Math.PI);
+        ctx.fillStyle='#f44';ctx.fill();
+      }
+    }
+    // Camera FOV cone (2D top-down)
+    if(ft==='camera'&&f.aimPoint){
+      var ax=f.aimPoint[0]*W/phW,ay=H-f.aimPoint[1]*H/phH;
+      var bLen=Math.sqrt((ax-cx)*(ax-cx)+(ay-cy)*(ay-cy));
+      if(bLen>5){
+        var bwDeg=f.fovDeg||60;
+        var angle=Math.atan2(ay-cy,ax-cx);
+        var halfW=Math.tan(bwDeg*Math.PI/360)*bLen;
+        var lx2=ax+Math.cos(angle+Math.PI/2)*halfW;
+        var ly2=ay+Math.sin(angle+Math.PI/2)*halfW;
+        var rx2=ax+Math.cos(angle-Math.PI/2)*halfW;
+        var ry2=ay+Math.sin(angle-Math.PI/2)*halfW;
+        ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(lx2,ly2);ctx.lineTo(rx2,ry2);ctx.closePath();
+        ctx.fillStyle='rgba(14,116,144,0.08)';ctx.fill();
+        ctx.strokeStyle='rgba(34,211,238,0.25)';ctx.lineWidth=1;ctx.stroke();
         ctx.beginPath();ctx.arc(ax,ay,3,0,2*Math.PI);
         ctx.fillStyle='#f44';ctx.fill();
       }
@@ -3984,9 +4049,10 @@ function emuDraw(){
   if(!children.length&&!layoutFixtures.length)return;
   // Debug: log fixture counts on first draw
   if(!_emuStage._logged){_emuStage._logged=true;
-    var pLed=layoutFixtures.filter(function(f){return f.fixtureType!=='dmx'&&f.positioned;}).length;
+    var pLed=layoutFixtures.filter(function(f){return f.fixtureType==='led'&&f.positioned;}).length;
     var pDmx=layoutFixtures.filter(function(f){return f.fixtureType==='dmx'&&f.positioned;}).length;
-    console.log('[SlyLED EMU] '+layoutFixtures.length+' layout fixtures ('+pLed+' LED + '+pDmx+' DMX positioned), '+children.length+' children, '+emuSurfs.length+' objects');
+    var pCam=layoutFixtures.filter(function(f){return f.fixtureType==='camera'&&f.positioned;}).length;
+    console.log('[SlyLED EMU] '+layoutFixtures.length+' layout fixtures ('+pLed+' LED + '+pDmx+' DMX + '+pCam+' CAM positioned), '+children.length+' children, '+emuSurfs.length+' objects');
   }
 
   var cw=(layout&&layout.canvasW)||10000;
@@ -4221,9 +4287,35 @@ function emuDraw(){
     ctx.fillText(fix.name||'DMX',fx,fy+14);
   });
 
+  // Camera FOV cones
+  layoutFixtures.forEach(function(fix){
+    if(fix.fixtureType!=='camera'||!fix.positioned)return;
+    var fx=fix.x*W/emuCW,fy=H-fix.y*H/emuCH;
+    fx=Math.max(6,Math.min(W-6,fx));fy=Math.max(6,Math.min(H-6,fy));
+    var aim=fix.aimPoint||[fix.x,0,0];
+    var ax=aim[0]*W/emuCW,ay=H-aim[1]*H/emuCH;
+    var bwDeg=fix.fovDeg||60;
+    var bLen=Math.sqrt((ax-fx)*(ax-fx)+(ay-fy)*(ay-fy));
+    if(bLen<2)bLen=80;
+    var halfW=Math.tan(bwDeg*Math.PI/360)*bLen;
+    var angle=Math.atan2(ay-fy,ax-fx);
+    var lx=ax+Math.cos(angle+Math.PI/2)*halfW;
+    var ly=ay+Math.sin(angle+Math.PI/2)*halfW;
+    var rx=ax+Math.cos(angle-Math.PI/2)*halfW;
+    var ry=ay+Math.sin(angle-Math.PI/2)*halfW;
+    ctx.beginPath();ctx.moveTo(fx,fy);ctx.lineTo(lx,ly);ctx.lineTo(rx,ry);ctx.closePath();
+    ctx.fillStyle='rgba(14,116,144,0.08)';ctx.fill();
+    ctx.beginPath();ctx.arc(fx,fy,4,0,2*Math.PI);
+    ctx.fillStyle='rgba(14,116,144,0.8)';ctx.fill();
+    ctx.beginPath();ctx.arc(ax,ay,3,0,2*Math.PI);
+    ctx.fillStyle='rgba(255,68,68,0.6)';ctx.fill();
+    ctx.fillStyle='#78889a';ctx.font='8px sans-serif';ctx.textAlign='center';
+    ctx.fillText(fix.name||'CAM',fx,fy+14);
+  });
+
   // LED fixtures from layout (positioned LED fixtures with strings)
   layoutFixtures.forEach(function(fix){
-    if(fix.fixtureType==='dmx'||!fix.positioned)return;
+    if(fix.fixtureType!=='led'||!fix.positioned)return;
     if(!fix.strings||!fix.strings.length)return;
     var fx=fix.x*W/emuCW,fy=H-fix.y*H/emuCH;
     fx=Math.max(12,Math.min(W-12,fx));fy=Math.max(12,Math.min(H-12,fy));

@@ -94,9 +94,9 @@ class LayoutViewModel @Inject constructor(
                 val stageD = (stg.d * 1000).toInt()
                 val topY = (stageH * 0.9).toInt()
                 val backZ = (stageD * 0.8).toInt()
-                val dmxFixtures = _fixtures.value.filter { it.fixtureType == "dmx" }
+                val dmxFixtures = _fixtures.value.filter { it.fixtureType == "dmx" || it.fixtureType == "camera" }
                 if (dmxFixtures.isEmpty()) {
-                    _message.value = "No DMX fixtures to arrange"
+                    _message.value = "No DMX/camera fixtures to arrange"
                     return@launch
                 }
                 val n = dmxFixtures.size
@@ -124,7 +124,7 @@ class LayoutViewModel @Inject constructor(
                         repository.setAimPoint(f.id, listOf(x.toDouble(), 0.0, backZ.toDouble()))
                     } catch (_: Exception) {}
                 }
-                _message.value = "Arranged ${dmxFixtures.size} DMX fixtures"
+                _message.value = "Arranged ${dmxFixtures.size} DMX/camera fixtures"
             } catch (e: Exception) { _message.value = "Arrange failed: ${e.message}" }
         }
     }

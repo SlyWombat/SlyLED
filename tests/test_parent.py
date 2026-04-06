@@ -325,6 +325,79 @@ def run():
         c.delete('/api/fixtures/' + str(dmx_id))
         c.delete('/api/fixtures/' + str(dmx_id2))
 
+        # ── Camera fixtures ──────────────────────────────────────────
+        # Create camera fixture with all fields
+        r = c.post('/api/fixtures', json={
+            'name': 'Stage Cam 1', 'type': 'point', 'fixtureType': 'camera',
+            'fovDeg': 90, 'cameraUrl': 'rtsp://192.168.1.50:554/stream',
+            'resolutionW': 1920, 'resolutionH': 1080
+        })
+        ok('POST camera fixture', r.status_code == 200 and r.get_json().get('ok'))
+        cam_id = r.get_json().get('id')
+
+        # GET camera fixture — verify all fields
+        r = c.get('/api/fixtures/' + str(cam_id))
+        cf = r.get_json()
+        ok('Camera fixtureType', cf.get('fixtureType') == 'camera')
+        ok('Camera fovDeg', cf.get('fovDeg') == 90)
+        ok('Camera cameraUrl', cf.get('cameraUrl') == 'rtsp://192.168.1.50:554/stream')
+        ok('Camera resolutionW', cf.get('resolutionW') == 1920)
+        ok('Camera has aimPoint', isinstance(cf.get('aimPoint'), list) and len(cf['aimPoint']) == 3)
+
+        # Update camera FOV
+        r = c.put('/api/fixtures/' + str(cam_id), json={'fovDeg': 120})
+        ok('PUT camera fovDeg', r.status_code == 200)
+        r = c.get('/api/fixtures/' + str(cam_id))
+        ok('Camera fovDeg updated', r.get_json().get('fovDeg') == 120)
+
+        # Camera aim point via /aim endpoint
+        r = c.put('/api/fixtures/' + str(cam_id) + '/aim', json={'aimPoint': [3000, 1000, 5000]})
+        ok('PUT camera aim point', r.status_code == 200)
+        r = c.get('/api/fixtures/' + str(cam_id))
+        ok('Camera aim persisted', r.get_json().get('aimPoint') == [3000.0, 1000.0, 5000.0])
+
+        # Camera fovDeg validation
+        r = c.post('/api/fixtures', json={
+            'name': 'Bad Cam', 'type': 'point', 'fixtureType': 'camera', 'fovDeg': 0
+        })
+        ok('Camera fovDeg 0 → 400', r.status_code == 400)
+        r = c.post('/api/fixtures', json={
+            'name': 'Bad Cam', 'type': 'point', 'fixtureType': 'camera', 'fovDeg': 200
+        })
+        ok('Camera fovDeg 200 → 400', r.status_code == 400)
+        r = c.put('/api/fixtures/' + str(cam_id), json={'fovDeg': 0})
+        ok('PUT camera fovDeg 0 → 400', r.status_code == 400)
+
+        # Camera with defaults (no optional fields)
+        r = c.post('/api/fixtures', json={
+            'name': 'Minimal Cam', 'type': 'point', 'fixtureType': 'camera'
+        })
+        ok('POST camera defaults', r.status_code == 200)
+        cam_id2 = r.get_json().get('id')
+        r = c.get('/api/fixtures/' + str(cam_id2))
+        ok('Camera default fovDeg', r.get_json().get('fovDeg') == 60)
+        ok('Camera default cameraUrl', r.get_json().get('cameraUrl') == '')
+
+        # Mixed fixture list includes camera
+        r = c.get('/api/fixtures')
+        cam_count = sum(1 for f in r.get_json() if f.get('fixtureType') == 'camera')
+        ok('Camera in fixture list', cam_count >= 2)
+
+        # Place camera on layout
+        c.post('/api/layout', json={'fixtures': [
+            {'id': cam_id, 'x': 5000, 'y': 4500, 'z': 2000}
+        ]})
+        r = c.get('/api/layout')
+        cam_in_lay = [f for f in r.get_json()['fixtures'] if f.get('fixtureType') == 'camera' and f.get('positioned')]
+        ok('Camera in layout', len(cam_in_lay) >= 1)
+        ok('Camera layout has aimPoint', 'aimPoint' in cam_in_lay[0])
+        ok('Camera layout has fovDeg', cam_in_lay[0].get('fovDeg') == 120)
+        ok('Camera layout x correct', cam_in_lay[0].get('x') == 5000)
+
+        # Cleanup camera fixtures
+        c.delete('/api/fixtures/' + str(cam_id))
+        c.delete('/api/fixtures/' + str(cam_id2))
+
         # ── Objects (Phase 2 — renamed from Surfaces) ─────────────────
         r = c.get('/api/objects')
         ok('GET /api/objects', r.status_code == 200)

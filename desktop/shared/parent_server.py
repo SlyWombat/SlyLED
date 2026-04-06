@@ -149,6 +149,13 @@ for _f in _fixtures:
     if _f.get("fixtureType") == "dmx" and "aimPoint" not in _f:
         _f["aimPoint"] = [0, 0, int(_stage.get("d", 10) * 1000)]
         _fix_patched = True
+    if _f.get("fixtureType") == "camera":
+        if "aimPoint" not in _f:
+            _f["aimPoint"] = [0, 0, int(_stage.get("d", 10) * 1000)]
+            _fix_patched = True
+        if "fovDeg" not in _f:
+            _f["fovDeg"] = 60
+            _fix_patched = True
 if _fix_patched:
     _save("fixtures", _fixtures)
 del _fix_patched
@@ -894,8 +901,8 @@ def api_fixtures_create():
     if ftype not in ("linear", "point", "surface", "group"):
         return jsonify(err="Invalid fixture type"), 400
     fixture_type = body.get("fixtureType", "led")
-    if fixture_type not in ("led", "dmx"):
-        return jsonify(err="Invalid fixtureType - must be 'led' or 'dmx'"), 400
+    if fixture_type not in ("led", "dmx", "camera"):
+        return jsonify(err="Invalid fixtureType - must be 'led', 'dmx', or 'camera'"), 400
     # DMX-specific validation
     if fixture_type == "dmx":
         dmx_uni = body.get("dmxUniverse")
@@ -907,6 +914,11 @@ def api_fixtures_create():
             return jsonify(err="dmxStartAddr must be 1-512"), 400
         if not isinstance(dmx_ch, int) or dmx_ch < 1:
             return jsonify(err="dmxChannelCount must be an integer >= 1"), 400
+    # Camera-specific validation
+    if fixture_type == "camera":
+        fov = body.get("fovDeg")
+        if fov is not None and (not isinstance(fov, (int, float)) or fov < 1 or fov > 180):
+            return jsonify(err="fovDeg must be 1-180"), 400
     with _lock:
         f = {
             "id": _nxt_fix, "name": name or f"Fixture {_nxt_fix}",
@@ -924,6 +936,12 @@ def api_fixtures_create():
             f["dmxChannelCount"] = body["dmxChannelCount"]
             f["dmxProfileId"] = body.get("dmxProfileId")
             f["aimPoint"] = body.get("aimPoint", [0, 0, int(_stage.get("d", 10) * 1000)])
+        if fixture_type == "camera":
+            f["aimPoint"] = body.get("aimPoint", [0, 0, int(_stage.get("d", 10) * 1000)])
+            f["fovDeg"] = body.get("fovDeg", 60)
+            f["cameraUrl"] = body.get("cameraUrl", "")
+            f["resolutionW"] = body.get("resolutionW", 1920)
+            f["resolutionH"] = body.get("resolutionH", 1080)
         _fixtures.append(f)
         _nxt_fix += 1
         _save("fixtures", _fixtures)
@@ -943,8 +961,8 @@ def api_fixture_update(fid):
         return jsonify(err="Not found"), 404
     body = request.get_json(silent=True) or {}
     # Validate fixtureType if changing
-    if "fixtureType" in body and body["fixtureType"] not in ("led", "dmx"):
-        return jsonify(err="Invalid fixtureType - must be 'led' or 'dmx'"), 400
+    if "fixtureType" in body and body["fixtureType"] not in ("led", "dmx", "camera"):
+        return jsonify(err="Invalid fixtureType - must be 'led', 'dmx', or 'camera'"), 400
     # Validate geometry type if changing
     if "type" in body and body["type"] not in ("linear", "point", "surface", "group"):
         return jsonify(err="Invalid fixture type"), 400
@@ -963,9 +981,15 @@ def api_fixture_update(fid):
         if "dmxChannelCount" in body:
             if not isinstance(ch, int) or ch < 1:
                 return jsonify(err="dmxChannelCount must be an integer >= 1"), 400
+    # Validate camera fields
+    if ft == "camera" and "fovDeg" in body:
+        fov = body["fovDeg"]
+        if not isinstance(fov, (int, float)) or fov < 1 or fov > 180:
+            return jsonify(err="fovDeg must be 1-180"), 400
     for k in ("name", "type", "fixtureType", "childId", "childIds", "strings",
               "rotation", "aoeRadius", "meshFile",
-              "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId", "aimPoint"):
+              "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId", "aimPoint",
+              "fovDeg", "cameraUrl", "resolutionW", "resolutionH"):
         if k in body:
             f[k] = body[k]
     _save("fixtures", _fixtures)
@@ -973,10 +997,10 @@ def api_fixture_update(fid):
 
 @app.put("/api/fixtures/<int:fid>/aim")
 def api_fixture_set_aim(fid):
-    """Set aim point for a DMX fixture."""
+    """Set aim point for a DMX or camera fixture."""
     f = next((f for f in _fixtures if f["id"] == fid), None)
-    if not f or f.get("fixtureType") != "dmx":
-        return jsonify(err="DMX fixture not found"), 404
+    if not f or f.get("fixtureType") not in ("dmx", "camera"):
+        return jsonify(err="DMX or camera fixture not found"), 404
     body = request.get_json(silent=True) or {}
     ap = body.get("aimPoint")
     if not isinstance(ap, list) or len(ap) != 3:
