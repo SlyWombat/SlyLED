@@ -941,8 +941,13 @@ function _renderSetup(){
       h+='</table>';
 
       // ── Cameras section
-      h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">Cameras <button class="btn" onclick="discoverCameras(this)" id="cam-disc-btn" style="font-size:.75em;padding:.15em .5em;margin-left:.5em;background:#0e7490;color:#fff">Discover</button></h3>';
+      h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">Cameras '
+        +'<button class="btn" onclick="discoverCameras(this)" id="cam-disc-btn" style="font-size:.75em;padding:.15em .5em;margin-left:.5em;background:#0e7490;color:#fff">Discover</button>'
+        +'<button class="btn" onclick="scanNetwork(this)" id="net-scan-btn" style="font-size:.75em;padding:.15em .5em;margin-left:.3em;background:#475569;color:#fff">Scan Network</button>'
+        +'<button class="btn" onclick="showSshSettings()" style="font-size:.75em;padding:.15em .5em;margin-left:.3em;background:#334155;color:#94a3b8">\u2699 SSH</button>'
+        +'</h3>';
       h+='<div id="cam-disc-results" style="display:none;margin-bottom:.5em"></div>';
+      h+='<div id="net-scan-results" style="display:none;margin-bottom:.5em"></div>';
       if(camFixtures.length){
         h+='<table class="tbl cam-status-tbl"><tr><th>Camera</th><th>IP</th><th>FOV</th><th>Resolution</th><th>Status</th><th>Actions</th></tr>';
         camFixtures.forEach(function(f){
@@ -1354,6 +1359,92 @@ function removeCamera(id,name){
   ra('DELETE','/api/cameras/'+id,null,function(){
     document.getElementById('hs').textContent='Removed camera: '+name;
     loadSetup();
+  });
+}
+
+function scanNetwork(btn){
+  if(btn){btn.disabled=true;btn.textContent='Scanning...';}
+  ra('GET','/api/cameras/scan-network',null,function(){
+    var poll=setInterval(function(){
+      ra('GET','/api/cameras/scan-network/results',null,function(d){
+        if(d&&d.pending)return;
+        clearInterval(poll);
+        if(btn){btn.disabled=false;btn.textContent='Scan Network';}
+        var el=document.getElementById('net-scan-results');
+        if(!el)return;
+        if(!d||!d.length){
+          el.innerHTML='<p style="color:#888;font-size:.85em;padding:.3em 0">No SSH-accessible devices found on network.</p>';
+          el.style.display='block';return;
+        }
+        var h='<p style="color:#94a3b8;font-size:.85em;margin-bottom:.4em">SSH devices found \u2014 deploy camera software:</p>'
+          +'<table class="tbl" style="max-width:500px"><tr><th>IP</th><th>Status</th><th></th></tr>';
+        d.forEach(function(dev){
+          var st=dev.hasCamera?'<span class="badge bon">Camera running</span>':'<span class="badge boff">No camera software</span>';
+          var act=dev.hasCamera
+            ?'<button class="btn" onclick="registerCamera(\''+dev.ip+'\',\''+escapeHtml(dev.hostname||'').replace(/'/g,"\\'")+'\')" style="background:#0e7490;color:#fff;font-size:.8em">Register</button>'
+            :'<button class="btn" onclick="deployCameraServer(\''+dev.ip+'\')" id="deploy-btn-'+dev.ip.replace(/\\./g,'-')+'" style="background:#475569;color:#fff;font-size:.8em">Deploy</button>';
+          h+='<tr><td>'+escapeHtml(dev.ip)+'</td><td>'+st+'</td><td>'+act+'</td></tr>';
+        });
+        el.innerHTML=h+'</table>';
+        el.style.display='block';
+      });
+    },500);
+  });
+}
+
+function deployCameraServer(ip){
+  var btnId='deploy-btn-'+ip.replace(/\./g,'-');
+  var btn=document.getElementById(btnId);
+  if(btn)btn.outerHTML='<span id="deploy-prog-'+ip.replace(/\./g,'-')+'" style="font-size:.8em;color:#94a3b8">Starting...</span>';
+  ra('POST','/api/cameras/deploy',{ip:ip},function(r){
+    if(r&&r.err){
+      var prog=document.getElementById('deploy-prog-'+ip.replace(/\./g,'-'));
+      if(prog)prog.innerHTML='<span style="color:#f66">'+escapeHtml(r.err)+'</span>';
+      return;
+    }
+    var poll=setInterval(function(){
+      ra('GET','/api/cameras/deploy/status',null,function(s){
+        var prog=document.getElementById('deploy-prog-'+ip.replace(/\./g,'-'));
+        if(!prog){clearInterval(poll);return;}
+        if(s.error){
+          prog.innerHTML='<span style="color:#f66">'+escapeHtml(s.error)+'</span>';
+          clearInterval(poll);return;
+        }
+        prog.textContent=s.progress+'% '+s.message;
+        if(!s.running){
+          clearInterval(poll);
+          if(s.progress>=95){
+            prog.innerHTML='<span style="color:#4ade80">\u2713 '+escapeHtml(s.message)+'</span>';
+            setTimeout(function(){discoverCameras(document.getElementById('cam-disc-btn'));},2000);
+          }
+        }
+      });
+    },1000);
+  });
+}
+
+function showSshSettings(){
+  ra('GET','/api/cameras/ssh',null,function(d){
+    var h='<label>SSH Username</label><input id="ssh-user" value="'+escapeHtml((d&&d.sshUser)||'root')+'" style="width:100%;margin-bottom:.4em">'
+      +'<label>SSH Password</label><input id="ssh-pass" type="password" placeholder="'+(d&&d.hasPassword?'(saved)':'Enter password')+'" style="width:100%;margin-bottom:.4em">'
+      +'<label>SSH Key Path <span style="color:#64748b;font-size:.75em">(optional, overrides password)</span></label>'
+      +'<input id="ssh-key" value="'+escapeHtml((d&&d.sshKeyPath)||'')+'" placeholder="~/.ssh/id_ed25519" style="width:100%;margin-bottom:.6em">'
+      +'<button class="btn btn-on" onclick="saveSshSettings()">Save</button>';
+    document.getElementById('modal-title').textContent='Camera SSH Settings';
+    document.getElementById('modal-body').innerHTML=h;
+    document.getElementById('modal').style.display='block';
+  });
+}
+
+function saveSshSettings(){
+  var body={sshUser:document.getElementById('ssh-user').value.trim()};
+  var pw=document.getElementById('ssh-pass').value;
+  if(pw)body.sshPassword=pw;
+  var key=document.getElementById('ssh-key').value.trim();
+  body.sshKeyPath=key;
+  ra('POST','/api/cameras/ssh',body,function(r){
+    if(r&&r.ok){closeModal();document.getElementById('hs').textContent='SSH settings saved';}
+    else{document.getElementById('hs').textContent='Save failed: '+(r&&r.err||'unknown');}
   });
 }
 

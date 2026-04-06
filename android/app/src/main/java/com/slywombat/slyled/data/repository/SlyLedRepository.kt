@@ -132,6 +132,12 @@ class SlyLedRepository @Inject constructor(
         return requireApi().registerCamera(body)
     }
     suspend fun unregisterCamera(id: Int) = requireApi().unregisterCamera(id)
+    suspend fun getCameraSshSettings() = requireApi().getCameraSshSettings()
+    suspend fun saveCameraSshSettings(body: Map<String, Any>) = requireApi().saveCameraSshSettings(body)
+    suspend fun scanNetwork() = requireApi().scanNetwork()
+    suspend fun scanNetworkResults() = requireApi().scanNetworkResults()
+    suspend fun deployCameraServer(ip: String) = requireApi().deployCameraServer(mapOf("ip" to ip))
+    suspend fun deployStatus() = requireApi().deployStatus()
 
     // DMX Profiles & Control
     suspend fun getDmxProfiles(category: String? = null) = requireApi().getDmxProfiles(category)

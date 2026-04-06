@@ -165,6 +165,7 @@ _spatial_fx = _load("spatial_fx", [])
 _timelines  = _load("timelines",  [])
 _actions = _load("actions", [])
 _wifi    = _load("wifi",    {"ssid": "", "password": ""})
+_ssh     = _load("ssh",    {"sshUser": "root", "sshPassword": "", "sshKeyPath": ""})
 
 # Live action events pushed by children (ip  -' {actionType, stepIndex, totalSteps, event, ts})
 _live_events = {}
@@ -1160,6 +1161,216 @@ def api_cameras_delete(fid):
         _fixtures = [x for x in _fixtures if x["id"] != fid]
         _save("fixtures", _fixtures)
     return jsonify(ok=True), 200
+
+def _get_local_ip():
+    """Get local IP by connecting a UDP socket (no traffic sent)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return socket.gethostbyname(socket.gethostname())
+
+# ── Camera network scan (SSH port scan for fresh SBCs) ──────────────────
+
+_ssh_scan_state = {"pending": False, "data": []}
+
+def _scan_ssh_devices():
+    """TCP connect scan for port 22 on local subnet. Returns SSH-accessible hosts."""
+    import concurrent.futures
+    try:
+        local_ip = _get_local_ip()
+    except Exception:
+        local_ip = "192.168.1.1"
+    prefix = ".".join(local_ip.split(".")[:3])
+    known_ips = {local_ip}
+    for c in _children:
+        known_ips.add(c.get("ip", ""))
+    for f in _fixtures:
+        if f.get("fixtureType") == "camera" and f.get("cameraIp"):
+            known_ips.add(f["cameraIp"])
+
+    def _check(ip):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.3)
+            if s.connect_ex((ip, 22)) == 0:
+                s.close()
+                cam_info = _probe_camera(ip, timeout=0.5)
+                return {"ip": ip, "hasCamera": cam_info is not None,
+                        "hostname": (cam_info or {}).get("hostname", "")}
+            s.close()
+        except Exception:
+            pass
+        return None
+
+    results = []
+    ips = [f"{prefix}.{i}" for i in range(1, 255) if f"{prefix}.{i}" not in known_ips]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as pool:
+        for r in pool.map(_check, ips):
+            if r:
+                results.append(r)
+    return results
+
+def _ssh_scan_bg():
+    try:
+        _ssh_scan_state["data"] = _scan_ssh_devices()
+    finally:
+        _ssh_scan_state["pending"] = False
+
+@app.get("/api/cameras/scan-network")
+def api_cameras_scan_network():
+    if _ssh_scan_state["pending"]:
+        return jsonify(pending=True)
+    _ssh_scan_state["pending"] = True
+    _ssh_scan_state["data"] = []
+    threading.Thread(target=_ssh_scan_bg, daemon=True).start()
+    return jsonify(pending=True)
+
+@app.get("/api/cameras/scan-network/results")
+def api_cameras_scan_network_results():
+    if _ssh_scan_state["pending"]:
+        return jsonify(pending=True)
+    return jsonify(_ssh_scan_state["data"])
+
+# ── Camera deploy via SSH+SCP ───────────────────────────────────────────
+
+_deploy_status = {"running": False, "progress": 0, "message": "", "error": None, "ip": ""}
+_deploy_lock = threading.Lock()
+
+def _deploy_camera_bg(ip):
+    """Deploy camera_server.py to a remote SBC via SSH+SCP."""
+    def _update(progress, message, error=None):
+        with _deploy_lock:
+            _deploy_status.update(progress=progress, message=message, error=error)
+    try:
+        import paramiko
+    except ImportError:
+        _update(0, "paramiko not installed", error="pip install paramiko")
+        with _deploy_lock:
+            _deploy_status["running"] = False
+        return
+
+    try:
+        _update(5, f"Connecting to {ip} via SSH...")
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        kwargs = {"hostname": ip, "port": 22,
+                  "username": _ssh.get("sshUser", "root"), "timeout": 10}
+        key_path = _ssh.get("sshKeyPath", "")
+        if key_path and os.path.isfile(key_path):
+            kwargs["key_filename"] = key_path
+        pw = _decrypt_pw(_ssh.get("sshPassword", ""))
+        if pw:
+            kwargs["password"] = pw
+        ssh.connect(**kwargs)
+
+        _update(10, "Checking pip3...")
+        _, stdout, _ = ssh.exec_command("which pip3")
+        if not stdout.read().decode().strip():
+            _update(15, "Installing pip3...")
+            _, stdout, stderr = ssh.exec_command(
+                "apt-get update -qq && apt-get install -y -qq python3-pip", timeout=120)
+            stdout.channel.recv_exit_status()
+
+        _update(25, "Creating /opt/slyled...")
+        ssh.exec_command("mkdir -p /opt/slyled")
+        time.sleep(0.5)
+
+        _update(30, "Uploading camera_server.py...")
+        sftp = ssh.open_sftp()
+        src_dir = Path(__file__).resolve().parent.parent / "firmware" / "orangepi"
+        sftp.put(str(src_dir / "camera_server.py"), "/opt/slyled/camera_server.py")
+
+        _update(40, "Uploading requirements.txt...")
+        sftp.put(str(src_dir / "requirements.txt"), "/opt/slyled/requirements.txt")
+        sftp.close()
+
+        _update(50, "Installing dependencies...")
+        _, stdout, stderr = ssh.exec_command(
+            "cd /opt/slyled && pip3 install --break-system-packages -r requirements.txt 2>&1",
+            timeout=180)
+        exit_code = stdout.channel.recv_exit_status()
+        if exit_code != 0:
+            # Try without --break-system-packages (older pip)
+            _, stdout, stderr = ssh.exec_command(
+                "cd /opt/slyled && pip3 install -r requirements.txt 2>&1", timeout=180)
+            exit_code = stdout.channel.recv_exit_status()
+            if exit_code != 0:
+                err = stderr.read().decode("utf-8", errors="replace")[:500]
+                _update(50, "pip install failed", error=err)
+                ssh.close()
+                return
+
+        _update(70, "Stopping existing camera server...")
+        ssh.exec_command("pkill -f camera_server.py || true")
+        time.sleep(1)
+
+        _update(80, "Starting camera server...")
+        ssh.exec_command(
+            "cd /opt/slyled && nohup python3 camera_server.py "
+            "> /var/log/slyled-cam.log 2>&1 &")
+        ssh.close()
+
+        _update(90, "Verifying camera server...")
+        time.sleep(3)
+        info = _probe_camera(ip, timeout=5)
+        if info:
+            _update(100, f"Deploy complete \u2014 {info.get('hostname', ip)} online")
+        else:
+            _update(95, "Server started but not yet responding (may need a few seconds)")
+    except Exception as e:
+        _update(_deploy_status.get("progress", 0), "Deploy failed", error=str(e))
+    finally:
+        with _deploy_lock:
+            _deploy_status["running"] = False
+
+@app.post("/api/cameras/deploy")
+def api_cameras_deploy():
+    with _deploy_lock:
+        if _deploy_status["running"]:
+            return jsonify(err="Deploy already in progress"), 409
+    body = request.get_json(silent=True) or {}
+    ip = body.get("ip", "").strip()
+    if not ip:
+        return jsonify(err="ip required"), 400
+    if not _ssh.get("sshPassword") and not _ssh.get("sshKeyPath"):
+        return jsonify(err="SSH credentials not configured"), 400
+    with _deploy_lock:
+        _deploy_status.update(running=True, progress=0, message="Starting...",
+                              error=None, ip=ip)
+    threading.Thread(target=_deploy_camera_bg, args=(ip,), daemon=True).start()
+    return jsonify(ok=True, pending=True)
+
+@app.get("/api/cameras/deploy/status")
+def api_cameras_deploy_status():
+    with _deploy_lock:
+        return jsonify(dict(_deploy_status))
+
+# ── Camera SSH settings ─────────────────────────────────────────────────
+
+@app.get("/api/cameras/ssh")
+def api_cameras_ssh_get():
+    return jsonify({
+        "sshUser": _ssh.get("sshUser", "root"),
+        "hasPassword": bool(_ssh.get("sshPassword")),
+        "sshKeyPath": _ssh.get("sshKeyPath", ""),
+    })
+
+@app.post("/api/cameras/ssh")
+def api_cameras_ssh_save():
+    body = request.get_json(silent=True) or {}
+    with _lock:
+        if "sshUser" in body:
+            _ssh["sshUser"] = body["sshUser"]
+        if "sshPassword" in body:
+            _ssh["sshPassword"] = _encrypt_pw(body["sshPassword"])
+        if "sshKeyPath" in body:
+            _ssh["sshKeyPath"] = body["sshKeyPath"]
+        _save("ssh", _ssh)
+    return jsonify(ok=True)
 
 @app.post("/api/fixtures/<int:fid>/resolve")
 def api_fixture_resolve(fid):
@@ -4019,6 +4230,7 @@ def api_reset():
         _children = []
         _actions  = []
         _wifi     = {"ssid": "", "password": ""}
+        _ssh      = {"sshUser": "root", "sshPassword": "", "sshKeyPath": ""}
         _layout   = dict(_DEFAULT_LAYOUT)
         _stage    = dict(_DEFAULT_STAGE)
         _settings = dict(_DEFAULT_SETTINGS)

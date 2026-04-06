@@ -468,6 +468,40 @@ def run():
         r = c.get('/api/cameras/discover')
         ok('GET /api/cameras/discover', r.status_code == 200)
 
+        # ── Camera SSH settings ──────────────────────────────────────
+        r = c.get('/api/cameras/ssh')
+        ok('GET /api/cameras/ssh', r.status_code == 200)
+        ssh = r.get_json()
+        ok('SSH default user', ssh.get('sshUser') == 'root')
+        ok('SSH no password', ssh.get('hasPassword') is False)
+
+        r = c.post('/api/cameras/ssh', json={'sshUser': 'pi', 'sshPassword': 'test123'})
+        ok('POST /api/cameras/ssh', r.status_code == 200 and r.get_json().get('ok'))
+
+        r = c.get('/api/cameras/ssh')
+        ssh = r.get_json()
+        ok('SSH user updated', ssh.get('sshUser') == 'pi')
+        ok('SSH has password', ssh.get('hasPassword') is True)
+        ok('SSH password masked', 'sshPassword' not in ssh)
+
+        # Reset SSH back
+        c.post('/api/cameras/ssh', json={'sshUser': 'root', 'sshPassword': ''})
+
+        # ── Camera network scan ──────────────────────────────────────
+        r = c.get('/api/cameras/scan-network')
+        ok('GET /api/cameras/scan-network', r.status_code == 200)
+
+        # ── Camera deploy validation ─────────────────────────────────
+        r = c.post('/api/cameras/deploy', json={})
+        ok('Deploy missing IP → 400', r.status_code == 400)
+
+        r = c.post('/api/cameras/deploy', json={'ip': '192.168.1.100'})
+        ok('Deploy no SSH creds → 400', r.status_code == 400)
+
+        r = c.get('/api/cameras/deploy/status')
+        ok('Deploy status shape', r.status_code == 200 and 'running' in r.get_json())
+        ok('Deploy not running', r.get_json().get('running') is False)
+
         # ── Objects (Phase 2 — renamed from Surfaces) ─────────────────
         r = c.get('/api/objects')
         ok('GET /api/objects', r.status_code == 200)

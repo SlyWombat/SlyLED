@@ -124,6 +124,24 @@ interface SlyLedApi {
     @GET("api/cameras/discover/results")
     suspend fun discoverCamerasResults(): List<JsonObject>
 
+    @GET("api/cameras/ssh")
+    suspend fun getCameraSshSettings(): JsonObject
+
+    @POST("api/cameras/ssh")
+    suspend fun saveCameraSshSettings(@Body body: Map<String, @JvmSuppressWildcards Any>): OkResponse
+
+    @GET("api/cameras/scan-network")
+    suspend fun scanNetwork(): JsonObject
+
+    @GET("api/cameras/scan-network/results")
+    suspend fun scanNetworkResults(): List<JsonObject>
+
+    @POST("api/cameras/deploy")
+    suspend fun deployCameraServer(@Body body: Map<String, @JvmSuppressWildcards Any>): OkResponse
+
+    @GET("api/cameras/deploy/status")
+    suspend fun deployStatus(): JsonObject
+
     // ── DMX Profiles & Control ────────────────────────────────────────
     @GET("/api/dmx-profiles")
     suspend fun getDmxProfiles(@Query("category") category: String? = null): List<DmxProfile>
