@@ -166,6 +166,7 @@ _timelines  = _load("timelines",  [])
 _actions = _load("actions", [])
 _wifi    = _load("wifi",    {"ssid": "", "password": ""})
 _ssh     = _load("ssh",    {"sshUser": "root", "sshPassword": "", "sshKeyPath": ""})
+_ssh_bootstrapped = False  # deferred pre-population (needs _encrypt_pw defined later)
 
 # Live action events pushed by children (ip  -' {actionType, stepIndex, totalSteps, event, ts})
 _live_events = {}
@@ -590,9 +591,26 @@ def _udp_listener():
         else:
             log.debug("UDP cmd=0x%02X from %s (%d bytes)", cmd, ip, len(data))
 
+def _bootstrap_ssh_defaults():
+    """Pre-populate SSH credentials on first run (default OrangePi/RPi creds)."""
+    global _ssh, _ssh_bootstrapped
+    if _ssh_bootstrapped:
+        return
+    _ssh_bootstrapped = True
+    if not _ssh.get("sshPassword") and not _ssh.get("sshKeyPath"):
+        import pathlib
+        key_path = str(pathlib.Path.home() / ".ssh" / "id_ed25519")
+        _ssh["sshUser"] = "root"
+        _ssh["sshPassword"] = _encrypt_pw("orangepi")
+        if pathlib.Path(key_path).exists():
+            _ssh["sshKeyPath"] = key_path
+        _save("ssh", _ssh)
+        log.info("SSH defaults set: root/orangepi, key=%s", _ssh.get("sshKeyPath") or "(none)")
+
 def start_background_tasks():
     """Call once after import to kick off periodic ping and UDP listener threads."""
     global _startup_check_done
+    _bootstrap_ssh_defaults()
     threading.Thread(target=_udp_listener, daemon=True).start()
     if _children:
         threading.Thread(target=_periodic_ping, daemon=True).start()
