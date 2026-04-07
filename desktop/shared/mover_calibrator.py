@@ -23,12 +23,20 @@ MAX_SAMPLES = 60   # stop BFS after this many
 # ── Art-Net helpers ───────────────────────────────────────────────────
 
 def _send_artnet(bridge_ip, universe, channels):
-    """Send an ArtDMX packet."""
+    """Send an ArtDMX packet (with retry on transient network errors)."""
     header = b"Art-Net\x00" + struct.pack("<H", 0x5000) + struct.pack(">H", 14)
     header += b"\x00\x00" + struct.pack("<H", universe) + struct.pack(">H", len(channels))
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.sendto(header + bytes(channels), (bridge_ip, 6454))
-    s.close()
+    for attempt in range(3):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.sendto(header + bytes(channels), (bridge_ip, 6454))
+            s.close()
+            return
+        except OSError:
+            if attempt < 2:
+                time.sleep(0.2)
+            else:
+                raise
 
 
 def _set_mover_dmx(dmx, addr, pan, tilt, r, g, b, dimmer=255):
@@ -56,7 +64,7 @@ def _hold_dmx(bridge_ip, dmx, duration=0.5):
 
 # ── Camera beam detection proxy ──────────────────────────────────────
 
-def _beam_detect(camera_ip, cam_idx, color=None, threshold=30, center=False):
+def _beam_detect(camera_ip, cam_idx, color=None, threshold=50, center=False):
     """Call beam detection on camera node. Returns (px, py) or None."""
     endpoint = "/beam-detect/center" if center else "/beam-detect"
     body = {"cam": cam_idx, "threshold": threshold}
@@ -345,7 +353,7 @@ def converge(bridge_ip, camera_ip, cam_idx,
              mover_addr, grid, color,
              target_px, target_py,
              other_mover_addrs=None,
-             max_iterations=12):
+             max_iterations=25):
     """Closed-loop convergence: aim mover at target pixel, verify, nudge.
 
     Returns: (pan, tilt, final_dist_px) or None
@@ -377,16 +385,20 @@ def converge(bridge_ip, camera_ip, cam_idx,
         err_y = target_py - by
         dist = (err_x**2 + err_y**2) ** 0.5
 
-        if dist < best_dist:
+        improved = dist < best_dist
+        if improved:
             best_dist = dist
             best_pan, best_tilt = pan, tilt
             worse_streak = 0
         else:
             worse_streak += 1
 
+        log.info("converge[%d] beam=(%d,%d) dist=%.0f pan=%.4f tilt=%.4f%s",
+                 it, bx, by, dist, pan, tilt, " *" if improved else "")
+
         if dist < 20:
             break
-        if worse_streak >= 3:
+        if worse_streak >= 5:
             pan, tilt = best_pan, best_tilt
             break
 
@@ -404,8 +416,9 @@ def converge(bridge_ip, camera_ip, cam_idx,
         det = dpx_dp * dpy_dt - dpx_dt * dpy_dp
         if abs(det) < 0.001:
             break
-        d_pan = (dpy_dt * err_x - dpx_dt * err_y) / det * 0.3
-        d_tilt = (-dpy_dp * err_x + dpx_dp * err_y) / det * 0.3
+        gain = 0.5 if it < 10 else 0.2  # aggressive early, cautious late
+        d_pan = (dpy_dt * err_x - dpx_dt * err_y) / det * gain
+        d_tilt = (-dpy_dp * err_x + dpx_dp * err_y) / det * gain
         pan = max(pans[0], min(pans[-1], pan + d_pan))
         tilt = max(tilts[0], min(tilts[-1], tilt + d_tilt))
 

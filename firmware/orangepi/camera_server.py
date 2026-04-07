@@ -679,6 +679,56 @@ def scan():
         frameSize=[int(frame.shape[1]), int(frame.shape[0])],
     )
 
+# ── Depth estimation ───────────────────────────────────────────────────
+
+_depth_estimator = None
+
+def _get_depth_estimator():
+    global _depth_estimator
+    if _depth_estimator is None:
+        try:
+            from depth_estimator import DepthEstimator
+            _depth_estimator = DepthEstimator()
+        except ImportError:
+            log.warning("depth_estimator module not available")
+            return None
+    return _depth_estimator
+
+@app.post("/depth-map")
+def depth_map():
+    """Estimate depth map from a camera. Returns depth stats + optional 3D points."""
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    cameras = _hw_info.get("cameras", [])
+    if cam_idx < 0 or cam_idx >= len(cameras):
+        return jsonify(ok=False, err="Invalid camera index"), 400
+    est = _get_depth_estimator()
+    if est is None:
+        return jsonify(ok=False, err="Depth estimator not available"), 503
+    dev = cameras[cam_idx]["device"]
+    frame = _cv_capture(dev)
+    if frame is None:
+        return jsonify(ok=False, err="Capture failed"), 503
+    depth, ms = est.estimate(frame)
+    h, w = depth.shape[:2]
+    # Return depth stats + optional sample points
+    points = body.get("points", [])  # [{px, py}] to project to 3D
+    fov = _camera_fov(cam_idx)
+    results_3d = []
+    for pt in points[:20]:  # max 20 points
+        x, y, z = est.pixel_to_3d(depth, pt["px"], pt["py"], fov, w, h)
+        results_3d.append({"px": pt["px"], "py": pt["py"], "x": x, "y": y, "z": z})
+    return jsonify(
+        ok=True,
+        inferenceMs=round(ms),
+        width=w, height=h,
+        depthMin=round(float(depth.min()), 3),
+        depthMax=round(float(depth.max()), 3),
+        depthMean=round(float(depth.mean()), 3),
+        points3d=results_3d,
+        camera=cam_idx,
+    )
+
 # ── Beam detection (for calibration) ───────────────────────────────────
 
 _beam_detector = None
