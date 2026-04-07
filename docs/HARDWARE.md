@@ -2,9 +2,49 @@
 
 ## Supported boards
 
-### Orange Raspberry PI with Camera module
+### Camera Nodes (Orange Pi / Raspberry Pi)
 
-Orange Pi Zero 3 1GB RAM Allwinner T527 with Freenove 8MP Camera
+Camera nodes run object detection for stage scanning and person tracking. Hardware requirements depend on use case:
+
+#### Minimum — Stage Scan Only
+Static object detection on demand (scan button, ~2-4s per frame at 640x640).
+
+| Component | Recommendation | Notes |
+|-----------|---------------|-------|
+| Board | Orange Pi Zero 3 (1GB) | Allwinner H618, 4-core A53 |
+| Camera | Freenove FNK0056 8MP CSI | Or any USB webcam (720p+) |
+| Storage | 8GB+ microSD | Class 10 or faster |
+| Cost | ~$25 USD total | |
+
+#### Normal — Scan + Single Tracking Camera
+Person detection + position tracking at ~1-2 FPS. Sufficient for follow-spot with 1 moving head.
+
+| Component | Recommendation | Notes |
+|-----------|---------------|-------|
+| Board | **Orange Pi 4A (2GB)** | Allwinner T527, 8-core A55 @ 1.8GHz |
+| Camera | USB webcam 1080p (e.g. NexiGo N60) | UVC compatible, no driver needed |
+| Storage | 16GB+ microSD | Class 10 or faster |
+| Cost | ~$55 USD total | |
+
+#### Extreme — Multi-Camera Tracking
+2+ cameras for cross-view person tracking, re-identification, multiple moving heads.
+
+| Component | Recommendation | Notes |
+|-----------|---------------|-------|
+| Board | **Orange Pi 5 (8GB)** or Raspberry Pi 5 (8GB) | RK3588S NPU (6 TOPS) or Pi 5's faster CPU |
+| Camera | 2x USB webcam 1080p+ (e.g. EMEET Nova 4K + NexiGo N60) | Different FOV angles recommended |
+| USB Hub | Powered USB 2.0 hub | Required for 2+ USB cameras |
+| Storage | 32GB+ microSD | Fast card for model loading |
+| Cost | ~$120 USD total | |
+
+#### Camera selection tips
+- **USB webcams** are recommended over CSI cameras (easier setup, hot-pluggable, UVC standard)
+- Choose cameras with different FOV for multi-camera setups (wide + narrow)
+- 1080p is the sweet spot; 4K captures more detail but inference runs at 320-640px anyway
+- Avoid cameras that create multiple `/dev/video*` nodes per device (metadata streams) — the firmware filters these automatically
+
+#### Currently tested hardware
+- Orange Pi 4A (2GB) with EMEET SmartCam Nova 4K + NexiGo N60 FHD (dual camera)
 
 ### Arduino Giga R1 WiFi
 
