@@ -46,6 +46,7 @@ def _load_config():
     defaults = {
         "hostname": "",
         "fovDeg": 60,
+        "cameraFov": {},
         "cameraUrl": "",
         "resolutionW": 1920,
         "resolutionH": 1080,
@@ -58,6 +59,11 @@ def _load_config():
     except Exception:
         pass
     _config = defaults
+
+def _camera_fov(idx):
+    """Get FOV for a specific camera index, falling back to node-level default."""
+    fov_map = _config.get("cameraFov", {})
+    return fov_map.get(str(idx), _config.get("fovDeg", 60))
 
 def _save_config():
     try:
@@ -246,8 +252,15 @@ def _get_local_ip():
 @app.get("/status")
 def status():
     # Lazy-probe cameras on first status request
-    for cam in _hw_info.get("cameras", []):
+    cameras = _hw_info.get("cameras", [])
+    for cam in cameras:
         _probe_camera_details(cam)
+    # Build cameras list with per-camera FOV
+    cam_list = []
+    for i, cam in enumerate(cameras):
+        c = dict(cam)
+        c["fovDeg"] = _camera_fov(i)
+        cam_list.append(c)
     return jsonify({
         "role": "camera",
         "hostname": _config.get("hostname") or socket.gethostname(),
@@ -255,8 +268,8 @@ def status():
         "fovDeg": _config.get("fovDeg", 60),
         "resolutionW": _config.get("resolutionW", 1920),
         "resolutionH": _config.get("resolutionH", 1080),
-        "cameraCount": len(_hw_info.get("cameras", [])),
-        "cameras": _hw_info.get("cameras", []),
+        "cameraCount": len(cameras),
+        "cameras": cam_list,
         "capabilities": {
             "tracking": _hw_info.get("tracking", False),
             "hasCamera": _hw_info.get("hasCamera", False),
@@ -325,7 +338,6 @@ input,select{{width:100%;padding:.35em .5em;background:#0f172a;border:1px solid 
 <h2>Status</h2>
 <div class="info-row"><span class="lbl">Board</span><span>{board}</span></div>
 <div class="info-row"><span class="lbl">Cameras</span><span>{len(_hw_info.get("cameras", []))}</span></div>
-<div class="info-row"><span class="lbl">FOV</span><span>{_config.get("fovDeg", 60)}&deg;</span></div>
 <div class="info-row"><span class="lbl">Firmware</span><span>v{VERSION}</span></div>
 <div class="info-row"><span class="lbl">Uptime</span><span>{uptime}s</span></div>
 </div>
@@ -333,6 +345,7 @@ input,select{{width:100%;padding:.35em .5em;background:#0f172a;border:1px solid 
 <h2>Camera {i} &mdash; {c["name"]}</h2>
 <div class="info-row"><span class="lbl">Device</span><span>{c["device"]}</span></div>
 <div class="info-row"><span class="lbl">Resolution</span><span>{c["resW"]}x{c["resH"]}</span></div>
+<div class="info-row"><span class="lbl">FOV</span><span><input type="number" id="fov-{i}" value="{_camera_fov(i)}" min="1" max="180" style="width:50px;padding:2px 4px" onchange="_saveFov({i})"> &deg;</span></div>
 <button class="btn btn-save" onclick="_snap({i})" id="snap-btn-{i}">Capture Frame</button>
 <button class="btn btn-save" onclick="_detect({i})" id="det-btn-{i}" style="{det_btn_style}">Detect Objects</button>
 <div class="det-controls" id="det-ctl-{i}" style="display:none">
@@ -470,6 +483,14 @@ function _autoToggle(idx){{
     delete _autoTimers[idx];
   }}
 }}
+function _saveFov(idx){{
+  var v=parseInt(document.getElementById('fov-'+idx).value)||60;
+  if(v<1)v=1;if(v>180)v=180;
+  document.getElementById('fov-'+idx).value=v;
+  var x=new XMLHttpRequest();
+  x.open('POST','/config');x.setRequestHeader('Content-Type','application/json');
+  x.send(JSON.stringify({{cameraFov:{{[idx]:v}}}}));
+}}
 function _reboot(){{
   if(!confirm('Reboot camera node?'))return;
   var x=new XMLHttpRequest();x.open('POST','/reboot');x.send();
@@ -492,6 +513,14 @@ def config_post():
     for k in ("hostname", "fovDeg", "cameraUrl", "resolutionW", "resolutionH"):
         if k in body:
             _config[k] = body[k]
+    # Merge per-camera FOV (e.g. {"0": 90, "1": 60})
+    if "cameraFov" in body and isinstance(body["cameraFov"], dict):
+        fov_map = _config.get("cameraFov", {})
+        for idx, val in body["cameraFov"].items():
+            v = int(val) if isinstance(val, (int, float, str)) else 60
+            if 1 <= v <= 180:
+                fov_map[str(idx)] = v
+        _config["cameraFov"] = fov_map
     _save_config()
     return jsonify(ok=True, config=_config)
 
@@ -499,7 +528,7 @@ def config_post():
 def config_reset():
     """Factory reset — clear config, reboot."""
     global _config
-    _config = {"hostname": "", "fovDeg": 60, "cameraUrl": "",
+    _config = {"hostname": "", "fovDeg": 60, "cameraFov": {}, "cameraUrl": "",
                "resolutionW": 1920, "resolutionH": 1080}
     _save_config()
     threading.Timer(1, lambda: os.system("reboot")).start()

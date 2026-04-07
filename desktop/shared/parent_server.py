@@ -1163,6 +1163,15 @@ def api_cameras_probe():
         return jsonify(ok=True, info=info)
     return jsonify(ok=False, err="No camera found"), 404
 
+def _camera_fov_from_info(info, cam_idx=0):
+    """Extract per-camera FOV from probe info, falling back to node-level."""
+    if not info:
+        return None
+    cameras = info.get("cameras", [])
+    if cam_idx < len(cameras) and "fovDeg" in cameras[cam_idx]:
+        return cameras[cam_idx]["fovDeg"]
+    return info.get("fovDeg")
+
 @app.post("/api/cameras")
 def api_cameras_register():
     """Register a camera node — creates a camera fixture."""
@@ -1193,7 +1202,7 @@ def api_cameras_register():
             "rotation": [0, 0, 0], "aoeRadius": 1000, "meshFile": None,
             "cameraIp": ip,
             "aimPoint": [0, 0, int(_stage.get("d", 10) * 1000)],
-            "fovDeg": (info or {}).get("fovDeg") or body.get("fovDeg") or 60,
+            "fovDeg": _camera_fov_from_info(info, body.get("cam", 0)) or body.get("fovDeg") or 60,
             "cameraUrl": (info or {}).get("cameraUrl") or body.get("cameraUrl", ""),
             "resolutionW": (info or {}).get("resolutionW") or body.get("resolutionW") or 1920,
             "resolutionH": (info or {}).get("resolutionH") or body.get("resolutionH") or 1080,

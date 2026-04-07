@@ -130,8 +130,11 @@ def run():
         ok("No SoC cameras in list",
            all("sunxi" not in c.get("name", "").lower() for c in cameras),
            "sunxi-vin should be filtered")
+        ok("Camera has per-camera fovDeg", "fovDeg" in cam0,
+           f"fovDeg={cam0.get('fovDeg')}")
+        ok("Camera fovDeg is number", isinstance(cam0.get("fovDeg"), (int, float)))
         for i, c in enumerate(cameras):
-            print(f"    [{i}] {c['device']}: {c['name']} ({c.get('resW', 0)}x{c.get('resH', 0)})")
+            print(f"    [{i}] {c['device']}: {c['name']} ({c.get('resW', 0)}x{c.get('resH', 0)}) fov={c.get('fovDeg', '?')}")
     else:
         ok("Camera has device field", True, "SKIP: no cameras")
         ok("Camera has name field", True, "SKIP: no cameras")
@@ -155,6 +158,8 @@ def run():
     ok("Config page has _detect function", "_detect(" in html)
     ok("Config page has _showImg function", "_showImg(" in html)
     ok("Config page has _autoToggle function", "_autoToggle(" in html)
+    ok("Config page has per-camera FOV input", "fov-" in html)
+    ok("Config page has _saveFov function", "_saveFov(" in html)
 
     # ── Config JSON ────────────────────────────────────────────────
     cfg = get_json("/config/json")
@@ -177,6 +182,39 @@ def run():
     post_json("/config", {"hostname": orig_name})
     d3 = get_json("/config/json")
     ok("Config hostname restored", d3.get("hostname") == orig_name)
+
+    # ── Per-camera FOV ─────────────────────────────────────────────
+    if cam_count > 0:
+        # Set FOV for camera 0
+        r = post_json("/config", {"cameraFov": {"0": 90}})
+        rd = json.loads(r.read().decode())
+        ok("POST cameraFov ok", rd.get("ok") is True)
+
+        cfg_fov = get_json("/config/json")
+        ok("Config has cameraFov", "cameraFov" in cfg_fov)
+        ok("Camera 0 FOV set to 90",
+           cfg_fov.get("cameraFov", {}).get("0") == 90)
+
+        # Verify /status returns per-camera FOV
+        st = get_json("/status")
+        ok("Status cam 0 has fovDeg",
+           "fovDeg" in st.get("cameras", [{}])[0])
+        ok("Status cam 0 fovDeg is 90",
+           st.get("cameras", [{}])[0].get("fovDeg") == 90)
+
+        # Set different FOV for camera 1 if present
+        if cam_count > 1:
+            post_json("/config", {"cameraFov": {"1": 75}})
+            st2 = get_json("/status")
+            ok("Status cam 1 fovDeg is 75",
+               st2.get("cameras", [{}] * 2)[1].get("fovDeg") == 75)
+            ok("Status cam 0 still 90",
+               st2.get("cameras", [{}])[0].get("fovDeg") == 90)
+
+        # Reset FOV back to default
+        post_json("/config", {"cameraFov": {"0": 60}})
+        if cam_count > 1:
+            post_json("/config", {"cameraFov": {"1": 60}})
 
     # ── Snapshot ───────────────────────────────────────────────────
     if cam_count > 0:
