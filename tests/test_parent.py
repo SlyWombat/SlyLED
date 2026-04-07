@@ -510,6 +510,100 @@ def run():
         # Restore layout
         _layout['children'] = []
 
+        # ── Calibration — homography math (unit tests) ───────────
+        from parent_server import _compute_homography, _apply_homography
+
+        # 4-point homography
+        stage_pts = [[0, 0], [3000, 0], [3000, 1500], [0, 1500]]
+        pixel_pts = [[50, 400], [590, 400], [550, 50], [90, 50]]
+        H, err = _compute_homography(stage_pts, pixel_pts)
+        ok('Homography 4-point returns matrix', len(H) == 9)
+        ok('Homography 4-point low error', err < 50, f'error={err:.1f}mm')
+        # Verify reprojection: pixel_pts[0] → stage_pts[0]
+        sx, sz = _apply_homography(H, 50, 400)
+        ok('Homography reprojects pt0 x', abs(sx - 0) < 20, f'sx={sx:.0f}')
+        ok('Homography reprojects pt0 z', abs(sz - 0) < 20, f'sz={sz:.0f}')
+        sx2, sz2 = _apply_homography(H, 590, 400)
+        ok('Homography reprojects pt1 x', abs(sx2 - 3000) < 20, f'sx={sx2:.0f}')
+
+        # 3-point minimum
+        H3, err3 = _compute_homography(stage_pts[:3], pixel_pts[:3])
+        ok('Homography 3-point accepted', len(H3) == 9)
+
+        # 2-point rejected
+        try:
+            _compute_homography(stage_pts[:2], pixel_pts[:2])
+            ok('Homography 2-point rejected', False)
+        except ValueError:
+            ok('Homography 2-point rejected', True)
+
+        # Collinear points rejected
+        try:
+            _compute_homography([[0,0],[100,0],[200,0]], [[0,0],[100,0],[200,0]])
+            ok('Homography collinear rejected', False)
+        except ValueError as e:
+            ok('Homography collinear rejected', 'collinear' in str(e).lower())
+
+        # Large stage (10m × 6m)
+        big_s = [[0,0],[10000,0],[10000,6000],[0,6000]]
+        big_p = [[10,450],[630,450],[600,10],[40,10]]
+        Hb, errb = _compute_homography(big_s, big_p)
+        ok('Homography large stage no overflow', len(Hb) == 9)
+
+        # ── Calibration API lifecycle ────────────────────────────
+        # Need positioned fixtures as references — create 3 LED fixtures
+        led_ids = []
+        for i in range(3):
+            r = c.post('/api/fixtures', json={'name': f'CalRef{i}', 'fixtureType': 'led'})
+            led_ids.append(r.get_json()['id'])
+        # Position them in a triangle (non-collinear)
+        pos_coords = [(500, 0, 200), (2500, 0, 200), (1500, 0, 1200)]
+        positions = [{'id': lid, 'x': pos_coords[i][0], 'y': pos_coords[i][1], 'z': pos_coords[i][2]} for i, lid in enumerate(led_ids)]
+        c.post('/api/layout', json={'fixtures': positions})
+
+        # Start calibration — need a camera fixture
+        r = c.post('/api/cameras', json={'ip': '10.99.0.55'})
+        cal_cam_id = r.get_json().get('id')
+
+        r = c.post(f'/api/cameras/{cal_cam_id}/calibrate/start')
+        ok('Calibrate start ok', r.status_code == 200 and r.get_json().get('ok'))
+        ok('Calibrate start has steps', r.get_json().get('steps', 0) >= 3)
+
+        # Detect reference points
+        refs = r.get_json().get('fixtures', [])
+        # Use triangular pixel positions (non-collinear)
+        pix_coords = [(100, 350), (540, 350), (320, 80)]
+        for i, ref in enumerate(refs[:3]):
+            r = c.post(f'/api/cameras/{cal_cam_id}/calibrate/detect',
+                        json={'fixtureId': ref['id'], 'pixelX': pix_coords[i][0], 'pixelY': pix_coords[i][1]})
+            ok(f'Calibrate detect step {i}', r.get_json().get('ok'))
+
+        # Compute
+        r = c.post(f'/api/cameras/{cal_cam_id}/calibrate/compute')
+        ok('Calibrate compute ok', r.status_code == 200 and r.get_json().get('ok'))
+        ok('Calibrate compute has error', isinstance(r.get_json().get('error'), (int, float)))
+        ok('Calibrate sets calibrated flag', r.get_json().get('calibrated') is True)
+
+        # Get calibration
+        r = c.get(f'/api/cameras/{cal_cam_id}/calibration')
+        ok('GET calibration shows calibrated', r.get_json().get('calibrated') is True)
+        ok('GET calibration has error', isinstance(r.get_json().get('error'), (int, float)))
+        ok('GET calibration has points', r.get_json().get('points', 0) >= 3)
+
+        # Uncalibrated camera returns calibrated=False
+        r = c.get('/api/cameras/99999/calibration')
+        ok('Unknown camera calibration → 404', r.status_code == 404)
+
+        # Start with insufficient fixtures
+        # Remove positioned fixtures
+        for lid in led_ids:
+            c.delete(f'/api/fixtures/{lid}')
+        r = c.post(f'/api/cameras/{cal_cam_id}/calibrate/start')
+        ok('Calibrate insufficient refs → 400', r.status_code == 400)
+
+        # Clean up
+        c.delete(f'/api/cameras/{cal_cam_id}')
+
         # Unknown camera → 404
         r = c.get('/api/cameras/99999/snapshot')
         ok('Snapshot proxy unknown → 404', r.status_code == 404)
@@ -1070,6 +1164,10 @@ def run():
         ok('SPA has ghost accept', '_layScanAccept' in spa)
         ok('SPA has ghost dismiss', '_layScanDismiss' in spa)
         ok('SPA has 3D ghost render', '_s3dRenderGhosts' in spa)
+        ok('SPA has calibration wizard', '_calWizardStart' in spa)
+        ok('SPA has calibration compute', '_calCompute' in spa)
+        ok('SPA has cone toggle', '_layConesToggle' in spa)
+        ok('SPA has cone toggle button', 'btn-lay-cones' in spa)
         # Toolbar tooltips on all buttons
         ok('SPA toolbar: save tooltip', "title='Save layout'" in spa)
         ok('SPA toolbar: mode tooltip', "title='Switch to 3D'" in spa or "title='Switch to 2D'" in spa)

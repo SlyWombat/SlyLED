@@ -2277,7 +2277,7 @@ function renderFixturesSidebar(){
   placed.forEach(function(f){
     var ft=f.fixtureType||'led';
     var icon=f.type==='point'?'\u2b24':f.type==='group'?'\u25a3':'\u2501';
-    var ftBadge=ft==='dmx'?'<span style="font-size:.6em;background:#7c3aed;color:#fff;padding:0 3px;border-radius:2px;margin-left:2px">DMX</span>':ft==='camera'?'<span style="font-size:.6em;background:#0e7490;color:#fff;padding:0 3px;border-radius:2px;margin-left:2px">CAM</span>':'';
+    var ftBadge=ft==='dmx'?'<span style="font-size:.6em;background:#7c3aed;color:#fff;padding:0 3px;border-radius:2px;margin-left:2px">DMX</span>':ft==='camera'?'<span style="font-size:.6em;background:#0e7490;color:#fff;padding:0 3px;border-radius:2px;margin-left:2px">CAM</span>'+(f.calibrated?'<span style="font-size:.6em;background:#065f46;color:#34d399;padding:0 3px;border-radius:2px;margin-left:2px">\u2713 Cal</span>':''):'';
     h+='<div style="padding:.2em 0;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:.3em">';
     h+='<span style="font-size:.8em">'+icon+'</span>';
     h+='<span style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer;font-size:.82em" onclick="selectOnCanvas(\'fixture\','+f.id+')">'+escapeHtml(f.name)+ftBadge+'</span>';
@@ -4028,6 +4028,7 @@ function showNodeEdit(f){
   h+='<div style="display:flex;gap:.5em;flex-wrap:wrap">';
   h+='<button class="btn btn-on" onclick="applyNodePos('+f.id+')">Set Position</button>';
   if(ft==='dmx')h+='<button class="btn" style="background:#1e3a5f;color:#93c5fd" onclick="startAimMode('+f.id+')">Click to Aim</button>';
+  if(ft==='camera')h+='<button class="btn" style="background:#7c3aed;color:#e9d5ff" onclick="closeModal();_calWizardStart('+f.id+')">Calibrate'+(f.calibrated?' \u2713':'')+'</button>';
   h+='<button class="btn btn-off" onclick="removeFromCanvas('+f.id+')">Remove from Stage</button>';
   h+='</div>';
   document.getElementById('modal-title').textContent=f.name;
@@ -4885,6 +4886,153 @@ function _layScanDismissAll(){
   document.getElementById('hs').textContent='Scan results cleared';
   drawLayout();
   if(_layMode==='3d'&&_s3d.inited)_s3dRenderGhosts();
+}
+
+// ── Calibration wizard ────────────────────────────────────────────────
+var _calState=null;  // {camId, step, fixtures, detected}
+
+function _calWizardStart(camId){
+  ra('POST','/api/cameras/'+camId+'/calibrate/start',{},function(r){
+    if(!r||!r.ok){
+      document.getElementById('hs').textContent='Calibration failed: '+(r&&r.err||'unknown');
+      return;
+    }
+    _calState={camId:camId,step:0,fixtures:r.fixtures||[],detected:[]};
+    _calWizardShow();
+  });
+}
+
+function _calWizardShow(){
+  var s=_calState;if(!s)return;
+  var h='<div style="min-width:400px">';
+  h+='<p style="color:#94a3b8;font-size:.85em;margin-bottom:.8em">Click each reference fixture on the camera image to map pixel \u2192 stage coordinates.</p>';
+  // Progress
+  h+='<div class="prog-bar" style="height:8px;margin-bottom:.6em"><div class="prog-fill" style="width:'+Math.round(s.detected.length/s.fixtures.length*100)+'%;transition:width .3s"></div></div>';
+  h+='<div style="font-size:.82em;color:#64748b;margin-bottom:.5em">'+s.detected.length+' / '+s.fixtures.length+' reference points</div>';
+  // Fixture list
+  h+='<div style="max-height:200px;overflow-y:auto;margin-bottom:.6em">';
+  s.fixtures.forEach(function(f,i){
+    var done=s.detected.some(function(d){return d.fixtureId===f.id;});
+    var isCurrent=!done&&s.detected.length===i;
+    h+='<div style="padding:.3em .5em;border-radius:4px;margin-bottom:.2em;font-size:.85em;'
+      +(done?'background:#065f46;color:#34d399':isCurrent?'background:#1e3a5f;color:#93c5fd;border:1px solid #3b82f6':'color:#64748b')
+      +'">'
+      +(done?'\u2713 ':isCurrent?'\u25b6 ':'\u2022 ')
+      +f.name+' <span style="font-size:.75em;opacity:.7">('+f.x+', '+f.z+' mm)</span>'
+      +'</div>';
+  });
+  h+='</div>';
+  // Current step: show snapshot with click-to-mark
+  var nextRef=null;
+  for(var i=0;i<s.fixtures.length;i++){
+    if(!s.detected.some(function(d){return d.fixtureId===s.fixtures[i].id;})){
+      nextRef=s.fixtures[i];break;
+    }
+  }
+  if(nextRef){
+    h+='<div style="margin-bottom:.5em;font-size:.85em;color:#22d3ee">Click on <strong>'+escapeHtml(nextRef.name)+'</strong> in the image below:</div>';
+    h+='<div style="position:relative;cursor:crosshair" id="cal-snap-wrap">';
+    h+='<img id="cal-snap" style="width:100%;border-radius:4px;border:1px solid #334155;display:none" onclick="_calClickSnap(event,'+nextRef.id+')">';
+    h+='<canvas id="cal-marks" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none"></canvas>';
+    h+='</div>';
+    h+='<div id="cal-snap-msg" style="font-size:.82em;color:#64748b;margin-top:.3em">Loading snapshot...</div>';
+  }
+  // Buttons
+  h+='<div style="display:flex;gap:.5em;margin-top:.8em;flex-wrap:wrap">';
+  if(s.detected.length>=3){
+    h+='<button class="btn btn-on" onclick="_calCompute()">Compute Calibration</button>';
+  }
+  h+='<button class="btn btn-off" onclick="_calState=null;closeModal()">Cancel</button>';
+  h+='</div>';
+  h+='</div>';
+  document.getElementById('modal-title').textContent='Camera Calibration';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+  // Load snapshot
+  if(nextRef)_calLoadSnap();
+}
+
+function _calLoadSnap(){
+  var s=_calState;if(!s)return;
+  var img=document.getElementById('cal-snap');
+  var msg=document.getElementById('cal-snap-msg');
+  var x=new XMLHttpRequest();
+  // Find the camera fixture to get IP
+  var camFix=(_fixtures||[]).filter(function(f){return f.id===s.camId;})[0];
+  if(!camFix||!camFix.cameraIp){if(msg)msg.textContent='Camera not found';return;}
+  x.open('GET','/api/cameras/'+s.camId+'/snapshot');
+  x.responseType='blob';
+  x.onload=function(){
+    if(x.status===200&&x.response){
+      img.src=URL.createObjectURL(x.response);
+      img.style.display='block';
+      if(msg)msg.textContent='Click on the fixture location';
+      _calDrawMarks();
+    }else{if(msg)msg.textContent='Snapshot failed';}
+  };
+  x.onerror=function(){if(msg)msg.textContent='Connection failed';};
+  x.send();
+}
+
+function _calClickSnap(e,fixId){
+  var s=_calState;if(!s)return;
+  var img=document.getElementById('cal-snap');if(!img)return;
+  var rect=img.getBoundingClientRect();
+  // Map click to actual pixel coords
+  var scaleX=img.naturalWidth/rect.width;
+  var scaleY=img.naturalHeight/rect.height;
+  var px=Math.round((e.clientX-rect.left)*scaleX);
+  var py=Math.round((e.clientY-rect.top)*scaleY);
+  // Send to server
+  ra('POST','/api/cameras/'+s.camId+'/calibrate/detect',
+    {fixtureId:fixId,pixelX:px,pixelY:py},function(r){
+    if(r&&r.ok){
+      s.detected.push({fixtureId:fixId,px:px,py:py});
+      _calWizardShow();  // Refresh wizard
+    }
+  });
+}
+
+function _calDrawMarks(){
+  var s=_calState;if(!s)return;
+  var img=document.getElementById('cal-snap');
+  var cvs=document.getElementById('cal-marks');
+  if(!img||!cvs)return;
+  img.onload=function(){
+    cvs.width=img.naturalWidth;cvs.height=img.naturalHeight;
+    var ctx=cvs.getContext('2d');
+    ctx.clearRect(0,0,cvs.width,cvs.height);
+    s.detected.forEach(function(d){
+      ctx.beginPath();ctx.arc(d.px,d.py,12,0,Math.PI*2);
+      ctx.strokeStyle='#4ade80';ctx.lineWidth=3;ctx.stroke();
+      ctx.beginPath();ctx.arc(d.px,d.py,3,0,Math.PI*2);
+      ctx.fillStyle='#4ade80';ctx.fill();
+    });
+  };
+  if(img.complete&&img.naturalWidth)img.onload();
+}
+
+function _calCompute(){
+  var s=_calState;if(!s)return;
+  ra('POST','/api/cameras/'+s.camId+'/calibrate/compute',{},function(r){
+    if(!r||!r.ok){
+      document.getElementById('hs').textContent='Calibration failed: '+(r&&r.err||'unknown');
+      return;
+    }
+    var err=r.error||0;
+    var h='<div style="text-align:center;padding:1em">';
+    h+='<div style="font-size:2em;color:#4ade80;margin-bottom:.3em">\u2713</div>';
+    h+='<div style="font-size:1.1em;color:#e2e8f0;margin-bottom:.5em">Calibration Complete</div>';
+    h+='<div style="font-size:.9em;color:#94a3b8">Reprojection error: <strong style="color:'+(err<30?'#4ade80':err<100?'#fbbf24':'#f87171')+'">'+err.toFixed(1)+' mm</strong></div>';
+    if(err>100)h+='<div style="font-size:.82em;color:#fbbf24;margin-top:.5em">\u26a0 High error — consider recalibrating with more reference points</div>';
+    h+='<div style="margin-top:1em"><button class="btn btn-on" onclick="closeModal();_calState=null;loadLayout()">Done</button></div>';
+    h+='</div>';
+    document.getElementById('modal-title').textContent='Camera Calibration';
+    document.getElementById('modal-body').innerHTML=h;
+    // Update fixture locally
+    (_fixtures||[]).forEach(function(f){if(f.id===s.camId)f.calibrated=true;});
+    renderSidebar();
+  });
 }
 
 function saveLayout(btn){

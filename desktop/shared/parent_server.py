@@ -75,7 +75,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "1.0.7"
+VERSION = "1.0.9"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -166,6 +166,7 @@ _timelines  = _load("timelines",  [])
 _actions = _load("actions", [])
 _wifi    = _load("wifi",    {"ssid": "", "password": ""})
 _ssh     = _load("ssh",    {"sshUser": "root", "sshPassword": "", "sshKeyPath": ""})
+_calibrations = _load("calibrations", {})  # {fixtureId_str: {matrix, error, points, timestamp}}
 _ssh_bootstrapped = False  # deferred pre-population (needs _encrypt_pw defined later)
 
 # Live action events pushed by children (ip  -' {actionType, stepIndex, totalSteps, event, ts})
@@ -1257,13 +1258,48 @@ def api_camera_status(fid):
         return jsonify(err="Camera offline"), 503
     return jsonify(info)
 
-def _pixel_to_stage(detections, cam_fixture, frame_w, frame_h):
-    """Transform pixel-space detections to stage-space (mm) using ground-plane projection.
+def _pixel_to_stage_homography(detections, H_flat, frame_w, frame_h):
+    """Transform detections using a calibrated homography matrix."""
+    stage_w = _stage.get("w", 3.0) * 1000
+    stage_d = _stage.get("d", 1.5) * 1000
+    result = []
+    for det in detections:
+        # Bounding box center
+        px = det["x"] + det["w"] / 2
+        py = det["y"] + det["h"] / 2
+        sx, sz = _apply_homography(H_flat, px, py)
+        # Estimate size using corner-to-corner transform
+        px1, py1 = det["x"], det["y"]
+        px2, py2 = det["x"] + det["w"], det["y"] + det["h"]
+        sx1, sz1 = _apply_homography(H_flat, px1, py1)
+        sx2, sz2 = _apply_homography(H_flat, px2, py2)
+        obj_w = abs(sx2 - sx1)
+        obj_h = abs(sz2 - sz1)
+        # Clamp to stage
+        sx = max(0, min(sx, stage_w))
+        sz = max(0, min(sz, stage_d))
+        result.append({
+            "label": det["label"],
+            "confidence": det["confidence"],
+            "x": round(sx), "y": 0, "z": round(sz),
+            "w": round(max(obj_w, 100)), "h": round(max(obj_h, 100)),
+            "pixelBox": {"x": det["x"], "y": det["y"], "w": det["w"], "h": det["h"]},
+        })
+    return result
 
-    Uses camera position, aimPoint, FOV, and a ground-plane (y=0) assumption.
-    Each detection gets stage coordinates (x, y=0, z) and size (w, h) in mm.
+def _pixel_to_stage(detections, cam_fixture, frame_w, frame_h):
+    """Transform pixel-space detections to stage-space (mm).
+
+    Uses calibrated homography if available, otherwise falls back to
+    ground-plane projection using camera position, aimPoint, and FOV.
     """
     import math
+
+    # Try calibrated homography first
+    cal = _calibrations.get(str(cam_fixture.get("id")))
+    if cal and cal.get("matrix"):
+        return _pixel_to_stage_homography(detections, cal["matrix"], frame_w, frame_h)
+
     # Camera position from layout
     pos_map = {p["id"]: p for p in _layout.get("children", [])}
     cam_pos = pos_map.get(cam_fixture["id"], {})
@@ -1398,6 +1434,187 @@ def api_camera_scan(fid):
         captureMs=raw.get("captureMs"),
         inferenceMs=raw.get("inferenceMs"),
     )
+
+# ── Camera calibration — homography math ──────────────────────────────
+
+def _compute_homography(stage_pts, pixel_pts):
+    """Compute 3×3 homography mapping pixel coords → stage coords (mm) using DLT.
+
+    Args:
+        stage_pts: list of [x, z] in stage mm (ground plane, y=0)
+        pixel_pts: list of [px, py] in camera pixels
+
+    Returns:
+        (matrix_3x3_flat, avg_reproj_error_px) or raises ValueError
+    """
+    import numpy as np
+    n = len(stage_pts)
+    if n < 3:
+        raise ValueError(f"Need at least 3 reference points, got {n}")
+    if n != len(pixel_pts):
+        raise ValueError("stage_pts and pixel_pts must have same length")
+
+    # Check for collinearity (all points on a line)
+    if n >= 3:
+        pts = np.array(pixel_pts, dtype=float)
+        # Use cross product of first 3 vectors to check collinearity
+        v1 = pts[1] - pts[0]
+        v2 = pts[2] - pts[0]
+        cross = abs(v1[0] * v2[1] - v1[1] * v2[0])
+        if cross < 1.0:
+            raise ValueError("Reference points are collinear — need non-collinear points")
+
+    sp = np.array(stage_pts, dtype=float)
+    pp = np.array(pixel_pts, dtype=float)
+
+    # Build DLT matrix A (2n × 9)
+    A = []
+    for i in range(n):
+        px, py = pp[i]
+        sx, sz = sp[i]
+        A.append([-px, -py, -1, 0, 0, 0, sx*px, sx*py, sx])
+        A.append([0, 0, 0, -px, -py, -1, sz*px, sz*py, sz])
+    A = np.array(A)
+
+    # SVD solve for h (last column of V)
+    _, _, Vt = np.linalg.svd(A)
+    h = Vt[-1]
+    H = h.reshape(3, 3)
+
+    # Normalize so H[2,2] = 1
+    if abs(H[2, 2]) > 1e-10:
+        H = H / H[2, 2]
+
+    # Compute reprojection error
+    errors = []
+    for i in range(n):
+        px, py = pp[i]
+        v = H @ np.array([px, py, 1.0])
+        if abs(v[2]) > 1e-10:
+            proj_sx, proj_sz = v[0]/v[2], v[1]/v[2]
+        else:
+            proj_sx, proj_sz = v[0], v[1]
+        err = np.sqrt((proj_sx - sp[i][0])**2 + (proj_sz - sp[i][1])**2)
+        errors.append(err)
+    avg_error = float(np.mean(errors))
+
+    return H.flatten().tolist(), avg_error
+
+def _apply_homography(H_flat, px, py):
+    """Apply 3×3 homography to a pixel point → stage coords [x, z] in mm."""
+    H = [H_flat[0:3], H_flat[3:6], H_flat[6:9]]
+    w = H[2][0]*px + H[2][1]*py + H[2][2]
+    if abs(w) < 1e-10:
+        w = 1e-10
+    sx = (H[0][0]*px + H[0][1]*py + H[0][2]) / w
+    sz = (H[1][0]*px + H[1][1]*py + H[1][2]) / w
+    return sx, sz
+
+
+_calib_state = {}  # {cam_fid: {step, fixtures, flashing, detected}}
+
+@app.post("/api/cameras/<int:fid>/calibrate/start")
+def api_camera_calibrate_start(fid):
+    """Start calibration sequence — identifies reference fixtures to flash."""
+    f = next((f for f in _fixtures if f["id"] == fid and f.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+
+    # Find positioned LED/DMX fixtures as reference points
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    refs = []
+    for fx in _fixtures:
+        if fx["id"] == fid:
+            continue
+        if fx["id"] not in pos_map:
+            continue
+        if fx.get("fixtureType") not in ("led", "dmx"):
+            continue
+        p = pos_map[fx["id"]]
+        refs.append({"id": fx["id"], "name": fx.get("name", ""),
+                      "x": p.get("x", 0), "z": p.get("z", 0),
+                      "fixtureType": fx.get("fixtureType")})
+
+    if len(refs) < 3:
+        return jsonify(err=f"Need at least 3 positioned fixtures as reference points, found {len(refs)}"), 400
+
+    _calib_state[fid] = {"step": 0, "fixtures": refs, "detected": []}
+    return jsonify(ok=True, steps=len(refs), fixtures=refs)
+
+
+@app.post("/api/cameras/<int:fid>/calibrate/detect")
+def api_camera_calibrate_detect(fid):
+    """Capture a detection for a specific reference fixture during calibration.
+    Body: {fixtureId, pixelX, pixelY} — the pixel position where the fixture was detected."""
+    f = next((f for f in _fixtures if f["id"] == fid and f.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    state = _calib_state.get(fid)
+    if not state:
+        return jsonify(err="No calibration in progress — call /calibrate/start first"), 400
+    body = request.get_json(silent=True) or {}
+    fix_id = body.get("fixtureId")
+    px = body.get("pixelX")
+    py = body.get("pixelY")
+    if fix_id is None or px is None or py is None:
+        return jsonify(err="fixtureId, pixelX, pixelY required"), 400
+    # Verify fixture is in the reference list
+    ref = next((r for r in state["fixtures"] if r["id"] == fix_id), None)
+    if not ref:
+        return jsonify(err=f"Fixture {fix_id} is not a calibration reference"), 400
+    state["detected"].append({
+        "fixtureId": fix_id, "stageX": ref["x"], "stageZ": ref["z"],
+        "pixelX": float(px), "pixelY": float(py),
+    })
+    state["step"] = len(state["detected"])
+    return jsonify(ok=True, step=state["step"], total=len(state["fixtures"]))
+
+
+@app.post("/api/cameras/<int:fid>/calibrate/compute")
+def api_camera_calibrate_compute(fid):
+    """Compute homography from collected reference points."""
+    f = next((f for f in _fixtures if f["id"] == fid and f.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    state = _calib_state.get(fid)
+    if not state or len(state.get("detected", [])) < 3:
+        return jsonify(err="Need at least 3 detected reference points"), 400
+    detected = state["detected"]
+    stage_pts = [[d["stageX"], d["stageZ"]] for d in detected]
+    pixel_pts = [[d["pixelX"], d["pixelY"]] for d in detected]
+    try:
+        matrix, error = _compute_homography(stage_pts, pixel_pts)
+    except ValueError as e:
+        return jsonify(err=str(e)), 400
+    # Store calibration
+    cal = {
+        "matrix": matrix,
+        "error": round(error, 2),
+        "points": detected,
+        "timestamp": time.time(),
+    }
+    _calibrations[str(fid)] = cal
+    _save("calibrations", _calibrations)
+    f["calibrated"] = True
+    _save("fixtures", _fixtures)
+    # Clean up state
+    _calib_state.pop(fid, None)
+    return jsonify(ok=True, error=round(error, 2), calibrated=True)
+
+
+@app.get("/api/cameras/<int:fid>/calibration")
+def api_camera_calibration_get(fid):
+    """Get calibration data for a camera."""
+    f = next((f for f in _fixtures if f["id"] == fid and f.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    cal = _calibrations.get(str(fid))
+    if not cal:
+        return jsonify(calibrated=False)
+    return jsonify(calibrated=True, error=cal.get("error"),
+                   points=len(cal.get("points", [])),
+                   timestamp=cal.get("timestamp"))
+
 
 def _get_local_ip():
     """Get local IP by connecting a UDP socket (no traffic sent)."""
@@ -4672,6 +4889,8 @@ def api_reset():
         _save("spatial_fx", _spatial_fx)
         _save("timelines",  _timelines)
         _save("dmx_settings", _dmx_settings)
+        _calibrations.clear()
+        _save("calibrations", _calibrations)
         # Delete custom profiles (keep built-ins)
         for p in list(_profile_lib._profiles.values()):
             if not p.get("builtin"):
@@ -4977,6 +5196,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
