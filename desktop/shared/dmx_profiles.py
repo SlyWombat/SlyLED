@@ -55,7 +55,7 @@ CAPABILITY_TYPES = {
     "Speed", "Maintenance", "Effect", "NoFunction", "Generic",
 }
 
-CATEGORIES = {"par", "wash", "spot", "moving-head", "strobe", "fog", "laser", "other"}
+CATEGORIES = {"par", "wash", "spot", "moving-head", "strobe", "fog", "laser", "bar", "matrix", "blinder", "other"}
 
 # -- Capability helper --------------------------------------------------------
 
@@ -527,6 +527,19 @@ class ProfileLibrary:
                         return False, f"Channel {i} cap {j}: missing type"
                     if cap["type"] not in CAPABILITY_TYPES:
                         return False, f"Channel {i} cap {j}: unknown capability type '{cap['type']}'"
+        # Validate emitters (optional multi-emitter support)
+        emitters = profile.get("emitters")
+        if emitters is not None:
+            if not isinstance(emitters, list):
+                return False, "emitters must be a list"
+            for ei, em in enumerate(emitters):
+                if not isinstance(em, dict):
+                    return False, f"Emitter {ei}: must be a dict"
+                if "name" not in em:
+                    return False, f"Emitter {ei}: missing name"
+                offset = em.get("offset", [0, 0, 0])
+                if not isinstance(offset, list) or len(offset) != 3:
+                    return False, f"Emitter {ei}: offset must be [x, y, z]"
         cat = profile.get("category", "other")
         if cat not in CATEGORIES:
             return False, f"Unknown category '{cat}'"

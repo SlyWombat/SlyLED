@@ -2679,12 +2679,18 @@ function _openProfileEditor(p,isEdit){
   h+='<div style="font-weight:bold;font-size:.82em;margin:.5em 0">Channels</div>';
   h+='<div id="pe-chs"></div>';
   h+='<button class="btn" onclick="_peAddCh()" style="font-size:.7em;margin-top:.3em">+ Add Channel</button>';
+  // Emitters (multi-emitter fixtures)
+  h+='<div style="font-weight:bold;font-size:.82em;margin:.5em 0">Emitters <span style="color:#64748b;font-size:.85em">(multi-emitter/matrix — optional)</span></div>';
+  h+='<div id="pe-emitters"></div>';
+  h+='<button class="btn" onclick="_peAddEmitter()" style="font-size:.7em;margin-top:.3em">+ Add Emitter</button>';
   h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="_peSave('+(isEdit?'true':'false')+')">'+(isEdit?'Update':'Create')+'</button></div>';
   document.getElementById('modal-title').textContent=(isEdit?'Edit':'New')+' Fixture Profile';
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
   window._peChannels=JSON.parse(JSON.stringify(p.channels||[]));
+  window._peEmitters=JSON.parse(JSON.stringify(p.emitters||[]));
   _peRenderChs();
+  _peRenderEmitters();
 }
 function _peRenderChs(){
   var el=document.getElementById('pe-chs');if(!el)return;
@@ -2719,7 +2725,7 @@ function _peEditCaps(chIdx){
   var h='<p style="font-size:.82em;color:#94a3b8">Channel: '+escapeHtml(ch.name)+' ('+ch.type+')</p>';
   h+='<div id="pe-caps-list"></div>';
   h+='<button class="btn" onclick="_peAddCap('+chIdx+')" style="font-size:.7em;margin-top:.3em">+ Add Range</button>';
-  h+='<div style="margin-top:.5em"><button class="btn btn-on" onclick="_peSaveCaps('+chIdx+')">Done</button></div>';
+  h+='<div style="margin-top:.5em"><button class="btn btn-on" onclick="_peSaveCaps('+chIdx+')">Save Capabilities</button></div>';
   document.getElementById('modal-title').textContent='Capabilities: '+ch.name;
   document.getElementById('modal-body').innerHTML=h;
   window._peCaps=JSON.parse(JSON.stringify(caps));
@@ -2772,7 +2778,8 @@ function _peGatherProfile(){
     colorMode:(document.getElementById('pe-cm')||{}).value||'rgb',
     beamWidth:parseInt((document.getElementById('pe-bw')||{}).value)||0,
     panRange:parseInt((document.getElementById('pe-pan')||{}).value)||0,
-    tiltRange:parseInt((document.getElementById('pe-tilt')||{}).value)||0};
+    tiltRange:parseInt((document.getElementById('pe-tilt')||{}).value)||0,
+    emitters:window._peEmitters&&window._peEmitters.length?window._peEmitters:undefined};
 }
 function _peSave(isEdit){
   var p=_peGatherProfile();
@@ -2785,8 +2792,40 @@ function _peSave(isEdit){
   var url=isEdit?'/api/dmx-profiles/'+p.id:'/api/dmx-profiles';
   ra(method,url,p,function(r){
     if(r&&r.ok){document.getElementById('hs').textContent='Profile saved: '+p.name;closeModal();if(typeof loadDmxProfiles==='function')loadDmxProfiles();}
+    else if(r&&r.err&&r.err.indexOf('built-in')>=0){
+      // Built-in profile — fork as custom copy
+      p.id=p.id+'-custom';
+      p.builtin=false;
+      ra('POST','/api/dmx-profiles',p,function(r2){
+        if(r2&&r2.ok){document.getElementById('hs').textContent='Saved as custom copy: '+p.id;closeModal();if(typeof loadDmxProfiles==='function')loadDmxProfiles();}
+        else document.getElementById('hs').textContent='Save failed: '+(r2&&r2.err||'unknown');
+      });
+    }
     else document.getElementById('hs').textContent='Save failed: '+(r&&r.err||'unknown');
   });
+}
+function _peRenderEmitters(){
+  var el=document.getElementById('pe-emitters');if(!el)return;
+  var ems=window._peEmitters||[];
+  if(!ems.length){el.innerHTML='<span style="color:#556;font-size:.78em">No emitters (single point source)</span>';return;}
+  var h='<table class="tbl" style="font-size:.78em"><tr><th>#</th><th>Name</th><th>X</th><th>Y</th><th>Z</th><th></th></tr>';
+  ems.forEach(function(em,i){
+    var o=em.offset||[0,0,0];
+    h+='<tr><td>'+(i+1)+'</td>';
+    h+='<td><input value="'+escapeHtml(em.name||'')+'" style="width:80px" onchange="window._peEmitters['+i+'].name=this.value"></td>';
+    h+='<td><input type="number" value="'+o[0]+'" style="width:50px" onchange="window._peEmitters['+i+'].offset[0]=parseInt(this.value)||0"></td>';
+    h+='<td><input type="number" value="'+o[1]+'" style="width:50px" onchange="window._peEmitters['+i+'].offset[1]=parseInt(this.value)||0"></td>';
+    h+='<td><input type="number" value="'+o[2]+'" style="width:50px" onchange="window._peEmitters['+i+'].offset[2]=parseInt(this.value)||0"></td>';
+    h+='<td><span style="cursor:pointer;color:#f66" onclick="window._peEmitters.splice('+i+',1);_peRenderEmitters()">\u2716</span></td></tr>';
+  });
+  h+='</table>';
+  el.innerHTML=h;
+}
+function _peAddEmitter(){
+  window._peEmitters=window._peEmitters||[];
+  var n=window._peEmitters.length;
+  window._peEmitters.push({name:'Emitter '+(n+1),offset:[n*30,0,0]});
+  _peRenderEmitters();
 }
 function showOflImport(){
   var h='<p style="font-size:.85em;color:#94a3b8;margin-bottom:.5em">Paste OFL fixture JSON from <a href="https://open-fixture-library.org" target="_blank" style="color:#3b82f6">open-fixture-library.org</a></p>';

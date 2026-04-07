@@ -296,6 +296,48 @@ def _map_category(ofl_categories):
     return "par"  # default for color changers etc.
 
 
+def _parse_matrix(physical, mode_def):
+    """Parse OFL matrix/matrixPixels into SlyLED emitters list.
+
+    OFL stores matrix layout as:
+    - physical.matrixPixels.dimensions: [cols, rows] or [cols, rows, layers]
+    - physical.matrixPixels.spacing: [x_mm, y_mm] between pixels
+
+    Returns list of emitter dicts: [{name, offset: [x_mm, y_mm, z_mm]}] or None.
+    """
+    mp = physical.get("matrixPixels", {})
+    if not mp:
+        # Check mode-level physical override
+        mp = (mode_def.get("physical", {}) or {}).get("matrixPixels", {})
+    if not mp:
+        return None
+
+    dims = mp.get("dimensions")
+    spacing = mp.get("spacing", [30, 30])  # default 30mm spacing
+    if not dims or not isinstance(dims, list) or len(dims) < 2:
+        return None
+
+    cols = int(dims[0])
+    rows = int(dims[1])
+    layers = int(dims[2]) if len(dims) > 2 else 1
+    sx = float(spacing[0]) if len(spacing) > 0 else 30
+    sy = float(spacing[1]) if len(spacing) > 1 else 30
+    sz = float(spacing[2]) if len(spacing) > 2 else 0
+
+    emitters = []
+    idx = 0
+    for lz in range(layers):
+        for ry in range(rows):
+            for cx in range(cols):
+                emitters.append({
+                    "name": f"Pixel {idx + 1}",
+                    "offset": [round(cx * sx), round(ry * sy), round(lz * sz)],
+                })
+                idx += 1
+
+    return emitters if len(emitters) > 1 else None
+
+
 def ofl_to_slyled(ofl_json, mode=None):
     """Convert OFL fixture JSON to SlyLED profile(s).
 
@@ -423,6 +465,12 @@ def ofl_to_slyled(ofl_json, mode=None):
             "panRange": m_pan,
             "tiltRange": m_tilt,
         }
+
+        # Parse matrix/pixel layout for multi-emitter fixtures
+        emitters = _parse_matrix(physical, m)
+        if emitters:
+            profile["emitters"] = emitters
+
         results.append(profile)
 
     return results

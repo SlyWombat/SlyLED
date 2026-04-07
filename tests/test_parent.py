@@ -321,6 +321,50 @@ def run():
         # Cleanup
         c.delete('/api/fixtures/' + str(mh_fix_id))
 
+        # ── Profile CRUD + emitters ──────────────────────────────
+        # Create custom profile with emitters
+        r = c.post('/api/dmx-profiles', json={
+            'id': 'test-bar-8seg', 'name': 'Test LED Bar 8-segment',
+            'manufacturer': 'Test', 'category': 'bar',
+            'channels': [
+                {'offset': 0, 'name': 'Dimmer', 'type': 'dimmer'},
+                {'offset': 1, 'name': 'Red', 'type': 'red'},
+                {'offset': 2, 'name': 'Green', 'type': 'green'},
+                {'offset': 3, 'name': 'Blue', 'type': 'blue'},
+            ],
+            'emitters': [
+                {'name': 'Seg 1', 'offset': [0, 0, 0]},
+                {'name': 'Seg 2', 'offset': [100, 0, 0]},
+                {'name': 'Seg 3', 'offset': [200, 0, 0]},
+            ],
+        })
+        ok('POST profile with emitters', r.status_code == 200 and r.get_json().get('ok'))
+
+        # Verify emitters persisted
+        r = c.get('/api/dmx-profiles/test-bar-8seg')
+        p = r.get_json()
+        ok('Profile has emitters', isinstance(p.get('emitters'), list))
+        ok('Profile has 3 emitters', len(p.get('emitters', [])) == 3)
+        ok('Emitter 2 offset correct', p['emitters'][1].get('offset') == [100, 0, 0])
+
+        # Update profile
+        p['emitters'].append({'name': 'Seg 4', 'offset': [300, 0, 0]})
+        r = c.put('/api/dmx-profiles/test-bar-8seg', json=p)
+        ok('PUT profile update ok', r.status_code == 200)
+        r = c.get('/api/dmx-profiles/test-bar-8seg')
+        ok('Profile now has 4 emitters', len(r.get_json().get('emitters', [])) == 4)
+
+        # Invalid emitter (bad offset)
+        r = c.post('/api/dmx-profiles', json={
+            'id': 'test-bad-emitter', 'name': 'Bad',
+            'channels': [{'offset': 0, 'name': 'D', 'type': 'dimmer'}],
+            'emitters': [{'name': 'E1', 'offset': [1, 2]}],  # need 3 elements
+        })
+        ok('Bad emitter offset rejected', r.status_code == 400)
+
+        # Clean up
+        c.delete('/api/dmx-profiles/test-bar-8seg')
+
         # Cleanup DMX fixtures
         c.delete('/api/fixtures/' + str(dmx_id))
         c.delete('/api/fixtures/' + str(dmx_id2))
@@ -1270,6 +1314,10 @@ def run():
         ok('SPA has range cal', '_rangeCalStart' in spa)
         ok('SPA has range cal submit', '_rangeCalSubmit' in spa)
         ok('SPA has Cal Range button', 'Cal Range' in spa)
+        ok('SPA has emitter editor', '_peRenderEmitters' in spa)
+        ok('SPA has add emitter', '_peAddEmitter' in spa)
+        ok('SPA has Save Capabilities button', 'Save Capabilities' in spa)
+        ok('SPA has built-in fork logic', 'built-in' in spa and '-custom' in spa)
         # Toolbar tooltips on all buttons
         ok('SPA toolbar: save tooltip', "title='Save layout'" in spa)
         ok('SPA toolbar: mode tooltip', "title='Switch to 3D'" in spa or "title='Switch to 2D'" in spa)
