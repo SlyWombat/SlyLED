@@ -574,12 +574,16 @@ def run():
         H3, err3 = _compute_homography(stage_pts[:3], pixel_pts[:3])
         ok('Homography 3-point accepted', len(H3) == 9)
 
-        # 2-point rejected
+        # 2-point accepted (similarity transform)
+        H2, err2 = _compute_homography(stage_pts[:2], pixel_pts[:2])
+        ok('Homography 2-point accepted', len(H2) == 9, f'error={err2:.1f}mm')
+
+        # 1-point rejected
         try:
-            _compute_homography(stage_pts[:2], pixel_pts[:2])
-            ok('Homography 2-point rejected', False)
+            _compute_homography(stage_pts[:1], pixel_pts[:1])
+            ok('Homography 1-point rejected', False)
         except ValueError:
-            ok('Homography 2-point rejected', True)
+            ok('Homography 1-point rejected', True)
 
         # Collinear points rejected
         try:
@@ -643,7 +647,7 @@ def run():
         for lid in led_ids:
             c.delete(f'/api/fixtures/{lid}')
         r = c.post(f'/api/cameras/{cal_cam_id}/calibrate/start')
-        ok('Calibrate insufficient refs → 400', r.status_code == 400)
+        ok('Calibrate no refs → 400', r.status_code == 400)
 
         # ── Tracking API tests ────────────────────────────────────
         # Track start on offline camera → 503

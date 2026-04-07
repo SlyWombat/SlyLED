@@ -1450,15 +1450,14 @@ def _compute_homography(stage_pts, pixel_pts):
     """
     import numpy as np
     n = len(stage_pts)
-    if n < 3:
-        raise ValueError(f"Need at least 3 reference points, got {n}")
+    if n < 2:
+        raise ValueError(f"Need at least 2 reference points, got {n}")
     if n != len(pixel_pts):
         raise ValueError("stage_pts and pixel_pts must have same length")
 
-    # Check for collinearity (all points on a line)
+    # Check for collinearity (all points on a line) — only relevant for 3+ points
     if n >= 3:
         pts = np.array(pixel_pts, dtype=float)
-        # Use cross product of first 3 vectors to check collinearity
         v1 = pts[1] - pts[0]
         v2 = pts[2] - pts[0]
         cross = abs(v1[0] * v2[1] - v1[1] * v2[0])
@@ -1468,7 +1467,37 @@ def _compute_homography(stage_pts, pixel_pts):
     sp = np.array(stage_pts, dtype=float)
     pp = np.array(pixel_pts, dtype=float)
 
-    # Build DLT matrix A (2n × 9)
+    # 2-point case: compute similarity transform (scale + translate)
+    if n == 2:
+        # Simple affine: stage = scale * pixel + offset
+        dp = pp[1] - pp[0]
+        ds = sp[1] - sp[0]
+        px_dist = np.linalg.norm(dp)
+        if px_dist < 0.001:
+            raise ValueError("Reference pixel points are identical")
+        st_dist = np.linalg.norm(ds)
+        scale = st_dist / px_dist
+        # Rotation angle
+        angle_p = np.arctan2(dp[1], dp[0])
+        angle_s = np.arctan2(ds[1], ds[0])
+        theta = angle_s - angle_p
+        cos_t, sin_t = np.cos(theta), np.sin(theta)
+        # Build 3x3 matrix: rotate + scale + translate
+        R = scale * np.array([[cos_t, -sin_t], [sin_t, cos_t]])
+        t = sp[0] - R @ pp[0]
+        H = np.array([
+            [R[0, 0], R[0, 1], t[0]],
+            [R[1, 0], R[1, 1], t[1]],
+            [0, 0, 1],
+        ])
+        # Compute error
+        errors = []
+        for i in range(n):
+            v = H @ np.array([pp[i][0], pp[i][1], 1.0])
+            errors.append(np.sqrt((v[0] - sp[i][0])**2 + (v[1] - sp[i][1])**2))
+        return H.flatten().tolist(), float(np.mean(errors))
+
+    # Build DLT matrix A (2n × 9) for 3+ points
     A = []
     for i in range(n):
         px, py = pp[i]
@@ -1536,8 +1565,8 @@ def api_camera_calibrate_start(fid):
                       "x": p.get("x", 0), "z": p.get("z", 0),
                       "fixtureType": fx.get("fixtureType")})
 
-    if len(refs) < 3:
-        return jsonify(err=f"Need at least 3 positioned fixtures as reference points, found {len(refs)}"), 400
+    if len(refs) < 2:
+        return jsonify(err=f"Need at least 2 positioned fixtures as reference points, found {len(refs)}"), 400
 
     _calib_state[fid] = {"step": 0, "fixtures": refs, "detected": []}
     return jsonify(ok=True, steps=len(refs), fixtures=refs)
@@ -1578,8 +1607,8 @@ def api_camera_calibrate_compute(fid):
     if not f:
         return jsonify(err="Camera not found"), 404
     state = _calib_state.get(fid)
-    if not state or len(state.get("detected", [])) < 3:
-        return jsonify(err="Need at least 3 detected reference points"), 400
+    if not state or len(state.get("detected", [])) < 2:
+        return jsonify(err="Need at least 2 detected reference points"), 400
     detected = state["detected"]
     stage_pts = [[d["stageX"], d["stageZ"]] for d in detected]
     pixel_pts = [[d["pixelX"], d["pixelY"]] for d in detected]
