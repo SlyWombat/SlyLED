@@ -83,9 +83,9 @@ def seed():
             {'id': 3, 'x': 5000, 'y': 2500, 'z': 5000},
         ]})
 
-        # Surfaces
-        c.post('/api/surfaces', json={
-            'name': 'Back Wall', 'surfaceType': 'wall', 'color': '#1e293b', 'opacity': 30,
+        # Objects
+        c.post('/api/objects', json={
+            'name': 'Back Wall', 'objectType': 'wall', 'color': '#1e293b', 'opacity': 30,
             'transform': {'pos': [0, 0, 0], 'rot': [0, 0, 0], 'scale': [10000, 5000, 100]}
         })
 

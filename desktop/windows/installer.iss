@@ -3,7 +3,7 @@
 ; Or:    run build.bat — it calls iscc automatically if available.
 
 #define AppName      "SlyLED Orchestrator"
-#define AppVersion   "1.0.0"
+#define AppVersion   "1.0.5"
 #define AppPublisher "Electric RV Corporation"
 #define AppExeName   "SlyLED.exe"
 ; Unique GUID for this app — keep fixed across releases so updates overwrite
@@ -87,9 +87,11 @@ var
   ResultCode: Integer;
 begin
   Result := '';
-  Exec('taskkill', '/f /im SlyLED.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  // Small delay to let the process fully exit and release file locks
-  Sleep(1000);
+  // taskkill /f can trigger a hidden UAC prompt on some machines, causing the
+  // wizard to freeze.  Use ewNoWait so the installer never blocks on it.
+  Exec('taskkill', '/f /im SlyLED.exe', '', SW_HIDE, ewNoWait, ResultCode);
+  // Brief pause — non-blocking in practice (process exit is fast after SIGKILL)
+  Sleep(500);
 end;
 
 // Ask whether to delete saved state (children, runners, settings) on uninstall

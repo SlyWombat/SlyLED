@@ -452,6 +452,26 @@ def run():
         r = c.put('/api/fixtures/' + str(reg_cam_id) + '/aim', json={'aimPoint': [1000, 500, 2000]})
         ok('Registered camera aim point', r.status_code == 200)
 
+        # ── Camera proxy endpoints (camera node offline, expect 503) ──
+        r = c.get('/api/cameras/' + str(reg_cam_id) + '/snapshot')
+        ok('Snapshot proxy offline → 503', r.status_code == 503)
+
+        r = c.get('/api/cameras/' + str(reg_cam_id) + '/status')
+        ok('Status proxy offline → 503', r.status_code == 503)
+
+        r = c.post('/api/cameras/' + str(reg_cam_id) + '/scan', json={'threshold': 0.5})
+        ok('Scan proxy offline → 503', r.status_code == 503)
+
+        # Unknown camera → 404
+        r = c.get('/api/cameras/99999/snapshot')
+        ok('Snapshot proxy unknown → 404', r.status_code == 404)
+
+        r = c.get('/api/cameras/99999/status')
+        ok('Status proxy unknown → 404', r.status_code == 404)
+
+        r = c.post('/api/cameras/99999/scan', json={})
+        ok('Scan proxy unknown → 404', r.status_code == 404)
+
         # DELETE /api/cameras/<id> unregisters
         r = c.delete('/api/cameras/' + str(reg_cam_id))
         ok('DELETE /api/cameras', r.status_code == 200)
@@ -502,13 +522,48 @@ def run():
         ok('Deploy status shape', r.status_code == 200 and 'running' in r.get_json())
         ok('Deploy not running', r.get_json().get('running') is False)
 
+        # ── Camera probe endpoint ────────────────────────────────────
+        r = c.post('/api/cameras/probe', json={})
+        ok('Probe missing IP → 400', r.status_code == 400)
+
+        r = c.post('/api/cameras/probe', json={'ip': '192.0.2.1'})
+        ok('Probe unreachable → 404', r.status_code == 404)
+
+        # ── SSH key content upload ───────────────────────────────────
+        r = c.post('/api/cameras/ssh', json={
+            'sshUser': 'root',
+            'sshKeyContent': '-----BEGIN OPENSSH PRIVATE KEY-----\ntest\n-----END OPENSSH PRIVATE KEY-----'
+        })
+        ok('SSH key content save', r.status_code == 200 and r.get_json().get('ok'))
+
+        r = c.get('/api/cameras/ssh')
+        ssh = r.get_json()
+        ok('SSH hasKey after content upload', ssh.get('hasKey') is True)
+        ok('SSH keyPath set to managed file', 'camera_key' in ssh.get('sshKeyPath', ''))
+
+        # ── SSH key generation ────────────────────────────────────────
+        r = c.post('/api/cameras/ssh/generate-key')
+        ok('Generate SSH key', r.status_code == 200 and r.get_json().get('ok'))
+        gen = r.get_json()
+        ok('Generated key has publicKey', 'ssh-ed25519' in gen.get('publicKey', ''))
+        ok('Generated key has keyPath', 'camera_key' in gen.get('keyPath', ''))
+
+        # SSH settings now point to generated key
+        r = c.get('/api/cameras/ssh')
+        ssh = r.get_json()
+        ok('SSH keyPath updated after gen', 'camera_key' in ssh.get('sshKeyPath', ''))
+        ok('SSH hasKey after gen', ssh.get('hasKey') is True)
+
+        # Reset SSH back
+        c.post('/api/cameras/ssh', json={'sshUser': 'root', 'sshPassword': '', 'sshKeyPath': ''})
+
         # ── Objects (Phase 2 — renamed from Surfaces) ─────────────────
         r = c.get('/api/objects')
         ok('GET /api/objects', r.status_code == 200)
 
         # Backward compat alias
-        r2 = c.get('/api/surfaces')
-        ok('GET /api/surfaces alias', r2.status_code == 200)
+        r2 = c.get('/api/objects')
+        ok('GET /api/objects alias', r2.status_code == 200)
 
         r = c.post('/api/objects', json={'name': 'Test Object'})
         ok('POST create object', r.status_code == 200 and r.get_json().get('ok'))

@@ -421,6 +421,60 @@ body.light .li:hover{border-color:#3b82f6}
       </div>
     </div>
   </div>
+  <div class='card' style='max-width:800px'>
+    <div class='card-title'>Camera Setup</div>
+    <p style='font-size:.82em;color:#888;margin-bottom:.6em'>Manage SSH credentials for deploying and upgrading camera nodes on SBC boards (Orange Pi, Raspberry Pi).</p>
+
+    <div style='display:flex;gap:1em;flex-wrap:wrap;margin-bottom:.8em'>
+      <div style='flex:1;min-width:250px;background:#0f172a;border:1px solid #1e3a5f;border-radius:6px;padding:.6em'>
+        <div style='font-size:.82em;font-weight:bold;color:#94a3b8;margin-bottom:.4em'>SSH Credentials</div>
+        <label style='font-size:.78em'>Username</label>
+        <input id='cam-ssh-user' value='root' style='width:100%;margin-bottom:.3em;font-size:.85em'>
+        <label style='font-size:.78em'>Password</label>
+        <div style='display:flex;gap:.3em;margin-bottom:.3em'>
+          <input id='cam-ssh-pass' type='password' placeholder='(not set)' style='flex:1;font-size:.85em'>
+          <button type='button' class='btn' style='padding:.2em .4em;background:#333;font-size:.75em'
+            onmousedown='document.getElementById("cam-ssh-pass").type="text"'
+            onmouseup='document.getElementById("cam-ssh-pass").type="password"'
+            onmouseleave='document.getElementById("cam-ssh-pass").type="password"'>&#128065;</button>
+        </div>
+        <span id='cam-ssh-pw-status' style='font-size:.75em;color:#888'></span>
+        <label style='font-size:.78em;margin-top:.3em'>SSH Key <span style='color:#475569'>(path or paste content)</span></label>
+        <input id='cam-ssh-key' placeholder='~/.ssh/id_ed25519' style='width:100%;margin-bottom:.2em;font-size:.85em'>
+        <textarea id='cam-ssh-key-content' placeholder='Paste private key here (optional — overrides path)' rows='3' style='width:100%;font-size:.75em;font-family:monospace;background:#0f172a;border:1px solid #334155;color:#94a3b8;border-radius:3px;display:none;margin-bottom:.2em'></textarea>
+        <div style='display:flex;gap:.3em;align-items:center;margin-bottom:.3em'>
+          <a href='#' onclick='var t=document.getElementById("cam-ssh-key-content");t.style.display=t.style.display==="none"?"":"none";return false' style='font-size:.72em;color:#22d3ee'>Paste key content</a>
+          <span id='cam-ssh-key-status' style='font-size:.75em;color:#888'></span>
+        </div>
+        <div style='display:flex;gap:.3em;flex-wrap:wrap'>
+          <button class='btn btn-on' onclick='_saveCamSsh()' style='font-size:.82em;padding:.3em .8em'>Save Credentials</button>
+          <button class='btn' onclick='_camGenKey()' style='font-size:.82em;padding:.3em .8em;background:#334155;color:#94a3b8'>Generate SSH Key</button>
+        </div>
+        <div id='cam-ssh-pubkey' style='display:none;margin-top:.5em;padding:.5em;background:#0f172a;border:1px solid #1e3a5f;border-radius:4px'>
+          <div style='font-size:.78em;color:#22d3ee;margin-bottom:.2em'>Public key (add to device's ~/.ssh/authorized_keys):</div>
+          <textarea id='cam-ssh-pubkey-text' readonly rows='2' style='width:100%;font-size:.72em;font-family:monospace;background:#0a0e1a;border:1px solid #334155;color:#e2e8f0;border-radius:3px'></textarea>
+          <button class='btn' onclick='_copyPubKey()' style='font-size:.72em;padding:.2em .5em;background:#1e3a5f;color:#93c5fd;margin-top:.2em'>Copy to Clipboard</button>
+        </div>
+      </div>
+    </div>
+
+    <div style='border-top:1px solid #333;padding-top:.8em;margin-bottom:.8em'>
+      <div style='display:flex;align-items:center;gap:.5em;margin-bottom:.4em'>
+        <span style='font-size:.85em;font-weight:bold;color:#aaa'>Registered Cameras</span>
+        <button class='btn' onclick='_camFwRefresh()' style='padding:.1em .4em;background:#0e7490;color:#fff;font-size:.75em'>&#x21bb; Check Versions</button>
+      </div>
+      <div id='cam-fw-list'><p style='color:#888;font-size:.82em'>Click refresh to check camera firmware versions.</p></div>
+    </div>
+
+    <div style='border-top:1px solid #333;padding-top:.8em'>
+      <div style='display:flex;align-items:center;gap:.5em;margin-bottom:.4em'>
+        <span style='font-size:.85em;font-weight:bold;color:#aaa'>New Board Setup</span>
+        <button class='btn' id='cam-scan-btn' onclick='_camScanBoards()' style='padding:.1em .4em;background:#475569;color:#fff;font-size:.75em'>Scan for SBC Boards</button>
+      </div>
+      <p style='font-size:.78em;color:#64748b;margin-bottom:.3em'>Finds SSH-accessible boards on the network that can receive camera software.</p>
+      <div id='cam-scan-results'></div>
+    </div>
+  </div>
 </div>
 
 <div id='modal' class='modal-bg' onclick='if(event.target===this)closeModal()'>
@@ -943,20 +997,20 @@ function _renderSetup(){
       // ── Cameras section
       h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">Cameras '
         +'<button class="btn" onclick="discoverCameras(this)" id="cam-disc-btn" style="font-size:.75em;padding:.15em .5em;margin-left:.5em;background:#0e7490;color:#fff">Discover</button>'
-        +'<button class="btn" onclick="scanNetwork(this)" id="net-scan-btn" style="font-size:.75em;padding:.15em .5em;margin-left:.3em;background:#475569;color:#fff">Scan Network</button>'
-        +'<button class="btn" onclick="showSshSettings()" style="font-size:.75em;padding:.15em .5em;margin-left:.3em;background:#334155;color:#94a3b8">\u2699 SSH</button>'
         +'</h3>';
       h+='<div id="cam-disc-results" style="display:none;margin-bottom:.5em"></div>';
-      h+='<div id="net-scan-results" style="display:none;margin-bottom:.5em"></div>';
       if(camFixtures.length){
         h+='<table class="tbl cam-status-tbl"><tr><th>Camera</th><th>IP</th><th>FOV</th><th>Resolution</th><th>Status</th><th>Actions</th></tr>';
         camFixtures.forEach(function(f){
           var ip=f.cameraIp||'—';
           var fov=(f.fovDeg||60)+'\u00b0';
           var res=(f.resolutionW||'—')+'x'+(f.resolutionH||'—');
-          var acts='<button class="btn" onclick="editFixture('+f.id+')" style="background:#0e7490;color:#fff">Edit</button>'
-            +' <button class="btn btn-off" onclick="removeCamera('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
+          var acts='<button class="btn" onclick="editFixture('+f.id+')" style="background:#0e7490;color:#fff">Edit</button>';
+          if(ip!=='—')acts+=' <button class="btn" onclick="_camSnap('+f.id+')" style="background:#059669;color:#fff">Snap</button>';
+          if(ip!=='—')acts+=' <button class="btn" onclick="window.open(\'http://'+escapeHtml(ip)+':5000/config\',\'_blank\')" style="background:#475569;color:#fff">Config</button>';
+          acts+=' <button class="btn btn-off" onclick="removeCamera('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
           h+='<tr><td><b>'+escapeHtml(f.name)+'</b></td><td>'+escapeHtml(ip)+'</td><td>'+fov+'</td><td>'+res+'</td><td id="cam-st-'+f.id+'"><span class="badge" style="background:#334;color:#888">Checking...</span></td><td>'+acts+'</td></tr>';
+          h+='<tr id="cam-snap-row-'+f.id+'" style="display:none"><td colspan="6" style="padding:.3em"><div id="cam-snap-'+f.id+'" style="text-align:center"></div></td></tr>';
         });
         h+='</table>';
       }else{
@@ -999,12 +1053,16 @@ function showAddFixtureModal(){
     +'<div style="margin-top:.8em;padding-top:.5em;border-top:1px solid #334155"><button class="btn btn-on" onclick="_submitAddFixture()" style="font-size:.95em;padding:.5em 2em">Add Fixture</button></div>'
     +'</div>'
     +'<div id="af-camera" style="display:none">'
-    +'<label>Name</label><input id="af-cam-name" placeholder="Stage Camera 1" style="width:100%;margin-bottom:.4em">'
-    +'<div style="display:flex;gap:.5em"><div style="flex:1"><label>FOV (degrees)</label><input id="af-cam-fov" type="number" value="60" min="1" max="180" style="width:100%;margin-bottom:.4em"></div>'
-    +'<div style="flex:1"><label>Width (px)</label><input id="af-cam-rw" type="number" value="1920" min="1" style="width:100%;margin-bottom:.4em"></div>'
-    +'<div style="flex:1"><label>Height (px)</label><input id="af-cam-rh" type="number" value="1080" min="1" style="width:100%;margin-bottom:.4em"></div></div>'
-    +'<label>Stream URL <span style="color:#64748b;font-size:.75em">(optional)</span></label><input id="af-cam-url" placeholder="rtsp://192.168.1.50:554/stream" style="width:100%;margin-bottom:.4em">'
-    +'<div style="margin-top:.8em"><button class="btn btn-on" onclick="_submitAddFixture()" style="font-size:.95em;padding:.5em 2em">Add Camera</button></div>'
+    +'<p style="color:#94a3b8;font-size:.82em;margin-bottom:.5em">Scan the network for camera nodes. Name, FOV, and resolution are read from the device.</p>'
+    +'<button class="btn" id="af-cam-disc-btn" onclick="_afCamDiscover()" style="background:#0e7490;color:#fff;font-size:.9em;padding:.4em 1.2em;margin-bottom:.5em">Discover Cameras</button>'
+    +' <span id="af-cam-disc-status" style="color:#64748b;font-size:.82em"></span>'
+    +'<div id="af-cam-results"></div>'
+    +'<div id="af-cam-manual" style="margin-top:.6em;border-top:1px solid #334155;padding-top:.5em">'
+    +'<p style="color:#64748b;font-size:.78em;margin-bottom:.3em">Or enter IP manually:</p>'
+    +'<div style="display:flex;gap:.3em;align-items:end"><input id="af-cam-ip" placeholder="192.168.10.x" style="flex:1">'
+    +'<button class="btn" onclick="_afCamProbe()" style="background:#334155;color:#94a3b8;font-size:.82em;padding:.35em .8em">Probe</button></div>'
+    +'<div id="af-cam-probe-result" style="margin-top:.3em"></div>'
+    +'</div>'
     +'</div>'
     +'<div id="af-group" style="display:none">'
     +'<label>Group Name</label><input id="af-gname" placeholder="Front Wash" style="width:100%;margin-bottom:.4em">'
@@ -1209,24 +1267,9 @@ function _submitAddFixture(){
       loadSetup();
     });
   }else if(ft==='camera'){
-    var cname=document.getElementById('af-cam-name').value.trim();
-    var fov=parseInt(document.getElementById('af-cam-fov').value)||60;
-    var rw=parseInt(document.getElementById('af-cam-rw').value)||1920;
-    var rh=parseInt(document.getElementById('af-cam-rh').value)||1080;
-    var curl=document.getElementById('af-cam-url').value.trim();
-    if(fov<1||fov>180){document.getElementById('hs').textContent='FOV must be 1–180°';return;}
-    closeModal();
-    var body={name:cname||'Camera',fixtureType:'camera',type:'point',
-      fovDeg:fov,resolutionW:rw,resolutionH:rh};
-    if(curl)body.cameraUrl=curl;
-    ra('POST','/api/fixtures',body,function(r){
-      if(r&&r.ok){
-        document.getElementById('hs').textContent='Added camera: '+(cname||'Camera');
-      }else{
-        document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
-      }
-      loadSetup();
-    });
+    // Cameras are added from discover results, not via form submit
+    document.getElementById('hs').textContent='Use Discover or Probe to find a camera first';
+    return;
   }else{
     var name=document.getElementById('af-name').value.trim();
     var uni=parseInt(document.getElementById('af-uni').value)||1;
@@ -1271,10 +1314,19 @@ function discoverChildren(){
         d.forEach(function(c){
           var bt=c.boardType||'slyled';
           var badge=bt==='dmx'?'<span class="badge" style="background:#7c3aed;color:#fff;font-size:.75em">DMX Bridge</span>'
+            :bt==='camera'?'<span class="badge" style="background:#0e7490;color:#fff;font-size:.75em">Camera</span>'
             :'<span class="badge" style="background:#059669;color:#fff;font-size:.75em">LED</span>';
-          var addBtn='<button class="btn btn-on" onclick="addDiscovered(\''+c.ip+'\')">Add</button>';
-          if(bt==='dmx')addBtn+=' <button class="btn" onclick="addDiscoveredDmxBridge(\''+c.ip+'\')" style="background:#7c3aed;color:#fff">Configure</button>';
-          h+='<tr><td>'+escapeHtml(c.hostname)+'</td><td>'+escapeHtml(c.name||'-')+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+badge+'</td><td>'+(bt==='dmx'?'—':c.sc)+'</td>'
+          var addBtn;
+          if(bt==='camera'){
+            addBtn='<button class="btn" onclick="addDiscoveredCamera(\''+c.ip+'\',\''+escapeHtml(c.hostname||c.name||'Camera').replace(/'/g,"\\'")+
+              '\')" style="background:#0e7490;color:#fff">Add Camera</button>'
+              +' <a href="http://'+c.ip+':5000/config" target="_blank" style="color:#22d3ee;font-size:.78em;text-decoration:underline;margin-left:.3em">Config</a>';
+          }else{
+            addBtn='<button class="btn btn-on" onclick="addDiscovered(\''+c.ip+'\')">Add</button>';
+            if(bt==='dmx')addBtn+=' <button class="btn" onclick="addDiscoveredDmxBridge(\''+c.ip+'\')" style="background:#7c3aed;color:#fff">Configure</button>';
+          }
+          var detail=bt==='camera'?(c.resolutionW+'x'+c.resolutionH):bt==='dmx'?'\u2014':c.sc;
+          h+='<tr><td>'+escapeHtml(c.hostname)+'</td><td>'+escapeHtml(c.name||'-')+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+badge+'</td><td>'+detail+'</td>'
             +'<td>'+addBtn+'</td></tr>';
         });
         el.innerHTML=h+'</table>';
@@ -1287,6 +1339,74 @@ function discoverChildren(){
 function addDiscoveredDmxBridge(ip){
   document.getElementById('hs').textContent='Opening DMX bridge config at '+ip+'...';
   window.open('http://'+ip+'/config','_blank');
+}
+
+function addDiscoveredCamera(ip,name){
+  document.getElementById('hs').textContent='Adding camera '+name+' at '+ip+'...';
+  ra('POST','/api/cameras',{ip:ip,name:name},function(r){
+    if(r&&r.ok){
+      document.getElementById('hs').textContent='Added camera: '+name;
+      closeModal();
+      setTimeout(loadSetup,1000);
+    }else{
+      document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
+      setTimeout(loadSetup,1000);
+    }
+  });
+}
+
+function _afCamDiscover(){
+  var btn=document.getElementById('af-cam-disc-btn');
+  var st=document.getElementById('af-cam-disc-status');
+  if(btn){btn.disabled=true;btn.textContent='Scanning...';}
+  if(st)st.textContent='Scanning all subnets...';
+  ra('GET','/api/cameras/discover',null,function(){
+    var poll=setInterval(function(){
+      ra('GET','/api/cameras/discover/results',null,function(d){
+        if(d&&d.pending)return;
+        clearInterval(poll);
+        if(btn){btn.disabled=false;btn.textContent='Discover Cameras';}
+        if(st)st.textContent='';
+        var el=document.getElementById('af-cam-results');
+        if(!el)return;
+        if(!d||!d.length){
+          el.innerHTML='<p style="color:#888;font-size:.85em;padding:.3em 0">No new cameras found on network.</p>';
+          return;
+        }
+        _afCamRenderResults(el,d);
+      });
+    },500);
+  });
+}
+
+function _afCamRenderResults(el,cams){
+  var h='<table class="tbl" style="font-size:.85em;margin-top:.3em"><tr><th>Name</th><th>IP</th><th>FOV</th><th>Resolution</th><th></th></tr>';
+  cams.forEach(function(c){
+    var name=c.hostname||c.name||'Camera';
+    h+='<tr><td><b>'+escapeHtml(name)+'</b></td>'
+      +'<td>'+escapeHtml(c.ip)+'</td>'
+      +'<td>'+(c.fovDeg||60)+'\u00b0</td>'
+      +'<td>'+(c.resolutionW||'?')+'x'+(c.resolutionH||'?')+'</td>'
+      +'<td><button class="btn" onclick="addDiscoveredCamera(\''+c.ip+'\',\''+escapeHtml(name).replace(/'/g,"\\'")+'\')" style="background:#0e7490;color:#fff;font-size:.82em;padding:.2em .6em">Add</button>'
+      +' <a href="http://'+c.ip+':5000/config" target="_blank" style="color:#22d3ee;font-size:.78em;text-decoration:underline">Config</a>'
+      +'</td></tr>';
+  });
+  el.innerHTML=h+'</table>';
+}
+
+function _afCamProbe(){
+  var ip=(document.getElementById('af-cam-ip').value||'').trim();
+  if(!ip){document.getElementById('hs').textContent='Enter an IP address';return;}
+  var el=document.getElementById('af-cam-probe-result');
+  if(el)el.innerHTML='<span style="color:#64748b;font-size:.82em">Probing '+escapeHtml(ip)+'...</span>';
+  ra('POST','/api/cameras/probe',{ip:ip},function(r){
+    if(!el)return;
+    if(r&&r.ok){
+      _afCamRenderResults(el,[r.info]);
+    }else{
+      el.innerHTML='<span style="color:#ef4444;font-size:.82em">No camera found at '+escapeHtml(ip)+'</span>';
+    }
+  });
 }
 
 function addDiscovered(ip){
@@ -1353,6 +1473,34 @@ function registerCamera(ip,name){
   });
 }
 
+function _camSnap(fid){
+  var row=document.getElementById('cam-snap-row-'+fid);
+  var el=document.getElementById('cam-snap-'+fid);
+  if(!row||!el)return;
+  row.style.display='';
+  el.innerHTML='<span style="color:#94a3b8;font-size:.82em">Capturing...</span>';
+  var x=new XMLHttpRequest();
+  x.open('GET','/api/cameras/'+fid+'/snapshot?cam=0');
+  x.responseType='blob';
+  x.onload=function(){
+    if(x.status===200&&x.response&&x.response.size>0){
+      var img=document.createElement('img');
+      img.src=URL.createObjectURL(x.response);
+      img.style.cssText='max-width:100%;border-radius:4px;border:1px solid #334155';
+      var ts=document.createElement('div');
+      ts.style.cssText='color:#64748b;font-size:.75em;margin-top:.2em';
+      ts.textContent='Captured at '+new Date().toLocaleTimeString();
+      el.innerHTML='';
+      el.appendChild(img);
+      el.appendChild(ts);
+    }else{
+      el.innerHTML='<span style="color:#fca5a5;font-size:.82em">Capture failed ('+x.status+')</span>';
+    }
+  };
+  x.onerror=function(){el.innerHTML='<span style="color:#fca5a5;font-size:.82em">Connection failed</span>';};
+  x.send();
+}
+
 function removeCamera(id,name){
   if(!confirm('Remove camera "'+name+'"?'))return;
   document.getElementById('hs').textContent='Removing camera...';
@@ -1393,34 +1541,7 @@ function scanNetwork(btn){
 }
 
 function deployCameraServer(ip){
-  var btnId='deploy-btn-'+ip.replace(/\./g,'-');
-  var btn=document.getElementById(btnId);
-  if(btn)btn.outerHTML='<span id="deploy-prog-'+ip.replace(/\./g,'-')+'" style="font-size:.8em;color:#94a3b8">Starting...</span>';
-  ra('POST','/api/cameras/deploy',{ip:ip},function(r){
-    if(r&&r.err){
-      var prog=document.getElementById('deploy-prog-'+ip.replace(/\./g,'-'));
-      if(prog)prog.innerHTML='<span style="color:#f66">'+escapeHtml(r.err)+'</span>';
-      return;
-    }
-    var poll=setInterval(function(){
-      ra('GET','/api/cameras/deploy/status',null,function(s){
-        var prog=document.getElementById('deploy-prog-'+ip.replace(/\./g,'-'));
-        if(!prog){clearInterval(poll);return;}
-        if(s.error){
-          prog.innerHTML='<span style="color:#f66">'+escapeHtml(s.error)+'</span>';
-          clearInterval(poll);return;
-        }
-        prog.textContent=s.progress+'% '+s.message;
-        if(!s.running){
-          clearInterval(poll);
-          if(s.progress>=95){
-            prog.innerHTML='<span style="color:#4ade80">\u2713 '+escapeHtml(s.message)+'</span>';
-            setTimeout(function(){discoverCameras(document.getElementById('cam-disc-btn'));},2000);
-          }
-        }
-      });
-    },1000);
-  });
+  _camDeploy(ip);
 }
 
 function showSshSettings(){
@@ -5235,7 +5356,7 @@ function otaUpdateAll(){
 }
 
 function loadFirmware(){
-  // Full firmware tab load — OTA + USB + WiFi
+  // Full firmware tab load — OTA + USB + WiFi + Camera Setup
   checkOtaUpdates();
   _fetchGithubFirmware();
   // Load WiFi creds
@@ -5249,6 +5370,8 @@ function loadFirmware(){
     }
   });
   loadFirmwarePorts();
+  _loadCamSsh();
+  _camFwRefresh();
 }
 function loadFirmwarePorts(){
   // Scan USB ports, query each for version + wifi
@@ -5358,6 +5481,177 @@ function saveWifi(btn){
         document.getElementById('fw-pass').type='password';
       }
     });
+}
+
+// ── Camera Setup (Firmware tab) ──────────────────────────────────────────
+function _loadCamSsh(){
+  ra('GET','/api/cameras/ssh',null,function(d){
+    if(!d)return;
+    var u=document.getElementById('cam-ssh-user');
+    if(u)u.value=d.sshUser||'root';
+    var pw=document.getElementById('cam-ssh-pass');
+    if(pw)pw.placeholder=d.hasPassword?'(saved)':'(not set)';
+    var pst=document.getElementById('cam-ssh-pw-status');
+    if(pst){
+      pst.textContent=d.hasPassword?'\u2705 Password saved':'';
+      pst.style.color='#4c4';
+    }
+    var k=document.getElementById('cam-ssh-key');
+    if(k)k.value=d.sshKeyPath||'';
+    var kst=document.getElementById('cam-ssh-key-status');
+    if(kst){
+      if(d.hasKey){kst.textContent='\u2705 Key file found';kst.style.color='#4c4';}
+      else if(d.sshKeyPath){kst.textContent='\u26a0 Key file not found';kst.style.color='#c66';}
+      else{kst.textContent='';}
+    }
+  });
+}
+function _saveCamSsh(){
+  var body={sshUser:document.getElementById('cam-ssh-user').value.trim()};
+  var pw=document.getElementById('cam-ssh-pass').value;
+  if(pw)body.sshPassword=pw;
+  var key=document.getElementById('cam-ssh-key').value.trim();
+  body.sshKeyPath=key;
+  var keyContent=document.getElementById('cam-ssh-key-content').value.trim();
+  if(keyContent)body.sshKeyContent=keyContent;
+  ra('POST','/api/cameras/ssh',body,function(r){
+    if(r&&r.ok){
+      document.getElementById('hs').textContent='SSH credentials saved';
+      document.getElementById('cam-ssh-pass').value='';
+      document.getElementById('cam-ssh-key-content').value='';
+      _loadCamSsh();
+    }else{
+      document.getElementById('hs').textContent='Save failed: '+(r&&r.err||'unknown');
+    }
+  });
+}
+function _camGenKey(){
+  ra('POST','/api/cameras/ssh/generate-key',{},function(r){
+    if(r&&r.ok){
+      document.getElementById('hs').textContent='SSH key pair generated';
+      var el=document.getElementById('cam-ssh-pubkey');
+      var txt=document.getElementById('cam-ssh-pubkey-text');
+      if(el&&txt){el.style.display='block';txt.value=r.publicKey||'';}
+      _loadCamSsh();
+    }else{
+      document.getElementById('hs').textContent='Key generation failed: '+(r&&r.err||'unknown');
+    }
+  });
+}
+function _copyPubKey(){
+  var txt=document.getElementById('cam-ssh-pubkey-text');
+  if(txt){txt.select();document.execCommand('copy');document.getElementById('hs').textContent='Public key copied to clipboard';}
+}
+function _camFwRefresh(){
+  ra('GET','/api/cameras',null,function(cams){
+    var el=document.getElementById('cam-fw-list');
+    if(!el)return;
+    if(!cams||!cams.length){
+      el.innerHTML='<p style="color:#888;font-size:.82em">No cameras registered. Add cameras from the Setup tab.</p>';
+      return;
+    }
+    var h='<table class="tbl" style="font-size:.85em"><tr><th>Camera</th><th>IP</th><th>Version</th><th>Status</th><th></th></tr>';
+    cams.forEach(function(c){
+      var ip=c.cameraIp||'\u2014';
+      var ver=c.fwVersion||'\u2014';
+      var st=c.online?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
+      var acts='';
+      if(c.online&&ip!=='\u2014'){
+        acts='<button class="btn" onclick="_camDeploy(\''+ip+'\')" id="cam-upg-'+ip.replace(/\./g,'-')+'" style="background:#475569;color:#fff;font-size:.78em;padding:.2em .5em">Upgrade</button>';
+      }
+      h+='<tr><td><b>'+escapeHtml(c.name)+'</b></td><td>'+escapeHtml(ip)+'</td><td>'+ver+'</td><td>'+st+'</td><td>'+acts+'</td></tr>';
+    });
+    el.innerHTML=h+'</table>';
+  });
+}
+function _camScanBoards(){
+  var btn=document.getElementById('cam-scan-btn');
+  if(btn){btn.disabled=true;btn.textContent='Scanning...';}
+  ra('GET','/api/cameras/scan-network',null,function(){
+    var poll=setInterval(function(){
+      ra('GET','/api/cameras/scan-network/results',null,function(d){
+        if(d&&d.pending)return;
+        clearInterval(poll);
+        if(btn){btn.disabled=false;btn.textContent='Scan for SBC Boards';}
+        var el=document.getElementById('cam-scan-results');
+        if(!el)return;
+        if(!d||!d.length){
+          el.innerHTML='<p style="color:#888;font-size:.82em;padding:.3em 0">No SSH-accessible boards found.</p>';
+          return;
+        }
+        var h='<table class="tbl" style="font-size:.85em"><tr><th>IP</th><th>Hostname</th><th>Status</th><th></th></tr>';
+        d.forEach(function(dev){
+          var st,act,depId='cam-dep-'+dev.ip.replace(/\./g,'-');
+          if(dev.hasCamera){
+            st='<span class="badge bon">Camera v'+(dev.fwVersion||'?')+'</span>';
+            act='<button class="btn" onclick="_camDeploy(\''+dev.ip+'\')" id="'+depId+'" style="background:#475569;color:#fff;font-size:.78em;padding:.2em .5em">Upgrade</button>'
+              +' <button class="btn" onclick="addDiscoveredCamera(\''+dev.ip+'\',\''+escapeHtml(dev.hostname||'Camera').replace(/'/g,"\\'")+'\')" style="background:#0e7490;color:#fff;font-size:.78em;padding:.2em .5em">Register</button>';
+          }else{
+            st='<span class="badge boff">No camera software</span>';
+            act='<button class="btn" onclick="_camDeploy(\''+dev.ip+'\')" id="'+depId+'" style="background:#059669;color:#fff;font-size:.78em;padding:.2em .5em">Install</button>';
+          }
+          h+='<tr><td>'+escapeHtml(dev.ip)+'</td><td>'+escapeHtml(dev.hostname||'\u2014')+'</td><td>'+st+'</td><td>'+act+'</td></tr>';
+        });
+        el.innerHTML=h+'</table>';
+      });
+    },500);
+  });
+}
+function _camDeploy(ip){
+  // Show deploy progress in a modal dialog
+  document.getElementById('modal-title').textContent='Deploying to '+ip;
+  document.getElementById('modal-body').innerHTML=
+    '<div style="min-width:350px">'
+    +'<div class="prog-bar" style="height:12px;margin-bottom:.6em"><div class="prog-fill" id="cam-deploy-fill" style="width:0%;transition:width .3s"></div></div>'
+    +'<div id="cam-deploy-msg" style="font-size:.85em;color:#94a3b8;margin-bottom:.4em">Starting...</div>'
+    +'<div id="cam-deploy-log" style="max-height:200px;overflow-y:auto;font-family:monospace;font-size:.75em;background:#0f172a;border:1px solid #334155;border-radius:4px;padding:.4em;color:#64748b"></div>'
+    +'</div>';
+  document.getElementById('modal').style.display='block';
+
+  ra('POST','/api/cameras/deploy',{ip:ip},function(r){
+    if(r&&r.err){
+      document.getElementById('cam-deploy-msg').innerHTML='<span style="color:#f66">'+escapeHtml(r.err)+'</span>';
+      _camDeployLog('Error: '+r.err);
+      return;
+    }
+    _camDeployLog('Deploy started for '+ip+'...');
+    var lastMsg='';
+    var poll=setInterval(function(){
+      ra('GET','/api/cameras/deploy/status',null,function(s){
+        var fill=document.getElementById('cam-deploy-fill');
+        var msg=document.getElementById('cam-deploy-msg');
+        if(!fill||!msg){clearInterval(poll);return;}
+        fill.style.width=s.progress+'%';
+        if(s.error){
+          msg.innerHTML='<span style="color:#ef4444">\u2718 '+escapeHtml(s.error)+'</span>';
+          fill.style.background='#ef4444';
+          _camDeployLog('ERROR: '+s.error);
+          clearInterval(poll);return;
+        }
+        if(s.message!==lastMsg){
+          lastMsg=s.message;
+          msg.textContent=s.progress+'% \u2014 '+s.message;
+          _camDeployLog('['+s.progress+'%] '+s.message);
+        }
+        if(!s.running){
+          clearInterval(poll);
+          if(s.progress>=95){
+            msg.innerHTML='<span style="color:#4ade80">\u2713 '+escapeHtml(s.message)+'</span>';
+            fill.style.background='#059669';
+            _camDeployLog('Deploy complete!');
+            // Refresh camera lists after a short delay
+            setTimeout(function(){_camFwRefresh();},2000);
+          }
+        }
+      });
+    },800);
+  });
+}
+function _camDeployLog(text){
+  var el=document.getElementById('cam-deploy-log');
+  if(!el)return;
+  el.textContent+=(el.textContent?'\n':'')+text;
+  el.scrollTop=el.scrollHeight;
 }
 
 var _flashPoll=null;

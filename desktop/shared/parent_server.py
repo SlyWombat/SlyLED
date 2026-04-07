@@ -75,7 +75,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "1.0.0"
+VERSION = "1.0.5"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -212,19 +212,34 @@ def _send(ip, pkt):
 def _local_broadcasts():
     """Return subnet-directed broadcast addresses for all non-loopback interfaces."""
     bcs = []
+    for prefix in _local_subnet_prefixes():
+        bc = prefix + ".255"
+        if bc not in bcs:
+            bcs.append(bc)
+    return bcs
+
+def _local_subnet_prefixes():
+    """Return /24 subnet prefixes (e.g. '192.168.10') for all non-loopback interfaces."""
+    prefixes = []
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
             ip = info[4][0]
             if ip.startswith("127.") or ip.startswith("169.254."):
                 continue
-            parts = ip.rsplit(".", 1)
-            if len(parts) == 2:
-                bc = parts[0] + ".255"
-                if bc not in bcs:
-                    bcs.append(bc)
+            prefix = ip.rsplit(".", 1)[0]
+            if prefix not in prefixes:
+                prefixes.append(prefix)
     except Exception:
         pass
-    return bcs
+    # Fallback: WSL2 / single-NIC hosts where getaddrinfo only returns loopback
+    if not prefixes:
+        try:
+            prefix = _get_local_ip().rsplit(".", 1)[0]
+            if prefix:
+                prefixes.append(prefix)
+        except Exception:
+            pass
+    return prefixes
 
 def _send_recv(ip, pkt, timeout=1.5, maxb=256):
     """Send UDP packet and wait for reply from the specified IP only.
@@ -362,30 +377,44 @@ def _discover_all():
 
 def _discover():
     """Broadcast PING, wait for listener to collect PONGs, return unknown devices.
-    Includes LED performers and DMX bridges — probes /status for board type."""
+    Includes LED performers, DMX bridges, and camera nodes."""
     known_ips = {c["ip"] for c in _children}
     known_hosts = {c.get("hostname") for c in _children}
-    # Also exclude IPs that already have a DMX fixture pointing at them
-    known_dmx_ips = set()
-    for f in _fixtures:
-        if f.get("fixtureType") == "dmx":
-            # DMX fixtures don't have IPs directly, but check children
-            pass
+    known_cam_ips = {f.get("cameraIp") for f in _fixtures
+                     if f.get("fixtureType") == "camera" and f.get("cameraIp")}
     _recent_pongs.clear()
     _broadcast_ping_all()
     time.sleep(2.0)
     results = []
+    pong_ips = set()
     for ip, info in _recent_pongs.items():
+        pong_ips.add(ip)
+        if ip in known_cam_ips:
+            continue
         if ip in known_ips or info.get("hostname") in known_hosts:
             continue
-        # Probe /status to detect board type
-        try:
-            import urllib.request as _ur
-            resp = _ur.urlopen(f"http://{ip}/status", timeout=2)
-            data = json.loads(resp.read().decode("utf-8"))
-            info["boardType"] = data.get("boardType", "slyled")
-        except Exception:
-            info["boardType"] = "slyled"
+        # Probe /status to detect board type — try port 80 (performers), then 5000 (cameras)
+        import urllib.request as _ur
+        board_type = "slyled"
+        for probe_port in (80, 5000):
+            try:
+                resp = _ur.urlopen(f"http://{ip}:{probe_port}/status", timeout=2)
+                data = json.loads(resp.read().decode("utf-8"))
+                if data.get("role") == "camera":
+                    board_type = "camera"
+                    # Enrich with camera-specific fields
+                    info.update({
+                        "fovDeg": data.get("fovDeg"),
+                        "resolutionW": data.get("resolutionW"),
+                        "resolutionH": data.get("resolutionH"),
+                        "cameraUrl": data.get("cameraUrl", ""),
+                    })
+                    break
+                board_type = data.get("boardType", "slyled")
+                break
+            except Exception:
+                continue
+        info["boardType"] = board_type
         results.append(info)
     return results
 
@@ -1067,26 +1096,20 @@ def _probe_camera(ip, timeout=2):
         return None
 
 def _discover_cameras():
-    """Scan subnet for camera nodes, return unregistered ones."""
+    """Scan all local subnets for camera nodes, return unregistered ones."""
     known_ips = set()
     for f in _fixtures:
         if f.get("fixtureType") == "camera" and f.get("cameraIp"):
             known_ips.add(f["cameraIp"])
-    # Get local subnet(s) and scan common range
     results = []
-    import socket
-    try:
-        local_ip = socket.gethostbyname(socket.gethostname())
-    except Exception:
-        local_ip = "192.168.1.1"
-    prefix = ".".join(local_ip.split(".")[:3])
-    for i in range(1, 255):
-        ip = f"{prefix}.{i}"
-        if ip in known_ips or ip == local_ip:
-            continue
-        info = _probe_camera(ip, timeout=0.3)
-        if info:
-            results.append(info)
+    for prefix in _local_subnet_prefixes():
+        for i in range(1, 255):
+            ip = f"{prefix}.{i}"
+            if ip in known_ips:
+                continue
+            info = _probe_camera(ip, timeout=0.3)
+            if info:
+                results.append(info)
     return results
 
 def _cam_discover_bg():
@@ -1127,6 +1150,18 @@ def api_cameras_discover_results():
     if _cam_discover_state["pending"]:
         return jsonify(pending=True)
     return jsonify(_cam_discover_state["data"])
+
+@app.post("/api/cameras/probe")
+def api_cameras_probe():
+    """Probe a single IP for a camera node."""
+    body = request.get_json(silent=True) or {}
+    ip = body.get("ip", "").strip()
+    if not ip:
+        return jsonify(ok=False, err="ip required"), 400
+    info = _probe_camera(ip, timeout=3)
+    if info:
+        return jsonify(ok=True, info=info)
+    return jsonify(ok=False, err="No camera found"), 404
 
 @app.post("/api/cameras")
 def api_cameras_register():
@@ -1180,6 +1215,68 @@ def api_cameras_delete(fid):
         _save("fixtures", _fixtures)
     return jsonify(ok=True), 200
 
+@app.get("/api/cameras/<int:fid>/snapshot")
+def api_camera_snapshot(fid):
+    """Proxy a snapshot from a camera node. ?cam=0 selects camera index."""
+    f = next((f for f in _fixtures if f["id"] == fid and f.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    cam_idx = request.args.get("cam", 0, type=int)
+    try:
+        import urllib.request as _ur
+        resp = _ur.urlopen(f"http://{ip}:5000/snapshot?cam={cam_idx}", timeout=15)
+        data = resp.read()
+        from flask import Response
+        return Response(data, mimetype="image/jpeg")
+    except Exception as e:
+        return jsonify(err=str(e)), 503
+
+@app.get("/api/cameras/<int:fid>/status")
+def api_camera_status(fid):
+    """Fetch live status from a camera node."""
+    f = next((f for f in _fixtures if f["id"] == fid and f.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    info = _probe_camera(ip, timeout=3)
+    if not info:
+        return jsonify(err="Camera offline"), 503
+    return jsonify(info)
+
+@app.post("/api/cameras/<int:fid>/scan")
+def api_camera_scan(fid):
+    """Proxy scan request to camera node. Returns detections with stage coordinates.
+    Requires camera node to have /scan endpoint (#195) and calibration (#191)."""
+    f = next((f for f in _fixtures if f["id"] == fid and f.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    body = request.get_json(silent=True) or {}
+    threshold = body.get("threshold", 0.5)
+    cam_idx = body.get("cam", 0)
+    # Forward to camera node /scan endpoint
+    try:
+        import urllib.request as _ur
+        req_data = json.dumps({"threshold": threshold, "cam": cam_idx}).encode()
+        req = _ur.Request(f"http://{ip}:5000/scan",
+                          data=req_data,
+                          headers={"Content-Type": "application/json"})
+        resp = _ur.urlopen(req, timeout=30)
+        detections = json.loads(resp.read().decode())
+    except Exception as e:
+        return jsonify(err=f"Camera scan failed: {e}"), 503
+    # TODO (#191): transform pixel coordinates to stage coordinates using
+    # camera position, aim direction, FOV, and homography matrix
+    # For now, return raw detections from camera node
+    return jsonify(detections=detections, cameraId=fid, raw=True)
+
 def _get_local_ip():
     """Get local IP by connecting a UDP socket (no traffic sent)."""
     try:
@@ -1196,36 +1293,38 @@ def _get_local_ip():
 _ssh_scan_state = {"pending": False, "data": []}
 
 def _scan_ssh_devices():
-    """TCP connect scan for port 22 on local subnet. Returns SSH-accessible hosts."""
+    """TCP connect scan for port 22 on all local subnets. Returns SSH-accessible hosts."""
     import concurrent.futures
     try:
         local_ip = _get_local_ip()
     except Exception:
         local_ip = "192.168.1.1"
-    prefix = ".".join(local_ip.split(".")[:3])
-    known_ips = {local_ip}
+    skip_ips = {local_ip}
     for c in _children:
-        known_ips.add(c.get("ip", ""))
-    for f in _fixtures:
-        if f.get("fixtureType") == "camera" and f.get("cameraIp"):
-            known_ips.add(f["cameraIp"])
+        skip_ips.add(c.get("ip", ""))
 
     def _check(ip):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(0.3)
+            s.settimeout(1.0)
             if s.connect_ex((ip, 22)) == 0:
                 s.close()
                 cam_info = _probe_camera(ip, timeout=0.5)
                 return {"ip": ip, "hasCamera": cam_info is not None,
-                        "hostname": (cam_info or {}).get("hostname", "")}
+                        "hostname": (cam_info or {}).get("hostname", ""),
+                        "fwVersion": (cam_info or {}).get("fwVersion", "")}
             s.close()
         except Exception:
             pass
         return None
 
+    ips = []
+    for prefix in _local_subnet_prefixes():
+        for i in range(1, 255):
+            ip = f"{prefix}.{i}"
+            if ip not in skip_ips:
+                ips.append(ip)
     results = []
-    ips = [f"{prefix}.{i}" for i in range(1, 255) if f"{prefix}.{i}" not in known_ips]
     with concurrent.futures.ThreadPoolExecutor(max_workers=50) as pool:
         for r in pool.map(_check, ips):
             if r:
@@ -1275,15 +1374,58 @@ def _deploy_camera_bg(ip):
         _update(5, f"Connecting to {ip} via SSH...")
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        kwargs = {"hostname": ip, "port": 22,
-                  "username": _ssh.get("sshUser", "root"), "timeout": 10}
+        user = _ssh.get("sshUser", "root")
         key_path = _ssh.get("sshKeyPath", "")
-        if key_path and os.path.isfile(key_path):
-            kwargs["key_filename"] = key_path
+        if key_path:
+            key_path = os.path.expanduser(key_path)
         pw = _decrypt_pw(_ssh.get("sshPassword", ""))
-        if pw:
-            kwargs["password"] = pw
-        ssh.connect(**kwargs)
+
+        connected = False
+        # Try key auth first
+        if key_path and os.path.isfile(key_path):
+            try:
+                ssh.connect(hostname=ip, port=22, username=user,
+                            key_filename=key_path, timeout=10,
+                            look_for_keys=False, allow_agent=False)
+                connected = True
+            except paramiko.AuthenticationException:
+                pass
+        # Try password auth
+        if not connected and pw:
+            try:
+                ssh.connect(hostname=ip, port=22, username=user,
+                            password=pw, timeout=10,
+                            look_for_keys=False, allow_agent=False)
+                connected = True
+            except paramiko.AuthenticationException as e:
+                if "publickey" in str(e):
+                    _update(0, "Key auth required",
+                            error="This device only accepts SSH key authentication. "
+                                  "Generate a key pair in Camera Setup, then add the "
+                                  "public key to the device's ~/.ssh/authorized_keys")
+                    with _deploy_lock:
+                        _deploy_status["running"] = False
+                    return
+                raise
+        # Try default keys from agent/system
+        if not connected:
+            try:
+                ssh.connect(hostname=ip, port=22, username=user, timeout=10)
+                connected = True
+            except paramiko.AuthenticationException as e:
+                auth_types = str(e)
+                if "publickey" in auth_types and not key_path:
+                    _update(0, "Key auth required",
+                            error="This device only accepts SSH key authentication. "
+                                  "Generate a key pair in Camera Setup, then add the "
+                                  "public key to the device's ~/.ssh/authorized_keys")
+                else:
+                    _update(0, "Authentication failed",
+                            error=f"Could not authenticate to {ip}. "
+                                  f"Check SSH credentials in Camera Setup. ({auth_types})")
+                with _deploy_lock:
+                    _deploy_status["running"] = False
+                return
 
         _update(10, "Checking pip3...")
         _, stdout, _ = ssh.exec_command("which pip3")
@@ -1299,14 +1441,18 @@ def _deploy_camera_bg(ip):
 
         _update(30, "Uploading camera_server.py...")
         sftp = ssh.open_sftp()
-        src_dir = Path(__file__).resolve().parent.parent / "firmware" / "orangepi"
+        src_dir = _FW_DIR / "orangepi"
         sftp.put(str(src_dir / "camera_server.py"), "/opt/slyled/camera_server.py")
 
         _update(40, "Uploading requirements.txt...")
         sftp.put(str(src_dir / "requirements.txt"), "/opt/slyled/requirements.txt")
         sftp.close()
 
-        _update(50, "Installing dependencies...")
+        _update(45, "Installing system packages...")
+        ssh.exec_command("apt-get install -y fswebcam 2>/dev/null || true")
+        time.sleep(2)
+
+        _update(50, "Installing Python dependencies...")
         _, stdout, stderr = ssh.exec_command(
             "cd /opt/slyled && pip3 install --break-system-packages -r requirements.txt 2>&1",
             timeout=180)
@@ -1322,14 +1468,35 @@ def _deploy_camera_bg(ip):
                 ssh.close()
                 return
 
-        _update(70, "Stopping existing camera server...")
-        ssh.exec_command("pkill -f camera_server.py || true")
+        _update(70, "Setting up systemd service...")
+        ssh.exec_command("systemctl stop slyled-cam 2>/dev/null || pkill -f camera_server.py || true")
+        time.sleep(1)
+        # Create systemd unit so it starts on boot and restarts on crash
+        unit = (
+            "[Unit]\n"
+            "Description=SlyLED Camera Node\n"
+            "After=network-online.target\n"
+            "Wants=network-online.target\n\n"
+            "[Service]\n"
+            "Type=simple\n"
+            "WorkingDirectory=/opt/slyled\n"
+            "ExecStart=/usr/bin/python3 -u /opt/slyled/camera_server.py\n"
+            "Restart=on-failure\n"
+            "RestartSec=5\n"
+            "StandardOutput=journal+console\n"
+            "StandardError=journal+console\n\n"
+            "[Install]\n"
+            "WantedBy=multi-user.target\n"
+        )
+        sftp2 = ssh.open_sftp()
+        with sftp2.file("/etc/systemd/system/slyled-cam.service", "w") as f:
+            f.write(unit)
+        sftp2.close()
+        ssh.exec_command("systemctl daemon-reload && systemctl enable slyled-cam")
         time.sleep(1)
 
         _update(80, "Starting camera server...")
-        ssh.exec_command(
-            "cd /opt/slyled && nohup python3 camera_server.py "
-            "> /var/log/slyled-cam.log 2>&1 &")
+        ssh.exec_command("systemctl start slyled-cam")
         ssh.close()
 
         _update(90, "Verifying camera server...")
@@ -1371,11 +1538,51 @@ def api_cameras_deploy_status():
 
 @app.get("/api/cameras/ssh")
 def api_cameras_ssh_get():
+    key_path = _ssh.get("sshKeyPath", "")
+    key_exists = bool(key_path and Path(os.path.expanduser(key_path)).exists())
     return jsonify({
         "sshUser": _ssh.get("sshUser", "root"),
         "hasPassword": bool(_ssh.get("sshPassword")),
-        "sshKeyPath": _ssh.get("sshKeyPath", ""),
+        "sshKeyPath": key_path,
+        "hasKey": key_exists,
     })
+
+@app.post("/api/cameras/ssh/generate-key")
+def api_cameras_ssh_generate_key():
+    """Generate an Ed25519 SSH key pair for camera deployments."""
+    try:
+        import paramiko
+    except ImportError:
+        return jsonify(err="paramiko not installed"), 500
+    key_dir = DATA / "ssh"
+    key_dir.mkdir(parents=True, exist_ok=True)
+    key_file = key_dir / "camera_key"
+    pub_file = key_dir / "camera_key.pub"
+
+    # Generate Ed25519 key using cryptography library (paramiko wraps it)
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives import serialization
+    priv = Ed25519PrivateKey.generate()
+    priv_pem = priv.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.OpenSSH,
+        serialization.NoEncryption()
+    )
+    pub_bytes = priv.public_key().public_bytes(
+        serialization.Encoding.OpenSSH,
+        serialization.PublicFormat.OpenSSH
+    )
+    key_file.write_bytes(priv_pem)
+    key_file.chmod(0o600)
+
+    pub_str = pub_bytes.decode("utf-8") + " slyled-camera"
+    pub_file.write_text(pub_str + "\n")
+
+    with _lock:
+        _ssh["sshKeyPath"] = str(key_file)
+        _save("ssh", _ssh)
+
+    return jsonify(ok=True, publicKey=pub_str, keyPath=str(key_file))
 
 @app.post("/api/cameras/ssh")
 def api_cameras_ssh_save():
@@ -1387,6 +1594,14 @@ def api_cameras_ssh_save():
             _ssh["sshPassword"] = _encrypt_pw(body["sshPassword"])
         if "sshKeyPath" in body:
             _ssh["sshKeyPath"] = body["sshKeyPath"]
+        if "sshKeyContent" in body:
+            # Save pasted key content to a managed file
+            key_dir = DATA / "ssh"
+            key_dir.mkdir(parents=True, exist_ok=True)
+            key_file = key_dir / "camera_key"
+            key_file.write_text(body["sshKeyContent"])
+            key_file.chmod(0o600)
+            _ssh["sshKeyPath"] = str(key_file)
         _save("ssh", _ssh)
     return jsonify(ok=True)
 
@@ -1448,13 +1663,11 @@ def _reap_temporal_objects():
     _temporal_objects = [o for o in _temporal_objects if o.get("_expiresAt", 0) > now]
 
 @app.get("/api/objects")
-@app.get("/api/surfaces")
 def api_objects_get():
     _reap_temporal_objects()
     return jsonify(_objects + _temporal_objects)
 
 @app.post("/api/objects")
-@app.post("/api/surfaces")
 def api_objects_create():
     global _nxt_obj
     body = request.get_json(silent=True) or {}
@@ -1480,7 +1693,6 @@ def api_objects_create():
     return jsonify(ok=True, id=s["id"])
 
 @app.delete("/api/objects/<int:sid>")
-@app.delete("/api/surfaces/<int:sid>")
 def api_object_delete(sid):
     global _objects, _temporal_objects
     before = len(_objects) + len(_temporal_objects)

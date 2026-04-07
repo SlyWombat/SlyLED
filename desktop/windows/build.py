@@ -12,33 +12,28 @@ import PyInstaller.__main__
 HERE   = pathlib.Path(__file__).resolve().parent
 SHARED = (HERE / ".." / "shared").resolve()
 
-# ── Auto-sync installer.iss AppVersion from parent_server.py VERSION ─────────
+# ── Auto-increment app patch version and sync to installer.iss ────────────────
 try:
-    server_py = (SHARED / "parent_server.py").read_text(encoding="utf-8")
-    m = re.search(r'VERSION\s*=\s*"([^"]+)"', server_py)
+    server_path = SHARED / "parent_server.py"
+    server_py = server_path.read_text(encoding="utf-8")
+    m = re.search(r'VERSION\s*=\s*"(\d+)\.(\d+)\.(\d+)"', server_py)
     if m:
-        version = m.group(1)
+        major, minor, patch = m.group(1), m.group(2), int(m.group(3)) + 1
+        version = f"{major}.{minor}.{patch}"
+        server_py = re.sub(r'VERSION = "[^"]+"', f'VERSION = "{version}"', server_py)
+        server_path.write_text(server_py, encoding="utf-8")
+        print(f"[build.py] App version = {version}")
+
         iss_path = HERE / "installer.iss"
         iss = iss_path.read_text(encoding="utf-8")
         iss_new = re.sub(r'#define AppVersion\s+"[^"]+"', f'#define AppVersion   "{version}"', iss)
         if iss_new != iss:
             iss_path.write_text(iss_new, encoding="utf-8")
-            print(f"[build.py] Updated installer.iss AppVersion → {version}")
-        # Also sync firmware/registry.json for ESP32 and D1 Mini entries
-        import json as _json
-        reg_path = (HERE / ".." / ".." / "firmware" / "registry.json").resolve()
-        if reg_path.exists():
-            reg = _json.loads(reg_path.read_text(encoding="utf-8"))
-            changed = False
-            for fw in reg.get("firmware", []):
-                if fw.get("board") in ("esp32", "d1mini") and fw.get("version") != version:
-                    fw["version"] = version
-                    changed = True
-            if changed:
-                reg_path.write_text(_json.dumps(reg, indent=2) + "\n", encoding="utf-8")
-                print(f"[build.py] Updated firmware/registry.json → {version}")
+            print(f"[build.py] Updated installer.iss AppVersion = {version}")
+        # NOTE: All firmware versions (Arduino + camera) are independent — only
+        # incremented when their respective firmware is compiled/deployed
 except Exception as e:
-    print(f"[build.py] Warning: could not sync versions: {e}")
+    print(f"[build.py] Warning: could not sync app version: {e}")
 SPA    = SHARED / "spa"
 ICO    = (HERE / ".." / ".." / "images" / "slyled.ico").resolve()
 FWDIR  = (HERE / ".." / ".." / "firmware").resolve()
@@ -59,6 +54,7 @@ args = [
     "--add-data", f"{SHARED / 'bake_engine.py'};.",
     "--add-data", f"{SHARED / 'wled_bridge.py'};.",
     "--hidden-import=pystray",
+    "--hidden-import=paramiko",
     "--hidden-import=PIL._tkinter_finder",
     "--collect-submodules=flask",
     "--collect-submodules=werkzeug",

@@ -142,8 +142,8 @@ def main():
                 {'id': 1, 'x': 4000, 'y': 5000, 'z': 2000},
                 {'id': 2, 'x': 7000, 'y': 5000, 'z': 2000},
             ]})
-            c.post('/api/surfaces', json={
-                'name': 'Back Wall', 'surfaceType': 'wall', 'color': '#1e293b', 'opacity': 25,
+            c.post('/api/objects', json={
+                'name': 'Back Wall', 'objectType': 'wall', 'color': '#1e293b', 'opacity': 25,
                 'transform': {'pos': [0, 0, 0], 'rot': [0, 0, 0], 'scale': [10000, 5000, 100]}
             })
         page.evaluate("showTab('layout')")

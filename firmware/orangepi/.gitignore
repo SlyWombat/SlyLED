@@ -1,0 +1,8 @@
+# Ignore disk images (large binary files)
+*.img
+*.img.xz
+*.7z
+*.zip
+
+# Ignore downloaded/cached files
+*.log

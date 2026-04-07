@@ -819,7 +819,7 @@ private fun FixtureTypeBadge(type: String) {
     val label = when (type.lowercase()) {
         "linear" -> "Linear"
         "point" -> "Point"
-        "surface" -> "Surface"
+        "surface" -> "Object"
         "group" -> "Group"
         else -> type.replaceFirstChar { it.uppercase() }
     }
@@ -881,6 +881,7 @@ private fun FixtureFormDialog(
     val coroutineScope = rememberCoroutineScope()
 
     val typeOptions = listOf("linear", "point", "surface", "group")
+    val typeLabels = mapOf("linear" to "Linear", "point" to "Point", "surface" to "Object", "group" to "Group")
     var typeExpanded by remember { mutableStateOf(false) }
     var childExpanded by remember { mutableStateOf(false) }
     var profileExpanded by remember { mutableStateOf(false) }
@@ -908,7 +909,7 @@ private fun FixtureFormDialog(
                     onExpandedChange = { typeExpanded = it }
                 ) {
                     OutlinedTextField(
-                        value = type.replaceFirstChar { it.uppercase() },
+                        value = typeLabels[type] ?: type.replaceFirstChar { it.uppercase() },
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("Type") },
@@ -921,7 +922,7 @@ private fun FixtureFormDialog(
                     ) {
                         typeOptions.forEach { opt ->
                             DropdownMenuItem(
-                                text = { Text(opt.replaceFirstChar { it.uppercase() }) },
+                                text = { Text(typeLabels[opt] ?: opt.replaceFirstChar { it.uppercase() }) },
                                 onClick = { type = opt; typeExpanded = false }
                             )
                         }

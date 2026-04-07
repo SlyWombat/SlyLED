@@ -152,21 +152,21 @@ api("DELETE", f"/api/fixtures/{d.get('id')}")
 api("DELETE", f"/api/fixtures/{qa_fix}")
 
 # ═══════════════════════════════════════════════════════════════
-section("6. SURFACES")
+section("6. OBJECTS")
 # ═══════════════════════════════════════════════════════════════
-c, d = api("POST", "/api/surfaces", {"name": "QA Wall", "color": "#ff0000", "opacity": 50,
-    "surfaceType": "wall", "transform": {"pos": [0,0,0], "rot": [0,0,0], "scale": [3000, 2000, 200]}})
-ok("Create surface", c == 200 and d.get("ok"))
+c, d = api("POST", "/api/objects", {"name": "QA Wall", "color": "#ff0000", "opacity": 50,
+    "objectType": "wall", "transform": {"pos": [0,0,0], "rot": [0,0,0], "scale": [3000, 2000, 200]}})
+ok("Create object", c == 200 and d.get("ok"))
 sf_id = d.get("id")
 
-c, d = api("GET", "/api/surfaces")
-ok("GET surfaces", c == 200 and isinstance(d, list) and len(d) > 0)
+c, d = api("GET", "/api/objects")
+ok("GET objects", c == 200 and isinstance(d, list) and len(d) > 0)
 sf = next((s for s in d if s.get("id") == sf_id), None)
-ok("Surface has color", sf and sf.get("color") == "#ff0000")
-ok("Surface has surfaceType", sf and sf.get("surfaceType") == "wall")
-ok("Surface has depth in scale", sf and sf.get("transform", {}).get("scale", [0,0,0])[2] == 200)
+ok("Object has color", sf and sf.get("color") == "#ff0000")
+ok("Object has objectType", sf and sf.get("objectType") == "wall")
+ok("Object has depth in scale", sf and sf.get("transform", {}).get("scale", [0,0,0])[2] == 200)
 
-api("DELETE", f"/api/surfaces/{sf_id}")
+api("DELETE", f"/api/objects/{sf_id}")
 
 # ═══════════════════════════════════════════════════════════════
 section("7. SPATIAL EFFECTS")

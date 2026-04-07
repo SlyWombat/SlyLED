@@ -2,6 +2,10 @@
 
 ## Supported boards
 
+### Orange Raspberry PI with Camera module
+
+Orange Pi Zero 3 1GB RAM Allwinner T527 with Freenove 8MP Camera
+
 ### Arduino Giga R1 WiFi
 
 MCU: STM32H747XI (dual-core: Cortex-M7 @ 480 MHz + Cortex-M4 @ 240 MHz)

@@ -13,16 +13,26 @@ import atexit
 import json
 import os
 import socket
+import struct
 import threading
 import time
 from pathlib import Path
 
 from flask import Flask, jsonify, request
 
-VERSION = "1.0.0"
+VERSION = "1.0.4"
 PORT = 5000
+UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
 CONFIG_PATH = CONFIG_DIR / "camera.json"
+
+# UDP protocol constants (must match parent_server.py)
+UDP_MAGIC   = 0x534C
+UDP_VERSION = 4
+CMD_PING       = 0x01
+CMD_PONG       = 0x02
+CMD_STATUS_REQ = 0x40
+CMD_STATUS_RESP = 0x41
 
 app = Flask(__name__)
 
@@ -59,9 +69,102 @@ def _save_config():
 
 # ── Hardware detection ──────────────────────────────────────────────────
 
+def _detect_cameras():
+    """List real video capture devices, filtering out SoC nodes (sunxi-vin etc.)
+    that crash when probed. Uses v4l2-ctl --info (safe) to check the driver name."""
+    import glob, subprocess
+    cameras = []
+    has_v4l2 = os.path.exists("/usr/bin/v4l2-ctl")
+    for dev in sorted(glob.glob("/dev/video*")):
+        if has_v4l2:
+            try:
+                r = subprocess.run(
+                    ["/usr/bin/v4l2-ctl", "-d", dev, "--info"],
+                    capture_output=True, text=True, timeout=3)
+                driver = ""
+                card = dev
+                caps = ""
+                for line in r.stdout.splitlines():
+                    if "Driver name" in line:
+                        driver = line.split(":", 1)[1].strip()
+                    elif "Card type" in line:
+                        card = line.split(":", 1)[1].strip()
+                    elif "Capabilities" in line:
+                        caps = line
+                # Skip SoC media nodes and metadata-only devices
+                if any(d in driver for d in ("sunxi", "sun6i", "cedrus")):
+                    continue
+                # Check Device Caps section (after "Device Caps" line)
+                # Real capture has "Video Capture", metadata-only has "Metadata Capture"
+                in_dev_caps = False
+                is_capture = False
+                for line in r.stdout.splitlines():
+                    if "Device Caps" in line and ":" in line:
+                        in_dev_caps = True
+                    elif in_dev_caps:
+                        stripped = line.strip()
+                        if stripped == "Video Capture":
+                            is_capture = True
+                            break
+                        elif not stripped.startswith(("\t", " ", "0x")):
+                            break  # next section
+                if not is_capture:
+                    continue
+                cameras.append({"device": dev, "resW": 0, "resH": 0,
+                                "name": card, "probed": False})
+            except Exception:
+                cameras.append({"device": dev, "resW": 0, "resH": 0,
+                                "name": dev, "probed": False})
+        else:
+            cameras.append({"device": dev, "resW": 0, "resH": 0,
+                            "name": dev, "probed": False})
+    return cameras
+
+def _probe_camera_details(cam):
+    """Lazy-probe a single camera device for name and resolution via v4l2-ctl.
+    Called on first snapshot or status request, not at startup."""
+    if cam.get("probed"):
+        return
+    cam["probed"] = True
+    import subprocess
+    if not os.path.exists("/usr/bin/v4l2-ctl"):
+        return
+    dev = cam["device"]
+    try:
+        r = subprocess.run(
+            ["/usr/bin/v4l2-ctl", "-d", dev, "--info"],
+            capture_output=True, text=True, timeout=3)
+        for line in r.stdout.splitlines():
+            if "Card type" in line:
+                cam["name"] = line.split(":", 1)[1].strip()
+                break
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(
+            ["/usr/bin/v4l2-ctl", "--list-formats-ext", "-d", dev],
+            capture_output=True, text=True, timeout=3)
+        max_w, max_h = 0, 0
+        for line in r.stdout.splitlines():
+            if "Size:" in line:
+                for p in line.split():
+                    if "x" in p and p[0].isdigit():
+                        try:
+                            w, h = p.split("x")
+                            w, h = int(w), int(h)
+                            if w * h > max_w * max_h:
+                                max_w, max_h = w, h
+                        except ValueError:
+                            pass
+        if max_w > 0:
+            cam["resW"] = max_w
+            cam["resH"] = max_h
+    except Exception:
+        pass
+
 def _detect_hardware():
     global _hw_info
-    info = {"board": "unknown", "hasCamera": False, "tracking": False}
+    info = {"board": "unknown", "hasCamera": False, "tracking": False, "cameras": []}
 
     # Board identification
     try:
@@ -72,38 +175,16 @@ def _detect_hardware():
     except Exception:
         pass
 
-    # Camera device detection
-    info["hasCamera"] = os.path.exists("/dev/video0")
+    # Camera device detection (multiple cameras supported)
+    info["cameras"] = _detect_cameras()
+    info["hasCamera"] = len(info["cameras"]) > 0
 
-    # Resolution detection via v4l2
-    if info["hasCamera"]:
-        try:
-            import subprocess
-            r = subprocess.run(
-                ["v4l2-ctl", "--list-formats-ext", "-d", "/dev/video0"],
-                capture_output=True, text=True, timeout=5
-            )
-            # Parse highest resolution from output
-            max_w, max_h = 0, 0
-            for line in r.stdout.splitlines():
-                line = line.strip()
-                if "Size:" in line:
-                    # Format: "Size: Discrete 1920x1080"
-                    parts = line.split()
-                    for p in parts:
-                        if "x" in p and p[0].isdigit():
-                            try:
-                                w, h = p.split("x")
-                                w, h = int(w), int(h)
-                                if w * h > max_w * max_h:
-                                    max_w, max_h = w, h
-                            except ValueError:
-                                pass
-            if max_w > 0:
-                _config["resolutionW"] = max_w
-                _config["resolutionH"] = max_h
-        except Exception:
-            pass
+    # Use highest resolution from first camera as defaults
+    if info["cameras"]:
+        first = info["cameras"][0]
+        if first["resW"] > 0:
+            _config.setdefault("resolutionW", first["resW"])
+            _config.setdefault("resolutionH", first["resH"])
 
     # Hostname
     hostname = socket.gethostname()
@@ -164,6 +245,9 @@ def _get_local_ip():
 
 @app.get("/status")
 def status():
+    # Lazy-probe cameras on first status request
+    for cam in _hw_info.get("cameras", []):
+        _probe_camera_details(cam)
     return jsonify({
         "role": "camera",
         "hostname": _config.get("hostname") or socket.gethostname(),
@@ -171,7 +255,8 @@ def status():
         "fovDeg": _config.get("fovDeg", 60),
         "resolutionW": _config.get("resolutionW", 1920),
         "resolutionH": _config.get("resolutionH", 1080),
-        "cameraUrl": _config.get("cameraUrl", ""),
+        "cameraCount": len(_hw_info.get("cameras", [])),
+        "cameras": _hw_info.get("cameras", []),
         "capabilities": {
             "tracking": _hw_info.get("tracking", False),
             "hasCamera": _hw_info.get("hasCamera", False),
@@ -180,7 +265,145 @@ def status():
     })
 
 @app.get("/config")
-def config_get():
+def config_page():
+    """HTML config SPA — consistent with performer /config pages."""
+    hostname = _config.get("hostname") or socket.gethostname()
+    has_cam = "Yes" if _hw_info.get("hasCamera") else "No"
+    board = _hw_info.get("board", "unknown")
+    res = f"{_config.get('resolutionW', '?')}x{_config.get('resolutionH', '?')}"
+    ip = _get_local_ip()
+    uptime = int(time.monotonic())
+    return f'''<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{hostname} — SlyLED Camera</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#0f172a;color:#e2e8f0;font-family:'Segoe UI',system-ui,sans-serif;padding:1em;max-width:480px;margin:0 auto}}
+h1{{font-size:1.1em;color:#22d3ee;margin-bottom:.2em}}
+.sub{{color:#64748b;font-size:.78em;margin-bottom:1em}}
+.card{{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:.8em;margin-bottom:.8em}}
+.card h2{{font-size:.85em;color:#94a3b8;margin-bottom:.5em}}
+label{{display:block;font-size:.82em;color:#94a3b8;margin:.4em 0 .15em}}
+input,select{{width:100%;padding:.35em .5em;background:#0f172a;border:1px solid #475569;border-radius:4px;color:#e2e8f0;font-size:.9em}}
+.row{{display:flex;gap:.5em}}
+.row>div{{flex:1}}
+.btn{{display:inline-block;padding:.4em 1.2em;border:none;border-radius:4px;font-size:.85em;cursor:pointer;margin-top:.5em}}
+.btn-save{{background:#0e7490;color:#fff}}
+.btn-save:hover{{background:#0891b2}}
+.btn-reboot{{background:#dc2626;color:#fff;font-size:.75em;padding:.3em .8em}}
+.btn-reset{{background:#475569;color:#e2e8f0;font-size:.75em;padding:.3em .8em}}
+.info-row{{display:flex;justify-content:space-between;padding:.2em 0;font-size:.82em}}
+.info-row .lbl{{color:#64748b}}
+.badge{{display:inline-block;padding:.1em .4em;border-radius:3px;font-size:.75em}}
+.badge-on{{background:#065f46;color:#34d399}}
+.badge-off{{background:#7f1d1d;color:#fca5a5}}
+#msg{{color:#22d3ee;font-size:.82em;min-height:1.2em;margin-top:.3em}}
+.tabs{{display:flex;gap:2px;margin-bottom:.8em}}
+.tab{{padding:.35em .8em;background:#1e293b;border:1px solid #334155;border-radius:4px 4px 0 0;cursor:pointer;font-size:.82em;color:#94a3b8}}
+.tab.active{{background:#334155;color:#e2e8f0;border-bottom-color:#334155}}
+.tab-content{{display:none}}
+.tab-content.active{{display:block}}
+</style></head><body>
+<h1>{hostname}</h1>
+<div class="sub">SlyLED Camera Node v{VERSION} &middot; {ip}</div>
+<div class="tabs">
+<div class="tab active" onclick="_tab(0)">Dashboard</div>
+<div class="tab" onclick="_tab(1)">Settings</div>
+</div>
+<div id="t0" class="tab-content active">
+<div class="card">
+<h2>Status</h2>
+<div class="info-row"><span class="lbl">Board</span><span>{board}</span></div>
+<div class="info-row"><span class="lbl">Cameras</span><span>{len(_hw_info.get("cameras", []))}</span></div>
+<div class="info-row"><span class="lbl">FOV</span><span>{_config.get("fovDeg", 60)}&deg;</span></div>
+<div class="info-row"><span class="lbl">Firmware</span><span>v{VERSION}</span></div>
+<div class="info-row"><span class="lbl">Uptime</span><span>{uptime}s</span></div>
+</div>
+{''.join(f"""<div class="card">
+<h2>Camera {i} &mdash; {c["name"]}</h2>
+<div class="info-row"><span class="lbl">Device</span><span>{c["device"]}</span></div>
+<div class="info-row"><span class="lbl">Resolution</span><span>{c["resW"]}x{c["resH"]}</span></div>
+<button class="btn btn-save" onclick="_test({i})" id="test-btn-{i}">Capture Frame</button>
+<div id="test-msg-{i}" style="color:#94a3b8;font-size:.82em;margin-top:.3em"></div>
+<img id="test-img-{i}" style="display:none;width:100%;border-radius:4px;margin-top:.5em;border:1px solid #334155">
+</div>""" for i, c in enumerate(_hw_info.get("cameras", [])))
+if _hw_info.get("cameras") else '<div class="card"><h2>Camera</h2><p style="color:#fca5a5;font-size:.82em">No cameras detected on this device.</p></div>'}
+</div>
+<div id="t1" class="tab-content">
+<div class="card">
+<h2>Device Settings</h2>
+<label>Name</label>
+<input id="cfg-name" value="{hostname}" maxlength="32">
+<div id="msg"></div>
+<button class="btn btn-save" onclick="_save()">Save</button>
+</div>
+<div class="card" style="margin-top:.5em">
+<h2>Device</h2>
+<button class="btn btn-reboot" onclick="_reboot()">Reboot</button>
+<button class="btn btn-reset" onclick="_reset()">Factory Reset</button>
+</div>
+</div>
+<script>
+function _tab(i){{
+  document.querySelectorAll('.tab').forEach(function(t,j){{t.classList.toggle('active',j===i)}});
+  document.querySelectorAll('.tab-content').forEach(function(t,j){{t.classList.toggle('active',j===i)}});
+}}
+function _save(){{
+  var name=document.getElementById('cfg-name').value.trim();
+  var x=new XMLHttpRequest();
+  x.open('POST','/config');
+  x.setRequestHeader('Content-Type','application/json');
+  x.onload=function(){{
+    var r=JSON.parse(x.responseText);
+    document.getElementById('msg').textContent=r.ok?'Saved':'Error: '+(r.err||'unknown');
+  }};
+  x.send(JSON.stringify({{hostname:name}}));
+}}
+function _test(idx){{
+  var btn=document.getElementById('test-btn-'+idx);
+  var msg=document.getElementById('test-msg-'+idx);
+  var img=document.getElementById('test-img-'+idx);
+  btn.disabled=true;btn.textContent='Capturing...';
+  msg.textContent='';img.style.display='none';
+  var x=new XMLHttpRequest();
+  x.open('GET','/snapshot?cam='+idx);
+  x.responseType='blob';
+  x.onload=function(){{
+    btn.disabled=false;btn.textContent='Capture Frame';
+    if(x.status===200&&x.response&&x.response.size>0){{
+      img.src=URL.createObjectURL(x.response);
+      img.style.display='block';
+      msg.textContent='Captured at '+new Date().toLocaleTimeString();
+      msg.style.color='#94a3b8';
+    }}else{{
+      msg.style.color='#fca5a5';
+      if(x.response&&x.response.size>0){{
+        var reader=new FileReader();
+        reader.onload=function(){{
+          try{{var r=JSON.parse(reader.result);msg.textContent='Error: '+(r.err||'unknown');}}
+          catch(e){{msg.textContent='Capture failed (status '+x.status+')';}}
+        }};
+        reader.readAsText(x.response);
+      }}else{{msg.textContent='Capture failed (empty response)';}}
+    }}
+  }};
+  x.onerror=function(){{btn.disabled=false;btn.textContent='Capture Frame';msg.textContent='Connection failed';msg.style.color='#fca5a5';}};
+  x.send();
+}}
+function _reboot(){{
+  if(!confirm('Reboot camera node?'))return;
+  var x=new XMLHttpRequest();x.open('POST','/reboot');x.send();
+  document.getElementById('msg').textContent='Rebooting...';
+}}
+function _reset(){{
+  if(!confirm('Factory reset? This will clear all settings.'))return;
+  var x=new XMLHttpRequest();x.open('POST','/config/reset');x.send();
+  document.getElementById('msg').textContent='Reset to factory defaults. Rebooting...';
+}}
+</script></body></html>'''
+
+@app.get("/config/json")
+def config_json():
     return jsonify(_config)
 
 @app.post("/config")
@@ -191,6 +414,16 @@ def config_post():
             _config[k] = body[k]
     _save_config()
     return jsonify(ok=True, config=_config)
+
+@app.post("/config/reset")
+def config_reset():
+    """Factory reset — clear config, reboot."""
+    global _config
+    _config = {"hostname": "", "fovDeg": 60, "cameraUrl": "",
+               "resolutionW": 1920, "resolutionH": 1080}
+    _save_config()
+    threading.Timer(1, lambda: os.system("reboot")).start()
+    return jsonify(ok=True, message="Factory reset. Rebooting...")
 
 @app.post("/reboot")
 def reboot():
@@ -204,16 +437,137 @@ def reboot():
 def health():
     return "", 200
 
+@app.get("/snapshot")
+def snapshot():
+    """Capture a single JPEG frame. ?cam=0 selects camera index (default 0)."""
+    cameras = _hw_info.get("cameras", [])
+    if not cameras:
+        return jsonify(ok=False, err="No camera detected"), 404
+    idx = request.args.get("cam", 0, type=int)
+    if idx < 0 or idx >= len(cameras):
+        return jsonify(ok=False, err=f"Camera index {idx} out of range (0-{len(cameras)-1})"), 400
+    dev = cameras[idx]["device"]
+    res = f"{cameras[idx].get('resW') or _config.get('resolutionW', 1920)}x{cameras[idx].get('resH') or _config.get('resolutionH', 1080)}"
+
+    from flask import Response
+    import subprocess
+
+    # Try capture tools by absolute path (systemd PATH may be minimal)
+    tools = [
+        (["/usr/bin/fswebcam", "-d", dev, "--no-banner", "-r", res, "--jpeg", "85", "-"], "fswebcam"),
+        (["/usr/bin/ffmpeg", "-y", "-f", "v4l2", "-i", dev,
+          "-frames:v", "1", "-f", "image2", "-c:v", "mjpeg", "pipe:1"], "ffmpeg"),
+        (["/usr/bin/v4l2-ctl", "-d", dev, "--set-fmt-video=pixelformat=MJPG",
+          "--stream-mmap", "--stream-count=1", "--stream-to=-"], "v4l2-ctl"),
+    ]
+    for cmd, name in tools:
+        if not os.path.exists(cmd[0]):
+            continue
+        try:
+            proc = subprocess.run(cmd, capture_output=True, timeout=10)
+            if proc.returncode == 0 and proc.stdout:
+                return Response(proc.stdout, mimetype="image/jpeg")
+            log.warning("Capture with %s failed: exit %d, stderr: %s",
+                        name, proc.returncode, proc.stderr[:200])
+        except Exception as e:
+            log.warning("Capture with %s error: %s", name, e)
+
+    return jsonify(ok=False, err="No capture tool available (install fswebcam or ffmpeg)"), 500
+
+# ── UDP protocol (PING/PONG + STATUS) ─────────────────────────────────
+
+def _udp_header(cmd, epoch=0):
+    return struct.pack("<HBBI", UDP_MAGIC, UDP_VERSION, cmd, epoch)
+
+def _build_pong():
+    """Build 134-byte PongPayload matching Protocol.h struct."""
+    full_name = _config.get("hostname") or socket.gethostname()
+    hostname = full_name[:10]   # hostname[10] — protocol limit
+    alt_name = full_name[:16]   # altName[16] — display name
+    desc = "Camera node"[:32]
+    # Pack hostname[10] + altName[16] + description[32] + stringCount(1)
+    payload = hostname.encode("ascii", "replace").ljust(10, b"\x00")
+    payload += alt_name.encode("ascii", "replace").ljust(16, b"\x00")
+    payload += desc.encode("ascii", "replace").ljust(32, b"\x00")
+    payload += struct.pack("B", len(_hw_info.get("cameras", [])))  # stringCount = camera count
+    # 8 x PongString (9 bytes each) = 72 bytes, all zeros
+    payload += b"\x00" * 72
+    # fwMajor, fwMinor, fwPatch
+    parts = VERSION.split(".")
+    payload += struct.pack("BBB", int(parts[0]), int(parts[1]),
+                           int(parts[2]) if len(parts) > 2 else 0)
+    return _udp_header(CMD_PONG) + payload
+
+def _build_status_resp():
+    """Build STATUS_RESP: 8 bytes (activeAction, runnerActive, currentStep, rssi, uptime)."""
+    rssi = 0
+    try:
+        # Read WiFi RSSI from /proc on Linux
+        with open("/proc/net/wireless", "r") as f:
+            for line in f:
+                if "wlan" in line:
+                    parts = line.split()
+                    rssi = abs(int(float(parts[3])))
+                    break
+    except Exception:
+        pass
+    uptime = int(time.monotonic())
+    return _udp_header(CMD_STATUS_RESP) + struct.pack("<BBBBI",
+        0, 0, 0, rssi, uptime)
+
+def _udp_listener():
+    """Background thread: listen for PING and STATUS_REQ on UDP_PORT."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind(("", UDP_PORT))
+        print(f"[UDP] Listening on port {UDP_PORT}")
+    except Exception as e:
+        print(f"[UDP] Could not bind port {UDP_PORT}: {e}")
+        return
+    while True:
+        try:
+            data, addr = s.recvfrom(512)
+            if len(data) < 8:
+                continue
+            magic, ver, cmd = struct.unpack_from("<HBB", data, 0)
+            if magic != UDP_MAGIC:
+                continue
+            if cmd == CMD_PING:
+                s.sendto(_build_pong(), (addr[0], UDP_PORT))
+            elif cmd == CMD_STATUS_REQ:
+                s.sendto(_build_status_resp(), (addr[0], UDP_PORT))
+        except Exception:
+            pass
+
 # ── Main ────────────────────────────────────────────────────────────────
 
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S")
+log = logging.getLogger("slyled-cam")
+
 if __name__ == "__main__":
-    print(f"SlyLED Camera Node v{VERSION}")
+    import sys
+    log.info("SlyLED Camera Node v%s starting (Python %s)", VERSION, sys.version.split()[0])
     _load_config()
-    _detect_hardware()
-    print(f"  Board: {_hw_info.get('board', 'unknown')}")
-    print(f"  Camera: {'found' if _hw_info.get('hasCamera') else 'not found'}")
-    print(f"  Resolution: {_config.get('resolutionW')}x{_config.get('resolutionH')}")
+    log.info("Config loaded")
+    try:
+        _detect_hardware()
+        cams = _hw_info.get("cameras", [])
+        log.info("Board: %s | Cameras: %d", _hw_info.get("board", "unknown"), len(cams))
+        for c in cams:
+            log.info("  %s: %s (%dx%d)", c["device"], c["name"], c["resW"], c["resH"])
+    except Exception as e:
+        log.error("Hardware detection failed: %s", e)
     _save_config()
-    _register_mdns()
+    try:
+        _register_mdns()
+    except Exception as e:
+        log.warning("mDNS failed: %s", e)
     atexit.register(_unregister_mdns)
+    threading.Thread(target=_udp_listener, daemon=True).start()
+    log.info("Listening on HTTP :%d, UDP :%d", PORT, UDP_PORT)
     app.run(host="0.0.0.0", port=PORT, debug=False)

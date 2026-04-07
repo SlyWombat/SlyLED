@@ -129,7 +129,7 @@ FEATURES = [
             "Hardware/Performers separation (DMX bridge badge)",
         ],
         "screenshots": ["06-setup-performer.png", "08-layout-2d.png"],
-        "captions": ["Setup with performers and fixtures", "2D layout with fixtures and surfaces"],
+        "captions": ["Setup with performers and fixtures", "2D layout with fixtures and objects"],
     },
     {
         "slug": "community",

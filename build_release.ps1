@@ -1,17 +1,23 @@
-# build_release.ps1 — Build all platforms, increment patch version, compile, package
+# build_release.ps1 — Build all platforms with independent version tracks
 #
 # Usage: powershell -ExecutionPolicy Bypass -File build_release.ps1
-#        powershell -ExecutionPolicy Bypass -File build_release.ps1 -SetVersion "8.3.0"
+#        powershell -ExecutionPolicy Bypass -File build_release.ps1 -SkipFirmware -SkipAndroid
+#        powershell -ExecutionPolicy Bypass -File build_release.ps1 -SetAppVersion "1.2.0"
 #
-# Builds: ESP32 firmware, D1 Mini firmware, Windows exe, Windows installer, Android APK
-# Increments APP_PATCH in version.h and syncs to all platform version strings
-# Creates a git tag for the release version
+# Version tracks (all independent):
+#   App (desktop + Android):  parent_server.py VERSION → installer.iss, build.gradle.kts
+#   ESP32 firmware:           registry.json "child-led-esp32"
+#   D1 Mini firmware:         registry.json "child-led-d1mini"
+#   Giga DMX bridge:          registry.json "dmx-bridge-esp32"
+#   Giga Child:               registry.json "child-led-giga"
+#   Giga Parent:              registry.json "parent-giga"
+#   Camera (Orange Pi):       registry.json "camera-orangepi" + camera_server.py VERSION
 
 param(
     [switch]$SkipFirmware,
     [switch]$SkipWindows,
     [switch]$SkipAndroid,
-    [string]$SetVersion = ""
+    [string]$SetAppVersion = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,87 +26,111 @@ Set-Location $root
 
 Write-Host "`n=== SlyLED Release Build ===" -ForegroundColor Cyan
 
-# ── Step 1: Determine version ───────────────────────────────────────────────
-$versionFile = "$root\main\version.h"
-$content = Get-Content $versionFile -Raw
-if ($content -match '#define APP_MAJOR\s+(\d+)') { $major = [int]$Matches[1] }
-if ($content -match '#define APP_MINOR\s+(\d+)') { $minor = [int]$Matches[1] }
-if ($content -match '#define APP_PATCH\s+(\d+)') { $patch = [int]$Matches[1] }
-
-if ($SetVersion) {
-    # Manual version override (e.g. -SetVersion "9.0.0")
-    $parts = $SetVersion.Split(".")
-    $major = [int]$parts[0]
-    $minor = [int]$parts[1]
-    $patch = if ($parts.Length -ge 3) { [int]$parts[2] } else { 0 }
-} else {
-    # Auto-increment patch
-    $patch = $patch + 1
+# ── Helper: increment a "major.minor.patch" version string ─────────────────
+function Increment-Patch([string]$ver) {
+    $parts = $ver.Split(".")
+    $parts[2] = [string]([int]$parts[2] + 1)
+    return ($parts -join ".")
 }
-$version = "$major.$minor.$patch"
 
-# ── Step 1b: Validate no version regression ─────────────────────────────────
-# Check latest git tag to ensure we're not going backwards
+# ── Helper: read/write registry.json ───────────────────────────────────────
+$regPath = "$root\firmware\registry.json"
+function Read-Registry { Get-Content $regPath -Raw | ConvertFrom-Json }
+function Save-Registry($reg) { $reg | ConvertTo-Json -Depth 5 | Set-Content $regPath -Encoding UTF8 }
+
+function Get-FwVersion([string]$id) {
+    $reg = Read-Registry
+    $entry = $reg.firmware | Where-Object { $_.id -eq $id }
+    if ($entry) { return $entry.version } else { return "0.0.0" }
+}
+
+function Set-FwVersion([string]$id, [string]$ver) {
+    $reg = Read-Registry
+    $entry = $reg.firmware | Where-Object { $_.id -eq $id }
+    if ($entry) { $entry.version = $ver }
+    Save-Registry $reg
+}
+
+# ── Helper: write version.h from a version string ─────────────────────────
+function Write-VersionH([string]$ver) {
+    $parts = $ver.Split(".")
+    @"
+#pragma once
+#define APP_MAJOR $($parts[0])
+#define APP_MINOR $($parts[1])
+#define APP_PATCH $($parts[2])
+"@ | Set-Content "$root\main\version.h" -Encoding UTF8
+}
+
+# ── Step 1: Determine app version ──────────────────────────────────────────
+$serverPy = Get-Content "$root\desktop\shared\parent_server.py" -Raw
+if ($serverPy -match 'VERSION = "([^"]+)"') { $appVersion = $Matches[1] } else { $appVersion = "1.0.0" }
+
+if ($SetAppVersion) {
+    $appVersion = $SetAppVersion
+} else {
+    $appVersion = Increment-Patch $appVersion
+}
+
+# Validate no regression against git tags
 $gitCmd = Get-Command git -ErrorAction SilentlyContinue
 if ($gitCmd) {
     $latestTag = & git describe --tags --abbrev=0 2>$null
     if ($latestTag -and $latestTag.StartsWith("v")) {
         $tagVer = $latestTag.TrimStart("v")
         $tagParts = $tagVer.Split(".")
-        $curParts = $version.Split(".")
+        $curParts = $appVersion.Split(".")
         $tagNum = [int]$tagParts[0] * 10000 + [int]$tagParts[1] * 100 + [int]$tagParts[2]
         $curNum = [int]$curParts[0] * 10000 + [int]$curParts[1] * 100 + [int]$curParts[2]
         if ($curNum -lt $tagNum) {
-            Write-Host "ERROR: Version $version is lower than latest tag $latestTag" -ForegroundColor Red
-            Write-Host "       Use -SetVersion to set a higher version" -ForegroundColor Yellow
+            Write-Host "ERROR: App version $appVersion is lower than latest tag $latestTag" -ForegroundColor Red
+            Write-Host "       Use -SetAppVersion to set a higher version" -ForegroundColor Yellow
             exit 1
         }
     }
-} else {
-    Write-Host "  (git not on PATH - skipping tag validation)" -ForegroundColor Yellow
 }
 
-Write-Host "Version: $version" -ForegroundColor Green
+Write-Host "App version: $appVersion" -ForegroundColor Green
 
-# ── Step 2: Write version to all platform files ─────────────────────────────
-# version.h (firmware)
-@"
-#pragma once
-#define APP_MAJOR $major
-#define APP_MINOR $minor
-#define APP_PATCH $patch
-"@ | Set-Content $versionFile -Encoding UTF8
-
-# parent_server.py (desktop)
-(Get-Content "$root\desktop\shared\parent_server.py" -Raw) -replace 'VERSION = "[^"]+"', "VERSION = `"$version`"" | Set-Content "$root\desktop\shared\parent_server.py" -Encoding UTF8
+# ── Step 2: Sync app version to all app platform files ─────────────────────
+# parent_server.py
+(Get-Content "$root\desktop\shared\parent_server.py" -Raw) -replace 'VERSION = "[^"]+"', "VERSION = `"$appVersion`"" | Set-Content "$root\desktop\shared\parent_server.py" -Encoding UTF8
 
 # Android build.gradle.kts
-(Get-Content "$root\android\app\build.gradle.kts" -Raw) -replace 'versionName = "[^"]+"', "versionName = `"$version`"" | Set-Content "$root\android\app\build.gradle.kts" -Encoding UTF8
+(Get-Content "$root\android\app\build.gradle.kts" -Raw) -replace 'versionName = "[^"]+"', "versionName = `"$appVersion`"" | Set-Content "$root\android\app\build.gradle.kts" -Encoding UTF8
 
-# Firmware registry
-(Get-Content "$root\firmware\registry.json" -Raw) -replace '"version": "[^"]+"', "`"version`": `"$version`"" | Set-Content "$root\firmware\registry.json" -Encoding UTF8
+Write-Host "App versions synced to $appVersion" -ForegroundColor Green
 
-Write-Host "All versions synced to $version" -ForegroundColor Green
-
-# ── Step 3: Compile firmware ────────────────────────────────────────────────
+# ── Step 3: Compile firmware (each board increments independently) ─────────
 if (-not $SkipFirmware) {
     $cli = "$env:LOCALAPPDATA\Arduino\arduino-cli.exe"
     $env:ARDUINO_DIRECTORIES_USER = $root
 
-    Write-Host "`n--- ESP32 Firmware ---" -ForegroundColor Yellow
+    # --- ESP32 ---
+    $espVer = Increment-Patch (Get-FwVersion "child-led-esp32")
+    Write-VersionH $espVer
+    Write-Host "`n--- ESP32 Firmware v$espVer ---" -ForegroundColor Yellow
     & $cli compile --clean --fqbn esp32:esp32:esp32 "$root\main" --output-dir "$root\firmware\esp32"
     if ($LASTEXITCODE -ne 0) { Write-Host "ESP32 FAILED" -ForegroundColor Red; exit 1 }
+    Set-FwVersion "child-led-esp32" $espVer
 
-    Write-Host "`n--- D1 Mini Firmware ---" -ForegroundColor Yellow
+    # --- D1 Mini ---
+    $d1Ver = Increment-Patch (Get-FwVersion "child-led-d1mini")
+    Write-VersionH $d1Ver
+    Write-Host "`n--- D1 Mini Firmware v$d1Ver ---" -ForegroundColor Yellow
     & $cli compile --clean --fqbn esp8266:esp8266:d1_mini "$root\main" --output-dir "$root\firmware\d1mini"
     if ($LASTEXITCODE -ne 0) { Write-Host "D1 Mini FAILED" -ForegroundColor Red; exit 1 }
+    Set-FwVersion "child-led-d1mini" $d1Ver
 
-    Write-Host "Firmware compiled" -ForegroundColor Green
+    # Note: Giga boards (child-led-giga, parent-giga, dmx-bridge-esp32) compile
+    # separately — increment their registry entry when building those targets.
+
+    Write-Host "`nFirmware compiled: ESP32 v$espVer, D1 Mini v$d1Ver" -ForegroundColor Green
 }
 
-# ── Step 4: Windows Desktop (PyInstaller) ───────────────────────────────────
+# ── Step 4: Windows Desktop (PyInstaller + Inno Setup) ────────────────────
 if (-not $SkipWindows) {
-    Write-Host "`n--- Windows Desktop ---" -ForegroundColor Yellow
+    Write-Host "`n--- Windows Desktop (App v$appVersion) ---" -ForegroundColor Yellow
     Set-Location "$root\desktop\windows"
     python build.py
     if ($LASTEXITCODE -ne 0) { Write-Host "Windows build FAILED" -ForegroundColor Red; exit 1 }
@@ -125,9 +155,9 @@ if (-not $SkipWindows) {
     Set-Location $root
 }
 
-# ── Step 5: Android APK ────────────────────────────────────────────────────
+# ── Step 5: Android APK ───────────────────────────────────────────────────
 if (-not $SkipAndroid) {
-    Write-Host "`n--- Android APK ---" -ForegroundColor Yellow
+    Write-Host "`n--- Android APK (App v$appVersion) ---" -ForegroundColor Yellow
     $env:JAVA_HOME = 'C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot'
     $env:ANDROID_SDK_ROOT = 'C:\Android\Sdk'
     Set-Location "$root\android"
@@ -141,7 +171,7 @@ if (-not $SkipAndroid) {
     Set-Location $root
 }
 
-# ── Step 6: Copy to dist/ ──────────────────────────────────────────────────
+# ── Step 6: Copy to dist/ ─────────────────────────────────────────────────
 Write-Host "`n--- Copying to dist/ ---" -ForegroundColor Yellow
 $distDir = "$root\dist"
 if (-not (Test-Path $distDir)) { New-Item -ItemType Directory -Path $distDir | Out-Null }
@@ -150,16 +180,16 @@ Copy-Item "$root\firmware\esp32\main.ino.merged.bin" "$distDir\esp32-firmware-me
 Copy-Item "$root\firmware\d1mini\main.ino.bin" "$distDir\d1mini-firmware.bin" -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\desktop\windows\dist\SlyLED.exe" "$distDir\SlyLED.exe" -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\desktop\windows\dist\SlyLED-Setup.exe" "$distDir\SlyLED-Setup.exe" -Force -ErrorAction SilentlyContinue
-$apk = Get-ChildItem -Path "C:\Android\build\slyled-app" -Recurse -Filter "app-release.apk" | Select-Object -First 1
+$apk = Get-ChildItem -Path "C:\Android\build\slyled-app" -Recurse -Filter "app-release.apk" -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($apk) { Copy-Item $apk.FullName "$distDir\SlyLED.apk" -Force }
-$dbgApk = Get-ChildItem -Path "C:\Android\build\slyled-app" -Recurse -Filter "app-debug.apk" | Select-Object -First 1
+$dbgApk = Get-ChildItem -Path "C:\Android\build\slyled-app" -Recurse -Filter "app-debug.apk" -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($dbgApk) { Copy-Item $dbgApk.FullName "$distDir\SlyLED-debug.apk" -Force }
 Write-Host "dist/ updated" -ForegroundColor Green
 
-# ── Step 7: Create git tag ──────────────────────────────────────────────────
+# ── Step 7: Create git tag (app version only) ─────────────────────────────
 if ($gitCmd) {
     Write-Host "`n--- Git tag ---" -ForegroundColor Yellow
-    $tagName = "v$version"
+    $tagName = "v$appVersion"
     $existingTag = & git tag -l $tagName 2>$null
     if ($existingTag) {
         Write-Host "Tag $tagName already exists - skipping" -ForegroundColor Yellow
@@ -172,14 +202,16 @@ if ($gitCmd) {
     Write-Host "`n  (git not on PATH - skipping tag creation)" -ForegroundColor Yellow
 }
 
-# ── Summary ─────────────────────────────────────────────────────────────────
-Write-Host "`n=== Build Complete: v$version ===" -ForegroundColor Cyan
-Write-Host "  Firmware:  firmware\esp32\main.ino.bin, firmware\d1mini\main.ino.bin"
-Write-Host "  Windows:   desktop\windows\dist\SlyLED.exe"
-Write-Host "  Installer: desktop\windows\dist\SlyLED-Setup.exe"
-Write-Host "  Android:   dist\SlyLED.apk"
+# ── Summary ────────────────────────────────────────────────────────────────
+Write-Host "`n=== Build Complete ===" -ForegroundColor Cyan
+Write-Host "  App:       v$appVersion (desktop + Android)" -ForegroundColor White
+$reg = Read-Registry
+foreach ($fw in $reg.firmware) {
+    Write-Host "  $($fw.id): v$($fw.version)" -ForegroundColor Gray
+}
+Write-Host ""
 Write-Host "  dist/:     All binaries copied"
 Write-Host ""
 Write-Host "Next steps:"
-Write-Host "  git add -A && git commit -m 'release: v$version' && git push origin main --tags"
-Write-Host "  gh release create v$version --target main --title 'v$version'"
+Write-Host "  git add -A && git commit -m 'release: v$appVersion' && git push origin main --tags"
+Write-Host "  gh release create v$appVersion --target main --title 'v$appVersion'"

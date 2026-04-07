@@ -128,9 +128,9 @@ def seed_data():
         r = c.post('/api/timelines', json={'name': 'Test Timeline', 'durationS': 30})
         tl_id = r.get_json().get('id')
 
-        # Surface — transform.pos is left-bottom corner, scale is w×h in mm
-        c.post('/api/surfaces', json={
-            'name': 'Back Wall', 'surfaceType': 'wall', 'color': '#1e293b', 'opacity': 30,
+        # Object — transform.pos is left-bottom corner, scale is w×h in mm
+        c.post('/api/objects', json={
+            'name': 'Back Wall', 'objectType': 'wall', 'color': '#1e293b', 'opacity': 30,
             'transform': {'pos': [0, 0, 0], 'rot': [0, 0, 0], 'scale': [10000, 5000, 100]}
         })
 
@@ -231,6 +231,18 @@ def test_setup(page, ids):
         modal = page.query_selector('#modal')
         vis = modal and modal.evaluate('el => getComputedStyle(el).display') != 'none'
         ok(vis, 'Add Fixture modal opens')
+
+        # Switch to Camera type — should have discover, not manual fields
+        page.select_option('#aft', 'camera')
+        time.sleep(0.2)
+        cam_div = page.query_selector('#af-camera')
+        cam_vis = cam_div and cam_div.evaluate('el => getComputedStyle(el).display') != 'none'
+        ok(cam_vis, 'Camera form visible when selected')
+        ok(page.query_selector('#af-cam-disc-btn') is not None, 'Camera Discover button in modal')
+        ok(page.query_selector('#af-cam-ip') is not None, 'Camera manual IP input in modal')
+        ok(page.query_selector('#af-cam-name') is None, 'No manual name field for camera')
+        ok(page.query_selector('#af-cam-fov') is None, 'No manual FOV field for camera')
+
         page.evaluate("typeof closeModal==='function'&&closeModal()")
         time.sleep(0.2)
     else:
@@ -317,6 +329,29 @@ def test_firmware_tab(page, ids):
     ok(page.query_selector('button[onclick*="saveWifi"]') is not None, 'Save WiFi button')
     text = get_text(page, '#t-firmware')
     ok('USB' in text or 'Flash' in text or 'OTA' in text or 'WiFi' in text, 'Firmware tab has content')
+
+    # ── Camera Setup section ─────────────────────────────────────────
+    ok('Camera Setup' in text, 'Camera Setup section exists')
+    ok(page.query_selector('#cam-ssh-user') is not None, 'SSH username input exists')
+    ok(page.query_selector('#cam-ssh-pass') is not None, 'SSH password input exists')
+    ok(page.query_selector('#cam-ssh-key') is not None, 'SSH key path input exists')
+    ok(page.query_selector('#cam-ssh-key-content') is not None, 'SSH key paste textarea exists')
+    ok(page.query_selector('button[onclick*="_saveCamSsh"]') is not None, 'Save Credentials button')
+    ok(page.query_selector('button[onclick*="_camFwRefresh"]') is not None, 'Check Versions button')
+    ok(page.query_selector('#cam-scan-btn') is not None, 'Scan for SBC Boards button')
+
+    # SSH credential save round-trip
+    page.fill('#cam-ssh-user', 'testuser')
+    page.fill('#cam-ssh-pass', 'testpass')
+    page.click('button[onclick*="_saveCamSsh"]')
+    time.sleep(0.5)
+    resp = api_json(page, 'GET', '/api/cameras/ssh')
+    ok(resp.get('sshUser') == 'testuser', 'SSH user saved via Camera Setup')
+    ok(resp.get('hasPassword') is True, 'SSH password saved via Camera Setup')
+
+    # Reset
+    api_json(page, 'POST', '/api/cameras/ssh',
+             {'sshUser': 'root', 'sshPassword': '', 'sshKeyPath': ''})
 
 
 def test_show_export(page, ids):
@@ -540,21 +575,21 @@ def test_spatial_effects_crud(page, ids):
     ok(resp is not None, 'Delete spatial effect')
 
 
-def test_surfaces_crud(page, ids):
-    section('Surfaces CRUD')
+def test_objects_crud(page, ids):
+    section('Objects CRUD')
 
-    resp = api_json(page, 'POST', '/api/surfaces', {
+    resp = api_json(page, 'POST', '/api/objects', {
         'name': 'CRUD Wall', 'type': 'wall', 'color': '#333',
         'x': 1000, 'y': 1000, 'z': 0, 'w': 5000, 'h': 3000, 'd': 50, 'opacity': 0.5
     })
-    ok(resp is not None and 'id' in resp, 'Create surface')
+    ok(resp is not None and 'id' in resp, 'Create object')
     sid = resp.get('id')
 
-    surfs = api_json(page, 'GET', '/api/surfaces')
-    ok(isinstance(surfs, list) and len(surfs) >= 1, 'Surfaces list non-empty')
+    surfs = api_json(page, 'GET', '/api/objects')
+    ok(isinstance(surfs, list) and len(surfs) >= 1, 'Objects list non-empty')
 
-    resp = api_json(page, 'DELETE', f'/api/surfaces/{sid}')
-    ok(resp is not None, 'Delete surface')
+    resp = api_json(page, 'DELETE', f'/api/objects/{sid}')
+    ok(resp is not None, 'Delete object')
 
 
 def test_children_api(page, ids):
@@ -1019,27 +1054,27 @@ def test_layout_fixture_types(page, ids):
     ok(resp.get('aimPoint') == [8000, 0, 3000], 'Aim point persisted')
 
 
-def test_surfaces_in_layout(page, ids):
-    """Verify surfaces render and can be managed."""
-    section('Surfaces in Layout')
+def test_objects_in_layout(page, ids):
+    """Verify objects render and can be managed."""
+    section('Objects in Layout')
 
-    surfs = api_json(page, 'GET', '/api/surfaces')
-    ok(isinstance(surfs, list), 'GET surfaces returns list')
+    objs = api_json(page, 'GET', '/api/objects')
+    ok(isinstance(objs, list), 'GET objects returns list')
 
-    # Create a surface for illumination testing
-    resp = api_json(page, 'POST', '/api/surfaces', {
-        'name': 'Test Wall', 'surfaceType': 'wall', 'color': '#1e293b',
+    # Create an object for illumination testing
+    resp = api_json(page, 'POST', '/api/objects', {
+        'name': 'Test Wall', 'objectType': 'wall', 'color': '#1e293b',
         'opacity': 40,
         'transform': {'pos': [5000, 2500, 0], 'rot': [0, 0, 0], 'scale': [8000, 4000, 100]}
     })
-    ok(resp is not None and resp.get('id') is not None, 'Create surface for illumination')
-    surf_id = resp.get('id')
+    ok(resp is not None and resp.get('id') is not None, 'Create object for illumination')
+    obj_id = resp.get('id')
 
-    surfs = api_json(page, 'GET', '/api/surfaces')
-    ok(any(s.get('id') == surf_id for s in surfs), 'Surface appears in list')
+    objs = api_json(page, 'GET', '/api/objects')
+    ok(any(s.get('id') == obj_id for s in objs), 'Object appears in list')
 
     # Clean up
-    api_json(page, 'DELETE', f'/api/surfaces/{surf_id}')
+    api_json(page, 'DELETE', f'/api/objects/{obj_id}')
 
 
 def test_bake_preview_data(page, ids):
@@ -1100,13 +1135,13 @@ def test_json_model_compat(page, ids):
             for v in ap:
                 ok(isinstance(v, (int, float)), f'Fixture {f["id"]} aimPoint value is number')
 
-    # Surfaces — transform pos/rot/scale must be lists of numbers
-    surfs = api_json(page, 'GET', '/api/surfaces')
-    for s in (surfs or []):
+    # Objects — transform pos/rot/scale must be lists of numbers
+    objs = api_json(page, 'GET', '/api/objects')
+    for s in (objs or []):
         t = s.get('transform', {})
         for field in ('pos', 'rot', 'scale'):
             vals = t.get(field, [])
-            ok(isinstance(vals, list), f'Surface {s.get("id")} transform.{field} is list')
+            ok(isinstance(vals, list), f'Object {s.get("id")} transform.{field} is list')
 
     # Settings — runnerStartEpoch can be null or number
     settings = api_json(page, 'GET', '/api/settings')
@@ -1179,48 +1214,48 @@ def test_canvas_stage_sync(page, ids):
     ]})
 
 
-def test_surface_transform(page, ids):
-    """Verify surfaces have correct transform structure and fit within stage."""
-    section('Surface Transform')
+def test_object_transform(page, ids):
+    """Verify objects have correct transform structure and fit within stage."""
+    section('Object Transform')
 
     settings = api_json(page, 'GET', '/api/settings')
     cw = settings.get('canvasW', 10000)
     ch = settings.get('canvasH', 5000)
 
-    surfs = api_json(page, 'GET', '/api/surfaces')
-    ok(isinstance(surfs, list), 'Surfaces is a list')
+    objs = api_json(page, 'GET', '/api/objects')
+    ok(isinstance(objs, list), 'Objects is a list')
 
-    for s in (surfs or []):
+    for s in (objs or []):
         t = s.get('transform', {})
-        ok('pos' in t and 'scale' in t, f'Surface {s.get("id")} has pos and scale')
+        ok('pos' in t and 'scale' in t, f'Object {s.get("id")} has pos and scale')
         pos = t.get('pos', [0, 0, 0])
         scale = t.get('scale', [0, 0, 0])
-        # Check surface doesn't have nonsensical dimensions
-        ok(scale[0] > 0, f'Surface {s.get("id")} width > 0')
-        ok(scale[1] > 0, f'Surface {s.get("id")} height > 0')
+        # Check object doesn't have nonsensical dimensions
+        ok(scale[0] > 0, f'Object {s.get("id")} width > 0')
+        ok(scale[1] > 0, f'Object {s.get("id")} height > 0')
         # Warn if extends far outside stage (> 2x stage size)
         right_edge = pos[0] + scale[0]
         top_edge = pos[1] + scale[1]
-        ok(right_edge <= cw * 2, f'Surface {s.get("id")} right edge within 2x stage ({right_edge} vs {cw})')
-        ok(top_edge <= ch * 2, f'Surface {s.get("id")} top edge within 2x stage ({top_edge} vs {ch})')
+        ok(right_edge <= cw * 2, f'Object {s.get("id")} right edge within 2x stage ({right_edge} vs {cw})')
+        ok(top_edge <= ch * 2, f'Object {s.get("id")} top edge within 2x stage ({top_edge} vs {ch})')
 
-    # Create a surface with proper transform and verify
-    resp = api_json(page, 'POST', '/api/surfaces', {
-        'name': 'Test Panel', 'surfaceType': 'wall', 'color': '#444',
+    # Create an object with proper transform and verify
+    resp = api_json(page, 'POST', '/api/objects', {
+        'name': 'Test Panel', 'objectType': 'wall', 'color': '#444',
         'opacity': 40,
         'transform': {'pos': [2000, 1000, 0], 'rot': [0, 0, 0], 'scale': [3000, 2000, 50]}
     })
-    ok(resp is not None and resp.get('id') is not None, 'Create surface with transform')
+    ok(resp is not None and resp.get('id') is not None, 'Create object with transform')
     sid = resp.get('id')
 
-    surfs = api_json(page, 'GET', '/api/surfaces')
-    created = next((s for s in surfs if s.get('id') == sid), None)
-    ok(created is not None, 'Surface exists in list')
+    objs = api_json(page, 'GET', '/api/objects')
+    created = next((s for s in objs if s.get('id') == sid), None)
+    ok(created is not None, 'Object exists in list')
     t = created.get('transform', {})
-    ok(t.get('pos') == [2000, 1000, 0], f'Surface pos correct ({t.get("pos")})')
-    ok(t.get('scale') == [3000, 2000, 50], f'Surface scale correct ({t.get("scale")})')
+    ok(t.get('pos') == [2000, 1000, 0], f'Object pos correct ({t.get("pos")})')
+    ok(t.get('scale') == [3000, 2000, 50], f'Object scale correct ({t.get("scale")})')
 
-    api_json(page, 'DELETE', f'/api/surfaces/{sid}')
+    api_json(page, 'DELETE', f'/api/objects/{sid}')
 
 
 def test_fixture_strings_in_layout(page, ids):
@@ -1675,7 +1710,7 @@ def main():
         ('fixtures_crud', test_fixtures_crud),
         ('timelines_crud', test_timelines_crud),
         ('spatial_crud', test_spatial_effects_crud),
-        ('surfaces_crud', test_surfaces_crud),
+        ('objects_crud', test_objects_crud),
         ('children_api', test_children_api),
         ('settings_api', test_settings_api),
         ('layout_api', test_layout_api),
@@ -1695,9 +1730,9 @@ def main():
         ('firmware_fix', test_firmware_check_fix),
         ('layout_place', test_layout_place_remove),
         ('layout_types', test_layout_fixture_types),
-        ('surfaces', test_surfaces_in_layout),
+        ('objects', test_objects_in_layout),
         ('canvas_stage', test_canvas_stage_sync),
-        ('surface_transform', test_surface_transform),
+        ('object_transform', test_object_transform),
         ('fixture_strings', test_fixture_strings_in_layout),
         ('bake_preview', test_bake_preview_data),
         ('emu_render', test_emulator_rendering),

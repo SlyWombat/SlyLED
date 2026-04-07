@@ -290,7 +290,7 @@ def build_manual():
     )
 
     add_screenshot('spa-layout-2d.png', 'Layout tab — 2D Canvas with placed fixtures')
-    add_screenshot('spa-layout-3d.png', 'Layout tab — 3D Viewport with stage wireframe, fixtures, and surfaces')
+    add_screenshot('spa-layout-3d.png', 'Layout tab — 3D Viewport with stage wireframe, fixtures, and objects')
 
     doc.add_heading(T('Navigating the 3D Viewport'), level=2)
     add_table(
@@ -368,7 +368,7 @@ def build_manual():
         [
             ['Linear', 'LED strip/string with pixels along a path', 'LED performers'],
             ['Point', 'Single light source with area of effect', 'DMX pars, spots, moving heads'],
-            ['Surface', '3D mesh as a projection target', 'Walls, screens'],
+            ['Object', '3D mesh as a projection target', 'Walls, screens'],
             ['Group', 'Named collection of fixtures', 'Zones, grouped control'],
         ]
     )

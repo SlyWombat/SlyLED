@@ -9,7 +9,7 @@ would produce empty, misplaced, or incorrectly oriented visual elements.
 56 rendering features across 3 render targets:
   - 2D layout canvas (drawLayout)
   - Runtime emulator (emuDraw)
-  - 3D viewport (s3dLoadChildren, _s3dRenderSurfaces)
+  - 3D viewport (s3dLoadChildren, _s3dRenderObjects)
 
 Usage:
     python tests/test_rendering.py
@@ -107,17 +107,17 @@ def seed():
             {'id': fix_dmx3, 'x': 8000, 'y': 4000, 'z': 0},
         ]})
 
-        # Surfaces
-        c.post('/api/surfaces', json={
-            'name': 'Back Wall', 'surfaceType': 'wall', 'color': '#1e293b', 'opacity': 30,
+        # Objects
+        c.post('/api/objects', json={
+            'name': 'Back Wall', 'objectType': 'wall', 'color': '#1e293b', 'opacity': 30,
             'transform': {'pos': [0, 0, 0], 'rot': [0, 0, 0], 'scale': [10000, 5000, 100]}
         })
-        c.post('/api/surfaces', json={
-            'name': 'Floor', 'surfaceType': 'floor', 'color': '#1a2744', 'opacity': 20,
+        c.post('/api/objects', json={
+            'name': 'Floor', 'objectType': 'floor', 'color': '#1a2744', 'opacity': 20,
             'transform': {'pos': [0, 0, 0], 'rot': [0, 0, 0], 'scale': [10000, 100, 10000]}
         })
-        c.post('/api/surfaces', json={
-            'name': 'Side Panel', 'surfaceType': 'custom', 'color': '#334455', 'opacity': 40,
+        c.post('/api/objects', json={
+            'name': 'Side Panel', 'objectType': 'custom', 'color': '#334455', 'opacity': 40,
             'transform': {'pos': [3000, 1000, 0], 'rot': [0, 0, 0], 'scale': [2000, 3000, 50]}
         })
 
@@ -272,26 +272,26 @@ def test_dmx_beam_cones(ids):
         ok(f3.get('aimPoint') is not None, f'Dimmer fixture has default aimPoint')
 
 
-def test_surfaces():
-    section('Surfaces (rectangles, names, opacity, bounds)')
-    surfs = api('GET', '/api/surfaces')
-    ok(isinstance(surfs, list) and len(surfs) >= 3, f'At least 3 surfaces ({len(surfs)})')
+def test_objects():
+    section('Objects (rectangles, names, opacity, bounds)')
+    objs = api('GET', '/api/objects')
+    ok(isinstance(objs, list) and len(objs) >= 3, f'At least 3 objects ({len(objs)})')
     lay = api('GET', '/api/layout')
     cw = lay.get('canvasW', 10000)
     ch = lay.get('canvasH', 5000)
-    for s in surfs:
-        ok('name' in s and len(s['name']) > 0, f'Surface {s["id"]} has name: {s.get("name")}')
-        ok('color' in s, f'Surface {s["id"]} has color')
-        ok(0 <= s.get('opacity', 0) <= 100, f'Surface {s["id"]} opacity valid: {s.get("opacity")}')
+    for s in objs:
+        ok('name' in s and len(s['name']) > 0, f'Object {s["id"]} has name: {s.get("name")}')
+        ok('color' in s, f'Object {s["id"]} has color')
+        ok(0 <= s.get('opacity', 0) <= 100, f'Object {s["id"]} opacity valid: {s.get("opacity")}')
         t = s.get('transform', {})
-        ok('pos' in t, f'Surface {s["id"]} has transform.pos')
-        ok('scale' in t, f'Surface {s["id"]} has transform.scale')
+        ok('pos' in t, f'Object {s["id"]} has transform.pos')
+        ok('scale' in t, f'Object {s["id"]} has transform.scale')
         pos = t.get('pos', [0, 0, 0])
         scale = t.get('scale', [0, 0, 0])
-        ok(scale[0] > 0, f'Surface {s["id"]} width > 0: {scale[0]}')
+        ok(scale[0] > 0, f'Object {s["id"]} width > 0: {scale[0]}')
         # Warn if extends way outside stage
         right = pos[0] + scale[0]
-        ok(right <= cw * 3, f'Surface {s["id"]} right edge ({right}) within 3x stage')
+        ok(right <= cw * 3, f'Object {s["id"]} right edge ({right}) within 3x stage')
 
 
 def test_dmx_profiles():
@@ -404,7 +404,7 @@ def test_coordinate_consistency():
 
 
 def test_3d_viewport_data():
-    section('3D Viewport Data (stage box, nodes, beam cones, surfaces)')
+    section('3D Viewport Data (stage box, nodes, beam cones, objects)')
     st = api('GET', '/api/stage')
     ok(st['w'] > 0 and st['h'] > 0 and st['d'] > 0, 'Stage has positive dimensions for 3D box')
     lay = api('GET', '/api/layout')
@@ -421,11 +421,11 @@ def test_3d_viewport_data():
             prof = api('GET', f'/api/dmx-profiles/{pid}')
             if prof:
                 ok('beamWidth' in prof or 'channelCount' in prof, f'Profile {pid} has rendering data')
-    surfs = api('GET', '/api/surfaces')
-    for s in surfs:
+    objs = api('GET', '/api/objects')
+    for s in objs:
         t = s.get('transform', {})
         scale = t.get('scale', [0, 0, 0])
-        ok(len(scale) >= 3, f'Surface {s["id"]} has 3D scale (w,h,d)')
+        ok(len(scale) >= 3, f'Object {s["id"]} has 3D scale (w,h,d)')
 
 
 def test_dmx_only_rendering():
@@ -470,7 +470,7 @@ def main():
     test_fixture_positions(ids)
     test_led_strings(ids)
     test_dmx_beam_cones(ids)
-    test_surfaces()
+    test_objects()
     test_dmx_profiles()
     test_action_types(ids)
     test_children_status()
