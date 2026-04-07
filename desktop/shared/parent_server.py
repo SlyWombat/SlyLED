@@ -14,6 +14,10 @@ import argparse
 import json
 import math
 import os
+try:
+    import numpy as np
+except ImportError:
+    np = None
 import signal
 import socket
 import struct
@@ -1294,8 +1298,6 @@ def _pixel_to_stage(detections, cam_fixture, frame_w, frame_h):
     Uses calibrated homography if available, otherwise falls back to
     ground-plane projection using camera position, aimPoint, and FOV.
     """
-    import math
-
     # Try calibrated homography first
     cal = _calibrations.get(str(cam_fixture.get("id")))
     if cal and cal.get("matrix"):
@@ -1448,7 +1450,6 @@ def _compute_homography(stage_pts, pixel_pts):
     Returns:
         (matrix_3x3_flat, avg_reproj_error_px) or raises ValueError
     """
-    import numpy as np
     n = len(stage_pts)
     if n < 2:
         raise ValueError(f"Need at least 2 reference points, got {n}")
@@ -1659,7 +1660,6 @@ def _compute_axis_mapping(samples):
     """
     if len(samples) < 2:
         return None
-    import numpy as np
     norms = np.array([s[0] for s in samples])
     xs = np.array([s[1] for s in samples])
     zs = np.array([s[2] for s in samples])
