@@ -462,6 +462,54 @@ def run():
         r = c.post('/api/cameras/' + str(reg_cam_id) + '/scan', json={'threshold': 0.5})
         ok('Scan proxy offline → 503', r.status_code == 503)
 
+        # ── Pixel-to-stage coordinate transform (unit test) ──────────
+        # Place camera at position and test transform directly
+        from parent_server import _pixel_to_stage, _layout, _stage, _fixtures
+
+        # Set up: camera at (1500, 2000, 0) looking at stage center (1500, 0, 750)
+        # Stage 3m × 2m × 1.5m = 3000 × 2000 × 1500 mm
+        cam_fix = next(f for f in _fixtures if f['id'] == reg_cam_id)
+        cam_fix['aimPoint'] = [1500, 0, 750]
+        cam_fix['fovDeg'] = 90
+        _layout['children'] = [{'id': reg_cam_id, 'x': 1500, 'y': 2000, 'z': 0}]
+
+        # Detection at image center should map near the aim point
+        dets = [{'label': 'person', 'confidence': 0.9,
+                 'x': 270, 'y': 190, 'w': 100, 'h': 100}]
+        result = _pixel_to_stage(dets, cam_fix, 640, 480)
+        ok('Transform returns list', isinstance(result, list) and len(result) == 1)
+        d0 = result[0]
+        ok('Transform has label', d0.get('label') == 'person')
+        ok('Transform has confidence', d0.get('confidence') == 0.9)
+        ok('Transform x is number', isinstance(d0.get('x'), (int, float)))
+        ok('Transform y is 0 (ground)', d0.get('y') == 0)
+        ok('Transform z is number', isinstance(d0.get('z'), (int, float)))
+        ok('Transform has w', d0.get('w', 0) > 0)
+        ok('Transform has h', d0.get('h', 0) > 0)
+        ok('Transform has pixelBox', 'pixelBox' in d0)
+        # Center detection should be roughly at aim point (within stage bounds)
+        ok('Transform x within stage', 0 <= d0['x'] <= 3000,
+           f"x={d0['x']}")
+        ok('Transform z within stage', 0 <= d0['z'] <= 1500,
+           f"z={d0['z']}")
+
+        # Detection at left edge should map to lower x
+        dets_left = [{'label': 'chair', 'confidence': 0.7,
+                      'x': 0, 'y': 200, 'w': 80, 'h': 80}]
+        dets_right = [{'label': 'chair', 'confidence': 0.7,
+                       'x': 560, 'y': 200, 'w': 80, 'h': 80}]
+        r_left = _pixel_to_stage(dets_left, cam_fix, 640, 480)
+        r_right = _pixel_to_stage(dets_right, cam_fix, 640, 480)
+        ok('Left detection has lower x than right',
+           r_left[0]['x'] < r_right[0]['x'],
+           f"left_x={r_left[0]['x']}, right_x={r_right[0]['x']}")
+
+        # Empty detections → empty result
+        ok('Empty detections → empty', _pixel_to_stage([], cam_fix, 640, 480) == [])
+
+        # Restore layout
+        _layout['children'] = []
+
         # Unknown camera → 404
         r = c.get('/api/cameras/99999/snapshot')
         ok('Snapshot proxy unknown → 404', r.status_code == 404)
@@ -1016,6 +1064,11 @@ def run():
         ok('SPA has Track action type', "'Track'" in spa or 'Track' in spa)
         ok('SPA has objects API', '/api/objects' in spa)
         ok('SPA has temporal support', '/api/objects/temporal' in spa or '_temporal' in spa)
+        ok('SPA has scan button', 'btn-lay-scan' in spa)
+        ok('SPA has _layScan function', '_layScan' in spa)
+        ok('SPA has _scanGhosts', '_scanGhosts' in spa)
+        ok('SPA has ghost accept', '_layScanAccept' in spa)
+        ok('SPA has ghost dismiss', '_layScanDismiss' in spa)
         # Toolbar tooltips on all buttons
         ok('SPA toolbar: save tooltip', "title='Save layout'" in spa)
         ok('SPA toolbar: mode tooltip', "title='Switch to 3D'" in spa or "title='Switch to 2D'" in spa)

@@ -1257,10 +1257,112 @@ def api_camera_status(fid):
         return jsonify(err="Camera offline"), 503
     return jsonify(info)
 
+def _pixel_to_stage(detections, cam_fixture, frame_w, frame_h):
+    """Transform pixel-space detections to stage-space (mm) using ground-plane projection.
+
+    Uses camera position, aimPoint, FOV, and a ground-plane (y=0) assumption.
+    Each detection gets stage coordinates (x, y=0, z) and size (w, h) in mm.
+    """
+    import math
+    # Camera position from layout
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    cam_pos = pos_map.get(cam_fixture["id"], {})
+    cx = cam_pos.get("x", 0)  # mm
+    cy = cam_pos.get("y", 0)  # mm (height)
+    cz = cam_pos.get("z", 0)  # mm (depth)
+
+    aim = cam_fixture.get("aimPoint", [0, 0, 0])
+    ax, ay, az = aim[0], aim[1], aim[2]
+
+    fov_deg = cam_fixture.get("fovDeg", 60)
+    fov_rad = math.radians(fov_deg)
+
+    # Camera look direction (normalized)
+    dx, dy, dz = ax - cx, ay - cy, az - cz
+    dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+    if dist < 1:
+        return detections  # Camera not positioned, return raw
+
+    dx, dy, dz = dx/dist, dy/dist, dz/dist
+
+    # Camera right vector (cross of look × world_up)
+    # World up = (0, 1, 0)
+    rx = dz  # dy*0 - dz*0 simplified for up=(0,1,0)
+    ry = 0
+    rz = -dx
+    r_len = math.sqrt(rx*rx + rz*rz)
+    if r_len < 0.001:
+        rx, ry, rz = 1, 0, 0  # Looking straight up/down, pick arbitrary right
+    else:
+        rx, rz = rx/r_len, rz/r_len
+
+    # Camera up vector (cross of right × look)
+    ux = ry*dz - rz*dy
+    uy = rz*dx - rx*dz
+    uz = rx*dy - ry*dx
+
+    # Half-FOV determines the image plane extent
+    half_fov = fov_rad / 2
+    aspect = frame_w / frame_h if frame_h > 0 else 1.0
+
+    stage_w = _stage.get("w", 3.0) * 1000  # mm
+    stage_h = _stage.get("h", 2.0) * 1000
+    stage_d = _stage.get("d", 1.5) * 1000
+
+    result = []
+    for det in detections:
+        # Bounding box center in pixel coords
+        px = det["x"] + det["w"] / 2
+        py = det["y"] + det["h"] / 2
+
+        # Normalize pixel coords to [-1, 1] (NDC)
+        ndc_x = (px / frame_w - 0.5) * 2   # -1 (left) to 1 (right)
+        ndc_y = -(py / frame_h - 0.5) * 2  # -1 (bottom) to 1 (top), flip Y
+
+        # Ray direction through pixel on image plane
+        ray_x = dx + math.tan(half_fov) * (ndc_x * rx + ndc_y / aspect * ux)
+        ray_y = dy + math.tan(half_fov) * (ndc_x * ry + ndc_y / aspect * uy)
+        ray_z = dz + math.tan(half_fov) * (ndc_x * rz + ndc_y / aspect * uz)
+
+        # Intersect ray with ground plane (y=0)
+        # Point = camera_pos + t * ray, solve for y=0: cy + t * ray_y = 0
+        if abs(ray_y) < 0.0001:
+            # Ray parallel to ground — place at aim point distance
+            t = dist
+        else:
+            t = -cy / ray_y
+            if t < 0:
+                t = dist  # Ray points away from ground, use aim distance
+
+        # Stage intersection point
+        sx = cx + t * ray_x
+        sz = cz + t * ray_z
+
+        # Estimate object size on ground plane from bounding box
+        # Use proportion of FOV covered by the box
+        ground_span = 2 * t * math.tan(half_fov)  # total width visible at distance t
+        obj_w = (det["w"] / frame_w) * ground_span
+        obj_h = (det["h"] / frame_h) * ground_span / aspect
+
+        # Clamp to stage bounds
+        sx = max(0, min(sx, stage_w))
+        sz = max(0, min(sz, stage_d))
+
+        result.append({
+            "label": det["label"],
+            "confidence": det["confidence"],
+            "x": round(sx),
+            "y": 0,
+            "z": round(sz),
+            "w": round(max(obj_w, 100)),   # minimum 100mm
+            "h": round(max(obj_h, 100)),
+            "pixelBox": {"x": det["x"], "y": det["y"], "w": det["w"], "h": det["h"]},
+        })
+    return result
+
 @app.post("/api/cameras/<int:fid>/scan")
 def api_camera_scan(fid):
-    """Proxy scan request to camera node. Returns detections with stage coordinates.
-    Requires camera node to have /scan endpoint (#195) and calibration (#191)."""
+    """Proxy scan request to camera node. Returns detections with stage coordinates."""
     f = next((f for f in _fixtures if f["id"] == fid and f.get("fixtureType") == "camera"), None)
     if not f:
         return jsonify(err="Camera not found"), 404
@@ -1270,21 +1372,32 @@ def api_camera_scan(fid):
     body = request.get_json(silent=True) or {}
     threshold = body.get("threshold", 0.5)
     cam_idx = body.get("cam", 0)
+    resolution = body.get("resolution", 320)
     # Forward to camera node /scan endpoint
     try:
         import urllib.request as _ur
-        req_data = json.dumps({"threshold": threshold, "cam": cam_idx}).encode()
+        req_data = json.dumps({"threshold": threshold, "cam": cam_idx,
+                                "resolution": resolution}).encode()
         req = _ur.Request(f"http://{ip}:5000/scan",
                           data=req_data,
                           headers={"Content-Type": "application/json"})
         resp = _ur.urlopen(req, timeout=30)
-        detections = json.loads(resp.read().decode())
+        raw = json.loads(resp.read().decode())
     except Exception as e:
         return jsonify(err=f"Camera scan failed: {e}"), 503
-    # TODO (#191): transform pixel coordinates to stage coordinates using
-    # camera position, aim direction, FOV, and homography matrix
-    # For now, return raw detections from camera node
-    return jsonify(detections=detections, cameraId=fid, raw=True)
+    if not raw.get("ok"):
+        return jsonify(err=raw.get("err", "Scan failed")), 503
+    raw_dets = raw.get("detections", [])
+    frame_size = raw.get("frameSize", [640, 480])
+    # Transform pixel coords to stage coords
+    stage_dets = _pixel_to_stage(raw_dets, f, frame_size[0], frame_size[1])
+    return jsonify(
+        ok=True,
+        detections=stage_dets,
+        cameraId=fid,
+        captureMs=raw.get("captureMs"),
+        inferenceMs=raw.get("inferenceMs"),
+    )
 
 def _get_local_ip():
     """Get local IP by connecting a UDP socket (no traffic sent)."""

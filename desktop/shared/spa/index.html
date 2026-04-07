@@ -103,7 +103,7 @@ body.light .li:hover{border-color:#3b82f6}
           onmousedown='cvDown(event)' onmousemove='cvMove(event)'
           onmouseup='cvUp()' onmouseleave='cvUp()'
           ondragover='event.preventDefault()' ondrop='cvDrop(event)'
-          ondblclick='cvDbl(event)'></canvas>
+          ondblclick='cvDbl(event)' oncontextmenu='cvCtx(event)'></canvas>
       </div>
       <!-- 3D Viewport -->
       <div id='lay-3d-wrap' style='display:none;position:relative'>
@@ -120,6 +120,8 @@ body.light .li:hover{border-color:#3b82f6}
         <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
         <button class='btn' onclick='autoArrangeDmx()' title='Auto-arrange DMX fixtures' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M1 2h3v2H1zm5 0h3v2H6zm5 0h3v2H11zM4 5l4 9 4-9H4z' opacity='.8'/></svg></button>
         <button class='btn' id='btn-lay-strings' onclick='_layDetailToggle()' title='Show/hide LED strings' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;background:#14532d;color:#86efac'><svg width='16' height='16' viewBox='0 0 16 16' id='lay-detail-svg'><line x1='2' y1='4' x2='14' y2='4' stroke='#22c55e' stroke-width='2'/><line x1='2' y1='8' x2='14' y2='8' stroke='#3b82f6' stroke-width='2'/><line x1='2' y1='12' x2='14' y2='12' stroke='#f59e0b' stroke-width='2'/></svg></button>
+        <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
+        <button class='btn' id='btn-lay-scan' onclick='_layScan()' title='Scan for objects (camera)' style='width:32px;height:32px;padding:0;display:none;align-items:center;justify-content:center;background:#4c1d95;color:#c4b5fd'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 2v4h1V3h3V2H2zm8 0v1h3v3h1V2h-4zM2 10v4h4v-1H3v-3H2zm11 0v3h-3v1h4v-4h-1zM5.5 5a3.5 3.5 0 100 7 3.5 3.5 0 000-7zm5 0a3.5 3.5 0 100 7 3.5 3.5 0 000-7z' opacity='.85'/></svg></button>
       </div>
     </div>
     <div style='width:200px;flex-shrink:0'>
@@ -3916,7 +3918,7 @@ function loadLayout(){
   });
 }
 
-function renderSidebar(){renderFixturesSidebar();}
+function renderSidebar(){renderFixturesSidebar();_layScanUpdateBtn();}
 
 function layDS(e,id){_layDragId=id;e.dataTransfer.setData('text/plain',String(id));e.dataTransfer.effectAllowed='move';}
 
@@ -3933,11 +3935,31 @@ function cvDrop(e){
   _layDragId=null;
 }
 
+function _hitGhost(mx,my,W,H){
+  for(var i=0;i<_scanGhosts.length;i++){
+    var g=_scanGhosts[i];
+    var gx=g.x*W/phW,gz=H-g.z*H/phH;
+    var gw=g.w*W/phW,gh=g.h*H/phH;
+    if(mx>=gx-gw/2&&mx<=gx+gw/2&&my>=gz-gh/2&&my<=gz+gh/2)return i;
+  }
+  return -1;
+}
 function cvDbl(e){
   var cv=document.getElementById('lcv');
   var m=_cvMouse(e,cv);
+  // Check ghost hits first (accept on double-click)
+  var gi=_hitGhost(m.x,m.y,cv.width,cv.height);
+  if(gi>=0){_layScanAccept(gi);return;}
   var hit=_hitNode(m.x,m.y,cv.width,cv.height);
   if(hit>=0){showNodeEdit(_fixtures.filter(_isFixturePlaced)[hit]);return;}
+}
+function cvCtx(e){
+  if(!_scanGhosts.length)return;
+  e.preventDefault();
+  var cv=document.getElementById('lcv');
+  var m=_cvMouse(e,cv);
+  var gi=_hitGhost(m.x,m.y,cv.width,cv.height);
+  if(gi>=0)_layScanDismiss(gi);
 }
 
 function showNodeEdit(f){
@@ -4024,6 +4046,27 @@ function drawLayout(){
     var lbl2d=s.name||'Object';
     if(s._temporal&&s._ttl!=null){lbl2d+=' ['+s._ttl+'s]';}
     ctx.fillText(lbl2d,sx+4,sy-sh+12);
+  });
+  // Draw scan ghost overlays (dashed cyan, semi-transparent)
+  (_scanGhosts||[]).forEach(function(g,gi){
+    var gx=g.x*W/phW, gz=H-g.z*H/phH;  // x→screen x, z→screen y (top-down view)
+    var gw=g.w*W/phW, gh=g.h*H/phH;
+    ctx.globalAlpha=0.25;
+    ctx.fillStyle='#22d3ee';
+    ctx.fillRect(gx-gw/2,gz-gh/2,gw,gh);
+    ctx.globalAlpha=0.8;
+    ctx.strokeStyle='#22d3ee';ctx.lineWidth=2;
+    ctx.setLineDash([6,4]);
+    ctx.strokeRect(gx-gw/2,gz-gh/2,gw,gh);
+    ctx.setLineDash([]);
+    ctx.globalAlpha=1;
+    ctx.fillStyle='#22d3ee';ctx.font='bold 10px sans-serif';ctx.textAlign='center';
+    ctx.fillText(g.label+' '+Math.round(g.confidence*100)+'%',gx,gz-gh/2-4);
+    // Accept/dismiss indicators
+    ctx.font='9px sans-serif';ctx.fillStyle='#4ade80';
+    ctx.fillText('\u2713 click',gx-20,gz+gh/2+12);
+    ctx.fillStyle='#f87171';
+    ctx.fillText('\u2717 right',gx+20,gz+gh/2+12);
   });
   var placed=(_fixtures||[]).filter(_isFixturePlaced);
   if(!placed.length&&!_objects.length){
@@ -4708,6 +4751,75 @@ function autoArrangeDmx(){
       }
     });
   });
+}
+
+// ── Scan mode — detect stage objects via camera ───────────────────────
+var _scanGhosts=[];  // [{label,confidence,x,y,z,w,h,pixelBox}]
+var _scanBusy=false;
+
+function _layScanUpdateBtn(){
+  var btn=document.getElementById('btn-lay-scan');
+  if(!btn)return;
+  var hasCam=(_fixtures||[]).some(function(f){return f.fixtureType==='camera'&&f.positioned;});
+  btn.style.display=hasCam?'flex':'none';
+}
+
+function _layScan(){
+  if(_scanBusy)return;
+  var cam=(_fixtures||[]).filter(function(f){return f.fixtureType==='camera'&&f.positioned;})[0];
+  if(!cam){document.getElementById('hs').textContent='No positioned camera fixture';return;}
+  _scanBusy=true;
+  var btn=document.getElementById('btn-lay-scan');
+  if(btn){btn.style.background='#7c3aed';btn.title='Scanning...';}
+  document.getElementById('hs').textContent='Scanning for objects...';
+  ra('POST','/api/cameras/'+cam.id+'/scan',{threshold:0.4,resolution:320},function(r){
+    _scanBusy=false;
+    if(btn){btn.style.background='#4c1d95';btn.title='Scan for objects (camera)';}
+    if(!r||!r.ok){
+      document.getElementById('hs').textContent='Scan failed: '+(r&&r.err||'unknown');
+      return;
+    }
+    _scanGhosts=r.detections||[];
+    if(!_scanGhosts.length){
+      document.getElementById('hs').textContent='No objects detected';
+      drawLayout();return;
+    }
+    document.getElementById('hs').textContent=_scanGhosts.length+' object(s) detected — click to accept or dismiss';
+    drawLayout();
+    if(_layMode==='3d'&&_s3d.inited)_s3dRenderGhosts();
+  });
+}
+
+function _layScanAccept(idx){
+  var g=_scanGhosts[idx];
+  if(!g)return;
+  ra('POST','/api/objects',{
+    name:g.label,
+    objectType:'prop',
+    mobility:'static',
+    color:'#22d3ee',
+    opacity:20,
+    transform:{pos:[g.x,0,g.z],rot:[0,0,0],scale:[g.w,g.h,100]}
+  },function(r){
+    if(r&&r.ok){
+      _scanGhosts.splice(idx,1);
+      loadObjects();
+      document.getElementById('hs').textContent='Added "'+g.label+'" to stage';
+      drawLayout();
+    }
+  });
+}
+
+function _layScanDismiss(idx){
+  _scanGhosts.splice(idx,1);
+  document.getElementById('hs').textContent=_scanGhosts.length?_scanGhosts.length+' remaining':'All dismissed';
+  drawLayout();
+}
+
+function _layScanDismissAll(){
+  _scanGhosts=[];
+  document.getElementById('hs').textContent='Scan results cleared';
+  drawLayout();
 }
 
 function saveLayout(btn){
