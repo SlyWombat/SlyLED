@@ -679,6 +679,82 @@ def scan():
         frameSize=[int(frame.shape[1]), int(frame.shape[0])],
     )
 
+# ── Beam detection (for calibration) ───────────────────────────────────
+
+_beam_detector = None
+
+def _get_beam_detector():
+    global _beam_detector
+    if _beam_detector is None:
+        try:
+            from beam_detector import BeamDetector
+            _beam_detector = BeamDetector()
+        except ImportError:
+            log.warning("beam_detector module not available")
+            return None
+    return _beam_detector
+
+@app.post("/dark-reference")
+def dark_reference():
+    """Capture dark reference frame for beam detection."""
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", -1)  # -1 = all cameras
+    det = _get_beam_detector()
+    if det is None:
+        return jsonify(ok=False, err="Beam detector not available"), 503
+    cameras = _hw_info.get("cameras", [])
+    captured = []
+    cams_to_capture = list(range(len(cameras))) if cam_idx == -1 else [cam_idx]
+    for ci in cams_to_capture:
+        if ci < 0 or ci >= len(cameras):
+            continue
+        frame = _cv_capture(cameras[ci]["device"])
+        if frame is not None:
+            import cv2
+            det.set_dark_frame(ci, frame)
+            captured.append(ci)
+    return jsonify(ok=True, cameras=captured)
+
+@app.post("/beam-detect")
+def beam_detect():
+    """Detect a bright beam spot. Fast (<100ms), color-filtered."""
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    color = body.get("color", None)
+    threshold = body.get("threshold", 30)
+    cameras = _hw_info.get("cameras", [])
+    if cam_idx < 0 or cam_idx >= len(cameras):
+        return jsonify(ok=False, err="Invalid camera index"), 400
+    det = _get_beam_detector()
+    if det is None:
+        return jsonify(ok=False, err="Beam detector not available"), 503
+    frame = _cv_capture(cameras[cam_idx]["device"])
+    if frame is None:
+        return jsonify(ok=False, err="Capture failed"), 503
+    result = det.detect(frame, cam_idx=cam_idx, color=color, threshold=threshold)
+    return jsonify(ok=True, **result)
+
+@app.post("/beam-detect/center")
+def beam_detect_center():
+    """Detect the center beam of a multi-beam fixture."""
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    color = body.get("color", None)
+    threshold = body.get("threshold", 30)
+    beam_count = body.get("beamCount", 3)
+    cameras = _hw_info.get("cameras", [])
+    if cam_idx < 0 or cam_idx >= len(cameras):
+        return jsonify(ok=False, err="Invalid camera index"), 400
+    det = _get_beam_detector()
+    if det is None:
+        return jsonify(ok=False, err="Beam detector not available"), 503
+    frame = _cv_capture(cameras[cam_idx]["device"])
+    if frame is None:
+        return jsonify(ok=False, err="Capture failed"), 503
+    result = det.detect_center(frame, cam_idx=cam_idx, color=color,
+                                threshold=threshold, beam_count=beam_count)
+    return jsonify(ok=True, **result)
+
 # ── Tracking mode ──────────────────────────────────────────────────────
 
 _tracker = None
