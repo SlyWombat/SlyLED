@@ -120,6 +120,7 @@ body.light .li:hover{border-color:#3b82f6}
         <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
         <button class='btn' onclick='autoArrangeDmx()' title='Auto-arrange DMX fixtures' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M1 2h3v2H1zm5 0h3v2H6zm5 0h3v2H11zM4 5l4 9 4-9H4z' opacity='.8'/></svg></button>
         <button class='btn' id='btn-lay-strings' onclick='_layDetailToggle()' title='Show/hide LED strings' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;background:#14532d;color:#86efac'><svg width='16' height='16' viewBox='0 0 16 16' id='lay-detail-svg'><line x1='2' y1='4' x2='14' y2='4' stroke='#22c55e' stroke-width='2'/><line x1='2' y1='8' x2='14' y2='8' stroke='#3b82f6' stroke-width='2'/><line x1='2' y1='12' x2='14' y2='12' stroke='#f59e0b' stroke-width='2'/></svg></button>
+        <button class='btn' id='btn-lay-cones' onclick='_layConesToggle()' title='Show/hide beam cones' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;background:#4c1d95;color:#c4b5fd'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M8 2l5 12H3L8 2zm0 3L5.5 12h5L8 5z' opacity='.8'/></svg></button>
         <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
         <button class='btn' id='btn-lay-scan' onclick='_layScan()' title='Scan for objects (camera)' style='width:32px;height:32px;padding:0;display:none;align-items:center;justify-content:center;background:#4c1d95;color:#c4b5fd'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 2v4h1V3h3V2H2zm8 0v1h3v3h1V2h-4zM2 10v4h4v-1H3v-3H2zm11 0v3h-3v1h4v-4h-1zM5.5 5a3.5 3.5 0 100 7 3.5 3.5 0 000-7zm5 0a3.5 3.5 0 100 7 3.5 3.5 0 000-7z' opacity='.85'/></svg></button>
       </div>
@@ -1874,21 +1875,25 @@ function s3dLoadChildren(){
           var quat=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,-1,0),dir);
           cone.quaternion.copy(quat);
           cone.userData.beamCone=true;
+          cone.visible=_layShowCones;
           grp.add(cone);
           // Aim point sphere (red, draggable)
-          var aimGeo=new THREE.SphereGeometry(0.25,16,16);
+          var aimGeo=new THREE.SphereGeometry(0.08,12,12);
           var aimMat=new THREE.MeshBasicMaterial({color:0xff4444,opacity:0.8,transparent:true});
           var aimSphere=new THREE.Mesh(aimGeo,aimMat);
           aimSphere.position.copy(aimLocal);
           aimSphere.userData.isAimPoint=true;
           aimSphere.userData.fixtureId=_fix3d.id;
+          aimSphere.visible=_layShowCones;
           grp.add(aimSphere);
           // Glow halo ring
-          var glowGeo=new THREE.RingGeometry(0.3,0.45,24);
+          var glowGeo=new THREE.RingGeometry(0.1,0.15,24);
           var glowMat=new THREE.MeshBasicMaterial({color:0xff6666,opacity:0.25,transparent:true,side:THREE.DoubleSide,depthWrite:false});
           var glow=new THREE.Mesh(glowGeo,glowMat);
           glow.position.copy(aimLocal);
           glow.lookAt(_s3d.camera.position);
+          glow.userData.beamCone=true;
+          glow.visible=_layShowCones;
           grp.add(glow);
         }
       }
@@ -4730,6 +4735,26 @@ function emuDraw(){
 }
 
 var _layShowStrings=true;
+var _layShowCones=true;
+function _layConesToggle(){
+  _layShowCones=!_layShowCones;
+  var btn=document.getElementById('btn-lay-cones');
+  if(btn){
+    btn.style.background=_layShowCones?'#4c1d95':'';
+    btn.style.color=_layShowCones?'#c4b5fd':'';
+  }
+  // Toggle cone visibility in 3D scene
+  if(_s3d.inited){
+    _s3d.scene.children.forEach(function(grp){
+      if(!grp.children)return;
+      grp.children.forEach(function(c){
+        if(c.userData&&c.userData.beamCone)c.visible=_layShowCones;
+        if(c.userData&&c.userData.isAimPoint)c.visible=_layShowCones;
+      });
+    });
+  }
+  drawLayout();
+}
 function _layDetailToggle(){
   _layShowStrings=!_layShowStrings;
   var btn=document.getElementById('btn-lay-strings');
