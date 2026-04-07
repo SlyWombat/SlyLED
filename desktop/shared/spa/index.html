@@ -4028,7 +4028,10 @@ function showNodeEdit(f){
   h+='<div style="display:flex;gap:.5em;flex-wrap:wrap">';
   h+='<button class="btn btn-on" onclick="applyNodePos('+f.id+')">Set Position</button>';
   if(ft==='dmx')h+='<button class="btn" style="background:#1e3a5f;color:#93c5fd" onclick="startAimMode('+f.id+')">Click to Aim</button>';
-  if(ft==='camera')h+='<button class="btn" style="background:#7c3aed;color:#e9d5ff" onclick="closeModal();_calWizardStart('+f.id+')">Calibrate'+(f.calibrated?' \u2713':'')+'</button>';
+  if(ft==='camera'){
+    h+='<button class="btn" style="background:#7c3aed;color:#e9d5ff" onclick="closeModal();_calWizardStart('+f.id+')">Calibrate'+(f.calibrated?' \u2713':'')+'</button>';
+    h+='<button class="btn" id="trk-btn-'+f.id+'" style="background:#be185d;color:#fce7f3" onclick="closeModal();_trackToggle('+f.id+')">Track</button>';
+  }
   h+='<button class="btn btn-off" onclick="removeFromCanvas('+f.id+')">Remove from Stage</button>';
   h+='</div>';
   document.getElementById('modal-title').textContent=f.name;
@@ -5033,6 +5036,53 @@ function _calCompute(){
     (_fixtures||[]).forEach(function(f){if(f.id===s.camId)f.calibrated=true;});
     renderSidebar();
   });
+}
+
+// ── Tracking mode — live person markers ──────────────────────────────
+var _trackingCams={};  // {camId: true}
+var _trackPollTimer=null;
+
+function _trackToggle(camId){
+  if(_trackingCams[camId]){
+    _trackStop(camId);
+  }else{
+    _trackStart(camId);
+  }
+}
+
+function _trackStart(camId){
+  document.getElementById('hs').textContent='Starting tracking...';
+  ra('POST','/api/cameras/'+camId+'/track/start',{fps:2,threshold:0.4,ttl:5},function(r){
+    if(r&&r.ok){
+      _trackingCams[camId]=true;
+      document.getElementById('hs').textContent='Tracking active — watching for people';
+      _trackPollStart();
+    }else{
+      document.getElementById('hs').textContent='Track start failed: '+(r&&r.err||'unknown');
+    }
+  });
+}
+
+function _trackStop(camId){
+  ra('POST','/api/cameras/'+camId+'/track/stop',{},function(r){
+    delete _trackingCams[camId];
+    document.getElementById('hs').textContent='Tracking stopped';
+    if(!Object.keys(_trackingCams).length)_trackPollStop();
+  });
+}
+
+function _trackPollStart(){
+  if(_trackPollTimer)return;
+  _trackPollTimer=setInterval(function(){
+    loadObjects(function(){
+      drawLayout();
+      if(_layMode==='3d'&&_s3d.inited)_s3dRenderObjects();
+    });
+  },1500);
+}
+
+function _trackPollStop(){
+  if(_trackPollTimer){clearInterval(_trackPollTimer);_trackPollTimer=null;}
 }
 
 function saveLayout(btn){

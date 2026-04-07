@@ -271,7 +271,7 @@ def status():
         "cameraCount": len(cameras),
         "cameras": cam_list,
         "capabilities": {
-            "tracking": _hw_info.get("tracking", False),
+            "tracking": (_tracker.running if _tracker else False),
             "hasCamera": _hw_info.get("hasCamera", False),
             "scan": _get_detector() is not None,
         },
@@ -677,6 +677,83 @@ def scan():
         resolution=resolution,
         camera=cam_idx,
         frameSize=[int(frame.shape[1]), int(frame.shape[0])],
+    )
+
+# ── Tracking mode ──────────────────────────────────────────────────────
+
+_tracker = None
+
+def _get_tracker():
+    """Get or create the tracker instance."""
+    global _tracker
+    if _tracker is not None:
+        return _tracker
+    det = _get_detector()
+    if det is None:
+        return None
+    try:
+        from tracker import Tracker
+        _tracker = Tracker(
+            detector=det,
+            capture_fn=_cv_capture,
+            orchestrator_url="",  # Set on start
+            camera_id=0,
+            pixel_to_stage_fn=None,  # Orchestrator handles transform
+        )
+        return _tracker
+    except ImportError:
+        log.warning("tracker module not available")
+        return None
+
+@app.post("/track/start")
+def track_start():
+    """Start continuous tracking on a camera."""
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    orch_url = body.get("orchestratorUrl", "")
+    camera_id = body.get("cameraId", 0)
+    fps = body.get("fps", 2)
+    threshold = body.get("threshold", 0.4)
+    ttl = body.get("ttl", 5)
+
+    cameras = _hw_info.get("cameras", [])
+    if cam_idx < 0 or cam_idx >= len(cameras):
+        return jsonify(ok=False, err="Invalid camera index"), 400
+
+    tracker = _get_tracker()
+    if tracker is None:
+        return jsonify(ok=False, err="Tracker not available"), 503
+
+    if tracker.running:
+        return jsonify(ok=True, message="Already tracking")
+
+    # Configure tracker
+    tracker._orch_url = orch_url
+    tracker._cam_id = camera_id
+    tracker._fps = fps
+    tracker._threshold = threshold
+    tracker._ttl = ttl
+    tracker.start(cameras[cam_idx]["device"])
+
+    _hw_info["tracking"] = True
+    return jsonify(ok=True, message="Tracking started")
+
+@app.post("/track/stop")
+def track_stop():
+    """Stop continuous tracking."""
+    tracker = _get_tracker()
+    if tracker and tracker.running:
+        tracker.stop()
+    _hw_info["tracking"] = False
+    return jsonify(ok=True, message="Tracking stopped")
+
+@app.get("/track/status")
+def track_status():
+    """Get current tracking state."""
+    tracker = _get_tracker()
+    return jsonify(
+        running=tracker.running if tracker else False,
+        trackCount=tracker.track_count if tracker else 0,
     )
 
 # ── UDP protocol (PING/PONG + STATUS) ─────────────────────────────────

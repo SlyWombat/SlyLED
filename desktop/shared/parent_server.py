@@ -1616,6 +1616,73 @@ def api_camera_calibration_get(fid):
                    timestamp=cal.get("timestamp"))
 
 
+# ── Camera tracking — orchestrator proxy ──────────────────────────────
+
+_tracking_state = {}  # {cam_fid: True/False}
+
+@app.post("/api/cameras/<int:fid>/track/start")
+def api_camera_track_start(fid):
+    """Start tracking on a camera node."""
+    f = next((f for f in _fixtures if f["id"] == fid and f.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    body = request.get_json(silent=True) or {}
+    local_ip = _get_local_ip()
+    port = request.host.split(":")[-1] if ":" in request.host else "8080"
+    try:
+        import urllib.request as _ur
+        req_data = json.dumps({
+            "cam": body.get("cam", 0),
+            "orchestratorUrl": f"http://{local_ip}:{port}",
+            "cameraId": fid,
+            "fps": body.get("fps", 2),
+            "threshold": body.get("threshold", 0.4),
+            "ttl": body.get("ttl", 5),
+        }).encode()
+        req = _ur.Request(f"http://{ip}:5000/track/start",
+                          data=req_data,
+                          headers={"Content-Type": "application/json"})
+        resp = _ur.urlopen(req, timeout=10)
+        r = json.loads(resp.read().decode())
+    except Exception as e:
+        return jsonify(err=f"Failed to start tracking: {e}"), 503
+    _tracking_state[fid] = True
+    return jsonify(ok=True, tracking=True)
+
+
+@app.post("/api/cameras/<int:fid>/track/stop")
+def api_camera_track_stop(fid):
+    """Stop tracking on a camera node."""
+    f = next((f for f in _fixtures if f["id"] == fid and f.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    try:
+        import urllib.request as _ur
+        req = _ur.Request(f"http://{ip}:5000/track/stop",
+                          data=b"{}",
+                          headers={"Content-Type": "application/json"})
+        _ur.urlopen(req, timeout=5)
+    except Exception:
+        pass  # Camera may be offline — still mark as stopped
+    _tracking_state.pop(fid, None)
+    return jsonify(ok=True, tracking=False)
+
+
+@app.get("/api/cameras/<int:fid>/track/status")
+def api_camera_track_status(fid):
+    """Get tracking state for a camera."""
+    f = next((f for f in _fixtures if f["id"] == fid and f.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    return jsonify(tracking=_tracking_state.get(fid, False))
+
+
 def _get_local_ip():
     """Get local IP by connecting a UDP socket (no traffic sent)."""
     try:

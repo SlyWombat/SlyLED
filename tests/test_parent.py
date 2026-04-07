@@ -601,7 +601,60 @@ def run():
         r = c.post(f'/api/cameras/{cal_cam_id}/calibrate/start')
         ok('Calibrate insufficient refs → 400', r.status_code == 400)
 
+        # ── Tracking API tests ────────────────────────────────────
+        # Track start on offline camera → 503
+        r = c.post(f'/api/cameras/{cal_cam_id}/track/start', json={})
+        ok('Track start offline → 503', r.status_code == 503)
+
+        # Track stop (idempotent even when not tracking)
+        r = c.post(f'/api/cameras/{cal_cam_id}/track/stop', json={})
+        ok('Track stop ok', r.status_code == 200)
+
+        # Track status
+        r = c.get(f'/api/cameras/{cal_cam_id}/track/status')
+        ok('Track status shape', r.status_code == 200 and 'tracking' in r.get_json())
+        ok('Track not running', r.get_json().get('tracking') is False)
+
+        # Unknown camera track → 404
+        r = c.post('/api/cameras/99999/track/start', json={})
+        ok('Track unknown → 404', r.status_code == 404)
+
+        r = c.get('/api/cameras/99999/track/status')
+        ok('Track status unknown → 404', r.status_code == 404)
+
+        # ── Temporal objects (tracking integration) ──────────────
+        # Create temporal object like tracker would
+        r = c.post('/api/objects/temporal', json={
+            'name': 'person', 'objectType': 'person',
+            'ttl': 10, 'color': '#f472b6', 'opacity': 40,
+            'transform': {'pos': [1500, 0, 750], 'rot': [0,0,0], 'scale': [400, 400, 200]}
+        })
+        ok('Temporal person created', r.status_code == 200 or r.status_code == 201)
+        tmp_id = r.get_json().get('id')
+        ok('Temporal ID >= 10000', tmp_id is not None and tmp_id >= 10000,
+           f'id={tmp_id}')
+
+        # Verify in object list
+        r = c.get('/api/objects')
+        objs = r.get_json()
+        tmp_obj = next((o for o in objs if o.get('id') == tmp_id), None)
+        ok('Temporal person in list', tmp_obj is not None)
+        ok('Temporal is moving', tmp_obj.get('mobility') == 'moving')
+        ok('Temporal is temporal', tmp_obj.get('_temporal') is True)
+        ok('Temporal objectType is person', tmp_obj.get('objectType') == 'person')
+
+        # Update position (like tracker re-ID would)
+        r = c.put(f'/api/objects/{tmp_id}/pos', json={'pos': [1600, 0, 800]})
+        ok('Temporal pos update ok', r.status_code == 200)
+
+        # Persistent objects not affected
+        r = c.post('/api/objects', json={'name': 'Wall', 'objectType': 'wall'})
+        wall_id = r.get_json().get('id')
+        ok('Persistent object has low ID', wall_id < 10000, f'id={wall_id}')
+
         # Clean up
+        c.delete(f'/api/objects/{tmp_id}')
+        c.delete(f'/api/objects/{wall_id}')
         c.delete(f'/api/cameras/{cal_cam_id}')
 
         # Unknown camera → 404
@@ -1168,6 +1221,10 @@ def run():
         ok('SPA has calibration compute', '_calCompute' in spa)
         ok('SPA has cone toggle', '_layConesToggle' in spa)
         ok('SPA has cone toggle button', 'btn-lay-cones' in spa)
+        ok('SPA has tracking toggle', '_trackToggle' in spa)
+        ok('SPA has tracking start', '_trackStart' in spa)
+        ok('SPA has tracking stop', '_trackStop' in spa)
+        ok('SPA has track poll', '_trackPollStart' in spa)
         # Toolbar tooltips on all buttons
         ok('SPA toolbar: save tooltip', "title='Save layout'" in spa)
         ok('SPA toolbar: mode tooltip', "title='Switch to 3D'" in spa or "title='Switch to 2D'" in spa)
