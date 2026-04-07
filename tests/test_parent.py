@@ -1069,6 +1069,7 @@ def run():
         ok('SPA has _scanGhosts', '_scanGhosts' in spa)
         ok('SPA has ghost accept', '_layScanAccept' in spa)
         ok('SPA has ghost dismiss', '_layScanDismiss' in spa)
+        ok('SPA has 3D ghost render', '_s3dRenderGhosts' in spa)
         # Toolbar tooltips on all buttons
         ok('SPA toolbar: save tooltip', "title='Save layout'" in spa)
         ok('SPA toolbar: mode tooltip', "title='Switch to 3D'" in spa or "title='Switch to 2D'" in spa)

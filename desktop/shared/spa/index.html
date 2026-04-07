@@ -1978,6 +1978,42 @@ function _s3dRenderObjects(){
   });
 }
 
+function _s3dRenderGhosts(){
+  if(!_s3d.inited)return;
+  // Remove old ghosts
+  var toRemove=[];
+  _s3d.scene.children.forEach(function(c){if(c.userData.scanGhost)toRemove.push(c);});
+  toRemove.forEach(function(c){c.traverse(function(obj){
+    if(obj.geometry)obj.geometry.dispose();
+    if(obj.material)obj.material.dispose();
+  });_s3d.scene.remove(c);});
+  // Render each ghost as a translucent cyan box
+  (_scanGhosts||[]).forEach(function(g,gi){
+    var grp=new THREE.Group();
+    grp.userData.scanGhost=true;
+    grp.userData.ghostIdx=gi;
+    grp.position.set((g.x||0)/1000,0,(g.z||0)/1000);
+    var sw=(g.w||200)/1000,sh=(g.h||200)/1000,sd=0.1;
+    var geo=new THREE.BoxGeometry(sw,sh,sd);
+    var mat=new THREE.MeshBasicMaterial({color:0x22d3ee,opacity:0.2,transparent:true,side:THREE.DoubleSide});
+    var mesh=new THREE.Mesh(geo,mat);
+    mesh.position.set(0,sh/2,0);
+    grp.add(mesh);
+    // Dashed wireframe
+    var edgeGeo=new THREE.EdgesGeometry(geo);
+    var edgeMat=new THREE.LineDashedMaterial({color:0x22d3ee,dashSize:0.1,gapSize:0.05,opacity:0.8,transparent:true});
+    var edge=new THREE.LineSegments(edgeGeo,edgeMat);
+    edge.computeLineDistances();
+    edge.position.copy(mesh.position);
+    grp.add(edge);
+    // Label
+    var lbl=_s3dLabel(g.label+' '+Math.round(g.confidence*100)+'%');
+    lbl.position.set(0,sh+0.15,0);
+    grp.add(lbl);
+    _s3d.scene.add(grp);
+  });
+}
+
 function _s3dPos(c){
   // Direct mapping: layout X→3D X, layout Y→3D Y (height), layout Z→3D Z (depth)
   // 2D canvas is the front view (XY plane), 3D adds depth on Z
@@ -4803,9 +4839,11 @@ function _layScanAccept(idx){
   },function(r){
     if(r&&r.ok){
       _scanGhosts.splice(idx,1);
-      loadObjects();
+      loadObjects(function(){
+        drawLayout();
+        if(_layMode==='3d'&&_s3d.inited){s3dLoadChildren();_s3dRenderGhosts();}
+      });
       document.getElementById('hs').textContent='Added "'+g.label+'" to stage';
-      drawLayout();
     }
   });
 }
@@ -4814,12 +4852,14 @@ function _layScanDismiss(idx){
   _scanGhosts.splice(idx,1);
   document.getElementById('hs').textContent=_scanGhosts.length?_scanGhosts.length+' remaining':'All dismissed';
   drawLayout();
+  if(_layMode==='3d'&&_s3d.inited)_s3dRenderGhosts();
 }
 
 function _layScanDismissAll(){
   _scanGhosts=[];
   document.getElementById('hs').textContent='Scan results cleared';
   drawLayout();
+  if(_layMode==='3d'&&_s3d.inited)_s3dRenderGhosts();
 }
 
 function saveLayout(btn){
