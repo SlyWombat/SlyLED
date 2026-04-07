@@ -70,14 +70,17 @@ Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask s
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/status` | JSON status (hostname, cameras, uptime) |
-| GET | `/config` | HTML config page |
-| GET | `/snapshot?cam=N` | JPEG snapshot from camera N |
+| GET | `/status` | JSON status (hostname, cameras, capabilities, uptime) |
+| GET | `/config` | HTML config SPA (dashboard + settings, detection UI) |
+| GET | `/snapshot?cam=N` | JPEG snapshot from camera N (OpenCV → fswebcam fallback) |
+| POST | `/scan` | Object detection — YOLOv8n via ONNX Runtime |
 | GET | `/health` | Health check |
 
-- **Systemd service:** `slyled-cam` for auto-start on boot
+- **Systemd service:** `slyled-cam` for auto-start on boot (tracked in `firmware/orangepi/slyled-cam.service`)
 - **Multi-camera support:** Filters SoC video nodes, only exposes real USB cameras
-- **Deploy:** SSH+SCP from the Firmware tab in the SPA; setup script at `firmware/orangepi/flash.ps1`
+- **Object detection:** `firmware/orangepi/detector.py` — YOLOv8n ONNX model via onnxruntime (falls back to OpenCV DNN). Model deployed via SCP (`models/yolov8n.onnx`, 12 MB, gitignored). Returns bounding boxes with labels and confidence scores.
+- **Config page:** Per-camera cards with Capture Frame + Detect Objects buttons, threshold slider, resolution toggle (320/640), auto-refresh, canvas overlay with bounding boxes
+- **Deploy:** SSH+SCP from the Firmware tab in the SPA; uploads `camera_server.py`, `detector.py`, `requirements.txt`, `slyled-cam.service`, and `models/yolov8n.onnx`. Version comparison with force-reinstall option.
 
 **Giga board roles:** The Giga R1 compiles in two modes:
 - `BOARD_GIGA` (default) — runtime Orchestrator with minimal SPA for start/stop
@@ -102,7 +105,9 @@ Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask s
 | `desktop/shared/dmx_artnet.py` | Art-Net engine — universe buffers, ArtDMX/ArtPoll output |
 | `desktop/shared/community_client.py` | Community profile server client (electricrv.ca) |
 | `firmware/registry.json` | Firmware binary registry (board, version, file) |
-| `firmware/orangepi/camera_server.py` | Camera node firmware — Flask HTTP + UDP PONG |
+| `firmware/orangepi/camera_server.py` | Camera node firmware — Flask HTTP + UDP PONG + detection |
+| `firmware/orangepi/detector.py` | YOLOv8n object detection via ONNX Runtime |
+| `firmware/orangepi/slyled-cam.service` | Systemd unit file for camera service |
 | `firmware/orangepi/flash.ps1` | SSH+SCP deploy script for camera nodes |
 
 **Running on Windows:** `powershell.exe -ExecutionPolicy Bypass -File desktop\windows\run.ps1`
@@ -258,13 +263,13 @@ powershell.exe -Command "python tests/discover.py"
 
 Tests restore factory state before and after string config tests. If a test run is interrupted, factory-reset the child manually via `POST /config/reset`.
 
-### Test suite (camera — 45 assertions)
+### Test suite (camera — 67 assertions)
 
 ```
 powershell.exe -Command "python -X utf8 tests/test_camera.py [host] [http_port] [udp_port]"
 ```
 
-Covers camera node HTTP endpoints, UDP PONG response, snapshot capture, and config.
+Covers camera node HTTP endpoints, UDP PONG response, snapshot capture, object detection `/scan`, config page UI, and detection overlay controls.
 
 ---
 

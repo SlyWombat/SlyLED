@@ -5597,40 +5597,80 @@ function _camScanBoards(){
     },500);
   });
 }
-function _camDeploy(ip){
-  // Show deploy progress in a modal dialog
-  document.getElementById('modal-title').textContent='Deploying to '+ip;
+function _camDeploy(ip,force){
+  document.getElementById('modal-title').textContent=(force?'Force reinstall':'Deploy')+' \u2014 '+ip;
   document.getElementById('modal-body').innerHTML=
-    '<div style="min-width:350px">'
-    +'<div class="prog-bar" style="height:12px;margin-bottom:.6em"><div class="prog-fill" id="cam-deploy-fill" style="width:0%;transition:width .3s"></div></div>'
-    +'<div id="cam-deploy-msg" style="font-size:.85em;color:#94a3b8;margin-bottom:.4em">Starting...</div>'
+    '<div style="min-width:380px">'
+    +'<div id="cam-deploy-ver" style="font-size:.82em;color:#94a3b8;margin-bottom:.5em"></div>'
+    +'<div class="prog-bar" style="height:12px;margin-bottom:.5em"><div class="prog-fill" id="cam-deploy-fill" style="width:0%;transition:width .3s"></div></div>'
+    +'<div id="cam-deploy-step" style="font-size:.82em;color:#64748b;margin-bottom:.2em"></div>'
+    +'<div id="cam-deploy-msg" style="font-size:.85em;color:#94a3b8;margin-bottom:.4em">Connecting...</div>'
     +'<div id="cam-deploy-log" style="max-height:200px;overflow-y:auto;font-family:monospace;font-size:.75em;background:#0f172a;border:1px solid #334155;border-radius:4px;padding:.4em;color:#64748b"></div>'
+    +'<div id="cam-deploy-actions" style="margin-top:.6em;display:none"></div>'
     +'</div>';
   document.getElementById('modal').style.display='block';
 
-  ra('POST','/api/cameras/deploy',{ip:ip},function(r){
+  // Map progress ranges to human-readable step names
+  var steps=[
+    [0,4,'Checking version'],[5,9,'SSH connect'],[10,24,'Pre-flight checks'],
+    [25,29,'Creating directories'],[30,39,'Uploading firmware'],
+    [40,49,'Installing system packages'],[50,59,'Installing Python dependencies'],
+    [60,69,'Setting up detection model'],[70,79,'Configuring service'],
+    [80,89,'Starting server'],[90,99,'Verifying'],[100,100,'Done']
+  ];
+  function stepLabel(pct){
+    for(var i=0;i<steps.length;i++){if(pct>=steps[i][0]&&pct<=steps[i][1])return steps[i][2];}
+    return '';
+  }
+
+  ra('POST','/api/cameras/deploy',{ip:ip,force:!!force},function(r){
     if(r&&r.err){
       document.getElementById('cam-deploy-msg').innerHTML='<span style="color:#f66">'+escapeHtml(r.err)+'</span>';
       _camDeployLog('Error: '+r.err);
+      _camDeployShowActions(ip,true);
       return;
     }
-    _camDeployLog('Deploy started for '+ip+'...');
-    var lastMsg='';
+    _camDeployLog('Deploy started for '+ip+(force?' (forced)':'')+'...');
+    var lastMsg='',lastStep='';
     var poll=setInterval(function(){
       ra('GET','/api/cameras/deploy/status',null,function(s){
         var fill=document.getElementById('cam-deploy-fill');
         var msg=document.getElementById('cam-deploy-msg');
+        var stepEl=document.getElementById('cam-deploy-step');
+        var verEl=document.getElementById('cam-deploy-ver');
         if(!fill||!msg){clearInterval(poll);return;}
         fill.style.width=s.progress+'%';
+
+        // Show version comparison when available
+        if(verEl&&(s.localVersion||s.remoteVersion)){
+          var vt='';
+          if(s.remoteVersion&&s.localVersion&&s.remoteVersion!==s.localVersion)
+            vt='Upgrade: v'+s.remoteVersion+' \u2192 v'+s.localVersion;
+          else if(s.remoteVersion&&s.localVersion&&s.remoteVersion===s.localVersion)
+            vt='Reinstall: v'+s.localVersion;
+          else if(s.localVersion&&!s.remoteVersion)
+            vt='Fresh install: v'+s.localVersion;
+          if(vt)verEl.textContent=vt;
+        }
+
+        // Show current step
+        var sl=stepLabel(s.progress);
+        if(stepEl&&sl&&sl!==lastStep){
+          lastStep=sl;
+          stepEl.textContent='Step: '+sl;
+        }
+
         if(s.error){
           msg.innerHTML='<span style="color:#ef4444">\u2718 '+escapeHtml(s.error)+'</span>';
           fill.style.background='#ef4444';
+          if(stepEl)stepEl.style.color='#ef4444';
           _camDeployLog('ERROR: '+s.error);
+          _camDeployShowActions(ip,true);
           clearInterval(poll);return;
         }
         if(s.message!==lastMsg){
           lastMsg=s.message;
-          msg.textContent=s.progress+'% \u2014 '+s.message;
+          msg.textContent=s.message;
           _camDeployLog('['+s.progress+'%] '+s.message);
         }
         if(!s.running){
@@ -5638,14 +5678,32 @@ function _camDeploy(ip){
           if(s.progress>=95){
             msg.innerHTML='<span style="color:#4ade80">\u2713 '+escapeHtml(s.message)+'</span>';
             fill.style.background='#059669';
-            _camDeployLog('Deploy complete!');
-            // Refresh camera lists after a short delay
+            if(stepEl)stepEl.textContent='';
+            _camDeployLog('Complete!');
+            _camDeployShowActions(ip,false);
             setTimeout(function(){_camFwRefresh();},2000);
           }
         }
       });
     },800);
   });
+}
+function _camDeployShowActions(ip,isError){
+  var el=document.getElementById('cam-deploy-actions');
+  if(!el)return;
+  el.style.display='flex';
+  el.style.gap='.4em';
+  el.style.flexWrap='wrap';
+  if(isError){
+    el.innerHTML=
+      '<button class="btn" onclick="_camDeploy(\''+ip+'\',false)" style="background:#0e7490;color:#fff;font-size:.82em;padding:.3em .8em">Retry</button>'
+      +'<button class="btn" onclick="_camDeploy(\''+ip+'\',true)" style="background:#475569;color:#e2e8f0;font-size:.82em;padding:.3em .8em">Force Reinstall</button>'
+      +'<button class="btn" onclick="closeModal()" style="background:#334155;color:#94a3b8;font-size:.82em;padding:.3em .8em">Close</button>';
+  }else{
+    el.innerHTML=
+      '<button class="btn" onclick="_camDeploy(\''+ip+'\',true)" style="background:#475569;color:#e2e8f0;font-size:.82em;padding:.3em .8em">Force Reinstall</button>'
+      +'<button class="btn" onclick="closeModal()" style="background:#334155;color:#94a3b8;font-size:.82em;padding:.3em .8em">Close</button>';
+  }
 }
 function _camDeployLog(text){
   var el=document.getElementById('cam-deploy-log');

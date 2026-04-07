@@ -13,10 +13,11 @@
 10. [Show Preview Emulator](#10-show-preview)
 11. [DMX Fixture Profiles](#11-dmx-profiles)
 12. [Preset Shows](#12-presets)
-13. [Firmware & OTA Updates](#13-firmware)
-14. [System Limits](#14-limits)
-15. [Troubleshooting](#15-troubleshooting)
-16. [API Quick Reference](#16-api)
+13. [Camera Nodes](#13-cameras)
+14. [Firmware & OTA Updates](#14-firmware)
+15. [System Limits](#15-limits)
+16. [Troubleshooting](#16-troubleshooting)
+17. [API Quick Reference](#17-api)
 
 ---
 
@@ -377,7 +378,50 @@ Community server: https://electricrv.ca/api/profiles/
 
 ---
 
-## 13. Firmware & OTA Updates
+## 13. Camera Nodes
+
+Camera nodes are Orange Pi or Raspberry Pi single-board computers with USB cameras. They provide live snapshots and AI-powered object detection for stage setup.
+
+### Adding a Camera Node
+1. Flash an Orange Pi with the supported OS image
+2. Connect it to the same WiFi network as the orchestrator
+3. In the **Firmware** tab, configure SSH credentials (default: `root` / `orangepi`)
+4. Click **Scan for Boards** to find the device on the network
+5. Click **Install** to deploy the camera firmware via SSH+SCP
+
+### Camera Config Page
+Each camera node serves a local web interface at `http://<camera-ip>:5000/config`:
+- **Dashboard** — board info, per-camera cards with live capture and detection
+- **Settings** — device name, reboot, factory reset
+
+### Snapshots
+Click **Capture Frame** on any camera card to take a JPEG snapshot. Uses OpenCV for fast capture with fswebcam fallback.
+
+### Object Detection
+Click **Detect Objects** (purple button) to run YOLOv8n AI detection on the current camera frame:
+- Bounding boxes with labels and confidence percentages are drawn on a canvas overlay
+- **Threshold slider** (0.1–0.9) — filter by detection confidence
+- **Resolution** (320/640) — lower is faster, higher is more accurate
+- **Auto checkbox** — continuously detect every 3 seconds
+- Typical latency: ~500ms capture + ~500ms inference on Orange Pi 4A
+
+Detection requires the YOLOv8n ONNX model (`models/yolov8n.onnx`, 12 MB), which is uploaded automatically during firmware deployment.
+
+### Camera Deploy
+The deploy process (from the **Firmware** tab) uploads all camera files via SCP:
+- `camera_server.py`, `detector.py`, `requirements.txt`, `slyled-cam.service`
+- `models/yolov8n.onnx` (detection model)
+- Installs system packages (`python3-opencv`, `python3-numpy`, `v4l-utils`)
+- Installs Python packages (`flask`, `zeroconf`, `onnxruntime`)
+- Sets up the `slyled-cam` systemd service for auto-start on boot
+- Shows version comparison and supports force-reinstall
+
+### Multi-Camera Support
+Each node can host multiple USB cameras. The firmware auto-detects connected cameras and filters out internal SoC video nodes. Each camera gets its own card in the config page with independent capture and detection controls.
+
+---
+
+## 14. Firmware & OTA Updates
 
 ### USB Flash
 1. Go to **Firmware** tab
@@ -395,7 +439,7 @@ Community server: https://electricrv.ca/api/profiles/
 
 ---
 
-## 14. System Limits
+## 15. System Limits
 
 | Resource | Tested | Recommended Max |
 |----------|--------|-----------------|
@@ -415,7 +459,7 @@ See `docs/STRESS_TEST.md` for full benchmark data.
 
 ---
 
-## 15. Troubleshooting
+## 16. Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
@@ -430,7 +474,7 @@ See `docs/STRESS_TEST.md` for full benchmark data.
 
 ---
 
-## 16. API Quick Reference
+## 17. API Quick Reference
 
 ### Stage & Layout
 | Method | Endpoint | Description |
@@ -462,3 +506,26 @@ See `docs/STRESS_TEST.md` for full benchmark data.
 | GET | `/api/dmx-profiles` | List profiles |
 | GET | `/api/dmx/patch` | Universe address map |
 | POST | `/api/dmx/start`, `/api/dmx/stop` | Engine control |
+
+### Cameras
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/cameras` | List registered camera fixtures |
+| POST | `/api/cameras` | Register a camera node as fixture |
+| DELETE | `/api/cameras/:id` | Remove camera fixture |
+| GET | `/api/cameras/:id/snapshot` | Proxy JPEG snapshot |
+| GET | `/api/cameras/:id/status` | Live status from camera node |
+| POST | `/api/cameras/:id/scan` | Object detection (proxy to node `/scan`) |
+| GET | `/api/cameras/discover` | Find camera nodes on network |
+| GET/POST | `/api/cameras/ssh` | SSH credentials for deployment |
+| POST | `/api/cameras/deploy` | Deploy firmware to camera node via SSH+SCP |
+| GET | `/api/cameras/deploy/status` | Poll deploy progress |
+
+### Camera Node Local API (port 5000)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/status` | Node status, capabilities, camera list |
+| GET | `/config` | HTML config page with detection UI |
+| GET | `/snapshot?cam=N` | JPEG snapshot from camera N |
+| POST | `/scan` | Object detection (JSON: cam, threshold, resolution, classes) |
+| GET | `/health` | Health check |

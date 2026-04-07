@@ -1354,10 +1354,24 @@ def api_cameras_scan_network_results():
 
 # ── Camera deploy via SSH+SCP ───────────────────────────────────────────
 
-_deploy_status = {"running": False, "progress": 0, "message": "", "error": None, "ip": ""}
+_deploy_status = {"running": False, "progress": 0, "message": "", "error": None,
+                  "ip": "", "remoteVersion": None, "localVersion": None}
 _deploy_lock = threading.Lock()
 
-def _deploy_camera_bg(ip):
+def _camera_local_version():
+    """Read VERSION from the local camera_server.py source."""
+    src = _FW_DIR / "orangepi" / "camera_server.py"
+    if not src.exists():
+        return None
+    try:
+        for line in src.read_text().splitlines():
+            if line.startswith("VERSION"):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return None
+
+def _deploy_camera_bg(ip, force=False):
     """Deploy camera_server.py to a remote SBC via SSH+SCP."""
     def _update(progress, message, error=None):
         with _deploy_lock:
@@ -1370,7 +1384,28 @@ def _deploy_camera_bg(ip):
             _deploy_status["running"] = False
         return
 
+    local_ver = _camera_local_version()
+    with _deploy_lock:
+        _deploy_status["localVersion"] = local_ver
+
     try:
+        # ── Version check ──────────────────────────────────────────
+        _update(2, "Checking remote version...")
+        remote_info = _probe_camera(ip, timeout=3)
+        remote_ver = remote_info.get("fwVersion") if remote_info else None
+        with _deploy_lock:
+            _deploy_status["remoteVersion"] = remote_ver
+
+        if remote_ver and local_ver and remote_ver == local_ver and not force:
+            _update(100, f"Already up-to-date \u2014 v{remote_ver}")
+            return
+
+        if remote_ver:
+            _update(3, f"Upgrading {remote_ver} \u2192 {local_ver}...")
+        else:
+            _update(3, f"Fresh install \u2014 v{local_ver}...")
+
+        # ── SSH connect ────────────────────────────────────────────
         _update(5, f"Connecting to {ip} via SSH...")
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -1427,31 +1462,63 @@ def _deploy_camera_bg(ip):
                     _deploy_status["running"] = False
                 return
 
-        _update(10, "Checking pip3...")
+        # ── Pre-flight checks ──────────────────────────────────────
+        _update(10, "Pre-flight checks...")
+        _, stdout, _ = ssh.exec_command("python3 --version")
+        py_out = stdout.read().decode().strip()
+        if not py_out:
+            _update(0, "Python3 not found on device", error="python3 is required")
+            ssh.close()
+            return
+
         _, stdout, _ = ssh.exec_command("which pip3")
         if not stdout.read().decode().strip():
             _update(15, "Installing pip3...")
             _, stdout, stderr = ssh.exec_command(
                 "apt-get update -qq && apt-get install -y -qq python3-pip", timeout=120)
-            stdout.channel.recv_exit_status()
+            exit_code = stdout.channel.recv_exit_status()
+            if exit_code != 0:
+                err = stderr.read().decode("utf-8", errors="replace")[:300]
+                _update(0, "Failed to install pip3", error=err)
+                ssh.close()
+                return
 
+        # ── Create target directory ────────────────────────────────
         _update(25, "Creating /opt/slyled...")
-        ssh.exec_command("mkdir -p /opt/slyled")
-        time.sleep(0.5)
+        _, stdout, _ = ssh.exec_command("mkdir -p /opt/slyled/models")
+        stdout.channel.recv_exit_status()
 
-        _update(30, "Uploading camera_server.py...")
+        # ── Upload firmware files ──────────────────────────────────
+        _update(30, "Uploading firmware files...")
         sftp = ssh.open_sftp()
         src_dir = _FW_DIR / "orangepi"
-        sftp.put(str(src_dir / "camera_server.py"), "/opt/slyled/camera_server.py")
-
-        _update(40, "Uploading requirements.txt...")
-        sftp.put(str(src_dir / "requirements.txt"), "/opt/slyled/requirements.txt")
+        for fname in ("camera_server.py", "detector.py", "requirements.txt",
+                       "slyled-cam.service"):
+            src = src_dir / fname
+            if src.exists():
+                sftp.put(str(src), f"/opt/slyled/{fname}")
+        # Upload YOLO model if present locally
+        model_src = src_dir / "models" / "yolov8n.onnx"
+        if model_src.exists():
+            _update(35, "Uploading detection model (~12 MB)...")
+            try:
+                sftp.stat("/opt/slyled/models")
+            except FileNotFoundError:
+                sftp.mkdir("/opt/slyled/models")
+            sftp.put(str(model_src), "/opt/slyled/models/yolov8n.onnx")
         sftp.close()
 
-        _update(45, "Installing system packages...")
-        ssh.exec_command("apt-get install -y fswebcam 2>/dev/null || true")
-        time.sleep(2)
+        # ── Install system packages ────────────────────────────────
+        _update(40, "Installing system packages...")
+        _, stdout, stderr = ssh.exec_command(
+            "apt-get install -y -qq fswebcam python3-opencv python3-numpy v4l-utils",
+            timeout=120)
+        exit_code = stdout.channel.recv_exit_status()
+        if exit_code != 0:
+            err = stderr.read().decode("utf-8", errors="replace")[:300]
+            log.warning("apt-get partial failure (continuing): %s", err)
 
+        # ── Install Python dependencies ────────────────────────────
         _update(50, "Installing Python dependencies...")
         _, stdout, stderr = ssh.exec_command(
             "cd /opt/slyled && pip3 install --break-system-packages -r requirements.txt 2>&1",
@@ -1468,42 +1535,39 @@ def _deploy_camera_bg(ip):
                 ssh.close()
                 return
 
-        _update(70, "Setting up systemd service...")
-        ssh.exec_command("systemctl stop slyled-cam 2>/dev/null || pkill -f camera_server.py || true")
-        time.sleep(1)
-        # Create systemd unit so it starts on boot and restarts on crash
-        unit = (
-            "[Unit]\n"
-            "Description=SlyLED Camera Node\n"
-            "After=network-online.target\n"
-            "Wants=network-online.target\n\n"
-            "[Service]\n"
-            "Type=simple\n"
-            "WorkingDirectory=/opt/slyled\n"
-            "ExecStart=/usr/bin/python3 -u /opt/slyled/camera_server.py\n"
-            "Restart=on-failure\n"
-            "RestartSec=5\n"
-            "StandardOutput=journal+console\n"
-            "StandardError=journal+console\n\n"
-            "[Install]\n"
-            "WantedBy=multi-user.target\n"
-        )
-        sftp2 = ssh.open_sftp()
-        with sftp2.file("/etc/systemd/system/slyled-cam.service", "w") as f:
-            f.write(unit)
-        sftp2.close()
-        ssh.exec_command("systemctl daemon-reload && systemctl enable slyled-cam")
-        time.sleep(1)
+        # ── Verify detection model ─────────────────────────────────
+        _update(60, "Checking detection model...")
+        _, stdout, _ = ssh.exec_command("test -f /opt/slyled/models/yolov8n.onnx && echo EXISTS")
+        if "EXISTS" in stdout.read().decode():
+            _update(65, "Detection model present")
+        else:
+            log.warning("yolov8n.onnx not on device (not bundled locally?) — scan will be unavailable")
 
+        # ── Install systemd service ────────────────────────────────
+        _update(70, "Setting up systemd service...")
+        ssh.exec_command("systemctl stop slyled-cam 2>/dev/null || true")
+        time.sleep(1)
+        # Copy tracked service file from upload to systemd
+        _, stdout, _ = ssh.exec_command(
+            "cp /opt/slyled/slyled-cam.service /etc/systemd/system/slyled-cam.service "
+            "&& systemctl daemon-reload && systemctl enable slyled-cam")
+        stdout.channel.recv_exit_status()
+
+        # ── Start and verify ───────────────────────────────────────
         _update(80, "Starting camera server...")
-        ssh.exec_command("systemctl start slyled-cam")
+        _, stdout, _ = ssh.exec_command("systemctl start slyled-cam")
+        stdout.channel.recv_exit_status()
         ssh.close()
 
         _update(90, "Verifying camera server...")
         time.sleep(3)
         info = _probe_camera(ip, timeout=5)
         if info:
-            _update(100, f"Deploy complete \u2014 {info.get('hostname', ip)} online")
+            new_ver = info.get("fwVersion", "?")
+            if remote_ver:
+                _update(100, f"Upgrade complete \u2014 v{remote_ver} \u2192 v{new_ver}")
+            else:
+                _update(100, f"Deploy complete \u2014 {info.get('hostname', ip)} v{new_ver} online")
         else:
             _update(95, "Server started but not yet responding (may need a few seconds)")
     except Exception as e:
@@ -1519,14 +1583,16 @@ def api_cameras_deploy():
             return jsonify(err="Deploy already in progress"), 409
     body = request.get_json(silent=True) or {}
     ip = body.get("ip", "").strip()
+    force = body.get("force", False)
     if not ip:
         return jsonify(err="ip required"), 400
     if not _ssh.get("sshPassword") and not _ssh.get("sshKeyPath"):
         return jsonify(err="SSH credentials not configured"), 400
     with _deploy_lock:
         _deploy_status.update(running=True, progress=0, message="Starting...",
-                              error=None, ip=ip)
-    threading.Thread(target=_deploy_camera_bg, args=(ip,), daemon=True).start()
+                              error=None, ip=ip, remoteVersion=None,
+                              localVersion=None)
+    threading.Thread(target=_deploy_camera_bg, args=(ip, force), daemon=True).start()
     return jsonify(ok=True, pending=True)
 
 @app.get("/api/cameras/deploy/status")

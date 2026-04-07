@@ -519,8 +519,11 @@ def run():
         ok('Deploy no SSH creds → 400', r.status_code == 400)
 
         r = c.get('/api/cameras/deploy/status')
-        ok('Deploy status shape', r.status_code == 200 and 'running' in r.get_json())
-        ok('Deploy not running', r.get_json().get('running') is False)
+        ds = r.get_json()
+        ok('Deploy status shape', r.status_code == 200 and 'running' in ds)
+        ok('Deploy not running', ds.get('running') is False)
+        ok('Deploy status has version fields',
+           'remoteVersion' in ds and 'localVersion' in ds)
 
         # ── Camera probe endpoint ────────────────────────────────────
         r = c.post('/api/cameras/probe', json={})

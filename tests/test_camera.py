@@ -146,15 +146,24 @@ def run():
     ok("Config page has Capture Frame button", "Capture Frame" in html)
     ok("Config page has Settings tab", "Settings" in html)
     ok("Config page has Dashboard tab", "Dashboard" in html)
+    ok("Config page has Detect Objects button", "Detect Objects" in html)
+    ok("Config page has detection threshold slider", "det-thr-" in html)
+    ok("Config page has detection resolution select", "det-res-" in html)
+    ok("Config page has auto-refresh checkbox", "det-auto-" in html)
+    ok("Config page has canvas overlay", "cam-cvs-" in html)
+    ok("Config page has timing display", "cam-time-" in html)
+    ok("Config page has _detect function", "_detect(" in html)
+    ok("Config page has _showImg function", "_showImg(" in html)
+    ok("Config page has _autoToggle function", "_autoToggle(" in html)
 
     # ── Config JSON ────────────────────────────────────────────────
-    d = get_json("/config/json")
-    ok("GET /config/json", isinstance(d, dict))
-    ok("Config has hostname", "hostname" in d)
-    ok("Config has fovDeg", "fovDeg" in d)
+    cfg = get_json("/config/json")
+    ok("GET /config/json", isinstance(cfg, dict))
+    ok("Config has hostname", "hostname" in cfg)
+    ok("Config has fovDeg", "fovDeg" in cfg)
 
     # ── Config update ──────────────────────────────────────────────
-    orig_name = d.get("hostname", "")
+    orig_name = cfg.get("hostname", "")
 
     # Set a test name
     r = post_json("/config", {"hostname": "TestCam99"})
@@ -203,6 +212,88 @@ def run():
             ok("Snapshot no camera returns 404", False, "Expected error")
         except urllib.error.HTTPError as e:
             ok("Snapshot no camera returns 404", e.code == 404)
+
+    # ── Object Detection /scan ─────────────────────────────────────
+    # Check if scan capability is available
+    has_scan = d.get("capabilities", {}).get("scan", False)
+    print(f"  Scan capability: {has_scan}")
+
+    if has_scan and cam_count > 0:
+        # Basic scan
+        try:
+            r = post_json("/scan", {"cam": 0, "threshold": 0.5, "resolution": 320})
+            sd = json.loads(r.read().decode())
+            ok("POST /scan returns ok", sd.get("ok") is True)
+            ok("Scan has detections array", isinstance(sd.get("detections"), list))
+            ok("Scan has captureMs", isinstance(sd.get("captureMs"), (int, float)))
+            ok("Scan has inferenceMs", isinstance(sd.get("inferenceMs"), (int, float)))
+            ok("Scan has frameSize", isinstance(sd.get("frameSize"), list) and len(sd.get("frameSize", [])) == 2)
+            ok("Scan has resolution", sd.get("resolution") == 320)
+            print(f"    Detections: {len(sd.get('detections', []))}, "
+                  f"capture: {sd.get('captureMs')}ms, inference: {sd.get('inferenceMs')}ms")
+            # Validate detection format if any
+            for det in sd.get("detections", [])[:3]:
+                ok("Detection has label", "label" in det, det.get("label"))
+                ok("Detection has confidence", 0 < det.get("confidence", 0) <= 1)
+                ok("Detection has bbox", all(k in det for k in ("x", "y", "w", "h")))
+                break  # Only check first detection in detail
+        except urllib.error.HTTPError as e:
+            ok("POST /scan returns ok", False, f"HTTP {e.code}: {e.read().decode()[:100]}")
+
+        # Scan second camera
+        if cam_count > 1:
+            try:
+                r = post_json("/scan", {"cam": 1, "threshold": 0.5, "resolution": 320})
+                sd2 = json.loads(r.read().decode())
+                ok("Scan cam=1 works", sd2.get("ok") is True)
+            except urllib.error.HTTPError as e:
+                ok("Scan cam=1 works", False, f"HTTP {e.code}")
+
+        # Invalid cam index
+        try:
+            post_json("/scan", {"cam": 999})
+            ok("Scan invalid cam returns 400", False)
+        except urllib.error.HTTPError as e:
+            ok("Scan invalid cam returns 400", e.code == 400)
+
+        # Invalid resolution
+        try:
+            post_json("/scan", {"cam": 0, "resolution": 999})
+            ok("Scan invalid resolution returns 400", False)
+        except urllib.error.HTTPError as e:
+            ok("Scan invalid resolution returns 400", e.code == 400)
+
+        # High-res scan (640) — just check it works, don't assert timing
+        try:
+            r = post_json("/scan", {"cam": 0, "resolution": 640, "threshold": 0.3})
+            sd640 = json.loads(r.read().decode())
+            ok("Scan 640x640 works", sd640.get("ok") is True)
+            print(f"    640x640: capture {sd640.get('captureMs')}ms, inference {sd640.get('inferenceMs')}ms")
+        except urllib.error.HTTPError as e:
+            ok("Scan 640x640 works", False, f"HTTP {e.code}")
+
+        # Class filter — person only
+        try:
+            r = post_json("/scan", {"cam": 0, "classes": ["person"], "resolution": 320})
+            sdf = json.loads(r.read().decode())
+            ok("Scan class filter accepted", sdf.get("ok") is True)
+            non_person = [d for d in sdf.get("detections", []) if d.get("label") != "person"]
+            ok("Class filter excludes non-person", len(non_person) == 0,
+               f"{len(non_person)} non-person detections")
+        except urllib.error.HTTPError as e:
+            ok("Scan class filter accepted", False, f"HTTP {e.code}")
+
+    elif not has_scan:
+        # Scan not available — POST /scan should return 503
+        try:
+            post_json("/scan", {"cam": 0})
+            ok("Scan unavailable returns 503", False)
+        except urllib.error.HTTPError as e:
+            ok("Scan unavailable returns 503", e.code == 503)
+    else:
+        ok("Scan skipped (no cameras)", True, "SKIP")
+
+    ok("Status scan capability field", "scan" in d.get("capabilities", {}))
 
     # ── UDP PING/PONG ──────────────────────────────────────────────
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

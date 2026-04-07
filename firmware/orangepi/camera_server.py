@@ -20,7 +20,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request
 
-VERSION = "1.0.4"
+VERSION = "1.1.0"
 PORT = 5000
 UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
@@ -260,6 +260,7 @@ def status():
         "capabilities": {
             "tracking": _hw_info.get("tracking", False),
             "hasCamera": _hw_info.get("hasCamera", False),
+            "scan": _get_detector() is not None,
         },
         "board": _hw_info.get("board", "unknown"),
     })
@@ -268,7 +269,8 @@ def status():
 def config_page():
     """HTML config SPA — consistent with performer /config pages."""
     hostname = _config.get("hostname") or socket.gethostname()
-    has_cam = "Yes" if _hw_info.get("hasCamera") else "No"
+    has_scan = _get_detector() is not None
+    det_btn_style = "background:#7c3aed" if has_scan else "background:#7c3aed;display:none"
     board = _hw_info.get("board", "unknown")
     res = f"{_config.get('resolutionW', '?')}x{_config.get('resolutionH', '?')}"
     ip = _get_local_ip()
@@ -303,6 +305,14 @@ input,select{{width:100%;padding:.35em .5em;background:#0f172a;border:1px solid 
 .tab.active{{background:#334155;color:#e2e8f0;border-bottom-color:#334155}}
 .tab-content{{display:none}}
 .tab-content.active{{display:block}}
+.cam-wrap{{position:relative;margin-top:.5em}}
+.cam-wrap canvas{{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none}}
+.cam-wrap img{{width:100%;border-radius:4px;border:1px solid #334155;display:block}}
+.det-controls{{display:flex;gap:.4em;align-items:center;flex-wrap:wrap;margin-top:.4em}}
+.det-controls label{{display:inline;margin:0;font-size:.78em}}
+.det-controls input[type=range]{{width:80px;padding:0}}
+.det-controls select{{width:auto;padding:.15em .3em;font-size:.78em}}
+.timing{{font-size:.75em;color:#64748b;margin-top:.2em}}
 </style></head><body>
 <h1>{hostname}</h1>
 <div class="sub">SlyLED Camera Node v{VERSION} &middot; {ip}</div>
@@ -323,9 +333,19 @@ input,select{{width:100%;padding:.35em .5em;background:#0f172a;border:1px solid 
 <h2>Camera {i} &mdash; {c["name"]}</h2>
 <div class="info-row"><span class="lbl">Device</span><span>{c["device"]}</span></div>
 <div class="info-row"><span class="lbl">Resolution</span><span>{c["resW"]}x{c["resH"]}</span></div>
-<button class="btn btn-save" onclick="_test({i})" id="test-btn-{i}">Capture Frame</button>
-<div id="test-msg-{i}" style="color:#94a3b8;font-size:.82em;margin-top:.3em"></div>
-<img id="test-img-{i}" style="display:none;width:100%;border-radius:4px;margin-top:.5em;border:1px solid #334155">
+<button class="btn btn-save" onclick="_snap({i})" id="snap-btn-{i}">Capture Frame</button>
+<button class="btn btn-save" onclick="_detect({i})" id="det-btn-{i}" style="{det_btn_style}">Detect Objects</button>
+<div class="det-controls" id="det-ctl-{i}" style="display:none">
+<label>Threshold</label><input type="range" min="10" max="90" value="50" id="det-thr-{i}" oninput="document.getElementById('det-thr-v-{i}').textContent=this.value/100"><span id="det-thr-v-{i}" style="font-size:.78em;min-width:2em">0.5</span>
+<label>Size</label><select id="det-res-{i}"><option value="320">320</option><option value="640">640</option></select>
+<label><input type="checkbox" id="det-auto-{i}" onchange="_autoToggle({i})"> Auto</label>
+</div>
+<div id="cam-msg-{i}" style="color:#94a3b8;font-size:.82em;margin-top:.3em"></div>
+<div class="cam-wrap" id="cam-wrap-{i}" style="display:none">
+<img id="cam-img-{i}">
+<canvas id="cam-cvs-{i}"></canvas>
+</div>
+<div class="timing" id="cam-time-{i}"></div>
 </div>""" for i, c in enumerate(_hw_info.get("cameras", [])))
 if _hw_info.get("cameras") else '<div class="card"><h2>Camera</h2><p style="color:#fca5a5;font-size:.82em">No cameras detected on this device.</p></div>'}
 </div>
@@ -344,6 +364,7 @@ if _hw_info.get("cameras") else '<div class="card"><h2>Camera</h2><p style="colo
 </div>
 </div>
 <script>
+var _autoTimers={{}};
 function _tab(i){{
   document.querySelectorAll('.tab').forEach(function(t,j){{t.classList.toggle('active',j===i)}});
   document.querySelectorAll('.tab-content').forEach(function(t,j){{t.classList.toggle('active',j===i)}});
@@ -353,42 +374,101 @@ function _save(){{
   var x=new XMLHttpRequest();
   x.open('POST','/config');
   x.setRequestHeader('Content-Type','application/json');
-  x.onload=function(){{
-    var r=JSON.parse(x.responseText);
-    document.getElementById('msg').textContent=r.ok?'Saved':'Error: '+(r.err||'unknown');
-  }};
+  x.onload=function(){{var r=JSON.parse(x.responseText);document.getElementById('msg').textContent=r.ok?'Saved':'Error: '+(r.err||'unknown');}};
   x.send(JSON.stringify({{hostname:name}}));
 }}
-function _test(idx){{
-  var btn=document.getElementById('test-btn-'+idx);
-  var msg=document.getElementById('test-msg-'+idx);
-  var img=document.getElementById('test-img-'+idx);
-  btn.disabled=true;btn.textContent='Capturing...';
-  msg.textContent='';img.style.display='none';
+function _showImg(idx,blob,dets){{
+  var wrap=document.getElementById('cam-wrap-'+idx);
+  var img=document.getElementById('cam-img-'+idx);
+  var cvs=document.getElementById('cam-cvs-'+idx);
+  wrap.style.display='block';
+  var url=URL.createObjectURL(blob);
+  img.onload=function(){{
+    cvs.width=img.naturalWidth;cvs.height=img.naturalHeight;
+    var ctx=cvs.getContext('2d');ctx.clearRect(0,0,cvs.width,cvs.height);
+    if(!dets||!dets.length)return;
+    ctx.lineWidth=2;ctx.font='bold 14px sans-serif';ctx.textBaseline='bottom';
+    var colors=['#22d3ee','#a78bfa','#f472b6','#34d399','#fbbf24','#fb923c','#f87171'];
+    var labels={{}};var ci=0;
+    for(var d=0;d<dets.length;d++){{
+      var det=dets[d];
+      if(!(det.label in labels))labels[det.label]=colors[ci++%colors.length];
+      var c=labels[det.label];
+      ctx.strokeStyle=c;ctx.strokeRect(det.x,det.y,det.w,det.h);
+      var txt=det.label+' '+Math.round(det.confidence*100)+'%';
+      var tw=ctx.measureText(txt).width;
+      ctx.fillStyle=c;ctx.globalAlpha=0.7;
+      ctx.fillRect(det.x,det.y-18,tw+6,18);
+      ctx.globalAlpha=1;ctx.fillStyle='#000';
+      ctx.fillText(txt,det.x+3,det.y-3);
+    }}
+  }};
+  img.src=url;
+}}
+function _snap(idx){{
+  var btn=document.getElementById('snap-btn-'+idx);
+  var msg=document.getElementById('cam-msg-'+idx);
+  var time=document.getElementById('cam-time-'+idx);
+  btn.disabled=true;btn.textContent='Capturing...';msg.textContent='';time.textContent='';
+  var t0=performance.now();
   var x=new XMLHttpRequest();
-  x.open('GET','/snapshot?cam='+idx);
-  x.responseType='blob';
+  x.open('GET','/snapshot?cam='+idx);x.responseType='blob';
   x.onload=function(){{
     btn.disabled=false;btn.textContent='Capture Frame';
     if(x.status===200&&x.response&&x.response.size>0){{
-      img.src=URL.createObjectURL(x.response);
-      img.style.display='block';
-      msg.textContent='Captured at '+new Date().toLocaleTimeString();
-      msg.style.color='#94a3b8';
+      _showImg(idx,x.response,null);
+      msg.textContent='Captured at '+new Date().toLocaleTimeString();msg.style.color='#94a3b8';
+      time.textContent='Round-trip: '+Math.round(performance.now()-t0)+'ms';
     }}else{{
       msg.style.color='#fca5a5';
       if(x.response&&x.response.size>0){{
-        var reader=new FileReader();
-        reader.onload=function(){{
-          try{{var r=JSON.parse(reader.result);msg.textContent='Error: '+(r.err||'unknown');}}
-          catch(e){{msg.textContent='Capture failed (status '+x.status+')';}}
-        }};
-        reader.readAsText(x.response);
-      }}else{{msg.textContent='Capture failed (empty response)';}}
+        var reader=new FileReader();reader.onload=function(){{
+          try{{msg.textContent='Error: '+JSON.parse(reader.result).err;}}
+          catch(e){{msg.textContent='Capture failed ('+x.status+')';}}
+        }};reader.readAsText(x.response);
+      }}else msg.textContent='Capture failed (empty response)';
     }}
   }};
   x.onerror=function(){{btn.disabled=false;btn.textContent='Capture Frame';msg.textContent='Connection failed';msg.style.color='#fca5a5';}};
   x.send();
+}}
+function _detect(idx){{
+  var btn=document.getElementById('det-btn-'+idx);
+  var msg=document.getElementById('cam-msg-'+idx);
+  var time=document.getElementById('cam-time-'+idx);
+  var ctl=document.getElementById('det-ctl-'+idx);
+  ctl.style.display='flex';
+  btn.disabled=true;btn.textContent='Detecting...';msg.textContent='';time.textContent='';
+  var thr=document.getElementById('det-thr-'+idx).value/100;
+  var res=document.getElementById('det-res-'+idx).value;
+  var x=new XMLHttpRequest();
+  x.open('POST','/scan');x.setRequestHeader('Content-Type','application/json');
+  x.onload=function(){{
+    btn.disabled=false;btn.textContent='Detect Objects';
+    try{{
+      var r=JSON.parse(x.responseText);
+      if(!r.ok){{msg.textContent='Error: '+(r.err||'unknown');msg.style.color='#fca5a5';return;}}
+      time.textContent='Capture: '+r.captureMs+'ms | Inference: '+r.inferenceMs+'ms | '+r.detections.length+' object'+(r.detections.length!==1?'s':'');
+      msg.textContent=r.detections.length?r.detections.map(function(d){{return d.label+' '+Math.round(d.confidence*100)+'%';}}).join(', '):'No objects detected';
+      msg.style.color=r.detections.length?'#22d3ee':'#94a3b8';
+      // Fetch snapshot to overlay boxes on
+      var sx=new XMLHttpRequest();sx.open('GET','/snapshot?cam='+idx);sx.responseType='blob';
+      sx.onload=function(){{if(sx.status===200)_showImg(idx,sx.response,r.detections);}};
+      sx.send();
+    }}catch(e){{msg.textContent='Parse error';msg.style.color='#fca5a5';}}
+  }};
+  x.onerror=function(){{btn.disabled=false;btn.textContent='Detect Objects';msg.textContent='Connection failed';msg.style.color='#fca5a5';}};
+  x.send(JSON.stringify({{cam:idx,threshold:thr,resolution:parseInt(res)}}));
+}}
+function _autoToggle(idx){{
+  var cb=document.getElementById('det-auto-'+idx);
+  if(cb.checked){{
+    _detect(idx);
+    _autoTimers[idx]=setInterval(function(){{_detect(idx);}},3000);
+  }}else{{
+    if(_autoTimers[idx])clearInterval(_autoTimers[idx]);
+    delete _autoTimers[idx];
+  }}
 }}
 function _reboot(){{
   if(!confirm('Reboot camera node?'))return;
@@ -452,7 +532,17 @@ def snapshot():
     from flask import Response
     import subprocess
 
-    # Try capture tools by absolute path (systemd PATH may be minimal)
+    # Try OpenCV first (fastest — direct numpy, no subprocess)
+    try:
+        import cv2
+        frame = _cv_capture(dev)
+        if frame is not None:
+            _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            return Response(jpeg.tobytes(), mimetype="image/jpeg")
+    except ImportError:
+        pass
+
+    # Fall back to CLI capture tools by absolute path (systemd PATH may be minimal)
     tools = [
         (["/usr/bin/fswebcam", "-d", dev, "--no-banner", "-r", res, "--jpeg", "85", "-"], "fswebcam"),
         (["/usr/bin/ffmpeg", "-y", "-f", "v4l2", "-i", dev,
@@ -473,6 +563,92 @@ def snapshot():
             log.warning("Capture with %s error: %s", name, e)
 
     return jsonify(ok=False, err="No capture tool available (install fswebcam or ffmpeg)"), 500
+
+# ── OpenCV capture helper ─────────────────────────────────────────────
+
+def _cv_capture(device, timeout=5):
+    """Capture a single BGR frame via OpenCV VideoCapture. Returns numpy array or None."""
+    try:
+        import cv2
+        cap = cv2.VideoCapture(device)
+        if not cap.isOpened():
+            return None
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        # Read twice to flush stale buffer
+        cap.read()
+        ret, frame = cap.read()
+        cap.release()
+        if ret and frame is not None:
+            return frame
+    except Exception as e:
+        log.warning("OpenCV capture %s failed: %s", device, e)
+    return None
+
+# ── Object detection ──────────────────────────────────────────────────
+
+_detector = None
+
+def _get_detector():
+    """Lazy-init the object detector."""
+    global _detector
+    if _detector is None:
+        try:
+            from detector import ObjectDetector
+            _detector = ObjectDetector()
+        except ImportError:
+            log.warning("detector module not available (missing opencv/numpy?)")
+            return None
+    return _detector
+
+@app.post("/scan")
+def scan():
+    """Single-frame object detection. Returns detections with bounding boxes."""
+    cameras = _hw_info.get("cameras", [])
+    if not cameras:
+        return jsonify(ok=False, err="No camera detected"), 404
+
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    threshold = body.get("threshold", 0.5)
+    classes = body.get("classes", None)  # None = all classes
+    resolution = body.get("resolution", 320)
+
+    if cam_idx < 0 or cam_idx >= len(cameras):
+        return jsonify(ok=False, err=f"Camera index {cam_idx} out of range (0-{len(cameras)-1})"), 400
+    if resolution not in (320, 640):
+        return jsonify(ok=False, err="resolution must be 320 or 640"), 400
+
+    det = _get_detector()
+    if det is None:
+        return jsonify(ok=False, err="Object detection not available (install python3-opencv python3-numpy)"), 503
+
+    dev = cameras[cam_idx]["device"]
+
+    # Capture frame via OpenCV
+    t0 = time.monotonic()
+    frame = _cv_capture(dev)
+    capture_ms = (time.monotonic() - t0) * 1000
+
+    if frame is None:
+        return jsonify(ok=False, err=f"Failed to capture from {dev}"), 503
+
+    # Run detection
+    try:
+        detections, inference_ms = det.detect(frame, threshold=threshold,
+                                               classes=classes, input_size=resolution)
+    except Exception as e:
+        log.error("Detection failed: %s", e)
+        return jsonify(ok=False, err=str(e)), 500
+
+    return jsonify(
+        ok=True,
+        detections=detections,
+        captureMs=round(capture_ms),
+        inferenceMs=round(inference_ms),
+        resolution=resolution,
+        camera=cam_idx,
+        frameSize=[int(frame.shape[1]), int(frame.shape[0])],
+    )
 
 # ── UDP protocol (PING/PONG + STATUS) ─────────────────────────────────
 
