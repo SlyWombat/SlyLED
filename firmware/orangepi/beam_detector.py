@@ -31,11 +31,10 @@ class BeamDetector:
         self._lock = threading.Lock()
 
     def set_dark_frame(self, cam_idx, frame):
-        """Store a dark reference frame for a camera."""
+        """Store a dark reference frame (full BGR) for a camera."""
         with self._lock:
             if frame is not None:
-                self._dark_frames[cam_idx] = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) \
-                    if len(frame.shape) == 3 else frame.copy()
+                self._dark_frames[cam_idx] = frame.copy()
 
     def has_dark_frame(self, cam_idx):
         return cam_idx in self._dark_frames
@@ -55,22 +54,27 @@ class BeamDetector:
         if frame is None:
             return {"found": False}
 
-        # Build detection mask
-        if color and color != [255, 255, 255]:
-            mask = self._color_mask(frame, color)
-        else:
-            mask = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        dark_bgr = self._dark_frames.get(cam_idx)
 
-        # Apply dark-frame differencing if available
-        dark = self._dark_frames.get(cam_idx)
-        if dark is not None:
-            if len(mask.shape) != len(dark.shape):
-                dark_resized = dark
+        # Apply same color filter to both dark and light frames, then diff
+        if color and color != [255, 255, 255]:
+            light_mask = self._color_mask(frame, color)
+            if dark_bgr is not None:
+                dark_resized = dark_bgr if dark_bgr.shape[:2] == frame.shape[:2] else \
+                    cv2.resize(dark_bgr, (frame.shape[1], frame.shape[0]))
+                dark_mask = self._color_mask(dark_resized, color)
+                mask = cv2.absdiff(light_mask, dark_mask)
             else:
-                dark_resized = dark
-            if mask.shape != dark_resized.shape:
-                dark_resized = cv2.resize(dark_resized, (mask.shape[1], mask.shape[0]))
-            mask = cv2.absdiff(mask, dark_resized)
+                mask = light_mask
+        else:
+            light_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            if dark_bgr is not None:
+                dark_resized = dark_bgr if dark_bgr.shape[:2] == frame.shape[:2] else \
+                    cv2.resize(dark_bgr, (frame.shape[1], frame.shape[0]))
+                dark_gray = cv2.cvtColor(dark_resized, cv2.COLOR_BGR2GRAY)
+                mask = cv2.absdiff(light_gray, dark_gray)
+            else:
+                mask = light_gray
 
         # Blur and threshold
         mask = cv2.GaussianBlur(mask, (15, 15), 0)
@@ -78,20 +82,31 @@ class BeamDetector:
         if peak_val < threshold:
             return {"found": False}
 
-        thresh_val = max(threshold, int(peak_val * 0.35))
+        # Require strong signal — beam is bright, noise is weak
+        thresh_val = max(threshold, int(peak_val * 0.4))
         _, binary = cv2.threshold(mask, thresh_val, 255, cv2.THRESH_BINARY)
 
-        # Find centroid
-        ys, xs = np.where(binary > 0)
-        if len(xs) < 5:
+        # Find the largest connected component (beam is a big bright patch)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return {"found": False}
+        biggest = max(contours, key=cv2.contourArea)
+        area = cv2.contourArea(biggest)
+
+        # Real beam covers a significant area (>500 pixels) and is bright
+        if area < 500 or peak_val < 60:
+            return {"found": False}
+
+        M = cv2.moments(biggest)
+        if M["m00"] == 0:
             return {"found": False}
 
         return {
             "found": True,
-            "pixelX": int(np.mean(xs)),
-            "pixelY": int(np.mean(ys)),
+            "pixelX": int(M["m10"] / M["m00"]),
+            "pixelY": int(M["m01"] / M["m00"]),
             "peakIntensity": int(peak_val),
-            "area": int(len(xs)),
+            "area": int(area),
         }
 
     def detect_center(self, frame, cam_idx=0, color=None, threshold=30, beam_count=3):
@@ -103,36 +118,42 @@ class BeamDetector:
         if frame is None:
             return {"found": False}
 
+        dark_bgr = self._dark_frames.get(cam_idx)
         if color and color != [255, 255, 255]:
-            mask = self._color_mask(frame, color)
-        else:
-            mask = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        dark = self._dark_frames.get(cam_idx)
-        if dark is not None:
-            if mask.shape != dark.shape:
-                dark_r = cv2.resize(dark, (mask.shape[1], mask.shape[0]))
+            light_mask = self._color_mask(frame, color)
+            if dark_bgr is not None:
+                dark_resized = dark_bgr if dark_bgr.shape[:2] == frame.shape[:2] else \
+                    cv2.resize(dark_bgr, (frame.shape[1], frame.shape[0]))
+                dark_mask = self._color_mask(dark_resized, color)
+                mask = cv2.absdiff(light_mask, dark_mask)
             else:
-                dark_r = dark
-            mask = cv2.absdiff(mask, dark_r)
+                mask = light_mask
+        else:
+            light_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            if dark_bgr is not None:
+                dark_resized = dark_bgr if dark_bgr.shape[:2] == frame.shape[:2] else \
+                    cv2.resize(dark_bgr, (frame.shape[1], frame.shape[0]))
+                mask = cv2.absdiff(light_gray, cv2.cvtColor(dark_resized, cv2.COLOR_BGR2GRAY))
+            else:
+                mask = light_gray
 
         mask = cv2.GaussianBlur(mask, (11, 11), 0)
         _, peak_val, _, _ = cv2.minMaxLoc(mask)
-        if peak_val < threshold:
+        if peak_val < threshold or peak_val < 60:
             return {"found": False}
 
-        thresh_val = max(threshold, int(peak_val * 0.35))
+        thresh_val = max(threshold, int(peak_val * 0.4))
         _, binary = cv2.threshold(mask, thresh_val, 255, cv2.THRESH_BINARY)
 
         # Find connected components
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
             binary, connectivity=8)
 
-        # Filter out background (label 0) and tiny components
+        # Filter out background (label 0) and small components (noise)
         components = []
         for i in range(1, num_labels):
             area = stats[i, cv2.CC_STAT_AREA]
-            if area < 5:
+            if area < 100:  # real beam spots are big
                 continue
             cx, cy = centroids[i]
             components.append({"idx": i, "cx": cx, "cy": cy, "area": area})

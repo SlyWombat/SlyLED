@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """
-test_calibrate_live.py — Live calibration using the new mover_calibrator engine.
+test_calibrate_live.py — Live calibration with detailed logging + screen captures.
 
-Uses beam_detector on camera node for fast detection (<100ms per probe).
-Calibrates both movers, scans for target, aims with convergence test.
-
-Usage:
-    python tests/test_calibrate_live.py
+1. Use layout positions to estimate initial aim toward camera
+2. Find beam, then probe small steps to learn axis orientation
+3. Save screenshots + detailed log for post-analysis
 """
 
 import json
@@ -20,236 +18,310 @@ import urllib.request
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 
 import logging
-logging.basicConfig(level=logging.INFO, format='  %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
+log = logging.getLogger("cal")
 
 from mover_calibrator import (
-    discover, map_visible, build_grid, grid_inverse, converge,
-    _dark_reference, _beam_detect, _set_mover_dmx, _hold_dmx, _send_artnet,
+    compute_initial_aim, _dark_reference, _beam_detect,
+    _set_mover_dmx, _hold_dmx, _send_artnet,
 )
 
 BRIDGE_IP = "192.168.10.219"
 CAMERA_IP = "192.168.10.235"
 CAM_IDX = 1  # EMEET 90° wide FOV
 
+# From slyled-config (2).json — positions in mm
+# Light center of axis is 1670mm from floor
 MOVERS = [
-    {"name": "Mover1", "addr": 14, "color": [255, 0, 0]},   # RED
-    {"name": "Mover2", "addr": 1,  "color": [0, 0, 255]},   # BLUE
+    {"name": "Mover1", "addr": 14, "color": [255, 0, 0],
+     "pos": (516, 1670, 26)},
+    {"name": "Mover2", "addr": 1,  "color": [0, 0, 255],
+     "pos": (2001, 1670, 45)},
 ]
+CAMERA_POS = (1187, 1275, 0)
 
+# Output directory for captures and logs
+OUT_DIR = "/mnt/d/temp/calibration_debug"
+os.makedirs(OUT_DIR, exist_ok=True)
+
+_dmx = [0] * 512
+_capture_idx = 0
+
+
+def send():
+    _send_artnet(BRIDGE_IP, 0, _dmx)
+
+def hold(dur=0.6):
+    _hold_dmx(BRIDGE_IP, _dmx, dur)
 
 def blackout():
-    dmx = [0] * 512
-    _hold_dmx(BRIDGE_IP, dmx, 0.5)
+    global _dmx
+    _dmx = [0] * 512
+    hold(0.5)
+
+def set_mover(addr, pan, tilt, r, g, b, dim=255):
+    _set_mover_dmx(_dmx, addr, pan, tilt, r, g, b, dim)
+
+def capture_frame(label):
+    """Save a JPEG screenshot from the camera with a label."""
+    global _capture_idx
+    try:
+        resp = urllib.request.urlopen(f"http://{CAMERA_IP}:5000/snapshot?cam={CAM_IDX}", timeout=10)
+        data = resp.read()
+        fname = f"{OUT_DIR}/{_capture_idx:04d}_{label}.jpg"
+        with open(fname, "wb") as f:
+            f.write(data)
+        _capture_idx += 1
+        return fname
+    except Exception as e:
+        log.warning("Capture failed: %s", e)
+        return None
+
+def beam_here(color, label=""):
+    """Detect beam and save a screenshot. Returns (px, py) or None."""
+    result = _beam_detect(CAMERA_IP, CAM_IDX, color, threshold=50, center=True)
+    fname = capture_frame(f"beam_{label}" if label else "beam")
+    if result:
+        log.info("  BEAM at pixel (%d, %d) [%s]", result[0], result[1], fname or "no capture")
+    else:
+        log.info("  no beam [%s]", fname or "no capture")
+    return result
 
 
-def scan_for_targets():
-    """Scan camera for all detected objects, sorted by priority."""
-    blackout()
-    time.sleep(0.5)
-    priority = {"bottle": 5, "sports ball": 4, "cup": 3, "chair": 2, "person": 1}
-    targets = []
-    for cam in [CAM_IDX]:
-        try:
-            req = urllib.request.Request(
-                f"http://{CAMERA_IP}:5000/scan",
-                data=json.dumps({"cam": cam, "threshold": 0.2, "resolution": 640}).encode(),
-                headers={"Content-Type": "application/json"})
-            r = json.loads(urllib.request.urlopen(req, timeout=30).read().decode())
-            if not r.get("ok"):
-                continue
-            for d in r.get("detections", []):
-                d["_cam"] = cam
-                d["_score"] = priority.get(d["label"], 1) + d["confidence"]
-                targets.append(d)
-        except Exception as e:
-            print(f"  Scan cam {cam} failed: {e}")
-    targets.sort(key=lambda d: d["_score"], reverse=True)
-    return targets
+def probe_axis(addr, color, others, base_pan, base_tilt, axis, delta=0.02):
+    """Move one axis by +delta and -delta to learn which direction it moves the beam.
+    Returns (direction_sign, pixel_delta) or (0, 0) if can't determine."""
+    # Measure at base
+    for a in others:
+        set_mover(a, 0.5, 0.5, 0, 0, 0, 0)
+    set_mover(addr, base_pan, base_tilt, *color, 255)
+    hold(1.0)
+    b0 = beam_here(color, f"probe_{axis}_base")
+    if not b0:
+        return (0, 0)
+
+    # Move positive
+    if axis == "pan":
+        set_mover(addr, min(1, base_pan + delta), base_tilt, *color, 255)
+    else:
+        set_mover(addr, base_pan, min(1, base_tilt + delta), *color, 255)
+    hold(0.8)
+    bp = beam_here(color, f"probe_{axis}_plus")
+
+    # Move negative
+    if axis == "pan":
+        set_mover(addr, max(0, base_pan - delta), base_tilt, *color, 255)
+    else:
+        set_mover(addr, base_pan, max(0, base_tilt - delta), *color, 255)
+    hold(0.8)
+    bn = beam_here(color, f"probe_{axis}_minus")
+
+    # Restore base
+    set_mover(addr, base_pan, base_tilt, *color, 255)
+    hold(0.5)
+
+    # Analyze movement
+    if bp and bn:
+        if axis == "pan":
+            dx_plus = bp[0] - b0[0]
+            dx_minus = bn[0] - b0[0]
+            log.info("  %s probe: +%.2f → pixel dx=%+d, -%.2f → pixel dx=%+d",
+                     axis, delta, dx_plus, delta, dx_minus)
+            return (1 if dx_plus > 5 else (-1 if dx_plus < -5 else 0), dx_plus)
+        else:
+            dy_plus = bp[1] - b0[1]
+            dy_minus = bn[1] - b0[1]
+            log.info("  %s probe: +%.2f → pixel dy=%+d, -%.2f → pixel dy=%+d",
+                     axis, delta, dy_plus, delta, dy_minus)
+            return (1 if dy_plus > 5 else (-1 if dy_plus < -5 else 0), dy_plus)
+    elif bp:
+        d = (bp[0] - b0[0]) if axis == "pan" else (bp[1] - b0[1])
+        log.info("  %s probe: +%.2f → delta=%+d (minus not visible)", axis, delta, d)
+        return (1 if d > 5 else (-1 if d < -5 else 0), d)
+    elif bn:
+        d = (bn[0] - b0[0]) if axis == "pan" else (bn[1] - b0[1])
+        log.info("  %s probe: -%.2f → delta=%+d (plus not visible)", axis, delta, d)
+        return (-1 if d > 5 else (1 if d < -5 else 0), -d)
+    else:
+        log.info("  %s probe: both directions lost beam", axis)
+        return (0, 0)
 
 
 def run():
-    print("\n=== Live Calibration Test (mover_calibrator engine) ===\n")
+    log.info("=== Live Calibration with Captures ===")
+    log.info("Output: %s", OUT_DIR)
 
-    # Step 1: Dark reference
-    print("Step 1: Dark reference...")
+    # Dark reference
+    log.info("Blackout for dark reference...")
     blackout()
-    time.sleep(2.0)  # let camera auto-exposure settle
-    ok = _dark_reference(CAMERA_IP, cam_idx=-1)
-    print(f"  Dark reference: {'OK' if ok else 'FAILED'}")
-    if not ok:
-        return 1
+    time.sleep(2.0)
+    _dark_reference(CAMERA_IP, cam_idx=-1)
+    capture_frame("dark_reference")
 
-    # Step 2: Calibrate each mover
-    calibrations = {}
     other_addrs = [m["addr"] for m in MOVERS]
 
     for mover in MOVERS:
         addr = mover["addr"]
         color = mover["color"]
+        pos = mover["pos"]
         others = [a for a in other_addrs if a != addr]
 
-        print(f"\n{'='*50}")
-        print(f"Calibrating {mover['name']} (addr {addr}, color {'G' if color[1]==255 else 'M'})")
-        print(f"{'='*50}")
+        log.info("")
+        log.info("=" * 60)
+        log.info("Calibrating %s (addr %d)", mover["name"], addr)
+        log.info("  Fixture position: %s", pos)
+        log.info("  Camera position: %s", CAMERA_POS)
 
-        # Discovery
-        print("  Phase 1: Discovery...")
-        result = discover(BRIDGE_IP, CAMERA_IP, addr, CAM_IDX, color,
-                          other_mover_addrs=others)
-        if not result:
-            print("  FAILED: beam never visible")
-            calibrations[addr] = None
-            continue
-        start_pan, start_tilt, px, py = result
-        print(f"  Found at pan={start_pan:.2f} tilt={start_tilt:.2f} → pixel ({px}, {py})")
+        # Geometric estimate to aim at camera
+        est_pan, est_tilt = compute_initial_aim(pos, CAMERA_POS)
+        log.info("  Geometric aim toward camera: pan=%.3f tilt=%.3f", est_pan, est_tilt)
 
-        # Mapping
-        print("  Phase 2: BFS mapping...")
-        def progress(n, p, t):
-            print(f"    {n} samples, current ({p:.2f}, {t:.2f})")
+        # Black out other movers
+        for a in others:
+            set_mover(a, 0.5, 0.5, 0, 0, 0, 0)
 
-        samples = map_visible(BRIDGE_IP, CAMERA_IP, addr, CAM_IDX, color,
-                              start_pan, start_tilt,
-                              other_mover_addrs=others,
-                              progress_cb=progress)
-        print(f"  Mapped {len(samples)} positions")
+        # Phase 1: Discovery — start from geometric estimate
+        log.info("  Phase 1: Discovery from geometric estimate...")
+        set_mover(addr, est_pan, est_tilt, *color, 255)
+        hold(1.5)
+        beam = beam_here(color, f"{mover['name']}_initial")
 
-        if len(samples) < 4:
-            print("  Insufficient samples for grid")
-            calibrations[addr] = None
-            continue
-
-        # Build grid
-        grid = build_grid(samples)
-        if not grid:
-            print("  Grid build failed")
-            calibrations[addr] = None
-            continue
-
-        pans = grid["panSteps"]
-        tilts = grid["tiltSteps"]
-        print(f"  Grid: pan=[{pans[0]:.2f},{pans[-1]:.2f}] ({len(pans)} steps) "
-              f"tilt=[{tilts[0]:.2f},{tilts[-1]:.2f}] ({len(tilts)} steps)")
-
-        calibrations[addr] = {"grid": grid, "samples": samples, "color": color}
-
-    # Step 3: Blackout and scan for target
-    print(f"\n{'='*50}")
-    print("Step 3: Scanning for targets...")
-    print(f"{'='*50}")
-    targets = scan_for_targets()
-    if not targets:
-        print("  No targets found!")
-        return 1
-    for t in targets[:5]:
-        print(f"  {t['label']} {t['confidence']:.0%} at ({t['x']},{t['y']}) {t['w']}x{t['h']}")
-
-    # Step 4: Aim at each target in turn
-    for target_idx, target in enumerate(targets[:3]):  # up to 3 objects
-        target_px = target["x"] + target["w"] / 2
-        target_py = target["y"] + target["h"] / 2
-        print(f"\n{'='*50}")
-        print(f"Step 4.{target_idx+1}: Aim at {target['label']} ({target_px:.0f}, {target_py:.0f})")
-        print(f"{'='*50}")
-
-        final_positions = {}
-        for mover in MOVERS:
-            addr = mover["addr"]
-            cal = calibrations.get(addr)
-            if not cal:
-                print(f"  {mover['name']}: no calibration, skipping")
+        if not beam:
+            # Spiral outward from estimate
+            log.info("  Not visible at estimate, spiraling outward...")
+            found = False
+            for radius in range(1, 15):
+                step = 0.03
+                for dp in range(-radius, radius + 1):
+                    for dt in range(-radius, radius + 1):
+                        if max(abs(dp), abs(dt)) != radius:
+                            continue
+                        p = est_pan + dp * step
+                        t = est_tilt + dt * step
+                        if p < 0 or p > 1 or t < 0 or t > 1:
+                            continue
+                        set_mover(addr, p, t, *color, 255)
+                        hold(0.6)
+                        beam = beam_here(color, f"{mover['name']}_spiral_r{radius}")
+                        if beam:
+                            est_pan, est_tilt = p, t
+                            found = True
+                            break
+                    if found:
+                        break
+                if found:
+                    break
+            if not found:
+                log.info("  FAILED: beam never visible")
                 continue
 
-            grid = cal["grid"]
-            color = cal["color"]
-            others = [a for a in other_addrs if a != addr]
+        log.info("  FOUND at pan=%.3f tilt=%.3f → pixel (%d, %d)",
+                 est_pan, est_tilt, beam[0], beam[1])
 
-            print(f"\n  {mover['name']}: converging on {target['label']}...")
-            result = converge(BRIDGE_IP, CAMERA_IP, CAM_IDX,
-                              addr, grid, color,
-                              target_px, target_py,
-                              other_mover_addrs=others)
-            if result:
-                pan, tilt, dist = result
-                final_positions[addr] = (pan, tilt)
-                print(f"  {mover['name']}: pan={pan:.3f} ({int(pan*255)}) "
-                      f"tilt={tilt:.3f} ({int(tilt*255)}) dist={dist:.0f}px")
-            else:
-                print(f"  {mover['name']}: convergence failed")
+        # Phase 2: Axis probing — learn which direction each axis moves the beam
+        log.info("  Phase 2: Probing axis orientations...")
+        pan_dir, pan_delta = probe_axis(addr, color, others, est_pan, est_tilt, "pan")
+        tilt_dir, tilt_delta = probe_axis(addr, color, others, est_pan, est_tilt, "tilt")
 
-        # Show both on this target for 5s
-        if final_positions:
-            dmx = [0] * 512
-            colors = [[255,0,0], [0,255,0], [0,0,255]]  # R G B
-            for i, mover in enumerate(MOVERS):
-                addr = mover["addr"]
-                if addr in final_positions:
-                    pan, tilt = final_positions[addr]
-                    c = colors[i % 3]
-                    _set_mover_dmx(dmx, addr, pan, tilt, *c, dimmer=255)
-            print(f"\n  Both movers on {target['label']} for 5s...")
-            _hold_dmx(BRIDGE_IP, dmx, 5.0)
-            blackout()
+        orientation = {
+            "pan_increases_pixel_x": pan_dir,  # +1 = right, -1 = left
+            "tilt_increases_pixel_y": tilt_dir,  # +1 = down, -1 = up
+            "pan_px_per_unit": pan_delta / 0.02 if pan_delta else 0,
+            "tilt_py_per_unit": tilt_delta / 0.02 if tilt_delta else 0,
+        }
+        log.info("  Axis orientation: %s", json.dumps(orientation, indent=4))
 
-    # Step 5: Multi-head convergence test on last target
-    if len(final_positions) >= 2:
-        print(f"\n{'='*50}")
-        print("Step 5: Multi-head convergence verify")
-        print(f"{'='*50}")
-        # Turn on each mover one at a time in its own color, check pixel position
-        blackout()
-        time.sleep(0.5)
-        beam_positions = {}
-        for mover in MOVERS:
-            addr = mover["addr"]
-            if addr not in final_positions:
-                continue
-            pan, tilt = final_positions[addr]
-            dmx = [0] * 512
-            _set_mover_dmx(dmx, addr, pan, tilt, *mover["color"], dimmer=255)
-            _hold_dmx(BRIDGE_IP, dmx, 1.5)
-            beam = _beam_detect(CAMERA_IP, CAM_IDX, mover["color"], center=True)
-            blackout()
-            time.sleep(0.3)
-            if beam:
-                beam_positions[addr] = beam
-                print(f"  {mover['name']}: beam at ({beam[0]}, {beam[1]})")
-            else:
-                print(f"  {mover['name']}: beam not visible")
+        # Save orientation
+        orient_path = f"{OUT_DIR}/{mover['name']}_orientation.json"
+        with open(orient_path, "w") as f:
+            json.dump({
+                "fixture": mover["name"],
+                "addr": addr,
+                "pos": pos,
+                "found_at": {"pan": est_pan, "tilt": est_tilt},
+                "beam_pixel": beam,
+                "orientation": orientation,
+            }, f, indent=2)
+        log.info("  Saved orientation to %s", orient_path)
 
-        if len(beam_positions) >= 2:
-            addrs = list(beam_positions.keys())
-            b1, b2 = beam_positions[addrs[0]], beam_positions[addrs[1]]
-            sep = ((b1[0]-b2[0])**2 + (b1[1]-b2[1])**2) ** 0.5
-            print(f"  Beam separation: {sep:.0f}px {'OK' if sep < 50 else 'NEEDS CORRECTION'}")
+        # Phase 3: Controlled sweep using known axis directions
+        log.info("  Phase 3: Controlled sweep (staying in camera view)...")
+        samples = []
+        # Start from found position, sweep in the direction that keeps beam visible
+        current_pan, current_tilt = est_pan, est_tilt
 
-    # Step 6: Final — both movers in distinct colors at target
-    print(f"\n{'='*50}")
-    print(f"Both movers aimed at {target['label']} — distinct colors 30s")
-    print(f"{'='*50}")
-    dmx = [0] * 512
-    for mover in MOVERS:
-        addr = mover["addr"]
-        if addr in final_positions:
-            pan, tilt = final_positions[addr]
-            # Mover1 = RED, Mover2 = BLUE (so you can see which is which)
-            if addr == MOVERS[0]["addr"]:
-                _set_mover_dmx(dmx, addr, pan, tilt, 255, 0, 0, dimmer=255)
-                print(f"  {mover['name']}: RED at pan={pan:.3f} tilt={tilt:.3f}")
-            else:
-                _set_mover_dmx(dmx, addr, pan, tilt, 0, 0, 255, dimmer=255)
-                print(f"  {mover['name']}: BLUE at pan={pan:.3f} tilt={tilt:.3f}")
+        # Sweep pan in both directions from found position
+        for direction in [+1, -1]:
+            p = current_pan
+            for i in range(20):
+                p += direction * 0.03
+                if p < 0 or p > 1:
+                    break
+                set_mover(addr, p, current_tilt, *color, 255)
+                hold(0.6)
+                b = beam_here(color, f"{mover['name']}_pan_{direction:+d}_{i}")
+                if b:
+                    samples.append({"pan": round(p, 3), "tilt": round(current_tilt, 3),
+                                    "px": b[0], "py": b[1]})
+                else:
+                    log.info("  Pan sweep %+d lost beam at pan=%.3f", direction, p)
+                    break
 
-    print("\n  Holding 30s (Ctrl+C to stop)...")
-    try:
-        for _ in range(600):
-            _send_artnet(BRIDGE_IP, 0, dmx)
-            time.sleep(0.05)
-    except KeyboardInterrupt:
-        pass
+        # Sweep tilt in both directions
+        for direction in [+1, -1]:
+            t = current_tilt
+            for i in range(20):
+                t += direction * 0.03
+                if t < 0 or t > 1:
+                    break
+                set_mover(addr, current_pan, t, *color, 255)
+                hold(0.6)
+                b = beam_here(color, f"{mover['name']}_tilt_{direction:+d}_{i}")
+                if b:
+                    samples.append({"pan": round(current_pan, 3), "tilt": round(t, 3),
+                                    "px": b[0], "py": b[1]})
+                else:
+                    log.info("  Tilt sweep %+d lost beam at tilt=%.3f", direction, t)
+                    break
 
-    print("  Blackout.")
+        # Add the center sample
+        samples.append({"pan": round(est_pan, 3), "tilt": round(est_tilt, 3),
+                        "px": beam[0], "py": beam[1]})
+
+        log.info("  Collected %d samples", len(samples))
+
+        # Save all samples
+        samples_path = f"{OUT_DIR}/{mover['name']}_samples.json"
+        with open(samples_path, "w") as f:
+            json.dump({"fixture": mover["name"], "samples": samples,
+                       "orientation": orientation}, f, indent=2)
+        log.info("  Saved to %s", samples_path)
+
+    # Final: scan and report
+    log.info("")
+    log.info("=" * 60)
+    log.info("Scanning for objects...")
     blackout()
+    time.sleep(1)
+    capture_frame("final_scan_dark")
+
+    try:
+        req = urllib.request.Request(
+            f"http://{CAMERA_IP}:5000/scan",
+            data=json.dumps({"cam": CAM_IDX, "threshold": 0.2, "resolution": 640}).encode(),
+            headers={"Content-Type": "application/json"})
+        r = json.loads(urllib.request.urlopen(req, timeout=30).read().decode())
+        for d in r.get("detections", []):
+            log.info("  %s %.0f%% at pixel (%d,%d) %dx%d",
+                     d["label"], d["confidence"]*100, d["x"], d["y"], d["w"], d["h"])
+    except Exception as e:
+        log.error("Scan failed: %s", e)
+
+    capture_frame("final_scan_result")
+
+    log.info("")
+    log.info("Calibration debug data saved to: %s", OUT_DIR)
+    log.info("Review screenshots to verify beam positions")
     return 0
 
 

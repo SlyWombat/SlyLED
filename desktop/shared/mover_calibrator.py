@@ -86,6 +86,24 @@ def _beam_detect(camera_ip, cam_idx, color=None, threshold=50, center=False):
     return None
 
 
+def _depth_at_pixel(camera_ip, cam_idx, px, py):
+    """Get 3D position for a pixel using depth estimation on camera node.
+    Returns (x_mm, y_mm, z_mm) or None."""
+    try:
+        req = urllib.request.Request(
+            f"http://{camera_ip}:5000/depth-map",
+            data=json.dumps({"cam": cam_idx, "points": [{"px": int(px), "py": int(py)}]}).encode(),
+            headers={"Content-Type": "application/json"})
+        resp = urllib.request.urlopen(req, timeout=30)
+        r = json.loads(resp.read().decode())
+        pts = r.get("points3d", [])
+        if pts:
+            return (pts[0]["x"], pts[0]["y"], pts[0]["z"])
+    except Exception as e:
+        log.debug("Depth query failed: %s", e)
+    return None
+
+
 def _dark_reference(camera_ip, cam_idx=-1):
     """Capture dark reference on camera node."""
     try:
@@ -102,15 +120,53 @@ def _dark_reference(camera_ip, cam_idx=-1):
 
 # ── Discovery ────────────────────────────────────────────────────────
 
+def compute_initial_aim(mover_pos, camera_pos, pan_range=540, tilt_range=270):
+    """Estimate the pan/tilt to aim the mover toward the camera.
+
+    Uses the fixture layout positions to compute a geometric starting point.
+    Convention: pan=0.5 = forward (+Z), tilt=0.5 = horizontal.
+
+    Args:
+        mover_pos: (x, y, z) in mm — fixture position from layout
+        camera_pos: (x, y, z) in mm — camera position from layout
+        pan_range, tilt_range: in degrees
+
+    Returns: (pan_norm, tilt_norm) both 0.0-1.0
+    """
+    dx = camera_pos[0] - mover_pos[0]
+    dy = camera_pos[1] - mover_pos[1]
+    dz = camera_pos[2] - mover_pos[2]
+    dist_xz = (dx*dx + dz*dz) ** 0.5
+
+    import math
+    pan_deg = math.degrees(math.atan2(dx, dz)) if dist_xz > 0.001 else 0.0
+    tilt_deg = math.degrees(math.atan2(-dy, dist_xz)) if (dist_xz > 0.001 or abs(dy) > 0.001) else 0.0
+
+    pan_norm = max(0, min(1, 0.5 + pan_deg / pan_range))
+    tilt_norm = max(0, min(1, 0.5 + tilt_deg / tilt_range))
+    return (pan_norm, tilt_norm)
+
+
 def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
-             other_mover_addrs=None, initial_pan=0.0, initial_tilt=0.2):
+             other_mover_addrs=None, initial_pan=None, initial_tilt=None,
+             mover_pos=None, camera_pos=None):
     """Find the first (pan, tilt) where the beam is visible to the camera.
 
-    Starts from initial guess and spirals outward. Light stays on,
-    moves incrementally.
+    If mover_pos and camera_pos are provided, computes a geometric starting
+    estimate. Otherwise uses initial_pan/initial_tilt defaults.
+    Spirals outward from the starting point.
 
     Returns: (pan, tilt, px, py) or None
     """
+    # Compute smart starting point from layout positions
+    if mover_pos and camera_pos:
+        est_pan, est_tilt = compute_initial_aim(mover_pos, camera_pos)
+        initial_pan = initial_pan if initial_pan is not None else est_pan
+        initial_tilt = initial_tilt if initial_tilt is not None else est_tilt
+        log.info("Discovery start from layout estimate: pan=%.2f tilt=%.2f", initial_pan, initial_tilt)
+    else:
+        initial_pan = initial_pan if initial_pan is not None else 0.0
+        initial_tilt = initial_tilt if initial_tilt is not None else 0.2
     dmx = [0] * 512
     # Black out other movers
     for addr in (other_mover_addrs or []):
@@ -152,7 +208,7 @@ def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
 def map_visible(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                 start_pan, start_tilt, other_mover_addrs=None,
                 step=STEP, max_samples=MAX_SAMPLES, use_center=True,
-                progress_cb=None):
+                progress_cb=None, collect_3d=False):
     """BFS explore the visible region from a known visible position.
 
     Light stays on, moves incrementally. Only explores from positions
@@ -160,8 +216,10 @@ def map_visible(bridge_ip, camera_ip, mover_addr, cam_idx, color,
 
     Args:
         progress_cb: optional callable(sample_count, current_pan, current_tilt)
+        collect_3d: if True, also query depth to get 3D world coords per sample
 
-    Returns: list of (pan, tilt, pixel_x, pixel_y)
+    Returns: list of (pan, tilt, pixel_x, pixel_y) or with collect_3d:
+             list of (pan, tilt, pixel_x, pixel_y, world_x, world_y, world_z)
     """
     dmx = [0] * 512
     for addr in (other_mover_addrs or []):
@@ -190,13 +248,21 @@ def map_visible(bridge_ip, camera_ip, mover_addr, cam_idx, color,
             # Reject stale: if pixel barely moved from a different pan/tilt, it's noise
             is_stale = False
             if samples:
-                for sp, st, spx, spy in samples[-5:]:
+                for s in samples[-5:]:
+                    sp, st, spx, spy = s[0], s[1], s[2], s[3]
                     if (abs(px - spx) < 15 and abs(py - spy) < 15 and
                         (abs(pan - sp) > step * 0.5 or abs(tilt - st) > step * 0.5)):
                         is_stale = True
                         break
             if not is_stale:
-                samples.append((pan, tilt, px, py))
+                if collect_3d:
+                    pt3d = _depth_at_pixel(camera_ip, cam_idx, px, py)
+                    if pt3d:
+                        samples.append((pan, tilt, px, py, pt3d[0], pt3d[1], pt3d[2]))
+                    else:
+                        samples.append((pan, tilt, px, py, 0, 0, 0))
+                else:
+                    samples.append((pan, tilt, px, py))
                 last_good = (pan, tilt)
                 # Explore neighbors
                 for dp, dt in [(step, 0), (-step, 0), (0, step), (0, -step)]:
@@ -344,6 +410,99 @@ def grid_inverse(grid, target_px, target_py, iterations=20):
         pan = max(pans[0], min(pans[-1], pan + d_pan))
         tilt = max(tilts[0], min(tilts[-1], tilt + d_tilt))
 
+    return (pan, tilt)
+
+
+def build_grid_3d(samples):
+    """Build a grid mapping (pan, tilt) → (world_x, world_y, world_z).
+    Samples must be 7-tuples: (pan, tilt, px, py, wx, wy, wz).
+    Returns dict with panSteps, tiltSteps, worldX/Y/Z 2D arrays, or None."""
+    if len(samples) < 4:
+        return None
+    pans = sorted(set(round(s[0], 3) for s in samples))
+    tilts = sorted(set(round(s[1], 3) for s in samples))
+    if len(pans) < 2 or len(tilts) < 2:
+        return None
+    lookup = {}
+    for s in samples:
+        lookup[(round(s[0], 3), round(s[1], 3))] = (s[4], s[5], s[6])
+    grid_wx, grid_wy, grid_wz = [], [], []
+    for p in pans:
+        rx, ry, rz = [], [], []
+        for t in tilts:
+            key = (round(p, 3), round(t, 3))
+            if key in lookup:
+                rx.append(lookup[key][0]); ry.append(lookup[key][1]); rz.append(lookup[key][2])
+            else:
+                best_d, best_v = 9999, (0, 0, 0)
+                for s in samples:
+                    d = (s[0] - p)**2 + (s[1] - t)**2
+                    if d < best_d:
+                        best_d = d; best_v = (s[4], s[5], s[6])
+                rx.append(best_v[0]); ry.append(best_v[1]); rz.append(best_v[2])
+        grid_wx.append(rx); grid_wy.append(ry); grid_wz.append(rz)
+    return {"panSteps": pans, "tiltSteps": tilts,
+            "worldX": grid_wx, "worldY": grid_wy, "worldZ": grid_wz}
+
+
+def grid_3d_lookup(grid3d, pan, tilt):
+    """Bilinear interpolation: (pan, tilt) → (world_x, world_y, world_z)."""
+    pans, tilts = grid3d["panSteps"], grid3d["tiltSteps"]
+    pan = max(pans[0], min(pans[-1], pan))
+    tilt = max(tilts[0], min(tilts[-1], tilt))
+    pi = 0
+    for i in range(len(pans) - 1):
+        if pans[i + 1] >= pan: pi = i; break
+    ti = 0
+    for i in range(len(tilts) - 1):
+        if tilts[i + 1] >= tilt: ti = i; break
+    pr = pans[pi + 1] - pans[pi] if pi + 1 < len(pans) else 1
+    tr = tilts[ti + 1] - tilts[ti] if ti + 1 < len(tilts) else 1
+    wp = (pan - pans[pi]) / pr if pr > 0 else 0
+    wt = (tilt - tilts[ti]) / tr if tr > 0 else 0
+    pi2, ti2 = min(pi + 1, len(pans) - 1), min(ti + 1, len(tilts) - 1)
+    result = []
+    for g in [grid3d["worldX"], grid3d["worldY"], grid3d["worldZ"]]:
+        v = (g[pi][ti] * (1-wp) * (1-wt) + g[pi2][ti] * wp * (1-wt) +
+             g[pi][ti2] * (1-wp) * wt + g[pi2][ti2] * wp * wt)
+        result.append(v)
+    return tuple(result)
+
+
+def grid_3d_inverse(grid3d, target_x, target_y, target_z, iterations=30):
+    """Inverse: (world_x, world_y, world_z) → (pan, tilt).
+    Finds the pan/tilt that aims closest to the target 3D point."""
+    pans, tilts = grid3d["panSteps"], grid3d["tiltSteps"]
+    # Brute-force search over grid for best starting point
+    best_pan, best_tilt, best_dist = pans[0], tilts[0], 1e9
+    for p in pans:
+        for t in tilts:
+            wx, wy, wz = grid_3d_lookup(grid3d, p, t)
+            d = (wx - target_x)**2 + (wy - target_y)**2 + (wz - target_z)**2
+            if d < best_dist:
+                best_dist = d; best_pan = p; best_tilt = t
+    # Refine with Newton iteration
+    pan, tilt = best_pan, best_tilt
+    for it in range(iterations):
+        wx, wy, wz = grid_3d_lookup(grid3d, pan, tilt)
+        err = ((wx - target_x)**2 + (wy - target_y)**2 + (wz - target_z)**2) ** 0.5
+        if err < 10:  # within 10mm
+            break
+        dp = 0.001
+        wx_dp, wy_dp, wz_dp = grid_3d_lookup(grid3d, pan + dp, tilt)
+        wx_dt, wy_dt, wz_dt = grid_3d_lookup(grid3d, pan, tilt + dp)
+        # Jacobian: d(world)/d(pan,tilt) — use X and Z (horizontal plane)
+        dwx_dp = (wx_dp - wx) / dp; dwz_dp = (wz_dp - wz) / dp
+        dwx_dt = (wx_dt - wx) / dp; dwz_dt = (wz_dt - wz) / dp
+        det = dwx_dp * dwz_dt - dwx_dt * dwz_dp
+        if abs(det) < 0.001:
+            break
+        ex, ez = target_x - wx, target_z - wz
+        gain = 0.4 if it < 15 else 0.15
+        d_pan = (dwz_dt * ex - dwx_dt * ez) / det * gain
+        d_tilt = (-dwz_dp * ex + dwx_dp * ez) / det * gain
+        pan = max(pans[0], min(pans[-1], pan + d_pan))
+        tilt = max(tilts[0], min(tilts[-1], tilt + d_tilt))
     return (pan, tilt)
 
 
