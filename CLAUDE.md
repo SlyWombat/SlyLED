@@ -58,7 +58,26 @@ The Orchestrator (Windows/Mac Flask)  ← primary design + control UI + firmware
          ▼
 Performers (ESP32 / D1 Mini / Giga Child)  ← LED execution nodes
     (managed via Setup tab, UDP PING/PONG/ACTION/LOAD_STEP)
+         │
+Camera Nodes (Orange Pi / Raspberry Pi)    ← video capture nodes
+    firmware/orangepi/camera_server.py
+    (Flask HTTP :5000 + UDP PONG :4210, deployed via SSH+SCP from Firmware tab)
 ```
+
+### Camera nodes
+
+Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask server (`firmware/orangepi/camera_server.py`) that responds to UDP PING with PONG (same binary protocol v4) and serves HTTP endpoints on port 5000:
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/status` | JSON status (hostname, cameras, uptime) |
+| GET | `/config` | HTML config page |
+| GET | `/snapshot?cam=N` | JPEG snapshot from camera N |
+| GET | `/health` | Health check |
+
+- **Systemd service:** `slyled-cam` for auto-start on boot
+- **Multi-camera support:** Filters SoC video nodes, only exposes real USB cameras
+- **Deploy:** SSH+SCP from the Firmware tab in the SPA; setup script at `firmware/orangepi/flash.ps1`
 
 **Giga board roles:** The Giga R1 compiles in two modes:
 - `BOARD_GIGA` (default) — runtime Orchestrator with minimal SPA for start/stop
@@ -83,6 +102,8 @@ Performers (ESP32 / D1 Mini / Giga Child)  ← LED execution nodes
 | `desktop/shared/dmx_artnet.py` | Art-Net engine — universe buffers, ArtDMX/ArtPoll output |
 | `desktop/shared/community_client.py` | Community profile server client (electricrv.ca) |
 | `firmware/registry.json` | Firmware binary registry (board, version, file) |
+| `firmware/orangepi/camera_server.py` | Camera node firmware — Flask HTTP + UDP PONG |
+| `firmware/orangepi/flash.ps1` | SSH+SCP deploy script for camera nodes |
 
 **Running on Windows:** `powershell.exe -ExecutionPolicy Bypass -File desktop\windows\run.ps1`
 
@@ -118,8 +139,13 @@ Performers (ESP32 / D1 Mini / Giga Child)  ← LED execution nodes
 | POST | `/api/firmware/detect` | Detect chip type via esptool |
 | POST | `/api/firmware/flash` | Flash firmware (background thread) |
 | GET | `/api/firmware/flash/status` | Poll flash progress |
+| GET | `/api/cameras/<id>/snapshot` | Proxy JPEG snapshot from camera node |
+| GET | `/api/cameras/<id>/status` | Live status from camera node |
+| POST | `/api/cameras/<id>/scan` | Forward camera scan to camera node |
 | POST | `/api/reset` | Factory reset all data |
 | POST | `/api/shutdown` | Terminate parent process |
+
+**Naming:** The "Surfaces" concept has been renamed to **"Objects"** across all platforms. Use `/api/objects` only — the `/api/surfaces` alias has been removed.
 
 ### UDP binary protocol (port 4210)
 
@@ -231,6 +257,14 @@ powershell.exe -Command "python tests/discover.py"
 ```
 
 Tests restore factory state before and after string config tests. If a test run is interrupted, factory-reset the child manually via `POST /config/reset`.
+
+### Test suite (camera — 45 assertions)
+
+```
+powershell.exe -Command "python -X utf8 tests/test_camera.py [host] [http_port] [udp_port]"
+```
+
+Covers camera node HTTP endpoints, UDP PONG response, snapshot capture, and config.
 
 ---
 
