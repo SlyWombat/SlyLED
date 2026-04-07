@@ -4027,7 +4027,10 @@ function showNodeEdit(f){
   }
   h+='<div style="display:flex;gap:.5em;flex-wrap:wrap">';
   h+='<button class="btn btn-on" onclick="applyNodePos('+f.id+')">Set Position</button>';
-  if(ft==='dmx')h+='<button class="btn" style="background:#1e3a5f;color:#93c5fd" onclick="startAimMode('+f.id+')">Click to Aim</button>';
+  if(ft==='dmx'){
+    h+='<button class="btn" style="background:#1e3a5f;color:#93c5fd" onclick="startAimMode('+f.id+')">Click to Aim</button>';
+    h+='<button class="btn" style="background:#6b21a8;color:#d8b4fe" onclick="closeModal();_rangeCalStart('+f.id+')">Cal Range'+(f.rangeCalibrated?' \u2713':'')+'</button>';
+  }
   if(ft==='camera'){
     h+='<button class="btn" style="background:#7c3aed;color:#e9d5ff" onclick="closeModal();_calWizardStart('+f.id+')">Calibrate'+(f.calibrated?' \u2713':'')+'</button>';
     h+='<button class="btn" id="trk-btn-'+f.id+'" style="background:#be185d;color:#fce7f3" onclick="closeModal();_trackToggle('+f.id+')">Track</button>';
@@ -5035,6 +5038,130 @@ function _calCompute(){
     // Update fixture locally
     (_fixtures||[]).forEach(function(f){if(f.id===s.camId)f.calibrated=true;});
     renderSidebar();
+  });
+}
+
+// ── Moving head range calibration ─────────────────────────────────────
+var _rcalState=null;
+
+function _rangeCalStart(fixId){
+  // Find a calibrated camera
+  var cam=(_fixtures||[]).filter(function(f){return f.fixtureType==='camera'&&f.calibrated&&f.positioned;})[0];
+  if(!cam){
+    document.getElementById('hs').textContent='No calibrated camera available — calibrate a camera first';
+    return;
+  }
+  _rcalState={fixId:fixId,camId:cam.id,axis:'pan',step:0,steps:9,
+    panSamples:[],tiltSamples:[],sweepValues:[]};
+  // Generate sweep values: 0.0, 0.125, 0.25, ..., 1.0
+  for(var i=0;i<=8;i++)_rcalState.sweepValues.push(i/8);
+  _rcalState.steps=_rcalState.sweepValues.length;
+  _rangeCalShow();
+}
+
+function _rangeCalShow(){
+  var s=_rcalState;if(!s)return;
+  var fix=(_fixtures||[]).filter(function(f){return f.id===s.fixId;})[0];
+  var axisLabel=s.axis==='pan'?'Pan':'Tilt';
+  var totalSteps=s.steps*2;  // pan + tilt
+  var doneSteps=(s.axis==='pan'?0:s.steps)+s.step;
+  var h='<div style="min-width:380px">';
+  h+='<p style="color:#94a3b8;font-size:.85em;margin-bottom:.6em">Sweeping <strong>'+axisLabel+'</strong> on '+escapeHtml(fix?fix.name:'fixture')+'. The head will move through its range while the camera captures beam positions.</p>';
+  h+='<div class="prog-bar" style="height:8px;margin-bottom:.5em"><div class="prog-fill" style="width:'+Math.round(doneSteps/totalSteps*100)+'%"></div></div>';
+  h+='<div style="font-size:.82em;color:#64748b;margin-bottom:.6em">'+axisLabel+' step '+s.step+' / '+s.steps+'</div>';
+  if(s.step<s.steps){
+    var val=s.sweepValues[s.step];
+    h+='<div style="font-size:.9em;color:#e2e8f0;margin-bottom:.4em">'+axisLabel+' = '+val.toFixed(3)+' <span style="color:#64748b">(DMX '+(s.axis==="pan"?"pan":"tilt")+': '+Math.round(val*255)+')</span></div>';
+    h+='<div id="rcal-msg" style="font-size:.82em;color:#22d3ee;margin-bottom:.4em">Sending DMX + capturing...</div>';
+    h+='<img id="rcal-snap" style="width:100%;border-radius:4px;border:1px solid #334155;display:none;margin-bottom:.4em">';
+  }else if(s.axis==='pan'){
+    h+='<div style="font-size:.9em;color:#4ade80;margin-bottom:.5em">\u2713 Pan sweep complete ('+s.panSamples.length+' samples). Starting tilt...</div>';
+  }
+  h+='<div style="display:flex;gap:.5em;margin-top:.6em">';
+  if(s.step>=s.steps&&s.axis==='tilt'){
+    h+='<button class="btn btn-on" onclick="_rangeCalSubmit()">Save Calibration</button>';
+  }
+  h+='<button class="btn btn-off" onclick="_rcalState=null;closeModal()">Cancel</button>';
+  h+='</div></div>';
+  document.getElementById('modal-title').textContent='Range Calibration — '+axisLabel;
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+  // Auto-advance: send DMX, capture, detect beam
+  if(s.step<s.steps){
+    setTimeout(function(){_rangeCalStep();},500);
+  }else if(s.axis==='pan'){
+    // Switch to tilt axis
+    setTimeout(function(){
+      s.axis='tilt';s.step=0;_rangeCalShow();
+    },1000);
+  }
+}
+
+function _rangeCalStep(){
+  var s=_rcalState;if(!s||s.step>=s.steps)return;
+  var val=s.sweepValues[s.step];
+  // Send DMX pan/tilt value to the fixture via action
+  var panVal=s.axis==='pan'?val:0.5;
+  var tiltVal=s.axis==='tilt'?val:0.5;
+  // Use direct DMX write — set pan/tilt channels
+  ra('POST','/api/fixtures/'+s.fixId+'/dmx-test',
+    {pan:panVal,tilt:tiltVal,dimmer:1.0},function(){
+    // Wait for head to move, then capture
+    setTimeout(function(){
+      // Capture snapshot from camera
+      var x=new XMLHttpRequest();
+      x.open('GET','/api/cameras/'+s.camId+'/snapshot');
+      x.responseType='blob';
+      x.onload=function(){
+        var img=document.getElementById('rcal-snap');
+        var msg=document.getElementById('rcal-msg');
+        if(x.status===200&&x.response){
+          if(img){img.src=URL.createObjectURL(x.response);img.style.display='block';}
+          // Run scan to find beam position
+          ra('POST','/api/cameras/'+s.camId+'/scan',
+            {threshold:0.1,resolution:320,cam:0},function(r){
+            // Use brightest/largest detection or center of image
+            var px=320,py=240;  // default center
+            if(r&&r.ok&&r.detections&&r.detections.length){
+              // Use the detection with highest confidence
+              var best=r.detections.sort(function(a,b){return b.confidence-a.confidence;})[0];
+              if(best.pixelBox){px=best.pixelBox.x+best.pixelBox.w/2;py=best.pixelBox.y+best.pixelBox.h/2;}
+            }
+            var sample={dmxNorm:val,pixelX:px,pixelY:py};
+            if(s.axis==='pan')s.panSamples.push(sample);
+            else s.tiltSamples.push(sample);
+            s.step++;
+            if(msg)msg.textContent='Captured at pixel ('+Math.round(px)+', '+Math.round(py)+')';
+            setTimeout(function(){_rangeCalShow();},300);
+          });
+        }else{
+          if(msg)msg.textContent='Capture failed — skipping step';
+          s.step++;
+          setTimeout(function(){_rangeCalShow();},500);
+        }
+      };
+      x.send();
+    },800);  // Wait 800ms for head to settle
+  });
+}
+
+function _rangeCalSubmit(){
+  var s=_rcalState;if(!s)return;
+  ra('POST','/api/fixtures/'+s.fixId+'/calibrate-range',
+    {cameraId:s.camId,panSamples:s.panSamples,tiltSamples:s.tiltSamples},function(r){
+    if(r&&r.ok){
+      var h='<div style="text-align:center;padding:1em">';
+      h+='<div style="font-size:2em;color:#4ade80;margin-bottom:.3em">\u2713</div>';
+      h+='<div style="font-size:1.1em;color:#e2e8f0;margin-bottom:.5em">Range Calibration Complete</div>';
+      h+='<div style="font-size:.85em;color:#94a3b8">Pan: '+s.panSamples.length+' samples, Tilt: '+s.tiltSamples.length+' samples</div>';
+      h+='<div style="margin-top:1em"><button class="btn btn-on" onclick="closeModal();_rcalState=null;loadLayout()">Done</button></div>';
+      h+='</div>';
+      document.getElementById('modal-body').innerHTML=h;
+      (_fixtures||[]).forEach(function(f){if(f.id===s.fixId)f.rangeCalibrated=true;});
+      renderSidebar();
+    }else{
+      document.getElementById('hs').textContent='Range calibration failed: '+(r&&r.err||'unknown');
+    }
   });
 }
 

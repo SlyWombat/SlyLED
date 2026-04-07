@@ -167,6 +167,7 @@ _actions = _load("actions", [])
 _wifi    = _load("wifi",    {"ssid": "", "password": ""})
 _ssh     = _load("ssh",    {"sshUser": "root", "sshPassword": "", "sshKeyPath": ""})
 _calibrations = _load("calibrations", {})  # {fixtureId_str: {matrix, error, points, timestamp}}
+_range_cal    = _load("range_calibrations", {})  # {fixtureId_str: {pan, tilt, timestamp}}
 _ssh_bootstrapped = False  # deferred pre-population (needs _encrypt_pw defined later)
 
 # Live action events pushed by children (ip  -' {actionType, stepIndex, totalSteps, event, ts})
@@ -1614,6 +1615,178 @@ def api_camera_calibration_get(fid):
     return jsonify(calibrated=True, error=cal.get("error"),
                    points=len(cal.get("points", [])),
                    timestamp=cal.get("timestamp"))
+
+
+# ── Moving head range calibration ─────────────────────────────────────
+
+def _compute_axis_mapping(samples):
+    """Fit a linear mapping from normalized DMX value (0-1) → stage position.
+
+    Args:
+        samples: list of (dmx_norm, stage_x, stage_z) tuples
+
+    Returns:
+        (offset, scale_x, scale_z) where stage_pos ≈ offset + dmx_norm * scale
+    """
+    if len(samples) < 2:
+        return None
+    import numpy as np
+    norms = np.array([s[0] for s in samples])
+    xs = np.array([s[1] for s in samples])
+    zs = np.array([s[2] for s in samples])
+    # Linear fit: stage_coord = a + b * dmx_norm
+    A = np.vstack([np.ones_like(norms), norms]).T
+    sol_x = np.linalg.lstsq(A, xs, rcond=None)[0]  # [intercept, slope]
+    sol_z = np.linalg.lstsq(A, zs, rcond=None)[0]
+    return {
+        "intercept_x": float(sol_x[0]), "slope_x": float(sol_x[1]),
+        "intercept_z": float(sol_z[0]), "slope_z": float(sol_z[1]),
+    }
+
+
+def _inverse_axis_lookup(mapping, target_x, target_z):
+    """Given a linear mapping and target stage position, compute the DMX normalized value.
+    Uses least-squares fit of the X and Z axes."""
+    sx, bx = mapping["intercept_x"], mapping["slope_x"]
+    sz, bz = mapping["intercept_z"], mapping["slope_z"]
+    # Solve: target = intercept + norm * slope → norm = (target - intercept) / slope
+    norms = []
+    if abs(bx) > 0.001:
+        norms.append((target_x - sx) / bx)
+    if abs(bz) > 0.001:
+        norms.append((target_z - sz) / bz)
+    if not norms:
+        return 0.5
+    return max(0.0, min(1.0, sum(norms) / len(norms)))
+
+
+@app.post("/api/fixtures/<int:fid>/calibrate-range")
+def api_fixture_calibrate_range(fid):
+    """Calibrate a moving head's pan/tilt range using camera observation.
+
+    Body: {cameraId, panSamples: [{dmxNorm, pixelX, pixelY}], tiltSamples: [...]}
+    The SPA wizard sweeps the head through its range, captures beam positions via
+    the camera, and submits the collected samples here for processing.
+    """
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f:
+        return jsonify(err="Fixture not found"), 404
+    if f.get("fixtureType") != "dmx":
+        return jsonify(err="Only DMX fixtures support range calibration"), 400
+
+    body = request.get_json(silent=True) or {}
+    cam_id = body.get("cameraId")
+    pan_samples = body.get("panSamples", [])
+    tilt_samples = body.get("tiltSamples", [])
+
+    if not cam_id:
+        return jsonify(err="cameraId required"), 400
+
+    # Need camera calibration for pixel→stage transform
+    cal = _calibrations.get(str(cam_id))
+    if not cal or not cal.get("matrix"):
+        return jsonify(err="Camera must be calibrated first"), 400
+
+    H = cal["matrix"]
+
+    # Transform pixel samples to stage coordinates
+    pan_stage = []
+    for s in pan_samples:
+        sx, sz = _apply_homography(H, s["pixelX"], s["pixelY"])
+        pan_stage.append((s["dmxNorm"], sx, sz))
+
+    tilt_stage = []
+    for s in tilt_samples:
+        sx, sz = _apply_homography(H, s["pixelX"], s["pixelY"])
+        tilt_stage.append((s["dmxNorm"], sx, sz))
+
+    result = {}
+
+    if len(pan_stage) >= 2:
+        pan_map = _compute_axis_mapping(pan_stage)
+        if pan_map:
+            result["pan"] = pan_map
+            result["panSampleCount"] = len(pan_stage)
+
+    if len(tilt_stage) >= 2:
+        tilt_map = _compute_axis_mapping(tilt_stage)
+        if tilt_map:
+            result["tilt"] = tilt_map
+            result["tiltSampleCount"] = len(tilt_stage)
+
+    if not result:
+        return jsonify(err="Need at least 2 samples per axis"), 400
+
+    result["timestamp"] = time.time()
+    result["cameraId"] = cam_id
+    _range_cal[str(fid)] = result
+    _save("range_calibrations", _range_cal)
+
+    f["rangeCalibrated"] = True
+    _save("fixtures", _fixtures)
+
+    return jsonify(ok=True, rangeCalibrated=True, result=result)
+
+
+@app.post("/api/fixtures/<int:fid>/dmx-test")
+def api_fixture_dmx_test(fid):
+    """Send test DMX values to a fixture. Used by range calibration wizard.
+    Body: {pan: 0-1, tilt: 0-1, dimmer: 0-1}"""
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f or f.get("fixtureType") != "dmx":
+        return jsonify(err="DMX fixture not found"), 404
+    body = request.get_json(silent=True) or {}
+    pid = f.get("dmxProfileId")
+    prof_info = _profile_lib.channel_info(pid) if pid else None
+    if not prof_info:
+        return jsonify(err="Fixture has no profile"), 400
+    uni = f.get("dmxUniverse", 1)
+    addr = f.get("dmxStartAddr", 1)
+    try:
+        uni_buf = _artnet.get_universe(uni)
+    except Exception:
+        return jsonify(err="Art-Net engine not running"), 503
+    profile = {"channel_map": prof_info.get("channel_map"),
+               "channels": prof_info.get("channels", [])}
+    pan = body.get("pan", 0.5)
+    tilt = body.get("tilt", 0.5)
+    dimmer = body.get("dimmer", 1.0)
+    uni_buf.set_fixture_pan_tilt(addr, pan, tilt, profile)
+    # Set dimmer if available
+    ch_map = prof_info.get("channel_map", {})
+    if "dimmer" in ch_map:
+        uni_buf.set_channel(addr + ch_map["dimmer"], int(dimmer * 255))
+    return jsonify(ok=True)
+
+
+@app.get("/api/fixtures/<int:fid>/calibrate-range")
+def api_fixture_range_cal_get(fid):
+    """Get range calibration data for a fixture."""
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f:
+        return jsonify(err="Fixture not found"), 404
+    cal = _range_cal.get(str(fid))
+    if not cal:
+        return jsonify(rangeCalibrated=False)
+    return jsonify(rangeCalibrated=True, **cal)
+
+
+def compute_pan_tilt_calibrated(fixture_id, target_pos):
+    """Compute calibrated pan/tilt for a fixture aiming at target_pos.
+
+    Returns (pan_norm, tilt_norm) 0.0-1.0 using calibration data,
+    or None if fixture has no range calibration.
+    """
+    cal = _range_cal.get(str(fixture_id))
+    if not cal:
+        return None
+    pan_norm = 0.5
+    tilt_norm = 0.5
+    if "pan" in cal:
+        pan_norm = _inverse_axis_lookup(cal["pan"], target_pos[0], target_pos[2])
+    if "tilt" in cal:
+        tilt_norm = _inverse_axis_lookup(cal["tilt"], target_pos[0], target_pos[2])
+    return (pan_norm, tilt_norm)
 
 
 # ── Camera tracking — orchestrator proxy ──────────────────────────────
@@ -3697,11 +3870,15 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
             aim[0] = max(0, min(sw, aim[0]))
             aim[1] = max(0, min(sh, aim[1]))
             aim[2] = max(0, min(sd, aim[2]))
-            # Compute pan/tilt
-            pt = compute_pan_tilt(fx_pos, aim, head_info["pan_range"], head_info["tilt_range"])
-            if pt is None:
-                continue
-            pan, tilt = pt
+            # Compute pan/tilt — use calibrated mapping if available, else geometric
+            pt_cal = compute_pan_tilt_calibrated(f["id"], aim)
+            if pt_cal:
+                pan, tilt = pt_cal
+            else:
+                pt = compute_pan_tilt(fx_pos, aim, head_info["pan_range"], head_info["tilt_range"])
+                if pt is None:
+                    continue
+                pan, tilt = pt
             # Write to DMX universe
             prof_info = head_info["prof_info"]
             if prof_info:
@@ -4958,6 +5135,8 @@ def api_reset():
         _save("dmx_settings", _dmx_settings)
         _calibrations.clear()
         _save("calibrations", _calibrations)
+        _range_cal.clear()
+        _save("range_calibrations", _range_cal)
         # Delete custom profiles (keep built-ins)
         for p in list(_profile_lib._profiles.values()):
             if not p.get("builtin"):

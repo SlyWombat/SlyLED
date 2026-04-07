@@ -652,7 +652,49 @@ def run():
         wall_id = r.get_json().get('id')
         ok('Persistent object has low ID', wall_id < 10000, f'id={wall_id}')
 
+        # ── Moving head range calibration ─────────────────────────
+        from parent_server import _compute_axis_mapping, _inverse_axis_lookup
+
+        # Axis mapping: linear fit from DMX norm → stage position
+        samples = [(0.0, 0, 0), (0.5, 1500, 750), (1.0, 3000, 1500)]
+        mapping = _compute_axis_mapping(samples)
+        ok('Axis mapping computed', mapping is not None)
+        ok('Axis mapping has slope_x', abs(mapping['slope_x'] - 3000) < 10)
+        ok('Axis mapping has slope_z', abs(mapping['slope_z'] - 1500) < 10)
+
+        # Inverse lookup: stage → DMX norm
+        norm = _inverse_axis_lookup(mapping, 1500, 750)
+        ok('Inverse lookup mid → ~0.5', abs(norm - 0.5) < 0.05, f'norm={norm:.3f}')
+        norm_zero = _inverse_axis_lookup(mapping, 0, 0)
+        ok('Inverse lookup origin → ~0.0', abs(norm_zero) < 0.05, f'norm={norm_zero:.3f}')
+
+        # API: calibrate-range on LED fixture → 400
+        led_fix = c.post('/api/fixtures', json={'name': 'LEDtest', 'fixtureType': 'led'})
+        led_fid = led_fix.get_json()['id']
+        r = c.post(f'/api/fixtures/{led_fid}/calibrate-range', json={'cameraId': 1})
+        ok('Range cal on LED → 400', r.status_code == 400)
+        c.delete(f'/api/fixtures/{led_fid}')
+
+        # API: calibrate-range on DMX without camera cal → 400
+        dmx_fix = c.post('/api/fixtures', json={
+            'name': 'MoverTest', 'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 16
+        })
+        dmx_fid = dmx_fix.get_json()['id']
+        r = c.post(f'/api/fixtures/{dmx_fid}/calibrate-range',
+                    json={'cameraId': 999, 'panSamples': [], 'tiltSamples': []})
+        ok('Range cal no cam cal → 400', r.status_code == 400)
+
+        # API: GET calibrate-range when uncalibrated
+        r = c.get(f'/api/fixtures/{dmx_fid}/calibrate-range')
+        ok('Range cal uncalibrated → false', r.get_json().get('rangeCalibrated') is False)
+
+        # API: dmx-test on non-DMX → 404
+        r = c.post(f'/api/fixtures/99999/dmx-test', json={'pan': 0.5})
+        ok('DMX test unknown → 404', r.status_code == 404)
+
         # Clean up
+        c.delete(f'/api/fixtures/{dmx_fid}')
         c.delete(f'/api/objects/{tmp_id}')
         c.delete(f'/api/objects/{wall_id}')
         c.delete(f'/api/cameras/{cal_cam_id}')
@@ -1225,6 +1267,9 @@ def run():
         ok('SPA has tracking start', '_trackStart' in spa)
         ok('SPA has tracking stop', '_trackStop' in spa)
         ok('SPA has track poll', '_trackPollStart' in spa)
+        ok('SPA has range cal', '_rangeCalStart' in spa)
+        ok('SPA has range cal submit', '_rangeCalSubmit' in spa)
+        ok('SPA has Cal Range button', 'Cal Range' in spa)
         # Toolbar tooltips on all buttons
         ok('SPA toolbar: save tooltip', "title='Save layout'" in spa)
         ok('SPA toolbar: mode tooltip', "title='Switch to 3D'" in spa or "title='Switch to 2D'" in spa)
