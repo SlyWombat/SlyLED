@@ -32,8 +32,10 @@ CAM_IDX = 1  # EMEET 90° wide FOV
 
 # From slyled-config (2).json — positions in mm
 # Light center of axis is 1670mm from floor
+# Blue is best detected color (101K px vs 25K for red)
+# Use blue for calibration of both movers (one at a time, other off)
 MOVERS = [
-    {"name": "Mover1", "addr": 14, "color": [255, 0, 0],
+    {"name": "Mover1", "addr": 14, "color": [0, 0, 255],
      "pos": (516, 1670, 26)},
     {"name": "Mover2", "addr": 1,  "color": [0, 0, 255],
      "pos": (2001, 1670, 45)},
