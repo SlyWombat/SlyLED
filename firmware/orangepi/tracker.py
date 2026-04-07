@@ -17,38 +17,28 @@ log = logging.getLogger("slyled-cam")
 # Default re-ID proximity threshold (mm) — detections within this distance
 # of an existing tracked object are considered the same person
 REID_THRESHOLD_MM = 500
-TEMPORAL_ID_BASE = 10000
 
 
 class Tracker:
     """Continuous tracking loop with proximity-based re-ID."""
 
-    def __init__(self, detector, capture_fn, orchestrator_url,
-                 camera_id, pixel_to_stage_fn,
-                 fps=2, threshold=0.4, ttl=5):
+    def __init__(self, detector, capture_fn):
         """
         Args:
             detector: ObjectDetector instance
             capture_fn: callable(device) → BGR numpy frame or None
-            orchestrator_url: base URL of orchestrator (e.g. http://192.168.10.174:8080)
-            camera_id: fixture ID on the orchestrator
-            pixel_to_stage_fn: callable(detections, frame_w, frame_h) → stage-space detections
-            fps: detection frames per second (default 2 for ARM)
-            threshold: confidence threshold
-            ttl: temporal object TTL in seconds
         """
         self._detector = detector
         self._capture = capture_fn
-        self._orch_url = orchestrator_url.rstrip("/")
-        self._cam_id = camera_id
-        self._px_to_stage = pixel_to_stage_fn
-        self._fps = fps
-        self._threshold = threshold
-        self._ttl = ttl
+        self._orch_url = ""
+        self._cam_id = 0
+        self._px_to_stage = None
+        self._fps = 2
+        self._threshold = 0.4
+        self._ttl = 5
         self._running = False
         self._thread = None
         self._lock = threading.Lock()
-        # Tracked objects: {track_id: {x, z, label, last_seen, orch_obj_id}}
         self._tracks = {}
         self._next_track_id = 0
 
@@ -60,10 +50,16 @@ class Tracker:
     def track_count(self):
         return len(self._tracks)
 
-    def start(self, device):
+    def start(self, device, orch_url="", camera_id=0,
+              fps=2, threshold=0.4, ttl=5):
         """Start tracking loop on the given camera device."""
         if self._running:
             return
+        self._orch_url = orch_url.rstrip("/") if orch_url else ""
+        self._cam_id = camera_id
+        self._fps = fps
+        self._threshold = threshold
+        self._ttl = ttl
         self._running = True
         self._thread = threading.Thread(target=self._loop, args=(device,), daemon=True)
         self._thread.start()
@@ -154,6 +150,12 @@ class Tracker:
                         "orch_obj_id": orch_id,
                     }
                     matched_track_ids.add(tid)
+
+        # Remove stale tracks (not seen for > TTL)
+        stale = [tid for tid, trk in self._tracks.items()
+                 if now - trk["last_seen"] > self._ttl]
+        for tid in stale:
+            del self._tracks[tid]
 
     def _orch_create_temporal(self, det):
         """Create a temporal object on the orchestrator. Returns object ID or None."""

@@ -2794,7 +2794,7 @@ function _peSave(isEdit){
     if(r&&r.ok){document.getElementById('hs').textContent='Profile saved: '+p.name;closeModal();if(typeof loadDmxProfiles==='function')loadDmxProfiles();}
     else if(r&&r.err&&r.err.indexOf('built-in')>=0){
       // Built-in profile — fork as custom copy
-      p.id=p.id+'-custom';
+      if(!p.id.endsWith('-custom'))p.id=p.id+'-custom';
       p.builtin=false;
       ra('POST','/api/dmx-profiles',p,function(r2){
         if(r2&&r2.ok){document.getElementById('hs').textContent='Saved as custom copy: '+p.id;closeModal();if(typeof loadDmxProfiles==='function')loadDmxProfiles();}

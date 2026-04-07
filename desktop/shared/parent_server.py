@@ -5166,6 +5166,8 @@ def api_reset():
         _save("calibrations", _calibrations)
         _range_cal.clear()
         _save("range_calibrations", _range_cal)
+        _calib_state.clear()
+        _tracking_state.clear()
         # Delete custom profiles (keep built-ins)
         for p in list(_profile_lib._profiles.values()):
             if not p.get("builtin"):

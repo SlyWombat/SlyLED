@@ -769,13 +769,7 @@ def _get_tracker():
         return None
     try:
         from tracker import Tracker
-        _tracker = Tracker(
-            detector=det,
-            capture_fn=_cv_capture,
-            orchestrator_url="",  # Set on start
-            camera_id=0,
-            pixel_to_stage_fn=None,  # Orchestrator handles transform
-        )
+        _tracker = Tracker(detector=det, capture_fn=_cv_capture)
         return _tracker
     except ImportError:
         log.warning("tracker module not available")
@@ -803,15 +797,8 @@ def track_start():
     if tracker.running:
         return jsonify(ok=True, message="Already tracking")
 
-    # Configure tracker
-    tracker._orch_url = orch_url
-    tracker._cam_id = camera_id
-    tracker._fps = fps
-    tracker._threshold = threshold
-    tracker._ttl = ttl
-    tracker.start(cameras[cam_idx]["device"])
-
-    _hw_info["tracking"] = True
+    tracker.start(cameras[cam_idx]["device"], orch_url=orch_url,
+                  camera_id=camera_id, fps=fps, threshold=threshold, ttl=ttl)
     return jsonify(ok=True, message="Tracking started")
 
 @app.post("/track/stop")
@@ -820,7 +807,6 @@ def track_stop():
     tracker = _get_tracker()
     if tracker and tracker.running:
         tracker.stop()
-    _hw_info["tracking"] = False
     return jsonify(ok=True, message="Tracking stopped")
 
 @app.get("/track/status")
