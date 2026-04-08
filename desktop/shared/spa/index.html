@@ -955,7 +955,9 @@ function _renderSetup(){
         // Camera nodes as hardware rows
         camNodes.forEach(function(node){
           var typeBadge='<span class="badge" style="background:#0e7490;color:#fff">Camera Node</span>';
-          var acts='<button class="btn" onclick="window.open(\'http://'+escapeHtml(node.ip)+':5000/config\',\'_blank\')" style="background:#0e7490;color:#fff">Configure</button>';
+          var fids=node.fixtures.map(function(f){return f.id;});
+          var acts='<button class="btn" onclick="window.open(\'http://'+escapeHtml(node.ip)+':5000/config\',\'_blank\')" style="background:#0e7490;color:#fff">Configure</button>'
+            +' <button class="btn btn-off" onclick="_removeCameraNode('+JSON.stringify(fids)+',\''+escapeHtml(node.name).replace(/'/g,"\\'")+'\')">Remove</button>';
           h+='<tr><td><b>'+escapeHtml(node.name)+'</b> <span style="color:#64748b;font-size:.75em">('+node.fixtures.length+' sensor'+(node.fixtures.length>1?'s':'')+')</span></td><td>'+typeBadge+'</td><td>'+escapeHtml(node.ip)+'</td><td id="cam-hw-st-'+escapeHtml(node.ip).replace(/\./g,'-')+'"><span class="badge" style="background:#334;color:#888">Checking...</span></td><td id="cam-hw-fw-'+escapeHtml(node.ip).replace(/\./g,'-')+'">—</td><td>'+acts+'</td></tr>';
         });
         h+='</table>';
@@ -1354,7 +1356,7 @@ function discoverChildren(){
           if(bt==='camera'){
             addBtn='<button class="btn" onclick="addDiscoveredCamera(\''+c.ip+'\',\''+escapeHtml(c.hostname||c.name||'Camera').replace(/'/g,"\\'")+
               '\')" style="background:#0e7490;color:#fff">Add Camera</button>'
-              +' <a href="http://'+c.ip+':5000/config" target="_blank" style="color:#22d3ee;font-size:.78em;text-decoration:underline;margin-left:.3em">Config</a>';
+              +' <button class="btn" onclick="window.open(\'http://'+escapeHtml(c.ip)+':5000/config\',\'_blank\')" style="background:#475569;color:#fff">Config</button>';
           }else{
             addBtn='<button class="btn btn-on" onclick="addDiscovered(\''+c.ip+'\')">Add</button>';
             if(bt==='dmx')addBtn+=' <button class="btn" onclick="addDiscoveredDmxBridge(\''+c.ip+'\')" style="background:#7c3aed;color:#fff">Configure</button>';
@@ -1422,7 +1424,7 @@ function _afCamRenderResults(el,cams){
       +'<td>'+(c.fovDeg||60)+'\u00b0</td>'
       +'<td>'+(c.resolutionW||'?')+'x'+(c.resolutionH||'?')+'</td>'
       +'<td><button class="btn" onclick="addDiscoveredCamera(\''+c.ip+'\',\''+escapeHtml(name).replace(/'/g,"\\'")+'\')" style="background:#0e7490;color:#fff;font-size:.82em;padding:.2em .6em">Add</button>'
-      +' <a href="http://'+c.ip+':5000/config" target="_blank" style="color:#22d3ee;font-size:.78em;text-decoration:underline">Config</a>'
+      +' <button class="btn" onclick="window.open(\'http://'+escapeHtml(c.ip)+':5000/config\',\'_blank\')" style="background:#475569;color:#fff;font-size:.82em;padding:.2em .6em">Config</button>'
       +'</td></tr>';
   });
   el.innerHTML=h+'</table>';
@@ -1492,6 +1494,17 @@ function discoverCameras(btn){
         el.style.display='block';
       });
     },500);
+  });
+}
+
+function _removeCameraNode(fixtureIds,name){
+  if(!confirm('Remove camera node "'+name+'" and all '+fixtureIds.length+' sensor(s)?'))return;
+  var remaining=fixtureIds.length;
+  fixtureIds.forEach(function(fid){
+    ra('DELETE','/api/cameras/'+fid,null,function(){
+      remaining--;
+      if(remaining<=0){loadSetup();document.getElementById('hs').textContent='Removed '+name;}
+    });
   });
 }
 

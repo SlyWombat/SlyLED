@@ -79,7 +79,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "1.0.23"
+VERSION = "1.0.27"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1210,8 +1210,8 @@ def api_cameras_register():
             if dup:
                 continue
             cam_info = cameras[cam_idx] if cam_idx < len(cameras) else {}
-            cam_name = cam_info.get("name", "")
-            # Short name: "NodeName — CamName" or just "NodeName" if single camera
+            # Use user-set custom name from camera config page, fall back to hardware name
+            cam_name = cam_info.get("customName") or cam_info.get("name", "")
             fixture_name = f"{base_name} — {cam_name}" if len(cameras) > 1 and cam_name else base_name
             f = {
                 "id": _nxt_fix, "name": fixture_name,
@@ -5646,6 +5646,8 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
 
 
 
