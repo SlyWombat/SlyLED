@@ -1904,7 +1904,7 @@ function s3dLoadChildren(){
         var aimLocal=new THREE.Vector3((aim[0]-(c.x||0))/1000,(aim[1]-(c.y||0))/1000,(aim[2]-(c.z||0))/1000);
         var beamLen=aimLocal.length();
         // Cone only shown for calibrated DMX fixtures (not cameras, not uncalibrated)
-        var showCone=_fix3d.fixtureType==='dmx'&&(_fix3d.rangeCalibrated||_fix3d.calibrated);
+        var showCone=_fix3d.fixtureType==='dmx'&&_fix3d.aimPoint;
         if(beamLen>0.01&&showCone){
           var bwDeg=_fix3d.fixtureType==='camera'?(_fix3d.fovDeg||60):15;
           // Use cached profile beamWidth (sync) — _profileCache populated by emulator/layout
@@ -4394,7 +4394,7 @@ function drawLayout(){
     ctx.fillStyle=nodeCol;ctx.fill();
     ctx.strokeStyle=nodeBdr;ctx.lineWidth=2;ctx.stroke();
     // DMX beam direction line (2D top-down: X→horizontal, aim shown as line from fixture to aim XY)
-    if(ft==='dmx'&&f.aimPoint&&(f.rangeCalibrated||f.calibrated)){
+    if(ft==='dmx'&&f.aimPoint){
       var ax=f.aimPoint[0]*W/phW,ay=H-f.aimPoint[1]*H/phH;
       var bLen=Math.sqrt((ax-cx)*(ax-cx)+(ay-cy)*(ay-cy));
       if(bLen>5){
