@@ -97,9 +97,11 @@ class DepthEstimator:
             depth = cv2.resize(depth, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
 
             # Normalize to 0-1 range (relative depth)
+            # Depth-Anything-V2 outputs inverse depth (higher = closer)
+            # Invert so higher value = farther (standard depth convention)
             d_min, d_max = depth.min(), depth.max()
             if d_max - d_min > 1e-6:
-                depth = (depth - d_min) / (d_max - d_min)
+                depth = 1.0 - (depth - d_min) / (d_max - d_min)
             else:
                 depth = np.zeros_like(depth)
 
