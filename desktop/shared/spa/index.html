@@ -919,8 +919,18 @@ function _renderSetup(){
         +'</div>'
         +'<div id="disc-results" style="display:none;margin-bottom:.8em"></div>';
 
-      // ── Hardware section (DMX bridges + standalone children)
-      if(standaloneHw.length){
+      // ── Hardware section (DMX bridges + standalone children + camera nodes)
+      // Group camera fixtures by IP to show each Orange Pi as a hardware node
+      var camNodeMap={};
+      camFixtures.forEach(function(f){
+        var ip=f.cameraIp||'';
+        if(!camNodeMap[ip])camNodeMap[ip]={ip:ip,fixtures:[],name:''};
+        camNodeMap[ip].fixtures.push(f);
+        if(!camNodeMap[ip].name)camNodeMap[ip].name=f.name.split(' — ')[0]||'Camera Node';
+      });
+      var camNodes=Object.values(camNodeMap);
+      var hasHw=standaloneHw.length||camNodes.length;
+      if(hasHw){
         h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">Hardware</h3>'
           +'<table class="tbl"><tr><th>Device</th><th>Type</th><th>IP</th><th>Status</th><th>Firmware</th><th>Actions</th></tr>';
         standaloneHw.forEach(function(c){
@@ -935,6 +945,12 @@ function _renderSetup(){
           acts+=' <button class="btn btn-off" onclick="removeChild('+c.id+')">Remove</button>';
           h+='<tr><td><b>'+escapeHtml(c.name||c.hostname)+'</b></td><td>'+typeBadge+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+(c.fwVersion||'—')+'</td><td>'+acts+'</td></tr>';
         });
+        // Camera nodes as hardware rows
+        camNodes.forEach(function(node){
+          var typeBadge='<span class="badge" style="background:#0e7490;color:#fff">Camera Node</span>';
+          var acts='<button class="btn" onclick="window.open(\'http://'+escapeHtml(node.ip)+':5000/config\',\'_blank\')" style="background:#0e7490;color:#fff">Configure</button>';
+          h+='<tr><td><b>'+escapeHtml(node.name)+'</b> <span style="color:#64748b;font-size:.75em">('+node.fixtures.length+' sensor'+(node.fixtures.length>1?'s':'')+')</span></td><td>'+typeBadge+'</td><td>'+escapeHtml(node.ip)+'</td><td id="cam-hw-st-'+escapeHtml(node.ip).replace(/\./g,'-')+'"><span class="badge" style="background:#334;color:#888">Checking...</span></td><td id="cam-hw-fw-'+escapeHtml(node.ip).replace(/\./g,'-')+'">—</td><td>'+acts+'</td></tr>';
+        });
         h+='</table>';
       }
 
@@ -947,10 +963,20 @@ function _renderSetup(){
       // Async: fetch camera live status (don't block render)
       if(camFixtures.length){ra('GET','/api/cameras',null,function(cams){
         if(!cams||!cams.length)return;
-        var tbl=document.querySelector('#t-setup .cam-status-tbl');if(!tbl)return;
+        // Update per-sensor status
         cams.forEach(function(c){
           var cell=document.getElementById('cam-st-'+c.id);
           if(cell)cell.innerHTML=c.online?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
+        });
+        // Update hardware node status (grouped by IP)
+        var seen={};
+        cams.forEach(function(c){
+          var ip=c.cameraIp||'';if(!ip||seen[ip])return;seen[ip]=true;
+          var key=ip.replace(/\./g,'-');
+          var stCell=document.getElementById('cam-hw-st-'+key);
+          var fwCell=document.getElementById('cam-hw-fw-'+key);
+          if(stCell)stCell.innerHTML=c.online?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
+          if(fwCell)fwCell.textContent=c.fwVersion||'—';
         });
       });}
       if(ledFixtures.length){
@@ -997,23 +1023,24 @@ function _renderSetup(){
       }
       h+='</table>';
 
-      // ── Cameras section
-      h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">Cameras '
+      // ── Cameras section — per-sensor listing grouped by node
+      h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">Camera Sensors '
         +'<button class="btn" onclick="discoverCameras(this)" id="cam-disc-btn" style="font-size:.75em;padding:.15em .5em;margin-left:.5em;background:#0e7490;color:#fff">Discover</button>'
         +'</h3>';
       h+='<div id="cam-disc-results" style="display:none;margin-bottom:.5em"></div>';
       if(camFixtures.length){
-        h+='<table class="tbl cam-status-tbl"><tr><th>Camera</th><th>IP</th><th>FOV</th><th>Resolution</th><th>Status</th><th>Actions</th></tr>';
+        h+='<table class="tbl cam-status-tbl"><tr><th>#</th><th>Sensor Name</th><th>Node</th><th>FOV</th><th>Resolution</th><th>Status</th><th>Actions</th></tr>';
         camFixtures.forEach(function(f){
           var ip=f.cameraIp||'—';
+          var camIdx=f.cameraIdx||0;
           var fov=(f.fovDeg||60)+'\u00b0';
           var res=(f.resolutionW||'—')+'x'+(f.resolutionH||'—');
+          var calBadge=f.calibrated?'<span class="badge" style="background:#065f46;color:#34d399;margin-left:4px">\u2713 Cal</span>':'';
           var acts='<button class="btn" onclick="editFixture('+f.id+')" style="background:#0e7490;color:#fff">Edit</button>';
           if(ip!=='—')acts+=' <button class="btn" onclick="_camSnap('+f.id+')" style="background:#059669;color:#fff">Snap</button>';
-          if(ip!=='—')acts+=' <button class="btn" onclick="window.open(\'http://'+escapeHtml(ip)+':5000/config\',\'_blank\')" style="background:#475569;color:#fff">Config</button>';
           acts+=' <button class="btn btn-off" onclick="removeCamera('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
-          h+='<tr><td><b>'+escapeHtml(f.name)+'</b></td><td>'+escapeHtml(ip)+'</td><td>'+fov+'</td><td>'+res+'</td><td id="cam-st-'+f.id+'"><span class="badge" style="background:#334;color:#888">Checking...</span></td><td>'+acts+'</td></tr>';
-          h+='<tr id="cam-snap-row-'+f.id+'" style="display:none"><td colspan="6" style="padding:.3em"><div id="cam-snap-'+f.id+'" style="text-align:center"></div></td></tr>';
+          h+='<tr><td style="color:#64748b">cam'+camIdx+'</td><td><b>'+escapeHtml(f.name)+'</b>'+calBadge+'</td><td>'+escapeHtml(ip)+'</td><td>'+fov+'</td><td>'+res+'</td><td id="cam-st-'+f.id+'"><span class="badge" style="background:#334;color:#888">...</span></td><td>'+acts+'</td></tr>';
+          h+='<tr id="cam-snap-row-'+f.id+'" style="display:none"><td colspan="7" style="padding:.3em"><div id="cam-snap-'+f.id+'" style="text-align:center"></div></td></tr>';
         });
         h+='</table>';
       }else{
