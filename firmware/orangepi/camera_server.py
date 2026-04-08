@@ -97,8 +97,9 @@ def _detect_cameras():
                         card = line.split(":", 1)[1].strip()
                     elif "Capabilities" in line:
                         caps = line
-                # Skip SoC media nodes and metadata-only devices
-                if any(d in driver for d in ("sunxi", "sun6i", "cedrus")):
+                # Skip SoC/ISP media nodes (not real cameras)
+                if any(d in driver for d in ("sunxi", "sun6i", "cedrus", "bcm2835", "bcm2835-isp")) or \
+                   any(d in card for d in ("bcm2835-isp", "sunxi-vin")):
                     continue
                 # Check Device Caps section (after "Device Caps" line)
                 # Real capture has "Video Capture", metadata-only has "Metadata Capture"
