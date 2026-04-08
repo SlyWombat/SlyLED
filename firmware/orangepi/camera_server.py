@@ -62,12 +62,18 @@ def _load_config():
     _config = defaults
 
 def _camera_fov(idx):
-    """Get FOV for a specific camera index."""
+    """Get FOV: user config > detected from USB VID:PID > node default."""
     cfg = _config.get("cameraCfg", {}).get(str(idx), {})
     if cfg.get("fovDeg"):
         return cfg["fovDeg"]
     fov_map = _config.get("cameraFov", {})
-    return fov_map.get(str(idx), _config.get("fovDeg", 60))
+    if str(idx) in fov_map:
+        return fov_map[str(idx)]
+    # Try auto-detected from hardware
+    cameras = _hw_info.get("cameras", [])
+    if idx < len(cameras) and cameras[idx].get("detectedFov"):
+        return cameras[idx]["detectedFov"]
+    return _config.get("fovDeg", 60)
 
 def _camera_cfg(idx):
     """Get full config for a camera index with defaults."""
@@ -88,7 +94,46 @@ def _save_config():
     except Exception as e:
         print(f"[WARN] Failed to save config: {e}")
 
+# ── Known camera FOV database (USB VID:PID → degrees) ─────────────────
+# Add entries as cameras are identified
+KNOWN_FOV = {
+    "3443:60bb": 60,    # NexiGo N60 FHD Webcam
+    "038f:0541": 78,    # lihappe8 USB 2.0 Camera
+    "0c45:636b": 78,    # Microdia USB Live camera
+    "2341:025e": 90,    # EMEET SmartCam Nova 4K (variant)
+    "328f:00eb": 90,    # EMEET SmartCam Nova 4K
+    "1bcf:2284": 90,    # EMEET SmartCam
+    "046d:0825": 78,    # Logitech C270
+    "046d:082d": 78,    # Logitech C920
+    "046d:0893": 90,    # Logitech C930e
+    "046d:085c": 82,    # Logitech C922
+    "046d:08e5": 90,    # Logitech BRIO
+}
+
 # ── Hardware detection ──────────────────────────────────────────────────
+
+def _detect_usb_fov():
+    """Build a map of /dev/videoN → FOV from USB VID:PID lookup via udevadm."""
+    import subprocess, glob
+    fov_map = {}
+    for dev_path in sorted(glob.glob("/dev/video*")):
+        try:
+            # Use udevadm to get the USB VID:PID for this video device
+            r = subprocess.run(["udevadm", "info", "-q", "property", "-n", dev_path],
+                               capture_output=True, text=True, timeout=2)
+            vid = pid = ""
+            for line in r.stdout.splitlines():
+                if line.startswith("ID_VENDOR_ID="):
+                    vid = line.split("=", 1)[1].strip()
+                elif line.startswith("ID_MODEL_ID="):
+                    pid = line.split("=", 1)[1].strip()
+            if vid and pid:
+                key = f"{vid}:{pid}"
+                if key in KNOWN_FOV:
+                    fov_map[dev_path] = KNOWN_FOV[key]
+        except Exception:
+            pass
+    return fov_map
 
 def _detect_cameras():
     """List real video capture devices, filtering out SoC nodes (sunxi-vin etc.)
@@ -96,6 +141,7 @@ def _detect_cameras():
     import glob, subprocess
     cameras = []
     has_v4l2 = os.path.exists("/usr/bin/v4l2-ctl")
+    usb_fov = _detect_usb_fov()
     for dev in sorted(glob.glob("/dev/video*")):
         if has_v4l2:
             try:
@@ -132,8 +178,10 @@ def _detect_cameras():
                             break  # next section
                 if not is_capture:
                     continue
+                detected_fov = usb_fov.get(dev, 0)
                 cameras.append({"device": dev, "resW": 0, "resH": 0,
-                                "name": card, "probed": False})
+                                "name": card, "probed": False,
+                                "detectedFov": detected_fov})
             except Exception:
                 cameras.append({"device": dev, "resW": 0, "resH": 0,
                                 "name": dev, "probed": False})
