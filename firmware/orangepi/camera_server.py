@@ -20,7 +20,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 PORT = 5000
 UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
@@ -475,20 +475,22 @@ if _hw_info.get("cameras") else '<div class="card"><h2>Camera</h2><p style="colo
 <div class="info-row"><span class="lbl">Resolution</span><span>{c["resW"]}x{c["resH"]}</span></div>
 <label>Custom Name</label>
 <input id="cam-name-{i}" value="{_camera_cfg(i)['name']}" maxlength="32" placeholder="{c['name'][:20]}">
-<label>FOV (degrees)</label>
-<input type="number" id="cam-fov-{i}" value="{_camera_cfg(i)['fovDeg']}" min="1" max="180" style="width:60px">
+<div style="display:flex;gap:.5em;align-items:center;margin:.3em 0">
+<div><label style="font-size:.82em">FOV (&deg;)</label><br><input type="number" id="cam-fov-{i}" value="{_camera_cfg(i)['fovDeg']}" min="1" max="180" style="width:55px"></div>
+<div style="padding-top:1em"><button class="btn btn-reset" onclick="document.getElementById('cam-fov-{i}').value={c.get('detectedFov',0) or 60}" style="font-size:.65em;padding:.15em .4em">Reset ({c.get('detectedFov',0) or 60}&deg;)</button></div>
+</div>
 <label>Orientation</label>
-<select id="cam-flip-{i}">
+<select id="cam-flip-{i}" style="margin-bottom:.3em">
 <option value="none" {'selected' if _camera_cfg(i)['flip']=='none' else ''}>Normal</option>
 <option value="h" {'selected' if _camera_cfg(i)['flip']=='h' else ''}>Flip Horizontal</option>
 <option value="v" {'selected' if _camera_cfg(i)['flip']=='v' else ''}>Flip Vertical</option>
 <option value="180" {'selected' if _camera_cfg(i)['flip']=='180' else ''}>Rotate 180&deg;</option>
 </select>
-<div style="margin-top:.3em">
-<label><input type="checkbox" id="cam-en-{i}" {'checked' if _camera_cfg(i)['enabled'] else ''}> Enabled</label>
-<label style="margin-left:1em"><input type="radio" name="cam-pref" id="cam-pref-{i}" {'checked' if _camera_cfg(i)['preferred'] else ''}> Preferred</label>
+<div style="display:flex;gap:1.5em;align-items:center;margin:.4em 0">
+<label style="display:flex;align-items:center;gap:.3em"><input type="checkbox" id="cam-en-{i}" {'checked' if _camera_cfg(i)['enabled'] else ''}> Enabled</label>
+<label style="display:flex;align-items:center;gap:.3em"><input type="radio" name="cam-pref" id="cam-pref-{i}" {'checked' if _camera_cfg(i)['preferred'] else ''}> Preferred</label>
 </div>
-<button class="btn btn-save" onclick="_saveCam({i})" style="margin-top:.4em">Save Camera {i}</button>
+<button class="btn btn-save" onclick="_saveCam({i})" style="margin-top:.3em">Save Camera {i}</button>
 </div>""" for i, c in enumerate(_hw_info.get("cameras", [])))
 if _hw_info.get("cameras") else '<div class="card" style="margin-top:.5em"><h2>Cameras</h2><p style="color:#fca5a5;font-size:.82em">No cameras detected.</p></div>'}
 <div class="card" style="margin-top:.5em">
