@@ -919,6 +919,11 @@ function _renderSetup(){
         +'</div>'
         +'<div id="disc-results" style="display:none;margin-bottom:.8em"></div>';
 
+      // Pre-filter fixture types (needed by hardware + fixture sections)
+      var ledFixtures=(fixtures||[]).filter(function(f){return (f.fixtureType||'led')==='led';});
+      var dmxFixtures=(fixtures||[]).filter(function(f){return f.fixtureType==='dmx';});
+      var camFixtures=(fixtures||[]).filter(function(f){return f.fixtureType==='camera';});
+
       // ── Hardware section (DMX bridges + standalone children + camera nodes)
       // Group camera fixtures by IP to show each Orange Pi as a hardware node
       var camNodeMap={};
@@ -957,9 +962,6 @@ function _renderSetup(){
       // ── Fixtures section (LED + DMX fixtures)
       h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">Fixtures</h3>'
         +'<table class="tbl"><tr><th>Fixture</th><th>Type</th><th>Connection</th><th>Status</th><th>Channels / LEDs</th><th>Actions</th></tr>';
-      var ledFixtures=(fixtures||[]).filter(function(f){return (f.fixtureType||'led')==='led';});
-      var dmxFixtures=(fixtures||[]).filter(function(f){return f.fixtureType==='dmx';});
-      var camFixtures=(fixtures||[]).filter(function(f){return f.fixtureType==='camera';});
       // Async: fetch camera live status (don't block render)
       if(camFixtures.length){ra('GET','/api/cameras',null,function(cams){
         if(!cams||!cams.length)return;
