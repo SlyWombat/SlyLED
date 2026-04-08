@@ -56,7 +56,7 @@ class BeamDetector:
 
         dark_bgr = self._dark_frames.get(cam_idx)
 
-        # Apply same color filter to both dark and light frames, then diff
+        # Step 1: Color diff between light and dark frames
         if color and color != [255, 255, 255]:
             light_mask = self._color_mask(frame, color)
             if dark_bgr is not None:
@@ -76,38 +76,73 @@ class BeamDetector:
             else:
                 mask = light_gray
 
-        # Blur and threshold
         mask = cv2.GaussianBlur(mask, (15, 15), 0)
         _, peak_val, _, _ = cv2.minMaxLoc(mask)
         if peak_val < threshold:
             return {"found": False}
 
-        # Require strong signal — beam is bright, noise is weak
         thresh_val = max(threshold, int(peak_val * 0.4))
         _, binary = cv2.threshold(mask, thresh_val, 255, cv2.THRESH_BINARY)
 
-        # Find the largest connected component (beam is a big bright patch)
+        # Step 2: Find contour candidates
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             return {"found": False}
-        biggest = max(contours, key=cv2.contourArea)
-        area = cv2.contourArea(biggest)
 
-        # Real beam covers a significant area (>500 pixels) and is bright
-        if area < 500 or peak_val < 60:
-            return {"found": False}
+        # Step 3: Validate each candidate against the ORIGINAL frame
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-        M = cv2.moments(biggest)
-        if M["m00"] == 0:
-            return {"found": False}
+        for contour in sorted(contours, key=cv2.contourArea, reverse=True):
+            area = cv2.contourArea(contour)
+            if area < 200:
+                break  # sorted descending, rest are smaller
 
-        return {
-            "found": True,
-            "pixelX": int(M["m10"] / M["m00"]),
-            "pixelY": int(M["m01"] / M["m00"]),
-            "peakIntensity": int(peak_val),
-            "area": int(area),
-        }
+            M = cv2.moments(contour)
+            if M["m00"] == 0:
+                continue
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
+
+            # Check 3a: Brightness — beam spot must be BRIGHT in original frame
+            # Sample a small region around the centroid
+            y1 = max(0, cy - 15)
+            y2 = min(frame.shape[0], cy + 15)
+            x1 = max(0, cx - 15)
+            x2 = min(frame.shape[1], cx + 15)
+            roi_v = hsv[y1:y2, x1:x2, 2]  # Value channel
+            mean_brightness = float(np.mean(roi_v)) if roi_v.size > 0 else 0
+
+            if mean_brightness < 160:
+                continue  # too dim — ambient shift, not a beam
+
+            # Check 3b: Saturation — beam is vivid colored, not grey/white
+            # A colored beam (blue, red, green) is both bright AND saturated
+            # A white wall is bright but NOT saturated
+            if color and color != [255, 255, 255]:
+                roi_s = hsv[y1:y2, x1:x2, 1]  # Saturation channel
+                mean_sat = float(np.mean(roi_s)) if roi_s.size > 0 else 0
+                if mean_sat < 80:
+                    continue  # not saturated enough — bright white surface, not colored beam
+
+            # Check 3c: Compactness — beam spot is roughly round, not a thin edge
+            rect = cv2.minAreaRect(contour)
+            w_r, h_r = rect[1]
+            if w_r > 0 and h_r > 0:
+                aspect = max(w_r, h_r) / min(w_r, h_r)
+                if aspect > 5:
+                    continue  # too elongated
+
+            # All checks passed — this is a real beam
+            return {
+                "found": True,
+                "pixelX": cx,
+                "pixelY": cy,
+                "peakIntensity": int(peak_val),
+                "area": int(area),
+                "brightness": int(mean_brightness),
+            }
+
+        return {"found": False}
 
     def detect_center(self, frame, cam_idx=0, color=None, threshold=30, beam_count=3):
         """Detect the center beam of a multi-beam fixture.
@@ -149,14 +184,24 @@ class BeamDetector:
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
             binary, connectivity=8)
 
-        # Filter out background (label 0) and small components (noise)
+        # Validate components: must be bright + saturated in original frame
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         components = []
         for i in range(1, num_labels):
             area = stats[i, cv2.CC_STAT_AREA]
-            if area < 100:  # real beam spots are big
+            if area < 100:
                 continue
-            cx, cy = centroids[i]
-            components.append({"idx": i, "cx": cx, "cy": cy, "area": area})
+            cx, cy = int(centroids[i][0]), int(centroids[i][1])
+            # Check brightness at component center
+            y1 = max(0, cy - 10)
+            y2 = min(frame.shape[0], cy + 10)
+            x1 = max(0, cx - 10)
+            x2 = min(frame.shape[1], cx + 10)
+            roi_v = hsv[y1:y2, x1:x2, 2]
+            if roi_v.size == 0 or float(np.mean(roi_v)) < 150:
+                continue  # too dim — not a real beam spot
+            components.append({"idx": i, "cx": float(centroids[i][0]),
+                               "cy": float(centroids[i][1]), "area": area})
 
         if not components:
             return {"found": False}

@@ -16,7 +16,7 @@ import urllib.request
 log = logging.getLogger("slyled")
 
 STEP = 0.05       # pan/tilt step size for BFS
-SETTLE = 0.6      # seconds between moves
+SETTLE = 1.2      # seconds between moves (heads need time to reach position)
 MAX_SAMPLES = 60   # stop BFS after this many
 
 
@@ -63,6 +63,26 @@ def _hold_dmx(bridge_ip, dmx, duration=0.5):
 
 
 # ── Camera beam detection proxy ──────────────────────────────────────
+
+def _beam_detect_verified(camera_ip, cam_idx, color=None, threshold=50, center=False):
+    """Double-capture beam detection — takes 2 captures 300ms apart.
+    Returns position only if both agree within 30px (head has settled)."""
+    b1 = _beam_detect(camera_ip, cam_idx, color, threshold, center)
+    if not b1:
+        return None
+    time.sleep(0.3)
+    b2 = _beam_detect(camera_ip, cam_idx, color, threshold, center)
+    if not b2:
+        return None
+    dx = abs(b1[0] - b2[0])
+    dy = abs(b1[1] - b2[1])
+    if dx > 30 or dy > 30:
+        log.debug("Beam moved between captures: (%d,%d) vs (%d,%d) — head still moving",
+                  b1[0], b1[1], b2[0], b2[1])
+        return None
+    # Return average of both
+    return ((b1[0] + b2[0]) // 2, (b1[1] + b2[1]) // 2)
+
 
 def _beam_detect(camera_ip, cam_idx, color=None, threshold=50, center=False):
     """Call beam detection on camera node. Returns (px, py) or None."""
@@ -175,28 +195,26 @@ def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     # Turn on our mover at initial position
     pan, tilt = initial_pan, initial_tilt
     _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
-    _hold_dmx(bridge_ip, dmx, 1.5)
+    _hold_dmx(bridge_ip, dmx, 2.0)  # extra settle for first position
 
     # Check initial position
-    beam = _beam_detect(camera_ip, cam_idx, color)
+    beam = _beam_detect_verified(camera_ip, cam_idx, color)
     if beam:
         return (pan, tilt, beam[0], beam[1])
 
     # Spiral outward in 0.05 steps
-    for radius in range(1, 12):  # up to 0.55 from start
-        r = radius * STEP
-        # Generate positions on this ring (clockwise)
+    for radius in range(1, 12):
         positions = []
         for dp in range(-radius, radius + 1):
             for dt in range(-radius, radius + 1):
-                if max(abs(dp), abs(dt)) == radius:  # only the ring edge
+                if max(abs(dp), abs(dt)) == radius:
                     positions.append((initial_pan + dp * STEP, initial_tilt + dt * STEP))
         for p, t in positions:
             if p < 0 or p > 1 or t < 0 or t > 1:
                 continue
             _set_mover_dmx(dmx, mover_addr, p, t, *color, dimmer=255)
             _hold_dmx(bridge_ip, dmx, SETTLE)
-            beam = _beam_detect(camera_ip, cam_idx, color)
+            beam = _beam_detect_verified(camera_ip, cam_idx, color)
             if beam:
                 return (p, t, beam[0], beam[1])
 
@@ -242,7 +260,7 @@ def map_visible(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
         _hold_dmx(bridge_ip, dmx, SETTLE)
 
-        beam = _beam_detect(camera_ip, cam_idx, color, center=use_center)
+        beam = _beam_detect_verified(camera_ip, cam_idx, color, center=use_center)
         if beam:
             px, py = beam
             # Reject stale: if pixel barely moved from a different pan/tilt, it's noise
