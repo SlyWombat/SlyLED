@@ -47,6 +47,7 @@ def _load_config():
         "hostname": "",
         "fovDeg": 60,
         "cameraFov": {},
+        "cameraCfg": {},  # per-camera: {idx: {name, fovDeg, enabled, flip, preferred}}
         "cameraUrl": "",
         "resolutionW": 1920,
         "resolutionH": 1080,
@@ -61,9 +62,23 @@ def _load_config():
     _config = defaults
 
 def _camera_fov(idx):
-    """Get FOV for a specific camera index, falling back to node-level default."""
+    """Get FOV for a specific camera index."""
+    cfg = _config.get("cameraCfg", {}).get(str(idx), {})
+    if cfg.get("fovDeg"):
+        return cfg["fovDeg"]
     fov_map = _config.get("cameraFov", {})
     return fov_map.get(str(idx), _config.get("fovDeg", 60))
+
+def _camera_cfg(idx):
+    """Get full config for a camera index with defaults."""
+    cfg = _config.get("cameraCfg", {}).get(str(idx), {})
+    return {
+        "name": cfg.get("name", ""),
+        "fovDeg": cfg.get("fovDeg", _camera_fov(idx)),
+        "enabled": cfg.get("enabled", True),
+        "flip": cfg.get("flip", "none"),  # none, h, v, 180
+        "preferred": cfg.get("preferred", False),
+    }
 
 def _save_config():
     try:
@@ -290,7 +305,12 @@ def status():
     cam_list = []
     for i, cam in enumerate(cameras):
         c = dict(cam)
-        c["fovDeg"] = _camera_fov(i)
+        cfg = _camera_cfg(i)
+        c["fovDeg"] = cfg["fovDeg"]
+        c["customName"] = cfg["name"]
+        c["enabled"] = cfg["enabled"]
+        c["flip"] = cfg["flip"]
+        c["preferred"] = cfg["preferred"]
         cam_list.append(c)
     return jsonify({
         "role": "camera",
@@ -396,11 +416,33 @@ if _hw_info.get("cameras") else '<div class="card"><h2>Camera</h2><p style="colo
 <div id="t1" class="tab-content">
 <div class="card">
 <h2>Device Settings</h2>
-<label>Name</label>
+<label>Node Name</label>
 <input id="cfg-name" value="{hostname}" maxlength="32">
 <div id="msg"></div>
 <button class="btn btn-save" onclick="_save()">Save</button>
 </div>
+{''.join(f"""<div class="card" style="margin-top:.5em">
+<h2>Camera {i} &mdash; {c["name"]}</h2>
+<div class="info-row"><span class="lbl">Device</span><span>{c["device"]}</span></div>
+<div class="info-row"><span class="lbl">Resolution</span><span>{c["resW"]}x{c["resH"]}</span></div>
+<label>Custom Name</label>
+<input id="cam-name-{i}" value="{_camera_cfg(i)['name']}" maxlength="32" placeholder="{c['name'][:20]}">
+<label>FOV (degrees)</label>
+<input type="number" id="cam-fov-{i}" value="{_camera_cfg(i)['fovDeg']}" min="1" max="180" style="width:60px">
+<label>Orientation</label>
+<select id="cam-flip-{i}">
+<option value="none" {'selected' if _camera_cfg(i)['flip']=='none' else ''}>Normal</option>
+<option value="h" {'selected' if _camera_cfg(i)['flip']=='h' else ''}>Flip Horizontal</option>
+<option value="v" {'selected' if _camera_cfg(i)['flip']=='v' else ''}>Flip Vertical</option>
+<option value="180" {'selected' if _camera_cfg(i)['flip']=='180' else ''}>Rotate 180&deg;</option>
+</select>
+<div style="margin-top:.3em">
+<label><input type="checkbox" id="cam-en-{i}" {'checked' if _camera_cfg(i)['enabled'] else ''}> Enabled</label>
+<label style="margin-left:1em"><input type="radio" name="cam-pref" id="cam-pref-{i}" {'checked' if _camera_cfg(i)['preferred'] else ''}> Preferred</label>
+</div>
+<button class="btn btn-save" onclick="_saveCam({i})" style="margin-top:.4em">Save Camera {i}</button>
+</div>""" for i, c in enumerate(_hw_info.get("cameras", [])))
+if _hw_info.get("cameras") else '<div class="card" style="margin-top:.5em"><h2>Cameras</h2><p style="color:#fca5a5;font-size:.82em">No cameras detected.</p></div>'}
 <div class="card" style="margin-top:.5em">
 <h2>Device</h2>
 <button class="btn btn-reboot" onclick="_reboot()">Reboot</button>
@@ -522,6 +564,19 @@ function _saveFov(idx){{
   x.open('POST','/config');x.setRequestHeader('Content-Type','application/json');
   x.send(JSON.stringify({{cameraFov:{{[idx]:v}}}}));
 }}
+function _saveCam(idx){{
+  var cfg={{}};
+  cfg.name=(document.getElementById('cam-name-'+idx)||{{}}).value||'';
+  cfg.fovDeg=parseInt((document.getElementById('cam-fov-'+idx)||{{}}).value)||60;
+  cfg.flip=(document.getElementById('cam-flip-'+idx)||{{}}).value||'none';
+  cfg.enabled=!!(document.getElementById('cam-en-'+idx)||{{}}).checked;
+  cfg.preferred=!!(document.getElementById('cam-pref-'+idx)||{{}}).checked;
+  var body={{cameraCfg:{{}}}};body.cameraCfg[idx]=cfg;
+  var x=new XMLHttpRequest();
+  x.open('POST','/config');x.setRequestHeader('Content-Type','application/json');
+  x.onload=function(){{document.getElementById('msg').textContent='Camera '+idx+' saved';}};
+  x.send(JSON.stringify(body));
+}}
 function _reboot(){{
   if(!confirm('Reboot camera node?'))return;
   var x=new XMLHttpRequest();x.open('POST','/reboot');x.send();
@@ -544,7 +599,7 @@ def config_post():
     for k in ("hostname", "fovDeg", "cameraUrl", "resolutionW", "resolutionH"):
         if k in body:
             _config[k] = body[k]
-    # Merge per-camera FOV (e.g. {"0": 90, "1": 60})
+    # Merge per-camera FOV (legacy)
     if "cameraFov" in body and isinstance(body["cameraFov"], dict):
         fov_map = _config.get("cameraFov", {})
         for idx, val in body["cameraFov"].items():
@@ -552,6 +607,24 @@ def config_post():
             if 1 <= v <= 180:
                 fov_map[str(idx)] = v
         _config["cameraFov"] = fov_map
+    # Merge per-camera config (name, fov, enabled, flip, preferred)
+    if "cameraCfg" in body and isinstance(body["cameraCfg"], dict):
+        cfg_map = _config.get("cameraCfg", {})
+        for idx, cam_cfg in body["cameraCfg"].items():
+            if not isinstance(cam_cfg, dict):
+                continue
+            existing = cfg_map.get(str(idx), {})
+            for k in ("name", "fovDeg", "enabled", "flip", "preferred"):
+                if k in cam_cfg:
+                    existing[k] = cam_cfg[k]
+            cfg_map[str(idx)] = existing
+        # If setting preferred, clear preferred on others
+        for idx, cam_cfg in body["cameraCfg"].items():
+            if cam_cfg.get("preferred"):
+                for other_idx in cfg_map:
+                    if other_idx != str(idx):
+                        cfg_map[other_idx]["preferred"] = False
+        _config["cameraCfg"] = cfg_map
     _save_config()
     return jsonify(ok=True, config=_config)
 
@@ -559,8 +632,8 @@ def config_post():
 def config_reset():
     """Factory reset — clear config, reboot."""
     global _config
-    _config = {"hostname": "", "fovDeg": 60, "cameraFov": {}, "cameraUrl": "",
-               "resolutionW": 1920, "resolutionH": 1080}
+    _config = {"hostname": "", "fovDeg": 60, "cameraFov": {}, "cameraCfg": {},
+               "cameraUrl": "", "resolutionW": 1920, "resolutionH": 1080}
     _save_config()
     threading.Timer(1, lambda: os.system("reboot")).start()
     return jsonify(ok=True, message="Factory reset. Rebooting...")
@@ -655,6 +728,19 @@ def _cv_capture(device, timeout=5):
         ret, frame = cap.read()
         cap.release()
         if ret and frame is not None:
+            # Apply per-camera flip if configured
+            cam_idx = None
+            for i, c in enumerate(_hw_info.get("cameras", [])):
+                if c.get("device") == device:
+                    cam_idx = i; break
+            if cam_idx is not None:
+                flip = _camera_cfg(cam_idx).get("flip", "none")
+                if flip == "h":
+                    frame = cv2.flip(frame, 1)
+                elif flip == "v":
+                    frame = cv2.flip(frame, 0)
+                elif flip == "180":
+                    frame = cv2.flip(frame, -1)
             return frame
     except Exception as e:
         log.warning("OpenCV capture %s failed: %s", device, e)
