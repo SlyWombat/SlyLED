@@ -4467,6 +4467,11 @@ function drawLayout(){
     ctx.fillStyle='#888';ctx.font='9px sans-serif';
     ctx.fillText('('+fmtCoord(f.x)+','+fmtCoord(f.y)+')',cx,cy+lblDir*31);
   });
+  // Draw compass gizmo for selected fixture
+  if(_compassFid){
+    var cf=null;placed.forEach(function(f){if(f.id===_compassFid)cf=f;});
+    if(cf&&(cf.fixtureType==='dmx'||cf.fixtureType==='camera'))_drawCompass(ctx,cf,W,H);
+  }
 }
 
 // -- Stage Preview (always visible, per-pixel) ----------------------------
@@ -5641,14 +5646,138 @@ function cvDown(e){
     e.preventDefault();return;
   }
   if(e.button!==0)return;
+  // Check compass ring click first
+  if(_compassFid && _compassHitTest(m.x,m.y,cv)){
+    _compassDragging=true;
+    cv.style.cursor='crosshair';
+    var angle=_compassAngle(m.x,m.y,cv);
+    _compassApply(angle,!e.shiftKey);
+    return;
+  }
   drag=_hitNode(m.x,m.y,cv.width,cv.height);
   if(drag>=0){
     var placed=_fixtures.filter(_isFixturePlaced);
     var np=_nodePos(placed[drag],cv.width,cv.height);
     dox=m.x-np.cx;doy=m.y-np.cy;
     cv.style.cursor='grabbing';
+    // Show compass for DMX/camera fixtures on click
+    var ft=placed[drag].fixtureType||'led';
+    if(ft==='dmx'||ft==='camera')_compassFid=placed[drag].id;
+    else _compassFid=null;
+    drawLayout();
+  }else{
+    _compassFid=null;drawLayout();
   }
 }
+// ── Compass gizmo for aiming cameras + moving heads ──────────────────
+var _compassFid=null;     // fixture ID with active compass
+var _compassDragging=false;
+
+function _compassShow(fid){
+  _compassFid=(_compassFid===fid)?null:fid;  // toggle
+  drawLayout();
+}
+
+function _compassHitTest(mx, my, cv){
+  // Check if mouse is on the compass ring
+  if(!_compassFid)return false;
+  var f=null;(_fixtures||[]).filter(_isFixturePlaced).forEach(function(fx){if(fx.id===_compassFid)f=fx;});
+  if(!f)return false;
+  var np=_nodePos(f,cv.width,cv.height);
+  var dist=Math.sqrt((mx-np.cx)*(mx-np.cx)+(my-np.cy)*(my-np.cy));
+  return dist>=35 && dist<=55;  // ring zone
+}
+
+function _compassAngle(mx, my, cv){
+  var f=null;(_fixtures||[]).filter(_isFixturePlaced).forEach(function(fx){if(fx.id===_compassFid)f=fx;});
+  if(!f)return 0;
+  var np=_nodePos(f,cv.width,cv.height);
+  return Math.atan2(-(my-np.cy), mx-np.cx);  // angle from center, Y inverted
+}
+
+function _compassApply(angle, snap){
+  var f=null;_fixtures.forEach(function(fx){if(fx.id===_compassFid)f=fx;});
+  if(!f)return;
+  // Snap to 15° increments unless shift held
+  var deg=angle*180/Math.PI;
+  if(snap) deg=Math.round(deg/15)*15;
+  // Convert screen angle to stage: screen right=+X=0°, screen up=+Y=90°
+  // Stage: +Z is forward (into screen in 2D top-down), +X is right
+  // aimPoint direction from fixture pos
+  var rad=deg*Math.PI/180;
+  var dist=1000; // 1m aim distance
+  var ax=(f.x||0)+Math.cos(rad)*dist;
+  var ay=(f.y||0)+Math.sin(rad)*dist;
+  var az=f.aimPoint?f.aimPoint[2]||0:0;
+  f.aimPoint=[Math.round(ax),Math.round(ay),az];
+  // Also update rotation Y for rest vector
+  // In 2D: screen angle 0=right(+X), 90=up(+Y). Stage: RY=0 means +Z forward.
+  // Stage angle from +Z: atan2(dx, dz). In 2D top-down dz maps to -screen_y.
+  var stageAngle=90-deg;  // approximate mapping
+  f.rotation=[f.rotation?f.rotation[0]||0:0, stageAngle, f.rotation?f.rotation[2]||0:0];
+  drawLayout();
+}
+
+function _drawCompass(ctx, f, W, H){
+  var np=_nodePos(f,W,H);
+  var cx=np.cx, cy=np.cy;
+  var R=45; // compass radius
+
+  // Ring
+  ctx.beginPath();ctx.arc(cx,cy,R,0,Math.PI*2);
+  ctx.strokeStyle='rgba(34,211,238,0.5)';ctx.lineWidth=2;ctx.stroke();
+  ctx.beginPath();ctx.arc(cx,cy,R-10,0,Math.PI*2);
+  ctx.strokeStyle='rgba(34,211,238,0.15)';ctx.lineWidth=1;ctx.stroke();
+
+  // Cardinal ticks + labels
+  var cardinals=[
+    {angle:0,label:'+X',color:'#f66'},
+    {angle:Math.PI/2,label:'+Y',color:'#6f6'},
+    {angle:Math.PI,label:'-X',color:'#f66'},
+    {angle:-Math.PI/2,label:'-Y',color:'#6f6'},
+  ];
+  cardinals.forEach(function(c){
+    var x1=cx+Math.cos(c.angle)*(R-5), y1=cy-Math.sin(c.angle)*(R-5);
+    var x2=cx+Math.cos(c.angle)*(R+5), y2=cy-Math.sin(c.angle)*(R+5);
+    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);
+    ctx.strokeStyle=c.color;ctx.lineWidth=2;ctx.stroke();
+    var lx=cx+Math.cos(c.angle)*(R+14), ly=cy-Math.sin(c.angle)*(R+14);
+    ctx.fillStyle=c.color;ctx.font='bold 9px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(c.label,lx,ly);
+  });
+
+  // 45° ticks
+  for(var i=0;i<8;i++){
+    var a=i*Math.PI/4;
+    if(i%2===0)continue; // skip cardinals
+    var x1=cx+Math.cos(a)*(R-3), y1=cy-Math.sin(a)*(R-3);
+    var x2=cx+Math.cos(a)*(R+3), y2=cy-Math.sin(a)*(R+3);
+    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);
+    ctx.strokeStyle='rgba(148,163,184,0.4)';ctx.lineWidth=1;ctx.stroke();
+  }
+
+  // Current direction arrow
+  var aim=f.aimPoint;
+  if(aim){
+    var dx=aim[0]-(f.x||0), dy=aim[1]-(f.y||0);
+    var aimAngle=Math.atan2(dy,dx);
+    // Arrow
+    var ax=cx+Math.cos(aimAngle)*R, ay=cy-Math.sin(aimAngle)*R;
+    ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(ax,ay);
+    ctx.strokeStyle='#22d3ee';ctx.lineWidth=3;ctx.stroke();
+    // Arrowhead
+    ctx.beginPath();
+    ctx.moveTo(ax,ay);
+    ctx.lineTo(ax-10*Math.cos(aimAngle-0.3),ay+10*Math.sin(aimAngle-0.3));
+    ctx.lineTo(ax-10*Math.cos(aimAngle+0.3),ay+10*Math.sin(aimAngle+0.3));
+    ctx.closePath();ctx.fillStyle='#22d3ee';ctx.fill();
+    // Degree label
+    var deg=Math.round(aimAngle*180/Math.PI);
+    ctx.fillStyle='#e2e8f0';ctx.font='bold 10px sans-serif';ctx.textAlign='center';
+    ctx.fillText(deg+'\u00b0',cx,cy+R+24);
+  }
+}
+
 function startAimMode(fixtureId){
   _aimMode=fixtureId;
   var cv=document.getElementById('lcv');if(cv)cv.style.cursor='crosshair';
@@ -5659,9 +5788,16 @@ function startAimMode(fixtureId){
 function cvMove(e){
   var cv=document.getElementById('lcv');
   var m=_cvMouse(e,cv);
+  // Compass ring drag
+  if(_compassDragging){
+    var angle=_compassAngle(m.x,m.y,cv);
+    _compassApply(angle,!e.shiftKey);
+    return;
+  }
   if(drag===null||drag<0){
     var hit=_hitNode(m.x,m.y,cv.width,cv.height);
-    cv.style.cursor=hit>=0?'pointer':'grab';
+    var onRing=_compassFid&&_compassHitTest(m.x,m.y,cv);
+    cv.style.cursor=onRing?'crosshair':(hit>=0?'pointer':'grab');
     return;
   }
   var placed=_fixtures.filter(_isFixturePlaced);
@@ -5681,7 +5817,18 @@ function cvMove(e){
   drawLayout();
 }
 
-function cvUp(){drag=null;var cv=document.getElementById('lcv');if(cv)cv.style.cursor='grab';}
+function cvUp(){
+  if(_compassDragging&&_compassFid){
+    _compassDragging=false;
+    // Save aim point to server
+    var f=null;_fixtures.forEach(function(fx){if(fx.id===_compassFid)f=fx;});
+    if(f&&f.aimPoint){
+      ra('PUT','/api/fixtures/'+f.id+'/aim',{aimPoint:f.aimPoint});
+      ra('PUT','/api/fixtures/'+f.id,{rotation:f.rotation});
+    }
+  }
+  drag=null;var cv=document.getElementById('lcv');if(cv)cv.style.cursor='grab';
+}
 
 // ── Actions library ──────────────────────────────────────────────────────────
 var _acts=[];
