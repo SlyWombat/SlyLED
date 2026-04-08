@@ -20,7 +20,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 PORT = 5000
 UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
