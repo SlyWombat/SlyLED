@@ -99,7 +99,7 @@ def _save_config():
 KNOWN_FOV = {
     "3443:60bb": 60,    # NexiGo N60 FHD Webcam
     "038f:0541": 78,    # lihappe8 USB 2.0 Camera
-    "0c45:636b": 78,    # Microdia USB Live camera
+    "0c45:636b": 100,   # Spedal MF920P (Microdia chipset)
     "2341:025e": 90,    # EMEET SmartCam Nova 4K (variant)
     "328f:00eb": 90,    # EMEET SmartCam Nova 4K
     "1bcf:2284": 90,    # EMEET SmartCam
