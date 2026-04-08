@@ -79,7 +79,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "1.0.21"
+VERSION = "1.0.23"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1879,6 +1879,24 @@ def api_space_get():
     if not _point_cloud:
         return jsonify(ok=False, err="No environment scan available"), 404
     return jsonify(ok=True, **_point_cloud)
+
+@app.post("/api/space/analyze")
+def api_space_analyze():
+    """Analyze the point cloud to detect surfaces (floor, walls, obstacles)."""
+    if not _point_cloud or not _point_cloud.get("points"):
+        return jsonify(err="No point cloud — run environment scan first"), 404
+    from surface_analyzer import analyze_surfaces
+    result = analyze_surfaces(_point_cloud["points"])
+    _point_cloud["surfaces"] = result
+    _save("pointcloud", _point_cloud)
+    return jsonify(ok=True, **result)
+
+@app.get("/api/space/surfaces")
+def api_space_surfaces():
+    """Get detected surfaces from the last analysis."""
+    if not _point_cloud or not _point_cloud.get("surfaces"):
+        return jsonify(err="No surface analysis — run /api/space/analyze first"), 404
+    return jsonify(ok=True, **_point_cloud["surfaces"])
 
 @app.delete("/api/space")
 def api_space_clear():
@@ -5544,6 +5562,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
