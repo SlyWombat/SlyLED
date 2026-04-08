@@ -6,6 +6,7 @@ Thread-safe, lazy-loaded. Deployed via SCP alongside yolov8n.onnx.
 """
 
 import logging
+import math
 import threading
 import time
 from pathlib import Path
@@ -124,7 +125,6 @@ class DepthEstimator:
         Returns:
             (x_mm, y_mm, z_mm) in camera-local coordinates
         """
-        import math
         rel_depth = self.depth_at_pixel(depth_map, px, py)
         z = rel_depth * max_depth_mm  # depth in mm
 
@@ -138,3 +138,47 @@ class DepthEstimator:
         y = (py - cy) * z / fy
 
         return (round(x), round(y), round(z))
+
+    def generate_point_cloud(self, frame, fov_deg, max_points=10000, max_depth_mm=5000):
+        """Generate a downsampled point cloud from a BGR frame.
+
+        Args:
+            frame: BGR numpy array
+            fov_deg: horizontal FOV in degrees
+            max_points: maximum number of points to return
+            max_depth_mm: maximum depth for scaling
+
+        Returns:
+            (points, inference_ms) where points is a list of [x, y, z, r, g, b]
+            Coordinates in camera-local mm. Colors are 0-255.
+        """
+        depth, ms = self.estimate(frame)
+        h, w = depth.shape[:2]
+
+        # Camera intrinsics
+        fx = (w / 2) / math.tan(math.radians(fov_deg / 2))
+        fy = fx
+        cx_cam, cy_cam = w / 2, h / 2
+
+        # Downsample: pick every Nth pixel to stay under max_points
+        total_pixels = h * w
+        step = max(1, int(math.sqrt(total_pixels / max_points)))
+
+        # Convert frame to RGB for color
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        if rgb.shape[:2] != depth.shape[:2]:
+            rgb = cv2.resize(rgb, (w, h))
+
+        points = []
+        for py in range(0, h, step):
+            for px in range(0, w, step):
+                d = float(depth[py, px])
+                if d < 0.01:
+                    continue  # skip near-zero depth (invalid)
+                z = d * max_depth_mm
+                x = (px - cx_cam) * z / fx
+                y = (py - cy_cam) * z / fy
+                r, g, b = int(rgb[py, px, 0]), int(rgb[py, px, 1]), int(rgb[py, px, 2])
+                points.append([round(x), round(y), round(z), r, g, b])
+
+        return points, ms

@@ -796,6 +796,19 @@ def run():
         r = c.get('/api/cameras/scan-network')
         ok('GET /api/cameras/scan-network', r.status_code == 200)
 
+        # ── Environment point cloud API ──────────────────────────────
+        r = c.get('/api/space')
+        ok('GET /api/space no data → 404', r.status_code == 404)
+
+        r = c.post('/api/space/scan', json={})
+        ok('Space scan no positioned cams', r.status_code == 400)
+
+        r = c.get('/api/space/scan/status')
+        ok('Space scan status shape', 'running' in r.get_json())
+
+        r = c.delete('/api/space')
+        ok('DELETE /api/space', r.status_code == 200)
+
         # ── Camera deploy validation ─────────────────────────────────
         r = c.post('/api/cameras/deploy', json={})
         ok('Deploy missing IP → 400', r.status_code == 400)
@@ -1319,6 +1332,9 @@ def run():
         ok('SPA has cone toggle button', 'btn-lay-cones' in spa)
         ok('SPA has rest vector 2D', "'0,0'" in spa and 'f59e0b' in spa)
         ok('SPA applyNodePos saves to server', "ra('POST','/api/layout'" in spa and 'applyNodePos' in spa)
+        ok('SPA has env scan', '_envScan' in spa and 'btn-env-scan' in spa)
+        ok('SPA has point cloud toggle', '_togglePointCloud' in spa and 'btn-show-cloud' in spa)
+        ok('SPA has point cloud renderer', '_renderPointCloud' in spa and 'THREE.Points' in spa)
         ok('SPA has rest vector 3D', 'LineDashedMaterial' in spa and 'homeDir' in spa)
         ok('SPA has tracking toggle', '_trackToggle' in spa)
         ok('SPA has tracking start', '_trackStart' in spa)

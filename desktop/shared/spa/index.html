@@ -123,6 +123,8 @@ body.light .li:hover{border-color:#3b82f6}
         <button class='btn' id='btn-lay-cones' onclick='_layConesToggle()' title='Show/hide beam cones' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;background:#4c1d95;color:#c4b5fd'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M8 2l5 12H3L8 2zm0 3L5.5 12h5L8 5z' opacity='.8'/></svg></button>
         <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
         <button class='btn' id='btn-lay-scan' onclick='_layScan()' title='Scan for objects (camera)' style='width:32px;height:32px;padding:0;display:none;align-items:center;justify-content:center;background:#4c1d95;color:#c4b5fd'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 2v4h1V3h3V2H2zm8 0v1h3v3h1V2h-4zM2 10v4h4v-1H3v-3H2zm11 0v3h-3v1h4v-4h-1zM5.5 5a3.5 3.5 0 100 7 3.5 3.5 0 000-7zm5 0a3.5 3.5 0 100 7 3.5 3.5 0 000-7z' opacity='.85'/></svg></button>
+        <button class='btn' id='btn-env-scan' onclick='_envScan()' title='Scan environment (3D point cloud)' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;background:#1e3a5f;color:#93c5fd'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><circle cx='3' cy='4' r='1.2'/><circle cx='8' cy='2' r='1.2'/><circle cx='13' cy='5' r='1.2'/><circle cx='5' cy='9' r='1.2'/><circle cx='11' cy='8' r='1.2'/><circle cx='4' cy='13' r='1.2'/><circle cx='9' cy='12' r='1.2'/><circle cx='14' cy='13' r='1.2'/></svg></button>
+        <button class='btn' id='btn-show-cloud' onclick='_togglePointCloud()' title='Show/hide point cloud' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor' opacity='.5'><circle cx='4' cy='4' r='1'/><circle cx='8' cy='3' r='1'/><circle cx='12' cy='5' r='1'/><circle cx='3' cy='8' r='1'/><circle cx='7' cy='7' r='1'/><circle cx='11' cy='9' r='1'/><circle cx='5' cy='12' r='1'/><circle cx='9' cy='11' r='1'/><circle cx='13' cy='13' r='1'/></svg></button>
       </div>
     </div>
     <div style='width:200px;flex-shrink:0'>
@@ -5358,6 +5360,107 @@ function _trackPollStart(){
 
 function _trackPollStop(){
   if(_trackPollTimer){clearInterval(_trackPollTimer);_trackPollTimer=null;}
+}
+
+// ── Environment point cloud scan + 3D preview ────────────────────────
+var _pointCloudData=null;
+var _pointCloudVisible=false;
+
+function _envScan(){
+  document.getElementById('modal-title').textContent='Environment Scan';
+  document.getElementById('modal-body').innerHTML=
+    '<p style="color:#94a3b8;font-size:.85em;margin-bottom:.6em">Scanning the environment with all positioned cameras. This builds a 3D point cloud of the physical space.</p>'
+    +'<div class="prog-bar" style="height:10px;margin-bottom:.5em"><div class="prog-fill" id="env-scan-fill" style="width:0%"></div></div>'
+    +'<div id="env-scan-msg" style="font-size:.82em;color:#64748b">Starting...</div>';
+  document.getElementById('modal').style.display='block';
+  ra('POST','/api/space/scan',{},function(r){
+    if(!r||!r.ok){
+      document.getElementById('env-scan-msg').innerHTML='<span style="color:#f66">'+(r&&r.err||'Failed')+'</span>';
+      return;
+    }
+    var poll=setInterval(function(){
+      ra('GET','/api/space/scan/status',null,function(s){
+        var fill=document.getElementById('env-scan-fill');
+        var msg=document.getElementById('env-scan-msg');
+        if(!fill||!msg){clearInterval(poll);return;}
+        fill.style.width=s.progress+'%';
+        msg.textContent=s.message||('Progress: '+s.progress+'%');
+        if(!s.running){
+          clearInterval(poll);
+          if(s.totalPoints>0){
+            fill.style.background='#059669';
+            msg.innerHTML='<span style="color:#4ade80">\u2713 '+s.totalPoints+' points captured</span>'
+              +' <button class="btn btn-on" onclick="closeModal();_loadPointCloud()" style="margin-left:.5em;font-size:.8em">Show in 3D</button>';
+          }else{
+            msg.innerHTML='<span style="color:#fbbf24">No points captured</span>';
+          }
+        }
+      });
+    },1000);
+  });
+}
+
+function _loadPointCloud(cb){
+  ra('GET','/api/space',null,function(r){
+    if(r&&r.ok&&r.points){
+      _pointCloudData=r;
+      document.getElementById('hs').textContent=r.totalPoints+' point cloud loaded';
+      if(_layMode==='3d'&&_s3d.inited)_renderPointCloud();
+      _pointCloudVisible=true;
+      _updateCloudBtn();
+    }
+    if(cb)cb();
+  });
+}
+
+function _togglePointCloud(){
+  if(!_pointCloudData){
+    _loadPointCloud(function(){
+      if(_pointCloudData)_togglePointCloud();
+      else document.getElementById('hs').textContent='No point cloud — run environment scan first';
+    });
+    return;
+  }
+  _pointCloudVisible=!_pointCloudVisible;
+  if(_layMode==='3d'&&_s3d.inited)_renderPointCloud();
+  _updateCloudBtn();
+}
+
+function _updateCloudBtn(){
+  var btn=document.getElementById('btn-show-cloud');
+  if(btn){
+    btn.style.background=_pointCloudVisible?'#1e3a5f':'';
+    btn.style.color=_pointCloudVisible?'#93c5fd':'';
+  }
+}
+
+function _renderPointCloud(){
+  if(!_s3d.inited)return;
+  // Remove old cloud
+  _s3d.scene.children.forEach(function(c){if(c.userData&&c.userData.pointCloud)c.visible=false;});
+  var old=_s3d.scene.children.filter(function(c){return c.userData&&c.userData.pointCloud;});
+  old.forEach(function(c){_s3d.scene.remove(c);if(c.geometry)c.geometry.dispose();if(c.material)c.material.dispose();});
+
+  if(!_pointCloudVisible||!_pointCloudData||!_pointCloudData.points)return;
+
+  var pts=_pointCloudData.points;
+  var positions=new Float32Array(pts.length*3);
+  var colors=new Float32Array(pts.length*3);
+  for(var i=0;i<pts.length;i++){
+    positions[i*3]=pts[i][0]/1000;    // mm → meters
+    positions[i*3+1]=pts[i][1]/1000;
+    positions[i*3+2]=pts[i][2]/1000;
+    colors[i*3]=pts[i][3]/255;
+    colors[i*3+1]=pts[i][4]/255;
+    colors[i*3+2]=pts[i][5]/255;
+  }
+  var geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.BufferAttribute(positions,3));
+  geo.setAttribute('color',new THREE.BufferAttribute(colors,3));
+  var mat=new THREE.PointsMaterial({size:0.015,vertexColors:true,transparent:true,opacity:0.6,sizeAttenuation:true});
+  var cloud=new THREE.Points(geo,mat);
+  cloud.userData.pointCloud=true;
+  _s3d.scene.add(cloud);
 }
 
 function saveLayout(btn){

@@ -729,6 +729,29 @@ def depth_map():
         camera=cam_idx,
     )
 
+@app.post("/point-cloud")
+def point_cloud():
+    """Generate a 3D point cloud from depth estimation. Returns downsampled [x,y,z,r,g,b] array."""
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    max_points = body.get("maxPoints", 10000)
+    max_depth = body.get("maxDepthMm", 5000)
+    cameras = _hw_info.get("cameras", [])
+    if cam_idx < 0 or cam_idx >= len(cameras):
+        return jsonify(ok=False, err="Invalid camera index"), 400
+    est = _get_depth_estimator()
+    if est is None:
+        return jsonify(ok=False, err="Depth estimator not available"), 503
+    dev = cameras[cam_idx]["device"]
+    frame = _cv_capture(dev)
+    if frame is None:
+        return jsonify(ok=False, err="Capture failed"), 503
+    fov = _camera_fov(cam_idx)
+    points, ms = est.generate_point_cloud(frame, fov, max_points=max_points,
+                                           max_depth_mm=max_depth)
+    return jsonify(ok=True, points=points, pointCount=len(points),
+                   inferenceMs=round(ms), camera=cam_idx, fovDeg=fov)
+
 # ── Beam detection (for calibration) ───────────────────────────────────
 
 _beam_detector = None

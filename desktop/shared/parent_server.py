@@ -79,7 +79,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "1.0.13"
+VERSION = "1.0.19"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1830,6 +1830,61 @@ def compute_pan_tilt_calibrated(fixture_id, target_pos):
     if "tilt" in cal:
         tilt_norm = _inverse_axis_lookup(cal["tilt"], target_pos[0], target_pos[2])
     return (pan_norm, tilt_norm)
+
+
+# ── Environment point cloud ───────────────────────────────────────────
+
+from space_mapper import SpaceScan
+
+_space_scan = SpaceScan()
+_point_cloud = _load("pointcloud", None)
+
+@app.post("/api/space/scan")
+def api_space_scan():
+    """Start an async environment scan using all positioned camera sensors."""
+    if _space_scan.running:
+        return jsonify(err="Scan already in progress"), 409
+    cams = [f for f in _fixtures if f.get("fixtureType") == "camera"]
+    if not cams:
+        return jsonify(err="No camera fixtures registered"), 400
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    positioned_cams = [c for c in cams if c["id"] in pos_map]
+    if not positioned_cams:
+        return jsonify(err="No camera fixtures positioned on layout"), 400
+    body = request.get_json(silent=True) or {}
+    max_pts = body.get("maxPointsPerCamera", 10000)
+    _space_scan.start(positioned_cams, pos_map, max_points_per_cam=max_pts)
+    return jsonify(ok=True, pending=True, cameras=len(positioned_cams))
+
+@app.get("/api/space/scan/status")
+def api_space_scan_status():
+    """Poll environment scan progress."""
+    st = _space_scan.status
+    if not st["running"] and st.get("result"):
+        global _point_cloud
+        _point_cloud = st["result"]
+        _point_cloud["stageW"] = int(_stage.get("w", 3) * 1000)
+        _point_cloud["stageH"] = int(_stage.get("h", 2) * 1000)
+        _point_cloud["stageD"] = int(_stage.get("d", 1.5) * 1000)
+        _save("pointcloud", _point_cloud)
+    return jsonify(running=st["running"], progress=st["progress"],
+                   message=st["message"],
+                   totalPoints=st["result"]["totalPoints"] if st.get("result") else 0)
+
+@app.get("/api/space")
+def api_space_get():
+    """Get the stored point cloud."""
+    if not _point_cloud:
+        return jsonify(ok=False, err="No environment scan available"), 404
+    return jsonify(ok=True, **_point_cloud)
+
+@app.delete("/api/space")
+def api_space_clear():
+    """Clear the stored point cloud."""
+    global _point_cloud
+    _point_cloud = None
+    _save("pointcloud", None)
+    return jsonify(ok=True)
 
 
 # ── Camera tracking — orchestrator proxy ──────────────────────────────
@@ -5487,6 +5542,9 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
+
 
 
 
