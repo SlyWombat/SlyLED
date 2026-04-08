@@ -2237,6 +2237,12 @@ def _deploy_camera_bg(ip, force=False):
                     _deploy_status["running"] = False
                 return
 
+        # ── Detect if we need sudo ─────────────────────────────────
+        _, stdout, _ = ssh.exec_command("id -u")
+        uid = stdout.read().decode().strip()
+        sudo = "" if uid == "0" else "sudo "
+        log.info("Deploy: uid=%s, sudo=%s", uid, "no" if not sudo else "yes")
+
         # ── Pre-flight checks ──────────────────────────────────────
         _update(10, "Pre-flight checks...")
         _, stdout, _ = ssh.exec_command("python3 --version")
@@ -2250,7 +2256,7 @@ def _deploy_camera_bg(ip, force=False):
         if not stdout.read().decode().strip():
             _update(15, "Installing pip3...")
             _, stdout, stderr = ssh.exec_command(
-                "apt-get update -qq && apt-get install -y -qq python3-pip", timeout=120)
+                f"{sudo}apt-get update -qq && {sudo}apt-get install -y -qq python3-pip", timeout=120)
             exit_code = stdout.channel.recv_exit_status()
             if exit_code != 0:
                 err = stderr.read().decode("utf-8", errors="replace")[:300]
@@ -2260,7 +2266,7 @@ def _deploy_camera_bg(ip, force=False):
 
         # ── Create target directory ────────────────────────────────
         _update(25, "Creating /opt/slyled...")
-        _, stdout, _ = ssh.exec_command("mkdir -p /opt/slyled/models")
+        _, stdout, _ = ssh.exec_command(f"{sudo}mkdir -p /opt/slyled/models && {sudo}chmod 777 /opt/slyled /opt/slyled/models")
         stdout.channel.recv_exit_status()
 
         # ── Upload firmware files ──────────────────────────────────
@@ -2286,7 +2292,7 @@ def _deploy_camera_bg(ip, force=False):
         # ── Install system packages ────────────────────────────────
         _update(40, "Installing system packages...")
         _, stdout, stderr = ssh.exec_command(
-            "apt-get install -y -qq fswebcam python3-opencv python3-numpy v4l-utils",
+            f"{sudo}apt-get install -y -qq fswebcam python3-opencv python3-numpy v4l-utils",
             timeout=120)
         exit_code = stdout.channel.recv_exit_status()
         if exit_code != 0:
@@ -2296,13 +2302,13 @@ def _deploy_camera_bg(ip, force=False):
         # ── Install Python dependencies ────────────────────────────
         _update(50, "Installing Python dependencies...")
         _, stdout, stderr = ssh.exec_command(
-            "cd /opt/slyled && pip3 install --break-system-packages -r requirements.txt 2>&1",
+            f"cd /opt/slyled && {sudo}pip3 install --break-system-packages -r requirements.txt 2>&1",
             timeout=180)
         exit_code = stdout.channel.recv_exit_status()
         if exit_code != 0:
             # Try without --break-system-packages (older pip)
             _, stdout, stderr = ssh.exec_command(
-                "cd /opt/slyled && pip3 install -r requirements.txt 2>&1", timeout=180)
+                f"cd /opt/slyled && {sudo}pip3 install -r requirements.txt 2>&1", timeout=180)
             exit_code = stdout.channel.recv_exit_status()
             if exit_code != 0:
                 err = stderr.read().decode("utf-8", errors="replace")[:500]
@@ -2320,17 +2326,17 @@ def _deploy_camera_bg(ip, force=False):
 
         # ── Install systemd service ────────────────────────────────
         _update(70, "Setting up systemd service...")
-        ssh.exec_command("systemctl stop slyled-cam 2>/dev/null || true")
+        ssh.exec_command(f"{sudo}systemctl stop slyled-cam 2>/dev/null || true")
         time.sleep(1)
         # Copy tracked service file from upload to systemd
         _, stdout, _ = ssh.exec_command(
-            "cp /opt/slyled/slyled-cam.service /etc/systemd/system/slyled-cam.service "
-            "&& systemctl daemon-reload && systemctl enable slyled-cam")
+            f"{sudo}cp /opt/slyled/slyled-cam.service /etc/systemd/system/slyled-cam.service "
+            f"&& {sudo}systemctl daemon-reload && {sudo}systemctl enable slyled-cam")
         stdout.channel.recv_exit_status()
 
         # ── Start and verify ───────────────────────────────────────
         _update(80, "Starting camera server...")
-        _, stdout, _ = ssh.exec_command("systemctl start slyled-cam")
+        _, stdout, _ = ssh.exec_command(f"{sudo}systemctl start slyled-cam")
         stdout.channel.recv_exit_status()
         ssh.close()
 
