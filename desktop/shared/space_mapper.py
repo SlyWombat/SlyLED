@@ -50,12 +50,15 @@ def transform_points(points, cam_pos, cam_rotation, cam_aim=None):
     """
     cx, cy, cz = cam_pos
 
-    # Compute yaw from aim direction if available (pitch handled by depth model)
+    # Compute yaw AND pitch from aim direction
+    # The depth model gives camera-local 3D coords that need full rotation to stage space
     if cam_aim:
         dx = cam_aim[0] - cx
+        dy = cam_aim[1] - cy
         dz = cam_aim[2] - cz
-        ry_rad = math.atan2(dx, dz)  # yaw only — horizontal direction camera faces
-        rx_rad = 0  # pitch is implicit in the depth back-projection
+        dist_xz = math.sqrt(dx * dx + dz * dz)
+        ry_rad = math.atan2(dx, dz)  # yaw
+        rx_rad = math.atan2(-dy, dist_xz)  # pitch (negative because looking down = positive pitch)
         rz_rad = 0
     else:
         rx_rad = math.radians(cam_rotation[0]) if len(cam_rotation) > 0 else 0
