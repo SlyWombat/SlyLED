@@ -1895,6 +1895,45 @@ function s3dLoadChildren(){
           glow.userData.beamCone=true;
           glow.visible=_layShowCones;
           grp.add(glow);
+
+          // Rest vector — dashed arrow showing pan=0 tilt=0 home direction
+          var _prCache=window._profileCache&&_fix3d.dmxProfileId&&window._profileCache[_fix3d.dmxProfileId];
+          if(_prCache&&_prCache.panRange>0){
+            var rot3d=_fix3d.rotation||[0,0,0];
+            var ryRad=rot3d[1]*Math.PI/180;
+            // Home direction: +Z rotated by fixture Y rotation
+            var homeDir=new THREE.Vector3(Math.sin(ryRad),0,Math.cos(ryRad)).normalize();
+            var vecLen=0.4; // 400mm in 3D units (meters)
+            var homeEnd=homeDir.clone().multiplyScalar(vecLen);
+            // Dashed line
+            var restColor=_fix3d.calibrated?0x22c55e:0xf59e0b;
+            var restGeo=new THREE.BufferGeometry().setFromPoints([
+              new THREE.Vector3(0,0,0), homeEnd]);
+            var restMat=new THREE.LineDashedMaterial({
+              color:restColor,dashSize:0.04,gapSize:0.02,opacity:0.7,transparent:true});
+            var restLine=new THREE.Line(restGeo,restMat);
+            restLine.computeLineDistances();
+            restLine.userData.beamCone=true;
+            restLine.visible=_layShowCones;
+            grp.add(restLine);
+            // Arrowhead cone
+            var arrowGeo=new THREE.ConeGeometry(0.02,0.06,8);
+            var arrowMat=new THREE.MeshBasicMaterial({color:restColor,opacity:0.8,transparent:true});
+            var arrow=new THREE.Mesh(arrowGeo,arrowMat);
+            arrow.position.copy(homeEnd);
+            var arrowQuat=new THREE.Quaternion().setFromUnitVectors(
+              new THREE.Vector3(0,1,0),homeDir);
+            arrow.quaternion.copy(arrowQuat);
+            arrow.userData.beamCone=true;
+            arrow.visible=_layShowCones;
+            grp.add(arrow);
+            // Label sprite
+            var restLbl=_s3dLabel('0,0');
+            restLbl.position.copy(homeEnd.clone().add(homeDir.clone().multiplyScalar(0.05)));
+            restLbl.userData.beamCone=true;
+            restLbl.visible=_layShowCones;
+            grp.add(restLbl);
+          }
         }
       }
 
@@ -4216,6 +4255,34 @@ function drawLayout(){
         // Aim point dot
         ctx.beginPath();ctx.arc(ax,ay,3,0,2*Math.PI);
         ctx.fillStyle='#f44';ctx.fill();
+      }
+    }
+    // Rest vector — shows pan=0 tilt=0 home direction (2D top-down)
+    if(ft==='dmx'&&_layShowCones){
+      var pr=window._profileCache&&f.dmxProfileId&&window._profileCache[f.dmxProfileId];
+      if(pr&&pr.panRange>0){
+        // Home direction: +Z in stage coords (forward), rotated by fixture rotation
+        var rot=f.rotation||[0,0,0];
+        var ry=rot[1]*Math.PI/180;  // Y rotation = horizontal turn
+        // In 2D top-down: +Z maps to -Y on canvas, +X maps to +X
+        // Home direction rotated by RY
+        var hx=Math.sin(ry),hz=Math.cos(ry);
+        var vecLen=300*W/phW;  // 300mm in stage coords
+        var vx=cx+hx*vecLen,vy=cy-hz*vecLen;  // -Z because canvas Y is inverted
+        ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(vx,vy);
+        ctx.strokeStyle=f.calibrated?'#22c55e':'#f59e0b';  // green if calibrated, orange if not
+        ctx.lineWidth=2;ctx.setLineDash([4,3]);ctx.stroke();ctx.setLineDash([]);
+        // Arrowhead
+        var angle=Math.atan2(vy-cy,vx-cx);
+        ctx.beginPath();
+        ctx.moveTo(vx,vy);
+        ctx.lineTo(vx-8*Math.cos(angle-0.4),vy-8*Math.sin(angle-0.4));
+        ctx.lineTo(vx-8*Math.cos(angle+0.4),vy-8*Math.sin(angle+0.4));
+        ctx.closePath();ctx.fillStyle=f.calibrated?'#22c55e':'#f59e0b';ctx.fill();
+        // Label
+        ctx.font='8px sans-serif';ctx.fillStyle=f.calibrated?'#22c55e':'#f59e0b';
+        ctx.textAlign='center';
+        ctx.fillText('0,0',vx+10*Math.cos(angle+0.5),vy+10*Math.sin(angle+0.5));
       }
     }
     // Camera FOV cone (2D top-down)
