@@ -419,6 +419,22 @@ The deploy process (from the **Firmware** tab) uploads all camera files via SCP:
 ### Multi-Camera Support
 Each node can host multiple USB cameras. The firmware auto-detects connected cameras and filters out internal SoC video nodes. Each camera gets its own card in the config page with independent capture and detection controls.
 
+### Environment Scanning
+The **Scan Environment** button on the Layout toolbar captures a 3D point cloud of the physical space:
+1. Each positioned camera captures a frame and runs depth estimation
+2. Pixels are back-projected to 3D using camera FOV and depth
+3. Point clouds from all cameras are merged into stage coordinates
+4. **Surface analysis** identifies floor, walls, and obstacles (pillars, furniture)
+5. Detected surfaces can be automatically created as named stage objects
+
+The point cloud can be viewed as colored dots in the 3D viewport (toggle with the point cloud button). This gives a visual map of the physical environment that the lights will illuminate.
+
+### Per-Camera Fixtures
+Each USB camera sensor on a camera node registers as a **separate fixture** in the layout. A node with 2 cameras creates 2 fixtures, each with:
+- Its own position on the stage (independently placeable)
+- Its own FOV and resolution
+- Its own rest direction vector (cyan arrow)
+
 ---
 
 ## 14. Firmware & OTA Updates

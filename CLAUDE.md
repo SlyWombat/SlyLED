@@ -74,13 +74,25 @@ Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask s
 | GET | `/config` | HTML config SPA (dashboard + settings, detection UI) |
 | GET | `/snapshot?cam=N` | JPEG snapshot from camera N (OpenCV → fswebcam fallback) |
 | POST | `/scan` | Object detection — YOLOv8n via ONNX Runtime |
+| POST | `/depth-map` | Monocular depth estimation (Depth-Anything-V2) |
+| POST | `/point-cloud` | Generate 3D point cloud from depth + camera |
+| POST | `/beam-detect` | Fast beam spot detection (for calibration) |
+| POST | `/beam-detect/center` | Center beam of multi-beam fixture |
+| POST | `/dark-reference` | Capture dark reference frame |
+| POST | `/track/start` | Start continuous person tracking |
+| POST | `/track/stop` | Stop tracking |
+| GET | `/track/status` | Tracking state |
 | GET | `/health` | Health check |
 
 - **Systemd service:** `slyled-cam` for auto-start on boot (tracked in `firmware/orangepi/slyled-cam.service`)
 - **Multi-camera support:** Filters SoC video nodes, only exposes real USB cameras
 - **Object detection:** `firmware/orangepi/detector.py` — YOLOv8n ONNX model via onnxruntime (falls back to OpenCV DNN). Model deployed via SCP (`models/yolov8n.onnx`, 12 MB, gitignored). Returns bounding boxes with labels and confidence scores.
 - **Config page:** Per-camera cards with Capture Frame + Detect Objects buttons, threshold slider, resolution toggle (320/640), auto-refresh, canvas overlay with bounding boxes
-- **Deploy:** SSH+SCP from the Firmware tab in the SPA; uploads `camera_server.py`, `detector.py`, `requirements.txt`, `slyled-cam.service`, and `models/yolov8n.onnx`. Version comparison with force-reinstall option.
+- **Depth estimation:** `firmware/orangepi/depth_estimator.py` — Depth-Anything-V2 small (95 MB ONNX). 6.5s on ARM. Produces relative depth maps and 3D point clouds.
+- **Beam detection:** `firmware/orangepi/beam_detector.py` — Color-filtered beam detection for moving head calibration. Brightness + saturation + compactness checks. 3-beam center identification.
+- **Tracking:** `firmware/orangepi/tracker.py` — Continuous person detection with proximity re-ID (500mm threshold). Pushes temporal objects to orchestrator.
+- **Deploy:** SSH+SCP from the Firmware tab in the SPA; uploads `camera_server.py`, `detector.py`, `depth_estimator.py`, `beam_detector.py`, `tracker.py`, `requirements.txt`, `slyled-cam.service`, and models. Version comparison with force-reinstall option.
+- **Per-camera fixtures:** Each USB camera sensor registers as a separate placeable fixture with own FOV, resolution, and calibration data.
 
 **Giga board roles:** The Giga R1 compiles in two modes:
 - `BOARD_GIGA` (default) — runtime Orchestrator with minimal SPA for start/stop
@@ -105,10 +117,16 @@ Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask s
 | `desktop/shared/dmx_artnet.py` | Art-Net engine — universe buffers, ArtDMX/ArtPoll output |
 | `desktop/shared/community_client.py` | Community profile server client (electricrv.ca) |
 | `firmware/registry.json` | Firmware binary registry (board, version, file) |
-| `firmware/orangepi/camera_server.py` | Camera node firmware — Flask HTTP + UDP PONG + detection |
+| `firmware/orangepi/camera_server.py` | Camera node firmware — Flask HTTP + UDP PONG + all endpoints |
 | `firmware/orangepi/detector.py` | YOLOv8n object detection via ONNX Runtime |
+| `firmware/orangepi/depth_estimator.py` | Depth-Anything-V2 monocular depth + point cloud |
+| `firmware/orangepi/beam_detector.py` | Color-filtered beam detection for calibration |
+| `firmware/orangepi/tracker.py` | Continuous person tracking with proximity re-ID |
 | `firmware/orangepi/slyled-cam.service` | Systemd unit file for camera service |
 | `firmware/orangepi/flash.ps1` | SSH+SCP deploy script for camera nodes |
+| `desktop/shared/mover_calibrator.py` | Moving head calibration — discovery, BFS, grid, convergence |
+| `desktop/shared/space_mapper.py` | Multi-camera point cloud merge + transform |
+| `desktop/shared/surface_analyzer.py` | RANSAC floor/wall/obstacle detection from point cloud |
 
 **Running on Windows:** `powershell.exe -ExecutionPolicy Bypass -File desktop\windows\run.ps1`
 
@@ -263,7 +281,7 @@ powershell.exe -Command "python tests/discover.py"
 
 Tests restore factory state before and after string config tests. If a test run is interrupted, factory-reset the child manually via `POST /config/reset`.
 
-### Test suite (camera — 67 assertions)
+### Test suite (camera — 81 assertions)
 
 ```
 powershell.exe -Command "python -X utf8 tests/test_camera.py [host] [http_port] [udp_port]"
