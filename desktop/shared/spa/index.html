@@ -4308,10 +4308,9 @@ function drawLayout(){
   ctx.fillText('Stage: '+fmtCoord(phW)+' x '+fmtCoord(phH),6,14);
   ctx.textAlign='right';
   ctx.fillText('(0,0)',8,H-4);
-  // Axis labels
+  // Axis labels at origin
   ctx.fillStyle='#c44';ctx.fillText('X \u2192',50,H-4);
-  ctx.save();ctx.translate(8,H-20);ctx.rotate(-Math.PI/2);
-  ctx.fillStyle='#4c4';ctx.fillText('Y \u2191',0,0);ctx.restore();
+  ctx.fillStyle='#4c4';ctx.fillText('Y \u2191',2,H-30);
   // Draw stage objects
   (_objects||[]).forEach(function(s){
     var t=s.transform||{pos:[0,0,0],scale:[2000,1500,1]};
