@@ -461,6 +461,7 @@ def run():
         ok('Registered camera has cameraIp', rc.get('cameraIp') == '192.168.10.200')
         ok('Registered camera has fovDeg', rc.get('fovDeg') == 60)
         ok('Registered camera has aimPoint', isinstance(rc.get('aimPoint'), list))
+        ok('Registered camera has cameraIdx', rc.get('cameraIdx') is not None)
 
         # Duplicate IP → 409
         r = c.post('/api/cameras', json={'ip': '192.168.10.200'})

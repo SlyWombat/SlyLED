@@ -1781,16 +1781,15 @@ function s3dInit(){
   var grid=new THREE.GridHelper(20,20,0x1a2744,0x111828);
   _s3d.scene.add(grid);
 
-  // Axis helper + labels
-  var axes=new THREE.AxesHelper(1.5);
-  axes.position.set(-0.5,0,-0.5);
+  // Axis helper at origin (0,0,0) — stage corner
+  var axes=new THREE.AxesHelper(0.5);
   _s3d.scene.add(axes);
   var originLbl=_s3dLabel('Origin (0,0,0)');
-  originLbl.position.set(-0.5,-0.1,-0.5);
+  originLbl.position.set(0,-0.08,0);
   _s3d.scene.add(originLbl);
-  var xLbl=_s3dLabel('X');xLbl.position.set(1.2,0.1,-0.5);_s3d.scene.add(xLbl);
-  var yLbl=_s3dLabel('Y');yLbl.position.set(-0.5,1.6,-0.5);_s3d.scene.add(yLbl);
-  var zLbl=_s3dLabel('Z');zLbl.position.set(-0.5,0.1,1.2);_s3d.scene.add(zLbl);
+  var xLbl=_s3dLabel('X');xLbl.position.set(0.6,0.05,0);_s3d.scene.add(xLbl);
+  var yLbl=_s3dLabel('Y');yLbl.position.set(0,0.6,0);_s3d.scene.add(yLbl);
+  var zLbl=_s3dLabel('Z');zLbl.position.set(0,0.05,0.6);_s3d.scene.add(zLbl);
 
   // Ambient + directional light
   _s3d.scene.add(new THREE.AmbientLight(0x334466,0.8));
