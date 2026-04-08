@@ -33,29 +33,58 @@ def fetch_point_cloud(camera_ip, cam_idx, max_points=10000, max_depth_mm=5000):
     return None
 
 
-def transform_points(points, cam_pos, cam_rotation):
+def transform_points(points, cam_pos, cam_rotation, cam_aim=None):
     """Transform camera-local points to stage coordinates.
+
+    Uses full 3-axis rotation (RX pitch, RY yaw, RZ roll).
+    If cam_aim is provided, computes the rotation from position→aim direction
+    instead of using the explicit rotation values.
 
     Args:
         points: list of [x, y, z, r, g, b] in camera-local mm
         cam_pos: (x, y, z) camera position in stage mm
         cam_rotation: (rx, ry, rz) rotation in degrees
+        cam_aim: optional (x, y, z) aim point — overrides rotation if provided
 
     Returns: list of [x, y, z, r, g, b] in stage mm
     """
     cx, cy, cz = cam_pos
-    ry_rad = math.radians(cam_rotation[1]) if len(cam_rotation) > 1 else 0
 
-    cos_ry = math.cos(ry_rad)
-    sin_ry = math.sin(ry_rad)
+    # Compute yaw from aim direction if available (pitch handled by depth model)
+    if cam_aim:
+        dx = cam_aim[0] - cx
+        dz = cam_aim[2] - cz
+        ry_rad = math.atan2(dx, dz)  # yaw only — horizontal direction camera faces
+        rx_rad = 0  # pitch is implicit in the depth back-projection
+        rz_rad = 0
+    else:
+        rx_rad = math.radians(cam_rotation[0]) if len(cam_rotation) > 0 else 0
+        ry_rad = math.radians(cam_rotation[1]) if len(cam_rotation) > 1 else 0
+        rz_rad = math.radians(cam_rotation[2]) if len(cam_rotation) > 2 else 0
+
+    # Build rotation matrix: RY * RX * RZ (yaw, pitch, roll order)
+    cos_rx, sin_rx = math.cos(rx_rad), math.sin(rx_rad)
+    cos_ry, sin_ry = math.cos(ry_rad), math.sin(ry_rad)
+    cos_rz, sin_rz = math.cos(rz_rad), math.sin(rz_rad)
+
+    # Combined rotation matrix elements (RY * RX * RZ)
+    r00 = cos_ry * cos_rz + sin_ry * sin_rx * sin_rz
+    r01 = -cos_ry * sin_rz + sin_ry * sin_rx * cos_rz
+    r02 = sin_ry * cos_rx
+    r10 = cos_rx * sin_rz
+    r11 = cos_rx * cos_rz
+    r12 = -sin_rx
+    r20 = -sin_ry * cos_rz + cos_ry * sin_rx * sin_rz
+    r21 = sin_ry * sin_rz + cos_ry * sin_rx * cos_rz
+    r22 = cos_ry * cos_rx
 
     result = []
     for pt in points:
         lx, ly, lz = pt[0], pt[1], pt[2]
-        # Rotate around Y axis (horizontal turn)
-        wx = lx * cos_ry + lz * sin_ry + cx
-        wy = ly + cy
-        wz = -lx * sin_ry + lz * cos_ry + cz
+        # Apply rotation then translation
+        wx = r00 * lx + r01 * ly + r02 * lz + cx
+        wy = r10 * lx + r11 * ly + r12 * lz + cy
+        wz = r20 * lx + r21 * ly + r22 * lz + cz
         result.append([round(wx), round(wy), round(wz), pt[3], pt[4], pt[5]])
     return result
 
@@ -127,7 +156,9 @@ class SpaceScan:
             pos = positions.get(fid, positions.get(str(fid), {}))
             cam_pos = (pos.get("x", 0), pos.get("y", 0), pos.get("z", 0))
             cam_rot = cam.get("rotation", [0, 0, 0])
-            stage_points = transform_points(points, cam_pos, cam_rot)
+            # Use aim point for yaw direction if available
+            cam_aim = cam.get("aimPoint")
+            stage_points = transform_points(points, cam_pos, cam_rot, cam_aim=cam_aim)
 
             all_points.extend(stage_points)
             cam_info.append({

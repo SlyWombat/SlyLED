@@ -1891,6 +1891,84 @@ def api_space_analyze():
     _save("pointcloud", _point_cloud)
     return jsonify(ok=True, **result)
 
+@app.post("/api/space/create-objects")
+def api_space_create_objects():
+    """Create stage objects from detected surfaces (floor, walls, obstacles)."""
+    global _nxt_obj
+    if not _point_cloud or not _point_cloud.get("surfaces"):
+        return jsonify(err="No surface analysis — run /api/space/analyze first"), 404
+    surfaces = _point_cloud["surfaces"]
+    created = []
+    with _lock:
+        # Floor
+        floor = surfaces.get("floor")
+        if floor:
+            ext = floor.get("extent", {})
+            w = ext.get("xMax", 0) - ext.get("xMin", 0)
+            d = ext.get("zMax", 0) - ext.get("zMin", 0)
+            obj = {
+                "id": _nxt_obj, "name": "Floor",
+                "objectType": "floor", "mobility": "static",
+                "color": "#475569", "opacity": 15,
+                "transform": {
+                    "pos": [ext.get("xMin", 0), floor["y"], ext.get("zMin", 0)],
+                    "rot": [0, 0, 0],
+                    "scale": [max(w, 100), 10, max(d, 100)],
+                },
+            }
+            _objects.append(obj)
+            created.append({"id": _nxt_obj, "name": "Floor"})
+            _nxt_obj += 1
+
+        # Walls
+        for i, wall in enumerate(surfaces.get("walls", [])):
+            ext = wall.get("extent", {})
+            w = ext.get("xMax", 0) - ext.get("xMin", 0)
+            h = ext.get("yMax", 0) - ext.get("yMin", 0)
+            n = wall.get("normal", [0, 0, 1])
+            # Name based on direction
+            if abs(n[2]) > 0.7:
+                wname = "Back Wall" if n[2] > 0 else "Front Wall"
+            elif abs(n[0]) > 0.7:
+                wname = "Right Wall" if n[0] > 0 else "Left Wall"
+            else:
+                wname = f"Wall {i+1}"
+            obj = {
+                "id": _nxt_obj, "name": wname,
+                "objectType": "wall", "mobility": "static",
+                "color": "#334155", "opacity": 10,
+                "transform": {
+                    "pos": [ext.get("xMin", 0), ext.get("yMin", 0), ext.get("zMin", 0)],
+                    "rot": [0, 0, 0],
+                    "scale": [max(w, 100), max(h, 100), 50],
+                },
+            }
+            _objects.append(obj)
+            created.append({"id": _nxt_obj, "name": wname})
+            _nxt_obj += 1
+
+        # Obstacles
+        for obs in surfaces.get("obstacles", []):
+            obj = {
+                "id": _nxt_obj, "name": obs.get("label", "Obstacle").title(),
+                "objectType": "prop", "mobility": "static",
+                "color": "#7c3aed", "opacity": 20,
+                "transform": {
+                    "pos": [obs["pos"][0] - obs["size"][0]//2,
+                            obs["pos"][1] - obs["size"][1]//2,
+                            obs["pos"][2] - obs["size"][2]//2],
+                    "rot": [0, 0, 0],
+                    "scale": [max(obs["size"][0], 100), max(obs["size"][1], 100),
+                              max(obs["size"][2], 100)],
+                },
+            }
+            _objects.append(obj)
+            created.append({"id": _nxt_obj, "name": obs.get("label", "Obstacle").title()})
+            _nxt_obj += 1
+
+        _save("objects", _objects)
+    return jsonify(ok=True, created=created, count=len(created))
+
 @app.get("/api/space/surfaces")
 def api_space_surfaces():
     """Get detected surfaces from the last analysis."""
