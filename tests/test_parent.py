@@ -1318,6 +1318,7 @@ def run():
         ok('SPA has cone toggle', '_layConesToggle' in spa)
         ok('SPA has cone toggle button', 'btn-lay-cones' in spa)
         ok('SPA has rest vector 2D', "'0,0'" in spa and 'f59e0b' in spa)
+        ok('SPA applyNodePos saves to server', "ra('POST','/api/layout'" in spa and 'applyNodePos' in spa)
         ok('SPA has rest vector 3D', 'LineDashedMaterial' in spa and 'homeDir' in spa)
         ok('SPA has tracking toggle', '_trackToggle' in spa)
         ok('SPA has tracking start', '_trackStart' in spa)

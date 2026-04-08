@@ -1777,10 +1777,16 @@ function s3dInit(){
   var grid=new THREE.GridHelper(20,20,0x1a2744,0x111828);
   _s3d.scene.add(grid);
 
-  // Axis helper
+  // Axis helper + labels
   var axes=new THREE.AxesHelper(1.5);
   axes.position.set(-0.5,0,-0.5);
   _s3d.scene.add(axes);
+  var originLbl=_s3dLabel('Origin (0,0,0)');
+  originLbl.position.set(-0.5,-0.1,-0.5);
+  _s3d.scene.add(originLbl);
+  var xLbl=_s3dLabel('X');xLbl.position.set(1.2,0.1,-0.5);_s3d.scene.add(xLbl);
+  var yLbl=_s3dLabel('Y');yLbl.position.set(-0.5,1.6,-0.5);_s3d.scene.add(yLbl);
+  var zLbl=_s3dLabel('Z');zLbl.position.set(-0.5,0.1,1.2);_s3d.scene.add(zLbl);
 
   // Ambient + directional light
   _s3d.scene.add(new THREE.AmbientLight(0x334466,0.8));
@@ -2220,8 +2226,13 @@ function applyNodePos3D(id){
   var nx=parseInt(document.getElementById('ne-x').value)||0;
   var ny=parseInt(document.getElementById('ne-y').value)||0;
   var nz=parseInt(document.getElementById('ne-z').value)||0;
+  // Update both ld.children and _fixtures
   (ld.children||[]).forEach(function(c){if(c.id===id){c.x=nx;c.y=ny;c.z=nz;c._placed=true;}});
-  closeModal();s3dLoadChildren();renderSidebar();
+  _fixtures.forEach(function(f){if(f.id===id){f.x=nx;f.y=ny;f.z=nz;f._placed=true;f.positioned=true;}});
+  closeModal();s3dLoadChildren();renderSidebar();drawLayout();
+  // Persist to server
+  var toSave=_fixtures.filter(_isFixturePlaced).map(function(f){return{id:f.id,x:f.x,y:f.y,z:f.z||0};});
+  ra('POST','/api/layout',{fixtures:toSave});
 }
 
 function s3dDrop(e){
@@ -4147,8 +4158,12 @@ function applyNodePos(id){
   var ny=parseInt(document.getElementById('ne-y').value)||0;
   var nz=parseInt(document.getElementById('ne-z').value)||0;
   nx=Math.max(0,Math.min(phW,nx));ny=Math.max(0,Math.min(phH,ny));nz=Math.max(0,nz);
-  _fixtures.forEach(function(f){if(f.id===id){f.x=nx;f.y=ny;f.z=nz;f._placed=true;}});
+  _fixtures.forEach(function(f){if(f.id===id){f.x=nx;f.y=ny;f.z=nz;f._placed=true;f.positioned=true;}});
   closeModal();drawLayout();renderFixturesSidebar();
+  if(_layMode==='3d'&&_s3d.inited)s3dLoadChildren();
+  // Persist to server
+  var toSave=_fixtures.filter(_isFixturePlaced).map(function(f){return{id:f.id,x:f.x,y:f.y,z:f.z||0};});
+  ra('POST','/api/layout',{fixtures:toSave});
 }
 
 function removeFromCanvas(id){
@@ -4176,6 +4191,10 @@ function drawLayout(){
   ctx.fillText('Stage: '+fmtCoord(phW)+' x '+fmtCoord(phH),6,14);
   ctx.textAlign='right';
   ctx.fillText('(0,0)',8,H-4);
+  // Axis labels
+  ctx.fillStyle='#c44';ctx.fillText('X \u2192',50,H-4);
+  ctx.save();ctx.translate(8,H-20);ctx.rotate(-Math.PI/2);
+  ctx.fillStyle='#4c4';ctx.fillText('Y \u2191',0,0);ctx.restore();
   // Draw stage objects
   (_objects||[]).forEach(function(s){
     var t=s.transform||{pos:[0,0,0],scale:[2000,1500,1]};
