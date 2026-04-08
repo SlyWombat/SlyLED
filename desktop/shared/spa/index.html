@@ -1854,7 +1854,9 @@ function s3dLoadChildren(){
         var aim=_fix3d.aimPoint||[c.x||0,0,(_s3d.stageD||10)*1000];
         var aimLocal=new THREE.Vector3((aim[0]-(c.x||0))/1000,(aim[1]-(c.y||0))/1000,(aim[2]-(c.z||0))/1000);
         var beamLen=aimLocal.length();
-        if(beamLen>0.01){
+        // Cone only shown for calibrated DMX fixtures (not cameras, not uncalibrated)
+        var showCone=_fix3d.fixtureType==='dmx'&&(_fix3d.rangeCalibrated||_fix3d.calibrated);
+        if(beamLen>0.01&&showCone){
           var bwDeg=_fix3d.fixtureType==='camera'?(_fix3d.fovDeg||60):15;
           // Use cached profile beamWidth (sync) — _profileCache populated by emulator/layout
           if(_fix3d.fixtureType==='dmx'&&_fix3d.dmxProfileId&&window._profileCache&&window._profileCache[_fix3d.dmxProfileId]){
@@ -1896,44 +1898,37 @@ function s3dLoadChildren(){
           glow.visible=_layShowCones;
           grp.add(glow);
 
-          // Rest vector — dashed arrow showing pan=0 tilt=0 home direction
-          var _prCache=window._profileCache&&_fix3d.dmxProfileId&&window._profileCache[_fix3d.dmxProfileId];
-          if(_prCache&&_prCache.panRange>0){
-            var rot3d=_fix3d.rotation||[0,0,0];
-            var ryRad=rot3d[1]*Math.PI/180;
-            // Home direction: +Z rotated by fixture Y rotation
-            var homeDir=new THREE.Vector3(Math.sin(ryRad),0,Math.cos(ryRad)).normalize();
-            var vecLen=0.4; // 400mm in 3D units (meters)
-            var homeEnd=homeDir.clone().multiplyScalar(vecLen);
-            // Dashed line
-            var restColor=_fix3d.calibrated?0x22c55e:0xf59e0b;
-            var restGeo=new THREE.BufferGeometry().setFromPoints([
-              new THREE.Vector3(0,0,0), homeEnd]);
-            var restMat=new THREE.LineDashedMaterial({
-              color:restColor,dashSize:0.04,gapSize:0.02,opacity:0.7,transparent:true});
-            var restLine=new THREE.Line(restGeo,restMat);
-            restLine.computeLineDistances();
-            restLine.userData.beamCone=true;
-            restLine.visible=_layShowCones;
-            grp.add(restLine);
-            // Arrowhead cone
-            var arrowGeo=new THREE.ConeGeometry(0.02,0.06,8);
-            var arrowMat=new THREE.MeshBasicMaterial({color:restColor,opacity:0.8,transparent:true});
-            var arrow=new THREE.Mesh(arrowGeo,arrowMat);
-            arrow.position.copy(homeEnd);
-            var arrowQuat=new THREE.Quaternion().setFromUnitVectors(
-              new THREE.Vector3(0,1,0),homeDir);
-            arrow.quaternion.copy(arrowQuat);
-            arrow.userData.beamCone=true;
-            arrow.visible=_layShowCones;
-            grp.add(arrow);
-            // Label sprite
-            var restLbl=_s3dLabel('0,0');
-            restLbl.position.copy(homeEnd.clone().add(homeDir.clone().multiplyScalar(0.05)));
-            restLbl.userData.beamCone=true;
-            restLbl.visible=_layShowCones;
-            grp.add(restLbl);
-          }
+        }
+      }
+
+      // Rest vector — dashed arrow showing home direction (DMX movers + cameras)
+      if(_fix3d&&(_fix3d.fixtureType==='dmx'||_fix3d.fixtureType==='camera')){
+        var hasPanTilt=_fix3d.fixtureType==='camera'||
+          (window._profileCache&&_fix3d.dmxProfileId&&window._profileCache[_fix3d.dmxProfileId]&&window._profileCache[_fix3d.dmxProfileId].panRange>0);
+        if(hasPanTilt||_fix3d.fixtureType==='camera'){
+          var rot3d=_fix3d.rotation||[0,0,0];
+          var ryRad=rot3d[1]*Math.PI/180;
+          var homeDir=new THREE.Vector3(Math.sin(ryRad),0,Math.cos(ryRad)).normalize();
+          var vecLen=0.4;
+          var homeEnd=homeDir.clone().multiplyScalar(vecLen);
+          var restColor=_fix3d.calibrated?0x22c55e:(_fix3d.fixtureType==='camera'?0x22d3ee:0xf59e0b);
+          var restGeo=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0),homeEnd]);
+          var restMat=new THREE.LineDashedMaterial({color:restColor,dashSize:0.04,gapSize:0.02,opacity:0.7,transparent:true});
+          var restLine=new THREE.Line(restGeo,restMat);
+          restLine.computeLineDistances();
+          restLine.userData.beamCone=true;restLine.visible=_layShowCones;
+          grp.add(restLine);
+          var arrowGeo=new THREE.ConeGeometry(0.02,0.06,8);
+          var arrowMat=new THREE.MeshBasicMaterial({color:restColor,opacity:0.8,transparent:true});
+          var arrow=new THREE.Mesh(arrowGeo,arrowMat);
+          arrow.position.copy(homeEnd);
+          arrow.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),homeDir));
+          arrow.userData.beamCone=true;arrow.visible=_layShowCones;
+          grp.add(arrow);
+          var restLbl=_s3dLabel(_fix3d.fixtureType==='camera'?'cam'+(_fix3d.cameraIdx||0):'0,0');
+          restLbl.position.copy(homeEnd.clone().add(homeDir.clone().multiplyScalar(0.05)));
+          restLbl.userData.beamCone=true;restLbl.visible=_layShowCones;
+          grp.add(restLbl);
         }
       }
 
@@ -4237,7 +4232,7 @@ function drawLayout(){
     ctx.fillStyle=nodeCol;ctx.fill();
     ctx.strokeStyle=nodeBdr;ctx.lineWidth=2;ctx.stroke();
     // DMX beam direction line (2D top-down: X→horizontal, aim shown as line from fixture to aim XY)
-    if(ft==='dmx'&&f.aimPoint){
+    if(ft==='dmx'&&f.aimPoint&&(f.rangeCalibrated||f.calibrated)){
       var ax=f.aimPoint[0]*W/phW,ay=H-f.aimPoint[1]*H/phH;
       var bLen=Math.sqrt((ax-cx)*(ax-cx)+(ay-cy)*(ay-cy));
       if(bLen>5){
@@ -4285,24 +4280,23 @@ function drawLayout(){
         ctx.fillText('0,0',vx+10*Math.cos(angle+0.5),vy+10*Math.sin(angle+0.5));
       }
     }
-    // Camera FOV cone (2D top-down)
-    if(ft==='camera'&&f.aimPoint){
-      var ax=f.aimPoint[0]*W/phW,ay=H-f.aimPoint[1]*H/phH;
-      var bLen=Math.sqrt((ax-cx)*(ax-cx)+(ay-cy)*(ay-cy));
-      if(bLen>5){
-        var bwDeg=f.fovDeg||60;
-        var angle=Math.atan2(ay-cy,ax-cx);
-        var halfW=Math.tan(bwDeg*Math.PI/360)*bLen;
-        var lx2=ax+Math.cos(angle+Math.PI/2)*halfW;
-        var ly2=ay+Math.sin(angle+Math.PI/2)*halfW;
-        var rx2=ax+Math.cos(angle-Math.PI/2)*halfW;
-        var ry2=ay+Math.sin(angle-Math.PI/2)*halfW;
-        ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(lx2,ly2);ctx.lineTo(rx2,ry2);ctx.closePath();
-        ctx.fillStyle='rgba(14,116,144,0.08)';ctx.fill();
-        ctx.strokeStyle='rgba(34,211,238,0.25)';ctx.lineWidth=1;ctx.stroke();
-        ctx.beginPath();ctx.arc(ax,ay,3,0,2*Math.PI);
-        ctx.fillStyle='#f44';ctx.fill();
-      }
+    // Camera rest vector (2D top-down) — same style as moving head rest arrows
+    if(ft==='camera'&&_layShowCones){
+      var rot=f.rotation||[0,0,0];
+      var ry=rot[1]*Math.PI/180;
+      var hx=Math.sin(ry),hz=Math.cos(ry);
+      var vecLen=400*W/phW;
+      var vx=cx+hx*vecLen,vy=cy-hz*vecLen;
+      ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(vx,vy);
+      ctx.strokeStyle=f.calibrated?'#22c55e':'#22d3ee';
+      ctx.lineWidth=2;ctx.setLineDash([4,3]);ctx.stroke();ctx.setLineDash([]);
+      var angle=Math.atan2(vy-cy,vx-cx);
+      ctx.beginPath();ctx.moveTo(vx,vy);
+      ctx.lineTo(vx-8*Math.cos(angle-0.4),vy-8*Math.sin(angle-0.4));
+      ctx.lineTo(vx-8*Math.cos(angle+0.4),vy-8*Math.sin(angle+0.4));
+      ctx.closePath();ctx.fillStyle=f.calibrated?'#22c55e':'#22d3ee';ctx.fill();
+      ctx.font='8px sans-serif';ctx.textAlign='center';
+      ctx.fillText('cam'+(f.cameraIdx||0),(vx+cx)/2+10*Math.cos(angle+0.5),(vy+cy)/2+10*Math.sin(angle+0.5));
     }
     // Labels
     var lblDir=(cy+50>H)?-1:1;

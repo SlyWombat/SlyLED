@@ -79,7 +79,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "1.0.9"
+VERSION = "1.0.11"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1193,30 +1193,44 @@ def api_cameras_register():
             return jsonify(err="Only private/LAN IP addresses allowed"), 400
     except ValueError:
         return jsonify(err="Invalid IP address"), 400
-    # Prevent duplicate
-    for f in _fixtures:
-        if f.get("fixtureType") == "camera" and f.get("cameraIp") == ip:
-            return jsonify(err="Camera already registered at this IP"), 409
     # Probe camera for info
     info = _probe_camera(ip, timeout=3)
-    name = body.get("name") or (info.get("hostname") if info else None) or f"Camera {ip}"
+    cameras = (info or {}).get("cameras", [])
+    base_name = body.get("name") or (info.get("hostname") if info else None) or f"Camera {ip}"
+
+    # Create one fixture per camera sensor (not one per node)
+    created_ids = []
     with _lock:
-        f = {
-            "id": _nxt_fix, "name": name,
-            "fixtureType": "camera", "type": "point",
-            "childId": None, "childIds": [], "strings": [],
-            "rotation": [0, 0, 0], "aoeRadius": 1000, "meshFile": None,
-            "cameraIp": ip,
-            "aimPoint": [0, 0, int(_stage.get("d", 10) * 1000)],
-            "fovDeg": _camera_fov_from_info(info, body.get("cam", 0)) or body.get("fovDeg") or 60,
-            "cameraUrl": (info or {}).get("cameraUrl") or body.get("cameraUrl", ""),
-            "resolutionW": (info or {}).get("resolutionW") or body.get("resolutionW") or 1920,
-            "resolutionH": (info or {}).get("resolutionH") or body.get("resolutionH") or 1080,
-        }
-        _fixtures.append(f)
-        _nxt_fix += 1
+        for cam_idx in range(max(1, len(cameras))):
+            # Check for duplicate (same IP + same camera index)
+            dup = next((f for f in _fixtures if f.get("fixtureType") == "camera"
+                        and f.get("cameraIp") == ip and f.get("cameraIdx", 0) == cam_idx), None)
+            if dup:
+                continue
+            cam_info = cameras[cam_idx] if cam_idx < len(cameras) else {}
+            cam_name = cam_info.get("name", "")
+            # Short name: "NodeName — CamName" or just "NodeName" if single camera
+            fixture_name = f"{base_name} — {cam_name}" if len(cameras) > 1 and cam_name else base_name
+            f = {
+                "id": _nxt_fix, "name": fixture_name,
+                "fixtureType": "camera", "type": "point",
+                "childId": None, "childIds": [], "strings": [],
+                "rotation": [0, 0, 0], "aoeRadius": 1000, "meshFile": None,
+                "cameraIp": ip,
+                "cameraIdx": cam_idx,
+                "aimPoint": [0, 0, int(_stage.get("d", 10) * 1000)],
+                "fovDeg": _camera_fov_from_info(info, cam_idx) or body.get("fovDeg") or 60,
+                "cameraUrl": (info or {}).get("cameraUrl") or body.get("cameraUrl", ""),
+                "resolutionW": cam_info.get("resW") or body.get("resolutionW") or 1920,
+                "resolutionH": cam_info.get("resH") or body.get("resolutionH") or 1080,
+            }
+            _fixtures.append(f)
+            created_ids.append(_nxt_fix)
+            _nxt_fix += 1
         _save("fixtures", _fixtures)
-    return jsonify(ok=True, id=f["id"]), 201
+    if not created_ids:
+        return jsonify(err="Camera already registered at this IP"), 409
+    return jsonify(ok=True, id=created_ids[0], ids=created_ids, count=len(created_ids)), 201
 
 @app.delete("/api/cameras/<int:fid>")
 def api_cameras_delete(fid):
@@ -5473,6 +5487,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
