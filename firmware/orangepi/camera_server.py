@@ -396,7 +396,7 @@ input,select{{width:100%;padding:.35em .5em;background:#0f172a;border:1px solid 
 <h2>Camera {i} &mdash; {c["name"]}</h2>
 <div class="info-row"><span class="lbl">Device</span><span>{c["device"]}</span></div>
 <div class="info-row"><span class="lbl">Resolution</span><span>{c["resW"]}x{c["resH"]}</span></div>
-<div class="info-row"><span class="lbl">FOV</span><span><input type="number" id="fov-{i}" value="{_camera_fov(i)}" min="1" max="180" style="width:50px;padding:2px 4px" onchange="_saveFov({i})"> &deg;</span></div>
+<div class="info-row"><span class="lbl">FOV</span><span>{_camera_fov(i)}&deg;</span></div>
 <button class="btn btn-save" onclick="_snap({i})" id="snap-btn-{i}">Capture Frame</button>
 <button class="btn btn-save" onclick="_detect({i})" id="det-btn-{i}" style="{det_btn_style}">Detect Objects</button>
 <div class="det-controls" id="det-ctl-{i}" style="display:none">
