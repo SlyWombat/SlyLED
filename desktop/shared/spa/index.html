@@ -6562,16 +6562,24 @@ function _camFwRefresh(){
       el.innerHTML='<p style="color:#888;font-size:.82em">No cameras registered. Add cameras from the Setup tab.</p>';
       return;
     }
-    var h='<table class="tbl" style="font-size:.85em"><tr><th>Camera</th><th>IP</th><th>Version</th><th>Status</th><th></th></tr>';
+    // Group by IP (hardware node), not per sensor
+    var nodes={};
     cams.forEach(function(c){
-      var ip=c.cameraIp||'\u2014';
-      var ver=c.fwVersion||'\u2014';
-      var st=c.online?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
+      var ip=c.cameraIp||'';
+      if(!nodes[ip])nodes[ip]={ip:ip,name:c.name.split(' \u2014 ')[0],ver:'',online:false,sensors:0};
+      nodes[ip].sensors++;
+      if(c.fwVersion)nodes[ip].ver=c.fwVersion;
+      if(c.online)nodes[ip].online=true;
+    });
+    var h='<table class="tbl" style="font-size:.85em"><tr><th>Node</th><th>IP</th><th>Sensors</th><th>Version</th><th>Status</th><th></th></tr>';
+    Object.values(nodes).forEach(function(n){
+      var st=n.online?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
       var acts='';
-      if(c.online&&ip!=='\u2014'){
-        acts='<button class="btn" onclick="_camDeploy(\''+ip+'\')" id="cam-upg-'+ip.replace(/\./g,'-')+'" style="background:#475569;color:#fff;font-size:.78em;padding:.2em .5em">Upgrade</button>';
+      if(n.online&&n.ip){
+        acts='<button class="btn" onclick="_camDeploy(\''+n.ip+'\')" id="cam-upg-'+n.ip.replace(/\./g,'-')+'" style="background:#475569;color:#fff;font-size:.78em;padding:.2em .5em">Upgrade</button>'
+          +' <button class="btn" onclick="_camDeploy(\''+n.ip+'\',true)" style="background:#334155;color:#94a3b8;font-size:.78em;padding:.2em .5em">Force</button>';
       }
-      h+='<tr><td><b>'+escapeHtml(c.name)+'</b></td><td>'+escapeHtml(ip)+'</td><td>'+ver+'</td><td>'+st+'</td><td>'+acts+'</td></tr>';
+      h+='<tr><td><b>'+escapeHtml(n.name)+'</b></td><td>'+escapeHtml(n.ip)+'</td><td>'+n.sensors+'</td><td>'+(n.ver||'\u2014')+'</td><td>'+st+'</td><td>'+acts+'</td></tr>';
     });
     el.innerHTML=h+'</table>';
   });
