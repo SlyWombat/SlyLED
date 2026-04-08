@@ -184,31 +184,116 @@ def _dark_reference(camera_ip, cam_idx=-1):
 
 # ── Discovery ────────────────────────────────────────────────────────
 
-def compute_initial_aim(mover_pos, camera_pos, pan_range=540, tilt_range=270):
-    """Estimate the pan/tilt to aim the mover toward the camera.
+def compute_initial_aim(mover_pos, target_pos, pan_range=540, tilt_range=270):
+    """Estimate the pan/tilt to aim the mover at a target point in stage mm.
 
-    Uses the fixture layout positions to compute a geometric starting point.
     Convention: pan=0.5 = forward (+Z), tilt=0.5 = horizontal.
 
     Args:
         mover_pos: (x, y, z) in mm — fixture position from layout
-        camera_pos: (x, y, z) in mm — camera position from layout
+        target_pos: (x, y, z) in mm — where to aim (e.g. floor center in camera view)
         pan_range, tilt_range: in degrees
 
     Returns: (pan_norm, tilt_norm) both 0.0-1.0
     """
-    dx = camera_pos[0] - mover_pos[0]
-    dy = camera_pos[1] - mover_pos[1]
-    dz = camera_pos[2] - mover_pos[2]
+    dx = target_pos[0] - mover_pos[0]
+    dy = target_pos[1] - mover_pos[1]
+    dz = target_pos[2] - mover_pos[2]
     dist_xz = (dx*dx + dz*dz) ** 0.5
 
-    import math
     pan_deg = math.degrees(math.atan2(dx, dz)) if dist_xz > 0.001 else 0.0
     tilt_deg = math.degrees(math.atan2(-dy, dist_xz)) if (dist_xz > 0.001 or abs(dy) > 0.001) else 0.0
 
     pan_norm = max(0, min(1, 0.5 + pan_deg / pan_range))
     tilt_norm = max(0, min(1, 0.5 + tilt_deg / tilt_range))
     return (pan_norm, tilt_norm)
+
+
+def pan_tilt_to_ray(pan_norm, tilt_norm, pan_range=540, tilt_range=270):
+    """Convert normalized pan/tilt (0-1) to a unit direction vector.
+
+    Convention: pan=0.5 = forward (+Z), tilt=0.5 = horizontal.
+    Pan increases clockwise viewed from above.
+    Tilt increases downward.
+
+    Returns: (dx, dy, dz) normalized direction vector
+    """
+    pan_deg = (pan_norm - 0.5) * pan_range
+    tilt_deg = (tilt_norm - 0.5) * tilt_range
+    pan_rad = math.radians(pan_deg)
+    tilt_rad = math.radians(tilt_deg)
+
+    # Spherical to cartesian
+    # pan rotates in XZ plane, tilt rotates down from horizontal
+    cos_tilt = math.cos(tilt_rad)
+    dx = math.sin(pan_rad) * cos_tilt
+    dy = -math.sin(tilt_rad)  # positive tilt = downward
+    dz = math.cos(pan_rad) * cos_tilt
+
+    return (dx, dy, dz)
+
+
+def ray_surface_intersect(origin, direction, surfaces):
+    """Find where a ray from origin in direction hits the nearest surface.
+
+    Args:
+        origin: (x, y, z) in mm — fixture position
+        direction: (dx, dy, dz) — unit direction vector
+        surfaces: dict from surface_analyzer {floor, walls, obstacles}
+
+    Returns: (x, y, z) intersection point in mm, or None
+    """
+    best_t = 1e9
+    best_point = None
+
+    # Floor: horizontal plane at y = floor_y
+    floor = surfaces.get("floor")
+    if floor and abs(direction[1]) > 0.001:
+        t = (floor["y"] - origin[1]) / direction[1]
+        if 0 < t < best_t:
+            px = origin[0] + t * direction[0]
+            py = origin[1] + t * direction[1]
+            pz = origin[2] + t * direction[2]
+            best_t = t
+            best_point = (round(px), round(py), round(pz))
+
+    # Walls: vertical planes
+    for wall in surfaces.get("walls", []):
+        n = wall["normal"]
+        d = wall["d"]
+        denom = n[0] * direction[0] + n[2] * direction[2]
+        if abs(denom) < 0.001:
+            continue
+        t = -(n[0] * origin[0] + n[2] * origin[2] + d) / denom
+        if 0 < t < best_t:
+            px = origin[0] + t * direction[0]
+            py = origin[1] + t * direction[1]
+            pz = origin[2] + t * direction[2]
+            best_t = t
+            best_point = (round(px), round(py), round(pz))
+
+    return best_point
+
+
+def compute_floor_target(floor_surface, camera_pos, camera_aim):
+    """Compute the center of the floor area visible to the camera.
+
+    Args:
+        floor_surface: dict from surface_analyzer with {y, extent: {xMin,xMax,zMin,zMax}}
+        camera_pos: (x, y, z) mm
+        camera_aim: (x, y, z) mm — aim point
+
+    Returns: (x, y, z) in stage mm — center of visible floor area
+    """
+    if not floor_surface or not floor_surface.get("extent"):
+        # Fallback: aim at stage center floor
+        return (1500, 0, 1500)
+    ext = floor_surface["extent"]
+    floor_y = floor_surface["y"]
+    # Center of detected floor
+    cx = (ext["xMin"] + ext["xMax"]) / 2
+    cz = (ext["zMin"] + ext["zMax"]) / 2
+    return (round(cx), round(floor_y), round(cz))
 
 
 def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,

@@ -2395,6 +2395,19 @@ function editFixture(id){
     h+='</div>';
     h+='<div id="fx-test-ch"></div>';
     h+='</div>';
+    // Orientation test panel
+    var orient=f.orientation||{};
+    h+='<div style="margin-top:.8em;border-top:1px solid #1e293b;padding-top:.6em">';
+    h+='<div style="font-weight:bold;font-size:.85em;margin-bottom:.4em">Fixture Orientation '
+      +(orient.verified?'<span style="color:#4ade80">\u2713 Set</span>':'<span style="color:#f59e0b">Not set</span>')+'</div>';
+    if(orient.verified){
+      h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.3em">'
+        +'Pan sign: '+(orient.panSign>0?'+X (right)':'-X (left)')
+        +' | Tilt sign: '+(orient.tiltSign>0?'-Y (down)':'+Y (up)')
+        +'</div>';
+    }
+    h+='<button class="btn" onclick="_orientTest('+id+')" style="background:#4c1d95;color:#e9d5ff;font-size:.8em">Test Orientation</button>';
+    h+='</div>';
   }else if(ft==='camera'){
     h+='<label>FOV (degrees)</label><input id="fx-fov" type="number" value="'+(f.fovDeg||60)+'" min="1" max="180" style="width:100%;margin-bottom:.4em">';
     h+='<label>Stream URL <span style="color:#64748b;font-size:.75em">(optional)</span></label>';
@@ -2413,6 +2426,94 @@ function editFixture(id){
   document.getElementById('modal-title').textContent='Edit Fixture: '+f.name;
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
+}
+
+// ── Fixture orientation test ──────────────────────────────────────────
+var _orientFid=null;
+var _orientStep=0;
+
+function _orientTest(fid){
+  _orientFid=fid;
+  _orientStep=0;
+  var h='<div style="min-width:350px">';
+  h+='<p style="color:#94a3b8;font-size:.85em;margin-bottom:.6em">This test determines which way pan and tilt move your fixture. The light will turn on and move — answer which direction it went.</p>';
+  h+='<div style="margin-bottom:.6em"><strong>Step 1:</strong> Setting fixture to center position (pan=0.5, tilt=0.5) with white light...</div>';
+  h+='<div id="orient-status" style="font-size:.82em;color:#64748b;margin-bottom:.6em">Sending DMX...</div>';
+  h+='<div id="orient-buttons" style="display:none"></div>';
+  h+='<div style="margin-top:.8em"><button class="btn btn-off" onclick="closeModal();_orientCleanup()">Cancel</button></div>';
+  h+='</div>';
+  document.getElementById('modal-title').textContent='Fixture Orientation Test';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+  // Send center position
+  ra('POST','/api/fixtures/'+fid+'/dmx-test',{pan:0.5,tilt:0.5,dimmer:1.0},function(){
+    document.getElementById('orient-status').textContent='Light is ON at center (pan=0.5, tilt=0.5). Look at where it points.';
+    _orientStep=1;
+    _orientShowStep();
+  });
+}
+
+function _orientShowStep(){
+  var el=document.getElementById('orient-buttons');
+  var st=document.getElementById('orient-status');
+  if(!el||!st)return;
+  if(_orientStep===1){
+    st.innerHTML='<strong>Step 2:</strong> Now moving pan slightly... Watch which way the beam moves.';
+    el.style.display='block';
+    // Move pan +0.1
+    ra('POST','/api/fixtures/'+_orientFid+'/dmx-test',{pan:0.6,tilt:0.5,dimmer:1.0},function(){
+      st.innerHTML='<strong>Step 2:</strong> Pan increased by 0.1. Which way did the beam move?';
+      el.innerHTML=
+        '<button class="btn" onclick="_orientAnswer(\'pan\',1)" style="background:#1e3a5f;color:#93c5fd;margin:.2em">\u2192 Right (+X)</button>'
+        +'<button class="btn" onclick="_orientAnswer(\'pan\',-1)" style="background:#1e3a5f;color:#93c5fd;margin:.2em">\u2190 Left (-X)</button>'
+        +'<button class="btn" onclick="_orientAnswer(\'pan\',0)" style="background:#334155;color:#94a3b8;margin:.2em">Could not tell</button>';
+    });
+  }else if(_orientStep===2){
+    st.innerHTML='<strong>Step 3:</strong> Now moving tilt slightly... Watch which way the beam moves.';
+    // Reset to center, then move tilt
+    ra('POST','/api/fixtures/'+_orientFid+'/dmx-test',{pan:0.5,tilt:0.5,dimmer:1.0},function(){
+      setTimeout(function(){
+        ra('POST','/api/fixtures/'+_orientFid+'/dmx-test',{pan:0.5,tilt:0.6,dimmer:1.0},function(){
+          st.innerHTML='<strong>Step 3:</strong> Tilt increased by 0.1. Which way did the beam move?';
+          el.innerHTML=
+            '<button class="btn" onclick="_orientAnswer(\'tilt\',-1)" style="background:#1e3a5f;color:#93c5fd;margin:.2em">\u2193 Down (-Y)</button>'
+            +'<button class="btn" onclick="_orientAnswer(\'tilt\',1)" style="background:#1e3a5f;color:#93c5fd;margin:.2em">\u2191 Up (+Y)</button>'
+            +'<button class="btn" onclick="_orientAnswer(\'tilt\',0)" style="background:#334155;color:#94a3b8;margin:.2em">Could not tell</button>';
+        });
+      },1000);
+    });
+  }else if(_orientStep===3){
+    // Save orientation
+    var orient=window._orientData||{};
+    orient.homePan=0.5;orient.homeTilt=0.5;orient.verified=true;
+    ra('PUT','/api/fixtures/'+_orientFid,{orientation:orient},function(r){
+      if(r&&r.ok){
+        (_fixtures||[]).forEach(function(f){if(f.id===_orientFid)f.orientation=orient;});
+        st.innerHTML='<span style="color:#4ade80">\u2713 Orientation saved!</span><br>'
+          +'Pan: '+(orient.panSign>0?'+ = Right':orient.panSign<0?'+ = Left':'Unknown')
+          +'<br>Tilt: '+(orient.tiltSign>0?'+ = Down':orient.tiltSign<0?'+ = Up':'Unknown');
+        el.innerHTML='<button class="btn btn-on" onclick="closeModal();_orientCleanup();editFixture('+_orientFid+')" style="margin-top:.5em">Done</button>';
+      }
+    });
+  }
+}
+
+function _orientAnswer(axis,sign){
+  if(!window._orientData)window._orientData={};
+  if(axis==='pan'){
+    window._orientData.panSign=sign||1;
+    _orientStep=2;
+  }else{
+    window._orientData.tiltSign=sign||-1;
+    _orientStep=3;
+  }
+  _orientShowStep();
+}
+
+function _orientCleanup(){
+  // Turn light off
+  if(_orientFid)ra('POST','/api/fixtures/'+_orientFid+'/dmx-test',{pan:0.5,tilt:0.5,dimmer:0});
+  _orientFid=null;_orientStep=0;window._orientData=null;
 }
 
 function saveFixture(id,ft){
