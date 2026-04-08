@@ -590,7 +590,7 @@ document.addEventListener('DOMContentLoaded',function(){
   _tipObs.observe(document.body,{childList:true,subtree:true});
 });
 
-var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0,units=0,_cvW=900,_cvH=450;
+var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0,units=0,_cvW=900,_cvH=450,_dragStartX=0,_dragStartY=0,_dragMoved=false;
 function _clearTabTimers(){
   if(typeof dashRunnerTimer!=='undefined'&&dashRunnerTimer){clearInterval(dashRunnerTimer);dashRunnerTimer=null;}
   if(typeof _emuTimer!=='undefined'&&_emuTimer){clearInterval(_emuTimer);_emuTimer=null;}
@@ -2448,67 +2448,126 @@ var _orientStep=0;
 function _orientTest(fid){
   _orientFid=fid;
   _orientStep=0;
-  var h='<div style="min-width:350px">';
-  h+='<p style="color:#94a3b8;font-size:.85em;margin-bottom:.6em">This test determines which way pan and tilt move your fixture. The light will turn on and move — answer which direction it went.</p>';
-  h+='<div style="margin-bottom:.6em"><strong>Step 1:</strong> Setting fixture to center position (pan=0.5, tilt=0.5) with white light...</div>';
-  h+='<div id="orient-status" style="font-size:.82em;color:#64748b;margin-bottom:.6em">Sending DMX...</div>';
-  h+='<div id="orient-buttons" style="display:none"></div>';
-  h+='<div style="margin-top:.8em"><button class="btn btn-off" onclick="closeModal();_orientCleanup()">Cancel</button></div>';
+  window._orientData={};
+  var f=null;_fixtures.forEach(function(fx){if(fx.id===fid)f=fx;});
+  var fname=f?f.name:'Fixture';
+  var h='<div style="min-width:380px">';
+  h+='<p style="color:#94a3b8;font-size:.85em;margin-bottom:.8em">Determine how <strong>'+escapeHtml(fname)+'</strong> moves by watching the beam as pan and tilt values change.</p>';
+  h+='<div class="card" style="margin-bottom:.6em;padding:.6em">';
+  h+='<div style="font-size:.82em;color:#f59e0b;margin-bottom:.5em">\u26a0 Make sure the DMX Art-Net engine is running and the fixture responds to DMX commands.</div>';
+  h+='<button class="btn btn-on" id="orient-start" onclick="_orientStart()" style="width:100%">Start Orientation Test</button>';
   h+='</div>';
-  document.getElementById('modal-title').textContent='Fixture Orientation Test';
+  h+='<div id="orient-step" style="display:none">';
+  h+='<div class="prog-bar" style="height:6px;margin-bottom:.5em"><div class="prog-fill" id="orient-prog" style="width:0%"></div></div>';
+  h+='<div id="orient-status" style="font-size:.85em;color:#e2e8f0;margin-bottom:.5em"></div>';
+  h+='<div id="orient-buttons" style="display:flex;flex-wrap:wrap;gap:.3em"></div>';
+  h+='</div>';
+  h+='<div style="margin-top:.8em;display:flex;gap:.4em">';
+  h+='<button class="btn btn-off" onclick="closeModal();_orientCleanup()">Cancel</button>';
+  h+='</div></div>';
+  document.getElementById('modal-title').textContent='Orientation Test';
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
-  // Send center position
-  ra('POST','/api/fixtures/'+fid+'/dmx-test',{pan:0.5,tilt:0.5,dimmer:1.0},function(){
-    document.getElementById('orient-status').textContent='Light is ON at center (pan=0.5, tilt=0.5). Look at where it points.';
-    _orientStep=1;
-    _orientShowStep();
+}
+
+function _orientStart(){
+  var btn=document.getElementById('orient-start');
+  if(btn)btn.style.display='none';
+  document.getElementById('orient-step').style.display='block';
+  // Pre-flight: check DMX works by sending a test command
+  var st=document.getElementById('orient-status');
+  st.textContent='Checking DMX connection...';
+  ra('POST','/api/fixtures/'+_orientFid+'/dmx-test',{pan:0.5,tilt:0.5,dimmer:1.0},function(r){
+    if(!r||!r.ok){
+      st.innerHTML='<span style="color:#f66">DMX test failed — is the Art-Net engine running?</span>'
+        +'<br><button class="btn btn-on" onclick="_orientStart()" style="margin-top:.4em;font-size:.82em">Retry</button>';
+      return;
+    }
+    st.textContent='Light ON at center position. Look at where it points.';
+    document.getElementById('orient-prog').style.width='10%';
+    setTimeout(function(){_orientStep=1;_orientShowStep();},2000);
   });
 }
 
 function _orientShowStep(){
   var el=document.getElementById('orient-buttons');
   var st=document.getElementById('orient-status');
+  var prog=document.getElementById('orient-prog');
   if(!el||!st)return;
+
   if(_orientStep===1){
-    st.innerHTML='<strong>Step 2:</strong> Now moving pan slightly... Watch which way the beam moves.';
-    el.style.display='block';
-    // Move pan +0.1
-    ra('POST','/api/fixtures/'+_orientFid+'/dmx-test',{pan:0.6,tilt:0.5,dimmer:1.0},function(){
-      st.innerHTML='<strong>Step 2:</strong> Pan increased by 0.1. Which way did the beam move?';
-      el.innerHTML=
-        '<button class="btn" onclick="_orientAnswer(\'pan\',1)" style="background:#1e3a5f;color:#93c5fd;margin:.2em">\u2192 Right (+X)</button>'
-        +'<button class="btn" onclick="_orientAnswer(\'pan\',-1)" style="background:#1e3a5f;color:#93c5fd;margin:.2em">\u2190 Left (-X)</button>'
-        +'<button class="btn" onclick="_orientAnswer(\'pan\',0)" style="background:#334155;color:#94a3b8;margin:.2em">Could not tell</button>';
-    });
-  }else if(_orientStep===2){
-    st.innerHTML='<strong>Step 3:</strong> Now moving tilt slightly... Watch which way the beam moves.';
-    // Reset to center, then move tilt
-    ra('POST','/api/fixtures/'+_orientFid+'/dmx-test',{pan:0.5,tilt:0.5,dimmer:1.0},function(){
+    prog.style.width='33%';
+    st.innerHTML='<strong>Pan Test:</strong> Moving pan from 0.5 \u2192 0.6. Watch the beam...';
+    el.innerHTML='';
+    ra('POST','/api/fixtures/'+_orientFid+'/dmx-test',{pan:0.6,tilt:0.5,dimmer:1.0},function(r){
+      if(!r||!r.ok){st.innerHTML='<span style="color:#f66">DMX send failed</span>';return;}
       setTimeout(function(){
-        ra('POST','/api/fixtures/'+_orientFid+'/dmx-test',{pan:0.5,tilt:0.6,dimmer:1.0},function(){
-          st.innerHTML='<strong>Step 3:</strong> Tilt increased by 0.1. Which way did the beam move?';
-          el.innerHTML=
-            '<button class="btn" onclick="_orientAnswer(\'tilt\',-1)" style="background:#1e3a5f;color:#93c5fd;margin:.2em">\u2193 Down (-Y)</button>'
-            +'<button class="btn" onclick="_orientAnswer(\'tilt\',1)" style="background:#1e3a5f;color:#93c5fd;margin:.2em">\u2191 Up (+Y)</button>'
-            +'<button class="btn" onclick="_orientAnswer(\'tilt\',0)" style="background:#334155;color:#94a3b8;margin:.2em">Could not tell</button>';
-        });
-      },1000);
+        st.innerHTML='<strong>Pan Test:</strong> Pan value increased. Which way did the beam move?';
+        el.innerHTML=
+          '<button class="btn" onclick="_orientAnswer(\'pan\',1)" style="background:#1e3a5f;color:#93c5fd;padding:.5em 1em">\u2192 Right</button>'
+          +'<button class="btn" onclick="_orientAnswer(\'pan\',-1)" style="background:#1e3a5f;color:#93c5fd;padding:.5em 1em">\u2190 Left</button>'
+          +'<button class="btn" onclick="_orientAnswer(\'pan\',2)" style="background:#1e3a5f;color:#93c5fd;padding:.5em 1em">\u2191 Up</button>'
+          +'<button class="btn" onclick="_orientAnswer(\'pan\',-2)" style="background:#1e3a5f;color:#93c5fd;padding:.5em 1em">\u2193 Down</button>'
+          +'<button class="btn" onclick="_orientRetry(1)" style="background:#475569;color:#94a3b8;padding:.5em 1em">Retry</button>'
+          +'<button class="btn" onclick="_orientAnswer(\'pan\',0)" style="background:#334155;color:#64748b;padding:.5em 1em">Skip</button>';
+      },1500);
     });
+
+  }else if(_orientStep===2){
+    prog.style.width='66%';
+    // Reset to center first
+    ra('POST','/api/fixtures/'+_orientFid+'/dmx-test',{pan:0.5,tilt:0.5,dimmer:1.0},function(){
+      st.innerHTML='<strong>Tilt Test:</strong> Resetting to center... then moving tilt.';
+      el.innerHTML='';
+      setTimeout(function(){
+        ra('POST','/api/fixtures/'+_orientFid+'/dmx-test',{pan:0.5,tilt:0.6,dimmer:1.0},function(r){
+          if(!r||!r.ok){st.innerHTML='<span style="color:#f66">DMX send failed</span>';return;}
+          setTimeout(function(){
+            st.innerHTML='<strong>Tilt Test:</strong> Tilt value increased. Which way did the beam move?';
+            el.innerHTML=
+              '<button class="btn" onclick="_orientAnswer(\'tilt\',-1)" style="background:#1e3a5f;color:#93c5fd;padding:.5em 1em">\u2193 Down</button>'
+              +'<button class="btn" onclick="_orientAnswer(\'tilt\',1)" style="background:#1e3a5f;color:#93c5fd;padding:.5em 1em">\u2191 Up</button>'
+              +'<button class="btn" onclick="_orientAnswer(\'tilt\',2)" style="background:#1e3a5f;color:#93c5fd;padding:.5em 1em">\u2192 Right</button>'
+              +'<button class="btn" onclick="_orientAnswer(\'tilt\',-2)" style="background:#1e3a5f;color:#93c5fd;padding:.5em 1em">\u2190 Left</button>'
+              +'<button class="btn" onclick="_orientRetry(2)" style="background:#475569;color:#94a3b8;padding:.5em 1em">Retry</button>'
+              +'<button class="btn" onclick="_orientAnswer(\'tilt\',0)" style="background:#334155;color:#64748b;padding:.5em 1em">Skip</button>';
+          },1500);
+        });
+      },1500);
+    });
+
   }else if(_orientStep===3){
-    // Save orientation
+    prog.style.width='100%';
+    // Save
     var orient=window._orientData||{};
     orient.homePan=0.5;orient.homeTilt=0.5;orient.verified=true;
     ra('PUT','/api/fixtures/'+_orientFid,{orientation:orient},function(r){
       if(r&&r.ok){
         (_fixtures||[]).forEach(function(f){if(f.id===_orientFid)f.orientation=orient;});
-        st.innerHTML='<span style="color:#4ade80">\u2713 Orientation saved!</span><br>'
-          +'Pan: '+(orient.panSign>0?'+ = Right':orient.panSign<0?'+ = Left':'Unknown')
-          +'<br>Tilt: '+(orient.tiltSign>0?'+ = Down':orient.tiltSign<0?'+ = Up':'Unknown');
-        el.innerHTML='<button class="btn btn-on" onclick="closeModal();_orientCleanup();editFixture('+_orientFid+')" style="margin-top:.5em">Done</button>';
+        var panDesc=orient.panSign>0?'Right (+X)':orient.panSign<0?'Left (-X)':'Not determined';
+        var tiltDesc=orient.tiltSign>0?'Down (-Y)':orient.tiltSign<0?'Up (+Y)':'Not determined';
+        st.innerHTML='<span style="color:#4ade80;font-size:1.1em">\u2713 Orientation Saved</span>';
+        el.innerHTML=
+          '<div style="width:100%;margin:.5em 0;font-size:.85em">'
+          +'<div style="margin-bottom:.2em">Pan increase \u2192 <strong style="color:#93c5fd">'+panDesc+'</strong></div>'
+          +'<div>Tilt increase \u2192 <strong style="color:#93c5fd">'+tiltDesc+'</strong></div>'
+          +'</div>'
+          +'<button class="btn btn-on" onclick="closeModal();_orientCleanup();editFixture('+_orientFid+')">Done</button>'
+          +' <button class="btn" onclick="_orientStep=0;_orientStart()" style="background:#475569;color:#94a3b8">Redo Test</button>';
+      }else{
+        st.innerHTML='<span style="color:#f66">Save failed</span>';
       }
     });
+    _orientCleanup();
   }
+}
+
+function _orientRetry(step){
+  // Reset to center and redo current step
+  ra('POST','/api/fixtures/'+_orientFid+'/dmx-test',{pan:0.5,tilt:0.5,dimmer:1.0},function(){
+    _orientStep=step;
+    setTimeout(function(){_orientShowStep();},1000);
+  });
 }
 
 function _orientAnswer(axis,sign){
@@ -2524,9 +2583,7 @@ function _orientAnswer(axis,sign){
 }
 
 function _orientCleanup(){
-  // Turn light off
   if(_orientFid)ra('POST','/api/fixtures/'+_orientFid+'/dmx-test',{pan:0.5,tilt:0.5,dimmer:0});
-  _orientFid=null;_orientStep=0;window._orientData=null;
 }
 
 function saveFixture(id,ft){
@@ -5659,6 +5716,7 @@ function cvDown(e){
     var placed=_fixtures.filter(_isFixturePlaced);
     var np=_nodePos(placed[drag],cv.width,cv.height);
     dox=m.x-np.cx;doy=m.y-np.cy;
+    _dragStartX=m.x;_dragStartY=m.y;_dragMoved=false;
     cv.style.cursor='grabbing';
     // Show compass for DMX/camera fixtures on click
     var ft=placed[drag].fixtureType||'led';
@@ -5799,6 +5857,13 @@ function cvMove(e){
     var onRing=_compassFid&&_compassHitTest(m.x,m.y,cv);
     cv.style.cursor=onRing?'crosshair':(hit>=0?'pointer':'grab');
     return;
+  }
+  // Only start actual drag after mouse moves >5px (so click shows compass without moving)
+  if(!_dragMoved){
+    var dd=Math.abs(m.x-_dragStartX)+Math.abs(m.y-_dragStartY);
+    if(dd<5)return;
+    _dragMoved=true;
+    _compassFid=null;  // hide compass during drag
   }
   var placed=_fixtures.filter(_isFixturePlaced);
   var W=cv.width,H=cv.height;
