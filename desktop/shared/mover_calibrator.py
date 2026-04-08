@@ -64,6 +64,50 @@ def _hold_dmx(bridge_ip, dmx, duration=0.5):
 
 # ── Camera beam detection proxy ──────────────────────────────────────
 
+def _beam_detect_flash(bridge_ip, camera_ip, cam_idx, mover_addr, pan, tilt,
+                        color, dmx, threshold=30):
+    """Flash detection: turn light ON → capture → turn OFF → capture → diff.
+    Returns (px, py) or None."""
+    # Light ON (should already be on from the caller, but ensure)
+    _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
+    _hold_dmx(bridge_ip, dmx, 0.3)  # brief hold to ensure DMX is sent
+
+    # Call flash endpoint — it captures ON frame, waits, captures OFF frame
+    # We turn light OFF after a delay on our side too
+    try:
+        req_data = json.dumps({
+            "cam": cam_idx, "color": color, "threshold": threshold,
+            "offDelayMs": 400,
+        }).encode()
+
+        # Start the flash detect request (camera will capture ON frame immediately)
+        req = urllib.request.Request(
+            f"http://{camera_ip}:5000/beam-detect/flash",
+            data=req_data,
+            headers={"Content-Type": "application/json"})
+
+        # Turn light OFF after 200ms (camera captures ON first, then waits 400ms for OFF)
+        import threading
+        def _off():
+            time.sleep(0.2)
+            _set_mover_dmx(dmx, mover_addr, pan, tilt, 0, 0, 0, dimmer=0)
+            _hold_dmx(bridge_ip, dmx, 0.1)
+        threading.Thread(target=_off, daemon=True).start()
+
+        resp = urllib.request.urlopen(req, timeout=10)
+        r = json.loads(resp.read().decode())
+
+        # Restore light ON for next step
+        _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
+        _hold_dmx(bridge_ip, dmx, 0.1)
+
+        if r.get("found"):
+            return (r["pixelX"], r["pixelY"])
+    except Exception as e:
+        log.debug("Flash detect failed: %s", e)
+    return None
+
+
 def _beam_detect_verified(camera_ip, cam_idx, color=None, threshold=50, center=False):
     """Double-capture beam detection — takes 2 captures 300ms apart.
     Returns position only if both agree within 30px (head has settled)."""

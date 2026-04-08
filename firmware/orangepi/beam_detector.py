@@ -229,6 +229,88 @@ class BeamDetector:
             "beamCount": len(components),
         }
 
+    def detect_flash(self, frame_on, frame_off, color=None, threshold=30):
+        """Flash detection: find beam by comparing ON frame vs OFF frame.
+
+        This is immune to ambient light shifts because both frames share the
+        same ambient conditions. Any bright spot present in frame_on but
+        absent in frame_off is the real beam.
+
+        Args:
+            frame_on: BGR frame with beam ON
+            frame_off: BGR frame with beam OFF (captured immediately after)
+            color: [r, g, b] beam color to filter for
+            threshold: minimum difference
+
+        Returns:
+            dict with {found, pixelX, pixelY, peakIntensity, area, brightness}
+        """
+        if frame_on is None or frame_off is None:
+            return {"found": False}
+
+        # Apply color filter to both frames
+        if color and color != [255, 255, 255]:
+            on_mask = self._color_mask(frame_on, color)
+            off_mask = self._color_mask(frame_off, color)
+        else:
+            on_mask = cv2.cvtColor(frame_on, cv2.COLOR_BGR2GRAY)
+            off_mask = cv2.cvtColor(frame_off, cv2.COLOR_BGR2GRAY)
+
+        # Diff: what's bright in ON but not in OFF
+        diff = cv2.subtract(on_mask, off_mask)  # clamps to 0, no negative
+        diff = cv2.GaussianBlur(diff, (15, 15), 0)
+        _, peak_val, _, _ = cv2.minMaxLoc(diff)
+
+        if peak_val < threshold:
+            return {"found": False}
+
+        thresh_val = max(threshold, int(peak_val * 0.4))
+        _, binary = cv2.threshold(diff, thresh_val, 255, cv2.THRESH_BINARY)
+
+        # Find contours
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return {"found": False}
+
+        # Validate: bright + saturated in the ON frame
+        hsv_on = cv2.cvtColor(frame_on, cv2.COLOR_BGR2HSV)
+
+        for contour in sorted(contours, key=cv2.contourArea, reverse=True):
+            area = cv2.contourArea(contour)
+            if area < 100:
+                break
+
+            M = cv2.moments(contour)
+            if M["m00"] == 0:
+                continue
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
+
+            # Brightness in ON frame
+            y1, y2 = max(0, cy - 15), min(frame_on.shape[0], cy + 15)
+            x1, x2 = max(0, cx - 15), min(frame_on.shape[1], cx + 15)
+            roi_v = hsv_on[y1:y2, x1:x2, 2]
+            mean_brightness = float(np.mean(roi_v)) if roi_v.size > 0 else 0
+            if mean_brightness < 120:
+                continue
+
+            # Compactness
+            rect = cv2.minAreaRect(contour)
+            w_r, h_r = rect[1]
+            if w_r > 0 and h_r > 0 and max(w_r, h_r) / min(w_r, h_r) > 5:
+                continue
+
+            return {
+                "found": True,
+                "pixelX": cx,
+                "pixelY": cy,
+                "peakIntensity": int(peak_val),
+                "area": int(area),
+                "brightness": int(mean_brightness),
+            }
+
+        return {"found": False}
+
     def _color_mask(self, frame, color):
         """Create a grayscale mask emphasizing the target color."""
         r, g, b = color

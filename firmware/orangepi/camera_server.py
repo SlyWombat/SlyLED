@@ -807,6 +807,40 @@ def beam_detect():
     result = det.detect(frame, cam_idx=cam_idx, color=color, threshold=threshold)
     return jsonify(ok=True, **result)
 
+@app.post("/beam-detect/flash")
+def beam_detect_flash():
+    """Flash detection: caller must turn light ON before calling, then this endpoint
+    captures the ON frame, waits for the caller to turn light OFF (via 'offDelay' ms),
+    captures the OFF frame, and diffs them. Immune to ambient shifts.
+
+    Body: {cam, color, threshold, offDelayMs (default 500)}
+    The caller should turn the light OFF offDelayMs after making this request.
+    OR: pass frameOff as base64 JPEG if already captured."""
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    color = body.get("color", None)
+    threshold = body.get("threshold", 30)
+    cameras = _hw_info.get("cameras", [])
+    if cam_idx < 0 or cam_idx >= len(cameras):
+        return jsonify(ok=False, err="Invalid camera index"), 400
+    det = _get_beam_detector()
+    if det is None:
+        return jsonify(ok=False, err="Beam detector not available"), 503
+    dev = cameras[cam_idx]["device"]
+    # Capture ON frame (beam should be on now)
+    frame_on = _cv_capture(dev)
+    if frame_on is None:
+        return jsonify(ok=False, err="ON frame capture failed"), 503
+    # Wait for caller to turn light off, then capture OFF frame
+    off_delay = body.get("offDelayMs", 500) / 1000.0
+    import time as _time
+    _time.sleep(off_delay)
+    frame_off = _cv_capture(dev)
+    if frame_off is None:
+        return jsonify(ok=False, err="OFF frame capture failed"), 503
+    result = det.detect_flash(frame_on, frame_off, color=color, threshold=threshold)
+    return jsonify(ok=True, **result)
+
 @app.post("/beam-detect/center")
 def beam_detect_center():
     """Detect the center beam of a multi-beam fixture."""
