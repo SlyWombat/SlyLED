@@ -96,27 +96,18 @@ body.light .li:hover{border-color:#3b82f6}
       <div style='display:flex;align-items:center;gap:.5em;margin-bottom:.4em'>
         <span id='lay-hint' style='color:#888;font-size:.82em;flex:1'>Drag fixtures from sidebar onto stage. Double-click to edit position. (0,0)=bottom-left.</span>
       </div>
-      <!-- 2D Canvas (default) -->
-      <div id='lay-2d-wrap'>
-        <canvas id='lcv' width='900' height='450'
-          style='border:1px solid #444;cursor:grab;display:block;background:#0d0d0d;max-width:100%'
-          onmousedown='cvDown(event)' onmousemove='cvMove(event)'
-          onmouseup='cvUp()' onmouseleave='cvUp()'
-          ondragover='event.preventDefault()' ondrop='cvDrop(event)'
-          ondblclick='cvDbl(event)' oncontextmenu='cvCtx(event)'></canvas>
-      </div>
-      <!-- 3D Viewport -->
-      <div id='lay-3d-wrap' style='display:none;position:relative'>
+      <!-- 3D Viewport (unified — replaces old 2D canvas + 3D toggle) -->
+      <div id='lay-3d-wrap' style='position:relative'>
         <div id='stage3d' style='width:900px;height:500px;border:1px solid #444;background:#080810;max-width:100%'></div>
         <div id='s3d-info' style='position:absolute;top:8px;left:8px;color:#64748b;font-size:.72em;pointer-events:none'></div>
       </div>
       <div style='margin-top:.5em;display:flex;gap:.2em;align-items:center' id='lay-toolbar'>
         <button class='btn btn-on' id='btn-lay-save' onclick='saveLayout(this)' title='Save layout' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 1h10l2 2v11H2V1zm2 1v4h8V2H4zm1 1h6v2H5V3zm-1 6v5h8V9H4z'/></svg></button>
         <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
-        <button class='btn' id='btn-lay-mode' onclick='toggleLayoutMode()' title='Switch to 3D' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;letter-spacing:-0.5px'>2D</button>
-        <button class='btn' onclick='layViewReset()' title='Recenter view' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M8 3a5 5 0 100 10A5 5 0 008 3zm0 2a3 3 0 110 6 3 3 0 010-6zm0 1.5a1.5 1.5 0 100 3 1.5 1.5 0 000-3z'/></svg></button>
-        <button class='btn' onclick='layViewTop()' title='Top view' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 2h12v12H2V2zm1 1v10h10V3H3zm4 2v3H5l3-4 3 4H9V5H7z' opacity='.85'/></svg></button>
-        <button class='btn' onclick='layViewFront()' title='Front view' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 3h12v10H2V3zm1 1v8h10V4H3zm2 6V7h6v3H5z' opacity='.85'/></svg></button>
+        <button class='btn' id='btn-view-front' onclick='setView("front")' title='Front view (orthographic)' style='width:auto;height:32px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0;background:#14532d;color:#86efac'>Front</button>
+        <button class='btn' id='btn-view-top' onclick='setView("top")' title='Top view (bird-eye)' style='width:auto;height:32px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0'>Top</button>
+        <button class='btn' id='btn-view-side' onclick='setView("side")' title='Side view' style='width:auto;height:32px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0'>Side</button>
+        <button class='btn' id='btn-view-3d' onclick='setView("3d")' title='3D perspective (orbit)' style='width:auto;height:32px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0'>3D</button>
         <button class='btn' id='btn-lay-tool' onclick='_layToolToggle()' title='Move / Rotate mode (R key)' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;background:#1e293b;color:#94a3b8'>M</button>
         <button class='btn' onclick='_layUndo()' title='Undo last move/rotate' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M4 2v4h4L4 2zM2 7h6a5 5 0 110 10H5v-2h3a3 3 0 000-6H2V7z' opacity='.7'/></svg></button>
         <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
@@ -1732,13 +1723,13 @@ function showDetails(id){
 var _strCol=['#0ff','#f0f','#ff0','#0f0','#f80','#08f','#f08','#8f0'];
 var _dirDx=[1,0,-1,0],_dirDy=[0,-1,0,1]; // E,N,W,S in canvas-Y-down coords
 var _layDragId=null;
-var _layMode='2d'; // '2d' or '3d'
+var _layView='front'; // 'front', 'top', 'side', '3d'
 
 function _isPlaced(c){return c.positioned||c._placed||(c.x>0||c.y>0||c.z>0);}
 
 // ── 3D Viewport (Three.js) ─────────────────────────────────────────────────
 var _s3d={
-  inited:false,scene:null,camera:null,renderer:null,controls:null,
+  inited:false,scene:null,camera:null,perspCam:null,orthoCam:null,renderer:null,controls:null,
   tctl:null,nodes:[],lines:[],labels:[],selected:null,raycaster:null,mouse:null,
   animId:null,stageW:10,stageH:5,stageD:10
 };
@@ -1753,18 +1744,27 @@ function s3dInit(){
   _s3d.scene.background=new THREE.Color(0x080810);
   _s3d.scene.fog=new THREE.Fog(0x080810,30,60);
 
-  _s3d.camera=new THREE.PerspectiveCamera(50,W/H,0.1,100);
-  _s3d.camera.position.set(8,6,12);
-  _s3d.camera.lookAt(0,0,0);
+  // Create both cameras — ortho for front/top/side, perspective for 3D
+  var aspect=W/H;
+  _s3d.perspCam=new THREE.PerspectiveCamera(50,aspect,0.1,100);
+  _s3d.perspCam.position.set(8,6,12);
+  _s3d.perspCam.lookAt(0,0,0);
+  var frustumH=12;
+  _s3d.orthoCam=new THREE.OrthographicCamera(-frustumH*aspect/2,frustumH*aspect/2,frustumH/2,-frustumH/2,0.01,200);
+  _s3d.orthoCam.position.set(0,0,50);
+  _s3d.orthoCam.lookAt(0,0,0);
+  // Start with ortho camera (front view is default)
+  _s3d.camera=_s3d.orthoCam;
 
   _s3d.renderer=new THREE.WebGLRenderer({antialias:true});
   _s3d.renderer.setSize(W,H);
   _s3d.renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
   el.appendChild(_s3d.renderer.domElement);
 
-  // Orbit controls
+  // Orbit controls (attached to current camera)
   _s3d.controls=new THREE.OrbitControls(_s3d.camera,_s3d.renderer.domElement);
   _s3d.controls.enableDamping=true;_s3d.controls.dampingFactor=0.08;
+  _s3d.controls.enableRotate=false; // front view: no rotation
   _s3d.controls.target.set(0,0,0);
 
   // Transform controls for moving nodes
@@ -1821,12 +1821,109 @@ function s3dInit(){
   _s3d.renderer.domElement.addEventListener('click',s3dClick);
   // Double-click to edit
   _s3d.renderer.domElement.addEventListener('dblclick',s3dDblClick);
+  // Right-click to dismiss scan ghosts (replaces old cvCtx)
+  _s3d.renderer.domElement.addEventListener('contextmenu',s3dCtx);
   // Drop from sidebar
   _s3d.renderer.domElement.addEventListener('dragover',function(e){e.preventDefault();});
   _s3d.renderer.domElement.addEventListener('drop',s3dDrop);
 
   _s3d.inited=true;
   s3dAnimate();
+  // Apply default front view after init
+  setView('front');
+}
+
+// Right-click handler for 3D scene — dismiss scan ghosts
+function s3dCtx(e){
+  if(!_scanGhosts.length)return;
+  e.preventDefault();
+  if(!_s3d.inited)return;
+  var rect=_s3d.renderer.domElement.getBoundingClientRect();
+  _s3d.mouse.x=((e.clientX-rect.left)/rect.width)*2-1;
+  _s3d.mouse.y=-((e.clientY-rect.top)/rect.height)*2+1;
+  _s3d.raycaster.setFromCamera(_s3d.mouse,_s3d.camera);
+  var ghostMeshes=[];
+  _s3d.scene.children.forEach(function(c){if(c.userData&&c.userData.scanGhost)c.traverse(function(obj){if(obj.isMesh){obj._ghostIdx=c.userData.ghostIdx;ghostMeshes.push(obj);}});});
+  var hits=_s3d.raycaster.intersectObjects(ghostMeshes);
+  if(hits.length>0&&hits[0].object._ghostIdx!==undefined)_layScanDismiss(hits[0].object._ghostIdx);
+}
+
+// ── View presets (replaces old 2D/3D toggle) ─────────────────────────────
+function _s3dSwitchCamera(cam){
+  _s3d.camera=cam;
+  _s3d.controls.object=cam;
+  _s3d.tctl.camera=cam;
+  _s3d.controls.update();
+}
+
+function setView(view){
+  _layView=view;
+  if(!_s3d.inited){s3dInit();if(!_s3d.inited)return;}
+  var sw=_s3d.stageW||10,sh=_s3d.stageH||5,sd=_s3d.stageD||10;
+  var el=document.getElementById('stage3d');
+  var W=(el?el.clientWidth:900)||900,H=(el?el.clientHeight:500)||500;
+  var aspect=W/H;
+  var hint=document.getElementById('lay-hint');
+
+  // Update button styles
+  ['front','top','side','3d'].forEach(function(v){
+    var btn=document.getElementById('btn-view-'+v);
+    if(btn){btn.style.background=v===view?'#14532d':'';btn.style.color=v===view?'#86efac':'';}
+  });
+
+  if(view==='3d'){
+    // Perspective camera with full orbit
+    _s3dSwitchCamera(_s3d.perspCam);
+    _s3d.controls.enableRotate=true;
+    _s3d.scene.fog=new THREE.Fog(0x080810,30,60);
+    _s3d.controls.target.set(sw/2,sh/4,sd/2);
+    _s3d.camera.position.set(sw*1.2,sh*1.0,sd*1.5);
+    if(hint)hint.textContent='Click to select. Drag gizmo to move. Double-click to edit. Scroll=zoom, Drag=orbit.';
+  } else {
+    // Orthographic camera — no rotation, pan+zoom only
+    var frustumH,cx,cy,cz,tx,ty,tz;
+    if(view==='front'){
+      // Looking down +Z toward origin: camera sees XY plane
+      frustumH=Math.max(sw,sh)*1.15;
+      var oh=frustumH/2;var ow=oh*aspect;
+      _s3d.orthoCam.left=-ow;_s3d.orthoCam.right=ow;_s3d.orthoCam.top=oh;_s3d.orthoCam.bottom=-oh;
+      _s3d.orthoCam.near=0.01;_s3d.orthoCam.far=200;
+      _s3d.orthoCam.updateProjectionMatrix();
+      tx=sw/2;ty=sh/2;tz=sd/2;
+      cx=sw/2;cy=sh/2;cz=sd+50;
+      if(hint)hint.textContent='Front view (XY). Drag fixtures from sidebar. Double-click to edit. Scroll=zoom, Drag=pan.';
+    } else if(view==='top'){
+      // Looking down -Y: camera sees XZ plane
+      frustumH=Math.max(sw,sd)*1.15;
+      var oh=frustumH/2;var ow=oh*aspect;
+      _s3d.orthoCam.left=-ow;_s3d.orthoCam.right=ow;_s3d.orthoCam.top=oh;_s3d.orthoCam.bottom=-oh;
+      _s3d.orthoCam.near=0.01;_s3d.orthoCam.far=200;
+      _s3d.orthoCam.updateProjectionMatrix();
+      tx=sw/2;ty=0;tz=sd/2;
+      cx=sw/2;cy=Math.max(sw,sd)*1.5;cz=sd/2;
+      _s3d.orthoCam.up.set(0,0,-1);
+      if(hint)hint.textContent='Top view (XZ, bird-eye). Scroll=zoom, Drag=pan.';
+    } else if(view==='side'){
+      // Looking down +X toward origin: camera sees ZY plane
+      frustumH=Math.max(sd,sh)*1.15;
+      var oh=frustumH/2;var ow=oh*aspect;
+      _s3d.orthoCam.left=-ow;_s3d.orthoCam.right=ow;_s3d.orthoCam.top=oh;_s3d.orthoCam.bottom=-oh;
+      _s3d.orthoCam.near=0.01;_s3d.orthoCam.far=200;
+      _s3d.orthoCam.updateProjectionMatrix();
+      tx=sw/2;ty=sh/2;tz=sd/2;
+      cx=sw+50;cy=sh/2;cz=sd/2;
+      if(hint)hint.textContent='Side view (ZY). Scroll=zoom, Drag=pan.';
+    }
+    _s3dSwitchCamera(_s3d.orthoCam);
+    _s3d.controls.enableRotate=false;
+    _s3d.scene.fog=null; // no fog in ortho views
+    _s3d.controls.target.set(tx,ty,tz);
+    _s3d.camera.position.set(cx,cy,cz);
+    _s3d.camera.lookAt(tx,ty,tz);
+    // Reset camera up after setting position (top view changes it)
+    if(view!=='top')_s3d.orthoCam.up.set(0,1,0);
+  }
+  _s3d.controls.update();
 }
 
 function s3dAnimate(){
@@ -1869,9 +1966,7 @@ function s3dLoadChildren(){
     boxLine.userData.stageBox=true;
     _s3d.scene.add(boxLine);
 
-    // Position camera to see stage
-    _s3d.controls.target.set(_s3d.stageW/2,_s3d.stageH/4,_s3d.stageD/2);
-    _s3d.camera.position.set(_s3d.stageW*1.2,_s3d.stageH*1.0,_s3d.stageD*1.5);
+    // Camera positioning is handled by setView() — don't reset on every reload
 
     // Load objects THEN render them (async — must wait for data)
     loadObjects(function(){_s3dRenderObjects();});
@@ -2206,11 +2301,23 @@ function s3dClick(e){
 
 function s3dDblClick(e){
   if(!_s3d.inited||!ld)return;
+  // Check for scan ghost hit first (accept on double-click, like old cvDbl)
+  var rect=_s3d.renderer.domElement.getBoundingClientRect();
+  _s3d.mouse.x=((e.clientX-rect.left)/rect.width)*2-1;
+  _s3d.mouse.y=-((e.clientY-rect.top)/rect.height)*2+1;
+  _s3d.raycaster.setFromCamera(_s3d.mouse,_s3d.camera);
+  if(_scanGhosts.length){
+    var ghostMeshes=[];
+    _s3d.scene.children.forEach(function(c){if(c.userData&&c.userData.scanGhost)c.traverse(function(obj){if(obj.isMesh){obj._ghostIdx=c.userData.ghostIdx;ghostMeshes.push(obj);}});});
+    var gHits=_s3d.raycaster.intersectObjects(ghostMeshes);
+    if(gHits.length>0&&gHits[0].object._ghostIdx!==undefined){_layScanAccept(gHits[0].object._ghostIdx);return;}
+  }
   var grp=_s3dHitGroup(e);
   if(!grp)return;
   if(grp.userData.childId!==undefined){
-    var ch=null;(ld.children||[]).forEach(function(c){if(c.id===grp.userData.childId)ch=c;});
-    if(ch)showNodeEdit3D(ch);
+    // Use full-featured showNodeEdit (has Aim, Calibrate, Track buttons)
+    var fx=null;(_fixtures||[]).forEach(function(f){if(f.id===grp.userData.childId)fx=f;});
+    if(fx)showNodeEdit(fx);
   } else if(grp.userData.stageObj){
     var sf=null;(_objects||[]).forEach(function(s){if(s.id===grp.userData.stageObjId)sf=s;});
     if(sf)editObject(sf.id);
@@ -2249,7 +2356,7 @@ function applyNodePos3D(id){
   // Update both ld.children and _fixtures
   (ld.children||[]).forEach(function(c){if(c.id===id){c.x=nx;c.y=ny;c.z=nz;c._placed=true;}});
   _fixtures.forEach(function(f){if(f.id===id){f.x=nx;f.y=ny;f.z=nz;f._placed=true;f.positioned=true;}});
-  closeModal();s3dLoadChildren();renderSidebar();drawLayout();
+  closeModal();s3dLoadChildren();renderSidebar();
   // Persist to server
   var toSave=_fixtures.filter(_isFixturePlaced).map(function(f){return{id:f.id,x:f.x,y:f.y,z:f.z||0};});
   ra('POST','/api/layout',{fixtures:toSave});
@@ -2280,62 +2387,10 @@ function s3dDrop(e){
   _layDragId=null;
 }
 
-function toggleLayoutMode(){setLayoutMode(_layMode==='3d'?'2d':'3d');}
-function setLayoutMode(mode){
-  _layMode=mode;
-  var w2d=document.getElementById('lay-2d-wrap'),w3d=document.getElementById('lay-3d-wrap');
-  var hint=document.getElementById('lay-hint');
-  var btn=document.getElementById('btn-lay-mode');
-  if(mode==='3d'){
-    w2d.style.display='none';w3d.style.display='block';
-    if(btn){btn.textContent='3D';btn.title='Switch to 2D';btn.style.background='#14532d';btn.style.color='#86efac';}
-    if(hint)hint.textContent='Click to select. Drag gizmo to move. Double-click to edit. Scroll=zoom, Drag=orbit.';
-    s3dInit();
-    if(!window._profileCache){
-      window._profileCache={};
-      ra('GET','/api/dmx-profiles',null,function(profs){
-        (profs||[]).forEach(function(p){window._profileCache[p.id]=p;});
-        s3dLoadChildren();
-      });
-    } else { s3dLoadChildren(); }
-  } else {
-    _s3dSyncToLd();
-    w3d.style.display='none';w2d.style.display='block';
-    if(btn){btn.textContent='2D';btn.title='Switch to 3D';btn.style.background='';btn.style.color='';}
-    if(hint)hint.textContent='Drag fixtures from sidebar onto canvas. Double-click a node to edit. (0,0)=bottom-left.';
-    drawLayout();renderSidebar();
-  }
-}
-
-// ── Layout quick-view controls ─────────────────────────────────────────────
-function layViewReset(){
-  if(_layMode==='3d'&&_s3d.inited){
-    var sw=_s3d.stageW||10,sh=_s3d.stageH||5,sd=_s3d.stageD||10;
-    _s3d.controls.target.set(sw/2,sh/4,sd/2);
-    _s3d.camera.position.set(sw*1.2,sh*1.0,sd*1.5);
-    _s3d.controls.update();
-  } else {
-    drawLayout();
-  }
-}
-function layViewTop(){
-  if(_layMode!=='3d'){setLayoutMode('3d');}
-  if(!_s3d.inited)return;
-  var sw=_s3d.stageW||10,sh=_s3d.stageH||5,sd=_s3d.stageD||10;
-  _s3d.controls.target.set(sw/2,0,sd/2);
-  _s3d.camera.position.set(sw/2,Math.max(sw,sd)*1.5,sd/2);
-  _s3d.camera.up.set(0,0,-1);
-  _s3d.controls.update();
-  setTimeout(function(){_s3d.camera.up.set(0,1,0);},50);
-}
-function layViewFront(){
-  if(_layMode!=='3d'){setLayoutMode('3d');}
-  if(!_s3d.inited)return;
-  var sw=_s3d.stageW||10,sh=_s3d.stageH||5,sd=_s3d.stageD||10;
-  _s3d.controls.target.set(sw/2,sh/2,sd/2);
-  _s3d.camera.position.set(sw/2,sh/2,sd+Math.max(sw,sh)*0.8);
-  _s3d.controls.update();
-}
+// ── Layout quick-view controls (now just wrappers for setView) ────────────
+function layViewReset(){setView(_layView||'front');}
+function layViewTop(){setView('top');}
+function layViewFront(){setView('front');}
 
 // ── Phase 2: Fixtures ───────────────────────────────────────────────────────
 var _fixtures=[];
@@ -3374,7 +3429,7 @@ function exportProfileBundle(){
 }
 
 function selectOnCanvas(type,id){
-  if(!_s3d.inited){setLayoutMode('3d');setTimeout(function(){selectOnCanvas(type,id);},500);return;}
+  if(!_s3d.inited){s3dInit();setTimeout(function(){selectOnCanvas(type,id);},500);return;}
   _s3d.nodes.forEach(function(grp){
     if(type==='fixture'&&grp.userData.childId===id){_s3d.selected=grp;_s3d.tctl.attach(grp);}
     if(type==='object'&&grp.userData.stageObjId===id){_s3d.selected=grp;_s3d.tctl.attach(grp);}
@@ -3531,7 +3586,7 @@ function createObject(){
       easing:document.getElementById('sf-pat-ease').value||'sine'};
   }
   ra('POST','/api/objects',body,function(r){
-    closeModal();if(r&&r.ok){loadObjects();drawLayout();if(_s3d.inited)s3dLoadChildren();}
+    closeModal();if(r&&r.ok){loadObjects();s3dLoadChildren();}
   });
 }
 
@@ -3613,7 +3668,7 @@ function updateObject(id){
   // Delete and recreate (simple approach since objects API doesn't have PUT)
   ra('DELETE','/api/objects/'+id,null,function(){
     ra('POST','/api/objects',body,function(r){
-      closeModal();loadObjects();drawLayout();if(_s3d.inited)s3dLoadChildren();
+      closeModal();loadObjects();s3dLoadChildren();
     });
   });
 }
@@ -3621,7 +3676,7 @@ function updateObject(id){
 function delObject(id){
   if(!confirm('Delete this object?'))return;
   ra('DELETE','/api/objects/'+id,null,function(){
-    closeModal();loadObjects();drawLayout();if(_s3d.inited)s3dLoadChildren();
+    closeModal();loadObjects();s3dLoadChildren();
   });
 }
 
@@ -4246,17 +4301,20 @@ function loadLayout(){
     if(s)units=s.units||0;
     ra('GET','/api/stage',null,function(st){
       if(st)window._stageData=st;
-      // Pre-load profile cache for beam widths (needed by both 2D and 3D views)
+      // Pre-load profile cache for beam widths
       if(!window._profileCache){
         window._profileCache={};
         ra('GET','/api/dmx-profiles',null,function(profs){
           (profs||[]).forEach(function(p){window._profileCache[p.id]=p;});
+          // Re-render after profiles loaded (beam cones need profile data)
+          if(_s3d.inited)s3dLoadChildren();
         });
       }
       ra('GET','/api/layout',null,function(d){
         if(!d)return;ld=d;phW=d.canvasW||10000;phH=d.canvasH||5000;
         _fixtures=d.fixtures||[];
-        drawLayout();renderFixturesSidebar();
+        s3dInit(); // init 3D scene on first layout load (idempotent)
+        s3dLoadChildren();renderFixturesSidebar();
         loadObjects();
       });
     });
@@ -4267,45 +4325,7 @@ function renderSidebar(){renderFixturesSidebar();_layScanUpdateBtn();}
 
 function layDS(e,id){_layDragId=id;e.dataTransfer.setData('text/plain',String(id));e.dataTransfer.effectAllowed='move';}
 
-function cvDrop(e){
-  e.preventDefault();
-  if(_layDragId===null)return;
-  var cv=document.getElementById('lcv');
-  var m=_cvMouse(e,cv);
-  var W=cv.width,H=cv.height;
-  var physX=Math.max(0,Math.min(phW,Math.round(m.x*phW/W)));
-  var physY=Math.max(0,Math.min(phH,Math.round((H-m.y)*phH/H)));
-  var fx=null;_fixtures.forEach(function(f){if(f.id===_layDragId)fx=f;});
-  if(fx){fx.x=physX;fx.y=physY;fx._placed=true;drawLayout();renderFixturesSidebar();}
-  _layDragId=null;
-}
-
-function _hitGhost(mx,my,W,H){
-  for(var i=0;i<_scanGhosts.length;i++){
-    var g=_scanGhosts[i];
-    var gx=g.x*W/phW,gz=H-g.z*H/phH;
-    var gw=g.w*W/phW,gh=g.h*H/phH;
-    if(mx>=gx-gw/2&&mx<=gx+gw/2&&my>=gz-gh/2&&my<=gz+gh/2)return i;
-  }
-  return -1;
-}
-function cvDbl(e){
-  var cv=document.getElementById('lcv');
-  var m=_cvMouse(e,cv);
-  // Check ghost hits first (accept on double-click)
-  var gi=_hitGhost(m.x,m.y,cv.width,cv.height);
-  if(gi>=0){_layScanAccept(gi);return;}
-  var hit=_hitNode(m.x,m.y,cv.width,cv.height);
-  if(hit>=0){showNodeEdit(_fixtures.filter(_isFixturePlaced)[hit]);return;}
-}
-function cvCtx(e){
-  if(!_scanGhosts.length)return;
-  e.preventDefault();
-  var cv=document.getElementById('lcv');
-  var m=_cvMouse(e,cv);
-  var gi=_hitGhost(m.x,m.y,cv.width,cv.height);
-  if(gi>=0)_layScanDismiss(gi);
-}
+// 2D canvas handlers removed — all interaction through 3D scene now
 
 function showNodeEdit(f){
   var h='<div style="margin-bottom:.8em">';
@@ -4352,8 +4372,7 @@ function applyNodePos(id){
   var nz=parseInt(document.getElementById('ne-z').value)||0;
   nx=Math.max(0,Math.min(phW,nx));ny=Math.max(0,Math.min(phH,ny));nz=Math.max(0,nz);
   _fixtures.forEach(function(f){if(f.id===id){f.x=nx;f.y=ny;f.z=nz;f._placed=true;f.positioned=true;}});
-  closeModal();drawLayout();renderFixturesSidebar();
-  if(_layMode==='3d'&&_s3d.inited)s3dLoadChildren();
+  closeModal();s3dLoadChildren();renderFixturesSidebar();
   // Persist to server
   var toSave=_fixtures.filter(_isFixturePlaced).map(function(f){return{id:f.id,x:f.x,y:f.y,z:f.z||0};});
   ra('POST','/api/layout',{fixtures:toSave});
@@ -4361,8 +4380,7 @@ function applyNodePos(id){
 
 function removeFromCanvas(id){
   _fixtures.forEach(function(f){if(f.id===id){f.x=0;f.y=0;f.z=0;f._placed=false;f.positioned=false;}});
-  closeModal();
-  if(_layMode==='3d'){s3dLoadChildren();}else{drawLayout();}
+  closeModal();s3dLoadChildren();
   renderFixturesSidebar();
 }
 
@@ -4370,184 +4388,9 @@ function fmtCoord(mm){
   if(units===1)return(mm/25.4).toFixed(1)+'"';return mm+'mm';
 }
 
+// drawLayout() — now a thin wrapper that delegates to 3D scene
 function drawLayout(){
-  var cv=document.getElementById('lcv');if(!cv||!ld)return;
-  var W=cv.width,H=cv.height,ctx=cv.getContext('2d');
-  var showStr=_layShowStrings;
-  ctx.fillStyle='#0d0d0d';ctx.fillRect(0,0,W,H);
-  ctx.strokeStyle='#1e1e1e';ctx.lineWidth=1;
-  for(var gx=0;gx<=W;gx+=90){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}
-  for(var gy=0;gy<=H;gy+=45){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
-  // Stage boundary with dimensions label
-  ctx.strokeStyle='#1e3a5f';ctx.lineWidth=2;ctx.strokeRect(1,1,W-2,H-2);
-  ctx.fillStyle='#1e3a5f';ctx.font='10px sans-serif';ctx.textAlign='left';
-  ctx.fillText('Stage: '+fmtCoord(phW)+' x '+fmtCoord(phH),6,14);
-  ctx.textAlign='right';
-  ctx.fillText('(0,0)',8,H-4);
-  // Axis labels at origin
-  ctx.fillStyle='#c44';ctx.fillText('X \u2192',50,H-4);
-  ctx.fillStyle='#4c4';ctx.fillText('Y \u2191',2,H-30);
-  // Draw stage objects
-  (_objects||[]).forEach(function(s){
-    var t=s.transform||{pos:[0,0,0],scale:[2000,1500,1]};
-    var sx=t.pos[0]*W/phW,sy=H-t.pos[1]*H/phH;
-    var sw=t.scale[0]*W/phW,sh=t.scale[1]*H/phH;
-    ctx.globalAlpha=(s.opacity||30)/100;
-    ctx.fillStyle=s.color||'#334155';
-    ctx.fillRect(sx,sy-sh,sw,sh);
-    ctx.globalAlpha=0.6;
-    ctx.strokeStyle=s.color||'#334155';ctx.lineWidth=1;
-    if(s._temporal){ctx.setLineDash([5,3]);}
-    ctx.strokeRect(sx,sy-sh,sw,sh);
-    if(s._temporal){ctx.setLineDash([]);}
-    ctx.globalAlpha=1;
-    ctx.fillStyle='#aaa';ctx.font='9px sans-serif';ctx.textAlign='left';
-    var lbl2d=s.name||'Object';
-    if(s._temporal&&s._ttl!=null){lbl2d+=' ['+s._ttl+'s]';}
-    ctx.fillText(lbl2d,sx+4,sy-sh+12);
-  });
-  // Draw scan ghost overlays (dashed cyan, semi-transparent)
-  (_scanGhosts||[]).forEach(function(g,gi){
-    var gx=g.x*W/phW, gz=H-g.z*H/phH;  // x→screen x, z→screen y (top-down view)
-    var gw=g.w*W/phW, gh=g.h*H/phH;
-    ctx.globalAlpha=0.25;
-    ctx.fillStyle='#22d3ee';
-    ctx.fillRect(gx-gw/2,gz-gh/2,gw,gh);
-    ctx.globalAlpha=0.8;
-    ctx.strokeStyle='#22d3ee';ctx.lineWidth=2;
-    ctx.setLineDash([6,4]);
-    ctx.strokeRect(gx-gw/2,gz-gh/2,gw,gh);
-    ctx.setLineDash([]);
-    ctx.globalAlpha=1;
-    ctx.fillStyle='#22d3ee';ctx.font='bold 10px sans-serif';ctx.textAlign='center';
-    ctx.fillText(g.label+' '+Math.round(g.confidence*100)+'%',gx,gz-gh/2-4);
-    // Accept/dismiss indicators
-    ctx.font='9px sans-serif';ctx.fillStyle='#4ade80';
-    ctx.fillText('\u2713 click',gx-20,gz+gh/2+12);
-    ctx.fillStyle='#f87171';
-    ctx.fillText('\u2717 right',gx+20,gz+gh/2+12);
-  });
-  var placed=(_fixtures||[]).filter(_isFixturePlaced);
-  if(!placed.length&&!_objects.length){
-    ctx.fillStyle='#555';ctx.font='13px sans-serif';ctx.textAlign='center';
-    ctx.fillText('Drag fixtures from the sidebar to place them.',W/2,H/2);
-    return;
-  }
-  placed.forEach(function(f){
-    var np=_nodePos(f,W,H),cx=np.cx,cy=np.cy;
-    var ft=f.fixtureType||'led';
-    // Draw strings in detailed mode (LED fixtures only)
-    if(showStr&&ft==='led'&&f.strings&&f.strings.length){
-      for(var si=0;si<f.strings.length;si++){
-        var s=f.strings[si];if(!s||!s.leds)continue;
-        var col=_strCol[si%_strCol.length];
-        var dx=_dirDx[s.sdir||0],dy=_dirDy[s.sdir||0];
-        var lenMm=s.mm||0;
-        if(lenMm<500)lenMm=Math.max(s.leds*16,500);
-        var pxL=dx!==0?lenMm*W/phW:lenMm*H/phH;
-        pxL=Math.max(pxL,30);
-        var ex=cx+dx*pxL,ey=cy+dy*pxL;
-        ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(ex,ey);
-        ctx.strokeStyle=col;ctx.lineWidth=4;ctx.stroke();
-        var dotCount=Math.min(s.leds,Math.floor(pxL/3));
-        for(var di=0;di<dotCount;di++){
-          var t=(di+0.5)/dotCount;
-          var dpx=cx+dx*pxL*t,dpy=cy+dy*pxL*t;
-          ctx.beginPath();ctx.arc(dpx,dpy,1.5,0,2*Math.PI);
-          ctx.fillStyle=col;ctx.fill();
-        }
-        ctx.fillStyle=_strCol[si%_strCol.length];
-        ctx.font='9px sans-serif';ctx.textAlign='center';
-        var lx=ex+(dx!==0?dx*12:0),ly=ey+(dy!==0?dy*12:(dx>0?-8:8));
-        ctx.fillText(s.leds+' LEDs',lx,ly);
-      }
-    }
-    // Fixture node
-    var nodeCol=ft==='dmx'?'#3b1f7c':ft==='camera'?'#0e7490':'#1a6b3a';
-    var nodeBdr=ft==='dmx'?'#a78bfa':ft==='camera'?'#22d3ee':'#4c4';
-    if(f.type==='point'&&ft!=='camera'){nodeCol=ft==='dmx'?'#3b1f7c':'#6b4f1a';nodeBdr=ft==='dmx'?'#a78bfa':'#d4a';}
-    ctx.beginPath();ctx.arc(cx,cy,10,0,2*Math.PI);
-    ctx.fillStyle=nodeCol;ctx.fill();
-    ctx.strokeStyle=nodeBdr;ctx.lineWidth=2;ctx.stroke();
-    // DMX beam direction line (2D top-down: X→horizontal, aim shown as line from fixture to aim XY)
-    if(ft==='dmx'&&f.aimPoint){
-      var ax=f.aimPoint[0]*W/phW,ay=H-f.aimPoint[1]*H/phH;
-      var bLen=Math.sqrt((ax-cx)*(ax-cx)+(ay-cy)*(ay-cy));
-      if(bLen>5){
-        // Draw beam cone triangle (simplified 2D)
-        var bwDeg=(window._profileCache&&f.dmxProfileId&&window._profileCache[f.dmxProfileId])?window._profileCache[f.dmxProfileId].beamWidth||15:15;
-        var angle=Math.atan2(ay-cy,ax-cx);
-        var halfW=Math.tan(bwDeg*Math.PI/360)*bLen;
-        var lx2=ax+Math.cos(angle+Math.PI/2)*halfW;
-        var ly2=ay+Math.sin(angle+Math.PI/2)*halfW;
-        var rx2=ax+Math.cos(angle-Math.PI/2)*halfW;
-        var ry2=ay+Math.sin(angle-Math.PI/2)*halfW;
-        ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(lx2,ly2);ctx.lineTo(rx2,ry2);ctx.closePath();
-        ctx.fillStyle='rgba(124,58,237,0.1)';ctx.fill();
-        ctx.strokeStyle='rgba(167,139,250,0.3)';ctx.lineWidth=1;ctx.stroke();
-        // Aim point dot
-        ctx.beginPath();ctx.arc(ax,ay,3,0,2*Math.PI);
-        ctx.fillStyle='#f44';ctx.fill();
-      }
-    }
-    // Rest vector — shows pan=0 tilt=0 home direction (2D top-down)
-    if(ft==='dmx'&&_layShowCones){
-      var pr=window._profileCache&&f.dmxProfileId&&window._profileCache[f.dmxProfileId];
-      if(pr&&pr.panRange>0){
-        // Home direction: +Z in stage coords (forward), rotated by fixture rotation
-        var rot=f.rotation||[0,0,0];
-        var ry=rot[1]*Math.PI/180;  // Y rotation = horizontal turn
-        // In 2D top-down: +Z maps to -Y on canvas, +X maps to +X
-        // Home direction rotated by RY
-        var hx=Math.sin(ry),hz=Math.cos(ry);
-        var vecLen=300*W/phW;  // 300mm in stage coords
-        var vx=cx+hx*vecLen,vy=cy-hz*vecLen;  // -Z because canvas Y is inverted
-        ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(vx,vy);
-        ctx.strokeStyle=f.calibrated?'#22c55e':'#f59e0b';  // green if calibrated, orange if not
-        ctx.lineWidth=2;ctx.setLineDash([4,3]);ctx.stroke();ctx.setLineDash([]);
-        // Arrowhead
-        var angle=Math.atan2(vy-cy,vx-cx);
-        ctx.beginPath();
-        ctx.moveTo(vx,vy);
-        ctx.lineTo(vx-8*Math.cos(angle-0.4),vy-8*Math.sin(angle-0.4));
-        ctx.lineTo(vx-8*Math.cos(angle+0.4),vy-8*Math.sin(angle+0.4));
-        ctx.closePath();ctx.fillStyle=f.calibrated?'#22c55e':'#f59e0b';ctx.fill();
-        // Label
-        ctx.font='8px sans-serif';ctx.fillStyle=f.calibrated?'#22c55e':'#f59e0b';
-        ctx.textAlign='center';
-        ctx.fillText('0,0',vx+10*Math.cos(angle+0.5),vy+10*Math.sin(angle+0.5));
-      }
-    }
-    // Camera rest vector (2D top-down) — same style as moving head rest arrows
-    if(ft==='camera'&&_layShowCones){
-      var rot=f.rotation||[0,0,0];
-      var ry=rot[1]*Math.PI/180;
-      var hx=Math.sin(ry),hz=Math.cos(ry);
-      var vecLen=400*W/phW;
-      var vx=cx+hx*vecLen,vy=cy-hz*vecLen;
-      ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(vx,vy);
-      ctx.strokeStyle=f.calibrated?'#22c55e':'#22d3ee';
-      ctx.lineWidth=2;ctx.setLineDash([4,3]);ctx.stroke();ctx.setLineDash([]);
-      var angle=Math.atan2(vy-cy,vx-cx);
-      ctx.beginPath();ctx.moveTo(vx,vy);
-      ctx.lineTo(vx-8*Math.cos(angle-0.4),vy-8*Math.sin(angle-0.4));
-      ctx.lineTo(vx-8*Math.cos(angle+0.4),vy-8*Math.sin(angle+0.4));
-      ctx.closePath();ctx.fillStyle=f.calibrated?'#22c55e':'#22d3ee';ctx.fill();
-      ctx.font='8px sans-serif';ctx.textAlign='center';
-      ctx.fillText('cam'+(f.cameraIdx||0),(vx+cx)/2+10*Math.cos(angle+0.5),(vy+cy)/2+10*Math.sin(angle+0.5));
-    }
-    // Labels
-    var lblDir=(cy+50>H)?-1:1;
-    ctx.fillStyle='#eee';ctx.font='bold 10px sans-serif';ctx.textAlign='center';
-    ctx.fillText(f.name||('Fixture '+f.id),cx,cy+lblDir*20);
-    ctx.fillStyle='#888';ctx.font='9px sans-serif';
-    ctx.fillText('('+fmtCoord(f.x)+','+fmtCoord(f.y)+')',cx,cy+lblDir*31);
-  });
-  // Draw compass gizmo for selected fixture
-  if(_compassFid){
-    var cf=null;placed.forEach(function(f){if(f.id===_compassFid)cf=f;});
-    if(cf&&(cf.fixtureType==='dmx'||cf.fixtureType==='camera'))_drawCompass(ctx,cf,W,H);
-  }
+  if(_s3d.inited)s3dLoadChildren();
 }
 
 // -- Stage Preview (always visible, per-pixel) ----------------------------
@@ -5156,8 +4999,7 @@ function autoArrangeDmx(){
           ra('PUT','/api/fixtures/'+f.id+'/aim',{aimPoint:f.aimPoint});
         });
         document.getElementById('hs').textContent='Arranged '+n+' DMX fixture(s) along top of stage';
-        drawLayout();
-        if(_layMode==='3d'&&_s3d.inited)s3dLoadChildren();
+        s3dLoadChildren();
         renderSidebar();
       }
     });
@@ -5195,9 +5037,9 @@ function _layScan(){
       document.getElementById('hs').textContent='No objects detected';
       drawLayout();return;
     }
-    document.getElementById('hs').textContent=_scanGhosts.length+' object(s) detected — click to accept or dismiss';
-    drawLayout();
-    if(_layMode==='3d'&&_s3d.inited)_s3dRenderGhosts();
+    document.getElementById('hs').textContent=_scanGhosts.length+' object(s) detected — double-click to accept, right-click to dismiss';
+    s3dLoadChildren();
+    if(_s3d.inited)_s3dRenderGhosts();
   });
 }
 
@@ -5215,8 +5057,8 @@ function _layScanAccept(idx){
     if(r&&r.ok){
       _scanGhosts.splice(idx,1);
       loadObjects(function(){
-        drawLayout();
-        if(_layMode==='3d'&&_s3d.inited){s3dLoadChildren();_s3dRenderGhosts();}
+        s3dLoadChildren();
+        if(_s3d.inited)_s3dRenderGhosts();
       });
       document.getElementById('hs').textContent='Added "'+g.label+'" to stage';
     }
@@ -5226,15 +5068,13 @@ function _layScanAccept(idx){
 function _layScanDismiss(idx){
   _scanGhosts.splice(idx,1);
   document.getElementById('hs').textContent=_scanGhosts.length?_scanGhosts.length+' remaining':'All dismissed';
-  drawLayout();
-  if(_layMode==='3d'&&_s3d.inited)_s3dRenderGhosts();
+  if(_s3d.inited)_s3dRenderGhosts();
 }
 
 function _layScanDismissAll(){
   _scanGhosts=[];
   document.getElementById('hs').textContent='Scan results cleared';
-  drawLayout();
-  if(_layMode==='3d'&&_s3d.inited)_s3dRenderGhosts();
+  if(_s3d.inited)_s3dRenderGhosts();
 }
 
 // ── Calibration wizard ────────────────────────────────────────────────
@@ -5642,8 +5482,7 @@ function _trackPollStart(){
   if(_trackPollTimer)return;
   _trackPollTimer=setInterval(function(){
     loadObjects(function(){
-      drawLayout();
-      if(_layMode==='3d'&&_s3d.inited)_s3dRenderObjects();
+      if(_s3d.inited)_s3dRenderObjects();
     });
   },1500);
 }
@@ -5695,7 +5534,7 @@ function _loadPointCloud(cb){
     if(r&&r.ok&&r.points){
       _pointCloudData=r;
       document.getElementById('hs').textContent=r.totalPoints+' point cloud loaded';
-      if(_layMode==='3d'&&_s3d.inited)_renderPointCloud();
+      if(_s3d.inited)_renderPointCloud();
       _pointCloudVisible=true;
       _updateCloudBtn();
     }
@@ -5712,7 +5551,7 @@ function _togglePointCloud(){
     return;
   }
   _pointCloudVisible=!_pointCloudVisible;
-  if(_layMode==='3d'&&_s3d.inited)_renderPointCloud();
+  if(_s3d.inited)_renderPointCloud();
   _updateCloudBtn();
 }
 
@@ -5756,7 +5595,7 @@ function _renderPointCloud(){
 function saveLayout(btn){
   if(!_fixtures)return;
   _btnSaving(btn);
-  if(_layMode==='3d'&&_s3d.inited)_s3dSyncToLd();
+  if(_s3d.inited)_s3dSyncToLd();
   var toSave=_fixtures.filter(_isFixturePlaced);
   ra('POST','/api/layout',{fixtures:toSave.map(function(f){return{id:f.id,x:f.x,y:f.y,z:f.z||0};})},
     function(r){
@@ -5777,94 +5616,7 @@ function saveLayout(btn){
     });
 }
 
-function _nodePos(c,W,H){
-  // Clamp draw position so node is always accessible (at least 14px inside canvas)
-  var cx=Math.round(c.x*W/phW),cy=H-Math.round(c.y*H/phH);
-  cx=Math.max(14,Math.min(W-14,cx));
-  cy=Math.max(14,Math.min(H-14,cy));
-  return{cx:cx,cy:cy};
-}
-
-function _hitNode(mx,my,W,H){
-  if(!_fixtures)return -1;
-  var best=-1,bestD=900;
-  var placed=_fixtures.filter(_isFixturePlaced);
-  for(var i=0;i<placed.length;i++){
-    var p=_nodePos(placed[i],W,H);
-    var dx=mx-p.cx,dy=my-p.cy,d2=dx*dx+dy*dy;
-    if(d2<bestD){bestD=d2;best=i;}
-  }
-  return best;
-}
-
-function _cvMouse(e,cv){
-  // Convert CSS pixel coords to canvas pixel coords (handles CSS scaling from max-width:100%)
-  var r=cv.getBoundingClientRect();
-  var sx=cv.width/r.width,sy=cv.height/r.height;
-  return{x:(e.clientX-r.left)*sx, y:(e.clientY-r.top)*sy};
-}
-
-var _aimMode=null; // fixture id when in click-to-aim mode
-function cvDown(e){
-  var cv=document.getElementById('lcv');
-  var m=_cvMouse(e,cv);
-  // Click-to-aim mode: any click sets aim point
-  if(_aimMode!==null){
-    var ax=Math.round(m.x*phW/cv.width);
-    var ay=Math.round((cv.height-m.y)*phH/cv.height);
-    var f=null;_fixtures.forEach(function(fx){if(fx.id===_aimMode)f=fx;});
-    if(f){f.aimPoint=[ax,ay,f.aimPoint?f.aimPoint[2]||0:0];drawLayout();}
-    _aimMode=null;cv.style.cursor='grab';
-    document.getElementById('hs').textContent='Aim point set to ('+ax+', '+ay+')';
-    e.preventDefault();return;
-  }
-  if(e.button!==0)return;
-  var hit=_hitNode(m.x,m.y,cv.width,cv.height);
-
-  // Rotate mode: compass interaction
-  if(_layTool==='rotate'){
-    // Compass ring drag — expanded hit zone (anywhere beyond fixture circle)
-    if(_compassFid && _compassHitTest(m.x,m.y,cv)){
-      var cf=null;_fixtures.forEach(function(fx){if(fx.id===_compassFid)cf=fx;});
-      if(cf)_laySaveUndo(cf);
-      _compassDragging=true;
-      cv.style.cursor='crosshair';
-      var angle=_compassAngle(m.x,m.y,cv);
-      _compassApply(angle,!e.shiftKey);
-      return;
-    }
-    // Click fixture to show compass (only dmx/camera have aim direction)
-    if(hit>=0){
-      var placed=_fixtures.filter(_isFixturePlaced);
-      var hf=placed[hit];
-      if(hf.fixtureType==='dmx'||hf.fixtureType==='camera'){
-        _compassFid=hf.id;
-        cv.style.cursor='crosshair';
-        drawLayout();
-        document.getElementById('hs').textContent='Rotate mode — drag ring to aim '+
-          (hf.name||'fixture');
-      }else{
-        document.getElementById('hs').textContent='Rotate mode — LED fixtures have no aim direction';
-      }
-    }else{
-      _compassFid=null;drawLayout();
-    }
-    return;
-  }
-
-  // Move mode: drag fixtures
-  _compassFid=null;
-  drag=hit;
-  if(drag>=0){
-    var placed=_fixtures.filter(_isFixturePlaced);
-    var np=_nodePos(placed[drag],cv.width,cv.height);
-    dox=m.x-np.cx;doy=m.y-np.cy;
-    _dragStartX=m.x;_dragStartY=m.y;_dragMoved=false;
-    _laySaveUndo(placed[drag]);
-    cv.style.cursor='grabbing';
-    drawLayout();
-  }
-}
+// 2D canvas helpers (_nodePos, _hitNode, _cvMouse, cvDown) removed — 3D scene handles all interaction
 // ── Layout tool mode (Move / Rotate) + Undo ─────────────────────────
 function _layToolToggle(){
   _layTool=_layTool==='move'?'rotate':'move';
@@ -5875,15 +5627,11 @@ function _layToolToggle(){
     btn.style.color=_layTool==='rotate'?'#e9d5ff':'#94a3b8';
     btn.title=_layTool==='move'?'Move mode (press R for Rotate)':'Rotate mode (press M for Move)';
   }
-  _compassFid=null;
-  var cv=document.getElementById('lcv');
-  if(cv)cv.style.cursor=_layTool==='move'?'grab':'default';
-  // Switch 3D TransformControls mode if 3D view is active
+  // Switch 3D TransformControls mode
   if(_s3d.inited&&_s3d.tctl){
     _s3d.tctl.setMode(_layTool==='rotate'?'rotate':'translate');
   }
-  drawLayout();
-  document.getElementById('hs').textContent=_layTool==='move'?'Move mode — drag to reposition':'Rotate mode — click fixture to aim';
+  document.getElementById('hs').textContent=_layTool==='move'?'Move mode — drag gizmo to reposition':'Rotate mode — use gizmo to rotate fixture';
 }
 function _laySaveUndo(f){
   _undoStack.push({fid:f.id,x:f.x,y:f.y,z:f.z||0,
@@ -5901,8 +5649,7 @@ function _layUndo(){
       if(u.rotation)f.rotation=u.rotation;
     }
   });
-  drawLayout();
-  if(_layMode==='3d'&&_s3d.inited)s3dLoadChildren();
+  s3dLoadChildren();
   // Save to server
   var toSave=_fixtures.filter(_isFixturePlaced).map(function(f){return{id:f.id,x:f.x,y:f.y,z:f.z||0};});
   ra('POST','/api/layout',{fixtures:toSave});
@@ -5917,175 +5664,14 @@ document.addEventListener('keydown',function(e){
   else if((e.ctrlKey||e.metaKey)&&e.key==='z'){e.preventDefault();_layUndo();}
 });
 
-// ── Compass gizmo for aiming cameras + moving heads ──────────────────
-var _compassFid=null;     // fixture ID with active compass
-var _compassDragging=false;
-
-function _compassShow(fid){
-  _compassFid=(_compassFid===fid)?null:fid;  // toggle
-  drawLayout();
-}
-
-function _compassHitTest(mx, my, cv){
-  // Check if mouse is on or near the compass (anywhere from fixture edge to beyond ring)
-  if(!_compassFid)return false;
-  var f=null;(_fixtures||[]).filter(_isFixturePlaced).forEach(function(fx){if(fx.id===_compassFid)f=fx;});
-  if(!f)return false;
-  var np=_nodePos(f,cv.width,cv.height);
-  var dist=Math.sqrt((mx-np.cx)*(mx-np.cx)+(my-np.cy)*(my-np.cy));
-  return dist>=12 && dist<=65;  // from just outside fixture circle to beyond ring
-}
-
-function _compassAngle(mx, my, cv){
-  var f=null;(_fixtures||[]).filter(_isFixturePlaced).forEach(function(fx){if(fx.id===_compassFid)f=fx;});
-  if(!f)return 0;
-  var np=_nodePos(f,cv.width,cv.height);
-  return Math.atan2(-(my-np.cy), mx-np.cx);  // angle from center, Y inverted
-}
-
-function _compassApply(angle, snap){
-  var f=null;_fixtures.forEach(function(fx){if(fx.id===_compassFid)f=fx;});
-  if(!f)return;
-  // Snap to 15° increments unless shift held
-  var deg=angle*180/Math.PI;
-  if(snap) deg=Math.round(deg/15)*15;
-  // Convert screen angle to stage: screen right=+X=0°, screen up=+Y=90°
-  // Stage: +Z is forward (into screen in 2D top-down), +X is right
-  // aimPoint direction from fixture pos
-  var rad=deg*Math.PI/180;
-  var dist=1000; // 1m aim distance
-  var ax=(f.x||0)+Math.cos(rad)*dist;
-  var ay=(f.y||0)+Math.sin(rad)*dist;
-  var az=f.aimPoint?f.aimPoint[2]||0:0;
-  f.aimPoint=[Math.round(ax),Math.round(ay),az];
-  // Also update rotation Y for rest vector
-  // In 2D: screen angle 0=right(+X), 90=up(+Y). Stage: RY=0 means +Z forward.
-  // Stage angle from +Z: atan2(dx, dz). In 2D top-down dz maps to -screen_y.
-  var stageAngle=90-deg;  // approximate mapping
-  f.rotation=[f.rotation?f.rotation[0]||0:0, stageAngle, f.rotation?f.rotation[2]||0:0];
-  drawLayout();
-}
-
-function _drawCompass(ctx, f, W, H){
-  var np=_nodePos(f,W,H);
-  var cx=np.cx, cy=np.cy;
-  var R=45; // compass radius
-
-  // Ring
-  ctx.beginPath();ctx.arc(cx,cy,R,0,Math.PI*2);
-  ctx.strokeStyle='rgba(34,211,238,0.5)';ctx.lineWidth=2;ctx.stroke();
-  ctx.beginPath();ctx.arc(cx,cy,R-10,0,Math.PI*2);
-  ctx.strokeStyle='rgba(34,211,238,0.15)';ctx.lineWidth=1;ctx.stroke();
-
-  // Cardinal ticks + labels
-  var cardinals=[
-    {angle:0,label:'+X',color:'#f66'},
-    {angle:Math.PI/2,label:'+Y',color:'#6f6'},
-    {angle:Math.PI,label:'-X',color:'#f66'},
-    {angle:-Math.PI/2,label:'-Y',color:'#6f6'},
-  ];
-  cardinals.forEach(function(c){
-    var x1=cx+Math.cos(c.angle)*(R-5), y1=cy-Math.sin(c.angle)*(R-5);
-    var x2=cx+Math.cos(c.angle)*(R+5), y2=cy-Math.sin(c.angle)*(R+5);
-    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);
-    ctx.strokeStyle=c.color;ctx.lineWidth=2;ctx.stroke();
-    var lx=cx+Math.cos(c.angle)*(R+14), ly=cy-Math.sin(c.angle)*(R+14);
-    ctx.fillStyle=c.color;ctx.font='bold 9px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
-    ctx.fillText(c.label,lx,ly);
-  });
-
-  // 45° ticks
-  for(var i=0;i<8;i++){
-    var a=i*Math.PI/4;
-    if(i%2===0)continue; // skip cardinals
-    var x1=cx+Math.cos(a)*(R-3), y1=cy-Math.sin(a)*(R-3);
-    var x2=cx+Math.cos(a)*(R+3), y2=cy-Math.sin(a)*(R+3);
-    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);
-    ctx.strokeStyle='rgba(148,163,184,0.4)';ctx.lineWidth=1;ctx.stroke();
-  }
-
-  // Current direction arrow
-  var aim=f.aimPoint;
-  if(aim){
-    var dx=aim[0]-(f.x||0), dy=aim[1]-(f.y||0);
-    var aimAngle=Math.atan2(dy,dx);
-    // Arrow
-    var ax=cx+Math.cos(aimAngle)*R, ay=cy-Math.sin(aimAngle)*R;
-    ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(ax,ay);
-    ctx.strokeStyle='#22d3ee';ctx.lineWidth=3;ctx.stroke();
-    // Arrowhead
-    ctx.beginPath();
-    ctx.moveTo(ax,ay);
-    ctx.lineTo(ax-10*Math.cos(aimAngle-0.3),ay+10*Math.sin(aimAngle-0.3));
-    ctx.lineTo(ax-10*Math.cos(aimAngle+0.3),ay+10*Math.sin(aimAngle+0.3));
-    ctx.closePath();ctx.fillStyle='#22d3ee';ctx.fill();
-    // Degree label
-    var deg=Math.round(aimAngle*180/Math.PI);
-    ctx.fillStyle='#e2e8f0';ctx.font='bold 10px sans-serif';ctx.textAlign='center';
-    ctx.fillText(deg+'\u00b0',cx,cy+R+24);
-  }
-}
+// 2D compass gizmo, startAimMode, cvMove, cvUp removed — use 3D gizmo for aiming
 
 function startAimMode(fixtureId){
-  _aimMode=fixtureId;
-  var cv=document.getElementById('lcv');if(cv)cv.style.cursor='crosshair';
-  document.getElementById('hs').textContent='Click on the canvas to set aim point';
+  // In unified 3D view: select the aim point sphere and drag it with the gizmo
+  document.getElementById('hs').textContent='Click the red aim point sphere in the 3D view, then drag the gizmo';
   closeModal();
-}
-
-function cvMove(e){
-  var cv=document.getElementById('lcv');
-  var m=_cvMouse(e,cv);
-  // Compass ring drag (rotate mode)
-  if(_compassDragging){
-    var angle=_compassAngle(m.x,m.y,cv);
-    _compassApply(angle,!e.shiftKey);
-    return;
-  }
-  if(_layTool==='rotate'){
-    var onRing=_compassFid&&_compassHitTest(m.x,m.y,cv);
-    cv.style.cursor=onRing?'crosshair':(_hitNode(m.x,m.y,cv.width,cv.height)>=0?'pointer':'default');
-    return;
-  }
-  if(drag===null||drag<0){
-    cv.style.cursor=_hitNode(m.x,m.y,cv.width,cv.height)>=0?'pointer':'grab';
-    return;
-  }
-  if(!_dragMoved){
-    var dd=Math.abs(m.x-_dragStartX)+Math.abs(m.y-_dragStartY);
-    if(dd<5)return;
-    _dragMoved=true;
-  }
-  var placed=_fixtures.filter(_isFixturePlaced);
-  var W=cv.width,H=cv.height;
-  var px=Math.max(0,Math.min(W,m.x-dox));
-  var py=Math.max(0,Math.min(H,m.y-doy));
-  var newX=Math.round(px*phW/W);
-  var newY=Math.round((H-py)*phH/H);
-  // Move aim point with fixture (maintain relative offset)
-  var f=placed[drag];
-  if(f.aimPoint){
-    var dx=newX-(f.x||0), dy=newY-(f.y||0);
-    f.aimPoint=[f.aimPoint[0]+dx, f.aimPoint[1]+dy, f.aimPoint[2]||0];
-  }
-  f.x=newX;
-  f.y=newY;
-  drawLayout();
-}
-
-function cvUp(){
-  if(_compassDragging&&_compassFid){
-    _compassDragging=false;
-    // Save aim point to server
-    var f=null;_fixtures.forEach(function(fx){if(fx.id===_compassFid)f=fx;});
-    if(f&&f.aimPoint){
-      ra('PUT','/api/fixtures/'+f.id+'/aim',{aimPoint:f.aimPoint});
-      ra('PUT','/api/fixtures/'+f.id,{rotation:f.rotation});
-    }
-  }
-  drag=null;
-  var cv=document.getElementById('lcv');
-  if(cv)cv.style.cursor=_layTool==='rotate'?(_compassFid?'crosshair':'default'):'grab';
+  // Auto-enable cones so aim point is visible
+  if(!_layShowCones)_layConesToggle();
 }
 
 // ── Actions library ──────────────────────────────────────────────────────────
