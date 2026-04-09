@@ -163,6 +163,7 @@ fun RuntimeScreen(viewModel: RuntimeViewModel = hiltViewModel()) {
                 onAddTrack = { viewModel.addTrackToTimeline(tl.id) },
                 onAddClip = { trackIdx, clip -> viewModel.addClipToTimeline(tl.id, trackIdx, clip) },
                 onRemoveClip = { trackIdx, clipIdx -> viewModel.removeClipFromTimeline(tl.id, trackIdx, clipIdx) },
+                onMoveTrack = { trackIdx, dir -> viewModel.moveTrack(tl.id, trackIdx, dir) },
                 actions = actions,
                 spatialEffects = spatialEffects,
                 bakeStatus = if (selectedTimeline?.id == tl.id) bakeStatus else null,
@@ -376,6 +377,7 @@ fun TimelineCard(
     onAddTrack: () -> Unit,
     onAddClip: (trackIdx: Int, TimelineClip) -> Unit,
     onRemoveClip: (trackIdx: Int, clipIdx: Int) -> Unit,
+    onMoveTrack: (trackIdx: Int, direction: Int) -> Unit,
     actions: List<Action>,
     spatialEffects: List<SpatialEffect>,
     bakeStatus: BakeStatus?,
@@ -423,6 +425,7 @@ fun TimelineCard(
                     spatialEffects = spatialEffects,
                     onAddClip = onAddClip,
                     onRemoveClip = onRemoveClip,
+                    onMoveTrack = onMoveTrack,
                 )
                 Spacer(Modifier.height(4.dp))
                 TextButton(onClick = onAddTrack) {
@@ -588,6 +591,7 @@ fun ClipEditorSection(
     spatialEffects: List<SpatialEffect>,
     onAddClip: (trackIdx: Int, TimelineClip) -> Unit,
     onRemoveClip: (trackIdx: Int, clipIdx: Int) -> Unit,
+    onMoveTrack: (trackIdx: Int, direction: Int) -> Unit = { _, _ -> },
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
     var addTrackIdx by remember { mutableIntStateOf(0) }
@@ -603,7 +607,19 @@ fun ClipEditorSection(
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(trackName, fontWeight = FontWeight.Bold, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                        Text(trackName, fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                            modifier = Modifier.weight(1f), maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        if (ti > 0) {
+                            IconButton(onClick = { onMoveTrack(ti, -1) }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Default.KeyboardArrowUp, "Move up", modifier = Modifier.size(16.dp))
+                            }
+                        }
+                        if (ti < timeline.tracks.size - 1) {
+                            IconButton(onClick = { onMoveTrack(ti, 1) }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Default.KeyboardArrowDown, "Move down", modifier = Modifier.size(16.dp))
+                            }
+                        }
                         TextButton(onClick = { addTrackIdx = ti; showAddDialog = true }) {
                             Text("+ Clip", fontSize = 12.sp)
                         }

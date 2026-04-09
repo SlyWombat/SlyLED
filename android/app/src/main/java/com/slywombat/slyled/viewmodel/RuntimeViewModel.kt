@@ -266,6 +266,24 @@ class RuntimeViewModel @Inject constructor(
         }
     }
 
+    fun moveTrack(timelineId: Int, trackIdx: Int, direction: Int) {
+        viewModelScope.launch {
+            try {
+                val tl = repository.getTimeline(timelineId)
+                val tracks = tl.tracks.toMutableList()
+                val to = trackIdx + direction
+                if (to in tracks.indices) {
+                    val tmp = tracks[trackIdx]
+                    tracks[trackIdx] = tracks[to]
+                    tracks[to] = tmp
+                    repository.updateTimeline(timelineId, tl.copy(tracks = tracks))
+                    _selectedTimeline.value = repository.getTimeline(timelineId)
+                    _timelines.value = repository.getTimelines()
+                }
+            } catch (e: Exception) { _message.value = "Error: ${e.message}" }
+        }
+    }
+
     fun removeClipFromTimeline(timelineId: Int, trackIdx: Int, clipIdx: Int) {
         viewModelScope.launch {
             try {
