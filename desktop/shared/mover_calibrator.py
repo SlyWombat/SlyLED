@@ -213,20 +213,29 @@ def compute_aim_with_orientation(mover_pos, target_pos, orientation,
                                   pan_range=540, tilt_range=180):
     """Compute pan/tilt using saved fixture orientation data.
 
-    The orientation dict corrects for physical mounting (upside-down, rotated, etc.)
-    by applying panOffset, tiltOffset, panSign, and tiltSign.
+    Stage coordinate system (matches layout 3D view):
+      X = stage width (stage right=0 → stage left)
+      Y = height (floor=0 → ceiling)
+      Z = depth (back wall=0 → audience)
+
+    Pan rotates in the XZ horizontal plane (atan2(dx, dz)).
+    Tilt rotates in the vertical plane (atan2(-dy, dist_xz)).
+
+    The orientation dict corrects for physical mounting by applying
+    panOffset, tiltOffset, panSign, and tiltSign — calibrated from
+    a known anchor point where beam position was verified by camera.
 
     Args:
-        mover_pos: (x, y, z) in stage mm
+        mover_pos: (x, y, z) in stage mm (from layout fixture position)
         target_pos: (x, y, z) in stage mm
-        orientation: dict with panSign, tiltSign, homePan, homeTilt, panOffset, tiltOffset
-        pan_range, tilt_range: degrees
+        orientation: dict with panSign, tiltSign, panOffset, tiltOffset
+        pan_range, tilt_range: degrees (fixture DMX range)
 
     Returns: (pan_norm, tilt_norm) both 0.0-1.0
     """
     dx = target_pos[0] - mover_pos[0]
-    dy = target_pos[1] - mover_pos[1]
-    dz = target_pos[2] - mover_pos[2]
+    dy = target_pos[1] - mover_pos[1]  # vertical (Y=height)
+    dz = target_pos[2] - mover_pos[2]  # depth toward audience
     dist_xz = (dx * dx + dz * dz) ** 0.5
 
     # Geometric angles from fixture to target
