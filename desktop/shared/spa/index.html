@@ -114,7 +114,7 @@ body.light .li:hover{border-color:#3b82f6}
     <!-- Zone 3: Align dropdown + Auto-arrange -->
     <div style='position:relative;display:inline-block'>
       <button class='btn' id='btn-align-menu' onclick='_toggleAlignMenu()' title='Align & Distribute' style='height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;gap:3px'>
-        <svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='1' y='1' width='2' height='14'/><rect x='5' y='3' width='9' height='4' rx='1'/><rect x='5' y='9' width='6' height='4' rx='1'/></svg>Align <span style='font-size:8px'>\u25bc</span>
+        <svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='1' y='1' width='2' height='14'/><rect x='5' y='3' width='9' height='4' rx='1'/><rect x='5' y='9' width='6' height='4' rx='1'/></svg>Align <span style='font-size:8px'>&#x25BC;</span>
       </button>
       <div id='align-dropdown' style='display:none;position:absolute;top:32px;left:0;background:#1a1a24;border:1px solid #2a2a3a;border-radius:6px;padding:4px 0;min-width:180px;z-index:100;box-shadow:0 6px 20px rgba(0,0,0,.5)'>
         <div style='padding:3px 10px;font-size:9px;color:#4a5568;text-transform:uppercase;letter-spacing:.5px'>Align (select 2+)</div>
@@ -2040,6 +2040,8 @@ function s3dLoadChildren(){
   // Fetch stage dimensions
   ra('GET','/api/stage',null,function(st){
     if(st){_s3d.stageW=st.w||10;_s3d.stageH=st.h||5;_s3d.stageD=st.d||10;}
+    // Re-fit camera to actual stage dimensions
+    setView(_layView||'front');
     // Draw stage boundary box
     _s3d.scene.children.forEach(function(c){if(c.userData.stageBox)_s3d.scene.remove(c);});
     var boxGeo=new THREE.BoxGeometry(_s3d.stageW,_s3d.stageH,_s3d.stageD);
@@ -4479,20 +4481,51 @@ function _updateSidePanel(fixtureId){
     } else if(ft==='dmx'){
       h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">DMX</div>';
       h+='<div style="font-size:.82em;color:#c4b5fd;margin-bottom:.2em">Profile: '+(f.dmxProfileId?'<span style="color:#e9d5ff">'+escapeHtml(f.dmxProfileId)+'</span>':'<span style="color:#64748b">None</span>')+'</div>';
-      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.2em">Universe: '+(f.dmxUniverse||1)+' | Addr: '+(f.dmxStartAddr||1)+'</div>';
+      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.4em">Universe: '+(f.dmxUniverse||1)+' | Addr: '+(f.dmxStartAddr||1)+'</div>';
+      // Aim point editable
       var ap=f.aimPoint||[0,0,0];
-      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.3em">Aim: '+ap[0]+', '+ap[1]+', '+ap[2]+' mm</div>';
+      h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Aim Point</div>';
+      h+='<div style="display:flex;gap:.3em;align-items:center;margin-bottom:.4em">';
+      h+='<label style="font-size:.72em;color:#64748b;margin:0">X</label><input type="number" value="'+Math.round(ap[0])+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelAimChange('+f.id+',0,this.value)">';
+      h+='<label style="font-size:.72em;color:#64748b;margin:0">Y</label><input type="number" value="'+Math.round(ap[1])+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelAimChange('+f.id+',1,this.value)">';
+      h+='<label style="font-size:.72em;color:#64748b;margin:0">Z</label><input type="number" value="'+Math.round(ap[2])+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelAimChange('+f.id+',2,this.value)">';
+      h+='</div>';
+      // Rotation / orientation
+      var rot=f.rotation||[0,0,0];
+      var orient=f.orientation||{};
+      h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Orientation</div>';
+      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.3em">';
+      h+='Pan: '+Math.round(rot[1])+'\u00b0 | Tilt: '+Math.round(rot[0])+'\u00b0';
+      if(orient.verified)h+=' <span style="color:#4ade80">\u2713</span>';
+      h+='</div>';
       h+='<div style="display:flex;gap:.3em;flex-wrap:wrap">';
-      h+='<button class="btn" onclick="_orientTest('+f.id+')" style="font-size:.7em;padding:.2em .5em;background:#4c1d95;color:#e9d5ff">Orient</button>';
+      h+='<button class="btn" onclick="_orientTest('+f.id+')" style="font-size:.7em;padding:.2em .5em;background:#4c1d95;color:#e9d5ff">Test Orient</button>';
       h+='<button class="btn" onclick="closeModal();_moverCalStart('+f.id+')" style="font-size:.7em;padding:.2em .5em;background:#6b21a8;color:#d8b4fe">Calibrate'+(f.moverCalibrated?' \u2713':'')+'</button>';
       h+='</div>';
     } else if(ft==='camera'){
       h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Camera</div>';
-      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.2em">FOV: '+(f.fovDeg||60)+'\u00b0 | '+(f.resolutionW||1920)+'\u00d7'+(f.resolutionH||1080)+'</div>';
-      h+='<div style="font-size:.82em;color:#94a3b8">Calibration: '+(f.calibrated?'<span style="color:#4ade80">\u2713 Done</span>':'<span style="color:#f59e0b">Not done</span>')+'</div>';
+      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.4em">FOV: '+(f.fovDeg||60)+'\u00b0 | '+(f.resolutionW||1920)+'\u00d7'+(f.resolutionH||1080)+'</div>';
+      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.3em">Calibration: '+(f.calibrated?'<span style="color:#4ade80">\u2713 Done</span>':'<span style="color:#f59e0b">Not done</span>')+'</div>';
+      // Aim point editable
+      var cap=f.aimPoint||[0,0,0];
+      h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Aim Point</div>';
+      h+='<div style="display:flex;gap:.3em;align-items:center">';
+      h+='<label style="font-size:.72em;color:#64748b;margin:0">X</label><input type="number" value="'+Math.round(cap[0])+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelAimChange('+f.id+',0,this.value)">';
+      h+='<label style="font-size:.72em;color:#64748b;margin:0">Y</label><input type="number" value="'+Math.round(cap[1])+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelAimChange('+f.id+',1,this.value)">';
+      h+='<label style="font-size:.72em;color:#64748b;margin:0">Z</label><input type="number" value="'+Math.round(cap[2])+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelAimChange('+f.id+',2,this.value)">';
+      h+='</div>';
     }
     det.innerHTML=h;
   }
+}
+function _panelAimChange(fid,axis,val){
+  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===fid)f=fx;});
+  if(!f)return;
+  if(!f.aimPoint)f.aimPoint=[f.x||0,0,0];
+  f.aimPoint[axis]=parseInt(val)||0;
+  _layoutDirty=true;_layDirtyUpdate();
+  ra('PUT','/api/fixtures/'+fid+'/aim',{aimPoint:f.aimPoint});
+  s3dLoadChildren();
 }
 function _panelPosChange(){
   var pos=document.getElementById('panel-position');if(!pos)return;
