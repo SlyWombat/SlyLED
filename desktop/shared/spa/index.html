@@ -1884,7 +1884,8 @@ function setView(view){
     var frustumH,cx,cy,cz,tx,ty,tz;
     if(view==='front'){
       // Looking down +Z toward origin: camera sees XY plane
-      frustumH=Math.max(sw,sh)*1.15;
+      // Best-fit: pick frustum so both stage width and height are visible
+      frustumH=Math.max(sh,sw/aspect)*1.05;
       var oh=frustumH/2;var ow=oh*aspect;
       _s3d.orthoCam.left=-ow;_s3d.orthoCam.right=ow;_s3d.orthoCam.top=oh;_s3d.orthoCam.bottom=-oh;
       _s3d.orthoCam.near=0.01;_s3d.orthoCam.far=200;
@@ -1894,7 +1895,7 @@ function setView(view){
       if(hint)hint.textContent='Front view (XY). Drag fixtures from sidebar. Double-click to edit. Scroll=zoom, Drag=pan.';
     } else if(view==='top'){
       // Looking down -Y: camera sees XZ plane
-      frustumH=Math.max(sw,sd)*1.15;
+      frustumH=Math.max(sd,sw/aspect)*1.05;
       var oh=frustumH/2;var ow=oh*aspect;
       _s3d.orthoCam.left=-ow;_s3d.orthoCam.right=ow;_s3d.orthoCam.top=oh;_s3d.orthoCam.bottom=-oh;
       _s3d.orthoCam.near=0.01;_s3d.orthoCam.far=200;
@@ -1905,7 +1906,7 @@ function setView(view){
       if(hint)hint.textContent='Top view (XZ, bird-eye). Scroll=zoom, Drag=pan.';
     } else if(view==='side'){
       // Looking down +X toward origin: camera sees ZY plane
-      frustumH=Math.max(sd,sh)*1.15;
+      frustumH=Math.max(sh,sd/aspect)*1.05;
       var oh=frustumH/2;var ow=oh*aspect;
       _s3d.orthoCam.left=-ow;_s3d.orthoCam.right=ow;_s3d.orthoCam.top=oh;_s3d.orthoCam.bottom=-oh;
       _s3d.orthoCam.near=0.01;_s3d.orthoCam.far=200;
