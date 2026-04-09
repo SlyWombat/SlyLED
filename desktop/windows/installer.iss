@@ -3,7 +3,7 @@
 ; Or:    run build.bat — it calls iscc automatically if available.
 
 #define AppName      "SlyLED Orchestrator"
-#define AppVersion   "1.0.35"
+#define AppVersion   "1.1.0"
 #define AppPublisher "Electric RV Corporation"
 #define AppExeName   "SlyLED.exe"
 ; Unique GUID for this app — keep fixed across releases so updates overwrite
