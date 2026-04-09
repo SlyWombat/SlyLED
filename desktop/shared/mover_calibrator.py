@@ -209,6 +209,258 @@ def compute_initial_aim(mover_pos, target_pos, pan_range=540, tilt_range=270):
     return (pan_norm, tilt_norm)
 
 
+def compute_aim_with_orientation(mover_pos, target_pos, orientation,
+                                  pan_range=540, tilt_range=180):
+    """Compute pan/tilt using saved fixture orientation data.
+
+    The orientation dict corrects for physical mounting (upside-down, rotated, etc.)
+    by applying panOffset, tiltOffset, panSign, and tiltSign.
+
+    Args:
+        mover_pos: (x, y, z) in stage mm
+        target_pos: (x, y, z) in stage mm
+        orientation: dict with panSign, tiltSign, homePan, homeTilt, panOffset, tiltOffset
+        pan_range, tilt_range: degrees
+
+    Returns: (pan_norm, tilt_norm) both 0.0-1.0
+    """
+    dx = target_pos[0] - mover_pos[0]
+    dy = target_pos[1] - mover_pos[1]
+    dz = target_pos[2] - mover_pos[2]
+    dist_xz = (dx * dx + dz * dz) ** 0.5
+
+    # Geometric angles from fixture to target
+    pan_deg = math.degrees(math.atan2(dx, dz)) if dist_xz > 0.001 else 0.0
+    tilt_deg = math.degrees(math.atan2(-dy, dist_xz)) if (dist_xz > 0.001 or abs(dy) > 0.001) else 0.0
+
+    # Apply orientation corrections
+    pan_sign = orientation.get("panSign", 1)
+    tilt_sign = orientation.get("tiltSign", -1)
+    pan_offset = orientation.get("panOffset", 0.0)  # where pan=0 is in normalized space
+    tilt_offset = orientation.get("tiltOffset", 0.0)  # where tilt=0 is in normalized space
+
+    # Convert geometric angle to normalized pan/tilt
+    # pan_offset is the normalized value that corresponds to "forward" (+Z)
+    # pan_sign determines which direction increasing pan goes
+    pan_norm = pan_offset + pan_sign * pan_deg / pan_range
+    tilt_norm = tilt_offset + tilt_sign * tilt_deg / tilt_range
+
+    # Clamp to valid range
+    pan_norm = max(0.0, min(1.0, pan_norm))
+    tilt_norm = max(0.0, min(1.0, tilt_norm))
+
+    return (pan_norm, tilt_norm)
+
+
+def calibrate_fixture_orientation(bridge_ip, camera_ip, cam_idx, mover_addr,
+                                   mover_pos, floor_target, color=(0, 0, 255),
+                                   universe=0, pan_range=540, tilt_range=180,
+                                   beam_count=1):
+    """Automated per-fixture orientation calibration.
+
+    1. Discovery: spiral from geometric estimate to find beam
+    2. Axis probe: tiny nudges to learn pan/tilt directions
+    3. Aim at floor target: compare expected vs actual pixel
+    4. Compute orientation correction offsets
+
+    Args:
+        bridge_ip: Art-Net bridge IP
+        camera_ip: camera node IP
+        cam_idx: camera index on the node
+        mover_addr: DMX start address of the fixture
+        mover_pos: (x, y, z) fixture position in stage mm
+        floor_target: (x, y, z) target point on floor in stage mm
+        color: (r, g, b) beam color for detection
+        beam_count: 1 for single beam, 3 for 3-beam fixtures
+
+    Returns: orientation dict or None on failure
+    """
+    import json
+    import urllib.request
+
+    detect_endpoint = "/beam-detect/center" if beam_count > 1 else "/beam-detect"
+    step = 0.005  # small step for axis probing
+
+    def send_dmx(pan, tilt, on=True):
+        """Send DMX to position the mover."""
+        dmx = [0] * 512
+        if on:
+            _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
+        _hold_dmx(bridge_ip, dmx, duration=2.5)
+
+    def detect_beam():
+        """Detect beam position using camera."""
+        req = urllib.request.Request(
+            f"http://{camera_ip}:5000{detect_endpoint}",
+            data=json.dumps({"cam": cam_idx, "color": list(color), "threshold": 50}).encode(),
+            headers={"Content-Type": "application/json"})
+        try:
+            r = json.loads(urllib.request.urlopen(req, timeout=10).read())
+            if r.get("found"):
+                return r["pixelX"], r["pixelY"], r.get("beamCount", 1)
+        except Exception as e:
+            log.warning("Beam detect failed: %s", e)
+        return None, None, 0
+
+    def detect_at(pan, tilt):
+        """Move to position, detect beam, return pixel coords."""
+        import threading
+        dmx = [0] * 512
+        _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
+        t = threading.Thread(target=_hold_dmx, args=(bridge_ip, dmx, 4.0), daemon=True)
+        t.start()
+        import time; time.sleep(2.5)
+        px, py, bc = detect_beam()
+        t.join()
+        return px, py, bc
+
+    log.info("ORIENT-CAL fixture addr=%d: starting from pos=%s target=%s",
+             mover_addr, mover_pos, floor_target)
+
+    # ── Step 1: Discovery ──────────────────────────────────────────
+    # Geometric estimate: start from center convention (0.5=forward)
+    # Then spiral outward to find the beam
+    est_pan, est_tilt = compute_initial_aim(mover_pos, floor_target, pan_range, tilt_range)
+    # Raw geometric angle (degrees) from fixture toward target
+    dx = floor_target[0] - mover_pos[0]
+    dy = floor_target[1] - mover_pos[1]
+    dz = floor_target[2] - mover_pos[2]
+    dist_xz = (dx * dx + dz * dz) ** 0.5
+    geo_pan_deg = math.degrees(math.atan2(dx, dz)) if dist_xz > 0.001 else 0.0
+    geo_tilt_deg = math.degrees(math.atan2(-dy, dist_xz))
+
+    log.info("ORIENT-CAL: geometric estimate pan=%.3f tilt=%.3f (angles: pan=%.1f° tilt=%.1f°)",
+             est_pan, est_tilt, geo_pan_deg, geo_tilt_deg)
+
+    # Try multiple conventions — we don't know mounting orientation yet
+    # Priority: upside-down (pan=0 forward, low tilt = floor) since it's common
+    candidates = [
+        # Upside-down mounting (most common for ceiling-mount moving heads)
+        (geo_pan_deg / pan_range, 0.12),                     # pan=0 forward, tilt empirical floor
+        (geo_pan_deg / pan_range, 0.10),                     # slight tilt variation
+        (geo_pan_deg / pan_range, 0.15),                     # slight tilt variation
+        # Standard convention
+        (est_pan, est_tilt),
+        (est_pan, 1.0 - est_tilt),                           # tilt inverted
+        # Straight down from fixture (target directly below)
+        (0.0, 0.12), (0.0, 0.10), (0.0, 0.15),
+        (0.05, 0.12), (0.05, 0.10), (0.05, 0.15),
+    ]
+    # Normalize and deduplicate
+    seen = set()
+    norm_candidates = []
+    for p, t in candidates:
+        p = max(0.0, min(1.0, p))
+        t = max(0.0, min(1.0, t))
+        key = (round(p, 3), round(t, 3))
+        if key not in seen:
+            seen.add(key)
+            norm_candidates.append((p, t))
+    candidates = norm_candidates
+
+    found_pan, found_tilt = None, None
+    for cp, ct in candidates:
+        log.info("ORIENT-CAL: trying pan=%.3f tilt=%.3f", cp, ct)
+        px, py, bc = detect_at(cp, ct)
+        if px is not None:
+            found_pan, found_tilt = cp, ct
+            log.info("ORIENT-CAL: FOUND at pan=%.3f tilt=%.3f → pixel (%d, %d) beams=%d",
+                     cp, ct, px, py, bc)
+            break
+
+    if found_pan is None:
+        # Spiral search from each candidate
+        for cp, ct in candidates:
+            for spiral_step in range(1, 20):
+                for dp, dt in [(1,0), (0,1), (-1,0), (0,-1), (1,1), (-1,-1)]:
+                    sp = max(0, min(1, cp + dp * spiral_step * 0.02))
+                    st = max(0, min(1, ct + dt * spiral_step * 0.02))
+                    px, py, bc = detect_at(sp, st)
+                    if px is not None:
+                        found_pan, found_tilt = sp, st
+                        log.info("ORIENT-CAL: FOUND (spiral) at pan=%.3f tilt=%.3f → (%d,%d)",
+                                 sp, st, px, py)
+                        break
+                if found_pan is not None:
+                    break
+            if found_pan is not None:
+                break
+
+    if found_pan is None:
+        log.error("ORIENT-CAL: beam not found after search")
+        return None
+
+    # ── Step 2: Axis probe ─────────────────────────────────────────
+    log.info("ORIENT-CAL: probing axes from pan=%.4f tilt=%.4f", found_pan, found_tilt)
+
+    base_px, base_py, _ = detect_at(found_pan, found_tilt)
+    pan_plus_px, pan_plus_py, _ = detect_at(found_pan + step, found_tilt)
+    pan_minus_px, pan_minus_py, _ = detect_at(found_pan - step, found_tilt)
+    tilt_plus_px, tilt_plus_py, _ = detect_at(found_pan, found_tilt + step)
+    tilt_minus_px, tilt_minus_py, _ = detect_at(found_pan, found_tilt - step)
+
+    if any(v is None for v in [base_px, pan_plus_px, pan_minus_px, tilt_plus_px, tilt_minus_px]):
+        log.error("ORIENT-CAL: axis probe lost beam")
+        return None
+
+    pan_dx = pan_plus_px - pan_minus_px
+    pan_dy = pan_plus_py - pan_minus_py
+    tilt_dx = tilt_plus_px - tilt_minus_px
+    tilt_dy = tilt_plus_py - tilt_minus_py
+
+    pan_sign = 1 if pan_dx > 0 else -1
+    tilt_sign = 1 if tilt_dy > 0 else -1
+
+    log.info("ORIENT-CAL: pan axis dx=%+d dy=%+d (sign=%+d), tilt axis dx=%+d dy=%+d (sign=%+d)",
+             pan_dx, pan_dy, pan_sign, tilt_dx, tilt_dy, tilt_sign)
+
+    # ── Step 3: Compute orientation offset ─────────────────────────
+    # geo_pan_deg and geo_tilt_deg already computed above
+
+    # The beam was found at (found_pan, found_tilt) which corresponds to
+    # the fixture physically aiming at the floor target.
+    # So: found_pan = panOffset + panSign * geo_pan_deg / pan_range
+    # → panOffset = found_pan - panSign * geo_pan_deg / pan_range
+    pan_offset = found_pan - pan_sign * geo_pan_deg / pan_range
+    tilt_offset = found_tilt - tilt_sign * geo_tilt_deg / tilt_range
+
+    orientation = {
+        "panSign": pan_sign,
+        "tiltSign": tilt_sign,
+        "panOffset": round(pan_offset, 4),
+        "tiltOffset": round(tilt_offset, 4),
+        "homePan": round(found_pan, 4),
+        "homeTilt": round(found_tilt, 4),
+        "panSensitivity": round(abs(pan_dx) / (2 * step), 1),
+        "tiltSensitivity": round(abs(tilt_dy) / (2 * step), 1),
+        "beamCount": beam_count,
+        "verified": True,
+        "panRange": pan_range,
+        "tiltRange": tilt_range,
+    }
+
+    log.info("ORIENT-CAL: result: panOffset=%.4f tiltOffset=%.4f panSign=%+d tiltSign=%+d",
+             pan_offset, tilt_offset, pan_sign, tilt_sign)
+
+    # ── Step 4: Verify — aim at a second point ─────────────────────
+    # Pick a point 500mm to the right of the floor target
+    verify_target = (floor_target[0] + 500, floor_target[1], floor_target[2])
+    verify_pan, verify_tilt = compute_aim_with_orientation(
+        mover_pos, verify_target, orientation, pan_range, tilt_range)
+
+    log.info("ORIENT-CAL: verify aim at %s → pan=%.4f tilt=%.4f", verify_target, verify_pan, verify_tilt)
+    verify_px, verify_py, _ = detect_at(verify_pan, verify_tilt)
+    if verify_px is not None:
+        log.info("ORIENT-CAL: verify beam at (%d, %d) — BEAM VISIBLE", verify_px, verify_py)
+        orientation["verifyPixel"] = [verify_px, verify_py]
+    else:
+        log.warning("ORIENT-CAL: verify beam NOT FOUND — orientation may need refinement")
+
+    # Turn off
+    send_dmx(0.5, 0.5, on=False)
+    return orientation
+
+
 def pan_tilt_to_ray(pan_norm, tilt_norm, pan_range=540, tilt_range=270):
     """Convert normalized pan/tilt (0-1) to a unit direction vector.
 
