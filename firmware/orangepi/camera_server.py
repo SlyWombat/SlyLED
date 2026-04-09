@@ -20,7 +20,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request
 
-VERSION = "1.2.1"
+VERSION = "1.2.3"
 PORT = 5000
 UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
@@ -188,9 +188,14 @@ def _detect_cameras():
         else:
             cameras.append({"device": dev, "resW": 0, "resH": 0,
                             "name": dev, "probed": False})
-    # Also detect Raspberry Pi CSI cameras via libcamera
-    try:
-        r = subprocess.run(["libcamera-hello", "--list-cameras"],
+    # Also detect Raspberry Pi CSI cameras via rpicam-hello or libcamera-hello
+    list_cmd = None
+    for _cmd in ["/usr/bin/rpicam-hello", "/usr/bin/libcamera-hello"]:
+        if os.path.exists(_cmd):
+            list_cmd = _cmd; break
+    if list_cmd:
+      try:
+        r = subprocess.run([list_cmd, "--list-cameras"],
                            capture_output=True, text=True, timeout=5)
         for line in r.stdout.splitlines():
             # Lines like: "0 : imx219 [3280x2464 10-bit RGGB] (/base/...)"
@@ -215,8 +220,8 @@ def _detect_cameras():
                     "name": f"Pi Camera ({name})",
                     "probed": True, "libcamera": True,
                 })
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass  # libcamera not installed
+      except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
 
     return cameras
 
@@ -757,8 +762,10 @@ def _cv_capture(device, timeout=5):
             import subprocess, cv2, numpy as np
             cam_idx = device.split(":")[1]
             tmp = "/tmp/slyled_capture.jpg"
+            # Try rpicam-still (newer) then libcamera-still (older)
+            still_cmd = "rpicam-still" if os.path.exists("/usr/bin/rpicam-still") else "libcamera-still"
             subprocess.run(
-                ["libcamera-still", "--camera", cam_idx, "-o", tmp,
+                [still_cmd, "--camera", cam_idx, "-o", tmp,
                  "--width", "1920", "--height", "1080", "--nopreview", "-t", "500"],
                 capture_output=True, timeout=10)
             frame = cv2.imread(tmp)

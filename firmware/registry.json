@@ -72,7 +72,7 @@
             "name": "Camera Node (Orange Pi)",
             "description": "RTSP camera streaming node with web UI and UDP discovery",
             "board": "orangepi",
-            "version": "1.2.1",
+            "version": "1.2.3",
             "file": "orangepi/camera_server.py",
             "flashMethod": "ssh"
         }
