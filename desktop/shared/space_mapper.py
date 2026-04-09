@@ -178,6 +178,25 @@ class SpaceScan:
                 "pointCount": len(stage_points),
             })
 
+        self._progress = 90
+        self._message = f"Normalizing {len(all_points)} points to stage floor..."
+
+        # Floor normalization: detect floor plane, shift Y so floor = Y=0 (#246)
+        floor_y = None
+        if len(all_points) > 100:
+            try:
+                from surface_analyzer import _detect_floor
+                coords = [(p[0], p[1], p[2]) for p in all_points]
+                floor = _detect_floor(coords, tolerance=150)
+                if floor:
+                    floor_y = floor["y"]
+                    log.info("Floor normalization: shifting Y by %d mm (floor was at Y=%d)",
+                             -floor_y, floor_y)
+                    for p in all_points:
+                        p[1] -= floor_y  # shift so floor = Y=0
+            except Exception as e:
+                log.warning("Floor normalization failed: %s", e)
+
         self._progress = 95
         self._message = f"Merging {len(all_points)} points..."
 
@@ -186,6 +205,8 @@ class SpaceScan:
             "cameras": cam_info,
             "points": all_points,
             "totalPoints": len(all_points),
+            "floorNormalized": floor_y is not None,
+            "floorOffset": floor_y,
         }
 
         self._progress = 100
