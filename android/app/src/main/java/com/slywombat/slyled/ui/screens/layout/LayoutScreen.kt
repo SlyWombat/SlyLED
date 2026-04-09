@@ -17,6 +17,8 @@ import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.OpenWith
+import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.VerticalAlignTop
 import androidx.compose.material.icons.filled.Visibility
@@ -48,12 +50,15 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
     val fixtures by viewModel.fixtures.collectAsState()
     val stage by viewModel.stage.collectAsState()
     val message by viewModel.message.collectAsState()
+    val isRotateMode by viewModel.rotateMode.collectAsState()
     var dragFixtureId by remember { mutableIntStateOf(-1) }
     var showStrings by remember { mutableStateOf(true) }
     var is3dMode by remember { mutableStateOf(false) }
     var editFixture by remember { mutableStateOf<Fixture?>(null) }
     var placingFixtureId by remember { mutableIntStateOf(-1) }
     var editObject by remember { mutableStateOf<StageObject?>(null) }
+    var compassFixtureId by remember { mutableIntStateOf(-1) }
+    var compassDragging by remember { mutableStateOf(false) }
 
     // Zoom and pan
     var zoom by remember { mutableFloatStateOf(1f) }
@@ -80,6 +85,14 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("Stage Layout", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+            // Move / Rotate mode toggle
+            IconButton(onClick = { viewModel.toggleRotateMode(); compassFixtureId = -1 }) {
+                Icon(
+                    if (isRotateMode) Icons.Default.RotateRight else Icons.Default.OpenWith,
+                    contentDescription = if (isRotateMode) "Rotate mode" else "Move mode",
+                    tint = if (isRotateMode) Color(0xFFE9D5FF) else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             // Auto-arrange DMX: evenly space along top, aimed down
             IconButton(onClick = { viewModel.autoArrangeDmx() }) {
                 Icon(Icons.Default.GridView, contentDescription = "Auto-arrange DMX fixtures",
@@ -121,6 +134,11 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
         Row(modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("${stageWm}m × ${stageHm}m | ${fixtures.size} fixtures",
                 fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (isRotateMode) "Rotate mode — tap DMX fixture to aim" else "Move mode — drag to reposition",
+                fontSize = 10.sp, color = if (isRotateMode) Color(0xFFE9D5FF) else Color(0xFF64748B)
+            )
         }
 
         // Placement mode indicator
@@ -151,7 +169,7 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
             Canvas(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(fixtures, zoom, panOffset, placingFixtureId) {
+                    .pointerInput(fixtures, zoom, panOffset, placingFixtureId, isRotateMode, compassFixtureId) {
                         detectDragGestures(
                             onDragStart = { offset ->
                                 // If in placement mode, place the fixture at tap location
@@ -167,10 +185,46 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                                     dragFixtureId = -1
                                     return@detectDragGestures
                                 }
-                                // Normal drag mode — find nearest fixture
                                 val w = size.width.toFloat()
                                 val h = size.height.toFloat()
                                 val placed = fixtures.filter { it.positioned }
+                                // Rotate mode
+                                if (isRotateMode) {
+                                    // Check compass drag first
+                                    if (compassFixtureId >= 0) {
+                                        val cf = placed.find { it.id == compassFixtureId }
+                                        if (cf != null) {
+                                            val ccx = cf.x.toFloat() * w / canvasW * zoom + panOffset.x
+                                            val ccy = (h - cf.y.toFloat() * h / canvasH) * zoom + panOffset.y
+                                            val dist = kotlin.math.sqrt((offset.x - ccx) * (offset.x - ccx) + (offset.y - ccy) * (offset.y - ccy))
+                                            if (dist >= 20f && dist <= 120f) {
+                                                compassDragging = true
+                                                val angle = kotlin.math.atan2(-(offset.y - ccy), offset.x - ccx) * 180f / Math.PI.toFloat()
+                                                viewModel.setAimFromAngle(compassFixtureId, angle)
+                                                return@detectDragGestures
+                                            }
+                                        }
+                                    }
+                                    // Tap to select fixture for compass (only dmx/camera)
+                                    val nearest = placed.filter { it.fixtureType == "dmx" || it.fixtureType == "camera" }
+                                        .minByOrNull { f ->
+                                            val fcx = f.x.toFloat() * w / canvasW * zoom + panOffset.x
+                                            val fcy = (h - f.y.toFloat() * h / canvasH) * zoom + panOffset.y
+                                            (fcx - offset.x).let { it * it } + (fcy - offset.y).let { it * it }
+                                        }
+                                    if (nearest != null) {
+                                        val ncx = nearest.x.toFloat() * w / canvasW * zoom + panOffset.x
+                                        val ncy = (h - nearest.y.toFloat() * h / canvasH) * zoom + panOffset.y
+                                        val ndist = kotlin.math.sqrt((offset.x - ncx) * (offset.x - ncx) + (offset.y - ncy) * (offset.y - ncy))
+                                        if (ndist < 60f) {
+                                            compassFixtureId = nearest.id
+                                        } else {
+                                            compassFixtureId = -1
+                                        }
+                                    }
+                                    return@detectDragGestures
+                                }
+                                // Move mode — find nearest fixture
                                 dragFixtureId = placed.minByOrNull { f ->
                                     val cx = f.x.toFloat() * w / canvasW * zoom + panOffset.x
                                     val cy = (h - f.y.toFloat() * h / canvasH) * zoom + panOffset.y
@@ -178,7 +232,18 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                                 }?.id ?: -1
                             },
                             onDrag = { change, _ ->
-                                if (dragFixtureId >= 0) {
+                                if (compassDragging && compassFixtureId >= 0) {
+                                    // Compass drag — compute angle from fixture center
+                                    val w = size.width.toFloat()
+                                    val h = size.height.toFloat()
+                                    val cf = fixtures.find { it.id == compassFixtureId }
+                                    if (cf != null) {
+                                        val ccx = cf.x.toFloat() * w / canvasW * zoom + panOffset.x
+                                        val ccy = (h - cf.y.toFloat() * h / canvasH) * zoom + panOffset.y
+                                        val angle = kotlin.math.atan2(-(change.position.y - ccy), change.position.x - ccx) * 180f / Math.PI.toFloat()
+                                        viewModel.setAimFromAngle(compassFixtureId, angle)
+                                    }
+                                } else if (dragFixtureId >= 0) {
                                     val w = size.width.toFloat()
                                     val h = size.height.toFloat()
                                     val pos = change.position
@@ -189,7 +254,13 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                                     viewModel.moveFixture(dragFixtureId, physX, physY)
                                 }
                             },
-                            onDragEnd = { dragFixtureId = -1 }
+                            onDragEnd = {
+                                if (compassDragging && compassFixtureId >= 0) {
+                                    viewModel.saveAimPoint(compassFixtureId)
+                                }
+                                compassDragging = false
+                                dragFixtureId = -1
+                            }
                         )
                     }
             ) {
@@ -328,6 +399,65 @@ fun LayoutScreen(viewModel: LayoutViewModel = hiltViewModel()) {
                         val tr = textMeasurer.measure(AnnotatedString(label),
                             style = TextStyle(fontSize = 9.sp, color = Color.White))
                         drawText(tr, topLeft = Offset(cx - tr.size.width / 2f, cy + 16f))
+                    }
+
+                    // Compass ring for selected fixture in rotate mode
+                    if (isRotateMode && compassFixtureId >= 0) {
+                        val cf = fixtures.find { it.id == compassFixtureId && it.positioned }
+                        if (cf != null) {
+                            val ccx = cf.x.toFloat() * w / canvasW
+                            val ccy = h - cf.y.toFloat() * h / canvasH
+                            val R = 60f  // compass radius (larger for touch)
+                            // Outer ring
+                            drawCircle(Color(0x8022D3EE), R, Offset(ccx, ccy), style = Stroke(3f))
+                            drawCircle(Color(0x2622D3EE), R - 15f, Offset(ccx, ccy), style = Stroke(1f))
+                            // Cardinal ticks
+                            val cardinals = listOf(
+                                Triple(0f, "+X", Color(0xFFFF6666)),
+                                Triple(90f, "+Y", Color(0xFF66FF66)),
+                                Triple(180f, "-X", Color(0xFFFF6666)),
+                                Triple(270f, "-Y", Color(0xFF66FF66)),
+                            )
+                            cardinals.forEach { (deg, lbl, col) ->
+                                val rad = deg * Math.PI.toFloat() / 180f
+                                val x1 = ccx + kotlin.math.cos(rad) * (R - 8f)
+                                val y1 = ccy - kotlin.math.sin(rad) * (R - 8f)
+                                val x2 = ccx + kotlin.math.cos(rad) * (R + 8f)
+                                val y2 = ccy - kotlin.math.sin(rad) * (R + 8f)
+                                drawLine(col, Offset(x1, y1), Offset(x2, y2), 2f)
+                                val lt = textMeasurer.measure(AnnotatedString(lbl),
+                                    style = TextStyle(fontSize = 7.sp, color = col))
+                                val lx = ccx + kotlin.math.cos(rad) * (R + 18f) - lt.size.width / 2f
+                                val ly = ccy - kotlin.math.sin(rad) * (R + 18f) - lt.size.height / 2f
+                                drawText(lt, topLeft = Offset(lx, ly))
+                            }
+                            // Current aim direction arrow
+                            val aim = cf.aimPoint
+                            if (aim != null && aim.size >= 2) {
+                                val dx = (aim[0] - cf.x).toFloat()
+                                val dy = (aim[1] - cf.y).toFloat()
+                                val aimAngle = kotlin.math.atan2(dy, dx)
+                                val ax = ccx + kotlin.math.cos(aimAngle) * R
+                                val ay = ccy - kotlin.math.sin(aimAngle) * R
+                                drawLine(Color(0xFF22D3EE), Offset(ccx, ccy), Offset(ax, ay), 4f)
+                                // Arrowhead
+                                val path = Path()
+                                path.moveTo(ax, ay)
+                                path.lineTo(
+                                    ax - 12f * kotlin.math.cos(aimAngle - 0.3f),
+                                    ay + 12f * kotlin.math.sin(aimAngle - 0.3f))
+                                path.lineTo(
+                                    ax - 12f * kotlin.math.cos(aimAngle + 0.3f),
+                                    ay + 12f * kotlin.math.sin(aimAngle + 0.3f))
+                                path.close()
+                                drawPath(path, Color(0xFF22D3EE))
+                                // Degree label
+                                val deg = Math.round(aimAngle * 180f / Math.PI.toFloat())
+                                val dl = textMeasurer.measure(AnnotatedString("${deg}°"),
+                                    style = TextStyle(fontSize = 9.sp, color = Color(0xFFE2E8F0)))
+                                drawText(dl, topLeft = Offset(ccx - dl.size.width / 2f, ccy + R + 12f))
+                            }
+                        }
                     }
                 }
 

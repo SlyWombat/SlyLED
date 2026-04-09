@@ -240,6 +240,9 @@ data class Fixture(
     val y: Int = 0,
     val z: Int = 0,
     val positioned: Boolean = false,
+    val calibrated: Boolean = false,
+    val moverCalibrated: Boolean = false,
+    val rangeCalibrated: Boolean = false,
 )
 
 @Serializable

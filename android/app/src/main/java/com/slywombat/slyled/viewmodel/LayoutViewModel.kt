@@ -33,6 +33,11 @@ class LayoutViewModel @Inject constructor(
     private val _message = MutableStateFlow<String?>(null)
     val message = _message.asStateFlow()
 
+    private val _rotateMode = MutableStateFlow(false)
+    val rotateMode = _rotateMode.asStateFlow()
+
+    fun toggleRotateMode() { _rotateMode.value = !_rotateMode.value }
+
     fun load() {
         viewModelScope.launch {
             try {
@@ -147,6 +152,38 @@ class LayoutViewModel @Inject constructor(
                 _objects.value = repository.getObjects()
                 _message.value = "Object updated"
             } catch (e: Exception) { _message.value = "Update failed: ${e.message}" }
+        }
+    }
+
+    fun setAimFromAngle(fixtureId: Int, angleDeg: Float, snap: Boolean = true) {
+        val list = _fixtures.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == fixtureId }
+        if (idx < 0) return
+        val f = list[idx]
+        val deg = if (snap) (Math.round(angleDeg / 15f) * 15).toFloat() else angleDeg
+        val rad = deg * Math.PI.toFloat() / 180f
+        val dist = 1000.0  // 1m aim distance
+        val ax = f.x + (kotlin.math.cos(rad) * dist).toInt()
+        val ay = f.y + (kotlin.math.sin(rad) * dist).toInt()
+        val az = f.aimPoint?.getOrNull(2) ?: 0.0
+        list[idx] = f.copy(aimPoint = listOf(ax.toDouble(), ay.toDouble(), az))
+        _fixtures.value = list
+    }
+
+    fun saveAimPoint(fixtureId: Int) {
+        val f = _fixtures.value.find { it.id == fixtureId } ?: return
+        val aim = f.aimPoint ?: return
+        viewModelScope.launch {
+            try {
+                repository.setAimPoint(fixtureId, aim)
+                val stageAngle = 90f - (kotlin.math.atan2(
+                    (aim[1] - f.y).toFloat(), (aim[0] - f.x).toFloat()
+                ) * 180f / Math.PI.toFloat())
+                repository.updateFixture(fixtureId, f.copy(
+                    rotation = listOf(f.rotation.getOrElse(0) { 0.0 }, stageAngle.toDouble(), f.rotation.getOrElse(2) { 0.0 })
+                ))
+                _message.value = "Aim saved"
+            } catch (e: Exception) { _message.value = "Save aim failed: ${e.message}" }
         }
     }
 
