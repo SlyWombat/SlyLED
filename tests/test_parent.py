@@ -1392,7 +1392,7 @@ def run():
         ok('SPA toolbar: top view tooltip', "title='Top view (bird-eye)'" in spa)
         ok('SPA toolbar: side view tooltip', "title='Side view'" in spa)
         ok('SPA toolbar: 3d view tooltip', "title='3D perspective (orbit)'" in spa)
-        ok('SPA toolbar: arrange tooltip', "title='Auto-arrange DMX fixtures'" in spa)
+        ok('SPA toolbar: align dropdown has auto-arrange', 'Auto-Arrange DMX' in spa)
         ok('SPA toolbar: strings tooltip', "title='Show/hide LED strings'" in spa)
         # 2D/3D toggle shows text
         ok('SPA view buttons have labels', '>Front<' in spa and '>Top<' in spa and '>Side<' in spa and '>3D<' in spa)
