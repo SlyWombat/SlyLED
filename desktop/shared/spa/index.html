@@ -661,6 +661,9 @@ document.addEventListener('DOMContentLoaded',function(){
 var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0,units=0,_cvW=900,_cvH=450,_dragStartX=0,_dragStartY=0,_dragMoved=false;
 var _layTool='move'; // 'move' or 'rotate'
 var _undoStack=[];   // [{fid, x, y, z, aimPoint, rotation}]
+var _compassGroup=null; // 3D compass ring group (created once, shown/hidden)
+var _compassFid=null;   // fixture ID that compass is attached to
+var _compassAngleLabel=null; // floating angle sprite near compass
 var _layoutDirty=false;
 var _panelSections={fixtures:false,objects:false,scene:false}; // collapse state
 var _panelSelectedFid=null; // currently selected fixture ID for side panel
@@ -1910,6 +1913,65 @@ function s3dInit(){
   _s3d.renderer.domElement.addEventListener('dragover',function(e){e.preventDefault();});
   _s3d.renderer.domElement.addEventListener('drop',s3dDrop);
 
+  // ── Compass ring group (created once, reused) ──
+  _compassGroup=new THREE.Group();
+  _compassGroup.visible=false;
+  _compassGroup.userData.isCompass=true;
+  // Torus ring in XZ plane (horizontal)
+  var cRad=0.4,cTube=0.02;
+  var torusGeo=new THREE.TorusGeometry(cRad,cTube,8,48);
+  var torusMat=new THREE.MeshBasicMaterial({color:0x22d3ee,opacity:0.7,transparent:true});
+  var torusMesh=new THREE.Mesh(torusGeo,torusMat);
+  torusMesh.rotation.x=Math.PI/2; // lay flat in XZ
+  _compassGroup.add(torusMesh);
+  // 24 tick marks at 15-degree intervals
+  for(var ti=0;ti<24;ti++){
+    var tAngle=ti*15*Math.PI/180;
+    var tInner=cRad-0.01;var tOuter=cRad+(ti%6===0?0.08:0.04);
+    var tPts=[new THREE.Vector3(Math.sin(tAngle)*tInner,0,Math.cos(tAngle)*tInner),
+              new THREE.Vector3(Math.sin(tAngle)*tOuter,0,Math.cos(tAngle)*tOuter)];
+    var tGeo=new THREE.BufferGeometry().setFromPoints(tPts);
+    var tCol=ti%6===0?0x67e8f9:0x22d3ee;
+    _compassGroup.add(new THREE.Line(tGeo,new THREE.LineBasicMaterial({color:tCol,opacity:0.8,transparent:true})));
+  }
+  // Cardinal labels at 0/90/180/270
+  var cardinals=[{deg:0,label:'0\u00b0'},{deg:90,label:'90\u00b0'},{deg:180,label:'180\u00b0'},{deg:270,label:'270\u00b0'}];
+  cardinals.forEach(function(cd){
+    var cAngle=cd.deg*Math.PI/180;
+    var lbl=_s3dLabel(cd.label);
+    lbl.position.set(Math.sin(cAngle)*(cRad+0.15),0.05,Math.cos(cAngle)*(cRad+0.15));
+    lbl.scale.set(0.5,0.125,0.5);
+    _compassGroup.add(lbl);
+  });
+  // Aim direction arrow (line from center to ring edge) — updated dynamically
+  var aimPts=[new THREE.Vector3(0,0,0),new THREE.Vector3(0,0,cRad)];
+  var aimGeo=new THREE.BufferGeometry().setFromPoints(aimPts);
+  var aimLine=new THREE.Line(aimGeo,new THREE.LineBasicMaterial({color:0xfbbf24,linewidth:2}));
+  aimLine.userData.compassArrow=true;
+  _compassGroup.add(aimLine);
+  // Arrow tip cone
+  var tipGeo=new THREE.ConeGeometry(0.025,0.07,8);
+  var tipMat=new THREE.MeshBasicMaterial({color:0xfbbf24});
+  var tipMesh=new THREE.Mesh(tipGeo,tipMat);
+  tipMesh.position.set(0,0,cRad);
+  tipMesh.rotation.x=Math.PI/2; // point outward along +Z
+  tipMesh.userData.compassTip=true;
+  _compassGroup.add(tipMesh);
+  // Floating angle label
+  _compassAngleLabel=_s3dLabel('0\u00b0');
+  _compassAngleLabel.position.set(0,0.2,0);
+  _compassAngleLabel.scale.set(0.7,0.175,0.7);
+  _compassAngleLabel.userData.compassAngleLabel=true;
+  _compassGroup.add(_compassAngleLabel);
+  _s3d.scene.add(_compassGroup);
+
+  // TransformControls objectChange — live updates during rotate drag
+  _s3d.tctl.addEventListener('objectChange',function(){
+    if(_layTool==='rotate'&&_s3d.selected&&_compassFid!==null){
+      _updateCompassFromRotation();
+    }
+  });
+
   _s3d.inited=true;
   s3dAnimate();
   // Apply default front view after init
@@ -2028,6 +2090,8 @@ function s3dDispose(){
 
 function s3dLoadChildren(){
   if(!_s3d.inited||!ld)return;
+  // Remember compass state across fixture rebuild
+  var _savedCompassFid=_compassFid;
   // Dispose old geometry/materials before removing nodes
   _s3d.nodes.forEach(function(grp){grp.traverse(function(obj){
     if(obj.geometry)obj.geometry.dispose();
@@ -2203,6 +2267,10 @@ function s3dLoadChildren(){
       _s3d.scene.add(grp);
       _s3d.nodes.push(grp);
     });
+    // Restore compass ring if it was active before rebuild
+    if(_savedCompassFid!==null&&_layTool==='rotate'){
+      _showCompass3D(_savedCompassFid);
+    }
   });
 }
 
@@ -2342,6 +2410,94 @@ function _s3dLabel(text){
   return sprite;
 }
 
+// ── 3D Compass ring functions ──────────────────────────────────────────
+function _showCompass3D(fid){
+  if(!_compassGroup)return;
+  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===fid)f=fx;});
+  if(!f)return;
+  var ft=f.fixtureType||'led';
+  if(ft!=='dmx'&&ft!=='camera'){_hideCompass3D();return;}
+  _compassFid=fid;
+  _compassGroup.position.set((f.x||0)/1000,(f.y||0)/1000,(f.z||0)/1000);
+  _compassGroup.visible=true;
+  _updateCompassArrow();
+}
+function _hideCompass3D(){
+  if(_compassGroup)_compassGroup.visible=false;
+  _compassFid=null;
+}
+function _updateCompassArrow(){
+  if(!_compassGroup||_compassFid===null)return;
+  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===_compassFid)f=fx;});
+  if(!f)return;
+  var ap=f.aimPoint||[f.x||0,0,((_s3d.stageD||10)*1000)];
+  var dx=(ap[0]-(f.x||0))/1000;
+  var dz=(ap[2]-(f.z||0))/1000;
+  var dy=(ap[1]-(f.y||0))/1000;
+  var panRad=Math.atan2(dx,dz);
+  var hDist=Math.sqrt(dx*dx+dz*dz);
+  var tiltRad=Math.atan2(-dy,hDist);
+  var panDeg=Math.round(panRad*180/Math.PI);
+  var tiltDeg=Math.round(tiltRad*180/Math.PI);
+  var cRad=0.4;
+  // Update arrow line
+  _compassGroup.children.forEach(function(c){
+    if(c.userData.compassArrow&&c.geometry){
+      var pts=[new THREE.Vector3(0,0,0),new THREE.Vector3(Math.sin(panRad)*cRad,0,Math.cos(panRad)*cRad)];
+      c.geometry.dispose();c.geometry=new THREE.BufferGeometry().setFromPoints(pts);
+    }
+    if(c.userData.compassTip){
+      c.position.set(Math.sin(panRad)*cRad,0,Math.cos(panRad)*cRad);
+      // Orient tip to point outward radially
+      var tipQuat=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),new THREE.Vector3(Math.sin(panRad),0,Math.cos(panRad)));
+      c.quaternion.copy(tipQuat);
+    }
+    if(c.userData.compassAngleLabel){
+      // Update floating text
+      _updateCompassLabelText(panDeg,tiltDeg);
+    }
+  });
+}
+function _updateCompassLabelText(panDeg,tiltDeg){
+  if(!_compassAngleLabel)return;
+  // Recreate sprite texture with new text
+  var txt='Pan '+panDeg+'\u00b0 Tilt '+tiltDeg+'\u00b0';
+  var canvas=document.createElement('canvas');canvas.width=256;canvas.height=64;
+  var ctx=canvas.getContext('2d');
+  ctx.font='bold 20px Inter,sans-serif';ctx.fillStyle='#fbbf24';ctx.textAlign='center';
+  ctx.fillText(txt,128,40);
+  if(_compassAngleLabel.material.map)_compassAngleLabel.material.map.dispose();
+  _compassAngleLabel.material.map=new THREE.CanvasTexture(canvas);
+  _compassAngleLabel.material.needsUpdate=true;
+}
+function _updateCompassFromRotation(){
+  // Called during TransformControls rotate drag — update panel and compass live
+  if(!_s3d.selected||_compassFid===null)return;
+  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===_compassFid)f=fx;});
+  if(!f)return;
+  // Read rotation from the 3D group and convert to aimPoint
+  var euler=_s3d.selected.rotation;
+  var ryDeg=Math.round(euler.y*180/Math.PI);
+  var rxDeg=Math.round(euler.x*180/Math.PI);
+  // Convert rotation to aim point at 1000mm distance
+  var panRad=euler.y;
+  var tiltRad=euler.x;
+  var dist=1000;
+  var ax=(f.x||0)+Math.round(Math.sin(panRad)*Math.cos(tiltRad)*dist);
+  var ay=(f.y||0)-Math.round(Math.sin(tiltRad)*dist);
+  var az=(f.z||0)+Math.round(Math.cos(panRad)*Math.cos(tiltRad)*dist);
+  f.aimPoint=[ax,ay,az];
+  // Update compass arrow
+  _updateCompassArrow();
+  // Live update side panel pan/tilt readout
+  var panEl=document.getElementById('panel-pan');
+  var tiltEl=document.getElementById('panel-tilt');
+  if(panEl)panEl.value=ryDeg;
+  if(tiltEl)tiltEl.value=rxDeg;
+  // Update aim point fields too
+  _updateSidePanel(_compassFid);
+}
+
 function _s3dHitGroup(e){
   // Raycast into all group children, return the parent group (fixture or object)
   var rect=_s3d.renderer.domElement.getBoundingClientRect();
@@ -2380,11 +2536,23 @@ function s3dClick(e){
   if(grp){
     _s3d.selected=grp;
     _s3d.tctl.attach(grp);
-    if(grp.userData.childId!==undefined)_updateSidePanel(grp.userData.childId);
-    else _updateSidePanel(null);
+    if(grp.userData.childId!==undefined){
+      _updateSidePanel(grp.userData.childId);
+      // Show compass ring in orient mode for DMX/camera fixtures
+      if(_layTool==='rotate'){
+        var _cFx=null;(_fixtures||[]).forEach(function(fx){if(fx.id===grp.userData.childId)_cFx=fx;});
+        if(_cFx&&(_cFx.fixtureType==='dmx'||_cFx.fixtureType==='camera')){
+          _showCompass3D(grp.userData.childId);
+        } else {
+          _hideCompass3D();
+        }
+      }
+    }
+    else{_updateSidePanel(null);_hideCompass3D();}
   } else {
     _s3d.tctl.detach();_s3d.selected=null;
     _updateSidePanel(null);
+    _hideCompass3D();
   }
 }
 
@@ -4503,12 +4671,17 @@ function _updateSidePanel(fixtureId){
       h+='<label style="font-size:.72em;color:#64748b;margin:0">Z</label><input type="number" value="'+Math.round(ap[2])+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelAimChange('+f.id+',2,this.value)">';
       h+='</div>';
       // Rotation / orientation
-      var rot=f.rotation||[0,0,0];
       var orient=f.orientation||{};
+      // Compute pan/tilt from aim point
+      var _pDx=(ap[0]-(f.x||0)),_pDz=(ap[2]-(f.z||0)),_pDy=(ap[1]-(f.y||0));
+      var _panDeg=Math.round(Math.atan2(_pDx,_pDz)*180/Math.PI);
+      var _hDist=Math.sqrt(_pDx*_pDx+_pDz*_pDz);
+      var _tiltDeg=Math.round(Math.atan2(-_pDy,_hDist)*180/Math.PI);
       h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Orientation</div>';
-      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.3em">';
-      h+='Pan: '+Math.round(rot[1])+'\u00b0 | Tilt: '+Math.round(rot[0])+'\u00b0';
-      if(orient.verified)h+=' <span style="color:#4ade80">\u2713</span>';
+      h+='<div style="display:flex;gap:.3em;align-items:center;margin-bottom:.3em">';
+      h+='<label style="font-size:.72em;color:#64748b;margin:0">Pan\u00b0</label><input id="panel-pan" type="number" value="'+_panDeg+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelPanTiltChange('+f.id+',\'pan\',this.value)">';
+      h+='<label style="font-size:.72em;color:#64748b;margin:0">Tilt\u00b0</label><input id="panel-tilt" type="number" value="'+_tiltDeg+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelPanTiltChange('+f.id+',\'tilt\',this.value)">';
+      if(orient.verified)h+='<span style="color:#4ade80;font-size:.75em">\u2713</span>';
       h+='</div>';
       h+='<div style="display:flex;gap:.3em;flex-wrap:wrap">';
       h+='<button class="btn" onclick="_orientTest('+f.id+')" style="font-size:.7em;padding:.2em .5em;background:#4c1d95;color:#e9d5ff">Test Orient</button>';
@@ -4526,6 +4699,15 @@ function _updateSidePanel(fixtureId){
       h+='<label style="font-size:.72em;color:#64748b;margin:0">Y</label><input type="number" value="'+Math.round(cap[1])+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelAimChange('+f.id+',1,this.value)">';
       h+='<label style="font-size:.72em;color:#64748b;margin:0">Z</label><input type="number" value="'+Math.round(cap[2])+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelAimChange('+f.id+',2,this.value)">';
       h+='</div>';
+      // Pan/Tilt editable for camera
+      var _cDx=(cap[0]-(f.x||0)),_cDz=(cap[2]-(f.z||0)),_cDy=(cap[1]-(f.y||0));
+      var _cPanDeg=Math.round(Math.atan2(_cDx,_cDz)*180/Math.PI);
+      var _cHDist=Math.sqrt(_cDx*_cDx+_cDz*_cDz);
+      var _cTiltDeg=Math.round(Math.atan2(-_cDy,_cHDist)*180/Math.PI);
+      h+='<div style="display:flex;gap:.3em;align-items:center;margin-top:.3em">';
+      h+='<label style="font-size:.72em;color:#64748b;margin:0">Pan\u00b0</label><input id="panel-pan" type="number" value="'+_cPanDeg+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelPanTiltChange('+f.id+',\'pan\',this.value)">';
+      h+='<label style="font-size:.72em;color:#64748b;margin:0">Tilt\u00b0</label><input id="panel-tilt" type="number" value="'+_cTiltDeg+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelPanTiltChange('+f.id+',\'tilt\',this.value)">';
+      h+='</div>';
     }
     det.innerHTML=h;
   }
@@ -4538,6 +4720,41 @@ function _panelAimChange(fid,axis,val){
   _layoutDirty=true;_layDirtyUpdate();
   ra('PUT','/api/fixtures/'+fid+'/aim',{aimPoint:f.aimPoint});
   s3dLoadChildren();
+  _updateCompassArrow();
+}
+function _panelPanTiltChange(fid,axis,deg){
+  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===fid)f=fx;});
+  if(!f)return;
+  var val=parseFloat(deg)||0;
+  var rad=val*Math.PI/180;
+  var dist=1000; // 1m aim distance
+  // Get current aim point to preserve the other axis
+  var ap=f.aimPoint||[f.x||0,0,0];
+  var dx=(ap[0]-(f.x||0)),dz=(ap[2]-(f.z||0)),dy=(ap[1]-(f.y||0));
+  var curPanRad=Math.atan2(dx,dz);
+  var hDist=Math.sqrt(dx*dx+dz*dz);
+  var curTiltRad=Math.atan2(-dy,hDist);
+  if(axis==='pan'){
+    var tRad=curTiltRad;
+    f.aimPoint=[
+      (f.x||0)+Math.round(Math.sin(rad)*Math.cos(tRad)*dist),
+      (f.y||0)-Math.round(Math.sin(tRad)*dist),
+      (f.z||0)+Math.round(Math.cos(rad)*Math.cos(tRad)*dist)
+    ];
+  } else {
+    var pRad=curPanRad;
+    f.aimPoint=[
+      (f.x||0)+Math.round(Math.sin(pRad)*Math.cos(rad)*dist),
+      (f.y||0)-Math.round(Math.sin(rad)*dist),
+      (f.z||0)+Math.round(Math.cos(pRad)*Math.cos(rad)*dist)
+    ];
+  }
+  _layoutDirty=true;_layDirtyUpdate();
+  ra('PUT','/api/fixtures/'+fid+'/aim',{aimPoint:f.aimPoint});
+  s3dLoadChildren();
+  _updateCompassArrow();
+  // Re-render panel to sync aim XYZ fields
+  _updateSidePanel(fid);
 }
 function _panelPosChange(){
   var pos=document.getElementById('panel-position');if(!pos)return;
@@ -5894,6 +6111,13 @@ function _layToolToggle(){
     _s3d.tctl.setMode(_layTool==='rotate'?'rotate':'translate');
   }
   document.getElementById('hs').textContent=_layTool==='move'?'Move mode — drag gizmo to reposition':'Rotate mode — use gizmo to rotate fixture';
+  // Show/hide compass based on mode and current selection
+  if(_layTool==='rotate'&&_s3d.selected&&_s3d.selected.userData.childId!==undefined){
+    var _tFx=null;(_fixtures||[]).forEach(function(fx){if(fx.id===_s3d.selected.userData.childId)_tFx=fx;});
+    if(_tFx&&(_tFx.fixtureType==='dmx'||_tFx.fixtureType==='camera')){
+      _showCompass3D(_s3d.selected.userData.childId);
+    } else {_hideCompass3D();}
+  } else {_hideCompass3D();}
 }
 function _laySaveUndo(f){
   _undoStack.push({fid:f.id,x:f.x,y:f.y,z:f.z||0,
