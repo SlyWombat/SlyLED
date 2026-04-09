@@ -154,7 +154,7 @@ class RuntimeViewModel @Inject constructor(
                     // Start emulator polling
                     startEmulator(id)
                 } else {
-                    _message.value = "Not all performers ready"
+                    _message.value = "Not all fixtures ready"
                 }
                 _bakeStatus.value = null
                 _syncStatus.value = null

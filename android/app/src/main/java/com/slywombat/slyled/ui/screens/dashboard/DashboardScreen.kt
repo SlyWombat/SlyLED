@@ -149,9 +149,9 @@ fun DashboardScreen(viewModel: DashboardViewModel = hiltViewModel()) {
                 }
             }
 
-            // Performer cards
+            // Fixture cards
             items(children, key = { it.id }) { child ->
-                PerformerCard(child = child)
+                FixtureCard(child = child)
             }
         }
     }
@@ -222,7 +222,7 @@ private fun ActiveRunnerCard(
 }
 
 @Composable
-private fun PerformerCard(child: Child) {
+private fun FixtureCard(child: Child) {
     val isOnline = child.onlineStatus == OnlineStatus.ONLINE
     val totalLeds = child.strings.sumOf { it.leds }
 

@@ -249,7 +249,7 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
                     )
                 }
                 items(children, key = { "hw-${it.id}" }) { child ->
-                    SetupPerformerCard(
+                    SetupFixtureCard(
                         child = child,
                         onRefresh = { viewModel.refreshChild(child.id) },
                         onReboot = { confirmRebootId = child.id },
@@ -510,7 +510,7 @@ fun SetupScreen(viewModel: SetupViewModel = hiltViewModel()) {
 }
 
 @Composable
-private fun SetupPerformerCard(
+private fun SetupFixtureCard(
     child: Child,
     onRefresh: () -> Unit,
     onReboot: () -> Unit,

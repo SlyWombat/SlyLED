@@ -332,8 +332,8 @@ body.light .li:hover{border-color:#3b82f6}
   <!-- SHOWS -->
   <div id='ss-shows' style='display:none'>
     <div class='card' style='max-width:480px'>
-      <div class='card-title'>Configuration (Performers + Layout)</div>
-      <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Save or load performer registration and layout positioning.</p>
+      <div class='card-title'>Configuration (Fixtures + Layout)</div>
+      <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Save or load fixture registration and layout positioning.</p>
       <div style='display:flex;gap:.5em;flex-wrap:wrap'>
         <button class='btn btn-nav' onclick='exportConfig(this)' data-tip='setExportConfig'>Save Config</button>
         <label class='btn btn-nav' style='cursor:pointer' data-tip='setLoadConfig'>Load Config
@@ -366,7 +366,7 @@ body.light .li:hover{border-color:#3b82f6}
     </div>
     <div class='card' style='max-width:480px;border-color:#622'>
       <div class='card-title' style='color:#c66'>Factory Reset</div>
-      <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Remove all performers, runners and layout data, and restore default settings.</p>
+      <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Remove all fixtures, runners and layout data, and restore default settings.</p>
       <button class='btn btn-off' onclick='factoryReset()'>Factory Reset</button>
     </div>
     <div class='card' style='max-width:480px;border-color:#622'>
@@ -379,7 +379,7 @@ body.light .li:hover{border-color:#3b82f6}
 <div id='t-firmware' class='tab' style='display:none'>
   <div class='card'>
     <div class='card-title'>WiFi Credentials</div>
-    <p style='font-size:.82em;color:#888;margin-bottom:.5em'>Stored on the Orchestrator and pushed to performers during flashing.</p>
+    <p style='font-size:.82em;color:#888;margin-bottom:.5em'>Stored on the Orchestrator and pushed to fixtures during flashing.</p>
     <label>SSID</label><input id='fw-ssid' style='width:200px'>
     <label>Password</label>
     <div style='display:flex;align-items:center;gap:.3em'>
@@ -401,7 +401,7 @@ body.light .li:hover{border-color:#3b82f6}
     </div>
     <div style='margin-bottom:1em'>
       <div style='font-size:.85em;font-weight:bold;color:#aaa;margin-bottom:.3em'>OTA (WiFi)</div>
-      <div id='ota-children'><p style='color:#888'>Click "Check for Updates" to scan performers.</p></div>
+      <div id='ota-children'><p style='color:#888'>Click "Check for Updates" to scan fixtures.</p></div>
     </div>
     <div style='border-top:1px solid #333;padding-top:.8em'>
       <div style='display:flex;align-items:center;gap:.5em;margin-bottom:.5em'>
@@ -511,30 +511,30 @@ function _rssiIcon(rssi){
 }
 var L={
   // Tab navigation
-  tabDash:'View live status of all connected performers',
-  tabSetup:'Register, discover, and manage LED performer nodes',
-  tabLayout:'Arrange performers in physical space on canvas',
+  tabDash:'View live status of all connected fixtures',
+  tabSetup:'Register, discover, and manage LED fixture nodes',
+  tabLayout:'Arrange fixtures in physical space on canvas',
   tabActions:'Create and manage reusable animation presets',
   tabRuntime:'Design and play timelines for LED shows',
   tabSettings:'Configure app settings, dark mode, and logging',
   tabFirmware:'Flash firmware to boards and manage WiFi credentials',
   // Dashboard
-  dashRefresh:'Refresh status of all performers via network ping',
+  dashRefresh:'Refresh status of all fixtures via network ping',
   // Setup
-  setupDiscover:'Broadcast scan for new performers on the network',
-  setupAdd:'Register a performer by its IP address',
-  setupRefreshAll:'Ping all registered performers to update status',
+  setupDiscover:'Broadcast scan for new fixtures on the network',
+  setupAdd:'Register a fixture by its IP address',
+  setupRefreshAll:'Ping all registered fixtures to update status',
   setupDetails:'View detailed configuration and string info',
-  setupRefresh:'Ping this performer to update its status',
-  setupReboot:'Restart this performer remotely (brief offline)',
-  setupRemove:'Unregister this performer from the orchestrator',
+  setupRefresh:'Ping this fixture to update its status',
+  setupReboot:'Restart this fixture remotely (brief offline)',
+  setupRemove:'Unregister this fixture from the orchestrator',
   // Layout
   layDetail:'Show LED string lines and LED counts on the canvas',
-  layPreview:'Show live effect colors on performers during playback',
-  laySave:'Save the current performer positions to storage',
+  layPreview:'Show live effect colors on fixtures during playback',
+  laySave:'Save the current fixture positions to storage',
   layAutoArrange:'Auto-arrange DMX fixtures: evenly spaced along top of stage, aimed straight down',
   layShowStrings:'Show/hide LED string detail lines on the canvas',
-  layCanvas:'Drag performers to position. Double-click to edit coordinates. (0,0) = bottom-left.',
+  layCanvas:'Drag fixtures to position. Double-click to edit coordinates. (0,0) = bottom-left.',
   lay2d:'Switch to 2D canvas view',
   lay3d:'Switch to interactive 3D viewport (Three.js)',
   // Actions
@@ -552,25 +552,25 @@ var L={
   setSave:'Save all settings to persistent storage',
   setReset:'Delete ALL data and restore factory defaults (cannot be undone)',
   setShutdown:'Stop the SlyLED service and close the application',
-  setExportConfig:'Save performer and layout data as a JSON file',
-  setLoadConfig:'Load performers and layout from a previously saved file',
+  setExportConfig:'Save fixture and layout data as a JSON file',
+  setLoadConfig:'Load fixtures and layout from a previously saved file',
   setExportShow:'Save all actions, runners, flights, and shows as a JSON file',
   setLoadShow:'Load show data from a file or generate a demo show',
   setQr:'Display QR code for the SlyLED Android app to scan and connect',
   // Firmware
-  fwSaveWifi:'Store WiFi credentials for performer provisioning',
+  fwSaveWifi:'Store WiFi credentials for fixture provisioning',
   fwRefresh:'Rescan for connected boards on USB/serial ports',
   fwFlash:'Upload firmware to the selected board',
   // Table headers
   thHost:'Unique network identifier assigned by the board',
-  thName:'User-assigned display name for this performer',
+  thName:'User-assigned display name for this fixture',
   thType:'Device type: SlyLED (native) or WLED (third-party)',
-  thIP:'Network address of the performer',
+  thIP:'Network address of the fixture',
   thStatus:'Current connection state: Online or Offline',
   thFW:'Firmware version currently running on the board',
-  thStrings:'Number of LED strings configured on this performer',
+  thStrings:'Number of LED strings configured on this fixture',
   thSeen:'Timestamp of last successful communication',
-  thActions:'Available management actions for this performer',
+  thActions:'Available management actions for this fixture',
   // Step editor
   stepMove:'Reorder this step in the sequence',
   stepRm:'Remove this step from the runner',
@@ -671,9 +671,9 @@ function loadDash(){
     var startupDone=!d||!d.length||d[0].startupDone!==false;
     var h='<div style="margin-bottom:.6em;display:flex;align-items:center;gap:.6em">';
     h+='<button class="btn" id="dash-refresh" onclick="dashRefresh(this)" style="background:#446;color:#fff;padding:.3em .8em" data-tip="dashRefresh">&#x21bb; Refresh All</button>';
-    if(!startupDone)h+='<span id="dash-startup" style="color:#fa6;font-size:.82em">&#x23f3; Checking performers...</span>';
+    if(!startupDone)h+='<span id="dash-startup" style="color:#fa6;font-size:.82em">&#x23f3; Checking fixtures...</span>';
     h+='</div>';
-    h+='<table class="tbl"><tr><th>Performer</th><th>Board</th><th>IP</th><th>Status</th><th>RSSI</th><th>FW</th><th>LEDs</th><th>Last Seen</th></tr>';
+    h+='<table class="tbl"><tr><th>Fixture</th><th>Board</th><th>IP</th><th>Status</th><th>RSSI</th><th>FW</th><th>LEDs</th><th>Last Seen</th></tr>';
     if(d&&d.length){
       d.forEach(function(c){
         var st;
@@ -704,7 +704,7 @@ function loadDash(){
         h+='<tr><td><b>'+displayName+'</b>'+(subtitle?'<br>'+subtitle:'')+'</td><td>'+tp+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+rssiBar+'</td><td><span id="fw-'+c.id+'">'+escapeHtml(c.fwVersion||'-')+'</span></td><td>'+ledInfo+'</td><td>'+ts+'</td></tr>';
       });
     }else{
-      h+='<tr><td colspan="8" style="color:#888;text-align:center">No performers registered</td></tr>';
+      h+='<tr><td colspan="8" style="color:#888;text-align:center">No fixtures registered</td></tr>';
     }
     h+='</table><div id="dash-runner" style="margin-top:1em"></div>';
     document.getElementById('t-dash').innerHTML=h;
@@ -722,7 +722,7 @@ function loadDash(){
       });
     }).catch(function(){});
     var onCnt=d?d.filter(function(c){return c.status===1;}).length:0;
-    document.getElementById('hs').textContent=d&&d.length?onCnt+'/'+d.length+' performer'+(d.length>1?'s':'')+' online':'No performers';
+    document.getElementById('hs').textContent=d&&d.length?onCnt+'/'+d.length+' fixture'+(d.length>1?'s':'')+' online':'No fixtures';
     refreshRunnerStatus();
     dashRunnerTimer=setInterval(refreshRunnerStatus,1000);
     if(!startupDone)_pollStartup();
@@ -751,7 +751,7 @@ function dashRefresh(btn){
         clearInterval(poll);
         if(btn){btn.disabled=false;btn.innerHTML='&#x21bb; Refresh All';}
         if(r&&r.ok){
-          document.getElementById('hs').textContent=r.online+'/'+r.total+' performers online';
+          document.getElementById('hs').textContent=r.online+'/'+r.total+' fixtures online';
           loadDash();
         }
       });
@@ -813,8 +813,8 @@ function _renderTimelineDash(el,settings,tlStatus){
     h+='<div style="background:#22d3ee;height:100%;width:'+pct+'%;transition:width .3s"></div></div>';
   }
 
-  // Performer count
-  h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.5em">'+onlineChildren.length+' performer'+(onlineChildren.length!==1?'s':'')+' online</div>';
+  // Fixture count
+  h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.5em">'+onlineChildren.length+' fixture'+(onlineChildren.length!==1?'s':'')+' online</div>';
 
   var tid=settings.activeTimeline;
   h+='<div style="margin-top:.6em"><button class="btn btn-off" onclick="tlDashStop('+tid+')">Stop Show</button></div></div>';
@@ -1067,12 +1067,12 @@ function showAddFixtureModal(){
   var h='<label>Fixture Type</label>'
     +'<select id="aft" onchange="_toggleAddFixFields()" style="width:100%;margin-bottom:.6em">'
     +'<option value="dmx">DMX Fixture</option>'
-    +'<option value="led">SlyLED Performer (LED)</option>'
+    +'<option value="led">SlyLED Fixture (LED)</option>'
     +'<option value="camera">Camera</option>'
     +'<option value="group">Fixture Group</option></select>'
     +'<div id="af-led" style="display:none">'
     +'<label>IP Address</label><input id="af-ip" placeholder="x.x.x.x" style="width:100%">'
-    +'<div style="margin-top:.8em"><button class="btn btn-on" onclick="_submitAddFixture()" style="font-size:.95em;padding:.5em 2em">Add Performer</button></div>'
+    +'<div style="margin-top:.8em"><button class="btn btn-on" onclick="_submitAddFixture()" style="font-size:.95em;padding:.5em 2em">Add Fixture</button></div>'
     +'</div>'
     +'<div id="af-dmx">'
     +'<div style="margin-bottom:.6em;padding:.5em;background:#0f172a;border:1px solid #1e3a5f;border-radius:4px">'
@@ -1461,7 +1461,7 @@ function addDiscovered(ip){
         document.getElementById('hs').textContent='Added DMX bridge: '+cname;
         setTimeout(loadSetup,1000);
       }else{
-        // LED performer — auto-create fixture
+        // LED fixture — auto-create fixture
         ra('POST','/api/fixtures',{name:cname,fixtureType:'led',type:'linear',childId:cid},function(){
           document.getElementById('hs').textContent='Added LED fixture: '+cname;
           setTimeout(loadSetup,2000);
@@ -1651,8 +1651,8 @@ function refreshChild(id){
 }
 
 function rebootChild(id){
-  if(!confirm('Reboot this performer? It will be offline for a few seconds.'))return;
-  document.getElementById('hs').textContent='Rebooting performer...';
+  if(!confirm('Reboot this fixture? It will be offline for a few seconds.'))return;
+  document.getElementById('hs').textContent='Rebooting fixture...';
   ra('POST','/api/children/'+id+'/reboot',{},function(r){
     if(r&&r.ok)document.getElementById('hs').textContent='Reboot sent. Waiting for reconnect...';
     else document.getElementById('hs').textContent='Reboot failed: '+(r&&r.err||'unreachable');
@@ -1837,7 +1837,7 @@ function s3dAnimate(){
   var info=document.getElementById('s3d-info');
   if(info&&ld){
     var placed=(ld.children||[]).filter(_isPlaced).length;
-    info.textContent='Stage: '+_s3d.stageW+'m x '+_s3d.stageH+'m x '+_s3d.stageD+'m | '+placed+' performers placed | Scroll=zoom, Drag=orbit, Right-drag=pan';
+    info.textContent='Stage: '+_s3d.stageW+'m x '+_s3d.stageH+'m x '+_s3d.stageD+'m | '+placed+' fixtures placed | Scroll=zoom, Drag=orbit, Right-drag=pan';
   }
 }
 
@@ -2302,7 +2302,7 @@ function setLayoutMode(mode){
     _s3dSyncToLd();
     w3d.style.display='none';w2d.style.display='block';
     if(btn){btn.textContent='2D';btn.title='Switch to 3D';btn.style.background='';btn.style.color='';}
-    if(hint)hint.textContent='Drag performers from sidebar onto canvas. Double-click a node to edit. (0,0)=bottom-left.';
+    if(hint)hint.textContent='Drag fixtures from sidebar onto canvas. Double-click a node to edit. (0,0)=bottom-left.';
     drawLayout();renderSidebar();
   }
 }
@@ -3892,7 +3892,7 @@ function tlMoveTrack(idx,dir){
 function tlAddTrack(){
   if(!_curTl)return;
   if(!_curTl.tracks)_curTl.tracks=[];
-  var opts='<option value="all">All Performers (Stage)</option>';
+  var opts='<option value="all">All Fixtures (Stage)</option>';
   _fixtures.forEach(function(f){opts+='<option value="'+f.id+'">'+escapeHtml(f.name||('Fixture '+f.id))+'</option>';});
   var h='<label>Target</label><select id="trk-fix">'+opts+'</select>';
   h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="tlAddTrackConfirm()">Add</button></div>';
@@ -4091,12 +4091,12 @@ function tlBake(){
           clearInterval(poll);
           if(s.error){if(stat)stat.textContent='Error: '+s.error;}
           else{
-            if(stat)stat.textContent='Bake complete! Syncing to performers...';
+            if(stat)stat.textContent='Bake complete! Syncing to fixtures...';
             if(det)det.textContent=segs;
-            // Auto-sync to performers after bake
+            // Auto-sync to fixtures after bake
             ra('POST','/api/timelines/'+_curTl.id+'/baked/sync',null,function(sr){
               if(sr&&sr.ok){
-                if(stat)stat.textContent='Synced to '+sr.synced+' performer(s). Ready to start.';
+                if(stat)stat.textContent='Synced to '+sr.synced+' fixture(s). Ready to start.';
               } else {
                 if(stat)stat.textContent='Bake done but sync failed: '+(sr&&sr.err||sr&&sr.warn||'?');
               }
@@ -4130,7 +4130,7 @@ function tlSyncAndStart(){
   ra('GET','/api/timelines/'+tlId+'/baked',null,function(baked){
     if(baked&&baked.bakedAt&&!baked.err){
       // Bake exists — skip to sync
-      _syncPhase('Bake up to date — syncing to performers...');_syncProg(100);
+      _syncPhase('Bake up to date — syncing to fixtures...');_syncProg(100);
       _doSyncPhase(tlId);
       return;
     }
@@ -4154,7 +4154,7 @@ function tlSyncAndStart(){
 }
 
 function _doSyncPhase(tlId){
-  _syncPhase('Syncing to performers...');_syncProg(0);
+  _syncPhase('Syncing to fixtures...');_syncProg(0);
   ra('POST','/api/timelines/'+tlId+'/baked/sync',{},function(sr){
     if(!sr||!sr.ok){_syncPhase('Sync failed');return;}
     var syncPoll=setInterval(function(){
@@ -4167,9 +4167,9 @@ function _doSyncPhase(tlId){
         if(sp.done){
           clearInterval(syncPoll);
           if(sp.allReady){
-            _syncPhase('All performers ready!');_syncProg(100);
+            _syncPhase('All fixtures ready!');_syncProg(100);
           } else {
-            _syncPhase('Warning: Not all performers verified');
+            _syncPhase('Warning: Not all fixtures verified');
             document.getElementById('sync-go-btn').textContent='Start Anyway';
           }
           document.getElementById('sync-actions').style.display='block';
@@ -4207,7 +4207,7 @@ function tlGoAfterSync(){
   closeModal();
   ra('POST','/api/timelines/'+tlId+'/start',{},function(r){
     if(r&&r.ok){
-      document.getElementById('hs').textContent='Show started — '+r.started+' performers, go in 5s';
+      document.getElementById('hs').textContent='Show started — '+r.started+' fixtures, go in 5s';
       emuStart(tlId);
     } else {
       document.getElementById('hs').textContent='Start failed: '+(r&&r.err||'?');
@@ -4219,7 +4219,7 @@ function tlStopShow(){
   if(!_curTl)return;
   emuStop();
   ra('POST','/api/timelines/'+_curTl.id+'/stop',{},function(r){
-    if(r&&r.ok)document.getElementById('hs').textContent='Show stopped — '+r.stopped+' performers';
+    if(r&&r.ok)document.getElementById('hs').textContent='Show stopped — '+r.stopped+' fixtures';
   });
 }
 
@@ -6141,13 +6141,13 @@ function _showActModal(a){
   var selIds=a&&a.targetIds?a.targetIds:[];
   var h='<label>Name</label><input id="ae-nm" value="'+escapeHtml(a?a.name:'')+'" style="width:240px" placeholder="e.g. Red Wipe">';
   h+='<label>Scope</label><select id="ae-scope" onchange="_aeScopeChg()">';
-  h+='<option value="performer"'+(sc==='performer'?' selected':'')+'>All Performers</option>';
-  h+='<option value="performer-selected"'+(sc==='performer-selected'?' selected':'')+'>Selected Performers</option>';
+  h+='<option value="performer"'+(sc==='performer'?' selected':'')+'>All Fixtures</option>';
+  h+='<option value="performer-selected"'+(sc==='performer-selected'?' selected':'')+'>Selected Fixtures</option>';
   h+='<option value="canvas"'+(sc==='canvas'?' selected':'')+'>Canvas (spatial sweep)</option>';
   h+='</select>';
-  // Selected performers picker
+  // Selected fixtures picker
   h+='<div id="ae-perf-select"'+(sc==='performer-selected'?'':' style="display:none"')+'>';
-  h+='<label>Select Performers</label><div id="ae-perf-list" style="max-height:120px;overflow-y:auto;border:1px solid #333;border-radius:4px;padding:.3em;background:#1a1a1a">';
+  h+='<label>Select Fixtures</label><div id="ae-perf-list" style="max-height:120px;overflow-y:auto;border:1px solid #333;border-radius:4px;padding:.3em;background:#1a1a1a">';
   h+='<p style="color:#888;font-size:.8em">Loading...</p></div></div>';
   // Canvas options
   h+='<div id="ae-canvas-opts"'+(sc==='canvas'?'':' style="display:none"')+'>';
@@ -6303,7 +6303,7 @@ function _aeScopeChg(){
 function _loadPerfPicker(){
   ra('GET','/api/children',null,function(d){
     var el=document.getElementById('ae-perf-list');if(!el)return;
-    if(!d||!d.length){el.innerHTML='<p style="color:#888;font-size:.8em">No performers registered.</p>';return;}
+    if(!d||!d.length){el.innerHTML='<p style="color:#888;font-size:.8em">No fixtures registered.</p>';return;}
     var h='';
     d.forEach(function(c){
       var checked=(_aePerfIds&&_aePerfIds.indexOf(c.id)>=0)?' checked':'';
@@ -6449,7 +6449,7 @@ function checkOtaUpdates(){
       // Refresh USB section — registry was updated by download
       _fetchGithubFirmware();
       loadFirmwarePorts();
-      el.innerHTML='<p style="color:#888">Refreshing performer status...</p>';
+      el.innerHTML='<p style="color:#888">Refreshing fixture status...</p>';
       return api('POST','/api/children/refresh-all').then(function(){return pollResults('/api/children/refresh-all/results');}).catch(function(){return null;});
     }).then(function(){
       return api('GET','/api/firmware/check');
@@ -6464,14 +6464,14 @@ function checkOtaUpdates(){
 function _renderOtaTable(d){
   var el=document.getElementById('ota-children');
   if(!d||!d.children||!d.children.length){
-    el.innerHTML='<p style="color:#888">No performers registered.</p>';
+    el.innerHTML='<p style="color:#888">No fixtures registered.</p>';
     document.getElementById('ota-update-all').style.display='none';
     return;
   }
   var outdated=d.children.filter(function(c){return c.needsUpdate&&c.board!=='wled';});
   document.getElementById('ota-update-all').style.display=outdated.length>0?'inline-block':'none';
   var h='<p style="font-size:.82em;color:#aaa;margin-bottom:.5em">Latest: v'+escapeHtml(d.latest)+'</p>';
-  h+='<table class="tbl"><tr><th>Performer</th><th>Board</th><th>IP</th><th>Current</th><th>Status</th><th>Action</th></tr>';
+  h+='<table class="tbl"><tr><th>Fixture</th><th>Board</th><th>IP</th><th>Current</th><th>Status</th><th>Action</th></tr>';
   d.children.forEach(function(c){
     var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b','d1mini':'#7c3aed','esp32':'#2563eb'};
     var boardLabel=c.board==='esp32'?'ESP32':c.board==='d1mini'?'D1 Mini':c.board==='wled'?'WLED':c.board;
@@ -6501,7 +6501,7 @@ function _renderOtaTable(d){
   el.innerHTML=h+'</table>';
 }
 function otaSingleUpdate(cid){
-  if(!confirm('Update this performer to the latest firmware? It will reboot.'))return;
+  if(!confirm('Update this fixture to the latest firmware? It will reboot.'))return;
   _startOtaForChild(cid);
 }
 function _startOtaForChild(cid){
@@ -6606,11 +6606,11 @@ function _otaPollTimeout(cid){
   _pollOtaProgress._ip=null;
 }
 function otaUpdateAll(){
-  if(!confirm('Update ALL outdated performers? They will reboot sequentially.'))return;
+  if(!confirm('Update ALL outdated fixtures? They will reboot sequentially.'))return;
   if(!_otaChecked||!_otaChecked.children)return;
   var outdated=_otaChecked.children.filter(function(c){return c.needsUpdate&&c.board!=='wled';});
-  if(!outdated.length){document.getElementById('hs').textContent='All performers are up to date';return;}
-  document.getElementById('hs').textContent='Updating '+outdated.length+' performer(s)...';
+  if(!outdated.length){document.getElementById('hs').textContent='All fixtures are up to date';return;}
+  document.getElementById('hs').textContent='Updating '+outdated.length+' fixture(s)...';
   // Sequential update — one at a time
   var i=0;
   function _next(){
@@ -7233,7 +7233,7 @@ function _stopLogging(){
 }
 
 function factoryReset(){
-  if(!confirm('Factory reset? This will delete ALL performers, runners and layout data and cannot be undone.'))return;
+  if(!confirm('Factory reset? This will delete ALL fixtures, runners and layout data and cannot be undone.'))return;
   var x=new XMLHttpRequest();x.open('POST','/api/reset',true);
   x.setRequestHeader('Content-Type','application/json');
   x.setRequestHeader('X-SlyLED-Confirm','true');
@@ -7252,10 +7252,10 @@ function shutdownService(){
 }
 
 function otaTrigger(childId){
-  if(!confirm('Update this performer to the latest firmware? It will reboot during the update.'))return;
+  if(!confirm('Update this fixture to the latest firmware? It will reboot during the update.'))return;
   document.getElementById('hs').textContent='Sending OTA update command...';
   api('POST','/api/firmware/ota/'+childId).then(function(r){
-    document.getElementById('hs').textContent='OTA update triggered (v'+r.version+') — performer will reboot when complete';
+    document.getElementById('hs').textContent='OTA update triggered (v'+r.version+') — fixture will reboot when complete';
     setTimeout(loadDash,15000);
   }).catch(function(){
     document.getElementById('hs').textContent='OTA update failed — check server logs';
@@ -7731,7 +7731,7 @@ function importConfig(input){
   rd.onload=function(e){
     try{var data=JSON.parse(e.target.result);}catch(ex){alert('Invalid JSON');return;}
     if(data.type!=='slyled-config'){alert('Not a SlyLED config file');return;}
-    if(!confirm('Load configuration? This will merge performers and replace layout.'))return;
+    if(!confirm('Load configuration? This will merge fixtures and replace layout.'))return;
     ra('POST','/api/config/import',data,function(r){
       if(r&&r.ok){document.getElementById('hs').textContent='Config loaded: +'+r.added+' new, '+r.updated+' updated';}
       else{document.getElementById('hs').textContent='Config load failed: '+(r&&r.err||'unknown error');}

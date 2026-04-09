@@ -143,7 +143,7 @@ class SetupViewModel @Inject constructor(
                 val registeredIps = _children.value.map { it.ip }.toSet()
                 _discovered.value = all.filter { it.ip !in registeredIps }
                 if (_discovered.value.isEmpty()) {
-                    _message.emit("No new performers found")
+                    _message.emit("No new fixtures found")
                 }
             } catch (e: Exception) {
                 _message.emit("Discovery failed: ${e.message}")
@@ -159,11 +159,11 @@ class SetupViewModel @Inject constructor(
             try {
                 val resp = repository.addChild(ip)
                 if (resp.ok) {
-                    _message.emit("Added performer at $ip")
+                    _message.emit("Added fixture at $ip")
                     _discovered.value = _discovered.value.filter { it.ip != ip }
                     loadChildren()
                 } else {
-                    _message.emit(resp.err ?: "Failed to add performer")
+                    _message.emit(resp.err ?: "Failed to add fixture")
                 }
             } catch (e: Exception) {
                 _message.emit("Add failed: ${e.message}")
@@ -178,10 +178,10 @@ class SetupViewModel @Inject constructor(
             try {
                 val resp = repository.deleteChild(id)
                 if (resp.ok) {
-                    _message.emit("Performer removed")
+                    _message.emit("Fixture removed")
                     loadChildren()
                 } else {
-                    _message.emit(resp.err ?: "Failed to remove performer")
+                    _message.emit(resp.err ?: "Failed to remove fixture")
                 }
             } catch (e: Exception) {
                 _message.emit("Remove failed: ${e.message}")

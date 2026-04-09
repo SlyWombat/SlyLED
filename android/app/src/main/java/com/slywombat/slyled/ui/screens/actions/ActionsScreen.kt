@@ -369,7 +369,7 @@ private fun ActionEditorDialog(
                     }
                 }
 
-                // Selected performers checkboxes
+                // Selected fixtures checkboxes
                 if (scope == "selected" && children.isNotEmpty()) {
                     Text("Selected Fixtures", style = MaterialTheme.typography.labelMedium)
                     Column {
