@@ -91,44 +91,107 @@ body.light .li:hover{border-color:#3b82f6}
 <div id='t-setup'   class='tab' style='display:none'></div>
 
 <div id='t-layout' class='tab' style='display:none'>
-  <div style='display:flex;gap:1em;align-items:flex-start'>
+  <!-- Hint -->
+  <div style='display:flex;align-items:center;gap:.5em;margin-bottom:.4em'>
+    <span id='lay-hint' style='color:#888;font-size:.82em;flex:1'>Drag fixtures from sidebar onto stage. Double-click to edit position. (0,0)=bottom-left.</span>
+  </div>
+  <!-- Toolbar (above viewport) -->
+  <div id='lay-toolbar' style='display:flex;gap:.2em;align-items:center;margin-bottom:.4em;flex-wrap:wrap'>
+    <!-- Zone 1: Mode -->
+    <button class='btn' id='btn-lay-tool' onclick='_layToolToggle()' title='Select / Move mode (M key)' style='width:auto;height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;background:#14532d;color:#86efac'>Select(M)</button>
+    <button class='btn' id='btn-lay-orient' onclick='_layToolToggle()' title='Orient / Rotate mode (R key)' style='width:auto;height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold'>Orient(R)</button>
+    <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
+    <!-- Zone 2: View -->
+    <button class='btn' id='btn-view-front' onclick='setView("front")' title='Front view (orthographic)' style='width:auto;height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0;background:#14532d;color:#86efac'>Front</button>
+    <button class='btn' id='btn-view-top' onclick='setView("top")' title='Top view (bird-eye)' style='width:auto;height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0'>Top</button>
+    <button class='btn' id='btn-view-side' onclick='setView("side")' title='Side view' style='width:auto;height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0'>Side</button>
+    <button class='btn' id='btn-view-3d' onclick='setView("3d")' title='3D perspective (orbit)' style='width:auto;height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0'>3D</button>
+    <button class='btn' id='btn-lay-strings' onclick='_layDetailToggle()' title='Show/hide LED strings' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;background:#14532d;color:#86efac'><svg width='14' height='14' viewBox='0 0 16 16' id='lay-detail-svg'><line x1='2' y1='4' x2='14' y2='4' stroke='#22c55e' stroke-width='2'/><line x1='2' y1='8' x2='14' y2='8' stroke='#3b82f6' stroke-width='2'/><line x1='2' y1='12' x2='14' y2='12' stroke='#f59e0b' stroke-width='2'/></svg></button>
+    <button class='btn' id='btn-lay-cones' onclick='_layConesToggle()' title='Show/hide beam cones' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;background:#4c1d95;color:#c4b5fd'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><path d='M8 2l5 12H3L8 2zm0 3L5.5 12h5L8 5z' opacity='.8'/></svg></button>
+    <button class='btn' id='btn-show-cloud' onclick='_togglePointCloud()' title='Show/hide point cloud' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor' opacity='.5'><circle cx='4' cy='4' r='1'/><circle cx='8' cy='3' r='1'/><circle cx='12' cy='5' r='1'/><circle cx='3' cy='8' r='1'/><circle cx='7' cy='7' r='1'/><circle cx='11' cy='9' r='1'/><circle cx='5' cy='12' r='1'/><circle cx='9' cy='11' r='1'/><circle cx='13' cy='13' r='1'/></svg></button>
+    <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
+    <!-- Zone 3: Align (disabled until multi-select) -->
+    <button class='btn' id='btn-align-left' onclick='layAlign("x","min")' title='Align left (select 2+ fixtures)' disabled style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;opacity:.4;cursor:not-allowed'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='1' y='1' width='2' height='14'/><rect x='5' y='3' width='9' height='4' rx='1'/><rect x='5' y='9' width='6' height='4' rx='1'/></svg></button>
+    <button class='btn' id='btn-align-cx' onclick='layAlign("x","center")' title='Center horizontally (select 2+)' disabled style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;opacity:.4;cursor:not-allowed'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='7' y='1' width='2' height='14'/><rect x='3' y='3' width='10' height='4' rx='1' opacity='.5'/><rect x='4' y='9' width='8' height='4' rx='1' opacity='.5'/></svg></button>
+    <button class='btn' id='btn-align-right' onclick='layAlign("x","max")' title='Align right (select 2+)' disabled style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;opacity:.4;cursor:not-allowed'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='13' y='1' width='2' height='14'/><rect x='2' y='3' width='9' height='4' rx='1'/><rect x='5' y='9' width='6' height='4' rx='1'/></svg></button>
+    <button class='btn' id='btn-align-top' onclick='layAlign("y","max")' title='Align top (select 2+)' disabled style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;opacity:.4;cursor:not-allowed'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='1' y='1' width='14' height='2'/><rect x='3' y='5' width='4' height='9' rx='1'/><rect x='9' y='5' width='4' height='6' rx='1'/></svg></button>
+    <button class='btn' id='btn-align-cy' onclick='layAlign("y","center")' title='Center vertically (select 2+)' disabled style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;opacity:.4;cursor:not-allowed'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='1' y='7' width='14' height='2'/><rect x='3' y='2' width='4' height='12' rx='1' opacity='.5'/><rect x='9' y='4' width='4' height='8' rx='1' opacity='.5'/></svg></button>
+    <button class='btn' id='btn-align-bottom' onclick='layAlign("y","min")' title='Align bottom (select 2+)' disabled style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;opacity:.4;cursor:not-allowed'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='1' y='13' width='14' height='2'/><rect x='3' y='2' width='4' height='9' rx='1'/><rect x='9' y='5' width='4' height='6' rx='1'/></svg></button>
+    <button class='btn' id='btn-dist-h' onclick='layAlign("x","distribute")' title='Distribute horizontally (select 3+)' disabled style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;opacity:.4;cursor:not-allowed'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='1' y='1' width='1.5' height='14'/><rect x='13.5' y='1' width='1.5' height='14'/><rect x='4' y='4' width='3' height='8' rx='1' opacity='.6'/><rect x='9' y='4' width='3' height='8' rx='1' opacity='.6'/></svg></button>
+    <button class='btn' id='btn-dist-v' onclick='layAlign("y","distribute")' title='Distribute vertically (select 3+)' disabled style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;opacity:.4;cursor:not-allowed'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='1' y='1' width='14' height='1.5'/><rect x='1' y='13.5' width='14' height='1.5'/><rect x='4' y='4' width='8' height='3' rx='1' opacity='.6'/><rect x='4' y='9' width='8' height='3' rx='1' opacity='.6'/></svg></button>
+    <button class='btn' onclick='autoArrangeDmx()' title='Auto-arrange DMX fixtures' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><path d='M1 2h3v2H1zm5 0h3v2H6zm5 0h3v2H11zM4 5l4 9 4-9H4z' opacity='.8'/></svg></button>
+    <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
+    <!-- Zone 4: Actions -->
+    <button class='btn' onclick='_layUndo()' title='Undo last move/rotate (Ctrl+Z)' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><path d='M4 2v4h4L4 2zM2 7h6a5 5 0 110 10H5v-2h3a3 3 0 000-6H2V7z' opacity='.7'/></svg></button>
+    <button class='btn' id='btn-lay-delete' onclick='_layDeleteSelected()' title='Delete selected fixture from stage (Del)' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><path d='M5 2V1h6v1h4v2H1V2h4zm1 4h1v7H6V6zm3 0h1v7H9V6zM2 4h12l-1 11H3L2 4z' opacity='.7'/></svg></button>
+    <button class='btn' id='btn-lay-scan' onclick='_layScan()' title='Scan for objects (camera)' style='width:30px;height:30px;padding:0;display:none;align-items:center;justify-content:center;background:#4c1d95;color:#c4b5fd'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><path d='M2 2v4h1V3h3V2H2zm8 0v1h3v3h1V2h-4zM2 10v4h4v-1H3v-3H2zm11 0v3h-3v1h4v-4h-1zM5.5 5a3.5 3.5 0 100 7 3.5 3.5 0 000-7zm5 0a3.5 3.5 0 100 7 3.5 3.5 0 000-7z' opacity='.85'/></svg></button>
+    <button class='btn' id='btn-env-scan' onclick='_envScan()' title='Scan environment (3D point cloud)' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;background:#1e3a5f;color:#93c5fd'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><circle cx='3' cy='4' r='1.2'/><circle cx='8' cy='2' r='1.2'/><circle cx='13' cy='5' r='1.2'/><circle cx='5' cy='9' r='1.2'/><circle cx='11' cy='8' r='1.2'/><circle cx='4' cy='13' r='1.2'/><circle cx='9' cy='12' r='1.2'/><circle cx='14' cy='13' r='1.2'/></svg></button>
+    <!-- Save button (right-aligned, green) -->
+    <span style='flex:1'></span>
+    <button class='btn' id='btn-lay-save' onclick='saveLayout(this)' title='Save layout' style='height:30px;padding:0 12px;display:flex;align-items:center;justify-content:center;gap:4px;background:#16a34a;color:#fff;font-size:10px;font-weight:bold'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><path d='M2 1h10l2 2v11H2V1zm2 1v4h8V2H4zm1 1h6v2H5V3zm-1 6v5h8V9H4z'/></svg><span>Save</span><span id='lay-dirty-dot' style='display:none;color:#fbbf24'>*</span></button>
+  </div>
+  <!-- Viewport + Side Panel row -->
+  <div style='display:flex;gap:0;align-items:stretch'>
+    <!-- 3D Viewport (flex:1 fills available width) -->
     <div style='flex:1;min-width:0'>
-      <div style='display:flex;align-items:center;gap:.5em;margin-bottom:.4em'>
-        <span id='lay-hint' style='color:#888;font-size:.82em;flex:1'>Drag fixtures from sidebar onto stage. Double-click to edit position. (0,0)=bottom-left.</span>
-      </div>
-      <!-- 3D Viewport (unified — replaces old 2D canvas + 3D toggle) -->
       <div id='lay-3d-wrap' style='position:relative'>
-        <div id='stage3d' style='width:900px;height:500px;border:1px solid #444;background:#080810;max-width:100%'></div>
+        <div id='stage3d' style='width:100%;height:500px;border:1px solid #444;background:#080810'></div>
         <div id='s3d-info' style='position:absolute;top:8px;left:8px;color:#64748b;font-size:.72em;pointer-events:none'></div>
       </div>
-      <div style='margin-top:.5em;display:flex;gap:.2em;align-items:center' id='lay-toolbar'>
-        <button class='btn btn-on' id='btn-lay-save' onclick='saveLayout(this)' title='Save layout' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 1h10l2 2v11H2V1zm2 1v4h8V2H4zm1 1h6v2H5V3zm-1 6v5h8V9H4z'/></svg></button>
-        <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
-        <button class='btn' id='btn-view-front' onclick='setView("front")' title='Front view (orthographic)' style='width:auto;height:32px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0;background:#14532d;color:#86efac'>Front</button>
-        <button class='btn' id='btn-view-top' onclick='setView("top")' title='Top view (bird-eye)' style='width:auto;height:32px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0'>Top</button>
-        <button class='btn' id='btn-view-side' onclick='setView("side")' title='Side view' style='width:auto;height:32px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0'>Side</button>
-        <button class='btn' id='btn-view-3d' onclick='setView("3d")' title='3D perspective (orbit)' style='width:auto;height:32px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0'>3D</button>
-        <button class='btn' id='btn-lay-tool' onclick='_layToolToggle()' title='Move / Rotate mode (R key)' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;background:#1e293b;color:#94a3b8'>M</button>
-        <button class='btn' onclick='_layUndo()' title='Undo last move/rotate' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M4 2v4h4L4 2zM2 7h6a5 5 0 110 10H5v-2h3a3 3 0 000-6H2V7z' opacity='.7'/></svg></button>
-        <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
-        <button class='btn' onclick='autoArrangeDmx()' title='Auto-arrange DMX fixtures' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M1 2h3v2H1zm5 0h3v2H6zm5 0h3v2H11zM4 5l4 9 4-9H4z' opacity='.8'/></svg></button>
-        <button class='btn' id='btn-lay-strings' onclick='_layDetailToggle()' title='Show/hide LED strings' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;background:#14532d;color:#86efac'><svg width='16' height='16' viewBox='0 0 16 16' id='lay-detail-svg'><line x1='2' y1='4' x2='14' y2='4' stroke='#22c55e' stroke-width='2'/><line x1='2' y1='8' x2='14' y2='8' stroke='#3b82f6' stroke-width='2'/><line x1='2' y1='12' x2='14' y2='12' stroke='#f59e0b' stroke-width='2'/></svg></button>
-        <button class='btn' id='btn-lay-cones' onclick='_layConesToggle()' title='Show/hide beam cones' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;background:#4c1d95;color:#c4b5fd'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M8 2l5 12H3L8 2zm0 3L5.5 12h5L8 5z' opacity='.8'/></svg></button>
-        <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
-        <button class='btn' id='btn-lay-scan' onclick='_layScan()' title='Scan for objects (camera)' style='width:32px;height:32px;padding:0;display:none;align-items:center;justify-content:center;background:#4c1d95;color:#c4b5fd'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 2v4h1V3h3V2H2zm8 0v1h3v3h1V2h-4zM2 10v4h4v-1H3v-3H2zm11 0v3h-3v1h4v-4h-1zM5.5 5a3.5 3.5 0 100 7 3.5 3.5 0 000-7zm5 0a3.5 3.5 0 100 7 3.5 3.5 0 000-7z' opacity='.85'/></svg></button>
-        <button class='btn' id='btn-env-scan' onclick='_envScan()' title='Scan environment (3D point cloud)' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;background:#1e3a5f;color:#93c5fd'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><circle cx='3' cy='4' r='1.2'/><circle cx='8' cy='2' r='1.2'/><circle cx='13' cy='5' r='1.2'/><circle cx='5' cy='9' r='1.2'/><circle cx='11' cy='8' r='1.2'/><circle cx='4' cy='13' r='1.2'/><circle cx='9' cy='12' r='1.2'/><circle cx='14' cy='13' r='1.2'/></svg></button>
-        <button class='btn' id='btn-show-cloud' onclick='_togglePointCloud()' title='Show/hide point cloud' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor' opacity='.5'><circle cx='4' cy='4' r='1'/><circle cx='8' cy='3' r='1'/><circle cx='12' cy='5' r='1'/><circle cx='3' cy='8' r='1'/><circle cx='7' cy='7' r='1'/><circle cx='11' cy='9' r='1'/><circle cx='5' cy='12' r='1'/><circle cx='9' cy='11' r='1'/><circle cx='13' cy='13' r='1'/></svg></button>
-      </div>
     </div>
-    <div style='width:200px;flex-shrink:0'>
-      <div style='font-size:.9em;font-weight:bold;color:#aaa;margin-bottom:.4em'>Fixtures</div>
-      <div id='lay-fixtures' style='font-size:.82em;color:#94a3b8'>Loading...</div>
-      <div style='margin-top:1em;border-top:1px solid #1e293b;padding-top:.8em'>
-        <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:.4em'>
-          <span style='font-size:.9em;font-weight:bold;color:#aaa'>Objects</span>
-          <button class='btn btn-on' onclick='newObject()' style='font-size:.65em;padding:.2em .5em'>+ Add</button>
+    <!-- Collapsible Side Panel (260px) -->
+    <div id='lay-panel' style='width:260px;flex-shrink:0;border-left:1px solid #1e293b;background:#0c1322;overflow-y:auto;max-height:500px;font-size:.82em'>
+      <!-- Selected fixture header -->
+      <div id='panel-header' style='padding:.6em .8em;border-bottom:1px solid #1e293b;display:none'>
+        <div style='display:flex;align-items:center;gap:.4em'>
+          <span id='panel-fx-name' style='font-weight:bold;color:#e2e8f0;flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis'></span>
+          <span id='panel-fx-badge' style='font-size:.65em;padding:0 4px;border-radius:2px'></span>
         </div>
-        <div id='lay-objects' style='font-size:.82em;color:#94a3b8'></div>
+      </div>
+      <!-- Position section (when selected) -->
+      <div id='panel-position' style='padding:.5em .8em;border-bottom:1px solid #1e293b;display:none'>
+        <div style='font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em'>Position (mm)</div>
+        <div style='display:flex;gap:.3em;align-items:center'>
+          <label style='font-size:.72em;margin:0;color:#64748b'>X</label><input id='panel-x' type='number' style='width:65px;font-size:.85em;padding:2px 4px' onchange='_panelPosChange()'>
+          <label style='font-size:.72em;margin:0;color:#64748b'>Y</label><input id='panel-y' type='number' style='width:65px;font-size:.85em;padding:2px 4px' onchange='_panelPosChange()'>
+          <label style='font-size:.72em;margin:0;color:#64748b'>Z</label><input id='panel-z' type='number' style='width:65px;font-size:.85em;padding:2px 4px' onchange='_panelPosChange()'>
+        </div>
+      </div>
+      <!-- Type-specific details (when selected) -->
+      <div id='panel-details' style='padding:.5em .8em;border-bottom:1px solid #1e293b;display:none'></div>
+      <!-- Fixtures list (collapsible) -->
+      <div style='border-bottom:1px solid #1e293b'>
+        <div id='panel-fixtures-hdr' onclick='_panelToggle("fixtures")' style='padding:.5em .8em;cursor:pointer;display:flex;align-items:center;gap:.4em;user-select:none'>
+          <span id='panel-fixtures-arrow' style='font-size:.7em;color:#64748b;transition:transform .15s'>&#9654;</span>
+          <span style='font-weight:600;color:#aaa;flex:1;font-size:.85em'>Fixtures</span>
+          <span id='panel-fixtures-count' style='font-size:.7em;color:#64748b;background:#1e293b;padding:0 5px;border-radius:8px'>0</span>
+        </div>
+        <div id='panel-fixtures-body' style='display:none;padding:0 .8em .5em'>
+          <div id='lay-fixtures' style='color:#94a3b8'>Loading...</div>
+        </div>
+      </div>
+      <!-- Objects list (collapsible) -->
+      <div style='border-bottom:1px solid #1e293b'>
+        <div id='panel-objects-hdr' onclick='_panelToggle("objects")' style='padding:.5em .8em;cursor:pointer;display:flex;align-items:center;gap:.4em;user-select:none'>
+          <span id='panel-objects-arrow' style='font-size:.7em;color:#64748b;transition:transform .15s'>&#9654;</span>
+          <span style='font-weight:600;color:#aaa;flex:1;font-size:.85em'>Objects</span>
+          <button class='btn btn-on' onclick='event.stopPropagation();newObject()' style='font-size:.6em;padding:.15em .4em'>+ Add</button>
+          <span id='panel-objects-count' style='font-size:.7em;color:#64748b;background:#1e293b;padding:0 5px;border-radius:8px'>0</span>
+        </div>
+        <div id='panel-objects-body' style='display:none;padding:0 .8em .5em'>
+          <div id='lay-objects' style='color:#94a3b8'></div>
+        </div>
+      </div>
+      <!-- Scene section (collapsible) — point cloud + env scan -->
+      <div>
+        <div onclick='_panelToggle("scene")' style='padding:.5em .8em;cursor:pointer;display:flex;align-items:center;gap:.4em;user-select:none'>
+          <span id='panel-scene-arrow' style='font-size:.7em;color:#64748b;transition:transform .15s'>&#9654;</span>
+          <span style='font-weight:600;color:#aaa;flex:1;font-size:.85em'>Scene</span>
+        </div>
+        <div id='panel-scene-body' style='display:none;padding:0 .8em .5em'>
+          <button class='btn' onclick='_togglePointCloud()' style='font-size:.78em;margin-bottom:.3em;width:100%'>Toggle Point Cloud</button>
+          <button class='btn' onclick='_envScan()' style='font-size:.78em;background:#1e3a5f;color:#93c5fd;width:100%'>Scan Environment</button>
+        </div>
       </div>
     </div>
   </div>
@@ -586,6 +649,8 @@ document.addEventListener('DOMContentLoaded',function(){
 var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0,units=0,_cvW=900,_cvH=450,_dragStartX=0,_dragStartY=0,_dragMoved=false;
 var _layTool='move'; // 'move' or 'rotate'
 var _undoStack=[];   // [{fid, x, y, z, aimPoint, rotation}]
+var _layoutDirty=false;
+var _panelSections={fixtures:false,objects:false,scene:false}; // collapse state
 function _clearTabTimers(){
   if(typeof dashRunnerTimer!=='undefined'&&dashRunnerTimer){clearInterval(dashRunnerTimer);dashRunnerTimer=null;}
   if(typeof _emuTimer!=='undefined'&&_emuTimer){clearInterval(_emuTimer);_emuTimer=null;}
@@ -609,8 +674,8 @@ function showTab(t){
   else if(t==='firmware')loadFirmware();
 }
 
-function _btnSaving(btn){if(!btn)return;btn.dataset.orig=btn.textContent;btn.textContent='Saving...';btn.disabled=true;btn.style.background='#555';}
-function _btnSaved(btn,ok){if(!btn)return;btn.textContent=ok?'Saved!':'Error';btn.style.background=ok?'#2a2':'#a22';setTimeout(function(){btn.textContent=btn.dataset.orig||'Save';btn.style.background='';btn.disabled=false;},1200);}
+function _btnSaving(btn){if(!btn)return;btn.dataset.origHtml=btn.innerHTML;btn.dataset.origBg=btn.style.background;btn.textContent='Saving...';btn.disabled=true;btn.style.background='#555';}
+function _btnSaved(btn,ok){if(!btn)return;btn.textContent=ok?'Saved!':'Error';btn.style.background=ok?'#2a2':'#a22';setTimeout(function(){if(btn.dataset.origHtml){btn.innerHTML=btn.dataset.origHtml;btn.style.background=btn.dataset.origBg||'';}else{btn.textContent='Save';btn.style.background='';}btn.disabled=false;},1200);}
 
 // API path constants — single source of truth for endpoint URLs
 var API={
@@ -1773,6 +1838,7 @@ function s3dInit(){
   _s3d.tctl.addEventListener('dragging-changed',function(e){
     _s3d.controls.enabled=!e.value;
     if(!e.value){
+      _layoutDirty=true;_layDirtyUpdate();
       if(_s3dDraggingAim){
         // Save aim point back to server and update local fixture data
         var obj=_s3d.tctl.object;
@@ -1789,6 +1855,10 @@ function s3dInit(){
         _s3dDraggingAim=null;
       } else {
         _s3dSyncToLd();
+        // Update side panel position fields for selected fixture
+        if(_s3d.selected&&_s3d.selected.userData.childId!==undefined){
+          _updateSidePanel(_s3d.selected.userData.childId);
+        }
       }
     }
   });
@@ -2295,8 +2365,11 @@ function s3dClick(e){
   if(grp){
     _s3d.selected=grp;
     _s3d.tctl.attach(grp);
+    if(grp.userData.childId!==undefined)_updateSidePanel(grp.userData.childId);
+    else _updateSidePanel(null);
   } else {
     _s3d.tctl.detach();_s3d.selected=null;
+    _updateSidePanel(null);
   }
 }
 
@@ -2434,6 +2507,7 @@ function renderFixturesSidebar(){
   });
   if(!unplaced.length&&placed.length)h+='<p style="color:#555;font-size:.75em;margin-top:.4em">All fixtures placed.</p>';
   el.innerHTML=h;
+  _panelUpdateCounts();
 }
 function _isFixturePlaced(f){return f.positioned||f._placed;}
 
@@ -3432,7 +3506,7 @@ function exportProfileBundle(){
 function selectOnCanvas(type,id){
   if(!_s3d.inited){s3dInit();setTimeout(function(){selectOnCanvas(type,id);},500);return;}
   _s3d.nodes.forEach(function(grp){
-    if(type==='fixture'&&grp.userData.childId===id){_s3d.selected=grp;_s3d.tctl.attach(grp);}
+    if(type==='fixture'&&grp.userData.childId===id){_s3d.selected=grp;_s3d.tctl.attach(grp);_updateSidePanel(id);}
     if(type==='object'&&grp.userData.stageObjId===id){_s3d.selected=grp;_s3d.tctl.attach(grp);}
   });
 }
@@ -3463,6 +3537,7 @@ function renderObjectsSidebar(){
     h+='</div>';
   });
   el.innerHTML=h;
+  _panelUpdateCounts();
 }
 
 function newObject(){
@@ -4317,12 +4392,126 @@ function loadLayout(){
         s3dInit(); // init 3D scene on first layout load (idempotent)
         s3dLoadChildren();renderFixturesSidebar();
         loadObjects();
+        // Auto-expand fixtures panel on load, show no selection
+        _updateSidePanel(null);
       });
     });
   });
 }
 
-function renderSidebar(){renderFixturesSidebar();_layScanUpdateBtn();}
+function renderSidebar(){renderFixturesSidebar();_layScanUpdateBtn();_panelUpdateCounts();}
+
+// ── Side panel helpers ──────────────────────────────────────────────────
+function _panelToggle(section){
+  _panelSections[section]=!_panelSections[section];
+  var body=document.getElementById('panel-'+section+'-body');
+  var arrow=document.getElementById('panel-'+section+'-arrow');
+  if(body)body.style.display=_panelSections[section]?'block':'none';
+  if(arrow)arrow.style.transform=_panelSections[section]?'rotate(90deg)':'';
+}
+function _panelUpdateCounts(){
+  var fc=document.getElementById('panel-fixtures-count');
+  if(fc)fc.textContent=(_fixtures||[]).length;
+  var oc=document.getElementById('panel-objects-count');
+  if(oc)oc.textContent=(_objects||[]).length;
+}
+function _updateSidePanel(fixtureId){
+  var hdr=document.getElementById('panel-header');
+  var pos=document.getElementById('panel-position');
+  var det=document.getElementById('panel-details');
+  if(!fixtureId){
+    // No selection — hide detail sections, expand fixtures list
+    if(hdr)hdr.style.display='none';
+    if(pos)pos.style.display='none';
+    if(det)det.style.display='none';
+    if(!_panelSections.fixtures){_panelSections.fixtures=true;var b=document.getElementById('panel-fixtures-body');var a=document.getElementById('panel-fixtures-arrow');if(b)b.style.display='block';if(a)a.style.transform='rotate(90deg)';}
+    return;
+  }
+  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===fixtureId)f=fx;});
+  if(!f)return;
+  var ft=f.fixtureType||'led';
+  // Header
+  if(hdr){
+    hdr.style.display='block';
+    var nm=document.getElementById('panel-fx-name');if(nm)nm.textContent=f.name||'Fixture';
+    var badge=document.getElementById('panel-fx-badge');
+    if(badge){
+      if(ft==='dmx'){badge.textContent='DMX';badge.style.background='#7c3aed';badge.style.color='#fff';}
+      else if(ft==='camera'){badge.textContent='CAM';badge.style.background='#0e7490';badge.style.color='#fff';}
+      else{badge.textContent='LED';badge.style.background='#14532d';badge.style.color='#86efac';}
+    }
+  }
+  // Position
+  if(pos){
+    pos.style.display='block';
+    var px=document.getElementById('panel-x');if(px)px.value=f.x||0;
+    var py=document.getElementById('panel-y');if(py)py.value=f.y||0;
+    var pz=document.getElementById('panel-z');if(pz)pz.value=f.z||0;
+    pos.dataset.fid=fixtureId;
+  }
+  // Type-specific details
+  if(det){
+    det.style.display='block';
+    var h='';
+    if(ft==='led'&&f.strings&&f.strings.length){
+      var dirs=['E','N','W','S'];
+      h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Strings</div>';
+      f.strings.forEach(function(s,i){
+        h+='<div style="padding:.2em 0;border-bottom:1px solid #1a2333;display:flex;gap:.4em;font-size:.82em">';
+        h+='<span style="color:#64748b">#'+(i+1)+'</span>';
+        h+='<span style="flex:1">'+(s.leds||0)+' LEDs, '+(s.mm||0)+'mm</span>';
+        h+='<span style="color:#64748b">'+(dirs[s.sdir]||'?')+'</span>';
+        if(s.folded)h+='<span title="Folded" style="color:#f59e0b;font-size:.7em">F</span>';
+        h+='</div>';
+      });
+    } else if(ft==='dmx'){
+      h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">DMX</div>';
+      h+='<div style="font-size:.82em;color:#c4b5fd;margin-bottom:.2em">Profile: '+(f.dmxProfileId?'<span style="color:#e9d5ff">'+escapeHtml(f.dmxProfileId)+'</span>':'<span style="color:#64748b">None</span>')+'</div>';
+      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.2em">Universe: '+(f.dmxUniverse||1)+' | Addr: '+(f.dmxStartAddr||1)+'</div>';
+      var ap=f.aimPoint||[0,0,0];
+      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.3em">Aim: '+ap[0]+', '+ap[1]+', '+ap[2]+' mm</div>';
+      h+='<div style="display:flex;gap:.3em;flex-wrap:wrap">';
+      h+='<button class="btn" onclick="_orientTest('+f.id+')" style="font-size:.7em;padding:.2em .5em;background:#4c1d95;color:#e9d5ff">Orient</button>';
+      h+='<button class="btn" onclick="closeModal();_moverCalStart('+f.id+')" style="font-size:.7em;padding:.2em .5em;background:#6b21a8;color:#d8b4fe">Calibrate'+(f.moverCalibrated?' \u2713':'')+'</button>';
+      h+='</div>';
+    } else if(ft==='camera'){
+      h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Camera</div>';
+      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.2em">FOV: '+(f.fovDeg||60)+'\u00b0 | '+(f.resolutionW||1920)+'\u00d7'+(f.resolutionH||1080)+'</div>';
+      h+='<div style="font-size:.82em;color:#94a3b8">Calibration: '+(f.calibrated?'<span style="color:#4ade80">\u2713 Done</span>':'<span style="color:#f59e0b">Not done</span>')+'</div>';
+    }
+    det.innerHTML=h;
+  }
+}
+function _panelPosChange(){
+  var pos=document.getElementById('panel-position');if(!pos)return;
+  var fid=parseInt(pos.dataset.fid);if(!fid)return;
+  var nx=parseInt(document.getElementById('panel-x').value)||0;
+  var ny=parseInt(document.getElementById('panel-y').value)||0;
+  var nz=parseInt(document.getElementById('panel-z').value)||0;
+  (_fixtures||[]).forEach(function(f){
+    if(f.id===fid){_laySaveUndo(f);f.x=nx;f.y=ny;f.z=nz;f._placed=true;f.positioned=true;}
+  });
+  _layoutDirty=true;_layDirtyUpdate();
+  s3dLoadChildren();
+}
+function _layDirtyUpdate(){
+  var dot=document.getElementById('lay-dirty-dot');
+  if(dot)dot.style.display=_layoutDirty?'inline':'none';
+}
+
+// ── Alignment functions (placeholder until multi-select) ────────────────
+function layAlign(axis,mode){
+  // Requires multi-select — currently disabled.
+  // Will support: 'min', 'max', 'center', 'distribute' on 'x' or 'y' axis
+  document.getElementById('hs').textContent='Alignment requires 2+ selected fixtures (multi-select coming soon)';
+}
+
+// ── Delete selected fixture from stage ──────────────────────────────────
+function _layDeleteSelected(){
+  if(!_s3d.selected)return;
+  var cid=_s3d.selected.userData.childId;
+  if(cid!==undefined){removeFromCanvas(cid);_updateSidePanel(null);}
+}
 
 function layDS(e,id){_layDragId=id;e.dataTransfer.setData('text/plain',String(id));e.dataTransfer.effectAllowed='move';}
 
@@ -5597,6 +5786,7 @@ function saveLayout(btn){
   if(!_fixtures)return;
   _btnSaving(btn);
   if(_s3d.inited)_s3dSyncToLd();
+  _layoutDirty=false;_layDirtyUpdate();
   var toSave=_fixtures.filter(_isFixturePlaced);
   ra('POST','/api/layout',{fixtures:toSave.map(function(f){return{id:f.id,x:f.x,y:f.y,z:f.z||0};})},
     function(r){
@@ -5621,12 +5811,16 @@ function saveLayout(btn){
 // ── Layout tool mode (Move / Rotate) + Undo ─────────────────────────
 function _layToolToggle(){
   _layTool=_layTool==='move'?'rotate':'move';
-  var btn=document.getElementById('btn-lay-tool');
-  if(btn){
-    btn.textContent=_layTool==='move'?'M':'R';
-    btn.style.background=_layTool==='rotate'?'#7c3aed':'#1e293b';
-    btn.style.color=_layTool==='rotate'?'#e9d5ff':'#94a3b8';
-    btn.title=_layTool==='move'?'Move mode (press R for Rotate)':'Rotate mode (press M for Move)';
+  // Update dual mode buttons
+  var btnM=document.getElementById('btn-lay-tool');
+  var btnR=document.getElementById('btn-lay-orient');
+  if(btnM){
+    btnM.style.background=_layTool==='move'?'#14532d':'';
+    btnM.style.color=_layTool==='move'?'#86efac':'';
+  }
+  if(btnR){
+    btnR.style.background=_layTool==='rotate'?'#7c3aed':'';
+    btnR.style.color=_layTool==='rotate'?'#e9d5ff':'';
   }
   // Switch 3D TransformControls mode
   if(_s3d.inited&&_s3d.tctl){
@@ -5663,6 +5857,7 @@ document.addEventListener('keydown',function(e){
   if((e.key==='r'||e.key==='R')&&_layTool!=='rotate'){_layToolToggle();}
   else if((e.key==='m'||e.key==='g'||e.key==='M'||e.key==='G')&&_layTool!=='move'){_layToolToggle();}
   else if((e.ctrlKey||e.metaKey)&&e.key==='z'){e.preventDefault();_layUndo();}
+  else if(e.key==='Delete'||e.key==='Backspace'){_layDeleteSelected();}
 });
 
 // 2D compass gizmo, startAimMode, cvMove, cvUp removed — use 3D gizmo for aiming
