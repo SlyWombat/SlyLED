@@ -750,6 +750,32 @@ def run():
         r = c.post(f'/api/fixtures/99999/dmx-test', json={'pan': 0.5})
         ok('DMX test unknown → 404', r.status_code == 404)
 
+        # ── Mover calibration routes ──
+        # GET calibration status when none exists
+        r = c.get(f'/api/calibration/mover/{dmx_fid}/status')
+        ok('Mover cal status → none', r.get_json().get('status') == 'none')
+
+        # GET calibration data when uncalibrated
+        r = c.get(f'/api/calibration/mover/{dmx_fid}')
+        ok('Mover cal not calibrated', r.get_json().get('calibrated') is False)
+
+        # Start calibration on non-existent fixture → 404
+        r = c.post('/api/calibration/mover/99999/start', json={})
+        ok('Mover cal unknown fixture → 404', r.status_code == 404)
+
+        # Start calibration without camera → 400
+        r = c.post(f'/api/calibration/mover/{dmx_fid}/start', json={})
+        ok('Mover cal no camera → 400', r.status_code == 400)
+
+        # Delete calibration (no-op when none exists)
+        r = c.delete(f'/api/calibration/mover/{dmx_fid}')
+        ok('Mover cal delete → ok', r.status_code == 200)
+
+        # Aim without calibration → 400
+        r = c.post(f'/api/calibration/mover/{dmx_fid}/aim',
+                    json={'pixelX': 100, 'pixelY': 200})
+        ok('Mover cal aim uncalibrated → 400', r.status_code == 400)
+
         # Clean up
         c.delete(f'/api/fixtures/{dmx_fid}')
         c.delete(f'/api/objects/{tmp_id}')
@@ -1351,7 +1377,7 @@ def run():
         ok('SPA has track poll', '_trackPollStart' in spa)
         ok('SPA has range cal', '_rangeCalStart' in spa)
         ok('SPA has range cal submit', '_rangeCalSubmit' in spa)
-        ok('SPA has Cal Range button', 'Cal Range' in spa)
+        ok('SPA has mover Calibrate button', '_moverCalStart' in spa)
         ok('SPA has emitter editor', '_peRenderEmitters' in spa)
         ok('SPA has add emitter', '_peAddEmitter' in spa)
         ok('SPA has Save Capabilities button', 'Save Capabilities' in spa)

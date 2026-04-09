@@ -4318,7 +4318,7 @@ function showNodeEdit(f){
   h+='<button class="btn btn-on" onclick="applyNodePos('+f.id+')">Set Position</button>';
   if(ft==='dmx'){
     h+='<button class="btn" style="background:#1e3a5f;color:#93c5fd" onclick="startAimMode('+f.id+')">Click to Aim</button>';
-    h+='<button class="btn" style="background:#6b21a8;color:#d8b4fe" onclick="closeModal();_rangeCalStart('+f.id+')">Cal Range'+(f.rangeCalibrated?' \u2713':'')+'</button>';
+    h+='<button class="btn" style="background:#6b21a8;color:#d8b4fe" onclick="closeModal();_moverCalStart('+f.id+')">Calibrate'+(f.moverCalibrated?' \u2713':'')+'</button>';
   }
   if(ft==='camera'){
     h+='<button class="btn" style="background:#7c3aed;color:#e9d5ff" onclick="closeModal();_calWizardStart('+f.id+')">Calibrate'+(f.calibrated?' \u2713':'')+'</button>';
@@ -5490,6 +5490,103 @@ function _rangeCalSubmit(){
     }else{
       document.getElementById('hs').textContent='Range calibration failed: '+(r&&r.err||'unknown');
     }
+  });
+}
+
+// ── Unified mover calibration wizard ─────────────────────────────────
+var _moverCalFid=null;
+var _moverCalTimer=null;
+
+function _moverCalStart(fixId){
+  _moverCalFid=fixId;
+  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===fixId)f=fx;});
+  var h='<div style="min-width:400px">';
+  h+='<div style="font-size:.85em;color:#94a3b8;margin-bottom:.8em">This will automatically discover and map <strong>'+
+    escapeHtml(f?f.name:'fixture')+'</strong> using camera observation. The fixture will move through visible positions while the camera tracks the beam.</div>';
+  h+='<div class="card" style="padding:.6em;margin-bottom:.6em">';
+  h+='<div style="font-size:.82em;color:#f59e0b;margin-bottom:.3em">\u26a0 Ensure Art-Net engine is running and fixture responds to DMX.</div>';
+  h+='<div style="display:flex;gap:.4em;align-items:center;margin-bottom:.3em">';
+  h+='<label style="font-size:.82em;color:#94a3b8;margin:0">Beam color:</label>';
+  h+='<select id="mcal-color" style="font-size:.82em;padding:2px 4px">';
+  h+='<option value="green">Green</option><option value="magenta">Magenta</option><option value="red">Red</option><option value="blue">Blue</option>';
+  h+='</select></div></div>';
+  h+='<div id="mcal-status" style="display:none">';
+  h+='<div class="prog-bar" style="height:8px;margin-bottom:.4em"><div class="prog-fill" id="mcal-prog" style="width:0%;transition:width .3s"></div></div>';
+  h+='<div id="mcal-phase" style="font-size:.85em;color:#e2e8f0;margin-bottom:.3em"></div>';
+  h+='<div id="mcal-detail" style="font-size:.78em;color:#64748b"></div>';
+  h+='</div>';
+  h+='<div style="display:flex;gap:.4em;margin-top:.8em">';
+  h+='<button class="btn btn-on" id="mcal-go" onclick="_moverCalGo()">Start Calibration</button>';
+  h+='<button class="btn btn-off" onclick="_moverCalCancel()">Cancel</button>';
+  h+='</div></div>';
+  document.getElementById('modal-title').textContent='Mover Calibration';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+}
+
+function _moverCalGo(){
+  var sel=document.getElementById('mcal-color');
+  var colorMap={green:[0,255,0],magenta:[255,0,255],red:[255,0,0],blue:[0,0,255]};
+  var color=colorMap[sel?sel.value:'green']||[0,255,0];
+  var btn=document.getElementById('mcal-go');
+  if(btn)btn.disabled=true;
+  document.getElementById('mcal-status').style.display='block';
+  document.getElementById('mcal-phase').textContent='Starting calibration...';
+  ra('POST','/api/calibration/mover/'+_moverCalFid+'/start',{color:color},function(r){
+    if(!r||!r.ok){
+      document.getElementById('mcal-phase').innerHTML='<span style="color:#f66">'+(r&&r.err||'Failed to start')+'</span>';
+      if(btn)btn.disabled=false;
+      return;
+    }
+    document.getElementById('mcal-detail').textContent='Camera: '+(r.cameraName||'unknown');
+    _moverCalPoll();
+  });
+}
+
+function _moverCalPoll(){
+  if(_moverCalTimer)clearTimeout(_moverCalTimer);
+  ra('GET','/api/calibration/mover/'+_moverCalFid+'/status',null,function(r){
+    if(!r)return;
+    var prog=document.getElementById('mcal-prog');
+    var phase=document.getElementById('mcal-phase');
+    var detail=document.getElementById('mcal-detail');
+    if(prog)prog.style.width=(r.progress||0)+'%';
+    var phaseNames={starting:'Starting...',discovery:'Discovering beam...',mapping:'Mapping visible region...',grid:'Building interpolation grid...',complete:'Complete'};
+    if(phase)phase.textContent=phaseNames[r.phase]||r.phase||'';
+    if(r.status==='running'){
+      _moverCalTimer=setTimeout(_moverCalPoll,1000);
+    }else if(r.status==='done'){
+      if(prog)prog.style.width='100%';
+      var res=r.result||{};
+      var h='<div style="text-align:center;padding:.5em">';
+      h+='<div style="font-size:2em;color:#4ade80;margin-bottom:.3em">\u2713</div>';
+      h+='<div style="font-size:1.1em;color:#e2e8f0;margin-bottom:.3em">Calibration Complete</div>';
+      h+='<div style="font-size:.85em;color:#94a3b8">'+res.sampleCount+' samples, grid size '+res.gridSize+'</div>';
+      h+='<div style="margin-top:.8em;display:flex;gap:.4em;justify-content:center">';
+      h+='<button class="btn btn-on" onclick="closeModal();_moverCalFid=null;loadLayout()">Done</button>';
+      h+='<button class="btn" style="background:#334155;color:#94a3b8" onclick="_moverCalDelete()">Recalibrate</button>';
+      h+='</div></div>';
+      document.getElementById('mcal-status').innerHTML=h;
+      (_fixtures||[]).forEach(function(f){if(f.id===_moverCalFid)f.moverCalibrated=true;});
+      renderSidebar();
+    }else if(r.status==='error'){
+      if(phase)phase.innerHTML='<span style="color:#f66">'+(r.error||'Unknown error')+'</span>';
+      var btn=document.getElementById('mcal-go');
+      if(btn){btn.disabled=false;btn.textContent='Retry';}
+    }
+  });
+}
+
+function _moverCalCancel(){
+  if(_moverCalTimer)clearTimeout(_moverCalTimer);
+  _moverCalFid=null;closeModal();
+}
+
+function _moverCalDelete(){
+  if(!_moverCalFid)return;
+  ra('DELETE','/api/calibration/mover/'+_moverCalFid,null,function(){
+    (_fixtures||[]).forEach(function(f){if(f.id===_moverCalFid)f.moverCalibrated=false;});
+    _moverCalStart(_moverCalFid);
   });
 }
 

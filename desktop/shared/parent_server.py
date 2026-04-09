@@ -172,6 +172,7 @@ _wifi    = _load("wifi",    {"ssid": "", "password": ""})
 _ssh     = _load("ssh",    {"sshUser": "root", "sshPassword": "", "sshKeyPath": ""})
 _calibrations = _load("calibrations", {})  # {fixtureId_str: {matrix, error, points, timestamp}}
 _range_cal    = _load("range_calibrations", {})  # {fixtureId_str: {pan, tilt, timestamp}}
+_mover_cal    = _load("mover_calibrations", {})  # {fixtureId_str: {grid, samples, ...}}
 _ssh_bootstrapped = False  # deferred pre-population (needs _encrypt_pw defined later)
 
 # Live action events pushed by children (ip  -' {actionType, stepIndex, totalSteps, event, ts})
@@ -1832,6 +1833,268 @@ def compute_pan_tilt_calibrated(fixture_id, target_pos):
     if "tilt" in cal:
         tilt_norm = _inverse_axis_lookup(cal["tilt"], target_pos[0], target_pos[2])
     return (pan_norm, tilt_norm)
+
+
+# ── Unified mover calibration (grid-based) ────────────────────────────
+
+import mover_calibrator as _mcal
+
+_mover_cal_jobs = {}  # fid_str → {thread, status, phase, progress, error, result}
+
+
+def _best_camera_for(fixture):
+    """Pick the widest-FOV positioned camera for calibration."""
+    cams = [f for f in _fixtures if f.get("fixtureType") == "camera"
+            and f.get("cameraUrl")]
+    if not cams:
+        return None
+    # Prefer widest FOV
+    cams.sort(key=lambda c: c.get("fovDeg") or 60, reverse=True)
+    return cams[0]
+
+
+def _get_bridge_ip():
+    """Find the DMX Art-Net bridge IP from discovered nodes or children."""
+    nodes = _artnet.discovered_nodes()
+    for ip, info in nodes.items():
+        if info.get("style") == "bridge" or "giga" in info.get("longName", "").lower():
+            return ip
+    # Fallback: any Art-Net discovered node
+    if nodes:
+        return next(iter(nodes))
+    # Fallback: look for DMX children
+    for c in _children:
+        if c.get("type") == "dmx":
+            return c.get("ip")
+    return None
+
+
+def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
+    """Background thread: discovery → mapping → save grid."""
+    job = _mover_cal_jobs[str(fid)]
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f:
+        job["error"] = "Fixture not found"
+        job["status"] = "error"
+        return
+    addr = f.get("dmxStartAddr", 1)
+    uni = f.get("dmxUniverse", 1) - 1  # Art-Net is 0-based
+    cam_url = cam.get("cameraUrl", "")
+    cam_ip = cam_url.replace("http://", "").split(":")[0]
+    cam_idx = cam.get("cameraIndex", 0)
+
+    # Phase 1: Discovery
+    job["phase"] = "discovery"
+    job["status"] = "running"
+    job["progress"] = 10
+    try:
+        start_pan, start_tilt = 0.5, 0.5
+        # Use orientation if available
+        orient = f.get("orientation", {})
+        if orient.get("homePan") is not None:
+            start_pan = orient["homePan"]
+            start_tilt = orient.get("homeTilt", 0.5)
+        # Use aim point as initial direction
+        if f.get("aimPoint") and f.get("x") is not None:
+            pt = _mcal.compute_initial_aim(
+                [f.get("x", 5000), f.get("y", 0), f.get("z", 0)],
+                f["aimPoint"])
+            if pt:
+                start_pan, start_tilt = pt
+
+        found = _mcal.discover(
+            bridge_ip, cam_ip, addr, cam_idx, mover_color,
+            universe=uni, start_pan=start_pan, start_tilt=start_tilt,
+            max_probes=80)
+        if not found:
+            job["error"] = "Beam not found — check fixture and camera positions"
+            job["status"] = "error"
+            return
+        job["progress"] = 30
+        job["foundAt"] = found
+        log.info("MOVER-CAL fixture %d: beam discovered at pan=%.2f tilt=%.2f",
+                 fid, found["pan"], found["tilt"])
+    except Exception as e:
+        job["error"] = f"Discovery failed: {e}"
+        job["status"] = "error"
+        log.exception("Mover cal discovery error fid=%d", fid)
+        return
+
+    # Phase 2: BFS mapping
+    job["phase"] = "mapping"
+    job["progress"] = 35
+    try:
+        samples = _mcal.map_visible(
+            bridge_ip, cam_ip, addr, cam_idx, mover_color,
+            universe=uni, start_pan=found["pan"], start_tilt=found["tilt"],
+            collect_3d=False, max_samples=50)
+        if len(samples) < 6:
+            job["error"] = f"Only {len(samples)} samples collected — need at least 6"
+            job["status"] = "error"
+            return
+        job["progress"] = 70
+        job["sampleCount"] = len(samples)
+        log.info("MOVER-CAL fixture %d: %d BFS samples collected", fid, len(samples))
+    except Exception as e:
+        job["error"] = f"Mapping failed: {e}"
+        job["status"] = "error"
+        log.exception("Mover cal mapping error fid=%d", fid)
+        return
+
+    # Phase 3: Build grid
+    job["phase"] = "grid"
+    job["progress"] = 80
+    try:
+        grid = _mcal.build_grid(samples)
+        if not grid:
+            job["error"] = "Grid build failed — insufficient sample spread"
+            job["status"] = "error"
+            return
+    except Exception as e:
+        job["error"] = f"Grid build failed: {e}"
+        job["status"] = "error"
+        return
+
+    # Save calibration data
+    cal_data = {
+        "cameraId": cam["id"],
+        "color": mover_color,
+        "samples": samples,
+        "grid": grid,
+        "sampleCount": len(samples),
+        "foundAt": found,
+        "timestamp": time.time(),
+    }
+    _mover_cal[str(fid)] = cal_data
+    _save("mover_calibrations", _mover_cal)
+    f["moverCalibrated"] = True
+    _save("fixtures", _fixtures)
+
+    job["result"] = {"sampleCount": len(samples), "gridSize": len(grid.get("panSteps", []))}
+    job["progress"] = 100
+    job["status"] = "done"
+    job["phase"] = "complete"
+    log.info("MOVER-CAL fixture %d: calibration complete, %d samples, grid %s",
+             fid, len(samples), job["result"]["gridSize"])
+
+
+@app.post("/api/calibration/mover/<int:fid>/start")
+def api_mover_cal_start(fid):
+    """Start unified mover calibration (discovery + BFS + grid) in background."""
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f or f.get("fixtureType") != "dmx":
+        return jsonify(err="DMX fixture not found"), 404
+    # Check if already running
+    existing = _mover_cal_jobs.get(str(fid))
+    if existing and existing.get("status") == "running":
+        return jsonify(err="Calibration already running"), 409
+    cam = _best_camera_for(f)
+    if not cam:
+        return jsonify(err="No camera available — register and position a camera first"), 400
+    bridge_ip = _get_bridge_ip()
+    if not bridge_ip:
+        return jsonify(err="No Art-Net bridge found — start the Art-Net engine"), 400
+    body = request.get_json(silent=True) or {}
+    color = body.get("color", [0, 255, 0])  # default green
+    job = {"status": "running", "phase": "starting", "progress": 0,
+           "error": None, "result": None, "cameraId": cam["id"],
+           "cameraName": cam.get("name", "Camera"), "bridgeIp": bridge_ip}
+    _mover_cal_jobs[str(fid)] = job
+    t = threading.Thread(target=_mover_cal_thread,
+                         args=(fid, cam, bridge_ip, color), daemon=True)
+    job["thread"] = t
+    t.start()
+    return jsonify(ok=True, started=True, cameraId=cam["id"],
+                   cameraName=cam.get("name"))
+
+
+@app.get("/api/calibration/mover/<int:fid>/status")
+def api_mover_cal_status(fid):
+    """Poll calibration progress."""
+    job = _mover_cal_jobs.get(str(fid))
+    if not job:
+        # Check for saved calibration
+        cal = _mover_cal.get(str(fid))
+        if cal:
+            return jsonify(status="done", calibrated=True,
+                           sampleCount=cal.get("sampleCount"),
+                           timestamp=cal.get("timestamp"))
+        return jsonify(status="none", calibrated=False)
+    return jsonify(status=job["status"], phase=job.get("phase"),
+                   progress=job.get("progress", 0),
+                   error=job.get("error"),
+                   result=job.get("result"),
+                   cameraId=job.get("cameraId"))
+
+
+@app.get("/api/calibration/mover/<int:fid>")
+def api_mover_cal_get(fid):
+    """Get saved mover calibration data."""
+    cal = _mover_cal.get(str(fid))
+    if not cal:
+        return jsonify(calibrated=False)
+    return jsonify(calibrated=True, sampleCount=cal.get("sampleCount"),
+                   timestamp=cal.get("timestamp"),
+                   grid=cal.get("grid") is not None,
+                   cameraId=cal.get("cameraId"))
+
+
+@app.delete("/api/calibration/mover/<int:fid>")
+def api_mover_cal_delete(fid):
+    """Delete mover calibration data."""
+    if str(fid) in _mover_cal:
+        del _mover_cal[str(fid)]
+        _save("mover_calibrations", _mover_cal)
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if f:
+        f.pop("moverCalibrated", None)
+        _save("fixtures", _fixtures)
+    return jsonify(ok=True)
+
+
+@app.post("/api/calibration/mover/<int:fid>/aim")
+def api_mover_cal_aim(fid):
+    """Use calibration grid to aim a mover at a target pixel or stage position.
+    Body: {targetX, targetY} (stage mm) or {pixelX, pixelY}"""
+    cal = _mover_cal.get(str(fid))
+    if not cal or not cal.get("grid"):
+        return jsonify(err="Fixture not calibrated"), 400
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f:
+        return jsonify(err="Fixture not found"), 404
+    body = request.get_json(silent=True) or {}
+    grid = cal["grid"]
+    # Direct pixel target
+    px = body.get("pixelX")
+    py = body.get("pixelY")
+    if px is not None and py is not None:
+        result = _mcal.grid_inverse(grid, px, py)
+        if result:
+            pan, tilt = result
+            # Send DMX
+            pid = f.get("dmxProfileId")
+            prof_info = _profile_lib.channel_info(pid) if pid else None
+            if prof_info:
+                uni = f.get("dmxUniverse", 1)
+                addr = f.get("dmxStartAddr", 1)
+                try:
+                    uni_buf = _artnet.get_universe(uni)
+                    profile = {"channel_map": prof_info.get("channel_map"),
+                               "channels": prof_info.get("channels", [])}
+                    uni_buf.set_fixture_pan_tilt(addr, pan, tilt, profile)
+                except Exception:
+                    pass
+            return jsonify(ok=True, pan=round(pan, 4), tilt=round(tilt, 4))
+    return jsonify(err="Provide pixelX/pixelY"), 400
+
+
+def pixel_to_pan_tilt(fixture_id, px, py):
+    """Direct pixel→pan/tilt lookup using mover calibration grid.
+    Returns (pan, tilt) or None if not calibrated."""
+    cal = _mover_cal.get(str(fixture_id))
+    if not cal or not cal.get("grid"):
+        return None
+    return _mcal.grid_inverse(cal["grid"], px, py)
 
 
 # ── Environment point cloud ───────────────────────────────────────────
@@ -5339,6 +5602,9 @@ def api_reset():
         _save("calibrations", _calibrations)
         _range_cal.clear()
         _save("range_calibrations", _range_cal)
+        _mover_cal.clear()
+        _save("mover_calibrations", _mover_cal)
+        _mover_cal_jobs.clear()
         _calib_state.clear()
         _tracking_state.clear()
         # Delete custom profiles (keep built-ins)
