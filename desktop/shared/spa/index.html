@@ -5863,6 +5863,10 @@ function _layToolToggle(){
   _compassFid=null;
   var cv=document.getElementById('lcv');
   if(cv)cv.style.cursor=_layTool==='move'?'grab':'default';
+  // Switch 3D TransformControls mode if 3D view is active
+  if(_s3d.inited&&_s3d.tctl){
+    _s3d.tctl.setMode(_layTool==='rotate'?'rotate':'translate');
+  }
   drawLayout();
   document.getElementById('hs').textContent=_layTool==='move'?'Move mode — drag to reposition':'Rotate mode — click fixture to aim';
 }
