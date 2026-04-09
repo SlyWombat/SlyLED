@@ -85,7 +85,7 @@ Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask s
 | GET | `/health` | Health check |
 
 - **Systemd service:** `slyled-cam` for auto-start on boot (tracked in `firmware/orangepi/slyled-cam.service`)
-- **Multi-camera support:** Filters SoC video nodes, only exposes real USB cameras
+- **Multi-camera support:** USB cameras only (V4L2). Filters SoC/ISP video nodes (sunxi-vin, bcm2835-isp). Pi CSI ribbon cameras not supported in v1.x.
 - **Object detection:** `firmware/orangepi/detector.py` — YOLOv8n ONNX model via onnxruntime (falls back to OpenCV DNN). Model deployed via SCP (`models/yolov8n.onnx`, 12 MB, gitignored). Returns bounding boxes with labels and confidence scores.
 - **Config page:** Per-camera cards with Capture Frame + Detect Objects buttons, threshold slider, resolution toggle (320/640), auto-refresh, canvas overlay with bounding boxes
 - **Depth estimation:** `firmware/orangepi/depth_estimator.py` — Depth-Anything-V2 small (95 MB ONNX). 6.5s on ARM. Produces relative depth maps and 3D point clouds.

@@ -5711,9 +5711,8 @@ function cvDown(e){
 
   // Rotate mode: compass interaction
   if(_layTool==='rotate'){
-    // Compass ring drag
+    // Compass ring drag — expanded hit zone (anywhere beyond fixture circle)
     if(_compassFid && _compassHitTest(m.x,m.y,cv)){
-      // Save undo before rotating
       var cf=null;_fixtures.forEach(function(fx){if(fx.id===_compassFid)cf=fx;});
       if(cf)_laySaveUndo(cf);
       _compassDragging=true;
@@ -5722,12 +5721,19 @@ function cvDown(e){
       _compassApply(angle,!e.shiftKey);
       return;
     }
-    // Click fixture to show compass
+    // Click fixture to show compass (only dmx/camera have aim direction)
     if(hit>=0){
       var placed=_fixtures.filter(_isFixturePlaced);
-      _compassFid=placed[hit].id;
-      cv.style.cursor='crosshair';
-      drawLayout();
+      var hf=placed[hit];
+      if(hf.fixtureType==='dmx'||hf.fixtureType==='camera'){
+        _compassFid=hf.id;
+        cv.style.cursor='crosshair';
+        drawLayout();
+        document.getElementById('hs').textContent='Rotate mode — drag ring to aim '+
+          (hf.name||'fixture');
+      }else{
+        document.getElementById('hs').textContent='Rotate mode — LED fixtures have no aim direction';
+      }
     }else{
       _compassFid=null;drawLayout();
     }
@@ -5758,6 +5764,8 @@ function _layToolToggle(){
     btn.title=_layTool==='move'?'Move mode (press R for Rotate)':'Rotate mode (press M for Move)';
   }
   _compassFid=null;
+  var cv=document.getElementById('lcv');
+  if(cv)cv.style.cursor=_layTool==='move'?'grab':'default';
   drawLayout();
   document.getElementById('hs').textContent=_layTool==='move'?'Move mode — drag to reposition':'Rotate mode — click fixture to aim';
 }
@@ -5803,13 +5811,13 @@ function _compassShow(fid){
 }
 
 function _compassHitTest(mx, my, cv){
-  // Check if mouse is on the compass ring
+  // Check if mouse is on or near the compass (anywhere from fixture edge to beyond ring)
   if(!_compassFid)return false;
   var f=null;(_fixtures||[]).filter(_isFixturePlaced).forEach(function(fx){if(fx.id===_compassFid)f=fx;});
   if(!f)return false;
   var np=_nodePos(f,cv.width,cv.height);
   var dist=Math.sqrt((mx-np.cx)*(mx-np.cx)+(my-np.cy)*(my-np.cy));
-  return dist>=35 && dist<=55;  // ring zone
+  return dist>=12 && dist<=65;  // from just outside fixture circle to beyond ring
 }
 
 function _compassAngle(mx, my, cv){
@@ -5959,7 +5967,9 @@ function cvUp(){
       ra('PUT','/api/fixtures/'+f.id,{rotation:f.rotation});
     }
   }
-  drag=null;var cv=document.getElementById('lcv');if(cv)cv.style.cursor='grab';
+  drag=null;
+  var cv=document.getElementById('lcv');
+  if(cv)cv.style.cursor=_layTool==='rotate'?(_compassFid?'crosshair':'default'):'grab';
 }
 
 // ── Actions library ──────────────────────────────────────────────────────────

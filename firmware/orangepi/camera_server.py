@@ -188,40 +188,8 @@ def _detect_cameras():
         else:
             cameras.append({"device": dev, "resW": 0, "resH": 0,
                             "name": dev, "probed": False})
-    # Also detect Raspberry Pi CSI cameras via rpicam-hello or libcamera-hello
-    list_cmd = None
-    for _cmd in ["/usr/bin/rpicam-hello", "/usr/bin/libcamera-hello"]:
-        if os.path.exists(_cmd):
-            list_cmd = _cmd; break
-    if list_cmd:
-      try:
-        r = subprocess.run([list_cmd, "--list-cameras"],
-                           capture_output=True, text=True, timeout=5)
-        for line in r.stdout.splitlines():
-            # Lines like: "0 : imx219 [3280x2464 10-bit RGGB] (/base/...)"
-            line = line.strip()
-            if line and line[0].isdigit() and ":" in line:
-                parts = line.split(":", 1)
-                idx = parts[0].strip()
-                rest = parts[1].strip()
-                # Extract name and resolution
-                name = rest.split("[")[0].strip() if "[" in rest else rest
-                res_w, res_h = 1920, 1080  # default
-                if "[" in rest and "x" in rest:
-                    try:
-                        res_str = rest.split("[")[1].split("]")[0].split()[0]
-                        res_w, res_h = int(res_str.split("x")[0]), int(res_str.split("x")[1])
-                    except (IndexError, ValueError):
-                        pass
-                # Use "libcamera:N" as device identifier
-                cameras.append({
-                    "device": f"libcamera:{idx}",
-                    "resW": res_w, "resH": res_h,
-                    "name": f"Pi Camera ({name})",
-                    "probed": True, "libcamera": True,
-                })
-      except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+    # NOTE: Pi CSI ribbon cameras (libcamera/rpicam) not supported in v1.x.
+    # Only USB cameras via V4L2 are supported. See docs/camera.md for details.
 
     return cameras
 
@@ -755,24 +723,7 @@ def snapshot():
 # ── OpenCV capture helper ─────────────────────────────────────────────
 
 def _cv_capture(device, timeout=5):
-    """Capture a single BGR frame. Supports V4L2 devices and libcamera."""
-    # Raspberry Pi CSI camera via libcamera
-    if isinstance(device, str) and device.startswith("libcamera:"):
-        try:
-            import subprocess, cv2, numpy as np
-            cam_idx = device.split(":")[1]
-            tmp = "/tmp/slyled_capture.jpg"
-            # Try rpicam-still (newer) then libcamera-still (older)
-            still_cmd = "rpicam-still" if os.path.exists("/usr/bin/rpicam-still") else "libcamera-still"
-            subprocess.run(
-                [still_cmd, "--camera", cam_idx, "-o", tmp,
-                 "--width", "1920", "--height", "1080", "--nopreview", "-t", "500"],
-                capture_output=True, timeout=10)
-            frame = cv2.imread(tmp)
-            return frame
-        except Exception as e:
-            log.warning("libcamera capture failed: %s", e)
-            return None
+    """Capture a single BGR frame from a V4L2 USB camera."""
 
     # Standard V4L2 via OpenCV
     try:

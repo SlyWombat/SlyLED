@@ -380,7 +380,9 @@ Community server: https://electricrv.ca/api/profiles/
 
 ## 13. Camera Nodes
 
-Camera nodes are Orange Pi or Raspberry Pi single-board computers with USB cameras. They provide live snapshots and AI-powered object detection for stage setup.
+Camera nodes are Orange Pi or Raspberry Pi single-board computers with **USB cameras**. They provide live snapshots and AI-powered object detection for stage setup.
+
+> **Note:** Only USB cameras are supported. Pi CSI ribbon cameras (e.g. Pi Camera Module, Freenove FNK0056) are not supported in v1.x. Use USB webcams instead.
 
 ### Adding a Camera Node
 1. Flash an Orange Pi with the supported OS image

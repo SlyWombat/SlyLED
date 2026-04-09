@@ -25,9 +25,15 @@ The camera will be running on different hardware than the ESP, but should behave
 
 
 
-Lower end camera hardware will be an OrangePI Zero with a Freenove FNK0056 camera attached for static setup and auto field of view
+**v1.x: USB cameras only.** Pi CSI ribbon cameras (Freenove FNK0056, Pi Camera Module) are not supported due to driver compatibility issues across Pi models and OS versions. Use USB webcams instead.
 
-A higher end system with an OrangePI 4A with a USB camera for the tracking capabilities. The hardware should be able to report to the orchestration engine if it has the capability for tracking. 
+Recommended USB cameras:
+- **Spedal MF920P** — 100° FOV, 1080p, good low-light
+- **NexiGo N60** — 60° FOV, 1080p, compact
+- **EMEET SmartCam Nova 4K** — 90° FOV, 4K, best for wide coverage
+- **Logitech C920/C930e** — 78-90° FOV, reliable
+
+Camera nodes: Orange Pi 4A or Raspberry Pi 3B+/4/5 with USB cameras. The hardware should be able to report to the orchestration engine if it has the capability for tracking.
 
 
 
