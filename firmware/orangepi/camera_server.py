@@ -1459,6 +1459,248 @@ def aruco_reset():
     return jsonify(ok=True, frameCount=0)
 
 
+# ── ArUco Stage Mapping — pixel ↔ real stage coordinates ─────────────
+#
+# ArUco markers placed at KNOWN stage positions (measured by user) allow
+# building a homography that maps camera pixels to real stage mm.
+#
+# This is the foundation for single-coordinate-system calibration:
+#   - Fixtures positioned in stage mm (from layout)
+#   - Camera sees beam at pixel (u,v) → homography → stage (X, Y=0, Z)
+#   - Compare expected vs actual → compute orientation correction
+#
+# The homography maps the FLOOR PLANE (Y=0) only. For 3D points above
+# the floor, additional depth info is needed (from ArUco marker distance
+# or monocular depth scaled by the known marker sizes).
+#
+# Coordinate system (matches layout 3D view):
+#   X = stage width  (stage right=0 → stage left)
+#   Y = height       (floor=0 → ceiling) — always 0 for floor mapping
+#   Z = depth        (back wall=0 → audience)
+
+@app.post("/calibrate/stage-map")
+def stage_map():
+    """Build pixel→stage floor mapping from ArUco markers at known positions.
+
+    The user places ArUco markers on the stage floor and provides their
+    real-world stage coordinates. The camera detects the markers and
+    computes a homography matrix that maps any pixel on the floor plane
+    to real stage (X, Z) coordinates in mm.
+
+    Body: {
+        cam: 0,
+        markers: {
+            "0": {"x": 0, "z": 0},         // marker ID → stage position (floor, Y=0)
+            "1": {"x": 3000, "z": 0},
+            "2": {"x": 1500, "z": 1500},
+            ...
+        },
+        markerSize: 150   // physical marker size in mm (for distance estimation)
+    }
+
+    Requires at least 4 markers with known positions for a reliable homography.
+
+    Returns: {
+        ok: true,
+        markersDetected: N,
+        markersMatched: N,       // how many detected markers have known positions
+        homography: [...],       // 3x3 matrix (flattened) for pixel→stage
+        rmsError: float,         // reprojection error in mm
+        markerDistances: {...},  // real distance to each marker (from marker size + fx)
+        depthScale: float,       // multiplier to convert relative depth → real mm
+    }
+    """
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    known_markers = body.get("markers", {})
+    marker_size_mm = body.get("markerSize", ARUCO_MARKER_SIZE)
+
+    if len(known_markers) < 4:
+        return jsonify(ok=False, err=f"Need at least 4 markers with known positions, got {len(known_markers)}")
+
+    cameras = _hw_info.get("cameras", [])
+    if cam_idx >= len(cameras):
+        return jsonify(ok=False, err="Invalid camera index"), 400
+
+    import cv2
+    import numpy as np
+
+    # ── Step 1: Capture frame and detect all ArUco markers ──────────
+    frame = _cv_capture(cameras[cam_idx]["device"])
+    if frame is None:
+        return jsonify(ok=False, err="Capture failed"), 503
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_ID)
+    params = cv2.aruco.DetectorParameters_create()
+    corners, ids, rejected = cv2.aruco.detectMarkers(gray, aruco_dict, parameters=params)
+
+    if ids is None or len(ids) == 0:
+        return jsonify(ok=False, err="No ArUco markers detected in frame")
+
+    detected_ids = ids.flatten().tolist()
+    log.info("Stage map cam%d: detected markers %s", cam_idx, detected_ids)
+
+    # ── Step 2: Match detected markers with known stage positions ───
+    # For each detected marker that has a known stage position,
+    # collect the pixel center and the stage (X, Z) coordinate.
+    pixel_points = []   # pixel coordinates of marker centers
+    stage_points = []   # corresponding stage (X, Z) coordinates in mm
+
+    for i, marker_id in enumerate(detected_ids):
+        str_id = str(marker_id)
+        if str_id not in known_markers:
+            continue
+        # Marker center pixel = average of 4 corners
+        cx = float(np.mean(corners[i][0][:, 0]))
+        cy = float(np.mean(corners[i][0][:, 1]))
+        # Stage position from user input
+        stage_x = known_markers[str_id]["x"]
+        stage_z = known_markers[str_id]["z"]
+        pixel_points.append([cx, cy])
+        stage_points.append([stage_x, stage_z])
+
+    matched = len(pixel_points)
+    log.info("Stage map cam%d: %d/%d markers matched with known positions",
+             cam_idx, matched, len(detected_ids))
+
+    if matched < 4:
+        return jsonify(ok=False,
+                       err=f"Only {matched} markers matched (need 4+). Detected IDs: {detected_ids}",
+                       markersDetected=len(detected_ids), markersMatched=matched)
+
+    # ── Step 3: Compute homography — pixel (u,v) → stage (X, Z) ────
+    # This is a 2D-to-2D mapping on the floor plane.
+    # We use findHomography which finds a 3x3 matrix H such that:
+    #   [X, Z, 1]^T ~ H * [u, v, 1]^T
+    # After applying H, divide by the third component (homogeneous divide).
+
+    src = np.array(pixel_points, dtype=np.float32)    # pixel coords
+    dst = np.array(stage_points, dtype=np.float32)    # stage (X, Z) coords
+    H, mask = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
+
+    if H is None:
+        return jsonify(ok=False, err="Homography computation failed")
+
+    # ── Step 4: Compute reprojection error ──────────────────────────
+    # Transform pixel points through H and compare with known stage positions.
+    errors = []
+    for i in range(matched):
+        px = np.array([pixel_points[i][0], pixel_points[i][1], 1.0])
+        mapped = H @ px
+        mapped = mapped / mapped[2]  # homogeneous divide
+        ex = mapped[0] - stage_points[i][0]
+        ez = mapped[1] - stage_points[i][1]
+        errors.append(math.sqrt(ex * ex + ez * ez))
+    rms_error = (sum(e * e for e in errors) / len(errors)) ** 0.5
+
+    # ── Step 5: Compute real distance to each marker ────────────────
+    # Using calibrated focal length + known marker size:
+    #   real_distance = (marker_size_mm * fx) / apparent_pixel_size
+    # This gives us a depth scale factor for monocular depth.
+
+    cal_path = CALIB_DIR / f"intrinsic_cam{cam_idx}.json"
+    fx = None
+    if cal_path.exists():
+        try:
+            cal = json.loads(cal_path.read_text())
+            fx = cal.get("fx")
+        except Exception:
+            pass
+    if not fx:
+        # Estimate from FOV
+        fov = _camera_fov(cam_idx)
+        w = frame.shape[1]
+        fx = (w / 2) / math.tan(math.radians(fov / 2))
+
+    marker_distances = {}
+    for i, marker_id in enumerate(detected_ids):
+        # Apparent size = distance between first two corners in pixels
+        c = corners[i][0]
+        side_px = float(np.linalg.norm(c[0] - c[1]))
+        if side_px > 1:
+            real_dist = (marker_size_mm * fx) / side_px
+            marker_distances[str(marker_id)] = round(real_dist, 1)
+
+    # Compute depth scale: ratio of real distances to monocular depth values
+    # (This will be used later to scale the point cloud to real mm)
+    depth_scale = None
+    if marker_distances:
+        avg_real = sum(marker_distances.values()) / len(marker_distances)
+        # For now just store the average distance — full scaling needs
+        # matching with monocular depth values at the same pixels
+        depth_scale = round(avg_real, 1)
+
+    # ── Step 6: Save the stage map ──────────────────────────────────
+    stage_map_data = {
+        "cam": cam_idx,
+        "homography": H.flatten().tolist(),
+        "rmsError": round(rms_error, 2),
+        "markersDetected": len(detected_ids),
+        "markersMatched": matched,
+        "markerPositions": known_markers,
+        "markerDistances": marker_distances,
+        "depthScale": depth_scale,
+        "imageSize": [frame.shape[1], frame.shape[0]],
+        "timestamp": time.time(),
+    }
+    map_path = CALIB_DIR / f"stage_map_cam{cam_idx}.json"
+    map_path.write_text(json.dumps(stage_map_data, indent=2))
+
+    log.info("Stage map cam%d: H computed from %d markers, RMS=%.1fmm, distances=%s",
+             cam_idx, matched, rms_error, marker_distances)
+
+    return jsonify(ok=True, **stage_map_data)
+
+
+@app.post("/calibrate/pixel-to-stage")
+def pixel_to_stage():
+    """Convert a camera pixel coordinate to real stage position on the floor.
+
+    Uses the saved stage map homography. Only valid for points on the
+    floor plane (Y=0 in stage coordinates).
+
+    Body: {cam: 0, pixelX: 960, pixelY: 700}
+    Returns: {ok, stageX, stageZ, stageY: 0}
+    """
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    px = body.get("pixelX", 0)
+    py = body.get("pixelY", 0)
+
+    map_path = CALIB_DIR / f"stage_map_cam{cam_idx}.json"
+    if not map_path.exists():
+        return jsonify(ok=False, err="No stage map — run /calibrate/stage-map first")
+
+    import numpy as np
+    stage_map = json.loads(map_path.read_text())
+    H = np.array(stage_map["homography"]).reshape(3, 3)
+
+    # Apply homography: pixel → stage floor
+    p = np.array([px, py, 1.0])
+    mapped = H @ p
+    if abs(mapped[2]) < 1e-9:
+        return jsonify(ok=False, err="Degenerate mapping at this pixel")
+    stage_x = float(mapped[0] / mapped[2])
+    stage_z = float(mapped[1] / mapped[2])
+
+    return jsonify(ok=True, stageX=round(stage_x, 1), stageY=0, stageZ=round(stage_z, 1))
+
+
+@app.get("/calibrate/stage-map")
+def stage_map_get():
+    """Get saved stage map for a camera. Query: ?cam=0"""
+    cam_idx = int(request.args.get("cam", 0))
+    map_path = CALIB_DIR / f"stage_map_cam{cam_idx}.json"
+    if not map_path.exists():
+        return jsonify(calibrated=False)
+    try:
+        data = json.loads(map_path.read_text())
+        return jsonify(calibrated=True, **data)
+    except Exception:
+        return jsonify(calibrated=False)
+
+
 # ── Tracking mode ──────────────────────────────────────────────────────
 
 _tracker = None
