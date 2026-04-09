@@ -1046,28 +1046,43 @@ def intrinsic_capture():
             continue
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        ret, corners = cv2.findChessboardCorners(
-            gray, (CHECKER_COLS, CHECKER_ROWS),
-            cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE)
-
-        if not ret:
-            results.append({"cam": cam_idx, "found": False,
-                            "frameCount": len(_calib_frames.get(cam_idx, []))})
-            continue
-
-        # Refine to sub-pixel
+        import numpy as np
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-        corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+        flags = cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE
+        search_img = gray.copy()
 
+        # Find ALL checkerboards in the frame (mask each found one, search again)
+        boards_found = 0
         if cam_idx not in _calib_frames:
             _calib_frames[cam_idx] = []
-        _calib_frames[cam_idx].append((corners, gray.shape[::-1]))
+
+        for attempt in range(10):  # max 10 boards per frame
+            ret, corners = cv2.findChessboardCorners(
+                search_img, (CHECKER_COLS, CHECKER_ROWS), flags)
+            if not ret:
+                break
+            # Refine to sub-pixel
+            corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+            _calib_frames[cam_idx].append((corners, gray.shape[::-1]))
+            boards_found += 1
+            # Mask out found board region so next search finds a different one
+            pts = corners.reshape(-1, 2).astype(np.int32)
+            margin = 15
+            x_min = max(0, pts[:, 0].min() - margin)
+            x_max = min(search_img.shape[1], pts[:, 0].max() + margin)
+            y_min = max(0, pts[:, 1].min() - margin)
+            y_max = min(search_img.shape[0], pts[:, 1].max() + margin)
+            search_img[y_min:y_max, x_min:x_max] = 128  # neutral gray mask
 
         count = len(_calib_frames[cam_idx])
-        log.info("Intrinsic calibration cam%d: captured frame %d (%d corners)",
-                 cam_idx, count, len(corners))
-        results.append({"cam": cam_idx, "found": True, "corners": len(corners),
-                        "frameCount": count})
+        if boards_found > 0:
+            log.info("Intrinsic calibration cam%d: found %d boards (%d total frames)",
+                     cam_idx, boards_found, count)
+            results.append({"cam": cam_idx, "found": True, "boardsInFrame": boards_found,
+                            "corners": CHECKER_ROWS * CHECKER_COLS, "frameCount": count})
+        else:
+            results.append({"cam": cam_idx, "found": False,
+                            "frameCount": count})
 
     return jsonify(ok=True, cameras=results)
 
