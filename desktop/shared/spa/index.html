@@ -421,19 +421,7 @@ body.light .li:hover{border-color:#3b82f6}
 
   <!-- CAMERAS -->
   <div id='ss-cameras' style='display:none'>
-    <div class='card' style='max-width:600px'>
-      <div class='card-title'>Camera Lens Calibration</div>
-      <p style='font-size:.85em;color:#94a3b8;margin-bottom:.6em'>Calibrate camera intrinsics (focal length, distortion) using a printed checkerboard pattern. This improves point cloud accuracy for all cameras on the network.</p>
-      <div style='margin-bottom:.8em'>
-        <button class='btn btn-on' onclick='_printAruco()' style='font-size:.85em'>Print ArUco Markers</button>
-        <span style='font-size:.78em;color:#64748b;margin-left:.5em'>6 markers, 150mm each &mdash; one per sheet, tape to boxes/walls on stage</span>
-      </div>
-      <div style='margin-bottom:.5em'>
-        <button class='btn' onclick='_printCheckerboard()' style='font-size:.78em;padding:.2em .5em'>Print Checkerboard (close-range)</button>
-        <span style='font-size:.72em;color:#4a5568;margin-left:.3em'>For lab/bench use only</span>
-      </div>
-      <div id='cam-cal-list' style='font-size:.82em;color:#94a3b8'>Loading cameras...</div>
-    </div>
+    <div id='cam-cal-wizard'></div>
   </div>
 
   <!-- ADVANCED -->
@@ -4713,7 +4701,7 @@ function _updateSidePanel(fixtureId){
       h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.4em">FOV: '+(f.fovDeg||60)+'\u00b0 | '+(f.resolutionW||1920)+'\u00d7'+(f.resolutionH||1080)+'</div>';
       h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.3em">Homography: '+(f.calibrated?'<span style="color:#4ade80">\u2713 Done</span>':'<span style="color:#f59e0b">Not done</span>')+'</div>';
       h+='<div style="display:flex;gap:.3em;margin-bottom:.4em">';
-      h+='<button class="btn" onclick="_intrinsicCalStart('+f.id+')" style="font-size:.7em;padding:.2em .5em;background:#164e63;color:#67e8f9">Calibrate Lens</button>';
+      h+='<button class="btn" onclick="_intrinsicCalStart('+f.id+')" style="font-size:.7em;padding:.2em .5em;background:#164e63;color:#67e8f9">Calibrate Lens</button> ';
       h+='</div>';
       // Aim point editable
       var cap=f.aimPoint||[0,0,0];
@@ -5917,133 +5905,459 @@ function _printCheckerboard(){
   if(win)win.print();
 }
 
+// ── Intrinsic calibration wizard (5-step) ───────────────────────────
+var _calWiz={step:1,cameras:[],captures:0,captureLog:[],results:{},markersPlaced:false,_refreshTimer:null};
+var _calWizMinCaptures=5;
+
 function _loadCamCalStatus(){
-  var el=document.getElementById('cam-cal-list');if(!el)return;
+  // Load cameras and render wizard at current step
   var cams=(_fixtures||[]).filter(function(f){return f.fixtureType==='camera';});
-  if(!cams.length){el.innerHTML='<p style="color:#555">No cameras registered. Add cameras in the Setup tab.</p>';return;}
-  var h='<table class="tbl" style="font-size:.82em"><tr><th>Camera</th><th>IP</th><th>Lens Calibration</th><th>Action</th></tr>';
-  cams.forEach(function(f){
-    var ip=f.cameraIp||'';
-    h+='<tr><td>'+escapeHtml(f.name)+'</td><td>'+escapeHtml(ip)+'</td>';
-    h+='<td id="cam-cal-st-'+f.id+'"><span style="color:#888">Checking...</span></td>';
-    h+='<td><button class="btn" onclick="_intrinsicCalStart('+f.id+')" style="font-size:.75em;padding:.2em .5em;background:#164e63;color:#67e8f9">Calibrate</button></td>';
-    h+='</tr>';
-    // Check calibration status from camera node
-    if(ip){
-      (function(fid,camIp,camIdx){
-        var x=new XMLHttpRequest();
-        x.open('GET','http://'+camIp+':5000/calibrate/intrinsic?cam='+(camIdx||0));
-        x.timeout=5000;
-        x.onload=function(){
-          try{
-            var r=JSON.parse(x.responseText);
-            var td=document.getElementById('cam-cal-st-'+fid);
-            if(td){
-              if(r.calibrated)td.innerHTML='<span style="color:#4ade80">\u2713 RMS='+r.rmsError+'px ('+r.frameCount+' frames)</span>';
-              else td.innerHTML='<span style="color:#f59e0b">Not calibrated</span>';
-            }
-          }catch(e){}
-        };
-        x.onerror=function(){
-          var td=document.getElementById('cam-cal-st-'+fid);
-          if(td)td.innerHTML='<span style="color:#555">Offline</span>';
-        };
-        x.send();
-      })(f.id,ip,f.cameraIdx||0);
-    }
+  _calWiz.cameras=cams.map(function(f){
+    var existing=null;
+    _calWiz.cameras.forEach(function(c){if(c.id===f.id)existing=c;});
+    return{id:f.id,name:f.name,ip:f.cameraIp||'',camIdx:f.cameraIdx||0,
+      selected:existing?existing.selected:!!f.cameraIp,
+      calibrated:existing?existing.calibrated:false,
+      rmsError:existing?existing.rmsError:null};
   });
-  h+='</table>';
-  el.innerHTML=h;
+  // Check calibration status from each camera node
+  _calWiz.cameras.forEach(function(cam){
+    if(!cam.ip)return;
+    var x=new XMLHttpRequest();
+    x.open('GET','http://'+cam.ip+':5000/calibrate/intrinsic?cam='+(cam.camIdx||0));
+    x.timeout=5000;
+    x.onload=function(){
+      try{
+        var r=JSON.parse(x.responseText);
+        cam.calibrated=!!r.calibrated;
+        cam.rmsError=r.calibrated?parseFloat(r.rmsError):null;
+        _calWizRender();
+      }catch(e){}
+    };
+    x.send();
+  });
+  _calWizRender();
 }
 
-// ── Intrinsic lens calibration wizard ─────────────────────────────────
-var _icalFid=null,_icalIp=null,_icalCamIdx=0;
-
-function _intrinsicCalStart(fid){
-  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id==fid)f=fx;});
-  if(!f||f.fixtureType!=='camera')return;
-  _icalFid=fid;
-  _icalIp=f.cameraIp||f.cameraUrl.replace('http://','').split(':')[0];
-  _icalCamIdx=f.cameraIdx||0;
-  var h='<div style="min-width:400px">';
-  h+='<p style="color:#94a3b8;font-size:.85em;margin-bottom:.6em">Place printed ArUco markers on stage (boxes, walls, truss) visible to <strong>'+escapeHtml(f.name)+'</strong>. Each capture detects all visible markers. 3\u20135 captures with markers at different positions gives good results.</p>';
-  h+='<div class="card" style="padding:.6em;margin-bottom:.4em">';
-  h+='<div style="font-size:.82em;color:#64748b;margin-bottom:.3em">Print markers from Settings > Cameras. Tape one per sheet to boxes/walls at different heights and angles. 150mm markers visible at 5m+.</div>';
-  h+='</div>';
-  h+='<div style="display:flex;gap:.4em;align-items:center;margin-bottom:.6em">';
-  h+='<button class="btn btn-on" id="ical-capture" onclick="_icalCapture()" style="flex:1">Capture Frame</button>';
-  h+='<span id="ical-count" style="font-size:.85em;color:#94a3b8">0 frames</span>';
-  h+='</div>';
-  h+='<div id="ical-log" style="font-size:.78em;color:#64748b;max-height:120px;overflow-y:auto;margin-bottom:.5em"></div>';
-  h+='<div id="ical-result"></div>';
-  h+='<div style="display:flex;gap:.4em;margin-top:.5em">';
-  h+='<button class="btn btn-on" id="ical-compute" onclick="_icalCompute()" style="display:none">Compute Calibration</button>';
-  h+='<button class="btn" onclick="_icalReset()">Reset</button>';
-  h+='<button class="btn btn-off" onclick="closeModal()">Close</button>';
-  h+='</div></div>';
-  document.getElementById('modal-title').textContent='Lens Calibration — '+f.name;
-  document.getElementById('modal-body').innerHTML=h;
-  document.getElementById('modal').style.display='block';
-  // Reset frames on camera (ArUco method)
-  ra('POST','http://'+_icalIp+':5000/calibrate/aruco/reset',{cam:_icalCamIdx});
+function _calWizStart(){
+  _calWiz.step=1;_calWiz.captures=0;_calWiz.captureLog=[];
+  _calWiz.results={};_calWiz.markersPlaced=false;
+  showTab('settings');_setSection('cameras');
+  _loadCamCalStatus();
 }
 
-function _icalCapture(){
-  var btn=document.getElementById('ical-capture');
-  if(btn)btn.disabled=true;
-  var logEl=document.getElementById('ical-log');
-  ra('POST','http://'+_icalIp+':5000/calibrate/aruco/capture',{cam:_icalCamIdx},function(r){
-    if(btn)btn.disabled=false;
-    if(!r||!r.ok){if(logEl)logEl.innerHTML+='<div style="color:#f66">Capture failed</div>';return;}
-    var cams=r.cameras||[r];
-    cams.forEach(function(c){
-      if(c.markersFound>0){
-        if(logEl)logEl.innerHTML+='<div style="color:#4ade80">\u2713 Frame '+c.frameCount+': '+c.markersFound+' markers found (IDs: '+(c.ids||[]).join(',')+') </div>';
-      }else{
-        if(logEl)logEl.innerHTML+='<div style="color:#f59e0b">\u2717 No ArUco markers found — ensure markers are visible and well-lit</div>';
-      }
-      var cnt=document.getElementById('ical-count');
-      if(cnt)cnt.textContent=c.frameCount+' frames, '+(c.markersFound||0)+' markers this capture';
-      if(c.frameCount>=3){
-        var cb=document.getElementById('ical-compute');if(cb)cb.style.display='inline-block';
-      }
+function _calWizNext(){
+  if(_calWiz.step<5)_calWiz.step++;
+  if(_calWiz.step===3){
+    // Reset ArUco frames on all selected cameras
+    _calWiz.captures=0;_calWiz.captureLog=[];
+    _calWiz.cameras.forEach(function(cam){
+      if(!cam.selected||!cam.ip)return;
+      ra('POST','http://'+cam.ip+':5000/calibrate/aruco/reset',{cam:cam.camIdx});
     });
-    if(logEl)logEl.scrollTop=logEl.scrollHeight;
-  });
+  }
+  if(_calWiz.step===4)_calWizCompute();
+  _calWizRender();
 }
 
-function _icalCompute(){
-  var btn=document.getElementById('ical-compute');
-  if(btn){btn.disabled=true;btn.textContent='Computing...';}
-  ra('POST','http://'+_icalIp+':5000/calibrate/aruco/compute',{cam:_icalCamIdx,markerSize:150},function(r){
-    var res=document.getElementById('ical-result');
-    if(!r||!r.ok){
-      if(res)res.innerHTML='<div style="color:#f66">'+( r&&r.err||'Failed')+'</div>';
-      if(btn){btn.disabled=false;btn.textContent='Compute Calibration';}
+function _calWizBack(){
+  if(_calWiz._refreshTimer){clearInterval(_calWiz._refreshTimer);_calWiz._refreshTimer=null;}
+  if(_calWiz.step>1)_calWiz.step--;
+  _calWizRender();
+}
+
+function _calWizReset(){
+  if(_calWiz._refreshTimer){clearInterval(_calWiz._refreshTimer);_calWiz._refreshTimer=null;}
+  _calWiz.step=1;_calWiz.captures=0;_calWiz.captureLog=[];
+  _calWiz.results={};_calWiz.markersPlaced=false;
+  _calWizRender();
+}
+
+function _calWizRender(){
+  var el=document.getElementById('cam-cal-wizard');if(!el)return;
+  var w=_calWiz,h='';
+  // Step indicator bar
+  h+='<div style="display:flex;gap:.3em;margin-bottom:1.2em;align-items:center">';
+  for(var si=1;si<=5;si++){
+    var active=si===w.step,done=si<w.step;
+    var labels=['Select','Print','Capture','Compute','Done'];
+    h+='<div style="flex:1;text-align:center">';
+    h+='<div style="height:4px;background:'+(done?'#22d3ee':active?'#3b82f6':'#1e293b')+';border-radius:2px;margin-bottom:.3em"></div>';
+    h+='<span style="font-size:.7em;color:'+(active?'#e2e8f0':done?'#22d3ee':'#475569')+';font-family:Space Grotesk;font-weight:600;letter-spacing:.06em;text-transform:uppercase">'+labels[si-1]+'</span>';
+    h+='</div>';
+  }
+  h+='</div>';
+
+  if(w.step===1)h+=_calWizStep1();
+  else if(w.step===2)h+=_calWizStep2();
+  else if(w.step===3)h+=_calWizStep3();
+  else if(w.step===4)h+=_calWizStep4();
+  else if(w.step===5)h+=_calWizStep5();
+  el.innerHTML=h;
+
+  // Start snapshot refresh timer for step 3
+  if(w.step===3){
+    if(w._refreshTimer)clearInterval(w._refreshTimer);
+    w._refreshTimer=setInterval(function(){_calWizRefreshPreviews();},2500);
+    setTimeout(function(){_calWizRefreshPreviews();},200);
+  }else{
+    if(w._refreshTimer){clearInterval(w._refreshTimer);w._refreshTimer=null;}
+  }
+}
+
+function _calWizStep1(){
+  var w=_calWiz,h='';
+  h+='<div class="card" style="max-width:640px">';
+  h+='<div class="card-title">Step 1: Select Cameras</div>';
+  h+='<p style="font-size:.85em;color:#94a3b8;margin-bottom:.8em">Choose which cameras to calibrate. Calibrating the lens (intrinsics) corrects for distortion and provides accurate focal length data needed for point clouds and spatial mapping.</p>';
+  if(!w.cameras.length){
+    h+='<p style="color:#f59e0b;font-size:.85em">No cameras registered. Add cameras in the Setup tab first.</p>';
+    h+='</div>';return h;
+  }
+  // Select All / Deselect All
+  h+='<div style="margin-bottom:.6em;display:flex;gap:.4em">';
+  h+='<button class="btn" onclick="_calWizSelectAll(true)" style="font-size:.75em;padding:.2em .6em;background:#1e3a5f;color:#93c5fd">Select All</button>';
+  h+='<button class="btn" onclick="_calWizSelectAll(false)" style="font-size:.75em;padding:.2em .6em;background:#1e293b;color:#64748b">Deselect All</button>';
+  h+='</div>';
+  // Camera list
+  w.cameras.forEach(function(cam,i){
+    var checked=cam.selected?'checked':'';
+    var statusHtml='';
+    if(cam.calibrated&&cam.rmsError!==null){
+      statusHtml='<span style="color:#4ade80;font-size:.78em">\u2713 RMS='+cam.rmsError.toFixed(2)+'px</span>';
+    }else if(cam.calibrated){
+      statusHtml='<span style="color:#4ade80;font-size:.78em">\u2713 Calibrated</span>';
+    }else{
+      statusHtml='<span style="color:#f59e0b;font-size:.78em">\u26a0 Not calibrated</span>';
+    }
+    if(!cam.ip)statusHtml='<span style="color:#555;font-size:.78em">No IP assigned</span>';
+    h+='<div style="display:flex;align-items:center;gap:.6em;padding:.4em .5em;border-radius:4px;margin-bottom:.3em;background:'+(cam.selected?'rgba(34,211,238,.06)':'transparent')+';border:1px solid '+(cam.selected?'rgba(34,211,238,.15)':'rgba(51,65,85,.2)')+'">';
+    h+='<input type="checkbox" id="calwiz-cam-'+i+'" '+checked+' onchange="_calWizToggleCam('+i+',this.checked)" style="accent-color:#22d3ee">';
+    h+='<div style="flex:1"><div style="font-size:.85em;color:#e2e8f0">'+escapeHtml(cam.name)+'</div>';
+    h+='<div style="font-size:.72em;color:#64748b">'+escapeHtml(cam.ip||'no IP')+(cam.camIdx?' cam'+cam.camIdx:'')+'</div></div>';
+    h+=statusHtml;
+    h+='</div>';
+  });
+  // Navigation
+  var selCount=w.cameras.filter(function(c){return c.selected&&c.ip;}).length;
+  h+='<div style="display:flex;justify-content:flex-end;gap:.4em;margin-top:.8em">';
+  h+='<button class="btn btn-on" onclick="_calWizNext()"'+(selCount===0?' disabled':'')+' style="'+(selCount===0?'opacity:.5;cursor:not-allowed':'')+'">Next \u2192</button>';
+  h+='</div></div>';
+  return h;
+}
+
+function _calWizStep2(){
+  var w=_calWiz,h='';
+  h+='<div class="card" style="max-width:640px">';
+  h+='<div class="card-title">Step 2: Prepare Markers</div>';
+  h+='<p style="font-size:.85em;color:#94a3b8;margin-bottom:.8em">Print ArUco markers and place them within view of the selected cameras. The calibration process uses these markers to compute lens parameters.</p>';
+  // Print buttons
+  h+='<div style="display:flex;gap:.5em;flex-wrap:wrap;margin-bottom:1em">';
+  h+='<button class="btn btn-on" onclick="_printAruco()" style="font-size:.85em">Print ArUco Markers</button>';
+  h+='<button class="btn" onclick="_printCheckerboard()" style="font-size:.78em;padding:.3em .6em;background:#1e293b;color:#94a3b8">Print Checkerboard (close-range)</button>';
+  h+='</div>';
+  // Instructions card
+  h+='<div style="background:rgba(34,211,238,.04);border:1px solid rgba(34,211,238,.12);border-radius:6px;padding:.8em 1em;margin-bottom:1em">';
+  h+='<div style="font-size:.85em;color:#e2e8f0;margin-bottom:.5em;font-weight:600">Placement instructions:</div>';
+  h+='<ul style="font-size:.82em;color:#94a3b8;margin-left:1.2em;line-height:1.8">';
+  h+='<li>Print 6 markers, one per sheet (A4 or Letter)</li>';
+  h+='<li>Tape to boxes, walls, or truss at <strong>different heights and angles</strong></li>';
+  h+='<li>Place within camera view, at various distances (1m to 5m+)</li>';
+  h+='<li>Markers should be flat, well-lit, and not crumpled</li>';
+  h+='<li>Avoid placing all markers on the same plane</li>';
+  h+='</ul></div>';
+  // Diagram: ideal placement
+  h+='<div style="background:#0a0f13;border:1px solid rgba(51,65,85,.3);border-radius:6px;padding:.8em;margin-bottom:1em;text-align:center">';
+  h+='<svg width="280" height="120" viewBox="0 0 280 120" style="max-width:100%">';
+  // Camera
+  h+='<rect x="125" y="5" width="30" height="20" rx="3" fill="#334155" stroke="#64748b"/>';
+  h+='<circle cx="140" cy="15" r="6" fill="#1e293b" stroke="#22d3ee"/>';
+  h+='<text x="140" y="38" text-anchor="middle" fill="#64748b" font-size="8">Camera</text>';
+  // FOV lines
+  h+='<line x1="140" y1="25" x2="30" y2="110" stroke="#22d3ee" stroke-width="0.5" stroke-dasharray="3,3" opacity="0.4"/>';
+  h+='<line x1="140" y1="25" x2="250" y2="110" stroke="#22d3ee" stroke-width="0.5" stroke-dasharray="3,3" opacity="0.4"/>';
+  // Markers at different positions and angles
+  h+='<rect x="40" y="55" width="18" height="18" rx="1" fill="none" stroke="#4ade80" transform="rotate(-10,49,64)"/><text x="49" y="84" text-anchor="middle" fill="#64748b" font-size="7">Low</text>';
+  h+='<rect x="95" y="45" width="18" height="18" rx="1" fill="none" stroke="#4ade80"/><text x="104" y="74" text-anchor="middle" fill="#64748b" font-size="7">Mid</text>';
+  h+='<rect x="165" y="40" width="18" height="18" rx="1" fill="none" stroke="#4ade80" transform="rotate(15,174,49)"/><text x="174" y="69" text-anchor="middle" fill="#64748b" font-size="7">Angled</text>';
+  h+='<rect x="220" y="65" width="18" height="18" rx="1" fill="none" stroke="#4ade80" transform="rotate(-5,229,74)"/><text x="229" y="94" text-anchor="middle" fill="#64748b" font-size="7">Far</text>';
+  h+='<rect x="60" y="90" width="18" height="18" rx="1" fill="none" stroke="#4ade80" transform="rotate(8,69,99)"/><text x="69" y="118" text-anchor="middle" fill="#64748b" font-size="7">Floor</text>';
+  h+='<rect x="140" y="80" width="18" height="18" rx="1" fill="none" stroke="#4ade80" transform="rotate(-12,149,89)"/><text x="149" y="108" text-anchor="middle" fill="#64748b" font-size="7">Wall</text>';
+  h+='</svg>';
+  h+='<div style="font-size:.72em;color:#475569;margin-top:.3em">Place markers at varying heights, angles, and distances</div>';
+  h+='</div>';
+  // Confirmation checkbox
+  h+='<div style="display:flex;align-items:center;gap:.5em;margin-bottom:.8em;padding:.5em;border-radius:4px;background:rgba(34,211,238,.04)">';
+  h+='<input type="checkbox" id="calwiz-placed" onchange="_calWiz.markersPlaced=this.checked;_calWizRender()" style="accent-color:#22d3ee"'+(w.markersPlaced?' checked':'')+'>';
+  h+='<label for="calwiz-placed" style="font-size:.85em;color:#e2e8f0;margin:0;cursor:pointer">I have placed the markers within camera view</label>';
+  h+='</div>';
+  // Navigation
+  h+='<div style="display:flex;justify-content:space-between;gap:.4em;margin-top:.5em">';
+  h+='<button class="btn" onclick="_calWizBack()" style="background:#1e293b;color:#94a3b8">\u2190 Back</button>';
+  h+='<button class="btn btn-on" onclick="_calWizNext()"'+(w.markersPlaced?'':' disabled')+' style="'+(w.markersPlaced?'':'opacity:.5;cursor:not-allowed')+'">Next \u2192</button>';
+  h+='</div></div>';
+  return h;
+}
+
+function _calWizStep3(){
+  var w=_calWiz,h='';
+  var selCams=w.cameras.filter(function(c){return c.selected&&c.ip;});
+  var ready=w.captures>=_calWizMinCaptures;
+  h+='<div class="card" style="max-width:720px">';
+  h+='<div class="card-title">Step 3: Capture Frames</div>';
+  h+='<p style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">Capture images from each camera with markers visible. Move some markers between captures to improve coverage. Minimum '+_calWizMinCaptures+' captures required.</p>';
+  // Progress bar
+  var prog=Math.min(w.captures/_calWizMinCaptures*100,100);
+  h+='<div style="display:flex;align-items:center;gap:.6em;margin-bottom:.8em">';
+  h+='<div class="prog-bar" style="flex:1;height:8px"><div class="prog-fill" style="width:'+prog+'%"></div></div>';
+  h+='<span style="font-size:.82em;color:'+(ready?'#4ade80':'#94a3b8')+'">Capture '+w.captures+' of '+_calWizMinCaptures+(w.captures>=_calWizMinCaptures?' (minimum met)':' (minimum '+_calWizMinCaptures+' required)')+'</span>';
+  h+='</div>';
+  // Camera previews
+  h+='<div style="display:flex;flex-wrap:wrap;gap:.8em;margin-bottom:.8em">';
+  selCams.forEach(function(cam){
+    h+='<div style="flex:1;min-width:200px;max-width:340px">';
+    h+='<div style="font-size:.82em;color:#e2e8f0;margin-bottom:.3em;font-weight:600">'+escapeHtml(cam.name)+'</div>';
+    h+='<div style="position:relative;background:#0a0f13;border:1px solid #334155;border-radius:4px;overflow:hidden;min-height:150px">';
+    h+='<img id="calwiz-preview-'+cam.id+'" src="" style="width:100%;display:none;border-radius:4px" alt="Preview">';
+    h+='<div id="calwiz-preview-msg-'+cam.id+'" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:.78em;color:#475569">Loading preview...</div>';
+    h+='</div>';
+    h+='<div id="calwiz-cam-status-'+cam.id+'" style="font-size:.75em;color:#64748b;margin-top:.2em">Ready</div>';
+    h+='</div>';
+  });
+  h+='</div>';
+  // Capture button
+  h+='<div style="display:flex;gap:.5em;align-items:center;margin-bottom:.6em">';
+  h+='<button class="btn btn-on" id="calwiz-capture-btn" onclick="_calWizCapture()" style="flex:0 0 auto;font-size:.9em;padding:.5em 1.5em">Capture All Cameras</button>';
+  if(w.captures>0&&w.captures<_calWizMinCaptures){
+    h+='<span style="font-size:.82em;color:#fbbf24">Move some markers and capture again</span>';
+  }
+  h+='</div>';
+  // Capture log
+  if(w.captureLog.length){
+    h+='<div style="max-height:140px;overflow-y:auto;border:1px solid rgba(51,65,85,.2);border-radius:4px;padding:.4em .6em;margin-bottom:.6em;font-size:.78em">';
+    w.captureLog.forEach(function(entry){h+=entry;});
+    h+='</div>';
+  }
+  // Navigation
+  h+='<div style="display:flex;justify-content:space-between;gap:.4em;margin-top:.5em">';
+  h+='<button class="btn" onclick="_calWizBack()" style="background:#1e293b;color:#94a3b8">\u2190 Back</button>';
+  h+='<button class="btn btn-on" onclick="_calWizNext()"'+(ready?'':' disabled')+' style="'+(ready?'':'opacity:.5;cursor:not-allowed')+'">Compute Calibration \u2192</button>';
+  h+='</div></div>';
+  return h;
+}
+
+function _calWizStep4(){
+  var w=_calWiz,h='';
+  var selCams=w.cameras.filter(function(c){return c.selected&&c.ip;});
+  var allDone=true,anyResult=false;
+  selCams.forEach(function(c){var k=c.id;if(!w.results[k])allDone=false;else anyResult=true;});
+  h+='<div class="card" style="max-width:720px">';
+  h+='<div class="card-title">Step 4: Compute & Evaluate</div>';
+  if(!allDone){
+    h+='<div style="display:flex;align-items:center;gap:.6em;margin-bottom:1em;padding:.6em;background:rgba(59,130,246,.06);border-radius:4px">';
+    h+='<div style="width:20px;height:20px;border:2px solid #3b82f6;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite"></div>';
+    h+='<span style="font-size:.85em;color:#93c5fd">Computing calibration for all cameras...</span>';
+    h+='</div>';
+    h+='<style>@keyframes spin{to{transform:rotate(360deg)}}</style>';
+  }
+  // Results table
+  if(anyResult){
+    h+='<table class="tbl" style="margin-bottom:.8em"><tr><th>Camera</th><th>RMS Error</th><th>fx</th><th>fy</th><th>fx/fy</th><th>Quality</th><th>Action</th></tr>';
+    selCams.forEach(function(cam){
+      var r=w.results[cam.id];
+      if(!r){
+        h+='<tr><td>'+escapeHtml(cam.name)+'</td><td colspan="6" style="color:#64748b">Computing...</td></tr>';
+        return;
+      }
+      if(r.error){
+        h+='<tr><td>'+escapeHtml(cam.name)+'</td><td colspan="5" style="color:#f66">'+escapeHtml(r.error)+'</td>';
+        h+='<td><button class="btn" onclick="_calWizRecal('+cam.id+')" style="font-size:.72em;padding:.15em .4em;background:#7f1d1d;color:#fca5a5">Redo</button></td></tr>';
+        return;
+      }
+      var qColor={'Excellent':'#4ade80','Good':'#22d3ee','Fair':'#fbbf24','Poor':'#f87171'};
+      h+='<tr><td>'+escapeHtml(cam.name)+'</td>';
+      h+='<td style="color:'+(r.rms<1.5?'#4ade80':r.rms<3?'#fbbf24':'#f87171')+'">'+r.rms.toFixed(3)+'px</td>';
+      h+='<td>'+r.fx.toFixed(1)+'</td>';
+      h+='<td>'+r.fy.toFixed(1)+'</td>';
+      h+='<td style="color:'+(r.ratio>=0.95&&r.ratio<=1.05?'#4ade80':r.ratio>=0.9&&r.ratio<=1.1?'#fbbf24':'#f87171')+'">'+r.ratio.toFixed(3)+'</td>';
+      h+='<td><span class="badge" style="background:'+(r.quality==='Excellent'?'#14532d':r.quality==='Good'?'#164e63':r.quality==='Fair'?'#78350f':'#7f1d1d')+';color:'+(qColor[r.quality]||'#888')+'">'+r.quality+'</span></td>';
+      h+='<td>';
+      if(!r.accepted){
+        h+='<button class="btn btn-on" onclick="_calWizAccept('+cam.id+')" style="font-size:.72em;padding:.15em .4em">Accept</button> ';
+        h+='<button class="btn" onclick="_calWizRecal('+cam.id+')" style="font-size:.72em;padding:.15em .4em;background:#1e293b;color:#94a3b8">Redo</button>';
+      }else{
+        h+='<span style="color:#4ade80;font-size:.82em">\u2713 Accepted</span>';
+      }
+      h+='</td></tr>';
+    });
+    h+='</table>';
+    // Bulk actions
+    var acceptableCount=0,acceptedCount=0;
+    selCams.forEach(function(c){var r=w.results[c.id];if(r&&!r.error){acceptableCount++;if(r.accepted)acceptedCount++;}});
+    if(acceptableCount>0&&acceptedCount<acceptableCount){
+      h+='<div style="display:flex;gap:.4em;margin-bottom:.6em">';
+      h+='<button class="btn btn-on" onclick="_calWizAcceptAll()" style="font-size:.82em">Accept All</button>';
+      h+='</div>';
+    }
+  }
+  // Navigation
+  var allAccepted=true;
+  selCams.forEach(function(c){var r=w.results[c.id];if(!r||(!r.accepted&&!r.error))allAccepted=false;});
+  h+='<div style="display:flex;justify-content:space-between;gap:.4em;margin-top:.5em">';
+  h+='<button class="btn" onclick="_calWizBack()" style="background:#1e293b;color:#94a3b8">\u2190 Back to Capture</button>';
+  h+='<button class="btn btn-on" onclick="_calWizNext()"'+(allAccepted&&allDone?'':' disabled')+' style="'+(allAccepted&&allDone?'':'opacity:.5;cursor:not-allowed')+'">Finish \u2192</button>';
+  h+='</div></div>';
+  return h;
+}
+
+function _calWizStep5(){
+  var w=_calWiz,h='';
+  var selCams=w.cameras.filter(function(c){return c.selected&&c.ip;});
+  var successCount=0;
+  selCams.forEach(function(c){var r=w.results[c.id];if(r&&r.accepted)successCount++;});
+  h+='<div class="card" style="max-width:640px;text-align:center">';
+  h+='<div style="font-size:2.5em;margin-bottom:.2em">\u2713</div>';
+  h+='<div class="card-title" style="font-size:1.1em;text-align:center">Calibration Complete</div>';
+  h+='<p style="font-size:.9em;color:#94a3b8;margin-bottom:1em">'+successCount+' camera'+(successCount!==1?'s':'')+' calibrated successfully.</p>';
+  // Summary table
+  h+='<table class="tbl" style="margin:0 auto .8em;max-width:400px"><tr><th>Camera</th><th>Quality</th><th>RMS</th></tr>';
+  selCams.forEach(function(cam){
+    var r=w.results[cam.id];
+    if(!r||r.error){
+      h+='<tr><td>'+escapeHtml(cam.name)+'</td><td style="color:#f87171">Failed</td><td>-</td></tr>';
       return;
     }
-    if(res){
-      res.innerHTML='<div style="color:#4ade80;font-size:1em;margin-bottom:.3em">\u2713 Calibration Complete</div>'
-        +'<div style="font-size:.82em;color:#94a3b8">'
-        +'RMS Error: <strong>'+r.rmsError+'</strong> px<br>'
-        +'fx='+r.fx+' fy='+r.fy+'<br>'
-        +'cx='+r.cx+' cy='+r.cy+'<br>'
-        +'Frames: '+r.frameCount
-        +'</div>';
-    }
-    // Update fixture calibration flag
-    (_fixtures||[]).forEach(function(f){if(f.id==_icalFid)f.intrinsicCalibrated=true;});
-    _updateSidePanel(_icalFid);
+    var qColor={'Excellent':'#4ade80','Good':'#22d3ee','Fair':'#fbbf24','Poor':'#f87171'};
+    h+='<tr><td>'+escapeHtml(cam.name)+'</td>';
+    h+='<td style="color:'+(qColor[r.quality]||'#888')+'">'+r.quality+'</td>';
+    h+='<td>'+r.rms.toFixed(3)+'px</td></tr>';
+  });
+  h+='</table>';
+  h+='<div style="font-size:.82em;color:#64748b;margin-bottom:1em;padding:.5em;background:rgba(34,211,238,.04);border-radius:4px">Calibration is saved on each camera node and will be used automatically for all point clouds and spatial mapping.</div>';
+  h+='<button class="btn btn-on" onclick="_calWizReset()" style="font-size:.9em;padding:.5em 1.5em">Done</button>';
+  h+='</div>';
+  return h;
+}
+
+function _calWizSelectAll(val){
+  _calWiz.cameras.forEach(function(c){if(c.ip)c.selected=val;});
+  _calWizRender();
+}
+
+function _calWizToggleCam(idx,val){
+  if(_calWiz.cameras[idx])_calWiz.cameras[idx].selected=val;
+  _calWizRender();
+}
+
+function _calWizRefreshPreviews(){
+  var selCams=_calWiz.cameras.filter(function(c){return c.selected&&c.ip;});
+  selCams.forEach(function(cam){
+    var img=document.getElementById('calwiz-preview-'+cam.id);
+    var msg=document.getElementById('calwiz-preview-msg-'+cam.id);
+    if(!img)return;
+    var t=Date.now();
+    var newImg=new Image();
+    newImg.onload=function(){
+      img.src=newImg.src;img.style.display='block';
+      if(msg)msg.style.display='none';
+    };
+    newImg.onerror=function(){
+      if(msg){msg.textContent='Camera offline';msg.style.display='block';}
+    };
+    newImg.src='http://'+cam.ip+':5000/snapshot?cam='+(cam.camIdx||0)+'&t='+t;
   });
 }
 
-function _icalReset(){
-  ra('POST','http://'+_icalIp+':5000/calibrate/aruco/reset',{cam:_icalCamIdx},function(){
-    var cnt=document.getElementById('ical-count');if(cnt)cnt.textContent='0 frames';
-    var logEl=document.getElementById('ical-log');if(logEl)logEl.innerHTML='';
-    var cb=document.getElementById('ical-compute');if(cb)cb.style.display='none';
-    var res=document.getElementById('ical-result');if(res)res.innerHTML='';
+function _calWizCapture(){
+  var btn=document.getElementById('calwiz-capture-btn');
+  if(btn){btn.disabled=true;btn.textContent='Capturing...';}
+  var selCams=_calWiz.cameras.filter(function(c){return c.selected&&c.ip;});
+  var done=0,total=selCams.length;
+  _calWiz.captures++;
+  selCams.forEach(function(cam){
+    var statusEl=document.getElementById('calwiz-cam-status-'+cam.id);
+    if(statusEl)statusEl.innerHTML='<span style="color:#93c5fd">Capturing...</span>';
+    ra('POST','http://'+cam.ip+':5000/calibrate/aruco/capture',{cam:cam.camIdx},function(r){
+      done++;
+      var entry='';
+      if(!r||!r.ok){
+        entry='<div style="color:#f66">Capture '+_calWiz.captures+' - '+escapeHtml(cam.name)+': Failed</div>';
+        if(statusEl)statusEl.innerHTML='<span style="color:#f66">Capture failed</span>';
+      }else{
+        var cams=r.cameras||[r];
+        cams.forEach(function(c){
+          if(c.markersFound>0){
+            entry='<div style="color:#4ade80">\u2713 Capture '+_calWiz.captures+' - '+escapeHtml(cam.name)+': '+c.markersFound+' markers (IDs: '+(c.ids||[]).join(',')+'), total frames: '+c.frameCount+'</div>';
+            if(statusEl)statusEl.innerHTML='<span style="color:#4ade80">\u2713 '+c.frameCount+' frames, '+c.markersFound+' markers last</span>';
+          }else{
+            entry='<div style="color:#f59e0b">\u2717 Capture '+_calWiz.captures+' - '+escapeHtml(cam.name)+': No markers found</div>';
+            if(statusEl)statusEl.innerHTML='<span style="color:#f59e0b">No markers found</span>';
+          }
+        });
+      }
+      _calWiz.captureLog.push(entry);
+      if(done>=total){
+        if(btn){btn.disabled=false;btn.textContent='Capture All Cameras';}
+        _calWizRender();
+      }
+    });
   });
+}
+
+function _calWizCompute(){
+  var selCams=_calWiz.cameras.filter(function(c){return c.selected&&c.ip;});
+  selCams.forEach(function(cam){
+    ra('POST','http://'+cam.ip+':5000/calibrate/aruco/compute',{cam:cam.camIdx,markerSize:150},function(r){
+      if(!r||!r.ok){
+        _calWiz.results[cam.id]={error:r&&r.err||'Computation failed'};
+      }else{
+        var rms=parseFloat(r.rmsError)||0;
+        var fx=parseFloat(r.fx)||0;
+        var fy=parseFloat(r.fy)||0;
+        var ratio=fy>0?fx/fy:0;
+        var quality='Poor';
+        if(rms<0.5&&ratio>=0.95&&ratio<=1.05)quality='Excellent';
+        else if(rms<1.5&&ratio>=0.9&&ratio<=1.1)quality='Good';
+        else if(rms<3)quality='Fair';
+        _calWiz.results[cam.id]={rms:rms,fx:fx,fy:fy,cx:parseFloat(r.cx)||0,cy:parseFloat(r.cy)||0,
+          ratio:ratio,quality:quality,frameCount:r.frameCount||0,accepted:false};
+        // Update local fixture data
+        cam.calibrated=true;cam.rmsError=rms;
+        (_fixtures||[]).forEach(function(f){if(f.id===cam.id)f.intrinsicCalibrated=true;});
+      }
+      _calWizRender();
+    });
+  });
+}
+
+function _calWizAccept(camId){
+  if(_calWiz.results[camId])_calWiz.results[camId].accepted=true;
+  _calWizRender();
+}
+
+function _calWizAcceptAll(){
+  var selCams=_calWiz.cameras.filter(function(c){return c.selected&&c.ip;});
+  selCams.forEach(function(c){if(_calWiz.results[c.id]&&!_calWiz.results[c.id].error)_calWiz.results[c.id].accepted=true;});
+  _calWizRender();
+}
+
+function _calWizRecal(camId){
+  delete _calWiz.results[camId];
+  _calWiz.step=3;
+  _calWizRender();
+}
+
+// Legacy alias — called from layout panel and tests
+function _intrinsicCalStart(fid){
+  // Pre-select just this camera and jump to wizard
+  _calWiz.step=1;_calWiz.captures=0;_calWiz.captureLog=[];
+  _calWiz.results={};_calWiz.markersPlaced=false;
+  var cams=(_fixtures||[]).filter(function(f){return f.fixtureType==='camera';});
+  _calWiz.cameras=cams.map(function(f){
+    return{id:f.id,name:f.name,ip:f.cameraIp||'',camIdx:f.cameraIdx||0,
+      selected:f.id===fid,calibrated:false,rmsError:null};
+  });
+  showTab('settings');_setSection('cameras');
 }
 
 function _moverCalStart(fixId){
