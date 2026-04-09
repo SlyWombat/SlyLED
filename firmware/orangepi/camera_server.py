@@ -1022,6 +1022,10 @@ CHECKER_ROWS = 6  # inner corners (7x10 squares → 6x9 inner corners)
 CHECKER_COLS = 9
 CHECKER_SIZE = 25.0  # mm per square (when printed at 100%)
 
+# ArUco markers for stage-distance calibration
+ARUCO_DICT_ID = 0  # cv2.aruco.DICT_4X4_50
+ARUCO_MARKER_SIZE = 150.0  # mm — size of printed marker (letter paper ~180mm usable)
+
 
 @app.post("/calibrate/intrinsic/capture")
 def intrinsic_capture():
@@ -1178,6 +1182,172 @@ def intrinsic_reset():
     body = request.get_json(silent=True) or {}
     cam_idx = body.get("cam", 0)
     _calib_frames.pop(cam_idx, None)
+    return jsonify(ok=True, frameCount=0)
+
+
+# ── ArUco marker calibration (stage-distance friendly) ────────────────
+
+_aruco_frames = {}  # cam_idx → list of (corners, ids, img_shape)
+
+
+@app.get("/calibrate/aruco/generate")
+def aruco_generate():
+    """Generate printable ArUco markers as SVG. Returns 6 markers for letter paper.
+    Query: ?count=6&size=150"""
+    import cv2
+    count = int(request.args.get("count", 6))
+    size_mm = int(request.args.get("size", ARUCO_MARKER_SIZE))
+    aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_ID)
+    markers = []
+    for i in range(count):
+        img = cv2.aruco.drawMarker(aruco_dict, i, 200)  # 200px image
+        # Convert to SVG path (black squares)
+        svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{size_mm}mm" height="{size_mm}mm" viewBox="0 0 200 200">'
+        svg += '<rect width="200" height="200" fill="white"/>'
+        for y in range(img.shape[0]):
+            for x in range(img.shape[1]):
+                if img[y, x] == 0:
+                    svg += f'<rect x="{x}" y="{y}" width="1" height="1" fill="black"/>'
+        svg += f'<text x="100" y="215" text-anchor="middle" font-size="12" fill="#666">ID {i} — {size_mm}mm — SlyLED</text>'
+        svg += '</svg>'
+        markers.append({"id": i, "svg": svg})
+    return jsonify(ok=True, markers=markers, count=count, sizeMm=size_mm)
+
+
+@app.post("/calibrate/aruco/capture")
+def aruco_capture():
+    """Capture ArUco markers from all cameras. Each marker gives 4 corners.
+    Body: {cam: N} for single, omit for all. {markerSize: 150} optional.
+    Returns: {ok, cameras: [{cam, markersFound, ids, frameCount}]}"""
+    body = request.get_json(silent=True) or {}
+    single_cam = body.get("cam", None)
+    marker_size = body.get("markerSize", ARUCO_MARKER_SIZE)
+    cameras = _hw_info.get("cameras", [])
+
+    import cv2
+    import numpy as np
+    aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_ID)
+    params = cv2.aruco.DetectorParameters_create()
+    cam_indices = [single_cam] if single_cam is not None else list(range(len(cameras)))
+    results = []
+
+    for cam_idx in cam_indices:
+        if cam_idx >= len(cameras):
+            results.append({"cam": cam_idx, "markersFound": 0, "err": "invalid"})
+            continue
+        frame = _cv_capture(cameras[cam_idx]["device"])
+        if frame is None:
+            results.append({"cam": cam_idx, "markersFound": 0, "err": "capture failed"})
+            continue
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        corners, ids, rejected = cv2.aruco.detectMarkers(gray, aruco_dict, parameters=params)
+
+        if ids is None or len(ids) == 0:
+            results.append({"cam": cam_idx, "markersFound": 0,
+                            "frameCount": len(_aruco_frames.get(cam_idx, []))})
+            continue
+
+        if cam_idx not in _aruco_frames:
+            _aruco_frames[cam_idx] = []
+        _aruco_frames[cam_idx].append((corners, ids, gray.shape[::-1]))
+
+        count = len(_aruco_frames[cam_idx])
+        found_ids = ids.flatten().tolist()
+        log.info("ArUco calibration cam%d: found %d markers (ids=%s, total=%d frames)",
+                 cam_idx, len(ids), found_ids, count)
+        results.append({"cam": cam_idx, "markersFound": len(ids), "ids": found_ids,
+                        "frameCount": count})
+
+    return jsonify(ok=True, cameras=results)
+
+
+@app.post("/calibrate/aruco/compute")
+def aruco_compute():
+    """Compute intrinsic calibration from ArUco marker detections.
+    Body: {cam: 0, markerSize: 150}"""
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    marker_size = body.get("markerSize", ARUCO_MARKER_SIZE)
+
+    frames = _aruco_frames.get(cam_idx, [])
+    if len(frames) < 3:
+        return jsonify(ok=False, err=f"Need at least 3 frames, have {len(frames)}")
+
+    import cv2
+    import numpy as np
+    aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_ID)
+
+    # Collect all corners and IDs across frames
+    all_corners = []
+    all_ids = []
+    img_size = frames[0][2]
+    for corners, ids, _ in frames:
+        all_corners.extend(corners)
+        all_ids.extend(ids)
+
+    if len(all_corners) < 4:
+        return jsonify(ok=False, err=f"Need at least 4 marker detections, have {len(all_corners)}")
+
+    # Use ArUco calibration (CharucoBoard not needed — direct marker calibration)
+    # Each marker gives 4 object points at known size
+    half = marker_size / 2.0
+    obj_points_per_marker = np.array([
+        [-half, half, 0], [half, half, 0],
+        [half, -half, 0], [-half, -half, 0]
+    ], dtype=np.float32)
+
+    obj_pts = []
+    img_pts = []
+    for corners, ids, _ in frames:
+        for i in range(len(ids)):
+            obj_pts.append(obj_points_per_marker)
+            img_pts.append(corners[i].reshape(4, 2))
+
+    obj_pts = np.array(obj_pts, dtype=np.float32)
+    img_pts = np.array(img_pts, dtype=np.float32)
+
+    # calibrateCamera wants list-of-arrays
+    obj_list = [obj_pts[i] for i in range(len(obj_pts))]
+    img_list = [img_pts[i] for i in range(len(img_pts))]
+
+    ret, K, dist, rvecs, tvecs = cv2.calibrateCamera(
+        obj_list, img_list, img_size, None, None)
+
+    if not ret:
+        return jsonify(ok=False, err="Calibration failed")
+
+    fx, fy = float(K[0, 0]), float(K[1, 1])
+    cx, cy = float(K[0, 2]), float(K[1, 2])
+    dist_list = dist.flatten().tolist()
+
+    cal_data = {
+        "cam": cam_idx, "method": "aruco",
+        "rmsError": round(float(ret), 4),
+        "fx": round(fx, 2), "fy": round(fy, 2),
+        "cx": round(cx, 2), "cy": round(cy, 2),
+        "distCoeffs": [round(d, 6) for d in dist_list],
+        "imageSize": list(img_size),
+        "frameCount": len(frames),
+        "markerSize": marker_size,
+        "totalDetections": len(obj_list),
+        "timestamp": time.time(),
+    }
+    cal_path = CALIB_DIR / f"intrinsic_cam{cam_idx}.json"
+    cal_path.write_text(json.dumps(cal_data, indent=2))
+    log.info("ArUco calibration cam%d: RMS=%.4f fx=%.1f fy=%.1f (%d markers, %d frames)",
+             cam_idx, ret, fx, fy, len(obj_list), len(frames))
+
+    _aruco_frames.pop(cam_idx, None)
+    return jsonify(ok=True, **cal_data)
+
+
+@app.post("/calibrate/aruco/reset")
+def aruco_reset():
+    """Reset ArUco captured frames. Body: {cam: 0}"""
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    _aruco_frames.pop(cam_idx, None)
     return jsonify(ok=True, frameCount=0)
 
 

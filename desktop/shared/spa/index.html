@@ -425,8 +425,12 @@ body.light .li:hover{border-color:#3b82f6}
       <div class='card-title'>Camera Lens Calibration</div>
       <p style='font-size:.85em;color:#94a3b8;margin-bottom:.6em'>Calibrate camera intrinsics (focal length, distortion) using a printed checkerboard pattern. This improves point cloud accuracy for all cameras on the network.</p>
       <div style='margin-bottom:.8em'>
-        <button class='btn btn-on' onclick='_printCheckerboard()' style='font-size:.85em'>Print Calibration Pattern</button>
-        <span style='font-size:.78em;color:#64748b;margin-left:.5em'>7&times;10 squares, 25mm each &mdash; print at 100% scale on A4/Letter</span>
+        <button class='btn btn-on' onclick='_printAruco()' style='font-size:.85em'>Print ArUco Markers</button>
+        <span style='font-size:.78em;color:#64748b;margin-left:.5em'>6 markers, 150mm each &mdash; one per sheet, tape to boxes/walls on stage</span>
+      </div>
+      <div style='margin-bottom:.5em'>
+        <button class='btn' onclick='_printCheckerboard()' style='font-size:.78em;padding:.2em .5em'>Print Checkerboard (close-range)</button>
+        <span style='font-size:.72em;color:#4a5568;margin-left:.3em'>For lab/bench use only</span>
       </div>
       <div id='cam-cal-list' style='font-size:.82em;color:#94a3b8'>Loading cameras...</div>
     </div>
@@ -5871,6 +5875,31 @@ function _checkCamCalWarning(){
   });
 }
 
+function _printAruco(){
+  // Fetch ArUco SVGs from the first available camera node
+  var cams=(_fixtures||[]).filter(function(f){return f.fixtureType==='camera'&&f.cameraIp;});
+  if(!cams.length){document.getElementById('hs').textContent='No camera nodes available to generate markers';return;}
+  var ip=cams[0].cameraIp;
+  var x=new XMLHttpRequest();
+  x.open('GET','http://'+ip+':5000/calibrate/aruco/generate?count=6&size=150');
+  x.timeout=10000;
+  x.onload=function(){
+    try{
+      var r=JSON.parse(x.responseText);
+      if(!r.ok)return;
+      // Open each marker in a new tab for printing
+      r.markers.forEach(function(m){
+        var blob=new Blob([m.svg],{type:'image/svg+xml'});
+        var url=URL.createObjectURL(blob);
+        window.open(url,'_blank');
+      });
+      document.getElementById('hs').textContent='Opened '+r.count+' ArUco markers — print each at 100% scale';
+    }catch(e){document.getElementById('hs').textContent='Failed to generate markers';}
+  };
+  x.onerror=function(){document.getElementById('hs').textContent='Camera node unreachable';};
+  x.send();
+}
+
 function _printCheckerboard(){
   // Generate a 7x10 checkerboard SVG and open in new tab for printing
   var cols=10,rows=7,sq=25; // 25mm squares
@@ -5937,9 +5966,9 @@ function _intrinsicCalStart(fid){
   _icalIp=f.cameraIp||f.cameraUrl.replace('http://','').split(':')[0];
   _icalCamIdx=f.cameraIdx||0;
   var h='<div style="min-width:400px">';
-  h+='<p style="color:#94a3b8;font-size:.85em;margin-bottom:.6em">Hold a printed checkerboard pattern (6\u00d79 inner corners, 25mm squares) in front of <strong>'+escapeHtml(f.name)+'</strong>. Capture 8\u201310 frames from different angles and distances.</p>';
+  h+='<p style="color:#94a3b8;font-size:.85em;margin-bottom:.6em">Place printed ArUco markers on stage (boxes, walls, truss) visible to <strong>'+escapeHtml(f.name)+'</strong>. Each capture detects all visible markers. 3\u20135 captures with markers at different positions gives good results.</p>';
   h+='<div class="card" style="padding:.6em;margin-bottom:.4em">';
-  h+='<div style="font-size:.82em;color:#64748b;margin-bottom:.3em">Print a 7\u00d710 checkerboard at 100% scale (A4/Letter). Each square should be 25mm.</div>';
+  h+='<div style="font-size:.82em;color:#64748b;margin-bottom:.3em">Print markers from Settings > Cameras. Tape one per sheet to boxes/walls at different heights and angles. 150mm markers visible at 5m+.</div>';
   h+='</div>';
   h+='<div style="display:flex;gap:.4em;align-items:center;margin-bottom:.6em">';
   h+='<button class="btn btn-on" id="ical-capture" onclick="_icalCapture()" style="flex:1">Capture Frame</button>';
@@ -5955,27 +5984,27 @@ function _intrinsicCalStart(fid){
   document.getElementById('modal-title').textContent='Lens Calibration — '+f.name;
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
-  // Reset frames on camera
-  ra('POST','http://'+_icalIp+':5000/calibrate/intrinsic/reset',{cam:_icalCamIdx});
+  // Reset frames on camera (ArUco method)
+  ra('POST','http://'+_icalIp+':5000/calibrate/aruco/reset',{cam:_icalCamIdx});
 }
 
 function _icalCapture(){
   var btn=document.getElementById('ical-capture');
   if(btn)btn.disabled=true;
   var logEl=document.getElementById('ical-log');
-  ra('POST','http://'+_icalIp+':5000/calibrate/intrinsic/capture',{cam:_icalCamIdx},function(r){
+  ra('POST','http://'+_icalIp+':5000/calibrate/aruco/capture',{cam:_icalCamIdx},function(r){
     if(btn)btn.disabled=false;
     if(!r||!r.ok){if(logEl)logEl.innerHTML+='<div style="color:#f66">Capture failed</div>';return;}
     var cams=r.cameras||[r];
     cams.forEach(function(c){
-      if(c.found){
-        if(logEl)logEl.innerHTML+='<div style="color:#4ade80">\u2713 Frame '+c.frameCount+': '+c.corners+' corners found</div>';
+      if(c.markersFound>0){
+        if(logEl)logEl.innerHTML+='<div style="color:#4ade80">\u2713 Frame '+c.frameCount+': '+c.markersFound+' markers found (IDs: '+(c.ids||[]).join(',')+') </div>';
       }else{
-        if(logEl)logEl.innerHTML+='<div style="color:#f59e0b">\u2717 No checkerboard found — try different angle</div>';
+        if(logEl)logEl.innerHTML+='<div style="color:#f59e0b">\u2717 No ArUco markers found — ensure markers are visible and well-lit</div>';
       }
       var cnt=document.getElementById('ical-count');
-      if(cnt)cnt.textContent=c.frameCount+' frames';
-      if(c.frameCount>=5){
+      if(cnt)cnt.textContent=c.frameCount+' frames, '+(c.markersFound||0)+' markers this capture';
+      if(c.frameCount>=3){
         var cb=document.getElementById('ical-compute');if(cb)cb.style.display='inline-block';
       }
     });
@@ -5986,7 +6015,7 @@ function _icalCapture(){
 function _icalCompute(){
   var btn=document.getElementById('ical-compute');
   if(btn){btn.disabled=true;btn.textContent='Computing...';}
-  ra('POST','http://'+_icalIp+':5000/calibrate/intrinsic/compute',{cam:_icalCamIdx},function(r){
+  ra('POST','http://'+_icalIp+':5000/calibrate/aruco/compute',{cam:_icalCamIdx,markerSize:150},function(r){
     var res=document.getElementById('ical-result');
     if(!r||!r.ok){
       if(res)res.innerHTML='<div style="color:#f66">'+( r&&r.err||'Failed')+'</div>';
@@ -6009,7 +6038,7 @@ function _icalCompute(){
 }
 
 function _icalReset(){
-  ra('POST','http://'+_icalIp+':5000/calibrate/intrinsic/reset',{cam:_icalCamIdx},function(){
+  ra('POST','http://'+_icalIp+':5000/calibrate/aruco/reset',{cam:_icalCamIdx},function(){
     var cnt=document.getElementById('ical-count');if(cnt)cnt.textContent='0 frames';
     var logEl=document.getElementById('ical-log');if(logEl)logEl.innerHTML='';
     var cb=document.getElementById('ical-compute');if(cb)cb.style.display='none';
