@@ -257,14 +257,15 @@ def ray_surface_intersect(origin, direction, surfaces):
             best_t = t
             best_point = (round(px), round(py), round(pz))
 
-    # Walls: vertical planes
+    # Walls: vertical planes — use full 3-component dot product (#263)
     for wall in surfaces.get("walls", []):
         n = wall["normal"]
-        d = wall["d"]
-        denom = n[0] * direction[0] + n[2] * direction[2]
+        d = wall.get("d", 0)
+        ny = n[1] if len(n) > 1 else 0
+        denom = n[0] * direction[0] + ny * direction[1] + n[2] * direction[2]
         if abs(denom) < 0.001:
             continue
-        t = -(n[0] * origin[0] + n[2] * origin[2] + d) / denom
+        t = -(n[0] * origin[0] + ny * origin[1] + n[2] * origin[2] + d) / denom
         if 0 < t < best_t:
             px = origin[0] + t * direction[0]
             py = origin[1] + t * direction[1]
@@ -298,24 +299,35 @@ def compute_floor_target(floor_surface, camera_pos, camera_aim):
 
 def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
              other_mover_addrs=None, initial_pan=None, initial_tilt=None,
-             mover_pos=None, camera_pos=None):
+             mover_pos=None, camera_pos=None, floor_surface=None,
+             universe=0, start_pan=None, start_tilt=None, max_probes=80):
     """Find the first (pan, tilt) where the beam is visible to the camera.
 
-    If mover_pos and camera_pos are provided, computes a geometric starting
-    estimate. Otherwise uses initial_pan/initial_tilt defaults.
-    Spirals outward from the starting point.
+    Aims at the floor area visible to the camera (not at the camera body). (#262)
+    Falls back to geometric estimate, then to sensible defaults (forward, slightly down).
 
-    Returns: (pan, tilt, px, py) or None
+    Returns: dict {pan, tilt, pixelX, pixelY} or None
     """
-    # Compute smart starting point from layout positions
-    if mover_pos and camera_pos:
-        est_pan, est_tilt = compute_initial_aim(mover_pos, camera_pos)
+    # Use explicit start values if provided
+    if start_pan is not None:
+        initial_pan = start_pan
+    if start_tilt is not None:
+        initial_tilt = start_tilt
+    # Compute starting point: prefer floor target, then geometric estimate
+    if initial_pan is None and mover_pos:
+        if floor_surface and camera_pos:
+            target = compute_floor_target(floor_surface, camera_pos, camera_pos)
+            est_pan, est_tilt = compute_initial_aim(mover_pos, target)
+        elif camera_pos:
+            est_pan, est_tilt = compute_initial_aim(mover_pos, camera_pos)
+        else:
+            est_pan, est_tilt = 0.5, 0.6
         initial_pan = initial_pan if initial_pan is not None else est_pan
         initial_tilt = initial_tilt if initial_tilt is not None else est_tilt
         log.info("Discovery start from layout estimate: pan=%.2f tilt=%.2f", initial_pan, initial_tilt)
     else:
-        initial_pan = initial_pan if initial_pan is not None else 0.0
-        initial_tilt = initial_tilt if initial_tilt is not None else 0.2
+        initial_pan = initial_pan if initial_pan is not None else 0.5   # forward (#266)
+        initial_tilt = initial_tilt if initial_tilt is not None else 0.6  # slightly down (#266)
     dmx = [0] * 512
     # Black out other movers
     for addr in (other_mover_addrs or []):
@@ -442,7 +454,8 @@ def build_grid(samples):
 
     # Build lookup: (pan, tilt) → (px, py)
     lookup = {}
-    for p, t, px, py in samples:
+    for s in samples:  # supports 4-tuple or 7-tuple (#264)
+        p, t, px, py = s[0], s[1], s[2], s[3]
         lookup[(round(p, 3), round(t, 3))] = (px, py)
 
     # Fill grid — use nearest neighbor for missing cells
@@ -632,8 +645,9 @@ def grid_3d_inverse(grid3d, target_x, target_y, target_z, iterations=30):
     pan, tilt = best_pan, best_tilt
     for it in range(iterations):
         wx, wy, wz = grid_3d_lookup(grid3d, pan, tilt)
-        err = ((wx - target_x)**2 + (wy - target_y)**2 + (wz - target_z)**2) ** 0.5
-        if err < 10:  # within 10mm
+        # Convergence on XZ only — Newton step only corrects XZ (#265)
+        err = ((wx - target_x)**2 + (wz - target_z)**2) ** 0.5
+        if err < 10:  # within 10mm in XZ plane
             break
         dp = 0.001
         wx_dp, wy_dp, wz_dp = grid_3d_lookup(grid3d, pan + dp, tilt)

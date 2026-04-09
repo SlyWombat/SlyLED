@@ -1692,18 +1692,20 @@ def _compute_axis_mapping(samples):
 
 def _inverse_axis_lookup(mapping, target_x, target_z):
     """Given a linear mapping and target stage position, compute the DMX normalized value.
-    Uses least-squares fit of the X and Z axes."""
+    Weight by abs(slope) so the axis with more signal dominates. (#259)"""
     sx, bx = mapping["intercept_x"], mapping["slope_x"]
     sz, bz = mapping["intercept_z"], mapping["slope_z"]
-    # Solve: target = intercept + norm * slope → norm = (target - intercept) / slope
-    norms = []
+    vals, weights = [], []
     if abs(bx) > 0.001:
-        norms.append((target_x - sx) / bx)
+        vals.append((target_x - sx) / bx)
+        weights.append(abs(bx))
     if abs(bz) > 0.001:
-        norms.append((target_z - sz) / bz)
-    if not norms:
+        vals.append((target_z - sz) / bz)
+        weights.append(abs(bz))
+    if not vals:
         return 0.5
-    return max(0.0, min(1.0, sum(norms) / len(norms)))
+    wsum = sum(v * w for v, w in zip(vals, weights))
+    return max(0.0, min(1.0, wsum / sum(weights)))
 
 
 @app.post("/api/fixtures/<int:fid>/calibrate-range")

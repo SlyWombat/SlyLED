@@ -36,17 +36,20 @@ def fetch_point_cloud(camera_ip, cam_idx, max_points=10000, max_depth_mm=5000):
 def transform_points(points, cam_pos, cam_rotation, cam_aim=None):
     """Transform camera-local points to stage coordinates.
 
-    Uses full 3-axis rotation (RX pitch, RY yaw, RZ roll).
-    If cam_aim is provided, computes the rotation from position→aim direction
-    instead of using the explicit rotation values.
+    Camera-local frame (pinhole convention): X-right, Y-down, Z-forward.
+    Stage frame: X-right, Y-up, Z-forward.
+    The Y axis is flipped before rotation to convert from camera to stage convention.
+
+    Rotation composition: RY(yaw) * RX(pitch) * RZ(roll) — YXZ intrinsic Euler angles.
+    If cam_aim is provided, computes yaw/pitch from position→aim direction.
 
     Args:
-        points: list of [x, y, z, r, g, b] in camera-local mm
+        points: list of [x, y, z, r, g, b] in camera-local mm (Y-down)
         cam_pos: (x, y, z) camera position in stage mm
         cam_rotation: (rx, ry, rz) rotation in degrees
         cam_aim: optional (x, y, z) aim point — overrides rotation if provided
 
-    Returns: list of [x, y, z, r, g, b] in stage mm
+    Returns: list of [x, y, z, r, g, b] in stage mm (Y-up)
     """
     cx, cy, cz = cam_pos
 
@@ -83,12 +86,16 @@ def transform_points(points, cam_pos, cam_rotation, cam_aim=None):
 
     result = []
     for pt in points:
-        lx, ly, lz = pt[0], pt[1], pt[2]
+        lx, lz = pt[0], pt[2]
+        ly = -pt[1]  # Flip Y: camera Y-down → stage Y-up (#257)
+        # Skip invalid points
+        if not (math.isfinite(lx) and math.isfinite(ly) and math.isfinite(lz)):
+            continue
         # Apply rotation then translation
         wx = r00 * lx + r01 * ly + r02 * lz + cx
         wy = r10 * lx + r11 * ly + r12 * lz + cy
         wz = r20 * lx + r21 * ly + r22 * lz + cz
-        result.append([round(wx), round(wy), round(wz), pt[3], pt[4], pt[5]])
+        result.append([wx, wy, wz, pt[3], pt[4], pt[5]])
     return result
 
 

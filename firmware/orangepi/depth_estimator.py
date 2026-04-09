@@ -58,7 +58,7 @@ class DepthEstimator:
 
         Returns:
             (depth_map, inference_ms)
-            depth_map: numpy float32 array (H, W) — higher values = farther
+            depth_map: numpy float32 array (H, W) — higher values = closer
         """
         with self._lock:
             self._load()
@@ -97,11 +97,13 @@ class DepthEstimator:
             depth = cv2.resize(depth, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
 
             # Normalize to 0-1 range (relative depth)
-            # Depth-Anything-V2 outputs inverse depth (higher = closer)
-            # Invert so higher value = farther (standard depth convention)
+            # Depth-Anything-V2 outputs disparity (higher = closer).
+            # Keep this ordering: higher value = closer = smaller z.
+            # pixel_to_3d/generate_point_cloud use z = rel * max_depth_mm,
+            # so close objects get large z and far objects get small z. (#258)
             d_min, d_max = depth.min(), depth.max()
             if d_max - d_min > 1e-6:
-                depth = 1.0 - (depth - d_min) / (d_max - d_min)
+                depth = (depth - d_min) / (d_max - d_min)
             else:
                 depth = np.zeros_like(depth)
 
@@ -118,7 +120,7 @@ class DepthEstimator:
         """Project a pixel + relative depth into approximate 3D coordinates.
 
         Args:
-            depth_map: relative depth map (0=near, 1=far)
+            depth_map: relative depth map (0=far, 1=near / disparity)
             px, py: pixel position
             fov_deg: horizontal FOV in degrees
             frame_w, frame_h: frame dimensions
@@ -133,7 +135,7 @@ class DepthEstimator:
         # Camera intrinsics from FOV
         fx = (frame_w / 2) / math.tan(math.radians(fov_deg / 2))
         fy = fx  # square pixels
-        cx, cy = frame_w / 2, frame_h / 2
+        cx, cy = (frame_w - 1) / 2.0, (frame_h - 1) / 2.0
 
         # Back-project
         x = (px - cx) * z / fx
@@ -160,7 +162,7 @@ class DepthEstimator:
         # Camera intrinsics
         fx = (w / 2) / math.tan(math.radians(fov_deg / 2))
         fy = fx
-        cx_cam, cy_cam = w / 2, h / 2
+        cx_cam, cy_cam = (w - 1) / 2.0, (h - 1) / 2.0
 
         # Downsample: pick every Nth pixel to stay under max_points
         total_pixels = h * w

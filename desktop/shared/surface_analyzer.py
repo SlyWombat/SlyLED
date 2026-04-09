@@ -71,42 +71,64 @@ def analyze_surfaces(points, floor_tolerance=100, wall_tolerance=100, min_cluste
     }
 
 
-def _detect_floor(coords, tolerance):
-    """RANSAC to find the dominant horizontal plane (floor).
-    Looks for a cluster of points at a consistent Y value."""
+def _detect_floor(coords, tolerance, ransac_trials=200):
+    """RANSAC 3-point plane fit to find the floor. (#261)
+    Accepts planes whose normal is within ~18° of vertical (dot > 0.95)."""
     if len(coords) < 10:
         return None
 
-    # Histogram approach: bin Y values, find the densest bin
-    y_vals = [c[1] for c in coords]
-    bin_size = tolerance
-    bins = {}
-    for y in y_vals:
-        b = round(y / bin_size) * bin_size
-        bins[b] = bins.get(b, 0) + 1
+    best_normal = None
+    best_d = 0
+    best_count = 0
+    n = len(coords)
 
-    if not bins:
+    for _ in range(ransac_trials):
+        # Pick 3 random non-collinear points
+        i, j, k = random.sample(range(n), 3)
+        p1, p2, p3 = coords[i], coords[j], coords[k]
+        # Two edge vectors
+        e1 = (p2[0]-p1[0], p2[1]-p1[1], p2[2]-p1[2])
+        e2 = (p3[0]-p1[0], p3[1]-p1[1], p3[2]-p1[2])
+        # Cross product → normal
+        nx = e1[1]*e2[2] - e1[2]*e2[1]
+        ny = e1[2]*e2[0] - e1[0]*e2[2]
+        nz = e1[0]*e2[1] - e1[1]*e2[0]
+        length = math.sqrt(nx*nx + ny*ny + nz*nz)
+        if length < 1e-6:
+            continue
+        nx, ny, nz = nx/length, ny/length, nz/length
+        # Ensure normal points upward (Y+)
+        if ny < 0:
+            nx, ny, nz = -nx, -ny, -nz
+        # Must be near-vertical: dot with (0,1,0) > 0.95
+        if ny < 0.95:
+            continue
+        d = -(nx*p1[0] + ny*p1[1] + nz*p1[2])
+        # Count inliers
+        count = sum(1 for x, y, z in coords
+                    if abs(nx*x + ny*y + nz*z + d) < tolerance)
+        if count > best_count:
+            best_count = count
+            best_normal = [round(nx, 4), round(ny, 4), round(nz, 4)]
+            best_d = d
+
+    # Need at least 5% of points
+    if best_count < n * 0.05:
         return None
 
-    # Best Y bin (most points = floor)
-    best_y = max(bins, key=bins.get)
-    inlier_count = bins[best_y]
-
-    # Need at least 5% of points to be floor
-    if inlier_count < len(coords) * 0.05:
+    # Collect inlier points for extent and average Y
+    floor_pts = [(x, y, z) for x, y, z in coords
+                 if abs(best_normal[0]*x + best_normal[1]*y + best_normal[2]*z + best_d) < tolerance]
+    if not floor_pts:
         return None
-
-    # Refine: average Y of all points near best_y
-    floor_pts = [(x, y, z) for x, y, z in coords if abs(y - best_y) < tolerance]
     avg_y = sum(p[1] for p in floor_pts) / len(floor_pts)
-
-    # Floor extent
     xs = [p[0] for p in floor_pts]
     zs = [p[2] for p in floor_pts]
 
     return {
         "y": round(avg_y),
-        "normal": [0, 1, 0],
+        "normal": best_normal,
+        "d": round(best_d),
         "inliers": len(floor_pts),
         "extent": {
             "xMin": round(min(xs)), "xMax": round(max(xs)),
@@ -156,8 +178,8 @@ def _detect_walls(coords, tolerance, max_walls=4):
                 best_count = count
                 best_wall = {"normal": [round(nx, 4), 0, round(nz, 4)], "d": round(d)}
 
-        # Accept wall if enough inliers (>3% of remaining)
-        if best_wall and best_count > len(remaining) * 0.03:
+        # Accept wall if enough inliers (>5% of remaining or 50 absolute) (#266)
+        if best_wall and best_count > max(50, len(remaining) * 0.05):
             # Compute wall extent
             n = best_wall["normal"]
             wall_pts = [(x, y, z) for x, y, z in remaining
@@ -279,18 +301,27 @@ def beam_surface_check(surfaces, ray_origin, ray_dir):
                   ray_origin[2] + t * ray_dir[2])
             hits.append({"surface": f"wall_{i}", "distance": t, "point": pt})
 
-    # Check obstacles (as bounding boxes)
+    # Check obstacles — proper ray-sphere intersection (#260)
     for obs in surfaces.get("obstacles", []):
         pos = obs["pos"]
         size = obs["size"]
-        # Simple sphere check
-        dx = ray_origin[0] - pos[0]
-        dy = ray_origin[1] - pos[1]
-        dz = ray_origin[2] - pos[2]
         radius = max(size) / 2
-        dist = math.sqrt(dx * dx + dy * dy + dz * dz)
-        if dist < radius * 3:  # rough proximity
-            hits.append({"surface": obs["label"], "distance": dist, "point": pos})
+        # Vector from ray origin to obstacle center
+        oc = (pos[0] - ray_origin[0], pos[1] - ray_origin[1], pos[2] - ray_origin[2])
+        # Project onto ray direction (t = oc . dir)
+        t = oc[0] * ray_dir[0] + oc[1] * ray_dir[1] + oc[2] * ray_dir[2]
+        if t < 0:
+            continue  # obstacle is behind the ray origin
+        # Closest point on ray to obstacle center
+        cx = ray_origin[0] + t * ray_dir[0] - pos[0]
+        cy = ray_origin[1] + t * ray_dir[1] - pos[1]
+        cz = ray_origin[2] + t * ray_dir[2] - pos[2]
+        perp_dist = math.sqrt(cx * cx + cy * cy + cz * cz)
+        if perp_dist < radius:
+            pt = (ray_origin[0] + t * ray_dir[0],
+                  ray_origin[1] + t * ray_dir[1],
+                  ray_origin[2] + t * ray_dir[2])
+            hits.append({"surface": obs["label"], "distance": t, "point": pt})
 
     if not hits:
         return None
