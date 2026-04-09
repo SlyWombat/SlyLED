@@ -267,6 +267,106 @@ def _detect_hardware():
 
     _hw_info = info
 
+    # Apply saved V4L2 settings on startup
+    _apply_saved_v4l2()
+
+
+# ── Per-camera V4L2 controls (#271) ───────────────────────────────────
+
+V4L2_SETTINGS_DIR = CONFIG_DIR / "v4l2"
+V4L2_SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _apply_saved_v4l2():
+    """Apply saved V4L2 settings to all cameras on startup."""
+    import subprocess
+    for i, cam in enumerate(_hw_info.get("cameras", [])):
+        path = V4L2_SETTINGS_DIR / f"cam{i}.json"
+        if not path.exists():
+            continue
+        try:
+            settings = json.loads(path.read_text())
+            dev = cam["device"]
+            for k, v in settings.items():
+                subprocess.run(["v4l2-ctl", "-d", dev, "--set-ctrl", f"{k}={v}"],
+                               capture_output=True, timeout=3)
+            log.info("Applied V4L2 settings to cam%d (%s): %s", i, dev, settings)
+        except Exception as e:
+            log.warning("Failed to apply V4L2 settings cam%d: %s", i, e)
+
+
+@app.get("/camera/controls")
+def camera_controls():
+    """List V4L2 controls for a camera with current values.
+    Query: ?cam=0"""
+    import subprocess
+    cam_idx = int(request.args.get("cam", 0))
+    cameras = _hw_info.get("cameras", [])
+    if cam_idx >= len(cameras):
+        return jsonify(ok=False, err="Invalid camera index"), 400
+    dev = cameras[cam_idx]["device"]
+    try:
+        r = subprocess.run(["v4l2-ctl", "-d", dev, "--list-ctrls"],
+                           capture_output=True, text=True, timeout=5)
+        controls = []
+        for line in r.stdout.splitlines():
+            line = line.strip()
+            if not line or ":" not in line:
+                continue
+            # Parse: "brightness 0x00980900 (int) : min=-64 max=64 step=1 default=0 value=0"
+            parts = line.split(":")
+            if len(parts) < 2:
+                continue
+            name_part = parts[0].strip()
+            name = name_part.split()[0] if name_part else ""
+            vals = parts[1].strip()
+            ctrl = {"name": name}
+            for token in vals.split():
+                if "=" in token:
+                    k, v = token.split("=", 1)
+                    try:
+                        ctrl[k] = int(v)
+                    except ValueError:
+                        ctrl[k] = v
+            if "(" in name_part:
+                ctrl["type"] = name_part.split("(")[1].split(")")[0]
+            controls.append(ctrl)
+        # Load saved settings
+        saved_path = V4L2_SETTINGS_DIR / f"cam{cam_idx}.json"
+        saved = json.loads(saved_path.read_text()) if saved_path.exists() else {}
+        return jsonify(ok=True, cam=cam_idx, controls=controls, saved=saved)
+    except Exception as e:
+        return jsonify(ok=False, err=str(e)), 500
+
+
+@app.post("/camera/controls")
+def camera_controls_set():
+    """Set V4L2 controls and save. Body: {cam: 0, controls: {brightness: -10, ...}}"""
+    import subprocess
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    ctrls = body.get("controls", {})
+    cameras = _hw_info.get("cameras", [])
+    if cam_idx >= len(cameras):
+        return jsonify(ok=False, err="Invalid camera index"), 400
+    dev = cameras[cam_idx]["device"]
+    applied = {}
+    for k, v in ctrls.items():
+        try:
+            subprocess.run(["v4l2-ctl", "-d", dev, "--set-ctrl", f"{k}={v}"],
+                           capture_output=True, timeout=3)
+            applied[k] = v
+        except Exception as e:
+            log.warning("v4l2 set %s=%s failed: %s", k, v, e)
+    # Save persistently
+    saved_path = V4L2_SETTINGS_DIR / f"cam{cam_idx}.json"
+    existing = json.loads(saved_path.read_text()) if saved_path.exists() else {}
+    existing.update(applied)
+    saved_path.write_text(json.dumps(existing, indent=2))
+    log.info("V4L2 cam%d: set %s, saved to %s", cam_idx, applied, saved_path)
+    return jsonify(ok=True, applied=applied)
+
+
 # ── mDNS advertisement ──────────────────────────────────────────────────
 
 _zc = None
