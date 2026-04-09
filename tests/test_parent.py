@@ -204,6 +204,14 @@ def run():
         r = c.get('/api/fixtures/' + str(dmx_id))
         ok('DMX addr updated', r.get_json().get('dmxStartAddr') == 50)
 
+        # PUT orientation data (from orientation test wizard)
+        orient = {'panSign': 1, 'tiltSign': -1, 'homePan': 0.5, 'homeTilt': 0.5, 'verified': True}
+        r = c.put('/api/fixtures/' + str(dmx_id), json={'orientation': orient})
+        ok('PUT orientation', r.status_code == 200)
+        r = c.get('/api/fixtures/' + str(dmx_id))
+        ok('Orientation saved', r.get_json().get('orientation', {}).get('verified') == True)
+        ok('Orientation panSign', r.get_json().get('orientation', {}).get('panSign') == 1)
+
         # Create second DMX fixture with profileId
         r = c.post('/api/fixtures', json={
             'name': 'RGB Par', 'type': 'point', 'fixtureType': 'dmx',
