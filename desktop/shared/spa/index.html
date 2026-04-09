@@ -3852,7 +3852,7 @@ function renderTimeline(){
     var fixName=trk.allPerformers?'\u2605 Stage (All)':'Track '+(ti+1);
     if(!trk.allPerformers){var fix=null;_fixtures.forEach(function(f){if(f.id===trk.fixtureId)fix=f;});if(fix)fixName=fix.name||fixName;}
     th+='<div style="display:flex;height:40px;border-bottom:1px solid #1e293b">';
-    th+='<div style="width:60px;flex-shrink:0;padding:2px 4px;font-size:.65em;color:#94a3b8;overflow:hidden;border-right:1px solid #1e293b;display:flex;flex-direction:column;justify-content:center"><span style="white-space:nowrap">'+escapeHtml(fixName)+'</span><span style="cursor:pointer;color:#3b82f6;font-size:.9em" onclick="tlAddClipToTrack('+ti+')" title="Add clip">+ clip</span></div>';
+    th+='<div style="width:60px;flex-shrink:0;padding:2px 4px;font-size:.65em;color:#94a3b8;overflow:hidden;border-right:1px solid #1e293b;display:flex;flex-direction:column;justify-content:center;gap:1px"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;max-width:56px" title="'+escapeHtml(fixName)+'">'+escapeHtml(fixName)+'</span><span style="cursor:pointer;color:#3b82f6;font-size:.9em;flex-shrink:0" onclick="tlAddClipToTrack('+ti+')" title="Add clip">+ clip</span></div>';
     th+='<div style="flex:1;position:relative;min-width:'+(trackW-60)+'px" id="tl-tr-'+ti+'">';
     // Render clips
     (trk.clips||[]).forEach(function(clip,ci){
