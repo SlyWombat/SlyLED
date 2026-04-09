@@ -95,6 +95,7 @@ body.light .li:hover{border-color:#3b82f6}
   <!-- Hint -->
   <div style='display:flex;align-items:center;gap:.5em;margin-bottom:.4em'>
     <span id='lay-hint' style='color:#888;font-size:.82em;flex:1'>Drag fixtures from sidebar onto stage. Double-click to edit position. (0,0)=bottom-left.</span>
+    <span id='lay-cal-warn' style='display:none;color:#f59e0b;font-size:.78em;cursor:pointer' onclick='showTab("settings");_setSection("cameras")' title='Go to Settings > Cameras'>&#x26a0; Uncalibrated cameras</span>
   </div>
   <!-- Toolbar (above viewport) -->
   <div id='lay-toolbar' style='display:flex;gap:.2em;align-items:center;margin-bottom:.4em;flex-wrap:wrap'>
@@ -274,6 +275,7 @@ body.light .li:hover{border-color:#3b82f6}
     <button class='tnav' id='sn-profiles' onclick='_setSection("profiles")'>Profiles</button>
     <button class='tnav' id='sn-dmx' onclick='_setSection("dmx")'>DMX Engine</button>
     <button class='tnav' id='sn-shows' onclick='_setSection("shows")'>Shows</button>
+    <button class='tnav' id='sn-cameras' onclick='_setSection("cameras")'>Cameras</button>
     <button class='tnav' id='sn-advanced' onclick='_setSection("advanced")'>Advanced</button>
   </div>
 
@@ -414,6 +416,19 @@ body.light .li:hover{border-color:#3b82f6}
         <button class='btn btn-nav' onclick='exportShow(this)' data-tip='setExportShow'>Save Show</button>
         <button class='btn btn-nav' onclick='openLoadShowModal()' data-tip='setLoadShow'>Load Show</button>
       </div>
+    </div>
+  </div>
+
+  <!-- CAMERAS -->
+  <div id='ss-cameras' style='display:none'>
+    <div class='card' style='max-width:600px'>
+      <div class='card-title'>Camera Lens Calibration</div>
+      <p style='font-size:.85em;color:#94a3b8;margin-bottom:.6em'>Calibrate camera intrinsics (focal length, distortion) using a printed checkerboard pattern. This improves point cloud accuracy for all cameras on the network.</p>
+      <div style='margin-bottom:.8em'>
+        <button class='btn btn-on' onclick='_printCheckerboard()' style='font-size:.85em'>Print Calibration Pattern</button>
+        <span style='font-size:.78em;color:#64748b;margin-left:.5em'>7&times;10 squares, 25mm each &mdash; print at 100% scale on A4/Letter</span>
+      </div>
+      <div id='cam-cal-list' style='font-size:.82em;color:#94a3b8'>Loading cameras...</div>
     </div>
   </div>
 
@@ -4577,6 +4592,8 @@ function loadLayout(){
         loadObjects();
         // Auto-expand fixtures panel on load, show no selection
         _updateSidePanel(null);
+        // Check camera calibration status — show warning if uncalibrated
+        _checkCamCalWarning();
       });
     });
   });
@@ -5828,6 +5845,87 @@ function _rangeCalSubmit(){
 // ── Unified mover calibration wizard ─────────────────────────────────
 var _moverCalFid=null;
 var _moverCalTimer=null;
+
+// ── Printable checkerboard + camera calibration status ───────────────
+
+function _checkCamCalWarning(){
+  var warn=document.getElementById('lay-cal-warn');if(!warn)return;
+  var cams=(_fixtures||[]).filter(function(f){return f.fixtureType==='camera'&&f.cameraIp;});
+  if(!cams.length){warn.style.display='none';return;}
+  var uncal=0,checked=0;
+  cams.forEach(function(f){
+    var ip=f.cameraIp;
+    var x=new XMLHttpRequest();
+    x.open('GET','http://'+ip+':5000/calibrate/intrinsic?cam='+(f.cameraIdx||0));
+    x.timeout=3000;
+    x.onload=function(){
+      checked++;
+      try{var r=JSON.parse(x.responseText);if(!r.calibrated)uncal++;}catch(e){uncal++;}
+      if(checked>=cams.length){
+        warn.style.display=uncal>0?'inline':'none';
+        if(uncal>0)warn.textContent='\u26a0 '+uncal+' camera'+(uncal>1?'s':'')+' not lens-calibrated \u2192 Settings';
+      }
+    };
+    x.onerror=function(){checked++;if(checked>=cams.length&&uncal>0){warn.style.display='inline';}};
+    x.send();
+  });
+}
+
+function _printCheckerboard(){
+  // Generate a 7x10 checkerboard SVG and open in new tab for printing
+  var cols=10,rows=7,sq=25; // 25mm squares
+  var w=cols*sq,h=rows*sq;
+  var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'mm" height="'+h+'mm" viewBox="0 0 '+w+' '+h+'">';
+  svg+='<rect width="'+w+'" height="'+h+'" fill="white"/>';
+  for(var r=0;r<rows;r++)for(var c=0;c<cols;c++){
+    if((r+c)%2===0)svg+='<rect x="'+(c*sq)+'" y="'+(r*sq)+'" width="'+sq+'" height="'+sq+'" fill="black"/>';
+  }
+  svg+='<text x="'+w/2+'" y="'+(h+8)+'" text-anchor="middle" font-size="3" fill="#666">SlyLED Calibration Pattern — '+cols+'x'+rows+' squares, '+sq+'mm each — Print at 100% scale</text>';
+  svg+='</svg>';
+  var blob=new Blob([svg],{type:'image/svg+xml'});
+  var url=URL.createObjectURL(blob);
+  var win=window.open(url,'_blank');
+  if(win)win.print();
+}
+
+function _loadCamCalStatus(){
+  var el=document.getElementById('cam-cal-list');if(!el)return;
+  var cams=(_fixtures||[]).filter(function(f){return f.fixtureType==='camera';});
+  if(!cams.length){el.innerHTML='<p style="color:#555">No cameras registered. Add cameras in the Setup tab.</p>';return;}
+  var h='<table class="tbl" style="font-size:.82em"><tr><th>Camera</th><th>IP</th><th>Lens Calibration</th><th>Action</th></tr>';
+  cams.forEach(function(f){
+    var ip=f.cameraIp||'';
+    h+='<tr><td>'+escapeHtml(f.name)+'</td><td>'+escapeHtml(ip)+'</td>';
+    h+='<td id="cam-cal-st-'+f.id+'"><span style="color:#888">Checking...</span></td>';
+    h+='<td><button class="btn" onclick="_intrinsicCalStart('+f.id+')" style="font-size:.75em;padding:.2em .5em;background:#164e63;color:#67e8f9">Calibrate</button></td>';
+    h+='</tr>';
+    // Check calibration status from camera node
+    if(ip){
+      (function(fid,camIp,camIdx){
+        var x=new XMLHttpRequest();
+        x.open('GET','http://'+camIp+':5000/calibrate/intrinsic?cam='+(camIdx||0));
+        x.timeout=5000;
+        x.onload=function(){
+          try{
+            var r=JSON.parse(x.responseText);
+            var td=document.getElementById('cam-cal-st-'+fid);
+            if(td){
+              if(r.calibrated)td.innerHTML='<span style="color:#4ade80">\u2713 RMS='+r.rmsError+'px ('+r.frameCount+' frames)</span>';
+              else td.innerHTML='<span style="color:#f59e0b">Not calibrated</span>';
+            }
+          }catch(e){}
+        };
+        x.onerror=function(){
+          var td=document.getElementById('cam-cal-st-'+fid);
+          if(td)td.innerHTML='<span style="color:#555">Offline</span>';
+        };
+        x.send();
+      })(f.id,ip,f.cameraIdx||0);
+    }
+  });
+  h+='</table>';
+  el.innerHTML=h;
+}
 
 // ── Intrinsic lens calibration wizard ─────────────────────────────────
 var _icalFid=null,_icalIp=null,_icalCamIdx=0;
@@ -7288,12 +7386,13 @@ function applyDarkMode(dm){
 var _curSetSection='general';
 function _setSection(s){
   _curSetSection=s;
-  ['general','profiles','dmx','shows','advanced'].forEach(function(id){
+  ['general','profiles','dmx','shows','cameras','advanced'].forEach(function(id){
     var el=document.getElementById('ss-'+id);if(el)el.style.display=id===s?'':'none';
     var btn=document.getElementById('sn-'+id);if(btn)btn.className='tnav'+(id===s?' tact':'');
   });
   if(s==='dmx')loadDmxSettings();
   if(s==='profiles')loadDmxProfiles();
+  if(s==='cameras')_loadCamCalStatus();
 }
 function _stageUnitsChange(){
   var imp=parseInt(document.getElementById('s-un').value)===1;
