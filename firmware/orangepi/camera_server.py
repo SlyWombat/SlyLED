@@ -1082,8 +1082,8 @@ def intrinsic_compute():
     sq_size = body.get("squareSize", CHECKER_SIZE)
 
     frames = _calib_frames.get(cam_idx, [])
-    if len(frames) < 5:
-        return jsonify(ok=False, err=f"Need at least 5 frames, have {len(frames)}")
+    if len(frames) < 3:
+        return jsonify(ok=False, err=f"Need at least 3 frames, have {len(frames)}")
 
     import cv2
     import numpy as np
