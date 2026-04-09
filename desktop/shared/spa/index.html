@@ -65,6 +65,7 @@ body.light .footer{color:#94a3b8}
 body.light .prog-bar{background:#e2e8f0}
 body.light .prog-fill{background:linear-gradient(90deg,#3b82f6,#2563eb)}
 .li{background:#0f172a;border:1px solid rgba(51,65,85,.3);border-radius:6px;padding:.5em .7em;margin-bottom:.4em;cursor:grab;font-size:.82em;transition:border-color .2s}
+.ali{padding:5px 14px;font-size:11px;color:#e2e8f0;cursor:pointer}.ali:hover{background:#7c3aed}
 .li:hover{border-color:#3b82f6}
 body.light .li{background:#ffffff;border-color:#e2e8f0}
 body.light .li:hover{border-color:#3b82f6}
@@ -110,16 +111,27 @@ body.light .li:hover{border-color:#3b82f6}
     <button class='btn' id='btn-lay-cones' onclick='_layConesToggle()' title='Show/hide beam cones' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;background:#4c1d95;color:#c4b5fd'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><path d='M8 2l5 12H3L8 2zm0 3L5.5 12h5L8 5z' opacity='.8'/></svg></button>
     <button class='btn' id='btn-show-cloud' onclick='_togglePointCloud()' title='Show/hide point cloud' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor' opacity='.5'><circle cx='4' cy='4' r='1'/><circle cx='8' cy='3' r='1'/><circle cx='12' cy='5' r='1'/><circle cx='3' cy='8' r='1'/><circle cx='7' cy='7' r='1'/><circle cx='11' cy='9' r='1'/><circle cx='5' cy='12' r='1'/><circle cx='9' cy='11' r='1'/><circle cx='13' cy='13' r='1'/></svg></button>
     <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
-    <!-- Zone 3: Align (disabled until multi-select) -->
-    <button class='btn' id='btn-align-left' onclick='layAlign("x","min")' title='Align left (select 2+ fixtures)' disabled style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;opacity:.4;cursor:not-allowed'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='1' y='1' width='2' height='14'/><rect x='5' y='3' width='9' height='4' rx='1'/><rect x='5' y='9' width='6' height='4' rx='1'/></svg></button>
-    <button class='btn' id='btn-align-cx' onclick='layAlign("x","center")' title='Center horizontally (select 2+)' disabled style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;opacity:.4;cursor:not-allowed'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='7' y='1' width='2' height='14'/><rect x='3' y='3' width='10' height='4' rx='1' opacity='.5'/><rect x='4' y='9' width='8' height='4' rx='1' opacity='.5'/></svg></button>
-    <button class='btn' id='btn-align-right' onclick='layAlign("x","max")' title='Align right (select 2+)' disabled style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;opacity:.4;cursor:not-allowed'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='13' y='1' width='2' height='14'/><rect x='2' y='3' width='9' height='4' rx='1'/><rect x='5' y='9' width='6' height='4' rx='1'/></svg></button>
-    <button class='btn' id='btn-align-top' onclick='layAlign("y","max")' title='Align top (select 2+)' disabled style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;opacity:.4;cursor:not-allowed'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='1' y='1' width='14' height='2'/><rect x='3' y='5' width='4' height='9' rx='1'/><rect x='9' y='5' width='4' height='6' rx='1'/></svg></button>
-    <button class='btn' id='btn-align-cy' onclick='layAlign("y","center")' title='Center vertically (select 2+)' disabled style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;opacity:.4;cursor:not-allowed'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='1' y='7' width='14' height='2'/><rect x='3' y='2' width='4' height='12' rx='1' opacity='.5'/><rect x='9' y='4' width='4' height='8' rx='1' opacity='.5'/></svg></button>
-    <button class='btn' id='btn-align-bottom' onclick='layAlign("y","min")' title='Align bottom (select 2+)' disabled style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;opacity:.4;cursor:not-allowed'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='1' y='13' width='14' height='2'/><rect x='3' y='2' width='4' height='9' rx='1'/><rect x='9' y='5' width='4' height='6' rx='1'/></svg></button>
-    <button class='btn' id='btn-dist-h' onclick='layAlign("x","distribute")' title='Distribute horizontally (select 3+)' disabled style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;opacity:.4;cursor:not-allowed'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='1' y='1' width='1.5' height='14'/><rect x='13.5' y='1' width='1.5' height='14'/><rect x='4' y='4' width='3' height='8' rx='1' opacity='.6'/><rect x='9' y='4' width='3' height='8' rx='1' opacity='.6'/></svg></button>
-    <button class='btn' id='btn-dist-v' onclick='layAlign("y","distribute")' title='Distribute vertically (select 3+)' disabled style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;opacity:.4;cursor:not-allowed'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='1' y='1' width='14' height='1.5'/><rect x='1' y='13.5' width='14' height='1.5'/><rect x='4' y='4' width='8' height='3' rx='1' opacity='.6'/><rect x='4' y='9' width='8' height='3' rx='1' opacity='.6'/></svg></button>
-    <button class='btn' onclick='autoArrangeDmx()' title='Auto-arrange DMX fixtures' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><path d='M1 2h3v2H1zm5 0h3v2H6zm5 0h3v2H11zM4 5l4 9 4-9H4z' opacity='.8'/></svg></button>
+    <!-- Zone 3: Align dropdown + Auto-arrange -->
+    <div style='position:relative;display:inline-block'>
+      <button class='btn' id='btn-align-menu' onclick='_toggleAlignMenu()' title='Align & Distribute' style='height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;gap:3px'>
+        <svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><rect x='1' y='1' width='2' height='14'/><rect x='5' y='3' width='9' height='4' rx='1'/><rect x='5' y='9' width='6' height='4' rx='1'/></svg>Align <span style='font-size:8px'>\u25bc</span>
+      </button>
+      <div id='align-dropdown' style='display:none;position:absolute;top:32px;left:0;background:#1a1a24;border:1px solid #2a2a3a;border-radius:6px;padding:4px 0;min-width:180px;z-index:100;box-shadow:0 6px 20px rgba(0,0,0,.5)'>
+        <div style='padding:3px 10px;font-size:9px;color:#4a5568;text-transform:uppercase;letter-spacing:.5px'>Align (select 2+)</div>
+        <div class='ali' onclick='layAlign("x","min")'>Align Left</div>
+        <div class='ali' onclick='layAlign("x","center")'>Center Horizontal</div>
+        <div class='ali' onclick='layAlign("x","max")'>Align Right</div>
+        <div class='ali' onclick='layAlign("y","max")'>Align Top</div>
+        <div class='ali' onclick='layAlign("y","center")'>Center Vertical</div>
+        <div class='ali' onclick='layAlign("y","min")'>Align Bottom</div>
+        <div style='border-top:1px solid #2a2a3a;margin:3px 0'></div>
+        <div style='padding:3px 10px;font-size:9px;color:#4a5568;text-transform:uppercase;letter-spacing:.5px'>Distribute (select 3+)</div>
+        <div class='ali' onclick='layAlign("x","distribute")'>Distribute Horizontal</div>
+        <div class='ali' onclick='layAlign("y","distribute")'>Distribute Vertical</div>
+        <div style='border-top:1px solid #2a2a3a;margin:3px 0'></div>
+        <div class='ali' onclick='autoArrangeDmx();_toggleAlignMenu()'>Auto-Arrange DMX</div>
+      </div>
+    </div>
     <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
     <!-- Zone 4: Actions -->
     <button class='btn' onclick='_layUndo()' title='Undo last move/rotate (Ctrl+Z)' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='14' height='14' viewBox='0 0 16 16' fill='currentColor'><path d='M4 2v4h4L4 2zM2 7h6a5 5 0 110 10H5v-2h3a3 3 0 000-6H2V7z' opacity='.7'/></svg></button>
@@ -4500,6 +4512,16 @@ function _layDirtyUpdate(){
 }
 
 // ── Alignment functions (placeholder until multi-select) ────────────────
+function _toggleAlignMenu(){
+  var d=document.getElementById('align-dropdown');
+  if(d)d.style.display=d.style.display==='none'?'block':'none';
+}
+// Close dropdown when clicking elsewhere
+document.addEventListener('click',function(e){
+  var d=document.getElementById('align-dropdown');
+  if(d&&d.style.display==='block'&&!e.target.closest('#btn-align-menu')&&!e.target.closest('#align-dropdown'))d.style.display='none';
+});
+
 function layAlign(axis,mode){
   // Requires multi-select — currently disabled.
   // Will support: 'min', 'max', 'center', 'distribute' on 'x' or 'y' axis
