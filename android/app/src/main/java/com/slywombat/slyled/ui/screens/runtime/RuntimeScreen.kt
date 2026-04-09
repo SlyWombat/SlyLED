@@ -164,6 +164,7 @@ fun RuntimeScreen(viewModel: RuntimeViewModel = hiltViewModel()) {
                 onAddClip = { trackIdx, clip -> viewModel.addClipToTimeline(tl.id, trackIdx, clip) },
                 onRemoveClip = { trackIdx, clipIdx -> viewModel.removeClipFromTimeline(tl.id, trackIdx, clipIdx) },
                 onMoveTrack = { trackIdx, dir -> viewModel.moveTrack(tl.id, trackIdx, dir) },
+                fixtures = viewModel.stageFixtures.collectAsState().value,
                 actions = actions,
                 spatialEffects = spatialEffects,
                 bakeStatus = if (selectedTimeline?.id == tl.id) bakeStatus else null,
@@ -378,6 +379,7 @@ fun TimelineCard(
     onAddClip: (trackIdx: Int, TimelineClip) -> Unit,
     onRemoveClip: (trackIdx: Int, clipIdx: Int) -> Unit,
     onMoveTrack: (trackIdx: Int, direction: Int) -> Unit,
+    fixtures: List<Fixture>,
     actions: List<Action>,
     spatialEffects: List<SpatialEffect>,
     bakeStatus: BakeStatus?,
@@ -421,6 +423,7 @@ fun TimelineCard(
                 Spacer(Modifier.height(8.dp))
                 ClipEditorSection(
                     timeline = displayTimeline,
+                    fixtures = fixtures,
                     actions = actions,
                     spatialEffects = spatialEffects,
                     onAddClip = onAddClip,
@@ -587,6 +590,7 @@ fun PresetDialog(presets: List<ShowPreset>?, onDismiss: () -> Unit, onSelect: (S
 @Composable
 fun ClipEditorSection(
     timeline: Timeline,
+    fixtures: List<Fixture> = emptyList(),
     actions: List<Action>,
     spatialEffects: List<SpatialEffect>,
     onAddClip: (trackIdx: Int, TimelineClip) -> Unit,
@@ -600,7 +604,10 @@ fun ClipEditorSection(
         Text("Tracks & Clips", fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
 
         timeline.tracks.forEachIndexed { ti, track ->
-            val trackName = if (track.allPerformers) "★ Stage (All)" else "Track ${ti + 1}"
+            val trackName = if (track.allPerformers) "★ Stage (All)" else {
+                val fix = track.fixtureId?.let { fid -> fixtures.find { it.id == fid } }
+                fix?.name?.ifEmpty { null } ?: "Track ${ti + 1}"
+            }
             Card(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
