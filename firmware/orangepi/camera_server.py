@@ -728,9 +728,17 @@ def _cv_capture(device, timeout=5):
     # Standard V4L2 via OpenCV
     try:
         import cv2
-        cap = cv2.VideoCapture(device)
+        # Use V4L2 backend explicitly — GStreamer backend ignores resolution on many cameras
+        cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
         if not cap.isOpened():
-            return None
+            # Fallback to default backend
+            cap = cv2.VideoCapture(device)
+            if not cap.isOpened():
+                return None
+        # Set MJPEG format + 1080p — required for correct aspect ratio on USB cameras
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         cap.read()
         ret, frame = cap.read()
