@@ -888,10 +888,19 @@ def point_cloud():
     if frame is None:
         return jsonify(ok=False, err="Capture failed"), 503
     fov = _camera_fov(cam_idx)
+    # Load intrinsic calibration if available (#244)
+    intrinsics = None
+    cal_path = CALIB_DIR / f"intrinsic_cam{cam_idx}.json"
+    if cal_path.exists():
+        try:
+            intrinsics = json.loads(cal_path.read_text())
+        except Exception:
+            pass
     points, ms = est.generate_point_cloud(frame, fov, max_points=max_points,
-                                           max_depth_mm=max_depth)
+                                           max_depth_mm=max_depth, intrinsics=intrinsics)
     return jsonify(ok=True, points=points, pointCount=len(points),
-                   inferenceMs=round(ms), camera=cam_idx, fovDeg=fov)
+                   inferenceMs=round(ms), camera=cam_idx, fovDeg=fov,
+                   calibrated=intrinsics is not None)
 
 # ── Beam detection (for calibration) ───────────────────────────────────
 
@@ -1002,6 +1011,160 @@ def beam_detect_center():
     result = det.detect_center(frame, cam_idx=cam_idx, color=color,
                                 threshold=threshold, beam_count=beam_count)
     return jsonify(ok=True, **result)
+
+# ── Intrinsic calibration (checkerboard) ──────────────────────────────
+
+CALIB_DIR = Path("/opt/slyled/calibration")
+CALIB_DIR.mkdir(parents=True, exist_ok=True)
+_calib_frames = {}  # cam_idx → list of (corners, img_shape)
+
+CHECKER_ROWS = 6  # inner corners (7x10 squares → 6x9 inner corners)
+CHECKER_COLS = 9
+CHECKER_SIZE = 25.0  # mm per square (when printed at 100%)
+
+
+@app.post("/calibrate/intrinsic/capture")
+def intrinsic_capture():
+    """Capture checkerboard from ALL cameras simultaneously.
+    Body: {cam: N} for single camera, or omit for all cameras at once.
+    Returns: {ok, cameras: [{cam, found, corners, frameCount}]}"""
+    body = request.get_json(silent=True) or {}
+    single_cam = body.get("cam", None)
+    cameras = _hw_info.get("cameras", [])
+
+    import cv2
+    cam_indices = [single_cam] if single_cam is not None else list(range(len(cameras)))
+    results = []
+
+    for cam_idx in cam_indices:
+        if cam_idx >= len(cameras):
+            results.append({"cam": cam_idx, "found": False, "err": "invalid index"})
+            continue
+        frame = _cv_capture(cameras[cam_idx]["device"])
+        if frame is None:
+            results.append({"cam": cam_idx, "found": False, "err": "capture failed"})
+            continue
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        ret, corners = cv2.findChessboardCorners(
+            gray, (CHECKER_COLS, CHECKER_ROWS),
+            cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE)
+
+        if not ret:
+            results.append({"cam": cam_idx, "found": False,
+                            "frameCount": len(_calib_frames.get(cam_idx, []))})
+            continue
+
+        # Refine to sub-pixel
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+        corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+
+        if cam_idx not in _calib_frames:
+            _calib_frames[cam_idx] = []
+        _calib_frames[cam_idx].append((corners, gray.shape[::-1]))
+
+        count = len(_calib_frames[cam_idx])
+        log.info("Intrinsic calibration cam%d: captured frame %d (%d corners)",
+                 cam_idx, count, len(corners))
+        results.append({"cam": cam_idx, "found": True, "corners": len(corners),
+                        "frameCount": count})
+
+    return jsonify(ok=True, cameras=results)
+
+
+@app.post("/calibrate/intrinsic/compute")
+def intrinsic_compute():
+    """Compute intrinsic calibration from captured checkerboard frames.
+    Body: {cam: 0, squareSize: 25}
+    Returns: {ok, rmsError, fx, fy, cx, cy, distCoeffs, frameCount}"""
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    sq_size = body.get("squareSize", CHECKER_SIZE)
+
+    frames = _calib_frames.get(cam_idx, [])
+    if len(frames) < 5:
+        return jsonify(ok=False, err=f"Need at least 5 frames, have {len(frames)}")
+
+    import cv2
+    import numpy as np
+
+    # 3D object points (same for all frames)
+    objp = np.zeros((CHECKER_ROWS * CHECKER_COLS, 3), np.float32)
+    objp[:, :2] = np.mgrid[0:CHECKER_COLS, 0:CHECKER_ROWS].T.reshape(-1, 2) * sq_size
+
+    obj_points = [objp] * len(frames)
+    img_points = [f[0] for f in frames]
+    img_size = frames[0][1]  # (w, h)
+
+    ret, K, dist, rvecs, tvecs = cv2.calibrateCamera(
+        obj_points, img_points, img_size, None, None)
+
+    if not ret:
+        return jsonify(ok=False, err="Calibration failed")
+
+    fx, fy = float(K[0, 0]), float(K[1, 1])
+    cx, cy = float(K[0, 2]), float(K[1, 2])
+    dist_list = dist.flatten().tolist()
+
+    # Save to disk
+    cal_data = {
+        "cam": cam_idx,
+        "rmsError": round(float(ret), 4),
+        "fx": round(fx, 2), "fy": round(fy, 2),
+        "cx": round(cx, 2), "cy": round(cy, 2),
+        "distCoeffs": [round(d, 6) for d in dist_list],
+        "imageSize": list(img_size),
+        "frameCount": len(frames),
+        "squareSize": sq_size,
+        "timestamp": time.time(),
+    }
+    cal_path = CALIB_DIR / f"intrinsic_cam{cam_idx}.json"
+    cal_path.write_text(json.dumps(cal_data, indent=2))
+    log.info("Intrinsic calibration cam%d: RMS=%.4f fx=%.1f fy=%.1f cx=%.1f cy=%.1f (%d frames)",
+             cam_idx, ret, fx, fy, cx, cy, len(frames))
+
+    # Clear captured frames
+    _calib_frames.pop(cam_idx, None)
+
+    return jsonify(ok=True, **cal_data)
+
+
+@app.get("/calibrate/intrinsic")
+def intrinsic_get():
+    """Get intrinsic calibration for a camera.
+    Query: ?cam=0
+    Returns calibration data or {calibrated: false}"""
+    cam_idx = int(request.args.get("cam", 0))
+    cal_path = CALIB_DIR / f"intrinsic_cam{cam_idx}.json"
+    if not cal_path.exists():
+        return jsonify(calibrated=False)
+    try:
+        cal = json.loads(cal_path.read_text())
+        return jsonify(calibrated=True, **cal)
+    except Exception:
+        return jsonify(calibrated=False)
+
+
+@app.delete("/calibrate/intrinsic")
+def intrinsic_delete():
+    """Delete intrinsic calibration for a camera. Body: {cam: 0}"""
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    cal_path = CALIB_DIR / f"intrinsic_cam{cam_idx}.json"
+    if cal_path.exists():
+        cal_path.unlink()
+    _calib_frames.pop(cam_idx, None)
+    return jsonify(ok=True)
+
+
+@app.post("/calibrate/intrinsic/reset")
+def intrinsic_reset():
+    """Reset captured frames without deleting saved calibration. Body: {cam: 0}"""
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    _calib_frames.pop(cam_idx, None)
+    return jsonify(ok=True, frameCount=0)
+
 
 # ── Tracking mode ──────────────────────────────────────────────────────
 

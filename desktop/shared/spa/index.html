@@ -4690,7 +4690,10 @@ function _updateSidePanel(fixtureId){
     } else if(ft==='camera'){
       h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Camera</div>';
       h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.4em">FOV: '+(f.fovDeg||60)+'\u00b0 | '+(f.resolutionW||1920)+'\u00d7'+(f.resolutionH||1080)+'</div>';
-      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.3em">Calibration: '+(f.calibrated?'<span style="color:#4ade80">\u2713 Done</span>':'<span style="color:#f59e0b">Not done</span>')+'</div>';
+      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.3em">Homography: '+(f.calibrated?'<span style="color:#4ade80">\u2713 Done</span>':'<span style="color:#f59e0b">Not done</span>')+'</div>';
+      h+='<div style="display:flex;gap:.3em;margin-bottom:.4em">';
+      h+='<button class="btn" onclick="_intrinsicCalStart('+f.id+')" style="font-size:.7em;padding:.2em .5em;background:#164e63;color:#67e8f9">Calibrate Lens</button>';
+      h+='</div>';
       // Aim point editable
       var cap=f.aimPoint||[0,0,0];
       h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Aim Point</div>';
@@ -5825,6 +5828,96 @@ function _rangeCalSubmit(){
 // ── Unified mover calibration wizard ─────────────────────────────────
 var _moverCalFid=null;
 var _moverCalTimer=null;
+
+// ── Intrinsic lens calibration wizard ─────────────────────────────────
+var _icalFid=null,_icalIp=null,_icalCamIdx=0;
+
+function _intrinsicCalStart(fid){
+  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id==fid)f=fx;});
+  if(!f||f.fixtureType!=='camera')return;
+  _icalFid=fid;
+  _icalIp=f.cameraIp||f.cameraUrl.replace('http://','').split(':')[0];
+  _icalCamIdx=f.cameraIdx||0;
+  var h='<div style="min-width:400px">';
+  h+='<p style="color:#94a3b8;font-size:.85em;margin-bottom:.6em">Hold a printed checkerboard pattern (6\u00d79 inner corners, 25mm squares) in front of <strong>'+escapeHtml(f.name)+'</strong>. Capture 8\u201310 frames from different angles and distances.</p>';
+  h+='<div class="card" style="padding:.6em;margin-bottom:.4em">';
+  h+='<div style="font-size:.82em;color:#64748b;margin-bottom:.3em">Print a 7\u00d710 checkerboard at 100% scale (A4/Letter). Each square should be 25mm.</div>';
+  h+='</div>';
+  h+='<div style="display:flex;gap:.4em;align-items:center;margin-bottom:.6em">';
+  h+='<button class="btn btn-on" id="ical-capture" onclick="_icalCapture()" style="flex:1">Capture Frame</button>';
+  h+='<span id="ical-count" style="font-size:.85em;color:#94a3b8">0 frames</span>';
+  h+='</div>';
+  h+='<div id="ical-log" style="font-size:.78em;color:#64748b;max-height:120px;overflow-y:auto;margin-bottom:.5em"></div>';
+  h+='<div id="ical-result"></div>';
+  h+='<div style="display:flex;gap:.4em;margin-top:.5em">';
+  h+='<button class="btn btn-on" id="ical-compute" onclick="_icalCompute()" style="display:none">Compute Calibration</button>';
+  h+='<button class="btn" onclick="_icalReset()">Reset</button>';
+  h+='<button class="btn btn-off" onclick="closeModal()">Close</button>';
+  h+='</div></div>';
+  document.getElementById('modal-title').textContent='Lens Calibration — '+f.name;
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+  // Reset frames on camera
+  ra('POST','http://'+_icalIp+':5000/calibrate/intrinsic/reset',{cam:_icalCamIdx});
+}
+
+function _icalCapture(){
+  var btn=document.getElementById('ical-capture');
+  if(btn)btn.disabled=true;
+  var logEl=document.getElementById('ical-log');
+  ra('POST','http://'+_icalIp+':5000/calibrate/intrinsic/capture',{cam:_icalCamIdx},function(r){
+    if(btn)btn.disabled=false;
+    if(!r||!r.ok){if(logEl)logEl.innerHTML+='<div style="color:#f66">Capture failed</div>';return;}
+    var cams=r.cameras||[r];
+    cams.forEach(function(c){
+      if(c.found){
+        if(logEl)logEl.innerHTML+='<div style="color:#4ade80">\u2713 Frame '+c.frameCount+': '+c.corners+' corners found</div>';
+      }else{
+        if(logEl)logEl.innerHTML+='<div style="color:#f59e0b">\u2717 No checkerboard found — try different angle</div>';
+      }
+      var cnt=document.getElementById('ical-count');
+      if(cnt)cnt.textContent=c.frameCount+' frames';
+      if(c.frameCount>=5){
+        var cb=document.getElementById('ical-compute');if(cb)cb.style.display='inline-block';
+      }
+    });
+    if(logEl)logEl.scrollTop=logEl.scrollHeight;
+  });
+}
+
+function _icalCompute(){
+  var btn=document.getElementById('ical-compute');
+  if(btn){btn.disabled=true;btn.textContent='Computing...';}
+  ra('POST','http://'+_icalIp+':5000/calibrate/intrinsic/compute',{cam:_icalCamIdx},function(r){
+    var res=document.getElementById('ical-result');
+    if(!r||!r.ok){
+      if(res)res.innerHTML='<div style="color:#f66">'+( r&&r.err||'Failed')+'</div>';
+      if(btn){btn.disabled=false;btn.textContent='Compute Calibration';}
+      return;
+    }
+    if(res){
+      res.innerHTML='<div style="color:#4ade80;font-size:1em;margin-bottom:.3em">\u2713 Calibration Complete</div>'
+        +'<div style="font-size:.82em;color:#94a3b8">'
+        +'RMS Error: <strong>'+r.rmsError+'</strong> px<br>'
+        +'fx='+r.fx+' fy='+r.fy+'<br>'
+        +'cx='+r.cx+' cy='+r.cy+'<br>'
+        +'Frames: '+r.frameCount
+        +'</div>';
+    }
+    // Update fixture calibration flag
+    (_fixtures||[]).forEach(function(f){if(f.id==_icalFid)f.intrinsicCalibrated=true;});
+    _updateSidePanel(_icalFid);
+  });
+}
+
+function _icalReset(){
+  ra('POST','http://'+_icalIp+':5000/calibrate/intrinsic/reset',{cam:_icalCamIdx},function(){
+    var cnt=document.getElementById('ical-count');if(cnt)cnt.textContent='0 frames';
+    var logEl=document.getElementById('ical-log');if(logEl)logEl.innerHTML='';
+    var cb=document.getElementById('ical-compute');if(cb)cb.style.display='none';
+    var res=document.getElementById('ical-result');if(res)res.innerHTML='';
+  });
+}
 
 function _moverCalStart(fixId){
   _moverCalFid=fixId;

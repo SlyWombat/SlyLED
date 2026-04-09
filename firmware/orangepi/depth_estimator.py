@@ -143,7 +143,8 @@ class DepthEstimator:
 
         return (round(x), round(y), round(z))
 
-    def generate_point_cloud(self, frame, fov_deg, max_points=10000, max_depth_mm=5000):
+    def generate_point_cloud(self, frame, fov_deg, max_points=10000, max_depth_mm=5000,
+                             intrinsics=None):
         """Generate a downsampled point cloud from a BGR frame.
 
         Args:
@@ -151,6 +152,7 @@ class DepthEstimator:
             fov_deg: horizontal FOV in degrees
             max_points: maximum number of points to return
             max_depth_mm: maximum depth for scaling
+            intrinsics: optional dict with fx, fy, cx, cy from checkerboard calibration (#244)
 
         Returns:
             (points, inference_ms) where points is a list of [x, y, z, r, g, b]
@@ -159,10 +161,16 @@ class DepthEstimator:
         depth, ms = self.estimate(frame)
         h, w = depth.shape[:2]
 
-        # Camera intrinsics
-        fx = (w / 2) / math.tan(math.radians(fov_deg / 2))
-        fy = fx
-        cx_cam, cy_cam = (w - 1) / 2.0, (h - 1) / 2.0
+        # Camera intrinsics — prefer calibrated if available
+        if intrinsics and intrinsics.get("fx"):
+            fx = intrinsics["fx"]
+            fy = intrinsics.get("fy", fx)
+            cx_cam = intrinsics.get("cx", (w - 1) / 2.0)
+            cy_cam = intrinsics.get("cy", (h - 1) / 2.0)
+        else:
+            fx = (w / 2) / math.tan(math.radians(fov_deg / 2))
+            fy = fx
+            cx_cam, cy_cam = (w - 1) / 2.0, (h - 1) / 2.0
 
         # Downsample: pick every Nth pixel to stay under max_points
         total_pixels = h * w
