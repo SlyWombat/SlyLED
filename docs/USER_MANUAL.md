@@ -141,6 +141,24 @@ Toggle to 3D mode for an interactive Three.js scene:
 - Draggable aim spheres for DMX fixtures
 - Object planes/boxes with transparency
 
+### Move / Rotate Mode
+
+The layout canvas has two interaction modes, toggled with keyboard shortcuts or the toolbar button (which displays **M** or **R** to show the active mode):
+
+| Key | Mode | Description |
+|-----|------|-------------|
+| **M** | Move | Drag any placed fixture to reposition it (default mode) |
+| **R** | Rotate | Click a DMX fixture or camera fixture to show a compass ring; drag around the ring to aim the fixture |
+
+**Rotate mode details:**
+- A compass ring appears around the selected fixture when you enter Rotate mode
+- Drag clockwise or counter-clockwise to set the horizontal aim direction
+- The beam cone updates in real-time as you drag
+- In 3D viewport, Rotate mode activates Three.js **TransformControls** in rotate mode — drag the colored arcs to rotate on any axis
+- Press **Ctrl+Z** to undo the last move or rotation
+
+**Typical workflow:** Place all fixtures in Move mode, then switch to Rotate mode to aim DMX moving heads and cameras toward their intended focus areas before running calibration.
+
 ### Coordinate System
 - **aimPoint[0]** = X (horizontal position, mm)
 - **aimPoint[1]** = Y (height from floor, mm) — used for 2D canvas vertical axis
@@ -436,6 +454,52 @@ Each USB camera sensor on a camera node registers as a **separate fixture** in t
 - Its own position on the stage (independently placeable)
 - Its own FOV and resolution
 - Its own rest direction vector (cyan arrow)
+
+### Mover Calibration
+
+The mover calibration wizard builds an interpolation grid that maps every stage position to the exact pan/tilt angles required for a DMX moving head. A positioned camera node is required.
+
+**Prerequisites:**
+- At least one camera node positioned on the Layout tab
+- Art-Net engine running (`POST /api/dmx/start`)
+- Moving head fixture placed on the layout with its profile configured
+
+**Starting calibration:**
+1. Go to the **Layout** tab and double-click a DMX moving head fixture
+2. Click the **Calibrate** button in the fixture edit dialog
+3. Choose a beam color — options are Green, Magenta, Red, Blue (pick one that contrasts with your stage)
+4. Click **Start Calibration** — the wizard takes over automatically
+
+**What happens automatically:**
+1. **Discover** — the head sweeps through a coarse pan/tilt grid; the camera detects where the beam lands on the stage floor
+2. **Map visible region** — the pan/tilt range that keeps the beam within the camera's field of view is identified
+3. **Build interpolation grid** — the head systematically samples points across the visible region; at each point the camera records the exact stage coordinates
+
+**Progress:** A real-time progress panel shows the current phase, percentage complete, and a live thumbnail from the camera.
+
+**Result:** The interpolation grid is saved to the fixture and used automatically by the Track action and any Pan/Tilt Move actions to convert stage-space coordinates into hardware pan/tilt values.
+
+> **Tip:** Run calibration in dim ambient lighting so the beam is clearly visible to the camera. Use the **Beam Color** option that gives the highest contrast against your floor surface.
+
+### Fixture Orientation Test
+
+Before running full calibration, use the orientation test to confirm pan and tilt are wired in the expected directions. Incorrect orientation causes calibration to converge on wrong positions.
+
+**Running the test:**
+1. Double-click a DMX moving head on the Layout tab to open the fixture edit dialog
+2. Click **Orientation Test** (below the channel map)
+3. The fixture moves through four probe positions: pan left, pan right, tilt up, tilt down
+4. Watch the physical beam and compare with the on-screen arrows showing expected direction
+
+**Interpreting results:**
+| Observation | Action |
+|-------------|--------|
+| Beam matches arrows | Orientation is correct — proceed to calibration |
+| Pan moves opposite direction | Enable **Invert Pan** in the fixture settings |
+| Tilt moves opposite direction | Enable **Invert Tilt** in the fixture settings |
+| Pan and tilt axes are swapped | Enable **Swap Pan/Tilt** in the fixture settings |
+
+**Saving:** After adjusting orientation flags, click **Save** in the fixture edit dialog. The flags are stored with the fixture and applied automatically during all subsequent calibration and playback.
 
 ---
 

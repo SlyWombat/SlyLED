@@ -84,6 +84,16 @@ Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask s
 | GET | `/track/status` | Tracking state |
 | GET | `/health` | Health check |
 
+**Orchestrator calibration API routes (served by `desktop/shared/parent_server.py`):**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/calibration/mover/<fid>/start` | Start unified mover calibration (background) |
+| GET | `/api/calibration/mover/<fid>/status` | Poll calibration progress |
+| GET | `/api/calibration/mover/<fid>` | Get saved calibration data |
+| DELETE | `/api/calibration/mover/<fid>` | Delete calibration |
+| POST | `/api/calibration/mover/<fid>/aim` | Aim using calibration grid |
+
 - **Systemd service:** `slyled-cam` for auto-start on boot (tracked in `firmware/orangepi/slyled-cam.service`)
 - **Multi-camera support:** USB cameras only (V4L2). Filters SoC/ISP video nodes (sunxi-vin, bcm2835-isp). Pi CSI ribbon cameras not supported in v1.x.
 - **Object detection:** `firmware/orangepi/detector.py` — YOLOv8n ONNX model via onnxruntime (falls back to OpenCV DNN). Model deployed via SCP (`models/yolov8n.onnx`, 12 MB, gitignored). Returns bounding boxes with labels and confidence scores.
@@ -165,6 +175,11 @@ Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask s
 | GET | `/api/cameras/<id>/snapshot` | Proxy JPEG snapshot from camera node |
 | GET | `/api/cameras/<id>/status` | Live status from camera node |
 | POST | `/api/cameras/<id>/scan` | Forward camera scan to camera node |
+| POST | `/api/calibration/mover/<fid>/start` | Start unified mover calibration (background) |
+| GET | `/api/calibration/mover/<fid>/status` | Poll calibration progress |
+| GET | `/api/calibration/mover/<fid>` | Get saved calibration data |
+| DELETE | `/api/calibration/mover/<fid>` | Delete calibration |
+| POST | `/api/calibration/mover/<fid>/aim` | Aim using calibration grid |
 | POST | `/api/reset` | Factory reset all data |
 | POST | `/api/shutdown` | Terminate parent process |
 
@@ -258,7 +273,7 @@ struct ChildStringCfg {
 
 `EEPROM_MAGIC = 0xA8` — bump when struct layout changes to force re-initialisation.
 
-### Test suite (parent — 90 tests)
+### Test suite (parent — 436 assertions)
 
 ```
 powershell.exe -Command "python -X utf8 tests/test_parent.py"
