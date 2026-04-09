@@ -117,6 +117,8 @@ body.light .li:hover{border-color:#3b82f6}
         <button class='btn' onclick='layViewReset()' title='Recenter view' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M8 3a5 5 0 100 10A5 5 0 008 3zm0 2a3 3 0 110 6 3 3 0 010-6zm0 1.5a1.5 1.5 0 100 3 1.5 1.5 0 000-3z'/></svg></button>
         <button class='btn' onclick='layViewTop()' title='Top view' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 2h12v12H2V2zm1 1v10h10V3H3zm4 2v3H5l3-4 3 4H9V5H7z' opacity='.85'/></svg></button>
         <button class='btn' onclick='layViewFront()' title='Front view' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M2 3h12v10H2V3zm1 1v8h10V4H3zm2 6V7h6v3H5z' opacity='.85'/></svg></button>
+        <button class='btn' id='btn-lay-tool' onclick='_layToolToggle()' title='Move / Rotate mode (R key)' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;background:#1e293b;color:#94a3b8'>M</button>
+        <button class='btn' onclick='_layUndo()' title='Undo last move/rotate' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M4 2v4h4L4 2zM2 7h6a5 5 0 110 10H5v-2h3a3 3 0 000-6H2V7z' opacity='.7'/></svg></button>
         <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
         <button class='btn' onclick='autoArrangeDmx()' title='Auto-arrange DMX fixtures' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M1 2h3v2H1zm5 0h3v2H6zm5 0h3v2H11zM4 5l4 9 4-9H4z' opacity='.8'/></svg></button>
         <button class='btn' id='btn-lay-strings' onclick='_layDetailToggle()' title='Show/hide LED strings' style='width:32px;height:32px;padding:0;display:flex;align-items:center;justify-content:center;background:#14532d;color:#86efac'><svg width='16' height='16' viewBox='0 0 16 16' id='lay-detail-svg'><line x1='2' y1='4' x2='14' y2='4' stroke='#22c55e' stroke-width='2'/><line x1='2' y1='8' x2='14' y2='8' stroke='#3b82f6' stroke-width='2'/><line x1='2' y1='12' x2='14' y2='12' stroke='#f59e0b' stroke-width='2'/></svg></button>
@@ -591,6 +593,8 @@ document.addEventListener('DOMContentLoaded',function(){
 });
 
 var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0,units=0,_cvW=900,_cvH=450,_dragStartX=0,_dragStartY=0,_dragMoved=false;
+var _layTool='move'; // 'move' or 'rotate'
+var _undoStack=[];   // [{fid, x, y, z, aimPoint, rotation}]
 function _clearTabTimers(){
   if(typeof dashRunnerTimer!=='undefined'&&dashRunnerTimer){clearInterval(dashRunnerTimer);dashRunnerTimer=null;}
   if(typeof _emuTimer!=='undefined'&&_emuTimer){clearInterval(_emuTimer);_emuTimer=null;}
@@ -5703,30 +5707,92 @@ function cvDown(e){
     e.preventDefault();return;
   }
   if(e.button!==0)return;
-  // Check compass ring click first
-  if(_compassFid && _compassHitTest(m.x,m.y,cv)){
-    _compassDragging=true;
-    cv.style.cursor='crosshair';
-    var angle=_compassAngle(m.x,m.y,cv);
-    _compassApply(angle,!e.shiftKey);
+  var hit=_hitNode(m.x,m.y,cv.width,cv.height);
+
+  // Rotate mode: compass interaction
+  if(_layTool==='rotate'){
+    // Compass ring drag
+    if(_compassFid && _compassHitTest(m.x,m.y,cv)){
+      // Save undo before rotating
+      var cf=null;_fixtures.forEach(function(fx){if(fx.id===_compassFid)cf=fx;});
+      if(cf)_laySaveUndo(cf);
+      _compassDragging=true;
+      cv.style.cursor='crosshair';
+      var angle=_compassAngle(m.x,m.y,cv);
+      _compassApply(angle,!e.shiftKey);
+      return;
+    }
+    // Click fixture to show compass
+    if(hit>=0){
+      var placed=_fixtures.filter(_isFixturePlaced);
+      _compassFid=placed[hit].id;
+      cv.style.cursor='crosshair';
+      drawLayout();
+    }else{
+      _compassFid=null;drawLayout();
+    }
     return;
   }
-  drag=_hitNode(m.x,m.y,cv.width,cv.height);
+
+  // Move mode: drag fixtures
+  _compassFid=null;
+  drag=hit;
   if(drag>=0){
     var placed=_fixtures.filter(_isFixturePlaced);
     var np=_nodePos(placed[drag],cv.width,cv.height);
     dox=m.x-np.cx;doy=m.y-np.cy;
     _dragStartX=m.x;_dragStartY=m.y;_dragMoved=false;
+    _laySaveUndo(placed[drag]);
     cv.style.cursor='grabbing';
-    // Show compass for DMX/camera fixtures on click
-    var ft=placed[drag].fixtureType||'led';
-    if(ft==='dmx'||ft==='camera')_compassFid=placed[drag].id;
-    else _compassFid=null;
     drawLayout();
-  }else{
-    _compassFid=null;drawLayout();
   }
 }
+// ── Layout tool mode (Move / Rotate) + Undo ─────────────────────────
+function _layToolToggle(){
+  _layTool=_layTool==='move'?'rotate':'move';
+  var btn=document.getElementById('btn-lay-tool');
+  if(btn){
+    btn.textContent=_layTool==='move'?'M':'R';
+    btn.style.background=_layTool==='rotate'?'#7c3aed':'#1e293b';
+    btn.style.color=_layTool==='rotate'?'#e9d5ff':'#94a3b8';
+    btn.title=_layTool==='move'?'Move mode (press R for Rotate)':'Rotate mode (press M for Move)';
+  }
+  _compassFid=null;
+  drawLayout();
+  document.getElementById('hs').textContent=_layTool==='move'?'Move mode — drag to reposition':'Rotate mode — click fixture to aim';
+}
+function _laySaveUndo(f){
+  _undoStack.push({fid:f.id,x:f.x,y:f.y,z:f.z||0,
+    aimPoint:f.aimPoint?f.aimPoint.slice():null,
+    rotation:f.rotation?f.rotation.slice():null});
+  if(_undoStack.length>20)_undoStack.shift();
+}
+function _layUndo(){
+  if(!_undoStack.length){document.getElementById('hs').textContent='Nothing to undo';return;}
+  var u=_undoStack.pop();
+  _fixtures.forEach(function(f){
+    if(f.id===u.fid){
+      f.x=u.x;f.y=u.y;f.z=u.z;
+      if(u.aimPoint)f.aimPoint=u.aimPoint;
+      if(u.rotation)f.rotation=u.rotation;
+    }
+  });
+  drawLayout();
+  if(_layMode==='3d'&&_s3d.inited)s3dLoadChildren();
+  // Save to server
+  var toSave=_fixtures.filter(_isFixturePlaced).map(function(f){return{id:f.id,x:f.x,y:f.y,z:f.z||0};});
+  ra('POST','/api/layout',{fixtures:toSave});
+  document.getElementById('hs').textContent='Undone';
+}
+// Keyboard shortcuts: R=rotate, M=move, Ctrl+Z=undo
+document.addEventListener('keydown',function(e){
+  if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT')return;
+  if(ctab!=='layout')return;
+  if((e.key==='r'||e.key==='R')&&_layTool!=='rotate'){_layToolToggle();}
+  else if((e.key==='m'||e.key==='g'||e.key==='M'||e.key==='G')&&_layTool!=='move'){_layToolToggle();}
+  else if((e.ctrlKey||e.metaKey)&&e.key==='z'){e.preventDefault();_layUndo();}
+});
+
 // ── Compass gizmo for aiming cameras + moving heads ──────────────────
 var _compassFid=null;     // fixture ID with active compass
 var _compassDragging=false;
@@ -5846,24 +5912,25 @@ function startAimMode(fixtureId){
 function cvMove(e){
   var cv=document.getElementById('lcv');
   var m=_cvMouse(e,cv);
-  // Compass ring drag
+  // Compass ring drag (rotate mode)
   if(_compassDragging){
     var angle=_compassAngle(m.x,m.y,cv);
     _compassApply(angle,!e.shiftKey);
     return;
   }
-  if(drag===null||drag<0){
-    var hit=_hitNode(m.x,m.y,cv.width,cv.height);
+  if(_layTool==='rotate'){
     var onRing=_compassFid&&_compassHitTest(m.x,m.y,cv);
-    cv.style.cursor=onRing?'crosshair':(hit>=0?'pointer':'grab');
+    cv.style.cursor=onRing?'crosshair':(_hitNode(m.x,m.y,cv.width,cv.height)>=0?'pointer':'default');
     return;
   }
-  // Only start actual drag after mouse moves >5px (so click shows compass without moving)
+  if(drag===null||drag<0){
+    cv.style.cursor=_hitNode(m.x,m.y,cv.width,cv.height)>=0?'pointer':'grab';
+    return;
+  }
   if(!_dragMoved){
     var dd=Math.abs(m.x-_dragStartX)+Math.abs(m.y-_dragStartY);
     if(dd<5)return;
     _dragMoved=true;
-    _compassFid=null;  // hide compass during drag
   }
   var placed=_fixtures.filter(_isFixturePlaced);
   var W=cv.width,H=cv.height;
