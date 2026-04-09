@@ -663,6 +663,7 @@ var _layTool='move'; // 'move' or 'rotate'
 var _undoStack=[];   // [{fid, x, y, z, aimPoint, rotation}]
 var _layoutDirty=false;
 var _panelSections={fixtures:false,objects:false,scene:false}; // collapse state
+var _panelSelectedFid=null; // currently selected fixture ID for side panel
 function _clearTabTimers(){
   if(typeof dashRunnerTimer!=='undefined'&&dashRunnerTimer){clearInterval(dashRunnerTimer);dashRunnerTimer=null;}
   if(typeof _emuTimer!=='undefined'&&_emuTimer){clearInterval(_emuTimer);_emuTimer=null;}
@@ -4413,7 +4414,11 @@ function loadLayout(){
   });
 }
 
-function renderSidebar(){renderFixturesSidebar();_layScanUpdateBtn();_panelUpdateCounts();}
+function renderSidebar(){renderFixturesSidebar();_layScanUpdateBtn();_panelUpdateCounts();
+  // Restore panel state: if a fixture was selected, re-apply its panel; otherwise expand fixture list
+  if(_panelSelectedFid!=null){_updateSidePanel(_panelSelectedFid);}
+  else{_panelSections.fixtures=true;var b=document.getElementById('panel-fixtures-body');var a=document.getElementById('panel-fixtures-arrow');if(b)b.style.display='block';if(a)a.style.transform='rotate(90deg)';}
+}
 
 // ── Side panel helpers ──────────────────────────────────────────────────
 function _panelToggle(section){
@@ -4430,20 +4435,27 @@ function _panelUpdateCounts(){
   if(oc)oc.textContent=(_objects||[]).length;
 }
 function _updateSidePanel(fixtureId){
+  _panelSelectedFid=fixtureId||null;
   var hdr=document.getElementById('panel-header');
   var pos=document.getElementById('panel-position');
   var det=document.getElementById('panel-details');
-  if(!fixtureId){
+  if(!fixtureId&&fixtureId!==0){
     // No selection — hide detail sections, expand fixtures list
     if(hdr)hdr.style.display='none';
     if(pos)pos.style.display='none';
     if(det)det.style.display='none';
-    if(!_panelSections.fixtures){_panelSections.fixtures=true;var b=document.getElementById('panel-fixtures-body');var a=document.getElementById('panel-fixtures-arrow');if(b)b.style.display='block';if(a)a.style.transform='rotate(90deg)';}
+    _panelSections.fixtures=true;var b=document.getElementById('panel-fixtures-body');var a=document.getElementById('panel-fixtures-arrow');if(b)b.style.display='block';if(a)a.style.transform='rotate(90deg)';
     return;
   }
-  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===fixtureId)f=fx;});
-  if(!f)return;
+  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id==fixtureId)f=fx;});
+  if(!f){console.warn('_updateSidePanel: no fixture with id',fixtureId,'in',(_fixtures||[]).map(function(x){return x.id;}));return;}
   var ft=f.fixtureType||'led';
+  // Collapse fixtures list to make room for selected fixture details
+  _panelSections.fixtures=false;
+  var fb=document.getElementById('panel-fixtures-body');var fa=document.getElementById('panel-fixtures-arrow');
+  if(fb)fb.style.display='none';if(fa)fa.style.transform='';
+  // Scroll panel to top so header/position/details are visible
+  var panel=document.getElementById('lay-panel');if(panel)panel.scrollTop=0;
   // Header
   if(hdr){
     hdr.style.display='block';
