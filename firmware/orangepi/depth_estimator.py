@@ -177,8 +177,8 @@ class DepthEstimator:
         for py in range(0, h, step):
             for px in range(0, w, step):
                 d = float(depth[py, px])
-                if d < 0.01:
-                    continue  # skip near-zero depth (invalid)
+                if d < 0.05 or d > 0.98:
+                    continue  # skip unreliable extremes (noise floor + saturated)
                 z = d * max_depth_mm
                 x = (px - cx_cam) * z / fx
                 y = (py - cy_cam) * z / fy
