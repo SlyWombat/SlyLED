@@ -146,6 +146,31 @@ input:focus,select:focus{border-color:#3b82f6;outline:none;box-shadow:0 0 0 2px 
       <div class='log-panel mt-1' id='build-log'>Waiting for build...</div>
     </div>
   </div>
+
+  <div class='card-row'>
+    <div class='card'>
+      <div class='card-title'>User Manuals</div>
+      <div style='display:flex;gap:.5em;align-items:center;flex-wrap:wrap;margin-bottom:.5em'>
+        <button class='btn btn-primary' onclick='buildManual("en",false)'>Build English</button>
+        <button class='btn btn-primary' onclick='buildManual("fr",false)'>Build French</button>
+        <button class='btn btn-accent' onclick='buildManual("en",true)'>English + Screenshots</button>
+        <button class='btn btn-accent' onclick='buildManual("fr",true)'>French + Screenshots</button>
+        <span id='manual-status' class='badge b-idle'>Idle</span>
+      </div>
+      <div class='log-panel' id='manual-log' style='max-height:150px'>Waiting...</div>
+    </div>
+    <div class='card'>
+      <div class='card-title'>Website Deploy</div>
+      <div style='display:flex;gap:.5em;align-items:center;flex-wrap:wrap;margin-bottom:.5em'>
+        <button class='btn' onclick='deployAction("test")' style='background:#334;color:#ccc'>Test Connection</button>
+        <button class='btn btn-primary' onclick='deployAction("website")'>Deploy Website</button>
+        <button class='btn btn-accent' onclick='deployAction("demo")'>Update Demo</button>
+        <button class='btn' onclick='deployAction("manual")' style='background:#4c1d95;color:#e9d5ff'>Upload Manuals</button>
+        <span id='deploy-status' class='badge b-idle'>Idle</span>
+      </div>
+      <div class='log-panel' id='deploy-log' style='max-height:150px'>Waiting...</div>
+    </div>
+  </div>
 </div>
 
 <!-- ═══ DASHBOARD TAB ═══ -->
@@ -387,6 +412,26 @@ function connectSSE() {
     }
   });
 
+  evtSource.addEventListener('manual', e => {
+    const d = JSON.parse(e.data);
+    if (d.line) appendLog('manual-log', d.line);
+    if (d.done) {
+      const badge = document.getElementById('manual-status');
+      badge.className = d.error ? 'badge b-fail' : 'badge b-pass';
+      badge.textContent = d.error ? 'Failed' : 'Done';
+    }
+  });
+
+  evtSource.addEventListener('deploy', e => {
+    const d = JSON.parse(e.data);
+    if (d.line) appendLog('deploy-log', d.line);
+    if (d.done) {
+      const badge = document.getElementById('deploy-status');
+      badge.className = d.error ? 'badge b-fail' : 'badge b-pass';
+      badge.textContent = d.error ? 'Failed' : 'Done';
+    }
+  });
+
   evtSource.onerror = () => {
     setTimeout(connectSSE, 3000);
   };
@@ -487,6 +532,27 @@ function setBuildRunning(running) {
     badge.className = 'badge b-run';
     badge.textContent = 'Building...';
   }
+}
+
+/* ── Manual Build ── */
+async function buildManual(lang, screenshots) {
+  const log = document.getElementById('manual-log');
+  const badge = document.getElementById('manual-status');
+  log.textContent = 'Starting ' + lang.toUpperCase() + ' manual build...\n';
+  badge.className = 'badge b-run'; badge.textContent = 'Building...';
+  const r = await api('/api/manual/build', {method: 'POST', body: JSON.stringify({lang, screenshots})});
+  if (!r || !r.ok) { badge.textContent = 'Failed'; badge.className = 'badge b-fail'; return; }
+  // Poll via SSE — manual events come through the same stream
+}
+
+/* ── Website Deploy ── */
+async function deployAction(action) {
+  const log = document.getElementById('deploy-log');
+  const badge = document.getElementById('deploy-status');
+  log.textContent = 'Starting ' + action + '...\n';
+  badge.className = 'badge b-run'; badge.textContent = 'Running...';
+  const r = await api('/api/deploy/run', {method: 'POST', body: JSON.stringify({action})});
+  if (!r || !r.ok) { badge.textContent = 'Failed'; badge.className = 'badge b-fail'; return; }
 }
 
 /* ── Dashboard ── */

@@ -462,6 +462,146 @@ def api_issues():
         return jsonify({'count': None, 'error': str(e)})
 
 
+# ── Manual Build ───────────────────────────────────────────────────────
+
+_manual_process = None
+_manual_lock = threading.Lock()
+_manual_output = []
+_manual_running = False
+
+
+@app.route('/api/manual/build', methods=['POST'])
+def api_manual_build():
+    global _manual_process, _manual_output, _manual_running
+    with _manual_lock:
+        if _manual_running:
+            return jsonify(ok=False, err='Manual build already running'), 409
+        body = request.get_json(silent=True) or {}
+        lang = body.get('lang', 'en')
+        screenshots = body.get('screenshots', False)
+        _manual_output = []
+        _manual_running = True
+
+    def _run():
+        global _manual_process, _manual_running
+        try:
+            # Step 1: Screenshots (optional)
+            if screenshots:
+                _manual_output.append('[devgui] Capturing screenshots...\n')
+                _broadcast_sse('manual', {'line': '[devgui] Capturing screenshots...'})
+                p = subprocess.Popen(
+                    [sys.executable, 'tests/screenshot_capture.py'],
+                    cwd=PROJECT_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                )
+                for line in iter(p.stdout.readline, ''):
+                    _manual_output.append(line)
+                    _broadcast_sse('manual', {'line': line.rstrip()})
+                p.wait()
+
+            # Step 2: Build manual
+            args = [sys.executable, 'tests/build_manual.py']
+            if lang != 'en':
+                args += ['--lang', lang]
+            _manual_output.append(f'[devgui] Building {lang.upper()} manual...\n')
+            _broadcast_sse('manual', {'line': f'[devgui] Building {lang.upper()} manual...'})
+            _manual_process = subprocess.Popen(
+                args, cwd=PROJECT_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            )
+            for line in iter(_manual_process.stdout.readline, ''):
+                _manual_output.append(line)
+                _broadcast_sse('manual', {'line': line.rstrip()})
+            _manual_process.wait()
+            rc = _manual_process.returncode
+            _broadcast_sse('manual', {'done': True, 'exitCode': rc})
+        except Exception as e:
+            _broadcast_sse('manual', {'done': True, 'error': str(e)})
+        finally:
+            _manual_running = False
+            _manual_process = None
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify(ok=True, lang=lang, screenshots=screenshots)
+
+
+@app.route('/api/manual/status')
+def api_manual_status():
+    return jsonify(running=_manual_running, lines=len(_manual_output))
+
+
+# ── Website Deploy ─────────────────────────────────────────────────────
+
+_deploy_process = None
+_deploy_lock = threading.Lock()
+_deploy_output = []
+_deploy_running = False
+
+
+@app.route('/api/deploy/run', methods=['POST'])
+def api_deploy_run():
+    global _deploy_process, _deploy_output, _deploy_running
+    with _deploy_lock:
+        if _deploy_running:
+            return jsonify(ok=False, err='Deploy already running'), 409
+        body = request.get_json(silent=True) or {}
+        action = body.get('action', 'test')  # test | website | demo | manual
+        _deploy_output = []
+        _deploy_running = True
+
+    def _run():
+        global _deploy_process, _deploy_running
+        try:
+            deploy_script = os.path.join(PROJECT_ROOT, 'server', 'deploy.py')
+            if not os.path.exists(deploy_script):
+                _broadcast_sse('deploy', {'done': True, 'error': 'server/deploy.py not found'})
+                return
+
+            if action == 'manual':
+                # Upload manual PDFs
+                for lang, fname in [('en', 'SlyLED_User_Manual.pdf'), ('fr', 'SlyLED_User_Manual_fr.pdf')]:
+                    fpath = os.path.join(PROJECT_ROOT, 'docs', fname)
+                    if os.path.exists(fpath):
+                        _deploy_output.append(f'[devgui] Uploading {fname}...\n')
+                        _broadcast_sse('deploy', {'line': f'[devgui] Uploading {fname}...'})
+                        p = subprocess.Popen(
+                            [sys.executable, deploy_script, 'upload', fpath, '/public_html/slyled'],
+                            cwd=PROJECT_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                        )
+                        for line in iter(p.stdout.readline, ''):
+                            _deploy_output.append(line)
+                            _broadcast_sse('deploy', {'line': line.rstrip()})
+                        p.wait()
+                    else:
+                        _deploy_output.append(f'[devgui] {fname} not found — skipping\n')
+                        _broadcast_sse('deploy', {'line': f'[devgui] {fname} not found — build first'})
+            else:
+                # test | website | demo | deploy
+                cmd = [sys.executable, deploy_script, action]
+                _deploy_output.append(f'[devgui] Running: deploy.py {action}\n')
+                _broadcast_sse('deploy', {'line': f'[devgui] Running: deploy.py {action}'})
+                _deploy_process = subprocess.Popen(
+                    cmd, cwd=PROJECT_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                )
+                for line in iter(_deploy_process.stdout.readline, ''):
+                    _deploy_output.append(line)
+                    _broadcast_sse('deploy', {'line': line.rstrip()})
+                _deploy_process.wait()
+
+            _broadcast_sse('deploy', {'done': True, 'exitCode': 0})
+        except Exception as e:
+            _broadcast_sse('deploy', {'done': True, 'error': str(e)})
+        finally:
+            _deploy_running = False
+            _deploy_process = None
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify(ok=True, action=action)
+
+
+@app.route('/api/deploy/status')
+def api_deploy_status():
+    return jsonify(running=_deploy_running, lines=len(_deploy_output))
+
+
 # ── Main ────────────────────────────────────────────────────────────────
 
 def main():
