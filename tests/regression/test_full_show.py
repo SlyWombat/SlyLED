@@ -230,7 +230,8 @@ try:
     print('\n=== Phase 5: Runtime 3D ===')
 
     page.click('#n-runtime')
-    page.wait_for_timeout(8000)
+    # Wait for emuLoadStage async chain (5 nested API calls)
+    page.wait_for_timeout(12000)
 
     rt_canvas = page.evaluate('() => !!document.querySelector("#emu-3d canvas")')
     check('Runtime has 3D canvas', rt_canvas)

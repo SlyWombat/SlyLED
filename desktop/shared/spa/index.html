@@ -88,7 +88,12 @@ body.light .li:hover{border-color:#3b82f6}
   <button id='n-firmware' class='tnav'      onclick='showTab("firmware")' data-tip='tabFirmware'>Firmware</button>
 </nav>
 
-<div id='t-dash'    class='tab'><p style='color:#888'>Loading...</p></div>
+<div id='t-dash' class='tab'>
+  <div id='dash-content'><p style='color:#888'>Loading...</p></div>
+  <div style='margin-top:.8em'><div style='font-weight:600;color:#94a3b8;font-size:.82em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em'>Stage Preview</div>
+  <div id='dash-3d' style='width:100%;height:350px;background:#060a12;border:1px solid #1e293b;border-radius:4px;overflow:hidden'></div></div>
+  <div id='dash-runner' style='margin-top:.6em'></div>
+</div>
 <div id='t-setup'   class='tab' style='display:none'></div>
 
 <div id='t-layout' class='tab' style='display:none'>
@@ -703,6 +708,8 @@ function showTab(t){
   if(t==='dash'){
     if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
     loadDash();
+    // dash-3d is persistent in HTML — attach immediately if 3D is ready
+    if(_s3d.inited&&_s3d.renderer&&_emu3d.inited)_dashAttach3d();
   }
   else if(t==='setup')loadSetup();
   else if(t==='layout'){
@@ -717,8 +724,10 @@ function showTab(t){
   else if(t==='actions')loadActions();
   else if(t==='runtime'){
     // Attach 3D canvas to runtime container
-    if(_s3d.inited&&_s3d.renderer&&_emu3d.inited){
-      if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
+    if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
+    if(!_s3d.inited)s3dInit();
+    if(_s3d.renderer){
+      emu3dInit();
       _emu3dAttach('emu-3d');
       if(!_emu3d.animId)emu3dAnimate();
     }
@@ -817,12 +826,8 @@ function loadDash(){
       h+='<tr><td colspan="8" style="color:#888;text-align:center">No fixtures registered</td></tr>';
     }
     h+='</table>';
-    // 3D stage preview — always visible
-    h+='<div style="margin-top:.8em"><div style="font-weight:600;color:#94a3b8;font-size:.82em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Stage Preview</div>';
-    h+='<div id="dash-3d" style="width:100%;height:350px;background:#060a12;border:1px solid #1e293b;border-radius:4px;overflow:hidden"></div></div>';
-    h+='<div id="dash-runner" style="margin-top:.6em"></div>';
-    document.getElementById('t-dash').innerHTML=h;
-    // Attach 3D viewport
+    document.getElementById('dash-content').innerHTML=h;
+    // Attach 3D viewport (dash-3d is persistent in HTML, never recreated)
     _dashAttach3d();
     // Check for firmware updates
     api('GET','/api/firmware/check').then(function(chk){
@@ -843,7 +848,7 @@ function loadDash(){
     dashRunnerTimer=setInterval(refreshRunnerStatus,1000);
     if(!startupDone)_pollStartup();
   }).catch(function(){
-    document.getElementById('t-dash').innerHTML='<p style="color:#f66">Failed to load dashboard.</p>';
+    document.getElementById('dash-content').innerHTML='<p style="color:#f66">Failed to load dashboard.</p>';
   });
 }
 
@@ -939,21 +944,28 @@ function _renderTimelineDash(el,settings,tlStatus){
 
 function _dashAttach3d(){
   var el=document.getElementById('dash-3d');
-  if(!el){console.warn('[DASH3D] no dash-3d element');return;}
+  if(!el||!_s3d.renderer)return;
   if(!_s3d.inited)s3dInit();
-  if(!_s3d.renderer){console.warn('[DASH3D] no renderer');return;}
+  if(!_s3d.renderer)return;
   emu3dInit();
+  if(!_emu3d.camera||!_emu3d.controls)return;
   if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
-  // Force canvas into dashboard container
-  _emu3dAttach('dash-3d');
-  console.log('[DASH3D] attached, canvas parent='+(_s3d.renderer.domElement.parentElement?_s3d.renderer.domElement.parentElement.id:'none'));
-  if(!_emu3d.animId)emu3dAnimate();
-  // Load stage data if needed, then build fixtures
-  if(!_emuStage){
-    emuLoadStage();
-  }else{
-    emu3dBuildFixtures();
-  }
+  // Directly append canvas — don't go through _emu3dAttach to avoid race
+  el.appendChild(_s3d.renderer.domElement);
+  var W=el.clientWidth||900,H=el.clientHeight||350;
+  _s3d.renderer.setSize(W,H);
+  _emu3d.camera.aspect=W/H;_emu3d.camera.updateProjectionMatrix();
+  if(_s3d.controls)_s3d.controls.enabled=false;
+  if(_s3d.tctl){_s3d.tctl.detach();_s3d.tctl.visible=false;}
+  _emu3d.controls.enabled=true;
+  _emu3d.activeTab=true;
+  _emu3d.activeContainer='dash-3d';
+  _s3d.renderer.domElement.removeEventListener('click',s3dClick);
+  _s3d.renderer.domElement.removeEventListener('dblclick',s3dDblClick);
+  if(_emu3d.animId){cancelAnimationFrame(_emu3d.animId);_emu3d.animId=null;}
+  emu3dAnimate();
+  if(!_emuStage)emuLoadStage();
+  else if(!_emu3d.nodes.length)emu3dBuildFixtures();
 }
 
 function _dashEmuDraw(){
@@ -5012,9 +5024,9 @@ function _emuStageReady(){
   if(!_s3d.renderer)return;
   emu3dInit();
   if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
-  // Attach to whichever live container is currently visible
+  // Only re-attach if not already in the correct container
   var cid=(ctab==='dash')?'dash-3d':'emu-3d';
-  _emu3dAttach(cid);
+  if(_emu3d.activeContainer!==cid)_emu3dAttach(cid);
   emu3dBuildFixtures();
   if(_emu3d.animId){cancelAnimationFrame(_emu3d.animId);_emu3d.animId=null;}
   emu3dAnimate();
