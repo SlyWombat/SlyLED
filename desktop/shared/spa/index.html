@@ -8788,23 +8788,42 @@ function exportConfig(btn){
   ra('GET','/api/config/export',null,function(d){
     _btnSaved(btn,!!d);
     if(!d)return;
-    var blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});
-    var a=document.createElement('a');
-    a.href=URL.createObjectURL(blob);
-    a.download='slyled-config.json';
-    a.click();URL.revokeObjectURL(a.href);
+    var json=JSON.stringify(d,null,2);
+    var blob=new Blob([json],{type:'application/json'});
+    // Use File System Access API if available (lets user pick save location)
+    if(window.showSaveFilePicker){
+      window.showSaveFilePicker({suggestedName:'slyled-config.json',types:[{description:'SlyLED Config',accept:{'application/json':['.json']}}]}).then(function(handle){
+        return handle.createWritable().then(function(w){return w.write(blob).then(function(){return w.close();});});
+      }).catch(function(e){if(e.name!=='AbortError')console.warn('Save picker failed, using download fallback');});
+    }else{
+      // Fallback: browser download
+      var a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download='slyled-config.json';
+      a.click();URL.revokeObjectURL(a.href);
+    }
   });
 }
 function importConfig(input){
   var f=input.files[0];if(!f)return;
   var rd=new FileReader();
   rd.onload=function(e){
-    try{var data=JSON.parse(e.target.result);}catch(ex){alert('Invalid JSON');return;}
-    if(data.type!=='slyled-config'){alert('Not a SlyLED config file');return;}
-    if(!confirm('Load configuration? This will merge fixtures and replace layout.'))return;
+    try{var data=JSON.parse(e.target.result);}catch(ex){alert('Invalid JSON file');return;}
+    if(data.type!=='slyled-config'){alert('Not a SlyLED config file (missing type field)');return;}
+    // Schema version warning
+    var sv=data.schemaVersion||data.version||1;
+    if(sv>3){
+      alert('This config file is version '+sv+', but this app only supports up to version 3. Please update SlyLED.');
+      return;
+    }
+    if(!confirm('Load configuration from v'+sv+' file? This will merge fixtures and replace layout.'))return;
     ra('POST','/api/config/import',data,function(r){
-      if(r&&r.ok){document.getElementById('hs').textContent='Config loaded: +'+r.added+' new, '+r.updated+' updated';}
-      else{document.getElementById('hs').textContent='Config load failed: '+(r&&r.err||'unknown error');}
+      if(r&&r.ok){
+        document.getElementById('hs').textContent='Config loaded (v'+sv+'): +'+r.added+' new, '+r.updated+' updated, '+r.fixturesCreated+' fixtures';
+        loadSetup();loadLayout();
+      }else{
+        document.getElementById('hs').textContent='Config load failed: '+(r&&r.err||'unknown error');
+      }
     });
   };
   rd.readAsText(f);input.value='';

@@ -1449,16 +1449,27 @@ def run():
         r = c.get('/api/config/export')
         d = r.get_json()
         ok('Config export type', d.get('type') == 'slyled-config')
-        ok('Config export version', d.get('version') == 2)
+        ok('Config export schemaVersion', d.get('schemaVersion') == 3)
+        ok('Config export version compat', d.get('version') == 3)
         ok('Config export has children', len(d.get('children', [])) >= 1)
         ok('Config export has layout', 'canvasW' in d.get('layout', {}))
+        # v3: internal fields stripped
+        for fx in d.get('fixtures', []):
+            ok('Config export no aimPoint', 'aimPoint' not in fx)
+            ok('Config export no orientation', 'orientation' not in fx)
+            ok('Config export no _placed', '_placed' not in fx)
         config_bundle = d
 
         # Bad type rejected
         r = c.post('/api/config/import', json={'type': 'wrong'})
         ok('Config import bad type → 400', r.status_code == 400)
 
-        # Import with a new child
+        # Future version rejected
+        r = c.post('/api/config/import', json={'type': 'slyled-config', 'schemaVersion': 99})
+        ok('Config import future version → 400', r.status_code == 400)
+        ok('Config import future version msg', 'update SlyLED' in r.get_json().get('err', ''))
+
+        # Import with a new child (v1 format — still accepted)
         new_cfg = {'type': 'slyled-config', 'version': 1,
                    'children': [{'id': 99, 'hostname': 'IMPORT-TEST', 'ip': '10.0.0.77',
                                  'name': 'Imported', 'desc': '', 'sc': 0, 'strings': [], 'status': 0}],

@@ -157,11 +157,11 @@ for _f in _fixtures:
         _fy = _f.get("y", 0) or 0
         _fz = _f.get("z", 0) or 0
         _dx, _dy, _dz = _ap[0] - _fx, _ap[1] - _fy, _ap[2] - _fz
-        _hdist = math.sqrt(_dx * _dx + _dz * _dz)
-        if _hdist > 0.001 or abs(_dy) > 0.001:
+        _hdist = math.sqrt(_dx * _dx + _dy * _dy)  # floor plane = XY (Z=height)
+        if _hdist > 0.001 or abs(_dz) > 0.001:
             _f["rotation"] = [
-                round(-math.atan2(_dy, _hdist) * 180 / math.pi, 2),  # tilt (pitch)
-                round(math.atan2(_dx, _dz) * 180 / math.pi, 2),       # pan (yaw)
+                round(-math.atan2(_dz, _hdist) * 180 / math.pi, 2),  # tilt (pitch)
+                round(math.atan2(_dx, _dy) * 180 / math.pi, 2),       # pan (yaw)
                 0
             ]
         del _f["aimPoint"]
@@ -1111,11 +1111,11 @@ def api_fixture_set_aim(fid):
     fy = f.get("y", 0) or 0
     fz = f.get("z", 0) or 0
     dx, dy, dz = ap[0] - fx, ap[1] - fy, ap[2] - fz
-    hdist = math.sqrt(dx * dx + dz * dz)
-    if hdist > 0.001 or abs(dy) > 0.001:
+    hdist = math.sqrt(dx * dx + dy * dy)  # floor plane = XY (Z=height)
+    if hdist > 0.001 or abs(dz) > 0.001:
         f["rotation"] = [
-            round(-math.atan2(dy, hdist) * 180 / math.pi, 2),
-            round(math.atan2(dx, dz) * 180 / math.pi, 2),
+            round(-math.atan2(dz, hdist) * 180 / math.pi, 2),
+            round(math.atan2(dx, dy) * 180 / math.pi, 2),
             f.get("rotation", [0, 0, 0])[2] if f.get("rotation") else 0
         ]
     _save("fixtures", _fixtures)
@@ -4847,11 +4847,40 @@ def api_action_delete(aid):
 
 #  "  "  Config export-import  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
+CONFIG_SCHEMA_VERSION = 3  # bump when export format changes incompatibly
+CONFIG_MIN_IMPORT_VERSION = 1  # oldest version we can still import
+
 @app.get("/api/config/export")
 def api_config_export():
-    """Bundle children + fixtures + layout as a portable config file."""
-    return jsonify({"type": "slyled-config", "version": 2,
-                    "children": _children, "fixtures": _fixtures, "layout": _layout})
+    """Bundle children + fixtures + layout as a portable config file.
+
+    Schema v3: strip internal-only fields (aimPoint, orientation, _placed,
+    _beamWidth, status, moverCalibrated, calibrated, _temporal, _ttl).
+    """
+    # Strip internal/transient fields from children
+    _CHILD_STRIP = {"status", "_temporal", "_ttl"}
+    clean_children = []
+    for c in _children:
+        cc = {k: v for k, v in c.items() if k not in _CHILD_STRIP}
+        clean_children.append(cc)
+
+    # Strip internal/transient fields from fixtures
+    _FIX_STRIP = {"aimPoint", "orientation", "_placed", "_beamWidth",
+                  "moverCalibrated", "calibrated", "rangeCalibrated",
+                  "_temporal", "_ttl", "positioned"}
+    clean_fixtures = []
+    for f in _fixtures:
+        cf = {k: v for k, v in f.items() if k not in _FIX_STRIP}
+        clean_fixtures.append(cf)
+
+    return jsonify({
+        "type": "slyled-config",
+        "schemaVersion": CONFIG_SCHEMA_VERSION,
+        "version": CONFIG_SCHEMA_VERSION,  # backward compat
+        "children": clean_children,
+        "fixtures": clean_fixtures,
+        "layout": _layout,
+    })
 
 @app.post("/api/config/import")
 def api_config_import():
@@ -4859,7 +4888,13 @@ def api_config_import():
     global _nxt_c, _nxt_fix, _layout
     data = request.get_json(silent=True) or {}
     if data.get("type") != "slyled-config":
-        return jsonify(ok=False, err="not a slyled-config file"), 400
+        return jsonify(ok=False, err="Not a SlyLED config file (missing type field)"), 400
+    # Schema version check — accept v1-v3, reject future incompatible versions
+    sv = data.get("schemaVersion") or data.get("version") or 1
+    if sv > CONFIG_SCHEMA_VERSION:
+        return jsonify(ok=False, err=f"Config file is version {sv}, but this app only supports up to version {CONFIG_SCHEMA_VERSION}. Please update SlyLED."), 400
+    if sv < CONFIG_MIN_IMPORT_VERSION:
+        return jsonify(ok=False, err=f"Config file is version {sv}, which is too old. Minimum supported version is {CONFIG_MIN_IMPORT_VERSION}."), 400
     imported_children = data.get("children", [])
     imported_layout = data.get("layout")
     added = updated = fixtures_created = 0
