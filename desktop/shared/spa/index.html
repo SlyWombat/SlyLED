@@ -5905,8 +5905,8 @@ function _printCheckerboard(){
   if(win)win.print();
 }
 
-// ── Intrinsic calibration wizard (5-step) ───────────────────────────
-var _calWiz={step:1,cameras:[],captures:0,captureLog:[],results:{},markersPlaced:false,_refreshTimer:null};
+// ── Intrinsic calibration wizard (6-step) ───────────────────────────
+var _calWiz={step:1,cameras:[],captures:0,captureLog:[],results:{},markersPlaced:false,stageMap:{},_refreshTimer:null};
 var _calWizMinCaptures=5;
 
 function _loadCamCalStatus(){
@@ -5941,14 +5941,14 @@ function _loadCamCalStatus(){
 
 function _calWizStart(){
   _calWiz.step=1;_calWiz.captures=0;_calWiz.captureLog=[];
-  _calWiz.results={};_calWiz.markersPlaced=false;
+  _calWiz.results={};_calWiz.markersPlaced=false;_calWiz.stageMap={};
   showTab('settings');_setSection('cameras');
   _loadCamCalStatus();
 }
 
 function _calWizNext(){
-  if(_calWiz.step<5)_calWiz.step++;
-  if(_calWiz.step===3){
+  if(_calWiz.step<6)_calWiz.step++;
+  if(_calWiz.step===4){
     // Reset ArUco frames on all selected cameras
     _calWiz.captures=0;_calWiz.captureLog=[];
     _calWiz.cameras.forEach(function(cam){
@@ -5956,7 +5956,7 @@ function _calWizNext(){
       ra('POST','http://'+cam.ip+':5000/calibrate/aruco/reset',{cam:cam.camIdx});
     });
   }
-  if(_calWiz.step===4)_calWizCompute();
+  if(_calWiz.step===5)_calWizCompute();
   _calWizRender();
 }
 
@@ -5969,7 +5969,7 @@ function _calWizBack(){
 function _calWizReset(){
   if(_calWiz._refreshTimer){clearInterval(_calWiz._refreshTimer);_calWiz._refreshTimer=null;}
   _calWiz.step=1;_calWiz.captures=0;_calWiz.captureLog=[];
-  _calWiz.results={};_calWiz.markersPlaced=false;
+  _calWiz.results={};_calWiz.markersPlaced=false;_calWiz.stageMap={};
   _calWizRender();
 }
 
@@ -5978,9 +5978,9 @@ function _calWizRender(){
   var w=_calWiz,h='';
   // Step indicator bar
   h+='<div style="display:flex;gap:.3em;margin-bottom:1.2em;align-items:center">';
-  for(var si=1;si<=5;si++){
+  for(var si=1;si<=6;si++){
     var active=si===w.step,done=si<w.step;
-    var labels=['Select','Print','Capture','Compute','Done'];
+    var labels=['Select','Print','Stage Map','Capture','Compute','Done'];
     h+='<div style="flex:1;text-align:center">';
     h+='<div style="height:4px;background:'+(done?'#22d3ee':active?'#3b82f6':'#1e293b')+';border-radius:2px;margin-bottom:.3em"></div>';
     h+='<span style="font-size:.7em;color:'+(active?'#e2e8f0':done?'#22d3ee':'#475569')+';font-family:Space Grotesk;font-weight:600;letter-spacing:.06em;text-transform:uppercase">'+labels[si-1]+'</span>';
@@ -5993,10 +5993,11 @@ function _calWizRender(){
   else if(w.step===3)h+=_calWizStep3();
   else if(w.step===4)h+=_calWizStep4();
   else if(w.step===5)h+=_calWizStep5();
+  else if(w.step===6)h+=_calWizStep6();
   el.innerHTML=h;
 
-  // Start snapshot refresh timer for step 3
-  if(w.step===3){
+  // Start snapshot refresh timer for steps 3 (stage map) and 4 (capture)
+  if(w.step===3||w.step===4){
     if(w._refreshTimer)clearInterval(w._refreshTimer);
     w._refreshTimer=setInterval(function(){_calWizRefreshPreviews();},2500);
     setTimeout(function(){_calWizRefreshPreviews();},200);
@@ -6102,9 +6103,166 @@ function _calWizStep2(){
 function _calWizStep3(){
   var w=_calWiz,h='';
   var selCams=w.cameras.filter(function(c){return c.selected&&c.ip;});
+  var hasResult=Object.keys(w.stageMap).length>0;
+  h+='<div class="card" style="max-width:720px">';
+  h+='<div class="card-title">Step 3: Stage Mapping</div>';
+  h+='<p style="font-size:.85em;color:#94a3b8;margin-bottom:.8em">Place a printed ArUco marker (with ID visible) flat on the stage floor at a position you can measure. Enter the marker ID and its stage coordinates below.</p>';
+  // Camera previews (auto-refreshing)
+  h+='<div style="display:flex;flex-wrap:wrap;gap:.8em;margin-bottom:1em">';
+  selCams.forEach(function(cam){
+    h+='<div style="flex:1;min-width:200px;max-width:340px">';
+    h+='<div style="font-size:.82em;color:#e2e8f0;margin-bottom:.3em;font-weight:600">'+escapeHtml(cam.name)+'</div>';
+    h+='<div style="position:relative;background:#0a0f13;border:1px solid #334155;border-radius:4px;overflow:hidden;min-height:150px">';
+    h+='<img id="calwiz-preview-'+cam.id+'" src="" style="width:100%;display:none;border-radius:4px" alt="Preview">';
+    h+='<div id="calwiz-preview-msg-'+cam.id+'" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:.78em;color:#475569">Loading preview...</div>';
+    h+='</div></div>';
+  });
+  h+='</div>';
+  // Marker 1 inputs
+  h+='<div style="background:rgba(34,211,238,.04);border:1px solid rgba(34,211,238,.12);border-radius:6px;padding:.8em 1em;margin-bottom:.8em">';
+  h+='<div style="font-size:.85em;color:#e2e8f0;margin-bottom:.5em;font-weight:600">Marker 1</div>';
+  h+='<div style="display:flex;gap:.8em;flex-wrap:wrap;align-items:end">';
+  h+='<div><label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.2em">ID</label>';
+  h+='<input id="sm-id1" type="number" min="0" max="5" value="0" style="width:60px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:.3em .5em;border-radius:4px;font-size:.85em"></div>';
+  h+='<div><label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.2em">X (mm from stage right)</label>';
+  h+='<input id="sm-x1" type="number" value="0" style="width:100px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:.3em .5em;border-radius:4px;font-size:.85em"></div>';
+  h+='<div><label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.2em">Z (mm from back wall)</label>';
+  h+='<input id="sm-z1" type="number" value="0" style="width:100px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:.3em .5em;border-radius:4px;font-size:.85em"></div>';
+  h+='</div></div>';
+  // Marker 2 (optional, collapsed)
+  h+='<div style="margin-bottom:.8em">';
+  h+='<details id="sm-marker2-details">';
+  h+='<summary style="font-size:.82em;color:#22d3ee;cursor:pointer;margin-bottom:.5em">+ Add second marker (optional)</summary>';
+  h+='<div style="background:rgba(34,211,238,.04);border:1px solid rgba(34,211,238,.12);border-radius:6px;padding:.8em 1em">';
+  h+='<div style="font-size:.85em;color:#e2e8f0;margin-bottom:.5em;font-weight:600">Marker 2 (optional)</div>';
+  h+='<div style="display:flex;gap:.8em;flex-wrap:wrap;align-items:end">';
+  h+='<div><label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.2em">ID</label>';
+  h+='<input id="sm-id2" type="number" min="0" max="5" value="" style="width:60px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:.3em .5em;border-radius:4px;font-size:.85em"></div>';
+  h+='<div><label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.2em">X (mm from stage right)</label>';
+  h+='<input id="sm-x2" type="number" value="" style="width:100px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:.3em .5em;border-radius:4px;font-size:.85em"></div>';
+  h+='<div><label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.2em">Z (mm from back wall)</label>';
+  h+='<input id="sm-z2" type="number" value="" style="width:100px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:.3em .5em;border-radius:4px;font-size:.85em"></div>';
+  h+='</div></div>';
+  h+='</details></div>';
+  // Compute button
+  h+='<button class="btn btn-on" id="sm-compute-btn" onclick="_calWizComputeStageMap()" style="font-size:.9em;padding:.5em 1.5em;margin-bottom:.8em">Compute Stage Map</button>';
+  // Result area
+  h+='<div id="sm-result" style="margin-bottom:.8em">';
+  if(hasResult){
+    h+=_calWizStageMapResultHtml();
+  }
+  h+='</div>';
+  // Navigation
+  h+='<div style="display:flex;justify-content:space-between;gap:.4em;margin-top:.5em">';
+  h+='<button class="btn" onclick="_calWizBack()" style="background:#1e293b;color:#94a3b8">\u2190 Back</button>';
+  h+='<button class="btn btn-on" onclick="_calWizNext()" style="'+(hasResult?'':'opacity:.7')+'">Next \u2192</button>';
+  h+='</div></div>';
+  return h;
+}
+
+function _calWizComputeStageMap(){
+  var btn=document.getElementById('sm-compute-btn');
+  if(btn){btn.disabled=true;btn.textContent='Computing...';}
+  var markers={};
+  var id1El=document.getElementById('sm-id1');
+  var x1El=document.getElementById('sm-x1');
+  var z1El=document.getElementById('sm-z1');
+  if(id1El&&x1El&&z1El&&id1El.value!==''){
+    markers[id1El.value]={x:parseInt(x1El.value)||0,y:0,z:parseInt(z1El.value)||0};
+  }
+  // Optional second marker
+  var id2El=document.getElementById('sm-id2');
+  var x2El=document.getElementById('sm-x2');
+  var z2El=document.getElementById('sm-z2');
+  if(id2El&&id2El.value!==''){
+    markers[id2El.value]={x:parseInt(x2El.value)||0,y:0,z:parseInt(z2El.value)||0};
+  }
+  if(Object.keys(markers).length===0){
+    if(btn){btn.disabled=false;btn.textContent='Compute Stage Map';}
+    var resEl=document.getElementById('sm-result');
+    if(resEl)resEl.innerHTML='<div style="color:#f87171;font-size:.85em">Enter at least one marker ID and coordinates.</div>';
+    return;
+  }
+  var selCams=_calWiz.cameras.filter(function(c){return c.selected&&c.ip;});
+  var done=0,total=selCams.length;
+  _calWiz.stageMap={};
+  selCams.forEach(function(cam){
+    ra('POST','http://'+cam.ip+':5000/calibrate/stage-map',
+      {cam:cam.camIdx,markers:markers,markerSize:150},
+      function(r){
+        done++;
+        if(r&&r.ok){
+          _calWiz.stageMap[cam.id]={
+            cameraPosition:r.cameraPosition||null,
+            rmsError:r.rmsError!=null?parseFloat(r.rmsError):null,
+            distances:r.distances||null,
+            markersUsed:Object.keys(markers).length
+          };
+        }else{
+          _calWiz.stageMap[cam.id]={error:r&&r.err||'Stage map computation failed'};
+        }
+        if(done>=total){
+          if(btn){btn.disabled=false;btn.textContent='Compute Stage Map';}
+          var resEl=document.getElementById('sm-result');
+          if(resEl)resEl.innerHTML=_calWizStageMapResultHtml();
+        }
+      });
+  });
+}
+
+function _calWizStageMapResultHtml(){
+  var h='';
+  var selCams=_calWiz.cameras.filter(function(c){return c.selected&&c.ip;});
+  h+='<div style="background:rgba(34,211,238,.04);border:1px solid rgba(34,211,238,.12);border-radius:6px;padding:.8em 1em">';
+  h+='<div style="font-size:.85em;color:#e2e8f0;margin-bottom:.5em;font-weight:600">Stage Map Results</div>';
+  h+='<table class="tbl" style="margin-bottom:.4em"><tr><th>Camera</th><th>Position (mm)</th><th>RMS Error</th><th>Status</th></tr>';
+  selCams.forEach(function(cam){
+    var r=_calWiz.stageMap[cam.id];
+    if(!r){
+      h+='<tr><td>'+escapeHtml(cam.name)+'</td><td colspan="3" style="color:#64748b">Pending...</td></tr>';
+      return;
+    }
+    if(r.error){
+      h+='<tr><td>'+escapeHtml(cam.name)+'</td><td colspan="3" style="color:#f87171">'+escapeHtml(r.error)+'</td></tr>';
+      return;
+    }
+    var pos=r.cameraPosition;
+    var posStr=pos?'X:'+Math.round(pos.x)+' Y:'+Math.round(pos.y)+' Z:'+Math.round(pos.z):'N/A';
+    var rmsStr=r.rmsError!=null?r.rmsError.toFixed(2)+'px':'N/A';
+    var rmsColor=r.rmsError!=null?(r.rmsError<2?'#4ade80':r.rmsError<5?'#fbbf24':'#f87171'):'#64748b';
+    h+='<tr><td>'+escapeHtml(cam.name)+'</td>';
+    h+='<td style="font-family:monospace;font-size:.82em;color:#e2e8f0">'+posStr+'</td>';
+    h+='<td style="color:'+rmsColor+'">'+rmsStr+'</td>';
+    h+='<td style="color:#4ade80">OK</td></tr>';
+  });
+  h+='</table>';
+  if(selCams.length>1){
+    // Show inter-camera distances
+    var camsWithPos=selCams.filter(function(c){var r=_calWiz.stageMap[c.id];return r&&r.cameraPosition&&!r.error;});
+    if(camsWithPos.length>1){
+      h+='<div style="font-size:.78em;color:#94a3b8;margin-top:.4em">Inter-camera distances: ';
+      for(var i=0;i<camsWithPos.length;i++){
+        for(var j=i+1;j<camsWithPos.length;j++){
+          var p1=_calWiz.stageMap[camsWithPos[i].id].cameraPosition;
+          var p2=_calWiz.stageMap[camsWithPos[j].id].cameraPosition;
+          var dx=p1.x-p2.x,dy=p1.y-p2.y,dz=p1.z-p2.z;
+          var dist=Math.sqrt(dx*dx+dy*dy+dz*dz);
+          h+=escapeHtml(camsWithPos[i].name)+' \u2194 '+escapeHtml(camsWithPos[j].name)+': '+Math.round(dist)+'mm ';
+        }
+      }
+      h+='</div>';
+    }
+  }
+  h+='</div>';
+  return h;
+}
+
+function _calWizStep4(){
+  var w=_calWiz,h='';
+  var selCams=w.cameras.filter(function(c){return c.selected&&c.ip;});
   var ready=w.captures>=_calWizMinCaptures;
   h+='<div class="card" style="max-width:720px">';
-  h+='<div class="card-title">Step 3: Capture Frames</div>';
+  h+='<div class="card-title">Step 4: Capture Frames</div>';
   h+='<p style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">Capture images from each camera with markers visible. Move some markers between captures to improve coverage. Minimum '+_calWizMinCaptures+' captures required.</p>';
   // Progress bar
   var prog=Math.min(w.captures/_calWizMinCaptures*100,100);
@@ -6146,13 +6304,13 @@ function _calWizStep3(){
   return h;
 }
 
-function _calWizStep4(){
+function _calWizStep5(){
   var w=_calWiz,h='';
   var selCams=w.cameras.filter(function(c){return c.selected&&c.ip;});
   var allDone=true,anyResult=false;
   selCams.forEach(function(c){var k=c.id;if(!w.results[k])allDone=false;else anyResult=true;});
   h+='<div class="card" style="max-width:720px">';
-  h+='<div class="card-title">Step 4: Compute & Evaluate</div>';
+  h+='<div class="card-title">Step 5: Compute & Evaluate</div>';
   if(!allDone){
     h+='<div style="display:flex;align-items:center;gap:.6em;margin-bottom:1em;padding:.6em;background:rgba(59,130,246,.06);border-radius:4px">';
     h+='<div style="width:20px;height:20px;border:2px solid #3b82f6;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite"></div>';
@@ -6210,7 +6368,7 @@ function _calWizStep4(){
   return h;
 }
 
-function _calWizStep5(){
+function _calWizStep6(){
   var w=_calWiz,h='';
   var selCams=w.cameras.filter(function(c){return c.selected&&c.ip;});
   var successCount=0;
@@ -6343,7 +6501,7 @@ function _calWizAcceptAll(){
 
 function _calWizRecal(camId){
   delete _calWiz.results[camId];
-  _calWiz.step=3;
+  _calWiz.step=4;
   _calWizRender();
 }
 
@@ -6351,7 +6509,7 @@ function _calWizRecal(camId){
 function _intrinsicCalStart(fid){
   // Pre-select just this camera and jump to wizard
   _calWiz.step=1;_calWiz.captures=0;_calWiz.captureLog=[];
-  _calWiz.results={};_calWiz.markersPlaced=false;
+  _calWiz.results={};_calWiz.markersPlaced=false;_calWiz.stageMap={};
   var cams=(_fixtures||[]).filter(function(f){return f.fixtureType==='camera';});
   _calWiz.cameras=cams.map(function(f){
     return{id:f.id,name:f.name,ip:f.cameraIp||'',camIdx:f.cameraIdx||0,
