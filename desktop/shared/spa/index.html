@@ -165,10 +165,11 @@ body.light .li:hover{border-color:#3b82f6}
       <div id='panel-position' style='padding:.5em .8em;border-bottom:1px solid #1e293b;display:none'>
         <div style='font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em'>Position (mm)</div>
         <div style='display:flex;gap:.3em;align-items:center'>
-          <label style='font-size:.72em;margin:0;color:#64748b'>X</label><input id='panel-x' type='number' style='width:65px;font-size:.85em;padding:2px 4px' onchange='_panelPosChange()'>
-          <label style='font-size:.72em;margin:0;color:#64748b'>Y</label><input id='panel-y' type='number' style='width:65px;font-size:.85em;padding:2px 4px' onchange='_panelPosChange()'>
-          <label style='font-size:.72em;margin:0;color:#64748b'>Z</label><input id='panel-z' type='number' style='width:65px;font-size:.85em;padding:2px 4px' onchange='_panelPosChange()'>
+          <label style='font-size:.72em;margin:0;color:#64748b'>X</label><input id='panel-x' type='number' style='width:55px;font-size:.85em;padding:2px 4px' onchange='_panelPosChange()'>
+          <label style='font-size:.72em;margin:0;color:#64748b'>Y</label><input id='panel-y' type='number' style='width:55px;font-size:.85em;padding:2px 4px' onchange='_panelPosChange()'>
+          <label style='font-size:.72em;margin:0;color:#64748b'>Z</label><input id='panel-z' type='number' style='width:55px;font-size:.85em;padding:2px 4px' onchange='_panelPosChange()'>
         </div>
+        <button class='btn btn-on' onclick='_panelSaveAll()' style='margin-top:.4em;font-size:.75em;width:100%'>Save Position</button>
       </div>
       <!-- Type-specific details (when selected) -->
       <div id='panel-details' style='padding:.5em .8em;border-bottom:1px solid #1e293b;display:none'></div>
@@ -2243,7 +2244,7 @@ function s3dLoadChildren(){
           arrow.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),homeDir));
           arrow.userData.beamCone=true;arrow.visible=_layShowCones;
           grp.add(arrow);
-          var restLbl=_s3dLabel(_fix3d.fixtureType==='camera'?'cam'+(_fix3d.cameraIdx||0):'0,0');
+          var restLbl=_s3dLabel(_fix3d.fixtureType==='camera'?(_fix3d.name||'cam'+(_fix3d.cameraIdx||0)):'0,0');
           restLbl.position.copy(homeEnd.clone().add(homeDir.clone().multiplyScalar(0.05)));
           restLbl.userData.beamCone=true;restLbl.visible=_layShowCones;
           grp.add(restLbl);
@@ -2680,10 +2681,13 @@ function editFixture(id){
     h+='<div style="display:flex;gap:.5em"><div style="flex:1"><label>Width (px)</label><input id="fx-cam-rw" type="number" value="'+(f.resolutionW||1920)+'" style="width:100%"></div>';
     h+='<div style="flex:1"><label>Height (px)</label><input id="fx-cam-rh" type="number" value="'+(f.resolutionH||1080)+'" style="width:100%"></div></div>';
   }
-  h+='<label>Rotation (degrees) <span style="color:#64748b;font-size:.75em">RX=Tilt, RY=Pan, RZ=Roll</span></label>';
+  // Position (mm)
+  h+='<label>Position (mm)</label>';
+  h+='<div style="display:flex;gap:.3em;margin-bottom:.6em"><label style="font-size:.75em;color:#64748b">X</label><input id="fx-px" type="number" value="'+(f.x||0)+'" style="width:80px"> <label style="font-size:.75em;color:#64748b">Y</label><input id="fx-py" type="number" value="'+(f.y||0)+'" style="width:80px"> <label style="font-size:.75em;color:#64748b">Z</label><input id="fx-pz" type="number" value="'+(f.z||0)+'" style="width:80px"></div>';
+  h+='<label>Rotation (degrees) <span style="color:#64748b;font-size:.75em">Tilt, Pan, Roll</span></label>';
   var rot=f.rotation||[0,0,0];
-  h+='<div style="display:flex;gap:.3em"><label style="font-size:.75em">RX</label><input id="fx-rx" type="number" value="'+rot[0]+'" style="width:70px"> <label style="font-size:.75em">RY</label><input id="fx-ry" type="number" value="'+rot[1]+'" style="width:70px"> <label style="font-size:.75em">RZ</label><input id="fx-rz" type="number" value="'+rot[2]+'" style="width:70px"></div>';
-  h+='<p style="color:#64748b;font-size:.75em;margin-top:.3em">RY=0 faces forward (+Z). RY=90 faces right (+X).</p>';
+  h+='<div style="display:flex;gap:.3em"><label style="font-size:.75em;color:#64748b">Tilt</label><input id="fx-rx" type="number" value="'+rot[0]+'" style="width:70px"> <label style="font-size:.75em;color:#64748b">Pan</label><input id="fx-ry" type="number" value="'+rot[1]+'" style="width:70px"> <label style="font-size:.75em;color:#64748b">Roll</label><input id="fx-rz" type="number" value="'+rot[2]+'" style="width:70px"></div>';
+  h+='<p style="color:#64748b;font-size:.75em;margin-top:.3em">Pan=0 faces forward (+Y depth). Pan=90 faces stage left (+X).</p>';
   h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="saveFixture('+id+',\''+ft+'\')">Save</button></div>';
   document.getElementById('modal-title').textContent='Edit Fixture: '+f.name;
   document.getElementById('modal-body').innerHTML=h;
@@ -2852,7 +2856,20 @@ function saveFixture(id,ft){
     body.resolutionW=parseInt(document.getElementById('fx-cam-rw').value)||1920;
     body.resolutionH=parseInt(document.getElementById('fx-cam-rh').value)||1080;
   }
-  ra('PUT','/api/fixtures/'+id,body,function(r){closeModal();if(r&&r.ok){loadFixtures();loadSetup();}});
+  // Save position from edit dialog
+  var nx=parseInt(document.getElementById('fx-px').value)||0;
+  var ny=parseInt(document.getElementById('fx-py').value)||0;
+  var nz=parseInt(document.getElementById('fx-pz').value)||0;
+  ra('PUT','/api/fixtures/'+id,body,function(r){
+    if(!r||!r.ok){closeModal();return;}
+    // Update layout position
+    var lay=ld||{};var children=lay.children||[];
+    var found=false;
+    children.forEach(function(c){if(c.id===id){c.x=nx;c.y=ny;c.z=nz;found=true;}});
+    if(!found)children.push({id:id,x:nx,y:ny,z:nz});
+    lay.children=children;
+    ra('POST','/api/layout',lay,function(){closeModal();loadFixtures();loadSetup();if(_s3d.inited)s3dLoadChildren();});
+  });
 }
 
 function delFixture(id){
@@ -4680,7 +4697,7 @@ function _panelPanTiltChange(fid,axis,deg){
 }
 function _panelPosChange(){
   var pos=document.getElementById('panel-position');if(!pos)return;
-  var fid=parseInt(pos.dataset.fid);if(!fid)return;
+  var fid=parseInt(pos.dataset.fid);if(isNaN(fid))return;
   var nx=parseInt(document.getElementById('panel-x').value)||0;
   var ny=parseInt(document.getElementById('panel-y').value)||0;
   var nz=parseInt(document.getElementById('panel-z').value)||0;
@@ -4689,6 +4706,23 @@ function _panelPosChange(){
   });
   _layoutDirty=true;_layDirtyUpdate();
   s3dLoadChildren();
+}
+function _panelSaveAll(){
+  // Save current layout (positions + fixture changes) to server
+  if(!ld)return;
+  var children=(ld.children||[]).slice();
+  // Sync 3D positions into layout children
+  (_fixtures||[]).filter(_isFixturePlaced).forEach(function(f){
+    var found=false;
+    children.forEach(function(c){if(c.id===f.id){c.x=f.x;c.y=f.y;c.z=f.z;found=true;}});
+    if(!found)children.push({id:f.id,x:f.x||0,y:f.y||0,z:f.z||0});
+  });
+  ld.children=children;
+  ra('POST','/api/layout',ld,function(r){
+    _layoutDirty=false;_layDirtyUpdate();
+    var btn=document.querySelector('#panel-position .btn-on');
+    if(btn){btn.textContent='Saved!';setTimeout(function(){btn.textContent='Save Position';},1000);}
+  });
 }
 function _layDirtyUpdate(){
   var dot=document.getElementById('lay-dirty-dot');
