@@ -1860,6 +1860,15 @@ function s3dInit(){
   _s3d.tctl.setMode('translate');_s3d.tctl.setSize(0.6);
   _s3d.tctl.addEventListener('dragging-changed',function(e){
     _s3d.controls.enabled=!e.value;
+    if(e.value){
+      // Drag started — save undo state for the fixture being dragged
+      var grp=_s3d.tctl.object;
+      if(grp&&grp.userData&&grp.userData.childId!==undefined){
+        var fid=grp.userData.childId;
+        var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id==fid)f=fx;});
+        if(f)_laySaveUndo(f);
+      }
+    }
     if(!e.value){
       _layoutDirty=true;_layDirtyUpdate();
       if(_s3dDraggingAim){
@@ -2082,6 +2091,26 @@ function setView(view){
 function s3dAnimate(){
   _s3d.animId=requestAnimationFrame(s3dAnimate);
   if(_s3d.controls)_s3d.controls.update();
+  // Scale fixture nodes to constant screen size regardless of zoom
+  if(_s3d.camera&&_s3d.nodes){
+    var baseSize=0.15; // meters — the SphereGeometry radius
+    var scaleFactor;
+    if(_s3d.camera.isOrthographicCamera){
+      // Ortho: scale by frustum height (bigger frustum = zoom out = need bigger nodes)
+      scaleFactor=(_s3d.camera.top-_s3d.camera.bottom)/8;
+    }else{
+      // Perspective: use average distance to stage center
+      var center=new THREE.Vector3((_s3d.stageW||10)/2,(_s3d.stageH||5)/4,(_s3d.stageD||10)/2);
+      scaleFactor=_s3d.camera.position.distanceTo(center)/15;
+    }
+    scaleFactor=Math.max(0.3,Math.min(3.0,scaleFactor));
+    _s3d.nodes.forEach(function(grp){
+      // Scale the node sphere (first child) but not the whole group (that would scale beams too)
+      if(grp.children[0]&&grp.children[0].isMesh)grp.children[0].scale.setScalar(scaleFactor);
+      // Also scale the glow ring (second child)
+      if(grp.children[1]&&grp.children[1].isMesh)grp.children[1].scale.setScalar(scaleFactor);
+    });
+  }
   if(_s3d.renderer&&_s3d.scene&&_s3d.camera)_s3d.renderer.render(_s3d.scene,_s3d.camera);
   // Info overlay
   var info=document.getElementById('s3d-info');
