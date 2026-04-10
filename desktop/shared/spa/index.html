@@ -262,7 +262,7 @@ body.light .li:hover{border-color:#3b82f6}
     </div>
     <div id='tl-emulator' style='margin-top:1em'>
       <div style='font-size:.82em;color:#94a3b8;margin-bottom:.3em'>Stage Preview</div>
-      <canvas id='emu-cv' width='800' height='280' style='border:1px solid #334155;background:#060a12;display:block;max-width:100%;border-radius:4px'></canvas>
+      <div id='emu-3d' style='width:100%;height:400px;border:1px solid #334155;background:#060a12;border-radius:4px;overflow:hidden;position:relative'></div>
       <div id='emu-time' style='font-size:.72em;color:#64748b;margin-top:.2em'></div>
     </div>
   </div>
@@ -683,10 +683,15 @@ function _clearTabTimers(){
   if(typeof dashRunnerTimer!=='undefined'&&dashRunnerTimer){clearInterval(dashRunnerTimer);dashRunnerTimer=null;}
   if(typeof _emuTimer!=='undefined'&&_emuTimer){clearInterval(_emuTimer);_emuTimer=null;}
   if(typeof _emuAnimId!=='undefined'&&_emuAnimId){cancelAnimationFrame(_emuAnimId);_emuAnimId=null;}
+  if(_emu3d.animId){cancelAnimationFrame(_emu3d.animId);_emu3d.animId=null;}
   if(typeof _tlPlayTimer!=='undefined'&&_tlPlayTimer){clearInterval(_tlPlayTimer);_tlPlayTimer=null;_tlPlaying=false;}
 }
 function showTab(t){
+  // Detach runtime 3D if leaving runtime tab
+  if(ctab==='runtime'&&t!=='runtime'&&_emu3d.activeTab){_emu3dDetach();}
   _clearTabTimers();
+  // Stop layout render loop if leaving layout for non-layout tab
+  if(ctab==='layout'&&t!=='layout'&&_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
   ctab=t;
   ['dash','setup','layout','actions','runtime','settings','firmware'].forEach(function(id){
     document.getElementById('t-'+id).style.display=id===t?'block':'none';
@@ -695,9 +700,25 @@ function showTab(t){
   });
   if(t==='dash')loadDash();
   else if(t==='setup')loadSetup();
-  else if(t==='layout')loadLayout();
+  else if(t==='layout'){
+    // Restore layout renderer if it was taken by runtime
+    if(_s3d.inited&&_s3d.renderer){
+      var el=document.getElementById('stage3d');
+      if(el&&!el.contains(_s3d.renderer.domElement)){_emu3dDetach();}
+      if(!_s3d.animId)s3dAnimate();
+    }
+    loadLayout();
+  }
   else if(t==='actions')loadActions();
-  else if(t==='runtime')loadRuntime();
+  else if(t==='runtime'){
+    // Immediately attach 3D canvas to runtime container (sync, before async API calls)
+    if(_s3d.inited&&_s3d.renderer&&_emu3d.inited){
+      if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
+      _emu3dAttach();
+      if(!_emu3d.animId)emu3dAnimate();
+    }
+    loadRuntime();
+  }
   else if(t==='settings'){loadSettings();loadDmxSettings();}
   else if(t==='firmware')loadFirmware();
 }
@@ -4784,9 +4805,9 @@ function emuLoadStage(){
             window._profileCache={};
             ra('GET','/api/dmx-profiles',null,function(profs){
               (profs||[]).forEach(function(p){window._profileCache[p.id]=p;});
-              emuDraw();
+              _emuStageReady();
             });
-          }else{emuDraw();}
+          }else{_emuStageReady();}
         });
         });
       });
@@ -4801,7 +4822,7 @@ function emuLoadStage(){
           _emuRunning=true;
           ra('GET','/api/timelines/'+s.activeTimeline+'/baked/preview',null,function(p){
             if(p&&typeof p==='object')_emuPreview=p;
-            if(!_emuAnimId)_emuAnimLoop();
+            if(!_emu3d.animId&&_emu3d.activeTab)emu3dAnimate();
           });
         }
         if(s.runnerStartEpoch)_emuT=Math.max(0,Math.floor(Date.now()/1000)-s.runnerStartEpoch);
@@ -4815,7 +4836,6 @@ function emuLoadStage(){
         if(td){var m=Math.floor(elapsed/60),sec=elapsed%60;td.textContent=(m<10?'0':'')+m+':'+(sec<10?'0':'')+sec.toFixed(0);}
       } else if(_emuRunning){
         _emuRunning=false;_emuPreview=null;_emuT=0;
-        if(_emuAnimId){cancelAnimationFrame(_emuAnimId);_emuAnimId=null;}
         // Reset playhead
         var ph=document.getElementById('tl-playhead');if(ph)ph.style.left='60px';
         var td=document.getElementById('tl-time');if(td)td.textContent='00:00.0';
@@ -4825,14 +4845,28 @@ function emuLoadStage(){
     ra('GET','/api/objects',null,function(objs){
       if(_emuStage&&objs)_emuStage.objects=objs;
     });
-    emuDraw();
   },1000);
-  emuDraw();
+}
+
+function _emuStageReady(){
+  // Initialize 3D runtime viewport and build fixtures
+  if(!_s3d.inited)s3dInit();
+  if(!_s3d.renderer)return;
+  emu3dInit();
+  // Stop layout render loop (we're on runtime tab now)
+  if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
+  // Always re-attach (handles second+ visits)
+  _emu3dAttach();
+  emu3dBuildFixtures();
+  // Ensure render loop is running
+  if(_emu3d.animId){cancelAnimationFrame(_emu3d.animId);_emu3d.animId=null;}
+  emu3dAnimate();
 }
 
 function _emuAnimLoop(){
   if(!_emuRunning){_emuAnimId=null;return;}
-  emuDraw();
+  // 3D viewport handles its own render loop via emu3dAnimate
+  if(_emu3d.activeTab){_emuAnimId=null;return;}
   _emuAnimId=requestAnimationFrame(_emuAnimLoop);
 }
 
@@ -4840,14 +4874,358 @@ function emuStart(tlId){
   _emuRunning=true;_emuT=0;
   ra('GET','/api/timelines/'+tlId+'/baked/preview',null,function(p){
     if(p&&typeof p==='object')_emuPreview=p;
-    if(!_emuAnimId)_emuAnimLoop();
+    if(_emu3d.activeTab&&!_emu3d.animId)emu3dAnimate();
   });
 }
 
 function emuStop(){
   _emuRunning=false;_emuPreview=null;_emuT=0;
   if(_emuAnimId){cancelAnimationFrame(_emuAnimId);_emuAnimId=null;}
-  emuDraw();
+  emu3dUpdateColors(); // final frame shows idle state
+}
+
+// ── 3D Runtime Viewport (#273) ──────────────────────────────────────────────
+var _emu3d={inited:false,camera:null,controls:null,animId:null,nodes:[],
+  stageW:10,stageH:5,stageD:10,stageBox:null,activeTab:false};
+
+function emu3dInit(){
+  if(_emu3d.inited)return;
+  if(typeof THREE==='undefined')return;
+  // Ensure shared renderer exists
+  if(!_s3d.inited)s3dInit();
+  if(!_s3d.renderer)return;
+
+  var el=document.getElementById('emu-3d');if(!el)return;
+  var W=el.clientWidth||900,H=el.clientHeight||400;
+  var aspect=W/H;
+
+  // Dedicated perspective camera for runtime (elevated angle)
+  _emu3d.camera=new THREE.PerspectiveCamera(50,aspect,0.1,100);
+  _emu3d.camera.position.set(8,6,12);
+
+  // Read-only orbit controls
+  _emu3d.controls=new THREE.OrbitControls(_emu3d.camera,_s3d.renderer.domElement);
+  _emu3d.controls.enableDamping=true;_emu3d.controls.dampingFactor=0.08;
+  _emu3d.controls.enableRotate=true;
+  _emu3d.controls.enabled=false; // disabled until tab is active
+
+  _emu3d.inited=true;
+}
+
+function _emu3dAttach(){
+  // Move renderer canvas into runtime container
+  var el=document.getElementById('emu-3d');if(!el||!_s3d.renderer)return;
+  if(!_emu3d.camera||!_emu3d.controls)return;
+  // Reparent canvas
+  if(!el.contains(_s3d.renderer.domElement)){
+    el.appendChild(_s3d.renderer.domElement);
+  }
+  var W=el.clientWidth||900,H=el.clientHeight||400;
+  _s3d.renderer.setSize(W,H);
+  _emu3d.camera.aspect=W/H;
+  _emu3d.camera.updateProjectionMatrix();
+  // Disable layout controls, enable runtime controls
+  if(_s3d.controls)_s3d.controls.enabled=false;
+  if(_s3d.tctl){_s3d.tctl.detach();_s3d.tctl.visible=false;}
+  _emu3d.controls.enabled=true;
+  _emu3d.activeTab=true;
+  // Remove layout click/dblclick listeners from canvas
+  _s3d.renderer.domElement.removeEventListener('click',s3dClick);
+  _s3d.renderer.domElement.removeEventListener('dblclick',s3dDblClick);
+}
+
+function _emu3dDetach(){
+  // Move renderer canvas back to layout container
+  var el=document.getElementById('stage3d');if(!el||!_s3d.renderer)return;
+  _emu3d.activeTab=false;
+  _emu3d.controls.enabled=false;
+  // Stop runtime render loop
+  if(_emu3d.animId){cancelAnimationFrame(_emu3d.animId);_emu3d.animId=null;}
+  // Remove runtime fixture nodes from scene
+  _emu3dClearNodes();
+  // Move canvas back
+  el.appendChild(_s3d.renderer.domElement);
+  var W=el.clientWidth||900,H=el.clientHeight||500;
+  _s3d.renderer.setSize(W,H);
+  // Restore layout controls
+  if(_s3d.controls){_s3d.controls.enabled=true;}
+  if(_s3d.tctl){_s3d.tctl.visible=true;}
+  // Restore layout click/dblclick listeners
+  _s3d.renderer.domElement.addEventListener('click',s3dClick);
+  _s3d.renderer.domElement.addEventListener('dblclick',s3dDblClick);
+  // Update layout camera aspect
+  if(_s3d.camera){
+    if(_s3d.camera.isPerspectiveCamera){_s3d.camera.aspect=W/H;_s3d.camera.updateProjectionMatrix();}
+    else if(_s3d.camera.isOrthographicCamera){
+      var aspect=W/H;var oh=(_s3d.camera.top-_s3d.camera.bottom)/2;
+      _s3d.camera.left=-oh*aspect;_s3d.camera.right=oh*aspect;
+      _s3d.camera.updateProjectionMatrix();
+    }
+  }
+}
+
+function _emu3dClearNodes(){
+  _emu3d.nodes.forEach(function(grp){
+    grp.traverse(function(obj){
+      if(obj.geometry)obj.geometry.dispose();
+      if(obj.material){if(obj.material.map)obj.material.map.dispose();obj.material.dispose();}
+    });
+    _s3d.scene.remove(grp);
+  });
+  _emu3d.nodes=[];
+  // Also remove runtime stage box
+  if(_emu3d.stageBox){_s3d.scene.remove(_emu3d.stageBox);_emu3d.stageBox=null;}
+}
+
+function emu3dZoomToFit(){
+  if(!_emu3d.camera)return;
+  var sw=_emu3d.stageW,sh=_emu3d.stageH,sd=_emu3d.stageD;
+  _emu3d.controls.target.set(sw/2,sh/2,sd/2);
+  // Position camera at elevated 3/4 angle, distance scales with stage size
+  var maxDim=Math.max(sw,sh,sd);
+  _emu3d.camera.position.set(sw/2+maxDim*0.8,sh+maxDim*0.5,sd/2+maxDim*1.0);
+  _emu3d.camera.lookAt(sw/2,sh/2,sd/2);
+  _emu3d.controls.update();
+}
+
+function emu3dBuildFixtures(){
+  if(!_s3d.inited||!_emuStage)return;
+  _emu3dClearNodes();
+
+  var layout=_emuStage.layout;
+  var layoutFixtures=(layout&&layout.fixtures)||[];
+  var children=_emuStage.children||[];
+  var fixtures=_emuStage.fixtures||[];
+  var cw=(layout&&layout.canvasW)||10000,ch_=(layout&&layout.canvasH)||5000;
+
+  // Stage dimensions from API (layout stores mm, convert to meters)
+  ra('GET','/api/stage',null,function(st){
+    if(st){_emu3d.stageW=st.w||10;_emu3d.stageH=st.h||5;_emu3d.stageD=st.d||10;}
+    // Stage wireframe box
+    var sw=_emu3d.stageW,sh=_emu3d.stageH,sd=_emu3d.stageD;
+    var boxGeo=new THREE.BoxGeometry(sw,sh,sd);
+    var boxEdge=new THREE.EdgesGeometry(boxGeo);
+    var boxLine=new THREE.LineSegments(boxEdge,new THREE.LineBasicMaterial({color:0x1e3a5f,opacity:0.4,transparent:true}));
+    boxLine.position.set(sw/2,sh/2,sd/2);
+    _s3d.scene.add(boxLine);
+    _emu3d.stageBox=boxLine;
+
+    // Build fixture meshes
+    var placed=layoutFixtures.filter(function(f){return f.positioned;});
+    placed.forEach(function(c){
+      var pos=_s3dPos(c);
+      var ft=c.fixtureType||'led';
+      var col=ft==='dmx'?0x7c3aed:ft==='camera'?0x0e7490:0x22cc66;
+
+      var grp=new THREE.Group();
+      grp.position.copy(pos);
+      grp.userData.emuNode=true;
+      grp.userData.fixtureId=c.id;
+      grp.userData.fixtureType=ft;
+      grp.userData.childId=c.childId;
+      // Store pan/tilt metadata for live beam animation
+      if(ft==='dmx'&&c.dmxProfileId&&window._profileCache&&window._profileCache[c.dmxProfileId]){
+        var prof=window._profileCache[c.dmxProfileId];
+        grp.userData.panRange=prof.panRange||540;
+        grp.userData.tiltRange=prof.tiltRange||270;
+      }
+      grp.userData.basePan=(c.rotation&&c.rotation[1])||0;
+
+      // Sphere node
+      var geo=new THREE.SphereGeometry(0.15,16,12);
+      var mat=new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.9});
+      var sphere=new THREE.Mesh(geo,mat);
+      sphere.userData.nodeSphere=true;
+      grp.add(sphere);
+
+      // Glow ring
+      var ringGeo=new THREE.RingGeometry(0.18,0.22,24);
+      var ringMat=new THREE.MeshBasicMaterial({color:col,side:THREE.DoubleSide,opacity:0.3,transparent:true});
+      grp.add(new THREE.Mesh(ringGeo,ringMat));
+
+      // DMX beam cone
+      if(ft==='dmx'||ft==='camera'){
+        var _fRot=c.rotation||[0,0,0];
+        var aim=_rotToAim(_fRot,[c.x||0,c.y||0,c.z||0]);
+        var aimLocal=new THREE.Vector3((aim[0]-(c.x||0))/1000,(aim[2]-(c.z||0))/1000,(aim[1]-(c.y||0))/1000);
+        var beamLen=aimLocal.length();
+        grp.userData.beamLen=beamLen;
+        if(beamLen>0.01&&(_fRot[0]!==0||_fRot[1]!==0||ft==='camera')){
+          var bwDeg=ft==='camera'?(c.fovDeg||60):15;
+          if(ft==='dmx'&&c.dmxProfileId&&window._profileCache&&window._profileCache[c.dmxProfileId]){
+            bwDeg=window._profileCache[c.dmxProfileId].beamWidth||15;
+          }
+          var bwRad=bwDeg*Math.PI/180;
+          var topR=Math.tan(bwRad/2)*beamLen;
+          var coneGeo=new THREE.ConeGeometry(topR,beamLen,16,1,true);
+          var coneColor=ft==='camera'?0x22d3ee:0xffff88;
+          var coneMat=new THREE.MeshBasicMaterial({color:coneColor,opacity:0.1,transparent:true,side:THREE.DoubleSide,depthWrite:false});
+          var cone=new THREE.Mesh(coneGeo,coneMat);
+          cone.userData.beamCone=true;
+          var midPt=aimLocal.clone().multiplyScalar(0.5);
+          cone.position.copy(midPt);
+          var dir=aimLocal.clone().normalize();
+          cone.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,-1,0),dir));
+          grp.add(cone);
+        }
+      }
+
+      // LED string dots (stored for color updates)
+      if(c.strings&&c.strings.length){
+        for(var si=0;si<c.strings.length;si++){
+          var s=c.strings[si];if(!s||!s.leds)continue;
+          var lenMm=s.mm||0;if(lenMm<500)lenMm=Math.max(s.leds*16,500);
+          var lenM=lenMm/1000;
+          var sdir=_s3dDir(s.sdir||0);
+          var endLocal=new THREE.Vector3(sdir.x*lenM,sdir.y*lenM,sdir.z*lenM);
+          // Line
+          var lineGeo=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0),endLocal]);
+          var lineMat=new THREE.LineBasicMaterial({color:0x555555});
+          grp.add(new THREE.Line(lineGeo,lineMat));
+          // LED dots
+          var dotCount=Math.min(s.leds,50);
+          for(var di=0;di<dotCount;di++){
+            var t=(di+0.5)/dotCount;
+            var dp=new THREE.Vector3().lerpVectors(new THREE.Vector3(0,0,0),endLocal,t);
+            var dotGeo=new THREE.SphereGeometry(0.03,4,4);
+            var dotMat=new THREE.MeshBasicMaterial({color:0x333340});
+            var dot=new THREE.Mesh(dotGeo,dotMat);
+            dot.position.copy(dp);
+            dot.userData.ledDot=true;
+            dot.userData.stringIdx=si;
+            dot.userData.dotIdx=di;
+            dot.userData.dotCount=dotCount;
+            grp.add(dot);
+          }
+        }
+      }
+
+      // Label
+      var label=_s3dLabel(c.name||('ID '+c.id));
+      label.position.set(0,0.35,0);
+      grp.add(label);
+
+      _s3d.scene.add(grp);
+      _emu3d.nodes.push(grp);
+    });
+
+    emu3dZoomToFit();
+  });
+}
+
+function emu3dUpdateColors(){
+  if(!_emu3d.nodes.length)return;
+  var layoutFixtures=(_emuStage&&_emuStage.layout&&_emuStage.layout.fixtures)||[];
+  _emu3d.nodes.forEach(function(grp){
+    var fid=grp.userData.fixtureId;
+    var ft=grp.userData.fixtureType;
+    var pd=null;
+    // Get preview frame for this fixture
+    if(_emuPreview&&_emuRunning){
+      var frames=_emuPreview[String(fid)];
+      if(frames&&frames.length>0){
+        var idx=Math.floor(_emuT)%frames.length;
+        pd=frames[idx];
+      }
+    }
+
+    if(ft==='dmx'){
+      // Update sphere + cone color from preview
+      var br=0x7c,bg=0x3a,bb=0xed,dimmer=0.1;
+      if(pd&&typeof pd==='object'){
+        if(pd.r!==undefined){br=pd.r;bg=pd.g;bb=pd.b;}
+        if(pd.dimmer>0)dimmer=(pd.dimmer/255)*0.4;
+        else if(br+bg+bb>10)dimmer=0.3;
+      }
+      var hexCol=(br<<16)|(bg<<8)|bb;
+      // Update beam cone direction from pan/tilt if available
+      if(pd&&pd.pan!==undefined&&pd.tilt!==undefined){
+        var panRange=grp.userData.panRange||540;
+        var tiltRange=grp.userData.tiltRange||270;
+        var panDeg=(pd.pan-0.5)*panRange;
+        var tiltDeg=(pd.tilt-0.5)*tiltRange;
+        var basePan=(grp.userData.basePan||0);
+        var panRad=(basePan+panDeg)*Math.PI/180;
+        var tiltRad=tiltDeg*Math.PI/180;
+        var aimDir=new THREE.Vector3(Math.sin(panRad)*Math.cos(tiltRad),
+          -Math.sin(tiltRad),Math.cos(panRad)*Math.cos(tiltRad));
+        var beamLen=grp.userData.beamLen||3;
+        grp.children.forEach(function(child){
+          if(child.userData.beamCone){
+            var mid=aimDir.clone().multiplyScalar(beamLen/2);
+            child.position.copy(mid);
+            child.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(
+              new THREE.Vector3(0,-1,0),aimDir.clone().normalize()));
+          }
+        });
+      }
+      grp.children.forEach(function(child){
+        if(child.userData.nodeSphere){
+          child.material.color.setHex(hexCol||0x7c3aed);
+          child.material.opacity=pd?0.95:0.5;
+        }
+        if(child.userData.beamCone){
+          child.material.color.setHex(hexCol||0xffff88);
+          child.material.opacity=pd?dimmer:0.08;
+        }
+      });
+    } else if(ft==='led'){
+      // Update LED dots from preview
+      var previewColors=null;
+      if(pd&&Array.isArray(pd)){previewColors=pd;}
+      // Also check by childId
+      if(!previewColors&&_emuPreview&&_emuRunning&&grp.userData.childId){
+        var cid=grp.userData.childId;
+        // Find fixture matching this child
+        (_emuStage.fixtures||[]).forEach(function(f){
+          if(f.childId===cid&&_emuPreview[String(f.id)]){
+            var frames=_emuPreview[String(f.id)];
+            if(frames&&frames.length>0)previewColors=frames[_emuT%frames.length];
+          }
+        });
+      }
+      grp.children.forEach(function(child){
+        if(!child.userData.ledDot)return;
+        var si=child.userData.stringIdx,di=child.userData.dotIdx,dc=child.userData.dotCount;
+        var pc=null;
+        if(previewColors&&si<previewColors.length)pc=previewColors[si];
+        var isAct=(pc&&typeof pc==='object'&&!Array.isArray(pc)&&pc.t!==undefined);
+        var r=40,g=40,b=45;
+        if(pc&&Array.isArray(pc)&&(pc[0]+pc[1]+pc[2])>3){r=pc[0];g=pc[1];b=pc[2];}
+        else if(isAct){
+          var eMs=(pc.e||0)*1000+(Date.now()%1000);
+          var px=_emuPixel(pc,di,dc,eMs);
+          if(px){r=px[0];g=px[1];b=px[2];}
+        }
+        child.material.color.setRGB(r/255,g/255,b/255);
+        // Scale lit dots larger
+        var lit=(r+g+b)>15;
+        child.scale.setScalar(lit?2.0:1.0);
+      });
+      // Update node sphere color to average
+      var nodeSphere=grp.children[0];
+      if(nodeSphere&&nodeSphere.userData.nodeSphere){
+        nodeSphere.material.opacity=(_emuRunning&&pd)?0.95:0.5;
+      }
+    }
+  });
+}
+
+function emu3dAnimate(){
+  if(!_emu3d.activeTab){_emu3d.animId=null;return;}
+  _emu3d.animId=requestAnimationFrame(emu3dAnimate);
+  if(_emu3d.controls)_emu3d.controls.update();
+  emu3dUpdateColors();
+  // Constant-size fixture nodes
+  if(_emu3d.camera&&_emu3d.nodes.length){
+    var center=new THREE.Vector3(_emu3d.stageW/2,_emu3d.stageH/4,_emu3d.stageD/2);
+    var scaleFactor=Math.max(0.3,Math.min(3.0,_emu3d.camera.position.distanceTo(center)/15));
+    _emu3d.nodes.forEach(function(grp){
+      if(grp.children[0]&&grp.children[0].isMesh)grp.children[0].scale.setScalar(scaleFactor);
+      if(grp.children[1]&&grp.children[1].isMesh)grp.children[1].scale.setScalar(scaleFactor);
+    });
+  }
+  if(_s3d.renderer&&_s3d.scene&&_emu3d.camera)_s3d.renderer.render(_s3d.scene,_emu3d.camera);
 }
 
 // -- Per-pixel colour helpers (mirror firmware ChildLED.cpp) ----------------
