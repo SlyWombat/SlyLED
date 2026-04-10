@@ -184,17 +184,22 @@ def _dark_reference(camera_ip, cam_idx=-1):
 
 # ── Discovery ────────────────────────────────────────────────────────
 
-def compute_initial_aim(mover_pos, target_pos, pan_range=540, tilt_range=270):
+def compute_initial_aim(mover_pos, target_pos, pan_range=540, tilt_range=270,
+                        mounted_inverted=False):
     """Estimate the pan/tilt to aim the mover at a target point in stage mm.
 
     Convention: pan=0.5 = forward (+Y), tilt=0.5 = horizontal.
 
     Stage coordinates: X=width, Y=depth (toward audience), Z=height (floor to ceiling).
 
+    When mounted_inverted=True (fixture hanging upside-down from truss),
+    both pan and tilt motor directions are reversed.
+
     Args:
         mover_pos: (x, y, z) in mm — fixture position from layout
         target_pos: (x, y, z) in mm — where to aim (e.g. floor center in camera view)
         pan_range, tilt_range: in degrees
+        mounted_inverted: True if fixture is mounted upside-down
 
     Returns: (pan_norm, tilt_norm) both 0.0-1.0
     """
@@ -206,8 +211,10 @@ def compute_initial_aim(mover_pos, target_pos, pan_range=540, tilt_range=270):
     pan_deg = math.degrees(math.atan2(dx, dy)) if dist_xy > 0.001 else 0.0
     tilt_deg = math.degrees(math.atan2(-dz, dist_xy)) if (dist_xy > 0.001 or abs(dz) > 0.001) else 0.0
 
-    pan_norm = max(0, min(1, 0.5 + pan_deg / pan_range))
-    tilt_norm = max(0, min(1, 0.5 + tilt_deg / tilt_range))
+    # Inverted mount: pan and tilt motor directions reverse
+    sign = -1 if mounted_inverted else 1
+    pan_norm = max(0, min(1, 0.5 + sign * pan_deg / pan_range))
+    tilt_norm = max(0, min(1, 0.5 + sign * tilt_deg / tilt_range))
     return (pan_norm, tilt_norm)
 
 

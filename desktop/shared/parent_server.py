@@ -1071,7 +1071,7 @@ def api_fixture_update(fid):
         if not isinstance(fov, (int, float)) or fov < 1 or fov > 180:
             return jsonify(err="fovDeg must be 1-180"), 400
     for k in ("name", "type", "fixtureType", "childId", "childIds", "strings",
-              "rotation", "orientation", "aoeRadius", "meshFile",
+              "rotation", "orientation", "mountedInverted", "aoeRadius", "meshFile",
               "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId",
               "fovDeg", "cameraUrl", "resolutionW", "resolutionH"):
         if k in body:

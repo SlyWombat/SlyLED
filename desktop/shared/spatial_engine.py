@@ -348,13 +348,17 @@ def evaluate_spatial_effect(effect, pixel_positions, t):
     return [[0, 0, 0]] * len(pixel_positions)
 
 
-def compute_pan_tilt(fixture_pos, aim_point, pan_range_deg, tilt_range_deg):
+def compute_pan_tilt(fixture_pos, aim_point, pan_range_deg, tilt_range_deg,
+                     mounted_inverted=False):
     """Compute normalized pan/tilt (0.0-1.0) from fixture position to aim point.
 
     Convention:
       - Pan 0 = forward (+Z axis), increases clockwise viewed from above
       - Tilt 0 = horizontal, increases downward
       - Center of range = 0.5
+
+    When mounted_inverted=True (fixture hanging upside-down from truss),
+    both pan and tilt motor directions are reversed.
 
     Returns:
         (pan_normalized, tilt_normalized) both 0.0-1.0, or None if ranges are 0
@@ -374,9 +378,10 @@ def compute_pan_tilt(fixture_pos, aim_point, pan_range_deg, tilt_range_deg):
     # Tilt: angle from horizontal, positive = downward
     tilt_deg = math.degrees(math.atan2(-dy, dist_xz)) if (dist_xz > 0.001 or abs(dy) > 0.001) else 0.0
 
-    # Map to normalized 0.0-1.0 with center of range at 0.5
-    pan_norm = 0.5 + pan_deg / pan_range_deg
-    tilt_norm = 0.5 + tilt_deg / tilt_range_deg
+    # Inverted mount: pan and tilt motor directions reverse
+    sign = -1 if mounted_inverted else 1
+    pan_norm = 0.5 + sign * pan_deg / pan_range_deg
+    tilt_norm = 0.5 + sign * tilt_deg / tilt_range_deg
 
     return (max(0.0, min(1.0, pan_norm)), max(0.0, min(1.0, tilt_norm)))
 

@@ -355,7 +355,7 @@ def _compile_box(pixels, start_pos, end_pos, size, color,
 
 
 def _compile_dmx_fixture(clip, effect, fixture_pos, aim_point, profile_info, duration,
-                         beam_pixels=None):
+                         beam_pixels=None, mounted_inverted=False):
     """Compile a spatial effect clip for a DMX fixture (moving head / par).
 
     beam_pixels: list of [x,y,z] sample points along the beam cone. If provided,
@@ -405,7 +405,8 @@ def _compile_dmx_fixture(clip, effect, fixture_pos, aim_point, profile_info, dur
             aim = effect_aim_point(effect, mid_t)
             colors = evaluate_spatial_effect(effect, eval_pixels, mid_t)
             c = _best_color(colors) if colors else [0, 0, 0]
-            pt = compute_pan_tilt(fixture_pos, aim, pan_range, tilt_range)
+            pt = compute_pan_tilt(fixture_pos, aim, pan_range, tilt_range,
+                                 mounted_inverted=mounted_inverted)
             segments.append({
                 "type": ACT_DMX_SCENE,
                 "params": {
@@ -447,7 +448,8 @@ def _compile_dmx_fixture(clip, effect, fixture_pos, aim_point, profile_info, dur
         mid_t = clip_dur / 2
         if has_pt:
             aim = aim_point
-            pt = compute_pan_tilt(fixture_pos, aim, pan_range, tilt_range)
+            pt = compute_pan_tilt(fixture_pos, aim, pan_range, tilt_range,
+                                 mounted_inverted=mounted_inverted)
         else:
             pt = None
         colors = evaluate_spatial_effect(effect, eval_pixels, mid_t)
@@ -696,6 +698,7 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
                     fdata.get("profileInfo"),
                     duration,
                     beam_pixels=pixels,
+                    mounted_inverted=bool(fdata.get("mountedInverted")),
                 )
                 all_segments.extend(steps)
             elif strings:

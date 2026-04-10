@@ -2688,6 +2688,10 @@ function editFixture(id){
   var rot=f.rotation||[0,0,0];
   h+='<div style="display:flex;gap:.3em"><label style="font-size:.75em;color:#64748b">Tilt</label><input id="fx-rx" type="number" value="'+rot[0]+'" style="width:70px"> <label style="font-size:.75em;color:#64748b">Pan</label><input id="fx-ry" type="number" value="'+rot[1]+'" style="width:70px"> <label style="font-size:.75em;color:#64748b">Roll</label><input id="fx-rz" type="number" value="'+rot[2]+'" style="width:70px"></div>';
   h+='<p style="color:#64748b;font-size:.75em;margin-top:.3em">Pan=0 faces forward (+Y depth). Pan=90 faces stage left (+X).</p>';
+  if(ft==='dmx'){
+    h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.5em;cursor:pointer"><input id="fx-inverted" type="checkbox"'+(f.mountedInverted?' checked':'')+' style="width:auto"> <span style="font-size:.82em">Mounted upside-down (inverted)</span></label>';
+    h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">Reverses pan and tilt motor direction for truss-mounted fixtures.</p>';
+  }
   h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="saveFixture('+id+',\''+ft+'\')">Save</button></div>';
   document.getElementById('modal-title').textContent='Edit Fixture: '+f.name;
   document.getElementById('modal-body').innerHTML=h;
@@ -2850,6 +2854,8 @@ function saveFixture(id,ft){
     body.dmxStartAddr=parseInt(document.getElementById('fx-addr').value)||1;
     body.dmxChannelCount=parseInt(document.getElementById('fx-ch').value)||3;
     body.dmxProfileId=document.getElementById('fx-prof').value.trim()||null;
+    var invEl=document.getElementById('fx-inverted');
+    if(invEl)body.mountedInverted=invEl.checked;
   }else if(ft==='camera'){
     body.fovDeg=parseInt(document.getElementById('fx-fov').value)||60;
     body.cameraUrl=document.getElementById('fx-cam-url').value.trim();
@@ -4656,6 +4662,7 @@ function _updateSidePanel(fixtureId){
       h+='<label style="font-size:.72em;color:#64748b;margin:0">Tilt\u00b0</label><input id="panel-tilt" type="number" value="'+_tiltDeg+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelPanTiltChange('+f.id+',\'tilt\',this.value)">';
       if(orient.verified)h+='<span style="color:#4ade80;font-size:.75em">\u2713</span>';
       h+='</div>';
+      if(f.mountedInverted)h+='<div style="font-size:.72em;color:#f59e0b;margin-bottom:.3em">\u26a0 Mounted upside-down</div>';
       h+='<div style="display:flex;gap:.3em;flex-wrap:wrap">';
       h+='<button class="btn" onclick="_orientTest('+f.id+')" style="font-size:.7em;padding:.2em .5em;background:#4c1d95;color:#e9d5ff">Test Orient</button>';
       h+='<button class="btn" onclick="closeModal();_moverCalStart('+f.id+')" style="font-size:.7em;padding:.2em .5em;background:#6b21a8;color:#d8b4fe">Calibrate'+(f.moverCalibrated?' \u2713':'')+'</button>';
@@ -4785,6 +4792,9 @@ function showNodeEdit(f){
     h+='<label style="font-size:.75em;color:#64748b;margin:0">Roll</label><input id="ne-roll" type="number" value="'+Math.round(_fRot[2]||0)+'" style="width:65px;font-size:.85em;padding:2px 4px">';
     h+='</div>';
     h+='<div style="font-size:.72em;color:#64748b;margin-top:.2em">Pan=0 faces forward (+Y). Tilt negative = down.</div>';
+    if(ft==='dmx'){
+      h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.3em;cursor:pointer"><input id="ne-inverted" type="checkbox"'+(f.mountedInverted?' checked':'')+' style="width:auto"> <span style="font-size:.8em">Mounted upside-down</span></label>';
+    }
     h+='</div>';
   }
   h+='<div style="display:flex;gap:.5em;flex-wrap:wrap">';
@@ -4813,10 +4823,11 @@ function applyNodePos(id){
   var tiltEl=document.getElementById('ne-tilt');
   var panEl=document.getElementById('ne-pan');
   var rollEl=document.getElementById('ne-roll');
+  var invEl=document.getElementById('ne-inverted');
   var rotChanged=false;
   if(tiltEl&&panEl){
     var newRot=[parseFloat(tiltEl.value)||0,parseFloat(panEl.value)||0,parseFloat(rollEl?rollEl.value:0)||0];
-    _fixtures.forEach(function(f){if(f.id===id){f.rotation=newRot;}});
+    _fixtures.forEach(function(f){if(f.id===id){f.rotation=newRot;if(invEl)f.mountedInverted=invEl.checked;}});
     rotChanged=true;
   }
   _fixtures.forEach(function(f){if(f.id===id){f.x=nx;f.y=ny;f.z=nz;f._placed=true;f.positioned=true;}});
@@ -4834,7 +4845,15 @@ function applyNodePos(id){
   };
   if(rotChanged){
     var f=null;_fixtures.forEach(function(fx){if(fx.id===id)f=fx;});
-    ra('PUT','/api/fixtures/'+id+'/aim',{rotation:f?f.rotation:[0,0,0]},afterRot);
+    var aimBody={rotation:f?f.rotation:[0,0,0]};
+    // Also save mountedInverted via PUT fixture
+    if(f&&f.mountedInverted!==undefined){
+      ra('PUT','/api/fixtures/'+id,{mountedInverted:!!f.mountedInverted},function(){
+        ra('PUT','/api/fixtures/'+id+'/aim',aimBody,afterRot);
+      });
+    }else{
+      ra('PUT','/api/fixtures/'+id+'/aim',aimBody,afterRot);
+    }
   }else{
     afterRot();
   }
