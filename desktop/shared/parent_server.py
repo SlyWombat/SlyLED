@@ -184,14 +184,15 @@ def _rotation_to_aim(rotation, pos, dist=3000):
     """Convert rotation [rx, ry, rz] (degrees) + position to an aim point [x,y,z].
 
     rx = tilt/pitch, ry = pan/yaw.  Default distance is 3000mm (3m).
+    Stage coordinates: X=width, Y=depth (forward), Z=height (up).
     """
     rx = rotation[0] if rotation else 0
     ry = rotation[1] if rotation and len(rotation) > 1 else 0
     pan_rad = math.radians(ry)
     tilt_rad = math.radians(rx)
     dx = math.sin(pan_rad) * math.cos(tilt_rad) * dist
-    dy = -math.sin(tilt_rad) * dist
-    dz = math.cos(pan_rad) * math.cos(tilt_rad) * dist
+    dy = math.cos(pan_rad) * math.cos(tilt_rad) * dist   # Y = depth (forward)
+    dz = -math.sin(tilt_rad) * dist                       # Z = height (up)
     return [pos[0] + dx, pos[1] + dy, pos[2] + dz]
 
 _objects    = _load("objects",     [])
@@ -1375,9 +1376,9 @@ def _pixel_to_stage(detections, cam_fixture, frame_w, frame_h):
     # Camera position from layout
     pos_map = {p["id"]: p for p in _layout.get("children", [])}
     cam_pos = pos_map.get(cam_fixture["id"], {})
-    cx = cam_pos.get("x", 0)  # mm
-    cy = cam_pos.get("y", 0)  # mm (height)
-    cz = cam_pos.get("z", 0)  # mm (depth)
+    cx = cam_pos.get("x", 0)  # mm (width)
+    cy = cam_pos.get("y", 0)  # mm (depth)
+    cz = cam_pos.get("z", 0)  # mm (height)
 
     # Compute aim from rotation
     aim = _rotation_to_aim(cam_fixture.get("rotation", [0, 0, 0]), [cx, cy, cz])
@@ -1395,15 +1396,16 @@ def _pixel_to_stage(detections, cam_fixture, frame_w, frame_h):
     dx, dy, dz = dx/dist, dy/dist, dz/dist
 
     # Camera right vector (cross of look × world_up)
-    # World up = (0, 1, 0)
-    rx = dz  # dy*0 - dz*0 simplified for up=(0,1,0)
-    ry = 0
-    rz = -dx
-    r_len = math.sqrt(rx*rx + rz*rz)
+    # World up = (0, 0, 1) — Z is height
+    # cross(look, up) = (dy*1 - dz*0, dz*0 - dx*1, dx*0 - dy*0) = (dy, -dx, 0)
+    rx = dy
+    ry = -dx
+    rz = 0
+    r_len = math.sqrt(rx*rx + ry*ry)
     if r_len < 0.001:
         rx, ry, rz = 1, 0, 0  # Looking straight up/down, pick arbitrary right
     else:
-        rx, rz = rx/r_len, rz/r_len
+        rx, ry = rx/r_len, ry/r_len
 
     # Camera up vector (cross of right × look)
     ux = ry*dz - rz*dy
@@ -1433,19 +1435,19 @@ def _pixel_to_stage(detections, cam_fixture, frame_w, frame_h):
         ray_y = dy + math.tan(half_fov) * (ndc_x * ry + ndc_y / aspect * uy)
         ray_z = dz + math.tan(half_fov) * (ndc_x * rz + ndc_y / aspect * uz)
 
-        # Intersect ray with ground plane (y=0)
-        # Point = camera_pos + t * ray, solve for y=0: cy + t * ray_y = 0
-        if abs(ray_y) < 0.0001:
+        # Intersect ray with ground plane (z=0)
+        # Point = camera_pos + t * ray, solve for z=0: cz + t * ray_z = 0
+        if abs(ray_z) < 0.0001:
             # Ray parallel to ground — place at aim point distance
             t = dist
         else:
-            t = -cy / ray_y
+            t = -cz / ray_z
             if t < 0:
                 t = dist  # Ray points away from ground, use aim distance
 
         # Stage intersection point
         sx = cx + t * ray_x
-        sz = cz + t * ray_z
+        sy = cy + t * ray_y
 
         # Estimate object size on ground plane from bounding box
         # Use proportion of FOV covered by the box
@@ -1455,14 +1457,14 @@ def _pixel_to_stage(detections, cam_fixture, frame_w, frame_h):
 
         # Clamp to stage bounds
         sx = max(0, min(sx, stage_w))
-        sz = max(0, min(sz, stage_d))
+        sy = max(0, min(sy, stage_d))
 
         result.append({
             "label": det["label"],
             "confidence": det["confidence"],
             "x": round(sx),
-            "y": 0,
-            "z": round(sz),
+            "y": round(sy),
+            "z": 0,
             "w": round(max(obj_w, 100)),   # minimum 100mm
             "h": round(max(obj_h, 100)),
             "pixelBox": {"x": det["x"], "y": det["y"], "w": det["w"], "h": det["h"]},

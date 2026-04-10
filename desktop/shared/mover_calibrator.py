@@ -187,7 +187,9 @@ def _dark_reference(camera_ip, cam_idx=-1):
 def compute_initial_aim(mover_pos, target_pos, pan_range=540, tilt_range=270):
     """Estimate the pan/tilt to aim the mover at a target point in stage mm.
 
-    Convention: pan=0.5 = forward (+Z), tilt=0.5 = horizontal.
+    Convention: pan=0.5 = forward (+Y), tilt=0.5 = horizontal.
+
+    Stage coordinates: X=width, Y=depth (toward audience), Z=height (floor to ceiling).
 
     Args:
         mover_pos: (x, y, z) in mm — fixture position from layout
@@ -197,12 +199,12 @@ def compute_initial_aim(mover_pos, target_pos, pan_range=540, tilt_range=270):
     Returns: (pan_norm, tilt_norm) both 0.0-1.0
     """
     dx = target_pos[0] - mover_pos[0]
-    dy = target_pos[1] - mover_pos[1]
-    dz = target_pos[2] - mover_pos[2]
-    dist_xz = (dx*dx + dz*dz) ** 0.5
+    dy = target_pos[1] - mover_pos[1]  # depth toward audience
+    dz = target_pos[2] - mover_pos[2]  # height
+    dist_xy = (dx*dx + dy*dy) ** 0.5
 
-    pan_deg = math.degrees(math.atan2(dx, dz)) if dist_xz > 0.001 else 0.0
-    tilt_deg = math.degrees(math.atan2(-dy, dist_xz)) if (dist_xz > 0.001 or abs(dy) > 0.001) else 0.0
+    pan_deg = math.degrees(math.atan2(dx, dy)) if dist_xy > 0.001 else 0.0
+    tilt_deg = math.degrees(math.atan2(-dz, dist_xy)) if (dist_xy > 0.001 or abs(dz) > 0.001) else 0.0
 
     pan_norm = max(0, min(1, 0.5 + pan_deg / pan_range))
     tilt_norm = max(0, min(1, 0.5 + tilt_deg / tilt_range))
@@ -215,11 +217,11 @@ def compute_aim_with_orientation(mover_pos, target_pos, orientation,
 
     Stage coordinate system (matches layout 3D view):
       X = stage width (stage right=0 → stage left)
-      Y = height (floor=0 → ceiling)
-      Z = depth (back wall=0 → audience)
+      Y = depth (back wall=0 → audience)
+      Z = height (floor=0 → ceiling)
 
-    Pan rotates in the XZ horizontal plane (atan2(dx, dz)).
-    Tilt rotates in the vertical plane (atan2(-dy, dist_xz)).
+    Pan rotates in the XY horizontal plane (atan2(dx, dy)).
+    Tilt rotates in the vertical plane (atan2(-dz, dist_xy)).
 
     The orientation dict corrects for physical mounting by applying
     panOffset, tiltOffset, panSign, and tiltSign — calibrated from
@@ -234,13 +236,13 @@ def compute_aim_with_orientation(mover_pos, target_pos, orientation,
     Returns: (pan_norm, tilt_norm) both 0.0-1.0
     """
     dx = target_pos[0] - mover_pos[0]
-    dy = target_pos[1] - mover_pos[1]  # vertical (Y=height)
-    dz = target_pos[2] - mover_pos[2]  # depth toward audience
-    dist_xz = (dx * dx + dz * dz) ** 0.5
+    dy = target_pos[1] - mover_pos[1]  # depth toward audience
+    dz = target_pos[2] - mover_pos[2]  # height (floor to ceiling)
+    dist_xy = (dx * dx + dy * dy) ** 0.5
 
     # Geometric angles from fixture to target
-    pan_deg = math.degrees(math.atan2(dx, dz)) if dist_xz > 0.001 else 0.0
-    tilt_deg = math.degrees(math.atan2(-dy, dist_xz)) if (dist_xz > 0.001 or abs(dy) > 0.001) else 0.0
+    pan_deg = math.degrees(math.atan2(dx, dy)) if dist_xy > 0.001 else 0.0
+    tilt_deg = math.degrees(math.atan2(-dz, dist_xy)) if (dist_xy > 0.001 or abs(dz) > 0.001) else 0.0
 
     # Apply orientation corrections
     pan_sign = orientation.get("panSign", 1)
@@ -249,7 +251,7 @@ def compute_aim_with_orientation(mover_pos, target_pos, orientation,
     tilt_offset = orientation.get("tiltOffset", 0.0)  # where tilt=0 is in normalized space
 
     # Convert geometric angle to normalized pan/tilt
-    # pan_offset is the normalized value that corresponds to "forward" (+Z)
+    # pan_offset is the normalized value that corresponds to "forward" (+Y)
     # pan_sign determines which direction increasing pan goes
     pan_norm = pan_offset + pan_sign * pan_deg / pan_range
     tilt_norm = tilt_offset + tilt_sign * tilt_deg / tilt_range
@@ -332,11 +334,11 @@ def calibrate_fixture_orientation(bridge_ip, camera_ip, cam_idx, mover_addr,
     est_pan, est_tilt = compute_initial_aim(mover_pos, floor_target, pan_range, tilt_range)
     # Raw geometric angle (degrees) from fixture toward target
     dx = floor_target[0] - mover_pos[0]
-    dy = floor_target[1] - mover_pos[1]
-    dz = floor_target[2] - mover_pos[2]
-    dist_xz = (dx * dx + dz * dz) ** 0.5
-    geo_pan_deg = math.degrees(math.atan2(dx, dz)) if dist_xz > 0.001 else 0.0
-    geo_tilt_deg = math.degrees(math.atan2(-dy, dist_xz))
+    dy = floor_target[1] - mover_pos[1]  # depth
+    dz = floor_target[2] - mover_pos[2]  # height
+    dist_xy = (dx * dx + dy * dy) ** 0.5
+    geo_pan_deg = math.degrees(math.atan2(dx, dy)) if dist_xy > 0.001 else 0.0
+    geo_tilt_deg = math.degrees(math.atan2(-dz, dist_xy))
 
     log.info("ORIENT-CAL: geometric estimate pan=%.3f tilt=%.3f (angles: pan=%.1f° tilt=%.1f°)",
              est_pan, est_tilt, geo_pan_deg, geo_tilt_deg)
@@ -473,9 +475,11 @@ def calibrate_fixture_orientation(bridge_ip, camera_ip, cam_idx, mover_addr,
 def pan_tilt_to_ray(pan_norm, tilt_norm, pan_range=540, tilt_range=270):
     """Convert normalized pan/tilt (0-1) to a unit direction vector.
 
-    Convention: pan=0.5 = forward (+Z), tilt=0.5 = horizontal.
+    Convention: pan=0.5 = forward (+Y), tilt=0.5 = horizontal.
     Pan increases clockwise viewed from above.
     Tilt increases downward.
+
+    Stage coordinates: X=width, Y=depth (forward), Z=height (up).
 
     Returns: (dx, dy, dz) normalized direction vector
     """
@@ -485,17 +489,20 @@ def pan_tilt_to_ray(pan_norm, tilt_norm, pan_range=540, tilt_range=270):
     tilt_rad = math.radians(tilt_deg)
 
     # Spherical to cartesian
-    # pan rotates in XZ plane, tilt rotates down from horizontal
+    # pan rotates in XY plane, tilt rotates down from horizontal
     cos_tilt = math.cos(tilt_rad)
     dx = math.sin(pan_rad) * cos_tilt
-    dy = -math.sin(tilt_rad)  # positive tilt = downward
-    dz = math.cos(pan_rad) * cos_tilt
+    dy = math.cos(pan_rad) * cos_tilt   # Y is forward (depth)
+    dz = -math.sin(tilt_rad)            # Z is up (height), positive tilt = downward
 
     return (dx, dy, dz)
 
 
 def ray_surface_intersect(origin, direction, surfaces):
     """Find where a ray from origin in direction hits the nearest surface.
+
+    Stage coordinates: X=width, Y=depth, Z=height.
+    Floor is at Z=floor_z. Wall normals are in the XY plane.
 
     Args:
         origin: (x, y, z) in mm — fixture position
@@ -507,10 +514,11 @@ def ray_surface_intersect(origin, direction, surfaces):
     best_t = 1e9
     best_point = None
 
-    # Floor: horizontal plane at y = floor_y
+    # Floor: horizontal plane at z = floor_z
     floor = surfaces.get("floor")
-    if floor and abs(direction[1]) > 0.001:
-        t = (floor["y"] - origin[1]) / direction[1]
+    floor_z = floor.get("z", floor.get("y", 0)) if floor else None
+    if floor_z is not None and abs(direction[2]) > 0.001:
+        t = (floor_z - origin[2]) / direction[2]
         if 0 < t < best_t:
             px = origin[0] + t * direction[0]
             py = origin[1] + t * direction[1]
@@ -518,15 +526,14 @@ def ray_surface_intersect(origin, direction, surfaces):
             best_t = t
             best_point = (round(px), round(py), round(pz))
 
-    # Walls: vertical planes — use full 3-component dot product (#263)
+    # Walls: vertical planes — normals in XY plane, use full 3-component dot (#263)
     for wall in surfaces.get("walls", []):
         n = wall["normal"]
         d = wall.get("d", 0)
-        ny = n[1] if len(n) > 1 else 0
-        denom = n[0] * direction[0] + ny * direction[1] + n[2] * direction[2]
+        denom = n[0] * direction[0] + n[1] * direction[1] + n[2] * direction[2]
         if abs(denom) < 0.001:
             continue
-        t = -(n[0] * origin[0] + ny * origin[1] + n[2] * origin[2] + d) / denom
+        t = -(n[0] * origin[0] + n[1] * origin[1] + n[2] * origin[2] + d) / denom
         if 0 < t < best_t:
             px = origin[0] + t * direction[0]
             py = origin[1] + t * direction[1]
@@ -540,8 +547,11 @@ def ray_surface_intersect(origin, direction, surfaces):
 def compute_floor_target(floor_surface, camera_pos, camera_aim):
     """Compute the center of the floor area visible to the camera.
 
+    Stage coordinates: X=width, Y=depth, Z=height.
+    Floor is at Z=floor_z.
+
     Args:
-        floor_surface: dict from surface_analyzer with {y, extent: {xMin,xMax,zMin,zMax}}
+        floor_surface: dict from surface_analyzer with {z, extent: {xMin,xMax,yMin,yMax}}
         camera_pos: (x, y, z) mm
         camera_aim: (x, y, z) mm — aim point
 
@@ -549,13 +559,13 @@ def compute_floor_target(floor_surface, camera_pos, camera_aim):
     """
     if not floor_surface or not floor_surface.get("extent"):
         # Fallback: aim at stage center floor
-        return (1500, 0, 1500)
+        return (1500, 1500, 0)
     ext = floor_surface["extent"]
-    floor_y = floor_surface["y"]
+    floor_z = floor_surface.get("z", floor_surface.get("y", 0))
     # Center of detected floor
     cx = (ext["xMin"] + ext["xMax"]) / 2
-    cz = (ext["zMin"] + ext["zMax"]) / 2
-    return (round(cx), round(floor_y), round(cz))
+    cy = (ext.get("yMin", ext.get("zMin", 0)) + ext.get("yMax", ext.get("zMax", 0))) / 2
+    return (round(cx), round(cy), round(floor_z))
 
 
 def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
@@ -892,7 +902,8 @@ def grid_3d_lookup(grid3d, pan, tilt):
 
 def grid_3d_inverse(grid3d, target_x, target_y, target_z, iterations=30):
     """Inverse: (world_x, world_y, world_z) → (pan, tilt).
-    Finds the pan/tilt that aims closest to the target 3D point."""
+    Finds the pan/tilt that aims closest to the target 3D point.
+    Converges on XY (horizontal plane: width+depth), ignores Z (height)."""
     pans, tilts = grid3d["panSteps"], grid3d["tiltSteps"]
     # Brute-force search over grid for best starting point
     best_pan, best_tilt, best_dist = pans[0], tilts[0], 1e9
@@ -906,23 +917,23 @@ def grid_3d_inverse(grid3d, target_x, target_y, target_z, iterations=30):
     pan, tilt = best_pan, best_tilt
     for it in range(iterations):
         wx, wy, wz = grid_3d_lookup(grid3d, pan, tilt)
-        # Convergence on XZ only — Newton step only corrects XZ (#265)
-        err = ((wx - target_x)**2 + (wz - target_z)**2) ** 0.5
-        if err < 10:  # within 10mm in XZ plane
+        # Convergence on XY only — Newton step only corrects XY (#265)
+        err = ((wx - target_x)**2 + (wy - target_y)**2) ** 0.5
+        if err < 10:  # within 10mm in XY plane
             break
         dp = 0.001
         wx_dp, wy_dp, wz_dp = grid_3d_lookup(grid3d, pan + dp, tilt)
         wx_dt, wy_dt, wz_dt = grid_3d_lookup(grid3d, pan, tilt + dp)
-        # Jacobian: d(world)/d(pan,tilt) — use X and Z (horizontal plane)
-        dwx_dp = (wx_dp - wx) / dp; dwz_dp = (wz_dp - wz) / dp
-        dwx_dt = (wx_dt - wx) / dp; dwz_dt = (wz_dt - wz) / dp
-        det = dwx_dp * dwz_dt - dwx_dt * dwz_dp
+        # Jacobian: d(world)/d(pan,tilt) — use X and Y (horizontal plane)
+        dwx_dp = (wx_dp - wx) / dp; dwy_dp = (wy_dp - wy) / dp
+        dwx_dt = (wx_dt - wx) / dp; dwy_dt = (wy_dt - wy) / dp
+        det = dwx_dp * dwy_dt - dwx_dt * dwy_dp
         if abs(det) < 0.001:
             break
-        ex, ez = target_x - wx, target_z - wz
+        ex, ey = target_x - wx, target_y - wy
         gain = 0.4 if it < 15 else 0.15
-        d_pan = (dwz_dt * ex - dwx_dt * ez) / det * gain
-        d_tilt = (-dwz_dp * ex + dwx_dp * ez) / det * gain
+        d_pan = (dwy_dt * ex - dwx_dt * ey) / det * gain
+        d_tilt = (-dwy_dp * ex + dwx_dp * ey) / det * gain
         pan = max(pans[0], min(pans[-1], pan + d_pan))
         tilt = max(tilts[0], min(tilts[-1], tilt + d_tilt))
     return (pan, tilt)

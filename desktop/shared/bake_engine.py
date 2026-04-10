@@ -49,14 +49,15 @@ def _rotation_to_aim(rotation, pos, dist=3000):
     """Convert rotation [rx, ry, rz] (degrees) + position to an aim point.
 
     rx = tilt/pitch, ry = pan/yaw.  Default distance is 3000mm (3m).
+    Stage coordinates: X=width, Y=depth (forward), Z=height (up).
     Returns [x, y, z] in stage mm coordinates.
     """
     rx, ry = rotation[0] if rotation else 0, rotation[1] if rotation and len(rotation) > 1 else 0
     pan_rad = math.radians(ry)
     tilt_rad = math.radians(rx)
     dx = math.sin(pan_rad) * math.cos(tilt_rad) * dist
-    dy = -math.sin(tilt_rad) * dist
-    dz = math.cos(pan_rad) * math.cos(tilt_rad) * dist
+    dy = math.cos(pan_rad) * math.cos(tilt_rad) * dist   # Y = depth (forward)
+    dz = -math.sin(tilt_rad) * dist                       # Z = height (up)
     return [pos[0] + dx, pos[1] + dy, pos[2] + dz]
 
 

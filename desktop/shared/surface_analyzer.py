@@ -33,14 +33,14 @@ def analyze_surfaces(points, floor_tolerance=100, wall_tolerance=100, min_cluste
     # Extract XYZ
     coords = [(p[0], p[1], p[2]) for p in points]
 
-    # Step 1: Floor detection — find dominant horizontal plane (consistent Y)
+    # Step 1: Floor detection — find dominant horizontal plane (consistent Z)
     floor = _detect_floor(coords, floor_tolerance)
-    floor_y = floor["y"] if floor else None
+    floor_z = floor["z"] if floor else None
 
     # Step 2: Separate floor points from remaining
-    if floor_y is not None:
+    if floor_z is not None:
         remaining = [(x, y, z) for x, y, z in coords
-                     if abs(y - floor_y) > floor_tolerance]
+                     if abs(z - floor_z) > floor_tolerance]
     else:
         remaining = list(coords)
 
@@ -61,7 +61,7 @@ def analyze_surfaces(points, floor_tolerance=100, wall_tolerance=100, min_cluste
 
     elapsed = (time.monotonic() - t0) * 1000
     log.info("Surface analysis: floor=%s, %d walls, %d obstacles (%.0fms)",
-             f"y={floor_y}" if floor_y else "none", len(walls), len(obstacles), elapsed)
+             f"z={floor_z}" if floor_z else "none", len(walls), len(obstacles), elapsed)
 
     return {
         "floor": floor,
@@ -73,7 +73,8 @@ def analyze_surfaces(points, floor_tolerance=100, wall_tolerance=100, min_cluste
 
 def _detect_floor(coords, tolerance, ransac_trials=200):
     """RANSAC 3-point plane fit to find the floor. (#261)
-    Accepts planes whose normal is within ~18° of vertical (dot > 0.95)."""
+    Floor is a horizontal plane at Z=constant.
+    Accepts planes whose normal is within ~18 deg of vertical (dot with (0,0,1) > 0.95)."""
     if len(coords) < 10:
         return None
 
@@ -97,11 +98,11 @@ def _detect_floor(coords, tolerance, ransac_trials=200):
         if length < 1e-6:
             continue
         nx, ny, nz = nx/length, ny/length, nz/length
-        # Ensure normal points upward (Y+)
-        if ny < 0:
+        # Ensure normal points upward (Z+)
+        if nz < 0:
             nx, ny, nz = -nx, -ny, -nz
-        # Must be near-vertical: dot with (0,1,0) > 0.95
-        if ny < 0.95:
+        # Must be near-vertical: dot with (0,0,1) > 0.95
+        if nz < 0.95:
             continue
         d = -(nx*p1[0] + ny*p1[1] + nz*p1[2])
         # Count inliers
@@ -116,29 +117,30 @@ def _detect_floor(coords, tolerance, ransac_trials=200):
     if best_count < n * 0.05:
         return None
 
-    # Collect inlier points for extent and average Y
+    # Collect inlier points for extent and average Z (height)
     floor_pts = [(x, y, z) for x, y, z in coords
                  if abs(best_normal[0]*x + best_normal[1]*y + best_normal[2]*z + best_d) < tolerance]
     if not floor_pts:
         return None
-    avg_y = sum(p[1] for p in floor_pts) / len(floor_pts)
+    avg_z = sum(p[2] for p in floor_pts) / len(floor_pts)
     xs = [p[0] for p in floor_pts]
-    zs = [p[2] for p in floor_pts]
+    ys = [p[1] for p in floor_pts]
 
     return {
-        "y": round(avg_y),
+        "z": round(avg_z),
         "normal": best_normal,
         "d": round(best_d),
         "inliers": len(floor_pts),
         "extent": {
             "xMin": round(min(xs)), "xMax": round(max(xs)),
-            "zMin": round(min(zs)), "zMax": round(max(zs)),
+            "yMin": round(min(ys)), "yMax": round(max(ys)),
         },
     }
 
 
 def _detect_walls(coords, tolerance, max_walls=4):
-    """Find vertical planes in the point cloud using RANSAC."""
+    """Find vertical planes in the point cloud using RANSAC.
+    Wall normals are in the XY horizontal plane (Z=height is vertical)."""
     if len(coords) < 30:
         return []
 
@@ -158,32 +160,32 @@ def _detect_walls(coords, tolerance, max_walls=4):
             i, j = random.sample(range(len(remaining)), 2)
             p1, p2 = remaining[i], remaining[j]
 
-            # Plane normal in XZ (vertical plane: normal is horizontal)
+            # Plane normal in XY (vertical plane: normal is horizontal)
             dx = p2[0] - p1[0]
-            dz = p2[2] - p1[2]
-            length = math.sqrt(dx * dx + dz * dz)
+            dy = p2[1] - p1[1]
+            length = math.sqrt(dx * dx + dy * dy)
             if length < 10:
                 continue
 
-            # Normal perpendicular to the line in XZ, pointing outward
-            nx, nz = -dz / length, dx / length
-            ny = 0
-            d = -(nx * p1[0] + nz * p1[2])
+            # Normal perpendicular to the line in XY, pointing outward
+            nx, ny = -dy / length, dx / length
+            nz = 0
+            d = -(nx * p1[0] + ny * p1[1])
 
             # Count inliers
             count = sum(1 for x, y, z in remaining
-                        if abs(nx * x + nz * z + d) < tolerance)
+                        if abs(nx * x + ny * y + d) < tolerance)
 
             if count > best_count:
                 best_count = count
-                best_wall = {"normal": [round(nx, 4), 0, round(nz, 4)], "d": round(d)}
+                best_wall = {"normal": [round(nx, 4), round(ny, 4), 0], "d": round(d)}
 
         # Accept wall if enough inliers (>5% of remaining or 50 absolute) (#266)
         if best_wall and best_count > max(50, len(remaining) * 0.05):
             # Compute wall extent
             n = best_wall["normal"]
             wall_pts = [(x, y, z) for x, y, z in remaining
-                        if abs(n[0] * x + n[2] * z + best_wall["d"]) < tolerance]
+                        if abs(n[0] * x + n[1] * y + best_wall["d"]) < tolerance]
             if wall_pts:
                 best_wall["inliers"] = len(wall_pts)
                 best_wall["extent"] = {
@@ -198,7 +200,7 @@ def _detect_walls(coords, tolerance, max_walls=4):
 
                 # Remove wall points from remaining
                 remaining = [(x, y, z) for x, y, z in remaining
-                             if abs(n[0] * x + n[2] * z + best_wall["d"]) >= tolerance]
+                             if abs(n[0] * x + n[1] * y + best_wall["d"]) >= tolerance]
 
     return walls
 
@@ -208,14 +210,15 @@ def _point_to_plane_dist(x, y, z, normal, d):
 
 
 def _cluster_obstacles(coords, min_cluster, grid_size=300):
-    """Simple grid-based clustering of remaining points into obstacles."""
+    """Simple grid-based clustering of remaining points into obstacles.
+    Grid uses (x, y) since X=width and Y=depth are the horizontal axes."""
     if len(coords) < min_cluster:
         return []
 
-    # Grid the points
+    # Grid the points in XY (horizontal plane)
     grid = {}
     for x, y, z in coords:
-        key = (round(x / grid_size), round(z / grid_size))
+        key = (round(x / grid_size), round(y / grid_size))
         if key not in grid:
             grid[key] = []
         grid[key].append((x, y, z))
@@ -250,9 +253,9 @@ def _cluster_obstacles(coords, min_cluster, grid_size=300):
         xs = [p[0] for p in cluster]
         ys = [p[1] for p in cluster]
         zs = [p[2] for p in cluster]
-        w = max(xs) - min(xs)
-        h = max(ys) - min(ys)
-        d = max(zs) - min(zs)
+        w = max(xs) - min(xs)   # width (X)
+        d = max(ys) - min(ys)   # depth (Y)
+        h = max(zs) - min(zs)   # height (Z)
 
         # Classify: tall+thin = pillar, wide+short = furniture
         label = "pillar" if h > 500 and max(w, d) < 500 else "obstacle"
@@ -281,10 +284,11 @@ def beam_surface_check(surfaces, ray_origin, ray_dir):
     """
     hits = []
 
-    # Check floor
+    # Check floor (horizontal plane at Z=floor_z, normal = (0,0,1))
     floor = surfaces.get("floor")
     if floor:
-        t = _ray_plane_intersect(ray_origin, ray_dir, [0, 1, 0], -floor["y"])
+        floor_z = floor.get("z", floor.get("y", 0))
+        t = _ray_plane_intersect(ray_origin, ray_dir, [0, 0, 1], -floor_z)
         if t and t > 0:
             pt = (ray_origin[0] + t * ray_dir[0],
                   ray_origin[1] + t * ray_dir[1],

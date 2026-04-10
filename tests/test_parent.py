@@ -522,14 +522,15 @@ def run():
         # Place camera at position and test transform directly
         from parent_server import _pixel_to_stage, _layout, _stage, _fixtures
 
-        # Set up: camera at (1500, 2000, 0) looking at stage center (1500, 0, 750)
-        # Stage 3m x 2m x 1.5m = 3000 x 2000 x 1500 mm
-        # Direction: (0, -2000, 750) -> pan=0, tilt=-atan2(-(-2000), 750) = -69.44
+        # Set up: camera at (1500, 0, 2000) looking at stage center (1500, 750, 0)
+        # Stage: X=width(3000), Y=depth(1500), Z=height(2000). Camera at height Z=2000.
+        # Direction: (0, 750, -2000) -> pan=0, tilt=atan2(2000, 750) ≈ 69.44°
+        # _rotation_to_aim: dz = -sin(tilt)*dist (negative = downward)
         import math as _math
         cam_fix = next(f for f in _fixtures if f['id'] == reg_cam_id)
-        cam_fix['rotation'] = [round(-_math.atan2(-(-2000), 750) * 180 / _math.pi, 2), 0, 0]
+        cam_fix['rotation'] = [round(_math.atan2(2000, 750) * 180 / _math.pi, 2), 0, 0]
         cam_fix['fovDeg'] = 90
-        _layout['children'] = [{'id': reg_cam_id, 'x': 1500, 'y': 2000, 'z': 0}]
+        _layout['children'] = [{'id': reg_cam_id, 'x': 1500, 'y': 0, 'z': 2000}]
 
         # Detection at image center should map near the direction aim
         dets = [{'label': 'person', 'confidence': 0.9,
@@ -540,16 +541,16 @@ def run():
         ok('Transform has label', d0.get('label') == 'person')
         ok('Transform has confidence', d0.get('confidence') == 0.9)
         ok('Transform x is number', isinstance(d0.get('x'), (int, float)))
-        ok('Transform y is 0 (ground)', d0.get('y') == 0)
-        ok('Transform z is number', isinstance(d0.get('z'), (int, float)))
+        ok('Transform y is number', isinstance(d0.get('y'), (int, float)))
+        ok('Transform z is 0 (ground)', d0.get('z') == 0)
         ok('Transform has w', d0.get('w', 0) > 0)
         ok('Transform has h', d0.get('h', 0) > 0)
         ok('Transform has pixelBox', 'pixelBox' in d0)
         # Center detection should be roughly at aim point (within stage bounds)
         ok('Transform x within stage', 0 <= d0['x'] <= 3000,
            f"x={d0['x']}")
-        ok('Transform z within stage', 0 <= d0['z'] <= 1500,
-           f"z={d0['z']}")
+        ok('Transform y within stage', 0 <= d0['y'] <= 1500,
+           f"y={d0['y']}")
 
         # Detection at left edge should map to lower x
         dets_left = [{'label': 'chair', 'confidence': 0.7,

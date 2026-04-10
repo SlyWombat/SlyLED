@@ -37,8 +37,8 @@ def transform_points(points, cam_pos, cam_rotation, cam_aim=None):
     """Transform camera-local points to stage coordinates.
 
     Camera-local frame (pinhole convention): X-right, Y-down, Z-forward.
-    Stage frame: X-right, Y-up, Z-forward.
-    The Y axis is flipped before rotation to convert from camera to stage convention.
+    Stage frame: X=width, Y=depth (forward), Z=height (up).
+    The camera Z-forward maps to stage Y-depth, and camera Y-down flips to stage Z-up.
 
     Rotation composition: RY(yaw) * RX(pitch) * RZ(roll) — YXZ intrinsic Euler angles.
     If cam_aim is provided, computes yaw/pitch from position→aim direction.
@@ -49,7 +49,7 @@ def transform_points(points, cam_pos, cam_rotation, cam_aim=None):
         cam_rotation: (rx, ry, rz) rotation in degrees
         cam_aim: optional (x, y, z) aim point — overrides rotation if provided
 
-    Returns: list of [x, y, z, r, g, b] in stage mm (Y-up)
+    Returns: list of [x, y, z, r, g, b] in stage mm (Z-up)
     """
     cx, cy, cz = cam_pos
 
@@ -57,11 +57,11 @@ def transform_points(points, cam_pos, cam_rotation, cam_aim=None):
     # The depth model gives camera-local 3D coords that need full rotation to stage space
     if cam_aim:
         dx = cam_aim[0] - cx
-        dy = cam_aim[1] - cy
-        dz = cam_aim[2] - cz
-        dist_xz = math.sqrt(dx * dx + dz * dz)
-        ry_rad = math.atan2(dx, dz)  # yaw
-        rx_rad = math.atan2(-dy, dist_xz)  # pitch (negative because looking down = positive pitch)
+        dy = cam_aim[1] - cy  # depth
+        dz = cam_aim[2] - cz  # height
+        dist_xy = math.sqrt(dx * dx + dy * dy)
+        ry_rad = math.atan2(dx, dy)  # yaw (pan in XY plane)
+        rx_rad = math.atan2(-dz, dist_xy)  # pitch (negative because looking down = positive pitch)
         rz_rad = 0
     else:
         rx_rad = math.radians(cam_rotation[0]) if len(cam_rotation) > 0 else 0
@@ -87,7 +87,7 @@ def transform_points(points, cam_pos, cam_rotation, cam_aim=None):
     result = []
     for pt in points:
         lx, lz = pt[0], pt[2]
-        ly = -pt[1]  # Flip Y: camera Y-down → stage Y-up (#257)
+        ly = -pt[1]  # Flip: camera Y-down → stage Z-up (via rotation matrix) (#257)
         # Skip invalid points
         if not (math.isfinite(lx) and math.isfinite(ly) and math.isfinite(lz)):
             continue
@@ -180,19 +180,19 @@ class SpaceScan:
         self._progress = 90
         self._message = f"Normalizing {len(all_points)} points to stage floor..."
 
-        # Floor normalization: detect floor plane, shift Y so floor = Y=0 (#246)
-        floor_y = None
+        # Floor normalization: detect floor plane, shift Z so floor = Z=0 (#246)
+        floor_z = None
         if len(all_points) > 100:
             try:
                 from surface_analyzer import _detect_floor
                 coords = [(p[0], p[1], p[2]) for p in all_points]
                 floor = _detect_floor(coords, tolerance=150)
                 if floor:
-                    floor_y = floor["y"]
-                    log.info("Floor normalization: shifting Y by %d mm (floor was at Y=%d)",
-                             -floor_y, floor_y)
+                    floor_z = floor.get("z", floor.get("y", 0))
+                    log.info("Floor normalization: shifting Z by %d mm (floor was at Z=%d)",
+                             -floor_z, floor_z)
                     for p in all_points:
-                        p[1] -= floor_y  # shift so floor = Y=0
+                        p[2] -= floor_z  # shift so floor = Z=0
             except Exception as e:
                 log.warning("Floor normalization failed: %s", e)
 
@@ -204,8 +204,8 @@ class SpaceScan:
             "cameras": cam_info,
             "points": all_points,
             "totalPoints": len(all_points),
-            "floorNormalized": floor_y is not None,
-            "floorOffset": floor_y,
+            "floorNormalized": floor_z is not None,
+            "floorOffset": floor_z,
         }
 
         self._progress = 100

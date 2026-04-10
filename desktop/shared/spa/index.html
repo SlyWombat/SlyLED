@@ -670,10 +670,11 @@ var _layTool='move'; // 'move' or 'rotate'
 var _undoStack=[];   // [{fid, x, y, z, rotation}]
 function _rotToAim(rot,pos,dist){
   // Convert rotation [rx,ry,rz] degrees + position to aim point [x,y,z]
+  // Stage: X=width, Y=depth(forward), Z=height(up)
   dist=dist||3000;
   var rx=rot?rot[0]:0,ry=rot&&rot.length>1?rot[1]:0;
   var pr=ry*Math.PI/180,tr=rx*Math.PI/180;
-  return[pos[0]+Math.sin(pr)*Math.cos(tr)*dist,pos[1]-Math.sin(tr)*dist,pos[2]+Math.cos(pr)*Math.cos(tr)*dist];
+  return[pos[0]+Math.sin(pr)*Math.cos(tr)*dist,pos[1]+Math.cos(pr)*Math.cos(tr)*dist,pos[2]-Math.sin(tr)*dist];
 }
 var _layoutDirty=false;
 var _panelSections={fixtures:false,objects:false,scene:false}; // collapse state
@@ -2359,7 +2360,8 @@ function _s3dToMm(pos){
   return{x:Math.round(pos.x*1000),y:Math.round(pos.z*1000),z:Math.round(pos.y*1000)};
 }
 function _s3dDir(sdir){
-  // E=+X, N=+Y(up), W=-X, S=-Y(down)
+  // E=+X, N=+Z(up, 3D Y), W=-X, S=-Z(down, 3D -Y)
+  // Stage Z=height maps to Three.js Y-up
   var dirs=[new THREE.Vector3(1,0,0),new THREE.Vector3(0,1,0),new THREE.Vector3(-1,0,0),new THREE.Vector3(0,-1,0)];
   return dirs[sdir]||dirs[0];
 }
@@ -5305,19 +5307,19 @@ function autoArrangeDmx(){
   if(!dmx.length){document.getElementById('hs').textContent='No DMX fixtures to arrange';return;}
   // Fetch stage dimensions for depth
   ra('GET','/api/stage',null,function(st){
-    var stageW=phW;                          // mm (X axis)
-    var stageH=phH;                          // mm (Y axis = height)
-    var stageD=(st&&st.d?st.d*1000:10000);   // mm (Z axis = depth)
-    var topY=Math.round(stageH*0.9);         // 90% up = near ceiling
-    var backZ=Math.round(stageD*0.8);        // 80% depth = 20% from back wall
+    var stageW=phW;                          // mm (X axis = width)
+    var stageD=(st&&st.d?st.d*1000:10000);   // mm (Y axis = depth)
+    var stageH=phH;                          // mm (Z axis = height)
+    var topZ=Math.round(stageH*0.9);         // 90% up = near ceiling
+    var backY=Math.round(stageD*0.8);        // 80% depth = 20% from back wall
     var n=dmx.length;
     var margin=stageW*0.1;                   // 10% margin each side
     var usableW=stageW-2*margin;
     var spacing=n>1?usableW/(n-1):0;
     dmx.forEach(function(f,i){
       f.x=Math.round(margin+i*spacing);
-      f.y=topY;
-      f.z=backZ;
+      f.y=backY;
+      f.z=topZ;
       f._placed=true;
       // Point straight down: tilt -90° (looking at floor)
       f.rotation=[-90,0,0];
