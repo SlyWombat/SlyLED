@@ -273,13 +273,54 @@ struct ChildStringCfg {
 
 `EEPROM_MAGIC = 0xA8` — bump when struct layout changes to force re-initialisation.
 
-### Test suite (parent — 436 assertions)
+### Test suite (parent — 450 assertions)
 
 ```
 powershell.exe -Command "python -X utf8 tests/test_parent.py"
 ```
 
-Covers all API endpoints, all 14 action types, WLED bridge mapping, children CRUD, runners lifecycle, settings, WiFi, layout, action dispatch, edge cases, and factory reset.
+Covers all API endpoints, all 14 action types, WLED bridge mapping, children CRUD, runners lifecycle, settings, WiFi, layout, action dispatch, schema versioning (v3 export, future version rejection), edge cases, and factory reset.
+
+### Test suites (calibration — 223 assertions)
+
+```
+powershell.exe -Command "python -X utf8 tests/test_spatial_math.py"          # 47 assertions
+powershell.exe -Command "python -X utf8 tests/test_mover_calibration.py"     # 99 assertions
+powershell.exe -Command "python -X utf8 tests/test_beam_detector.py"         # 35 (requires OpenCV)
+powershell.exe -Command "python -X utf8 tests/test_surface_analyzer.py"      # 42 assertions
+```
+
+Covers: coordinate transforms, pan/tilt math, grid interpolation, Newton inverse, RANSAC floor/wall detection, obstacle clustering, beam detection with synthetic frames, DMX buffer layout.
+
+### Test suites (visual — Playwright)
+
+```
+powershell.exe -Command "python -X utf8 tests/test_unified_3d.py"           # 17 assertions
+powershell.exe -Command "python -X utf8 tests/test_edit_rotation.py"        # 17 assertions
+powershell.exe -Command "python -X utf8 tests/test_aruco_click.py"          # 9 assertions
+```
+
+Covers: 3D viewport on Dashboard/Runtime/Layout, tab switching round-trip, fixture edit rotation persistence, ArUco marker modal.
+
+### Regression tests (weekly — tests/regression/)
+
+```
+powershell.exe -Command "python -X utf8 tests/regression/run_all.py"        # runs all 4
+powershell.exe -Command "python -X utf8 tests/regression/test_stage_setup.py"    # 11
+powershell.exe -Command "python -X utf8 tests/regression/test_layout_edit.py"    # 8
+powershell.exe -Command "python -X utf8 tests/regression/test_timeline_bake.py"  # 10
+powershell.exe -Command "python -X utf8 tests/regression/test_mover_tracking.py" # 11
+```
+
+End-to-end: fixture creation → layout → timeline → bake → show playback → 3D runtime verification. Each test is self-contained with own server + factory reset.
+
+### Developer Management GUI
+
+```
+python tools/devgui/server.py    # http://localhost:9090
+```
+
+Standalone Flask app for running tests (auto-discovery, SSE live output), building releases (PyInstaller + Inno Setup), version dashboard (10 tracked sources), manual build (EN/FR), and website deploy.
 
 ### Test suite (child)
 
