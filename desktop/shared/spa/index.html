@@ -767,12 +767,17 @@ var API={
   fwCheck:'/api/firmware/check',fwLatest:'/api/firmware/latest',
   oflSearch:'/api/dmx-profiles/ofl/search',oflImport:'/api/dmx-profiles/ofl/import-by-id',
 };
+// ra() — callback-style XHR (used by 240+ call sites)
+// api() — Promise wrapper for async/await chains
+// Both accept API constant paths (e.g. API.children) or literal strings.
 function ra(method,path,body,callback){
   var x=new XMLHttpRequest();
   x.open(method,path,true);
+  x.timeout=30000;
   if(body)x.setRequestHeader('Content-Type','application/json');
   x.onload=function(){try{if(callback)callback(JSON.parse(x.responseText));}catch(e){if(callback)callback(null);}};
   x.onerror=function(){if(callback)callback(null);};
+  x.ontimeout=function(){console.warn('XHR timeout:',method,path);if(callback)callback(null);};
   x.send(body?JSON.stringify(body):null);
 }
 function api(method,path,body){
