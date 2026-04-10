@@ -97,6 +97,18 @@ body.light .li:hover{border-color:#3b82f6}
 <div id='t-setup'   class='tab' style='display:none'></div>
 
 <div id='t-layout' class='tab' style='display:none'>
+  <!-- Show-running banner (hides toolbar when active) -->
+  <div id='lay-show-banner' style='display:none;background:#1e293b;border:1px solid #334155;border-radius:6px;padding:.8em 1.2em;margin-bottom:.6em'>
+    <div style='display:flex;align-items:center;gap:.6em'>
+      <span style='font-size:1.2em'>&#9654;</span>
+      <div style='flex:1'>
+        <div style='font-weight:bold;color:#22d3ee;font-size:.9em' id='lay-show-name'>Show in progress</div>
+        <div style='color:#94a3b8;font-size:.78em'>Editing is disabled during playback. Go to Dashboard for live view.</div>
+      </div>
+      <button class='btn' onclick='showTab("dash")' style='background:#0e7490;color:#fff;font-size:.82em'>Dashboard</button>
+      <button class='btn btn-off' id='lay-show-stop' style='font-size:.82em'>Stop Show</button>
+    </div>
+  </div>
   <!-- Hint -->
   <div style='display:flex;align-items:center;gap:.5em;margin-bottom:.4em'>
     <span id='lay-hint' style='color:#888;font-size:.82em;flex:1'>Drag fixtures from sidebar onto stage. Double-click to edit position. (0,0)=bottom-left.</span>
@@ -4623,7 +4635,30 @@ function toggleHelp(){
   });
 }
 
+function _layCheckShowRunning(){
+  ra('GET','/api/settings',null,function(s){
+    var running=s&&s.runnerRunning;
+    var banner=document.getElementById('lay-show-banner');
+    var toolbar=document.getElementById('lay-toolbar');
+    if(banner)banner.style.display=running?'block':'none';
+    if(toolbar)toolbar.style.opacity=running?'0.3':'1';
+    if(toolbar)toolbar.style.pointerEvents=running?'none':'auto';
+    // Disable TransformControls during playback
+    if(_s3d.tctl)_s3d.tctl.enabled=!running;
+    // Wire stop button
+    var stopBtn=document.getElementById('lay-show-stop');
+    if(stopBtn&&running&&s.activeTimeline>=0){
+      stopBtn.onclick=function(){ra('POST','/api/timelines/'+s.activeTimeline+'/stop',{},function(){_layCheckShowRunning();});};
+    }
+    if(running){
+      var name=s.activeTimelineName||'Timeline';
+      var el=document.getElementById('lay-show-name');
+      if(el)el.textContent='Playing: '+name;
+    }
+  });
+}
 function loadLayout(){
+  _layCheckShowRunning();
   ra('GET','/api/settings',null,function(s){
     if(s)units=s.units||0;
     ra('GET','/api/stage',null,function(st){
