@@ -6197,28 +6197,37 @@ function _checkCamCalWarning(){
 }
 
 function _printAruco(){
-  // Fetch ArUco SVGs from the first available camera node
-  var cams=(_fixtures||[]).filter(function(f){return f.fixtureType==='camera'&&f.cameraIp;});
-  if(!cams.length){document.getElementById('hs').textContent='No camera nodes available to generate markers';return;}
-  var ip=cams[0].cameraIp;
-  var x=new XMLHttpRequest();
-  x.open('GET','http://'+ip+':5000/calibrate/aruco/generate?count=6&size=150');
-  x.timeout=10000;
-  x.onload=function(){
-    try{
-      var r=JSON.parse(x.responseText);
-      if(!r.ok)return;
-      // Open each marker in a new tab for printing
-      r.markers.forEach(function(m){
-        var blob=new Blob([m.svg],{type:'image/svg+xml'});
-        var url=URL.createObjectURL(blob);
-        window.open(url,'_blank');
-      });
-      document.getElementById('hs').textContent='Opened '+r.count+' ArUco markers — print each at 100% scale';
-    }catch(e){document.getElementById('hs').textContent='Failed to generate markers';}
-  };
-  x.onerror=function(){document.getElementById('hs').textContent='Camera node unreachable';};
-  x.send();
+  // Generate ArUco 4x4 markers locally as SVG (no camera node required)
+  // ArUco 4x4_50 dictionary — 6 markers (IDs 0-5), each is a 6x6 grid (4x4 data + border)
+  var dict=[
+    [1,0,0,1, 1,0,0,0, 0,1,0,1, 0,1,1,1],  // ID 0
+    [1,1,0,0, 1,0,1,0, 1,0,0,1, 0,0,1,1],  // ID 1
+    [0,1,1,0, 1,1,0,0, 0,0,1,0, 0,1,0,1],  // ID 2
+    [0,0,1,1, 1,1,1,0, 1,1,0,0, 1,1,0,0],  // ID 3
+    [1,0,1,0, 0,0,0,1, 1,1,1,0, 0,1,0,0],  // ID 4
+    [0,1,0,1, 0,0,1,1, 0,0,1,1, 1,0,1,0],  // ID 5
+  ];
+  var count=6,sizeMm=150,sq=Math.round(sizeMm/6);
+  var opened=0;
+  for(var mid=0;mid<count;mid++){
+    var bits=dict[mid];
+    var gs=6; // grid size (4x4 + 1px border on each side)
+    var w=gs*sq,h=gs*sq;
+    var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'mm" height="'+(h+12)+'mm" viewBox="0 0 '+w+' '+(h+12)+'">';
+    svg+='<rect width="'+w+'" height="'+h+'" fill="black"/>'; // black border
+    // Inner 4x4 data cells
+    for(var r=0;r<4;r++)for(var c=0;c<4;c++){
+      if(bits[r*4+c]===1){
+        svg+='<rect x="'+((c+1)*sq)+'" y="'+((r+1)*sq)+'" width="'+sq+'" height="'+sq+'" fill="white"/>';
+      }
+    }
+    svg+='<text x="'+(w/2)+'" y="'+(h+9)+'" text-anchor="middle" font-size="4" font-family="monospace" fill="#333">ArUco 4x4 ID '+mid+' — '+sizeMm+'mm — Print at 100% scale</text>';
+    svg+='</svg>';
+    var blob=new Blob([svg],{type:'image/svg+xml'});
+    window.open(URL.createObjectURL(blob),'_blank');
+    opened++;
+  }
+  document.getElementById('hs').textContent='Opened '+opened+' ArUco markers for printing';
 }
 
 function _printCheckerboard(){
