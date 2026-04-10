@@ -6228,8 +6228,8 @@ function _checkCamCalWarning(){
 }
 
 function _printAruco(){
-  // Generate ArUco 4x4 markers locally as SVG (no camera node required)
-  // ArUco 4x4_50 dictionary — 6 markers (IDs 0-5), each is a 6x6 grid (4x4 data + border)
+  // Generate all 6 ArUco 4x4 markers in a single printable HTML page
+  // ArUco 4x4_50 dictionary — IDs 0-5, each is a 6x6 grid (4x4 data + 1px border)
   var dict=[
     [1,0,0,1, 1,0,0,0, 0,1,0,1, 0,1,1,1],  // ID 0
     [1,1,0,0, 1,0,1,0, 1,0,0,1, 0,0,1,1],  // ID 1
@@ -6238,27 +6238,38 @@ function _printAruco(){
     [1,0,1,0, 0,0,0,1, 1,1,1,0, 0,1,0,0],  // ID 4
     [0,1,0,1, 0,0,1,1, 0,0,1,1, 1,0,1,0],  // ID 5
   ];
-  var count=6,sizeMm=150,sq=Math.round(sizeMm/6);
-  var opened=0;
-  for(var mid=0;mid<count;mid++){
+  var sizeMm=150,sq=Math.round(sizeMm/6);
+  // Build a single HTML page with all markers (one per printed page)
+  var html='<!DOCTYPE html><html><head><title>SlyLED ArUco Markers</title><style>';
+  html+='@page{size:letter;margin:15mm}body{font-family:sans-serif;margin:0}';
+  html+='.marker{page-break-after:always;text-align:center;padding-top:20mm}';
+  html+='.marker:last-child{page-break-after:auto}';
+  html+='svg{display:block;margin:0 auto}';
+  html+='p{margin-top:8mm;font-size:14pt;color:#333}';
+  html+='</style></head><body>';
+  for(var mid=0;mid<dict.length;mid++){
     var bits=dict[mid];
-    var gs=6; // grid size (4x4 + 1px border on each side)
-    var w=gs*sq,h=gs*sq;
-    var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'mm" height="'+(h+12)+'mm" viewBox="0 0 '+w+' '+(h+12)+'">';
-    svg+='<rect width="'+w+'" height="'+h+'" fill="black"/>'; // black border
-    // Inner 4x4 data cells
+    var gs=6,w=gs*sq,h=gs*sq;
+    html+='<div class="marker">';
+    html+='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'mm" height="'+h+'mm" viewBox="0 0 '+w+' '+h+'">';
+    html+='<rect width="'+w+'" height="'+h+'" fill="black"/>';
     for(var r=0;r<4;r++)for(var c=0;c<4;c++){
       if(bits[r*4+c]===1){
-        svg+='<rect x="'+((c+1)*sq)+'" y="'+((r+1)*sq)+'" width="'+sq+'" height="'+sq+'" fill="white"/>';
+        html+='<rect x="'+((c+1)*sq)+'" y="'+((r+1)*sq)+'" width="'+sq+'" height="'+sq+'" fill="white"/>';
       }
     }
-    svg+='<text x="'+(w/2)+'" y="'+(h+9)+'" text-anchor="middle" font-size="4" font-family="monospace" fill="#333">ArUco 4x4 ID '+mid+' — '+sizeMm+'mm — Print at 100% scale</text>';
-    svg+='</svg>';
-    var blob=new Blob([svg],{type:'image/svg+xml'});
-    window.open(URL.createObjectURL(blob),'_blank');
-    opened++;
+    html+='</svg>';
+    html+='<p>ArUco 4x4 &mdash; ID '+mid+' &mdash; '+sizeMm+'mm &mdash; Print at 100% scale</p>';
+    html+='</div>';
   }
-  document.getElementById('hs').textContent='Opened '+opened+' ArUco markers for printing';
+  html+='</body></html>';
+  // Single popup — no blocker issues
+  var w=window.open('','_blank');
+  if(!w){document.getElementById('hs').textContent='Popup blocked — please allow popups for this site';return;}
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  document.getElementById('hs').textContent='Opened ArUco marker print page (6 markers, one per sheet)';
 }
 
 function _printCheckerboard(){
