@@ -2180,10 +2180,11 @@ function s3dLoadChildren(){
       if(_fix3d&&(_fix3d.fixtureType==='dmx'||_fix3d.fixtureType==='camera')){
         var _fRot=_fix3d.rotation||[0,0,0];
         var aim=_rotToAim(_fRot,[c.x||0,c.y||0,c.z||0]);
-        var aimLocal=new THREE.Vector3((aim[0]-(c.x||0))/1000,(aim[1]-(c.y||0))/1000,(aim[2]-(c.z||0))/1000);
+        // Stage→Three.js: X=X, Y(depth)→Z, Z(height)→Y
+        var aimLocal=new THREE.Vector3((aim[0]-(c.x||0))/1000,(aim[2]-(c.z||0))/1000,(aim[1]-(c.y||0))/1000);
         var beamLen=aimLocal.length();
-        // Cone shown for DMX fixtures that have non-zero rotation
-        var showCone=_fix3d.fixtureType==='dmx'&&(_fRot[0]!==0||_fRot[1]!==0);
+        // Cone shown for DMX and camera fixtures with non-zero rotation
+        var showCone=(_fRot[0]!==0||_fRot[1]!==0)||_fix3d.fixtureType==='camera';
         if(beamLen>0.01&&showCone){
           var bwDeg=_fix3d.fixtureType==='camera'?(_fix3d.fovDeg||60):15;
           // Use cached profile beamWidth (sync) — _profileCache populated by emulator/layout
@@ -2670,18 +2671,20 @@ function editFixture(id){
     h+='</div>';
     h+='<div id="fx-test-ch"></div>';
     h+='</div>';
-    // Orientation test panel
+    // Orientation calibration panel
     var orient=f.orientation||{};
     h+='<div style="margin-top:.8em;border-top:1px solid #1e293b;padding-top:.6em">';
-    h+='<div style="font-weight:bold;font-size:.85em;margin-bottom:.4em">Fixture Orientation '
-      +(orient.verified?'<span style="color:#4ade80">\u2713 Set</span>':'<span style="color:#f59e0b">Not set</span>')+'</div>';
+    h+='<div style="font-weight:bold;font-size:.85em;margin-bottom:.4em">Motor Calibration '
+      +(orient.verified?'<span style="color:#4ade80">\u2713 Calibrated</span>':'<span style="color:#64748b">(optional)</span>')+'</div>';
     if(orient.verified){
       h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.3em">'
-        +'Pan sign: '+(orient.panSign>0?'+X (right)':'-X (left)')
-        +' | Tilt sign: '+(orient.tiltSign>0?'-Y (down)':'+Y (up)')
+        +'Pan: '+(orient.panSign>0?'normal':'\u21c4 reversed')
+        +' | Tilt: '+(orient.tiltSign<0?'normal':'\u21c5 reversed')
         +'</div>';
+    } else {
+      h+='<div style="font-size:.78em;color:#64748b;margin-bottom:.3em">Use the upside-down checkbox above if truss-mounted. Run this test with live DMX for precise motor direction calibration.</div>';
     }
-    h+='<button class="btn" onclick="_orientTest('+id+')" style="background:#4c1d95;color:#e9d5ff;font-size:.8em">Test Orientation</button>';
+    h+='<button class="btn" onclick="_orientTest('+id+')" style="background:#4c1d95;color:#e9d5ff;font-size:.8em">Test with DMX</button>';
     h+='</div>';
   }else if(ft==='camera'){
     h+='<label>FOV (degrees)</label><input id="fx-fov" type="number" value="'+(f.fovDeg||60)+'" min="1" max="180" style="width:100%;margin-bottom:.4em">';
