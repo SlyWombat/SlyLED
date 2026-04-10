@@ -1838,7 +1838,7 @@ function showDetails(id){
 var _strCol=['#0ff','#f0f','#ff0','#0f0','#f80','#08f','#f08','#8f0'];
 var _dirDx=[1,0,-1,0],_dirDy=[0,-1,0,1]; // E,N,W,S in canvas-Y-down coords
 var _layDragId=null;
-var _layView='front'; // 'front', 'top', 'side', '3d'
+var _layView='3d'; // 'front', 'top', 'side', '3d'
 
 function _isPlaced(c){return c.positioned||c._placed||(c.x>0||c.y>0||c.z>0);}
 
@@ -1975,8 +1975,8 @@ function s3dInit(){
 
   _s3d.inited=true;
   s3dAnimate();
-  // Apply default front view after init
-  setView('front');
+  // Apply default 3D view after init
+  setView('3d');
 }
 
 // Right-click handler for 3D scene — dismiss scan ghosts
@@ -2135,6 +2135,15 @@ function s3dLoadChildren(){
     boxLine.position.set(_s3d.stageW/2,_s3d.stageH/2,_s3d.stageD/2);
     boxLine.userData.stageBox=true;
     _s3d.scene.add(boxLine);
+
+    // Stage dimension labels along edges
+    _s3d.scene.children.forEach(function(c){if(c.userData&&c.userData.stageDimLabel){
+      if(c.material&&c.material.map)c.material.map.dispose();if(c.material)c.material.dispose();_s3d.scene.remove(c);
+    }});
+    var sw=_s3d.stageW,sh=_s3d.stageH,sd=_s3d.stageD;
+    var wLbl=_s3dLabel(Math.round(sw*1000)+'mm');wLbl.position.set(sw/2,-0.15,0);wLbl.userData.stageDimLabel=true;wLbl.scale.set(0.6,0.15,1);_s3d.scene.add(wLbl);
+    var dLbl=_s3dLabel(Math.round(sd*1000)+'mm');dLbl.position.set(0,-0.15,sd/2);dLbl.userData.stageDimLabel=true;dLbl.scale.set(0.6,0.15,1);_s3d.scene.add(dLbl);
+    var hLbl=_s3dLabel(Math.round(sh*1000)+'mm');hLbl.position.set(-0.15,sh/2,0);hLbl.userData.stageDimLabel=true;hLbl.scale.set(0.6,0.15,1);_s3d.scene.add(hLbl);
 
     // Camera positioning is handled by setView() — don't reset on every reload
 
