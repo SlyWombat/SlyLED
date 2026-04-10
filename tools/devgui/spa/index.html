@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>SlyLED DevGUI</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0f1a;color:#e2e8f0;min-height:100vh}
+
+#hdr{background:#0b1120;padding:.8em 2em;border-bottom:1px solid rgba(51,65,85,.3);display:flex;align-items:center;gap:.8em}
+#hdr h1{font-family:'Space Grotesk',sans-serif;font-size:1.4em;letter-spacing:.08em;text-transform:uppercase}
+#hdr h1 span{color:#22d3ee}
+#hdr .sub{font-size:.8em;color:#64748b;margin-left:.5em}
+
+nav{background:#0b1120;padding:.3em 1.5em;border-bottom:1px solid rgba(51,65,85,.2);display:flex;gap:0}
+.tnav{background:none;border:none;color:#64748b;padding:.55em 1.1em;cursor:pointer;font-size:.78em;font-family:'Space Grotesk',sans-serif;font-weight:600;letter-spacing:.12em;text-transform:uppercase;border-bottom:2px solid transparent;transition:color .2s}
+.tnav:hover{color:#f1f5f9}
+.tact{color:#22d3ee;border-bottom:2px solid #22d3ee;text-shadow:0 0 10px rgba(34,211,238,.4)}
+
+.tab{display:none;padding:1.5em}
+.tab.active{display:block}
+
+.card{background:#111827;border:1px solid rgba(51,65,85,.3);border-radius:6px;padding:1.2em 1.5em;margin-bottom:1em;transition:border-color .2s,box-shadow .2s}
+.card:hover{border-color:rgba(34,211,238,.15);box-shadow:0 0 12px rgba(34,211,238,.04)}
+.card-title{font-family:'Space Grotesk',sans-serif;font-size:.9em;font-weight:600;color:#f1f5f9;margin-bottom:.8em;letter-spacing:.05em;text-transform:uppercase}
+.card-row{display:flex;gap:1em;flex-wrap:wrap}
+.card-row .card{flex:1;min-width:260px}
+
+.tbl{border-collapse:collapse;width:100%}
+.tbl th,.tbl td{padding:.45em .7em;border:1px solid rgba(51,65,85,.2);text-align:left;font-size:.82em}
+.tbl th{background:#0f172a;color:#94a3b8;font-family:'Space Grotesk',sans-serif;font-weight:600;letter-spacing:.08em;text-transform:uppercase;font-size:.72em}
+.tbl tr:nth-child(even){background:rgba(15,23,42,.4)}
+
+.badge{display:inline-block;padding:.15em .6em;border-radius:10px;font-size:.72em;font-weight:600;letter-spacing:.03em}
+.b-pass{background:#14532d;color:#86efac}
+.b-fail{background:#7f1d1d;color:#fca5a5}
+.b-run{background:#1e3a5f;color:#93c5fd;animation:pulse 1.5s infinite}
+.b-idle{background:rgba(30,30,30,.8);color:#64748b}
+.b-quick{background:#1e3a5f;color:#93c5fd}
+.b-visual{background:#4c1d95;color:#c4b5fd}
+.b-regression{background:#713f12;color:#fde68a}
+.b-hardware{background:#7f1d1d;color:#fca5a5}
+
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+.btn{display:inline-block;padding:.4em 1em;border-radius:5px;border:none;cursor:pointer;font-size:.78em;font-family:'Space Grotesk',sans-serif;font-weight:600;letter-spacing:.04em;transition:all .15s}
+.btn:hover{opacity:.9;transform:translateY(-1px)}
+.btn:active{transform:scale(.97)}
+.btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.btn-primary{background:linear-gradient(135deg,#3b82f6,#2563eb);color:#fff}
+.btn-primary:hover{box-shadow:0 0 12px rgba(59,130,246,.3)}
+.btn-danger{background:#7f1d1d;color:#fca5a5}
+.btn-danger:hover{box-shadow:0 0 12px rgba(239,68,68,.2)}
+.btn-accent{background:rgba(34,211,238,.15);color:#22d3ee;border:1px solid rgba(34,211,238,.25)}
+.btn-accent:hover{background:rgba(34,211,238,.25)}
+.btn-sm{padding:.25em .7em;font-size:.72em}
+.btn-ghost{background:none;color:#64748b;border:1px solid rgba(51,65,85,.3)}
+.btn-ghost:hover{color:#e2e8f0;border-color:#64748b}
+
+input,select{background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:4px;padding:.35em .5em;font-family:'Inter',sans-serif;font-size:.82em;transition:border-color .2s}
+input:focus,select:focus{border-color:#3b82f6;outline:none;box-shadow:0 0 0 2px rgba(59,130,246,.2)}
+
+.log-panel{background:#020617;border:1px solid rgba(51,65,85,.3);border-radius:6px;padding:.8em;font-family:'JetBrains Mono','Fira Code',monospace;font-size:.75em;line-height:1.7;max-height:420px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;color:#94a3b8}
+.log-panel .pass{color:#86efac}
+.log-panel .fail{color:#fca5a5;font-weight:600}
+.log-panel .info{color:#93c5fd}
+.log-panel .sep{color:#334155}
+
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.8em}
+.stat-box{background:#0f172a;border:1px solid rgba(51,65,85,.2);border-radius:6px;padding:1em;text-align:center}
+.stat-val{font-size:1.8em;font-weight:700;font-family:'Space Grotesk',sans-serif;color:#22d3ee}
+.stat-label{font-size:.72em;color:#64748b;text-transform:uppercase;letter-spacing:.1em;margin-top:.3em}
+
+.test-list{margin-top:.5em}
+.test-item{display:flex;align-items:center;gap:.6em;padding:.35em .5em;border-radius:4px;font-size:.82em;transition:background .15s}
+.test-item:hover{background:rgba(51,65,85,.2)}
+.test-item .name{flex:1;color:#cbd5e1}
+.test-item .count{color:#64748b;font-size:.75em}
+
+.expand-btn{background:none;border:none;color:#64748b;cursor:pointer;font-size:.8em;padding:.2em .4em;transition:color .15s}
+.expand-btn:hover{color:#e2e8f0}
+
+.version-input{width:90px}
+.commit-hash{color:#22d3ee;font-family:monospace;font-size:.82em}
+.commit-msg{color:#cbd5e1;font-size:.82em;margin-left:.5em}
+
+.hidden{display:none}
+.mt-1{margin-top:.8em}
+.mb-1{margin-bottom:.8em}
+.flex-between{display:flex;justify-content:space-between;align-items:center}
+.gap-sm{gap:.5em}
+</style>
+</head>
+<body>
+<div id='hdr'>
+  <h1>Sly<span>LED</span></h1>
+  <span class='sub'>Developer GUI</span>
+</div>
+<nav>
+  <button class='tnav tact' onclick='showTab("tests")'>Tests</button>
+  <button class='tnav' onclick='showTab("builds")'>Builds</button>
+  <button class='tnav' onclick='showTab("dashboard")'>Dashboard</button>
+</nav>
+
+<!-- ═══ TESTS TAB ═══ -->
+<div id='tab-tests' class='tab active'>
+  <div class='card-row' id='test-categories'></div>
+
+  <div class='card mt-1'>
+    <div class='flex-between'>
+      <div class='card-title'>Output Log</div>
+      <div>
+        <span id='test-status-badge' class='badge b-idle'>Idle</span>
+        <span id='test-pass-count' class='badge b-pass hidden'>0 passed</span>
+        <span id='test-fail-count' class='badge b-fail hidden'>0 failed</span>
+        <button class='btn btn-danger btn-sm' id='btn-cancel-test' onclick='cancelTest()' disabled>Cancel</button>
+      </div>
+    </div>
+    <div class='log-panel mt-1' id='test-log'>Waiting for test run...</div>
+  </div>
+</div>
+
+<!-- ═══ BUILDS TAB ═══ -->
+<div id='tab-builds' class='tab'>
+  <div class='card'>
+    <div class='card-title'>Version Dashboard</div>
+    <table class='tbl' id='version-table'>
+      <thead><tr><th>Component</th><th>File</th><th>Current</th><th>Override</th></tr></thead>
+      <tbody id='version-body'></tbody>
+    </table>
+  </div>
+
+  <div class='card-row'>
+    <div class='card'>
+      <div class='card-title'>Build</div>
+      <div style='display:flex;gap:.5em;align-items:center;flex-wrap:wrap'>
+        <select id='build-type'>
+          <option value='quick'>Quick (Version check)</option>
+          <option value='exe'>Windows Exe</option>
+          <option value='full'>Full Release</option>
+        </select>
+        <button class='btn btn-primary' id='btn-build' onclick='startBuild()'>Build</button>
+        <button class='btn btn-danger btn-sm' id='btn-cancel-build' onclick='cancelBuild()' disabled>Cancel</button>
+        <span id='build-status-badge' class='badge b-idle'>Idle</span>
+      </div>
+      <div class='log-panel mt-1' id='build-log'>Waiting for build...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ DASHBOARD TAB ═══ -->
+<div id='tab-dashboard' class='tab'>
+  <div class='stat-grid mb-1' id='dash-stats'></div>
+
+  <div class='card-row'>
+    <div class='card'>
+      <div class='card-title'>Git Status</div>
+      <div id='git-info'>Loading...</div>
+    </div>
+    <div class='card'>
+      <div class='card-title'>Recent Commits</div>
+      <div id='git-commits'>Loading...</div>
+    </div>
+  </div>
+
+  <div class='card mt-1'>
+    <div class='card-title'>Quick Actions</div>
+    <div style='display:flex;gap:.5em;flex-wrap:wrap'>
+      <button class='btn btn-primary' onclick='runSuite("quick")'>Run Quick Tests</button>
+      <button class='btn btn-accent' onclick='showTab("builds");startBuild()'>Build Quick</button>
+      <button class='btn btn-ghost' onclick='refreshDashboard()'>Refresh</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── State ── */
+let allTests = [];
+let evtSource = null;
+let testRunning = false;
+let buildRunning = false;
+
+/* ── Tab switching ── */
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tnav').forEach(b => b.classList.remove('tact'));
+  const tab = document.getElementById('tab-' + name);
+  if (tab) tab.classList.add('active');
+  event.target.classList.add('tact');
+  if (name === 'dashboard') refreshDashboard();
+}
+
+/* ── API helpers ── */
+async function api(path, opts) {
+  try {
+    const r = await fetch(path, opts);
+    return await r.json();
+  } catch (e) {
+    console.error('API error:', path, e);
+    return null;
+  }
+}
+
+/* ── Tests ── */
+async function loadTests() {
+  const data = await api('/api/tests');
+  if (!data) return;
+  allTests = data;
+  renderTestCategories();
+}
+
+function renderTestCategories() {
+  const cats = {};
+  allTests.forEach(t => {
+    if (!cats[t.category]) cats[t.category] = {tests: [], assertions: 0};
+    cats[t.category].tests.push(t);
+    cats[t.category].assertions += t.assertionCount;
+  });
+
+  const order = ['quick', 'visual', 'regression', 'hardware'];
+  const labels = {quick: 'Quick (Unit)', visual: 'Visual (Playwright)', regression: 'Regression', hardware: 'Hardware'};
+  const el = document.getElementById('test-categories');
+  el.innerHTML = '';
+
+  order.forEach(cat => {
+    if (!cats[cat]) return;
+    const c = cats[cat];
+    const div = document.createElement('div');
+    div.className = 'card';
+    div.innerHTML = `
+      <div class='flex-between'>
+        <div class='card-title'><span class='badge b-${cat}'>${labels[cat] || cat}</span></div>
+        <button class='btn btn-primary btn-sm' onclick='runSuite("${cat}")' ${testRunning ? 'disabled' : ''}>Run All</button>
+      </div>
+      <div style='color:#64748b;font-size:.82em'>${c.tests.length} files &middot; ${c.assertions} assertions</div>
+      <div class='flex-between mt-1'>
+        <span id='result-${cat}' class='badge b-idle'>No results</span>
+        <button class='expand-btn' onclick='toggleList("list-${cat}")'>&#9660; Show files</button>
+      </div>
+      <div class='test-list hidden' id='list-${cat}'>
+        ${c.tests.map(t => `
+          <div class='test-item'>
+            <span class='name'>${t.name}</span>
+            <span class='count'>${t.assertionCount}</span>
+            <button class='btn btn-accent btn-sm' onclick='runFile("${t.file}")' ${testRunning ? 'disabled' : ''}>Run</button>
+          </div>
+        `).join('')}
+      </div>
+    `;
+    el.appendChild(div);
+  });
+}
+
+function toggleList(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('hidden');
+}
+
+async function runSuite(suite) {
+  if (testRunning) return;
+  clearLog('test-log');
+  const r = await api('/api/tests/run', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({suite}),
+  });
+  if (r && r.ok) {
+    setTestRunning(true);
+    showTab('tests');
+  } else {
+    appendLog('test-log', 'Error: ' + (r ? r.message : 'Request failed'), 'fail');
+  }
+}
+
+async function runFile(file) {
+  if (testRunning) return;
+  clearLog('test-log');
+  const r = await api('/api/tests/run', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({file}),
+  });
+  if (r && r.ok) {
+    setTestRunning(true);
+    // Switch to Tests tab
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tnav').forEach(b => b.classList.remove('tact'));
+    document.getElementById('tab-tests').classList.add('active');
+    document.querySelector('.tnav').classList.add('tact');
+  } else {
+    appendLog('test-log', 'Error: ' + (r ? r.message : 'Request failed'), 'fail');
+  }
+}
+
+async function cancelTest() {
+  await api('/api/tests/cancel', {method: 'POST'});
+}
+
+function setTestRunning(running) {
+  testRunning = running;
+  document.getElementById('btn-cancel-test').disabled = !running;
+  const badge = document.getElementById('test-status-badge');
+  if (running) {
+    badge.className = 'badge b-run';
+    badge.textContent = 'Running...';
+  } else {
+    badge.className = 'badge b-idle';
+    badge.textContent = 'Idle';
+  }
+  document.getElementById('test-pass-count').classList.toggle('hidden', !running);
+  document.getElementById('test-fail-count').classList.toggle('hidden', !running);
+  // Refresh buttons
+  renderTestCategories();
+}
+
+/* ── SSE ── */
+function connectSSE() {
+  if (evtSource) evtSource.close();
+  evtSource = new EventSource('/api/tests/stream');
+
+  evtSource.addEventListener('test_start', e => {
+    const d = JSON.parse(e.data);
+    setTestRunning(true);
+    appendLog('test-log', '=== ' + d.suite + ' ===', 'info');
+  });
+
+  evtSource.addEventListener('test_line', e => {
+    const d = JSON.parse(e.data);
+    let cls = '';
+    if (d.line.includes('[PASS]')) cls = 'pass';
+    else if (d.line.includes('[FAIL]')) cls = 'fail';
+    else if (d.line.startsWith('===')) cls = 'sep';
+    appendLog('test-log', d.line, cls);
+    if (d.passed !== undefined) {
+      const pe = document.getElementById('test-pass-count');
+      pe.textContent = d.passed + ' passed';
+      pe.classList.remove('hidden');
+    }
+    if (d.failed !== undefined) {
+      const fe = document.getElementById('test-fail-count');
+      fe.textContent = d.failed + ' failed';
+      fe.classList.remove('hidden');
+      if (d.failed > 0) fe.className = 'badge b-fail';
+    }
+  });
+
+  evtSource.addEventListener('test_done', e => {
+    const d = JSON.parse(e.data);
+    setTestRunning(false);
+    const badge = document.getElementById('test-status-badge');
+    if (d.cancelled) {
+      badge.className = 'badge b-fail';
+      badge.textContent = 'Cancelled';
+      appendLog('test-log', '--- Cancelled ---', 'fail');
+    } else if (d.failed > 0) {
+      badge.className = 'badge b-fail';
+      badge.textContent = d.failed + ' Failed';
+    } else {
+      badge.className = 'badge b-pass';
+      badge.textContent = 'All Passed';
+    }
+    loadLastResults();
+  });
+
+  evtSource.addEventListener('build_start', e => {
+    setBuildRunning(true);
+  });
+
+  evtSource.addEventListener('build_line', e => {
+    const d = JSON.parse(e.data);
+    appendLog('build-log', d.line);
+  });
+
+  evtSource.addEventListener('build_done', e => {
+    const d = JSON.parse(e.data);
+    setBuildRunning(false);
+    const badge = document.getElementById('build-status-badge');
+    if (d.cancelled) {
+      badge.className = 'badge b-fail';
+      badge.textContent = 'Cancelled';
+    } else if (d.exitCode === 0) {
+      badge.className = 'badge b-pass';
+      badge.textContent = 'Success';
+    } else {
+      badge.className = 'badge b-fail';
+      badge.textContent = 'Failed (' + d.exitCode + ')';
+    }
+  });
+
+  evtSource.onerror = () => {
+    setTimeout(connectSSE, 3000);
+  };
+}
+
+/* ── Builds ── */
+async function loadVersions() {
+  const data = await api('/api/versions');
+  if (!data) return;
+  const body = document.getElementById('version-body');
+  body.innerHTML = '';
+  const order = ['parent_server', 'installer', 'android', 'camera'];
+  const labels = {
+    parent_server: 'App (parent_server.py)',
+    installer: 'Installer (.iss)',
+    android: 'Android (build.gradle.kts)',
+    camera: 'Camera (camera_server.py)',
+  };
+
+  // App versions
+  order.forEach(key => {
+    if (!data[key]) return;
+    const d = data[key];
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${labels[key] || key}</td>
+      <td style='color:#64748b;font-size:.78em'>${d.path}</td>
+      <td><strong>${d.version || 'N/A'}</strong></td>
+      <td>
+        <input class='version-input' id='ver-${key}' value='${d.version || ''}' placeholder='x.y.z'>
+        <button class='btn btn-accent btn-sm' onclick='setVersion("${key}")'>Set</button>
+      </td>
+    `;
+    body.appendChild(tr);
+  });
+
+  // Firmware versions
+  Object.keys(data).filter(k => k.startsWith('firmware_')).forEach(key => {
+    const d = data[key];
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${d.name || key}</td>
+      <td style='color:#64748b;font-size:.78em'>${d.path}</td>
+      <td><strong>${d.version || 'N/A'}</strong></td>
+      <td>
+        <input class='version-input' id='ver-${key}' value='${d.version || ''}' placeholder='x.y.z'>
+        <button class='btn btn-accent btn-sm' onclick='setVersion("${key}")'>Set</button>
+      </td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+async function setVersion(key) {
+  const input = document.getElementById('ver-' + key);
+  if (!input) return;
+  const version = input.value.trim();
+  if (!version) return;
+  const r = await api('/api/versions/override', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({file: key, version}),
+  });
+  if (r && r.ok) {
+    loadVersions();
+    appendLog('build-log', 'Version set: ' + key + ' = ' + version, 'pass');
+  } else {
+    appendLog('build-log', 'Error: ' + (r ? r.message : 'Failed'), 'fail');
+  }
+}
+
+async function startBuild() {
+  if (buildRunning) return;
+  clearLog('build-log');
+  const type = document.getElementById('build-type').value;
+  const r = await api('/api/builds/run', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({type}),
+  });
+  if (r && r.ok) {
+    setBuildRunning(true);
+  } else {
+    appendLog('build-log', 'Error: ' + (r ? r.message : 'Request failed'), 'fail');
+  }
+}
+
+async function cancelBuild() {
+  await api('/api/builds/cancel', {method: 'POST'});
+}
+
+function setBuildRunning(running) {
+  buildRunning = running;
+  document.getElementById('btn-build').disabled = running;
+  document.getElementById('btn-cancel-build').disabled = !running;
+  const badge = document.getElementById('build-status-badge');
+  if (running) {
+    badge.className = 'badge b-run';
+    badge.textContent = 'Building...';
+  }
+}
+
+/* ── Dashboard ── */
+async function refreshDashboard() {
+  // Stats
+  const statsEl = document.getElementById('dash-stats');
+  const tests = allTests.length ? allTests : (await api('/api/tests') || []);
+  if (!allTests.length && Array.isArray(tests)) allTests = tests;
+  const totalAssertions = (Array.isArray(tests) ? tests : []).reduce((s, t) => s + t.assertionCount, 0);
+  const totalFiles = Array.isArray(tests) ? tests.length : 0;
+
+  const issues = await api('/api/issues');
+  const git = await api('/api/git');
+  const results = await api('/api/tests/results');
+
+  statsEl.innerHTML = `
+    <div class='stat-box'><div class='stat-val'>${totalFiles}</div><div class='stat-label'>Test Files</div></div>
+    <div class='stat-box'><div class='stat-val'>${totalAssertions}</div><div class='stat-label'>Assertions</div></div>
+    <div class='stat-box'><div class='stat-val'>${issues && issues.count !== null ? issues.count : '?'}</div><div class='stat-label'>Open Issues</div></div>
+    <div class='stat-box'><div class='stat-val'>${git && git.changedFiles !== undefined ? git.changedFiles : '?'}</div><div class='stat-label'>Changed Files</div></div>
+  `;
+
+  // Git info
+  const gitEl = document.getElementById('git-info');
+  if (git) {
+    gitEl.innerHTML = `
+      <div style='font-size:.88em;margin-bottom:.5em'>
+        Branch: <strong style='color:#22d3ee'>${git.branch}</strong>
+        &nbsp;
+        ${git.dirty ? '<span class="badge b-fail">Dirty</span>' : '<span class="badge b-pass">Clean</span>'}
+        &nbsp;
+        <span style='color:#64748b'>${git.changedFiles} changed files</span>
+      </div>
+      ${git.status && git.status.length ? '<div style="font-family:monospace;font-size:.75em;color:#64748b;max-height:120px;overflow-y:auto">' + git.status.map(s => escHtml(s)).join('<br>') + '</div>' : ''}
+    `;
+  }
+
+  // Commits
+  const commitsEl = document.getElementById('git-commits');
+  if (git && git.commits) {
+    commitsEl.innerHTML = git.commits.slice(0, 5).map(c =>
+      `<div style='margin-bottom:.3em'><span class='commit-hash'>${c.hash}</span><span class='commit-msg'>${escHtml(c.message)}</span></div>`
+    ).join('');
+  }
+}
+
+async function loadLastResults() {
+  const data = await api('/api/tests/results');
+  if (!data || !data.results) return;
+  Object.entries(data.results).forEach(([suite, r]) => {
+    // Try to match category badges
+    const cats = ['quick', 'visual', 'regression', 'hardware'];
+    cats.forEach(cat => {
+      const el = document.getElementById('result-' + cat);
+      if (!el) return;
+      // Match by suite name containing category
+      if (suite.toLowerCase().includes(cat)) {
+        if (r.failed > 0) {
+          el.className = 'badge b-fail';
+          el.textContent = `${r.passed}/${r.total} passed`;
+        } else if (r.passed > 0) {
+          el.className = 'badge b-pass';
+          el.textContent = `${r.passed}/${r.total} passed`;
+        }
+      }
+    });
+  });
+}
+
+/* ── Log helpers ── */
+function clearLog(id) {
+  document.getElementById(id).innerHTML = '';
+}
+
+function appendLog(id, text, cls) {
+  const el = document.getElementById(id);
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = text;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+/* ── Init ── */
+(async function init() {
+  await loadTests();
+  connectSSE();
+  loadVersions();
+  loadLastResults();
+})();
+</script>
+</body>
+</html>
