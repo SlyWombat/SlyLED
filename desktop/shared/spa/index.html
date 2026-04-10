@@ -5910,8 +5910,15 @@ var _calWiz={step:1,cameras:[],captures:0,captureLog:[],results:{},markersPlaced
 var _calWizMinCaptures=5;
 
 function _loadCamCalStatus(){
-  // Load cameras and render wizard at current step
-  var cams=(_fixtures||[]).filter(function(f){return f.fixtureType==='camera';});
+  // Ensure fixtures are loaded before populating camera list
+  if(!_fixtures||!_fixtures.length){
+    ra('GET','/api/fixtures',null,function(fx){
+      if(fx&&fx.length){_fixtures=fx;_loadCamCalStatus();}
+      else{_calWizRender();}
+    });
+    return;
+  }
+  var cams=_fixtures.filter(function(f){return f.fixtureType==='camera';});
   _calWiz.cameras=cams.map(function(f){
     var existing=null;
     _calWiz.cameras.forEach(function(c){if(c.id===f.id)existing=c;});
@@ -5976,6 +5983,11 @@ function _calWizReset(){
 function _calWizRender(){
   var el=document.getElementById('cam-cal-wizard');if(!el)return;
   var w=_calWiz,h='';
+  // Print button — always visible at top regardless of step
+  h+='<div style="display:flex;gap:.5em;align-items:center;margin-bottom:.8em;padding:.5em;background:#0c1a2a;border-radius:6px;border:1px solid #1e293b">';
+  h+='<button class="btn btn-on" onclick="_printAruco()" style="font-size:.82em">Print ArUco Markers</button>';
+  h+='<span style="font-size:.75em;color:#64748b">Print before starting — each marker has its ID printed below the pattern</span>';
+  h+='</div>';
   // Step indicator bar
   h+='<div style="display:flex;gap:.3em;margin-bottom:1.2em;align-items:center">';
   for(var si=1;si<=6;si++){
@@ -6029,9 +6041,9 @@ function _calWizStep1(){
     }else if(cam.calibrated){
       statusHtml='<span style="color:#4ade80;font-size:.78em">\u2713 Calibrated</span>';
     }else{
-      statusHtml='<span style="color:#f59e0b;font-size:.78em">\u26a0 Not calibrated</span>';
+      statusHtml='<span style="color:#94a3b8;font-size:.78em">Lens not calibrated yet</span>';
     }
-    if(!cam.ip)statusHtml='<span style="color:#555;font-size:.78em">No IP assigned</span>';
+    if(!cam.ip)statusHtml='<span style="color:#555;font-size:.78em">No IP — re-register in Setup tab</span>';
     h+='<div style="display:flex;align-items:center;gap:.6em;padding:.4em .5em;border-radius:4px;margin-bottom:.3em;background:'+(cam.selected?'rgba(34,211,238,.06)':'transparent')+';border:1px solid '+(cam.selected?'rgba(34,211,238,.15)':'rgba(51,65,85,.2)')+'">';
     h+='<input type="checkbox" id="calwiz-cam-'+i+'" '+checked+' onchange="_calWizToggleCam('+i+',this.checked)" style="accent-color:#22d3ee">';
     h+='<div style="flex:1"><div style="font-size:.85em;color:#e2e8f0">'+escapeHtml(cam.name)+'</div>';
