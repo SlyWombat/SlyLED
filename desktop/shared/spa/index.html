@@ -964,13 +964,19 @@ function _dashEmuDraw(){
     ctx.fillRect(Math.max(0,sx),Math.max(0,sy-sh),Math.min(W,sx+sw)-Math.max(0,sx),Math.min(H,sy)-Math.max(0,sy-sh));
     ctx.globalAlpha=1;
   });
-  var emuCW=_emuStage.cw||10000,emuCH=_emuStage.ch||5000;
-  // DMX fixtures
+  // Dashboard 2D front view: X=horizontal, Z(height)=vertical (Y-up)
+  // Stage dimensions in mm: stageW(X), stageH(Z height), stageD(Y depth)
+  var stgW=(layout&&layout.stageW)||(cw);  // mm
+  var stgH=(layout&&layout.stageH)||(ch);  // mm (height)
+  // Use stage dimensions from _emuStage if available
+  if(window._stageData){stgW=(_stageData.w||10)*1000;stgH=(_stageData.h||5)*1000;}
+  // DMX fixtures — front view: X→horizontal, Z→vertical
   layoutFixtures.forEach(function(fix){
     if(fix.fixtureType!=='dmx'||!fix.positioned)return;
-    var fx=fix.x*W/emuCW,fy=H-fix.y*H/emuCH;
+    var fx=(fix.x||0)*W/stgW,fy=H-(fix.z||0)*H/stgH;
+    fx=Math.max(4,Math.min(W-4,fx));fy=Math.max(4,Math.min(H-4,fy));
     var aim=_rotToAim(fix.rotation||[0,0,0],[fix.x||0,fix.y||0,fix.z||0]);
-    var ax=aim[0]*W/emuCW,ay=H-aim[1]*H/emuCH;
+    var ax=(aim[0]||0)*W/stgW,ay=H-(aim[2]||0)*H/stgH;
     var bLen=Math.sqrt((ax-fx)*(ax-fx)+(ay-fy)*(ay-fy));if(bLen<2)bLen=60;
     var bwDeg=(window._profileCache&&fix.dmxProfileId&&window._profileCache[fix.dmxProfileId])?window._profileCache[fix.dmxProfileId].beamWidth||15:15;
     var halfW=Math.tan(bwDeg*Math.PI/360)*bLen;
@@ -982,15 +988,33 @@ function _dashEmuDraw(){
     ctx.beginPath();ctx.arc(fx,fy,3,0,2*Math.PI);ctx.fillStyle='rgba(124,58,237,0.8)';ctx.fill();
     ctx.fillStyle='#78889a';ctx.font='7px sans-serif';ctx.textAlign='center';ctx.fillText(fix.name||'',fx,fy+12);
   });
-  // LED fixtures
+  // Camera FOV cones
+  layoutFixtures.forEach(function(fix){
+    if(fix.fixtureType!=='camera'||!fix.positioned)return;
+    var fx=(fix.x||0)*W/stgW,fy=H-(fix.z||0)*H/stgH;
+    fx=Math.max(4,Math.min(W-4,fx));fy=Math.max(4,Math.min(H-4,fy));
+    var aim=_rotToAim(fix.rotation||[0,0,0],[fix.x||0,fix.y||0,fix.z||0]);
+    var ax=(aim[0]||0)*W/stgW,ay=H-(aim[2]||0)*H/stgH;
+    var bLen=Math.sqrt((ax-fx)*(ax-fx)+(ay-fy)*(ay-fy));if(bLen<2)bLen=60;
+    var halfW=Math.tan((fix.fovDeg||60)*Math.PI/360)*bLen;
+    var angle=Math.atan2(ay-fy,ax-fx);
+    ctx.beginPath();ctx.moveTo(fx,fy);
+    ctx.lineTo(ax+Math.cos(angle+Math.PI/2)*halfW,ay+Math.sin(angle+Math.PI/2)*halfW);
+    ctx.lineTo(ax+Math.cos(angle-Math.PI/2)*halfW,ay+Math.sin(angle-Math.PI/2)*halfW);
+    ctx.closePath();ctx.fillStyle='rgba(14,116,144,0.08)';ctx.fill();
+    ctx.beginPath();ctx.arc(fx,fy,3,0,2*Math.PI);ctx.fillStyle='rgba(14,116,144,0.8)';ctx.fill();
+    ctx.fillStyle='#78889a';ctx.font='7px sans-serif';ctx.textAlign='center';ctx.fillText(fix.name||'',fx,fy+12);
+  });
+  // LED fixtures — front view
   layoutFixtures.forEach(function(fix){
     if(fix.fixtureType!=='led'||!fix.positioned||!fix.strings||!fix.strings.length)return;
-    var fx=fix.x*W/emuCW,fy=H-fix.y*H/emuCH;
+    var fx=(fix.x||0)*W/stgW,fy=H-(fix.z||0)*H/stgH;
+    fx=Math.max(4,Math.min(W-4,fx));fy=Math.max(4,Math.min(H-4,fy));
     var dirDx=[1,0,-1,0],dirDy=[0,-1,0,1];
     fix.strings.forEach(function(s){
       if(!s||!s.leds)return;
       var dx=dirDx[s.sdir||0]||0,dy=dirDy[s.sdir||0]||0;
-      var lenMm=s.mm||500;var pxLen=dx?lenMm*W/emuCW:lenMm*H/emuCH;pxLen=Math.max(pxLen,15);
+      var lenMm=s.mm||500;var pxLen=dx?lenMm*W/stgW:lenMm*H/stgH;pxLen=Math.max(pxLen,15);
       for(var di=0;di<Math.min(s.leds,30);di++){
         var t=(di+0.5)/Math.min(s.leds,30);
         ctx.beginPath();ctx.arc(fx+dx*pxLen*t,fy+dy*pxLen*t,1.5,0,2*Math.PI);ctx.fillStyle='#334';ctx.fill();
@@ -999,6 +1023,10 @@ function _dashEmuDraw(){
     ctx.beginPath();ctx.arc(fx,fy,3,0,2*Math.PI);ctx.fillStyle='#22cc66';ctx.fill();
     ctx.fillStyle='#78889a';ctx.font='7px sans-serif';ctx.textAlign='center';ctx.fillText(fix.name||'',fx,fy+12);
   });
+  // Axis labels
+  ctx.fillStyle='#334';ctx.font='8px sans-serif';
+  ctx.textAlign='left';ctx.fillText('X \u2192',4,H-4);
+  ctx.save();ctx.translate(8,H-10);ctx.rotate(-Math.PI/2);ctx.fillText('Z \u2191 (height)',0,0);ctx.restore();
 }
 
 function tlDashStop(tid){
