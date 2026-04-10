@@ -564,6 +564,11 @@ if _hw_info.get("cameras") else '<div class="card"><h2>Camera</h2><p style="colo
 <label style="display:flex;align-items:center;gap:.3em"><input type="radio" name="cam-pref" id="cam-pref-{i}" {'checked' if _camera_cfg(i)['preferred'] else ''}> Preferred</label>
 </div>
 <button class="btn btn-save" onclick="_saveCam({i})" style="margin-top:.3em">Save Camera {i}</button>
+<div style="border-top:1px solid #334155;margin-top:.6em;padding-top:.5em">
+<h2 style="font-size:.82em;color:#94a3b8;margin-bottom:.3em">Image Settings</h2>
+<div id="v4l2-controls-{i}" style="font-size:.82em;color:#64748b">Loading...</div>
+<button class="btn btn-reset" onclick="_v4l2Reset({i})" style="margin-top:.3em;font-size:.72em;padding:.2em .6em">Reset to defaults</button>
+</div>
 </div>""" for i, c in enumerate(_hw_info.get("cameras", [])))
 if _hw_info.get("cameras") else '<div class="card" style="margin-top:.5em"><h2>Cameras</h2><p style="color:#fca5a5;font-size:.82em">No cameras detected.</p></div>'}
 <div class="card" style="margin-top:.5em">
@@ -710,6 +715,81 @@ function _reset(){{
   var x=new XMLHttpRequest();x.open('POST','/config/reset');x.send();
   document.getElementById('msg').textContent='Reset to factory defaults. Rebooting...';
 }}
+// ── V4L2 image controls ──
+var _v4l2Cache={{}};
+function _v4l2Load(idx){{
+  var el=document.getElementById('v4l2-controls-'+idx);
+  if(!el)return;
+  var x=new XMLHttpRequest();
+  x.open('GET','/camera/controls?cam='+idx);
+  x.onload=function(){{
+    try{{
+      var r=JSON.parse(x.responseText);
+      if(!r.ok){{el.textContent='Not available';return;}}
+      _v4l2Cache[idx]=r.controls;
+      _v4l2Render(idx,r.controls);
+    }}catch(e){{el.textContent='Error loading controls';}}
+  }};
+  x.onerror=function(){{el.textContent='Connection failed';}};
+  x.send();
+}}
+function _v4l2Render(idx,controls){{
+  var el=document.getElementById('v4l2-controls-'+idx);
+  if(!el||!controls||!controls.length){{if(el)el.textContent='No V4L2 controls available';return;}}
+  var html='';
+  for(var ci=0;ci<controls.length;ci++){{
+    var c=controls[ci];
+    var name=c.name||'';
+    // Only show user-friendly controls
+    var show=['brightness','contrast','saturation','sharpness','backlight_compensation',
+              'auto_exposure','exposure_time_absolute','white_balance_automatic',
+              'white_balance_temperature','gain','gamma','power_line_frequency'];
+    if(show.indexOf(name)===-1)continue;
+    var val=c.value!==undefined?c.value:0;
+    var mn=c.min!==undefined?c.min:0;
+    var mx=c.max!==undefined?c.max:100;
+    var dflt=c['default']!==undefined?c['default']:0;
+    var tp=c.type||'int';
+    var label=name.replace(/_/g,' ');
+    label=label.charAt(0).toUpperCase()+label.slice(1);
+    if(tp==='bool'||mn===0&&mx===1){{
+      html+='<div style="display:flex;align-items:center;gap:.4em;margin:.3em 0">';
+      html+='<label style="display:flex;align-items:center;gap:.3em;margin:0;min-width:130px"><input type="checkbox" id="v4l2-'+idx+'-'+name+'"'+(val?'checked':'')+' onchange="_v4l2Set('+idx+',\''+name+'\',this.checked?1:0)"> '+label+'</label>';
+      html+='</div>';
+    }}else{{
+      html+='<div style="margin:.3em 0">';
+      html+='<div style="display:flex;align-items:center;gap:.4em">';
+      html+='<span style="min-width:130px;font-size:.82em;color:#94a3b8">'+label+'</span>';
+      html+='<input type="range" id="v4l2-'+idx+'-'+name+'" min="'+mn+'" max="'+mx+'" value="'+val+'" style="flex:1;padding:0" oninput="document.getElementById(\'v4l2-val-'+idx+'-'+name+'\').textContent=this.value" onchange="_v4l2Set('+idx+',\''+name+'\',parseInt(this.value))">';
+      html+='<span id="v4l2-val-'+idx+'-'+name+'" style="min-width:30px;text-align:right;font-size:.78em;color:#64748b">'+val+'</span>';
+      html+='</div></div>';
+    }}
+  }}
+  el.innerHTML=html||'<span style="color:#64748b">No adjustable controls found</span>';
+}}
+function _v4l2Set(idx,name,val){{
+  var body={{cam:idx,controls:{{}}}};
+  body.controls[name]=val;
+  var x=new XMLHttpRequest();
+  x.open('POST','/camera/controls');
+  x.setRequestHeader('Content-Type','application/json');
+  x.send(JSON.stringify(body));
+}}
+function _v4l2Reset(idx){{
+  if(!_v4l2Cache[idx])return;
+  var body={{cam:idx,controls:{{}}}};
+  for(var ci=0;ci<_v4l2Cache[idx].length;ci++){{
+    var c=_v4l2Cache[idx][ci];
+    if(c['default']!==undefined)body.controls[c.name]=c['default'];
+  }}
+  var x=new XMLHttpRequest();
+  x.open('POST','/camera/controls');
+  x.setRequestHeader('Content-Type','application/json');
+  x.onload=function(){{_v4l2Load(idx);}};
+  x.send(JSON.stringify(body));
+}}
+// Auto-load V4L2 controls when Settings tab shown
+(function(){{var origTab=_tab;_tab=function(i){{origTab(i);if(i===1){{var cams={len(_hw_info.get("cameras", []))};for(var ci=0;ci<cams;ci++)_v4l2Load(ci);}}}};}}());
 </script></body></html>'''
 
 @app.get("/config/json")

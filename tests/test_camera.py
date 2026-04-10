@@ -160,6 +160,10 @@ def run():
     ok("Config page has _autoToggle function", "_autoToggle(" in html)
     ok("Config page has per-camera FOV input", "fov-" in html)
     ok("Config page has _saveFov function", "_saveFov(" in html)
+    ok("Config page has V4L2 Image Settings", "Image Settings" in html)
+    ok("Config page has _v4l2Load function", "_v4l2Load(" in html)
+    ok("Config page has _v4l2Set function", "_v4l2Set(" in html)
+    ok("Config page has V4L2 reset button", "_v4l2Reset(" in html)
 
     # ── Config JSON ────────────────────────────────────────────────
     cfg = get_json("/config/json")
