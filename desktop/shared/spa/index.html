@@ -6327,17 +6327,16 @@ function _printAruco(){
     html+='</div>';
   }
   html+='</body></html>';
-  // Open as blob URL — works even with strict popup blockers
-  var blob=new Blob([html],{type:'text/html'});
-  var url=URL.createObjectURL(blob);
-  var popup=window.open(url,'_blank');
-  if(popup){
-    document.getElementById('hs').textContent='Opened ArUco marker print page (6 markers, one per sheet)';
-  }else{
-    // Fallback: download as HTML file
-    var a=document.createElement('a');a.href=url;a.download='slyled-aruco-markers.html';a.click();
-    document.getElementById('hs').textContent='Downloaded ArUco markers — open the HTML file and print';
-  }
+  // Render in an iframe inside a modal — no popup blocker issues
+  var mh='<div style="text-align:center;margin-bottom:.8em">';
+  mh+='<button class="btn btn-on" onclick="document.getElementById(\'aruco-frame\').contentWindow.print()" style="font-size:1em;padding:.5em 1.5em">Print All Markers</button>';
+  mh+=' <button class="btn" onclick="var b=new Blob([document.getElementById(\'aruco-frame\').srcdoc||document.getElementById(\'aruco-frame\').contentDocument.documentElement.outerHTML],{type:\'text/html\'});var a=document.createElement(\'a\');a.href=URL.createObjectURL(b);a.download=\'slyled-aruco-markers.html\';a.click();" style="font-size:.85em;background:#334;color:#ccc">Download HTML</button>';
+  mh+='</div>';
+  mh+='<iframe id="aruco-frame" srcdoc="'+html.replace(/"/g,'&quot;')+'" style="width:100%;height:400px;border:1px solid #334;background:#fff;border-radius:4px"></iframe>';
+  document.getElementById('modal-title').textContent='ArUco Markers (6 pages)';
+  document.getElementById('modal-body').innerHTML=mh;
+  document.getElementById('modal').style.display='block';
+  document.getElementById('hs').textContent='ArUco markers ready — click Print to send to printer';
 }
 
 function _printCheckerboard(){
