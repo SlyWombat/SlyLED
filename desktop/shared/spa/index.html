@@ -688,10 +688,11 @@ function _clearTabTimers(){
   if(typeof _tlPlayTimer!=='undefined'&&_tlPlayTimer){clearInterval(_tlPlayTimer);_tlPlayTimer=null;_tlPlaying=false;}
 }
 function showTab(t){
-  // Detach runtime 3D if leaving runtime tab
-  if(ctab==='runtime'&&t!=='runtime'&&_emu3d.activeTab){_emu3dDetach();}
+  var liveTab=(t==='dash'||t==='runtime');
+  // Only detach if going to a non-live tab (layout, setup, etc.)
+  if(!liveTab&&_emu3d.activeTab){_emu3dDetach();}
   _clearTabTimers();
-  // Stop layout render loop if leaving layout for non-layout tab
+  // Stop layout render loop if leaving layout
   if(ctab==='layout'&&t!=='layout'&&_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
   ctab=t;
   ['dash','setup','layout','actions','runtime','settings','firmware'].forEach(function(id){
@@ -699,10 +700,22 @@ function showTab(t){
     var n=document.getElementById('n-'+id);
     n.className='tnav'+(id===t?' tact':'');
   });
-  if(t==='dash')loadDash();
+  if(t==='dash'){
+    loadDash();
+    // After loadDash creates the DOM, re-check and attach 3D (deferred)
+    setTimeout(function(){
+      if(_s3d.inited&&_s3d.renderer&&_emu3d.inited){
+        var d3=document.getElementById('dash-3d');
+        if(d3&&!d3.contains(_s3d.renderer.domElement)){
+          if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
+          _dashAttach3d();
+        }
+      }
+    },500);
+  }
   else if(t==='setup')loadSetup();
   else if(t==='layout'){
-    // Restore layout renderer if it was taken by runtime
+    // Restore layout renderer if it was taken by live viewport
     if(_s3d.inited&&_s3d.renderer){
       var el=document.getElementById('stage3d');
       if(el&&!el.contains(_s3d.renderer.domElement)){_emu3dDetach();}
@@ -712,10 +725,10 @@ function showTab(t){
   }
   else if(t==='actions')loadActions();
   else if(t==='runtime'){
-    // Immediately attach 3D canvas to runtime container (sync, before async API calls)
+    // Attach 3D canvas to runtime container
     if(_s3d.inited&&_s3d.renderer&&_emu3d.inited){
       if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
-      _emu3dAttach();
+      _emu3dAttach('emu-3d');
       if(!_emu3d.animId)emu3dAnimate();
     }
     loadRuntime();
@@ -812,8 +825,14 @@ function loadDash(){
     }else{
       h+='<tr><td colspan="8" style="color:#888;text-align:center">No fixtures registered</td></tr>';
     }
-    h+='</table><div id="dash-runner" style="margin-top:1em"></div>';
+    h+='</table>';
+    // 3D stage preview — always visible
+    h+='<div style="margin-top:.8em"><div style="font-weight:600;color:#94a3b8;font-size:.82em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Stage Preview</div>';
+    h+='<div id="dash-3d" style="width:100%;height:350px;background:#060a12;border:1px solid #1e293b;border-radius:4px;overflow:hidden"></div></div>';
+    h+='<div id="dash-runner" style="margin-top:.6em"></div>';
     document.getElementById('t-dash').innerHTML=h;
+    // Attach 3D viewport
+    _dashAttach3d();
     // Check for firmware updates
     api('GET','/api/firmware/check').then(function(chk){
       if(!chk||!chk.children)return;
@@ -924,14 +943,30 @@ function _renderTimelineDash(el,settings,tlStatus){
 
   var tid=settings.activeTimeline;
   h+='<div style="margin-top:.6em"><button class="btn btn-off" onclick="tlDashStop('+tid+')">Stop Show</button></div></div>';
-  // Stage preview canvas
-  h+='<div class="card" style="max-width:700px;margin-top:.6em">';
-  h+='<div class="card-title">Stage Preview</div>';
-  h+='<canvas id="dash-emu-cv" width="680" height="240" style="width:100%;background:#060a12;border-radius:4px"></canvas>';
-  h+='</div>';
   el.innerHTML=h;
-  // Draw the emulator on the dashboard canvas
-  _dashEmuDraw();
+}
+
+function _dashAttach3d(){
+  var el=document.getElementById('dash-3d');
+  if(!el)return;
+  if(!_s3d.inited)s3dInit();
+  if(!_s3d.renderer)return;
+  emu3dInit();
+  if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
+  // Force reparent canvas into dashboard container
+  el.appendChild(_s3d.renderer.domElement);
+  var W=el.clientWidth||900,H=el.clientHeight||350;
+  _s3d.renderer.setSize(W,H);
+  if(_emu3d.camera){_emu3d.camera.aspect=W/H;_emu3d.camera.updateProjectionMatrix();}
+  if(_s3d.controls)_s3d.controls.enabled=false;
+  if(_s3d.tctl){_s3d.tctl.detach();_s3d.tctl.visible=false;}
+  if(_emu3d.controls)_emu3d.controls.enabled=true;
+  _emu3d.activeTab=true;
+  _emu3d.activeContainer='dash-3d';
+  _s3d.renderer.domElement.removeEventListener('click',s3dClick);
+  _s3d.renderer.domElement.removeEventListener('dblclick',s3dDblClick);
+  if(!_emu3d.animId)emu3dAnimate();
+  emuLoadStage();
 }
 
 function _dashEmuDraw(){
@@ -4974,16 +5009,15 @@ function emuLoadStage(){
 }
 
 function _emuStageReady(){
-  // Initialize 3D runtime viewport and build fixtures
+  // Initialize 3D viewport and build fixtures — used by both Dashboard and Runtime
   if(!_s3d.inited)s3dInit();
   if(!_s3d.renderer)return;
   emu3dInit();
-  // Stop layout render loop (we're on runtime tab now)
   if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
-  // Always re-attach (handles second+ visits)
-  _emu3dAttach();
+  // Attach to whichever live container is currently visible
+  var cid=(ctab==='dash')?'dash-3d':'emu-3d';
+  _emu3dAttach(cid);
   emu3dBuildFixtures();
-  // Ensure render loop is running
   if(_emu3d.animId){cancelAnimationFrame(_emu3d.animId);_emu3d.animId=null;}
   emu3dAnimate();
 }
@@ -5037,9 +5071,10 @@ function emu3dInit(){
   _emu3d.inited=true;
 }
 
-function _emu3dAttach(){
-  // Move renderer canvas into runtime container
-  var el=document.getElementById('emu-3d');if(!el||!_s3d.renderer)return;
+function _emu3dAttach(containerId){
+  // Move renderer canvas into a live viewport container (dashboard or runtime)
+  var cid=containerId||'emu-3d';
+  var el=document.getElementById(cid);if(!el||!_s3d.renderer)return;
   if(!_emu3d.camera||!_emu3d.controls)return;
   // Reparent canvas
   if(!el.contains(_s3d.renderer.domElement)){
@@ -5054,6 +5089,7 @@ function _emu3dAttach(){
   if(_s3d.tctl){_s3d.tctl.detach();_s3d.tctl.visible=false;}
   _emu3d.controls.enabled=true;
   _emu3d.activeTab=true;
+  _emu3d.activeContainer=cid;
   // Remove layout click/dblclick listeners from canvas
   _s3d.renderer.domElement.removeEventListener('click',s3dClick);
   _s3d.renderer.domElement.removeEventListener('dblclick',s3dDblClick);
@@ -6291,13 +6327,17 @@ function _printAruco(){
     html+='</div>';
   }
   html+='</body></html>';
-  // Single popup — no blocker issues
-  var w=window.open('','_blank');
-  if(!w){document.getElementById('hs').textContent='Popup blocked — please allow popups for this site';return;}
-  w.document.write(html);
-  w.document.close();
-  w.focus();
-  document.getElementById('hs').textContent='Opened ArUco marker print page (6 markers, one per sheet)';
+  // Open as blob URL — works even with strict popup blockers
+  var blob=new Blob([html],{type:'text/html'});
+  var url=URL.createObjectURL(blob);
+  var popup=window.open(url,'_blank');
+  if(popup){
+    document.getElementById('hs').textContent='Opened ArUco marker print page (6 markers, one per sheet)';
+  }else{
+    // Fallback: download as HTML file
+    var a=document.createElement('a');a.href=url;a.download='slyled-aruco-markers.html';a.click();
+    document.getElementById('hs').textContent='Downloaded ArUco markers — open the HTML file and print';
+  }
 }
 
 function _printCheckerboard(){
