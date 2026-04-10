@@ -701,17 +701,8 @@ function showTab(t){
     n.className='tnav'+(id===t?' tact':'');
   });
   if(t==='dash'){
+    if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
     loadDash();
-    // After loadDash creates the DOM, re-check and attach 3D (deferred)
-    setTimeout(function(){
-      if(_s3d.inited&&_s3d.renderer&&_emu3d.inited){
-        var d3=document.getElementById('dash-3d');
-        if(d3&&!d3.contains(_s3d.renderer.domElement)){
-          if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
-          _dashAttach3d();
-        }
-      }
-    },500);
   }
   else if(t==='setup')loadSetup();
   else if(t==='layout'){
@@ -948,25 +939,21 @@ function _renderTimelineDash(el,settings,tlStatus){
 
 function _dashAttach3d(){
   var el=document.getElementById('dash-3d');
-  if(!el)return;
+  if(!el){console.warn('[DASH3D] no dash-3d element');return;}
   if(!_s3d.inited)s3dInit();
-  if(!_s3d.renderer)return;
+  if(!_s3d.renderer){console.warn('[DASH3D] no renderer');return;}
   emu3dInit();
   if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
-  // Force reparent canvas into dashboard container
-  el.appendChild(_s3d.renderer.domElement);
-  var W=el.clientWidth||900,H=el.clientHeight||350;
-  _s3d.renderer.setSize(W,H);
-  if(_emu3d.camera){_emu3d.camera.aspect=W/H;_emu3d.camera.updateProjectionMatrix();}
-  if(_s3d.controls)_s3d.controls.enabled=false;
-  if(_s3d.tctl){_s3d.tctl.detach();_s3d.tctl.visible=false;}
-  if(_emu3d.controls)_emu3d.controls.enabled=true;
-  _emu3d.activeTab=true;
-  _emu3d.activeContainer='dash-3d';
-  _s3d.renderer.domElement.removeEventListener('click',s3dClick);
-  _s3d.renderer.domElement.removeEventListener('dblclick',s3dDblClick);
+  // Force canvas into dashboard container
+  _emu3dAttach('dash-3d');
+  console.log('[DASH3D] attached, canvas parent='+(_s3d.renderer.domElement.parentElement?_s3d.renderer.domElement.parentElement.id:'none'));
   if(!_emu3d.animId)emu3dAnimate();
-  emuLoadStage();
+  // Load stage data if needed, then build fixtures
+  if(!_emuStage){
+    emuLoadStage();
+  }else{
+    emu3dBuildFixtures();
+  }
 }
 
 function _dashEmuDraw(){
@@ -5166,12 +5153,9 @@ function emu3dBuildFixtures(){
 
   var layout=_emuStage.layout;
   var layoutFixtures=(layout&&layout.fixtures)||[];
-  var children=_emuStage.children||[];
-  var fixtures=_emuStage.fixtures||[];
-  var cw=(layout&&layout.canvasW)||10000,ch_=(layout&&layout.canvasH)||5000;
 
-  // Stage dimensions from API (layout stores mm, convert to meters)
-  ra('GET','/api/stage',null,function(st){
+  // Use stage data from _stageData (loaded by loadLayout) or fetch sync
+  var stReady=function(st){
     if(st){_emu3d.stageW=st.w||10;_emu3d.stageH=st.h||5;_emu3d.stageD=st.d||10;}
     // Stage wireframe box
     var sw=_emu3d.stageW,sh=_emu3d.stageH,sd=_emu3d.stageD;
@@ -5281,7 +5265,13 @@ function emu3dBuildFixtures(){
     });
 
     emu3dZoomToFit();
-  });
+  };
+  // Use cached stage data if available, otherwise fetch
+  if(window._stageData){
+    stReady(window._stageData);
+  }else{
+    ra('GET','/api/stage',null,function(st){window._stageData=st;stReady(st);});
+  }
 }
 
 function emu3dUpdateColors(){
