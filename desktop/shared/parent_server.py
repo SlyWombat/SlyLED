@@ -1073,7 +1073,7 @@ def api_fixture_update(fid):
     for k in ("name", "type", "fixtureType", "childId", "childIds", "strings",
               "rotation", "orientation", "mountedInverted", "aoeRadius", "meshFile",
               "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId",
-              "fovDeg", "cameraUrl", "resolutionW", "resolutionH"):
+              "fovDeg", "cameraUrl", "cameraIp", "cameraIdx", "resolutionW", "resolutionH"):
         if k in body:
             f[k] = body[k]
     _save("fixtures", _fixtures)

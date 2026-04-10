@@ -2766,6 +2766,7 @@ function editFixture(id){
     h+='<button class="btn" onclick="_orientTest('+id+')" style="background:#4c1d95;color:#e9d5ff;font-size:.8em">Test with DMX</button>';
     h+='</div>';
   }else if(ft==='camera'){
+    h+='<label>Camera Node IP</label><input id="fx-cam-ip" value="'+escapeHtml(f.cameraIp||'')+'" placeholder="e.g. 192.168.10.50" style="width:100%;margin-bottom:.4em">';
     h+='<label>FOV (degrees)</label><input id="fx-fov" type="number" value="'+(f.fovDeg||60)+'" min="1" max="180" style="width:100%;margin-bottom:.4em">';
     h+='<label>Stream URL <span style="color:#64748b;font-size:.75em">(optional)</span></label>';
     h+='<input id="fx-cam-url" value="'+escapeHtml(f.cameraUrl||'')+'" style="width:100%;margin-bottom:.4em">';
@@ -2948,6 +2949,7 @@ function saveFixture(id,ft){
     var invEl=document.getElementById('fx-inverted');
     if(invEl)body.mountedInverted=invEl.checked;
   }else if(ft==='camera'){
+    body.cameraIp=document.getElementById('fx-cam-ip').value.trim();
     body.fovDeg=parseInt(document.getElementById('fx-fov').value)||60;
     body.cameraUrl=document.getElementById('fx-cam-url').value.trim();
     body.resolutionW=parseInt(document.getElementById('fx-cam-rw').value)||1920;
@@ -4790,6 +4792,7 @@ function _updateSidePanel(fixtureId){
       h+='</div>';
     } else if(ft==='camera'){
       h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Camera</div>';
+      h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.2em">IP: '+(f.cameraIp?'<span style="color:#e2e8f0">'+escapeHtml(f.cameraIp)+'</span>':'<span style="color:#f59e0b">Not set</span>')+'</div>';
       h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.4em">FOV: '+(f.fovDeg||60)+'\u00b0 | '+(f.resolutionW||1920)+'\u00d7'+(f.resolutionH||1080)+'</div>';
       h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.3em">Homography: '+(f.calibrated?'<span style="color:#4ade80">\u2713 Done</span>':'<span style="color:#f59e0b">Not done</span>')+'</div>';
       h+='<div style="display:flex;gap:.3em;margin-bottom:.4em">';
