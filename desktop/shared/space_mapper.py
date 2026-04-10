@@ -166,9 +166,8 @@ class SpaceScan:
             pos = positions.get(fid, positions.get(str(fid), {}))
             cam_pos = (pos.get("x", 0), pos.get("y", 0), pos.get("z", 0))
             cam_rot = cam.get("rotation", [0, 0, 0])
-            # Use aim point for yaw direction if available
-            cam_aim = cam.get("aimPoint")
-            stage_points = transform_points(points, cam_pos, cam_rot, cam_aim=cam_aim)
+            # Use rotation for yaw direction
+            stage_points = transform_points(points, cam_pos, cam_rot)
 
             all_points.extend(stage_points)
             cam_info.append({

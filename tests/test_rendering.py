@@ -77,7 +77,7 @@ def seed():
             'name': 'Moving Head SL', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 16,
             'dmxProfileId': 'generic-moving-head-16bit',
-            'aimPoint': [5000, 2000, 5000]
+            'rotation': [-20, 0, 0]
         })
         fix_dmx1 = r.get_json()['id']
 
@@ -86,11 +86,11 @@ def seed():
             'name': 'RGB Par Center', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 33, 'dmxChannelCount': 3,
             'dmxProfileId': 'generic-rgb',
-            'aimPoint': [5000, 0, 5000]
+            'rotation': [0, 0, 0]
         })
         fix_dmx2 = r.get_json()['id']
 
-        # DMX dimmer (no aimPoint — should use default)
+        # DMX dimmer (no rotation — should use default [0,0,0])
         r = c.post('/api/fixtures', json={
             'name': 'Dimmer Spot', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 2, 'dmxStartAddr': 1, 'dmxChannelCount': 1,
@@ -245,31 +245,24 @@ def test_led_strings(ids):
 
 
 def test_dmx_beam_cones(ids):
-    section('DMX Beam Cones (aim point, direction, profile)')
+    section('DMX Beam Cones (rotation, direction, profile)')
     lay = api('GET', '/api/layout')
     dmx_fx = [f for f in lay.get('fixtures', []) if f.get('fixtureType') == 'dmx' and f.get('positioned')]
     ok(len(dmx_fx) >= 2, f'At least 2 DMX fixtures ({len(dmx_fx)})')
     for f in dmx_fx:
-        ap = f.get('aimPoint')
-        ok(ap is not None, f'DMX {f["id"]} "{f.get("name")}" has aimPoint')
-        if ap:
-            ok(len(ap) >= 2, f'  aimPoint has >= 2 components')
-            ok(isinstance(ap[0], (int, float)), f'  aimPoint[0] (X) is number: {ap[0]}')
-            ok(isinstance(ap[1], (int, float)), f'  aimPoint[1] (Y) is number: {ap[1]}')
-            # 2D canvas uses aimPoint[0]=X, aimPoint[1]=Y (NOT [2])
-            cw = lay.get('canvasW', 10000)
-            ch = lay.get('canvasH', 5000)
-            x_pct = ap[0] / cw
-            y_pct = ap[1] / ch
-            ok(0 <= x_pct <= 1.5, f'  aim X ({ap[0]}) within reasonable range of canvas')
-            ok(-0.5 <= y_pct <= 1.5, f'  aim Y ({ap[1]}) within reasonable range of canvas')
+        rot = f.get('rotation')
+        ok(rot is not None, f'DMX {f["id"]} "{f.get("name")}" has rotation')
+        if rot:
+            ok(len(rot) == 3, f'  rotation has 3 components')
+            ok(isinstance(rot[0], (int, float)), f'  rotation[0] (tilt) is number: {rot[0]}')
+            ok(isinstance(rot[1], (int, float)), f'  rotation[1] (pan) is number: {rot[1]}')
         # Profile for beam width
         pid = f.get('dmxProfileId')
         ok(pid is not None, f'  has dmxProfileId: {pid}')
-    # DMX fixture without explicit aimPoint should have default
+    # DMX fixture without explicit rotation should have default
     f3 = next((f for f in dmx_fx if f['id'] == ids['fix_dmx3']), None)
     if f3:
-        ok(f3.get('aimPoint') is not None, f'Dimmer fixture has default aimPoint')
+        ok(f3.get('rotation') is not None, f'Dimmer fixture has default rotation')
 
 
 def test_objects():
@@ -383,9 +376,9 @@ def test_emulator_guard_conditions():
     # LED fixtures must have strings for dot rendering
     for f in led_pos:
         ok(len(f.get('strings', [])) > 0, f'LED fixture {f["id"]} has strings in layout')
-    # DMX fixtures should have aimPoint for beam cones
+    # DMX fixtures should have rotation for beam cones
     for f in dmx_pos:
-        ok(f.get('aimPoint') is not None, f'DMX fixture {f["id"]} has aimPoint in layout')
+        ok(f.get('rotation') is not None, f'DMX fixture {f["id"]} has rotation in layout')
 
 
 def test_coordinate_consistency():
@@ -399,8 +392,8 @@ def test_coordinate_consistency():
         if af:
             ok(af.get('name') == lf.get('name'), f'Fixture {lf["id"]} name matches')
             ok(af.get('fixtureType') == lf.get('fixtureType'), f'Fixture {lf["id"]} fixtureType matches')
-            if af.get('aimPoint'):
-                ok(af['aimPoint'] == lf.get('aimPoint'), f'Fixture {lf["id"]} aimPoint matches')
+            if af.get('rotation'):
+                ok(af['rotation'] == lf.get('rotation'), f'Fixture {lf["id"]} rotation matches')
 
 
 def test_3d_viewport_data():
@@ -440,7 +433,7 @@ def test_dmx_only_rendering():
         r = c.post('/api/fixtures', json={
             'name': 'DMX Only', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 16,
-            'dmxProfileId': 'generic-moving-head-16bit', 'aimPoint': [5000, 2000, 5000]
+            'dmxProfileId': 'generic-moving-head-16bit', 'rotation': [-20, 0, 0]
         })
         fid = r.get_json()['id']
         c.post('/api/layout', json={'children': [{'id': fid, 'x': 5000, 'y': 4000, 'z': 0}]})

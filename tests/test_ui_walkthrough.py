@@ -67,12 +67,12 @@ def seed():
         c.post('/api/fixtures', json={
             'name': 'Beam 200 SL', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 16,
-            'dmxProfileId': 'generic-moving-head-16bit', 'aimPoint': [5000, 2000, 5000]
+            'dmxProfileId': 'generic-moving-head-16bit', 'rotation': [-20, 0, 0]
         })
         c.post('/api/fixtures', json={
             'name': 'SlimPAR Center', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 33, 'dmxChannelCount': 3,
-            'dmxProfileId': 'generic-rgb', 'aimPoint': [5000, 0, 5000]
+            'dmxProfileId': 'generic-rgb', 'rotation': [0, 0, 0]
         })
 
         # Layout

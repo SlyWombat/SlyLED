@@ -1,0 +1,268 @@
+{
+  "children": [
+    {
+      "boardType": "giga-dmx",
+      "chipModel": "STM32H747XI",
+      "desc": "",
+      "flashSize": 0,
+      "freeHeap": 0,
+      "fwVersion": "7.5.20",
+      "hostname": "SLYC-1152",
+      "id": 0,
+      "ip": "192.168.10.219",
+      "name": "SLYC-1152",
+      "rssi": -51,
+      "sc": 1,
+      "sdkVersion": "mbed",
+      "seen": 1775754683,
+      "status": 1,
+      "strings": [
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 30,
+          "mm": 500,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        }
+      ],
+      "type": "dmx",
+      "uptime": 8308
+    }
+  ],
+  "fixtures": [
+    {
+      "aimPoint": [
+        543,
+        1712,
+        2056
+      ],
+      "aoeRadius": 1000,
+      "childId": null,
+      "childIds": [],
+      "dmxChannelCount": 13,
+      "dmxProfileId": "Slymovehead",
+      "dmxStartAddr": 14,
+      "dmxUniverse": 1,
+      "fixtureType": "dmx",
+      "id": 2,
+      "meshFile": null,
+      "name": "Sly MH 1",
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "strings": [],
+      "type": "point"
+    },
+    {
+      "aimPoint": [
+        1638,
+        1816,
+        1723
+      ],
+      "aoeRadius": 1000,
+      "childId": null,
+      "childIds": [],
+      "dmxChannelCount": 13,
+      "dmxProfileId": "Slymovehead",
+      "dmxStartAddr": 1,
+      "dmxUniverse": 1,
+      "fixtureType": "dmx",
+      "id": 7,
+      "meshFile": null,
+      "name": "Sly MH 2",
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "strings": [],
+      "type": "point"
+    },
+    {
+      "aimPoint": [
+        0,
+        0,
+        3000
+      ],
+      "aoeRadius": 1000,
+      "cameraIdx": 0,
+      "cameraIp": "192.168.10.235",
+      "cameraUrl": "",
+      "childId": null,
+      "childIds": [],
+      "fixtureType": "camera",
+      "fovDeg": 100,
+      "id": 12,
+      "meshFile": null,
+      "name": "Left Cam Wide",
+      "resolutionH": 1080,
+      "resolutionW": 1920,
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "strings": [],
+      "type": "point"
+    },
+    {
+      "aimPoint": [
+        0,
+        0,
+        3000
+      ],
+      "aoeRadius": 1000,
+      "cameraIdx": 1,
+      "cameraIp": "192.168.10.235",
+      "cameraUrl": "",
+      "childId": null,
+      "childIds": [],
+      "fixtureType": "camera",
+      "fovDeg": 90,
+      "id": 13,
+      "meshFile": null,
+      "name": "Right High Res",
+      "resolutionH": 2160,
+      "resolutionW": 3840,
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "strings": [],
+      "type": "point"
+    },
+    {
+      "aimPoint": [
+        1199,
+        1513,
+        2979
+      ],
+      "aoeRadius": 1000,
+      "cameraIdx": 0,
+      "cameraIp": "192.168.10.109",
+      "cameraUrl": "",
+      "childId": null,
+      "childIds": [],
+      "fixtureType": "camera",
+      "fovDeg": 60,
+      "id": 18,
+      "meshFile": null,
+      "name": "RPi-Sly1",
+      "resolutionH": 1080,
+      "resolutionW": 1920,
+      "rotation": [
+        0,
+        30,
+        0
+      ],
+      "strings": [],
+      "type": "point"
+    }
+  ],
+  "layout": {
+    "canvasH": 2000,
+    "canvasW": 3000,
+    "children": [
+      {
+        "id": 2,
+        "x": 500,
+        "y": 1813,
+        "z": 0
+      },
+      {
+        "id": 7,
+        "x": 1605,
+        "y": 1800,
+        "z": 0
+      },
+      {
+        "id": 12,
+        "x": 1275,
+        "y": 1800,
+        "z": 0
+      },
+      {
+        "id": 13,
+        "x": 830,
+        "y": 1800,
+        "z": 0
+      },
+      {
+        "id": 18,
+        "x": 193,
+        "y": 656,
+        "z": 0
+      }
+    ]
+  },
+  "type": "slyled-config",
+  "version": 2
+}

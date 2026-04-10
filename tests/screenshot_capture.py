@@ -78,7 +78,7 @@ def populate_data():
             'name': 'Beam 200 Stage Left', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 16,
             'dmxProfileId': 'generic-moving-head-16bit',
-            'aimPoint': [5000, 2000, 5000]
+            'rotation': [-20, 0, 0]
         })
         dmx1 = r.get_json().get('id')
 
@@ -86,7 +86,7 @@ def populate_data():
             'name': 'Beam 200 Stage Right', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 17, 'dmxChannelCount': 16,
             'dmxProfileId': 'generic-moving-head-16bit',
-            'aimPoint': [5000, 2000, 5000]
+            'rotation': [-20, 0, 0]
         })
         dmx2 = r.get_json().get('id')
 
@@ -95,7 +95,7 @@ def populate_data():
             'name': 'SlimPAR Center Wash', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 33, 'dmxChannelCount': 3,
             'dmxProfileId': 'generic-rgb',
-            'aimPoint': [5000, 0, 5000]
+            'rotation': [0, 0, 0]
         })
         dmx3 = r.get_json().get('id')
 

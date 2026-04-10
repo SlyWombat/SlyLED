@@ -49,7 +49,7 @@ def seed():
             'name': 'MH Stage Left', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 16,
             'dmxProfileId': 'generic-moving-head-16bit',
-            'aimPoint': [8000, 2000, 5000]
+            'rotation': [-20, 40, 0]
         })
         mh1 = r.get_json()['id']
 
@@ -58,7 +58,7 @@ def seed():
             'name': 'MH Stage Right', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 17, 'dmxChannelCount': 16,
             'dmxProfileId': 'generic-moving-head-16bit',
-            'aimPoint': [2000, 2000, 5000]
+            'rotation': [-20, -40, 0]
         })
         mh2 = r.get_json()['id']
 
@@ -67,7 +67,7 @@ def seed():
             'name': 'RGB Par Center', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 33, 'dmxChannelCount': 3,
             'dmxProfileId': 'generic-rgb',
-            'aimPoint': [5000, 0, 5000]
+            'rotation': [0, 0, 0]
         })
         par1 = r.get_json()['id']
 
@@ -76,7 +76,7 @@ def seed():
             'name': 'Dimmer Back', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 2, 'dmxStartAddr': 1, 'dmxChannelCount': 1,
             'dmxProfileId': 'generic-dimmer',
-            'aimPoint': [5000, 0, 5000]
+            'rotation': [0, 0, 0]
         })
         dim1 = r.get_json()['id']
 
@@ -175,7 +175,7 @@ def test_sweep_dmx_fixtures(ids):
     ok(len(fixtures) > 0, f'Bake produced fixture segments ({len(fixtures)})')
 
     # Moving head at x=1000 — sphere starts at x=0, radius 3000
-    # Beam axis goes to aimPoint [8000, 2000, 5000], sampling should intersect sphere
+    # Beam axis follows rotation, sampling should intersect sphere
     mh1_segs = fixtures.get(str(ids['mh1']), {}).get('segments', [])
     ok(len(mh1_segs) > 0, f'MH Stage Left has segments ({len(mh1_segs)})')
     # Should have non-zero color in some segments

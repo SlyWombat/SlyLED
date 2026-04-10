@@ -155,17 +155,17 @@ def run():
 
             for m in movers:
                 mid = m['id']
-                # Set aim point to the chair position
+                # Set aim point via legacy aimPoint (converted to rotation server-side)
                 r = c.put(f'/api/fixtures/{mid}/aim',
                            json={'aimPoint': target})
                 ok(f'Aim mover {m["name"]} at chair', r.get_json().get('ok'))
 
-                # Verify aim point persisted
+                # Verify rotation persisted (converted from aimPoint)
                 r = c.get(f'/api/fixtures/{mid}')
                 fx = r.get_json()
-                aim = fx.get('aimPoint', [])
-                ok(f'Mover {mid} aim set', len(aim) == 3 and aim[0] == target[0],
-                   f'aim={aim}')
+                rot = fx.get('rotation', [])
+                ok(f'Mover {mid} rotation set', len(rot) == 3,
+                   f'rotation={rot}')
 
                 # Compute what pan/tilt values would be needed
                 from parent_server import compute_pan_tilt_calibrated

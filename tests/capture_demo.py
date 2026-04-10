@@ -124,12 +124,12 @@ def main():
             c.post('/api/fixtures', json={
                 'name': 'Chauvet SlimPAR 56', 'type': 'point', 'fixtureType': 'dmx',
                 'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 7,
-                'dmxProfileId': 'generic-wash-7ch', 'aimPoint': [5000, 2000, 5000]
+                'dmxProfileId': 'generic-wash-7ch', 'rotation': [-20, 0, 0]
             })
             c.post('/api/fixtures', json={
                 'name': 'ADJ Vizi Beam 5RX', 'type': 'point', 'fixtureType': 'dmx',
                 'dmxUniverse': 1, 'dmxStartAddr': 8, 'dmxChannelCount': 16,
-                'dmxProfileId': 'generic-moving-head-16bit', 'aimPoint': [5000, 0, 5000]
+                'dmxProfileId': 'generic-moving-head-16bit', 'rotation': [0, 0, 0]
             })
         page.evaluate("showTab('setup')")
         snap(page, '07-setup-dmx.png', 1)

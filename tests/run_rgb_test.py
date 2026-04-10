@@ -39,7 +39,7 @@ def run():
                 'dmxStartAddr': 1,
                 'dmxChannelCount': 6,
                 'dmxProfileId': 'generic-rgb',
-                'aimPoint': [5000, 0, 5000],
+                'rotation': [0, 0, 0],
             })
             d = r.get_json()
             print(f"  Created fixture id={d.get('id')}")

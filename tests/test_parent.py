@@ -262,22 +262,25 @@ def run():
         dmx_count = sum(1 for f in flist if f.get('fixtureType') == 'dmx')
         ok('Mixed fixture list', led_count >= 1 and dmx_count >= 2)
 
-        # ── DMX aim points & beam cone data ──────────────────────────
-        # DMX fixtures should have aimPoint in layout response
+        # ── DMX rotation & beam cone data ──────────────────────────
+        # DMX fixtures should have rotation in layout response
         r = c.get('/api/layout')
         lay = r.get_json()
         dmx_in_lay = [f for f in lay.get('fixtures', []) if f.get('fixtureType') == 'dmx']
         ok('DMX fixtures in layout', len(dmx_in_lay) >= 2)
-        ok('DMX fixture has aimPoint', all('aimPoint' in f for f in dmx_in_lay))
-        ok('DMX aimPoint is 3-element list', all(
-            isinstance(f['aimPoint'], list) and len(f['aimPoint']) == 3 for f in dmx_in_lay))
+        ok('DMX fixture has rotation', all('rotation' in f for f in dmx_in_lay))
+        ok('DMX rotation is 3-element list', all(
+            isinstance(f['rotation'], list) and len(f['rotation']) == 3 for f in dmx_in_lay))
 
-        # Set explicit aim point
+        # Set explicit rotation
+        r = c.put('/api/fixtures/' + str(dmx_id) + '/aim', json={'rotation': [30.0, 45.0, 0.0]})
+        ok('PUT rotation', r.status_code == 200)
+        r = c.get('/api/fixtures/' + str(dmx_id))
+        ok('Rotation persisted', r.get_json()['rotation'] == [30.0, 45.0, 0.0])
+
+        # Legacy aimPoint → rotation conversion (backward compat)
         r = c.put('/api/fixtures/' + str(dmx_id) + '/aim', json={'aimPoint': [5000, 0, 4000]})
-        ok('PUT aim point', r.status_code == 200)
-        r = c.get('/api/layout')
-        dmx_f = [f for f in r.get_json()['fixtures'] if f['id'] == dmx_id][0]
-        ok('Aim point persisted', dmx_f['aimPoint'] == [5000.0, 0.0, 4000.0])
+        ok('PUT legacy aimPoint', r.status_code == 200)
 
         # Aim point validation
         r = c.put('/api/fixtures/' + str(dmx_id) + '/aim', json={'aimPoint': [1, 2]})
@@ -314,7 +317,7 @@ def run():
         r = c.get('/api/layout')
         mh_in_lay = [f for f in r.get_json()['fixtures'] if f['id'] == mh_fix_id]
         ok('Profile fixture in layout', len(mh_in_lay) == 1)
-        ok('Profile fixture has aimPoint', 'aimPoint' in mh_in_lay[0])
+        ok('Profile fixture has rotation', 'rotation' in mh_in_lay[0])
         ok('Profile fixture has profileId', mh_in_lay[0].get('dmxProfileId') == mh_id)
         ok('Profile fixture positioned', mh_in_lay[0].get('positioned') is True)
         ok('Profile fixture x correct', mh_in_lay[0].get('x') == 8000)
@@ -322,8 +325,8 @@ def run():
         # Multiple DMX fixtures all have cones data (aimPoint + position)
         r = c.get('/api/layout')
         all_dmx = [f for f in r.get_json()['fixtures'] if f.get('fixtureType') == 'dmx' and f.get('positioned')]
-        ok('All placed DMX have aimPoint', all('aimPoint' in f for f in all_dmx),
-           f'missing: {[f["id"] for f in all_dmx if "aimPoint" not in f]}')
+        ok('All placed DMX have rotation', all('rotation' in f for f in all_dmx),
+           f'missing: {[f["id"] for f in all_dmx if "rotation" not in f]}')
         ok('All placed DMX have x/y/z', all(f.get('x') is not None for f in all_dmx))
 
         # Cleanup
@@ -394,7 +397,7 @@ def run():
         ok('Camera fovDeg', cf.get('fovDeg') == 90)
         ok('Camera cameraUrl', cf.get('cameraUrl') == 'rtsp://192.168.1.50:554/stream')
         ok('Camera resolutionW', cf.get('resolutionW') == 1920)
-        ok('Camera has aimPoint', isinstance(cf.get('aimPoint'), list) and len(cf['aimPoint']) == 3)
+        ok('Camera has rotation', isinstance(cf.get('rotation'), list) and len(cf['rotation']) == 3)
 
         # Update camera FOV
         r = c.put('/api/fixtures/' + str(cam_id), json={'fovDeg': 120})
@@ -402,11 +405,11 @@ def run():
         r = c.get('/api/fixtures/' + str(cam_id))
         ok('Camera fovDeg updated', r.get_json().get('fovDeg') == 120)
 
-        # Camera aim point via /aim endpoint
-        r = c.put('/api/fixtures/' + str(cam_id) + '/aim', json={'aimPoint': [3000, 1000, 5000]})
-        ok('PUT camera aim point', r.status_code == 200)
+        # Camera rotation via /aim endpoint
+        r = c.put('/api/fixtures/' + str(cam_id) + '/aim', json={'rotation': [-15.0, 30.0, 0.0]})
+        ok('PUT camera rotation', r.status_code == 200)
         r = c.get('/api/fixtures/' + str(cam_id))
-        ok('Camera aim persisted', r.get_json().get('aimPoint') == [3000.0, 1000.0, 5000.0])
+        ok('Camera rotation persisted', r.get_json().get('rotation') == [-15.0, 30.0, 0.0])
 
         # Camera fovDeg validation
         r = c.post('/api/fixtures', json={
@@ -442,7 +445,7 @@ def run():
         r = c.get('/api/layout')
         cam_in_lay = [f for f in r.get_json()['fixtures'] if f.get('fixtureType') == 'camera' and f.get('positioned')]
         ok('Camera in layout', len(cam_in_lay) >= 1)
-        ok('Camera layout has aimPoint', 'aimPoint' in cam_in_lay[0])
+        ok('Camera layout has rotation', 'rotation' in cam_in_lay[0])
         ok('Camera layout has fovDeg', cam_in_lay[0].get('fovDeg') == 120)
         ok('Camera layout x correct', cam_in_lay[0].get('x') == 5000)
 
@@ -468,7 +471,7 @@ def run():
         ok('Registered camera fixtureType', rc.get('fixtureType') == 'camera')
         ok('Registered camera has cameraIp', rc.get('cameraIp') == '192.168.10.200')
         ok('Registered camera has fovDeg', rc.get('fovDeg') == 60)
-        ok('Registered camera has aimPoint', isinstance(rc.get('aimPoint'), list))
+        ok('Registered camera has rotation', isinstance(rc.get('rotation'), list))
         ok('Registered camera has cameraIdx', rc.get('cameraIdx') is not None)
 
         # Duplicate IP → 409
@@ -502,8 +505,8 @@ def run():
         ok('Registered camera in layout', len(cam_in_lay) == 1)
 
         # Camera can use /aim endpoint
-        r = c.put('/api/fixtures/' + str(reg_cam_id) + '/aim', json={'aimPoint': [1000, 500, 2000]})
-        ok('Registered camera aim point', r.status_code == 200)
+        r = c.put('/api/fixtures/' + str(reg_cam_id) + '/aim', json={'rotation': [-10.0, 20.0, 0.0]})
+        ok('Registered camera rotation', r.status_code == 200)
 
         # ── Camera proxy endpoints (camera node offline, expect 503) ──
         r = c.get('/api/cameras/' + str(reg_cam_id) + '/snapshot')
@@ -520,13 +523,15 @@ def run():
         from parent_server import _pixel_to_stage, _layout, _stage, _fixtures
 
         # Set up: camera at (1500, 2000, 0) looking at stage center (1500, 0, 750)
-        # Stage 3m × 2m × 1.5m = 3000 × 2000 × 1500 mm
+        # Stage 3m x 2m x 1.5m = 3000 x 2000 x 1500 mm
+        # Direction: (0, -2000, 750) -> pan=0, tilt=-atan2(-(-2000), 750) = -69.44
+        import math as _math
         cam_fix = next(f for f in _fixtures if f['id'] == reg_cam_id)
-        cam_fix['aimPoint'] = [1500, 0, 750]
+        cam_fix['rotation'] = [round(-_math.atan2(-(-2000), 750) * 180 / _math.pi, 2), 0, 0]
         cam_fix['fovDeg'] = 90
         _layout['children'] = [{'id': reg_cam_id, 'x': 1500, 'y': 2000, 'z': 0}]
 
-        # Detection at image center should map near the aim point
+        # Detection at image center should map near the direction aim
         dets = [{'label': 'person', 'confidence': 0.9,
                  'x': 270, 'y': 190, 'w': 100, 'h': 100}]
         result = _pixel_to_stage(dets, cam_fix, 640, 480)

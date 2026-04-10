@@ -617,7 +617,7 @@ def build_manual():
         ('DMX Not Outputting', 'Check Art-Net engine is started (Settings → DMX Output → Start). '
          'Verify universe routing matches your bridge address.'),
         ('Moving Heads Not Tracking', 'Verify fixture has a profile with panRange/tiltRange > 0. '
-         'Check aimPoint is set (Edit fixture → Aim Point fields).'),
+         'Check rotation is set (Edit fixture → Pan/Tilt fields).'),
         ('Preview Shows No DMX Beams', 'Bake the timeline first. DMX preview requires baked data.'),
         ('Factory Reset', 'Settings → Factory Reset clears ALL data including fixtures, '
          'effects, timelines, and profiles.'),

@@ -199,7 +199,7 @@ def generate_dmx_fixtures(count):
             'dmxStartAddr': addr[uni],
             'dmxChannelCount': ch_count,
             'dmxProfileId': prof_id,
-            'aimPoint': [5000, 0, 5000],
+            'rotation': [0, 0, 0],
         })
         addr[uni] += ch_count
     return fixtures

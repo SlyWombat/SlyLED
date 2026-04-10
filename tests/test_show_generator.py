@@ -115,7 +115,7 @@ def setup_mixed_rig():
                 'name': name, 'type': 'point', 'fixtureType': 'dmx',
                 'dmxUniverse': 1, 'dmxStartAddr': addr, 'dmxChannelCount': 10,
                 'dmxProfileId': 'test-mover',
-                'aimPoint': [5000, 0, 5000]
+                'rotation': [0, 0, 0]
             })
             ids[name] = r.get_json().get('id')
 

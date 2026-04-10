@@ -150,12 +150,28 @@ for _f in _fixtures:
     if "fixtureType" not in _f:
         _f["fixtureType"] = "led"
         _fix_patched = True
-    if _f.get("fixtureType") == "dmx" and "aimPoint" not in _f:
-        _f["aimPoint"] = [0, 0, int(_stage.get("d", 10) * 1000)]
+    # Migrate aimPoint → rotation (one-time conversion)
+    if _f.get("aimPoint") and (not _f.get("rotation") or _f["rotation"] == [0, 0, 0]):
+        _ap = _f["aimPoint"]
+        _fx = _f.get("x", 0) or 0
+        _fy = _f.get("y", 0) or 0
+        _fz = _f.get("z", 0) or 0
+        _dx, _dy, _dz = _ap[0] - _fx, _ap[1] - _fy, _ap[2] - _fz
+        _hdist = math.sqrt(_dx * _dx + _dz * _dz)
+        if _hdist > 0.001 or abs(_dy) > 0.001:
+            _f["rotation"] = [
+                round(-math.atan2(_dy, _hdist) * 180 / math.pi, 2),  # tilt (pitch)
+                round(math.atan2(_dx, _dz) * 180 / math.pi, 2),       # pan (yaw)
+                0
+            ]
+        del _f["aimPoint"]
+        _fix_patched = True
+    if _f.get("fixtureType") == "dmx" and "rotation" not in _f:
+        _f["rotation"] = [0, 0, 0]
         _fix_patched = True
     if _f.get("fixtureType") == "camera":
-        if "aimPoint" not in _f:
-            _f["aimPoint"] = [0, 0, int(_stage.get("d", 10) * 1000)]
+        if "rotation" not in _f:
+            _f["rotation"] = [0, 0, 0]
             _fix_patched = True
         if "fovDeg" not in _f:
             _f["fovDeg"] = 60
@@ -163,6 +179,20 @@ for _f in _fixtures:
 if _fix_patched:
     _save("fixtures", _fixtures)
 del _fix_patched
+
+def _rotation_to_aim(rotation, pos, dist=3000):
+    """Convert rotation [rx, ry, rz] (degrees) + position to an aim point [x,y,z].
+
+    rx = tilt/pitch, ry = pan/yaw.  Default distance is 3000mm (3m).
+    """
+    rx = rotation[0] if rotation else 0
+    ry = rotation[1] if rotation and len(rotation) > 1 else 0
+    pan_rad = math.radians(ry)
+    tilt_rad = math.radians(rx)
+    dx = math.sin(pan_rad) * math.cos(tilt_rad) * dist
+    dy = -math.sin(tilt_rad) * dist
+    dz = math.cos(pan_rad) * math.cos(tilt_rad) * dist
+    return [pos[0] + dx, pos[1] + dy, pos[2] + dz]
 
 _objects    = _load("objects",     [])
 _spatial_fx = _load("spatial_fx", [])
@@ -990,9 +1020,7 @@ def api_fixtures_create():
             f["dmxStartAddr"] = body["dmxStartAddr"]
             f["dmxChannelCount"] = body["dmxChannelCount"]
             f["dmxProfileId"] = body.get("dmxProfileId")
-            f["aimPoint"] = body.get("aimPoint", [0, 0, int(_stage.get("d", 10) * 1000)])
         if fixture_type == "camera":
-            f["aimPoint"] = body.get("aimPoint", [0, 0, int(_stage.get("d", 10) * 1000)])
             f["fovDeg"] = body.get("fovDeg", 60)
             f["cameraUrl"] = body.get("cameraUrl", "")
             f["resolutionW"] = body.get("resolutionW", 1920)
@@ -1043,7 +1071,7 @@ def api_fixture_update(fid):
             return jsonify(err="fovDeg must be 1-180"), 400
     for k in ("name", "type", "fixtureType", "childId", "childIds", "strings",
               "rotation", "orientation", "aoeRadius", "meshFile",
-              "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId", "aimPoint",
+              "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId",
               "fovDeg", "cameraUrl", "resolutionW", "resolutionH"):
         if k in body:
             f[k] = body[k]
@@ -1052,20 +1080,45 @@ def api_fixture_update(fid):
 
 @app.put("/api/fixtures/<int:fid>/aim")
 def api_fixture_set_aim(fid):
-    """Set aim point for a DMX or camera fixture."""
+    """Set rotation for a DMX or camera fixture.
+
+    Accepts either {rotation: [rx, ry, rz]} or legacy {aimPoint: [x,y,z]}
+    (converted to rotation on import).
+    """
     f = next((f for f in _fixtures if f["id"] == fid), None)
     if not f or f.get("fixtureType") not in ("dmx", "camera"):
         return jsonify(err="DMX or camera fixture not found"), 404
     body = request.get_json(silent=True) or {}
+    # Accept rotation directly
+    rot = body.get("rotation")
+    if isinstance(rot, list) and len(rot) == 3:
+        try:
+            f["rotation"] = [float(v) for v in rot]
+        except (TypeError, ValueError):
+            return jsonify(err="rotation values must be numbers"), 400
+        _save("fixtures", _fixtures)
+        return jsonify(ok=True)
+    # Legacy aimPoint → convert to rotation
     ap = body.get("aimPoint")
     if not isinstance(ap, list) or len(ap) != 3:
-        return jsonify(err="aimPoint must be [x,y,z]"), 400
+        return jsonify(err="rotation must be [rx,ry,rz]"), 400
     try:
-        f["aimPoint"] = [float(v) for v in ap]
+        ap = [float(v) for v in ap]
     except (TypeError, ValueError):
         return jsonify(err="aimPoint values must be numbers"), 400
+    fx = f.get("x", 0) or 0
+    fy = f.get("y", 0) or 0
+    fz = f.get("z", 0) or 0
+    dx, dy, dz = ap[0] - fx, ap[1] - fy, ap[2] - fz
+    hdist = math.sqrt(dx * dx + dz * dz)
+    if hdist > 0.001 or abs(dy) > 0.001:
+        f["rotation"] = [
+            round(-math.atan2(dy, hdist) * 180 / math.pi, 2),
+            round(math.atan2(dx, dz) * 180 / math.pi, 2),
+            f.get("rotation", [0, 0, 0])[2] if f.get("rotation") else 0
+        ]
     _save("fixtures", _fixtures)
-    return jsonify(ok=True)
+    return jsonify(ok=True, rotation=f.get("rotation", [0, 0, 0]))
 
 @app.delete("/api/fixtures/<int:fid>")
 def api_fixture_delete(fid):
@@ -1221,7 +1274,6 @@ def api_cameras_register():
                 "rotation": [0, 0, 0], "aoeRadius": 1000, "meshFile": None,
                 "cameraIp": ip,
                 "cameraIdx": cam_idx,
-                "aimPoint": [0, 0, int(_stage.get("d", 10) * 1000)],
                 "fovDeg": _camera_fov_from_info(info, cam_idx) or body.get("fovDeg") or 60,
                 "cameraUrl": (info or {}).get("cameraUrl") or body.get("cameraUrl", ""),
                 "resolutionW": cam_info.get("resW") or body.get("resolutionW") or 1920,
@@ -1313,7 +1365,7 @@ def _pixel_to_stage(detections, cam_fixture, frame_w, frame_h):
     """Transform pixel-space detections to stage-space (mm).
 
     Uses calibrated homography if available, otherwise falls back to
-    ground-plane projection using camera position, aimPoint, and FOV.
+    ground-plane projection using camera position, rotation, and FOV.
     """
     # Try calibrated homography first
     cal = _calibrations.get(str(cam_fixture.get("id")))
@@ -1327,7 +1379,8 @@ def _pixel_to_stage(detections, cam_fixture, frame_w, frame_h):
     cy = cam_pos.get("y", 0)  # mm (height)
     cz = cam_pos.get("z", 0)  # mm (depth)
 
-    aim = cam_fixture.get("aimPoint", [0, 0, 0])
+    # Compute aim from rotation
+    aim = _rotation_to_aim(cam_fixture.get("rotation", [0, 0, 0]), [cx, cy, cz])
     ax, ay, az = aim[0], aim[1], aim[2]
 
     fov_deg = cam_fixture.get("fovDeg", 60)
@@ -1896,11 +1949,12 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
         if orient.get("homePan") is not None:
             start_pan = orient["homePan"]
             start_tilt = orient.get("homeTilt", 0.5)
-        # Use aim point as initial direction
-        if f.get("aimPoint") and f.get("x") is not None:
-            pt = _mcal.compute_initial_aim(
-                [f.get("x", 5000), f.get("y", 0), f.get("z", 0)],
-                f["aimPoint"])
+        # Use rotation as initial direction
+        rot = f.get("rotation", [0, 0, 0])
+        if any(v != 0 for v in rot) and f.get("x") is not None:
+            fx_pos = [f.get("x", 5000), f.get("y", 0), f.get("z", 0)]
+            aim_pt = _rotation_to_aim(rot, fx_pos)
+            pt = _mcal.compute_initial_aim(fx_pos, aim_pt)
             if pt:
                 start_pan, start_tilt = pt
 
@@ -3963,9 +4017,9 @@ def api_timeline_bake(tid):
         ft = ef.get("fixtureType", "led")
         strings = ef.get("strings", [])
         leds = sum(s.get("leds", 0) for s in strings)
-        log.info("  fixture %d '%s' type=%s strings=%d leds=%d aim=%s pos=(%s,%s)",
+        log.info("  fixture %d '%s' type=%s strings=%d leds=%d rot=%s pos=(%s,%s)",
                  ef.get("id"), ef.get("name"), ft, len(strings), leds,
-                 ef.get("aimPoint"), ef.get("x", "?"), ef.get("y", "?"))
+                 ef.get("rotation"), ef.get("x", "?"), ef.get("y", "?"))
     pos_map = {p["id"]: p for p in _layout.get("children", [])}
     placed = [f for f in enriched_fixtures if f["id"] in pos_map]
     log.info("BAKE: %d/%d fixtures have layout positions", len(placed), len(enriched_fixtures))

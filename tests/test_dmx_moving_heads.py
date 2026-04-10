@@ -230,26 +230,26 @@ def run():
     with app.test_client() as c:
         c.post('/api/reset', headers={'X-SlyLED-Confirm': 'true'})
 
-        # Create DMX fixture
+        # Create DMX fixture with rotation
         r = c.post('/api/fixtures', json={
             'name': 'MH Test', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 8,
-            'aimPoint': [1000, 0, 2000]
+            'rotation': [15, 30, 0]
         })
         fid = r.get_json().get('id')
-        ok('Create fixture with aimPoint', r.status_code == 200)
+        ok('Create fixture with rotation', r.status_code == 200)
 
-        # Verify aimPoint stored
+        # Verify rotation stored
         r = c.get(f'/api/fixtures/{fid}')
-        ok('aimPoint persisted', r.get_json().get('aimPoint') == [1000, 0, 2000])
+        ok('rotation persisted', r.get_json().get('rotation') == [15, 30, 0])
 
-        # PUT /aim
-        r = c.put(f'/api/fixtures/{fid}/aim', json={'aimPoint': [3000, -500, 1000]})
-        ok('PUT aim 200', r.status_code == 200)
+        # PUT /aim with rotation
+        r = c.put(f'/api/fixtures/{fid}/aim', json={'rotation': [-10.0, 45.0, 0.0]})
+        ok('PUT aim rotation 200', r.status_code == 200)
         r = c.get(f'/api/fixtures/{fid}')
-        ok('aimPoint updated', r.get_json().get('aimPoint') == [3000, -500, 1000])
+        ok('rotation updated', r.get_json().get('rotation') == [-10.0, 45.0, 0.0])
 
-        # PUT /aim bad data
+        # PUT /aim bad data (legacy aimPoint path)
         r = c.put(f'/api/fixtures/{fid}/aim', json={'aimPoint': 'bad'})
         ok('PUT aim bad data -> 400', r.status_code == 400)
 
@@ -259,17 +259,17 @@ def run():
         # PUT /aim on LED fixture -> 404
         r = c.post('/api/fixtures', json={'name': 'LED', 'type': 'linear', 'fixtureType': 'led'})
         led_id = r.get_json().get('id')
-        r = c.put(f'/api/fixtures/{led_id}/aim', json={'aimPoint': [0, 0, 0]})
+        r = c.put(f'/api/fixtures/{led_id}/aim', json={'rotation': [0, 0, 0]})
         ok('PUT aim on LED -> 404', r.status_code == 404)
 
-        # Default aimPoint on creation
+        # Default rotation on creation
         r = c.post('/api/fixtures', json={
             'name': 'MH Default', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 20, 'dmxChannelCount': 3,
         })
         fid2 = r.get_json().get('id')
         r = c.get(f'/api/fixtures/{fid2}')
-        ok('Default aimPoint', r.get_json().get('aimPoint') == [0, -1000, 0])
+        ok('Default rotation', r.get_json().get('rotation') == [0, 0, 0])
 
     # ================================================================
     # SUMMARY

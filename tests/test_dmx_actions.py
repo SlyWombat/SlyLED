@@ -90,7 +90,7 @@ def seed():
             'name': 'MH Left', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 16,
             'dmxProfileId': 'test-mover-16ch',
-            'aimPoint': [5000, 0, 5000]
+            'rotation': [0, 0, 0]
         })
         mh_id = r.get_json().get('id')
 

@@ -667,7 +667,14 @@ document.addEventListener('DOMContentLoaded',function(){
 
 var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0,units=0,_cvW=900,_cvH=450,_dragStartX=0,_dragStartY=0,_dragMoved=false;
 var _layTool='move'; // 'move' or 'rotate'
-var _undoStack=[];   // [{fid, x, y, z, aimPoint, rotation}]
+var _undoStack=[];   // [{fid, x, y, z, rotation}]
+function _rotToAim(rot,pos,dist){
+  // Convert rotation [rx,ry,rz] degrees + position to aim point [x,y,z]
+  dist=dist||3000;
+  var rx=rot?rot[0]:0,ry=rot&&rot.length>1?rot[1]:0;
+  var pr=ry*Math.PI/180,tr=rx*Math.PI/180;
+  return[pos[0]+Math.sin(pr)*Math.cos(tr)*dist,pos[1]-Math.sin(tr)*dist,pos[2]+Math.cos(pr)*Math.cos(tr)*dist];
+}
 var _compassGroup=null; // 3D compass ring group (created once, shown/hidden)
 var _compassFid=null;   // fixture ID that compass is attached to
 var _compassAngleLabel=null; // floating angle sprite near compass
@@ -942,7 +949,7 @@ function _dashEmuDraw(){
   layoutFixtures.forEach(function(fix){
     if(fix.fixtureType!=='dmx'||!fix.positioned)return;
     var fx=fix.x*W/emuCW,fy=H-fix.y*H/emuCH;
-    var aim=fix.aimPoint||[fix.x,0,0];
+    var aim=_rotToAim(fix.rotation||[0,0,0],[fix.x||0,fix.y||0,fix.z||0]);
     var ax=aim[0]*W/emuCW,ay=H-aim[1]*H/emuCH;
     var bLen=Math.sqrt((ax-fx)*(ax-fx)+(ay-fy)*(ay-fy));if(bLen<2)bLen=60;
     var bwDeg=(window._profileCache&&fix.dmxProfileId&&window._profileCache[fix.dmxProfileId])?window._profileCache[fix.dmxProfileId].beamWidth||15:15;
@@ -1872,16 +1879,25 @@ function s3dInit(){
     if(!e.value){
       _layoutDirty=true;_layDirtyUpdate();
       if(_s3dDraggingAim){
-        // Save aim point back to server and update local fixture data
+        // Convert dragged aim point position to rotation and save
         var obj=_s3d.tctl.object;
         if(obj){
           var wp=new THREE.Vector3();obj.getWorldPosition(wp);
           var aim=[Math.round(wp.x*1000),Math.round(wp.y*1000),Math.round(wp.z*1000)];
-          // Update local fixture data so re-render uses new aim
           var _aimFid=_s3dDraggingAim;
-          (_fixtures||[]).forEach(function(f){if(f.id===_aimFid)f.aimPoint=aim;});
+          (_fixtures||[]).forEach(function(f){if(f.id===_aimFid){
+            var dx=aim[0]-(f.x||0),dy=aim[1]-(f.y||0),dz=aim[2]-(f.z||0);
+            var hd=Math.sqrt(dx*dx+dz*dz);
+            if(hd>0.001||Math.abs(dy)>0.001){
+              f.rotation=[
+                Math.round(-Math.atan2(dy,hd)*180/Math.PI),
+                Math.round(Math.atan2(dx,dz)*180/Math.PI),
+                f.rotation?f.rotation[2]||0:0
+              ];
+            }
+          }});
           ra('PUT','/api/fixtures/'+_aimFid+'/aim',{aimPoint:aim},function(){
-            s3dLoadChildren(); // Re-render beam cone at new aim
+            s3dLoadChildren();
           });
         }
         _s3dDraggingAim=null;
@@ -2181,15 +2197,16 @@ function s3dLoadChildren(){
       ring.rotation.x=-Math.PI/2;
       grp.add(ring);
 
-      // DMX beam cone + aim point (for DMX fixtures with profiles)
+      // DMX beam cone + aim point (for DMX fixtures with rotation)
       var _fix3d=null;
       (_fixtures||[]).forEach(function(ff){if(ff.childId===c.id||ff.id===c.id)_fix3d=ff;});
       if(_fix3d&&(_fix3d.fixtureType==='dmx'||_fix3d.fixtureType==='camera')){
-        var aim=_fix3d.aimPoint||[c.x||0,0,(_s3d.stageD||10)*1000];
+        var _fRot=_fix3d.rotation||[0,0,0];
+        var aim=_rotToAim(_fRot,[c.x||0,c.y||0,c.z||0]);
         var aimLocal=new THREE.Vector3((aim[0]-(c.x||0))/1000,(aim[1]-(c.y||0))/1000,(aim[2]-(c.z||0))/1000);
         var beamLen=aimLocal.length();
-        // Cone only shown for calibrated DMX fixtures (not cameras, not uncalibrated)
-        var showCone=_fix3d.fixtureType==='dmx'&&_fix3d.aimPoint;
+        // Cone shown for DMX fixtures that have non-zero rotation
+        var showCone=_fix3d.fixtureType==='dmx'&&(_fRot[0]!==0||_fRot[1]!==0);
         if(beamLen>0.01&&showCone){
           var bwDeg=_fix3d.fixtureType==='camera'?(_fix3d.fovDeg||60):15;
           // Use cached profile beamWidth (sync) — _profileCache populated by emulator/layout
@@ -2413,11 +2430,7 @@ function _s3dSyncToLd(){
       var mm=_s3dToMm(grp.position);
       (ld.children||[]).forEach(function(c){if(c.id===cid){c.x=mm.x;c.y=mm.y;c.z=mm.z;}});
       (_fixtures||[]).forEach(function(f){if(f.id===cid){
-        // Move aim point with fixture (maintain relative offset)
-        if(f.aimPoint&&f.x!==undefined){
-          var dx=mm.x-(f.x||0),dy=mm.y-(f.y||0),dz=mm.z-(f.z||0);
-          f.aimPoint=[f.aimPoint[0]+dx,f.aimPoint[1]+dy,f.aimPoint[2]+dz];
-        }
+        // Rotation stays the same — beam direction is relative to fixture
         f.x=mm.x;f.y=mm.y;f.z=mm.z;f._placed=true;
       }});
     }
@@ -2466,15 +2479,10 @@ function _updateCompassArrow(){
   if(!_compassGroup||_compassFid===null)return;
   var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===_compassFid)f=fx;});
   if(!f)return;
-  var ap=f.aimPoint||[f.x||0,0,((_s3d.stageD||10)*1000)];
-  var dx=(ap[0]-(f.x||0))/1000;
-  var dz=(ap[2]-(f.z||0))/1000;
-  var dy=(ap[1]-(f.y||0))/1000;
-  var panRad=Math.atan2(dx,dz);
-  var hDist=Math.sqrt(dx*dx+dz*dz);
-  var tiltRad=Math.atan2(-dy,hDist);
-  var panDeg=Math.round(panRad*180/Math.PI);
-  var tiltDeg=Math.round(tiltRad*180/Math.PI);
+  var rot=f.rotation||[0,0,0];
+  var tiltDeg=Math.round(rot[0]);
+  var panDeg=Math.round(rot[1]);
+  var panRad=panDeg*Math.PI/180;
   var cRad=0.4;
   // Update arrow line
   _compassGroup.children.forEach(function(c){
@@ -2511,18 +2519,11 @@ function _updateCompassFromRotation(){
   if(!_s3d.selected||_compassFid===null)return;
   var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===_compassFid)f=fx;});
   if(!f)return;
-  // Read rotation from the 3D group and convert to aimPoint
+  // Read rotation from the 3D group and store directly as rotation
   var euler=_s3d.selected.rotation;
   var ryDeg=Math.round(euler.y*180/Math.PI);
   var rxDeg=Math.round(euler.x*180/Math.PI);
-  // Convert rotation to aim point at 1000mm distance
-  var panRad=euler.y;
-  var tiltRad=euler.x;
-  var dist=1000;
-  var ax=(f.x||0)+Math.round(Math.sin(panRad)*Math.cos(tiltRad)*dist);
-  var ay=(f.y||0)-Math.round(Math.sin(tiltRad)*dist);
-  var az=(f.z||0)+Math.round(Math.cos(panRad)*Math.cos(tiltRad)*dist);
-  f.aimPoint=[ax,ay,az];
+  f.rotation=[rxDeg,ryDeg,f.rotation?f.rotation[2]||0:0];
   // Update compass arrow
   _updateCompassArrow();
   // Live update side panel pan/tilt readout
@@ -2530,7 +2531,6 @@ function _updateCompassFromRotation(){
   var tiltEl=document.getElementById('panel-tilt');
   if(panEl)panEl.value=ryDeg;
   if(tiltEl)tiltEl.value=rxDeg;
-  // Update aim point fields too
   _updateSidePanel(_compassFid);
 }
 
@@ -2751,9 +2751,6 @@ function editFixture(id){
     h+='<label>Channel Count</label><input id="fx-ch" type="number" value="'+(f.dmxChannelCount||3)+'" min="1" style="width:100%;margin-bottom:.4em">';
     h+='<label>Profile ID <span style="color:#64748b;font-size:.75em">(optional)</span></label>';
     h+='<input id="fx-prof" value="'+escapeHtml(f.dmxProfileId||'')+'" style="width:100%">';
-    var ap=f.aimPoint||[f.x||0,0,0];
-    h+='<label>Aim Point (mm) <span style="color:#64748b;font-size:.75em">Where the beam points</span></label>';
-    h+='<div style="display:flex;gap:.3em"><label style="font-size:.75em">X</label><input id="fx-ax" type="number" value="'+ap[0]+'" style="width:80px"> <label style="font-size:.75em">Y</label><input id="fx-ay" type="number" value="'+ap[1]+'" style="width:80px"> <label style="font-size:.75em">Z</label><input id="fx-az" type="number" value="'+ap[2]+'" style="width:80px"></div>';
     h+='<div style="margin-top:.8em;border-top:1px solid #1e293b;padding-top:.6em">';
     h+='<div style="display:flex;justify-content:space-between;align-items:center">';
     h+='<span style="font-weight:bold;font-size:.85em">Test Channels</span>';
@@ -2780,14 +2777,11 @@ function editFixture(id){
     h+='<input id="fx-cam-url" value="'+escapeHtml(f.cameraUrl||'')+'" style="width:100%;margin-bottom:.4em">';
     h+='<div style="display:flex;gap:.5em"><div style="flex:1"><label>Width (px)</label><input id="fx-cam-rw" type="number" value="'+(f.resolutionW||1920)+'" style="width:100%"></div>';
     h+='<div style="flex:1"><label>Height (px)</label><input id="fx-cam-rh" type="number" value="'+(f.resolutionH||1080)+'" style="width:100%"></div></div>';
-    var ap=f.aimPoint||[f.x||0,0,0];
-    h+='<label>Aim Point (mm) <span style="color:#64748b;font-size:.75em">Where the camera looks</span></label>';
-    h+='<div style="display:flex;gap:.3em"><label style="font-size:.75em">X</label><input id="fx-ax" type="number" value="'+ap[0]+'" style="width:80px"> <label style="font-size:.75em">Y</label><input id="fx-ay" type="number" value="'+ap[1]+'" style="width:80px"> <label style="font-size:.75em">Z</label><input id="fx-az" type="number" value="'+ap[2]+'" style="width:80px"></div>';
   }
-  h+='<label>Rotation Override (degrees)</label>';
+  h+='<label>Rotation (degrees) <span style="color:#64748b;font-size:.75em">RX=Tilt, RY=Pan, RZ=Roll</span></label>';
   var rot=f.rotation||[0,0,0];
   h+='<div style="display:flex;gap:.3em"><label style="font-size:.75em">RX</label><input id="fx-rx" type="number" value="'+rot[0]+'" style="width:70px"> <label style="font-size:.75em">RY</label><input id="fx-ry" type="number" value="'+rot[1]+'" style="width:70px"> <label style="font-size:.75em">RZ</label><input id="fx-rz" type="number" value="'+rot[2]+'" style="width:70px"></div>';
-  h+='<p style="color:#64748b;font-size:.75em;margin-top:.3em">E.g., RZ=90 rotates an east string to vertical</p>';
+  h+='<p style="color:#64748b;font-size:.75em;margin-top:.3em">RY=0 faces forward (+Z). RY=90 faces right (+X).</p>';
   h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="saveFixture('+id+',\''+ft+'\')">Save</button></div>';
   document.getElementById('modal-title').textContent='Edit Fixture: '+f.name;
   document.getElementById('modal-body').innerHTML=h;
@@ -2950,15 +2944,11 @@ function saveFixture(id,ft){
     body.dmxStartAddr=parseInt(document.getElementById('fx-addr').value)||1;
     body.dmxChannelCount=parseInt(document.getElementById('fx-ch').value)||3;
     body.dmxProfileId=document.getElementById('fx-prof').value.trim()||null;
-    var axEl=document.getElementById('fx-ax'),ayEl=document.getElementById('fx-ay'),azEl=document.getElementById('fx-az');
-    if(axEl&&ayEl&&azEl)body.aimPoint=[parseFloat(axEl.value)||0,parseFloat(ayEl.value)||0,parseFloat(azEl.value)||0];
   }else if(ft==='camera'){
     body.fovDeg=parseInt(document.getElementById('fx-fov').value)||60;
     body.cameraUrl=document.getElementById('fx-cam-url').value.trim();
     body.resolutionW=parseInt(document.getElementById('fx-cam-rw').value)||1920;
     body.resolutionH=parseInt(document.getElementById('fx-cam-rh').value)||1080;
-    var axEl=document.getElementById('fx-ax'),ayEl=document.getElementById('fx-ay'),azEl=document.getElementById('fx-az');
-    if(axEl&&ayEl&&azEl)body.aimPoint=[parseFloat(axEl.value)||0,parseFloat(ayEl.value)||0,parseFloat(azEl.value)||0];
   }
   ra('PUT','/api/fixtures/'+id,body,function(r){closeModal();if(r&&r.ok){loadFixtures();loadSetup();}});
 }
@@ -4700,21 +4690,11 @@ function _updateSidePanel(fixtureId){
       h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">DMX</div>';
       h+='<div style="font-size:.82em;color:#c4b5fd;margin-bottom:.2em">Profile: '+(f.dmxProfileId?'<span style="color:#e9d5ff">'+escapeHtml(f.dmxProfileId)+'</span>':'<span style="color:#64748b">None</span>')+'</div>';
       h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.4em">Universe: '+(f.dmxUniverse||1)+' | Addr: '+(f.dmxStartAddr||1)+'</div>';
-      // Aim point editable
-      var ap=f.aimPoint||[0,0,0];
-      h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Aim Point</div>';
-      h+='<div style="display:flex;gap:.3em;align-items:center;margin-bottom:.4em">';
-      h+='<label style="font-size:.72em;color:#64748b;margin:0">X</label><input type="number" value="'+Math.round(ap[0])+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelAimChange('+f.id+',0,this.value)">';
-      h+='<label style="font-size:.72em;color:#64748b;margin:0">Y</label><input type="number" value="'+Math.round(ap[1])+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelAimChange('+f.id+',1,this.value)">';
-      h+='<label style="font-size:.72em;color:#64748b;margin:0">Z</label><input type="number" value="'+Math.round(ap[2])+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelAimChange('+f.id+',2,this.value)">';
-      h+='</div>';
       // Rotation / orientation
       var orient=f.orientation||{};
-      // Compute pan/tilt from aim point
-      var _pDx=(ap[0]-(f.x||0)),_pDz=(ap[2]-(f.z||0)),_pDy=(ap[1]-(f.y||0));
-      var _panDeg=Math.round(Math.atan2(_pDx,_pDz)*180/Math.PI);
-      var _hDist=Math.sqrt(_pDx*_pDx+_pDz*_pDz);
-      var _tiltDeg=Math.round(Math.atan2(-_pDy,_hDist)*180/Math.PI);
+      var _rot=f.rotation||[0,0,0];
+      var _panDeg=Math.round(_rot[1]);
+      var _tiltDeg=Math.round(_rot[0]);
       h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Orientation</div>';
       h+='<div style="display:flex;gap:.3em;align-items:center;margin-bottom:.3em">';
       h+='<label style="font-size:.72em;color:#64748b;margin:0">Pan\u00b0</label><input id="panel-pan" type="number" value="'+_panDeg+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelPanTiltChange('+f.id+',\'pan\',this.value)">';
@@ -4732,19 +4712,11 @@ function _updateSidePanel(fixtureId){
       h+='<div style="display:flex;gap:.3em;margin-bottom:.4em">';
       h+='<button class="btn" onclick="_intrinsicCalStart('+f.id+')" style="font-size:.7em;padding:.2em .5em;background:#164e63;color:#67e8f9">Calibrate Lens</button> ';
       h+='</div>';
-      // Aim point editable
-      var cap=f.aimPoint||[0,0,0];
-      h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Aim Point</div>';
-      h+='<div style="display:flex;gap:.3em;align-items:center">';
-      h+='<label style="font-size:.72em;color:#64748b;margin:0">X</label><input type="number" value="'+Math.round(cap[0])+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelAimChange('+f.id+',0,this.value)">';
-      h+='<label style="font-size:.72em;color:#64748b;margin:0">Y</label><input type="number" value="'+Math.round(cap[1])+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelAimChange('+f.id+',1,this.value)">';
-      h+='<label style="font-size:.72em;color:#64748b;margin:0">Z</label><input type="number" value="'+Math.round(cap[2])+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelAimChange('+f.id+',2,this.value)">';
-      h+='</div>';
-      // Pan/Tilt editable for camera
-      var _cDx=(cap[0]-(f.x||0)),_cDz=(cap[2]-(f.z||0)),_cDy=(cap[1]-(f.y||0));
-      var _cPanDeg=Math.round(Math.atan2(_cDx,_cDz)*180/Math.PI);
-      var _cHDist=Math.sqrt(_cDx*_cDx+_cDz*_cDz);
-      var _cTiltDeg=Math.round(Math.atan2(-_cDy,_cHDist)*180/Math.PI);
+      // Pan/Tilt editable for camera (from rotation)
+      var _cRot=f.rotation||[0,0,0];
+      var _cPanDeg=Math.round(_cRot[1]);
+      var _cTiltDeg=Math.round(_cRot[0]);
+      h+='<div style="font-weight:600;color:#94a3b8;font-size:.78em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Orientation</div>';
       h+='<div style="display:flex;gap:.3em;align-items:center;margin-top:.3em">';
       h+='<label style="font-size:.72em;color:#64748b;margin:0">Pan\u00b0</label><input id="panel-pan" type="number" value="'+_cPanDeg+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelPanTiltChange('+f.id+',\'pan\',this.value)">';
       h+='<label style="font-size:.72em;color:#64748b;margin:0">Tilt\u00b0</label><input id="panel-tilt" type="number" value="'+_cTiltDeg+'" style="width:58px;font-size:.82em;padding:2px 3px" onchange="_panelPanTiltChange('+f.id+',\'tilt\',this.value)">';
@@ -4753,48 +4725,20 @@ function _updateSidePanel(fixtureId){
     det.innerHTML=h;
   }
 }
-function _panelAimChange(fid,axis,val){
-  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===fid)f=fx;});
-  if(!f)return;
-  if(!f.aimPoint)f.aimPoint=[f.x||0,0,0];
-  f.aimPoint[axis]=parseInt(val)||0;
-  _layoutDirty=true;_layDirtyUpdate();
-  ra('PUT','/api/fixtures/'+fid+'/aim',{aimPoint:f.aimPoint});
-  s3dLoadChildren();
-  _updateCompassArrow();
-}
 function _panelPanTiltChange(fid,axis,deg){
   var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===fid)f=fx;});
   if(!f)return;
   var val=parseFloat(deg)||0;
-  var rad=val*Math.PI/180;
-  var dist=1000; // 1m aim distance
-  // Get current aim point to preserve the other axis
-  var ap=f.aimPoint||[f.x||0,0,0];
-  var dx=(ap[0]-(f.x||0)),dz=(ap[2]-(f.z||0)),dy=(ap[1]-(f.y||0));
-  var curPanRad=Math.atan2(dx,dz);
-  var hDist=Math.sqrt(dx*dx+dz*dz);
-  var curTiltRad=Math.atan2(-dy,hDist);
+  if(!f.rotation)f.rotation=[0,0,0];
   if(axis==='pan'){
-    var tRad=curTiltRad;
-    f.aimPoint=[
-      (f.x||0)+Math.round(Math.sin(rad)*Math.cos(tRad)*dist),
-      (f.y||0)-Math.round(Math.sin(tRad)*dist),
-      (f.z||0)+Math.round(Math.cos(rad)*Math.cos(tRad)*dist)
-    ];
+    f.rotation=[f.rotation[0],val,f.rotation[2]||0];
   } else {
-    var pRad=curPanRad;
-    f.aimPoint=[
-      (f.x||0)+Math.round(Math.sin(pRad)*Math.cos(rad)*dist),
-      (f.y||0)-Math.round(Math.sin(rad)*dist),
-      (f.z||0)+Math.round(Math.cos(pRad)*Math.cos(rad)*dist)
-    ];
+    f.rotation=[val,f.rotation[1],f.rotation[2]||0];
   }
   _layoutDirty=true;_layDirtyUpdate();
-  ra('PUT','/api/fixtures/'+fid+'/aim',{aimPoint:f.aimPoint});
+  ra('PUT','/api/fixtures/'+fid+'/aim',{rotation:f.rotation});
   s3dLoadChildren();
   _updateCompassArrow();
-  // Re-render panel to sync aim XYZ fields
   _updateSidePanel(fid);
 }
 function _panelPosChange(){
@@ -4860,9 +4804,9 @@ function showNodeEdit(f){
     h+='</table>';
   }
   if(ft==='dmx'){
-    var ap=f.aimPoint||[f.x||0,0,0];
-    h+='<div style="margin-bottom:.5em"><label style="font-size:.82em;color:#94a3b8">Aim Point (mm)</label>';
-    h+=' <span style="font-size:.75em;color:#64748b">('+ap[0]+', '+ap[1]+', '+ap[2]+')</span></div>';
+    var _fRot=f.rotation||[0,0,0];
+    h+='<div style="margin-bottom:.5em"><label style="font-size:.82em;color:#94a3b8">Direction</label>';
+    h+=' <span style="font-size:.75em;color:#64748b">Pan '+Math.round(_fRot[1])+'\u00b0 Tilt '+Math.round(_fRot[0])+'\u00b0</span></div>';
   }
   h+='<div style="display:flex;gap:.5em;flex-wrap:wrap">';
   h+='<button class="btn btn-on" onclick="applyNodePos('+f.id+')">Set Position</button>';
@@ -5338,8 +5282,8 @@ function emuDraw(){
       if(pd.dimmer>0)dimmer=(pd.dimmer/255)*0.3;
       else if(br+bg+bb>10)dimmer=0.2;
     }
-    // Draw beam cone toward aim point — beamWidth from profile or default
-    var aim=fix.aimPoint||[fix.x,0,0];
+    // Draw beam cone from rotation — beamWidth from profile or default
+    var aim=_rotToAim(fix.rotation||[0,0,0],[fix.x||0,fix.y||0,fix.z||0]);
     var ax=aim[0]*W/emuCW,ay=H-aim[1]*H/emuCH;
     var bwDeg=(fix._beamWidth)||(pd&&pd.beamWidth)||15;
     // Flood lights have wider beams (>40°), spots are narrow (<20°)
@@ -5374,7 +5318,7 @@ function emuDraw(){
     if(fix.fixtureType!=='camera'||!fix.positioned)return;
     var fx=fix.x*W/emuCW,fy=H-fix.y*H/emuCH;
     fx=Math.max(6,Math.min(W-6,fx));fy=Math.max(6,Math.min(H-6,fy));
-    var aim=fix.aimPoint||[fix.x,0,0];
+    var aim=_rotToAim(fix.rotation||[0,0,0],[fix.x||0,fix.y||0,fix.z||0]);
     var ax=aim[0]*W/emuCW,ay=H-aim[1]*H/emuCH;
     var bwDeg=fix.fovDeg||60;
     var bLen=Math.sqrt((ax-fx)*(ax-fx)+(ay-fy)*(ay-fy));
@@ -5497,8 +5441,8 @@ function autoArrangeDmx(){
       f.y=topY;
       f.z=backZ;
       f._placed=true;
-      // Aim straight down: same X/Z, Y=0 (floor)
-      f.aimPoint=[f.x,0,f.z];
+      // Point straight down: tilt -90° (looking at floor)
+      f.rotation=[-90,0,0];
     });
     // Update layout positions
     var positions=[];
@@ -5509,9 +5453,9 @@ function autoArrangeDmx(){
     });
     ra('POST','/api/layout',{fixtures:positions},function(r){
       if(r&&r.ok){
-        // Save aim points for each DMX fixture
+        // Save rotation for each DMX fixture
         dmx.forEach(function(f){
-          ra('PUT','/api/fixtures/'+f.id+'/aim',{aimPoint:f.aimPoint});
+          ra('PUT','/api/fixtures/'+f.id+'/aim',{rotation:f.rotation});
         });
         document.getElementById('hs').textContent='Arranged '+n+' DMX fixture(s) along top of stage';
         s3dLoadChildren();
@@ -6854,7 +6798,6 @@ function _layToolToggle(){
 }
 function _laySaveUndo(f){
   _undoStack.push({fid:f.id,x:f.x,y:f.y,z:f.z||0,
-    aimPoint:f.aimPoint?f.aimPoint.slice():null,
     rotation:f.rotation?f.rotation.slice():null});
   if(_undoStack.length>20)_undoStack.shift();
 }
@@ -6864,7 +6807,6 @@ function _layUndo(){
   _fixtures.forEach(function(f){
     if(f.id===u.fid){
       f.x=u.x;f.y=u.y;f.z=u.z;
-      if(u.aimPoint)f.aimPoint=u.aimPoint;
       if(u.rotation)f.rotation=u.rotation;
     }
   });

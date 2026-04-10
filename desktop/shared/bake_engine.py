@@ -45,6 +45,21 @@ ACT_DMX_GOBO = 16  # Gobo select
 ACT_DMX_COLOR_WHEEL = 17  # Color wheel select
 
 
+def _rotation_to_aim(rotation, pos, dist=3000):
+    """Convert rotation [rx, ry, rz] (degrees) + position to an aim point.
+
+    rx = tilt/pitch, ry = pan/yaw.  Default distance is 3000mm (3m).
+    Returns [x, y, z] in stage mm coordinates.
+    """
+    rx, ry = rotation[0] if rotation else 0, rotation[1] if rotation and len(rotation) > 1 else 0
+    pan_rad = math.radians(ry)
+    tilt_rad = math.radians(rx)
+    dx = math.sin(pan_rad) * math.cos(tilt_rad) * dist
+    dy = -math.sin(tilt_rad) * dist
+    dz = math.cos(pan_rad) * math.cos(tilt_rad) * dist
+    return [pos[0] + dx, pos[1] + dy, pos[2] + dz]
+
+
 class BakeProgress:
     """Bake progress tracker."""
     def __init__(self, total_steps=0):
@@ -479,9 +494,9 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
         child_pos = [lp.get("x", 0), lp.get("y", 0), lp.get("z", 0)]
         ft = f.get("fixtureType", "led")
         if ft == "dmx":
-            # DMX fixture: sample points along beam axis (fixture → aimPoint)
+            # DMX fixture: sample points along beam axis (fixture → rotation direction)
             # so spatial effects intersecting the beam cone trigger the fixture
-            aim = f.get("aimPoint", [child_pos[0], child_pos[1] - 2000, child_pos[2]])
+            aim = _rotation_to_aim(f.get("rotation", [0, 0, 0]), child_pos)
             beam_samples = [child_pos]  # fixture position
             n_samples = 5  # sample along beam at 0%, 25%, 50%, 75%, 100%
             for si in range(1, n_samples + 1):
@@ -536,7 +551,7 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
             "pixels": pixels, "pixelCount": len(pixels), "strings": strings_info,
             "fixtureType": ft,
             "profileInfo": _dmx_profile_info if ft == "dmx" else None,
-            "aimPoint": f.get("aimPoint", [0, 0, 10000]) if ft == "dmx" else None,
+            "rotation": f.get("rotation", [0, 0, 0]) if ft == "dmx" else None,
         }
 
     # Expand allPerformers and group fixtures into per-fixture tracks
@@ -672,9 +687,11 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
 
             if fdata.get("fixtureType") == "dmx":
                 # DMX fixture: compile with beam cone samples for intersection
+                fx_pos = pixels[0] if pixels else [0, 0, 0]
+                aim_from_rot = _rotation_to_aim(fdata.get("rotation", [0, 0, 0]), fx_pos)
                 steps = _compile_dmx_fixture(
-                    clip, fx, pixels[0] if pixels else [0, 0, 0],
-                    fdata.get("aimPoint", [0, 0, 10000]),
+                    clip, fx, fx_pos,
+                    aim_from_rot,
                     fdata.get("profileInfo"),
                     duration,
                     beam_pixels=pixels,

@@ -56,7 +56,7 @@ def seed_and_start():
             'name': 'Moving Head', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 16,
             'dmxProfileId': 'generic-moving-head-16bit',
-            'aimPoint': [5000, 2000, 5000]
+            'rotation': [-20, 0, 0]
         })
         fix_dmx = r.get_json()['id']
 
@@ -64,7 +64,7 @@ def seed_and_start():
             'name': 'RGB Par', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 33, 'dmxChannelCount': 3,
             'dmxProfileId': 'generic-rgb',
-            'aimPoint': [5000, 0, 5000]
+            'rotation': [0, 0, 0]
         })
         fix_par = r.get_json()['id']
 
@@ -170,7 +170,7 @@ def test_layout_fixtures(ids):
         leds = sum(s.get('leds', 0) for s in strings)
         ok(leds > 0, f'LED fixture {f["id"]} "{f.get("name")}" has {leds} LEDs')
     for f in dmx:
-        ok(f.get('aimPoint') is not None, f'DMX fixture {f["id"]} "{f.get("name")}" has aimPoint')
+        ok(f.get('rotation') is not None, f'DMX fixture {f["id"]} "{f.get("name")}" has rotation')
 
     # Check for fixture ID mismatches between show and layout
     timelines = api('GET', '/api/timelines')
