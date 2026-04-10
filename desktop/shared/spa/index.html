@@ -1919,9 +1919,10 @@ function s3dInit(){
   var originLbl=_s3dLabel('Origin (0,0,0)');
   originLbl.position.set(0,-0.08,0);
   _s3d.scene.add(originLbl);
+  // Axis labels match stage coords: X=width, Y=depth(3D Z), Z=height(3D Y)
   var xLbl=_s3dLabel('X');xLbl.position.set(0.6,0.05,0);_s3d.scene.add(xLbl);
-  var yLbl=_s3dLabel('Y');yLbl.position.set(0,0.6,0);_s3d.scene.add(yLbl);
-  var zLbl=_s3dLabel('Z');zLbl.position.set(0,0.05,0.6);_s3d.scene.add(zLbl);
+  var zLbl=_s3dLabel('Z');zLbl.position.set(0,0.6,0);_s3d.scene.add(zLbl);   // 3D Y-up = stage Z(height)
+  var yLbl=_s3dLabel('Y');yLbl.position.set(0,0.05,0.6);_s3d.scene.add(yLbl); // 3D Z = stage Y(depth)
 
   // Ambient + directional light
   _s3d.scene.add(new THREE.AmbientLight(0x334466,0.8));
@@ -2014,7 +2015,7 @@ function setView(view){
       _s3d.orthoCam.updateProjectionMatrix();
       tx=sw/2;ty=sh/2;tz=sd/2;
       cx=sw/2;cy=sh/2;cz=sd+50;
-      if(hint)hint.textContent='Front view (XY). Drag fixtures from sidebar. Double-click to edit. Scroll=zoom, Drag=pan.';
+      if(hint)hint.textContent='Front view (XZ). Drag fixtures from sidebar. Double-click to edit. Scroll=zoom, Drag=pan.';
     } else if(view==='top'){
       // Looking down -Y: camera sees XZ plane
       frustumH=Math.max(sd,sw/aspect)*1.05;
@@ -2025,7 +2026,7 @@ function setView(view){
       tx=sw/2;ty=0;tz=sd/2;
       cx=sw/2;cy=Math.max(sw,sd)*1.5;cz=sd/2;
       _s3d.orthoCam.up.set(0,0,-1);
-      if(hint)hint.textContent='Top view (XZ, bird-eye). Scroll=zoom, Drag=pan.';
+      if(hint)hint.textContent='Top view (XY, bird-eye). Scroll=zoom, Drag=pan.';
     } else if(view==='side'){
       // Looking down +X toward origin: camera sees ZY plane
       frustumH=Math.max(sh,sd/aspect)*1.05;
@@ -2035,7 +2036,7 @@ function setView(view){
       _s3d.orthoCam.updateProjectionMatrix();
       tx=sw/2;ty=sh/2;tz=sd/2;
       cx=sw+50;cy=sh/2;cz=sd/2;
-      if(hint)hint.textContent='Side view (ZY). Scroll=zoom, Drag=pan.';
+      if(hint)hint.textContent='Side view (YZ). Scroll=zoom, Drag=pan.';
     }
     _s3dSwitchCamera(_s3d.orthoCam);
     _s3d.controls.enableRotate=false;
@@ -2104,6 +2105,7 @@ function s3dLoadChildren(){
     setView(_layView||'front');
     // Draw stage boundary box
     _s3d.scene.children.forEach(function(c){if(c.userData.stageBox)_s3d.scene.remove(c);});
+    // Stage box: Three.js (X, Y-up=height, Z=depth) = stage (W, H, D)
     var boxGeo=new THREE.BoxGeometry(_s3d.stageW,_s3d.stageH,_s3d.stageD);
     var boxEdge=new THREE.EdgesGeometry(boxGeo);
     var boxLine=new THREE.LineSegments(boxEdge,new THREE.LineBasicMaterial({color:0x1e3a5f,opacity:0.4,transparent:true}));
@@ -2348,12 +2350,13 @@ function _s3dRenderGhosts(){
 }
 
 function _s3dPos(c){
-  // Direct mapping: layout X→3D X, layout Y→3D Y (height), layout Z→3D Z (depth)
-  // 2D canvas is the front view (XY plane), 3D adds depth on Z
-  return new THREE.Vector3((c.x||0)/1000,(c.y||0)/1000,(c.z||0)/1000);
+  // Stage coordinate system: X=width, Y=depth, Z=height
+  // Three.js uses Y-up, so we map: stage X→3D X, stage Y→3D Z (depth), stage Z→3D Y (height)
+  return new THREE.Vector3((c.x||0)/1000,(c.z||0)/1000,(c.y||0)/1000);
 }
 function _s3dToMm(pos){
-  return{x:Math.round(pos.x*1000),y:Math.round(pos.y*1000),z:Math.round(pos.z*1000)};
+  // Reverse: 3D X→stage X, 3D Y(up)→stage Z(height), 3D Z(depth)→stage Y(depth)
+  return{x:Math.round(pos.x*1000),y:Math.round(pos.z*1000),z:Math.round(pos.y*1000)};
 }
 function _s3dDir(sdir){
   // E=+X, N=+Y(up), W=-X, S=-Y(down)
