@@ -2949,7 +2949,14 @@ function saveFixture(id,ft){
     children.forEach(function(c){if(c.id===id){c.x=nx;c.y=ny;c.z=nz;found=true;}});
     if(!found)children.push({id:id,x:nx,y:ny,z:nz});
     lay.children=children;
-    ra('POST','/api/layout',lay,function(){closeModal();loadFixtures(function(){if(_s3d.inited)s3dLoadChildren();});loadSetup();});
+    ra('POST','/api/layout',lay,function(){
+      closeModal();
+      ra('GET','/api/layout',null,function(d){
+        if(d){ld=d;_fixtures=d.fixtures||[];}
+        if(_s3d.inited)s3dLoadChildren();renderFixturesSidebar();
+      });
+      loadSetup();
+    });
   });
 }
 
@@ -4915,7 +4922,11 @@ function applyNodePos(id){
     if(!found)children.push({id:id,x:nx,y:ny,z:nz});
     lay.children=children;
     ra('POST','/api/layout',lay,function(){
-      loadFixtures(function(){s3dLoadChildren();renderFixturesSidebar();_updateSidePanel(id);});
+      // Reload layout (merges fixtures+positions) then rebuild 3D
+      ra('GET','/api/layout',null,function(d){
+        if(d){ld=d;_fixtures=d.fixtures||[];}
+        s3dLoadChildren();renderFixturesSidebar();_updateSidePanel(id);
+      });
     });
   };
   if(rotChanged){
