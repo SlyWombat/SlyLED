@@ -2868,7 +2868,7 @@ function saveFixture(id,ft){
     children.forEach(function(c){if(c.id===id){c.x=nx;c.y=ny;c.z=nz;found=true;}});
     if(!found)children.push({id:id,x:nx,y:ny,z:nz});
     lay.children=children;
-    ra('POST','/api/layout',lay,function(){closeModal();loadFixtures();loadSetup();if(_s3d.inited)s3dLoadChildren();});
+    ra('POST','/api/layout',lay,function(){closeModal();loadFixtures(function(){if(_s3d.inited)s3dLoadChildren();});loadSetup();});
   });
 }
 
@@ -4759,12 +4759,12 @@ function layDS(e,id){_layDragId=id;e.dataTransfer.setData('text/plain',String(id
 
 function showNodeEdit(f){
   var h='<div style="margin-bottom:.8em">';
-  h+='<label>X (mm)</label><input id="ne-x" type="number" value="'+f.x+'" min="0" max="'+phW+'" style="width:120px">';
-  h+=' <label style="display:inline;margin-left:1em">Y (mm)</label><input id="ne-y" type="number" value="'+f.y+'" min="0" max="'+phH+'" style="width:120px">';
+  h+='<label>X (mm)</label><input id="ne-x" type="number" value="'+f.x+'" min="0" style="width:120px">';
+  h+=' <label style="display:inline;margin-left:1em">Y (mm)</label><input id="ne-y" type="number" value="'+f.y+'" min="0" style="width:120px">';
   h+=' <label style="display:inline;margin-left:1em">Z (mm)</label><input id="ne-z" type="number" value="'+(f.z||0)+'" min="0" style="width:120px">';
   h+='</div>';
   var ft=f.fixtureType||'led';
-  h+='<div style="color:#64748b;font-size:.8em;margin-bottom:.5em">Type: '+f.type+(ft==='dmx'?' (DMX)':'')+' | ID: '+f.id+'</div>';
+  h+='<div style="color:#64748b;font-size:.8em;margin-bottom:.5em">Type: '+f.type+(ft==='dmx'?' (DMX)':ft==='camera'?' (Camera)':'')+' | ID: '+f.id+'</div>';
   if(f.strings&&f.strings.length){
     var dirs=['East (+X)','North (+Y)','West (-X)','South (-Y)'];
     h+='<table class="tbl" style="font-size:.8em;margin-bottom:.8em"><tr><th>#</th><th>LEDs</th><th>Length</th><th>Dir</th></tr>';
@@ -4774,13 +4774,21 @@ function showNodeEdit(f){
     }
     h+='</table>';
   }
-  if(ft==='dmx'){
+  // Rotation fields for DMX and Camera fixtures
+  if(ft==='dmx'||ft==='camera'){
     var _fRot=f.rotation||[0,0,0];
-    h+='<div style="margin-bottom:.5em"><label style="font-size:.82em;color:#94a3b8">Direction</label>';
-    h+=' <span style="font-size:.75em;color:#64748b">Pan '+Math.round(_fRot[1])+'\u00b0 Tilt '+Math.round(_fRot[0])+'\u00b0</span></div>';
+    h+='<div style="margin-bottom:.6em">';
+    h+='<label style="font-size:.82em;color:#94a3b8">Orientation (degrees)</label>';
+    h+='<div style="display:flex;gap:.4em;align-items:center;margin-top:.2em">';
+    h+='<label style="font-size:.75em;color:#64748b;margin:0">Tilt</label><input id="ne-tilt" type="number" value="'+Math.round(_fRot[0])+'" style="width:65px;font-size:.85em;padding:2px 4px">';
+    h+='<label style="font-size:.75em;color:#64748b;margin:0">Pan</label><input id="ne-pan" type="number" value="'+Math.round(_fRot[1])+'" style="width:65px;font-size:.85em;padding:2px 4px">';
+    h+='<label style="font-size:.75em;color:#64748b;margin:0">Roll</label><input id="ne-roll" type="number" value="'+Math.round(_fRot[2]||0)+'" style="width:65px;font-size:.85em;padding:2px 4px">';
+    h+='</div>';
+    h+='<div style="font-size:.72em;color:#64748b;margin-top:.2em">Pan=0 faces forward (+Y). Tilt negative = down.</div>';
+    h+='</div>';
   }
   h+='<div style="display:flex;gap:.5em;flex-wrap:wrap">';
-  h+='<button class="btn btn-on" onclick="applyNodePos('+f.id+')">Set Position</button>';
+  h+='<button class="btn btn-on" onclick="applyNodePos('+f.id+')">Save</button>';
   if(ft==='dmx'){
     h+='<button class="btn" style="background:#1e3a5f;color:#93c5fd" onclick="startAimMode('+f.id+')">Click to Aim</button>';
     h+='<button class="btn" style="background:#6b21a8;color:#d8b4fe" onclick="closeModal();_moverCalStart('+f.id+')">Calibrate'+(f.moverCalibrated?' \u2713':'')+'</button>';
@@ -4800,12 +4808,36 @@ function applyNodePos(id){
   var nx=parseInt(document.getElementById('ne-x').value)||0;
   var ny=parseInt(document.getElementById('ne-y').value)||0;
   var nz=parseInt(document.getElementById('ne-z').value)||0;
-  nx=Math.max(0,Math.min(phW,nx));ny=Math.max(0,Math.min(phH,ny));nz=Math.max(0,nz);
+  nx=Math.max(0,nx);ny=Math.max(0,ny);nz=Math.max(0,nz);
+  // Save rotation if fields present (DMX/camera)
+  var tiltEl=document.getElementById('ne-tilt');
+  var panEl=document.getElementById('ne-pan');
+  var rollEl=document.getElementById('ne-roll');
+  var rotChanged=false;
+  if(tiltEl&&panEl){
+    var newRot=[parseFloat(tiltEl.value)||0,parseFloat(panEl.value)||0,parseFloat(rollEl?rollEl.value:0)||0];
+    _fixtures.forEach(function(f){if(f.id===id){f.rotation=newRot;}});
+    rotChanged=true;
+  }
   _fixtures.forEach(function(f){if(f.id===id){f.x=nx;f.y=ny;f.z=nz;f._placed=true;f.positioned=true;}});
-  closeModal();s3dLoadChildren();renderFixturesSidebar();
-  // Persist to server
-  var toSave=_fixtures.filter(_isFixturePlaced).map(function(f){return{id:f.id,x:f.x,y:f.y,z:f.z||0};});
-  ra('POST','/api/layout',{fixtures:toSave});
+  closeModal();
+  // Save rotation to server first, then layout position
+  var afterRot=function(){
+    var lay=ld||{};var children=(lay.children||[]).slice();
+    var found=false;
+    children.forEach(function(c){if(c.id===id){c.x=nx;c.y=ny;c.z=nz;found=true;}});
+    if(!found)children.push({id:id,x:nx,y:ny,z:nz});
+    lay.children=children;
+    ra('POST','/api/layout',lay,function(){
+      loadFixtures(function(){s3dLoadChildren();renderFixturesSidebar();_updateSidePanel(id);});
+    });
+  };
+  if(rotChanged){
+    var f=null;_fixtures.forEach(function(fx){if(fx.id===id)f=fx;});
+    ra('PUT','/api/fixtures/'+id+'/aim',{rotation:f?f.rotation:[0,0,0]},afterRot);
+  }else{
+    afterRot();
+  }
 }
 
 function removeFromCanvas(id){
