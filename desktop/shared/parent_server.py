@@ -79,7 +79,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "1.3.1"
+VERSION = "1.4.1"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -4274,12 +4274,26 @@ _dmx_playback_stop = threading.Event()
 _PATROL_SPEED_PRESETS = {"slow": 20.0, "medium": 10.0, "fast": 5.0}
 
 def _evaluate_object_patrols(elapsed):
-    """Update positions of patrolling objects based on elapsed playback time."""
-    sw = _stage.get("w", 10) * 1000
-    sh = _stage.get("h", 5) * 1000
-    sd = _stage.get("d", 10) * 1000
-    dims = {"x": sw, "y": sh, "z": sd}
+    """Update positions of patrolling objects based on elapsed playback time.
+
+    Motion patterns:
+      pingpong — oscillate back and forth along axis (default)
+      circle   — circular motion in the horizontal plane (XY)
+      figure8  — figure-8 pattern in the horizontal plane (XY)
+      square   — rectangular path along the perimeter of the range
+
+    Bounding box: if patrol.boundingObject is set to another object's name,
+    the patrol range is derived from that object's transform (pos + scale)
+    instead of using startPct/endPct of the stage dimensions.
+    """
+    sw = _stage.get("w", 10) * 1000  # stage width in mm (X)
+    sd = _stage.get("d", 10) * 1000  # stage depth in mm (Y)
+    sh = _stage.get("h", 5) * 1000   # stage height in mm (Z)
+    dims = {"x": sw, "y": sd, "z": sh}
     all_objs = _objects + _temporal_objects
+    # Build name→object lookup for bounding box references
+    obj_by_name = {o.get("name", ""): o for o in all_objs if o.get("name")}
+
     for obj in all_objs:
         if obj.get("mobility") != "moving":
             continue
@@ -4290,24 +4304,92 @@ def _evaluate_object_patrols(elapsed):
         cycle_s = _PATROL_SPEED_PRESETS.get(preset, pat.get("cycleS", 10.0))
         if cycle_s <= 0:
             continue
-        start_pct = pat.get("startPct", 10) / 100.0
-        end_pct = pat.get("endPct", 90) / 100.0
         easing = pat.get("easing", "sine")
-        # Ping-pong phase: 0→1→0 over one full cycle
+        pattern = pat.get("pattern", "pingpong")
+
+        # Phase: 0→1 over one full cycle
         phase = (elapsed % cycle_s) / cycle_s
-        t = 1.0 - abs(2.0 * phase - 1.0)  # triangle wave 0→1→0
-        if easing == "sine":
-            t = 0.5 - 0.5 * math.cos(t * math.pi)  # smooth ease in/out
-        axis = pat.get("axis", "x")
+
+        # Determine bounding range — either from a named bounding object or stage %
+        bound_obj_name = pat.get("boundingObject", "")
+        if bound_obj_name and bound_obj_name in obj_by_name:
+            # Use the bounding object's transform as the motion range
+            bo = obj_by_name[bound_obj_name]
+            bt = bo.get("transform", {})
+            bp = bt.get("pos", [0, 0, 0])
+            bs = bt.get("scale", [1000, 1000, 1000])
+            x_lo, x_hi = bp[0], bp[0] + bs[0]
+            y_lo, y_hi = bp[1], bp[1] + bs[1]
+            z_lo, z_hi = bp[2], bp[2] + bs[2]
+        else:
+            start_pct = pat.get("startPct", 10) / 100.0
+            end_pct = pat.get("endPct", 90) / 100.0
+            x_lo, x_hi = sw * start_pct, sw * end_pct
+            y_lo, y_hi = sd * start_pct, sd * end_pct
+            z_lo, z_hi = 0, 0  # floor level for horizontal patterns
+
+        # Center and half-size for circular/figure-8 patterns
+        cx = (x_lo + x_hi) / 2.0
+        cy = (y_lo + y_hi) / 2.0
+        rx = (x_hi - x_lo) / 2.0
+        ry = (y_hi - y_lo) / 2.0
+
         pos = obj.get("transform", {}).get("pos", [0, 0, 0])
         new_pos = list(pos)
-        for ax in (list(axis) if len(axis) > 1 else [axis]):
-            dim = dims.get(ax, sw)
-            lo = dim * start_pct
-            hi = dim * end_pct
-            val = lo + t * (hi - lo)
-            idx = {"x": 0, "y": 1, "z": 2}.get(ax, 0)
-            new_pos[idx] = val
+
+        if pattern == "circle":
+            # Circular motion in XY plane
+            angle = phase * 2.0 * math.pi
+            if easing == "sine":
+                angle = phase * 2.0 * math.pi  # already smooth for circle
+            new_pos[0] = cx + rx * math.cos(angle)
+            new_pos[1] = cy + ry * math.sin(angle)
+
+        elif pattern == "figure8":
+            # Figure-8 (lissajous): X has 1x frequency, Y has 2x frequency
+            angle = phase * 2.0 * math.pi
+            new_pos[0] = cx + rx * math.sin(angle)
+            new_pos[1] = cy + ry * math.sin(2.0 * angle)
+
+        elif pattern == "square":
+            # Rectangular perimeter path: 4 equal segments
+            # Segment 0: left→right (bottom), 1: bottom→top (right),
+            # 2: right→left (top), 3: top→bottom (left)
+            seg = int(phase * 4) % 4
+            seg_t = (phase * 4) % 1.0
+            if easing == "sine":
+                seg_t = 0.5 - 0.5 * math.cos(seg_t * math.pi)
+            if seg == 0:
+                new_pos[0] = x_lo + seg_t * (x_hi - x_lo)
+                new_pos[1] = y_lo
+            elif seg == 1:
+                new_pos[0] = x_hi
+                new_pos[1] = y_lo + seg_t * (y_hi - y_lo)
+            elif seg == 2:
+                new_pos[0] = x_hi - seg_t * (x_hi - x_lo)
+                new_pos[1] = y_hi
+            else:
+                new_pos[0] = x_lo
+                new_pos[1] = y_hi - seg_t * (y_hi - y_lo)
+
+        else:
+            # Default: pingpong — back-and-forth along axis
+            t = 1.0 - abs(2.0 * phase - 1.0)  # triangle wave 0→1→0
+            if easing == "sine":
+                t = 0.5 - 0.5 * math.cos(t * math.pi)
+            axis = pat.get("axis", "x")
+            for ax in (list(axis) if len(axis) > 1 else [axis]):
+                dim = dims.get(ax, sw)
+                start_pct = pat.get("startPct", 10) / 100.0
+                end_pct = pat.get("endPct", 90) / 100.0
+                lo = dim * start_pct
+                hi = dim * end_pct
+                if bound_obj_name and bound_obj_name in obj_by_name:
+                    lo = {"x": x_lo, "y": y_lo, "z": z_lo}.get(ax, lo)
+                    hi = {"x": x_hi, "y": y_hi, "z": z_hi}.get(ax, hi)
+                idx = {"x": 0, "y": 1, "z": 2}.get(ax, 0)
+                new_pos[idx] = lo + t * (hi - lo)
+
         obj.setdefault("transform", {})["pos"] = new_pos
 
 def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
@@ -5975,6 +6057,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

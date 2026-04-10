@@ -3658,10 +3658,12 @@ function newObject(){
   h+='<div id="sf-patrol" style="margin-top:.6em;padding:.5em;border:1px solid #1e293b;border-radius:4px">';
   h+='<label style="cursor:pointer"><input type="checkbox" id="sf-pat-en" onchange="_patToggle()"> Patrol (auto back-and-forth)</label>';
   h+='<div id="sf-pat-opts" style="display:none;margin-top:.4em">';
-  h+='<label>Axis</label><select id="sf-pat-axis"><option value="x">Side to side (X)</option><option value="z">Front to back (Z)</option><option value="xz">Diagonal (X+Z)</option></select>';
+  h+='<label>Pattern</label><select id="sf-pat-pattern" onchange="_patPatternChange()"><option value="pingpong">Ping-Pong</option><option value="circle">Circle</option><option value="figure8">Figure 8</option><option value="square">Square</option></select>';
+  h+='<div id="sf-pat-axis-wrap"><label>Axis</label><select id="sf-pat-axis"><option value="x">Side to side (X)</option><option value="y">Front to back (Y)</option><option value="xy">Diagonal (X+Y)</option></select></div>';
   h+='<label>Speed</label><select id="sf-pat-speed" onchange="var c=document.getElementById(\'sf-pat-cyc\');c.style.display=this.value===\'custom\'?\'inline\':\'none\'"><option value="slow">Slow (20s)</option><option value="medium" selected>Medium (10s)</option><option value="fast">Fast (5s)</option><option value="custom">Custom</option></select>';
   h+=' <input id="sf-pat-cyc" type="number" value="10" min="1" max="120" style="width:60px;display:none"> <span id="sf-pat-cyc-lbl" style="font-size:.8em;color:#666">sec</span>';
   h+='<label>Range</label><input id="sf-pat-start" type="number" value="10" min="0" max="100" style="width:50px">% to <input id="sf-pat-end" type="number" value="90" min="0" max="100" style="width:50px">% of stage';
+  h+='<div id="sf-pat-bound-wrap"><label>Bounding Object <span style="color:#64748b;font-size:.75em">(optional)</span></label><select id="sf-pat-bound"><option value="">None (use stage %)</option></select></div>';
   h+='<label>Easing</label><select id="sf-pat-ease"><option value="sine">Smooth (sine)</option><option value="linear">Linear</option></select>';
   h+='</div></div>';
   h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="createObject()">Add to Stage</button></div>';
@@ -3715,7 +3717,27 @@ function objTypeChange(){
 function _patToggle(){
   var en=document.getElementById('sf-pat-en');
   var opts=document.getElementById('sf-pat-opts');
-  if(en&&opts)opts.style.display=en.checked?'block':'none';
+  if(en&&opts){
+    opts.style.display=en.checked?'block':'none';
+    if(en.checked)_patPopulateBoundingObjects();
+  }
+}
+function _patPatternChange(){
+  // Show/hide axis selector — only for pingpong (circle/figure8/square use XY implicitly)
+  var pat=document.getElementById('sf-pat-pattern');
+  var axWrap=document.getElementById('sf-pat-axis-wrap');
+  if(pat&&axWrap)axWrap.style.display=(pat.value==='pingpong')?'block':'none';
+}
+function _patPopulateBoundingObjects(){
+  // Populate the bounding object dropdown with existing static objects
+  var sel=document.getElementById('sf-pat-bound');if(!sel)return;
+  var html='<option value="">None (use stage %)</option>';
+  (_objects||[]).forEach(function(o){
+    if(o.mobility!=='moving'&&o.name){
+      html+='<option value="'+escapeHtml(o.name)+'">'+escapeHtml(o.name)+'</option>';
+    }
+  });
+  sel.innerHTML=html;
 }
 function objLockChange(){
   var lk=document.getElementById('sf-lock');
@@ -3745,11 +3767,16 @@ function createObject(){
   var patEn=document.getElementById('sf-pat-en');
   if(patEn&&patEn.checked){
     var sp=document.getElementById('sf-pat-speed');
-    body.patrol={enabled:true,axis:document.getElementById('sf-pat-axis').value||'x',
+    var patPattern=document.getElementById('sf-pat-pattern');
+    var patBound=document.getElementById('sf-pat-bound');
+    body.patrol={enabled:true,
+      pattern:patPattern?patPattern.value:'pingpong',
+      axis:document.getElementById('sf-pat-axis').value||'x',
       speedPreset:sp?sp.value:'medium',cycleS:parseFloat(document.getElementById('sf-pat-cyc').value)||10,
       startPct:parseInt(document.getElementById('sf-pat-start').value)||10,
       endPct:parseInt(document.getElementById('sf-pat-end').value)||90,
-      easing:document.getElementById('sf-pat-ease').value||'sine'};
+      easing:document.getElementById('sf-pat-ease').value||'sine',
+      boundingObject:(patBound&&patBound.value)||''};
   }
   ra('POST','/api/objects',body,function(r){
     closeModal();if(r&&r.ok){loadObjects();s3dLoadChildren();}
@@ -3788,10 +3815,14 @@ function editObject(id){
     h+='<div id="sf-patrol" style="margin-top:.6em;padding:.5em;border:1px solid #1e293b;border-radius:4px">';
     h+='<label style="cursor:pointer"><input type="checkbox" id="sf-pat-en" onchange="_patToggle()"'+(pat.enabled?' checked':'')+'>  Patrol (auto back-and-forth)</label>';
     h+='<div id="sf-pat-opts" style="'+(pat.enabled?'':'display:none;')+'margin-top:.4em">';
-    h+='<label>Axis</label><select id="sf-pat-axis"><option value="x"'+((pat.axis||'x')==='x'?' selected':'')+'>Side to side (X)</option><option value="z"'+((pat.axis)==='z'?' selected':'')+'>Front to back (Z)</option><option value="xz"'+((pat.axis)==='xz'?' selected':'')+'>Diagonal (X+Z)</option></select>';
+    h+='<label>Pattern</label><select id="sf-pat-pattern" onchange="_patPatternChange()"><option value="pingpong"'+((pat.pattern||'pingpong')==='pingpong'?' selected':'')+'>Ping-Pong</option><option value="circle"'+((pat.pattern)==='circle'?' selected':'')+'>Circle</option><option value="figure8"'+((pat.pattern)==='figure8'?' selected':'')+'>Figure 8</option><option value="square"'+((pat.pattern)==='square'?' selected':'')+'>Square</option></select>';
+    h+='<div id="sf-pat-axis-wrap" style="'+((pat.pattern&&pat.pattern!=='pingpong')?'display:none':'')+'"><label>Axis</label><select id="sf-pat-axis"><option value="x"'+((pat.axis||'x')==='x'?' selected':'')+'>Side to side (X)</option><option value="y"'+((pat.axis)==='y'?' selected':'')+'>Front to back (Y)</option><option value="xy"'+((pat.axis)==='xy'?' selected':'')+'>Diagonal (X+Y)</option></select></div>';
     h+='<label>Speed</label><select id="sf-pat-speed" onchange="var c=document.getElementById(\'sf-pat-cyc\');c.style.display=this.value===\'custom\'?\'inline\':\'none\'"><option value="slow"'+((pat.speedPreset)==='slow'?' selected':'')+'>Slow (20s)</option><option value="medium"'+((pat.speedPreset||'medium')==='medium'?' selected':'')+'>Medium (10s)</option><option value="fast"'+((pat.speedPreset)==='fast'?' selected':'')+'>Fast (5s)</option><option value="custom"'+((pat.speedPreset)==='custom'?' selected':'')+'>Custom</option></select>';
     h+=' <input id="sf-pat-cyc" type="number" value="'+(pat.cycleS||10)+'" min="1" max="120" style="width:60px;'+(pat.speedPreset==='custom'?'':'display:none')+'">';
     h+='<label>Range</label><input id="sf-pat-start" type="number" value="'+(pat.startPct||10)+'" min="0" max="100" style="width:50px">% to <input id="sf-pat-end" type="number" value="'+(pat.endPct||90)+'" min="0" max="100" style="width:50px">% of stage';
+    h+='<div id="sf-pat-bound-wrap"><label>Bounding Object <span style="color:#64748b;font-size:.75em">(optional)</span></label><select id="sf-pat-bound"><option value="">None (use stage %)</option>';
+    (_objects||[]).forEach(function(o){if(o.mobility!=='moving'&&o.name)h+='<option value="'+escapeHtml(o.name)+'"'+((pat.boundingObject===o.name)?' selected':'')+'>'+escapeHtml(o.name)+'</option>';});
+    h+='</select></div>';
     h+='<label>Easing</label><select id="sf-pat-ease"><option value="sine"'+((pat.easing||'sine')==='sine'?' selected':'')+'>Smooth (sine)</option><option value="linear"'+((pat.easing)==='linear'?' selected':'')+'>Linear</option></select>';
     h+='</div></div>';
   }
@@ -3825,11 +3856,16 @@ function updateObject(id){
   var patEn=document.getElementById('sf-pat-en');
   if(patEn&&patEn.checked){
     var sp=document.getElementById('sf-pat-speed');
-    body.patrol={enabled:true,axis:document.getElementById('sf-pat-axis').value||'x',
+    var patPattern=document.getElementById('sf-pat-pattern');
+    var patBound=document.getElementById('sf-pat-bound');
+    body.patrol={enabled:true,
+      pattern:patPattern?patPattern.value:'pingpong',
+      axis:document.getElementById('sf-pat-axis').value||'x',
       speedPreset:sp?sp.value:'medium',cycleS:parseFloat(document.getElementById('sf-pat-cyc').value)||10,
       startPct:parseInt(document.getElementById('sf-pat-start').value)||10,
       endPct:parseInt(document.getElementById('sf-pat-end').value)||90,
-      easing:document.getElementById('sf-pat-ease').value||'sine'};
+      easing:document.getElementById('sf-pat-ease').value||'sine',
+      boundingObject:(patBound&&patBound.value)||''};
   }
   // Delete and recreate (simple approach since objects API doesn't have PUT)
   ra('DELETE','/api/objects/'+id,null,function(){

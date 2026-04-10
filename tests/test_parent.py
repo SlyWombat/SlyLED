@@ -1065,11 +1065,41 @@ def run():
         diag = [o for o in objs if o['id'] == diag_id][0]
         ok('Patrol diagonal axis', diag['patrol'].get('axis') == 'xz')
 
+        # Patrol with circle pattern
+        r = c.post('/api/objects', json={
+            'name': 'Circler', 'objectType': 'prop', 'mobility': 'moving',
+            'patrol': {'enabled': True, 'pattern': 'circle', 'speedPreset': 'fast'}})
+        ok('POST patrol circle', r.status_code == 200)
+        circ_id = r.get_json().get('id')
+        circ = [o for o in c.get('/api/objects').get_json() if o['id'] == circ_id][0]
+        ok('Patrol circle pattern', circ['patrol'].get('pattern') == 'circle')
+
+        # Patrol with figure8 pattern
+        r = c.post('/api/objects', json={
+            'name': 'Figure8', 'objectType': 'prop', 'mobility': 'moving',
+            'patrol': {'enabled': True, 'pattern': 'figure8', 'speedPreset': 'medium'}})
+        ok('POST patrol figure8', r.status_code == 200)
+        f8_id = r.get_json().get('id')
+
+        # Patrol with square pattern + bounding object
+        r = c.post('/api/objects', json={
+            'name': 'Squarer', 'objectType': 'prop', 'mobility': 'moving',
+            'patrol': {'enabled': True, 'pattern': 'square', 'speedPreset': 'slow',
+                        'boundingObject': 'Patrol Singer'}})
+        ok('POST patrol square with bounding', r.status_code == 200)
+        sq_id = r.get_json().get('id')
+        sq = [o for o in c.get('/api/objects').get_json() if o['id'] == sq_id][0]
+        ok('Patrol square pattern', sq['patrol'].get('pattern') == 'square')
+        ok('Patrol bounding object', sq['patrol'].get('boundingObject') == 'Patrol Singer')
+
         # Cleanup patrol objects
         c.delete('/api/objects/' + str(pat_id))
         c.delete('/api/objects/' + str(no_pat_id))
         c.delete('/api/objects/' + str(cust_id))
         c.delete('/api/objects/' + str(diag_id))
+        c.delete('/api/objects/' + str(circ_id))
+        c.delete('/api/objects/' + str(f8_id))
+        c.delete('/api/objects/' + str(sq_id))
 
         # ── Track action (#186) ───────────────────────────────────────
         # Create moving objects and a Track action
