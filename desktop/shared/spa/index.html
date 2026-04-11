@@ -40,6 +40,47 @@ input,select{background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-ra
 input:focus,select:focus{border-color:#3b82f6;outline:none;box-shadow:0 0 0 2px rgba(59,130,246,.2)}
 label{color:#94a3b8;font-size:.82em;display:block;margin-top:.6em}
 .footer{padding:.8em 2em;font-size:.7em;color:#334155}
+/* File menu */
+#file-menu-wrap{position:relative;display:inline-block}
+#file-menu-btn{background:none;border:1px solid rgba(51,65,85,.3);color:#94a3b8;padding:.3em .7em;border-radius:4px;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-size:.78em;font-weight:600;letter-spacing:.06em;text-transform:uppercase;transition:all .15s}
+#file-menu-btn:hover{color:#e2e8f0;border-color:#3b82f6;background:rgba(59,130,246,.1)}
+#file-dropdown{display:none;position:absolute;top:100%;left:0;margin-top:4px;background:#0f172a;border:1px solid #334155;border-radius:6px;min-width:220px;z-index:300;box-shadow:0 8px 24px rgba(0,0,0,.5);padding:4px 0}
+#file-dropdown.open{display:block}
+.fm-item{display:block;width:100%;background:none;border:none;color:#e2e8f0;text-align:left;padding:.45em 1em;font-size:.82em;cursor:pointer;font-family:'Inter',sans-serif;transition:background .1s}
+.fm-item:hover{background:rgba(59,130,246,.15)}
+.fm-item .fm-key{float:right;color:#64748b;font-size:.85em;font-family:monospace}
+.fm-sep{border:none;border-top:1px solid rgba(51,65,85,.3);margin:4px 0}
+.fm-sub{position:relative}
+.fm-sub-menu{display:none;position:absolute;left:100%;top:0;background:#0f172a;border:1px solid #334155;border-radius:6px;min-width:200px;z-shadow:0 8px 24px rgba(0,0,0,.5);padding:4px 0;z-index:301}
+.fm-sub:hover .fm-sub-menu{display:block}
+.fm-item-muted{color:#64748b;font-size:.78em;padding:.3em 1em;cursor:default}
+#proj-name-display{color:#64748b;font-size:.78em;font-family:'Space Grotesk',sans-serif;letter-spacing:.04em;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+body.light #file-menu-btn{color:#475569;border-color:#e2e8f0}
+body.light #file-menu-btn:hover{color:#0f172a;border-color:#3b82f6}
+body.light #file-dropdown{background:#ffffff;border-color:#e2e8f0}
+body.light .fm-item{color:#0f172a}
+body.light .fm-item:hover{background:rgba(59,130,246,.1)}
+body.light .fm-sep{border-top-color:#e2e8f0}
+body.light .fm-sub-menu{background:#ffffff;border-color:#e2e8f0}
+body.light #proj-name-display{color:#94a3b8}
+/* Fixture status grid (#303) */
+#dash-live-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:.8em}
+.flx-card{background:#0f172a;border:1px solid rgba(51,65,85,.3);border-radius:6px;padding:8px 10px;width:120px;transition:border-color .3s,box-shadow .3s;position:relative;overflow:hidden}
+.flx-card.flx-active{border-color:rgba(34,211,238,.25);box-shadow:0 0 12px rgba(34,211,238,.08)}
+.flx-card.flx-off{opacity:.5}
+.flx-name{font-size:.7em;font-weight:600;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em;margin-bottom:4px}
+.flx-swatch{width:100%;height:22px;border-radius:3px;margin-bottom:4px;transition:background-color .3s}
+.flx-dim-bar{height:4px;background:#1e293b;border-radius:2px;overflow:hidden;margin-bottom:3px}
+.flx-dim-fill{height:100%;background:linear-gradient(90deg,#3b82f6,#22d3ee);border-radius:2px;transition:width .3s;width:0%}
+.flx-effect{font-size:.62em;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.flx-dmx-addr{font-size:.58em;color:#475569;font-family:monospace}
+.flx-badge{position:absolute;top:4px;right:4px;width:6px;height:6px;border-radius:50%}
+.flx-badge-on{background:#22c55e;box-shadow:0 0 4px rgba(34,197,94,.5)}
+.flx-badge-off{background:#475569}
+body.light .flx-card{background:#ffffff;border-color:#e2e8f0}
+body.light .flx-name{color:#0f172a}
+body.light .flx-dim-bar{background:#e2e8f0}
+body.light .flx-effect{color:#475569}
 .modal-bg{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(2,6,23,.85);backdrop-filter:blur(4px);z-index:100;overflow:auto}
 .modal-box{background:#0f172a;border:1px solid #334155;border-radius:6px;max-width:540px;margin:3em auto;padding:1.5em}
 .modal-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:.8em}
@@ -77,21 +118,51 @@ body.light .li:hover{border-color:#3b82f6}
 <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:1em'><span style='font-family:Space Grotesk;font-weight:600;color:#e2e8f0'>Help</span><button onclick='toggleHelp()' style='background:none;border:none;color:#64748b;font-size:1.3em;cursor:pointer'>&times;</button></div>
 <div id='help-body' style='font-size:.85em;color:#94a3b8;line-height:1.6'><p>Select a tab to see contextual help.</p></div>
 </div>
-<img src='data:image/png;base64,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' style='height:48px;width:auto;flex-shrink:0' alt='SlyLED'><div><h1>Sly<span>LED</span></h1><div id='hs'>Loading...</div></div></div>
+<img src='data:image/png;base64,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' style='height:48px;width:auto;flex-shrink:0' alt='SlyLED'><div><h1>Sly<span>LED</span></h1><div id='hs'>Loading...</div></div>
+<div style='flex:1'></div>
+<div id='file-menu-wrap'>
+  <button id='file-menu-btn' onclick='_fmToggle(event)'>File &#9662;</button>
+  <div id='file-dropdown'>
+    <button class='fm-item' onclick='_fmNewProject()'>New Project</button>
+    <button class='fm-item' onclick='_fmOpen()'>Open...<span class='fm-key'>Ctrl+O</span></button>
+    <div class='fm-sub'>
+      <button class='fm-item'>Open Recent &#9656;</button>
+      <div class='fm-sub-menu' id='fm-recent-menu'>
+        <span class='fm-item-muted'>No recent projects</span>
+      </div>
+    </div>
+    <hr class='fm-sep'>
+    <button class='fm-item' onclick='_fmSave()'>Save<span class='fm-key'>Ctrl+S</span></button>
+    <button class='fm-item' onclick='_fmSaveAs()'>Save As...</button>
+    <hr class='fm-sep'>
+    <button class='fm-item' onclick='exportConfig(this)'>Export Config</button>
+    <label class='fm-item' style='cursor:pointer'>Import Config<input type='file' accept='.json' style='display:none' onchange='importConfig(this)'></label>
+  </div>
+</div>
+<span id='proj-name-display'></span>
+<input type='file' id='proj-file-input' accept='.slyshow,.json' style='display:none' onchange='_fmOpenFile(this)'>
+</div>
 <nav>
   <button id='n-dash'     class='tnav tact' onclick='showTab("dash")' data-tip='tabDash'>Dashboard</button>
   <button id='n-setup'    class='tnav'      onclick='showTab("setup")' data-tip='tabSetup'>Setup</button>
   <button id='n-layout'   class='tnav'      onclick='showTab("layout")' data-tip='tabLayout'>Layout</button>
   <button id='n-actions'  class='tnav'      onclick='showTab("actions")' data-tip='tabActions'>Actions</button>
+  <button id='n-shows'    class='tnav'      onclick='showTab("shows")' data-tip='tabShows'>Shows</button>
   <button id='n-runtime'  class='tnav'      onclick='showTab("runtime")' data-tip='tabRuntime'>Runtime</button>
   <button id='n-settings' class='tnav'      onclick='showTab("settings")' data-tip='tabSettings'>Settings</button>
   <button id='n-firmware' class='tnav'      onclick='showTab("firmware")' data-tip='tabFirmware'>Firmware</button>
 </nav>
 
 <div id='t-dash' class='tab'>
-  <div id='dash-content'><p style='color:#888'>Loading...</p></div>
-  <div style='margin-top:.8em'><div style='font-weight:600;color:#94a3b8;font-size:.82em;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em'>Stage Preview</div>
-  <div id='dash-3d' style='width:100%;height:350px;background:#060a12;border:1px solid #1e293b;border-radius:4px;overflow:hidden'></div></div>
+  <div id='dash-3d' style='width:100%;height:350px;background:#060a12;border:1px solid #1e293b;border-radius:4px;overflow:hidden'></div>
+  <div id='dash-content' style='margin-top:.6em'><p style='color:#888'>Loading...</p></div>
+  <div style='margin-top:.6em'>
+    <div style='display:flex;align-items:center;gap:.6em;margin-bottom:.3em'>
+      <span style='font-weight:600;color:#94a3b8;font-size:.82em;text-transform:uppercase;letter-spacing:.06em'>Fixture Monitor</span>
+      <span id='dash-live-label' style='font-size:.7em;color:#475569'></span>
+    </div>
+    <div id='dash-live-grid'></div>
+  </div>
   <div id='dash-runner' style='margin-top:.6em'></div>
 </div>
 <div id='t-setup'   class='tab' style='display:none'></div>
@@ -125,9 +196,22 @@ body.light .li:hover{border-color:#3b82f6}
     <button class='btn' id='btn-view-top' onclick='setView("top")' title='Top view (bird-eye)' style='width:auto;height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0'>Top</button>
     <button class='btn' id='btn-view-side' onclick='setView("side")' title='Side view' style='width:auto;height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0'>Side</button>
     <button class='btn' id='btn-view-3d' onclick='setView("3d")' title='3D perspective (orbit)' style='width:auto;height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0'>3D</button>
-    <button class='btn' id='btn-lay-strings' onclick='_layDetailToggle()' title='Show/hide LED strings' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;background:#14532d;color:#86efac'><svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' id='lay-detail-svg'><line x1='8' y1='6' x2='21' y2='6'/><line x1='8' y1='12' x2='21' y2='12'/><line x1='8' y1='18' x2='21' y2='18'/><line x1='3' y1='6' x2='3.01' y2='6'/><line x1='3' y1='12' x2='3.01' y2='12'/><line x1='3' y1='18' x2='3.01' y2='18'/></svg></button>
-    <button class='btn' id='btn-lay-cones' onclick='_layConesToggle()' title='Show/hide beam cones' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;background:#4c1d95;color:#c4b5fd'><svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 2L6 22h12L12 2z'/><ellipse cx='12' cy='22' rx='6' ry='2'/></svg></button>
-    <button class='btn' id='btn-show-cloud' onclick='_togglePointCloud()' title='Show/hide point cloud' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='.5'><path d='M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z'/></svg></button>
+    <div style='position:relative;display:inline-block'>
+      <button class='btn' id='btn-view-menu' onclick='_toggleViewMenu()' title='View visibility options' style='height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;gap:3px'>
+        <svg width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z'/><circle cx='12' cy='12' r='3'/></svg>View <span style='font-size:8px'>&#x25BC;</span>
+      </button>
+      <div id='view-dropdown' style='display:none;position:absolute;top:32px;left:0;background:#1a1a24;border:1px solid #2a2a3a;border-radius:6px;padding:4px 0;min-width:190px;z-index:100;box-shadow:0 6px 20px rgba(0,0,0,.5)'>
+        <label class='ali' style='display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer'><input type='checkbox' id='vw-strings' checked onchange='_layDetailToggle()'> LED Strings</label>
+        <label class='ali' style='display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer'><input type='checkbox' id='vw-lightcones' onchange='_layConesToggle()'> Light Cones</label>
+        <label class='ali' style='display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer'><input type='checkbox' id='vw-camcones' onchange='_layCamConesToggle()'> Camera Cones</label>
+        <label class='ali' style='display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer'><input type='checkbox' id='vw-orient' checked onchange='_layOrientToggle()'> Orientation Vectors</label>
+        <div style='border-top:1px solid #2a2a3a;margin:3px 0'></div>
+        <label class='ali' style='display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer'><input type='checkbox' id='vw-cloud' onchange='_togglePointCloud()'> Point Cloud</label>
+        <label class='ali' style='display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer'><input type='checkbox' id='vw-grid' checked onchange='_layGridToggle()'> Grid</label>
+        <label class='ali' style='display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer'><input type='checkbox' id='vw-labels' checked onchange='_layLabelsToggle()'> Labels</label>
+        <label class='ali' style='display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer'><input type='checkbox' id='vw-stagebox' checked onchange='_layStageBoxToggle()'> Stage Box</label>
+      </div>
+    </div>
     <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
     <!-- Zone 3: Align dropdown + Auto-arrange -->
     <div style='position:relative;display:inline-block'>
@@ -244,45 +328,79 @@ body.light .li:hover{border-color:#3b82f6}
   <div id='act-list'><p style='color:#888'>Loading...</p></div>
 </div>
 
-<div id='t-runtime' class='tab' style='display:none'>
-  <!-- Timeline mode -->
-  <div id='rt-timeline'>
+<!-- ── Shows tab (timeline editor) ── -->
+<div id='t-shows' class='tab' style='display:none'>
+  <!-- Show bar -->
+  <div style='display:flex;align-items:center;gap:.8em;margin-bottom:.6em;flex-wrap:wrap'>
+    <button class='btn btn-nav' onclick='exportShow(this)'>Save Show</button>
+    <button class='btn btn-nav' onclick='openLoadShowModal()'>Open Show</button>
+    <span style='flex:1'></span>
+    <button class='btn btn-on' onclick='newTimeline()'>+ New Timeline</button>
+    <select id='tl-select' onchange='loadTimelineDetail()' style='min-width:150px'><option value=''>Select timeline...</option></select>
+    <button class='btn' onclick='deleteTimeline()' style='background:#7f1d1d;color:#fca5a5'>Delete</button>
+  </div>
+  <!-- Timeline detail editor -->
+  <div id='tl-detail' style='display:none'>
     <div style='display:flex;align-items:center;gap:.8em;margin-bottom:.6em;flex-wrap:wrap'>
-      <button class='btn btn-on' onclick='newTimeline()'>+ New Timeline</button>
-      <select id='tl-select' onchange='loadTimelineDetail()' style='min-width:150px'><option value=''>Select timeline...</option></select>
-      <button class='btn' onclick='deleteTimeline()' style='background:#7f1d1d;color:#fca5a5'>Delete</button>
+      <label style='color:#94a3b8;font-size:.82em'>Name</label><input id='tl-name' style='width:150px'>
+      <label style='color:#94a3b8;font-size:.82em'>Duration (s)</label><input id='tl-dur' type='number' min='1' max='3600' style='width:80px'>
+      <label style='color:#94a3b8;font-size:.82em;display:flex;align-items:center;gap:.3em'><input type='checkbox' id='tl-loop'> Loop</label>
+      <button class='btn btn-on' onclick='saveTimeline(this)'>Save</button>
     </div>
-    <div id='tl-detail' style='display:none'>
-      <div style='display:flex;align-items:center;gap:.8em;margin-bottom:.6em'>
-        <label style='color:#94a3b8;font-size:.82em'>Name</label><input id='tl-name' style='width:150px'>
-        <label style='color:#94a3b8;font-size:.82em'>Duration (s)</label><input id='tl-dur' type='number' min='1' max='3600' style='width:80px'>
-        <label style='color:#94a3b8;font-size:.82em;display:flex;align-items:center;gap:.3em'><input type='checkbox' id='tl-loop'> Loop</label>
-        <button class='btn btn-on' onclick='saveTimeline(this)'>Save</button>
-      </div>
-      <!-- Track timeline area -->
-      <div id='tl-tracks' style='border:1px solid #334155;border-radius:4px;background:#0a0f1a;min-height:200px;position:relative;overflow-x:auto'>
-        <div id='tl-ruler' style='height:24px;border-bottom:1px solid #1e293b;position:relative;background:#0f172a'></div>
-        <div id='tl-track-rows'></div>
-        <!-- Playhead -->
-        <div id='tl-playhead' style='position:absolute;top:0;left:60px;width:2px;height:100%;background:#22d3ee;pointer-events:none;z-index:10;transition:left 0.1s'></div>
-      </div>
-      <div style='margin-top:.6em;display:flex;align-items:center;gap:.5em'>
-        <button class='btn' onclick='tlAddTrack()' style='background:#1e3a5f;color:#93c5fd'>+ Add Track</button>
-        <button class='btn btn-on' id='tl-play-btn' onclick='tlTogglePreview()'>&#9654; Preview</button>
-        <button class='btn' id='tl-pause-btn' onclick='tlPause()' style='background:#334;color:#94a3b8'>&#10074;&#10074; Pause</button>
-        <button class='btn' onclick='tlRewind()' style='background:#223;color:#64748b'>&#9194;</button>
-        <span id='tl-time' style='color:#64748b;font-size:.82em;font-family:monospace'>00:00.0</span>
-        <span style='flex:1'></span>
-        <button class='btn' onclick='tlBake()' style='background:#4a2080;color:#c4b5fd'>Bake</button>
-        <button class='btn btn-on' onclick='tlSyncAndStart()'>Start Show</button>
-        <button class='btn btn-off' id='tl-stop-btn' onclick='tlStop()'>&#9632; Stop</button>
-      </div>
+    <!-- Track timeline area -->
+    <div id='tl-tracks' style='border:1px solid #334155;border-radius:4px;background:#0a0f1a;min-height:200px;position:relative;overflow-x:auto'>
+      <div id='tl-ruler' style='height:24px;border-bottom:1px solid #1e293b;position:relative;background:#0f172a'></div>
+      <div id='tl-track-rows'></div>
+      <div id='tl-playhead' style='position:absolute;top:0;left:60px;width:2px;height:100%;background:#22d3ee;pointer-events:none;z-index:10;transition:left 0.1s'></div>
     </div>
-    <div id='tl-emulator' style='margin-top:1em'>
-      <div style='font-size:.82em;color:#94a3b8;margin-bottom:.3em'>Stage Preview</div>
-      <div id='emu-3d' style='width:100%;height:400px;border:1px solid #334155;background:#060a12;border-radius:4px;overflow:hidden;position:relative'></div>
-      <div id='emu-time' style='font-size:.72em;color:#64748b;margin-top:.2em'></div>
+    <div style='margin-top:.6em;display:flex;align-items:center;gap:.5em;flex-wrap:wrap'>
+      <button class='btn' onclick='tlAddTrack()' style='background:#1e3a5f;color:#93c5fd'>+ Add Track</button>
+      <button class='btn btn-on' id='tl-play-btn' onclick='tlTogglePreview()'>&#9654; Preview</button>
+      <button class='btn' id='tl-pause-btn' onclick='tlPause()' style='background:#334;color:#94a3b8'>&#10074;&#10074; Pause</button>
+      <button class='btn' onclick='tlRewind()' style='background:#223;color:#64748b'>&#9194;</button>
+      <span id='tl-time' style='color:#64748b;font-size:.82em;font-family:monospace'>00:00.0</span>
+      <span style='flex:1'></span>
+      <button class='btn' onclick='tlBake()' style='background:#4a2080;color:#c4b5fd'>Bake</button>
     </div>
+  </div>
+  <!-- Shows tab 3D preview -->
+  <div style='margin-top:1em'>
+    <div style='font-size:.82em;color:#94a3b8;margin-bottom:.3em'>Stage Preview</div>
+    <div id='shows-3d' style='width:100%;height:400px;border:1px solid #334155;background:#060a12;border-radius:4px;overflow:hidden;position:relative'></div>
+    <div id='shows-emu-time' style='font-size:.72em;color:#64748b;margin-top:.2em'></div>
+  </div>
+</div>
+
+<!-- ── Runtime tab (playback + playlist) ── -->
+<div id='t-runtime' class='tab' style='display:none'>
+  <!-- 3D Stage Preview (hero) -->
+  <div id='emu-3d' style='width:100%;height:500px;border:1px solid #334155;background:#060a12;border-radius:4px;overflow:hidden;position:relative'></div>
+  <div id='emu-time' style='font-size:.72em;color:#64748b;margin-top:.2em'></div>
+  <!-- Show Playlist -->
+  <div style='margin-top:.8em'>
+    <div style='display:flex;align-items:center;gap:.8em;margin-bottom:.4em'>
+      <span style='font-weight:600;color:#94a3b8;font-size:.82em;text-transform:uppercase;letter-spacing:.06em'>Show Playlist</span>
+      <span style='flex:1'></span>
+      <label style='color:#94a3b8;font-size:.82em;display:flex;align-items:center;gap:.3em'><input type='checkbox' id='rt-loop-all' onchange='_rtLoopToggle()'> Loop All</label>
+    </div>
+    <div id='rt-playlist' style='border:1px solid #334155;border-radius:4px;background:#0a0f1a;min-height:40px;padding:4px'></div>
+    <div id='rt-playlist-total' style='font-size:.72em;color:#64748b;margin-top:.2em'></div>
+  </div>
+  <!-- Playback controls -->
+  <div style='margin-top:.6em;display:flex;align-items:center;gap:.5em;flex-wrap:wrap'>
+    <button class='btn btn-on' id='rt-preview-btn' onclick='_rtPreviewAll()'>&#9654; Preview All</button>
+    <button class='btn' id='rt-pause-btn' onclick='_rtPause()' style='background:#334;color:#94a3b8'>&#10074;&#10074;</button>
+    <button class='btn' onclick='_rtRewind()' style='background:#223;color:#64748b'>&#9194;</button>
+    <span id='rt-time' style='color:#64748b;font-size:.82em;font-family:monospace'>00:00 / 00:00</span>
+    <span style='flex:1'></span>
+    <button class='btn' id='rt-bake-btn' onclick='_rtBakeAll()' style='background:#4a2080;color:#c4b5fd'>Bake All</button>
+    <button class='btn btn-on' id='rt-start-btn' onclick='_rtStartShow()'>&#9654; Start Show</button>
+    <button class='btn btn-off' id='rt-stop-btn' onclick='_rtStopShow()'>&#9632; Stop</button>
+  </div>
+  <!-- Progress bar -->
+  <div style='margin-top:.4em'>
+    <div class='prog-bar'><div class='prog-fill' id='rt-prog-fill' style='width:0%'></div></div>
+    <div id='rt-now-playing' style='font-size:.72em;color:#64748b;margin-top:.2em'></div>
   </div>
 </div>
 
@@ -292,7 +410,6 @@ body.light .li:hover{border-color:#3b82f6}
     <button class='tnav tact' id='sn-general' onclick='_setSection("general")'>General</button>
     <button class='tnav' id='sn-profiles' onclick='_setSection("profiles")'>Profiles</button>
     <button class='tnav' id='sn-dmx' onclick='_setSection("dmx")'>DMX Engine</button>
-    <button class='tnav' id='sn-shows' onclick='_setSection("shows")'>Shows</button>
     <button class='tnav' id='sn-cameras' onclick='_setSection("cameras")'>Cameras</button>
     <button class='tnav' id='sn-advanced' onclick='_setSection("advanced")'>Advanced</button>
   </div>
@@ -413,28 +530,6 @@ body.light .li:hover{border-color:#3b82f6}
     </div>
     <div id='patch-grid' style='overflow-x:auto'></div>
   </div>
-  </div>
-
-  <!-- SHOWS -->
-  <div id='ss-shows' style='display:none'>
-    <div class='card' style='max-width:480px'>
-      <div class='card-title'>Configuration (Fixtures + Layout)</div>
-      <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Save or load fixture registration and layout positioning.</p>
-      <div style='display:flex;gap:.5em;flex-wrap:wrap'>
-        <button class='btn btn-nav' onclick='exportConfig(this)' data-tip='setExportConfig'>Save Config</button>
-        <label class='btn btn-nav' style='cursor:pointer' data-tip='setLoadConfig'>Load Config
-          <input type='file' accept='.json' style='display:none' onchange='importConfig(this)'>
-        </label>
-      </div>
-    </div>
-    <div class='card' style='max-width:480px'>
-      <div class='card-title'>Show (Actions + Timelines)</div>
-      <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Save or load show programming. Loading replaces all current show data.</p>
-      <div style='display:flex;gap:.5em;flex-wrap:wrap'>
-        <button class='btn btn-nav' onclick='exportShow(this)' data-tip='setExportShow'>Save Show</button>
-        <button class='btn btn-nav' onclick='openLoadShowModal()' data-tip='setLoadShow'>Load Show</button>
-      </div>
-    </div>
   </div>
 
   <!-- CAMERAS -->
@@ -699,33 +794,33 @@ var _panelSections={fixtures:false,objects:false,scene:false}; // collapse state
 var _panelSelectedFid=null; // currently selected fixture ID for side panel
 function _clearTabTimers(){
   if(typeof dashRunnerTimer!=='undefined'&&dashRunnerTimer){clearInterval(dashRunnerTimer);dashRunnerTimer=null;}
+  if(typeof _rtTimer!=='undefined'&&_rtTimer){clearInterval(_rtTimer);_rtTimer=null;}
   if(typeof _emuTimer!=='undefined'&&_emuTimer){clearInterval(_emuTimer);_emuTimer=null;}
   if(typeof _emuAnimId!=='undefined'&&_emuAnimId){cancelAnimationFrame(_emuAnimId);_emuAnimId=null;}
   if(_emu3d.animId){cancelAnimationFrame(_emu3d.animId);_emu3d.animId=null;}
   if(typeof _tlPlayTimer!=='undefined'&&_tlPlayTimer){clearInterval(_tlPlayTimer);_tlPlayTimer=null;_tlPlaying=false;}
 }
 function showTab(t){
-  var liveTab=(t==='dash'||t==='runtime');
+  var liveTab=(t==='dash'||t==='runtime'||t==='shows');
   // Only detach if going to a non-live tab (layout, setup, etc.)
   if(!liveTab&&_emu3d.activeTab){_emu3dDetach();}
   _clearTabTimers();
   // Stop layout render loop if leaving layout
   if(ctab==='layout'&&t!=='layout'&&_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
   ctab=t;
-  ['dash','setup','layout','actions','runtime','settings','firmware'].forEach(function(id){
-    document.getElementById('t-'+id).style.display=id===t?'block':'none';
+  ['dash','setup','layout','actions','shows','runtime','settings','firmware'].forEach(function(id){
+    var el=document.getElementById('t-'+id);
+    if(el)el.style.display=id===t?'block':'none';
     var n=document.getElementById('n-'+id);
-    n.className='tnav'+(id===t?' tact':'');
+    if(n)n.className='tnav'+(id===t?' tact':'');
   });
   if(t==='dash'){
     if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
     loadDash();
-    // dash-3d is persistent in HTML — attach immediately if 3D is ready
     if(_s3d.inited&&_s3d.renderer&&_emu3d.inited)_dashAttach3d();
   }
   else if(t==='setup')loadSetup();
   else if(t==='layout'){
-    // Restore layout renderer if it was taken by live viewport
     if(_s3d.inited&&_s3d.renderer){
       var el=document.getElementById('stage3d');
       if(el&&!el.contains(_s3d.renderer.domElement)){_emu3dDetach();}
@@ -734,6 +829,17 @@ function showTab(t){
     loadLayout();
   }
   else if(t==='actions')loadActions();
+  else if(t==='shows'){
+    // Attach 3D canvas to shows preview container
+    if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
+    if(!_s3d.inited)s3dInit();
+    if(_s3d.renderer){
+      emu3dInit();
+      _emu3dAttach('shows-3d');
+      if(!_emu3d.animId)emu3dAnimate();
+    }
+    loadShows();
+  }
   else if(t==='runtime'){
     // Attach 3D canvas to runtime container
     if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
@@ -801,66 +907,26 @@ function pollResults(url){
 var dashRunnerTimer=null;
 function loadDash(){
   if(dashRunnerTimer)clearInterval(dashRunnerTimer);
+  _liveGridBuilt=false;
   api('GET','/api/actions').then(function(a){_acts=a||[];}).catch(function(){});
-  // Always render from current server state — background ping thread keeps it fresh
+  // Dashboard is fully live — fixture grid + runner status auto-refresh every 1s
   api('GET','/api/children').then(function(d){
     var startupDone=!d||!d.length||d[0].startupDone!==false;
-    var h='<div style="margin-bottom:.6em;display:flex;align-items:center;gap:.6em">';
-    h+='<button class="btn" id="dash-refresh" onclick="dashRefresh(this)" style="background:#446;color:#fff;padding:.3em .8em" data-tip="dashRefresh">&#x21bb; Refresh All</button>';
-    if(!startupDone)h+='<span id="dash-startup" style="color:#fa6;font-size:.82em">&#x23f3; Checking fixtures...</span>';
-    h+='</div>';
-    h+='<table class="tbl"><tr><th>Fixture</th><th>Board</th><th>IP</th><th>Status</th><th>RSSI</th><th>FW</th><th>LEDs</th><th>Last Seen</th></tr>';
-    if(d&&d.length){
-      d.forEach(function(c){
-        var st;
-        if(!startupDone&&c.status!==1)st='<span class="badge" style="background:#333;color:#888">Checking...</span>';
-        else st=c.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
-        // Infer board type from child data
-        var board=c.boardType||'SlyLED';
-        if(c.type==='wled')board='WLED';
-        else if(!c.boardType){
-          if(c.sc<=1&&c.strings&&c.strings.length&&c.strings[0].leds<=1)board='Giga';
-          else board='ESP32';
-        }
-        var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b'};
-        var bc=boardColors[board]||'#446';
-        var tp='<span class="badge" style="background:'+bc+';color:#fff">'+board+'</span>';
-        // Total LED count across all configured strings
-        var totalLeds=0;
-        if(c.strings)c.strings.forEach(function(s,i){if(i<c.sc)totalLeds+=(s.leds||0);});
-        var ledInfo=c.sc+'&times;'+totalLeds;
-        var ts=c.seen>0?new Date(c.seen*1000).toLocaleString():'-';
-        var displayName=(c.name&&c.name!==c.hostname)?escapeHtml(c.name):escapeHtml(c.hostname);
-        var subtitle=(c.name&&c.name!==c.hostname)?'<span style="font-size:.75em;color:#888">'+escapeHtml(c.hostname)+'</span>':'';
-        // RSSI signal indicator
-        var rssi=c.rssi||0;
-        var rssiTxt=c.status===1&&rssi?rssi+' dBm':'';
-        var rssiCol=rssi>-50?'#4c4':rssi>-70?'#fa6':'#f66';
-        var rssiBar=c.status===1&&rssi?'<span style="color:'+rssiCol+';font-size:.85em" title="'+rssi+' dBm">'+_rssiIcon(rssi)+'</span>':'<span style="color:#666">—</span>';
-        h+='<tr><td><b>'+displayName+'</b>'+(subtitle?'<br>'+subtitle:'')+'</td><td>'+tp+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+rssiBar+'</td><td><span id="fw-'+c.id+'">'+escapeHtml(c.fwVersion||'-')+'</span></td><td>'+ledInfo+'</td><td>'+ts+'</td></tr>';
-      });
-    }else{
-      h+='<tr><td colspan="8" style="color:#888;text-align:center">No fixtures registered</td></tr>';
-    }
-    h+='</table>';
-    document.getElementById('dash-content').innerHTML=h;
-    // Attach 3D viewport (dash-3d is persistent in HTML, never recreated)
+    document.getElementById('dash-content').innerHTML=
+      !startupDone?'<span style="color:#fa6;font-size:.82em">&#x23f3; Checking fixtures...</span>':'';
     _dashAttach3d();
-    // Check for firmware updates
-    api('GET','/api/firmware/check').then(function(chk){
-      if(!chk||!chk.children)return;
-      chk.children.forEach(function(u){
-        var el=document.getElementById('fw-'+u.id);
-        if(!el)return;
-        if(u.needsUpdate&&u.board!=='wled'){
-          el.innerHTML=escapeHtml(u.currentVersion)+' <button class="btn" onclick="otaTrigger('+u.id+')" style="background:#f60;color:#fff;padding:.1em .4em;font-size:.8em">Update to v'+escapeHtml(u.latestVersion)+'</button>';
-        }else if(!u.needsUpdate&&u.currentVersion!=='0.0'){
-          el.innerHTML=escapeHtml(u.currentVersion)+' <span style="color:#4c4;font-size:.8em">&#x2713;</span>';
-        }
-      });
-    }).catch(function(){});
-    var onCnt=d?d.filter(function(c){return c.status===1;}).length:0;
-    document.getElementById('hs').textContent=d&&d.length?onCnt+'/'+d.length+' fixture'+(d.length>1?'s':'')+' online':'No fixtures';
+    // Status bar — count fixtures (not children) for accurate reporting
+    ra('GET','/api/fixtures',null,function(fxs){
+      if(!fxs)return;
+      var light=fxs.filter(function(f){return f.fixtureType!=='camera';});
+      var cams=fxs.filter(function(f){return f.fixtureType==='camera';});
+      var onCnt=d?d.filter(function(c){return c.status===1;}).length:0;
+      var parts=[];
+      if(light.length)parts.push(light.length+' fixture'+(light.length>1?'s':''));
+      if(cams.length)parts.push(cams.length+' camera'+(cams.length>1?'s':''));
+      if(onCnt)parts.push(onCnt+' online');
+      document.getElementById('hs').textContent=parts.length?parts.join(' \u2022 '):'No fixtures';
+    });
     refreshRunnerStatus();
     dashRunnerTimer=setInterval(refreshRunnerStatus,1000);
     if(!startupDone)_pollStartup();
@@ -898,7 +964,85 @@ function dashRefresh(btn){
 }
 
 var _dashChildren=null,_dashTimeline=null;
+// ── Fixture Monitor Grid (#303) ─────────────────────────────────────────────
+var _liveGridBuilt=false;
+function refreshLiveGrid(){
+  var grid=document.getElementById('dash-live-grid');
+  var label=document.getElementById('dash-live-label');
+  if(!grid)return;
+  ra('GET','/api/fixtures/live',null,function(d){
+    if(!d||!d.fixtures){
+      if(!_liveGridBuilt){grid.innerHTML='<span style="color:#888;font-size:.82em">No fixtures</span>';_liveGridBuilt=true;}
+      return;
+    }
+    var fxs=d.fixtures;
+    if(!fxs.length){
+      grid.innerHTML='<span style="color:#888;font-size:.82em">No fixtures registered</span>';
+      _liveGridBuilt=true;return;
+    }
+    // Update label
+    var activeCount=fxs.filter(function(f){return f.active;}).length;
+    if(label){
+      if(d.running)label.textContent=activeCount+'/'+fxs.length+' active';
+      else label.textContent=fxs.length+' fixture'+(fxs.length>1?'s':'');
+    }
+    // Build or update cards
+    if(!_liveGridBuilt||grid.childElementCount!==fxs.length){
+      // Full rebuild
+      var h='';
+      fxs.forEach(function(f){
+        var rgb='rgb('+f.r+','+f.g+','+f.b+')';
+        var dim=f.dimmer!==undefined?Math.round(f.dimmer/2.55):0;
+        var intensity=Math.max(dim,Math.round(Math.max(f.r,f.g,f.b)/2.55));
+        var cls='flx-card'+(f.active?' flx-active':'')+((!f.active&&!d.running)?' flx-off':'');
+        var online=f.online!==undefined?f.online:f.active;
+        h+='<div class="'+cls+'" id="flx-'+f.id+'" data-fid="'+f.id+'">';
+        h+='<div class="flx-badge '+(online?'flx-badge-on':'flx-badge-off')+'"></div>';
+        h+='<div class="flx-name" title="'+escapeHtml(f.name)+'">'+escapeHtml(f.name)+'</div>';
+        h+='<div class="flx-swatch" style="background:'+rgb+'"></div>';
+        h+='<div class="flx-dim-bar"><div class="flx-dim-fill" style="width:'+intensity+'%"></div></div>';
+        h+='<div class="flx-effect">'+(f.effect||'Idle')+'</div>';
+        if(f.dmxAddr)h+='<div class="flx-dmx-addr">'+escapeHtml(f.dmxAddr)+'</div>';
+        if(f.pan!==undefined)h+='<div class="flx-dmx-addr">P:'+f.pan+(f.panFine!==undefined?'.'+f.panFine:'')+' T:'+f.tilt+(f.tiltFine!==undefined?'.'+f.tiltFine:'')+'</div>';
+        h+='</div>';
+      });
+      grid.innerHTML=h;
+      _liveGridBuilt=true;
+    }else{
+      // Incremental update — just patch existing cards
+      fxs.forEach(function(f){
+        var card=document.getElementById('flx-'+f.id);
+        if(!card)return;
+        var rgb='rgb('+f.r+','+f.g+','+f.b+')';
+        var dim=f.dimmer!==undefined?Math.round(f.dimmer/2.55):0;
+        var intensity=Math.max(dim,Math.round(Math.max(f.r,f.g,f.b)/2.55));
+        var online=f.online!==undefined?f.online:f.active;
+        // Update swatch
+        var sw=card.querySelector('.flx-swatch');
+        if(sw)sw.style.backgroundColor=rgb;
+        // Update dimmer bar
+        var db=card.querySelector('.flx-dim-fill');
+        if(db)db.style.width=intensity+'%';
+        // Update effect label
+        var eff=card.querySelector('.flx-effect');
+        if(eff)eff.textContent=f.effect||'Idle';
+        // Update active class
+        card.className='flx-card'+(f.active?' flx-active':'')+((!f.active&&!d.running)?' flx-off':'');
+        // Update badge
+        var badge=card.querySelector('.flx-badge');
+        if(badge)badge.className='flx-badge '+(online?'flx-badge-on':'flx-badge-off');
+        // Update pan/tilt if DMX
+        if(f.pan!==undefined){
+          var ptEl=card.querySelectorAll('.flx-dmx-addr');
+          if(ptEl.length>=2)ptEl[1].textContent='P:'+f.pan+(f.panFine!==undefined?'.'+f.panFine:'')+' T:'+f.tilt+(f.tiltFine!==undefined?'.'+f.tiltFine:'');
+        }
+      });
+    }
+  });
+}
+
 function refreshRunnerStatus(){
+  refreshLiveGrid();
   api('GET','/api/settings').then(function(s){
     var el=document.getElementById('dash-runner');if(!el)return;
     if(!s||!s.runnerRunning){
@@ -1122,7 +1266,8 @@ function _renderSetup(){
         var ip=f.cameraIp||'';
         if(!camNodeMap[ip])camNodeMap[ip]={ip:ip,fixtures:[],name:''};
         camNodeMap[ip].fixtures.push(f);
-        if(!camNodeMap[ip].name)camNodeMap[ip].name=f.name.split(' — ')[0]||'Camera Node';
+        // Use IP as placeholder name — real hostname comes from async probe
+        if(!camNodeMap[ip].name)camNodeMap[ip].name=ip||'Camera Node';
       });
       var camNodes=Object.values(camNodeMap);
       var hasHw=standaloneHw.length||camNodes.length;
@@ -1134,20 +1279,29 @@ function _renderSetup(){
           var typeBadge=isDmx
             ?'<span class="badge" style="background:#7c3aed;color:#fff">DMX Bridge</span>'
             :'<span class="badge" style="background:#446;color:#fff">'+(c.boardType||'SlyLED')+'</span>';
-          var st=c.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
+          var rssi=c.rssi||0;
+          var rssiHtml='';
+          if(c.status===1&&rssi){
+            var rssiCol=Math.abs(rssi)<=50?'#4c4':Math.abs(rssi)<=70?'#fa6':'#f66';
+            rssiHtml=' <span style="color:'+rssiCol+';font-size:.75em" title="'+rssi+' dBm">'+_rssiIcon(rssi)+'</span>';
+          }
+          var st=c.status===1?'<span class="badge bon">Online</span>'+rssiHtml:'<span class="badge boff">Offline</span>';
+          var fwVer=c.fwVersion||'—';
+          var fwHtml=escapeHtml(fwVer)+'<span id="fw-ind-'+c.id+'"></span>';
           var acts='<button class="btn btn-on" onclick="refreshChild('+c.id+')">Refresh</button>';
-          if(isDmx)acts+=' <button class="btn" onclick="window.open(\'http://'+escapeHtml(c.ip)+'/config\',\'_blank\')" style="background:#7c3aed;color:#fff">Configure</button>';
+          if(isDmx)acts+=' <button class="btn" onclick="window.open(\'http://'+escapeHtml(c.ip)+'/config\',\'_blank\')" style="background:#446;color:#fff">Configure</button>';
           acts+=' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff">Reboot</button>';
           acts+=' <button class="btn btn-off" onclick="removeChild('+c.id+')">Remove</button>';
-          h+='<tr><td><b>'+escapeHtml(c.name||c.hostname)+'</b></td><td>'+typeBadge+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+(c.fwVersion||'—')+'</td><td>'+acts+'</td></tr>';
+          h+='<tr><td><b>'+escapeHtml(c.name||c.hostname)+'</b></td><td>'+typeBadge+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+fwHtml+'</td><td>'+acts+'</td></tr>';
         });
         // Camera nodes as hardware rows
         camNodes.forEach(function(node){
           var typeBadge='<span class="badge" style="background:#0e7490;color:#fff">Camera Node</span>';
           var fids=node.fixtures.map(function(f){return f.id;});
-          var acts='<button class="btn" onclick="window.open(\'http://'+escapeHtml(node.ip)+':5000/config\',\'_blank\')" style="background:#0e7490;color:#fff">Configure</button>'
+          var acts='<button class="btn" onclick="window.open(\'http://'+escapeHtml(node.ip)+':5000/config\',\'_blank\')" style="background:#446;color:#fff">Configure</button>'
             +' <button class="btn btn-off" onclick="_removeCameraNode('+JSON.stringify(fids)+',\''+escapeHtml(node.name).replace(/'/g,"\\'")+'\')">Remove</button>';
-          h+='<tr><td><b>'+escapeHtml(node.name)+'</b> <span style="color:#64748b;font-size:.75em">('+node.fixtures.length+' sensor'+(node.fixtures.length>1?'s':'')+')</span></td><td>'+typeBadge+'</td><td>'+escapeHtml(node.ip)+'</td><td id="cam-hw-st-'+escapeHtml(node.ip).replace(/\./g,'-')+'"><span class="badge" style="background:#334;color:#888">Checking...</span></td><td id="cam-hw-fw-'+escapeHtml(node.ip).replace(/\./g,'-')+'">—</td><td>'+acts+'</td></tr>';
+          var ipKey=escapeHtml(node.ip).replace(/\./g,'-');
+          h+='<tr><td><span id="cam-hw-name-'+ipKey+'"><b>'+escapeHtml(node.name)+'</b></span> <span style="color:#64748b;font-size:.75em">('+node.fixtures.length+' sensor'+(node.fixtures.length>1?'s':'')+')</span></td><td>'+typeBadge+'</td><td>'+escapeHtml(node.ip)+'</td><td id="cam-hw-st-'+ipKey+'"><span class="badge" style="background:#334;color:#888">Checking...</span></td><td id="cam-hw-fw-'+ipKey+'">—</td><td>'+acts+'</td></tr>';
         });
         h+='</table>';
       }
@@ -1170,8 +1324,17 @@ function _renderSetup(){
           var key=ip.replace(/\./g,'-');
           var stCell=document.getElementById('cam-hw-st-'+key);
           var fwCell=document.getElementById('cam-hw-fw-'+key);
+          var nameCell=document.getElementById('cam-hw-name-'+key);
           if(stCell)stCell.innerHTML=c.online?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
-          if(fwCell)fwCell.textContent=c.fwVersion||'—';
+          if(fwCell){
+            var fw=c.fwVersion||'—';
+            // Check if camera firmware is outdated (compare against registry)
+            fwCell.innerHTML=escapeHtml(fw)+'<span id="cam-fw-ind-'+key+'"></span>';
+          }
+          // Update hardware name from probe hostname (node name setting)
+          if(nameCell&&c.hostname&&c.hostname!==ip){
+            nameCell.innerHTML='<b>'+escapeHtml(c.hostname)+'</b>';
+          }
         });
       });}
       if(ledFixtures.length){
@@ -1187,7 +1350,13 @@ function _renderSetup(){
             }
             var boardColors={'ESP32':'#2563eb','D1 Mini':'#7c3aed','Giga':'#059669','WLED':'#f59e0b'};
             conn=escapeHtml(ch.ip)+' <span class="badge" style="background:'+(boardColors[board]||'#446')+';color:#fff;font-size:.75em">'+board+'</span>';
-            status=ch.status===1?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
+            var rssi=ch.rssi||0;
+            var rssiHtml='';
+            if(ch.status===1&&rssi){
+              var rssiCol=Math.abs(rssi)<=50?'#4c4':Math.abs(rssi)<=70?'#fa6':'#f66';
+              rssiHtml=' <span style="color:'+rssiCol+';font-size:.75em" title="'+rssi+' dBm">'+_rssiIcon(rssi)+'</span>';
+            }
+            status=ch.status===1?'<span class="badge bon">Online</span>'+rssiHtml:'<span class="badge boff">Offline</span>';
             var totalLeds=0;if(ch.strings)ch.strings.forEach(function(s,i){if(i<ch.sc)totalLeds+=(s.leds||0);});
             chLeds=ch.sc+'&times;'+totalLeds;
           }else{
@@ -1221,6 +1390,7 @@ function _renderSetup(){
       // ── Cameras section — per-sensor listing grouped by node
       h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">Camera Sensors '
         +'<button class="btn" onclick="discoverCameras(this)" id="cam-disc-btn" style="font-size:.75em;padding:.15em .5em;margin-left:.5em;background:#0e7490;color:#fff">Discover</button>'
+        +' <button class="btn btn-on" onclick="loadSetup()" style="font-size:.75em;padding:.15em .5em">Refresh</button>'
         +'</h3>';
       h+='<div id="cam-disc-results" style="display:none;margin-bottom:.5em"></div>';
       if(camFixtures.length){
@@ -1231,7 +1401,7 @@ function _renderSetup(){
           var fov=(f.fovDeg||60)+'\u00b0';
           var res=(f.resolutionW||'—')+'x'+(f.resolutionH||'—');
           var calBadge=f.calibrated?'<span class="badge" style="background:#065f46;color:#34d399;margin-left:4px">\u2713 Cal</span>':'';
-          var acts='<button class="btn" onclick="editFixture('+f.id+')" style="background:#0e7490;color:#fff">Edit</button>';
+          var acts='<button class="btn" onclick="editFixture('+f.id+')" style="background:#446;color:#fff">Edit</button>';
           if(ip!=='—')acts+=' <button class="btn" onclick="_camSnap('+f.id+')" style="background:#059669;color:#fff">Snap</button>';
           acts+=' <button class="btn btn-off" onclick="removeCamera('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
           h+='<tr><td style="color:#64748b">cam'+camIdx+'</td><td><b>'+escapeHtml(f.name)+'</b>'+calBadge+'</td><td>'+escapeHtml(ip)+'</td><td>'+fov+'</td><td>'+res+'</td><td id="cam-st-'+f.id+'"><span class="badge" style="background:#334;color:#888">...</span></td><td>'+acts+'</td></tr>';
@@ -1243,6 +1413,15 @@ function _renderSetup(){
       }
 
       document.getElementById('t-setup').innerHTML=h;
+      // Check firmware updates — add ▲ triangle indicator to outdated devices
+      api('GET','/api/firmware/check').then(function(chk){
+        if(!chk||!chk.children)return;
+        chk.children.forEach(function(u){
+          if(!u.needsUpdate||u.board==='wled')return;
+          var el=document.getElementById('fw-ind-'+u.id);
+          if(el)el.innerHTML=' <span onclick="showTab(\'firmware\')" style="color:#f60;cursor:pointer;font-size:.9em" title="Update available: v'+escapeHtml(u.latestVersion)+' (click to update)">&#9650;</span>';
+        });
+      }).catch(function(){});
     });
   });
 }
@@ -5896,16 +6075,15 @@ function emuDraw(){
   }
 }
 
-var _layShowStrings=true;
-var _layShowCones=true;
+// View prefs — loaded from localStorage, defaults per #255
+var _viewDefaults={strings:true,lightCones:false,camCones:false,orient:true,cloud:false,grid:true,labels:true,stageBox:true};
+var _viewPrefs=(function(){try{return Object.assign({},_viewDefaults,JSON.parse(localStorage.getItem('slyled-view-prefs')));}catch(e){return Object.assign({},_viewDefaults);}})();
+var _layShowStrings=_viewPrefs.strings;
+var _layShowCones=_viewPrefs.lightCones;
 function _layConesToggle(){
-  _layShowCones=!_layShowCones;
-  var btn=document.getElementById('btn-lay-cones');
-  if(btn){
-    btn.style.background=_layShowCones?'#4c1d95':'';
-    btn.style.color=_layShowCones?'#c4b5fd':'';
-  }
-  // Toggle cone visibility in 3D scene
+  var cb=document.getElementById('vw-lightcones');
+  _layShowCones=cb?cb.checked:!_layShowCones;
+  _viewSave();
   if(_s3d.inited){
     _s3d.scene.children.forEach(function(grp){
       if(!grp.children)return;
@@ -5918,15 +6096,86 @@ function _layConesToggle(){
   drawLayout();
 }
 function _layDetailToggle(){
-  _layShowStrings=!_layShowStrings;
-  var btn=document.getElementById('btn-lay-strings');
-  if(btn){
-    btn.style.background=_layShowStrings?'#14532d':'';
-    btn.style.color=_layShowStrings?'#86efac':'';
+  var cb=document.getElementById('vw-strings');
+  _layShowStrings=cb?cb.checked:!_layShowStrings;
+  _viewSave();drawLayout();
+}
+
+// ── View dropdown (#255) ──
+function _viewSave(){
+  _viewPrefs={strings:_layShowStrings,lightCones:_layShowCones,camCones:_layShowCamCones,orient:_layShowOrient,cloud:!!document.getElementById('vw-cloud')&&document.getElementById('vw-cloud').checked,grid:_layShowGrid,labels:_layShowLabels,stageBox:_layShowStageBox};
+  localStorage.setItem('slyled-view-prefs',JSON.stringify(_viewPrefs));
+}
+function _viewSyncCheckboxes(){
+  var m={strings:_layShowStrings,lightcones:_layShowCones,camcones:_layShowCamCones,orient:_layShowOrient,grid:_layShowGrid,labels:_layShowLabels,stagebox:_layShowStageBox};
+  for(var k in m){var cb=document.getElementById('vw-'+k);if(cb)cb.checked=m[k];}
+  var cl=document.getElementById('vw-cloud');if(cl)cl.checked=!!_viewPrefs.cloud;
+}
+function _toggleViewMenu(){
+  var dd=document.getElementById('view-dropdown');
+  var show=dd.style.display==='none';
+  dd.style.display=show?'':'none';
+  if(show)_viewSyncCheckboxes();
+}
+document.addEventListener('click',function(e){
+  var dd=document.getElementById('view-dropdown');
+  var btn=document.getElementById('btn-view-menu');
+  if(dd&&btn&&!dd.contains(e.target)&&!btn.contains(e.target))dd.style.display='none';
+});
+
+var _layShowCamCones=_viewPrefs.camCones,_layShowOrient=_viewPrefs.orient,_layShowGrid=_viewPrefs.grid,_layShowLabels=_viewPrefs.labels,_layShowStageBox=_viewPrefs.stageBox;
+
+function _layCamConesToggle(){
+  var cb=document.getElementById('vw-camcones');
+  _layShowCamCones=cb?cb.checked:!_layShowCamCones;
+  _viewSave();
+  if(_s3d.inited){
+    _s3d.scene.traverse(function(c){
+      if(c.userData&&c.userData.cameraFov)c.visible=_layShowCamCones;
+    });
   }
-  var svg=document.getElementById('lay-detail-svg');
-  if(svg)svg.style.opacity=_layShowStrings?'1':'0.3';
-  drawLayout();
+}
+function _layOrientToggle(){
+  var cb=document.getElementById('vw-orient');
+  _layShowOrient=cb?cb.checked:!_layShowOrient;
+  _viewSave();
+  if(_s3d.inited){
+    _s3d.scene.traverse(function(c){
+      if(c.userData&&(c.userData.orientArrow||c.userData.restArrow))c.visible=_layShowOrient;
+    });
+  }
+}
+function _layGridToggle(){
+  var cb=document.getElementById('vw-grid');
+  _layShowGrid=cb?cb.checked:!_layShowGrid;
+  _viewSave();
+  if(_s3d.inited){
+    _s3d.scene.traverse(function(c){
+      if(c.userData&&c.userData.isGrid)c.visible=_layShowGrid;
+      if(c.type==='GridHelper')c.visible=_layShowGrid;
+    });
+  }
+}
+function _layLabelsToggle(){
+  var cb=document.getElementById('vw-labels');
+  _layShowLabels=cb?cb.checked:!_layShowLabels;
+  _viewSave();
+  if(_s3d.inited){
+    _s3d.scene.traverse(function(c){
+      if(c.userData&&c.userData.isLabel)c.visible=_layShowLabels;
+      if(c.type==='Sprite')c.visible=_layShowLabels;
+    });
+  }
+}
+function _layStageBoxToggle(){
+  var cb=document.getElementById('vw-stagebox');
+  _layShowStageBox=cb?cb.checked:!_layShowStageBox;
+  _viewSave();
+  if(_s3d.inited){
+    _s3d.scene.traverse(function(c){
+      if(c.userData&&c.userData.stageBox)c.visible=_layShowStageBox;
+    });
+  }
 }
 
 function autoArrangeDmx(){
@@ -6331,7 +6580,7 @@ function _checkCamCalWarning(){
   cams.forEach(function(f){
     var ip=f.cameraIp;
     var x=new XMLHttpRequest();
-    x.open('GET','http://'+ip+':5000/calibrate/intrinsic?cam='+(f.cameraIdx||0));
+    x.open('GET','/api/cameras/'+f.id+'/intrinsic');
     x.timeout=3000;
     x.onload=function(){
       checked++;
@@ -6348,14 +6597,14 @@ function _checkCamCalWarning(){
 
 function _printAruco(){
   // Generate all 6 ArUco 4x4 markers in a single printable HTML page
-  // ArUco 4x4_50 dictionary — IDs 0-5, each is a 6x6 grid (4x4 data + 1px border)
+  // ArUco DICT_4X4_50 — correct patterns extracted from OpenCV cv2.aruco
   var dict=[
-    [1,0,0,1, 1,0,0,0, 0,1,0,1, 0,1,1,1],  // ID 0
-    [1,1,0,0, 1,0,1,0, 1,0,0,1, 0,0,1,1],  // ID 1
-    [0,1,1,0, 1,1,0,0, 0,0,1,0, 0,1,0,1],  // ID 2
-    [0,0,1,1, 1,1,1,0, 1,1,0,0, 1,1,0,0],  // ID 3
-    [1,0,1,0, 0,0,0,1, 1,1,1,0, 0,1,0,0],  // ID 4
-    [0,1,0,1, 0,0,1,1, 0,0,1,1, 1,0,1,0],  // ID 5
+    [1,0,1,1, 0,1,0,1, 0,0,1,1, 0,0,1,0],  // ID 0
+    [0,0,0,0, 1,1,1,1, 1,0,0,1, 1,0,1,0],  // ID 1
+    [0,0,1,1, 0,0,1,1, 0,0,1,0, 1,1,0,1],  // ID 2
+    [1,0,0,1, 1,0,0,1, 0,1,0,0, 0,1,1,0],  // ID 3
+    [0,1,0,1, 0,1,0,0, 1,0,0,1, 1,1,1,0],  // ID 4
+    [0,1,1,1, 1,0,0,1, 1,1,0,0, 1,1,0,1],  // ID 5
   ];
   var sizeMm=150,sq=Math.round(sizeMm/6);
   // Build a single HTML page with all markers (one per printed page)
@@ -6452,7 +6701,7 @@ function _loadCamCalStatus(){
   _calWiz.cameras.forEach(function(cam){
     if(!cam.ip)return;
     var x=new XMLHttpRequest();
-    x.open('GET','http://'+cam.ip+':5000/calibrate/intrinsic?cam='+(cam.camIdx||0));
+    x.open('GET','/api/cameras/'+cam.id+'/intrinsic');
     x.timeout=5000;
     x.onload=function(){
       try{
@@ -6481,7 +6730,7 @@ function _calWizNext(){
     _calWiz.captures=0;_calWiz.captureLog=[];
     _calWiz.cameras.forEach(function(cam){
       if(!cam.selected||!cam.ip)return;
-      ra('POST','http://'+cam.ip+':5000/calibrate/aruco/reset',{cam:cam.camIdx});
+      ra('POST','/api/cameras/'+cam.id+'/aruco/reset',{});
     });
   }
   if(_calWiz.step===5)_calWizCompute();
@@ -6659,7 +6908,9 @@ function _calWizStep3(){
   h+='<input id="sm-id1" type="number" min="0" max="5" value="0" style="width:60px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:.3em .5em;border-radius:4px;font-size:.85em"></div>';
   h+='<div><label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.2em">X (mm from stage right)</label>';
   h+='<input id="sm-x1" type="number" value="0" style="width:100px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:.3em .5em;border-radius:4px;font-size:.85em"></div>';
-  h+='<div><label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.2em">Z (mm from back wall)</label>';
+  h+='<div><label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.2em">Y (mm from back wall)</label>';
+  h+='<input id="sm-y1" type="number" value="0" style="width:100px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:.3em .5em;border-radius:4px;font-size:.85em"></div>';
+  h+='<div><label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.2em">Z (mm from floor)</label>';
   h+='<input id="sm-z1" type="number" value="0" style="width:100px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:.3em .5em;border-radius:4px;font-size:.85em"></div>';
   h+='</div></div>';
   // Marker 2 (optional, collapsed)
@@ -6673,7 +6924,9 @@ function _calWizStep3(){
   h+='<input id="sm-id2" type="number" min="0" max="5" value="" style="width:60px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:.3em .5em;border-radius:4px;font-size:.85em"></div>';
   h+='<div><label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.2em">X (mm from stage right)</label>';
   h+='<input id="sm-x2" type="number" value="" style="width:100px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:.3em .5em;border-radius:4px;font-size:.85em"></div>';
-  h+='<div><label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.2em">Z (mm from back wall)</label>';
+  h+='<div><label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.2em">Y (mm from back wall)</label>';
+  h+='<input id="sm-y2" type="number" value="" style="width:100px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:.3em .5em;border-radius:4px;font-size:.85em"></div>';
+  h+='<div><label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.2em">Z (mm from floor)</label>';
   h+='<input id="sm-z2" type="number" value="" style="width:100px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:.3em .5em;border-radius:4px;font-size:.85em"></div>';
   h+='</div></div>';
   h+='</details></div>';
@@ -6699,16 +6952,18 @@ function _calWizComputeStageMap(){
   var markers={};
   var id1El=document.getElementById('sm-id1');
   var x1El=document.getElementById('sm-x1');
+  var y1El=document.getElementById('sm-y1');
   var z1El=document.getElementById('sm-z1');
   if(id1El&&x1El&&z1El&&id1El.value!==''){
-    markers[id1El.value]={x:parseInt(x1El.value)||0,y:0,z:parseInt(z1El.value)||0};
+    markers[id1El.value]={x:parseInt(x1El.value)||0,y:parseInt(y1El?y1El.value:0)||0,z:parseInt(z1El.value)||0};
   }
   // Optional second marker
   var id2El=document.getElementById('sm-id2');
   var x2El=document.getElementById('sm-x2');
+  var y2El=document.getElementById('sm-y2');
   var z2El=document.getElementById('sm-z2');
   if(id2El&&id2El.value!==''){
-    markers[id2El.value]={x:parseInt(x2El.value)||0,y:0,z:parseInt(z2El.value)||0};
+    markers[id2El.value]={x:parseInt(x2El.value)||0,y:parseInt(y2El?y2El.value:0)||0,z:parseInt(z2El.value)||0};
   }
   if(Object.keys(markers).length===0){
     if(btn){btn.disabled=false;btn.textContent='Compute Stage Map';}
@@ -6720,8 +6975,8 @@ function _calWizComputeStageMap(){
   var done=0,total=selCams.length;
   _calWiz.stageMap={};
   selCams.forEach(function(cam){
-    ra('POST','http://'+cam.ip+':5000/calibrate/stage-map',
-      {cam:cam.camIdx,markers:markers,markerSize:150},
+    ra('POST','/api/cameras/'+cam.id+'/stage-map',
+      {markers:markers,markerSize:150},
       function(r){
         done++;
         if(r&&r.ok){
@@ -6968,7 +7223,7 @@ function _calWizCapture(){
   selCams.forEach(function(cam){
     var statusEl=document.getElementById('calwiz-cam-status-'+cam.id);
     if(statusEl)statusEl.innerHTML='<span style="color:#93c5fd">Capturing...</span>';
-    ra('POST','http://'+cam.ip+':5000/calibrate/aruco/capture',{cam:cam.camIdx},function(r){
+    ra('POST','/api/cameras/'+cam.id+'/aruco/capture',{},function(r){
       done++;
       var entry='';
       if(!r||!r.ok){
@@ -6998,7 +7253,7 @@ function _calWizCapture(){
 function _calWizCompute(){
   var selCams=_calWiz.cameras.filter(function(c){return c.selected&&c.ip;});
   selCams.forEach(function(cam){
-    ra('POST','http://'+cam.ip+':5000/calibrate/aruco/compute',{cam:cam.camIdx,markerSize:150},function(r){
+    ra('POST','/api/cameras/'+cam.id+'/aruco/compute',{markerSize:150},function(r){
       if(!r||!r.ok){
         _calWiz.results[cam.id]={error:r&&r.err||'Computation failed'};
       }else{
@@ -7359,6 +7614,9 @@ function _layUndo(){
 }
 // Keyboard shortcuts: R=rotate, M=move, Ctrl+Z=undo
 document.addEventListener('keydown',function(e){
+  // Global shortcuts (work from any tab, any focus)
+  if((e.ctrlKey||e.metaKey)&&(e.key==='s'||e.key==='S')){e.preventDefault();_fmSave();return;}
+  if((e.ctrlKey||e.metaKey)&&(e.key==='o'||e.key==='O')){e.preventDefault();_fmOpen();return;}
   if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT')return;
   if(ctab!=='layout')return;
   if((e.key==='r'||e.key==='R')&&_layTool!=='rotate'){_layToolToggle();}
@@ -7703,8 +7961,207 @@ function saveLoopSetting(){
   ra('POST','/api/settings',{runnerLoop:lp&&lp.checked?true:false},null);
 }
 
-function loadRuntime(){
+// ── Shows tab ────────────────────────────────────────────────────────────────
+function loadShows(){
   loadTimelines();
+  // Restore last-opened timeline
+  setTimeout(function(){
+    var last=localStorage.getItem('slyled-last-timeline');
+    if(last){
+      var sel=document.getElementById('tl-select');
+      if(sel&&!sel.value){sel.value=last;loadTimelineDetail();}
+    }
+  },300);
+}
+// Save last-opened timeline when user selects one
+var _origLoadTimelineDetail=typeof loadTimelineDetail==='function'?null:null;
+function _wrapTlSelect(){
+  var sel=document.getElementById('tl-select');
+  if(sel&&!sel.dataset.wrapped){
+    sel.dataset.wrapped='1';
+    sel.addEventListener('change',function(){
+      if(sel.value)localStorage.setItem('slyled-last-timeline',sel.value);
+    });
+  }
+}
+// Hook into loadTimelines to wrap the select
+var _origLoadTimelines=loadTimelines;
+loadTimelines=function(){_origLoadTimelines();setTimeout(_wrapTlSelect,400);};
+
+// ── Runtime tab (playlist + playback) ────────────────────────────────────────
+var _rtTimer=null;
+
+function loadRuntime(){
+  if(_rtTimer){clearInterval(_rtTimer);_rtTimer=null;}
+  // Load playlist
+  ra('GET','/api/show/playlist',null,function(d){
+    if(!d)return;
+    _rtRenderPlaylist(d);
+    var cb=document.getElementById('rt-loop-all');
+    if(cb)cb.checked=!!d.loopAll;
+  });
+  // Start polling show status + fixture grid
+  _rtRefresh();
+  _rtTimer=setInterval(_rtRefresh,1000);
+}
+
+function _rtRenderPlaylist(d){
+  var el=document.getElementById('rt-playlist');
+  var totalEl=document.getElementById('rt-playlist-total');
+  if(!el)return;
+  var items=d.items||[];
+  if(!items.length){
+    el.innerHTML='<div style="padding:.6em;color:#888;font-size:.82em">No timelines in playlist. Go to the <a href="#" onclick="showTab(\'shows\');return false" style="color:#22d3ee">Shows tab</a> to create timelines.</div>';
+    if(totalEl)totalEl.textContent='';
+    return;
+  }
+  var h='';
+  items.forEach(function(it,i){
+    var baked=it.baked;
+    var playing=it.playing;
+    var cls=playing?' style="border-color:#22d3ee;background:#0f1a2e"':'';
+    h+='<div class="li"'+cls+' draggable="true" data-tid="'+it.id+'" data-idx="'+i+'" ondragstart="_rtDragStart(event)" ondragover="_rtDragOver(event)" ondrop="_rtDrop(event)">';
+    h+='<div style="display:flex;align-items:center;gap:.6em">';
+    h+='<span style="color:#475569;cursor:grab;font-size:1.1em" title="Drag to reorder">&#9776;</span>';
+    h+='<span style="color:#64748b;font-size:.75em;width:1.5em">'+(i+1)+'.</span>';
+    h+='<b style="flex:1">'+escapeHtml(it.name)+'</b>';
+    h+='<span style="color:#64748b;font-size:.82em;font-family:monospace">'+_fmtDur(it.durationS)+'</span>';
+    h+='<button class="btn" onclick="_rtPreviewOne('+it.id+')" style="background:#1e3a5f;color:#93c5fd;padding:.2em .5em;font-size:.75em">&#9654;</button>';
+    if(baked)h+='<span style="color:#4c4;font-size:.8em" title="Baked">&#x2713;</span>';
+    else h+='<button class="btn" onclick="_rtBakeOne('+it.id+')" style="background:#4a2080;color:#c4b5fd;padding:.2em .5em;font-size:.75em">Bake</button>';
+    h+='</div></div>';
+  });
+  el.innerHTML=h;
+  if(totalEl)totalEl.textContent='Total: '+_fmtDur(d.totalDurationS||0);
+}
+
+function _fmtDur(s){
+  var m=Math.floor(s/60),sec=Math.floor(s%60);
+  return m+':'+('0'+sec).slice(-2);
+}
+
+function _rtRefresh(){
+  // Poll show status
+  ra('GET','/api/show/status',null,function(d){
+    if(!d)return;
+    var timeEl=document.getElementById('rt-time');
+    var progEl=document.getElementById('rt-prog-fill');
+    var nowEl=document.getElementById('rt-now-playing');
+    if(d.running){
+      if(timeEl)timeEl.textContent=_fmtDur(d.totalElapsed||0)+' / '+_fmtDur(d.totalDurationS||0);
+      var pct=d.totalDurationS>0?Math.min(100,Math.round((d.totalElapsed/d.totalDurationS)*100)):0;
+      if(progEl)progEl.style.width=pct+'%';
+      if(nowEl)nowEl.textContent=d.currentName?('\u25b8 '+d.currentName):'';
+    }else{
+      if(timeEl)timeEl.textContent='00:00 / 00:00';
+      if(progEl)progEl.style.width='0%';
+      if(nowEl)nowEl.textContent='';
+    }
+  });
+}
+
+// ── Playlist drag-reorder ──
+var _rtDragIdx=-1;
+function _rtDragStart(e){_rtDragIdx=parseInt(e.currentTarget.dataset.idx);e.dataTransfer.effectAllowed='move';}
+function _rtDragOver(e){e.preventDefault();e.dataTransfer.dropEffect='move';}
+function _rtDrop(e){
+  e.preventDefault();
+  var targetIdx=parseInt(e.currentTarget.dataset.idx);
+  if(_rtDragIdx<0||_rtDragIdx===targetIdx)return;
+  // Reorder: remove from old position, insert at new
+  ra('GET','/api/show/playlist',null,function(d){
+    if(!d)return;
+    var order=d.order.slice();
+    var item=order.splice(_rtDragIdx,1)[0];
+    order.splice(targetIdx,0,item);
+    ra('POST','/api/show/playlist',{order:order},function(){
+      ra('GET','/api/show/playlist',null,function(d2){if(d2)_rtRenderPlaylist(d2);});
+    });
+  });
+}
+
+function _rtLoopToggle(){
+  var cb=document.getElementById('rt-loop-all');
+  ra('POST','/api/show/playlist',{loopAll:cb?cb.checked:false});
+}
+
+function _rtPreviewOne(tid){
+  // Preview single timeline in 3D emulator (no live output)
+  var sel=document.getElementById('tl-select');
+  if(sel)sel.value=tid;
+  loadTimelineDetail();
+  tlTogglePreview();
+}
+
+function _rtPreviewAll(){
+  // For now, preview the first timeline in the playlist
+  ra('GET','/api/show/playlist',null,function(d){
+    if(!d||!d.order||!d.order.length){alert('Playlist is empty. Add timelines on the Shows tab.');return;}
+    _rtPreviewOne(d.order[0]);
+  });
+}
+
+function _rtPause(){tlPause();}
+function _rtRewind(){tlRewind();}
+
+function _rtBakeOne(tid){
+  ra('POST','/api/timelines/'+tid+'/bake',{},function(r){
+    if(!r)return;
+    // Poll bake status
+    var poll=setInterval(function(){
+      ra('GET','/api/timelines/'+tid+'/bake/status',null,function(s){
+        if(!s||s.status==='running')return;
+        clearInterval(poll);
+        // Refresh playlist to update bake indicator
+        ra('GET','/api/show/playlist',null,function(d){if(d)_rtRenderPlaylist(d);});
+      });
+    },500);
+  });
+}
+
+function _rtBakeAll(){
+  ra('GET','/api/show/playlist',null,function(d){
+    if(!d||!d.order||!d.order.length){alert('Playlist is empty.');return;}
+    var unbaked=d.items.filter(function(it){return !it.baked;});
+    if(!unbaked.length){document.getElementById('hs').textContent='All timelines already baked';return;}
+    document.getElementById('hs').textContent='Baking '+unbaked.length+' timeline(s)...';
+    var idx=0;
+    function bakeNext(){
+      if(idx>=unbaked.length){
+        document.getElementById('hs').textContent='All timelines baked';
+        ra('GET','/api/show/playlist',null,function(d2){if(d2)_rtRenderPlaylist(d2);});
+        return;
+      }
+      var tid=unbaked[idx].id;
+      ra('POST','/api/timelines/'+tid+'/bake',{},function(){
+        var poll=setInterval(function(){
+          ra('GET','/api/timelines/'+tid+'/bake/status',null,function(s){
+            if(!s||s.status==='running')return;
+            clearInterval(poll);idx++;bakeNext();
+          });
+        },500);
+      });
+    }
+    bakeNext();
+  });
+}
+
+function _rtStartShow(){
+  ra('POST','/api/show/start',{},function(r){
+    if(!r||!r.ok){
+      if(r&&r.unbaked){alert('Some timelines need baking first. Click "Bake All".');}
+      else{alert(r&&r.err||'Failed to start show');}
+      return;
+    }
+    document.getElementById('hs').textContent='Show started — '+r.timelines+' timeline(s)';
+  });
+}
+
+function _rtStopShow(){
+  ra('POST','/api/show/stop',{},function(r){
+    if(r&&r.ok)document.getElementById('hs').textContent='Show stopped';
+  });
+  tlStop();
 }
 
 // ── Firmware management ──────────────────────────────────────────────────────
@@ -8113,17 +8570,19 @@ function _camFwRefresh(){
     var nodes={};
     cams.forEach(function(c){
       var ip=c.cameraIp||'';
-      if(!nodes[ip])nodes[ip]={ip:ip,name:c.name.split(' \u2014 ')[0],ver:'',online:false,sensors:0};
+      if(!nodes[ip])nodes[ip]={ip:ip,name:ip,fid:c.id,ver:'',online:false,sensors:0};
       nodes[ip].sensors++;
       if(c.fwVersion)nodes[ip].ver=c.fwVersion;
       if(c.online)nodes[ip].online=true;
+      if(c.hostname&&c.hostname!==ip)nodes[ip].name=c.hostname;
     });
     var h='<table class="tbl" style="font-size:.85em"><tr><th>Node</th><th>IP</th><th>Sensors</th><th>Version</th><th>Status</th><th></th></tr>';
     Object.values(nodes).forEach(function(n){
       var st=n.online?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
-      var acts='';
+      var sshBtn='<button class="btn" onclick="_camSshModal(\''+n.ip+'\','+n.fid+')" style="background:#446;color:#fff;font-size:.78em;padding:.2em .5em">SSH</button>';
+      var acts=sshBtn;
       if(n.online&&n.ip){
-        acts='<button class="btn" onclick="_camDeploy(\''+n.ip+'\')" id="cam-upg-'+n.ip.replace(/\./g,'-')+'" style="background:#475569;color:#fff;font-size:.78em;padding:.2em .5em">Upgrade</button>'
+        acts+=' <button class="btn" onclick="_camDeploy(\''+n.ip+'\')" id="cam-upg-'+n.ip.replace(/\./g,'-')+'" style="background:#475569;color:#fff;font-size:.78em;padding:.2em .5em">Upgrade</button>'
           +' <button class="btn" onclick="_camDeploy(\''+n.ip+'\',true)" style="background:#334155;color:#94a3b8;font-size:.78em;padding:.2em .5em">Force</button>';
       }
       h+='<tr><td><b>'+escapeHtml(n.name)+'</b></td><td>'+escapeHtml(n.ip)+'</td><td>'+n.sensors+'</td><td>'+(n.ver||'\u2014')+'</td><td>'+st+'</td><td>'+acts+'</td></tr>';
@@ -8164,6 +8623,87 @@ function _camScanBoards(){
     },500);
   });
 }
+function _camSshModal(ip,fid){
+  var _csshIp=ip;
+  document.getElementById('modal-title').textContent='SSH Configuration \u2014 '+ip;
+  var h='<div style="min-width:420px">';
+  h+='<div style="margin-bottom:.6em"><label style="font-size:.82em;color:#94a3b8">Authentication Type</label><br>';
+  h+='<label style="font-size:.85em;margin-right:1em"><input type="radio" name="cssh-auth" value="password" checked onchange="_csshToggle()"> Password</label>';
+  h+='<label style="font-size:.85em"><input type="radio" name="cssh-auth" value="key" onchange="_csshToggle()"> SSH Key</label>';
+  h+='</div>';
+  h+='<div id="cssh-pw-section">';
+  h+='<label style="font-size:.82em">Username</label>';
+  h+='<input id="cssh-user" value="root" style="width:100%;margin-bottom:.3em">';
+  h+='<label style="font-size:.82em">Password</label>';
+  h+='<div style="display:flex;gap:.3em;margin-bottom:.3em"><input id="cssh-pass" type="password" placeholder="Enter password" style="flex:1">';
+  h+='<button type="button" class="btn" style="padding:.2em .4em;background:#333;font-size:.75em" onmousedown="document.getElementById(\'cssh-pass\').type=\'text\'" onmouseup="document.getElementById(\'cssh-pass\').type=\'password\'" onmouseleave="document.getElementById(\'cssh-pass\').type=\'password\'">&#128065;</button></div>';
+  h+='</div>';
+  h+='<div id="cssh-key-section" style="display:none">';
+  h+='<label style="font-size:.82em">Username</label>';
+  h+='<input id="cssh-key-user" value="root" style="width:100%;margin-bottom:.3em">';
+  h+='<label style="font-size:.82em">Key File Path</label>';
+  h+='<input id="cssh-keypath" placeholder="~/.ssh/id_ed25519" style="width:100%;margin-bottom:.3em">';
+  h+='<label style="font-size:.82em">Or paste key content</label>';
+  h+='<textarea id="cssh-keycontent" rows="4" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" style="width:100%;font-size:.75em;font-family:monospace;margin-bottom:.3em"></textarea>';
+  h+='</div>';
+  h+='<div style="display:flex;gap:.5em;margin-top:.6em">';
+  h+='<button class="btn btn-on" onclick="_csshSave(\''+ip+'\')">Save</button>';
+  h+='<button class="btn" onclick="_csshTest(\''+ip+'\')" style="background:#1e3a5f;color:#93c5fd">Test Connection</button>';
+  h+='</div>';
+  h+='<div id="cssh-result" style="margin-top:.5em;font-size:.85em"></div>';
+  h+='</div>';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='flex';
+  // Load existing config by IP
+  ra('GET','/api/cameras/node/'+encodeURIComponent(ip)+'/ssh',null,function(d){
+    if(!d||!d.configured)return;
+    if(d.authType==='key'){
+      document.querySelector('input[name="cssh-auth"][value="key"]').checked=true;
+      _csshToggle();
+      var ku=document.getElementById('cssh-key-user');if(ku)ku.value=d.user||'root';
+      var kp=document.getElementById('cssh-keypath');if(kp)kp.value=d.keyPath||'';
+    }else{
+      var u=document.getElementById('cssh-user');if(u)u.value=d.user||'root';
+    }
+  });
+}
+function _csshToggle(){
+  var isKey=document.querySelector('input[name="cssh-auth"][value="key"]').checked;
+  document.getElementById('cssh-pw-section').style.display=isKey?'none':'';
+  document.getElementById('cssh-key-section').style.display=isKey?'':'none';
+}
+function _csshSave(ip){
+  var isKey=document.querySelector('input[name="cssh-auth"][value="key"]').checked;
+  var body={authType:isKey?'key':'password'};
+  if(isKey){
+    body.user=document.getElementById('cssh-key-user').value||'root';
+    body.keyPath=document.getElementById('cssh-keypath').value;
+    var kc=document.getElementById('cssh-keycontent').value;
+    if(kc)body.keyContent=kc;
+  }else{
+    body.user=document.getElementById('cssh-user').value||'root';
+    body.password=document.getElementById('cssh-pass').value;
+  }
+  ra('POST','/api/cameras/node/'+encodeURIComponent(ip)+'/ssh',body,function(r){
+    var el=document.getElementById('cssh-result');
+    if(r&&r.ok){el.innerHTML='<span style="color:#4c4">&#x2713; Saved for '+escapeHtml(ip)+'</span>';}
+    else{el.innerHTML='<span style="color:#f66">Save failed: '+(r&&r.err||'unknown')+'</span>';}
+  });
+}
+function _csshTest(ip){
+  var el=document.getElementById('cssh-result');
+  el.innerHTML='<span style="color:#94a3b8">Testing connection to '+escapeHtml(ip)+'...</span>';
+  ra('POST','/api/cameras/node/'+encodeURIComponent(ip)+'/ssh/test',{},function(r){
+    if(!r){el.innerHTML='<span style="color:#f66">Request failed</span>';return;}
+    if(r.ok){
+      el.innerHTML='<span style="color:#4c4">&#x2713; '+escapeHtml(r.msg)+'</span>';
+    }else{
+      el.innerHTML='<span style="color:#f66">&#x2717; '+escapeHtml(r.err)+'</span>'
+        +(r.guidance?'<br><span style="color:#94a3b8;font-size:.85em">'+escapeHtml(r.guidance)+'</span>':'');
+    }
+  });
+}
+
 function _camDeploy(ip,force){
   document.getElementById('modal-title').textContent=(force?'Force reinstall':'Deploy')+' \u2014 '+ip;
   document.getElementById('modal-body').innerHTML=
@@ -8411,7 +8951,7 @@ function applyDarkMode(dm){
 var _curSetSection='general';
 function _setSection(s){
   _curSetSection=s;
-  ['general','profiles','dmx','shows','cameras','advanced'].forEach(function(id){
+  ['general','profiles','dmx','cameras','advanced'].forEach(function(id){
     var el=document.getElementById('ss-'+id);if(el)el.style.display=id===s?'':'none';
     var btn=document.getElementById('sn-'+id);if(btn)btn.className='tnav'+(id===s?' tact':'');
   });
@@ -9096,6 +9636,181 @@ function importShowFile(input){
   };
   rd.readAsText(f);input.value='';
 }
+
+// ── Project file (Save/Open/Recent) ─────────────────────────────────────────
+var _projFileHandle=null; // File System Access API handle for current file
+var _projName='SlyLED';
+
+function _fmToggle(e){
+  e.stopPropagation();
+  var dd=document.getElementById('file-dropdown');
+  dd.classList.toggle('open');
+  _fmBuildRecent();
+}
+document.addEventListener('click',function(){document.getElementById('file-dropdown').classList.remove('open');});
+
+function _fmBuildRecent(){
+  var el=document.getElementById('fm-recent-menu');if(!el)return;
+  var list=_projRecentGet();
+  if(!list.length){el.innerHTML='<span class="fm-item-muted">No recent projects</span>';return;}
+  var h='';
+  list.forEach(function(r){
+    h+='<button class="fm-item" onclick="_fmOpenRecent(\''+escapeHtml(r.filename)+'\')">'+escapeHtml(r.name)+' <span style="color:#64748b;font-size:.8em">— '+r.date+'</span></button>';
+  });
+  el.innerHTML=h;
+}
+
+function _projRecentGet(){
+  try{return JSON.parse(localStorage.getItem('slyled-recent-projects'))||[];}catch(e){return[];}
+}
+function _projRecentAdd(name,filename){
+  var list=_projRecentGet().filter(function(r){return r.filename!==filename;});
+  list.unshift({name:name,filename:filename,date:new Date().toISOString().slice(0,10)});
+  if(list.length>8)list=list.slice(0,8);
+  localStorage.setItem('slyled-recent-projects',JSON.stringify(list));
+}
+
+function _projUpdateName(name){
+  _projName=name||'SlyLED';
+  var el=document.getElementById('proj-name-display');
+  if(el)el.textContent=_projName==='SlyLED'?'':_projName;
+  document.title=_projName+' — SlyLED';
+}
+
+function _fmNewProject(){
+  document.getElementById('file-dropdown').classList.remove('open');
+  if(!confirm('Create a new project? This will reset ALL data.'))return;
+  var x=new XMLHttpRequest();
+  x.open('POST','/api/reset',true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.setRequestHeader('X-SlyLED-Confirm','true');
+  x.onload=function(){
+    try{var r=JSON.parse(x.responseText);}catch(e){return;}
+    if(r&&r.ok){
+      _projFileHandle=null;
+      _projUpdateName('SlyLED');
+      document.getElementById('hs').textContent='New project created';
+      loadAll();
+    }
+  };
+  x.send(null);
+}
+
+function _fmSave(){
+  document.getElementById('file-dropdown').classList.remove('open');
+  if(_projFileHandle&&window.showSaveFilePicker){
+    // Save to existing handle
+    _projDoExportToHandle(_projFileHandle);
+  }else{
+    _fmSaveAs();
+  }
+}
+
+function _fmSaveAs(){
+  document.getElementById('file-dropdown').classList.remove('open');
+  ra('GET','/api/project/export',null,function(d){
+    if(!d)return;
+    var json=JSON.stringify(d,null,2);
+    var blob=new Blob([json],{type:'application/json'});
+    var fname=(d.name||'project').replace(/[^a-zA-Z0-9_\-\s]/g,'').replace(/\s+/g,'-').toLowerCase()+'.slyshow';
+    if(window.showSaveFilePicker){
+      window.showSaveFilePicker({suggestedName:fname,types:[{description:'SlyLED Project',accept:{'application/json':['.slyshow','.json']}}]}).then(function(handle){
+        _projFileHandle=handle;
+        var name=handle.name.replace(/\.(slyshow|json)$/i,'');
+        _projRecentAdd(d.name||name,handle.name);
+        _projUpdateName(d.name||name);
+        return handle.createWritable().then(function(w){return w.write(blob).then(function(){return w.close();});});
+      }).then(function(){
+        document.getElementById('hs').textContent='Project saved';
+      }).catch(function(e){
+        if(e.name!=='AbortError'){
+          // Fallback download
+          var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fname;a.click();URL.revokeObjectURL(a.href);
+          document.getElementById('hs').textContent='Project downloaded as '+fname;
+        }
+      });
+    }else{
+      var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fname;a.click();URL.revokeObjectURL(a.href);
+      _projRecentAdd(d.name||'project',fname);
+      document.getElementById('hs').textContent='Project downloaded as '+fname;
+    }
+  });
+}
+
+function _projDoExportToHandle(handle){
+  ra('GET','/api/project/export',null,function(d){
+    if(!d)return;
+    var json=JSON.stringify(d,null,2);
+    var blob=new Blob([json],{type:'application/json'});
+    handle.createWritable().then(function(w){return w.write(blob).then(function(){return w.close();});}).then(function(){
+      document.getElementById('hs').textContent='Project saved';
+    }).catch(function(){
+      document.getElementById('hs').textContent='Save failed';
+    });
+  });
+}
+
+function _fmOpen(){
+  document.getElementById('file-dropdown').classList.remove('open');
+  if(window.showOpenFilePicker){
+    window.showOpenFilePicker({types:[{description:'SlyLED Project',accept:{'application/json':['.slyshow','.json']}}],multiple:false}).then(function(handles){
+      _projFileHandle=handles[0];
+      return handles[0].getFile();
+    }).then(function(file){
+      return file.text().then(function(txt){_fmImportJson(txt,_projFileHandle?_projFileHandle.name:'');});
+    }).catch(function(e){if(e.name!=='AbortError')console.warn('Open picker failed');});
+  }else{
+    document.getElementById('proj-file-input').click();
+  }
+}
+
+function _fmOpenFile(input){
+  var f=input.files[0];if(!f)return;
+  var rd=new FileReader();
+  rd.onload=function(e){_fmImportJson(e.target.result,f.name);};
+  rd.readAsText(f);input.value='';
+}
+
+function _fmImportJson(txt,filename){
+  try{var data=JSON.parse(txt);}catch(ex){alert('Invalid JSON file');return;}
+  if(data.type!=='slyled-project'){alert('Not a SlyLED project file.\n\nExpected type "slyled-project" but got "'+(data.type||'undefined')+'".\n\nUse Import Config for config files or Load Show for show files.');return;}
+  var sv=data.schemaVersion||1;
+  var summary='Project: '+(data.name||'Untitled')+'\nSaved: '+(data.savedAt||'unknown')+'\nApp version: '+(data.appVersion||'unknown')+'\n\nThis will replace ALL current data.';
+  if(!confirm('Load project?\n\n'+summary))return;
+  document.getElementById('hs').textContent='Loading project...';
+  ra('POST','/api/project/import',data,function(r){
+    if(r&&r.ok){
+      _projRecentAdd(r.name||data.name||'Untitled',filename);
+      _projUpdateName(r.name||data.name);
+      document.getElementById('hs').textContent='Project "'+r.name+'" loaded — '+r.children+' children, '+r.fixtures+' fixtures, '+r.actions+' actions';
+      // Guide user to re-enter SSH credentials for camera nodes
+      if(r.sshNeeded&&r.sshNeeded.length){
+        var msg='The following camera nodes need SSH credentials re-entered (passwords are not portable between computers):\n\n';
+        r.sshNeeded.forEach(function(n){
+          msg+='\u2022 '+n.ip+' ('+n.authType+', user: '+n.user+')'+(n.keyPath?' — key: '+n.keyPath:'')+'\n';
+        });
+        msg+='\nGo to Firmware tab > Camera Setup to configure SSH for each node.';
+        setTimeout(function(){alert(msg);},500);
+      }
+      loadAll();
+    }else{
+      document.getElementById('hs').textContent='Project load failed: '+(r&&r.err||'unknown error');
+    }
+  });
+}
+
+function _fmOpenRecent(filename){
+  document.getElementById('file-dropdown').classList.remove('open');
+  // Recent files are just names — user must re-open since we can't persist FS handles across sessions
+  alert('To open "'+filename+'", use File > Open and select the file.\n\nRecent files show your history for reference.');
+}
+
+function loadAll(){
+  // Reload all tabs with fresh data
+  loadDash();loadSetup();loadLayout();loadActions();loadRuntime();loadSettings();
+  ra('GET','/api/project/name',null,function(d){if(d&&d.name)_projUpdateName(d.name);});
+}
+
 function loadPresetList(){
   ra('GET','/api/show/presets',null,function(presets){
     var el=document.getElementById('preset-list');if(!el)return;
@@ -9132,5 +9847,6 @@ showTab(_qTab);
 ra('GET','/api/settings',null,function(d){
   applyDarkMode(!d||d.darkMode!==0);
 });
+ra('GET','/api/project/name',null,function(d){if(d&&d.name)_projUpdateName(d.name);});
 </script>
 </body></html>

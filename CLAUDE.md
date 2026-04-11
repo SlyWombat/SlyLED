@@ -180,6 +180,15 @@ Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask s
 | GET | `/api/calibration/mover/<fid>` | Get saved calibration data |
 | DELETE | `/api/calibration/mover/<fid>` | Delete calibration |
 | POST | `/api/calibration/mover/<fid>/aim` | Aim using calibration grid |
+| GET | `/api/fixtures/live` | Per-fixture live output state (RGB, dimmer, pan/tilt, effect) |
+| GET/POST | `/api/show/playlist` | Ordered timeline playlist + loop setting |
+| POST | `/api/show/start` | Start sequential show playback (all timelines) |
+| POST | `/api/show/stop` | Stop show playback |
+| GET | `/api/show/status` | Sequential playback status (current timeline, progress) |
+| GET | `/api/project/export` | Bundle ALL state into `.slyshow` project file |
+| POST | `/api/project/import` | Load complete project file, replace ALL state |
+| GET | `/api/project/name` | Current project name |
+| POST | `/api/project/name` | Set project name |
 | POST | `/api/reset` | Factory reset all data |
 | POST | `/api/shutdown` | Terminate parent process |
 
@@ -273,7 +282,7 @@ struct ChildStringCfg {
 
 `EEPROM_MAGIC = 0xA8` — bump when struct layout changes to force re-initialisation.
 
-### Test suite (parent — 450 assertions)
+### Test suite (parent — 523 assertions)
 
 ```
 powershell.exe -Command "python -X utf8 tests/test_parent.py"
@@ -298,6 +307,7 @@ Covers: coordinate transforms, pan/tilt math, grid interpolation, Newton inverse
 powershell.exe -Command "python -X utf8 tests/test_unified_3d.py"           # 17 assertions
 powershell.exe -Command "python -X utf8 tests/test_edit_rotation.py"        # 17 assertions
 powershell.exe -Command "python -X utf8 tests/test_aruco_click.py"          # 9 assertions
+powershell.exe -Command "python -X utf8 tests/test_fixture_grid.py"        # 24 assertions
 ```
 
 Covers: 3D viewport on Dashboard/Runtime/Layout, tab switching round-trip, fixture edit rotation persistence, ArUco marker modal.

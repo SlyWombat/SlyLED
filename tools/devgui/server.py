@@ -26,6 +26,8 @@ PROJECT_ROOT = os.path.abspath(os.path.join(DEVGUI_DIR, '..', '..'))
 sys.path.insert(0, DEVGUI_DIR)
 
 from flask import Flask, request, jsonify, Response, send_from_directory
+import flask.cli
+flask.cli.show_server_banner = lambda *a, **kw: None   # suppress dev-server warning (#289)
 from test_registry import discover_tests
 from build_runner import get_all_versions, set_version, run_build
 

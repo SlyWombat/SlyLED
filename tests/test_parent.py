@@ -1400,7 +1400,7 @@ def run():
         ok('SPA has calibration wizard', '_calWizardStart' in spa)
         ok('SPA has calibration compute', '_calCompute' in spa)
         ok('SPA has cone toggle', '_layConesToggle' in spa)
-        ok('SPA has cone toggle button', 'btn-lay-cones' in spa)
+        ok('SPA has view dropdown', 'view-dropdown' in spa)
         ok('SPA has rest vector 2D', "'0,0'" in spa and 'f59e0b' in spa)
         ok('SPA applyNodePos saves to server', "ra('POST','/api/layout'" in spa and 'applyNodePos' in spa)
         ok('SPA has env scan', '_envScan' in spa and 'btn-env-scan' in spa)
@@ -1429,7 +1429,7 @@ def run():
         ok('SPA toolbar: side view tooltip', "title='Side view'" in spa)
         ok('SPA toolbar: 3d view tooltip', "title='3D perspective (orbit)'" in spa)
         ok('SPA toolbar: align dropdown has auto-arrange', 'Auto-Arrange DMX' in spa)
-        ok('SPA toolbar: strings tooltip', "title='Show/hide LED strings'" in spa)
+        ok('SPA toolbar: view menu', 'btn-view-menu' in spa)
         # 2D/3D toggle shows text
         ok('SPA view buttons have labels', '>Front<' in spa and '>Top<' in spa and '>Side<' in spa and '>3D<' in spa)
 
@@ -1501,6 +1501,213 @@ def run():
 
         # Clean up test child
         c.delete(f'/api/children/{cfg_cid}')
+
+        # ── Project file export/import (#290) ─────────────────────
+        # Seed data for project round-trip
+        c.post('/api/children', json={'ip': '10.0.0.60'})
+        c.post('/api/actions', json={'name': 'ProjTest', 'type': 1, 'r': 255, 'g': 0, 'b': 0})
+        c.post('/api/settings', json={'name': 'Test Show'})
+        c.post('/api/stage', json={'w': 6.0, 'h': 3.0, 'd': 4.0})
+
+        # Export project
+        r = c.get('/api/project/export')
+        proj = r.get_json()
+        ok('Project export type', proj.get('type') == 'slyled-project')
+        ok('Project export schemaVersion', proj.get('schemaVersion') == 1)
+        ok('Project export appVersion', 'appVersion' in proj)
+        ok('Project export savedAt', 'savedAt' in proj)
+        ok('Project export name', proj.get('name') == 'Test Show')
+        ok('Project export has children', len(proj.get('children', [])) >= 1)
+        ok('Project export has fixtures', isinstance(proj.get('fixtures'), list))
+        ok('Project export has layout', 'canvasW' in proj.get('layout', {}))
+        ok('Project export has actions', len(proj.get('actions', [])) >= 1)
+        ok('Project export has stage', proj.get('stage', {}).get('w') == 6.0)
+        ok('Project export has dmxSettings', 'protocol' in proj.get('dmxSettings', {}))
+        ok('Project export has settings', 'darkMode' in proj.get('settings', {}))
+        ok('Project export no runnerRunning', 'runnerRunning' not in proj.get('settings', {}))
+
+        # Bad type rejected
+        r = c.post('/api/project/import', json={'type': 'wrong'})
+        ok('Project import bad type → 400', r.status_code == 400)
+
+        # Future version rejected
+        r = c.post('/api/project/import', json={'type': 'slyled-project', 'schemaVersion': 99})
+        ok('Project import future version → 400', r.status_code == 400)
+
+        # Round-trip: reset → import saved project → verify state restored
+        c.post('/api/reset', headers={'X-SlyLED-Confirm': 'true'})
+        r = c.get('/api/children')
+        ok('Post-reset children empty', len(r.get_json()) == 0)
+
+        r = c.post('/api/project/import', json=proj)
+        d = r.get_json()
+        ok('Project import ok', d.get('ok'))
+        ok('Project import name', d.get('name') == 'Test Show')
+        ok('Project import children count', d.get('children', 0) >= 1)
+        ok('Project import actions count', d.get('actions', 0) >= 1)
+
+        # Verify data is actually restored
+        r = c.get('/api/children')
+        ok('Project restored children', len(r.get_json()) >= 1)
+        r = c.get('/api/actions')
+        ok('Project restored actions', len(r.get_json()) >= 1)
+        r = c.get('/api/stage')
+        ok('Project restored stage', r.get_json().get('w') == 6.0)
+        r = c.get('/api/settings')
+        ok('Project restored settings name', r.get_json().get('name') == 'Test Show')
+
+        # Project name API
+        r = c.get('/api/project/name')
+        ok('Project name get', r.get_json().get('name') == 'Test Show')
+        r = c.post('/api/project/name', json={'name': 'Renamed'})
+        ok('Project name set ok', r.get_json().get('ok'))
+        r = c.get('/api/project/name')
+        ok('Project name updated', r.get_json().get('name') == 'Renamed')
+        r = c.post('/api/project/name', json={'name': ''})
+        ok('Project name empty → 400', r.status_code == 400)
+
+        # Reset for next section
+        c.post('/api/reset', headers={'X-SlyLED-Confirm': 'true'})
+
+        # ── Live fixture status (#303) ─────────────────────────────
+        # Empty state
+        r = c.get('/api/fixtures/live')
+        d = r.get_json()
+        ok('Fixtures live returns JSON', r.status_code == 200)
+        ok('Fixtures live has running flag', 'running' in d)
+        ok('Fixtures live has fixtures list', isinstance(d.get('fixtures'), list))
+        ok('Fixtures live empty when no fixtures', len(d['fixtures']) == 0)
+
+        # Add a child + LED fixture
+        r = c.post('/api/children', json={'ip': '10.0.0.70', 'hostname': 'LIVE-TEST',
+               'name': 'Live Tester', 'sc': 1, 'strings': [{'leds': 10, 'mm': 500}]})
+        live_cid = r.get_json().get('id')
+        c.post('/api/fixtures', json={'name': 'LED Test', 'fixtureType': 'led',
+               'childId': live_cid, 'type': 'linear',
+               'strings': [{'leds': 10, 'mm': 500, 'sdir': 0}]})
+        r = c.get('/api/fixtures/live')
+        fxs = r.get_json().get('fixtures', [])
+        ok('Fixtures live LED fixture present', len(fxs) >= 1)
+        led_fx = next((f for f in fxs if f.get('fixtureType') == 'led'), fxs[0] if fxs else {})
+        ok('Fixtures live has id', 'id' in led_fx)
+        ok('Fixtures live has name', 'name' in led_fx)
+        ok('Fixtures live has fixtureType', led_fx.get('fixtureType') == 'led')
+        ok('Fixtures live has r/g/b', 'r' in led_fx and 'g' in led_fx and 'b' in led_fx)
+        ok('Fixtures live has dimmer', 'dimmer' in led_fx)
+        ok('Fixtures live has active flag', 'active' in led_fx)
+        ok('Fixtures live has effect field', 'effect' in led_fx)
+        ok('Fixtures live LED initially idle', led_fx.get('active') is False)
+        ok('Fixtures live LED effect is null', led_fx.get('effect') is None)
+
+        # Add a DMX fixture manually
+        c.post('/api/fixtures', json={'name': 'DMX Test', 'fixtureType': 'dmx',
+               'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 6})
+        r = c.get('/api/fixtures/live')
+        fxs = r.get_json().get('fixtures', [])
+        dmx_fxs = [f for f in fxs if f.get('fixtureType') == 'dmx']
+        ok('Fixtures live DMX fixture present', len(dmx_fxs) >= 1)
+        dmx_fx = dmx_fxs[0]
+        ok('Fixtures live DMX has dmxAddr', 'dmxAddr' in dmx_fx)
+        ok('Fixtures live DMX addr format', dmx_fx.get('dmxAddr') == 'U1.1')
+        ok('Fixtures live DMX initially zero', dmx_fx.get('r') == 0 and dmx_fx.get('g') == 0)
+
+        # Start Art-Net engine so monitor set/read works
+        c.post('/api/dmx/start', json={'protocol': 'artnet'})
+        # Set DMX channels directly via monitor and verify live reads them
+        c.post('/api/dmx/monitor/1/set', json={'channels': [
+            {'addr': 1, 'value': 255},  # ch1 (r for generic)
+            {'addr': 2, 'value': 128},  # ch2 (g)
+            {'addr': 3, 'value': 64},   # ch3 (b)
+        ]})
+        r = c.get('/api/fixtures/live')
+        fxs = r.get_json().get('fixtures', [])
+        dmx_fxs = [f for f in fxs if f.get('fixtureType') == 'dmx']
+        ok('Fixtures live DMX reads universe buffer', len(dmx_fxs) >= 1)
+        dmx_fx = dmx_fxs[0]
+        ok('Fixtures live DMX r=255', dmx_fx.get('r') == 255)
+        ok('Fixtures live DMX g=128', dmx_fx.get('g') == 128)
+        ok('Fixtures live DMX b=64', dmx_fx.get('b') == 64)
+        ok('Fixtures live DMX active when lit', dmx_fx.get('active') is True)
+
+        # Camera fixtures excluded from live list
+        c.post('/api/fixtures', json={'name': 'Cam 1', 'fixtureType': 'camera',
+               'ip': '10.0.0.99'})
+        r = c.get('/api/fixtures/live')
+        fxs = r.get_json().get('fixtures', [])
+        cam_fxs = [f for f in fxs if f.get('fixtureType') == 'camera']
+        ok('Fixtures live excludes cameras', len(cam_fxs) == 0)
+
+        # Reset for next section
+        c.post('/api/reset', headers={'X-SlyLED-Confirm': 'true'})
+
+        # ── Show playlist (#309/#310) ──────────────────────────────
+        # Empty playlist
+        r = c.get('/api/show/playlist')
+        d = r.get_json()
+        ok('Playlist returns JSON', r.status_code == 200)
+        ok('Playlist has order', isinstance(d.get('order'), list))
+        ok('Playlist empty initially', len(d['order']) == 0)
+        ok('Playlist has loopAll', 'loopAll' in d)
+        ok('Playlist has items', isinstance(d.get('items'), list))
+
+        # Create timelines for playlist testing
+        r = c.post('/api/timelines', json={'name': 'Intro', 'durationS': 10})
+        tl1 = r.get_json().get('id')
+        r = c.post('/api/timelines', json={'name': 'Main', 'durationS': 30})
+        tl2 = r.get_json().get('id')
+        r = c.post('/api/timelines', json={'name': 'Finale', 'durationS': 15})
+        tl3 = r.get_json().get('id')
+
+        # Set playlist
+        r = c.post('/api/show/playlist', json={'order': [tl1, tl2, tl3], 'loopAll': True})
+        ok('Playlist set ok', r.get_json().get('ok'))
+
+        # Read back
+        r = c.get('/api/show/playlist')
+        d = r.get_json()
+        ok('Playlist order saved', d['order'] == [tl1, tl2, tl3])
+        ok('Playlist loopAll saved', d['loopAll'] is True)
+        ok('Playlist items enriched', len(d['items']) == 3)
+        ok('Playlist item has name', d['items'][0].get('name') == 'Intro')
+        ok('Playlist item has duration', d['items'][0].get('durationS') == 10)
+        ok('Playlist total duration', d.get('totalDurationS') == 55)
+
+        # Reorder
+        r = c.post('/api/show/playlist', json={'order': [tl3, tl1, tl2]})
+        r = c.get('/api/show/playlist')
+        ok('Playlist reorder works', r.get_json()['order'] == [tl3, tl1, tl2])
+
+        # Invalid IDs filtered out
+        r = c.post('/api/show/playlist', json={'order': [tl1, 999, tl2]})
+        r = c.get('/api/show/playlist')
+        ok('Playlist filters invalid IDs', r.get_json()['order'] == [tl1, tl2])
+
+        # Show start with unbaked → 400
+        r = c.post('/api/show/start', json={})
+        ok('Show start unbaked → 400', r.status_code == 400)
+        ok('Show start unbaked has error', 'unbaked' in (r.get_json().get('err', '').lower()) or 'unbaked' in str(r.get_json()))
+
+        # Show status when idle
+        r = c.get('/api/show/status')
+        d = r.get_json()
+        ok('Show status returns JSON', r.status_code == 200)
+        ok('Show status not running', d.get('running') is False)
+
+        # Show stop (no-op when not running)
+        r = c.post('/api/show/stop')
+        ok('Show stop ok', r.get_json().get('ok'))
+
+        # Playlist persists through project export/import
+        c.post('/api/show/playlist', json={'order': [tl1, tl2], 'loopAll': True})
+        r = c.get('/api/project/export')
+        proj = r.get_json()
+        ok('Project export has showPlaylist', 'showPlaylist' in proj)
+        ok('Project export playlist order', proj['showPlaylist'].get('order') == [tl1, tl2])
+
+        # Reset clears playlist
+        c.post('/api/reset', headers={'X-SlyLED-Confirm': 'true'})
+        r = c.get('/api/show/playlist')
+        ok('Reset clears playlist', len(r.get_json()['order']) == 0)
 
         # ── OTA firmware endpoints ─────────────────────────────────
         r = c.get('/api/firmware/latest')

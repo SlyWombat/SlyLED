@@ -29,6 +29,8 @@ from pathlib import Path
 
 import io
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+import flask.cli
+flask.cli.show_server_banner = lambda *a, **kw: None   # suppress dev-server warning (#289)
 import logging
 from datetime import datetime
 
@@ -79,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "1.4.6"
+VERSION = "1.4.11"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -198,9 +200,11 @@ def _rotation_to_aim(rotation, pos, dist=3000):
 _objects    = _load("objects",     [])
 _spatial_fx = _load("spatial_fx", [])
 _timelines  = _load("timelines",  [])
+_show_playlist = _load("show_playlist", {"order": [], "loopAll": False})  # {order: [tid,...], loopAll: bool}
 _actions = _load("actions", [])
 _wifi    = _load("wifi",    {"ssid": "", "password": ""})
 _ssh     = _load("ssh",    {"sshUser": "root", "sshPassword": "", "sshKeyPath": ""})
+_camera_ssh = _load("camera_ssh", {})  # {ip: {authType, user, password(encrypted), keyPath, keyStored}}
 _calibrations = _load("calibrations", {})  # {fixtureId_str: {matrix, error, points, timestamp}}
 _range_cal    = _load("range_calibrations", {})  # {fixtureId_str: {pan, tilt, timestamp}}
 _mover_cal    = _load("mover_calibrations", {})  # {fixtureId_str: {grid, samples, ...}}
@@ -1705,6 +1709,123 @@ def api_camera_calibrate_compute(fid):
     return jsonify(ok=True, error=round(error, 2), calibrated=True)
 
 
+@app.get("/api/cameras/<int:fid>/intrinsic")
+def api_camera_intrinsic_get(fid):
+    """Proxy intrinsic calibration data from a camera node."""
+    f = next((fx for fx in _fixtures if fx["id"] == fid and fx.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    cam_idx = f.get("cameraIdx", 0)
+    import urllib.request as _ur
+    try:
+        resp = _ur.urlopen(f"http://{ip}:5000/calibrate/intrinsic?cam={cam_idx}", timeout=10)
+        return jsonify(json.loads(resp.read().decode("utf-8")))
+    except Exception as e:
+        return jsonify(ok=False, err=str(e)), 503
+
+
+@app.post("/api/cameras/<int:fid>/aruco/capture")
+def api_camera_aruco_capture(fid):
+    """Proxy ArUco capture request to a camera node."""
+    f = next((fx for fx in _fixtures if fx["id"] == fid and fx.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    body = request.get_json(silent=True) or {}
+    if "cam" not in body:
+        body["cam"] = f.get("cameraIdx", 0)
+    import urllib.request as _ur
+    try:
+        req = _ur.Request(f"http://{ip}:5000/calibrate/aruco/capture",
+                          data=json.dumps(body).encode("utf-8"),
+                          headers={"Content-Type": "application/json"}, method="POST")
+        resp = _ur.urlopen(req, timeout=15)
+        return jsonify(json.loads(resp.read().decode("utf-8")))
+    except Exception as e:
+        return jsonify(ok=False, err=str(e)), 503
+
+
+@app.post("/api/cameras/<int:fid>/aruco/compute")
+def api_camera_aruco_compute(fid):
+    """Proxy ArUco compute request to a camera node."""
+    f = next((fx for fx in _fixtures if fx["id"] == fid and fx.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    body = request.get_json(silent=True) or {}
+    if "cam" not in body:
+        body["cam"] = f.get("cameraIdx", 0)
+    import urllib.request as _ur
+    try:
+        req = _ur.Request(f"http://{ip}:5000/calibrate/aruco/compute",
+                          data=json.dumps(body).encode("utf-8"),
+                          headers={"Content-Type": "application/json"}, method="POST")
+        resp = _ur.urlopen(req, timeout=30)
+        return jsonify(json.loads(resp.read().decode("utf-8")))
+    except Exception as e:
+        return jsonify(ok=False, err=str(e)), 503
+
+
+@app.post("/api/cameras/<int:fid>/aruco/reset")
+def api_camera_aruco_reset(fid):
+    """Proxy ArUco reset request to a camera node."""
+    f = next((fx for fx in _fixtures if fx["id"] == fid and fx.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    body = request.get_json(silent=True) or {}
+    if "cam" not in body:
+        body["cam"] = f.get("cameraIdx", 0)
+    import urllib.request as _ur
+    try:
+        req = _ur.Request(f"http://{ip}:5000/calibrate/aruco/reset",
+                          data=json.dumps(body).encode("utf-8"),
+                          headers={"Content-Type": "application/json"}, method="POST")
+        resp = _ur.urlopen(req, timeout=10)
+        return jsonify(json.loads(resp.read().decode("utf-8")))
+    except Exception as e:
+        return jsonify(ok=False, err=str(e)), 503
+
+
+@app.post("/api/cameras/<int:fid>/stage-map")
+def api_camera_stage_map(fid):
+    """Proxy stage-map calibration request to a camera node."""
+    f = next((fx for fx in _fixtures if fx["id"] == fid and fx.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    body = request.get_json(silent=True) or {}
+    # Inject camera index from fixture data
+    if "cam" not in body:
+        body["cam"] = f.get("cameraIdx", 0)
+    # Inject camera layout position if available (#324)
+    if "cameraPos" not in body:
+        pos = {"x": f.get("x", 0), "y": f.get("y", 0), "z": f.get("z", 0)}
+        body["cameraPos"] = pos
+    import urllib.request as _ur
+    try:
+        req = _ur.Request(f"http://{ip}:5000/calibrate/stage-map",
+                          data=json.dumps(body).encode("utf-8"),
+                          headers={"Content-Type": "application/json"},
+                          method="POST")
+        resp = _ur.urlopen(req, timeout=30)
+        result = json.loads(resp.read().decode("utf-8"))
+        return jsonify(result)
+    except Exception as e:
+        return jsonify(ok=False, err=str(e)), 503
+
+
 @app.get("/api/cameras/<int:fid>/calibration")
 def api_camera_calibration_get(fid):
     """Get calibration data for a camera."""
@@ -2505,11 +2626,11 @@ def _deploy_camera_bg(ip, force=False):
         _update(5, f"Connecting to {ip} via SSH...")
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        user = _ssh.get("sshUser", "root")
-        key_path = _ssh.get("sshKeyPath", "")
-        if key_path:
-            key_path = os.path.expanduser(key_path)
-        pw = _decrypt_pw(_ssh.get("sshPassword", ""))
+        # Use per-node SSH credentials if available, else fall back to global
+        _cam_ssh = _get_node_ssh(ip)
+        user = _cam_ssh["user"]
+        key_path = os.path.expanduser(_cam_ssh.get("keyPath", "")) if _cam_ssh.get("keyPath") else ""
+        pw = _cam_ssh.get("password", "")
 
         connected = False
         # Try key auth first
@@ -2772,6 +2893,128 @@ def api_cameras_ssh_save():
             _ssh["sshKeyPath"] = str(key_file)
         _save("ssh", _ssh)
     return jsonify(ok=True)
+
+# -- Per-camera-node SSH config (#311) -------------------------------------------
+# SSH credentials keyed by camera node IP (not per sensor/fixture).
+# Multiple sensors on the same Orange Pi share one SSH config.
+
+@app.get("/api/cameras/node/<path:ip>/ssh")
+def api_camera_node_ssh_get(ip):
+    """Get SSH config for a camera hardware node by IP (password masked)."""
+    ssh = _camera_ssh.get(ip, {})
+    return jsonify({
+        "ip": ip,
+        "authType": ssh.get("authType", "password"),
+        "user": ssh.get("user", _ssh.get("sshUser", "root")),
+        "hasPassword": bool(ssh.get("password")),
+        "keyPath": ssh.get("keyPath", ""),
+        "keyStored": ssh.get("keyStored", False),
+        "configured": bool(ssh),
+    })
+
+
+@app.post("/api/cameras/node/<path:ip>/ssh")
+def api_camera_node_ssh_save(ip):
+    """Save SSH config for a camera hardware node."""
+    body = request.get_json(silent=True) or {}
+    with _lock:
+        ssh = _camera_ssh.get(ip, {})
+        if "authType" in body:
+            ssh["authType"] = body["authType"]
+        if "user" in body:
+            ssh["user"] = body["user"]
+        if "password" in body:
+            ssh["password"] = _encrypt_pw(body["password"]) if body["password"] else ""
+        if "keyPath" in body:
+            ssh["keyPath"] = body["keyPath"]
+            ssh["keyStored"] = False
+        if "keyContent" in body and body["keyContent"]:
+            key_dir = DATA / "ssh"
+            key_dir.mkdir(parents=True, exist_ok=True)
+            safe_ip = ip.replace(".", "_")
+            key_file = key_dir / f"cam_node_{safe_ip}_key"
+            key_file.write_text(body["keyContent"])
+            key_file.chmod(0o600)
+            ssh["keyPath"] = str(key_file)
+            ssh["keyStored"] = True
+        _camera_ssh[ip] = ssh
+        _save("camera_ssh", _camera_ssh)
+    return jsonify(ok=True)
+
+
+@app.post("/api/cameras/node/<path:ip>/ssh/test")
+def api_camera_node_ssh_test(ip):
+    """Test SSH connection to a camera node."""
+    ssh_cfg = _get_node_ssh(ip)
+    try:
+        import paramiko
+    except ImportError:
+        return jsonify(ok=False, err="paramiko not installed — run: pip install paramiko")
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        kwargs = {"hostname": ip, "port": 22, "username": ssh_cfg["user"], "timeout": 8}
+        if ssh_cfg.get("keyPath") and Path(os.path.expanduser(ssh_cfg["keyPath"])).exists():
+            kwargs["key_filename"] = os.path.expanduser(ssh_cfg["keyPath"])
+        elif ssh_cfg.get("password"):
+            kwargs["password"] = ssh_cfg["password"]
+        else:
+            return jsonify(ok=False, err="No password or key configured. Enter credentials and save first.",
+                           guidance="Set a password or provide an SSH key, then click Save.")
+        client.connect(**kwargs)
+        stdin, stdout, stderr = client.exec_command("whoami")
+        user = stdout.read().decode().strip()
+        client.close()
+        return jsonify(ok=True, user=user, msg=f"Connected as {user}")
+    except paramiko.AuthenticationException:
+        return jsonify(ok=False, err="Authentication failed",
+                       guidance="Check username and password, or ensure your SSH key is in the device's authorized_keys file.")
+    except paramiko.SSHException as e:
+        return jsonify(ok=False, err=f"SSH error: {e}",
+                       guidance="Check that SSH is enabled on the device and the IP is correct.")
+    except OSError as e:
+        if "timed out" in str(e).lower():
+            return jsonify(ok=False, err="Connection timed out",
+                           guidance="Camera not responding. Check the IP address and network connectivity.")
+        return jsonify(ok=False, err=f"Connection refused: {e}",
+                       guidance="Check that the camera is powered on and SSH port 22 is accessible.")
+    except Exception as e:
+        return jsonify(ok=False, err=str(e))
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
+def _get_node_ssh(ip):
+    """Get SSH credentials for a camera node by IP, falling back to global _ssh."""
+    ssh = _camera_ssh.get(ip, {})
+    if ssh.get("password") or ssh.get("keyPath"):
+        pw = ""
+        if ssh.get("password"):
+            try:
+                pw = _decrypt_pw(ssh["password"])
+            except Exception:
+                pw = ""
+        return {
+            "user": ssh.get("user", "root"),
+            "password": pw,
+            "keyPath": ssh.get("keyPath", ""),
+        }
+    # Fall back to global SSH config
+    pw = ""
+    if _ssh.get("sshPassword"):
+        try:
+            pw = _decrypt_pw(_ssh["sshPassword"])
+        except Exception:
+            pw = ""
+    return {
+        "user": _ssh.get("sshUser", "root"),
+        "password": pw,
+        "keyPath": _ssh.get("sshKeyPath", ""),
+    }
+
 
 @app.post("/api/fixtures/<int:fid>/resolve")
 def api_fixture_resolve(fid):
@@ -3740,6 +3983,108 @@ def api_dmx_fixture_test(fid):
         if _sacn.running:
             _sacn.set_channel(uni, dmx_addr, val)
     return jsonify(ok=True)
+
+# -- Live fixture status (#303) -----------------------------------------------
+
+# Action type names — must match SPA _typeNames array
+_ACTION_NAMES = [
+    "Blackout", "Solid", "Fade", "Breathe", "Chase", "Rainbow", "Fire",
+    "Comet", "Twinkle", "Strobe", "Color Wipe", "Scanner", "Sparkle",
+    "Gradient", "DMX Scene", "Pan/Tilt Move", "Gobo Select", "Color Wheel",
+    "Track",
+]
+
+@app.get("/api/fixtures/live")
+def api_fixtures_live():
+    """Return per-fixture live output state for the dashboard status grid.
+
+    For DMX fixtures: reads current channel values from Art-Net/sACN universe
+    buffers and maps them to named parameters (r, g, b, dimmer, pan, tilt, …).
+
+    For LED children: uses ACTION_EVENT data pushed by child nodes to report
+    the current action type and step.
+
+    Returns a list of fixture status objects, one per fixture.
+    """
+    running = bool(_settings.get("runnerRunning"))
+    result = []
+    for f in _fixtures:
+        fid = f["id"]
+        ft = f.get("fixtureType", "led")
+        entry = {
+            "id": fid,
+            "name": f.get("name") or f"Fixture {fid}",
+            "fixtureType": ft,
+            "r": 0, "g": 0, "b": 0,
+            "dimmer": 0,
+            "active": False,
+            "effect": None,
+        }
+        if ft == "dmx":
+            uni_num = f.get("dmxUniverse", 1)
+            addr = f.get("dmxStartAddr", 1)
+            pid = f.get("dmxProfileId")
+            prof_info = _profile_lib.channel_info(pid) if pid else None
+            ch_map = prof_info.get("channel_map") if prof_info else None
+            # Read channels from running engine
+            engine = None
+            if _artnet.running:
+                engine = _artnet
+            elif _sacn.running:
+                engine = _sacn
+            if engine:
+                uni = engine.get_universe(uni_num)
+                if ch_map:
+                    if "red" in ch_map:
+                        entry["r"] = uni.get_channel(addr + ch_map["red"])
+                    if "green" in ch_map:
+                        entry["g"] = uni.get_channel(addr + ch_map["green"])
+                    if "blue" in ch_map:
+                        entry["b"] = uni.get_channel(addr + ch_map["blue"])
+                    if "dimmer" in ch_map:
+                        entry["dimmer"] = uni.get_channel(addr + ch_map["dimmer"])
+                    if "pan" in ch_map:
+                        entry["pan"] = uni.get_channel(addr + ch_map["pan"])
+                    if "tilt" in ch_map:
+                        entry["tilt"] = uni.get_channel(addr + ch_map["tilt"])
+                    if "pan-fine" in ch_map:
+                        entry["panFine"] = uni.get_channel(addr + ch_map["pan-fine"])
+                    if "tilt-fine" in ch_map:
+                        entry["tiltFine"] = uni.get_channel(addr + ch_map["tilt-fine"])
+                else:
+                    # Generic RGB fixture — assume channels at start
+                    count = f.get("dmxChannelCount", 3)
+                    if count >= 3:
+                        entry["r"] = uni.get_channel(addr)
+                        entry["g"] = uni.get_channel(addr + 1)
+                        entry["b"] = uni.get_channel(addr + 2)
+                    if count >= 4:
+                        entry["dimmer"] = uni.get_channel(addr + 3)
+            entry["active"] = (entry["r"] > 0 or entry["g"] > 0
+                               or entry["b"] > 0 or entry["dimmer"] > 0)
+            # DMX address info for display
+            entry["dmxAddr"] = f"U{uni_num}.{addr}"
+        elif ft == "led":
+            # LED fixtures — check live_events from child node
+            cid = f.get("childId")
+            child = next((c for c in _children if c["id"] == cid), None) if cid is not None else None
+            entry["online"] = bool(child and child.get("status") == 1) if child else False
+            if child:
+                ip = child.get("ip", "")
+                ev = _live_events.get(ip)
+                if ev and time.time() - ev.get("ts", 0) < 30:
+                    at = ev.get("actionType", 0)
+                    entry["active"] = ev.get("event", 1) == 0  # 0=started
+                    if at < len(_ACTION_NAMES):
+                        entry["effect"] = _ACTION_NAMES[at]
+                    entry["step"] = ev.get("stepIndex", 0)
+                    entry["totalSteps"] = ev.get("totalSteps", 0)
+        elif ft == "camera":
+            entry["online"] = bool(f.get("ip"))
+            continue  # cameras aren't light-emitting fixtures
+        result.append(entry)
+    return jsonify({"running": running, "fixtures": result})
+
 
 # -- Spatial Effects (Phase 3) ------------------------------------------------
 
@@ -4719,7 +5064,323 @@ def api_timeline_playback_status(tid):
         activeTimeline=_settings.get("activeTimeline", -1),
     )
 
-#  "  "  Settings  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
+#  "  "  Show playlist (sequential playback)  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
+
+# Show-level playback state (for sequential multi-timeline playback)
+_show_playback = {
+    "running": False,
+    "currentIndex": 0,     # index into playlist order
+    "currentTid": -1,
+    "startEpoch": 0,
+    "loopAll": False,
+    "totalElapsed": 0,
+}
+
+@app.get("/api/show/playlist")
+def api_show_playlist_get():
+    """Return ordered timeline playlist + loop setting."""
+    order = _show_playlist.get("order", [])
+    # Build enriched list with timeline metadata
+    items = []
+    for tid in order:
+        tl = next((t for t in _timelines if t["id"] == tid), None)
+        if tl:
+            items.append({
+                "id": tid,
+                "name": tl.get("name", f"Timeline {tid}"),
+                "durationS": tl.get("durationS", 0),
+                "baked": tid in _bake_result,
+            })
+    total_duration = sum(it["durationS"] for it in items)
+    return jsonify({
+        "order": order,
+        "loopAll": _show_playlist.get("loopAll", False),
+        "items": items,
+        "totalDurationS": total_duration,
+    })
+
+
+@app.post("/api/show/playlist")
+def api_show_playlist_set():
+    """Set ordered timeline playlist + loop setting."""
+    data = request.get_json(silent=True) or {}
+    if "order" in data:
+        # Validate all IDs exist
+        valid_ids = {t["id"] for t in _timelines}
+        _show_playlist["order"] = [tid for tid in data["order"] if tid in valid_ids]
+    if "loopAll" in data:
+        _show_playlist["loopAll"] = bool(data["loopAll"])
+    _save("show_playlist", _show_playlist)
+    return jsonify(ok=True)
+
+
+def _show_playback_loop(playlist_order, loop_all, go_epoch):
+    """Background thread: play timelines sequentially."""
+    global _show_playback
+    tl_list = []
+    for tid in playlist_order:
+        tl = next((t for t in _timelines if t["id"] == tid), None)
+        if not tl or tid not in _bake_result:
+            continue
+        tl_list.append((tid, tl))
+    if not tl_list:
+        log.warning("Show playback: no baked timelines in playlist")
+        return
+
+    log.info("Show playback: %d timelines, loop=%s", len(tl_list), loop_all)
+    cumulative = 0
+
+    while not _dmx_playback_stop.is_set():
+        for idx, (tid, tl) in enumerate(tl_list):
+            if _dmx_playback_stop.is_set():
+                break
+            duration = tl.get("durationS", 60)
+            _show_playback["currentIndex"] = idx
+            _show_playback["currentTid"] = tid
+            log.info("Show playback: starting timeline %d '%s' (%ds)",
+                     tid, tl.get("name", "?"), duration)
+
+            # Reuse single-timeline playback for this segment
+            _settings["activeTimeline"] = tid
+            _save("settings", _settings)
+
+            # Run the single-timeline DMX loop inline (blocking)
+            _dmx_playback_single(tid, time.time(), duration)
+
+            if _dmx_playback_stop.is_set():
+                break
+            cumulative += duration
+            _show_playback["totalElapsed"] = cumulative
+
+        if not loop_all or _dmx_playback_stop.is_set():
+            break
+        # Loop: reset and go again
+        cumulative = 0
+
+    _show_playback["running"] = False
+    _show_playback["currentTid"] = -1
+    with _lock:
+        _settings["runnerRunning"] = False
+        _settings["activeTimeline"] = -1
+        _settings["runnerStartEpoch"] = 0
+        _save("settings", _settings)
+    log.info("Show playback: finished")
+
+
+def _dmx_playback_single(tid, go_epoch, duration):
+    """Play a single timeline's DMX data. Returns when done or stopped."""
+    result = _bake_result.get(tid)
+    if not result:
+        return
+    baked_fixtures = result.get("fixtures", {})
+    dmx_fixtures = []
+    for f in _fixtures:
+        if f.get("fixtureType") != "dmx":
+            continue
+        fid = f["id"]
+        fix_data = baked_fixtures.get(fid) or baked_fixtures.get(str(fid), {})
+        segs = fix_data.get("segments", [])
+        uni = f.get("dmxUniverse", 1)
+        addr = f.get("dmxStartAddr", 1)
+        pid = f.get("dmxProfileId")
+        prof_info = _profile_lib.channel_info(pid) if pid else None
+        ch_map = prof_info.get("channel_map") if prof_info else None
+        channels = prof_info.get("channels", []) if prof_info else []
+        if not segs:
+            continue
+        dmx_fixtures.append({"fid": fid, "name": f.get("name", "?"),
+                             "uni": uni, "addr": addr, "ch_map": ch_map,
+                             "channels": channels, "segs": segs})
+    if not dmx_fixtures:
+        # No DMX fixtures — just wait for duration to pass
+        _dmx_playback_stop.wait(timeout=duration)
+        return
+
+    proto = _dmx_settings.get("protocol", "artnet")
+    engine = _artnet if proto == "artnet" else _sacn
+    if not engine.running:
+        engine.start()
+
+    interval = 0.025
+    next_frame = time.monotonic()
+    frame_count = 0
+    while not _dmx_playback_stop.is_set():
+        now_mono = time.monotonic()
+        if now_mono < next_frame:
+            _dmx_playback_stop.wait(timeout=next_frame - now_mono)
+            if _dmx_playback_stop.is_set():
+                break
+            continue
+        next_frame += interval
+        if next_frame < now_mono:
+            next_frame = now_mono + interval
+        elapsed = time.time() - go_epoch
+        if elapsed < 0:
+            continue
+        if elapsed > duration:
+            break
+        for fx in dmx_fixtures:
+            ch_vals = {}
+            for seg in fx["segs"]:
+                ss = seg.get("startS", 0)
+                sd = seg.get("durationS", 1)
+                if ss <= elapsed < ss + sd:
+                    p = seg.get("params", {})
+                    pri = seg.get("_pri", 0)
+                    for k, v in p.items():
+                        if v is not None and (k not in ch_vals or pri >= ch_vals[k][1]):
+                            ch_vals[k] = (v, pri)
+            r = ch_vals.get("r", (0, 0))[0]
+            g = ch_vals.get("g", (0, 0))[0]
+            b = ch_vals.get("b", (0, 0))[0]
+            pan = ch_vals.get("pan", (None, 0))[0]
+            tilt = ch_vals.get("tilt", (None, 0))[0]
+            dimmer = ch_vals.get("dimmer", (None, 0))[0]
+            strobe = ch_vals.get("strobe", (None, 0))[0]
+            gobo = ch_vals.get("gobo", (None, 0))[0]
+            color_wheel = ch_vals.get("colorWheel", (None, 0))[0]
+            prism = ch_vals.get("prism", (None, 0))[0]
+            focus = ch_vals.get("focus", (None, 0))[0]
+            zoom = ch_vals.get("zoom", (None, 0))[0]
+            profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
+            uni_buf = engine.get_universe(fx["uni"])
+            uni_buf.set_fixture_rgb(fx["addr"], r, g, b, profile)
+            if fx["ch_map"] and "dimmer" in fx["ch_map"]:
+                dim = dimmer if dimmer is not None else (255 if (r or g or b) else 0)
+                uni_buf.set_fixture_dimmer(fx["addr"], dim, profile)
+            if pan is not None and tilt is not None and profile:
+                uni_buf.set_fixture_pan_tilt(fx["addr"], pan, tilt, profile)
+            extra_ch = {}
+            if strobe is not None: extra_ch["strobe"] = strobe
+            if gobo is not None: extra_ch["gobo"] = gobo
+            if color_wheel is not None: extra_ch["color-wheel"] = color_wheel
+            if prism is not None: extra_ch["prism"] = prism
+            if focus is not None: extra_ch["focus"] = focus
+            if zoom is not None: extra_ch["zoom"] = zoom
+            if extra_ch and profile:
+                uni_buf.set_fixture_channels(fx["addr"], extra_ch, profile)
+        _evaluate_object_patrols(elapsed)
+        if frame_count % 40 == 0:
+            _reap_temporal_objects()
+        _evaluate_track_actions(elapsed, engine, dmx_fixtures)
+        frame_count += 1
+    # Blackout on segment end
+    for fx in dmx_fixtures:
+        profile = {"channel_map": fx["ch_map"]} if fx["ch_map"] else None
+        engine.set_fixture_rgb(fx["uni"], fx["addr"], 0, 0, 0, profile)
+        if fx["ch_map"] and "dimmer" in fx["ch_map"]:
+            engine.get_universe(fx["uni"]).set_fixture_dimmer(fx["addr"], 0, profile)
+
+
+@app.post("/api/show/start")
+def api_show_start():
+    """Start sequential playback of the show playlist."""
+    global _show_playback
+    data = request.get_json(silent=True) or {}
+    order = data.get("order") or _show_playlist.get("order", [])
+    loop_all = data.get("loopAll", _show_playlist.get("loopAll", False))
+    if not order:
+        return jsonify(err="Playlist is empty"), 400
+    # Verify all timelines are baked
+    unbaked = [tid for tid in order if tid not in _bake_result]
+    if unbaked:
+        return jsonify(err="Unbaked timelines in playlist", unbaked=unbaked), 400
+    # Stop any existing playback
+    _dmx_playback_stop.set()
+    time.sleep(0.1)
+    _dmx_playback_stop.clear()
+
+    go_epoch = int(time.time()) + 2
+    # Send RUNNER_GO to all children
+    loop_flag = 1 if loop_all else 0
+    go_pkt = _hdr(CMD_RUNNER_GO, go_epoch) + struct.pack("<IB", go_epoch, loop_flag)
+    started = 0
+    for child in _children:
+        if child.get("ip"):
+            _send(child["ip"], go_pkt)
+            started += 1
+
+    _show_playback = {
+        "running": True, "currentIndex": 0, "currentTid": order[0],
+        "startEpoch": go_epoch, "loopAll": loop_all, "totalElapsed": 0,
+    }
+    with _lock:
+        _settings["runnerRunning"] = True
+        _settings["activeTimeline"] = order[0]
+        _settings["runnerStartEpoch"] = go_epoch
+        _save("settings", _settings)
+
+    threading.Thread(target=_show_playback_loop, args=(order, loop_all, go_epoch),
+                     daemon=True).start()
+    return jsonify(ok=True, started=started, goEpoch=go_epoch, timelines=len(order))
+
+
+@app.post("/api/show/stop")
+def api_show_stop():
+    """Stop sequential show playback."""
+    _dmx_playback_stop.set()
+    pkt_stop = _hdr(CMD_RUNNER_STOP)
+    pkt_off = _hdr(CMD_ACTION_STOP)
+    for child in _children:
+        if child.get("ip"):
+            _send(child["ip"], pkt_stop)
+            _send(child["ip"], pkt_off)
+    with _lock:
+        _settings["runnerRunning"] = False
+        _settings["activeTimeline"] = -1
+        _settings["runnerStartEpoch"] = 0
+        _save("settings", _settings)
+    _show_playback["running"] = False
+    _show_playback["currentTid"] = -1
+    return jsonify(ok=True)
+
+
+@app.get("/api/show/status")
+def api_show_status():
+    """Get sequential show playback status."""
+    running = _show_playback.get("running", False)
+    current_tid = _show_playback.get("currentTid", -1)
+    current_tl = next((t for t in _timelines if t["id"] == current_tid), None)
+    # Compute elapsed for current timeline
+    current_elapsed = 0
+    if running and _settings.get("runnerStartEpoch"):
+        current_elapsed = max(0, int(time.time()) - _settings["runnerStartEpoch"])
+    # Build enriched playlist
+    order = _show_playlist.get("order", [])
+    items = []
+    cumulative_before = 0
+    for tid in order:
+        tl = next((t for t in _timelines if t["id"] == tid), None)
+        if tl:
+            d = tl.get("durationS", 0)
+            items.append({
+                "id": tid, "name": tl.get("name", "?"),
+                "durationS": d, "baked": tid in _bake_result,
+                "playing": tid == current_tid,
+            })
+            if tid == current_tid:
+                break
+            cumulative_before += d
+    total_elapsed = cumulative_before + current_elapsed if running else 0
+    total_duration = sum(
+        t.get("durationS", 0) for t in _timelines
+        if t["id"] in order
+    )
+    return jsonify({
+        "running": running,
+        "loopAll": _show_playback.get("loopAll", False),
+        "currentTimeline": current_tid,
+        "currentName": current_tl.get("name", "?") if current_tl else None,
+        "currentIndex": _show_playback.get("currentIndex", 0),
+        "currentElapsed": current_elapsed,
+        "currentDurationS": current_tl.get("durationS", 0) if current_tl else 0,
+        "totalElapsed": total_elapsed,
+        "totalDurationS": total_duration,
+        "items": items,
+    })
+
+
+#  "  "  Settings  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
 @app.get("/api/settings")
 def api_settings_get():
@@ -5390,7 +6051,163 @@ def api_show_import():
                    timelines=len(_timelines),
                    runners=0, flights=0, shows=0)
 
-#  "  "  Factory reset  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
+#  "  "  Project file (complete save/load)  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
+
+PROJECT_SCHEMA_VERSION = 1
+
+@app.get("/api/project/export")
+def api_project_export():
+    """Bundle ALL state into a complete project file (.slyshow)."""
+    # Strip transient fields from children
+    _CHILD_STRIP = {"status", "_temporal", "_ttl"}
+    clean_children = [{k: v for k, v in c.items() if k not in _CHILD_STRIP}
+                      for c in _children]
+    # Strip transient fields from fixtures
+    _FIX_STRIP = {"_placed", "_beamWidth", "_temporal", "_ttl", "positioned"}
+    clean_fixtures = [{k: v for k, v in f.items() if k not in _FIX_STRIP}
+                      for f in _fixtures]
+    # Camera SSH: export per-node config with passwords stripped (not portable)
+    clean_camera_ssh = {}
+    for ip, ssh in _camera_ssh.items():
+        clean = dict(ssh)
+        clean.pop("password", None)  # encrypted passwords are machine-specific
+        clean_camera_ssh[ip] = clean
+    # Settings minus transient runtime state
+    clean_settings = {k: v for k, v in _settings.items()
+                      if k not in ("runnerRunning", "runnerElapsed")}
+    return jsonify({
+        "type": "slyled-project",
+        "schemaVersion": PROJECT_SCHEMA_VERSION,
+        "appVersion": VERSION,
+        "savedAt": datetime.utcnow().isoformat() + "Z",
+        "name": _settings.get("name", "SlyLED"),
+        "stage": _stage,
+        "children": clean_children,
+        "fixtures": clean_fixtures,
+        "layout": _layout,
+        "actions": _actions,
+        "spatialEffects": _spatial_fx,
+        "timelines": _timelines,
+        "objects": _objects,
+        "dmxSettings": {k: v for k, v in _dmx_settings.items()},
+        "calibrations": _calibrations,
+        "rangeCalibrations": _range_cal,
+        "moverCalibrations": _mover_cal,
+        "cameraSsh": clean_camera_ssh,
+        "showPlaylist": _show_playlist,
+        "settings": clean_settings,
+    })
+
+
+@app.post("/api/project/import")
+def api_project_import():
+    """Load a complete project file, replacing ALL state."""
+    global _children, _fixtures, _layout, _stage, _settings
+    global _actions, _spatial_fx, _timelines, _objects
+    global _dmx_settings, _calibrations, _range_cal, _mover_cal
+    global _nxt_c, _nxt_a, _nxt_fix, _nxt_obj, _nxt_sfx, _nxt_tl
+    data = request.get_json(silent=True) or {}
+    if data.get("type") != "slyled-project":
+        return jsonify(ok=False, err="Not a SlyLED project file"), 400
+    sv = data.get("schemaVersion", 1)
+    if sv > PROJECT_SCHEMA_VERSION:
+        return jsonify(ok=False, err=f"Project file is version {sv}, but this app only supports version {PROJECT_SCHEMA_VERSION}. Please update SlyLED."), 400
+    # Stop active playback
+    _dmx_playback_stop.set()
+    pkt_stop = _hdr(CMD_RUNNER_STOP)
+    pkt_off = _hdr(CMD_ACTION_STOP)
+    for c in _children:
+        if c.get("ip"):
+            _send(c["ip"], pkt_stop)
+            _send(c["ip"], pkt_off)
+    _live_events.clear()
+    _bake_result.clear()
+    with _lock:
+        _children = data.get("children", [])
+        for c in _children:
+            c["status"] = 0  # all offline until next ping
+        _fixtures = data.get("fixtures", [])
+        _layout = data.get("layout", {"canvasW": 3000, "canvasH": 2000, "children": []})
+        _stage = data.get("stage", {"w": 10.0, "h": 5.0, "d": 10.0})
+        _actions = data.get("actions", [])
+        _spatial_fx = data.get("spatialEffects", [])
+        _timelines = data.get("timelines", [])
+        _objects = data.get("objects", [])
+        _dmx_settings = data.get("dmxSettings", dict(_DMX_SETTINGS_DEFAULTS))
+        _calibrations.clear()
+        _calibrations.update(data.get("calibrations", {}))
+        _range_cal.clear()
+        _range_cal.update(data.get("rangeCalibrations", {}))
+        _mover_cal.clear()
+        _mover_cal.update(data.get("moverCalibrations", {}))
+        # Restore show playlist
+        _show_playlist.clear()
+        _show_playlist.update(data.get("showPlaylist", {"order": [], "loopAll": False}))
+        # Restore per-node camera SSH (passwords stripped — user must re-enter)
+        imported_cam_ssh = data.get("cameraSsh", {})
+        if imported_cam_ssh:
+            _camera_ssh.update(imported_cam_ssh)
+            _save("camera_ssh", _camera_ssh)
+        # Merge imported settings (preserve runtime-only fields)
+        imp_settings = data.get("settings", {})
+        for k, v in imp_settings.items():
+            _settings[k] = v
+        _settings["runnerRunning"] = False
+        _settings["runnerElapsed"] = 0
+        # Recompute sequence counters
+        _nxt_c = max((c["id"] for c in _children), default=-1) + 1
+        _nxt_fix = max((f["id"] for f in _fixtures), default=-1) + 1
+        _nxt_a = max((a["id"] for a in _actions), default=-1) + 1
+        _nxt_obj = max((o["id"] for o in _objects), default=-1) + 1
+        _nxt_sfx = max((f["id"] for f in _spatial_fx), default=-1) + 1
+        _nxt_tl = max((t["id"] for t in _timelines), default=-1) + 1
+        # Persist everything
+        _save("children", _children)
+        _save("fixtures", _fixtures)
+        _save("layout", _layout)
+        _save("stage", _stage)
+        _save("actions", _actions)
+        _save("spatial_fx", _spatial_fx)
+        _save("timelines", _timelines)
+        _save("objects", _objects)
+        _save("dmx_settings", _dmx_settings)
+        _save("calibrations", _calibrations)
+        _save("range_calibrations", _range_cal)
+        _save("mover_calibrations", _mover_cal)
+        _save("show_playlist", _show_playlist)
+        _save("settings", _settings)
+    _apply_dmx_settings()
+    name = data.get("name", "Untitled")
+    # Report camera nodes that need SSH credentials re-entered
+    ssh_needed = []
+    for ip, ssh in _camera_ssh.items():
+        if ssh.get("authType") == "password" and not ssh.get("password"):
+            ssh_needed.append({"ip": ip, "user": ssh.get("user", "root"), "authType": "password"})
+        elif ssh.get("authType") == "key" and ssh.get("keyPath") and not Path(os.path.expanduser(ssh["keyPath"])).exists():
+            ssh_needed.append({"ip": ip, "user": ssh.get("user", "root"), "authType": "key", "keyPath": ssh["keyPath"]})
+    return jsonify(ok=True, name=name,
+                   children=len(_children), fixtures=len(_fixtures),
+                   actions=len(_actions), timelines=len(_timelines),
+                   objects=len(_objects), sshNeeded=ssh_needed)
+
+
+@app.get("/api/project/name")
+def api_project_name_get():
+    return jsonify(name=_settings.get("name", "SlyLED"))
+
+
+@app.post("/api/project/name")
+def api_project_name_set():
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify(ok=False, err="name required"), 400
+    _settings["name"] = name
+    _save("settings", _settings)
+    return jsonify(ok=True, name=name)
+
+
+#  "  "  Factory reset  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
 _DEFAULT_SETTINGS = {
     "name": "SlyLED", "units": 0, "canvasW": 3000, "canvasH": 2000,
@@ -5773,6 +6590,11 @@ def api_reset():
         _save("spatial_fx", _spatial_fx)
         _save("timelines",  _timelines)
         _save("dmx_settings", _dmx_settings)
+        _show_playlist.clear()
+        _show_playlist.update({"order": [], "loopAll": False})
+        _save("show_playlist", _show_playlist)
+        _camera_ssh.clear()
+        _save("camera_ssh", _camera_ssh)
         _calibrations.clear()
         _save("calibrations", _calibrations)
         _range_cal.clear()

@@ -19,8 +19,10 @@ import time
 from pathlib import Path
 
 from flask import Flask, jsonify, request
+import flask.cli
+flask.cli.show_server_banner = lambda *a, **kw: None   # suppress dev-server warning (#289)
 
-VERSION = "1.2.3"
+VERSION = "1.2.11"
 PORT = 5000
 UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
@@ -565,8 +567,13 @@ if _hw_info.get("cameras") else '<div class="card"><h2>Camera</h2><p style="colo
 </div>
 <button class="btn btn-save" onclick="_saveCam({i})" style="margin-top:.3em">Save Camera {i}</button>
 <div style="border-top:1px solid #334155;margin-top:.6em;padding-top:.5em">
-<h2 style="font-size:.82em;color:#94a3b8;margin-bottom:.3em">Image Settings</h2>
+<div style="display:flex;align-items:center;gap:.5em;margin-bottom:.3em">
+<h2 style="font-size:.82em;color:#94a3b8;margin:0">Image Settings</h2>
+<span style="font-size:.68em;color:#475569">changes auto-saved</span>
+<button class="btn btn-save" onclick="_v4l2Preview({i})" style="font-size:.72em;padding:.2em .6em">Preview</button>
+</div>
 <div id="v4l2-controls-{i}" style="font-size:.82em;color:#64748b">Loading...</div>
+<div id="v4l2-preview-{i}" style="margin-top:.4em;display:none"><img id="v4l2-img-{i}" style="max-width:100%;border-radius:4px;border:1px solid #334155"></div>
 <button class="btn btn-reset" onclick="_v4l2Reset({i})" style="margin-top:.3em;font-size:.72em;padding:.2em .6em">Reset to defaults</button>
 </div>
 </div>""" for i, c in enumerate(_hw_info.get("cameras", [])))
@@ -754,13 +761,13 @@ function _v4l2Render(idx,controls){{
     label=label.charAt(0).toUpperCase()+label.slice(1);
     if(tp==='bool'||mn===0&&mx===1){{
       html+='<div style="display:flex;align-items:center;gap:.4em;margin:.3em 0">';
-      html+='<label style="display:flex;align-items:center;gap:.3em;margin:0;min-width:130px"><input type="checkbox" id="v4l2-'+idx+'-'+name+'"'+(val?'checked':'')+' onchange="_v4l2Set('+idx+',\''+name+'\',this.checked?1:0)"> '+label+'</label>';
+      html+='<label style="display:flex;align-items:center;gap:.3em;margin:0;min-width:130px"><input type="checkbox" id="v4l2-'+idx+'-'+name+'"'+(val?'checked':'')+' onchange="_v4l2Set('+idx+',\\x27'+name+'\\x27,this.checked?1:0)"> '+label+'</label>';
       html+='</div>';
     }}else{{
       html+='<div style="margin:.3em 0">';
       html+='<div style="display:flex;align-items:center;gap:.4em">';
       html+='<span style="min-width:130px;font-size:.82em;color:#94a3b8">'+label+'</span>';
-      html+='<input type="range" id="v4l2-'+idx+'-'+name+'" min="'+mn+'" max="'+mx+'" value="'+val+'" style="flex:1;padding:0" oninput="document.getElementById(\'v4l2-val-'+idx+'-'+name+'\').textContent=this.value" onchange="_v4l2Set('+idx+',\''+name+'\',parseInt(this.value))">';
+      html+='<input type="range" id="v4l2-'+idx+'-'+name+'" min="'+mn+'" max="'+mx+'" value="'+val+'" style="flex:1;padding:0" oninput="document.getElementById(\\x27v4l2-val-'+idx+'-'+name+'\\x27).textContent=this.value" onchange="_v4l2Set('+idx+',\\x27'+name+'\\x27,parseInt(this.value))">';
       html+='<span id="v4l2-val-'+idx+'-'+name+'" style="min-width:30px;text-align:right;font-size:.78em;color:#64748b">'+val+'</span>';
       html+='</div></div>';
     }}
@@ -774,6 +781,13 @@ function _v4l2Set(idx,name,val){{
   x.open('POST','/camera/controls');
   x.setRequestHeader('Content-Type','application/json');
   x.send(JSON.stringify(body));
+}}
+function _v4l2Preview(idx){{
+  var wrap=document.getElementById('v4l2-preview-'+idx);
+  var img=document.getElementById('v4l2-img-'+idx);
+  if(!wrap||!img)return;
+  wrap.style.display='';
+  img.src='/snapshot?cam='+idx+'&t='+Date.now();
 }}
 function _v4l2Reset(idx){{
   if(!_v4l2Cache[idx])return;
@@ -904,42 +918,50 @@ def snapshot():
 
 def _cv_capture(device, timeout=5):
     """Capture a single BGR frame from a V4L2 USB camera."""
+    import time as _time
 
-    # Standard V4L2 via OpenCV
-    try:
-        import cv2
-        # Use V4L2 backend explicitly — GStreamer backend ignores resolution on many cameras
-        cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
-        if not cap.isOpened():
-            # Fallback to default backend
-            cap = cv2.VideoCapture(device)
+    # Standard V4L2 via OpenCV — retry up to 3 times (USB bus contention)
+    for attempt in range(3):
+        try:
+            import cv2
+            cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
             if not cap.isOpened():
-                return None
-        # Set MJPEG format + 1080p — required for correct aspect ratio on USB cameras
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        cap.read()
-        ret, frame = cap.read()
-        cap.release()
-        if ret and frame is not None:
-            # Apply per-camera flip if configured
-            cam_idx = None
-            for i, c in enumerate(_hw_info.get("cameras", [])):
-                if c.get("device") == device:
-                    cam_idx = i; break
-            if cam_idx is not None:
-                flip = _camera_cfg(cam_idx).get("flip", "none")
-                if flip == "h":
-                    frame = cv2.flip(frame, 1)
-                elif flip == "v":
-                    frame = cv2.flip(frame, 0)
-                elif flip == "180":
-                    frame = cv2.flip(frame, -1)
-            return frame
-    except Exception as e:
-        log.warning("OpenCV capture %s failed: %s", device, e)
+                cap = cv2.VideoCapture(device)
+                if not cap.isOpened():
+                    log.warning("OpenCV: %s not opened (attempt %d)", device, attempt + 1)
+                    if attempt < 2:
+                        _time.sleep(0.5)
+                    continue
+            # Set MJPEG format + 1080p
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            cap.read()  # discard first (often stale) frame
+            ret, frame = cap.read()
+            cap.release()
+            if ret and frame is not None:
+                # Apply per-camera flip if configured
+                cam_idx = None
+                for i, c in enumerate(_hw_info.get("cameras", [])):
+                    if c.get("device") == device:
+                        cam_idx = i; break
+                if cam_idx is not None:
+                    flip = _camera_cfg(cam_idx).get("flip", "none")
+                    if flip == "h":
+                        frame = cv2.flip(frame, 1)
+                    elif flip == "v":
+                        frame = cv2.flip(frame, 0)
+                    elif flip == "180":
+                        frame = cv2.flip(frame, -1)
+                return frame
+            log.warning("OpenCV: %s read failed ret=%s (attempt %d)", device, ret, attempt + 1)
+            if attempt < 2:
+                _time.sleep(0.5)
+        except Exception as e:
+            log.warning("OpenCV capture %s failed (attempt %d): %s", device, attempt + 1, e)
+            if attempt < 2:
+                _time.sleep(0.5)
     return None
 
 # ── Object detection ──────────────────────────────────────────────────
@@ -1211,7 +1233,7 @@ CHECKER_COLS = 9
 CHECKER_SIZE = 25.0  # mm per square (when printed at 100%)
 
 # ArUco markers for stage-distance calibration
-ARUCO_DICT_ID = 0  # cv2.aruco.DICT_4X4_50
+ARUCO_DICT_ID = 0  # cv2.aruco.DICT_4X4_50 — IDs 0-49, matches SlyLED printed markers
 ARUCO_MARKER_SIZE = 150.0  # mm — size of printed marker (letter paper ~180mm usable)
 
 
@@ -1422,6 +1444,15 @@ def aruco_capture():
     import numpy as np
     aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_ID)
     params = cv2.aruco.DetectorParameters_create()
+    params.adaptiveThreshWinSizeMin = 3
+    params.adaptiveThreshWinSizeMax = 53
+    params.adaptiveThreshWinSizeStep = 4
+    params.minMarkerPerimeterRate = 0.01
+    params.maxMarkerPerimeterRate = 4.0
+    params.polygonalApproxAccuracyRate = 0.05
+    params.minCornerDistanceRate = 0.01
+    params.minDistanceToBorder = 1
+    params.errorCorrectionRate = 0.8
     cam_indices = [single_cam] if single_cam is not None else list(range(len(cameras)))
     results = []
 
@@ -1580,8 +1611,8 @@ def stage_map():
 
     Stage coordinate system (matches layout 3D view):
       X = stage width  (stage right=0 → stage left)
-      Y = height       (floor=0 → ceiling)
-      Z = depth        (back wall=0 → audience)
+      Y = stage depth  (back wall=0 → audience)
+      Z = height       (floor=0 → ceiling)
 
     Body: {
         cam: 0,
@@ -1626,10 +1657,22 @@ def stage_map():
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_ID)
     params = cv2.aruco.DetectorParameters_create()
+    # Relaxed detection for real-world conditions (varying lighting, angles, distance)
+    params.adaptiveThreshWinSizeMin = 3
+    params.adaptiveThreshWinSizeMax = 53
+    params.adaptiveThreshWinSizeStep = 4
+    params.minMarkerPerimeterRate = 0.01
+    params.maxMarkerPerimeterRate = 4.0
+    params.polygonalApproxAccuracyRate = 0.05
+    params.minCornerDistanceRate = 0.01
+    params.minDistanceToBorder = 1
+    params.errorCorrectionRate = 0.8
     corners, ids, rejected = cv2.aruco.detectMarkers(gray, aruco_dict, parameters=params)
+    log.info("ArUco stage-map cam%d: %d detected, %d rejected, frame=%dx%d",
+             cam_idx, len(ids) if ids is not None else 0, len(rejected), frame.shape[1], frame.shape[0])
 
     if ids is None or len(ids) == 0:
-        return jsonify(ok=False, err="No ArUco markers detected in frame")
+        return jsonify(ok=False, err=f"No ArUco markers detected in frame ({len(rejected)} candidates rejected, {frame.shape[1]}x{frame.shape[0]})")
 
     detected_ids = ids.flatten().tolist()
     log.info("Stage map cam%d: detected markers %s", cam_idx, detected_ids)
@@ -1675,13 +1718,14 @@ def stage_map():
         mx, my, mz = mk.get("x", 0), mk.get("y", 0), mk.get("z", 0)
 
         # The 4 corners of this marker in stage coordinates (3D)
-        # Marker lies on the floor (Y=0 by default), oriented in the XZ plane
+        # Marker lies on/near the floor, oriented in the XY plane (Z = height)
         # Corner order matches ArUco convention: TL, TR, BR, BL when viewed from above
+        # Stage: X=width(right→left), Y=depth(back→front), Z=height(floor→ceiling)
         obj_pts = np.array([
-            [mx - half, my, mz + half],   # top-left (toward back wall + stage right)
-            [mx + half, my, mz + half],   # top-right
-            [mx + half, my, mz - half],   # bottom-right
-            [mx - half, my, mz - half],   # bottom-left
+            [mx - half, my + half, mz],   # top-left (toward back wall + stage right)
+            [mx + half, my + half, mz],   # top-right
+            [mx + half, my - half, mz],   # bottom-right
+            [mx - half, my - half, mz],   # bottom-left
         ], dtype=np.float64)
 
         img_pts = corners[i][0].astype(np.float64)  # 4x2 pixel corners
@@ -1729,25 +1773,16 @@ def stage_map():
 
     # ── Step 6: Build floor-plane homography from the camera pose ───
     # For any pixel (u,v), we can cast a ray from the camera and find
-    # where it intersects the floor plane (Y=0).
-    # The homography H maps pixel (u,v) → stage (X,Z) on the floor.
+    # where it intersects the floor plane (Z=0).
+    # The homography H maps pixel (u,v) → stage (X,Y) on the floor.
     #
-    # Ray in camera coords: d_cam = K^-1 * [u, v, 1]^T
-    # Ray in stage coords:  d_stage = R^T * d_cam
-    # Ray origin in stage:  o = cam_pos_stage
-    # Floor intersection:   o + t*d_stage where y-component = 0
-    #   t = -o.y / d_stage.y
-    #   intersection = o + t * d_stage → gives (X, 0, Z)
-    #
-    # We precompute H as a 3x3 matrix for fast lookup:
-    #   [X, Z, 1]^T ~ H * [u, v, 1]^T
-    K_inv = np.linalg.inv(K)
-    # Build the homography from the camera pose
-    # For floor (Y=0): the mapping pixel→(X,Z) can be expressed as a homography
-    # by selecting columns 0 and 2 of the extrinsic matrix (dropping the Y column)
-    # H_floor = K * [r0 | r2 | t]  (columns 0, 2 of R, plus t)
+    # Stage coords: X=width, Y=depth, Z=height. Floor is Z=0.
+    # For floor (Z=0): the mapping pixel→(X,Y) can be expressed as a homography
+    # by selecting columns 0 and 1 of the extrinsic matrix (dropping the Z column)
+    # H_floor = K * [r0 | r1 | t]  (columns 0, 1 of R, plus t)
     # Then invert to get pixel→stage
-    H_cam_to_floor = K @ np.column_stack([R[:, 0], R[:, 2], tvec.flatten()])
+    K_inv = np.linalg.inv(K)
+    H_cam_to_floor = K @ np.column_stack([R[:, 0], R[:, 1], tvec.flatten()])
     H_floor = np.linalg.inv(H_cam_to_floor)
 
     # ── Step 7: Save everything ─────────────────────────────────────
@@ -1786,10 +1821,10 @@ def pixel_to_stage():
     """Convert a camera pixel coordinate to real stage position on the floor.
 
     Uses the saved stage map homography. Only valid for points on the
-    floor plane (Y=0 in stage coordinates).
+    floor plane (Z=0 in stage coordinates: X=width, Y=depth, Z=height).
 
     Body: {cam: 0, pixelX: 960, pixelY: 700}
-    Returns: {ok, stageX, stageZ, stageY: 0}
+    Returns: {ok, stageX, stageY, stageZ: 0}
     """
     body = request.get_json(silent=True) or {}
     cam_idx = body.get("cam", 0)
@@ -1804,15 +1839,15 @@ def pixel_to_stage():
     stage_map = json.loads(map_path.read_text())
     H = np.array(stage_map["homography"]).reshape(3, 3)
 
-    # Apply homography: pixel → stage floor
+    # Apply homography: pixel → stage floor (X, Y on floor, Z=0)
     p = np.array([px, py, 1.0])
     mapped = H @ p
     if abs(mapped[2]) < 1e-9:
         return jsonify(ok=False, err="Degenerate mapping at this pixel")
     stage_x = float(mapped[0] / mapped[2])
-    stage_z = float(mapped[1] / mapped[2])
+    stage_y = float(mapped[1] / mapped[2])
 
-    return jsonify(ok=True, stageX=round(stage_x, 1), stageY=0, stageZ=round(stage_z, 1))
+    return jsonify(ok=True, stageX=round(stage_x, 1), stageY=round(stage_y, 1), stageZ=0)
 
 
 @app.get("/calibrate/stage-map")
