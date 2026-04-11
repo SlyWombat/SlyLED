@@ -816,8 +816,10 @@ function showTab(t){
   });
   if(t==='dash'){
     if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
+    if(!_s3d.inited)s3dInit();
+    if(_s3d.renderer)emu3dInit();
     loadDash();
-    if(_s3d.inited&&_s3d.renderer&&_emu3d.inited)_dashAttach3d();
+    if(_s3d.inited&&_s3d.renderer)_dashAttach3d();
   }
   else if(t==='setup')loadSetup();
   else if(t==='layout'){
@@ -914,6 +916,8 @@ function loadDash(){
     var startupDone=!d||!d.length||d[0].startupDone!==false;
     document.getElementById('dash-content').innerHTML=
       !startupDone?'<span style="color:#fa6;font-size:.82em">&#x23f3; Checking fixtures...</span>':'';
+    if(!_s3d.inited)s3dInit();
+    if(_s3d.renderer)emu3dInit();
     _dashAttach3d();
     // Status bar — count fixtures (not children) for accurate reporting
     ra('GET','/api/fixtures',null,function(fxs){
@@ -1105,7 +1109,7 @@ function _renderTimelineDash(el,settings,tlStatus){
 
 function _dashAttach3d(){
   var el=document.getElementById('dash-3d');
-  if(!el||!_s3d.renderer)return;
+  if(!el)return;
   if(!_s3d.inited)s3dInit();
   if(!_s3d.renderer)return;
   emu3dInit();
@@ -1317,6 +1321,9 @@ function _renderSetup(){
           var cell=document.getElementById('cam-st-'+c.id);
           if(cell)cell.innerHTML=c.online?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
         });
+        // Find latest camera firmware version across all online cameras
+        var latestCamVer='0.0.0';
+        cams.forEach(function(c){if(c.online&&c.fwVersion&&_cmpVer(c.fwVersion,latestCamVer)>0)latestCamVer=c.fwVersion;});
         // Update hardware node status (grouped by IP)
         var seen={};
         cams.forEach(function(c){
@@ -1328,8 +1335,11 @@ function _renderSetup(){
           if(stCell)stCell.innerHTML=c.online?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
           if(fwCell){
             var fw=c.fwVersion||'—';
-            // Check if camera firmware is outdated (compare against registry)
-            fwCell.innerHTML=escapeHtml(fw)+'<span id="cam-fw-ind-'+key+'"></span>';
+            fwCell.innerHTML=escapeHtml(fw);
+            // Show upgrade indicator if camera firmware is behind the latest
+            if(c.online&&fw!=='—'&&_cmpVer(fw,latestCamVer)<0){
+              fwCell.innerHTML+=' <span onclick="showTab(\'firmware\')" style="color:#f60;cursor:pointer;font-size:.9em" title="Update available: v'+latestCamVer+'">&#9650;</span>';
+            }
           }
           // Update hardware name from probe hostname (node name setting)
           if(nameCell&&c.hostname&&c.hostname!==ip){
@@ -1894,8 +1904,10 @@ function _camSnap(fid){
   if(!row||!el)return;
   row.style.display='';
   el.innerHTML='<span style="color:#94a3b8;font-size:.82em">Capturing...</span>';
+  var fix=(_fixtures||[]).find(function(f){return f.id===fid;});
+  var camIdx=fix?fix.cameraIdx||0:0;
   var x=new XMLHttpRequest();
-  x.open('GET','/api/cameras/'+fid+'/snapshot?cam=0');
+  x.open('GET','/api/cameras/'+fid+'/snapshot?cam='+camIdx);
   x.responseType='blob';
   x.onload=function(){
     if(x.status===200&&x.response&&x.response.size>0){

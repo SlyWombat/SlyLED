@@ -81,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "1.4.11"
+VERSION = "1.4.12"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1199,6 +1199,7 @@ def api_cameras():
             if info:
                 cam["online"] = True
                 cam["fwVersion"] = info.get("fwVersion", "")
+                cam["hostname"] = info.get("hostname", "")
                 cam["capabilities"] = info.get("capabilities", {})
         result.append(cam)
     return jsonify(result)
@@ -4217,6 +4218,10 @@ def api_timelines_create():
         _timelines.append(tl)
         _nxt_tl += 1
         _save("timelines", _timelines)
+        # Auto-add new timeline to playlist order (fixes #312)
+        if tl["id"] not in _show_playlist.get("order", []):
+            _show_playlist.setdefault("order", []).append(tl["id"])
+            _save("show_playlist", _show_playlist)
     return jsonify(ok=True, id=tl["id"])
 
 @app.get("/api/timelines/<int:tid>")
@@ -5761,6 +5766,10 @@ def _install_preset_show(preset_id):
         _timelines.append(tl)
         _nxt_tl += 1
         _save("timelines", _timelines)
+        # Auto-add new timeline to playlist order (fixes #312)
+        if tl["id"] not in _show_playlist.get("order", []):
+            _show_playlist.setdefault("order", []).append(tl["id"])
+            _save("show_playlist", _show_playlist)
 
     return jsonify(ok=True, name=show["name"], timelineId=tl["id"],
                    actions=action_count, effects=len(effect_ref_map))
@@ -6004,6 +6013,10 @@ def _api_show_preset_old():
         _timelines.append(tl)
         _nxt_tl += 1
         _save("timelines", _timelines)
+        # Auto-add new timeline to playlist order (fixes #312)
+        if tl["id"] not in _show_playlist.get("order", []):
+            _show_playlist.setdefault("order", []).append(tl["id"])
+            _save("show_playlist", _show_playlist)
 
     return jsonify(ok=True, name=preset["name"], timelineId=tl["id"],
                    actions=len(action_ids), effects=len(effect_ids))
@@ -6143,6 +6156,9 @@ def api_project_import():
         # Restore show playlist
         _show_playlist.clear()
         _show_playlist.update(data.get("showPlaylist", {"order": [], "loopAll": False}))
+        # Auto-populate playlist if empty but timelines exist (fixes #312)
+        if not _show_playlist.get("order") and _timelines:
+            _show_playlist["order"] = [t["id"] for t in _timelines]
         # Restore per-node camera SSH (passwords stripped — user must re-enter)
         imported_cam_ssh = data.get("cameraSsh", {})
         if imported_cam_ssh:
