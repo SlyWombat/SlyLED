@@ -5973,7 +5973,9 @@ _ACTION_FIELDS = ("name", "type", "scope", "canvasEffect", "targetIds", "r", "g"
                   "onMs", "offMs", "wipeDir", "wipeSpeedPct",  # legacy compat
                   "wledFxOverride", "wledPalOverride", "wledSegId",  # WLED overrides
                   "trackObjectIds", "trackCycleMs", "trackOffset",  # Track action
-                  "trackFixtureIds", "trackFixtureOffsets", "trackAutoSpread")
+                  "trackFixtureIds", "trackFixtureOffsets", "trackAutoSpread",
+                  "dimmer", "pan", "tilt", "strobe", "gobo", "colorWheel", "prism",  # DMX channels
+                  "ptStartPos", "ptEndPos")  # Pan/Tilt Move: stage coordinate positions [x,y,z] mm
 
 @app.post("/api/actions")
 def api_actions_create():

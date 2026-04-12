@@ -555,6 +555,8 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
             "fixtureType": ft,
             "profileInfo": _dmx_profile_info if ft == "dmx" else None,
             "rotation": f.get("rotation", [0, 0, 0]) if ft == "dmx" else None,
+            "position": child_pos,
+            "mountedInverted": f.get("mountedInverted", False),
         }
 
     # Expand allPerformers and group fixtures into per-fixture tracks
@@ -638,11 +640,30 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
                     if act_type == ACT_DMX_PT_MOVE:
                         clip_start_s = clip.get("startS", 0)
                         clip_dur_s = clip.get("durationS", 1)
-                        ps = act.get("panStart", 0)
-                        pe = act.get("panEnd", 1)
-                        ts = act.get("tiltStart", 0.5)
-                        te = act.get("tiltEnd", 0.5)
                         pt_dimmer = act.get("dimmer")
+                        # Prefer stage coordinate positions (ptStartPos/ptEndPos) over
+                        # legacy DMX-normalized values.
+                        start_pos = act.get("ptStartPos")
+                        end_pos = act.get("ptEndPos")
+                        prof_info = fdata.get("profileInfo") or {}
+                        pan_range = prof_info.get("panRange", 0)
+                        tilt_range = prof_info.get("tiltRange", 0)
+                        if start_pos and end_pos and pan_range > 0 and tilt_range > 0:
+                            from spatial_engine import compute_pan_tilt as _cpt
+                            fx_pos = fdata.get("position", [0, 0, 0])
+                            mounted_inv = bool(fdata.get("mountedInverted"))
+                            pt_s = _cpt(fx_pos, start_pos, pan_range, tilt_range,
+                                        mounted_inverted=mounted_inv)
+                            pt_e = _cpt(fx_pos, end_pos, pan_range, tilt_range,
+                                        mounted_inverted=mounted_inv)
+                            ps, ts = pt_s if pt_s else (0.0, 0.5)
+                            pe, te = pt_e if pt_e else (1.0, 0.5)
+                        else:
+                            # Fallback for legacy actions without stage coords
+                            ps = act.get("panStart", 0)
+                            pe = act.get("panEnd", 1)
+                            ts = act.get("tiltStart", 0.5)
+                            te = act.get("tiltEnd", 0.5)
                         # Scale slice duration to keep segment count reasonable
                         slice_dur = 1.0 if clip_dur_s > 15 else 0.5
                         t = 0

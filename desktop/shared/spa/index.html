@@ -7806,10 +7806,20 @@ function _showActModal(a){
   h+='</div>';
   // Pan/Tilt Move: start/end pan/tilt, speed
   h+='<div id="ae-ptmove"'+(t===15?'':' style="display:none"')+'>';
-  h+='<label>Start Pan</label><input type="number" id="ae-pt-sp" value="'+(a?a.panStart||0:0)+'" min="0" max="1" step="0.01" style="width:80px">';
-  h+=' <label style="display:inline;margin-left:.5em">Start Tilt</label><input type="number" id="ae-pt-st" value="'+(a?a.tiltStart||0.5:0.5)+'" min="0" max="1" step="0.01" style="width:80px">';
-  h+='<label>End Pan</label><input type="number" id="ae-pt-ep" value="'+(a?a.panEnd||1:1)+'" min="0" max="1" step="0.01" style="width:80px">';
-  h+=' <label style="display:inline;margin-left:.5em">End Tilt</label><input type="number" id="ae-pt-et" value="'+(a?a.tiltEnd||0.5:0.5)+'" min="0" max="1" step="0.01" style="width:80px">';
+  var ptSP=a&&a.ptStartPos?a.ptStartPos:[0,0,0];
+  var ptEP=a&&a.ptEndPos?a.ptEndPos:[0,0,0];
+  h+='<label>Start Position (mm)</label>';
+  h+='<span style="display:inline-flex;align-items:center;gap:.4em;flex-wrap:wrap">';
+  h+='X <input type="number" id="ae-pt-sx" value="'+ptSP[0]+'" step="1" style="width:70px">';
+  h+='Y <input type="number" id="ae-pt-sy" value="'+ptSP[1]+'" step="1" style="width:70px">';
+  h+='Z <input type="number" id="ae-pt-sz" value="'+ptSP[2]+'" step="1" style="width:70px">';
+  h+='</span>';
+  h+='<label>End Position (mm)</label>';
+  h+='<span style="display:inline-flex;align-items:center;gap:.4em;flex-wrap:wrap">';
+  h+='X <input type="number" id="ae-pt-ex" value="'+ptEP[0]+'" step="1" style="width:70px">';
+  h+='Y <input type="number" id="ae-pt-ey" value="'+ptEP[1]+'" step="1" style="width:70px">';
+  h+='Z <input type="number" id="ae-pt-ez" value="'+ptEP[2]+'" step="1" style="width:70px">';
+  h+='</span>';
   h+='<label>Speed (s)</label><input type="number" id="ae-pt-spd" value="'+((a?a.speedMs||5000:5000)/1000)+'" min="0.1" max="60" step="0.1" style="width:80px">';
   h+='</div>';
   // Track: follow moving objects
@@ -7888,15 +7898,15 @@ function _aeScopeChg(){
 }
 
 function _loadPerfPicker(){
-  ra('GET','/api/children',null,function(d){
+  ra('GET','/api/fixtures',null,function(d){
     var el=document.getElementById('ae-perf-list');if(!el)return;
     if(!d||!d.length){el.innerHTML='<p style="color:#888;font-size:.8em">No fixtures registered.</p>';return;}
     var h='';
-    d.forEach(function(c){
-      var checked=(_aePerfIds&&_aePerfIds.indexOf(c.id)>=0)?' checked':'';
+    d.forEach(function(f){
+      var checked=(_aePerfIds&&_aePerfIds.indexOf(f.id)>=0)?' checked':'';
       h+='<label style="display:flex;align-items:center;gap:.3em;font-size:.85em;padding:.15em 0">';
-      h+='<input type="checkbox" class="ae-perf-cb" value="'+c.id+'"'+checked+'> ';
-      h+=escapeHtml(c.hostname)+(c.name&&c.name!==c.hostname?' ('+escapeHtml(c.name)+')':'')+'</label>';
+      h+='<input type="checkbox" class="ae-perf-cb" value="'+f.id+'"'+checked+'> ';
+      h+=escapeHtml(f.name)+'</label>';
     });
     el.innerHTML=h;
   });
@@ -7952,7 +7962,7 @@ function _aeSubmit(id,btn){
     body.colorWheel=parseInt(document.getElementById('ae-colorwheel').value)||0;
     body.prism=parseInt(document.getElementById('ae-prism').value)||0;
   }
-  if(t===15){body.panStart=parseFloat(document.getElementById('ae-pt-sp').value)||0;body.tiltStart=parseFloat(document.getElementById('ae-pt-st').value)||0.5;body.panEnd=parseFloat(document.getElementById('ae-pt-ep').value)||1;body.tiltEnd=parseFloat(document.getElementById('ae-pt-et').value)||0.5;body.speedMs=_s2ms('ae-pt-spd',5000);}
+  if(t===15){body.ptStartPos=[parseFloat(document.getElementById('ae-pt-sx').value)||0,parseFloat(document.getElementById('ae-pt-sy').value)||0,parseFloat(document.getElementById('ae-pt-sz').value)||0];body.ptEndPos=[parseFloat(document.getElementById('ae-pt-ex').value)||0,parseFloat(document.getElementById('ae-pt-ey').value)||0,parseFloat(document.getElementById('ae-pt-ez').value)||0];body.speedMs=_s2ms('ae-pt-spd',5000);}
   if(t===16){body.gobo=parseInt(document.getElementById('ae-gobo').value)||0;}
   if(t===17){body.colorWheel=parseInt(document.getElementById('ae-colorwheel').value)||0;}
   if(t===18){
