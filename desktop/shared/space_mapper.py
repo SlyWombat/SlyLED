@@ -107,65 +107,64 @@ def fetch_point_cloud(camera_fixture, max_points=10000, max_depth_mm=5000):
 def transform_points(points, cam_pos, cam_rotation, cam_aim=None):
     """Transform camera-local points to stage coordinates.
 
-    Camera-local frame (pinhole convention): X-right, Y-down, Z-forward.
-    Stage frame: X=width, Y=depth (forward), Z=height (up).
-    The camera Z-forward maps to stage Y-depth, and camera Y-down flips to stage Z-up.
+    Camera-local frame (pinhole convention): X-right, Y-down, Z-forward (depth).
+    Stage frame: X=width (right), Y=depth (forward), Z=height (up).
 
-    Rotation composition: RY(yaw) * RX(pitch) * RZ(roll) — YXZ intrinsic Euler angles.
-    If cam_aim is provided, computes yaw/pitch from position→aim direction.
+    Pipeline:
+      1. Frame swap: cam(X,Y,Z) → stage-aligned axes
+         cam X-right   → stage X (width)
+         cam Z-forward → stage Y (depth)
+         cam -Y (up)   → stage Z (height)
+      2. Rotate by camera pitch (rx) and yaw (ry) in stage frame
+      3. Translate by camera position
 
     Args:
-        points: list of [x, y, z, r, g, b] in camera-local mm (Y-down)
+        points: list of [x, y, z, r, g, b] in camera-local coords
         cam_pos: (x, y, z) camera position in stage mm
-        cam_rotation: (rx, ry, rz) rotation in degrees
-        cam_aim: optional (x, y, z) aim point — overrides rotation if provided
+        cam_rotation: (rx, ry, rz) degrees — rx=pitch (tilt down), ry=yaw (pan)
+        cam_aim: optional (x, y, z) aim point — overrides rotation
 
     Returns: list of [x, y, z, r, g, b] in stage mm (Z-up)
     """
     cx, cy, cz = cam_pos
 
-    # Compute yaw AND pitch from aim direction
-    # The depth model gives camera-local 3D coords that need full rotation to stage space
+    # Compute yaw and pitch
     if cam_aim:
         dx = cam_aim[0] - cx
-        dy = cam_aim[1] - cy  # depth
-        dz = cam_aim[2] - cz  # height
+        dy = cam_aim[1] - cy
+        dz = cam_aim[2] - cz
         dist_xy = math.sqrt(dx * dx + dy * dy)
-        ry_rad = math.atan2(dx, dy)  # yaw (pan in XY plane)
-        rx_rad = math.atan2(-dz, dist_xy)  # pitch (negative because looking down = positive pitch)
-        rz_rad = 0
+        ry_rad = math.atan2(dx, dy)           # yaw
+        rx_rad = math.atan2(-dz, dist_xy)     # pitch (down = positive)
     else:
         rx_rad = math.radians(cam_rotation[0]) if len(cam_rotation) > 0 else 0
         ry_rad = math.radians(cam_rotation[1]) if len(cam_rotation) > 1 else 0
-        rz_rad = math.radians(cam_rotation[2]) if len(cam_rotation) > 2 else 0
 
-    # Build rotation matrix: RY * RX * RZ (yaw, pitch, roll order)
-    cos_rx, sin_rx = math.cos(rx_rad), math.sin(rx_rad)
-    cos_ry, sin_ry = math.cos(ry_rad), math.sin(ry_rad)
-    cos_rz, sin_rz = math.cos(rz_rad), math.sin(rz_rad)
+    # Rotation matrix: RZ(yaw) * RX(pitch)
+    # In stage coords (Z=up), yaw rotates around Z axis, pitch tilts around X axis
+    cos_p, sin_p = math.cos(rx_rad), math.sin(rx_rad)
+    cos_y, sin_y = math.cos(ry_rad), math.sin(ry_rad)
 
-    # Combined rotation matrix elements (RY * RX * RZ)
-    r00 = cos_ry * cos_rz + sin_ry * sin_rx * sin_rz
-    r01 = -cos_ry * sin_rz + sin_ry * sin_rx * cos_rz
-    r02 = sin_ry * cos_rx
-    r10 = cos_rx * sin_rz
-    r11 = cos_rx * cos_rz
-    r12 = -sin_rx
-    r20 = -sin_ry * cos_rz + cos_ry * sin_rx * sin_rz
-    r21 = sin_ry * sin_rz + cos_ry * sin_rx * cos_rz
-    r22 = cos_ry * cos_rx
+    # RZ(yaw) * RX(pitch)
+    r00 = cos_y;              r01 = -sin_y * cos_p;  r02 = sin_y * sin_p
+    r10 = sin_y;              r11 = cos_y * cos_p;   r12 = -cos_y * sin_p
+    r20 = 0;                  r21 = sin_p;            r22 = cos_p
 
     result = []
     for pt in points:
-        lx, lz = pt[0], pt[2]
-        ly = -pt[1]  # Flip: camera Y-down → stage Z-up (via rotation matrix) (#257)
-        # Skip invalid points
-        if not (math.isfinite(lx) and math.isfinite(ly) and math.isfinite(lz)):
+        # Step 1: Frame swap — camera → stage-aligned
+        sx = pt[0]        # cam X-right  → stage X
+        sy = pt[2]        # cam Z-forward → stage Y (depth)
+        sz = -pt[1]       # cam -Y-down  → stage Z (height)
+
+        if not (math.isfinite(sx) and math.isfinite(sy) and math.isfinite(sz)):
             continue
-        # Apply rotation then translation
-        wx = r00 * lx + r01 * ly + r02 * lz + cx
-        wy = r10 * lx + r11 * ly + r12 * lz + cy
-        wz = r20 * lx + r21 * ly + r22 * lz + cz
+
+        # Step 2: Rotate + translate to stage position
+        wx = r00 * sx + r01 * sy + r02 * sz + cx
+        wy = r10 * sx + r11 * sy + r12 * sz + cy
+        wz = r20 * sx + r21 * sy + r22 * sz + cz
+
         result.append([wx, wy, wz, pt[3], pt[4], pt[5]])
     return result
 
