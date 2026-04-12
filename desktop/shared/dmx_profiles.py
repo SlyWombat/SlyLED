@@ -376,8 +376,16 @@ class ProfileLibrary:
         return sorted(profiles, key=lambda p: p.get("name", ""))
 
     def get_profile(self, profile_id):
-        """Return a profile by ID, or None."""
-        return self._profiles.get(profile_id)
+        """Return a profile by ID, or None. Case-insensitive fallback."""
+        p = self._profiles.get(profile_id)
+        if p:
+            return p
+        # Case-insensitive fallback
+        pid_lower = profile_id.lower()
+        for k, v in self._profiles.items():
+            if k.lower() == pid_lower:
+                return v
+        return None
 
     def save_profile(self, profile):
         """Save a custom profile to disk and memory."""
