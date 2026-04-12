@@ -749,8 +749,8 @@ def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
     _hold_dmx(bridge_ip, dmx, 2.0)  # extra settle for first position
 
-    # Check initial position — use adaptive settle (#238)
-    beam = _wait_settled(camera_ip, cam_idx, color, center=False)
+    # Check initial position — use adaptive settle (#238), lower threshold for ambient light
+    beam = _wait_settled(camera_ip, cam_idx, color, center=False, threshold=30)
     if beam:
         return (pan, tilt, beam[0], beam[1])
 
@@ -774,7 +774,7 @@ def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
             _hold_dmx(bridge_ip, dmx, SETTLE)
             beam = _wait_settled(camera_ip, cam_idx, color,
                                  prev_pan=prev_p, prev_tilt=prev_t,
-                                 new_pan=p, new_tilt=t)
+                                 new_pan=p, new_tilt=t, threshold=30)
             prev_p, prev_t = p, t
             if beam:
                 return (p, t, beam[0], beam[1])
@@ -840,7 +840,8 @@ def map_visible(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         # Use adaptive settle (#238) — scales by movement distance
         beam = _wait_settled(camera_ip, cam_idx, color,
                              prev_pan=prev_p, prev_tilt=prev_t,
-                             new_pan=pan, new_tilt=tilt, center=use_center)
+                             new_pan=pan, new_tilt=tilt, center=use_center,
+                             threshold=30)
         if beam:
             px, py = beam
             # Reject stale: if pixel barely moved from a different pan/tilt, it's noise
