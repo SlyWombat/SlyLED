@@ -307,16 +307,21 @@ def compute_initial_aim(mover_pos, target_pos, pan_range=540, tilt_range=270,
     """
     dx = target_pos[0] - mover_pos[0]
     dy = target_pos[1] - mover_pos[1]  # depth toward audience
-    dz = target_pos[2] - mover_pos[2]  # height
+    dz = target_pos[2] - mover_pos[2]  # positive = target above fixture
     dist_xy = (dx*dx + dy*dy) ** 0.5
 
     pan_deg = math.degrees(math.atan2(dx, dy)) if dist_xy > 0.001 else 0.0
-    tilt_deg = math.degrees(math.atan2(-dz, dist_xy)) if (dist_xy > 0.001 or abs(dz) > 0.001) else 0.0
+    # tilt_deg: positive = below horizontal (looking down at floor)
+    # dz is negative when target is below fixture — use abs for "how far down"
+    tilt_deg = math.degrees(math.atan2(abs(dz), dist_xy)) if (dist_xy > 0.001 or abs(dz) > 0.001) else 0.0
+    if dz > 0:
+        tilt_deg = -tilt_deg  # target above fixture = tilt up (negative)
 
-    # Inverted mount: pan and tilt motor directions reverse
-    sign = -1 if mounted_inverted else 1
-    pan_norm = max(0, min(1, 0.5 + sign * pan_deg / pan_range))
-    tilt_norm = max(0, min(1, 0.5 + sign * tilt_deg / tilt_range))
+    # No pan/tilt sign flip for inverted mounts — the 3D viewport and DMX
+    # protocol treat normalized values the same regardless of mount orientation.
+    # The physical motor reversal is a fixture property, not a DMX convention.
+    pan_norm = max(0, min(1, 0.5 + pan_deg / pan_range))
+    tilt_norm = max(0, min(1, 0.5 + tilt_deg / tilt_range))
     return (pan_norm, tilt_norm)
 
 
@@ -680,31 +685,57 @@ def compute_floor_target(floor_surface, camera_pos, camera_aim):
 def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
              other_mover_addrs=None, initial_pan=None, initial_tilt=None,
              mover_pos=None, camera_pos=None, floor_surface=None,
-             universe=0, start_pan=None, start_tilt=None, max_probes=80):
+             universe=0, start_pan=None, start_tilt=None, max_probes=80,
+             mounted_inverted=False, camera_rotation=None, camera_fov=90,
+             stage_depth=4000):
     """Find the first (pan, tilt) where the beam is visible to the camera.
 
     Aims at the floor area visible to the camera (not at the camera body). (#262)
     Falls back to geometric estimate, then to sensible defaults (forward, slightly down).
 
-    Returns: dict {pan, tilt, pixelX, pixelY} or None
+    Returns: (pan, tilt, pixelX, pixelY) or None
     """
     # Use explicit start values if provided
     if start_pan is not None:
         initial_pan = start_pan
     if start_tilt is not None:
         initial_tilt = start_tilt
-    # Compute starting point: prefer floor target, then geometric estimate
+    # Compute starting point: prefer floor target, then geometric estimate (#347)
     if initial_pan is None and mover_pos:
         if floor_surface and camera_pos:
             target = compute_floor_target(floor_surface, camera_pos, camera_pos)
-            est_pan, est_tilt = compute_initial_aim(mover_pos, target)
+            est_pan, est_tilt = compute_initial_aim(mover_pos, target,
+                                                     mounted_inverted=mounted_inverted)
         elif camera_pos:
-            est_pan, est_tilt = compute_initial_aim(mover_pos, camera_pos)
+            # Aim at center of floor visible to camera (#347)
+            cam_tilt = (camera_rotation or [15, 0, 0])[0]  # degrees below horizontal
+            fov_half = camera_fov / 2
+            bottom_angle = cam_tilt + fov_half  # steepest view angle
+            if bottom_angle > 89:
+                bottom_angle = 89
+            near_y = camera_pos[1] + camera_pos[2] / math.tan(math.radians(bottom_angle))
+            if cam_tilt > 0.1:
+                center_y = camera_pos[1] + camera_pos[2] / math.tan(math.radians(cam_tilt))
+            else:
+                center_y = stage_depth
+            center_y = min(center_y, stage_depth)
+            target_y = near_y + (center_y - near_y) * 0.67
+            floor_target = [
+                (mover_pos[0] + camera_pos[0]) / 2,
+                target_y,
+                0]
+            log.info("Floor target from camera geometry: (%.0f, %.0f, 0) cam_tilt=%.1f fov=%.0f",
+                     floor_target[0], floor_target[1], cam_tilt, camera_fov)
+            est_pan, est_tilt = compute_initial_aim(mover_pos, floor_target,
+                                                     mounted_inverted=mounted_inverted)
+            log.info("Initial aim: pan=%.3f tilt=%.3f (DMX %d,%d) inverted=%s",
+                     est_pan, est_tilt, int(est_pan*255), int(est_tilt*255), mounted_inverted)
         else:
             est_pan, est_tilt = 0.5, 0.6
         initial_pan = initial_pan if initial_pan is not None else est_pan
         initial_tilt = initial_tilt if initial_tilt is not None else est_tilt
-        log.info("Discovery start from layout estimate: pan=%.2f tilt=%.2f", initial_pan, initial_tilt)
+        log.info("Discovery start from layout estimate: pan=%.2f tilt=%.2f (inverted=%s)",
+                 initial_pan, initial_tilt, mounted_inverted)
     else:
         initial_pan = initial_pan if initial_pan is not None else 0.5   # forward (#266)
         initial_tilt = initial_tilt if initial_tilt is not None else 0.6  # slightly down (#266)
@@ -723,8 +754,9 @@ def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     if beam:
         return (pan, tilt, beam[0], beam[1])
 
-    # Spiral outward in 0.05 steps
+    # Spiral outward in 0.05 steps (#348: enforce max_probes)
     prev_p, prev_t = pan, tilt
+    probes = 0
     for radius in range(1, 12):
         positions = []
         for dp in range(-radius, radius + 1):
@@ -734,6 +766,10 @@ def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         for p, t in positions:
             if p < 0 or p > 1 or t < 0 or t > 1:
                 continue
+            probes += 1
+            if probes > max_probes:
+                log.warning("Discovery exhausted %d probes without finding beam", max_probes)
+                return None
             _set_mover_dmx(dmx, mover_addr, p, t, *color, dimmer=255)
             _hold_dmx(bridge_ip, dmx, SETTLE)
             beam = _wait_settled(camera_ip, cam_idx, color,
@@ -800,6 +836,7 @@ def map_visible(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         visited.add(key)
 
         _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
+        _hold_dmx(bridge_ip, dmx, SETTLE)  # #352 — must send DMX before detecting
         # Use adaptive settle (#238) — scales by movement distance
         beam = _wait_settled(camera_ip, cam_idx, color,
                              prev_pan=prev_p, prev_tilt=prev_t,

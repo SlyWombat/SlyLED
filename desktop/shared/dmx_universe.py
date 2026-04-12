@@ -10,13 +10,14 @@ import threading
 class DMXUniverse:
     """Thread-safe 512-channel DMX universe buffer."""
 
-    __slots__ = ("_data", "_lock", "universe", "dirty")
+    __slots__ = ("_data", "_lock", "universe", "dirty", "_last_send")
 
     def __init__(self, universe=1):
         self.universe = universe
         self._data = bytearray(512)
         self._lock = threading.Lock()
         self.dirty = False  # set True on write, cleared by engine after send
+        self._last_send = 0  # monotonic timestamp of last ArtDMX send
 
     # ── Single channel ────────────────────────────────────────────
 

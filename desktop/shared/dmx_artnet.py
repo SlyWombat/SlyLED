@@ -371,11 +371,14 @@ class ArtNetEngine:
                     pass
 
     def _send_all_universes(self):
-        """Send ArtDMX for all dirty universes. Unicast if route exists, broadcast otherwise."""
+        """Send ArtDMX for dirty universes + keep-alive retransmit every ~1s."""
         if not self._sock:
             return
+        now = time.monotonic()
         for uni_num, uni in list(self._universes.items()):
-            if not uni.dirty:
+            # Send if dirty OR keep-alive interval elapsed (Art-Net standard)
+            last = getattr(uni, '_last_send', 0)
+            if not uni.dirty and (now - last) < 1.0:
                 continue
             data = uni.get_data()
             seq = self._sequences.get(uni_num, 0) + 1
@@ -393,6 +396,7 @@ class ArtNetEngine:
             except Exception:
                 pass
             uni.dirty = False
+            uni._last_send = now
 
     # ── Status ───────────────────────────────────────────────────
 

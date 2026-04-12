@@ -2346,9 +2346,11 @@ if _cv is not None:
 def _mcal_dmx_sender(universe_1based, start_addr, values):
     """Write DMX channels through the Art-Net/sACN engine."""
     engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
-    if engine:
-        uni = engine.get_universe(universe_1based)
-        uni.set_channels(start_addr, values)
+    if not engine:
+        log.warning("DMX sender: no engine running — DMX write discarded")  # #346
+        return
+    uni = engine.get_universe(universe_1based)
+    uni.set_channels(start_addr, values)
 _mcal.set_dmx_sender(_mcal_dmx_sender)
 
 _mover_cal_jobs = {}  # fid_str → {thread, status, phase, progress, error, result}
@@ -2402,25 +2404,53 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
     job["status"] = "running"
     job["progress"] = 10
     try:
-        start_pan, start_tilt = 0.5, 0.5
-        # Use orientation if available
+        inverted = f.get("mountedInverted", False)  # #349
+        # Positions live in _layout["children"], not in _fixtures
+        pos_map = {p["id"]: p for p in _layout.get("children", [])}
+        fp = pos_map.get(f["id"], {})
+        cp = pos_map.get(cam["id"], {})
+        fx_pos = [fp.get("x", 0), fp.get("y", 0), fp.get("z", 0)]
+        cam_pos = [cp.get("x", 0), cp.get("y", 0), cp.get("z", 0)]
+
+        # Compute initial aim from camera geometry in the thread (#347)
+        cam_rot = cam.get("rotation", [15, 0, 0])
+        cam_fov = cam.get("fovDeg", 90)
+        stage_d = int(_stage.get("d", 4.0) * 1000)
+        import math as _m
+        _ct = cam_rot[0] if cam_rot else 15
+        _fh = cam_fov / 2
+        _ba = min(_ct + _fh, 89)
+        _near = cam_pos[1] + cam_pos[2] / _m.tan(_m.radians(_ba)) if cam_pos[2] > 0 else 0
+        _ceny = cam_pos[1] + cam_pos[2] / _m.tan(_m.radians(_ct)) if _ct > 0.1 else stage_d
+        _ceny = min(_ceny, stage_d)
+        _ty = _near + (_ceny - _near) * 0.67
+        floor_target = [(fx_pos[0] + cam_pos[0]) / 2, _ty, 0]
+        start_pan, start_tilt = _mcal.compute_initial_aim(
+            fx_pos, floor_target, mounted_inverted=inverted)
+
+        # Override with orientation/rotation if available
         orient = f.get("orientation", {})
         if orient.get("homePan") is not None:
             start_pan = orient["homePan"]
             start_tilt = orient.get("homeTilt", 0.5)
-        # Use rotation as initial direction
         rot = f.get("rotation", [0, 0, 0])
-        if any(v != 0 for v in rot) and f.get("x") is not None:
-            fx_pos = [f.get("x", 5000), f.get("y", 0), f.get("z", 0)]
+        if any(v != 0 for v in rot):
             aim_pt = _rotation_to_aim(rot, fx_pos)
-            pt = _mcal.compute_initial_aim(fx_pos, aim_pt)
+            pt = _mcal.compute_initial_aim(fx_pos, aim_pt, mounted_inverted=inverted)
             if pt:
                 start_pan, start_tilt = pt
 
+        job["debug"] = {"fx_pos": fx_pos, "cam_pos": cam_pos, "cam_rot": cam_rot,
+                        "cam_fov": cam_fov, "stage_d": stage_d, "inverted": inverted,
+                        "start_pan": start_pan, "start_tilt": start_tilt,
+                        "floor_target": floor_target}
         found = _mcal.discover(
             bridge_ip, cam_ip, addr, cam_idx, mover_color,
-            universe=uni, start_pan=start_pan, start_tilt=start_tilt,
-            max_probes=80)
+            universe=uni, mover_pos=fx_pos, camera_pos=cam_pos,
+            start_pan=start_pan, start_tilt=start_tilt,
+            mounted_inverted=inverted, max_probes=80,
+            camera_rotation=cam_rot, camera_fov=cam_fov,
+            stage_depth=stage_d)
         if not found:
             job["error"] = "Beam not found — check fixture and camera positions"
             job["status"] = "error"
@@ -2514,6 +2544,8 @@ def api_mover_cal_start(fid):
     bridge_ip = _get_bridge_ip()
     if not bridge_ip:
         return jsonify(err="No Art-Net bridge found — start the Art-Net engine"), 400
+    if not _artnet.running and not _sacn.running:  # #346
+        return jsonify(err="DMX engine is not running — start it from Settings \u2192 DMX Engine"), 400
     body = request.get_json(silent=True) or {}
     color = body.get("color", [0, 255, 0])  # default green
     job = {"status": "running", "phase": "starting", "progress": 0,
@@ -2544,7 +2576,10 @@ def api_mover_cal_status(fid):
                    progress=job.get("progress", 0),
                    error=job.get("error"),
                    result=job.get("result"),
-                   cameraId=job.get("cameraId"))
+                   cameraId=job.get("cameraId"),
+                   foundAt=job.get("foundAt"),
+                   sampleCount=job.get("sampleCount"),
+                   debug=job.get("debug"))
 
 
 @app.get("/api/calibration/mover/<int:fid>")
@@ -4326,17 +4361,23 @@ _apply_dmx_settings()
 # Auto-start DMX engine if universe routes are configured
 if _dmx_settings.get("universeRoutes"):
     _proto = _dmx_settings.get("protocol", "artnet")
-    try:
-        if _proto == "artnet":
-            _artnet.start()
-            _apply_profile_defaults(_artnet)
-            log.info("Art-Net auto-started (%d routes), profile defaults applied", len(_dmx_settings["universeRoutes"]))
-        elif _proto == "sacn":
-            _sacn.start()
-            _apply_profile_defaults(_sacn)
-            log.info("sACN auto-started (%d routes), profile defaults applied", len(_dmx_settings["universeRoutes"]))
-    except Exception as e:
-        log.warning("DMX auto-start failed: %s", e)
+    _engine = _artnet if _proto == "artnet" else _sacn if _proto == "sacn" else None
+    if _engine:
+        try:
+            _engine.start()
+        except Exception as e:
+            # Bind IP may be stale (DHCP changed) — retry with 0.0.0.0 (#345)
+            log.warning("DMX auto-start failed on %s: %s — retrying with 0.0.0.0",
+                        _dmx_settings.get("bindIp", "?"), e)
+            try:
+                _engine._bind_ip = "0.0.0.0"
+                _engine.start()
+            except Exception as e2:
+                log.warning("DMX auto-start fallback also failed: %s", e2)
+        if _engine.running:
+            _apply_profile_defaults(_engine)
+            log.info("%s auto-started (%d routes), profile defaults applied",
+                     _proto.upper(), len(_dmx_settings["universeRoutes"]))
 
 @app.get("/api/dmx/interfaces")
 def api_dmx_interfaces():
@@ -6669,6 +6710,22 @@ def api_project_import():
         _timelines = data.get("timelines", [])
         _objects = data.get("objects", [])
         _dmx_settings = data.get("dmxSettings", dict(_DMX_SETTINGS_DEFAULTS))
+        # Reconfigure and restart engine with imported settings (#350)
+        if _artnet.running:
+            _artnet.stop()
+        if _sacn.running:
+            _sacn.stop()
+        _apply_dmx_settings()
+        _proto = _dmx_settings.get("protocol", "artnet")
+        _eng = _artnet if _proto == "artnet" else _sacn if _proto == "sacn" else None
+        if _eng and _dmx_settings.get("universeRoutes"):
+            _eng._bind_ip = "0.0.0.0"  # always use wildcard — saved IP may be stale (#345)
+            try:
+                _eng.start()
+            except Exception:
+                pass
+            if _eng.running:
+                _apply_profile_defaults(_eng)
         _calibrations.clear()
         _calibrations.update(data.get("calibrations", {}))
         _range_cal.clear()
@@ -6716,6 +6773,28 @@ def api_project_import():
             pid = p.get("id")
             if pid and not _profile_lib.get_profile(pid):
                 _profile_lib.save_profile(p)
+        # Fetch missing profiles from community server (#351)
+        _missing_pids = set()
+        for f in _fixtures:
+            pid = f.get("dmxProfileId")
+            if pid and not _profile_lib.get_profile(pid):
+                _missing_pids.add(pid)
+        if _missing_pids:
+            try:
+                import community_client as cc
+                for pid in _missing_pids:
+                    result = cc.get_profile(pid)
+                    if result and result.get("ok"):
+                        prof = result.get("data", result)
+                        if isinstance(prof, dict) and "id" in prof:
+                            _profile_lib.import_profiles([prof])
+                            log.info("Project import: fetched missing profile '%s' from community", pid)
+                        else:
+                            log.warning("Project import: community returned invalid data for '%s'", pid)
+                    else:
+                        log.warning("Project import: could not fetch profile '%s' from community", pid)
+            except Exception as e:
+                log.warning("Project import: community profile fetch failed: %s", e)
         # Persist everything
         _save("children", _children)
         _save("fixtures", _fixtures)
