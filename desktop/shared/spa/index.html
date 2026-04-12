@@ -7345,6 +7345,7 @@ function _moverCalStart(fixId){
     escapeHtml(f?f.name:'fixture')+'</strong> using camera observation. The fixture will move through visible positions while the camera tracks the beam.</div>';
   h+='<div class="card" style="padding:.6em;margin-bottom:.6em">';
   h+='<div style="font-size:.82em;color:#f59e0b;margin-bottom:.3em">\u26a0 Ensure Art-Net engine is running and fixture responds to DMX.</div>';
+  h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.3em">Dim or turn off room lights for best results \u2014 the camera needs to clearly see the beam spot on the floor/walls.</div>';
   h+='<div style="display:flex;gap:.4em;align-items:center;margin-bottom:.3em">';
   h+='<label style="font-size:.82em;color:#94a3b8;margin:0">Beam color:</label>';
   h+='<select id="mcal-color" style="font-size:.82em;padding:2px 4px">';
@@ -8434,16 +8435,31 @@ function loadFirmwarePorts(){
       sel.innerHTML='';
       var boardPorts=[];
       var h='<table class="tbl" id="fw-tbl"><tr><th>Port</th><th>Board</th><th>VID:PID</th><th>Firmware</th><th>WiFi</th></tr>';
+      // Separate recognized boards from unknown USB devices (#317)
+      var knownPorts=[];var unknownPorts=[];
       ports.forEach(function(p,idx){
-        var hasBoard=p.board||p.candidates&&p.candidates.length>0;
-        var fwCell=hasBoard?'<span class="fw-q" id="fwq-'+idx+'" style="color:#888">\u23f3</span>':'-';
-        var wfCell=hasBoard?'<span id="wfq-'+idx+'" style="color:#888">\u23f3</span>':'-';
+        p._idx=idx;
+        if(p.board||p.candidates&&p.candidates.length>0)knownPorts.push(p);
+        else unknownPorts.push(p);
+      });
+      // Show known boards first
+      knownPorts.forEach(function(p){
+        var idx=p._idx;
+        var fwCell='<span class="fw-q" id="fwq-'+idx+'" style="color:#888">\u23f3</span>';
+        var wfCell='<span id="wfq-'+idx+'" style="color:#888">\u23f3</span>';
         h+='<tr><td>'+p.port+'</td><td>'+p.boardName+'</td><td>'+(p.vid_pid||'-')+'</td>';
         h+='<td>'+fwCell+'</td><td>'+wfCell+'</td></tr>';
         var o=document.createElement('option');o.value=p.port;o.text=p.port+' ('+p.boardName+')';sel.add(o);
         if(p.board){document.getElementById('fw-board').value=p.board;}
-        if(hasBoard)boardPorts.push({port:p.port,idx:idx,board:p.board});
+        boardPorts.push({port:p.port,idx:idx,board:p.board});
       });
+      // Show unknown ports muted (collapsed if many)
+      if(unknownPorts.length){
+        unknownPorts.forEach(function(p){
+          h+='<tr style="opacity:.4"><td>'+p.port+'</td><td style="color:#64748b">'+p.boardName+'</td><td style="color:#475569">'+(p.vid_pid||'-')+'</td><td>-</td><td>-</td></tr>';
+          var o=document.createElement('option');o.value=p.port;o.text=p.port+' ('+p.boardName+')';sel.add(o);
+        });
+      }
       el.innerHTML=h+'</table>';
       updateFwImages();
       // Async query each board port for version + wifi
@@ -9866,6 +9882,14 @@ function _fmImportJson(txt,filename){
         msg+='\nGo to Firmware tab > Camera Setup to configure SSH for each node.';
         setTimeout(function(){alert(msg);},500);
       }
+      // Guide user about WiFi credentials (#315)
+      ra('GET','/api/wifi',null,function(w){
+        if(!w||(!w.ssid&&!w.hasPassword)){
+          setTimeout(function(){
+            alert('WiFi credentials are not included in project files for security.\n\nIf you need OTA firmware updates, enter your network SSID and password on the Firmware tab.');
+          },1200);
+        }
+      });
       loadAll();
     }else{
       document.getElementById('hs').textContent='Project load failed: '+(r&&r.err||'unknown error');
