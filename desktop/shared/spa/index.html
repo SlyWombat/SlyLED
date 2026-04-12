@@ -3431,12 +3431,17 @@ function viewProfile(id){
     if(p.tiltRange)h+=' | Tilt: '+p.tiltRange+'\u00b0';
     h+='</p>';
     h+='<table class="tbl" style="font-size:.78em;margin-top:.5em"><tr><th>Off</th><th>Name</th><th>Type</th><th>Bits</th><th>Default</th><th>Capabilities</th></tr>';
+    var topCaps=p.capabilities||{};
     (p.channels||[]).forEach(function(ch){
       var capTxt='';
-      if(ch.capabilities&&ch.capabilities.length>1){
-        capTxt=ch.capabilities.map(function(c){return c.range[0]+'-'+c.range[1]+': '+escapeHtml(c.label||c.type);}).join('<br>');
-      }else if(ch.capabilities&&ch.capabilities.length===1){
-        capTxt=escapeHtml(ch.capabilities[0].label||ch.capabilities[0].type);
+      // Per-channel capabilities (builtin format) or top-level dict (custom format)
+      var caps=ch.capabilities||(topCaps[String(ch.offset)]?topCaps[String(ch.offset)].map(function(c){
+        return {range:[c.rangeStart!=null?c.rangeStart:c.range?c.range[0]:0,c.rangeEnd!=null?c.rangeEnd:c.range?c.range[1]:255],label:c.label,type:c.type};
+      }):null);
+      if(caps&&caps.length>1){
+        capTxt=caps.map(function(c){var r=c.range||[0,255];return r[0]+'-'+r[1]+': '+escapeHtml(c.label||c.type||'');}).join('<br>');
+      }else if(caps&&caps.length===1){
+        capTxt=escapeHtml(caps[0].label||caps[0].type||'');
       }
       h+='<tr><td>'+ch.offset+'</td><td>'+escapeHtml(ch.name)+'</td><td><code>'+escapeHtml(ch.type)+'</code></td><td>'+(ch.bits||8)+'</td><td>'+(ch.default!==undefined?ch.default:0)+'</td><td style="font-size:.85em">'+capTxt+'</td></tr>';
     });
