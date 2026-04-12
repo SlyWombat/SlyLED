@@ -81,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "1.4.12"
+VERSION = "1.4.14"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1728,73 +1728,136 @@ def api_camera_intrinsic_get(fid):
         return jsonify(ok=False, err=str(e)), 503
 
 
+# -- ArUco calibration — detection runs on orchestrator, cameras only provide snapshots (#329)
+
+_aruco_frames = {}  # {fid: [(corners, ids, frame_size), ...]}
+
+def _aruco_detect(frame):
+    """Run ArUco detection on a frame. Returns (corners, ids, rejected).
+    Tries default params first (fast), falls back to relaxed for high-res."""
+    import cv2
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+    params = cv2.aruco.DetectorParameters()
+    corners, ids, rejected = cv2.aruco.detectMarkers(gray, aruco_dict, parameters=params)
+    if (ids is None or len(ids) == 0) and frame.shape[1] >= 1920:
+        params.adaptiveThreshWinSizeMin = 3
+        params.adaptiveThreshWinSizeMax = 53
+        params.adaptiveThreshWinSizeStep = 4
+        params.minMarkerPerimeterRate = 0.01
+        params.maxMarkerPerimeterRate = 4.0
+        params.polygonalApproxAccuracyRate = 0.05
+        params.minCornerDistanceRate = 0.01
+        params.minDistanceToBorder = 1
+        params.errorCorrectionRate = 0.8
+        corners, ids, rejected = cv2.aruco.detectMarkers(gray, aruco_dict, parameters=params)
+    return corners, ids, rejected, gray.shape[::-1]
+
+
 @app.post("/api/cameras/<int:fid>/aruco/capture")
 def api_camera_aruco_capture(fid):
-    """Proxy ArUco capture request to a camera node."""
+    """Fetch snapshot from camera, run ArUco detection on orchestrator."""
     f = next((fx for fx in _fixtures if fx["id"] == fid and fx.get("fixtureType") == "camera"), None)
     if not f:
         return jsonify(err="Camera not found"), 404
     ip = f.get("cameraIp")
     if not ip:
         return jsonify(err="Camera has no IP"), 400
-    body = request.get_json(silent=True) or {}
-    if "cam" not in body:
-        body["cam"] = f.get("cameraIdx", 0)
+    cam_idx = f.get("cameraIdx", 0)
+    try:
+        import cv2
+    except ImportError:
+        return jsonify(ok=False, err="OpenCV not installed on orchestrator"), 500
+    # Fetch JPEG snapshot from camera
     import urllib.request as _ur
     try:
-        req = _ur.Request(f"http://{ip}:5000/calibrate/aruco/capture",
-                          data=json.dumps(body).encode("utf-8"),
-                          headers={"Content-Type": "application/json"}, method="POST")
-        resp = _ur.urlopen(req, timeout=15)
-        return jsonify(json.loads(resp.read().decode("utf-8")))
+        resp = _ur.urlopen(f"http://{ip}:5000/snapshot?cam={cam_idx}", timeout=15)
+        jpeg_data = resp.read()
     except Exception as e:
-        return jsonify(ok=False, err=str(e)), 503
+        return jsonify(ok=True, cameras=[{"cam": cam_idx, "markersFound": 0,
+                       "err": f"Snapshot failed: {e}",
+                       "frameCount": len(_aruco_frames.get(fid, []))}])
+    # Decode and detect
+    frame = cv2.imdecode(np.frombuffer(jpeg_data, np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        return jsonify(ok=True, cameras=[{"cam": cam_idx, "markersFound": 0,
+                       "err": "Decode failed",
+                       "frameCount": len(_aruco_frames.get(fid, []))}])
+    corners, ids, rejected, frame_size = _aruco_detect(frame)
+    if ids is not None and len(ids) > 0:
+        if fid not in _aruco_frames:
+            _aruco_frames[fid] = []
+        _aruco_frames[fid].append((corners, ids, frame_size))
+        found_ids = ids.flatten().tolist()
+        log.info("ArUco capture fid=%d: %d markers (ids=%s), total=%d frames",
+                 fid, len(ids), found_ids, len(_aruco_frames[fid]))
+        return jsonify(ok=True, cameras=[{"cam": cam_idx, "markersFound": len(ids),
+                       "ids": found_ids, "frameCount": len(_aruco_frames[fid])}])
+    return jsonify(ok=True, cameras=[{"cam": cam_idx, "markersFound": 0,
+                   "frameCount": len(_aruco_frames.get(fid, []))}])
 
 
 @app.post("/api/cameras/<int:fid>/aruco/compute")
 def api_camera_aruco_compute(fid):
-    """Proxy ArUco compute request to a camera node."""
+    """Compute intrinsic calibration from accumulated frames — all on orchestrator."""
     f = next((fx for fx in _fixtures if fx["id"] == fid and fx.get("fixtureType") == "camera"), None)
     if not f:
         return jsonify(err="Camera not found"), 404
-    ip = f.get("cameraIp")
-    if not ip:
-        return jsonify(err="Camera has no IP"), 400
-    body = request.get_json(silent=True) or {}
-    if "cam" not in body:
-        body["cam"] = f.get("cameraIdx", 0)
-    import urllib.request as _ur
+    frames = _aruco_frames.get(fid, [])
+    if len(frames) < 3:
+        return jsonify(ok=False, err=f"Need at least 3 frames, have {len(frames)}")
     try:
-        req = _ur.Request(f"http://{ip}:5000/calibrate/aruco/compute",
-                          data=json.dumps(body).encode("utf-8"),
-                          headers={"Content-Type": "application/json"}, method="POST")
-        resp = _ur.urlopen(req, timeout=30)
-        return jsonify(json.loads(resp.read().decode("utf-8")))
+        import cv2
+    except ImportError:
+        return jsonify(ok=False, err="OpenCV not installed"), 500
+    body = request.get_json(silent=True) or {}
+    marker_size = body.get("markerSize", 150)
+    half = marker_size / 2.0
+    # Build calibration arrays: each marker = 4 object + 4 image points
+    obj_points = []
+    img_points = []
+    frame_size = frames[0][2]
+    for corners, ids, sz in frames:
+        for i in range(len(ids)):
+            obj = np.array([[-half, half, 0], [half, half, 0],
+                            [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
+            obj_points.append(obj)
+            img_points.append(corners[i].reshape(4, 2).astype(np.float32))
+    try:
+        ret, K, dist, rvecs, tvecs = cv2.calibrateCamera(
+            obj_points, img_points, frame_size, None, None)
     except Exception as e:
-        return jsonify(ok=False, err=str(e)), 503
+        return jsonify(ok=False, err=f"calibrateCamera failed: {e}")
+    if not ret or K is None:
+        return jsonify(ok=False, err="Calibration failed — try more frames")
+    fx, fy = float(K[0, 0]), float(K[1, 1])
+    cx, cy = float(K[0, 2]), float(K[1, 2])
+    rms = float(ret)
+    # Save to camera node if possible
+    ip = f.get("cameraIp")
+    cam_idx = f.get("cameraIdx", 0)
+    if ip:
+        cal_data = {"cam": cam_idx, "fx": fx, "fy": fy, "cx": cx, "cy": cy,
+                    "distCoeffs": dist.flatten().tolist() if dist is not None else [],
+                    "rmsError": rms, "frameCount": len(frames)}
+        try:
+            import urllib.request as _ur
+            req = _ur.Request(f"http://{ip}:5000/calibrate/intrinsic/save",
+                              data=json.dumps(cal_data).encode("utf-8"),
+                              headers={"Content-Type": "application/json"}, method="POST")
+            _ur.urlopen(req, timeout=5)
+        except Exception:
+            pass  # Save failed — calibration still valid locally
+    return jsonify(ok=True, frameCount=len(frames), rmsError=round(rms, 4),
+                   fx=round(fx, 1), fy=round(fy, 1), cx=round(cx, 1), cy=round(cy, 1),
+                   distCoeffs=dist.flatten().tolist() if dist is not None else [])
 
 
 @app.post("/api/cameras/<int:fid>/aruco/reset")
 def api_camera_aruco_reset(fid):
-    """Proxy ArUco reset request to a camera node."""
-    f = next((fx for fx in _fixtures if fx["id"] == fid and fx.get("fixtureType") == "camera"), None)
-    if not f:
-        return jsonify(err="Camera not found"), 404
-    ip = f.get("cameraIp")
-    if not ip:
-        return jsonify(err="Camera has no IP"), 400
-    body = request.get_json(silent=True) or {}
-    if "cam" not in body:
-        body["cam"] = f.get("cameraIdx", 0)
-    import urllib.request as _ur
-    try:
-        req = _ur.Request(f"http://{ip}:5000/calibrate/aruco/reset",
-                          data=json.dumps(body).encode("utf-8"),
-                          headers={"Content-Type": "application/json"}, method="POST")
-        resp = _ur.urlopen(req, timeout=10)
-        return jsonify(json.loads(resp.read().decode("utf-8")))
-    except Exception as e:
-        return jsonify(ok=False, err=str(e)), 503
+    """Reset accumulated ArUco frames for a camera."""
+    _aruco_frames.pop(fid, None)
+    return jsonify(ok=True, frameCount=0)
 
 
 @app.post("/api/cameras/<int:fid>/stage-map")
