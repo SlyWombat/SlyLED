@@ -22,7 +22,7 @@ from flask import Flask, jsonify, request
 import flask.cli
 flask.cli.show_server_banner = lambda *a, **kw: None   # suppress dev-server warning (#289)
 
-VERSION = "1.2.11"
+VERSION = "1.2.12"
 PORT = 5000
 UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
@@ -1443,16 +1443,6 @@ def aruco_capture():
     import cv2
     import numpy as np
     aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_ID)
-    params = cv2.aruco.DetectorParameters_create()
-    params.adaptiveThreshWinSizeMin = 3
-    params.adaptiveThreshWinSizeMax = 53
-    params.adaptiveThreshWinSizeStep = 4
-    params.minMarkerPerimeterRate = 0.01
-    params.maxMarkerPerimeterRate = 4.0
-    params.polygonalApproxAccuracyRate = 0.05
-    params.minCornerDistanceRate = 0.01
-    params.minDistanceToBorder = 1
-    params.errorCorrectionRate = 0.8
     cam_indices = [single_cam] if single_cam is not None else list(range(len(cameras)))
     results = []
 
@@ -1466,7 +1456,21 @@ def aruco_capture():
             continue
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Try default params first (fast — works on slower hardware like RPi)
+        params = cv2.aruco.DetectorParameters_create()
         corners, ids, rejected = cv2.aruco.detectMarkers(gray, aruco_dict, parameters=params)
+        # If default finds nothing, retry with relaxed params (slower but catches more)
+        if (ids is None or len(ids) == 0) and frame.shape[1] >= 1920:
+            params.adaptiveThreshWinSizeMin = 3
+            params.adaptiveThreshWinSizeMax = 53
+            params.adaptiveThreshWinSizeStep = 4
+            params.minMarkerPerimeterRate = 0.01
+            params.maxMarkerPerimeterRate = 4.0
+            params.polygonalApproxAccuracyRate = 0.05
+            params.minCornerDistanceRate = 0.01
+            params.minDistanceToBorder = 1
+            params.errorCorrectionRate = 0.8
+            corners, ids, rejected = cv2.aruco.detectMarkers(gray, aruco_dict, parameters=params)
 
         if ids is None or len(ids) == 0:
             results.append({"cam": cam_idx, "markersFound": 0,
@@ -1656,18 +1660,20 @@ def stage_map():
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_ID)
+    # Try default params first (fast), fall back to relaxed for high-res frames
     params = cv2.aruco.DetectorParameters_create()
-    # Relaxed detection for real-world conditions (varying lighting, angles, distance)
-    params.adaptiveThreshWinSizeMin = 3
-    params.adaptiveThreshWinSizeMax = 53
-    params.adaptiveThreshWinSizeStep = 4
-    params.minMarkerPerimeterRate = 0.01
-    params.maxMarkerPerimeterRate = 4.0
-    params.polygonalApproxAccuracyRate = 0.05
-    params.minCornerDistanceRate = 0.01
-    params.minDistanceToBorder = 1
-    params.errorCorrectionRate = 0.8
     corners, ids, rejected = cv2.aruco.detectMarkers(gray, aruco_dict, parameters=params)
+    if (ids is None or len(ids) == 0) and frame.shape[1] >= 1920:
+        params.adaptiveThreshWinSizeMin = 3
+        params.adaptiveThreshWinSizeMax = 53
+        params.adaptiveThreshWinSizeStep = 4
+        params.minMarkerPerimeterRate = 0.01
+        params.maxMarkerPerimeterRate = 4.0
+        params.polygonalApproxAccuracyRate = 0.05
+        params.minCornerDistanceRate = 0.01
+        params.minDistanceToBorder = 1
+        params.errorCorrectionRate = 0.8
+        corners, ids, rejected = cv2.aruco.detectMarkers(gray, aruco_dict, parameters=params)
     log.info("ArUco stage-map cam%d: %d detected, %d rejected, frame=%dx%d",
              cam_idx, len(ids) if ids is not None else 0, len(rejected), frame.shape[1], frame.shape[0])
 
