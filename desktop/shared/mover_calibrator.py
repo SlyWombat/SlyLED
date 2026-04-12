@@ -36,8 +36,28 @@ SETTLE_PIXEL_THRESH = 30  # max pixel drift to consider settled
 
 # ── Art-Net helpers ───────────────────────────────────────────────────
 
+# ── DMX output ────────────────────────────────────────────────────────
+# Uses a dmx_sender callback injected by the orchestrator to write
+# through the Art-Net/sACN engine rather than raw UDP. This ensures
+# the calibrator works with any transport and doesn't conflict with
+# the engine's continuous 40Hz output.
+
+_dmx_sender = None  # set by set_dmx_sender(fn)
+
+def set_dmx_sender(fn):
+    """Register a callback: fn(universe_1based, addr_1based, values_list).
+    Called by parent_server at startup."""
+    global _dmx_sender
+    _dmx_sender = fn
+
+
 def _send_artnet(bridge_ip, universe, channels):
-    """Send an ArtDMX packet (with retry on transient network errors)."""
+    """Send DMX — uses engine callback if available, falls back to raw UDP."""
+    if _dmx_sender:
+        # Write all non-zero channels through the engine
+        _dmx_sender(universe + 1, 1, channels)  # universe is 0-based here, engine is 1-based
+        return
+    # Fallback: raw Art-Net UDP (legacy, may conflict with engine)
     header = b"Art-Net\x00" + struct.pack("<H", 0x5000) + struct.pack(">H", 14)
     header += b"\x00\x00" + struct.pack("<H", universe) + struct.pack(">H", len(channels))
     for attempt in range(3):
@@ -70,10 +90,9 @@ def _set_mover_dmx(dmx, addr, pan, tilt, r, g, b, dimmer=255):
 
 
 def _hold_dmx(bridge_ip, dmx, duration=0.5):
-    """Send DMX at 20fps for given duration."""
-    for _ in range(max(int(duration * 20), 1)):
-        _send_artnet(bridge_ip, 0, dmx)
-        time.sleep(0.05)
+    """Set DMX channels and wait for the fixture to settle."""
+    _send_artnet(bridge_ip, 0, dmx)
+    time.sleep(duration)
 
 
 # ── Camera beam detection proxy ──────────────────────────────────────

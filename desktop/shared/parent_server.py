@@ -2342,6 +2342,15 @@ import mover_calibrator as _mcal
 if _cv is not None:
     _mcal.set_cv_engine(_cv)
 
+# Wire DMX engine into calibrator so it uses the engine buffer, not raw UDP (#344)
+def _mcal_dmx_sender(universe_1based, start_addr, values):
+    """Write DMX channels through the Art-Net/sACN engine."""
+    engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+    if engine:
+        uni = engine.get_universe(universe_1based)
+        uni.set_channels(start_addr, values)
+_mcal.set_dmx_sender(_mcal_dmx_sender)
+
 _mover_cal_jobs = {}  # fid_str → {thread, status, phase, progress, error, result}
 
 
