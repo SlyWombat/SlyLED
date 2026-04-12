@@ -609,12 +609,24 @@ def api_deploy_status():
 def main():
     parser = argparse.ArgumentParser(description='SlyLED Developer Management GUI')
     parser.add_argument('--port', type=int, default=9090, help='Port (default 9090)')
-    parser.add_argument('--host', default='0.0.0.0', help='Host (default 0.0.0.0 — all interfaces)')
+    parser.add_argument('--host', default=None, help='Host IP to bind to (default: auto-detect LAN IP)')
     args = parser.parse_args()
 
-    print(f'SlyLED DevGUI starting on http://{args.host}:{args.port}')
+    # Auto-detect LAN IP if not specified
+    host = args.host
+    if not host:
+        import socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            host = s.getsockname()[0]
+            s.close()
+        except Exception:
+            host = "127.0.0.1"
+
+    print(f'SlyLED DevGUI starting on http://{host}:{args.port}')
     print(f'Project root: {PROJECT_ROOT}')
-    app.run(host=args.host, port=args.port, debug=False, threaded=True)
+    app.run(host=host, port=args.port, debug=False, threaded=True)
 
 
 if __name__ == '__main__':
