@@ -2230,9 +2230,8 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
         return
     addr = f.get("dmxStartAddr", 1)
     uni = f.get("dmxUniverse", 1) - 1  # Art-Net is 0-based
-    cam_url = cam.get("cameraUrl", "")
-    cam_ip = cam_url.replace("http://", "").split(":")[0]
-    cam_idx = cam.get("cameraIndex", 0)
+    cam_ip = cam.get("cameraIp", "")  # #342
+    cam_idx = cam.get("cameraIdx", 0)  # #342
 
     # Phase 1: Discovery
     job["phase"] = "discovery"
