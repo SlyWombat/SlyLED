@@ -1862,32 +1862,138 @@ def api_camera_aruco_reset(fid):
 
 @app.post("/api/cameras/<int:fid>/stage-map")
 def api_camera_stage_map(fid):
-    """Proxy stage-map calibration request to a camera node."""
+    """Compute stage-map calibration on orchestrator using solvePnP (#330).
+
+    Fetches a snapshot from the camera, runs ArUco detection locally,
+    matches detected markers against provided marker positions, and
+    computes camera pose via cv2.solvePnP.
+    """
     f = next((fx for fx in _fixtures if fx["id"] == fid and fx.get("fixtureType") == "camera"), None)
     if not f:
         return jsonify(err="Camera not found"), 404
     ip = f.get("cameraIp")
     if not ip:
         return jsonify(err="Camera has no IP"), 400
+    try:
+        import cv2
+    except ImportError:
+        return jsonify(ok=False, err="OpenCV not installed on orchestrator"), 500
+    if np is None:
+        return jsonify(ok=False, err="NumPy not installed on orchestrator"), 500
     body = request.get_json(silent=True) or {}
-    # Inject camera index from fixture data
-    if "cam" not in body:
-        body["cam"] = f.get("cameraIdx", 0)
-    # Inject camera layout position if available (#324)
-    if "cameraPos" not in body:
-        pos = {"x": f.get("x", 0), "y": f.get("y", 0), "z": f.get("z", 0)}
-        body["cameraPos"] = pos
+    cam_idx = body.get("cam", f.get("cameraIdx", 0))
+    markers = body.get("markers", [])
+    if not markers or len(markers) < 3:
+        return jsonify(ok=False, err="Need at least 3 marker positions"), 400
+    marker_size = body.get("markerSize", 150)  # mm
+    half = marker_size / 2.0
+    # Build lookup: marker_id → {x, y, z}
+    marker_map = {}
+    for m in markers:
+        mid = m.get("id")
+        if mid is not None:
+            marker_map[int(mid)] = m
+    # Fetch JPEG snapshot from camera
     import urllib.request as _ur
     try:
-        req = _ur.Request(f"http://{ip}:5000/calibrate/stage-map",
-                          data=json.dumps(body).encode("utf-8"),
-                          headers={"Content-Type": "application/json"},
-                          method="POST")
-        resp = _ur.urlopen(req, timeout=30)
-        result = json.loads(resp.read().decode("utf-8"))
-        return jsonify(result)
+        resp = _ur.urlopen(f"http://{ip}:5000/snapshot?cam={cam_idx}", timeout=15)
+        jpeg_data = resp.read()
     except Exception as e:
-        return jsonify(ok=False, err=str(e)), 503
+        return jsonify(ok=False, err=f"Snapshot failed: {e}"), 503
+    # Decode and run ArUco detection
+    frame = cv2.imdecode(np.frombuffer(jpeg_data, np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        return jsonify(ok=False, err="Failed to decode snapshot"), 500
+    corners, ids, _rejected, frame_size = _aruco_detect(frame)
+    h, w = frame.shape[:2]
+    detected_count = len(ids) if ids is not None else 0
+    if ids is None or len(ids) == 0:
+        return jsonify(ok=True, markersDetected=0, markersMatched=0,
+                       err="No ArUco markers detected in snapshot")
+    # Match detected markers against provided positions
+    obj_points = []  # 3D stage coords
+    img_points = []  # 2D pixel coords
+    matched_ids = []
+    flat_ids = ids.flatten()
+    for i, mid in enumerate(flat_ids):
+        mid_int = int(mid)
+        if mid_int in marker_map:
+            m = marker_map[mid_int]
+            mx = float(m.get("x", 0))
+            my = float(m.get("y", 0))
+            mz = float(m.get("z", 0))
+            # 3D corners: spread in X and Y, constant Z
+            obj_pts = np.array([
+                [mx - half, my + half, mz],   # top-left
+                [mx + half, my + half, mz],   # top-right
+                [mx + half, my - half, mz],   # bottom-right
+                [mx - half, my - half, mz],   # bottom-left
+            ], dtype=np.float64)
+            img_pts = corners[i].reshape(4, 2).astype(np.float64)
+            obj_points.append(obj_pts)
+            img_points.append(img_pts)
+            matched_ids.append(mid_int)
+    if len(matched_ids) < 3:
+        return jsonify(ok=True, markersDetected=detected_count,
+                       markersMatched=len(matched_ids),
+                       err=f"Only {len(matched_ids)} markers matched (need 3+)")
+    # Stack all points
+    obj_all = np.vstack(obj_points)  # (N*4, 3)
+    img_all = np.vstack(img_points)  # (N*4, 2)
+    # Estimate camera intrinsics from FOV
+    fov_deg = f.get("fovDeg", 60)
+    fov_rad = math.radians(fov_deg)
+    fx_est = (w / 2.0) / math.tan(fov_rad / 2.0)
+    fy_est = fx_est  # square pixels
+    cx_est = w / 2.0
+    cy_est = h / 2.0
+    K = np.array([
+        [fx_est, 0,      cx_est],
+        [0,      fy_est, cy_est],
+        [0,      0,      1     ],
+    ], dtype=np.float64)
+    dist_coeffs = np.zeros(4, dtype=np.float64)
+    # solvePnP
+    success, rvec, tvec = cv2.solvePnP(obj_all, img_all, K, dist_coeffs,
+                                        flags=cv2.SOLVEPNP_ITERATIVE)
+    if not success:
+        return jsonify(ok=False, markersDetected=detected_count,
+                       markersMatched=len(matched_ids),
+                       err="solvePnP failed")
+    # Compute camera position in stage coords: cam_pos = -R^T @ tvec
+    R, _ = cv2.Rodrigues(rvec)
+    cam_pos = (-R.T @ tvec).flatten()
+    # Compute reprojection error (RMS)
+    proj, _ = cv2.projectPoints(obj_all, rvec, tvec, K, dist_coeffs)
+    proj = proj.reshape(-1, 2)
+    err = np.sqrt(np.mean(np.sum((img_all - proj) ** 2, axis=1)))
+    # Build floor-plane homography (floor is Z=0)
+    # Drop Z column (column 2) of rotation matrix
+    H_cam_to_floor = K @ np.column_stack([R[:, 0], R[:, 1], tvec.flatten()])
+    H_floor = np.linalg.inv(H_cam_to_floor)
+    # Get camera layout position for cross-validation
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    lp = pos_map.get(fid)
+    camera_pos_layout = None
+    if lp:
+        camera_pos_layout = {"x": lp.get("x", 0), "y": lp.get("y", 0), "z": lp.get("z", 0)}
+    result = {
+        "ok": True,
+        "markersDetected": detected_count,
+        "markersMatched": len(matched_ids),
+        "matchedIds": matched_ids,
+        "cameraPosStage": [round(float(cam_pos[0]), 1),
+                           round(float(cam_pos[1]), 1),
+                           round(float(cam_pos[2]), 1)],
+        "rmsError": round(float(err), 2),
+        "method": "solvePnP",
+        "homography": H_floor.tolist(),
+        "intrinsics": {"fx": round(fx_est, 1), "fy": round(fy_est, 1),
+                       "cx": round(cx_est, 1), "cy": round(cy_est, 1)},
+    }
+    if camera_pos_layout:
+        result["cameraPos"] = camera_pos_layout
+    return jsonify(result)
 
 
 @app.get("/api/cameras/<int:fid>/calibration")
@@ -2974,8 +3080,14 @@ def _deploy_camera_bg(ip, force=False):
         ssh.close()
 
         _update(90, "Verifying camera server...")
-        time.sleep(3)
-        info = _probe_camera(ip, timeout=5)
+        # Retry probe with increasing delays — slow devices (RPi) can take 60s+
+        info = None
+        for attempt in range(12):
+            time.sleep(5 if attempt < 3 else 10)
+            _update(90 + min(attempt, 9), f"Verifying... ({(attempt+1)*5}s)")
+            info = _probe_camera(ip, timeout=5)
+            if info:
+                break
         if info:
             new_ver = info.get("fwVersion", "?")
             if remote_ver:
@@ -2983,7 +3095,7 @@ def _deploy_camera_bg(ip, force=False):
             else:
                 _update(100, f"Deploy complete \u2014 {info.get('hostname', ip)} v{new_ver} online")
         else:
-            _update(95, "Server started but not yet responding (may need a few seconds)")
+            _update(100, f"\u2713 Deploy uploaded successfully. Server may still be starting on {ip}.")
     except Exception as e:
         _update(_deploy_status.get("progress", 0), "Deploy failed", error=str(e))
     finally:
