@@ -2281,7 +2281,7 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
     try:
         samples = _mcal.map_visible(
             bridge_ip, cam_ip, addr, cam_idx, mover_color,
-            universe=uni, start_pan=found_pan, start_tilt=found_tilt,
+            start_pan=found_pan, start_tilt=found_tilt,
             collect_3d=False, max_samples=50)
         if len(samples) < 6:
             job["error"] = f"Only {len(samples)} samples collected — need at least 6"
