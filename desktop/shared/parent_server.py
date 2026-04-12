@@ -81,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
-VERSION = "1.4.15"
+VERSION = "1.4.16"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1733,13 +1733,18 @@ def api_camera_intrinsic_get(fid):
 _aruco_frames = {}  # {fid: [(corners, ids, frame_size), ...]}
 
 def _aruco_detect(frame):
-    """Run ArUco detection on a frame. Returns (corners, ids, rejected).
-    Tries default params first (fast), falls back to relaxed for high-res."""
+    """Run ArUco detection on a frame. Returns (corners, ids, rejected, frame_size).
+    Tries default params first (fast), falls back to relaxed for high-res.
+    Compatible with OpenCV 4.7 (detectMarkers) and 4.8+ (ArucoDetector)."""
     import cv2
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     params = cv2.aruco.DetectorParameters()
-    corners, ids, rejected = cv2.aruco.detectMarkers(gray, aruco_dict, parameters=params)
+    def _detect(g, d, p):
+        if hasattr(cv2.aruco, 'ArucoDetector'):
+            return cv2.aruco.ArucoDetector(d, p).detectMarkers(g)
+        return cv2.aruco.detectMarkers(g, d, parameters=p)
+    corners, ids, rejected = _detect(gray, aruco_dict, params)
     if (ids is None or len(ids) == 0) and frame.shape[1] >= 1920:
         params.adaptiveThreshWinSizeMin = 3
         params.adaptiveThreshWinSizeMax = 53
@@ -1750,7 +1755,7 @@ def _aruco_detect(frame):
         params.minCornerDistanceRate = 0.01
         params.minDistanceToBorder = 1
         params.errorCorrectionRate = 0.8
-        corners, ids, rejected = cv2.aruco.detectMarkers(gray, aruco_dict, parameters=params)
+        corners, ids, rejected = _detect(gray, aruco_dict, params)
     return corners, ids, rejected, gray.shape[::-1]
 
 
@@ -2183,9 +2188,159 @@ def compute_pan_tilt_calibrated(fixture_id, target_pos):
     return (pan_norm, tilt_norm)
 
 
+# ── CV Engine — orchestrator-side computer vision (#333) ──────────────
+
+try:
+    from cv_engine import CVEngine
+    _cv = CVEngine()
+    log.info("CVEngine loaded — beam=%s depth=%s detection=%s",
+             _cv.status()["beam"], _cv.status()["depth"], _cv.status()["detection"])
+except Exception as _cv_err:
+    _cv = None
+    log.warning("CVEngine not available: %s", _cv_err)
+
+
+@app.get("/api/cv/status")
+def api_cv_status():
+    """Return CV engine model loading status."""
+    if _cv is None:
+        return jsonify(ok=False, err="CVEngine not initialized")
+    return jsonify(ok=True, **_cv.status())
+
+
+@app.post("/api/cameras/<int:fid>/detect")
+def api_camera_detect_local(fid):
+    """Run object detection locally on orchestrator (#333)."""
+    f = next((fx for fx in _fixtures if fx["id"] == fid and fx.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    if _cv is None:
+        return jsonify(ok=False, err="CVEngine not available"), 503
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(ok=False, err="Camera has no IP"), 400
+    cam_idx = f.get("cameraIdx", 0)
+    body = request.get_json(silent=True) or {}
+    try:
+        frame = _cv.fetch_snapshot(ip, cam_idx)
+        detections, ms = _cv.detect_objects(
+            frame, threshold=body.get("threshold", 0.5),
+            classes=body.get("classes"), input_size=body.get("inputSize", 640))
+        return jsonify(ok=True, detections=detections, inferenceMs=ms)
+    except Exception as e:
+        return jsonify(ok=False, err=str(e)), 503
+
+
+@app.post("/api/cameras/<int:fid>/depth")
+def api_camera_depth_local(fid):
+    """Run depth estimation locally on orchestrator (#333)."""
+    f = next((fx for fx in _fixtures if fx["id"] == fid and fx.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    if _cv is None:
+        return jsonify(ok=False, err="CVEngine not available"), 503
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(ok=False, err="Camera has no IP"), 400
+    cam_idx = f.get("cameraIdx", 0)
+    body = request.get_json(silent=True) or {}
+    try:
+        frame = _cv.fetch_snapshot(ip, cam_idx)
+        fov = f.get("fovDeg", 60)
+        points, ms = _cv.generate_point_cloud(
+            frame, fov, max_points=body.get("maxPoints", 5000),
+            max_depth_mm=body.get("maxDepthMm", 5000))
+        return jsonify(ok=True, pointCount=len(points), inferenceMs=ms)
+    except Exception as e:
+        return jsonify(ok=False, err=str(e)), 503
+
+
+@app.post("/api/cameras/<int:fid>/beam-detect")
+def api_camera_beam_detect_local(fid):
+    """Run beam detection locally on orchestrator (#333)."""
+    f = next((fx for fx in _fixtures if fx["id"] == fid and fx.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    if _cv is None:
+        return jsonify(ok=False, err="CVEngine not available"), 503
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(ok=False, err="Camera has no IP"), 400
+    cam_idx = f.get("cameraIdx", 0)
+    body = request.get_json(silent=True) or {}
+    try:
+        frame = _cv.fetch_snapshot(ip, cam_idx)
+        result = _cv.detect_beam(frame, cam_idx,
+                                  color=body.get("color"),
+                                  threshold=body.get("threshold", 30))
+        return jsonify(ok=True, **result)
+    except Exception as e:
+        return jsonify(ok=False, err=str(e)), 503
+
+
+# ── Stereo 3D reconstruction (#230) ──────────────────────────────────
+
+try:
+    from stereo_engine import StereoEngine
+    _stereo = StereoEngine()
+except ImportError:
+    _stereo = None
+
+
+@app.post("/api/calibration/stereo/calibrate")
+def api_stereo_calibrate():
+    """Build stereo engine from calibrated cameras. Requires stage-map data."""
+    if _stereo is None:
+        return jsonify(ok=False, err="StereoEngine not available"), 503
+    body = request.get_json(silent=True) or {}
+    camera_ids = body.get("cameraIds")
+    # Auto-select all cameras with stage-map data if no IDs given
+    cams = [f for f in _fixtures if f.get("fixtureType") == "camera"
+            and f.get("cameraIp")]
+    added = 0
+    for cam in cams:
+        fid = cam["id"]
+        if camera_ids and fid not in camera_ids:
+            continue
+        fov = cam.get("fovDeg", 60)
+        pos = None
+        for p in _layout.get("children", []):
+            if p.get("id") == fid:
+                pos = [p.get("x", 0), p.get("y", 0), p.get("z", 0)]
+                break
+        if pos:
+            rot = cam.get("rotation", [0, 0, 0])
+            _stereo.add_camera_from_fov(str(fid), fov, 640, 480, pos, rot)
+            added += 1
+    return jsonify(ok=True, camerasAdded=added,
+                   totalCameras=_stereo.camera_count)
+
+
+@app.post("/api/calibration/stereo/triangulate")
+def api_stereo_triangulate():
+    """Triangulate 3D point from pixel observations across cameras."""
+    if _stereo is None:
+        return jsonify(ok=False, err="StereoEngine not available"), 503
+    if _stereo.camera_count < 2:
+        return jsonify(ok=False, err="Need at least 2 calibrated cameras"), 400
+    body = request.get_json(silent=True) or {}
+    observations = body.get("observations", [])
+    if len(observations) < 2:
+        return jsonify(ok=False, err="Need at least 2 observations"), 400
+    obs_tuples = [(str(o["camId"]), o["px"], o["py"]) for o in observations]
+    result = _stereo.triangulate(obs_tuples)
+    if result is None:
+        return jsonify(ok=False, err="Triangulation failed (parallel rays?)")
+    return jsonify(ok=True, **result)
+
+
 # ── Unified mover calibration (grid-based) ────────────────────────────
 
 import mover_calibrator as _mcal
+
+# Wire CVEngine into the calibrator for local processing (#333)
+if _cv is not None:
+    _mcal.set_cv_engine(_cv)
 
 _mover_cal_jobs = {}  # fid_str → {thread, status, phase, progress, error, result}
 
@@ -2279,7 +2434,7 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
     job["phase"] = "mapping"
     job["progress"] = 35
     try:
-        samples = _mcal.map_visible(
+        samples, boundaries = _mcal.map_visible(
             bridge_ip, cam_ip, addr, cam_idx, mover_color,
             start_pan=found_pan, start_tilt=found_tilt,
             collect_3d=False, max_samples=50)
@@ -2316,6 +2471,7 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
         "color": mover_color,
         "samples": samples,
         "grid": grid,
+        "boundaries": boundaries,
         "sampleCount": len(samples),
         "foundAt": found,
         "timestamp": time.time(),
@@ -2757,7 +2913,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.4.15" from camera_server.py source text."""
+    """Extract VERSION = "1.4.16" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -6374,7 +6530,31 @@ def api_show_import():
 
 #  "  "  Project file (complete save/load)  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-PROJECT_SCHEMA_VERSION = 1
+PROJECT_SCHEMA_VERSION = 2   # bumped from 1 → 2 for spatial data (#336)
+
+
+def _compress_cloud(cloud):
+    """Gzip-compress point cloud data for .slyshow portability (#336)."""
+    import gzip, base64, io
+    raw = json.dumps(cloud.get("points", [])).encode("utf-8")
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode='wb') as f:
+        f.write(raw)
+    result = {k: v for k, v in cloud.items() if k != "points"}
+    result["points"] = {"compressed": True,
+                        "data": base64.b64encode(buf.getvalue()).decode("ascii")}
+    return result
+
+
+def _decompress_cloud(cloud):
+    """Decompress gzip-compressed point cloud from import (#336)."""
+    import gzip, base64, io
+    pts = cloud.get("points")
+    if isinstance(pts, dict) and pts.get("compressed"):
+        raw = gzip.decompress(base64.b64decode(pts["data"]))
+        cloud["points"] = json.loads(raw)
+    return cloud
+
 
 @app.get("/api/project/export")
 def api_project_export():
@@ -6396,6 +6576,16 @@ def api_project_export():
     # Settings minus transient runtime state
     clean_settings = {k: v for k, v in _settings.items()
                       if k not in ("runnerRunning", "runnerElapsed")}
+    # Point cloud: compress if large (#336)
+    cloud_export = None
+    if _point_cloud and _point_cloud.get("points"):
+        cloud_export = _compress_cloud(_point_cloud)
+    # Light maps from mover calibrations (#336)
+    light_maps = {}
+    for fid, cal in _mover_cal.items():
+        lm = cal.get("lightMap")
+        if lm:
+            light_maps[fid] = lm
     return jsonify({
         "type": "slyled-project",
         "schemaVersion": PROJECT_SCHEMA_VERSION,
@@ -6417,6 +6607,9 @@ def api_project_export():
         "cameraSsh": clean_camera_ssh,
         "showPlaylist": _show_playlist,
         "settings": clean_settings,
+        # Spatial data (#336)
+        "pointCloud": cloud_export,
+        "lightMaps": light_maps if light_maps else None,
     })
 
 
@@ -6485,6 +6678,18 @@ def api_project_import():
         _nxt_obj = max((o["id"] for o in _objects), default=-1) + 1
         _nxt_sfx = max((f["id"] for f in _spatial_fx), default=-1) + 1
         _nxt_tl = max((t["id"] for t in _timelines), default=-1) + 1
+        # Restore spatial data (#336)
+        global _point_cloud
+        cloud = data.get("pointCloud")
+        if cloud:
+            _point_cloud = _decompress_cloud(cloud)
+            _save("pointcloud", _point_cloud)
+        # Restore light maps into mover calibrations (#336)
+        light_maps = data.get("lightMaps")
+        if light_maps:
+            for fid_str, lm in light_maps.items():
+                if fid_str in _mover_cal:
+                    _mover_cal[fid_str]["lightMap"] = lm
         # Persist everything
         _save("children", _children)
         _save("fixtures", _fixtures)

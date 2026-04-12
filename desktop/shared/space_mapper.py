@@ -52,51 +52,18 @@ def fetch_point_cloud(camera_fixture, max_points=10000, max_depth_mm=5000):
         log.info("Camera /point-cloud failed for %s cam%d: %s — trying orchestrator-side depth",
                  ip, cam_idx, e)
 
-    # Strategy 2: Fetch snapshot + run depth estimation locally on orchestrator
+    # Strategy 2: Fetch snapshot + run depth estimation locally via CVEngine (#333)
     try:
-        snap_resp = urllib.request.urlopen(
-            f"http://{ip}:5000/snapshot?cam={cam_idx}", timeout=15)
-        jpeg_data = snap_resp.read()
-
-        import cv2
-        import numpy as np
-        frame = cv2.imdecode(np.frombuffer(jpeg_data, np.uint8), cv2.IMREAD_COLOR)
-        if frame is None:
-            log.warning("Failed to decode snapshot from %s cam%d", ip, cam_idx)
-            return None
-
-        # Try to load depth estimator (may not be available on orchestrator)
-        try:
-            from depth_estimator import DepthEstimator
-        except ImportError:
-            log.warning("No depth_estimator module available on orchestrator for %s cam%d", ip, cam_idx)
-            return None
-
-        estimator = DepthEstimator()
-        depth_map, _ms = estimator.estimate(frame)
-
-        # Generate point cloud from depth map + camera intrinsics
-        h, w = depth_map.shape[:2]
+        from cv_engine import CVEngine
+        cv = CVEngine()
+        frame = cv.fetch_snapshot(ip, cam_idx, timeout=15)
         fov = camera_fixture.get("fovDeg", 60)
-        fx = (w / 2) / math.tan(math.radians(fov / 2))
-        fy = fx
-        cx, cy = w / 2.0, h / 2.0
-
-        points = []
-        step = max(1, int(math.sqrt(h * w / max_points)))
-        for v in range(0, h, step):
-            for u in range(0, w, step):
-                d = float(depth_map[v, u])
-                if d <= 0 or d > max_depth_mm:
-                    continue
-                x = (u - cx) * d / fx
-                y = (v - cy) * d / fy
-                z = d
-                r_val = int(frame[v, u, 2])
-                g_val = int(frame[v, u, 1])
-                b_val = int(frame[v, u, 0])
-                points.append([x, y, z, r_val, g_val, b_val])
-        log.info("Orchestrator-side depth for %s cam%d: %d points", ip, cam_idx, len(points))
+        intrinsics = None  # Use FOV-based estimate
+        points, _ms = cv.generate_point_cloud(
+            frame, fov, max_points=max_points,
+            max_depth_mm=max_depth_mm, intrinsics=intrinsics)
+        log.info("Orchestrator-side depth for %s cam%d: %d points in %dms",
+                 ip, cam_idx, len(points), _ms)
         return points if points else None
     except Exception as e:
         log.warning("Orchestrator-side depth failed for %s cam%d: %s", ip, cam_idx, e)

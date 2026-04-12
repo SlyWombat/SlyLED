@@ -15,9 +15,23 @@ import urllib.request
 
 log = logging.getLogger("slyled")
 
+# Module-level cv_engine instance — set by parent_server to enable local processing (#333)
+_cv_engine = None
+
+def set_cv_engine(engine):
+    """Set the shared CVEngine instance for local beam detection."""
+    global _cv_engine
+    _cv_engine = engine
+
 STEP = 0.05       # pan/tilt step size for BFS
-SETTLE = 1.2      # seconds between moves (heads need time to reach position)
+SETTLE = 1.2      # seconds between moves (legacy — used by _hold_dmx callers)
 MAX_SAMPLES = 60   # stop BFS after this many
+
+# ── Adaptive settle time (#238) ─────────────────────────────────────────
+SETTLE_BASE = 0.8          # base settle time (seconds)
+SETTLE_ESCALATE = [0.8, 1.5, 2.5]  # escalation stages
+SETTLE_VERIFY_GAP = 0.3   # gap between double-capture (seconds)
+SETTLE_PIXEL_THRESH = 30  # max pixel drift to consider settled
 
 
 # ── Art-Net helpers ───────────────────────────────────────────────────
@@ -128,8 +142,55 @@ def _beam_detect_verified(camera_ip, cam_idx, color=None, threshold=50, center=F
     return ((b1[0] + b2[0]) // 2, (b1[1] + b2[1]) // 2)
 
 
+def _wait_settled(camera_ip, cam_idx, color, prev_pan=None, prev_tilt=None,
+                  new_pan=None, new_tilt=None, center=False, threshold=50):
+    """Wait until beam has stopped moving (#238). Returns (px, py) or None.
+
+    Uses adaptive settle time: scales base wait by movement distance, then
+    escalates through SETTLE_ESCALATE stages if double-capture shows drift.
+    """
+    # Scale base settle by angular movement distance
+    if prev_pan is not None and new_pan is not None:
+        dist = math.sqrt((new_pan - prev_pan) ** 2 +
+                         (new_tilt - prev_tilt) ** 2)
+        base = SETTLE_BASE * (1.0 + 2.0 * min(dist, 0.5))
+    else:
+        base = SETTLE_BASE
+
+    for attempt, escalate in enumerate(SETTLE_ESCALATE):
+        wait = max(base, escalate)
+        time.sleep(wait)
+        beam1 = _beam_detect(camera_ip, cam_idx, color, threshold, center)
+        if not beam1:
+            return None
+        time.sleep(SETTLE_VERIFY_GAP)
+        beam2 = _beam_detect(camera_ip, cam_idx, color, threshold, center)
+        if not beam2:
+            return None
+        dx = abs(beam1[0] - beam2[0])
+        dy = abs(beam1[1] - beam2[1])
+        if dx <= SETTLE_PIXEL_THRESH and dy <= SETTLE_PIXEL_THRESH:
+            return ((beam1[0] + beam2[0]) // 2, (beam1[1] + beam2[1]) // 2)
+        log.info("Settle attempt %d: dx=%d dy=%d (threshold=%d), escalating",
+                 attempt + 1, dx, dy, SETTLE_PIXEL_THRESH)
+    log.warning("Beam still moving after %d settle attempts", len(SETTLE_ESCALATE))
+    return None
+
+
 def _beam_detect(camera_ip, cam_idx, color=None, threshold=50, center=False):
-    """Call beam detection on camera node. Returns (px, py) or None."""
+    """Detect beam — uses local CVEngine if available, else camera HTTP (#333)."""
+    # Strategy 1: Local processing via CVEngine
+    if _cv_engine is not None:
+        try:
+            frame = _cv_engine.fetch_snapshot(camera_ip, cam_idx, timeout=5)
+            r = _cv_engine.detect_beam(frame, cam_idx, color, threshold)
+            if r.get("found"):
+                return (r["pixelX"], r["pixelY"])
+            return None
+        except Exception as e:
+            log.debug("Local beam detect failed, falling back to camera: %s", e)
+
+    # Strategy 2: HTTP to camera node (legacy)
     endpoint = "/beam-detect/center" if center else "/beam-detect"
     body = {"cam": cam_idx, "threshold": threshold}
     if color:
@@ -151,8 +212,20 @@ def _beam_detect(camera_ip, cam_idx, color=None, threshold=50, center=False):
 
 
 def _depth_at_pixel(camera_ip, cam_idx, px, py):
-    """Get 3D position for a pixel using depth estimation on camera node.
-    Returns (x_mm, y_mm, z_mm) or None."""
+    """Get 3D position for a pixel — uses local CVEngine or camera HTTP (#333)."""
+    # Strategy 1: Local depth via CVEngine
+    if _cv_engine is not None:
+        try:
+            frame = _cv_engine.fetch_snapshot(camera_ip, cam_idx, timeout=15)
+            depth_map, _ms = _cv_engine.estimate_depth(frame)
+            h, w = frame.shape[:2]
+            pt = _cv_engine.pixel_to_3d(depth_map, int(px), int(py), 60, w, h)
+            if pt:
+                return pt
+        except Exception as e:
+            log.debug("Local depth failed, falling back to camera: %s", e)
+
+    # Strategy 2: HTTP to camera node (legacy)
     try:
         req = urllib.request.Request(
             f"http://{camera_ip}:5000/depth-map",
@@ -169,7 +242,17 @@ def _depth_at_pixel(camera_ip, cam_idx, px, py):
 
 
 def _dark_reference(camera_ip, cam_idx=-1):
-    """Capture dark reference on camera node."""
+    """Capture dark reference — uses local CVEngine or camera HTTP (#333)."""
+    # Strategy 1: Local dark reference via CVEngine
+    if _cv_engine is not None:
+        try:
+            frame = _cv_engine.fetch_snapshot(camera_ip, cam_idx, timeout=10)
+            _cv_engine.set_dark_frame(cam_idx, frame)
+            return True
+        except Exception as e:
+            log.debug("Local dark reference failed: %s", e)
+
+    # Strategy 2: HTTP to camera node (legacy)
     try:
         req = urllib.request.Request(
             f"http://{camera_ip}:5000/dark-reference",
@@ -616,12 +699,13 @@ def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
     _hold_dmx(bridge_ip, dmx, 2.0)  # extra settle for first position
 
-    # Check initial position
-    beam = _beam_detect_verified(camera_ip, cam_idx, color)
+    # Check initial position — use adaptive settle (#238)
+    beam = _wait_settled(camera_ip, cam_idx, color, center=False)
     if beam:
         return (pan, tilt, beam[0], beam[1])
 
     # Spiral outward in 0.05 steps
+    prev_p, prev_t = pan, tilt
     for radius in range(1, 12):
         positions = []
         for dp in range(-radius, radius + 1):
@@ -633,7 +717,10 @@ def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                 continue
             _set_mover_dmx(dmx, mover_addr, p, t, *color, dimmer=255)
             _hold_dmx(bridge_ip, dmx, SETTLE)
-            beam = _beam_detect_verified(camera_ip, cam_idx, color)
+            beam = _wait_settled(camera_ip, cam_idx, color,
+                                 prev_pan=prev_p, prev_tilt=prev_t,
+                                 new_pan=p, new_tilt=t)
+            prev_p, prev_t = p, t
             if beam:
                 return (p, t, beam[0], beam[1])
 
@@ -642,21 +729,37 @@ def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
 
 # ── BFS Mapping ──────────────────────────────────────────────────────
 
+def _verify_boundary(bridge_ip, camera_ip, cam_idx, mover_addr, pan, tilt,
+                     color, dmx, threshold=50):
+    """Flash on/off at boundary position to confirm beam truly invisible (#239).
+    Returns True if the position is truly a boundary (no beam when light on)."""
+    _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
+    _hold_dmx(bridge_ip, dmx, SETTLE_BASE)
+    beam_on = _beam_detect(camera_ip, cam_idx, color, threshold)
+    return beam_on is None
+
+
 def map_visible(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                 start_pan, start_tilt, other_mover_addrs=None,
                 step=STEP, max_samples=MAX_SAMPLES, use_center=True,
-                progress_cb=None, collect_3d=False):
+                progress_cb=None, collect_3d=False, verify_boundary=False):
     """BFS explore the visible region from a known visible position.
 
     Light stays on, moves incrementally. Only explores from positions
-    where the beam IS visible. If beam lost, skips that direction (no backtrack).
+    where the beam IS visible. Stops at boundaries — when beam is lost,
+    that direction is recorded as a boundary and no further cells in that
+    direction are explored (#239). Uses adaptive settle time (#238).
 
     Args:
         progress_cb: optional callable(sample_count, current_pan, current_tilt)
         collect_3d: if True, also query depth to get 3D world coords per sample
+        verify_boundary: if True, flash on/off at boundaries to confirm
 
-    Returns: list of (pan, tilt, pixel_x, pixel_y) or with collect_3d:
-             list of (pan, tilt, pixel_x, pixel_y, world_x, world_y, world_z)
+    Returns: (samples, boundaries) where samples is a list and boundaries is a dict.
+        samples: list of (pan, tilt, pixel_x, pixel_y) or with collect_3d:
+                 list of (pan, tilt, pixel_x, pixel_y, world_x, world_y, world_z)
+        boundaries: {"panMin": float, "panMax": float,
+                     "tiltMin": float, "tiltMax": float, "verified": bool}
     """
     dmx = [0] * 512
     for addr in (other_mover_addrs or []):
@@ -666,20 +769,22 @@ def map_visible(bridge_ip, camera_ip, mover_addr, cam_idx, color,
 
     samples = []
     visited = set()
-    queue = [(start_pan, start_tilt)]
+    lost = set()       # positions where beam was lost (#239)
+    queue = [(start_pan, start_tilt, None, None)]  # (pan, tilt, prev_pan, prev_tilt)
     last_good = (start_pan, start_tilt)
 
     while queue and len(samples) < max_samples:
-        pan, tilt = queue.pop(0)
+        pan, tilt, prev_p, prev_t = queue.pop(0)
         key = (round(pan, 3), round(tilt, 3))
         if key in visited or pan < 0 or pan > 1 or tilt < 0 or tilt > 1:
             continue
         visited.add(key)
 
         _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
-        _hold_dmx(bridge_ip, dmx, SETTLE)
-
-        beam = _beam_detect_verified(camera_ip, cam_idx, color, center=use_center)
+        # Use adaptive settle (#238) — scales by movement distance
+        beam = _wait_settled(camera_ip, cam_idx, color,
+                             prev_pan=prev_p, prev_tilt=prev_t,
+                             new_pan=pan, new_tilt=tilt, center=use_center)
         if beam:
             px, py = beam
             # Reject stale: if pixel barely moved from a different pan/tilt, it's noise
@@ -701,15 +806,224 @@ def map_visible(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                 else:
                     samples.append((pan, tilt, px, py))
                 last_good = (pan, tilt)
-                # Explore neighbors
+                # Explore neighbors — skip if a neighbor in this direction was already lost
                 for dp, dt in [(step, 0), (-step, 0), (0, step), (0, -step)]:
                     nb = (round(pan + dp, 3), round(tilt + dt, 3))
-                    if nb not in visited:
-                        queue.append(nb)
+                    if nb not in visited and nb not in lost:
+                        queue.append((nb[0], nb[1], pan, tilt))
                 if progress_cb:
                     progress_cb(len(samples), pan, tilt)
+        else:
+            # Beam lost at this position — record boundary (#239)
+            lost.add(key)
+            log.debug("Beam lost at pan=%.3f tilt=%.3f — boundary", pan, tilt)
 
-    return samples
+    # Compute boundary box from successful samples
+    if samples:
+        pans = [s[0] for s in samples]
+        tilts = [s[1] for s in samples]
+        boundaries = {
+            "panMin": round(min(pans), 3),
+            "panMax": round(max(pans), 3),
+            "tiltMin": round(min(tilts), 3),
+            "tiltMax": round(max(tilts), 3),
+            "verified": False,
+        }
+        # Optional boundary verification (#239)
+        if verify_boundary and lost:
+            verified_count = 0
+            for lp, lt in list(lost)[:8]:  # verify up to 8 boundary positions
+                if _verify_boundary(bridge_ip, camera_ip, cam_idx, mover_addr,
+                                    lp, lt, color, dmx):
+                    verified_count += 1
+            boundaries["verified"] = verified_count > 0
+            log.info("Boundary verification: %d/%d confirmed",
+                     verified_count, min(len(lost), 8))
+    else:
+        boundaries = {"panMin": 0.0, "panMax": 1.0,
+                      "tiltMin": 0.0, "tiltMax": 1.0, "verified": False}
+
+    return samples, boundaries
+
+
+# ── Real-space coordinate transforms (#246) ──────────────────────────
+
+def pixel_to_stage(px, py, homography):
+    """Convert pixel coordinates to stage mm using a floor-plane homography.
+
+    The homography matrix is from solvePnP (3x3, maps pixel to stage XY on Z=0 floor).
+    Returns (stage_x_mm, stage_y_mm) or None if the homography is degenerate.
+    """
+    import numpy as np
+    H = np.array(homography).reshape(3, 3)
+    pt = H @ np.array([float(px), float(py), 1.0])
+    if abs(pt[2]) < 1e-10:
+        return None
+    pt /= pt[2]
+    return (float(pt[0]), float(pt[1]))
+
+
+def compute_depth_scale(marker_positions_3d, marker_positions_pixel,
+                        depth_map, fov_deg, frame_w, frame_h):
+    """Compute a scale factor to convert relative depth to absolute mm (#246).
+
+    Uses known 3D distances between ArUco markers on the stage floor and their
+    relative depth values from the depth model. Returns mm_per_relative_unit.
+    """
+    if len(marker_positions_3d) < 2 or len(marker_positions_pixel) < 2:
+        return None
+    import numpy as np
+    # Compute real-world distances between marker pairs
+    scales = []
+    for i in range(len(marker_positions_3d)):
+        for j in range(i + 1, len(marker_positions_3d)):
+            m1 = marker_positions_3d[i]
+            m2 = marker_positions_3d[j]
+            real_dist = math.sqrt(
+                (m1["x"] - m2["x"]) ** 2 +
+                (m1["y"] - m2["y"]) ** 2 +
+                (m1["z"] - m2["z"]) ** 2)
+            if real_dist < 100:  # skip markers too close together
+                continue
+            p1 = marker_positions_pixel[i]
+            p2 = marker_positions_pixel[j]
+            # Get depth values at marker pixel positions
+            h, w = depth_map.shape[:2]
+            py1 = max(0, min(h - 1, int(p1[1])))
+            px1 = max(0, min(w - 1, int(p1[0])))
+            py2 = max(0, min(h - 1, int(p2[1])))
+            px2 = max(0, min(w - 1, int(p2[0])))
+            d1 = float(depth_map[py1, px1])
+            d2 = float(depth_map[py2, px2])
+            if d1 <= 0 or d2 <= 0:
+                continue
+            # Approximate 3D using pinhole model
+            fx = (frame_w / 2.0) / math.tan(math.radians(fov_deg / 2.0))
+            x1_3d = (p1[0] - frame_w / 2.0) * d1 / fx
+            y1_3d = (p1[1] - frame_h / 2.0) * d1 / fx
+            x2_3d = (p2[0] - frame_w / 2.0) * d2 / fx
+            y2_3d = (p2[1] - frame_h / 2.0) * d2 / fx
+            depth_dist = math.sqrt(
+                (x1_3d - x2_3d) ** 2 +
+                (y1_3d - y2_3d) ** 2 +
+                (d1 - d2) ** 2)
+            if depth_dist > 0:
+                scales.append(real_dist / depth_dist)
+    if not scales:
+        return None
+    return sum(scales) / len(scales)
+
+
+# ── Per-fixture light mapping (#234) ─────────────────────────────────
+
+def build_light_map(bridge_ip, camera_ip, cam_idx, mover_addr, color,
+                    boundaries, stage_map_homography,
+                    pan_steps=20, tilt_steps=15, progress_cb=None):
+    """Sweep mover across visible area, build (pan,tilt) → (x,y,z) lookup (#234).
+
+    For each grid point within boundaries:
+      1. Move to (pan, tilt), wait for settle.
+      2. Detect beam pixel position.
+      3. Convert pixel to stage coords via homography.
+      4. Store: (pan, tilt) → (stage_x, stage_y, stage_z=0).
+
+    Returns:
+        dict with panSteps, tiltSteps, samples (list of dicts), panMin/Max, tiltMin/Max
+        or None if insufficient samples.
+    """
+    pmin = boundaries.get("panMin", 0.0)
+    pmax = boundaries.get("panMax", 1.0)
+    tmin = boundaries.get("tiltMin", 0.0)
+    tmax = boundaries.get("tiltMax", 1.0)
+
+    p_step = (pmax - pmin) / max(pan_steps - 1, 1)
+    t_step = (tmax - tmin) / max(tilt_steps - 1, 1)
+
+    dmx = [0] * 512
+    _set_mover_dmx(dmx, mover_addr, pmin, tmin, *color, dimmer=255)
+    _hold_dmx(bridge_ip, dmx, 1.5)
+
+    samples = []
+    total = pan_steps * tilt_steps
+    prev_pan, prev_tilt = pmin, tmin
+
+    for pi in range(pan_steps):
+        pan = pmin + pi * p_step
+        for ti in range(tilt_steps):
+            tilt = tmin + ti * t_step
+            _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
+            beam = _wait_settled(camera_ip, cam_idx, color,
+                                 prev_pan=prev_pan, prev_tilt=prev_tilt,
+                                 new_pan=pan, new_tilt=tilt)
+            if beam:
+                px, py = beam
+                stage = pixel_to_stage(px, py, stage_map_homography)
+                if stage:
+                    samples.append({
+                        "pan": round(pan, 4), "tilt": round(tilt, 4),
+                        "px": px, "py": py,
+                        "stageX": round(stage[0], 1),
+                        "stageY": round(stage[1], 1),
+                        "stageZ": 0.0,  # floor plane
+                    })
+            prev_pan, prev_tilt = pan, tilt
+            if progress_cb:
+                progress_cb(len(samples), pi * tilt_steps + ti + 1, total)
+
+    if len(samples) < 4:
+        return None
+
+    return {
+        "panSteps": pan_steps, "tiltSteps": tilt_steps,
+        "samples": samples,
+        "panMin": pmin, "panMax": pmax,
+        "tiltMin": tmin, "tiltMax": tmax,
+        "sampleCount": len(samples),
+    }
+
+
+def light_map_inverse(light_map, target_x, target_y, target_z=0):
+    """Inverse lookup: (x,y,z) stage coords → (pan, tilt) (#234).
+
+    Finds the nearest sample by stage distance, then interpolates
+    between nearby samples for smoother results.
+    """
+    samples = light_map.get("samples", [])
+    if not samples:
+        return None
+
+    best_dist = float('inf')
+    best_pan = None
+    best_tilt = None
+    # Weighted average of K nearest samples
+    K = 4
+    nearest = []
+
+    for s in samples:
+        dx = s["stageX"] - target_x
+        dy = s["stageY"] - target_y
+        dz = s["stageZ"] - target_z
+        dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+        nearest.append((dist, s["pan"], s["tilt"]))
+
+    nearest.sort(key=lambda x: x[0])
+    if not nearest:
+        return None
+
+    # Inverse-distance weighted average of K nearest
+    top = nearest[:K]
+    if top[0][0] < 1.0:  # exact match
+        return (top[0][1], top[0][2])
+
+    w_pan = 0.0
+    w_tilt = 0.0
+    w_sum = 0.0
+    for dist, pan, tilt in top:
+        w = 1.0 / max(dist, 1.0)
+        w_pan += w * pan
+        w_tilt += w * tilt
+        w_sum += w
+    return (w_pan / w_sum, w_tilt / w_sum)
 
 
 # ── Grid interpolation ───────────────────────────────────────────────
