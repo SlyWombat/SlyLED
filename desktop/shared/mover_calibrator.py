@@ -316,7 +316,7 @@ def compute_initial_aim(mover_pos, target_pos, pan_range=540, tilt_range=270,
         tilt_deg = -tilt_deg
 
     if pan_offset is None:
-        pan_offset = 180.0 if mounted_inverted else 0.0  # degrees
+        pan_offset = 0.0  # calibration discovers the actual offset
     pan_norm = max(0, min(1, 0.5 + (pan_deg + pan_offset) / pan_range))
     tilt_norm = max(0, min(1, 0.5 + tilt_deg / tilt_range))
     return (pan_norm, tilt_norm)
