@@ -2957,6 +2957,7 @@ function editFixture(id){
       h+='<div style="font-size:.78em;color:#64748b;margin-bottom:.3em">Use the upside-down checkbox above if truss-mounted. Run this test with live DMX for precise motor direction calibration.</div>';
     }
     h+='<button class="btn" onclick="_orientTest('+id+')" style="background:#4c1d95;color:#e9d5ff;font-size:.8em">Test with DMX</button>';
+    h+='<button class="btn" onclick="closeModal();_moverCalStart('+id+')" style="background:#6b21a8;color:#d8b4fe;margin-left:.5em">Calibrate'+(f.moverCalibrated?' \u2713':'')+'</button>';
     h+='</div>';
   }else if(ft==='camera'){
     h+='<label>Camera Node IP</label><input id="fx-cam-ip" value="'+escapeHtml(f.cameraIp||'')+'" placeholder="e.g. 192.168.10.50" style="width:100%;margin-bottom:.4em">';
