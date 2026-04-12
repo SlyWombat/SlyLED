@@ -220,16 +220,22 @@ def capture_spa():
         except Exception:
             skipped.append('spa-setup-edit-dmx.png')
 
-        # Layout 2D
+        # Layout — Front view (orthographic, closest to old 2D canvas)
         page.evaluate("showTab('layout')")
-        snap('spa-layout-2d.png', 1.5)
-
-        # Layout 3D
+        time.sleep(1)
         try:
-            page.evaluate("setLayoutMode('3d')")
+            page.evaluate("setView('front')")
+            snap('spa-layout-2d.png', 2.0)
+        except Exception as e:
+            print(f'    Front view capture failed: {e}')
+            skipped.append('spa-layout-2d.png')
+
+        # Layout — 3D perspective view
+        try:
+            page.evaluate("setView('3d')")
             snap('spa-layout-3d.png', 2.5)
-            page.evaluate("setLayoutMode('2d')")
-        except Exception:
+        except Exception as e:
+            print(f'    3D capture failed: {e}')
             skipped.append('spa-layout-3d.png')
 
         # Actions
