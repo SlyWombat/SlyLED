@@ -7519,8 +7519,8 @@ function _loadPointCloud(cb){
     if(r&&r.ok&&r.points){
       _pointCloudData=r;
       document.getElementById('hs').textContent=r.totalPoints+' point cloud loaded';
-      if(_s3d.inited)_renderPointCloud();
       _pointCloudVisible=true;
+      if(_s3d.inited)_renderPointCloud();
       _updateCloudBtn();
     }
     if(cb)cb();
@@ -7530,8 +7530,8 @@ function _loadPointCloud(cb){
 function _togglePointCloud(){
   if(!_pointCloudData){
     _loadPointCloud(function(){
-      if(_pointCloudData)_togglePointCloud();
-      else document.getElementById('hs').textContent='No point cloud — run environment scan first';
+      if(!_pointCloudData)document.getElementById('hs').textContent='No point cloud — run environment scan first';
+      // _loadPointCloud already set _pointCloudVisible=true and rendered
     });
     return;
   }
@@ -7546,6 +7546,8 @@ function _updateCloudBtn(){
     btn.style.background=_pointCloudVisible?'#1e3a5f':'';
     btn.style.color=_pointCloudVisible?'#93c5fd':'';
   }
+  var cb=document.getElementById('vw-cloud');
+  if(cb)cb.checked=_pointCloudVisible;
 }
 
 function _renderPointCloud(){
@@ -7572,7 +7574,7 @@ function _renderPointCloud(){
   var geo=new THREE.BufferGeometry();
   geo.setAttribute('position',new THREE.BufferAttribute(positions,3));
   geo.setAttribute('color',new THREE.BufferAttribute(colors,3));
-  var mat=new THREE.PointsMaterial({size:0.03,vertexColors:true,transparent:true,opacity:0.7,sizeAttenuation:true,depthWrite:false});
+  var mat=new THREE.PointsMaterial({size:0.06,vertexColors:true,transparent:true,opacity:0.7,sizeAttenuation:true,depthWrite:false});
   var cloud=new THREE.Points(geo,mat);
   cloud.userData.pointCloud=true;
   _s3d.scene.add(cloud);
