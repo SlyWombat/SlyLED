@@ -2262,9 +2262,13 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
             job["status"] = "error"
             return
         job["progress"] = 30
-        job["foundAt"] = found
-        log.info("MOVER-CAL fixture %d: beam discovered at pan=%.2f tilt=%.2f",
-                 fid, found["pan"], found["tilt"])
+        # discover() returns (pan, tilt, pixelX, pixelY) tuple
+        found_pan, found_tilt = found[0], found[1]
+        found_px, found_py = found[2], found[3]
+        job["foundAt"] = {"pan": found_pan, "tilt": found_tilt,
+                          "pixelX": found_px, "pixelY": found_py}
+        log.info("MOVER-CAL fixture %d: beam discovered at pan=%.2f tilt=%.2f pixel=(%d,%d)",
+                 fid, found_pan, found_tilt, found_px, found_py)
     except Exception as e:
         job["error"] = f"Discovery failed: {e}"
         job["status"] = "error"
@@ -2277,7 +2281,7 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
     try:
         samples = _mcal.map_visible(
             bridge_ip, cam_ip, addr, cam_idx, mover_color,
-            universe=uni, start_pan=found["pan"], start_tilt=found["tilt"],
+            universe=uni, start_pan=found_pan, start_tilt=found_tilt,
             collect_3d=False, max_samples=50)
         if len(samples) < 6:
             job["error"] = f"Only {len(samples)} samples collected — need at least 6"
