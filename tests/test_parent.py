@@ -1530,7 +1530,7 @@ def run():
         r = c.get('/api/project/export')
         proj = r.get_json()
         ok('Project export type', proj.get('type') == 'slyled-project')
-        ok('Project export schemaVersion', proj.get('schemaVersion') == 1)
+        ok('Project export schemaVersion', proj.get('schemaVersion') == 2)
         ok('Project export appVersion', 'appVersion' in proj)
         ok('Project export savedAt', 'savedAt' in proj)
         ok('Project export name', proj.get('name') == 'Test Show')
@@ -1573,7 +1573,48 @@ def run():
         r = c.get('/api/settings')
         ok('Project restored settings name', r.get_json().get('name') == 'Test Show')
 
+        # ── Profile round-trip in project export/import (#337) ──
+        # Create a custom profile and a DMX fixture referencing it
+        test_profile = {
+            'id': 'proj-test-prof',
+            'name': 'ProjTestProfile',
+            'category': 'par',
+            'channels': [
+                {'offset': 0, 'name': 'Red', 'type': 'red'},
+                {'offset': 1, 'name': 'Green', 'type': 'green'},
+                {'offset': 2, 'name': 'Blue', 'type': 'blue'},
+            ]
+        }
+        r = c.post('/api/dmx-profiles', json=test_profile)
+        ok('Profile created for project test', r.status_code == 200 or r.status_code == 201)
+        r = c.post('/api/fixtures', json={
+            'name': 'ProfFix', 'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 1,
+            'dmxChannelCount': 3, 'dmxProfileId': 'proj-test-prof',
+        })
+        ok('DMX fixture with profile created', r.status_code == 200 or r.status_code == 201)
+        # Export and verify profiles included
+        r = c.get('/api/project/export')
+        proj2 = r.get_json()
+        ok('Project export has profiles', isinstance(proj2.get('profiles'), list))
+        ok('Project export profiles non-empty', len(proj2.get('profiles', [])) >= 1)
+        prof_ids = [p['id'] for p in proj2.get('profiles', [])]
+        ok('Project export has test profile', 'proj-test-prof' in prof_ids)
+        # Reset, import, verify profile restored
+        c.post('/api/reset', headers={'X-SlyLED-Confirm': 'true'})
+        r = c.get('/api/dmx-profiles')
+        pre_import = [p for p in r.get_json() if p.get('id') == 'proj-test-prof']
+        ok('Profile gone after reset', len(pre_import) == 0)
+        r = c.post('/api/project/import', json=proj2)
+        ok('Project import with profiles ok', r.get_json().get('ok'))
+        r = c.get('/api/dmx-profiles')
+        post_import = [p for p in r.get_json() if p.get('id') == 'proj-test-prof']
+        ok('Profile restored after import', len(post_import) == 1)
+        ok('Restored profile name', post_import[0].get('name') == 'ProjTestProfile')
+        ok('Restored profile channels', len(post_import[0].get('channels', [])) == 3)
+
         # Project name API
+        c.post('/api/settings', json={'name': 'Test Show'})  # re-set after reset
         r = c.get('/api/project/name')
         ok('Project name get', r.get_json().get('name') == 'Test Show')
         r = c.post('/api/project/name', json={'name': 'Renamed'})

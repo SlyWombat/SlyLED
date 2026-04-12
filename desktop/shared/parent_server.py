@@ -6595,6 +6595,17 @@ def api_project_export():
         lm = cal.get("lightMap")
         if lm:
             light_maps[fid] = lm
+    # Collect custom DMX profiles referenced by fixtures (#337)
+    profile_ids = set()
+    for f in _fixtures:
+        pid = f.get("dmxProfileId")
+        if pid:
+            profile_ids.add(pid)
+    export_profiles = []
+    for pid in profile_ids:
+        p = _profile_lib.get_profile(pid)
+        if p and not p.get("builtin"):
+            export_profiles.append(p)
     return jsonify({
         "type": "slyled-project",
         "schemaVersion": PROJECT_SCHEMA_VERSION,
@@ -6615,6 +6626,7 @@ def api_project_export():
         "moverCalibrations": _mover_cal,
         "cameraSsh": clean_camera_ssh,
         "showPlaylist": _show_playlist,
+        "profiles": export_profiles,
         "settings": clean_settings,
         # Spatial data (#336)
         "pointCloud": cloud_export,
@@ -6699,6 +6711,11 @@ def api_project_import():
             for fid_str, lm in light_maps.items():
                 if fid_str in _mover_cal:
                     _mover_cal[fid_str]["lightMap"] = lm
+        # Import custom DMX profiles referenced by fixtures (#337)
+        for p in data.get("profiles", []):
+            pid = p.get("id")
+            if pid and not _profile_lib.get_profile(pid):
+                _profile_lib.save_profile(p)
         # Persist everything
         _save("children", _children)
         _save("fixtures", _fixtures)
