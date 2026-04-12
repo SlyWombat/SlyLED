@@ -2203,7 +2203,7 @@ def _best_camera_for(fixture):
 
 def _get_bridge_ip():
     """Find the DMX Art-Net bridge IP from discovered nodes or children."""
-    nodes = _artnet.discovered_nodes()
+    nodes = _artnet.discovered_nodes if hasattr(_artnet, 'discovered_nodes') and isinstance(_artnet.discovered_nodes, dict) else {}
     for ip, info in nodes.items():
         if info.get("style") == "bridge" or "giga" in info.get("longName", "").lower():
             return ip
