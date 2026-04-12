@@ -7234,11 +7234,17 @@ function _calWizCapture(){
   var selCams=_calWiz.cameras.filter(function(c){return c.selected&&c.ip;});
   var done=0,total=selCams.length;
   _calWiz.captures++;
+  /* Group cameras by IP so cameras on the same hardware node are captured
+     serially (avoids USB bus contention), while different nodes run in parallel. */
+  var groups={};
   selCams.forEach(function(cam){
+    if(!groups[cam.ip])groups[cam.ip]=[];
+    groups[cam.ip].push(cam);
+  });
+  function captureCam(cam,cb){
     var statusEl=document.getElementById('calwiz-cam-status-'+cam.id);
     if(statusEl)statusEl.innerHTML='<span style="color:#93c5fd">Capturing...</span>';
     ra('POST','/api/cameras/'+cam.id+'/aruco/capture',{},function(r){
-      done++;
       var entry='';
       if(!r||!r.ok){
         entry='<div style="color:#f66">Capture '+_calWiz.captures+' - '+escapeHtml(cam.name)+': Failed</div>';
@@ -7256,11 +7262,21 @@ function _calWizCapture(){
         });
       }
       _calWiz.captureLog.push(entry);
+      done++;
       if(done>=total){
         if(btn){btn.disabled=false;btn.textContent='Capture All Cameras';}
         _calWizRender();
       }
+      cb();
     });
+  }
+  /* Each IP group runs serially; different IP groups run in parallel */
+  Object.keys(groups).forEach(function(ip){
+    var camsOnNode=groups[ip];
+    (function captureNext(idx){
+      if(idx>=camsOnNode.length)return;
+      captureCam(camsOnNode[idx],function(){captureNext(idx+1);});
+    })(0);
   });
 }
 
