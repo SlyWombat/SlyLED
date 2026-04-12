@@ -2193,7 +2193,7 @@ _mover_cal_jobs = {}  # fid_str → {thread, status, phase, progress, error, res
 def _best_camera_for(fixture):
     """Pick the widest-FOV positioned camera for calibration."""
     cams = [f for f in _fixtures if f.get("fixtureType") == "camera"
-            and f.get("cameraUrl")]
+            and f.get("cameraIp")]  # #342 — was cameraUrl
     if not cams:
         return None
     # Prefer widest FOV
@@ -2207,13 +2207,16 @@ def _get_bridge_ip():
     for ip, info in nodes.items():
         if info.get("style") == "bridge" or "giga" in info.get("longName", "").lower():
             return ip
-    # Fallback: any Art-Net discovered node
     if nodes:
         return next(iter(nodes))
-    # Fallback: look for DMX children
+    # Fallback: DMX children
     for c in _children:
         if c.get("type") == "dmx":
             return c.get("ip")
+    # Fallback: universe routes destination
+    for r in _dmx_settings.get("universeRoutes", []):
+        if r.get("destination"):
+            return r["destination"]
     return None
 
 
