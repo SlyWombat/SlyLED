@@ -352,13 +352,8 @@ def compute_pan_tilt(fixture_pos, aim_point, pan_range_deg, tilt_range_deg,
                      mounted_inverted=False):
     """Compute normalized pan/tilt (0.0-1.0) from fixture position to aim point.
 
-    Convention:
-      - Pan 0 = forward (+Z axis), increases clockwise viewed from above
-      - Tilt 0 = horizontal, increases downward
-      - Center of range = 0.5
-
-    When mounted_inverted=True (fixture hanging upside-down from truss),
-    both pan and tilt motor directions are reversed.
+    Stage coordinates: X=width, Y=depth (forward toward audience), Z=height.
+    Convention: pan=0.5 = forward (+Y), tilt=0.5 = horizontal.
 
     Returns:
         (pan_normalized, tilt_normalized) both 0.0-1.0, or None if ranges are 0
@@ -366,22 +361,23 @@ def compute_pan_tilt(fixture_pos, aim_point, pan_range_deg, tilt_range_deg,
     if pan_range_deg <= 0 or tilt_range_deg <= 0:
         return None
 
-    dx = aim_point[0] - fixture_pos[0]
-    dy = aim_point[1] - fixture_pos[1]
-    dz = aim_point[2] - fixture_pos[2]
+    dx = aim_point[0] - fixture_pos[0]  # stage X (width)
+    dy = aim_point[1] - fixture_pos[1]  # stage Y (depth / forward)
+    dz = aim_point[2] - fixture_pos[2]  # stage Z (height)
 
-    dist_xz = math.sqrt(dx * dx + dz * dz)
+    dist_xy = math.sqrt(dx * dx + dy * dy)
 
-    # Pan: angle in XZ plane from +Z axis, clockwise
-    pan_deg = math.degrees(math.atan2(dx, dz)) if dist_xz > 0.001 else 0.0
+    # Pan: angle from +Y (forward) toward +X, in horizontal XY plane
+    pan_deg = math.degrees(math.atan2(dx, dy)) if dist_xy > 0.001 else 0.0
 
-    # Tilt: angle from horizontal, positive = downward
-    tilt_deg = math.degrees(math.atan2(-dy, dist_xz)) if (dist_xz > 0.001 or abs(dy) > 0.001) else 0.0
+    # Tilt: angle below horizontal, positive = looking down (#359)
+    tilt_deg = math.degrees(math.atan2(abs(dz), dist_xy)) if (dist_xy > 0.001 or abs(dz) > 0.001) else 0.0
+    if dz > 0:
+        tilt_deg = -tilt_deg  # target above fixture = tilt up
 
-    # Inverted mount: pan and tilt motor directions reverse
-    sign = -1 if mounted_inverted else 1
-    pan_norm = 0.5 + sign * pan_deg / pan_range_deg
-    tilt_norm = 0.5 + sign * tilt_deg / tilt_range_deg
+    # No sign flip for inverted mounts — matches 3D viewport convention (#349)
+    pan_norm = 0.5 + pan_deg / pan_range_deg
+    tilt_norm = 0.5 + tilt_deg / tilt_range_deg
 
     return (max(0.0, min(1.0, pan_norm)), max(0.0, min(1.0, tilt_norm)))
 
