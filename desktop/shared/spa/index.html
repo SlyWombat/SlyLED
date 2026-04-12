@@ -655,7 +655,9 @@ body.light .li:hover{border-color:#3b82f6}
       <div style='display:flex;align-items:center;gap:.5em;margin-bottom:.4em'>
         <span style='font-size:.85em;font-weight:bold;color:#aaa'>Registered Cameras</span>
         <button class='btn' onclick='_camFwRefresh()' style='padding:.1em .4em;background:#0e7490;color:#fff;font-size:.75em'>&#x21bb; Check Versions</button>
+        <button class='btn' onclick='_camGhCheck()' id='cam-gh-btn' style='padding:.1em .4em;background:#6d28d9;color:#fff;font-size:.75em'>&#x2601; Check GitHub</button>
       </div>
+      <div id='cam-gh-status'></div>
       <div id='cam-fw-list'><p style='color:#888;font-size:.82em'>Click refresh to check camera firmware versions.</p></div>
     </div>
 
@@ -8600,6 +8602,46 @@ function _camFwRefresh(){
       h+='<tr><td><b>'+escapeHtml(n.name)+'</b></td><td>'+escapeHtml(n.ip)+'</td><td>'+n.sensors+'</td><td>'+(n.ver||'\u2014')+'</td><td>'+st+'</td><td>'+acts+'</td></tr>';
     });
     el.innerHTML=h+'</table>';
+  });
+}
+function _camGhCheck(){
+  var btn=document.getElementById('cam-gh-btn');
+  var el=document.getElementById('cam-gh-status');
+  if(btn){btn.disabled=true;btn.textContent='Checking...';}
+  ra('GET','/api/firmware/camera/check',null,function(d){
+    if(btn){btn.disabled=false;btn.textContent='\u2601 Check GitHub';}
+    if(!el)return;
+    if(!d||d.err){el.innerHTML='<p style="color:#e44;font-size:.82em">'+(d&&d.err||'Check failed')+'</p>';return;}
+    var loc=d.localVersion||'?';
+    var dl=d.downloadedVersion;
+    var lat=d.latestVersion||'?';
+    var h='<div style="font-size:.82em;padding:.4em;background:#1e1b4b;border:1px solid #4c1d95;border-radius:4px;margin:.4em 0">';
+    h+='<span style="color:#a78bfa">Bundled:</span> v'+escapeHtml(loc);
+    if(dl)h+=' &nbsp; <span style="color:#34d399">Downloaded:</span> v'+escapeHtml(dl);
+    h+=' &nbsp; <span style="color:#fbbf24">GitHub:</span> v'+escapeHtml(lat);
+    if(d.updateAvailable){
+      h+=' &nbsp; <button class="btn" onclick="_camGhDownload()" id="cam-gh-dl" style="padding:.1em .5em;background:#059669;color:#fff;font-size:.9em">Download v'+escapeHtml(lat)+'</button>';
+    }else{
+      h+=' &nbsp; <span style="color:#4ade80">Up to date</span>';
+    }
+    el.innerHTML=h+'</div>';
+  });
+}
+function _camGhDownload(){
+  var btn=document.getElementById('cam-gh-dl');
+  if(btn){btn.disabled=true;btn.textContent='Downloading...';}
+  ra('POST','/api/firmware/camera/download',{},function(d){
+    var el=document.getElementById('cam-gh-status');
+    if(!d||!d.ok){
+      if(el)el.innerHTML='<p style="color:#e44;font-size:.82em">Download failed</p>';
+      return;
+    }
+    var h='<div style="font-size:.82em;padding:.4em;background:#052e16;border:1px solid #059669;border-radius:4px;margin:.4em 0">';
+    h+='<span style="color:#4ade80">Downloaded v'+(d.version||'?')+' &mdash; '+d.files.length+' files</span>';
+    if(d.warnings&&d.warnings.length)h+='<br><span style="color:#fbbf24">Warnings: '+d.warnings.join(', ')+'</span>';
+    h+='</div>';
+    if(el)el.innerHTML=h;
+    _camFwRefresh();
   });
 }
 function _camScanBoards(){

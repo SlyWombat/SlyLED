@@ -2639,18 +2639,143 @@ _deploy_status = {"running": False, "progress": 0, "message": "", "error": None,
                   "ip": "", "remoteVersion": None, "localVersion": None}
 _deploy_lock = threading.Lock()
 
+_CAMERA_FW_FILES = ("camera_server.py", "detector.py", "depth_estimator.py",
+                    "beam_detector.py", "tracker.py", "requirements.txt", "slyled-cam.service")
+_github_camera_cache = {"version": None, "ts": 0}
+_GITHUB_CAMERA_TTL = 3600  # 1 hour cache
+
+def _parse_version_from_text(text):
+    """Extract VERSION = "x.y.z" from camera_server.py source text."""
+    import re
+    m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
+    return m.group(1) if m else None
+
 def _camera_local_version():
-    """Read VERSION from the local camera_server.py source."""
-    src = _FW_DIR / "orangepi" / "camera_server.py"
-    if not src.exists():
-        return None
-    try:
-        for line in src.read_text().splitlines():
-            if line.startswith("VERSION"):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
-    except Exception:
-        pass
+    """Read VERSION from the local (bundled) camera_server.py source."""
+    for base in [Path(getattr(sys, '_MEIPASS', '')) / "firmware" / "orangepi",
+                 _FW_DIR / "orangepi"]:
+        p = base / "camera_server.py"
+        if p.exists():
+            try:
+                v = _parse_version_from_text(p.read_text(encoding="utf-8"))
+                if v:
+                    return v
+            except Exception:
+                pass
     return None
+
+def _camera_downloaded_version():
+    """Read VERSION from the downloaded (cached) camera_server.py if present."""
+    p = DATA / "firmware" / "camera" / "camera_server.py"
+    if p.exists():
+        try:
+            return _parse_version_from_text(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return None
+
+def _camera_deploy_version():
+    """Return the version that would actually be deployed (downloaded > local)."""
+    dl = _camera_downloaded_version()
+    loc = _camera_local_version()
+    if dl and loc:
+        # Compare semver-style: prefer whichever is newer
+        try:
+            dl_t = tuple(int(x) for x in dl.split("."))
+            loc_t = tuple(int(x) for x in loc.split("."))
+            return dl if dl_t >= loc_t else loc
+        except (ValueError, AttributeError):
+            return dl
+    return dl or loc
+
+def _camera_deploy_dir():
+    """Return the directory to use for camera firmware deployment.
+    Prefers downloaded cache if it has a newer version than bundled."""
+    dl_dir = DATA / "firmware" / "camera"
+    dl_ver = _camera_downloaded_version()
+    loc_ver = _camera_local_version()
+    if dl_ver and dl_dir.exists() and (dl_dir / "camera_server.py").exists():
+        if not loc_ver:
+            return dl_dir
+        try:
+            dl_t = tuple(int(x) for x in dl_ver.split("."))
+            loc_t = tuple(int(x) for x in loc_ver.split("."))
+            if dl_t >= loc_t:
+                return dl_dir
+        except (ValueError, AttributeError):
+            return dl_dir
+    return _FW_DIR / "orangepi"
+
+@app.get("/api/firmware/camera/check")
+def api_firmware_camera_check():
+    """Compare bundled vs downloaded vs GitHub latest camera firmware versions."""
+    import urllib.request as _ur
+    local_ver = _camera_local_version() or "0.0.0"
+    dl_ver = _camera_downloaded_version()
+    now = time.time()
+    # Check cache first
+    if _github_camera_cache["version"] and now - _github_camera_cache["ts"] < _GITHUB_CAMERA_TTL:
+        latest = _github_camera_cache["version"]
+    else:
+        latest = None
+        try:
+            req = _ur.Request(
+                "https://api.github.com/repos/SlyWombat/SlyLED/contents/firmware/orangepi/camera_server.py?ref=main",
+                headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "SlyLED-Parent"})
+            resp = _ur.urlopen(req, timeout=10)
+            data = json.loads(resp.read().decode("utf-8"))
+            import base64
+            content = base64.b64decode(data.get("content", "")).decode("utf-8")
+            latest = _parse_version_from_text(content)
+            if latest:
+                _github_camera_cache["version"] = latest
+                _github_camera_cache["ts"] = now
+                log.info("GitHub camera firmware: v%s", latest)
+        except Exception as e:
+            log.debug("GitHub camera check failed: %s", e)
+            latest = _github_camera_cache.get("version")  # stale cache
+    # Determine if update is available
+    update = False
+    effective = dl_ver or local_ver
+    if latest and effective:
+        try:
+            latest_t = tuple(int(x) for x in latest.split("."))
+            eff_t = tuple(int(x) for x in effective.split("."))
+            update = latest_t > eff_t
+        except (ValueError, AttributeError):
+            pass
+    return jsonify(localVersion=local_ver, downloadedVersion=dl_ver,
+                   latestVersion=latest, updateAvailable=update)
+
+@app.post("/api/firmware/camera/download")
+def api_firmware_camera_download():
+    """Download all camera firmware files from GitHub main branch."""
+    import urllib.request as _ur
+    dest = DATA / "firmware" / "camera"
+    dest.mkdir(parents=True, exist_ok=True)
+    downloaded = []
+    errors = []
+    for fname in _CAMERA_FW_FILES:
+        url = f"https://raw.githubusercontent.com/SlyWombat/SlyLED/main/firmware/orangepi/{fname}"
+        try:
+            req = _ur.Request(url, headers={"User-Agent": "SlyLED-Parent"})
+            resp = _ur.urlopen(req, timeout=15)
+            content = resp.read()
+            (dest / fname).write_bytes(content)
+            downloaded.append(fname)
+        except Exception as e:
+            log.warning("Failed to download %s: %s", fname, e)
+            errors.append(f"{fname}: {e}")
+    # Parse version from downloaded camera_server.py
+    ver = _camera_downloaded_version()
+    if ver:
+        _github_camera_cache["version"] = ver
+        _github_camera_cache["ts"] = time.time()
+    log.info("Downloaded %d camera firmware files (v%s)", len(downloaded), ver)
+    if errors:
+        return jsonify(ok=True, version=ver, files=downloaded,
+                       warnings=errors)
+    return jsonify(ok=True, version=ver, files=downloaded)
 
 def _deploy_camera_bg(ip, force=False):
     """Deploy camera_server.py to a remote SBC via SSH+SCP."""
@@ -2665,9 +2790,9 @@ def _deploy_camera_bg(ip, force=False):
             _deploy_status["running"] = False
         return
 
-    local_ver = _camera_local_version()
+    deploy_ver = _camera_deploy_version()
     with _deploy_lock:
-        _deploy_status["localVersion"] = local_ver
+        _deploy_status["localVersion"] = deploy_ver
 
     try:
         # ── Version check ──────────────────────────────────────────
@@ -2677,14 +2802,14 @@ def _deploy_camera_bg(ip, force=False):
         with _deploy_lock:
             _deploy_status["remoteVersion"] = remote_ver
 
-        if remote_ver and local_ver and remote_ver == local_ver and not force:
+        if remote_ver and deploy_ver and remote_ver == deploy_ver and not force:
             _update(100, f"Already up-to-date \u2014 v{remote_ver}")
             return
 
         if remote_ver:
-            _update(3, f"Upgrading {remote_ver} \u2192 {local_ver}...")
+            _update(3, f"Upgrading {remote_ver} \u2192 {deploy_ver}...")
         else:
-            _update(3, f"Fresh install \u2014 v{local_ver}...")
+            _update(3, f"Fresh install \u2014 v{deploy_ver}...")
 
         # ── SSH connect ────────────────────────────────────────────
         _update(5, f"Connecting to {ip} via SSH...")
@@ -2778,14 +2903,16 @@ def _deploy_camera_bg(ip, force=False):
         # ── Upload firmware files ──────────────────────────────────
         _update(30, "Uploading firmware files...")
         sftp = ssh.open_sftp()
-        src_dir = _FW_DIR / "orangepi"
-        for fname in ("camera_server.py", "detector.py", "requirements.txt",
-                       "slyled-cam.service"):
+        src_dir = _camera_deploy_dir()
+        log.info("Deploy: using firmware from %s", src_dir)
+        for fname in _CAMERA_FW_FILES:
             src = src_dir / fname
             if src.exists():
                 sftp.put(str(src), f"/opt/slyled/{fname}")
-        # Upload YOLO model if present locally
+        # Upload YOLO model if present locally (check both downloaded cache and bundled)
         model_src = src_dir / "models" / "yolov8n.onnx"
+        if not model_src.exists():
+            model_src = _FW_DIR / "orangepi" / "models" / "yolov8n.onnx"
         if model_src.exists():
             _update(35, "Uploading detection model (~12 MB)...")
             try:

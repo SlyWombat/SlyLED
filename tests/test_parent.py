@@ -864,6 +864,23 @@ def run():
         ok('Deploy status has version fields',
            'remoteVersion' in ds and 'localVersion' in ds)
 
+        # ── Camera firmware GitHub OTA (#325) ────────────────────────
+        r = c.get('/api/firmware/camera/check')
+        ok('Camera check → 200', r.status_code == 200)
+        cc = r.get_json()
+        ok('Camera check has localVersion', 'localVersion' in cc)
+        ok('Camera check has downloadedVersion', 'downloadedVersion' in cc)
+        ok('Camera check has latestVersion', 'latestVersion' in cc)
+        ok('Camera check has updateAvailable', 'updateAvailable' in cc)
+        ok('Camera check localVersion is string', isinstance(cc.get('localVersion'), str))
+
+        # Download endpoint — will attempt GitHub fetch (may fail offline, but route must exist)
+        r = c.post('/api/firmware/camera/download')
+        ok('Camera download route exists', r.status_code == 200)
+        dl = r.get_json()
+        ok('Camera download has ok field', 'ok' in dl)
+        ok('Camera download has files field', 'files' in dl)
+
         # ── Camera probe endpoint ────────────────────────────────────
         r = c.post('/api/cameras/probe', json={})
         ok('Probe missing IP → 400', r.status_code == 400)
