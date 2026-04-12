@@ -471,7 +471,8 @@ def _compile_dmx_fixture(clip, effect, fixture_pos, aim_point, profile_info, dur
 
 def bake_timeline(timeline, fixtures, spatial_fx, layout,
                   progress=None, actions=None,
-                  resolve_fn=None, evaluate_fn=None, blend_fn=None):
+                  resolve_fn=None, evaluate_fn=None, blend_fn=None,
+                  profile_lib=None):
     """Compile a timeline into per-fixture action sequences.
 
     Instead of rendering 40Hz frames, this directly analyzes each clip's spatial
@@ -513,9 +514,11 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
             _pid = f.get("dmxProfileId")
             _dmx_profile_info = None
             if _pid:
-                from dmx_profiles import ProfileLibrary
-                _plib = ProfileLibrary()
-                _dmx_profile_info = _plib.channel_info(_pid)
+                if profile_lib:
+                    _dmx_profile_info = profile_lib.channel_info(_pid)
+                else:
+                    from dmx_profiles import ProfileLibrary
+                    _dmx_profile_info = ProfileLibrary().channel_info(_pid)
             beam_width_deg = 15
             if _dmx_profile_info:
                 beam_width_deg = _dmx_profile_info.get("beamWidth", 15) or 15
@@ -674,6 +677,10 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
                                   "tilt": ts + (te - ts) * frac}
                             if pt_dimmer is not None:
                                 sp["dimmer"] = pt_dimmer
+                            # Copy RGB from action (#362)
+                            for ck in ("r", "g", "b"):
+                                if ck in act:
+                                    sp[ck] = act[ck]
                             all_segments.append({
                                 "type": ACT_DMX_SCENE,
                                 "params": sp,
