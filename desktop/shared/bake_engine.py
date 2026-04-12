@@ -616,6 +616,11 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
             if aid is not None:
                 act = act_map.get(aid)
                 if act:
+                    # Skip if action targets specific fixtures and this isn't one (#363)
+                    _scope = act.get("scope", "performer")
+                    _tids = act.get("targetIds") or clip.get("fixtureIds")
+                    if _scope == "performer-selected" and _tids and fid not in _tids:
+                        continue
                     act_type = act.get("type", 0)
                     params = {k: act.get(k, 0) for k in (
                         "r", "g", "b", "r2", "g2", "b2", "speedMs", "periodMs",

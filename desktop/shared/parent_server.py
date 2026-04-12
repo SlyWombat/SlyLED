@@ -5489,12 +5489,20 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
         if frame_count == 1:
             log.info("DMX playback: first frame sent at elapsed=%.1fs", elapsed)
     log.info("DMX playback: stopped after %d frames", frame_count)
-    # Blackout DMX fixtures on stop, then remove universes to stop sending
+    # Blackout DMX fixtures on stop (#364) — zero all channels
     for fx in dmx_fixtures:
-        profile = {"channel_map": fx["ch_map"]} if fx["ch_map"] else None
-        engine.set_fixture_rgb(fx["uni"], fx["addr"], 0, 0, 0, profile)
+        profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
+        uni_buf = engine.get_universe(fx["uni"])
+        uni_buf.set_fixture_rgb(fx["addr"], 0, 0, 0, profile)
         if fx["ch_map"] and "dimmer" in fx["ch_map"]:
-            engine.get_universe(fx["uni"]).set_fixture_dimmer(fx["addr"], 0, profile)
+            uni_buf.set_fixture_dimmer(fx["addr"], 0, profile)
+        if profile and fx["ch_map"]:
+            zero_ch = {}
+            for ch_type in ("pan", "tilt", "strobe", "gobo", "color-wheel", "prism", "focus", "zoom", "speed"):
+                if ch_type in fx["ch_map"]:
+                    zero_ch[ch_type] = 0
+            if zero_ch:
+                uni_buf.set_fixture_channels(fx["addr"], zero_ch, profile)
 
 @app.post("/api/timelines/<int:tid>/start")
 def api_timeline_start(tid):
@@ -5784,12 +5792,21 @@ def _dmx_playback_single(tid, go_epoch, duration):
             _reap_temporal_objects()
         _evaluate_track_actions(elapsed, engine, dmx_fixtures)
         frame_count += 1
-    # Blackout on segment end
+    # Blackout on segment end (#364) — zero RGB, dimmer, pan/tilt, and all extras
     for fx in dmx_fixtures:
-        profile = {"channel_map": fx["ch_map"]} if fx["ch_map"] else None
-        engine.set_fixture_rgb(fx["uni"], fx["addr"], 0, 0, 0, profile)
+        profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
+        uni_buf = engine.get_universe(fx["uni"])
+        uni_buf.set_fixture_rgb(fx["addr"], 0, 0, 0, profile)
         if fx["ch_map"] and "dimmer" in fx["ch_map"]:
-            engine.get_universe(fx["uni"]).set_fixture_dimmer(fx["addr"], 0, profile)
+            uni_buf.set_fixture_dimmer(fx["addr"], 0, profile)
+        if profile and fx["ch_map"]:
+            # Zero all mapped channels (pan, tilt, strobe, gobo, etc.)
+            zero_ch = {}
+            for ch_type in ("pan", "tilt", "strobe", "gobo", "color-wheel", "prism", "focus", "zoom", "speed"):
+                if ch_type in fx["ch_map"]:
+                    zero_ch[ch_type] = 0
+            if zero_ch:
+                uni_buf.set_fixture_channels(fx["addr"], zero_ch, profile)
 
 
 @app.post("/api/show/start")
