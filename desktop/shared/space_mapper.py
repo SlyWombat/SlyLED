@@ -15,21 +15,92 @@ import urllib.request
 log = logging.getLogger("slyled")
 
 
-def fetch_point_cloud(camera_ip, cam_idx, max_points=10000, max_depth_mm=5000):
-    """Fetch a point cloud from a camera node's /point-cloud endpoint.
-    Returns list of [x, y, z, r, g, b] in camera-local coords, or None."""
+def fetch_point_cloud(camera_fixture, max_points=10000, max_depth_mm=5000):
+    """Fetch a point cloud using two strategies:
+
+    1. Try the camera node's /point-cloud endpoint (works on Orange Pi).
+    2. If that fails (503/timeout), fetch a snapshot and run depth estimation
+       locally on the orchestrator (requires cv2 + depth model).
+
+    Args:
+        camera_fixture: dict with cameraIp, cameraIdx, fovDeg, etc.
+        max_points: maximum number of points to return
+        max_depth_mm: maximum depth in mm
+
+    Returns:
+        list of [x, y, z, r, g, b] in camera-local coords, or None.
+    """
+    ip = camera_fixture.get("cameraIp")
+    cam_idx = camera_fixture.get("cameraIdx", 0)
+    if not ip:
+        return None
+
+    # Strategy 1: Try camera's /point-cloud endpoint
     try:
         req = urllib.request.Request(
-            f"http://{camera_ip}:5000/point-cloud",
+            f"http://{ip}:5000/point-cloud",
             data=json.dumps({"cam": cam_idx, "maxPoints": max_points,
                               "maxDepthMm": max_depth_mm}).encode(),
             headers={"Content-Type": "application/json"})
         resp = urllib.request.urlopen(req, timeout=60)
         r = json.loads(resp.read().decode())
         if r.get("ok"):
-            return r.get("points", [])
+            pts = r.get("points", [])
+            if pts:
+                return pts
     except Exception as e:
-        log.warning("Point cloud fetch failed for %s cam%d: %s", camera_ip, cam_idx, e)
+        log.info("Camera /point-cloud failed for %s cam%d: %s — trying orchestrator-side depth",
+                 ip, cam_idx, e)
+
+    # Strategy 2: Fetch snapshot + run depth estimation locally on orchestrator
+    try:
+        snap_resp = urllib.request.urlopen(
+            f"http://{ip}:5000/snapshot?cam={cam_idx}", timeout=15)
+        jpeg_data = snap_resp.read()
+
+        import cv2
+        import numpy as np
+        frame = cv2.imdecode(np.frombuffer(jpeg_data, np.uint8), cv2.IMREAD_COLOR)
+        if frame is None:
+            log.warning("Failed to decode snapshot from %s cam%d", ip, cam_idx)
+            return None
+
+        # Try to load depth estimator (may not be available on orchestrator)
+        try:
+            from depth_estimator import DepthEstimator
+        except ImportError:
+            log.warning("No depth_estimator module available on orchestrator for %s cam%d", ip, cam_idx)
+            return None
+
+        estimator = DepthEstimator()
+        depth_map, _ms = estimator.estimate(frame)
+
+        # Generate point cloud from depth map + camera intrinsics
+        h, w = depth_map.shape[:2]
+        fov = camera_fixture.get("fovDeg", 60)
+        fx = (w / 2) / math.tan(math.radians(fov / 2))
+        fy = fx
+        cx, cy = w / 2.0, h / 2.0
+
+        points = []
+        step = max(1, int(math.sqrt(h * w / max_points)))
+        for v in range(0, h, step):
+            for u in range(0, w, step):
+                d = float(depth_map[v, u])
+                if d <= 0 or d > max_depth_mm:
+                    continue
+                x = (u - cx) * d / fx
+                y = (v - cy) * d / fy
+                z = d
+                r_val = int(frame[v, u, 2])
+                g_val = int(frame[v, u, 1])
+                b_val = int(frame[v, u, 0])
+                points.append([x, y, z, r_val, g_val, b_val])
+        log.info("Orchestrator-side depth for %s cam%d: %d points", ip, cam_idx, len(points))
+        return points if points else None
+    except Exception as e:
+        log.warning("Orchestrator-side depth failed for %s cam%d: %s", ip, cam_idx, e)
+
     return None
 
 
@@ -156,8 +227,8 @@ class SpaceScan:
             if not ip:
                 continue
 
-            # Fetch point cloud from camera node
-            points = fetch_point_cloud(ip, cam_idx, max_points)
+            # Fetch point cloud (tries camera endpoint, then orchestrator-side depth)
+            points = fetch_point_cloud(cam, max_points)
             if not points:
                 log.warning("No points from %s cam%d", ip, cam_idx)
                 continue
