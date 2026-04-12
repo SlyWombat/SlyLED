@@ -609,7 +609,7 @@ def api_deploy_status():
 def main():
     parser = argparse.ArgumentParser(description='SlyLED Developer Management GUI')
     parser.add_argument('--port', type=int, default=9090, help='Port (default 9090)')
-    parser.add_argument('--host', default='127.0.0.1', help='Host (default 127.0.0.1)')
+    parser.add_argument('--host', default='0.0.0.0', help='Host (default 0.0.0.0 — all interfaces)')
     args = parser.parse_args()
 
     print(f'SlyLED DevGUI starting on http://{args.host}:{args.port}')
