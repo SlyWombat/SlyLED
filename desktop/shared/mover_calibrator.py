@@ -287,40 +287,37 @@ def _dark_reference(camera_ip, cam_idx=-1):
 # ── Discovery ────────────────────────────────────────────────────────
 
 def compute_initial_aim(mover_pos, target_pos, pan_range=540, tilt_range=270,
-                        mounted_inverted=False):
+                        mounted_inverted=False, pan_offset=None):
     """Estimate the pan/tilt to aim the mover at a target point in stage mm.
 
     Convention: pan=0.5 = forward (+Y), tilt=0.5 = horizontal.
-
-    Stage coordinates: X=width, Y=depth (toward audience), Z=height (floor to ceiling).
-
-    When mounted_inverted=True (fixture hanging upside-down from truss),
-    both pan and tilt motor directions are reversed.
+    Stage coordinates: X=width, Y=depth (toward audience), Z=height.
 
     Args:
-        mover_pos: (x, y, z) in mm — fixture position from layout
-        target_pos: (x, y, z) in mm — where to aim (e.g. floor center in camera view)
+        mover_pos: (x, y, z) in mm
+        target_pos: (x, y, z) in mm
         pan_range, tilt_range: in degrees
         mounted_inverted: True if fixture is mounted upside-down
+        pan_offset: degrees to add to the geometric pan angle (#365).
+            Inverted ceiling mounts typically need 180° because pan=0.5
+            mechanically faces the mounting surface, not into the room.
+            If None, defaults to 180 when mounted_inverted, else 0.
 
     Returns: (pan_norm, tilt_norm) both 0.0-1.0
     """
     dx = target_pos[0] - mover_pos[0]
-    dy = target_pos[1] - mover_pos[1]  # depth toward audience
-    dz = target_pos[2] - mover_pos[2]  # positive = target above fixture
+    dy = target_pos[1] - mover_pos[1]
+    dz = target_pos[2] - mover_pos[2]
     dist_xy = (dx*dx + dy*dy) ** 0.5
 
     pan_deg = math.degrees(math.atan2(dx, dy)) if dist_xy > 0.001 else 0.0
-    # tilt_deg: positive = below horizontal (looking down at floor)
-    # dz is negative when target is below fixture — use abs for "how far down"
     tilt_deg = math.degrees(math.atan2(abs(dz), dist_xy)) if (dist_xy > 0.001 or abs(dz) > 0.001) else 0.0
     if dz > 0:
-        tilt_deg = -tilt_deg  # target above fixture = tilt up (negative)
+        tilt_deg = -tilt_deg
 
-    # No pan/tilt sign flip for inverted mounts — the 3D viewport and DMX
-    # protocol treat normalized values the same regardless of mount orientation.
-    # The physical motor reversal is a fixture property, not a DMX convention.
-    pan_norm = max(0, min(1, 0.5 + pan_deg / pan_range))
+    if pan_offset is None:
+        pan_offset = 180.0 if mounted_inverted else 0.0  # degrees
+    pan_norm = max(0, min(1, 0.5 + (pan_deg + pan_offset) / pan_range))
     tilt_norm = max(0, min(1, 0.5 + tilt_deg / tilt_range))
     return (pan_norm, tilt_norm)
 

@@ -349,11 +349,16 @@ def evaluate_spatial_effect(effect, pixel_positions, t):
 
 
 def compute_pan_tilt(fixture_pos, aim_point, pan_range_deg, tilt_range_deg,
-                     mounted_inverted=False):
+                     mounted_inverted=False, pan_offset=None):
     """Compute normalized pan/tilt (0.0-1.0) from fixture position to aim point.
 
     Stage coordinates: X=width, Y=depth (forward toward audience), Z=height.
     Convention: pan=0.5 = forward (+Y), tilt=0.5 = horizontal.
+
+    Args:
+        pan_offset: normalized offset for pan home direction (#365).
+            0.5 = 180° flip (inverted ceiling mounts face backward at pan=0.5).
+            If None, defaults to 0.5 when mounted_inverted, else 0.0.
 
     Returns:
         (pan_normalized, tilt_normalized) both 0.0-1.0, or None if ranges are 0
@@ -361,22 +366,20 @@ def compute_pan_tilt(fixture_pos, aim_point, pan_range_deg, tilt_range_deg,
     if pan_range_deg <= 0 or tilt_range_deg <= 0:
         return None
 
-    dx = aim_point[0] - fixture_pos[0]  # stage X (width)
-    dy = aim_point[1] - fixture_pos[1]  # stage Y (depth / forward)
-    dz = aim_point[2] - fixture_pos[2]  # stage Z (height)
+    dx = aim_point[0] - fixture_pos[0]
+    dy = aim_point[1] - fixture_pos[1]
+    dz = aim_point[2] - fixture_pos[2]
 
     dist_xy = math.sqrt(dx * dx + dy * dy)
 
-    # Pan: angle from +Y (forward) toward +X, in horizontal XY plane
     pan_deg = math.degrees(math.atan2(dx, dy)) if dist_xy > 0.001 else 0.0
-
-    # Tilt: angle below horizontal, positive = looking down (#359)
     tilt_deg = math.degrees(math.atan2(abs(dz), dist_xy)) if (dist_xy > 0.001 or abs(dz) > 0.001) else 0.0
     if dz > 0:
-        tilt_deg = -tilt_deg  # target above fixture = tilt up
+        tilt_deg = -tilt_deg
 
-    # No sign flip for inverted mounts — matches 3D viewport convention (#349)
-    pan_norm = 0.5 + pan_deg / pan_range_deg
+    if pan_offset is None:
+        pan_offset = 180.0 if mounted_inverted else 0.0  # degrees
+    pan_norm = 0.5 + (pan_deg + pan_offset) / pan_range_deg
     tilt_norm = 0.5 + tilt_deg / tilt_range_deg
 
     return (max(0.0, min(1.0, pan_norm)), max(0.0, min(1.0, tilt_norm)))
