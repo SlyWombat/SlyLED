@@ -7484,8 +7484,12 @@ var _calMarkers=(function(){try{var s=localStorage.getItem('slyled_cal_markers')
 function _moverCalManualStart2(fixId){
   // Reuse persisted markers or start empty
   var markers=_calMarkers?JSON.parse(JSON.stringify(_calMarkers)):[];
-  _manCal={fid:fixId,markers:markers,step:'markers',currentIdx:0,samples:[],channels:null};
-  _manCalRender();
+  _manCal={fid:fixId,markers:markers,step:'markers',currentIdx:0,samples:[],channels:null,savedSamples:null};
+  // Load existing calibration samples for this fixture (for restoring positions)
+  ra('GET','/api/calibration/mover/'+fixId,null,function(cal){
+    if(cal&&cal.samples)_manCal.savedSamples=cal.samples;
+    _manCalRender();
+  });
 }
 
 function _manCalRender(){
@@ -7625,13 +7629,25 @@ function _manCalRenderJog(fname){
   // All DMX channels
   var allCh=_manCal.allChannels||[];
   var panVal=128, tiltVal=128;
-  if(idx>0&&_manCal.samples.length>0){var ls=_manCal.samples[_manCal.samples.length-1];panVal=Math.round(ls.pan*255);tiltVal=Math.round(ls.tilt*255);}
+  // Try to restore from: 1) previous sample for this marker, 2) saved calibration, 3) last confirmed sample
+  if(_manCal.samples[idx]){
+    panVal=Math.round(_manCal.samples[idx].pan*255);
+    tiltVal=Math.round(_manCal.samples[idx].tilt*255);
+  }else if(_manCal.savedSamples){
+    // Match saved sample by stage position
+    var m=_manCal.markers[idx];
+    _manCal.savedSamples.forEach(function(s){
+      if(s.stageX===m.x&&s.stageY===m.y&&s.stageZ===m.z){panVal=Math.round(s.pan*255);tiltVal=Math.round(s.tilt*255);}
+    });
+  }else if(idx>0&&_manCal.samples.length>0){
+    var ls=_manCal.samples[_manCal.samples.length-1];panVal=Math.round(ls.pan*255);tiltVal=Math.round(ls.tilt*255);
+  }
   h+='<div style="max-height:280px;overflow-y:auto;border:1px solid #1e293b;border-radius:4px;padding:.4em;background:#0a0f1a;margin-bottom:.6em">';
   if(allCh.length){
     allCh.forEach(function(c){
       var isPan=(c.type==='pan'),isTilt=(c.type==='tilt');
-      var isDim=(c.type==='dimmer'),isGreen=(c.type==='green');
-      var defVal=isPan?panVal:isTilt?tiltVal:isDim?255:isGreen?255:(c.default||0);
+      var isDim=(c.type==='dimmer'),isGreen=(c.type==='green'),isSpeed=(c.type==='speed');
+      var defVal=isPan?panVal:isTilt?tiltVal:isDim?255:isGreen?255:isSpeed?0:(c.default||0);
       // Current value from last state or default
       var curVal=defVal;
       var highlight=isPan||isTilt?'color:#22d3ee;font-weight:600':'color:#94a3b8';
