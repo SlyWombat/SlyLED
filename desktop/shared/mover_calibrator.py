@@ -1111,7 +1111,7 @@ def build_grid(samples):
     Returns dict with panSteps, tiltSteps, pixelX (2D), pixelY (2D),
     or None if insufficient samples.
     """
-    if len(samples) < 4:
+    if len(samples) < 2:
         return None
 
     import numpy as np

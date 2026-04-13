@@ -279,8 +279,10 @@ if pt:
 print('\n=== build_grid ===')
 # =====================================================================
 
-# Too few samples: < 4 → None
-check('build_grid: < 4 samples → None', build_grid([(0.3, 0.3, 100, 100), (0.4, 0.4, 200, 200)]) is None)
+# Too few samples: < 2 → None (lowered from 4 for manual calibration #368)
+check('build_grid: < 2 samples → None', build_grid([(0.3, 0.3, 100, 100)]) is None)
+# 2 samples with distinct pan+tilt builds a grid
+check('build_grid: 2 samples → grid', build_grid([(0.3, 0.3, 100, 100), (0.4, 0.4, 200, 200)]) is not None)
 
 # Too few unique pans: all same pan → None
 same_pan = [(0.5, 0.3, 100, 100), (0.5, 0.4, 100, 200),
