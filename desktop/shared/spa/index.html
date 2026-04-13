@@ -7597,15 +7597,7 @@ function _manCalNextToJog(){
     });
     _manCal.channels=ch;
     _manCal.allChannels=d.channels; // full channel list for DMX display
-    // Turn fixture on: dimmer=255, white
-    var fid=_manCal.fid;
-    var on=[];
-    if(ch.dimmer!=null)on.push({offset:ch.dimmer,value:255});
-    if(ch.red!=null)on.push({offset:ch.red,value:255});
-    if(ch.green!=null)on.push({offset:ch.green,value:255});
-    if(ch.blue!=null)on.push({offset:ch.blue,value:255});
-    if(ch.white!=null)on.push({offset:ch.white,value:255});
-    if(on.length)ra('POST','/api/dmx/fixture/'+fid+'/test',{channels:on},function(){});
+    // Don't auto-send DMX — user controls everything via sliders
     _manCalRender();
   });
 }
