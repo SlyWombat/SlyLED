@@ -95,10 +95,27 @@ class Tracker:
         interval = 1.0 / max(self._fps, 0.1)
         tick_count = 0
         fail_count = 0
+        # Keep camera open for the entire tracking session (fast capture)
+        cap = None
+        try:
+            import cv2
+            cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
+            if cap.isOpened():
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                log.info("Tracking: opened persistent capture %s at 640x480", device)
+            else:
+                log.warning("Tracking: failed to open persistent capture %s", device)
+                cap = None
+        except Exception as e:
+            log.warning("Tracking: persistent capture init failed: %s", e)
+            cap = None
         while self._running:
             t0 = time.monotonic()
             try:
-                self._tick(device)
+                self._tick(device, cap)
                 tick_count += 1
                 if tick_count == 1:
                     log.info("Tracking: first tick OK on %s", device)
@@ -114,12 +131,21 @@ class Tracker:
             sleep_time = interval - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
+        if cap:
+            cap.release()
+            log.info("Tracking: released persistent capture")
         log.info("Tracking loop exited: %d ticks, %d errors", tick_count, fail_count)
 
-    def _tick(self, device):
+    def _tick(self, device, cap=None):
         self._tick_count += 1
-        # Capture frame
-        frame = self._capture(device)
+        # Fast capture from persistent VideoCapture, or fallback to _cv_capture
+        frame = None
+        if cap and cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                frame = None
+        if frame is None:
+            frame = self._capture(device)
         if frame is None:
             self._capture_fail_count += 1
             if self._capture_fail_count <= 3 or self._capture_fail_count % 20 == 0:
