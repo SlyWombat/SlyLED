@@ -2668,7 +2668,7 @@ def api_mover_cal_manual(fid):
     # Build grid using stage coords as the "pixel" dimension
     grid_samples = [(s["pan"], s["tilt"], s["stageX"], s["stageY"]) for s in samples]
     grid = None
-    if len(grid_samples) >= 4:
+    if len(grid_samples) >= 2:
         try:
             grid = _mcal.build_grid(grid_samples)
         except Exception as e:
