@@ -7597,8 +7597,12 @@ function _manCalNextToJog(){
     });
     _manCal.channels=ch;
     _manCal.allChannels=d.channels; // full channel list for DMX display
-    // Don't auto-send DMX — user controls everything via sliders
-    _manCalRender();
+    // Zero all fixture channels before jog so buffer is clean
+    var fid=_manCal.fid;
+    var zeroChs=d.channels.map(function(c){return{offset:c.offset,value:0};});
+    ra('POST','/api/dmx/fixture/'+fid+'/test',{channels:zeroChs},function(){
+      _manCalRender();
+    });
   });
 }
 
