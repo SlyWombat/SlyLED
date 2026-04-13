@@ -7501,15 +7501,27 @@ function _manCalRenderMarkers(fname){
   h+='</table>';
   h+='<div style="margin-top:.4em;display:flex;gap:.5em;align-items:center;flex-wrap:wrap">';
   h+='<button class="btn" style="font-size:.8em;background:#1e3a5f;color:#93c5fd" onclick="_manCalAddMarker()">+ Add Marker</button>';
-  // Object dropdown — pick position from a named layout object
-  var objs=(_objects||[]).filter(function(o){return o.transform&&o.transform.pos;});
-  if(objs.length){
-    h+='<span style="font-size:.78em;color:#64748b">or from object:</span>';
-    h+='<select style="font-size:.8em" onchange="_manCalAddFromObject(this)">';
+  // Dropdown — pick position from a layout object or fixture
+  var pickItems=[];
+  (_objects||[]).filter(function(o){return o.transform&&o.transform.pos;}).forEach(function(o){
+    var p=o.transform.pos;
+    pickItems.push({id:'obj:'+o.id,name:o.name,x:p[0],y:p[1],z:p[2]});
+  });
+  // Also include positioned fixtures (cameras, other movers — not the one being calibrated)
+  var posMap={};((_layout||{}).children||[]).forEach(function(c){posMap[c.id]=c;});
+  (_fixtures||[]).forEach(function(f){
+    if(f.id===_manCal.fid)return; // skip self
+    var lp=posMap[f.id];
+    if(lp&&(lp.x||lp.y||lp.z)){
+      pickItems.push({id:'fix:'+f.id,name:f.name||('Fixture '+f.id),x:lp.x,y:lp.y,z:lp.z});
+    }
+  });
+  if(pickItems.length){
+    h+='<span style="font-size:.78em;color:#64748b">or from:</span>';
+    h+='<select style="font-size:.8em" onchange="_manCalAddFromPick(this)">';
     h+='<option value="">— pick —</option>';
-    objs.forEach(function(o){
-      var p=o.transform.pos;
-      h+='<option value="'+o.id+'">'+escapeHtml(o.name)+' ('+p[0]+','+p[1]+','+p[2]+')</option>';
+    pickItems.forEach(function(it){
+      h+='<option value="'+it.id+'">'+escapeHtml(it.name)+' ('+it.x+','+it.y+','+it.z+')</option>';
     });
     h+='</select>';
   }
@@ -7529,13 +7541,21 @@ function _manCalAddMarker(){
   _manCal.markers.push({x:Math.round(sm.sw/2),y:Math.round(sm.sd/2),z:0});
   _manCalRender();
 }
-function _manCalAddFromObject(selEl){
-  var id=parseInt(selEl.value);if(!id&&id!==0)return;
+function _manCalAddFromPick(selEl){
+  var val=selEl.value;if(!val)return;
   selEl.value='';
-  var obj=null;(_objects||[]).forEach(function(o){if(o.id===id)obj=o;});
-  if(!obj||!obj.transform)return;
-  var p=obj.transform.pos||[0,0,0];
-  _manCal.markers.push({x:p[0],y:p[1],z:p[2],name:obj.name});
+  var parts=val.split(':');var type=parts[0];var id=parseInt(parts[1]);
+  var name='',x=0,y=0,z=0;
+  if(type==='obj'){
+    (_objects||[]).forEach(function(o){if(o.id===id&&o.transform){
+      var p=o.transform.pos||[0,0,0];name=o.name;x=p[0];y=p[1];z=p[2];}});
+  }else if(type==='fix'){
+    (_fixtures||[]).forEach(function(f){if(f.id===id)name=f.name||'Fixture';});
+    var posMap={};((_layout||{}).children||[]).forEach(function(c){posMap[c.id]=c;});
+    var lp=posMap[id]||{};x=lp.x||0;y=lp.y||0;z=lp.z||0;
+  }
+  if(!name)return;
+  _manCal.markers.push({x:x,y:y,z:z,name:name});
   _manCalRender();
 }
 
