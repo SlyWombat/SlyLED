@@ -99,14 +99,7 @@ def populate_data():
         })
         dmx3 = r.get_json().get('id')
 
-        # Layout positions
-        c.post('/api/layout', json={'children': [
-            {'id': fix1, 'x': 1000, 'y': 4500, 'z': 0},
-            {'id': fix2, 'x': 9000, 'y': 4500, 'z': 0},
-            {'id': dmx1, 'x': 2000, 'y': 5000, 'z': 2000},
-            {'id': dmx2, 'x': 8000, 'y': 5000, 'z': 2000},
-            {'id': dmx3, 'x': 5000, 'y': 4800, 'z': 5000},
-        ]})
+        # Layout positions (cameras added below after camera fixture creation)
 
         # Actions library
         actions = [
@@ -142,13 +135,58 @@ def populate_data():
         r = c.post('/api/show/preset', json={'id': 'spotlight-sweep'})
         tl_id = r.get_json().get('timelineId')
 
+        # Camera fixtures — for calibration screenshots (#329, #330)
+        r = c.post('/api/fixtures', json={
+            'name': 'Stage Left Cam', 'type': 'point', 'fixtureType': 'camera',
+            'fovDeg': 90, 'resolutionW': 1920, 'resolutionH': 1080
+        })
+        cam1 = r.get_json().get('id')
+        c.put(f'/api/fixtures/{cam1}', json={
+            'cameraIp': '192.168.10.235', 'cameraIdx': 0
+        })
+
+        r = c.post('/api/fixtures', json={
+            'name': 'Stage Right Cam', 'type': 'point', 'fixtureType': 'camera',
+            'fovDeg': 60, 'resolutionW': 1920, 'resolutionH': 1080
+        })
+        cam2 = r.get_json().get('id')
+        c.put(f'/api/fixtures/{cam2}', json={
+            'cameraIp': '192.168.10.109', 'cameraIdx': 0
+        })
+
+        # Place cameras in layout — mounted high on side walls
+        c.post('/api/layout', json={'children': [
+            {'id': fix1, 'x': 1000, 'y': 4500, 'z': 0},
+            {'id': fix2, 'x': 9000, 'y': 4500, 'z': 0},
+            {'id': dmx1, 'x': 2000, 'y': 5000, 'z': 2000},
+            {'id': dmx2, 'x': 8000, 'y': 5000, 'z': 2000},
+            {'id': dmx3, 'x': 5000, 'y': 4800, 'z': 5000},
+            {'id': cam1, 'x': 500, 'y': 0, 'z': 2500},
+            {'id': cam2, 'x': 9500, 'y': 0, 'z': 2500},
+        ]})
+
+        # Synthetic point cloud data — simulates a scanned venue
+        import parent_server as _ps
+        _ps._point_cloud = {
+            'points': [[x * 100, y * 100, 0, 128, 128, 128]
+                       for x in range(60) for y in range(40)],
+            'totalPoints': 2400,
+            'floorNormalized': True,
+            'floorOffset': 0,
+            'surfaces': {
+                'floor': {'z': 0, 'normal': [0, 0, 1], 'inliers': 1800},
+                'walls': [{'normal': [0, 1, 0], 'd': 0}],
+                'obstacles': [],
+            },
+        }
+
         # Objects — proper transform format
         c.post('/api/objects', json={
             'name': 'Back Wall', 'objectType': 'wall', 'color': '#1e293b', 'opacity': 30,
             'transform': {'pos': [0, 0, 0], 'rot': [0, 0, 0], 'scale': [10000, 5000, 100]}
         })
 
-    print(f'  Data populated: 5 fixtures, 8 actions, 2 effects, 1 preset show')
+    print(f'  Data populated: 7 fixtures (5+2 cameras), 8 actions, 2 effects, 1 preset show')
     return tl_id
 
 
@@ -279,6 +317,23 @@ def capture_spa():
         # Firmware
         page.evaluate("showTab('firmware')")
         snap('spa-firmware.png', 1.0)
+
+        # Settings > Cameras sub-tab — calibration overview
+        try:
+            page.evaluate("showTab('settings')")
+            time.sleep(0.5)
+            page.evaluate("document.querySelector('#sn-cameras')?.click()")
+            snap('spa-settings-cameras.png', 1.5)
+        except Exception:
+            skipped.append('spa-settings-cameras.png')
+
+        # CV Engine status
+        try:
+            page.evaluate("showTab('settings')")
+            time.sleep(0.5)
+            snap('spa-cv-status.png', 0.5)
+        except Exception:
+            skipped.append('spa-cv-status.png')
 
         # Workflow: test channels
         try:

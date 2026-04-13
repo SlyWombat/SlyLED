@@ -77,6 +77,27 @@ _TR = {
     'Pan/Tilt Move': 'Mouvement Pan/Tilt',
     'Gobo Select': 'S\u00e9lection de gobo',
     'Color Wheel': 'Roue de couleurs',
+    # New calibration chapters (#329-#336)
+    '10. Camera Setup & Calibration': '10. Configuration des cam\u00e9ras et calibration',
+    'Adding Camera Nodes': 'Ajouter des n\u0153uds cam\u00e9ra',
+    'ArUco Marker Calibration': "Calibration par marqueurs ArUco",
+    'Stage Map — Camera Pose': "Carte de sc\u00e8ne \u2014 Pose de la cam\u00e9ra",
+    'Mover Calibration Wizard': "Assistant de calibration des lyres",
+    '11. 3D Environment Scanning': '11. Scan 3D de l\u2019environnement',
+    'Point Cloud Capture': 'Capture du nuage de points',
+    'Surface Detection': 'D\u00e9tection des surfaces',
+    'CV Engine': 'Moteur de vision par ordinateur',
+    '12. Stereo 3D & Light Mapping': '12. St\u00e9r\u00e9o 3D et cartographie lumineuse',
+    'Stereo Triangulation': 'Triangulation st\u00e9r\u00e9o',
+    'Per-Fixture Light Maps': 'Cartographie lumineuse par projecteur',
+    'Beam-as-Structured-Light': 'Faisceau comme lumi\u00e8re structur\u00e9e',
+    '13. Project Files': '13. Fichiers de projet',
+    'Export': 'Exportation',
+    'Import': 'Importation',
+    'Spatial Data in Projects': 'Donn\u00e9es spatiales dans les projets',
+    '14. System Limits': '14. Limites du syst\u00e8me',
+    '15. Troubleshooting': '15. D\u00e9pannage',
+    '16. API Quick Reference': "16. R\u00e9f\u00e9rence rapide de l'API",
   }
 }
 def T(s):
@@ -151,8 +172,16 @@ def build_manual():
             ('spa-runtime.png', 'Runtime tab with emulator preview'),
         ],
         '7. Preset Shows': [],  # text-only section
-        '8. System Limits': [],
-        '9. Troubleshooting': [],
+        '10. Camera Setup': [
+            ('spa-settings-cameras.png', 'Settings > Cameras — camera list with calibration status'),
+        ],
+        '11. 3D Environment': [
+            ('spa-layout-3d.png', '3D Viewport with point cloud and detected surfaces'),
+        ],
+        '12. Stereo 3D': [],
+        '13. Project': [],
+        '14. System Limits': [],
+        '15. Troubleshooting': [],
         'Settings': [
             ('spa-settings.png', 'Settings tab — app config and DMX output'),
             ('spa-settings-profiles.png', 'Fixture Profile Library — 12 built-in profiles'),
@@ -232,9 +261,13 @@ def build_manual():
         '7. Preset Shows',
         '8. DMX Fixture Profiles',
         '9. Settings & Configuration',
-        '10. System Limits',
-        '11. Troubleshooting',
-        '12. API Quick Reference',
+        '10. Camera Setup & Calibration',
+        '11. 3D Environment Scanning',
+        '12. Stereo 3D & Light Mapping',
+        '13. Project Files',
+        '14. System Limits',
+        '15. Troubleshooting',
+        '16. API Quick Reference',
     ]
     for item in toc_items:
         doc.add_paragraph(item, style='List Number')
@@ -587,8 +620,181 @@ def build_manual():
     )
     doc.add_page_break()
 
-    # ── Section 10: System Limits ─────────────────────────────
-    doc.add_heading(T('10. System Limits'), level=1)
+    # ── Section 10: Camera Setup & Calibration ─────────────────
+    doc.add_heading(T('10. Camera Setup & Calibration'), level=1)
+
+    doc.add_heading(T('Adding Camera Nodes'), level=2)
+    doc.add_paragraph(T(
+        'Camera nodes are Orange Pi or Raspberry Pi SBCs running the SlyLED camera firmware. '
+        'They capture snapshots for calibration, beam detection, depth estimation, and tracking.\n\n'
+        'To add a camera:\n'
+        '1. Connect the camera node to the same network as the orchestrator\n'
+        '2. Go to Setup tab and click "Discover" — camera nodes respond to UDP broadcast\n'
+        '3. Or manually add via Settings > Cameras with the camera\'s IP address\n'
+        '4. Each USB camera sensor appears as a separate fixture that can be placed in the Layout'
+    ))
+
+    add_screenshot('spa-settings-cameras.png', 'Settings > Cameras — camera list with calibration status')
+
+    doc.add_heading(T('ArUco Marker Calibration'), level=2)
+    doc.add_paragraph(T(
+        'ArUco markers are used for camera intrinsic calibration (lens parameters).\n\n'
+        'Step-by-step:\n'
+        '1. Print ArUco markers: Settings > Cameras > "Print ArUco Markers" (6 markers, 150mm each)\n'
+        '2. Place printed markers on flat surfaces visible to the camera at various angles\n'
+        '3. Click "Capture" 5+ times from different positions — each capture detects markers automatically\n'
+        '4. Click "Compute" — the system runs cv2.calibrateCamera() to determine fx, fy, cx, cy\n'
+        '5. RMS error < 2.0 indicates good calibration\n\n'
+        'All ArUco detection runs on the orchestrator PC (not the camera hardware), so any camera '
+        'that can serve JPEG snapshots works — even low-end Raspberry Pi boards.'
+    ))
+
+    doc.add_heading(T('Stage Map — Camera Pose'), level=2)
+    doc.add_paragraph(T(
+        'The Stage Map determines each camera\'s 3D position and orientation in stage coordinates '
+        'using solvePnP with ArUco markers at known stage positions.\n\n'
+        'Step-by-step:\n'
+        '1. Place 3+ ArUco markers on the stage floor at known positions (measure with tape)\n'
+        '2. Enter each marker\'s stage coordinates (X, Y, Z in mm) in the wizard\n'
+        '3. Click "Compute Stage Map" — the system detects markers and solves for camera pose\n'
+        '4. Result: camera position in stage mm, floor-plane homography, reprojection error\n\n'
+        'The homography maps any pixel to stage floor coordinates (X, Y at Z=0), enabling '
+        'beam detection in real-world millimeters rather than pixel space.'
+    ))
+
+    doc.add_heading(T('Mover Calibration Wizard'), level=2)
+    doc.add_paragraph(T(
+        'Moving head fixtures need calibration to map DMX pan/tilt values to real-world positions.\n\n'
+        'The wizard runs automatically:\n'
+        '1. Discovery: Spiral search to find the beam in the camera\'s field of view\n'
+        '2. Adaptive settle: Waits 0.8-2.5s per move, verifies beam has stopped (double-capture)\n'
+        '3. BFS mapping: Explores visible region, stops at boundaries when beam leaves camera view\n'
+        '4. Grid build: Creates a bilinear interpolation grid for fast pan/tilt lookup\n'
+        '5. Boundary verification: Flash on/off at edges to confirm true visibility limits\n\n'
+        'After calibration, the system can aim any fixture at any stage coordinate using grid_inverse().'
+    ))
+    doc.add_page_break()
+
+    # ── Section 11: 3D Environment Scanning ──────────────────
+    doc.add_heading(T('11. 3D Environment Scanning'), level=1)
+
+    doc.add_heading(T('Point Cloud Capture'), level=2)
+    doc.add_paragraph(T(
+        'The environment scan creates a 3D point cloud of your venue using depth estimation.\n\n'
+        'Step-by-step:\n'
+        '1. Position and calibrate 2+ cameras (Stage Map required)\n'
+        '2. Go to Settings > Space > "Start Scan"\n'
+        '3. Each camera captures a snapshot, the CV Engine runs Depth-Anything-V2 locally\n'
+        '4. Point clouds from each camera are transformed to stage coordinates and merged\n'
+        '5. Floor is auto-detected and normalized to Z=0\n\n'
+        'Result: 5,000-20,000 colored 3D points representing your venue geometry.'
+    ))
+
+    doc.add_heading(T('Surface Detection'), level=2)
+    doc.add_paragraph(T(
+        'After scanning, click "Analyze Surfaces" to run RANSAC-based detection:\n\n'
+        '- Floor: Horizontal plane detection (normal near vertical)\n'
+        '- Walls: Vertical planes along stage boundaries\n'
+        '- Obstacles: Clustered points that don\'t belong to floor or walls (pillars, furniture)\n\n'
+        'Detected surfaces are used by the calibration system to predict where beams land '
+        'and by the structured-light refinement to verify 3D accuracy.'
+    ))
+
+    doc.add_heading(T('CV Engine'), level=2)
+    doc.add_paragraph(T(
+        'All computer vision processing runs on the orchestrator PC, not the camera hardware. '
+        'The CV Engine wraps three model pipelines:\n\n'
+        '- Beam Detection: Fast color-filtered bright spot detection (<100ms)\n'
+        '- Depth Estimation: Depth-Anything-V2 monocular depth (1-2s on x86)\n'
+        '- Object Detection: YOLOv8n for person/object detection (100-200ms)\n\n'
+        'Camera nodes only provide JPEG snapshots. This means any camera works — even a '
+        'Raspberry Pi 3 that can\'t run ONNX models locally.'
+    ))
+
+    add_screenshot('spa-cv-status.png', 'CV Engine status — model loading state in Settings')
+    doc.add_page_break()
+
+    # ── Section 12: Stereo 3D & Light Mapping ─────────────────
+    doc.add_heading(T('12. Stereo 3D & Light Mapping'), level=1)
+
+    doc.add_heading(T('Stereo Triangulation'), level=2)
+    doc.add_paragraph(T(
+        'With 2+ calibrated cameras, the stereo engine triangulates 3D points from pixel '
+        'observations. Each camera converts a pixel to a 3D ray; the intersection of rays '
+        'from different cameras gives the 3D position in stage mm.\n\n'
+        'Use cases:\n'
+        '- Verify fixture positions by observing them from multiple cameras\n'
+        '- Track moving objects (people) in 3D\n'
+        '- Cross-validate depth estimation against triangulated ground truth\n\n'
+        'Accuracy depends on camera baseline (distance between cameras) and calibration quality. '
+        'Typical error: 20-100mm at 3-5m distance with 60\u00b0 FOV cameras.'
+    ))
+
+    doc.add_heading(T('Per-Fixture Light Maps'), level=2)
+    doc.add_paragraph(T(
+        'A light map records where each moving head\'s beam lands at every pan/tilt position '
+        'in real stage coordinates.\n\n'
+        'Step-by-step:\n'
+        '1. Calibrate the fixture (mover calibration wizard)\n'
+        '2. Click "Build Light Map" on the fixture\n'
+        '3. The system sweeps the beam across the visible area in a grid pattern\n'
+        '4. At each position: detect beam pixel, convert to stage mm via homography\n'
+        '5. Result: (pan, tilt) \u2192 (stageX, stageY, stageZ) lookup table\n\n'
+        'Inverse lookup: given a target position on stage, find the exact pan/tilt to aim there. '
+        'Uses inverse-distance weighted interpolation of the 4 nearest samples.'
+    ))
+
+    doc.add_heading(T('Beam-as-Structured-Light'), level=2)
+    doc.add_paragraph(T(
+        'During calibration sweeps, each beam position that hits a surface provides a definite '
+        '3D contact point. These points refine the environment model:\n\n'
+        '- Floor height correction: Beam contacts adjust the detected floor Z value\n'
+        '- Wall boundary extension: Contacts outside known wall boundaries expand the model\n'
+        '- Surface verification: Predicted ray-surface intersections are compared with observed positions\n\n'
+        'This is more accurate than depth estimation alone because the beam position is precise '
+        '(bright centroid) and the ray direction is known (from pan/tilt geometry).'
+    ))
+    doc.add_page_break()
+
+    # ── Section 13: Project Files ─────────────────────────────
+    doc.add_heading(T('13. Project Files'), level=1)
+
+    doc.add_heading(T('Export'), level=2)
+    doc.add_paragraph(T(
+        'File > Export saves your entire project as a .slyshow file containing:\n\n'
+        '- All fixtures, children, layout positions, and stage dimensions\n'
+        '- Actions, spatial effects, timelines, and show playlist\n'
+        '- DMX settings, fixture profiles, and calibration data\n'
+        '- Camera calibrations (intrinsics, stage maps, mover grids)\n'
+        '- Point cloud (gzip-compressed for portability)\n'
+        '- Light maps (per-fixture pan/tilt-to-stage lookup tables)\n\n'
+        'The project file uses schema version 2. Files from older versions (v1) import '
+        'successfully — new spatial fields default to empty.'
+    ))
+
+    doc.add_heading(T('Import'), level=2)
+    doc.add_paragraph(T(
+        'File > Import loads a .slyshow file, replacing all current state:\n\n'
+        '1. All playback is stopped\n'
+        '2. Fixtures, actions, timelines, and objects are restored\n'
+        '3. Calibration data (homographies, grids, light maps) is restored\n'
+        '4. Point cloud is decompressed and loaded into the 3D viewport\n'
+        '5. Camera SSH passwords must be re-entered (not portable between machines)\n\n'
+        'This enables a workflow where a designer builds the show on their laptop, exports the project, '
+        'and a runtime operator loads it on the show PC — all spatial data transfers automatically.'
+    ))
+
+    doc.add_heading(T('Spatial Data in Projects'), level=2)
+    doc.add_paragraph(T(
+        'Point clouds can be 10,000-20,000 points (1-3 MB uncompressed). The export pipeline '
+        'gzip-compresses the point array to ~200-500 KB. On import, the compressed data is '
+        'automatically decompressed and loaded.\n\n'
+        'Light maps (typically 200-300 samples per fixture) are stored alongside mover calibration data.'
+    ))
+    doc.add_page_break()
+
+    # ── Section 14: System Limits ─────────────────────────────
+    doc.add_heading(T('14. System Limits'), level=1)
     add_table(
         ['Resource', 'Limit', 'Notes'],
         [
@@ -607,8 +813,8 @@ def build_manual():
     )
     doc.add_page_break()
 
-    # ── Section 11: Troubleshooting ───────────────────────────
-    doc.add_heading(T('11. Troubleshooting'), level=1)
+    # ── Section 15: Troubleshooting ──────────────────────────
+    doc.add_heading(T('15. Troubleshooting'), level=1)
 
     problems = [
         ('3D Viewport Not Rendering', 'Browser doesn\'t support WebGL. Use Chrome, Firefox, or Edge.'),
@@ -628,8 +834,8 @@ def build_manual():
 
     doc.add_page_break()
 
-    # ── Section 12: API Quick Reference ───────────────────────
-    doc.add_heading(T('12. API Quick Reference'), level=1)
+    # ── Section 16: API Quick Reference ──────────────────────
+    doc.add_heading(T('16. API Quick Reference'), level=1)
     doc.add_paragraph('All endpoints are served from the Orchestrator at http://localhost:8080.')
 
     api_sections = [
@@ -657,6 +863,28 @@ def build_manual():
             ['POST', '/api/dmx/start', 'Start engine'],
             ['POST', '/api/dmx/stop', 'Stop engine'],
             ['GET', '/api/dmx/fixture/:id/channels', 'Fixture channels with values'],
+        ]),
+        ('Calibration', [
+            ['POST', '/api/cameras/:id/aruco/capture', 'Capture ArUco frame'],
+            ['POST', '/api/cameras/:id/aruco/compute', 'Compute intrinsics'],
+            ['POST', '/api/cameras/:id/stage-map', 'Compute camera pose'],
+            ['POST', '/api/calibration/mover/:id/start', 'Start mover calibration'],
+            ['GET', '/api/calibration/mover/:id/status', 'Poll calibration progress'],
+            ['POST', '/api/calibration/stereo/calibrate', 'Build stereo engine'],
+            ['POST', '/api/calibration/stereo/triangulate', 'Triangulate 3D point'],
+        ]),
+        ('CV Engine', [
+            ['GET', '/api/cv/status', 'Model loading status'],
+            ['POST', '/api/cameras/:id/detect', 'Object detection (local)'],
+            ['POST', '/api/cameras/:id/depth', 'Depth estimation (local)'],
+            ['POST', '/api/cameras/:id/beam-detect', 'Beam detection (local)'],
+        ]),
+        ('Space', [
+            ['POST', '/api/space/scan', 'Start point cloud scan'],
+            ['GET', '/api/space', 'Get point cloud'],
+            ['POST', '/api/space/analyze', 'Detect surfaces'],
+            ['GET', '/api/project/export', 'Export project (with spatial data)'],
+            ['POST', '/api/project/import', 'Import project'],
         ]),
     ]
     for section_name, rows in api_sections:
