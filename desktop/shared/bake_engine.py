@@ -472,7 +472,7 @@ def _compile_dmx_fixture(clip, effect, fixture_pos, aim_point, profile_info, dur
 def bake_timeline(timeline, fixtures, spatial_fx, layout,
                   progress=None, actions=None,
                   resolve_fn=None, evaluate_fn=None, blend_fn=None,
-                  profile_lib=None):
+                  profile_lib=None, mover_calibrations=None):
     """Compile a timeline into per-fixture action sequences.
 
     Instead of rendering 40Hz frames, this directly analyzes each clip's spatial
@@ -657,15 +657,47 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
                         pan_range = prof_info.get("panRange", 0)
                         tilt_range = prof_info.get("tiltRange", 0)
                         if start_pos and end_pos and pan_range > 0 and tilt_range > 0:
-                            from spatial_engine import compute_pan_tilt as _cpt
                             fx_pos = fdata.get("position", [0, 0, 0])
                             mounted_inv = bool(fdata.get("mountedInverted"))
-                            pt_s = _cpt(fx_pos, start_pos, pan_range, tilt_range,
-                                        mounted_inverted=mounted_inv)
-                            pt_e = _cpt(fx_pos, end_pos, pan_range, tilt_range,
-                                        mounted_inverted=mounted_inv)
-                            ps, ts = pt_s if pt_s else (0.0, 0.5)
-                            pe, te = pt_e if pt_e else (1.0, 0.5)
+                            # Prefer calibration grid when available (#366)
+                            _mcal = (mover_calibrations or {}).get(str(fid))
+                            _grid = _mcal.get("grid") if _mcal else None
+                            if _grid:
+                                from mover_calibrator import grid_inverse as _ginv
+                                # Calibration maps pan/tilt → pixel; we need
+                                # stage pos → pixel → pan/tilt
+                                # For now use grid center as reference and
+                                # geometric offset from calibrated center
+                                _cal_center = (_mcal.get("centerPan", 0.5),
+                                               _mcal.get("centerTilt", 0.5))
+                                from spatial_engine import compute_pan_tilt as _cpt
+                                _center_target = _mcal.get("centerTarget", fx_pos)
+                                pt_s_geo = _cpt(fx_pos, start_pos, pan_range, tilt_range,
+                                                mounted_inverted=mounted_inv)
+                                pt_e_geo = _cpt(fx_pos, end_pos, pan_range, tilt_range,
+                                                mounted_inverted=mounted_inv)
+                                pt_c_geo = _cpt(fx_pos, _center_target, pan_range, tilt_range,
+                                                mounted_inverted=mounted_inv)
+                                if pt_s_geo and pt_e_geo and pt_c_geo:
+                                    # Apply calibrated offset: actual_pan = cal_center + (geo_pan - geo_center)
+                                    dp = _cal_center[0] - pt_c_geo[0]
+                                    dt = _cal_center[1] - pt_c_geo[1]
+                                    ps = max(0, min(1, pt_s_geo[0] + dp))
+                                    ts = max(0, min(1, pt_s_geo[1] + dt))
+                                    pe = max(0, min(1, pt_e_geo[0] + dp))
+                                    te = max(0, min(1, pt_e_geo[1] + dt))
+                                    log.info("Bake PT Move fid=%s: using calibration offset dp=%.3f dt=%.3f", fid, dp, dt)
+                                else:
+                                    ps, ts = _cal_center
+                                    pe, te = _cal_center
+                            else:
+                                from spatial_engine import compute_pan_tilt as _cpt
+                                pt_s = _cpt(fx_pos, start_pos, pan_range, tilt_range,
+                                            mounted_inverted=mounted_inv)
+                                pt_e = _cpt(fx_pos, end_pos, pan_range, tilt_range,
+                                            mounted_inverted=mounted_inv)
+                                ps, ts = pt_s if pt_s else (0.0, 0.5)
+                                pe, te = pt_e if pt_e else (1.0, 0.5)
                         else:
                             # Fallback for legacy actions without stage coords
                             ps = act.get("panStart", 0)

@@ -746,14 +746,37 @@ def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
     _hold_dmx(bridge_ip, dmx, 2.0)  # extra settle for first position
 
-    # Check initial position — use adaptive settle (#238), lower threshold for ambient light
+    # Check initial position — use adaptive settle (#238)
     beam = _wait_settled(camera_ip, cam_idx, color, center=False, threshold=30)
     if beam:
         return (pan, tilt, beam[0], beam[1])
 
-    # Spiral outward in 0.05 steps (#348: enforce max_probes)
+    # Phase 1: Coarse grid scan across full range (#367)
+    # Covers the entire pan/tilt space quickly — finds the beam regardless
+    # of fixture orientation, mount direction, or motor mapping.
+    COARSE_PAN = 8   # 8 pan positions across 0.05–0.95
+    COARSE_TILT = 5   # 5 tilt positions across 0.3–0.9
     prev_p, prev_t = pan, tilt
     probes = 0
+    log.info("Discovery: coarse grid scan %dx%d", COARSE_PAN, COARSE_TILT)
+    for ti in range(COARSE_TILT):
+        t = 0.3 + (0.6 * ti / max(COARSE_TILT - 1, 1))
+        for pi in range(COARSE_PAN):
+            p = 0.05 + (0.9 * pi / max(COARSE_PAN - 1, 1))
+            probes += 1
+            _set_mover_dmx(dmx, mover_addr, p, t, *color, dimmer=255)
+            _hold_dmx(bridge_ip, dmx, SETTLE)
+            beam = _wait_settled(camera_ip, cam_idx, color,
+                                 prev_pan=prev_p, prev_tilt=prev_t,
+                                 new_pan=p, new_tilt=t, threshold=30)
+            prev_p, prev_t = p, t
+            if beam:
+                log.info("Discovery: beam found at coarse probe %d (pan=%.2f tilt=%.2f)", probes, p, t)
+                return (p, t, beam[0], beam[1])
+
+    # Phase 2: Fine spiral from initial aim if coarse missed (#348)
+    log.info("Discovery: coarse scan missed, fine spiral from (%.2f, %.2f)", initial_pan, initial_tilt)
+    prev_p, prev_t = initial_pan, initial_tilt
     for radius in range(1, 12):
         positions = []
         for dp in range(-radius, radius + 1):
