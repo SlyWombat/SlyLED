@@ -6818,6 +6818,15 @@ def api_project_import():
         _range_cal.update(data.get("rangeCalibrations", {}))
         _mover_cal.clear()
         _mover_cal.update(data.get("moverCalibrations", {}))
+        # Rebuild grids from samples if missing (e.g. saved before grid fix)
+        for _fid_str, _cal in _mover_cal.items():
+            if _cal.get("method") == "manual" and _cal.get("samples") and not _cal.get("grid"):
+                _gs = [(_s["pan"], _s["tilt"], _s["stageX"], _s["stageY"]) for _s in _cal["samples"]]
+                if len(_gs) >= 2:
+                    try:
+                        _cal["grid"] = _mcal.build_grid(_gs)
+                    except Exception:
+                        pass
         # Restore show playlist
         _show_playlist.clear()
         _show_playlist.update(data.get("showPlaylist", {"order": [], "loopAll": False}))
