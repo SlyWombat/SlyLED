@@ -7508,12 +7508,11 @@ function _manCalRenderMarkers(fname){
     pickItems.push({id:'obj:'+o.id,name:o.name,x:p[0],y:p[1],z:p[2]});
   });
   // Also include positioned fixtures (cameras, other movers — not the one being calibrated)
-  var posMap={};((_layout||{}).children||[]).forEach(function(c){posMap[c.id]=c;});
+  // _fixtures already have x/y/z merged from layout by loadLayout()
   (_fixtures||[]).forEach(function(f){
     if(f.id===_manCal.fid)return; // skip self
-    var lp=posMap[f.id];
-    if(lp&&(lp.x||lp.y||lp.z)){
-      pickItems.push({id:'fix:'+f.id,name:f.name||('Fixture '+f.id),x:lp.x,y:lp.y,z:lp.z});
+    if(f.x||f.y||f.z){
+      pickItems.push({id:'fix:'+f.id,name:f.name||('Fixture '+f.id),x:f.x,y:f.y,z:f.z});
     }
   });
   if(pickItems.length){
@@ -7550,9 +7549,7 @@ function _manCalAddFromPick(selEl){
     (_objects||[]).forEach(function(o){if(o.id===id&&o.transform){
       var p=o.transform.pos||[0,0,0];name=o.name;x=p[0];y=p[1];z=p[2];}});
   }else if(type==='fix'){
-    (_fixtures||[]).forEach(function(f){if(f.id===id)name=f.name||'Fixture';});
-    var posMap={};((_layout||{}).children||[]).forEach(function(c){posMap[c.id]=c;});
-    var lp=posMap[id]||{};x=lp.x||0;y=lp.y||0;z=lp.z||0;
+    (_fixtures||[]).forEach(function(f){if(f.id===id){name=f.name||'Fixture';x=f.x||0;y=f.y||0;z=f.z||0;}});
   }
   if(!name)return;
   _manCal.markers.push({x:x,y:y,z:z,name:name});
