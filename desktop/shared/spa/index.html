@@ -7480,14 +7480,11 @@ function _moverCalManualStart(fixId){
     _moverCalManualStart2(fixId);
   });
 }
+var _calMarkers=(function(){try{var s=localStorage.getItem('slyled_cal_markers');return s?JSON.parse(s):null;}catch(e){return null;}})();
 function _moverCalManualStart2(fixId){
-  var sm=_sfStageMm();
-  _manCal={fid:fixId,markers:[
-    {x:Math.round(sm.sw*0.2),y:Math.round(sm.sd*0.6),z:0},
-    {x:Math.round(sm.sw*0.8),y:Math.round(sm.sd*0.6),z:0},
-    {x:Math.round(sm.sw*0.2),y:Math.round(sm.sd*0.3),z:0},
-    {x:Math.round(sm.sw*0.8),y:Math.round(sm.sd*0.3),z:0}
-  ],step:'markers',currentIdx:0,samples:[],channels:null};
+  // Reuse persisted markers or start empty
+  var markers=_calMarkers?JSON.parse(JSON.stringify(_calMarkers)):[];
+  _manCal={fid:fixId,markers:markers,step:'markers',currentIdx:0,samples:[],channels:null};
   _manCalRender();
 }
 
@@ -7576,6 +7573,9 @@ function _manCalAddFromPick(selEl){
 
 function _manCalNextToJog(){
   if(_manCal.markers.length<2)return;
+  // Persist markers for reuse across fixtures and sessions
+  _calMarkers=JSON.parse(JSON.stringify(_manCal.markers));
+  try{localStorage.setItem('slyled_cal_markers',JSON.stringify(_calMarkers));}catch(e){}
   _manCal.step='jog';
   _manCal.currentIdx=0;
   _manCal.samples=[];
@@ -7597,10 +7597,14 @@ function _manCalNextToJog(){
     });
     _manCal.channels=ch;
     _manCal.allChannels=d.channels; // full channel list for DMX display
-    // Zero all fixture channels before jog so buffer is clean
+    // Set fixture to default jog state: all zero except dimmer=255, green=255
     var fid=_manCal.fid;
-    var zeroChs=d.channels.map(function(c){return{offset:c.offset,value:0};});
-    ra('POST','/api/dmx/fixture/'+fid+'/test',{channels:zeroChs},function(){
+    var initChs=d.channels.map(function(c){
+      if(c.type==='dimmer')return{offset:c.offset,value:255};
+      if(c.type==='green')return{offset:c.offset,value:255};
+      return{offset:c.offset,value:0};
+    });
+    ra('POST','/api/dmx/fixture/'+fid+'/test',{channels:initChs},function(){
       _manCalRender();
     });
   });
@@ -7626,7 +7630,8 @@ function _manCalRenderJog(fname){
   if(allCh.length){
     allCh.forEach(function(c){
       var isPan=(c.type==='pan'),isTilt=(c.type==='tilt');
-      var defVal=isPan?panVal:isTilt?tiltVal:(c.default||0);
+      var isDim=(c.type==='dimmer'),isGreen=(c.type==='green');
+      var defVal=isPan?panVal:isTilt?tiltVal:isDim?255:isGreen?255:(c.default||0);
       // Current value from last state or default
       var curVal=defVal;
       var highlight=isPan||isTilt?'color:#22d3ee;font-weight:600':'color:#94a3b8';
