@@ -15,10 +15,13 @@ The children already know how to run WIPE, SOLID, FADE etc — we just compute W
 """
 
 import io
+import logging
 import math
 import struct
 import time
 import zipfile
+
+log = logging.getLogger("slyled")
 
 BAKE_FPS = 40  # only used for preview generation
 LSQ_MAGIC = b"LSQ\x00"
