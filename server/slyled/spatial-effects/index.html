@@ -48,9 +48,6 @@ footer{text-align:center;padding:30px 0;color:#64748b;font-size:.85em;border-top
     <li>Motion paths with start/end positions and easing</li>
     <li>Blend modes: Replace, Add, Multiply, Screen</li>
     <li>Moving heads auto-track the effect center</li>
-    <li>Object Patrol — objects move automatically along paths during playback</li>
-    <li>Temporal objects from external tracking systems</li>
-    <li>Track action follows patrolling objects with real-time pan/tilt at 40Hz</li>
     <li>Bake engine samples beam cone volume for DMX intersection</li>
     <li>Real-time visualization in stage preview during playback</li>
   </ul>
@@ -64,5 +61,6 @@ footer{text-align:center;padding:30px 0;color:#64748b;font-size:.85em;border-top
   </div>
 </div>
 <footer><p><a href="../">SlyLED Home</a> &bull; <a href="https://github.com/SlyWombat/SlyLED">GitHub</a></p></footer>
+<script>fetch('/api/analytics/index.php?action=hit&page='+encodeURIComponent(location.pathname)+'&sw='+screen.width,{method:'POST',body:JSON.stringify({page:location.pathname,referrer:document.referrer,sw:screen.width}),headers:{'Content-Type':'application/json'}}).catch(function(){})</script>
 </body>
 </html>

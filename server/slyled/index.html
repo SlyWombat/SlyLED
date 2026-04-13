@@ -109,7 +109,7 @@ footer a{color:var(--accent)}
 <div class="hero">
   <div class="container">
     <img src="slyled.png" alt="SlyLED Logo">
-    <h1>SlyLED<span class="version-badge">v1.0</span></h1>
+    <h1>SlyLED<span class="version-badge">v1.4</span></h1>
     <p class="tagline" data-i="tagline"></p>
     <div class="badges">
       <span class="badge badge-win">&#x1F4BB; Windows</span>
@@ -154,6 +154,7 @@ footer a{color:var(--accent)}
       <a href="groups/" class="feature fade-in"><div class="icon">&#x1F91D;</div><h3 data-i="feat6t"></h3><p data-i="feat6p"></p></a>
       <a href="android/" class="feature fade-in"><div class="icon">&#x1F4F1;</div><h3 data-i="feat7t"></h3><p data-i="feat7p"></p></a>
       <a href="community/" class="feature fade-in"><div class="icon">&#x1F310;</div><h3 data-i="feat8t"></h3><p data-i="feat8p"></p></a>
+      <a href="3d-calibration/" class="feature fade-in" style="border-color:rgba(244,63,94,.3)"><div class="icon">&#x1F4D0;</div><h3 data-i="feat11t"></h3><p data-i="feat11p"></p></a>
       <a href="demo/" class="feature fade-in"><div class="icon">&#x1F3AD;</div><h3 data-i="feat9t"></h3><p data-i="feat9p"></p></a>
       <div class="feature fade-in"><div class="icon">&#x1F4F7;</div><h3 data-i="feat10t"></h3><p data-i="feat10p"></p></div>
     </div>
@@ -227,7 +228,7 @@ footer a{color:var(--accent)}
 // ── i18n ──────────────────────────────────────────────────────────────
 var I={
 en:{
-  tagline:"Design stunning lighting shows with 3D spatial effects, DMX moving heads, and addressable LED strips. Free and open-source.",
+  tagline:"Design stunning lighting shows with 3D spatial effects, camera-based calibration, stereo triangulation, and full DMX control. Free and open-source.",
   ctaWin:"Download for Windows",ctaAndroid:"Android APK",ctaGithub:"View on GitHub",ctaDemo:"See Demo \u2192",ctaManual:"User Manual (PDF)",
   ssTitle:"See It In Action",ssSub:"7-tab SPA with 2D/3D layout, timeline editor, live emulator, and DMX control",
   ssDash:"Dashboard \u2014 performer status, live show preview",ss3d:"3D Layout \u2014 beam cones, aim spheres, drag-to-position",
@@ -244,6 +245,7 @@ en:{
   feat8t:"Community Profiles",feat8p:"Share and download fixture profiles with the SlyLED community. Automatic duplicate detection. Browse by manufacturer or search.",
   feat9t:"Stage Objects & Patrol",feat9p:"Place walls, floors, and performer props on stage. Moving objects patrol back-and-forth automatically. Moving heads track them in real-time via the Track action.",
   feat10t:"AI Camera Detection",feat10p:"Orange Pi camera nodes with YOLOv8n object detection. Live snapshot preview with bounding box overlay, adjustable confidence threshold, and auto-refresh. Deploy firmware via SSH from the Firmware tab.",
+  feat11t:"3D Spatial Calibration",feat11p:"ArUco-based camera calibration, depth-estimated point clouds, stereo triangulation, per-fixture light maps, and beam-as-structured-light. All CV runs on the orchestrator \u2014 any camera works.",
   hwTitle:"Supported Hardware",hwSub:"WiFi-connected LED performers and DMX bridges",
   hw1:"Up to 8 LED strings on independent GPIO pins. OTA firmware updates. Multi-pin FastLED.",
   hw2:"Compact single-string controller. Perfect for portable installations. WS2812B on GPIO 2.",
@@ -261,7 +263,7 @@ en:{
   footDl:"Downloads",footManual:"User Manual (PDF)",footIssues:"Issues"
 },
 fr:{
-  tagline:"Cr\u00e9ez des spectacles lumineux \u00e9poustouflants avec des effets spatiaux 3D, des lyres DMX et des rubans LED adressables. Gratuit et open-source.",
+  tagline:"Cr\u00e9ez des spectacles lumineux \u00e9poustouflants avec des effets spatiaux 3D, calibration par cam\u00e9ra, triangulation st\u00e9r\u00e9o et contr\u00f4le DMX complet. Gratuit et open-source.",
   ctaWin:"T\u00e9l\u00e9charger pour Windows",ctaAndroid:"APK Android",ctaGithub:"Voir sur GitHub",ctaDemo:"Voir la d\u00e9mo \u2192",ctaManual:"Manuel (PDF)",
   ssTitle:"Voyez-le en action",ssSub:"SPA 7 onglets avec mise en page 2D/3D, \u00e9diteur de timeline, \u00e9mulateur en direct et contr\u00f4le DMX",
   ssDash:"Tableau de bord \u2014 \u00e9tat des performers, aper\u00e7u du spectacle",ss3d:"Mise en page 3D \u2014 c\u00f4nes de faisceau, sph\u00e8res de vis\u00e9e",
@@ -278,6 +280,7 @@ fr:{
   feat8t:"Profils communautaires",feat8p:"Partagez et t\u00e9l\u00e9chargez des profils de projecteurs avec la communaut\u00e9 SlyLED. D\u00e9tection automatique des doublons.",
   feat9t:"Objets de sc\u00e8ne & Patrouille",feat9p:"Placez murs, sols et accessoires sur sc\u00e8ne. Les objets mobiles patrouillent automatiquement. Les lyres les suivent en temps r\u00e9el via l\u2019action Track.",
   feat10t:"D\u00e9tection IA par cam\u00e9ra",feat10p:"N\u0153uds cam\u00e9ra Orange Pi avec d\u00e9tection d\u2019objets YOLOv8n. Aper\u00e7u en direct avec bo\u00eetes englobantes, seuil de confiance ajustable et rafra\u00eechissement automatique. D\u00e9ploiement du firmware via SSH.",
+  feat11t:"Calibration spatiale 3D",feat11p:"Calibration cam\u00e9ra par marqueurs ArUco, nuages de points par estimation de profondeur, triangulation st\u00e9r\u00e9o, cartographie lumineuse par projecteur. Tout le traitement CV tourne sur l\u2019orchestrateur.",
   hwTitle:"Mat\u00e9riel support\u00e9",hwSub:"Performers LED et ponts DMX connect\u00e9s en WiFi",
   hw1:"Jusqu\u2019\u00e0 8 rubans LED sur des broches GPIO ind\u00e9pendantes. Mises \u00e0 jour OTA. FastLED multi-broches.",
   hw2:"Contr\u00f4leur compact \u00e0 un ruban. Parfait pour les installations portables. WS2812B sur GPIO 2.",
@@ -343,5 +346,6 @@ document.querySelectorAll('.fade-in').forEach(function(el){obs.observe(el);});
   <img id="lb-img" src="" alt="">
 </div>
 
+<script>fetch('/api/analytics/index.php?action=hit&page='+encodeURIComponent(location.pathname)+'&sw='+screen.width,{method:'POST',body:JSON.stringify({page:location.pathname,referrer:document.referrer,sw:screen.width}),headers:{'Content-Type':'application/json'}}).catch(function(){})</script>
 </body>
 </html>

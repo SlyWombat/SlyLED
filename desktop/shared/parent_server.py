@@ -5426,14 +5426,23 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
             if prof_info:
                 profile = {"channel_map": prof_info.get("channel_map"), "channels": prof_info.get("channels", [])}
                 uni_buf = engine.get_universe(f.get("dmxUniverse", 1))
-                uni_buf.set_fixture_pan_tilt(f.get("dmxStartAddr", 1), pan, tilt, profile)
+                addr = f.get("dmxStartAddr", 1)
+                uni_buf.set_fixture_pan_tilt(addr, pan, tilt, profile)
+                # Track action also sets dimmer + color so the beam is visible
+                tr = ta.get("trackDimmer", 255)
+                uni_buf.set_fixture_dimmer(addr, tr, profile)
+                uni_buf.set_fixture_rgb(addr, ta.get("r", 255), ta.get("g", 255), ta.get("b", 255), profile)
 
 def _dmx_playback_loop(tid, go_epoch, duration, loop):
     """Background thread: stream DMX channel data during show playback."""
     result = _bake_result.get(tid)
-    if not result:
-        log.warning("DMX playback: no bake result for timeline %d", tid)
+    has_track_actions = any(a.get("type") == 18 for a in _actions)
+    if not result and not has_track_actions:
+        log.warning("DMX playback: no bake result for timeline %d and no Track actions", tid)
         return
+    if not result:
+        log.info("DMX playback: no bake result but Track actions present — running for tracking")
+        result = {"fixtures": {}}
     baked_fixtures = result.get("fixtures", {})
     # Collect DMX fixtures with their baked segments
     dmx_fixtures = []
@@ -5458,9 +5467,12 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
         dmx_fixtures.append({"fid": fid, "name": f.get("name", "?"),
                              "uni": uni, "addr": addr, "ch_map": ch_map,
                              "channels": channels, "segs": segs})
-    if not dmx_fixtures:
-        log.warning("DMX playback: no DMX fixtures with segments found")
+    has_track_actions = any(a.get("type") == 18 for a in _actions)
+    if not dmx_fixtures and not has_track_actions:
+        log.warning("DMX playback: no DMX fixtures with segments and no Track actions")
         return
+    if not dmx_fixtures:
+        log.info("DMX playback: no baked segments but Track actions present — loop will run for tracking")
     log.info("DMX playback: %d fixture(s), duration=%ds, loop=%s", len(dmx_fixtures), duration, loop)
     # Auto-start Art-Net engine if not running
     proto = _dmx_settings.get("protocol", "artnet")
@@ -5582,7 +5594,8 @@ def api_timeline_start(tid):
     tl = next((t for t in _timelines if t["id"] == tid), None)
     if not tl:
         return jsonify(err="Not found"), 404
-    if tid not in _bake_result:
+    has_track_actions = any(a.get("type") == 18 for a in _actions)
+    if tid not in _bake_result and not has_track_actions:
         return jsonify(err="Timeline not baked yet - bake first"), 400
 
     # Check sync is done
@@ -6063,7 +6076,7 @@ _ACTION_FIELDS = ("name", "type", "scope", "canvasEffect", "targetIds", "r", "g"
                   "onMs", "offMs", "wipeDir", "wipeSpeedPct",  # legacy compat
                   "wledFxOverride", "wledPalOverride", "wledSegId",  # WLED overrides
                   "trackObjectIds", "trackCycleMs", "trackOffset",  # Track action
-                  "trackFixtureIds", "trackFixtureOffsets", "trackAutoSpread", "trackFixedAssignment",
+                  "trackFixtureIds", "trackFixtureOffsets", "trackAutoSpread", "trackFixedAssignment", "trackDimmer",
                   "dimmer", "pan", "tilt", "strobe", "gobo", "colorWheel", "prism",  # DMX channels
                   "ptStartPos", "ptEndPos")  # Pan/Tilt Move: stage coordinate positions [x,y,z] mm
 

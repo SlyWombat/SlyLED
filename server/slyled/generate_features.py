@@ -149,6 +149,28 @@ FEATURES = [
         "screenshots": ["12-settings.png", "10-actions.png"],
         "captions": ["Community browser in Settings", "Profile management"],
     },
+    {
+        "slug": "3d-calibration",
+        "title": "3D Spatial Calibration",
+        "icon": "&#x1F4D0;",
+        "color": "#f43f5e",
+        "hero": "Camera-based venue mapping and fixture calibration",
+        "desc": "Transform your venue into a calibrated 3D stage. ArUco markers map camera positions, depth estimation builds point clouds, and moving heads auto-calibrate their pan/tilt ranges — all from the orchestrator with any camera hardware.",
+        "bullets": [
+            "ArUco marker detection runs on the orchestrator — any camera works",
+            "Stage Map: solvePnP computes camera 3D pose from floor markers",
+            "Depth-Anything-V2 monocular depth for environment point clouds",
+            "RANSAC surface detection: floor, walls, and obstacles",
+            "Adaptive settle time: 0.8-2.5s with double-capture verification",
+            "Boundary-aware BFS: stops when beam leaves camera view",
+            "Per-fixture light maps: (pan, tilt) &rarr; (x, y, z) in stage mm",
+            "Stereo triangulation from 2+ cameras for object tracking",
+            "Beam-as-structured-light refines 3D model during calibration",
+            "Point cloud + calibration data included in .slyshow project files",
+        ],
+        "screenshots": ["spa-settings-cameras.png", "spa-layout-3d.png"],
+        "captions": ["Camera calibration status in Settings", "3D viewport with scanned point cloud and surfaces"],
+    },
 ]
 
 TEMPLATE = """<!DOCTYPE html>
@@ -208,6 +230,7 @@ footer{{text-align:center;padding:30px 0;color:#64748b;font-size:.85em;border-to
   </div>
 </div>
 <footer><p><a href="../">SlyLED Home</a> &bull; <a href="https://github.com/SlyWombat/SlyLED">GitHub</a></p></footer>
+<script>fetch('/api/analytics/index.php?action=hit&page='+encodeURIComponent(location.pathname)+'&sw='+screen.width,{{method:'POST',body:JSON.stringify({{page:location.pathname,referrer:document.referrer,sw:screen.width}}),headers:{{'Content-Type':'application/json'}}}}).catch(function(){{}})</script>
 </body>
 </html>"""
 

@@ -48,8 +48,6 @@ footer{text-align:center;padding:30px 0;color:#64748b;font-size:.85em;border-top
     <li>Spatial effect clips with 3D position-based rendering</li>
     <li>Smart bake: analyzes spatial geometry, emits optimal actions</li>
     <li>NTP-synced playback across all performers</li>
-    <li>Object Patrol evaluated at 40Hz in the playback loop</li>
-    <li>Track action produces real-time pan/tilt during playback (NOT baked — evaluates live)</li>
     <li>14 preset shows (Rainbow, Aurora, Disco, etc.)</li>
     <li>Preview emulator with real-time fixture visualization</li>
   </ul>
@@ -63,5 +61,6 @@ footer{text-align:center;padding:30px 0;color:#64748b;font-size:.85em;border-top
   </div>
 </div>
 <footer><p><a href="../">SlyLED Home</a> &bull; <a href="https://github.com/SlyWombat/SlyLED">GitHub</a></p></footer>
+<script>fetch('/api/analytics/index.php?action=hit&page='+encodeURIComponent(location.pathname)+'&sw='+screen.width,{method:'POST',body:JSON.stringify({page:location.pathname,referrer:document.referrer,sw:screen.width}),headers:{'Content-Type':'application/json'}}).catch(function(){})</script>
 </body>
 </html>

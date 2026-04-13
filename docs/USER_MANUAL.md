@@ -17,7 +17,8 @@
 14. [Firmware & OTA Updates](#14-firmware)
 15. [System Limits](#15-limits)
 16. [Troubleshooting](#16-troubleshooting)
-17. [API Quick Reference](#17-api)
+17. [Examples](#17-examples)
+18. [API Quick Reference](#18-api)
 
 ---
 
@@ -558,7 +559,185 @@ See `docs/STRESS_TEST.md` for full benchmark data.
 
 ---
 
-## 17. API Quick Reference
+## 17. Examples
+
+### Example A: Camera Tracking — Moving Heads Follow a Person (#376)
+
+Make DMX moving heads automatically follow people detected by a camera.
+
+**Prerequisites:**
+- At least one camera node online (Firmware tab → deploy + verify)
+- At least one DMX moving head fixture placed on the Layout tab
+- Moving head profile configured with pan/tilt range
+- Art-Net/sACN engine running (Settings → DMX → Start)
+- Mover calibration completed (see Example C) for accurate aiming
+
+**Steps:**
+
+1. **Verify hardware** — Open the Setup tab. Confirm your movers show green status and camera nodes show online. If cameras are offline, check WiFi and deploy firmware from the Firmware tab.
+
+2. **Start camera tracking** — Go to the Layout tab. Click a camera fixture to select it. Click the **Track** toggle button. The status bar shows "Tracking active — watching for people." The camera node begins running YOLO person detection at 2 fps and creates temporal stage objects for each detected person.
+
+3. **Create a Track action** — Go to the Actions tab. Click **+ New Action**.
+   - **Name:** `Person Follow`
+   - **Type:** `Track` (last option in the dropdown)
+   - **Colour:** Pick the beam color (e.g. red for a spotlight)
+   - Leave **Target Objects** empty — this means "follow ALL detected people"
+   - **Cycle Time:** 2000 ms (how fast heads switch if cycling)
+   - Check **Fixed assignment** if you want strict 1:1 (head 1 = person 1, extras ignored)
+   - Click **Save Action**
+
+4. **Create a timeline** — Go to the Shows tab. Click **+ New Timeline**, name it "Person Tracking", set duration to 600s, enable **Loop**. The timeline can be empty — Track actions evaluate globally during any playback.
+
+5. **Start playback** — Click **Bake**, then **Start**. The 40 Hz DMX playback loop begins. The Track action reads all moving temporal objects (detected people), computes pan/tilt for each head, sets dimmer and color, and sends Art-Net packets to the bridge.
+
+6. **Test** — Walk in front of the camera. Within 2 seconds a pink person marker appears in the 3D viewport. The moving heads should light up in your chosen color and aim at you.
+
+**Assignment behavior:**
+
+| People in view | With 2 moving heads |
+|----------------|---------------------|
+| 1 person | Both heads aim at the same person |
+| 2 people | One head per person (1:1) |
+| 3+ people (cycling) | Heads cycle through people every 2s |
+| 3+ people (fixed) | First 2 tracked, 3rd ignored |
+
+**Troubleshooting:**
+
+| Problem | Solution |
+|---------|----------|
+| No person markers in 3D | Check camera node status — is tracking running? Try a manual Scan to verify detection works. |
+| Person detected but heads don't move | Check Art-Net engine is running. Check mover calibration. Verify timeline playback is active. |
+| Heads light up but aim at wrong position | Run mover calibration (Example C). Without calibration, the system uses geometric estimates which may be inaccurate. |
+| Heads respond with delay | Normal — detection runs at 2 fps with ~1s capture latency. Temporal objects have 5s TTL. |
+
+---
+
+### Example B: Mover Tracking with Spatial Effects (#379)
+
+Make moving heads follow a virtual object sweeping across the stage — no camera required.
+
+**Steps:**
+
+1. **Set stage dimensions** — Settings tab → set Width, Height, Depth (e.g. 6 m x 3 m x 4 m)
+
+2. **Create a DMX profile** — Settings → Profiles → **New Profile**:
+   - Name: `Narrow Spot`
+   - Beam Width: 8 degrees
+   - Pan Range: 540, Tilt Range: 270
+   - Channels: Pan (16-bit), Tilt (16-bit), Dimmer, Red, Green, Blue
+   - Click Save
+
+3. **Add two movers** — Setup tab → **+ DMX Fixture** (twice):
+   - Fixture 1: `Stage Left`, Universe 1, Address 1, profile `Narrow Spot`
+   - Fixture 2: `Stage Right`, Universe 1, Address 14, profile `Narrow Spot`
+
+4. **Position in 3D** — Layout tab → drag each mover to the truss positions. Use the 3D viewport to verify they're elevated and aimed downward.
+
+5. **Create a moving object** — Layout tab → **+ Object**:
+   - Name: `Performer`
+   - Type: Prop
+   - Mobility: Moving
+   - Patrol: Enabled, Side-to-side (X), Medium speed, 10%–90% range
+
+6. **Create a Track action** — Actions tab → **+ New Action**:
+   - Type: Track
+   - Colour: Green
+   - Leave targets empty (tracks the patrolling object automatically)
+
+7. **Create and bake a timeline** — Shows tab → **+ New Timeline**, 60s, Loop. Click **Bake**.
+
+8. **Start playback** — Runtime tab → click **Start**. The 3D viewport shows two beam cones tracking the green object as it patrols back and forth across the stage.
+
+---
+
+### Example C: Manual Mover Calibration (#381)
+
+Calibrate a moving head so the system knows exactly where its beam lands for any pan/tilt position.
+
+**Prerequisites:**
+- Camera node positioned on the Layout tab with camera calibration complete (Example D)
+- Moving head fixture placed on the Layout tab
+- Art-Net engine running
+- Dim ambient lighting (beam must be visible to the camera)
+
+**Steps:**
+
+1. **Open calibration** — Layout tab → double-click a moving head → click **Calibrate**
+
+2. **Choose beam color** — Select a color that contrasts with your floor (Green works on dark floors, Magenta on light floors)
+
+3. **Run discovery** — Click **Start Calibration**. The fixture sweeps a coarse pan/tilt grid. The camera watches for the beam landing on the floor. Discovery identifies the visible pan/tilt range.
+
+4. **Grid build** — The system automatically samples points across the visible range. At each position, the camera records the exact stage coordinates where the beam lands. Progress shows in real-time.
+
+5. **Review results** — The calibration summary shows:
+   - Number of grid samples
+   - Pan range (normalized 0.0–1.0)
+   - Tilt range (normalized 0.0–1.0)
+   - Grid density
+
+6. **Verify aim** — Use the **Aim** button to point the head at a known stage position. Confirm the beam lands where expected.
+
+7. **Save** — Calibration data is automatically saved with the fixture. Track actions and Pan/Tilt Move actions use it automatically.
+
+**Manual calibration (alternative):**
+
+If automated calibration isn't available, use the manual calibration wizard:
+
+1. Layout tab → double-click mover → **Manual Calibrate**
+2. Add sample points: for each, jog the beam to a known stage position using the sliders, then enter the X/Y/Z coordinates
+3. Add at least 4 samples spread across the stage for a good grid
+4. Click **Compute** — the system builds an affine transform from your samples
+5. The transform extrapolates beyond calibrated points for full-stage coverage
+
+**When to re-calibrate:**
+- Fixture physically moved to a new position
+- Venue change (different stage dimensions)
+- After firmware update that changes pan/tilt range
+
+---
+
+### Example D: Camera Calibration with ArUco Markers (#380)
+
+Calibrate a camera so pixel coordinates can be mapped to real stage positions.
+
+**Prerequisites:**
+- Camera node online (Firmware tab → deploy)
+- Camera fixture placed on the Layout tab
+- Printer for ArUco marker sheets
+
+**Steps:**
+
+1. **Print ArUco markers** — Settings → Cameras → **Print Markers**. Print the full-page marker sheet. Each marker has a unique ID number.
+
+2. **Place markers on stage** — Position the printed markers at known locations on the stage floor. Record the real-world coordinates (X, Y in mm) for each marker. Spread markers across the visible area — at least 3 points, ideally 4+ covering all corners.
+
+3. **Register camera** — If not already done, add the camera node via Settings → Cameras → **Scan for Boards** → **Register**.
+
+4. **Position the camera** — Layout tab → drag the camera fixture to its physical position. Set the rotation to match the camera's actual aim direction.
+
+5. **Run calibration** — Layout tab → click camera → **Calibrate**:
+   - The camera captures a frame and detects all visible ArUco markers
+   - For each detected marker, enter its real-world stage coordinates (X, Y in mm)
+   - Click **Compute** — the system builds a homography matrix mapping pixels to stage coords
+
+6. **Verify** — The calibration summary shows:
+   - Reprojection error (lower is better, < 20mm is good)
+   - Number of reference points used
+   - Coverage area on stage
+
+7. **Apply** — Calibration is saved to the camera fixture. All tracking and detection features now output real stage coordinates instead of raw pixels.
+
+**Tips:**
+- Use large markers (> 10 cm) for reliable detection at distance
+- Place markers flat on the floor — tilted markers reduce accuracy
+- More reference points = better accuracy, especially at the edges of the camera's view
+- Re-calibrate if the camera is physically moved
+
+---
+
+## 18. API Quick Reference
 
 ### Stage & Layout
 | Method | Endpoint | Description |

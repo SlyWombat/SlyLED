@@ -1912,7 +1912,14 @@ def track_start():
     if tracker.running:
         return jsonify(ok=True, message="Already tracking")
 
-    tracker.start(cameras[cam_idx]["device"], orch_url=orch_url,
+    device = cameras[cam_idx]["device"]
+    # Validate camera capture works before starting tracker thread
+    test_frame = _cv_capture(device, timeout=5)
+    if test_frame is None:
+        return jsonify(ok=False, err=f"Camera {cam_idx} ({device}) capture failed — cannot start tracking"), 503
+    log.info("Track start: test capture OK on %s (%dx%d)", device, test_frame.shape[1], test_frame.shape[0])
+
+    tracker.start(device, orch_url=orch_url,
                   camera_id=camera_id, fps=fps, threshold=threshold, ttl=ttl)
     return jsonify(ok=True, message="Tracking started")
 
@@ -1932,6 +1939,14 @@ def track_status():
         running=tracker.running if tracker else False,
         trackCount=tracker.track_count if tracker else 0,
     )
+
+@app.get("/track/debug")
+def track_debug():
+    """Detailed tracker diagnostics."""
+    tracker = _get_tracker()
+    if tracker is None:
+        return jsonify(available=False, err="Tracker not initialized")
+    return jsonify(available=True, **tracker.debug_info)
 
 # ── UDP protocol (PING/PONG + STATUS) ─────────────────────────────────
 

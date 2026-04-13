@@ -41,6 +41,10 @@ class Tracker:
         self._lock = threading.Lock()
         self._tracks = {}
         self._next_track_id = 0
+        self._tick_count = 0
+        self._capture_fail_count = 0
+        self._detect_count = 0
+        self._last_error = None
 
     @property
     def running(self):
@@ -49,6 +53,18 @@ class Tracker:
     @property
     def track_count(self):
         return len(self._tracks)
+
+    @property
+    def debug_info(self):
+        return {
+            "running": self._running,
+            "trackCount": len(self._tracks),
+            "ticks": self._tick_count,
+            "captureFails": self._capture_fail_count,
+            "detections": self._detect_count,
+            "lastError": self._last_error,
+            "orchestratorUrl": self._orch_url,
+        }
 
     def start(self, device, orch_url="", camera_id=0,
               fps=2, threshold=0.4, ttl=5):
@@ -77,21 +93,38 @@ class Tracker:
 
     def _loop(self, device):
         interval = 1.0 / max(self._fps, 0.1)
+        tick_count = 0
+        fail_count = 0
         while self._running:
             t0 = time.monotonic()
             try:
                 self._tick(device)
+                tick_count += 1
+                if tick_count == 1:
+                    log.info("Tracking: first tick OK on %s", device)
             except Exception as e:
-                log.warning("Tracking tick error: %s", e)
+                fail_count += 1
+                self._last_error = str(e)
+                log.warning("Tracking tick error (#%d): %s", fail_count, e)
+                if fail_count >= 10 and tick_count == 0:
+                    log.error("Tracking: 10 consecutive failures with no success — stopping")
+                    self._running = False
+                    break
             elapsed = time.monotonic() - t0
             sleep_time = interval - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
+        log.info("Tracking loop exited: %d ticks, %d errors", tick_count, fail_count)
 
     def _tick(self, device):
+        self._tick_count += 1
         # Capture frame
         frame = self._capture(device)
         if frame is None:
+            self._capture_fail_count += 1
+            if self._capture_fail_count <= 3 or self._capture_fail_count % 20 == 0:
+                log.warning("Tracking: capture returned None for %s (fail #%d)",
+                            device, self._capture_fail_count)
             return
 
         # Run detection
@@ -100,6 +133,7 @@ class Tracker:
                                                 input_size=320)
         if not detections:
             return
+        self._detect_count += len(detections)
 
         # Transform to stage coords if available
         frame_h, frame_w = frame.shape[:2]
@@ -179,7 +213,9 @@ class Tracker:
             r = json.loads(resp.read().decode())
             return r.get("id")
         except Exception as e:
-            log.debug("Failed to create temporal object: %s", e)
+            self._last_error = f"create_temporal: {e}"
+            log.warning("Failed to create temporal object at %s: %s",
+                        self._orch_url, e)
             return None
 
     def _orch_update_pos(self, obj_id, x, z):

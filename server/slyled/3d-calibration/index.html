@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SlyLED — Fixture Groups</title>
+<title>SlyLED — 3D Spatial Calibration</title>
 <link rel="icon" type="image/x-icon" href="../slyled.ico">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Inter:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -14,13 +14,13 @@ a{color:#22d3ee;text-decoration:none}a:hover{text-decoration:underline}
 .container{max-width:800px;margin:0 auto;padding:0 20px}
 header{padding:40px 0 30px;text-align:center}
 header .icon{font-size:3em;margin-bottom:12px}
-header h1{font-size:2.2em;color:#22d3ee}
+header h1{font-size:2.2em;color:#f43f5e}
 header p{color:#94a3b8;font-size:1.1em;margin-top:8px;max-width:600px;margin-left:auto;margin-right:auto}
 .back{display:inline-block;margin-top:16px;padding:8px 20px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#94a3b8;font-size:.85em;transition:all .2s}
 .back:hover{border-color:#22d3ee;color:#22d3ee;text-decoration:none}
 .bullets{list-style:none;margin:30px 0;padding:0}
 .bullets li{padding:10px 0 10px 28px;position:relative;color:#94a3b8;font-size:.95em;border-bottom:1px solid #1e293b}
-.bullets li::before{content:'\2713';position:absolute;left:0;color:#22d3ee;font-weight:bold}
+.bullets li::before{content:'\2713';position:absolute;left:0;color:#f43f5e;font-weight:bold}
 .screenshots{display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:16px;margin:30px 0}
 .screenshots figure{margin:0;border-radius:10px;overflow:hidden;border:1px solid #334155}
 .screenshots img{width:100%;display:block}
@@ -35,25 +35,29 @@ footer{text-align:center;padding:30px 0;color:#64748b;font-size:.85em;border-top
 <body>
 <header>
   <div class="container">
-    <div class="icon">&#x1F91D;</div>
-    <h1>Fixture Groups</h1>
-    <p>Control multiple fixtures as one</p>
+    <div class="icon">&#x1F4D0;</div>
+    <h1>3D Spatial Calibration</h1>
+    <p>Camera-based venue mapping and fixture calibration</p>
     <a href="../" class="back">&larr; Back to SlyLED</a>
   </div>
 </header>
 <div class="container">
-  <p style="font-size:1.05em;margin-bottom:20px">Group DMX fixtures and control them with a master dimmer, RGB color sliders, and quick preset buttons. Groups are targetable in timelines for coordinated shows.</p>
+  <p style="font-size:1.05em;margin-bottom:20px">Transform your venue into a calibrated 3D stage. ArUco markers map camera positions, depth estimation builds point clouds, and moving heads auto-calibrate their pan/tilt ranges — all from the orchestrator with any camera hardware.</p>
   <ul class="bullets">
-    <li>Master dimmer slider per group</li>
-    <li>R/G/B sliders for live color mixing</li>
-    <li>Quick presets: Warm, Cool, Red, Off</li>
-    <li>Groups targetable in timeline tracks</li>
-    <li>Profile-aware channel mapping (finds R/G/B/dimmer channels)</li>
-    <li>Works with any DMX fixture type</li>
+    <li>ArUco marker detection runs on the orchestrator — any camera works</li>
+    <li>Stage Map: solvePnP computes camera 3D pose from floor markers</li>
+    <li>Depth-Anything-V2 monocular depth for environment point clouds</li>
+    <li>RANSAC surface detection: floor, walls, and obstacles</li>
+    <li>Adaptive settle time: 0.8-2.5s with double-capture verification</li>
+    <li>Boundary-aware BFS: stops when beam leaves camera view</li>
+    <li>Per-fixture light maps: (pan, tilt) &rarr; (x, y, z) in stage mm</li>
+    <li>Stereo triangulation from 2+ cameras for object tracking</li>
+    <li>Beam-as-structured-light refines 3D model during calibration</li>
+    <li>Point cloud + calibration data included in .slyshow project files</li>
   </ul>
   <div class="screenshots">
-    <figure><img src="../demo/06-setup-performer.png" alt="Setup with fixture groups" loading="lazy"><figcaption>Setup with fixture groups</figcaption></figure>
-    <figure><img src="../demo/12-settings.png" alt="Group control panel in Settings" loading="lazy"><figcaption>Group control panel in Settings</figcaption></figure>
+    <figure><img src="../demo/spa-settings-cameras.png" alt="Camera calibration status in Settings" loading="lazy"><figcaption>Camera calibration status in Settings</figcaption></figure>
+    <figure><img src="../demo/spa-layout-3d.png" alt="3D viewport with scanned point cloud and surfaces" loading="lazy"><figcaption>3D viewport with scanned point cloud and surfaces</figcaption></figure>
   </div>
   <div class="cta">
     <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="cta-dl">Download SlyLED</a>

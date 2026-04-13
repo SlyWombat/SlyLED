@@ -3,7 +3,7 @@
 ; Or:    run build.bat — it calls iscc automatically if available.
 
 #define AppName      "SlyLED Orchestrator"
-#define AppVersion   "1.4.17"
+#define AppVersion   "1.4.28"
 #define AppPublisher "Electric RV Corporation"
 #define AppExeName   "SlyLED.exe"
 ; Unique GUID for this app — keep fixed across releases so updates overwrite
@@ -38,7 +38,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
 Name: "startuprun";  Description: "Start SlyLED when &Windows starts (runs minimised to tray)"; GroupDescription: "Startup:"; Flags: unchecked
-Name: "serviceinstall"; Description: "Install management console as Windows &service (auto-start on boot, no login required)"; GroupDescription: "Startup:"
+
 
 [Files]
 ; Main executable — compiled by PyInstaller
@@ -69,18 +69,10 @@ Filename: "netsh"; \
   Parameters: "advfirewall firewall add rule name=""SlyLED HTTP 8080"" dir=in action=allow protocol=TCP localport=8080 description=""SlyLED web UI"""; \
   Flags: runhidden waituntilterminated; StatusMsg: "Configuring firewall (TCP 8080)..."
 
-; Install as scheduled task (runs at system startup, before login, with restart on failure)
-Filename: "schtasks"; \
-  Parameters: "/create /tn ""SlyLED Management Console"" /tr """"""{app}\SlyLED.exe"""""" --no-browser"" /sc onstart /ru SYSTEM /rl highest /f"; \
-  Tasks: serviceinstall; \
-  Flags: runhidden waituntilterminated; StatusMsg: "Installing SlyLED service..."
-
 [UninstallRun]
 ; Kill any running instance before uninstalling
 Filename: "taskkill"; Parameters: "/f /im SlyLED.exe"; Flags: runhidden; RunOnceId: "KillSlyLED"
 
-; Remove scheduled task service
-Filename: "schtasks"; Parameters: "/delete /tn ""SlyLED Management Console"" /f"; Flags: runhidden; RunOnceId: "DelSvc"
 
 ; Remove firewall rules
 Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED UDP 4210"""; Flags: runhidden; RunOnceId: "FwUDP4210"

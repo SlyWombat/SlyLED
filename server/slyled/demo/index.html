@@ -190,7 +190,7 @@ footer{text-align:center;padding:40px 0;color:#64748b;font-size:.85em;border-top
     <p><a href="https://github.com/SlyWombat/SlyLED/releases/latest">Download SlyLED</a> &bull; <a href="../">Home</a> &bull; <a href="https://github.com/SlyWombat/SlyLED">GitHub</a></p>
   </div>
 </footer>
-
+<script>fetch('/api/analytics/index.php?action=hit&page='+encodeURIComponent(location.pathname)+'&sw='+screen.width,{method:'POST',body:JSON.stringify({page:location.pathname,referrer:document.referrer,sw:screen.width}),headers:{'Content-Type':'application/json'}}).catch(function(){})</script>
 </body>
 </html>
 

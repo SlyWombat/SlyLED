@@ -48,9 +48,7 @@ footer{text-align:center;padding:30px 0;color:#64748b;font-size:.85em;border-top
     <li>Multi-universe routing to specific bridges</li>
     <li>Live 512-channel DMX monitor with click-to-set</li>
     <li>Per-channel testing with quick color buttons</li>
-    <li>Track action (type 18) for real-time moving head following at 40Hz</li>
-    <li>700+ fixture profiles via unified search (Local + Community + OFL)</li>
-    <li>Fixture wizard with 3-step setup</li>
+    <li>Fixture profiles from OFL (search + bulk import)</li>
     <li>Community profile sharing at electricrv.ca</li>
   </ul>
   <div class="screenshots">
@@ -63,5 +61,6 @@ footer{text-align:center;padding:30px 0;color:#64748b;font-size:.85em;border-top
   </div>
 </div>
 <footer><p><a href="../">SlyLED Home</a> &bull; <a href="https://github.com/SlyWombat/SlyLED">GitHub</a></p></footer>
+<script>fetch('/api/analytics/index.php?action=hit&page='+encodeURIComponent(location.pathname)+'&sw='+screen.width,{method:'POST',body:JSON.stringify({page:location.pathname,referrer:document.referrer,sw:screen.width}),headers:{'Content-Type':'application/json'}}).catch(function(){})</script>
 </body>
 </html>
