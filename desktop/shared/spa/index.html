@@ -7668,9 +7668,7 @@ function _manCalRenderJog(fname){
   h+='</div></div>';
   document.getElementById('modal-title').textContent=escapeHtml(fname)+' \u2014 '+addr+' \u2014 Jog';
   document.getElementById('modal-body').innerHTML=h;
-  // Send initial pan/tilt
-  _manCalJog('pan',panVal);
-  _manCalJog('tilt',tiltVal);
+  // Do NOT send DMX on render — only send when user moves a slider (#368)
 }
 
 function _manCalJogCh(offset,value){
