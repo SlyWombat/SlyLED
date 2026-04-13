@@ -2645,6 +2645,65 @@ def api_mover_cal_aim(fid):
     return jsonify(err="Provide pixelX/pixelY"), 400
 
 
+@app.post("/api/calibration/mover/<int:fid>/manual")
+def api_mover_cal_manual(fid):
+    """Save manual calibration from jog marker samples (#368).
+
+    Body: {samples: [{pan, tilt, stageX, stageY, stageZ}, ...]}
+    The grid maps pan/tilt → stage coords (not pixels), so grid_inverse
+    returns pan/tilt from a stage target directly.
+    """
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f or f.get("fixtureType") != "dmx":
+        return jsonify(err="DMX fixture not found"), 404
+    body = request.get_json(silent=True) or {}
+    samples = body.get("samples", [])
+    if len(samples) < 2:
+        return jsonify(err="Need at least 2 calibration samples"), 400
+
+    # Build grid using stage coords as the "pixel" dimension
+    grid_samples = [(s["pan"], s["tilt"], s["stageX"], s["stageY"]) for s in samples]
+    grid = None
+    if len(grid_samples) >= 4:
+        try:
+            grid = _mcal.build_grid(grid_samples)
+        except Exception as e:
+            log.warning("Manual calibration grid build failed: %s", e)
+
+    avg_pan = sum(s["pan"] for s in samples) / len(samples)
+    avg_tilt = sum(s["tilt"] for s in samples) / len(samples)
+    avg_x = sum(s["stageX"] for s in samples) / len(samples)
+    avg_y = sum(s["stageY"] for s in samples) / len(samples)
+    avg_z = sum(s.get("stageZ", 0) for s in samples) / len(samples)
+
+    # Compute boundaries from samples
+    pans = [s["pan"] for s in samples]
+    tilts = [s["tilt"] for s in samples]
+
+    cal_data = {
+        "method": "manual",
+        "samples": samples,
+        "grid": grid,
+        "boundaries": {
+            "panMin": round(min(pans), 3), "panMax": round(max(pans), 3),
+            "tiltMin": round(min(tilts), 3), "tiltMax": round(max(tilts), 3),
+            "verified": False,
+        },
+        "centerPan": round(avg_pan, 4),
+        "centerTilt": round(avg_tilt, 4),
+        "centerTarget": [round(avg_x), round(avg_y), round(avg_z)],
+        "sampleCount": len(samples),
+        "timestamp": time.time(),
+    }
+    _mover_cal[str(fid)] = cal_data
+    _save("mover_calibrations", _mover_cal)
+    f["moverCalibrated"] = True
+    _save("fixtures", _fixtures)
+    log.info("Manual calibration saved for fixture %d: %d samples, grid=%s",
+             fid, len(samples), "yes" if grid else "no")
+    return jsonify(ok=True, sampleCount=len(samples), hasGrid=grid is not None)
+
+
 def pixel_to_pan_tilt(fixture_id, px, py):
     """Direct pixel→pan/tilt lookup using mover calibration grid.
     Returns (pan, tilt) or None if not calibrated."""
