@@ -1242,41 +1242,56 @@ def grid_inverse(grid, target_px, target_py, iterations=20):
     return (pan, tilt)
 
 
-def affine_pan_tilt(samples, target_x, target_y):
+def affine_pan_tilt(samples, target_x, target_y, target_z=0):
     """Compute pan/tilt for a stage position using affine transform from manual samples.
 
-    Fits: pan = a1*x + b1*y + c1, tilt = a2*x + b2*y + c2
+    Fits 3D: pan = a1*x + b1*y + c1*z + d1, tilt = a2*x + b2*y + c2*z + d2
+    Falls back to 2D if samples lack Z or have < 3 samples with distinct Z.
     Works for extrapolation beyond the calibrated range (#371).
 
-    samples: list of {pan, tilt, stageX, stageY} dicts (or 4-tuples)
+    samples: list of {pan, tilt, stageX, stageY, stageZ?} dicts (or tuples)
     Returns: (pan, tilt) or None
     """
     if len(samples) < 2:
         return None
-    # Extract data
+    # Extract data — include Z if available
     pts = []
     for s in samples:
         if isinstance(s, dict):
-            pts.append((s["pan"], s["tilt"], s["stageX"], s["stageY"]))
+            pts.append((s["pan"], s["tilt"], s["stageX"], s["stageY"],
+                        s.get("stageZ", 0)))
+        elif len(s) >= 5:
+            pts.append((s[0], s[1], s[2], s[3], s[4]))
         else:
-            pts.append((s[0], s[1], s[2], s[3]))
+            pts.append((s[0], s[1], s[2], s[3], 0))
 
     import numpy as np
-    n = len(pts)
-    # Build matrix A: [x, y, 1] for each sample
-    A = np.array([[p[2], p[3], 1.0] for p in pts])
+    # Use 3D if samples have distinct Z values, else 2D
+    z_vals = set(p[4] for p in pts)
+    use_3d = len(z_vals) > 1 and len(pts) >= 3
+
+    if use_3d:
+        A = np.array([[p[2], p[3], p[4], 1.0] for p in pts])
+    else:
+        A = np.array([[p[2], p[3], 1.0] for p in pts])
     pan_vals = np.array([p[0] for p in pts])
     tilt_vals = np.array([p[1] for p in pts])
 
-    # Least-squares solve (works for 2+ samples)
+    # Least-squares solve
     try:
         pan_coeffs, _, _, _ = np.linalg.lstsq(A, pan_vals, rcond=None)
         tilt_coeffs, _, _, _ = np.linalg.lstsq(A, tilt_vals, rcond=None)
     except Exception:
         return None
 
-    pan = float(pan_coeffs[0] * target_x + pan_coeffs[1] * target_y + pan_coeffs[2])
-    tilt = float(tilt_coeffs[0] * target_x + tilt_coeffs[1] * target_y + tilt_coeffs[2])
+    if use_3d:
+        pan = float(pan_coeffs[0] * target_x + pan_coeffs[1] * target_y +
+                     pan_coeffs[2] * target_z + pan_coeffs[3])
+        tilt = float(tilt_coeffs[0] * target_x + tilt_coeffs[1] * target_y +
+                      tilt_coeffs[2] * target_z + tilt_coeffs[3])
+    else:
+        pan = float(pan_coeffs[0] * target_x + pan_coeffs[1] * target_y + pan_coeffs[2])
+        tilt = float(tilt_coeffs[0] * target_x + tilt_coeffs[1] * target_y + tilt_coeffs[2])
     return (max(0.0, min(1.0, pan)), max(0.0, min(1.0, tilt)))
 
 

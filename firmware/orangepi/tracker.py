@@ -135,15 +135,19 @@ class Tracker:
             return
         self._detect_count += len(detections)
 
-        # Transform to stage coords if available
+        # Keep raw pixel data for orchestrator-side conversion
         frame_h, frame_w = frame.shape[:2]
         if self._px_to_stage:
             stage_dets = self._px_to_stage(detections, frame_w, frame_h)
         else:
-            # Fallback: use raw pixel coords as mm (very rough)
+            # Use pixel center as internal tracking coords (for re-ID proximity)
+            # Real stage conversion happens on the orchestrator via cameraId + pixelBox
             stage_dets = [{"label": d["label"], "confidence": d["confidence"],
-                           "x": d["x"], "y": 0, "z": d["y"],
-                           "w": d["w"], "h": d["h"]} for d in detections]
+                           "x": d["x"] + d["w"] // 2, "y": 0,
+                           "z": d["y"] + d["h"] // 2,
+                           "w": d["w"], "h": d["h"],
+                           "_raw": d, "_frameSize": [frame_w, frame_h],
+                           } for d in detections]
 
         now = time.monotonic()
         matched_track_ids = set()
@@ -169,7 +173,7 @@ class Tracker:
                 trk["last_seen"] = now
                 matched_track_ids.add(best_id)
                 # Update position on orchestrator
-                self._orch_update_pos(trk["orch_obj_id"], det["x"], det["z"])
+                self._orch_update_pos(trk["orch_obj_id"], det)
             else:
                 # New track
                 with self._lock:
@@ -194,18 +198,24 @@ class Tracker:
     def _orch_create_temporal(self, det):
         """Create a temporal object on the orchestrator. Returns object ID or None."""
         try:
-            data = json.dumps({
+            body = {
                 "name": det.get("label", "person"),
                 "objectType": det.get("label", "person"),
                 "ttl": self._ttl,
                 "color": "#f472b6",
                 "opacity": 40,
-                "transform": {
-                    "pos": [det["x"], det["z"], 0],
-                    "rot": [0, 0, 0],
-                    "scale": [det.get("w", 400), 200, det.get("h", 400)],
-                },
-            }).encode()
+                "pos": [det["x"], det["z"], 0],   # fallback if orchestrator can't convert
+                "scale": [det.get("w", 400), 200, det.get("h", 400)],
+            }
+            # Send raw pixel box + camera ID for orchestrator-side pixel→stage conversion
+            raw = det.get("_raw")
+            fs = det.get("_frameSize")
+            if raw and fs and self._cam_id:
+                body["cameraId"] = self._cam_id
+                body["pixelBox"] = {"x": raw["x"], "y": raw["y"],
+                                    "w": raw.get("w", 100), "h": raw.get("h", 200)}
+                body["frameSize"] = fs
+            data = json.dumps(body).encode()
             req = urllib.request.Request(
                 f"{self._orch_url}/api/objects/temporal",
                 data=data, headers={"Content-Type": "application/json"})
@@ -218,11 +228,19 @@ class Tracker:
                         self._orch_url, e)
             return None
 
-    def _orch_update_pos(self, obj_id, x, z):
+    def _orch_update_pos(self, obj_id, det):
         """Update position of an existing temporal object.
-        Internal x=width, z=depth; mapped to stage coords X=width, Y=depth, Z=0."""
+        Sends pixel data for orchestrator-side conversion."""
         try:
-            data = json.dumps({"pos": [x, z, 0]}).encode()
+            body = {"pos": [det["x"], det["z"], 0]}
+            raw = det.get("_raw")
+            fs = det.get("_frameSize")
+            if raw and fs and self._cam_id:
+                body["cameraId"] = self._cam_id
+                body["pixelBox"] = {"x": raw["x"], "y": raw["y"],
+                                    "w": raw.get("w", 100), "h": raw.get("h", 200)}
+                body["frameSize"] = fs
+            data = json.dumps(body).encode()
             req = urllib.request.Request(
                 f"{self._orch_url}/api/objects/{obj_id}/pos",
                 data=data, headers={"Content-Type": "application/json"},

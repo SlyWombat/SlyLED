@@ -3693,6 +3693,17 @@ def api_object_pos(oid):
     pos = body.get("pos")
     if not pos or not isinstance(pos, list) or len(pos) != 3:
         return jsonify(err="pos must be [x, y, z]"), 400
+    # Pixel→stage conversion if camera data provided
+    cam_id = body.get("cameraId")
+    pixel_box = body.get("pixelBox")
+    frame_size = body.get("frameSize")
+    if cam_id is not None and pixel_box and frame_size:
+        fw, fh = frame_size
+        cx = (pixel_box["x"] + pixel_box.get("w", 0) / 2) / fw
+        cy = (pixel_box["y"] + pixel_box.get("h", 0) / 2) / fh
+        sw = _stage.get("w", 3.0) * 1000
+        sd = _stage.get("d", 4.0) * 1000
+        pos = [sw * cx, sd * cy, 0]
     with _lock:
         obj = next((o for o in _objects if o["id"] == oid), None)
         if not obj:
@@ -3713,6 +3724,23 @@ def api_objects_temporal_create():
         return jsonify(err="ttl must be > 0"), 400
     pos = body.get("pos", [0, 0, 0])
     scale = body.get("scale", [500, 1800, 500])
+    # If pixel coordinates + camera ID provided, convert to stage coords
+    cam_id = body.get("cameraId")
+    pixel_box = body.get("pixelBox")  # {x, y, w, h}
+    frame_size = body.get("frameSize")  # [w, h]
+    if cam_id is not None and pixel_box and frame_size:
+        # Simple proportional mapping: pixel fraction → stage position
+        # Camera on back wall looking forward: left-of-frame = stage-left (high X)
+        fw, fh = frame_size
+        cx = (pixel_box["x"] + pixel_box.get("w", 0) / 2) / fw  # 0=left, 1=right
+        cy = (pixel_box["y"] + pixel_box.get("h", 0) / 2) / fh  # 0=top, 1=bottom
+        sw = _stage.get("w", 3.0) * 1000  # stage width mm
+        sd = _stage.get("d", 4.0) * 1000  # stage depth mm
+        # Camera on back wall: left-of-frame = stage-right (X=0), right = stage-left (X=sw)
+        # Bottom of frame = far from camera (sd), top = near (0)
+        pos = [sw * cx, sd * cy, 0]
+        scale = [pixel_box.get("w", 100) * sw / fw, 200,
+                 pixel_box.get("h", 200) * sd / fh]
     with _lock:
         obj = {
             "id": _nxt_tmp, "name": body.get("name", f"Temporal {_nxt_tmp}"),
@@ -5330,8 +5358,6 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
         return
     all_objects = _objects + _temporal_objects
     moving_objects = [o for o in all_objects if o.get("mobility") == "moving"]
-    if not moving_objects:
-        return
     # Build fixture lookup: id -> fixture info (with profile pan/tilt range)
     fx_lookup = {}
     for f in _fixtures:
@@ -5352,8 +5378,6 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
         # Resolve target objects
         target_ids = ta.get("trackObjectIds", [])
         targets = [o for o in moving_objects if o["id"] in target_ids] if target_ids else moving_objects
-        if not targets:
-            continue
         # Resolve fixtures
         fix_ids = ta.get("trackFixtureIds", [])
         heads = [fx_lookup[fid] for fid in (fix_ids or fx_lookup.keys()) if fid in fx_lookup]
@@ -5368,15 +5392,23 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
         cycle_s = max(cycle_ms / 1000.0, 0.1)
         n_heads = len(heads)
         n_targets = len(targets)
+        # Track which heads get assigned — unassigned heads get blackout
+        assigned_heads = set()
+        if not targets:
+            n_targets = 0  # will blackout all heads below
         for hi, head_info in enumerate(heads):
+            if not targets:
+                break  # skip aim loop, go to blackout
             f = head_info["fixture"]
             fid = f["id"]
             fx_pos = [f.get("x", 0), f.get("y", 0), f.get("z", 0)]
-            # Assignment
-            if fixed_assign:
-                # Fixed 1:1 — each head gets one target, extras ignored
-                if hi >= n_targets:
-                    continue  # no target for this head
+            # Assignment: 1 person = all heads aim at them,
+            # 2 people = 1:1, 3+ people (fixed) = first N only
+            if n_heads > n_targets:
+                # More heads than targets: all heads aim at available targets (spread)
+                obj = targets[hi % n_targets]
+            elif fixed_assign and n_targets > n_heads:
+                # Fixed 1:1 — each head gets one target, excess people ignored
                 obj = targets[hi]
             elif n_heads <= n_targets:
                 # Cycling: this head covers a chunk of targets
@@ -5412,11 +5444,30 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
             aim[0] = max(0, min(sw, aim[0]))
             aim[1] = max(0, min(sd, aim[1]))
             aim[2] = max(0, min(sh, aim[2]))
-            # Compute pan/tilt — use calibrated mapping if available, else geometric
-            pt_cal = compute_pan_tilt_calibrated(f["id"], aim)
-            if pt_cal:
-                pan, tilt = pt_cal
-            else:
+            # Compute pan/tilt — try mover cal affine first, then range cal, then geometric
+            pan = tilt = None
+            # 1. Mover calibration affine (manual calibration with stage samples)
+            mcal_data = _mover_cal.get(str(fid))
+            if mcal_data and mcal_data.get("samples") and len(mcal_data["samples"]) >= 2:
+                pt_affine = _mcal.affine_pan_tilt(mcal_data["samples"], aim[0], aim[1], aim[2])
+                if pt_affine:
+                    # Clamp to calibrated range + 10% margin to prevent backwards aim
+                    samps = mcal_data["samples"]
+                    pan_vals = [s["pan"] for s in samps]
+                    tilt_vals = [s["tilt"] for s in samps]
+                    pan_lo, pan_hi = min(pan_vals), max(pan_vals)
+                    tilt_lo, tilt_hi = min(tilt_vals), max(tilt_vals)
+                    margin_p = (pan_hi - pan_lo) * 0.1
+                    margin_t = (tilt_hi - tilt_lo) * 0.1
+                    pan = max(pan_lo - margin_p, min(pan_hi + margin_p, pt_affine[0]))
+                    tilt = max(tilt_lo - margin_t, min(tilt_hi + margin_t, pt_affine[1]))
+            # 2. Range calibration (automated axis mapping)
+            if pan is None:
+                pt_cal = compute_pan_tilt_calibrated(fid, aim)
+                if pt_cal:
+                    pan, tilt = pt_cal
+            # 3. Geometric fallback
+            if pan is None:
                 pt = compute_pan_tilt(fx_pos, aim, head_info["pan_range"], head_info["tilt_range"])
                 if pt is None:
                     continue
@@ -5432,6 +5483,16 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
                 tr = ta.get("trackDimmer", 255)
                 uni_buf.set_fixture_dimmer(addr, tr, profile)
                 uni_buf.set_fixture_rgb(addr, ta.get("r", 255), ta.get("g", 255), ta.get("b", 255), profile)
+                assigned_heads.add(hi)
+        # Blackout unassigned heads (no target = beam off)
+        for hi, head_info in enumerate(heads):
+            if hi not in assigned_heads:
+                f = head_info["fixture"]
+                prof_info = head_info["prof_info"]
+                if prof_info:
+                    profile = {"channel_map": prof_info.get("channel_map"), "channels": prof_info.get("channels", [])}
+                    uni_buf = engine.get_universe(f.get("dmxUniverse", 1))
+                    uni_buf.set_fixture_dimmer(f.get("dmxStartAddr", 1), 0, profile)
 
 def _dmx_playback_loop(tid, go_epoch, duration, loop):
     """Background thread: stream DMX channel data during show playback."""
