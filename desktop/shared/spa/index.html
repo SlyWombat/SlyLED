@@ -7463,6 +7463,13 @@ function _moverCalDelete(){
 
 function _moverCalManualStart(fixId){
   _moverCalFid=fixId;
+  // Ensure _fixtures have positions from layout
+  ra('GET','/api/layout',null,function(lay){
+    if(lay&&lay.fixtures)_fixtures=lay.fixtures;
+    _moverCalManualStart2(fixId);
+  });
+}
+function _moverCalManualStart2(fixId){
   var sm=_sfStageMm();
   _manCal={fid:fixId,markers:[
     {x:Math.round(sm.sw*0.2),y:Math.round(sm.sd*0.6),z:0},
