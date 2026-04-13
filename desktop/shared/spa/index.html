@@ -2592,10 +2592,13 @@ function _s3dRenderObjects(){
     var grp=new THREE.Group();
     grp.userData.stageObj=true;
     grp.userData.stageObjId=s.id;
-    grp.position.set((t.pos[0]||0)/1000,(t.pos[1]||0)/1000,(t.pos[2]||0)/1000);
+    // Stage→Three.js: X→X, Y(depth)→Z, Z(height)→Y (#369)
+    grp.position.set((t.pos[0]||0)/1000,(t.pos[2]||0)/1000,(t.pos[1]||0)/1000);
 
     var sd=(t.scale[2]||1)/1000;
     var useBox=((t.scale[2]||1)>100); // >10cm depth → box
+    // Scale: stage [W, H, D] → Three.js [W(x), H(y), D(z)]
+    // But stage H is visual height (Z axis in 3D = Y), stage D is depth (Y axis in 3D = Z)
     var geo=useBox?new THREE.BoxGeometry(sw,sh,sd):new THREE.PlaneGeometry(sw,sh);
     var mat=new THREE.MeshBasicMaterial({color:col,side:THREE.DoubleSide,opacity:(s.opacity||30)/100,transparent:true});
     var mesh=new THREE.Mesh(geo,mat);
