@@ -81,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.4.22"
+VERSION = "1.4.26"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -2593,7 +2593,11 @@ def api_mover_cal_get(fid):
     return jsonify(calibrated=True, sampleCount=cal.get("sampleCount"),
                    timestamp=cal.get("timestamp"),
                    grid=cal.get("grid") is not None,
-                   cameraId=cal.get("cameraId"))
+                   cameraId=cal.get("cameraId"),
+                   method=cal.get("method"),
+                   centerPan=cal.get("centerPan"),
+                   centerTilt=cal.get("centerTilt"),
+                   samples=cal.get("samples"))
 
 
 @app.delete("/api/calibration/mover/<int:fid>")
@@ -3018,7 +3022,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.4.22" from camera_server.py source text."""
+    """Extract VERSION = "1.4.26" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
