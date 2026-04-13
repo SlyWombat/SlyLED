@@ -7365,6 +7365,14 @@ function _moverCalStart(fixId){
   h+='<div style="font-size:.95em;color:#e2e8f0;font-weight:600">\ud83c\udfaf Manual (Jog to Markers)</div>';
   h+='<div style="font-size:.8em;color:#94a3b8;margin-top:.2em">Place markers at known positions, then aim the beam at each one. Works without cameras.</div>';
   h+='</div></div>';
+  // Verify existing calibration option
+  if(f&&f.moverCalibrated){
+    h+='<div class="card" style="padding:.8em;cursor:pointer" onclick="_manCalVerifyExisting('+fixId+')">';
+    h+='<div style="font-size:.95em;color:#e2e8f0;font-weight:600">\u2705 Verify Existing Calibration</div>';
+    h+='<div style="font-size:.8em;color:#94a3b8;margin-top:.2em">Test saved calibration positions. Send the beam to each recorded marker to confirm accuracy.</div>';
+    h+='</div>';
+  }
+  h+='</div>';
   h+='<div style="margin-top:.6em"><button class="btn btn-off" onclick="closeModal()">Cancel</button></div>';
   h+='</div>';
   document.getElementById('modal-title').textContent='Calibrate Mover';
@@ -7583,8 +7591,12 @@ function _manCalNextToJog(){
       if(c.type==='green')ch.green=c.offset;
       if(c.type==='blue')ch.blue=c.offset;
       if(c.type==='white')ch.white=c.offset;
+      if(c.type==='speed')ch.speed=c.offset;
+      if(c.type==='strobe')ch.strobe=c.offset;
+      if(c.type==='gobo')ch.gobo=c.offset;
     });
     _manCal.channels=ch;
+    _manCal.allChannels=d.channels; // full channel list for DMX display
     // Turn fixture on: dimmer=255, white
     var fid=_manCal.fid;
     var on=[];
@@ -7603,29 +7615,45 @@ function _manCalRenderJog(fname){
   var total=_manCal.markers.length;
   var m=_manCal.markers[idx];
   var ch=_manCal.channels||{};
-  var h='<div style="min-width:420px">';
+  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===_manCal.fid)f=fx;});
+  var addr=f?('U'+(f.dmxUniverse||1)+' @ '+(f.dmxStartAddr||1)):'';
+  var h='<div style="min-width:460px">';
   // Progress
   h+='<div class="prog-bar" style="height:6px;margin-bottom:.5em"><div class="prog-fill" style="width:'+Math.round((idx/total)*100)+'%"></div></div>';
-  h+='<div style="font-size:.9em;color:#e2e8f0;margin-bottom:.6em">Marker <strong>'+(idx+1)+' of '+total+'</strong>: aim beam at <span style="color:#22d3ee">X='+m.x+' Y='+m.y+' Z='+m.z+'</span> mm</div>';
-  h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.8em">Use the sliders to move the beam until it centers on the physical marker.</div>';
-  // Pan slider
-  var panVal=128;
-  if(idx>0&&_manCal.samples.length>0){var ls=_manCal.samples[_manCal.samples.length-1];panVal=Math.round(ls.pan*255);}
-  h+='<div style="display:flex;align-items:center;gap:.5em;margin-bottom:.5em">';
-  h+='<label style="width:40px;font-size:.82em;color:#94a3b8;text-align:right">Pan</label>';
-  h+='<input type="range" id="mcj-pan" min="0" max="255" value="'+panVal+'" style="flex:1" oninput="_manCalJog(\'pan\',this.value)">';
-  h+='<span id="mcj-pan-val" style="width:30px;font-size:.82em;color:#e2e8f0;font-family:monospace">'+panVal+'</span>';
+  h+='<div style="font-size:.9em;color:#e2e8f0;margin-bottom:.4em">Marker <strong>'+(idx+1)+' of '+total+'</strong>: aim beam at <span style="color:#22d3ee">X='+m.x+' Y='+m.y+' Z='+m.z+'</span> mm'+(m.name?' <span style="color:#94a3b8">('+escapeHtml(m.name)+')</span>':'')+'</div>';
+  h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.6em">Adjust sliders until the beam centers on the physical marker.</div>';
+  // All DMX channels
+  var allCh=_manCal.allChannels||[];
+  var panVal=128, tiltVal=128;
+  if(idx>0&&_manCal.samples.length>0){var ls=_manCal.samples[_manCal.samples.length-1];panVal=Math.round(ls.pan*255);tiltVal=Math.round(ls.tilt*255);}
+  h+='<div style="max-height:280px;overflow-y:auto;border:1px solid #1e293b;border-radius:4px;padding:.4em;background:#0a0f1a;margin-bottom:.6em">';
+  if(allCh.length){
+    allCh.forEach(function(c){
+      var isPan=(c.type==='pan'),isTilt=(c.type==='tilt');
+      var defVal=isPan?panVal:isTilt?tiltVal:(c.default||0);
+      // Current value from last state or default
+      var curVal=defVal;
+      var highlight=isPan||isTilt?'color:#22d3ee;font-weight:600':'color:#94a3b8';
+      h+='<div style="display:flex;align-items:center;gap:.4em;margin-bottom:.2em">';
+      h+='<label style="width:90px;font-size:.78em;'+highlight+';text-align:right;overflow:hidden;white-space:nowrap;text-overflow:ellipsis" title="'+escapeHtml(c.name)+'">'+escapeHtml(c.name)+'</label>';
+      h+='<input type="range" min="0" max="255" value="'+curVal+'" style="flex:1" id="mcj-ch-'+c.offset+'" oninput="_manCalJogCh('+c.offset+',this.value)">';
+      h+='<span id="mcj-chv-'+c.offset+'" style="width:28px;font-size:.78em;color:#e2e8f0;font-family:monospace;text-align:right">'+curVal+'</span>';
+      h+='</div>';
+    });
+  } else {
+    // Fallback: just pan/tilt
+    h+='<div style="display:flex;align-items:center;gap:.5em;margin-bottom:.3em">';
+    h+='<label style="width:40px;font-size:.82em;color:#22d3ee;text-align:right">Pan</label>';
+    h+='<input type="range" id="mcj-ch-'+(ch.pan||0)+'" min="0" max="255" value="'+panVal+'" style="flex:1" oninput="_manCalJogCh('+(ch.pan||0)+',this.value)">';
+    h+='<span id="mcj-chv-'+(ch.pan||0)+'" style="width:28px;font-size:.78em;color:#e2e8f0;font-family:monospace">'+panVal+'</span></div>';
+    h+='<div style="display:flex;align-items:center;gap:.5em;margin-bottom:.3em">';
+    h+='<label style="width:40px;font-size:.82em;color:#22d3ee;text-align:right">Tilt</label>';
+    h+='<input type="range" id="mcj-ch-'+(ch.tilt||1)+'" min="0" max="255" value="'+tiltVal+'" style="flex:1" oninput="_manCalJogCh('+(ch.tilt||1)+',this.value)">';
+    h+='<span id="mcj-chv-'+(ch.tilt||1)+'" style="width:28px;font-size:.78em;color:#e2e8f0;font-family:monospace">'+tiltVal+'</span></div>';
+  }
   h+='</div>';
-  // Tilt slider
-  var tiltVal=128;
-  if(idx>0&&_manCal.samples.length>0){var ls=_manCal.samples[_manCal.samples.length-1];tiltVal=Math.round(ls.tilt*255);}
-  h+='<div style="display:flex;align-items:center;gap:.5em;margin-bottom:.5em">';
-  h+='<label style="width:40px;font-size:.82em;color:#94a3b8;text-align:right">Tilt</label>';
-  h+='<input type="range" id="mcj-tilt" min="0" max="255" value="'+tiltVal+'" style="flex:1" oninput="_manCalJog(\'tilt\',this.value)">';
-  h+='<span id="mcj-tilt-val" style="width:30px;font-size:.82em;color:#e2e8f0;font-family:monospace">'+tiltVal+'</span>';
-  h+='</div>';
-  // Fine adjust buttons
-  h+='<div style="display:flex;gap:.3em;margin-bottom:.8em;justify-content:center">';
+  // Fine adjust buttons for pan/tilt
+  h+='<div style="display:flex;gap:.3em;margin-bottom:.6em;justify-content:center">';
   h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'pan\',-1)">Pan \u25c0</button>';
   h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'pan\',1)">Pan \u25b6</button>';
   h+='<span style="width:10px"></span>';
@@ -7638,11 +7666,18 @@ function _manCalRenderJog(fname){
   if(idx>0)h+='<button class="btn" style="background:#334155;color:#94a3b8" onclick="_manCal.currentIdx--;_manCal.samples.pop();_manCalRender()">Back</button>';
   h+='<button class="btn btn-off" onclick="_manCalBlackout();_manCal=null;closeModal()">Cancel</button>';
   h+='</div></div>';
-  document.getElementById('modal-title').textContent='Manual Calibration \u2014 Jog';
+  document.getElementById('modal-title').textContent=escapeHtml(fname)+' \u2014 '+addr+' \u2014 Jog';
   document.getElementById('modal-body').innerHTML=h;
   // Send initial pan/tilt
   _manCalJog('pan',panVal);
   _manCalJog('tilt',tiltVal);
+}
+
+function _manCalJogCh(offset,value){
+  var v=parseInt(value);
+  dmxTestCh(_manCal.fid,offset,v);
+  var el=document.getElementById('mcj-chv-'+offset);
+  if(el)el.textContent=v;
 }
 
 function _manCalJog(axis,value){
@@ -7650,24 +7685,28 @@ function _manCalJog(axis,value){
   var offset=axis==='pan'?ch.pan:ch.tilt;
   if(offset==null)return;
   var v=parseInt(value);
-  dmxTestCh(_manCal.fid,offset,v);
-  var el=document.getElementById('mcj-'+axis+'-val');
-  if(el)el.textContent=v;
-  var sl=document.getElementById('mcj-'+axis);
+  _manCalJogCh(offset,v);
+  var sl=document.getElementById('mcj-ch-'+offset);
   if(sl)sl.value=v;
 }
 
 function _manCalNudge(axis,dir){
-  var sl=document.getElementById('mcj-'+axis);
+  var ch=_manCal.channels||{};
+  var offset=axis==='pan'?ch.pan:ch.tilt;
+  if(offset==null)return;
+  var sl=document.getElementById('mcj-ch-'+offset);
   if(!sl)return;
   var v=Math.max(0,Math.min(255,parseInt(sl.value)+dir));
   sl.value=v;
-  _manCalJog(axis,v);
+  _manCalJogCh(offset,v);
 }
 
 function _manCalConfirm(){
-  var pan=parseInt(document.getElementById('mcj-pan').value)/255;
-  var tilt=parseInt(document.getElementById('mcj-tilt').value)/255;
+  var ch=_manCal.channels||{};
+  var panEl=document.getElementById('mcj-ch-'+(ch.pan!=null?ch.pan:0));
+  var tiltEl=document.getElementById('mcj-ch-'+(ch.tilt!=null?ch.tilt:1));
+  var pan=(panEl?parseInt(panEl.value):128)/255;
+  var tilt=(tiltEl?parseInt(tiltEl.value):128)/255;
   var m=_manCal.markers[_manCal.currentIdx];
   _manCal.samples.push({pan:pan,tilt:tilt,stageX:m.x,stageY:m.y,stageZ:m.z});
   _manCal.currentIdx++;
@@ -7735,6 +7774,30 @@ function _manCalBlackout(){
   var chs=[];
   for(var k in ch)if(ch[k]!=null)chs.push({offset:ch[k],value:0});
   if(chs.length)ra('POST','/api/dmx/fixture/'+_manCal.fid+'/test',{channels:chs},function(){});
+}
+
+function _manCalVerifyExisting(fixId){
+  _moverCalFid=fixId;
+  // Fetch saved calibration and channel info
+  ra('GET','/api/calibration/mover/'+fixId,null,function(cal){
+    if(!cal||!cal.calibrated){
+      document.getElementById('modal-body').innerHTML='<div style="color:#f66;padding:1em">No calibration data found.</div>';
+      return;
+    }
+    ra('GET','/api/dmx/fixture/'+fixId+'/channels',null,function(d){
+      var ch={};
+      if(d&&d.channels)d.channels.forEach(function(c){
+        if(c.type==='pan')ch.pan=c.offset;
+        if(c.type==='tilt')ch.tilt=c.offset;
+        if(c.type==='dimmer')ch.dimmer=c.offset;
+        if(c.type==='red')ch.red=c.offset;
+        if(c.type==='green')ch.green=c.offset;
+        if(c.type==='blue')ch.blue=c.offset;
+      });
+      _manCal={fid:fixId,samples:cal.samples||[],channels:ch,step:'verify'};
+      _manCalRender();
+    });
+  });
 }
 
 // ── Tracking mode — live person markers ──────────────────────────────
