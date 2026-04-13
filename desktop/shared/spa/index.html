@@ -7489,17 +7489,30 @@ function _manCalRenderMarkers(fname){
   h+='<div style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">Place physical markers (tape, objects) at known stage positions. You\'ll aim <strong>'+escapeHtml(fname)+'</strong> at each one.</div>';
   h+='<div style="font-size:.78em;color:#64748b;margin-bottom:.6em">Spread markers across the stage floor for best results. Minimum 2, recommended 4+.</div>';
   h+='<table style="width:100%;font-size:.82em;border-collapse:collapse">';
-  h+='<tr style="color:#94a3b8"><th style="text-align:left;padding:2px 4px">#</th><th>X (mm)</th><th>Y (mm)</th><th>Z (mm)</th><th></th></tr>';
+  h+='<tr style="color:#94a3b8"><th style="text-align:left;padding:2px 4px">#</th><th>Name</th><th>X (mm)</th><th>Y (mm)</th><th>Z (mm)</th><th></th></tr>';
   _manCal.markers.forEach(function(m,i){
     h+='<tr><td style="padding:2px 4px;color:#94a3b8">'+(i+1)+'</td>';
+    h+='<td style="font-size:.78em;color:#22d3ee;max-width:80px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">'+(m.name?escapeHtml(m.name):'')+'</td>';
     h+='<td><input type="number" value="'+m.x+'" style="width:70px" onchange="_manCal.markers['+i+'].x=parseInt(this.value)||0"></td>';
     h+='<td><input type="number" value="'+m.y+'" style="width:70px" onchange="_manCal.markers['+i+'].y=parseInt(this.value)||0"></td>';
     h+='<td><input type="number" value="'+m.z+'" style="width:70px" onchange="_manCal.markers['+i+'].z=parseInt(this.value)||0"></td>';
     h+='<td><button class="btn" style="font-size:.75em;padding:1px 6px;background:#7f1d1d;color:#fca5a5" onclick="_manCal.markers.splice('+i+',1);_manCalRender()">&#x2715;</button></td></tr>';
   });
   h+='</table>';
-  h+='<div style="margin-top:.4em">';
+  h+='<div style="margin-top:.4em;display:flex;gap:.5em;align-items:center;flex-wrap:wrap">';
   h+='<button class="btn" style="font-size:.8em;background:#1e3a5f;color:#93c5fd" onclick="_manCalAddMarker()">+ Add Marker</button>';
+  // Object dropdown — pick position from a named layout object
+  var objs=(_objects||[]).filter(function(o){return o.transform&&o.transform.pos;});
+  if(objs.length){
+    h+='<span style="font-size:.78em;color:#64748b">or from object:</span>';
+    h+='<select style="font-size:.8em" onchange="_manCalAddFromObject(this)">';
+    h+='<option value="">— pick —</option>';
+    objs.forEach(function(o){
+      var p=o.transform.pos;
+      h+='<option value="'+o.id+'">'+escapeHtml(o.name)+' ('+p[0]+','+p[1]+','+p[2]+')</option>';
+    });
+    h+='</select>';
+  }
   h+='</div>';
   h+='<div style="display:flex;gap:.4em;margin-top:.8em">';
   var canNext=_manCal.markers.length>=2;
@@ -7514,6 +7527,15 @@ function _manCalRenderMarkers(fname){
 function _manCalAddMarker(){
   var sm=_sfStageMm();
   _manCal.markers.push({x:Math.round(sm.sw/2),y:Math.round(sm.sd/2),z:0});
+  _manCalRender();
+}
+function _manCalAddFromObject(selEl){
+  var id=parseInt(selEl.value);if(!id&&id!==0)return;
+  selEl.value='';
+  var obj=null;(_objects||[]).forEach(function(o){if(o.id===id)obj=o;});
+  if(!obj||!obj.transform)return;
+  var p=obj.transform.pos||[0,0,0];
+  _manCal.markers.push({x:p[0],y:p[1],z:p[2],name:obj.name});
   _manCalRender();
 }
 
