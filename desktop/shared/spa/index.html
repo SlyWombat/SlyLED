@@ -7669,9 +7669,16 @@ function _manCalRenderJog(fname){
 
 function _manCalJogCh(offset,value){
   var v=parseInt(value);
-  dmxTestCh(_manCal.fid,offset,v);
   var el=document.getElementById('mcj-chv-'+offset);
   if(el)el.textContent=v;
+  // Send ALL current slider values as a batch so fixture gets consistent state
+  var allCh=(_manCal&&_manCal.allChannels)||[];
+  var batch=[];
+  allCh.forEach(function(c){
+    var sl=document.getElementById('mcj-ch-'+c.offset);
+    if(sl)batch.push({offset:c.offset,value:parseInt(sl.value)||0});
+  });
+  if(batch.length)ra('POST','/api/dmx/fixture/'+_manCal.fid+'/test',{channels:batch},function(){});
 }
 
 function _manCalJog(axis,value){
