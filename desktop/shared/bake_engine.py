@@ -666,17 +666,18 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
                             _mcal_data = (mover_calibrations or {}).get(str(fid))
                             _grid = _mcal_data.get("grid") if _mcal_data else None
                             _cal_used = False
-                            if _mcal_data and _mcal_data.get("method") == "manual" and _grid:
-                                # Manual calibration: grid maps pan/tilt → stage coords
-                                # grid_inverse returns pan/tilt from stage target directly
-                                from mover_calibrator import grid_inverse as _ginv
-                                pt_s = _ginv(_grid, start_pos[0], start_pos[1])
-                                pt_e = _ginv(_grid, end_pos[0], end_pos[1])
+                            if _mcal_data and _mcal_data.get("method") == "manual":
+                                # Manual calibration: use affine transform for full extrapolation (#371)
+                                from mover_calibrator import affine_pan_tilt as _apt
+                                _samples = _mcal_data.get("samples", [])
+                                pt_s = _apt(_samples, start_pos[0], start_pos[1])
+                                pt_e = _apt(_samples, end_pos[0], end_pos[1])
                                 if pt_s and pt_e:
                                     ps, ts = pt_s
                                     pe, te = pt_e
                                     _cal_used = True
-                                    log.info("Bake PT Move fid=%s: manual calibration grid_inverse", fid)
+                                    log.info("Bake PT Move fid=%s: manual affine pan=%.3f→%.3f tilt=%.3f→%.3f",
+                                             fid, ps, pe, ts, te)
                             if not _cal_used and _grid and _mcal_data:
                                 # Camera-based calibration: apply center offset
                                 _cal_center = (_mcal_data.get("centerPan", 0.5),
