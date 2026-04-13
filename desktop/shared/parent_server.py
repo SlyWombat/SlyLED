@@ -81,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.4.27"
+VERSION = "1.4.28"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -3022,7 +3022,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.4.26" from camera_server.py source text."""
+    """Extract VERSION = "1.4.28" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -5363,6 +5363,7 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
         g_off = ta.get("trackOffset", [0, 0, 0])
         per_fx_off = ta.get("trackFixtureOffsets", {})
         auto_spread = ta.get("trackAutoSpread", False)
+        fixed_assign = ta.get("trackFixedAssignment", False)
         cycle_ms = ta.get("trackCycleMs", 2000)
         cycle_s = max(cycle_ms / 1000.0, 0.1)
         n_heads = len(heads)
@@ -5372,7 +5373,12 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
             fid = f["id"]
             fx_pos = [f.get("x", 0), f.get("y", 0), f.get("z", 0)]
             # Assignment
-            if n_heads <= n_targets:
+            if fixed_assign:
+                # Fixed 1:1 — each head gets one target, extras ignored
+                if hi >= n_targets:
+                    continue  # no target for this head
+                obj = targets[hi]
+            elif n_heads <= n_targets:
                 # Cycling: this head covers a chunk of targets
                 chunk_size = max(1, n_targets // n_heads)
                 chunk_start = hi * chunk_size
@@ -5399,13 +5405,13 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
                     local_idx = (hi // n_targets)
                     spread_off[0] = (local_idx - (heads_on_this - 1) / 2.0) * obj_w / max(heads_on_this, 1)
             aim = [obj_pos[i] + g_off[i] + p_off[i] + spread_off[i] for i in range(3)]
-            # Clamp to stage bounds
+            # Clamp to stage bounds (X=width, Y=depth, Z=height)
             sw = _stage.get("w", 10) * 1000
-            sh = _stage.get("h", 5) * 1000
             sd = _stage.get("d", 10) * 1000
+            sh = _stage.get("h", 5) * 1000
             aim[0] = max(0, min(sw, aim[0]))
-            aim[1] = max(0, min(sh, aim[1]))
-            aim[2] = max(0, min(sd, aim[2]))
+            aim[1] = max(0, min(sd, aim[1]))
+            aim[2] = max(0, min(sh, aim[2]))
             # Compute pan/tilt — use calibrated mapping if available, else geometric
             pt_cal = compute_pan_tilt_calibrated(f["id"], aim)
             if pt_cal:
@@ -6057,7 +6063,7 @@ _ACTION_FIELDS = ("name", "type", "scope", "canvasEffect", "targetIds", "r", "g"
                   "onMs", "offMs", "wipeDir", "wipeSpeedPct",  # legacy compat
                   "wledFxOverride", "wledPalOverride", "wledSegId",  # WLED overrides
                   "trackObjectIds", "trackCycleMs", "trackOffset",  # Track action
-                  "trackFixtureIds", "trackFixtureOffsets", "trackAutoSpread",
+                  "trackFixtureIds", "trackFixtureOffsets", "trackAutoSpread", "trackFixedAssignment",
                   "dimmer", "pan", "tilt", "strobe", "gobo", "colorWheel", "prism",  # DMX channels
                   "ptStartPos", "ptEndPos")  # Pan/Tilt Move: stage coordinate positions [x,y,z] mm
 

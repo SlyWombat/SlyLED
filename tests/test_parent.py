@@ -1148,13 +1148,43 @@ def run():
         ok('Track has offset', ta.get('trackOffset') == [0, 200, 0])
         ok('Track has autoSpread', ta.get('trackAutoSpread') is False)
 
-        # Update Track action with per-fixture offsets
+        # Update Track action with per-fixture offsets and fixed assignment (#374)
         r = c.put('/api/actions/' + str(track_id), json={
-            'trackFixtureOffsets': {'1': [100, 0, 0], '2': [-100, 0, 0]}})
-        ok('PUT Track action offsets', r.status_code == 200)
+            'trackFixtureOffsets': {'1': [100, 0, 0], '2': [-100, 0, 0]},
+            'trackFixedAssignment': True})
+        ok('PUT Track action offsets + fixedAssignment', r.status_code == 200)
         r = c.get('/api/actions/' + str(track_id))
         ta = r.get_json()
         ok('Track per-fixture offsets saved', '1' in ta.get('trackFixtureOffsets', {}))
+        ok('Track fixedAssignment saved', ta.get('trackFixedAssignment') is True)
+
+        # Verify fixedAssignment defaults to absent/False for new actions
+        r = c.post('/api/actions', json={'name': 'Track Default', 'type': 18})
+        ok('POST Track action (defaults)', r.status_code == 200)
+        def_id = r.get_json().get('id')
+        r = c.get('/api/actions/' + str(def_id))
+        ok('Track fixedAssignment absent by default', 'trackFixedAssignment' not in r.get_json())
+        c.delete('/api/actions/' + str(def_id))
+
+        # ── Temporal objects: coordinate system (#377) ──────────────
+        r = c.post('/api/objects/temporal', json={
+            'name': 'Person A', 'objectType': 'person', 'ttl': 10,
+            'pos': [1500, 3000, 0],   # X=width, Y=depth, Z=0 (floor)
+            'scale': [400, 200, 1800]  # width, depth, height
+        })
+        ok('POST temporal object', r.status_code == 200 and r.get_json().get('ok'))
+        tmp_id = r.get_json().get('id')
+        # Verify position round-trips correctly
+        r = c.get('/api/objects')
+        objs = r.get_json()
+        tmp = next((o for o in objs if o.get('id') == tmp_id), None)
+        ok('Temporal object exists in list', tmp is not None)
+        ok('Temporal mobility is moving', tmp.get('mobility') == 'moving')
+        pos = tmp.get('transform', {}).get('pos', [])
+        ok('Temporal pos X=1500 (width)', len(pos) == 3 and pos[0] == 1500)
+        ok('Temporal pos Y=3000 (depth)', pos[1] == 3000)
+        ok('Temporal pos Z=0 (floor)', pos[2] == 0)
+        c.delete('/api/objects/' + str(tmp_id))
 
         # Cleanup
         c.delete('/api/actions/' + str(track_id))

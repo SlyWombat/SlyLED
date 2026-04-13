@@ -167,9 +167,9 @@ class Tracker:
                 "color": "#f472b6",
                 "opacity": 40,
                 "transform": {
-                    "pos": [det["x"], 0, det["z"]],
+                    "pos": [det["x"], det["z"], 0],
                     "rot": [0, 0, 0],
-                    "scale": [det.get("w", 400), det.get("h", 400), 200],
+                    "scale": [det.get("w", 400), 200, det.get("h", 400)],
                 },
             }).encode()
             req = urllib.request.Request(
@@ -183,9 +183,10 @@ class Tracker:
             return None
 
     def _orch_update_pos(self, obj_id, x, z):
-        """Update position of an existing temporal object."""
+        """Update position of an existing temporal object.
+        Internal x=width, z=depth; mapped to stage coords X=width, Y=depth, Z=0."""
         try:
-            data = json.dumps({"pos": [x, 0, z]}).encode()
+            data = json.dumps({"pos": [x, z, 0]}).encode()
             req = urllib.request.Request(
                 f"{self._orch_url}/api/objects/{obj_id}/pos",
                 data=data, headers={"Content-Type": "application/json"},

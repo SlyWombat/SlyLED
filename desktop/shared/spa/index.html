@@ -8210,19 +8210,23 @@ function _showActModal(a){
   h+='</div>';
   // Track: follow moving objects
   h+='<div id="ae-track"'+(t===18?'':' style="display:none"')+'>';
-  h+='<label>Target Objects (moving)</label><div id="ae-track-objs" style="max-height:120px;overflow-y:auto;border:1px solid #333;border-radius:4px;padding:.3em;background:#1a1a1a">';
-  var trackIds=a&&a.trackTargets?a.trackTargets:[];
+  h+='<label>Target Objects</label><p style="color:#64748b;font-size:.78em;margin:0 0 .3em">Leave empty to auto-track all detected people and moving objects.</p>';
+  h+='<div id="ae-track-objs" style="max-height:140px;overflow-y:auto;border:1px solid #333;border-radius:4px;padding:.3em;background:#1a1a1a">';
+  var trackIds=a&&a.trackObjectIds?a.trackObjectIds:[];
   (_objects||[]).filter(function(o){return o.mobility==='moving';}).forEach(function(o){
     var chk=trackIds.indexOf(o.id)>=0?' checked':'';
     h+='<label style="display:block;cursor:pointer;padding:.15em 0"><input type="checkbox" class="ae-track-cb" value="'+o.id+'"'+chk+'> '+escapeHtml(o.name)+'</label>';
   });
-  if(!(_objects||[]).filter(function(o){return o.mobility==='moving';}).length)h+='<p style="color:#555;font-size:.8em">No moving objects defined.</p>';
+  h+='<div id="ae-track-temporal"></div>';
+  if(!(_objects||[]).filter(function(o){return o.mobility==='moving';}).length)h+='<p id="ae-track-empty" style="color:#555;font-size:.8em">No moving objects. Camera-tracked people appear live below.</p>';
   h+='</div>';
-  h+='<label>Cycle Time (ms)</label><input type="number" id="ae-trk-cycle" value="'+(a?a.cycleMs||2000:2000)+'" min="100" max="60000" style="width:100px">';
-  h+='<label>Offset X (mm)</label><input type="number" id="ae-trk-ox" value="'+(a?a.offsetX||0:0)+'" style="width:80px">';
-  h+=' <label style="display:inline;margin-left:.5em">Y (mm)</label><input type="number" id="ae-trk-oy" value="'+(a?a.offsetY||0:0)+'" style="width:80px">';
-  h+=' <label style="display:inline;margin-left:.5em">Z (mm)</label><input type="number" id="ae-trk-oz" value="'+(a?a.offsetZ||0:0)+'" style="width:80px">';
-  h+='<div style="margin-top:.4em"><label style="cursor:pointer"><input type="checkbox" id="ae-trk-spread"'+(a&&a.autoSpread?' checked':'')+'>  Auto-spread across targets</label></div>';
+  h+='<label>Cycle Time (ms)</label><input type="number" id="ae-trk-cycle" value="'+(a?a.trackCycleMs||2000:2000)+'" min="100" max="60000" style="width:100px">';
+  var tOff=a&&a.trackOffset?a.trackOffset:[0,0,0];
+  h+='<label>Offset X (mm)</label><input type="number" id="ae-trk-ox" value="'+tOff[0]+'" style="width:80px">';
+  h+=' <label style="display:inline;margin-left:.5em">Y (mm)</label><input type="number" id="ae-trk-oy" value="'+tOff[1]+'" style="width:80px">';
+  h+=' <label style="display:inline;margin-left:.5em">Z (mm)</label><input type="number" id="ae-trk-oz" value="'+tOff[2]+'" style="width:80px">';
+  h+='<div style="margin-top:.4em"><label style="cursor:pointer"><input type="checkbox" id="ae-trk-spread"'+(a&&a.trackAutoSpread?' checked':'')+'>  Auto-spread across targets</label></div>';
+  h+='<div style="margin-top:.3em"><label style="cursor:pointer"><input type="checkbox" id="ae-trk-fixed"'+(a&&a.trackFixedAssignment?' checked':'')+'>  Fixed assignment (1:1 — extra targets ignored)</label></div>';
   h+='</div>';
   // WLED Overrides section (hidden by default, shown if WLED devices exist)
   h+='<div id="ae-wled-section" style="display:none;margin-top:1em;border:1px solid #444;border-radius:6px;padding:.6em">';
@@ -8239,6 +8243,8 @@ function _showActModal(a){
   document.getElementById('modal').style.display='block';
   _aePerfIds=selIds.slice();
   if(sc==='performer-selected')_loadPerfPicker();
+  // Fetch live temporal objects for Track action target list
+  if(t===18)_aeLoadTemporalObjects(trackIds);
   // Detect WLED devices and populate overrides
   ra('GET','/api/children',null,function(children){
     var wc=null;
@@ -8273,6 +8279,27 @@ function _showActModal(a){
         sel.appendChild(o);
       });
     });
+  });
+}
+
+function _aeLoadTemporalObjects(selIds){
+  ra('GET','/api/objects',null,function(objs){
+    var el=document.getElementById('ae-track-temporal');
+    if(!el||!objs)return;
+    var temps=objs.filter(function(o){return o._temporal&&o.mobility==='moving';});
+    if(!temps.length)return;
+    // Hide the "no moving objects" placeholder if present
+    var emp=document.getElementById('ae-track-empty');if(emp)emp.style.display='none';
+    var h='<div style="border-top:1px solid #334155;margin-top:.3em;padding-top:.3em">';
+    h+='<span style="color:#f472b6;font-size:.75em;font-weight:bold">LIVE</span>';
+    temps.forEach(function(o){
+      var chk=selIds.indexOf(o.id)>=0?' checked':'';
+      h+='<label style="display:block;cursor:pointer;padding:.15em 0"><input type="checkbox" class="ae-track-cb" value="'+o.id+'"'+chk+'> ';
+      h+='<span style="color:#f472b6">'+escapeHtml(o.name||'Person')+'</span>';
+      h+=' <span style="color:#555;font-size:.75em">('+o.objectType+')</span></label>';
+    });
+    h+='</div>';
+    el.innerHTML=h;
   });
 }
 
@@ -8354,12 +8381,11 @@ function _aeSubmit(id,btn){
   if(t===18){
     var tcbs=document.querySelectorAll('.ae-track-cb:checked');
     var tids=[];tcbs.forEach(function(cb){tids.push(parseInt(cb.value));});
-    body.trackTargets=tids;
-    body.cycleMs=parseInt(document.getElementById('ae-trk-cycle').value)||2000;
-    body.offsetX=parseInt(document.getElementById('ae-trk-ox').value)||0;
-    body.offsetY=parseInt(document.getElementById('ae-trk-oy').value)||0;
-    body.offsetZ=parseInt(document.getElementById('ae-trk-oz').value)||0;
-    body.autoSpread=!!document.getElementById('ae-trk-spread').checked;
+    body.trackObjectIds=tids;
+    body.trackCycleMs=parseInt(document.getElementById('ae-trk-cycle').value)||2000;
+    body.trackOffset=[parseInt(document.getElementById('ae-trk-ox').value)||0,parseInt(document.getElementById('ae-trk-oy').value)||0,parseInt(document.getElementById('ae-trk-oz').value)||0];
+    body.trackAutoSpread=!!document.getElementById('ae-trk-spread').checked;
+    body.trackFixedAssignment=!!document.getElementById('ae-trk-fixed').checked;
   }
   // WLED overrides (optional)
   var wfx=document.getElementById('ae-wled-fx');
