@@ -265,11 +265,17 @@ private fun StageCanvas(
             .background(DeepSlate)
             .pointerInput(Unit) {
                 detectTransformGestures { _, pan, gestureZoom, _ ->
-                    if (gestureZoom != 1f) {
+                    val isTwoFinger = gestureZoom != 1f
+                    if (isTwoFinger) {
+                        // Two-finger: pinch = zoom, drag = pan
                         zoomFactor = (zoomFactor / gestureZoom).coerceIn(0.3f, 4f)
+                        panX += pan.x
+                        panY += pan.y
+                    } else {
+                        // One-finger: drag = orbit
+                        orbitAzimuth += pan.x * 0.003f
+                        orbitElevation = (orbitElevation + pan.y * 0.003f).coerceIn(-0.8f, 0.8f)
                     }
-                    orbitAzimuth += pan.x * 0.003f
-                    orbitElevation = (orbitElevation + pan.y * 0.003f).coerceIn(-0.8f, 0.8f)
                 }
             }
             .pointerInput(projectedPositions) {
