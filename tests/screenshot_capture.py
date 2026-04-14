@@ -482,12 +482,285 @@ def capture_android():
     print(f'  Android: done')
 
 
+# ── 6. Example-specific screenshot capture ──────────────────────────────────
+
+def capture_examples():
+    """Capture screenshots for the Examples section of the user manual.
+
+    Sets up a mover-tracking scenario (Example B) and captures:
+    - Profile editor, layout 3D, actions, timeline, runtime tracking views
+    Also captures calibration-related panels (Examples C & D).
+    """
+    from playwright.sync_api import sync_playwright
+    import shutil
+
+    print('  Setting up example data...')
+
+    # ── Example B data: mover tracking with spatial effects ──
+    import parent_server
+    from parent_server import app
+
+    with app.test_client() as c:
+        c.post('/api/reset', headers={'X-SlyLED-Confirm': 'true'})
+
+        # Stage: 6m x 3m x 4m
+        c.post('/api/stage', json={'w': 6.0, 'h': 3.0, 'd': 4.0})
+        c.post('/api/settings', json={'name': 'Tracking Demo', 'darkMode': 1})
+
+        # Create narrow-beam mover profile
+        c.post('/api/dmx-profiles', json={
+            'id': 'narrow-mover', 'name': 'Narrow Spot 8deg',
+            'beamWidth': 8, 'panRange': 540, 'tiltRange': 270,
+            'channels': [
+                {'offset': 0, 'name': 'Pan', 'type': 'pan', 'bits': 16},
+                {'offset': 2, 'name': 'Tilt', 'type': 'tilt', 'bits': 16},
+                {'offset': 4, 'name': 'Dimmer', 'type': 'dimmer'},
+                {'offset': 5, 'name': 'Red', 'type': 'red'},
+                {'offset': 6, 'name': 'Green', 'type': 'green'},
+                {'offset': 7, 'name': 'Blue', 'type': 'blue'},
+            ]
+        })
+
+        # Two movers
+        r = c.post('/api/fixtures', json={
+            'name': 'Mover SL', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 8,
+            'dmxProfileId': 'narrow-mover', 'rotation': [-30, -15, 0]
+        })
+        msl = r.get_json().get('id')
+
+        r = c.post('/api/fixtures', json={
+            'name': 'Mover SR', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 14, 'dmxChannelCount': 8,
+            'dmxProfileId': 'narrow-mover', 'rotation': [-30, 15, 0]
+        })
+        msr = r.get_json().get('id')
+
+        # Camera fixtures (for Examples C & D)
+        r = c.post('/api/fixtures', json={
+            'name': 'Stage Cam', 'type': 'point', 'fixtureType': 'camera',
+            'fovDeg': 90, 'resolutionW': 1920, 'resolutionH': 1080
+        })
+        cam = r.get_json().get('id')
+        c.put(f'/api/fixtures/{cam}', json={
+            'cameraIp': '192.168.10.235', 'cameraIdx': 0
+        })
+
+        # Position in layout
+        c.post('/api/layout', json={'children': [
+            {'id': msl, 'x': 1500, 'y': 0, 'z': 2800},
+            {'id': msr, 'x': 4500, 'y': 0, 'z': 2800},
+            {'id': cam, 'x': 3000, 'y': 0, 'z': 2000},
+        ]})
+
+        # Spatial effect: green sphere sweep
+        r = c.post('/api/spatial-effects', json={
+            'name': 'Sweep Green', 'category': 'spatial-field', 'shape': 'sphere',
+            'r': 0, 'g': 255, 'b': 0, 'size': {'radius': 800},
+            'motion': {'startPos': [1000, 2000, 0], 'endPos': [5000, 2000, 0],
+                       'durationS': 8, 'easing': 'linear'},
+            'blend': 'replace'
+        })
+        eff_id = r.get_json().get('id')
+
+        # Timeline with effect
+        r = c.post('/api/timelines', json={
+            'name': 'Mover Tracking Demo', 'durationS': 20, 'loop': True
+        })
+        tl_id = r.get_json().get('id')
+
+        # Add track + clip
+        c.post(f'/api/timelines/{tl_id}/tracks', json={'target': 'all'})
+        tl_data = c.get(f'/api/timelines/{tl_id}').get_json()
+        tracks = tl_data.get('tracks', [])
+        if tracks:
+            track_id = tracks[0].get('id')
+            c.post(f'/api/timelines/{tl_id}/tracks/{track_id}/clips', json={
+                'effectId': eff_id, 'startS': 0, 'durationS': 8
+            })
+
+        # Bake
+        c.post(f'/api/timelines/{tl_id}/bake')
+
+        # Start playback
+        c.post(f'/api/timelines/{tl_id}/start')
+
+    print('  Example data ready. Capturing with Playwright...')
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        ctx = browser.new_context(viewport={'width': 1280, 'height': 800},
+                                   color_scheme='dark')
+        page = ctx.new_page()
+        page.goto(BASE, wait_until='networkidle', timeout=15000)
+        time.sleep(1.5)
+
+        def snap(name, delay=0.5):
+            time.sleep(delay)
+            path = out(name)
+            page.screenshot(path=path, full_page=False)
+            captured.append(name)
+            print(f'    [{len(captured):2d}] {name}')
+
+        # ── Example B screenshots ──
+
+        # Profile editor (Settings → Profiles → view narrow-mover)
+        try:
+            page.evaluate("showTab('settings')")
+            time.sleep(0.5)
+            page.evaluate("showProfileBrowser()")
+            time.sleep(0.5)
+            page.evaluate("viewProfile('narrow-mover')")
+            snap('example-b-profile.png', 1.0)
+            page.evaluate("closeModal()")
+        except Exception as e:
+            print(f'    Profile capture failed: {e}')
+            skipped.append('example-b-profile.png')
+
+        # Layout 3D with movers on truss
+        try:
+            page.evaluate("showTab('layout')")
+            time.sleep(1)
+            page.evaluate("setView('3d')")
+            snap('example-b-layout-3d.png', 2.5)
+        except Exception as e:
+            print(f'    Layout 3D capture failed: {e}')
+            skipped.append('example-b-layout-3d.png')
+
+        # Actions tab with spatial effect
+        page.evaluate("showTab('actions')")
+        snap('example-b-action.png', 1.5)
+
+        # Shows tab with timeline
+        page.evaluate("showTab('shows')")
+        snap('example-b-timeline.png', 1.5)
+
+        # Runtime tab — tracking T=0
+        page.evaluate("showTab('runtime')")
+        time.sleep(2)
+        snap('example-b-tracking-t0.png', 1.0)
+
+        # Wait and capture T=5
+        time.sleep(5)
+        snap('example-b-tracking-t5.png', 0.5)
+
+        # Wait and capture T=10
+        time.sleep(5)
+        snap('example-b-tracking-t10.png', 0.5)
+
+        # ── Example D screenshots — camera calibration panels ──
+
+        # Camera settings panel
+        try:
+            page.evaluate("showTab('settings')")
+            time.sleep(0.5)
+            page.evaluate("document.querySelector('#sn-cameras')?.click()")
+            snap('example-d-camera-config.png', 1.5)
+        except Exception:
+            skipped.append('example-d-camera-config.png')
+
+        # ArUco print dialog
+        try:
+            page.evaluate("_printAruco()")
+            snap('example-d-print-markers.png', 1.0)
+            page.evaluate("closeModal()")
+        except Exception:
+            skipped.append('example-d-print-markers.png')
+
+        # ── Example C screenshots — mover calibration panel ──
+
+        # Open mover edit then calibrate panel
+        try:
+            page.evaluate("showTab('layout')")
+            time.sleep(1)
+            # Double-click first mover to open edit dialog
+            page.evaluate("""
+                var mover = _fixtures.find(f => f.dmxProfileId === 'narrow-mover');
+                if (mover) editFixture(mover.id);
+            """)
+            snap('example-c-calibrate-panel.png', 1.0)
+            page.evaluate("closeModal()")
+        except Exception as e:
+            print(f'    Calibrate panel capture failed: {e}')
+            skipped.append('example-c-calibrate-panel.png')
+
+        # Stop playback
+        try:
+            with app.test_client() as c:
+                tls = c.get('/api/timelines').get_json() or []
+                for tl in tls:
+                    c.post(f'/api/timelines/{tl["id"]}/stop')
+        except Exception:
+            pass
+
+        browser.close()
+
+    # ── Copy regression test tracking screenshots as higher-quality fallbacks ──
+    reg_dir = os.path.join(PROJ, 'tests', 'regression')
+    for src_name, dst_name in [
+        ('tracking_t0.png', 'example-b-tracking-t0.png'),
+        ('tracking_t5.png', 'example-b-tracking-t5.png'),
+        ('tracking_t10.png', 'example-b-tracking-t10.png'),
+    ]:
+        src = os.path.join(reg_dir, src_name)
+        dst = out(dst_name)
+        if os.path.exists(src) and not os.path.exists(dst):
+            shutil.copy2(src, dst)
+            print(f'    Copied regression screenshot: {src_name} → {dst_name}')
+
+    # ── Create placeholder images for calibration screenshots ──
+    # These need real hardware; provide labeled placeholders for the manual build
+    _create_placeholder('example-c-discovery.png',
+                        'Discovery in progress\nCoarse grid scan with camera detecting beam')
+    _create_placeholder('example-c-grid-result.png',
+                        'Grid calibration complete\nSample count, pan/tilt range, grid density')
+    _create_placeholder('example-c-light-map.png',
+                        'Light map build in progress\nSystematic sweep with stage coordinate mapping')
+    _create_placeholder('example-c-aim-verify.png',
+                        'Aim verification\nBeam aimed at target using calibrated light map')
+    _create_placeholder('example-d-detection.png',
+                        'Camera snapshot with ArUco markers detected\nGreen overlays showing marker IDs')
+    _create_placeholder('example-d-result.png',
+                        'Calibration complete\nReprojection error and reference point summary')
+
+
+def _create_placeholder(filename, text):
+    """Create a labeled placeholder PNG for screenshots that require hardware."""
+    path = out(filename)
+    if os.path.exists(path):
+        return  # don't overwrite existing real screenshots
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new('RGB', (1280, 800), color=(15, 23, 42))
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.truetype('arial.ttf', 24)
+            font_sm = ImageFont.truetype('arial.ttf', 16)
+        except OSError:
+            font = ImageFont.load_default()
+            font_sm = font
+        # Title
+        draw.text((40, 340), text, fill=(56, 189, 248), font=font)
+        # Footer
+        draw.text((40, 740), '[Placeholder — replace with live capture]',
+                  fill=(100, 116, 139), font=font_sm)
+        img.save(path)
+        captured.append(filename)
+        print(f'    [{len(captured):2d}] {filename} (placeholder)')
+    except ImportError:
+        # PIL not available — write a minimal 1x1 PNG as fallback
+        print(f'    Skipped placeholder {filename} (Pillow not installed)')
+        skipped.append(filename)
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description='SlyLED screenshot capture')
     parser.add_argument('--android', action='store_true', help='Capture Android screens via adb')
     parser.add_argument('--child', type=str, help='Capture child config from IP address')
+    parser.add_argument('--examples', action='store_true',
+                        help='Capture example-specific screenshots (Examples B, C, D)')
     args = parser.parse_args()
 
     print('SlyLED Screenshot Capture')
@@ -515,6 +788,15 @@ def main():
             capture_android()
         except Exception as e:
             print(f'  Android capture error: {e}')
+
+    if args.examples:
+        print(f'\n6. Capturing example screenshots...')
+        try:
+            capture_examples()
+        except Exception as e:
+            print(f'  Example capture error: {e}')
+            import traceback
+            traceback.print_exc()
 
     # Summary
     print(f'\n{"=" * 50}')

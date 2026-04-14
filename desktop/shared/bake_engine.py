@@ -529,13 +529,14 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
             beam_len = _math.sqrt(sum((aim[i] - child_pos[i])**2 for i in range(3)))
             half_spread = _math.tan(_math.radians(beam_width_deg / 2)) * beam_len
             if half_spread > 50:  # only if meaningful spread
-                # Add spread points perpendicular to beam at aim end
+                # Add spread points perpendicular to beam in XY plane (#386)
+                # Stage: X=width, Y=depth, Z=height — spread stays at same height
                 dx = aim[0] - child_pos[0]
-                dz = aim[2] - child_pos[2]
-                perp_len = _math.sqrt(dx*dx + dz*dz) or 1
-                px, pz = -dz / perp_len * half_spread, dx / perp_len * half_spread
-                beam_samples.append([aim[0] + px, aim[1], aim[2] + pz])
-                beam_samples.append([aim[0] - px, aim[1], aim[2] - pz])
+                dy = aim[1] - child_pos[1]
+                perp_len = _math.sqrt(dx*dx + dy*dy) or 1
+                px, py = -dy / perp_len * half_spread, dx / perp_len * half_spread
+                beam_samples.append([aim[0] + px, aim[1] + py, aim[2]])
+                beam_samples.append([aim[0] - px, aim[1] - py, aim[2]])
             pixels = beam_samples
             strings_info = [{"offset": 0, "count": len(beam_samples), "sdir": 0}]
         else:
@@ -713,12 +714,27 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
                             pe = act.get("panEnd", 1)
                             ts = act.get("tiltStart", 0.5)
                             te = act.get("tiltEnd", 0.5)
+                        # Pre-position segment: pan/tilt at start with dimmer=0 (#372)
+                        # Gives the fixture time to physically move before the light turns on.
+                        prepos_dur = 0.5  # 500ms settle time
+                        prepos_params = {"pan": ps, "tilt": ts, "dimmer": 0}
+                        for ck in ("r", "g", "b"):
+                            if ck in act:
+                                prepos_params[ck] = act[ck]
+                        all_segments.append({
+                            "type": ACT_DMX_SCENE,
+                            "params": prepos_params,
+                            "startS": round(clip_start_s, 2),
+                            "durationS": prepos_dur,
+                        })
                         # Scale slice duration to keep segment count reasonable
                         slice_dur = 1.0 if clip_dur_s > 15 else 0.5
-                        t = 0
+                        t = prepos_dur  # start after pre-position
+                        effective_dur = clip_dur_s - prepos_dur
                         while t < clip_dur_s:
                             sd = min(slice_dur, clip_dur_s - t)
-                            frac = (t + sd / 2) / clip_dur_s if clip_dur_s > 0 else 0
+                            frac = (t - prepos_dur + sd / 2) / effective_dur if effective_dur > 0 else 0
+                            frac = max(0.0, min(1.0, frac))
                             sp = {"pan": ps + (pe - ps) * frac,
                                   "tilt": ts + (te - ts) * frac}
                             if pt_dimmer is not None:

@@ -445,7 +445,8 @@ def status():
         "cameraCount": len(cameras),
         "cameras": cam_list,
         "capabilities": {
-            "tracking": (_tracker.running if _tracker else False),
+            "tracking": (_tracker is not None or _get_detector() is not None),
+            "trackingRunning": (_tracker.running if _tracker else False),
             "hasCamera": _hw_info.get("hasCamera", False),
             "scan": _get_detector() is not None,
         },
@@ -1594,10 +1595,10 @@ def aruco_reset():
 # the floor, additional depth info is needed (from ArUco marker distance
 # or monocular depth scaled by the known marker sizes).
 #
-# Coordinate system (matches layout 3D view):
+# Coordinate system (stage convention — matches layout 3D view):
 #   X = stage width  (stage right=0 → stage left)
-#   Y = height       (floor=0 → ceiling) — always 0 for floor mapping
-#   Z = depth        (back wall=0 → audience)
+#   Y = stage depth  (back wall=0 → audience) — homography maps floor Y
+#   Z = height       (floor=0 → ceiling) — always 0 for floor mapping
 
 @app.post("/calibrate/stage-map")
 def stage_map():
@@ -1907,7 +1908,7 @@ def track_start():
 
     tracker = _get_tracker()
     if tracker is None:
-        return jsonify(ok=False, err="Tracker not available"), 503
+        return jsonify(ok=False, err="Tracker not available (detector failed to load)"), 503
 
     if tracker.running:
         return jsonify(ok=True, message="Already tracking")
@@ -1921,6 +1922,13 @@ def track_start():
 
     tracker.start(device, orch_url=orch_url,
                   camera_id=camera_id, fps=fps, threshold=threshold, ttl=ttl)
+    # Wait briefly and verify the tracker thread actually started (#378)
+    import time as _t
+    _t.sleep(0.3)
+    if not tracker.running:
+        debug = tracker.debug_info
+        err_msg = debug.get("lastError") or "Thread exited immediately"
+        return jsonify(ok=False, err=f"Tracking failed to start: {err_msg}"), 503
     return jsonify(ok=True, message="Tracking started")
 
 @app.post("/track/stop")

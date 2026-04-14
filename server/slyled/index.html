@@ -109,7 +109,7 @@ footer a{color:var(--accent)}
 <div class="hero">
   <div class="container">
     <img src="slyled.png" alt="SlyLED Logo">
-    <h1>SlyLED<span class="version-badge">v1.4</span></h1>
+    <h1>SlyLED<span class="version-badge">v1.4.28</span></h1>
     <p class="tagline" data-i="tagline"></p>
     <div class="badges">
       <span class="badge badge-win">&#x1F4BB; Windows</span>
@@ -135,6 +135,8 @@ footer a{color:var(--accent)}
       <figure class="fade-in"><img src="spa-runtime.png" alt="Runtime" loading="lazy"><figcaption data-i="ssRuntime"></figcaption></figure>
       <figure class="fade-in"><img src="spa-layout-2d.png" alt="2D Layout" loading="lazy"><figcaption data-i="ss2d"></figcaption></figure>
       <figure class="fade-in"><img src="spa-actions.png" alt="Actions" loading="lazy"><figcaption data-i="ssActions"></figcaption></figure>
+      <figure class="fade-in"><img src="spa-settings-cameras.png" alt="Camera Calibration" loading="lazy"><figcaption data-i="ssCameras"></figcaption></figure>
+      <figure class="fade-in"><img src="example-b-tracking-t5.png" alt="Mover Tracking" loading="lazy"><figcaption data-i="ssTracking"></figcaption></figure>
       <figure class="fade-in"><img src="spa-firmware.png" alt="Firmware" loading="lazy"><figcaption data-i="ssFirmware"></figcaption></figure>
     </div>
   </div>
@@ -155,8 +157,10 @@ footer a{color:var(--accent)}
       <a href="android/" class="feature fade-in"><div class="icon">&#x1F4F1;</div><h3 data-i="feat7t"></h3><p data-i="feat7p"></p></a>
       <a href="community/" class="feature fade-in"><div class="icon">&#x1F310;</div><h3 data-i="feat8t"></h3><p data-i="feat8p"></p></a>
       <a href="3d-calibration/" class="feature fade-in" style="border-color:rgba(244,63,94,.3)"><div class="icon">&#x1F4D0;</div><h3 data-i="feat11t"></h3><p data-i="feat11p"></p></a>
+      <a href="person-tracking/" class="feature fade-in" style="border-color:rgba(236,72,153,.3)"><div class="icon">&#x1F3AF;</div><h3 data-i="feat12t"></h3><p data-i="feat12p"></p></a>
+      <a href="mover-calibration/" class="feature fade-in" style="border-color:rgba(251,191,36,.3)"><div class="icon">&#x1F527;</div><h3 data-i="feat13t"></h3><p data-i="feat13p"></p></a>
       <a href="demo/" class="feature fade-in"><div class="icon">&#x1F3AD;</div><h3 data-i="feat9t"></h3><p data-i="feat9p"></p></a>
-      <div class="feature fade-in"><div class="icon">&#x1F4F7;</div><h3 data-i="feat10t"></h3><p data-i="feat10p"></p></div>
+      <a href="camera-tracking/" class="feature fade-in"><div class="icon">&#x1F4F7;</div><h3 data-i="feat10t"></h3><p data-i="feat10p"></p></a>
     </div>
   </div>
 </section>
@@ -246,6 +250,10 @@ en:{
   feat9t:"Stage Objects & Patrol",feat9p:"Place walls, floors, and performer props on stage. Moving objects patrol back-and-forth automatically. Moving heads track them in real-time via the Track action.",
   feat10t:"AI Camera Detection",feat10p:"Orange Pi camera nodes with YOLOv8n object detection. Live snapshot preview with bounding box overlay, adjustable confidence threshold, and auto-refresh. Deploy firmware via SSH from the Firmware tab.",
   feat11t:"3D Spatial Calibration",feat11p:"ArUco-based camera calibration, depth-estimated point clouds, stereo triangulation, per-fixture light maps, and beam-as-structured-light. All CV runs on the orchestrator \u2014 any camera works.",
+  feat12t:"Person Tracking",feat12p:"Moving heads automatically follow people in real-time. Camera nodes run YOLOv8n detection at 2\u202Ffps, create temporal stage objects, and the Track action aims heads with calibrated pan/tilt at 40\u202FHz. Supports 1:1 assignment, cycling, and multi-person tracking.",
+  feat13t:"Mover Calibration",feat13p:"Automated calibration discovers each moving head's visible range, maps pan/tilt to stage coordinates, and builds per-fixture light maps. Manual mode uses physical markers with pan/tilt jog. Affine extrapolation covers the full stage from just a few samples.",
+  ssCameras:"Camera Calibration \u2014 ArUco markers, stage mapping, mover wizard",
+  ssTracking:"Mover Tracking \u2014 beam cones following spatial effect across stage",
   hwTitle:"Supported Hardware",hwSub:"WiFi-connected LED performers and DMX bridges",
   hw1:"Up to 8 LED strings on independent GPIO pins. OTA firmware updates. Multi-pin FastLED.",
   hw2:"Compact single-string controller. Perfect for portable installations. WS2812B on GPIO 2.",
@@ -281,6 +289,10 @@ fr:{
   feat9t:"Objets de sc\u00e8ne & Patrouille",feat9p:"Placez murs, sols et accessoires sur sc\u00e8ne. Les objets mobiles patrouillent automatiquement. Les lyres les suivent en temps r\u00e9el via l\u2019action Track.",
   feat10t:"D\u00e9tection IA par cam\u00e9ra",feat10p:"N\u0153uds cam\u00e9ra Orange Pi avec d\u00e9tection d\u2019objets YOLOv8n. Aper\u00e7u en direct avec bo\u00eetes englobantes, seuil de confiance ajustable et rafra\u00eechissement automatique. D\u00e9ploiement du firmware via SSH.",
   feat11t:"Calibration spatiale 3D",feat11p:"Calibration cam\u00e9ra par marqueurs ArUco, nuages de points par estimation de profondeur, triangulation st\u00e9r\u00e9o, cartographie lumineuse par projecteur. Tout le traitement CV tourne sur l\u2019orchestrateur.",
+  feat12t:"Suivi de personnes",feat12p:"Les lyres suivent automatiquement les personnes en temps r\u00e9el. Les n\u0153uds cam\u00e9ra d\u00e9tectent via YOLOv8n \u00e0 2\u202Fips, cr\u00e9ent des objets temporels, et l\u2019action Track vise les lyres avec pan/tilt calibr\u00e9 \u00e0 40\u202FHz. Supporte l\u2019attribution 1:1, le cyclage et le suivi multi-personnes.",
+  feat13t:"Calibration des lyres",feat13p:"La calibration automatis\u00e9e d\u00e9couvre la zone visible de chaque lyre, cartographie pan/tilt vers les coordonn\u00e9es de sc\u00e8ne et construit des cartes lumineuses par projecteur. Le mode manuel utilise des marqueurs physiques avec r\u00e9glage pan/tilt. L\u2019extrapolation affine couvre toute la sc\u00e8ne \u00e0 partir de quelques \u00e9chantillons.",
+  ssCameras:"Calibration cam\u00e9ra \u2014 marqueurs ArUco, cartographie de sc\u00e8ne, assistant lyre",
+  ssTracking:"Suivi de lyres \u2014 c\u00f4nes de faisceau suivant un effet spatial sur sc\u00e8ne",
   hwTitle:"Mat\u00e9riel support\u00e9",hwSub:"Performers LED et ponts DMX connect\u00e9s en WiFi",
   hw1:"Jusqu\u2019\u00e0 8 rubans LED sur des broches GPIO ind\u00e9pendantes. Mises \u00e0 jour OTA. FastLED multi-broches.",
   hw2:"Contr\u00f4leur compact \u00e0 un ruban. Parfait pour les installations portables. WS2812B sur GPIO 2.",

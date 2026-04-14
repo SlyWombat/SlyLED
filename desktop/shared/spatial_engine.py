@@ -341,8 +341,9 @@ def evaluate_spatial_effect(effect, pixel_positions, t):
         w = size.get("width", 1000)
         h = size.get("height", 1000)
         d = size.get("depth", 1000)
-        min_c = [pos[0] - w/2, pos[1] - h/2, pos[2] - d/2]
-        max_c = [pos[0] + w/2, pos[1] + h/2, pos[2] + d/2]
+        # Stage: X=width, Y=depth, Z=height (#385)
+        min_c = [pos[0] - w/2, pos[1] - d/2, pos[2] - h/2]
+        max_c = [pos[0] + w/2, pos[1] + d/2, pos[2] + h/2]
         return box_field_evaluate(min_c, max_c, pixel_positions, color, blend)
 
     return [[0, 0, 0]] * len(pixel_positions)

@@ -264,10 +264,17 @@ def test_pan_tilt_move(mh_id):
     ok(len(segs) >= 8, f'PT Move expanded into {len(segs)} slices (expect ≥8 for 5s @ 0.5s)')
 
     if len(segs) >= 2:
-        # First slice should have pan near start (0.0)
+        # First segment should be pre-position with dimmer=0 (#372)
         p0 = segs[0].get('params', {})
-        ok(p0.get('pan', -1) < 0.15, f'First slice pan near 0: {p0.get("pan")}')
-        ok(p0.get('tilt', -1) < 0.4, f'First slice tilt near 0.3: {p0.get("tilt")}')
+        ok(p0.get('dimmer', -1) == 0, f'Pre-position segment has dimmer=0: {p0.get("dimmer")}')
+        ok(p0.get('pan', -1) < 0.05, f'Pre-position pan at start (0.0): {p0.get("pan")}')
+        ok(p0.get('tilt', -1) < 0.35, f'Pre-position tilt at start (0.3): {p0.get("tilt")}')
+        ok(segs[0].get('durationS', 0) >= 0.4, f'Pre-position duration >= 0.4s: {segs[0].get("durationS")}')
+
+        # Second segment onward should have dimmer=255 (from action)
+        p1 = segs[1].get('params', {})
+        ok(p1.get('dimmer', 0) == 255, f'First motion segment has dimmer=255: {p1.get("dimmer")}')
+        ok(p1.get('pan', -1) < 0.15, f'First motion slice pan near 0: {p1.get("pan")}')
 
         # Last slice should have pan near end (1.0)
         pl = segs[-1].get('params', {})
@@ -278,10 +285,10 @@ def test_pan_tilt_move(mh_id):
         all_dmx = all(s.get('type') == 14 for s in segs)
         ok(all_dmx, 'All PT Move slices are DMX_SCENE type')
 
-        # Verify monotonic pan increase
-        pans = [s.get('params', {}).get('pan', 0) for s in segs]
+        # Verify monotonic pan increase (skip pre-position segment)
+        pans = [s.get('params', {}).get('pan', 0) for s in segs[1:]]
         monotonic = all(pans[i] <= pans[i+1] + 0.01 for i in range(len(pans)-1))
-        ok(monotonic, 'Pan values increase monotonically')
+        ok(monotonic, 'Pan values increase monotonically (after pre-position)')
 
     api('DELETE', f'/api/timelines/{tl_id}')
     api('DELETE', f'/api/actions/{act_id}')

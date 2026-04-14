@@ -97,7 +97,47 @@ _TR = {
     'Spatial Data in Projects': 'Donn\u00e9es spatiales dans les projets',
     '14. System Limits': '14. Limites du syst\u00e8me',
     '15. Troubleshooting': '15. D\u00e9pannage',
-    '16. API Quick Reference': "16. R\u00e9f\u00e9rence rapide de l'API",
+    '16. Examples': '16. Exemples',
+    '17. API Quick Reference': "17. R\u00e9f\u00e9rence rapide de l'API",
+    # Example section headings
+    'Example A: Camera Tracking — Moving Heads Follow a Person': 'Exemple A\u00a0: Suivi cam\u00e9ra \u2014 Les lyres suivent une personne',
+    'Example B: Mover Tracking with Spatial Effects': 'Exemple B\u00a0: Suivi de lyres avec effets spatiaux',
+    'Example C: Mover Calibration': 'Exemple C\u00a0: Calibration des lyres',
+    'Example D: Camera Calibration with ArUco Markers': 'Exemple D\u00a0: Calibration cam\u00e9ra avec marqueurs ArUco',
+    'Prerequisites': 'Pr\u00e9requis',
+    'Steps': '\u00c9tapes',
+    'Assignment Behavior': 'Comportement d\u2019attribution',
+    'People in View': 'Personnes visibles',
+    'With 2 Moving Heads': 'Avec 2 lyres',
+    'Part 1 — Stage and Fixture Setup': 'Partie 1 \u2014 Sc\u00e8ne et configuration des projecteurs',
+    'Part 2 — 3D Layout and Spatial Effect': 'Partie 2 \u2014 Disposition 3D et effet spatial',
+    'Part 3 — Timeline, Bake, and Playback': 'Partie 3 \u2014 Timeline, compilation et lecture',
+    'Part 1 — Pan/Tilt Discovery and Grid Calibration': 'Partie 1 \u2014 D\u00e9couverte pan/tilt et calibration de grille',
+    'Part 2 — Light Map (Stage to Pan/Tilt Lookup)': 'Partie 2 \u2014 Carte lumineuse (sc\u00e8ne vers pan/tilt)',
+    'Manual Calibration (No Camera)': 'Calibration manuelle (sans cam\u00e9ra)',
+    'Part 1 — Prepare and Place Markers': 'Partie 1 \u2014 Pr\u00e9parer et placer les marqueurs',
+    'Part 2 — Register and Position Camera': 'Partie 2 \u2014 Enregistrer et positionner la cam\u00e9ra',
+    'Part 3 — Calibrate and Verify': 'Partie 3 \u2014 Calibrer et v\u00e9rifier',
+    'Tips': 'Conseils',
+    # Screenshot captions
+    'Profile editor — Narrow Spot 8-degree beam': '\u00c9diteur de profil \u2014 Faisceau \u00e9troit 8 degr\u00e9s',
+    'Layout tab — 3D view with two movers on truss': 'Onglet Disposition \u2014 Vue 3D avec deux lyres sur la poutre',
+    'Actions tab — Sweep Green spatial effect': 'Onglet Actions \u2014 Effet spatial Balayage Vert',
+    'Shows tab — timeline with spatial effect clip': 'Onglet Spectacles \u2014 Timeline avec clip d\u2019effet spatial',
+    'Runtime — beam cones at start position (T=0s)': 'Lecture \u2014 C\u00f4nes de faisceau au d\u00e9part (T=0s)',
+    'Runtime — beams tracking mid-sweep (T=5s)': 'Lecture \u2014 Faisceaux en suivi \u00e0 mi-parcours (T=5s)',
+    'Runtime — beams at end position (T=10s)': 'Lecture \u2014 Faisceaux en position finale (T=10s)',
+    'Calibration panel — fixture name and options': 'Panneau de calibration \u2014 Nom du projecteur et options',
+    'Discovery in progress — coarse grid scan': 'D\u00e9couverte en cours \u2014 Scan de grille grossi\u00e8re',
+    'Grid calibration complete — sample count and range': 'Calibration de grille termin\u00e9e \u2014 Nombre d\u2019\u00e9chantillons et plage',
+    'Light map build — systematic sweep in progress': 'Construction de la carte lumineuse \u2014 Balayage en cours',
+    'Aim verification — beam at target position': 'V\u00e9rification de vis\u00e9e \u2014 Faisceau sur la position cible',
+    'ArUco marker print dialog — 6 markers': 'Impression des marqueurs ArUco \u2014 6 marqueurs',
+    'Camera configuration — list with IP and status': 'Configuration cam\u00e9ra \u2014 Liste avec IP et statut',
+    'ArUco markers detected — green overlays with IDs': 'Marqueurs ArUco d\u00e9tect\u00e9s \u2014 Cadres verts avec identifiants',
+    'Calibration complete — error and coverage summary': 'Calibration termin\u00e9e \u2014 Erreur et couverture',
+    'Example E: Spotlight Follow Person — Live Tracking Preset': 'Exemple E\u00a0: Spotlight suivi de personne \u2014 Spectacle de suivi en direct',
+    'Multi-Person Behavior': 'Comportement multi-personnes',
   }
 }
 def T(s):
@@ -267,7 +307,8 @@ def build_manual():
         '13. Project Files',
         '14. System Limits',
         '15. Troubleshooting',
-        '16. API Quick Reference',
+        '16. Examples',
+        '17. API Quick Reference',
     ]
     for item in toc_items:
         doc.add_paragraph(item, style='List Number')
@@ -834,8 +875,346 @@ def build_manual():
 
     doc.add_page_break()
 
-    # ── Section 16: API Quick Reference ──────────────────────
-    doc.add_heading(T('16. API Quick Reference'), level=1)
+    # ── Section 16: Examples ─────────────────────────────────
+    doc.add_heading(T('16. Examples'), level=1)
+
+    doc.add_paragraph(
+        'These worked examples walk through common workflows from start to finish. '
+        'Each example includes the exact steps, configuration values, and screenshots '
+        'showing what you should see at each stage.'
+    )
+
+    # ── Example A: Camera Tracking ──
+    doc.add_heading(T('Example A: Camera Tracking — Moving Heads Follow a Person'), level=2)
+    doc.add_paragraph(
+        'Make DMX moving heads automatically follow people detected by a camera.'
+    )
+
+    doc.add_heading(T('Prerequisites'), level=3)
+    doc.add_paragraph(
+        '- At least one camera node online (Firmware tab -> deploy + verify)\n'
+        '- At least one DMX moving head fixture placed on the Layout tab\n'
+        '- Moving head profile configured with pan/tilt range\n'
+        '- Art-Net/sACN engine running (Settings -> DMX -> Start)\n'
+        '- Mover calibration completed (see Example C) for accurate aiming'
+    )
+
+    doc.add_heading(T('Steps'), level=3)
+    doc.add_paragraph(
+        '1. Verify hardware - Open the Setup tab. Confirm movers show green status and camera nodes '
+        'show online. If cameras are offline, check WiFi and deploy firmware from the Firmware tab.\n\n'
+        '2. Start camera tracking - Go to the Layout tab. Click a camera fixture to select it. '
+        'Click the Track toggle button. The status bar shows "Tracking active." The camera node '
+        'begins running YOLO person detection at 2 fps and creates temporal stage objects for each '
+        'detected person.\n\n'
+        '3. Create a Track action - Go to the Actions tab. Click + New Action:\n'
+        '   - Name: Person Follow\n'
+        '   - Type: Track (last option in the dropdown)\n'
+        '   - Color: Pick the beam color (e.g. red for a spotlight)\n'
+        '   - Leave Target Objects empty (follows ALL detected people)\n'
+        '   - Cycle Time: 2000 ms\n'
+        '   - Check Fixed assignment for strict 1:1 mapping\n\n'
+        '4. Create a timeline - Go to the Shows tab. Click + New Timeline, name it "Person '
+        'Tracking", set duration to 600s, enable Loop.\n\n'
+        '5. Start playback - Click Bake, then Start. The 40 Hz DMX playback loop begins.\n\n'
+        '6. Test - Walk in front of the camera. Within 2 seconds a pink person marker appears '
+        'in the 3D viewport. The moving heads aim at you.'
+    )
+
+    doc.add_heading(T('Assignment Behavior'), level=3)
+    add_table(
+        [T('People in View'), T('With 2 Moving Heads')],
+        [
+            ['1 person', 'Both heads aim at the same person'],
+            ['2 people', 'One head per person (1:1)'],
+            ['3+ people (cycling)', 'Heads cycle through people every 2s'],
+            ['3+ people (fixed)', 'First 2 tracked, 3rd ignored'],
+        ]
+    )
+
+    # ── Example B: Mover Tracking with Spatial Effects ──
+    doc.add_heading(T('Example B: Mover Tracking with Spatial Effects'), level=2)
+    doc.add_paragraph(
+        'Make moving heads follow a virtual object sweeping across the stage. '
+        'No camera or physical hardware required — this runs entirely in the emulator.'
+    )
+
+    doc.add_heading(T('Part 1 — Stage and Fixture Setup'), level=3)
+    doc.add_paragraph(
+        '1. Set stage dimensions - Open the Settings tab. Under Stage, enter:\n'
+        '   - Width: 6000 mm, Height: 3000 mm, Depth: 4000 mm\n'
+        '   - Click Save\n\n'
+        '2. Create a DMX profile - Go to Settings -> Profiles -> New Profile:\n'
+        '   - Name: Narrow Spot\n'
+        '   - Beam Width: 8 degrees\n'
+        '   - Pan Range: 540, Tilt Range: 270\n'
+        '   - Channels: Pan (16-bit), Tilt (16-bit), Dimmer, Red, Green, Blue\n'
+        '   - Click Save Profile'
+    )
+
+    add_screenshot('example-b-profile.png', T('Profile editor — Narrow Spot 8-degree beam'))
+
+    doc.add_paragraph(
+        '3. Add two movers - Setup tab -> + Add Fixture (twice):\n'
+        '   - Mover SL: Universe 1, Address 1, profile Narrow Spot\n'
+        '   - Mover SR: Universe 1, Address 14, profile Narrow Spot'
+    )
+
+    doc.add_heading(T('Part 2 — 3D Layout and Spatial Effect'), level=3)
+    doc.add_paragraph(
+        '4. Position movers on the truss - Layout tab -> drag each mover:\n'
+        '   - Mover SL: X=1500, Y=0, Z=2800 (stage left on truss)\n'
+        '   - Mover SR: X=4500, Y=0, Z=2800 (stage right on truss)\n'
+        '   - Switch to 3D view to confirm both are elevated and aimed downward.'
+    )
+
+    add_screenshot('example-b-layout-3d.png', T('Layout tab — 3D view with two movers on truss'))
+
+    doc.add_paragraph(
+        '5. Create a spatial effect - Actions tab -> + New Action:\n'
+        '   - Name: Sweep Green\n'
+        '   - Type: Spatial Effect, Shape: Sphere, Radius: 800 mm\n'
+        '   - Color: Green (0, 255, 0)\n'
+        '   - Motion Start: X=1000, Y=2000, Z=0\n'
+        '   - Motion End: X=5000, Y=2000, Z=0\n'
+        '   - Duration: 8 seconds, Easing: Linear\n'
+        '   - This creates a green sphere that sweeps left to right in 8 seconds.'
+    )
+
+    add_screenshot('example-b-action.png', T('Actions tab — Sweep Green spatial effect'))
+
+    doc.add_heading(T('Part 3 — Timeline, Bake, and Playback'), level=3)
+    doc.add_paragraph(
+        '6. Create a timeline - Shows tab -> + New Timeline:\n'
+        '   - Name: Mover Tracking Demo, Duration: 20s, Loop: On\n'
+        '   - Add track targeting All Performers\n'
+        '   - Add clip referencing Sweep Green, 0s start, 8s duration'
+    )
+
+    add_screenshot('example-b-timeline.png', T('Shows tab — timeline with spatial effect clip'))
+
+    doc.add_paragraph(
+        '7. Bake the timeline - Click Bake. The engine computes per-fixture '
+        'pan/tilt angles for each 25ms frame.\n\n'
+        '8. Start playback - Switch to Runtime tab. Click Start. Both beam cones '
+        'animate in real-time, tracking the green sphere across the stage.'
+    )
+
+    add_screenshot('example-b-tracking-t0.png', T('Runtime — beam cones at start position (T=0s)'))
+    add_screenshot('example-b-tracking-t5.png', T('Runtime — beams tracking mid-sweep (T=5s)'))
+    add_screenshot('example-b-tracking-t10.png', T('Runtime — beams at end position (T=10s)'))
+
+    doc.add_paragraph(
+        'What to look for:\n'
+        '- Both beam cones should be green (matching the effect color)\n'
+        '- The cones should move smoothly from left to right\n'
+        '- Beam opacity > 0 during the sweep, indicating active output\n'
+        '- If beam cones don\'t appear, ensure fixtures are positioned and the timeline is baked'
+    )
+
+    # ── Example C: Manual Mover Calibration ──
+    doc.add_heading(T('Example C: Mover Calibration'), level=2)
+    doc.add_paragraph(
+        'Calibrate a moving head so the system knows exactly where its beam lands '
+        'for any pan/tilt position. This two-part process discovers the visible range '
+        'then builds a light map for inverse lookup.'
+    )
+
+    doc.add_heading(T('Prerequisites'), level=3)
+    doc.add_paragraph(
+        '- Camera node positioned on Layout with camera calibration complete (Example D)\n'
+        '- Moving head fixture placed on the Layout tab\n'
+        '- Art-Net engine running\n'
+        '- Dim ambient lighting (beam must be visible to camera)\n'
+        '- Beam aimed at the floor within the camera\'s field of view'
+    )
+
+    doc.add_heading(T('Part 1 — Pan/Tilt Discovery and Grid Calibration'), level=3)
+    doc.add_paragraph(
+        '1. Open calibration - Layout tab -> double-click a moving head -> click Calibrate.'
+    )
+
+    add_screenshot('example-c-calibrate-panel.png', T('Calibration panel — fixture name and options'))
+
+    doc.add_paragraph(
+        '2. Choose beam color - Select a color that contrasts with your floor:\n'
+        '   - Green on dark floors, Magenta on light floors\n\n'
+        '3. Run discovery - Click Start Calibration. The system sweeps a coarse 8x5 grid '
+        'across the full pan/tilt range. The camera watches for the beam on the floor.\n'
+        '   - Phase 1: Coarse grid scan (~40 positions)\n'
+        '   - Phase 2: Fine spiral refinement from detected position'
+    )
+
+    add_screenshot('example-c-discovery.png', T('Discovery in progress — coarse grid scan'))
+
+    doc.add_paragraph(
+        '4. BFS mapping - The system explores the visible region in 4 directions from the '
+        'discovered position. Collects up to 60 samples using adaptive settle times '
+        '(0.8-2.5s per move). Mapping stops at boundaries.\n\n'
+        '5. Grid build and review - The calibration summary shows:\n'
+        '   - Sample count (aim for 30+)\n'
+        '   - Pan/tilt range (normalized 0.0-1.0)\n'
+        '   - Grid density'
+    )
+
+    add_screenshot('example-c-grid-result.png', T('Grid calibration complete — sample count and range'))
+
+    doc.add_heading(T('Part 2 — Light Map (Stage to Pan/Tilt Lookup)'), level=3)
+    doc.add_paragraph(
+        '6. Build light map - Click Build Light Map. The system sweeps a 20x15 grid:\n'
+        '   - At each position: move, detect beam, convert pixel to stage mm via homography\n'
+        '   - Builds a (pan, tilt) -> (stageX, stageY, stageZ) lookup table\n'
+        '   - Typical time: 5-10 minutes for 300 samples'
+    )
+
+    add_screenshot('example-c-light-map.png', T('Light map build — systematic sweep in progress'))
+
+    doc.add_paragraph(
+        '7. Verify inverse lookup - Click Aim and enter a target stage position:\n'
+        '   - The system uses inverse-distance interpolation to find the pan/tilt\n'
+        '   - Verify the beam lands within 100-200mm of the target\n'
+        '   - Test 3-4 positions across the stage\n\n'
+        '8. Save - Calibration data is auto-saved with the fixture and included '
+        'in project exports.'
+    )
+
+    add_screenshot('example-c-aim-verify.png', T('Aim verification — beam at target position'))
+
+    doc.add_heading(T('Manual Calibration (No Camera)'), level=3)
+    doc.add_paragraph(
+        'If automated calibration isn\'t available:\n\n'
+        '1. Double-click mover -> Manual Calibrate\n'
+        '2. Define 4-6 physical markers at known stage positions\n'
+        '3. Jog beam to each marker using pan/tilt sliders, click Record\n'
+        '4. Click Compute — the system fits a 3D affine transform\n'
+        '5. The transform extrapolates beyond calibrated points\n\n'
+        'Re-calibrate when: fixture moved, venue changed, pan/tilt range updated, '
+        'or accuracy degrades.'
+    )
+
+    # ── Example D: Camera Calibration with ArUco Markers ──
+    doc.add_heading(T('Example D: Camera Calibration with ArUco Markers'), level=2)
+    doc.add_paragraph(
+        'Calibrate a camera so pixel coordinates map to real stage positions. '
+        'This is a prerequisite for beam detection, person tracking, and mover calibration.'
+    )
+
+    doc.add_heading(T('Prerequisites'), level=3)
+    doc.add_paragraph(
+        '- Camera node online and reachable on the network\n'
+        '- Camera fixture registered (Setup -> Discover, or Settings -> Cameras)\n'
+        '- Camera placed on the Layout tab at its physical position\n'
+        '- Printer for ArUco marker sheet (A4/Letter)\n'
+        '- Tape measure for recording marker positions on stage'
+    )
+
+    doc.add_heading(T('Part 1 — Prepare and Place Markers'), level=3)
+    doc.add_paragraph(
+        '1. Print ArUco markers - Settings -> Cameras -> Print ArUco Markers. '
+        'A modal shows 6 ArUco 4x4 markers (IDs 0-5), each 150mm.\n'
+        '   - Print at 100% scale (no fit-to-page)\n'
+        '   - Card stock is more durable than regular paper'
+    )
+
+    add_screenshot('example-d-print-markers.png', T('ArUco marker print dialog — 6 markers'))
+
+    doc.add_paragraph(
+        '2. Place markers on the stage floor:\n'
+        '   - Minimum 3 markers, recommended 4-6\n'
+        '   - Spread across the camera\'s field of view\n'
+        '   - Place flat on the floor (tilted markers reduce accuracy)\n'
+        '   - Measure each marker\'s X, Y position from the stage origin (mm)'
+    )
+
+    doc.add_heading(T('Part 2 — Register and Position Camera'), level=3)
+    doc.add_paragraph(
+        '3. Register camera - Setup tab -> Discover, or Settings -> Cameras -> add IP.\n'
+        '   Each USB camera sensor appears as a separate fixture.'
+    )
+
+    add_screenshot('example-d-camera-config.png', T('Camera configuration — list with IP and status'))
+
+    doc.add_paragraph(
+        '4. Position in 3D - Layout tab -> drag camera to its physical position.\n'
+        '   Set rotation to match aim direction. The camera frustum should cover '
+        'the markers on stage.'
+    )
+
+    doc.add_heading(T('Part 3 — Calibrate and Verify'), level=3)
+    doc.add_paragraph(
+        '5. Run calibration - Layout tab -> click camera -> Calibrate:\n'
+        '   - Camera captures a frame, ArUco markers are auto-detected\n'
+        '   - For each marker: enter the real-world X, Y coordinates, click Record\n'
+        '   - Click Compute — builds a homography matrix (pixels -> stage coords)'
+    )
+
+    add_screenshot('example-d-detection.png', T('ArUco markers detected — green overlays with IDs'))
+
+    doc.add_paragraph(
+        '6. Review results:\n'
+        '   - Reprojection error: < 10mm excellent, 10-20mm good, > 50mm re-try\n'
+        '   - Reference points: should match markers recorded\n'
+        '   - Coverage area: larger is better\n\n'
+        '7. Save - Click Save. The camera badge shows a green checkmark.\n'
+        '   All tracking and detection features now use stage coordinates.'
+    )
+
+    add_screenshot('example-d-result.png', T('Calibration complete — error and coverage summary'))
+
+    doc.add_heading(T('Tips'), level=3)
+    doc.add_paragraph(
+        '- Use large markers (> 10 cm) for reliable detection at distance\n'
+        '- Place markers at the extremes of the camera\'s view, not just center\n'
+        '- Avoid direct glare on glossy printed markers\n'
+        '- Re-calibrate when: camera moved, lens changed, or stage reconfigured'
+    )
+
+    # ── Example E: Spotlight Follow Person ──
+    doc.add_heading(T('Example E: Spotlight Follow Person — Live Tracking Preset'), level=2)
+    doc.add_paragraph(
+        'Use the built-in Spotlight: Follow Person preset to make moving heads '
+        'automatically follow people detected by a camera in real-time.'
+    )
+
+    doc.add_heading(T('Prerequisites'), level=3)
+    doc.add_paragraph(
+        '- Camera node online with person detection working\n'
+        '- DMX moving head fixtures placed on the Layout tab\n'
+        '- Camera calibration complete (Example D)\n'
+        '- Mover calibration complete (Example C)\n'
+        '- Art-Net engine running'
+    )
+
+    doc.add_heading(T('Steps'), level=3)
+    doc.add_paragraph(
+        '1. Load the preset - Runtime tab -> Load Show -> Spotlight: Follow Person.\n'
+        '   Warnings appear if camera or movers are missing (preset still loads).\n\n'
+        '2. What it creates:\n'
+        '   - Track action (type 18) on all movers targeting "person" objects\n'
+        '   - Warm spotlight color (255, 240, 200) at full dimmer\n'
+        '   - Dim blue ambient wash on LED fixtures for framing\n'
+        '   - 10-minute looping timeline for the DMX playback loop\n\n'
+        '3. Start camera tracking - Layout tab -> click camera -> Track toggle.\n'
+        '   Pink person capsules appear in the 3D viewport.\n\n'
+        '4. Start playback - Click Bake, then Start. The 40 Hz DMX loop begins.\n\n'
+        '5. Walk on stage - Within 2 seconds, heads light up and aim at you.\n'
+        '   As you move, beams follow in real-time.'
+    )
+
+    doc.add_heading(T('Multi-Person Behavior'), level=3)
+    add_table(
+        [T('People in View'), T('With 2 Moving Heads')],
+        [
+            ['1 person', 'Both heads aim at the same person'],
+            ['2 people', 'One head per person (auto-spread)'],
+            ['3+ people', 'Heads cycle through people every 2s'],
+        ]
+    )
+
+    doc.add_page_break()
+
+    # ── Section 17: API Quick Reference ──────────────────────
+    doc.add_heading(T('17. API Quick Reference'), level=1)
     doc.add_paragraph('All endpoints are served from the Orchestrator at http://localhost:8080.')
 
     api_sections = [

@@ -171,6 +171,72 @@ FEATURES = [
         "screenshots": ["spa-settings-cameras.png", "spa-layout-3d.png"],
         "captions": ["Camera calibration status in Settings", "3D viewport with scanned point cloud and surfaces"],
     },
+    {
+        "slug": "person-tracking",
+        "title": "Person Tracking",
+        "icon": "&#x1F3AF;",
+        "color": "#ec4899",
+        "hero": "Moving heads automatically follow people in real-time",
+        "desc": "Camera nodes run YOLOv8n person detection at 2 fps. Detected people become temporal stage objects with 5-second TTL. The Track action aims calibrated moving heads at each person using inverse light map lookup, updating pan/tilt at 40 Hz over Art-Net.",
+        "bullets": [
+            "YOLOv8n person detection on Orange Pi camera nodes",
+            "Temporal stage objects auto-created for each detected person",
+            "Proximity-based re-identification (500mm threshold) across frames",
+            "Track action: 1:1 assignment, cycling, or fixed modes",
+            "Calibrated pan/tilt aiming via per-fixture light maps",
+            "40 Hz Art-Net output for smooth, responsive head movement",
+            "Multi-person support: heads distribute across detected people",
+            "Pink markers in 3D viewport show tracked person positions",
+            "Works with any calibrated camera (ArUco stage map required)",
+            "Configurable cycle time, beam color, and assignment mode",
+        ],
+        "screenshots": ["example-b-tracking-t5.png", "spa-settings-cameras.png"],
+        "captions": ["Beam cones tracking a spatial effect across the stage", "Camera calibration setup for tracking"],
+    },
+    {
+        "slug": "mover-calibration",
+        "title": "Mover Calibration",
+        "icon": "&#x1F527;",
+        "color": "#fbbf24",
+        "hero": "Automated pan/tilt calibration with camera-verified light maps",
+        "desc": "The calibration wizard automatically discovers each moving head's visible range, maps pan/tilt positions to real stage coordinates, and builds per-fixture light maps. Manual mode uses physical markers for venues without cameras. Affine extrapolation covers the full stage from just a few samples.",
+        "bullets": [
+            "Automatic discovery: coarse 8x5 grid + fine spiral refinement",
+            "BFS region mapping: explores visible area with adaptive settle (0.8-2.5s)",
+            "Light map: 20x15 systematic sweep maps (pan,tilt) to stage (x,y,z)",
+            "Inverse lookup: aim at any stage coordinate using IDW interpolation",
+            "Manual calibration: jog beam to physical markers, build affine transform",
+            "Beam color selection: green, magenta, red, or blue for contrast",
+            "Double-capture verification ensures beam has settled before recording",
+            "Boundary-aware: stops at camera field-of-view edges automatically",
+            "Calibration data persists in project files (.slyshow export/import)",
+            "ArUco camera calibration prerequisite for pixel-to-stage mapping",
+        ],
+        "screenshots": ["example-c-calibrate-panel.png", "example-b-layout-3d.png"],
+        "captions": ["Mover calibration panel with fixture settings", "3D layout with calibrated movers on truss"],
+    },
+    {
+        "slug": "camera-tracking",
+        "title": "AI Camera Detection",
+        "icon": "&#x1F4F7;",
+        "color": "#22c55e",
+        "hero": "YOLOv8n object detection on Orange Pi camera nodes",
+        "desc": "Deploy camera firmware to Orange Pi or Raspberry Pi boards via SSH from the Firmware tab. Each camera node serves HTTP endpoints for snapshots, object detection, depth estimation, and continuous tracking. All heavy CV processing runs on the orchestrator — any camera that can serve JPEGs works.",
+        "bullets": [
+            "YOLOv8n ONNX model (12 MB) for fast person/object detection",
+            "Depth-Anything-V2 monocular depth estimation for 3D point clouds",
+            "ArUco marker detection for camera intrinsic calibration",
+            "Homography-based pixel-to-stage coordinate mapping",
+            "Live snapshot preview with bounding box overlay in the SPA",
+            "Adjustable confidence threshold and resolution (320/640)",
+            "Multi-camera support (V4L2 USB cameras, auto-filtering SoC nodes)",
+            "Systemd service (slyled-cam) for auto-start on boot",
+            "SSH+SCP firmware deployment from desktop Firmware tab",
+            "Per-camera fixtures with independent FOV, calibration, and positioning",
+        ],
+        "screenshots": ["spa-cv-status.png", "spa-settings-cameras.png"],
+        "captions": ["CV Engine status showing model loading", "Camera node configuration with calibration status"],
+    },
 ]
 
 TEMPLATE = """<!DOCTYPE html>
@@ -237,6 +303,8 @@ footer{{text-align:center;padding:30px 0;color:#64748b;font-size:.85em;border-to
 for f in FEATURES:
     bullets_html = "\n".join(f"    <li>{b}</li>" for b in f["bullets"])
     screenshots_html = "\n".join(
+        f'    <figure><img src="../{img}" alt="{cap}" loading="lazy"><figcaption>{cap}</figcaption></figure>'
+        if img.startswith(("spa-", "example-")) else
         f'    <figure><img src="../demo/{img}" alt="{cap}" loading="lazy"><figcaption>{cap}</figcaption></figure>'
         for img, cap in zip(f["screenshots"], f["captions"])
     )

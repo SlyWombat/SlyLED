@@ -168,9 +168,11 @@ class Tracker:
         else:
             # Use pixel center as internal tracking coords (for re-ID proximity)
             # Real stage conversion happens on the orchestrator via cameraId + pixelBox
+            # Stage: X=width, Y=depth, Z=height. Pixel Y → stage Y (depth), Z=0 floor (#387)
             stage_dets = [{"label": d["label"], "confidence": d["confidence"],
-                           "x": d["x"] + d["w"] // 2, "y": 0,
-                           "z": d["y"] + d["h"] // 2,
+                           "x": d["x"] + d["w"] // 2,
+                           "y": d["y"] + d["h"] // 2,
+                           "z": 0,
                            "w": d["w"], "h": d["h"],
                            "_raw": d, "_frameSize": [frame_w, frame_h],
                            } for d in detections]
@@ -178,14 +180,14 @@ class Tracker:
         now = time.monotonic()
         matched_track_ids = set()
 
-        # Match detections to existing tracks by proximity
+        # Match detections to existing tracks by proximity (XY horizontal plane)
         for det in stage_dets:
             best_id = None
             best_dist = REID_THRESHOLD_MM + 1
             for tid, trk in self._tracks.items():
                 dx = det["x"] - trk["x"]
-                dz = det["z"] - trk["z"]
-                dist = (dx*dx + dz*dz) ** 0.5
+                dy = det["y"] - trk["y"]
+                dist = (dx*dx + dy*dy) ** 0.5
                 if dist < best_dist and tid not in matched_track_ids:
                     best_dist = dist
                     best_id = tid
@@ -194,7 +196,7 @@ class Tracker:
                 # Update existing track
                 trk = self._tracks[best_id]
                 trk["x"] = det["x"]
-                trk["z"] = det["z"]
+                trk["y"] = det["y"]
                 trk["label"] = det.get("label", "person")
                 trk["last_seen"] = now
                 matched_track_ids.add(best_id)
@@ -208,7 +210,7 @@ class Tracker:
                 orch_id = self._orch_create_temporal(det)
                 if orch_id is not None:
                     self._tracks[tid] = {
-                        "x": det["x"], "z": det["z"],
+                        "x": det["x"], "y": det["y"],
                         "label": det.get("label", "person"),
                         "last_seen": now,
                         "orch_obj_id": orch_id,
@@ -230,7 +232,7 @@ class Tracker:
                 "ttl": self._ttl,
                 "color": "#f472b6",
                 "opacity": 40,
-                "pos": [det["x"], det["z"], 0],   # fallback if orchestrator can't convert
+                "pos": [det["x"], det["y"], 0],   # stage: X=width, Y=depth, Z=0 (floor)
                 "scale": [det.get("w", 400), 200, det.get("h", 400)],
             }
             # Send raw pixel box + camera ID for orchestrator-side pixel→stage conversion
@@ -258,7 +260,7 @@ class Tracker:
         """Update position of an existing temporal object.
         Sends pixel data for orchestrator-side conversion."""
         try:
-            body = {"pos": [det["x"], det["z"], 0]}
+            body = {"pos": [det["x"], det["y"], 0]}
             raw = det.get("_raw")
             fs = det.get("_frameSize")
             if raw and fs and self._cam_id:
@@ -272,5 +274,7 @@ class Tracker:
                 data=data, headers={"Content-Type": "application/json"},
                 method="PUT")
             urllib.request.urlopen(req, timeout=2)
-        except Exception:
-            pass  # Object may have expired
+        except Exception as e:
+            self._last_error = f"update_pos({obj_id}): {e}"
+            if self._tick_count <= 3 or self._tick_count % 50 == 0:
+                log.warning("Failed to update temporal object %s: %s", obj_id, e)

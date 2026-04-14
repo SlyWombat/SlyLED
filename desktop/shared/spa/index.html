@@ -277,11 +277,11 @@ body.light .li:hover{border-color:#3b82f6}
       <!-- Fixtures list (collapsible) -->
       <div style='border-bottom:1px solid #1e293b'>
         <div id='panel-fixtures-hdr' onclick='_panelToggle("fixtures")' style='padding:.5em .8em;cursor:pointer;display:flex;align-items:center;gap:.4em;user-select:none'>
-          <span id='panel-fixtures-arrow' style='font-size:.7em;color:#64748b;transition:transform .15s'>&#9654;</span>
+          <span id='panel-fixtures-arrow' style='font-size:.7em;color:#64748b;transition:transform .15s;transform:rotate(90deg)'>&#9654;</span>
           <span style='font-weight:600;color:#aaa;flex:1;font-size:.85em'>Fixtures</span>
           <span id='panel-fixtures-count' style='font-size:.7em;color:#64748b;background:#1e293b;padding:0 5px;border-radius:8px'>0</span>
         </div>
-        <div id='panel-fixtures-body' style='display:none;padding:0 .8em .5em'>
+        <div id='panel-fixtures-body' style='display:block;padding:0 .8em .5em'>
           <div id='lay-fixtures' style='color:#94a3b8'>Loading...</div>
         </div>
       </div>
@@ -792,7 +792,7 @@ function _rotToAim(rot,pos,dist){
   return[pos[0]+Math.sin(pr)*Math.cos(tr)*dist,pos[1]+Math.cos(pr)*Math.cos(tr)*dist,pos[2]-Math.sin(tr)*dist];
 }
 var _layoutDirty=false;
-var _panelSections={fixtures:false,objects:false,scene:false}; // collapse state
+var _panelSections={fixtures:true,objects:false,scene:false}; // collapse state (#354: fixtures expanded by default)
 var _panelSelectedFid=null; // currently selected fixture ID for side panel
 function _clearTabTimers(){
   if(typeof dashRunnerTimer!=='undefined'&&dashRunnerTimer){clearInterval(dashRunnerTimer);dashRunnerTimer=null;}
@@ -2369,6 +2369,52 @@ function s3dAnimate(){
       if(grp.children[1]&&grp.children[1].isMesh)grp.children[1].scale.setScalar(scaleFactor);
     });
   }
+  // Live beam cone update from /api/fixtures/live (#355)
+  if(!_s3d._liveT)_s3d._liveT=0;
+  var now=Date.now();
+  if(now-_s3d._liveT>500&&ctab==='layout'){
+    _s3d._liveT=now;
+    ra('GET','/api/fixtures/live',null,function(liveData){
+      if(!liveData||typeof liveData!=='object')return;
+      _s3d.nodes.forEach(function(grp){
+        var fid=grp.userData.childId;if(fid===undefined)return;
+        var live=liveData[String(fid)];if(!live)return;
+        var panNorm=live.pan,tiltNorm=live.tilt;
+        if(panNorm===undefined||tiltNorm===undefined)return;
+        var fx=null;(_fixtures||[]).forEach(function(f){if(f.id===fid)fx=f;});
+        if(!fx||fx.fixtureType!=='dmx')return;
+        var prof=window._profileCache&&fx.dmxProfileId?window._profileCache[fx.dmxProfileId]:null;
+        var panRange=prof?prof.panRange||540:540;
+        var tiltRange=prof?prof.tiltRange||270:270;
+        var rot=fx.rotation||[0,0,0];
+        var basePan=rot[1]||0;
+        var panDeg=(panNorm-0.5)*panRange;
+        var tiltDeg=(tiltNorm-0.5)*tiltRange;
+        var panRad=(basePan+panDeg)*Math.PI/180;
+        var tiltRad=tiltDeg*Math.PI/180;
+        var aimDir=new THREE.Vector3(Math.sin(panRad)*Math.cos(tiltRad),-Math.sin(tiltRad),Math.cos(panRad)*Math.cos(tiltRad));
+        grp.children.forEach(function(child){
+          if(child.userData.beamCone&&child.isMesh&&child.geometry.type==='ConeGeometry'){
+            var beamLen=child.geometry.parameters.height||3;
+            var mid=aimDir.clone().multiplyScalar(beamLen/2);
+            child.position.copy(mid);
+            child.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,-1,0),aimDir.clone().normalize()));
+          }
+        });
+        // Update cone color from live dimmer/RGB
+        if(live.dimmer!==undefined){
+          var dimVal=live.dimmer/255;
+          var hexCol=((live.r||0)<<16)|((live.g||0)<<8)|(live.b||0);
+          grp.children.forEach(function(child){
+            if(child.userData.beamCone&&child.isMesh&&child.geometry.type==='ConeGeometry'){
+              if(hexCol>0)child.material.color.setHex(hexCol);
+              child.material.opacity=dimVal>0.01?dimVal*0.4:0.08;
+            }
+          });
+        }
+      });
+    });
+  }
   if(_s3d.renderer&&_s3d.scene&&_s3d.camera)_s3d.renderer.render(_s3d.scene,_s3d.camera);
   // Info overlay
   var info=document.getElementById('s3d-info');
@@ -2439,6 +2485,12 @@ function s3dLoadChildren(){
       var mat=new THREE.MeshStandardMaterial({color:col,emissive:col,emissiveIntensity:0.4});
       var sphere=new THREE.Mesh(geo,mat);
       grp.add(sphere);
+
+      // Invisible click helper sphere — larger hit area for raycaster (#358)
+      var hitGeo=new THREE.SphereGeometry(0.35,8,8);
+      var hitMat=new THREE.MeshBasicMaterial({visible:false});
+      var hitSphere=new THREE.Mesh(hitGeo,hitMat);
+      grp.add(hitSphere);
 
       // Glow ring
       var ringGeo=new THREE.RingGeometry(0.18,0.22,24);
@@ -5257,9 +5309,9 @@ function emuLoadStage(){
         var td=document.getElementById('tl-time');if(td)td.textContent='00:00.0';
       }
     });
-    // Refresh objects to include temporal objects
+    // Refresh objects to include temporal objects; update 3D markers (#383)
     ra('GET','/api/objects',null,function(objs){
-      if(_emuStage&&objs)_emuStage.objects=objs;
+      if(_emuStage&&objs){_emuStage.objects=objs;emu3dRenderObjects();}
     });
   },1000);
 }
@@ -5390,6 +5442,8 @@ function _emu3dClearNodes(){
     _s3d.scene.remove(grp);
   });
   _emu3d.nodes=[];
+  // Clear object nodes (tracked persons, stage objects) (#383)
+  _emu3dClearObjNodes();
   // Also remove runtime stage box
   if(_emu3d.stageBox){_s3d.scene.remove(_emu3d.stageBox);_emu3d.stageBox=null;}
 }
@@ -5522,6 +5576,8 @@ function emu3dBuildFixtures(){
       _emu3d.nodes.push(grp);
     });
 
+    // Render stage objects (including tracked persons) (#383)
+    emu3dRenderObjects();
     emu3dZoomToFit();
   };
   // Use cached stage data if available, otherwise fetch
@@ -5530,6 +5586,126 @@ function emu3dBuildFixtures(){
   }else{
     ra('GET','/api/stage',null,function(st){window._stageData=st;stReady(st);});
   }
+}
+
+// ── Stage object rendering for Runtime/Dashboard 3D (#383) ─────────────
+var _emu3dObjNodes=[];  // tracked separately from fixture nodes
+
+function emu3dRenderObjects(){
+  if(!_s3d.inited)return;
+  var objs=(_emuStage&&_emuStage.objects)||[];
+  // Build a map of current object IDs for expiry detection
+  var objIds={};
+  objs.forEach(function(o){objIds[o.id]=true;});
+
+  // Remove expired objects (no longer in API response = TTL expired)
+  var keep=[];
+  _emu3dObjNodes.forEach(function(grp){
+    if(!objIds[grp.userData.objId]){
+      grp.traverse(function(obj){
+        if(obj.geometry)obj.geometry.dispose();
+        if(obj.material){if(obj.material.map)obj.material.map.dispose();obj.material.dispose();}
+      });
+      _s3d.scene.remove(grp);
+    } else {
+      keep.push(grp);
+    }
+  });
+  _emu3dObjNodes=keep;
+
+  // Build a map of existing node IDs for update-in-place
+  var existing={};
+  _emu3dObjNodes.forEach(function(grp){existing[grp.userData.objId]=grp;});
+
+  objs.forEach(function(s){
+    var t=s.transform||{pos:[0,0,0],scale:[2000,1500,1]};
+    var isPerson=(s.objectType==='person'||s._temporal);
+    // Stage→Three.js: X→X, Z(height)→Y, Y(depth)→Z
+    var px=(t.pos[0]||0)/1000, py=(t.pos[2]||0)/1000, pz=(t.pos[1]||0)/1000;
+
+    // Update existing node position (smooth lerp)
+    if(existing[s.id]){
+      var grp=existing[s.id];
+      var tp=grp.userData._targetPos;
+      if(!tp){tp={x:px,y:py,z:pz};grp.userData._targetPos=tp;}
+      tp.x=px;tp.y=py;tp.z=pz;
+      return; // position lerp handled in emu3dAnimate
+    }
+
+    // Create new node
+    var grp=new THREE.Group();
+    grp.userData.emuObj=true;
+    grp.userData.objId=s.id;
+    grp.userData.isPerson=isPerson;
+    grp.userData._targetPos={x:px,y:py,z:pz};
+    grp.position.set(px,py,pz);
+
+    if(isPerson){
+      // Person: vertical capsule (cylinder + 2 hemispheres)
+      var personH=1.8; // ~1.8m tall
+      var personR=0.2;  // ~0.4m wide
+      var cylGeo=new THREE.CylinderGeometry(personR,personR,personH-personR*2,12);
+      var cylMat=new THREE.MeshBasicMaterial({color:0xf472b6,transparent:true,opacity:0.55,depthWrite:false});
+      var cyl=new THREE.Mesh(cylGeo,cylMat);
+      cyl.position.set(0,(personH-personR*2)/2+personR,0);
+      cyl.userData.personBody=true;
+      grp.add(cyl);
+      // Top hemisphere
+      var topGeo=new THREE.SphereGeometry(personR,12,8,0,Math.PI*2,0,Math.PI/2);
+      var topMat=new THREE.MeshBasicMaterial({color:0xf472b6,transparent:true,opacity:0.55,depthWrite:false});
+      var top=new THREE.Mesh(topGeo,topMat);
+      top.position.set(0,personH-personR,0);
+      top.userData.personBody=true;
+      grp.add(top);
+      // Bottom hemisphere
+      var botGeo=new THREE.SphereGeometry(personR,12,8,0,Math.PI*2,Math.PI/2,Math.PI/2);
+      var botMat=new THREE.MeshBasicMaterial({color:0xf472b6,transparent:true,opacity:0.55,depthWrite:false});
+      var bot=new THREE.Mesh(botGeo,botMat);
+      bot.position.set(0,personR,0);
+      bot.userData.personBody=true;
+      grp.add(bot);
+      // Glow ring at feet
+      var ringGeo=new THREE.RingGeometry(0.25,0.35,24);
+      var ringMat=new THREE.MeshBasicMaterial({color:0xf472b6,side:THREE.DoubleSide,opacity:0.3,transparent:true,depthWrite:false});
+      var ring=new THREE.Mesh(ringGeo,ringMat);
+      ring.rotation.x=-Math.PI/2;
+      ring.position.set(0,0.02,0);
+      grp.add(ring);
+    } else {
+      // Static object: box/plane (same as layout view)
+      var sw=(t.scale[0]||2000)/1000,sh=(t.scale[1]||1500)/1000;
+      var sd=(t.scale[2]||1)/1000;
+      var col=new THREE.Color(s.color||'#334155');
+      var useBox=((t.scale[2]||1)>100);
+      var geo=useBox?new THREE.BoxGeometry(sw,sh,sd):new THREE.PlaneGeometry(sw,sh);
+      var mat=new THREE.MeshBasicMaterial({color:col,side:THREE.DoubleSide,opacity:(s.opacity||30)/100,transparent:true,depthWrite:false});
+      var mesh=new THREE.Mesh(geo,mat);
+      mesh.position.set(sw/2,sh/2,useBox?(-sd/2):0);
+      grp.add(mesh);
+      var edgeMat=new THREE.LineBasicMaterial({color:col,opacity:0.6,transparent:true});
+      grp.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo),edgeMat));
+    }
+
+    // Label above
+    var lbl=_s3dLabel(s.name||(isPerson?'Person':'Object'));
+    lbl.position.set(0,isPerson?2.1:((t.scale[1]||1500)/1000+0.15),0);
+    lbl.userData.objLabel=true;
+    grp.add(lbl);
+
+    _s3d.scene.add(grp);
+    _emu3dObjNodes.push(grp);
+  });
+}
+
+function _emu3dClearObjNodes(){
+  _emu3dObjNodes.forEach(function(grp){
+    grp.traverse(function(obj){
+      if(obj.geometry)obj.geometry.dispose();
+      if(obj.material){if(obj.material.map)obj.material.map.dispose();obj.material.dispose();}
+    });
+    _s3d.scene.remove(grp);
+  });
+  _emu3dObjNodes=[];
 }
 
 function emu3dUpdateColors(){
@@ -5644,6 +5820,26 @@ function emu3dAnimate(){
       if(grp.children[1]&&grp.children[1].isMesh)grp.children[1].scale.setScalar(scaleFactor);
     });
   }
+  // Animate person markers: lerp position + pulsing opacity (#383)
+  var now=Date.now()/1000;
+  _emu3dObjNodes.forEach(function(grp){
+    // Smooth position lerp toward target
+    var tp=grp.userData._targetPos;
+    if(tp){
+      grp.position.x+=(tp.x-grp.position.x)*0.15;
+      grp.position.y+=(tp.y-grp.position.y)*0.15;
+      grp.position.z+=(tp.z-grp.position.z)*0.15;
+    }
+    // Pulsing opacity for person markers
+    if(grp.userData.isPerson){
+      var pulse=0.4+0.2*Math.sin(now*3);
+      grp.traverse(function(child){
+        if(child.userData.personBody&&child.material){
+          child.material.opacity=pulse;
+        }
+      });
+    }
+  });
   if(_s3d.renderer&&_s3d.scene&&_emu3d.camera)_s3d.renderer.render(_s3d.scene,_emu3d.camera);
 }
 
@@ -10351,8 +10547,13 @@ function loadPreset(id){
   ra('POST','/api/show/preset',{id:id},function(r){
     closeModal();
     if(r&&r.ok){
-      document.getElementById('hs').textContent='Loaded "'+r.name+'" — '+r.actions+' actions, '+r.effects+' effects. Go to Runtime tab to play.';
-      // Switch to runtime tab
+      var msg='Loaded "'+r.name+'" — '+r.actions+' actions, '+r.effects+' effects.';
+      if(r.warnings&&r.warnings.length){
+        msg+=' Warning: '+r.warnings.join('; ');
+      } else {
+        msg+=' Go to Runtime tab to play.';
+      }
+      document.getElementById('hs').textContent=msg;
       showTab('runtime');
     }else{
       document.getElementById('hs').textContent='Load failed: '+(r&&r.err||'?');

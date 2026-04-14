@@ -6371,6 +6371,25 @@ def _install_preset_show(preset_id):
     if preset_id not in THEMES:
         return jsonify(ok=False, err=f"Unknown preset: {preset_id}"), 404
 
+    # Prerequisite check for live-tracking presets (#382)
+    warnings = []
+    theme = THEMES.get(preset_id, {})
+    if theme.get("live_track"):
+        has_camera = any(f.get("fixtureType") == "camera" for f in _fixtures)
+        has_mover = any(
+            f.get("fixtureType") == "dmx" and _profile_lib and
+            (_profile_lib.channel_info(f.get("dmxProfileId", "")) or {}).get("panRange", 0) > 0
+            for f in _fixtures
+        )
+        warnings = []
+        if not has_camera:
+            warnings.append("No camera node registered — person detection will not work")
+        if not has_mover:
+            warnings.append("No moving head fixtures found — spotlight tracking requires DMX movers with pan/tilt")
+        # Allow loading but include warnings in response
+        if warnings:
+            log.warning("Preset %s prerequisites: %s", preset_id, "; ".join(warnings))
+
     show = generate_show(preset_id, _fixtures, _layout, _stage, _profile_lib)
     if not show:
         return jsonify(ok=False, err="Failed to generate show"), 500
@@ -6451,8 +6470,11 @@ def _install_preset_show(preset_id):
             _show_playlist.setdefault("order", []).append(tl["id"])
             _save("show_playlist", _show_playlist)
 
-    return jsonify(ok=True, name=show["name"], timelineId=tl["id"],
-                   actions=action_count, effects=len(effect_ref_map))
+    resp = {"ok": True, "name": show["name"], "timelineId": tl["id"],
+            "actions": action_count, "effects": len(effect_ref_map)}
+    if theme.get("live_track") and warnings:
+        resp["warnings"] = warnings
+    return jsonify(resp)
 
 
 def _api_show_preset_old():

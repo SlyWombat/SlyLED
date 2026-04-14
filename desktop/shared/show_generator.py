@@ -187,6 +187,19 @@ THEMES = {
         "energy": 0.9,
         "accent_colors": [[255, 0, 50], [50, 0, 255], [0, 255, 80]],
     },
+    "spotlight-follow-person": {
+        "name": "Spotlight: Follow Person",
+        "desc": "Moving heads track detected people in real-time via camera (requires camera node)",
+        "durationS": 600,
+        "palette": [[255, 240, 200], [255, 200, 150]],
+        "base_action": {"type": 1, "r": 10, "g": 5, "b": 30},
+        "sweep_dir": "left-right",
+        "sweep_shape": "sphere",
+        "sweep_speed": 0.5,
+        "energy": 0.3,
+        "accent_colors": [[255, 240, 200]],
+        "live_track": True,
+    },
 }
 
 
@@ -509,6 +522,35 @@ def _generate_mover_actions(theme, dmx_movers, fixture_positions, bounds):
     return actions
 
 
+def _generate_track_actions(theme, dmx_movers):
+    """Generate live Track actions (type 18) for camera-based person following.
+
+    Creates a single Track action targeting all movers at person objects.
+    The Track action is evaluated at runtime by the 40 Hz DMX loop —
+    no baked pan/tilt values are needed.
+    """
+    if not dmx_movers:
+        return []
+
+    color = theme["palette"][0] if theme["palette"] else [255, 240, 200]
+    mover_ids = [m["id"] for m in dmx_movers]
+
+    return [{
+        "action": {
+            "name": "Follow Person",
+            "type": 18,  # ACT_TRACK
+            "r": color[0], "g": color[1], "b": color[2],
+            "trackObjectType": "person",
+            "trackDimmer": 255,
+            "trackAutoSpread": True,
+            "trackFixedAssignment": False,
+            "trackCycleMs": 2000,
+            "dimmer": 255,
+        },
+        "targets": mover_ids,
+    }]
+
+
 def generate_show(theme_id, fixtures, layout, stage, profile_lib=None):
     """Generate a complete show from a theme and the user's actual fixtures.
 
@@ -570,8 +612,11 @@ def generate_show(theme_id, fixtures, layout, stage, profile_lib=None):
     # 2. Spatial effects — sweep through fixture positions
     effects = _generate_spatial_effects(theme, bounds, fpos, dmx_movers)
 
-    # 3. Moving head pan/tilt actions
-    mover_actions = _generate_mover_actions(theme, dmx_movers, fpos, bounds)
+    # 3. Moving head actions — Track (type 18) for live_track, PT_MOVE for baked
+    if theme.get("live_track"):
+        mover_actions = _generate_track_actions(theme, dmx_movers)
+    else:
+        mover_actions = _generate_mover_actions(theme, dmx_movers, fpos, bounds)
 
     # ── Build track structure ──────────────────────────────────────────
     # Track ordering: lower index = lower priority (background)
