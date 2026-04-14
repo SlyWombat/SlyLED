@@ -92,3 +92,4 @@ main/arduino_secrets.h.bak
 android/*.jks
 android/*.keystore
 android/keystore.properties
+*.onnx
