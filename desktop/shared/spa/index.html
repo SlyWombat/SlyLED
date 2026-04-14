@@ -1422,7 +1422,11 @@ function _renderSetup(){
           var res=(f.resolutionW||'—')+'x'+(f.resolutionH||'—');
           var calBadge=f.calibrated?'<span class="badge" style="background:#065f46;color:#34d399;margin-left:4px">\u2713 Cal</span>':'';
           var acts='<button class="btn" onclick="editFixture('+f.id+')" style="background:#446;color:#fff">Edit</button>';
-          if(ip!=='—')acts+=' <button class="btn" onclick="_camSnap('+f.id+')" style="background:#059669;color:#fff">Snap</button>';
+          if(ip!=='—'){
+            acts+=' <button class="btn" onclick="_camSnap('+f.id+')" style="background:#059669;color:#fff">Snap</button>';
+            var trkActive=_trackingCams[f.id];
+            acts+=' <button class="btn" id="setup-trk-'+f.id+'" onclick="_setupTrackToggle('+f.id+')" style="background:'+(trkActive?'#9f1239':'#be185d')+';color:#fce7f3">'+(trkActive?'Stop Track':'Track')+'</button>';
+          }
           acts+=' <button class="btn btn-off" onclick="removeCamera('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
           h+='<tr><td style="color:#64748b">cam'+camIdx+'</td><td><b>'+escapeHtml(f.name)+'</b>'+calBadge+'</td><td>'+escapeHtml(ip)+'</td><td>'+fov+'</td><td>'+res+'</td><td id="cam-st-'+f.id+'"><span class="badge" style="background:#334;color:#888">...</span></td><td>'+acts+'</td></tr>';
           h+='<tr id="cam-snap-row-'+f.id+'" style="display:none"><td colspan="7" style="padding:.3em"><div id="cam-snap-'+f.id+'" style="text-align:center"></div></td></tr>';
@@ -5200,7 +5204,8 @@ function showNodeEdit(f){
   }
   if(ft==='camera'){
     h+='<button class="btn" style="background:#7c3aed;color:#e9d5ff" onclick="closeModal();_calWizardStart('+f.id+')">Calibrate'+(f.calibrated?' \u2713':'')+'</button>';
-    h+='<button class="btn" id="trk-btn-'+f.id+'" style="background:#be185d;color:#fce7f3" onclick="closeModal();_trackToggle('+f.id+')">Track</button>';
+    var _ta=_trackingCams[f.id];
+    h+='<button class="btn" id="trk-btn-'+f.id+'" style="background:'+(_ta?'#9f1239':'#be185d')+';color:#fce7f3" onclick="closeModal();_trackToggle('+f.id+')">'+(_ta?'Stop Track':'Track')+'</button>';
   }
   h+='<button class="btn btn-off" onclick="removeFromCanvas('+f.id+')">Remove from Stage</button>';
   h+='</div>';
@@ -8046,6 +8051,22 @@ function _trackToggle(camId){
   }
 }
 
+function _setupTrackToggle(camId){
+  var btn=document.getElementById('setup-trk-'+camId);
+  if(btn){btn.disabled=true;btn.textContent='...';}
+  _trackToggle(camId);
+}
+
+function _trackBtnSync(camId){
+  var active=!!_trackingCams[camId];
+  // Update Setup tab button if present
+  var sb=document.getElementById('setup-trk-'+camId);
+  if(sb){sb.disabled=false;sb.textContent=active?'Stop Track':'Track';sb.style.background=active?'#9f1239':'#be185d';}
+  // Update modal button if present
+  var mb=document.getElementById('trk-btn-'+camId);
+  if(mb){mb.textContent=active?'Stop Track':'Track';mb.style.background=active?'#9f1239':'#be185d';}
+}
+
 function _trackStart(camId){
   document.getElementById('hs').textContent='Starting tracking...';
   ra('POST','/api/cameras/'+camId+'/track/start',{fps:2,threshold:0.4,ttl:5},function(r){
@@ -8056,6 +8077,7 @@ function _trackStart(camId){
     }else{
       document.getElementById('hs').textContent='Track start failed: '+(r&&r.err||'unknown');
     }
+    _trackBtnSync(camId);
   });
 }
 
@@ -8064,6 +8086,7 @@ function _trackStop(camId){
     delete _trackingCams[camId];
     document.getElementById('hs').textContent='Tracking stopped';
     if(!Object.keys(_trackingCams).length)_trackPollStop();
+    _trackBtnSync(camId);
   });
 }
 
