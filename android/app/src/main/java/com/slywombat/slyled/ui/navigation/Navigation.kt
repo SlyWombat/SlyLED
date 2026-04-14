@@ -11,20 +11,16 @@ import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.*
 import com.slywombat.slyled.ui.screens.connection.ConnectionScreen
-import com.slywombat.slyled.ui.screens.dashboard.DashboardScreen
-import com.slywombat.slyled.ui.screens.setup.SetupScreen
-import com.slywombat.slyled.ui.screens.layout.LayoutScreen
-import com.slywombat.slyled.ui.screens.actions.ActionsScreen
-import com.slywombat.slyled.ui.screens.runtime.RuntimeScreen
+import com.slywombat.slyled.ui.screens.livestage.LiveStageScreen
+import com.slywombat.slyled.ui.screens.control.ControlScreen
+import com.slywombat.slyled.ui.screens.status.StatusScreen
 import com.slywombat.slyled.ui.screens.settings.SettingsScreen
 import com.slywombat.slyled.viewmodel.ConnectionViewModel
 
 enum class Tab(val route: String, val label: String, val icon: ImageVector) {
-    DASHBOARD("dashboard", "Home", Icons.Default.Dashboard),
-    SETUP("setup", "Setup", Icons.Default.DeviceHub),
-    LAYOUT("layout", "Layout", Icons.Default.GridView),
-    ACTIONS("actions", "Actions", Icons.Default.Animation),
-    RUNTIME("runtime", "Runtime", Icons.Default.PlayCircle),
+    STAGE("stage", "Stage", Icons.Default.Visibility),
+    CONTROL("control", "Control", Icons.Default.PlayCircle),
+    STATUS("status", "Status", Icons.Default.DeviceHub),
 }
 
 @Composable
@@ -137,14 +133,12 @@ fun MainScaffold(connectionVm: ConnectionViewModel, onDisconnect: () -> Unit) {
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = Tab.DASHBOARD.route,
+            startDestination = Tab.STAGE.route,
             modifier = Modifier.padding(innerPadding)
         ) {
-            composable(Tab.DASHBOARD.route) { DashboardScreen() }
-            composable(Tab.SETUP.route) { SetupScreen() }
-            composable(Tab.LAYOUT.route) { LayoutScreen() }
-            composable(Tab.ACTIONS.route) { ActionsScreen() }
-            composable(Tab.RUNTIME.route) { RuntimeScreen() }
+            composable(Tab.STAGE.route) { LiveStageScreen() }
+            composable(Tab.CONTROL.route) { ControlScreen() }
+            composable(Tab.STATUS.route) { StatusScreen() }
             composable("settings") { SettingsScreen(onDisconnect = onDisconnect) }
         }
     }

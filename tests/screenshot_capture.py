@@ -138,7 +138,9 @@ def populate_data():
         # Camera fixtures — for calibration screenshots (#329, #330)
         r = c.post('/api/fixtures', json={
             'name': 'Stage Left Cam', 'type': 'point', 'fixtureType': 'camera',
-            'fovDeg': 90, 'resolutionW': 1920, 'resolutionH': 1080
+            'fovDeg': 90, 'resolutionW': 1920, 'resolutionH': 1080,
+            'trackClasses': ['person', 'chair', 'backpack'],
+            'trackFps': 3, 'trackThreshold': 0.35, 'trackTtl': 8, 'trackReidMm': 600
         })
         cam1 = r.get_json().get('id')
         c.put(f'/api/fixtures/{cam1}', json={
@@ -257,6 +259,17 @@ def capture_spa():
             page.evaluate("closeModal()")
         except Exception:
             skipped.append('spa-setup-edit-dmx.png')
+
+        # Edit camera fixture — shows tracking configuration (#391, #392)
+        try:
+            page.evaluate("""
+                var camFix = _fixtures.find(f => f.fixtureType === 'camera');
+                if (camFix) editFixture(camFix.id);
+            """)
+            snap('spa-setup-edit-camera.png', 0.5)
+            page.evaluate("closeModal()")
+        except Exception:
+            skipped.append('spa-setup-edit-camera.png')
 
         # Layout — Front view (orthographic, closest to old 2D canvas)
         page.evaluate("showTab('layout')")

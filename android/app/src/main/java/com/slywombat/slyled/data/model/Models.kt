@@ -407,3 +407,75 @@ data class ShowPreset(
     val name: String = "",
     val desc: String = "",
 )
+
+// ── Camera Status ─────────────────────────────────────────────────────
+@Serializable
+data class CameraStatus(
+    val id: Int = -1,
+    val name: String = "",
+    val cameraIp: String = "",
+    val online: Boolean = false,
+    val fwVersion: String = "",
+    val hostname: String = "",
+    val tracking: Boolean = false,
+    val trackClasses: List<String> = listOf("person"),
+)
+
+// ── Show Status / Playlist ────────────────────────────────────────────
+@Serializable
+data class ShowStatus(
+    val running: Boolean = false,
+    val currentTimeline: Int? = null,
+    val currentIndex: Int = 0,
+    val totalTimelines: Int = 0,
+    val elapsed: Double = 0.0,
+    val duration: Double = 0.0,
+    val loop: Boolean = false,
+)
+
+@Serializable
+data class ShowPlaylist(
+    val order: List<Int> = emptyList(),
+    val loop: Boolean = false,
+)
+
+// ── DMX Status (parsed from nested {artnet:{...}, sacn:{...}} response) ──
+@Serializable
+data class DmxStatus(
+    val running: Boolean = false,
+    val universes: Int = 0,
+    val fps: Int = 0,
+    val protocol: String = "",
+    val nodes: Int = 0,
+) {
+    companion object {
+        /** Parse the nested /api/dmx/status response into a flat DmxStatus. */
+        fun fromJson(json: kotlinx.serialization.json.JsonObject): DmxStatus {
+            val artnet = json["artnet"]?.let {
+                if (it is kotlinx.serialization.json.JsonObject) it else null
+            }
+            val sacn = json["sacn"]?.let {
+                if (it is kotlinx.serialization.json.JsonObject) it else null
+            }
+            // Prefer artnet if running, else sacn
+            val engine = if (artnet?.get("running")?.let {
+                    it is kotlinx.serialization.json.JsonPrimitive && it.content == "true"
+                } == true) artnet else sacn
+            val running = engine?.get("running")?.let {
+                it is kotlinx.serialization.json.JsonPrimitive && it.content == "true"
+            } ?: false
+            val uniArr = engine?.get("universes")
+            val universes = if (uniArr is kotlinx.serialization.json.JsonArray) uniArr.size else 0
+            val fps = engine?.get("frameRate")?.let {
+                if (it is kotlinx.serialization.json.JsonPrimitive) it.content.toIntOrNull() else null
+            } ?: 0
+            val protocol = engine?.get("protocol")?.let {
+                if (it is kotlinx.serialization.json.JsonPrimitive) it.content else null
+            } ?: ""
+            val nodes = engine?.get("discoveredNodes")?.let {
+                if (it is kotlinx.serialization.json.JsonPrimitive) it.content.toIntOrNull() else null
+            } ?: 0
+            return DmxStatus(running, universes, fps, protocol, nodes)
+        }
+    }
+}

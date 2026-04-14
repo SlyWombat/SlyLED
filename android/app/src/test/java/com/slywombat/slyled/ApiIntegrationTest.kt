@@ -153,82 +153,7 @@ class ApiIntegrationTest {
         assertEquals("/api/actions/5", server.takeRequest().path)
     }
 
-    // ── Runners ───────────────────────────────────────────────────
-
-    @Test
-    fun `GET runners list`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""[{"id":0,"name":"Demo Runner","steps":8,"totalDurationS":55,"computed":true}]"""))
-        val runners = api.getRunners()
-        assertEquals(1, runners.size)
-        assertEquals(8, runners[0].steps)
-        assertTrue(runners[0].computed)
-    }
-
-    @Test
-    fun `GET runner detail with steps`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"id":0,"name":"Runner1","computed":false,"steps":[{"actionId":0,"durationS":5},{"actionId":1,"durationS":10}]}"""))
-        val runner = api.getRunner(0)
-        assertEquals(2, runner.steps.size)
-        assertEquals(0, runner.steps[0].actionId)
-    }
-
-    @Test
-    fun `POST create runner`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"ok":true,"id":0}"""))
-        val resp = api.createRunner(CreateRunnerRequest("New Runner"))
-        assertTrue(resp.ok)
-    }
-
-    @Test
-    fun `POST compute runner`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"ok":true}"""))
-        val resp = api.computeRunner(0)
-        assertTrue(resp.ok)
-        assertEquals("/api/runners/0/compute", server.takeRequest().path)
-    }
-
-    @Test
-    fun `POST start runner`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"ok":true}"""))
-        val resp = api.startRunner(0)
-        assertTrue(resp.ok)
-        assertEquals("/api/runners/0/start", server.takeRequest().path)
-    }
-
-    // ── Flights ───────────────────────────────────────────────────
-
-    @Test
-    fun `GET flights`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""[{"id":0,"name":"Flight 1","performerIds":[0,1],"runnerId":0,"priority":1}]"""))
-        val flights = api.getFlights()
-        assertEquals(1, flights.size)
-        assertEquals(2, flights[0].performerIds.size)
-    }
-
-    @Test
-    fun `POST create flight`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"ok":true,"id":0}"""))
-        val resp = api.createFlight(Flight(name = "Test Flight", performerIds = listOf(0, 1), runnerId = 0))
-        assertTrue(resp.ok)
-    }
-
-    // ── Shows ─────────────────────────────────────────────────────
-
-    @Test
-    fun `GET shows`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""[{"id":0,"name":"Demo Show","flightIds":[0],"loop":true}]"""))
-        val shows = api.getShows()
-        assertEquals(1, shows.size)
-        assertTrue(shows[0].loop)
-    }
-
-    @Test
-    fun `POST start show`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"ok":true}"""))
-        val resp = api.startShow(0)
-        assertTrue(resp.ok)
-        assertEquals("/api/shows/0/start", server.takeRequest().path)
-    }
+    // Runners, Flights, and Shows removed — replaced by timeline system
 
     // ── Config/Show export-import ─────────────────────────────────
 
@@ -272,7 +197,7 @@ class ApiIntegrationTest {
     fun `404 response throws`() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(404).setBody("Not Found"))
         try {
-            api.getRunner(999)
+            api.getShowStatus()
             fail("Expected exception")
         } catch (e: Exception) {
             // Expected — Retrofit throws on non-2xx

@@ -71,49 +71,9 @@ class ModelSerializationTest {
         assertNull(action.wledFxOverride)
     }
 
-    @Test
-    fun `deserialize RunnerSummary from list endpoint`() {
-        val input = """{"id":0,"name":"Demo Runner","steps":8,"totalDurationS":55,"computed":false}"""
-        val runner = json.decodeFromString<RunnerSummary>(input)
-        assertEquals("Demo Runner", runner.name)
-        assertEquals(8, runner.steps)
-        assertEquals(55, runner.totalDurationS)
-        assertFalse(runner.computed)
-    }
+    // Runner, RunnerSummary, Flight models removed — replaced by timeline system
 
-    @Test
-    fun `deserialize Runner with steps`() {
-        val input = """{"id":0,"name":"Runner1","computed":true,"steps":[{"actionId":1,"durationS":5},{"actionId":2,"durationS":10}]}"""
-        val runner = json.decodeFromString<Runner>(input)
-        assertEquals(2, runner.steps.size)
-        assertEquals(1, runner.steps[0].actionId)
-        assertEquals(10, runner.steps[1].durationS)
-    }
-
-    @Test
-    fun `deserialize Flight`() {
-        val input = """{"id":0,"name":"Flight 1","performerIds":[0,1,2],"runnerId":0,"priority":1}"""
-        val flight = json.decodeFromString<Flight>(input)
-        assertEquals(3, flight.performerIds.size)
-        assertEquals(0, flight.runnerId)
-    }
-
-    @Test
-    fun `deserialize Flight with empty performerIds`() {
-        val input = """{"id":0,"name":"Empty","performerIds":[],"runnerId":null,"priority":1}"""
-        val flight = json.decodeFromString<Flight>(input)
-        assertTrue(flight.performerIds.isEmpty())
-        assertNull(flight.runnerId)
-    }
-
-    @Test
-    fun `deserialize Show`() {
-        val input = """{"id":0,"name":"Demo Show","flightIds":[0],"loop":true}"""
-        val show = json.decodeFromString<Show>(input)
-        assertEquals("Demo Show", show.name)
-        assertEquals(1, show.flightIds.size)
-        assertTrue(show.loop)
-    }
+    // Show model removed — shows replaced by timeline playlist system
 
     @Test
     fun `deserialize Layout`() {
@@ -170,14 +130,7 @@ class ModelSerializationTest {
         assertEquals("orphans", withWarning.warning)
     }
 
-    @Test
-    fun `deserialize LiveEvent`() {
-        val input = """{"ip":"192.168.10.219","actionType":5,"stepIndex":2,"totalSteps":8,"event":0,"age":1.5}"""
-        val event = json.decodeFromString<LiveEvent>(input)
-        assertEquals("192.168.10.219", event.ip)
-        assertEquals(5, event.actionType)
-        assertEquals(1.5, event.age!!, 0.001)
-    }
+    // LiveEvent model removed — replaced by fixtures/live polling
 
     @Test
     fun `deserialize ChildStatus`() {

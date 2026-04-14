@@ -108,6 +108,27 @@ interface SlyLedApi {
     @POST("api/fixtures/{id}/resolve")
     suspend fun resolveFixture(@Path("id") id: Int): Map<String, Any>
 
+    // ── Fixture Aim (pointer mode) ──────────────────────────────────
+    @POST("api/calibration/mover/{id}/aim")
+    suspend fun aimFixture(@Path("id") id: Int, @Body body: JsonObject): OkResponse
+
+    // ── Fixtures Live ────────────────────────────────────────────────
+    @GET("api/fixtures/live")
+    suspend fun getFixturesLive(): Map<String, kotlinx.serialization.json.JsonElement>
+
+    // ── Show Playback ─────────────────────────────────────────────────
+    @GET("api/show/status")
+    suspend fun getShowStatus(): ShowStatus
+
+    @GET("api/show/playlist")
+    suspend fun getShowPlaylist(): ShowPlaylist
+
+    @POST("api/show/start")
+    suspend fun startShow(): OkResponse
+
+    @POST("api/show/stop")
+    suspend fun stopShow(): OkResponse
+
     // ── Cameras ───────────────────────────────────────────────────────
     @GET("api/cameras")
     suspend fun getCameras(): List<Fixture>
@@ -123,6 +144,15 @@ interface SlyLedApi {
 
     @GET("api/cameras/discover/results")
     suspend fun discoverCamerasResults(): List<JsonObject>
+
+    @GET("api/cameras/{id}/status")
+    suspend fun getCameraStatus(@Path("id") id: Int): CameraStatus
+
+    @POST("api/cameras/{id}/track/start")
+    suspend fun startTracking(@Path("id") id: Int, @Body body: JsonObject = JsonObject(emptyMap())): OkResponse
+
+    @POST("api/cameras/{id}/track/stop")
+    suspend fun stopTracking(@Path("id") id: Int): OkResponse
 
     @GET("api/cameras/ssh")
     suspend fun getCameraSshSettings(): JsonObject

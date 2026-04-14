@@ -47,18 +47,23 @@ The primary design and control interface. Full-featured 7-tab SPA with 2D/3D lay
 **Install:** Run `SlyLED-Setup.exe` (includes system tray icon)
 
 ### Android App
-Mobile companion for monitoring and playback control. Available on the same WiFi network as the desktop server.
+Live operator tool for running shows from your phone. Connects to the desktop server over WiFi.
 
-**Install:** Transfer `SlyLED.apk` to your phone and install.
-**Connect:** Enter the server IP address and port (shown on desktop Settings tab).
+**Install:** Transfer `SlyLED-debug.apk` to your phone and install.
+**Connect:** Scan the QR code on the desktop Settings tab, or enter the server IP and port manually.
 
-**Android Features:**
-- **Dashboard** — performer status, online/offline indicators
-- **Setup** — view fixtures, discover performers
-- **Layout** — 2D canvas with pinch-to-zoom, drag-to-reposition, tap-to-place, DMX beam cones, object visualization, layout quick-view buttons, patrol display for moving objects
-- **Actions** — browse and create LED effects
-- **Runtime** — show emulator with LED string dots and DMX beam cones, timeline bake/sync/play, preset shows
-- **Settings** — server name, brightness, factory reset
+![Android Stage View](screenshots/android/android-stage-idle.png)
+
+**Android Screens:**
+- **Stage** — live viewport showing all fixtures (LED, DMX, cameras) with beam cones, tracked object markers, and grid floor. Pinch-to-zoom and drag-to-pan. HUD shows current show status. Play/Stop button and brightness slider at bottom.
+- **Control** — one-tap timeline start, playlist with loop toggle, global brightness slider, and Pointer Mode for aiming DMX moving heads with your phone's gyroscope.
+- **Status** — device monitoring (performers online/offline, RSSI, firmware), camera nodes with Track button to start/stop person tracking, and Art-Net/DMX engine status.
+- **Settings** — server name, stage dimensions, dark mode, config export/import, disconnect.
+
+![Android Control](screenshots/android/android-control.png)
+![Android Status](screenshots/android/android-status.png)
+
+**Pointer Mode:** Select a DMX moving head on the Control tab and tap its name under Pointer Mode. Hold your phone and point where you want the light — the fixture's pan/tilt follows your phone orientation in real-time at 20 Hz. Tap Recenter to calibrate, X to exit.
 
 ### Firmware Config (ESP32/D1 Mini)
 Each performer serves a 3-tab config page at `http://<device-ip>/config`:
@@ -458,6 +463,34 @@ Each USB camera sensor on a camera node registers as a **separate fixture** in t
 - Its own FOV and resolution
 - Its own rest direction vector (cyan arrow)
 
+### Tracking Configuration
+
+Each camera fixture has per-camera tracking settings accessible from the **Edit** dialog on the Setup tab. These control what the camera detects and how it behaves during live tracking.
+
+![Camera edit with tracking config](screenshots/spa-setup-edit-camera.png)
+
+**Detect Classes** — Multi-select the object types to track. The YOLOv8n model supports 80 COCO classes; 16 stage-relevant classes are available:
+
+| Category | Classes |
+|----------|---------|
+| People | Person |
+| Animals | Cat, Dog, Horse |
+| Props | Chair, Backpack, Suitcase, Sports Ball, Bottle, Cup, Umbrella, Teddy Bear |
+| Vehicles | Bicycle, Skateboard, Car, Truck |
+
+By default only **Person** is selected. Adding more classes has zero performance impact — YOLO always evaluates all classes in one pass and filters afterward.
+
+**Parameters:**
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| FPS | 2 | 0.5–10 | Detection frames per second. Higher = more responsive but more CPU on the camera node. |
+| Threshold | 0.4 | 0.1–0.95 | Minimum confidence to accept a detection. Lower = more sensitive but more false positives. |
+| TTL (s) | 5 | 1–60 | Seconds before a lost track expires and its stage marker is removed. |
+| Re-ID (mm) | 500 | 50–5000 | Maximum distance to match a new detection to an existing tracked object. |
+
+**Starting tracking:** Click the **Track** button on the Setup tab (next to Snap) or in the fixture edit modal on the Layout tab. The camera node begins continuous detection using your configured classes and parameters. Detected objects appear as labeled markers in the 3D viewport.
+
 ### Mover Calibration
 
 The mover calibration wizard builds an interpolation grid that maps every stage position to the exact pan/tilt angles required for a DMX moving head. A positioned camera node is required.
@@ -576,7 +609,7 @@ Make DMX moving heads automatically follow people detected by a camera.
 
 1. **Verify hardware** — Open the Setup tab. Confirm your movers show green status and camera nodes show online. If cameras are offline, check WiFi and deploy firmware from the Firmware tab.
 
-2. **Start camera tracking** — Go to the Layout tab. Click a camera fixture to select it. Click the **Track** toggle button. The status bar shows "Tracking active — watching for people." The camera node begins running YOLO person detection at 2 fps and creates temporal stage objects for each detected person.
+2. **Start camera tracking** — Click the **Track** button on the Setup tab (next to Snap), or go to the Layout tab, click a camera fixture, and click the **Track** button in the edit modal. The camera node begins running YOLO detection using the classes and parameters configured in the camera's tracking settings (see [Tracking Configuration](#tracking-configuration)). Detected objects appear as labeled markers in the 3D viewport.
 
 3. **Create a Track action** — Go to the Actions tab. Click **+ New Action**.
    - **Name:** `Person Follow`
@@ -935,7 +968,7 @@ Use the built-in **Spotlight: Follow Person** preset to make moving heads automa
    - A dim blue ambient wash (10, 5, 30) on all LED fixtures for atmospheric framing
    - A 10-minute looping timeline that keeps the DMX playback loop running
 
-3. **Start camera tracking** — Go to the Layout tab. Click on your camera fixture and click the **Track** toggle. The camera node begins running YOLO person detection at 2 fps. Detected people appear as pink capsule markers in the 3D viewport.
+3. **Start camera tracking** — Click the **Track** button on the Setup tab or in the camera fixture edit modal. The camera node begins running detection using the configured tracking classes and parameters (see [Tracking Configuration](#tracking-configuration)). Detected objects appear as labeled markers in the 3D viewport.
 
 4. **Start playback** — Click **Bake**, then **Start**. The 40 Hz DMX playback loop begins. The Track action reads all temporal person objects and computes pan/tilt for each head in real-time.
 

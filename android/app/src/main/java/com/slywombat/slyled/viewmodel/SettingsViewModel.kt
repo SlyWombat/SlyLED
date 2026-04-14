@@ -3,6 +3,7 @@ package com.slywombat.slyled.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.slywombat.slyled.data.model.DmxProfile
+import com.slywombat.slyled.data.model.DmxStatus
 import com.slywombat.slyled.data.model.Settings
 import com.slywombat.slyled.data.model.Stage
 import com.slywombat.slyled.data.repository.SlyLedRepository
@@ -35,8 +36,8 @@ class SettingsViewModel @Inject constructor(
     private val _message = MutableSharedFlow<String>()
     val message: SharedFlow<String> = _message
 
-    private val _dmxStatus = MutableStateFlow<JsonObject?>(null)
-    val dmxStatus: StateFlow<JsonObject?> = _dmxStatus
+    private val _dmxStatus = MutableStateFlow<DmxStatus?>(null)
+    val dmxStatus: StateFlow<DmxStatus?> = _dmxStatus
 
     private val _dmxSettings = MutableStateFlow<JsonObject?>(null)
     val dmxSettings: StateFlow<JsonObject?> = _dmxSettings

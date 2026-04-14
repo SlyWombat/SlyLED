@@ -1901,6 +1901,8 @@ def track_start():
     fps = body.get("fps", 2)
     threshold = body.get("threshold", 0.4)
     ttl = body.get("ttl", 5)
+    classes = body.get("classes", ["person"])
+    reid_mm = body.get("reidMm", 500)
 
     cameras = _hw_info.get("cameras", [])
     if cam_idx < 0 or cam_idx >= len(cameras):
@@ -1921,7 +1923,8 @@ def track_start():
     log.info("Track start: test capture OK on %s (%dx%d)", device, test_frame.shape[1], test_frame.shape[0])
 
     tracker.start(device, orch_url=orch_url,
-                  camera_id=camera_id, fps=fps, threshold=threshold, ttl=ttl)
+                  camera_id=camera_id, fps=fps, threshold=threshold, ttl=ttl,
+                  classes=classes, reid_mm=reid_mm)
     # Wait briefly and verify the tracker thread actually started (#378)
     import time as _t
     _t.sleep(0.3)

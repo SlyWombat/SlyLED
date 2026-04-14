@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SlyLED — Person Tracking</title>
+<title>SlyLED — Object &amp; Person Tracking</title>
 <link rel="icon" type="image/x-icon" href="../slyled.ico">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Inter:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -36,28 +36,28 @@ footer{text-align:center;padding:30px 0;color:#64748b;font-size:.85em;border-top
 <header>
   <div class="container">
     <div class="icon">&#x1F3AF;</div>
-    <h1>Person Tracking</h1>
-    <p>Moving heads automatically follow people in real-time</p>
+    <h1>Object &amp; Person Tracking</h1>
+    <p>Your lights know where people are. Automatically.</p>
     <a href="../" class="back">&larr; Back to SlyLED</a>
   </div>
 </header>
 <div class="container">
-  <p style="font-size:1.05em;margin-bottom:20px">Camera nodes run YOLOv8n person detection at 2 fps. Detected people become temporal stage objects with 5-second TTL. The Track action aims calibrated moving heads at each person using inverse light map lookup, updating pan/tilt at 40 Hz over Art-Net.</p>
+  <p style="font-size:1.05em;margin-bottom:20px">Point a camera at the stage. Press Track. Moving heads lock onto every person in the room and follow them in real-time — no programming, no cue lists, no operator. Add cats, dogs, chairs, or any of 16 object types and the system tracks those too. Each camera has its own detection settings so you can tune sensitivity per zone.</p>
   <ul class="bullets">
-    <li>YOLOv8n person detection on Orange Pi camera nodes</li>
-    <li>Temporal stage objects auto-created for each detected person</li>
-    <li>Proximity-based re-identification (500mm threshold) across frames</li>
-    <li>Track action: 1:1 assignment, cycling, or fixed modes</li>
-    <li>Calibrated pan/tilt aiming via per-fixture light maps</li>
-    <li>40 Hz Art-Net output for smooth, responsive head movement</li>
-    <li>Multi-person support: heads distribute across detected people</li>
-    <li>Pink markers in 3D viewport show tracked person positions</li>
-    <li>Works with any calibrated camera (ArUco stage map required)</li>
-    <li>Configurable cycle time, beam color, and assignment mode</li>
+    <li>One-click tracking: press Track on the Setup tab and heads start following instantly</li>
+    <li>16 detection classes — people, animals, furniture, props — choose what matters for your show</li>
+    <li>AI-powered: YOLOv8n runs on-camera with zero latency penalty for multiple classes</li>
+    <li>Per-camera tuning: adjust sensitivity, speed, and re-ID distance independently per zone</li>
+    <li>Smooth 40 Hz Art-Net output — heads glide, they don't jump</li>
+    <li>Smart assignment: 1:1 lock, round-robin cycling, or spread mode across multiple heads</li>
+    <li>Works in the dark — detection runs at configurable FPS with adjustable confidence</li>
+    <li>Temporal markers: tracked objects appear live in the 3D viewport, labeled by class</li>
+    <li>Fully configurable from the fixture edit dialog — no config files, no command line</li>
+    <li>Combine with spatial effects and timeline automation for hybrid shows</li>
   </ul>
   <div class="screenshots">
-    <figure><img src="../example-b-tracking-t5.png" alt="Beam cones tracking a spatial effect across the stage" loading="lazy"><figcaption>Beam cones tracking a spatial effect across the stage</figcaption></figure>
-    <figure><img src="../spa-settings-cameras.png" alt="Camera calibration setup for tracking" loading="lazy"><figcaption>Camera calibration setup for tracking</figcaption></figure>
+    <figure><img src="../spa-runtime.png" alt="3D runtime view with beam cones tracking across the stage" loading="lazy"><figcaption>3D runtime view with beam cones tracking across the stage</figcaption></figure>
+    <figure><img src="../spa-setup-edit-camera.png" alt="Per-camera tracking configuration — classes, sensitivity, and tuning" loading="lazy"><figcaption>Per-camera tracking configuration — classes, sensitivity, and tuning</figcaption></figure>
   </div>
   <div class="cta">
     <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="cta-dl">Download SlyLED</a>

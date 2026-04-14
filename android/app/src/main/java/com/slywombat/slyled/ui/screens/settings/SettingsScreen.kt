@@ -415,11 +415,11 @@ private fun DmxControlSection(viewModel: SettingsViewModel) {
     val dmxSettings by viewModel.dmxSettings.collectAsState()
     var showProfileDialog by remember { mutableStateOf(false) }
 
-    // Extract status fields from JsonObject
-    val running = dmxStatus?.get("running")?.jsonPrimitive?.booleanOrNull ?: false
-    val universes = dmxStatus?.get("universes")?.jsonPrimitive?.intOrNull ?: 0
-    val statusFrameRate = dmxStatus?.get("frameRate")?.jsonPrimitive?.intOrNull ?: 40
-    val nodes = dmxStatus?.get("nodes")?.jsonPrimitive?.intOrNull
+    // Extract status fields from DmxStatus
+    val running = dmxStatus?.running ?: false
+    val universes = dmxStatus?.universes ?: 0
+    val statusFrameRate = dmxStatus?.fps ?: 40
+    val nodes: Int? = null  // Not in DmxStatus yet
 
     // Local state initialized from settings
     val settingsProtocol = dmxSettings?.get("protocol")?.jsonPrimitive?.contentOrNull ?: "artnet"

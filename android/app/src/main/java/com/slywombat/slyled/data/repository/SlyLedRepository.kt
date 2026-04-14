@@ -124,6 +124,24 @@ class SlyLedRepository @Inject constructor(
     suspend fun setAimPoint(id: Int, aimPoint: List<Double>) =
         requireApi().setAimPoint(id, mapOf("aimPoint" to aimPoint))
 
+    // Fixture Aim (pointer mode)
+    suspend fun aimFixture(id: Int, pan: Float, tilt: Float): OkResponse {
+        val body = kotlinx.serialization.json.buildJsonObject {
+            put("pan", kotlinx.serialization.json.JsonPrimitive(pan))
+            put("tilt", kotlinx.serialization.json.JsonPrimitive(tilt))
+        }
+        return requireApi().aimFixture(id, body)
+    }
+
+    // Fixtures Live
+    suspend fun getFixturesLive() = requireApi().getFixturesLive()
+
+    // Show Playback
+    suspend fun getShowStatus() = requireApi().getShowStatus()
+    suspend fun getShowPlaylist() = requireApi().getShowPlaylist()
+    suspend fun startShow() = requireApi().startShow()
+    suspend fun stopShow() = requireApi().stopShow()
+
     // Cameras
     suspend fun getCameras() = requireApi().getCameras()
     suspend fun registerCamera(ip: String, name: String? = null): OkResponse {
@@ -132,6 +150,9 @@ class SlyLedRepository @Inject constructor(
         return requireApi().registerCamera(body)
     }
     suspend fun unregisterCamera(id: Int) = requireApi().unregisterCamera(id)
+    suspend fun getCameraStatus(id: Int) = requireApi().getCameraStatus(id)
+    suspend fun startTracking(id: Int) = requireApi().startTracking(id)
+    suspend fun stopTracking(id: Int) = requireApi().stopTracking(id)
     suspend fun getCameraSshSettings() = requireApi().getCameraSshSettings()
     suspend fun saveCameraSshSettings(body: Map<String, Any>) = requireApi().saveCameraSshSettings(body)
     suspend fun scanNetwork() = requireApi().scanNetwork()
@@ -141,7 +162,7 @@ class SlyLedRepository @Inject constructor(
 
     // DMX Profiles & Control
     suspend fun getDmxProfiles(category: String? = null) = requireApi().getDmxProfiles(category)
-    suspend fun getDmxStatus() = requireApi().getDmxStatus()
+    suspend fun getDmxStatus(): DmxStatus = DmxStatus.fromJson(requireApi().getDmxStatus())
     suspend fun startDmx(body: JsonObject) = requireApi().startDmx(body)
     suspend fun stopDmx() = requireApi().stopDmx()
     suspend fun dmxBlackout() = requireApi().dmxBlackout()

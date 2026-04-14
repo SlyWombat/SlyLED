@@ -36,6 +36,8 @@ class Tracker:
         self._fps = 2
         self._threshold = 0.4
         self._ttl = 5
+        self._classes = ["person"]
+        self._reid_mm = REID_THRESHOLD_MM
         self._running = False
         self._thread = None
         self._lock = threading.Lock()
@@ -64,10 +66,13 @@ class Tracker:
             "detections": self._detect_count,
             "lastError": self._last_error,
             "orchestratorUrl": self._orch_url,
+            "classes": self._classes,
+            "reidMm": self._reid_mm,
         }
 
     def start(self, device, orch_url="", camera_id=0,
-              fps=2, threshold=0.4, ttl=5):
+              fps=2, threshold=0.4, ttl=5,
+              classes=None, reid_mm=None):
         """Start tracking loop on the given camera device."""
         if self._running:
             return
@@ -76,6 +81,8 @@ class Tracker:
         self._fps = fps
         self._threshold = threshold
         self._ttl = ttl
+        self._classes = classes if classes else ["person"]
+        self._reid_mm = reid_mm if reid_mm is not None else REID_THRESHOLD_MM
         self._running = True
         self._thread = threading.Thread(target=self._loop, args=(device,), daemon=True)
         self._thread.start()
@@ -155,7 +162,7 @@ class Tracker:
 
         # Run detection
         detections, _ = self._detector.detect(frame, threshold=self._threshold,
-                                                classes=["person"],
+                                                classes=self._classes,
                                                 input_size=320)
         if not detections:
             return
@@ -183,7 +190,7 @@ class Tracker:
         # Match detections to existing tracks by proximity (XY horizontal plane)
         for det in stage_dets:
             best_id = None
-            best_dist = REID_THRESHOLD_MM + 1
+            best_dist = self._reid_mm + 1
             for tid, trk in self._tracks.items():
                 dx = det["x"] - trk["x"]
                 dy = det["y"] - trk["y"]
@@ -192,7 +199,7 @@ class Tracker:
                     best_dist = dist
                     best_id = tid
 
-            if best_id is not None and best_dist <= REID_THRESHOLD_MM:
+            if best_id is not None and best_dist <= self._reid_mm:
                 # Update existing track
                 trk = self._tracks[best_id]
                 trk["x"] = det["x"]
@@ -233,7 +240,8 @@ class Tracker:
                 "color": "#f472b6",
                 "opacity": 40,
                 "pos": [det["x"], det["y"], 0],   # stage: X=width, Y=depth, Z=0 (floor)
-                "scale": [det.get("w", 400), 200, det.get("h", 400)],
+                # [width, height(Z), depth(Y)] — matches renderer convention
+                "scale": [det.get("w", 400), 1700, 400],
             }
             # Send raw pixel box + camera ID for orchestrator-side pixel→stage conversion
             raw = det.get("_raw")

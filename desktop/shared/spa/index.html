@@ -1249,6 +1249,14 @@ function loadSetup(){
 }
 
 var _setupChildren=[];
+var TRACK_CLASSES=[
+  {id:"person",label:"Person"},{id:"cat",label:"Cat"},{id:"dog",label:"Dog"},
+  {id:"horse",label:"Horse"},{id:"chair",label:"Chair"},{id:"backpack",label:"Backpack"},
+  {id:"suitcase",label:"Suitcase"},{id:"sports ball",label:"Sports Ball"},
+  {id:"bottle",label:"Bottle"},{id:"cup",label:"Cup"},{id:"umbrella",label:"Umbrella"},
+  {id:"teddy bear",label:"Teddy Bear"},{id:"bicycle",label:"Bicycle"},
+  {id:"skateboard",label:"Skateboard"},{id:"car",label:"Car"},{id:"truck",label:"Truck"}
+];
 function _renderSetup(){
   // Fetch both fixtures and children so we can resolve LED fixture status
   ra('GET','/api/fixtures',null,function(fixtures){
@@ -3033,6 +3041,25 @@ function editFixture(id){
     h+='<input id="fx-cam-url" value="'+escapeHtml(f.cameraUrl||'')+'" style="width:100%;margin-bottom:.4em">';
     h+='<div style="display:flex;gap:.5em"><div style="flex:1"><label>Width (px)</label><input id="fx-cam-rw" type="number" value="'+(f.resolutionW||1920)+'" style="width:100%"></div>';
     h+='<div style="flex:1"><label>Height (px)</label><input id="fx-cam-rh" type="number" value="'+(f.resolutionH||1080)+'" style="width:100%"></div></div>';
+    // Tracking config
+    h+='<div style="border-top:1px solid #1e293b;margin-top:.8em;padding-top:.6em">';
+    h+='<div style="font-weight:bold;font-size:.85em;margin-bottom:.4em;color:#f472b6">Tracking Configuration</div>';
+    h+='<label>Detect Classes</label>';
+    h+='<div id="fx-track-classes" style="max-height:120px;overflow-y:auto;border:1px solid #333;border-radius:4px;padding:.3em;background:#1a1a1a;margin-bottom:.4em">';
+    var selCls=f.trackClasses||["person"];
+    TRACK_CLASSES.forEach(function(c){
+      var chk=selCls.indexOf(c.id)>=0?' checked':'';
+      h+='<label style="display:block;cursor:pointer;padding:.1em 0;font-size:.82em"><input type="checkbox" class="fx-trk-cls" value="'+c.id+'"'+chk+'> '+c.label+'</label>';
+    });
+    h+='</div>';
+    h+='<div style="display:flex;gap:.5em;flex-wrap:wrap">';
+    h+='<div style="flex:1;min-width:80px"><label style="font-size:.8em">FPS</label><input id="fx-trk-fps" type="number" value="'+(f.trackFps||2)+'" min="0.5" max="10" step="0.5" style="width:100%"></div>';
+    h+='<div style="flex:1;min-width:80px"><label style="font-size:.8em">Threshold</label><input id="fx-trk-thr" type="number" value="'+(f.trackThreshold||0.4)+'" min="0.1" max="0.95" step="0.05" style="width:100%"></div>';
+    h+='<div style="flex:1;min-width:60px"><label style="font-size:.8em">TTL (s)</label><input id="fx-trk-ttl" type="number" value="'+(f.trackTtl||5)+'" min="1" max="60" style="width:100%"></div>';
+    h+='<div style="flex:1;min-width:80px"><label style="font-size:.8em">Re-ID (mm)</label><input id="fx-trk-reid" type="number" value="'+(f.trackReidMm||500)+'" min="50" max="5000" step="50" style="width:100%"></div>';
+    h+='</div>';
+    h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">FPS: detection rate. Threshold: min confidence. TTL: seconds before lost track expires. Re-ID: max distance to match same object.</p>';
+    h+='</div>';
   }
   // Position (mm)
   h+='<label>Position (mm)</label>';
@@ -3215,6 +3242,14 @@ function saveFixture(id,ft){
     body.cameraUrl=document.getElementById('fx-cam-url').value.trim();
     body.resolutionW=parseInt(document.getElementById('fx-cam-rw').value)||1920;
     body.resolutionH=parseInt(document.getElementById('fx-cam-rh').value)||1080;
+    var clsCbs=document.querySelectorAll('.fx-trk-cls:checked');
+    var classes=[];clsCbs.forEach(function(cb){classes.push(cb.value);});
+    if(!classes.length)classes=["person"];
+    body.trackClasses=classes;
+    body.trackFps=parseFloat(document.getElementById('fx-trk-fps').value)||2;
+    body.trackThreshold=parseFloat(document.getElementById('fx-trk-thr').value)||0.4;
+    body.trackTtl=parseInt(document.getElementById('fx-trk-ttl').value)||5;
+    body.trackReidMm=parseInt(document.getElementById('fx-trk-reid').value)||500;
   }
   // Save position from edit dialog
   var nx=parseInt(document.getElementById('fx-px').value)||0;
@@ -8068,11 +8103,18 @@ function _trackBtnSync(camId){
 }
 
 function _trackStart(camId){
+  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===camId)f=fx;});
+  var classes=(f&&f.trackClasses)?f.trackClasses:["person"];
+  var fps=(f&&f.trackFps)?f.trackFps:2;
+  var thr=(f&&f.trackThreshold)?f.trackThreshold:0.4;
+  var ttl=(f&&f.trackTtl)?f.trackTtl:5;
+  var reid=(f&&f.trackReidMm)?f.trackReidMm:500;
   document.getElementById('hs').textContent='Starting tracking...';
-  ra('POST','/api/cameras/'+camId+'/track/start',{fps:2,threshold:0.4,ttl:5},function(r){
+  ra('POST','/api/cameras/'+camId+'/track/start',{fps:fps,threshold:thr,ttl:ttl,classes:classes,reidMm:reid},function(r){
     if(r&&r.ok){
       _trackingCams[camId]=true;
-      document.getElementById('hs').textContent='Tracking active — watching for people';
+      var lbl=classes.length===1?classes[0]:classes.length+' classes';
+      document.getElementById('hs').textContent='Tracking active \u2014 watching for '+lbl;
       _trackPollStart();
     }else{
       document.getElementById('hs').textContent='Track start failed: '+(r&&r.err||'unknown');

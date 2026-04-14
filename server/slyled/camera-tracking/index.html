@@ -42,22 +42,22 @@ footer{text-align:center;padding:30px 0;color:#64748b;font-size:.85em;border-top
   </div>
 </header>
 <div class="container">
-  <p style="font-size:1.05em;margin-bottom:20px">Deploy camera firmware to Orange Pi or Raspberry Pi boards via SSH from the Firmware tab. Each camera node serves HTTP endpoints for snapshots, object detection, depth estimation, and continuous tracking. All heavy CV processing runs on the orchestrator — any camera that can serve JPEGs works.</p>
+  <p style="font-size:1.05em;margin-bottom:20px">Deploy camera firmware to Orange Pi or Raspberry Pi boards via SSH from the Firmware tab. Each camera node serves HTTP endpoints for snapshots, object detection, depth estimation, and continuous tracking. Per-camera tracking configuration lets you choose exactly what to detect and how sensitive the detection should be.</p>
   <ul class="bullets">
-    <li>YOLOv8n ONNX model (12 MB) for fast person/object detection</li>
+    <li>YOLOv8n ONNX model (12 MB) with 16 configurable detection classes</li>
+    <li>Per-camera tracking settings: detection classes, FPS, threshold, TTL, re-ID distance</li>
     <li>Depth-Anything-V2 monocular depth estimation for 3D point clouds</li>
     <li>ArUco marker detection for camera intrinsic calibration</li>
     <li>Homography-based pixel-to-stage coordinate mapping</li>
     <li>Live snapshot preview with bounding box overlay in the SPA</li>
-    <li>Adjustable confidence threshold and resolution (320/640)</li>
     <li>Multi-camera support (V4L2 USB cameras, auto-filtering SoC nodes)</li>
     <li>Systemd service (slyled-cam) for auto-start on boot</li>
     <li>SSH+SCP firmware deployment from desktop Firmware tab</li>
     <li>Per-camera fixtures with independent FOV, calibration, and positioning</li>
   </ul>
   <div class="screenshots">
+    <figure><img src="../spa-setup-edit-camera.png" alt="Camera fixture edit with tracking configuration" loading="lazy"><figcaption>Camera fixture edit with tracking configuration</figcaption></figure>
     <figure><img src="../spa-cv-status.png" alt="CV Engine status showing model loading" loading="lazy"><figcaption>CV Engine status showing model loading</figcaption></figure>
-    <figure><img src="../spa-settings-cameras.png" alt="Camera node configuration with calibration status" loading="lazy"><figcaption>Camera node configuration with calibration status</figcaption></figure>
   </div>
   <div class="cta">
     <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="cta-dl">Download SlyLED</a>

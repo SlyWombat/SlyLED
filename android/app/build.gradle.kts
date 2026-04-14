@@ -28,8 +28,8 @@ android {
         applicationId = "com.slywombat.slyled"
         minSdk = 26
         targetSdk = 35
-        versionCode = 141
-        versionName = "1.4.1"
+        versionCode = 200
+        versionName = "2.0.0"
     }
 
     signingConfigs {
@@ -93,6 +93,9 @@ dependencies {
     implementation("com.google.dagger:hilt-android:2.51.1")
     kapt("com.google.dagger:hilt-compiler:2.51.1")
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
+
+    // 3D SceneView (Filament wrapper for Jetpack Compose)
+    implementation("io.github.sceneview:sceneview:2.2.1")
 
     // Camera + QR
     implementation("androidx.camera:camera-camera2:1.4.1")

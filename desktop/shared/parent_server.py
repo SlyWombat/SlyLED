@@ -81,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.4.30"
+VERSION = "1.4.34"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1038,6 +1038,11 @@ def api_fixtures_create():
             f["cameraUrl"] = body.get("cameraUrl", "")
             f["resolutionW"] = body.get("resolutionW", 1920)
             f["resolutionH"] = body.get("resolutionH", 1080)
+            f["trackClasses"] = body.get("trackClasses", ["person"])
+            f["trackFps"] = body.get("trackFps", 2)
+            f["trackThreshold"] = body.get("trackThreshold", 0.4)
+            f["trackTtl"] = body.get("trackTtl", 5)
+            f["trackReidMm"] = body.get("trackReidMm", 500)
         _fixtures.append(f)
         _nxt_fix += 1
         _save("fixtures", _fixtures)
@@ -1082,10 +1087,32 @@ def api_fixture_update(fid):
         fov = body["fovDeg"]
         if not isinstance(fov, (int, float)) or fov < 1 or fov > 180:
             return jsonify(err="fovDeg must be 1-180"), 400
+    if ft == "camera":
+        if "trackClasses" in body:
+            tc = body["trackClasses"]
+            if not isinstance(tc, list) or not tc or not all(isinstance(c, str) for c in tc):
+                return jsonify(err="trackClasses must be a non-empty list of strings"), 400
+        if "trackFps" in body:
+            v = body["trackFps"]
+            if not isinstance(v, (int, float)) or v < 0.5 or v > 10:
+                return jsonify(err="trackFps must be 0.5-10"), 400
+        if "trackThreshold" in body:
+            v = body["trackThreshold"]
+            if not isinstance(v, (int, float)) or v < 0.1 or v > 0.95:
+                return jsonify(err="trackThreshold must be 0.1-0.95"), 400
+        if "trackTtl" in body:
+            v = body["trackTtl"]
+            if not isinstance(v, (int, float)) or v < 1 or v > 60:
+                return jsonify(err="trackTtl must be 1-60"), 400
+        if "trackReidMm" in body:
+            v = body["trackReidMm"]
+            if not isinstance(v, (int, float)) or v < 50 or v > 5000:
+                return jsonify(err="trackReidMm must be 50-5000"), 400
     for k in ("name", "type", "fixtureType", "childId", "childIds", "strings",
               "rotation", "orientation", "mountedInverted", "aoeRadius", "meshFile",
               "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId",
-              "fovDeg", "cameraUrl", "cameraIp", "cameraIdx", "resolutionW", "resolutionH"):
+              "fovDeg", "cameraUrl", "cameraIp", "cameraIdx", "resolutionW", "resolutionH",
+              "trackClasses", "trackFps", "trackThreshold", "trackTtl", "trackReidMm"):
         if k in body:
             f[k] = body[k]
     _save("fixtures", _fixtures)
@@ -2915,9 +2942,11 @@ def api_camera_track_start(fid):
             "cam": body.get("cam", 0),
             "orchestratorUrl": f"http://{local_ip}:{port}",
             "cameraId": fid,
-            "fps": body.get("fps", 2),
-            "threshold": body.get("threshold", 0.4),
-            "ttl": body.get("ttl", 5),
+            "fps": body.get("fps", f.get("trackFps", 2)),
+            "threshold": body.get("threshold", f.get("trackThreshold", 0.4)),
+            "ttl": body.get("ttl", f.get("trackTtl", 5)),
+            "classes": body.get("classes", f.get("trackClasses", ["person"])),
+            "reidMm": body.get("reidMm", f.get("trackReidMm", 500)),
         }).encode()
         req = _ur.Request(f"http://{ip}:5000/track/start",
                           data=req_data,
@@ -3047,7 +3076,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.4.30" from camera_server.py source text."""
+    """Extract VERSION = "1.4.34" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -3764,8 +3793,10 @@ def api_objects_temporal_create():
         # Camera on back wall: left-of-frame = stage-right (X=0), right = stage-left (X=sw)
         # Bottom of frame = far from camera (sd), top = near (0)
         pos = [sw * cx, sd * cy, 0]
-        scale = [pixel_box.get("w", 100) * sw / fw, 200,
-                 pixel_box.get("h", 200) * sd / fh]
+        # Scale order matches renderer: [width, height(Z), depth(Y)]
+        scale = [pixel_box.get("w", 100) * sw / fw,
+                 1700,
+                 400]
     with _lock:
         obj = {
             "id": _nxt_tmp, "name": body.get("name", f"Temporal {_nxt_tmp}"),
@@ -4971,6 +5002,11 @@ def api_timeline_delete(tid):
         return jsonify(ok=False, err="timeline not found"), 404
     _timelines = [t for t in _timelines if t["id"] != tid]
     _save("timelines", _timelines)
+    # Prune deleted timeline from playlist
+    pl_order = _show_playlist.get("order", [])
+    if tid in pl_order:
+        _show_playlist["order"] = [t for t in pl_order if t != tid]
+        _save("show_playlist", _show_playlist)
     return jsonify(ok=True)
 
 @app.post("/api/timelines/<int:tid>/frame")
@@ -5806,7 +5842,7 @@ def api_timeline_start(tid):
 
 @app.post("/api/timelines/<int:tid>/stop")
 def api_timeline_stop(tid):
-    """Stop timeline playback on all children + DMX playback thread."""
+    """Stop timeline playback on all children + DMX playback thread + blackout."""
     # Stop DMX playback thread
     _dmx_playback_stop.set()
 
@@ -5821,6 +5857,10 @@ def api_timeline_stop(tid):
             _send(child["ip"], pkt_off)
             if _attempt == 0:
                 stopped += 1
+
+    # Blackout all DMX universes (#405)
+    if _artnet.running:
+        _artnet.blackout()
 
     with _lock:
         _settings["runnerRunning"] = False
@@ -6087,6 +6127,21 @@ def api_show_start():
     loop_all = data.get("loopAll", _show_playlist.get("loopAll", False))
     if not order:
         return jsonify(err="Playlist is empty"), 400
+    # Auto-enable loop for track-only playlists (#410)
+    if not loop_all:
+        track_action_ids = {a["id"] for a in _actions if a.get("type") == 18}
+        all_track = True
+        for tid in order:
+            tl = next((t for t in _timelines if t["id"] == tid), None)
+            if not tl:
+                continue
+            for tr in tl.get("tracks", []):
+                for cl in tr.get("clips", []):
+                    if cl.get("actionId") not in track_action_ids:
+                        all_track = False
+                        break
+        if all_track and track_action_ids:
+            loop_all = True
     # Verify all timelines are baked (Track actions bypass bake requirement)
     has_track_actions = any(a.get("type") == 18 for a in _actions)
     unbaked = [tid for tid in order if tid not in _bake_result]
@@ -6125,7 +6180,7 @@ def api_show_start():
 
 @app.post("/api/show/stop")
 def api_show_stop():
-    """Stop sequential show playback."""
+    """Stop sequential show playback + blackout all output."""
     _dmx_playback_stop.set()
     pkt_stop = _hdr(CMD_RUNNER_STOP)
     pkt_off = _hdr(CMD_ACTION_STOP)
@@ -6133,6 +6188,9 @@ def api_show_stop():
         if child.get("ip"):
             _send(child["ip"], pkt_stop)
             _send(child["ip"], pkt_off)
+    # Blackout all DMX universes (#405)
+    if _artnet.running:
+        _artnet.blackout()
     with _lock:
         _settings["runnerRunning"] = False
         _settings["activeTimeline"] = -1
@@ -7055,9 +7113,11 @@ def api_project_import():
                         _cal["grid"] = _mcal.build_grid(_gs)
                     except Exception:
                         pass
-        # Restore show playlist
+        # Restore show playlist — prune any orphan IDs that reference deleted timelines
         _show_playlist.clear()
         _show_playlist.update(data.get("showPlaylist", {"order": [], "loopAll": False}))
+        valid_tl_ids = {t["id"] for t in _timelines}
+        _show_playlist["order"] = [tid for tid in _show_playlist.get("order", []) if tid in valid_tl_ids]
         # Auto-populate playlist if empty but timelines exist (fixes #312)
         if not _show_playlist.get("order") and _timelines:
             _show_playlist["order"] = [t["id"] for t in _timelines]
