@@ -938,7 +938,7 @@ def _cv_capture(device, timeout=5):
             # Find native resolution for this device
             cam_entry = next((c for c in _hw_info.get("cameras", []) if c.get("device") == device), None)
             if cam_entry:
-                _probe_camera(cam_entry)
+                _probe_camera_details(cam_entry)
             native_w = cam_entry["resW"] if cam_entry and cam_entry.get("resW", 0) > 0 else 1920
             native_h = cam_entry["resH"] if cam_entry and cam_entry.get("resH", 0) > 0 else 1080
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, native_w)
