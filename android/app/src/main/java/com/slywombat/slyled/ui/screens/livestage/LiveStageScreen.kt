@@ -312,15 +312,19 @@ private fun StageCanvas(
         // Default camera position — same formula as SPA:
         //   SPA: camera.position.set(sw*1.2, sh*1.0, sd*1.5)
         //   SPA target: (sw/2, sh/4, sd/2)
-        //   SPA coords: Three.js X=stageX, Y=stageZ(height), Z=stageY(depth)
-        //   Stage coords: cam at X=stageW*1.2, Z=stageH*1.0, Y=stageD*1.5
+        // SPA camera position (in Three.js coords):
+        //   position = (sw*1.2, sh*1.0, sd*1.5)  → Three.js X, Y(up), Z(depth)
+        //   target = (sw/2, sh/4, sd/2)
+        // Mapping Three.js → stage: X=X, Y=Z(height), Z=Y(depth)
+        // So SPA camera in stage coords: X=sw*1.2, Y(depth)=sd*1.5, Z(height)=sh*1.0
+        // But SPA Three.js Z points TOWARD viewer, and Y=0 is back wall (far from camera)
+        // Our stage Y=0 is back wall. Camera must be at NEGATIVE Y to look at back wall from front.
         val defaultCamX = stageW * 1.2f
-        val defaultCamY = stageD * 1.5f
+        val defaultCamY = -stageD * 0.5f   // in front of stage (audience side, negative Y)
         val defaultCamZ = stageH * 1.0f
 
-        // Apply user orbit rotation around the look target
         val lookX = stageW / 2f
-        val lookY = stageD / 2f
+        val lookY = stageD / 2f     // look at center of stage
         val lookZ = stageH / 4f
 
         // Rotate default camera offset around look target by user orbit
