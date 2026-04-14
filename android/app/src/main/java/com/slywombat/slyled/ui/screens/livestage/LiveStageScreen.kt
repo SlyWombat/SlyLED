@@ -410,6 +410,46 @@ private fun StageCanvas(
             drawPath(borderPath, color = CyanSecondary.copy(alpha = 0.1f), style = Stroke(4f))
         }
 
+        // --- Stage volume wireframe (W × D × H) ---
+        if (stageH > 0f) {
+            // Ceiling corners
+            val c00 = project(0f, 0f, stageH)
+            val c10 = project(stageW, 0f, stageH)
+            val c11 = project(stageW, stageD, stageH)
+            val c01 = project(0f, stageD, stageH)
+            val wireColor = CyanSecondary.copy(alpha = 0.06f)
+            val wireStroke = Stroke(1f)
+            // Ceiling quad
+            if (c00 != null && c10 != null && c11 != null && c01 != null) {
+                val ceilPath = Path().apply {
+                    moveTo(c00.x, c00.y); lineTo(c10.x, c10.y)
+                    lineTo(c11.x, c11.y); lineTo(c01.x, c01.y); close()
+                }
+                drawPath(ceilPath, wireColor, style = wireStroke)
+            }
+            // Vertical edges (floor to ceiling)
+            val floors = listOf(f00, f10, f11, f01)
+            val ceils = listOf(c00, c10, c11, c01)
+            for (i in 0..3) {
+                val fl = floors[i]; val cl = ceils[i]
+                if (fl != null && cl != null) {
+                    drawLine(wireColor, fl, cl, strokeWidth = 1f)
+                }
+            }
+        }
+
+        // --- Origin axes (small RGB arrows at 0,0,0) ---
+        val axisLen = min(stageW, stageD) * 0.1f  // 10% of stage
+        val origin = project(0f, 0f, 0f)
+        val xEnd = project(axisLen, 0f, 0f)
+        val yEnd = project(0f, axisLen, 0f)
+        val zEnd = project(0f, 0f, axisLen)
+        if (origin != null) {
+            if (xEnd != null) drawLine(Color.Red.copy(alpha = 0.5f), origin, xEnd, strokeWidth = 2f)
+            if (yEnd != null) drawLine(Color.Green.copy(alpha = 0.5f), origin, yEnd, strokeWidth = 2f)
+            if (zEnd != null) drawLine(Color.Blue.copy(alpha = 0.5f), origin, zEnd, strokeWidth = 2f)
+        }
+
         // --- 2. Static objects (walls as 3D boxes) ---
         for (obj in objects) {
             if (obj.temporal || obj.mobility == "moving") continue
