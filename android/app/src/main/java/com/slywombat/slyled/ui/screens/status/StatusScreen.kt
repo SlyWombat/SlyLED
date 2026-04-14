@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import kotlinx.coroutines.flow.collectLatest
 import com.slywombat.slyled.data.model.*
 import com.slywombat.slyled.ui.theme.*
 import com.slywombat.slyled.viewmodel.StatusViewModel
@@ -32,10 +33,21 @@ fun StatusScreen(viewModel: StatusViewModel = hiltViewModel()) {
     val settings by viewModel.settings.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
 
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(Unit) {
+        viewModel.message.collectLatest { msg ->
+            snackbarHostState.showSnackbar(msg)
+        }
+    }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { padding ->
     PullToRefreshBox(
         isRefreshing = isRefreshing,
         onRefresh = { viewModel.refreshAll() },
-        modifier = Modifier.fillMaxSize()
+        modifier = Modifier.fillMaxSize().padding(padding)
     ) {
         LazyColumn(
             modifier = Modifier
@@ -54,11 +66,11 @@ fun StatusScreen(viewModel: StatusViewModel = hiltViewModel()) {
                 DmxStatusCard(dmxStatus = dmxStatus)
             }
 
-            // Performers section header
+            // Hardware section header
             item {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Performers",
+                    "Hardware",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -85,12 +97,12 @@ fun StatusScreen(viewModel: StatusViewModel = hiltViewModel()) {
                 PerformerCard(child = child)
             }
 
-            // Camera Nodes section
+            // Camera Sensors section
             if (cameraFixtures.isNotEmpty()) {
                 item {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "Camera Nodes",
+                        "Camera Sensors",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -107,6 +119,7 @@ fun StatusScreen(viewModel: StatusViewModel = hiltViewModel()) {
                 }
             }
         }
+    }
     }
 }
 

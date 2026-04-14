@@ -623,30 +623,50 @@ private fun StageCanvas(
             }
         }
 
-        // --- 5. Tracked objects (temporal/moving) ---
+        // --- 5. Tracked objects (temporal/moving) — 3D wireframe box ---
         for (obj in objects) {
             if (!obj.temporal && obj.mobility != "moving") continue
             val pos = obj.transform.pos
             val ox = pos[0].toFloat(); val oy = pos[1].toFloat(); val oz = pos[2].toFloat()
-            val p = project(ox, oy, oz) ?: continue
             val s = scaleAt(ox, oy, oz)
+            if (s <= 0f) continue
             val col = try { Color(android.graphics.Color.parseColor(obj.color ?: "#f472b6")) } catch (_: Exception) { Color(0xFFf472b6) }
-            val markerH = 1700f  // person height mm
-            val topP = project(ox, oy, oz + markerH)
 
-            // Vertical line from floor to head
-            if (topP != null) {
-                drawLine(col.copy(alpha = 0.4f), p, topP, strokeWidth = 2f * s)
-                // Head circle
-                drawCircle(col, 8f * s, topP)
-                drawCircle(col.copy(alpha = 0.3f), 16f * s, topP)
+            // Box dimensions from transform.scale: [width(X), height(Z), depth(Y)]
+            val scl = obj.transform.scale
+            val ow = (if (scl.isNotEmpty()) scl[0].toFloat() else 400f)
+            val oh = (if (scl.size > 1) scl[1].toFloat() else 1700f)
+            val od = (if (scl.size > 2) scl[2].toFloat() else 400f)
+
+            // 8 corners of the box centered on (ox, oy, oz)
+            val hw = ow / 2f; val hd = od / 2f
+            val corners = arrayOf(
+                project(ox - hw, oy - hd, oz),      project(ox + hw, oy - hd, oz),
+                project(ox + hw, oy + hd, oz),      project(ox - hw, oy + hd, oz),
+                project(ox - hw, oy - hd, oz + oh), project(ox + hw, oy - hd, oz + oh),
+                project(ox + hw, oy + hd, oz + oh), project(ox - hw, oy + hd, oz + oh)
+            )
+            // Draw 12 edges
+            val edges = listOf(0 to 1, 1 to 2, 2 to 3, 3 to 0,
+                               4 to 5, 5 to 6, 6 to 7, 7 to 4,
+                               0 to 4, 1 to 5, 2 to 6, 3 to 7)
+            for ((a, b) in edges) {
+                val pa = corners[a]; val pb = corners[b]
+                if (pa != null && pb != null) {
+                    drawLine(col.copy(alpha = 0.6f), pa, pb, strokeWidth = 1.5f)
+                }
             }
-            // Floor circle
-            drawCircle(col.copy(alpha = 0.3f), 12f * s, p)
-            drawCircle(col.copy(alpha = 0.6f), 12f * s, p, style = Stroke(2f))
 
-            // Label above head
-            val labelP = topP ?: p
+            // Floor circle as ground marker
+            val floorP = project(ox, oy, oz)
+            if (floorP != null) {
+                drawCircle(col.copy(alpha = 0.3f), 12f * s, floorP)
+                drawCircle(col.copy(alpha = 0.6f), 12f * s, floorP, style = Stroke(2f))
+            }
+
+            // Label above box top
+            val topCenter = project(ox, oy, oz + oh)
+            val labelP = topCenter ?: floorP ?: continue
             val label = obj.name.ifBlank { "?" }
             val labelStyle = TextStyle(color = col, fontSize = (11f * s).coerceIn(8f, 16f).sp)
             val labelResult = textMeasurer.measure(label, labelStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)

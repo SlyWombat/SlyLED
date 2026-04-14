@@ -81,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.4.34"
+VERSION = "1.4.36"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1345,6 +1345,7 @@ def api_cameras():
         cam = dict(c)
         ip = c.get("cameraIp")
         cam["online"] = False
+        cam["tracking"] = _tracking_state.get(c["id"], False)
         if ip:
             info = _probe_camera(ip, timeout=1)
             if info:
@@ -1352,6 +1353,11 @@ def api_cameras():
                 cam["fwVersion"] = info.get("fwVersion", "")
                 cam["hostname"] = info.get("hostname", "")
                 cam["capabilities"] = info.get("capabilities", {})
+                # Check actual tracking state from camera node
+                caps = info.get("capabilities", {})
+                if caps.get("trackingRunning"):
+                    cam["tracking"] = True
+                    _tracking_state[c["id"]] = True
         result.append(cam)
     return jsonify(result)
 
@@ -3192,7 +3198,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.4.34" from camera_server.py source text."""
+    """Extract VERSION = "1.4.36" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None

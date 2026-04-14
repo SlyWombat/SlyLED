@@ -127,6 +127,21 @@ class Tracker:
                 tick_count += 1
                 if tick_count == 1:
                     log.info("Tracking: first tick OK on %s", device)
+                # Reopen camera after 10 consecutive capture failures
+                if self._capture_fail_count == 10:
+                    log.info("Tracking: 10 capture failures — reopening %s", device)
+                    try:
+                        import cv2
+                        if cap:
+                            cap.release()
+                        cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
+                        if cap.isOpened():
+                            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                            log.info("Tracking: reopened %s", device)
+                        self._capture_fail_count = 11  # prevent re-trigger next tick
+                    except Exception as e:
+                        log.warning("Tracking: reopen failed: %s", e)
             except Exception as e:
                 fail_count += 1
                 self._last_error = str(e)
@@ -160,6 +175,7 @@ class Tracker:
                 log.warning("Tracking: capture returned None for %s (fail #%d)",
                             device, self._capture_fail_count)
             return
+        self._capture_fail_count = 0
 
         # Run detection
         detections, _ = self._detector.detect(frame, threshold=self._threshold,

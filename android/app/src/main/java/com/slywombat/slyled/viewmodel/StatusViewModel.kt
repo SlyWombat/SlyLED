@@ -7,7 +7,9 @@ import com.slywombat.slyled.data.model.*
 import com.slywombat.slyled.data.repository.SlyLedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -44,6 +46,9 @@ class StatusViewModel @Inject constructor(
 
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
+    private val _message = MutableSharedFlow<String>()
+    val message: SharedFlow<String> = _message
 
     private var initialized = false
 
@@ -127,13 +132,23 @@ class StatusViewModel @Inject constructor(
                 val currentlyTracking = _trackingState.value[fixtureId] ?: false
                 if (currentlyTracking) {
                     repository.stopTracking(fixtureId)
+                    _trackingState.value = _trackingState.value.toMutableMap().apply {
+                        this[fixtureId] = false
+                    }
+                    _message.emit("Tracking stopped")
                 } else {
                     repository.startTracking(fixtureId)
+                    _trackingState.value = _trackingState.value.toMutableMap().apply {
+                        this[fixtureId] = true
+                    }
+                    val camName = _cameraFixtures.value.find { it.id == fixtureId }?.name
+                        ?: "Camera #$fixtureId"
+                    _message.emit("Tracking started on $camName")
                 }
-                _trackingState.value = _trackingState.value.toMutableMap().apply {
-                    this[fixtureId] = !currentlyTracking
-                }
-            } catch (e: Exception) { Log.e(TAG, "toggleTracking", e) }
+            } catch (e: Exception) {
+                Log.e(TAG, "toggleTracking", e)
+                _message.emit("Track failed: ${e.message}")
+            }
         }
     }
 
