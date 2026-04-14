@@ -368,10 +368,10 @@ private fun StageCanvas(
         val rLen = kotlin.math.sqrt(rX * rX + rY * rY + rZ * rZ)
         if (rLen > 0.001f) { rX /= rLen; rY /= rLen; rZ /= rLen }
 
-        // Camera up = right × forward
-        val cuX = rY * fwdZ - rZ * fwdY
-        val cuY = rZ * fwdX - rX * fwdZ
-        val cuZ = rX * fwdY - rY * fwdX
+        // Camera up = forward × right (Z-up convention)
+        val cuX = fwdY * rZ - fwdZ * rY
+        val cuY = fwdZ * rX - fwdX * rZ
+        val cuZ = fwdX * rY - fwdY * rX
 
         // Perspective projection: project 3D stage point → 2D screen
         val fov = 50f * (Math.PI.toFloat() / 180f)
