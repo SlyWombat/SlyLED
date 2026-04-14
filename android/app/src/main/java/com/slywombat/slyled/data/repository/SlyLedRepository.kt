@@ -124,13 +124,27 @@ class SlyLedRepository @Inject constructor(
     suspend fun setAimPoint(id: Int, aimPoint: List<Double>) =
         requireApi().setAimPoint(id, mapOf("aimPoint" to aimPoint))
 
-    // Fixture Aim (pointer mode)
-    suspend fun aimFixture(id: Int, pan: Float, tilt: Float): OkResponse {
+    // Fixture Controller mode — send normalized 0-1 pan/tilt
+    suspend fun aimFixtureDirect(id: Int, panNorm: Float, tiltNorm: Float): OkResponse {
         val body = kotlinx.serialization.json.buildJsonObject {
-            put("pan", kotlinx.serialization.json.JsonPrimitive(pan))
-            put("tilt", kotlinx.serialization.json.JsonPrimitive(tilt))
+            put("pan", kotlinx.serialization.json.JsonPrimitive(panNorm.toDouble()))
+            put("tilt", kotlinx.serialization.json.JsonPrimitive(tiltNorm.toDouble()))
         }
-        return requireApi().aimFixture(id, body)
+        return requireApi().aimFixtureDirect(id, body)
+    }
+
+    // Fixture Controller mode — send color/dimmer/strobe channels (0-1 normalized)
+    suspend fun setFixtureOutput(id: Int, dimmer: Float, red: Float, green: Float,
+                                  blue: Float, white: Float, strobe: Float): OkResponse {
+        val body = kotlinx.serialization.json.buildJsonObject {
+            put("dimmer", kotlinx.serialization.json.JsonPrimitive(dimmer.toDouble()))
+            put("red", kotlinx.serialization.json.JsonPrimitive(red.toDouble()))
+            put("green", kotlinx.serialization.json.JsonPrimitive(green.toDouble()))
+            put("blue", kotlinx.serialization.json.JsonPrimitive(blue.toDouble()))
+            put("white", kotlinx.serialization.json.JsonPrimitive(white.toDouble()))
+            put("strobe", kotlinx.serialization.json.JsonPrimitive(strobe.toDouble()))
+        }
+        return requireApi().aimFixtureDirect(id, body)
     }
 
     // Fixtures Live

@@ -108,9 +108,9 @@ interface SlyLedApi {
     @POST("api/fixtures/{id}/resolve")
     suspend fun resolveFixture(@Path("id") id: Int): Map<String, Any>
 
-    // ── Fixture Aim (pointer mode) ──────────────────────────────────
-    @POST("api/calibration/mover/{id}/aim")
-    suspend fun aimFixture(@Path("id") id: Int, @Body body: JsonObject): OkResponse
+    // ── Fixture Controller mode — send normalized pan/tilt + dimmer ──
+    @POST("api/fixtures/{id}/dmx-test")
+    suspend fun aimFixtureDirect(@Path("id") id: Int, @Body body: JsonObject): OkResponse
 
     // ── Fixtures Live ────────────────────────────────────────────────
     @GET("api/fixtures/live")

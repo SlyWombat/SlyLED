@@ -81,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.4.36"
+VERSION = "1.4.37"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -2304,14 +2304,22 @@ def api_fixture_dmx_test(fid):
         return jsonify(err="Art-Net engine not running"), 503
     profile = {"channel_map": prof_info.get("channel_map"),
                "channels": prof_info.get("channels", [])}
-    pan = body.get("pan", 0.5)
-    tilt = body.get("tilt", 0.5)
-    dimmer = body.get("dimmer", 1.0)
-    uni_buf.set_fixture_pan_tilt(addr, pan, tilt, profile)
-    # Set dimmer if available
+    pan = body.get("pan")
+    tilt = body.get("tilt")
+    dimmer = body.get("dimmer")
+    # Only update pan/tilt if provided and non-negative (skip when -1)
+    if pan is not None and pan >= 0 and tilt is not None and tilt >= 0:
+        uni_buf.set_fixture_pan_tilt(addr, pan, tilt, profile)
     ch_map = prof_info.get("channel_map", {})
-    if "dimmer" in ch_map:
+    # Set dimmer if provided
+    if dimmer is not None and "dimmer" in ch_map:
         uni_buf.set_channel(addr + ch_map["dimmer"], int(dimmer * 255))
+    # Set color + strobe channels if provided
+    for ch_name in ("red", "green", "blue", "white", "strobe"):
+        if ch_name in ch_map:
+            val = body.get(ch_name)
+            if val is not None:
+                uni_buf.set_channel(addr + ch_map[ch_name], int(val * 255))
     return jsonify(ok=True)
 
 
@@ -3198,7 +3206,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.4.36" from camera_server.py source text."""
+    """Extract VERSION = "1.4.37" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -4839,7 +4847,33 @@ def api_dmx_fixture_channels(fid):
         if val == 0 and ch.get("default", 0) > 0:
             val = ch["default"]
         ch["value"] = val
-    return jsonify(universe=uni, startAddr=addr, channels=channels)
+    pan_range = profile.get("panRange", 0) if profile else 0
+    tilt_range = profile.get("tiltRange", 0) if profile else 0
+    orient = fixture.get("orientation", {})
+    inverted = fixture.get("mountedInverted", False)
+    # Compute home position: aim at audience center at floor level
+    home_pan = 0.5
+    home_tilt = 0.5
+    if pan_range > 0 and tilt_range > 0:
+        # Fixture position lives in _layout["children"], not on fixture object
+        pos = next((c for c in _layout.get("children", []) if c.get("id") == fid), None)
+        fx = pos.get("x", 0) if pos else 0
+        fy = pos.get("y", 0) if pos else 0
+        fz = pos.get("z", 0) if pos else 0
+        # Target: same X as fixture, mid-stage depth, floor
+        stage_d = (_stage.get("d", 4) * 1000) if _stage else 4000
+        target = (fx, stage_d / 2, 0)
+        pt = compute_pan_tilt((fx, fy, fz), target, pan_range, tilt_range,
+                              mounted_inverted=inverted)
+        if pt:
+            home_pan, home_tilt = pt
+    return jsonify(universe=uni, startAddr=addr, channels=channels,
+                   panRange=pan_range, tiltRange=tilt_range,
+                   panSign=orient.get("panSign", 1),
+                   tiltSign=orient.get("tiltSign", -1),
+                   mountedInverted=inverted,
+                   homePan=round(home_pan, 4),
+                   homeTilt=round(home_tilt, 4))
 
 @app.post("/api/dmx/fixture/<int:fid>/test")
 def api_dmx_fixture_test(fid):

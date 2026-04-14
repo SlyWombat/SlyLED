@@ -29,7 +29,15 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
     val message by viewModel.message.collectAsState()
 
     val fixtures by viewModel.fixtures.collectAsState()
-    val pointerFixtureId by viewModel.pointerFixtureId.collectAsState()
+    val controllerFixtureId by viewModel.controllerFixtureId.collectAsState()
+    val controllerReady by viewModel.controllerReady.collectAsState()
+    val controllerConnected by viewModel.controllerConnected.collectAsState()
+    val controllerPanRange by viewModel.controllerPanRange.collectAsState()
+    val controllerTiltRange by viewModel.controllerTiltRange.collectAsState()
+    val controllerPanSign by viewModel.controllerPanSign.collectAsState()
+    val controllerTiltSign by viewModel.controllerTiltSign.collectAsState()
+    val controllerInitialPan by viewModel.controllerInitialPan.collectAsState()
+    val controllerInitialTilt by viewModel.controllerInitialTilt.collectAsState()
     val dmxFixtures = fixtures.filter { it.fixtureType == "dmx" }
 
     val isRunning = settings.runnerRunning
@@ -148,25 +156,25 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
                 }
             }
 
-            // Pointer mode — DMX moving head control
+            // Controller mode — DMX moving head fixture picker
             if (dmxFixtures.isNotEmpty()) {
                 item {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text(
-                                "Pointer Mode",
+                                "Controller Mode",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                "Use your phone as a pointer to aim moving heads",
+                                "Use your phone to control moving head fixtures",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Spacer(Modifier.height(8.dp))
                             dmxFixtures.forEach { f ->
                                 OutlinedButton(
-                                    onClick = { viewModel.enterPointerMode(f.id) },
+                                    onClick = { viewModel.enterControllerMode(f.id) },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(vertical = 2.dp)
@@ -233,13 +241,25 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
         }
     }
 
-    // Pointer mode overlay
-    val pointerFix = pointerFixtureId?.let { id -> fixtures.find { it.id == id } }
-    if (pointerFix != null) {
-        PointerModeOverlay(
-            fixtureName = pointerFix.name ?: "Fixture ${pointerFix.id}",
-            onAim = { pan, tilt -> viewModel.aimFixture(pointerFix.id, pan, tilt) },
-            onDismiss = { viewModel.exitPointerMode() }
+    // Full-screen controller overlay
+    val controllerFix = controllerFixtureId?.let { id -> fixtures.find { it.id == id } }
+    if (controllerFix != null && controllerReady) {
+        ControllerModeOverlay(
+            fixtureName = controllerFix.name ?: "Fixture ${controllerFix.id}",
+            panRangeDeg = controllerPanRange,
+            tiltRangeDeg = controllerTiltRange,
+            initialPanNorm = controllerInitialPan,
+            initialTiltNorm = controllerInitialTilt,
+            panSign = controllerPanSign,
+            tiltSign = controllerTiltSign,
+            connected = controllerConnected,
+            onAim = { panNorm, tiltNorm ->
+                viewModel.aimFixture(controllerFix.id, panNorm, tiltNorm)
+            },
+            onChannelChange = { dimmer, red, green, blue, white, strobe ->
+                viewModel.setFixtureChannels(controllerFix.id, dimmer, red, green, blue, white, strobe)
+            },
+            onDismiss = { viewModel.exitControllerMode() }
         )
     }
 }
