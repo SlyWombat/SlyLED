@@ -440,16 +440,31 @@ private fun StageCanvas(
             }
         }
 
-        // --- Origin axes (small RGB arrows at 0,0,0) ---
-        val axisLen = min(stageW, stageD) * 0.1f  // 10% of stage
+        // --- Origin axes (RGB arrows at 0,0,0 with labels) ---
+        val axisLen = min(stageW, stageD) * 0.15f
         val origin = project(0f, 0f, 0f)
         val xEnd = project(axisLen, 0f, 0f)
         val yEnd = project(0f, axisLen, 0f)
         val zEnd = project(0f, 0f, axisLen)
         if (origin != null) {
-            if (xEnd != null) drawLine(Color.Red.copy(alpha = 0.5f), origin, xEnd, strokeWidth = 2f)
-            if (yEnd != null) drawLine(Color.Green.copy(alpha = 0.5f), origin, yEnd, strokeWidth = 2f)
-            if (zEnd != null) drawLine(Color.Blue.copy(alpha = 0.5f), origin, zEnd, strokeWidth = 2f)
+            val axisStroke = 2.5f
+            if (xEnd != null) {
+                drawLine(Color.Red.copy(alpha = 0.7f), origin, xEnd, strokeWidth = axisStroke)
+                val xl = textMeasurer.measure("X", TextStyle(color = Color.Red.copy(alpha = 0.8f), fontSize = 12.sp))
+                drawText(xl, topLeft = Offset(xEnd.x + 4f, xEnd.y - xl.size.height / 2f))
+            }
+            if (yEnd != null) {
+                drawLine(Color.Green.copy(alpha = 0.7f), origin, yEnd, strokeWidth = axisStroke)
+                val yl = textMeasurer.measure("Y", TextStyle(color = Color.Green.copy(alpha = 0.8f), fontSize = 12.sp))
+                drawText(yl, topLeft = Offset(yEnd.x + 4f, yEnd.y - yl.size.height / 2f))
+            }
+            if (zEnd != null) {
+                drawLine(Color.Blue.copy(alpha = 0.7f), origin, zEnd, strokeWidth = axisStroke)
+                val zl = textMeasurer.measure("Z", TextStyle(color = Color.Blue.copy(alpha = 0.8f), fontSize = 12.sp))
+                drawText(zl, topLeft = Offset(zEnd.x + 4f, zEnd.y - zl.size.height / 2f))
+            }
+            // Origin dot
+            drawCircle(Color.White.copy(alpha = 0.6f), 4f, origin)
         }
 
         // --- 2. Static objects (walls as 3D boxes) ---
