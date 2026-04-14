@@ -81,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.4.28"
+VERSION = "1.4.30"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -140,8 +140,16 @@ for _c in _children:
 _settings = _load("settings", {
     "name": "SlyLED", "units": 0, "canvasW": 3000, "canvasH": 2000,
     "darkMode": 1, "runnerRunning": False, "runnerElapsed": 0,
-    "runnerLoop": True,
+    "runnerLoop": True, "autoStartShow": False,
 })
+# Backfill autoStartShow for existing configs (#390)
+if "autoStartShow" not in _settings:
+    _settings["autoStartShow"] = False
+# Boot runner state: reset unless auto-start is enabled (#390)
+if not _settings.get("autoStartShow"):
+    _settings["runnerRunning"] = False
+    _settings["activeTimeline"] = -1
+    _settings["runnerStartEpoch"] = 0
 _layout  = _load("layout",  {"canvasW": 3000, "canvasH": 2000, "children": []})
 _stage   = _load("stage",   {"w": 3.0, "h": 2.0, "d": 1.5})
 _fixtures   = _load("fixtures",   [])
@@ -3039,7 +3047,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.4.28" from camera_server.py source text."""
+    """Extract VERSION = "1.4.30" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -4552,6 +4560,31 @@ if _dmx_settings.get("autoStartEngine", True) and _dmx_settings.get("universeRou
                 import threading as _thr
                 _thr.Thread(target=_run_boot_blink, args=(_engine,), daemon=True).start()
 
+# ── Auto-start show on boot (#390) ────────────────────────────────────────
+def _auto_start_show():
+    """Resume the last active timeline if autoStartShow is enabled."""
+    time.sleep(5)  # wait for children to reconnect
+    tid = _settings.get("activeTimeline", -1)
+    if tid < 0:
+        log.info("Auto-start show: no active timeline saved — staying idle")
+        return
+    tl = next((t for t in _timelines if t["id"] == tid), None)
+    if not tl:
+        log.warning("Auto-start show: timeline %d not found — staying idle", tid)
+        return
+    has_track = any(a.get("type") == 18 for a in _actions)
+    if tid not in _bake_result and not has_track:
+        log.warning("Auto-start show: timeline %d not baked — staying idle", tid)
+        return
+    # Start playback
+    log.info("Auto-start show: resuming timeline %d (%s)", tid, tl.get("name", "?"))
+    with app.test_request_context():
+        api_timeline_start(tid)
+
+if _settings.get("autoStartShow"):
+    import threading as _thr2
+    _thr2.Thread(target=_auto_start_show, daemon=True).start()
+
 @app.get("/api/dmx/interfaces")
 def api_dmx_interfaces():
     """List local network interfaces with their IPv4 addresses."""
@@ -5869,7 +5902,7 @@ def api_show_playlist_set():
     return jsonify(ok=True)
 
 
-def _show_playback_loop(playlist_order, loop_all, go_epoch):
+def _show_playback_loop(playlist_order, loop_all, go_epoch, start_idx=0):
     """Background thread: play timelines sequentially."""
     global _show_playback
     tl_list = []
@@ -5882,11 +5915,15 @@ def _show_playback_loop(playlist_order, loop_all, go_epoch):
         log.warning("Show playback: no baked timelines in playlist")
         return
 
-    log.info("Show playback: %d timelines, loop=%s", len(tl_list), loop_all)
+    log.info("Show playback: %d timelines, loop=%s, startIdx=%d", len(tl_list), loop_all, start_idx)
     cumulative = 0
+    first_pass = True
 
     while not _dmx_playback_stop.is_set():
         for idx, (tid, tl) in enumerate(tl_list):
+            # Skip items before startIndex on first pass (#361)
+            if first_pass and idx < start_idx:
+                continue
             if _dmx_playback_stop.is_set():
                 break
             duration = tl.get("durationS", 60)
@@ -5907,6 +5944,7 @@ def _show_playback_loop(playlist_order, loop_all, go_epoch):
             cumulative += duration
             _show_playback["totalElapsed"] = cumulative
 
+        first_pass = False  # subsequent loops start from beginning (#361)
         if not loop_all or _dmx_playback_stop.is_set():
             break
         # Loop: reset and go again
@@ -6064,17 +6102,18 @@ def api_show_start():
             _send(child["ip"], go_pkt)
             started += 1
 
+    start_idx = max(0, min(len(order) - 1, data.get("startIndex", 0)))
     _show_playback = {
-        "running": True, "currentIndex": 0, "currentTid": order[0],
+        "running": True, "currentIndex": start_idx, "currentTid": order[start_idx],
         "startEpoch": go_epoch, "loopAll": loop_all, "totalElapsed": 0,
     }
     with _lock:
         _settings["runnerRunning"] = True
-        _settings["activeTimeline"] = order[0]
+        _settings["activeTimeline"] = order[start_idx]
         _settings["runnerStartEpoch"] = go_epoch
         _save("settings", _settings)
 
-    threading.Thread(target=_show_playback_loop, args=(order, loop_all, go_epoch),
+    threading.Thread(target=_show_playback_loop, args=(order, loop_all, go_epoch, start_idx),
                      daemon=True).start()
     return jsonify(ok=True, started=started, goEpoch=go_epoch, timelines=len(order))
 
@@ -6158,7 +6197,8 @@ def api_settings_get():
 def api_settings_save():
     body = request.get_json(silent=True) or {}
     with _lock:
-        for k in ("name", "units", "canvasW", "canvasH", "darkMode", "runnerLoop", "globalBrightness", "logging", "logPath"):
+        for k in ("name", "units", "canvasW", "canvasH", "darkMode", "runnerLoop",
+                  "globalBrightness", "logging", "logPath", "autoStartShow"):
             if k in body:
                 _settings[k] = body[k]
         _layout["canvasW"] = _settings["canvasW"]

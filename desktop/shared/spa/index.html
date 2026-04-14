@@ -447,6 +447,9 @@ body.light .li:hover{border-color:#3b82f6}
       <label style='display:flex;align-items:center;gap:.5em;margin-top:.8em'>
         <input type='checkbox' id='s-dm' data-tip='setDark'> Dark Mode
       </label>
+      <label style='display:flex;align-items:center;gap:.5em;margin-top:.5em'>
+        <input type='checkbox' id='s-auto-show'> Auto-start runtime show on boot
+      </label>
       <div style='margin-top:1em'>
         <button class='btn btn-on' onclick='saveSettings(this)'>Save Settings</button>
       </div>
@@ -4518,7 +4521,7 @@ function renderTimeline(){
       +(ti>0?'<span style="cursor:pointer;color:#64748b;font-size:8px" onclick="tlMoveTrack('+ti+',-1)" title="Move up">\u25b2</span>':'')
       +(ti<tracks.length-1?'<span style="cursor:pointer;color:#64748b;font-size:8px" onclick="tlMoveTrack('+ti+',1)" title="Move down">\u25bc</span>':'')
       +'</span></div>'
-      +'<span style="cursor:pointer;color:#3b82f6;font-size:.9em;flex-shrink:0" onclick="tlAddClipToTrack('+ti+')" title="Add clip">+ clip</span></div>';
+      +'<span style="display:flex;gap:2px;align-items:center"><span style="cursor:pointer;color:#3b82f6;font-size:.9em" onclick="tlAddClipToTrack('+ti+')" title="Add clip">+</span><span style="cursor:pointer;color:#f66;font-size:.9em" onclick="tlDeleteTrack('+ti+')" title="Delete track">&times;</span></span></div>';
     th+='<div style="flex:1;position:relative;min-width:'+(trackW-60)+'px" id="tl-tr-'+ti+'">';
     // Render clips
     (trk.clips||[]).forEach(function(clip,ci){
@@ -4546,6 +4549,15 @@ function tlMoveTrack(idx,dir){
   var to=idx+dir;
   if(to<0||to>=t.length)return;
   var tmp=t[idx];t[idx]=t[to];t[to]=tmp;
+  ra('PUT','/api/timelines/'+_curTl.id,_curTl,function(){renderTimeline();});
+}
+
+function tlDeleteTrack(idx){
+  if(!_curTl||!_curTl.tracks||idx<0||idx>=_curTl.tracks.length)return;
+  var trk=_curTl.tracks[idx];
+  var name=trk.allPerformers?'Stage (All)':'Track '+(idx+1);
+  if(!confirm('Delete track "'+name+'"?'))return;
+  _curTl.tracks.splice(idx,1);
   ra('PUT','/api/timelines/'+_curTl.id,_curTl,function(){renderTimeline();});
 }
 
@@ -8688,12 +8700,30 @@ function _rtRenderPlaylist(d){
     h+='<span style="color:#64748b;font-size:.75em;width:1.5em">'+(i+1)+'.</span>';
     h+='<b style="flex:1">'+escapeHtml(it.name)+'</b>';
     h+='<span style="color:#64748b;font-size:.82em;font-family:monospace">'+_fmtDur(it.durationS)+'</span>';
-    h+='<button class="btn" onclick="_rtPreviewOne('+it.id+')" style="background:#1e3a5f;color:#93c5fd;padding:.2em .5em;font-size:.75em">&#9654;</button>';
+    h+='<button class="btn" onclick="_rtPlayFrom('+i+')" style="background:#1e3a5f;color:#93c5fd;padding:.2em .5em;font-size:.75em" title="Start show from here">&#9654;</button>';
     if(baked)h+='<span style="color:#4c4;font-size:.8em" title="Baked">&#x2713;</span>';
     else h+='<button class="btn" onclick="_rtBakeOne('+it.id+')" style="background:#4a2080;color:#c4b5fd;padding:.2em .5em;font-size:.75em">Bake</button>';
+    if(items.length>1)h+='<span style="cursor:pointer;color:#f66;font-size:1em;padding:0 .2em" onclick="_rtRemoveItem('+i+')" title="Remove from playlist">&times;</span>';
     h+='</div></div>';
   });
+  // Add timeline control
+  var playlistIds=items.map(function(it){return it.id;});
+  h+='<div style="padding:.4em;border-top:1px solid #1e293b;display:flex;gap:.4em;align-items:center">';
+  h+='<select id="rt-add-tl" style="font-size:.78em;flex:1;padding:.2em"><option value="">+ Add timeline...</option></select>';
+  h+='<button class="btn" onclick="_rtAddTimeline()" style="font-size:.72em;background:#14532d;color:#86efac;padding:.2em .5em">Add</button>';
+  h+='</div>';
   el.innerHTML=h;
+  // Populate add-timeline dropdown with timelines not already in playlist
+  ra('GET','/api/timelines',null,function(tls){
+    var sel=document.getElementById('rt-add-tl');if(!sel)return;
+    (tls||[]).forEach(function(t){
+      if(playlistIds.indexOf(t.id)===-1){
+        var o=document.createElement('option');o.value=t.id;
+        o.textContent=t.name+' ('+t.durationS+'s)';sel.appendChild(o);
+      }
+    });
+    if(sel.options.length<=1)sel.options[0].textContent='All timelines added';
+  });
   if(totalEl)totalEl.textContent='Total: '+_fmtDur(d.totalDurationS||0);
 }
 
@@ -8742,6 +8772,41 @@ function _rtDrop(e){
   });
 }
 
+function _rtRemoveItem(idx){
+  ra('GET','/api/show/playlist',null,function(d){
+    if(!d||!d.order)return;
+    var order=d.order.slice();
+    if(order.length<=1)return; // don't allow empty playlist
+    order.splice(idx,1);
+    ra('POST','/api/show/playlist',{order:order},function(){
+      ra('GET','/api/show/playlist',null,function(d2){if(d2)_rtRenderPlaylist(d2);});
+    });
+  });
+}
+
+function _rtAddTimeline(){
+  var sel=document.getElementById('rt-add-tl');
+  if(!sel||!sel.value)return;
+  var tid=parseInt(sel.value);
+  ra('GET','/api/show/playlist',null,function(d){
+    if(!d)return;
+    var order=(d.order||[]).slice();
+    if(order.indexOf(tid)===-1)order.push(tid);
+    ra('POST','/api/show/playlist',{order:order},function(){
+      ra('GET','/api/show/playlist',null,function(d2){if(d2)_rtRenderPlaylist(d2);});
+    });
+  });
+}
+
+function _rtPlayFrom(idx){
+  _rtBakeAll(function(){
+    ra('POST','/api/show/start',{startIndex:idx},function(r){
+      if(!r||!r.ok){alert(r&&r.err||'Failed to start');return;}
+      document.getElementById('hs').textContent='Show started from item '+(idx+1);
+    });
+  });
+}
+
 function _rtLoopToggle(){
   var cb=document.getElementById('rt-loop-all');
   ra('POST','/api/show/playlist',{loopAll:cb?cb.checked:false});
@@ -8771,7 +8836,7 @@ function _rtBakeOne(tid){
     if(!r)return;
     // Poll bake status
     var poll=setInterval(function(){
-      ra('GET','/api/timelines/'+tid+'/bake/status',null,function(s){
+      ra('GET','/api/timelines/'+tid+'/baked/status',null,function(s){
         if(!s||s.status==='running')return;
         clearInterval(poll);
         // Refresh playlist to update bake indicator
@@ -8781,23 +8846,28 @@ function _rtBakeOne(tid){
   });
 }
 
-function _rtBakeAll(){
+function _rtBakeAll(onDone){
   ra('GET','/api/show/playlist',null,function(d){
     if(!d||!d.order||!d.order.length){alert('Playlist is empty.');return;}
     var unbaked=d.items.filter(function(it){return !it.baked;});
-    if(!unbaked.length){document.getElementById('hs').textContent='All timelines already baked';return;}
+    if(!unbaked.length){
+      document.getElementById('hs').textContent='All timelines already baked';
+      if(onDone)onDone();
+      return;
+    }
     document.getElementById('hs').textContent='Baking '+unbaked.length+' timeline(s)...';
     var idx=0;
     function bakeNext(){
       if(idx>=unbaked.length){
         document.getElementById('hs').textContent='All timelines baked';
         ra('GET','/api/show/playlist',null,function(d2){if(d2)_rtRenderPlaylist(d2);});
+        if(onDone)onDone();
         return;
       }
       var tid=unbaked[idx].id;
       ra('POST','/api/timelines/'+tid+'/bake',{},function(){
         var poll=setInterval(function(){
-          ra('GET','/api/timelines/'+tid+'/bake/status',null,function(s){
+          ra('GET','/api/timelines/'+tid+'/baked/status',null,function(s){
             if(!s||s.status==='running')return;
             clearInterval(poll);idx++;bakeNext();
           });
@@ -8809,13 +8879,15 @@ function _rtBakeAll(){
 }
 
 function _rtStartShow(){
-  ra('POST','/api/show/start',{},function(r){
-    if(!r||!r.ok){
-      if(r&&r.unbaked){alert('Some timelines need baking first. Click "Bake All".');}
-      else{alert(r&&r.err||'Failed to start show');}
-      return;
-    }
-    document.getElementById('hs').textContent='Show started — '+r.timelines+' timeline(s)';
+  // Auto-bake unbaked timelines, then start
+  _rtBakeAll(function(){
+    ra('POST','/api/show/start',{},function(r){
+      if(!r||!r.ok){
+        alert(r&&r.err||'Failed to start show');
+        return;
+      }
+      document.getElementById('hs').textContent='Show started — '+r.timelines+' timeline(s)';
+    });
   });
 }
 
@@ -9721,6 +9793,7 @@ function loadSettings(){
     document.getElementById('s-nm').value=d.name||'';
     document.getElementById('s-un').value=d.units||0;
     var cb=document.getElementById('s-dm');if(cb)cb.checked=(d.darkMode!==0);
+    var asEl=document.getElementById('s-auto-show');if(asEl)asEl.checked=!!d.autoStartShow;
     applyDarkMode(d.darkMode!==0);
     var lpi=document.getElementById('s-log-path-input');
     if(lpi&&d.logPath)lpi.value=d.logPath;
@@ -9850,7 +9923,8 @@ function saveSettings(btn){
     canvasW:Math.round(stg.w*10),  // cm → mm
     canvasH:Math.round(stg.h*10),  // cm → mm
     darkMode:dm,
-    logPath:logPath||''
+    logPath:logPath||'',
+    autoStartShow:document.getElementById('s-auto-show').checked
   },function(r){
     _btnSaved(btn,r&&r.ok);
     // Refresh layout canvas with new dimensions
