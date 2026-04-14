@@ -109,13 +109,11 @@ class Tracker:
             cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
             if cap.isOpened():
                 cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-                # Use 640-wide capture (fast enough for tracking); let driver pick matching height
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                # Capture at native resolution for full FOV — YOLO pre-downscales internally
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                 actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                log.info("Tracking: opened persistent capture %s at %dx%d", device, actual_w, actual_h)
+                log.info("Tracking: opened persistent capture %s at %dx%d (native)", device, actual_w, actual_h)
             else:
                 log.warning("Tracking: failed to open persistent capture %s", device)
                 cap = None
