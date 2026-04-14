@@ -359,13 +359,12 @@ private fun StageCanvas(
         if (fwdLen < 0.001f) return@Canvas
         fwdX /= fwdLen; fwdY /= fwdLen; fwdZ /= fwdLen
 
-        // World up = Z
+        // World up = Z (right-handed Z-up coordinate system)
         val upX = 0f; val upY = 0f; val upZ = 1f
-        // Right = forward × up, then NEGATE so X=0 (stage right) maps to screen LEFT
-        // (audience convention: stage right = audience left = screen left)
-        var rX = -(fwdY * upZ - fwdZ * upY)
-        var rY = -(fwdZ * upX - fwdX * upZ)
-        var rZ = -(fwdX * upY - fwdY * upX)
+        // Right = worldUp × forward (standard for Z-up right-handed)
+        var rX = upY * fwdZ - upZ * fwdY
+        var rY = upZ * fwdX - upX * fwdZ
+        var rZ = upX * fwdY - upY * fwdX
         val rLen = kotlin.math.sqrt(rX * rX + rY * rY + rZ * rZ)
         if (rLen > 0.001f) { rX /= rLen; rY /= rLen; rZ /= rLen }
 
