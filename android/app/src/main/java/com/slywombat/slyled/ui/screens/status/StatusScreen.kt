@@ -27,7 +27,9 @@ fun StatusScreen(viewModel: StatusViewModel = hiltViewModel()) {
     val cameraFixtures by viewModel.cameraFixtures.collectAsState()
     val trackingState by viewModel.trackingState.collectAsState()
     val cameraOnline by viewModel.cameraOnline.collectAsState()
+    val cameraStats by viewModel.cameraStats.collectAsState()
     val dmxStatus by viewModel.dmxStatus.collectAsState()
+    val settings by viewModel.settings.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
 
     PullToRefreshBox(
@@ -42,6 +44,11 @@ fun StatusScreen(viewModel: StatusViewModel = hiltViewModel()) {
             contentPadding = PaddingValues(vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // System status section
+            item {
+                SystemStatusCard(settings = settings, dmxStatus = dmxStatus)
+            }
+
             // DMX Status section
             item {
                 DmxStatusCard(dmxStatus = dmxStatus)
@@ -94,6 +101,7 @@ fun StatusScreen(viewModel: StatusViewModel = hiltViewModel()) {
                         camera = cam,
                         isOnline = cameraOnline[cam.id] ?: false,
                         isTracking = trackingState[cam.id] ?: false,
+                        stats = cameraStats[cam.id],
                         onToggleTracking = { viewModel.toggleTracking(cam.id) }
                     )
                 }
@@ -158,6 +166,83 @@ private fun DmxStatusCard(dmxStatus: DmxStatus?) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SystemStatusCard(settings: Settings, dmxStatus: DmxStatus?) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Dashboard,
+                    contentDescription = null,
+                    tint = CyanSecondary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "System",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Show status
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Show: ",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        if (settings.runnerRunning) "Running" else "Stopped",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        color = if (settings.runnerRunning) GreenOnline else MutedSlate
+                    )
+                }
+                // Art-Net status
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Art-Net: ",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        if (dmxStatus?.running == true) "Running" else "Stopped",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        color = if (dmxStatus?.running == true) GreenOnline else MutedSlate
+                    )
+                }
+            }
+            // Active timeline info
+            val activeTl = settings.activeTimeline
+            if (settings.runnerRunning && activeTl != null && activeTl >= 0) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Timeline #$activeTl",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CyanSecondary
+                )
+            }
+            // DMX details when running
+            if (dmxStatus != null && dmxStatus.running) {
+                Spacer(Modifier.height(4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    DetailLabel("FPS", "${dmxStatus.fps}")
+                    DetailLabel("Universes", "${dmxStatus.universes}")
+                    if (dmxStatus.nodes > 0) {
+                        DetailLabel("Nodes", "${dmxStatus.nodes}")
+                    }
+                }
             }
         }
     }
@@ -230,6 +315,7 @@ private fun CameraCard(
     camera: Fixture,
     isOnline: Boolean = false,
     isTracking: Boolean,
+    stats: CameraStatus? = null,
     onToggleTracking: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -295,6 +381,20 @@ private fun CameraCard(
                     Spacer(Modifier.width(4.dp))
                     Text(if (isTracking) "Tracking" else "Track")
                 }
+            }
+            // Tracking classes from camera stats
+            if (stats != null && stats.trackClasses.isNotEmpty() && isTracking) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Tracking: ${stats.trackClasses.joinToString(", ")}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = GreenOnline
+                )
+            }
+            // Firmware version if available
+            if (stats != null && stats.fwVersion.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                DetailLabel("Firmware", "v${stats.fwVersion}")
             }
         }
     }

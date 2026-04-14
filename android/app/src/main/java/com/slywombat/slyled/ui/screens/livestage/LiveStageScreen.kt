@@ -7,6 +7,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
@@ -22,9 +23,9 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -40,6 +41,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 @Composable
 fun LiveStageScreen(viewModel: LiveStageViewModel = hiltViewModel()) {
@@ -53,6 +55,8 @@ fun LiveStageScreen(viewModel: LiveStageViewModel = hiltViewModel()) {
     val timelineStatus by viewModel.timelineStatus.collectAsState()
     val timelines by viewModel.timelines.collectAsState()
     val layout by viewModel.layout.collectAsState()
+
+    var selectedFixtureId by remember { mutableStateOf<Int?>(null) }
 
     val isRunning = settings.runnerRunning
     val brightness = settings.globalBrightness ?: 255
@@ -71,6 +75,8 @@ fun LiveStageScreen(viewModel: LiveStageViewModel = hiltViewModel()) {
             objects = objects,
             stage = stage,
             layout = layout,
+            selectedFixtureId = selectedFixtureId,
+            onFixtureSelected = { selectedFixtureId = it },
             modifier = Modifier.fillMaxSize()
         )
 
@@ -84,6 +90,24 @@ fun LiveStageScreen(viewModel: LiveStageViewModel = hiltViewModel()) {
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         )
+
+        // Fixture info card overlay
+        if (selectedFixtureId != null) {
+            val selFixture = fixtures.find { it.id == selectedFixtureId }
+            val selLayout = layout?.children?.find { it.id == selectedFixtureId }
+            if (selFixture != null) {
+                FixtureInfoCard(
+                    fixture = selFixture,
+                    layoutChild = selLayout,
+                    liveData = fixturesLive[selFixture.id.toString()],
+                    onDismiss = { selectedFixtureId = null },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 160.dp)
+                )
+            }
+        }
 
         // Controls at bottom
         Column(
@@ -214,16 +238,24 @@ private fun StageCanvas(
     objects: List<StageObject>,
     stage: Stage,
     layout: Layout?,
+    selectedFixtureId: Int? = null,
+    onFixtureSelected: (Int?) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val textMeasurer = rememberTextMeasurer()
 
-    // Stage dimensions in mm
+    // Projected fixture positions for tap detection
+    val projectedPositions = remember { mutableStateMapOf<Int, Offset>() }
+
+    // Stage dimensions in mm — stage coords: X=width, Y=depth, Z=height
     val stageW = (stage.w * 1000).toFloat()
     val stageD = (stage.d * 1000).toFloat()
+    val stageH = (stage.h * 1000).toFloat()
 
-    // Gesture state: zoom and pan
-    var zoom by remember { mutableFloatStateOf(1f) }
+    // 3D camera orbit: azimuth (horizontal rotation), elevation (vertical angle), distance
+    var azimuth by remember { mutableFloatStateOf(0.3f) }       // radians, 0 = front
+    var elevation by remember { mutableFloatStateOf(0.6f) }     // radians, 0 = level, PI/2 = top-down
+    var camDist by remember { mutableFloatStateOf(1.8f) }       // multiplier of stage diagonal
     var panX by remember { mutableFloatStateOf(0f) }
     var panY by remember { mutableFloatStateOf(0f) }
 
@@ -232,15 +264,37 @@ private fun StageCanvas(
             .background(DeepSlate)
             .pointerInput(Unit) {
                 detectTransformGestures { _, pan, gestureZoom, _ ->
-                    zoom = (zoom * gestureZoom).coerceIn(0.5f, 4f)
-                    panX += pan.x
-                    panY += pan.y
+                    // One-finger drag = orbit rotation, pinch = zoom
+                    if (gestureZoom != 1f) {
+                        camDist = (camDist / gestureZoom).coerceIn(0.5f, 5f)
+                    }
+                    // Drag rotates the camera orbit
+                    azimuth += pan.x * 0.003f
+                    elevation = (elevation - pan.y * 0.003f).coerceIn(0.05f, 1.5f)
                 }
             }
-            .pointerInput(Unit) {
+            .pointerInput(projectedPositions) {
                 detectTapGestures(
+                    onTap = { tapOffset ->
+                        // Find nearest fixture within 40px threshold
+                        var bestId: Int? = null
+                        var bestDist = 40f
+                        for ((id, pos) in projectedPositions) {
+                            val dx = tapOffset.x - pos.x
+                            val dy = tapOffset.y - pos.y
+                            val dist = sqrt(dx * dx + dy * dy)
+                            if (dist < bestDist) {
+                                bestDist = dist
+                                bestId = id
+                            }
+                        }
+                        onFixtureSelected(bestId)
+                    },
                     onDoubleTap = {
-                        zoom = 1f
+                        // Reset to default 3D view
+                        azimuth = 0.3f
+                        elevation = 0.6f
+                        camDist = 1.8f
                         panX = 0f
                         panY = 0f
                     }
@@ -249,407 +303,260 @@ private fun StageCanvas(
     ) {
         if (stageW <= 0f || stageD <= 0f) return@Canvas
 
-        val padding = 40f
-        val availW = size.width - padding * 2
-        val availH = size.height - padding * 2
-        val baseScale = min(availW / stageW, availH / stageD)
-        val scale = baseScale * zoom
-        val offsetX = padding + (availW - stageW * baseScale) / 2f + panX
-        val offsetY = padding + (availH - stageD * baseScale) / 2f + panY
+        val cw = size.width
+        val ch = size.height
 
-        // --- 1. Stage floor with gradient ---
-        val stageTopLeft = Offset(offsetX, offsetY)
-        val stageSz = Size(stageW * scale, stageD * scale)
+        // Stage center (in mm) — camera looks at this point
+        val cx = stageW / 2f
+        val cy = stageD / 2f
+        val cz = stageH / 3f  // look slightly above floor
 
-        // Dark floor with subtle vertical gradient (front lighter, back darker)
-        drawRect(
-            brush = Brush.verticalGradient(
-                colors = listOf(Color(0xFF0D1B2A), Color(0xFF0F172A), Color(0xFF0A0F13)),
-                startY = offsetY,
-                endY = offsetY + stageD * scale
-            ),
-            topLeft = stageTopLeft,
-            size = stageSz
-        )
+        // Camera position on orbit sphere around stage center
+        val diagMm = kotlin.math.sqrt(stageW * stageW + stageD * stageD + stageH * stageH)
+        val dist = diagMm * camDist
+        val camX = cx + dist * cos(elevation) * sin(azimuth)
+        val camY = cy - dist * cos(elevation) * cos(azimuth)
+        val camZ = cz + dist * sin(elevation)
 
-        // Grid lines every 1000mm
+        // Forward, right, up vectors for view matrix
+        var fwdX = cx - camX; var fwdY = cy - camY; var fwdZ = cz - camZ
+        val fwdLen = kotlin.math.sqrt(fwdX * fwdX + fwdY * fwdY + fwdZ * fwdZ)
+        if (fwdLen < 0.001f) return@Canvas
+        fwdX /= fwdLen; fwdY /= fwdLen; fwdZ /= fwdLen
+
+        // World up = Z
+        val upX = 0f; val upY = 0f; val upZ = 1f
+        // Right = forward × up
+        var rX = fwdY * upZ - fwdZ * upY
+        var rY = fwdZ * upX - fwdX * upZ
+        var rZ = fwdX * upY - fwdY * upX
+        val rLen = kotlin.math.sqrt(rX * rX + rY * rY + rZ * rZ)
+        if (rLen > 0.001f) { rX /= rLen; rY /= rLen; rZ /= rLen }
+
+        // Camera up = right × forward
+        val cuX = rY * fwdZ - rZ * fwdY
+        val cuY = rZ * fwdX - rX * fwdZ
+        val cuZ = rX * fwdY - rY * fwdX
+
+        // Perspective projection: project 3D stage point → 2D screen
+        val fov = 50f * (Math.PI.toFloat() / 180f)
+        val aspect = cw / ch
+        val focalLen = (ch / 2f) / kotlin.math.tan(fov / 2f)
+
+        fun project(sx: Float, sy: Float, sz: Float): Offset? {
+            // Translate to camera space
+            val dx = sx - camX; val dy = sy - camY; val dz = sz - camZ
+            // Dot with camera axes
+            val vx = dx * rX + dy * rY + dz * rZ          // screen X
+            val vy = dx * cuX + dy * cuY + dz * cuZ       // screen Y (up)
+            val vz = dx * fwdX + dy * fwdY + dz * fwdZ    // depth (forward)
+            if (vz < 10f) return null  // behind camera
+            val px = cw / 2f + (vx / vz) * focalLen + panX
+            val py = ch / 2f - (vy / vz) * focalLen + panY
+            return Offset(px, py)
+        }
+
+        // Scale factor at a given depth (for sizing objects)
+        fun scaleAt(sx: Float, sy: Float, sz: Float): Float {
+            val dx = sx - camX; val dy = sy - camY; val dz = sz - camZ
+            val vz = dx * fwdX + dy * fwdY + dz * fwdZ
+            return if (vz > 10f) focalLen / vz else 0f
+        }
+
+        // --- 1. Stage floor grid ---
+        // Draw floor quad (Z=0)
+        val f00 = project(0f, 0f, 0f)
+        val f10 = project(stageW, 0f, 0f)
+        val f11 = project(stageW, stageD, 0f)
+        val f01 = project(0f, stageD, 0f)
+        if (f00 != null && f10 != null && f11 != null && f01 != null) {
+            val floorPath = Path().apply {
+                moveTo(f00.x, f00.y); lineTo(f10.x, f10.y)
+                lineTo(f11.x, f11.y); lineTo(f01.x, f01.y); close()
+            }
+            drawPath(floorPath, color = Color(0xFF0D1B2A), style = Fill)
+            drawPath(floorPath, color = MutedSlate.copy(alpha = 0.4f), style = Stroke(2f))
+        }
+
+        // Grid lines on floor
         val gridStep = 1000f
         var gx = 0f
         while (gx <= stageW) {
-            val sx = offsetX + gx * scale
-            val gridAlpha = if (gx.toInt() % 2000 == 0) 0.2f else 0.1f
-            drawLine(
-                color = MutedSlate.copy(alpha = gridAlpha),
-                start = Offset(sx, offsetY),
-                end = Offset(sx, offsetY + stageD * scale),
-                strokeWidth = if (gx.toInt() % 2000 == 0) 1.5f else 0.5f
-            )
+            val p0 = project(gx, 0f, 0f)
+            val p1 = project(gx, stageD, 0f)
+            if (p0 != null && p1 != null) {
+                val a = if (gx.toInt() % 2000 == 0) 0.2f else 0.08f
+                drawLine(MutedSlate.copy(alpha = a), p0, p1, strokeWidth = if (gx.toInt() % 2000 == 0) 1.5f else 0.5f)
+            }
             gx += gridStep
         }
         var gy = 0f
         while (gy <= stageD) {
-            val sy = offsetY + gy * scale
-            val gridAlpha = if (gy.toInt() % 2000 == 0) 0.2f else 0.1f
-            drawLine(
-                color = MutedSlate.copy(alpha = gridAlpha),
-                start = Offset(offsetX, sy),
-                end = Offset(offsetX + stageW * scale, sy),
-                strokeWidth = if (gy.toInt() % 2000 == 0) 1.5f else 0.5f
-            )
+            val p0 = project(0f, gy, 0f)
+            val p1 = project(stageW, gy, 0f)
+            if (p0 != null && p1 != null) {
+                val a = if (gy.toInt() % 2000 == 0) 0.2f else 0.08f
+                drawLine(MutedSlate.copy(alpha = a), p0, p1, strokeWidth = if (gy.toInt() % 2000 == 0) 1.5f else 0.5f)
+            }
             gy += gridStep
         }
 
-        // Stage border (outer glow effect)
-        drawRect(
-            color = CyanSecondary.copy(alpha = 0.08f),
-            topLeft = Offset(stageTopLeft.x - 4f, stageTopLeft.y - 4f),
-            size = Size(stageSz.width + 8f, stageSz.height + 8f),
-            style = Stroke(width = 4f)
-        )
-        drawRect(
-            color = MutedSlate.copy(alpha = 0.4f),
-            topLeft = stageTopLeft,
-            size = stageSz,
-            style = Stroke(width = 2f)
-        )
+        // Floor border glow
+        if (f00 != null && f10 != null && f11 != null && f01 != null) {
+            val borderPath = Path().apply {
+                moveTo(f00.x, f00.y); lineTo(f10.x, f10.y)
+                lineTo(f11.x, f11.y); lineTo(f01.x, f01.y); close()
+            }
+            drawPath(borderPath, color = CyanSecondary.copy(alpha = 0.1f), style = Stroke(4f))
+        }
 
-        // --- 2. Static objects (walls, obstacles) ---
+        // --- 2. Static objects (walls as 3D boxes) ---
         for (obj in objects) {
             if (obj.temporal || obj.mobility == "moving") continue
-            drawStaticObject(obj, offsetX, offsetY, scale, textMeasurer)
+            val pos = obj.transform.pos
+            val scl = obj.transform.scale
+            val ox = pos[0].toFloat(); val oy = pos[1].toFloat(); val oz = pos[2].toFloat()
+            val ow = scl[0].toFloat()
+            val oh = if (scl.size > 1) scl[1].toFloat() else 100f  // height (Z)
+            val od = if (scl.size > 2) scl[2].toFloat() else 100f  // depth (Y)
+            val objColor = try { Color(android.graphics.Color.parseColor(obj.color ?: "#334155")) } catch (_: Exception) { Color(0xFF334155) }
+            val alpha = (obj.opacity ?: 30) / 100f
+
+            // Draw as 3D box: front face + top face + side face
+            val pts = arrayOf(
+                project(ox, oy, oz), project(ox + ow, oy, oz),
+                project(ox + ow, oy + od, oz), project(ox, oy + od, oz),
+                project(ox, oy, oz + oh), project(ox + ow, oy, oz + oh),
+                project(ox + ow, oy + od, oz + oh), project(ox, oy + od, oz + oh)
+            )
+            // Draw top face
+            val t0 = pts[4]; val t1 = pts[5]; val t2 = pts[6]; val t3 = pts[7]
+            if (t0 != null && t1 != null && t2 != null && t3 != null) {
+                val topPath = Path().apply { moveTo(t0.x, t0.y); lineTo(t1.x, t1.y); lineTo(t2.x, t2.y); lineTo(t3.x, t3.y); close() }
+                drawPath(topPath, objColor.copy(alpha = alpha * 0.3f), style = Fill)
+                drawPath(topPath, objColor.copy(alpha = alpha * 0.6f), style = Stroke(1f))
+            }
+            // Draw front face
+            val b0 = pts[0]; val b1 = pts[1]; val b5 = pts[5]; val b4 = pts[4]
+            if (b0 != null && b1 != null && b5 != null && b4 != null) {
+                val frontPath = Path().apply { moveTo(b0.x, b0.y); lineTo(b1.x, b1.y); lineTo(b5.x, b5.y); lineTo(b4.x, b4.y); close() }
+                drawPath(frontPath, objColor.copy(alpha = alpha * 0.2f), style = Fill)
+                drawPath(frontPath, objColor.copy(alpha = alpha * 0.5f), style = Stroke(1f))
+            }
         }
 
         // --- 3. Build position map from layout ---
         val posMap = mutableMapOf<Int, LayoutChild>()
         layout?.children?.forEach { lc -> posMap[lc.id] = lc }
 
-        // --- 4. Draw fixtures (use layout positions, fall back to fixture x/y) ---
+        // --- 4. Draw fixtures ---
+        projectedPositions.clear()
         for (fixture in fixtures) {
             val lc = posMap[fixture.id]
             val fx = (lc?.x ?: fixture.x).toFloat()
             val fy = (lc?.y ?: fixture.y).toFloat()
-            // Skip fixtures with no position at all
+            val fz = (lc?.z ?: fixture.z).toFloat()
             if (fx == 0f && fy == 0f && lc == null && !fixture.positioned) continue
-            val sx = offsetX + fx * scale
-            val sy = offsetY + fy * scale
+            val p = project(fx, fy, fz) ?: continue
+            val s = scaleAt(fx, fy, fz)
 
-            // Get live color
+            // Store projected position for tap detection
+            projectedPositions[fixture.id] = p
+
             val liveData = fixturesLive[fixture.id.toString()]
             val liveColor = parseLiveColor(liveData)
 
             when (fixture.fixtureType) {
-                "camera" -> drawCameraFixture(sx, sy, zoom, fixture)
-                "dmx" -> drawDmxFixture(sx, sy, zoom, scale, fixture, liveColor)
-                else -> drawLedFixture(sx, sy, zoom, liveColor)
+                "camera" -> {
+                    val sz = 8f * s
+                    drawRect(CyanSecondary, Offset(p.x - sz, p.y - sz), Size(sz * 2, sz * 2))
+                    drawRect(Color(0xFF0E7490), Offset(p.x - sz, p.y - sz), Size(sz * 2, sz * 2), style = Stroke(1.5f))
+                }
+                "dmx" -> {
+                    val effectiveColor = liveColor ?: DmxPurple
+                    // Beam cone from fixture to floor
+                    if (liveColor != null && liveColor != Color.Black && fz > 100f) {
+                        val floorP = project(fx, fy, 0f)
+                        if (floorP != null) {
+                            val spread = 300f * s  // beam spread on screen
+                            val conePath = Path().apply {
+                                moveTo(p.x, p.y)
+                                lineTo(floorP.x - spread, floorP.y)
+                                lineTo(floorP.x + spread, floorP.y)
+                                close()
+                            }
+                            drawPath(conePath, liveColor.copy(alpha = 0.12f), style = Fill)
+                            drawPath(conePath, liveColor.copy(alpha = 0.3f), style = Stroke(1f))
+                        }
+                    }
+                    // Fixture body
+                    val triSize = 10f * s
+                    val triPath = Path().apply {
+                        moveTo(p.x, p.y - triSize)
+                        lineTo(p.x - triSize * 0.866f, p.y + triSize * 0.5f)
+                        lineTo(p.x + triSize * 0.866f, p.y + triSize * 0.5f)
+                        close()
+                    }
+                    drawPath(triPath, effectiveColor, style = Fill)
+                    drawPath(triPath, Color.White.copy(alpha = 0.3f), style = Stroke(1f))
+                    // Hot spot glow
+                    drawCircle(effectiveColor.copy(alpha = 0.2f), 14f * s, p)
+                }
+                else -> {
+                    val ledColor = liveColor ?: GreenOnline
+                    drawCircle(ledColor, 6f * s, p)
+                    drawCircle(Color.White.copy(alpha = 0.2f), 6f * s, p, style = Stroke(1f))
+                    if (liveColor != null) drawCircle(liveColor.copy(alpha = 0.15f), 12f * s, p)
+                }
             }
-        }
 
-        // --- 5. Draw tracked (temporal/moving) objects ---
-        for (obj in objects) {
-            if (!obj.temporal && obj.mobility != "moving") continue
-            drawTrackedObject(obj, offsetX, offsetY, scale, zoom, textMeasurer)
-        }
+            // Selection highlight ring
+            if (fixture.id == selectedFixtureId) {
+                drawCircle(CyanSecondary.copy(alpha = 0.5f), 20f * s, p, style = Stroke(3f))
+                drawCircle(CyanSecondary.copy(alpha = 0.15f), 24f * s, p)
+            }
 
-        // --- 6. Fixture labels ---
-        for (fixture in fixtures) {
-            val lc = posMap[fixture.id]
-            val fx = (lc?.x ?: fixture.x).toFloat()
-            val fy = (lc?.y ?: fixture.y).toFloat()
-            if (fx == 0f && fy == 0f && lc == null && !fixture.positioned) continue
-            val sx = offsetX + fx * scale
-            val sy = offsetY + fy * scale
-
-            if (zoom >= 1.2f && fixture.name.isNotBlank()) {
+            // Label
+            if (s > 0.12f && fixture.name.isNotBlank()) {
                 val labelStyle = TextStyle(
                     color = NearWhite.copy(alpha = 0.7f),
-                    fontSize = (9f * zoom).coerceIn(8f, 14f).sp
+                    fontSize = (10f * s).coerceIn(7f, 14f).sp
                 )
-                val labelResult = textMeasurer.measure(
-                    text = fixture.name,
-                    style = labelStyle,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                drawText(
-                    textLayoutResult = labelResult,
-                    topLeft = Offset(
-                        sx - labelResult.size.width / 2f,
-                        sy + 14f * zoom
-                    )
-                )
+                val labelResult = textMeasurer.measure(fixture.name, labelStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                drawText(labelResult, topLeft = Offset(p.x - labelResult.size.width / 2f, p.y + 12f * s))
             }
         }
-    }
-}
 
-// ---- Drawing helpers ----
+        // --- 5. Tracked objects (temporal/moving) ---
+        for (obj in objects) {
+            if (!obj.temporal && obj.mobility != "moving") continue
+            val pos = obj.transform.pos
+            val ox = pos[0].toFloat(); val oy = pos[1].toFloat(); val oz = pos[2].toFloat()
+            val p = project(ox, oy, oz) ?: continue
+            val s = scaleAt(ox, oy, oz)
+            val col = try { Color(android.graphics.Color.parseColor(obj.color ?: "#f472b6")) } catch (_: Exception) { Color(0xFFf472b6) }
+            val markerH = 1700f  // person height mm
+            val topP = project(ox, oy, oz + markerH)
 
-private fun DrawScope.drawStaticObject(
-    obj: StageObject,
-    offsetX: Float,
-    offsetY: Float,
-    scale: Float,
-    textMeasurer: TextMeasurer
-) {
-    val pos = obj.transform.pos
-    val scl = obj.transform.scale
-    // Top-down view: X = stage X (width), Y = stage Y (depth)
-    // Scale: [0]=width(X), [1]=height(Z, not visible in top-down), [2]=depth(Y)
-    val ox = offsetX + pos[0].toFloat() * scale
-    val oy = offsetY + pos[1].toFloat() * scale
-    val ow = scl[0].toFloat() * scale
-    val od = (if (scl.size > 2) scl[2].toFloat() else 100f) * scale  // depth = Y extent
+            // Vertical line from floor to head
+            if (topP != null) {
+                drawLine(col.copy(alpha = 0.4f), p, topP, strokeWidth = 2f * s)
+                // Head circle
+                drawCircle(col, 8f * s, topP)
+                drawCircle(col.copy(alpha = 0.3f), 16f * s, topP)
+            }
+            // Floor circle
+            drawCircle(col.copy(alpha = 0.3f), 12f * s, p)
+            drawCircle(col.copy(alpha = 0.6f), 12f * s, p, style = Stroke(2f))
 
-    val objColor = try {
-        val hex = obj.color ?: "#334155"
-        Color(android.graphics.Color.parseColor(hex))
-    } catch (_: Exception) { Color(0xFF334155) }
-    val alpha = (obj.opacity ?: 30) / 100f
-
-    // Fill
-    drawRect(
-        color = objColor.copy(alpha = alpha * 0.5f),
-        topLeft = Offset(ox, oy),
-        size = Size(ow, od)
-    )
-    // Border
-    drawRect(
-        color = objColor.copy(alpha = alpha),
-        topLeft = Offset(ox, oy),
-        size = Size(ow, od),
-        style = Stroke(width = 1.5f)
-    )
-
-    // Label
-    val label = obj.name.ifBlank { obj.objectType }
-    val textStyle = TextStyle(
-        color = objColor.copy(alpha = 0.8f),
-        fontSize = 10.sp
-    )
-    val textResult = textMeasurer.measure(
-        text = label,
-        style = textStyle,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis
-    )
-    drawText(
-        textLayoutResult = textResult,
-        topLeft = Offset(ox - textResult.size.width / 2f, oy - od / 2 - textResult.size.height - 2f)
-    )
-}
-
-private fun DrawScope.drawCameraFixture(
-    sx: Float,
-    sy: Float,
-    zoom: Float,
-    fixture: Fixture
-) {
-    val sz = 10f * zoom
-
-    // Camera FOV arc
-    val fov = (fixture.fovDeg ?: 60.0).toFloat()
-    val arcLen = 50f * zoom
-    val halfFov = fov / 2f * (Math.PI.toFloat() / 180f)
-    val aimAngle = getAimAngle(fixture)
-
-    val fovPath = Path().apply {
-        moveTo(sx, sy)
-        lineTo(
-            sx + arcLen * cos(aimAngle - halfFov),
-            sy + arcLen * sin(aimAngle - halfFov)
-        )
-        lineTo(
-            sx + arcLen * cos(aimAngle + halfFov),
-            sy + arcLen * sin(aimAngle + halfFov)
-        )
-        close()
-    }
-    drawPath(fovPath, color = CyanSecondary.copy(alpha = 0.08f), style = Fill)
-    drawPath(fovPath, color = CyanSecondary.copy(alpha = 0.25f), style = Stroke(width = 1f))
-
-    // Camera body: rounded square
-    drawRect(
-        color = CyanSecondary,
-        topLeft = Offset(sx - sz, sy - sz),
-        size = Size(sz * 2, sz * 2)
-    )
-    drawRect(
-        color = Color(0xFF0E7490),
-        topLeft = Offset(sx - sz, sy - sz),
-        size = Size(sz * 2, sz * 2),
-        style = Stroke(width = 1.5f)
-    )
-    // Lens dot
-    drawCircle(
-        color = Color(0xFF0E7490),
-        radius = sz * 0.4f,
-        center = Offset(sx, sy)
-    )
-}
-
-private fun DrawScope.drawDmxFixture(
-    sx: Float,
-    sy: Float,
-    zoom: Float,
-    scale: Float,
-    fixture: Fixture,
-    liveColor: Color?
-) {
-    val effectiveColor = liveColor ?: DmxPurple
-
-    // Beam cone (translucent triangle toward aim point)
-    if (liveColor != null && liveColor != Color.Black) {
-        val beamLen = 2000f * scale   // 2m beam length
-        val beamSpread = 15f * (Math.PI.toFloat() / 180f)  // 15 deg half-angle
-        val aimAngle = getAimAngle(fixture)
-
-        val beamPath = Path().apply {
-            moveTo(sx, sy)
-            lineTo(
-                sx + beamLen * cos(aimAngle - beamSpread),
-                sy + beamLen * sin(aimAngle - beamSpread)
-            )
-            lineTo(
-                sx + beamLen * cos(aimAngle + beamSpread),
-                sy + beamLen * sin(aimAngle + beamSpread)
-            )
-            close()
+            // Label above head
+            val labelP = topP ?: p
+            val label = obj.name.ifBlank { "?" }
+            val labelStyle = TextStyle(color = col, fontSize = (11f * s).coerceIn(8f, 16f).sp)
+            val labelResult = textMeasurer.measure(label, labelStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            drawText(labelResult, topLeft = Offset(labelP.x - labelResult.size.width / 2f, labelP.y - labelResult.size.height - 4f * s))
         }
-
-        // Gradient fill: bright at source, fading out
-        drawPath(beamPath, color = liveColor.copy(alpha = 0.15f), style = Fill)
-        drawPath(beamPath, color = liveColor.copy(alpha = 0.35f), style = Stroke(width = 1.5f))
-
-        // Hot spot at source
-        drawCircle(
-            color = liveColor.copy(alpha = 0.3f),
-            radius = 18f * zoom,
-            center = Offset(sx, sy)
-        )
     }
-
-    // Fixture body: triangle
-    val triSize = 12f * zoom
-    val path = Path().apply {
-        moveTo(sx, sy - triSize)
-        lineTo(sx - triSize * 0.866f, sy + triSize * 0.5f)
-        lineTo(sx + triSize * 0.866f, sy + triSize * 0.5f)
-        close()
-    }
-    drawPath(path, color = effectiveColor, style = Fill)
-    drawPath(path, color = DmxPurple.copy(alpha = 0.6f), style = Stroke(width = 1.5f))
-
-    // Inner dot showing live color
-    drawCircle(
-        color = Color(0xFF0F172A),
-        radius = 4f * zoom,
-        center = Offset(sx, sy)
-    )
-    drawCircle(
-        color = effectiveColor,
-        radius = 2.5f * zoom,
-        center = Offset(sx, sy)
-    )
-}
-
-private fun DrawScope.drawLedFixture(
-    sx: Float,
-    sy: Float,
-    zoom: Float,
-    liveColor: Color?
-) {
-    val fillColor = liveColor ?: GreenOnline
-    val radius = 8f * zoom
-
-    // Glow ring
-    if (liveColor != null && liveColor != Color.Black) {
-        drawCircle(
-            color = fillColor.copy(alpha = 0.15f),
-            radius = radius * 2.5f,
-            center = Offset(sx, sy)
-        )
-    }
-
-    // Outer ring
-    drawCircle(
-        color = fillColor.copy(alpha = 0.4f),
-        radius = radius + 2f,
-        center = Offset(sx, sy),
-        style = Stroke(width = 1.5f)
-    )
-
-    // Filled circle
-    drawCircle(
-        color = fillColor,
-        radius = radius,
-        center = Offset(sx, sy)
-    )
-}
-
-private fun DrawScope.drawTrackedObject(
-    obj: StageObject,
-    offsetX: Float,
-    offsetY: Float,
-    scale: Float,
-    zoom: Float,
-    textMeasurer: TextMeasurer
-) {
-    val pos = obj.transform.pos
-    val scl = obj.transform.scale
-    val cx = offsetX + pos[0].toFloat() * scale
-    val cy = offsetY + pos[1].toFloat() * scale
-    val ow = scl[0].toFloat() * scale
-    val od = scl[1].toFloat() * scale
-
-    val objColor = try {
-        Color(android.graphics.Color.parseColor(obj.color))
-    } catch (_: Exception) {
-        Color(0xFFF472B6)
-    }
-
-    // Outer pulse ring
-    drawOval(
-        color = objColor.copy(alpha = 0.12f),
-        topLeft = Offset(cx - ow * 0.75f, cy - od * 0.75f),
-        size = Size(ow * 1.5f, od * 1.5f)
-    )
-
-    // Body oval
-    drawOval(
-        color = objColor.copy(alpha = 0.2f),
-        topLeft = Offset(cx - ow / 2, cy - od / 2),
-        size = Size(ow, od)
-    )
-    drawOval(
-        color = objColor.copy(alpha = 0.6f),
-        topLeft = Offset(cx - ow / 2, cy - od / 2),
-        size = Size(ow, od),
-        style = Stroke(width = 2f)
-    )
-
-    // Center dot
-    drawCircle(
-        color = objColor,
-        radius = 4f * zoom,
-        center = Offset(cx, cy)
-    )
-
-    // Label
-    val label = obj.name.ifBlank { obj.objectType }
-    val textStyle = TextStyle(
-        color = objColor,
-        fontSize = 10.sp
-    )
-    val textResult = textMeasurer.measure(
-        text = label,
-        style = textStyle,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis
-    )
-    drawText(
-        textLayoutResult = textResult,
-        topLeft = Offset(cx - textResult.size.width / 2f, cy - od / 2 - textResult.size.height - 4f)
-    )
 }
 
 // ---- Utility functions ----
@@ -686,4 +593,132 @@ private fun formatTime(seconds: Int): String {
     val m = seconds / 60
     val s = seconds % 60
     return "%02d:%02d".format(m, s)
+}
+
+@Composable
+private fun FixtureInfoCard(
+    fixture: Fixture,
+    layoutChild: LayoutChild?,
+    liveData: JsonElement?,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val posX = layoutChild?.x ?: fixture.x
+    val posY = layoutChild?.y ?: fixture.y
+    val posZ = layoutChild?.z ?: fixture.z
+
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Header row: name + type badge + dismiss
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        fixture.name.ifBlank { "Fixture #${fixture.id}" },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    val (typeLabel, typeColor) = when (fixture.fixtureType) {
+                        "dmx" -> "DMX" to DmxPurple
+                        "camera" -> "Camera" to CyanSecondary
+                        else -> "LED" to GreenOnline
+                    }
+                    SuggestionChip(
+                        onClick = {},
+                        label = { Text(typeLabel, style = MaterialTheme.typography.labelSmall) },
+                        colors = SuggestionChipDefaults.suggestionChipColors(
+                            containerColor = typeColor.copy(alpha = 0.15f),
+                            labelColor = typeColor
+                        ),
+                        border = null
+                    )
+                }
+                IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Dismiss",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // Position row
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                FixtureDetail("X", "${posX}mm")
+                FixtureDetail("Y", "${posY}mm")
+                FixtureDetail("Z", "${posZ}mm")
+            }
+
+            // DMX address if applicable
+            if (fixture.fixtureType == "dmx" && fixture.dmxUniverse != null && fixture.dmxStartAddr != null) {
+                Spacer(Modifier.height(4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    FixtureDetail("Universe", "${fixture.dmxUniverse}")
+                    FixtureDetail("Address", "${fixture.dmxStartAddr}")
+                    if (fixture.dmxChannelCount != null) {
+                        FixtureDetail("Channels", "${fixture.dmxChannelCount}")
+                    }
+                }
+            }
+
+            // Live output (RGB + dimmer)
+            if (liveData != null) {
+                Spacer(Modifier.height(8.dp))
+                val liveColor = parseLiveColor(liveData)
+                val obj = try { liveData.jsonObject } catch (_: Exception) { null }
+                val r = obj?.get("r")?.jsonPrimitive?.intOrNull ?: 0
+                val g = obj?.get("g")?.jsonPrimitive?.intOrNull ?: 0
+                val b = obj?.get("b")?.jsonPrimitive?.intOrNull ?: 0
+                val dimmer = obj?.get("dimmer")?.jsonPrimitive?.intOrNull ?: 255
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Color swatch
+                    if (liveColor != null) {
+                        Canvas(modifier = Modifier.size(24.dp)) {
+                            drawCircle(liveColor, radius = 12f)
+                            drawCircle(Color.White.copy(alpha = 0.3f), radius = 12f, style = Stroke(1.5f))
+                        }
+                    }
+                    FixtureDetail("RGB", "$r, $g, $b")
+                    FixtureDetail("Dimmer", "$dimmer")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FixtureDetail(label: String, value: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "$label: ",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
 }

@@ -33,8 +33,14 @@ class StatusViewModel @Inject constructor(
     private val _cameraOnline = MutableStateFlow<Map<Int, Boolean>>(emptyMap())
     val cameraOnline: StateFlow<Map<Int, Boolean>> = _cameraOnline.asStateFlow()
 
+    private val _cameraStats = MutableStateFlow<Map<Int, CameraStatus>>(emptyMap())
+    val cameraStats: StateFlow<Map<Int, CameraStatus>> = _cameraStats.asStateFlow()
+
     private val _dmxStatus = MutableStateFlow<DmxStatus?>(null)
     val dmxStatus: StateFlow<DmxStatus?> = _dmxStatus.asStateFlow()
+
+    private val _settings = MutableStateFlow(Settings())
+    val settings: StateFlow<Settings> = _settings.asStateFlow()
 
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
@@ -65,6 +71,14 @@ class StatusViewModel @Inject constructor(
                 } catch (_: Exception) {}
             }
         }
+
+        // Poll settings every 5s
+        viewModelScope.launch {
+            while (true) {
+                delay(5000)
+                try { _settings.value = repository.getSettings() } catch (_: Exception) {}
+            }
+        }
     }
 
     fun refreshAll() {
@@ -80,14 +94,19 @@ class StatusViewModel @Inject constructor(
                 try {
                     _dmxStatus.value = repository.getDmxStatus()
                 } catch (_: Exception) {}
-                // Load tracking + online state for each camera
+                try { _settings.value = repository.getSettings() } catch (_: Exception) {}
+                // Load tracking + online state + full stats for each camera
                 val trackMap = mutableMapOf<Int, Boolean>()
                 val onlineMap = mutableMapOf<Int, Boolean>()
+                val statsMap = mutableMapOf<Int, CameraStatus>()
                 _cameraFixtures.value.forEach { cam ->
                     try {
                         val status = repository.getCameraStatus(cam.id)
                         trackMap[cam.id] = status.tracking
-                        onlineMap[cam.id] = status.online
+                        // If getCameraStatus succeeds, the camera is online
+                        // (the response may not include an explicit "online" field)
+                        onlineMap[cam.id] = true
+                        statsMap[cam.id] = status.copy(online = true)
                     } catch (_: Exception) {
                         trackMap[cam.id] = false
                         onlineMap[cam.id] = false
@@ -95,6 +114,7 @@ class StatusViewModel @Inject constructor(
                 }
                 _trackingState.value = trackMap
                 _cameraOnline.value = onlineMap
+                _cameraStats.value = statsMap
             } finally {
                 _isRefreshing.value = false
             }
