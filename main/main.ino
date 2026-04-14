@@ -53,6 +53,13 @@
 #include "ArtNetRecv.h"
 #endif
 
+#ifdef BOARD_GYRO
+#include "GyroBoard.h"
+#include "GyroDisplay.h"
+#include "GyroTouch.h"
+#include "GyroIMU.h"
+#endif
+
 // ── setup ─────────────────────────────────────────────────────────────────────
 
 void setup() {
@@ -68,6 +75,10 @@ void setup() {
   pinMode(2, OUTPUT);
   digitalWrite(2, LOW);
   delay(1);
+#elif defined(BOARD_GYRO)
+  // Backlight off during init to avoid white-flash on cold power-up
+  pinMode(GYRO_LCD_BL, OUTPUT);
+  digitalWrite(GYRO_LCD_BL, LOW);
 #endif
 #ifdef BOARD_GIGA_DMX
   // Onboard LED diagnostics: RED = booting
@@ -77,7 +88,13 @@ void setup() {
   delay(500);
   if (Serial) Serial.println("=== BOOT ===");
 
-#ifdef BOARD_GIGA
+#ifdef BOARD_GYRO
+  gyroIMUInit();
+  gyroTouchInit();
+  connectWiFi();
+  gyroDisplayInit();  // display after WiFi so we can show connect status
+
+#elif defined(BOARD_GIGA)
   memset(children,  0, sizeof(children));
   memset(runners,   0, sizeof(runners));
   memset(&settings, 0, sizeof(settings));
@@ -100,7 +117,9 @@ void setup() {
   FastLED.show();
 #endif
 
+#ifndef BOARD_GYRO
   connectWiFi();   // also calls initChildConfig() for BOARD_CHILD
+#endif
 #ifdef BOARD_GIGA_DMX
   // GREEN = WiFi connected
   digitalWrite(LEDR, HIGH); digitalWrite(LEDG, LOW); // GREEN on
@@ -168,6 +187,8 @@ static void checkSerialCmd() {
           Serial.println("BOARD:giga-child");
 #elif defined(BOARD_DMX_BRIDGE)
           Serial.println("BOARD:dmx-bridge");
+#elif defined(BOARD_GYRO)
+          Serial.println("BOARD:gyro");
 #elif defined(BOARD_ESP32)
           Serial.println("BOARD:esp32");
 #elif defined(BOARD_D1MINI)
@@ -289,6 +310,12 @@ void loop() {
   pollUDP();        // SlyLED protocol — config, PING/PONG, status
   pollArtNet();     // poll again after UDP
   handleClient();   // HTTP — config UI, /dmx/set, /dmx/channels
+
+#elif defined(BOARD_GYRO)
+  // Gyro board loop — display UI and IMU handled in GyroUI (Issue #401)
+  // OTA and gyro UDP streaming handled in subsequent issues (#402, #403)
+  handleClient();
+  delay(10);
 
 #else  // ESP32
   handleClient();

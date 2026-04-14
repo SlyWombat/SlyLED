@@ -45,7 +45,7 @@ unsigned long currentEpoch() {
 
 // ── WiFi credential storage (survives OTA + power cycles) ────────────────────
 
-#ifdef BOARD_ESP32
+#if defined(BOARD_ESP32) || defined(BOARD_GYRO)
 #include <Preferences.h>
 
 void loadWiFiCredentials(char* ssid, size_t ssidLen, char* pass, size_t passLen) {
@@ -82,7 +82,7 @@ bool hasStoredWiFiCredentials() {
   return s.length() > 0;
 }
 
-#elif defined(BOARD_D1MINI)
+#elif defined(BOARD_D1MINI)  // BOARD_ESP32 / BOARD_GYRO block ends above
 
 // D1 Mini: store WiFi creds at EEPROM offset after childCfg
 // Layout: [0]=magic, [1..sizeof(childCfg)]=config, [next]=wifi_magic, ssid[33], pass[65]
@@ -164,6 +164,15 @@ void connectWiFi() {
 #else
     WiFi.setHostname(hn);
 #endif
+  }
+#elif defined(BOARD_GYRO)
+  // Gyro board: derive hostname from MAC, prefix SLYG- to distinguish from LED children
+  {
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    char hn[HOSTNAME_LEN];
+    snprintf(hn, sizeof(hn), "SLYG-%02X%02X", mac[4], mac[5]);
+    WiFi.setHostname(hn);
   }
 #elif defined(BOARD_GIGA_CHILD) || defined(BOARD_GIGA_DMX)
   // Giga child/DMX: WiFi.macAddress() returns zeros before begin(),

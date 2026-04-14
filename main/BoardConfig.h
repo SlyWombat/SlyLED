@@ -12,6 +12,10 @@
 #if defined(ESP32) && defined(DMX_BRIDGE)
   #define BOARD_ESP32
   #define BOARD_DMX_BRIDGE
+#elif defined(ESP32) && defined(GYRO_BOARD)
+  // Waveshare ESP32-S3 1.28" Round Touch LCD — gyro/orientation controller.
+  // Must appear before the generic ESP32 catch-all; -DGYRO_BOARD build flag required.
+  #define BOARD_GYRO
 #elif defined(ESP32)
   #define BOARD_ESP32
 #elif defined(ESP8266) || defined(ARDUINO_ARCH_ESP8266)
@@ -27,7 +31,7 @@
     #define BOARD_GIGA          // Giga R1 as parent (Orchestrator runtime)
   #endif
 #else
-  #error "Unsupported board. Target: arduino:mbed_giga:giga | esp32:esp32:esp32 | esp8266:esp8266:d1_mini"
+  #error "Unsupported board. Use: -DGYRO_BOARD (ESP32-S3 gyro) | target esp32:esp32:esp32 | esp8266:esp8266:d1_mini | arduino:mbed_giga:giga"
 #endif
 
 // BOARD_FASTLED = child with WS2812B/addressable strips via FastLED
@@ -60,7 +64,15 @@
 
 // ── Board-specific includes ───────────────────────────────────────────────────
 
-#ifdef BOARD_GIGA
+#ifdef BOARD_GYRO
+  // ESP32-S3 with GC9A01 display, CST816S touch, QMI8658 IMU
+  #include <WiFi.h>
+  #include <WiFiUdp.h>
+  #include <time.h>
+  #include <Preferences.h>
+  #include <Wire.h>
+  #include <SPI.h>
+#elif defined(BOARD_GIGA)
   #include <mbed.h>
   #include <WiFi.h>
   #include <WiFiUdp.h>

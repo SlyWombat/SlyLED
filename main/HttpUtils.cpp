@@ -50,6 +50,21 @@ void sendStatus(WiFiClient& c) {
   int blen;
 #ifdef BOARD_GIGA
   blen = snprintf(body, sizeof(body), "{\"role\":\"parent\",\"hostname\":\"slyled\"}");
+
+#elif defined(BOARD_GYRO)
+  // Gyro board status — no child LED config; reports orientation controller role
+  blen = snprintf(body, sizeof(body),
+    "{\"role\":\"gyro\",\"hostname\":\"%s\",\"board\":\"gyro\","
+    "\"version\":\"%u.%u.%u\",\"udpRx\":%lu,"
+    "\"freeHeap\":%lu,\"uptime\":%lu,"
+    "\"rssi\":%d,\"chipModel\":\"%s\",\"flashSize\":%lu,\"sdkVersion\":\"%s\"}",
+    WiFi.getHostname(),
+    (unsigned)APP_MAJOR, (unsigned)APP_MINOR, (unsigned)APP_PATCH,
+    (unsigned long)udpRxCount,
+    (unsigned long)ESP.getFreeHeap(), (unsigned long)(millis() / 1000),
+    (int)WiFi.RSSI(), ESP.getChipModel(),
+    (unsigned long)ESP.getFlashChipSize(), ESP.getSdkVersion());
+
 #else
   const char* boardName =
 #ifdef BOARD_GIGA_DMX

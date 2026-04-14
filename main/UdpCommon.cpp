@@ -34,6 +34,11 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
     memcpy(&pong, payload, sizeof(pong));
     registerChild(sender, &pong);
   }
+#elif defined(BOARD_GYRO)
+  // Gyro board — full UDP protocol (CMD_GYRO_ORIENT, CMD_GYRO_CTRL, PONG, OTA)
+  // is implemented in Issue #402 (GyroUdp.h/.cpp).  Suppress unused-parameter
+  // warnings until that issue is merged.
+  (void)cmd; (void)sender; (void)payload; (void)plen;
 #else
   if (cmd == CMD_PING) {
     sendPong(sender);
@@ -525,6 +530,9 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
   } else {
 #ifdef BOARD_CHILD
     sendChildConfigPage(client);
+#elif defined(BOARD_GYRO)
+    // Gyro board: redirect all unmatched routes to /status
+    sendBuf(client, F("HTTP/1.1 302 Found\r\nLocation: /status\r\nContent-Length: 0\r\n\r\n"));
 #else
     sendParentSPA(client);
 #endif
