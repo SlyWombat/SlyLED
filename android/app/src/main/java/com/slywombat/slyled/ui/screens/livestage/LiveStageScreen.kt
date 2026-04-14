@@ -312,10 +312,12 @@ private fun StageCanvas(
         val cz = stageH / 3f  // look slightly above floor
 
         // Camera position on orbit sphere around stage center
+        // Default: camera in front of stage (positive Y), slightly right (positive X), elevated
+        // Matches SPA: camera.position.set(sw*1.2, sh*1.0, sd*1.5)
         val diagMm = kotlin.math.sqrt(stageW * stageW + stageD * stageD + stageH * stageH)
         val dist = diagMm * camDist
         val camX = cx + dist * cos(elevation) * sin(azimuth)
-        val camY = cy - dist * cos(elevation) * cos(azimuth)
+        val camY = cy + dist * cos(elevation) * cos(azimuth)
         val camZ = cz + dist * sin(elevation)
 
         // Forward, right, up vectors for view matrix
