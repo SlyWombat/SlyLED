@@ -1,9 +1,10 @@
 # build.ps1 — increment minor version, compile, and upload
-# Usage: .\build.ps1 [-Port COM7] [-Board giga|esp32|d1mini] [-NoUpload]
+# Usage: .\build.ps1 [-Port COM7] [-Board giga|esp32|d1mini|gyro] [-NoUpload]
 #
-# -Board : "giga"   → arduino:mbed_giga:giga    (Arduino Giga R1 WiFi)
-#          "esp32"  → esp32:esp32:esp32           (ESP32 Dev Module)
-#          "d1mini" → esp8266:esp8266:d1_mini     (LOLIN D1 Mini / D1 R2)
+# -Board : "giga"   → arduino:mbed_giga:giga      (Arduino Giga R1 WiFi)
+#          "esp32"  → esp32:esp32:esp32             (ESP32 Dev Module)
+#          "d1mini" → esp8266:esp8266:d1_mini       (LOLIN D1 Mini / D1 R2)
+#          "gyro"   → esp32:esp32:esp32s3           (Waveshare ESP32-S3 LCD 1.28)
 #          (omit)   → auto-detect from connected board
 # -NoUpload : compile only (no upload, no version bump)
 param(
@@ -31,16 +32,21 @@ if ($Board -eq "") {
     } elseif ($boardList -match "esp8266:esp8266") {
         $Board = "d1mini"
         Write-Host "Detected: LOLIN D1 Mini (ESP8266)" -ForegroundColor Cyan
+    } elseif ($boardList -match "esp32:esp32:esp32s3") {
+        $Board = "gyro"
+        Write-Host "Detected: Waveshare ESP32-S3 LCD 1.28 (gyro board)" -ForegroundColor Cyan
     } else {
-        Write-Error "No supported board detected. Use -Board giga, esp32, or d1mini"
+        Write-Error "No supported board detected. Use -Board giga, esp32, d1mini, or gyro"
     }
 }
 
+$extraFlags = ""
 switch ($Board.ToLower()) {
     "giga"   { $fqbn = "arduino:mbed_giga:giga" }
     "esp32"  { $fqbn = "esp32:esp32:esp32" }
     "d1mini" { $fqbn = "esp8266:esp8266:d1_mini" }
-    default  { Write-Error "Unknown board '$Board'. Use 'giga', 'esp32', or 'd1mini'" }
+    "gyro"   { $fqbn = "esp32:esp32:esp32s3"; $extraFlags = "--build-property build.extra_flags=-DGYRO_BOARD" }
+    default  { Write-Error "Unknown board '$Board'. Use 'giga', 'esp32', 'd1mini', or 'gyro'" }
 }
 
 Write-Host "Target: $fqbn" -ForegroundColor Cyan
@@ -74,7 +80,15 @@ $buildPath = "$PSScriptRoot\build\$Board"
 New-Item -ItemType Directory -Force -Path $buildPath | Out-Null
 
 if ($NoUpload) {
-    & $cli compile --fqbn $fqbn --build-path $buildPath main
+    if ($extraFlags) {
+        & $cli compile --fqbn $fqbn --build-path $buildPath $extraFlags main
+    } else {
+        & $cli compile --fqbn $fqbn --build-path $buildPath main
+    }
 } else {
-    & $cli compile --upload --port $Port --fqbn $fqbn --build-path $buildPath main
+    if ($extraFlags) {
+        & $cli compile --upload --port $Port --fqbn $fqbn --build-path $buildPath $extraFlags main
+    } else {
+        & $cli compile --upload --port $Port --fqbn $fqbn --build-path $buildPath main
+    }
 }

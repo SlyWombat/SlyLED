@@ -68,6 +68,20 @@
             ]
         },
         {
+            "id": "gyro-esp32s3",
+            "name": "Gyro Controller (ESP32-S3 LCD 1.28)",
+            "description": "Waveshare ESP32-S3 1.28inch round LCD — orientation controller for DMX moving heads",
+            "board": "esp32s3",
+            "fqbn": "esp32:esp32:esp32s3",
+            "version": "8.4.3",
+            "file": "esp32s3/main.ino.merged.bin",
+            "flashMethod": "esptool",
+            "buildDefines": [
+                "GYRO_BOARD"
+            ],
+            "buildFlags": "-DGYRO_BOARD"
+        },
+        {
             "id": "camera-orangepi",
             "name": "Camera Node (Orange Pi)",
             "description": "RTSP camera streaming node with web UI and UDP discovery",

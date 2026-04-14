@@ -58,6 +58,8 @@
 #include "GyroDisplay.h"
 #include "GyroTouch.h"
 #include "GyroIMU.h"
+#include "GyroUdp.h"
+#include "GyroUI.h"
 #endif
 
 // ── setup ─────────────────────────────────────────────────────────────────────
@@ -93,6 +95,8 @@ void setup() {
   gyroTouchInit();
   connectWiFi();
   gyroDisplayInit();  // display after WiFi so we can show connect status
+  gyroUIInit();
+  gyroUdpInit();
 
 #elif defined(BOARD_GIGA)
   memset(children,  0, sizeof(children));
@@ -312,8 +316,8 @@ void loop() {
   handleClient();   // HTTP — config UI, /dmx/set, /dmx/channels
 
 #elif defined(BOARD_GYRO)
-  // Gyro board loop — display UI and IMU handled in GyroUI (Issue #401)
-  // OTA and gyro UDP streaming handled in subsequent issues (#402, #403)
+  gyroUIUpdate();
+  gyroUdpUpdate();
   handleClient();
   delay(10);
 

@@ -102,6 +102,10 @@ CMD_ACTION_EVENT = 0x12
 CMD_STATUS_REQ  = 0x40
 CMD_STATUS_RESP = 0x41
 
+CMD_GYRO_ORIENT = 0x60   # gyro→parent: GyroOrientPayload (8 bytes)
+CMD_GYRO_CTRL   = 0x61   # parent→gyro: enabled(1) + targetFps(1)
+CMD_GYRO_RECAL  = 0x62   # parent→gyro: zero IMU reference (no payload)
+
 #  "  "  Paths  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
 BASE = Path(__file__).parent
@@ -220,6 +224,11 @@ _ssh_bootstrapped = False  # deferred pre-population (needs _encrypt_pw defined 
 
 # Live action events pushed by children (ip  -' {actionType, stepIndex, totalSteps, event, ts})
 _live_events = {}
+
+# Live gyro orientation data keyed by child IP
+# {ip: {roll, pitch, yaw, fps, flags, ts}}
+_gyro_state = {}
+_gyro_lock  = threading.Lock()
 
 # Recent PONGs seen by UDP listener (ip  -' parsed pong info)   " used by discover
 _recent_pongs = {}
@@ -365,12 +374,16 @@ def _probe_board_type(child):
         board = data.get("board")
         if board:
             board_map = {"esp32": "ESP32", "d1mini": "D1 Mini", "giga-child": "Giga",
-                         "dmx-bridge": "DMX Bridge"}
+                         "dmx-bridge": "DMX Bridge", "gyro": "Gyro Controller"}
             child["boardType"] = board_map.get(board, board)
         # Detect DMX bridge from boardType field in /status
         bt = data.get("boardType")
         if bt == "dmx":
             child["type"] = "dmx"
+        # Detect gyro board from role field in /status
+        role = data.get("role")
+        if role == "gyro":
+            child["type"] = "gyro"
         # Full version from /status (3-part: 5.3.2) overrides PONG's 2-part version
         version = data.get("version")
         if version:
@@ -650,6 +663,20 @@ def _udp_listener():
             }
             log.debug("ACTION_EVENT from %s: type=%d step=%d/%d event=%s",
                        ip, at, si, tot, "started" if ev == 0 else "ended")
+        elif cmd == CMD_GYRO_ORIENT and len(data) >= 16:
+            # GyroOrientPayload: roll100(2) pitch100(2) yaw100(2) fps(1) flags(1)
+            roll100, pitch100, yaw100, fps, flags = struct.unpack_from("<hhhBB", data, 8)
+            with _gyro_lock:
+                _gyro_state[ip] = {
+                    "roll":  roll100  / 100.0,
+                    "pitch": pitch100 / 100.0,
+                    "yaw":   yaw100   / 100.0,
+                    "fps":   fps,
+                    "flags": flags,
+                    "ts":    time.time(),
+                }
+            log.debug("GYRO_ORIENT from %s: R=%.1f P=%.1f Y=%.1f fps=%d",
+                      ip, roll100/100.0, pitch100/100.0, yaw100/100.0, fps)
         elif cmd == CMD_PONG:
             # Handle PONGs from broadcast/direct pings
             info = _parse_pong(data, ip)
@@ -695,6 +722,10 @@ def start_background_tasks():
         threading.Thread(target=_periodic_ping, daemon=True).start()
     else:
         _startup_check_done = True
+    # Start gyro engine if any gyro fixtures exist
+    if any(f.get("fixtureType") == "gyro" for f in _fixtures):
+        from gyro_engine import init_gyro_engine
+        init_gyro_engine(_artnet, _sacn, _gyro_state, _gyro_lock, _fixtures, _children)
 
 @app.get("/api/children")
 def api_children():
@@ -999,8 +1030,8 @@ def api_fixtures_create():
     if ftype not in ("linear", "point", "surface", "group"):
         return jsonify(err="Invalid fixture type"), 400
     fixture_type = body.get("fixtureType", "led")
-    if fixture_type not in ("led", "dmx", "camera"):
-        return jsonify(err="Invalid fixtureType - must be 'led', 'dmx', or 'camera'"), 400
+    if fixture_type not in ("led", "dmx", "camera", "gyro"):
+        return jsonify(err="Invalid fixtureType - must be 'led', 'dmx', 'camera', or 'gyro'"), 400
     # DMX-specific validation
     if fixture_type == "dmx":
         dmx_uni = body.get("dmxUniverse")
@@ -1043,6 +1074,17 @@ def api_fixtures_create():
             f["trackThreshold"] = body.get("trackThreshold", 0.4)
             f["trackTtl"] = body.get("trackTtl", 5)
             f["trackReidMm"] = body.get("trackReidMm", 500)
+        if fixture_type == "gyro":
+            f["gyroChildId"]       = body.get("gyroChildId")       # child record ID of the gyro board
+            f["assignedMoverId"]   = body.get("assignedMoverId")   # fixture ID of the DMX mover to control
+            f["gyroEnabled"]       = body.get("gyroEnabled", False)
+            f["panCenter"]         = body.get("panCenter", 128)    # DMX pan centre value (0-255)
+            f["tiltCenter"]        = body.get("tiltCenter", 128)   # DMX tilt centre value
+            f["panScale"]          = body.get("panScale", 1.0)     # deg/DMX-step scaling
+            f["tiltScale"]         = body.get("tiltScale", 1.0)
+            f["panOffsetDeg"]      = body.get("panOffsetDeg", 0.0)
+            f["tiltOffsetDeg"]     = body.get("tiltOffsetDeg", 0.0)
+            f["smoothing"]         = body.get("smoothing", 0.15)   # EMA factor 0-1
         _fixtures.append(f)
         _nxt_fix += 1
         _save("fixtures", _fixtures)
@@ -1062,8 +1104,8 @@ def api_fixture_update(fid):
         return jsonify(err="Not found"), 404
     body = request.get_json(silent=True) or {}
     # Validate fixtureType if changing
-    if "fixtureType" in body and body["fixtureType"] not in ("led", "dmx", "camera"):
-        return jsonify(err="Invalid fixtureType - must be 'led', 'dmx', or 'camera'"), 400
+    if "fixtureType" in body and body["fixtureType"] not in ("led", "dmx", "camera", "gyro"):
+        return jsonify(err="Invalid fixtureType - must be 'led', 'dmx', 'camera', or 'gyro'"), 400
     # Validate geometry type if changing
     if "type" in body and body["type"] not in ("linear", "point", "surface", "group"):
         return jsonify(err="Invalid fixture type"), 400
@@ -1112,7 +1154,10 @@ def api_fixture_update(fid):
               "rotation", "orientation", "mountedInverted", "aoeRadius", "meshFile",
               "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId",
               "fovDeg", "cameraUrl", "cameraIp", "cameraIdx", "resolutionW", "resolutionH",
-              "trackClasses", "trackFps", "trackThreshold", "trackTtl", "trackReidMm"):
+              "trackClasses", "trackFps", "trackThreshold", "trackTtl", "trackReidMm",
+              "gyroChildId", "assignedMoverId", "gyroEnabled",
+              "panCenter", "tiltCenter", "panScale", "tiltScale",
+              "panOffsetDeg", "tiltOffsetDeg", "smoothing"):
         if k in body:
             f[k] = body[k]
     _save("fixtures", _fixtures)
@@ -1167,6 +1212,77 @@ def api_fixture_delete(fid):
         return jsonify(ok=False, err="fixture not found"), 404
     _fixtures = [f for f in _fixtures if f["id"] != fid]
     _save("fixtures", _fixtures)
+    return jsonify(ok=True)
+
+# ── Gyro API ─────────────────────────────────────────────────────────────
+
+GYRO_STALE_S = 2.0  # seconds before orientation data is considered stale
+
+@app.get("/api/gyro/state")
+def api_gyro_state():
+    """Return live orientation for all known gyro boards.
+    Each entry: {ip, roll, pitch, yaw, fps, streaming, imuOk, stale}
+    """
+    now = time.time()
+    with _gyro_lock:
+        result = []
+        for ip, g in _gyro_state.items():
+            stale = (now - g["ts"]) > GYRO_STALE_S
+            flags = g.get("flags", 0)
+            result.append({
+                "ip":        ip,
+                "roll":      round(g["roll"], 2),
+                "pitch":     round(g["pitch"], 2),
+                "yaw":       round(g["yaw"], 2),
+                "fps":       g["fps"],
+                "streaming": bool(flags & 0x01),
+                "imuOk":     bool(flags & 0x02),
+                "mode":      (flags >> 4) & 0x03,
+                "stale":     stale,
+                "ts":        g["ts"],
+            })
+    return jsonify(result)
+
+def _gyro_child_ip(child_id):
+    """Return IP for a child by ID, or None if not found / offline."""
+    c = next((c for c in _children if c["id"] == child_id), None)
+    if not c:
+        return None, jsonify(err="gyro child not found"), 404
+    if c.get("status") != 1:
+        return None, jsonify(err="gyro child offline"), 503
+    return c["ip"], None, None
+
+@app.post("/api/gyro/<int:child_id>/enable")
+def api_gyro_enable(child_id):
+    """Send CMD_GYRO_CTRL(enabled=1) to the gyro board at child_id."""
+    ip, err, code = _gyro_child_ip(child_id)
+    if err:
+        return err, code
+    fps = request.get_json(silent=True, force=True) or {}
+    target_fps = int(fps.get("fps", 20)) if isinstance(fps, dict) else 20
+    target_fps = max(1, min(50, target_fps))
+    pkt = _hdr(CMD_GYRO_CTRL) + struct.pack("<BB", 1, target_fps)
+    _send(ip, pkt)
+    return jsonify(ok=True)
+
+@app.post("/api/gyro/<int:child_id>/disable")
+def api_gyro_disable(child_id):
+    """Send CMD_GYRO_CTRL(enabled=0) to the gyro board at child_id."""
+    ip, err, code = _gyro_child_ip(child_id)
+    if err:
+        return err, code
+    pkt = _hdr(CMD_GYRO_CTRL) + struct.pack("<BB", 0, 0)
+    _send(ip, pkt)
+    return jsonify(ok=True)
+
+@app.post("/api/gyro/<int:child_id>/recalibrate")
+def api_gyro_recalibrate(child_id):
+    """Send CMD_GYRO_RECAL to the gyro board — zeros the IMU reference."""
+    ip, err, code = _gyro_child_ip(child_id)
+    if err:
+        return err, code
+    pkt = _hdr(CMD_GYRO_RECAL)
+    _send(ip, pkt)
     return jsonify(ok=True)
 
 # ── Camera discovery & CRUD ─────────────────────────────────────────────

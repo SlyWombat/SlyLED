@@ -26,12 +26,16 @@ KNOWN_BOARDS = {
     "0403:6001": [{"board": "esp32", "chip": "FT232", "name": "ESP32 (FTDI)"}],
     "2341:0266": [{"board": "giga", "chip": "native", "name": "Arduino Giga R1 WiFi"}],
     "2341:0366": [{"board": "giga", "chip": "DFU", "name": "Giga R1 (DFU bootloader)"}],
+    # Waveshare ESP32-S3 LCD 1.28 — native USB (303A:1001) or USB-UART (303A:0002)
+    "303A:1001": [{"board": "esp32s3", "chip": "ESP32-S3", "name": "Waveshare ESP32-S3 LCD 1.28 (native USB)"}],
+    "303A:0002": [{"board": "esp32s3", "chip": "ESP32-S3", "name": "Waveshare ESP32-S3 LCD 1.28 (USB-UART)"}],
 }
 
 FQBN_MAP = {
-    "esp32":  "esp32:esp32:esp32",
-    "d1mini": "esp8266:esp8266:d1_mini",
-    "giga":   "arduino:mbed_giga:giga",
+    "esp32":   "esp32:esp32:esp32",
+    "d1mini":  "esp8266:esp8266:d1_mini",
+    "giga":    "arduino:mbed_giga:giga",
+    "esp32s3": "esp32:esp32:esp32s3",
 }
 
 # ── Port listing ──────────────────────────────────────────────────────────────
@@ -70,7 +74,9 @@ def detect_chip(port):
             capture_output=True, text=True, timeout=10
         )
         out = r.stdout + r.stderr
-        if "ESP32" in out:
+        if "ESP32-S3" in out:
+            return "esp32s3"
+        elif "ESP32" in out:
             return "esp32"
         elif "ESP8266" in out:
             return "d1mini"
@@ -318,7 +324,7 @@ def flash_giga(port, bin_path, progress_cb=None):
 
 def flash_board(port, bin_path, board, wifi_ssid=None, wifi_pass=None, progress_cb=None):
     """Flash firmware to a board. Dispatches to the correct method."""
-    if board in ("esp32", "d1mini"):
+    if board in ("esp32", "d1mini", "esp32s3"):
         return flash_esp(port, bin_path, board, progress_cb)
     elif board == "giga":
         return flash_giga(port, bin_path, progress_cb)

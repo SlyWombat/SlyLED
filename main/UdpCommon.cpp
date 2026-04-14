@@ -25,6 +25,10 @@
 #include "ArtNetRecv.h"
 #endif
 
+#ifdef BOARD_GYRO
+#include "GyroUdp.h"
+#endif
+
 // ── handleUdpPacket ───────────────────────────────────────────────────────────
 
 void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) {
@@ -35,10 +39,7 @@ void handleUdpPacket(uint8_t cmd, IPAddress sender, uint8_t* payload, int plen) 
     registerChild(sender, &pong);
   }
 #elif defined(BOARD_GYRO)
-  // Gyro board — full UDP protocol (CMD_GYRO_ORIENT, CMD_GYRO_CTRL, PONG, OTA)
-  // is implemented in Issue #402 (GyroUdp.h/.cpp).  Suppress unused-parameter
-  // warnings until that issue is merged.
-  (void)cmd; (void)sender; (void)payload; (void)plen;
+  gyroUdpHandleCmd(cmd, sender, payload, plen);
 #else
   if (cmd == CMD_PING) {
     sendPong(sender);

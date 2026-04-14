@@ -38,6 +38,10 @@ constexpr uint8_t CMD_STATUS_RESP    = 0x41;
 constexpr uint8_t CMD_OTA_UPDATE     = 0x50;   // parent→child: trigger OTA (URL + sha256 in payload)
 constexpr uint8_t CMD_OTA_STATUS     = 0x51;   // child→parent: OTA progress/result
 
+constexpr uint8_t CMD_GYRO_ORIENT    = 0x60;   // gyro→parent: orientation stream (20 Hz default)
+constexpr uint8_t CMD_GYRO_CTRL      = 0x61;   // parent→gyro: enable/disable + target fps
+constexpr uint8_t CMD_GYRO_RECAL     = 0x62;   // parent→gyro: zero IMU reference (no payload)
+
 // ── Action type codes ─────────────────────────────────────────────────────────
 // (uint8_t — avoids Mbed prototype-generator issues with enums)
 
@@ -163,5 +167,23 @@ struct __attribute__((packed)) ActionEventPayload {
   uint8_t  totalSteps;
   uint8_t  event;          // 0=started, 1=ended
 };
+
+// ── Gyro board packet structures ──────────────────────────────────────────────
+
+// GyroOrientPayload — gyro→parent at ≤50 Hz (8 bytes)
+// Angles scaled ×100 to avoid float on the wire: 18000 = 180.00°
+struct __attribute__((packed)) GyroOrientPayload {
+  int16_t roll100;    // roll  × 100  (range −18000..+18000)
+  int16_t pitch100;   // pitch × 100
+  int16_t yaw100;     // yaw   × 100
+  uint8_t fps;        // actual transmit rate achieved this second
+  uint8_t flags;      // bit0=streaming, bit1=imuOk, bit2=wifiOk
+};  // 8 bytes; total packet = header(8) + 8 = 16 bytes
+
+// GyroCtrlPayload — parent→gyro (2 bytes)
+struct __attribute__((packed)) GyroCtrlPayload {
+  uint8_t enabled;    // 1 = start streaming, 0 = stop
+  uint8_t targetFps;  // desired rate, 0 = use board default (20 Hz); max 50
+};  // 2 bytes
 
 #endif  // PROTOCOL_H

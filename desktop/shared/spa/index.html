@@ -604,10 +604,11 @@ body.light .li:hover{border-color:#3b82f6}
       <div id='fw-ports' style='margin-bottom:.8em'><p style='color:#888'>Scanning USB ports...</p></div>
       <div style='display:flex;gap:1em;flex-wrap:wrap;align-items:flex-end'>
         <div><label>Port</label><select id='fw-port' style='width:120px'></select></div>
-        <div><label>Board</label><select id='fw-board' onchange='updateFwImages()' style='width:120px'>
+        <div><label>Board</label><select id='fw-board' onchange='updateFwImages()' style='width:150px'>
           <option value='esp32'>ESP32</option>
           <option value='d1mini'>D1 Mini</option>
           <option value='giga'>Giga R1</option>
+          <option value='esp32s3'>ESP32-S3 (Gyro)</option>
         </select></div>
         <div style='flex:1;min-width:200px'><label>Firmware</label><select id='fw-image' style='width:100%'></select></div>
         <div><button class='btn btn-on' id='fw-flash-btn' onclick='doFlash(this)' style='margin-bottom:2px'>Flash</button></div>
@@ -943,8 +944,63 @@ function loadDash(){
     refreshRunnerStatus();
     dashRunnerTimer=setInterval(refreshRunnerStatus,1000);
     if(!startupDone)_pollStartup();
+    // Gyro live cards — poll if any gyro fixtures exist
+    ra('GET','/api/fixtures',null,function(fxs){
+      if(!fxs)return;
+      var gyroFxs=fxs.filter(function(f){return f.fixtureType==='gyro';});
+      if(!gyroFxs.length)return;
+      ra('GET','/api/children',null,function(children){
+        var childIpById={};
+        (children||[]).forEach(function(c){childIpById[c.id]=c.ip;});
+        _renderGyroDash(gyroFxs);
+        if(!window._gyroTimer)window._gyroTimer=setInterval(function(){_refreshGyroDash(gyroFxs,childIpById);},500);
+      });
+    });
   }).catch(function(){
     document.getElementById('dash-content').innerHTML='<p style="color:#f66">Failed to load dashboard.</p>';
+  });
+}
+
+function _renderGyroDash(gyroFxs){
+  var el=document.getElementById('dash-content');if(!el)return;
+  var h='<div id="gyro-dash-cards" style="margin-top:.8em">';
+  h+='<div style="font-size:.85em;font-weight:bold;color:#94a3b8;margin-bottom:.4em">Gyro Controllers</div>';
+  h+='<div style="display:flex;flex-wrap:wrap;gap:.6em">';
+  gyroFxs.forEach(function(f){
+    h+='<div id="gyro-card-'+f.id+'" style="background:#0f172a;border:1px solid #334155;border-radius:6px;padding:.5em .8em;min-width:200px">'
+      +'<div style="font-weight:bold;color:#e2e8f0;font-size:.88em">'+escapeHtml(f.name)+'</div>'
+      +'<div id="gyro-card-data-'+f.id+'" style="color:#64748b;font-size:.78em">Waiting for data...</div>'
+      +'<div style="margin-top:.4em;display:flex;gap:.3em">'
+      +'<button class="btn" onclick="_gyroEnable('+(f.gyroChildId||0)+',true)" style="font-size:.72em;padding:.15em .4em;background:#14532d;color:#86efac">Enable</button>'
+      +'<button class="btn" onclick="_gyroEnable('+(f.gyroChildId||0)+',false)" style="font-size:.72em;padding:.15em .4em;background:#1e293b;color:#94a3b8">Disable</button>'
+      +'<button class="btn" onclick="_gyroRecal('+(f.gyroChildId||0)+')" style="font-size:.72em;padding:.15em .4em;background:#1e3a5f;color:#93c5fd">Zero</button>'
+      +'</div></div>';
+  });
+  h+='</div></div>';
+  el.innerHTML+=h;
+}
+
+function _refreshGyroDash(gyroFxs,childIpById){
+  ra('GET','/api/gyro/state',null,function(states){
+    if(!states)return;
+    var byIp={};states.forEach(function(s){byIp[s.ip]=s;});
+    gyroFxs.forEach(function(f){
+      var el=document.getElementById('gyro-card-data-'+f.id);
+      if(!el)return;
+      var ip=childIpById[f.gyroChildId];
+      var st=ip?byIp[ip]:null;
+      if(!st||st.stale){
+        el.innerHTML='<span style="color:#64748b">STALE -- no data</span>';return;
+      }
+      var modeNames=['FULL','PAN','TILT','INV'];
+      var liveCol=st.streaming?'#22c55e':'#94a3b8';
+      el.innerHTML='<span style="color:'+liveCol+';font-size:.72em;font-weight:bold">'+(st.streaming?'LIVE':'IDLE')+'</span>'
+        +' <span style="color:#94a3b8">R:'+st.roll.toFixed(1)+'\u00b0</span>'
+        +' <span style="color:#94a3b8">P:'+st.pitch.toFixed(1)+'\u00b0</span>'
+        +' <span style="color:#94a3b8">Y:'+st.yaw.toFixed(1)+'\u00b0</span>'
+        +' <span style="color:#475569;font-size:.78em">'+st.fps+'fps</span>'
+        +(st.mode!==undefined?' <span style="color:#7c3aed;font-size:.72em">'+modeNames[st.mode||0]+'</span>':'');
+    });
   });
 }
 
@@ -1279,6 +1335,7 @@ function _renderSetup(){
       var ledFixtures=(fixtures||[]).filter(function(f){return (f.fixtureType||'led')==='led';});
       var dmxFixtures=(fixtures||[]).filter(function(f){return f.fixtureType==='dmx';});
       var camFixtures=(fixtures||[]).filter(function(f){return f.fixtureType==='camera';});
+      var gyroFixtures=(fixtures||[]).filter(function(f){return f.fixtureType==='gyro';});
 
       // ── Hardware section (DMX bridges + standalone children + camera nodes)
       // Group camera fixtures by IP to show each Orange Pi as a hardware node
@@ -1291,7 +1348,8 @@ function _renderSetup(){
         if(!camNodeMap[ip].name)camNodeMap[ip].name=ip||'Camera Node';
       });
       var camNodes=Object.values(camNodeMap);
-      var hasHw=standaloneHw.length||camNodes.length;
+      var gyroChildren=(children||[]).filter(function(c){return c.type==='gyro';});
+      var hasHw=standaloneHw.length||camNodes.length||gyroChildren.length;
       if(hasHw){
         h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">Hardware</h3>'
           +'<table class="tbl"><tr><th>Device</th><th>Type</th><th>IP</th><th>Status</th><th>Firmware</th><th>Actions</th></tr>';
@@ -1313,6 +1371,20 @@ function _renderSetup(){
           if(isDmx)acts+=' <button class="btn" onclick="window.open(\'http://'+escapeHtml(c.ip)+'/config\',\'_blank\')" style="background:#446;color:#fff">Configure</button>';
           acts+=' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff">Reboot</button>';
           acts+=' <button class="btn btn-off" onclick="removeChild('+c.id+')">Remove</button>';
+          h+='<tr><td><b>'+escapeHtml(c.name||c.hostname)+'</b></td><td>'+typeBadge+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+fwHtml+'</td><td>'+acts+'</td></tr>';
+        });
+        // Gyro boards as hardware rows
+        gyroChildren.forEach(function(c){
+          var typeBadge='<span class="badge" style="background:#7c3aed;color:#fff">Gyro Board</span>';
+          var rssi=c.rssi||0;
+          var rssiHtml='';
+          if(c.status===1&&rssi){var rssiCol=Math.abs(rssi)<=50?'#4c4':Math.abs(rssi)<=70?'#fa6':'#f66';rssiHtml=' <span style="color:'+rssiCol+';font-size:.75em" title="'+rssi+' dBm">'+_rssiIcon(rssi)+'</span>';}
+          var st=c.status===1?'<span class="badge bon">Online</span>'+rssiHtml:'<span class="badge boff">Offline</span>';
+          var fwVer=c.fwVersion||'—';
+          var fwHtml=escapeHtml(fwVer)+'<span id="fw-ind-'+c.id+'"></span>';
+          var acts='<button class="btn btn-on" onclick="refreshChild('+c.id+')">Refresh</button>'
+            +' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff">Reboot</button>'
+            +' <button class="btn btn-off" onclick="removeChild('+c.id+')">Remove</button>';
           h+='<tr><td><b>'+escapeHtml(c.name||c.hostname)+'</b></td><td>'+typeBadge+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+fwHtml+'</td><td>'+acts+'</td></tr>';
         });
         // Camera nodes as hardware rows
@@ -1410,7 +1482,28 @@ function _renderSetup(){
           h+='<tr><td><b>'+escapeHtml(f.name)+'</b></td><td><span class="badge" style="background:#7c3aed;color:#fff">DMX</span></td><td>'+conn+'</td><td><span class="badge" style="background:#7c3aed;color:#fff">Configured</span></td><td>'+chLeds+'</td><td>'+actions+'</td></tr>';
         });
       }
-      if(!ledFixtures.length&&!dmxFixtures.length&&!camFixtures.length){
+      if(gyroFixtures.length){
+        gyroFixtures.forEach(function(f){
+          var gcid=f.gyroChildId;
+          var gc=gcid!=null?(children||[]).find(function(c){return c.id===gcid;}):null;
+          var conn=gc?escapeHtml(gc.hostname||gc.ip)+'<span style="color:#64748b;font-size:.8em"> ('+escapeHtml(gc.ip)+')</span>':'<span style="color:#666">No gyro board linked</span>';
+          var mid=f.assignedMoverId;
+          var mover=mid!=null?(fixtures||[]).find(function(fx){return fx.id===mid;}):null;
+          var moverTxt=mover?escapeHtml(mover.name):'<span style="color:#666">No mover assigned</span>';
+          var status=f.gyroEnabled?'<span class="badge" style="background:#059669;color:#fff">Enabled</span>':'<span class="badge" style="background:#334;color:#888">Disabled</span>';
+          var actions='<button class="btn" onclick="editFixture('+f.id+')" style="background:#446;color:#fff">Edit</button>';
+          if(gcid!=null){
+            actions+=' <button class="btn btn-on" onclick="_gyroEnable('+f.gyroChildId+',true)" style="font-size:.8em">Enable</button>'
+              +' <button class="btn" onclick="_gyroEnable('+f.gyroChildId+',false)" style="background:#334;color:#94a3b8;font-size:.8em">Disable</button>'
+              +' <button class="btn" onclick="_gyroRecal('+f.gyroChildId+')" style="background:#1e3a5f;color:#93c5fd;font-size:.8em">Zero IMU</button>';
+          }
+          actions+=' <button class="btn btn-off" onclick="removeFixture('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
+          h+='<tr><td><b>'+escapeHtml(f.name)+'</b><br><span style="color:#94a3b8;font-size:.75em">→ '+moverTxt+'</span></td>'
+            +'<td><span class="badge" style="background:#6d28d9;color:#fff">Gyro</span></td>'
+            +'<td>'+conn+'</td><td>'+status+'</td><td>—</td><td>'+actions+'</td></tr>';
+        });
+      }
+      if(!ledFixtures.length&&!dmxFixtures.length&&!camFixtures.length&&!gyroFixtures.length){
         h+='<tr><td colspan="6" style="color:#888;text-align:center">No fixtures — click Add Fixture or Discover</td></tr>';
       }
       h+='</table>';
@@ -1465,6 +1558,7 @@ function showAddFixtureModal(){
     +'<option value="dmx">DMX Fixture</option>'
     +'<option value="led">SlyLED Fixture (LED)</option>'
     +'<option value="camera">Camera</option>'
+    +'<option value="gyro">Gyro Controller</option>'
     +'<option value="group">Fixture Group</option></select>'
     +'<div id="af-led" style="display:none">'
     +'<label>IP Address</label><input id="af-ip" placeholder="x.x.x.x" style="width:100%">'
@@ -1500,6 +1594,19 @@ function showAddFixtureModal(){
     +'<div id="af-cam-probe-result" style="margin-top:.3em"></div>'
     +'</div>'
     +'</div>'
+    +'<div id="af-gyro" style="display:none">'
+    +'<p style="color:#94a3b8;font-size:.82em;margin-bottom:.5em">Links a Waveshare ESP32-S3 gyro board to a DMX moving head fixture for real-time orientation control.</p>'
+    +'<label>Name</label><input id="af-gyro-name" placeholder="Gyro Controller 1" style="width:100%;margin-bottom:.4em">'
+    +'<label>Gyro Board (child)</label>'
+    +'<select id="af-gyro-child" style="width:100%;margin-bottom:.4em"><option value="">— Select gyro board —</option></select>'
+    +'<label>Assigned Mover Fixture (DMX)</label>'
+    +'<select id="af-gyro-mover" style="width:100%;margin-bottom:.4em"><option value="">— Select DMX mover —</option></select>'
+    +'<div style="display:flex;gap:.5em">'
+    +'<div style="flex:1"><label>Pan Scale (°/step)</label><input id="af-gyro-pscale" type="number" value="1.0" step="0.1" style="width:100%;margin-bottom:.4em"></div>'
+    +'<div style="flex:1"><label>Tilt Scale (°/step)</label><input id="af-gyro-tscale" type="number" value="1.0" step="0.1" style="width:100%;margin-bottom:.4em"></div>'
+    +'</div>'
+    +'<div style="margin-top:.8em"><button class="btn btn-on" onclick="_submitAddFixture()" style="font-size:.95em;padding:.5em 2em">Add Gyro Controller</button></div>'
+    +'</div>'
     +'<div id="af-group" style="display:none">'
     +'<label>Group Name</label><input id="af-gname" placeholder="Front Wash" style="width:100%;margin-bottom:.4em">'
     +'<label>Select Members</label><div id="af-members" style="max-height:200px;overflow-y:auto;border:1px solid #334;padding:.3em;margin-bottom:.4em"></div>'
@@ -1515,7 +1622,27 @@ function _toggleAddFixFields(){
   document.getElementById('af-led').style.display=t==='led'?'':'none';
   document.getElementById('af-dmx').style.display=t==='dmx'?'':'none';
   document.getElementById('af-camera').style.display=t==='camera'?'':'none';
+  document.getElementById('af-gyro').style.display=t==='gyro'?'':'none';
   document.getElementById('af-group').style.display=t==='group'?'':'none';
+  if(t==='gyro'){
+    // Populate gyro board + mover dropdowns
+    ra('GET','/api/children',null,function(cs){
+      var sel=document.getElementById('af-gyro-child');if(!sel)return;
+      sel.innerHTML='<option value="">— Select gyro board —</option>';
+      (cs||[]).filter(function(c){return c.type==='gyro';}).forEach(function(c){
+        var o=document.createElement('option');o.value=c.id;
+        o.textContent=(c.name||c.hostname)+' ('+c.ip+')';sel.appendChild(o);
+      });
+    });
+    ra('GET','/api/fixtures',null,function(fxs){
+      var sel=document.getElementById('af-gyro-mover');if(!sel)return;
+      sel.innerHTML='<option value="">— Select DMX mover —</option>';
+      (fxs||[]).filter(function(f){return f.fixtureType==='dmx';}).forEach(function(f){
+        var o=document.createElement('option');o.value=f.id;
+        o.textContent=escapeHtml(f.name)+' (U'+f.dmxUniverse+' @'+f.dmxStartAddr+')';sel.appendChild(o);
+      });
+    });
+  }
   if(t==='group'){
     var mel=document.getElementById('af-members');
     if(mel&&!mel.innerHTML){
@@ -1705,6 +1832,23 @@ function _submitAddFixture(){
   }else if(ft==='camera'){
     // Cameras are added from discover results, not via form submit
     document.getElementById('hs').textContent='Use Discover or Probe to find a camera first';
+    return;
+  }else if(ft==='gyro'){
+    var gname=document.getElementById('af-gyro-name').value.trim();
+    var gcid=parseInt(document.getElementById('af-gyro-child').value)||null;
+    var gmid=parseInt(document.getElementById('af-gyro-mover').value)||null;
+    var gpsc=parseFloat(document.getElementById('af-gyro-pscale').value)||1.0;
+    var gtsc=parseFloat(document.getElementById('af-gyro-tscale').value)||1.0;
+    closeModal();
+    ra('POST','/api/fixtures',{
+      name:gname||'Gyro Controller',fixtureType:'gyro',type:'point',
+      gyroChildId:gcid,assignedMoverId:gmid,
+      panScale:gpsc,tiltScale:gtsc
+    },function(r){
+      if(r&&r.ok)document.getElementById('hs').textContent='Added gyro controller: '+(gname||'Gyro Controller');
+      else document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
+      loadSetup();
+    });
     return;
   }else{
     var name=document.getElementById('af-name').value.trim();
@@ -2055,6 +2199,21 @@ function rebootChild(id){
     if(r&&r.ok)document.getElementById('hs').textContent='Reboot sent. Waiting for reconnect...';
     else document.getElementById('hs').textContent='Reboot failed: '+(r&&r.err||'unreachable');
     setTimeout(_renderSetup,8000);
+  });
+}
+
+function _gyroEnable(childId, enable){
+  var endpoint='/api/gyro/'+childId+(enable?'/enable':'/disable');
+  ra('POST',endpoint,enable?{fps:20}:{},function(r){
+    if(r&&r.ok)document.getElementById('hs').textContent=enable?'Gyro streaming enabled':'Gyro streaming disabled';
+    else document.getElementById('hs').textContent='Gyro command failed: '+(r&&r.err||'unknown');
+  });
+}
+
+function _gyroRecal(childId){
+  ra('POST','/api/gyro/'+childId+'/recalibrate',{},function(r){
+    if(r&&r.ok)document.getElementById('hs').textContent='Gyro IMU zeroed';
+    else document.getElementById('hs').textContent='Recalibrate failed: '+(r&&r.err||'unknown');
   });
 }
 
