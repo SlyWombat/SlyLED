@@ -5908,7 +5908,11 @@ def _show_playback_loop(playlist_order, loop_all, go_epoch, start_idx=0):
     tl_list = []
     for tid in playlist_order:
         tl = next((t for t in _timelines if t["id"] == tid), None)
-        if not tl or tid not in _bake_result:
+        if not tl:
+            continue
+        # Include timeline if baked OR if Track actions exist (live tracking)
+        has_track = any(a.get("type") == 18 for a in _actions)
+        if tid not in _bake_result and not has_track:
             continue
         tl_list.append((tid, tl))
     if not tl_list:
@@ -6083,9 +6087,10 @@ def api_show_start():
     loop_all = data.get("loopAll", _show_playlist.get("loopAll", False))
     if not order:
         return jsonify(err="Playlist is empty"), 400
-    # Verify all timelines are baked
+    # Verify all timelines are baked (Track actions bypass bake requirement)
+    has_track_actions = any(a.get("type") == 18 for a in _actions)
     unbaked = [tid for tid in order if tid not in _bake_result]
-    if unbaked:
+    if unbaked and not has_track_actions:
         return jsonify(err="Unbaked timelines in playlist", unbaked=unbaked), 400
     # Stop any existing playback
     _dmx_playback_stop.set()
