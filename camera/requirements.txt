@@ -1,0 +1,6 @@
+# Python dependencies installed via pip on camera nodes.
+# OpenCV and NumPy are installed via apt (python3-opencv, python3-numpy)
+# to avoid slow ARM compilation. Do NOT add them here.
+flask>=3.0
+zeroconf>=0.80
+onnxruntime>=1.17

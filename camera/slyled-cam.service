@@ -1,0 +1,16 @@
+[Unit]
+Description=SlyLED Camera Node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/slyled
+ExecStart=/usr/bin/python3 -u /opt/slyled/camera_server.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
