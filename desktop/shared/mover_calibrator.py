@@ -1209,9 +1209,17 @@ def grid_inverse(grid, target_px, target_py, iterations=20):
     """Inverse lookup: (pixel_x, pixel_y) → (pan, tilt).
 
     Uses iterative Newton's method with the grid's local Jacobian.
+    Allows extrapolation up to 20% beyond grid bounds (#371).
     """
     pans = grid["panSteps"]
     tilts = grid["tiltSteps"]
+    # Allow 20% extrapolation beyond grid bounds
+    pan_range = pans[-1] - pans[0] if len(pans) > 1 else 0.2
+    tilt_range = tilts[-1] - tilts[0] if len(tilts) > 1 else 0.2
+    pan_lo = pans[0] - pan_range * 0.2
+    pan_hi = pans[-1] + pan_range * 0.2
+    tilt_lo = tilts[0] - tilt_range * 0.2
+    tilt_hi = tilts[-1] + tilt_range * 0.2
     # Start from center of grid
     pan = (pans[0] + pans[-1]) / 2
     tilt = (tilts[0] + tilts[-1]) / 2
@@ -1236,10 +1244,11 @@ def grid_inverse(grid, target_px, target_py, iterations=20):
         # Newton step with damping
         d_pan = (dpy_dt * err_x - dpx_dt * err_y) / det * 0.5
         d_tilt = (-dpy_dp * err_x + dpx_dp * err_y) / det * 0.5
-        pan = max(pans[0], min(pans[-1], pan + d_pan))
-        tilt = max(tilts[0], min(tilts[-1], tilt + d_tilt))
+        pan = max(pan_lo, min(pan_hi, pan + d_pan))
+        tilt = max(tilt_lo, min(tilt_hi, tilt + d_tilt))
 
-    return (pan, tilt)
+    # Final clamp to valid DMX range
+    return (max(0.0, min(1.0, pan)), max(0.0, min(1.0, tilt)))
 
 
 def affine_pan_tilt(samples, target_x, target_y, target_z=0):

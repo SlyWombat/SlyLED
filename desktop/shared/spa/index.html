@@ -504,6 +504,10 @@ body.light .li:hover{border-color:#3b82f6}
       <input id='dmx-pri' type='range' min='0' max='200' value='100' style='width:200px' oninput="document.getElementById('dmx-pri-val').textContent=this.value">
       <label>sACN Source Name</label><input id='dmx-src' value='SlyLED' style='width:200px'>
     </div>
+    <div style='margin-top:.6em;border-top:1px solid #1e293b;padding-top:.5em'>
+      <label style='display:flex;align-items:center;gap:.4em;font-size:.82em;cursor:pointer'><input type='checkbox' id='dmx-auto-start' checked onchange='saveDmxBootSettings()'>Auto-start engine on boot</label>
+      <label style='display:flex;align-items:center;gap:.4em;font-size:.82em;cursor:pointer;margin-top:.3em'><input type='checkbox' id='dmx-boot-blink' checked onchange='saveDmxBootSettings()'>Blink fixtures on boot</label>
+    </div>
     <div id='dmx-artnet-opts'>
       <div style='margin-top:.5em;font-size:.85em;font-weight:bold;color:#94a3b8'>Universe Routing</div>
       <div style='font-size:.72em;color:#556;margin-bottom:.3em'>Map universes to specific bridges. Unrouted universes broadcast.</div>
@@ -9903,6 +9907,10 @@ function loadDmxSettings(){
           document.getElementById('dmx-pri-val').textContent=d.sacnPriority||100;
           document.getElementById('dmx-src').value=d.sacnSourceName||'SlyLED';
           _dmxRoutes=d.universeRoutes||[];
+          var asEl=document.getElementById('dmx-auto-start');
+          if(asEl)asEl.checked=d.autoStartEngine!==false;
+          var bbEl=document.getElementById('dmx-boot-blink');
+          if(bbEl)bbEl.checked=d.bootBlinkFixtures!==false;
           dmxRenderRoutes();
           dmxProtoChange();
           ra('GET','/api/dmx/status',null,function(st){
@@ -9972,6 +9980,17 @@ function saveDmxSettings(){
   };
   ra('POST','/api/dmx/settings',body,function(r){
     document.getElementById('dmx-status').textContent=r&&r.ok?'Settings saved':'Save failed';
+  });
+}
+
+function saveDmxBootSettings(){
+  var body={
+    autoStartEngine:document.getElementById('dmx-auto-start').checked,
+    bootBlinkFixtures:document.getElementById('dmx-boot-blink').checked
+  };
+  ra('POST','/api/dmx/settings',body,function(r){
+    var el=document.getElementById('dmx-status');
+    if(el)el.textContent=r&&r.ok?'Boot settings saved':'Save failed';
   });
 }
 

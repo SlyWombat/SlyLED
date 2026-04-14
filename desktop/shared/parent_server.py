@@ -2618,35 +2618,52 @@ def api_mover_cal_aim(fid):
     """Use calibration grid to aim a mover at a target pixel or stage position.
     Body: {targetX, targetY} (stage mm) or {pixelX, pixelY}"""
     cal = _mover_cal.get(str(fid))
-    if not cal or not cal.get("grid"):
+    if not cal or (not cal.get("grid") and not cal.get("samples")):
         return jsonify(err="Fixture not calibrated"), 400
     f = next((f for f in _fixtures if f["id"] == fid), None)
     if not f:
         return jsonify(err="Fixture not found"), 404
     body = request.get_json(silent=True) or {}
     grid = cal["grid"]
+    pan = tilt = None
+
+    # Stage coordinate target — use affine transform for extrapolation (#371)
+    tx = body.get("targetX")
+    ty = body.get("targetY")
+    tz = body.get("targetZ", 0)
+    if tx is not None and ty is not None:
+        samples = cal.get("samples", [])
+        if samples and len(samples) >= 2:
+            pt = _mcal.affine_pan_tilt(samples, tx, ty, tz)
+            if pt:
+                pan, tilt = pt
+        # Fallback: grid_inverse treats stage coords as "pixel" coords for manual grids
+        if pan is None and grid:
+            pan, tilt = _mcal.grid_inverse(grid, tx, ty)
+
     # Direct pixel target
-    px = body.get("pixelX")
-    py = body.get("pixelY")
-    if px is not None and py is not None:
-        result = _mcal.grid_inverse(grid, px, py)
-        if result:
-            pan, tilt = result
-            # Send DMX
-            pid = f.get("dmxProfileId")
-            prof_info = _profile_lib.channel_info(pid) if pid else None
-            if prof_info:
-                uni = f.get("dmxUniverse", 1)
-                addr = f.get("dmxStartAddr", 1)
-                try:
-                    uni_buf = _artnet.get_universe(uni)
-                    profile = {"channel_map": prof_info.get("channel_map"),
-                               "channels": prof_info.get("channels", [])}
-                    uni_buf.set_fixture_pan_tilt(addr, pan, tilt, profile)
-                except Exception:
-                    pass
-            return jsonify(ok=True, pan=round(pan, 4), tilt=round(tilt, 4))
-    return jsonify(err="Provide pixelX/pixelY"), 400
+    if pan is None:
+        px = body.get("pixelX")
+        py = body.get("pixelY")
+        if px is not None and py is not None and grid:
+            pan, tilt = _mcal.grid_inverse(grid, px, py)
+
+    if pan is not None:
+        # Send DMX
+        pid = f.get("dmxProfileId")
+        prof_info = _profile_lib.channel_info(pid) if pid else None
+        if prof_info:
+            uni = f.get("dmxUniverse", 1)
+            addr = f.get("dmxStartAddr", 1)
+            try:
+                uni_buf = _artnet.get_universe(uni)
+                profile = {"channel_map": prof_info.get("channel_map"),
+                           "channels": prof_info.get("channels", [])}
+                uni_buf.set_fixture_pan_tilt(addr, pan, tilt, profile)
+            except Exception:
+                pass
+        return jsonify(ok=True, pan=round(pan, 4), tilt=round(tilt, 4))
+    return jsonify(err="Provide targetX/targetY (stage mm) or pixelX/pixelY"), 400
 
 
 @app.post("/api/calibration/mover/<int:fid>/manual")
@@ -4414,8 +4431,14 @@ _DMX_SETTINGS_DEFAULTS = {
     "universeRoutes": [],     # [{universe: int, destination: ip, label: str}]
     "sacnPriority": 100,
     "sacnSourceName": "SlyLED",
+    "autoStartEngine": True,   # auto-start DMX engine on boot (#389)
+    "bootBlinkFixtures": True,  # rainbow blink on first boot (#389)
 }
 _dmx_settings = _load("dmx_settings", dict(_DMX_SETTINGS_DEFAULTS))
+# Backfill new keys from defaults (#389)
+for _dk, _dv in _DMX_SETTINGS_DEFAULTS.items():
+    if _dk not in _dmx_settings:
+        _dmx_settings[_dk] = _dv
 # Migrate old unicastTargets to universeRoutes
 if "unicastTargets" in _dmx_settings and not _dmx_settings.get("universeRoutes"):
     _old = _dmx_settings.pop("unicastTargets", {})
@@ -4451,8 +4474,61 @@ def _apply_dmx_settings():
 
 _apply_dmx_settings()
 
-# Auto-start DMX engine if universe routes are configured
-if _dmx_settings.get("universeRoutes"):
+# ── Boot blink function (#389) ────────────────────────────────────────────
+_boot_blink_done = False
+
+def _run_boot_blink(engine):
+    """Rainbow cycle all DMX fixtures for 3s then blackout. Runs once per process."""
+    global _boot_blink_done
+    if _boot_blink_done:
+        return
+    _boot_blink_done = True
+    import colorsys
+    # Collect DMX fixtures once before the animation
+    dmx_fx = [(f, f.get("dmxProfileId")) for f in _fixtures if f.get("fixtureType") == "dmx"]
+    if not dmx_fx:
+        return
+    profiles = {}
+    for f, pid in dmx_fx:
+        if pid and pid not in profiles:
+            info = _profile_lib.channel_info(pid)
+            if info:
+                profiles[pid] = {"channel_map": info.get("channel_map", {}),
+                                 "channels": info.get("channels", [])}
+    steps = 30
+    step_ms = 100  # 30 × 100ms = 3s
+    for i in range(steps):
+        hue = i / steps
+        r, g, b = [int(c * 255) for c in colorsys.hsv_to_rgb(hue, 1.0, 1.0)]
+        for f, pid in dmx_fx:
+            uni = f.get("dmxUniverse", 1)
+            addr = f.get("dmxStartAddr", 1)
+            prof = profiles.get(pid)
+            if prof:
+                engine.set_fixture_rgb(uni, addr, r, g, b, prof)
+                cm = prof.get("channel_map", {})
+                if "dimmer" in cm:
+                    engine.get_universe(uni).set_channel(addr + cm["dimmer"], 255)
+            else:
+                # No profile — write dimmer-only pulse to first channel
+                engine.get_universe(uni).set_channel(addr, 255)
+        time.sleep(step_ms / 1000)
+    # Blackout all fixtures
+    for f, pid in dmx_fx:
+        uni = f.get("dmxUniverse", 1)
+        addr = f.get("dmxStartAddr", 1)
+        prof = profiles.get(pid)
+        if prof:
+            engine.set_fixture_rgb(uni, addr, 0, 0, 0, prof)
+            cm = prof.get("channel_map", {})
+            if "dimmer" in cm:
+                engine.get_universe(uni).set_channel(addr + cm["dimmer"], 0)
+        else:
+            engine.get_universe(uni).set_channel(addr, 0)
+    log.info("Boot blink complete: %d fixtures cycled rainbow → blackout", len(dmx_fx))
+
+# Auto-start DMX engine if universe routes are configured (#389: gated by setting)
+if _dmx_settings.get("autoStartEngine", True) and _dmx_settings.get("universeRoutes"):
     _proto = _dmx_settings.get("protocol", "artnet")
     _engine = _artnet if _proto == "artnet" else _sacn if _proto == "sacn" else None
     if _engine:
@@ -4471,6 +4547,10 @@ if _dmx_settings.get("universeRoutes"):
             _apply_profile_defaults(_engine)
             log.info("%s auto-started (%d routes), profile defaults applied",
                      _proto.upper(), len(_dmx_settings["universeRoutes"]))
+            # Boot blink: rainbow cycle then blackout (#389)
+            if _dmx_settings.get("bootBlinkFixtures", True) and not _boot_blink_done:
+                import threading as _thr
+                _thr.Thread(target=_run_boot_blink, args=(_engine,), daemon=True).start()
 
 @app.get("/api/dmx/interfaces")
 def api_dmx_interfaces():
@@ -4516,7 +4596,8 @@ def api_dmx_settings_get():
 def api_dmx_settings_save():
     body = request.get_json(silent=True) or {}
     for k in ("protocol", "frameRate", "bindIp", "universeRoutes",
-              "sacnPriority", "sacnSourceName"):
+              "sacnPriority", "sacnSourceName",
+              "autoStartEngine", "bootBlinkFixtures"):
         if k in body:
             _dmx_settings[k] = body[k]
     # Remove legacy field
