@@ -320,15 +320,15 @@ private fun StageCanvas(
         // But SPA Three.js Z points TOWARD viewer, and Y=0 is back wall (far from camera)
         // Our stage Y=0 is back wall. Camera must be at NEGATIVE Y to look at back wall from front.
         // Camera position in stage coordinates (mm)
-        // Audience seat: centered, slightly in front, eye height
+        // Behind stage, elevated, looking forward — floor at bottom, ceiling at top
         val defaultCamX = stageW / 2f       // center width
-        val defaultCamY = -stageD * 0.3f    // slightly in front of stage
-        val defaultCamZ = stageH * 0.5f     // mid-height eye level
+        val defaultCamY = stageD * 1.3f     // behind stage (past front edge)
+        val defaultCamZ = stageH * 0.6f     // slightly above mid-height
 
-        // Look at stage center, slightly above floor
+        // Look at center of stage
         val lookX = stageW / 2f
-        val lookY = stageD * 0.4f           // center-ish depth
-        val lookZ = stageH * 0.35f          // between floor and mid-height
+        val lookY = stageD * 0.4f           // toward back wall
+        val lookZ = stageH * 0.3f           // slightly above floor
 
         // Rotate default camera offset around look target by user orbit
         val dx0 = (defaultCamX - lookX) * zoomFactor
