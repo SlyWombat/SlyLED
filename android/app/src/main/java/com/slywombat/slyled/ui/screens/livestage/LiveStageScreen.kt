@@ -319,13 +319,16 @@ private fun StageCanvas(
         // So SPA camera in stage coords: X=sw*1.2, Y(depth)=sd*1.5, Z(height)=sh*1.0
         // But SPA Three.js Z points TOWARD viewer, and Y=0 is back wall (far from camera)
         // Our stage Y=0 is back wall. Camera must be at NEGATIVE Y to look at back wall from front.
-        val defaultCamX = stageW * 1.2f
-        val defaultCamY = -stageD * 0.5f   // in front of stage (audience side, negative Y)
-        val defaultCamZ = stageH * 1.0f
+        // Camera position in stage coordinates (mm)
+        // Audience seat: centered, slightly in front, eye height
+        val defaultCamX = stageW / 2f       // center width
+        val defaultCamY = -stageD * 0.3f    // slightly in front of stage
+        val defaultCamZ = stageH * 0.5f     // mid-height eye level
 
+        // Look at stage center, slightly above floor
         val lookX = stageW / 2f
-        val lookY = stageD / 2f     // look at center of stage
-        val lookZ = stageH / 4f
+        val lookY = stageD * 0.4f           // center-ish depth
+        val lookZ = stageH * 0.35f          // between floor and mid-height
 
         // Rotate default camera offset around look target by user orbit
         val dx0 = (defaultCamX - lookX) * zoomFactor
@@ -358,10 +361,11 @@ private fun StageCanvas(
 
         // World up = Z
         val upX = 0f; val upY = 0f; val upZ = 1f
-        // Right = forward × up
-        var rX = fwdY * upZ - fwdZ * upY
-        var rY = fwdZ * upX - fwdX * upZ
-        var rZ = fwdX * upY - fwdY * upX
+        // Right = forward × up, then NEGATE so X=0 (stage right) maps to screen LEFT
+        // (audience convention: stage right = audience left = screen left)
+        var rX = -(fwdY * upZ - fwdZ * upY)
+        var rY = -(fwdZ * upX - fwdX * upZ)
+        var rZ = -(fwdX * upY - fwdY * upX)
         val rLen = kotlin.math.sqrt(rX * rX + rY * rY + rZ * rZ)
         if (rLen > 0.001f) { rX /= rLen; rY /= rLen; rZ /= rLen }
 
@@ -449,8 +453,8 @@ private fun StageCanvas(
             val c10 = project(stageW, 0f, stageH)
             val c11 = project(stageW, stageD, stageH)
             val c01 = project(0f, stageD, stageH)
-            val wireColor = CyanSecondary.copy(alpha = 0.06f)
-            val wireStroke = Stroke(1f)
+            val wireColor = CyanSecondary.copy(alpha = 0.25f)
+            val wireStroke = Stroke(1.5f)
             // Ceiling quad
             if (c00 != null && c10 != null && c11 != null && c01 != null) {
                 val ceilPath = Path().apply {
@@ -465,7 +469,7 @@ private fun StageCanvas(
             for (i in 0..3) {
                 val fl = floors[i]; val cl = ceils[i]
                 if (fl != null && cl != null) {
-                    drawLine(wireColor, fl, cl, strokeWidth = 1f)
+                    drawLine(wireColor, fl, cl, strokeWidth = 1.5f)
                 }
             }
         }
