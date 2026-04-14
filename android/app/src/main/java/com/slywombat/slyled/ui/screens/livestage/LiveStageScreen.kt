@@ -252,10 +252,11 @@ private fun StageCanvas(
     val stageD = (stage.d * 1000).toFloat()
     val stageH = (stage.h * 1000).toFloat()
 
-    // 3D camera orbit: azimuth (horizontal rotation), elevation (vertical angle), distance
-    var azimuth by remember { mutableFloatStateOf(0.3f) }       // radians, 0 = front
-    var elevation by remember { mutableFloatStateOf(0.6f) }     // radians, 0 = level, PI/2 = top-down
-    var camDist by remember { mutableFloatStateOf(1.8f) }       // multiplier of stage diagonal
+    // 3D camera: orbit around stage center
+    // User can drag to orbit, pinch to zoom, double-tap to reset
+    var orbitAzimuth by remember { mutableFloatStateOf(0f) }   // user rotation delta
+    var orbitElevation by remember { mutableFloatStateOf(0f) } // user elevation delta
+    var zoomFactor by remember { mutableFloatStateOf(1f) }
     var panX by remember { mutableFloatStateOf(0f) }
     var panY by remember { mutableFloatStateOf(0f) }
 
@@ -264,13 +265,11 @@ private fun StageCanvas(
             .background(DeepSlate)
             .pointerInput(Unit) {
                 detectTransformGestures { _, pan, gestureZoom, _ ->
-                    // One-finger drag = orbit rotation, pinch = zoom
                     if (gestureZoom != 1f) {
-                        camDist = (camDist / gestureZoom).coerceIn(0.5f, 5f)
+                        zoomFactor = (zoomFactor / gestureZoom).coerceIn(0.3f, 4f)
                     }
-                    // Drag rotates the camera orbit
-                    azimuth += pan.x * 0.003f
-                    elevation = (elevation - pan.y * 0.003f).coerceIn(0.05f, 1.5f)
+                    orbitAzimuth += pan.x * 0.003f
+                    orbitElevation = (orbitElevation + pan.y * 0.003f).coerceIn(-0.8f, 0.8f)
                 }
             }
             .pointerInput(projectedPositions) {
@@ -291,10 +290,9 @@ private fun StageCanvas(
                         onFixtureSelected(bestId)
                     },
                     onDoubleTap = {
-                        // Reset to default 3D view
-                        azimuth = 0.3f
-                        elevation = 0.6f
-                        camDist = 1.8f
+                        orbitAzimuth = 0f
+                        orbitElevation = 0f
+                        zoomFactor = 1f
                         panX = 0f
                         panY = 0f
                     }
@@ -311,17 +309,45 @@ private fun StageCanvas(
         val cy = stageD / 2f
         val cz = stageH / 3f  // look slightly above floor
 
-        // Camera position on orbit sphere around stage center
-        // Default: camera in front of stage (positive Y), slightly right (positive X), elevated
-        // Matches SPA: camera.position.set(sw*1.2, sh*1.0, sd*1.5)
-        val diagMm = kotlin.math.sqrt(stageW * stageW + stageD * stageD + stageH * stageH)
-        val dist = diagMm * camDist
-        val camX = cx + dist * cos(elevation) * sin(azimuth)
-        val camY = cy + dist * cos(elevation) * cos(azimuth)
-        val camZ = cz + dist * sin(elevation)
+        // Default camera position — same formula as SPA:
+        //   SPA: camera.position.set(sw*1.2, sh*1.0, sd*1.5)
+        //   SPA target: (sw/2, sh/4, sd/2)
+        //   SPA coords: Three.js X=stageX, Y=stageZ(height), Z=stageY(depth)
+        //   Stage coords: cam at X=stageW*1.2, Z=stageH*1.0, Y=stageD*1.5
+        val defaultCamX = stageW * 1.2f
+        val defaultCamY = stageD * 1.5f
+        val defaultCamZ = stageH * 1.0f
+
+        // Apply user orbit rotation around the look target
+        val lookX = stageW / 2f
+        val lookY = stageD / 2f
+        val lookZ = stageH / 4f
+
+        // Rotate default camera offset around look target by user orbit
+        val dx0 = (defaultCamX - lookX) * zoomFactor
+        val dy0 = (defaultCamY - lookY) * zoomFactor
+        val dz0 = (defaultCamZ - lookZ) * zoomFactor
+
+        // Apply azimuth rotation (around Z axis)
+        val cosA = cos(orbitAzimuth); val sinA = sin(orbitAzimuth)
+        val dx1 = dx0 * cosA - dy0 * sinA
+        val dy1 = dx0 * sinA + dy0 * cosA
+
+        // Apply elevation rotation (tilt up/down)
+        val horizDist = kotlin.math.sqrt(dx1 * dx1 + dy1 * dy1)
+        val currentElev = kotlin.math.atan2(dz0, horizDist) + orbitElevation
+        val totalDist = kotlin.math.sqrt(dx1 * dx1 + dy1 * dy1 + dz0 * dz0)
+        val dz1 = totalDist * sin(currentElev)
+        val horizScale = cos(currentElev) / (if (horizDist > 0.001f) horizDist / kotlin.math.sqrt(dx1 * dx1 + dy1 * dy1) else 1f)
+        val dx2 = dx1 * cos(currentElev) * totalDist / horizDist.coerceAtLeast(1f)
+        val dy2 = dy1 * cos(currentElev) * totalDist / horizDist.coerceAtLeast(1f)
+
+        val camX = lookX + dx2
+        val camY = lookY + dy2
+        val camZ = lookZ + dz1
 
         // Forward, right, up vectors for view matrix
-        var fwdX = cx - camX; var fwdY = cy - camY; var fwdZ = cz - camZ
+        var fwdX = lookX - camX; var fwdY = lookY - camY; var fwdZ = lookZ - camZ
         val fwdLen = kotlin.math.sqrt(fwdX * fwdX + fwdY * fwdY + fwdZ * fwdZ)
         if (fwdLen < 0.001f) return@Canvas
         fwdX /= fwdLen; fwdY /= fwdLen; fwdZ /= fwdLen
