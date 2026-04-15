@@ -1432,7 +1432,9 @@ def run():
         spa = r.data.decode('utf-8', errors='replace')
         # Also fetch external JS — SPA content tests need HTML + all JS modules
         for jsfile in ['app.js', 'dashboard.js', 'setup-ui.js', 'objects-effects.js',
-                       'timelines.js', 'actions.js', 'wizard.js', 'file-manager.js']:
+                       'timelines.js', 'actions.js', 'wizard.js', 'file-manager.js',
+                       'scene-3d.js', 'fixtures.js', 'profiles.js', 'emulation.js',
+                       'calibration.js']:
             rjs = c.get(f'/js/{jsfile}')
             ok(f'GET /js/{jsfile}', rjs.status_code == 200)
             spa += rjs.data.decode('utf-8', errors='replace')
