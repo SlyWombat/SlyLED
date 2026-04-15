@@ -1430,10 +1430,12 @@ def run():
         r = c.get('/')
         ok('GET / (SPA)', r.status_code == 200)
         spa = r.data.decode('utf-8', errors='replace')
-        # Also fetch external JS — SPA content tests need both HTML + JS
-        rjs = c.get('/js/app.js')
-        ok('GET /js/app.js', rjs.status_code == 200)
-        spa += rjs.data.decode('utf-8', errors='replace')
+        # Also fetch external JS — SPA content tests need HTML + all JS modules
+        for jsfile in ['app.js', 'dashboard.js', 'setup-ui.js', 'objects-effects.js',
+                       'timelines.js', 'actions.js', 'wizard.js', 'file-manager.js']:
+            rjs = c.get(f'/js/{jsfile}')
+            ok(f'GET /js/{jsfile}', rjs.status_code == 200)
+            spa += rjs.data.decode('utf-8', errors='replace')
         ok('SPA has layout quick-view recenter', 'layViewReset' in spa)
         ok('SPA has layout quick-view top', 'layViewTop' in spa)
         ok('SPA has layout quick-view front', 'layViewFront' in spa)
