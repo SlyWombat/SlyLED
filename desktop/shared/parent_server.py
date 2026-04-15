@@ -81,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.1"
+VERSION = "1.5.2"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -3299,7 +3299,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.1" from camera_server.py source text."""
+    """Extract VERSION = "1.5.2" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -5898,35 +5898,59 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
             aim[0] = max(0, min(sw, aim[0]))
             aim[1] = max(0, min(sd, aim[1]))
             aim[2] = max(0, min(sh, aim[2]))
-            # Compute pan/tilt — try mover cal affine first, then range cal, then geometric
+            # Compute pan/tilt — hybrid affine + geometric blend (#437)
             pan = tilt = None
+            inverted = head_info.get("mounted_inverted", False)
             # 1. Mover calibration affine (manual calibration with stage samples)
             mcal_data = _mover_cal.get(str(fid))
             if mcal_data and mcal_data.get("samples") and len(mcal_data["samples"]) >= 2:
                 pt_affine = _mcal.affine_pan_tilt(mcal_data["samples"], aim[0], aim[1], aim[2])
                 if pt_affine:
-                    # Clamp to calibrated range + 10% margin.
-                    # Affine is only accurate near calibration samples.
-                    # For targets far outside, result is clamped to nearest
-                    # calibrated edge — not perfect but stable.
                     samps = mcal_data["samples"]
-                    pan_vals = [s["pan"] for s in samps]
-                    tilt_vals = [s["tilt"] for s in samps]
-                    pan_lo, pan_hi = min(pan_vals), max(pan_vals)
-                    tilt_lo, tilt_hi = min(tilt_vals), max(tilt_vals)
-                    margin_p = (pan_hi - pan_lo) * 0.1
-                    margin_t = (tilt_hi - tilt_lo) * 0.1
-                    pan = max(pan_lo - margin_p, min(pan_hi + margin_p, pt_affine[0]))
-                    tilt = max(tilt_lo - margin_t, min(tilt_hi + margin_t, pt_affine[1]))
+                    # Compute distance from aim to nearest calibration sample
+                    min_dist = min(
+                        math.sqrt((aim[0] - s.get("stageX", 0))**2 +
+                                  (aim[1] - s.get("stageY", 0))**2 +
+                                  (aim[2] - s.get("stageZ", 0))**2)
+                        for s in samps
+                    )
+                    # Bounding box of calibration samples
+                    sx = [s.get("stageX", 0) for s in samps]
+                    sy = [s.get("stageY", 0) for s in samps]
+                    bbox_diag = math.sqrt((max(sx) - min(sx))**2 + (max(sy) - min(sy))**2) or 1000
+                    # Blend: within bbox → pure affine; beyond bbox → blend to geometric
+                    # fade_dist = distance beyond bbox at which geometric fully takes over
+                    fade_dist = bbox_diag * 0.5
+                    # How far outside the bbox is the aim point?
+                    outside_x = max(0, min(sx) - aim[0], aim[0] - max(sx))
+                    outside_y = max(0, min(sy) - aim[1], aim[1] - max(sy))
+                    outside_dist = math.sqrt(outside_x**2 + outside_y**2)
+                    if outside_dist <= 0:
+                        # Inside calibrated region — pure affine
+                        pan, tilt = max(0.0, min(1.0, pt_affine[0])), max(0.0, min(1.0, pt_affine[1]))
+                    else:
+                        # Outside — blend affine → geometric
+                        blend = min(1.0, outside_dist / fade_dist)  # 0=affine, 1=geometric
+                        pt_geo = compute_pan_tilt(fx_pos, aim, head_info["pan_range"],
+                                                  head_info["tilt_range"], mounted_inverted=inverted)
+                        if pt_geo:
+                            aff_p = max(0.0, min(1.0, pt_affine[0]))
+                            aff_t = max(0.0, min(1.0, pt_affine[1]))
+                            pan = aff_p + blend * (pt_geo[0] - aff_p)
+                            tilt = aff_t + blend * (pt_geo[1] - aff_t)
+                        else:
+                            # Geometric failed — use clamped affine as last resort
+                            pan = max(0.0, min(1.0, pt_affine[0]))
+                            tilt = max(0.0, min(1.0, pt_affine[1]))
             # 2. Range calibration (automated axis mapping)
             if pan is None:
                 pt_cal = compute_pan_tilt_calibrated(fid, aim)
                 if pt_cal:
                     pan, tilt = pt_cal
-            # 3. Geometric fallback
+            # 3. Geometric fallback (no calibration data at all)
             if pan is None:
                 pt = compute_pan_tilt(fx_pos, aim, head_info["pan_range"], head_info["tilt_range"],
-                                      mounted_inverted=head_info.get("mounted_inverted", False))
+                                      mounted_inverted=inverted)
                 if pt is None:
                     continue
                 pan, tilt = pt
