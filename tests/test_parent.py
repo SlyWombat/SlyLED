@@ -1430,6 +1430,10 @@ def run():
         r = c.get('/')
         ok('GET / (SPA)', r.status_code == 200)
         spa = r.data.decode('utf-8', errors='replace')
+        # Also fetch external JS — SPA content tests need both HTML + JS
+        rjs = c.get('/js/app.js')
+        ok('GET /js/app.js', rjs.status_code == 200)
+        spa += rjs.data.decode('utf-8', errors='replace')
         ok('SPA has layout quick-view recenter', 'layViewReset' in spa)
         ok('SPA has layout quick-view top', 'layViewTop' in spa)
         ok('SPA has layout quick-view front', 'layViewFront' in spa)

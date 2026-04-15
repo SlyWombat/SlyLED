@@ -8218,6 +8218,18 @@ def spa_lib(filename):
     """Serve bundled JS libraries (Three.js etc.) — no internet required (#269)."""
     return send_from_directory(str(SPA / "lib"), filename)
 
+@app.route("/js/<path:filename>")
+def spa_js(filename):
+    """Serve SPA JavaScript modules."""
+    resp = send_from_directory(str(SPA / "js"), filename)
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
+@app.route("/css/<path:filename>")
+def spa_css(filename):
+    """Serve SPA stylesheets."""
+    return send_from_directory(str(SPA / "css"), filename)
+
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def spa_fallback(path):
