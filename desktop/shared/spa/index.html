@@ -234,12 +234,21 @@ body.light .li:hover{border-color:#3b82f6}
         <div class='ali' onclick='autoArrangeDmx();_toggleAlignMenu()'>Auto-Arrange DMX</div>
       </div>
     </div>
+    <!-- Zone 3b: Scene dropdown -->
+    <div style='position:relative;display:inline-block'>
+      <button class='btn' id='btn-scene-menu' onclick='_toggleSceneMenu()' title='Scene tools' style='height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;gap:3px'>
+        <svg width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z'/><path d='m3.3 7 8.7 5 8.7-5'/><path d='M12 22V12'/></svg>Scene <span style='font-size:8px'>&#x25BC;</span>
+      </button>
+      <div id='scene-dropdown' style='display:none;position:absolute;top:32px;left:0;background:#1a1a24;border:1px solid #2a2a3a;border-radius:6px;padding:4px 0;min-width:190px;z-index:100;box-shadow:0 6px 20px rgba(0,0,0,.5)'>
+        <div class='ali' onclick='_togglePointCloud();_toggleSceneMenu()'>Toggle Point Cloud</div>
+        <div class='ali' onclick='_envScan();_toggleSceneMenu()'>Scan Environment</div>
+        <div class='ali' onclick='_layScan();_toggleSceneMenu()'>Detect Objects (Camera)</div>
+      </div>
+    </div>
     <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
     <!-- Zone 4: Actions -->
     <button class='btn' onclick='_layUndo()' title='Undo last move/rotate (Ctrl+Z)' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='.7'><path d='M3 7v6h6'/><path d='M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13'/></svg></button>
     <button class='btn' id='btn-lay-delete' onclick='_layDeleteSelected()' title='Delete selected fixture from stage (Del)' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center'><svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='.7'><path d='M3 6h18'/><path d='M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6'/><path d='M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2'/><line x1='10' y1='11' x2='10' y2='17'/><line x1='14' y1='11' x2='14' y2='17'/></svg></button>
-    <button class='btn' id='btn-lay-scan' onclick='_layScan()' title='Scan for objects (camera)' style='width:30px;height:30px;padding:0;display:none;align-items:center;justify-content:center;background:#4c1d95;color:#c4b5fd'><svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 7V5a2 2 0 0 1 2-2h2'/><path d='M17 3h2a2 2 0 0 1 2 2v2'/><path d='M21 17v2a2 2 0 0 1-2 2h-2'/><path d='M7 21H5a2 2 0 0 1-2-2v-2'/></svg></button>
-    <button class='btn' id='btn-env-scan' onclick='_envScan()' title='Scan environment (3D point cloud)' style='width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;background:#1e3a5f;color:#93c5fd'><svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z'/><path d='m3.3 7 8.7 5 8.7-5'/><path d='M12 22V12'/></svg></button>
     <!-- Save button (right-aligned, green) -->
     <span style='flex:1'></span>
     <button class='btn' id='btn-lay-save' onclick='saveLayout(this)' title='Save layout' style='height:30px;padding:0 12px;display:flex;align-items:center;justify-content:center;gap:4px;background:#16a34a;color:#fff;font-size:10px;font-weight:bold'><svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z'/><path d='M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7'/><path d='M7 3v4a1 1 0 0 0 1 1h7'/></svg><span>Save</span><span id='lay-dirty-dot' style='display:none;color:#fbbf24'>*</span></button>
@@ -249,12 +258,12 @@ body.light .li:hover{border-color:#3b82f6}
     <!-- 3D Viewport (flex:1 fills available width) -->
     <div style='flex:1;min-width:0'>
       <div id='lay-3d-wrap' style='position:relative'>
-        <div id='stage3d' style='width:100%;height:500px;border:1px solid #444;background:#080810'></div>
+        <div id='stage3d' style='width:100%;height:min(500px, calc(100vh - 220px));border:1px solid #444;background:#080810'></div>
         <div id='s3d-info' style='position:absolute;top:8px;left:8px;color:#64748b;font-size:.72em;pointer-events:none'></div>
       </div>
     </div>
     <!-- Collapsible Side Panel (260px) -->
-    <div id='lay-panel' style='width:260px;flex-shrink:0;border-left:1px solid #1e293b;background:#0c1322;overflow-y:auto;max-height:500px;font-size:.82em'>
+    <div id='lay-panel' style='width:260px;flex-shrink:0;border-left:1px solid #1e293b;background:#0c1322;overflow-y:auto;max-height:min(500px, calc(100vh - 220px));font-size:.82em'>
       <!-- Selected fixture header -->
       <div id='panel-header' style='padding:.6em .8em;border-bottom:1px solid #1e293b;display:none'>
         <div style='display:flex;align-items:center;gap:.4em'>
@@ -286,7 +295,7 @@ body.light .li:hover{border-color:#3b82f6}
         </div>
       </div>
       <!-- Objects list (collapsible) -->
-      <div style='border-bottom:1px solid #1e293b'>
+      <div>
         <div id='panel-objects-hdr' onclick='_panelToggle("objects")' style='padding:.5em .8em;cursor:pointer;display:flex;align-items:center;gap:.4em;user-select:none'>
           <span id='panel-objects-arrow' style='font-size:.7em;color:#64748b;transition:transform .15s'>&#9654;</span>
           <span style='font-weight:600;color:#aaa;flex:1;font-size:.85em'>Objects</span>
@@ -295,17 +304,6 @@ body.light .li:hover{border-color:#3b82f6}
         </div>
         <div id='panel-objects-body' style='display:none;padding:0 .8em .5em'>
           <div id='lay-objects' style='color:#94a3b8'></div>
-        </div>
-      </div>
-      <!-- Scene section (collapsible) — point cloud + env scan -->
-      <div>
-        <div onclick='_panelToggle("scene")' style='padding:.5em .8em;cursor:pointer;display:flex;align-items:center;gap:.4em;user-select:none'>
-          <span id='panel-scene-arrow' style='font-size:.7em;color:#64748b;transition:transform .15s'>&#9654;</span>
-          <span style='font-weight:600;color:#aaa;flex:1;font-size:.85em'>Scene</span>
-        </div>
-        <div id='panel-scene-body' style='display:none;padding:0 .8em .5em'>
-          <button class='btn' onclick='_togglePointCloud()' style='font-size:.78em;margin-bottom:.3em;width:100%'>Toggle Point Cloud</button>
-          <button class='btn' onclick='_envScan()' style='font-size:.78em;background:#1e3a5f;color:#93c5fd;width:100%'>Scan Environment</button>
         </div>
       </div>
     </div>
@@ -421,17 +419,17 @@ body.light .li:hover{border-color:#3b82f6}
       <label>Orchestrator Name</label><input id='s-nm' maxlength='15' style='width:200px' data-tip='setName'>
       <label>Units</label>
       <select id='s-un' data-tip='setUnits' onchange='_stageUnitsChange()'>
-        <option value='0'>Metric (cm)</option>
+        <option value='0'>Metric (mm)</option>
         <option value='1'>Imperial (ft / in)</option>
       </select>
       <div id='s-stage-metric'>
-        <label>Stage Dimensions (cm)</label>
+        <label>Stage Dimensions (mm)</label>
         <div style='display:flex;gap:.5em;align-items:center'>
-          <div><span style='font-size:.7em;color:#64748b'>W</span><input id='s-sw' type='number' min='10' max='10000' style='width:80px' value='300'></div>
+          <div><span style='font-size:.7em;color:#64748b'>W</span><input id='s-sw' type='number' min='100' max='100000' style='width:80px' value='3000'></div>
           <span style='color:#444'>&times;</span>
-          <div><span style='font-size:.7em;color:#64748b'>H</span><input id='s-sh' type='number' min='10' max='10000' style='width:80px' value='200'></div>
+          <div><span style='font-size:.7em;color:#64748b'>H</span><input id='s-sh' type='number' min='100' max='100000' style='width:80px' value='2000'></div>
           <span style='color:#444'>&times;</span>
-          <div><span style='font-size:.7em;color:#64748b'>D</span><input id='s-sd' type='number' min='10' max='10000' style='width:80px' value='150'></div>
+          <div><span style='font-size:.7em;color:#64748b'>D</span><input id='s-sd' type='number' min='100' max='100000' style='width:80px' value='1500'></div>
         </div>
       </div>
       <div id='s-stage-imperial' style='display:none'>
@@ -521,6 +519,7 @@ body.light .li:hover{border-color:#3b82f6}
       <button class='btn btn-on' onclick='saveDmxSettings()'>Save DMX Settings</button>
       <button class='btn btn-on' onclick='dmxEngineStart()'>Start</button>
       <button class='btn btn-off' onclick='dmxEngineStop()'>Stop</button>
+      <button class='btn' onclick='dmxBlink()' title='Rainbow cycle all DMX fixtures to verify connectivity' style='background:#4c1d95;color:#c4b5fd'>Blink</button>
     </div>
     <div id='dmx-status' style='font-size:.78em;color:#64748b;margin-top:.5em'></div>
     <div style='margin-top:.8em'>
@@ -800,7 +799,7 @@ function _rotToAim(rot,pos,dist){
   return[pos[0]+Math.sin(pr)*Math.cos(tr)*dist,pos[1]+Math.cos(pr)*Math.cos(tr)*dist,pos[2]-Math.sin(tr)*dist];
 }
 var _layoutDirty=false;
-var _panelSections={fixtures:true,objects:false,scene:false}; // collapse state (#354: fixtures expanded by default)
+var _panelSections={fixtures:true,objects:false}; // collapse state (#354: fixtures expanded by default)
 var _panelSelectedFid=null; // currently selected fixture ID for side panel
 function _clearTabTimers(){
   if(typeof dashRunnerTimer!=='undefined'&&dashRunnerTimer){clearInterval(dashRunnerTimer);dashRunnerTimer=null;}
@@ -1112,6 +1111,10 @@ function refreshLiveGrid(){
 
 function refreshRunnerStatus(){
   refreshLiveGrid();
+  // Refresh objects so patrol/tracking targets update in 3D view
+  ra('GET','/api/objects',null,function(objs){
+    if(objs){_objects=objs;if(_s3d.inited)_s3dRenderObjects();}
+  });
   api('GET','/api/settings').then(function(s){
     var el=document.getElementById('dash-runner');if(!el)return;
     if(!s||!s.runnerRunning){
@@ -1425,7 +1428,11 @@ function _renderSetup(){
           var stCell=document.getElementById('cam-hw-st-'+key);
           var fwCell=document.getElementById('cam-hw-fw-'+key);
           var nameCell=document.getElementById('cam-hw-name-'+key);
-          if(stCell)stCell.innerHTML=c.online?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
+          if(stCell){
+            var stHtml=c.online?'<span class="badge bon">Online</span>':'<span class="badge boff">Offline</span>';
+            if(c.online&&c.rssi){var rc=Math.abs(c.rssi)<=50?'#4c4':Math.abs(c.rssi)<=70?'#fa6':'#f66';stHtml+=' <span style="color:'+rc+';font-size:.75em" title="'+c.rssi+' dBm">'+_rssiIcon(c.rssi)+'</span>';}
+            stCell.innerHTML=stHtml;
+          }
           if(fwCell){
             var fw=c.fwVersion||'—';
             fwCell.innerHTML=escapeHtml(fw);
@@ -4253,7 +4260,7 @@ function newObject(){
   h+='</select>';
   h+='<label>Name</label><input id="sf-name" value="" style="width:100%">';
   h+='<label>Color</label><input id="sf-color" type="color" value="#334155">';
-  h+='<div style="margin:.5em 0"><label style="cursor:pointer"><input type="checkbox" id="sf-lock" onchange="objLockChange()" checked> Lock to stage dimensions</label></div>';
+  h+='<div id="sf-lock-wrap" style="margin:.5em 0"><label style="cursor:pointer" title="Auto-size to match stage width/height — disables manual position and dimension editing"><input type="checkbox" id="sf-lock" onchange="objLockChange()" checked> Lock to stage dimensions</label></div>';
   h+='<div id="sf-dims">';
   h+='<label>Position X (mm)</label><input id="sf-x" type="number" value="0" style="width:100px">';
   h+=' <label style="display:inline;margin-left:.5em">Y (mm)</label><input id="sf-y" type="number" value="0" style="width:100px">';
@@ -4291,7 +4298,9 @@ function objTypeChange(){
   var sm=_sfStageMm();
   var lockable=(t==='wall'||t==='floor');
   var lk=document.getElementById('sf-lock');
-  if(lk){lk.checked=lockable;lk.disabled=!lockable;}
+  var lkWrap=document.getElementById('sf-lock-wrap');
+  if(lkWrap)lkWrap.style.display=lockable?'block':'none';
+  if(lk){lk.checked=lockable;lk.disabled=false;}
   var presets={
     wall:  {name:'Back Wall',   color:'#334155',w:sm.sw,h:sm.sh,d:100,op:25},
     floor: {name:'Stage Floor', color:'#1a2744',w:sm.sw,h:sm.sd+1000,d:100,op:20},
@@ -5338,10 +5347,16 @@ function _toggleAlignMenu(){
   var d=document.getElementById('align-dropdown');
   if(d)d.style.display=d.style.display==='none'?'block':'none';
 }
-// Close dropdown when clicking elsewhere
+function _toggleSceneMenu(){
+  var d=document.getElementById('scene-dropdown');
+  if(d)d.style.display=d.style.display==='none'?'block':'none';
+}
+// Close dropdowns when clicking elsewhere
 document.addEventListener('click',function(e){
   var d=document.getElementById('align-dropdown');
   if(d&&d.style.display==='block'&&!e.target.closest('#btn-align-menu')&&!e.target.closest('#align-dropdown'))d.style.display='none';
+  var s=document.getElementById('scene-dropdown');
+  if(s&&s.style.display==='block'&&!e.target.closest('#btn-scene-menu')&&!e.target.closest('#scene-dropdown'))s.style.display='none';
 });
 
 function layAlign(axis,mode){
@@ -8650,15 +8665,16 @@ function _showActModal(a){
   h+='</div>';
   // Track: follow moving objects
   h+='<div id="ae-track"'+(t===18?'':' style="display:none"')+'>';
-  h+='<label>Target Objects</label><p style="color:#64748b;font-size:.78em;margin:0 0 .3em">Leave empty to auto-track all detected people and moving objects.</p>';
+  h+='<label>Target Objects</label><p style="color:#64748b;font-size:.78em;margin:0 0 .3em">Select objects to track. Leave empty to auto-track all moving objects.</p>';
   h+='<div id="ae-track-objs" style="max-height:140px;overflow-y:auto;border:1px solid #333;border-radius:4px;padding:.3em;background:#1a1a1a">';
   var trackIds=a&&a.trackObjectIds?a.trackObjectIds:[];
-  (_objects||[]).filter(function(o){return o.mobility==='moving';}).forEach(function(o){
+  (_objects||[]).forEach(function(o){
     var chk=trackIds.indexOf(o.id)>=0?' checked':'';
-    h+='<label style="display:block;cursor:pointer;padding:.15em 0"><input type="checkbox" class="ae-track-cb" value="'+o.id+'"'+chk+'> '+escapeHtml(o.name)+'</label>';
+    var badge=o.mobility==='moving'?'<span style="color:#38bdf8;font-size:.7em"> (moving)</span>':'';
+    h+='<label style="display:block;cursor:pointer;padding:.15em 0"><input type="checkbox" class="ae-track-cb" value="'+o.id+'"'+chk+'> '+escapeHtml(o.name)+badge+'</label>';
   });
   h+='<div id="ae-track-temporal"></div>';
-  if(!(_objects||[]).filter(function(o){return o.mobility==='moving';}).length)h+='<p id="ae-track-empty" style="color:#555;font-size:.8em">No moving objects. Camera-tracked people appear live below.</p>';
+  if(!(_objects||[]).length)h+='<p id="ae-track-empty" style="color:#555;font-size:.8em">No objects defined. Add objects on the Layout tab, or camera-tracked people appear live below.</p>';
   h+='</div>';
   h+='<label>Cycle Time (ms)</label><input type="number" id="ae-trk-cycle" value="'+(a?a.trackCycleMs||2000:2000)+'" min="100" max="60000" style="width:100px">';
   var tOff=a&&a.trackOffset?a.trackOffset:[0,0,0];
@@ -8683,8 +8699,25 @@ function _showActModal(a){
   document.getElementById('modal').style.display='block';
   _aePerfIds=selIds.slice();
   if(sc==='performer-selected')_loadPerfPicker();
-  // Fetch live temporal objects for Track action target list
-  if(t===18)_aeLoadTemporalObjects(trackIds);
+  // Refresh objects + fetch temporals for Track action target list
+  if(t===18){
+    loadObjects(function(){
+      // Re-render the target checkboxes with fresh _objects
+      var el=document.getElementById('ae-track-objs');
+      if(el){
+        var h2='';
+        (_objects||[]).forEach(function(o){
+          var chk=trackIds.indexOf(o.id)>=0?' checked':'';
+          var badge=o.mobility==='moving'?'<span style="color:#38bdf8;font-size:.7em"> (moving)</span>':'';
+          h2+='<label style="display:block;cursor:pointer;padding:.15em 0"><input type="checkbox" class="ae-track-cb" value="'+o.id+'"'+chk+'> '+escapeHtml(o.name)+badge+'</label>';
+        });
+        if(!(_objects||[]).length)h2+='<p style="color:#555;font-size:.8em">No objects defined.</p>';
+        h2+='<div id="ae-track-temporal"></div>';
+        el.innerHTML=h2;
+      }
+      _aeLoadTemporalObjects(trackIds);
+    });
+  }
   // Detect WLED devices and populate overrides
   ra('GET','/api/children',null,function(children){
     var wc=null;
@@ -8941,16 +8974,14 @@ function _rtRenderPlaylist(d){
   h+='<button class="btn" onclick="_rtAddTimeline()" style="font-size:.72em;background:#14532d;color:#86efac;padding:.2em .5em">Add</button>';
   h+='</div>';
   el.innerHTML=h;
-  // Populate add-timeline dropdown with timelines not already in playlist
+  // Populate add-timeline dropdown with all timelines (duplicates allowed for repeats)
   ra('GET','/api/timelines',null,function(tls){
     var sel=document.getElementById('rt-add-tl');if(!sel)return;
     (tls||[]).forEach(function(t){
-      if(playlistIds.indexOf(t.id)===-1){
-        var o=document.createElement('option');o.value=t.id;
-        o.textContent=t.name+' ('+t.durationS+'s)';sel.appendChild(o);
-      }
+      var o=document.createElement('option');o.value=t.id;
+      o.textContent=t.name+' ('+t.durationS+'s)';sel.appendChild(o);
     });
-    if(sel.options.length<=1)sel.options[0].textContent='All timelines added';
+    if(sel.options.length<=1)sel.options[0].textContent='No timelines available';
   });
   if(totalEl)totalEl.textContent='Total: '+_fmtDur(d.totalDurationS||0);
 }
@@ -9981,39 +10012,39 @@ function _stageUnitsChange(){
   document.getElementById('s-stage-metric').style.display=imp?'none':'';
   document.getElementById('s-stage-imperial').style.display=imp?'':'none';
   if(imp){
-    // Convert metric cm to imperial ft/in
-    var w=parseFloat(document.getElementById('s-sw').value)||300;
-    var h=parseFloat(document.getElementById('s-sh').value)||200;
-    var d=parseFloat(document.getElementById('s-sd').value)||150;
-    _cmToFtIn(w,'s-sw');_cmToFtIn(h,'s-sh');_cmToFtIn(d,'s-sd');
+    // Convert metric mm to imperial ft/in
+    var w=parseFloat(document.getElementById('s-sw').value)||3000;
+    var h=parseFloat(document.getElementById('s-sh').value)||2000;
+    var d=parseFloat(document.getElementById('s-sd').value)||1500;
+    _mmToFtIn(w,'s-sw');_mmToFtIn(h,'s-sh');_mmToFtIn(d,'s-sd');
   }else{
-    // Convert imperial to metric cm
-    var w=_ftInToCm('s-sw');var h=_ftInToCm('s-sh');var d=_ftInToCm('s-sd');
+    // Convert imperial to metric mm
+    var w=_ftInToMm('s-sw');var h=_ftInToMm('s-sh');var d=_ftInToMm('s-sd');
     document.getElementById('s-sw').value=Math.round(w);
     document.getElementById('s-sh').value=Math.round(h);
     document.getElementById('s-sd').value=Math.round(d);
   }
 }
-function _cmToFtIn(cm,prefix){
-  var totalIn=cm/2.54;
+function _mmToFtIn(mm,prefix){
+  var totalIn=mm/25.4;
   var ft=Math.floor(totalIn/12);
   var inn=Math.round(totalIn%12);
   document.getElementById(prefix+'-ft').value=ft;
   document.getElementById(prefix+'-in').value=inn;
 }
-function _ftInToCm(prefix){
+function _ftInToMm(prefix){
   var ft=parseInt(document.getElementById(prefix+'-ft').value)||0;
   var inn=parseInt(document.getElementById(prefix+'-in').value)||0;
-  return (ft*12+inn)*2.54;
+  return (ft*12+inn)*25.4;
 }
-function _getStageCm(){
+function _getStageMm(){
   var imp=parseInt(document.getElementById('s-un').value)===1;
   if(imp){
-    return{w:_ftInToCm('s-sw'),h:_ftInToCm('s-sh'),d:_ftInToCm('s-sd')};
+    return{w:_ftInToMm('s-sw'),h:_ftInToMm('s-sh'),d:_ftInToMm('s-sd')};
   }
-  return{w:parseFloat(document.getElementById('s-sw').value)||300,
-         h:parseFloat(document.getElementById('s-sh').value)||200,
-         d:parseFloat(document.getElementById('s-sd').value)||150};
+  return{w:parseFloat(document.getElementById('s-sw').value)||3000,
+         h:parseFloat(document.getElementById('s-sh').value)||2000,
+         d:parseFloat(document.getElementById('s-sd').value)||1500};
 }
 function loadSettings(){
   ra('GET','/api/settings',null,function(d){
@@ -10027,18 +10058,21 @@ function loadSettings(){
     if(lpi&&d.logPath)lpi.value=d.logPath;
     _refreshLogStatus();
   });
-  // Load stage dimensions (meters → cm for display)
+  // Load stage dimensions (meters → mm for display)
   ra('GET','/api/stage',null,function(st){
     if(!st)return;
-    var wCm=Math.round((st.w||3)*100);
-    var hCm=Math.round((st.h||2)*100);
-    var dCm=Math.round((st.d||1.5)*100);
-    document.getElementById('s-sw').value=wCm;
-    document.getElementById('s-sh').value=hCm;
-    document.getElementById('s-sd').value=dCm;
-    // Also populate imperial fields
-    _cmToFtIn(wCm,'s-sw');_cmToFtIn(hCm,'s-sh');_cmToFtIn(dCm,'s-sd');
-    _stageUnitsChange(); // show correct panel
+    var wMm=Math.round((st.w||3)*1000);
+    var hMm=Math.round((st.h||2)*1000);
+    var dMm=Math.round((st.d||1.5)*1000);
+    document.getElementById('s-sw').value=wMm;
+    document.getElementById('s-sh').value=hMm;
+    document.getElementById('s-sd').value=dMm;
+    // Also populate imperial fields (rounded — display only)
+    _mmToFtIn(wMm,'s-sw');_mmToFtIn(hMm,'s-sh');_mmToFtIn(dMm,'s-sd');
+    // Show correct panel without converting (avoids imperial round-trip clobbering mm values)
+    var imp=parseInt(document.getElementById('s-un').value)===1;
+    document.getElementById('s-stage-metric').style.display=imp?'none':'';
+    document.getElementById('s-stage-imperial').style.display=imp?'':'none';
   });
   loadPatchView();
 }
@@ -10141,22 +10175,22 @@ function saveSettings(btn){
   var dm=document.getElementById('s-dm').checked?1:0;
   applyDarkMode(dm);
   var logPath=document.getElementById('s-log-path-input').value.trim();
-  // Save stage dimensions (cm → meters for server)
-  var stg=_getStageCm();
-  var stageM={w:stg.w/100, h:stg.h/100, d:stg.d/100};
+  // Save stage dimensions (mm → meters for server)
+  var stg=_getStageMm();
+  var stageM={w:stg.w/1000, h:stg.h/1000, d:stg.d/1000};
   ra('POST','/api/stage',stageM,function(){});
   ra('POST','/api/settings',{
     name:document.getElementById('s-nm').value.trim(),
     units:parseInt(document.getElementById('s-un').value)||0,
-    canvasW:Math.round(stg.w*10),  // cm → mm
-    canvasH:Math.round(stg.h*10),  // cm → mm
+    canvasW:stg.w,
+    canvasH:stg.h,
     darkMode:dm,
     logPath:logPath||'',
     autoStartShow:document.getElementById('s-auto-show').checked
   },function(r){
     _btnSaved(btn,r&&r.ok);
     // Refresh layout canvas with new dimensions
-    if(r&&r.ok){phW=Math.round(stg.w*10);phH=Math.round(stg.h*10);}
+    if(r&&r.ok){phW=stg.w;phH=stg.h;}
   });
 }
 
@@ -10307,6 +10341,12 @@ function dmxEngineStart(){
 function dmxEngineStop(){
   ra('POST','/api/dmx/stop',{},function(r){
     document.getElementById('dmx-status').textContent=r&&r.ok?'Engine: stopped':'Stop failed';
+  });
+}
+
+function dmxBlink(){
+  ra('POST','/api/dmx/blink',{},function(r){
+    document.getElementById('dmx-status').textContent=r&&r.ok?'Blinking...':'Blink failed — '+(r&&r.err||'engine not running');
   });
 }
 

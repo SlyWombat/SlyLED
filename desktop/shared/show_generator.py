@@ -153,15 +153,28 @@ THEMES = {
     },
     "figure-eight": {
         "name": "Figure Eight",
-        "desc": "Crossing orbs — moving heads trace paths",
-        "durationS": 24,
-        "palette": [[0, 220, 255], [255, 200, 50]],
+        "desc": "Virtual target traces a figure-8 on stage — all moving heads follow",
+        "durationS": 60,
+        "palette": [[255, 240, 200], [255, 200, 50]],
         "base_action": {"type": 1, "r": 5, "g": 10, "b": 20},
         "sweep_dir": "cross",
         "sweep_shape": "sphere",
         "sweep_speed": 6,
         "energy": 0.6,
         "accent_colors": [[0, 220, 255], [255, 200, 50]],
+        "live_track": True,
+        "patrol_objects": [{
+            "name": "Figure-8 Target",
+            "objectType": "figure8-target",
+            "color": "#00DCFF",
+            "patrol": {
+                "enabled": True,
+                "pattern": "figure8",
+                "speedPreset": "medium",
+                "startPct": 15,
+                "endPct": 85,
+            },
+        }],
     },
     "thunderstorm": {
         "name": "Thunderstorm",
@@ -174,6 +187,7 @@ THEMES = {
         "sweep_speed": 0.3,
         "energy": 0.7,
         "accent_colors": [[255, 255, 240], [200, 200, 255]],
+        "lightning": True,
     },
     "dance-floor": {
         "name": "Dance Floor",
@@ -449,7 +463,7 @@ def _generate_spatial_effects(theme, bounds, fixture_positions, dmx_movers):
             })
 
     # Thunderstorm special: add lightning bolts at random fixture positions
-    if theme.get("sweep_speed", 1) < 1 and fixture_positions:
+    if theme.get("lightning") and fixture_positions:
         positions = list(fixture_positions.values())
         for i in range(min(4, len(positions))):
             pos = random.choice(positions)
@@ -523,31 +537,40 @@ def _generate_mover_actions(theme, dmx_movers, fixture_positions, bounds):
 
 
 def _generate_track_actions(theme, dmx_movers):
-    """Generate live Track actions (type 18) for camera-based person following.
+    """Generate live Track actions (type 18) for real-time object following.
 
-    Creates a single Track action targeting all movers at person objects.
-    The Track action is evaluated at runtime by the 40 Hz DMX loop —
-    no baked pan/tilt values are needed.
+    Creates a single Track action targeting all movers. The Track action is
+    evaluated at runtime by the 40 Hz DMX loop — no baked pan/tilt values
+    are needed. trackObjectType filters which moving objects to follow
+    (e.g. "person" for camera tracking, "figure8-target" for patrol objects).
     """
     if not dmx_movers:
         return []
 
     color = theme["palette"][0] if theme["palette"] else [255, 240, 200]
-    mover_ids = [m["id"] for m in dmx_movers]
+
+    # Derive object type from patrol objects if present, else "person"
+    patrol_objs = theme.get("patrol_objects", [])
+    if patrol_objs:
+        obj_type = patrol_objs[0].get("objectType", "person")
+        name = f"Track {patrol_objs[0].get('name', 'Target')}"
+    else:
+        obj_type = "person"
+        name = "Follow Person"
 
     return [{
         "action": {
-            "name": "Follow Person",
+            "name": name,
             "type": 18,  # ACT_TRACK
             "r": color[0], "g": color[1], "b": color[2],
-            "trackObjectType": "person",
+            "trackObjectType": obj_type,
             "trackDimmer": 255,
-            "trackAutoSpread": True,
+            "trackAutoSpread": False,
             "trackFixedAssignment": False,
             "trackCycleMs": 2000,
             "dimmer": 255,
         },
-        "targets": mover_ids,
+        "targets": [],  # empty = all movers auto-discovered at runtime
     }]
 
 
@@ -606,17 +629,42 @@ def generate_show(theme_id, fixtures, layout, stage, profile_lib=None):
 
     dur = theme["durationS"]
 
+    # ── Live tracking shows: minimal structure ────────────────────────
+    # Track action (type 18) auto-discovers all movers at runtime —
+    # no per-fixture tracks, no spatial effects, no mover base wash.
+    # Just one Track action on a single allPerformers track.
+    if theme.get("live_track"):
+        track_action = _generate_track_actions(theme, dmx_movers)
+        if not track_action:
+            # No movers — fall through to normal generation
+            pass
+        else:
+            tracks = [{"allPerformers": True, "clips": [
+                {"_action_ref": track_action[0], "startS": 0, "durationS": dur}
+            ], "_layer": "track"}]
+            return {
+                "name": theme["name"],
+                "durationS": dur,
+                "base_actions": [],
+                "mover_actions": track_action,
+                "effects": [],
+                "tracks": tracks,
+                "patrol_objects": theme.get("patrol_objects", []),
+                "led_fixture_ids": [f["id"] for f in led_fx],
+                "dmx_par_ids": [f["id"] for f in dmx_pars],
+                "dmx_mover_ids": [f["id"] for f in dmx_movers],
+            }
+
+    # ── Normal shows: base wash + spatial effects + mover sweeps ──────
+
     # 1. Base wash actions — keep everything lit
     base_actions = _generate_base_actions(theme, led_fx, dmx_pars, dmx_movers)
 
     # 2. Spatial effects — sweep through fixture positions
     effects = _generate_spatial_effects(theme, bounds, fpos, dmx_movers)
 
-    # 3. Moving head actions — Track (type 18) for live_track, PT_MOVE for baked
-    if theme.get("live_track"):
-        mover_actions = _generate_track_actions(theme, dmx_movers)
-    else:
-        mover_actions = _generate_mover_actions(theme, dmx_movers, fpos, bounds)
+    # 3. Moving head actions — PT_MOVE for baked shows
+    mover_actions = _generate_mover_actions(theme, dmx_movers, fpos, bounds)
 
     # ── Build track structure ──────────────────────────────────────────
     # Track ordering: lower index = lower priority (background)

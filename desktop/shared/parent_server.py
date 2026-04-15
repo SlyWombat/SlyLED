@@ -81,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.4.38"
+VERSION = "1.4.42"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1309,6 +1309,7 @@ def _probe_camera(ip, timeout=2):
             "cameraUrl": data.get("cameraUrl", ""),
             "cameras": data.get("cameras", []),
             "cameraCount": data.get("cameraCount", 0),
+            "rssi": data.get("rssi", 0),
         }
     except Exception:
         return None
@@ -1353,11 +1354,11 @@ def api_cameras():
                 cam["fwVersion"] = info.get("fwVersion", "")
                 cam["hostname"] = info.get("hostname", "")
                 cam["capabilities"] = info.get("capabilities", {})
-                # Check actual tracking state from camera node
-                caps = info.get("capabilities", {})
-                if caps.get("trackingRunning"):
-                    cam["tracking"] = True
-                    _tracking_state[c["id"]] = True
+                cam["rssi"] = info.get("rssi", 0)
+                # Note: camera node trackingRunning is node-level, not per-sensor.
+                # Trust _tracking_state (per-fixture) instead of overriding from
+                # the node capability, which would mark all sensors on the same
+                # IP as tracking when only one was started.
         result.append(cam)
     return jsonify(result)
 
@@ -3056,16 +3057,40 @@ _tracking_state = {}  # {cam_fid: True/False}
 
 @app.post("/api/cameras/<int:fid>/track/start")
 def api_camera_track_start(fid):
-    """Start tracking on a camera node."""
+    """Start tracking on a camera node with pre-flight checks."""
     f = next((f for f in _fixtures if f["id"] == fid and f.get("fixtureType") == "camera"), None)
     if not f:
         return jsonify(err="Camera not found"), 404
     ip = f.get("cameraIp")
     if not ip:
         return jsonify(err="Camera has no IP"), 400
+
+    # Pre-flight: probe camera node for readiness
+    info = _probe_camera(ip, timeout=3)
+    if not info:
+        return jsonify(err=f"Camera node {ip} is offline or unreachable"), 503
+    caps = info.get("capabilities", {})
+    if not caps.get("hasCamera"):
+        return jsonify(err=f"Camera node {ip} has no working camera connected"), 503
+    if not caps.get("scan") and not caps.get("tracking"):
+        return jsonify(err=f"Camera node {ip} has no detection model loaded — deploy firmware with model first"), 503
+
+    # If already tracking on this camera, stop first so settings refresh cleanly
+    if _tracking_state.get(fid):
+        try:
+            import urllib.request as _ur_stop
+            _ur_stop.urlopen(
+                _ur_stop.Request(f"http://{ip}:5000/track/stop", data=b"{}",
+                                 headers={"Content-Type": "application/json"}),
+                timeout=5)
+        except Exception:
+            pass
+        _tracking_state.pop(fid, None)
+
     body = request.get_json(silent=True) or {}
     local_ip = _get_local_ip()
     port = request.host.split(":")[-1] if ":" in request.host else "8080"
+    classes = body.get("classes", f.get("trackClasses", ["person"]))
     try:
         import urllib.request as _ur
         req_data = json.dumps({
@@ -3075,7 +3100,7 @@ def api_camera_track_start(fid):
             "fps": body.get("fps", f.get("trackFps", 2)),
             "threshold": body.get("threshold", f.get("trackThreshold", 0.4)),
             "ttl": body.get("ttl", f.get("trackTtl", 5)),
-            "classes": body.get("classes", f.get("trackClasses", ["person"])),
+            "classes": classes,
             "reidMm": body.get("reidMm", f.get("trackReidMm", 500)),
         }).encode()
         req = _ur.Request(f"http://{ip}:5000/track/start",
@@ -3085,7 +3110,11 @@ def api_camera_track_start(fid):
         r = json.loads(resp.read().decode())
     except Exception as e:
         return jsonify(err=f"Failed to start tracking: {e}"), 503
+    if not r.get("ok", True):
+        return jsonify(err=r.get("err", "Camera node rejected track start")), 503
     _tracking_state[fid] = True
+    lbl = classes[0] if len(classes) == 1 else f"{len(classes)} classes"
+    log.info("Tracking started on camera %d (%s) — watching for %s", fid, ip, lbl)
     return jsonify(ok=True, tracking=True)
 
 
@@ -3206,7 +3235,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.4.38" from camera_server.py source text."""
+    """Extract VERSION = "1.4.42" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -4436,6 +4465,16 @@ def api_dmx_blackout():
     _sacn.blackout()
     return jsonify(ok=True)
 
+@app.post("/api/dmx/blink")
+def api_dmx_blink():
+    """Rainbow-cycle all DMX fixtures (same as boot blink). Engine must be running."""
+    engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+    if not engine:
+        return jsonify(ok=False, err="DMX engine is not running"), 400
+    import threading as _thr_blink
+    _thr_blink.Thread(target=_run_boot_blink, args=(engine, True), daemon=True).start()
+    return jsonify(ok=True)
+
 @app.post("/api/dmx/channel")
 def api_dmx_set_channel():
     """Set a single DMX channel. Body: {universe, channel, value}."""
@@ -4646,10 +4685,11 @@ _apply_dmx_settings()
 # ── Boot blink function (#389) ────────────────────────────────────────────
 _boot_blink_done = False
 
-def _run_boot_blink(engine):
-    """Rainbow cycle all DMX fixtures for 3s then blackout. Runs once per process."""
+def _run_boot_blink(engine, force=False):
+    """Rainbow cycle all DMX fixtures for 3s then blackout.
+    Runs once on boot unless force=True (manual blink from Settings)."""
     global _boot_blink_done
-    if _boot_blink_done:
+    if _boot_blink_done and not force:
         return
     _boot_blink_done = True
     import colorsys
@@ -4741,6 +4781,30 @@ def _auto_start_show():
     log.info("Auto-start show: resuming timeline %d (%s)", tid, tl.get("name", "?"))
     with app.test_request_context():
         api_timeline_start(tid)
+
+# ── Boot cleanup: stop any camera trackers left running from previous session ──
+def _boot_stop_trackers():
+    """Send track/stop to all camera nodes so stale trackers don't keep pushing data."""
+    import urllib.request as _ur_boot
+    time.sleep(3)  # wait for network
+    cams = [f for f in _fixtures if f.get("fixtureType") == "camera" and f.get("cameraIp")]
+    seen_ips = set()
+    for c in cams:
+        ip = c["cameraIp"]
+        if ip in seen_ips:
+            continue
+        seen_ips.add(ip)
+        try:
+            req = _ur_boot.Request(f"http://{ip}:5000/track/stop",
+                                   data=b"{}",
+                                   headers={"Content-Type": "application/json"})
+            _ur_boot.urlopen(req, timeout=3)
+            log.info("Boot cleanup: stopped tracker on %s", ip)
+        except Exception:
+            pass  # camera offline — nothing to stop
+
+import threading as _thr_boot
+_thr_boot.Thread(target=_boot_stop_trackers, daemon=True).start()
 
 if _settings.get("autoStartShow"):
     import threading as _thr2
@@ -5611,10 +5675,11 @@ def _evaluate_object_patrols(elapsed):
             new_pos[1] = cy + ry * math.sin(angle)
 
         elif pattern == "figure8":
-            # Figure-8 (lissajous): X has 1x frequency, Y has 2x frequency
+            # Figure-8 (lissajous): use uniform radius so loops are round
+            r = min(rx, ry)
             angle = phase * 2.0 * math.pi
-            new_pos[0] = cx + rx * math.sin(angle)
-            new_pos[1] = cy + ry * math.sin(2.0 * angle)
+            new_pos[0] = cx + r * math.sin(angle)
+            new_pos[1] = cy + r * math.sin(2.0 * angle)
 
         elif pattern == "square":
             # Rectangular perimeter path: 4 equal segments
@@ -5664,7 +5729,10 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
         return
     all_objects = _objects + _temporal_objects
     moving_objects = [o for o in all_objects if o.get("mobility") == "moving"]
+    # Pre-filter by objectType per Track action below
     # Build fixture lookup: id -> fixture info (with profile pan/tilt range)
+    # Positions live in _layout["children"], not in _fixtures
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
     fx_lookup = {}
     for f in _fixtures:
         if f.get("fixtureType") != "dmx":
@@ -5674,16 +5742,20 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
         pan_range = prof.get("panRange", 0) if prof else 0
         tilt_range = prof.get("tiltRange", 0) if prof else 0
         if pan_range > 0 and tilt_range > 0:
+            lp = pos_map.get(f["id"], {})
             fx_lookup[f["id"]] = {
                 "fixture": f, "pan_range": pan_range, "tilt_range": tilt_range,
-                "prof_info": _profile_lib.channel_info(pid) if pid else None
+                "prof_info": _profile_lib.channel_info(pid) if pid else None,
+                "pos": [lp.get("x", 0), lp.get("y", 0), lp.get("z", 0)],
             }
     if not fx_lookup:
         return
     for ta in track_actions:
-        # Resolve target objects
+        # Resolve target objects — filter by trackObjectType if set
+        obj_type = ta.get("trackObjectType")
+        candidates = [o for o in moving_objects if o.get("objectType") == obj_type] if obj_type else moving_objects
         target_ids = ta.get("trackObjectIds", [])
-        targets = [o for o in moving_objects if o["id"] in target_ids] if target_ids else moving_objects
+        targets = [o for o in candidates if o["id"] in target_ids] if target_ids else candidates
         # Resolve fixtures
         fix_ids = ta.get("trackFixtureIds", [])
         heads = [fx_lookup[fid] for fid in (fix_ids or fx_lookup.keys()) if fid in fx_lookup]
@@ -5707,7 +5779,7 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
                 break  # skip aim loop, go to blackout
             f = head_info["fixture"]
             fid = f["id"]
-            fx_pos = [f.get("x", 0), f.get("y", 0), f.get("z", 0)]
+            fx_pos = head_info["pos"]
             # Assignment: 1 person = all heads aim at them,
             # 2 people = 1:1, 3+ people (fixed) = first N only
             if n_heads > n_targets:
@@ -5757,16 +5829,9 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
             if mcal_data and mcal_data.get("samples") and len(mcal_data["samples"]) >= 2:
                 pt_affine = _mcal.affine_pan_tilt(mcal_data["samples"], aim[0], aim[1], aim[2])
                 if pt_affine:
-                    # Clamp to calibrated range + 10% margin to prevent backwards aim
-                    samps = mcal_data["samples"]
-                    pan_vals = [s["pan"] for s in samps]
-                    tilt_vals = [s["tilt"] for s in samps]
-                    pan_lo, pan_hi = min(pan_vals), max(pan_vals)
-                    tilt_lo, tilt_hi = min(tilt_vals), max(tilt_vals)
-                    margin_p = (pan_hi - pan_lo) * 0.1
-                    margin_t = (tilt_hi - tilt_lo) * 0.1
-                    pan = max(pan_lo - margin_p, min(pan_hi + margin_p, pt_affine[0]))
-                    tilt = max(tilt_lo - margin_t, min(tilt_hi + margin_t, pt_affine[1]))
+                    # Allow extrapolation beyond calibrated range but clamp to 0.0–1.0
+                    pan = max(0.0, min(1.0, pt_affine[0]))
+                    tilt = max(0.0, min(1.0, pt_affine[1]))
             # 2. Range calibration (automated axis mapping)
             if pan is None:
                 pt_cal = compute_pan_tilt_calibrated(fid, aim)
@@ -6705,7 +6770,7 @@ def _install_preset_show(preset_id):
     actual fixtures, positions, and capabilities. Every fixture gets coverage
     so there are no dark periods.
     """
-    global _nxt_a, _nxt_sfx, _nxt_tl
+    global _nxt_a, _nxt_sfx, _nxt_tl, _nxt_obj
 
     from show_generator import generate_show, THEMES
     if preset_id not in THEMES:
@@ -6715,6 +6780,7 @@ def _install_preset_show(preset_id):
     warnings = []
     theme = THEMES.get(preset_id, {})
     if theme.get("live_track"):
+        needs_camera = not theme.get("patrol_objects")  # patrol shows don't need cameras
         has_camera = any(f.get("fixtureType") == "camera" for f in _fixtures)
         has_mover = any(
             f.get("fixtureType") == "dmx" and _profile_lib and
@@ -6722,10 +6788,10 @@ def _install_preset_show(preset_id):
             for f in _fixtures
         )
         warnings = []
-        if not has_camera:
+        if needs_camera and not has_camera:
             warnings.append("No camera node registered — person detection will not work")
         if not has_mover:
-            warnings.append("No moving head fixtures found — spotlight tracking requires DMX movers with pan/tilt")
+            warnings.append("No moving head fixtures found — tracking requires DMX movers with pan/tilt")
         # Allow loading but include warnings in response
         if warnings:
             log.warning("Preset %s prerequisites: %s", preset_id, "; ".join(warnings))
@@ -6737,6 +6803,27 @@ def _install_preset_show(preset_id):
     with _lock:
         dur = show["durationS"]
 
+        # Create patrol objects first so their IDs can be linked to Track actions
+        patrol_obj_ids = []
+        obj_count = 0
+        for po in show.get("patrol_objects", []):
+            obj = {
+                "id": _nxt_obj, "name": po.get("name", f"Patrol {_nxt_obj}"),
+                "objectType": po.get("objectType", "custom"),
+                "mobility": "moving",
+                "color": po.get("color", "#00DCFF"),
+                "opacity": po.get("opacity", 40),
+                "transform": {"pos": [0, 0, 0], "rot": [0, 0, 0],
+                               "scale": po.get("scale", [500, 500, 500])},
+                "patrol": po.get("patrol", {}),
+            }
+            _objects.append(obj)
+            patrol_obj_ids.append(_nxt_obj)
+            _nxt_obj += 1
+            obj_count += 1
+        if obj_count:
+            _save("objects", _objects)
+
         # Create action records and build id lookup
         # action_ref_map: maps python id() of the action_info dict -> assigned action id
         action_ref_map = {}
@@ -6744,6 +6831,9 @@ def _install_preset_show(preset_id):
         for act_info in show.get("base_actions", []) + show.get("mover_actions", []):
             act_data = act_info.get("action", act_info) if isinstance(act_info, dict) and "action" in act_info else act_info
             act = {"id": _nxt_a, **act_data}
+            # Link patrol objects to Track actions by ID
+            if act.get("type") == 18 and patrol_obj_ids:
+                act["trackObjectIds"] = patrol_obj_ids
             _actions.append(act)
             action_ref_map[id(act_info)] = _nxt_a
             action_count += 1
@@ -6811,7 +6901,8 @@ def _install_preset_show(preset_id):
             _save("show_playlist", _show_playlist)
 
     resp = {"ok": True, "name": show["name"], "timelineId": tl["id"],
-            "actions": action_count, "effects": len(effect_ref_map)}
+            "actions": action_count, "effects": len(effect_ref_map),
+            "objects": obj_count}
     if theme.get("live_track") and warnings:
         resp["warnings"] = warnings
     return jsonify(resp)

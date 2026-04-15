@@ -451,6 +451,7 @@ def status():
             "scan": _get_detector() is not None,
         },
         "board": _hw_info.get("board", "unknown"),
+        "rssi": _read_wifi_rssi(),
     })
 
 @app.get("/config")
@@ -1989,19 +1990,21 @@ def _build_pong():
                            int(parts[2]) if len(parts) > 2 else 0)
     return _udp_header(CMD_PONG) + payload
 
-def _build_status_resp():
-    """Build STATUS_RESP: 8 bytes (activeAction, runnerActive, currentStep, rssi, uptime)."""
-    rssi = 0
+def _read_wifi_rssi():
+    """Read WiFi RSSI from /proc/net/wireless. Returns negative dBm or 0."""
     try:
-        # Read WiFi RSSI from /proc on Linux
         with open("/proc/net/wireless", "r") as f:
             for line in f:
                 if "wlan" in line:
                     parts = line.split()
-                    rssi = abs(int(float(parts[3])))
-                    break
+                    return -abs(int(float(parts[3])))
     except Exception:
         pass
+    return 0
+
+def _build_status_resp():
+    """Build STATUS_RESP: 8 bytes (activeAction, runnerActive, currentStep, rssi, uptime)."""
+    rssi = abs(_read_wifi_rssi())  # UDP protocol uses absolute magnitude
     uptime = int(time.monotonic())
     return _udp_header(CMD_STATUS_RESP) + struct.pack("<BBBBI",
         0, 0, 0, rssi, uptime)
