@@ -51,7 +51,7 @@ $env:ARDUINO_DIRECTORIES_USER = (Get-Location).Path
 The Orchestrator (Windows/Mac Flask)  ← primary design + control UI + firmware manager
     desktop/shared/parent_server.py
     desktop/shared/firmware_manager.py
-    desktop/shared/spa/index.html     ← 7-tab SPA
+    desktop/shared/spa/              ← 7-tab SPA (22 files: HTML shell + 16 JS modules + CSS)
     desktop/windows/run.ps1  (Windows launcher)
     desktop/mac/run.sh        (Mac launcher)
          │  UDP port 4210 binary protocol v4
@@ -114,7 +114,25 @@ Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask s
 |------|---------|
 | `desktop/shared/parent_server.py` | Flask server — all `/api/*` routes + UDP child protocol + WiFi + firmware API |
 | `desktop/shared/firmware_manager.py` | Board detection (VID:PID), serial version query, esptool/arduino-cli flash |
-| `desktop/shared/spa/index.html` | Full 7-tab SPA (identical logic to Giga embedded version) |
+| `desktop/shared/spa/index.html` | HTML shell (592 lines) — 7-tab SPA structure |
+| `desktop/shared/spa/css/app.css` | Extracted stylesheet (102 lines) |
+| `desktop/shared/spa/js/app.js` | Core JS (797 lines) — layout, navigation, utils, modal, init |
+| `desktop/shared/spa/js/dashboard.js` | Dashboard tab — live grid, runner status, gyro |
+| `desktop/shared/spa/js/setup-ui.js` | Setup tab — fixture CRUD, discovery, cameras, gyro config |
+| `desktop/shared/spa/js/scene-3d.js` | Three.js 3D viewport, view controls, alignment |
+| `desktop/shared/spa/js/timelines.js` | Timeline editor, preview (performance.now), bake |
+| `desktop/shared/spa/js/actions.js` | Action library, editor modal |
+| `desktop/shared/spa/js/objects-effects.js` | Stage objects, spatial effects |
+| `desktop/shared/spa/js/fixtures.js` | Fixture editor, orientation test |
+| `desktop/shared/spa/js/profiles.js` | Profile browser/editor, OFL import, community |
+| `desktop/shared/spa/js/emulation.js` | Stage preview, 3D runtime emulator |
+| `desktop/shared/spa/js/calibration.js` | Camera/mover calibration, tracking, point cloud |
+| `desktop/shared/spa/js/settings.js` | Settings, DMX engine, monitor, group control |
+| `desktop/shared/spa/js/firmware.js` | OTA, flash, ports, GitHub firmware |
+| `desktop/shared/spa/js/camera-deploy.js` | SSH config, key gen, camera deploy |
+| `desktop/shared/spa/js/show-runtime.js` | Playlist, show playback |
+| `desktop/shared/spa/js/wizard.js` | Fixture creation wizard |
+| `desktop/shared/spa/js/file-manager.js` | Project file I/O, File System API |
 | `desktop/shared/data/` | JSON persistence (children, layout, runners, settings, actions, wifi) — gitignored |
 | `desktop/windows/run.ps1` | PowerShell launcher — installs deps, starts server |
 | `desktop/windows/requirements.txt` | `flask, pystray, pillow, pyserial, esptool` |
