@@ -121,6 +121,10 @@ function _wizStep2(){
       var el=document.getElementById('wiz-conflict');if(!el||!patch)return;
       var unis=patch.universes||{};var fx=unis[uni]||[];
       var endAddr=addr+w.channels-1;
+      if(endAddr>512){
+        el.innerHTML='<span style="color:#fca5a5">Error: channels extend past 512 (addr '+addr+' + '+w.channels+' ch = '+endAddr+')</span>';
+        return;
+      }
       var conflicts=fx.filter(function(f){return addr<=f.endAddr&&f.startAddr<=endAddr;});
       if(conflicts.length){
         el.innerHTML='<span style="color:#fca5a5">Conflict: overlaps with '+conflicts.map(function(c){return escapeHtml(c.name);}).join(', ')+'</span>';

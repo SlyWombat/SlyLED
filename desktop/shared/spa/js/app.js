@@ -84,13 +84,18 @@ function _applyTips(root){
     if(L[key])el.title=L[key];
   });
 }
-// Also apply to dynamic content via MutationObserver
+// Apply tooltips to dynamic content via MutationObserver (#434)
+// Scoped to modal container to avoid firing on every DOM change (DMX monitor, 3D, live grid)
 var _tipObs=new MutationObserver(function(muts){muts.forEach(function(m){
   m.addedNodes.forEach(function(n){if(n.querySelectorAll)_applyTips(n);});
 });});
 document.addEventListener('DOMContentLoaded',function(){
   _applyTips();
-  _tipObs.observe(document.body,{childList:true,subtree:true});
+  var modalEl=document.getElementById('modal');
+  if(modalEl)_tipObs.observe(modalEl,{childList:true,subtree:true});
+  // Also observe tab content area for tab switches
+  var appEl=document.getElementById('app');
+  if(appEl)_tipObs.observe(appEl,{childList:true,subtree:false});
 });
 
 var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0,units=0,_cvW=900,_cvH=450,_dragStartX=0,_dragStartY=0,_dragMoved=false;
@@ -243,6 +248,8 @@ function _popModal(){
 function closeModal(){
   // If there's a parent dialog on the stack, go back to it instead of closing
   if(_popModal())return;
+  // Clear any active polling intervals (#430)
+  if(window._bakePoll){clearInterval(window._bakePoll);window._bakePoll=null;}
   document.getElementById('modal').style.display='none';
 }
 

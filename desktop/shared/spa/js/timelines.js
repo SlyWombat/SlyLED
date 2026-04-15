@@ -333,8 +333,9 @@ function tlBake(){
 
   ra('POST','/api/timelines/'+_curTl.id+'/bake',{},function(r){
     if(!r||!r.ok){document.getElementById('bake-status').textContent='Error: '+(r&&r.err||'failed');return;}
-    // Poll progress
-    var poll=setInterval(function(){
+    // Poll progress — store on window so closeModal can clear it (#430)
+    if(window._bakePoll)clearInterval(window._bakePoll);
+    var poll=window._bakePoll=setInterval(function(){
       ra('GET','/api/timelines/'+_curTl.id+'/baked/status',null,function(s){
         if(!s)return;
         var bar=document.getElementById('bake-prog');
