@@ -1434,7 +1434,8 @@ def run():
         for jsfile in ['app.js', 'dashboard.js', 'setup-ui.js', 'objects-effects.js',
                        'timelines.js', 'actions.js', 'wizard.js', 'file-manager.js',
                        'scene-3d.js', 'fixtures.js', 'profiles.js', 'emulation.js',
-                       'calibration.js']:
+                       'calibration.js', 'settings.js', 'firmware.js',
+                       'camera-deploy.js', 'show-runtime.js']:
             rjs = c.get(f'/js/{jsfile}')
             ok(f'GET /js/{jsfile}', rjs.status_code == 200)
             spa += rjs.data.decode('utf-8', errors='replace')
