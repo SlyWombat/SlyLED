@@ -790,11 +790,12 @@ document.addEventListener('DOMContentLoaded',function(){
 var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0,units=0,_cvW=900,_cvH=450,_dragStartX=0,_dragStartY=0,_dragMoved=false;
 var _layTool='move'; // 'move' or 'rotate'
 var _undoStack=[];   // [{fid, x, y, z, rotation}]
-function _rotToAim(rot,pos,dist){
+function _rotToAim(rot,pos,dist,inverted){
   // Convert rotation [rx,ry,rz] degrees + position to aim point [x,y,z]
   // Stage: X=width, Y=depth(forward), Z=height(up)
   dist=dist||3000;
   var rx=rot?rot[0]:0,ry=rot&&rot.length>1?rot[1]:0;
+  if(inverted)rx=-rx;
   var pr=ry*Math.PI/180,tr=rx*Math.PI/180;
   return[pos[0]+Math.sin(pr)*Math.cos(tr)*dist,pos[1]+Math.cos(pr)*Math.cos(tr)*dist,pos[2]-Math.sin(tr)*dist];
 }
@@ -1242,7 +1243,7 @@ function _dashEmuDraw(){
     if(fix.fixtureType!=='dmx'||!fix.positioned)return;
     var fx=(fix.x||0)*W/stgW,fy=H-(fix.z||0)*H/stgH;
     fx=Math.max(4,Math.min(W-4,fx));fy=Math.max(4,Math.min(H-4,fy));
-    var aim=_rotToAim(fix.rotation||[0,0,0],[fix.x||0,fix.y||0,fix.z||0]);
+    var aim=_rotToAim(fix.rotation||[0,0,0],[fix.x||0,fix.y||0,fix.z||0],3000,fix.mountedInverted);
     var ax=(aim[0]||0)*W/stgW,ay=H-(aim[2]||0)*H/stgH;
     var bLen=Math.sqrt((ax-fx)*(ax-fx)+(ay-fy)*(ay-fy));if(bLen<2)bLen=60;
     var bwDeg=(window._profileCache&&fix.dmxProfileId&&window._profileCache[fix.dmxProfileId])?window._profileCache[fix.dmxProfileId].beamWidth||15:15;
@@ -2579,6 +2580,7 @@ function s3dAnimate(){
         var basePan=rot[1]||0;
         var panDeg=(panNorm-0.5)*panRange;
         var tiltDeg=(tiltNorm-0.5)*tiltRange;
+        if(fx.mountedInverted)tiltDeg=-tiltDeg;
         var panRad=(basePan+panDeg)*Math.PI/180;
         var tiltRad=tiltDeg*Math.PI/180;
         var aimDir=new THREE.Vector3(Math.sin(panRad)*Math.cos(tiltRad),-Math.sin(tiltRad),Math.cos(panRad)*Math.cos(tiltRad));
@@ -2693,7 +2695,7 @@ function s3dLoadChildren(){
       (_fixtures||[]).forEach(function(ff){if(ff.childId===c.id||ff.id===c.id)_fix3d=ff;});
       if(_fix3d&&(_fix3d.fixtureType==='dmx'||_fix3d.fixtureType==='camera')){
         var _fRot=_fix3d.rotation||[0,0,0];
-        var aim=_rotToAim(_fRot,[c.x||0,c.y||0,c.z||0]);
+        var aim=_rotToAim(_fRot,[c.x||0,c.y||0,c.z||0],3000,_fix3d.mountedInverted);
         // Stage→Three.js: X=X, Y(depth)→Z, Z(height)→Y
         var aimLocal=new THREE.Vector3((aim[0]-(c.x||0))/1000,(aim[2]-(c.z||0))/1000,(aim[1]-(c.y||0))/1000);
         var beamLen=aimLocal.length();
@@ -5732,6 +5734,7 @@ function emu3dBuildFixtures(){
         grp.userData.tiltRange=prof.tiltRange||270;
       }
       grp.userData.basePan=(c.rotation&&c.rotation[1])||0;
+      grp.userData.mountedInverted=!!c.mountedInverted;
 
       // Sphere node
       var geo=new THREE.SphereGeometry(0.15,16,12);
@@ -5748,7 +5751,7 @@ function emu3dBuildFixtures(){
       // DMX beam cone (skip cameras — not useful during runtime)
       if(ft==='dmx'){
         var _fRot=c.rotation||[0,0,0];
-        var aim=_rotToAim(_fRot,[c.x||0,c.y||0,c.z||0]);
+        var aim=_rotToAim(_fRot,[c.x||0,c.y||0,c.z||0],3000,c.mountedInverted);
         var aimLocal=new THREE.Vector3((aim[0]-(c.x||0))/1000,(aim[2]-(c.z||0))/1000,(aim[1]-(c.y||0))/1000);
         var beamLen=aimLocal.length();
         // Default beam length if rotation is zero (pointing forward)
@@ -5973,6 +5976,7 @@ function emu3dUpdateColors(){
         var tiltRange=grp.userData.tiltRange||270;
         var panDeg=(pd.pan-0.5)*panRange;
         var tiltDeg=(pd.tilt-0.5)*tiltRange;
+        if(grp.userData.mountedInverted)tiltDeg=-tiltDeg;
         var basePan=(grp.userData.basePan||0);
         var panRad=(basePan+panDeg)*Math.PI/180;
         var tiltRad=tiltDeg*Math.PI/180;
@@ -6426,7 +6430,7 @@ function emuDraw(){
       else if(br+bg+bb>10)dimmer=0.2;
     }
     // Draw beam cone from rotation — beamWidth from profile or default
-    var aim=_rotToAim(fix.rotation||[0,0,0],[fix.x||0,fix.y||0,fix.z||0]);
+    var aim=_rotToAim(fix.rotation||[0,0,0],[fix.x||0,fix.y||0,fix.z||0],3000,fix.mountedInverted);
     var ax=aim[0]*W/emuCW,ay=H-aim[1]*H/emuCH;
     var bwDeg=(fix._beamWidth)||(pd&&pd.beamWidth)||15;
     // Flood lights have wider beams (>40°), spots are narrow (<20°)
@@ -9459,7 +9463,7 @@ function updateFwImages(){
   });
   // Add latest from GitHub if available and newer
   if(_fwGithubRelease){
-    var assetMap={'esp32':'esp32-firmware-merged.bin','d1mini':'d1mini-firmware.bin'};
+    var assetMap={'esp32':'esp32-firmware-merged.bin','d1mini':'d1mini-firmware.bin','esp32s3':'esp32s3-firmware-merged.bin'};
     var assetName=assetMap[board];
     if(assetName){
       var found=false;

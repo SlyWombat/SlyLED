@@ -81,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.4.43"
+VERSION = "1.5.0"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -105,6 +105,7 @@ CMD_STATUS_RESP = 0x41
 CMD_GYRO_ORIENT = 0x60   # gyro→parent: GyroOrientPayload (8 bytes)
 CMD_GYRO_CTRL   = 0x61   # parent→gyro: enabled(1) + targetFps(1)
 CMD_GYRO_RECAL  = 0x62   # parent→gyro: zero IMU reference (no payload)
+CMD_GYRO_COLOR  = 0x63   # gyro→parent: GyroColorPayload (r, g, b, flags)
 
 #  "  "  Paths  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -229,6 +230,61 @@ _live_events = {}
 # {ip: {roll, pitch, yaw, fps, flags, ts}}
 _gyro_state = {}
 _gyro_lock  = threading.Lock()
+
+def _apply_gyro_color(gyro_ip: str, r: int, g: int, b: int, flash: bool):
+    """Apply colour from gyro board to its assigned mover's DMX channels."""
+    # Find the gyro fixture that maps to this IP
+    gyro_fix = None
+    for f in _fixtures:
+        if f.get("fixtureType") != "gyro":
+            continue
+        gid = f.get("gyroChildId")
+        child = next((c for c in _children if c.get("id") == gid), None)
+        if child and child.get("ip") == gyro_ip:
+            gyro_fix = f
+            break
+    if not gyro_fix:
+        return
+    mid = gyro_fix.get("assignedMoverId")
+    if not mid:
+        return
+    mover = next((f for f in _fixtures if f.get("id") == mid), None)
+    if not mover:
+        return
+    pid = mover.get("dmxProfileId")
+    prof = _profile_lib.get(pid) if pid else None
+    if not prof:
+        return
+    uni   = mover.get("dmxUniverse", 0)
+    start = mover.get("dmxStartAddr", 1)
+    ch_map = {ch["type"]: ch["offset"] for ch in prof.get("channels", [])}
+    # Set R/G/B channels
+    for ctype, val in [("red", r), ("green", g), ("blue", b)]:
+        if ctype in ch_map:
+            addr = start + ch_map[ctype]
+            try: _artnet.set_channel(uni, addr, val)
+            except Exception: pass
+            try: _sacn.set_channel(uni, addr, val)
+            except Exception: pass
+    # Set dimmer to full if present
+    if "dimmer" in ch_map:
+        addr = start + ch_map["dimmer"]
+        try: _artnet.set_channel(uni, addr, 255)
+        except Exception: pass
+        try: _sacn.set_channel(uni, addr, 255)
+        except Exception: pass
+    if flash:
+        # Brief 150ms pulse then restore previous dimmer (0)
+        def _flash_off():
+            import time as _t
+            _t.sleep(0.15)
+            if "dimmer" in ch_map:
+                addr = start + ch_map["dimmer"]
+                try: _artnet.set_channel(uni, addr, 0)
+                except Exception: pass
+                try: _sacn.set_channel(uni, addr, 0)
+                except Exception: pass
+        threading.Thread(target=_flash_off, daemon=True).start()
 
 # Recent PONGs seen by UDP listener (ip  -' parsed pong info)   " used by discover
 _recent_pongs = {}
@@ -677,6 +733,12 @@ def _udp_listener():
                 }
             log.debug("GYRO_ORIENT from %s: R=%.1f P=%.1f Y=%.1f fps=%d",
                       ip, roll100/100.0, pitch100/100.0, yaw100/100.0, fps)
+        elif cmd == CMD_GYRO_COLOR and len(data) >= 12:
+            # GyroColorPayload: r(1) g(1) b(1) flags(1)
+            r, g, b, flags = struct.unpack_from("<BBBB", data, 8)
+            flash = bool(flags & 0x01)
+            log.info("GYRO_COLOR from %s: r=%d g=%d b=%d flash=%s", ip, r, g, b, flash)
+            _apply_gyro_color(ip, r, g, b, flash)
         elif cmd == CMD_PONG:
             # Handle PONGs from broadcast/direct pings
             info = _parse_pong(data, ip)
@@ -3237,7 +3299,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.4.43" from camera_server.py source text."""
+    """Extract VERSION = "x.y.z" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -5749,6 +5811,7 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
                 "fixture": f, "pan_range": pan_range, "tilt_range": tilt_range,
                 "prof_info": _profile_lib.channel_info(pid) if pid else None,
                 "pos": [lp.get("x", 0), lp.get("y", 0), lp.get("z", 0)],
+                "mounted_inverted": bool(f.get("mountedInverted", False)),
             }
     if not fx_lookup:
         return
@@ -5862,7 +5925,8 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
                     pan, tilt = pt_cal
             # 3. Geometric fallback
             if pan is None:
-                pt = compute_pan_tilt(fx_pos, aim, head_info["pan_range"], head_info["tilt_range"])
+                pt = compute_pan_tilt(fx_pos, aim, head_info["pan_range"], head_info["tilt_range"],
+                                      mounted_inverted=head_info.get("mounted_inverted", False))
                 if pt is None:
                     continue
                 pan, tilt = pt
@@ -7683,7 +7747,8 @@ def api_fw_download():
 def api_fw_binary(board):
     """Serve a firmware binary for OTA   " child downloads from parent over plain HTTP.
     ESP32 OTA needs app-only binary (main.ino.bin), NOT the merged binary."""
-    file_map = {"esp32": "esp32/main.ino.bin", "d1mini": "d1mini/main.ino.bin"}
+    file_map = {"esp32": "esp32/main.ino.bin", "d1mini": "d1mini/main.ino.bin",
+                 "esp32s3": "esp32s3/main.ino.bin"}
     rel_path = file_map.get(board)
     if not rel_path:
         return jsonify(ok=False, err=f"unknown board: {board}"), 404
@@ -7694,7 +7759,8 @@ def api_fw_binary(board):
         if rel:
             # OTA needs app-only binary; try esp32-firmware-app.bin first, fallback to merged
             asset_names = {"esp32": ["esp32-firmware-app.bin", "esp32-firmware-merged.bin"],
-                           "d1mini": ["d1mini-firmware.bin"]}
+                           "d1mini": ["d1mini-firmware.bin"],
+                           "esp32s3": ["esp32s3-firmware-app.bin", "esp32s3-firmware-merged.bin"]}
             asset_name = None
             for name in asset_names.get(board, []):
                 if any(a["name"] == name for a in rel.get("assets", [])):

@@ -74,5 +74,9 @@ void gyroDrawText(int16_t x, int16_t y, const char* str,
 int16_t gyroDrawChar(int16_t x, int16_t y, char c,
                      uint8_t size, uint16_t colour);
 
+// Blit an RGB565 image buffer. Skips black (0x0000) pixels for transparency.
+void gyroDrawImage(int16_t x, int16_t y, int16_t w, int16_t h,
+                   const uint16_t* data);
+
 #endif  // BOARD_GYRO
 #endif  // GYRODISPLAY_H

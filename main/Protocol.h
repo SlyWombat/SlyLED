@@ -41,6 +41,7 @@ constexpr uint8_t CMD_OTA_STATUS     = 0x51;   // child→parent: OTA progress/r
 constexpr uint8_t CMD_GYRO_ORIENT    = 0x60;   // gyro→parent: orientation stream (20 Hz default)
 constexpr uint8_t CMD_GYRO_CTRL      = 0x61;   // parent→gyro: enable/disable + target fps
 constexpr uint8_t CMD_GYRO_RECAL     = 0x62;   // parent→gyro: zero IMU reference (no payload)
+constexpr uint8_t CMD_GYRO_COLOR     = 0x63;   // gyro→parent: colour preset / flash command
 
 // ── Action type codes ─────────────────────────────────────────────────────────
 // (uint8_t — avoids Mbed prototype-generator issues with enums)
@@ -185,5 +186,13 @@ struct __attribute__((packed)) GyroCtrlPayload {
   uint8_t enabled;    // 1 = start streaming, 0 = stop
   uint8_t targetFps;  // desired rate, 0 = use board default (20 Hz); max 50
 };  // 2 bytes
+
+// GyroColorPayload — gyro→parent (4 bytes)
+struct __attribute__((packed)) GyroColorPayload {
+  uint8_t r;
+  uint8_t g;
+  uint8_t b;
+  uint8_t flags;      // bit0 = flash (brief full-brightness pulse), bits[1:7] reserved
+};  // 4 bytes
 
 #endif  // PROTOCOL_H

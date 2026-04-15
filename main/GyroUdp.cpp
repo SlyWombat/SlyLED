@@ -191,4 +191,29 @@ void gyroUdpSetStreaming(bool enabled, uint8_t fps) {
     s_fpsWindowMs = (uint32_t)millis();
 }
 
+void gyroUdpSendColor(uint8_t r, uint8_t g, uint8_t b, uint8_t flags) {
+    UdpHeader hdr;
+    hdr.magic   = UDP_MAGIC;
+    hdr.version = UDP_VERSION;
+    hdr.cmd     = CMD_GYRO_COLOR;
+    hdr.epoch   = (uint32_t)currentEpoch();
+
+    GyroColorPayload cp;
+    cp.r     = r;
+    cp.g     = g;
+    cp.b     = b;
+    cp.flags = flags;
+
+    uint8_t buf[sizeof(hdr) + sizeof(cp)];
+    memcpy(buf,               &hdr, sizeof(hdr));
+    memcpy(buf + sizeof(hdr), &cp,  sizeof(cp));
+
+    cmdUDP.beginPacket(s_parentIP, UDP_PORT);
+    cmdUDP.write(buf, sizeof(buf));
+    cmdUDP.endPacket();
+
+    if (Serial)
+        Serial.printf("[GyroUDP] COLOR r=%d g=%d b=%d flags=0x%02X\n", r, g, b, flags);
+}
+
 #endif  // BOARD_GYRO

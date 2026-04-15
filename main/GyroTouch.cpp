@@ -22,9 +22,10 @@
 #include <Wire.h>
 
 // ── CST816S register addresses ────────────────────────────────────────────────
-static constexpr uint8_t REG_GESTURE    = 0x00;
-static constexpr uint8_t REG_FINGER_NUM = 0x01;
-static constexpr uint8_t REG_XPOS_H     = 0x02;
+// Register map starts at 0x01 (0x00 is reserved/unused on CST816S).
+static constexpr uint8_t REG_GESTURE    = 0x01;
+static constexpr uint8_t REG_FINGER_NUM = 0x02;
+static constexpr uint8_t REG_XPOS_H     = 0x03;
 static constexpr uint8_t REG_CHIP_ID    = 0xA7;
 static constexpr uint8_t REG_MOTION_MSK = 0xFA;
 
@@ -83,17 +84,15 @@ void gyroTouchInit() {
 // ── Read ──────────────────────────────────────────────────────────────────────
 
 bool gyroTouchRead(int16_t* x, int16_t* y, uint8_t* gesture) {
-    // Read 6 bytes starting from REG_GESTURE in one I2C transaction
     uint8_t buf[6];
     if (!tpReadReg(REG_GESTURE, buf, 6)) {
         *gesture = TOUCH_GEST_NONE;
         return false;
     }
 
-    *gesture = buf[0];                                // GestureID
-    uint8_t fingers = buf[1] & 0x0F;                 // FingerNum (lower nibble)
+    *gesture = buf[0];                                // 0x01: GestureID
+    uint8_t fingers = buf[1] & 0x0F;                 // 0x02: FingerNum
 
-    // Reconstruct 12-bit X and Y coordinates
     *x = (int16_t)(((uint16_t)(buf[2] & 0x0F) << 8) | buf[3]);
     *y = (int16_t)(((uint16_t)(buf[4] & 0x0F) << 8) | buf[5]);
 

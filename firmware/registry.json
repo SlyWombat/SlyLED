@@ -73,7 +73,7 @@
             "description": "Waveshare ESP32-S3 1.28inch round LCD — orientation controller for DMX moving heads",
             "board": "esp32s3",
             "fqbn": "esp32:esp32:esp32s3",
-            "version": "8.4.3",
+            "version": "0.0.1",
             "file": "esp32s3/main.ino.merged.bin",
             "flashMethod": "esptool",
             "buildDefines": [

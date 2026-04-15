@@ -11,7 +11,7 @@
 #ifndef OTA_UPDATE_H
 #define OTA_UPDATE_H
 
-#ifdef BOARD_CHILD
+#if defined(BOARD_CHILD) || defined(BOARD_GYRO)
 
 #include "BoardConfig.h"
 #include <stdint.h>
@@ -46,5 +46,5 @@ bool otaIsNewFirmware();
 // Call from loop() — ESP32: confirms OTA partition after 60s stable operation
 void otaCheckConfirm();
 
-#endif // BOARD_CHILD
+#endif // BOARD_CHILD || BOARD_GYRO
 #endif // OTA_UPDATE_H

@@ -43,8 +43,9 @@ static constexpr uint8_t QMI_CTRL3_VAL = 0x55;
 
 static constexpr float ACCEL_SENS = 4096.0f;  // LSB per g  (±8 g range)
 static constexpr float GYRO_SENS  =   64.0f;  // LSB per dps (±512 dps range)
-static constexpr float DEG_TO_RAD = (float)M_PI / 180.0f;
-static constexpr float RAD_TO_DEG = 180.0f / (float)M_PI;
+// Use unique names — Arduino.h already #defines DEG_TO_RAD / IMU_RAD2DEG
+static constexpr float IMU_DEG2RAD = (float)M_PI / 180.0f;
+static constexpr float IMU_RAD2DEG = 180.0f / (float)M_PI;
 static constexpr float CF_ALPHA   = 0.98f;    // complementary filter weight
 
 // ── Filter state ─────────────────────────────────────────────────────────────
@@ -148,8 +149,8 @@ bool gyroIMURead(float* roll, float* pitch, float* yaw) {
     if (dt <= 0.0f || dt > 0.5f) dt = 0.01f;
 
     // Accelerometer-derived roll and pitch (stable long-term, noisy short-term)
-    float accelRoll  = atan2f(ay, az) * RAD_TO_DEG;
-    float accelPitch = atan2f(-ax, sqrtf(ay * ay + az * az)) * RAD_TO_DEG;
+    float accelRoll  = atan2f(ay, az) * IMU_RAD2DEG;
+    float accelPitch = atan2f(-ax, sqrtf(ay * ay + az * az)) * IMU_RAD2DEG;
 
     // Complementary filter: 98% gyro integration + 2% accelerometer correction
     s_roll  = CF_ALPHA * (s_roll  + gx * dt) + (1.0f - CF_ALPHA) * accelRoll;

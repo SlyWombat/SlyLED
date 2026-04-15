@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Light Ctrl - Color Picker</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "secondary": "#ff7350",
+                    "on-secondary-fixed-variant": "#9b2200",
+                    "secondary-fixed": "#ffc4b6",
+                    "on-error-container": "#ffa8a3",
+                    "surface-bright": "#2c2c2c",
+                    "on-tertiary-fixed-variant": "#436800",
+                    "inverse-surface": "#f9f9f9",
+                    "on-secondary-fixed": "#681300",
+                    "inverse-primary": "#006a71",
+                    "on-error": "#490006",
+                    "primary-container": "#00eefc",
+                    "on-tertiary-fixed": "#2d4900",
+                    "on-tertiary-container": "#3b5d00",
+                    "surface-tint": "#8ff5ff",
+                    "secondary-container": "#b42800",
+                    "error": "#ff716c",
+                    "primary-dim": "#00deec",
+                    "surface-container": "#191919",
+                    "inverse-on-surface": "#555555",
+                    "on-secondary": "#440900",
+                    "secondary-dim": "#dc3300",
+                    "error-container": "#9f0519",
+                    "surface-container-low": "#131313",
+                    "tertiary-dim": "#9eed00",
+                    "on-tertiary": "#416600",
+                    "surface-variant": "#262626",
+                    "surface-container-highest": "#262626",
+                    "tertiary-fixed": "#a8fd00",
+                    "outline": "#757575",
+                    "tertiary": "#deffac",
+                    "surface-container-lowest": "#000000",
+                    "surface-dim": "#0e0e0e",
+                    "on-surface": "#ffffff",
+                    "background": "#0e0e0e",
+                    "on-primary-container": "#005359",
+                    "secondary-fixed-dim": "#ffb09d",
+                    "primary-fixed-dim": "#00deec",
+                    "primary-fixed": "#00eefc",
+                    "outline-variant": "#484848",
+                    "tertiary-container": "#a8fd00",
+                    "surface-container-high": "#1f1f1f",
+                    "primary": "#8ff5ff",
+                    "on-primary-fixed": "#003f43",
+                    "surface": "#0e0e0e",
+                    "on-surface-variant": "#ababab",
+                    "on-primary-fixed-variant": "#005e64",
+                    "on-primary": "#005d63",
+                    "on-secondary-container": "#fff6f4",
+                    "on-background": "#ffffff",
+                    "error-dim": "#d7383b",
+                    "tertiary-fixed-dim": "#9eed00"
+            },
+            "borderRadius": {
+                    "DEFAULT": "1rem",
+                    "lg": "2rem",
+                    "xl": "3rem",
+                    "full": "9999px"
+            },
+            "fontFamily": {
+                    "headline": ["Space Grotesk"],
+                    "body": ["Inter"],
+                    "label": ["Space Grotesk"]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        .color-wheel-bg {
+            background: conic-gradient(from 0deg, #ff0000, #ff8000, #ffff00, #00ff00, #00ffff, #0000ff, #8000ff, #ff00ff, #ff0000);
+        }
+        .neon-glow {
+            box-shadow: 0 0 25px 2px rgba(143, 245, 255, 0.45);
+        }
+        .radial-command-center {
+            aspect-ratio: 1/1;
+            border-radius: 50%;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+</head>
+<body class="bg-background text-on-surface font-body flex items-center justify-center min-h-screen">
+<!-- Smart Watch Circular Container -->
+<div class="relative w-[380px] h-[380px] bg-background rounded-full overflow-hidden border-8 border-surface-container flex flex-col items-center justify-center">
+<!-- Shared Component: TopAppBar (Small Center Aligned) -->
+<header class="absolute top-0 w-full pt-4 px-6 bg-gradient-to-b from-[#131313] to-transparent z-20">
+<div class="flex justify-between items-center w-full max-w-[200px] mx-auto">
+<button class="text-cyan-300 scale-95 active:scale-90 duration-150">
+<span class="material-symbols-outlined text-[20px]">lightbulb</span>
+</button>
+<h1 class="font-['Space_Grotesk'] font-bold text-[#00F0FF] text-xs tracking-widest uppercase">LIGHT CTRL</h1>
+<button class="text-[#ababab] hover:text-cyan-300 transition-colors scale-95 active:scale-90 duration-150">
+<span class="material-symbols-outlined text-[20px]">settings</span>
+</button>
+</div>
+</header>
+<!-- Color Wheel Outer Edge -->
+<div class="absolute inset-0 color-wheel-bg opacity-90"></div>
+<!-- UI Mask (To create the "Wheel" effect) -->
+<div class="absolute inset-[18px] bg-background rounded-full z-10"></div>
+<!-- Technical Content Canvas (Circular Center) -->
+<main class="relative z-20 w-full h-full flex flex-col items-center justify-center pt-8">
+<!-- Technical Metadata Arcs -->
+<!-- Main Interactive Flash Button -->
+<button class="group relative w-44 h-44 rounded-full bg-surface-container-high border border-outline-variant/20 flex flex-col items-center justify-center gap-2 neon-glow active:scale-95 transition-all duration-300">
+<!-- Inner Neon Surface -->
+<div class="absolute inset-2 rounded-full border-2 border-primary/10 bg-gradient-to-br from-primary/10 to-transparent"></div>
+<span class="material-symbols-outlined text-primary text-5xl mb-1" style="font-variation-settings: 'FILL' 1;">bolt</span>
+<span class="font-headline font-bold text-sm tracking-widest text-on-surface text-center px-6 leading-tight">HOLD TO FLASH</span>
+<div class="absolute bottom-6 h-1 w-8 bg-primary-dim/30 rounded-full overflow-hidden">
+<div class="h-full w-2/3 bg-primary"></div>
+</div>
+</button>
+<!-- Bottom Technical Details / Radial Arc Stats -->
+<!-- Navigation Pagination Indicators (Top/Bottom) -->
+<div class="absolute bottom-6 flex gap-1.5">
+<div class="w-1.5 h-1.5 rounded-full bg-outline-variant"></div>
+<div class="w-4 h-1.5 rounded-full bg-primary shadow-[0_0_8px_rgba(143,245,255,0.6)]"></div>
+<div class="w-1.5 h-1.5 rounded-full bg-outline-variant"></div>
+<div class="w-1.5 h-1.5 rounded-full bg-outline-variant"></div>
+</div>
+</main>
+<!-- Shared Component: BottomNavBar (Icons Only) -->
+<nav class="fixed bottom-4 left-1/2 -translate-x-1/2 w-[70%] flex justify-around items-center z-50 bg-[#131313]/80 backdrop-blur-lg rounded-full px-4 py-1">
+<button class="text-[#484848] p-2 hover:bg-white/5 rounded-full">
+<span class="material-symbols-outlined text-[18px]">palette</span>
+</button>
+<button class="bg-cyan-400/20 text-[#00F0FF] rounded-full p-2 shadow-[0_0_15px_rgba(0,240,255,0.4)] transition-transform duration-300 ease-out active:scale-110">
+<span class="material-symbols-outlined text-[18px]" style="font-variation-settings: 'FILL' 1;">tune</span>
+</button>
+<button class="text-[#484848] p-2 hover:bg-white/5 rounded-full">
+<span class="material-symbols-outlined text-[18px]">groups</span>
+</button>
+</nav>
+<!-- Visual Enhancements: Edge Glare -->
+<div class="pointer-events-none absolute inset-0 rounded-full border-[1px] border-white/5 z-40"></div>
+</div>
+<!-- Background Decorative Visual (for the surrounding screen/desktop context) -->
+<div class="fixed inset-0 -z-10 bg-surface-container-lowest opacity-40">
+<div class="absolute top-1/4 left-1/4 w-[600px] h-[600px] bg-primary/5 rounded-full blur-[120px]"></div>
+<div class="absolute bottom-1/4 right-1/4 w-[600px] h-[600px] bg-secondary/5 rounded-full blur-[120px]"></div>
+</div>
+</body></html>

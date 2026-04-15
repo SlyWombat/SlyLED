@@ -43,5 +43,9 @@ uint8_t gyroUdpTargetFps();  // configured target fps
 // round-trip.  Does not change the stored parent IP.
 void gyroUdpSetStreaming(bool enabled, uint8_t fps = 0);
 
+// Send CMD_GYRO_COLOR (0x63) to parent — colour preset or flash pulse.
+// flags bit0 = flash (brief full-brightness pulse)
+void gyroUdpSendColor(uint8_t r, uint8_t g, uint8_t b, uint8_t flags);
+
 #endif  // BOARD_GYRO
 #endif  // GYROUDP_H

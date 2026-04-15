@@ -378,4 +378,17 @@ void gyroDrawText(int16_t x, int16_t y, const char* str, uint8_t size, uint16_t 
     }
 }
 
+// Blit RGB565 image with black-as-transparent
+void gyroDrawImage(int16_t x, int16_t y, int16_t w, int16_t h,
+                   const uint16_t* data) {
+    for (int16_t row = 0; row < h; row++) {
+        for (int16_t col = 0; col < w; col++) {
+            uint16_t px = data[row * w + col];
+            if (px != 0x0000) {  // skip black = transparent
+                gyroDrawPixel(x + col, y + row, px);
+            }
+        }
+    }
+}
+
 #endif  // BOARD_GYRO

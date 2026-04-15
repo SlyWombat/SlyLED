@@ -91,11 +91,11 @@ void setup() {
   if (Serial) Serial.println("=== BOOT ===");
 
 #ifdef BOARD_GYRO
+  gyroTouchInit();   // Wire.begin() happens here — must come before IMU
   gyroIMUInit();
-  gyroTouchInit();
-  connectWiFi();
-  gyroDisplayInit();  // display after WiFi so we can show connect status
-  gyroUIInit();
+  gyroDisplayInit();  // display before WiFi so LOGO screen is visible
+  gyroUIInit();       // draws LOGO with progress bar
+  connectWiFi();     // blocking — LOGO visible during connect
   gyroUdpInit();
 
 #elif defined(BOARD_GIGA)

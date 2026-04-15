@@ -533,7 +533,7 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
     sendChildConfigPage(client);
 #elif defined(BOARD_GYRO)
     // Gyro board: redirect all unmatched routes to /status
-    sendBuf(client, F("HTTP/1.1 302 Found\r\nLocation: /status\r\nContent-Length: 0\r\n\r\n"));
+    sendBuf(client, "HTTP/1.1 302 Found\r\nLocation: /status\r\nContent-Length: 0\r\n\r\n");
 #else
     sendParentSPA(client);
 #endif

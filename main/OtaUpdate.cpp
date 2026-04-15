@@ -9,7 +9,7 @@
 #include "BoardConfig.h"
 #include "OtaUpdate.h"
 
-#ifdef BOARD_CHILD
+#if defined(BOARD_CHILD) || defined(BOARD_GYRO)
 
 #include "version.h"
 #include <Arduino.h>
@@ -19,7 +19,7 @@ volatile uint8_t otaProgress = 0;
 
 // ── ESP32 OTA ────────────────────────────────────────────────────────────────
 
-#if defined(BOARD_ESP32)
+#if defined(BOARD_ESP32) || defined(BOARD_GYRO)
 #include <HTTPUpdate.h>
 #include <WiFi.h>
 #include <esp_ota_ops.h>
@@ -156,4 +156,4 @@ void otaCheckConfirm() {}
 
 #endif // board selection
 
-#endif // BOARD_CHILD
+#endif // BOARD_CHILD || BOARD_GYRO
