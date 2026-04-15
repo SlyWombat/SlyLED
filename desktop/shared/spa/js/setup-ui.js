@@ -85,6 +85,19 @@ function _renderSetup(){
           var acts='<button class="btn btn-on" onclick="refreshChild('+c.id+')">Refresh</button>'
             +' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff">Reboot</button>'
             +' <button class="btn btn-off" onclick="removeChild('+c.id+')">Remove</button>';
+          // Assign Mover UI — only shown if this board has no gyro fixture yet (#461)
+          var gcAlreadyAssigned=gyroFixtures.some(function(gf){return gf.gyroChildId===c.id;});
+          if(!gcAlreadyAssigned){
+            var assignedMoverIds=new Set(gyroFixtures.map(function(gf){return gf.assignedMoverId;}).filter(function(id){return id!=null;}));
+            var freeMovers=dmxFixtures.filter(function(m){return !assignedMoverIds.has(m.id);});
+            if(freeMovers.length){
+              var mopts='<option value="">Select mover\u2026</option>'+freeMovers.map(function(m){return '<option value="'+m.id+'">'+escapeHtml(m.name)+'</option>';}).join('');
+              acts+=' <select id="gyro-ms-'+c.id+'" style="font-size:.8em;background:#1a1a2e;color:#e2e8f0;border:1px solid #334;border-radius:3px;padding:.12em .3em">'+mopts+'</select>'
+                +' <button class="btn btn-on" onclick="_gyroAssignMover('+c.id+',\'gyro-ms-'+c.id+'\')" style="font-size:.8em">Assign&nbsp;Mover</button>';
+            }else{
+              acts+=' <span style="color:#64748b;font-size:.78em;margin-left:.4em">(add DMX movers first)</span>';
+            }
+          }
           h+='<tr><td><b>'+escapeHtml(c.name||c.hostname)+'</b></td><td>'+typeBadge+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+fwHtml+'</td><td>'+acts+'</td></tr>';
         });
         // Camera nodes as hardware rows
@@ -197,18 +210,44 @@ function _renderSetup(){
           var conn=gc?escapeHtml(gc.hostname||gc.ip)+'<span style="color:#64748b;font-size:.8em"> ('+escapeHtml(gc.ip)+')</span>':'<span style="color:#666">No gyro board linked</span>';
           var mid=f.assignedMoverId;
           var mover=mid!=null?(fixtures||[]).find(function(fx){return fx.id===mid;}):null;
-          var moverTxt=mover?escapeHtml(mover.name):'<span style="color:#666">No mover assigned</span>';
+          var moverWarn=(mid!=null&&!mover)?'<span style="color:#f87171;font-size:.75em"> \u26a0 Mover deleted</span>':'';
+          var moverTxt=mover?escapeHtml(mover.name):mid!=null?'<span style="color:#f87171">Missing (#'+mid+')</span>':'<span style="color:#64748b">No mover assigned</span>';
           var status=f.gyroEnabled?'<span class="badge" style="background:#059669;color:#fff">Enabled</span>':'<span class="badge" style="background:#334;color:#888">Disabled</span>';
-          var actions='<button class="btn" onclick="editFixture('+f.id+')" style="background:#446;color:#fff">Edit</button>';
+          var tid='gyro-tune-'+f.id;
+          var actions='';
           if(gcid!=null){
-            actions+=' <button class="btn btn-on" onclick="_gyroEnable('+f.gyroChildId+',true)" style="font-size:.8em">Enable</button>'
-              +' <button class="btn" onclick="_gyroEnable('+f.gyroChildId+',false)" style="background:#334;color:#94a3b8;font-size:.8em">Disable</button>'
-              +' <button class="btn" onclick="_gyroRecal('+f.gyroChildId+')" style="background:#1e3a5f;color:#93c5fd;font-size:.8em">Zero IMU</button>';
+            if(f.gyroEnabled){
+              actions+='<button class="btn" onclick="_gyroToggleEnabled('+f.id+',false)" style="background:#334;color:#94a3b8;font-size:.8em">Disable</button>';
+            }else{
+              actions+='<button class="btn btn-on" onclick="_gyroToggleEnabled('+f.id+',true)" style="font-size:.8em">Enable</button>';
+            }
+            actions+=' <button class="btn" onclick="_gyroRecal('+f.gyroChildId+')" style="background:#1e3a5f;color:#93c5fd;font-size:.8em">Zero IMU</button>';
           }
+          actions+=' <button class="btn" onclick="_gyroShowTuning(\''+tid+'\')" style="background:#312e81;color:#a5b4fc;font-size:.8em">Tuning \u25be</button>';
           actions+=' <button class="btn btn-off" onclick="removeFixture('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
-          h+='<tr><td><b>'+escapeHtml(f.name)+'</b><br><span style="color:#94a3b8;font-size:.75em">→ '+moverTxt+'</span></td>'
+          h+='<tr><td><b>'+escapeHtml(f.name)+'</b><br><span style="color:#94a3b8;font-size:.75em">\u2192 '+moverTxt+'</span>'+moverWarn+'</td>'
             +'<td><span class="badge" style="background:#6d28d9;color:#fff">Gyro</span></td>'
-            +'<td>'+conn+'</td><td>'+status+'</td><td>—</td><td>'+actions+'</td></tr>';
+            +'<td>'+conn+'</td><td>'+status+'</td><td>\u2014</td><td>'+actions+'</td></tr>';
+          // Collapsible tuning row (#461)
+          var moverOpts='<option value="">None</option>'+dmxFixtures.map(function(m){return '<option value="'+m.id+'"'+(m.id===mid?' selected':'')+'>'+escapeHtml(m.name)+'</option>';}).join('');
+          h+='<tr id="'+tid+'" style="display:none"><td colspan="6" style="background:#0c111d;padding:.6em 1em 1em;border-bottom:2px solid #312e81">'
+            +'<div style="display:flex;flex-wrap:wrap;gap:.7em;align-items:flex-end;margin-bottom:.6em">'
+            +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Pan Center</label><input id="'+tid+'-pc" type="number" value="'+(f.panCenter!=null?f.panCenter:128)+'" min="0" max="255" style="width:64px;font-size:.85em"></div>'
+            +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Tilt Center</label><input id="'+tid+'-tc" type="number" value="'+(f.tiltCenter!=null?f.tiltCenter:128)+'" min="0" max="255" style="width:64px;font-size:.85em"></div>'
+            +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Pan Scale</label><input id="'+tid+'-ps" type="number" value="'+(f.panScale!=null?f.panScale:1.0)+'" min="0.1" max="3.0" step="0.1" style="width:64px;font-size:.85em"></div>'
+            +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Tilt Scale</label><input id="'+tid+'-ts" type="number" value="'+(f.tiltScale!=null?f.tiltScale:1.0)+'" min="0.1" max="3.0" step="0.1" style="width:64px;font-size:.85em"></div>'
+            +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Pan Offset (\u00b0)</label><input id="'+tid+'-po" type="number" value="'+(f.panOffsetDeg||0)+'" min="-180" max="180" style="width:64px;font-size:.85em"></div>'
+            +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Tilt Offset (\u00b0)</label><input id="'+tid+'-to" type="number" value="'+(f.tiltOffsetDeg||0)+'" min="-90" max="90" style="width:64px;font-size:.85em"></div>'
+            +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Smoothing</label><input id="'+tid+'-sm" type="number" value="'+(f.smoothing!=null?f.smoothing:0.15)+'" min="0" max="1" step="0.05" style="width:64px;font-size:.85em"></div>'
+            +'<div style="align-self:flex-end"><button class="btn btn-on" onclick="_gyroSaveTuning('+f.id+')" style="font-size:.85em">Save</button></div>'
+            +'</div>'
+            +'<div style="display:flex;align-items:center;gap:.5em;flex-wrap:wrap;border-top:1px solid #1e293b;padding-top:.5em">'
+            +'<span style="font-size:.8em;color:#94a3b8">Assigned Mover:</span>'
+            +'<select id="'+tid+'-mv" style="font-size:.82em;background:#1a1a2e;color:#e2e8f0;border:1px solid #334;border-radius:3px;padding:.12em .3em">'+moverOpts+'</select>'
+            +'<button class="btn btn-on" onclick="_gyroReassign('+f.id+',\''+tid+'-mv\')" style="font-size:.82em">Reassign</button>'
+            +'<button class="btn btn-off" onclick="_gyroUnassign('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Unassign</button>'
+            +'</div>'
+            +'</td></tr>';
         });
       }
       if(!ledFixtures.length&&!dmxFixtures.length&&!camFixtures.length&&!gyroFixtures.length){
@@ -922,6 +961,72 @@ function _gyroRecal(childId){
   ra('POST','/api/gyro/'+childId+'/recalibrate',{},function(r){
     if(r&&r.ok)document.getElementById('hs').textContent='Gyro IMU zeroed';
     else document.getElementById('hs').textContent='Recalibrate failed: '+(r&&r.err||'unknown');
+  });
+}
+
+function _gyroShowTuning(rowId){
+  var r=document.getElementById(rowId);
+  if(r)r.style.display=r.style.display==='none'?'table-row':'none';
+}
+
+function _gyroToggleEnabled(fixtureId,enable){
+  ra('PUT','/api/fixtures/'+fixtureId,{gyroEnabled:enable},function(r){
+    if(r&&r.ok){
+      var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===fixtureId)f=fx;});
+      if(f&&f.gyroChildId!=null)_gyroEnable(f.gyroChildId,enable);
+      document.getElementById('hs').textContent=enable?'Gyro enabled':'Gyro disabled';
+      loadSetup();
+    }else{
+      document.getElementById('hs').textContent='Toggle failed: '+(r&&r.err||'unknown');
+    }
+  });
+}
+
+function _gyroAssignMover(childId,selId){
+  var sel=document.getElementById(selId);
+  if(!sel||!sel.value){document.getElementById('hs').textContent='Select a mover first';return;}
+  var moverId=parseInt(sel.value,10);
+  var mover=null;(_fixtures||[]).forEach(function(f){if(f.id===moverId)mover=f;});
+  var name=(mover?mover.name+' ':'')+'Gyro';
+  ra('POST','/api/fixtures',{name:name,fixtureType:'gyro',type:'point',gyroChildId:childId,assignedMoverId:moverId,gyroEnabled:false},function(r){
+    if(r&&r.ok){document.getElementById('hs').textContent='Gyro fixture created';loadSetup();}
+    else document.getElementById('hs').textContent='Create failed: '+(r&&r.err||'unknown');
+  });
+}
+
+function _gyroReassign(fixtureId,selId){
+  var sel=document.getElementById(selId);
+  if(!sel)return;
+  var mid=sel.value?parseInt(sel.value,10):null;
+  ra('PUT','/api/fixtures/'+fixtureId,{assignedMoverId:mid},function(r){
+    if(r&&r.ok){document.getElementById('hs').textContent=mid?'Mover reassigned':'Mover cleared';loadSetup();}
+    else document.getElementById('hs').textContent='Reassign failed: '+(r&&r.err||'unknown');
+  });
+}
+
+function _gyroSaveTuning(fixtureId){
+  var tid='gyro-tune-'+fixtureId;
+  var pc=parseFloat(document.getElementById(tid+'-pc').value);
+  var tc=parseFloat(document.getElementById(tid+'-tc').value);
+  var ps=parseFloat(document.getElementById(tid+'-ps').value);
+  var ts=parseFloat(document.getElementById(tid+'-ts').value);
+  var po=parseFloat(document.getElementById(tid+'-po').value);
+  var to=parseFloat(document.getElementById(tid+'-to').value);
+  var sm=parseFloat(document.getElementById(tid+'-sm').value);
+  if(isNaN(pc)||pc<0||pc>255||isNaN(tc)||tc<0||tc>255){document.getElementById('hs').textContent='Center must be 0-255';return;}
+  if(isNaN(ps)||ps<0.1||ps>3||isNaN(ts)||ts<0.1||ts>3){document.getElementById('hs').textContent='Scale must be 0.1-3.0';return;}
+  if(isNaN(sm)||sm<0||sm>1){document.getElementById('hs').textContent='Smoothing must be 0-1';return;}
+  ra('PUT','/api/fixtures/'+fixtureId,{panCenter:pc,tiltCenter:tc,panScale:ps,tiltScale:ts,panOffsetDeg:po,tiltOffsetDeg:to,smoothing:sm},function(r){
+    if(r&&r.ok)document.getElementById('hs').textContent='Tuning saved';
+    else document.getElementById('hs').textContent='Save failed: '+(r&&r.err||'unknown');
+  });
+}
+
+function _gyroUnassign(fixtureId,name){
+  if(!confirm('Remove gyro fixture "'+name+'"? This will unlink the gyro board from its mover.'))return;
+  ra('DELETE','/api/fixtures/'+fixtureId,null,function(r){
+    if(r&&r.ok){document.getElementById('hs').textContent='Gyro fixture removed';loadSetup();}
+    else document.getElementById('hs').textContent='Remove failed: '+(r&&r.err||'unknown');
   });
 }
 
