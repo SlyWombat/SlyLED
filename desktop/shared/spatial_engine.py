@@ -379,7 +379,8 @@ def compute_pan_tilt(fixture_pos, aim_point, pan_range_deg, tilt_range_deg,
         tilt_deg = -tilt_deg
 
     if pan_offset is None:
-        pan_offset = 0.0  # calibration discovers the actual offset
+        # Inverted ceiling mounts face backward — 180° pan flip
+        pan_offset = 180.0 if mounted_inverted else 0.0
     pan_norm = 0.5 + (pan_deg + pan_offset) / pan_range_deg
     tilt_norm = 0.5 + tilt_deg / tilt_range_deg
 

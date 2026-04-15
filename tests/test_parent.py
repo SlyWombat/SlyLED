@@ -1450,7 +1450,7 @@ def run():
         ok('SPA has view dropdown', 'view-dropdown' in spa)
         ok('SPA has rest vector 2D', "'0,0'" in spa and 'f59e0b' in spa)
         ok('SPA applyNodePos saves to server', "ra('POST','/api/layout'" in spa and 'applyNodePos' in spa)
-        ok('SPA has env scan', '_envScan' in spa and 'btn-env-scan' in spa)
+        ok('SPA has env scan', '_envScan' in spa and 'scene-dropdown' in spa)
         ok('SPA has point cloud toggle', '_togglePointCloud' in spa and 'btn-show-cloud' in spa)
         ok('SPA has point cloud renderer', '_renderPointCloud' in spa and 'THREE.Points' in spa)
         ok('SPA has rest vector 3D', 'LineDashedMaterial' in spa and 'homeDir' in spa)
