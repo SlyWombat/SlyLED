@@ -73,22 +73,30 @@ function _renderSetup(){
           acts+=' <button class="btn btn-off" onclick="removeChild('+c.id+')">Remove</button>';
           h+='<tr><td><b>'+escapeHtml(c.name||c.hostname)+'</b></td><td>'+typeBadge+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+fwHtml+'</td><td>'+acts+'</td></tr>';
         });
-        // Gyro boards as hardware rows
+        // Gyro boards as hardware rows (#462-465: gyro devices with inline Configure panel)
         gyroChildren.forEach(function(c){
-          var typeBadge='<span class="badge" style="background:#7c3aed;color:#fff">Gyro Board</span>';
+          var typeBadge='<span class="badge" style="background:#6d28d9;color:#fff">Gyro</span>';
           var rssi=c.rssi||0;
           var rssiHtml='';
           if(c.status===1&&rssi){var rssiCol=Math.abs(rssi)<=50?'#4c4':Math.abs(rssi)<=70?'#fa6':'#f66';rssiHtml=' <span style="color:'+rssiCol+';font-size:.75em" title="'+rssi+' dBm">'+_rssiIcon(rssi)+'</span>';}
           var st=c.status===1?'<span class="badge bon">Online</span>'+rssiHtml:'<span class="badge boff">Offline</span>';
           var fwVer=c.fwVersion||'—';
           var fwHtml=escapeHtml(fwVer)+'<span id="fw-ind-'+c.id+'"></span>';
+          // Name: show altName as primary if set, hostname as secondary (#464)
+          var primaryName=c.altName||c.name||c.hostname||'Gyro';
+          var secondaryName=(c.altName&&c.hostname&&c.altName!==c.hostname)?'<br><span style="color:#64748b;font-size:.75em">'+escapeHtml(c.hostname)+'</span>':'';
           var acts='<button class="btn btn-on" onclick="refreshChild('+c.id+')">Refresh</button>'
             +' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff">Reboot</button>'
             +' <button class="btn btn-off" onclick="removeChild('+c.id+')">Remove</button>';
-          // Assign Mover UI — only shown if this board has no gyro fixture yet (#461)
-          var gcAlreadyAssigned=gyroFixtures.some(function(gf){return gf.gyroChildId===c.id;});
-          if(!gcAlreadyAssigned){
-            var assignedMoverIds=new Set(gyroFixtures.map(function(gf){return gf.assignedMoverId;}).filter(function(id){return id!=null;}));
+          // Find gyro fixture linked to this child (if any)
+          var gf=gyroFixtures.find(function(gfx){return gfx.gyroChildId===c.id;});
+          var gcTuneId='gyro-hw-tune-'+c.id;
+          if(gf){
+            // Has a gyro fixture — show Configure button (#465)
+            acts+=' <button class="btn" onclick="_gyroShowTuning(\''+gcTuneId+'\')" style="background:#312e81;color:#a5b4fc;font-size:.8em">Configure \u25be</button>';
+          }else{
+            // No gyro fixture yet — show Assign Mover inline (#461)
+            var assignedMoverIds=new Set(gyroFixtures.map(function(gfx){return gfx.assignedMoverId;}).filter(function(id){return id!=null;}));
             var freeMovers=dmxFixtures.filter(function(m){return !assignedMoverIds.has(m.id);});
             if(freeMovers.length){
               var mopts='<option value="">Select mover\u2026</option>'+freeMovers.map(function(m){return '<option value="'+m.id+'">'+escapeHtml(m.name)+'</option>';}).join('');
@@ -98,7 +106,45 @@ function _renderSetup(){
               acts+=' <span style="color:#64748b;font-size:.78em;margin-left:.4em">(add DMX movers first)</span>';
             }
           }
-          h+='<tr><td><b>'+escapeHtml(c.name||c.hostname)+'</b></td><td>'+typeBadge+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+fwHtml+'</td><td>'+acts+'</td></tr>';
+          h+='<tr><td><b>'+escapeHtml(primaryName)+'</b>'+secondaryName+'</td><td>'+typeBadge+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+fwHtml+'</td><td>'+acts+'</td></tr>';
+          // Collapsible Configure panel — inline tuning + mover assignment (#465)
+          if(gf){
+            var f=gf;
+            var mid=f.assignedMoverId;
+            var mover=mid!=null?(fixtures||[]).find(function(fx){return fx.id===mid;}):null;
+            var moverTxt=mover?escapeHtml(mover.name):mid!=null?'<span style="color:#f87171">Missing (#'+mid+')</span>':'<span style="color:#64748b">No mover assigned</span>';
+            var statusBadge=f.gyroEnabled?'<span class="badge" style="background:#059669;color:#fff;margin-right:.5em">Enabled</span>':'<span class="badge" style="background:#334;color:#888;margin-right:.5em">Disabled</span>';
+            var enableActs='';
+            if(f.gyroEnabled){
+              enableActs+='<button class="btn" onclick="_gyroToggleEnabled('+f.id+',false)" style="background:#334;color:#94a3b8;font-size:.8em">Disable</button>';
+            }else{
+              enableActs+='<button class="btn btn-on" onclick="_gyroToggleEnabled('+f.id+',true)" style="font-size:.8em">Enable</button>';
+            }
+            enableActs+=' <button class="btn" onclick="_gyroRecal('+f.gyroChildId+')" style="background:#1e3a5f;color:#93c5fd;font-size:.8em">Zero IMU</button>';
+            var tid='gyro-tune-'+f.id;
+            var moverOpts='<option value="">None</option>'+dmxFixtures.map(function(m){return '<option value="'+m.id+'"'+(m.id===mid?' selected':'')+'>'+escapeHtml(m.name)+'</option>';}).join('');
+            h+='<tr id="'+gcTuneId+'" style="display:none"><td colspan="6" style="background:#0c111d;padding:.6em 1em 1em;border-bottom:2px solid #312e81">'
+              +'<div style="display:flex;align-items:center;gap:.5em;margin-bottom:.6em;flex-wrap:wrap">'+statusBadge
+              +'<span style="font-size:.8em;color:#94a3b8">Mover: '+moverTxt+'</span>'
+              +'<span style="flex:1"></span>'+enableActs+'</div>'
+              +'<div style="display:flex;flex-wrap:wrap;gap:.7em;align-items:flex-end;margin-bottom:.6em">'
+              +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Pan Center</label><input id="'+tid+'-pc" type="number" value="'+(f.panCenter!=null?f.panCenter:128)+'" min="0" max="255" style="width:64px;font-size:.85em"></div>'
+              +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Tilt Center</label><input id="'+tid+'-tc" type="number" value="'+(f.tiltCenter!=null?f.tiltCenter:128)+'" min="0" max="255" style="width:64px;font-size:.85em"></div>'
+              +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Pan Scale</label><input id="'+tid+'-ps" type="number" value="'+(f.panScale!=null?f.panScale:1.0)+'" min="0.1" max="3.0" step="0.1" style="width:64px;font-size:.85em"></div>'
+              +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Tilt Scale</label><input id="'+tid+'-ts" type="number" value="'+(f.tiltScale!=null?f.tiltScale:1.0)+'" min="0.1" max="3.0" step="0.1" style="width:64px;font-size:.85em"></div>'
+              +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Pan Offset (\u00b0)</label><input id="'+tid+'-po" type="number" value="'+(f.panOffsetDeg||0)+'" min="-180" max="180" style="width:64px;font-size:.85em"></div>'
+              +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Tilt Offset (\u00b0)</label><input id="'+tid+'-to" type="number" value="'+(f.tiltOffsetDeg||0)+'" min="-90" max="90" style="width:64px;font-size:.85em"></div>'
+              +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Smoothing</label><input id="'+tid+'-sm" type="number" value="'+(f.smoothing!=null?f.smoothing:0.15)+'" min="0" max="1" step="0.05" style="width:64px;font-size:.85em"></div>'
+              +'<div style="align-self:flex-end"><button class="btn btn-on" onclick="_gyroSaveTuning('+f.id+')" style="font-size:.85em">Save</button></div>'
+              +'</div>'
+              +'<div style="display:flex;align-items:center;gap:.5em;flex-wrap:wrap;border-top:1px solid #1e293b;padding-top:.5em">'
+              +'<span style="font-size:.8em;color:#94a3b8">Assigned Mover:</span>'
+              +'<select id="'+tid+'-mv" style="font-size:.82em;background:#1a1a2e;color:#e2e8f0;border:1px solid #334;border-radius:3px;padding:.12em .3em">'+moverOpts+'</select>'
+              +'<button class="btn btn-on" onclick="_gyroReassign('+f.id+',\''+tid+'-mv\')" style="font-size:.82em">Reassign</button>'
+              +'<button class="btn btn-off" onclick="_gyroUnassign('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Unassign</button>'
+              +'</div>'
+              +'</td></tr>';
+          }
         });
         // Camera nodes as hardware rows
         camNodes.forEach(function(node){
@@ -203,54 +249,7 @@ function _renderSetup(){
           h+='<tr><td><b>'+escapeHtml(f.name)+'</b></td><td><span class="badge" style="background:#7c3aed;color:#fff">DMX</span></td><td>'+conn+'</td><td><span class="badge" style="background:#7c3aed;color:#fff">Configured</span></td><td>'+chLeds+'</td><td>'+actions+'</td></tr>';
         });
       }
-      if(gyroFixtures.length){
-        gyroFixtures.forEach(function(f){
-          var gcid=f.gyroChildId;
-          var gc=gcid!=null?(children||[]).find(function(c){return c.id===gcid;}):null;
-          var conn=gc?escapeHtml(gc.hostname||gc.ip)+'<span style="color:#64748b;font-size:.8em"> ('+escapeHtml(gc.ip)+')</span>':'<span style="color:#666">No gyro board linked</span>';
-          var mid=f.assignedMoverId;
-          var mover=mid!=null?(fixtures||[]).find(function(fx){return fx.id===mid;}):null;
-          var moverWarn=(mid!=null&&!mover)?'<span style="color:#f87171;font-size:.75em"> \u26a0 Mover deleted</span>':'';
-          var moverTxt=mover?escapeHtml(mover.name):mid!=null?'<span style="color:#f87171">Missing (#'+mid+')</span>':'<span style="color:#64748b">No mover assigned</span>';
-          var status=f.gyroEnabled?'<span class="badge" style="background:#059669;color:#fff">Enabled</span>':'<span class="badge" style="background:#334;color:#888">Disabled</span>';
-          var tid='gyro-tune-'+f.id;
-          var actions='';
-          if(gcid!=null){
-            if(f.gyroEnabled){
-              actions+='<button class="btn" onclick="_gyroToggleEnabled('+f.id+',false)" style="background:#334;color:#94a3b8;font-size:.8em">Disable</button>';
-            }else{
-              actions+='<button class="btn btn-on" onclick="_gyroToggleEnabled('+f.id+',true)" style="font-size:.8em">Enable</button>';
-            }
-            actions+=' <button class="btn" onclick="_gyroRecal('+f.gyroChildId+')" style="background:#1e3a5f;color:#93c5fd;font-size:.8em">Zero IMU</button>';
-          }
-          actions+=' <button class="btn" onclick="_gyroShowTuning(\''+tid+'\')" style="background:#312e81;color:#a5b4fc;font-size:.8em">Tuning \u25be</button>';
-          actions+=' <button class="btn btn-off" onclick="removeFixture('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
-          h+='<tr><td><b>'+escapeHtml(f.name)+'</b><br><span style="color:#94a3b8;font-size:.75em">\u2192 '+moverTxt+'</span>'+moverWarn+'</td>'
-            +'<td><span class="badge" style="background:#6d28d9;color:#fff">Gyro</span></td>'
-            +'<td>'+conn+'</td><td>'+status+'</td><td>\u2014</td><td>'+actions+'</td></tr>';
-          // Collapsible tuning row (#461)
-          var moverOpts='<option value="">None</option>'+dmxFixtures.map(function(m){return '<option value="'+m.id+'"'+(m.id===mid?' selected':'')+'>'+escapeHtml(m.name)+'</option>';}).join('');
-          h+='<tr id="'+tid+'" style="display:none"><td colspan="6" style="background:#0c111d;padding:.6em 1em 1em;border-bottom:2px solid #312e81">'
-            +'<div style="display:flex;flex-wrap:wrap;gap:.7em;align-items:flex-end;margin-bottom:.6em">'
-            +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Pan Center</label><input id="'+tid+'-pc" type="number" value="'+(f.panCenter!=null?f.panCenter:128)+'" min="0" max="255" style="width:64px;font-size:.85em"></div>'
-            +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Tilt Center</label><input id="'+tid+'-tc" type="number" value="'+(f.tiltCenter!=null?f.tiltCenter:128)+'" min="0" max="255" style="width:64px;font-size:.85em"></div>'
-            +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Pan Scale</label><input id="'+tid+'-ps" type="number" value="'+(f.panScale!=null?f.panScale:1.0)+'" min="0.1" max="3.0" step="0.1" style="width:64px;font-size:.85em"></div>'
-            +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Tilt Scale</label><input id="'+tid+'-ts" type="number" value="'+(f.tiltScale!=null?f.tiltScale:1.0)+'" min="0.1" max="3.0" step="0.1" style="width:64px;font-size:.85em"></div>'
-            +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Pan Offset (\u00b0)</label><input id="'+tid+'-po" type="number" value="'+(f.panOffsetDeg||0)+'" min="-180" max="180" style="width:64px;font-size:.85em"></div>'
-            +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Tilt Offset (\u00b0)</label><input id="'+tid+'-to" type="number" value="'+(f.tiltOffsetDeg||0)+'" min="-90" max="90" style="width:64px;font-size:.85em"></div>'
-            +'<div><label style="font-size:.73em;color:#94a3b8;display:block">Smoothing</label><input id="'+tid+'-sm" type="number" value="'+(f.smoothing!=null?f.smoothing:0.15)+'" min="0" max="1" step="0.05" style="width:64px;font-size:.85em"></div>'
-            +'<div style="align-self:flex-end"><button class="btn btn-on" onclick="_gyroSaveTuning('+f.id+')" style="font-size:.85em">Save</button></div>'
-            +'</div>'
-            +'<div style="display:flex;align-items:center;gap:.5em;flex-wrap:wrap;border-top:1px solid #1e293b;padding-top:.5em">'
-            +'<span style="font-size:.8em;color:#94a3b8">Assigned Mover:</span>'
-            +'<select id="'+tid+'-mv" style="font-size:.82em;background:#1a1a2e;color:#e2e8f0;border:1px solid #334;border-radius:3px;padding:.12em .3em">'+moverOpts+'</select>'
-            +'<button class="btn btn-on" onclick="_gyroReassign('+f.id+',\''+tid+'-mv\')" style="font-size:.82em">Reassign</button>'
-            +'<button class="btn btn-off" onclick="_gyroUnassign('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Unassign</button>'
-            +'</div>'
-            +'</td></tr>';
-        });
-      }
-      if(!ledFixtures.length&&!dmxFixtures.length&&!camFixtures.length&&!gyroFixtures.length){
+      if(!ledFixtures.length&&!dmxFixtures.length&&!camFixtures.length){
         h+='<tr><td colspan="6" style="color:#888;text-align:center">No fixtures — click Add Fixture or Discover</td></tr>';
       }
       h+='</table>';
