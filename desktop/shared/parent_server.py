@@ -81,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.4.42"
+VERSION = "1.4.43"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1074,6 +1074,7 @@ def api_fixtures_create():
             f["trackThreshold"] = body.get("trackThreshold", 0.4)
             f["trackTtl"] = body.get("trackTtl", 5)
             f["trackReidMm"] = body.get("trackReidMm", 500)
+            f["trackInputSize"] = body.get("trackInputSize", 320)
         if fixture_type == "gyro":
             f["gyroChildId"]       = body.get("gyroChildId")       # child record ID of the gyro board
             f["assignedMoverId"]   = body.get("assignedMoverId")   # fixture ID of the DMX mover to control
@@ -3102,6 +3103,7 @@ def api_camera_track_start(fid):
             "ttl": body.get("ttl", f.get("trackTtl", 5)),
             "classes": classes,
             "reidMm": body.get("reidMm", f.get("trackReidMm", 500)),
+            "inputSize": body.get("inputSize", f.get("trackInputSize", 320)),
         }).encode()
         req = _ur.Request(f"http://{ip}:5000/track/start",
                           data=req_data,
@@ -3235,7 +3237,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.4.42" from camera_server.py source text."""
+    """Extract VERSION = "1.4.43" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -3916,7 +3918,7 @@ def api_object_pos(oid):
         cy = (pixel_box["y"] + pixel_box.get("h", 0) / 2) / fh
         sw = _stage.get("w", 3.0) * 1000
         sd = _stage.get("d", 4.0) * 1000
-        pos = [sw * cx, sd * cy, 0]
+        pos = [sw * (1.0 - cx), sd * (1.0 - cy), 0]
     with _lock:
         obj = next((o for o in _objects if o["id"] == oid), None)
         if not obj:
@@ -3949,9 +3951,9 @@ def api_objects_temporal_create():
         cy = (pixel_box["y"] + pixel_box.get("h", 0) / 2) / fh  # 0=top, 1=bottom
         sw = _stage.get("w", 3.0) * 1000  # stage width mm
         sd = _stage.get("d", 4.0) * 1000  # stage depth mm
-        # Camera on back wall: left-of-frame = stage-right (X=0), right = stage-left (X=sw)
-        # Bottom of frame = far from camera (sd), top = near (0)
-        pos = [sw * cx, sd * cy, 0]
+        # Pixel fraction → stage mm. Camera on back wall facing audience:
+        # pixel (0,0)=top-left → stage (sw, sd), pixel (1,1)=bottom-right → stage (0, 0)
+        pos = [sw * (1.0 - cx), sd * (1.0 - cy), 0]
         # Scale order matches renderer: [width, height(Z), depth(Y)]
         scale = [pixel_box.get("w", 100) * sw / fw,
                  1700,
@@ -5751,11 +5753,22 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
     if not fx_lookup:
         return
     for ta in track_actions:
-        # Resolve target objects — filter by trackObjectType if set
+        # Resolve target objects:
+        #   trackObjectIds set → use those specific objects
+        #   trackObjectType set → filter moving objects by type (e.g. "figure8-target")
+        #   neither → all temporal moving objects (camera detections, not patrol objects)
         obj_type = ta.get("trackObjectType")
-        candidates = [o for o in moving_objects if o.get("objectType") == obj_type] if obj_type else moving_objects
         target_ids = ta.get("trackObjectIds", [])
+        if obj_type:
+            candidates = [o for o in moving_objects if o.get("objectType") == obj_type]
+        else:
+            candidates = [o for o in moving_objects if o.get("_temporal")]
         targets = [o for o in candidates if o["id"] in target_ids] if target_ids else candidates
+        # If this action has explicit trackObjectIds but none exist, skip entirely —
+        # don't blackout heads just because a deleted patrol object is missing.
+        # Only auto-discover actions (no trackObjectIds) blackout when no targets found.
+        if target_ids and not targets:
+            continue
         # Resolve fixtures
         fix_ids = ta.get("trackFixtureIds", [])
         heads = [fx_lookup[fid] for fid in (fix_ids or fx_lookup.keys()) if fid in fx_lookup]
@@ -5829,9 +5842,19 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
             if mcal_data and mcal_data.get("samples") and len(mcal_data["samples"]) >= 2:
                 pt_affine = _mcal.affine_pan_tilt(mcal_data["samples"], aim[0], aim[1], aim[2])
                 if pt_affine:
-                    # Allow extrapolation beyond calibrated range but clamp to 0.0–1.0
-                    pan = max(0.0, min(1.0, pt_affine[0]))
-                    tilt = max(0.0, min(1.0, pt_affine[1]))
+                    # Clamp to calibrated range + 10% margin.
+                    # Affine is only accurate near calibration samples.
+                    # For targets far outside, result is clamped to nearest
+                    # calibrated edge — not perfect but stable.
+                    samps = mcal_data["samples"]
+                    pan_vals = [s["pan"] for s in samps]
+                    tilt_vals = [s["tilt"] for s in samps]
+                    pan_lo, pan_hi = min(pan_vals), max(pan_vals)
+                    tilt_lo, tilt_hi = min(tilt_vals), max(tilt_vals)
+                    margin_p = (pan_hi - pan_lo) * 0.1
+                    margin_t = (tilt_hi - tilt_lo) * 0.1
+                    pan = max(pan_lo - margin_p, min(pan_hi + margin_p, pt_affine[0]))
+                    tilt = max(tilt_lo - margin_t, min(tilt_hi + margin_t, pt_affine[1]))
             # 2. Range calibration (automated axis mapping)
             if pan is None:
                 pt_cal = compute_pan_tilt_calibrated(fid, aim)

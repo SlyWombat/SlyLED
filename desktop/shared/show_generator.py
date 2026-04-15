@@ -552,7 +552,7 @@ def _generate_track_actions(theme, dmx_movers):
     # Derive object type from patrol objects if present, else "person"
     patrol_objs = theme.get("patrol_objects", [])
     if patrol_objs:
-        obj_type = patrol_objs[0].get("objectType", "person")
+        obj_type = patrol_objs[0].get("objectType")
         name = f"Track {patrol_objs[0].get('name', 'Target')}"
     else:
         obj_type = "person"

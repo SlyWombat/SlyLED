@@ -72,7 +72,7 @@ class Tracker:
 
     def start(self, device, orch_url="", camera_id=0,
               fps=2, threshold=0.4, ttl=5,
-              classes=None, reid_mm=None):
+              classes=None, reid_mm=None, input_size=None):
         """Start tracking loop on the given camera device."""
         if self._running:
             return
@@ -83,6 +83,7 @@ class Tracker:
         self._ttl = ttl
         self._classes = classes if classes else ["person"]
         self._reid_mm = reid_mm if reid_mm is not None else REID_THRESHOLD_MM
+        self._input_size = input_size if input_size else 320
         self._running = True
         self._thread = threading.Thread(target=self._loop, args=(device,), daemon=True)
         self._thread.start()
@@ -180,7 +181,7 @@ class Tracker:
         # Run detection
         detections, _ = self._detector.detect(frame, threshold=self._threshold,
                                                 classes=self._classes,
-                                                input_size=320)
+                                                input_size=self._input_size)
         if not detections:
             return
         self._detect_count += len(detections)

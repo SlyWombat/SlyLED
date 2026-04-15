@@ -1910,6 +1910,7 @@ def track_start():
     ttl = body.get("ttl", 5)
     classes = body.get("classes", ["person"])
     reid_mm = body.get("reidMm", 500)
+    input_size = body.get("inputSize", 320)
 
     cameras = _hw_info.get("cameras", [])
     if cam_idx < 0 or cam_idx >= len(cameras):
@@ -1931,7 +1932,7 @@ def track_start():
 
     tracker.start(device, orch_url=orch_url,
                   camera_id=camera_id, fps=fps, threshold=threshold, ttl=ttl,
-                  classes=classes, reid_mm=reid_mm)
+                  classes=classes, reid_mm=reid_mm, input_size=input_size)
     # Wait briefly and verify the tracker thread actually started (#378)
     import time as _t
     _t.sleep(0.3)
