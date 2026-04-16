@@ -1141,7 +1141,7 @@ function _moverCalAutoStart(){
   h+='<div style="display:flex;gap:.4em;align-items:center;margin-bottom:.3em">';
   h+='<label style="font-size:.82em;color:#94a3b8;margin:0">Beam color:</label>';
   h+='<select id="mcal-color" style="font-size:.82em;padding:2px 4px">';
-  h+='<option value="green">Green</option><option value="magenta">Magenta</option><option value="red">Red</option><option value="blue">Blue</option>';
+  h+='<option value="white">White</option><option value="green">Green</option><option value="magenta">Magenta</option><option value="red">Red</option><option value="blue">Blue</option>';
   h+='</select></div></div>';
   h+='<div id="mcal-status" style="display:none">';
   h+='<div class="prog-bar" style="height:8px;margin-bottom:.4em"><div class="prog-fill" id="mcal-prog" style="width:0%;transition:width .3s"></div></div>';
@@ -1158,7 +1158,7 @@ function _moverCalAutoStart(){
 
 function _moverCalGo(){
   var sel=document.getElementById('mcal-color');
-  var colorMap={green:[0,255,0],magenta:[255,0,255],red:[255,0,0],blue:[0,0,255]};
+  var colorMap={white:[255,255,255],green:[0,255,0],magenta:[255,0,255],red:[255,0,0],blue:[0,0,255]};
   var color=colorMap[sel?sel.value:'green']||[0,255,0];
   var btn=document.getElementById('mcal-go');
   if(btn)btn.disabled=true;
