@@ -214,13 +214,11 @@ static void drawCalibratePage() {
 // ── ACTIVE page 1 — Colour / Flash ──────────────────────────────────────────
 
 static void drawColourWheel() {
-    // 13 segments: 12 hue segments (27.7° each) + 1 white segment at top
-    // White segment: 345°–360° (top of wheel)
-    gyroDrawArcSegment(CX, CY, COL_RING_OUTER, COL_RING_T, 345, 359, GC_WHITE);
-    // 12 hue segments from 0° to 344° (~28.75° each)
+    // 13 segments: 12 hue (28° each, 0°-335°) + 1 white (336°-359°, top-right)
+    // atan2 convention: 0°=right(3 o'clock), 90°=down(6), 180°=left(9), 270°=up(12)
     for (int16_t i = 0; i < 12; i++) {
-        int16_t startDeg = i * 345 / 12;
-        int16_t endDeg = (i + 1) * 345 / 12 - 1;
+        int16_t startDeg = i * 28;
+        int16_t endDeg = startDeg + 27;
         int16_t hue = i * 30;
         uint8_t r, g, b;
         hueToRGB(hue, &r, &g, &b);
@@ -228,7 +226,11 @@ static void drawColourWheel() {
         gyroDrawArcSegment(CX, CY, COL_RING_OUTER, COL_RING_T,
                            startDeg, endDeg, col);
     }
+    // White segment at 336°-359° (just before red at 0°)
+    gyroDrawArcSegment(CX, CY, COL_RING_OUTER, COL_RING_T, 336, 359, GC_WHITE);
 }
+
+static constexpr int16_t WHITE_SEG_START = 336;
 
 // Draw a lightning bolt icon (pixel art, ~10x16)
 static void drawBolt(int16_t cx, int16_t cy, uint16_t col) {
@@ -457,10 +459,12 @@ void gyroUIInit() {
     s_lastEventMs  = 0;
     s_lastDrawMs   = 0;
 
-    // If WiFi is already connected (rare on cold boot), skip logo
-    if (wifiOk()) {
+    // Skip logo if waking from deep sleep (touch wake) or WiFi already connected
+    esp_sleep_wakeup_cause_t wakeReason = esp_sleep_get_wakeup_cause();
+    if (wakeReason == ESP_SLEEP_WAKEUP_EXT0 || wifiOk()) {
         s_state = UIState::IDLE;
         drawIdle();
+        if (Serial) Serial.println(F("[GyroUI] Woke from sleep — skipping logo"));
     } else {
         drawLogo();
     }
@@ -562,12 +566,12 @@ void gyroUIUpdate() {
                 if (now - s_colorSendMs >= 100) {
                     s_colorSendMs = now;
                     uint8_t cr, cg, cb;
-                    if (s_selHue >= 345) {
-                        // White segment at top of wheel
+                    if (s_selHue >= WHITE_SEG_START) {
+                        // White segment
                         cr = 255; cg = 255; cb = 255;
                     } else {
-                        // Map angle to hue: 0-344° → 0-360 hue
-                        int16_t hue = (int16_t)((float)s_selHue * 360.0f / 345.0f);
+                        // Map angle to hue: 0°-335° → 0-360 hue
+                        int16_t hue = (int16_t)((float)s_selHue * 360.0f / (float)WHITE_SEG_START);
                         hueToRGB(hue, &cr, &cg, &cb);
                     }
                     gyroUdpSendColor(cr, cg, cb, 0);
