@@ -744,12 +744,29 @@ def _udp_listener():
                 }
             log.debug("GYRO_ORIENT from %s: R=%.1f P=%.1f Y=%.1f fps=%d",
                       ip, roll100/100.0, pitch100/100.0, yaw100/100.0, fps)
+            # Route to unified mover control engine (#468)
+            if _mover_engine:
+                _gf = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
+                            and f.get("gyroChildId") is not None
+                            and next((c for c in _children if c["id"] == f["gyroChildId"]
+                                      and c.get("ip") == ip), None)), None)
+                if _gf and _gf.get("assignedMoverId"):
+                    _mover_engine.orient(_gf["assignedMoverId"], f"gyro-{ip}",
+                                         roll100/100.0, pitch100/100.0, yaw100/100.0)
         elif cmd == CMD_GYRO_COLOR and len(data) >= 12:
             # GyroColorPayload: r(1) g(1) b(1) flags(1)
             r, g, b, flags = struct.unpack_from("<BBBB", data, 8)
             flash = bool(flags & 0x01)
             log.info("GYRO_COLOR from %s: r=%d g=%d b=%d flash=%s", ip, r, g, b, flash)
             _apply_gyro_color(ip, r, g, b, flash)
+            # Also route to engine
+            if _mover_engine:
+                _gf2 = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
+                             and f.get("gyroChildId") is not None
+                             and next((c for c in _children if c["id"] == f["gyroChildId"]
+                                       and c.get("ip") == ip), None)), None)
+                if _gf2 and _gf2.get("assignedMoverId"):
+                    _mover_engine.set_color(_gf2["assignedMoverId"], f"gyro-{ip}", r, g, b)
         elif cmd == CMD_PONG:
             # Handle PONGs from broadcast/direct pings
             info = _parse_pong(data, ip)
@@ -1337,6 +1354,18 @@ def api_gyro_enable(child_id):
     target_fps = max(1, min(50, target_fps))
     pkt = _hdr(CMD_GYRO_CTRL) + struct.pack("<BB", 1, target_fps)
     _send(ip, pkt)
+    # Auto-claim the assigned mover via unified engine (#468)
+    gf = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
+               and f.get("gyroChildId") == child_id), None)
+    if gf and gf.get("assignedMoverId") and _mover_engine:
+        device_id = f"gyro-{ip}"
+        c = next((ch for ch in _children if ch["id"] == child_id), None)
+        dname = c.get("altName") or c.get("name") or c.get("hostname") or ip if c else ip
+        _mover_engine.claim(gf["assignedMoverId"], device_id, dname, "gyro",
+                            pan_scale=gf.get("panScale", 1.0),
+                            tilt_scale=gf.get("tiltScale", 1.0),
+                            smoothing=gf.get("smoothing", 0.15))
+        _mover_engine.start_stream(gf["assignedMoverId"], device_id)
     return jsonify(ok=True)
 
 @app.post("/api/gyro/<int:child_id>/disable")
@@ -1347,6 +1376,11 @@ def api_gyro_disable(child_id):
         return err, code
     pkt = _hdr(CMD_GYRO_CTRL) + struct.pack("<BB", 0, 0)
     _send(ip, pkt)
+    # Auto-release the assigned mover (#468)
+    gf = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
+               and f.get("gyroChildId") == child_id), None)
+    if gf and gf.get("assignedMoverId") and _mover_engine:
+        _mover_engine.release(gf["assignedMoverId"], f"gyro-{ip}")
     return jsonify(ok=True)
 
 @app.post("/api/gyro/<int:child_id>/recalibrate")
@@ -4552,6 +4586,94 @@ def _set_fixture_color(engine_or_buf, uni_or_addr, addr_or_none, r, g, b, prof_i
         elif "color-wheel" in cm:
             cw = rgb_to_wheel_slot(prof_info, r, g, b) if (r or g or b) else 0
             uni_buf.set_channel(addr + cm["color-wheel"], cw)
+
+# ── Unified Mover Control Engine (#468) ─────────────────────────────────────
+from mover_control import MoverControlEngine
+
+_mover_engine = MoverControlEngine(
+    get_fixtures=lambda: _fixtures,
+    get_layout=lambda: _layout,
+    get_profile_info=lambda pid: _profile_lib.channel_info(pid) if pid else None,
+    get_engine=lambda: _artnet if _artnet.running else (_sacn if _sacn.running else None),
+    set_fixture_color_fn=_set_fixture_color,
+)
+_mover_engine.start()
+
+@app.post("/api/mover-control/claim")
+def api_mover_claim():
+    body = request.get_json(silent=True) or {}
+    mid = body.get("moverId")
+    did = body.get("deviceId", "")
+    dname = body.get("deviceName", "Unknown")
+    dtype = body.get("deviceType", "android")
+    ps = body.get("panScale", 1.0)
+    ts = body.get("tiltScale", 1.0)
+    sm = body.get("smoothing", 0.15)
+    if mid is None:
+        return jsonify(ok=False, err="moverId required"), 400
+    ok, reason = _mover_engine.claim(mid, did, dname, dtype, ps, ts, sm)
+    if not ok:
+        return jsonify(ok=False, err=reason), 409
+    return jsonify(ok=True)
+
+@app.post("/api/mover-control/release")
+def api_mover_release():
+    body = request.get_json(silent=True) or {}
+    mid = body.get("moverId")
+    did = body.get("deviceId")
+    ok = _mover_engine.release(mid, did)
+    return jsonify(ok=ok)
+
+@app.post("/api/mover-control/start")
+def api_mover_start():
+    body = request.get_json(silent=True) or {}
+    mid = body.get("moverId")
+    did = body.get("deviceId")
+    ok = _mover_engine.start_stream(mid, did)
+    return jsonify(ok=ok)
+
+@app.post("/api/mover-control/calibrate-start")
+def api_mover_cal_start_ctrl():
+    body = request.get_json(silent=True) or {}
+    mid = body.get("moverId")
+    did = body.get("deviceId")
+    result = _mover_engine.calibrate_start(
+        mid, did, body.get("roll", 0), body.get("pitch", 0), body.get("yaw", 0))
+    if result is None:
+        return jsonify(ok=False, err="Not claimed or wrong device"), 403
+    return jsonify(ok=True, **result)
+
+@app.post("/api/mover-control/calibrate-end")
+def api_mover_cal_end_ctrl():
+    body = request.get_json(silent=True) or {}
+    mid = body.get("moverId")
+    did = body.get("deviceId")
+    ok = _mover_engine.calibrate_end(
+        mid, did, body.get("roll", 0), body.get("pitch", 0), body.get("yaw", 0))
+    return jsonify(ok=ok)
+
+@app.post("/api/mover-control/orient")
+def api_mover_orient():
+    body = request.get_json(silent=True) or {}
+    mid = body.get("moverId")
+    did = body.get("deviceId")
+    ok = _mover_engine.orient(mid, did, body.get("roll", 0), body.get("pitch", 0), body.get("yaw", 0))
+    return jsonify(ok=ok)
+
+@app.post("/api/mover-control/color")
+def api_mover_color():
+    body = request.get_json(silent=True) or {}
+    mid = body.get("moverId")
+    did = body.get("deviceId")
+    ok = _mover_engine.set_color(mid, did, body.get("r", 255), body.get("g", 255), body.get("b", 255),
+                                  dimmer=body.get("dimmer"))
+    return jsonify(ok=ok)
+
+@app.get("/api/mover-control/status")
+def api_mover_status():
+    return jsonify(claims=_mover_engine.get_status())
+
+# ── End Mover Control ───────────────────────────────────────────────────────
 
 def _apply_profile_defaults(engine):
     """Apply profile channel default values to all DMX fixtures."""

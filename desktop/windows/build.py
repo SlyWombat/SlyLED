@@ -59,6 +59,7 @@ args = [
     "--add-data", f"{SHARED / 'show_generator.py'};.",
     "--add-data", f"{SHARED / 'community_client.py'};.",
     "--add-data", f"{SHARED / 'mover_calibrator.py'};.",
+    "--add-data", f"{SHARED / 'mover_control.py'};.",
     "--add-data", f"{SHARED / 'space_mapper.py'};.",
     "--add-data", f"{SHARED / 'surface_analyzer.py'};.",
     "--hidden-import=pystray",
