@@ -1423,11 +1423,11 @@ function _manCalRenderJog(fname){
   h+='</div>';
   // Fine adjust buttons for pan/tilt
   h+='<div style="display:flex;gap:.3em;margin-bottom:.6em;justify-content:center">';
-  h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'pan\',-1)">Pan \u25c0</button>';
-  h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'pan\',1)">Pan \u25b6</button>';
+  h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'pan\',-1)">Pan \u2212</button>';
+  h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'pan\',1)">Pan +</button>';
   h+='<span style="width:10px"></span>';
-  h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'tilt\',-1)">Tilt \u25b2</button>';
-  h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'tilt\',1)">Tilt \u25bc</button>';
+  h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'tilt\',-1)">Tilt \u2212</button>';
+  h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'tilt\',1)">Tilt +</button>';
   h+='</div>';
   // Buttons
   h+='<div style="display:flex;gap:.4em">';
@@ -1539,6 +1539,13 @@ function _manCalTest(idx){
   if(ch.red!=null)chs.push({offset:ch.red,value:255});
   if(ch.green!=null)chs.push({offset:ch.green,value:255});
   if(ch.blue!=null)chs.push({offset:ch.blue,value:255});
+  // Also send channel defaults (strobe open, color wheel white, etc.)
+  (_manCal.allChannels||[]).forEach(function(c){
+    if(c.default>0&&c.type!=='pan'&&c.type!=='tilt'&&c.type!=='dimmer'
+       &&c.type!=='red'&&c.type!=='green'&&c.type!=='blue'){
+      chs.push({offset:c.offset,value:c.default});
+    }
+  });
   ra('POST','/api/dmx/fixture/'+_manCal.fid+'/test',{channels:chs},function(){});
 }
 
@@ -1568,7 +1575,8 @@ function _manCalVerifyExisting(fixId){
         if(c.type==='green')ch.green=c.offset;
         if(c.type==='blue')ch.blue=c.offset;
       });
-      _manCal={fid:fixId,samples:cal.samples||[],channels:ch,step:'verify'};
+      _manCal={fid:fixId,samples:cal.samples||[],channels:ch,step:'verify',
+               allChannels:d&&d.channels?d.channels:[]};
       _manCalRender();
     });
   });

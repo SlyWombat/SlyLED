@@ -81,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.2"
+VERSION = "1.5.3"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -2384,6 +2384,17 @@ def api_fixture_dmx_test(fid):
             val = body.get(ch_name)
             if val is not None:
                 uni_buf.set_channel(addr + ch_map[ch_name], int(val * 255))
+    # Apply profile channel defaults for any channel not explicitly set above
+    # (strobe open, color wheel white, etc.) so the beam is visible
+    explicitly_set = {"pan", "tilt", "dimmer"}
+    for ch_name in ("red", "green", "blue", "white", "strobe"):
+        if body.get(ch_name) is not None:
+            explicitly_set.add(ch_name)
+    for ch in prof_info.get("channels", []):
+        ch_type = ch.get("type", "")
+        default = ch.get("default")
+        if default is not None and default > 0 and ch_type not in explicitly_set:
+            uni_buf.set_channel(addr + ch.get("offset", 0), int(default))
     return jsonify(ok=True)
 
 
@@ -3299,7 +3310,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.2" from camera_server.py source text."""
+    """Extract VERSION = "1.5.3" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -5964,7 +5975,19 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
                 # Track action also sets dimmer + color so the beam is visible
                 tr = ta.get("trackDimmer", 255)
                 uni_buf.set_fixture_dimmer(addr, tr, profile)
-                uni_buf.set_fixture_rgb(addr, ta.get("r", 255), ta.get("g", 255), ta.get("b", 255), profile)
+                cm = prof_info.get("channel_map", {})
+                if "red" in cm:
+                    # RGB fixture — set color from action
+                    uni_buf.set_fixture_rgb(addr, ta.get("r", 255), ta.get("g", 255), ta.get("b", 255), profile)
+                elif "color-wheel" in cm:
+                    # Color wheel fixture — set to white/open (first slot)
+                    uni_buf.set_channel(addr + cm["color-wheel"], ta.get("colorWheel", 0))
+                # Apply channel defaults (strobe open, etc.) so beam is visible
+                for ch in prof_info.get("channels", []):
+                    ch_type = ch.get("type", "")
+                    default = ch.get("default")
+                    if default is not None and ch_type not in ("pan", "tilt", "dimmer", "red", "green", "blue", "color-wheel"):
+                        uni_buf.set_channel(addr + ch.get("offset", 0), int(default))
                 assigned_heads.add(hi)
         # Blackout unassigned heads (no target = beam off)
         for hi, head_info in enumerate(heads):

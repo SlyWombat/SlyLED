@@ -358,12 +358,28 @@ function loadFixtureChannels(fid){
       if(caps.length>1){h+='<div class="cap-lbl" style="font-size:.65em;color:#7c3aed;margin-left:85px;margin-bottom:.2em">'+escapeHtml(capLbl)+'</div>';}
     });
     h+='<button class="btn btn-off" onclick="dmxTestBlackout('+fid+')" style="font-size:.7em;margin-top:.4em">Blackout</button>';
+    h+=' <button class="btn" onclick="dmxTestSendAll('+fid+')" style="font-size:.7em;margin-top:.4em;background:#1e3a5f;color:#93c5fd">Send All</button>';
     el.innerHTML=h;
+    // Send all channel defaults on load so fixture matches what sliders show
+    var initChs=d.channels.filter(function(ch){return ch.value>0||ch.default>0;}).map(function(ch){
+      return{offset:ch.offset,value:ch.value>0?ch.value:(ch.default||0)};
+    });
+    if(initChs.length)ra('POST','/api/dmx/fixture/'+fid+'/test',{channels:initChs},function(){});
   });
 }
 
 function dmxTestCh(fid,offset,value){
   ra('POST','/api/dmx/fixture/'+fid+'/test',{channels:[{offset:offset,value:value}]},function(){});
+}
+
+function dmxTestSendAll(fid){
+  var sliders=document.querySelectorAll('#fx-test-ch input[type=range]');
+  var chs=[];
+  sliders.forEach(function(s){
+    var offset=parseInt(s.getAttribute('oninput').match(/dmxTestCh\(\d+,(\d+)/)[1]);
+    chs.push({offset:offset,value:parseInt(s.value)});
+  });
+  if(chs.length)ra('POST','/api/dmx/fixture/'+fid+'/test',{channels:chs},function(){});
 }
 
 function dmxTestBlackout(fid){
