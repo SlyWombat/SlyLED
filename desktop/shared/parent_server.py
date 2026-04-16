@@ -413,12 +413,20 @@ def _parse_pong(data, src_ip):
         fw_ver = f"{p[131]}.{p[132]}.{p[133]}"
     elif len(data) >= 141:
         fw_ver = f"{p[131]}.{p[132]}"
-    return {
+    # Detect gyro boards: stringCount=0 + hostname starts with SLYG
+    board_type = None
+    if sc == 0 and hn.upper().startswith("SLYG"):
+        board_type = "gyro"
+    result = {
         "hostname": hn, "name": nm or hn, "desc": ds, "sc": sc,
         "strings": strings, "ip": src_ip,
         "status": 1, "seen": int(time.time()),
         "fwVersion": fw_ver,
     }
+    if board_type:
+        result["type"] = board_type
+        result["boardType"] = "Gyro Controller"
+    return result
 
 def _probe_board_type(child):
     """Fetch board type, version, and telemetry from child's HTTP /status endpoint."""
@@ -436,9 +444,9 @@ def _probe_board_type(child):
         bt = data.get("boardType")
         if bt == "dmx":
             child["type"] = "dmx"
-        # Detect gyro board from role field in /status
+        # Detect gyro board from role or board field in /status
         role = data.get("role")
-        if role == "gyro":
+        if role == "gyro" or board == "gyro":
             child["type"] = "gyro"
         # Full version from /status (3-part: 5.3.2) overrides PONG's 2-part version
         version = data.get("version")
