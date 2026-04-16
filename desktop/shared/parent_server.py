@@ -81,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.5"
+VERSION = "1.5.6"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -233,59 +233,21 @@ _gyro_state = {}
 _gyro_lock  = threading.Lock()
 
 def _apply_gyro_color(gyro_ip: str, r: int, g: int, b: int, flash: bool):
-    """Apply colour from gyro board to its assigned mover's DMX channels."""
-    # Find the gyro fixture that maps to this IP
-    gyro_fix = None
-    for f in _fixtures:
-        if f.get("fixtureType") != "gyro":
-            continue
-        gid = f.get("gyroChildId")
-        child = next((c for c in _children if c.get("id") == gid), None)
-        if child and child.get("ip") == gyro_ip:
-            gyro_fix = f
-            break
-    if not gyro_fix:
+    """Route gyro colour through unified MoverControlEngine. Legacy direct-write removed."""
+    if not _mover_engine:
         return
-    mid = gyro_fix.get("assignedMoverId")
-    if not mid:
+    gf = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
+               and f.get("gyroChildId") is not None
+               and next((c for c in _children if c["id"] == f["gyroChildId"]
+                         and c.get("ip") == gyro_ip), None)), None)
+    if not gf or not gf.get("assignedMoverId"):
         return
-    mover = next((f for f in _fixtures if f.get("id") == mid), None)
-    if not mover:
-        return
-    pid = mover.get("dmxProfileId")
-    prof = _profile_lib.get(pid) if pid else None
-    if not prof:
-        return
-    uni   = mover.get("dmxUniverse", 0)
-    start = mover.get("dmxStartAddr", 1)
-    ch_map = {ch["type"]: ch["offset"] for ch in prof.get("channels", [])}
-    # Set R/G/B channels
-    for ctype, val in [("red", r), ("green", g), ("blue", b)]:
-        if ctype in ch_map:
-            addr = start + ch_map[ctype]
-            try: _artnet.set_channel(uni, addr, val)
-            except Exception: pass
-            try: _sacn.set_channel(uni, addr, val)
-            except Exception: pass
-    # Set dimmer to full if present
-    if "dimmer" in ch_map:
-        addr = start + ch_map["dimmer"]
-        try: _artnet.set_channel(uni, addr, 255)
-        except Exception: pass
-        try: _sacn.set_channel(uni, addr, 255)
-        except Exception: pass
+    mid = gf["assignedMoverId"]
+    did = f"gyro-{gyro_ip}"
     if flash:
-        # Brief 150ms pulse then restore previous dimmer (0)
-        def _flash_off():
-            import time as _t
-            _t.sleep(0.15)
-            if "dimmer" in ch_map:
-                addr = start + ch_map["dimmer"]
-                try: _artnet.set_channel(uni, addr, 0)
-                except Exception: pass
-                try: _sacn.set_channel(uni, addr, 0)
-                except Exception: pass
-        threading.Thread(target=_flash_off, daemon=True).start()
+        _mover_engine.flash(mid, did)
+    else:
+        _mover_engine.set_color(mid, did, r, g, b)
 
 # Recent PONGs seen by UDP listener (ip  -' parsed pong info)   " used by discover
 _recent_pongs = {}
@@ -3409,7 +3371,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.5" from camera_server.py source text."""
+    """Extract VERSION = "1.5.6" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None

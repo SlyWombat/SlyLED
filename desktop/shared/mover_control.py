@@ -231,6 +231,32 @@ class MoverControlEngine:
                 claim.dimmer = dimmer
         return True
 
+    # ── Flash ────────────────────────────────────────────────────────
+
+    def flash(self, mover_id, device_id):
+        """Brief white flash — sets dimmer to 255 + white, then restores after 150ms."""
+        with self._lock:
+            claim = self._claims.get(mover_id)
+            if not claim or claim.device_id != device_id:
+                return False
+            saved_r, saved_g, saved_b = claim.color_r, claim.color_g, claim.color_b
+            claim.color_r = 255
+            claim.color_g = 255
+            claim.color_b = 255
+            claim.dimmer = 255
+        # Restore after brief pulse
+        def _restore():
+            time.sleep(0.15)
+            with self._lock:
+                c = self._claims.get(mover_id)
+                if c and c.device_id == device_id:
+                    c.color_r = saved_r
+                    c.color_g = saved_g
+                    c.color_b = saved_b
+        import threading
+        threading.Thread(target=_restore, daemon=True).start()
+        return True
+
     # ── Status ───────────────────────────────────────────────────────
 
     def get_status(self):
@@ -267,43 +293,37 @@ class MoverControlEngine:
                 expired.append((mover_id, claim.device_id))
                 continue
 
-            if claim.state == "calibrating":
-                # During calibrate hold, keep light on but don't move
-                continue
-
-            if claim.state != "streaming" or not claim.calibrated:
-                continue
-
-            # Compute delta from reference
-            d_roll = claim.cur_roll - claim.ref_roll
-            d_pitch = claim.cur_pitch - claim.ref_pitch
-
-            # Get mover profile for pan/tilt range
+            # Get mover + profile (needed for all states)
             mover = self._get_mover(mover_id)
             if not mover:
                 continue
             pid = mover.get("dmxProfileId")
             prof_info = self._get_profile_info(pid) if pid else None
-            pan_range = (prof_info or {}).get("panRange", 540)
-            tilt_range = (prof_info or {}).get("tiltRange", 270)
 
-            if pan_range <= 0 or tilt_range <= 0:
+            if claim.state == "calibrating":
+                # During calibrate hold, keep light on at current position
+                self._write_dmx(mover_id, mover, prof_info, claim)
                 continue
 
-            # Map device degrees to normalized pan/tilt delta
-            d_pan = (d_roll * claim.pan_scale) / pan_range
-            d_tilt = (d_pitch * claim.tilt_scale) / tilt_range
+            if claim.calibrated and claim.state == "streaming":
+                # Compute delta from reference
+                d_roll = claim.cur_roll - claim.ref_roll
+                d_pitch = claim.cur_pitch - claim.ref_pitch
 
-            # Final = reference + delta
-            pan = max(0.0, min(1.0, claim.ref_pan + d_pan))
-            tilt = max(0.0, min(1.0, claim.ref_tilt + d_tilt))
+                pan_range = (prof_info or {}).get("panRange", 540)
+                tilt_range = (prof_info or {}).get("tiltRange", 270)
 
-            # EMA smoothing
-            alpha = claim.smoothing
-            claim.pan_smooth += alpha * (pan - claim.pan_smooth)
-            claim.tilt_smooth += alpha * (tilt - claim.tilt_smooth)
+                if pan_range > 0 and tilt_range > 0:
+                    d_pan = (d_roll * claim.pan_scale) / pan_range
+                    d_tilt = (d_pitch * claim.tilt_scale) / tilt_range
+                    pan = max(0.0, min(1.0, claim.ref_pan + d_pan))
+                    tilt = max(0.0, min(1.0, claim.ref_tilt + d_tilt))
 
-            # Write to DMX
+                    alpha = claim.smoothing
+                    claim.pan_smooth += alpha * (pan - claim.pan_smooth)
+                    claim.tilt_smooth += alpha * (tilt - claim.tilt_smooth)
+
+            # Always write DMX — holds position + updates color/dimmer even before calibration
             self._write_dmx(mover_id, mover, prof_info, claim)
 
         # Release expired claims
