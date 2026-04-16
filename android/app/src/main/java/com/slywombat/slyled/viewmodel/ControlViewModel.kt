@@ -43,34 +43,13 @@ class ControlViewModel @Inject constructor(
     private val _controllerFixtureId = MutableStateFlow<Int?>(null)
     val controllerFixtureId: StateFlow<Int?> = _controllerFixtureId.asStateFlow()
 
-    private val _controllerPanRange = MutableStateFlow(540f)
-    val controllerPanRange: StateFlow<Float> = _controllerPanRange.asStateFlow()
-
-    private val _controllerTiltRange = MutableStateFlow(270f)
-    val controllerTiltRange: StateFlow<Float> = _controllerTiltRange.asStateFlow()
-
-    private val _controllerInitialPan = MutableStateFlow(0.5f)
-    val controllerInitialPan: StateFlow<Float> = _controllerInitialPan.asStateFlow()
-
-    private val _controllerInitialTilt = MutableStateFlow(0.5f)
-    val controllerInitialTilt: StateFlow<Float> = _controllerInitialTilt.asStateFlow()
-
-    // Orientation signs from calibration — determines which way DMX values
-    // physically move the beam. panSign=+1 means increasing pan goes one way,
-    // -1 means the opposite. tiltSign defaults to -1 (typical for most fixtures).
-    private val _controllerPanSign = MutableStateFlow(1)
-    val controllerPanSign: StateFlow<Int> = _controllerPanSign.asStateFlow()
-
-    private val _controllerTiltSign = MutableStateFlow(-1)
-    val controllerTiltSign: StateFlow<Int> = _controllerTiltSign.asStateFlow()
-
     private val _controllerReady = MutableStateFlow(false)
     val controllerReady: StateFlow<Boolean> = _controllerReady.asStateFlow()
 
     private val _controllerConnected = MutableStateFlow(true)
     val controllerConnected: StateFlow<Boolean> = _controllerConnected.asStateFlow()
 
-    private var aimErrorCount = 0
+    private var orientErrorCount = 0
 
     private var initialized = false
 
@@ -183,7 +162,7 @@ class ControlViewModel @Inject constructor(
         }
     }
 
-    // ── Controller mode ─────────────────────────────────────────────
+    // ── Controller mode (unified mover-control API) ───────────────────
 
     fun enterControllerMode(fixtureId: Int) {
         _controllerFixtureId.value = fixtureId
@@ -191,105 +170,30 @@ class ControlViewModel @Inject constructor(
 
         viewModelScope.launch {
             try {
-                // Fetch channel info — includes panRange, tiltRange, panSign, tiltSign
-                try {
-                    val channelInfo = repository.getDmxFixtureChannels(fixtureId)
-                    channelInfo["panRange"]?.let {
-                        val v = (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toFloatOrNull()
-                        if (v != null && v > 0) _controllerPanRange.value = v
-                    }
-                    channelInfo["tiltRange"]?.let {
-                        val v = (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toFloatOrNull()
-                        if (v != null && v > 0) _controllerTiltRange.value = v
-                    }
-                    channelInfo["panSign"]?.let {
-                        val v = (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull()
-                        if (v != null) _controllerPanSign.value = v
-                    }
-                    channelInfo["tiltSign"]?.let {
-                        val v = (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull()
-                        if (v != null) _controllerTiltSign.value = v
-                    }
-                    // Server-computed home position (horizontal toward audience)
-                    channelInfo["homePan"]?.let {
-                        val v = (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toFloatOrNull()
-                        if (v != null) _controllerInitialPan.value = v
-                    }
-                    channelInfo["homeTilt"]?.let {
-                        val v = (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toFloatOrNull()
-                        if (v != null) _controllerInitialTilt.value = v
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not fetch channel info, using defaults", e)
+                // Step 1: Claim the mover
+                val claimResult = repository.moverClaim(fixtureId)
+                if (!claimResult.ok) {
+                    _message.value = claimResult.err ?: "Mover claimed by another device"
+                    _controllerFixtureId.value = null
+                    return@launch
                 }
 
-                // Fetch current live state to set initial pan/tilt
-                var usedLiveState = false
-                try {
-                    val live = repository.getFixturesLive()
-                    val fixturesJson = live["fixtures"]
-                    if (fixturesJson is kotlinx.serialization.json.JsonArray) {
-                        for (elem in fixturesJson) {
-                            if (elem is kotlinx.serialization.json.JsonObject) {
-                                val id = elem["id"]?.let {
-                                    (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull()
-                                }
-                                if (id == fixtureId) {
-                                    val pan = elem["pan"]?.let {
-                                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toFloatOrNull()
-                                    } ?: 0f
-                                    val panFine = elem["panFine"]?.let {
-                                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toFloatOrNull()
-                                    }
-                                    val tilt = elem["tilt"]?.let {
-                                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toFloatOrNull()
-                                    } ?: 0f
-                                    val tiltFine = elem["tiltFine"]?.let {
-                                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toFloatOrNull()
-                                    }
-                                    val dimmer = elem["dimmer"]?.let {
-                                        (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toFloatOrNull()
-                                    } ?: 0f
-
-                                    // Only use live state if fixture is actually active
-                                    if (dimmer > 0 || pan > 0 || tilt > 0) {
-                                        _controllerInitialPan.value = if (panFine != null) {
-                                            (pan * 256f + panFine) / 65535f
-                                        } else {
-                                            pan / 255f
-                                        }
-                                        _controllerInitialTilt.value = if (tiltFine != null) {
-                                            (tilt * 256f + tiltFine) / 65535f
-                                        } else {
-                                            tilt / 255f
-                                        }
-                                        usedLiveState = true
-                                    }
-                                    break
-                                }
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not read live fixture state", e)
+                // Step 2: Start streaming (turns on light via server)
+                val startResult = repository.moverStart(fixtureId)
+                if (!startResult.ok) {
+                    _message.value = "Failed to start mover stream"
+                    try { repository.moverRelease(fixtureId) } catch (_: Exception) {}
+                    _controllerFixtureId.value = null
+                    return@launch
                 }
-
-                // homePan/homeTilt from channel info is already set as default;
-                // live state overrides it only if fixture is active
-
-                // Send initial position + turn on white light
-                try {
-                    val initPan = _controllerInitialPan.value
-                    val initTilt = _controllerInitialTilt.value
-                    repository.aimFixtureDirect(fixtureId, initPan, initTilt)
-                    repository.setFixtureOutput(fixtureId, 1f, 0f, 0f, 0f, 1f, 0f)
-                } catch (_: Exception) {}
 
                 _controllerReady.value = true
             } catch (e: Exception) {
                 Log.e(TAG, "enterControllerMode", e)
                 _message.value = "Error entering controller mode: ${e.message}"
                 _controllerFixtureId.value = null
+                // Best effort release
+                try { repository.moverRelease(fixtureId) } catch (_: Exception) {}
             }
         }
     }
@@ -299,43 +203,65 @@ class ControlViewModel @Inject constructor(
         _controllerFixtureId.value = null
         _controllerReady.value = false
         _controllerConnected.value = true
-        aimErrorCount = 0
-        // Blackout the fixture on exit
+        orientErrorCount = 0
+        // Release claim — server handles blackout
         if (fid != null) {
             viewModelScope.launch {
-                try { repository.setFixtureOutput(fid, 0f, 0f, 0f, 0f, 0f, 0f) } catch (_: Exception) {}
+                try { repository.moverRelease(fid) } catch (_: Exception) {}
             }
         }
     }
 
-    /** Called from overlay at ~20Hz with normalized 0-1 pan/tilt values. */
-    fun aimFixture(fixtureId: Int, panNorm: Float, tiltNorm: Float) {
+    /** Called when user presses the calibrate button (finger down). */
+    fun calibrateStart(fixtureId: Int, roll: Float, pitch: Float, yaw: Float) {
         viewModelScope.launch {
             try {
-                repository.aimFixtureDirect(fixtureId, panNorm, tiltNorm)
+                repository.moverCalibrateStart(fixtureId, roll, pitch, yaw)
+            } catch (e: Exception) {
+                Log.w(TAG, "calibrateStart failed: ${e.message}")
+            }
+        }
+    }
+
+    /** Called when user releases the calibrate button (finger up). */
+    fun calibrateEnd(fixtureId: Int, roll: Float, pitch: Float, yaw: Float) {
+        viewModelScope.launch {
+            try {
+                repository.moverCalibrateEnd(fixtureId, roll, pitch, yaw)
+            } catch (e: Exception) {
+                Log.w(TAG, "calibrateEnd failed: ${e.message}")
+            }
+        }
+    }
+
+    /** Called from overlay at ~20Hz with raw device orientation in degrees. */
+    fun sendOrientation(fixtureId: Int, roll: Float, pitch: Float, yaw: Float) {
+        viewModelScope.launch {
+            try {
+                repository.moverOrient(fixtureId, roll, pitch, yaw)
                 if (!_controllerConnected.value) {
                     _controllerConnected.value = true
-                    aimErrorCount = 0
+                    orientErrorCount = 0
                 }
             } catch (e: Exception) {
-                aimErrorCount++
+                orientErrorCount++
                 // Show disconnected after 3 consecutive failures (~150ms)
-                if (aimErrorCount >= 3) {
+                if (orientErrorCount >= 3) {
                     _controllerConnected.value = false
                 }
-                Log.w(TAG, "aimFixture failed: ${e.message}")
+                Log.w(TAG, "sendOrientation failed: ${e.message}")
             }
         }
     }
 
-    /** Called when user adjusts color/dimmer/strobe sliders. */
-    fun setFixtureChannels(fixtureId: Int, dimmer: Float, red: Float, green: Float,
-                           blue: Float, white: Float, strobe: Float) {
+    /** Called when user adjusts color via color wheel or dimmer slider.
+     *  Sends RGB 0-255 + optional dimmer 0-255 to server. */
+    fun setMoverColor(fixtureId: Int, r: Int, g: Int, b: Int, dimmer: Int? = null) {
         viewModelScope.launch {
             try {
-                repository.setFixtureOutput(fixtureId, dimmer, red, green, blue, white, strobe)
+                repository.moverColor(fixtureId, r, g, b, dimmer)
             } catch (e: Exception) {
-                Log.w(TAG, "setFixtureChannels failed: ${e.message}")
+                Log.w(TAG, "setMoverColor failed: ${e.message}")
             }
         }
     }

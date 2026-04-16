@@ -32,12 +32,6 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
     val controllerFixtureId by viewModel.controllerFixtureId.collectAsState()
     val controllerReady by viewModel.controllerReady.collectAsState()
     val controllerConnected by viewModel.controllerConnected.collectAsState()
-    val controllerPanRange by viewModel.controllerPanRange.collectAsState()
-    val controllerTiltRange by viewModel.controllerTiltRange.collectAsState()
-    val controllerPanSign by viewModel.controllerPanSign.collectAsState()
-    val controllerTiltSign by viewModel.controllerTiltSign.collectAsState()
-    val controllerInitialPan by viewModel.controllerInitialPan.collectAsState()
-    val controllerInitialTilt by viewModel.controllerInitialTilt.collectAsState()
     val dmxFixtures = fixtures.filter { it.fixtureType == "dmx" }
 
     val isRunning = settings.runnerRunning
@@ -246,18 +240,18 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
     if (controllerFix != null && controllerReady) {
         ControllerModeOverlay(
             fixtureName = controllerFix.name ?: "Fixture ${controllerFix.id}",
-            panRangeDeg = controllerPanRange,
-            tiltRangeDeg = controllerTiltRange,
-            initialPanNorm = controllerInitialPan,
-            initialTiltNorm = controllerInitialTilt,
-            panSign = controllerPanSign,
-            tiltSign = controllerTiltSign,
             connected = controllerConnected,
-            onAim = { panNorm, tiltNorm ->
-                viewModel.aimFixture(controllerFix.id, panNorm, tiltNorm)
+            onOrient = { roll, pitch, yaw ->
+                viewModel.sendOrientation(controllerFix.id, roll, pitch, yaw)
             },
-            onChannelChange = { dimmer, red, green, blue, white, strobe ->
-                viewModel.setFixtureChannels(controllerFix.id, dimmer, red, green, blue, white, strobe)
+            onCalibrateStart = { roll, pitch, yaw ->
+                viewModel.calibrateStart(controllerFix.id, roll, pitch, yaw)
+            },
+            onCalibrateEnd = { roll, pitch, yaw ->
+                viewModel.calibrateEnd(controllerFix.id, roll, pitch, yaw)
+            },
+            onColorChange = { r, g, b, dimmer ->
+                viewModel.setMoverColor(controllerFix.id, r, g, b, dimmer)
             },
             onDismiss = { viewModel.exitControllerMode() }
         )

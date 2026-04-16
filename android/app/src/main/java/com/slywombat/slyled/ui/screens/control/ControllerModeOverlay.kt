@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MyLocation
@@ -36,20 +35,20 @@ import com.slywombat.slyled.ui.theme.*
 
 /**
  * Controller mode — full-screen overlay with compact crosshair,
- * pan/tilt readout, color/dimmer/strobe sliders, hold-to-calibrate.
+ * orientation readout, color/dimmer sliders, hold-to-calibrate.
+ *
+ * Sends raw device orientation (roll, pitch, yaw) to the server via
+ * the unified /api/mover-control/* endpoints. The server handles all
+ * pan/tilt computation, calibration reference, and DMX output.
  */
 @Composable
 fun ControllerModeOverlay(
     fixtureName: String,
-    panRangeDeg: Float = 540f,
-    tiltRangeDeg: Float = 270f,
-    initialPanNorm: Float = 0.5f,
-    initialTiltNorm: Float = 0.5f,
-    panSign: Int = 1,
-    tiltSign: Int = -1,
     connected: Boolean = true,
-    onAim: (panNorm: Float, tiltNorm: Float) -> Unit,
-    onChannelChange: (dimmer: Float, red: Float, green: Float, blue: Float, white: Float, strobe: Float) -> Unit,
+    onOrient: (roll: Float, pitch: Float, yaw: Float) -> Unit,
+    onCalibrateStart: (roll: Float, pitch: Float, yaw: Float) -> Unit,
+    onCalibrateEnd: (roll: Float, pitch: Float, yaw: Float) -> Unit,
+    onColorChange: (r: Int, g: Int, b: Int, dimmer: Int?) -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -59,29 +58,29 @@ fun ControllerModeOverlay(
     val sensorManager = remember { context.getSystemService(Context.SENSOR_SERVICE) as SensorManager }
     val rotationSensor = remember { sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) }
 
-    var refAzimuth by remember { mutableFloatStateOf(0f) }
-    var refPitch by remember { mutableFloatStateOf(0f) }
-    var calibrated by remember { mutableStateOf(false) }
-    var refPanNorm by remember { mutableFloatStateOf(initialPanNorm) }
-    var refTiltNorm by remember { mutableFloatStateOf(initialTiltNorm) }
-    var currentPanNorm by remember { mutableFloatStateOf(initialPanNorm) }
-    var currentTiltNorm by remember { mutableFloatStateOf(initialTiltNorm) }
-    var deltaAzimuth by remember { mutableFloatStateOf(0f) }
-    var deltaPitch by remember { mutableFloatStateOf(0f) }
     var holdingCalibrate by remember { mutableStateOf(false) }
     // Ref for sensor callback — Compose state isn't visible inside DisposableEffect closures
     val holdingCalibrateRef = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
 
-    var dimmer by remember { mutableFloatStateOf(1f) }
-    var red by remember { mutableFloatStateOf(0f) }
-    var green by remember { mutableFloatStateOf(0f) }
-    var blue by remember { mutableFloatStateOf(0f) }
-    var white by remember { mutableFloatStateOf(1f) }
-    var strobe by remember { mutableFloatStateOf(0f) }
+    // Current orientation for display
+    var currentAzimuth by remember { mutableFloatStateOf(0f) }
+    var currentPitch by remember { mutableFloatStateOf(0f) }
+    // Delta from calibration ref for crosshair display
+    var deltaAzimuth by remember { mutableFloatStateOf(0f) }
+    var deltaPitch by remember { mutableFloatStateOf(0f) }
+    var refAzimuth by remember { mutableFloatStateOf(0f) }
+    var refPitch by remember { mutableFloatStateOf(0f) }
+    var hasRef by remember { mutableStateOf(false) }
 
-    val panSensitivity = panSign * 0.5f / 90f
-    // Negate tilt so phone-down = beam-down on inverted fixtures
-    val tiltSensitivity = -tiltSign * 0.5f / 45f
+    // Latest orientation for calibrate button callbacks
+    val latestRoll = remember { java.util.concurrent.atomic.AtomicReference(0f) }
+    val latestPitch = remember { java.util.concurrent.atomic.AtomicReference(0f) }
+    val latestYaw = remember { java.util.concurrent.atomic.AtomicReference(0f) }
+
+    var dimmer by remember { mutableFloatStateOf(1f) }
+    var red by remember { mutableFloatStateOf(1f) }
+    var green by remember { mutableFloatStateOf(1f) }
+    var blue by remember { mutableFloatStateOf(1f) }
 
     DisposableEffect(rotationSensor) {
         val listener = object : SensorEventListener {
@@ -90,37 +89,40 @@ fun ControllerModeOverlay(
             private var lastSendMs = 0L
 
             override fun onSensorChanged(event: SensorEvent) {
-                // While holding calibrate: freeze everything — no display update, no sending
-                if (holdingCalibrateRef.get()) return
-
                 SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
                 SensorManager.getOrientation(rotationMatrix, orientation)
                 val azimuth = Math.toDegrees(orientation[0].toDouble()).toFloat()
                 val pitch = Math.toDegrees(orientation[1].toDouble()).toFloat()
+                val roll = Math.toDegrees(orientation[2].toDouble()).toFloat()
 
-                if (!calibrated) {
+                // Store latest for calibrate callbacks
+                latestRoll.set(roll)
+                latestPitch.set(pitch)
+                latestYaw.set(azimuth)
+
+                // While holding calibrate: freeze display — no movement, no sending
+                if (holdingCalibrateRef.get()) return
+
+                currentAzimuth = azimuth
+                currentPitch = pitch
+
+                // Update crosshair display delta
+                if (!hasRef) {
                     refAzimuth = azimuth
                     refPitch = pitch
-                    refPanNorm = currentPanNorm
-                    refTiltNorm = currentTiltNorm
-                    calibrated = true
+                    hasRef = true
                 }
-
                 var dAz = azimuth - refAzimuth
                 if (dAz > 180) dAz -= 360
                 if (dAz < -180) dAz += 360
                 deltaAzimuth = dAz
                 deltaPitch = pitch - refPitch
 
-                val panNorm = (refPanNorm + dAz * panSensitivity).coerceIn(0f, 1f)
-                val tiltNorm = (refTiltNorm + deltaPitch * tiltSensitivity).coerceIn(0f, 1f)
-                currentPanNorm = panNorm
-                currentTiltNorm = tiltNorm
-
                 val now = System.currentTimeMillis()
                 if (now - lastSendMs >= 50) {
                     lastSendMs = now
-                    onAim(panNorm, tiltNorm)
+                    // Send raw orientation to server — server does all pan/tilt math
+                    onOrient(roll, pitch, azimuth)
                 }
             }
 
@@ -131,9 +133,6 @@ fun ControllerModeOverlay(
         }
         onDispose { sensorManager.unregisterListener(listener) }
     }
-
-    val displayPanDeg = currentPanNorm * panRangeDeg
-    val displayTiltDeg = currentTiltNorm * tiltRangeDeg
 
     // Full-screen overlay
     Box(
@@ -212,14 +211,14 @@ fun ControllerModeOverlay(
                 Column(modifier = Modifier.weight(1f)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                         Column {
-                            Text("PAN", style = MaterialTheme.typography.labelSmall, color = Color(0xFF64748B))
-                            Text("%.1f\u00b0".format(displayPanDeg),
+                            Text("YAW", style = MaterialTheme.typography.labelSmall, color = Color(0xFF64748B))
+                            Text("%.1f\u00b0".format(currentAzimuth),
                                 style = MaterialTheme.typography.headlineSmall,
                                 color = CyanSecondary, fontWeight = FontWeight.Bold)
                         }
                         Column {
-                            Text("TILT", style = MaterialTheme.typography.labelSmall, color = Color(0xFF64748B))
-                            Text("%.1f\u00b0".format(displayTiltDeg),
+                            Text("PITCH", style = MaterialTheme.typography.labelSmall, color = Color(0xFF64748B))
+                            Text("%.1f\u00b0".format(currentPitch),
                                 style = MaterialTheme.typography.headlineSmall,
                                 color = CyanSecondary, fontWeight = FontWeight.Bold)
                         }
@@ -236,8 +235,21 @@ fun ControllerModeOverlay(
                                     awaitFirstDown()
                                     holdingCalibrate = true
                                     holdingCalibrateRef.set(true)
+                                    // Send calibrate-start with current orientation
+                                    onCalibrateStart(
+                                        latestRoll.get(),
+                                        latestPitch.get(),
+                                        latestYaw.get()
+                                    )
                                     waitForUpOrCancellation()
-                                    calibrated = false
+                                    // Send calibrate-end with current orientation
+                                    onCalibrateEnd(
+                                        latestRoll.get(),
+                                        latestPitch.get(),
+                                        latestYaw.get()
+                                    )
+                                    // Reset crosshair reference so display re-centers
+                                    hasRef = false
                                     holdingCalibrate = false
                                     holdingCalibrateRef.set(false)
                                 }
@@ -268,13 +280,11 @@ fun ControllerModeOverlay(
             Spacer(Modifier.height(12.dp))
 
             ChannelSlider("Dimmer", dimmer, Color.White) { v ->
-                dimmer = v; onChannelChange(dimmer, red, green, blue, white, strobe)
-            }
-            ChannelSlider("White", white, Color(0xFFF8FAFC)) { v ->
-                white = v; onChannelChange(dimmer, red, green, blue, white, strobe)
-            }
-            ChannelSlider("Strobe", strobe, Color(0xFFFBBF24)) { v ->
-                strobe = v; onChannelChange(dimmer, red, green, blue, white, strobe)
+                dimmer = v
+                onColorChange(
+                    (red * 255).toInt(), (green * 255).toInt(), (blue * 255).toInt(),
+                    (dimmer * 255).toInt()
+                )
             }
 
             Spacer(Modifier.height(16.dp))
@@ -301,11 +311,10 @@ fun ControllerModeOverlay(
                 currentBlue = blue,
                 onColorSelected = { r, g, b ->
                     red = r; green = g; blue = b
-                    // Auto-zero white when picking a color so RGB is visible
-                    if (r > 0.01f || g > 0.01f || b > 0.01f) {
-                        white = 0f
-                    }
-                    onChannelChange(dimmer, red, green, blue, white, strobe)
+                    onColorChange(
+                        (red * 255).toInt(), (green * 255).toInt(), (blue * 255).toInt(),
+                        (dimmer * 255).toInt()
+                    )
                 }
             )
 

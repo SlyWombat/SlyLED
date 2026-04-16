@@ -8,6 +8,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
@@ -16,7 +19,8 @@ import javax.inject.Singleton
 
 @Singleton
 class SlyLedRepository @Inject constructor(
-    private val okHttpClient: OkHttpClient
+    private val okHttpClient: OkHttpClient,
+    private val deviceIdentity: DeviceIdentity? = null
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private var api: SlyLedApi? = null
@@ -124,27 +128,110 @@ class SlyLedRepository @Inject constructor(
     suspend fun setAimPoint(id: Int, aimPoint: List<Double>) =
         requireApi().setAimPoint(id, mapOf("aimPoint" to aimPoint))
 
-    // Fixture Controller mode — send normalized 0-1 pan/tilt
+    // Fixture Controller mode (legacy) — send normalized 0-1 pan/tilt
     suspend fun aimFixtureDirect(id: Int, panNorm: Float, tiltNorm: Float): OkResponse {
-        val body = kotlinx.serialization.json.buildJsonObject {
-            put("pan", kotlinx.serialization.json.JsonPrimitive(panNorm.toDouble()))
-            put("tilt", kotlinx.serialization.json.JsonPrimitive(tiltNorm.toDouble()))
+        val body = buildJsonObject {
+            put("pan", JsonPrimitive(panNorm.toDouble()))
+            put("tilt", JsonPrimitive(tiltNorm.toDouble()))
         }
         return requireApi().aimFixtureDirect(id, body)
     }
 
-    // Fixture Controller mode — send color/dimmer/strobe channels (0-1 normalized)
+    // Fixture Controller mode (legacy) — send color/dimmer/strobe channels (0-1 normalized)
     suspend fun setFixtureOutput(id: Int, dimmer: Float, red: Float, green: Float,
                                   blue: Float, white: Float, strobe: Float): OkResponse {
-        val body = kotlinx.serialization.json.buildJsonObject {
-            put("dimmer", kotlinx.serialization.json.JsonPrimitive(dimmer.toDouble()))
-            put("red", kotlinx.serialization.json.JsonPrimitive(red.toDouble()))
-            put("green", kotlinx.serialization.json.JsonPrimitive(green.toDouble()))
-            put("blue", kotlinx.serialization.json.JsonPrimitive(blue.toDouble()))
-            put("white", kotlinx.serialization.json.JsonPrimitive(white.toDouble()))
-            put("strobe", kotlinx.serialization.json.JsonPrimitive(strobe.toDouble()))
+        val body = buildJsonObject {
+            put("dimmer", JsonPrimitive(dimmer.toDouble()))
+            put("red", JsonPrimitive(red.toDouble()))
+            put("green", JsonPrimitive(green.toDouble()))
+            put("blue", JsonPrimitive(blue.toDouble()))
+            put("white", JsonPrimitive(white.toDouble()))
+            put("strobe", JsonPrimitive(strobe.toDouble()))
         }
         return requireApi().aimFixtureDirect(id, body)
+    }
+
+    // ── Mover Control (unified API) ────────────────────────────────────
+
+    private fun requireIdentity(): DeviceIdentity =
+        deviceIdentity ?: throw IllegalStateException("DeviceIdentity not available")
+
+    suspend fun moverClaim(moverId: Int): OkResponse {
+        val id = requireIdentity()
+        val body = buildJsonObject {
+            put("moverId", moverId)
+            put("deviceId", id.deviceId)
+            put("deviceName", id.deviceName)
+            put("deviceType", "android")
+        }
+        return requireApi().moverClaim(body)
+    }
+
+    suspend fun moverRelease(moverId: Int): OkResponse {
+        val id = requireIdentity()
+        val body = buildJsonObject {
+            put("moverId", moverId)
+            put("deviceId", id.deviceId)
+        }
+        return requireApi().moverRelease(body)
+    }
+
+    suspend fun moverStart(moverId: Int): OkResponse {
+        val id = requireIdentity()
+        val body = buildJsonObject {
+            put("moverId", moverId)
+            put("deviceId", id.deviceId)
+        }
+        return requireApi().moverStart(body)
+    }
+
+    suspend fun moverCalibrateStart(moverId: Int, roll: Float, pitch: Float, yaw: Float): OkResponse {
+        val id = requireIdentity()
+        val body = buildJsonObject {
+            put("moverId", moverId)
+            put("deviceId", id.deviceId)
+            put("roll", roll.toDouble())
+            put("pitch", pitch.toDouble())
+            put("yaw", yaw.toDouble())
+        }
+        return requireApi().moverCalibrateStart(body)
+    }
+
+    suspend fun moverCalibrateEnd(moverId: Int, roll: Float, pitch: Float, yaw: Float): OkResponse {
+        val id = requireIdentity()
+        val body = buildJsonObject {
+            put("moverId", moverId)
+            put("deviceId", id.deviceId)
+            put("roll", roll.toDouble())
+            put("pitch", pitch.toDouble())
+            put("yaw", yaw.toDouble())
+        }
+        return requireApi().moverCalibrateEnd(body)
+    }
+
+    suspend fun moverOrient(moverId: Int, roll: Float, pitch: Float, yaw: Float): OkResponse {
+        val id = requireIdentity()
+        val body = buildJsonObject {
+            put("moverId", moverId)
+            put("deviceId", id.deviceId)
+            put("roll", roll.toDouble())
+            put("pitch", pitch.toDouble())
+            put("yaw", yaw.toDouble())
+        }
+        return requireApi().moverOrient(body)
+    }
+
+    suspend fun moverColor(moverId: Int, r: Int, g: Int, b: Int, dimmer: Int? = null): OkResponse {
+        val id = requireIdentity()
+        val body = buildJsonObject {
+            put("moverId", moverId)
+            put("deviceId", id.deviceId)
+            put("r", r)
+            put("g", g)
+            put("b", b)
+            if (dimmer != null) put("dimmer", dimmer)
+        }
+        return requireApi().moverColor(body)
     }
 
     // Fixtures Live
