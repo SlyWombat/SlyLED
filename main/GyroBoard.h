@@ -46,5 +46,11 @@ constexpr uint8_t GYRO_IMU_INT1 =  4;  // data-ready interrupt (optional)
 // CST816S supports up to 400 kHz; QMI8658 up to 1 MHz in standard I2C mode.
 constexpr uint32_t GYRO_I2C_FREQ = 400000UL;
 
+// ── Battery voltage ADC (optional — set to 0 if no battery circuit) ─────
+// Waveshare ESP32-S3-LCD-1.28 with battery: voltage divider on GPIO1
+// Vbat → 100k → ADC → 100k → GND (divider ratio 2:1, max 4.2V → 2.1V)
+constexpr uint8_t GYRO_BAT_PIN = 1;        // GPIO1 ADC, 0 = disabled
+constexpr float   GYRO_BAT_DIVIDER = 2.0f; // voltage divider ratio
+
 #endif  // BOARD_GYRO
 #endif  // GYROBOARD_H

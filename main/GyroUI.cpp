@@ -5,13 +5,14 @@
  *   LOGO     → WiFi connect (or 5s timeout) → IDLE
  *   IDLE     → tap START                     → ACTIVE (page 0)
  *   ACTIVE   → tap STOP (page 2)            → IDLE
- *   ACTIVE   → swipe left/right             → page 0/1/2/3
+ *   ACTIVE   → swipe left/right             → page 0/1/2/3/4
  *
  * ACTIVE pages:
  *   0 — Calibrate (hold-to-calibrate → server captures reference)
  *   1 — Colour / Flash (rainbow ring + flash button)
  *   2 — Status (park / power-save, 2 Hz update)
  *   3 — Stop (hold-to-stop → returns to IDLE)
+ *   4 — Settings (battery, WiFi, hold-to-sleep → deep sleep)
  */
 
 #include "BoardConfig.h"
@@ -19,12 +20,14 @@
 #ifdef BOARD_GYRO
 
 #include "GyroUI.h"
+#include "GyroBoard.h"
 #include "GyroDisplay.h"
 #include "GyroTouch.h"
 #include "GyroIMU.h"
 #include "GyroUdp.h"
 #include "GyroLogo.h"
 #include <Arduino.h>
+#include <esp_sleep.h>
 
 // ── Forward declaration ──────────────────────────────────────────────────────
 void gyroUdpSendColor(uint8_t r, uint8_t g, uint8_t b, uint8_t flags);
@@ -123,8 +126,8 @@ static bool s_stopHeld  = false;
 static bool wifiOk() { return WiFi.status() == WL_CONNECTED; }
 
 static void drawPageDots() {
-    int16_t startX = CX - (int16_t)(3 * PAGE_DOT_SP) / 2;
-    for (uint8_t i = 0; i < 4; i++) {
+    int16_t startX = CX - (int16_t)(4 * PAGE_DOT_SP) / 2;
+    for (uint8_t i = 0; i < 5; i++) {
         int16_t dx = startX + i * PAGE_DOT_SP;
         uint16_t col = (i == s_page) ? GC_WHITE : GC_DKGREY;
         gyroFillCircle(dx, PAGE_DOT_Y, PAGE_DOT_R, col);
@@ -305,15 +308,95 @@ static void drawStatusPage() {
     drawPageDots();
 }
 
+// ── ACTIVE page 4 — Settings ────────────────────────────────────────────────
+
+static float readBatteryVoltage() {
+    if (GYRO_BAT_PIN == 0) return -1.0f;  // no battery pin
+    int raw = analogRead(GYRO_BAT_PIN);
+    // ESP32-S3 ADC: 12-bit (0-4095), reference ~3.3V
+    float v = (float)raw / 4095.0f * 3.3f * GYRO_BAT_DIVIDER;
+    return v;
+}
+
+static int batteryPercent(float voltage) {
+    // LiPo: 4.2V=100%, 3.7V=50%, 3.3V=0%
+    if (voltage < 0) return -1;  // no battery
+    if (voltage >= 4.2f) return 100;
+    if (voltage <= 3.3f) return 0;
+    return (int)((voltage - 3.3f) / 0.9f * 100.0f);
+}
+
+static bool s_sleepHeld = false;
+
+static void enterDeepSleep() {
+    // Stop streaming
+    gyroUdpSetStreaming(false, 0);
+
+    // Show sleep message
+    gyroClearScreen(GC_BLACK);
+    gyroDrawText(52, 100, "Sleeping...", 1, GC_GREY);
+    gyroDrawText(28, 120, "Touch screen to wake", 1, GC_DKGREY);
+    delay(1000);
+
+    // Turn off backlight
+    digitalWrite(GYRO_LCD_BL, LOW);
+
+    // Configure wake on touch INT pin (CST816S asserts INT on any touch)
+    esp_sleep_enable_ext0_wakeup((gpio_num_t)GYRO_TP_INT, 0);  // wake on LOW
+
+    // Enter deep sleep — device restarts on wake
+    esp_deep_sleep_start();
+}
+
+static void drawSettingsPage() {
+    gyroClearScreen(GC_BLACK);
+    gyroDrawText(CX - 27, 32, "SETTINGS", 1, GC_CYAN);
+
+    // Battery
+    float vbat = readBatteryVoltage();
+    int pct = batteryPercent(vbat);
+    if (pct >= 0) {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "Battery: %d%%", pct);
+        uint16_t col = pct > 20 ? GC_GREEN : (pct > 5 ? GC_ORANGE : GC_RED);
+        gyroDrawText(52, 70, buf, 1, col);
+        snprintf(buf, sizeof(buf), "%.2fV", vbat);
+        gyroDrawText(80, 85, buf, 1, GC_GREY);
+
+        // Battery bar
+        gyroFillRect(50, 100, 140, 10, GC_DKGREY);
+        int barW = pct * 136 / 100;
+        if (barW > 0) gyroFillRect(52, 102, barW, 6, col);
+    } else {
+        gyroDrawText(48, 80, "No battery", 1, GC_GREY);
+    }
+
+    // WiFi info
+    gyroDrawText(52, 125, wifiOk() ? "WiFi: Connected" : "WiFi: Disconnected", 1,
+                 wifiOk() ? GC_GREEN : GC_RED);
+
+    // Power Off button
+    uint16_t fill = s_sleepHeld ? GC_RED : (uint16_t)0x9800u;
+    gyroFillCircle(CX, 175, 30, fill);
+    gyroDrawCircle(CX, 175, 30, GC_RED);
+    gyroDrawText(CX - 18, 170, "SLEEP", 1, GC_WHITE);
+
+    if (!s_sleepHeld)
+        gyroDrawText(28, 210, "Hold to sleep", 1, GC_GREY);
+
+    drawPageDots();
+}
+
 // ── Page dispatch ────────────────────────────────────────────────────────────
 
-// Pages: 0=Calibrate, 1=Colour, 2=Status/park, 3=Stop
+// Pages: 0=Calibrate, 1=Colour, 2=Status/park, 3=Stop, 4=Settings
 static void drawCurrentPage() {
     switch (s_page) {
         case 0: drawCalibratePage(); break;
         case 1: drawColourPage(); break;
         case 2: drawStatusPage(); break;
         case 3: drawStopPage(); break;
+        case 4: drawSettingsPage(); break;
     }
 }
 
@@ -436,7 +519,7 @@ void gyroUIUpdate() {
         s_gestCoolMs = now;  // start cooldown
 
         if (s_state == UIState::ACTIVE && isSwipe) {
-            if (gesture == TOUCH_GEST_SWIPE_LEFT && s_page < 3) {
+            if (gesture == TOUCH_GEST_SWIPE_LEFT && s_page < 4) {
                 s_page++;
                 drawCurrentPage();
             } else if (gesture == TOUCH_GEST_SWIPE_RIGHT && s_page > 0) {
@@ -502,11 +585,18 @@ void gyroUIUpdate() {
                 }
             }
         }
-        // Page 2: hold-to-stop
+        // Page 3: hold-to-stop
         if (s_page == 3 && held && hitCircle(tx, ty, CX, CY, BTN_MAIN_R)) {
             if (!s_stopHeld) {
                 s_stopHeld = true;
                 drawStopPage();
+            }
+        }
+        // Page 4: hold-to-sleep
+        if (s_page == 4 && held && hitCircle(tx, ty, CX, 175, 30)) {
+            if (!s_sleepHeld) {
+                s_sleepHeld = true;
+                drawSettingsPage();
             }
         }
     }
@@ -530,6 +620,10 @@ void gyroUIUpdate() {
             gyroUdpSetStreaming(false, 0);
             s_state = UIState::IDLE;
             drawIdle();
+        }
+        if (s_sleepHeld) {
+            s_sleepHeld = false;
+            enterDeepSleep();  // does not return — device restarts on touch wake
         }
         // On colour page: update the colour fill ring on finger release
         if (s_state == UIState::ACTIVE && s_page == 1 && s_selHue >= 0) {
