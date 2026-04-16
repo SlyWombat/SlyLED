@@ -24,13 +24,13 @@ def set_cv_engine(engine):
     _cv_engine = engine
 
 STEP = 0.05       # pan/tilt step size for BFS
-SETTLE = 1.2      # seconds between moves (legacy — used by _hold_dmx callers)
-MAX_SAMPLES = 60   # stop BFS after this many
+SETTLE = 0.6      # seconds between moves (reduced from 1.2)
+MAX_SAMPLES = 80   # stop BFS after this many (increased from 60 for better coverage)
 
 # ── Adaptive settle time (#238) ─────────────────────────────────────────
-SETTLE_BASE = 0.8          # base settle time (seconds)
-SETTLE_ESCALATE = [0.8, 1.5, 2.5]  # escalation stages
-SETTLE_VERIFY_GAP = 0.3   # gap between double-capture (seconds)
+SETTLE_BASE = 0.4          # base settle time (seconds, reduced from 0.8)
+SETTLE_ESCALATE = [0.4, 0.8, 1.5]  # escalation stages (faster)
+SETTLE_VERIFY_GAP = 0.2   # gap between double-capture (reduced from 0.3)
 SETTLE_PIXEL_THRESH = 30  # max pixel drift to consider settled
 
 
@@ -789,7 +789,7 @@ def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     # Turn on our mover at initial position
     pan, tilt = initial_pan, initial_tilt
     _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
-    _hold_dmx(bridge_ip, dmx, 2.0)  # extra settle for first position
+    _hold_dmx(bridge_ip, dmx, 1.0)  # settle for first position (reduced from 2.0)
 
     # Check initial position — use adaptive settle (#238)
     beam = _wait_settled(camera_ip, cam_idx, color, center=False, threshold=30)
@@ -799,15 +799,15 @@ def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     # Phase 1: Coarse grid scan across full range (#367)
     # Covers the entire pan/tilt space quickly — finds the beam regardless
     # of fixture orientation, mount direction, or motor mapping.
-    COARSE_PAN = 8   # 8 pan positions across 0.05–0.95
-    COARSE_TILT = 5   # 5 tilt positions across 0.3–0.9
+    COARSE_PAN = 10   # 10 pan positions across 0.02–0.98
+    COARSE_TILT = 7    # 7 tilt positions across 0.1–0.95
     prev_p, prev_t = pan, tilt
     probes = 0
     log.info("Discovery: coarse grid scan %dx%d", COARSE_PAN, COARSE_TILT)
     for ti in range(COARSE_TILT):
-        t = 0.3 + (0.6 * ti / max(COARSE_TILT - 1, 1))
+        t = 0.1 + (0.85 * ti / max(COARSE_TILT - 1, 1))
         for pi in range(COARSE_PAN):
-            p = 0.05 + (0.9 * pi / max(COARSE_PAN - 1, 1))
+            p = 0.02 + (0.96 * pi / max(COARSE_PAN - 1, 1))
             probes += 1
             _set_mover_dmx(dmx, mover_addr, p, t, *color, dimmer=255)
             _hold_dmx(bridge_ip, dmx, SETTLE)
