@@ -133,6 +133,7 @@ Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask s
 | `desktop/shared/spa/js/show-runtime.js` | Playlist, show playback |
 | `desktop/shared/spa/js/wizard.js` | Fixture creation wizard |
 | `desktop/shared/spa/js/file-manager.js` | Project file I/O, File System API |
+| `desktop/shared/mover_control.py` | Unified mover control engine — claim/release, calibrate, orient, color |
 | `desktop/shared/data/` | JSON persistence (children, layout, runners, settings, actions, wifi) — gitignored |
 | `desktop/windows/run.ps1` | PowerShell launcher — installs deps, starts server |
 | `desktop/windows/requirements.txt` | `flask, pystray, pillow, pyserial, esptool` |
@@ -211,6 +212,29 @@ Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask s
 | POST | `/api/shutdown` | Terminate parent process |
 
 **Naming:** The "Surfaces" concept has been renamed to **"Objects"** across all platforms. Use `/api/objects` only — the `/api/surfaces` alias has been removed.
+
+### Unified mover control (gyro + Android)
+
+Both ESP32-S3 gyro boards and Android phones control moving heads through a single `MoverControlEngine` (`desktop/shared/mover_control.py`). Key concepts:
+
+- **Claim/Release**: Only one device controls a mover at a time. TTL auto-release (30s).
+- **Calibrate (hold-to-align)**: User holds calibrate button → server captures device orientation + current mover pan/tilt as reference pair. On release, device delta maps to mover delta.
+- **Orient**: 20fps updates → delta from reference → normalized pan/tilt → profile-aware DMX.
+- **Color**: RGB auto-resolved to color-wheel slot for color-wheel fixtures.
+
+| API | Purpose |
+|-----|---------|
+| POST `/api/mover-control/claim` | Claim a mover (device exclusivity) |
+| POST `/api/mover-control/release` | Release a mover |
+| POST `/api/mover-control/start` | Turn on light, enter streaming |
+| POST `/api/mover-control/calibrate-start` | Capture reference orientation + position |
+| POST `/api/mover-control/calibrate-end` | Lock reference, resume streaming |
+| POST `/api/mover-control/orient` | Orientation update (20fps) |
+| POST `/api/mover-control/color` | Set beam color |
+| GET `/api/mover-control/status` | Active claims status |
+
+ESP32 gyro uses UDP (CMD_GYRO_ORIENT 0x60, CMD_GYRO_CALIBRATE 0x64) → server translates to engine calls.
+Android uses HTTP POST to the same endpoints.
 
 ### UDP binary protocol (port 4210)
 
