@@ -154,9 +154,11 @@ def main():
                 {'moverId': mover_id, 'deviceId': 'wrong-device'})
         ok(not r.get('ok'), 'Release from wrong device → rejected')
 
-        # ── Cleanup ─────────────────────────────────────────────
+        # ── Cleanup — release and blackout ─────────────────────
         api(c, 'POST', '/api/mover-control/release',
             {'moverId': mover_id, 'deviceId': 'gyro-1'})
+        c.post('/api/dmx/blackout', json={})
+        c.post('/api/dmx/stop', json={})
 
     total = _pass + _fail
     print(f'\n{"="*60}')

@@ -106,6 +106,7 @@ CMD_GYRO_ORIENT = 0x60   # gyro→parent: GyroOrientPayload (8 bytes)
 CMD_GYRO_CTRL   = 0x61   # parent→gyro: enabled(1) + targetFps(1)
 CMD_GYRO_RECAL  = 0x62   # parent→gyro: zero IMU reference (no payload)
 CMD_GYRO_COLOR  = 0x63   # gyro→parent: GyroColorPayload (r, g, b, flags)
+CMD_GYRO_CALIBRATE = 0x64  # gyro→parent: calibrate start/end + orientation
 
 #  "  "  Paths  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -767,6 +768,25 @@ def _udp_listener():
                                        and c.get("ip") == ip), None)), None)
                 if _gf2 and _gf2.get("assignedMoverId"):
                     _mover_engine.set_color(_gf2["assignedMoverId"], f"gyro-{ip}", r, g, b)
+        elif cmd == CMD_GYRO_CALIBRATE and len(data) >= 15:
+            # GyroCalibratePayload: calibrating(1) roll100(2) pitch100(2) yaw100(2)
+            calibrating, roll100, pitch100, yaw100 = struct.unpack_from("<Bhhh", data, 8)
+            roll = roll100 / 100.0
+            pitch = pitch100 / 100.0
+            yaw = yaw100 / 100.0
+            log.info("GYRO_CALIBRATE from %s: cal=%d R=%.1f P=%.1f Y=%.1f", ip, calibrating, roll, pitch, yaw)
+            if _mover_engine:
+                _gf3 = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
+                             and f.get("gyroChildId") is not None
+                             and next((c for c in _children if c["id"] == f["gyroChildId"]
+                                       and c.get("ip") == ip), None)), None)
+                if _gf3 and _gf3.get("assignedMoverId"):
+                    mid = _gf3["assignedMoverId"]
+                    did = f"gyro-{ip}"
+                    if calibrating:
+                        _mover_engine.calibrate_start(mid, did, roll, pitch, yaw)
+                    else:
+                        _mover_engine.calibrate_end(mid, did, roll, pitch, yaw)
         elif cmd == CMD_PONG:
             # Handle PONGs from broadcast/direct pings
             info = _parse_pong(data, ip)

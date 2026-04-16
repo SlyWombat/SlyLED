@@ -47,5 +47,9 @@ void gyroUdpSetStreaming(bool enabled, uint8_t fps = 0);
 // flags bit0 = flash (brief full-brightness pulse)
 void gyroUdpSendColor(uint8_t r, uint8_t g, uint8_t b, uint8_t flags);
 
+// Send CMD_GYRO_CALIBRATE (0x64) to parent — calibrate hold start/end.
+// calibrating: 1 = hold started, 0 = hold released
+void gyroUdpSendCalibrate(bool calibrating);
+
 #endif  // BOARD_GYRO
 #endif  // GYROUDP_H

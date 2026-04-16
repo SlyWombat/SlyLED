@@ -216,4 +216,33 @@ void gyroUdpSendColor(uint8_t r, uint8_t g, uint8_t b, uint8_t flags) {
         Serial.printf("[GyroUDP] COLOR r=%d g=%d b=%d flags=0x%02X\n", r, g, b, flags);
 }
 
+void gyroUdpSendCalibrate(bool calibrating) {
+    float roll = 0.0f, pitch = 0.0f, yaw = 0.0f;
+    gyroIMURead(&roll, &pitch, &yaw);
+
+    UdpHeader hdr;
+    hdr.magic   = UDP_MAGIC;
+    hdr.version = UDP_VERSION;
+    hdr.cmd     = CMD_GYRO_CALIBRATE;
+    hdr.epoch   = (uint32_t)currentEpoch();
+
+    GyroCalibratePayload cp;
+    cp.calibrating = calibrating ? 1 : 0;
+    cp.roll100     = (int16_t)(roll  * 100.0f);
+    cp.pitch100    = (int16_t)(pitch * 100.0f);
+    cp.yaw100      = (int16_t)(yaw   * 100.0f);
+
+    uint8_t buf[sizeof(hdr) + sizeof(cp)];
+    memcpy(buf,               &hdr, sizeof(hdr));
+    memcpy(buf + sizeof(hdr), &cp,  sizeof(cp));
+
+    cmdUDP.beginPacket(s_parentIP, UDP_PORT);
+    cmdUDP.write(buf, sizeof(buf));
+    cmdUDP.endPacket();
+
+    if (Serial)
+        Serial.printf("[GyroUDP] CALIBRATE: %s orient=(%.1f,%.1f,%.1f)\n",
+                      calibrating ? "START" : "END", roll, pitch, yaw);
+}
+
 #endif  // BOARD_GYRO
