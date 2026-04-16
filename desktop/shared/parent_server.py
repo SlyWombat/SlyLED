@@ -5108,6 +5108,28 @@ def api_fixtures_live():
                         entry["b"] = uni.get_channel(addr + 2)
                     if count >= 4:
                         entry["dimmer"] = uni.get_channel(addr + 3)
+            # Color wheel slot lookup — populate swatch color from wheel slot
+            if ch_map and "color-wheel" in ch_map and engine:
+                cw_val = uni.get_channel(addr + ch_map["color-wheel"])
+                entry["colorWheelDmx"] = cw_val
+                for ch_def in (prof_info.get("channels") or []):
+                    if ch_def.get("type") == "color-wheel":
+                        for cap in (ch_def.get("capabilities") or []):
+                            rng = cap.get("range", [0, 0])
+                            if cap.get("type") == "WheelSlot" and rng[0] <= cw_val <= rng[1]:
+                                entry["colorWheelSlot"] = cap.get("label", "")
+                                hex_col = cap.get("color", "")
+                                entry["colorWheelColor"] = hex_col
+                                # Use wheel color for swatch if no RGB channels
+                                if hex_col and "red" not in ch_map:
+                                    try:
+                                        entry["r"] = int(hex_col[1:3], 16)
+                                        entry["g"] = int(hex_col[3:5], 16)
+                                        entry["b"] = int(hex_col[5:7], 16)
+                                    except (ValueError, IndexError):
+                                        pass
+                                break
+                        break
             entry["active"] = (entry["r"] > 0 or entry["g"] > 0
                                or entry["b"] > 0 or entry["dimmer"] > 0)
             # DMX address info for display
@@ -5989,8 +6011,12 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
                     # RGB fixture — set color from action
                     uni_buf.set_fixture_rgb(addr, ta.get("r", 255), ta.get("g", 255), ta.get("b", 255), profile)
                 elif "color-wheel" in cm:
-                    # Color wheel fixture — set to white/open (first slot)
-                    uni_buf.set_channel(addr + cm["color-wheel"], ta.get("colorWheel", 0))
+                    # Color wheel fixture — resolve action RGB to closest wheel slot
+                    from dmx_profiles import rgb_to_wheel_slot
+                    cw_val = ta.get("colorWheel")
+                    if cw_val is None:
+                        cw_val = rgb_to_wheel_slot(prof_info, ta.get("r", 255), ta.get("g", 255), ta.get("b", 255))
+                    uni_buf.set_channel(addr + cm["color-wheel"], cw_val)
                 # Apply channel defaults (strobe open, etc.) so beam is visible
                 for ch in prof_info.get("channels", []):
                     ch_type = ch.get("type", "")
@@ -6112,8 +6138,13 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
             zoom = ch_vals.get("zoom", (None, 0))[0]
             profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
             uni_buf = engine.get_universe(fx["uni"])
-            # RGB
-            uni_buf.set_fixture_rgb(fx["addr"], r, g, b, profile)
+            # RGB or color-wheel resolution
+            if fx["ch_map"] and "red" in fx["ch_map"]:
+                uni_buf.set_fixture_rgb(fx["addr"], r, g, b, profile)
+            elif fx["ch_map"] and "color-wheel" in fx["ch_map"] and (r or g or b):
+                from dmx_profiles import rgb_to_wheel_slot
+                cw = color_wheel if color_wheel is not None else rgb_to_wheel_slot(fx, r, g, b)
+                uni_buf.set_channel(fx["addr"] + fx["ch_map"]["color-wheel"], cw)
             # Dimmer
             if fx["ch_map"] and "dimmer" in fx["ch_map"]:
                 dim = dimmer if dimmer is not None else (255 if (r or g or b) else 0)
@@ -6445,7 +6476,12 @@ def _dmx_playback_single(tid, go_epoch, duration):
             zoom = ch_vals.get("zoom", (None, 0))[0]
             profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
             uni_buf = engine.get_universe(fx["uni"])
-            uni_buf.set_fixture_rgb(fx["addr"], r, g, b, profile)
+            if fx["ch_map"] and "red" in fx["ch_map"]:
+                uni_buf.set_fixture_rgb(fx["addr"], r, g, b, profile)
+            elif fx["ch_map"] and "color-wheel" in fx["ch_map"] and (r or g or b):
+                from dmx_profiles import rgb_to_wheel_slot
+                cw = color_wheel if color_wheel is not None else rgb_to_wheel_slot(fx, r, g, b)
+                uni_buf.set_channel(fx["addr"] + fx["ch_map"]["color-wheel"], cw)
             if fx["ch_map"] and "dimmer" in fx["ch_map"]:
                 dim = dimmer if dimmer is not None else (255 if (r or g or b) else 0)
                 uni_buf.set_fixture_dimmer(fx["addr"], dim, profile)

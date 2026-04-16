@@ -1,4 +1,14 @@
 /** profiles.js — Profile library, patch view, OFL import, community browser. Extracted from app.js Phase 3. */
+// ── Gel Color Presets (common theatrical gel colors) ─────────────────────────
+var _GEL_PRESETS=[
+  {name:'Open / White',hex:'#ffffff'},{name:'Warm White',hex:'#fff5e6'},{name:'Cool White',hex:'#e6f0ff'},
+  {name:'Primary Red',hex:'#ff0000'},{name:'Deep Red',hex:'#cc0000'},{name:'Orange',hex:'#ff6600'},
+  {name:'Amber',hex:'#ffbf00'},{name:'Yellow',hex:'#ffff00'},{name:'Straw',hex:'#fce883'},
+  {name:'Primary Green',hex:'#00ff00'},{name:'Dark Green',hex:'#006633'},{name:'Cyan',hex:'#00ffff'},
+  {name:'Primary Blue',hex:'#0000ff'},{name:'Congo Blue',hex:'#00004d'},{name:'Lavender',hex:'#cc99ff'},
+  {name:'Magenta',hex:'#ff00ff'},{name:'Pink',hex:'#ff66b2'},{name:'UV / Blacklight',hex:'#6600cc'},
+  {name:'CTO (warm)',hex:'#ffad5c'},{name:'CTB (cool)',hex:'#80b3ff'},
+];
 // ── Profile Library + Patch View + OFL + Community ──────────────────────────
 var _profileCatColors={'par':'#059669','wash':'#2563eb','spot':'#7c3aed','moving-head':'#dc2626','strobe':'#f59e0b','fog':'#6b7280','laser':'#ec4899','other':'#446'};
 // ── Universe Patch View ──────────────────────────────────────────────────────
@@ -238,20 +248,32 @@ function _peRenderCaps(chIdx){
   // Visual range bar + table
   var h='<div style="position:relative;height:24px;background:#111;border:1px solid #334;border-radius:3px;margin-bottom:.5em">';
   var capColors={'Intensity':'#3b82f6','ColorIntensity':'#ef4444','Pan':'#22d3ee','Tilt':'#a78bfa','ShutterStrobe':'#f59e0b','WheelSlot':'#10b981','Speed':'#f97316','Generic':'#64748b','NoFunction':'#334155'};
+  var isColorWheel=window._peChannels&&window._peChannels[chIdx]&&window._peChannels[chIdx].type==='color-wheel';
   (window._peCaps||[]).forEach(function(c,j){
     var pct0=c.range[0]/maxVal*100,pct1=(c.range[1]+1)/maxVal*100;
     var w=pct1-pct0;
-    var col=capColors[c.type]||'#64748b';
+    var col=(c.type==='WheelSlot'&&c.color)?c.color:(capColors[c.type]||'#64748b');
     h+='<div style="position:absolute;left:'+pct0+'%;width:'+w+'%;height:100%;background:'+col+';opacity:0.6;border-radius:2px" title="'+c.range[0]+'-'+c.range[1]+': '+(c.label||c.type)+'"></div>';
   });
   h+='</div>';
-  h+='<table class="tbl" style="font-size:.75em"><tr><th>Min</th><th>Max</th><th>Type</th><th>Label</th><th>Default</th><th></th></tr>';
+  h+='<table class="tbl" style="font-size:.75em"><tr><th>Min</th><th>Max</th><th>Type</th><th>Label</th>'+(isColorWheel?'<th>Color</th>':'')+'<th>Default</th><th></th></tr>';
   (window._peCaps||[]).forEach(function(c,j){
     var tOpts='';_profEditCapTypes.forEach(function(t){tOpts+='<option'+(t===c.type?' selected':'')+'>'+t+'</option>';});
     h+='<tr><td><input type="number" value="'+c.range[0]+'" min="0" max="'+maxVal+'" style="width:55px;font-size:.9em" onchange="window._peCaps['+j+'].range[0]=parseInt(this.value);_peRenderCaps('+chIdx+')"></td>';
     h+='<td><input type="number" value="'+c.range[1]+'" min="0" max="'+maxVal+'" style="width:55px;font-size:.9em" onchange="window._peCaps['+j+'].range[1]=parseInt(this.value);_peRenderCaps('+chIdx+')"></td>';
     h+='<td><select style="font-size:.85em" onchange="window._peCaps['+j+'].type=this.value;_peRenderCaps('+chIdx+')">'+tOpts+'</select></td>';
     h+='<td><input value="'+escapeHtml(c.label||'')+'" style="width:120px;font-size:.9em" onchange="window._peCaps['+j+'].label=this.value"></td>';
+    if(isColorWheel){
+      var cHex=c.color||'#000000';
+      h+='<td style="white-space:nowrap">';
+      h+='<input type="color" value="'+cHex+'" style="width:28px;height:22px;padding:0;border:none;cursor:pointer;vertical-align:middle" onchange="window._peCaps['+j+'].color=this.value;_peRenderCaps('+chIdx+')">';
+      h+=' <span style="position:relative;display:inline-block"><button class="btn" style="font-size:.65em;padding:1px 5px" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'block\':\'none\'">Gel</button>';
+      h+='<div style="display:none;position:absolute;z-index:50;background:#0f172a;border:1px solid #334;border-radius:4px;padding:4px;width:200px;top:22px;left:0;box-shadow:0 4px 12px rgba(0,0,0,.5)">';
+      _GEL_PRESETS.forEach(function(g){
+        h+='<span onclick="window._peCaps['+j+'].color=\''+g.hex+'\';_peRenderCaps('+chIdx+')" title="'+escapeHtml(g.name)+'" style="display:inline-block;width:22px;height:22px;background:'+g.hex+';border:1px solid #555;border-radius:2px;cursor:pointer;margin:1px"></span>';
+      });
+      h+='</div></span></td>';
+    }
     h+='<td><input type="number" value="'+(c.default!==undefined?c.default:c.range[0])+'" min="'+c.range[0]+'" max="'+c.range[1]+'" style="width:50px;font-size:.9em" onchange="window._peCaps['+j+'].default=parseInt(this.value)"></td>';
     h+='<td><button class="btn btn-off" onclick="window._peCaps.splice('+j+',1);_peRenderCaps('+chIdx+')" style="font-size:.7em">\u2715</button></td></tr>';
   });
@@ -260,7 +282,11 @@ function _peRenderCaps(chIdx){
 function _peAddCap(chIdx){
   var caps=window._peCaps||[];
   var startVal=caps.length?caps[caps.length-1].range[1]+1:0;
-  caps.push({range:[startVal,255],type:'Intensity',label:'',default:startVal});
+  var isColorWheel=window._peChannels&&window._peChannels[chIdx]&&window._peChannels[chIdx].type==='color-wheel';
+  var newCap=isColorWheel
+    ?{range:[startVal,Math.min(startVal+4,255)],type:'WheelSlot',label:'',color:'#ffffff',default:startVal}
+    :{range:[startVal,255],type:'Intensity',label:'',default:startVal};
+  caps.push(newCap);
   _peRenderCaps(chIdx);
 }
 function _peSaveCaps(chIdx){

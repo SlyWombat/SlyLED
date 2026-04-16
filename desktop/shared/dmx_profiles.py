@@ -57,6 +57,57 @@ CAPABILITY_TYPES = {
 
 CATEGORIES = {"par", "wash", "spot", "moving-head", "strobe", "fog", "laser", "bar", "matrix", "blinder", "other"}
 
+# -- Color wheel matching -----------------------------------------------------
+
+import math as _math
+import re as _re
+
+def rgb_to_wheel_slot(prof_info, r, g, b):
+    """Find the closest color wheel slot for an RGB value.
+
+    Searches color-wheel channel capabilities of type WheelSlot that have
+    a 'color' hex field.  Uses Euclidean distance in RGB space.
+
+    Args:
+        prof_info: dict with 'channels' list (from channel_info() or profile)
+        r, g, b: 0-255 target color
+
+    Returns:
+        DMX value (midpoint of closest slot's range), or 0 (open/white)
+        if no color-annotated WheelSlot caps exist.
+    """
+    if r == 0 and g == 0 and b == 0:
+        return 0  # black = open/white (dimmer controls brightness, not color)
+    best_val, best_dist = 0, float("inf")
+    for ch in (prof_info.get("channels") or []):
+        if ch.get("type") != "color-wheel":
+            continue
+        for cap in (ch.get("capabilities") or []):
+            if cap.get("type") != "WheelSlot":
+                continue
+            hex_color = cap.get("color", "")
+            if not hex_color or len(hex_color) != 7:
+                continue
+            try:
+                cr = int(hex_color[1:3], 16)
+                cg = int(hex_color[3:5], 16)
+                cb = int(hex_color[5:7], 16)
+            except ValueError:
+                continue
+            dist = _math.sqrt((r - cr)**2 + (g - cg)**2 + (b - cb)**2)
+            if dist < best_dist:
+                best_dist = dist
+                rng = cap.get("range", [0, 0])
+                best_val = (rng[0] + rng[1]) // 2
+    return best_val
+
+
+def has_color_wheel_only(prof_info):
+    """True if profile has a color-wheel channel but no RGB channels."""
+    ch_map = prof_info.get("channel_map", {})
+    return "color-wheel" in ch_map and "red" not in ch_map
+
+
 # -- Capability helper --------------------------------------------------------
 
 def _simple_cap(label, cap_type="Intensity"):
