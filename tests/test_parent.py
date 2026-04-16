@@ -1726,6 +1726,14 @@ def run():
         ok('Fixtures live DMX b=64', dmx_fx.get('b') == 64)
         ok('Fixtures live DMX active when lit', dmx_fx.get('active') is True)
 
+        # DMX Monitor — 512-channel grid read (#308)
+        r = c.get('/api/dmx/monitor/1')
+        ok('GET /api/dmx/monitor/1', r.status_code == 200)
+        mon = r.get_json()
+        ok('Monitor returns 512 channels', len(mon.get('channels', [])) == 512)
+        ok('Monitor ch1 matches set value', mon['channels'][0] == 255)
+        ok('Monitor ch2 matches set value', mon['channels'][1] == 128)
+
         # Camera fixtures excluded from live list
         c.post('/api/fixtures', json={'name': 'Cam 1', 'fixtureType': 'camera',
                'ip': '10.0.0.99'})

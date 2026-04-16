@@ -173,6 +173,7 @@ THEMES = {
                 "speedPreset": "medium",
                 "startPct": 15,
                 "endPct": 85,
+                "patrolMode": "on-demand",
             },
         }],
     },

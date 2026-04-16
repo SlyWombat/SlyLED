@@ -63,6 +63,7 @@ function newObject(){
   h+='<label>Range</label><input id="sf-pat-start" type="number" value="10" min="0" max="100" style="width:50px">% to <input id="sf-pat-end" type="number" value="90" min="0" max="100" style="width:50px">% of stage';
   h+='<div id="sf-pat-bound-wrap"><label>Bounding Object <span style="color:#64748b;font-size:.75em">(optional)</span></label><select id="sf-pat-bound"><option value="">None (use stage %)</option></select></div>';
   h+='<label>Easing</label><select id="sf-pat-ease"><option value="sine">Smooth (sine)</option><option value="linear">Linear</option></select>';
+  h+='<label>Activation</label><select id="sf-pat-mode"><option value="always">Always (animate whenever DMX runs)</option><option value="on-demand">On Demand (only when linked show is playing)</option></select>';
   h+='</div></div>';
   h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="createObject()">Add to Stage</button></div>';
   document.getElementById('modal-title').textContent='New Stage Object';
@@ -169,6 +170,7 @@ function createObject(){
     var sp=document.getElementById('sf-pat-speed');
     var patPattern=document.getElementById('sf-pat-pattern');
     var patBound=document.getElementById('sf-pat-bound');
+    var patMode=document.getElementById('sf-pat-mode');
     body.patrol={enabled:true,
       pattern:patPattern?patPattern.value:'pingpong',
       axis:document.getElementById('sf-pat-axis').value||'x',
@@ -176,7 +178,8 @@ function createObject(){
       startPct:parseInt(document.getElementById('sf-pat-start').value)||10,
       endPct:parseInt(document.getElementById('sf-pat-end').value)||90,
       easing:document.getElementById('sf-pat-ease').value||'sine',
-      boundingObject:(patBound&&patBound.value)||''};
+      boundingObject:(patBound&&patBound.value)||'',
+      patrolMode:(patMode?patMode.value:'always')};
   }
   ra('POST','/api/objects',body,function(r){
     closeModal();if(r&&r.ok){loadObjects();s3dLoadChildren();}
@@ -224,6 +227,8 @@ function editObject(id){
     (_objects||[]).forEach(function(o){if(o.mobility!=='moving'&&o.name)h+='<option value="'+escapeHtml(o.name)+'"'+((pat.boundingObject===o.name)?' selected':'')+'>'+escapeHtml(o.name)+'</option>';});
     h+='</select></div>';
     h+='<label>Easing</label><select id="sf-pat-ease"><option value="sine"'+((pat.easing||'sine')==='sine'?' selected':'')+'>Smooth (sine)</option><option value="linear"'+((pat.easing)==='linear'?' selected':'')+'>Linear</option></select>';
+    var pm=pat.patrolMode||'always';
+    h+='<label>Activation</label><select id="sf-pat-mode"><option value="always"'+(pm==='always'?' selected':'')+'>Always</option><option value="on-demand"'+(pm==='on-demand'?' selected':'')+'>On Demand (only when show playing)</option></select>';
     h+='</div></div>';
   }
   h+='<div style="margin-top:.8em;display:flex;gap:.5em">';
@@ -265,7 +270,8 @@ function updateObject(id){
       startPct:parseInt(document.getElementById('sf-pat-start').value)||10,
       endPct:parseInt(document.getElementById('sf-pat-end').value)||90,
       easing:document.getElementById('sf-pat-ease').value||'sine',
-      boundingObject:(patBound&&patBound.value)||''};
+      boundingObject:(patBound&&patBound.value)||'',
+      patrolMode:(document.getElementById('sf-pat-mode')?document.getElementById('sf-pat-mode').value:'always')};
   }
   // Delete and recreate (simple approach since objects API doesn't have PUT)
   ra('DELETE','/api/objects/'+id,null,function(){

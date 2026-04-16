@@ -5720,11 +5720,28 @@ def _evaluate_object_patrols(elapsed):
     # Build name→object lookup for bounding box references
     obj_by_name = {o.get("name", ""): o for o in all_objs if o.get("name")}
 
+    # Build set of active Track action target object IDs (for on-demand patrol check)
+    active_track_obj_ids = set()
+    if _settings.get("runnerRunning"):
+        active_tid = _settings.get("activeTimeline", -1)
+        active_tl = next((t for t in _timelines if t["id"] == active_tid), None) if active_tid >= 0 else None
+        if active_tl:
+            for tr in active_tl.get("tracks", []):
+                for cl in tr.get("clips", []):
+                    aid = cl.get("actionId")
+                    act = next((a for a in _actions if a.get("id") == aid), None) if aid is not None else None
+                    if act and act.get("type") == 18:
+                        for oid in (act.get("trackObjectIds") or []):
+                            active_track_obj_ids.add(oid)
+
     for obj in all_objs:
         if obj.get("mobility") != "moving":
             continue
         pat = obj.get("patrol")
         if not pat or not pat.get("enabled"):
+            continue
+        # On-demand patrols only animate when linked Track action is in active timeline
+        if pat.get("patrolMode") == "on-demand" and obj["id"] not in active_track_obj_ids:
             continue
         preset = pat.get("speedPreset", "medium")
         cycle_s = _PATROL_SPEED_PRESETS.get(preset, pat.get("cycleS", 10.0))

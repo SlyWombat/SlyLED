@@ -22,6 +22,8 @@ function loadDash(){
       if(light.length)parts.push(light.length+' fixture'+(light.length>1?'s':''));
       if(cams.length)parts.push(cams.length+' camera'+(cams.length>1?'s':''));
       if(onCnt)parts.push(onCnt+' online');
+      var movingObjs=(_objects||[]).filter(function(o){return o.mobility==='moving';});
+      if(movingObjs.length)parts.push(movingObjs.length+' moving object'+(movingObjs.length>1?'s':''));
       document.getElementById('hs').textContent=parts.length?parts.join(' \u2022 '):'No fixtures';
     });
     refreshRunnerStatus();
