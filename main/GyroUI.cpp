@@ -211,14 +211,19 @@ static void drawCalibratePage() {
 // ── ACTIVE page 1 — Colour / Flash ──────────────────────────────────────────
 
 static void drawColourWheel() {
-    // 12 distinct colour segments (30° each) — clean on RGB565
+    // 13 segments: 12 hue segments (27.7° each) + 1 white segment at top
+    // White segment: 345°–360° (top of wheel)
+    gyroDrawArcSegment(CX, CY, COL_RING_OUTER, COL_RING_T, 345, 359, GC_WHITE);
+    // 12 hue segments from 0° to 344° (~28.75° each)
     for (int16_t i = 0; i < 12; i++) {
+        int16_t startDeg = i * 345 / 12;
+        int16_t endDeg = (i + 1) * 345 / 12 - 1;
         int16_t hue = i * 30;
         uint8_t r, g, b;
         hueToRGB(hue, &r, &g, &b);
         uint16_t col = gc9a01_rgb565(r, g, b);
         gyroDrawArcSegment(CX, CY, COL_RING_OUTER, COL_RING_T,
-                           i * 30, i * 30 + 29, col);
+                           startDeg, endDeg, col);
     }
 }
 
@@ -474,15 +479,22 @@ void gyroUIUpdate() {
                 if (now - s_colorSendMs >= 100) {
                     s_colorSendMs = now;
                     uint8_t cr, cg, cb;
-                    hueToRGB(s_selHue, &cr, &cg, &cb);
+                    if (s_selHue >= 345) {
+                        // White segment at top of wheel
+                        cr = 255; cg = 255; cb = 255;
+                    } else {
+                        // Map angle to hue: 0-344° → 0-360 hue
+                        int16_t hue = (int16_t)((float)s_selHue * 360.0f / 345.0f);
+                        hueToRGB(hue, &cr, &cg, &cb);
+                    }
                     gyroUdpSendColor(cr, cg, cb, 0);
                 }
             }
-            // Hold-to-flash (centre button)
+            // Hold-to-flash (centre button) — full screen flash feedback
             if (held && hitCircle(tx, ty, CX, CY, COL_FLASH_R)) {
                 if (!s_flashHeld) {
                     s_flashHeld = true;
-                    drawFlashButton();
+                    gyroClearScreen(GC_WHITE);  // full screen flash
                 }
                 if (now - s_flashLastMs >= 200) {
                     s_flashLastMs = now;
@@ -511,7 +523,7 @@ void gyroUIUpdate() {
         }
         if (s_flashHeld) {
             s_flashHeld = false;
-            drawFlashButton();
+            drawColourPage();  // restore full page after flash
         }
         if (s_stopHeld) {
             s_stopHeld = false;
