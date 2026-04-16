@@ -8,10 +8,10 @@
  *   ACTIVE   → swipe left/right             → page 0/1/2/3
  *
  * ACTIVE pages:
- *   0 — Calibrate (hold-to-calibrate)
- *   1 — Colour / Flash
- *   2 — Stop
- *   3 — Status (park / power-save, 2 Hz update)
+ *   0 — Calibrate (hold-to-calibrate → server captures reference)
+ *   1 — Colour / Flash (rainbow ring + flash button)
+ *   2 — Status (park / power-save, 2 Hz update)
+ *   3 — Stop (hold-to-stop → returns to IDLE)
  */
 
 #include "BoardConfig.h"
@@ -302,7 +302,7 @@ static void drawStatusPage() {
 
 // ── Page dispatch ────────────────────────────────────────────────────────────
 
-// Pages: 0=Calibrate, 1=Colour, 2=Status(park), 3=Stop
+// Pages: 0=Calibrate, 1=Colour, 2=Status/park, 3=Stop
 static void drawCurrentPage() {
     switch (s_page) {
         case 0: drawCalibratePage(); break;
@@ -332,21 +332,8 @@ static void handleTouchIdle(int16_t tx, int16_t ty) {
 }
 
 static void handleTouchActive(int16_t tx, int16_t ty, uint8_t gesture) {
-    // Swipe navigation (works on all pages)
-    if (gesture == TOUCH_GEST_SWIPE_LEFT && s_page < 3) {
-        s_page++;
-        s_calibHeld = false;
-        drawCurrentPage();
-        return;
-    }
-    if (gesture == TOUCH_GEST_SWIPE_RIGHT && s_page > 0) {
-        s_page--;
-        s_calibHeld = false;
-        drawCurrentPage();
-        return;
-    }
-
-    // Page-specific tap handling
+    // Swipe navigation handled in gyroUIUpdate() gesture edge detector.
+    // This function handles TAP events only.
     switch (s_page) {
         case 0:
             // If not streaming, tap = START
@@ -468,6 +455,7 @@ void gyroUIUpdate() {
         if (s_page == 0 && held && hitCircle(tx, ty, CX, BTN_CAL_Y, BTN_CAL_R)) {
             if (!s_calibHeld) {
                 s_calibHeld = true;
+                gyroUdpSendCalibrate(true);  // calibrate START — server captures orientation
                 gyroUdpSetStreaming(false, 0);
                 drawCalibratePage();
             }
@@ -515,7 +503,7 @@ void gyroUIUpdate() {
     if (!touching && s_wasTouching) {
         if (s_calibHeld) {
             s_calibHeld = false;
-            gyroIMUZero();
+            gyroUdpSendCalibrate(false);  // calibrate END — server captures reference
             gyroUdpSetStreaming(true, 0);
             gyroFillCircle(CX, BTN_CAL_Y, BTN_CAL_R, GC_CYAN);
             delay(120);
