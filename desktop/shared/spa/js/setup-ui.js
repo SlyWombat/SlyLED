@@ -915,8 +915,16 @@ function _gyroShowTuning(rowId){
 }
 
 function _gyroConfigModal(childId){
-  var c=null;(_children||[]).forEach(function(ch){if(ch.id===childId)c=ch;});
-  if(!c)return;
+  // Fetch fresh children data (not available as a global after module extraction)
+  ra('GET','/api/children',null,function(children){
+    if(!children)return;
+    var c=null;children.forEach(function(ch){if(ch.id===childId)c=ch;});
+    if(!c)return;
+    _gyroConfigModalRender(childId, c);
+  });
+}
+
+function _gyroConfigModalRender(childId, c){
   var gyroFixtures=(_fixtures||[]).filter(function(f){return f.fixtureType==='gyro';});
   var dmxFixtures=(_fixtures||[]).filter(function(f){return f.fixtureType==='dmx';});
   var gf=gyroFixtures.find(function(gfx){return gfx.gyroChildId===childId;});
