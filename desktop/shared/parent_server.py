@@ -4487,6 +4487,31 @@ def api_dmx_status():
         sacn=_sacn.status(),
     )
 
+def _set_fixture_color(engine_or_buf, uni_or_addr, addr_or_none, r, g, b, prof_info):
+    """Set color on a fixture — RGB or color-wheel depending on profile.
+    Accepts (engine, uni, addr, ...) or (uni_buf, addr, None, ...)."""
+    from dmx_profiles import rgb_to_wheel_slot
+    if addr_or_none is not None:
+        # Engine mode: engine.set_fixture_rgb(uni, addr, ...)
+        engine, uni, addr = engine_or_buf, uni_or_addr, addr_or_none
+        cm = prof_info.get("channel_map", {}) if prof_info else {}
+        if "red" in cm or not cm:
+            profile = {"channel_map": cm} if cm else None
+            engine.set_fixture_rgb(uni, addr, r, g, b, profile)
+        elif "color-wheel" in cm:
+            cw = rgb_to_wheel_slot(prof_info, r, g, b) if (r or g or b) else 0
+            engine.get_universe(uni).set_channel(addr + cm["color-wheel"], cw)
+    else:
+        # Buffer mode: uni_buf.set_fixture_rgb(addr, ...)
+        uni_buf, addr = engine_or_buf, uni_or_addr
+        cm = prof_info.get("channel_map", {}) if prof_info else {}
+        if "red" in cm or not cm:
+            profile = {"channel_map": cm, "channels": prof_info.get("channels", [])} if cm else None
+            uni_buf.set_fixture_rgb(addr, r, g, b, profile)
+        elif "color-wheel" in cm:
+            cw = rgb_to_wheel_slot(prof_info, r, g, b) if (r or g or b) else 0
+            uni_buf.set_channel(addr + cm["color-wheel"], cw)
+
 def _apply_profile_defaults(engine):
     """Apply profile channel default values to all DMX fixtures."""
     for f in _fixtures:
@@ -4589,8 +4614,7 @@ def api_dmx_set_fixture():
 
     for engine in (_artnet, _sacn):
         if engine.running:
-            engine.set_fixture_rgb(uni, addr, r, g, b,
-                                   {"channel_map": profile_map} if profile_map else None)
+            _set_fixture_color(engine, uni, addr, r, g, b, prof_info)
             if dimmer is not None and profile_map and "dimmer" in profile_map:
                 engine.get_universe(uni).set_fixture_dimmer(
                     addr, dimmer, {"channel_map": profile_map})
@@ -4693,6 +4717,7 @@ def api_group_control(gid):
         addr = member.get("dmxStartAddr", 1)
         pid = member.get("dmxProfileId")
         profile_map = None
+        prof_info_full = _profile_lib.channel_info(pid) if pid else None
         if pid:
             prof = _profile_lib.get_profile(pid)
             if prof:
@@ -4702,8 +4727,7 @@ def api_group_control(gid):
         for engine in (_artnet, _sacn):
             if engine.running:
                 if r is not None and g is not None and b is not None:
-                    engine.set_fixture_rgb(uni, addr, r, g, b,
-                                           {"channel_map": profile_map} if profile_map else None)
+                    _set_fixture_color(engine, uni, addr, r, g, b, prof_info_full)
                 if dimmer is not None and profile_map and "dimmer" in profile_map:
                     engine.get_universe(uni).set_channel(addr + profile_map["dimmer"], dimmer)
         applied += 1
@@ -4793,7 +4817,7 @@ def _run_boot_blink(engine, force=False):
             addr = f.get("dmxStartAddr", 1)
             prof = profiles.get(pid)
             if prof:
-                engine.set_fixture_rgb(uni, addr, r, g, b, prof)
+                _set_fixture_color(engine, uni, addr, r, g, b, prof)
                 cm = prof.get("channel_map", {})
                 if "dimmer" in cm:
                     engine.get_universe(uni).set_channel(addr + cm["dimmer"], 255)
