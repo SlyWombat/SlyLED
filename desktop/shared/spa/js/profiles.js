@@ -179,7 +179,7 @@ function _openProfileEditor(p,isEdit){
   h+='<div><label style="font-size:.78em">Category</label><select id="pe-cat">';
   cats.forEach(function(c){h+='<option'+(c===p.category?' selected':'')+'>'+c+'</option>';});
   h+='</select></div>';
-  var cmodes=['rgb','cmy','rgbw','rgba','single'];
+  var cmodes=['rgb','cmy','rgbw','rgba','color-wheel','single'];
   h+='<div><label style="font-size:.78em">Color Mode</label><select id="pe-cm">';
   cmodes.forEach(function(c){h+='<option'+(c===p.colorMode?' selected':'')+'>'+c+'</option>';});
   h+='</select></div>';
@@ -598,11 +598,10 @@ function _commShareProfile(profileId){
       if(!confirm(msg))return;
     }
     if(!data.slug_available){
-      document.getElementById('hs').textContent='A profile with this ID already exists in the community.';
-      return;
+      if(!confirm('A profile with this ID already exists in the community. Update it with your version?'))return;
+    }else{
+      if(!confirm('Share "'+profileId+'" to the SlyLED community? Other users will be able to download it.'))return;
     }
-    // Step 2: Confirm upload
-    if(!confirm('Share "'+profileId+'" to the SlyLED community? Other users will be able to download it.'))return;
     // Step 3: Upload
     document.getElementById('hs').textContent='Uploading to community...';
     ra('POST','/api/dmx-profiles/community/upload',{profileId:profileId},function(ur){

@@ -73,20 +73,64 @@ def _send_artnet(bridge_ip, universe, channels):
                 raise
 
 
-def _set_mover_dmx(dmx, addr, pan, tilt, r, g, b, dimmer=255):
-    """Set a 13ch Slymovehead-style fixture in a DMX buffer.
-    Channel layout: pan tilt speed dimmer strobe R G B W UV goboRot gobo macro"""
+_active_profile = None  # Set by caller before calibration; used by _set_mover_dmx
+
+def _set_mover_dmx(dmx, addr, pan, tilt, r, g, b, dimmer=255, profile=None):
+    """Set a mover fixture in a DMX buffer using profile channel map.
+
+    If profile is provided (or _active_profile is set), uses channel_map for
+    correct offsets and handles 8/16-bit pan/tilt, color-wheel, strobe defaults.
+    Falls back to hardcoded 13ch Slymovehead layout if no profile.
+    """
     base = addr - 1
-    dmx[base + 0] = max(0, min(255, int(pan * 255)))
-    dmx[base + 1] = max(0, min(255, int(tilt * 255)))
-    dmx[base + 2] = 0       # speed fast
-    dmx[base + 3] = dimmer
-    dmx[base + 4] = 0       # no strobe
-    dmx[base + 5] = r
-    dmx[base + 6] = g
-    dmx[base + 7] = b
-    for i in range(8, 13):
-        dmx[base + i] = 0
+    profile = profile or _active_profile
+    if profile:
+        cm = profile.get("channel_map", {})
+        channels = profile.get("channels", [])
+        # Pan/tilt — detect 8 vs 16 bit
+        for axis, val in [("pan", pan), ("tilt", tilt)]:
+            off = cm.get(axis)
+            if off is None:
+                continue
+            ch_def = next((c for c in channels if c.get("type") == axis), None)
+            bits = ch_def.get("bits", 8) if ch_def else 8
+            if bits == 16:
+                v16 = max(0, min(65535, int(val * 65535)))
+                dmx[base + off] = v16 >> 8
+                dmx[base + off + 1] = v16 & 0xFF
+            else:
+                dmx[base + off] = max(0, min(255, int(val * 255)))
+        # Dimmer
+        if "dimmer" in cm:
+            dmx[base + cm["dimmer"]] = max(0, min(255, dimmer))
+        # Color — RGB or color-wheel
+        if "red" in cm:
+            dmx[base + cm["red"]] = max(0, min(255, r))
+            if "green" in cm: dmx[base + cm["green"]] = max(0, min(255, g))
+            if "blue" in cm: dmx[base + cm["blue"]] = max(0, min(255, b))
+        elif "color-wheel" in cm:
+            # Resolve RGB to closest wheel slot, or use white (0) if black
+            from dmx_profiles import rgb_to_wheel_slot
+            cw = rgb_to_wheel_slot(profile, r, g, b) if (r or g or b) else 0
+            dmx[base + cm["color-wheel"]] = cw
+        # Apply channel defaults (strobe open, speed, etc.)
+        for ch in channels:
+            default = ch.get("default")
+            ch_type = ch.get("type", "")
+            if default is not None and default > 0 and ch_type not in ("pan", "tilt", "dimmer", "red", "green", "blue", "color-wheel"):
+                dmx[base + ch.get("offset", 0)] = max(0, min(255, int(default)))
+    else:
+        # Legacy fallback: 13ch Slymovehead layout
+        dmx[base + 0] = max(0, min(255, int(pan * 255)))
+        dmx[base + 1] = max(0, min(255, int(tilt * 255)))
+        dmx[base + 2] = 0       # speed fast
+        dmx[base + 3] = dimmer
+        dmx[base + 4] = 0       # no strobe
+        dmx[base + 5] = r
+        dmx[base + 6] = g
+        dmx[base + 7] = b
+        for i in range(8, 13):
+            dmx[base + i] = 0
 
 
 def _hold_dmx(bridge_ip, dmx, duration=0.5):
@@ -684,6 +728,7 @@ def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
              mover_pos=None, camera_pos=None, floor_surface=None,
              universe=0, start_pan=None, start_tilt=None, max_probes=80,
              mounted_inverted=False, camera_rotation=None, camera_fov=90,
+             profile=None,
              stage_depth=4000):
     """Find the first (pan, tilt) where the beam is visible to the camera.
 
