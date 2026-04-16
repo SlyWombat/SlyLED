@@ -975,6 +975,11 @@ function _gyroConfigModal(childId){
   }
   h+='</div>';
 
+  // Mover control claim status (#471)
+  if(gf&&gf.assignedMoverId!=null){
+    h+='<div id="gcfg-claim" style="margin-top:.6em;padding:.4em;border:1px solid #1e293b;border-radius:4px;font-size:.82em;color:#94a3b8">Checking control status...</div>';
+  }
+
   // Action buttons
   h+='<div style="display:flex;gap:.4em;margin-top:.8em">';
   h+='<button class="btn btn-on" onclick="_gyroConfigSave('+childId+')">Save</button>';
@@ -984,6 +989,20 @@ function _gyroConfigModal(childId){
   document.getElementById('modal-title').textContent='Configure: '+(c.altName||c.name||c.hostname);
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
+  // Fetch mover control claim status (#471)
+  if(gf&&gf.assignedMoverId!=null){
+    ra('GET','/api/mover-control/status',null,function(d){
+      var el=document.getElementById('gcfg-claim');if(!el||!d)return;
+      var claim=(d.claims||[]).find(function(c){return c.moverId===gf.assignedMoverId;});
+      if(claim){
+        el.innerHTML='\u26a1 <b>Active:</b> '+escapeHtml(claim.deviceName)+' ('+claim.state+(claim.calibrated?' \u2713':'')+') '
+          +'<button class="btn btn-off" onclick="ra(\'POST\',\'/api/mover-control/release\',{moverId:'+gf.assignedMoverId+'},function(){_gyroConfigModal('+childId+')})" style="font-size:.75em">Force Release</button>';
+        el.style.borderColor='#6d28d9';
+      }else{
+        el.innerHTML='No active control session';
+      }
+    });
+  }
 }
 
 function _gyroConfigSave(childId){

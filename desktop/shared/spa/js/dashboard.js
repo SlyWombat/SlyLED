@@ -201,6 +201,29 @@ function refreshRunnerStatus(){
   ra('GET','/api/objects',null,function(objs){
     if(objs){_objects=objs;if(_s3d.inited)_s3dRenderObjects();}
   });
+  // Refresh mover control status (#471)
+  ra('GET','/api/mover-control/status',null,function(d){
+    var el=document.getElementById('dash-mover-ctrl');
+    if(!el||!d)return;
+    var claims=d.claims||[];
+    if(!claims.length){el.innerHTML='';return;}
+    var h='<div style="margin-top:.6em;border:1px solid #312e81;border-radius:6px;padding:.5em .7em;background:#0c0a1d">';
+    h+='<div style="font-size:.78em;font-weight:600;color:#a5b4fc;margin-bottom:.3em;text-transform:uppercase;letter-spacing:.06em">Mover Control</div>';
+    claims.forEach(function(c){
+      var col='rgb('+c.color.r+','+c.color.g+','+c.color.b+')';
+      var stateCol=c.state==='streaming'?'#4ade80':c.state==='calibrating'?'#facc15':'#94a3b8';
+      var mover=(_fixtures||[]).find(function(f){return f.id===c.moverId;});
+      var mname=mover?escapeHtml(mover.name):'Mover #'+c.moverId;
+      h+='<div style="display:flex;align-items:center;gap:.5em;margin-bottom:.3em;font-size:.82em">';
+      h+='<span style="width:10px;height:10px;border-radius:50%;background:'+col+';flex-shrink:0"></span>';
+      h+='<b style="flex:1;color:#e2e8f0">'+mname+'</b>';
+      h+='<span style="color:'+stateCol+';font-size:.75em">'+c.state+(c.calibrated?' \u2713':'')+'</span>';
+      h+='<span style="color:#64748b;font-size:.72em">'+escapeHtml(c.deviceName)+'</span>';
+      h+='</div>';
+    });
+    h+='</div>';
+    el.innerHTML=h;
+  });
   api('GET','/api/settings').then(function(s){
     var el=document.getElementById('dash-runner');if(!el)return;
     if(!s||!s.runnerRunning){
