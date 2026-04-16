@@ -2629,10 +2629,19 @@ def _get_bridge_ip():
 def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
     """Background thread: discovery → mapping → save grid."""
     job = _mover_cal_jobs[str(fid)]
+
+    def _cal_blackout():
+        """Blackout fixture when calibration ends (success or error)."""
+        try:
+            _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
+        except Exception:
+            pass
+
     f = next((f for f in _fixtures if f["id"] == fid), None)
     if not f:
         job["error"] = "Fixture not found"
         job["status"] = "error"
+        _cal_blackout()
         return
     addr = f.get("dmxStartAddr", 1)
     uni = f.get("dmxUniverse", 1) - 1  # Art-Net is 0-based
@@ -2677,8 +2686,13 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
         existing_samples = existing_cal.get("samples", [])
         if existing_samples:
             s = existing_samples[0]
-            start_pan = s["pan"]
-            start_tilt = s["tilt"]
+            # Samples can be dicts {pan, tilt, ...} or lists [pan, tilt, x, y, ...]
+            if isinstance(s, dict):
+                start_pan = s["pan"]
+                start_tilt = s["tilt"]
+            elif isinstance(s, (list, tuple)) and len(s) >= 2:
+                start_pan = s[0]
+                start_tilt = s[1]
             log.info("MOVER-CAL %d: starting from manual sample pan=%.3f tilt=%.3f", fid, start_pan, start_tilt)
         else:
             # Override with orientation/rotation if available
@@ -2707,6 +2721,7 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
         if not found:
             job["error"] = "Beam not found — check fixture and camera positions"
             job["status"] = "error"
+            _cal_blackout()
             return
         job["progress"] = 30
         # discover() returns (pan, tilt, pixelX, pixelY) tuple
@@ -2720,6 +2735,7 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
         job["error"] = f"Discovery failed: {e}"
         job["status"] = "error"
         log.exception("Mover cal discovery error fid=%d", fid)
+        _cal_blackout()
         return
 
     # Phase 2: BFS mapping
@@ -2733,6 +2749,7 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
         if len(samples) < 6:
             job["error"] = f"Only {len(samples)} samples collected — need at least 6"
             job["status"] = "error"
+            _cal_blackout()
             return
         job["progress"] = 70
         job["sampleCount"] = len(samples)
@@ -2741,6 +2758,7 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
         job["error"] = f"Mapping failed: {e}"
         job["status"] = "error"
         log.exception("Mover cal mapping error fid=%d", fid)
+        _cal_blackout()
         return
 
     # Phase 3: Build grid
@@ -2751,10 +2769,12 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
         if not grid:
             job["error"] = "Grid build failed — insufficient sample spread"
             job["status"] = "error"
+            _cal_blackout()
             return
     except Exception as e:
         job["error"] = f"Grid build failed: {e}"
         job["status"] = "error"
+        _cal_blackout()
         return
 
     # Save calibration data
@@ -2781,6 +2801,7 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
     job["phase"] = "complete"
     log.info("MOVER-CAL fixture %d: calibration complete, %d samples, grid %s",
              fid, len(samples), job["result"]["gridSize"])
+    _cal_blackout()
 
 
 @app.post("/api/calibration/mover/<int:fid>/start")
