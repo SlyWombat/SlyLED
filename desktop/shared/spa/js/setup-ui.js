@@ -234,7 +234,7 @@ function _renderSetup(){
       api('GET','/api/firmware/check').then(function(chk){
         if(!chk||!chk.children)return;
         chk.children.forEach(function(u){
-          if(!u.needsUpdate||u.board==='wled')return;
+          if(!u.needsUpdate||u.board==='wled'||u.board==='gyro'||u.type==='gyro')return;
           var el=document.getElementById('fw-ind-'+u.id);
           if(el)el.innerHTML=' <span onclick="showTab(\'firmware\')" style="color:#f60;cursor:pointer;font-size:.9em" title="Update available: v'+escapeHtml(u.latestVersion)+' (click to update)">&#9650;</span>';
         });
