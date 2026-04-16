@@ -1353,16 +1353,8 @@ function _manCalNextToJog(){
     });
     _manCal.channels=ch;
     _manCal.allChannels=d.channels; // full channel list for DMX display
-    // Set fixture to default jog state: all zero except dimmer=255, green=255
-    var fid=_manCal.fid;
-    var initChs=d.channels.map(function(c){
-      if(c.type==='dimmer')return{offset:c.offset,value:255};
-      if(c.type==='green')return{offset:c.offset,value:255};
-      return{offset:c.offset,value:0};
-    });
-    ra('POST','/api/dmx/fixture/'+fid+'/test',{channels:initChs},function(){
-      _manCalRender();
-    });
+    // Render handles DMX send — it restores saved pan/tilt per marker + defaults
+    _manCalRender();
   });
 }
 
@@ -1437,7 +1429,21 @@ function _manCalRenderJog(fname){
   h+='</div></div>';
   document.getElementById('modal-title').textContent=escapeHtml(fname)+' \u2014 '+addr+' \u2014 Jog';
   document.getElementById('modal-body').innerHTML=h;
-  // Do NOT send DMX on render — only send when user moves a slider (#368)
+  // Send pan/tilt + defaults to DMX so fixture aims at saved/restored position
+  var ch=_manCal.channels||{};
+  var sendChs=[];
+  if(ch.pan!=null)sendChs.push({offset:ch.pan,value:panVal});
+  if(ch.tilt!=null)sendChs.push({offset:ch.tilt,value:tiltVal});
+  if(ch.dimmer!=null)sendChs.push({offset:ch.dimmer,value:255});
+  if(ch.red!=null)sendChs.push({offset:ch.red,value:255});
+  if(ch.green!=null)sendChs.push({offset:ch.green,value:255});
+  if(ch.blue!=null)sendChs.push({offset:ch.blue,value:255});
+  (_manCal.allChannels||[]).forEach(function(c){
+    if(c.default>0&&c.type!=='pan'&&c.type!=='tilt'&&c.type!=='dimmer'
+       &&c.type!=='red'&&c.type!=='green'&&c.type!=='blue')
+      sendChs.push({offset:c.offset,value:c.default});
+  });
+  if(sendChs.length)ra('POST','/api/dmx/fixture/'+_manCal.fid+'/test',{channels:sendChs},function(){});
 }
 
 function _manCalJogCh(offset,value){

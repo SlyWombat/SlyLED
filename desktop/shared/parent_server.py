@@ -5912,6 +5912,7 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
             # Compute pan/tilt — hybrid affine + geometric blend (#437)
             pan = tilt = None
             inverted = head_info.get("mounted_inverted", False)
+            orient = f.get("orientation", {})
             # 1. Mover calibration affine (manual calibration with stage samples)
             mcal_data = _mover_cal.get(str(fid))
             if mcal_data and mcal_data.get("samples") and len(mcal_data["samples"]) >= 2:
@@ -5942,8 +5943,12 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
                     else:
                         # Outside — blend affine → geometric
                         blend = min(1.0, outside_dist / fade_dist)  # 0=affine, 1=geometric
-                        pt_geo = compute_pan_tilt(fx_pos, aim, head_info["pan_range"],
-                                                  head_info["tilt_range"], mounted_inverted=inverted)
+                        if orient.get("verified"):
+                            pt_geo = _mcal.compute_aim_with_orientation(
+                                fx_pos, aim, orient, head_info["pan_range"], head_info["tilt_range"])
+                        else:
+                            pt_geo = compute_pan_tilt(fx_pos, aim, head_info["pan_range"],
+                                                      head_info["tilt_range"], mounted_inverted=inverted)
                         if pt_geo:
                             aff_p = max(0.0, min(1.0, pt_affine[0]))
                             aff_t = max(0.0, min(1.0, pt_affine[1]))
@@ -5960,8 +5965,12 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
                     pan, tilt = pt_cal
             # 3. Geometric fallback (no calibration data at all)
             if pan is None:
-                pt = compute_pan_tilt(fx_pos, aim, head_info["pan_range"], head_info["tilt_range"],
-                                      mounted_inverted=inverted)
+                if orient.get("verified"):
+                    pt = _mcal.compute_aim_with_orientation(
+                        fx_pos, aim, orient, head_info["pan_range"], head_info["tilt_range"])
+                else:
+                    pt = compute_pan_tilt(fx_pos, aim, head_info["pan_range"], head_info["tilt_range"],
+                                          mounted_inverted=inverted)
                 if pt is None:
                     continue
                 pan, tilt = pt
