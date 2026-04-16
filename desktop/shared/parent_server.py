@@ -522,14 +522,13 @@ def _discover():
             continue
         # Probe /status to detect board type — try port 80 (performers), then 5000 (cameras)
         import urllib.request as _ur
-        board_type = "slyled"
+        board_type = info.get("boardType", "slyled")  # preserve PONG-detected type
         for probe_port in (80, 5000):
             try:
                 resp = _ur.urlopen(f"http://{ip}:{probe_port}/status", timeout=2)
                 data = json.loads(resp.read().decode("utf-8"))
                 if data.get("role") == "camera":
                     board_type = "camera"
-                    # Enrich with camera-specific fields
                     info.update({
                         "fovDeg": data.get("fovDeg"),
                         "resolutionW": data.get("resolutionW"),
@@ -537,7 +536,11 @@ def _discover():
                         "cameraUrl": data.get("cameraUrl", ""),
                     })
                     break
-                board_type = data.get("boardType", "slyled")
+                if data.get("role") == "gyro" or data.get("board") == "gyro":
+                    board_type = "Gyro Controller"
+                    info["type"] = "gyro"
+                    break
+                board_type = data.get("boardType", board_type)
                 break
             except Exception:
                 continue

@@ -70,7 +70,7 @@ function _renderSetup(){
           var acts='<button class="btn btn-on" onclick="refreshChild('+c.id+')">Refresh</button>';
           if(isDmx)acts+=' <button class="btn" onclick="window.open(\'http://'+escapeHtml(c.ip)+'/config\',\'_blank\')" style="background:#446;color:#fff">Configure</button>';
           acts+=' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff">Reboot</button>';
-          acts+=' <button class="btn btn-off" onclick="removeChild('+c.id+')">Remove</button>';
+          acts+=' <button class="btn btn-off" onclick="removeChildDevice('+c.id+')">Remove</button>';
           h+='<tr><td><b>'+escapeHtml(c.name||c.hostname)+'</b></td><td>'+typeBadge+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+st+'</td><td>'+fwHtml+'</td><td>'+acts+'</td></tr>';
         });
         // Gyro boards as hardware rows (#462-465: gyro devices with inline Configure panel)
@@ -87,7 +87,7 @@ function _renderSetup(){
           var secondaryName=(c.altName&&c.hostname&&c.altName!==c.hostname)?'<br><span style="color:#64748b;font-size:.75em">'+escapeHtml(c.hostname)+'</span>':'';
           var acts='<button class="btn btn-on" onclick="refreshChild('+c.id+')">Refresh</button>'
             +' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff">Reboot</button>'
-            +' <button class="btn btn-off" onclick="removeChild('+c.id+')">Remove</button>';
+            +' <button class="btn btn-off" onclick="removeChildDevice('+c.id+')">Remove</button>';
           // Find gyro fixture linked to this child (if any)
           var gf=gyroFixtures.find(function(gfx){return gfx.gyroChildId===c.id;});
           var gcTuneId='gyro-hw-tune-'+c.id;
@@ -926,7 +926,7 @@ function removeFixture(id,name){
   });
 }
 
-function removeChild(id){
+function removeChildDevice(id){
   if(!confirm('Remove this device?'))return;
   ra('DELETE','/api/children/'+id,null,function(r){
     document.getElementById('hs').textContent=(r&&r.ok)?'Device removed':'Remove failed';
