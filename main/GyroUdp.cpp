@@ -43,6 +43,15 @@ static uint32_t s_fpsWindowMs = 0;
 static uint8_t  s_fpsTxCount  = 0;
 static uint8_t  s_actualFps   = 0;
 
+// #476 — last heartbeat tick from the parent. 0 = never heard.
+// The UI layer (GyroUI.cpp) reads this via gyroGetLastHeartbeatMs() to
+// decide whether to show "Reconnecting..." or drop out of the active page.
+static uint32_t s_lastHeartbeatMs = 0;
+static uint8_t  s_serverClaimActive = 0;   // mirrored from the heartbeat payload
+
+uint32_t gyroGetLastHeartbeatMs() { return s_lastHeartbeatMs; }
+bool     gyroServerClaimActive()  { return s_serverClaimActive != 0; }
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 static void sendGyroPong(IPAddress dest) {
@@ -155,6 +164,16 @@ void gyroUdpHandleCmd(uint8_t cmd, IPAddress sender,
     } else if (cmd == CMD_GYRO_RECAL) {
         gyroIMUZero();
         if (Serial) Serial.println(F("[GyroUDP] RECAL: IMU zeroed by parent"));
+
+    } else if (cmd == CMD_GYRO_HEARTBEAT) {
+        // Payload = state(1) + claimActive(1); both optional. Any heartbeat
+        // counts as "parent is alive"; we just stamp the clock.
+        s_lastHeartbeatMs = millis();
+        if (plen >= 2) {
+            s_serverClaimActive = payload[1];
+        } else {
+            s_serverClaimActive = 1;
+        }
 
     } else if (cmd == CMD_OTA_UPDATE && plen > 5) {
         uint8_t  newMaj = payload[0];

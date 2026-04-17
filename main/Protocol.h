@@ -43,6 +43,7 @@ constexpr uint8_t CMD_GYRO_CTRL      = 0x61;   // parent→gyro: enable/disable 
 constexpr uint8_t CMD_GYRO_RECAL     = 0x62;   // parent→gyro: zero IMU reference (no payload)
 constexpr uint8_t CMD_GYRO_COLOR     = 0x63;   // gyro→parent: colour preset / flash command
 constexpr uint8_t CMD_GYRO_CALIBRATE = 0x64;   // gyro→parent: calibrate start/end + orientation
+constexpr uint8_t CMD_GYRO_HEARTBEAT = 0x65;   // parent→gyro: keep-alive (2 s cadence while a claim is active)
 
 // ── Action type codes ─────────────────────────────────────────────────────────
 // (uint8_t — avoids Mbed prototype-generator issues with enums)

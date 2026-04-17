@@ -107,6 +107,7 @@ CMD_GYRO_CTRL   = 0x61   # parent→gyro: enabled(1) + targetFps(1)
 CMD_GYRO_RECAL  = 0x62   # parent→gyro: zero IMU reference (no payload)
 CMD_GYRO_COLOR  = 0x63   # gyro→parent: GyroColorPayload (r, g, b, flags)
 CMD_GYRO_CALIBRATE = 0x64  # gyro→parent: calibrate start/end + orientation
+CMD_GYRO_HEARTBEAT = 0x65  # parent→gyro: 2s cadence while claim active (#476)
 
 #  "  "  Paths  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -864,11 +865,45 @@ def _bootstrap_ssh_defaults():
         _save("ssh", _ssh)
         log.info("SSH defaults set: root/orangepi, key=%s", _ssh.get("sshKeyPath") or "(none)")
 
+def _heartbeat_loop():
+    """#476 — Emit CMD_GYRO_HEARTBEAT to every puck with an active claim.
+
+    Runs every 2 s. The puck treats the heartbeat as "parent is alive and
+    still holds your claim"; if the puck doesn't hear one for >5 s it
+    shows "RECON", and >20 s it drops back to IDLE. Silence is symmetric
+    with the consumer-side auto-release: server times out at 60 s, puck
+    times out at 20 s — both resolve to "operator must Send-Lock again".
+    """
+    while True:
+        try:
+            claims = _mover_engine.get_status() if _mover_engine else []
+        except Exception:
+            claims = []
+        for claim in claims:
+            did = claim.get("deviceId") or ""
+            if not did.startswith("gyro-"):
+                continue
+            ip = did[len("gyro-"):]
+            if not ip:
+                continue
+            try:
+                state_byte = 1 if claim.get("state") == "streaming" else 0
+                active_byte = 1
+                pkt = _hdr(CMD_GYRO_HEARTBEAT) + bytes([state_byte, active_byte])
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.sendto(pkt, (ip, UDP_PORT))
+                sock.close()
+            except Exception as e:
+                log.debug("heartbeat to %s failed: %s", ip, e)
+        time.sleep(2.0)
+
+
 def start_background_tasks():
     """Call once after import to kick off periodic ping and UDP listener threads."""
     global _startup_check_done
     _bootstrap_ssh_defaults()
     threading.Thread(target=_udp_listener, daemon=True).start()
+    threading.Thread(target=_heartbeat_loop, daemon=True).start()
     if _children:
         threading.Thread(target=_periodic_ping, daemon=True).start()
     else:

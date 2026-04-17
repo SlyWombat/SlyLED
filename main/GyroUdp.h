@@ -55,5 +55,9 @@ void gyroUdpSendColor(uint8_t r, uint8_t g, uint8_t b, uint8_t flags);
 // calibrating: 1 = hold started, 0 = hold released
 void gyroUdpSendCalibrate(bool calibrating);
 
+// #476 — heartbeat state accessors. UI polls these to show reconnecting.
+uint32_t gyroGetLastHeartbeatMs();  // millis() of last CMD_GYRO_HEARTBEAT, 0 if never
+bool     gyroServerClaimActive();   // server-reported claim-active flag
+
 #endif  // BOARD_GYRO
 #endif  // GYROUDP_H

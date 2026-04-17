@@ -135,9 +135,25 @@ static void drawPageDots() {
     }
 }
 
+// #476 — heartbeat-driven state:
+//   never heard   → LIVE (first-session or firmware without the feature)
+//   < 5 s stale   → LIVE (green)
+//   < 20 s stale  → RECON (amber, "Reconnecting...")
+//   > 20 s stale  → LOST (red, drops back to IDLE state via update loop)
 static void drawLiveIndicator() {
-    gyroFillCircle(LIVE_X, LIVE_Y, LIVE_R, GC_GREEN);
-    gyroDrawText(LIVE_X + 10, LIVE_Y - 4, "LIVE", 1, GC_GREEN);
+    uint32_t hb = gyroGetLastHeartbeatMs();
+    uint32_t now = millis();
+    uint32_t age = (hb == 0) ? 0 : (now - hb);
+    if (hb != 0 && age > 5000u && age <= 20000u) {
+        gyroFillCircle(LIVE_X, LIVE_Y, LIVE_R, GC_YELLOW);
+        gyroDrawText(LIVE_X + 10, LIVE_Y - 4, "RECON", 1, GC_YELLOW);
+    } else if (hb != 0 && age > 20000u) {
+        gyroFillCircle(LIVE_X, LIVE_Y, LIVE_R, GC_RED);
+        gyroDrawText(LIVE_X + 10, LIVE_Y - 4, "LOST",  1, GC_RED);
+    } else {
+        gyroFillCircle(LIVE_X, LIVE_Y, LIVE_R, GC_GREEN);
+        gyroDrawText(LIVE_X + 10, LIVE_Y - 4, "LIVE",  1, GC_GREEN);
+    }
 }
 
 static void drawFpsIndicator() {
@@ -497,6 +513,19 @@ void gyroUIInit() {
 
 void gyroUIUpdate() {
     unsigned long now = millis();
+
+    // #476 — heartbeat watchdog. If we've heard at least one heartbeat but
+    // none in the last 20 s while streaming/active, drop back to IDLE: the
+    // server has already auto-released the claim, so keeping the ACTIVE
+    // pages on-screen would mislead the operator.
+    {
+        uint32_t hb = gyroGetLastHeartbeatMs();
+        if (hb != 0 && (now - hb) > 20000u && s_state == UIState::ACTIVE) {
+            gyroUdpSetStreaming(false, 0);
+            s_state = UIState::IDLE;
+            drawIdle();
+        }
+    }
 
     // ── LOGO state ──────────────────────────────────────────────────────────
     if (s_state == UIState::LOGO) {
