@@ -18,7 +18,7 @@ import logging
 import threading
 import time
 
-from mover_calibrator import aim_to_pan_tilt
+from mover_calibrator import aim_to_pan_tilt, affine_pan_tilt
 
 log = logging.getLogger("slyled.mover_control")
 
@@ -75,7 +75,8 @@ class MoverControlEngine:
     """Mover-follow consumer of the remote-orientation primitive."""
 
     def __init__(self, get_fixtures, get_layout, get_profile_info,
-                 get_engine, set_fixture_color_fn, get_remote_by_device_id):
+                 get_engine, set_fixture_color_fn, get_remote_by_device_id,
+                 get_mover_cal=None):
         """
         Args:
             get_fixtures:             list of fixtures
@@ -84,6 +85,9 @@ class MoverControlEngine:
             get_engine():             running ArtNet/sACN engine or None
             set_fixture_color_fn:     (engine, uni, addr, r, g, b, prof_info) writer
             get_remote_by_device_id:  callable(device_id) → Remote | None
+            get_mover_cal:            callable(mover_id) → calibration dict or None.
+                                      When provided, the tick prefers `affine_pan_tilt`
+                                      against the calibrated samples over pure IK.
         """
         self._get_fixtures = get_fixtures
         self._get_layout = get_layout
@@ -91,6 +95,7 @@ class MoverControlEngine:
         self._get_engine = get_engine
         self._set_fixture_color = set_fixture_color_fn
         self._get_remote = get_remote_by_device_id
+        self._get_mover_cal = get_mover_cal or (lambda _mid: None)
 
         self._claims = {}  # mover_id → MoverClaim
         self._lock = threading.Lock()
@@ -247,11 +252,8 @@ class MoverControlEngine:
                 remote = self._get_remote(claim.device_id)
                 if remote is not None and remote.aim_stage is not None \
                         and remote.stale_reason is None:
-                    pan_norm, tilt_norm = aim_to_pan_tilt(
-                        remote.aim_stage,
-                        mount_rotation_deg=mover.get("rotation") or [0, 0, 0],
-                        pan_range=mover.get("panRange") or 540,
-                        tilt_range=mover.get("tiltRange") or 270,
+                    pan_norm, tilt_norm = self._aim_to_pan_tilt(
+                        mover_id, mover, remote.aim_stage,
                     )
                     alpha = max(0.0, min(1.0, 1.0 - claim.smoothing))
                     claim.pan_smooth  += alpha * (pan_norm  - claim.pan_smooth)
@@ -269,6 +271,30 @@ class MoverControlEngine:
             if f["id"] == mover_id and f.get("fixtureType") == "dmx":
                 return f
         return None
+
+    def _aim_to_pan_tilt(self, mover_id, mover, aim_stage):
+        """Pan/tilt from a stage-space aim vector, preferring the fixture's
+        calibration grid when present. Projects `aim_stage` 3 m from the
+        fixture to get a target point, then uses `affine_pan_tilt` against
+        the saved samples. Falls back to the pure `aim_to_pan_tilt` IK
+        when no usable calibration exists."""
+        cal = self._get_mover_cal(mover_id)
+        if cal and cal.get("samples") and len(cal["samples"]) >= 2:
+            fx = mover.get("x", 0)
+            fy = mover.get("y", 0)
+            fz = mover.get("z", 0)
+            tx = fx + aim_stage[0] * 3000.0
+            ty = fy + aim_stage[1] * 3000.0
+            tz = fz + aim_stage[2] * 3000.0
+            pt = affine_pan_tilt(cal["samples"], tx, ty, tz)
+            if pt is not None:
+                return pt
+        return aim_to_pan_tilt(
+            aim_stage,
+            mount_rotation_deg=mover.get("rotation") or [0, 0, 0],
+            pan_range=mover.get("panRange") or 540,
+            tilt_range=mover.get("tiltRange") or 270,
+        )
 
     def _write_dmx(self, mover, prof_info, claim):
         engine = self._get_engine()

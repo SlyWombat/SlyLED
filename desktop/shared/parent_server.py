@@ -4668,6 +4668,7 @@ _mover_engine = MoverControlEngine(
     get_engine=lambda: _artnet if _artnet.running else (_sacn if _sacn.running else None),
     set_fixture_color_fn=_set_fixture_color,
     get_remote_by_device_id=lambda did: _remotes.by_device(did),
+    get_mover_cal=lambda mid: _mover_cal.get(str(mid)),
 )
 _mover_engine.start()
 
@@ -4989,7 +4990,13 @@ def api_remote_orient(remote_id):
 # ── End Remote Orientation Primitive ────────────────────────────────────────
 
 def _apply_profile_defaults(engine):
-    """Apply profile channel default values to all DMX fixtures."""
+    """Apply profile channel default values to all DMX fixtures.
+
+    For moving heads, also centres pan/tilt (0.5, 0.5) so the fixture
+    powers up aimed at the layout-forward direction (stage +Y in mount
+    frame, transformed by `fixture.rotation`) rather than drooping to
+    the mechanical minimum.
+    """
     for f in _fixtures:
         if f.get("fixtureType") != "dmx":
             continue
@@ -5002,7 +5009,8 @@ def _apply_profile_defaults(engine):
         uni = f.get("dmxUniverse", 1)
         addr = f.get("dmxStartAddr", 1)
         uni_buf = engine.get_universe(uni)
-        profile = {"channel_map": info.get("channel_map", {}), "channels": info.get("channels", [])}
+        profile = {"channel_map": info.get("channel_map", {}),
+                   "channels": info.get("channels", [])}
         for ch in info.get("channels", []):
             default = ch.get("default")
             if default is not None and default > 0:
@@ -5014,6 +5022,28 @@ def _apply_profile_defaults(engine):
                     uni_buf.set_channel(addr + offset + 1, val16 & 0xFF)
                 else:
                     uni_buf.set_channel(addr + offset, max(0, min(255, int(default))))
+        # Seed pan/tilt to the fixture's layout-forward target.
+        #  - If the fixture has a calibration grid (`_mover_cal[fid]`),
+        #    compute the target stage point from `fixture.rotation` (at
+        #    3 m) and use `affine_pan_tilt` to get the DMX values. This
+        #    honours the per-fixture calibration (centerPan/Tilt + grid)
+        #    that the operator configured.
+        #  - Otherwise fall back to 0.5/0.5 (mount-local forward).
+        pan_seed, tilt_seed = 0.5, 0.5
+        cal = _mover_cal.get(str(f["id"]))
+        if cal and cal.get("samples") and len(cal["samples"]) >= 2:
+            try:
+                from bake_engine import _rotation_to_aim
+                from mover_calibrator import affine_pan_tilt
+                pos = [f.get("x", 0), f.get("y", 0), f.get("z", 0)]
+                rot = f.get("rotation") or [0, 0, 0]
+                aim = _rotation_to_aim(rot, pos, 3000)  # 3 m forward per layout
+                pt = affine_pan_tilt(cal["samples"], aim[0], aim[1], aim[2])
+                if pt is not None:
+                    pan_seed, tilt_seed = pt
+            except Exception:
+                pass
+        uni_buf.set_fixture_pan_tilt(addr, pan_seed, tilt_seed, profile)
 
 @app.post("/api/dmx/start")
 def api_dmx_start():
