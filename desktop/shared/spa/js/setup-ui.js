@@ -587,6 +587,7 @@ function discoverChildren(){
           var bt=c.boardType||'slyled';
           var badge=bt==='dmx'?'<span class="badge" style="background:#7c3aed;color:#fff;font-size:.75em">DMX Bridge</span>'
             :bt==='camera'?'<span class="badge" style="background:#0e7490;color:#fff;font-size:.75em">Camera</span>'
+            :bt==='gyro'?'<span class="badge" style="background:#a5b4fc;color:#1e1b4b;font-size:.75em">Gyro</span>'
             :'<span class="badge" style="background:#059669;color:#fff;font-size:.75em">LED</span>';
           var addBtn;
           if(bt==='camera'){
@@ -684,24 +685,30 @@ function _afCamProbe(){
 function addDiscovered(ip){
   document.getElementById('hs').textContent='Adding '+ip+' (probing device...)';
   ra('POST','/api/children',{ip:ip},function(r){
-    if(r&&r.ok){
-      var cid=r.id;
-      var cname=r.name||r.hostname||ip;
-      var ctype=r.type||'';
-      if(ctype==='dmx'){
-        // DMX bridge — register as child only, no fixture created
-        document.getElementById('hs').textContent='Added DMX bridge: '+cname;
-        setTimeout(loadSetup,1000);
-      }else{
-        // LED fixture — auto-create fixture
-        ra('POST','/api/fixtures',{name:cname,fixtureType:'led',type:'linear',childId:cid},function(){
-          document.getElementById('hs').textContent='Added LED fixture: '+cname;
-          setTimeout(loadSetup,2000);
-        });
-      }
-    }else{
+    if(!r||!r.ok){
       document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
       setTimeout(loadSetup,1000);
+      return;
+    }
+    var cid=r.id;
+    var cname=r.name||r.hostname||ip;
+    var ctype=r.type||'';
+    if(ctype==='dmx'){
+      document.getElementById('hs').textContent='Added DMX bridge: '+cname;
+      setTimeout(loadSetup,1000);
+    }else if(ctype==='gyro'){
+      // Gyro puck — create a gyro fixture (no mover assigned yet; user
+      // picks a mover in the Configure modal).
+      ra('POST','/api/fixtures',{name:cname,fixtureType:'gyro',type:'point',gyroChildId:cid,gyroEnabled:false},function(){
+        document.getElementById('hs').textContent='Added gyro fixture: '+cname;
+        setTimeout(loadSetup,2000);
+      });
+    }else{
+      // LED fixture — auto-create fixture
+      ra('POST','/api/fixtures',{name:cname,fixtureType:'led',type:'linear',childId:cid},function(){
+        document.getElementById('hs').textContent='Added LED fixture: '+cname;
+        setTimeout(loadSetup,2000);
+      });
     }
   });
 }
@@ -1075,25 +1082,42 @@ function _gyroSendLock(childId,fixtureId){
 function _gyroLivePoll(childId,gf){
   var el=document.getElementById('gcfg-live');
   if(!el)return;  // modal closed
-  ra('GET','/api/mover-control/status',null,function(d){
-    if(!d||!document.getElementById('gcfg-live'))return;
-    var claim=(d.claims||[]).find(function(c){return c.moverId===gf.assignedMoverId;});
-    if(claim){
-      var age=claim.lastDataAge!=null?claim.lastDataAge:99;
-      var stale=age>5;
-      var stateLabel=claim.state==='streaming'?(claim.calibrated?'Streaming (calibrated \u2713)':'Streaming')
-                    :claim.state==='calibrating'?'Calibrating...'
-                    :'Claimed';
-      el.innerHTML=(stale?'\u25cb ':'<span style="color:#22c55e">\u25cf </span>')
-        +'<b>'+escapeHtml(claim.deviceName)+'</b> \u2014 '+stateLabel
-        +' <span style="color:#64748b">('+age.toFixed(1)+'s ago)</span>'
-        +' <button class="btn btn-off" onclick="ra(\'POST\',\'/api/mover-control/release\',{moverId:'
-        +gf.assignedMoverId+'},function(){_gyroConfigModal('+childId+')})" style="font-size:.72em;margin-left:.4em">Release</button>';
-      el.style.borderColor=stale?'#92400e':'#059669';
-    }else{
-      el.innerHTML='\u25cb Not connected';
-      el.style.borderColor='#1e293b';
-    }
+  // Poll both the claim state (mover-control) and the primitive's stream
+  // state (remote-orientation). Show the fullest picture — the puck can be
+  // streaming orient data before any lock/claim exists.
+  ra('GET','/api/mover-control/status',null,function(ds){
+    ra('GET','/api/remotes/live',null,function(dr){
+      if(!document.getElementById('gcfg-live'))return;
+      var claim=(ds&&ds.claims||[]).find(function(c){return c.moverId===gf.assignedMoverId;});
+      // Match the remote by device IP (gyroChildId → child IP → deviceId "gyro-<ip>").
+      var childIp=(_children||[]).reduce(function(a,c){return c.id===gf.gyroChildId?c.ip:a;},null);
+      var remote=childIp?(dr&&dr.remotes||[]).find(function(r){return r.deviceId==='gyro-'+childIp;}):null;
+
+      var parts=[];
+      var border='#1e293b';
+      if(remote){
+        var age=remote.lastDataAge!=null?remote.lastDataAge:99;
+        var stateLabel=remote.calibrated?(remote.staleReason?('Stale ('+remote.staleReason+')'):'Calibrated'):'Streaming (uncal)';
+        var dot=remote.staleReason?'\u25cb':(age<2?'<span style="color:#22c55e">\u25cf</span>':'<span style="color:#f59e0b">\u25cf</span>');
+        parts.push(dot+' <b>'+escapeHtml(remote.name||('remote '+remote.id))+'</b> \u2014 '+stateLabel
+          +' <span style="color:#64748b">('+age.toFixed(1)+'s ago)</span>');
+        border=remote.staleReason?'#92400e':'#059669';
+      }
+      if(claim){
+        parts.push('<b>Lock:</b> '+escapeHtml(claim.deviceName)+' ('+claim.state+')'
+          +' <button class="btn btn-off" onclick="ra(\'POST\',\'/api/mover-control/release\',{moverId:'
+          +gf.assignedMoverId+'},function(){_gyroConfigModal('+childId+')})" style="font-size:.72em;margin-left:.4em">Release</button>');
+      }else if(remote){
+        parts.push('<span style="color:#64748b">No lock \u2014 press <b>Send Lock</b> to control a mover.</span>');
+      }
+      if(!parts.length){
+        el.innerHTML='\u25cb Not connected';
+        el.style.borderColor='#1e293b';
+        return;
+      }
+      el.innerHTML=parts.join('<br>');
+      el.style.borderColor=border;
+    });
   });
 }
 

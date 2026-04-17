@@ -720,18 +720,9 @@ def _udp_listener():
                     }
                 log.debug("GYRO_ORIENT from %s: R=%.1f P=%.1f Y=%.1f fps=%d",
                           ip, roll100/100.0, pitch100/100.0, yaw100/100.0, fps)
-                # Route to unified mover control engine (#468)
-                if _mover_engine:
-                    _gf = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
-                                and f.get("gyroChildId") is not None
-                                and next((c for c in _children if c["id"] == f["gyroChildId"]
-                                          and c.get("ip") == ip), None)), None)
-                    if _gf and _gf.get("assignedMoverId"):
-                        _mover_engine.orient(_gf["assignedMoverId"], f"gyro-{ip}",
-                                             roll100/100.0, pitch100/100.0, yaw100/100.0)
-                # Also route to the remote-orientation primitive (#484 phase 2).
-                # Observer-only for now — the 3D viewport (phase 3) consumes it;
-                # mover-follow keeps using _mover_engine until phase 4.
+                # Primitive owns orientation (#484 phase 4). Mover-follow
+                # reads Remote.aim_stage via its tick loop — no legacy call
+                # here any more.
                 device_id = f"gyro-{ip}"
                 remote = _auto_register_remote(device_id, kind=KIND_PUCK)
                 remote.update_from_euler_deg(
@@ -749,19 +740,38 @@ def _udp_listener():
             roll = roll100 / 100.0
             pitch = pitch100 / 100.0
             yaw = yaw100 / 100.0
-            log.info("GYRO_CALIBRATE from %s: cal=%d R=%.1f P=%.1f Y=%.1f", ip, calibrating, roll, pitch, yaw)
-            if _mover_engine:
-                _gf3 = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
-                             and f.get("gyroChildId") is not None
-                             and next((c for c in _children if c["id"] == f["gyroChildId"]
-                                       and c.get("ip") == ip), None)), None)
-                if _gf3 and _gf3.get("assignedMoverId"):
-                    mid = _gf3["assignedMoverId"]
-                    did = f"gyro-{ip}"
-                    if calibrating:
-                        _mover_engine.calibrate_start(mid, did, roll, pitch, yaw)
-                    else:
-                        _mover_engine.calibrate_end(mid, did, roll, pitch, yaw)
+            log.info("GYRO_CALIBRATE from %s: cal=%d R=%.1f P=%.1f Y=%.1f",
+                     ip, calibrating, roll, pitch, yaw)
+            # Resolve the gyro fixture + target mover for this puck.
+            _gf3 = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
+                         and f.get("gyroChildId") is not None
+                         and next((c for c in _children if c["id"] == f["gyroChildId"]
+                                   and c.get("ip") == ip), None)), None)
+            target_mover_id = _gf3.get("assignedMoverId") if _gf3 else None
+            did = f"gyro-{ip}"
+            if target_mover_id is not None:
+                # State transition on the claim (hold DMX during align).
+                if calibrating:
+                    _mover_engine.calibrate_start(target_mover_id, did)
+                else:
+                    # Primitive computes R_world_to_stage against the mover's
+                    # current stage aim; engine resumes streaming.
+                    mover = _mover_fixture(target_mover_id)
+                    remote = _remotes.by_device(did) or _auto_register_remote(did, kind=KIND_PUCK)
+                    if mover is not None:
+                        aim_stage = _mover_current_aim_stage(mover)
+                        try:
+                            remote.calibrate(
+                                target_aim_stage=aim_stage,
+                                target_info={"objectId": mover["id"], "kind": "mover"},
+                                roll=roll, pitch=pitch, yaw=yaw,
+                            )
+                            _remotes.save()
+                            log.info("Remote %d calibrated via UDP against mover %d aim=%s",
+                                     remote.id, mover["id"], aim_stage)
+                        except Exception as e:
+                            log.error("Remote %d calibrate failed: %s", remote.id, e)
+                    _mover_engine.calibrate_end(target_mover_id, did)
         elif cmd == CMD_PONG:
             # Handle PONGs from broadcast/direct pings
             info = _parse_pong(data, ip)
@@ -1355,8 +1365,6 @@ def api_gyro_enable(child_id):
         c = next((ch for ch in _children if ch["id"] == child_id), None)
         dname = c.get("altName") or c.get("name") or c.get("hostname") or ip if c else ip
         _mover_engine.claim(gf["assignedMoverId"], device_id, dname, "gyro",
-                            pan_scale=gf.get("panScale", 1.0),
-                            tilt_scale=gf.get("tiltScale", 1.0),
                             smoothing=gf.get("smoothing", 0.15))
         # Don't start_stream here — light stays off until user presses
         # START on gyro and first CMD_GYRO_ORIENT arrives
@@ -4581,7 +4589,16 @@ def _set_fixture_color(engine_or_buf, uni_or_addr, addr_or_none, r, g, b, prof_i
             cw = rgb_to_wheel_slot(prof_info, r, g, b) if (r or g or b) else 0
             uni_buf.set_channel(addr + cm["color-wheel"], cw)
 
-# ── Unified Mover Control Engine (#468) ─────────────────────────────────────
+# ── Remote-orientation primitive (#484) — initialised first so the
+#    mover-follow engine below can read it. ────────────────────────────────
+
+from remote_orientation import RemoteRegistry, KIND_PUCK, KIND_PHONE
+from mover_calibrator import pan_tilt_to_ray as _pan_tilt_to_ray
+
+_remotes = RemoteRegistry(data_path=str(DATA / "remotes.json"))
+_remotes.load()
+
+# ── Mover-follow engine (#468) — consumer of the primitive (#484 phase 4) ──
 from mover_control import MoverControlEngine
 
 _mover_engine = MoverControlEngine(
@@ -4590,6 +4607,7 @@ _mover_engine = MoverControlEngine(
     get_profile_info=lambda pid: _profile_lib.channel_info(pid) if pid else None,
     get_engine=lambda: _artnet if _artnet.running else (_sacn if _sacn.running else None),
     set_fixture_color_fn=_set_fixture_color,
+    get_remote_by_device_id=lambda did: _remotes.by_device(did),
 )
 _mover_engine.start()
 
@@ -4600,12 +4618,10 @@ def api_mover_claim():
     did = body.get("deviceId", "")
     dname = body.get("deviceName", "Unknown")
     dtype = body.get("deviceType", "android")
-    ps = body.get("panScale", 1.0)
-    ts = body.get("tiltScale", 1.0)
     sm = body.get("smoothing", 0.15)
     if mid is None:
         return jsonify(ok=False, err="moverId required"), 400
-    ok, reason = _mover_engine.claim(mid, did, dname, dtype, ps, ts, sm)
+    ok, reason = _mover_engine.claim(mid, did, dname, dtype, smoothing=sm)
     if not ok:
         return jsonify(ok=False, err=reason), 409
     return jsonify(ok=True)
@@ -4628,31 +4644,47 @@ def api_mover_start():
 
 @app.post("/api/mover-control/calibrate-start")
 def api_mover_cal_start_ctrl():
+    """Mark the mover as calibrating so the engine holds DMX steady.
+
+    The orientation math runs on the Remote object — if body includes
+    `targetObjectId` or none is given, we also drive the primitive's
+    calibrate-start through the device's Remote (via _remotes.by_device).
+    """
     body = request.get_json(silent=True) or {}
     mid = body.get("moverId")
     did = body.get("deviceId")
-    result = _mover_engine.calibrate_start(
-        mid, did, body.get("roll", 0), body.get("pitch", 0), body.get("yaw", 0))
-    if result is None:
+    ok = _mover_engine.calibrate_start(mid, did)
+    if not ok:
         return jsonify(ok=False, err="Not claimed or wrong device"), 403
-    return jsonify(ok=True, **result)
+    return jsonify(ok=True)
 
 @app.post("/api/mover-control/calibrate-end")
 def api_mover_cal_end_ctrl():
+    """Run calibration: compute R_world_to_stage on the remote against
+    the claimed mover's current stage aim, then resume streaming."""
     body = request.get_json(silent=True) or {}
     mid = body.get("moverId")
     did = body.get("deviceId")
-    ok = _mover_engine.calibrate_end(
-        mid, did, body.get("roll", 0), body.get("pitch", 0), body.get("yaw", 0))
-    return jsonify(ok=ok)
-
-@app.post("/api/mover-control/orient")
-def api_mover_orient():
-    body = request.get_json(silent=True) or {}
-    mid = body.get("moverId")
-    did = body.get("deviceId")
-    ok = _mover_engine.orient(mid, did, body.get("roll", 0), body.get("pitch", 0), body.get("yaw", 0))
-    return jsonify(ok=ok)
+    if mid is None or did is None:
+        return jsonify(ok=False, err="moverId/deviceId required"), 400
+    mover = _mover_fixture(mid)
+    if mover is None:
+        return jsonify(ok=False, err="mover not found"), 404
+    remote = _remotes.by_device(did)
+    if remote is None:
+        return jsonify(ok=False, err="no remote for this device"), 404
+    aim_stage = _mover_current_aim_stage(mover)
+    try:
+        remote.calibrate(
+            target_aim_stage=aim_stage,
+            target_info={"objectId": mover["id"], "kind": "mover"},
+            roll=body.get("roll"), pitch=body.get("pitch"), yaw=body.get("yaw"),
+        )
+        _remotes.save()
+    except ValueError as e:
+        return jsonify(ok=False, err=str(e)), 400
+    _mover_engine.calibrate_end(mid, did)
+    return jsonify(ok=True, aim=list(aim_stage))
 
 @app.post("/api/mover-control/color")
 def api_mover_color():
@@ -4670,22 +4702,12 @@ def api_mover_status():
 # ── End Mover Control ───────────────────────────────────────────────────────
 
 
-# ── Remote Orientation Primitive (#484 phase 2) ─────────────────────────────
+# ── Remote Orientation Primitive (#484) ─────────────────────────────────────
 #
-# The primitive layer: each remote is a stage-space object with a calibrated
-# orientation (R_world_to_stage). Feature consumers (mover-follow, etc.) read
-# `remote.aim_stage`; they don't touch raw sensor Euler here.
-#
-# The engine below still runs in parallel — phase 4 will rewrite it to consume
-# this primitive and delete the delta path. For now the primitive observes
-# ingest in parallel so we can verify it with the 3D viz (phase 3) before
-# switching the mover-follow feature over.
-
-from remote_orientation import RemoteRegistry, KIND_PUCK, KIND_PHONE
-from mover_calibrator import pan_tilt_to_ray as _pan_tilt_to_ray
-
-_remotes = RemoteRegistry(data_path=str(DATA / "remotes.json"))
-_remotes.load()
+# Primitive layer: each remote is a stage-space object with a calibrated
+# orientation (R_world_to_stage). Consumer features (mover-follow above)
+# read `remote.aim_stage`. The registry + _mover_current_aim_stage helper
+# are defined above; the API routes follow.
 
 
 def _mover_fixture(object_id):

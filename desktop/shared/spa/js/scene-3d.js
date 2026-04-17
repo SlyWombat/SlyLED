@@ -1042,12 +1042,15 @@ function _s3dBuildRemoteGroup(rec){
   var icon=new THREE.Mesh(iconGeo,iconMat);
   grp.add(icon);
 
-  // Aim ray: THREE.ArrowHelper (line + cone tip).
-  var dir=rec.aim?_s3dRemoteAim(rec.aim):new THREE.Vector3(0,1,0);
-  var rayLen=3.0; // 3 m — the ray visually terminates at 3 m from the remote.
-  var arrow=new THREE.ArrowHelper(dir,new THREE.Vector3(0,0,0),rayLen,col,0.25,0.12);
-  arrow.userData.isRay=true;
-  grp.add(arrow);
+  // Aim ray: only drawn once we have a calibrated aim vector.  Uncalibrated
+  // remotes render as the icon alone, so nothing misleads the operator.
+  if(rec.aim){
+    var dir=_s3dRemoteAim(rec.aim);
+    var rayLen=3.0; // 3 m — visible termination
+    var arrow=new THREE.ArrowHelper(dir,new THREE.Vector3(0,0,0),rayLen,col,0.25,0.12);
+    arrow.userData.isRay=true;
+    grp.add(arrow);
+  }
 
   // Label
   var lbl=_s3dLabel(rec.name||('Remote '+rec.id));
@@ -1059,14 +1062,26 @@ function _s3dBuildRemoteGroup(rec){
 
 function _s3dUpdateRemoteGroup(grp,rec){
   var col=_s3dRemoteColor(rec);
+  var ray=null;
+  grp.traverse(function(o){if(o.userData.isRay)ray=o;});
+  if(rec.aim){
+    if(!ray){
+      // Calibration just completed — add a ray for this remote.
+      ray=new THREE.ArrowHelper(_s3dRemoteAim(rec.aim),new THREE.Vector3(0,0,0),3.0,col,0.25,0.12);
+      ray.userData.isRay=true;
+      grp.add(ray);
+    }else{
+      ray.setDirection(_s3dRemoteAim(rec.aim));
+      ray.setColor(new THREE.Color(col));
+    }
+  }else if(ray){
+    // Calibration was cleared — drop the ray.
+    grp.remove(ray);
+    if(ray.line&&ray.line.geometry)ray.line.geometry.dispose();
+    if(ray.cone&&ray.cone.geometry)ray.cone.geometry.dispose();
+  }
   grp.traverse(function(o){
-    if(o.userData.isRay){
-      if(rec.aim){
-        var d=_s3dRemoteAim(rec.aim);
-        o.setDirection(d);
-      }
-      o.setColor(new THREE.Color(col));
-    }else if(o.isMesh&&o.material){
+    if(!o.userData.isRay&&o.isMesh&&o.material){
       o.material.color=new THREE.Color(col);
     }
   });

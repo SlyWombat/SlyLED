@@ -22,6 +22,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -224,48 +225,54 @@ fun ControllerModeOverlay(
                         }
                     }
                     Spacer(Modifier.height(10.dp))
-                    Button(
-                        onClick = { },
-                        shape = RoundedCornerShape(8.dp),
+                    // A plain Box rather than Material Button so the hold
+                    // gesture actually reaches our pointerInput — the Button
+                    // composable consumes first-down events for its ripple
+                    // + click handling, which was swallowing the press.
+                    Box(
+                        contentAlignment = Alignment.Center,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(40.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(
+                                if (holdingCalibrate) CyanSecondary.copy(alpha = 0.3f)
+                                else Color(0xFF1E293B)
+                            )
                             .pointerInput(Unit) {
                                 awaitEachGesture {
                                     awaitFirstDown()
                                     holdingCalibrate = true
                                     holdingCalibrateRef.set(true)
-                                    // Send calibrate-start with current orientation
                                     onCalibrateStart(
                                         latestRoll.get(),
                                         latestPitch.get(),
                                         latestYaw.get()
                                     )
                                     waitForUpOrCancellation()
-                                    // Send calibrate-end with current orientation
                                     onCalibrateEnd(
                                         latestRoll.get(),
                                         latestPitch.get(),
                                         latestYaw.get()
                                     )
-                                    // Reset crosshair reference so display re-centers
                                     hasRef = false
                                     holdingCalibrate = false
                                     holdingCalibrateRef.set(false)
                                 }
-                            },
-                        contentPadding = PaddingValues(horizontal = 12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (holdingCalibrate) CyanSecondary.copy(alpha = 0.3f)
-                            else Color(0xFF1E293B)
-                        )
+                            }
                     ) {
-                        Icon(Icons.Default.MyLocation, null, tint = CyanSecondary, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            if (holdingCalibrate) "Reposition..." else "Hold to Calibrate",
-                            color = CyanSecondary, style = MaterialTheme.typography.labelMedium
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.MyLocation, null,
+                                tint = CyanSecondary, modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                if (holdingCalibrate) "Reposition..." else "Hold to Calibrate",
+                                color = CyanSecondary,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
                     }
                 }
             }
