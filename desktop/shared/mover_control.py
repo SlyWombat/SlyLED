@@ -30,7 +30,8 @@ class MoverClaim:
         "mover_id", "device_id", "device_name", "device_type",
         "claimed_at", "last_write_ts", "ttl_s", "state",
         "color_r", "color_g", "color_b", "dimmer", "strobe_active",
-        "pan_smooth", "tilt_smooth", "have_pan_tilt", "smoothing",
+        "pan_smooth", "tilt_smooth", "have_pan_tilt",
+        "calibrated_here", "smoothing",
     )
 
     def __init__(self, mover_id, device_id, device_name, device_type="gyro",
@@ -56,6 +57,11 @@ class MoverClaim:
         self.pan_smooth = 0.5
         self.tilt_smooth = 0.5
         self.have_pan_tilt = False
+        # Persisted calibration from a previous session is NOT trusted to
+        # drive pan/tilt until the operator confirms alignment via
+        # calibrate-end in THIS claim. Fixture holds the seeded
+        # layout-forward position until then.
+        self.calibrated_here = False
         self.smoothing = smoothing
 
     def to_dict(self):
@@ -184,6 +190,8 @@ class MoverControlEngine:
             if not claim or claim.device_id != device_id:
                 return False
             claim.state = "streaming"
+            claim.calibrated_here = True
+            claim.have_pan_tilt = False  # force jump-to-target on next tick
             claim.last_write_ts = time.time()
         log.info("Mover %d: calibrate-end — consuming primitive", mover_id)
         return True
@@ -253,14 +261,16 @@ class MoverControlEngine:
             have_aim = False
             if claim.state == "streaming":
                 remote = self._get_remote(claim.device_id)
+                # Only drive pan/tilt from the puck once the operator has
+                # calibrated THIS session. Stale-across-restart calibration
+                # would point the fixture at the previous aim direction; we
+                # want the layout-forward seed held until re-calibration.
                 if remote is not None and remote.aim_stage is not None \
-                        and remote.stale_reason is None:
+                        and claim.calibrated_here and remote.stale_reason is None:
                     pan_norm, tilt_norm = self._aim_to_pan_tilt(
                         mover_id, mover, remote.aim_stage,
                     )
                     if not claim.have_pan_tilt:
-                        # First aim sample — jump to target without EMA so the
-                        # fixture doesn't visibly slew from mechanical centre.
                         claim.pan_smooth  = pan_norm
                         claim.tilt_smooth = tilt_norm
                         claim.have_pan_tilt = True
@@ -270,15 +280,15 @@ class MoverControlEngine:
                         claim.tilt_smooth += alpha * (tilt_norm - claim.tilt_smooth)
                     have_aim = True
 
-            if claim.state == "calibrating" or have_aim:
-                # Write DMX when we have a real aim, or during calibrate-hold
-                # (holds the last known position while the operator aligns).
-                self._write_dmx(mover, prof_info, claim)
+            # Always write the non-pan/tilt claim state (dimmer, colour,
+            # strobe, channel defaults) while streaming or calibrating —
+            # that's what turns the light on. Pan/tilt are only written
+            # once `claim.have_pan_tilt` is true (i.e. a fresh puck aim
+            # has overridden the seeded layout-forward position).
+            if claim.state in ("streaming", "calibrating"):
+                self._write_dmx(mover, prof_info, claim,
+                                include_pan_tilt=claim.have_pan_tilt)
                 claim.last_write_ts = time.time()
-            # Otherwise — claim is streaming but no aim yet. Leave whatever
-            # `_apply_profile_defaults` seeded (typically the calibrated
-            # layout-forward target) in place so the fixture powers up aimed
-            # correctly instead of slewing to mechanical centre.
 
     # ── DMX writers ─────────────────────────────────────────────────
 
@@ -312,7 +322,7 @@ class MoverControlEngine:
             tilt_range=mover.get("tiltRange") or 270,
         )
 
-    def _write_dmx(self, mover, prof_info, claim):
+    def _write_dmx(self, mover, prof_info, claim, include_pan_tilt=True):
         engine = self._get_engine()
         if not engine or not engine.running:
             return
@@ -324,7 +334,9 @@ class MoverControlEngine:
                    "channels": prof_info.get("channels", [])}
         uni_buf = engine.get_universe(uni)
 
-        uni_buf.set_fixture_pan_tilt(addr, claim.pan_smooth, claim.tilt_smooth, profile)
+        if include_pan_tilt:
+            uni_buf.set_fixture_pan_tilt(addr, claim.pan_smooth,
+                                         claim.tilt_smooth, profile)
         uni_buf.set_fixture_dimmer(addr, claim.dimmer, profile)
         self._set_fixture_color(engine, uni, addr,
                                 claim.color_r, claim.color_g, claim.color_b,
