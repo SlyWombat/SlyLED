@@ -3115,14 +3115,43 @@ def api_mover_cal_manual(fid):
         "sampleCount": len(samples),
         "timestamp": time.time(),
     }
+
+    # #490 — fit the parametric v2 model inline. The lazy migration path
+    # would eventually do this on first read, but doing it here surfaces
+    # the fit quality in the POST response so the calibration wizard can
+    # show residuals to the operator immediately.
+    pos = _fixture_position(fid)
+    prof = _profile_lib.channel_info(f.get("dmxProfileId")) \
+        if f.get("dmxProfileId") else None
+    pan_range = f.get("panRange") \
+        or (prof.get("panRange") if prof else None) or 540
+    tilt_range = f.get("tiltRange") \
+        or (prof.get("tiltRange") if prof else None) or 270
+    fit_quality = None
+    try:
+        model, quality = _fit_model(
+            pos, pan_range, tilt_range, samples,
+            mounted_inverted=bool(f.get("mountedInverted")),
+        )
+        cal_data["version"] = 2
+        cal_data["model"] = model.to_dict()
+        cal_data["fit"] = quality.to_dict()
+        fit_quality = quality
+    except Exception as e:
+        log.warning("Mover %d LM fit failed on manual save: %s", fid, e)
+
     _mover_cal[str(fid)] = cal_data
     _save("mover_calibrations", _mover_cal)
     _invalidate_mover_model(fid)
     f["moverCalibrated"] = True
     _save("fixtures", _fixtures)
-    log.info("Manual calibration saved for fixture %d: %d samples, grid=%s",
-             fid, len(samples), "yes" if grid else "no")
-    return jsonify(ok=True, sampleCount=len(samples), hasGrid=grid is not None)
+    log.info("Manual calibration saved for fixture %d: %d samples, grid=%s, rms=%s",
+             fid, len(samples), "yes" if grid else "no",
+             f"{fit_quality.rms_error_deg:.2f}°" if fit_quality else "n/a")
+    resp = {"ok": True, "sampleCount": len(samples), "hasGrid": grid is not None}
+    if fit_quality is not None:
+        resp["fit"] = fit_quality.to_dict()
+    return jsonify(**resp)
 
 
 def pixel_to_pan_tilt(fixture_id, px, py):
