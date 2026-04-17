@@ -148,7 +148,7 @@ At calibrate-end, with the operator holding the remote so it visually matches th
    claim.remote_forward_body_axis = [0, 1, 0]  # convention
    claim.remote_up_body_axis      = [0, 0, 1]
    ```
-9. **Discard deltas.** The existing `ref_roll/pitch/yaw`, `ref_pan/tilt`, `pan_scale`, `tilt_scale` fields are no longer used in the orient path. Keep them in memory only during the migration window so legacy code paths don't crash.
+9. **Delete the old delta fields.** `ref_roll/pitch/yaw`, `ref_pan/tilt`, `pan_scale`, `tilt_scale` are removed from `MoverClaim` entirely. No compatibility shim.
 
 ## 5. Live update math
 
@@ -235,7 +235,7 @@ Add to `desktop/shared/mover_control.py::MoverClaim`:
 | `last_quat_world` | quaternion | Most recent remote orientation in remote world frame |
 | `last_aim_stage` | `[dx, dy, dz]` | Cached aim vector for viewport; updated per orient sample |
 
-Existing `ref_*`, `pan_scale`, `tilt_scale` fields: retained but **unused** in the stage-space path. Removed in a follow-up cleanup.
+Existing `ref_*`, `pan_scale`, `tilt_scale` fields on `MoverClaim` are deleted in the same change — no retention, no shim.
 
 ### 7.2 Read API
 
@@ -278,30 +278,41 @@ In the Three.js viewport (`desktop/shared/spa/js/scene-3d.js`), add a `remotes` 
 
 Rationale: temporal objects currently only carry position + bounding box (`parent_server.py:4072–4111`). Remotes have orientation and a ray, so a dedicated group is cleaner than shoehorning into temporals.
 
-## 9. Migration plan
+## 9. Clean cut — no backwards compatibility
 
-### 9.1 Fixture schema
+This is a clean rewrite. No legacy code path, no deprecation cycle, no shim. The v2 release ships without the old delta math. Users re-calibrate once after updating; nothing else transfers.
 
-| Field | v1.5.x | Stage-space v2 |
-|-------|--------|----------------|
-| `panCenter`, `tiltCenter` | User-tunable DMX centre | Implicit in IK (`pan_norm=0.5 = forward`). Field retained, no longer tunable in UI. |
-| `panScale`, `tiltScale` | Primary sensitivity knob | Deprecated. Ignored in stage-space path. Hidden in UI behind an "Advanced / Legacy" panel. Removed one release after v2 ships cleanly. |
-| `panOffsetDeg`, `tiltOffsetDeg` | Per-gyro calibration offsets | Subsumed by `mount_rotation`. One-time migration: if non-zero and `fixture.rotation` is identity, synthesise an equivalent mount rotation. |
-| `smoothing` | EMA coefficient | Retained. Same semantics. |
-| `mount_rotation` | — | Uses existing `fixture.rotation [rx, ry, rz]` degrees. Inverted mounts represented as `[180, 0, 0]` or `[0, 0, 180]` depending on convention (resolve in §11). |
+### 9.1 Fixture schema — delete these fields outright
 
-### 9.2 Controller UI (desktop SPA + Android)
+Remove from the fixture schema, from all `_fixtures` entries at load time (drop on read), from `/api/fixtures` responses, from the SPA/Android UI, from the engine:
 
-- Hide `panScale`, `tiltScale`, `panOffsetDeg`, `tiltOffsetDeg` in the gyro config modal and Android controller overlay.
-- Keep **Smoothing** slider (operator preference).
-- The "Speed" slider from #480 becomes an optional **post-scale factor** (default 1.0× = true 1:1). Document that 1.0× is the intended value. Considered for removal in the cleanup release.
-- Show calibration status prominently (already on the path via the #479 live status card).
+- `panScale`, `tiltScale`
+- `panOffsetDeg`, `tiltOffsetDeg`
+- `panCenter`, `tiltCenter` (pan=0.5 = forward-in-mount is now the only convention)
 
-### 9.3 Backward compatibility
+Keep and reuse:
 
-- Old claims still work via a `legacy_delta` code path kept in `mover_control.py` for one release cycle, triggered when `claim.R_world_to_stage` is absent.
-- `.slyshow` files with fixture-level `panScale`/`tiltScale` import cleanly; values are retained but not used.
-- ESP32 gyro firmware < v1.1.2 still sends plain Euler; server handles it as before.
+- `fixture.rotation = [rx, ry, rz]` (Euler deg) — the mount rotation for IK. Already exists. Inverted / angled mounts use this; no separate flip flag.
+- `smoothing` — EMA coefficient, still an operator preference.
+
+### 9.2 Data files (`.slyshow`, `_fixtures.json`, etc.)
+
+Old files opened by a v2 build get the deleted fields silently stripped on load, then saved without them on next write. No loader errors, no warnings. If a user's old calibration was encoded only in the removed fields, they re-calibrate — there's nothing to migrate.
+
+### 9.3 Controller UI
+
+- Gyro config modal (`desktop/shared/spa/js/setup-ui.js`): remove the Speed slider, the Advanced Tuning `<details>` block, and every legacy numeric input. Remaining controls: Send Lock, live status card, Smoothing slider, mover assignment, name.
+- Android controller overlay: same — no Speed/pan/tilt scale UI. Smoothing slider is the only tuning control.
+
+### 9.4 Engine (`mover_control.py`)
+
+Replace the current `orient` / `_tick` body outright. Delete `_euler_to_aim`, the `calim.calibrated` delta-reference capture, and the `pan_scale`/`tilt_scale` multipliers. The file shrinks.
+
+### 9.5 Firmware
+
+ESP32 puck firmware stays as-is (still sends Euler via `CMD_GYRO_ORIENT`). No protocol break on the wire. The change is server-side.
+
+Android APK in v2 adds the `quat` field to `POST /api/mover-control/orient` (§6). If an older APK is in the field, the server falls back to Euler → quaternion and still runs the stage-space pipeline. This isn't a compatibility layer — it's just that the math accepts both input shapes.
 
 ## 10. Test plan
 
@@ -348,19 +359,21 @@ Rationale: temporal objects currently only carry position + bounding box (`paren
 4. **Remote position input.**
    - v1: default to stage centre at head height (`stageW/2, stageD * 0.7, 1600`), with a setting in the controller overlay to override. No camera tracking.
    - Future: phone camera / stage camera auto-locates the operator (post-v2).
-5. **Speed slider.** Keep as 1.0× post-scale for "it feels slow" escape hatch, or remove entirely? Recommend keep for v2, remove in cleanup.
-6. **Inverted-mount representation.** If `fixture.rotation = [180, 0, 0]` and `[0, 0, 180]` both represent "ceiling mount" depending on convention, settle on one. Bakers and the manual-calibration wizard (#345–#371 era) already made a choice — match it.
+5. **Inverted-mount representation.** If `fixture.rotation = [180, 0, 0]` and `[0, 0, 180]` both represent "ceiling mount" depending on convention, settle on one. Bakers and the manual-calibration wizard (#345–#371 era) already made a choice — match it.
 
-Resolving 1–6 is the first milestone; everything downstream is straightforward math implementation.
+(Speed slider is deleted — no longer a question.)
+
+Resolving 1–5 is the first milestone; everything downstream is straightforward math implementation.
 
 ## 12. Implementation phasing (after plan is approved)
 
-Split from this issue once the above decisions are recorded:
+Split from this issue once the above decisions are recorded. Each phase is a separate PR; together they land as v2.
 
-1. **Math foundation.** `aim_to_pan_tilt`, `frame_align`, `quat_from_euler_zyx`, extended `pan_tilt_to_ray(mount_rotation)`. Unit tests. One PR.
-2. **Engine rewrite.** `MoverControlEngine.calibrate_end` + `.orient` use the new math. Legacy path guarded by `claim.R_world_to_stage is None`. Integration tests.
-3. **Wire format.** Android adds quat to orient payload. ESP32 stays as-is.
+1. **Math foundation.** `aim_to_pan_tilt`, `frame_align`, `quat_from_euler_zyx`, extended `pan_tilt_to_ray(mount_rotation)`. Unit tests.
+2. **Engine rewrite.** `MoverControlEngine.calibrate_end` + `.orient` replaced outright. Old delta fields and `_euler_to_aim` deleted in the same commit. Integration tests.
+3. **Wire format.** Android adds `quat` to orient payload. ESP32 unchanged.
 4. **Remote object + API.** `MoverClaim` fields, `GET /api/remotes/live`.
-5. **3D debug visualisation.** `scene-3d.js` renders remotes.
-6. **UI cleanup.** Hide legacy scale fields. Android parity (#478–#483) rebased onto the new architecture.
-7. **Cleanup release.** Remove `panScale`/`tiltScale` from engine and schema after one stable cycle.
+5. **3D debug visualisation.** `scene-3d.js` renders remotes with aim rays.
+6. **UI cut.** Delete `panScale` / `tiltScale` / `panOffsetDeg` / `tiltOffsetDeg` / `panCenter` / `tiltCenter` from the schema, SPA modals, and Android overlay. Rebase Android parity work (#478–#483) onto the new architecture.
+
+No cleanup release — everything legacy is gone by the end of phase 6.
