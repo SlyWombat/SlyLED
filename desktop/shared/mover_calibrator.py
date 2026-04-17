@@ -631,12 +631,18 @@ def calibrate_fixture_orientation(bridge_ip, camera_ip, cam_idx, mover_addr,
     return orientation
 
 
-def pan_tilt_to_ray(pan_norm, tilt_norm, pan_range=540, tilt_range=270):
+def pan_tilt_to_ray(pan_norm, tilt_norm, pan_range=540, tilt_range=270,
+                    mount_rotation_deg=None):
     """Convert normalized pan/tilt (0-1) to a unit direction vector.
 
-    Convention: pan=0.5 = forward (+Y), tilt=0.5 = horizontal.
-    Pan increases clockwise viewed from above.
+    Convention (in mount-local frame): pan=0.5 = forward (+Y),
+    tilt=0.5 = horizontal. Pan increases clockwise viewed from above.
     Tilt increases downward.
+
+    If `mount_rotation_deg` is given (as `[rx, ry, rz]` in degrees,
+    interpreted as intrinsic XYZ per Three.js default Euler order),
+    the returned vector is rotated into stage space. Otherwise the
+    mount-local vector is returned, preserving the legacy call shape.
 
     Stage coordinates: X=width, Y=depth (forward), Z=height (up).
 
@@ -654,7 +660,48 @@ def pan_tilt_to_ray(pan_norm, tilt_norm, pan_range=540, tilt_range=270):
     dy = math.cos(pan_rad) * cos_tilt   # Y is forward (depth)
     dz = -math.sin(tilt_rad)            # Z is up (height), positive tilt = downward
 
-    return (dx, dy, dz)
+    if mount_rotation_deg is None or (
+            mount_rotation_deg[0] == 0
+            and mount_rotation_deg[1] == 0
+            and mount_rotation_deg[2] == 0):
+        return (dx, dy, dz)
+
+    from remote_math import euler_xyz_deg_to_matrix, matrix_vec_mul
+    R = euler_xyz_deg_to_matrix(mount_rotation_deg)
+    return matrix_vec_mul(R, (dx, dy, dz))
+
+
+def aim_to_pan_tilt(aim_stage, mount_rotation_deg=None,
+                    pan_range=540, tilt_range=270):
+    """Inverse of `pan_tilt_to_ray` with mount orientation.
+
+    Given a unit aim vector in stage coordinates and the mover's mount
+    rotation (intrinsic XYZ Euler, degrees), return `(pan_norm, tilt_norm)`
+    that aim the mover along that vector. Values are clipped to `[0, 1]`.
+
+    Round-trips with `pan_tilt_to_ray` inside the mechanical range.
+    """
+    if mount_rotation_deg is None or (
+            mount_rotation_deg[0] == 0
+            and mount_rotation_deg[1] == 0
+            and mount_rotation_deg[2] == 0):
+        aim_mount = aim_stage
+    else:
+        from remote_math import (
+            euler_xyz_deg_to_matrix, matrix_vec_mul, matrix_transpose,
+        )
+        R = euler_xyz_deg_to_matrix(mount_rotation_deg)
+        aim_mount = matrix_vec_mul(matrix_transpose(R), aim_stage)
+
+    dx, dy, dz = aim_mount
+    pan_deg = math.degrees(math.atan2(dx, dy))
+    horiz = math.hypot(dx, dy)
+    tilt_deg = math.degrees(math.atan2(-dz, horiz))
+    pan_norm = 0.5 + pan_deg / pan_range
+    tilt_norm = 0.5 + tilt_deg / tilt_range
+    pan_norm = max(0.0, min(1.0, pan_norm))
+    tilt_norm = max(0.0, min(1.0, tilt_norm))
+    return (pan_norm, tilt_norm)
 
 
 def ray_surface_intersect(origin, direction, surfaces):
