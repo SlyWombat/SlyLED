@@ -248,8 +248,9 @@ function _popModal(){
 function closeModal(){
   // If there's a parent dialog on the stack, go back to it instead of closing
   if(_popModal())return;
-  // Clear any active polling intervals (#430)
+  // Clear any active polling intervals (#430, gyro live status)
   if(window._bakePoll){clearInterval(window._bakePoll);window._bakePoll=null;}
+  if(window._gcfgPoll){clearInterval(window._gcfgPoll);window._gcfgPoll=null;}
   document.getElementById('modal').style.display='none';
 }
 

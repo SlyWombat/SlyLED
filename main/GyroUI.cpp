@@ -115,6 +115,7 @@ static unsigned long s_flashLastMs  = 0;
 static unsigned long s_colorSendMs  = 0;
 
 // Hold states (active while finger down on button for > HOLD_MS)
+static bool s_startHeld = false;
 static bool s_calibHeld = false;
 static bool s_flashHeld = false;
 static bool s_stopHeld  = false;
@@ -173,14 +174,35 @@ static void updateLogoProgress(float progress) {
 
 static void drawIdle() {
     gyroClearScreen(GC_BLACK);
-    // WiFi dot
-    gyroFillCircle(WIFI_X, WIFI_Y, WIFI_R, wifiOk() ? GC_GREEN : GC_RED);
-    // START button
-    gyroFillCircle(CX, CY, BTN_MAIN_R, (uint16_t)0x0360u);  // dark green
-    gyroDrawCircle(CX, CY, BTN_MAIN_R, GC_GREEN);
-    const char* lbl = "START";
-    int16_t tw = (int16_t)(strlen(lbl) * 6 * 2);
-    gyroDrawText(CX - tw / 2, CY - 7, lbl, 2, GC_WHITE);
+    bool locked = gyroUdpHasLock();
+
+    if (s_startHeld && locked) {
+        // Holding — bright green, visual feedback
+        gyroFillCircle(CX, CY, BTN_MAIN_R, GC_GREEN);
+        gyroDrawCircle(CX, CY, BTN_MAIN_R, GC_WHITE);
+        const char* lbl = "HOLD";
+        int16_t tw = (int16_t)(strlen(lbl) * 6 * 2);
+        gyroDrawText(CX - tw / 2, CY - 7, lbl, 2, GC_WHITE);
+    } else {
+        // START button — yellow (waiting for lock) or green (locked by orchestrator)
+        uint16_t btnFill = locked ? (uint16_t)0x0360u : (uint16_t)0x4200u;
+        uint16_t btnRing = locked ? GC_GREEN : GC_YELLOW;
+        gyroFillCircle(CX, CY, BTN_MAIN_R, btnFill);
+        gyroDrawCircle(CX, CY, BTN_MAIN_R, btnRing);
+        const char* lbl = "START";
+        int16_t tw = (int16_t)(strlen(lbl) * 6 * 2);
+        gyroDrawText(CX - tw / 2, CY - 7, lbl, 2, GC_WHITE);
+    }
+
+    if (!locked) {
+        const char* hint = "Waiting for lock...";
+        int16_t hw = (int16_t)(strlen(hint) * 6);
+        gyroDrawText(CX - hw / 2, CY + 65, hint, 1, GC_GREY);
+    } else if (!s_startHeld) {
+        const char* hint = "Hold to start";
+        int16_t hw = (int16_t)(strlen(hint) * 6);
+        gyroDrawText(CX - hw / 2, CY + 65, hint, 1, GC_GREY);
+    }
 }
 
 // ── ACTIVE page 0 — Calibrate ───────────────────────────────────────────────
@@ -194,13 +216,15 @@ static void drawCalibratePage() {
         gyroFillCircle(CX, BTN_CAL_Y, BTN_CAL_R, GC_ORANGE);
         gyroDrawCircle(CX, BTN_CAL_Y, BTN_CAL_R, GC_WHITE);
         gyroDrawText(CX - 24, BTN_CAL_Y - 7, "HOLD", 2, GC_WHITE);
-        gyroDrawText(28, 168, "Release to set zero", 1, GC_CYAN);
+        // "Release to set zero" = 19 chars × 6px = 114px → center
+        gyroDrawText(CX - 57, 168, "Release to set zero", 1, GC_CYAN);
     } else if (live) {
         // Live — green calibrate button
         gyroFillCircle(CX, BTN_CAL_Y, BTN_CAL_R, (uint16_t)0x0360u);
         gyroDrawCircle(CX, BTN_CAL_Y, BTN_CAL_R, GC_GREEN);
         gyroDrawText(CX - 27, BTN_CAL_Y - 3, "CALIBRATE", 1, GC_WHITE);
-        gyroDrawText(24, 168, "Hold to pause & move", 1, GC_GREY);
+        // "Hold to pause & move" = 20 chars × 6px = 120px → center
+        gyroDrawText(CX - 60, 168, "Hold to pause & move", 1, GC_GREY);
     } else {
         // Not live — this IS the start button
         gyroFillCircle(CX, BTN_CAL_Y, BTN_CAL_R, (uint16_t)0x0360u);
@@ -252,9 +276,15 @@ static void drawBolt(int16_t cx, int16_t cy, uint16_t col) {
 // Fill the ring between flash button and colour wheel with selected colour
 static void drawColourFill() {
     if (s_selHue < 0) return;
-    uint8_t r, g, b;
-    hueToRGB(s_selHue, &r, &g, &b);
-    uint16_t col = gc9a01_rgb565(r, g, b);
+    uint16_t col;
+    if (s_selHue >= WHITE_SEG_START) {
+        col = GC_WHITE;
+    } else {
+        uint8_t r, g, b;
+        int16_t hue = (int16_t)((float)s_selHue * 360.0f / (float)WHITE_SEG_START);
+        hueToRGB(hue, &r, &g, &b);
+        col = gc9a01_rgb565(r, g, b);
+    }
     // Fill ring from just outside flash button to just inside colour wheel
     gyroDrawArcSegment(CX, CY, COL_RING_INNER - 2, COL_RING_INNER - COL_FLASH_R - 4,
                        0, 359, col);
@@ -271,7 +301,6 @@ static void drawFlashButton() {
 
 static void drawColourPage() {
     gyroClearScreen(GC_BLACK);
-    gyroDrawText(CX - 33, 28, "LIGHT CTRL", 1, GC_CYAN);
     drawColourWheel();
     drawColourFill();
     drawFlashButton();
@@ -412,13 +441,8 @@ static bool hitCircle(int16_t tx, int16_t ty, int16_t cx, int16_t cy, int16_t r)
 // ── Touch handlers per state ─────────────────────────────────────────────────
 
 static void handleTouchIdle(int16_t tx, int16_t ty) {
-    if (hitCircle(tx, ty, CX, CY, BTN_MAIN_R)) {
-        s_state = UIState::ACTIVE;
-        s_page  = 0;
-        s_calibHeld = false;
-        gyroUdpSetStreaming(true, 0);
-        drawCurrentPage();
-    }
+    // START is hold-to-start, handled in update loop — taps ignored
+    (void)tx; (void)ty;
 }
 
 static void handleTouchActive(int16_t tx, int16_t ty, uint8_t gesture) {
@@ -542,6 +566,16 @@ void gyroUIUpdate() {
     }
 
     // ── Hold actions (finger still on screen, no gesture yet) ───────────────
+
+    // IDLE: hold-to-start
+    if (s_state == UIState::IDLE && touching && gesture == TOUCH_GEST_NONE
+        && held && gyroUdpHasLock() && hitCircle(tx, ty, CX, CY, BTN_MAIN_R)) {
+        if (!s_startHeld) {
+            s_startHeld = true;
+            drawIdle();  // show HOLD feedback
+        }
+    }
+
     if (s_state == UIState::ACTIVE && touching && gesture == TOUCH_GEST_NONE) {
         // Page 0: hold-to-calibrate
         if (s_page == 0 && held && hitCircle(tx, ty, CX, BTN_CAL_Y, BTN_CAL_R)) {
@@ -607,6 +641,15 @@ void gyroUIUpdate() {
 
     // ── Release hold actions when finger lifts (gesture appears or fingers=0) ─
     if (!touching && s_wasTouching) {
+        if (s_startHeld) {
+            s_startHeld = false;
+            // Transition IDLE → ACTIVE
+            s_state = UIState::ACTIVE;
+            s_page  = 0;
+            s_calibHeld = false;
+            gyroUdpSetStreaming(true, 0);
+            drawCurrentPage();
+        }
         if (s_calibHeld) {
             s_calibHeld = false;
             gyroUdpSendCalibrate(false);  // calibrate END — server captures reference
@@ -617,10 +660,24 @@ void gyroUIUpdate() {
         }
         if (s_flashHeld) {
             s_flashHeld = false;
+            // Send current colour (no flash flag) to cancel strobe
+            if (s_selHue >= 0) {
+                uint8_t cr, cg, cb;
+                if (s_selHue >= WHITE_SEG_START) {
+                    cr = 255; cg = 255; cb = 255;
+                } else {
+                    int16_t hue = (int16_t)((float)s_selHue * 360.0f / (float)WHITE_SEG_START);
+                    hueToRGB(hue, &cr, &cg, &cb);
+                }
+                gyroUdpSendColor(cr, cg, cb, 0);  // flags=0 → no flash → cancels strobe
+            } else {
+                gyroUdpSendColor(255, 255, 255, 0);  // default white, no strobe
+            }
             drawColourPage();  // restore full page after flash
         }
         if (s_stopHeld) {
             s_stopHeld = false;
+            gyroUdpSendStop();  // tell server → release claim + blackout
             gyroUdpSetStreaming(false, 0);
             s_state = UIState::IDLE;
             drawIdle();
@@ -649,6 +706,16 @@ periodic:
     // Read IMU regardless of screen
     float r, p, y;
     gyroIMURead(&r, &p, &y);
+
+    // IDLE: redraw when lock status changes (yellow → green)
+    if (s_state == UIState::IDLE) {
+        static bool s_prevLock = false;
+        bool locked = gyroUdpHasLock();
+        if (locked != s_prevLock) {
+            s_prevLock = locked;
+            drawIdle();
+        }
+    }
 
     // Page 2 (status park): only redraw dot if status changed
     if (s_state == UIState::ACTIVE && s_page == 2) {

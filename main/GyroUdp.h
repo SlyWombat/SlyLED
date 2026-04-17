@@ -37,11 +37,15 @@ void gyroUdpHandleCmd(uint8_t cmd, IPAddress sender,
 // ── State accessors / setters ─────────────────────────────────────────────────
 
 bool    gyroUdpStreaming();   // true while sending GYRO_ORIENT
+bool    gyroUdpHasLock();    // true after CMD_GYRO_CTRL received (parent IP known)
 uint8_t gyroUdpTargetFps();  // configured target fps
 
 // Direct local control — used by GyroUI to toggle streaming without a UDP
 // round-trip.  Does not change the stored parent IP.
 void gyroUdpSetStreaming(bool enabled, uint8_t fps = 0);
+
+// Send one final CMD_GYRO_ORIENT with stop flag → server releases claim + blackout.
+void gyroUdpSendStop();
 
 // Send CMD_GYRO_COLOR (0x63) to parent — colour preset or flash pulse.
 // flags bit0 = flash (brief full-brightness pulse)

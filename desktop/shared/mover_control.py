@@ -15,6 +15,38 @@ import math
 import threading
 import time
 
+
+def _euler_to_aim(roll_deg, pitch_deg, yaw_deg):
+    """Convert IMU Euler angles to (azimuth, elevation) in degrees.
+
+    Builds a forward direction vector from the Euler rotation, then
+    decomposes into azimuth (horizontal turn, for pan) and elevation
+    (vertical angle, for tilt).  This avoids Euler-angle coupling where
+    a pure pitch change leaks into yaw.
+
+    Convention matches QMI8658 complementary filter output:
+      roll  = atan2(ay, az)        — rotation around X
+      pitch = atan2(-ax, √(ay²+az²)) — rotation around Y (nose up = positive)
+      yaw   = ∫gz dt               — rotation around Z (turn right = positive)
+    """
+    r = math.radians(roll_deg)
+    p = math.radians(pitch_deg)
+    y = math.radians(yaw_deg)
+
+    # Forward vector (unit Z of device frame rotated into world frame, ZYX order)
+    cp, sp = math.cos(p), math.sin(p)
+    cy, sy = math.cos(y), math.sin(y)
+    cr, sr = math.cos(r), math.sin(r)
+
+    # Device "forward" is +X in device frame.  After ZYX rotation:
+    fx = cy * cp
+    fy = sy * cp
+    fz = -sp
+
+    azimuth   = math.degrees(math.atan2(fy, fx))
+    elevation = math.degrees(math.atan2(-fz, math.sqrt(fx * fx + fy * fy)))
+    return azimuth, elevation
+
 log = logging.getLogger("slyled.mover_control")
 
 
@@ -26,7 +58,7 @@ class MoverClaim:
         "ref_roll", "ref_pitch", "ref_yaw",
         "ref_pan", "ref_tilt", "calibrated",
         "cur_roll", "cur_pitch", "cur_yaw",
-        "color_r", "color_g", "color_b", "dimmer",
+        "color_r", "color_g", "color_b", "dimmer", "strobe_active",
         "pan_smooth", "tilt_smooth",
         "pan_scale", "tilt_scale", "smoothing",
     )
@@ -39,7 +71,7 @@ class MoverClaim:
         self.device_type = device_type
         self.claimed_at = time.time()
         self.last_data_ts = time.time()
-        self.ttl_s = 30.0
+        self.ttl_s = 15.0
         self.state = "claimed"  # claimed | streaming | calibrating
 
         # Reference pair (set during calibrate)
@@ -60,6 +92,7 @@ class MoverClaim:
         self.color_g = 255
         self.color_b = 255
         self.dimmer = 255
+        self.strobe_active = False
 
         # Smoothing
         self.pan_smooth = 0.5
@@ -207,14 +240,28 @@ class MoverControlEngine:
     # ── Orient ───────────────────────────────────────────────────────
 
     def orient(self, mover_id, device_id, roll, pitch, yaw):
+        just_started = False
         with self._lock:
             claim = self._claims.get(mover_id)
             if not claim or claim.device_id != device_id:
                 return False
+            # Auto-start streaming on first orient data (user pressed START on device)
+            if claim.state == "claimed":
+                claim.state = "streaming"
+                just_started = True
+                # Capture starting orientation as implicit reference
+                # so resting position = center (0.5, 0.5)
+                claim.ref_roll = roll
+                claim.ref_pitch = pitch
+                claim.ref_yaw = yaw
+                log.info("Mover %d: auto-started streaming, ref=(%.1f,%.1f,%.1f)",
+                         mover_id, roll, pitch, yaw)
             claim.cur_roll = roll
             claim.cur_pitch = pitch
             claim.cur_yaw = yaw
             claim.last_data_ts = time.time()
+        if just_started:
+            self._set_mover_light(mover_id, claim)
         return True
 
     # ── Color ────────────────────────────────────────────────────────
@@ -227,34 +274,21 @@ class MoverControlEngine:
             claim.color_r = r
             claim.color_g = g
             claim.color_b = b
+            claim.strobe_active = False  # color change cancels strobe
             if dimmer is not None:
                 claim.dimmer = dimmer
         return True
 
-    # ── Flash ────────────────────────────────────────────────────────
+    # ── Flash (strobe) ───────────────────────────────────────────────
 
     def flash(self, mover_id, device_id):
-        """Brief white flash — sets dimmer to 255 + white, then restores after 150ms."""
+        """Enable strobe on the fixture's strobe channel."""
         with self._lock:
             claim = self._claims.get(mover_id)
             if not claim or claim.device_id != device_id:
                 return False
-            saved_r, saved_g, saved_b = claim.color_r, claim.color_g, claim.color_b
-            claim.color_r = 255
-            claim.color_g = 255
-            claim.color_b = 255
+            claim.strobe_active = True
             claim.dimmer = 255
-        # Restore after brief pulse
-        def _restore():
-            time.sleep(0.15)
-            with self._lock:
-                c = self._claims.get(mover_id)
-                if c and c.device_id == device_id:
-                    c.color_r = saved_r
-                    c.color_g = saved_g
-                    c.color_b = saved_b
-        import threading
-        threading.Thread(target=_restore, daemon=True).start()
         return True
 
     # ── Status ───────────────────────────────────────────────────────
@@ -288,8 +322,9 @@ class MoverControlEngine:
             claims = list(self._claims.items())
 
         for mover_id, claim in claims:
-            # TTL check
-            if now - claim.last_data_ts > claim.ttl_s:
+            # TTL check — only for streaming/calibrating (not "claimed" which
+            # is waiting for user to press START on the device)
+            if claim.state != "claimed" and now - claim.last_data_ts > claim.ttl_s:
                 expired.append((mover_id, claim.device_id))
                 continue
 
@@ -300,22 +335,34 @@ class MoverControlEngine:
             pid = mover.get("dmxProfileId")
             prof_info = self._get_profile_info(pid) if pid else None
 
+            # "claimed" = locked but user hasn't pressed START yet — no DMX
+            if claim.state == "claimed":
+                continue
+
             if claim.state == "calibrating":
                 # During calibrate hold, keep light on at current position
                 self._write_dmx(mover_id, mover, prof_info, claim)
                 continue
 
-            if claim.calibrated and claim.state == "streaming":
-                # Compute delta from reference
-                d_roll = claim.cur_roll - claim.ref_roll
-                d_pitch = claim.cur_pitch - claim.ref_pitch
+            if claim.state == "streaming":
+                # Convert Euler angles to direction vector → azimuth/elevation.
+                # This avoids gimbal-lock coupling where pitch leaks into yaw.
+                cur_az, cur_el = _euler_to_aim(claim.cur_roll, claim.cur_pitch, claim.cur_yaw)
+                ref_az, ref_el = _euler_to_aim(claim.ref_roll, claim.ref_pitch, claim.ref_yaw)
+
+                d_az = cur_az - ref_az
+                if d_az > 180:
+                    d_az -= 360
+                elif d_az < -180:
+                    d_az += 360
+                d_el = cur_el - ref_el
 
                 pan_range = (prof_info or {}).get("panRange", 540)
                 tilt_range = (prof_info or {}).get("tiltRange", 270)
 
                 if pan_range > 0 and tilt_range > 0:
-                    d_pan = (d_roll * claim.pan_scale) / pan_range
-                    d_tilt = (d_pitch * claim.tilt_scale) / tilt_range
+                    d_pan = (d_az * claim.pan_scale) / pan_range
+                    d_tilt = (d_el * claim.tilt_scale) / tilt_range
                     pan = max(0.0, min(1.0, claim.ref_pan + d_pan))
                     tilt = max(0.0, min(1.0, claim.ref_tilt + d_tilt))
 
@@ -323,7 +370,7 @@ class MoverControlEngine:
                     claim.pan_smooth += alpha * (pan - claim.pan_smooth)
                     claim.tilt_smooth += alpha * (tilt - claim.tilt_smooth)
 
-            # Always write DMX — holds position + updates color/dimmer even before calibration
+            # Write DMX for streaming/calibrating — holds position + updates color/dimmer
             self._write_dmx(mover_id, mover, prof_info, claim)
 
         # Release expired claims
@@ -360,13 +407,42 @@ class MoverControlEngine:
                                 prof_info)
 
         # Channel defaults (strobe open etc.)
-        cm = prof_info.get("channel_map", {})
         for ch in prof_info.get("channels", []):
             ch_type = ch.get("type", "")
             default = ch.get("default")
             if default is not None and default > 0 and ch_type not in (
                     "pan", "tilt", "dimmer", "red", "green", "blue", "color-wheel"):
-                uni_buf.set_channel(addr + ch.get("offset", 0), int(default))
+                if ch_type == "strobe" and claim.strobe_active:
+                    # Find strobe range from ShutterStrobe capabilities
+                    strobe_val = self._find_strobe_value(ch)
+                    uni_buf.set_channel(addr + ch.get("offset", 0), strobe_val)
+                else:
+                    uni_buf.set_channel(addr + ch.get("offset", 0), int(default))
+
+    @staticmethod
+    def _find_strobe_value(ch):
+        """Find the DMX value for visible strobe from channel capabilities.
+
+        Looks for a ShutterStrobe capability with a 'strobe' label.
+        Returns the midpoint of that range.  Falls back to midpoint of
+        the full channel range if no strobe capability is defined.
+        """
+        caps = ch.get("capabilities", [])
+        for cap in caps:
+            cap_type = cap.get("type", "")
+            label = (cap.get("label") or "").lower()
+            rng = cap.get("range", [0, 255])
+            # Match ShutterStrobe capabilities that contain 'strobe' in label
+            if cap_type == "ShutterStrobe" and "strobe" in label:
+                return (rng[0] + rng[1]) // 2  # midpoint = medium speed
+        # No ShutterStrobe capability — use midpoint of default range
+        default = ch.get("default", 255)
+        # Assume strobe is opposite end from the default (solid) value
+        if default > 200:
+            return 128  # default is high (solid), strobe is lower
+        elif default < 50:
+            return 128  # default is low (closed), strobe is higher
+        return 128
 
     def _set_mover_light(self, mover_id, claim):
         """Turn on the mover's light when streaming starts."""

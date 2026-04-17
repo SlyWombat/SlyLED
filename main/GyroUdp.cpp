@@ -137,14 +137,20 @@ void gyroUdpHandleCmd(uint8_t cmd, IPAddress sender,
     } else if (cmd == CMD_GYRO_CTRL && plen >= (int)sizeof(GyroCtrlPayload)) {
         GyroCtrlPayload ctrl;
         memcpy(&ctrl, payload, sizeof(ctrl));
-        s_streaming = (ctrl.enabled != 0);
         if (ctrl.targetFps > 0 && ctrl.targetFps <= 50)
             s_targetFps = ctrl.targetFps;
-        // Capture parent IP for unicast replies
-        s_parentIP = sender;
+        if (ctrl.enabled) {
+            // Capture parent IP — establishes the "lock"
+            // Don't set s_streaming — user must press START on the device
+            s_parentIP = sender;
+        } else {
+            // Disable — stop streaming + clear the lock
+            s_streaming = false;
+            s_parentIP = IPAddress(255, 255, 255, 255);
+        }
         if (Serial)
-            Serial.printf("[GyroUDP] CTRL: enabled=%d fps=%d parent=%s\n",
-                          s_streaming, s_targetFps, sender.toString().c_str());
+            Serial.printf("[GyroUDP] CTRL: lock=%d fps=%d streaming=%d parent=%s\n",
+                          ctrl.enabled, s_targetFps, s_streaming, sender.toString().c_str());
 
     } else if (cmd == CMD_GYRO_RECAL) {
         gyroIMUZero();
@@ -180,6 +186,7 @@ void gyroUdpHandleCmd(uint8_t cmd, IPAddress sender,
 }
 
 bool    gyroUdpStreaming()  { return s_streaming; }
+bool    gyroUdpHasLock()   { return s_parentIP != IPAddress(255, 255, 255, 255); }
 uint8_t gyroUdpTargetFps() { return s_targetFps; }
 
 void gyroUdpSetStreaming(bool enabled, uint8_t fps) {
@@ -189,6 +196,29 @@ void gyroUdpSetStreaming(bool enabled, uint8_t fps) {
     s_fpsTxCount  = 0;
     s_actualFps   = 0;
     s_fpsWindowMs = (uint32_t)millis();
+}
+
+void gyroUdpSendStop() {
+    // Send one final orient with flags bit 3 = stop signal → server releases claim
+    UdpHeader hdr;
+    hdr.magic   = UDP_MAGIC;
+    hdr.version = UDP_VERSION;
+    hdr.cmd     = CMD_GYRO_ORIENT;
+    hdr.epoch   = (uint32_t)currentEpoch();
+
+    GyroOrientPayload op;
+    memset(&op, 0, sizeof(op));
+    op.flags = 0x08u;  // bit 3 = stop
+
+    uint8_t buf[sizeof(hdr) + sizeof(op)];
+    memcpy(buf,               &hdr, sizeof(hdr));
+    memcpy(buf + sizeof(hdr), &op,  sizeof(op));
+
+    cmdUDP.beginPacket(s_parentIP, UDP_PORT);
+    cmdUDP.write(buf, sizeof(buf));
+    cmdUDP.endPacket();
+
+    if (Serial) Serial.println(F("[GyroUDP] Sent STOP signal to parent"));
 }
 
 void gyroUdpSendColor(uint8_t r, uint8_t g, uint8_t b, uint8_t flags) {

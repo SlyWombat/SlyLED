@@ -10,6 +10,9 @@
 #include "Child.h"          // initChildConfig() — guarded by #ifdef BOARD_FASTLED inside Child.h
 #include "ArtNetRecv.h"     // artnetInit() — guarded by #ifdef BOARD_DMX_BRIDGE
 #include "arduino_secrets.h"
+#ifdef BOARD_GYRO
+  #include <esp_mac.h>      // esp_efuse_mac_get_default()
+#endif
 
 // ── NTP ───────────────────────────────────────────────────────────────────────
 
@@ -167,9 +170,10 @@ void connectWiFi() {
   }
 #elif defined(BOARD_GYRO)
   // Gyro board: derive hostname from MAC, prefix SLYG- to distinguish from LED children
+  // ESP32-S3: WiFi.macAddress() returns zeros before WiFi.mode() — use efuse instead
   {
     uint8_t mac[6];
-    WiFi.macAddress(mac);
+    esp_efuse_mac_get_default(mac);
     char hn[HOSTNAME_LEN];
     snprintf(hn, sizeof(hn), "SLYG-%02X%02X", mac[4], mac[5]);
     WiFi.setHostname(hn);
@@ -190,6 +194,14 @@ void connectWiFi() {
     if (Serial) Serial.print('.');
   }
   if (Serial) { Serial.println(); Serial.print("Connected. IP: "); Serial.println(WiFi.localIP()); }
+
+#ifdef BOARD_GYRO
+  // Disable WiFi power save — reduces RTT from ~500ms to ~5ms.
+  // Critical for real-time orientation streaming.
+  WiFi.setSleep(false);
+  if (Serial) Serial.println(F("WiFi power save disabled (low latency mode)"));
+#endif
+
   server.begin();
   syncNTP();
   cmdUDP.begin(UDP_PORT);

@@ -937,7 +937,7 @@ function _gyroConfigModalRender(childId, c){
   h+='<div><label style="font-size:.78em;color:#94a3b8">Firmware</label><div style="font-size:.9em;color:#e2e8f0">'+(c.fwVersion||'\u2014')+'</div></div>';
   h+='</div>';
 
-  // Name (editable — like other ESP devices)
+  // Name (editable)
   h+='<label>Device Name</label>';
   h+='<input id="gcfg-name" value="'+escapeHtml(c.altName||c.name||c.hostname||'')+'" style="width:100%;margin-bottom:.6em" placeholder="e.g. Stage Left Gyro">';
 
@@ -952,41 +952,76 @@ function _gyroConfigModalRender(childId, c){
   // Tuning (only if fixture exists)
   if(gf){
     var f=gf;
+    // ── Send Lock + Live Status ──────────────────────────────────
     h+='<div style="border-top:1px solid #1e293b;padding-top:.6em;margin-top:.4em">';
-    h+='<div style="font-weight:600;font-size:.85em;color:#a5b4fc;margin-bottom:.5em">Tuning</div>';
-    h+='<div style="display:flex;flex-wrap:wrap;gap:.6em">';
-    var fields=[
-      {id:'pc',label:'Pan Center',val:f.panCenter!=null?f.panCenter:128,min:0,max:255,step:1},
-      {id:'tc',label:'Tilt Center',val:f.tiltCenter!=null?f.tiltCenter:128,min:0,max:255,step:1},
-      {id:'ps',label:'Pan Scale',val:f.panScale!=null?f.panScale:1.0,min:0.1,max:3.0,step:0.1},
-      {id:'ts',label:'Tilt Scale',val:f.tiltScale!=null?f.tiltScale:1.0,min:0.1,max:3.0,step:0.1},
-      {id:'po',label:'Pan Offset \u00b0',val:f.panOffsetDeg||0,min:-180,max:180,step:1},
-      {id:'to',label:'Tilt Offset \u00b0',val:f.tiltOffsetDeg||0,min:-90,max:90,step:1},
-      {id:'sm',label:'Smoothing',val:f.smoothing!=null?f.smoothing:0.15,min:0,max:1,step:0.05},
-    ];
-    fields.forEach(function(fld){
-      h+='<div><label style="font-size:.73em;color:#94a3b8;display:block">'+fld.label+'</label>'
-        +'<input id="gcfg-'+fld.id+'" type="number" value="'+fld.val+'" min="'+fld.min+'" max="'+fld.max+'" step="'+fld.step+'" style="width:70px;font-size:.85em"></div>';
-    });
-    h+='</div></div>';
-
-    // Enable/disable
-    h+='<div style="display:flex;gap:.5em;align-items:center;margin-top:.8em;border-top:1px solid #1e293b;padding-top:.6em">';
-    h+=(f.gyroEnabled?'<span class="badge" style="background:#059669;color:#fff">Enabled</span>':'<span class="badge" style="background:#334;color:#888">Disabled</span>');
-    if(f.gyroEnabled){
-      h+=' <button class="btn" onclick="_gyroToggleEnabled('+f.id+',false);_gyroConfigModal('+childId+')" style="background:#334;color:#94a3b8;font-size:.82em">Disable</button>';
-    }else{
-      h+=' <button class="btn btn-on" onclick="_gyroToggleEnabled('+f.id+',true);_gyroConfigModal('+childId+')" style="font-size:.82em">Enable</button>';
-    }
-    h+=' <button class="btn" onclick="_gyroRecal('+f.gyroChildId+')" style="background:#1e3a5f;color:#93c5fd;font-size:.82em">Zero IMU</button>';
+    h+='<div style="display:flex;gap:.5em;align-items:center;margin-bottom:.5em">';
+    h+='<button id="gcfg-lock-btn" class="btn btn-on" onclick="_gyroSendLock('+childId+','+f.id+')" style="font-size:.85em">Send Lock</button>';
+    h+='<button class="btn" onclick="_gyroRecal('+f.gyroChildId+')" style="background:#1e3a5f;color:#93c5fd;font-size:.82em">Zero IMU</button>';
     h+='</div>';
+    h+='<div id="gcfg-live" style="padding:.4em .6em;border:1px solid #1e293b;border-radius:4px;font-size:.82em;color:#94a3b8;margin-bottom:.6em">';
+    h+='\u25cb Not connected</div>';
+    h+='<div style="font-size:.72em;color:#64748b;margin-bottom:.8em">'
+      +'Send Lock tells the gyro controller which moving head to control. '
+      +'Once locked, press START on the gyro device to begin streaming orientation data. '
+      +'The status above updates live while this card is open.</div>';
+
+    // ── Speed + Smoothing (primary controls) ─────────────────────
+    h+='<div style="border-top:1px solid #1e293b;padding-top:.6em;margin-top:.4em">';
+    h+='<div style="font-weight:600;font-size:.85em;color:#a5b4fc;margin-bottom:.4em">Control</div>';
+
+    // Speed (sets both panScale + tiltScale)
+    var curSpeed=f.panScale!=null?f.panScale:1.0;
+    h+='<div style="margin-bottom:.5em">';
+    h+='<label style="font-size:.78em;color:#94a3b8;display:block">Speed</label>';
+    h+='<div style="display:flex;align-items:center;gap:.5em">';
+    h+='<span style="font-size:.7em;color:#64748b">Slow</span>';
+    h+='<input id="gcfg-speed" type="range" min="0.1" max="3.0" step="0.1" value="'+curSpeed+'" style="flex:1">';
+    h+='<span style="font-size:.7em;color:#64748b">Fast</span>';
+    h+='<span id="gcfg-speed-val" style="font-size:.78em;color:#e2e8f0;min-width:2em;text-align:right">'+curSpeed.toFixed(1)+'x</span>';
+    h+='</div>';
+    h+='<div style="font-size:.68em;color:#64748b;margin-top:.15em">How much the fixture moves relative to hand movement</div>';
+    h+='</div>';
+
+    // Smoothing
+    var curSmooth=f.smoothing!=null?f.smoothing:0.15;
+    h+='<div style="margin-bottom:.4em">';
+    h+='<label style="font-size:.78em;color:#94a3b8;display:block">Smoothing</label>';
+    h+='<div style="display:flex;align-items:center;gap:.5em">';
+    h+='<span style="font-size:.7em;color:#64748b">Smooth</span>';
+    h+='<input id="gcfg-sm" type="range" min="0.05" max="1" step="0.05" value="'+curSmooth+'" style="flex:1">';
+    h+='<span style="font-size:.7em;color:#64748b">Instant</span>';
+    h+='<span id="gcfg-sm-val" style="font-size:.78em;color:#e2e8f0;min-width:2em;text-align:right">'+curSmooth.toFixed(2)+'</span>';
+    h+='</div>';
+    h+='<div style="font-size:.68em;color:#64748b;margin-top:.15em">Low = dampened, smooth movement. High = instant, direct response</div>';
+    h+='</div>';
+    h+='</div>';
+
+    // ── Advanced tuning (collapsed) ──────────────────────────────
+    h+='<details style="border-top:1px solid #1e293b;padding-top:.4em;margin-top:.4em">';
+    h+='<summary style="font-size:.8em;color:#94a3b8;cursor:pointer;user-select:none">Advanced Tuning</summary>';
+    h+='<div style="display:flex;flex-wrap:wrap;gap:.6em;margin-top:.4em">';
+    var advFields=[
+      {id:'pc',label:'Pan Center',val:f.panCenter!=null?f.panCenter:128,min:0,max:255,step:1,
+       help:'DMX center position for pan (128 = middle)'},
+      {id:'tc',label:'Tilt Center',val:f.tiltCenter!=null?f.tiltCenter:128,min:0,max:255,step:1,
+       help:'DMX center position for tilt (128 = middle)'},
+      {id:'ps',label:'Pan Speed',val:f.panScale!=null?f.panScale:1.0,min:0.1,max:3.0,step:0.1,
+       help:'Override for pan axis only'},
+      {id:'ts',label:'Tilt Speed',val:f.tiltScale!=null?f.tiltScale:1.0,min:0.1,max:3.0,step:0.1,
+       help:'Override for tilt axis only'},
+      {id:'po',label:'Pan Offset \u00b0',val:f.panOffsetDeg||0,min:-180,max:180,step:1,
+       help:'Rotate pan zero point'},
+      {id:'to',label:'Tilt Offset \u00b0',val:f.tiltOffsetDeg||0,min:-90,max:90,step:1,
+       help:'Rotate tilt zero point'},
+    ];
+    advFields.forEach(function(fld){
+      h+='<div><label style="font-size:.73em;color:#94a3b8;display:block" title="'+fld.help+'">'+fld.label+'</label>'
+        +'<input id="gcfg-'+fld.id+'" type="number" value="'+fld.val+'" min="'+fld.min+'" max="'+fld.max+'" step="'+fld.step+'" style="width:70px;font-size:.85em">'
+        +'</div>';
+    });
+    h+='</div></details>';
   }
   h+='</div>';
-
-  // Mover control claim status (#471)
-  if(gf&&gf.assignedMoverId!=null){
-    h+='<div id="gcfg-claim" style="margin-top:.6em;padding:.4em;border:1px solid #1e293b;border-radius:4px;font-size:.82em;color:#94a3b8">Checking control status...</div>';
-  }
 
   // Action buttons
   h+='<div style="display:flex;gap:.4em;margin-top:.8em">';
@@ -997,20 +1032,69 @@ function _gyroConfigModalRender(childId, c){
   document.getElementById('modal-title').textContent='Configure: '+(c.altName||c.name||c.hostname);
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
-  // Fetch mover control claim status (#471)
-  if(gf&&gf.assignedMoverId!=null){
-    ra('GET','/api/mover-control/status',null,function(d){
-      var el=document.getElementById('gcfg-claim');if(!el||!d)return;
-      var claim=(d.claims||[]).find(function(c){return c.moverId===gf.assignedMoverId;});
-      if(claim){
-        el.innerHTML='\u26a1 <b>Active:</b> '+escapeHtml(claim.deviceName)+' ('+claim.state+(claim.calibrated?' \u2713':'')+') '
-          +'<button class="btn btn-off" onclick="ra(\'POST\',\'/api/mover-control/release\',{moverId:'+gf.assignedMoverId+'},function(){_gyroConfigModal('+childId+')})" style="font-size:.75em">Force Release</button>';
-        el.style.borderColor='#6d28d9';
-      }else{
-        el.innerHTML='No active control session';
-      }
-    });
+
+  // Wire up slider live-value displays
+  var speedEl=document.getElementById('gcfg-speed');
+  if(speedEl){
+    speedEl.oninput=function(){
+      var v=parseFloat(this.value);
+      document.getElementById('gcfg-speed-val').textContent=v.toFixed(1)+'x';
+      // Sync advanced pan/tilt speed fields
+      var ps=document.getElementById('gcfg-ps');if(ps)ps.value=v.toFixed(1);
+      var ts=document.getElementById('gcfg-ts');if(ts)ts.value=v.toFixed(1);
+    };
   }
+  var smEl=document.getElementById('gcfg-sm');
+  if(smEl){
+    smEl.oninput=function(){document.getElementById('gcfg-sm-val').textContent=parseFloat(this.value).toFixed(2);};
+  }
+
+  // Start live status polling (every 2s while modal open)
+  if(gf&&gf.assignedMoverId!=null){
+    _gyroLivePoll(childId,gf);
+    window._gcfgPoll=setInterval(function(){_gyroLivePoll(childId,gf);},2000);
+  }
+}
+
+function _gyroSendLock(childId,fixtureId){
+  // Send CMD_GYRO_CTRL + auto-claim mover
+  var gf=(_fixtures||[]).find(function(f){return f.id===fixtureId;});
+  if(!gf)return;
+  _gyroToggleEnabled(fixtureId,true);
+  // Brief visual feedback then revert
+  var btn=document.getElementById('gcfg-lock-btn');
+  if(btn){
+    btn.textContent='Sent \u2713';btn.style.background='#059669';
+    setTimeout(function(){
+      var b=document.getElementById('gcfg-lock-btn');
+      if(b){b.textContent='Send Lock';b.style.background='';}
+    },2000);
+  }
+}
+
+function _gyroLivePoll(childId,gf){
+  var el=document.getElementById('gcfg-live');
+  if(!el)return;  // modal closed
+  ra('GET','/api/mover-control/status',null,function(d){
+    if(!d||!document.getElementById('gcfg-live'))return;
+    var claim=(d.claims||[]).find(function(c){return c.moverId===gf.assignedMoverId;});
+    if(claim){
+      var age=claim.lastDataAge!=null?claim.lastDataAge:99;
+      var stale=age>5;
+      var stateLabel=claim.state==='streaming'?(claim.calibrated?'Streaming (calibrated \u2713)':'Streaming')
+                    :claim.state==='calibrating'?'Calibrating...'
+                    :'Claimed';
+      el.innerHTML=(stale?'\u25cb ':'<span style="color:#22c55e">\u25cf </span>')
+        +'<b>'+escapeHtml(claim.deviceName)+'</b> \u2014 '+stateLabel
+        +' <span style="color:#64748b">('+age.toFixed(1)+'s ago)</span>'
+        +' <button class="btn btn-off" onclick="ra(\'POST\',\'/api/mover-control/release\',{moverId:'
+        +gf.assignedMoverId+'},function(){_gyroConfigModal('+childId+')})" style="font-size:.72em;margin-left:.4em">Release</button>';
+      el.style.borderColor=stale?'#92400e':'#059669';
+    }else{
+      el.innerHTML='\u25cb Not connected';
+      el.style.borderColor='#1e293b';
+    }
+  });
 }
 
 function _gyroConfigSave(childId){
@@ -1027,7 +1111,7 @@ function _gyroConfigSave(childId){
   if(!gf&&moverId!=null){
     // Create new gyro fixture with mover assignment
     var mover=(_fixtures||[]).find(function(f){return f.id===moverId;});
-    ra('POST','/api/fixtures',{name:(name||'Gyro')+' → '+(mover?mover.name:'Mover'),fixtureType:'gyro',type:'point',gyroChildId:childId,assignedMoverId:moverId,gyroEnabled:false},function(r){
+    ra('POST','/api/fixtures',{name:(name||'Gyro')+' \u2192 '+(mover?mover.name:'Mover'),fixtureType:'gyro',type:'point',gyroChildId:childId,assignedMoverId:moverId,gyroEnabled:false},function(r){
       if(r&&r.ok){document.getElementById('hs').textContent='Gyro configured';closeModal();loadSetup();}
       else document.getElementById('hs').textContent='Failed: '+(r&&r.err||'unknown');
     });
@@ -1035,7 +1119,13 @@ function _gyroConfigSave(childId){
     // Update existing fixture — mover + tuning
     var body={};
     if(moverId!==undefined)body.assignedMoverId=moverId;
-    // Tuning fields
+    // Speed slider → both panScale and tiltScale
+    var speedEl=document.getElementById('gcfg-speed');
+    if(speedEl){
+      var speed=parseFloat(speedEl.value);
+      body.panScale=speed;body.tiltScale=speed;
+    }
+    // Advanced overrides (if user opened the details)
     var pc=document.getElementById('gcfg-pc');if(pc)body.panCenter=parseFloat(pc.value);
     var tc=document.getElementById('gcfg-tc');if(tc)body.tiltCenter=parseFloat(tc.value);
     var ps=document.getElementById('gcfg-ps');if(ps)body.panScale=parseFloat(ps.value);

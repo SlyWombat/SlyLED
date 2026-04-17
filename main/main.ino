@@ -316,10 +316,12 @@ void loop() {
   handleClient();   // HTTP — config UI, /dmx/set, /dmx/channels
 
 #elif defined(BOARD_GYRO)
+  pollUDP();        // receive PING, CMD_GYRO_CTRL, RECAL, OTA
   gyroUIUpdate();
+  yield();  // feed watchdog between heavy operations
   gyroUdpUpdate();
   handleClient();
-  delay(10);
+  delay(5);
 
 #else  // ESP32
   handleClient();

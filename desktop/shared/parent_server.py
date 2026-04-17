@@ -696,40 +696,45 @@ def _udp_listener():
         elif cmd == CMD_GYRO_ORIENT and len(data) >= 16:
             # GyroOrientPayload: roll100(2) pitch100(2) yaw100(2) fps(1) flags(1)
             roll100, pitch100, yaw100, fps, flags = struct.unpack_from("<hhhBB", data, 8)
-            with _gyro_lock:
-                _gyro_state[ip] = {
-                    "roll":  roll100  / 100.0,
-                    "pitch": pitch100 / 100.0,
-                    "yaw":   yaw100   / 100.0,
-                    "fps":   fps,
-                    "flags": flags,
-                    "ts":    time.time(),
-                }
-            log.debug("GYRO_ORIENT from %s: R=%.1f P=%.1f Y=%.1f fps=%d",
-                      ip, roll100/100.0, pitch100/100.0, yaw100/100.0, fps)
-            # Route to unified mover control engine (#468)
-            if _mover_engine:
-                _gf = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
-                            and f.get("gyroChildId") is not None
-                            and next((c for c in _children if c["id"] == f["gyroChildId"]
-                                      and c.get("ip") == ip), None)), None)
-                if _gf and _gf.get("assignedMoverId"):
-                    _mover_engine.orient(_gf["assignedMoverId"], f"gyro-{ip}",
-                                         roll100/100.0, pitch100/100.0, yaw100/100.0)
+
+            # flags bit 3 = stop signal → release claim + blackout
+            if flags & 0x08:
+                log.info("GYRO_STOP from %s — releasing claim", ip)
+                if _mover_engine:
+                    _gf = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
+                                and f.get("gyroChildId") is not None
+                                and next((c for c in _children if c["id"] == f["gyroChildId"]
+                                          and c.get("ip") == ip), None)), None)
+                    if _gf and _gf.get("assignedMoverId"):
+                        _mover_engine.release(_gf["assignedMoverId"], f"gyro-{ip}",
+                                              blackout=True)
+            else:
+                with _gyro_lock:
+                    _gyro_state[ip] = {
+                        "roll":  roll100  / 100.0,
+                        "pitch": pitch100 / 100.0,
+                        "yaw":   yaw100   / 100.0,
+                        "fps":   fps,
+                        "flags": flags,
+                        "ts":    time.time(),
+                    }
+                log.debug("GYRO_ORIENT from %s: R=%.1f P=%.1f Y=%.1f fps=%d",
+                          ip, roll100/100.0, pitch100/100.0, yaw100/100.0, fps)
+                # Route to unified mover control engine (#468)
+                if _mover_engine:
+                    _gf = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
+                                and f.get("gyroChildId") is not None
+                                and next((c for c in _children if c["id"] == f["gyroChildId"]
+                                          and c.get("ip") == ip), None)), None)
+                    if _gf and _gf.get("assignedMoverId"):
+                        _mover_engine.orient(_gf["assignedMoverId"], f"gyro-{ip}",
+                                             roll100/100.0, pitch100/100.0, yaw100/100.0)
         elif cmd == CMD_GYRO_COLOR and len(data) >= 12:
             # GyroColorPayload: r(1) g(1) b(1) flags(1)
             r, g, b, flags = struct.unpack_from("<BBBB", data, 8)
             flash = bool(flags & 0x01)
             log.info("GYRO_COLOR from %s: r=%d g=%d b=%d flash=%s", ip, r, g, b, flash)
             _apply_gyro_color(ip, r, g, b, flash)
-            # Also route to engine
-            if _mover_engine:
-                _gf2 = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
-                             and f.get("gyroChildId") is not None
-                             and next((c for c in _children if c["id"] == f["gyroChildId"]
-                                       and c.get("ip") == ip), None)), None)
-                if _gf2 and _gf2.get("assignedMoverId"):
-                    _mover_engine.set_color(_gf2["assignedMoverId"], f"gyro-{ip}", r, g, b)
         elif cmd == CMD_GYRO_CALIBRATE and len(data) >= 15:
             # GyroCalibratePayload: calibrating(1) roll100(2) pitch100(2) yaw100(2)
             calibrating, roll100, pitch100, yaw100 = struct.unpack_from("<Bhhh", data, 8)
@@ -794,10 +799,8 @@ def start_background_tasks():
         threading.Thread(target=_periodic_ping, daemon=True).start()
     else:
         _startup_check_done = True
-    # Start gyro engine if any gyro fixtures exist
-    if any(f.get("fixtureType") == "gyro" for f in _fixtures):
-        from gyro_engine import init_gyro_engine
-        init_gyro_engine(_artnet, _sacn, _gyro_state, _gyro_lock, _fixtures, _children)
+    # Legacy gyro_engine.py removed — all gyro control goes through MoverControlEngine
+    # (mover_control.py) which handles claim/release, calibrate, orient, and color.
 
 @app.get("/api/children")
 def api_children():
@@ -1347,7 +1350,8 @@ def api_gyro_enable(child_id):
                             pan_scale=gf.get("panScale", 1.0),
                             tilt_scale=gf.get("tiltScale", 1.0),
                             smoothing=gf.get("smoothing", 0.15))
-        _mover_engine.start_stream(gf["assignedMoverId"], device_id)
+        # Don't start_stream here — light stays off until user presses
+        # START on gyro and first CMD_GYRO_ORIENT arrives
     return jsonify(ok=True)
 
 @app.post("/api/gyro/<int:child_id>/disable")
@@ -5303,8 +5307,15 @@ def api_fixtures_live():
                                         pass
                                 break
                         break
-            entry["active"] = (entry["r"] > 0 or entry["g"] > 0
-                               or entry["b"] > 0 or entry["dimmer"] > 0)
+            # Active = producing visible light.  For color-wheel-only fixtures the
+            # r/g/b are inferred from the wheel slot and don't mean the beam is on —
+            # only dimmer > 0 matters.  For RGB fixtures check actual channel values.
+            has_rgb_ch = "red" in ch_map
+            if has_rgb_ch:
+                entry["active"] = (entry["r"] > 0 or entry["g"] > 0
+                                   or entry["b"] > 0 or entry["dimmer"] > 0)
+            else:
+                entry["active"] = entry["dimmer"] > 0
             # DMX address info for display
             entry["dmxAddr"] = f"U{uni_num}.{addr}"
         elif ft == "led":
