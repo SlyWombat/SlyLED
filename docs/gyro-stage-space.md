@@ -14,25 +14,36 @@ Current implementation in `desktop/shared/mover_control.py` is **delta-based in 
 - On calibrate-end (or auto-start), store `ref_roll/pitch/yaw` + `ref_pan/tilt`.
 - Per orient update: compute `(cur_az - ref_az, cur_el - ref_el)` via `_euler_to_aim()`, scale by `panScale/tiltScale`, add to `ref_pan/tilt`.
 
-This treats the remote's roll axis as pan and pitch axis as tilt, regardless of where the fixture is mounted, whether it's inverted, and where in the stage it sits. Inverted mounts, off-centre fixtures, and diagonal aiming all feel wrong. The Android client hits the same engine so it has the same bug.
+This treats the remote's roll axis as pan and pitch axis as tilt, regardless of where the stage object is mounted, whether it's inverted, or where in the stage it sits. Inverted mounts, off-centre fixtures, and diagonal aiming all feel wrong. The Android client hits the same engine so it has the same bug. The architecture also fuses two concerns — "the remote's orientation in stage space" and "what pan/tilt value to send to this specific mover" — into a single code path, which is why one can't exist without the other today.
 
-The user model is:
+The user model (verbatim from #484):
 
-> The mover is currently pointed at a known stage vector. Calibration aligns the remote's current forward vector *with that same stage vector*. From that moment on, the remote's orientation **is** the mover's aim direction in stage space. Any rotation of the remote should rotate the mover's aim through the same angle in stage space.
+> The selected stage object (eg moving head) is currently oriented at its known orientation vector. Calibration is where the remote is moved without the stage object moving so the user aligns the remote's current forward vector with that same stage object vector. From that moment on, the remote's orientation is known in stage space. Features then build upon this accurate representation of this object. The first feature is that a selected moving head follows the same direction vector the remote is.
 
-There is no `panScale` in that model — it is 1:1 in stage angles by construction.
+Key distinctions this model draws, each of which must be reflected in the architecture:
+
+1. **The calibration target is any stage object with an orientation vector.** A moving head is the first use case, not the only one. Anything in the stage with a forward direction (mover aim, prop facing, camera bore-sight) can be the reference. The calibration math must not bake in "mover" as an assumption.
+2. **During calibration the stage object does not move.** Only the remote moves. The user physically rotates the remote until its forward direction matches the stage object's known vector, then signals done. The engine must hold the stage object still during the calibration window (no DMX updates from timelines, shows, or other sources to the target fixture).
+3. **After calibration, the remote's orientation in stage space is a primitive.** It is a first-class property of the remote — `remote.R_world_to_stage` — independent of any mover or consumer. Queryable by anyone.
+4. **Consumer features read the primitive.** "A selected moving head follows the same direction vector the remote is" is **feature #1** built on the primitive. Others that will come later (record a motion path, drive a floor spot, aim a tracking camera, snap-to-object) read the same primitive. The primitive owes them nothing except "here's where the remote is pointing, in stage coordinates."
+5. **1:1 in stage angles.** No `panScale` — rotation of the remote by θ degrees in stage rotates the consumer's output by θ degrees in stage.
+
+These five points are the spec. The rest of this document is how to realise them.
 
 ## 2. Goals and non-goals
 
 **Goals**
-- 1:1 mapping from remote rotation to mover aim rotation, measured in stage angles.
+- **Primitive:** remote orientation in stage space is a standalone, queryable property of each remote. Not coupled to any mover or consumer.
+- **Calibration** is against any stage object with an orientation vector, not hard-coded to movers. Stage object is held still by the engine during calibration.
+- **Feature #1 — mover-follow:** 1:1 mapping from remote rotation to mover aim rotation in stage angles. Shipped alongside the primitive, but isolated from it.
 - Inverted / angled fixture mounts are handled by the mount rotation matrix, not per-fixture flip flags.
 - One pipeline handles both ESP32 puck and Android phone.
-- Each active remote is a first-class stage-space object with a visible aim ray in the 3D viewport, for debugging and for operator feedback.
+- Each active remote is a first-class stage-space object (position + orientation) with a visible aim ray in the 3D viewport.
 
 **Non-goals (v1)**
-- Absolute north-referenced control (point phone at a real-world direction, fixture aims there regardless of where the operator moved). v1 is anchored by explicit calibration.
-- Simultaneous control of multiple movers by one remote.
+- Consumer features beyond mover-follow (record/playback of remote paths, floor-spot aiming, camera slewing, snap-to-object). These are downstream and live in their own issues once the primitive exists.
+- Simultaneous control of multiple consumers from one remote.
+- Absolute north-referenced control without calibration.
 - Predictive tracking / latency compensation.
 - Automatic drift correction for the ESP32 (no magnetometer). Re-calibration is the mitigation.
 
@@ -102,27 +113,33 @@ Origin `(0,0,0)` = floor, stage right, back wall. All components (calibration, r
 
 The server pipeline treats all inputs as a rotation (quaternion internally) from "remote world" to "remote body." What differs is how stable the remote's world-frame is over time — that's a UX concern, not a math concern.
 
-## 4. Calibration math
+## 4. Primitive — remote orientation in stage space
 
-**Entry point:** `POST /api/mover-control/calibrate-end` (or equivalent on CMD_GYRO_CALIBRATE).
+The primitive has two operations: `calibrate(remote, target)` sets `remote.R_world_to_stage`, and `update(remote, orient_sample)` refreshes `remote.aim_stage` per incoming sensor frame. No mover, no DMX, no consumer at this layer.
 
-At calibrate-end, with the operator holding the remote so it visually matches the mover's current aim:
+### 4.1 Calibration
 
-1. **Read the mover's current pan/tilt.** Source: the last DMX value the engine wrote for this mover's pan/tilt channels, or a safe default `(0.5, 0.5)` if none yet. Call this `(p_norm, t_norm)`.
-2. **Compute aim vector in the mount-local frame** via `pan_tilt_to_ray(p_norm, t_norm, pan_range, tilt_range)` → `aim_mount`.
-3. **Rotate into stage frame** by the fixture's mount rotation:
-   `a_stage = R_mount_to_stage · aim_mount`
-   where `R_mount_to_stage` is built from `fixture.rotation` (Euler deg, intrinsic XYZ).
-4. **Choose the stage "up" reference:**
+**Entry point:** `POST /api/remotes/<id>/calibrate-end` with body `{ "targetObjectId": <id>, "targetKind": "mover" | "fixture" | "object" }`.
+
+**Precondition during the calibration hold window:**
+- Consumer output from this remote is paused (no mover-follow writes).
+- The target stage object is **held still** — any active timeline or show source writing to the target is suppressed until calibration ends or is cancelled. Implementation: on `calibrate-start`, the engine marks the target's output channels as "held" and re-asserts the last written value each tick.
+- The remote continues to stream orientation samples so the engine has fresh data when the user triggers `calibrate-end`.
+
+**Steps on `calibrate-end`:**
+
+1. **Resolve the target's stage-space orientation vector** `a_stage`:
+   - Mover: `a_stage = R_mount_to_stage · pan_tilt_to_ray(p_norm, t_norm, pan_range, tilt_range)` using the last DMX pan/tilt for this fixture. `R_mount_to_stage` built from `fixture.rotation` (Euler deg).
+   - Other stage objects (fixture with a face direction, camera bore-sight, prop facing): `a_stage = R_object_to_stage · object_forward_local`, where `object_forward_local` is that object type's canonical "forward" axis.
+   - Defined in a single resolver `object_orientation_vector(obj) -> (pos, a_stage)` so new object kinds slot in without touching calibration.
+2. **Choose the stage "up" reference:**
    `u_stage = normalize(Z_stage - (Z_stage · a_stage) · a_stage)`
-   (project world-up onto the plane perpendicular to `a_stage`; gives a well-defined "top" direction for the aim).
-5. **Read the remote's current orientation** from the last orient sample:
-   - ESP32: Euler `(roll, pitch, yaw)` → `q_body_to_world` via ZYX.
-   - Android: quaternion directly if the wire format exposes it (see §6); otherwise Euler → quaternion same as ESP32.
-6. **Compute remote forward and up in remote world:**
+   (project stage +Z onto plane perpendicular to `a_stage`; gives a well-defined "top" direction for the aim).
+3. **Read the remote's current orientation** from the last orient sample (see §5 for wire formats), producing a body→world quaternion `q_body_to_world`.
+4. **Compute remote forward and up in remote world:**
    `f_remote = q_body_to_world · [0, 1, 0]ᵀ`  (body +Y = forward)
    `u_remote = q_body_to_world · [0, 0, 1]ᵀ`  (body +Z = up)
-7. **Solve two-axis frame alignment.** Find the rotation `R_world_to_stage` such that:
+5. **Solve two-axis frame alignment.** Find the rotation `R_world_to_stage` such that:
    `R_world_to_stage · f_remote ≈ a_stage`
    `R_world_to_stage · u_remote ≈ u_stage`  (in the plane ⊥ `a_stage`)
 
@@ -141,31 +158,54 @@ At calibrate-end, with the operator holding the remote so it visually matches th
        q2 = quat_from_to(u1, u2)
        return q2 * q1   # apply q1 then q2
    ```
-8. **Store on the claim:**
+   Note: the user model is expressed as a single-vector alignment (align the remote's forward to the object's forward). The math uses two axes (forward + up) because aligning forward alone leaves the remote's rotation about its own forward axis unconstrained, which makes the downstream IK ambiguous. The "up" constraint is a derived engineering requirement, not an addition to the user model — it is how "any position change by the remote is represented correctly in stage space" is made true.
+6. **Store on the remote:**
    ```
-   claim.R_world_to_stage = R_world_to_stage   # quaternion
-   claim.calibrated       = True
-   claim.remote_forward_body_axis = [0, 1, 0]  # convention
-   claim.remote_up_body_axis      = [0, 0, 1]
+   remote.R_world_to_stage = R_world_to_stage   # quaternion
+   remote.calibrated       = True
+   remote.calibrated_at    = now()
+   remote.calibrated_against = {"objectId": ..., "kind": ...}  # for debug/UX
    ```
-9. **Delete the old delta fields.** `ref_roll/pitch/yaw`, `ref_pan/tilt`, `pan_scale`, `tilt_scale` are removed from `MoverClaim` entirely. No compatibility shim.
+7. **Release the target's held output.** Timelines/shows may resume writing to it.
+8. **Delete the old delta fields** from `MoverClaim`: `ref_roll/pitch/yaw`, `ref_pan/tilt`, `pan_scale`, `tilt_scale` are removed. No shim.
 
-## 5. Live update math
+### 4.2 Live primitive update
 
-**Entry point:** `MoverControlEngine.orient()`, called from either UDP (`CMD_GYRO_ORIENT`) or HTTP (`POST /api/mover-control/orient`).
+**Entry points:**
+- UDP `CMD_GYRO_ORIENT` (ESP32) — binary Euler × 100.
+- HTTP `POST /api/remotes/<id>/orient` (Android) — JSON, prefers quaternion (§6).
 
-Per sample (roll, pitch, yaw) or quaternion:
+Per sample:
 
 1. **Build body→world quaternion.**
    ESP32: Euler (ZYX) → quaternion.
-   Android: use the `quat` field directly if present.
-2. **Transform body +Y (forward) and +Z (up) into remote world frame:**
+   Android: use the `quat` field directly if present; else Euler fallback.
+2. **Transform body axes into remote world:**
    `f_world = q_body_to_world · [0, 1, 0]ᵀ`
    `u_world = q_body_to_world · [0, 0, 1]ᵀ`
-3. **Map remote world → stage:**
-   `a_stage = claim.R_world_to_stage · f_world`
-   (`u_stage` can also be derived if needed for a future "roll" axis; v1 only uses forward.)
-4. **Inverse-kinematics: stage aim → pan/tilt.** New helper in `mover_calibrator.py`:
+3. **Map remote world → stage via calibration:**
+   `a_stage = remote.R_world_to_stage · f_world`
+   `u_stage = remote.R_world_to_stage · u_world`  (kept for features that care about roll about the aim axis)
+4. **Store on the remote:**
+   ```
+   remote.aim_stage  = a_stage
+   remote.up_stage   = u_stage
+   remote.last_data  = now()
+   ```
+5. **Notify consumers** — any feature subscribed to this remote (see §5) reads the updated `aim_stage` and acts on it.
+
+That is the entirety of the primitive. Output = a unit aim vector in stage coordinates, plus a timestamp.
+
+## 5. Feature #1 — mover-follow
+
+A consumer of the primitive. Subscribes to a remote, reads `remote.aim_stage` on each update, computes pan/tilt IK against its assigned mover, writes DMX. Contains no orientation logic of its own.
+
+**State:** still lives in `MoverControlEngine`. The claim (device → mover mapping, TTL, streaming lifecycle) stays. What changes is that the engine no longer touches Euler angles — it consumes `remote.aim_stage` directly.
+
+**Per update** (triggered when `remote.aim_stage` changes):
+
+1. Look up the mover fixture (`pos`, `rotation`, `pan_range`, `tilt_range`).
+2. **Inverse-kinematics: stage aim → pan/tilt.** New helper in `mover_calibrator.py`:
    ```python
    def aim_to_pan_tilt(aim_stage, mount_rotation_deg,
                       pan_range=540, tilt_range=270):
@@ -183,14 +223,16 @@ Per sample (roll, pitch, yaw) or quaternion:
        tilt_norm = 0.5 + tilt_deg / tilt_range
        return (clamp01(pan_norm), clamp01(tilt_norm))
    ```
-   Note: this is algebraically the inverse of `pan_tilt_to_ray` when `mount_rotation = identity`. Should be verified by a round-trip test.
-5. **EMA smoothing** (per-fixture `smoothing` field, default 0.15):
+   Algebraically the inverse of `pan_tilt_to_ray` when `mount_rotation = identity`. Round-trip verified by unit test.
+3. **EMA smoothing** (per-fixture `smoothing` field, default 0.15):
    `pan_smooth  += α · (pan_norm  - pan_smooth)`
    `tilt_smooth += α · (tilt_norm - tilt_smooth)`
-   where α = smoothing. (Rename for clarity: 1 - smoothing is the true EMA coefficient; current code uses `alpha = 1 - smoothing`. Keep existing behaviour, document precisely.)
-6. **Write DMX.** Reuse `_write_dmx()` from `mover_control.py` unchanged.
+   where α = `1 - smoothing` as in the current engine. Document the sign convention where the field is defined.
+4. **Write DMX.** Reuse `_write_dmx()` from `mover_control.py` unchanged.
 
-**No `panScale` / `tiltScale` in the primary path.** The mapping is 1:1 in stage angles by construction.
+**No `panScale` / `tiltScale`.** The feature inherits 1:1 from the primitive.
+
+Future consumer features (floor-spot follow, record/replay, camera slewing, snap-to-object) implement their own step 2+ against the same `remote.aim_stage`. The primitive does not change.
 
 ## 6. Wire format decision
 
@@ -220,63 +262,100 @@ Engine prefers `quat` when present, falls back to Euler.
 
 ## 7. Remote object schema
 
-Each active remote is an ephemeral stage-space object while claimed. Lifetime = claim lifetime. Not persisted.
+A remote is a first-class stage-space object — not an attribute of a claim. It owns its own orientation state (the primitive). Consumer features like mover-follow reference a remote by id; they don't store rotation data.
 
-### 7.1 In-memory fields on `MoverClaim`
+### 7.1 Persistence
 
-Add to `desktop/shared/mover_control.py::MoverClaim`:
+Remotes appear in the layout alongside fixtures, so operators can place a puck or phone at its known position and the viewport can render it.
 
-| Field | Type | Purpose |
-|-------|------|---------|
-| `remote_kind` | `"gyro-puck" \| "phone"` | Icon selection in the viewport |
-| `remote_pos_stage` | `[x, y, z]` mm | Operator position; default stage centre at head height |
-| `R_world_to_stage` | quaternion `[w, x, y, z]` | Calibration result |
-| `calibrated` | bool | Existing, reused |
-| `last_quat_world` | quaternion | Most recent remote orientation in remote world frame |
-| `last_aim_stage` | `[dx, dy, dz]` | Cached aim vector for viewport; updated per orient sample |
+Stored in `desktop/shared/data/remotes.json` (new file) or a new array in the existing layout JSON, whichever fits the existing persistence pattern (resolve during implementation):
 
-Existing `ref_*`, `pan_scale`, `tilt_scale` fields on `MoverClaim` are deleted in the same change — no retention, no shim.
-
-### 7.2 Read API
-
-New endpoint (or extend existing `/api/mover-control/status`):
-
-```
-GET /api/remotes/live
-->
+```json
 {
   "remotes": [
     {
-      "deviceId":     "gyro-192.168.10.201",
-      "kind":         "gyro-puck",
-      "moverId":      3,
-      "moverName":    "Stage Left MH",
-      "claimState":   "streaming",
-      "calibrated":   true,
-      "lastDataAge":  0.12,
-      "pos":          [1500, 2100, 1600],
-      "aim":          [0.20, 0.80, -0.55]
+      "id":   1,
+      "name": "Stage Left Puck",
+      "kind": "gyro-puck",
+      "deviceId": "gyro-192.168.10.201",
+      "pos":  [1500, 2100, 1600],
+      "rot":  [0, 0, 0]
     }
   ]
 }
 ```
 
-Frontend polls this while the 3D viewport is visible (reuse the existing `/api/fixtures/live` polling cadence ~10Hz) or wires into the same SSE/WebSocket channel if/when one exists.
+`pos` is operator position in stage mm. Entered from the layout UI (preferred) or defaulted to stage centre at head height (`stageW/2, stageD*0.7, 1600`) on first appearance if the user hasn't placed it. `rot` is an optional mounting orientation for static remotes; most remotes leave it identity since orientation is driven live by the sensor.
+
+### 7.2 Runtime fields (not persisted)
+
+Attached to the remote record at runtime by the engine:
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `R_world_to_stage` | quaternion `[w, x, y, z]` | Calibration result. Persist to `remotes.json` on calibrate-end so a reboot doesn't force re-calibration (decision — keep across sessions or wipe on startup?). |
+| `calibrated` | bool | Whether `R_world_to_stage` is valid. |
+| `calibrated_against` | `{objectId, kind}` | Debug / UX — which object was used for the last calibration. |
+| `last_quat_world` | quaternion | Most recent sensor orientation in remote world frame. |
+| `aim_stage` | `[dx, dy, dz]` | Primitive output — aim unit vector in stage coords. |
+| `up_stage` | `[dx, dy, dz]` | Stage-space "up" at the aim (for future roll-sensitive features). |
+| `last_data` | float timestamp | Freshness indicator for the viewport. |
+| `connection_state` | `"idle" \| "armed" \| "streaming" \| "stale"` | Lifecycle shown in viewport + UI. |
+
+The `MoverClaim` in the engine becomes lean: just `(mover_id, remote_id, state, last_write_ts, smoothing)`. No orientation fields. Read orientation from `remotes[remote_id].aim_stage` on each tick.
+
+### 7.3 Read API
+
+```
+GET /api/remotes                          -> static list (pos, kind, name)
+GET /api/remotes/live                     -> runtime state (aim, calibration, claim, freshness)
+POST /api/remotes/<id>                    -> edit pos/name
+POST /api/remotes/<id>/calibrate-start    -> begin calibration (holds target object)
+POST /api/remotes/<id>/calibrate-end      -> compute R_world_to_stage
+POST /api/remotes/<id>/orient             -> push orientation sample (Android); ESP32 keeps UDP
+DELETE /api/remotes/<id>                  -> remove
+```
+
+`/api/remotes/live` response shape:
+
+```json
+{
+  "remotes": [
+    {
+      "id":         1,
+      "deviceId":   "gyro-192.168.10.201",
+      "kind":       "gyro-puck",
+      "name":       "Stage Left Puck",
+      "pos":        [1500, 2100, 1600],
+      "aim":        [0.20, 0.80, -0.55],
+      "calibrated": true,
+      "calibratedAgainst": {"objectId": 3, "kind": "mover"},
+      "connectionState": "streaming",
+      "lastDataAge":     0.12,
+      "consumers": [
+        {"feature": "mover-follow", "targetId": 3, "targetName": "Stage Left MH"}
+      ]
+    }
+  ]
+}
+```
+
+Frontend polls at the `/api/fixtures/live` cadence (~10 Hz) while the 3D viewport is visible.
 
 ## 8. 3D debug visualisation
 
-In the Three.js viewport (`desktop/shared/spa/js/scene-3d.js`), add a `remotes` group parallel to fixtures / temporal objects:
+In the Three.js viewport (`desktop/shared/spa/js/scene-3d.js`), add a `remotes` group parallel to fixtures and temporal objects:
 
 - **Icon at `pos`:** small sprite — disc for gyro puck, rounded rectangle for phone.
 - **Ray from `pos` along `aim`** of configurable length (default 3000 mm or until it hits floor/wall, whichever is first — reuse `ray_surface_intersect` at `mover_calibrator.py:660`).
-- **Colour coding by claim state + data age:**
+- **Colour coding by connection state + data age:**
   - Green = streaming, fresh (age < 2s)
   - Amber = streaming, stale (age 2–10s)
-  - Blue = claimed, not yet streaming
-  - Grey / fade-out = released (removed next poll)
-- **Label:** `{deviceShortName} → {moverName}`
+  - Blue = armed (calibrated, no live data yet)
+  - Grey = idle / uncalibrated
+- **Label:** `{remoteName} → {consumer targets}`  (e.g. "Stage Left Puck → Stage Left MH").
 
-Rationale: temporal objects currently only carry position + bounding box (`parent_server.py:4072–4111`). Remotes have orientation and a ray, so a dedicated group is cleaner than shoehorning into temporals.
+Rationale: temporal objects currently only carry position + bounding box (`parent_server.py:4072–4111`). Remotes have orientation and a ray, so a dedicated group is cleaner than shoehorning into temporals. The viewport rendering is a pure consumer of `/api/remotes/live` — no coupling to mover-follow.
 
 ## 9. Clean cut — no backwards compatibility
 
@@ -304,9 +383,14 @@ Old files opened by a v2 build get the deleted fields silently stripped on load,
 - Gyro config modal (`desktop/shared/spa/js/setup-ui.js`): remove the Speed slider, the Advanced Tuning `<details>` block, and every legacy numeric input. Remaining controls: Send Lock, live status card, Smoothing slider, mover assignment, name.
 - Android controller overlay: same — no Speed/pan/tilt scale UI. Smoothing slider is the only tuning control.
 
-### 9.4 Engine (`mover_control.py`)
+### 9.4 Engine split
 
-Replace the current `orient` / `_tick` body outright. Delete `_euler_to_aim`, the `calim.calibrated` delta-reference capture, and the `pan_scale`/`tilt_scale` multipliers. The file shrinks.
+The current `mover_control.py` owns both the primitive and the feature. v2 splits them:
+
+- New `desktop/shared/remote_orientation.py` — primitive. `Remote` class (fields in §7), `calibrate()`, `update(orient_sample)`, persistence I/O. Knows nothing about movers.
+- `desktop/shared/mover_control.py` — feature-only after the split. Each tick: read `Remote.aim_stage` from the primitive module for the remote id in the claim, run IK, write DMX. Delete `_euler_to_aim`, the `claim.calibrated` delta-reference capture, and the `pan_scale`/`tilt_scale` multipliers.
+
+Both files shrink compared to today's combined file.
 
 ### 9.5 Firmware
 
@@ -332,9 +416,20 @@ Android APK in v2 adds the `quat` field to `POST /api/mover-control/orient` (§6
 
 ### 10.2 Integration tests
 
-- End-to-end via `MoverControlEngine`: claim → calibrate-end with synthetic DMX pan/tilt → orient samples → assert DMX output matches expected curve.
-- UDP: replay a recorded `CMD_GYRO_ORIENT` trace. Compare engine output to a golden pan/tilt trace captured from the manual hardware test.
-- HTTP: POST recorded Android quaternion samples to `/api/mover-control/orient`; same assertions.
+Split by layer:
+
+**Primitive (`remote_orientation.py`) — no movers involved:**
+- Calibrate remote against a synthetic stage object with `a_stage = (0, 1, 0)`. Assert `remote.R_world_to_stage · remote_forward = a_stage`.
+- Send 20 orient samples representing a 45° pitch-up rotation. Assert `remote.aim_stage` rotates by 45° about the stage X axis.
+- Calibrate against an object aimed at a diagonal (`(0.5, 0.5, -0.5)` normalised). Verify aim tracks correctly through arbitrary remote motion.
+
+**Feature (`mover-follow` in `mover_control.py`) — consumes primitive:**
+- Stub the primitive with a scripted sequence of `aim_stage` vectors. Assert the DMX buffer contains the expected pan/tilt for each.
+- Inverted mount (`fixture.rotation = [180, 0, 0]`) + downward aim: mover DMX is pan=0.5, tilt=0.5.
+
+**End-to-end:**
+- UDP: replay a recorded `CMD_GYRO_ORIENT` trace through the full stack. Compare DMX output to a golden trace.
+- HTTP: POST recorded Android quaternion samples to `/api/remotes/<id>/orient`; same assertions.
 
 ### 10.3 Hardware tests (`tests/user/gyro-stage-space-test.log`)
 
@@ -357,23 +452,23 @@ Android APK in v2 adds the `quat` field to `POST /api/mover-control/orient` (§6
    - Existing baker / viewport applies `[rx, ry, rz]` as intrinsic XYZ (confirm by reading `desktop/shared/bake_engine.py` / `scene-3d.js`). The IK must use the same order or fixtures that already render correctly will break.
 3. **Android wire format** — ship quaternion in v2 (recommended) or defer and stay Euler? Impacts schedule, not math.
 4. **Remote position input.**
-   - v1: default to stage centre at head height (`stageW/2, stageD * 0.7, 1600`), with a setting in the controller overlay to override. No camera tracking.
+   - v1: default to stage centre at head height (`stageW/2, stageD * 0.7, 1600`), with placement via the layout UI. No camera tracking.
    - Future: phone camera / stage camera auto-locates the operator (post-v2).
 5. **Inverted-mount representation.** If `fixture.rotation = [180, 0, 0]` and `[0, 0, 180]` both represent "ceiling mount" depending on convention, settle on one. Bakers and the manual-calibration wizard (#345–#371 era) already made a choice — match it.
+6. **Calibration target kinds for v1.** Movers are required. Which other objects must be supported on day one — just fixtures with a facing direction, or also arbitrary stage props? Recommend ship with mover + "any fixture with `rotation`" and defer free props to a follow-up.
+7. **Persist `R_world_to_stage` across sessions?** Reboot-stable calibration is nice, but the remote's physical reference (the hand-held pointing direction) is lost on reboot. Recommend: persist, but auto-flag as "stale" after N days and prompt re-calibration.
 
-(Speed slider is deleted — no longer a question.)
-
-Resolving 1–5 is the first milestone; everything downstream is straightforward math implementation.
+Resolving 1–7 is the first milestone; everything downstream is straightforward math implementation.
 
 ## 12. Implementation phasing (after plan is approved)
 
-Split from this issue once the above decisions are recorded. Each phase is a separate PR; together they land as v2.
+Split from this issue once the above decisions are recorded. Each phase is a separate PR; they land as v2 in order. The primitive comes first and ships standalone so features can be written against it in isolation.
 
-1. **Math foundation.** `aim_to_pan_tilt`, `frame_align`, `quat_from_euler_zyx`, extended `pan_tilt_to_ray(mount_rotation)`. Unit tests.
-2. **Engine rewrite.** `MoverControlEngine.calibrate_end` + `.orient` replaced outright. Old delta fields and `_euler_to_aim` deleted in the same commit. Integration tests.
+1. **Math foundation.** `aim_to_pan_tilt`, `frame_align`, `quat_from_euler_zyx`, extended `pan_tilt_to_ray(mount_rotation)`. Unit tests. Zero runtime impact.
+2. **Primitive — `remote_orientation.py`.** New module. `Remote` class, `calibrate()`, `update()`, persistence to `remotes.json`. `GET /api/remotes`, `/live`, `/calibrate-*`, `/orient`. Target-holding during calibration. Integration tests against a stub consumer.
 3. **Wire format.** Android adds `quat` to orient payload. ESP32 unchanged.
-4. **Remote object + API.** `MoverClaim` fields, `GET /api/remotes/live`.
-5. **3D debug visualisation.** `scene-3d.js` renders remotes with aim rays.
+4. **3D debug visualisation.** `scene-3d.js` renders remotes + aim rays from `/api/remotes/live`. This lands before feature-rewrite so we can **see** whether the primitive is right before plumbing it into DMX. If it looks wrong in the viewport, fix the primitive, not the feature.
+5. **Feature rewrite — mover-follow.** `mover_control.py` reduced to the IK-and-DMX consumer. Reads `aim_stage` from the primitive. Delete `_euler_to_aim`, delta fields, `pan_scale`/`tilt_scale`. Integration + hardware tests.
 6. **UI cut.** Delete `panScale` / `tiltScale` / `panOffsetDeg` / `tiltOffsetDeg` / `panCenter` / `tiltCenter` from the schema, SPA modals, and Android overlay. Rebase Android parity work (#478–#483) onto the new architecture.
 
-No cleanup release — everything legacy is gone by the end of phase 6.
+No cleanup release — everything legacy is gone by the end of phase 6. Phases 2–4 give a working "calibrate and see the ray move" experience with no moving fixtures involved, which is the cheapest way to shake out the primitive before hardware risk.
