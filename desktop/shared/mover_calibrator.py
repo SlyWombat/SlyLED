@@ -1347,6 +1347,40 @@ def grid_inverse(grid, target_px, target_py, iterations=20):
     return (max(0.0, min(1.0, pan)), max(0.0, min(1.0, tilt)))
 
 
+def affine_stage_point(samples, pan, tilt):
+    """Forward affine fit: (pan, tilt) → (stageX, stageY, stageZ).
+
+    Inverse of affine_pan_tilt. Uses the same per-fixture manual samples
+    to ask "where in stage is the mover aimed at these DMX values?".
+    Returns (x, y, z) or None with < 2 samples.
+    """
+    if len(samples) < 2:
+        return None
+    pts = []
+    for s in samples:
+        if isinstance(s, dict):
+            pts.append((s["pan"], s["tilt"], s["stageX"], s["stageY"],
+                        s.get("stageZ", 0)))
+        else:
+            pts.append((s[0], s[1], s[2], s[3], s[4] if len(s) >= 5 else 0))
+
+    import numpy as np
+    A = np.array([[p[0], p[1], 1.0] for p in pts])
+    x_vals = np.array([p[2] for p in pts])
+    y_vals = np.array([p[3] for p in pts])
+    z_vals = np.array([p[4] for p in pts])
+    try:
+        x_coeffs, _, _, _ = np.linalg.lstsq(A, x_vals, rcond=None)
+        y_coeffs, _, _, _ = np.linalg.lstsq(A, y_vals, rcond=None)
+        z_coeffs, _, _, _ = np.linalg.lstsq(A, z_vals, rcond=None)
+    except Exception:
+        return None
+    x = float(x_coeffs[0] * pan + x_coeffs[1] * tilt + x_coeffs[2])
+    y = float(y_coeffs[0] * pan + y_coeffs[1] * tilt + y_coeffs[2])
+    z = float(z_coeffs[0] * pan + z_coeffs[1] * tilt + z_coeffs[2])
+    return (x, y, z)
+
+
 def affine_pan_tilt(samples, target_x, target_y, target_z=0):
     """Compute pan/tilt for a stage position using affine transform from manual samples.
 

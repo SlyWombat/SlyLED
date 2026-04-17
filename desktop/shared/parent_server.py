@@ -4765,6 +4765,13 @@ def _mover_current_aim_stage(mover):
     """Read the mover's current pan/tilt from the universe buffer and
     convert it to a unit aim vector in stage coordinates.
 
+    Preference order:
+      1. Calibration grid (`affine_stage_point`) — honours the fixture's
+         actual physical mount including `mountedInverted` and any per-
+         fixture orientation quirks the operator encoded in samples.
+      2. Pure `pan_tilt_to_ray` — assumes the profile's mechanical centre
+         is stage forward.
+
     Falls back to `(0.5, 0.5)` center when the DMX buffer has no data or
     the profile lookup fails. Decision #6 scopes v1 to movers only.
     """
@@ -4794,6 +4801,25 @@ def _mover_current_aim_stage(mover):
 
         pan_norm = _read("pan")
         tilt_norm = _read("tilt")
+
+    # Prefer the per-fixture calibration grid when available — it encodes
+    # mountedInverted + any yoke quirks via stage-space samples, whereas
+    # pan_tilt_to_ray assumes DMX centre = mount-local forward.
+    cal = _mover_cal.get(str(mover.get("id")))
+    if cal and cal.get("samples") and len(cal["samples"]) >= 2:
+        try:
+            from mover_calibrator import affine_stage_point
+            pt = affine_stage_point(cal["samples"], pan_norm, tilt_norm)
+            if pt is not None:
+                fx = mover.get("x", 0)
+                fy = mover.get("y", 0)
+                fz = mover.get("z", 0)
+                vx, vy, vz = pt[0] - fx, pt[1] - fy, pt[2] - fz
+                mag = math.sqrt(vx*vx + vy*vy + vz*vz)
+                if mag > 1e-6:
+                    return (vx/mag, vy/mag, vz/mag)
+        except Exception:
+            pass
 
     return _pan_tilt_to_ray(
         pan_norm, tilt_norm,
