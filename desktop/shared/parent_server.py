@@ -4824,9 +4824,13 @@ def _mover_current_aim_stage(mover):
             from mover_calibrator import affine_stage_point
             pt = affine_stage_point(cal["samples"], pan_norm, tilt_norm)
             if pt is not None:
-                fx = mover.get("x", 0)
-                fy = mover.get("y", 0)
-                fz = mover.get("z", 0)
+                # Fixture positions live in the layout keyed by fixture id,
+                # NOT on the fixture object itself.
+                layout_pos = next((c for c in (_layout.get("children") or [])
+                                   if c.get("id") == mover.get("id")), None) or {}
+                fx = layout_pos.get("x", mover.get("x", 0))
+                fy = layout_pos.get("y", mover.get("y", 0))
+                fz = layout_pos.get("z", mover.get("z", 0))
                 vx, vy, vz = pt[0] - fx, pt[1] - fy, pt[2] - fz
                 mag = math.sqrt(vx*vx + vy*vy + vz*vz)
                 if mag > 1e-6:
