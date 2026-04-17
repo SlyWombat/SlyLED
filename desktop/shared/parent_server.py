@@ -4728,6 +4728,35 @@ def api_mover_cal_end_ctrl():
     _mover_engine.calibrate_end(mid, did)
     return jsonify(ok=True, aim=list(aim_stage))
 
+@app.post("/api/mover-control/orient")
+def api_mover_orient_compat():
+    """Legacy compat — route orient to the remote primitive (#484 phase 4
+    removed the direct path). Android APKs < this commit hit this
+    endpoint; this thin wrapper keeps them working without an APK update.
+    """
+    body = request.get_json(silent=True) or {}
+    did = body.get("deviceId")
+    if not did:
+        return jsonify(ok=False, err="deviceId required"), 400
+    remote = _remotes.by_device(did)
+    if remote is None:
+        # Auto-register — matches the UDP path's behaviour.
+        remote = _remotes.add(device_id=did, kind=KIND_PHONE, name=did)
+    quat = body.get("quat")
+    try:
+        if quat and len(quat) == 4:
+            remote.update_from_quat(quat)
+        else:
+            remote.update_from_euler_deg(
+                float(body.get("roll", 0.0)),
+                float(body.get("pitch", 0.0)),
+                float(body.get("yaw", 0.0)),
+            )
+    except Exception as e:
+        return jsonify(ok=False, err=str(e)), 400
+    return jsonify(ok=True)
+
+
 @app.post("/api/mover-control/color")
 def api_mover_color():
     body = request.get_json(silent=True) or {}
@@ -4735,6 +4764,24 @@ def api_mover_color():
     did = body.get("deviceId")
     ok = _mover_engine.set_color(mid, did, body.get("r", 255), body.get("g", 255), body.get("b", 255),
                                   dimmer=body.get("dimmer"))
+    return jsonify(ok=ok)
+
+
+@app.post("/api/mover-control/flash")
+def api_mover_flash():
+    """Trigger strobe on a claimed mover (#482 — Android parity).
+
+    Server-side MoverControlEngine.flash() already toggles claim.strobe_active
+    which the tick maps to the fixture's strobe channel. No HTTP endpoint
+    existed before — this exposes it.
+    """
+    body = request.get_json(silent=True) or {}
+    mid = body.get("moverId")
+    did = body.get("deviceId")
+    on = body.get("on", True)
+    if mid is None or not did:
+        return jsonify(ok=False, err="moverId + deviceId required"), 400
+    ok = _mover_engine.flash(mid, did, on=bool(on))
     return jsonify(ok=ok)
 
 @app.get("/api/mover-control/status")

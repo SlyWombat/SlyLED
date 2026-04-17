@@ -211,13 +211,14 @@ class MoverControlEngine:
                 claim.dimmer = dimmer
         return True
 
-    def flash(self, mover_id, device_id):
+    def flash(self, mover_id, device_id, on=True):
         with self._lock:
             claim = self._claims.get(mover_id)
             if not claim or claim.device_id != device_id:
                 return False
-            claim.strobe_active = True
-            claim.dimmer = 255
+            claim.strobe_active = bool(on)
+            if on:
+                claim.dimmer = 255
         return True
 
     # ── Status ───────────────────────────────────────────────────────
