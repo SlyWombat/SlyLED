@@ -720,17 +720,21 @@ def _udp_listener():
             # GyroOrientPayload: roll100(2) pitch100(2) yaw100(2) fps(1) flags(1)
             roll100, pitch100, yaw100, fps, flags = struct.unpack_from("<hhhBB", data, 8)
 
-            # flags bit 3 = stop signal → release claim + blackout
+            # flags bit 3 = stop signal → release claim + blackout + stale cal
             if flags & 0x08:
-                log.info("GYRO_STOP from %s — releasing claim", ip)
+                log.info("GYRO_STOP from %s — releasing claim, clearing cal", ip)
+                did_stop = f"gyro-{ip}"
                 if _mover_engine:
-                    _gf = next((f for f in _fixtures if f.get("fixtureType") == "gyro"
-                                and f.get("gyroChildId") is not None
-                                and next((c for c in _children if c["id"] == f["gyroChildId"]
-                                          and c.get("ip") == ip), None)), None)
-                    if _gf and _gf.get("assignedMoverId"):
-                        _mover_engine.release(_gf["assignedMoverId"], f"gyro-{ip}",
-                                              blackout=True)
+                    gf_stop = _gyro_fixture_for_ip(ip)
+                    if gf_stop and gf_stop.get("assignedMoverId") is not None:
+                        _mover_engine.release(gf_stop["assignedMoverId"],
+                                              did_stop, blackout=True)
+                # Invalidate the primitive's calibration too — next Start
+                # must re-align before the fixture can follow again.
+                remote_stop = _remotes.by_device(did_stop)
+                if remote_stop is not None:
+                    remote_stop.end_session()
+                    _remotes.save()
             else:
                 with _gyro_lock:
                     _gyro_state[ip] = {
