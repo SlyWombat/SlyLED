@@ -853,32 +853,11 @@ def start_background_tasks():
         threading.Thread(target=_periodic_ping, daemon=True).start()
     else:
         _startup_check_done = True
-    # Auto-claim movers for every enabled gyro fixture so the user doesn't
-    # have to re-Send-Lock after every server restart. Claim state lives
-    # in-memory only; the enable flag on the fixture is the persistent source.
-    for f in _fixtures:
-        if f.get("fixtureType") != "gyro":
-            continue
-        if not f.get("gyroEnabled"):
-            continue
-        mid = f.get("assignedMoverId")
-        cid = f.get("gyroChildId")
-        if mid is None or cid is None:
-            continue
-        child = next((c for c in _children if c["id"] == cid), None)
-        if not child or not child.get("ip"):
-            continue
-        did = f"gyro-{child['ip']}"
-        dname = child.get("altName") or child.get("name") or child.get("hostname") or child["ip"]
-        ok, reason = _mover_engine.claim(mid, did, dname, "gyro",
-                                          smoothing=f.get("smoothing", 0.15))
-        if ok:
-            # Jump straight to streaming — the old session's calibration
-            # survived via remotes.json, so the feature can run immediately.
-            _mover_engine.start_stream(mid, did)
-            log.info("Auto-claimed mover %d for gyro %s (%s)", mid, did, dname)
-        else:
-            log.warning("Auto-claim mover %d for gyro %s failed: %s", mid, did, reason)
+    # No auto-claim on boot. The UDP CMD_GYRO_ORIENT handler auto-claims
+    # on the first orient packet from an enabled gyro fixture, which is
+    # the operator pressing Start on the puck. That's what turns the
+    # fixture on — the server staying silent on boot lets the fixture
+    # hold its blackout until the operator actively starts.
 
 @app.get("/api/children")
 def api_children():
