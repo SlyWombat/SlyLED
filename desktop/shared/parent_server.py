@@ -729,6 +729,14 @@ def _udp_listener():
                     if _gf and _gf.get("assignedMoverId"):
                         _mover_engine.orient(_gf["assignedMoverId"], f"gyro-{ip}",
                                              roll100/100.0, pitch100/100.0, yaw100/100.0)
+                # Also route to the remote-orientation primitive (#484 phase 2).
+                # Observer-only for now — the 3D viewport (phase 3) consumes it;
+                # mover-follow keeps using _mover_engine until phase 4.
+                device_id = f"gyro-{ip}"
+                remote = _auto_register_remote(device_id, kind=KIND_PUCK)
+                remote.update_from_euler_deg(
+                    roll100/100.0, pitch100/100.0, yaw100/100.0,
+                )
         elif cmd == CMD_GYRO_COLOR and len(data) >= 12:
             # GyroColorPayload: r(1) g(1) b(1) flags(1)
             r, g, b, flags = struct.unpack_from("<BBBB", data, 8)
@@ -4661,6 +4669,243 @@ def api_mover_status():
 
 # ── End Mover Control ───────────────────────────────────────────────────────
 
+
+# ── Remote Orientation Primitive (#484 phase 2) ─────────────────────────────
+#
+# The primitive layer: each remote is a stage-space object with a calibrated
+# orientation (R_world_to_stage). Feature consumers (mover-follow, etc.) read
+# `remote.aim_stage`; they don't touch raw sensor Euler here.
+#
+# The engine below still runs in parallel — phase 4 will rewrite it to consume
+# this primitive and delete the delta path. For now the primitive observes
+# ingest in parallel so we can verify it with the 3D viz (phase 3) before
+# switching the mover-follow feature over.
+
+from remote_orientation import RemoteRegistry, KIND_PUCK, KIND_PHONE
+from mover_calibrator import pan_tilt_to_ray as _pan_tilt_to_ray
+
+_remotes = RemoteRegistry(data_path=str(DATA / "remotes.json"))
+_remotes.load()
+
+
+def _mover_fixture(object_id):
+    for f in _fixtures:
+        if f.get("id") == int(object_id) and f.get("fixtureType") == "dmx":
+            return f
+    return None
+
+
+def _mover_current_aim_stage(mover):
+    """Read the mover's current pan/tilt from the universe buffer and
+    convert it to a unit aim vector in stage coordinates.
+
+    Falls back to `(0.5, 0.5)` center when the DMX buffer has no data or
+    the profile lookup fails. Decision #6 scopes v1 to movers only.
+    """
+    pan_norm = 0.5
+    tilt_norm = 0.5
+    pid = mover.get("dmxProfileId")
+    prof = _profile_lib.channel_info(pid) if pid else None
+    engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+    if prof and engine:
+        ch_map = prof.get("channel_map", {})
+        channels = prof.get("channels", [])
+        addr = mover.get("dmxStartAddr", 1)
+        uni = mover.get("dmxUniverse", 1)
+        uni_buf = engine.get_universe(uni)
+
+        def _read(axis):
+            offset = ch_map.get(axis)
+            if offset is None:
+                return 0.5
+            ch_def = next((c for c in channels if c.get("type") == axis), None)
+            bits = ch_def.get("bits", 8) if ch_def else 8
+            if bits == 16:
+                hi = uni_buf.get_channel(addr + offset)
+                lo = uni_buf.get_channel(addr + offset + 1)
+                return ((hi << 8) | lo) / 65535.0
+            return uni_buf.get_channel(addr + offset) / 255.0
+
+        pan_norm = _read("pan")
+        tilt_norm = _read("tilt")
+
+    return _pan_tilt_to_ray(
+        pan_norm, tilt_norm,
+        pan_range=mover.get("panRange", 540),
+        tilt_range=mover.get("tiltRange", 270),
+        mount_rotation_deg=mover.get("rotation", [0, 0, 0]),
+    )
+
+
+def _auto_register_remote(device_id, kind=KIND_PUCK):
+    """Return an existing remote for this device or create a fresh one.
+
+    The first time we see a sensor stream from a device we haven't stored
+    yet, stand up a remote at the default position (stage centre at head
+    height — decision #4). The operator can rename or relocate via the
+    layout UI later.
+    """
+    r = _remotes.by_device(device_id)
+    if r is not None:
+        return r
+    # Default position: stage centre at head height
+    stage_w_mm = float(_stage.get("w", 3.0)) * 1000.0
+    stage_d_mm = float(_stage.get("d", 1.5)) * 1000.0
+    pos = [stage_w_mm / 2.0, stage_d_mm * 0.7, 1600.0]
+    name = f"Puck {device_id.split('-', 1)[-1]}" if kind == KIND_PUCK else f"Phone {device_id.split('-', 1)[-1]}"
+    return _remotes.add(name=name, kind=kind, device_id=device_id, pos=pos)
+
+
+# CRUD routes ──────────────────────────────────────────────────────────────
+
+@app.get("/api/remotes")
+def api_remotes_list():
+    return jsonify(remotes=[r.to_persisted_dict() for r in _remotes.list()])
+
+
+@app.post("/api/remotes")
+def api_remotes_create():
+    body = request.get_json(silent=True) or {}
+    kind = body.get("kind", KIND_PUCK)
+    if kind not in (KIND_PUCK, KIND_PHONE):
+        return jsonify(ok=False, err="invalid kind"), 400
+    r = _remotes.add(
+        name=body.get("name", ""),
+        kind=kind,
+        device_id=body.get("deviceId"),
+        pos=body.get("pos"),
+        rot=body.get("rot"),
+    )
+    return jsonify(ok=True, remote=r.to_persisted_dict())
+
+
+@app.post("/api/remotes/<int:remote_id>")
+def api_remotes_update(remote_id):
+    body = request.get_json(silent=True) or {}
+    r = _remotes.update_fields(
+        remote_id,
+        name=body.get("name"),
+        pos=body.get("pos"),
+        rot=body.get("rot"),
+        kind=body.get("kind"),
+        deviceId=body.get("deviceId"),
+    )
+    if r is None:
+        return jsonify(ok=False, err="not found"), 404
+    return jsonify(ok=True, remote=r.to_persisted_dict())
+
+
+@app.delete("/api/remotes/<int:remote_id>")
+def api_remotes_delete(remote_id):
+    r = _remotes.remove(remote_id)
+    return jsonify(ok=r is not None)
+
+
+@app.get("/api/remotes/live")
+def api_remotes_live():
+    return jsonify(remotes=_remotes.live_list())
+
+
+# Calibration ──────────────────────────────────────────────────────────────
+
+@app.post("/api/remotes/<int:remote_id>/calibrate-start")
+def api_remote_calibrate_start(remote_id):
+    """Mark that calibration is in progress.
+
+    v1 does not suppress timeline writes to the target — the design doc's
+    "target held still" precondition is the operator's responsibility for
+    now. Phase 4 (mover-follow rewrite) adds the hold automatically.
+    """
+    r = _remotes.get(remote_id)
+    if r is None:
+        return jsonify(ok=False, err="not found"), 404
+    r.connection_state = "armed"
+    return jsonify(ok=True)
+
+
+@app.post("/api/remotes/<int:remote_id>/calibrate-end")
+def api_remote_calibrate_end(remote_id):
+    """Compute R_world_to_stage against a target stage object.
+
+    Body:
+      { "targetObjectId": <fixture id>, "targetKind": "mover",
+        "roll": deg, "pitch": deg, "yaw": deg }
+    If roll/pitch/yaw are omitted, uses `remote.last_quat_world` from the
+    most recent orient sample.
+    """
+    r = _remotes.get(remote_id)
+    if r is None:
+        return jsonify(ok=False, err="not found"), 404
+    body = request.get_json(silent=True) or {}
+    target_id = body.get("targetObjectId")
+    target_kind = body.get("targetKind", "mover")
+    if target_kind != "mover":
+        return jsonify(ok=False, err="only mover targets in v1 (decision #6)"), 400
+    mover = _mover_fixture(target_id) if target_id is not None else None
+    if mover is None:
+        return jsonify(ok=False, err="target mover not found"), 404
+
+    aim_stage = _mover_current_aim_stage(mover)
+
+    try:
+        r.calibrate(
+            target_aim_stage=aim_stage,
+            target_info={"objectId": mover["id"], "kind": "mover"},
+            roll=body.get("roll"),
+            pitch=body.get("pitch"),
+            yaw=body.get("yaw"),
+        )
+    except ValueError as e:
+        return jsonify(ok=False, err=str(e)), 400
+    _remotes.save()
+    return jsonify(ok=True, remote=r.live_dict())
+
+
+@app.post("/api/remotes/<int:remote_id>/clear-stale")
+def api_remote_clear_stale(remote_id):
+    r = _remotes.get(remote_id)
+    if r is None:
+        return jsonify(ok=False, err="not found"), 404
+    r.clear_stale()
+    return jsonify(ok=True, remote=r.live_dict())
+
+
+@app.post("/api/remotes/<int:remote_id>/end-session")
+def api_remote_end_session(remote_id):
+    r = _remotes.get(remote_id)
+    if r is None:
+        return jsonify(ok=False, err="not found"), 404
+    r.end_session()
+    _remotes.save()
+    return jsonify(ok=True, remote=r.live_dict())
+
+
+@app.post("/api/remotes/<int:remote_id>/orient")
+def api_remote_orient(remote_id):
+    """Push an orientation sample from Android (HTTP) or tests.
+
+    v1 accepts Euler roll/pitch/yaw (degrees, ZYX intrinsic). A follow-up
+    issue adds native quaternion support.
+    """
+    r = _remotes.get(remote_id)
+    if r is None:
+        return jsonify(ok=False, err="not found"), 404
+    body = request.get_json(silent=True) or {}
+    quat = body.get("quat")
+    if quat and len(quat) == 4:
+        r.update_from_quat(quat)
+    else:
+        r.update_from_euler_deg(
+            float(body.get("roll", 0.0)),
+            float(body.get("pitch", 0.0)),
+            float(body.get("yaw", 0.0)),
+        )
+    return jsonify(ok=True, aim=list(r.aim_stage) if r.aim_stage else None,
+                    connectionState=r.connection_state)
+
+
+# ── End Remote Orientation Primitive ────────────────────────────────────────
+
 def _apply_profile_defaults(engine):
     """Apply profile channel default values to all DMX fixtures."""
     for f in _fixtures:
@@ -5310,7 +5555,9 @@ def api_fixtures_live():
             # Active = producing visible light.  For color-wheel-only fixtures the
             # r/g/b are inferred from the wheel slot and don't mean the beam is on —
             # only dimmer > 0 matters.  For RGB fixtures check actual channel values.
-            has_rgb_ch = "red" in ch_map
+            # Generic (profile-less) DMX fixtures also populate r/g/b from raw
+            # channels above, so treat them as RGB for the active check.
+            has_rgb_ch = (not ch_map) or ("red" in ch_map)
             if has_rgb_ch:
                 entry["active"] = (entry["r"] > 0 or entry["g"] > 0
                                    or entry["b"] > 0 or entry["dimmer"] > 0)
