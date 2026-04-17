@@ -291,29 +291,35 @@ class MoverControlEngine:
         # Channel defaults + strobe override.
         for ch in prof_info.get("channels", []):
             ch_type = ch.get("type", "")
-            default = ch.get("default")
-            if default is None or default <= 0:
-                continue
             if ch_type in ("pan", "tilt", "dimmer", "red", "green", "blue",
                            "color-wheel"):
                 continue
-            if ch_type == "strobe" and claim.strobe_active:
-                uni_buf.set_channel(addr + ch.get("offset", 0),
-                                    self._find_strobe_value(ch))
-            else:
-                uni_buf.set_channel(addr + ch.get("offset", 0), int(default))
+            default = ch.get("default")
+            # Strobe: always honour the strobe_active flag, even when the
+            # profile's default is None (which many fixtures leave blank).
+            if ch_type == "strobe":
+                if claim.strobe_active:
+                    uni_buf.set_channel(addr + ch.get("offset", 0),
+                                        self._find_strobe_value(ch))
+                elif default is not None and default > 0:
+                    uni_buf.set_channel(addr + ch.get("offset", 0), int(default))
+                continue
+            # Other channels: write the profile default when present.
+            if default is None or default <= 0:
+                continue
+            uni_buf.set_channel(addr + ch.get("offset", 0), int(default))
 
     @staticmethod
     def _find_strobe_value(ch):
-        caps = ch.get("capabilities", [])
-        for cap in caps:
+        """DMX value to send when strobe_active. Prefers a ShutterStrobe
+        capability with 'strobe' in its label, falls back to channel
+        midpoint 128 otherwise (works for most generic intensity-mapped
+        strobe channels)."""
+        for cap in ch.get("capabilities", []) or []:
             label = (cap.get("label") or "").lower()
             rng = cap.get("range", [0, 255])
             if cap.get("type") == "ShutterStrobe" and "strobe" in label:
                 return (rng[0] + rng[1]) // 2
-        default = ch.get("default", 255)
-        if default > 200 or default < 50:
-            return 128
         return 128
 
     def _blackout_mover(self, mover_id):

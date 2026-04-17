@@ -232,6 +232,26 @@ _live_events = {}
 _gyro_state = {}
 _gyro_lock  = threading.Lock()
 
+def _gyro_fixture_for_ip(ip: str):
+    """Return the gyro fixture whose gyroChildId points at a child with this IP."""
+    return next((f for f in _fixtures if f.get("fixtureType") == "gyro"
+                 and f.get("gyroChildId") is not None
+                 and next((c for c in _children if c["id"] == f["gyroChildId"]
+                           and c.get("ip") == ip), None)), None)
+
+def _gyro_assigned_mover_id(ip: str):
+    gf = _gyro_fixture_for_ip(ip)
+    return gf.get("assignedMoverId") if gf else None
+
+def _gyro_device_name(ip: str, gf=None):
+    if gf is None:
+        gf = _gyro_fixture_for_ip(ip)
+    if gf and gf.get("gyroChildId") is not None:
+        c = next((ch for ch in _children if ch["id"] == gf["gyroChildId"]), None)
+        if c:
+            return c.get("altName") or c.get("name") or c.get("hostname") or ip
+    return ip
+
 def _apply_gyro_color(gyro_ip: str, r: int, g: int, b: int, flash: bool):
     """Route gyro colour through unified MoverControlEngine. Legacy direct-write removed."""
     if not _mover_engine:
@@ -731,6 +751,19 @@ def _udp_listener():
                 remote.update_from_euler_deg(
                     roll100/100.0, pitch100/100.0, yaw100/100.0,
                 )
+                # Auto-claim on first orient if the fixture is enabled but
+                # the claim was lost (e.g. after Stop). Avoids forcing the
+                # user back to the SPA to click Send Lock again — pressing
+                # START on the puck re-engages DMX output.
+                if _mover_engine and not _mover_engine.get_claim(
+                        _gyro_assigned_mover_id(ip) or -1):
+                    gf = _gyro_fixture_for_ip(ip)
+                    if gf and gf.get("gyroEnabled") and gf.get("assignedMoverId") is not None:
+                        dname = _gyro_device_name(ip, gf)
+                        _mover_engine.claim(gf["assignedMoverId"], device_id,
+                                              dname, "gyro",
+                                              smoothing=gf.get("smoothing", 0.15))
+                        _mover_engine.start_stream(gf["assignedMoverId"], device_id)
         elif cmd == CMD_GYRO_COLOR and len(data) >= 12:
             # GyroColorPayload: r(1) g(1) b(1) flags(1)
             r, g, b, flags = struct.unpack_from("<BBBB", data, 8)
