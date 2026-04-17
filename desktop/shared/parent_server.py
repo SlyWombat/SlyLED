@@ -722,19 +722,25 @@ def _udp_listener():
 
             # flags bit 3 = stop signal → release claim + blackout + stale cal
             if flags & 0x08:
-                log.info("GYRO_STOP from %s — releasing claim, clearing cal", ip)
-                did_stop = f"gyro-{ip}"
-                if _mover_engine:
-                    gf_stop = _gyro_fixture_for_ip(ip)
-                    if gf_stop and gf_stop.get("assignedMoverId") is not None:
-                        _mover_engine.release(gf_stop["assignedMoverId"],
-                                              did_stop, blackout=True)
-                # Invalidate the primitive's calibration too — next Start
-                # must re-align before the fixture can follow again.
-                remote_stop = _remotes.by_device(did_stop)
-                if remote_stop is not None:
-                    remote_stop.end_session()
-                    _remotes.save()
+                try:
+                    log.info("GYRO_STOP from %s — releasing claim, clearing cal", ip)
+                    did_stop = f"gyro-{ip}"
+                    if _mover_engine:
+                        gf_stop = _gyro_fixture_for_ip(ip)
+                        if gf_stop and gf_stop.get("assignedMoverId") is not None:
+                            _mover_engine.release(gf_stop["assignedMoverId"],
+                                                  did_stop, blackout=True)
+                    # Invalidate the primitive's calibration too — next Start
+                    # must re-align before the fixture can follow again.
+                    remote_stop = _remotes.by_device(did_stop)
+                    if remote_stop is not None:
+                        remote_stop.end_session()
+                        try:
+                            _remotes.save()
+                        except Exception as e:
+                            log.error("remotes.save() during stop failed: %s", e)
+                except Exception as e:
+                    log.error("GYRO_STOP handler failed: %s", e, exc_info=True)
             else:
                 with _gyro_lock:
                     _gyro_state[ip] = {
