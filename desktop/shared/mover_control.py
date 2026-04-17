@@ -315,11 +315,19 @@ class MoverControlEngine:
             pt = affine_pan_tilt(cal["samples"], tx, ty, tz)
             if pt is not None:
                 return pt
+        # Fixture instance may carry None for pan/tilt range — fall back
+        # to the profile's declared ranges before the generic default.
+        prof = self._get_profile_info(mover.get("dmxProfileId")) \
+            if mover.get("dmxProfileId") else None
+        pan_range = mover.get("panRange") \
+            or (prof.get("panRange") if prof else None) or 540
+        tilt_range = mover.get("tiltRange") \
+            or (prof.get("tiltRange") if prof else None) or 270
         return aim_to_pan_tilt(
             aim_stage,
             mount_rotation_deg=mover.get("rotation") or [0, 0, 0],
-            pan_range=mover.get("panRange") or 540,
-            tilt_range=mover.get("tiltRange") or 270,
+            pan_range=pan_range,
+            tilt_range=tilt_range,
         )
 
     def _write_dmx(self, mover, prof_info, claim, include_pan_tilt=True):

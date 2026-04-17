@@ -4786,6 +4786,13 @@ def _mover_current_aim_stage(mover):
     pid = mover.get("dmxProfileId")
     prof = _profile_lib.channel_info(pid) if pid else None
     engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+    # Fixture instance may have panRange/tiltRange as None — prefer the
+    # profile's declared ranges (Slymovehead = 540° pan / 180° tilt) and
+    # fall back to generic moving-head defaults only as a last resort.
+    pan_range = mover.get("panRange") \
+        or (prof.get("panRange") if prof else None) or 540
+    tilt_range = mover.get("tiltRange") \
+        or (prof.get("tiltRange") if prof else None) or 270
     if prof and engine:
         ch_map = prof.get("channel_map", {})
         channels = prof.get("channels", [])
@@ -4829,8 +4836,8 @@ def _mover_current_aim_stage(mover):
 
     return _pan_tilt_to_ray(
         pan_norm, tilt_norm,
-        pan_range=mover.get("panRange") or 540,
-        tilt_range=mover.get("tiltRange") or 270,
+        pan_range=pan_range,
+        tilt_range=tilt_range,
         mount_rotation_deg=mover.get("rotation") or [0, 0, 0],
     )
 
