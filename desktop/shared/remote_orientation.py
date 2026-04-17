@@ -43,8 +43,20 @@ REMOTE_FORWARD_LOCAL = (0.0, 1.0, 0.0)
 REMOTE_UP_LOCAL      = (0.0, 0.0, 1.0)
 
 # Staleness thresholds. Decision #7 says "N days" — N=7 initially.
+#
+# Two-tier comms staleness (#476):
+#   soft (5-60s):   puck fell off the air briefly — keep the claim, stop
+#                   writing pan/tilt (dmx frozen), UI pulses amber
+#                   "Reconnecting..."
+#   hard (>60s):    gone for long enough we should drop the claim and
+#                   blackout — operator will need to re-Send-Lock.
 STALE_AGE_SECS   = 7 * 24 * 3600
-STALE_COMMS_SECS = 60
+STALE_HARD_SECS  = 60      # comms silence beyond this → hard-stale (auto-release)
+STALE_SOFT_SECS  = 5       # comms silence beyond this → soft-stale (freeze dmx)
+
+# Backwards-compatibility alias — some call sites referenced the original
+# single threshold. Kept as the hard value.
+STALE_COMMS_SECS = STALE_HARD_SECS
 
 CONNECTION_STATES = ("idle", "armed", "streaming", "stale")
 
@@ -62,7 +74,7 @@ class Remote:
     __slots__ = (
         "id", "name", "kind", "device_id", "pos", "rot",
         "R_world_to_stage", "calibrated", "calibrated_at",
-        "calibrated_against", "stale_reason",
+        "calibrated_against", "stale_reason", "soft_stale",
         "last_quat_world", "aim_stage", "up_stage", "last_data",
         "connection_state",
     )
@@ -84,6 +96,7 @@ class Remote:
         self.calibrated_at = 0.0
         self.calibrated_against = None  # {"objectId": int, "kind": str}
         self.stale_reason = None        # None | "age" | "connection-lost" | "session-ended"
+        self.soft_stale = False         # transient: comms silent 5-60s
         self.last_quat_world = None     # last sensor orientation in remote world frame
         self.aim_stage = None           # unit vector in stage coords
         self.up_stage = None            # unit "up" in stage coords
@@ -237,20 +250,42 @@ class Remote:
     # ── Staleness ────────────────────────────────────────────────────────
 
     def check_staleness(self, now=None):
-        """Update `stale_reason` based on age + comms. Call periodically."""
+        """Update `stale_reason` + `soft_stale` based on age + comms.
+
+        - soft_stale:  transient — comms silence 5-60s; auto-clears when
+                       the next orient packet arrives. UI shows
+                       "Reconnecting..." and dmx writes freeze.
+        - stale_reason (hard): latched — age > N days, session-ended, or
+                       comms > 60s. Requires re-calibrate/clear-stale.
+        """
         if not self.calibrated or self.R_world_to_stage is None:
             return
-        if self.stale_reason:
-            return  # already flagged — requires re-calibrate or clear
         if now is None:
             now = time.time()
+
+        # Hard latch already set — skip transient updates.
+        if self.stale_reason:
+            self.soft_stale = False
+            return
+
+        # Age-out (hard).
         if now - self.calibrated_at > STALE_AGE_SECS:
             self.stale_reason = "age"
             self.connection_state = "stale"
+            self.soft_stale = False
             return
-        if self.last_data > 0 and now - self.last_data > STALE_COMMS_SECS:
-            self.stale_reason = "connection-lost"
-            self.connection_state = "stale"
+
+        # Comms silence → soft / hard.
+        if self.last_data > 0:
+            silence = now - self.last_data
+            if silence > STALE_HARD_SECS:
+                self.stale_reason = "connection-lost"
+                self.connection_state = "stale"
+                self.soft_stale = False
+            elif silence > STALE_SOFT_SECS:
+                self.soft_stale = True
+            else:
+                self.soft_stale = False
 
     def end_session(self):
         """Explicit user signal — remote is no longer in active use."""
@@ -278,6 +313,8 @@ class Remote:
             "calibratedAt": self.calibrated_at,
             "calibratedAgainst": self.calibrated_against,
             "staleReason": self.stale_reason,
+            "softStale": self.soft_stale,
+            "hardStale": self.stale_reason is not None,
             "aim": list(self.aim_stage) if self.aim_stage else None,
             "up": list(self.up_stage) if self.up_stage else None,
             "connectionState": self.connection_state,

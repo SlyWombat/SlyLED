@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "desktop", "sha
 from remote_math import norm3, quat_from_euler_zyx_deg, quat_rotate_vec  # noqa: E402
 from remote_orientation import (  # noqa: E402
     REMOTE_FORWARD_LOCAL, REMOTE_UP_LOCAL, STALE_AGE_SECS, STALE_COMMS_SECS,
+    STALE_SOFT_SECS, STALE_HARD_SECS,
     Remote, RemoteRegistry, KIND_PUCK, KIND_PHONE,
 )
 
@@ -230,6 +231,35 @@ def test_staleness_comms_lost():
     _eq(r.stale_reason, "connection-lost", msg="no comms flagged")
 
 
+def test_staleness_soft_then_hard():
+    """Comms silence 5-60s → soft_stale; >60s → hard stale_reason."""
+    r = Remote(id=131)
+    r.update_from_euler_deg(0, 0, 0)
+    r.calibrate(target_aim_stage=(0, 1, 0))
+
+    # Fresh (just calibrated, last_data within STALE_SOFT).
+    r.check_staleness()
+    _eq(r.soft_stale, False, msg="not soft-stale fresh")
+    _eq(r.stale_reason, None, msg="no hard reason fresh")
+
+    # Soft window (silence between STALE_SOFT_SECS and STALE_HARD_SECS).
+    r.last_data = time.time() - (STALE_SOFT_SECS + 2)
+    r.check_staleness()
+    _eq(r.soft_stale, True, msg="soft-stale in 5-60s window")
+    _eq(r.stale_reason, None, msg="no hard reason yet")
+
+    # Arrival of a fresh orient clears soft.
+    r.update_from_euler_deg(0, 0, 0)
+    r.check_staleness()
+    _eq(r.soft_stale, False, msg="soft clears on new data")
+
+    # Push past hard threshold.
+    r.last_data = time.time() - (STALE_HARD_SECS + 1)
+    r.check_staleness()
+    _eq(r.stale_reason, "connection-lost", msg="hard-stale after 60s")
+    _eq(r.soft_stale, False, msg="hard supersedes soft")
+
+
 def test_staleness_session_ended():
     r = Remote(id=32)
     r.update_from_euler_deg(0, 0, 0)
@@ -428,6 +458,7 @@ ALL = [
     test_full_user_model,
     test_staleness_age,
     test_staleness_comms_lost,
+    test_staleness_soft_then_hard,
     test_staleness_session_ended,
     test_clear_stale_recomputes,
     test_fresh_calibration_clears_stale,

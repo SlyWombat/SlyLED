@@ -267,9 +267,20 @@ class MoverControlEngine:
                 # Locked but user hasn't started streaming — don't write DMX.
                 continue
 
+            # #476 — if the remote has gone hard-stale (comms silence > 60s,
+            # session-ended, or age-out), drop the claim and blackout. The
+            # operator will need to Send-Lock again.
+            remote = self._get_remote(claim.device_id)
+            if remote is not None:
+                remote.check_staleness()
+                if remote.stale_reason is not None and claim.state == "streaming":
+                    log.info("Mover %d auto-released: remote %s %s",
+                             mover_id, claim.device_id, remote.stale_reason)
+                    self.release(mover_id, claim.device_id, blackout=True)
+                    continue
+
             have_aim = False
             if claim.state == "streaming":
-                remote = self._get_remote(claim.device_id)
                 # Only drive pan/tilt from the puck once the operator has
                 # calibrated THIS session. Stale-across-restart calibration
                 # would point the fixture at the previous aim direction; we

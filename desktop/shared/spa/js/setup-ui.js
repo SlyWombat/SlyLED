@@ -1047,11 +1047,27 @@ function _gyroLivePoll(childId,gf){
       var border='#1e293b';
       if(remote){
         var age=remote.lastDataAge!=null?remote.lastDataAge:99;
-        var stateLabel=remote.calibrated?(remote.staleReason?('Stale ('+remote.staleReason+')'):'Calibrated'):'Streaming (uncal)';
-        var dot=remote.staleReason?'\u25cb':(age<2?'<span style="color:#22c55e">\u25cf</span>':'<span style="color:#f59e0b">\u25cf</span>');
+        // #476 — three-tier state: hard (grey, latched), soft (amber, transient), live (green).
+        var dot, stateLabel;
+        if(remote.hardStale){
+          dot='<span style="color:#64748b">\u25cb</span>';
+          stateLabel='Lost ('+remote.staleReason+')';
+          border='#475569';
+        }else if(remote.softStale){
+          dot='<span style="color:#f59e0b">\u25cf</span>';
+          stateLabel='Reconnecting...';
+          border='#92400e';
+        }else if(remote.calibrated){
+          dot='<span style="color:#22c55e">\u25cf</span>';
+          stateLabel='Calibrated';
+          border='#059669';
+        }else{
+          dot='<span style="color:#22c55e">\u25cf</span>';
+          stateLabel='Streaming (uncal)';
+          border='#059669';
+        }
         parts.push(dot+' <b>'+escapeHtml(remote.name||('remote '+remote.id))+'</b> \u2014 '+stateLabel
           +' <span style="color:#64748b">('+age.toFixed(1)+'s ago)</span>');
-        border=remote.staleReason?'#92400e':'#059669';
       }
       if(claim){
         parts.push('<b>Lock:</b> '+escapeHtml(claim.deviceName)+' ('+claim.state+')'

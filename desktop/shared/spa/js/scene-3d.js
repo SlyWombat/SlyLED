@@ -1006,13 +1006,15 @@ function autoArrangeDmx(){
 var _s3dRemotes={group:null,byId:{},pollId:null};
 
 function _s3dRemoteColor(rec){
-  if(rec.staleReason)return 0x555555;                 // grey
+  // #476 — hard-stale latches grey until cleared; soft-stale pulses amber.
+  if(rec.hardStale||rec.staleReason)return 0x6b7280;  // grey — lost/stale
+  if(rec.softStale)return 0xf59e0b;                   // amber — reconnecting
   if(rec.connectionState==='armed')return 0x3b82f6;   // blue
   if(rec.connectionState==='streaming'){
     var age=rec.lastDataAge;
     if(age==null||age<2)return 0x22c55e;              // green — fresh
-    if(age<10)return 0xf59e0b;                        // amber — stale data
-    return 0x6b7280;                                  // dim grey — dead stream
+    if(age<5)return 0xf59e0b;                         // amber — slow stream
+    return 0x6b7280;                                  // grey — dead stream
   }
   return 0x64748b;                                    // idle — slate
 }
