@@ -123,6 +123,12 @@ class Remote:
         r.calibrated = bool(d.get("calibrated", False))
         r.calibrated_at = float(d.get("calibratedAt", 0.0))
         r.calibrated_against = d.get("calibratedAgainst")
+        # Persisted calibration is treated as stale on restart — the
+        # operator must explicitly re-confirm alignment this session.
+        # Until then: aim_stage is suppressed, viz shows no ray, and
+        # consumer features refuse to act (see §7.4 in the design doc).
+        if r.calibrated:
+            r.stale_reason = "session-ended"
         return r
 
     # ── Calibration ──────────────────────────────────────────────────────
