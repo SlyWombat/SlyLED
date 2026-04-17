@@ -4907,6 +4907,42 @@ def api_remotes_live():
     return jsonify(remotes=_remotes.live_list())
 
 
+@app.get("/api/remotes/<int:remote_id>/diagnostic")
+def api_remote_diagnostic(remote_id):
+    """Raw + transformed orientation for axis-convention verification (#477).
+
+    Useful when the physical puck motion doesn't match the 3D ray —
+    operator / developer can see every step of the sensor → stage pipeline.
+    """
+    r = _remotes.get(remote_id)
+    if r is None:
+        return jsonify(ok=False, err="not found"), 404
+    from remote_math import quat_rotate_vec
+    from remote_orientation import REMOTE_FORWARD_LOCAL, REMOTE_UP_LOCAL
+    q = r.last_quat_world
+    body_fwd_world = list(quat_rotate_vec(q, REMOTE_FORWARD_LOCAL)) if q else None
+    body_up_world  = list(quat_rotate_vec(q, REMOTE_UP_LOCAL))      if q else None
+    return jsonify({
+        "id":                 r.id,
+        "deviceId":           r.device_id,
+        "kind":               r.kind,
+        "rawQuat":            list(q) if q else None,
+        "bodyForwardLocal":   list(REMOTE_FORWARD_LOCAL),
+        "bodyUpLocal":        list(REMOTE_UP_LOCAL),
+        "bodyForwardInWorld": body_fwd_world,
+        "bodyUpInWorld":      body_up_world,
+        "rWorldToStage":      list(r.R_world_to_stage) if r.R_world_to_stage else None,
+        "aimStage":           list(r.aim_stage) if r.aim_stage else None,
+        "upStage":            list(r.up_stage) if r.up_stage else None,
+        "calibrated":         r.calibrated,
+        "calibratedAt":       r.calibrated_at,
+        "calibratedAgainst":  r.calibrated_against,
+        "staleReason":        r.stale_reason,
+        "connectionState":    r.connection_state,
+        "lastDataAge":        (time.time() - r.last_data) if r.last_data else None,
+    })
+
+
 # Calibration ──────────────────────────────────────────────────────────────
 
 @app.post("/api/remotes/<int:remote_id>/calibrate-start")

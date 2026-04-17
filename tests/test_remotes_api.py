@@ -213,6 +213,32 @@ def test_calibrate_non_mover_rejected():
         _remove_mover_fixture(fx["id"])
 
 
+def test_diagnostic_endpoint():
+    """Axis-verification diagnostic returns the full pipeline snapshot."""
+    _clear_remotes()
+    with app.test_client() as c:
+        rid = c.post("/api/remotes", json={"name": "Diag"}).get_json()["remote"]["id"]
+        # 404 for missing remote
+        r = c.get(f"/api/remotes/999999/diagnostic")
+        _assert(r.status_code == 404, "missing remote -> 404")
+        # With no orient sample: quat None, body vectors None
+        r = c.get(f"/api/remotes/{rid}/diagnostic")
+        _assert(r.status_code == 200, "diag status pre-orient")
+        d = r.get_json()
+        _assert(d["rawQuat"] is None, "rawQuat None before orient")
+        _assert(d["bodyForwardLocal"] == [0.0, 1.0, 0.0], "body forward convention")
+        _assert(d["bodyUpLocal"] == [0.0, 0.0, 1.0], "body up convention")
+        # After an orient sample + calibration, body_fwd_world is populated
+        c.post(f"/api/remotes/{rid}/orient", json={"roll": 0, "pitch": 0, "yaw": 0})
+        r = c.get(f"/api/remotes/{rid}/diagnostic")
+        d = r.get_json()
+        _assert(d["rawQuat"] is not None and len(d["rawQuat"]) == 4,
+                "rawQuat populated after orient")
+        _assert(d["bodyForwardInWorld"] is not None,
+                "bodyForwardInWorld populated")
+    _clear_remotes()
+
+
 def test_end_session_and_clear_stale():
     _clear_remotes()
     fx = _add_mover_fixture()
@@ -262,6 +288,7 @@ ALL = [
     test_calibrate_and_orient_flow,
     test_calibrate_missing_target_404,
     test_calibrate_non_mover_rejected,
+    test_diagnostic_endpoint,
     test_end_session_and_clear_stale,
     test_auto_register_from_udp_path,
 ]
