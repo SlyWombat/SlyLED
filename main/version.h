@@ -1,4 +1,4 @@
 #pragma once
-#define APP_MAJOR 1
-#define APP_MINOR 1
-#define APP_PATCH 2
+#define APP_MAJOR 8
+#define APP_MINOR 4
+#define APP_PATCH 4

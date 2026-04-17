@@ -86,7 +86,7 @@ void sendStatus(WiFiClient& c) {
   int chipTemp = -999;  // sentinel: not available
   uint32_t flashSize = 0;
   const char* sdkVer = "";
-#ifdef BOARD_GIGA_DMX
+#if defined(BOARD_GIGA_DMX) || defined(BOARD_GIGA_CHILD)
   chipModel = "STM32H747XI";
   sdkVer = "mbed";
 #elif defined(BOARD_ESP32)
@@ -117,7 +117,7 @@ void sendStatus(WiFiClient& c) {
     childCfg.hostname, boardName, boardType,
     (unsigned)APP_MAJOR, (unsigned)APP_MINOR, (unsigned)APP_PATCH,
     (unsigned)childActType, (unsigned long)udpRxCount,
-#ifdef BOARD_GIGA_DMX
+#if defined(BOARD_GIGA_DMX) || defined(BOARD_GIGA_CHILD)
     0UL, (unsigned long)(millis() / 1000),
 #else
     (unsigned long)ESP.getFreeHeap(), (unsigned long)(millis() / 1000),

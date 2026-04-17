@@ -38,7 +38,7 @@ import com.slywombat.slyled.ui.theme.*
  * orientation readout, color/dimmer sliders, hold-to-calibrate.
  *
  * Sends raw device orientation (roll, pitch, yaw) to the server via
- * the unified /api/mover-control/* endpoints. The server handles all
+ * the unified /api/mover-control endpoints. The server handles all
  * pan/tilt computation, calibration reference, and DMX output.
  */
 @Composable
