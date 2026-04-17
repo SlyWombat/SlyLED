@@ -680,7 +680,10 @@ def _udp_listener():
             continue
         if len(data) < 8:
             continue
-        magic, ver, cmd = struct.unpack_from("<HBB", data, 0)
+        try:
+            magic, ver, cmd = struct.unpack_from("<HBB", data, 0)
+        except Exception:
+            continue
         if magic != UDP_MAGIC or ver not in (3, UDP_VERSION):
             continue
         ip = addr[0]
@@ -817,8 +820,32 @@ def start_background_tasks():
         threading.Thread(target=_periodic_ping, daemon=True).start()
     else:
         _startup_check_done = True
-    # Legacy gyro_engine.py removed — all gyro control goes through MoverControlEngine
-    # (mover_control.py) which handles claim/release, calibrate, orient, and color.
+    # Auto-claim movers for every enabled gyro fixture so the user doesn't
+    # have to re-Send-Lock after every server restart. Claim state lives
+    # in-memory only; the enable flag on the fixture is the persistent source.
+    for f in _fixtures:
+        if f.get("fixtureType") != "gyro":
+            continue
+        if not f.get("gyroEnabled"):
+            continue
+        mid = f.get("assignedMoverId")
+        cid = f.get("gyroChildId")
+        if mid is None or cid is None:
+            continue
+        child = next((c for c in _children if c["id"] == cid), None)
+        if not child or not child.get("ip"):
+            continue
+        did = f"gyro-{child['ip']}"
+        dname = child.get("altName") or child.get("name") or child.get("hostname") or child["ip"]
+        ok, reason = _mover_engine.claim(mid, did, dname, "gyro",
+                                          smoothing=f.get("smoothing", 0.15))
+        if ok:
+            # Jump straight to streaming — the old session's calibration
+            # survived via remotes.json, so the feature can run immediately.
+            _mover_engine.start_stream(mid, did)
+            log.info("Auto-claimed mover %d for gyro %s (%s)", mid, did, dname)
+        else:
+            log.warning("Auto-claim mover %d for gyro %s failed: %s", mid, did, reason)
 
 @app.get("/api/children")
 def api_children():
@@ -4753,9 +4780,9 @@ def _mover_current_aim_stage(mover):
 
     return _pan_tilt_to_ray(
         pan_norm, tilt_norm,
-        pan_range=mover.get("panRange", 540),
-        tilt_range=mover.get("tiltRange", 270),
-        mount_rotation_deg=mover.get("rotation", [0, 0, 0]),
+        pan_range=mover.get("panRange") or 540,
+        tilt_range=mover.get("tiltRange") or 270,
+        mount_rotation_deg=mover.get("rotation") or [0, 0, 0],
     )
 
 
@@ -5587,6 +5614,38 @@ def api_fixtures_live():
                 entry["active"] = entry["dimmer"] > 0
             # DMX address info for display
             entry["dmxAddr"] = f"U{uni_num}.{addr}"
+            # Live aim vector in stage coords for the 3D viewport cone.
+            # Reads current pan/tilt from the universe buffer (including 16-bit
+            # pairs) and runs pan_tilt_to_ray with the fixture's mount rotation.
+            if ch_map and "pan" in ch_map and "tilt" in ch_map and engine:
+                try:
+                    def _read_norm(axis):
+                        offset = ch_map.get(axis)
+                        if offset is None:
+                            return 0.5
+                        ch_def = next((c for c in prof_info.get("channels", [])
+                                       if c.get("type") == axis), None)
+                        bits = ch_def.get("bits", 8) if ch_def else 8
+                        if bits == 16:
+                            hi = uni.get_channel(addr + offset)
+                            lo = uni.get_channel(addr + offset + 1)
+                            return ((hi << 8) | lo) / 65535.0
+                        return uni.get_channel(addr + offset) / 255.0
+                    pan_norm = _read_norm("pan")
+                    tilt_norm = _read_norm("tilt")
+                    aim = _pan_tilt_to_ray(
+                        pan_norm, tilt_norm,
+                        pan_range=f.get("panRange") or 540,
+                        tilt_range=f.get("tiltRange") or 270,
+                        mount_rotation_deg=f.get("rotation") or [0, 0, 0],
+                    )
+                    entry["aim"] = [round(aim[0], 4),
+                                    round(aim[1], 4),
+                                    round(aim[2], 4)]
+                    entry["panNorm"] = round(pan_norm, 4)
+                    entry["tiltNorm"] = round(tilt_norm, 4)
+                except Exception:
+                    pass
         elif ft == "led":
             # LED fixtures — check live_events from child node
             cid = f.get("childId")
@@ -8575,47 +8634,73 @@ def api_firmware_latest():
 
 @app.get("/api/firmware/check")
 def api_firmware_check():
-    """Compare all children firmware against latest release. Returns per-child update status."""
+    """Compare each child's firmware against the registry entry for its
+    specific board. Each board track is independent — gyros compare against
+    gyro-esp32s3, D1 Mini against child-led-d1mini, etc."""
     if not _wifi.get("ssid") or not _wifi.get("password"):
         return jsonify(ok=False, err="WiFi credentials required - set them on the Firmware tab before checking for updates"), 400
     rel = _fetch_github_release()
     if not rel:
         return jsonify(ok=False, err="Could not fetch release info"), 502
-    # Use registry.json firmware version, not GitHub tag (desktop releases != firmware releases)
     registry = load_registry(_FW_DIR).get("firmware", [])
-    reg_versions = {e.get("board"): e.get("version", "0.0") for e in registry}
-    gh_version = rel.get("version", "0.0")
-    # Only use GitHub version if release has firmware binaries attached
-    has_firmware_assets = any(a.get("name", "").endswith(".bin") for a in rel.get("assets", []))
-    latest = gh_version if has_firmware_assets else max(reg_versions.values(), default="0.0")
-    results = []
-    for c in _children:
-        fw = c.get("fwVersion", "0.0") or "0.0"
-        needs_update = False
+    # Index registry entries by their `id` (e.g. "gyro-esp32s3", "child-led-esp32").
+    reg_by_id = {e.get("id"): e for e in registry}
+
+    # Map a child's detected board onto its registry id.
+    board_to_regid = {
+        "esp32":     "child-led-esp32",
+        "d1mini":    "child-led-d1mini",
+        "giga":      "child-led-giga",
+        "giga-dmx":  "dmx-bridge-esp32",
+        "dmx":       "dmx-bridge-esp32",
+        "gyro":      "gyro-esp32s3",
+    }
+
+    def _detect_board(c):
+        """Return a normalised board key for this child."""
+        if c.get("type") == "wled":
+            return "wled"
+        if c.get("type") == "gyro":
+            return "gyro"
+        if c.get("type") == "dmx":
+            # DMX bridge — prefer Giga-DMX when hostname is SLYC-* or boardType says so
+            if (c.get("boardType") or "").lower().startswith("giga"):
+                return "giga-dmx"
+            return "dmx"
+        bt = (c.get("boardType") or "").lower()
+        if "gyro" in bt:
+            return "gyro"
+        if bt in ("esp32",):
+            return "esp32"
+        if "d1" in bt or bt == "d1mini":
+            return "d1mini"
+        if "giga" in bt:
+            return "giga"
+        return "esp32"  # last-resort fallback
+
+    def _cmp(cur, latest):
         try:
-            cur_parts = [int(x) for x in fw.split(".")]
-            lat_parts = [int(x) for x in latest.split(".")]
-            # Pad to 3 parts for consistent comparison (7.0  -' 7.0.0)
+            cur_parts  = [int(x) for x in (cur or "0.0").split(".")]
+            lat_parts  = [int(x) for x in (latest or "0.0").split(".")]
             while len(cur_parts) < 3: cur_parts.append(0)
             while len(lat_parts) < 3: lat_parts.append(0)
-            needs_update = lat_parts > cur_parts
+            return lat_parts > cur_parts
         except (ValueError, IndexError):
-            needs_update = fw != latest
-        # Determine board type from stored boardType (from /status probe) or fallback
-        bt = c.get("boardType", "")
-        if c.get("type") == "wled":
-            board = "wled"
-        elif bt in ("ESP32", "esp32"):
-            board = "esp32"
-        elif bt in ("D1 Mini", "d1mini"):
-            board = "d1mini"
-        elif bt in ("Giga", "giga-child"):
-            board = "giga"
-        else:
-            board = "esp32"  # default fallback
-        # OTA needs app-only binary for ESP32; try app first, fallback to merged
-        asset_prefs = {"esp32": ["esp32-firmware-app.bin", "esp32-firmware-merged.bin"],
-                       "d1mini": ["d1mini-firmware.bin"]}
+            return (cur or "") != (latest or "")
+
+    results = []
+    for c in _children:
+        board = _detect_board(c)
+        reg_entry = reg_by_id.get(board_to_regid.get(board))
+        latest = reg_entry.get("version", "0.0") if reg_entry else "0.0"
+        fw = c.get("fwVersion", "0.0") or "0.0"
+        needs_update = _cmp(fw, latest) if board != "wled" else False
+
+        # OTA download URL (ESP32/D1 only — Gigas are DFU-only, gyro flashes over USB).
+        asset_prefs = {
+            "esp32":  ["esp32-firmware-app.bin", "esp32-firmware-merged.bin"],
+            "d1mini": ["d1mini-firmware.bin"],
+        }
         download_url = ""
         for name in asset_prefs.get(board, []):
             for a in rel.get("assets", []):
@@ -8624,15 +8709,20 @@ def api_firmware_check():
                     break
             if download_url:
                 break
+
         results.append({
             "id": c["id"], "hostname": c.get("hostname"), "name": c.get("name", ""),
             "ip": c.get("ip", ""),
             "currentVersion": fw, "latestVersion": latest,
             "needsUpdate": needs_update, "board": board,
+            "type": c.get("type", ""),
             "status": c.get("status", 0),
             "downloadUrl": download_url,
         })
-    return jsonify({"latest": latest, "children": results})
+
+    # The top-level "latest" is informational — the latest of any board.
+    top_latest = max((r["latestVersion"] for r in results), default="0.0")
+    return jsonify({"latest": top_latest, "children": results})
 
 @app.post("/api/firmware/ota/<int:cid>")
 def api_firmware_ota(cid):

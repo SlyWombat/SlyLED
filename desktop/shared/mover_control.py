@@ -249,9 +249,9 @@ class MoverControlEngine:
                         and remote.stale_reason is None:
                     pan_norm, tilt_norm = aim_to_pan_tilt(
                         remote.aim_stage,
-                        mount_rotation_deg=mover.get("rotation", [0, 0, 0]),
-                        pan_range=mover.get("panRange", 540),
-                        tilt_range=mover.get("tiltRange", 270),
+                        mount_rotation_deg=mover.get("rotation") or [0, 0, 0],
+                        pan_range=mover.get("panRange") or 540,
+                        tilt_range=mover.get("tiltRange") or 270,
                     )
                     alpha = max(0.0, min(1.0, 1.0 - claim.smoothing))
                     claim.pan_smooth  += alpha * (pan_norm  - claim.pan_smooth)

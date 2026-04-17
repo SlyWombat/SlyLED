@@ -136,6 +136,8 @@ function s3dInit(){
   setView('3d');
   // Start polling remote-orientation state for debug viz (#484 phase 3)
   s3dPollRemotes();
+  // Live fixture aim — keeps the beam cones honest when a mover moves.
+  s3dPollFixturesLive();
 }
 
 // Right-click handler for 3D scene — dismiss scan ghosts
@@ -1134,4 +1136,73 @@ function s3dPollRemotes(){
 
 function s3dStopPollRemotes(){
   if(_s3dRemotes.pollId){clearInterval(_s3dRemotes.pollId);_s3dRemotes.pollId=null;}
+}
+
+// ── Live fixture aim (DMX movers) ─────────────────────────────────────────
+// Polls /api/fixtures/live and updates the beam cone + aim sphere of each
+// DMX mover to its current pan/tilt-driven aim vector. This is what keeps
+// the 3D view honest when a gyro puck, timeline, or any other source moves
+// the fixture.
+
+var _s3dFixLive={pollId:null};
+
+function _s3dAimStageToLocal(aim){
+  // Stage (X, Y, Z) -> Three.js Y-up (X, Z_stage, Y_stage).
+  return new THREE.Vector3(aim[0]||0, aim[2]||0, aim[1]||0).normalize();
+}
+
+function _s3dUpdateFixtureAim(fid, aim){
+  if(!aim||!_s3d.nodes)return;
+  // Find the scene group for this fixture/child.
+  var grp=null;
+  _s3d.nodes.forEach(function(g){if(g.userData&&g.userData.childId===fid)grp=g;});
+  if(!grp)return;
+  var dir=_s3dAimStageToLocal(aim);
+  // Distance is whatever the existing aim sphere already sits at — keep
+  // the beam length stable, just redirect.
+  var beamLen=3.0;
+  grp.traverse(function(o){
+    if(o.userData&&o.userData.isAimPoint){
+      beamLen=o.position.length()||beamLen;
+    }
+  });
+  var aimLocal=dir.clone().multiplyScalar(beamLen);
+  grp.traverse(function(o){
+    if(!o.userData)return;
+    if(o.userData.beamCone&&o.geometry&&o.geometry.type==='ConeGeometry'){
+      // Re-centre + re-orient the cone.
+      o.position.copy(aimLocal.clone().multiplyScalar(0.5));
+      var q=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,-1,0),dir);
+      o.quaternion.copy(q);
+    }else if(o.userData.isAimPoint){
+      o.position.copy(aimLocal);
+    }else if(o.userData.beamCone&&o.geometry&&o.geometry.type==='RingGeometry'){
+      // Glow halo around the aim point.
+      o.position.copy(aimLocal);
+      if(_s3d.camera)o.lookAt(_s3d.camera.position);
+    }
+  });
+}
+
+function s3dRenderFixturesLive(list){
+  if(!_s3d.inited||!list)return;
+  list.forEach(function(f){
+    if(f.aim)_s3dUpdateFixtureAim(f.id, f.aim);
+  });
+}
+
+function s3dPollFixturesLive(){
+  if(_s3dFixLive.pollId)return;
+  var fetchOne=function(){
+    if(!_s3d.inited)return;
+    ra('GET','/api/fixtures/live',null,function(d){
+      if(d&&d.fixtures)s3dRenderFixturesLive(d.fixtures);
+    });
+  };
+  fetchOne();
+  _s3dFixLive.pollId=setInterval(fetchOne,500);  // 2 Hz — enough for a viewport
+}
+
+function s3dStopPollFixturesLive(){
+  if(_s3dFixLive.pollId){clearInterval(_s3dFixLive.pollId);_s3dFixLive.pollId=null;}
 }
