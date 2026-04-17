@@ -584,7 +584,9 @@ function discoverChildren(){
         var h='<p style="color:#aaa;font-size:.85em;margin-bottom:.4em">Found — click Add to register:</p>'
           +'<table class="tbl" style="max-width:800px"><tr><th>Hostname</th><th>Name</th><th>IP</th><th>Type</th><th>Strings</th><th></th></tr>';
         d.forEach(function(c){
-          var bt=c.boardType||'slyled';
+          // Prefer the typed code (`c.type` = "gyro"/"dmx"/"camera"/"slyled")
+          // and fall back to boardType for DMX/camera which use codes there.
+          var bt=c.type||c.boardType||'slyled';
           var badge=bt==='dmx'?'<span class="badge" style="background:#7c3aed;color:#fff;font-size:.75em">DMX Bridge</span>'
             :bt==='camera'?'<span class="badge" style="background:#0e7490;color:#fff;font-size:.75em">Camera</span>'
             :bt==='gyro'?'<span class="badge" style="background:#a5b4fc;color:#1e1b4b;font-size:.75em">Gyro</span>'
@@ -598,7 +600,9 @@ function discoverChildren(){
             addBtn='<button class="btn btn-on" onclick="addDiscovered(\''+c.ip+'\')">Add</button>';
             if(bt==='dmx')addBtn+=' <button class="btn" onclick="addDiscoveredDmxBridge(\''+c.ip+'\')" style="background:#7c3aed;color:#fff">Configure</button>';
           }
-          var detail=bt==='camera'?(c.resolutionW+'x'+c.resolutionH):bt==='dmx'?'\u2014':c.sc;
+          var detail=bt==='camera'?(c.resolutionW+'x'+c.resolutionH)
+                    :bt==='dmx'||bt==='gyro'?'\u2014'
+                    :c.sc;
           h+='<tr><td>'+escapeHtml(c.hostname)+'</td><td>'+escapeHtml(c.name||'-')+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+badge+'</td><td>'+detail+'</td>'
             +'<td>'+addBtn+'</td></tr>';
         });
