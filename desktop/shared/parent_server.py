@@ -5354,8 +5354,15 @@ _apply_dmx_settings()
 _boot_blink_done = False
 
 def _run_boot_blink(engine, force=False):
-    """Rainbow cycle all DMX fixtures for 3s then blackout.
-    Runs once on boot unless force=True (manual blink from Settings)."""
+    """Boot sequence for DMX fixtures (#487): hold at layout-forward
+    position (already seeded by _apply_profile_defaults) → brief blackout
+    hold → rainbow cycle → final blackout. The mover never slews —
+    pan/tilt are untouched throughout so the fixture visibly stays on
+    its layout direction while colour and dimmer confirm the pipeline
+    is alive.
+
+    Runs once on boot unless force=True (manual blink from Settings).
+    """
     global _boot_blink_done
     if _boot_blink_done and not force:
         return
@@ -5372,6 +5379,21 @@ def _run_boot_blink(engine, force=False):
             if info:
                 profiles[pid] = {"channel_map": info.get("channel_map", {}),
                                  "channels": info.get("channels", [])}
+
+    # Step 1: explicit blackout hold (500 ms) so the blink starts
+    # against darkness — the fixture is aimed at layout-forward but
+    # dark. Makes the "DMX is alive" flash unambiguous.
+    for f, pid in dmx_fx:
+        uni = f.get("dmxUniverse", 1)
+        addr = f.get("dmxStartAddr", 1)
+        prof = profiles.get(pid)
+        if prof:
+            cm = prof.get("channel_map", {})
+            if "dimmer" in cm:
+                engine.get_universe(uni).set_channel(addr + cm["dimmer"], 0)
+    time.sleep(0.5)
+
+    # Step 2: rainbow colour cycle (3 s, no pan/tilt motion).
     steps = 30
     step_ms = 100  # 30 × 100ms = 3s
     for i in range(steps):
