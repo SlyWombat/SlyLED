@@ -2915,6 +2915,7 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
     }
     _mover_cal[str(fid)] = cal_data
     _save("mover_calibrations", _mover_cal)
+    _invalidate_mover_model(fid)
     f["moverCalibrated"] = True
     _save("fixtures", _fixtures)
 
@@ -3003,6 +3004,7 @@ def api_mover_cal_delete(fid):
     if str(fid) in _mover_cal:
         del _mover_cal[str(fid)]
         _save("mover_calibrations", _mover_cal)
+        _invalidate_mover_model(fid)
     f = next((f for f in _fixtures if f["id"] == fid), None)
     if f:
         f.pop("moverCalibrated", None)
@@ -3115,6 +3117,7 @@ def api_mover_cal_manual(fid):
     }
     _mover_cal[str(fid)] = cal_data
     _save("mover_calibrations", _mover_cal)
+    _invalidate_mover_model(fid)
     f["moverCalibrated"] = True
     _save("fixtures", _fixtures)
     log.info("Manual calibration saved for fixture %d: %d samples, grid=%s",
@@ -4674,6 +4677,95 @@ from mover_calibrator import pan_tilt_to_ray as _pan_tilt_to_ray
 _remotes = RemoteRegistry(data_path=str(DATA / "remotes.json"))
 _remotes.load()
 
+# ── Parametric calibration model (#489-#494) ───────────────────────────────
+#
+# Lazy per-fixture cache: first access fits the v2 model from samples (or
+# loads pre-fitted params from `cal["model"]`) and stores the result here.
+# Invalidated on calibration save/delete so re-calibration is a fresh fit.
+from parametric_mover import ParametricFixtureModel, fit_model as _fit_model
+
+_mover_models = {}  # fixture_id (int) → ParametricFixtureModel
+
+
+def _fixture_position(fid):
+    """Stage-space position for a fixture. Layout holds x/y/z keyed by id;
+    the fixture record itself only has the metadata fields."""
+    for c in (_layout.get("children") or []):
+        if c.get("id") == fid:
+            return (c.get("x", 0) or 0, c.get("y", 0) or 0, c.get("z", 0) or 0)
+    return (0.0, 0.0, 0.0)
+
+
+def _get_mover_model(fid, mover=None):
+    """Return the ParametricFixtureModel for a fixture, fitting lazily.
+
+    Migration path:
+      - v2 (`cal["version"] == 2` and `cal["model"]` present) → load directly.
+      - v1 (`cal["samples"]` with ≥ 2 entries, no "model") → LM-fit, persist
+        as v2 inline, save, return.
+      - No calibration → None.
+
+    Result is cached in `_mover_models`. Call ``_invalidate_mover_model(fid)``
+    whenever samples change.
+    """
+    fid = int(fid)
+    cached = _mover_models.get(fid)
+    if cached is not None:
+        return cached
+
+    cal = _mover_cal.get(str(fid))
+    if not cal:
+        return None
+
+    pos = _fixture_position(fid)
+    if mover is None:
+        mover = next((f for f in _fixtures if f.get("id") == fid), {}) or {}
+    prof = _profile_lib.channel_info(mover.get("dmxProfileId")) \
+        if mover.get("dmxProfileId") else None
+    pan_range = mover.get("panRange") \
+        or (prof.get("panRange") if prof else None) or 540
+    tilt_range = mover.get("tiltRange") \
+        or (prof.get("tiltRange") if prof else None) or 270
+
+    # v2 fast path.
+    if cal.get("version") == 2 and cal.get("model"):
+        try:
+            model = ParametricFixtureModel.from_dict(pos, cal["model"])
+        except Exception as e:
+            log.warning("Mover %d v2 model load failed: %s — re-fitting", fid, e)
+        else:
+            _mover_models[fid] = model
+            return model
+
+    # v1 migration: fit from samples, persist inline as v2 additive.
+    samples = cal.get("samples") or []
+    if len(samples) < 2:
+        return None
+
+    try:
+        model, quality = _fit_model(
+            pos, pan_range, tilt_range, samples,
+            mounted_inverted=bool(mover.get("mountedInverted")),
+        )
+    except Exception as e:
+        log.warning("Mover %d v2 fit failed: %s — keeping v1 affine", fid, e)
+        return None
+
+    cal["version"] = 2
+    cal["model"] = model.to_dict()
+    cal["fit"] = quality.to_dict()
+    _save("mover_calibrations", _mover_cal)
+    _mover_models[fid] = model
+    log.info("Mover %d: migrated v1→v2 calibration, rms=%.2f° max=%.2f° samples=%d",
+             fid, quality.rms_error_deg, quality.max_error_deg, quality.sample_count)
+    return model
+
+
+def _invalidate_mover_model(fid):
+    """Drop the cached model so the next ``_get_mover_model`` call refits."""
+    _mover_models.pop(int(fid), None)
+
+
 # ── Mover-follow engine (#468) — consumer of the primitive (#484 phase 4) ──
 from mover_control import MoverControlEngine
 
@@ -4685,6 +4777,7 @@ _mover_engine = MoverControlEngine(
     set_fixture_color_fn=_set_fixture_color,
     get_remote_by_device_id=lambda did: _remotes.by_device(did),
     get_mover_cal=lambda mid: _mover_cal.get(str(mid)),
+    get_mover_model=_get_mover_model,
 )
 _mover_engine.start()
 
@@ -4858,14 +4951,17 @@ def _mover_current_aim_stage(mover):
     """Read the mover's current pan/tilt from the universe buffer and
     convert it to a unit aim vector in stage coordinates.
 
-    Preference order:
-      1. Calibration grid (`affine_stage_point`) — honours the fixture's
-         actual physical mount including `mountedInverted` and any per-
-         fixture orientation quirks the operator encoded in samples.
-      2. Pure `pan_tilt_to_ray` — assumes the profile's mechanical centre
-         is stage forward.
+    Preference order (#491):
+      1. **Parametric v2 model** — closed-form forward kinematics against
+         the fitted mount + offsets. Round-trips with ``model.inverse``,
+         so calibrate-end locks against the fixture's *actual*
+         DMX-commanded aim instead of a guessed layout-forward (#510).
+      2. **Calibration grid** (v1 affine) — legacy fallback if the fit
+         failed or no v2 data yet.
+      3. **Pure ``pan_tilt_to_ray``** — assumes DMX centre = mount-local
+         forward. Used when no calibration exists at all.
 
-    Falls back to `(0.5, 0.5)` center when the DMX buffer has no data or
+    Falls back to ``(0.5, 0.5)`` centre when the DMX buffer has no data or
     the profile lookup fails. Decision #6 scopes v1 to movers only.
     """
     pan_norm = 0.5
@@ -4902,17 +4998,18 @@ def _mover_current_aim_stage(mover):
         pan_norm = _read("pan")
         tilt_norm = _read("tilt")
 
-    # Prefer the per-fixture calibration grid when available — it encodes
-    # mountedInverted + any yoke quirks via stage-space samples, whereas
-    # pan_tilt_to_ray assumes DMX centre = mount-local forward.
+    # 1 — parametric model (preferred when calibration exists).
+    model = _get_mover_model(mover.get("id"), mover)
+    if model is not None:
+        return model.forward(pan_norm, tilt_norm)
+
+    # 2 — legacy affine grid (pre-migration fallback).
     cal = _mover_cal.get(str(mover.get("id")))
     if cal and cal.get("samples") and len(cal["samples"]) >= 2:
         try:
             from mover_calibrator import affine_stage_point
             pt = affine_stage_point(cal["samples"], pan_norm, tilt_norm)
             if pt is not None:
-                # Fixture positions live in the layout keyed by fixture id,
-                # NOT on the fixture object itself.
                 layout_pos = next((c for c in (_layout.get("children") or [])
                                    if c.get("id") == mover.get("id")), None) or {}
                 fx = layout_pos.get("x", mover.get("x", 0))
@@ -4925,6 +5022,7 @@ def _mover_current_aim_stage(mover):
         except Exception:
             pass
 
+    # 3 — no calibration; generic mount-relative IK.
     return _pan_tilt_to_ray(
         pan_norm, tilt_norm,
         pan_range=pan_range,
@@ -5171,17 +5269,28 @@ def _apply_profile_defaults(engine):
                     uni_buf.set_channel(addr + offset + 1, val16 & 0xFF)
                 else:
                     uni_buf.set_channel(addr + offset, max(0, min(255, int(default))))
-        # Seed pan/tilt to the fixture's layout-forward reference.
-        # Preference order:
-        #   1. Calibration's explicit `centerPan`/`centerTilt` — the
-        #      operator's "home" reference, known to aim correctly.
-        #   2. Affine fit against the fixture's rotation-derived forward
-        #      target (works only when the target lies inside the sampled
-        #      region; otherwise extrapolates poorly).
-        #   3. Mount-local forward 0.5/0.5.
+        # Seed pan/tilt to the fixture's home position — the layout-stored
+        # `rotation` aim vector (#493). Preference order:
+        #   1. Parametric v2 model inverse() of the home target — closed form,
+        #      always within mechanical range (clamped).
+        #   2. Calibration's explicit `centerPan`/`centerTilt` — legacy.
+        #   3. v1 affine fit against the rotation-derived target.
+        #   4. Mount-local forward 0.5/0.5.
         pan_seed, tilt_seed = 0.5, 0.5
         cal = _mover_cal.get(str(f["id"]))
-        if cal:
+        model = _get_mover_model(f["id"], f)
+        if model is not None:
+            try:
+                from bake_engine import _rotation_to_aim
+                pos = _fixture_position(f["id"])
+                rot = f.get("rotation") or [0, 0, 0]
+                # _rotation_to_aim returns a stage-space target 3 m ahead
+                # along the home direction.
+                aim_target = _rotation_to_aim(rot, list(pos), 3000)
+                pan_seed, tilt_seed = model.inverse(aim_target[0], aim_target[1], aim_target[2])
+            except Exception as e:
+                log.debug("Mover %d home-seed via parametric failed: %s", f["id"], e)
+        elif cal:
             cp, ct = cal.get("centerPan"), cal.get("centerTilt")
             if cp is not None and ct is not None:
                 pan_seed, tilt_seed = cp, ct
@@ -5189,9 +5298,9 @@ def _apply_profile_defaults(engine):
                 try:
                     from bake_engine import _rotation_to_aim
                     from mover_calibrator import affine_pan_tilt
-                    pos = [f.get("x", 0), f.get("y", 0), f.get("z", 0)]
+                    pos = _fixture_position(f["id"])
                     rot = f.get("rotation") or [0, 0, 0]
-                    aim = _rotation_to_aim(rot, pos, 3000)
+                    aim = _rotation_to_aim(rot, list(pos), 3000)
                     pt = affine_pan_tilt(cal["samples"], aim[0], aim[1], aim[2])
                     if pt is not None:
                         pan_seed, tilt_seed = pt

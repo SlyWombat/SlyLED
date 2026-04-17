@@ -84,7 +84,7 @@ class MoverControlEngine:
 
     def __init__(self, get_fixtures, get_layout, get_profile_info,
                  get_engine, set_fixture_color_fn, get_remote_by_device_id,
-                 get_mover_cal=None):
+                 get_mover_cal=None, get_mover_model=None):
         """
         Args:
             get_fixtures:             list of fixtures
@@ -94,8 +94,12 @@ class MoverControlEngine:
             set_fixture_color_fn:     (engine, uni, addr, r, g, b, prof_info) writer
             get_remote_by_device_id:  callable(device_id) → Remote | None
             get_mover_cal:            callable(mover_id) → calibration dict or None.
-                                      When provided, the tick prefers `affine_pan_tilt`
-                                      against the calibrated samples over pure IK.
+                                      Kept for back-compat; the v2 parametric
+                                      model is the preferred IK path.
+            get_mover_model:          callable(mover_id, mover) → ParametricFixtureModel
+                                      or None. When provided, IK uses the
+                                      closed-form model.inverse() — no grid,
+                                      no round-trip mismatch.
         """
         self._get_fixtures = get_fixtures
         self._get_layout = get_layout
@@ -104,6 +108,7 @@ class MoverControlEngine:
         self._set_fixture_color = set_fixture_color_fn
         self._get_remote = get_remote_by_device_id
         self._get_mover_cal = get_mover_cal or (lambda _mid: None)
+        self._get_mover_model = get_mover_model or (lambda _mid, _mv: None)
 
         self._claims = {}  # mover_id → MoverClaim
         self._lock = threading.Lock()
@@ -319,11 +324,26 @@ class MoverControlEngine:
         return None
 
     def _aim_to_pan_tilt(self, mover_id, mover, aim_stage):
-        """Pan/tilt from a stage-space aim vector, preferring the fixture's
-        calibration grid when present. Projects `aim_stage` 3 m from the
-        fixture to get a target point, then uses `affine_pan_tilt` against
-        the saved samples. Falls back to the pure `aim_to_pan_tilt` IK
-        when no usable calibration exists."""
+        """Pan/tilt from a stage-space aim vector.
+
+        Preference order (#491):
+          1. **Parametric v2 model** (closed-form inverse, no round-trip mismatch).
+             Distance from fixture is irrelevant for a pure direction aim —
+             we project 3 m and let ``model.inverse`` normalise.
+          2. **v1 affine samples** (legacy fallback while migration lands).
+          3. **Pure ``aim_to_pan_tilt`` IK** when no calibration exists.
+        """
+        # 1 — parametric model (preferred)
+        model = self._get_mover_model(mover_id, mover)
+        if model is not None:
+            px, py, pz = model.fixture_pos
+            tx = px + aim_stage[0] * 3000.0
+            ty = py + aim_stage[1] * 3000.0
+            tz = pz + aim_stage[2] * 3000.0
+            return model.inverse(tx, ty, tz)
+
+        # 2 — legacy affine (only reached if migration helper returns None
+        # despite samples being present — e.g. < 2 samples).
         cal = self._get_mover_cal(mover_id)
         if cal and cal.get("samples") and len(cal["samples"]) >= 2:
             fx = mover.get("x", 0)
@@ -335,8 +355,8 @@ class MoverControlEngine:
             pt = affine_pan_tilt(cal["samples"], tx, ty, tz)
             if pt is not None:
                 return pt
-        # Fixture instance may carry None for pan/tilt range — fall back
-        # to the profile's declared ranges before the generic default.
+
+        # 3 — no calibration; generic geometric IK against mount rotation.
         prof = self._get_profile_info(mover.get("dmxProfileId")) \
             if mover.get("dmxProfileId") else None
         pan_range = mover.get("panRange") \
