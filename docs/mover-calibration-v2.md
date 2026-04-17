@@ -68,6 +68,12 @@ visualized, debugged, and transferred between venues.
 | **Camera/sensor assist** | **Exceeds field** | No competitor offers camera-based calibration. Depence supports BlackTrax for tracking but not for calibration. |
 | **Profile data** | **Concedes to grandMA3/Depence (acceptable)** | GDTF profiles include full yoke geometry (axis offsets, beam origin). SlyLED profiles store pan/tilt ranges but not yoke dimensions. Concession is acceptable: yoke offset is typically 50-150mm, producing sub-degree error at stage distances (>3m). If OFL/GDTF import is added later, yoke geometry can be folded into the kinematic model without changing the calibration pipeline. |
 
+**Note (Gemini review):** disguise (d3) "OmniCal" uses multi-camera calibration for
+projectors — a high-end parallel but targeting projection, not DMX fixtures. ETC
+recently added ArUco-based position estimation for Augment3d (phone camera locates the
+fixture). SlyLED's approach of using the **fixture's own beam** to find the stage is a
+distinct and valid inversion of that technique.
+
 ---
 
 ## 3. Mathematical Model
