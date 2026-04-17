@@ -211,6 +211,14 @@ class MoverControlEngine:
                 claim.dimmer = dimmer
         return True
 
+    def set_smoothing(self, mover_id, device_id, smoothing):
+        with self._lock:
+            claim = self._claims.get(mover_id)
+            if not claim or claim.device_id != device_id:
+                return False
+            claim.smoothing = max(0.01, min(1.0, float(smoothing)))
+        return True
+
     def flash(self, mover_id, device_id, on=True):
         with self._lock:
             claim = self._claims.get(mover_id)

@@ -16,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material3.*
@@ -46,10 +47,12 @@ import com.slywombat.slyled.ui.theme.*
 fun ControllerModeOverlay(
     fixtureName: String,
     connected: Boolean = true,
-    onOrient: (roll: Float, pitch: Float, yaw: Float) -> Unit,
+    onOrient: (roll: Float, pitch: Float, yaw: Float, quat: FloatArray) -> Unit,
     onCalibrateStart: (roll: Float, pitch: Float, yaw: Float) -> Unit,
     onCalibrateEnd: (roll: Float, pitch: Float, yaw: Float) -> Unit,
     onColorChange: (r: Int, g: Int, b: Int, dimmer: Int?) -> Unit,
+    onFlash: (on: Boolean) -> Unit,
+    onSmoothing: (smoothing: Float) -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -82,11 +85,14 @@ fun ControllerModeOverlay(
     var red by remember { mutableFloatStateOf(1f) }
     var green by remember { mutableFloatStateOf(1f) }
     var blue by remember { mutableFloatStateOf(1f) }
+    var smoothing by remember { mutableFloatStateOf(0.15f) }
 
     DisposableEffect(rotationSensor) {
         val listener = object : SensorEventListener {
             private val rotationMatrix = FloatArray(9)
             private val orientation = FloatArray(3)
+            // Android's getQuaternionFromVector returns [w, x, y, z] — matches wire order.
+            private val quat = FloatArray(4)
             private var lastSendMs = 0L
 
             override fun onSensorChanged(event: SensorEvent) {
@@ -95,6 +101,8 @@ fun ControllerModeOverlay(
                 val azimuth = Math.toDegrees(orientation[0].toDouble()).toFloat()
                 val pitch = Math.toDegrees(orientation[1].toDouble()).toFloat()
                 val roll = Math.toDegrees(orientation[2].toDouble()).toFloat()
+
+                SensorManager.getQuaternionFromVector(quat, event.values)
 
                 // Store latest for calibrate callbacks
                 latestRoll.set(roll)
@@ -122,8 +130,7 @@ fun ControllerModeOverlay(
                 val now = System.currentTimeMillis()
                 if (now - lastSendMs >= 50) {
                     lastSendMs = now
-                    // Send raw orientation to server — server does all pan/tilt math
-                    onOrient(roll, pitch, azimuth)
+                    onOrient(roll, pitch, azimuth, quat.copyOf())
                 }
             }
 
@@ -133,6 +140,13 @@ fun ControllerModeOverlay(
             sensorManager.registerListener(listener, rotationSensor, SensorManager.SENSOR_DELAY_GAME)
         }
         onDispose { sensorManager.unregisterListener(listener) }
+    }
+
+    // Guarantee release+blackout fires whenever this overlay leaves composition
+    // (tab switch, process recomposition, etc.) — #483. onDismiss is idempotent
+    // on the viewmodel, so a stacking Close-button + dispose call is harmless.
+    DisposableEffect(Unit) {
+        onDispose { onDismiss() }
     }
 
     // Full-screen overlay
@@ -324,6 +338,79 @@ fun ControllerModeOverlay(
                     )
                 }
             )
+
+            Spacer(Modifier.height(20.dp))
+            HorizontalDivider(color = Color(0xFF1E293B))
+            Spacer(Modifier.height(16.dp))
+
+            // Flash (press-and-hold strobe) — #482
+            var flashDown by remember { mutableStateOf(false) }
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        if (flashDown) Color(0xFFFBBF24)
+                        else Color(0xFF1E293B)
+                    )
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown()
+                            flashDown = true
+                            onFlash(true)
+                            waitForUpOrCancellation()
+                            flashDown = false
+                            onFlash(false)
+                        }
+                    }
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Bolt, null,
+                        tint = if (flashDown) Color.Black else Color(0xFFFBBF24),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Hold for Strobe",
+                        color = if (flashDown) Color.Black else Color(0xFFFBBF24),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // Smoothing slider — #481 (EMA factor; higher = snappier, lower = smoother).
+            Text("SMOOTHING", style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFF64748B), fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().height(40.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Smooth", style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF94A3B8), modifier = Modifier.width(56.dp))
+                Slider(
+                    value = smoothing,
+                    onValueChange = {
+                        smoothing = it
+                        onSmoothing(it)
+                    },
+                    valueRange = 0.05f..1.0f,
+                    modifier = Modifier.weight(1f),
+                    colors = SliderDefaults.colors(
+                        thumbColor = CyanSecondary,
+                        activeTrackColor = CyanSecondary
+                    )
+                )
+                Text("%.2f".format(smoothing),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF94A3B8), modifier = Modifier.width(44.dp))
+            }
 
             Spacer(Modifier.height(24.dp))
         }

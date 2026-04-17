@@ -234,11 +234,14 @@ class ControlViewModel @Inject constructor(
         }
     }
 
-    /** Called from overlay at ~20Hz with raw device orientation in degrees. */
-    fun sendOrientation(fixtureId: Int, roll: Float, pitch: Float, yaw: Float) {
+    /** Called from overlay at ~20Hz with raw device orientation in degrees.
+     *  Optionally passes the native rotation-vector quaternion (#485) so the
+     *  server primitive can skip our Euler→quat reconstruction. */
+    fun sendOrientation(fixtureId: Int, roll: Float, pitch: Float, yaw: Float,
+                         quat: FloatArray? = null) {
         viewModelScope.launch {
             try {
-                repository.moverOrient(fixtureId, roll, pitch, yaw)
+                repository.moverOrient(fixtureId, roll, pitch, yaw, quat)
                 if (!_controllerConnected.value) {
                     _controllerConnected.value = true
                     orientErrorCount = 0
@@ -250,6 +253,28 @@ class ControlViewModel @Inject constructor(
                     _controllerConnected.value = false
                 }
                 Log.w(TAG, "sendOrientation failed: ${e.message}")
+            }
+        }
+    }
+
+    /** Momentary strobe (#482). press=true on finger-down, false on lift. */
+    fun setFlash(fixtureId: Int, on: Boolean) {
+        viewModelScope.launch {
+            try {
+                repository.moverFlash(fixtureId, on)
+            } catch (e: Exception) {
+                Log.w(TAG, "moverFlash failed: ${e.message}")
+            }
+        }
+    }
+
+    /** EMA smoothing factor 0.05-1.0 (#481). */
+    fun setSmoothing(fixtureId: Int, smoothing: Float) {
+        viewModelScope.launch {
+            try {
+                repository.moverSmoothing(fixtureId, smoothing)
+            } catch (e: Exception) {
+                Log.w(TAG, "moverSmoothing failed: ${e.message}")
             }
         }
     }

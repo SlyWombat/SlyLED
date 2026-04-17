@@ -4767,6 +4767,19 @@ def api_mover_color():
     return jsonify(ok=ok)
 
 
+@app.post("/api/mover-control/smoothing")
+def api_mover_set_smoothing():
+    """Update EMA smoothing without re-claiming (#481 — Android parity)."""
+    body = request.get_json(silent=True) or {}
+    mid = body.get("moverId")
+    did = body.get("deviceId")
+    sm = body.get("smoothing")
+    if mid is None or not did or sm is None:
+        return jsonify(ok=False, err="moverId + deviceId + smoothing required"), 400
+    ok = _mover_engine.set_smoothing(mid, did, sm)
+    return jsonify(ok=ok)
+
+
 @app.post("/api/mover-control/flash")
 def api_mover_flash():
     """Trigger strobe on a claimed mover (#482 — Android parity).

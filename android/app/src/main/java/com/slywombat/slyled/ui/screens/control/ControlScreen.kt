@@ -241,8 +241,8 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
         ControllerModeOverlay(
             fixtureName = controllerFix.name ?: "Fixture ${controllerFix.id}",
             connected = controllerConnected,
-            onOrient = { roll, pitch, yaw ->
-                viewModel.sendOrientation(controllerFix.id, roll, pitch, yaw)
+            onOrient = { roll, pitch, yaw, quat ->
+                viewModel.sendOrientation(controllerFix.id, roll, pitch, yaw, quat)
             },
             onCalibrateStart = { roll, pitch, yaw ->
                 viewModel.calibrateStart(controllerFix.id, roll, pitch, yaw)
@@ -252,6 +252,12 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
             },
             onColorChange = { r, g, b, dimmer ->
                 viewModel.setMoverColor(controllerFix.id, r, g, b, dimmer)
+            },
+            onFlash = { on ->
+                viewModel.setFlash(controllerFix.id, on)
+            },
+            onSmoothing = { sm ->
+                viewModel.setSmoothing(controllerFix.id, sm)
             },
             onDismiss = { viewModel.exitControllerMode() }
         )

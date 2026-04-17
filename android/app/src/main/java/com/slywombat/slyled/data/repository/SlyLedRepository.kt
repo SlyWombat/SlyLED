@@ -9,8 +9,11 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
@@ -209,16 +212,43 @@ class SlyLedRepository @Inject constructor(
         return requireApi().moverCalibrateEnd(body)
     }
 
-    suspend fun moverOrient(moverId: Int, roll: Float, pitch: Float, yaw: Float): OkResponse {
+    suspend fun moverOrient(moverId: Int, roll: Float, pitch: Float, yaw: Float,
+                             quat: FloatArray? = null): OkResponse {
         val id = requireIdentity()
         val body = buildJsonObject {
             put("moverId", moverId)
             put("deviceId", id.deviceId)
-            put("roll", roll.toDouble())
-            put("pitch", pitch.toDouble())
-            put("yaw", yaw.toDouble())
+            if (quat != null && quat.size == 4) {
+                putJsonArray("quat") {
+                    quat.forEach { add(JsonPrimitive(it.toDouble())) }
+                }
+            } else {
+                put("roll", roll.toDouble())
+                put("pitch", pitch.toDouble())
+                put("yaw", yaw.toDouble())
+            }
         }
         return requireApi().moverOrient(body)
+    }
+
+    suspend fun moverFlash(moverId: Int, on: Boolean): OkResponse {
+        val id = requireIdentity()
+        val body = buildJsonObject {
+            put("moverId", moverId)
+            put("deviceId", id.deviceId)
+            put("on", on)
+        }
+        return requireApi().moverFlash(body)
+    }
+
+    suspend fun moverSmoothing(moverId: Int, smoothing: Float): OkResponse {
+        val id = requireIdentity()
+        val body = buildJsonObject {
+            put("moverId", moverId)
+            put("deviceId", id.deviceId)
+            put("smoothing", smoothing.toDouble())
+        }
+        return requireApi().moverSmoothing(body)
     }
 
     suspend fun moverColor(moverId: Int, r: Int, g: Int, b: Int, dimmer: Int? = null): OkResponse {

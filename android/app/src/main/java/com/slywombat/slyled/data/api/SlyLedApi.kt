@@ -134,6 +134,12 @@ interface SlyLedApi {
     @POST("api/mover-control/color")
     suspend fun moverColor(@Body body: JsonObject): OkResponse
 
+    @POST("api/mover-control/flash")
+    suspend fun moverFlash(@Body body: JsonObject): OkResponse
+
+    @POST("api/mover-control/smoothing")
+    suspend fun moverSmoothing(@Body body: JsonObject): OkResponse
+
     // ── Fixtures Live ────────────────────────────────────────────────
     @GET("api/fixtures/live")
     suspend fun getFixturesLive(): Map<String, kotlinx.serialization.json.JsonElement>
