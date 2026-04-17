@@ -301,10 +301,6 @@ function showAddFixtureModal(){
     +'<select id="af-gyro-child" style="width:100%;margin-bottom:.4em"><option value="">— Select gyro board —</option></select>'
     +'<label>Assigned Mover Fixture (DMX)</label>'
     +'<select id="af-gyro-mover" style="width:100%;margin-bottom:.4em"><option value="">— Select DMX mover —</option></select>'
-    +'<div style="display:flex;gap:.5em">'
-    +'<div style="flex:1"><label>Pan Scale (°/step)</label><input id="af-gyro-pscale" type="number" value="1.0" step="0.1" style="width:100%;margin-bottom:.4em"></div>'
-    +'<div style="flex:1"><label>Tilt Scale (°/step)</label><input id="af-gyro-tscale" type="number" value="1.0" step="0.1" style="width:100%;margin-bottom:.4em"></div>'
-    +'</div>'
     +'<div style="margin-top:.8em"><button class="btn btn-on" onclick="_submitAddFixture()" style="font-size:.95em;padding:.5em 2em">Add Gyro Controller</button></div>'
     +'</div>'
     +'<div id="af-group" style="display:none">'
@@ -537,13 +533,10 @@ function _submitAddFixture(){
     var gname=document.getElementById('af-gyro-name').value.trim();
     var gcid=parseInt(document.getElementById('af-gyro-child').value)||null;
     var gmid=parseInt(document.getElementById('af-gyro-mover').value)||null;
-    var gpsc=parseFloat(document.getElementById('af-gyro-pscale').value)||1.0;
-    var gtsc=parseFloat(document.getElementById('af-gyro-tscale').value)||1.0;
     closeModal();
     ra('POST','/api/fixtures',{
       name:gname||'Gyro Controller',fixtureType:'gyro',type:'point',
-      gyroChildId:gcid,assignedMoverId:gmid,
-      panScale:gpsc,tiltScale:gtsc
+      gyroChildId:gcid,assignedMoverId:gmid
     },function(r){
       if(r&&r.ok)document.getElementById('hs').textContent='Added gyro controller: '+(gname||'Gyro Controller');
       else document.getElementById('hs').textContent='Add failed: '+(r&&r.err||'unknown');
@@ -927,17 +920,6 @@ function _gyroEnable(childId, enable){
   });
 }
 
-function _gyroRecal(childId){
-  ra('POST','/api/gyro/'+childId+'/recalibrate',{},function(r){
-    if(r&&r.ok)document.getElementById('hs').textContent='Gyro IMU zeroed';
-    else document.getElementById('hs').textContent='Recalibrate failed: '+(r&&r.err||'unknown');
-  });
-}
-
-function _gyroShowTuning(rowId){
-  var r=document.getElementById(rowId);
-  if(r)r.style.display=r.style.display==='none'?'table-row':'none';
-}
 
 function _gyroConfigModal(childId){
   // Fetch fresh children data (not available as a global after module extraction)
@@ -981,7 +963,6 @@ function _gyroConfigModalRender(childId, c){
     h+='<div style="border-top:1px solid #1e293b;padding-top:.6em;margin-top:.4em">';
     h+='<div style="display:flex;gap:.5em;align-items:center;margin-bottom:.5em">';
     h+='<button id="gcfg-lock-btn" class="btn btn-on" onclick="_gyroSendLock('+childId+','+f.id+')" style="font-size:.85em">Send Lock</button>';
-    h+='<button class="btn" onclick="_gyroRecal('+f.gyroChildId+')" style="background:#1e3a5f;color:#93c5fd;font-size:.82em">Zero IMU</button>';
     h+='</div>';
     h+='<div id="gcfg-live" style="padding:.4em .6em;border:1px solid #1e293b;border-radius:4px;font-size:.82em;color:#94a3b8;margin-bottom:.6em">';
     h+='\u25cb Not connected</div>';
@@ -990,24 +971,10 @@ function _gyroConfigModalRender(childId, c){
       +'Once locked, press START on the gyro device to begin streaming orientation data. '
       +'The status above updates live while this card is open.</div>';
 
-    // ── Speed + Smoothing (primary controls) ─────────────────────
+    // ── Smoothing (the only operator-facing preference in the
+    //    stage-space architecture; pan/tilt mapping comes from the
+    //    calibration grid, not tunable multipliers) ────────────────
     h+='<div style="border-top:1px solid #1e293b;padding-top:.6em;margin-top:.4em">';
-    h+='<div style="font-weight:600;font-size:.85em;color:#a5b4fc;margin-bottom:.4em">Control</div>';
-
-    // Speed (sets both panScale + tiltScale)
-    var curSpeed=f.panScale!=null?f.panScale:1.0;
-    h+='<div style="margin-bottom:.5em">';
-    h+='<label style="font-size:.78em;color:#94a3b8;display:block">Speed</label>';
-    h+='<div style="display:flex;align-items:center;gap:.5em">';
-    h+='<span style="font-size:.7em;color:#64748b">Slow</span>';
-    h+='<input id="gcfg-speed" type="range" min="0.1" max="3.0" step="0.1" value="'+curSpeed+'" style="flex:1">';
-    h+='<span style="font-size:.7em;color:#64748b">Fast</span>';
-    h+='<span id="gcfg-speed-val" style="font-size:.78em;color:#e2e8f0;min-width:2em;text-align:right">'+curSpeed.toFixed(1)+'x</span>';
-    h+='</div>';
-    h+='<div style="font-size:.68em;color:#64748b;margin-top:.15em">How much the fixture moves relative to hand movement</div>';
-    h+='</div>';
-
-    // Smoothing
     var curSmooth=f.smoothing!=null?f.smoothing:0.15;
     h+='<div style="margin-bottom:.4em">';
     h+='<label style="font-size:.78em;color:#94a3b8;display:block">Smoothing</label>';
@@ -1020,31 +987,6 @@ function _gyroConfigModalRender(childId, c){
     h+='<div style="font-size:.68em;color:#64748b;margin-top:.15em">Low = dampened, smooth movement. High = instant, direct response</div>';
     h+='</div>';
     h+='</div>';
-
-    // ── Advanced tuning (collapsed) ──────────────────────────────
-    h+='<details style="border-top:1px solid #1e293b;padding-top:.4em;margin-top:.4em">';
-    h+='<summary style="font-size:.8em;color:#94a3b8;cursor:pointer;user-select:none">Advanced Tuning</summary>';
-    h+='<div style="display:flex;flex-wrap:wrap;gap:.6em;margin-top:.4em">';
-    var advFields=[
-      {id:'pc',label:'Pan Center',val:f.panCenter!=null?f.panCenter:128,min:0,max:255,step:1,
-       help:'DMX center position for pan (128 = middle)'},
-      {id:'tc',label:'Tilt Center',val:f.tiltCenter!=null?f.tiltCenter:128,min:0,max:255,step:1,
-       help:'DMX center position for tilt (128 = middle)'},
-      {id:'ps',label:'Pan Speed',val:f.panScale!=null?f.panScale:1.0,min:0.1,max:3.0,step:0.1,
-       help:'Override for pan axis only'},
-      {id:'ts',label:'Tilt Speed',val:f.tiltScale!=null?f.tiltScale:1.0,min:0.1,max:3.0,step:0.1,
-       help:'Override for tilt axis only'},
-      {id:'po',label:'Pan Offset \u00b0',val:f.panOffsetDeg||0,min:-180,max:180,step:1,
-       help:'Rotate pan zero point'},
-      {id:'to',label:'Tilt Offset \u00b0',val:f.tiltOffsetDeg||0,min:-90,max:90,step:1,
-       help:'Rotate tilt zero point'},
-    ];
-    advFields.forEach(function(fld){
-      h+='<div><label style="font-size:.73em;color:#94a3b8;display:block" title="'+fld.help+'">'+fld.label+'</label>'
-        +'<input id="gcfg-'+fld.id+'" type="number" value="'+fld.val+'" min="'+fld.min+'" max="'+fld.max+'" step="'+fld.step+'" style="width:70px;font-size:.85em">'
-        +'</div>';
-    });
-    h+='</div></details>';
   }
   h+='</div>';
 
@@ -1058,17 +1000,7 @@ function _gyroConfigModalRender(childId, c){
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
 
-  // Wire up slider live-value displays
-  var speedEl=document.getElementById('gcfg-speed');
-  if(speedEl){
-    speedEl.oninput=function(){
-      var v=parseFloat(this.value);
-      document.getElementById('gcfg-speed-val').textContent=v.toFixed(1)+'x';
-      // Sync advanced pan/tilt speed fields
-      var ps=document.getElementById('gcfg-ps');if(ps)ps.value=v.toFixed(1);
-      var ts=document.getElementById('gcfg-ts');if(ts)ts.value=v.toFixed(1);
-    };
-  }
+  // Wire up smoothing slider live-value display
   var smEl=document.getElementById('gcfg-sm');
   if(smEl){
     smEl.oninput=function(){document.getElementById('gcfg-sm-val').textContent=parseFloat(this.value).toFixed(2);};
@@ -1158,22 +1090,9 @@ function _gyroConfigSave(childId){
       else document.getElementById('hs').textContent='Failed: '+(r&&r.err||'unknown');
     });
   }else if(gf){
-    // Update existing fixture — mover + tuning
+    // Update existing fixture — mover assignment + smoothing
     var body={};
     if(moverId!==undefined)body.assignedMoverId=moverId;
-    // Speed slider → both panScale and tiltScale
-    var speedEl=document.getElementById('gcfg-speed');
-    if(speedEl){
-      var speed=parseFloat(speedEl.value);
-      body.panScale=speed;body.tiltScale=speed;
-    }
-    // Advanced overrides (if user opened the details)
-    var pc=document.getElementById('gcfg-pc');if(pc)body.panCenter=parseFloat(pc.value);
-    var tc=document.getElementById('gcfg-tc');if(tc)body.tiltCenter=parseFloat(tc.value);
-    var ps=document.getElementById('gcfg-ps');if(ps)body.panScale=parseFloat(ps.value);
-    var ts=document.getElementById('gcfg-ts');if(ts)body.tiltScale=parseFloat(ts.value);
-    var po=document.getElementById('gcfg-po');if(po)body.panOffsetDeg=parseFloat(po.value);
-    var to=document.getElementById('gcfg-to');if(to)body.tiltOffsetDeg=parseFloat(to.value);
     var sm=document.getElementById('gcfg-sm');if(sm)body.smoothing=parseFloat(sm.value);
     ra('PUT','/api/fixtures/'+gf.id,body,function(r){
       if(r&&r.ok){document.getElementById('hs').textContent='Gyro configuration saved';closeModal();loadSetup();}
@@ -1218,24 +1137,6 @@ function _gyroReassign(fixtureId,selId){
   ra('PUT','/api/fixtures/'+fixtureId,{assignedMoverId:mid},function(r){
     if(r&&r.ok){document.getElementById('hs').textContent=mid?'Mover reassigned':'Mover cleared';loadSetup();}
     else document.getElementById('hs').textContent='Reassign failed: '+(r&&r.err||'unknown');
-  });
-}
-
-function _gyroSaveTuning(fixtureId){
-  var tid='gyro-tune-'+fixtureId;
-  var pc=parseFloat(document.getElementById(tid+'-pc').value);
-  var tc=parseFloat(document.getElementById(tid+'-tc').value);
-  var ps=parseFloat(document.getElementById(tid+'-ps').value);
-  var ts=parseFloat(document.getElementById(tid+'-ts').value);
-  var po=parseFloat(document.getElementById(tid+'-po').value);
-  var to=parseFloat(document.getElementById(tid+'-to').value);
-  var sm=parseFloat(document.getElementById(tid+'-sm').value);
-  if(isNaN(pc)||pc<0||pc>255||isNaN(tc)||tc<0||tc>255){document.getElementById('hs').textContent='Center must be 0-255';return;}
-  if(isNaN(ps)||ps<0.1||ps>3||isNaN(ts)||ts<0.1||ts>3){document.getElementById('hs').textContent='Scale must be 0.1-3.0';return;}
-  if(isNaN(sm)||sm<0||sm>1){document.getElementById('hs').textContent='Smoothing must be 0-1';return;}
-  ra('PUT','/api/fixtures/'+fixtureId,{panCenter:pc,tiltCenter:tc,panScale:ps,tiltScale:ts,panOffsetDeg:po,tiltOffsetDeg:to,smoothing:sm},function(r){
-    if(r&&r.ok)document.getElementById('hs').textContent='Tuning saved';
-    else document.getElementById('hs').textContent='Save failed: '+(r&&r.err||'unknown');
   });
 }
 

@@ -192,6 +192,16 @@ for _f in _fixtures:
         if "fovDeg" not in _f:
             _f["fovDeg"] = 60
             _fix_patched = True
+    # #484 phase 5 — strip legacy gyro-tuning fields from persisted data.
+    # These were consumer-owned tunables in the delta-path era; the
+    # stage-space primitive doesn't use them and the SPA no longer
+    # surfaces them. Remove silently so old fixtures.json files stop
+    # carrying dead weight forward.
+    for _legacy in ("panScale", "tiltScale", "panCenter", "tiltCenter",
+                    "panOffsetDeg", "tiltOffsetDeg"):
+        if _legacy in _f:
+            _f.pop(_legacy, None)
+            _fix_patched = True
 if _fix_patched:
     _save("fixtures", _fixtures)
 del _fix_patched
@@ -1221,13 +1231,7 @@ def api_fixtures_create():
             f["gyroChildId"]       = body.get("gyroChildId")       # child record ID of the gyro board
             f["assignedMoverId"]   = body.get("assignedMoverId")   # fixture ID of the DMX mover to control
             f["gyroEnabled"]       = body.get("gyroEnabled", False)
-            f["panCenter"]         = body.get("panCenter", 128)    # DMX pan centre value (0-255)
-            f["tiltCenter"]        = body.get("tiltCenter", 128)   # DMX tilt centre value
-            f["panScale"]          = body.get("panScale", 1.0)     # deg/DMX-step scaling
-            f["tiltScale"]         = body.get("tiltScale", 1.0)
-            f["panOffsetDeg"]      = body.get("panOffsetDeg", 0.0)
-            f["tiltOffsetDeg"]     = body.get("tiltOffsetDeg", 0.0)
-            f["smoothing"]         = body.get("smoothing", 0.15)   # EMA factor 0-1
+            f["smoothing"]         = body.get("smoothing", 0.15)   # EMA factor 0-1 (only operator tunable)
         _fixtures.append(f)
         _nxt_fix += 1
         _save("fixtures", _fixtures)
@@ -1298,9 +1302,7 @@ def api_fixture_update(fid):
               "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId",
               "fovDeg", "cameraUrl", "cameraIp", "cameraIdx", "resolutionW", "resolutionH",
               "trackClasses", "trackFps", "trackThreshold", "trackTtl", "trackReidMm",
-              "gyroChildId", "assignedMoverId", "gyroEnabled",
-              "panCenter", "tiltCenter", "panScale", "tiltScale",
-              "panOffsetDeg", "tiltOffsetDeg", "smoothing"):
+              "gyroChildId", "assignedMoverId", "gyroEnabled", "smoothing"):
         if k in body:
             f[k] = body[k]
     _save("fixtures", _fixtures)
@@ -1432,16 +1434,6 @@ def api_gyro_disable(child_id):
                and f.get("gyroChildId") == child_id), None)
     if gf and gf.get("assignedMoverId") and _mover_engine:
         _mover_engine.release(gf["assignedMoverId"], f"gyro-{ip}")
-    return jsonify(ok=True)
-
-@app.post("/api/gyro/<int:child_id>/recalibrate")
-def api_gyro_recalibrate(child_id):
-    """Send CMD_GYRO_RECAL to the gyro board — zeros the IMU reference."""
-    ip, err, code = _gyro_child_ip(child_id)
-    if err:
-        return err, code
-    pkt = _hdr(CMD_GYRO_RECAL)
-    _send(ip, pkt)
     return jsonify(ok=True)
 
 # ── Camera discovery & CRUD ─────────────────────────────────────────────
