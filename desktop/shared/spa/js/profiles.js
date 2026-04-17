@@ -168,6 +168,10 @@ function editProfile(id){
 }
 function showProfileEditor(){_openProfileEditor({id:'',name:'',manufacturer:'',category:'par',channels:[{offset:0,name:'Dimmer',type:'dimmer',capabilities:[{range:[0,255],type:'Intensity',label:'Dimmer 0-100%'}]}],colorMode:'rgb',beamWidth:25,panRange:0,tiltRange:0});}
 var _profEditChTypes=['dimmer','red','green','blue','white','amber','uv','pan','pan-fine','tilt','tilt-fine','strobe','gobo','gobo-rotation','prism','focus','zoom','frost','color-wheel','speed','macro','reset'];
+// Dirty flag for the profile editor — set by any edit in the editor, cleared
+// on successful save. closeModal() checks this and prompts the operator.
+var _peDirty=false;
+function _peMarkDirty(){_peDirty=true;}
 var _profEditCapTypes=['ColorIntensity','Intensity','Pan','PanContinuous','Tilt','TiltContinuous','ShutterStrobe','WheelSlot','WheelRotation','Prism','Focus','Zoom','Frost','Speed','Maintenance','Effect','NoFunction','Generic'];
 function _openProfileEditor(p,isEdit){
   var h='<div style="display:flex;gap:.5em;flex-wrap:wrap;margin-bottom:.5em">';
@@ -200,8 +204,18 @@ function _openProfileEditor(p,isEdit){
   document.getElementById('modal').style.display='block';
   window._peChannels=JSON.parse(JSON.stringify(p.channels||[]));
   window._peEmitters=JSON.parse(JSON.stringify(p.emitters||[]));
+  _peDirty=false;
   _peRenderChs();
   _peRenderEmitters();
+  // Attach dirty-tracking to every input/select in the profile editor header.
+  var body=document.getElementById('modal-body');
+  if(body){
+    var fields=body.querySelectorAll('input, select');
+    for(var i=0;i<fields.length;i++){
+      fields[i].addEventListener('input',_peMarkDirty);
+      fields[i].addEventListener('change',_peMarkDirty);
+    }
+  }
 }
 function _peRenderChs(){
   var el=document.getElementById('pe-chs');if(!el)return;
@@ -291,6 +305,7 @@ function _peAddCap(chIdx){
 }
 function _peSaveCaps(chIdx){
   window._peChannels[chIdx].capabilities=JSON.parse(JSON.stringify(window._peCaps||[]));
+  _peMarkDirty();  // capability changes count as unsaved profile changes
   // Pop the stack to restore profile editor (re-render channels table)
   if(_popModal()){
     _peRenderChs(); // refresh channel table with updated caps
@@ -314,21 +329,45 @@ function _peSave(isEdit){
   if(!p.id&&p.name){p.id=p.name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,128);}
   // Ensure ID is a valid slug
   p.id=(p.id||'').toLowerCase().replace(/[^a-z0-9\-]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
-  if(!p.id||!p.name){document.getElementById('hs').textContent='Profile needs an ID and Name';return;}
+  if(!p.id||!p.name){
+    alert('Profile needs an ID and Name');
+    return;
+  }
   var method=isEdit?'PUT':'POST';
   var url=isEdit?'/api/dmx-profiles/'+p.id:'/api/dmx-profiles';
+  var hs=document.getElementById('hs');
+  if(hs)hs.textContent='Saving '+p.name+'...';
   ra(method,url,p,function(r){
-    if(r&&r.ok){document.getElementById('hs').textContent='Profile saved: '+p.name;closeModal();if(typeof loadDmxProfiles==='function')loadDmxProfiles();}
-    else if(r&&r.err&&r.err.indexOf('built-in')>=0){
+    if(r&&r.ok){
+      if(hs)hs.textContent='Profile saved: '+p.name;
+      _peDirty=false;  // clear dirty flag so close doesn't prompt
+      closeModal();
+      if(typeof loadDmxProfiles==='function')loadDmxProfiles();
+      return;
+    }
+    if(r&&r.err&&r.err.indexOf('built-in')>=0){
       // Built-in profile — fork as custom copy
       if(!p.id.endsWith('-custom'))p.id=p.id+'-custom';
       p.builtin=false;
       ra('POST','/api/dmx-profiles',p,function(r2){
-        if(r2&&r2.ok){document.getElementById('hs').textContent='Saved as custom copy: '+p.id;closeModal();if(typeof loadDmxProfiles==='function')loadDmxProfiles();}
-        else document.getElementById('hs').textContent='Save failed: '+(r2&&r2.err||'unknown');
+        if(r2&&r2.ok){
+          if(hs)hs.textContent='Saved as custom copy: '+p.id;
+          _peDirty=false;
+          closeModal();
+          if(typeof loadDmxProfiles==='function')loadDmxProfiles();
+        }else{
+          var m2='Save failed: '+(r2&&r2.err||'unknown');
+          if(hs)hs.textContent=m2; alert(m2);
+        }
       });
+      return;
     }
-    else document.getElementById('hs').textContent='Save failed: '+(r&&r.err||'unknown');
+    // Any other failure (null = network error, or {err:...})
+    var m=r===null
+      ? 'Save failed — no response from server. Is it running?'
+      : ('Save failed: '+(r&&r.err||'server rejected request'));
+    if(hs)hs.textContent=m;
+    alert(m);
   });
 }
 function _peRenderEmitters(){

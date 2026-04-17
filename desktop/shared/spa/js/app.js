@@ -246,6 +246,14 @@ function _popModal(){
   return false;
 }
 function closeModal(){
+  // Guard: unsaved profile-editor changes prompt before closing.
+  if(typeof _peDirty !== 'undefined' && _peDirty){
+    // Only prompt when the top-level modal (not a pushed sub-dialog) would close.
+    if(!_modalStack.length){
+      if(!confirm('You have unsaved changes to this profile. Close and discard?'))return;
+      _peDirty=false;
+    }
+  }
   // If there's a parent dialog on the stack, go back to it instead of closing
   if(_popModal())return;
   // Clear any active polling intervals (#430, gyro live status)
