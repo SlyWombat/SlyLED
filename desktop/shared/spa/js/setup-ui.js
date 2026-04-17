@@ -21,8 +21,16 @@ function _renderSetup(){
       _setupChildren=children||[];
       var cMap={};(children||[]).forEach(function(c){cMap[c.id]=c;});
       // Separate children with fixtures from standalone hardware (DMX bridges, unlinked)
-      var linkedChildIds=new Set();(fixtures||[]).forEach(function(f){if(f.childId!=null)linkedChildIds.add(f.childId);});
-      var standaloneHw=(children||[]).filter(function(c){return !linkedChildIds.has(c.id);});
+      var linkedChildIds=new Set();(fixtures||[]).forEach(function(f){
+        if(f.childId!=null)linkedChildIds.add(f.childId);
+        if(f.gyroChildId!=null)linkedChildIds.add(f.gyroChildId);
+      });
+      // Gyro children get their own dedicated row later — never treat them
+      // as generic "standalone hardware" even if their fixture isn't yet
+      // linked, otherwise they render twice.
+      var standaloneHw=(children||[]).filter(function(c){
+        return !linkedChildIds.has(c.id) && c.type!=='gyro';
+      });
 
       var h='<div style="margin-bottom:.6em">'
         +'<button class="btn btn-on" onclick="showAddFixtureModal()" data-tip="setupAdd">+ Add</button>'
@@ -701,8 +709,14 @@ function addDiscovered(ip){
       document.getElementById('hs').textContent='Added DMX bridge: '+cname;
       setTimeout(loadSetup,1000);
     }else if(ctype==='gyro'){
-      // Gyro puck — create a gyro fixture (no mover assigned yet; user
-      // picks a mover in the Configure modal).
+      // Gyro puck — idempotent: if a gyro fixture already exists for this
+      // child id, don't spawn a duplicate.
+      var existing=(_fixtures||[]).find(function(f){return f.fixtureType==='gyro'&&f.gyroChildId===cid;});
+      if(existing){
+        document.getElementById('hs').textContent='Gyro already registered: '+cname;
+        setTimeout(loadSetup,1000);
+        return;
+      }
       ra('POST','/api/fixtures',{name:cname,fixtureType:'gyro',type:'point',gyroChildId:cid,gyroEnabled:false},function(){
         document.getElementById('hs').textContent='Added gyro fixture: '+cname;
         setTimeout(loadSetup,2000);
