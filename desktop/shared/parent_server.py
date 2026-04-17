@@ -5001,27 +5001,32 @@ def _apply_profile_defaults(engine):
                     uni_buf.set_channel(addr + offset + 1, val16 & 0xFF)
                 else:
                     uni_buf.set_channel(addr + offset, max(0, min(255, int(default))))
-        # Seed pan/tilt to the fixture's layout-forward target.
-        #  - If the fixture has a calibration grid (`_mover_cal[fid]`),
-        #    compute the target stage point from `fixture.rotation` (at
-        #    3 m) and use `affine_pan_tilt` to get the DMX values. This
-        #    honours the per-fixture calibration (centerPan/Tilt + grid)
-        #    that the operator configured.
-        #  - Otherwise fall back to 0.5/0.5 (mount-local forward).
+        # Seed pan/tilt to the fixture's layout-forward reference.
+        # Preference order:
+        #   1. Calibration's explicit `centerPan`/`centerTilt` — the
+        #      operator's "home" reference, known to aim correctly.
+        #   2. Affine fit against the fixture's rotation-derived forward
+        #      target (works only when the target lies inside the sampled
+        #      region; otherwise extrapolates poorly).
+        #   3. Mount-local forward 0.5/0.5.
         pan_seed, tilt_seed = 0.5, 0.5
         cal = _mover_cal.get(str(f["id"]))
-        if cal and cal.get("samples") and len(cal["samples"]) >= 2:
-            try:
-                from bake_engine import _rotation_to_aim
-                from mover_calibrator import affine_pan_tilt
-                pos = [f.get("x", 0), f.get("y", 0), f.get("z", 0)]
-                rot = f.get("rotation") or [0, 0, 0]
-                aim = _rotation_to_aim(rot, pos, 3000)  # 3 m forward per layout
-                pt = affine_pan_tilt(cal["samples"], aim[0], aim[1], aim[2])
-                if pt is not None:
-                    pan_seed, tilt_seed = pt
-            except Exception:
-                pass
+        if cal:
+            cp, ct = cal.get("centerPan"), cal.get("centerTilt")
+            if cp is not None and ct is not None:
+                pan_seed, tilt_seed = cp, ct
+            elif cal.get("samples") and len(cal["samples"]) >= 2:
+                try:
+                    from bake_engine import _rotation_to_aim
+                    from mover_calibrator import affine_pan_tilt
+                    pos = [f.get("x", 0), f.get("y", 0), f.get("z", 0)]
+                    rot = f.get("rotation") or [0, 0, 0]
+                    aim = _rotation_to_aim(rot, pos, 3000)
+                    pt = affine_pan_tilt(cal["samples"], aim[0], aim[1], aim[2])
+                    if pt is not None:
+                        pan_seed, tilt_seed = pt
+                except Exception:
+                    pass
         uni_buf.set_fixture_pan_tilt(addr, pan_seed, tilt_seed, profile)
 
 @app.post("/api/dmx/start")
