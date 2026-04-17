@@ -30,7 +30,7 @@ class MoverClaim:
         "mover_id", "device_id", "device_name", "device_type",
         "claimed_at", "last_write_ts", "ttl_s", "state",
         "color_r", "color_g", "color_b", "dimmer", "strobe_active",
-        "pan_smooth", "tilt_smooth", "smoothing",
+        "pan_smooth", "tilt_smooth", "have_pan_tilt", "smoothing",
     )
 
     def __init__(self, mover_id, device_id, device_name, device_type="gyro",
@@ -51,9 +51,11 @@ class MoverClaim:
         self.dimmer = 255
         self.strobe_active = False
 
-        # Smoothed pan/tilt in normalised [0,1]. Initialised to centre.
+        # Smoothed pan/tilt in normalised [0,1]. Initialised to centre but
+        # not considered valid until the first aim sample arrives.
         self.pan_smooth = 0.5
         self.tilt_smooth = 0.5
+        self.have_pan_tilt = False
         self.smoothing = smoothing
 
     def to_dict(self):
@@ -248,6 +250,7 @@ class MoverControlEngine:
                 # Locked but user hasn't started streaming — don't write DMX.
                 continue
 
+            have_aim = False
             if claim.state == "streaming":
                 remote = self._get_remote(claim.device_id)
                 if remote is not None and remote.aim_stage is not None \
@@ -255,14 +258,27 @@ class MoverControlEngine:
                     pan_norm, tilt_norm = self._aim_to_pan_tilt(
                         mover_id, mover, remote.aim_stage,
                     )
-                    alpha = max(0.0, min(1.0, 1.0 - claim.smoothing))
-                    claim.pan_smooth  += alpha * (pan_norm  - claim.pan_smooth)
-                    claim.tilt_smooth += alpha * (tilt_norm - claim.tilt_smooth)
+                    if not claim.have_pan_tilt:
+                        # First aim sample — jump to target without EMA so the
+                        # fixture doesn't visibly slew from mechanical centre.
+                        claim.pan_smooth  = pan_norm
+                        claim.tilt_smooth = tilt_norm
+                        claim.have_pan_tilt = True
+                    else:
+                        alpha = max(0.0, min(1.0, 1.0 - claim.smoothing))
+                        claim.pan_smooth  += alpha * (pan_norm  - claim.pan_smooth)
+                        claim.tilt_smooth += alpha * (tilt_norm - claim.tilt_smooth)
+                    have_aim = True
 
-            # Write DMX for streaming + calibrating (holds position while
-            # operator aligns the puck during calibration).
-            self._write_dmx(mover, prof_info, claim)
-            claim.last_write_ts = time.time()
+            if claim.state == "calibrating" or have_aim:
+                # Write DMX when we have a real aim, or during calibrate-hold
+                # (holds the last known position while the operator aligns).
+                self._write_dmx(mover, prof_info, claim)
+                claim.last_write_ts = time.time()
+            # Otherwise — claim is streaming but no aim yet. Leave whatever
+            # `_apply_profile_defaults` seeded (typically the calibrated
+            # layout-forward target) in place so the fixture powers up aimed
+            # correctly instead of slewing to mechanical centre.
 
     # ── DMX writers ─────────────────────────────────────────────────
 
