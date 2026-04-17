@@ -134,6 +134,8 @@ function s3dInit(){
   s3dAnimate();
   // Apply default 3D view after init
   setView('3d');
+  // Start polling remote-orientation state for debug viz (#484 phase 3)
+  s3dPollRemotes();
 }
 
 // Right-click handler for 3D scene — dismiss scan ghosts
@@ -993,4 +995,128 @@ function autoArrangeDmx(){
       }
     });
   });
+}
+
+// ── Remote-orientation debug visualisation (#484 phase 3) ─────────────────
+// Renders each remote (gyro puck / phone) as an icon + aim ray in the
+// viewport. Consumes GET /api/remotes/live — no coupling to mover-follow.
+
+var _s3dRemotes={group:null,byId:{},pollId:null};
+
+function _s3dRemoteColor(rec){
+  if(rec.staleReason)return 0x555555;                 // grey
+  if(rec.connectionState==='armed')return 0x3b82f6;   // blue
+  if(rec.connectionState==='streaming'){
+    var age=rec.lastDataAge;
+    if(age==null||age<2)return 0x22c55e;              // green — fresh
+    if(age<10)return 0xf59e0b;                        // amber — stale data
+    return 0x6b7280;                                  // dim grey — dead stream
+  }
+  return 0x64748b;                                    // idle — slate
+}
+
+// Stage (mm, X=width Y=depth Z=height) → scene (meters, Y-up).
+// 3D X = stage X / 1000, 3D Y = stage Z / 1000, 3D Z = stage Y / 1000.
+function _s3dRemotePos(pos_mm){
+  return new THREE.Vector3(
+    (pos_mm[0]||0)/1000,
+    (pos_mm[2]||0)/1000,
+    (pos_mm[1]||0)/1000
+  );
+}
+function _s3dRemoteAim(aim){
+  // aim is unit vector in stage coords — remap axes for scene.
+  return new THREE.Vector3(aim[0]||0, aim[2]||0, aim[1]||0).normalize();
+}
+
+function _s3dBuildRemoteGroup(rec){
+  var grp=new THREE.Group();
+  grp.userData.remoteId=rec.id;
+  var col=_s3dRemoteColor(rec);
+
+  // Icon: small cube for phone, cylinder for puck.
+  var iconGeo=rec.kind==='phone'
+    ? new THREE.BoxGeometry(0.16,0.26,0.02)
+    : new THREE.CylinderGeometry(0.09,0.09,0.03,24);
+  var iconMat=new THREE.MeshStandardMaterial({color:col,roughness:0.4,metalness:0.2});
+  var icon=new THREE.Mesh(iconGeo,iconMat);
+  grp.add(icon);
+
+  // Aim ray: THREE.ArrowHelper (line + cone tip).
+  var dir=rec.aim?_s3dRemoteAim(rec.aim):new THREE.Vector3(0,1,0);
+  var rayLen=3.0; // 3 m — the ray visually terminates at 3 m from the remote.
+  var arrow=new THREE.ArrowHelper(dir,new THREE.Vector3(0,0,0),rayLen,col,0.25,0.12);
+  arrow.userData.isRay=true;
+  grp.add(arrow);
+
+  // Label
+  var lbl=_s3dLabel(rec.name||('Remote '+rec.id));
+  lbl.position.set(0,0.2,0);lbl.scale.set(0.6,0.15,1);
+  grp.add(lbl);
+
+  return grp;
+}
+
+function _s3dUpdateRemoteGroup(grp,rec){
+  var col=_s3dRemoteColor(rec);
+  grp.traverse(function(o){
+    if(o.userData.isRay){
+      if(rec.aim){
+        var d=_s3dRemoteAim(rec.aim);
+        o.setDirection(d);
+      }
+      o.setColor(new THREE.Color(col));
+    }else if(o.isMesh&&o.material){
+      o.material.color=new THREE.Color(col);
+    }
+  });
+}
+
+function s3dRenderRemotes(list){
+  if(!_s3d.inited||typeof THREE==='undefined')return;
+  if(!_s3dRemotes.group){
+    _s3dRemotes.group=new THREE.Group();
+    _s3dRemotes.group.userData.remotesRoot=true;
+    _s3d.scene.add(_s3dRemotes.group);
+  }
+  var seen={};
+  (list||[]).forEach(function(rec){
+    seen[rec.id]=true;
+    var grp=_s3dRemotes.byId[rec.id];
+    if(!grp){
+      grp=_s3dBuildRemoteGroup(rec);
+      _s3dRemotes.group.add(grp);
+      _s3dRemotes.byId[rec.id]=grp;
+    }
+    grp.position.copy(_s3dRemotePos(rec.pos||[0,0,1600]));
+    _s3dUpdateRemoteGroup(grp,rec);
+  });
+  // Remove remotes no longer in the list
+  Object.keys(_s3dRemotes.byId).forEach(function(idStr){
+    if(!seen[idStr]){
+      var grp=_s3dRemotes.byId[idStr];
+      grp.traverse(function(obj){
+        if(obj.geometry)obj.geometry.dispose();
+        if(obj.material){if(obj.material.map)obj.material.map.dispose();obj.material.dispose();}
+      });
+      _s3dRemotes.group.remove(grp);
+      delete _s3dRemotes.byId[idStr];
+    }
+  });
+}
+
+function s3dPollRemotes(){
+  if(_s3dRemotes.pollId)return;
+  var fetchOne=function(){
+    if(!_s3d.inited)return;
+    ra('GET','/api/remotes/live',null,function(d){
+      if(d&&d.remotes)s3dRenderRemotes(d.remotes);
+    });
+  };
+  fetchOne();
+  _s3dRemotes.pollId=setInterval(fetchOne,1000);
+}
+
+function s3dStopPollRemotes(){
+  if(_s3dRemotes.pollId){clearInterval(_s3dRemotes.pollId);_s3dRemotes.pollId=null;}
 }
