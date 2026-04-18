@@ -300,6 +300,10 @@ function _peRenderCaps(chIdx){
   var h='<div style="position:relative;height:24px;background:#111;border:1px solid #334;border-radius:3px;margin-bottom:.5em">';
   var capColors={'Intensity':'#3b82f6','ColorIntensity':'#ef4444','Pan':'#22d3ee','Tilt':'#a78bfa','ShutterStrobe':'#f59e0b','WheelSlot':'#10b981','Speed':'#f97316','Generic':'#64748b','NoFunction':'#334155'};
   var isColorWheel=window._peChannels&&window._peChannels[chIdx]&&window._peChannels[chIdx].type==='color-wheel';
+  var isStrobe=window._peChannels&&window._peChannels[chIdx]&&window._peChannels[chIdx].type==='strobe';
+  // #516 — shutter-effect values map each ShutterStrobe range to a
+  // canonical semantic meaning. Matches dmx_profiles.SHUTTER_EFFECTS.
+  var shutterEffects=['Open','Closed','Strobe','Pulse','RampUp','RampDown','RampUpDown','Lightning'];
   (window._peCaps||[]).forEach(function(c,j){
     var pct0=c.range[0]/maxVal*100,pct1=(c.range[1]+1)/maxVal*100;
     var w=pct1-pct0;
@@ -307,12 +311,24 @@ function _peRenderCaps(chIdx){
     h+='<div style="position:absolute;left:'+pct0+'%;width:'+w+'%;height:100%;background:'+col+';opacity:0.6;border-radius:2px" title="'+c.range[0]+'-'+c.range[1]+': '+(c.label||c.type)+'"></div>';
   });
   h+='</div>';
-  h+='<table class="tbl" style="font-size:.75em"><tr><th>Min</th><th>Max</th><th>Type</th><th>Label</th>'+(isColorWheel?'<th>Color</th>':'')+'<th>Default</th><th></th></tr>';
+  h+='<table class="tbl" style="font-size:.75em"><tr><th>Min</th><th>Max</th><th>Type</th>'+(isStrobe?'<th>Effect</th>':'')+'<th>Label</th>'+(isColorWheel?'<th>Color</th>':'')+'<th>Default</th><th></th></tr>';
   (window._peCaps||[]).forEach(function(c,j){
     var tOpts='';_profEditCapTypes.forEach(function(t){tOpts+='<option'+(t===c.type?' selected':'')+'>'+t+'</option>';});
     h+='<tr><td><input type="number" value="'+c.range[0]+'" min="0" max="'+maxVal+'" style="width:55px;font-size:.9em" onchange="window._peCaps['+j+'].range[0]=parseInt(this.value);_peRenderCaps('+chIdx+')"></td>';
     h+='<td><input type="number" value="'+c.range[1]+'" min="0" max="'+maxVal+'" style="width:55px;font-size:.9em" onchange="window._peCaps['+j+'].range[1]=parseInt(this.value);_peRenderCaps('+chIdx+')"></td>';
     h+='<td><select style="font-size:.85em" onchange="window._peCaps['+j+'].type=this.value;_peRenderCaps('+chIdx+')">'+tOpts+'</select></td>';
+    if(isStrobe){
+      // #516 — shutterEffect dropdown, only relevant when the cap type
+      // is ShutterStrobe. Other cap types on a strobe channel show a
+      // disabled "—" placeholder so the table columns stay aligned.
+      if(c.type==='ShutterStrobe'){
+        var eOpts='<option value="">(none)</option>';
+        shutterEffects.forEach(function(e){eOpts+='<option'+(e===c.shutterEffect?' selected':'')+' value="'+e+'">'+e+'</option>';});
+        h+='<td><select style="font-size:.85em" onchange="window._peCaps['+j+'].shutterEffect=this.value||undefined;_peRenderCaps('+chIdx+')">'+eOpts+'</select></td>';
+      }else{
+        h+='<td style="color:#475569;font-size:.8em">—</td>';
+      }
+    }
     h+='<td><input value="'+escapeHtml(c.label||'')+'" style="width:120px;font-size:.9em" onchange="window._peCaps['+j+'].label=this.value"></td>';
     if(isColorWheel){
       var cHex=c.color||'#000000';
@@ -333,10 +349,19 @@ function _peRenderCaps(chIdx){
 function _peAddCap(chIdx){
   var caps=window._peCaps||[];
   var startVal=caps.length?caps[caps.length-1].range[1]+1:0;
-  var isColorWheel=window._peChannels&&window._peChannels[chIdx]&&window._peChannels[chIdx].type==='color-wheel';
-  var newCap=isColorWheel
-    ?{range:[startVal,Math.min(startVal+4,255)],type:'WheelSlot',label:'',color:'#ffffff',default:startVal}
-    :{range:[startVal,255],type:'Intensity',label:'',default:startVal};
+  var chType=window._peChannels&&window._peChannels[chIdx]?window._peChannels[chIdx].type:'';
+  var isColorWheel=chType==='color-wheel';
+  var isStrobe=chType==='strobe';
+  var newCap;
+  if(isColorWheel){
+    newCap={range:[startVal,Math.min(startVal+4,255)],type:'WheelSlot',label:'',color:'#ffffff',default:startVal};
+  }else if(isStrobe){
+    // #516 — first strobe range defaults to Open, subsequent to Strobe.
+    var eff=caps.length===0?'Open':'Strobe';
+    newCap={range:[startVal,255],type:'ShutterStrobe',shutterEffect:eff,label:eff,default:startVal};
+  }else{
+    newCap={range:[startVal,255],type:'Intensity',label:'',default:startVal};
+  }
   caps.push(newCap);
   _peRenderCaps(chIdx);
 }

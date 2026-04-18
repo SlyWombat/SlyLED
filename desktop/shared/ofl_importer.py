@@ -250,6 +250,13 @@ def _convert_capabilities(ofl_channel, is_16bit=False):
                             continue
                     entry[key] = val
 
+        # #516 — preserve shutterEffect so runtime can identify Open /
+        # Strobe / Closed ranges without re-guessing from the label.
+        if ofl_type == "ShutterStrobe":
+            se = cap.get("shutterEffect")
+            if isinstance(se, str) and se:
+                entry["shutterEffect"] = se
+
         result.append(entry)
 
     return result

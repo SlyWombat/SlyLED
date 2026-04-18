@@ -407,12 +407,20 @@ class MoverControlEngine:
             default = ch.get("default")
             # Strobe: always honour the strobe_active flag, even when the
             # profile's default is None (which many fixtures leave blank).
+            # When NOT strobing, write the profile's shutterEffect=Open
+            # value (#516) so operator-controlled movers power up with a
+            # visible beam — the raw channel default may be 0, which on
+            # "closed at 0" wirings would blacken the fixture.
             if ch_type == "strobe":
                 if claim.strobe_active:
                     uni_buf.set_channel(addr + ch.get("offset", 0),
                                         self._find_strobe_value(ch))
-                elif default is not None and default > 0:
-                    uni_buf.set_channel(addr + ch.get("offset", 0), int(default))
+                else:
+                    open_val = self._find_strobe_open(prof_info)
+                    if open_val is not None:
+                        uni_buf.set_channel(addr + ch.get("offset", 0), open_val)
+                    elif default is not None and default > 0:
+                        uni_buf.set_channel(addr + ch.get("offset", 0), int(default))
                 continue
             # Other channels: write the profile default when present.
             if default is None or default <= 0:
@@ -422,15 +430,38 @@ class MoverControlEngine:
     @staticmethod
     def _find_strobe_value(ch):
         """DMX value to send when strobe_active. Prefers a ShutterStrobe
-        capability with 'strobe' in its label, falls back to channel
-        midpoint 128 otherwise (works for most generic intensity-mapped
-        strobe channels)."""
+        range with ``shutterEffect == "Strobe"`` (#516 annotation), falls
+        back to label matching for legacy profiles, then to channel
+        midpoint 128."""
+        for cap in ch.get("capabilities", []) or []:
+            if cap.get("type") != "ShutterStrobe":
+                continue
+            eff = cap.get("shutterEffect")
+            if eff == "Strobe":
+                rng = cap.get("range", [0, 255])
+                return (rng[0] + rng[1]) // 2
+        # Legacy label heuristic
         for cap in ch.get("capabilities", []) or []:
             label = (cap.get("label") or "").lower()
             rng = cap.get("range", [0, 255])
             if cap.get("type") == "ShutterStrobe" and "strobe" in label:
                 return (rng[0] + rng[1]) // 2
         return 128
+
+    @staticmethod
+    def _find_strobe_open(prof_info):
+        """DMX value that means 'shutter open / solid light' for the
+        profile. Delegates to dmx_profiles.strobe_open_value which
+        handles both annotated and legacy ShutterStrobe layouts.
+        Returns None if the profile has no strobe channel at all so the
+        caller can decide how to degrade."""
+        try:
+            from dmx_profiles import strobe_open_value, _strobe_channel
+            if _strobe_channel(prof_info) is None:
+                return None
+            return strobe_open_value(prof_info)
+        except Exception:
+            return None
 
     def _blackout_mover(self, mover_id):
         mover = self._get_mover(mover_id)

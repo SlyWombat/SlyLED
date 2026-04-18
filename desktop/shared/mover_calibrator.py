@@ -120,6 +120,17 @@ def _set_mover_dmx(dmx, addr, pan, tilt, r, g, b, dimmer=255, profile=None):
                 ch_type = ch.get("type", "")
                 if default is not None and default > 0 and ch_type not in ("pan", "tilt", "dimmer", "red", "green", "blue", "color-wheel"):
                     dmx[base + ch.get("offset", 0)] = max(0, min(255, int(default)))
+            # #516 — ensure the shutter is OPEN during calibration so the
+            # beam is always visible to the camera. strobe_open_value
+            # honours the shutterEffect annotation on ShutterStrobe ranges
+            # (Open vs Closed) and overrides any channel default that
+            # would leave the fixture strobing or blacked out.
+            if "strobe" in cm:
+                try:
+                    from dmx_profiles import strobe_open_value
+                    dmx[base + cm["strobe"]] = strobe_open_value(profile)
+                except Exception:
+                    pass
         except Exception as e:
             log.warning("Profile-aware DMX write failed (addr=%d): %s — falling back to legacy", addr, e)
             # Fall through to legacy

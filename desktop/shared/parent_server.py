@@ -42,6 +42,7 @@ from spatial_engine import (catmull_rom_sample, resolve_fixture,
 from bake_engine import (bake_timeline, pack_lsq_zip, segments_to_load_steps,
                          BakeProgress)
 from dmx_profiles import ProfileLibrary
+import dmx_profiles
 from dmx_artnet import ArtNetEngine
 from dmx_sacn import sACNEngine
 
@@ -5910,6 +5911,15 @@ def _apply_profile_defaults(engine):
                     uni_buf.set_channel(addr + offset + 1, val16 & 0xFF)
                 else:
                     uni_buf.set_channel(addr + offset, max(0, min(255, int(default))))
+        # #516 — for the strobe channel, always write the "Open" DMX
+        # value derived from ShutterStrobe capability ranges. The profile
+        # default may be 0, which on "Closed at 0" wirings would leave
+        # the fixture blacked out; strobe_open_value honours both
+        # conventions via the shutterEffect annotation.
+        strobe_open = dmx_profiles.strobe_open_value(info)
+        ch_map = info.get("channel_map", {})
+        if "strobe" in ch_map:
+            uni_buf.set_channel(addr + ch_map["strobe"], strobe_open)
         # Seed pan/tilt to the fixture's home position — the layout-stored
         # `rotation` aim vector (#493). Preference order:
         #   1. Parametric v2 model inverse() of the home target — closed form,

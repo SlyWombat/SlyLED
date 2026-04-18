@@ -108,6 +108,127 @@ def has_color_wheel_only(prof_info):
     return "color-wheel" in ch_map and "red" not in ch_map
 
 
+# ── Shutter / strobe helpers (#516) ────────────────────────────────────────
+#
+# ShutterStrobe capability ranges can carry a `shutterEffect` field that maps
+# semantic meaning (Open / Closed / Strobe / Pulse / Lightning / …) to a DMX
+# range. Consumers call these helpers instead of guessing "0 means open".
+# For profiles that haven't been annotated we fall back to a label-based
+# heuristic so legacy profiles keep working.
+
+# Canonical shutterEffect values (aligned with OFL / GDTF).
+SHUTTER_EFFECTS = (
+    "Open", "Closed", "Strobe", "Pulse",
+    "RampUp", "RampDown", "RampUpDown", "Lightning",
+)
+
+
+def _strobe_channel(prof_info):
+    """Return the first ``type: "strobe"`` channel dict, or None."""
+    for ch in (prof_info.get("channels") or []):
+        if ch.get("type") == "strobe":
+            return ch
+    return None
+
+
+def _cap_effect(cap):
+    """Extract the canonical shutterEffect from a capability dict, using
+    the explicit field when present and falling back to a label scan.
+    Returns None if the capability is not a ShutterStrobe."""
+    if cap.get("type") != "ShutterStrobe":
+        return None
+    eff = cap.get("shutterEffect")
+    if eff:
+        return eff
+    label = (cap.get("label") or "").lower()
+    if not label:
+        return None
+    # Most-specific matches first so "solid open" doesn't mistake for Open.
+    if "closed" in label or "blackout" in label:
+        return "Closed"
+    if "lightning" in label:
+        return "Lightning"
+    if "ramp up" in label and "down" in label:
+        return "RampUpDown"
+    if "ramp up" in label:
+        return "RampUp"
+    if "ramp down" in label:
+        return "RampDown"
+    if "pulse" in label:
+        return "Pulse"
+    if "strobe" in label:
+        return "Strobe"
+    if "open" in label or "solid" in label:
+        return "Open"
+    return None
+
+
+def strobe_open_value(prof_info):
+    """Return the DMX value that means 'shutter open / solid light' for
+    this profile — the midpoint of the first ShutterStrobe range whose
+    ``shutterEffect`` is ``Open``. Legacy profiles without the annotation
+    fall back to label matching (`"open"` / `"solid"`).
+
+    Returns 0 when the profile has no strobe channel, no Open range, or
+    isn't a ShutterStrobe — 0 is the safe default for fixtures where
+    DMX=0 means full-light (most common wiring convention).
+    """
+    ch = _strobe_channel(prof_info)
+    if not ch:
+        return 0
+    for cap in (ch.get("capabilities") or []):
+        if _cap_effect(cap) == "Open":
+            rng = cap.get("range") or [0, 0]
+            return int((rng[0] + rng[1]) // 2)
+    return 0
+
+
+def strobe_range(prof_info, effect="Strobe"):
+    """Return ``(min_dmx, max_dmx)`` for the named shutter effect, or
+    None when the profile doesn't declare that effect. Used to map a
+    0-100 % speed slider onto the profile's actual DMX window."""
+    ch = _strobe_channel(prof_info)
+    if not ch:
+        return None
+    for cap in (ch.get("capabilities") or []):
+        if _cap_effect(cap) == effect:
+            rng = cap.get("range")
+            if rng and len(rng) == 2:
+                return (int(rng[0]), int(rng[1]))
+    return None
+
+
+def strobe_value_for_speed(prof_info, speed_pct, effect="Strobe"):
+    """Map a 0-100 % strobe-speed slider to the profile's actual DMX
+    range for the given effect. Clamped to the range endpoints. Returns
+    None when the profile doesn't declare the requested effect (caller
+    should fall back to a literal DMX write)."""
+    rng = strobe_range(prof_info, effect)
+    if rng is None:
+        return None
+    p = max(0.0, min(1.0, float(speed_pct) / 100.0 if speed_pct > 1 else float(speed_pct)))
+    lo, hi = rng
+    return int(round(lo + p * (hi - lo)))
+
+
+def shutter_effect_at(prof_info, dmx_value):
+    """Reverse lookup: which shutterEffect is the fixture currently in,
+    given the DMX value on its strobe channel? Returns None when the
+    profile has no strobe channel or no matching range. Useful for the
+    live-output status widget."""
+    ch = _strobe_channel(prof_info)
+    if not ch:
+        return None
+    dv = max(0, min(255, int(dmx_value)))
+    for cap in (ch.get("capabilities") or []):
+        rng = cap.get("range")
+        if not rng or len(rng) != 2:
+            continue
+        if rng[0] <= dv <= rng[1]:
+            return _cap_effect(cap)
+    return None
+
+
 # -- Capability helper --------------------------------------------------------
 
 def _simple_cap(label, cap_type="Intensity"):
@@ -213,8 +334,8 @@ BUILTIN_PROFILES = [
             {"offset": 2, "name": "Green",  "type": "green",  "capabilities": _color_cap("Green")},
             {"offset": 3, "name": "Blue",   "type": "blue",   "capabilities": _color_cap("Blue")},
             {"offset": 4, "name": "Strobe", "type": "strobe", "capabilities": [
-                {"range": [0, 3],   "type": "ShutterStrobe", "label": "Closed"},
-                {"range": [4, 255], "type": "ShutterStrobe", "label": "Strobe slow-fast"},
+                {"range": [0, 3],   "type": "ShutterStrobe", "shutterEffect": "Closed", "label": "Closed"},
+                {"range": [4, 255], "type": "ShutterStrobe", "shutterEffect": "Strobe", "label": "Strobe slow-fast"},
             ]},
         ],
         "channelCount": 5,
@@ -263,8 +384,8 @@ BUILTIN_PROFILES = [
             {"offset": 4,  "name": "Speed",     "type": "speed",       "capabilities": _simple_cap("P/T speed fast-slow", "Speed")},
             {"offset": 5,  "name": "Dimmer",    "type": "dimmer",      "default": 255, "capabilities": _simple_cap("Dimmer 0-100%")},
             {"offset": 6,  "name": "Strobe",    "type": "strobe",      "capabilities": [
-                {"range": [0, 3],   "type": "ShutterStrobe", "label": "Open"},
-                {"range": [4, 255], "type": "ShutterStrobe", "label": "Strobe slow-fast"},
+                {"range": [0, 3],   "type": "ShutterStrobe", "shutterEffect": "Open",   "label": "Open"},
+                {"range": [4, 255], "type": "ShutterStrobe", "shutterEffect": "Strobe", "label": "Strobe slow-fast"},
             ]},
             {"offset": 7,  "name": "Red",       "type": "red",         "capabilities": _color_cap("Red")},
             {"offset": 8,  "name": "Green",     "type": "green",       "capabilities": _color_cap("Green")},
@@ -312,8 +433,8 @@ BUILTIN_PROFILES = [
             {"offset": 2, "name": "Green",  "type": "green",  "capabilities": _color_cap("Green")},
             {"offset": 3, "name": "Blue",   "type": "blue",   "capabilities": _color_cap("Blue")},
             {"offset": 4, "name": "Strobe", "type": "strobe", "capabilities": [
-                {"range": [0, 3],   "type": "ShutterStrobe", "label": "Open"},
-                {"range": [4, 255], "type": "ShutterStrobe", "label": "Strobe slow-fast"},
+                {"range": [0, 3],   "type": "ShutterStrobe", "shutterEffect": "Open",   "label": "Open"},
+                {"range": [4, 255], "type": "ShutterStrobe", "shutterEffect": "Strobe", "label": "Strobe slow-fast"},
             ]},
             {"offset": 5, "name": "Macro",  "type": "macro",  "capabilities": _simple_cap("Macro programs", "Effect")},
         ],
@@ -335,8 +456,8 @@ BUILTIN_PROFILES = [
             {"offset": 3, "name": "Blue",   "type": "blue",   "capabilities": _color_cap("Blue")},
             {"offset": 4, "name": "White",  "type": "white",  "capabilities": _color_cap("White")},
             {"offset": 5, "name": "Strobe", "type": "strobe", "capabilities": [
-                {"range": [0, 3],   "type": "ShutterStrobe", "label": "Open"},
-                {"range": [4, 255], "type": "ShutterStrobe", "label": "Strobe slow-fast"},
+                {"range": [0, 3],   "type": "ShutterStrobe", "shutterEffect": "Open",   "label": "Open"},
+                {"range": [4, 255], "type": "ShutterStrobe", "shutterEffect": "Strobe", "label": "Strobe slow-fast"},
             ]},
             {"offset": 6, "name": "Zoom",   "type": "zoom",   "capabilities": _simple_cap("Zoom narrow-wide", "Zoom")},
         ],
@@ -369,8 +490,8 @@ BUILTIN_PROFILES = [
         "channels": [
             {"offset": 0, "name": "Dimmer", "type": "dimmer", "default": 255, "capabilities": _simple_cap("Intensity 0-100%")},
             {"offset": 1, "name": "Rate",   "type": "strobe", "capabilities": [
-                {"range": [0, 3],   "type": "ShutterStrobe", "label": "Open"},
-                {"range": [4, 255], "type": "ShutterStrobe", "label": "Strobe rate slow-fast"},
+                {"range": [0, 3],   "type": "ShutterStrobe", "shutterEffect": "Open",   "label": "Open"},
+                {"range": [4, 255], "type": "ShutterStrobe", "shutterEffect": "Strobe", "label": "Strobe rate slow-fast"},
             ]},
         ],
         "channelCount": 2,
