@@ -329,19 +329,52 @@ def _local_broadcasts():
     return bcs
 
 def _local_subnet_prefixes():
-    """Return /24 subnet prefixes (e.g. '192.168.10') for all non-loopback interfaces."""
+    """Return /24 subnet prefixes (e.g. '192.168.10') for all non-loopback interfaces.
+
+    Primary method parses `ip -4 addr show` so WSL2 mirrored-mode hosts (where
+    the Linux hostname only resolves to one of several mirrored NICs) still
+    see every physical subnet. Falls back to getaddrinfo then _get_local_ip()
+    on platforms without the `ip` command.
+    """
     prefixes = []
+    seen = set()
+
+    # Method 1: parse `ip -4 addr show` — enumerates every attached interface,
+    # which is the only reliable way to catch all mirrored NICs under WSL2.
     try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            ip = info[4][0]
-            if ip.startswith("127.") or ip.startswith("169.254."):
+        import subprocess, re
+        out = subprocess.check_output(["ip", "-4", "addr", "show"],
+                                      text=True, timeout=3)
+        for m in re.finditer(r"inet (\d+\.\d+\.\d+)\.\d+/\d+", out):
+            prefix = m.group(1)
+            if prefix in seen:
                 continue
-            prefix = ip.rsplit(".", 1)[0]
-            if prefix not in prefixes:
-                prefixes.append(prefix)
+            if prefix.startswith("127.") or prefix.startswith("169.254."):
+                continue
+            # Skip the WSL2 NAT bridge (172.x) when real mirrored adapters are
+            # also present — the NAT bridge has no path to external LAN devices.
+            if prefix.startswith("172.") and prefixes:
+                continue
+            prefixes.append(prefix)
+            seen.add(prefix)
     except Exception:
         pass
-    # Fallback: WSL2 / single-NIC hosts where getaddrinfo only returns loopback
+
+    # Method 2: socket.getaddrinfo — works on Windows/macOS hosts without `ip`.
+    if not prefixes:
+        try:
+            for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                ip = info[4][0]
+                if ip.startswith("127.") or ip.startswith("169.254."):
+                    continue
+                prefix = ip.rsplit(".", 1)[0]
+                if prefix not in seen:
+                    prefixes.append(prefix)
+                    seen.add(prefix)
+        except Exception:
+            pass
+
+    # Method 3: _get_local_ip() last resort — single primary-interface prefix.
     if not prefixes:
         try:
             prefix = _get_local_ip().rsplit(".", 1)[0]
@@ -1502,18 +1535,31 @@ def _probe_camera(ip, timeout=2):
         return None
 
 def _discover_cameras():
-    """Scan all local subnets for camera nodes, return unregistered ones."""
+    """Scan all local subnets for camera nodes in parallel, return unregistered ones.
+
+    Sequential probing was ~76s per /24 subnet (254 × 0.3s) and linear in the
+    number of subnets, which blew past the browser poll timeout on multi-NIC
+    hosts. The ThreadPoolExecutor mirrors the pattern used by _scan_ssh_devices.
+    """
+    import concurrent.futures
     known_ips = set()
     for f in _fixtures:
         if f.get("fixtureType") == "camera" and f.get("cameraIp"):
             known_ips.add(f["cameraIp"])
-    results = []
+
+    ips_to_probe = []
     for prefix in _local_subnet_prefixes():
         for i in range(1, 255):
             ip = f"{prefix}.{i}"
-            if ip in known_ips:
-                continue
-            info = _probe_camera(ip, timeout=0.3)
+            if ip not in known_ips:
+                ips_to_probe.append(ip)
+
+    results = []
+    # 64 workers + 0.8s timeout: parallel probes have no latency penalty so a
+    # slower camera gets a fair chance, and the whole /24 sweep still finishes
+    # in ~4s instead of ~76s.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=64) as pool:
+        for info in pool.map(lambda ip: _probe_camera(ip, timeout=0.8), ips_to_probe):
             if info:
                 results.append(info)
     return results

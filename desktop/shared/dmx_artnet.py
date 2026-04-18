@@ -20,6 +20,38 @@ import uuid
 
 from dmx_universe import DMXUniverse
 
+
+def _all_local_broadcast_addrs():
+    """Return subnet broadcast addresses for every non-loopback IPv4 interface.
+
+    On Linux (incl. WSL2 mirrored mode), sending to 255.255.255.255 on a
+    0.0.0.0-bound socket only reaches the default-route interface. Enumerating
+    every adapter's subnet broadcast ensures Art-Net ArtPoll discovery and
+    ArtDMX frames reach nodes on all physical NICs.
+    """
+    import re, subprocess, ipaddress
+    broadcasts = []
+    seen = set()
+    try:
+        out = subprocess.check_output(["ip", "-4", "addr", "show"],
+                                      text=True, timeout=2)
+        for m in re.finditer(r"inet (\d+\.\d+\.\d+\.\d+)/(\d+)\s", out):
+            ip_str, prefix_len = m.group(1), int(m.group(2))
+            if ip_str.startswith("127.") or ip_str.startswith("169.254."):
+                continue
+            iface = ipaddress.IPv4Interface(f"{ip_str}/{prefix_len}")
+            bc = str(iface.network.broadcast_address)
+            if bc not in seen:
+                broadcasts.append(bc)
+                seen.add(bc)
+    except Exception:
+        pass
+    # Always keep the limited broadcast as a final fallback — on Windows/macOS
+    # (where `ip` is missing) this is the only address we know about.
+    if "255.255.255.255" not in seen:
+        broadcasts.append("255.255.255.255")
+    return broadcasts
+
 # ── Art-Net constants ────────────────────────────────────────────────────────
 
 ARTNET_PORT = 6454
@@ -255,6 +287,9 @@ class ArtNetEngine:
             probe.close()
         except Exception:
             self._local_ip = "127.0.0.1"
+        # Cache every interface's broadcast address so poll() and DMX output
+        # reach nodes on every NIC, not just the default-route one (#541).
+        self._broadcast_addrs = _all_local_broadcast_addrs()
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
@@ -280,20 +315,13 @@ class ArtNetEngine:
         if not self._sock:
             return
         pkt = build_artpoll()
-        # Broadcast on all common paths
-        for dest in ("255.255.255.255",):
+        # Broadcast on every interface's subnet — default-route-only broadcast
+        # leaves non-primary NICs dark (see #541).
+        for dest in getattr(self, "_broadcast_addrs", ["255.255.255.255"]):
             try:
                 self._sock.sendto(pkt, (dest, ARTNET_PORT))
             except Exception:
                 pass
-        # Subnet broadcast based on local IP (e.g. 192.168.10.x → 192.168.10.255)
-        if self._local_ip and self._local_ip != "0.0.0.0" and self._local_ip != "127.0.0.1":
-            parts = self._local_ip.rsplit(".", 1)
-            if len(parts) == 2:
-                try:
-                    self._sock.sendto(pkt, (parts[0] + ".255", ARTNET_PORT))
-                except Exception:
-                    pass
         # Also unicast to known targets (some bridges only respond to unicast)
         for ip in set(self._unicast.values()):
             try:
@@ -387,14 +415,19 @@ class ArtNetEngine:
             self._sequences[uni_num] = seq
             pkt = build_artdmx(uni_num - 1, seq, data)  # Art-Net uses 0-based universe
             target = self._unicast.get(uni_num)
-            try:
-                if target:
+            if target:
+                try:
                     self._sock.sendto(pkt, (target, ARTNET_PORT))
-                else:
-                    # No route — broadcast (standard Art-Net behavior)
-                    self._sock.sendto(pkt, ("255.255.255.255", ARTNET_PORT))
-            except Exception:
-                pass
+                except Exception:
+                    pass
+            else:
+                # No route — broadcast on every interface's subnet so nodes on
+                # non-default NICs still receive frames (#541).
+                for dest in getattr(self, "_broadcast_addrs", ["255.255.255.255"]):
+                    try:
+                        self._sock.sendto(pkt, (dest, ARTNET_PORT))
+                    except Exception:
+                        pass
             uni.dirty = False
             uni._last_send = now
 
