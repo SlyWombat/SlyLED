@@ -203,6 +203,14 @@ function emu3dZoomToFit(){
 
 function emu3dBuildFixtures(){
   if(!_s3d.inited||!_emuStage)return;
+  // Guard — don't splat emulator fixture sprites into the scene when
+  // we're no longer on an emulator-live tab. `_dashAttach3d` etc. kick
+  // off `emuLoadStage()` which returns asynchronously; if the operator
+  // has already navigated to Layout/Setup by then, the build would
+  // otherwise leak emu sprites onto the Layout's live fixture labels,
+  // producing apparent duplicates like two "Music" labels at the same
+  // stage position.
+  if(!_emu3d.activeTab)return;
   _emu3dClearNodes();
 
   var layout=_emuStage.layout;
@@ -336,6 +344,11 @@ var _emu3dObjNodes=[];  // tracked separately from fixture nodes
 
 function emu3dRenderObjects(){
   if(!_s3d.inited)return;
+  // Same guard as emu3dBuildFixtures — the periodic object poll in
+  // `emuStart` calls this every second regardless of tab. Without the
+  // check, switching to Layout leaves a stream of emuObj sprites
+  // (people / tracked objects) flickering on top of the Layout scene.
+  if(!_emu3d.activeTab)return;
   var objs=(_emuStage&&_emuStage.objects)||[];
   // Build a map of current object IDs for expiry detection
   var objIds={};
