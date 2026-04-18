@@ -5491,6 +5491,22 @@ def api_mover_claim():
     ok, reason = _mover_engine.claim(mid, did, dname, dtype, smoothing=sm)
     if not ok:
         return jsonify(ok=False, err=reason), 409
+    # #492 — when an Android phone claims a mover it supplies its own
+    # hostname via deviceName ("Pixel 9 Pro XL" etc.). Stamp that onto
+    # the Remote record so the dashboard can render a human name
+    # instead of the raw GUID we auto-registered during the first
+    # orient packet.
+    if did:
+        remote = _remotes.by_device(did)
+        if remote is None:
+            kind = KIND_PHONE if dtype == "android" else KIND_PUCK
+            remote = _remotes.add(device_id=did, kind=kind, name=dname or did)
+        else:
+            if dname and dname != "Unknown" and remote.name != dname:
+                remote.name = dname
+            if dtype == "android" and remote.kind != KIND_PHONE:
+                remote.kind = KIND_PHONE
+        _remotes.save()
     return jsonify(ok=True)
 
 @app.post("/api/mover-control/release")
@@ -5563,10 +5579,18 @@ def api_mover_orient_compat():
     did = body.get("deviceId")
     if not did:
         return jsonify(ok=False, err="deviceId required"), 400
+    dname = body.get("deviceName") or ""
     remote = _remotes.by_device(did)
     if remote is None:
-        # Auto-register — matches the UDP path's behaviour.
-        remote = _remotes.add(device_id=did, kind=KIND_PHONE, name=did)
+        # Auto-register — matches the UDP path's behaviour. Prefer the
+        # deviceName the Android app supplies (phone hostname / model)
+        # over the GUID so the dashboard shows "Pixel 9 Pro XL", not
+        # the raw UUID (#492).
+        remote = _remotes.add(device_id=did, kind=KIND_PHONE, name=dname or did)
+    elif dname and remote.name != dname and remote.name == did:
+        # Upgrade the placeholder name once the app starts sending one.
+        remote.name = dname
+        _remotes.save()
     quat = body.get("quat")
     try:
         if quat and len(quat) == 4:

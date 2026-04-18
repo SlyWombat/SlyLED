@@ -60,12 +60,14 @@ function _remoteDashColor(r){
   if(r.hardStale||r.staleReason)return{dot:'#6b7280',border:'#475569',lbl:'LOST'};
   if(r.softStale)return{dot:'#f59e0b',border:'#92400e',lbl:'RECONNECTING'};
   var age=r.lastDataAge;
-  if(r.connectionState==='streaming'){
-    if(age==null||age<2)return{dot:'#22c55e',border:'#065f46',lbl:'LIVE'};
-    if(age<5)return{dot:'#f59e0b',border:'#92400e',lbl:'SLOW'};
-    return{dot:'#6b7280',border:'#475569',lbl:'DEAD'};
-  }
+  // #492 — uncalibrated phones that are actively streaming still report
+  // connectionState 'idle'; treat fresh data as LIVE regardless of
+  // state, falling back to the state-driven labels only when there's
+  // no recent data to rely on.
+  if(age!=null&&age<2)return{dot:'#22c55e',border:'#065f46',lbl:'LIVE'};
+  if(age!=null&&age<5)return{dot:'#f59e0b',border:'#92400e',lbl:'SLOW'};
   if(r.connectionState==='armed')return{dot:'#3b82f6',border:'#1e3a5f',lbl:'ARMED'};
+  if(r.connectionState==='streaming')return{dot:'#6b7280',border:'#475569',lbl:'DEAD'};
   return{dot:'#64748b',border:'#334155',lbl:'IDLE'};
 }
 
@@ -74,27 +76,51 @@ function _refreshRemotesDash(){
   if(!list)return;
   ra('GET','/api/remotes/live',null,function(d){
     if(!list.parentNode)return;  // dashboard torn down
-    var remotes=(d&&d.remotes)||[];
+    var all=(d&&d.remotes)||[];
+    // #492 — phones are ephemeral; only surface them on the dashboard
+    // while they're actively streaming orient data. Hard-stale or idle
+    // phones are hidden so a stale GUID from yesterday's test doesn't
+    // clutter the live operator view. Gyro pucks are registered
+    // hardware — always shown.
+    var remotes=all.filter(function(r){
+      if(r.kind==='phone'){
+        if(r.hardStale||r.staleReason)return false;
+        // A phone is "active" when it has sent orient data in the last
+        // 10 s. connectionState stays 'idle' for uncalibrated phones
+        // even while they're streaming, so we can't key on it.
+        if(r.lastDataAge==null||r.lastDataAge>10)return false;
+      }
+      return true;
+    });
     var empty=document.getElementById('remotes-dash-empty');
     if(empty)empty.style.display=remotes.length?'none':'block';
     // Rebuild cards — cheap since the list is small (usually 1-3 entries).
     var h='';
     if(empty)h+=empty.outerHTML;
+    // GUID-shaped strings are the Android auto-registration fallback —
+    // hide them behind a friendlier "Phone (unknown)" if the deviceName
+    // hasn't been captured yet.
+    var GUID_RX=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     remotes.forEach(function(r){
       var c=_remoteDashColor(r);
       var kindLbl=r.kind==='phone'?'Phone':'Gyro puck';
       var calLbl=r.calibrated?'<span style="color:#22c55e">calibrated</span>':'<span style="color:#64748b">uncalibrated</span>';
       var age=r.lastDataAge!=null?(r.lastDataAge.toFixed(1)+'s'):'-';
+      var rawName=r.name||('Remote '+r.id);
+      var displayName=GUID_RX.test(rawName)?'Phone (unknown host)':rawName;
       h+='<div style="background:#0f172a;border:1px solid '+c.border+';border-radius:6px;padding:.5em .8em;min-width:220px">'
         +'<div style="display:flex;align-items:center;gap:.4em;margin-bottom:.2em">'
         +'<span style="color:'+c.dot+';font-size:1.1em">\u25cf</span>'
-        +'<span style="font-weight:bold;color:#e2e8f0;font-size:.82em;flex:1">'+escapeHtml(r.name||('Remote '+r.id))+'</span>'
+        +'<span style="font-weight:bold;color:#e2e8f0;font-size:.82em;flex:1">'+escapeHtml(displayName)+'</span>'
         +'<span style="color:'+c.dot+';font-size:.7em;font-weight:bold;letter-spacing:.05em">'+c.lbl+'</span>'
         +'</div>'
         +'<div style="color:#64748b;font-size:.72em;font-family:monospace">'
         +kindLbl+' \u00b7 '+calLbl+' \u00b7 last '+age
         +'</div>'
-        +(r.deviceId?'<div style="color:#475569;font-size:.68em;font-family:monospace;margin-top:.15em">'+escapeHtml(r.deviceId)+'</div>':'')
+        // Only surface the raw deviceId when it's meaningful (e.g.
+        // "gyro-192.168.10.211"); hide the bare GUID from phones.
+        +(r.deviceId && !GUID_RX.test(r.deviceId)?
+          '<div style="color:#475569;font-size:.68em;font-family:monospace;margin-top:.15em">'+escapeHtml(r.deviceId)+'</div>':'')
         +'</div>';
     });
     list.innerHTML=h;

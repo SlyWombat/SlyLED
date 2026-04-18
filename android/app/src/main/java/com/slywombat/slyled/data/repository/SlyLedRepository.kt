@@ -218,6 +218,9 @@ class SlyLedRepository @Inject constructor(
         val body = buildJsonObject {
             put("moverId", moverId)
             put("deviceId", id.deviceId)
+            // #492 — include the phone's hostname so the server can
+            // upgrade the auto-registered remote from GUID → model name.
+            put("deviceName", id.deviceName)
             if (quat != null && quat.size == 4) {
                 putJsonArray("quat") {
                     quat.forEach { add(JsonPrimitive(it.toDouble())) }
