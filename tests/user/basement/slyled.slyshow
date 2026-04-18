@@ -5,7 +5,7 @@
       "g": 40,
       "id": 0,
       "minBri": 20,
-      "name": "Concert Wash \u2014 LED Base",
+      "name": "Concert Wash — LED Base",
       "periodMs": 5000,
       "r": 0,
       "type": 3
@@ -15,7 +15,7 @@
       "dimmer": 200,
       "g": 0,
       "id": 1,
-      "name": "Concert Wash \u2014 Par Wash",
+      "name": "Concert Wash — Par Wash",
       "pan": 0.5,
       "r": 220,
       "tilt": 0.5,
@@ -26,7 +26,7 @@
       "dimmer": 120,
       "g": 20,
       "id": 2,
-      "name": "Concert Wash \u2014 Mover Base",
+      "name": "Concert Wash — Mover Base",
       "pan": 0.5,
       "r": 73,
       "tilt": 0.5,
@@ -51,7 +51,7 @@
       "g": 80,
       "id": 4,
       "minBri": 10,
-      "name": "Aurora Borealis \u2014 LED Base",
+      "name": "Aurora Borealis — LED Base",
       "periodMs": 5000,
       "r": 0,
       "type": 3
@@ -61,7 +61,7 @@
       "dimmer": 200,
       "g": 255,
       "id": 5,
-      "name": "Aurora Borealis \u2014 Par Wash",
+      "name": "Aurora Borealis — Par Wash",
       "pan": 0.5,
       "r": 0,
       "tilt": 0.5,
@@ -72,7 +72,7 @@
       "dimmer": 120,
       "g": 85,
       "id": 6,
-      "name": "Aurora Borealis \u2014 Mover Base",
+      "name": "Aurora Borealis — Mover Base",
       "pan": 0.5,
       "r": 20,
       "tilt": 0.5,
@@ -97,7 +97,7 @@
       "g": 100,
       "id": 8,
       "minBri": 30,
-      "name": "Sunset Glow \u2014 LED Base",
+      "name": "Sunset Glow — LED Base",
       "periodMs": 4000,
       "r": 255,
       "type": 3
@@ -107,7 +107,7 @@
       "dimmer": 200,
       "g": 100,
       "id": 9,
-      "name": "Sunset Glow \u2014 Par Wash",
+      "name": "Sunset Glow — Par Wash",
       "pan": 0.5,
       "r": 255,
       "tilt": 0.5,
@@ -118,7 +118,7 @@
       "dimmer": 120,
       "g": 33,
       "id": 10,
-      "name": "Sunset Glow \u2014 Mover Base",
+      "name": "Sunset Glow — Mover Base",
       "pan": 0.5,
       "r": 85,
       "tilt": 0.5,
@@ -142,7 +142,7 @@
       "b": 10,
       "g": 15,
       "id": 12,
-      "name": "Spotlight Sweep \u2014 LED Base",
+      "name": "Spotlight Sweep — LED Base",
       "r": 20,
       "type": 1
     },
@@ -151,7 +151,7 @@
       "dimmer": 120,
       "g": 80,
       "id": 13,
-      "name": "Spotlight Sweep \u2014 Mover Base",
+      "name": "Spotlight Sweep — Mover Base",
       "pan": 0.5,
       "r": 85,
       "tilt": 0.5,
@@ -389,9 +389,9 @@
       "aoeRadius": 1000,
       "childId": null,
       "childIds": [],
-      "dmxChannelCount": 16,
-      "dmxProfileId": "beamlight-350w-16ch",
-      "dmxStartAddr": 17,
+      "dmxChannelCount": 13,
+      "dmxProfileId": "Slymovehead",
+      "dmxStartAddr": 14,
       "dmxUniverse": 1,
       "fixtureType": "dmx",
       "id": 2,
@@ -411,8 +411,8 @@
       "aoeRadius": 1000,
       "childId": null,
       "childIds": [],
-      "dmxChannelCount": 16,
-      "dmxProfileId": "beamlight-350w-16ch",
+      "dmxChannelCount": 13,
+      "dmxProfileId": "Slymovehead",
       "dmxStartAddr": 1,
       "dmxUniverse": 1,
       "fixtureType": "dmx",
@@ -911,856 +911,6 @@
       "name": "Sly Moving Head 13ch",
       "panRange": 540,
       "tiltRange": 270
-    },
-    {
-      "beamWidth": 3,
-      "category": "moving-head",
-      "channelCount": 14,
-      "channels": [
-        {
-          "capabilities": [
-            {
-              "color": "#ffffff",
-              "label": "Open / white",
-              "range": [
-                0,
-                7
-              ],
-              "slotNumber": 0,
-              "type": "WheelSlot"
-            },
-            {
-              "color": "#ff0000",
-              "label": "Red",
-              "range": [
-                8,
-                24
-              ],
-              "slotNumber": 1,
-              "type": "WheelSlot"
-            },
-            {
-              "color": "#ff7f00",
-              "label": "Orange",
-              "range": [
-                25,
-                41
-              ],
-              "slotNumber": 2,
-              "type": "WheelSlot"
-            },
-            {
-              "color": "#0033ff",
-              "label": "Blue",
-              "range": [
-                42,
-                58
-              ],
-              "slotNumber": 3,
-              "type": "WheelSlot"
-            },
-            {
-              "color": "#00c837",
-              "label": "Green",
-              "range": [
-                59,
-                75
-              ],
-              "slotNumber": 4,
-              "type": "WheelSlot"
-            },
-            {
-              "color": "#7dff7d",
-              "label": "Light green",
-              "range": [
-                76,
-                92
-              ],
-              "slotNumber": 5,
-              "type": "WheelSlot"
-            },
-            {
-              "color": "#b093c9",
-              "label": "Lavender",
-              "range": [
-                93,
-                109
-              ],
-              "slotNumber": 6,
-              "type": "WheelSlot"
-            },
-            {
-              "color": "#ff4000",
-              "label": "Orangered",
-              "range": [
-                110,
-                126
-              ],
-              "slotNumber": 7,
-              "type": "WheelSlot"
-            },
-            {
-              "color": "#ffff00",
-              "label": "Yellow",
-              "range": [
-                127,
-                143
-              ],
-              "slotNumber": 8,
-              "type": "WheelSlot"
-            },
-            {
-              "color": "#c80050",
-              "label": "Magenta",
-              "range": [
-                144,
-                160
-              ],
-              "slotNumber": 9,
-              "type": "WheelSlot"
-            },
-            {
-              "color": "#00ffff",
-              "label": "Cyan",
-              "range": [
-                161,
-                177
-              ],
-              "slotNumber": 10,
-              "type": "WheelSlot"
-            },
-            {
-              "color": "#fff6c8",
-              "label": "Light yellow",
-              "range": [
-                178,
-                194
-              ],
-              "slotNumber": 11,
-              "type": "WheelSlot"
-            },
-            {
-              "colorTemperature": 3200,
-              "label": "CTO1 (3200K)",
-              "range": [
-                195,
-                211
-              ],
-              "slotNumber": 12,
-              "type": "ColorTemperature"
-            },
-            {
-              "colorTemperature": 2700,
-              "label": "CTO2 (2700K)",
-              "range": [
-                212,
-                228
-              ],
-              "slotNumber": 13,
-              "type": "ColorTemperature"
-            },
-            {
-              "color": "#87ceeb",
-              "label": "Sky blue",
-              "range": [
-                229,
-                255
-              ],
-              "slotNumber": 14,
-              "type": "WheelSlot"
-            }
-          ],
-          "name": "Color Wheel",
-          "offset": 0,
-          "type": "color-wheel"
-        },
-        {
-          "capabilities": [
-            {
-              "label": "Dimmer 0-100%",
-              "range": [
-                0,
-                255
-              ],
-              "type": "Intensity"
-            }
-          ],
-          "name": "Dimmer",
-          "offset": 1,
-          "type": "dimmer"
-        },
-        {
-          "capabilities": [
-            {
-              "label": "Closed (blackout)",
-              "range": [
-                0,
-                7
-              ],
-              "shutterEffect": "Closed",
-              "type": "ShutterStrobe"
-            },
-            {
-              "label": "Open",
-              "range": [
-                8,
-                15
-              ],
-              "shutterEffect": "Open",
-              "type": "ShutterStrobe"
-            },
-            {
-              "label": "Strobe slow-fast",
-              "range": [
-                16,
-                131
-              ],
-              "shutterEffect": "Strobe",
-              "type": "ShutterStrobe"
-            },
-            {
-              "label": "Pulse slow-fast",
-              "range": [
-                132,
-                167
-              ],
-              "shutterEffect": "Pulse",
-              "type": "ShutterStrobe"
-            },
-            {
-              "label": "Ramp up slow-fast",
-              "range": [
-                168,
-                207
-              ],
-              "shutterEffect": "RampUp",
-              "type": "ShutterStrobe"
-            },
-            {
-              "label": "Ramp down slow-fast",
-              "range": [
-                208,
-                247
-              ],
-              "shutterEffect": "RampDown",
-              "type": "ShutterStrobe"
-            },
-            {
-              "label": "Open (hold)",
-              "range": [
-                248,
-                255
-              ],
-              "shutterEffect": "Open",
-              "type": "ShutterStrobe"
-            }
-          ],
-          "default": 255,
-          "name": "Stop/Strobe",
-          "offset": 2,
-          "type": "strobe"
-        },
-        {
-          "capabilities": [
-            {
-              "label": "Open",
-              "range": [
-                0,
-                6
-              ],
-              "slotNumber": 0,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 1",
-              "range": [
-                7,
-                13
-              ],
-              "slotNumber": 1,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 2",
-              "range": [
-                14,
-                20
-              ],
-              "slotNumber": 2,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 3",
-              "range": [
-                21,
-                27
-              ],
-              "slotNumber": 3,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 4",
-              "range": [
-                28,
-                34
-              ],
-              "slotNumber": 4,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 5",
-              "range": [
-                35,
-                41
-              ],
-              "slotNumber": 5,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 6",
-              "range": [
-                42,
-                48
-              ],
-              "slotNumber": 6,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 7",
-              "range": [
-                49,
-                55
-              ],
-              "slotNumber": 7,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 8",
-              "range": [
-                56,
-                62
-              ],
-              "slotNumber": 8,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 9",
-              "range": [
-                63,
-                69
-              ],
-              "slotNumber": 9,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 10",
-              "range": [
-                70,
-                76
-              ],
-              "slotNumber": 10,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 11",
-              "range": [
-                77,
-                83
-              ],
-              "slotNumber": 11,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 12",
-              "range": [
-                84,
-                90
-              ],
-              "slotNumber": 12,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 13",
-              "range": [
-                91,
-                97
-              ],
-              "slotNumber": 13,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 14",
-              "range": [
-                98,
-                104
-              ],
-              "slotNumber": 14,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 15",
-              "range": [
-                105,
-                111
-              ],
-              "slotNumber": 15,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 16",
-              "range": [
-                112,
-                118
-              ],
-              "slotNumber": 16,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 17",
-              "range": [
-                119,
-                125
-              ],
-              "slotNumber": 17,
-              "type": "WheelSlot"
-            },
-            {
-              "label": "Gobo 1 shake",
-              "range": [
-                130,
-                136
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 1,
-              "type": "WheelShake"
-            },
-            {
-              "label": "Gobo 2 shake",
-              "range": [
-                137,
-                143
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 2,
-              "type": "WheelShake"
-            },
-            {
-              "label": "Gobo 3 shake",
-              "range": [
-                144,
-                150
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 3,
-              "type": "WheelShake"
-            },
-            {
-              "label": "Gobo 4 shake",
-              "range": [
-                151,
-                157
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 4,
-              "type": "WheelShake"
-            },
-            {
-              "label": "Gobo 5 shake",
-              "range": [
-                158,
-                164
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 5,
-              "type": "WheelShake"
-            },
-            {
-              "label": "Gobo 6 shake",
-              "range": [
-                165,
-                171
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 6,
-              "type": "WheelShake"
-            },
-            {
-              "label": "Gobo 7 shake",
-              "range": [
-                172,
-                178
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 7,
-              "type": "WheelShake"
-            },
-            {
-              "label": "Gobo 8 shake",
-              "range": [
-                179,
-                185
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 8,
-              "type": "WheelShake"
-            },
-            {
-              "label": "Gobo 9 shake",
-              "range": [
-                186,
-                192
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 9,
-              "type": "WheelShake"
-            },
-            {
-              "label": "Gobo 10 shake",
-              "range": [
-                193,
-                199
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 10,
-              "type": "WheelShake"
-            },
-            {
-              "label": "Gobo 11 shake",
-              "range": [
-                200,
-                206
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 11,
-              "type": "WheelShake"
-            },
-            {
-              "label": "Gobo 12 shake",
-              "range": [
-                207,
-                213
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 12,
-              "type": "WheelShake"
-            },
-            {
-              "label": "Gobo 13 shake",
-              "range": [
-                214,
-                220
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 13,
-              "type": "WheelShake"
-            },
-            {
-              "label": "Gobo 14 shake",
-              "range": [
-                221,
-                227
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 14,
-              "type": "WheelShake"
-            },
-            {
-              "label": "Gobo 15 shake",
-              "range": [
-                228,
-                234
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 15,
-              "type": "WheelShake"
-            },
-            {
-              "label": "Gobo 16 shake",
-              "range": [
-                235,
-                241
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 16,
-              "type": "WheelShake"
-            },
-            {
-              "label": "Gobo 17 shake",
-              "range": [
-                242,
-                248
-              ],
-              "shakeSpeedEnd": 10.0,
-              "shakeSpeedStart": 0.5,
-              "slotNumber": 17,
-              "type": "WheelShake"
-            }
-          ],
-          "name": "Static Gobo Change",
-          "offset": 3,
-          "type": "gobo"
-        },
-        {
-          "capabilities": [
-            {
-              "label": "Prism out",
-              "range": [
-                0,
-                3
-              ],
-              "type": "Prism"
-            },
-            {
-              "label": "Prism in (8-face)",
-              "range": [
-                4,
-                255
-              ],
-              "type": "Prism"
-            }
-          ],
-          "name": "Prism 1 Insertion",
-          "offset": 4,
-          "type": "prism"
-        },
-        {
-          "capabilities": [
-            {
-              "label": "No rotation",
-              "range": [
-                0,
-                0
-              ],
-              "speed": 0,
-              "type": "PrismRotation"
-            },
-            {
-              "label": "Rotate CW slow-fast",
-              "range": [
-                1,
-                127
-              ],
-              "speedEnd": 5.0,
-              "speedStart": 0.1,
-              "type": "PrismRotation"
-            },
-            {
-              "label": "Stop",
-              "range": [
-                128,
-                128
-              ],
-              "speed": 0,
-              "type": "PrismRotation"
-            },
-            {
-              "label": "Rotate CCW slow-fast",
-              "range": [
-                129,
-                255
-              ],
-              "speedEnd": -5.0,
-              "speedStart": -0.1,
-              "type": "PrismRotation"
-            }
-          ],
-          "name": "Prism 1 Rotation",
-          "offset": 5,
-          "type": "prism-rotation"
-        },
-        {
-          "capabilities": [
-            {
-              "label": "Reserved",
-              "range": [
-                0,
-                255
-              ],
-              "type": "NoFunction"
-            }
-          ],
-          "name": "Reserved 1",
-          "offset": 6,
-          "type": "macro"
-        },
-        {
-          "capabilities": [
-            {
-              "label": "Reserved",
-              "range": [
-                0,
-                255
-              ],
-              "type": "NoFunction"
-            }
-          ],
-          "name": "Reserved 2",
-          "offset": 7,
-          "type": "macro"
-        },
-        {
-          "capabilities": [
-            {
-              "label": "Near \u2192 Far",
-              "range": [
-                0,
-                255
-              ],
-              "type": "Focus"
-            }
-          ],
-          "default": 128,
-          "name": "Focus",
-          "offset": 8,
-          "type": "focus"
-        },
-        {
-          "bits": 16,
-          "capabilities": [
-            {
-              "angleEnd": 540,
-              "angleStart": 0,
-              "label": "Pan 0-540\u00b0",
-              "range": [
-                0,
-                65535
-              ],
-              "type": "Pan"
-            }
-          ],
-          "name": "Pan",
-          "offset": 9,
-          "type": "pan"
-        },
-        {
-          "bits": 16,
-          "capabilities": [
-            {
-              "angleEnd": 210,
-              "angleStart": 0,
-              "label": "Tilt 0-210\u00b0",
-              "range": [
-                0,
-                65535
-              ],
-              "type": "Tilt"
-            }
-          ],
-          "name": "Tilt",
-          "offset": 11,
-          "type": "tilt"
-        },
-        {
-          "capabilities": [
-            {
-              "duration": 0,
-              "label": "Vectorial (fastest)",
-              "range": [
-                0,
-                0
-              ],
-              "type": "PanTiltSpeed"
-            },
-            {
-              "durationEnd": 0.1,
-              "durationStart": 5.0,
-              "label": "Tracking slow-fast",
-              "range": [
-                1,
-                255
-              ],
-              "type": "PanTiltSpeed"
-            }
-          ],
-          "name": "Pan-Tilt Speed",
-          "offset": 13,
-          "type": "pan-tilt-speed"
-        },
-        {
-          "capabilities": [
-            {
-              "label": "Frost out",
-              "range": [
-                0,
-                3
-              ],
-              "type": "Frost"
-            },
-            {
-              "label": "Frost in (variable)",
-              "range": [
-                4,
-                255
-              ],
-              "type": "Frost"
-            }
-          ],
-          "name": "Frost",
-          "offset": 14,
-          "type": "frost"
-        },
-        {
-          "capabilities": [
-            {
-              "label": "Unused",
-              "range": [
-                0,
-                99
-              ],
-              "type": "NoFunction"
-            },
-            {
-              "label": "Lamp ON",
-              "range": [
-                100,
-                105
-              ],
-              "type": "Maintenance"
-            },
-            {
-              "label": "Lamp OFF",
-              "range": [
-                200,
-                205
-              ],
-              "type": "Maintenance"
-            },
-            {
-              "label": "Complete reset",
-              "range": [
-                255,
-                255
-              ],
-              "type": "Maintenance"
-            }
-          ],
-          "name": "Lamp Control/Reset",
-          "offset": 15,
-          "type": "reset"
-        }
-      ],
-      "colorMode": "color-wheel",
-      "id": "beamlight-350w-16ch",
-      "manufacturer": "BeamLight",
-      "name": "350W Outdoor Waterproof BeamLight",
-      "panRange": 540,
-      "tiltRange": 210
     }
   ],
   "rangeCalibrations": {},
@@ -2230,7 +1380,7 @@
             {
               "actionId": 1,
               "durationS": 30,
-              "name": "Concert Wash \u2014 Par Wash",
+              "name": "Concert Wash — Par Wash",
               "startS": 0
             }
           ],
@@ -2241,7 +1391,7 @@
             {
               "actionId": 1,
               "durationS": 30,
-              "name": "Concert Wash \u2014 Par Wash",
+              "name": "Concert Wash — Par Wash",
               "startS": 0
             }
           ],
@@ -2252,7 +1402,7 @@
             {
               "actionId": 2,
               "durationS": 30,
-              "name": "Concert Wash \u2014 Mover Base",
+              "name": "Concert Wash — Mover Base",
               "startS": 0
             }
           ],
@@ -2311,7 +1461,7 @@
             {
               "actionId": 4,
               "durationS": 40,
-              "name": "Aurora Borealis \u2014 LED Base",
+              "name": "Aurora Borealis — LED Base",
               "startS": 0
             }
           ],
@@ -2322,7 +1472,7 @@
             {
               "actionId": 4,
               "durationS": 40,
-              "name": "Aurora Borealis \u2014 LED Base",
+              "name": "Aurora Borealis — LED Base",
               "startS": 0
             }
           ],
@@ -2333,7 +1483,7 @@
             {
               "actionId": 5,
               "durationS": 40,
-              "name": "Aurora Borealis \u2014 Par Wash",
+              "name": "Aurora Borealis — Par Wash",
               "startS": 0
             }
           ],
@@ -2344,7 +1494,7 @@
             {
               "actionId": 5,
               "durationS": 40,
-              "name": "Aurora Borealis \u2014 Par Wash",
+              "name": "Aurora Borealis — Par Wash",
               "startS": 0
             }
           ],
@@ -2355,7 +1505,7 @@
             {
               "actionId": 6,
               "durationS": 40,
-              "name": "Aurora Borealis \u2014 Mover Base",
+              "name": "Aurora Borealis — Mover Base",
               "startS": 0
             }
           ],
@@ -2408,7 +1558,7 @@
             {
               "actionId": 8,
               "durationS": 45,
-              "name": "Sunset Glow \u2014 LED Base",
+              "name": "Sunset Glow — LED Base",
               "startS": 0
             }
           ],
@@ -2419,7 +1569,7 @@
             {
               "actionId": 8,
               "durationS": 45,
-              "name": "Sunset Glow \u2014 LED Base",
+              "name": "Sunset Glow — LED Base",
               "startS": 0
             }
           ],
@@ -2430,7 +1580,7 @@
             {
               "actionId": 9,
               "durationS": 45,
-              "name": "Sunset Glow \u2014 Par Wash",
+              "name": "Sunset Glow — Par Wash",
               "startS": 0
             }
           ],
@@ -2441,7 +1591,7 @@
             {
               "actionId": 9,
               "durationS": 45,
-              "name": "Sunset Glow \u2014 Par Wash",
+              "name": "Sunset Glow — Par Wash",
               "startS": 0
             }
           ],
@@ -2452,7 +1602,7 @@
             {
               "actionId": 10,
               "durationS": 45,
-              "name": "Sunset Glow \u2014 Mover Base",
+              "name": "Sunset Glow — Mover Base",
               "startS": 0
             }
           ],
