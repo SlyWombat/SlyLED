@@ -96,7 +96,73 @@ document.addEventListener('DOMContentLoaded',function(){
   // Also observe tab content area for tab switches
   var appEl=document.getElementById('app');
   if(appEl)_tipObs.observe(appEl,{childList:true,subtree:false});
+  // Toast container — stacks in bottom-right, never blocks interaction.
+  if(!document.getElementById('toast-stack')){
+    var ts=document.createElement('div');
+    ts.id='toast-stack';
+    ts.style.cssText='position:fixed;right:16px;bottom:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;max-width:380px;pointer-events:none';
+    document.body.appendChild(ts);
+  }
 });
+
+// ── Toast notification system (#298) ─────────────────────────────────────
+// toast(msg, level, opts) — bottom-right stacking notifications.
+//   level: 'info' (cyan) | 'success' (green) | 'warn' (amber) | 'error' (red)
+//   opts:  { timeout: ms, persistent: bool }  — default 5s info, 10s error.
+// Replaces alert() for non-blocking feedback and the transient `#hs`
+// status bar for important events the operator needs to actually see.
+var _TOAST_COLORS={
+  info:   {bg:'#0e7490',border:'#22d3ee',dot:'#22d3ee'},
+  success:{bg:'#065f46',border:'#22c55e',dot:'#22c55e'},
+  warn:   {bg:'#78350f',border:'#f59e0b',dot:'#f59e0b'},
+  error:  {bg:'#7f1d1d',border:'#ef4444',dot:'#ef4444'},
+};
+function toast(msg,level,opts){
+  level=level||'info';opts=opts||{};
+  var col=_TOAST_COLORS[level]||_TOAST_COLORS.info;
+  var timeout=opts.timeout;
+  if(timeout==null)timeout=(level==='error'||level==='warn')?10000:5000;
+  if(opts.persistent)timeout=0;
+  var stack=document.getElementById('toast-stack');
+  if(!stack)return;
+  var t=document.createElement('div');
+  t.style.cssText='background:'+col.bg+';color:#f1f5f9;border:1px solid '+col.border
+    +';border-radius:6px;padding:10px 14px;font-size:.85em;box-shadow:0 6px 18px rgba(0,0,0,.4);'
+    +'pointer-events:auto;display:flex;align-items:flex-start;gap:10px;'
+    +'animation:toast-in .18s ease-out';
+  var dot='<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:'
+    +col.dot+';margin-top:7px;flex-shrink:0"></span>';
+  var text='<span style="flex:1">'+String(msg).replace(/</g,'&lt;')+'</span>';
+  var closeBtn='<span class="toast-x" style="opacity:.5;font-size:1.1em;line-height:1;cursor:pointer;padding:0 4px">&times;</span>';
+  t.innerHTML=dot+text+closeBtn;
+  var timer=null;
+  function dismiss(){
+    if(timer){clearTimeout(timer);timer=null;}
+    t.style.transition='opacity .2s, transform .2s';
+    t.style.opacity='0';t.style.transform='translateX(16px)';
+    setTimeout(function(){if(t.parentNode)t.parentNode.removeChild(t);},220);
+  }
+  if(timeout>0)timer=setTimeout(dismiss,timeout);
+  // Only the × glyph dismisses — clicking the body might be a stray click
+  // on an overlapping element (Chromium fires click on the topmost), which
+  // would otherwise silently discard a warning the operator hasn't read.
+  var x=t.querySelector('.toast-x');
+  if(x)x.addEventListener('click',function(ev){ev.stopPropagation();dismiss();});
+  stack.appendChild(t);
+  return dismiss;
+}
+// Shorthand entry points — readable at call sites and trivial to grep for.
+function toastInfo(m,o){return toast(m,'info',o);}
+function toastSuccess(m,o){return toast(m,'success',o);}
+function toastWarn(m,o){return toast(m,'warn',o);}
+function toastError(m,o){return toast(m,'error',o);}
+// Keyframes for the slide-in animation — appended once.
+(function(){
+  if(document.getElementById('toast-style'))return;
+  var s=document.createElement('style');s.id='toast-style';
+  s.textContent='@keyframes toast-in{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:translateX(0)}}';
+  document.head.appendChild(s);
+})();
 
 var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0,units=0,_cvW=900,_cvH=450,_dragStartX=0,_dragStartY=0,_dragMoved=false;
 var _layTool='move'; // 'move' or 'rotate'
@@ -739,12 +805,63 @@ function _layUndo(){
   ra('POST','/api/layout',{fixtures:toSave});
   document.getElementById('hs').textContent='Undone';
 }
-// Keyboard shortcuts: R=rotate, M=move, Ctrl+Z=undo
+// Keyboard shortcuts: R=rotate, M=move, Ctrl+Z=undo (Layout only), plus
+// Space/Esc/Home/End/Arrow keys for timeline playback (#299). All global
+// shortcuts are suppressed while the user is typing in a form element so
+// Space in a text field still inserts a space.
 document.addEventListener('keydown',function(e){
   // Global shortcuts (work from any tab, any focus)
   if((e.ctrlKey||e.metaKey)&&(e.key==='s'||e.key==='S')){e.preventDefault();_fmSave();return;}
   if((e.ctrlKey||e.metaKey)&&(e.key==='o'||e.key==='O')){e.preventDefault();_fmOpen();return;}
   if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT')return;
+  if(e.target.isContentEditable)return;
+
+  // Timeline playback shortcuts — active on the Shows/Runtime tabs where a
+  // timeline is open. Fall through if no timeline is selected so the key
+  // can still be handled by the layout block below.
+  var hasTl=(typeof _curTl!=='undefined'&&_curTl)
+            &&(ctab==='shows'||ctab==='runtime');
+  if(hasTl){
+    if(e.key===' '||e.code==='Space'){
+      e.preventDefault();
+      if(typeof tlTogglePreview==='function')tlTogglePreview();
+      return;
+    }
+    if(e.key==='Escape'){
+      e.preventDefault();
+      if(typeof tlStop==='function')tlStop();
+      return;
+    }
+    if(e.key==='Home'){
+      e.preventDefault();
+      if(typeof tlRewind==='function')tlRewind();
+      return;
+    }
+    if(e.key==='End'){
+      e.preventDefault();
+      if(typeof _tlJumpToEnd==='function')_tlJumpToEnd();
+      return;
+    }
+    if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
+      e.preventDefault();
+      var dir=(e.key==='ArrowRight'?1:-1);
+      var step=(e.shiftKey?5:1);
+      if(typeof _tlNudge==='function')_tlNudge(dir*step);
+      return;
+    }
+  }
+  // 'B' anywhere (outside inputs) → blackout all fixtures. Second press
+  // does nothing extra since blackout is idempotent — operators use Esc
+  // or another command to resume output.
+  if((e.key==='b'||e.key==='B')&&ctab!=='layout'){
+    e.preventDefault();
+    if(typeof _dmxBlackoutAll==='function')_dmxBlackoutAll();
+    else ra('POST','/api/dmx/blackout',{},function(){
+      var hs=document.getElementById('hs');if(hs)hs.textContent='Blackout';
+    });
+    return;
+  }
+
   if(ctab!=='layout')return;
   if((e.key==='r'||e.key==='R')&&_layTool!=='rotate'){_layToolToggle();}
   else if((e.key==='m'||e.key==='g'||e.key==='M'||e.key==='G')&&_layTool!=='move'){_layToolToggle();}

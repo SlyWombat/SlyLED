@@ -1,9 +1,14 @@
 package com.slywombat.slyled.ui.screens.settings
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.slywombat.slyled.BuildConfig
 import com.slywombat.slyled.data.model.DmxProfile
 import com.slywombat.slyled.ui.theme.RedError
 import com.slywombat.slyled.viewmodel.SettingsViewModel
@@ -375,6 +381,24 @@ fun SettingsScreen(
                 Spacer(Modifier.width(4.dp))
                 Text("Disconnect")
             }
+
+            // App version footer — tap to copy to clipboard for bug reports.
+            // Source of truth is BuildConfig from the APK itself, so sideloaded
+            // builds can't lie about which version is actually running (#508).
+            val versionStr = "SlyLED v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+            Text(
+                text = versionStr,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .clickable {
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("SlyLED version", versionStr))
+                        Toast.makeText(context, "Copied $versionStr", Toast.LENGTH_SHORT).show()
+                    }
+            )
 
             Spacer(Modifier.height(16.dp))
         }

@@ -332,6 +332,31 @@ function tlStop(){
 function tlStopPreview(){tlRewind();}
 function tlStopShow(){tlStop();}
 
+// #299 — helpers for the End key and ArrowLeft/Right timeline nudging.
+// Only update playhead + time display; don't try to advance a paused
+// timeline. End key parks the playhead 0.1 s from the end so the user
+// can preview the tail without immediately triggering stop.
+function _tlJumpToEnd(){
+  if(!_curTl)return;
+  var dur=_curTl.durationS||60;
+  _tlPlayT=Math.max(0,dur-0.1);
+  var ph=document.getElementById('tl-playhead');
+  if(ph)ph.style.left=(60+_tlPlayT*_tlPxPerSec)+'px';
+  var td=document.getElementById('tl-time');
+  if(td){var m=Math.floor(_tlPlayT/60),s=(_tlPlayT%60).toFixed(1);
+    td.textContent=(m<10?'0':'')+m+':'+(s<10?'0':'')+s;}
+}
+function _tlNudge(deltaS){
+  if(!_curTl)return;
+  var dur=_curTl.durationS||60;
+  _tlPlayT=Math.max(0,Math.min(dur,_tlPlayT+deltaS));
+  var ph=document.getElementById('tl-playhead');
+  if(ph)ph.style.left=(60+_tlPlayT*_tlPxPerSec)+'px';
+  var td=document.getElementById('tl-time');
+  if(td){var m=Math.floor(_tlPlayT/60),s=(_tlPlayT%60).toFixed(1);
+    td.textContent=(m<10?'0':'')+m+':'+(s<10?'0':'')+s;}
+}
+
 // ── Phase 5: Baking ─────────────────────────────────────────────────────────
 function tlBake(){
   if(!_curTl){alert('No timeline selected');return;}

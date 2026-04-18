@@ -354,10 +354,10 @@ function doFlash(btn){
   var port=document.getElementById('fw-port').value;
   var board=document.getElementById('fw-board').value;
   var fwId=document.getElementById('fw-image').value;
-  if(!port||!fwId){alert('Select a port and firmware');return;}
+  if(!port||!fwId){toastWarn('Select a port and firmware');return;}
   // WiFi must be configured before flashing
   var ssid=document.getElementById('fw-ssid').value;
-  if(!ssid){alert('WiFi credentials must be configured before flashing.\nEnter SSID and password above, then click Save WiFi.');return;}
+  if(!ssid){toastWarn('WiFi credentials required. Enter SSID + password above and click Save WiFi before flashing.',{timeout:10000});return;}
   _btnSaving(btn);
   document.getElementById('fw-progress').style.display='block';
   // If GitHub firmware selected, download first then flash

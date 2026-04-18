@@ -25,21 +25,21 @@ function importConfig(input){
   var f=input.files[0];if(!f)return;
   var rd=new FileReader();
   rd.onload=function(e){
-    try{var data=JSON.parse(e.target.result);}catch(ex){alert('Invalid JSON file');return;}
-    if(data.type!=='slyled-config'){alert('Not a SlyLED config file (missing type field)');return;}
+    try{var data=JSON.parse(e.target.result);}catch(ex){toastError('Invalid JSON file');return;}
+    if(data.type!=='slyled-config'){toastError('Not a SlyLED config file (missing type field)');return;}
     // Schema version warning
     var sv=data.schemaVersion||data.version||1;
     if(sv>3){
-      alert('This config file is version '+sv+', but this app only supports up to version 3. Please update SlyLED.');
+      toastError('Config is schema v'+sv+'; this app supports up to v3. Please update SlyLED.');
       return;
     }
     if(!confirm('Load configuration from v'+sv+' file? This will merge fixtures and replace layout.'))return;
     ra('POST','/api/config/import',data,function(r){
       if(r&&r.ok){
-        document.getElementById('hs').textContent='Config loaded (v'+sv+'): +'+r.added+' new, '+r.updated+' updated, '+r.fixturesCreated+' fixtures';
+        toastSuccess('Config loaded (v'+sv+'): +'+r.added+' new, '+r.updated+' updated, '+r.fixturesCreated+' fixtures');
         loadSetup();loadLayout();
       }else{
-        document.getElementById('hs').textContent='Config load failed: '+(r&&r.err||'unknown error');
+        toastError('Config load failed: '+(r&&r.err||'unknown error'));
       }
     });
   };
@@ -80,15 +80,15 @@ function importShowFile(input){
   var f=input.files[0];if(!f)return;
   var rd=new FileReader();
   rd.onload=function(e){
-    try{var data=JSON.parse(e.target.result);}catch(ex){alert('Invalid JSON');return;}
-    if(data.type!=='slyled-show'){alert('Not a SlyLED show file');return;}
+    try{var data=JSON.parse(e.target.result);}catch(ex){toastError('Invalid JSON');return;}
+    if(data.type!=='slyled-show'){toastError('Not a SlyLED show file');return;}
     if(!confirm('Load show? This replaces ALL current actions, runners, flights, and shows.'))return;
     ra('POST','/api/show/import',data,function(r){
       closeModal();
       if(r&&r.ok){
-        document.getElementById('hs').textContent='Show loaded: '+r.actions+' actions, '+r.runners+' runners, '+r.flights+' flights, '+r.shows+' shows';
-        if(r.warning)alert(r.warning);
-      }else{document.getElementById('hs').textContent='Show load failed: '+(r&&r.err||'unknown');}
+        toastSuccess('Show loaded: '+r.actions+' actions, '+r.runners+' runners, '+r.flights+' flights, '+r.shows+' shows');
+        if(r.warning)toastWarn(r.warning,{timeout:12000});
+      }else{toastError('Show load failed: '+(r&&r.err||'unknown'));}
     });
   };
   rd.readAsText(f);input.value='';
@@ -229,17 +229,20 @@ function _fmOpenFile(input){
 }
 
 function _fmImportJson(txt,filename){
-  try{var data=JSON.parse(txt);}catch(ex){alert('Invalid JSON file');return;}
-  if(data.type!=='slyled-project'){alert('Not a SlyLED project file.\n\nExpected type "slyled-project" but got "'+(data.type||'undefined')+'".\n\nUse Import Config for config files or Load Show for show files.');return;}
+  try{var data=JSON.parse(txt);}catch(ex){toastError('Invalid JSON file');return;}
+  if(data.type!=='slyled-project'){
+    toastError('Not a SlyLED project file (type="'+(data.type||'undefined')+'"). Use Import Config or Load Show instead.',{timeout:12000});
+    return;
+  }
   var sv=data.schemaVersion||1;
   var summary='Project: '+(data.name||'Untitled')+'\nSaved: '+(data.savedAt||'unknown')+'\nApp version: '+(data.appVersion||'unknown')+'\n\nThis will replace ALL current data.';
   if(!confirm('Load project?\n\n'+summary))return;
-  document.getElementById('hs').textContent='Loading project...';
+  toastInfo('Loading project...');
   ra('POST','/api/project/import',data,function(r){
     if(r&&r.ok){
       _projRecentAdd(r.name||data.name||'Untitled',filename);
       _projUpdateName(r.name||data.name);
-      document.getElementById('hs').textContent='Project "'+r.name+'" loaded — '+r.children+' children, '+r.fixtures+' fixtures, '+r.actions+' actions';
+      toastSuccess('Project "'+r.name+'" loaded — '+r.children+' children, '+r.fixtures+' fixtures, '+r.actions+' actions');
       // #534 — seed the stale-profile set from the server's post-import
       // community check + toast the count so the operator knows to open
       // the Profile Library to review pulls.
@@ -251,30 +254,28 @@ function _fmImportJson(txt,filename){
           if(u.slug)window._commStaleSet[u.slug]=u;
         });
         setTimeout(function(){
-          alert(staleN+' embedded profile'+(staleN===1?' has':'s have')
-            +' community updates available.\n\nOpen the Profiles tab and click "Check community updates" to review, then "Pull update" on each stale entry.');
+          toastWarn(staleN+' embedded profile'+(staleN===1?' has':'s have')
+            +' community updates. Open Profiles → "Check community updates" to review.',{timeout:15000});
         },900);
       }
       // Guide user to re-enter SSH credentials for camera nodes
       if(r.sshNeeded&&r.sshNeeded.length){
-        var msg='The following camera nodes need SSH credentials re-entered (passwords are not portable between computers):\n\n';
-        r.sshNeeded.forEach(function(n){
-          msg+='\u2022 '+n.ip+' ('+n.authType+', user: '+n.user+')'+(n.keyPath?' — key: '+n.keyPath:'')+'\n';
-        });
-        msg+='\nGo to Firmware tab > Camera Setup to configure SSH for each node.';
-        setTimeout(function(){alert(msg);},500);
+        var ips=r.sshNeeded.map(function(n){return n.ip;}).join(', ');
+        setTimeout(function(){
+          toastWarn(r.sshNeeded.length+' camera node(s) need SSH credentials re-entered ('+ips+'). Firmware → Camera Setup.',{timeout:15000});
+        },500);
       }
       // Guide user about WiFi credentials (#315)
       ra('GET','/api/wifi',null,function(w){
         if(!w||(!w.ssid&&!w.hasPassword)){
           setTimeout(function(){
-            alert('WiFi credentials are not included in project files for security.\n\nIf you need OTA firmware updates, enter your network SSID and password on the Firmware tab.');
+            toastInfo('WiFi credentials are not in project files. Enter them on the Firmware tab if you need OTA updates.',{timeout:12000});
           },1200);
         }
       });
       loadAll();
     }else{
-      document.getElementById('hs').textContent='Project load failed: '+(r&&r.err||'unknown error');
+      toastError('Project load failed: '+(r&&r.err||'unknown error'));
     }
   });
 }
@@ -282,7 +283,7 @@ function _fmImportJson(txt,filename){
 function _fmOpenRecent(filename){
   document.getElementById('file-dropdown').classList.remove('open');
   // Recent files are just names — user must re-open since we can't persist FS handles across sessions
-  alert('To open "'+filename+'", use File > Open and select the file.\n\nRecent files show your history for reference.');
+  toastInfo('Use File → Open and pick "'+filename+'". Recent list is for reference only.',{timeout:8000});
 }
 
 function loadAll(){
