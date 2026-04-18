@@ -599,6 +599,7 @@ function _afSelectLocal(profId,displayName,chCount){
   if(sel){for(var i=0;i<sel.options.length;i++){if(sel.options[i].value===profId){sel.selectedIndex=i;break;}}}
   var el=document.getElementById('af-ofl-results');
   if(el)el.innerHTML='<span style="color:#86efac">Selected local profile: '+escapeHtml(displayName)+'</span>';
+  _afPreviewChannels();
 }
 function _afSelectCommunity(slug,displayName){
   var el=document.getElementById('af-ofl-results');
@@ -617,6 +618,7 @@ function _afSelectCommunity(slug,displayName){
         var matched=profiles.find(function(p){return p.id===slug;});
         if(matched){var chEl=document.getElementById('af-ch');if(chEl)chEl.value=matched.channelCount;}
         if(el)el.innerHTML='<span style="color:#86efac">Downloaded: '+escapeHtml(displayName)+'</span>';
+        _afPreviewChannels();
       });
     }else{if(el)el.innerHTML='<span style="color:#f66">Download failed</span>';}
   });
@@ -638,6 +640,7 @@ function _afSelectOfl(mfr,fix,displayName){
         if(!exists){var o=document.createElement('option');o.value=p.id;o.textContent=p.name+' ('+p.channels+'ch)';sel.appendChild(o);sel.value=p.id;}
       }
       if(el)el.innerHTML='<span style="color:#86efac">Selected: '+escapeHtml(p.name)+' ('+p.channels+'ch)</span>';
+      _afPreviewChannels();
     }else{
       if(el)el.innerHTML='<span style="color:#f66">Import failed: '+(r&&r.err||'unknown')+'</span>';
     }
