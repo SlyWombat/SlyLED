@@ -14,11 +14,12 @@
 11. [DMX Fixture Profiles](#11-dmx-profiles)
 12. [Preset Shows](#12-presets)
 13. [Camera Nodes](#13-cameras)
-14. [Firmware & OTA Updates](#14-firmware)
-15. [System Limits](#15-limits)
-16. [Troubleshooting](#16-troubleshooting)
-17. [Examples](#17-examples)
-18. [API Quick Reference](#18-api)
+14. [Mover Calibration](#14-mover-calibration)
+15. [Firmware & OTA Updates](#15-firmware)
+16. [System Limits](#16-limits)
+17. [Troubleshooting](#17-troubleshooting)
+18. [Examples](#18-examples)
+19. [API Quick Reference](#19-api)
 
 ---
 
@@ -539,7 +540,64 @@ Before running full calibration, use the orientation test to confirm pan and til
 
 ---
 
-## 14. Firmware & OTA Updates
+## 14. Mover Calibration
+
+**What it does.** Calibration teaches SlyLED the mechanical truth of every DMX moving head: how its mount is rotated in space, where its pan and tilt axes sit, and which direction increasing DMX drives each axis. Once calibrated, any stage-space aim (from a timeline, a gyro puck, or an Android phone) lands on the correct pan/tilt — no trial and error per fixture.
+
+### Before you calibrate
+- **Position the fixture** in the layout 3D viewport (stage X, Y, Z in mm) and set `mountedInverted` if it hangs from a truss.
+- **Set the home aim vector** by dragging the red aim-point sphere in the 3D viewport. This is the fixture's power-on rest position (§14 "Home Position" below).
+- **Register a camera** that can see the fixture's beam on the stage floor. For the v2 target-driven workflow the camera must have an ArUco homography calibration (Camera tab → Calibrate).
+- **Run the Art-Net engine** — calibration writes DMX directly through the universe buffer.
+- **Dim the room lights.** Beam detection contrasts the fixture's coloured output against the floor.
+
+### Running calibration
+On any DMX mover fixture row, click the **Calibrate** button. The wizard shows three sections:
+
+**Existing calibration** (visible when the fixture already has a fit):
+- Fit-quality badge: **GOOD** (<1.5° RMS), **FAIR** (<3° RMS), **POOR** (≥3° RMS).
+- Summary line: RMS, max, sample count, condition number.
+- Verification sweep result (if available): RMS/max pixel error from held-out points.
+- **Re-calibrate (fast, warm-start)** runs a v2 target-driven calibration that starts from your existing model — typical runtime ≤10 s vs. ~120 s for a first calibration.
+- **View residuals** opens the per-sample error table (see "Re-collect" below).
+
+**Options**:
+- **Beam color** — the DMX colour the fixture outputs during discovery and sampling. Pick whatever contrasts best with your floor (green is usually safe).
+- **Method** — *Legacy BFS (broad sampling)* is the proven v1 path. *v2 target-driven* requires a camera ArUco cal and converges point-by-point using the parametric model.
+- **Warm-up** — optional 30 s pan/tilt sweep at dimmer 0 before samples are captured. Recommended for cold fixtures: motors, belts, and LED modules drift thermally in the first minute of use, and calibrating cold produces a model that drifts as the fixture warms up during a show.
+
+When you hit **Start Calibration** the wizard switches to the run view:
+
+- **Progress bar** with the phase name (*Warm-up → Discovering → Sampling → Fitting → Verifying*).
+- **Per-target table** (v2 mode only) — each target shows a status dot: pending (grey) → converging (amber) → converged (green) or failed (red). Iteration count and final pixel error per target.
+- Takes ~60–120 s for a first calibration, <10 s for a warm-start re-cal.
+
+### What a good fit looks like
+On completion you get the **fit summary**:
+- **RMS angular error** — below 1° is excellent, below 3° is usable, above 3° means something is wrong (bad sample, wrong mount orientation, fixture mechanical slop).
+- **Max single-sample error** — flags outliers. If max is much larger than RMS, a single bad sample is skewing the fit.
+- **Condition number** — under ~20 is healthy; over 100 means samples are geometrically weak (colinear or clustered). Spread targets wider.
+
+Plus **verification** on 2–3 held-out points (points the solver didn't see). Green border = fixture generalises; amber/red = possible overfit.
+
+### Re-collect a bad sample
+The residual table lists every sample with its per-sample error, colour-coded. Click the **✕** next to a sample to exclude it — the server re-fits from the remaining samples and refreshes the quality metrics. You can also click **Show residuals in 3D** to visualise each sample as a short coloured line from the operator's target to the model's predicted landing point on the floor.
+
+### Home position (#493)
+The fixture's home aim vector — the red sphere you dragged in the 3D viewport — is now the **power-on position**. When the Art-Net engine starts, each mover seeds pan/tilt via `model.inverse(home_target)`, so fixtures power up pointing at something meaningful instead of flopping to the mechanical minimum. Set this for every fixture before calibration.
+
+### Calibration lock (#511)
+While a calibration is running, the fixture is locked: timelines, gyro pucks, Android phones, and the DMX test panel are all blocked from writing to its channels for the duration. The operator sees the HTTP 423 *Locked* status on any attempt. The lock clears automatically on completion, cancel, or error, and can never leak across a server restart.
+
+### Troubleshooting
+- **"Beam not found"** — re-aim the fixture toward the camera's floor view (drag the red aim sphere in 3D) and restart. The v1 path will spiral-search from that initial aim.
+- **"No camera homography"** (v2 mode) — go to the camera fixture's *Calibrate* button and run the ArUco step first.
+- **"Only N of M targets converged"** — the camera can't see the beam at some aim angles. Move the camera, or switch to legacy BFS which samples the whole visible region.
+- **POOR fit badge** — check `mountedInverted`, check the fixture is mechanically tight (a loose yoke adds random error in all directions), run with warm-up enabled.
+
+---
+
+## 15. Firmware & OTA Updates
 
 ### USB Flash
 1. Go to **Firmware** tab
@@ -557,7 +615,7 @@ Before running full calibration, use the orientation test to confirm pan and til
 
 ---
 
-## 15. System Limits
+## 16. System Limits
 
 | Resource | Tested | Recommended Max |
 |----------|--------|-----------------|
@@ -577,7 +635,7 @@ See `docs/STRESS_TEST.md` for full benchmark data.
 
 ---
 
-## 16. Troubleshooting
+## 17. Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
@@ -592,7 +650,7 @@ See `docs/STRESS_TEST.md` for full benchmark data.
 
 ---
 
-## 17. Examples
+## 18. Examples
 
 ### Example A: Camera Tracking — Moving Heads Follow a Person (#376)
 
@@ -991,7 +1049,7 @@ Use the built-in **Spotlight: Follow Person** preset to make moving heads automa
 
 ---
 
-## 18. API Quick Reference
+## 19. API Quick Reference
 
 ### Stage & Layout
 | Method | Endpoint | Description |
