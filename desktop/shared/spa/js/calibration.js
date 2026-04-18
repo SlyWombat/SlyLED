@@ -1997,14 +1997,23 @@ function _loadPointCloud(cb){
 }
 
 function _togglePointCloud(){
+  // When invoked from the View-menu checkbox, trust the checkbox state so it
+  // can't desync from _pointCloudVisible. Fall back to a plain flip for the
+  // legacy button-driven path (#529).
+  var cb=document.getElementById('vw-cloud');
+  var desired=cb?cb.checked:!_pointCloudVisible;
   if(!_pointCloudData){
+    if(!desired){_pointCloudVisible=false;_updateCloudBtn();return;}
     _loadPointCloud(function(){
-      if(!_pointCloudData)document.getElementById('hs').textContent='No point cloud — run environment scan first';
+      if(!_pointCloudData){
+        document.getElementById('hs').textContent='No point cloud — run environment scan first';
+        if(cb)cb.checked=false;
+      }
       // _loadPointCloud already set _pointCloudVisible=true and rendered
     });
     return;
   }
-  _pointCloudVisible=!_pointCloudVisible;
+  _pointCloudVisible=desired;
   if(_s3d.inited)_renderPointCloud();
   _updateCloudBtn();
 }

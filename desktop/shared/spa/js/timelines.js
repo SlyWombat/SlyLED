@@ -29,13 +29,25 @@ function loadTimelines(){
 }
 
 function newTimeline(){
-  var name=prompt('Timeline name:');
-  if(!name)return;
-  var dur=parseInt(prompt('Duration in seconds:','60'))||60;
-  ra('POST','/api/timelines',{name:name,durationS:dur},function(r){
-    if(r&&r.ok){loadTimelines();setTimeout(function(){
-      var sel=document.getElementById('tl-select');if(sel)sel.value=r.id;loadTimelineDetail();
-    },200);}
+  // Auto-generate a unique "Timeline N" name by finding the first unused number;
+  // operator renames inline via the #tl-name field once the editor opens.
+  var used={};(_timelines||[]).forEach(function(t){
+    var m=/^Timeline (\d+)$/.exec(t.name||'');if(m)used[parseInt(m[1])]=1;
+  });
+  var n=1;while(used[n])n++;
+  ra('POST','/api/timelines',{name:'Timeline '+n,durationS:60},function(r){
+    if(!r||!r.ok)return;
+    // Refetch the list so the new option is present, then select + open it.
+    ra('GET','/api/timelines',null,function(d){
+      _timelines=d||[];
+      var sel=document.getElementById('tl-select');if(!sel)return;
+      sel.innerHTML='<option value="">Select timeline...</option>';
+      _timelines.forEach(function(t){
+        sel.innerHTML+='<option value="'+t.id+'">'+escapeHtml(t.name)+' ('+t.durationS+'s)</option>';
+      });
+      sel.value=r.id;
+      loadTimelineDetail();
+    });
   });
 }
 

@@ -91,18 +91,21 @@ function s3dInit(){
 
   // Ground grid
   var grid=new THREE.GridHelper(20,20,0x1a2744,0x111828);
+  grid.userData.isGrid=true;
   _s3d.scene.add(grid);
 
   // Axis helper at origin (0,0,0) — stage corner
   var axes=new THREE.AxesHelper(0.5);
+  axes.userData.isGrid=true;
   _s3d.scene.add(axes);
   var originLbl=_s3dLabel('Origin (0,0,0)');
   originLbl.position.set(0,-0.08,0);
+  originLbl.userData.isLabel=true;
   _s3d.scene.add(originLbl);
   // Axis labels match stage coords: X=width, Y=depth(3D Z), Z=height(3D Y)
-  var xLbl=_s3dLabel('X');xLbl.position.set(0.6,0.05,0);_s3d.scene.add(xLbl);
-  var zLbl=_s3dLabel('Z');zLbl.position.set(0,0.6,0);_s3d.scene.add(zLbl);   // 3D Y-up = stage Z(height)
-  var yLbl=_s3dLabel('Y');yLbl.position.set(0,0.05,0.6);_s3d.scene.add(yLbl); // 3D Z = stage Y(depth)
+  var xLbl=_s3dLabel('X');xLbl.position.set(0.6,0.05,0);xLbl.userData.isLabel=true;_s3d.scene.add(xLbl);
+  var zLbl=_s3dLabel('Z');zLbl.position.set(0,0.6,0);zLbl.userData.isLabel=true;_s3d.scene.add(zLbl);   // 3D Y-up = stage Z(height)
+  var yLbl=_s3dLabel('Y');yLbl.position.set(0,0.05,0.6);yLbl.userData.isLabel=true;_s3d.scene.add(yLbl); // 3D Z = stage Y(depth)
 
   // Ambient + directional light
   _s3d.scene.add(new THREE.AmbientLight(0x334466,0.8));
@@ -419,32 +422,41 @@ function s3dLoadChildren(){
           var dir=aimLocal.clone().normalize();
           var quat=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,-1,0),dir);
           cone.quaternion.copy(quat);
-          cone.userData.beamCone=true;
-          cone.visible=_layShowCones;
+          // Camera FOV cones and DMX beam cones share rendering but not visibility
+          // — Camera Cones and Light Cones are separate toggles in the View menu.
+          var isCam=(_fix3d.fixtureType==='camera');
+          if(isCam){cone.userData.cameraCone=true;cone.visible=_layShowCamCones;}
+          else{cone.userData.beamCone=true;cone.visible=_layShowCones;}
           grp.add(cone);
-          // Aim point sphere (red, draggable)
+          // Aim point sphere (red). Draggable for DMX movers only — camera
+          // aim is fixed by placement. Tag drives the correct View toggle.
           var aimGeo=new THREE.SphereGeometry(0.08,12,12);
           var aimMat=new THREE.MeshBasicMaterial({color:0xff4444,opacity:0.8,transparent:true});
           var aimSphere=new THREE.Mesh(aimGeo,aimMat);
           aimSphere.position.copy(aimLocal);
-          aimSphere.userData.isAimPoint=true;
-          aimSphere.userData.fixtureId=_fix3d.id;
-          aimSphere.visible=_layShowCones;
+          if(isCam){aimSphere.userData.cameraCone=true;aimSphere.visible=_layShowCamCones;}
+          else{
+            aimSphere.userData.isAimPoint=true;
+            aimSphere.userData.fixtureId=_fix3d.id;
+            aimSphere.visible=_layShowCones;
+          }
           grp.add(aimSphere);
-          // Glow halo ring
+          // Glow halo ring — visibility follows the cone
           var glowGeo=new THREE.RingGeometry(0.1,0.15,24);
           var glowMat=new THREE.MeshBasicMaterial({color:0xff6666,opacity:0.25,transparent:true,side:THREE.DoubleSide,depthWrite:false});
           var glow=new THREE.Mesh(glowGeo,glowMat);
           glow.position.copy(aimLocal);
           glow.lookAt(_s3d.camera.position);
-          glow.userData.beamCone=true;
-          glow.visible=_layShowCones;
+          if(isCam){glow.userData.cameraCone=true;glow.visible=_layShowCamCones;}
+          else{glow.userData.beamCone=true;glow.visible=_layShowCones;}
           grp.add(glow);
 
         }
       }
 
-      // Rest vector — dashed arrow showing home direction (DMX movers + cameras)
+      // Rest vector — dashed arrow showing home direction (DMX movers + cameras).
+      // Tagged `restArrow` (not beamCone) so the Orientation Vectors toggle
+      // controls it independently of Light Cones / Camera Cones (#529).
       if(_fix3d&&(_fix3d.fixtureType==='dmx'||_fix3d.fixtureType==='camera')){
         var hasPanTilt=_fix3d.fixtureType==='camera'||
           (window._profileCache&&_fix3d.dmxProfileId&&window._profileCache[_fix3d.dmxProfileId]&&window._profileCache[_fix3d.dmxProfileId].panRange>0);
@@ -459,23 +471,25 @@ function s3dLoadChildren(){
           var restMat=new THREE.LineDashedMaterial({color:restColor,dashSize:0.04,gapSize:0.02,opacity:0.7,transparent:true});
           var restLine=new THREE.Line(restGeo,restMat);
           restLine.computeLineDistances();
-          restLine.userData.beamCone=true;restLine.visible=_layShowCones;
+          restLine.userData.restArrow=true;restLine.visible=_layShowOrient;
           grp.add(restLine);
           var arrowGeo=new THREE.ConeGeometry(0.02,0.06,8);
           var arrowMat=new THREE.MeshBasicMaterial({color:restColor,opacity:0.8,transparent:true});
           var arrow=new THREE.Mesh(arrowGeo,arrowMat);
           arrow.position.copy(homeEnd);
           arrow.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),homeDir));
-          arrow.userData.beamCone=true;arrow.visible=_layShowCones;
+          arrow.userData.restArrow=true;arrow.visible=_layShowOrient;
           grp.add(arrow);
           var restLbl=_s3dLabel(_fix3d.fixtureType==='camera'?(_fix3d.name||'cam'+(_fix3d.cameraIdx||0)):'0,0');
           restLbl.position.copy(homeEnd.clone().add(homeDir.clone().multiplyScalar(0.05)));
-          restLbl.userData.beamCone=true;restLbl.visible=_layShowCones;
+          restLbl.userData.restArrow=true;restLbl.visible=_layShowOrient;
           grp.add(restLbl);
         }
       }
 
-      // LED string lines + dots (positions relative to group origin = 0,0,0)
+      // LED string lines + dots (positions relative to group origin = 0,0,0).
+      // Tagged `ledString` so the LED Strings toggle can hide them without a
+      // full layout redraw (#529).
       var _sc=c.sc||c.strings&&c.strings.length||0;
       if(c.strings&&_sc>0){
         for(var si=0;si<_sc&&si<c.strings.length;si++){
@@ -488,7 +502,9 @@ function s3dLoadChildren(){
           var pts=[new THREE.Vector3(0,0,0),endLocal];
           var lineGeo=new THREE.BufferGeometry().setFromPoints(pts);
           var lineMat=new THREE.LineBasicMaterial({color:strCol,linewidth:2});
-          grp.add(new THREE.Line(lineGeo,lineMat));
+          var strLine=new THREE.Line(lineGeo,lineMat);
+          strLine.userData.ledString=true;strLine.visible=_layShowStrings;
+          grp.add(strLine);
 
           // LED dots along string
           var dotCount=Math.min(s.leds,50);
@@ -499,14 +515,16 @@ function s3dLoadChildren(){
             var dotMat=new THREE.MeshBasicMaterial({color:strCol});
             var dot=new THREE.Mesh(dotGeo,dotMat);
             dot.position.copy(dp);
+            dot.userData.ledString=true;dot.visible=_layShowStrings;
             grp.add(dot);
           }
         }
       }
 
-      // Text label (sprite, above group)
+      // Text label (sprite, above group) — tagged so Labels toggle hides it.
       var label=_s3dLabel(c.name||(c.hostname||'ID '+c.id));
       label.position.set(0,0.35,0);
+      label.userData.isLabel=true;label.visible=_layShowLabels;
       grp.add(label);
 
       _s3d.scene.add(grp);
@@ -693,7 +711,11 @@ function _s3dHitGroup(e){
   _s3d.nodes.forEach(function(grp){
     grp.traverse(function(obj){
       if(!obj.isMesh)return;
+      // Exclude presentation meshes that project far from the fixture so a
+      // click on one fixture's cone/arrow never resolves to its group (#528).
       if(obj.userData.beamCone)return;
+      if(obj.userData.cameraCone)return;
+      if(obj.userData.restArrow)return;
       if(obj.userData.isAimPoint)return;
       allMeshes.push(obj);
     });
@@ -878,20 +900,21 @@ function _layConesToggle(){
   _layShowCones=cb?cb.checked:!_layShowCones;
   _viewSave();
   if(_s3d.inited){
-    _s3d.scene.children.forEach(function(grp){
-      if(!grp.children)return;
-      grp.children.forEach(function(c){
-        if(c.userData&&c.userData.beamCone)c.visible=_layShowCones;
-        if(c.userData&&c.userData.isAimPoint)c.visible=_layShowCones;
-      });
+    _s3d.scene.traverse(function(c){
+      if(!c.userData)return;
+      if(c.userData.beamCone||c.userData.isAimPoint)c.visible=_layShowCones;
     });
   }
-  drawLayout();
 }
 function _layDetailToggle(){
   var cb=document.getElementById('vw-strings');
   _layShowStrings=cb?cb.checked:!_layShowStrings;
-  _viewSave();drawLayout();
+  _viewSave();
+  if(_s3d.inited){
+    _s3d.scene.traverse(function(c){
+      if(c.userData&&c.userData.ledString)c.visible=_layShowStrings;
+    });
+  }
 }
 
 // ── View dropdown (#255) ──
@@ -924,7 +947,7 @@ function _layCamConesToggle(){
   _viewSave();
   if(_s3d.inited){
     _s3d.scene.traverse(function(c){
-      if(c.userData&&c.userData.cameraFov)c.visible=_layShowCamCones;
+      if(c.userData&&c.userData.cameraCone)c.visible=_layShowCamCones;
     });
   }
 }
@@ -954,9 +977,10 @@ function _layLabelsToggle(){
   _layShowLabels=cb?cb.checked:!_layShowLabels;
   _viewSave();
   if(_s3d.inited){
+    // Only toggle sprites explicitly tagged as labels — rest-vector labels
+    // are Sprites too but belong to the Orientation Vectors toggle (#529).
     _s3d.scene.traverse(function(c){
       if(c.userData&&c.userData.isLabel)c.visible=_layShowLabels;
-      if(c.type==='Sprite')c.visible=_layShowLabels;
     });
   }
 }
