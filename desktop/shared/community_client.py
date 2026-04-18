@@ -52,6 +52,14 @@ def upload(profile):
     return _api("upload", body={"profile": profile})
 
 
+def update(profile):
+    """Overwrite an existing community profile (same slug). The server
+    enforces `uploader_ip` matching — if the IP has changed since the
+    original upload, the row must be deleted via cPanel phpMyAdmin
+    first, then re-uploaded fresh."""
+    return _api("update", body={"profile": profile})
+
+
 def check_duplicate(profile):
     return _api("check", body={"profile": profile})
 

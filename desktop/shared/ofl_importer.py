@@ -25,14 +25,15 @@ _OFL_TYPE_MAP = {
     "PanContinuous":    "pan",
     "Tilt":             "tilt",
     "TiltContinuous":   "tilt",
+    "PanTiltSpeed":     "pan-tilt-speed",  # #517
     "ShutterStrobe":    "strobe",
     "StrobeSpeed":      "speed",
     "StrobeDuration":   "strobe",
     "WheelSlot":        "gobo",       # overridden to color-wheel if color wheel
-    "WheelShake":       "gobo",
+    "WheelShake":       "gobo",       # #520 — shake on same wheel channel
     "WheelRotation":    "gobo-rotation",
     "Prism":            "prism",
-    "PrismRotation":    "prism",
+    "PrismRotation":    "prism-rotation",  # #522
     "Focus":            "focus",
     "Zoom":             "zoom",
     "Frost":            "frost",
@@ -48,7 +49,7 @@ _OFL_TYPE_MAP = {
     "BeamAngle":        "zoom",
     "BeamPosition":     "macro",
     "ColorPreset":      "color-wheel",
-    "ColorTemperature": "white",
+    "ColorTemperature": "color-temp",  # #519 — dedicated CTO / CTB channel
     "Effect":           "macro",
     "EffectSpeed":      "speed",
     "EffectDuration":   "macro",
@@ -98,14 +99,15 @@ _CAP_TYPE_MAP = {
     "PanContinuous":    "PanContinuous",
     "Tilt":             "Tilt",
     "TiltContinuous":   "TiltContinuous",
+    "PanTiltSpeed":     "PanTiltSpeed",    # #517
     "ShutterStrobe":    "ShutterStrobe",
     "StrobeSpeed":      "Speed",
     "StrobeDuration":   "ShutterStrobe",
     "WheelSlot":        "WheelSlot",
-    "WheelShake":       "WheelSlot",
+    "WheelShake":       "WheelShake",      # #520 — distinct from WheelSlot now
     "WheelRotation":    "WheelRotation",
     "Prism":            "Prism",
-    "PrismRotation":    "WheelRotation",
+    "PrismRotation":    "PrismRotation",   # #522 — distinct from WheelRotation now
     "Focus":            "Focus",
     "Zoom":             "Zoom",
     "Frost":            "Frost",
@@ -117,7 +119,7 @@ _CAP_TYPE_MAP = {
     "FogType":          "Effect",
     "BeamAngle":        "Zoom",
     "ColorPreset":      "WheelSlot",
-    "ColorTemperature": "ColorIntensity",
+    "ColorTemperature": "ColorTemperature",  # #519
     "Effect":           "Effect",
     "EffectSpeed":      "Speed",
     "EffectDuration":   "Effect",
@@ -256,6 +258,60 @@ def _convert_capabilities(ofl_channel, is_16bit=False):
             se = cap.get("shutterEffect")
             if isinstance(se, str) and se:
                 entry["shutterEffect"] = se
+
+        # #519 ColorTemperature — preserve the Kelvin value (or start/end
+        # pair for warm→cool ramps) so the runtime can show Kelvin in UI
+        # and map a slider to Kelvin space.
+        if ofl_type == "ColorTemperature":
+            for key in ("colorTemperature", "colorTemperatureStart", "colorTemperatureEnd"):
+                if key in cap:
+                    val = cap[key]
+                    if isinstance(val, str):
+                        try:
+                            val = float(val.replace("K", "").strip())
+                        except ValueError:
+                            continue
+                    entry[key] = val
+
+        # #520 WheelShake — preserve shakeSpeed + slotNumber so the
+        # runtime can match shake ranges to their underlying gobo.
+        if ofl_type == "WheelShake":
+            for key in ("slotNumber", "shakeSpeed", "shakeSpeedStart",
+                         "shakeSpeedEnd", "shakeAngle"):
+                if key in cap:
+                    val = cap[key]
+                    if isinstance(val, str):
+                        try:
+                            val = float(val.replace("Hz", "").replace("deg", "").strip())
+                        except ValueError:
+                            val = cap[key]
+                    entry[key] = val
+
+        # #522 PrismRotation — preserve speed/angle fields.
+        if ofl_type == "PrismRotation":
+            for key in ("speed", "speedStart", "speedEnd", "angle",
+                         "angleStart", "angleEnd"):
+                if key in cap:
+                    val = cap[key]
+                    if isinstance(val, str):
+                        try:
+                            val = float(val.replace("Hz", "").replace("deg", "").strip())
+                        except ValueError:
+                            val = cap[key]
+                    entry[key] = val
+
+        # #517 PanTiltSpeed — preserve speed / duration fields.
+        if ofl_type == "PanTiltSpeed":
+            for key in ("speed", "speedStart", "speedEnd",
+                         "duration", "durationStart", "durationEnd"):
+                if key in cap:
+                    val = cap[key]
+                    if isinstance(val, str):
+                        try:
+                            val = float(val.replace("s", "").replace("%", "").strip())
+                        except ValueError:
+                            val = cap[key]
+                    entry[key] = val
 
         result.append(entry)
 

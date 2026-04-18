@@ -5076,27 +5076,64 @@ def api_community_stats():
     import community_client as cc
     return jsonify(cc.stats())
 
-@app.post("/api/dmx-profiles/community/upload")
-def api_community_upload():
-    """Upload a local profile to the community server."""
-    import community_client as cc
-    body = request.get_json(silent=True) or {}
-    profile_id = body.get("profileId")
-    if not profile_id:
-        return jsonify(ok=False, err="profileId required"), 400
+def _prepare_community_payload(profile_id):
+    """Shared payload builder for community upload + update routes."""
     profile = _profile_lib.get_profile(profile_id)
     if not profile:
-        return jsonify(ok=False, err="Profile not found locally"), 404
-    # Strip builtin flag and ensure slug-safe ID
+        return None, ("Profile not found locally", 404)
     import re
     p = {k: v for k, v in profile.items() if k != "builtin"}
     slug = re.sub(r'[^a-z0-9\-]', '-', p.get("id", "").lower())
     slug = re.sub(r'-+', '-', slug).strip('-')[:128]
     if not slug:
-        return jsonify(ok=False, err="Profile ID cannot be converted to a valid slug"), 400
+        return None, ("Profile ID cannot be converted to a valid slug", 400)
     p["id"] = slug
+    return p, None
+
+
+@app.post("/api/dmx-profiles/community/upload")
+def api_community_upload():
+    """Upload a local profile to the community server. If ``overwrite:
+    true`` is in the body and the slug already exists, the call falls
+    back to the `update` action so operators can re-publish a revised
+    version of their own profile in one request."""
+    import community_client as cc
+    body = request.get_json(silent=True) or {}
+    profile_id = body.get("profileId")
+    overwrite = bool(body.get("overwrite"))
+    if not profile_id:
+        return jsonify(ok=False, err="profileId required"), 400
+    p, err = _prepare_community_payload(profile_id)
+    if err:
+        msg, code = err
+        return jsonify(ok=False, err=msg), code
     result = cc.upload(p)
-    log.info("Community upload '%s' (slug '%s'): %s", profile_id, slug, result)
+    # Fall through to `update` when the server rejected the insert
+    # because the slug already exists and the caller asked for overwrite.
+    if overwrite and isinstance(result, dict) and not result.get("ok"):
+        err_msg = (result.get("error") or "").lower()
+        if "already exists" in err_msg:
+            log.info("Community upload '%s': slug exists → retrying as update", p["id"])
+            result = cc.update(p)
+    log.info("Community upload '%s' (slug '%s'): %s", profile_id, p["id"], result)
+    return jsonify(result)
+
+
+@app.post("/api/dmx-profiles/community/update")
+def api_community_update():
+    """Overwrite an existing community profile (same slug). Requires
+    the caller's IP to match the original uploader server-side."""
+    import community_client as cc
+    body = request.get_json(silent=True) or {}
+    profile_id = body.get("profileId")
+    if not profile_id:
+        return jsonify(ok=False, err="profileId required"), 400
+    p, err = _prepare_community_payload(profile_id)
+    if err:
+        msg, code = err
+        return jsonify(ok=False, err=msg), code
+    result = cc.update(p)
+    log.info("Community update '%s' (slug '%s'): %s", profile_id, p["id"], result)
     return jsonify(result)
 
 @app.post("/api/dmx-profiles/community/download")

@@ -167,12 +167,12 @@ function editProfile(id){
   ra('GET','/api/dmx-profiles/'+id,null,function(p){if(p)_openProfileEditor(p,true);});
 }
 function showProfileEditor(){_openProfileEditor({id:'',name:'',manufacturer:'',category:'par',channels:[{offset:0,name:'Dimmer',type:'dimmer',capabilities:[{range:[0,255],type:'Intensity',label:'Dimmer 0-100%'}]}],colorMode:'rgb',beamWidth:25,panRange:0,tiltRange:0});}
-var _profEditChTypes=['dimmer','red','green','blue','white','amber','uv','pan','pan-fine','tilt','tilt-fine','strobe','gobo','gobo-rotation','prism','focus','zoom','frost','color-wheel','speed','macro','reset'];
+var _profEditChTypes=['dimmer','red','green','blue','white','amber','uv','pan','pan-fine','tilt','tilt-fine','pan-tilt-speed','strobe','gobo','gobo-rotation','prism','prism-rotation','focus','zoom','frost','color-wheel','color-temp','speed','macro','reset'];
 // Dirty flag for the profile editor — set by any edit in the editor, cleared
 // on successful save. closeModal() checks this and prompts the operator.
 var _peDirty=false;
 function _peMarkDirty(){_peDirty=true;}
-var _profEditCapTypes=['ColorIntensity','Intensity','Pan','PanContinuous','Tilt','TiltContinuous','ShutterStrobe','WheelSlot','WheelRotation','Prism','Focus','Zoom','Frost','Speed','Maintenance','Effect','NoFunction','Generic'];
+var _profEditCapTypes=['ColorIntensity','Intensity','Pan','PanContinuous','Tilt','TiltContinuous','PanTiltSpeed','ShutterStrobe','WheelSlot','WheelShake','WheelRotation','Prism','PrismRotation','ColorTemperature','Focus','Zoom','Frost','Speed','Maintenance','Effect','NoFunction','Generic'];
 function _openProfileEditor(p,isEdit){
   var h='<div style="display:flex;gap:.5em;flex-wrap:wrap;margin-bottom:.5em">';
   h+='<div><label style="font-size:.78em">ID <span style="color:#64748b">(lowercase, hyphens only)</span></label><input id="pe-id" value="'+escapeHtml(p.id||'')+'" style="width:180px" oninput="this.value=this.value.toLowerCase().replace(/[^a-z0-9\\-]/g,\'-\').replace(/-+/g,\'-\').replace(/^-/,\'\')" placeholder="my-fixture-name"'+(isEdit?' disabled':'')+'></div>';

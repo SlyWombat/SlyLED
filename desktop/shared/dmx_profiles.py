@@ -27,11 +27,13 @@ Profile schema:
 }
 
 Channel types (primary function): dimmer, red, green, blue, white, amber, uv,
-    pan, pan-fine, tilt, tilt-fine, strobe, gobo, gobo-rotation, prism, focus,
-    zoom, frost, color-wheel, speed, macro, reset
+    pan, pan-fine, tilt, tilt-fine, strobe, gobo, gobo-rotation, prism,
+    prism-rotation, focus, zoom, frost, color-wheel, color-temp, speed,
+    pan-tilt-speed, macro, reset
 
 Capability types: ColorIntensity, Intensity, Pan, PanContinuous, Tilt,
-    TiltContinuous, ShutterStrobe, WheelSlot, WheelRotation, Prism, Focus,
+    TiltContinuous, PanTiltSpeed, ShutterStrobe, WheelSlot, WheelShake,
+    WheelRotation, Prism, PrismRotation, ColorTemperature, Focus,
     Zoom, Frost, Speed, Maintenance, Effect, NoFunction, Generic
 """
 
@@ -44,14 +46,20 @@ from pathlib import Path
 CHANNEL_TYPES = {
     "dimmer", "red", "green", "blue", "white", "amber", "uv",
     "pan", "pan-fine", "tilt", "tilt-fine",
-    "strobe", "gobo", "gobo-rotation", "prism", "focus", "zoom", "frost",
-    "color-wheel", "speed", "macro", "reset",
+    "strobe", "gobo", "gobo-rotation", "prism", "prism-rotation",
+    "focus", "zoom", "frost",
+    "color-wheel", "color-temp",
+    "speed", "pan-tilt-speed",
+    "macro", "reset",
 }
 
 CAPABILITY_TYPES = {
     "ColorIntensity", "Intensity", "Pan", "PanContinuous",
-    "Tilt", "TiltContinuous", "ShutterStrobe", "WheelSlot",
-    "WheelRotation", "Prism", "Focus", "Zoom", "Frost",
+    "Tilt", "TiltContinuous", "PanTiltSpeed",
+    "ShutterStrobe", "WheelSlot", "WheelShake", "WheelRotation",
+    "Prism", "PrismRotation",
+    "ColorTemperature",
+    "Focus", "Zoom", "Frost",
     "Speed", "Maintenance", "Effect", "NoFunction", "Generic",
 }
 

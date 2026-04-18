@@ -11,6 +11,7 @@
  * GET  ?action=stats
  * GET  ?action=since&ts=2026-01-01T00:00:00
  * POST ?action=upload     (body: {"profile":{...}})
+ * POST ?action=update     (body: {"profile":{...}})  — overwrite existing slug; requires same uploader_ip
  * POST ?action=check      (body: {"profile":{...}})
  */
 error_reporting(0);
@@ -61,8 +62,9 @@ try {
     } elseif ($method === 'POST') {
         switch ($action) {
             case 'upload':  handle_upload(); break;
+            case 'update':  handle_update(); break;
             case 'check':   handle_check(); break;
-            default:        json_err('Unknown action. Use ?action=upload|check', 400);
+            default:        json_err('Unknown action. Use ?action=upload|update|check', 400);
         }
     } else {
         json_err('Method not allowed', 405);
@@ -171,6 +173,60 @@ function handle_upload(): void {
     increment_rate_limit();
     http_response_code(201);
     echo json_encode(['ok' => true, 'slug' => $slug, 'channel_hash' => $hash]);
+    exit;
+}
+
+function handle_update(): void {
+    // Overwrite an existing profile row, keyed by slug. Uploader-IP must
+    // match the original uploader of that slug — "the same person can
+    // update their own submission". If the IP has changed (VPN, mobile
+    // network, etc.) the operator can always DELETE the row in cPanel
+    // phpMyAdmin and re-submit via ?action=upload.
+    check_rate_limit();
+    $body = json_decode(file_get_contents('php://input'), true);
+    if (!$body) json_err('Invalid JSON body');
+    $profile = $body['profile'] ?? $body;
+    $errors = validate_profile($profile);
+    if ($errors) json_err('Validation: ' . implode('; ', $errors));
+
+    $slug = $profile['id'];
+    $hash = compute_channel_hash($profile);
+    $json = json_encode($profile, JSON_UNESCAPED_UNICODE);
+    if (strlen($json) > MAX_PROFILE_SIZE) json_err('Profile too large (max ' . MAX_PROFILE_SIZE . ' bytes)');
+
+    $existing = db()->prepare('SELECT slug, uploader_ip FROM profiles WHERE slug = ?');
+    $existing->execute([$slug]);
+    $row = $existing->fetch(PDO::FETCH_ASSOC);
+    if (!$row) json_err("Slug '$slug' does not exist — use ?action=upload for new profiles", 404);
+
+    $caller = $_SERVER['REMOTE_ADDR'] ?? '';
+    if ($row['uploader_ip'] && $caller && $row['uploader_ip'] !== $caller) {
+        json_err("Update forbidden: only the original uploader (same IP) can overwrite this slug", 403);
+    }
+
+    // Allow channel-hash collision against SELF (slug match), reject against
+    // any OTHER slug — otherwise an update could stomp onto a different
+    // profile's identity.
+    $dup = db()->prepare('SELECT slug, name FROM profiles WHERE channel_hash = ? AND slug != ?');
+    $dup->execute([$hash, $slug]);
+    $dupRow = $dup->fetch(PDO::FETCH_ASSOC);
+    if ($dupRow) {
+        http_response_code(409);
+        echo json_encode(['ok' => false, 'error' => 'Duplicate channels match another slug',
+                          'duplicate_of' => $dupRow['slug'], 'duplicate_name' => $dupRow['name']]);
+        exit;
+    }
+
+    $stmt = db()->prepare('UPDATE profiles SET name=?, manufacturer=?, category=?, channel_count=?, color_mode=?, beam_width=?, pan_range=?, tilt_range=?, profile_json=?, channel_hash=? WHERE slug=?');
+    $stmt->execute([
+        $profile['name'] ?? '', $profile['manufacturer'] ?? 'Generic',
+        $profile['category'] ?? 'par', intval($profile['channelCount'] ?? count($profile['channels'] ?? [])),
+        $profile['colorMode'] ?? 'rgb', intval($profile['beamWidth'] ?? 0),
+        intval($profile['panRange'] ?? 0), intval($profile['tiltRange'] ?? 0),
+        $json, $hash, $slug
+    ]);
+    increment_rate_limit();
+    echo json_encode(['ok' => true, 'slug' => $slug, 'channel_hash' => $hash, 'updated' => true]);
     exit;
 }
 
