@@ -5157,9 +5157,33 @@ def api_community_update():
     log.info("Community update '%s' (slug '%s'): %s", profile_id, p["id"], result)
     return jsonify(result)
 
+def _stamp_community_provenance(profile, slug):
+    """#534 — tag a freshly-downloaded community profile with the
+    `_community` block so later check_updates calls can detect drift.
+
+    Reads the server's response-only fields (communityUploadTs +
+    communityChannelHash), moves them into the private `_community`
+    sub-dict, and drops the top-level duplicates so the profile that
+    ends up in the editor isn't polluted with transient fields.
+    """
+    import time as _time
+    upload_ts = profile.pop("communityUploadTs", None)
+    channel_hash = profile.pop("communityChannelHash", None)
+    if not (upload_ts or channel_hash):
+        return
+    profile["_community"] = {
+        "slug": slug,
+        "uploadTs": upload_ts or "",
+        "channelHash": channel_hash or "",
+        "syncedAt": int(_time.time()),
+    }
+
+
 @app.post("/api/dmx-profiles/community/download")
 def api_community_download():
-    """Download a community profile and import it locally."""
+    """Download a community profile and import it locally. Stamps the
+    `_community` provenance block so the Profile Library can later
+    detect when the remote has been updated (#534)."""
     import community_client as cc
     body = request.get_json(silent=True) or {}
     slug = body.get("slug", "").strip()
@@ -5170,6 +5194,7 @@ def api_community_download():
         return jsonify(ok=False, err=result.get("error", "Fetch failed")), 502
     profile = result.get("data", result)
     if isinstance(profile, dict) and "id" in profile:
+        _stamp_community_provenance(profile, slug)
         imported = _profile_lib.import_profiles([profile])
         log.info("Community download '%s': %s", slug, imported)
         if imported.get("errors"):
@@ -5178,6 +5203,45 @@ def api_community_download():
     log.warning("Community download '%s': invalid data — keys=%s", slug,
                 list(profile.keys()) if isinstance(profile, dict) else type(profile).__name__)
     return jsonify(ok=False, err="Invalid profile data"), 400
+
+
+@app.post("/api/dmx-profiles/community/check-updates")
+def api_community_check_updates():
+    """Batch-check every locally-tracked community profile for newer
+    versions on the server. Builds the slug/knownTs pairs from the
+    profiles that carry a `_community` provenance block and proxies to
+    `community_client.check_updates`.
+    """
+    import community_client as cc
+    pairs = []
+    tracked_profiles = {}
+    for pid in list(_profile_lib._profiles.keys()):
+        p = _profile_lib._profiles.get(pid) or {}
+        cm = p.get("_community") or {}
+        slug = cm.get("slug")
+        if not slug:
+            continue
+        tracked_profiles[slug] = pid
+        pairs.append({"slug": slug, "knownTs": cm.get("uploadTs", "")})
+    if not pairs:
+        return jsonify(ok=True, tracked=0, updates=[])
+    result = cc.check_updates(pairs) or {}
+    if not result.get("ok"):
+        return jsonify(ok=False, err=result.get("error", "Check failed")), 502
+    data = result.get("data") or {}
+    updates = []
+    for u in (data.get("updates") or []):
+        slug = u.get("slug")
+        if not slug:
+            continue
+        updates.append({
+            "slug": slug,
+            "profileId": tracked_profiles.get(slug, slug),
+            "name": u.get("name"),
+            "uploadTs": u.get("uploadTs"),
+            "channelHash": u.get("channelHash"),
+        })
+    return jsonify(ok=True, tracked=len(pairs), updates=updates)
 
 @app.post("/api/dmx-profiles/community/check")
 def api_community_check():
@@ -9220,12 +9284,22 @@ def api_project_import():
             for fid_str, lm in light_maps.items():
                 if fid_str in _mover_cal:
                     _mover_cal[fid_str]["lightMap"] = lm
-        # Import custom DMX profiles referenced by fixtures (#337)
+        # Import custom DMX profiles referenced by fixtures (#337).
+        # Embedded profiles may or may not exist in the community — we
+        # try to stamp `_community` provenance on any that do so the
+        # SPA can detect staleness later (#534). Collect the slugs we
+        # ended up with so we can batch check_updates after the import.
+        _imported_community_slugs = []
         for p in data.get("profiles", []):
             pid = p.get("id")
-            if pid and not _profile_lib.get_profile(pid):
+            if not pid:
+                continue
+            if not _profile_lib.get_profile(pid):
                 _profile_lib.save_profile(p)
-        # Fetch missing profiles from community server (#351)
+            if p.get("_community") and p["_community"].get("slug"):
+                _imported_community_slugs.append(p["_community"]["slug"])
+        # Fetch missing profiles from community server (#351) — and
+        # stamp them with _community provenance while we're at it.
         _missing_pids = set()
         for f in _fixtures:
             pid = f.get("dmxProfileId")
@@ -9239,7 +9313,9 @@ def api_project_import():
                     if result and result.get("ok"):
                         prof = result.get("data", result)
                         if isinstance(prof, dict) and "id" in prof:
+                            _stamp_community_provenance(prof, pid)
                             _profile_lib.import_profiles([prof])
+                            _imported_community_slugs.append(pid)
                             log.info("Project import: fetched missing profile '%s' from community", pid)
                         else:
                             log.warning("Project import: community returned invalid data for '%s'", pid)
@@ -9271,10 +9347,33 @@ def api_project_import():
             ssh_needed.append({"ip": ip, "user": ssh.get("user", "root"), "authType": "password"})
         elif ssh.get("authType") == "key" and ssh.get("keyPath") and not Path(os.path.expanduser(ssh["keyPath"])).exists():
             ssh_needed.append({"ip": ip, "user": ssh.get("user", "root"), "authType": "key", "keyPath": ssh["keyPath"]})
+    # #534 — post-import community update check. Batch-check every
+    # profile we just stamped with _community provenance; surface the
+    # stale count so the SPA can toast "3 embedded profiles have
+    # community updates available". Failures are non-fatal — if the
+    # community server is unreachable we just report 0.
+    stale_profiles = 0
+    stale_detail = []
+    if _imported_community_slugs:
+        try:
+            import community_client as cc
+            pairs = []
+            for slug in set(_imported_community_slugs):
+                p = _profile_lib.get_profile(slug) or {}
+                ts = (p.get("_community") or {}).get("uploadTs", "")
+                pairs.append({"slug": slug, "knownTs": ts})
+            result = cc.check_updates(pairs) or {}
+            if result.get("ok"):
+                stale_detail = (result.get("data") or {}).get("updates") or []
+                stale_profiles = len(stale_detail)
+        except Exception as e:
+            log.warning("Project import: community check_updates failed: %s", e)
     return jsonify(ok=True, name=name,
                    children=len(_children), fixtures=len(_fixtures),
                    actions=len(_actions), timelines=len(_timelines),
-                   objects=len(_objects), sshNeeded=ssh_needed)
+                   objects=len(_objects), sshNeeded=ssh_needed,
+                   communityStaleProfiles=stale_profiles,
+                   communityStaleDetail=stale_detail)
 
 
 @app.get("/api/project/name")

@@ -10,9 +10,10 @@
  * GET  ?action=popular&limit=20
  * GET  ?action=stats
  * GET  ?action=since&ts=2026-01-01T00:00:00
- * POST ?action=upload     (body: {"profile":{...}})
- * POST ?action=update     (body: {"profile":{...}})  — overwrite existing slug; requires same uploader_ip
- * POST ?action=check      (body: {"profile":{...}})
+ * POST ?action=upload         (body: {"profile":{...}})
+ * POST ?action=update         (body: {"profile":{...}})  — overwrite existing slug; requires same uploader_ip
+ * POST ?action=check          (body: {"profile":{...}})
+ * POST ?action=check_updates  (body: {"slugs":[{"slug":"x","knownTs":"..."}, ...]})
  */
 error_reporting(0);
 require_once __DIR__ . '/config.php';
@@ -61,10 +62,11 @@ try {
         }
     } elseif ($method === 'POST') {
         switch ($action) {
-            case 'upload':  handle_upload(); break;
-            case 'update':  handle_update(); break;
-            case 'check':   handle_check(); break;
-            default:        json_err('Unknown action. Use ?action=upload|update|check', 400);
+            case 'upload':          handle_upload(); break;
+            case 'update':          handle_update(); break;
+            case 'check':           handle_check(); break;
+            case 'check_updates':   handle_check_updates(); break;
+            default:                json_err('Unknown action. Use ?action=upload|update|check|check_updates', 400);
         }
     } else {
         json_err('Method not allowed', 405);
@@ -97,13 +99,17 @@ function handle_search(): void {
 
 function handle_get(string $slug): void {
     if (!$slug) json_err('slug parameter required');
-    $stmt = db()->prepare('SELECT profile_json, downloads FROM profiles WHERE slug = ? AND flagged = 0');
+    $stmt = db()->prepare('SELECT profile_json, downloads, upload_ts, channel_hash FROM profiles WHERE slug = ? AND flagged = 0');
     $stmt->execute([$slug]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$row) json_err('Profile not found', 404);
     db()->prepare('UPDATE profiles SET downloads = downloads + 1 WHERE slug = ?')->execute([$slug]);
     $profile = json_decode($row['profile_json'], true);
     $profile['communityDownloads'] = intval($row['downloads']) + 1;
+    // #534 — provenance fields the client stamps as `_community` after
+    // import so future check_updates calls can detect drift.
+    $profile['communityUploadTs'] = $row['upload_ts'];
+    $profile['communityChannelHash'] = $row['channel_hash'];
     json_out($profile);
 }
 
@@ -248,6 +254,54 @@ function handle_check(): void {
     $dup = $d->fetch(PDO::FETCH_ASSOC);
     if ($dup) { $result['duplicate'] = true; $result['duplicate_of'] = $dup['slug']; $result['duplicate_name'] = $dup['name']; }
     json_out($result);
+}
+
+function handle_check_updates(): void {
+    // Batch check — given a list of locally-held slugs + the upload_ts
+    // the client last saw, return only the ones that have a newer
+    // upload_ts on the server. Rate-limit bucket is shared with other
+    // POSTs so a polling client can't hammer the DB.
+    check_rate_limit();
+    $body = json_decode(file_get_contents('php://input'), true);
+    if (!$body) json_err('Invalid JSON body');
+    $slugs = $body['slugs'] ?? [];
+    if (!is_array($slugs) || !$slugs) {
+        json_out(['updates' => []]);
+        return;
+    }
+    // Cap the batch size so a malformed client can't pull the whole table.
+    $slugs = array_slice($slugs, 0, 200);
+
+    $wantedSlugs = [];
+    $known = [];
+    foreach ($slugs as $row) {
+        $s = trim((string)($row['slug'] ?? ''));
+        if (!$s) continue;
+        $wantedSlugs[] = $s;
+        $known[$s] = (string)($row['knownTs'] ?? '');
+    }
+    if (!$wantedSlugs) { json_out(['updates' => []]); return; }
+
+    $placeholders = implode(',', array_fill(0, count($wantedSlugs), '?'));
+    $stmt = db()->prepare("SELECT slug, upload_ts, channel_hash, name FROM profiles WHERE slug IN ($placeholders) AND flagged = 0");
+    $stmt->execute($wantedSlugs);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $updates = [];
+    foreach ($rows as $row) {
+        $serverTs = (string)($row['upload_ts'] ?? '');
+        $clientTs = $known[$row['slug']] ?? '';
+        // Strict newer comparison on the ISO-like timestamp string.
+        if ($serverTs !== '' && $serverTs > $clientTs) {
+            $updates[] = [
+                'slug'        => $row['slug'],
+                'name'        => $row['name'],
+                'uploadTs'    => $serverTs,
+                'channelHash' => $row['channel_hash'],
+            ];
+        }
+    }
+    json_out(['updates' => $updates, 'checked' => count($wantedSlugs)]);
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────

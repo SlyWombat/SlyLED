@@ -84,30 +84,98 @@ function renderPatchView(){
   el.innerHTML=h;
 }
 
+// #534 — cached set of profile ids that have newer community versions.
+// Populated by `_commCheckUpdates` and by the post-import toast path;
+// cleared when the Profile Library modal closes. The library-render
+// function reads it to flip on the "Update available" badge.
+window._commStaleSet=window._commStaleSet||{};
+
 function showProfileBrowser(){
   _modalStack=[]; // top-level modal — clear stack
   ra('GET','/api/dmx-profiles',null,function(profiles){
     if(!profiles)return;
     var cats=['','par','wash','spot','moving-head','strobe','fog','laser','other'];
-    var h='<div style="margin-bottom:.5em"><select id="prof-cat-filter" onchange="_filterProfiles()" style="font-size:.8em">';
+    var h='<div style="margin-bottom:.5em;display:flex;gap:.4em;align-items:center;flex-wrap:wrap">'
+      +'<select id="prof-cat-filter" onchange="_filterProfiles()" style="font-size:.8em">';
     h+='<option value="">All Categories</option>';
     cats.forEach(function(c){if(c)h+='<option value="'+c+'">'+c+'</option>';});
-    h+='</select> <input id="prof-search" placeholder="Search..." oninput="_filterProfiles()" style="font-size:.8em;width:180px"></div>';
+    h+='</select> <input id="prof-search" placeholder="Search..." oninput="_filterProfiles()" style="font-size:.8em;width:180px">';
+    // #534 — community update check button.
+    h+=' <button class="btn" onclick="_commCheckUpdates()" style="font-size:.75em;background:#1e3a5f;color:#93c5fd;margin-left:auto">'
+      +'<span id="comm-upd-btn-label">Check community updates</span></button>';
+    h+='</div>';
     h+='<table class="tbl" style="font-size:.82em" id="prof-tbl"><tr><th>Name</th><th>Mfr</th><th>Cat</th><th>Ch</th><th>Source</th><th>Actions</th></tr>';
     profiles.forEach(function(p){
       var src=p.builtin?'<span style="color:#64748b;font-size:.75em">Built-in</span>':'<span style="color:#059669;font-size:.75em">Custom</span>';
+      if(p._community&&p._community.slug){
+        src+=' <span style="color:#7c3aed;font-size:.7em">· community</span>';
+      }
       var badge='<span class="badge" style="background:'+(_profileCatColors[p.category]||'#446')+';color:#fff;font-size:.7em">'+escapeHtml(p.category||'other')+'</span>';
+      // Update-available badge (#534) — only shown when _commCheckUpdates
+      // has been run this session and found a newer remote.
+      var staleBadge='';
+      if(window._commStaleSet[p.id]){
+        staleBadge=' <span class="badge" style="background:#92400e;color:#fde68a;font-size:.68em" title="Newer version on community">Update available</span>';
+      }
       var acts='<button class="btn" onclick="viewProfile(\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#335;color:#fff">View</button>';
       if(!p.builtin)acts+=' <button class="btn" onclick="editProfile(\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#446;color:#fff">Edit</button>'
         +' <button class="btn" onclick="_commShareProfile(\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#7c3aed;color:#e9d5ff">Share</button>'
+        +(window._commStaleSet[p.id]?
+          ' <button class="btn" onclick="_commPullUpdate(\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#065f46;color:#bbf7d0">Pull update</button>':'')
         +' <button class="btn btn-off" onclick="deleteProfile(\''+escapeHtml(p.id)+'\',\''+escapeHtml(p.name).replace(/'/g,"\\'")+'\')" style="font-size:.7em">Del</button>';
       else acts+=' <button class="btn" onclick="cloneProfile(\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#446;color:#fff">Clone</button>';
-      h+='<tr data-cat="'+escapeHtml(p.category||'')+'" data-name="'+escapeHtml((p.name||'')+(p.manufacturer||'')).toLowerCase()+'"><td>'+escapeHtml(p.name)+'</td><td>'+escapeHtml(p.manufacturer||'')+'</td><td>'+badge+'</td><td>'+p.channelCount+'</td><td>'+src+'</td><td>'+acts+'</td></tr>';
+      h+='<tr data-cat="'+escapeHtml(p.category||'')+'" data-name="'+escapeHtml((p.name||'')+(p.manufacturer||'')).toLowerCase()+'"><td>'+escapeHtml(p.name)+staleBadge+'</td><td>'+escapeHtml(p.manufacturer||'')+'</td><td>'+badge+'</td><td>'+p.channelCount+'</td><td>'+src+'</td><td>'+acts+'</td></tr>';
     });
     h+='</table>';
     document.getElementById('modal-title').textContent='Fixture Profile Library ('+profiles.length+')';
     document.getElementById('modal-body').innerHTML=h;
     document.getElementById('modal').style.display='block';
+  });
+}
+
+// #534 — batch-check every locally-tracked community profile for
+// newer server versions. Populates window._commStaleSet and reopens
+// the library so the badges render.
+function _commCheckUpdates(){
+  var lbl=document.getElementById('comm-upd-btn-label');
+  if(lbl)lbl.textContent='Checking…';
+  ra('POST','/api/dmx-profiles/community/check-updates',{},function(r){
+    if(lbl)lbl.textContent='Check community updates';
+    if(!r||!r.ok){
+      document.getElementById('hs').textContent='Update check failed: '+(r&&(r.err||r.error)||'unknown');
+      return;
+    }
+    window._commStaleSet={};
+    (r.updates||[]).forEach(function(u){
+      if(u.profileId)window._commStaleSet[u.profileId]=u;
+    });
+    var n=(r.updates||[]).length;
+    if(n===0){
+      document.getElementById('hs').textContent=
+        'All '+(r.tracked||0)+' tracked profiles are up to date.';
+    }else{
+      document.getElementById('hs').textContent=
+        n+' profile'+(n===1?'':'s')+' have updates available — look for the amber badge.';
+    }
+    // Re-render the library so the new badges show up.
+    showProfileBrowser();
+  });
+}
+
+// #534 — pull the fresh community copy of a specific profile. Runs
+// community/download which re-stamps `_community` and overwrites the
+// local record.
+function _commPullUpdate(profileId){
+  if(!confirm('Download the latest community version of "'+profileId+'" and overwrite the local copy?\n\nAny local edits since last sync will be lost.'))return;
+  document.getElementById('hs').textContent='Pulling update for '+profileId+'…';
+  ra('POST','/api/dmx-profiles/community/download',{slug:profileId},function(r){
+    if(r&&r.ok){
+      delete window._commStaleSet[profileId];
+      document.getElementById('hs').textContent='Pulled community update for '+profileId+'.';
+      showProfileBrowser();
+    }else{
+      document.getElementById('hs').textContent='Pull failed: '+(r&&(r.err||r.error)||'unknown');
+    }
   });
 }
 function _filterProfiles(){

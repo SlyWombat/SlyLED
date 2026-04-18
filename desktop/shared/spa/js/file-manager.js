@@ -240,6 +240,21 @@ function _fmImportJson(txt,filename){
       _projRecentAdd(r.name||data.name||'Untitled',filename);
       _projUpdateName(r.name||data.name);
       document.getElementById('hs').textContent='Project "'+r.name+'" loaded — '+r.children+' children, '+r.fixtures+' fixtures, '+r.actions+' actions';
+      // #534 — seed the stale-profile set from the server's post-import
+      // community check + toast the count so the operator knows to open
+      // the Profile Library to review pulls.
+      var staleN=r.communityStaleProfiles||0;
+      var staleDetail=r.communityStaleDetail||[];
+      if(staleN>0){
+        window._commStaleSet=window._commStaleSet||{};
+        staleDetail.forEach(function(u){
+          if(u.slug)window._commStaleSet[u.slug]=u;
+        });
+        setTimeout(function(){
+          alert(staleN+' embedded profile'+(staleN===1?' has':'s have')
+            +' community updates available.\n\nOpen the Profiles tab and click "Check community updates" to review, then "Pull update" on each stale entry.');
+        },900);
+      }
       // Guide user to re-enter SSH credentials for camera nodes
       if(r.sshNeeded&&r.sshNeeded.length){
         var msg='The following camera nodes need SSH credentials re-entered (passwords are not portable between computers):\n\n';

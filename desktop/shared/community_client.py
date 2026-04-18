@@ -64,6 +64,17 @@ def check_duplicate(profile):
     return _api("check", body={"profile": profile})
 
 
+def check_updates(slug_ts_pairs):
+    """Batch compare of local-held community profiles vs server.
+
+    ``slug_ts_pairs`` is a list of ``{"slug": "...", "knownTs": "..."}``
+    dicts. Returns the same shape as the PHP endpoint: ``{"updates":
+    [{slug, name, uploadTs, channelHash}, ...]}`` with only the
+    strictly-newer slugs.
+    """
+    return _api("check_updates", body={"slugs": list(slug_ts_pairs or [])})
+
+
 def recent(limit=20):
     return _api("recent", {"limit": limit})
 
