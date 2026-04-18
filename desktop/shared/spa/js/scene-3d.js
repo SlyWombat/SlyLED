@@ -1208,3 +1208,61 @@ function s3dPollFixturesLive(){
 function s3dStopPollFixturesLive(){
   if(_s3dFixLive.pollId){clearInterval(_s3dFixLive.pollId);_s3dFixLive.pollId=null;}
 }
+
+// ── Residual error vectors (#512) ────────────────────────────────────────
+// For each calibration sample, draw a short line from the target point
+// (where the operator intended the beam to hit) to the predicted point
+// (where the fitted model says the beam actually lands). Colour
+// gradient by error magnitude: green <50mm, amber <200mm, red ≥200mm.
+
+var _s3dResiduals={group:null,fid:null};
+
+function _s3dStageToLocal(xyz){
+  return new THREE.Vector3((xyz[0]||0)/1000, (xyz[2]||0)/1000, (xyz[1]||0)/1000);
+}
+
+function s3dClearResiduals(){
+  if(!_s3dResiduals.group)return;
+  _s3dResiduals.group.traverse(function(o){
+    if(o.geometry)o.geometry.dispose();
+    if(o.material)o.material.dispose();
+  });
+  _s3d.scene.remove(_s3dResiduals.group);
+  _s3dResiduals.group=null;
+  _s3dResiduals.fid=null;
+}
+
+function s3dShowResidualsForFixture(fid){
+  if(typeof THREE==='undefined'||!_s3d.inited)return;
+  s3dClearResiduals();
+  ra('GET','/api/calibration/mover/'+fid+'/residuals',null,function(r){
+    if(!r||!r.ok||!r.samples||!r.samples.length)return;
+    var grp=new THREE.Group();
+    grp.userData.residualsFor=fid;
+    r.samples.forEach(function(s){
+      var a=_s3dStageToLocal(s.actual);
+      var p=_s3dStageToLocal(s.predicted);
+      var err=s.errorMm||0;
+      var col=err<50?0x4ade80:(err<200?0xf59e0b:0xef4444);
+      var geo=new THREE.BufferGeometry().setFromPoints([a,p]);
+      var mat=new THREE.LineBasicMaterial({color:col,linewidth:2,
+        transparent:true,opacity:0.85});
+      grp.add(new THREE.Line(geo,mat));
+      // Small sphere at the actual point (operator's intended target)
+      var sph=new THREE.Mesh(
+        new THREE.SphereGeometry(0.035,8,8),
+        new THREE.MeshBasicMaterial({color:col}));
+      sph.position.copy(a);
+      grp.add(sph);
+    });
+    _s3d.scene.add(grp);
+    _s3dResiduals.group=grp;
+    _s3dResiduals.fid=fid;
+  });
+}
+
+function s3dToggleResidualsForFixture(fid){
+  if(_s3dResiduals.fid===fid){s3dClearResiduals();return false;}
+  s3dShowResidualsForFixture(fid);
+  return true;
+}

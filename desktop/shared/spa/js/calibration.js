@@ -1131,46 +1131,197 @@ function _moverCalStart(fixId){
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
 }
+// #502 — calibration wizard modal (v2). Shows:
+//   - fixture name + current fit quality badge (if already calibrated)
+//   - warmup toggle, colour picker, mode toggle (legacy / v2-targets)
+//   - target preview (from /api/calibration/mover/<fid>/targets)
+//   - progress bar + per-target table during the run
+//   - fit + verification + residual table on completion
+//   - [Recalibrate fast] button for subsequent runs (warm-start, #505)
+//
+// Keep the old entry point name so the rest of the SPA's wiring doesn't
+// need to change — fixture cards / dashboard cal buttons all invoke
+// `_moverCalAutoStart` and expect it to render its own modal body.
 function _moverCalAutoStart(){
   var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===_moverCalFid)f=fx;});
-  var h='<div style="min-width:400px">';
-  h+='<div style="font-size:.85em;color:#94a3b8;margin-bottom:.8em">Automatic calibration for <strong>'+escapeHtml(f?f.name:'fixture')+'</strong>.</div>';
-  h+='<div class="card" style="padding:.6em;margin-bottom:.6em">';
+  var cal=f&&f.moverCalibrated;
+  var h='<div style="min-width:480px">';
+  h+='<div style="font-size:.85em;color:#94a3b8;margin-bottom:.8em">';
+  h+='Automatic calibration for <strong>'+escapeHtml(f?f.name:'fixture')+'</strong>.';
+  h+='</div>';
+
+  // Existing-fit summary block — shown when the fixture already has a v2 model.
+  h+='<div id="mcal-existing" style="display:none"></div>';
+
+  h+='<div class="card" style="padding:.6em;margin-bottom:.6em" id="mcal-options">';
   h+='<div style="font-size:.82em;color:#f59e0b;margin-bottom:.3em">\u26a0 Ensure Art-Net engine is running and fixture responds to DMX.</div>';
-  h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.3em">Dim or turn off room lights for best results.</div>';
-  h+='<div style="display:flex;gap:.4em;align-items:center;margin-bottom:.3em">';
-  h+='<label style="font-size:.82em;color:#94a3b8;margin:0">Beam color:</label>';
+  h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.5em">Dim or turn off room lights for best results.</div>';
+  h+='<div style="display:grid;grid-template-columns:120px 1fr;gap:.4em;align-items:center;font-size:.82em">';
+  h+='<label style="color:#94a3b8;margin:0">Beam color:</label>';
   h+='<select id="mcal-color" style="font-size:.82em;padding:2px 4px">';
-  h+='<option value="white">White</option><option value="green">Green</option><option value="magenta">Magenta</option><option value="red">Red</option><option value="blue">Blue</option>';
-  h+='</select></div></div>';
+  h+='<option value="white">White</option><option value="green" selected>Green</option><option value="magenta">Magenta</option><option value="red">Red</option><option value="blue">Blue</option>';
+  h+='</select>';
+  h+='<label style="color:#94a3b8;margin:0">Method:</label>';
+  h+='<select id="mcal-mode" style="font-size:.82em;padding:2px 4px" onchange="_moverCalModeChanged()">';
+  h+='<option value="legacy" selected>Legacy BFS (broad sampling)</option>';
+  h+='<option value="v2">v2 target-driven (#499, requires camera ArUco cal)</option>';
+  h+='</select>';
+  h+='<label style="color:#94a3b8;margin:0">Warm-up:</label>';
+  h+='<label style="color:#e2e8f0;font-size:.8em;margin:0"><input type="checkbox" id="mcal-warmup" style="margin-right:.3em">Sweep pan/tilt for 30s before sampling (thermal settle — #513)</label>';
+  h+='</div>';
+
+  // Target preview (populated below when mode=v2)
+  h+='<div id="mcal-targets-preview" style="display:none;margin-top:.5em;border-top:1px solid #334155;padding-top:.4em">';
+  h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.3em">Auto-selected targets (<span id="mcal-targets-count">0</span>):</div>';
+  h+='<div id="mcal-targets-list" style="font-size:.75em;color:#64748b;font-family:monospace;max-height:80px;overflow:auto"></div>';
+  h+='</div>';
+  h+='</div>';  // /mcal-options
+
+  // Run-time status
   h+='<div id="mcal-status" style="display:none">';
   h+='<div class="prog-bar" style="height:8px;margin-bottom:.4em"><div class="prog-fill" id="mcal-prog" style="width:0%;transition:width .3s"></div></div>';
   h+='<div id="mcal-phase" style="font-size:.85em;color:#e2e8f0;margin-bottom:.3em"></div>';
   h+='<div id="mcal-detail" style="font-size:.78em;color:#64748b"></div>';
+  h+='<div id="mcal-targets-progress" style="margin-top:.5em"></div>';
   h+='</div>';
-  h+='<div style="display:flex;gap:.4em;margin-top:.8em">';
+
+  h+='<div id="mcal-actions" style="display:flex;gap:.4em;margin-top:.8em">';
   h+='<button class="btn btn-on" id="mcal-go" onclick="_moverCalGo()">Start Calibration</button>';
   h+='<button class="btn btn-off" onclick="_moverCalCancel()">Cancel</button>';
   h+='</div></div>';
-  document.getElementById('modal-title').textContent='Automatic Calibration';
+  document.getElementById('modal-title').textContent='Calibrate Mover — '+escapeHtml(f?f.name:'fixture');
   document.getElementById('modal-body').innerHTML=h;
+
+  // If already calibrated, fetch the stored fit + render the existing-fit summary.
+  if(cal){
+    ra('GET','/api/calibration/mover/'+_moverCalFid,null,function(r){
+      _moverCalRenderExisting(r);
+    });
+  }
+}
+
+function _moverCalModeChanged(){
+  var sel=document.getElementById('mcal-mode');
+  var prev=document.getElementById('mcal-targets-preview');
+  if(!sel||!prev)return;
+  if(sel.value==='v2'){
+    prev.style.display='block';
+    ra('GET','/api/calibration/mover/'+_moverCalFid+'/targets?n=6',null,function(r){
+      if(!r||!r.ok)return;
+      var list=document.getElementById('mcal-targets-list');
+      var cnt=document.getElementById('mcal-targets-count');
+      if(cnt)cnt.textContent=(r.targets||[]).length;
+      if(list){
+        list.innerHTML=(r.targets||[]).map(function(t,i){
+          return (i+1)+'. ('+Math.round(t.x)+', '+Math.round(t.y)+', '+Math.round(t.z)+') mm';
+        }).join('<br>');
+      }
+    });
+  }else{
+    prev.style.display='none';
+  }
+}
+
+function _moverCalFitBadge(fit){
+  if(!fit||fit.rmsErrorDeg==null)return'';
+  var rms=fit.rmsErrorDeg;
+  var col='#4ade80', lbl='GOOD';
+  if(rms>1.5){col='#f59e0b';lbl='FAIR';}
+  if(rms>3.0){col='#ef4444';lbl='POOR';}
+  return '<span style="background:'+col+';color:#0a0e1a;padding:1px 6px;border-radius:4px;font-weight:bold;font-size:.72em;letter-spacing:.05em">'+lbl+' '+rms.toFixed(2)+'\u00b0</span>';
+}
+
+function _moverCalRenderExisting(r){
+  var box=document.getElementById('mcal-existing');
+  if(!box||!r||!r.calibrated)return;
+  var h='<div class="card" style="padding:.6em;margin-bottom:.6em;background:#0f172a;border-left:3px solid #4ade80">';
+  h+='<div style="display:flex;align-items:center;gap:.5em;margin-bottom:.3em">';
+  h+='<div style="font-size:.85em;color:#e2e8f0;font-weight:bold">Current calibration</div>';
+  h+=_moverCalFitBadge(r.fit);
+  h+='</div>';
+  if(r.fit){
+    h+='<div style="font-size:.78em;color:#94a3b8">';
+    h+='RMS '+r.fit.rmsErrorDeg.toFixed(2)+'\u00b0 \u00b7 max '+r.fit.maxErrorDeg.toFixed(2)+'\u00b0 \u00b7 ';
+    h+=r.fit.sampleCount+' samples';
+    if(r.fit.conditionNumber!=null)h+=' \u00b7 cond '+r.fit.conditionNumber.toFixed(1);
+    h+='</div>';
+  }
+  if(r.verification&&!r.verification.skipped&&r.verification.rmsErrorPx!=null){
+    h+='<div style="font-size:.78em;color:#94a3b8;margin-top:.2em">';
+    h+='Verification: '+r.verification.rmsErrorPx.toFixed(1)+'px RMS (max '+r.verification.maxErrorPx.toFixed(1)+'px)';
+    h+='</div>';
+  }
+  // One-button fast re-calibration (#505) — uses v2 warm-start.
+  h+='<div style="margin-top:.4em;display:flex;gap:.4em">';
+  h+='<button class="btn btn-on" style="font-size:.78em;padding:3px 8px" onclick="_moverCalFastRecal()">Re-calibrate (fast, warm-start)</button>';
+  if(r.samples){
+    h+='<button class="btn" style="font-size:.78em;padding:3px 8px;background:#334155;color:#94a3b8" onclick="_moverCalShowResiduals()">View residuals ('+r.samples.length+')</button>';
+  }
+  h+='</div></div>';
+  box.innerHTML=h;
+  box.style.display='block';
+  _moverCalExistingCache=r;
+}
+var _moverCalExistingCache=null;
+
+// #505 — one-button fast re-cal. Uses v2 mode; warm-start comes
+// automatically from _get_mover_model(fid) hitting the existing v2 cal.
+function _moverCalFastRecal(){
+  var opts=document.getElementById('mcal-options');
+  if(opts)opts.style.display='none';
+  var exist=document.getElementById('mcal-existing');
+  if(exist)exist.style.display='none';
+  var status=document.getElementById('mcal-status');
+  if(status)status.style.display='block';
+  var phase=document.getElementById('mcal-phase');
+  if(phase)phase.textContent='Starting fast re-calibration (v2 warm-start)...';
+  ra('POST','/api/calibration/mover/'+_moverCalFid+'/start',
+     {mode:'v2',warmup:false,color:[0,255,0]},function(r){
+    if(!r||!r.ok){
+      if(phase)phase.innerHTML='<span style="color:#f66">'+(r&&r.err||'Failed to start')+'</span>';
+      return;
+    }
+    var detail=document.getElementById('mcal-detail');
+    if(detail)detail.textContent='Camera: '+(r.cameraName||'unknown')+' \u00b7 mode: v2';
+    _moverCalPoll();
+  });
+}
+
+function _moverCalShowResiduals(){
+  var r=_moverCalExistingCache;
+  if(!r||!r.samples)return;
+  _moverCalRenderResidualTable(r);
+}
+
+// #512 — toggle 3D residual vectors in the viewport. Closes the modal so
+// the operator can see the scene; re-opening is a click on Calibrate.
+function _moverCalShowIn3D(){
+  var fid=_moverCalFid;
+  if(!fid||typeof s3dShowResidualsForFixture!=='function')return;
+  s3dShowResidualsForFixture(fid);
+  closeModal();
 }
 
 function _moverCalGo(){
   var sel=document.getElementById('mcal-color');
   var colorMap={white:[255,255,255],green:[0,255,0],magenta:[255,0,255],red:[255,0,0],blue:[0,0,255]};
   var color=colorMap[sel?sel.value:'green']||[0,255,0];
+  var mode=(document.getElementById('mcal-mode')||{}).value||'legacy';
+  var warmup=(document.getElementById('mcal-warmup')||{}).checked||false;
   var btn=document.getElementById('mcal-go');
   if(btn)btn.disabled=true;
   document.getElementById('mcal-status').style.display='block';
   document.getElementById('mcal-phase').textContent='Starting calibration...';
-  ra('POST','/api/calibration/mover/'+_moverCalFid+'/start',{color:color},function(r){
+  ra('POST','/api/calibration/mover/'+_moverCalFid+'/start',
+     {color:color,mode:mode,warmup:warmup},function(r){
     if(!r||!r.ok){
       document.getElementById('mcal-phase').innerHTML='<span style="color:#f66">'+(r&&r.err||'Failed to start')+'</span>';
       if(btn)btn.disabled=false;
       return;
     }
-    document.getElementById('mcal-detail').textContent='Camera: '+(r.cameraName||'unknown');
+    var dbits=['Camera: '+(r.cameraName||'unknown'),'mode: '+(mode||'legacy')];
+    if(warmup)dbits.push('warmup: yes');
+    document.getElementById('mcal-detail').textContent=dbits.join(' \u00b7 ');
     _moverCalPoll();
   });
 }
@@ -1181,24 +1332,55 @@ function _moverCalPoll(){
     if(!r)return;
     var prog=document.getElementById('mcal-prog');
     var phase=document.getElementById('mcal-phase');
-    var detail=document.getElementById('mcal-detail');
     if(prog)prog.style.width=(r.progress||0)+'%';
-    var phaseNames={starting:'Starting...',discovery:'Discovering beam...',mapping:'Mapping visible region...',grid:'Building interpolation grid...',complete:'Complete'};
-    if(phase)phase.textContent=phaseNames[r.phase]||r.phase||'';
+    var phaseNames={
+      starting:'Starting...',
+      warmup:'Warming up fixture (thermal settle)...',
+      discovery:'Discovering beam...',
+      mapping:'Mapping visible region...',
+      sampling:'Sampling target points...',
+      fitting:'Running Levenberg-Marquardt fit...',
+      verification:'Verifying fit on held-out points...',
+      grid:'Building interpolation grid...',
+      complete:'Complete'
+    };
+    if(phase){
+      var phName=phaseNames[r.phase]||r.phase||'';
+      var extra=r.message?(' \u2014 '+r.message):'';
+      phase.textContent=phName+extra;
+    }
+
+    // Per-target progress table (v2 mode)
+    var tgtBox=document.getElementById('mcal-targets-progress');
+    if(tgtBox){
+      if(r.targets&&r.targets.length){
+        var rows=r.targets.map(function(t){
+          var cols={
+            pending:'#64748b',
+            converging:'#f59e0b',
+            converged:'#4ade80',
+            skipped:'#f59e0b',
+            failed:'#ef4444'
+          };
+          var col=cols[t.status]||'#94a3b8';
+          var err=t.errorPx!=null?(' ('+t.errorPx.toFixed(0)+'px)'):'';
+          return '<div style="display:flex;gap:.4em;font-size:.75em;font-family:monospace"><span style="width:16px;color:'+col+'">\u25cf</span>'
+                +'<span style="flex:1;color:#94a3b8">T'+(t.idx+1)+' ('+Math.round(t.stagePos[0])+','+Math.round(t.stagePos[1])+')</span>'
+                +'<span style="color:'+col+';min-width:80px">'+t.status+err+'</span>'
+                +'<span style="color:#64748b">iters '+(t.iterations||0)+'</span></div>';
+        }).join('');
+        tgtBox.innerHTML='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.3em">Targets ('
+          +(r.currentTarget!=null?(r.currentTarget+1):'-')+'/'+(r.totalTargets||r.targets.length)+'):</div>'+rows;
+      }else{
+        tgtBox.innerHTML='';
+      }
+    }
+
     if(r.status==='running'){
       _moverCalTimer=setTimeout(_moverCalPoll,1000);
     }else if(r.status==='done'){
       if(prog)prog.style.width='100%';
-      var res=r.result||{};
-      var h='<div style="text-align:center;padding:.5em">';
-      h+='<div style="font-size:2em;color:#4ade80;margin-bottom:.3em">\u2713</div>';
-      h+='<div style="font-size:1.1em;color:#e2e8f0;margin-bottom:.3em">Calibration Complete</div>';
-      h+='<div style="font-size:.85em;color:#94a3b8">'+res.sampleCount+' samples, grid size '+res.gridSize+'</div>';
-      h+='<div style="margin-top:.8em;display:flex;gap:.4em;justify-content:center">';
-      h+='<button class="btn btn-on" onclick="closeModal();_moverCalFid=null;loadLayout()">Done</button>';
-      h+='<button class="btn" style="background:#334155;color:#94a3b8" onclick="_moverCalDelete()">Recalibrate</button>';
-      h+='</div></div>';
-      document.getElementById('mcal-status').innerHTML=h;
+      _moverCalRenderComplete(r);
       (_fixtures||[]).forEach(function(f){if(f.id===_moverCalFid)f.moverCalibrated=true;});
       renderSidebar();
     }else if(r.status==='error'){
@@ -1206,6 +1388,110 @@ function _moverCalPoll(){
       var btn=document.getElementById('mcal-go');
       if(btn){btn.disabled=false;btn.textContent='Retry';}
     }
+  });
+}
+
+function _moverCalRenderComplete(r){
+  var status=document.getElementById('mcal-status');
+  if(!status)return;
+  var res=r.result||{};
+  var fit=r.fit;
+  var ver=r.verification;
+  var h='<div style="padding:.5em">';
+  h+='<div style="display:flex;align-items:center;gap:.5em;margin-bottom:.4em">';
+  h+='<div style="font-size:1.5em;color:#4ade80">\u2713</div>';
+  h+='<div style="flex:1">';
+  h+='<div style="font-size:1em;color:#e2e8f0;font-weight:bold">Calibration Complete</div>';
+  h+='<div style="font-size:.8em;color:#94a3b8">'+(res.sampleCount||r.sampleCount||0)+' samples</div>';
+  h+='</div>';
+  h+=_moverCalFitBadge(fit);
+  h+='</div>';
+  if(fit){
+    h+='<div class="card" style="padding:.5em;margin-bottom:.5em;background:#0f172a">';
+    h+='<div style="font-size:.78em;color:#94a3b8">Fit quality</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:.2em;font-size:.78em;color:#e2e8f0;margin-top:.2em">';
+    h+='<div>RMS: '+fit.rmsErrorDeg.toFixed(2)+'\u00b0</div>';
+    h+='<div>Max: '+fit.maxErrorDeg.toFixed(2)+'\u00b0</div>';
+    h+='<div>Samples: '+fit.sampleCount+'</div>';
+    h+='<div>Cond #: '+(fit.conditionNumber!=null?fit.conditionNumber.toFixed(1):'-')+'</div>';
+    h+='</div></div>';
+  }
+  if(ver){
+    if(ver.skipped){
+      h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.4em">Verification skipped ('+escapeHtml(ver.reason||'')+')</div>';
+    }else if(ver.rmsErrorPx!=null){
+      var col=ver.maxErrorPx<40?'#4ade80':(ver.maxErrorPx<100?'#f59e0b':'#ef4444');
+      h+='<div class="card" style="padding:.5em;margin-bottom:.5em;background:#0f172a;border-left:3px solid '+col+'">';
+      h+='<div style="font-size:.78em;color:#94a3b8">Verification on held-out points</div>';
+      h+='<div style="font-size:.78em;color:#e2e8f0;margin-top:.2em">';
+      h+='RMS '+ver.rmsErrorPx.toFixed(1)+'px \u00b7 max '+ver.maxErrorPx.toFixed(1)+'px \u00b7 '+(ver.points||[]).length+' points';
+      h+='</div></div>';
+    }
+  }
+  // Residual table with exclude buttons (#504)
+  h+='<div id="mcal-residual-table"></div>';
+  h+='<div style="margin-top:.6em;display:flex;gap:.4em;justify-content:center;flex-wrap:wrap">';
+  h+='<button class="btn btn-on" onclick="closeModal();_moverCalFid=null;loadLayout()">Done</button>';
+  h+='<button class="btn" style="background:#0f172a;color:#e2e8f0;border:1px solid #334155" onclick="_moverCalShowIn3D()">Show residuals in 3D</button>';
+  h+='<button class="btn" style="background:#334155;color:#94a3b8" onclick="_moverCalDelete()">Re-calibrate (full)</button>';
+  h+='</div></div>';
+  status.innerHTML=h;
+  // Pull the persisted samples + per-sample errors from the GET endpoint.
+  ra('GET','/api/calibration/mover/'+_moverCalFid,null,function(full){
+    _moverCalExistingCache=full;
+    _moverCalRenderResidualTable(full);
+  });
+}
+
+// #504 — residual table lists each sample's per-sample error and lets
+// the operator exclude an outlier, which triggers a server-side re-fit.
+function _moverCalRenderResidualTable(r){
+  var box=document.getElementById('mcal-residual-table');
+  if(!box)return;
+  if(!r||!r.samples){box.innerHTML='';return;}
+  var errs=(r.fit&&r.fit.perSampleDeg)||[];
+  // perSampleDeg may not be in the persisted fit; fall back to empty.
+  var n=r.samples.length;
+  var h='<div class="card" style="padding:.5em;margin-bottom:.5em;background:#0f172a">';
+  h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.3em">Samples (click \u2715 to exclude and re-fit):</div>';
+  for(var i=0;i<n;i++){
+    var s=r.samples[i];
+    var pan=s.pan!=null?s.pan:(Array.isArray(s)?s[0]:'-');
+    var tilt=s.tilt!=null?s.tilt:(Array.isArray(s)?s[1]:'-');
+    var err=errs[i];
+    var col='#64748b';
+    if(err!=null){
+      if(err>3)col='#ef4444';
+      else if(err>1)col='#f59e0b';
+      else col='#4ade80';
+    }
+    h+='<div style="display:flex;gap:.4em;font-size:.74em;font-family:monospace;padding:2px 0;border-bottom:1px solid #1e293b">';
+    h+='<span style="width:24px;color:#64748b">'+(i+1)+'.</span>';
+    h+='<span style="flex:1;color:#94a3b8">pan='+(typeof pan==='number'?pan.toFixed(3):pan)
+         +' tilt='+(typeof tilt==='number'?tilt.toFixed(3):tilt)+'</span>';
+    h+='<span style="min-width:60px;color:'+col+';text-align:right">'+(err!=null?err.toFixed(2)+'\u00b0':'-')+'</span>';
+    h+='<button class="btn" style="background:transparent;color:#64748b;padding:0 6px;font-size:.9em" onclick="_moverCalExcludeSample('+i+')">\u2715</button>';
+    h+='</div>';
+  }
+  h+='</div>';
+  box.innerHTML=h;
+}
+
+function _moverCalExcludeSample(idx){
+  if(!confirm('Exclude sample '+(idx+1)+' and re-fit?'))return;
+  ra('POST','/api/calibration/mover/'+_moverCalFid+'/exclude-sample',{index:idx},function(r){
+    if(!r||!r.ok){alert((r&&r.err)||'Re-fit failed');return;}
+    // Refresh the existing-fit summary + residual table.
+    ra('GET','/api/calibration/mover/'+_moverCalFid,null,function(full){
+      _moverCalExistingCache=full;
+      var res=document.getElementById('mcal-residual-table');
+      if(res)_moverCalRenderResidualTable(full);
+      var exist=document.getElementById('mcal-existing');
+      if(exist){
+        // Also refresh the fit badge if we're still on the start view.
+        _moverCalRenderExisting(full);
+      }
+    });
   });
 }
 

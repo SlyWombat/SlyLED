@@ -3406,6 +3406,121 @@ def api_mover_cal_delete(fid):
     return jsonify(ok=True)
 
 
+@app.get("/api/calibration/mover/<int:fid>/residuals")
+def api_mover_cal_residuals(fid):
+    """Per-sample residual data for the 3D viewport (#512).
+
+    Returns one entry per calibration sample with:
+      - ``actual``: the stage target the sample was recorded at.
+      - ``predicted``: where the fitted model thinks that pan/tilt pair
+        lands on the floor plane (Z = `geometry.floor.z` when available,
+        otherwise 0).
+      - ``errorMm``: 3D distance between actual and predicted.
+
+    Scene-3d renders a short line per entry so operators can spot bad
+    samples at a glance without reading the residual table.
+    """
+    cal = _mover_cal.get(str(fid))
+    if not cal:
+        return jsonify(err="Fixture not calibrated"), 404
+    model = _get_mover_model(fid)
+    if model is None:
+        return jsonify(err="No parametric model — re-calibrate to generate"), 400
+    geometry = _get_stage_geometry()
+    floor_z = (geometry.get("floor") or {}).get("z", 0)
+    fx_pos = _fixture_position(fid)
+    entries = []
+    for s in (cal.get("samples") or []):
+        if not isinstance(s, dict):
+            continue
+        pan = s.get("pan")
+        tilt = s.get("tilt")
+        actual = (s.get("stageX"), s.get("stageY"), s.get("stageZ"))
+        if None in (pan, tilt) or None in actual:
+            continue
+        try:
+            dx, dy, dz = model.forward(pan, tilt)
+        except Exception:
+            continue
+        # Intersect the beam with the floor plane at Z = floor_z.
+        if abs(dz) < 1e-6:
+            continue
+        t = (floor_z - fx_pos[2]) / dz
+        if t <= 0:
+            continue
+        px = fx_pos[0] + dx * t
+        py = fx_pos[1] + dy * t
+        pz = floor_z
+        err = math.sqrt((px - actual[0]) ** 2 + (py - actual[1]) ** 2
+                         + (pz - actual[2]) ** 2)
+        entries.append({
+            "pan": pan, "tilt": tilt,
+            "actual": [float(actual[0]), float(actual[1]), float(actual[2])],
+            "predicted": [float(px), float(py), float(pz)],
+            "errorMm": float(err),
+        })
+    return jsonify(ok=True, samples=entries,
+                   fixturePos=list(fx_pos),
+                   floorZ=float(floor_z))
+
+
+@app.post("/api/calibration/mover/<int:fid>/exclude-sample")
+def api_mover_cal_exclude_sample(fid):
+    """Remove a calibration sample and re-fit the v2 parametric model (#504).
+
+    Body: ``{index: int}`` — zero-based index into the current samples
+    list. The sample is popped, the remaining samples are re-fit via
+    fit_model, and the fresh model + fit quality are persisted. Returns
+    the new fit quality so the wizard's residual table can refresh.
+    """
+    cal = _mover_cal.get(str(fid))
+    if not cal or not cal.get("samples"):
+        return jsonify(err="Fixture not calibrated"), 404
+    body = request.get_json(silent=True) or {}
+    idx = body.get("index")
+    if not isinstance(idx, int):
+        return jsonify(err="index required"), 400
+    samples = list(cal["samples"])
+    if idx < 0 or idx >= len(samples):
+        return jsonify(err=f"index {idx} out of range (0-{len(samples)-1})"), 400
+    if len(samples) <= 2:
+        return jsonify(err="At least 2 samples required — re-calibrate instead"), 400
+
+    removed = samples.pop(idx)
+    f = next((x for x in _fixtures if x.get("id") == fid), None)
+    if not f:
+        return jsonify(err="Fixture not found"), 404
+    pos = _fixture_position(fid)
+    prof = _profile_lib.channel_info(f.get("dmxProfileId")) \
+        if f.get("dmxProfileId") else None
+    pan_range = f.get("panRange") \
+        or (prof.get("panRange") if prof else None) or 540
+    tilt_range = f.get("tiltRange") \
+        or (prof.get("tiltRange") if prof else None) or 270
+    try:
+        model, quality = _fit_model(
+            pos, pan_range, tilt_range, samples,
+            mounted_inverted=bool(f.get("mountedInverted")),
+        )
+    except Exception as e:
+        # Put the sample back — we can't re-fit without it.
+        samples.insert(idx, removed)
+        return jsonify(err=f"Re-fit failed: {e}"), 400
+
+    cal["samples"] = samples
+    cal["sampleCount"] = len(samples)
+    cal["version"] = 2
+    cal["model"] = model.to_dict()
+    cal["fit"] = quality.to_dict()
+    _mover_cal[str(fid)] = cal
+    _save("mover_calibrations", _mover_cal)
+    _invalidate_mover_model(fid)
+    log.info("Mover %d: excluded sample %d → re-fit rms=%.2f° max=%.2f° (N=%d)",
+             fid, idx, quality.rms_error_deg, quality.max_error_deg, len(samples))
+    return jsonify(ok=True, fit=quality.to_dict(), model=model.to_dict(),
+                   sampleCount=len(samples))
+
+
 @app.post("/api/calibration/mover/<int:fid>/aim")
 def api_mover_cal_aim(fid):
     """Use calibration grid to aim a mover at a target pixel or stage position.

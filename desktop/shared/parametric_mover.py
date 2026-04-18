@@ -307,6 +307,9 @@ class FitQuality:
             "maxErrorDeg":     self.max_error_deg,
             "sampleCount":     self.sample_count,
             "conditionNumber": self.condition_number,
+            # Per-sample residual in degrees — enables the wizard's
+            # residual table and exclude-sample flow (#504).
+            "perSampleDeg":    [float(e) for e in self.per_sample_deg],
         }
 
 

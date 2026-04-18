@@ -17,6 +17,17 @@ function _renderSetup(){
   // Fetch both fixtures and children so we can resolve LED fixture status
   ra('GET','/api/fixtures',null,function(fixtures){
     _fixtures=fixtures||[];
+    // #503 — fire a fit-quality fetch for each calibrated mover so the
+    // next repaint can render the RMS badge. Cached on the fixture
+    // record itself (`_mcalFit`) so subsequent renders are free.
+    (_fixtures||[]).forEach(function(f){
+      if(f.fixtureType==='dmx'&&f.moverCalibrated&&f._mcalFit===undefined){
+        f._mcalFit=null;  // mark as "fetched"
+        ra('GET','/api/calibration/mover/'+f.id,null,function(c){
+          if(c&&c.fit){f._mcalFit=c.fit;}
+        });
+      }
+    });
     ra('GET','/api/children',null,function(children){
       _setupChildren=children||[];
       var cMap={};(children||[]).forEach(function(c){cMap[c.id]=c;});
@@ -196,9 +207,27 @@ function _renderSetup(){
         dmxFixtures.forEach(function(f){
           var conn='U'+f.dmxUniverse+' @ '+(f.dmxStartAddr||1);
           var chLeds=(f.dmxChannelCount||0)+' ch'+(f.dmxProfileId?' ('+f.dmxProfileId+')':'');
+          // #503 — fit-quality badge. `f._mcalFit` is populated
+          // opportunistically below by a one-shot fetch; we optimistically
+          // render the stored value on each repaint.
+          var calBadge='';
+          if(f.moverCalibrated){
+            var fit=f._mcalFit;
+            if(fit&&fit.rmsErrorDeg!=null){
+              var rms=fit.rmsErrorDeg;
+              var bg='#065f46', fg='#bbf7d0';
+              if(rms>1.5){bg='#92400e';fg='#fde68a';}
+              if(rms>3.0){bg='#991b1b';fg='#fecaca';}
+              calBadge=' <span title="RMS '+rms.toFixed(2)+'° / max '+fit.maxErrorDeg.toFixed(2)+'°" '
+                      +'style="background:'+bg+';color:'+fg+';padding:1px 5px;border-radius:3px;font-size:.72em;margin-left:.3em;font-weight:bold">'
+                      +rms.toFixed(1)+'\u00b0</span>';
+            }else{
+              calBadge=' <span title="calibrated" style="color:#4ade80">\u2713</span>';
+            }
+          }
           var actions='<button class="btn" onclick="editFixture('+f.id+')" style="background:#446;color:#fff">Edit</button>'
             +' <button class="btn" onclick="showDmxDetails('+f.id+')" style="background:#3b1f7c;color:#e9d5ff">Details</button>'
-            +' <button class="btn" onclick="_moverCalStart('+f.id+')" style="background:#6b21a8;color:#d8b4fe">Calibrate'+(f.moverCalibrated?' \u2713':'')+'</button>'
+            +' <button class="btn" onclick="_moverCalStart('+f.id+')" style="background:#6b21a8;color:#d8b4fe">Calibrate'+calBadge+'</button>'
             +' <button class="btn btn-off" onclick="removeFixture('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
           h+='<tr><td><b>'+escapeHtml(f.name)+'</b></td><td><span class="badge" style="background:#7c3aed;color:#fff">DMX</span></td><td>'+conn+'</td><td><span class="badge" style="background:#7c3aed;color:#fff">Configured</span></td><td>'+chLeds+'</td><td>'+actions+'</td></tr>';
         });
