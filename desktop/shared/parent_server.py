@@ -2838,31 +2838,53 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
         start_pan, start_tilt = _mcal.compute_initial_aim(
             fx_pos, floor_target, mounted_inverted=inverted)
 
-        # Best start: existing manual calibration sample (known-good position)
-        existing_cal = _mover_cal.get(str(fid), {})
-        existing_samples = existing_cal.get("samples", [])
-        if existing_samples:
-            s = existing_samples[0]
-            # Samples can be dicts {pan, tilt, ...} or lists [pan, tilt, x, y, ...]
-            if isinstance(s, dict):
-                start_pan = s["pan"]
-                start_tilt = s["tilt"]
-            elif isinstance(s, (list, tuple)) and len(s) >= 2:
-                start_pan = s[0]
-                start_tilt = s[1]
-            log.info("MOVER-CAL %d: starting from manual sample pan=%.3f tilt=%.3f", fid, start_pan, start_tilt)
-        else:
-            # Override with orientation/rotation if available
-            orient = f.get("orientation", {})
-            if orient.get("homePan") is not None:
-                start_pan = orient["homePan"]
-                start_tilt = orient.get("homeTilt", 0.5)
-            rot = f.get("rotation", [0, 0, 0])
-            if any(v != 0 for v in rot):
-                aim_pt = _rotation_to_aim(rot, fx_pos)
-                pt = _mcal.compute_initial_aim(fx_pos, aim_pt, mounted_inverted=inverted)
-                if pt:
-                    start_pan, start_tilt = pt
+        # #498 — model-predicted discovery. If a v2 parametric model
+        # already exists for this fixture (re-calibration flow), use
+        # model.inverse(floor_target) directly — it captures mount
+        # rotation, signs, and offsets, so the beam lands on the
+        # predicted pixel without the blind spiral. Falls back to the
+        # legacy geometric estimate when no model is present.
+        model = _get_mover_model(fid, f)
+        used_model_warmstart = False
+        if model is not None:
+            try:
+                mp, mt = model.inverse(floor_target[0], floor_target[1], floor_target[2])
+                start_pan, start_tilt = mp, mt
+                used_model_warmstart = True
+                log.info("MOVER-CAL %d: warm-start from v2 model → pan=%.3f tilt=%.3f",
+                         fid, start_pan, start_tilt)
+            except Exception as e:
+                log.warning("MOVER-CAL %d: model inverse failed (%s); falling back", fid, e)
+
+        # If we didn't warm-start from a v2 model, try the legacy priority:
+        # existing manual sample → orientation override → rotation-derived aim.
+        if not used_model_warmstart:
+            existing_cal = _mover_cal.get(str(fid), {})
+            existing_samples = existing_cal.get("samples", [])
+            if existing_samples:
+                s = existing_samples[0]
+                # Samples can be dicts {pan, tilt, ...} or lists [pan, tilt, x, y, ...]
+                if isinstance(s, dict):
+                    start_pan = s["pan"]
+                    start_tilt = s["tilt"]
+                elif isinstance(s, (list, tuple)) and len(s) >= 2:
+                    start_pan = s[0]
+                    start_tilt = s[1]
+                log.info("MOVER-CAL %d: starting from manual sample pan=%.3f tilt=%.3f",
+                         fid, start_pan, start_tilt)
+            else:
+                # Override with orientation/rotation if available
+                orient = f.get("orientation", {})
+                if orient.get("homePan") is not None:
+                    start_pan = orient["homePan"]
+                    start_tilt = orient.get("homeTilt", 0.5)
+                rot = f.get("rotation", [0, 0, 0])
+                if any(v != 0 for v in rot):
+                    aim_pt = _rotation_to_aim(rot, fx_pos)
+                    pt = _mcal.compute_initial_aim(fx_pos, aim_pt, mounted_inverted=inverted)
+                    if pt:
+                        start_pan, start_tilt = pt
+        job["warmStart"] = "model" if used_model_warmstart else "geometric"
 
         job["debug"] = {"fx_pos": fx_pos, "cam_pos": cam_pos, "cam_rot": cam_rot,
                         "cam_fov": cam_fov, "stage_d": stage_d, "inverted": inverted,
