@@ -3079,6 +3079,44 @@ def api_mover_cal_start(fid):
                    cameraName=cam.get("name"), warmup=warmup)
 
 
+@app.get("/api/calibration/mover/<int:fid>/targets")
+def api_mover_cal_targets(fid):
+    """Preview auto-selected calibration targets for a fixture (#497).
+
+    Returns the target list the cal thread *would* pick if calibration
+    started now, computed from the current stage geometry + fixture /
+    camera positions. Accepts optional ?n=6 query for target count.
+    """
+    f = next((x for x in _fixtures if x.get("id") == fid), None)
+    if not f or f.get("fixtureType") != "dmx":
+        return jsonify(err="DMX fixture not found"), 404
+    try:
+        n = int(request.args.get("n", 6))
+    except ValueError:
+        n = 6
+    cam = _best_camera_for(f)
+    geometry = _get_stage_geometry()
+    fx_pos = _fixture_position(fid)
+    cam_pos = _fixture_position(cam["id"]) if cam else None
+    cam_fov = cam.get("fovDeg", 90) if cam else 90
+    try:
+        targets = _mcal.pick_calibration_targets(
+            fx_pos, geometry, n=n,
+            camera_pos=cam_pos, camera_fov_deg=cam_fov,
+        )
+    except Exception as e:
+        log.warning("pick_calibration_targets failed for fid=%d: %s", fid, e)
+        targets = []
+    return jsonify(
+        ok=True,
+        targets=[{"x": float(t[0]), "y": float(t[1]), "z": float(t[2])}
+                  for t in targets],
+        geometrySource=geometry.get("source"),
+        fixturePos=list(fx_pos),
+        cameraId=cam["id"] if cam else None,
+    )
+
+
 @app.get("/api/calibration/mover/<int:fid>/status")
 def api_mover_cal_status(fid):
     """Poll calibration progress.

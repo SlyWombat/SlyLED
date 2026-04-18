@@ -144,6 +144,138 @@ def _hold_dmx(bridge_ip, dmx, duration=0.5):
     time.sleep(duration)
 
 
+def pick_calibration_targets(fixture_pos, geometry, n=6,
+                              camera_pos=None, camera_fov_deg=90,
+                              margin_frac=0.15):
+    """Pick N stage-space aim targets for calibration (#497).
+
+    Lays out a uniform grid inside the floor extent, clips to the
+    camera's rough visibility cone, drops anything inside the AABB of
+    a detected obstacle, then trims to N via angular-spread ranking
+    from the fixture's position (prefer points that are mutually
+    well-separated in pan/tilt angle).
+
+    Args:
+        fixture_pos:    (x, y, z) of the mover in stage mm.
+        geometry:       dict from _get_stage_geometry (floor + walls +
+                        obstacles or the layout-box fallback).
+        n:              number of targets to return (minimum 4).
+        camera_pos:     optional (x, y, z) — when set, the target grid
+                        is clipped to the camera's forward FOV.
+        camera_fov_deg: horizontal FOV of the camera, used for the
+                        visibility cone.
+        margin_frac:    fraction of extent shrunk inward on all sides so
+                        targets don't land at the mechanical-range edge.
+
+    Returns a list of (x, y, z) in stage mm, length ≤ n. The caller
+    must still verify each is reachable (fixture pan/tilt range) and
+    visible to the camera — this function gives a reasonable default.
+    """
+    n = max(4, int(n))
+    floor = geometry.get("floor") if geometry else None
+    if not floor:
+        return []
+    extent = floor.get("extent") or {}
+    if not extent:
+        return []
+    xmin = extent.get("xMin", 0)
+    xmax = extent.get("xMax", 0)
+    ymin = extent.get("yMin", 0)
+    ymax = extent.get("yMax", 0)
+    floor_z = floor.get("z", 0)
+    if xmax <= xmin or ymax <= ymin:
+        return []
+
+    # Shrink inward from the extent boundary.
+    sx = (xmax - xmin) * margin_frac
+    sy = (ymax - ymin) * margin_frac
+    xmin_s, xmax_s = xmin + sx, xmax - sx
+    ymin_s, ymax_s = ymin + sy, ymax - sy
+
+    # 3×2 base grid (6 points) — overridden below if n differs.
+    cols = 3 if n >= 5 else 2
+    rows = max(2, math.ceil(n / cols))
+    candidates = []
+    for j in range(rows):
+        fy = j / max(rows - 1, 1)
+        py = ymin_s + (ymax_s - ymin_s) * fy
+        for i in range(cols):
+            fx = i / max(cols - 1, 1)
+            px = xmin_s + (xmax_s - xmin_s) * fx
+            candidates.append((px, py, floor_z))
+
+    # Drop any candidate that falls inside an obstacle AABB. We inflate
+    # each obstacle bbox by 150 mm so the beam doesn't try to land on
+    # the edge of a pillar.
+    obstacles = geometry.get("obstacles") or []
+    def _blocked(pt):
+        px, py, pz = pt
+        for ob in obstacles:
+            bbox = ob.get("bbox") or ob.get("aabb")
+            if not bbox:
+                continue
+            x0 = bbox.get("xMin", bbox.get("x_min", float("inf")))
+            x1 = bbox.get("xMax", bbox.get("x_max", float("-inf")))
+            y0 = bbox.get("yMin", bbox.get("y_min", float("inf")))
+            y1 = bbox.get("yMax", bbox.get("y_max", float("-inf")))
+            if x0 - 150 <= px <= x1 + 150 and y0 - 150 <= py <= y1 + 150:
+                return True
+        return False
+    candidates = [c for c in candidates if not _blocked(c)]
+
+    # Camera visibility: drop points outside the camera's horizontal FOV
+    # cone along the stage-forward Y axis. Uses a simple projection onto
+    # the camera-forward vector; cheap and good enough as a first filter.
+    if camera_pos is not None:
+        cx, cy, _ = camera_pos
+        half_fov = math.radians(camera_fov_deg) / 2.0
+        def _visible(pt):
+            dx = pt[0] - cx
+            dy = pt[1] - cy
+            if abs(dx) < 1e-6 and abs(dy) < 1e-6:
+                return False
+            ang = abs(math.atan2(dx, dy))  # 0 = straight forward
+            return ang <= half_fov
+        candidates = [c for c in candidates if _visible(c)]
+
+    if len(candidates) <= n:
+        return candidates
+
+    # Trim to N via greedy angular-spread selection from the fixture.
+    fx_x, fx_y, fx_z = fixture_pos
+
+    def _aim_angles(pt):
+        dx = pt[0] - fx_x
+        dy = pt[1] - fx_y
+        dz = pt[2] - fx_z
+        pan = math.atan2(dx, dy)  # 0 = forward
+        horiz = math.hypot(dx, dy)
+        tilt = math.atan2(-dz, horiz)
+        return pan, tilt
+
+    # Seed with the point closest to the fixture's forward center.
+    seeds = sorted(candidates, key=lambda c: (c[0] - fx_x) ** 2 + (c[1] - fx_y) ** 2)
+    picked = [seeds[0]]
+    pool = [c for c in candidates if c is not seeds[0]]
+    while len(picked) < n and pool:
+        # Pick the candidate whose minimum angular distance to any
+        # already-picked target is largest (maximises spread).
+        best = None
+        best_score = -1.0
+        for cand in pool:
+            cp, ct = _aim_angles(cand)
+            min_dist = min(
+                math.hypot(cp - pp, ct - pt)
+                for pp, pt in (_aim_angles(p) for p in picked)
+            )
+            if min_dist > best_score:
+                best_score = min_dist
+                best = cand
+        picked.append(best)
+        pool.remove(best)
+    return picked
+
+
 def verification_sweep(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                         grid, n_points=3, avoid_samples=None):
     """Post-fit verification (#501). Aims the fixture at N pan/tilt points
