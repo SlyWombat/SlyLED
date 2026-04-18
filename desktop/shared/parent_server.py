@@ -2956,6 +2956,39 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
         _cal_blackout()
         return
 
+    # Phase 3.5 — verification sweep (#501). Aim at 3 held-out pan/tilt
+    # points and measure pixel-space error vs grid prediction. Failures
+    # here flag overfitting / sample-coverage issues without blocking
+    # the save — we always persist the cal; verification is advisory.
+    job["phase"] = "verification"
+    job["progress"] = 90
+    verification = None
+    try:
+        fit_keys = [(s[0], s[1]) if isinstance(s, (list, tuple)) else (s.get("pan"), s.get("tilt"))
+                    for s in samples]
+        verification = _mcal.verification_sweep(
+            bridge_ip, cam_ip, addr, cam_idx, mover_color, grid,
+            n_points=3, avoid_samples=fit_keys,
+        )
+        # Summary: worst pixel error across the sweep.
+        errs = [v["errorPx"] for v in (verification or []) if v.get("errorPx") is not None]
+        if errs:
+            worst = max(errs)
+            rms = math.sqrt(sum(e * e for e in errs) / len(errs))
+            job["verification"] = {
+                "points": verification, "rmsErrorPx": rms, "maxErrorPx": worst,
+                "skipped": False,
+            }
+            log.info("MOVER-CAL %d: verification sweep rms=%.1fpx max=%.1fpx",
+                     fid, rms, worst)
+        else:
+            job["verification"] = {"points": verification or [], "skipped": True,
+                                     "reason": "no beam detected on any verification point"}
+            log.warning("MOVER-CAL %d: verification sweep detected no beam", fid)
+    except Exception as e:
+        log.warning("MOVER-CAL %d: verification failed (%s) — continuing", fid, e)
+        job["verification"] = {"skipped": True, "reason": f"exception: {e}"}
+
     # Save calibration data
     cal_data = {
         "cameraId": cam["id"],
@@ -2969,6 +3002,8 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
         "centerTilt": found_tilt,  # calibrated tilt center (#366)
         "timestamp": time.time(),
     }
+    if job.get("verification"):
+        cal_data["verification"] = job["verification"]
     _mover_cal[str(fid)] = cal_data
     _save("mover_calibrations", _mover_cal)
     _invalidate_mover_model(fid)
@@ -3059,6 +3094,8 @@ def api_mover_cal_status(fid):
                     resp["fit"] = cal["fit"]
                 if "model" in cal:
                     resp["model"] = cal["model"]
+            if "verification" in cal:
+                resp["verification"] = cal["verification"]
             return jsonify(**resp)
         return jsonify(status="none", calibrated=False,
                        calibrationLocked=bool(_fixture_is_calibrating(fid)))
@@ -3078,6 +3115,8 @@ def api_mover_cal_status(fid):
         message=job.get("message"),
         fit=job.get("fit"),
         model=job.get("model"),
+        verification=job.get("verification"),
+        warmStart=job.get("warmStart"),
         calibrationLocked=bool(_fixture_is_calibrating(fid)),
     )
 

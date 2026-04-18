@@ -8,6 +8,7 @@ inverse lookup (pixel → pan/tilt), and convergence correction.
 import json
 import logging
 import math
+import random
 import socket
 import struct
 import time
@@ -141,6 +142,84 @@ def _hold_dmx(bridge_ip, dmx, duration=0.5):
     """Set DMX channels and wait for the fixture to settle."""
     _send_artnet(bridge_ip, 0, dmx)
     time.sleep(duration)
+
+
+def verification_sweep(bridge_ip, camera_ip, mover_addr, cam_idx, color,
+                        grid, n_points=3, avoid_samples=None):
+    """Post-fit verification (#501). Aims the fixture at N pan/tilt points
+    drawn from inside the calibrated region but excluded from the fit,
+    detects the beam via camera, and reports the residual in pixel
+    space against the grid's own prediction.
+
+    This is a cross-check against overfitting — the LM residual on the
+    fit set is always low by construction. Verification on held-out
+    points is the real test of model generalisation.
+
+    Args:
+        grid:           the interpolation grid produced by `build_grid`,
+                        used to predict "where should the beam land".
+        n_points:       number of verification aims (default 3).
+        avoid_samples:  iterable of (pan, tilt) already used for fit —
+                        verification points stay at least 0.05 (≈5 %) in
+                        pan/tilt space away from any of them.
+
+    Returns a list of dicts:
+        [{"pan": ..., "tilt": ...,
+          "expectedPixel": [x, y], "detectedPixel": [x, y] | None,
+          "errorPx": float | None}, ...]
+    """
+    pans = grid.get("panSteps") or []
+    tilts = grid.get("tiltSteps") or []
+    if len(pans) < 2 or len(tilts) < 2:
+        return []
+    pan_min, pan_max = min(pans), max(pans)
+    tilt_min, tilt_max = min(tilts), max(tilts)
+    # Shrink inward 10 % so we don't probe the grid edge where
+    # interpolation is weakest.
+    margin_p = 0.1 * (pan_max - pan_min)
+    margin_t = 0.1 * (tilt_max - tilt_min)
+
+    avoid = list(avoid_samples or [])
+
+    rng = random.Random(0x5A1ED)  # deterministic for reproducibility
+    candidates = []
+    attempts = 0
+    while len(candidates) < n_points and attempts < 50:
+        attempts += 1
+        p = rng.uniform(pan_min + margin_p, pan_max - margin_p)
+        t = rng.uniform(tilt_min + margin_t, tilt_max - margin_t)
+        # Skip points near any fit sample.
+        too_close = any(abs(p - ap) < 0.05 and abs(t - at) < 0.05
+                         for ap, at in avoid)
+        if too_close:
+            continue
+        candidates.append((p, t))
+
+    dmx = [0] * 512
+    results = []
+    for pan, tilt in candidates:
+        expected = grid_lookup(grid, pan, tilt)
+        _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
+        _hold_dmx(bridge_ip, dmx, 0.8)
+        beam = _beam_detect(camera_ip, cam_idx, color, center=True)
+        if beam is None:
+            results.append({
+                "pan": pan, "tilt": tilt,
+                "expectedPixel": list(expected) if expected else None,
+                "detectedPixel": None, "errorPx": None,
+            })
+            continue
+        bx, by = beam
+        err_px = None
+        if expected is not None:
+            err_px = math.hypot(bx - expected[0], by - expected[1])
+        results.append({
+            "pan": pan, "tilt": tilt,
+            "expectedPixel": list(expected) if expected else None,
+            "detectedPixel": [int(bx), int(by)],
+            "errorPx": err_px,
+        })
+    return results
 
 
 def warmup_sweep(bridge_ip, mover_addr, color=(0, 0, 0),
