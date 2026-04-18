@@ -685,40 +685,232 @@ function _commDownload(slug){
     }
   });
 }
+// ─── Community Share / Update wizard ──────────────────────────────────────
+//
+// Two-step modal flow (replaces the old confirm()-only path):
+//   1. Check + fetch remote (if any) → summarise intent, first confirm.
+//   2. On confirm, fetch local + remote, render diff panel → second confirm.
+//   3. Upload (new) or upload-with-overwrite (existing).
+//
+// Structural guardrail: if the operator's local profile has a different
+// channel *layout* than the community copy (channel count, type, or bits
+// per offset), we refuse the update — the slug identifies one fixture
+// model and silently overwriting with a different one corrupts every
+// existing download. Operator can still share under a NEW slug.
+
 function _commShareProfile(profileId){
-  // Step 1: Check for duplicates first
-  document.getElementById('hs').textContent='Checking for duplicates...';
+  document.getElementById('hs').textContent='Checking community…';
   ra('POST','/api/dmx-profiles/community/check',{profileId:profileId},function(r){
     if(!r||!r.ok||!r.data){
       document.getElementById('hs').textContent='Check failed: '+(r&&r.error||r&&r.err||'unknown');
       return;
     }
-    var data=r.data;
-    if(data.duplicate){
-      var msg='This profile has the same channels as "'+escapeHtml(data.duplicate_name||data.duplicate_of)+'" already in the community. Share anyway?';
-      if(!confirm(msg))return;
+    var d=r.data;
+    // No existing slug → straightforward new-upload flow.
+    if(d.slug_available){
+      _commRenderNewShareModal(profileId, d);
+      return;
     }
-    if(!data.slug_available){
-      if(!confirm('A profile with this ID already exists in the community. Update it with your version?'))return;
-    }else{
-      if(!confirm('Share "'+profileId+'" to the SlyLED community? Other users will be able to download it.'))return;
-    }
-    // Step 3: Upload
-    document.getElementById('hs').textContent='Uploading to community...';
-    ra('POST','/api/dmx-profiles/community/upload',{profileId:profileId},function(ur){
-      if(ur&&ur.ok){
-        document.getElementById('hs').textContent='Shared to community! Profile: '+profileId;
-      }else{
-        var err=ur&&(ur.error||ur.err)||'unknown';
-        if(err.indexOf('already exists')>=0){
-          document.getElementById('hs').textContent='This profile ID already exists in the community.';
-        }else if(err.indexOf('Duplicate')>=0){
-          document.getElementById('hs').textContent='Duplicate detected: '+(ur.duplicate_name||err);
-        }else{
-          document.getElementById('hs').textContent='Share failed: '+err;
-        }
+    // Slug is taken → enter the update flow. Peek at the remote copy so
+    // we can compute a diff.
+    ra('GET','/api/dmx-profiles/community/peek?slug='+encodeURIComponent(profileId),null,function(pr){
+      if(!pr||!pr.ok||!pr.profile){
+        document.getElementById('hs').textContent='Could not fetch remote copy: '+(pr&&pr.err||'unknown');
+        return;
       }
+      // Pull local copy too.
+      ra('GET','/api/dmx-profiles/'+encodeURIComponent(profileId),null,function(lp){
+        if(!lp||(lp&&lp.err)){
+          document.getElementById('hs').textContent='Could not fetch local copy';return;
+        }
+        _commRenderUpdateConfirm1(profileId, lp, pr.profile);
+      });
     });
+  });
+}
+
+function _commShareEscape(s){return escapeHtml(String(s==null?'':s));}
+
+// Compute a structural fingerprint: offset + type + bits per channel.
+// Two profiles share the same fingerprint only when the wire-level
+// channel layout is identical — which is the invariant the community
+// slug is supposed to identify.
+function _commStructuralFingerprint(prof){
+  var chs=(prof.channels||[]).slice().sort(function(a,b){return (a.offset||0)-(b.offset||0);});
+  return chs.map(function(c){return (c.offset||0)+':'+(c.type||'?')+':'+(c.bits||8);}).join('|');
+}
+
+// Summarise diff between two profile copies.
+function _commDiff(localP, remoteP){
+  var notes=[];
+  ['name','manufacturer','category','colorMode','beamWidth','panRange','tiltRange'].forEach(function(k){
+    var a=localP[k], b=remoteP[k];
+    if(a!==b)notes.push({kind:'meta',key:k,from:b,to:a});
+  });
+  var byOffRemote={};
+  (remoteP.channels||[]).forEach(function(c){byOffRemote[c.offset||0]=c;});
+  var byOffLocal={};
+  (localP.channels||[]).forEach(function(c){byOffLocal[c.offset||0]=c;});
+  Object.keys(byOffLocal).forEach(function(o){
+    var lc=byOffLocal[o], rc=byOffRemote[o];
+    if(!rc){notes.push({kind:'ch-added',offset:o,name:lc.name,type:lc.type});return;}
+    if((lc.type||'')!==(rc.type||''))notes.push({kind:'ch-retyped',offset:o,from:rc.type,to:lc.type});
+    if((lc.bits||8)!==(rc.bits||8))notes.push({kind:'ch-bits',offset:o,from:rc.bits||8,to:lc.bits||8});
+    var lc_caps=JSON.stringify(lc.capabilities||[]);
+    var rc_caps=JSON.stringify(rc.capabilities||[]);
+    if(lc_caps!==rc_caps)notes.push({kind:'caps',offset:o,name:lc.name||('ch@'+o),
+      added:(lc.capabilities||[]).length,removed:(rc.capabilities||[]).length});
+  });
+  Object.keys(byOffRemote).forEach(function(o){
+    if(!byOffLocal[o])notes.push({kind:'ch-removed',offset:o,name:byOffRemote[o].name,type:byOffRemote[o].type});
+  });
+  return notes;
+}
+
+function _commRenderNewShareModal(profileId, checkData){
+  var dupWarn='';
+  if(checkData.duplicate){
+    dupWarn='<div style="background:#422006;border:1px solid #78350f;border-radius:4px;padding:.5em .7em;margin-bottom:.6em;color:#fde68a;font-size:.82em">'
+      +'⚠ The channel layout is identical to <b>'+_commShareEscape(checkData.duplicate_name||checkData.duplicate_of)+'</b>, which is already in the community. Sharing creates a duplicate listing for the same fixture.</div>';
+  }
+  var h='<div style="min-width:420px">'
+    +'<p style="color:#94a3b8;font-size:.88em;margin-bottom:.5em">Share profile <b style="color:#e2e8f0">'+_commShareEscape(profileId)+'</b> to the SlyLED community. Other operators will be able to search, download, and import it.</p>'
+    +dupWarn
+    +'<div style="background:#0f172a;border:1px solid #334155;border-radius:4px;padding:.5em .7em;margin-bottom:.6em;font-size:.8em;color:#cbd5e1">This is a <b style="color:#4ade80">new</b> community profile — no existing slug to overwrite.</div>'
+    +'<div style="display:flex;gap:.5em;margin-top:.6em">'
+    +'<button class="btn btn-on" onclick="_commDoUpload(\''+_commShareEscape(profileId)+'\',false)">Share to community</button>'
+    +'<button class="btn btn-off" onclick="closeModal()">Cancel</button>'
+    +'</div></div>';
+  document.getElementById('modal-title').textContent='Share to Community';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+}
+
+function _commRenderUpdateConfirm1(profileId, localP, remoteP){
+  // Structural mismatch check — reject early and explain.
+  var locSig=_commStructuralFingerprint(localP);
+  var remSig=_commStructuralFingerprint(remoteP);
+  if(locSig!==remSig){
+    var h='<div style="min-width:480px">'
+      +'<div style="background:#450a0a;border:1px solid #b91c1c;border-radius:4px;padding:.6em .8em;margin-bottom:.6em;color:#fecaca;font-size:.85em">'
+      +'<b>⚠ Update blocked — channel layout differs</b><br>'
+      +'The community profile at slug <b>'+_commShareEscape(profileId)+'</b> describes a fixture with <b>'+(remoteP.channels||[]).length+'</b> channels. '
+      +'Your local copy has <b>'+(localP.channels||[]).length+'</b> channels, or the channel types / bit depths don\'t match.<br><br>'
+      +'The community slug is an identifier for <i>this exact wire layout</i>. Overwriting it with a different layout would break every existing download of this profile.'
+      +'</div>'
+      +'<div style="background:#0f172a;border:1px solid #334155;border-radius:4px;padding:.5em .7em;margin-bottom:.6em;font-size:.8em;color:#cbd5e1">'
+      +'<b>What to do instead:</b><br>'
+      +'  • Rename your local profile to a new unique ID (e.g. <code>'+_commShareEscape(profileId)+'-v2</code>) in the profile editor, then Share.<br>'
+      +'  • Use Share as a new community entry.<br>'
+      +'  • If you believe the remote is wrong and needs to be replaced with this different layout, delete the remote row in cPanel phpMyAdmin first, then Share again.'
+      +'</div>'
+      +'<details style="font-size:.78em;color:#64748b"><summary style="cursor:pointer">Show structural fingerprints</summary>'
+      +'<pre style="white-space:pre-wrap;word-break:break-all;font-size:.72em;color:#64748b;background:#020617;padding:.3em;margin-top:.3em">local : '+_commShareEscape(locSig)+'\nremote: '+_commShareEscape(remSig)+'</pre></details>'
+      +'<div style="display:flex;gap:.5em;margin-top:.6em">'
+      +'<button class="btn btn-off" onclick="closeModal()">Cancel</button>'
+      +'</div></div>';
+    document.getElementById('modal-title').textContent='Update Blocked — Different Layout';
+    document.getElementById('modal-body').innerHTML=h;
+    document.getElementById('modal').style.display='block';
+    return;
+  }
+
+  // Structure matches. Present intent + first confirm.
+  var diff=_commDiff(localP, remoteP);
+  var diffSummary=diff.length+' change'+(diff.length===1?'':'s')+' detected';
+  var h='<div style="min-width:480px">'
+    +'<p style="color:#94a3b8;font-size:.88em;margin-bottom:.5em">Update the community copy of <b style="color:#e2e8f0">'+_commShareEscape(profileId)+'</b>?</p>'
+    +'<div style="background:#0f172a;border:1px solid #334155;border-radius:4px;padding:.5em .7em;margin-bottom:.6em;font-size:.82em;color:#cbd5e1">'
+    +'• Channel layout matches the community copy (<b style="color:#4ade80">safe to update</b>).<br>'
+    +'• Your local version has <b>'+diffSummary+'</b>.<br>'
+    +'• The overwrite is tied to your public IP — only you can update this slug.'
+    +'</div>'
+    +'<div style="display:flex;gap:.5em;margin-top:.6em">'
+    +'<button class="btn btn-on" onclick="_commRenderUpdateDiff(\''+_commShareEscape(profileId)+'\')">Review changes →</button>'
+    +'<button class="btn btn-off" onclick="closeModal()">Cancel</button>'
+    +'</div></div>';
+  document.getElementById('modal-title').textContent='Update Community Profile';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+  // Cache for step 2 to avoid re-fetching.
+  window._commCache={profileId:profileId,local:localP,remote:remoteP,diff:diff};
+}
+
+function _commRenderUpdateDiff(profileId){
+  var cache=window._commCache||{};
+  if(!cache.profileId){
+    _commShareProfile(profileId);return;
+  }
+  var diff=cache.diff||[];
+  var rows='';
+  if(!diff.length){
+    rows='<div style="color:#64748b;padding:.4em;font-size:.85em">No changes — local copy is identical to the community copy. Upload will be a no-op.</div>';
+  }else{
+    diff.forEach(function(n){
+      var ic='•', col='#94a3b8', line='';
+      if(n.kind==='meta'){
+        ic='✎';col='#60a5fa';
+        line='<b>'+_commShareEscape(n.key)+'</b>: '
+            +'<span style="color:#64748b;text-decoration:line-through">'+_commShareEscape(n.from)+'</span> → '
+            +'<span style="color:#4ade80">'+_commShareEscape(n.to)+'</span>';
+      }else if(n.kind==='ch-retyped'){
+        ic='⚠';col='#f59e0b';
+        line='ch@'+n.offset+' type '+_commShareEscape(n.from)+' → '+_commShareEscape(n.to);
+      }else if(n.kind==='ch-bits'){
+        ic='⚠';col='#f59e0b';
+        line='ch@'+n.offset+' bits '+n.from+' → '+n.to;
+      }else if(n.kind==='ch-added'){
+        ic='+';col='#4ade80';
+        line='ch@'+n.offset+' <b>added</b> ('+_commShareEscape(n.name)+', '+_commShareEscape(n.type)+')';
+      }else if(n.kind==='ch-removed'){
+        ic='−';col='#ef4444';
+        line='ch@'+n.offset+' <b>removed</b> ('+_commShareEscape(n.name)+', '+_commShareEscape(n.type)+')';
+      }else if(n.kind==='caps'){
+        ic='✎';col='#a78bfa';
+        line='ch@'+n.offset+' capabilities edited ('+_commShareEscape(n.name)+': remote had '+n.removed+' caps, local has '+n.added+')';
+      }
+      rows+='<div style="font-size:.8em;padding:.2em 0;border-bottom:1px solid #1e293b"><span style="display:inline-block;width:16px;color:'+col+';font-weight:bold">'+ic+'</span>'+line+'</div>';
+    });
+  }
+  var h='<div style="min-width:520px">'
+    +'<p style="color:#94a3b8;font-size:.88em;margin-bottom:.4em">Review changes to <b style="color:#e2e8f0">'+_commShareEscape(profileId)+'</b>:</p>'
+    +'<div style="max-height:280px;overflow-y:auto;background:#0f172a;border:1px solid #334155;border-radius:4px;padding:.4em .6em;margin-bottom:.6em">'
+    +rows
+    +'</div>'
+    +'<div style="background:#422006;border:1px solid #78350f;border-radius:4px;padding:.4em .6em;margin-bottom:.6em;color:#fde68a;font-size:.78em">This overwrites the community copy. Every operator who downloads <b>'+_commShareEscape(profileId)+'</b> from now on will receive your version.</div>'
+    +'<div style="display:flex;gap:.5em;margin-top:.6em">'
+    +'<button class="btn btn-on" onclick="_commDoUpload(\''+_commShareEscape(profileId)+'\',true)">Confirm update</button>'
+    +'<button class="btn btn-off" onclick="closeModal()">Cancel</button>'
+    +'</div></div>';
+  document.getElementById('modal-title').textContent='Confirm Community Update';
+  document.getElementById('modal-body').innerHTML=h;
+}
+
+function _commDoUpload(profileId, overwrite){
+  var body={profileId:profileId};
+  if(overwrite)body.overwrite=true;
+  document.getElementById('modal-body').innerHTML=
+    '<div style="text-align:center;padding:1.5em;color:#94a3b8">Uploading…</div>';
+  ra('POST','/api/dmx-profiles/community/upload',body,function(ur){
+    if(ur&&ur.ok){
+      var msg=overwrite?('Community profile updated: '+profileId):('Shared to community: '+profileId);
+      document.getElementById('hs').textContent=msg;
+      closeModal();
+      window._commCache=null;
+      return;
+    }
+    var err=ur&&(ur.error||ur.err)||'unknown';
+    var hint='';
+    if(err.indexOf('forbidden')>=0||err.indexOf('403')>=0){
+      hint='<br><br>The community server requires your public IP to match the original uploader. If it has changed (VPN, new ISP), delete the row in cPanel phpMyAdmin and re-share as a new upload.';
+    }else if(err.indexOf('Duplicate channels')>=0){
+      hint='<br><br>The channel fingerprint matches a <i>different</i> slug already in the community. Change the profile\'s channel layout, or import the existing community profile instead of creating a new one.';
+    }
+    document.getElementById('modal-body').innerHTML=
+      '<div style="color:#fecaca;background:#450a0a;border:1px solid #b91c1c;border-radius:4px;padding:.6em .8em;font-size:.85em">'
+      +'<b>Upload failed.</b><br>'+_commShareEscape(err)+hint+'</div>'
+      +'<div style="display:flex;gap:.5em;margin-top:.8em">'
+      +'<button class="btn btn-off" onclick="closeModal()">Close</button></div>';
   });
 }
 

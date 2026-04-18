@@ -5119,6 +5119,27 @@ def api_community_upload():
     return jsonify(result)
 
 
+@app.get("/api/dmx-profiles/community/peek")
+def api_community_peek():
+    """Fetch a community profile WITHOUT importing it locally.
+
+    The Share/Update wizard calls this to build the diff view: we need
+    the remote profile in-memory for comparison, but we don't want to
+    stomp the operator's local copy until they've confirmed the update.
+    """
+    import community_client as cc
+    slug = (request.args.get("slug") or "").strip()
+    if not slug:
+        return jsonify(ok=False, err="slug required"), 400
+    result = cc.get_profile(slug)
+    if not isinstance(result, dict) or not result.get("ok"):
+        # Community returns 404 for missing — surface as ok:false with the
+        # flag the SPA needs to pick the "new upload" path.
+        err = result.get("error") if isinstance(result, dict) else "Fetch failed"
+        return jsonify(ok=False, err=err, notFound="not found" in (err or "").lower())
+    return jsonify(ok=True, profile=result.get("data") or result)
+
+
 @app.post("/api/dmx-profiles/community/update")
 def api_community_update():
     """Overwrite an existing community profile (same slug). Requires
