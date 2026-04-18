@@ -84,7 +84,8 @@ class MoverControlEngine:
 
     def __init__(self, get_fixtures, get_layout, get_profile_info,
                  get_engine, set_fixture_color_fn, get_remote_by_device_id,
-                 get_mover_cal=None, get_mover_model=None):
+                 get_mover_cal=None, get_mover_model=None,
+                 is_calibrating=None):
         """
         Args:
             get_fixtures:             list of fixtures
@@ -109,6 +110,7 @@ class MoverControlEngine:
         self._get_remote = get_remote_by_device_id
         self._get_mover_cal = get_mover_cal or (lambda _mid: None)
         self._get_mover_model = get_mover_model or (lambda _mid, _mv: None)
+        self._is_calibrating = is_calibrating or (lambda _mid: False)
 
         self._claims = {}  # mover_id → MoverClaim
         self._lock = threading.Lock()
@@ -270,6 +272,12 @@ class MoverControlEngine:
 
             if claim.state == "claimed":
                 # Locked but user hasn't started streaming — don't write DMX.
+                continue
+
+            # #511 — fixture is mid-calibration; don't fight the cal thread
+            # for pan/tilt. The claim remains so the operator keeps control
+            # as soon as cal releases.
+            if self._is_calibrating(mover_id):
                 continue
 
             # #476 — if the remote has gone hard-stale (comms silence > 60s,

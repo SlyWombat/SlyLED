@@ -2478,6 +2478,9 @@ def api_fixture_dmx_test(fid):
     f = next((f for f in _fixtures if f["id"] == fid), None)
     if not f or f.get("fixtureType") != "dmx":
         return jsonify(err="DMX fixture not found"), 404
+    # #511 — fixture is locked while its calibration run is active.
+    if f.get("isCalibrating"):
+        return jsonify(err="Fixture is being calibrated"), 423
     body = request.get_json(silent=True) or {}
     pid = f.get("dmxProfileId")
     prof_info = _profile_lib.channel_info(pid) if pid else None
@@ -2754,11 +2757,13 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
     job = _mover_cal_jobs[str(fid)]
 
     def _cal_blackout():
-        """Blackout fixture when calibration ends (success or error)."""
+        """Blackout fixture and release the calibration lock when cal ends."""
         try:
             _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
         except Exception:
             pass
+        # #511 — always release the lock on exit.
+        _set_calibrating(fid, False)
 
     f = next((f for f in _fixtures if f["id"] == fid), None)
     if not f:
@@ -2766,6 +2771,11 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
         job["status"] = "error"
         _cal_blackout()
         return
+
+    # #511 — engage the calibration lock. Any external pan/tilt writer
+    # (show bake, mover-follow, dmx-test, profile defaults) will skip this
+    # fixture until we clear the flag in the finally-style cleanup below.
+    _set_calibrating(fid, True)
     addr = f.get("dmxStartAddr", 1)
     uni = f.get("dmxUniverse", 1) - 1  # Art-Net is 0-based
     # Set profile for profile-aware DMX writes (#467)
@@ -2917,6 +2927,9 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
     _save("mover_calibrations", _mover_cal)
     _invalidate_mover_model(fid)
     f["moverCalibrated"] = True
+    # #511 — release the lock before persisting so isCalibrating doesn't
+    # leak into fixtures.json.
+    _set_calibrating(fid, False)
     _save("fixtures", _fixtures)
 
     job["result"] = {"sampleCount": len(samples), "gridSize": len(grid.get("panSteps", []))}
@@ -3072,13 +3085,19 @@ def api_mover_cal_manual(fid):
     Body: {samples: [{pan, tilt, stageX, stageY, stageZ}, ...]}
     The grid maps pan/tilt → stage coords (not pixels), so grid_inverse
     returns pan/tilt from a stage target directly.
+
+    Manual calibration is atomic — flag is set only for the duration of
+    the save so external writers (show bake / gyro) don't clobber
+    pan/tilt while samples are being serialized.
     """
     f = next((f for f in _fixtures if f["id"] == fid), None)
     if not f or f.get("fixtureType") != "dmx":
         return jsonify(err="DMX fixture not found"), 404
+    _set_calibrating(fid, True)
     body = request.get_json(silent=True) or {}
     samples = body.get("samples", [])
     if len(samples) < 2:
+        _set_calibrating(fid, False)
         return jsonify(err="Need at least 2 calibration samples"), 400
 
     # Build grid using stage coords as the "pixel" dimension
@@ -3151,6 +3170,7 @@ def api_mover_cal_manual(fid):
     resp = {"ok": True, "sampleCount": len(samples), "hasGrid": grid is not None}
     if fit_quality is not None:
         resp["fit"] = fit_quality.to_dict()
+    _set_calibrating(fid, False)
     return jsonify(**resp)
 
 
@@ -4725,6 +4745,39 @@ def _fixture_position(fid):
     return (0.0, 0.0, 0.0)
 
 
+# ── Calibration lock (#511) ────────────────────────────────────────────────
+#
+# Runtime-only flag on the fixture record. When a calibration run is active
+# the lock blocks every other DMX writer (mover-control, show/bake playback,
+# test panel, profile-defaults re-seed) so the cal thread's beam samples
+# aren't corrupted by a concurrent pan/tilt write. Not persisted — cleared
+# on server start so a crash mid-calibration doesn't orphan the flag.
+
+def _fixture_is_calibrating(fid):
+    if fid is None:
+        return False
+    f = next((x for x in _fixtures if x.get("id") == fid), None)
+    return bool(f and f.get("isCalibrating"))
+
+
+def _set_calibrating(fid, val):
+    """Toggle the fixture-level calibration lock. Idempotent."""
+    f = next((x for x in _fixtures if x.get("id") == fid), None)
+    if not f:
+        return
+    if val:
+        f["isCalibrating"] = True
+        log.info("Mover %d: calibration lock engaged — external DMX writes blocked", fid)
+    else:
+        if f.pop("isCalibrating", None):
+            log.info("Mover %d: calibration lock released", fid)
+
+
+# Clear stale locks from any crash-induced persistence leak.
+for _f in _fixtures:
+    _f.pop("isCalibrating", None)
+
+
 def _get_mover_model(fid, mover=None):
     """Return the ParametricFixtureModel for a fixture, fitting lazily.
 
@@ -4807,6 +4860,7 @@ _mover_engine = MoverControlEngine(
     get_remote_by_device_id=lambda did: _remotes.by_device(did),
     get_mover_cal=lambda mid: _mover_cal.get(str(mid)),
     get_mover_model=_get_mover_model,
+    is_calibrating=_fixture_is_calibrating,
 )
 _mover_engine.start()
 
@@ -5275,6 +5329,9 @@ def _apply_profile_defaults(engine):
     """
     for f in _fixtures:
         if f.get("fixtureType") != "dmx":
+            continue
+        # #511 — a fixture mid-calibration owns its pan/tilt channels.
+        if f.get("isCalibrating"):
             continue
         pid = f.get("dmxProfileId")
         if not pid:
@@ -6794,6 +6851,9 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
                 break  # skip aim loop, go to blackout
             f = head_info["fixture"]
             fid = f["id"]
+            # #511 — skip show output for fixtures mid-calibration.
+            if f.get("isCalibrating"):
+                continue
             fx_pos = head_info["pos"]
             # Assignment: 1 person = all heads aim at them,
             # 2 people = 1:1, 3+ people (fixed) = first N only
@@ -7019,6 +7079,9 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
         # allowing e.g. a PT sweep to control pan/tilt while a base wash
         # controls color independently.
         for fx in dmx_fixtures:
+            # #511 — skip playback for fixtures mid-calibration.
+            if _fixture_is_calibrating(fx.get("id")):
+                continue
             # Collect per-channel values: {channel_name: (value, priority)}
             ch_vals = {}
             for seg in fx["segs"]:
@@ -7358,6 +7421,9 @@ def _dmx_playback_single(tid, go_epoch, duration):
         if elapsed > duration:
             break
         for fx in dmx_fixtures:
+            # #511 — skip playback for fixtures mid-calibration.
+            if _fixture_is_calibrating(fx.get("id")):
+                continue
             ch_vals = {}
             for seg in fx["segs"]:
                 ss = seg.get("startS", 0)
