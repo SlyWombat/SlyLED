@@ -28,13 +28,15 @@ Profile schema:
 
 Channel types (primary function): dimmer, red, green, blue, white, amber, uv,
     pan, pan-fine, tilt, tilt-fine, strobe, gobo, gobo-rotation, prism,
-    prism-rotation, focus, zoom, frost, color-wheel, color-temp, speed,
-    pan-tilt-speed, macro, reset
+    prism-rotation, focus, zoom, frost, color-wheel, color-temp, iris,
+    blade, rotation, speed, pan-tilt-speed, effect-speed, macro, reset
 
-Capability types: ColorIntensity, Intensity, Pan, PanContinuous, Tilt,
-    TiltContinuous, PanTiltSpeed, ShutterStrobe, WheelSlot, WheelShake,
-    WheelRotation, Prism, PrismRotation, ColorTemperature, Focus,
-    Zoom, Frost, Speed, Maintenance, Effect, NoFunction, Generic
+Capability types: ColorIntensity, ColorPreset, Intensity, Pan, PanContinuous,
+    Tilt, TiltContinuous, PanTiltSpeed, ShutterStrobe, WheelSlot, WheelShake,
+    WheelRotation, WheelSlotRotation, Prism, PrismRotation,
+    ColorTemperature, Iris, IrisEffect, BladeInsertion, BladeRotation,
+    BladeSystemRotation, Rotation, EffectSpeed, Focus, Zoom, Frost, Speed,
+    Maintenance, Effect, NoFunction, Generic
 """
 
 import json
@@ -49,16 +51,21 @@ CHANNEL_TYPES = {
     "strobe", "gobo", "gobo-rotation", "prism", "prism-rotation",
     "focus", "zoom", "frost",
     "color-wheel", "color-temp",
-    "speed", "pan-tilt-speed",
+    "iris", "blade", "rotation",
+    "speed", "pan-tilt-speed", "effect-speed",
     "macro", "reset",
 }
 
 CAPABILITY_TYPES = {
-    "ColorIntensity", "Intensity", "Pan", "PanContinuous",
-    "Tilt", "TiltContinuous", "PanTiltSpeed",
-    "ShutterStrobe", "WheelSlot", "WheelShake", "WheelRotation",
+    "ColorIntensity", "ColorPreset", "Intensity",
+    "Pan", "PanContinuous", "Tilt", "TiltContinuous", "PanTiltSpeed",
+    "ShutterStrobe",
+    "WheelSlot", "WheelShake", "WheelRotation", "WheelSlotRotation",
     "Prism", "PrismRotation",
     "ColorTemperature",
+    "Iris", "IrisEffect",
+    "BladeInsertion", "BladeRotation", "BladeSystemRotation",
+    "Rotation", "EffectSpeed",
     "Focus", "Zoom", "Frost",
     "Speed", "Maintenance", "Effect", "NoFunction", "Generic",
 }

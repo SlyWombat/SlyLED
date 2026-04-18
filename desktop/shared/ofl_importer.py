@@ -32,6 +32,7 @@ _OFL_TYPE_MAP = {
     "WheelSlot":        "gobo",       # overridden to color-wheel if color wheel
     "WheelShake":       "gobo",       # #520 — shake on same wheel channel
     "WheelRotation":    "gobo-rotation",
+    "WheelSlotRotation":"gobo-rotation",  # #521 — rotation indexed to a slot
     "Prism":            "prism",
     "PrismRotation":    "prism-rotation",  # #522
     "Focus":            "focus",
@@ -40,22 +41,26 @@ _OFL_TYPE_MAP = {
     "FrostEffect":      "frost",
     "Speed":            "speed",
     "Maintenance":      "reset",
-    "BladeInsertion":   "macro",
-    "BladeRotation":    "macro",
-    "BladeSystemRotation": "macro",
+    # #523 Iris — mechanical aperture, separate from Zoom (optics).
+    "Iris":             "iris",
+    "IrisEffect":       "iris",
+    # #524 Blade — framing shutters on profile fixtures.
+    "BladeInsertion":   "blade",
+    "BladeRotation":    "blade",
+    "BladeSystemRotation": "blade",
     "Fog":              "dimmer",
     "FogOutput":        "dimmer",
     "FogType":          "macro",
     "BeamAngle":        "zoom",
     "BeamPosition":     "macro",
-    "ColorPreset":      "color-wheel",
+    "ColorPreset":      "color-wheel",  # #518 — OFL preset palette channel
     "ColorTemperature": "color-temp",  # #519 — dedicated CTO / CTB channel
     "Effect":           "macro",
-    "EffectSpeed":      "speed",
+    "EffectSpeed":      "effect-speed",  # #525 — paired to an Effect channel
     "EffectDuration":   "macro",
     "EffectParameter":  "macro",
     "SoundSensitivity": "macro",
-    "Rotation":         "speed",
+    "Rotation":         "rotation",  # #526 — full-body / animation wheel spin
     "NoFunction":       "macro",
     "Generic":          "macro",
 }
@@ -106,6 +111,7 @@ _CAP_TYPE_MAP = {
     "WheelSlot":        "WheelSlot",
     "WheelShake":       "WheelShake",      # #520 — distinct from WheelSlot now
     "WheelRotation":    "WheelRotation",
+    "WheelSlotRotation":"WheelSlotRotation",  # #521
     "Prism":            "Prism",
     "PrismRotation":    "PrismRotation",   # #522 — distinct from WheelRotation now
     "Focus":            "Focus",
@@ -118,14 +124,19 @@ _CAP_TYPE_MAP = {
     "FogOutput":        "Intensity",
     "FogType":          "Effect",
     "BeamAngle":        "Zoom",
-    "ColorPreset":      "WheelSlot",
+    "ColorPreset":      "ColorPreset",      # #518 — distinct from WheelSlot
     "ColorTemperature": "ColorTemperature",  # #519
+    "Iris":             "Iris",             # #523
+    "IrisEffect":       "IrisEffect",       # #523
+    "BladeInsertion":   "BladeInsertion",   # #524
+    "BladeRotation":    "BladeRotation",    # #524
+    "BladeSystemRotation": "BladeSystemRotation",  # #524
     "Effect":           "Effect",
-    "EffectSpeed":      "Speed",
+    "EffectSpeed":      "EffectSpeed",      # #525
     "EffectDuration":   "Effect",
     "EffectParameter":  "Effect",
     "SoundSensitivity": "Effect",
-    "Rotation":         "Speed",
+    "Rotation":         "Rotation",         # #526
     "NoFunction":       "NoFunction",
     "Generic":          "Generic",
 }
@@ -309,6 +320,86 @@ def _convert_capabilities(ofl_channel, is_16bit=False):
                     if isinstance(val, str):
                         try:
                             val = float(val.replace("s", "").replace("%", "").strip())
+                        except ValueError:
+                            val = cap[key]
+                    entry[key] = val
+
+        # #518 ColorPreset — preserve colors array + optional Kelvin.
+        if ofl_type == "ColorPreset":
+            if isinstance(cap.get("colors"), list):
+                entry["colors"] = [str(c) for c in cap["colors"]]
+            for key in ("colorTemperature", "colorTemperatureStart", "colorTemperatureEnd"):
+                if key in cap:
+                    val = cap[key]
+                    if isinstance(val, str):
+                        try:
+                            val = float(val.replace("K", "").strip())
+                        except ValueError:
+                            continue
+                    entry[key] = val
+
+        # #521 WheelSlotRotation — slot + speed/angle ranges.
+        if ofl_type == "WheelSlotRotation":
+            for key in ("slotNumber", "speed", "speedStart", "speedEnd",
+                         "angle", "angleStart", "angleEnd"):
+                if key in cap:
+                    val = cap[key]
+                    if isinstance(val, str):
+                        try:
+                            val = float(val.replace("Hz", "").replace("deg", "").strip())
+                        except ValueError:
+                            val = cap[key]
+                    entry[key] = val
+
+        # #523 Iris / IrisEffect — openPercent + effect name.
+        if ofl_type in ("Iris", "IrisEffect"):
+            for key in ("openPercent", "openPercentStart", "openPercentEnd"):
+                if key in cap:
+                    val = cap[key]
+                    if isinstance(val, str):
+                        try:
+                            val = float(val.replace("%", "").strip())
+                        except ValueError:
+                            continue
+                    entry[key] = val
+            if ofl_type == "IrisEffect" and isinstance(cap.get("effectName"), str):
+                entry["effectName"] = cap["effectName"]
+
+        # #524 Blade — framing shutter channels.
+        if ofl_type in ("BladeInsertion", "BladeRotation", "BladeSystemRotation"):
+            for key in ("bladeNumber",
+                         "insertion", "insertionStart", "insertionEnd",
+                         "angle", "angleStart", "angleEnd"):
+                if key in cap:
+                    val = cap[key]
+                    if isinstance(val, str):
+                        try:
+                            val = float(val.replace("%", "").replace("deg", "").strip())
+                        except ValueError:
+                            val = cap[key]
+                    entry[key] = val
+
+        # #525 EffectSpeed — effect-speed paired to an Effect channel.
+        if ofl_type == "EffectSpeed":
+            for key in ("speed", "speedStart", "speedEnd"):
+                if key in cap:
+                    val = cap[key]
+                    if isinstance(val, str):
+                        try:
+                            val = float(val.replace("Hz", "").replace("%", "").strip())
+                        except ValueError:
+                            continue
+                    entry[key] = val
+
+        # #526 Rotation — whole-element / animation-wheel spin.
+        if ofl_type == "Rotation":
+            for key in ("speed", "speedStart", "speedEnd",
+                         "angle", "angleStart", "angleEnd"):
+                if key in cap:
+                    val = cap[key]
+                    if isinstance(val, str):
+                        try:
+                            val = float(val.replace("Hz", "").replace("deg", "").strip())
                         except ValueError:
                             val = cap[key]
                     entry[key] = val
