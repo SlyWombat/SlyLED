@@ -132,8 +132,15 @@ class MockCameraServer:
         def beam_flash():
             return jsonify(found=False)
 
+        # Tests can flip this to True + populate self.saved_intrinsics to
+        # exercise the "use calibrated intrinsics" code path in stage-map
+        # compute (#331).
+        self.saved_intrinsics = None
+
         @app.get("/calibrate/intrinsic")
         def intrinsic_get():
+            if self.saved_intrinsics is not None:
+                return jsonify(calibrated=True, **self.saved_intrinsics)
             return jsonify(ok=True, calibrated=False)
 
     def start(self):

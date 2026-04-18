@@ -10,14 +10,9 @@ function emuLoadStage(){
         ra('GET','/api/spatial-effects',null,function(sfx){
           _emuStage={layout:lay,children:ch||[],fixtures:fx||[],objects:surfs||[],
             spatialFx:sfx||[],cw:(lay||{}).canvasW||10000,ch:(lay||{}).canvasH||5000};
-          // Cache profile beamWidths for beam cone rendering
-          if(!window._profileCache){
-            window._profileCache={};
-            ra('GET','/api/dmx-profiles',null,function(profs){
-              (profs||[]).forEach(function(p){window._profileCache[p.id]=p;});
-              _emuStageReady();
-            });
-          }else{_emuStageReady();}
+          // Cache profile beamWidths for beam cone rendering. Shared loader
+          // coalesces parallel callers — see _loadProfileCache (#432).
+          _loadProfileCache(_emuStageReady);
         });
         });
       });

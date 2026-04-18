@@ -138,6 +138,21 @@ ok(isinstance(cam_pos, list) and len(cam_pos) == 3,
 ok(all(isinstance(v, (int, float)) and math.isfinite(v) for v in cam_pos),
    f'cameraPosStage values are finite: {cam_pos}')
 
+# #331 — SPA reads r.cameraPosition (dict). Previously endpoint only
+# returned cameraPosStage array, silently blanking the results table.
+cam_pos_dict = d.get('cameraPosition', {})
+ok(isinstance(cam_pos_dict, dict)
+   and all(k in cam_pos_dict for k in ('x','y','z')),
+   f'cameraPosition dict has x/y/z: {cam_pos_dict}')
+ok(cam_pos_dict.get('x') == cam_pos[0] and cam_pos_dict.get('z') == cam_pos[2],
+   'cameraPosition dict matches cameraPosStage array')
+
+# #331 — intrinsicSource flag so operators can tell an FOV estimate from
+# a proper ArUco-calibrated solve. Mock camera returns calibrated:false so
+# the solver must fall back.
+ok(d.get('intrinsicSource') == 'fov-estimate',
+   f'intrinsicSource is "fov-estimate" (got {d.get("intrinsicSource")!r})')
+
 # RMS error should be reasonable (not perfect since synthetic markers are flat)
 rms = d.get('rmsError', 999)
 ok(isinstance(rms, (int, float)) and rms < 100,
@@ -154,6 +169,27 @@ if len(H) == 3:
 intrinsics = d.get('intrinsics', {})
 ok(intrinsics.get('fx', 0) > 0, f'Intrinsics fx > 0: {intrinsics.get("fx")}')
 ok(intrinsics.get('cx', 0) > 0, f'Intrinsics cx > 0: {intrinsics.get("cx")}')
+
+# ── Calibrated intrinsics path (#331) ──────────────────────────────────
+
+section('Calibrated intrinsics')
+
+# Tell the mock camera it has saved intrinsics from an ArUco calibration.
+# The exact values don't matter for this test — we only assert the
+# stage-map endpoint read them back and flagged intrinsicSource accordingly.
+mock_cam.saved_intrinsics = {
+    'fx': 850.0, 'fy': 848.0, 'cx': IMAGE_W / 2.0, 'cy': IMAGE_H / 2.0,
+    'distCoeffs': [0.01, -0.02, 0.0, 0.0, 0.0],
+}
+r = requests.post(f'{BASE}/api/cameras/{cam_fid}/stage-map',
+                   json={'markers': markers, 'markerSize': 150})
+d = r.json()
+ok(d.get('ok') is True, 'Stage map with calibrated intrinsics → ok')
+ok(d.get('intrinsicSource') == 'calibrated',
+   f'intrinsicSource is "calibrated" (got {d.get("intrinsicSource")!r})')
+ok(abs(d.get('intrinsics', {}).get('fx', 0) - 850.0) < 1.0,
+   f'Used saved fx=850 (got {d.get("intrinsics", {}).get("fx")})')
+mock_cam.saved_intrinsics = None  # reset for later tests
 
 # ── Test with fewer markers (minimum 3) ──────────────────────────────────
 

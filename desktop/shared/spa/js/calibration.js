@@ -761,6 +761,10 @@ function _calWizComputeStageMap(){
             cameraPosition:r.cameraPosition||null,
             rmsError:r.rmsError!=null?parseFloat(r.rmsError):null,
             distances:r.distances||null,
+            // #331 — surface which intrinsics path the solver used so
+            // operators can tell a bogus pose from an FOV-estimate pose.
+            intrinsicSource:r.intrinsicSource||'fov-estimate',
+            markersMatched:r.markersMatched||0,
             markersUsed:Object.keys(markers).length
           };
         }else{
@@ -795,8 +799,14 @@ function _calWizStageMapResultHtml(){
     var posStr=pos?'X:'+Math.round(pos.x)+' Y:'+Math.round(pos.y)+' Z:'+Math.round(pos.z):'N/A';
     var rmsStr=r.rmsError!=null?r.rmsError.toFixed(2)+'px':'N/A';
     var rmsColor=r.rmsError!=null?(r.rmsError<2?'#4ade80':r.rmsError<5?'#fbbf24':'#f87171'):'#64748b';
+    // #331 — warn when solvePnP was run with an FOV-estimate instead of
+    // the proper calibrated intrinsics; that's the #1 cause of wild Z
+    // values and the operator needs to see it next to the position.
+    var srcLbl=r.intrinsicSource==='calibrated'
+      ?' <span style="color:#4ade80;font-size:.72em" title="Used saved intrinsics from ArUco calibration">(cal)</span>'
+      :' <span style="color:#fbbf24;font-size:.72em" title="No ArUco calibration found — used FOV nameplate estimate. Run calibration for accurate pose.">(est)</span>';
     h+='<tr><td>'+escapeHtml(cam.name)+'</td>';
-    h+='<td style="font-family:monospace;font-size:.82em;color:#e2e8f0">'+posStr+'</td>';
+    h+='<td style="font-family:monospace;font-size:.82em;color:#e2e8f0">'+posStr+srcLbl+'</td>';
     h+='<td style="color:'+rmsColor+'">'+rmsStr+'</td>';
     h+='<td style="color:#4ade80">OK</td></tr>';
   });

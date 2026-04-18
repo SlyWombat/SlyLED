@@ -56,15 +56,34 @@ def main():
                 {"offset": 7, "name": "Blue", "type": "blue"},
             ]
         })
+        # Universe 99 keeps these tests off every real stage universe —
+        # some engines (Art-Net) broadcast, so U1 writes would reach live
+        # fixtures on the LAN even through the test client.
         r = c.post('/api/fixtures', json={
             'name': 'MH Test', 'type': 'point', 'fixtureType': 'dmx',
-            'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 10,
+            'dmxUniverse': 99, 'dmxStartAddr': 1, 'dmxChannelCount': 10,
             'dmxProfileId': 'test-mh'
         })
         mover_id = r.get_json().get('id')
 
-        # Start DMX engine
+        # Start DMX engine, then swap its socket for a no-op proxy so the
+        # test never emits Art-Net frames onto the LAN — we only need the
+        # universe buffer state, not actual network output. (An earlier
+        # run on U1 reached a live DMX bridge and latched a strobe on
+        # Sly MH 2 — never again.)
         c.post('/api/dmx/start', json={'protocol': 'artnet'})
+        time.sleep(0.05)  # let _run_loop bind the real socket first
+        import socket as _sock_mod
+        class _MuteSock:
+            def sendto(self, *a, **kw): pass
+            def recvfrom(self, n): raise _sock_mod.timeout
+            def close(self): pass
+            def setblocking(self, *a, **kw): pass
+            def settimeout(self, *a, **kw): pass
+        if parent_server._artnet._sock is not None:
+            try: parent_server._artnet._sock.close()
+            except Exception: pass
+            parent_server._artnet._sock = _MuteSock()
 
         # ── Claim Tests ─────────────────────────────────────────
         section('Claim / Release')
@@ -141,6 +160,64 @@ def main():
         color = r['claims'][0].get('color', {}) if r.get('claims') else {}
         ok(color.get('r') == 255, 'Color r=255')
         ok(color.get('g') == 0, 'Color g=0')
+
+        # ── Flash / strobe release (#509) ───────────────────────
+        section('Flash release — #509')
+        # Build a second profile with an annotated strobe channel so we
+        # can assert the channel returns to its Open range after flash-off.
+        c.post('/api/dmx-profiles', json={
+            "id": "test-strobe", "name": "Test Strobe", "manufacturer": "Test",
+            "category": "moving-head", "channelCount": 6,
+            "panRange": 540, "tiltRange": 270,
+            "channels": [
+                {"offset": 0, "name": "Pan",    "type": "pan",    "bits": 16},
+                {"offset": 2, "name": "Tilt",   "type": "tilt",   "bits": 16},
+                {"offset": 4, "name": "Shutter","type": "strobe", "default": 0,
+                 "capabilities": [
+                    {"type": "ShutterStrobe", "shutterEffect": "Open",
+                     "range": [0, 10], "label": "Open"},
+                    {"type": "ShutterStrobe", "shutterEffect": "Strobe",
+                     "range": [50, 200], "label": "Strobe slow→fast"},
+                 ]},
+                {"offset": 5, "name": "Dimmer", "type": "dimmer", "default": 255},
+            ],
+        })
+        r = c.post('/api/fixtures', json={
+            'name': 'Strobe MH', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxUniverse': 99, 'dmxStartAddr': 20, 'dmxChannelCount': 6,
+            'dmxProfileId': 'test-strobe',
+        })
+        strobe_mover = r.get_json().get('id')
+        api(c, 'POST', '/api/mover-control/claim',
+            {'moverId': strobe_mover, 'deviceId': 'phone-2', 'deviceName': 'Pixel'})
+        api(c, 'POST', '/api/mover-control/start',
+            {'moverId': strobe_mover, 'deviceId': 'phone-2'})
+        api(c, 'POST', '/api/mover-control/calibrate-start',
+            {'moverId': strobe_mover, 'deviceId': 'phone-2',
+             'roll': 0, 'pitch': 0, 'yaw': 0})
+        api(c, 'POST', '/api/mover-control/calibrate-end',
+            {'moverId': strobe_mover, 'deviceId': 'phone-2',
+             'roll': 0, 'pitch': 0, 'yaw': 0})
+        api(c, 'POST', '/api/mover-control/orient',
+            {'moverId': strobe_mover, 'deviceId': 'phone-2',
+             'roll': 5, 'pitch': 5, 'yaw': 5})
+        time.sleep(0.1)
+        engine = parent_server._artnet
+        uni = engine.get_universe(99)
+        shutter_dmx = lambda: uni.get_data()[20 + 4 - 1]  # addr 20 + offset 4
+        api(c, 'POST', '/api/mover-control/flash',
+            {'moverId': strobe_mover, 'deviceId': 'phone-2', 'on': True})
+        time.sleep(0.15)
+        on_val = shutter_dmx()
+        ok(50 <= on_val <= 200, f'Flash on → shutter in Strobe range ({on_val})')
+        api(c, 'POST', '/api/mover-control/flash',
+            {'moverId': strobe_mover, 'deviceId': 'phone-2', 'on': False})
+        time.sleep(0.15)
+        off_val = shutter_dmx()
+        ok(0 <= off_val <= 10,
+           f'Flash off → shutter back to Open range ({off_val}) — #509')
+        api(c, 'POST', '/api/mover-control/release',
+            {'moverId': strobe_mover, 'deviceId': 'phone-2'})
 
         # ── Wrong device ────────────────────────────────────────
         section('Wrong device rejection')

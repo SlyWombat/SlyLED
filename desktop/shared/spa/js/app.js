@@ -339,6 +339,22 @@ function _layCheckShowRunning(){
     }
   });
 }
+// Shared profile-cache loader — emuLoadStage() and loadLayout() both fire
+// on page load and previously double-fetched /api/dmx-profiles (#432).
+// The pending-callback queue coalesces concurrent callers into one request.
+window._profileCachePending=null;
+function _loadProfileCache(cb){
+  if(window._profileCache){if(cb)cb();return;}
+  if(window._profileCachePending){if(cb)window._profileCachePending.push(cb);return;}
+  var queue=window._profileCachePending=cb?[cb]:[];
+  ra('GET','/api/dmx-profiles',null,function(profs){
+    window._profileCache={};
+    (profs||[]).forEach(function(p){window._profileCache[p.id]=p;});
+    window._profileCachePending=null;
+    queue.forEach(function(fn){try{fn();}catch(e){}});
+  });
+}
+
 function loadLayout(){
   _layCheckShowRunning();
   ra('GET','/api/settings',null,function(s){
@@ -346,14 +362,10 @@ function loadLayout(){
     ra('GET','/api/stage',null,function(st){
       if(st)window._stageData=st;
       // Pre-load profile cache for beam widths
-      if(!window._profileCache){
-        window._profileCache={};
-        ra('GET','/api/dmx-profiles',null,function(profs){
-          (profs||[]).forEach(function(p){window._profileCache[p.id]=p;});
-          // Re-render after profiles loaded (beam cones need profile data)
-          if(_s3d.inited)s3dLoadChildren();
-        });
-      }
+      _loadProfileCache(function(){
+        // Re-render after profiles loaded (beam cones need profile data)
+        if(_s3d.inited)s3dLoadChildren();
+      });
       ra('GET','/api/layout',null,function(d){
         if(!d)return;ld=d;phW=d.canvasW||10000;phH=d.canvasH||5000;
         _fixtures=d.fixtures||[];

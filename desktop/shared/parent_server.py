@@ -82,7 +82,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.18"
+VERSION = "1.5.20"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -2336,19 +2336,43 @@ def api_camera_stage_map(fid):
     # Stack all points
     obj_all = np.vstack(obj_points)  # (N*4, 3)
     img_all = np.vstack(img_points)  # (N*4, 2)
-    # Estimate camera intrinsics from FOV
-    fov_deg = f.get("fovDeg", 60)
-    fov_rad = math.radians(fov_deg)
-    fx_est = (w / 2.0) / math.tan(fov_rad / 2.0)
-    fy_est = fx_est  # square pixels
-    cx_est = w / 2.0
-    cy_est = h / 2.0
-    K = np.array([
-        [fx_est, 0,      cx_est],
-        [0,      fy_est, cy_est],
-        [0,      0,      1     ],
-    ], dtype=np.float64)
+    # Prefer calibrated intrinsics from the camera node (saved by
+    # /api/cameras/<fid>/aruco/compute) over an FOV-derived estimate —
+    # the FOV value is nameplate-accurate at best and drives solvePnP
+    # towards implausible Z values when the fixture's real lens deviates
+    # (#331).
+    intrinsic_source = "fov-estimate"
     dist_coeffs = np.zeros(4, dtype=np.float64)
+    K = None
+    try:
+        import urllib.request as _ur_calib
+        _resp = _ur_calib.urlopen(
+            f"http://{ip}:5000/calibrate/intrinsic?cam={cam_idx}", timeout=3)
+        _cal = json.loads(_resp.read().decode("utf-8"))
+        if _cal.get("calibrated") and all(k in _cal for k in ("fx","fy","cx","cy")):
+            K = np.array([
+                [float(_cal["fx"]), 0, float(_cal["cx"])],
+                [0, float(_cal["fy"]), float(_cal["cy"])],
+                [0, 0, 1],
+            ], dtype=np.float64)
+            dc = _cal.get("distCoeffs") or []
+            if dc:
+                dist_coeffs = np.array(dc, dtype=np.float64).flatten()
+            intrinsic_source = "calibrated"
+    except Exception:
+        pass
+    if K is None:
+        fov_deg = f.get("fovDeg", 60)
+        fov_rad = math.radians(fov_deg)
+        fx_est = (w / 2.0) / math.tan(fov_rad / 2.0)
+        fy_est = fx_est  # square pixels
+        cx_est = w / 2.0
+        cy_est = h / 2.0
+        K = np.array([
+            [fx_est, 0,      cx_est],
+            [0,      fy_est, cy_est],
+            [0,      0,      1     ],
+        ], dtype=np.float64)
     # solvePnP
     success, rvec, tvec = cv2.solvePnP(obj_all, img_all, K, dist_coeffs,
                                         flags=cv2.SOLVEPNP_ITERATIVE)
@@ -2373,19 +2397,29 @@ def api_camera_stage_map(fid):
     camera_pos_layout = None
     if lp:
         camera_pos_layout = {"x": lp.get("x", 0), "y": lp.get("y", 0), "z": lp.get("z", 0)}
+    cam_pos_rounded = [round(float(cam_pos[0]), 1),
+                       round(float(cam_pos[1]), 1),
+                       round(float(cam_pos[2]), 1)]
     result = {
         "ok": True,
         "markersDetected": detected_count,
         "markersMatched": len(matched_ids),
         "matchedIds": matched_ids,
-        "cameraPosStage": [round(float(cam_pos[0]), 1),
-                           round(float(cam_pos[1]), 1),
-                           round(float(cam_pos[2]), 1)],
+        # Array form for new consumers, dict form for the SPA — the SPA's
+        # stage-map wizard reads `.cameraPosition` (was previously silently
+        # undefined, blanking the results table on every run — #331).
+        "cameraPosStage": cam_pos_rounded,
+        "cameraPosition": {"x": cam_pos_rounded[0],
+                           "y": cam_pos_rounded[1],
+                           "z": cam_pos_rounded[2]},
         "rmsError": round(float(err), 2),
         "method": "solvePnP",
+        "intrinsicSource": intrinsic_source,
         "homography": H_floor.tolist(),
-        "intrinsics": {"fx": round(fx_est, 1), "fy": round(fy_est, 1),
-                       "cx": round(cx_est, 1), "cy": round(cy_est, 1)},
+        "intrinsics": {"fx": round(float(K[0, 0]), 1),
+                       "fy": round(float(K[1, 1]), 1),
+                       "cx": round(float(K[0, 2]), 1),
+                       "cy": round(float(K[1, 2]), 1)},
     }
     if camera_pos_layout:
         result["cameraPos"] = camera_pos_layout
@@ -4121,7 +4155,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.18" from camera_server.py source text."""
+    """Extract VERSION = "1.5.20" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -10190,6 +10224,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
