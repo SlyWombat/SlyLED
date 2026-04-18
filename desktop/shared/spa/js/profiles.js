@@ -690,6 +690,7 @@ function showCommunityBrowser(){
   h+='<button class="btn" style="background:#1e293b;color:#94a3b8;font-size:.78em" onclick="_commPopular()">Popular</button>';
   h+='</div>';
   h+='<div id="comm-results" style="max-height:300px;overflow-y:auto"></div>';
+  h+='<div id="comm-status" style="margin-top:.4em;font-size:.82em;min-height:1.2em"></div>';
   h+='<div style="border-top:1px solid #1e293b;padding-top:.5em;margin-top:.5em">';
   h+='<div id="comm-stats" style="font-size:.75em;color:#64748b"></div></div>';
   document.getElementById('modal-title').textContent='Community Fixture Library';
@@ -738,18 +739,28 @@ function _commRenderList(profiles){
     h+='<td style="padding:.3em .5em;color:#94a3b8">'+escapeHtml(p.manufacturer||'')+'</td>';
     h+='<td style="text-align:center">'+p.channel_count+'</td>';
     h+='<td style="text-align:center;color:#64748b">'+(p.downloads||0)+'</td>';
-    h+='<td><button class="btn" style="font-size:.72em;padding:.2em .5em;background:#14532d;color:#86efac" onclick="_commDownload(\''+escapeHtml(p.slug)+'\')">Download</button></td></tr>';
+    h+='<td><button class="btn" data-slug="'+escapeHtml(p.slug)+'" style="font-size:.72em;padding:.2em .5em;background:#14532d;color:#86efac" onclick="_commDownload(\''+escapeHtml(p.slug)+'\')">Download</button></td></tr>';
   });
   el.innerHTML=h+'</table>';
 }
 function _commDownload(slug){
-  document.getElementById('hs').textContent='Downloading '+slug+'...';
+  var hs=document.getElementById('hs');if(hs)hs.textContent='Downloading '+slug+'...';
+  var cs=document.getElementById('comm-status');
+  if(cs)cs.innerHTML='<span style="color:#a78bfa">Downloading <b>'+escapeHtml(slug)+'</b>...</span>';
+  // Mark the row's button as in-flight so the user sees something change.
+  var rowBtn=document.querySelector('#comm-results button[data-slug="'+slug+'"]');
+  if(rowBtn){rowBtn.disabled=true;rowBtn.textContent='...';}
   ra('POST','/api/dmx-profiles/community/download',{slug:slug},function(r){
     if(r&&r.ok){
-      document.getElementById('hs').textContent='Downloaded and imported: '+slug;
+      if(hs)hs.textContent='Downloaded and imported: '+slug;
+      if(cs)cs.innerHTML='<span style="color:#86efac">✓ Imported <b>'+escapeHtml(slug)+'</b> into your local library.</span>';
+      if(rowBtn){rowBtn.textContent='Downloaded';rowBtn.style.background='#1e293b';rowBtn.style.color='#64748b';}
       if(typeof loadDmxProfiles==='function')loadDmxProfiles();
     }else{
-      document.getElementById('hs').textContent='Download failed: '+(r&&r.err||'unknown');
+      var err=(r&&(r.err||r.error))||'unknown';
+      if(hs)hs.textContent='Download failed: '+err;
+      if(cs)cs.innerHTML='<span style="color:#f87171">✗ Download failed: '+escapeHtml(err)+'</span>';
+      if(rowBtn){rowBtn.disabled=false;rowBtn.textContent='Download';}
     }
   });
 }
