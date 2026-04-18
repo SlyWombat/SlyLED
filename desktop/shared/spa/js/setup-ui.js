@@ -2,6 +2,46 @@
 function loadSetup(){
   document.getElementById('t-setup').innerHTML='<p style="color:#888">Loading fixtures...</p>';
   _renderSetup();
+  // #514 — periodic poll of the mover-control claim status so the Setup
+  // hardware table shows a green "ACTIVE" badge on every gyro puck that
+  // currently has an active mover claim. The span is stamped async so
+  // initial render stays fast.
+  if(!window._gyroLockPollTimer){
+    window._gyroLockPollTimer=setInterval(_gyroLockBadgeRefresh,1500);
+    _gyroLockBadgeRefresh();
+  }
+}
+
+function _gyroLockBadgeRefresh(){
+  if(document.getElementById('t-setup').style.display==='none')return;
+  // Map device IP → child id so we can resolve claim.deviceId="gyro-<ip>".
+  var ipToChild={};
+  (_setupChildren||[]).forEach(function(c){
+    if(c.type==='gyro'&&c.ip)ipToChild[c.ip]=c.id;
+  });
+  ra('GET','/api/mover-control/status',null,function(r){
+    var active={};
+    ((r&&r.claims)||[]).forEach(function(cl){
+      var did=cl.deviceId||'';
+      if(!did.startsWith('gyro-'))return;
+      var ip=did.slice(5);
+      var cid=ipToChild[ip];
+      if(cid!=null)active[cid]=cl;
+    });
+    (_setupChildren||[]).forEach(function(c){
+      if(c.type!=='gyro')return;
+      var span=document.getElementById('gyro-lock-'+c.id);
+      if(!span)return;
+      var cl=active[c.id];
+      if(cl&&cl.state==='streaming'){
+        span.innerHTML=' <span class="badge" style="background:#065f46;color:#bbf7d0" title="Streaming orientation to mover '+cl.moverId+'">ACTIVE</span>';
+      }else if(cl){
+        span.innerHTML=' <span class="badge" style="background:#1e3a5f;color:#93c5fd" title="Claimed, awaiting Start">ARMED</span>';
+      }else{
+        span.innerHTML='';
+      }
+    });
+  });
 }
 
 var _setupChildren=[];
@@ -98,7 +138,9 @@ function _renderSetup(){
           var rssi=c.rssi||0;
           var rssiHtml='';
           if(c.status===1&&rssi){var rssiCol=Math.abs(rssi)<=50?'#4c4':Math.abs(rssi)<=70?'#fa6':'#f66';rssiHtml=' <span style="color:'+rssiCol+';font-size:.75em" title="'+rssi+' dBm">'+_rssiIcon(rssi)+'</span>';}
-          var st=c.status===1?'<span class="badge bon">Online</span>'+rssiHtml:'<span class="badge boff">Offline</span>';
+          // #514 — inline lock-active indicator, populated async below.
+          var lockHtml=' <span id="gyro-lock-'+c.id+'"></span>';
+          var st=c.status===1?'<span class="badge bon">Online</span>'+rssiHtml+lockHtml:'<span class="badge boff">Offline</span>';
           var fwVer=c.fwVersion||'—';
           var fwHtml=escapeHtml(fwVer)+'<span id="fw-ind-'+c.id+'"></span>';
           // Name: show altName as primary if set, hostname as secondary (#464)
@@ -302,8 +344,8 @@ function showAddFixtureModal(){
     +'<div id="af-ofl-results" style="max-height:200px;overflow-y:auto;font-size:.8em"></div>'
     +'</div>'
     +'<label>Name</label><input id="af-name" placeholder="Moving Head 1" style="width:100%;margin-bottom:.4em">'
-    +'<div style="display:flex;gap:.5em"><div style="flex:1"><label>Universe</label><input id="af-uni" type="number" value="1" min="1" style="width:100%;margin-bottom:.4em"></div>'
-    +'<div style="flex:1"><label>Start Address</label><input id="af-addr" type="number" value="1" min="1" max="512" style="width:100%;margin-bottom:.4em"></div>'
+    +'<div style="display:flex;gap:.5em"><div style="flex:1"><label>Universe</label><input id="af-uni" type="number" value="1" min="1" style="width:100%;margin-bottom:.4em" onchange="_afAddrAutofill()"></div>'
+    +'<div style="flex:1"><label>Start Address</label><input id="af-addr" type="number" value="1" min="1" max="512" style="width:100%;margin-bottom:.4em" onchange="_afPreviewChannels()"></div>'
     +'<div style="flex:1"><label>Channels</label><input id="af-ch" type="number" value="3" min="1" max="512" style="width:100%;margin-bottom:.4em" onchange="_afPreviewChannels()"></div></div>'
     +'<label>Geometry</label><select id="af-geom" style="width:100%;margin-bottom:.4em"><option value="point">Point</option><option value="linear">Linear</option></select>'
     +'<label>Profile</label>'
@@ -396,7 +438,36 @@ function _toggleAddFixFields(){
         if(curVal)sel.value=curVal;
       });
     }
+    // #515 — smart defaults. Universe = last-used in this session, address
+    // = next free slot in that universe based on current fixtures.
+    var uniEl=document.getElementById('af-uni');
+    if(uniEl&&window._lastDmxUniverse)uniEl.value=window._lastDmxUniverse;
+    _afAddrAutofill();
   }
+}
+
+// #515 — compute next available address in the selected universe.
+function _afNextFreeAddr(uni){
+  var end=0;
+  (_fixtures||[]).forEach(function(f){
+    if(f.fixtureType!=='dmx')return;
+    if((f.dmxUniverse||1)!==uni)return;
+    var a=f.dmxStartAddr||1;
+    var n=f.dmxChannelCount||1;
+    var last=a+n-1;
+    if(last>end)end=last;
+  });
+  return end+1;
+}
+
+function _afAddrAutofill(){
+  var uniEl=document.getElementById('af-uni');
+  var addrEl=document.getElementById('af-addr');
+  if(!uniEl||!addrEl)return;
+  var uni=parseInt(uniEl.value)||1;
+  var next=_afNextFreeAddr(uni);
+  addrEl.value=next;
+  _afPreviewChannels();
 }
 function _afOflSearch(){
   var q=document.getElementById('af-ofl-q').value.trim();
@@ -428,24 +499,75 @@ function _afOflSearch(){
     el.innerHTML=h;
   });
 }
+// #515 — channel map preview. Adds an absolute Address column computed
+// from the current start address, highlights DMX-512 overflow, and
+// marks any address that clashes with an existing fixture in red.
+function _afOccupiedAddrSet(){
+  var uniEl=document.getElementById('af-uni');
+  var uni=uniEl?(parseInt(uniEl.value)||1):1;
+  var set={};
+  (_fixtures||[]).forEach(function(f){
+    if(f.fixtureType!=='dmx')return;
+    if((f.dmxUniverse||1)!==uni)return;
+    var a=f.dmxStartAddr||1;
+    var n=f.dmxChannelCount||1;
+    for(var i=0;i<n;i++)set[a+i]=f.name||('Fixture '+f.id);
+  });
+  return set;
+}
+
 function _afPreviewChannels(){
   var el=document.getElementById('af-ch-preview');if(!el)return;
   var profId=document.getElementById('af-prof').value;
+  var addrEl=document.getElementById('af-addr');
+  var startAddr=addrEl?(parseInt(addrEl.value)||1):1;
+  var occupied=_afOccupiedAddrSet();
+  var conflict=false, maxAddr=0;
+  function _row(chIdx,offset,name,type,bits){
+    var addr=startAddr+offset;
+    if(addr>maxAddr)maxAddr=addr;
+    var clash=(occupied[addr]!==undefined);
+    if(clash)conflict=true;
+    var over=addr>512;
+    if(over)conflict=true;
+    var typeCol={'red':'#f66','green':'#6f6','blue':'#66f','white':'#eee','dimmer':'#fa6','pan':'#6ef','tilt':'#c8f'};
+    var col=typeCol[type]||'#94a3b8';
+    var addrCell=clash
+      ? '<td style="color:#f87171;font-weight:bold" title="Conflicts with '+escapeHtml(occupied[addr]||'')+'">'+addr+' ✕</td>'
+      : (over?'<td style="color:#f87171" title="exceeds 512">'+addr+' ✕</td>'
+             :'<td style="color:#e2e8f0">'+addr+'</td>');
+    return '<tr style="border-bottom:1px solid #1e293b"><td>'+chIdx+'</td><td>+'+offset+'</td><td>'+escapeHtml(name)+'</td><td style="color:'+col+'">'+type+'</td>'+(bits!==undefined?'<td>'+bits+'</td>':'')+addrCell+'</tr>';
+  }
+  function _header(showBits){
+    return '<table style="width:100%;border-collapse:collapse;font-size:.75em"><tr style="color:#64748b;text-align:left">'
+      +'<th>#</th><th>Off</th><th>Name</th><th>Type</th>'
+      +(showBits?'<th>Bits</th>':'')
+      +'<th>Addr</th></tr>';
+  }
+  function _finalize(h){
+    var chEl=document.getElementById('af-ch');
+    var chCount=chEl?(parseInt(chEl.value)||0):0;
+    var endAddr=startAddr+chCount-1;
+    var summary='<div style="font-size:.72em;margin-top:.2em;color:'+(conflict?'#f87171':'#64748b')+'">'
+      +'Range '+startAddr+'–'+endAddr+' ('+chCount+' channels)'
+      +(conflict?' — conflict / overflow':'')
+      +'</div>';
+    el.innerHTML=h+'</table>'+summary;
+  }
   if(!profId){
     var ch=parseInt(document.getElementById('af-ch').value)||3;
-    var h='<table style="width:100%;border-collapse:collapse"><tr style="color:#64748b"><th style="text-align:left">Ch</th><th style="text-align:left">Name</th><th>Type</th></tr>';
-    for(var i=0;i<ch;i++)h+='<tr style="border-bottom:1px solid #1e293b"><td>'+(i+1)+'</td><td>Channel '+(i+1)+'</td><td style="color:#64748b">dimmer</td></tr>';
-    el.innerHTML=h+'</table>';
+    var h=_header(false);
+    for(var i=0;i<ch;i++)h+=_row(i+1,i,'Channel '+(i+1),'dimmer');
+    _finalize(h);
     return;
   }
   ra('GET','/api/dmx-profiles/'+profId,null,function(p){
     if(!p||!p.channels){el.innerHTML='';return;}
-    var h='<table style="width:100%;border-collapse:collapse"><tr style="color:#64748b"><th style="text-align:left">Ch</th><th style="text-align:left">Name</th><th>Type</th><th>Bits</th></tr>';
+    var h=_header(true);
     p.channels.forEach(function(c,i){
-      var typeCol={'red':'#f66','green':'#6f6','blue':'#66f','white':'#eee','dimmer':'#fa6','pan':'#6ef','tilt':'#c8f'};
-      h+='<tr style="border-bottom:1px solid #1e293b"><td>'+(c.offset+1)+'</td><td>'+escapeHtml(c.name)+'</td><td style="color:'+(typeCol[c.type]||'#94a3b8')+'">'+c.type+'</td><td>'+(c.bits||8)+'</td></tr>';
+      h+=_row(i+1,c.offset||0,c.name||('Ch '+(i+1)),c.type||'dimmer',c.bits||8);
     });
-    el.innerHTML=h+'</table>';
+    _finalize(h);
   });
 }
 function _afBrowseAll(){
@@ -577,6 +699,21 @@ function _submitAddFixture(){
     var uni=parseInt(document.getElementById('af-uni').value)||1;
     var addr=parseInt(document.getElementById('af-addr').value)||1;
     var ch=parseInt(document.getElementById('af-ch').value)||3;
+    // #515 — remember last-used universe for this session.
+    window._lastDmxUniverse=uni;
+    // Warn if patch overflows or clashes before POST (overrideable).
+    if(addr+ch-1>512){
+      if(!confirm('This fixture occupies addresses '+addr+'–'+(addr+ch-1)+' which exceeds the 512-slot universe. Add anyway?'))return;
+    }
+    var occ=_afOccupiedAddrSet();
+    var clashNames=[];
+    for(var _k=0;_k<ch;_k++){
+      var _name=occ[addr+_k];
+      if(_name&&clashNames.indexOf(_name)<0)clashNames.push(_name);
+    }
+    if(clashNames.length){
+      if(!confirm('Address range '+addr+'–'+(addr+ch-1)+' overlaps with: '+clashNames.join(', ')+'. Add anyway?'))return;
+    }
     var geom=document.getElementById('af-geom').value;
     var prof=document.getElementById('af-prof').value;
     if(addr<1||addr>512){document.getElementById('hs').textContent='Address must be 1–512';return;}

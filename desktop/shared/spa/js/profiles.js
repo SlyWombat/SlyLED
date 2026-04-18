@@ -238,9 +238,46 @@ function _peAddCh(){
   chs.push({offset:off,name:'Ch '+(chs.length+1),type:'dimmer',capabilities:[{range:[0,255],type:'Intensity',label:'0-100%'}]});
   _peRenderChs();
 }
-function _peDelCh(i){window._peChannels.splice(i,1);_peRecalcOffsets();_peRenderChs();}
-function _peRecalcOffsets(){
-  var off=0;(window._peChannels||[]).forEach(function(ch){ch.offset=off;off+=ch.bits===16?2:1;});
+function _peDelCh(i){
+  window._peChannels.splice(i,1);
+  // #435 — renumber safely: only sequentialise offsets when the user
+  // is already on a contiguous layout. Custom gaps (e.g. offsets 0, 2,
+  // 5, 8 for fixtures with reserved slots) must not be blown away by
+  // a single-channel delete.
+  _peRecalcOffsets(true /* afterDelete */);
+  _peRenderChs();
+}
+
+function _peOffsetsAreContiguous(){
+  var chs=window._peChannels||[];
+  if(!chs.length)return true;
+  var expected=0;
+  for(var i=0;i<chs.length;i++){
+    var ch=chs[i];
+    if((ch.offset||0)!==expected)return false;
+    expected+=ch.bits===16?2:1;
+  }
+  return true;
+}
+
+function _peRecalcOffsets(afterDelete){
+  // #435 — preserve custom non-sequential offsets unless the layout was
+  // already contiguous. Triggers:
+  //   - bits change (8↔16): always renumber, because the new width
+  //     shifts every channel after this one by ±1 slot.
+  //   - channel delete: renumber only when the profile was contiguous;
+  //     otherwise ask the operator first so a reserved-slot layout
+  //     survives accidental deletes.
+  var chs=window._peChannels||[];
+  if(afterDelete&&!_peOffsetsAreContiguous()){
+    if(!confirm('This profile has non-sequential channel offsets. '
+               +'Renumbering would destroy your custom layout.\n\n'
+               +'OK = renumber (offsets become 0, 1, 2, …)\n'
+               +'Cancel = keep your custom offsets'))
+      return;
+  }
+  var off=0;
+  chs.forEach(function(ch){ch.offset=off;off+=ch.bits===16?2:1;});
   _peRenderChs();
 }
 function _peEditCaps(chIdx){

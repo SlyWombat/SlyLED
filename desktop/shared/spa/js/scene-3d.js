@@ -675,17 +675,35 @@ function _updateRotationFromGizmo(){
 }
 
 function _s3dHitGroup(e){
-  // Raycast into all group children, return the parent group (fixture or object)
+  // Raycast into all group children, return the parent group (fixture or object).
+  //
+  // #528 — beam cones, rest arrows, and aim-point halos are child meshes of a
+  // fixture group but they extend up to 3 m AWAY from the fixture. A dbl-click
+  // on fixture B could hit fixture A's cone first, then walk up to fixture A's
+  // group — always opening whichever fixture's cone happened to be in front.
+  // Exclude those presentation meshes from the hit-test list so only the node
+  // sphere (and its invisible hit helper) counts as "that fixture was clicked".
+  // Aim-point dragging is handled separately in s3dClick via userData.isAimPoint
+  // so excluding it here doesn't break drag.
   var rect=_s3d.renderer.domElement.getBoundingClientRect();
   _s3d.mouse.x=((e.clientX-rect.left)/rect.width)*2-1;
   _s3d.mouse.y=-((e.clientY-rect.top)/rect.height)*2+1;
   _s3d.raycaster.setFromCamera(_s3d.mouse,_s3d.camera);
   var allMeshes=[];
-  _s3d.nodes.forEach(function(grp){grp.traverse(function(obj){if(obj.isMesh)allMeshes.push(obj);});});
+  _s3d.nodes.forEach(function(grp){
+    grp.traverse(function(obj){
+      if(!obj.isMesh)return;
+      if(obj.userData.beamCone)return;
+      if(obj.userData.isAimPoint)return;
+      allMeshes.push(obj);
+    });
+  });
   var hits=_s3d.raycaster.intersectObjects(allMeshes);
   if(hits.length>0){
     var obj=hits[0].object;
-    while(obj.parent&&!obj.userData.childId&&!obj.userData.stageObj)obj=obj.parent;
+    // Walk up until we hit a group marked with childId or stageObj. Use explicit
+    // !== undefined so fixture id 0 (valid) isn't treated as falsy.
+    while(obj.parent&&obj.userData.childId===undefined&&!obj.userData.stageObj)obj=obj.parent;
     if(obj.userData.childId!==undefined||obj.userData.stageObj)return obj;
   }
   return null;

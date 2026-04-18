@@ -29,63 +29,75 @@ function loadDash(){
     refreshRunnerStatus();
     dashRunnerTimer=setInterval(refreshRunnerStatus,1000);
     if(!startupDone)_pollStartup();
-    // Gyro live cards — poll if any gyro fixtures exist
-    ra('GET','/api/fixtures',null,function(fxs){
-      if(!fxs)return;
-      var gyroFxs=fxs.filter(function(f){return f.fixtureType==='gyro';});
-      if(!gyroFxs.length)return;
-      ra('GET','/api/children',null,function(children){
-        var childIpById={};
-        (children||[]).forEach(function(c){childIpById[c.id]=c.ip;});
-        _renderGyroDash(gyroFxs);
-        if(!window._gyroTimer)window._gyroTimer=setInterval(function(){_refreshGyroDash(gyroFxs,childIpById);},500);
-      });
-    });
+    // Remote Controllers dashboard card (#492) — lists every entry in
+    // /api/remotes/live (both gyro pucks auto-registered via UDP and
+    // phones auto-registered via /api/mover-control/orient). Renders an
+    // empty placeholder when no remotes exist so the operator knows
+    // where to look after installing the Android APK.
+    _renderRemotesDash();
+    if(!window._remotesTimer){
+      window._remotesTimer=setInterval(_refreshRemotesDash,1000);
+    }
   }).catch(function(){
     document.getElementById('dash-content').innerHTML='<p style="color:#f66">Failed to load dashboard.</p>';
   });
 }
 
-function _renderGyroDash(gyroFxs){
+function _renderRemotesDash(){
   var el=document.getElementById('dash-content');if(!el)return;
-  var h='<div id="gyro-dash-cards" style="margin-top:.8em">';
-  h+='<div style="font-size:.85em;font-weight:bold;color:#94a3b8;margin-bottom:.4em">Gyro Controllers</div>';
-  h+='<div style="display:flex;flex-wrap:wrap;gap:.6em">';
-  gyroFxs.forEach(function(f){
-    h+='<div id="gyro-card-'+f.id+'" style="background:#0f172a;border:1px solid #334155;border-radius:6px;padding:.5em .8em;min-width:200px">'
-      +'<div style="font-weight:bold;color:#e2e8f0;font-size:.88em">'+escapeHtml(f.name)+'</div>'
-      +'<div id="gyro-card-data-'+f.id+'" style="color:#64748b;font-size:.78em">Waiting for data...</div>'
-      +'<div style="margin-top:.4em;display:flex;gap:.3em">'
-      +'<button class="btn" onclick="_gyroEnable('+(f.gyroChildId||0)+',true)" style="font-size:.72em;padding:.15em .4em;background:#14532d;color:#86efac">Enable</button>'
-      +'<button class="btn" onclick="_gyroEnable('+(f.gyroChildId||0)+',false)" style="font-size:.72em;padding:.15em .4em;background:#1e293b;color:#94a3b8">Disable</button>'
-      +'<button class="btn" onclick="_gyroRecal('+(f.gyroChildId||0)+')" style="font-size:.72em;padding:.15em .4em;background:#1e3a5f;color:#93c5fd">Zero</button>'
-      +'</div></div>';
-  });
+  if(document.getElementById('remotes-dash-cards'))return;  // already rendered
+  var h='<div id="remotes-dash-cards" style="margin-top:.8em">';
+  h+='<div style="font-size:.85em;font-weight:bold;color:#94a3b8;margin-bottom:.4em">Remote Controllers</div>';
+  h+='<div id="remotes-dash-list" style="display:flex;flex-wrap:wrap;gap:.6em;min-height:2em">';
+  h+='<div id="remotes-dash-empty" style="color:#475569;font-size:.78em;font-style:italic">None connected — start the gyro puck or open Controller mode on the Android app.</div>';
   h+='</div></div>';
   el.innerHTML+=h;
+  _refreshRemotesDash();
 }
 
-function _refreshGyroDash(gyroFxs,childIpById){
-  ra('GET','/api/gyro/state',null,function(states){
-    if(!states)return;
-    var byIp={};states.forEach(function(s){byIp[s.ip]=s;});
-    gyroFxs.forEach(function(f){
-      var el=document.getElementById('gyro-card-data-'+f.id);
-      if(!el)return;
-      var ip=childIpById[f.gyroChildId];
-      var st=ip?byIp[ip]:null;
-      if(!st||st.stale){
-        el.innerHTML='<span style="color:#64748b">STALE -- no data</span>';return;
-      }
-      var modeNames=['FULL','PAN','TILT','INV'];
-      var liveCol=st.streaming?'#22c55e':'#94a3b8';
-      el.innerHTML='<span style="color:'+liveCol+';font-size:.72em;font-weight:bold">'+(st.streaming?'LIVE':'IDLE')+'</span>'
-        +' <span style="color:#94a3b8">R:'+st.roll.toFixed(1)+'\u00b0</span>'
-        +' <span style="color:#94a3b8">P:'+st.pitch.toFixed(1)+'\u00b0</span>'
-        +' <span style="color:#94a3b8">Y:'+st.yaw.toFixed(1)+'\u00b0</span>'
-        +' <span style="color:#475569;font-size:.78em">'+st.fps+'fps</span>'
-        +(st.mode!==undefined?' <span style="color:#7c3aed;font-size:.72em">'+modeNames[st.mode||0]+'</span>':'');
+function _remoteDashColor(r){
+  // #476 three-tier state palette — grey lost, amber soft-stale, green live.
+  if(r.hardStale||r.staleReason)return{dot:'#6b7280',border:'#475569',lbl:'LOST'};
+  if(r.softStale)return{dot:'#f59e0b',border:'#92400e',lbl:'RECONNECTING'};
+  var age=r.lastDataAge;
+  if(r.connectionState==='streaming'){
+    if(age==null||age<2)return{dot:'#22c55e',border:'#065f46',lbl:'LIVE'};
+    if(age<5)return{dot:'#f59e0b',border:'#92400e',lbl:'SLOW'};
+    return{dot:'#6b7280',border:'#475569',lbl:'DEAD'};
+  }
+  if(r.connectionState==='armed')return{dot:'#3b82f6',border:'#1e3a5f',lbl:'ARMED'};
+  return{dot:'#64748b',border:'#334155',lbl:'IDLE'};
+}
+
+function _refreshRemotesDash(){
+  var list=document.getElementById('remotes-dash-list');
+  if(!list)return;
+  ra('GET','/api/remotes/live',null,function(d){
+    if(!list.parentNode)return;  // dashboard torn down
+    var remotes=(d&&d.remotes)||[];
+    var empty=document.getElementById('remotes-dash-empty');
+    if(empty)empty.style.display=remotes.length?'none':'block';
+    // Rebuild cards — cheap since the list is small (usually 1-3 entries).
+    var h='';
+    if(empty)h+=empty.outerHTML;
+    remotes.forEach(function(r){
+      var c=_remoteDashColor(r);
+      var kindLbl=r.kind==='phone'?'Phone':'Gyro puck';
+      var calLbl=r.calibrated?'<span style="color:#22c55e">calibrated</span>':'<span style="color:#64748b">uncalibrated</span>';
+      var age=r.lastDataAge!=null?(r.lastDataAge.toFixed(1)+'s'):'-';
+      h+='<div style="background:#0f172a;border:1px solid '+c.border+';border-radius:6px;padding:.5em .8em;min-width:220px">'
+        +'<div style="display:flex;align-items:center;gap:.4em;margin-bottom:.2em">'
+        +'<span style="color:'+c.dot+';font-size:1.1em">\u25cf</span>'
+        +'<span style="font-weight:bold;color:#e2e8f0;font-size:.82em;flex:1">'+escapeHtml(r.name||('Remote '+r.id))+'</span>'
+        +'<span style="color:'+c.dot+';font-size:.7em;font-weight:bold;letter-spacing:.05em">'+c.lbl+'</span>'
+        +'</div>'
+        +'<div style="color:#64748b;font-size:.72em;font-family:monospace">'
+        +kindLbl+' \u00b7 '+calLbl+' \u00b7 last '+age
+        +'</div>'
+        +(r.deviceId?'<div style="color:#475569;font-size:.68em;font-family:monospace;margin-top:.15em">'+escapeHtml(r.deviceId)+'</div>':'')
+        +'</div>';
     });
+    list.innerHTML=h;
   });
 }
 

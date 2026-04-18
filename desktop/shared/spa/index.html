@@ -93,7 +93,6 @@
     <button class='btn' id='btn-view-front' onclick='setView("front")' title='Front view (orthographic)' style='width:auto;height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0;background:#14532d;color:#86efac'>Front</button>
     <button class='btn' id='btn-view-top' onclick='setView("top")' title='Top view (bird-eye)' style='width:auto;height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0'>Top</button>
     <button class='btn' id='btn-view-side' onclick='setView("side")' title='Side view' style='width:auto;height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0'>Side</button>
-    <button class='btn' id='btn-view-3d' onclick='setView("3d")' title='3D perspective (orbit)' style='width:auto;height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:bold;letter-spacing:0'>3D</button>
     <div style='position:relative;display:inline-block'>
       <button class='btn' id='btn-view-menu' onclick='_toggleViewMenu()' title='View visibility options' style='height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;font-size:10px;gap:3px'>
         <svg width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z'/><circle cx='12' cy='12' r='3'/></svg>View <span style='font-size:8px'>&#x25BC;</span>
@@ -138,7 +137,6 @@
         <svg width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z'/><path d='m3.3 7 8.7 5 8.7-5'/><path d='M12 22V12'/></svg>Scene <span style='font-size:8px'>&#x25BC;</span>
       </button>
       <div id='scene-dropdown' style='display:none;position:absolute;top:32px;left:0;background:#1a1a24;border:1px solid #2a2a3a;border-radius:6px;padding:4px 0;min-width:190px;z-index:100;box-shadow:0 6px 20px rgba(0,0,0,.5)'>
-        <div class='ali' onclick='_togglePointCloud();_toggleSceneMenu()'>Toggle Point Cloud</div>
         <div class='ali' onclick='_envScan();_toggleSceneMenu()'>Scan Environment</div>
         <div class='ali' onclick='_layScan();_toggleSceneMenu()'>Detect Objects (Camera)</div>
       </div>

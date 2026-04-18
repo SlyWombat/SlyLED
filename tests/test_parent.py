@@ -1483,11 +1483,12 @@ def run():
         ok('SPA toolbar: front view tooltip', "title='Front view (orthographic)'" in spa)
         ok('SPA toolbar: top view tooltip', "title='Top view (bird-eye)'" in spa)
         ok('SPA toolbar: side view tooltip', "title='Side view'" in spa)
-        ok('SPA toolbar: 3d view tooltip', "title='3D perspective (orbit)'" in spa)
+        # #530 — 3D view is permanent (always on); the standalone 3D button
+        # was removed. Only Front/Top/Side orthographic buttons remain.
+        ok('SPA toolbar: no 3d view button', 'btn-view-3d' not in spa)
         ok('SPA toolbar: align dropdown has auto-arrange', 'Auto-Arrange DMX' in spa)
         ok('SPA toolbar: view menu', 'btn-view-menu' in spa)
-        # 2D/3D toggle shows text
-        ok('SPA view buttons have labels', '>Front<' in spa and '>Top<' in spa and '>Side<' in spa and '>3D<' in spa)
+        ok('SPA view buttons have labels', '>Front<' in spa and '>Top<' in spa and '>Side<' in spa)
 
         r = c.get('/favicon.ico')
         ok('GET /favicon.ico → 404', r.status_code == 404)
@@ -1973,6 +1974,17 @@ def run():
 
         r = c.get('/api/actions')
         ok('Reset cleared actions', len(r.get_json()) == 0)
+
+        # #531 — preset show loader must be idempotent. Loading the
+        # same theme twice produces the same action count (no clones).
+        # Add a fixture so the generator has something to target.
+        c.post('/api/fixtures', json={'name':'ld1','fixtureType':'led','type':'point','childId':-1})
+        c.post('/api/show/preset', json={'id':'rainbow-up'})
+        n1 = len(c.get('/api/actions').get_json())
+        c.post('/api/show/preset', json={'id':'rainbow-up'})
+        n2 = len(c.get('/api/actions').get_json())
+        ok('#531: preset reload does not duplicate actions', n1 == n2,
+           f'first={n1} second={n2}')
 
     # ── Print results ───────────────────────────────────────────────
     passed = sum(1 for _, v, _ in results if v)

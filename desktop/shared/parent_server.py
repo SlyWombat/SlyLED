@@ -81,7 +81,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.10"
+VERSION = "1.5.12"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -4074,7 +4074,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.10" from camera_server.py source text."""
+    """Extract VERSION = "1.5.12" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -8530,17 +8530,41 @@ def _install_preset_show(preset_id):
         if obj_count:
             _save("objects", _objects)
 
-        # Create action records and build id lookup
-        # action_ref_map: maps python id() of the action_info dict -> assigned action id
+        # Create action records and build id lookup (#531 — dedupe by
+        # (presetId, name, type) so re-loading a preset doesn't clone the
+        # same action into the library. Preset-generated actions are
+        # tagged with ``presetSource`` so they're distinguishable from
+        # user-created entries and only previously-generated presets are
+        # considered match candidates — an operator's manually-created
+        # action with the same name is never overwritten).
         action_ref_map = {}
         action_count = 0
+        existing_preset_by_key = {}
+        for a in _actions:
+            src = a.get("presetSource")
+            if not src:
+                continue
+            key = (src, a.get("name"), a.get("type"))
+            existing_preset_by_key[key] = a
+
         for act_info in show.get("base_actions", []) + show.get("mover_actions", []):
             act_data = act_info.get("action", act_info) if isinstance(act_info, dict) and "action" in act_info else act_info
-            act = {"id": _nxt_a, **act_data}
-            # Link patrol objects to Track actions by ID
+            key = (preset_id, act_data.get("name"), act_data.get("type"))
+            existing = existing_preset_by_key.get(key)
+            if existing is not None:
+                # Update in place — a preset redefinition is allowed to
+                # bump parameters without duplicating the record.
+                existing.update(act_data)
+                existing["presetSource"] = preset_id
+                if existing.get("type") == 18 and patrol_obj_ids:
+                    existing["trackObjectIds"] = patrol_obj_ids
+                action_ref_map[id(act_info)] = existing["id"]
+                continue
+            act = {"id": _nxt_a, **act_data, "presetSource": preset_id}
             if act.get("type") == 18 and patrol_obj_ids:
                 act["trackObjectIds"] = patrol_obj_ids
             _actions.append(act)
+            existing_preset_by_key[key] = act
             action_ref_map[id(act_info)] = _nxt_a
             action_count += 1
             _nxt_a += 1
@@ -9929,6 +9953,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
