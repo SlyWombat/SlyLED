@@ -2809,6 +2809,18 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
     cam_ip = cam.get("cameraIp", "")  # #342
     cam_idx = cam.get("cameraIdx", 0)  # #342
 
+    # #496 — log which stage geometry source we're calibrating against
+    # so the operator (and later the wizard UI) can tell "scanned
+    # floor at z=38mm" from "assumed flat floor at z=0".
+    geometry = _get_stage_geometry()
+    job["geometrySource"] = geometry.get("source")
+    floor = geometry.get("floor") or {}
+    if "z" in floor:
+        job["floorZ"] = floor["z"]
+    log.info("MOVER-CAL %d: geometry source=%s floor_z=%s walls=%d",
+             fid, geometry.get("source"), floor.get("z"),
+             len(geometry.get("walls") or []))
+
     # Phase 1: Discovery
     job["phase"] = "discovery"
     job["status"] = "running"
@@ -3117,6 +3129,8 @@ def api_mover_cal_status(fid):
         model=job.get("model"),
         verification=job.get("verification"),
         warmStart=job.get("warmStart"),
+        geometrySource=job.get("geometrySource"),
+        floorZ=job.get("floorZ"),
         calibrationLocked=bool(_fixture_is_calibrating(fid)),
     )
 
@@ -3316,6 +3330,63 @@ from space_mapper import SpaceScan
 _space_scan = SpaceScan()
 _point_cloud = _load("pointcloud", None)
 
+# Analyzed surfaces cache (#496) — computed lazily from _point_cloud.
+_stage_surfaces_cache = {"key": None, "value": None}
+
+
+def _get_stage_geometry():
+    """Return a dict of structural surfaces for calibration (#496).
+
+    Priority chain:
+      1. Point cloud — run `surface_analyzer.analyze_surfaces` on the
+         latest scan. Produces floor Z (not assumed 0), wall normals,
+         obstacle clusters. Cached until the point cloud changes.
+      2. Layout box — synthetic floor at Z=0 + 4 walls from stage w/d/h.
+
+    Consumers (ray_surface_intersect, target selection) accept either
+    form so the fallback is safe.
+    """
+    global _stage_surfaces_cache
+    pc = _point_cloud
+    if pc and pc.get("points"):
+        # Cache key covers point-count plus the last-known bbox so re-scans
+        # invalidate naturally. Use a stable tuple of sizes, not the full
+        # point list (cheap + catches common edits).
+        key = (
+            len(pc.get("points") or []),
+            pc.get("stageW"), pc.get("stageH"), pc.get("stageD"),
+        )
+        if _stage_surfaces_cache["key"] == key and _stage_surfaces_cache["value"] is not None:
+            return _stage_surfaces_cache["value"]
+        try:
+            from surface_analyzer import analyze_surfaces
+            surfaces = analyze_surfaces(pc["points"]) or {}
+            surfaces["source"] = "pointcloud"
+            _stage_surfaces_cache = {"key": key, "value": surfaces}
+            return surfaces
+        except Exception as e:
+            log.warning("surface_analyzer.analyze_surfaces failed: %s", e)
+
+    # Fallback — synthesize a rectangular stage from the configured box.
+    sw = int(_stage.get("w", 10) * 1000)
+    sd = int(_stage.get("d", 10) * 1000)
+    sh = int(_stage.get("h", 5) * 1000)
+    synthetic = {
+        "floor": {"z": 0, "extent": {"xMin": 0, "xMax": sw,
+                                       "yMin": 0, "yMax": sd}},
+        "walls": [
+            {"normal": [0, 1, 0], "d": 0,       "label": "back"},
+            {"normal": [0, -1, 0], "d": sd,     "label": "front"},
+            {"normal": [1, 0, 0], "d": 0,       "label": "stage-left"},
+            {"normal": [-1, 0, 0], "d": sw,     "label": "stage-right"},
+        ],
+        "obstacles": [],
+        "stage": {"w": sw, "d": sd, "h": sh},
+        "source": "layout-box",
+    }
+    return synthetic
+
+
 @app.post("/api/space/scan")
 def api_space_scan():
     """Start an async environment scan using all positioned camera sensors."""
@@ -3338,12 +3409,14 @@ def api_space_scan_status():
     """Poll environment scan progress."""
     st = _space_scan.status
     if not st["running"] and st.get("result"):
-        global _point_cloud
+        global _point_cloud, _stage_surfaces_cache
         _point_cloud = st["result"]
         _point_cloud["stageW"] = int(_stage.get("w", 3) * 1000)
         _point_cloud["stageH"] = int(_stage.get("h", 2) * 1000)
         _point_cloud["stageD"] = int(_stage.get("d", 1.5) * 1000)
         _save("pointcloud", _point_cloud)
+        # #496 — new cloud invalidates analyzed surfaces cache.
+        _stage_surfaces_cache = {"key": None, "value": None}
     return jsonify(running=st["running"], progress=st["progress"],
                    message=st["message"],
                    totalPoints=st["result"]["totalPoints"] if st.get("result") else 0)
