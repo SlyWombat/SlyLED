@@ -63,8 +63,11 @@ function editFixture(id){
     h+='<label>Universe</label><input id="fx-uni" type="number" value="'+(f.dmxUniverse||1)+'" min="1" style="width:100%;margin-bottom:.4em">';
     h+='<label>Start Address (1–512)</label><input id="fx-addr" type="number" value="'+(f.dmxStartAddr||1)+'" min="1" max="512" style="width:100%;margin-bottom:.4em">';
     h+='<label>Channel Count</label><input id="fx-ch" type="number" value="'+(f.dmxChannelCount||3)+'" min="1" style="width:100%;margin-bottom:.4em">';
-    h+='<label>Profile ID <span style="color:#64748b;font-size:.75em">(optional)</span></label>';
-    h+='<input id="fx-prof" value="'+escapeHtml(f.dmxProfileId||'')+'" style="width:100%">';
+    h+='<label>Profile <span style="color:#64748b;font-size:.75em">(optional)</span></label>';
+    h+='<select id="fx-prof" data-current="'+escapeHtml(f.dmxProfileId||'')+'" onchange="_editFxProfileChange()" style="width:100%">';
+    h+='<option value="">-- None (generic channels) --</option>';
+    if(f.dmxProfileId)h+='<option value="'+escapeHtml(f.dmxProfileId)+'" selected>'+escapeHtml(f.dmxProfileId)+' (loading\u2026)</option>';
+    h+='</select>';
     h+='<div style="margin-top:.8em;border-top:1px solid #1e293b;padding-top:.6em">';
     h+='<div style="display:flex;justify-content:space-between;align-items:center">';
     h+='<span style="font-weight:bold;font-size:.85em">Test Channels</span>';
@@ -130,6 +133,43 @@ function editFixture(id){
   document.getElementById('modal-title').textContent='Edit Fixture: '+f.name;
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
+  if(ft==='dmx')_editFxLoadProfiles();
+}
+
+// Populate the profile dropdown on the edit modal from the local library,
+// preserving the fixture's current selection.
+function _editFxLoadProfiles(){
+  var sel=document.getElementById('fx-prof');if(!sel)return;
+  var cur=sel.getAttribute('data-current')||'';
+  ra('GET','/api/dmx-profiles',null,function(profiles){
+    if(!profiles||!sel)return;
+    sel.innerHTML='<option value="">-- None (generic channels) --</option>';
+    var matched=false;var curLc=(cur||'').toLowerCase();
+    profiles.forEach(function(p){
+      var o=document.createElement('option');o.value=p.id;
+      o.textContent=p.name+' ('+p.channelCount+'ch)';
+      if(!matched&&p.id.toLowerCase()===curLc){o.selected=true;matched=true;}
+      sel.appendChild(o);
+    });
+    if(cur&&!matched){
+      // Referenced profile no longer exists locally — preserve the id so
+      // Save doesn't silently clear it. Flag it visually.
+      var o=document.createElement('option');o.value=cur;o.textContent=cur+' (missing)';o.selected=true;
+      sel.appendChild(o);
+    }
+  });
+}
+
+// When the operator picks a different profile, update the channel count
+// so the address layout matches — mirrors the Add Fixture behaviour.
+function _editFxProfileChange(){
+  var sel=document.getElementById('fx-prof');if(!sel)return;
+  var pid=sel.value;if(!pid)return;
+  ra('GET','/api/dmx-profiles/'+encodeURIComponent(pid),null,function(p){
+    if(!p||!p.channels)return;
+    var chEl=document.getElementById('fx-ch');
+    if(chEl)chEl.value=p.channels.length;
+  });
 }
 
 // ── Fixture orientation test ──────────────────────────────────────────
