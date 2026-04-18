@@ -2752,8 +2752,9 @@ def _get_bridge_ip():
     return None
 
 
-def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
-    """Background thread: discovery → mapping → save grid."""
+def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
+                      warmup=False, warmup_seconds=30.0):
+    """Background thread: optional warmup → discovery → mapping → save grid."""
     job = _mover_cal_jobs[str(fid)]
 
     def _cal_blackout():
@@ -2776,6 +2777,29 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
     # (show bake, mover-follow, dmx-test, profile defaults) will skip this
     # fixture until we clear the flag in the finally-style cleanup below.
     _set_calibrating(fid, True)
+
+    # #513 — optional warmup sweep before any measurement. Motors, belts,
+    # and LED modules drift thermally; running the fixture through its
+    # range for ~30 s stabilises pan/tilt position before samples are
+    # captured.
+    if warmup:
+        job["phase"] = "warmup"
+        job["progress"] = 2
+        job["message"] = "Warming up fixture (thermal + mechanical settle)"
+        try:
+            def _warmup_progress(frac):
+                # Warmup occupies the 2-8% progress band so the
+                # downstream phases still map to their legacy ranges.
+                job["progress"] = int(2 + frac * 6)
+                job["message"] = f"Warming up fixture ({int(frac * 100)}%)"
+            _mcal.warmup_sweep(
+                bridge_ip, f.get("dmxStartAddr", 1), color=(0, 0, 0),
+                duration_s=warmup_seconds, progress_cb=_warmup_progress,
+            )
+            job["message"] = None
+            log.info("MOVER-CAL %d: warmup complete (%.0fs)", fid, warmup_seconds)
+        except Exception as e:
+            log.warning("MOVER-CAL %d: warmup failed (%s) — continuing without", fid, e)
     addr = f.get("dmxStartAddr", 1)
     uni = f.get("dmxUniverse", 1) - 1  # Art-Net is 0-based
     # Set profile for profile-aware DMX writes (#467)
@@ -2932,6 +2956,15 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color):
     _set_calibrating(fid, False)
     _save("fixtures", _fixtures)
 
+    # #500 — populate the job with v2 fit/model so SPA polling picks up
+    # the quality metrics before the job expires from _mover_cal_jobs.
+    v2_cal = _mover_cal.get(str(fid)) or {}
+    if v2_cal.get("version") == 2:
+        if "fit" in v2_cal:
+            job["fit"] = v2_cal["fit"]
+        if "model" in v2_cal:
+            job["model"] = v2_cal["model"]
+
     job["result"] = {"sampleCount": len(samples), "gridSize": len(grid.get("panSteps", []))}
     job["progress"] = 100
     job["status"] = "done"
@@ -2961,38 +2994,70 @@ def api_mover_cal_start(fid):
         return jsonify(err="DMX engine is not running — start it from Settings \u2192 DMX Engine"), 400
     body = request.get_json(silent=True) or {}
     color = body.get("color", [0, 255, 0])  # default green
+    warmup = bool(body.get("warmup", False))
+    warmup_seconds = float(body.get("warmupSeconds", 30.0))
     job = {"status": "running", "phase": "starting", "progress": 0,
            "error": None, "result": None, "cameraId": cam["id"],
-           "cameraName": cam.get("name", "Camera"), "bridgeIp": bridge_ip}
+           "cameraName": cam.get("name", "Camera"), "bridgeIp": bridge_ip,
+           "warmup": warmup}
     _mover_cal_jobs[str(fid)] = job
     t = threading.Thread(target=_mover_cal_thread,
-                         args=(fid, cam, bridge_ip, color), daemon=True)
+                         args=(fid, cam, bridge_ip, color, warmup, warmup_seconds),
+                         daemon=True)
     job["thread"] = t
     t.start()
     return jsonify(ok=True, started=True, cameraId=cam["id"],
-                   cameraName=cam.get("name"))
+                   cameraName=cam.get("name"), warmup=warmup)
 
 
 @app.get("/api/calibration/mover/<int:fid>/status")
 def api_mover_cal_status(fid):
-    """Poll calibration progress."""
+    """Poll calibration progress.
+
+    #500 — enhanced schema. Running jobs now surface `targets` (per-target
+    progress table, populated by the v2 convergence loop when it lands
+    in #499) and `currentTarget`/`totalTargets` counters. Done jobs
+    return the v2 fit quality metrics and model parameters so the wizard
+    can show residuals without a second round-trip.
+    """
     job = _mover_cal_jobs.get(str(fid))
     if not job:
-        # Check for saved calibration
         cal = _mover_cal.get(str(fid))
         if cal:
-            return jsonify(status="done", calibrated=True,
-                           sampleCount=cal.get("sampleCount"),
-                           timestamp=cal.get("timestamp"))
-        return jsonify(status="none", calibrated=False)
-    return jsonify(status=job["status"], phase=job.get("phase"),
-                   progress=job.get("progress", 0),
-                   error=job.get("error"),
-                   result=job.get("result"),
-                   cameraId=job.get("cameraId"),
-                   foundAt=job.get("foundAt"),
-                   sampleCount=job.get("sampleCount"),
-                   debug=job.get("debug"))
+            resp = {
+                "status": "done",
+                "calibrated": True,
+                "sampleCount": cal.get("sampleCount"),
+                "timestamp": cal.get("timestamp"),
+                "calibrationLocked": bool(_fixture_is_calibrating(fid)),
+            }
+            if cal.get("version") == 2:
+                resp["version"] = 2
+                if "fit" in cal:
+                    resp["fit"] = cal["fit"]
+                if "model" in cal:
+                    resp["model"] = cal["model"]
+            return jsonify(**resp)
+        return jsonify(status="none", calibrated=False,
+                       calibrationLocked=bool(_fixture_is_calibrating(fid)))
+    return jsonify(
+        status=job["status"],
+        phase=job.get("phase"),
+        progress=job.get("progress", 0),
+        error=job.get("error"),
+        result=job.get("result"),
+        cameraId=job.get("cameraId"),
+        foundAt=job.get("foundAt"),
+        sampleCount=job.get("sampleCount"),
+        debug=job.get("debug"),
+        targets=job.get("targets") or [],
+        currentTarget=job.get("currentTarget"),
+        totalTargets=job.get("totalTargets"),
+        message=job.get("message"),
+        fit=job.get("fit"),
+        model=job.get("model"),
+        calibrationLocked=bool(_fixture_is_calibrating(fid)),
+    )
 
 
 @app.get("/api/calibration/mover/<int:fid>")

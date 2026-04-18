@@ -143,6 +143,50 @@ def _hold_dmx(bridge_ip, dmx, duration=0.5):
     time.sleep(duration)
 
 
+def warmup_sweep(bridge_ip, mover_addr, color=(0, 0, 0),
+                 duration_s=30.0, progress_cb=None, abort_event=None):
+    """Cycle the fixture through its pan/tilt range to warm motors/belts
+    before calibration (#513). Pattern: pan 0→1→0, tilt 0→1→0, diagonal.
+
+    - Dimmer stays 0 throughout — the warm-up is mechanical, not visual.
+    - ``progress_cb(frac)`` is called once per step with frac ∈ [0, 1].
+    - ``abort_event`` is a threading.Event; warmup exits early if set.
+
+    Total wall time targets ``duration_s`` split evenly across the three
+    phases with small settle pauses between DMX writes."""
+    dmx = [0] * 512
+    phases = [
+        # (axis, start, end) tuples — tilt locked to 0.5 during pan sweep, etc.
+        ("pan",      0.0, 1.0),
+        ("pan",      1.0, 0.0),
+        ("tilt",     0.0, 1.0),
+        ("tilt",     1.0, 0.0),
+        ("diagonal", 0.0, 1.0),
+        ("diagonal", 1.0, 0.0),
+    ]
+    steps_per_phase = 20
+    step_sleep = max(0.05, duration_s / (len(phases) * steps_per_phase))
+    total_steps = len(phases) * steps_per_phase
+    step_count = 0
+
+    for axis, a, b in phases:
+        for i in range(steps_per_phase):
+            if abort_event is not None and abort_event.is_set():
+                return
+            t = i / (steps_per_phase - 1) if steps_per_phase > 1 else 1.0
+            v = a + (b - a) * t
+            pan = v if axis in ("pan", "diagonal") else 0.5
+            tilt = v if axis in ("tilt", "diagonal") else 0.5
+            _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=0)
+            _hold_dmx(bridge_ip, dmx, step_sleep)
+            step_count += 1
+            if progress_cb:
+                try:
+                    progress_cb(step_count / total_steps)
+                except Exception:
+                    pass
+
+
 # ── Camera beam detection proxy ──────────────────────────────────────
 
 def _beam_detect_flash(bridge_ip, camera_ip, cam_idx, mover_addr, pan, tilt,
