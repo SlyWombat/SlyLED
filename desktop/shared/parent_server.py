@@ -2752,6 +2752,196 @@ def _get_bridge_ip():
     return None
 
 
+def _mover_cal_thread_v2(fid, cam, bridge_ip, mover_color,
+                          warmup=False, warmup_seconds=30.0,
+                          target_overrides=None):
+    """#499 — per-target convergence calibration.
+
+    Picks N floor targets (auto or operator-supplied), drives the beam
+    to each via `converge_on_stage_target`, fits the parametric model
+    from the collected samples. No BFS mapping phase.
+
+    Requires a camera calibration homography on the chosen camera —
+    without it we can't project stage→pixel. Falls back to the legacy
+    thread with a warning if absent.
+    """
+    job = _mover_cal_jobs[str(fid)]
+
+    def _blackout():
+        try:
+            _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
+        except Exception:
+            pass
+        _set_calibrating(fid, False)
+
+    f = next((x for x in _fixtures if x["id"] == fid), None)
+    if not f:
+        job["error"] = "Fixture not found"; job["status"] = "error"
+        _blackout(); return
+
+    # Camera homography is required. Check before engaging lock so we can
+    # clean up quietly if it's missing.
+    cam_cal = _calibrated_cameras.get(str(cam["id"])) if "_calibrated_cameras" in globals() \
+        else None
+    H_flat = (cam_cal or {}).get("matrix") if cam_cal else None
+    if H_flat is None:
+        # Look at a cam record field "homography" as a fallback — some
+        # flows store the matrix there. If still absent, bail out with a
+        # clear error so the operator knows to run camera calibration first.
+        H_flat = cam.get("homography") or cam.get("calibrationMatrix")
+    if H_flat is None:
+        job["error"] = ("Camera must be calibrated (ArUco homography) before "
+                         "running v2 target-driven calibration")
+        job["status"] = "error"
+        log.warning("MOVER-CAL v2 %d: no camera homography on cam=%d", fid, cam["id"])
+        return  # don't blackout / no lock engaged yet
+
+    _set_calibrating(fid, True)
+    addr = f.get("dmxStartAddr", 1)
+    uni = f.get("dmxUniverse", 1) - 1
+    pid = f.get("dmxProfileId")
+    prof_info = _profile_lib.channel_info(pid) if pid else None
+    _mcal._active_profile = prof_info
+    cam_ip = cam.get("cameraIp", "")
+    cam_idx = cam.get("cameraIdx", 0)
+
+    # Warmup (shared with legacy path).
+    if warmup:
+        job["phase"] = "warmup"; job["progress"] = 2
+        job["message"] = "Warming up fixture"
+        try:
+            def _wp(frac):
+                job["progress"] = int(2 + frac * 6)
+                job["message"] = f"Warming up fixture ({int(frac*100)}%)"
+            _mcal.warmup_sweep(bridge_ip, addr, color=(0, 0, 0),
+                               duration_s=warmup_seconds, progress_cb=_wp)
+            job["message"] = None
+        except Exception as e:
+            log.warning("MOVER-CAL v2 %d: warmup failed (%s)", fid, e)
+
+    # Target selection: operator override wins, else auto-pick.
+    geometry = _get_stage_geometry()
+    job["geometrySource"] = geometry.get("source")
+    fx_pos = _fixture_position(fid)
+    cam_pos = _fixture_position(cam["id"])
+    if target_overrides:
+        targets = [(t[0], t[1], t[2] if len(t) > 2 else 0) for t in target_overrides]
+    else:
+        try:
+            targets = _mcal.pick_calibration_targets(
+                fx_pos, geometry, n=6,
+                camera_pos=cam_pos, camera_fov_deg=cam.get("fovDeg", 90),
+            )
+        except Exception as e:
+            job["error"] = f"Target selection failed: {e}"; job["status"] = "error"
+            _blackout(); return
+    if len(targets) < 4:
+        job["error"] = f"Only {len(targets)} targets — need at least 4 for a stable fit"
+        job["status"] = "error"; _blackout(); return
+
+    # Status payload — per-target progress table.
+    job["totalTargets"] = len(targets)
+    job["targets"] = [{"idx": i, "stagePos": list(t),
+                        "status": "pending", "iterations": 0,
+                        "errorPx": None}
+                       for i, t in enumerate(targets)]
+
+    # Warm-start for the first aim — use v2 model when present.
+    model = _get_mover_model(fid, f)
+
+    samples = []
+    for i, target in enumerate(targets):
+        job["currentTarget"] = i
+        job["phase"] = "sampling"
+        job["progress"] = int(10 + 70 * (i / len(targets)))
+        tstate = job["targets"][i]
+        tstate["status"] = "converging"
+        job["message"] = f"Converging on target {i+1}/{len(targets)}"
+        try:
+            result = _mcal.converge_on_stage_target(
+                bridge_ip, cam_ip, addr, cam_idx, mover_color,
+                H_flat, target, model=model,
+                start_pan=0.5, start_tilt=0.5,
+            )
+        except Exception as e:
+            log.warning("MOVER-CAL v2 %d: converge failed on target %d: %s", fid, i, e)
+            tstate["status"] = "failed"
+            tstate["error"] = str(e)
+            continue
+
+        tstate["iterations"] = result.get("iterations", 0)
+        tstate["errorPx"] = result.get("errorPx")
+        if result.get("converged"):
+            tstate["status"] = "converged"
+            samples.append({
+                "pan": result["pan"], "tilt": result["tilt"],
+                "stageX": float(target[0]),
+                "stageY": float(target[1]),
+                "stageZ": float(target[2]),
+                "pixelX": (result.get("beamPixel") or [0, 0])[0],
+                "pixelY": (result.get("beamPixel") or [0, 0])[1],
+            })
+        else:
+            tstate["status"] = "skipped"
+
+    if len(samples) < 4:
+        job["error"] = (f"Only {len(samples)} of {len(targets)} targets converged "
+                         "— cannot fit a stable model")
+        job["status"] = "error"; _blackout(); return
+
+    # Fit + persist.
+    job["phase"] = "fitting"; job["progress"] = 85
+    job["message"] = "Running Levenberg-Marquardt fit"
+    pan_range = f.get("panRange") or (prof_info.get("panRange") if prof_info else None) or 540
+    tilt_range = f.get("tiltRange") or (prof_info.get("tiltRange") if prof_info else None) or 270
+    try:
+        fit_model_obj, quality = _fit_model(
+            fx_pos, pan_range, tilt_range, samples,
+            mounted_inverted=bool(f.get("mountedInverted")),
+        )
+    except Exception as e:
+        job["error"] = f"LM fit failed: {e}"; job["status"] = "error"
+        _blackout(); return
+
+    cal_data = {
+        "version": 2,
+        "method": "v2-convergence",
+        "cameraId": cam["id"],
+        "color": mover_color,
+        "samples": samples,
+        "sampleCount": len(samples),
+        "timestamp": time.time(),
+        "model": fit_model_obj.to_dict(),
+        "fit": quality.to_dict(),
+        "targets": [{"idx": i, "stagePos": list(t),
+                      "status": job["targets"][i]["status"],
+                      "iterations": job["targets"][i]["iterations"],
+                      "errorPx": job["targets"][i].get("errorPx")}
+                     for i, t in enumerate(targets)],
+        "centerPan": round(sum(s["pan"] for s in samples) / len(samples), 4),
+        "centerTilt": round(sum(s["tilt"] for s in samples) / len(samples), 4),
+    }
+
+    _mover_cal[str(fid)] = cal_data
+    _save("mover_calibrations", _mover_cal)
+    _invalidate_mover_model(fid)
+    f["moverCalibrated"] = True
+    _set_calibrating(fid, False)
+    _save("fixtures", _fixtures)
+
+    job["fit"] = quality.to_dict()
+    job["model"] = fit_model_obj.to_dict()
+    job["result"] = {"sampleCount": len(samples),
+                     "converged": sum(1 for s in job["targets"] if s["status"] == "converged")}
+    job["phase"] = "complete"
+    job["progress"] = 100
+    job["status"] = "done"
+    job["message"] = None
+    log.info("MOVER-CAL v2 fid=%d: %d/%d converged, rms=%.2f°",
+             fid, len(samples), len(targets), quality.rms_error_deg)
+    _blackout()
+
+
 def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
                       warmup=False, warmup_seconds=30.0):
     """Background thread: optional warmup → discovery → mapping → save grid."""
@@ -3065,14 +3255,27 @@ def api_mover_cal_start(fid):
     color = body.get("color", [0, 255, 0])  # default green
     warmup = bool(body.get("warmup", False))
     warmup_seconds = float(body.get("warmupSeconds", 30.0))
+    # #499 — opt-in per-target convergence loop. Default stays on the
+    # legacy BFS path until we've hardware-validated the new loop.
+    mode = body.get("mode", "legacy")
+    if mode not in ("legacy", "v2"):
+        mode = "legacy"
+    target_overrides = body.get("targets")  # optional list of [x, y, z]
     job = {"status": "running", "phase": "starting", "progress": 0,
            "error": None, "result": None, "cameraId": cam["id"],
            "cameraName": cam.get("name", "Camera"), "bridgeIp": bridge_ip,
-           "warmup": warmup}
+           "warmup": warmup, "mode": mode}
     _mover_cal_jobs[str(fid)] = job
-    t = threading.Thread(target=_mover_cal_thread,
-                         args=(fid, cam, bridge_ip, color, warmup, warmup_seconds),
-                         daemon=True)
+    if mode == "v2":
+        t = threading.Thread(
+            target=_mover_cal_thread_v2,
+            args=(fid, cam, bridge_ip, color, warmup, warmup_seconds,
+                   target_overrides),
+            daemon=True)
+    else:
+        t = threading.Thread(target=_mover_cal_thread,
+                             args=(fid, cam, bridge_ip, color, warmup, warmup_seconds),
+                             daemon=True)
     job["thread"] = t
     t.start()
     return jsonify(ok=True, started=True, cameraId=cam["id"],

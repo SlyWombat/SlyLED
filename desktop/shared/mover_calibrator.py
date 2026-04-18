@@ -276,6 +276,143 @@ def pick_calibration_targets(fixture_pos, geometry, n=6,
     return picked
 
 
+def stage_to_pixel(homography_flat, sx, sy):
+    """Inverse of `pixel_to_stage` — project a stage-floor point (sx, sy in mm)
+    back to camera pixel coordinates (#499). Returns (px, py) or None.
+
+    The homography is pixel→stage, so we invert the 3×3 matrix. Stage Y
+    is the depth component used during camera calibration (matches the
+    same [x, z] convention as `_apply_homography` in parent_server).
+    """
+    import numpy as np
+    try:
+        H = np.array(homography_flat, dtype=float).reshape(3, 3)
+        Hi = np.linalg.inv(H)
+    except Exception:
+        return None
+    v = Hi @ np.array([float(sx), float(sy), 1.0])
+    if abs(v[2]) < 1e-9:
+        return None
+    return (float(v[0] / v[2]), float(v[1] / v[2]))
+
+
+def converge_on_stage_target(bridge_ip, camera_ip, mover_addr, cam_idx, color,
+                              homography_flat, target_stage,
+                              model=None, start_pan=0.5, start_tilt=0.5,
+                              other_mover_addrs=None, max_iterations=25,
+                              converge_px=20):
+    """Per-target convergence loop (#499).
+
+    Aims the fixture at `target_stage` (x, y, z in mm). Uses:
+      - ``model`` (ParametricFixtureModel) for the initial aim. When not
+        given, falls back to ``start_pan`` / ``start_tilt``.
+      - ``homography_flat`` (pixel→stage 3×3) for the stage→pixel
+        projection that tells us "where should the beam land in the
+        camera image?".
+
+    Closed-loop: detect → nudge → repeat until pixel error < converge_px
+    or max_iterations. Uses a numerical pan/tilt Jacobian from the model
+    (tiny ±0.005 probe aims) so no pre-built grid is required.
+
+    Returns dict:
+        {
+          "converged": bool, "iterations": int,
+          "pan": float, "tilt": float,
+          "beamPixel": [x, y] | None,
+          "targetPixel": [x, y],
+          "errorPx": float | None,
+        }
+    """
+    target_px = stage_to_pixel(homography_flat, target_stage[0], target_stage[1])
+    if target_px is None:
+        return {"converged": False, "iterations": 0, "pan": start_pan,
+                "tilt": start_tilt, "beamPixel": None,
+                "targetPixel": None, "errorPx": None,
+                "reason": "homography inversion failed"}
+
+    dmx = [0] * 512
+    for addr in (other_mover_addrs or []):
+        _set_mover_dmx(dmx, addr, 0.5, 0.5, 0, 0, 0, dimmer=0)
+
+    if model is not None:
+        try:
+            pan, tilt = model.inverse(target_stage[0], target_stage[1], target_stage[2])
+        except Exception:
+            pan, tilt = start_pan, start_tilt
+    else:
+        pan, tilt = start_pan, start_tilt
+
+    best_pan, best_tilt = pan, tilt
+    best_dist = 1e9
+    final_beam = None
+    worse_streak = 0
+
+    for it in range(max_iterations):
+        _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
+        _hold_dmx(bridge_ip, dmx, 0.6)
+        beam = _beam_detect(camera_ip, cam_idx, color, center=True)
+        if beam is None:
+            worse_streak += 1
+            if worse_streak >= 3:
+                pan, tilt = best_pan, best_tilt
+                break
+            continue
+
+        final_beam = beam
+        err_x = target_px[0] - beam[0]
+        err_y = target_px[1] - beam[1]
+        dist = math.hypot(err_x, err_y)
+        if dist < best_dist:
+            best_dist = dist
+            best_pan, best_tilt = pan, tilt
+            worse_streak = 0
+        else:
+            worse_streak += 1
+
+        if dist < converge_px:
+            break
+        if worse_streak >= 4:
+            pan, tilt = best_pan, best_tilt
+            break
+
+        # Pan/tilt → pixel Jacobian via two tiny probe aims.
+        dp = 0.005
+        probe_pan = min(1.0, pan + dp)
+        probe_tilt = min(1.0, tilt + dp)
+        _set_mover_dmx(dmx, mover_addr, probe_pan, tilt, *color, dimmer=255)
+        _hold_dmx(bridge_ip, dmx, 0.4)
+        b_p = _beam_detect(camera_ip, cam_idx, color, center=True)
+        _set_mover_dmx(dmx, mover_addr, pan, probe_tilt, *color, dimmer=255)
+        _hold_dmx(bridge_ip, dmx, 0.4)
+        b_t = _beam_detect(camera_ip, cam_idx, color, center=True)
+        if b_p is None or b_t is None:
+            # Fall back: small blind nudge toward the target direction.
+            pan = max(0.0, min(1.0, pan + 0.01 * (1 if err_x > 0 else -1)))
+            tilt = max(0.0, min(1.0, tilt + 0.01 * (1 if err_y > 0 else -1)))
+            continue
+        dpx_dp = (b_p[0] - beam[0]) / dp
+        dpy_dp = (b_p[1] - beam[1]) / dp
+        dpx_dt = (b_t[0] - beam[0]) / dp
+        dpy_dt = (b_t[1] - beam[1]) / dp
+        det = dpx_dp * dpy_dt - dpx_dt * dpy_dp
+        if abs(det) < 0.001:
+            break
+        gain = 0.5 if it < 8 else 0.25
+        d_pan = (dpy_dt * err_x - dpx_dt * err_y) / det * gain
+        d_tilt = (-dpy_dp * err_x + dpx_dp * err_y) / det * gain
+        pan = max(0.0, min(1.0, pan + d_pan))
+        tilt = max(0.0, min(1.0, tilt + d_tilt))
+
+    return {
+        "converged": best_dist < converge_px,
+        "iterations": it + 1,
+        "pan": best_pan, "tilt": best_tilt,
+        "beamPixel": list(final_beam) if final_beam else None,
+        "targetPixel": [int(target_px[0]), int(target_px[1])],
+        "errorPx": best_dist if best_dist < 1e8 else None,
+    }
+
+
 def verification_sweep(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                         grid, n_points=3, avoid_samples=None):
     """Post-fit verification (#501). Aims the fixture at N pan/tilt points

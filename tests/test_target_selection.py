@@ -16,7 +16,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "desktop", "shared"))
 
-from mover_calibrator import pick_calibration_targets  # noqa: E402
+from mover_calibrator import pick_calibration_targets, stage_to_pixel  # noqa: E402
+from mover_calibrator import pixel_to_stage  # noqa: E402
 
 
 _passed = 0
@@ -120,6 +121,29 @@ def test_pointcloud_floor_z_honoured():
         _assert(z == -50, f"floor_z=-50 honoured, got {z}")
 
 
+def test_stage_to_pixel_roundtrips():
+    """Identity homography maps pixel (x,y) ↔ stage (x,y) 1:1, and the
+    inverse is consistent for non-trivial homographies."""
+    # A simple scale + translate: stage = 10 * pixel + 100.
+    H = [10, 0, 100,
+         0, 10, 100,
+         0,  0,   1]
+    # pixel → stage (forward via existing pixel_to_stage)
+    s = pixel_to_stage(50, 40, H)
+    _assert(s == (600.0, 500.0), f"pixel→stage got {s}")
+    # stage → pixel (inverse via new helper)
+    px = stage_to_pixel(H, 600.0, 500.0)
+    _assert(px is not None and abs(px[0] - 50) < 1e-6 and abs(px[1] - 40) < 1e-6,
+            f"stage→pixel got {px}")
+
+
+def test_stage_to_pixel_degenerate():
+    # A singular matrix returns None instead of raising.
+    H = [1, 0, 0, 2, 0, 0, 0, 0, 0]
+    _assert(stage_to_pixel(H, 100, 100) is None,
+            "singular homography returns None")
+
+
 ALL = [
     test_returns_requested_count_on_empty_stage,
     test_points_lie_inside_extent,
@@ -129,6 +153,8 @@ ALL = [
     test_no_floor_extent_returns_empty,
     test_no_floor_returns_empty,
     test_pointcloud_floor_z_honoured,
+    test_stage_to_pixel_roundtrips,
+    test_stage_to_pixel_degenerate,
 ]
 
 
