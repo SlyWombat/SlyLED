@@ -216,8 +216,16 @@
     <div id='sfx-list' style='font-size:.85em;color:#94a3b8'>Loading...</div>
   </div>
   <!-- Classic Actions -->
-  <div style='margin-bottom:.8em'>
+  <div style='margin-bottom:.8em;display:flex;flex-wrap:wrap;gap:.5em;align-items:center'>
     <button class='btn btn-on' onclick='newAction()'>+ New Action</button>
+    <input id='act-search' type='text' placeholder='Search…' oninput='_actRefilter()' style='padding:.3em .6em;font-size:.85em;min-width:160px'>
+    <select id='act-sort' onchange='_actRefilter()' style='padding:.3em;font-size:.82em'>
+      <option value='manual'>Sort: none</option>
+      <option value='name'>Sort: name A→Z</option>
+      <option value='type'>Sort: type</option>
+      <option value='newest'>Sort: newest</option>
+    </select>
+    <div id='act-type-chips' style='display:flex;flex-wrap:wrap;gap:.3em;margin-left:.5em'></div>
   </div>
   <div id='act-list'><p style='color:#888'>Loading...</p></div>
 </div>

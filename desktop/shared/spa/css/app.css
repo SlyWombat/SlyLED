@@ -100,3 +100,49 @@ body.light .prog-fill{background:linear-gradient(90deg,#3b82f6,#2563eb)}
 .li:hover{border-color:#3b82f6}
 body.light .li{background:#ffffff;border-color:#e2e8f0}
 body.light .li:hover{border-color:#3b82f6}
+
+/* #294 — Responsive breakpoints.
+   Desktop is the primary target; these rules just stop the SPA from
+   horizontal-scrolling on tablets/phones so an operator walking a
+   venue can still read status. Two breakpoints: 1024 and 640. */
+
+/* Touch ergonomics — no double-tap delay, no flash on tap. Applies at
+   all widths since many desktops have touch screens too. */
+html{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+
+@media (max-width:1024px){
+  /* Tighter header/nav padding so tabs fit without clipping. */
+  #hdr{padding:.6em 1em}
+  #hdr h1{font-size:1.25em}
+  nav{padding:.25em .5em}
+  .tnav{padding:.5em .7em;font-size:.72em;letter-spacing:.08em}
+  .tab{padding:1em .8em}
+  /* Tabs wrap onto a scrollable strip instead of being clipped. */
+  nav{overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
+  .tbl{display:block;overflow-x:auto}
+  /* Cards fill the viewport instead of the fixed 480 max. */
+  .card{max-width:100%}
+  /* Layout sidebar: stack below the viewport rather than side-by-side. */
+  #t-layout > div[style*="display:flex"]{flex-direction:column!important}
+  #lay-fixtures{width:100%!important;max-width:100%!important;margin-top:.8em}
+  /* 3D canvas scales with viewport width. */
+  #s3d-host,#s3d-container{height:auto!important;aspect-ratio:16/10;min-height:320px}
+}
+
+@media (max-width:640px){
+  #hdr{padding:.5em .7em}
+  #hdr h1{font-size:1.05em;letter-spacing:.04em}
+  #file-menu-btn,#proj-name-display{font-size:.7em}
+  .tab{padding:.7em .4em}
+  /* Most secondary table columns are hidden on phones — the first two
+     (name + primary status) are the only ones operators can actually
+     read at 400 px. Hide everything from the 3rd onward; the table
+     stays horizontally scrollable for users who want the full row. */
+  .tbl th:nth-child(n+3),.tbl td:nth-child(n+3){display:none}
+  /* Wider tap targets on phone. */
+  .btn{padding:.55em 1.1em;font-size:.85em}
+  /* Fixture grid cards compress to 2-up. */
+  .flx-card{width:calc(50% - 4px)}
+  /* Modal uses nearly the full viewport. */
+  .modal-box{margin:1em .5em;padding:1em;max-width:calc(100vw - 1em)}
+}

@@ -7,38 +7,110 @@ var _palNames=['Classic','Ocean','Lava','Forest','Party','Heat','Cool','Pastel']
 function rgb2h(r,g,b){return'#'+('0'+r.toString(16)).slice(-2)+('0'+g.toString(16)).slice(-2)+('0'+b.toString(16)).slice(-2);}
 function h2r(h){return{r:parseInt(h.slice(1,3),16),g:parseInt(h.slice(3,5),16),b:parseInt(h.slice(5,7),16)};}
 
+// #301 — filter/sort state lives in-memory only; it's a browsing aid,
+// not part of the show data.
+var _actFilter={q:'',type:null,sort:'manual'};
+
 function loadActions(){
   loadSpatialFx();
   ra('GET','/api/actions',null,function(d){
     _acts=d||[];
-    var el=document.getElementById('act-list');if(!el)return;
-    if(!_acts.length){el.innerHTML='<p style="color:#888">No actions defined yet. Click + New Action to create one.</p>';return;}
-    var h='<table class="tbl" style="max-width:700px"><tr><th>Name</th><th>Type</th><th>Colour</th><th>Details</th><th>Actions</th></tr>';
-    _acts.forEach(function(a){
-      var col=a.type>0?rgb2h(a.r||0,a.g||0,a.b||0):'#000';
-      var scopeLbl='';
-      if(a.scope==='canvas')scopeLbl='<span style="color:#6af;font-size:.8em"> [canvas]</span>';
-      else if(a.scope==='performer-selected')scopeLbl='<span style="color:#fa6;font-size:.8em"> [selected]</span>';
-      var det='';
-      function _ms2s(v){return((v||0)/1000).toFixed(2)+'s';}
-      if(a.type===2)det=_ms2s(a.speedMs)+' → '+rgb2h(a.r2||0,a.g2||0,a.b2||0);
-      if(a.type===3)det='Period:'+_ms2s(a.periodMs)+' Min:'+(a.minBri||0)+'%';
-      if(a.type===4)det=(_dirNames[a.direction]||'E')+' '+_ms2s(a.speedMs)+' gap:'+(a.spacing||3);
-      if(a.type===5)det=(_palNames[a.paletteId]||'Classic')+' '+_ms2s(a.speedMs);
-      if(a.type===6)det='Cool:'+(a.cooling||55)+' Spark:'+(a.sparking||120);
-      if(a.type===7)det=(_dirNames[a.direction]||'E')+' tail:'+(a.tailLen||10)+' '+_ms2s(a.speedMs);
-      if(a.type===8)det='Den:'+(a.density||3)+' Fade:'+(a.fadeSpeed||15);
-      if(a.type===14)det='Dim:'+(a.dimmer||0)+' P:'+(a.pan||0).toFixed(2)+' T:'+(a.tilt||0).toFixed(2)+(a.gobo?' G:'+a.gobo:'')+(a.strobe?' S:'+a.strobe:'');
-      if(a.type===15)det='P:'+((a.panStart||0).toFixed(2))+'→'+((a.panEnd||1).toFixed(2))+' T:'+((a.tiltStart||0.5).toFixed(2))+'→'+((a.tiltEnd||0.5).toFixed(2));
-      if(a.type===16)det='Gobo:'+(a.gobo||0);
-      if(a.type===17)det='Color:'+(a.colorWheel||0);
-      h+='<tr><td><b>'+escapeHtml(a.name)+'</b>'+scopeLbl+'</td><td>'+(_typeNames[a.type]||a.type)+'</td>';
-      h+='<td><span style="display:inline-block;width:24px;height:16px;border-radius:3px;background:'+col+';border:1px solid #555;vertical-align:middle"></span> '+col+'</td>';
-      h+='<td style="font-size:.82em;color:#888">'+det+'</td>';
-      h+='<td><button class="btn" onclick="editAction('+a.id+')" style="background:#446;color:#fff;padding:.2em .6em">Edit</button>';
-      h+=' <button class="btn btn-off" onclick="delAction('+a.id+')" style="padding:.2em .6em">Del</button></td></tr>';
-    });
-    el.innerHTML=h+'</table>';
+    _actRenderTypeChips();
+    _actRefilter();
+  });
+}
+
+// Build the type-filter chip row. "All" plus one chip per type currently
+// present in the library (so we don't show chips for types nobody uses).
+function _actRenderTypeChips(){
+  var el=document.getElementById('act-type-chips');if(!el)return;
+  var present={};(_acts||[]).forEach(function(a){present[a.type]=1;});
+  var h=_actChip(null,'All');
+  Object.keys(present).map(Number).sort(function(x,y){return x-y;}).forEach(function(t){
+    h+=_actChip(t,_typeNames[t]||('Type '+t));
+  });
+  el.innerHTML=h;
+}
+function _actChip(t,label){
+  var active=(_actFilter.type===t);
+  var style=active
+    ?'background:#14532d;color:#86efac;border:1px solid #22c55e'
+    :'background:#1e293b;color:#94a3b8;border:1px solid #334155';
+  return '<button class="btn" onclick="_actFilterType('+(t===null?'null':t)+')" '
+    +'style="padding:.18em .55em;font-size:.72em;'+style+'">'+escapeHtml(label)+'</button>';
+}
+function _actFilterType(t){_actFilter.type=t;_actRenderTypeChips();_actRefilter();}
+
+// Re-render the table honouring the current search/type/sort filter.
+// Called on every input event from the search box, chip click, or sort
+// dropdown — cheap since the full action list already lives in _acts.
+function _actRefilter(){
+  var el=document.getElementById('act-list');if(!el)return;
+  var q=(document.getElementById('act-search')||{}).value;
+  var s=(document.getElementById('act-sort')||{}).value;
+  _actFilter.q=(q||'').trim().toLowerCase();
+  _actFilter.sort=s||'manual';
+  var list=(_acts||[]).filter(function(a){
+    if(_actFilter.q&&(a.name||'').toLowerCase().indexOf(_actFilter.q)<0)return false;
+    if(_actFilter.type!=null&&a.type!==_actFilter.type)return false;
+    return true;
+  });
+  if(_actFilter.sort==='name')list.sort(function(a,b){return(a.name||'').localeCompare(b.name||'');});
+  else if(_actFilter.sort==='type')list.sort(function(a,b){return(a.type||0)-(b.type||0);});
+  else if(_actFilter.sort==='newest')list.sort(function(a,b){return(b.id||0)-(a.id||0);});
+  if(!(_acts||[]).length){
+    el.innerHTML='<p style="color:#888">No actions defined yet. Click + New Action to create one.</p>';
+    return;
+  }
+  if(!list.length){
+    el.innerHTML='<p style="color:#888">No actions match — clear the search or pick a different type.</p>';
+    return;
+  }
+  var h='<table class="tbl" style="max-width:700px"><tr><th>Name</th><th>Type</th><th>Colour</th><th>Details</th><th>Actions</th></tr>';
+  list.forEach(function(a){
+    var col=a.type>0?rgb2h(a.r||0,a.g||0,a.b||0):'#000';
+    var scopeLbl='';
+    if(a.scope==='canvas')scopeLbl='<span style="color:#6af;font-size:.8em"> [canvas]</span>';
+    else if(a.scope==='performer-selected')scopeLbl='<span style="color:#fa6;font-size:.8em"> [selected]</span>';
+    var det='';
+    function _ms2s(v){return((v||0)/1000).toFixed(2)+'s';}
+    if(a.type===2)det=_ms2s(a.speedMs)+' → '+rgb2h(a.r2||0,a.g2||0,a.b2||0);
+    if(a.type===3)det='Period:'+_ms2s(a.periodMs)+' Min:'+(a.minBri||0)+'%';
+    if(a.type===4)det=(_dirNames[a.direction]||'E')+' '+_ms2s(a.speedMs)+' gap:'+(a.spacing||3);
+    if(a.type===5)det=(_palNames[a.paletteId]||'Classic')+' '+_ms2s(a.speedMs);
+    if(a.type===6)det='Cool:'+(a.cooling||55)+' Spark:'+(a.sparking||120);
+    if(a.type===7)det=(_dirNames[a.direction]||'E')+' tail:'+(a.tailLen||10)+' '+_ms2s(a.speedMs);
+    if(a.type===8)det='Den:'+(a.density||3)+' Fade:'+(a.fadeSpeed||15);
+    if(a.type===14)det='Dim:'+(a.dimmer||0)+' P:'+(a.pan||0).toFixed(2)+' T:'+(a.tilt||0).toFixed(2)+(a.gobo?' G:'+a.gobo:'')+(a.strobe?' S:'+a.strobe:'');
+    if(a.type===15)det='P:'+((a.panStart||0).toFixed(2))+'→'+((a.panEnd||1).toFixed(2))+' T:'+((a.tiltStart||0.5).toFixed(2))+'→'+((a.tiltEnd||0.5).toFixed(2));
+    if(a.type===16)det='Gobo:'+(a.gobo||0);
+    if(a.type===17)det='Color:'+(a.colorWheel||0);
+    h+='<tr><td><b>'+escapeHtml(a.name)+'</b>'+scopeLbl+'</td><td>'+(_typeNames[a.type]||a.type)+'</td>';
+    h+='<td><span style="display:inline-block;width:24px;height:16px;border-radius:3px;background:'+col+';border:1px solid #555;vertical-align:middle"></span> '+col+'</td>';
+    h+='<td style="font-size:.82em;color:#888">'+det+'</td>';
+    h+='<td><button class="btn" onclick="editAction('+a.id+')" style="background:#446;color:#fff;padding:.2em .6em">Edit</button>';
+    h+=' <button class="btn" onclick="duplicateAction('+a.id+')" style="background:#334155;color:#cbd5e1;padding:.2em .6em" title="Clone this action as a starting point">Dup</button>';
+    h+=' <button class="btn btn-off" onclick="delAction('+a.id+')" style="padding:.2em .6em">Del</button></td></tr>';
+  });
+  el.innerHTML=h+'</table>';
+}
+
+// #301 — clone an action server-side so the user can tweak a copy
+// without editing the original. POSTs a full clone with " (copy)"
+// appended to the name; the server assigns a fresh id on insert.
+function duplicateAction(id){
+  var src=null;(_acts||[]).forEach(function(x){if(x.id===id)src=x;});
+  if(!src)return;
+  var copy={};for(var k in src)if(src.hasOwnProperty(k))copy[k]=src[k];
+  delete copy.id;
+  copy.name=(src.name||'Action')+' (copy)';
+  ra('POST','/api/actions',copy,function(r){
+    if(r&&r.ok){
+      if(typeof toastSuccess==='function')toastSuccess('Duplicated: '+copy.name);
+      loadActions();
+    }else{
+      if(typeof toastError==='function')toastError('Duplicate failed: '+(r&&r.err||'unknown'));
+    }
   });
 }
 
@@ -361,8 +433,29 @@ function _aeSubmit(id,btn){
 
 function delAction(id){
   if(!confirm('Delete this action?'))return;
-  var x=new XMLHttpRequest();x.open('DELETE','/api/actions/'+id,true);
-  x.onload=function(){loadActions();document.getElementById('hs').textContent='Action deleted';};
-  x.onerror=function(){document.getElementById('hs').textContent='Delete failed';};
-  x.send();
+  // Snapshot the action so Ctrl+Z can POST it back. The server assigns a
+  // fresh id on re-create, so redo has to re-snapshot after the restore
+  // to stay in sync (#297).
+  var snap=null;(_acts||[]).forEach(function(x){if(x.id===id)snap=JSON.parse(JSON.stringify(x));});
+  var newId=null;
+  function doDelete(targetId,cb){
+    var x=new XMLHttpRequest();x.open('DELETE','/api/actions/'+targetId,true);
+    x.onload=function(){loadActions();if(cb)cb();};
+    x.onerror=function(){if(typeof toastError==='function')toastError('Delete failed');};
+    x.send();
+  }
+  doDelete(id,function(){
+    if(typeof toastSuccess==='function')toastSuccess('Action deleted — Ctrl+Z to restore');
+    if(!snap||typeof cmdPush!=='function')return;
+    cmdPush('Delete action "'+(snap.name||'?')+'"',
+      function undo(){
+        var body={};for(var k in snap)if(k!=='id')body[k]=snap[k];
+        ra('POST','/api/actions',body,function(r){
+          if(r&&r.ok){newId=r.id;loadActions();}
+        });
+      },
+      function redo(){
+        if(newId!=null)doDelete(newId);else if(snap&&snap.id!=null)doDelete(snap.id);
+      });
+  });
 }

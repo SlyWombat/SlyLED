@@ -166,7 +166,35 @@ function toastError(m,o){return toast(m,'error',o);}
 
 var ctab='dash',ld=null,phW=10000,phH=5000,drag=null,dox=0,doy=0,units=0,_cvW=900,_cvH=450,_dragStartX=0,_dragStartY=0,_dragMoved=false;
 var _layTool='move'; // 'move' or 'rotate'
-var _undoStack=[];   // [{fid, x, y, z, rotation}]
+var _undoStack=[];   // [{fid, x, y, z, rotation}] — legacy Layout-only positional undo
+
+// #297 — global command stack for cross-tab undo/redo. Entries are
+// {name, undo, redo} records; undo/redo are nullary fns that restore
+// state and re-issue the server calls. Layout drag/rotate still uses
+// the legacy _undoStack above — the two coexist so this change is
+// scoped to action CRUD (the highest-pain regression target).
+var _cmdStack=[], _cmdRedo=[], _CMD_MAX=50;
+function cmdPush(name,undoFn,redoFn){
+  _cmdStack.push({name:name,undo:undoFn,redo:redoFn});
+  if(_cmdStack.length>_CMD_MAX)_cmdStack.shift();
+  _cmdRedo.length=0;  // any new command invalidates the redo stack
+}
+function cmdUndo(){
+  if(!_cmdStack.length)return false;
+  var c=_cmdStack.pop();
+  try{c.undo();}catch(e){console.error('undo failed',e);}
+  _cmdRedo.push(c);
+  if(typeof toastInfo==='function')toastInfo('Undo: '+c.name);
+  return true;
+}
+function cmdRedo(){
+  if(!_cmdRedo.length)return false;
+  var c=_cmdRedo.pop();
+  try{c.redo();}catch(e){console.error('redo failed',e);}
+  _cmdStack.push(c);
+  if(typeof toastInfo==='function')toastInfo('Redo: '+c.name);
+  return true;
+}
 function _rotToAim(rot,pos,dist,inverted){
   // Convert rotation [rx,ry,rz] degrees + position to aim point [x,y,z]
   // Stage: X=width, Y=depth(forward), Z=height(up)
@@ -815,6 +843,18 @@ document.addEventListener('keydown',function(e){
   if((e.ctrlKey||e.metaKey)&&(e.key==='o'||e.key==='O')){e.preventDefault();_fmOpen();return;}
   if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT')return;
   if(e.target.isContentEditable)return;
+
+  // #297 — Ctrl+Shift+Z redo and Ctrl+Z undo, active on every tab. The
+  // global command stack holds cross-tab mutations (action delete for
+  // now); the layout-positional _undoStack is consulted as a fallback so
+  // existing move/rotate undo keeps working.
+  if((e.ctrlKey||e.metaKey)&&e.shiftKey&&(e.key==='z'||e.key==='Z')){
+    e.preventDefault();cmdRedo();return;
+  }
+  if((e.ctrlKey||e.metaKey)&&(e.key==='z'||e.key==='Z')){
+    if(cmdUndo()){e.preventDefault();return;}
+    // Else: fall through so Layout-tab positional undo can still fire.
+  }
 
   // Timeline playback shortcuts — active on the Shows/Runtime tabs where a
   // timeline is open. Fall through if no timeline is selected so the key

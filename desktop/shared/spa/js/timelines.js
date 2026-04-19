@@ -90,15 +90,18 @@ function saveTimeline(btn){
 function renderTimeline(){
   if(!_curTl)return;
   var dur=_curTl.durationS||60;
-  var trackW=60+dur*_tlPxPerSec;
+  // #300 — track-header column widened to 96 px to fit M/S/color/lock
+  // controls; ruler origin and clip origin must track that same offset
+  // so time ticks still align with clip starts.
+  var trackW=96+dur*_tlPxPerSec;
   var ruler=document.getElementById('tl-ruler');
   var rows=document.getElementById('tl-track-rows');
   if(!ruler||!rows)return;
 
-  // Ruler
+  // Ruler — time ticks start at the edge of the track-header column.
   var rh='';
   for(var s=0;s<=dur;s+=5){
-    var x=60+s*_tlPxPerSec;
+    var x=96+s*_tlPxPerSec;
     rh+='<span style="position:absolute;left:'+x+'px;top:4px;font-size:.65em;color:#475569">'+s+'s</span>';
     rh+='<span style="position:absolute;left:'+x+'px;top:16px;width:1px;height:8px;background:#1e293b"></span>';
   }
@@ -106,37 +109,108 @@ function renderTimeline(){
 
   // Tracks
   var tracks=_curTl.tracks||[];
+  // #300 — per-timeline transient sets for mute/solo. Rebuilt when the
+  // user loads a different timeline so mute state doesn't leak across
+  // projects.
+  if(!_curTl._muteSet)_curTl._muteSet={};
+  if(!_curTl._soloSet)_curTl._soloSet={};
+  var anySolo=Object.keys(_curTl._soloSet).length>0;
   var th='';
   tracks.forEach(function(trk,ti){
     var fixName=trk.allPerformers?'\u2605 Stage (All)':'Track '+(ti+1);
     if(!trk.allPerformers){var fix=null;_fixtures.forEach(function(f){if(f.id===trk.fixtureId)fix=f;});if(fix)fixName=fix.name||fixName;}
-    th+='<div style="display:flex;height:40px;border-bottom:1px solid #1e293b">';
-    th+='<div style="width:60px;flex-shrink:0;padding:2px 4px;font-size:.65em;color:#94a3b8;overflow:hidden;border-right:1px solid #1e293b;display:flex;flex-direction:column;justify-content:center;gap:1px">'
-      +'<div style="display:flex;align-items:center;gap:1px"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;max-width:40px" title="'+escapeHtml(fixName)+'">'+escapeHtml(fixName)+'</span>'
-      +'<span style="display:flex;flex-direction:column;line-height:1">'
-      +(ti>0?'<span style="cursor:pointer;color:#64748b;font-size:8px" onclick="tlMoveTrack('+ti+',-1)" title="Move up">\u25b2</span>':'')
-      +(ti<tracks.length-1?'<span style="cursor:pointer;color:#64748b;font-size:8px" onclick="tlMoveTrack('+ti+',1)" title="Move down">\u25bc</span>':'')
-      +'</span></div>'
-      +'<span style="display:flex;gap:2px;align-items:center"><span style="cursor:pointer;color:#3b82f6;font-size:.9em" onclick="tlAddClipToTrack('+ti+')" title="Add clip">+</span><span style="cursor:pointer;color:#f66;font-size:.9em" onclick="tlDeleteTrack('+ti+')" title="Delete track">&times;</span></span></div>';
-    th+='<div style="flex:1;position:relative;min-width:'+(trackW-60)+'px" id="tl-tr-'+ti+'">';
-    // Render clips
+    var muted=!!_curTl._muteSet[ti];
+    var soloed=!!_curTl._soloSet[ti];
+    var locked=!!trk.locked;
+    var audible=_tlTrackAudible(ti,anySolo);
+    // Stripe the track itself when it won't contribute to playback so the
+    // operator instantly sees which lanes are live.
+    var rowBg=audible?'':'background:repeating-linear-gradient(45deg,#0f172a,#0f172a 8px,#1e1b1b 8px,#1e1b1b 16px)';
+    var color=trk.color||(trk.allPerformers?'#8b5cf6':'#3b82f6');
+    th+='<div style="display:flex;height:40px;border-bottom:1px solid #1e293b;'+rowBg+'">';
+    th+='<div style="width:96px;flex-shrink:0;padding:2px 4px;font-size:.65em;color:#94a3b8;overflow:hidden;border-right:1px solid #1e293b;display:flex;flex-direction:column;justify-content:center;gap:2px;border-left:3px solid '+color+'">'
+      +'<div style="display:flex;align-items:center;gap:2px">'
+        +'<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1" title="'+escapeHtml(fixName)+(locked?' (locked)':'')+'">'+escapeHtml(fixName)+(locked?' \ud83d\udd12':'')+'</span>'
+        +'<span style="display:flex;flex-direction:column;line-height:1">'
+          +(ti>0?'<span style="cursor:pointer;color:#64748b;font-size:8px" onclick="tlMoveTrack('+ti+',-1)" title="Move up">\u25b2</span>':'')
+          +(ti<tracks.length-1?'<span style="cursor:pointer;color:#64748b;font-size:8px" onclick="tlMoveTrack('+ti+',1)" title="Move down">\u25bc</span>':'')
+        +'</span>'
+      +'</div>'
+      +'<div style="display:flex;gap:3px;align-items:center">'
+        +_tlMsBtn('M','Mute',muted,'#f59e0b','tlToggleMute('+ti+')')
+        +_tlMsBtn('S','Solo',soloed,'#22d3ee','tlToggleSolo('+ti+')')
+        +'<input type="color" value="'+escapeHtml(color)+'" title="Track colour" onchange="tlSetTrackColor('+ti+',this.value)" style="width:14px;height:14px;padding:0;border:none;background:transparent;cursor:pointer">'
+        +_tlMsBtn(locked?'\ud83d\udd12':'\ud83d\udd13','Lock clip edits',locked,'#94a3b8','tlToggleLock('+ti+')')
+        +'<span style="flex:1"></span>'
+        +'<span style="cursor:pointer;color:#3b82f6;font-size:.95em" onclick="tlAddClipToTrack('+ti+')" title="Add clip">+</span>'
+        +'<span style="cursor:pointer;color:#f66;font-size:.95em" onclick="tlDeleteTrack('+ti+')" title="Delete track">&times;</span>'
+      +'</div>'
+    +'</div>';
+    th+='<div style="flex:1;position:relative;min-width:'+(trackW-96)+'px" id="tl-tr-'+ti+'">';
+    // Render clips — dim them when the track is muted/not-audible.
     (trk.clips||[]).forEach(function(clip,ci){
       var lx=clip.startS*_tlPxPerSec;
       var w=clip.durationS*_tlPxPerSec;
-      var fxn=clip.name||'',fxcol='#3b82f6';
+      var fxn=clip.name||'',fxcol=color;
       if(clip.actionId!=null){
-        _acts.forEach(function(a){if(a.id===clip.actionId){fxn='\u25b6 '+a.name;fxcol=rgb2h(a.r||100,a.g||100,a.b||255);}});
+        _acts.forEach(function(a){if(a.id===clip.actionId){fxn='\u25b6 '+a.name;if(!trk.color)fxcol=rgb2h(a.r||100,a.g||100,a.b||255);}});
       } else if(clip.effectId!=null){
-        _spatialFx.forEach(function(f){if(f.id===clip.effectId){fxn=f.name;fxcol=rgb2h(f.r||100,f.g||100,f.b||255);}});
+        _spatialFx.forEach(function(f){if(f.id===clip.effectId){fxn=f.name;if(!trk.color)fxcol=rgb2h(f.r||100,f.g||100,f.b||255);}});
       }
-      th+='<div style="position:absolute;left:'+lx+'px;top:4px;width:'+Math.max(w,8)+'px;height:28px;background:'+fxcol+'33;border:1px solid '+fxcol+';border-radius:3px;cursor:pointer;overflow:hidden;font-size:.65em;color:#e2e8f0;padding:2px 4px;white-space:nowrap" ';
-      th+='onclick="editClip('+ti+','+ci+')" title="'+escapeHtml(fxn)+' ('+clip.durationS+'s)">';
+      var op=audible?'1':'0.3';
+      var clickHandler=locked
+        ?'onclick="if(typeof toastWarn===\\\'function\\\')toastWarn(\\\'Track is locked — click the lock icon to unlock.\\\')"'
+        :'onclick="editClip('+ti+','+ci+')"';
+      th+='<div style="position:absolute;left:'+lx+'px;top:4px;width:'+Math.max(w,8)+'px;height:28px;background:'+fxcol+'33;border:1px solid '+fxcol+';border-radius:3px;cursor:'+(locked?'not-allowed':'pointer')+';overflow:hidden;font-size:.65em;color:#e2e8f0;padding:2px 4px;white-space:nowrap;opacity:'+op+'" ';
+      th+=clickHandler+' title="'+escapeHtml(fxn)+' ('+clip.durationS+'s)'+(locked?' — locked':'')+'">';
       th+=escapeHtml(fxn||'?')+'</div>';
     });
     th+='</div></div>';
   });
   if(!tracks.length)th='<p style="color:#475569;font-size:.82em;padding:.6em">No tracks. Click + Add Track to begin.</p>';
   rows.style.width=trackW+'px';rows.innerHTML=th;
+}
+
+// #300 — tiny pill button helper for M / S / lock toggles. Kept inline
+// so the track header render doesn't fan out across many DOM nodes.
+function _tlMsBtn(lbl,title,on,onColor,onclick){
+  var bg=on?onColor:'#1e293b';
+  var fg=on?'#0f172a':'#94a3b8';
+  return '<span title="'+escapeHtml(title)+'" onclick="'+onclick+'" '
+    +'style="display:inline-block;min-width:14px;height:14px;line-height:14px;font-size:10px;font-weight:bold;text-align:center;'
+    +'border-radius:3px;background:'+bg+';color:'+fg+';cursor:pointer;padding:0 3px">'
+    +escapeHtml(lbl)+'</span>';
+}
+// #300 — "audible" means the track contributes to preview/bake: not
+// muted, and if any track is soloed then only soloed tracks are audible.
+function _tlTrackAudible(ti,anySolo){
+  if(!_curTl)return true;
+  if(_curTl._muteSet&&_curTl._muteSet[ti])return false;
+  if(anySolo===undefined)anySolo=Object.keys(_curTl._soloSet||{}).length>0;
+  if(anySolo)return !!(_curTl._soloSet&&_curTl._soloSet[ti]);
+  return true;
+}
+function tlToggleMute(ti){
+  if(!_curTl)return;
+  if(!_curTl._muteSet)_curTl._muteSet={};
+  if(_curTl._muteSet[ti])delete _curTl._muteSet[ti];else _curTl._muteSet[ti]=1;
+  renderTimeline();
+}
+function tlToggleSolo(ti){
+  if(!_curTl)return;
+  if(!_curTl._soloSet)_curTl._soloSet={};
+  if(_curTl._soloSet[ti])delete _curTl._soloSet[ti];else _curTl._soloSet[ti]=1;
+  renderTimeline();
+}
+function tlToggleLock(ti){
+  if(!_curTl||!_curTl.tracks||!_curTl.tracks[ti])return;
+  _curTl.tracks[ti].locked=!_curTl.tracks[ti].locked;
+  ra('PUT','/api/timelines/'+_curTl.id,_curTl,function(){renderTimeline();});
+}
+function tlSetTrackColor(ti,hex){
+  if(!_curTl||!_curTl.tracks||!_curTl.tracks[ti])return;
+  _curTl.tracks[ti].color=hex;
+  ra('PUT','/api/timelines/'+_curTl.id,_curTl,function(){renderTimeline();});
 }
 
 function tlMoveTrack(idx,dir){
@@ -284,7 +358,7 @@ function tlTogglePreview(){
     }
     // Update playhead
     var ph=document.getElementById('tl-playhead');
-    if(ph)ph.style.left=(60+_tlPlayT*_tlPxPerSec)+'px';
+    if(ph)ph.style.left=(96+_tlPlayT*_tlPxPerSec)+'px';
     // Update time display
     var td=document.getElementById('tl-time');
     if(td){var m=Math.floor(_tlPlayT/60),s=(_tlPlayT%60).toFixed(1);td.textContent=(m<10?'0':'')+m+':'+(s<10?'0':'')+s;}
@@ -302,7 +376,7 @@ function tlPause(){
 function tlRewind(){
   // Reset playhead to start
   _tlPlayT=0;
-  var ph=document.getElementById('tl-playhead');if(ph)ph.style.left='60px';
+  var ph=document.getElementById('tl-playhead');if(ph)ph.style.left='96px';
   var td=document.getElementById('tl-time');if(td)td.textContent='00:00.0';
   if(_tlPlaying){tlPause();}
   var btn=document.getElementById('tl-play-btn');if(btn)btn.textContent='\u25b6 Preview';
@@ -324,7 +398,7 @@ function tlStop(){
   _tlPlaying=false;_tlPlayT=0;
   if(_tlPlayTimer){clearInterval(_tlPlayTimer);_tlPlayTimer=null;}
   var btn=document.getElementById('tl-play-btn');if(btn)btn.textContent='\u25b6 Preview';
-  var ph=document.getElementById('tl-playhead');if(ph)ph.style.left='60px';
+  var ph=document.getElementById('tl-playhead');if(ph)ph.style.left='96px';
   var td=document.getElementById('tl-time');if(td)td.textContent='00:00.0';
 }
 
@@ -341,7 +415,7 @@ function _tlJumpToEnd(){
   var dur=_curTl.durationS||60;
   _tlPlayT=Math.max(0,dur-0.1);
   var ph=document.getElementById('tl-playhead');
-  if(ph)ph.style.left=(60+_tlPlayT*_tlPxPerSec)+'px';
+  if(ph)ph.style.left=(96+_tlPlayT*_tlPxPerSec)+'px';
   var td=document.getElementById('tl-time');
   if(td){var m=Math.floor(_tlPlayT/60),s=(_tlPlayT%60).toFixed(1);
     td.textContent=(m<10?'0':'')+m+':'+(s<10?'0':'')+s;}
@@ -351,7 +425,7 @@ function _tlNudge(deltaS){
   var dur=_curTl.durationS||60;
   _tlPlayT=Math.max(0,Math.min(dur,_tlPlayT+deltaS));
   var ph=document.getElementById('tl-playhead');
-  if(ph)ph.style.left=(60+_tlPlayT*_tlPxPerSec)+'px';
+  if(ph)ph.style.left=(96+_tlPlayT*_tlPxPerSec)+'px';
   var td=document.getElementById('tl-time');
   if(td){var m=Math.floor(_tlPlayT/60),s=(_tlPlayT%60).toFixed(1);
     td.textContent=(m<10?'0':'')+m+':'+(s<10?'0':'')+s;}
