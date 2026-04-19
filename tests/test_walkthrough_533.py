@@ -102,28 +102,28 @@ def add_dmx_fixture(page, name, search_term, universe, address, step_id):
     # OFL search to find community profile
     page.locator("#af-ofl-q").fill(search_term)
     page.locator("button[onclick='_afOflSearch()']").click()
-    page.wait_for_timeout(1500)
+    page.wait_for_timeout(3000)  # unified search hits local+community+OFL — allow extra time
 
     # Click the best available profile button: prefer local > community > OFL
-    local_btn = page.locator("button[onclick*='_afSelectLocal']").first
-    community_btn = page.locator("button[onclick*='_afSelectCommunity']").first
-    ofl_btn = page.locator("button[onclick*='_afSelectOfl']").first
+    local_btn = page.locator("#af-ofl-results button[onclick*='_afSelectLocal']").first
+    community_btn = page.locator("#af-ofl-results button[onclick*='_afSelectCommunity']").first
+    ofl_btn = page.locator("#af-ofl-results button[onclick*='_afSelectOfl']").first
 
     if local_btn.count() and local_btn.is_visible():
         label = local_btn.get_attribute("onclick") or ""
         print(f"    Local profile found: {label[:80]}")
         local_btn.click()
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(600)
     elif community_btn.count() and community_btn.is_visible():
         label = community_btn.get_attribute("onclick") or ""
         print(f"    Community profile found: {label[:80]}")
         community_btn.click()
-        page.wait_for_timeout(2500)  # community download + GET profiles = two sequential calls
+        page.wait_for_timeout(3000)  # community download + GET profiles = two sequential calls
     elif ofl_btn.count() and ofl_btn.is_visible():
         label = ofl_btn.get_attribute("onclick") or ""
         print(f"    OFL profile found: {label[:80]}")
         ofl_btn.click()
-        page.wait_for_timeout(2500)
+        page.wait_for_timeout(3000)
     else:
         bug(step_id, f"No profile button found for search '{search_term}'")
 
@@ -264,36 +264,42 @@ def run():
         ss(page, "02-new-project.png")
 
         # ── STEP 3a: Discover DMX hardware (Setup → Discover) ────────────────
+        # IMPORTANT: DMX fixtures must NOT be added until a DMX bridge/controller
+        # is found. Without a registered bridge, Art-Net has no unicast target
+        # and fixtures don't respond (Bug #564).
         log("Step 3a — Discover DMX hardware (Setup → Discover)")
         go(page, "setup")
         page.wait_for_timeout(400)
 
+        dmx_bridge_added = False
         disc_btn = page.locator("button[onclick='discoverChildren()']")
         if disc_btn.count() and disc_btn.is_visible():
             disc_btn.click()
             page.wait_for_timeout(500)
             print("  ✓ Discover clicked — scanning network for performers & DMX bridges")
-            # Wait up to 15s for discover to complete (button re-enables)
+            # Wait up to 15s for discover to complete
             try:
                 disc_btn.wait_for(state="enabled", timeout=15000)
             except Exception:
                 pass
-            page.wait_for_timeout(500)
+            page.wait_for_timeout(800)
 
-            # Check for any discovered results and add DMX bridge if found
-            discover_results = page.locator("#disc-results, #hs")
-            dmx_configure_btns = page.locator("button[onclick*='addDiscoveredDmxBridge']")
-            dmx_add_btns = page.locator("button[onclick*='addDiscovered']")
-            if dmx_configure_btns.count():
-                print(f"  ✓ DMX Bridge found on network — {dmx_configure_btns.count()} device(s)")
-                # Add the first discovered performer
-                first_add = dmx_add_btns.first
-                if first_add.count() and first_add.is_visible():
-                    first_add.click()
-                    page.wait_for_timeout(800)
-                    print("  ✓ DMX Bridge added as child")
+            # Look for discovered Add buttons — click the first DMX bridge
+            add_btns = page.locator("button[onclick*='addDiscovered']").all()
+            visible_add = [b for b in add_btns if b.is_visible()]
+            if visible_add:
+                print(f"  ✓ {len(visible_add)} device(s) found on network")
+                for btn in visible_add:
+                    oc = btn.get_attribute("onclick") or ""
+                    label = btn.inner_text().strip()
+                    print(f"    → {label!r}  {oc[:60]}")
+                visible_add[0].click()
+                page.wait_for_timeout(1000)
+                dmx_bridge_added = True
+                print("  ✓ First device added as child")
             else:
-                print("  ℹ No DMX bridge found via Discover — will use broadcast routing")
+                bug("3a", "No DMX bridge or performer found via Discover — DMX fixtures cannot be routed. Check hardware is powered and on the same subnet.")
+                print("  ⚠ Continuing with broadcast routing — physical lights may not respond")
         else:
             bug("3a", "Discover button not found on Setup tab")
         ss(page, "03a-discover-hardware.png")
@@ -544,6 +550,21 @@ def run():
                 close_modal(page)
         ss(page, "09-aim-red.png")
 
+        # ── Camera verification: capture snapshot with red lit ────────────────
+        log("Camera verification — snapshot with red lights on")
+        page.wait_for_timeout(1500)  # hold red long enough for camera to capture
+        import urllib.request as _ur3
+        for cam_idx in [0, 1]:
+            try:
+                with _ur3.urlopen(f"http://192.168.10.235:5000/snapshot?cam={cam_idx}", timeout=15) as r:
+                    img = r.read()
+                snap_path = f"{SS_DIR}/09-beam-verify-cam{cam_idx}.jpg"
+                with open(snap_path, "wb") as f:
+                    f.write(img)
+                print(f"  ✓ Camera {cam_idx} snapshot saved ({len(img)} bytes) → {snap_path}")
+            except Exception as e:
+                bug("9-cam", f"Camera {cam_idx} snapshot failed: {e}")
+
         # ── STEP 10: Blackout ────────────────────────────────────────────────
         log("Step 10 — Blackout all fixtures")
         go(page, "setup")
@@ -724,65 +745,76 @@ def run():
         try:
             new_tl = page.locator("button[onclick='newTimeline()']")
             if new_tl.count() and new_tl.is_visible():
-                # newTimeline() uses prompt() — handle both dialog prompts
-                _dialog_count = [0]
-                def _handle_tl_dialog(dialog):
-                    _dialog_count[0] += 1
-                    if _dialog_count[0] == 1:
-                        dialog.accept("Walkthrough 533")   # name prompt
-                    else:
-                        dialog.accept("420")               # duration prompt
-                page.on("dialog", _handle_tl_dialog)
+                # newTimeline() auto-creates "Timeline N" (60s) — no prompt dialogs.
+                # Rename and set duration via inline #tl-name / #tl-dur fields after creation.
                 new_tl.click()
                 page.wait_for_timeout(1000)
-                page.remove_listener("dialog", _handle_tl_dialog)
-                # Verify timeline appeared in dropdown
+
+                # Verify a timeline appeared and the detail panel opened
                 tl_sel = page.locator("#tl-select")
-                if tl_sel.count():
-                    opts = tl_sel.locator("option").all_text_contents()
-                    real_opts = [o for o in opts if o and "Select" not in o]
-                    if real_opts:
-                        print(f"  ✓ Timeline created: '{real_opts[0]}'")
-                        # Select it to load the detail view
-                        tl_sel.select_option(index=1)
-                        page.wait_for_timeout(600)
+                opts = tl_sel.locator("option").all_text_contents() if tl_sel.count() else []
+                real_opts = [o for o in opts if o and "Select" not in o]
+                if real_opts:
+                    print(f"  ✓ Timeline auto-created: '{real_opts[-1]}'")
+                    # Select it (newTimeline auto-selects, but ensure detail view is open)
+                    tl_sel.select_option(index=len(real_opts))
+                    page.wait_for_timeout(600)
 
-                        # Add one track per fixture (All Fixtures + each DMX fixture)
-                        actions_now = api_get("/api/actions") or []
-                        first_action = actions_now[0] if actions_now else None
-                        for track_target in ["all", "0", "1", "2"]:
-                            add_trk = page.locator("button[onclick='tlAddTrack()']")
-                            if add_trk.count() and add_trk.is_visible():
-                                add_trk.click()
-                                page.wait_for_timeout(400)
-                                trk_fix = page.locator("#trk-fix")
-                                if trk_fix.count() and trk_fix.is_visible():
-                                    trk_fix.select_option(value=track_target)
-                                confirm_btn = page.locator("button[onclick='tlAddTrackConfirm()']")
-                                if confirm_btn.count() and confirm_btn.is_visible():
-                                    confirm_btn.click()
-                                    page.wait_for_timeout(500)
-                                    print(f"    ✓ Track added for target: '{track_target}'")
-                                else:
-                                    close_modal(page)
-                            else:
-                                bug("11e", f"+ Add Track button not found (target {track_target})")
-                                break
-
-                        # Verify via API
-                        tls = api_get("/api/timelines") or []
-                        tl = next((t for t in tls if "Walkthrough" in t.get("name", "")), None)
-                        if tl:
-                            track_count = len(tl.get("tracks", []))
-                            print(f"  ✓ Timeline '{tl['name']}' has {track_count} track(s)")
-                            if track_count == 0:
-                                bug("11e", "Timeline has 0 tracks after adding — tlAddTrackConfirm may have failed")
-                        else:
-                            bug("11e", "Walkthrough timeline not found in /api/timelines")
+                    # Rename + set duration via inline fields
+                    tl_name_f = page.locator("#tl-name")
+                    tl_dur_f = page.locator("#tl-dur")
+                    if tl_name_f.count() and tl_name_f.is_visible():
+                        tl_name_f.fill("Walkthrough 533")
                     else:
-                        bug("11e", "No timelines in dropdown after newTimeline() — dropdown shows only placeholder.")
+                        bug("11e", "#tl-name field not visible in timeline detail — cannot rename")
+                    if tl_dur_f.count() and tl_dur_f.is_visible():
+                        tl_dur_f.fill("420")
+                    else:
+                        bug("11e", "#tl-dur field not visible — cannot set 420s duration")
+
+                    # Save (button calls saveTimeline(this))
+                    save_tl_btn = page.locator("button[onclick*='saveTimeline']").first
+                    if save_tl_btn.count() and save_tl_btn.is_visible():
+                        save_tl_btn.click()
+                        page.wait_for_timeout(800)
+                        print("  ✓ Timeline renamed to 'Walkthrough 533' (420s)")
+                    else:
+                        bug("11e", "saveTimeline button not found — timeline name/duration not persisted")
+
+                    # Add one track per target: all fixtures + each DMX fixture
+                    for track_target in ["all", "0", "1", "2"]:
+                        add_trk = page.locator("button[onclick='tlAddTrack()']")
+                        if add_trk.count() and add_trk.is_visible():
+                            add_trk.click()
+                            page.wait_for_timeout(400)
+                            trk_fix = page.locator("#trk-fix")
+                            if trk_fix.count() and trk_fix.is_visible():
+                                trk_fix.select_option(value=track_target)
+                            confirm_btn = page.locator("button[onclick='tlAddTrackConfirm()']")
+                            if confirm_btn.count() and confirm_btn.is_visible():
+                                confirm_btn.click()
+                                page.wait_for_timeout(500)
+                                print(f"    ✓ Track added for target: '{track_target}'")
+                            else:
+                                close_modal(page)
+                        else:
+                            bug("11e", f"+ Add Track button not found (target {track_target})")
+                            break
+
+                    # Verify via API
+                    tls = api_get("/api/timelines") or []
+                    tl = next((t for t in tls if "Walkthrough" in t.get("name", "")), None)
+                    if tl:
+                        track_count = len(tl.get("tracks", []))
+                        print(f"  ✓ Timeline '{tl['name']}' ({tl['durationS']}s) has {track_count} track(s)")
+                        if track_count == 0:
+                            bug("11e", "Timeline has 0 tracks — tlAddTrackConfirm may have failed")
+                        if tl['durationS'] != 420:
+                            bug("11e", f"Duration is {tl['durationS']}s, expected 420s")
+                    else:
+                        bug("11e", "Walkthrough timeline not found in /api/timelines after rename")
                 else:
-                    bug("11e", "tl-select dropdown not found after newTimeline()")
+                    bug("11e", "No timelines in dropdown after newTimeline()")
             else:
                 bug("11e", "+ New Timeline button not found on Shows tab")
         except Exception as e:
