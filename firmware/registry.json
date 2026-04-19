@@ -9,6 +9,7 @@
             "version": "8.4.4",
             "file": "esp32/main.ino.merged.bin",
             "releaseAsset": "esp32-firmware-merged.bin",
+            "sha256": "d4a1047ec3899b31e80d30c21124cec576f5fae98d4bae4546b81ec4cc2e0699",
             "flashMethod": "esptool",
             "buildDefines": [
                 "BOARD_ESP32"
@@ -23,6 +24,7 @@
             "version": "8.4.4",
             "file": "d1mini/main.ino.bin",
             "releaseAsset": "d1mini-firmware.bin",
+            "sha256": "64cad3e8ea7478f9613f124d1ffb12ea2f2aff152f6f818b371014416b30bb7a",
             "flashMethod": "esptool",
             "buildDefines": [
                 "BOARD_D1MINI"
@@ -37,6 +39,7 @@
             "version": "8.4.4",
             "file": "esp32-dmx/main.ino.merged.bin",
             "releaseAsset": "esp32-dmx-bridge-firmware.bin",
+            "sha256": "d8c2e67d8fa0c4f0ae3881133dc8c65923fe78e029b13f59b69fb972a63740f1",
             "flashMethod": "esptool",
             "buildDefines": [
                 "DMX_BRIDGE"
@@ -52,6 +55,7 @@
             "version": "8.4.4",
             "file": "giga/child-led.bin",
             "releaseAsset": "giga-child-firmware.bin",
+            "sha256": "1345fc1b4d8cded341354bfd00f982bd081a628465fa742508925ab1c2b59f6b",
             "flashMethod": "dfu",
             "buildDefines": [
                 "GIGA_CHILD"
@@ -67,6 +71,7 @@
             "version": "8.4.4",
             "file": "giga/parent.bin",
             "releaseAsset": "giga-parent-firmware.bin",
+            "sha256": "ceb4e0a9959b6d59ed22a3a76a864a875f49b19273653f96d828f439e4ef5eb6",
             "flashMethod": "dfu",
             "buildDefines": [
                 "BOARD_GIGA"
@@ -81,6 +86,7 @@
             "version": "8.4.4",
             "file": "giga/dmx-bridge.bin",
             "releaseAsset": "giga-dmx-bridge-firmware.bin",
+            "sha256": "d86dd941c689f2f07bd016bee58d00184e533e3330b3557fb818d89880fa08a5",
             "flashMethod": "dfu",
             "buildDefines": [
                 "GIGA_DMX"
@@ -95,6 +101,7 @@
             "version": "1.2.0",
             "file": "esp32s3/main.ino.merged.bin",
             "releaseAsset": "esp32s3-gyro-firmware.bin",
+            "sha256": "0f1f82bee1f0429a831a9fb2ab3b5a3953a7d2a27902a427852b9dc689b4bf4c",
             "flashMethod": "esptool",
             "buildDefines": [
                 "GYRO_BOARD"
@@ -109,6 +116,7 @@
             "version": "1.2.3",
             "file": "orangepi/camera_server.py",
             "releaseAsset": "camera-firmware-v1.3.0.zip",
+            "sha256": "bd627e8d9eed1b499e5dfea2498aa6031c14a277f512329af3dd852c512bdd2e",
             "flashMethod": "ssh"
         }
     ]

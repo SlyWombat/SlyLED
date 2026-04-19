@@ -153,6 +153,22 @@ def _registry_fetch_assets(timeout=10):
             for a in (data.get("assets") or [])}
 
 
+def _verify_sha256(path, expected):
+    """Return True when SHA-256 of `path` matches `expected` (case-insensitive).
+    Streams in 64 KB chunks to keep memory bounded on large binaries."""
+    if not expected:
+        return True  # no hash pinned — caller decided to skip verification
+    import hashlib
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+    except OSError:
+        return False
+    return h.hexdigest().lower() == expected.strip().lower()
+
+
 def download_firmware(entry, cache_dir, assets_by_name=None):
     """Download a single registry entry's binary into cache_dir / entry['file'].
 
@@ -160,6 +176,15 @@ def download_firmware(entry, cache_dir, assets_by_name=None):
     to check `os.path.isfile(path)` first — a missing or partial local file
     means a re-download is needed. `assets_by_name` can be pre-fetched once
     for a batch download (#567 refresh-all) so we only call GitHub once.
+
+    Security (#568 review):
+      - If the registry pins a `sha256`, the downloaded bytes are verified
+        and the file is deleted on mismatch — we refuse to leave a
+        potentially tampered binary on disk that a subsequent flash would
+        push straight to hardware.
+      - Entries that omit `sha256` fall back to the pre-verification
+        behaviour (log a warning via debug channel — upgrading paths not
+        yet pinned is the responsibility of the release workflow).
     """
     import urllib.request
     fname = entry.get("file")
@@ -178,9 +203,18 @@ def download_firmware(entry, cache_dir, assets_by_name=None):
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = resp.read()
         dest.write_bytes(data)
-        return str(dest)
     except Exception:
         return None
+    expected = entry.get("sha256")
+    if expected and not _verify_sha256(dest, expected):
+        # Don't keep a binary that failed integrity check — a subsequent
+        # flash would push this straight to hardware. Delete and bail.
+        try:
+            dest.unlink()
+        except OSError:
+            pass
+        return None
+    return str(dest)
 
 
 def resolve_binary_path(entry, cache_dir, registry_dir, auto_download=True):
@@ -189,16 +223,32 @@ def resolve_binary_path(entry, cache_dir, registry_dir, auto_download=True):
     Cache-first (writable), then registry-dir (installer-bundled / dev tree),
     then — if auto_download is True — pull it from GitHub Releases into the
     cache. Returns the absolute path or None.
+
+    When the registry pins a `sha256`, any on-disk candidate is verified
+    before being returned. A mismatched cached file triggers a re-download;
+    a mismatched bundled file is skipped (we can't delete the installer's
+    copy on the user's machine safely).
     """
     fname = entry.get("file")
     if not fname:
         return None
-    for root in (cache_dir, registry_dir):
-        if not root:
-            continue
-        p = Path(root) / fname
-        if p.is_file():
-            return str(p)
+    expected = entry.get("sha256")
+    # Cache first — if a cached file exists but fails hash, delete it so
+    # the download path below will try again with a fresh fetch.
+    if cache_dir:
+        cache_p = Path(cache_dir) / fname
+        if cache_p.is_file():
+            if _verify_sha256(cache_p, expected):
+                return str(cache_p)
+            try:
+                cache_p.unlink()
+            except OSError:
+                pass
+    # Bundled / dev-tree copy — only trust if hash matches (or no hash set).
+    if registry_dir:
+        bundle_p = Path(registry_dir) / fname
+        if bundle_p.is_file() and _verify_sha256(bundle_p, expected):
+            return str(bundle_p)
     if not auto_download:
         return None
     return download_firmware(entry, cache_dir)

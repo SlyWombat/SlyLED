@@ -186,6 +186,39 @@ $dbgApk = Get-ChildItem -Path "C:\Android\build\slyled-app" -Recurse -Filter "ap
 if ($dbgApk) { Copy-Item $dbgApk.FullName "$distDir\SlyLED-debug.apk" -Force }
 Write-Host "dist/ updated" -ForegroundColor Green
 
+# ── Step 6b: Refresh registry SHA-256 hashes ──────────────────────────────
+# Any binary we just rebuilt needs its `sha256` in registry.json re-pinned
+# so downloads can verify integrity (#568 security review). Walks every
+# registry entry that declares a `releaseAsset` and, if the matching file
+# now lives in dist/, updates `sha256` to the fresh hash. Unchanged
+# binaries keep their existing hash.
+Write-Host "`n--- Refreshing registry SHA-256 hashes ---" -ForegroundColor Yellow
+$reg = Read-Registry
+$anyChanged = $false
+foreach ($fw in $reg.firmware) {
+    $asset = $fw.releaseAsset
+    if (-not $asset) { continue }
+    $distPath = Join-Path $distDir $asset
+    if (-not (Test-Path $distPath)) { continue }
+    $newHash = (Get-FileHash -Algorithm SHA256 -Path $distPath).Hash.ToLower()
+    $oldHash = if ($fw.PSObject.Properties['sha256']) { $fw.sha256 } else { $null }
+    if ($newHash -ne $oldHash) {
+        $anyChanged = $true
+        if ($fw.PSObject.Properties['sha256']) {
+            $fw.sha256 = $newHash
+        } else {
+            $fw | Add-Member -MemberType NoteProperty -Name sha256 -Value $newHash
+        }
+        Write-Host "  $($fw.id): sha256 → $($newHash.Substring(0,12))…" -ForegroundColor Green
+    }
+}
+if ($anyChanged) {
+    Save-Registry $reg
+    Write-Host "registry.json SHAs updated — commit with the release" -ForegroundColor Green
+} else {
+    Write-Host "All SHAs already match dist/ binaries" -ForegroundColor Gray
+}
+
 # ── Step 7: Create git tag (app version only) ─────────────────────────────
 if ($gitCmd) {
     Write-Host "`n--- Git tag ---" -ForegroundColor Yellow
