@@ -3,68 +3,748 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SlyLED — Object &amp; Person Tracking</title>
+<title>SlyLED — Person &amp; Object Tracking</title>
+<meta name="description" content="AI-powered beam tracking. Mount a camera. Press Track. Your moving heads follow every person automatically at 40 Hz. No programming. No operator.">
+<meta property="og:title" content="SlyLED — Lights That Follow People">
+<meta property="og:description" content="AI person tracking turns any moving head rig into an autonomous follow-spot system. Free. Open source.">
 <link rel="icon" type="image/x-icon" href="../slyled.ico">
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Inter:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Inter',sans-serif;background:#0A0F13;color:#e2e8f0;line-height:1.6}
-h1,h2,h3{font-family:'Space Grotesk',sans-serif}
-a{color:#22d3ee;text-decoration:none}a:hover{text-decoration:underline}
-.container{max-width:800px;margin:0 auto;padding:0 20px}
-header{padding:40px 0 30px;text-align:center}
-header .icon{font-size:3em;margin-bottom:12px}
-header h1{font-size:2.2em;color:#ec4899}
-header p{color:#94a3b8;font-size:1.1em;margin-top:8px;max-width:600px;margin-left:auto;margin-right:auto}
-.back{display:inline-block;margin-top:16px;padding:8px 20px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#94a3b8;font-size:.85em;transition:all .2s}
-.back:hover{border-color:#22d3ee;color:#22d3ee;text-decoration:none}
-.bullets{list-style:none;margin:30px 0;padding:0}
-.bullets li{padding:10px 0 10px 28px;position:relative;color:#94a3b8;font-size:.95em;border-bottom:1px solid #1e293b}
-.bullets li::before{content:'\2713';position:absolute;left:0;color:#ec4899;font-weight:bold}
-.screenshots{display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:16px;margin:30px 0}
-.screenshots figure{margin:0;border-radius:10px;overflow:hidden;border:1px solid #334155}
-.screenshots img{width:100%;display:block}
-.screenshots figcaption{padding:8px 12px;font-size:.8em;color:#64748b;background:#0f172a}
-.cta{text-align:center;margin:40px 0}
-.cta a{display:inline-block;padding:12px 28px;border-radius:8px;font-weight:700;margin:0 6px}
-.cta-dl{background:linear-gradient(135deg,#0969DA,#22d3ee);color:#fff}
-.cta-demo{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
-footer{text-align:center;padding:30px 0;color:#64748b;font-size:.85em;border-top:1px solid #1e293b}
+:root{
+  --bg:#0a0f13;--surface:#0f172a;--surface2:#1e293b;--border:#334155;
+  --text:#e2e8f0;--dim:#94a3b8;--dim2:#64748b;
+  --cyan:#22d3ee;--pink:#ec4899;--amber:#f59e0b;--green:#4ade80;--purple:#818cf8;
+}
+html{scroll-behavior:smooth}
+body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);line-height:1.65;overflow-x:hidden}
+h1,h2,h3{font-weight:700;letter-spacing:-.02em}
+
+/* Nav */
+.nav{position:fixed;top:0;left:0;right:0;z-index:100;padding:14px 24px;display:flex;align-items:center;gap:16px;background:rgba(10,15,19,.82);backdrop-filter:blur(12px);border-bottom:1px solid rgba(51,65,85,.5);transition:transform .35s}
+.nav.hide{transform:translateY(-100%)}
+.nav-back{display:flex;align-items:center;gap:8px;color:var(--dim);font-size:.85em;text-decoration:none;padding:6px 14px;border:1px solid var(--border);border-radius:6px;transition:all .2s}
+.nav-back:hover{border-color:var(--cyan);color:var(--cyan)}
+.nav-back svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.nav-title{font-size:.9em;color:var(--dim);flex:1}
+.nav-cta{padding:7px 18px;background:var(--pink);color:#fff;border-radius:7px;font-weight:700;font-size:.85em;text-decoration:none;transition:opacity .2s}
+.nav-cta:hover{opacity:.85}
+
+/* Hero */
+.hero{position:relative;width:100%;height:100svh;min-height:540px;overflow:hidden;display:flex;align-items:center;justify-content:center}
+#track-canvas{position:absolute;inset:0;width:100%;height:100%}
+.hero-overlay{position:relative;z-index:2;text-align:center;padding:24px;pointer-events:none}
+.hero-badge{display:inline-flex;align-items:center;gap:8px;padding:6px 16px;border:1px solid rgba(236,72,153,.35);border-radius:100px;color:var(--pink);font-size:.78em;font-weight:600;letter-spacing:.06em;text-transform:uppercase;margin-bottom:20px;background:rgba(236,72,153,.07);backdrop-filter:blur(6px)}
+.hero-badge::before{content:'';width:7px;height:7px;background:var(--pink);border-radius:50%;animation:pulse-dot 1.8s ease-in-out infinite}
+@keyframes pulse-dot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
+.hero h1{font-size:clamp(2.4rem,6vw,4.6rem);line-height:1.05;color:#fff;max-width:820px;margin:0 auto 18px;text-shadow:0 2px 40px rgba(0,0,0,.7)}
+.hero h1 em{font-style:normal;color:var(--pink)}
+.hero-sub{font-size:clamp(.95rem,2vw,1.2rem);color:var(--dim);max-width:560px;margin:0 auto 32px;text-shadow:0 1px 8px rgba(0,0,0,.8)}
+.hero-btns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;pointer-events:all}
+.btn-primary{padding:13px 28px;background:var(--pink);color:#fff;border-radius:9px;font-weight:700;font-size:.95em;text-decoration:none;transition:transform .2s,opacity .2s;display:inline-block}
+.btn-primary:hover{opacity:.88;transform:translateY(-2px)}
+.btn-ghost{padding:13px 28px;background:rgba(15,23,42,.8);border:1px solid var(--border);color:var(--text);border-radius:9px;font-weight:600;font-size:.95em;text-decoration:none;backdrop-filter:blur(8px);transition:all .2s;display:inline-block}
+.btn-ghost:hover{border-color:var(--cyan);color:var(--cyan)}
+.scroll-hint{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);color:var(--dim2);font-size:.78em;display:flex;flex-direction:column;align-items:center;gap:6px;animation:hint-fade 1.5s ease-in-out 4s both}
+@keyframes hint-fade{from{opacity:0;transform:translateX(-50%) translateY(6px)}to{opacity:.7;transform:translateX(-50%) translateY(0)}}
+.scroll-hint svg{animation:bounce-down 2s ease-in-out infinite}
+@keyframes bounce-down{0%,100%{transform:translateY(0)}50%{transform:translateY(4px)}}
+
+/* Stats row */
+.stats{display:flex;justify-content:center;flex-wrap:wrap;gap:0;background:var(--surface);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.stat{flex:1 1 160px;padding:20px 16px;text-align:center;border-right:1px solid var(--border)}
+.stat:last-child{border-right:none}
+.stat-n{font-size:1.6rem;font-weight:800;color:var(--pink);display:block;letter-spacing:-.03em}
+.stat-l{font-size:.75em;color:var(--dim2);margin-top:2px}
+
+/* How it works */
+.how{padding:96px 24px;max-width:1100px;margin:0 auto}
+.section-label{font-size:.72em;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--pink);margin-bottom:12px}
+.how h2{font-size:clamp(1.8rem,4vw,3rem);margin-bottom:14px}
+.how .lead{color:var(--dim);font-size:1.1em;max-width:640px;margin-bottom:64px}
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0}
+.step{padding:32px 28px;border:1px solid var(--border);border-right:none;position:relative;background:var(--surface);transition:background .3s}
+.step:first-child{border-radius:12px 0 0 12px}
+.step:last-child{border-right:1px solid var(--border);border-radius:0 12px 12px 0}
+.step:hover{background:var(--surface2)}
+.step-n{font-size:2.2rem;font-weight:900;color:rgba(236,72,153,.18);letter-spacing:-.04em;line-height:1;margin-bottom:12px}
+.step h3{font-size:1em;margin-bottom:8px}
+.step p{font-size:.85em;color:var(--dim);line-height:1.55}
+.step-icon{font-size:1.6rem;margin-bottom:8px}
+
+/* Live demo section */
+.demo-section{background:var(--surface);border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:80px 24px}
+.demo-inner{max-width:1100px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center}
+@media(max-width:720px){.demo-inner{grid-template-columns:1fr}}
+.demo-text .section-label{margin-bottom:10px}
+.demo-text h2{font-size:clamp(1.6rem,3.5vw,2.6rem);margin-bottom:16px}
+.demo-text p{color:var(--dim);margin-bottom:20px;font-size:.97em}
+.demo-features{list-style:none;display:flex;flex-direction:column;gap:10px}
+.demo-features li{display:flex;align-items:flex-start;gap:10px;font-size:.88em;color:var(--dim)}
+.demo-features li::before{content:'';width:18px;height:18px;border-radius:50%;background:rgba(236,72,153,.15);border:1px solid rgba(236,72,153,.4);flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center}
+.demo-features li span{color:var(--text)}
+.stage-wrap{position:relative;border-radius:14px;overflow:hidden;border:1px solid var(--border);background:#000;aspect-ratio:1.4}
+#stage-canvas{width:100%;height:100%;display:block}
+.stage-label{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);font-size:.7em;color:var(--dim2);white-space:nowrap;pointer-events:none}
+
+/* Why section */
+.why{padding:80px 24px;max-width:1100px;margin:0 auto}
+.why h2{font-size:clamp(1.6rem,3.5vw,2.4rem);text-align:center;margin-bottom:8px}
+.why .sub{text-align:center;color:var(--dim);margin-bottom:48px;font-size:.97em}
+.why-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+.why-card{padding:28px;border:1px solid var(--border);border-radius:12px;background:var(--surface);position:relative;overflow:hidden;transition:border-color .25s,transform .25s}
+.why-card:hover{border-color:var(--pink);transform:translateY(-3px)}
+.why-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--pink),var(--purple))}
+.why-icon{font-size:1.8rem;margin-bottom:12px}
+.why-card h3{font-size:1em;margin-bottom:8px}
+.why-card p{font-size:.84em;color:var(--dim);line-height:1.6}
+
+/* Use cases */
+.cases{background:var(--surface);border-top:1px solid var(--border);padding:80px 24px}
+.cases-inner{max-width:1100px;margin:0 auto}
+.cases h2{font-size:clamp(1.6rem,3.5vw,2.4rem);text-align:center;margin-bottom:8px}
+.cases .sub{text-align:center;color:var(--dim);margin-bottom:48px}
+.cases-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}
+.case-card{padding:24px;border:1px solid var(--border);border-radius:10px;background:var(--bg)}
+.case-card .case-emoji{font-size:1.6rem;margin-bottom:10px}
+.case-card h3{font-size:.95em;margin-bottom:6px}
+.case-card p{font-size:.82em;color:var(--dim);line-height:1.5}
+
+/* Screenshots */
+.screens{padding:80px 24px;max-width:1100px;margin:0 auto}
+.screens h2{font-size:clamp(1.4rem,3vw,2.2rem);text-align:center;margin-bottom:40px}
+.screens-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px}
+.screens-grid figure{margin:0;border-radius:10px;overflow:hidden;border:1px solid var(--border);cursor:zoom-in}
+.screens-grid img{width:100%;display:block;transition:transform .4s}
+.screens-grid figure:hover img{transform:scale(1.03)}
+.screens-grid figcaption{padding:9px 13px;font-size:.78em;color:var(--dim2);background:var(--surface)}
+
+/* CTA */
+.cta-section{padding:80px 24px;text-align:center}
+.cta-section h2{font-size:clamp(1.6rem,3.5vw,2.8rem);margin-bottom:14px}
+.cta-section p{color:var(--dim);max-width:520px;margin:0 auto 32px;font-size:.97em}
+.cta-btns{display:flex;justify-content:center;gap:14px;flex-wrap:wrap}
+
+/* Footer */
+footer{border-top:1px solid var(--border);padding:28px 24px;text-align:center;color:var(--dim2);font-size:.82em}
+footer a{color:var(--dim);text-decoration:none}
+footer a:hover{color:var(--cyan)}
+
+/* Lightbox */
+#lb{display:none;position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:999;align-items:center;justify-content:center;padding:24px}
+#lb.open{display:flex}
+#lb img{max-width:94vw;max-height:94vh;border-radius:8px;border:1px solid var(--border)}
+#lb::after{content:'✕';position:absolute;top:20px;right:24px;color:#fff;font-size:1.4rem;cursor:pointer}
+
+/* Fade-in */
+.fi{opacity:0;transform:translateY(22px);transition:opacity .65s,transform .65s}
+.fi.visible{opacity:1;transform:none}
+
+/* Reduced motion */
+@media(prefers-reduced-motion:reduce){
+  .fi{opacity:1;transform:none;transition:none}
+  #track-canvas,#stage-canvas{display:none}
+  .hero{background:linear-gradient(135deg,var(--surface),var(--bg))}
+}
 </style>
 </head>
 <body>
-<header>
-  <div class="container">
-    <div class="icon">&#x1F3AF;</div>
-    <h1>Object &amp; Person Tracking</h1>
-    <p>Your lights know where people are. Automatically.</p>
-    <a href="../" class="back">&larr; Back to SlyLED</a>
+
+<!-- Nav -->
+<nav class="nav" id="nav">
+  <a href="../" class="nav-back">
+    <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
+    SlyLED
+  </a>
+  <span class="nav-title">Person &amp; Object Tracking</span>
+  <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="nav-cta">Download Free</a>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <canvas id="track-canvas"></canvas>
+  <div class="hero-overlay">
+    <div class="hero-badge">Live Demo — move your cursor</div>
+    <h1>Lights that <em>follow</em> people.</h1>
+    <p class="hero-sub">Mount a camera. Press Track. Every moving head locks onto every person in the room — automatically. No programming, no cue lists, no operator.</p>
+    <div class="hero-btns">
+      <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="btn-primary">Download Free</a>
+      <a href="../" class="btn-ghost">Explore All Features</a>
+    </div>
   </div>
-</header>
-<div class="container">
-  <p style="font-size:1.05em;margin-bottom:20px">Point a camera at the stage. Press Track. Moving heads lock onto every person in the room and follow them in real-time — no programming, no cue lists, no operator. Add cats, dogs, chairs, or any of 16 object types and the system tracks those too. Each camera has its own detection settings so you can tune sensitivity per zone.</p>
-  <ul class="bullets">
-    <li>One-click tracking: press Track on the Setup tab and heads start following instantly</li>
-    <li>16 detection classes — people, animals, furniture, props — choose what matters for your show</li>
-    <li>AI-powered: YOLOv8n runs on-camera with zero latency penalty for multiple classes</li>
-    <li>Per-camera tuning: adjust sensitivity, speed, and re-ID distance independently per zone</li>
-    <li>Smooth 40 Hz Art-Net output — heads glide, they don't jump</li>
-    <li>Smart assignment: 1:1 lock, round-robin cycling, or spread mode across multiple heads</li>
-    <li>Works in the dark — detection runs at configurable FPS with adjustable confidence</li>
-    <li>Temporal markers: tracked objects appear live in the 3D viewport, labeled by class</li>
-    <li>Fully configurable from the fixture edit dialog — no config files, no command line</li>
-    <li>Combine with spatial effects and timeline automation for hybrid shows</li>
-  </ul>
-  <div class="screenshots">
-    <figure><img src="../spa-runtime.png" alt="3D runtime view with beam cones tracking across the stage" loading="lazy"><figcaption>3D runtime view with beam cones tracking across the stage</figcaption></figure>
-    <figure><img src="../spa-setup-edit-camera.png" alt="Per-camera tracking configuration — classes, sensitivity, and tuning" loading="lazy"><figcaption>Per-camera tracking configuration — classes, sensitivity, and tuning</figcaption></figure>
+  <div class="scroll-hint">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+    scroll
   </div>
-  <div class="cta">
-    <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="cta-dl">Download SlyLED</a>
-    <a href="../demo/" class="cta-demo">See Full Demo</a>
-  </div>
+</section>
+
+<!-- Stats -->
+<div class="stats">
+  <div class="stat"><span class="stat-n">40 Hz</span><div class="stat-l">Art-Net update rate</div></div>
+  <div class="stat"><span class="stat-n">16</span><div class="stat-l">detection classes</div></div>
+  <div class="stat"><span class="stat-n">&lt; 200ms</span><div class="stat-l">detection-to-beam latency</div></div>
+  <div class="stat"><span class="stat-n">1-click</span><div class="stat-l">to start tracking</div></div>
+  <div class="stat"><span class="stat-n">Free</span><div class="stat-l">MIT open source</div></div>
 </div>
-<footer><p><a href="../">SlyLED Home</a> &bull; <a href="https://github.com/SlyWombat/SlyLED">GitHub</a></p></footer>
-<script>fetch('/api/analytics/index.php?action=hit&page='+encodeURIComponent(location.pathname)+'&sw='+screen.width,{method:'POST',body:JSON.stringify({page:location.pathname,referrer:document.referrer,sw:screen.width}),headers:{'Content-Type':'application/json'}}).catch(function(){})</script>
+
+<!-- How it works -->
+<section class="how fi">
+  <p class="section-label">How it works</p>
+  <h2>From camera to beam in four steps</h2>
+  <p class="lead">SlyLED runs YOLOv8n on the camera node itself so detection never leaves your network. The orchestrator converts detected positions into pan/tilt angles and fires Art-Net at 40 Hz.</p>
+  <div class="steps">
+    <div class="step fi">
+      <div class="step-n">01</div>
+      <div class="step-icon">📷</div>
+      <h3>Camera sees the stage</h3>
+      <p>A USB camera on a Raspberry Pi or Orange Pi captures frames. YOLOv8n runs on-device — no cloud, no latency, no subscription.</p>
+    </div>
+    <div class="step fi">
+      <div class="step-n">02</div>
+      <div class="step-icon">🧭</div>
+      <h3>Calibration maps pixels to space</h3>
+      <p>A one-time beam-detection calibration links camera coordinates to real-world stage positions. Accuracy within ±5 cm.</p>
+    </div>
+    <div class="step fi">
+      <div class="step-n">03</div>
+      <div class="step-icon">📐</div>
+      <h3>Fixture profiles convert to pan/tilt</h3>
+      <p>SlyLED knows every fixture's position and OFL profile. It converts XYZ coordinates to exact DMX pan/tilt values via inverse kinematics.</p>
+    </div>
+    <div class="step fi">
+      <div class="step-n">04</div>
+      <div class="step-icon">✨</div>
+      <h3>Beams glide. Show runs.</h3>
+      <p>40 Hz Art-Net output. Smooth cubic interpolation means heads glide — not snap. Even fast runners stay lit.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Live demo -->
+<section class="demo-section">
+  <div class="demo-inner">
+    <div class="demo-text fi">
+      <p class="section-label">Live simulation</p>
+      <h2>Top-down beam tracking</h2>
+      <p>This canvas shows what SlyLED sees: four fixtures mounted on a truss, three people walking the stage floor. Each fixture independently locks onto the nearest unassigned person. Assignment resolves in real time as people cross paths.</p>
+      <ul class="demo-features">
+        <li><span>1:1 exclusive lock — one head per person, no doubling</span></li>
+        <li><span>Round-robin cycling when more people than fixtures</span></li>
+        <li><span>Spread mode to maximize stage coverage</span></li>
+        <li><span>Proximity re-ID across detection gaps (500 mm threshold)</span></li>
+        <li><span>Per-fixture color — each head gets its own beam color</span></li>
+        <li><span>Temporal markers appear live in 3D viewport</span></li>
+      </ul>
+    </div>
+    <div class="stage-wrap">
+      <canvas id="stage-canvas"></canvas>
+      <div class="stage-label">Top-down view — truss overhead, stage floor below</div>
+    </div>
+  </div>
+</section>
+
+<!-- Why -->
+<section class="why">
+  <h2 class="fi">Why SlyLED tracking is different</h2>
+  <p class="sub fi">Every competitor charges thousands for follow-spot automation. SlyLED is free and does more.</p>
+  <div class="why-grid">
+    <div class="why-card fi">
+      <div class="why-icon">🧠</div>
+      <h3>On-device AI, zero cloud</h3>
+      <p>Detection runs on the camera node itself. Nothing leaves your network. No API keys, no subscription, no outage risk. Works in a venue with no internet.</p>
+    </div>
+    <div class="why-card fi">
+      <div class="why-icon">🎯</div>
+      <h3>Any fixture, any make</h3>
+      <p>SlyLED uses OFL profiles — 700+ fixtures supported. If it has pan and tilt channels, tracking works. No proprietary hardware required.</p>
+    </div>
+    <div class="why-card fi">
+      <div class="why-icon">⚡</div>
+      <h3>No programming required</h3>
+      <p>Legacy follow-spot systems require DMX programming and manual cueing. SlyLED is one click. The show adapts to performers, not the other way around.</p>
+    </div>
+    <div class="why-card fi">
+      <div class="why-icon">🔗</div>
+      <h3>Integrates with everything</h3>
+      <p>Combine tracking with timeline automation, spatial effects, and manual overrides. Tracking is a mode, not a separate system.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Use cases -->
+<section class="cases">
+  <div class="cases-inner">
+    <h2 class="fi">Who uses it</h2>
+    <p class="sub fi">Built for shows where the performer is unpredictable — which is every show.</p>
+    <div class="cases-grid">
+      <div class="case-card fi">
+        <div class="case-emoji">🎤</div>
+        <h3>Live music</h3>
+        <p>Vocalist moves freely. Spot beams follow them on stage while the rest of the rig runs the programmed show.</p>
+      </div>
+      <div class="case-card fi">
+        <div class="case-emoji">🎭</div>
+        <h3>Theatre</h3>
+        <p>Actors hit their marks — or don't. SlyLED tracks wherever they actually are, not where the cue list expected them.</p>
+      </div>
+      <div class="case-card fi">
+        <div class="case-emoji">💃</div>
+        <h3>Dance</h3>
+        <p>Up to 8 performers tracked simultaneously across the full stage width. No follow-spot operator needed.</p>
+      </div>
+      <div class="case-card fi">
+        <div class="case-emoji">🎪</div>
+        <h3>Corporate events</h3>
+        <p>Speaker moves around the stage naturally. Clean, professional lighting follows without a technician watching.</p>
+      </div>
+      <div class="case-card fi">
+        <div class="case-emoji">🎠</div>
+        <h3>Installations</h3>
+        <p>Interactive art where the light responds to visitors. 16 object classes — track people, props, even pets.</p>
+      </div>
+      <div class="case-card fi">
+        <div class="case-emoji">🏫</div>
+        <h3>Education</h3>
+        <p>Affordable enough for school theatre budgets. Full system under $500 in hardware. No licensing fees ever.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Screenshots -->
+<section class="screens">
+  <h2 class="fi">Screenshots</h2>
+  <div class="screens-grid">
+    <figure class="fi" data-src="../example-b-tracking-t0.png">
+      <img src="../example-b-tracking-t0.png" alt="Stage at T=0 — three beams waiting to acquire" loading="lazy">
+      <figcaption>T=0 — fixtures idle, waiting for first detection</figcaption>
+    </figure>
+    <figure class="fi" data-src="../example-b-tracking-t5.png">
+      <img src="../example-b-tracking-t5.png" alt="T=5s — two people detected, beams acquired" loading="lazy">
+      <figcaption>T=5s — beams acquired on two performers</figcaption>
+    </figure>
+    <figure class="fi" data-src="../example-b-tracking-t10.png">
+      <img src="../example-b-tracking-t10.png" alt="T=10s — full tracking, all fixtures locked" loading="lazy">
+      <figcaption>T=10s — full stage coverage, all fixtures tracking</figcaption>
+    </figure>
+    <figure class="fi" data-src="../spa-setup-edit-camera.png">
+      <img src="../spa-setup-edit-camera.png" alt="Camera configuration dialog" loading="lazy">
+      <figcaption>Per-camera config — classes, sensitivity, resolution, FPS</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section fi">
+  <h2>Your next show runs itself.</h2>
+  <p>Download SlyLED, mount a USB camera, run the calibration wizard. Your moving heads will be tracking performers before the headliner's soundcheck.</p>
+  <div class="cta-btns">
+    <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="btn-primary">Download SlyLED Free</a>
+    <a href="../" class="btn-ghost">See All Features</a>
+  </div>
+</section>
+
+<footer>
+  <p><a href="../">SlyLED Home</a> &bull; <a href="https://github.com/SlyWombat/SlyLED">GitHub</a> &bull; <a href="../community/">Community Profiles</a></p>
+</footer>
+
+<!-- Lightbox -->
+<div id="lb" onclick="this.classList.remove('open')"><img id="lb-img" src="" alt=""></div>
+
+<script>
+// ─── Hero canvas: full-viewport beam tracking ────────────────────────────────
+(function(){
+  var c=document.getElementById('track-canvas');
+  if(!c)return;
+  var ctx=c.getContext('2d');
+  var W,H,raf;
+
+  // Fixture positions (relative 0-1)
+  var fixtures=[
+    {rx:.22,ry:.12,col:'#22d3ee',beam:null},
+    {rx:.44,ry:.10,col:'#ec4899',beam:null},
+    {rx:.62,ry:.11,col:'#f59e0b',beam:null},
+    {rx:.80,ry:.12,col:'#4ade80',beam:null},
+  ];
+
+  // People
+  var people=[
+    {x:.3,y:.7,tx:.3,ty:.7,t:0,spd:.007},
+    {x:.55,y:.75,tx:.55,ty:.75,t:Math.PI*.66,spd:.009},
+    {x:.72,y:.65,tx:.72,ty:.65,t:Math.PI*1.3,spd:.006},
+  ];
+  var personPaths=[
+    function(t){return{x:.35+Math.sin(t)*.22,y:.68+Math.sin(t*1.7+.5)*.07}},
+    function(t){return{x:.55+Math.sin(t+1.2)*.18,y:.74+Math.sin(t*.9)*.06}},
+    function(t){return{x:.72+Math.sin(t*.8+2)*.14,y:.63+Math.sin(t*1.4+1)*.08}},
+  ];
+
+  var mouse={x:.5,y:.82,active:false};
+  c.addEventListener('mousemove',function(e){
+    var r=c.getBoundingClientRect();
+    mouse.x=(e.clientX-r.left)/r.width;
+    mouse.y=(e.clientY-r.top)/r.height;
+    mouse.active=true;
+  });
+  c.addEventListener('mouseleave',function(){mouse.active=false;});
+  c.addEventListener('touchmove',function(e){
+    e.preventDefault();
+    var r=c.getBoundingClientRect();
+    var t=e.touches[0];
+    mouse.x=(t.clientX-r.left)/r.width;
+    mouse.y=(t.clientY-r.top)/r.height;
+    mouse.active=true;
+  },{passive:false});
+
+  function resize(){
+    W=c.offsetWidth; H=c.offsetHeight;
+    c.width=W*devicePixelRatio; c.height=H*devicePixelRatio;
+    ctx.scale(devicePixelRatio,devicePixelRatio);
+  }
+  window.addEventListener('resize',resize);
+  resize();
+
+  function drawBeam(fx,fy,px,py,col,alpha){
+    var dist=Math.sqrt((px-fx)*(px-fx)+(py-fy)*(py-fy));
+    var dx=(px-fx)/dist, dy=(py-fy)/dist;
+    var nx=-dy*dist*.065, ny=dx*dist*.065;
+    var hw0=3.5;
+    var g=ctx.createLinearGradient(fx,fy,px,py);
+    g.addColorStop(0,col.replace(')',','+alpha*.9+')').replace('rgb','rgba').replace('#',''));
+    // parse hex to rgba properly
+    var r2=parseInt(col.slice(1,3),16),g2=parseInt(col.slice(3,5),16),b2=parseInt(col.slice(5,7),16);
+    var grad=ctx.createLinearGradient(fx,fy,px,py);
+    grad.addColorStop(0,'rgba('+r2+','+g2+','+b2+','+alpha*.85+')');
+    grad.addColorStop(1,'rgba('+r2+','+g2+','+b2+',0)');
+    ctx.beginPath();
+    ctx.moveTo(fx-nx*.04-ny*.04,fy-ny*.04+nx*.04);
+    ctx.lineTo(px+nx,py+ny);
+    ctx.lineTo(px-nx,py-ny);
+    ctx.closePath();
+    ctx.fillStyle=grad;
+    ctx.fill();
+    // floor glow
+    var gf=ctx.createRadialGradient(px,py,0,px,py,dist*.12);
+    gf.addColorStop(0,'rgba('+r2+','+g2+','+b2+','+alpha*.5+')');
+    gf.addColorStop(1,'rgba('+r2+','+g2+','+b2+',0)');
+    ctx.beginPath();
+    ctx.ellipse(px,py,dist*.12,dist*.055,Math.atan2(dy,dx),0,Math.PI*2);
+    ctx.fillStyle=gf;
+    ctx.fill();
+  }
+
+  function drawPerson(px,py,highlight){
+    ctx.save();
+    // shadow
+    ctx.beginPath();
+    ctx.ellipse(px,py+12,8,4,0,0,Math.PI*2);
+    ctx.fillStyle='rgba(0,0,0,.35)';
+    ctx.fill();
+    // body
+    var bodyG=ctx.createRadialGradient(px,py,0,px,py,16);
+    bodyG.addColorStop(0,highlight?'rgba(255,255,255,.95)':'rgba(200,220,255,.8)');
+    bodyG.addColorStop(1,highlight?'rgba(200,200,200,.3)':'rgba(100,130,200,.15)');
+    ctx.beginPath();
+    ctx.ellipse(px,py,7,11,0,0,Math.PI*2);
+    ctx.fillStyle=bodyG;
+    ctx.fill();
+    // head
+    ctx.beginPath();
+    ctx.arc(px,py-14,5,0,Math.PI*2);
+    ctx.fillStyle=highlight?'rgba(255,255,255,.95)':'rgba(200,220,255,.8)';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawFixture(fx,fy,col){
+    ctx.save();
+    // mount point
+    ctx.beginPath();
+    ctx.arc(fx,fy,5,0,Math.PI*2);
+    ctx.fillStyle=col;
+    ctx.globalAlpha=.8;
+    ctx.fill();
+    ctx.globalAlpha=1;
+    // ring
+    ctx.beginPath();
+    ctx.arc(fx,fy,8,0,Math.PI*2);
+    ctx.strokeStyle=col;
+    ctx.lineWidth=1.5;
+    ctx.globalAlpha=.35;
+    ctx.stroke();
+    ctx.globalAlpha=1;
+    ctx.restore();
+  }
+
+  var frameN=0;
+  function frame(){
+    raf=requestAnimationFrame(frame);
+    frameN++;
+
+    ctx.clearRect(0,0,W,H);
+
+    // Background — deep stage dark
+    var bgG=ctx.createRadialGradient(W*.5,H*.5,0,W*.5,H*.5,Math.max(W,H)*.7);
+    bgG.addColorStop(0,'#0d1520');
+    bgG.addColorStop(1,'#080c12');
+    ctx.fillStyle=bgG;
+    ctx.fillRect(0,0,W,H);
+
+    // Stage floor grid (subtle)
+    ctx.save();
+    ctx.strokeStyle='rgba(51,65,85,.3)';
+    ctx.lineWidth=.5;
+    var gridSpacing=Math.min(W,H)*.08;
+    for(var gx=0;gx<W;gx+=gridSpacing){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}
+    for(var gy=0;gy<H;gy+=gridSpacing){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
+    ctx.restore();
+
+    // Truss bar
+    ctx.save();
+    var trussY=H*.13;
+    ctx.beginPath();ctx.roundRect(W*.15,trussY-4,W*.72,8,4);
+    ctx.fillStyle='#1e293b';ctx.fill();
+    ctx.strokeStyle='#334155';ctx.lineWidth=1;ctx.stroke();
+    ctx.restore();
+
+    // Update people
+    people.forEach(function(p,i){
+      p.t+=p.spd;
+      var pt=personPaths[i](p.t);
+      if(mouse.active && i===0){
+        p.tx=mouse.x; p.ty=mouse.y;
+      } else {
+        p.tx=pt.x; p.ty=pt.y;
+      }
+      p.x+=(p.tx-p.x)*.07;
+      p.y+=(p.ty-p.y)*.07;
+    });
+
+    // Assign fixtures to nearest person (greedy)
+    var assigned=new Array(people.length).fill(-1);
+    var fAssign=new Array(fixtures.length).fill(-1);
+    fixtures.forEach(function(f,fi){
+      var best=-1,bestD=Infinity;
+      people.forEach(function(p,pi){
+        var d=(p.x-f.rx)*(p.x-f.rx)+(p.y-f.ry)*(p.y-f.ry);
+        if(d<bestD){bestD=d;best=pi;}
+      });
+      if(best>=0){fAssign[fi]=best;}
+    });
+
+    // Smooth beam targets
+    fixtures.forEach(function(f,fi){
+      var pi=fAssign[fi];
+      if(pi<0)return;
+      var p=people[pi];
+      if(!f.beam){f.beam={x:p.x,y:p.y};}
+      f.beam.x+=(p.x-f.beam.x)*.1;
+      f.beam.y+=(p.y-f.beam.y)*.1;
+    });
+
+    // Draw beams first (back layer)
+    fixtures.forEach(function(f){
+      if(!f.beam)return;
+      var fx=f.rx*W, fy=f.ry*H;
+      var bx=f.beam.x*W, by=f.beam.y*H;
+      drawBeam(fx,fy,bx,by,f.col,.7);
+    });
+
+    // Draw people
+    people.forEach(function(p,i){
+      var px=p.x*W, py=p.y*H;
+      var highlighted=(mouse.active && i===0);
+      drawPerson(px,py,highlighted);
+    });
+
+    // Draw fixtures over beams
+    fixtures.forEach(function(f){
+      drawFixture(f.rx*W,f.ry*H,f.col);
+    });
+
+    // Scan line (subtle)
+    var scanY=((frameN*0.4)%H);
+    ctx.save();
+    var scanG=ctx.createLinearGradient(0,scanY-30,0,scanY+8);
+    scanG.addColorStop(0,'rgba(34,211,238,0)');
+    scanG.addColorStop(.7,'rgba(34,211,238,.04)');
+    scanG.addColorStop(1,'rgba(34,211,238,.01)');
+    ctx.fillStyle=scanG;
+    ctx.fillRect(0,scanY-30,W,38);
+    ctx.restore();
+  }
+
+  frame();
+
+  // Cleanup on nav away
+  document.addEventListener('visibilitychange',function(){
+    if(document.hidden){cancelAnimationFrame(raf);}
+    else{frame();}
+  });
+})();
+
+// ─── Top-down stage canvas ────────────────────────────────────────────────────
+(function(){
+  var c=document.getElementById('stage-canvas');
+  if(!c)return;
+  var ctx=c.getContext('2d');
+  var W,H;
+
+  var colors=['#22d3ee','#ec4899','#f59e0b','#4ade80'];
+  var fixtures=[
+    {rx:.2,ry:.1},{rx:.4,ry:.08},{rx:.62,ry:.09},{rx:.82,ry:.1}
+  ];
+  var people=[
+    {x:.3,y:.75,t:0,path:function(t){return{x:.3+Math.sin(t)*.2,y:.72+Math.sin(t*1.5)*.06};}},
+    {x:.55,y:.7,t:2,path:function(t){return{x:.56+Math.sin(t*.8+1)*.18,y:.68+Math.sin(t*1.2)*.07};}},
+    {x:.75,y:.78,t:4,path:function(t){return{x:.74+Math.sin(t*.6+2)*.13,y:.76+Math.sin(t)*.05};}},
+  ];
+
+  function resize(){
+    var rect=c.parentElement.getBoundingClientRect();
+    W=rect.width; H=rect.height||W/.714|0;
+    c.width=W*devicePixelRatio; c.height=H*devicePixelRatio;
+    c.style.width=W+'px'; c.style.height=H+'px';
+    ctx.scale(devicePixelRatio,devicePixelRatio);
+  }
+  resize();
+  window.addEventListener('resize',resize);
+
+  var spd=.008;
+  function frame(){
+    requestAnimationFrame(frame);
+    ctx.clearRect(0,0,W,H);
+
+    // bg
+    ctx.fillStyle='#060a0f';
+    ctx.fillRect(0,0,W,H);
+
+    // Stage outline
+    ctx.beginPath();
+    ctx.roundRect(W*.06,H*.22,W*.88,H*.65,8);
+    ctx.strokeStyle='rgba(51,65,85,.6)';
+    ctx.lineWidth=1;
+    ctx.stroke();
+    ctx.fillStyle='rgba(15,23,42,.4)';
+    ctx.fill();
+
+    // Truss line
+    ctx.beginPath();
+    ctx.moveTo(W*.12,H*.14);ctx.lineTo(W*.88,H*.14);
+    ctx.strokeStyle='rgba(100,116,139,.5)';ctx.lineWidth=3;ctx.stroke();
+    // truss dots
+    fixtures.forEach(function(f){
+      ctx.beginPath();ctx.arc(f.rx*W,f.ry*H,3,0,Math.PI*2);
+      ctx.fillStyle='rgba(148,163,184,.4)';ctx.fill();
+    });
+
+    // Update people
+    people.forEach(function(p){
+      p.t+=spd;
+      var pt=p.path(p.t);
+      p.x+=(pt.x-p.x)*.08;
+      p.y+=(pt.y-p.y)*.08;
+    });
+
+    // Assign
+    var fAssign=fixtures.map(function(f){
+      var best=0,bestD=Infinity;
+      people.forEach(function(p,pi){
+        var d=(p.x-f.rx)*(p.x-f.rx)+(p.y-f.ry)*(p.y-f.ry);
+        if(d<bestD){bestD=d;best=pi;}
+      });
+      return best;
+    });
+
+    // Smooth beam targets
+    fixtures.forEach(function(f,fi){
+      var p=people[fAssign[fi]];
+      if(!f.bx){f.bx=p.x;f.by=p.y;}
+      f.bx+=(p.x-f.bx)*.12;
+      f.by+=(p.y-f.by)*.12;
+    });
+
+    // Draw beams (top-down = lines with glow)
+    fixtures.forEach(function(f,fi){
+      var col=colors[fi];
+      var r2=parseInt(col.slice(1,3),16),g2=parseInt(col.slice(3,5),16),b2=parseInt(col.slice(5,7),16);
+      var x1=f.rx*W,y1=f.ry*H,x2=f.bx*W,y2=f.by*H;
+      // glow line
+      ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);
+      ctx.strokeStyle='rgba('+r2+','+g2+','+b2+',.18)';
+      ctx.lineWidth=8;ctx.stroke();
+      ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);
+      ctx.strokeStyle='rgba('+r2+','+g2+','+b2+',.55)';
+      ctx.lineWidth=2;ctx.stroke();
+      // lock ring at target
+      ctx.beginPath();ctx.arc(x2,y2,9,0,Math.PI*2);
+      ctx.strokeStyle='rgba('+r2+','+g2+','+b2+',.7)';
+      ctx.lineWidth=1.5;ctx.stroke();
+      // fixture dot
+      ctx.beginPath();ctx.arc(x1,y1,5,0,Math.PI*2);
+      ctx.fillStyle=col;ctx.globalAlpha=.9;ctx.fill();ctx.globalAlpha=1;
+    });
+
+    // People markers
+    people.forEach(function(p,i){
+      var px=p.x*W, py=p.y*H;
+      ctx.save();
+      ctx.beginPath();ctx.arc(px,py,8,0,Math.PI*2);
+      ctx.fillStyle='rgba(255,255,255,.13)';ctx.fill();
+      ctx.beginPath();ctx.arc(px,py,4,0,Math.PI*2);
+      ctx.fillStyle='rgba(255,255,255,.85)';ctx.fill();
+      // label
+      ctx.font='9px system-ui';ctx.fillStyle='rgba(255,255,255,.5)';
+      ctx.textAlign='center';ctx.fillText('P'+(i+1),px,py-13);
+      ctx.restore();
+    });
+
+    // Label
+    ctx.font='10px system-ui';ctx.fillStyle='rgba(100,116,139,.6)';
+    ctx.textAlign='left';ctx.fillText('STAGE',W*.08,H*.92);
+    ctx.textAlign='center';ctx.fillText('↑ truss',W*.5,H*.06);
+  }
+  frame();
+})();
+
+// ─── Nav hide/show on scroll ──────────────────────────────────────────────────
+(function(){
+  var nav=document.getElementById('nav');
+  var last=0;
+  window.addEventListener('scroll',function(){
+    var s=window.scrollY;
+    if(s>last+40&&s>200){nav.classList.add('hide');}
+    else if(s<last-10){nav.classList.remove('hide');}
+    last=s;
+  });
+})();
+
+// ─── Fade-in observer ─────────────────────────────────────────────────────────
+(function(){
+  if(!window.IntersectionObserver)return;
+  var obs=new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){e.target.classList.add('visible');obs.unobserve(e.target);}
+    });
+  },{threshold:.12,rootMargin:'0px 0px -40px 0px'});
+  document.querySelectorAll('.fi').forEach(function(el){obs.observe(el);});
+})();
+
+// ─── Screenshot lightbox ──────────────────────────────────────────────────────
+(function(){
+  var lb=document.getElementById('lb');
+  var lbImg=document.getElementById('lb-img');
+  document.querySelectorAll('.screens-grid figure').forEach(function(fig){
+    fig.addEventListener('click',function(){
+      lbImg.src=fig.dataset.src||fig.querySelector('img').src;
+      lb.classList.add('open');
+    });
+  });
+  lb.addEventListener('click',function(){lb.classList.remove('open');});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')lb.classList.remove('open');});
+})();
+
+// ─── Analytics ────────────────────────────────────────────────────────────────
+fetch('/api/analytics/index.php?action=hit&page='+encodeURIComponent(location.pathname),{method:'POST',body:JSON.stringify({page:location.pathname,referrer:document.referrer,sw:screen.width}),headers:{'Content-Type':'application/json'}}).catch(function(){});
+</script>
 </body>
 </html>

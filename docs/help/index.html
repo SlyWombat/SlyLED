@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SlyLED User Manual</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --border: #334155;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #22d3ee;
+    --accent2: #818cf8;
+    --green: #4ade80;
+    --yellow: #fbbf24;
+    --red: #f87171;
+    --code-bg: #0d1117;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    display: flex;
+    min-height: 100vh;
+  }
+  /* Sidebar */
+  nav {
+    width: 280px;
+    min-width: 280px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 1.5rem 1rem;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    font-size: .875rem;
+  }
+  nav .logo {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+  }
+  nav .logo span { color: var(--text); }
+  nav ul { list-style: none; }
+  nav li { margin: .15rem 0; }
+  nav a {
+    color: var(--muted);
+    text-decoration: none;
+    display: block;
+    padding: .3rem .5rem;
+    border-radius: 4px;
+    transition: background .15s, color .15s;
+  }
+  nav a:hover { background: var(--border); color: var(--text); }
+  nav .section-link { font-weight: 600; color: var(--text); margin-top: .8rem; }
+  nav .sub-link { padding-left: 1.2rem; font-size: .82rem; }
+  /* Main content */
+  main {
+    flex: 1;
+    max-width: 960px;
+    padding: 2.5rem 3rem;
+    overflow-x: hidden;
+  }
+  h1 { font-size: 2rem; color: var(--accent); margin-bottom: .3rem; }
+  .subtitle { color: var(--muted); margin-bottom: 2.5rem; font-size: .95rem; }
+  h2 {
+    font-size: 1.5rem;
+    color: var(--accent);
+    margin: 2.5rem 0 1rem;
+    padding-bottom: .5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 { font-size: 1.15rem; color: var(--accent2); margin: 1.8rem 0 .7rem; }
+  h4 { font-size: 1rem; color: var(--yellow); margin: 1.2rem 0 .5rem; }
+  p { margin: .6rem 0; color: var(--text); }
+  a { color: var(--accent); }
+  ul, ol { margin: .6rem 0 .6rem 1.5rem; }
+  li { margin: .25rem 0; }
+  strong { color: var(--text); }
+  code {
+    font-family: 'Consolas', 'Fira Code', monospace;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    padding: .1em .35em;
+    border-radius: 3px;
+    font-size: .88em;
+    color: var(--green);
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin: .8rem 0;
+    overflow-x: auto;
+    font-size: .88rem;
+    line-height: 1.5;
+  }
+  pre code { background: none; border: none; padding: 0; color: var(--green); }
+  blockquote {
+    border-left: 3px solid var(--accent);
+    background: var(--surface);
+    padding: .7rem 1rem;
+    margin: .8rem 0;
+    border-radius: 0 6px 6px 0;
+    color: var(--muted);
+    font-size: .93rem;
+  }
+  blockquote strong { color: var(--accent); }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: .8rem 0;
+    font-size: .9rem;
+  }
+  th {
+    background: var(--surface);
+    color: var(--accent);
+    padding: .5rem .75rem;
+    text-align: left;
+    border: 1px solid var(--border);
+    font-weight: 600;
+  }
+  td {
+    padding: .45rem .75rem;
+    border: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:nth-child(even) td { background: rgba(255,255,255,.02); }
+  /* Screenshots */
+  .screenshot {
+    margin: 1.2rem 0;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .screenshot img {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  .screenshot figcaption {
+    background: var(--surface);
+    padding: .4rem .75rem;
+    font-size: .82rem;
+    color: var(--muted);
+    border-top: 1px solid var(--border);
+  }
+  .screenshot-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1rem 0;
+  }
+  /* Step badges */
+  .step-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    background: var(--accent);
+    color: var(--bg);
+    border-radius: 50%;
+    font-weight: 700;
+    font-size: .85rem;
+    margin-right: .5rem;
+    flex-shrink: 0;
+  }
+  .step {
+    display: flex;
+    align-items: flex-start;
+    margin: 1.5rem 0;
+    gap: .5rem;
+  }
+  .step-content { flex: 1; }
+  .step-content h3 { margin-top: 0; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  .badge {
+    display: inline-block;
+    padding: .15em .5em;
+    border-radius: 4px;
+    font-size: .78rem;
+    font-weight: 600;
+  }
+  .badge-blue { background: rgba(34,211,238,.2); color: var(--accent); }
+  .badge-green { background: rgba(74,222,128,.2); color: var(--green); }
+  .badge-yellow { background: rgba(251,191,36,.2); color: var(--yellow); }
+  .tip {
+    background: rgba(34,211,238,.08);
+    border: 1px solid rgba(34,211,238,.3);
+    border-radius: 6px;
+    padding: .7rem 1rem;
+    margin: .8rem 0;
+    font-size: .9rem;
+  }
+  .tip::before { content: "💡 "; }
+  .warn {
+    background: rgba(251,191,36,.08);
+    border: 1px solid rgba(251,191,36,.3);
+    border-radius: 6px;
+    padding: .7rem 1rem;
+    margin: .8rem 0;
+    font-size: .9rem;
+  }
+  .warn::before { content: "⚠️ "; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">🎭 <span>SlyLED</span></div>
+  <ul>
+    <li><a href="#getting-started" class="section-link">1. Getting Started</a></li>
+    <li><a href="#walkthrough" class="section-link">2. First Show Walkthrough</a></li>
+    <li><a href="#wt-step1" class="sub-link">Step 1 — Launch</a></li>
+    <li><a href="#wt-step3a" class="sub-link">Step 3a — DMX Hardware</a></li>
+    <li><a href="#wt-step3b" class="sub-link">Step 3b — DMX Engine</a></li>
+    <li><a href="#wt-step4" class="sub-link">Step 4 — Fixtures</a></li>
+    <li><a href="#wt-step6" class="sub-link">Step 6 — Cameras</a></li>
+    <li><a href="#wt-step7" class="sub-link">Step 7 — Layout</a></li>
+    <li><a href="#wt-step9" class="sub-link">Step 9 — Calibrate</a></li>
+    <li><a href="#wt-step10" class="sub-link">Step 10 — Actions</a></li>
+    <li><a href="#wt-step11" class="sub-link">Step 11 — Timeline</a></li>
+    <li><a href="#wt-step12" class="sub-link">Step 12 — Playback</a></li>
+    <li><a href="#platforms" class="section-link">3. Platforms</a></li>
+    <li><a href="#fixture-setup" class="section-link">4. Fixture Setup</a></li>
+    <li><a href="#layout" class="section-link">5. Stage Layout</a></li>
+    <li><a href="#objects" class="section-link">6. Stage Objects</a></li>
+    <li><a href="#spatial-effects" class="section-link">7. Spatial Effects</a></li>
+    <li><a href="#track" class="section-link">8. Track Action</a></li>
+    <li><a href="#timeline" class="section-link">9. Building a Timeline</a></li>
+    <li><a href="#baking" class="section-link">10. Baking &amp; Playback</a></li>
+    <li><a href="#emulator" class="section-link">11. Show Preview</a></li>
+    <li><a href="#dmx-profiles" class="section-link">12. DMX Profiles</a></li>
+    <li><a href="#presets" class="section-link">13. Preset Shows</a></li>
+    <li><a href="#cameras" class="section-link">14. Camera Nodes</a></li>
+    <li><a href="#firmware" class="section-link">15. Firmware &amp; OTA</a></li>
+    <li><a href="#limits" class="section-link">16. System Limits</a></li>
+    <li><a href="#troubleshooting" class="section-link">17. Troubleshooting</a></li>
+  </ul>
+</nav>
+
+<main>
+
+<h1>SlyLED User Manual</h1>
+<p class="subtitle">3D Volumetric Lighting Control System — v1.0 &nbsp;|&nbsp; <span class="badge badge-blue">Validated April 2026</span></p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="getting-started">1. Getting Started</h2>
+
+<p>SlyLED is a three-tier lighting control system:</p>
+<ul>
+  <li><strong>Orchestrator</strong> — Windows/Mac/Android app: design shows and control playback</li>
+  <li><strong>Performers</strong> — ESP32/D1 Mini nodes: run LED effects on hardware</li>
+  <li><strong>DMX Bridge</strong> — Art-Net/sACN output to professional DMX fixtures</li>
+</ul>
+
+<h3>Quick Start</h3>
+<ol>
+  <li>Launch: <code>powershell -File desktop\windows\run.ps1</code> (Windows) or <code>bash desktop/mac/run.sh</code> (Mac)</li>
+  <li>Open <code>http://localhost:8080</code> in Chrome or Edge</li>
+  <li><strong>Setup</strong> tab → Discover performers</li>
+  <li><strong>Layout</strong> tab → position fixtures</li>
+  <li><strong>Runtime</strong> tab → load a Preset Show → Bake &amp; Start</li>
+</ol>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="walkthrough">2. Walkthrough: First Show in 30 Minutes</h2>
+
+<p>This walkthrough builds a complete DMX moving-head show from scratch — hardware discovery, fixture setup, layout, camera registration, actions, timeline, and playback. Every step was validated end-to-end during QA testing (issue #533).</p>
+
+<p><strong>What you need:</strong></p>
+<ul>
+  <li>SlyLED orchestrator running on Windows or Mac</li>
+  <li>At least one DMX moving head connected via Art-Net/sACN bridge (e.g. Enttec ODE Mk3)</li>
+  <li>At least one USB camera node on the network (Orange Pi or Raspberry Pi)</li>
+  <li>All devices on the same LAN subnet as the orchestrator</li>
+</ul>
+
+<hr>
+
+<h3 id="wt-step1">Step 1 — Launch and Create a New Project</h3>
+
+<p>Start the orchestrator and open <code>http://localhost:8080</code>. The SPA loads on the Dashboard tab.</p>
+
+<figure class="screenshot">
+  <img src="images/01-launch.png" alt="SPA at launch — Dashboard tab">
+  <figcaption>The SPA at launch showing the Dashboard tab with the 7-tab navigation.</figcaption>
+</figure>
+
+<p>Go to <strong>Settings</strong> → <strong>Project</strong> → click <strong>New Project</strong>, then name it (e.g. "Walkthrough Show").</p>
+
+<figure class="screenshot">
+  <img src="images/02-new-project.png" alt="New project dialog">
+  <figcaption>New project dialog — enter a name and click Create.</figcaption>
+</figure>
+
+<hr>
+
+<h3>Step 2 — Set Stage Dimensions</h3>
+
+<p>In <strong>Settings</strong> → <strong>Stage</strong>, enter your performance area dimensions:</p>
+<ul>
+  <li>Width: <code>6000</code> mm (6 m)</li>
+  <li>Height: <code>3000</code> mm (3 m)</li>
+  <li>Depth: <code>4000</code> mm (4 m)</li>
+</ul>
+<p>Click <strong>Save</strong>. The layout canvas resizes to match.</p>
+
+<hr>
+
+<h3 id="wt-step3a">Step 3a — Discover DMX Hardware</h3>
+
+<p>Go to the <strong>Setup</strong> tab. In the <strong>DMX Nodes</strong> section, click <strong>Discover Nodes</strong>. SlyLED broadcasts an ArtPoll packet; Art-Net bridges on the network reply within 3 seconds.</p>
+
+<figure class="screenshot">
+  <img src="images/03a-discover-hardware.png" alt="Setup tab after hardware discovery">
+  <figcaption>Setup tab showing a discovered Art-Net node with IP, port, and universe count.</figcaption>
+</figure>
+
+<p>If your bridge is not found:</p>
+<ul>
+  <li>Confirm it is powered and on the same LAN subnet</li>
+  <li>Check that UDP port 6454 is not blocked by a local firewall</li>
+  <li>Some bridges require the Art-Net source IP to match their configured subnet</li>
+</ul>
+
+<hr>
+
+<h3 id="wt-step3b">Step 3b — Configure and Start the DMX Engine</h3>
+
+<p>Go to <strong>Settings</strong> → <strong>DMX</strong>:</p>
+<ol>
+  <li><strong>Universe Routing</strong>: Set Universe 1 → your Art-Net node IP (or broadcast <code>255.255.255.255</code>)</li>
+  <li>Click <strong>Start Engine</strong> — the status indicator turns green</li>
+</ol>
+
+<div class="screenshot-row">
+  <figure class="screenshot">
+    <img src="images/03b-dmx-engine.png" alt="DMX engine settings">
+    <figcaption>DMX engine — universe routing and Start Engine button.</figcaption>
+  </figure>
+  <figure class="screenshot">
+    <img src="images/03-dmx-routing.png" alt="DMX routing config">
+    <figcaption>Universe 1 assigned to the Art-Net bridge IP.</figcaption>
+  </figure>
+</div>
+
+<div class="warn">The engine must be running before adding DMX fixtures or running calibration. If you restart the orchestrator, re-start the engine here.</div>
+
+<hr>
+
+<h3 id="wt-step4">Step 4 — Add DMX Moving Head Fixtures</h3>
+
+<p>Go to the <strong>Setup</strong> tab → click <strong>+ DMX Fixture</strong>. The fixture wizard opens.</p>
+
+<h4>Finding the right profile</h4>
+<ol>
+  <li>Type your fixture's name in the <strong>Search</strong> box (e.g. "Sly Moving Head Super Mini")</li>
+  <li>Results show Local profiles first, then Community, then OFL (Open Fixture Library)</li>
+  <li>If a community profile download fails ("imported: 0"), it may contain unsupported channel types — use a local generic profile or search OFL directly</li>
+  <li>For a generic 16-channel moving head, search OFL for "moving head" and import the closest match</li>
+</ol>
+
+<p><strong>Fixture 1 (stage left):</strong> Name: <code>MH1 SL</code>, Universe 1, Start Address 1</p>
+
+<figure class="screenshot">
+  <img src="images/04a-mh1-sly-added.png" alt="MH1 added to Setup tab">
+  <figcaption>MH1 SL added — purple DMX badge with profile name visible.</figcaption>
+</figure>
+
+<p><strong>Fixture 2 (stage right):</strong> Name: <code>MH2 SR</code>, Universe 1, Start Address 17</p>
+
+<figure class="screenshot">
+  <img src="images/04b-mh2-sly-added.png" alt="MH2 added to Setup tab">
+  <figcaption>Both moving heads in the Setup fixture list.</figcaption>
+</figure>
+
+<hr>
+
+<h3>Step 5 — Add a Wash or Spot Fixture</h3>
+
+<p>Click <strong>+ DMX Fixture</strong> again for any additional fixtures (e.g. 350W spot):</p>
+<ul>
+  <li>Name: <code>Spot C</code>, Universe 1, Start Address 33</li>
+</ul>
+
+<figure class="screenshot">
+  <img src="images/05-350w-spot-added.png" alt="350W spot added">
+  <figcaption>350W spot fixture added alongside the two moving heads.</figcaption>
+</figure>
+
+<hr>
+
+<h3 id="wt-step6">Step 6 — Register Camera Nodes</h3>
+
+<p>On the <strong>Setup</strong> tab, scroll to <strong>Camera Nodes</strong>. Click <strong>Discover Cameras</strong> or enter IPs manually.</p>
+
+<figure class="screenshot">
+  <img src="images/06-cameras-added.png" alt="Two cameras added">
+  <figcaption>Two camera nodes registered with online status indicators.</figcaption>
+</figure>
+
+<p>Click <strong>Snap</strong> to verify each camera's live feed.</p>
+
+<div class="screenshot-row">
+  <figure class="screenshot">
+    <img src="images/06-cam1_left_hires.png" alt="Camera 1 snapshot">
+    <figcaption>Camera 1 (left) — live snapshot showing stage area.</figcaption>
+  </figure>
+  <figure class="screenshot">
+    <img src="images/06-cam2_right.png" alt="Camera 2 snapshot">
+    <figcaption>Camera 2 (right) — live snapshot from stage right.</figcaption>
+  </figure>
+</div>
+
+<div class="tip">Camera discover sometimes returns 0 nodes on the first broadcast due to UDP timing. Wait 3 seconds and click Discover again if needed. (Known issue #542.)</div>
+
+<hr>
+
+<h3 id="wt-step7">Step 7 — Position All Fixtures on the Layout</h3>
+
+<p>Switch to the <strong>Layout</strong> tab. Drag fixtures from the sidebar onto the canvas, then double-click each to enter exact coordinates.</p>
+
+<table>
+  <tr><th>Fixture</th><th>X (mm)</th><th>Y (mm)</th><th>Z (mm)</th></tr>
+  <tr><td>MH1 SL</td><td>1500</td><td>3000</td><td>500</td></tr>
+  <tr><td>MH2 SR</td><td>4500</td><td>3000</td><td>500</td></tr>
+  <tr><td>Spot C</td><td>3000</td><td>3000</td><td>500</td></tr>
+  <tr><td>Cam Left</td><td>0</td><td>2500</td><td>0</td></tr>
+  <tr><td>Cam Right</td><td>6000</td><td>2500</td><td>0</td></tr>
+</table>
+
+<div class="screenshot-row">
+  <figure class="screenshot">
+    <img src="images/04c-layout-initial.png" alt="Layout — initial fixture placement">
+    <figcaption>Fixtures placed on the 2D layout canvas.</figcaption>
+  </figure>
+  <figure class="screenshot">
+    <img src="images/04d-layout-positions.png" alt="Layout — final positions">
+    <figcaption>Final fixture positions entered via the edit dialog.</figcaption>
+  </figure>
+</div>
+
+<figure class="screenshot">
+  <img src="images/06c-cameras-positioned.png" alt="Camera fixtures on layout">
+  <figcaption>Camera fixtures positioned on the layout — cyan FOV frustums visible.</figcaption>
+</figure>
+
+<div class="tip">Use 3D view (toggle in the layout toolbar) to confirm movers are elevated and aimed downward toward the stage floor.</div>
+
+<hr>
+
+<h3>Step 8 — Add a Stage Object</h3>
+
+<p>In the <strong>Layout</strong> tab, click <strong>+ Object</strong>:</p>
+<ul>
+  <li>Name: <code>Music Stand</code></li>
+  <li>Type: <strong>Prop</strong> (moving — trackable by movers)</li>
+  <li>Position: X: 3000, Y: 0, Z: 2000 (center stage, floor level)</li>
+  <li>Size: 300 × 1200 × 300 mm</li>
+</ul>
+
+<figure class="screenshot">
+  <img src="images/08-music-object.png" alt="Music stand object on layout">
+  <figcaption>Music stand prop object placed at center stage.</figcaption>
+</figure>
+
+<hr>
+
+<h3 id="wt-step9">Step 9 — Run Mover Calibration</h3>
+
+<p>Before moving heads can accurately aim, calibrate each one. Requires: camera nodes positioned (Step 7) + DMX engine running (Step 3b).</p>
+
+<p>In the <strong>Layout</strong> tab, double-click <code>MH1 SL</code>, then click <strong>Calibrate</strong>.</p>
+
+<div class="screenshot-row">
+  <figure class="screenshot">
+    <img src="images/07-calibrate-buttons.png" alt="Calibrate button in fixture edit dialog">
+    <figcaption>Calibrate button in the fixture edit dialog.</figcaption>
+  </figure>
+  <figure class="screenshot">
+    <img src="images/07-calibrate-ui.png" alt="Calibration wizard UI">
+    <figcaption>Calibration wizard — choose beam color and start.</figcaption>
+  </figure>
+</div>
+
+<ol>
+  <li>Select <strong>Green</strong> as the beam color (good contrast on dark floors)</li>
+  <li>Click <strong>Start Calibration</strong></li>
+  <li>The wizard runs: coarse scan → BFS mapping → grid build (3-5 min per head)</li>
+  <li>Repeat for <code>MH2 SR</code></li>
+</ol>
+
+<hr>
+
+<h3 id="wt-step10">Step 10 — Create Actions</h3>
+
+<p>Go to the <strong>Actions</strong> tab. Create two actions:</p>
+
+<h4>Action 1: Aim Red (static spotlight)</h4>
+<ol>
+  <li>Click <strong>+ New Action</strong></li>
+  <li>Name: <code>Aim Red</code>, Type: <code>DMX Scene</code>, Colour: Red (255, 0, 0), Dimmer: 255</li>
+  <li>Click <strong>Save Action</strong></li>
+</ol>
+
+<figure class="screenshot">
+  <img src="images/09-aim-red.png" alt="Aim Red action">
+  <figcaption>Aim Red DMX Scene action — full red at full dimmer.</figcaption>
+</figure>
+
+<h4>Action 2: Figure Eight (dynamic sweep)</h4>
+<ol>
+  <li>Click <strong>+ New Action</strong></li>
+  <li>Name: <code>Figure Eight</code>, Type: <code>Track</code>, Target Objects: empty (track all), Cycle Time: 4000 ms</li>
+  <li>Click <strong>Save Action</strong></li>
+</ol>
+
+<figure class="screenshot">
+  <img src="images/11d-figure8-action.png" alt="Figure Eight track action">
+  <figcaption>Figure Eight Track action — all moving objects, 4s cycle time.</figcaption>
+</figure>
+
+<hr>
+
+<h3 id="wt-step11">Step 11 — Build a Timeline</h3>
+
+<p>Go to the <strong>Runtime</strong> tab (labeled <strong>Shows</strong> in some versions). Click <strong>+ New Timeline</strong>. Enter name <code>Walkthrough Show</code> and duration <code>120</code> seconds.</p>
+
+<figure class="screenshot">
+  <img src="images/11e-timeline.png" alt="Timeline editor with tracks">
+  <figcaption>Timeline editor showing tracks with action clips assigned.</figcaption>
+</figure>
+
+<p>Click <strong>+ Add Track</strong> for each fixture and assign action clips:</p>
+<ul>
+  <li>MH1 SL: <code>Aim Red</code> at 0s (10s) → <code>Figure Eight</code> at 10s (110s)</li>
+  <li>MH2 SR: <code>Figure Eight</code> at 0s (120s)</li>
+  <li>All Performers: ambient color wash</li>
+</ul>
+
+<div class="tip">The Track action (type 18) evaluates in real-time during playback — it reads live object positions at 40 Hz and does not need per-frame baking.</div>
+
+<figure class="screenshot">
+  <img src="images/11b-track-action.png" alt="Track action in timeline">
+  <figcaption>Track action clip in the timeline — runs continuously during playback.</figcaption>
+</figure>
+
+<hr>
+
+<h3 id="wt-step12">Step 12 — Bake and Start Playback</h3>
+
+<ol>
+  <li>Click <strong>Bake</strong> — compiles the timeline. Progress shows frame count and segments.</li>
+  <li>Click <strong>Start</strong> — NTP-synchronized playback begins.</li>
+</ol>
+
+<figure class="screenshot">
+  <img src="images/11f-runtime.png" alt="Runtime view with animated beam cones">
+  <figcaption>Runtime view — beam cones animate in 3D as the timeline plays.</figcaption>
+</figure>
+
+<p>To test a blackout, click <strong>Stop</strong> then fire <strong>Blackout</strong> from Settings → Group Control.</p>
+
+<figure class="screenshot">
+  <img src="images/10-blackout.png" alt="Blackout state">
+  <figcaption>Blackout state — all beams off, stage dark.</figcaption>
+</figure>
+
+<p>Save everything via <strong>Settings</strong> → <strong>Project</strong> → <strong>Export</strong> (.slyshow file).</p>
+
+<figure class="screenshot">
+  <img src="images/12-saved.png" alt="Project saved confirmation">
+  <figcaption>Project exported as .slyshow — all fixtures, layout, calibration, timelines bundled.</figcaption>
+</figure>
+
+<h3>Walkthrough Troubleshooting</h3>
+<table>
+  <tr><th>Problem</th><th>Solution</th></tr>
+  <tr><td>No Art-Net nodes discovered</td><td>Confirm bridge on same subnet; UDP 6454 not blocked</td></tr>
+  <tr><td>DMX engine won't start</td><td>Settings → DMX → verify universe routing configured</td></tr>
+  <tr><td>Community profile download fails</td><td>Unsupported channel types — use local or OFL profile</td></tr>
+  <tr><td>Fixture position resets to 0,0,0</td><td>Use the edit dialog Save button; wait for save to complete</td></tr>
+  <tr><td>Camera discover returns 0</td><td>Wait 3s and retry — first broadcast arrives before socket binds (#542)</td></tr>
+  <tr><td>Calibration fails to detect beam</td><td>Dim ambient light; verify beam color contrasts with floor</td></tr>
+  <tr><td>Figure Eight doesn't move heads</td><td>Verify Track action has no fixture restriction; confirm engine running</td></tr>
+  <tr><td>Timeline tracks missing</td><td>Add tracks manually after timeline creation — not auto-created</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="platforms">3. Platform Guide</h2>
+
+<h3>Windows Desktop (SPA)</h3>
+<p>Primary design and control interface. Full-featured 7-tab SPA with 2D/3D layout, timeline editor, spatial effects, DMX profiles, and firmware management.</p>
+<ul>
+  <li><strong>Launch:</strong> <code>powershell -File desktop\windows\run.ps1</code> or run <code>SlyLED.exe</code></li>
+  <li><strong>Install:</strong> Run <code>SlyLED-Setup.exe</code> (includes system tray icon)</li>
+</ul>
+
+<h3>Android App</h3>
+<p>Live operator tool for running shows from your phone. Connects to the desktop server over WiFi.</p>
+<ul>
+  <li><strong>Install:</strong> Transfer <code>SlyLED-debug.apk</code> to your phone</li>
+  <li><strong>Connect:</strong> Scan the QR code on the desktop Settings tab, or enter server IP manually</li>
+</ul>
+<p><strong>Android screens:</strong> Stage (live 3D viewport, play/stop), Control (timeline start, brightness, Pointer Mode), Status (device monitoring, camera tracking), Settings.</p>
+<p><strong>Pointer Mode:</strong> Select a DMX moving head, hold your phone, and point where you want the light. Pan/tilt follows your phone orientation at 20 Hz.</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="fixture-setup">4. Fixture Setup</h2>
+
+<h3>Fixture Types</h3>
+<table>
+  <tr><th>Type</th><th>Description</th></tr>
+  <tr><td><strong>LED</strong></td><td>Linked to a performer child with LED strings</td></tr>
+  <tr><td><strong>DMX</strong></td><td>Linked to a DMX universe/address with profile and aim point</td></tr>
+  <tr><td><strong>Camera</strong></td><td>USB camera sensor on an Orange Pi/RPi node</td></tr>
+</table>
+
+<h3>Adding DMX Fixtures (Wizard)</h3>
+<p>Click <strong>+ DMX Fixture</strong> on the Setup tab to launch the 3-step wizard:</p>
+<ol>
+  <li><strong>Choose Fixture</strong> — search Local + Community + OFL simultaneously</li>
+  <li><strong>Set Address</strong> — universe, start address, name; real-time conflict detection</li>
+  <li><strong>Confirm</strong> — review settings, click "Create Fixture"</li>
+</ol>
+
+<h3>Profile Search Priority</h3>
+<p>When searching for a profile, results are ranked: <strong>Local</strong> (custom) → <strong>Community</strong> (shared library) → <strong>OFL</strong> (Open Fixture Library, 700+ fixtures). If a community profile fails to import due to unsupported channel types, fall back to an OFL profile with similar channel layout.</p>
+
+<h3>DMX Monitor</h3>
+<p>Settings → DMX → <strong>DMX Monitor</strong>: real-time 512-channel grid per universe. Click any cell to set a value. Color-coded by intensity.</p>
+
+<h3>Group Control</h3>
+<p>Settings → DMX → <strong>Group Control</strong>: master dimmer, R/G/B sliders, and quick color preset buttons (Warm, Cool, Red, Off) for all fixtures in a group.</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="layout">5. Stage Layout</h2>
+
+<h3>2D Canvas</h3>
+<p>The Layout tab shows a 2D front view of the stage. Stage dimensions are set in Settings.</p>
+
+<table>
+  <tr><th>Action</th><th>Desktop</th></tr>
+  <tr><td>Place fixture</td><td>Drag from sidebar</td></tr>
+  <tr><td>Move fixture</td><td>Drag on canvas</td></tr>
+  <tr><td>Edit coordinates</td><td>Double-click → enter values → Save</td></tr>
+  <tr><td>Remove fixture</td><td>Double-click → Remove</td></tr>
+  <tr><td>Zoom</td><td>Scroll wheel</td></tr>
+</table>
+
+<h3>3D Viewport</h3>
+<p>Toggle to 3D mode for an interactive Three.js scene with orbit camera, beam cones as 3D geometry, draggable aim spheres for DMX fixtures, and object planes with transparency.</p>
+
+<h3>Move / Rotate Mode</h3>
+<p>Keyboard shortcuts <strong>M</strong> (move) and <strong>R</strong> (rotate) toggle interaction modes. In Rotate mode, a compass ring appears around DMX fixtures — drag it to aim the beam. Press <strong>Ctrl+Z</strong> to undo.</p>
+
+<h3>Coordinate System</h3>
+<ul>
+  <li>X = horizontal (mm), Y = height from floor (mm), Z = depth (mm)</li>
+  <li>Stage origin: bottom-left corner of the front face</li>
+</ul>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="objects">6. Stage Objects</h2>
+
+<table>
+  <tr><th>Type</th><th>Mobility</th><th>Description</th></tr>
+  <tr><td>Wall</td><td>Static</td><td>Back wall — stage-locked</td></tr>
+  <tr><td>Floor</td><td>Static</td><td>Stage floor — stage-locked</td></tr>
+  <tr><td>Truss</td><td>Static</td><td>Lighting truss bar</td></tr>
+  <tr><td>Prop</td><td>Moving</td><td>Performer or set piece — trackable by moving heads</td></tr>
+  <tr><td>Custom</td><td>Moving</td><td>User-defined object</td></tr>
+</table>
+
+<p><strong>Patrol Motion:</strong> Moving objects can patrol back and forth. Configure axis (X/Z/X+Z), speed, range, and easing. Evaluated at 40 Hz during DMX playback.</p>
+
+<p><strong>Temporal Objects:</strong> External systems (cameras) create short-lived objects via <code>POST /api/objects/temporal</code>. Auto-expire when TTL elapses.</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="spatial-effects">7. Creating Spatial Effects</h2>
+
+<p>Spatial effects operate in 3D space — a sphere of light sweeping across the stage illuminates different fixtures at different times.</p>
+
+<p>Navigate to <strong>Actions</strong> tab → <strong>+ New Action</strong> → set Type to <strong>Spatial Effect</strong>.</p>
+
+<table>
+  <tr><th>Field</th><th>Description</th></tr>
+  <tr><td>Shape</td><td>Sphere, Plane, or Box</td></tr>
+  <tr><td>Color</td><td>RGB color applied to pixels inside the field</td></tr>
+  <tr><td>Motion Start/End</td><td>3D positions in millimeters</td></tr>
+  <tr><td>Duration</td><td>Travel time from start to end</td></tr>
+  <tr><td>Easing</td><td>Linear, ease-in, ease-out, ease-in-out</td></tr>
+</table>
+
+<p>SlyLED supports 19 action types total: 14 classic LED actions + 5 DMX/spatial (DMX Scene, Pan/Tilt Move, Gobo Select, Color Wheel, Track).</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="track">8. Track Action</h2>
+
+<p>Makes DMX moving heads follow moving objects in real-time during playback.</p>
+
+<table>
+  <tr><th>Field</th><th>Description</th></tr>
+  <tr><td>trackObjectIds</td><td>Target object IDs (empty = all moving objects)</td></tr>
+  <tr><td>trackCycleMs</td><td>Cycle time when more objects than heads (default 2000ms)</td></tr>
+  <tr><td>trackOffset</td><td>Global [x,y,z] offset in mm</td></tr>
+  <tr><td>trackFixtureIds</td><td>Specific fixture IDs (empty = all moving heads)</td></tr>
+  <tr><td>trackFixedAssignment</td><td>Fixed 1:1 — each head gets one target</td></tr>
+</table>
+
+<p><strong>Assignment rules:</strong> Equal heads and objects → 1:1. More heads than objects → spread. More objects than heads → cycle (or fixed mode: extras ignored).</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="timeline">9. Building a Timeline</h2>
+
+<ol>
+  <li>Go to <strong>Runtime</strong> tab → <strong>+ New Timeline</strong></li>
+  <li>Enter name and duration (seconds)</li>
+  <li>Click <strong>+ Add Track</strong> for each fixture or group</li>
+  <li>Click <strong>+ Add Clip</strong> to assign effects with start time and duration</li>
+</ol>
+
+<p>Clips can overlap — they blend according to their effect's blend mode. Track actions (type 18) evaluate in real-time without per-frame baking.</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="baking">10. Baking &amp; Playback</h2>
+
+<ol>
+  <li>Click <strong>Bake</strong> → progress shows frame count and segments</li>
+  <li>Click <strong>Sync</strong> to push instructions to performers via UDP</li>
+  <li>Click <strong>Start</strong> for synchronized NTP-timed playback</li>
+</ol>
+
+<p>Output: action segments (19 types), LSQ files (raw RGB at 40 Hz), and preview data for the emulator.</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="emulator">11. Show Preview Emulator</h2>
+
+<p>Both desktop and Android include a real-time show preview. The emulator canvas shows LED string dots, DMX beam cones with live colors, aim dots, fixture labels, and a time counter.</p>
+
+<p>During playback, spatial effects render as animated translucent shapes moving across the stage — spheres, planes, and boxes with live position labels.</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="dmx-profiles">12. DMX Fixture Profiles</h2>
+
+<h3>Built-in Profiles</h3>
+<table>
+  <tr><th>Profile</th><th>Channels</th><th>Features</th></tr>
+  <tr><td>Generic RGB</td><td>3</td><td>Red, Green, Blue</td></tr>
+  <tr><td>Generic RGBW</td><td>5</td><td>RGBW + Dimmer</td></tr>
+  <tr><td>Generic Dimmer</td><td>1</td><td>Intensity only</td></tr>
+  <tr><td>Moving Head 16-bit</td><td>16</td><td>Pan, Tilt, Dimmer, Color, Gobo, Prism</td></tr>
+</table>
+
+<h3>Open Fixture Library</h3>
+<p>Click <strong>Search OFL</strong> in Settings → Profiles to browse 700+ fixtures. Search by name, manufacturer, or keyword. <strong>Import All</strong> bulk-imports an entire manufacturer's catalog.</p>
+
+<h3>Community Library</h3>
+<p>Click <strong>Community</strong> to browse profiles shared by other SlyLED users. Download to import locally. Share custom profiles for others to discover.</p>
+
+<div class="warn">Some community profiles may fail to import if they contain channel capability types not yet supported (e.g. <code>pan-tilt-speed</code>, <code>ColorTemperature</code>). Fall back to OFL or a local custom profile. Issue #544 tracks adding support for these types.</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="presets">13. Preset Shows</h2>
+
+<p>14 pre-built shows available from Runtime → <strong>Load Show</strong> → Presets:</p>
+<table>
+  <tr><th>Preset</th><th>Description</th></tr>
+  <tr><td>Rainbow Up</td><td>Rainbow plane rising floor to ceiling</td></tr>
+  <tr><td>Rainbow Across</td><td>Rainbow sphere sweeping left to right</td></tr>
+  <tr><td>Slow Fire</td><td>Warm fire effect on all fixtures</td></tr>
+  <tr><td>Disco</td><td>Pastel twinkle sparkles</td></tr>
+  <tr><td>Ocean Wave</td><td>Blue wave sweep with teal wash</td></tr>
+  <tr><td>Sunset Glow</td><td>Warm breathe with golden sweep</td></tr>
+  <tr><td>Police Lights</td><td>Red strobe with blue flash sweep</td></tr>
+  <tr><td>Starfield</td><td>White sparkles on dark background</td></tr>
+  <tr><td>Aurora Borealis</td><td>Green curtain with purple shimmer</td></tr>
+  <tr><td>Spotlight Sweep</td><td>Warm orb — moving heads track it</td></tr>
+  <tr><td>Concert Wash</td><td>Magenta flood + amber tracking spot</td></tr>
+  <tr><td>Figure Eight</td><td>Crossing orbs — heads trace X paths</td></tr>
+  <tr><td>Thunderstorm</td><td>Lightning strikes — heads chase bolts</td></tr>
+  <tr><td>Dance Floor</td><td>Fast orbiting spots — rapid tracking</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="cameras">14. Camera Nodes</h2>
+
+<p>Camera nodes are Orange Pi or Raspberry Pi SBCs with USB cameras. Only USB cameras are supported — Pi CSI ribbon cameras are not.</p>
+
+<h3>Adding a Camera Node</h3>
+<ol>
+  <li>Flash an Orange Pi with the supported OS image</li>
+  <li>Connect to the same WiFi network as the orchestrator</li>
+  <li>In the <strong>Firmware</strong> tab, configure SSH credentials (default: <code>root</code> / <code>orangepi</code>)</li>
+  <li>Click <strong>Scan for Boards</strong> to find the device</li>
+  <li>Click <strong>Install</strong> to deploy firmware via SSH+SCP</li>
+</ol>
+
+<h3>Object Detection</h3>
+<p>Click <strong>Detect Objects</strong> to run YOLOv8n AI detection on the current camera frame. Results show bounding boxes with labels and confidence percentages.</p>
+
+<h3>Mover Calibration</h3>
+<p>The calibration wizard builds an interpolation grid mapping every stage position to exact pan/tilt angles. Requires a positioned camera node and the DMX engine running.</p>
+<ol>
+  <li>Layout tab → double-click a DMX moving head → click <strong>Calibrate</strong></li>
+  <li>Choose beam color (Green for dark floors, Magenta for light floors)</li>
+  <li>Click <strong>Start Calibration</strong> — the wizard runs automatically (3-5 min)</li>
+</ol>
+
+<h3>Tracking Configuration</h3>
+<p>Each camera fixture has per-camera tracking settings accessible from its edit dialog:</p>
+<table>
+  <tr><th>Parameter</th><th>Default</th><th>Description</th></tr>
+  <tr><td>FPS</td><td>2</td><td>Detection frames per second</td></tr>
+  <tr><td>Threshold</td><td>0.4</td><td>Minimum confidence to accept a detection</td></tr>
+  <tr><td>TTL (s)</td><td>5</td><td>Seconds before a lost track expires</td></tr>
+  <tr><td>Re-ID (mm)</td><td>500</td><td>Max distance to match a detection to an existing track</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="firmware">15. Firmware &amp; OTA Updates</h2>
+
+<h3>USB Flash</h3>
+<ol>
+  <li>Go to <strong>Firmware</strong> tab</li>
+  <li>Select COM port and firmware binary</li>
+  <li>Click <strong>Flash</strong> — progress shows percentage</li>
+</ol>
+
+<h3>OTA (Over-the-Air)</h3>
+<ol>
+  <li>Set WiFi credentials on the Firmware tab</li>
+  <li>Click <strong>Check for Updates</strong> — shows per-device version comparison</li>
+  <li>Click <strong>Update</strong> on any outdated performer</li>
+</ol>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="limits">16. System Limits</h2>
+
+<table>
+  <tr><th>Resource</th><th>Tested</th><th>Recommended Max</th></tr>
+  <tr><td>DMX fixtures</td><td>120</td><td>500+</td></tr>
+  <tr><td>LED performers</td><td>12</td><td>50</td></tr>
+  <tr><td>Universes</td><td>4</td><td>32,768 (Art-Net)</td></tr>
+  <tr><td>LEDs per string</td><td>—</td><td>65535 (uint16)</td></tr>
+  <tr><td>Timeline clips</td><td>50</td><td>200+</td></tr>
+  <tr><td>API response (132 fixtures)</td><td>&lt; 1ms</td><td>Sub-millisecond</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<h2 id="troubleshooting">17. Troubleshooting</h2>
+
+<table>
+  <tr><th>Problem</th><th>Solution</th></tr>
+  <tr><td>Runtime view empty</td><td>Check fixtures are positioned in Layout</td></tr>
+  <tr><td>Beam cone wrong direction</td><td>aimPoint[1] is height (Y), not depth (Z)</td></tr>
+  <tr><td>3D viewport not rendering</td><td>Use Chrome/Firefox/Edge with WebGL support</td></tr>
+  <tr><td>Performers not syncing</td><td>Check all devices on same WiFi network</td></tr>
+  <tr><td>No Art-Net nodes discovered</td><td>Check UDP 6454 not blocked; bridge on same subnet</td></tr>
+  <tr><td>Community profile won't import</td><td>Unsupported channel types — use local/OFL profile (#544)</td></tr>
+  <tr><td>Camera discover returns 0</td><td>Wait 3s and retry — UDP timing issue (#542)</td></tr>
+  <tr><td>Fixture position saves as 0,0,0</td><td>Use the edit dialog Save button; wait for completion</td></tr>
+  <tr><td>Help panel shows "not available"</td><td>Section mapping issue — will be fixed in a future release (#545)</td></tr>
+</table>
+
+<hr>
+<p style="text-align:center;color:var(--muted);font-size:.85rem;margin-top:2rem">
+  SlyLED User Manual v1.0 &nbsp;·&nbsp; Generated April 2026 &nbsp;·&nbsp; Open source at github.com/SlyWombat/SlyLED
+</p>
+
+</main>
+</body>
+</html>
