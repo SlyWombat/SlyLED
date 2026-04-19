@@ -82,7 +82,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.24"
+VERSION = "1.5.28"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -532,13 +532,23 @@ def _discover_all():
 
 def _discover():
     """Broadcast PING, wait for listener to collect PONGs, return unknown devices.
-    Includes LED performers, DMX bridges, and camera nodes."""
+    Includes LED performers, DMX bridges, camera nodes, and Art-Net bridges
+    that speak ArtPoll (even ones that don't respond to SlyLED's own UDP
+    PING). The single Setup → Discover button covers every hardware type
+    — there's no dedicated per-type discovery anywhere else (#564).
+    """
     known_ips = {c["ip"] for c in _children}
     known_hosts = {c.get("hostname") for c in _children}
     known_cam_ips = {f.get("cameraIp") for f in _fixtures
                      if f.get("fixtureType") == "camera" and f.get("cameraIp")}
+    # Fire ArtPoll in parallel with the SlyLED PING broadcast so a
+    # single 2 s wait catches both kinds of responders.
     _recent_pongs.clear()
     _broadcast_ping_all()
+    try:
+        _artnet_oneshot_poll()  # broadcasts + listens ~2 s for ArtPollReply
+    except Exception as e:
+        log.debug("_discover ArtPoll leg failed: %s", e)
     time.sleep(2.0)
     results = []
     pong_ips = set()
@@ -574,6 +584,25 @@ def _discover():
                 continue
         info["boardType"] = board_type
         results.append(info)
+    # Merge in any Art-Net bridges that replied to ArtPoll but not to
+    # SlyLED's UDP PING (third-party Enttec, old Giga bridges without
+    # the PONG extension). Skip our own server address so we don't
+    # "discover" ourselves.
+    own_ip = _get_local_ip()
+    for ip, node in (getattr(_artnet, "_discovered", None) or {}).items():
+        if ip == own_ip:
+            continue
+        if ip in known_ips or ip in pong_ips:
+            continue
+        results.append({
+            "ip": ip,
+            "hostname": node.get("shortName") or ip,
+            "name": node.get("longName") or node.get("shortName") or ip,
+            "type": "dmx",
+            "boardType": "DMX Bridge",
+            "sc": 0,
+            "strings": [],
+        })
     return results
 
 #  "  "  Async discover / refresh state  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
@@ -4180,7 +4209,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.24" from camera_server.py source text."""
+    """Extract VERSION = "1.5.28" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -10300,6 +10329,8 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
 
 
 
