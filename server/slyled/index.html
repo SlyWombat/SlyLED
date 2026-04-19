@@ -93,6 +93,15 @@ footer a{color:var(--accent)}
 .lightbox .close{position:absolute;top:20px;right:24px;color:#fff;font-size:2em;cursor:pointer;z-index:201}
 .fade-in{opacity:0;transform:translateY(20px);transition:opacity .6s,transform .6s}
 .fade-in.visible{opacity:1;transform:translateY(0)}
+.whatsnew{background:linear-gradient(135deg,rgba(34,211,238,.04),rgba(124,58,237,.04));padding:50px 0}
+.whatsnew h2{text-align:center;font-size:1.8em;margin-bottom:8px}
+.whatsnew .wn-sub{text-align:center;color:var(--dim);margin-bottom:30px;font-size:.95em}
+.wn-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;max-width:900px;margin:0 auto}
+.wn-card{background:var(--surface);border:1px solid #334155;border-radius:10px;padding:18px 20px;transition:border-color .2s}
+.wn-card:hover{border-color:var(--accent)}
+.wn-card .wn-tag{display:inline-block;font-size:.7em;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:6px}
+.wn-card h4{font-size:1em;margin-bottom:4px;color:var(--text)}
+.wn-card p{font-size:.85em;color:var(--dim);line-height:1.5}
 @media(max-width:600px){.hero h1{font-size:2.2em}.hero .tagline{font-size:1em}.section-title{font-size:1.5em}
 .ss-grid{grid-template-columns:1fr}.lang-btn{top:8px;right:8px;font-size:.75em;padding:4px 8px}}
 </style>
@@ -109,7 +118,7 @@ footer a{color:var(--accent)}
 <div class="hero">
   <div class="container">
     <img src="slyled.png" alt="SlyLED Logo">
-    <h1>SlyLED<span class="version-badge">v1.4.28</span></h1>
+    <h1>SlyLED<span class="version-badge">v1.5.22</span></h1>
     <p class="tagline" data-i="tagline"></p>
     <div class="badges">
       <span class="badge badge-win">&#x1F4BB; Windows</span>
@@ -119,6 +128,22 @@ footer a{color:var(--accent)}
     </div>
   </div>
 </div>
+
+<!-- WHAT'S NEW IN v1.5 -->
+<section class="whatsnew fade-in">
+  <div class="container">
+    <h2 data-i="wnTitle"></h2>
+    <p class="wn-sub" data-i="wnSub"></p>
+    <div class="wn-grid">
+      <div class="wn-card"><span class="wn-tag" data-i="wnTagQol"></span><h4 data-i="wn1t"></h4><p data-i="wn1p"></p></div>
+      <div class="wn-card"><span class="wn-tag" data-i="wnTagShortcut"></span><h4 data-i="wn2t"></h4><p data-i="wn2p"></p></div>
+      <div class="wn-card"><span class="wn-tag" data-i="wnTagUi"></span><h4 data-i="wn3t"></h4><p data-i="wn3p"></p></div>
+      <div class="wn-card"><span class="wn-tag" data-i="wnTagTimeline"></span><h4 data-i="wn4t"></h4><p data-i="wn4p"></p></div>
+      <div class="wn-card"><span class="wn-tag" data-i="wnTagDmx"></span><h4 data-i="wn5t"></h4><p data-i="wn5p"></p></div>
+      <div class="wn-card"><span class="wn-tag" data-i="wnTagMobile"></span><h4 data-i="wn6t"></h4><p data-i="wn6p"></p></div>
+    </div>
+  </div>
+</section>
 
 <!-- Screenshots: copy from docs/screenshots/ after capture -->
 <!-- SCREENSHOTS -->
@@ -234,6 +259,14 @@ var I={
 en:{
   tagline:"Design stunning lighting shows with 3D spatial effects, camera-based calibration, stereo triangulation, and full DMX control. Free and open-source.",
   ctaWin:"Download for Windows",ctaAndroid:"Android APK",ctaGithub:"View on GitHub",ctaDemo:"See Demo \u2192",ctaManual:"User Manual (PDF)",
+  wnTitle:"What\u2019s New in v1.5",wnSub:"Operator-driven polish from the April live-test sessions",
+  wnTagQol:"QoL",wnTagShortcut:"Shortcut",wnTagUi:"UI",wnTagTimeline:"Timeline",wnTagDmx:"DMX",wnTagMobile:"Mobile",
+  wn1t:"Global Undo / Redo",wn1p:"Ctrl+Z restores deleted actions, moves, and edits across every tab. Ctrl+Shift+Z redoes. 50-deep history, toast confirmation on every step.",
+  wn2t:"Runtime Keyboard Shortcuts",wn2p:"Space plays and pauses, Esc stops, Home/End jump to edges, arrow keys nudge \u00b11 s (\u00b15 with Shift), B blackouts. Muscle memory from every console.",
+  wn3t:"Toast Notifications",wn3p:"Operators stop missing errors. Success and failure events stack bottom-right with level-coded colours, click \u00d7 to dismiss, stay persistent when they need to.",
+  wn4t:"Timeline Mute / Solo / Colour",wn4p:"Per-track M, S, colour-picker, and lock pills. Isolate one lane to debug a fixture, stripe shows exactly what\u2019s live, and locked tracks refuse stray clicks.",
+  wn5t:"Smart DMX Patching",wn5p:"Add Fixture remembers your last universe and auto-picks the next free channel. Live channel map highlights address conflicts before you hit Save.",
+  wn6t:"Responsive on Tablet & Phone",wn6p:"Layout sidebar stacks under the 3D canvas, tables collapse to readable column counts, and tap targets widen. The whole SPA works at 390\u202Fpx.",
   ssTitle:"See It In Action",ssSub:"7-tab SPA with 2D/3D layout, timeline editor, live emulator, and DMX control",
   ssDash:"Dashboard \u2014 performer status, live show preview",ss3d:"3D Layout \u2014 beam cones, aim spheres, drag-to-position",
   ssRuntime:"Runtime \u2014 timeline editor with spatial effects emulator",ss2d:"2D Layout \u2014 stage canvas with LED strings and DMX beams",
@@ -273,6 +306,14 @@ en:{
 fr:{
   tagline:"Cr\u00e9ez des spectacles lumineux \u00e9poustouflants avec des effets spatiaux 3D, calibration par cam\u00e9ra, triangulation st\u00e9r\u00e9o et contr\u00f4le DMX complet. Gratuit et open-source.",
   ctaWin:"T\u00e9l\u00e9charger pour Windows",ctaAndroid:"APK Android",ctaGithub:"Voir sur GitHub",ctaDemo:"Voir la d\u00e9mo \u2192",ctaManual:"Manuel (PDF)",
+  wnTitle:"Nouveaut\u00e9s de la v1.5",wnSub:"Am\u00e9liorations pour l\u2019op\u00e9rateur issues des tests en conditions r\u00e9elles d\u2019avril",
+  wnTagQol:"Confort",wnTagShortcut:"Raccourci",wnTagUi:"Interface",wnTagTimeline:"Timeline",wnTagDmx:"DMX",wnTagMobile:"Mobile",
+  wn1t:"Annuler / R\u00e9tablir global",wn1p:"Ctrl+Z restaure les actions supprim\u00e9es, les d\u00e9placements et les modifications dans tous les onglets. Ctrl+Maj+Z r\u00e9tablit. Historique de 50 \u00e9tapes avec toast de confirmation.",
+  wn2t:"Raccourcis clavier Runtime",wn2p:"Espace lit et met en pause, \u00c9chap arr\u00eate, D\u00e9but/Fin sautent aux extr\u00e9mit\u00e9s, les fl\u00e8ches d\u00e9calent de \u00b11\u202Fs (\u00b15 avec Maj), B noircit. M\u00e9moire musculaire des consoles pro.",
+  wn3t:"Notifications toast",wn3p:"L\u2019op\u00e9rateur ne manque plus les erreurs. Les \u00e9v\u00e9nements s\u2019empilent en bas \u00e0 droite avec couleurs cod\u00e9es par niveau, cliquez sur \u00d7 pour fermer, persistance si n\u00e9cessaire.",
+  wn4t:"Mute / Solo / Couleur par piste",wn4p:"Boutons M, S, s\u00e9lecteur de couleur et verrou par piste. Isolez une piste pour d\u00e9boguer un projecteur, voyez ce qui est actif d\u2019un coup d\u2019\u0153il, les pistes verrouill\u00e9es ignorent les clics errants.",
+  wn5t:"Patching DMX intelligent",wn5p:"Ajouter Fixture m\u00e9morise votre dernier univers et choisit automatiquement le prochain canal libre. La carte des canaux signale les conflits d\u2019adresse avant m\u00eame l\u2019enregistrement.",
+  wn6t:"Adapt\u00e9 tablette et mobile",wn6p:"La barre lat\u00e9rale s\u2019empile sous le canevas 3D, les tableaux r\u00e9duisent leurs colonnes et les zones tactiles s\u2019agrandissent. Toute la SPA fonctionne \u00e0 390\u202Fpx.",
   ssTitle:"Voyez-le en action",ssSub:"SPA 7 onglets avec mise en page 2D/3D, \u00e9diteur de timeline, \u00e9mulateur en direct et contr\u00f4le DMX",
   ssDash:"Tableau de bord \u2014 \u00e9tat des performers, aper\u00e7u du spectacle",ss3d:"Mise en page 3D \u2014 c\u00f4nes de faisceau, sph\u00e8res de vis\u00e9e",
   ssRuntime:"Ex\u00e9cution \u2014 \u00e9diteur de timeline avec \u00e9mulateur d\u2019effets spatiaux",ss2d:"Mise en page 2D \u2014 sc\u00e8ne avec rubans LED et faisceaux DMX",
