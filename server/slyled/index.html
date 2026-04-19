@@ -765,14 +765,27 @@ if(_hint)setTimeout(function(){_hint.style.opacity='0';},5500);
     target.y=Math.max(.65,Math.min(.94,(e.clientY-r.top)/H));
   });
   cv.addEventListener('mouseleave',function(){mouseActive=false;});
+  var touchStartX=0,touchStartY=0,touchLocked=false;
+  cv.addEventListener('touchstart',function(e){
+    touchStartX=e.touches[0].clientX;
+    touchStartY=e.touches[0].clientY;
+    touchLocked=false;
+  },{passive:true});
   cv.addEventListener('touchmove',function(e){
+    var t=e.touches[0];
+    var dx=Math.abs(t.clientX-touchStartX),dy=Math.abs(t.clientY-touchStartY);
+    if(!touchLocked){
+      // let vertical swipes scroll; only lock to canvas-move if horizontal-dominant
+      if(dy>dx&&dy>8){return;}
+      if(dx>8){touchLocked=true;}else{return;}
+    }
     e.preventDefault();
-    var r=cv.getBoundingClientRect(),t=e.touches[0];
+    var r=cv.getBoundingClientRect();
     mouseActive=true;
     target.x=Math.max(.04,Math.min(.96,(t.clientX-r.left)/W));
     target.y=Math.max(.65,Math.min(.94,(t.clientY-r.top)/H));
   },{passive:false});
-  cv.addEventListener('touchend',function(){mouseActive=false;});
+  cv.addEventListener('touchend',function(){mouseActive=false;touchLocked=false;});
 })();
 
 // ══════════════════════════════════════════════════════════════════════════
