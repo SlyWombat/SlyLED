@@ -271,6 +271,44 @@ function loadDmxSettings(){
   });
 }
 
+// #564 — explicit "Discover bridges" button. Wraps /api/dmx/discovered
+// (which already broadcasts ArtPoll on every NIC subnet and waits ~1 s
+// for replies on the server side). Refreshes the destinations list and
+// shows a toast with the count so operators have visible feedback —
+// without this button the discovery was silent, hidden inside the
+// initial loadDmxSettings() call, and operators assumed nothing had
+// happened when they saw an empty destinations dropdown.
+function dmxDiscoverBridges(btn){
+  var lbl=document.getElementById('dmx-discover-count');
+  if(lbl)lbl.textContent='scanning…';
+  if(btn){btn.disabled=true;var old=btn.textContent;btn.textContent='Scanning…';btn.dataset._old=old;}
+  var start=performance.now();
+  ra('GET','/api/dmx/discovered',null,function(nodes){
+    var ms=Math.round(performance.now()-start);
+    var keys=Object.keys(nodes||{});
+    // Merge discovered into destinations — children are the primary
+    // source; discovered IPs are added only if not already present.
+    ra('GET','/api/children',null,function(children){
+      _dmxDestinations=[];
+      (children||[]).forEach(function(c){
+        if(c.type==='dmx'||c.boardType==='DMX Bridge')
+          _dmxDestinations.push({ip:c.ip,label:c.name||c.hostname||c.ip});
+      });
+      keys.forEach(function(ip){
+        if(!_dmxDestinations.some(function(d){return d.ip===ip;}))
+          _dmxDestinations.push({ip:ip,label:(nodes[ip].shortName)||ip});
+      });
+      dmxRenderRoutes();
+      if(lbl)lbl.textContent=keys.length+' bridge'+(keys.length===1?'':'s')+' ('+ms+' ms)';
+      if(btn){btn.disabled=false;btn.textContent=btn.dataset._old||'Discover bridges';}
+      if(typeof toast==='function'){
+        if(keys.length===0)toastWarn('No Art-Net bridges responded. Check network + ArtPoll reachability.');
+        else toastSuccess('Discovered '+keys.length+' bridge'+(keys.length===1?'':'s')+': '+keys.join(', '));
+      }
+    });
+  });
+}
+
 function dmxRenderRoutes(){
   var el=document.getElementById('dmx-routes');if(!el)return;
   if(!_dmxRoutes.length){

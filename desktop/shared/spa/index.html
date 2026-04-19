@@ -414,7 +414,11 @@
       <label style='display:flex;align-items:center;gap:.4em;font-size:.82em;cursor:pointer;margin-top:.3em'><input type='checkbox' id='dmx-boot-blink' checked onchange='saveDmxBootSettings()'>Blink fixtures on boot</label>
     </div>
     <div id='dmx-artnet-opts'>
-      <div style='margin-top:.5em;font-size:.85em;font-weight:bold;color:#94a3b8'>Universe Routing</div>
+      <div style='margin-top:.5em;display:flex;align-items:center;gap:.6em;flex-wrap:wrap'>
+        <span style='font-size:.85em;font-weight:bold;color:#94a3b8'>Universe Routing</span>
+        <button class='btn' onclick='dmxDiscoverBridges(this)' style='font-size:.7em;padding:.2em .5em;background:#1e3a5f;color:#93c5fd'>Discover bridges</button>
+        <span id='dmx-discover-count' style='font-size:.72em;color:#64748b'></span>
+      </div>
       <div style='font-size:.72em;color:#556;margin-bottom:.3em'>Map universes to specific bridges. Unrouted universes broadcast.</div>
       <div id='dmx-routes' style='font-size:.82em'></div>
       <button class='btn' onclick='dmxAddRoute()' style='font-size:.72em;margin-top:.3em'>+ Add Route</button>
