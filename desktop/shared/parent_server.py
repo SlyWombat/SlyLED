@@ -82,7 +82,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.20"
+VERSION = "1.5.22"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1203,7 +1203,12 @@ def api_layout_get():
 @app.post("/api/layout")
 def api_layout_save():
     body = request.get_json(silent=True) or {}
-    fixtures = body.get("fixtures", body.get("children", []))
+    # #543 — prefer `children` (the positioned-item list). The SPA sometimes
+    # posts the full cached layout object which carries both arrays; the
+    # canonical position data lives in `children`, while `fixtures` is the
+    # fixture registry and has x/y/z pinned at 0 from the server side.
+    # Reading `fixtures` first silently discarded every position edit.
+    fixtures = body.get("children") or body.get("fixtures") or []
     _layout["children"] = [{"id": f["id"], "x": f.get("x", 0), "y": f.get("y", 0), "z": f.get("z", 0)} for f in fixtures]
     _save("layout", _layout)
     return jsonify(ok=True)
@@ -1540,8 +1545,15 @@ def _discover_cameras():
     Sequential probing was ~76s per /24 subnet (254 × 0.3s) and linear in the
     number of subnets, which blew past the browser poll timeout on multi-NIC
     hosts. The ThreadPoolExecutor mirrors the pattern used by _scan_ssh_devices.
+
+    #542 — the first scan after the SPA opens sometimes misses a camera that
+    a second scan finds. Root cause is a lost first probe (ARP cache miss,
+    cold HTTP accept queue, WiFi scanner stealing the radio briefly). Two
+    passes with a short back-off between them catches the slow responders
+    without doubling the happy-path time since pass 2 only retries the IPs
+    that returned nothing the first time.
     """
-    import concurrent.futures
+    import concurrent.futures, time as _time
     known_ips = set()
     for f in _fixtures:
         if f.get("fixtureType") == "camera" and f.get("cameraIp"):
@@ -1554,15 +1566,27 @@ def _discover_cameras():
             if ip not in known_ips:
                 ips_to_probe.append(ip)
 
-    results = []
-    # 64 workers + 0.8s timeout: parallel probes have no latency penalty so a
-    # slower camera gets a fair chance, and the whole /24 sweep still finishes
-    # in ~4s instead of ~76s.
+    # Pass 1 — 64 workers + 0.8s timeout: parallel probes have no latency
+    # penalty so a slower camera gets a fair chance, and the whole /24 sweep
+    # finishes in ~4s instead of ~76s sequential.
+    found = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=64) as pool:
-        for info in pool.map(lambda ip: _probe_camera(ip, timeout=0.8), ips_to_probe):
+        for ip, info in zip(ips_to_probe,
+                            pool.map(lambda ip: _probe_camera(ip, timeout=0.8), ips_to_probe)):
             if info:
-                results.append(info)
-    return results
+                found[ip] = info
+    # Pass 2 — retry anything that didn't answer with a slightly longer
+    # timeout. Skip the retry entirely when pass 1 already got a full
+    # complement (no known cold-start cases ever go past two responders).
+    missing = [ip for ip in ips_to_probe if ip not in found]
+    if missing:
+        _time.sleep(0.15)  # let the radio settle / ARP cache warm up
+        with concurrent.futures.ThreadPoolExecutor(max_workers=64) as pool:
+            for ip, info in zip(missing,
+                                pool.map(lambda ip: _probe_camera(ip, timeout=1.5), missing)):
+                if info:
+                    found[ip] = info
+    return list(found.values())
 
 def _cam_discover_bg():
     try:
@@ -4155,7 +4179,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.20" from camera_server.py source text."""
+    """Extract VERSION = "1.5.22" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -10224,6 +10248,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

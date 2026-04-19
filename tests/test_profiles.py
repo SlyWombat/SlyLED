@@ -128,6 +128,26 @@ def run():
     ]})
     ok('Unknown channel type fails', not v and 'type' in e.lower())
 
+    # #544 — community profiles use these newer OFL-aligned names. If
+    # either gets dropped from CHANNEL_TYPES/CAPABILITY_TYPES the
+    # slymovehead / beamlight-350w-16ch community imports regress to
+    # imported=0 with no UI feedback.
+    ok('pan-tilt-speed in CHANNEL_TYPES (#544)', 'pan-tilt-speed' in CHANNEL_TYPES)
+    ok('ColorTemperature in CAPABILITY_TYPES (#544)', 'ColorTemperature' in CAPABILITY_TYPES)
+    v, e = lib.validate_profile({"id": "t544a", "name": "T", "channels": [
+        {"offset": 0, "type": "pan", "name": "P"},
+        {"offset": 1, "type": "tilt", "name": "T"},
+        {"offset": 2, "type": "pan-tilt-speed", "name": "Speed"},
+    ]})
+    ok('pan-tilt-speed channel validates (#544)', v)
+    v, e = lib.validate_profile({"id": "t544b", "name": "T", "channels": [
+        {"offset": 0, "type": "color-wheel", "name": "CTC", "capabilities": [
+            {"range": [0, 10], "type": "ColorTemperature",
+             "colorTemperature": "6500K", "label": "Daylight"}
+        ]}
+    ]})
+    ok('ColorTemperature capability validates (#544)', v)
+
     v, e = lib.validate_profile({"id": "t", "name": "T", "channels": [
         {"offset": 0, "type": "red", "name": "R"},
         {"offset": 0, "type": "green", "name": "G"},
