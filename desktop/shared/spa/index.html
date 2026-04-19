@@ -525,6 +525,18 @@
       </div>
     </div>
   </div>
+  <!-- #567 Firmware Library — one row per registry entry, Download
+       when not yet cached locally, Refresh All to bulk-download the
+       missing ones from the latest GitHub release. -->
+  <div class='card' style='max-width:800px'>
+    <div class='card-title' style='display:flex;align-items:center;gap:.5em;flex-wrap:wrap'>
+      Firmware Library
+      <button class='btn' onclick='refreshFirmwareLibrary(this)' style='padding:.15em .5em;font-size:.78em;background:#1e3a5f;color:#93c5fd'>Refresh All</button>
+      <button class='btn' onclick='renderFirmwareLibrary()' style='padding:.15em .5em;font-size:.78em;background:#334155;color:#cbd5e1'>&#x21bb; Reload list</button>
+    </div>
+    <p style='font-size:.78em;color:#64748b;margin-bottom:.5em'>Binaries download on demand from the latest GitHub release. The Flash button above auto-downloads whatever's missing.</p>
+    <div id='fw-library'><p style='color:#888;font-size:.85em'>Loading...</p></div>
+  </div>
   <div class='card' style='max-width:800px'>
     <div class='card-title'>Camera Setup</div>
     <p style='font-size:.82em;color:#888;margin-bottom:.6em'>Manage SSH credentials for deploying and upgrading camera nodes on SBC boards (Orange Pi, Raspberry Pi).</p>

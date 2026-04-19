@@ -8,6 +8,7 @@
             "fqbn": "esp32:esp32:esp32",
             "version": "8.4.4",
             "file": "esp32/main.ino.merged.bin",
+            "releaseAsset": "esp32-firmware-merged.bin",
             "flashMethod": "esptool",
             "buildDefines": [
                 "BOARD_ESP32"
@@ -21,6 +22,7 @@
             "fqbn": "esp8266:esp8266:d1_mini",
             "version": "8.4.4",
             "file": "d1mini/main.ino.bin",
+            "releaseAsset": "d1mini-firmware.bin",
             "flashMethod": "esptool",
             "buildDefines": [
                 "BOARD_D1MINI"
@@ -29,11 +31,12 @@
         {
             "id": "dmx-bridge-esp32",
             "name": "DMX Bridge (ESP32)",
-            "description": "DMX-512 output via RS-485 transceiver \u00c3\u0192\u00c2\u00a2\u00c3\u00a2\u00e2\u20ac\u0161\u00c2\u00ac\u00c3\u00a2\u00e2\u201a\u00ac\u00c2\u009d receives SlyLED actions, outputs DMX frames at 40Hz",
+            "description": "DMX-512 output via RS-485 transceiver — receives SlyLED actions, outputs DMX frames at 40Hz",
             "board": "esp32",
             "fqbn": "esp32:esp32:esp32",
             "version": "8.4.4",
             "file": "esp32-dmx/main.ino.merged.bin",
+            "releaseAsset": "esp32-dmx-bridge-firmware.bin",
             "flashMethod": "esptool",
             "buildDefines": [
                 "DMX_BRIDGE"
@@ -43,11 +46,12 @@
         {
             "id": "child-led-giga",
             "name": "LED Performer (Giga R1)",
-            "description": "Onboard RGB LED performer \u00e2\u20ac\u201d 1 pixel, all 14 effects",
+            "description": "Onboard RGB LED performer — 1 pixel, all 14 effects",
             "board": "giga",
             "fqbn": "arduino:mbed_giga:giga",
             "version": "8.4.4",
             "file": "giga/child-led.bin",
+            "releaseAsset": "giga-child-firmware.bin",
             "flashMethod": "dfu",
             "buildDefines": [
                 "GIGA_CHILD"
@@ -62,19 +66,35 @@
             "fqbn": "arduino:mbed_giga:giga",
             "version": "8.4.4",
             "file": "giga/parent.bin",
+            "releaseAsset": "giga-parent-firmware.bin",
             "flashMethod": "dfu",
             "buildDefines": [
                 "BOARD_GIGA"
             ]
         },
         {
+            "id": "dmx-bridge-giga",
+            "name": "DMX Bridge (Giga R1)",
+            "description": "Giga R1 with RS-485 shield — Art-Net receiver, DMX-512 output",
+            "board": "giga",
+            "fqbn": "arduino:mbed_giga:giga",
+            "version": "8.4.4",
+            "file": "giga/dmx-bridge.bin",
+            "releaseAsset": "giga-dmx-bridge-firmware.bin",
+            "flashMethod": "dfu",
+            "buildDefines": [
+                "GIGA_DMX"
+            ]
+        },
+        {
             "id": "gyro-esp32s3",
             "name": "Gyro Controller (ESP32-S3 LCD 1.28)",
-            "description": "Waveshare ESP32-S3 1.28inch round LCD \u00e2\u20ac\u201d orientation controller for DMX moving heads",
+            "description": "Waveshare ESP32-S3 1.28inch round LCD — orientation controller for DMX moving heads",
             "board": "esp32s3",
             "fqbn": "esp32:esp32:esp32s3",
             "version": "1.2.0",
             "file": "esp32s3/main.ino.merged.bin",
+            "releaseAsset": "esp32s3-gyro-firmware.bin",
             "flashMethod": "esptool",
             "buildDefines": [
                 "GYRO_BOARD"
@@ -88,6 +108,7 @@
             "board": "orangepi",
             "version": "1.2.3",
             "file": "orangepi/camera_server.py",
+            "releaseAsset": "camera-firmware-v1.3.0.zip",
             "flashMethod": "ssh"
         }
     ]

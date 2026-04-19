@@ -9664,6 +9664,20 @@ else:
     if not _FW_DIR.exists():
         _FW_DIR = BASE / "firmware"
 
+# Writable cache for firmware binaries downloaded on demand (#568). The
+# installer no longer bundles the .bin files — only registry.json ships —
+# so the first flash of a given board will fetch the binary from the
+# matching GitHub release asset and park it here for later reuse.
+if getattr(sys, "frozen", False) and os.name == "nt" and os.environ.get("APPDATA"):
+    _FW_CACHE_DIR = Path(os.environ["APPDATA"]) / "SlyLED" / "firmware"
+elif getattr(sys, "frozen", False):
+    _FW_CACHE_DIR = Path.home() / ".slyled" / "firmware"
+else:
+    # Dev / source checkout: re-use the project firmware tree so locally
+    # built binaries are picked up without a download round-trip.
+    _FW_CACHE_DIR = _FW_DIR
+_FW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
 def _parent_wifi_hash():
     """Compute the same djb2 hash as the firmware for SSID+password comparison."""
     ssid = _wifi.get("ssid", "")
@@ -9706,6 +9720,80 @@ def api_fw_query_port():
 @app.get("/api/firmware/registry")
 def api_fw_registry():
     return jsonify(load_registry(_FW_DIR))
+
+
+@app.get("/api/firmware/library")
+def api_fw_library():
+    """#567 — return every registry entry annotated with its local
+    availability so the Firmware Library section can render Download
+    buttons for the missing ones."""
+    reg = load_registry(_FW_DIR)
+    entries = []
+    for e in reg.get("firmware", []):
+        fname = e.get("file") or ""
+        cache_path = _FW_CACHE_DIR / fname if fname else None
+        bundle_path = _FW_DIR / fname if fname else None
+        local = False
+        local_path = ""
+        for p in (cache_path, bundle_path):
+            if p and p.is_file():
+                local = True
+                local_path = str(p)
+                break
+        entries.append({**e, "local": local, "localPath": local_path,
+                        "hasReleaseAsset": bool(e.get("releaseAsset"))})
+    return jsonify(firmware=entries)
+
+
+@app.post("/api/firmware/fetch")
+def api_fw_fetch():
+    """#567 — download a single registry entry's binary from the matching
+    GitHub release asset into the writable cache directory. Idempotent:
+    a redownload overwrites the cached copy."""
+    from firmware_manager import download_firmware, _registry_fetch_assets
+    body = request.get_json(silent=True) or {}
+    fid = body.get("id") or ""
+    reg = load_registry(_FW_DIR)
+    entry = next((e for e in reg.get("firmware", []) if e.get("id") == fid), None)
+    if not entry:
+        return jsonify(ok=False, err="unknown firmware id"), 404
+    if not entry.get("releaseAsset"):
+        return jsonify(ok=False, err="registry entry has no releaseAsset"), 400
+    path = download_firmware(entry, _FW_CACHE_DIR)
+    if not path:
+        return jsonify(ok=False, err="download failed — asset missing or network error"), 502
+    log.info("Firmware library fetch: %s → %s", fid, path)
+    return jsonify(ok=True, id=fid, path=path)
+
+
+@app.post("/api/firmware/refresh-all")
+def api_fw_refresh_all():
+    """#567 — bulk-download every registry entry that has a release asset
+    but isn't cached locally. Skips entries already on disk so repeat
+    clicks are cheap."""
+    from firmware_manager import download_firmware, _registry_fetch_assets
+    assets = _registry_fetch_assets()
+    if assets is None:
+        return jsonify(ok=False, err="could not reach GitHub releases"), 502
+    reg = load_registry(_FW_DIR)
+    results = []
+    for e in reg.get("firmware", []):
+        fname = e.get("file") or ""
+        if not fname:
+            continue
+        cache_p = _FW_CACHE_DIR / fname
+        bundle_p = _FW_DIR / fname
+        if cache_p.is_file() or bundle_p.is_file():
+            results.append({"id": e.get("id"), "status": "already-local"})
+            continue
+        if not e.get("releaseAsset"):
+            results.append({"id": e.get("id"), "status": "no-release-asset"})
+            continue
+        path = download_firmware(e, _FW_CACHE_DIR, assets_by_name=assets)
+        results.append({"id": e.get("id"),
+                        "status": "downloaded" if path else "download-failed"})
+    downloaded = sum(1 for r in results if r["status"] == "downloaded")
+    return jsonify(ok=True, results=results, downloaded=downloaded)
 
 @app.post("/api/firmware/download")
 def api_fw_download():
@@ -9833,12 +9921,20 @@ def api_fw_flash():
     fw = next((f for f in reg.get("firmware", []) if f["id"] == fw_id), None)
     if not fw:
         return jsonify(ok=False, err="firmware not found in registry"), 404
-    bin_path = _FW_DIR / fw["file"]
-    if not bin_path.exists():
-        return jsonify(ok=False, err=f"binary not found: {fw['file']}"), 404
+    # #568 — if the binary is missing locally, auto-download it from the
+    # matching GitHub release asset before kicking off the flash. The
+    # installer no longer bundles binaries, so the first flash of any
+    # given board will pull from the cloud on demand.
+    from firmware_manager import resolve_binary_path
+    bin_path_str = resolve_binary_path(fw, _FW_CACHE_DIR, _FW_DIR, auto_download=True)
+    if not bin_path_str:
+        return jsonify(ok=False,
+                       err=f"binary not found locally and release asset "
+                           f"'{fw.get('releaseAsset') or fw.get('file')}' "
+                           "could not be downloaded"), 502
     # Flash in background thread
     def _do_flash():
-        flash_board(port, str(bin_path), board or fw["board"],
+        flash_board(port, bin_path_str, board or fw["board"],
                     wifi_ssid=_wifi.get("ssid"), wifi_pass=_decrypt_pw(_wifi.get("password", "")))
     threading.Thread(target=_do_flash, daemon=True).start()
     return jsonify(ok=True, message="Flashing started")

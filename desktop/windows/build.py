@@ -72,10 +72,16 @@ args = [
     "--paths", str(SHARED),
 ]
 
-# Bundle firmware registry if it exists
-if FWDIR.exists():
+# #568 — bundle ONLY firmware/registry.json (manifest + download URLs)
+# into the installer. The binaries themselves (esp32/*.bin, giga/*.bin,
+# orangepi/*.zip …) are downloaded on demand from the matching GitHub
+# release via firmware_manager.download_firmware() and cached under
+# %APPDATA%/SlyLED/firmware. This keeps the installer small and stops
+# it from going stale when a new firmware drops.
+reg_path = FWDIR / "registry.json"
+if reg_path.exists():
     args.append("--add-data")
-    args.append(f"{FWDIR};firmware")
+    args.append(f"{reg_path};firmware")
 
 args.append(str(SHARED / "main.py"))
 

@@ -207,7 +207,7 @@ function otaUpdateAll(){
 }
 
 function loadFirmware(){
-  // Full firmware tab load — OTA + USB + WiFi + Camera Setup
+  // Full firmware tab load — OTA + USB + WiFi + Camera Setup + Library
   checkOtaUpdates();
   _fetchGithubFirmware();
   // Load WiFi creds
@@ -223,6 +223,72 @@ function loadFirmware(){
   loadFirmwarePorts();
   _loadCamSsh();
   _camFwRefresh();
+  renderFirmwareLibrary();
+}
+
+// ── #567 Firmware Library ─────────────────────────────────────────────
+// Registry-driven table with Local / Not-downloaded badges and a per-row
+// Download button. Refresh-All button downloads every missing entry in
+// one GitHub round-trip.
+function renderFirmwareLibrary(){
+  ra('GET','/api/firmware/library',null,function(r){
+    var el=document.getElementById('fw-library');if(!el)return;
+    var entries=(r&&r.firmware)||[];
+    if(!entries.length){el.innerHTML='<p style="color:#888;font-size:.85em">Registry is empty.</p>';return;}
+    var h='<table class="tbl" style="max-width:100%;font-size:.78em"><tr>'
+      +'<th style="text-align:left">Board</th><th>Version</th><th>Status</th><th></th></tr>';
+    entries.forEach(function(e){
+      var badge;
+      if(e.local){
+        badge='<span class="badge" style="background:#14532d;color:#86efac">Local</span>';
+      }else if(!e.hasReleaseAsset){
+        badge='<span class="badge" style="background:#475569;color:#cbd5e1" title="No releaseAsset in registry — needs local build">Not downloadable</span>';
+      }else{
+        badge='<span class="badge" style="background:#78350f;color:#fbbf24">Not downloaded</span>';
+      }
+      var action='';
+      if(!e.local&&e.hasReleaseAsset){
+        action='<button class="btn" onclick="fetchFirmware(\''+escapeHtml(e.id)+'\',this)" '
+          +'style="font-size:.72em;padding:.18em .5em;background:#1e3a5f;color:#93c5fd">Download</button>';
+      }
+      h+='<tr><td>'+escapeHtml(e.name||e.id)
+        +'<div style="color:#64748b;font-size:.78em">'+escapeHtml(e.description||'')+'</div></td>'
+        +'<td style="white-space:nowrap">'+escapeHtml(e.version||'?')+'</td>'
+        +'<td>'+badge+'</td>'
+        +'<td>'+action+'</td></tr>';
+    });
+    el.innerHTML=h+'</table>';
+  });
+}
+
+function fetchFirmware(id,btn){
+  if(btn){btn.disabled=true;btn.textContent='Downloading…';}
+  ra('POST','/api/firmware/fetch',{id:id},function(r){
+    if(r&&r.ok){
+      if(typeof toastSuccess==='function')toastSuccess('Downloaded '+id);
+      renderFirmwareLibrary();
+    }else{
+      if(btn){btn.disabled=false;btn.textContent='Download';}
+      if(typeof toastError==='function')toastError('Download failed: '+((r&&r.err)||'unknown'));
+    }
+  });
+}
+
+function refreshFirmwareLibrary(btn){
+  if(btn){btn.disabled=true;var old=btn.textContent;btn.textContent='Refreshing…';btn.dataset._old=old;}
+  ra('POST','/api/firmware/refresh-all',{},function(r){
+    if(btn){btn.disabled=false;btn.textContent=btn.dataset._old||'Refresh All';}
+    if(r&&r.ok){
+      var n=r.downloaded||0;
+      if(typeof toast==='function'){
+        if(n===0)toastInfo('All firmware already local — nothing to download');
+        else toastSuccess('Downloaded '+n+' new firmware binar'+(n===1?'y':'ies'));
+      }
+      renderFirmwareLibrary();
+    }else{
+      if(typeof toastError==='function')toastError('Refresh failed: '+((r&&r.err)||'unknown'));
+    }
+  });
 }
 function loadFirmwarePorts(){
   // Scan USB ports, query each for version + wifi

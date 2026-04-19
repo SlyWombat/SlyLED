@@ -136,6 +136,73 @@ def load_registry(firmware_dir):
             pass
     return {"firmware": []}
 
+
+def _registry_fetch_assets(timeout=10):
+    """Fetch GitHub /releases/latest asset list. Returns {name: url} or None."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            "https://api.github.com/repos/SlyWombat/SlyLED/releases/latest",
+            headers={"Accept": "application/vnd.github.v3+json",
+                     "User-Agent": "SlyLED-Parent"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    return {a["name"]: a.get("browser_download_url", "")
+            for a in (data.get("assets") or [])}
+
+
+def download_firmware(entry, cache_dir, assets_by_name=None):
+    """Download a single registry entry's binary into cache_dir / entry['file'].
+
+    Returns the local path on success, None on failure. Caller is expected
+    to check `os.path.isfile(path)` first — a missing or partial local file
+    means a re-download is needed. `assets_by_name` can be pre-fetched once
+    for a batch download (#567 refresh-all) so we only call GitHub once.
+    """
+    import urllib.request
+    fname = entry.get("file")
+    asset_name = entry.get("releaseAsset") or os.path.basename(fname or "")
+    if not fname or not asset_name:
+        return None
+    dest = Path(cache_dir) / fname
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if assets_by_name is None:
+        assets_by_name = _registry_fetch_assets() or {}
+    url = assets_by_name.get(asset_name)
+    if not url:
+        return None
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "SlyLED-Parent"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = resp.read()
+        dest.write_bytes(data)
+        return str(dest)
+    except Exception:
+        return None
+
+
+def resolve_binary_path(entry, cache_dir, registry_dir, auto_download=True):
+    """Resolve a registry entry's binary to a local file path.
+
+    Cache-first (writable), then registry-dir (installer-bundled / dev tree),
+    then — if auto_download is True — pull it from GitHub Releases into the
+    cache. Returns the absolute path or None.
+    """
+    fname = entry.get("file")
+    if not fname:
+        return None
+    for root in (cache_dir, registry_dir):
+        if not root:
+            continue
+        p = Path(root) / fname
+        if p.is_file():
+            return str(p)
+    if not auto_download:
+        return None
+    return download_firmware(entry, cache_dir)
+
 # ── Flash ─────────────────────────────────────────────────────────────────────
 
 _flash_status = {"running": False, "progress": 0, "message": "", "error": None}
