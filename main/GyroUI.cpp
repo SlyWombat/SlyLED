@@ -120,6 +120,12 @@ static bool s_calibHeld = false;
 static bool s_flashHeld = false;
 static bool s_stopHeld  = false;
 
+// #565 — when true, the IDLE state has been swiped into Settings. This
+// keeps the app in UIState::IDLE (so the server isn't claimed) but
+// paints the Settings page so operators can reach battery info and
+// Sleep before starting. Swipe back to clear.
+static bool s_idleSettings = false;
+
 // Selected colour preset index (page 1)
 
 // ── Drawing helpers ──────────────────────────────────────────────────────────
@@ -395,6 +401,37 @@ static void enterDeepSleep() {
     esp_deep_sleep_start();
 }
 
+// #565 — sleep-button arc geometry. Instead of a cramped circle at y=175
+// the sleep button is now a circular segment hugging the bottom of the
+// 240 px round display. `SLEEP_ARC_YTOP` is the top row of the segment
+// — rows ≥ this and inside the display circle belong to the button.
+// Lifting the top to 180 yields a rise of ~60 px (≈ 1/4 of the screen),
+// which matches the issue spec and leaves ~150 px of content area above.
+static constexpr int16_t SLEEP_ARC_YTOP = 180;
+static constexpr int16_t SLEEP_ARC_RADIUS = 118;  // just inside the 120 px screen edge
+
+// Fill the bottom segment of the display circle from yTop downward.
+// At row y, the horizontal span is x = CX ± sqrt(R² − (y−CY)²).
+static void fillSleepArc(uint16_t colour) {
+    for (int16_t y = SLEEP_ARC_YTOP; y <= CY + SLEEP_ARC_RADIUS && y < GYRO_LCD_H; y++) {
+        int32_t dy = y - CY;
+        int32_t rSq = (int32_t)SLEEP_ARC_RADIUS * SLEEP_ARC_RADIUS;
+        int32_t dySq = dy * dy;
+        if (dySq > rSq) continue;
+        int16_t span = (int16_t)sqrtf((float)(rSq - dySq));
+        gyroFillRect(CX - span, y, 2 * span, 1, colour);
+    }
+}
+
+// Hit test — a tap is on the sleep arc when y ≥ yTop AND inside the
+// screen disc. Matches exactly the filled region so the button never
+// "lies" about its touch area.
+static bool hitSleepArc(int16_t tx, int16_t ty) {
+    if (ty < SLEEP_ARC_YTOP) return false;
+    int32_t dx = tx - CX, dy = ty - CY;
+    return (dx * dx + dy * dy) <= (int32_t)SLEEP_ARC_RADIUS * SLEEP_ARC_RADIUS;
+}
+
 static void drawSettingsPage() {
     gyroClearScreen(GC_BLACK);
     gyroDrawText(CX - 27, 32, "SETTINGS", 1, GC_CYAN);
@@ -422,14 +459,17 @@ static void drawSettingsPage() {
     gyroDrawText(52, 125, wifiOk() ? "WiFi: Connected" : "WiFi: Disconnected", 1,
                  wifiOk() ? GC_GREEN : GC_RED);
 
-    // Power Off button
-    uint16_t fill = s_sleepHeld ? GC_RED : (uint16_t)0x9800u;
-    gyroFillCircle(CX, 175, 30, fill);
-    gyroDrawCircle(CX, 175, 30, GC_RED);
-    gyroDrawText(CX - 18, 170, "SLEEP", 1, GC_WHITE);
-
-    if (!s_sleepHeld)
-        gyroDrawText(28, 210, "Hold to sleep", 1, GC_GREY);
+    // Sleep arc at bottom — filled red when held for feedback, dark red
+    // otherwise. Label sits inside the arc just below yTop (y=180).
+    uint16_t arcFill = s_sleepHeld ? GC_RED : (uint16_t)0x6000u;  // dark red
+    fillSleepArc(arcFill);
+    if (s_sleepHeld) {
+        gyroDrawText(CX - 12, SLEEP_ARC_YTOP + 12, "HOLD", 1, GC_WHITE);
+        gyroDrawText(CX - 51, SLEEP_ARC_YTOP + 30, "Release to sleep", 1, GC_WHITE);
+    } else {
+        gyroDrawText(CX - 15, SLEEP_ARC_YTOP + 12, "SLEEP", 1, GC_WHITE);
+        gyroDrawText(CX - 39, SLEEP_ARC_YTOP + 30, "Hold to sleep", 1, GC_GREY);
+    }
 
     drawPageDots();
 }
@@ -584,6 +624,17 @@ void gyroUIUpdate() {
                 drawCurrentPage();
             }
             s_holdStartMs = 0;
+        } else if (s_state == UIState::IDLE && isSwipe) {
+            // #565 — IDLE has two screens: START and Settings. Swipe
+            // left reveals Settings, swipe right returns to START.
+            if (gesture == TOUCH_GEST_SWIPE_LEFT && !s_idleSettings) {
+                s_idleSettings = true;
+                drawSettingsPage();
+            } else if (gesture == TOUCH_GEST_SWIPE_RIGHT && s_idleSettings) {
+                s_idleSettings = false;
+                drawIdle();
+            }
+            s_holdStartMs = 0;
         } else if (isTap) {
             if (s_state == UIState::IDLE) {
                 handleTouchIdle(tx, ty);
@@ -596,9 +647,11 @@ void gyroUIUpdate() {
 
     // ── Hold actions (finger still on screen, no gesture yet) ───────────────
 
-    // IDLE: hold-to-start
-    if (s_state == UIState::IDLE && touching && gesture == TOUCH_GEST_NONE
-        && held && gyroUdpHasLock() && hitCircle(tx, ty, CX, CY, BTN_MAIN_R)) {
+    // IDLE: hold-to-start — only fires on the START screen, not when
+    // the user has swiped into the IDLE Settings view (#565).
+    if (s_state == UIState::IDLE && !s_idleSettings && touching
+        && gesture == TOUCH_GEST_NONE && held && gyroUdpHasLock()
+        && hitCircle(tx, ty, CX, CY, BTN_MAIN_R)) {
         if (!s_startHeld) {
             s_startHeld = true;
             drawIdle();  // show HOLD feedback
@@ -659,8 +712,9 @@ void gyroUIUpdate() {
                 drawStopPage();
             }
         }
-        // Page 4: hold-to-sleep
-        if (s_page == 4 && held && hitCircle(tx, ty, CX, 175, 30)) {
+        // Page 4: hold-to-sleep — arc hit test follows the bottom of
+        // the display (matches the filled region).
+        if (s_page == 4 && held && hitSleepArc(tx, ty)) {
             if (!s_sleepHeld) {
                 s_sleepHeld = true;
                 drawSettingsPage();
@@ -668,11 +722,24 @@ void gyroUIUpdate() {
         }
     }
 
+    // #565 — hold-to-sleep also fires from the IDLE Settings view so
+    // operators can power down before ever starting a session.
+    if (s_state == UIState::IDLE && s_idleSettings && touching
+        && gesture == TOUCH_GEST_NONE && held && hitSleepArc(tx, ty)) {
+        if (!s_sleepHeld) {
+            s_sleepHeld = true;
+            drawSettingsPage();
+        }
+    }
+
     // ── Release hold actions when finger lifts (gesture appears or fingers=0) ─
     if (!touching && s_wasTouching) {
         if (s_startHeld) {
             s_startHeld = false;
-            // Transition IDLE → ACTIVE
+            // Transition IDLE → ACTIVE. Clear any swiped-into-Settings
+            // state from IDLE so a return-to-IDLE later starts on the
+            // START screen, not Settings (#565).
+            s_idleSettings = false;
             s_state = UIState::ACTIVE;
             s_page  = 0;
             s_calibHeld = false;
@@ -736,8 +803,11 @@ periodic:
     float r, p, y;
     gyroIMURead(&r, &p, &y);
 
-    // IDLE: redraw when lock status changes (yellow → green)
-    if (s_state == UIState::IDLE) {
+    // IDLE: redraw when lock status changes (yellow → green). Only when
+    // the START page is showing — skip the redraw when the operator
+    // swiped into the Settings view (#565) so we don't clobber it every
+    // time the lock flips.
+    if (s_state == UIState::IDLE && !s_idleSettings) {
         static bool s_prevLock = false;
         bool locked = gyroUdpHasLock();
         if (locked != s_prevLock) {
