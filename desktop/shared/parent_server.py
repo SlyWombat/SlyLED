@@ -82,7 +82,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.30"
+VERSION = "1.5.32"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -4209,7 +4209,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.30" from camera_server.py source text."""
+    """Extract VERSION = "1.5.32" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -6377,16 +6377,42 @@ def _artnet_oneshot_poll():
       on timeout — it continues polling until the 2 s deadline expires,
       which means we actually catch replies that arrive 300+ ms after
       the first second of silence.
+
+    Fixed in #570:
+    - **binds to port 6454** (with SO_REUSEADDR). Art-Net 4 spec mandates
+      the node reply goes to UDP port 6454 regardless of the source port
+      of the ArtPoll; binding to an ephemeral port meant every reply
+      landed somewhere we weren't listening. Cold-start discover now
+      actually receives ArtPollReply packets.
+    - If the engine's already bound exclusively to 6454 we fall back to
+      issuing the poll through the engine's own socket, which lets its
+      `_recv()` loop stamp the replies into `_artnet._discovered`.
     """
     try:
         from dmx_artnet import (build_artpoll, parse_artnet_header,
                                 parse_artpoll_reply, ARTNET_PORT,
                                 OP_POLL_REPLY, _all_local_broadcast_addrs)
+        # If the engine is already running it owns port 6454 and its
+        # _recv loop will catch replies — just trigger the broadcast.
+        if _artnet.running and _artnet._sock is not None:
+            _artnet.poll()
+            _artnet_unicast_known_bridges()
+            return
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # Bind to ARTNET_PORT (6454) so ArtPollReply packets land here.
+        # Bridges always target 6454 per spec, not the sender's ephemeral
+        # port. Fall back to ephemeral if 6454 is held by some other app
+        # (e.g. an external console running on the same host) — replies
+        # will be lost in that edge case but at least the poll goes out.
         sock.settimeout(0.1)  # short per-recv so late replies still land
-        sock.bind(("", 0))
+        try:
+            sock.bind(("", ARTNET_PORT))
+        except OSError:
+            log.warning("ArtPoll one-shot: port %d in use — binding ephemeral; "
+                        "replies may be missed", ARTNET_PORT)
+            sock.bind(("", 0))
         pkt = build_artpoll()
         for dest in _all_local_broadcast_addrs():
             try:
@@ -10425,6 +10451,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
