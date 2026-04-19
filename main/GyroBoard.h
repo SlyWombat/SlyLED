@@ -47,10 +47,13 @@ constexpr uint8_t GYRO_IMU_INT1 =  4;  // data-ready interrupt (optional)
 constexpr uint32_t GYRO_I2C_FREQ = 400000UL;
 
 // ── Battery voltage ADC (optional — set to 0 if no battery circuit) ─────
-// Waveshare ESP32-S3-LCD-1.28 with battery: voltage divider on GPIO1
-// Vbat → 100k → ADC → 100k → GND (divider ratio 2:1, max 4.2V → 2.1V)
+// Waveshare ESP32-S3-Touch-LCD-1.28 with battery: per the vendor schematic
+// (waveshare.com/wiki/ESP32-S3-Touch-LCD-1.28) the divider is 200 kΩ + 100 kΩ
+// to GND, so the ADC sees Vbat × (100/(200+100)) = Vbat / 3. Max for a 4.2 V
+// LiPo is 1.4 V at the ADC — comfortably inside 11 dB attenuation range.
+// Vendor reference formula: voltage = 3.3 / (1<<12) * 3 * adc_raw.
 constexpr uint8_t GYRO_BAT_PIN = 1;        // GPIO1 ADC, 0 = disabled
-constexpr float   GYRO_BAT_DIVIDER = 2.0f; // voltage divider ratio
+constexpr float   GYRO_BAT_DIVIDER = 3.0f; // 200k/100k → divide by 3
 
 #endif  // BOARD_GYRO
 #endif  // GYROBOARD_H

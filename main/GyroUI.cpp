@@ -481,35 +481,42 @@ static bool hitSleepArc(int16_t tx, int16_t ty) {
     return (dx * dx + dy * dy) <= (int32_t)SLEEP_ARC_RADIUS * SLEEP_ARC_RADIUS;
 }
 
+// Repaint just the battery readout block (rows ~60-112). Called from
+// drawSettingsPage on entry and from the 2 s tick so the charging
+// indicator updates live without clearing the whole screen (which
+// caused visible flicker). Wipes the rect first so stale pixels from
+// a longer previous string don't survive.
+static void drawBatteryInfo() {
+    gyroFillRect(0, 60, GYRO_LCD_W, 52, GC_BLACK);
+    float vbat = readBatteryVoltage();
+    int pct = batteryPercent(vbat);
+    if (pct < 0) {
+        gyroDrawText(48, 80, "No battery", 1, GC_GREY);
+        return;
+    }
+    char buf[32];
+    bool charging = batteryCharging();
+    // "Battery: 87% +" when charging (lightning-bolt glyph isn't in
+    // font5x7, so "+" is the operator-visible charge marker).
+    snprintf(buf, sizeof(buf), charging ? "Battery: %d%% +" : "Battery: %d%%", pct);
+    uint16_t col = charging
+                   ? GC_CYAN
+                   : (pct > 20 ? GC_GREEN : (pct > 5 ? GC_ORANGE : GC_RED));
+    gyroDrawText(44, 70, buf, 1, col);
+    snprintf(buf, sizeof(buf), "%.2fV", vbat);
+    gyroDrawText(80, 85, buf, 1, GC_GREY);
+    // Battery bar — tint cyan while charging so the state is legible
+    // even without reading the label.
+    gyroFillRect(50, 100, 140, 10, GC_DKGREY);
+    int barW = pct * 136 / 100;
+    if (barW > 0) gyroFillRect(52, 102, barW, 6, col);
+}
+
 static void drawSettingsPage() {
     gyroClearScreen(GC_BLACK);
     gyroDrawText(CX - 27, 32, "SETTINGS", 1, GC_CYAN);
 
-    // Battery
-    float vbat = readBatteryVoltage();
-    int pct = batteryPercent(vbat);
-    if (pct >= 0) {
-        char buf[32];
-        bool charging = batteryCharging();
-        // "Battery: 87% ⚡" when charging, plain "Battery: 87%" otherwise.
-        // The lightning-bolt glyph is ASCII 0x0F in the stock font5x7 table
-        // used by gyroDrawText, so fall back to "+" if the font lacks it.
-        snprintf(buf, sizeof(buf), charging ? "Battery: %d%% +" : "Battery: %d%%", pct);
-        uint16_t col = charging
-                       ? GC_CYAN
-                       : (pct > 20 ? GC_GREEN : (pct > 5 ? GC_ORANGE : GC_RED));
-        gyroDrawText(44, 70, buf, 1, col);
-        snprintf(buf, sizeof(buf), "%.2fV", vbat);
-        gyroDrawText(80, 85, buf, 1, GC_GREY);
-
-        // Battery bar — tint cyan while charging so the state is legible
-        // even without reading the label.
-        gyroFillRect(50, 100, 140, 10, GC_DKGREY);
-        int barW = pct * 136 / 100;
-        if (barW > 0) gyroFillRect(52, 102, barW, 6, col);
-    } else {
-        gyroDrawText(48, 80, "No battery", 1, GC_GREY);
-    }
+    drawBatteryInfo();
 
     // WiFi info
     gyroDrawText(52, 125, wifiOk() ? "WiFi: Connected" : "WiFi: Disconnected", 1,
@@ -876,16 +883,15 @@ periodic:
     // periodic tick (0.5 Hz inside batterySample()). Cheap when the
     // Settings page isn't showing; essential when it is.
     batterySample();
-    // When the operator is staring at the Settings page, repaint once
-    // per batterySample interval so the charging indicator flips live
-    // instead of waiting for a page transition. 2 s matches the ring
-    // sample cadence.
+    // When the operator is staring at the Settings page, repaint only
+    // the battery block (rows 60-112) so the charging indicator flips
+    // live. Full-page redraw caused a visible flicker every 2 s.
     static uint32_t s_settingsRedrawMs = 0;
     bool onSettings = (s_state == UIState::IDLE && s_idleSettings) ||
                       (s_state == UIState::ACTIVE && s_page == 4);
     if (onSettings && !s_sleepHeld && (now - s_settingsRedrawMs) >= 2000) {
         s_settingsRedrawMs = now;
-        drawSettingsPage();
+        drawBatteryInfo();
     }
 
     // Page 2 (status park): only redraw dot if status changed
