@@ -82,7 +82,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.22"
+VERSION = "1.5.24"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1566,16 +1566,17 @@ def _discover_cameras():
             if ip not in known_ips:
                 ips_to_probe.append(ip)
 
-    # Pass 1 — 64 workers + 0.8s timeout: parallel probes have no latency
-    # penalty so a slower camera gets a fair chance, and the whole /24 sweep
-    # finishes in ~4s instead of ~76s sequential.
+    # Pass 1 — 64 workers + 1.2s timeout. WSL2-measured full HTTP round-trip
+    # to an Orange Pi on /24 is ~330 ms and can spike to 700 ms under a
+    # loaded WiFi radio. 0.8 s was cutting it too close (#562) — bumped to
+    # 1.2 s so the common case reliably catches the camera on pass 1.
     found = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=64) as pool:
         for ip, info in zip(ips_to_probe,
-                            pool.map(lambda ip: _probe_camera(ip, timeout=0.8), ips_to_probe)):
+                            pool.map(lambda ip: _probe_camera(ip, timeout=1.2), ips_to_probe)):
             if info:
                 found[ip] = info
-    # Pass 2 — retry anything that didn't answer with a slightly longer
+    # Pass 2 — retry anything that didn't answer with a longer 2.0 s
     # timeout. Skip the retry entirely when pass 1 already got a full
     # complement (no known cold-start cases ever go past two responders).
     missing = [ip for ip in ips_to_probe if ip not in found]
@@ -1583,7 +1584,7 @@ def _discover_cameras():
         _time.sleep(0.15)  # let the radio settle / ARP cache warm up
         with concurrent.futures.ThreadPoolExecutor(max_workers=64) as pool:
             for ip, info in zip(missing,
-                                pool.map(lambda ip: _probe_camera(ip, timeout=1.5), missing)):
+                                pool.map(lambda ip: _probe_camera(ip, timeout=2.0), missing)):
                 if info:
                     found[ip] = info
     return list(found.values())
@@ -4179,7 +4180,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.22" from camera_server.py source text."""
+    """Extract VERSION = "1.5.24" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -6292,50 +6293,101 @@ def api_dmx_set_fixture():
 
 @app.get("/api/dmx/discovered")
 def api_dmx_discovered():
-    """Return Art-Net nodes discovered via ArtPoll. Sends a poll if engine is running."""
+    """Return Art-Net nodes discovered via ArtPoll.
+
+    Both code paths now wait ~1 s for replies to trickle in before
+    returning — the engine-running path used to return `discovered_nodes`
+    synchronously right after issuing the poll, which guaranteed an empty
+    list on the first click because replies take 50-500 ms to arrive.
+    The one-shot path had the same bug plus a `break` on its first recv
+    timeout that exited the listen loop ~500 ms early. Both fixed (#564).
+    """
     if _artnet.running:
         _artnet.poll()
+        # Also poll any known DMX bridge IP directly — subnet broadcast
+        # can get dropped by switches that disable IGMP on a guest VLAN,
+        # and unicast to a known bridge is always reliable.
+        _artnet_unicast_known_bridges()
+        # Give the engine's _recv loop time to stamp late replies.
+        _time_mod = time
+        _deadline = _time_mod.time() + 1.0
+        _seen_at_start = set(_artnet.discovered_nodes.keys())
+        while _time_mod.time() < _deadline:
+            if set(_artnet.discovered_nodes.keys()) - _seen_at_start:
+                break  # at least one new node — short-circuit
+            _time_mod.sleep(0.05)
     else:
-        # One-shot ArtPoll even when engine is stopped
         _artnet_oneshot_poll()
     return jsonify(_artnet.discovered_nodes)
 
-def _artnet_oneshot_poll():
-    """Send ArtPoll + listen for replies without starting the full engine."""
+def _artnet_unicast_known_bridges():
+    """Unicast an ArtPoll to every known DMX bridge IP. Subnet broadcast
+    can be silently dropped by managed switches / guest VLANs; unicast to
+    a known-good IP is always reachable when the bridge is online."""
     try:
-        from dmx_artnet import build_artpoll, parse_artnet_header, parse_artpoll_reply, ARTNET_PORT, OP_POLL_REPLY
+        from dmx_artnet import build_artpoll, ARTNET_PORT
+    except Exception:
+        return
+    if not _artnet._sock:
+        return
+    pkt = build_artpoll()
+    for c in _children:
+        if c.get("type") == "dmx" and c.get("ip"):
+            try:
+                _artnet._sock.sendto(pkt, (c["ip"], ARTNET_PORT))
+            except Exception:
+                pass
+
+def _artnet_oneshot_poll():
+    """Send ArtPoll + listen for replies without starting the full engine.
+
+    Fixed in #564:
+    - broadcast list now comes from `_all_local_broadcast_addrs()` so
+      every interface's subnet is covered (matches the engine's path);
+    - `recvfrom` timeout is a tight 100 ms and the loop no longer breaks
+      on timeout — it continues polling until the 2 s deadline expires,
+      which means we actually catch replies that arrive 300+ ms after
+      the first second of silence.
+    """
+    try:
+        from dmx_artnet import (build_artpoll, parse_artnet_header,
+                                parse_artpoll_reply, ARTNET_PORT,
+                                OP_POLL_REPLY, _all_local_broadcast_addrs)
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.settimeout(0.5)
+        sock.settimeout(0.1)  # short per-recv so late replies still land
         sock.bind(("", 0))
         pkt = build_artpoll()
-        # Broadcast on all common paths
-        for dest in ("255.255.255.255", "192.168.10.255", "192.168.1.255", "10.0.0.255"):
+        for dest in _all_local_broadcast_addrs():
             try:
                 sock.sendto(pkt, (dest, ARTNET_PORT))
             except Exception:
                 pass
-        # Also unicast to known children with type=dmx
+        # Also unicast to known children with type=dmx — reliable path
+        # when the switch drops broadcasts.
         for c in _children:
             if c.get("type") == "dmx" and c.get("ip"):
                 try:
                     sock.sendto(pkt, (c["ip"], ARTNET_PORT))
                 except Exception:
                     pass
-        # Listen for replies (up to 2 seconds)
+        # Listen for the full 2 s — do NOT break on the first timeout.
         deadline = time.time() + 2.0
         while time.time() < deadline:
             try:
                 data, addr = sock.recvfrom(2048)
-                hdr = parse_artnet_header(data)
-                if hdr and hdr[0] == OP_POLL_REPLY:
-                    info = parse_artpoll_reply(data)
-                    if info:
-                        _artnet._discovered[info["ip"]] = info
-                        log.info("ArtPoll reply from %s: %s", info["ip"], info.get("shortName"))
-            except (socket.timeout, BlockingIOError, OSError):
+            except (socket.timeout, BlockingIOError):
+                continue
+            except OSError:
                 break
+            hdr = parse_artnet_header(data)
+            if hdr and hdr[0] == OP_POLL_REPLY:
+                info = parse_artpoll_reply(data)
+                if info:
+                    _artnet._discovered[info["ip"]] = info
+                    log.info("ArtPoll reply from %s: %s", info["ip"],
+                             info.get("shortName"))
         sock.close()
     except Exception as e:
         log.debug("One-shot ArtPoll failed: %s", e)
@@ -10248,6 +10300,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

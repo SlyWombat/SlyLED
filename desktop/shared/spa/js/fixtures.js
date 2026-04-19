@@ -63,7 +63,18 @@ function editFixture(id){
     h+='<label>Universe</label><input id="fx-uni" type="number" value="'+(f.dmxUniverse||1)+'" min="1" style="width:100%;margin-bottom:.4em">';
     h+='<label>Start Address (1–512)</label><input id="fx-addr" type="number" value="'+(f.dmxStartAddr||1)+'" min="1" max="512" style="width:100%;margin-bottom:.4em">';
     h+='<label>Channel Count</label><input id="fx-ch" type="number" value="'+(f.dmxChannelCount||3)+'" min="1" style="width:100%;margin-bottom:.4em">';
-    h+='<label>Profile <span style="color:#64748b;font-size:.75em">(optional)</span></label>';
+    // Unified Local + Community + OFL search — mirrors Add Fixture so
+    // operators don't have to memorise a profile id by hand (was a plain
+    // "Profile ID (optional)" text field before; now searches the full
+    // 700-fixture library).
+    h+='<div style="margin-bottom:.6em;padding:.5em;background:#0f172a;border:1px solid #1e3a5f;border-radius:4px">';
+    h+='<label style="font-size:.82em;color:#93c5fd">Search All Fixtures (Local + Community + OFL)</label>';
+    h+='<div style="display:flex;gap:.3em;margin:.3em 0"><input id="fx-ofl-q" placeholder="e.g. par, moving head, chauvet..." style="flex:1;padding:.3em;font-size:.85em" onkeydown="if(event.key===\'Enter\')_fxOflSearch()">';
+    h+='<button class="btn" style="font-size:.75em;padding:.2em .5em;background:#1e3a5f;color:#93c5fd" onclick="_fxOflSearch()">Search</button>';
+    h+='<button class="btn" style="font-size:.75em;padding:.2em .5em;background:#1e293b;color:#94a3b8" onclick="_fxBrowseAll()">Browse All</button></div>';
+    h+='<div id="fx-ofl-results" style="max-height:200px;overflow-y:auto;font-size:.8em"></div>';
+    h+='</div>';
+    h+='<label>Profile <span style="color:#64748b;font-size:.75em">(or pick from the search above)</span></label>';
     h+='<select id="fx-prof" data-current="'+escapeHtml(f.dmxProfileId||'')+'" onchange="_editFxProfileChange()" style="width:100%">';
     h+='<option value="">-- None (generic channels) --</option>';
     if(f.dmxProfileId)h+='<option value="'+escapeHtml(f.dmxProfileId)+'" selected>'+escapeHtml(f.dmxProfileId)+' (loading\u2026)</option>';
@@ -169,6 +180,122 @@ function _editFxProfileChange(){
     if(!p||!p.channels)return;
     var chEl=document.getElementById('fx-ch');
     if(chEl)chEl.value=p.channels.length;
+  });
+}
+
+// ── Edit Fixture unified profile search (local + community + OFL) ───
+// Mirrors _afOflSearch / _afBrowseAll / _afSelect* from setup-ui.js
+// but targets the fx-* element IDs used inside the edit modal.
+
+function _fxOflSearch(){
+  var q=document.getElementById('fx-ofl-q').value.trim();
+  var el=document.getElementById('fx-ofl-results');if(!el)return;
+  if(q.length<2){el.innerHTML='<span style="color:#f66">Enter at least 2 characters</span>';return;}
+  el.innerHTML='<span style="color:#888">Searching local, community &amp; OFL...</span>';
+  ra('GET','/api/dmx-profiles/unified-search?q='+encodeURIComponent(q),null,function(r){
+    if(!el)return;
+    if(!r||r.err){el.innerHTML='<span style="color:#f66">'+(r&&r.err||'Search failed')+'</span>';return;}
+    if(!r.length){el.innerHTML='<span style="color:#888">No results for "'+escapeHtml(q)+'"</span>';return;}
+    var srcColors={local:'#22c55e',community:'#7c3aed',ofl:'#3b82f6'};
+    var srcLabels={local:'Local',community:'Community',ofl:'OFL'};
+    var h='';
+    r.forEach(function(f){
+      var src=f.source||'ofl';
+      var badge='<span style="font-size:.65em;padding:1px 5px;border-radius:8px;background:'+srcColors[src]+'22;color:'+srcColors[src]+'">'+srcLabels[src]+'</span>';
+      var fn;
+      if(src==='local')fn='_fxSelectLocal(\''+escapeHtml(f.id)+'\',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\','+(f.channelCount||3)+')';
+      else if(src==='community')fn='_fxSelectCommunity(\''+escapeHtml(f.id)+'\',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')';
+      else fn='_fxSelectOfl(\''+(f.oflMfr||'')+'\',\''+escapeHtml(f.id)+'\',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')';
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:.3em 0;border-bottom:1px solid #1e293b">'
+        +'<span>'+escapeHtml(f.name)+' <span style="color:#64748b;font-size:.82em">'+escapeHtml(f.manufacturer||'')+'</span> '+badge+'</span>'
+        +'<button class="btn" style="font-size:.7em;padding:.15em .4em;background:#14532d;color:#86efac" onclick="'+fn+'">Select</button></div>';
+    });
+    el.innerHTML=h;
+  });
+}
+
+function _fxBrowseAll(){
+  var el=document.getElementById('fx-ofl-results');if(!el)return;
+  el.innerHTML='<span style="color:#888;font-size:.82em">Loading all profiles...</span>';
+  ra('GET','/api/dmx-profiles',null,function(profiles){
+    if(!profiles||!profiles.length){el.innerHTML='<span style="color:#888">No profiles in library</span>';return;}
+    var h='<div style="font-size:.75em;color:#64748b;margin-bottom:.3em">'+profiles.length+' profiles</div>';
+    h+='<table style="width:100%;font-size:.82em;border-collapse:collapse"><tr style="color:#64748b"><th style="text-align:left">Name</th><th style="text-align:left">Manufacturer</th><th>Ch</th><th>Category</th><th></th></tr>';
+    profiles.forEach(function(p){
+      h+='<tr style="border-bottom:1px solid #1e293b">'
+        +'<td style="padding:.2em .3em">'+escapeHtml(p.name)+'</td>'
+        +'<td style="padding:.2em .3em;color:#94a3b8">'+escapeHtml(p.manufacturer||'')+'</td>'
+        +'<td style="text-align:center">'+p.channelCount+'</td>'
+        +'<td style="color:#64748b;font-size:.85em">'+escapeHtml(p.category||'')+'</td>'
+        +'<td><button class="btn" style="font-size:.7em;padding:.15em .4em;background:#14532d;color:#86efac" '
+        +'onclick="_fxSelectLocal(\''+escapeHtml(p.id)+'\',\''+escapeHtml(p.name).replace(/'/g,"\\'")+'\','+p.channelCount+')">Select</button></td></tr>';
+    });
+    h+='</table>';
+    el.innerHTML=h;
+  });
+}
+
+function _fxSelectLocal(profId,displayName,chCount){
+  var chEl=document.getElementById('fx-ch');if(chEl)chEl.value=chCount;
+  var sel=document.getElementById('fx-prof');
+  if(sel){
+    // Ensure the option exists before selecting — the dropdown is loaded
+    // async, so a fresh-from-search pick may race with _editFxLoadProfiles.
+    var found=false;
+    for(var i=0;i<sel.options.length;i++){
+      if(sel.options[i].value===profId){sel.selectedIndex=i;found=true;break;}
+    }
+    if(!found){
+      var o=document.createElement('option');o.value=profId;o.textContent=displayName+' ('+chCount+'ch)';o.selected=true;
+      sel.appendChild(o);
+    }
+  }
+  var el=document.getElementById('fx-ofl-results');
+  if(el)el.innerHTML='<span style="color:#86efac">Selected: '+escapeHtml(displayName)+'</span>';
+}
+
+function _fxSelectCommunity(slug,displayName){
+  var el=document.getElementById('fx-ofl-results');
+  if(el)el.innerHTML='<span style="color:#a78bfa">Downloading '+escapeHtml(displayName)+'...</span>';
+  ra('POST','/api/dmx-profiles/community/download',{slug:slug},function(r){
+    if(r&&r.ok){
+      // Refresh local profile list then select the freshly-downloaded one.
+      ra('GET','/api/dmx-profiles',null,function(profiles){
+        var sel=document.getElementById('fx-prof');if(!sel)return;
+        sel.innerHTML='<option value="">-- None (generic channels) --</option>';
+        (profiles||[]).forEach(function(p){
+          var o=document.createElement('option');o.value=p.id;o.textContent=p.name+' ('+p.channelCount+'ch)';
+          sel.appendChild(o);if(p.id===slug)sel.value=slug;
+        });
+        var matched=(profiles||[]).find(function(p){return p.id===slug;});
+        if(matched){var chEl=document.getElementById('fx-ch');if(chEl)chEl.value=matched.channelCount;}
+        if(el)el.innerHTML='<span style="color:#86efac">Downloaded: '+escapeHtml(displayName)+'</span>';
+      });
+    }else{
+      if(el)el.innerHTML='<span style="color:#f66">Download failed'+(r&&r.err?': '+escapeHtml(r.err):'')+'</span>';
+    }
+  });
+}
+
+function _fxSelectOfl(mfr,fix,displayName){
+  var el=document.getElementById('fx-ofl-results');
+  if(el)el.innerHTML='<span style="color:#86efac">Importing '+escapeHtml(displayName)+'...</span>';
+  ra('POST','/api/dmx-profiles/ofl/import-by-id',{manufacturer:mfr,fixture:fix},function(r){
+    if(r&&r.ok&&r.profiles&&r.profiles.length){
+      var p=r.profiles[0];
+      ra('GET','/api/dmx-profiles',null,function(profiles){
+        var sel=document.getElementById('fx-prof');if(!sel)return;
+        sel.innerHTML='<option value="">-- None (generic channels) --</option>';
+        (profiles||[]).forEach(function(pp){
+          var o=document.createElement('option');o.value=pp.id;o.textContent=pp.name+' ('+pp.channelCount+'ch)';
+          sel.appendChild(o);if(pp.id===p.id)sel.value=p.id;
+        });
+        var chEl=document.getElementById('fx-ch');if(chEl&&p.channelCount)chEl.value=p.channelCount;
+        if(el)el.innerHTML='<span style="color:#86efac">Imported: '+escapeHtml(displayName)+'</span>';
+      });
+    }else{
+      if(el)el.innerHTML='<span style="color:#f66">Import failed'+(r&&r.err?': '+escapeHtml(r.err):'')+'</span>';
+    }
   });
 }
 
