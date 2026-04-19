@@ -363,12 +363,26 @@ static void drawStatusPage() {
 
 // ── ACTIVE page 4 — Settings ────────────────────────────────────────────────
 
+// #566 follow-up — the old `analogRead() / 4095 * 3.3` was wildly off on
+// the ESP32-S3 because it ignored the per-chip eFuse ADC calibration and
+// the attenuation default. `analogReadMilliVolts()` from the Arduino
+// ESP32 core returns calibrated mV (applies the TwoPoint / VRef
+// calibration written to eFuse at Espressif's factory test). 16-sample
+// average smooths the ~±20 mV ADC noise.
 static float readBatteryVoltage() {
     if (GYRO_BAT_PIN == 0) return -1.0f;  // no battery pin
-    int raw = analogRead(GYRO_BAT_PIN);
-    // ESP32-S3 ADC: 12-bit (0-4095), reference ~3.3V
-    float v = (float)raw / 4095.0f * 3.3f * GYRO_BAT_DIVIDER;
-    return v;
+    // Explicitly pick 11 dB attenuation — max divider-output of a 4.2 V
+    // LiPo through a 2:1 divider is 2.1 V, comfortably inside 11 dB's
+    // ~3.1 V linear range.
+    static bool s_adcInited = false;
+    if (!s_adcInited) {
+        analogSetPinAttenuation(GYRO_BAT_PIN, ADC_11db);
+        s_adcInited = true;
+    }
+    uint32_t mvSum = 0;
+    for (int i = 0; i < 16; i++) mvSum += analogReadMilliVolts(GYRO_BAT_PIN);
+    float mv = (float)mvSum / 16.0f;
+    return (mv / 1000.0f) * GYRO_BAT_DIVIDER;
 }
 
 static int batteryPercent(float voltage) {
@@ -377,6 +391,41 @@ static int batteryPercent(float voltage) {
     if (voltage >= 4.2f) return 100;
     if (voltage <= 3.3f) return 0;
     return (int)((voltage - 3.3f) / 0.9f * 100.0f);
+}
+
+// #566 follow-up — charging detection without a dedicated CHRG GPIO.
+// The Waveshare 1.28 board doesn't wire the TP4056 CHRG line out, so we
+// infer charge state from the battery voltage curve:
+//
+//   • A 4.15 V+ plateau holds only while USB is supplying current (a
+//     disconnected LiPo under any load drops into the 3.9–4.1 V range
+//     within minutes).
+//   • A monotonic 20+ mV rise across a 20 s window is unambiguously a
+//     charge cycle — discharge slope under the ~80 mA display load is
+//     always downward, never upward.
+//
+// s_batHist is a 10-slot rolling ring sampled at 0.5 Hz.
+static float   s_batHist[10]      = {0};
+static uint8_t s_batHistIdx       = 0;
+static uint32_t s_batLastSampleMs = 0;
+
+static void batterySample() {
+    uint32_t now = millis();
+    if (now - s_batLastSampleMs < 2000) return;  // 0.5 Hz
+    s_batLastSampleMs = now;
+    float v = readBatteryVoltage();
+    if (v < 0) return;  // no battery
+    s_batHist[s_batHistIdx] = v;
+    s_batHistIdx = (uint8_t)((s_batHistIdx + 1) % 10);
+}
+
+static bool batteryCharging() {
+    float curr = s_batHist[(s_batHistIdx + 9) % 10];
+    if (curr <= 0) return false;
+    if (curr >= 4.15f) return true;           // USB plateau
+    float oldest = s_batHist[s_batHistIdx];   // next slot to overwrite = oldest
+    if (oldest <= 0) return false;            // buffer not full yet
+    return (curr - oldest) > 0.02f;           // >20 mV rise over 20 s
 }
 
 static bool s_sleepHeld = false;
@@ -440,14 +489,21 @@ static void drawSettingsPage() {
     float vbat = readBatteryVoltage();
     int pct = batteryPercent(vbat);
     if (pct >= 0) {
-        char buf[24];
-        snprintf(buf, sizeof(buf), "Battery: %d%%", pct);
-        uint16_t col = pct > 20 ? GC_GREEN : (pct > 5 ? GC_ORANGE : GC_RED);
-        gyroDrawText(52, 70, buf, 1, col);
+        char buf[32];
+        bool charging = batteryCharging();
+        // "Battery: 87% ⚡" when charging, plain "Battery: 87%" otherwise.
+        // The lightning-bolt glyph is ASCII 0x0F in the stock font5x7 table
+        // used by gyroDrawText, so fall back to "+" if the font lacks it.
+        snprintf(buf, sizeof(buf), charging ? "Battery: %d%% +" : "Battery: %d%%", pct);
+        uint16_t col = charging
+                       ? GC_CYAN
+                       : (pct > 20 ? GC_GREEN : (pct > 5 ? GC_ORANGE : GC_RED));
+        gyroDrawText(44, 70, buf, 1, col);
         snprintf(buf, sizeof(buf), "%.2fV", vbat);
         gyroDrawText(80, 85, buf, 1, GC_GREY);
 
-        // Battery bar
+        // Battery bar — tint cyan while charging so the state is legible
+        // even without reading the label.
         gyroFillRect(50, 100, 140, 10, GC_DKGREY);
         int barW = pct * 136 / 100;
         if (barW > 0) gyroFillRect(52, 102, barW, 6, col);
@@ -814,6 +870,22 @@ periodic:
             s_prevLock = locked;
             drawIdle();
         }
+    }
+
+    // #566 follow-up — feed the charging-detection ring buffer on every
+    // periodic tick (0.5 Hz inside batterySample()). Cheap when the
+    // Settings page isn't showing; essential when it is.
+    batterySample();
+    // When the operator is staring at the Settings page, repaint once
+    // per batterySample interval so the charging indicator flips live
+    // instead of waiting for a page transition. 2 s matches the ring
+    // sample cadence.
+    static uint32_t s_settingsRedrawMs = 0;
+    bool onSettings = (s_state == UIState::IDLE && s_idleSettings) ||
+                      (s_state == UIState::ACTIVE && s_page == 4);
+    if (onSettings && !s_sleepHeld && (now - s_settingsRedrawMs) >= 2000) {
+        s_settingsRedrawMs = now;
+        drawSettingsPage();
     }
 
     // Page 2 (status park): only redraw dot if status changed
