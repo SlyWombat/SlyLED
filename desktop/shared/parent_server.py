@@ -4118,6 +4118,7 @@ def api_space_scan_stereo():
         log.warning("Stereo scan: %s", tilt_warning)
 
     import base64, io
+    import urllib.request  # not imported at module scope; local import keeps handler self-contained
     try:
         import cv2
         import numpy as _np
