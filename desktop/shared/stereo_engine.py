@@ -58,21 +58,51 @@ class StereoEngine:
                  cam_id, [round(float(v), 1) for v in pos_stage])
 
     def add_camera_from_fov(self, cam_id, fov_deg, frame_w, frame_h,
-                            stage_pos, stage_rotation=None):
-        """Register camera using FOV estimate (no ArUco calibration).
+                            stage_pos, stage_rotation=None,
+                            fov_type="horizontal"):
+        """Register camera using an FOV estimate (no ArUco calibration).
 
-        Computes approximate intrinsics from FOV; the cam-to-stage
-        rotation comes from the shared `camera_math.build_camera_to_stage`
-        helper so the sign convention matches space_mapper and the
-        fixture editor (#586). stage_rotation is
-        `[tilt_deg, pan_deg, roll_deg]` where positive tilt = aim down
-        and positive pan = aim toward +X.
+        Intrinsics model assumes square pixels (true for all USB/webcam
+        sensors) — `fx = fy`. Different image aspect ratios are handled
+        correctly by the shared focal length plus a frame-dimension-
+        derived principal point `(cx, cy) = (w/2, h/2)`.
+
+        FOV-type handling is the subtle part. Consumer USB cameras
+        often quote **diagonal** FOV on spec sheets but the intrinsics
+        derivation needs horizontal FOV. Pass `fov_type="diagonal"`
+        when the supplied `fov_deg` is a diagonal value; the helper
+        converts to horizontal using the sensor aspect ratio:
+
+            tan(h_fov/2) = tan(d_fov/2) * (w / sqrt(w² + h²))
+
+        The cam-to-stage rotation comes from the shared
+        `camera_math.build_camera_to_stage` helper so the sign
+        convention matches space_mapper and the fixture editor (#586).
+
+        Args:
+            fov_deg: FOV angle in degrees.
+            frame_w, frame_h: ACTUAL captured image dimensions (not the
+                requested resolution — V4L2 may downscale silently).
+            stage_rotation: [tilt, pan, roll] in degrees.
+            fov_type: "horizontal" (default), "diagonal", or "vertical".
         """
         from camera_math import build_camera_to_stage, rotation_from_layout
 
-        fov_rad = math.radians(fov_deg)
-        fx = (frame_w / 2.0) / math.tan(fov_rad / 2.0)
-        fy = fx
+        # Convert to horizontal FOV if the caller supplied something else.
+        if fov_type == "diagonal":
+            diag = math.sqrt(frame_w * frame_w + frame_h * frame_h)
+            # tan(h_fov/2) = tan(d_fov/2) * (w / diag)
+            h_fov_rad = 2 * math.atan(math.tan(math.radians(fov_deg) / 2.0)
+                                        * (frame_w / diag))
+        elif fov_type == "vertical":
+            # tan(h_fov/2) = tan(v_fov/2) * (w / h)
+            h_fov_rad = 2 * math.atan(math.tan(math.radians(fov_deg) / 2.0)
+                                        * (frame_w / frame_h))
+        else:
+            h_fov_rad = math.radians(fov_deg)
+
+        fx = (frame_w / 2.0) / math.tan(h_fov_rad / 2.0)
+        fy = fx  # square pixels
         cx, cy = frame_w / 2.0, frame_h / 2.0
 
         K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)

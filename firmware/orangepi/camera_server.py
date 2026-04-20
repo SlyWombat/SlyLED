@@ -22,7 +22,7 @@ from flask import Flask, jsonify, request
 import flask.cli
 flask.cli.show_server_banner = lambda *a, **kw: None   # suppress dev-server warning (#289)
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 PORT = 5000
 UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
@@ -1131,11 +1131,19 @@ def stereo_capture():
     """Grab near-simultaneous frames from two cameras for stereo
     triangulation (#583).
 
-    Body: {"pair": [0, 1]}  — two distinct camera indices.
-    Returns: base64 JPEGs plus the measured capture-time delta. Both
-    cameras are opened, primed (to flush stale frames), then grab()'d
-    as close together as possible; typical delta on the same V4L2 bus
-    is < 10 ms.
+    Body:
+        pair:       [a, b] — two distinct camera indices. Default [0,1].
+        resolution: [w, h] — per-camera capture resolution. Default:
+                    each camera's native probed resolution (resW × resH
+                    from /status), capped at 1920×1080 so the round-trip
+                    payload stays manageable.
+        quality:    JPEG quality 1-100. Default 85.
+
+    Returns: base64 JPEGs plus the measured capture-time delta and the
+    per-camera actual output size (may differ from requested if the
+    sensor doesn't support the requested resolution). The sizes field
+    is what callers must use to build intrinsics — don't assume the
+    requested resolution was honoured.
     """
     import cv2
     import time as _time
@@ -1143,6 +1151,8 @@ def stereo_capture():
 
     body = request.get_json(silent=True) or {}
     pair = body.get("pair", [0, 1])
+    req_res = body.get("resolution")  # optional [w, h]
+    quality = int(body.get("quality", 85))
     if not isinstance(pair, list) or len(pair) != 2 or pair[0] == pair[1]:
         return jsonify(ok=False, err="pair must be two distinct camera indices"), 400
     cameras = _hw_info.get("cameras", [])
@@ -1150,17 +1160,37 @@ def stereo_capture():
         if not isinstance(p, int) or p < 0 or p >= len(cameras):
             return jsonify(ok=False, err=f"camera index {p} out of range"), 400
 
-    dev_a = cameras[pair[0]]["device"]
-    dev_b = cameras[pair[1]]["device"]
+    def _target_res(cam_entry):
+        if isinstance(req_res, list) and len(req_res) == 2:
+            return int(req_res[0]), int(req_res[1])
+        # Per-camera native with a 1920x1080 cap — a 4K frame would be
+        # ~6 MB base64 which kills the HTTP round-trip.
+        w = cam_entry.get("resW") or 1920
+        h = cam_entry.get("resH") or 1080
+        if w > 1920:
+            scale = 1920 / w
+            w = 1920
+            h = int(h * scale)
+        return int(w), int(h)
+
+    cam_a_entry = cameras[pair[0]]
+    cam_b_entry = cameras[pair[1]]
+    dev_a = cam_a_entry["device"]
+    dev_b = cam_b_entry["device"]
+    w_a, h_a = _target_res(cam_a_entry)
+    w_b, h_b = _target_res(cam_b_entry)
+
     cap_a = cv2.VideoCapture(dev_a, cv2.CAP_V4L2)
     cap_b = cv2.VideoCapture(dev_b, cv2.CAP_V4L2)
     try:
         if not (cap_a.isOpened() and cap_b.isOpened()):
             return jsonify(ok=False, err="failed to open one or both cameras"), 500
-        for cap in (cap_a, cap_b):
+        for cap, w, h in ((cap_a, w_a, h_a), (cap_b, w_b, h_b)):
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            cap.read()  # discard stale frame
+            cap.read()  # discard stale frame at the new resolution
         t0 = _time.monotonic()
         cap_a.grab()
         cap_b.grab()
@@ -1174,21 +1204,30 @@ def stereo_capture():
     if not (ok_a and ok_b and frame_a is not None and frame_b is not None):
         return jsonify(ok=False, err="one or both cameras failed to return a frame"), 500
 
-    _, jpg_a = cv2.imencode('.jpg', frame_a, [cv2.IMWRITE_JPEG_QUALITY, 85])
-    _, jpg_b = cv2.imencode('.jpg', frame_b, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    q = max(1, min(100, quality))
+    _, jpg_a = cv2.imencode('.jpg', frame_a, [cv2.IMWRITE_JPEG_QUALITY, q])
+    _, jpg_b = cv2.imencode('.jpg', frame_b, [cv2.IMWRITE_JPEG_QUALITY, q])
     return jsonify(
         ok=True,
-        schemaVersion=1,
+        schemaVersion=2,  # resolution-aware payload
         pair=pair,
         captureDeltaMs=round((t1 - t0) * 1000, 2),
         frames={
             str(pair[0]): base64.b64encode(jpg_a.tobytes()).decode('ascii'),
             str(pair[1]): base64.b64encode(jpg_b.tobytes()).decode('ascii'),
         },
+        # ACTUAL captured size — may differ from requested if the sensor
+        # doesn't support it. Callers MUST build intrinsics from these,
+        # not from the request or any layout resW/resH.
         sizes={
             str(pair[0]): [int(frame_a.shape[1]), int(frame_a.shape[0])],
             str(pair[1]): [int(frame_b.shape[1]), int(frame_b.shape[0])],
         },
+        requestedSizes={
+            str(pair[0]): [w_a, h_a],
+            str(pair[1]): [w_b, h_b],
+        },
+        quality=q,
     )
 
 

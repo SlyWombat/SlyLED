@@ -4069,14 +4069,22 @@ def api_space_scan_stereo():
     except ImportError:
         return jsonify(err="cv2 / numpy not available on host"), 500
 
-    # Pull paired frames
-    body_payload = {"pair": [cam_a.get("cameraIdx", 0), cam_b.get("cameraIdx", 1)]}
+    # Pull paired frames. Request the highest resolution both cameras
+    # can reasonably deliver — 1920×1080 is the firmware's per-cam cap
+    # so the HTTP round-trip stays under ~1 MB per frame. Callers can
+    # override via the request body.
+    req_res = body.get("resolution", [1920, 1080])
+    body_payload = {
+        "pair": [cam_a.get("cameraIdx", 0), cam_b.get("cameraIdx", 1)],
+        "resolution": req_res,
+        "quality": body.get("quality", 85),
+    }
     try:
         req = urllib.request.Request(
             f"http://{cam_a['cameraIp']}:5000/stereo-capture",
             data=json.dumps(body_payload).encode(),
             headers={"Content-Type": "application/json"})
-        resp = urllib.request.urlopen(req, timeout=30)
+        resp = urllib.request.urlopen(req, timeout=45)
         data = json.loads(resp.read().decode())
     except Exception as e:
         return jsonify(err=f"stereo-capture request failed: {e}"), 502
@@ -4096,7 +4104,12 @@ def api_space_scan_stereo():
     h_a, w_a = frame_a.shape[:2]
     h_b, w_b = frame_b.shape[:2]
 
-    # Register both cameras with the stereo engine
+    # Register both cameras with the stereo engine using the ACTUAL
+    # captured resolution (sensor may ignore the request; trust the
+    # firmware's reported `sizes`). FOV type defaults to horizontal but
+    # each camera fixture can override via `fovType` — useful when a
+    # camera's spec sheet quotes diagonal FOV, which is typical for
+    # consumer USB cams.
     from stereo_engine import StereoEngine, feature_match_points
     engine = StereoEngine()
     pos_a = pos_map[cam_a["id"]]
@@ -4104,11 +4117,13 @@ def api_space_scan_stereo():
     engine.add_camera_from_fov(
         "a", cam_a.get("fovDeg", 90), w_a, h_a,
         (pos_a.get("x", 0), pos_a.get("y", 0), pos_a.get("z", 0)),
-        cam_a.get("rotation", [0, 0, 0]))
+        cam_a.get("rotation", [0, 0, 0]),
+        fov_type=cam_a.get("fovType", "horizontal"))
     engine.add_camera_from_fov(
         "b", cam_b.get("fovDeg", 90), w_b, h_b,
         (pos_b.get("x", 0), pos_b.get("y", 0), pos_b.get("z", 0)),
-        cam_b.get("rotation", [0, 0, 0]))
+        cam_b.get("rotation", [0, 0, 0]),
+        fov_type=cam_b.get("fovType", "horizontal"))
 
     matches = feature_match_points(frame_a, frame_b)
     points = engine.triangulate_pair("a", "b", matches)
