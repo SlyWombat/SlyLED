@@ -135,6 +135,9 @@ def cross_camera_filter(per_cam, tolerance_mm=150.0,
               "stage_pos": (x, y, z) in mm,
               "fov_deg": float,
               "points": [[x,y,z,r,g,b, (confidence)], ...] in stage mm,
+              "anchorQuality": "ok" | "fallback" | "failed" | None
+                (from space_mapper.anchor_depth_scale — used to decide
+                which cameras are trustworthy voters; #590)
             }
         tolerance_mm: maximum distance between cross-cam corresponding
             points for them to be considered the same observation.
@@ -144,15 +147,32 @@ def cross_camera_filter(per_cam, tolerance_mm=150.0,
     Returns:
         merged_points: single list of 7-slot points sorted by source order.
         stats: dict with per-camera counts of confirmed / single / dropped.
+
+    #590 behaviour: cameras whose anchor fit failed (anchorQuality =
+    "failed") produce clouds at raw disparity scale that disagree with
+    the rest of the stage. Letting them vote in the consistency check
+    would cause them to reject every good point from anchored cameras.
+    Instead, failed cameras are EXCLUDED from the voting pool — they
+    still contribute their points at singleCam confidence, but they
+    don't get to veto anyone. Fallback-anchor cameras vote normally.
     """
     # Build camera contexts
     ctxs = []
     clouds = []
-    for entry in per_cam:
+    voters = []  # indices of cameras allowed to vote
+    for idx, entry in enumerate(per_cam):
         ctx = _build_cam_context(entry["fixture"], entry["stage_pos"], entry["fov_deg"])
         ctxs.append(ctx)
         pts = entry.get("points", [])
         clouds.append(pts)
+        # A camera can vote iff its anchor succeeded OR no anchor was
+        # attempted. Cameras flagged as "failed" were producing raw-
+        # disparity clouds in earlier runs; letting them veto good
+        # points was the #590 bug.
+        aq = entry.get("anchorQuality")
+        if aq == "failed":
+            continue
+        voters.append(idx)
 
     # Precompute (N, 3) arrays for fast nearest-neighbour checks
     cloud_arrays = []
@@ -162,6 +182,8 @@ def cross_camera_filter(per_cam, tolerance_mm=150.0,
         else:
             arr = np.empty((0, 3), dtype=np.float64)
         cloud_arrays.append(arr)
+
+    voter_set = set(voters)
 
     merged = []
     stats = []
@@ -178,6 +200,8 @@ def cross_camera_filter(per_cam, tolerance_mm=150.0,
             for j, ctx_j in enumerate(ctxs):
                 if i == j:
                     continue
+                if j not in voter_set:
+                    continue  # non-voting camera — can't confirm or veto
                 if not _in_fov(xyz, ctx_j):
                     continue
                 any_other_sees = True
@@ -197,8 +221,9 @@ def cross_camera_filter(per_cam, tolerance_mm=150.0,
                 n_dropped += 1
                 continue
             else:
-                # No other camera has this point in its FOV cone — keep
-                # with reduced confidence.
+                # No voting camera has this point in its FOV cone, or
+                # this camera itself is a non-voter — keep at lower
+                # confidence.
                 conf = confidence_single
                 n_single += 1
             out = [p[0], p[1], p[2],

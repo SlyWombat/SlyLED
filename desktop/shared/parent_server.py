@@ -1544,18 +1544,33 @@ def api_gyro_disable(child_id):
 _cam_discover_state = {"pending": False, "data": []}
 
 def _probe_camera(ip, timeout=2):
-    """Probe a camera node via HTTP GET /status. Returns info dict or None."""
+    """Probe a camera node via HTTP GET /status. Returns info dict or None.
+
+    #561 — the `role: \"camera\"` check was rejecting every real camera
+    because the Orange Pi firmware never emitted that field. Current
+    firmware responses look like:
+        {\"board\": \"sun55iw3\", \"cameraCount\": 2, \"cameras\": [...]}
+    Recognise the response via any of these signals:
+        - explicit `role == \"camera\"` (future firmware)
+        - `cameras` is a non-empty list (current firmware)
+        - `cameraCount` > 0 (current firmware)
+    """
     import urllib.request as _ur
     try:
         resp = _ur.urlopen(f"http://{ip}:5000/status", timeout=timeout)
         data = json.loads(resp.read().decode("utf-8"))
-        if data.get("role") != "camera":
+        looks_like_camera = (
+            data.get("role") == "camera"
+            or (isinstance(data.get("cameras"), list) and len(data["cameras"]) > 0)
+            or data.get("cameraCount", 0) > 0
+        )
+        if not looks_like_camera:
             return None
         return {
             "ip": ip,
             "hostname": data.get("hostname", ip),
             "name": data.get("hostname", ip),
-            "fwVersion": data.get("fwVersion", ""),
+            "fwVersion": data.get("fwVersion", data.get("version", "")),
             "fovDeg": data.get("fovDeg"),
             "resolutionW": data.get("resolutionW"),
             "resolutionH": data.get("resolutionH"),
@@ -4119,15 +4134,21 @@ def api_space_scan_stereo():
         "resolution": req_res,
         "quality": body.get("quality", 85),
     }
-    try:
-        req = urllib.request.Request(
-            f"http://{cam_a['cameraIp']}:5000/stereo-capture",
-            data=json.dumps(body_payload).encode(),
-            headers={"Content-Type": "application/json"})
-        resp = urllib.request.urlopen(req, timeout=45)
-        data = json.loads(resp.read().decode())
-    except Exception as e:
-        return jsonify(err=f"stereo-capture request failed: {e}"), 502
+    # #591 — blackout DMX for the capture window. Synchronous context
+    # manager so state restores even if the HTTP call or ORB step
+    # raises. Default "blackout"; callers can pass "keep" to preserve
+    # show playback, or "fill" for a scan-friendly dim preset.
+    lighting_mode = body.get("lighting", "blackout")
+    with _ScanLightingWindow(lighting_mode):
+        try:
+            req = urllib.request.Request(
+                f"http://{cam_a['cameraIp']}:5000/stereo-capture",
+                data=json.dumps(body_payload).encode(),
+                headers={"Content-Type": "application/json"})
+            resp = urllib.request.urlopen(req, timeout=45)
+            data = json.loads(resp.read().decode())
+        except Exception as e:
+            return jsonify(err=f"stereo-capture request failed: {e}"), 502
     if not data.get("ok"):
         return jsonify(err=f"camera rejected request: {data.get('err')}"), 502
 
@@ -4200,9 +4221,103 @@ def api_space_scan_stereo():
                    warning=tilt_warning)
 
 
+def _dmx_snapshot_state():
+    """Capture the current ArtNet + sACN universe buffers so we can restore
+    them after a blackout window. Returns a dict of engine → {uni → bytes}."""
+    snap = {"artnet": {}, "sacn": {}}
+    for name, eng in (("artnet", _artnet), ("sacn", _sacn)):
+        if not getattr(eng, "running", False):
+            continue
+        for uni_num, uni in getattr(eng, "_universes", {}).items():
+            try:
+                snap[name][uni_num] = bytes(uni.get_data())
+            except Exception:
+                pass
+    return snap
+
+
+def _dmx_restore_state(snap):
+    """Restore universe buffers from a _dmx_snapshot_state() result."""
+    for name, eng in (("artnet", _artnet), ("sacn", _sacn)):
+        if not getattr(eng, "running", False):
+            continue
+        for uni_num, data in snap.get(name, {}).items():
+            try:
+                eng.get_universe(uni_num).set_data(data)
+            except Exception:
+                pass
+
+
+class _ScanLightingWindow:
+    """Context manager that blacks out (or applies a fill preset to) all
+    DMX universes for the duration of a scan and restores the prior
+    state on exit. #591."""
+
+    def __init__(self, mode="blackout"):
+        self.mode = mode if mode in ("blackout", "keep", "fill") else "blackout"
+        self._snap = None
+
+    def __enter__(self):
+        if self.mode == "keep":
+            return self
+        self._snap = _dmx_snapshot_state()
+        if self.mode == "blackout":
+            try:
+                _artnet.blackout()
+                _sacn.blackout()
+                log.info("Scan: DMX blacked out for capture")
+            except Exception as e:
+                log.warning("Scan: blackout failed: %s", e)
+        elif self.mode == "fill":
+            # Scan-friendly fill: write a low neutral dimmer to each DMX
+            # fixture that has a dimmer channel. No pan/tilt changes.
+            try:
+                for f in _fixtures:
+                    if f.get("fixtureType") != "dmx":
+                        continue
+                    pid = f.get("dmxProfileId")
+                    info = _profile_lib.channel_info(pid) if pid else None
+                    if not info:
+                        continue
+                    ch_map = info.get("channel_map", {})
+                    if "dimmer" not in ch_map:
+                        continue
+                    uni = f.get("dmxUniverse", 1)
+                    addr = f.get("dmxStartAddr", 1)
+                    for eng in (_artnet, _sacn):
+                        if eng.running:
+                            eng.get_universe(uni).set_channel(addr + ch_map["dimmer"], 60)
+                log.info("Scan: fill-light preset applied (dimmer=60 on DMX fixtures)")
+            except Exception as e:
+                log.warning("Scan: fill preset failed: %s", e)
+        # Give the bridge a short moment to transmit
+        time.sleep(0.2)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._snap is not None:
+            try:
+                _dmx_restore_state(self._snap)
+                log.info("Scan: DMX state restored")
+            except Exception as e:
+                log.warning("Scan: DMX restore failed: %s", e)
+        return False
+
+
+_scan_lighting_window = None  # tracks an open _ScanLightingWindow for async scans
+
+
 @app.post("/api/space/scan")
 def api_space_scan():
-    """Start an async environment scan using all positioned camera sensors."""
+    """Start an async environment scan using all positioned camera sensors.
+
+    Body:
+        maxPointsPerCamera: int — monocular points per camera.
+        lighting: "blackout" (default) | "keep" | "fill" — #591.
+        cameras: optional list of fixture IDs to restrict the scan
+                 (#588; otherwise every positioned camera is used).
+    """
+    global _scan_lighting_window
     if _space_scan.running:
         return jsonify(err="Scan already in progress"), 409
     cams = [f for f in _fixtures if f.get("fixtureType") == "camera"]
@@ -4214,21 +4329,47 @@ def api_space_scan():
         return jsonify(err="No camera fixtures positioned on layout"), 400
     body = request.get_json(silent=True) or {}
     max_pts = body.get("maxPointsPerCamera", 10000)
+    # #588 — optional per-camera selection. When body.cameras is set,
+    # only run the scan on those fixture IDs (still must be positioned).
+    sel = body.get("cameras")
+    if sel:
+        ids = set(int(x) for x in sel)
+        positioned_cams = [c for c in positioned_cams if c["id"] in ids]
+        if not positioned_cams:
+            return jsonify(err="None of the selected cameras are positioned"), 400
     # #581 — pass stage dimensions so depth anchoring can bound each
     # camera's rays against the surveyed box. Dimensions come from the
     # stage.json data file; values may be stored in either metres
     # (float < 100) or millimetres (int ≥ 100) historically — the
     # anchor_depth_scale helper normalises.
     stage_dims = dict(_stage) if _stage else None
+    # #591 — open a lighting window before starting the scan. The
+    # status endpoint closes it when the scan completes. Without this
+    # the monocular depth model's output was being corrupted by DMX
+    # hotspots on walls (see Cam13 r=0.127 in the basement rig test).
+    lighting_mode = body.get("lighting", "blackout")
+    _scan_lighting_window = _ScanLightingWindow(lighting_mode)
+    _scan_lighting_window.__enter__()
     _space_scan.start(positioned_cams, pos_map,
                       max_points_per_cam=max_pts,
                       stage_dims=stage_dims)
-    return jsonify(ok=True, pending=True, cameras=len(positioned_cams))
+    return jsonify(ok=True, pending=True,
+                   cameras=len(positioned_cams),
+                   lighting=lighting_mode)
 
 @app.get("/api/space/scan/status")
 def api_space_scan_status():
     """Poll environment scan progress."""
+    global _scan_lighting_window
     st = _space_scan.status
+    # #591 — once the scan finishes, close the lighting window so the
+    # operator's previous DMX state is restored.
+    if not st["running"] and _scan_lighting_window is not None:
+        try:
+            _scan_lighting_window.__exit__(None, None, None)
+        except Exception as e:
+            log.warning("Scan: lighting restore failed: %s", e)
+        _scan_lighting_window = None
     if not st["running"] and st.get("result"):
         global _point_cloud, _stage_surfaces_cache
         _point_cloud = st["result"]
@@ -4238,9 +4379,24 @@ def api_space_scan_status():
         _save("pointcloud", _point_cloud)
         # #496 — new cloud invalidates analyzed surfaces cache.
         _stage_surfaces_cache = {"key": None, "value": None}
+    # #588 — return per-camera summary (name, pointCount, anchorQuality)
+    # so the Advanced Scan card can show a quality breakdown when the
+    # scan completes. Keep `result` slim (no points, just metadata) to
+    # avoid ballooning the JSON on every poll.
+    result_meta = None
+    if st.get("result"):
+        r = st["result"]
+        result_meta = {
+            "totalPoints": r.get("totalPoints", 0),
+            "cameras": r.get("cameras", []),
+            "filterStats": r.get("filterStats"),
+            "source": r.get("source"),
+            "floorOffset": r.get("floorOffset"),
+        }
     return jsonify(running=st["running"], progress=st["progress"],
                    message=st["message"],
-                   totalPoints=st["result"]["totalPoints"] if st.get("result") else 0)
+                   totalPoints=st["result"]["totalPoints"] if st.get("result") else 0,
+                   result=result_meta)
 
 @app.get("/api/space")
 def api_space_get():

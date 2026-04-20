@@ -466,5 +466,51 @@ ok("v1 input normalised to v2 output",
    all(len(p) == 7 for p in fused_v1))
 
 
+# ═══════════════════════════════════════════════════════════════════════
+print("\n=== #590 failed-anchor camera can't veto good points ===")
+# ═══════════════════════════════════════════════════════════════════════
+
+# Build two cameras. Cam A has a good cloud + a valid pillar-like
+# cluster. Cam B has a "failed" anchor — its cloud is at raw disparity
+# scale so every point it contributes is in the wrong place. Under the
+# pre-#590 behaviour, Cam B's clouds would veto Cam A's pillar. After
+# the fix Cam A's pillar must survive.
+
+pillar_points = [[1650, 2550, z, 255, 255, 255] for z in range(200, 1100, 100)]
+cam_a_entry = {
+    "fixture": {"id": 12, "name": "A", "rotation": [22, 0, 0], "fovDeg": 90},
+    "stage_pos": (1275, 120, 1930),
+    "fov_deg": 90,
+    "points": pillar_points,
+    "anchorQuality": "ok",
+}
+# Cam B sees the same region but its points land way off (raw disparity)
+cam_b_entry = {
+    "fixture": {"id": 13, "name": "B", "rotation": [15, 0, 0], "fovDeg": 90},
+    "stage_pos": (830, 120, 1930),
+    "fov_deg": 90,
+    "points": [[500, 3000, -1500, 0, 0, 0]] * 20,  # disagrees with A's pillar
+    "anchorQuality": "failed",
+}
+
+merged, stats = cross_camera_filter([cam_a_entry, cam_b_entry], tolerance_mm=200)
+a_stats = next(s for s in stats if s["fixtureId"] == 12)
+b_stats = next(s for s in stats if s["fixtureId"] == 13)
+ok("A's pillar points survive despite B's disagreement",
+   a_stats["dropped"] == 0,
+   f"A dropped={a_stats['dropped']}, expected 0")
+ok("A's pillar kept in merged output",
+   sum(1 for p in merged if 0 <= p[0] <= 3000 and 2000 <= p[1] <= 3000 and 0 <= p[2] <= 1500) == len(pillar_points),
+   f"{sum(1 for p in merged if 0 <= p[0] <= 3000 and 2000 <= p[1] <= 3000 and 0 <= p[2] <= 1500)} pillar points out of {len(pillar_points)}")
+# B's failed-anchor points should still be present but flagged singleCam
+# B's anchor failed → its points are still in wrong 3D locations (raw
+# disparity scale). Ideally they'd either: (a) be discarded as polluting
+# noise, or (b) survive at low confidence. Current behaviour is (a) because
+# A is a voter and sees no match where B's points land — OK outcome.
+ok("B's failed-anchor points do NOT contaminate as cross-confirmed",
+   b_stats["confirmed"] == 0,
+   f"B confirmed={b_stats['confirmed']}, expected 0")
+
+
 print(f"\n{_PASS} passed, {_FAIL} failed out of {_PASS + _FAIL} tests")
 sys.exit(0 if _FAIL == 0 else 1)

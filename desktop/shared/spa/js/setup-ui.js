@@ -350,16 +350,16 @@ function _loadPointCloudMeta(camFixtures){
         bh='<b style="color:#94a3b8">Point cloud:</b> <span style="color:#f59e0b">none</span> '
           +'<span style="color:#64748b">— calibration will have no stage geometry.</span> '
           +'<button class="btn" onclick="_pcLiteRun()" style="font-size:.75em;margin-left:.4em;background:#0e7490;color:#fff">Quick Lite Setup</button>'
-          +' <button class="btn" onclick="_pcFullScan()" style="font-size:.75em;margin-left:.3em;background:#1e3a5f;color:#93c5fd">Run Full Scan</button>';
+          +' <button class="btn" onclick="_pcAdvancedScan()" style="font-size:.75em;margin-left:.3em;background:#1e3a5f;color:#93c5fd">Advanced Scan\u2026</button>';
       }else if(isLite){
         bh='<b style="color:#94a3b8">Point cloud:</b> <span style="color:#f59e0b">Lite only</span> '
           +'<span style="color:#64748b">— synthesized from layout dimensions, no camera depth. Upgrade once cameras can scan.</span> '
-          +'<button class="btn" onclick="_pcFullScan()" style="font-size:.75em;margin-left:.4em;background:#0e7490;color:#fff">Run Full Scan</button>';
+          +'<button class="btn" onclick="_pcAdvancedScan()" style="font-size:.75em;margin-left:.4em;background:#0e7490;color:#fff">Advanced Scan\u2026</button>';
       }else{
         var ts=r.timestamp?new Date(r.timestamp*1000).toLocaleString():'unknown';
         bh='<b style="color:#94a3b8">Point cloud:</b> <span style="color:#34d399">'+r.totalPoints+' points</span> '
           +'<span style="color:#64748b">· '+((r.cameras||[]).length)+' cameras · '+escapeHtml(ts)+'</span> '
-          +'<button class="btn" onclick="_pcFullScan()" style="font-size:.75em;margin-left:.4em;background:#1e3a5f;color:#93c5fd">Rescan</button>';
+          +'<button class="btn" onclick="_pcAdvancedScan()" style="font-size:.75em;margin-left:.4em;background:#1e3a5f;color:#93c5fd">Advanced Scan\u2026</button>';
       }
       banner.innerHTML=bh;
     }
@@ -397,6 +397,8 @@ function _pcLiteRun(){
 }
 
 function _pcFullScan(){
+  // Legacy one-click scan — kept for callers that didn't migrate to
+  // _pcAdvancedScan. Runs monocular with default options.
   var banner=document.getElementById('pc-status');
   if(banner)banner.innerHTML='<span style="color:#64748b">Starting environment scan…</span>';
   ra('POST','/api/space/scan',{maxPointsPerCamera:5000},function(r){
@@ -413,6 +415,180 @@ function _pcFullScan(){
           clearInterval(poll);
           document.getElementById('hs').textContent='Scan complete — '+(st.totalPoints||0)+' points';
           loadSetup();
+        }
+      });
+    },800);
+  });
+}
+
+// ── Advanced Scan modal (#588) ──────────────────────────────────────────
+// Method picker, per-camera toggle, lighting, live progress, sample frames.
+
+function _pcAdvancedScan(){
+  _modalStack=[];
+  var cams=(_fixtures||[]).filter(function(f){return f.fixtureType==='camera';});
+  // Detect stereo-capable pair (same cameraIp, at least two entries)
+  var byIp={};
+  cams.forEach(function(c){
+    if(!c.cameraIp)return;
+    (byIp[c.cameraIp]=byIp[c.cameraIp]||[]).push(c);
+  });
+  var stereoPairs=[];
+  Object.keys(byIp).forEach(function(ip){
+    if(byIp[ip].length>=2)stereoPairs.push({ip:ip,cams:byIp[ip].slice(0,2)});
+  });
+
+  var h='<div style="min-width:520px">';
+  h+='<div style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">Build a stage-space point cloud. Pick a method, choose which cameras to include, and optionally black out DMX during capture so bright beams don\'t confuse the depth model.</div>';
+
+  // Method picker
+  h+='<div class="card" style="padding:.6em;margin-bottom:.5em">';
+  h+='<div style="font-size:.82em;font-weight:bold;color:#e2e8f0;margin-bottom:.3em">Method</div>';
+  h+='<label style="display:block;cursor:pointer;padding:.2em 0;font-size:.85em">'
+    +'<input type="radio" name="pcmethod" value="mono" checked onchange="_pcAdvRefresh()"> Monocular — each positioned camera contributes a depth cloud.'
+    +'</label>';
+  var stereoDisabled=stereoPairs.length===0;
+  h+='<label style="display:block;cursor:pointer;padding:.2em 0;font-size:.85em'+(stereoDisabled?';opacity:.4':'')+'">'
+    +'<input type="radio" name="pcmethod" value="stereo"'+(stereoDisabled?' disabled':'')+' onchange="_pcAdvRefresh()"> Stereo triangulation'
+    +(stereoDisabled?' <span style="color:#f59e0b">— needs two cameras on the same node</span>'
+                    :' <span style="color:#34d399">— high-accuracy pair on '+escapeHtml(stereoPairs[0].ip)+'</span>')
+    +'</label>';
+  h+='<label style="display:block;cursor:pointer;padding:.2em 0;font-size:.85em">'
+    +'<input type="radio" name="pcmethod" value="lite" onchange="_pcAdvRefresh()"> Lite — synthesize from layout dimensions (no camera scan).'
+    +'</label>';
+  h+='</div>';
+
+  // Camera picker
+  h+='<div class="card" id="pcadv-cams" style="padding:.6em;margin-bottom:.5em">';
+  h+='<div style="font-size:.82em;font-weight:bold;color:#e2e8f0;margin-bottom:.3em">Cameras to include</div>';
+  if(cams.length===0){
+    h+='<div style="color:#94a3b8;font-size:.8em">No camera fixtures registered.</div>';
+  }else{
+    cams.forEach(function(c){
+      var disabled=!c.cameraIp;
+      h+='<label style="display:block;cursor:pointer;padding:.15em 0;font-size:.82em'+(disabled?';opacity:.4':'')+'">'
+        +'<input type="checkbox" class="pcadv-cam" value="'+c.id+'"'+(disabled?' disabled':' checked')+'> '
+        +escapeHtml(c.name||('cam '+c.id))
+        +' <span style="color:#64748b">· '+escapeHtml(c.cameraIp||'no IP')+' · cam'+(c.cameraIdx||0)+' · FOV '+(c.fovDeg||'?')+'°</span>'
+        +'</label>';
+    });
+  }
+  h+='</div>';
+
+  // Lighting
+  h+='<div class="card" style="padding:.6em;margin-bottom:.5em">';
+  h+='<div style="font-size:.82em;font-weight:bold;color:#e2e8f0;margin-bottom:.3em">DMX lighting during capture</div>';
+  h+='<select id="pcadv-light" style="width:100%;font-size:.85em;padding:.3em">';
+  h+='<option value="blackout" selected>Blackout (recommended — clean depth input)</option>';
+  h+='<option value="fill">Dim fill light (low ambient, no moving beams)</option>';
+  h+='<option value="keep">Keep current lighting (don\'t touch DMX)</option>';
+  h+='</select>';
+  h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">Bright DMX beams on walls/ceiling saturate the monocular depth model. Blackout restores prior state after capture (#591).</p>';
+  h+='</div>';
+
+  // Advanced options
+  h+='<details style="margin-bottom:.5em"><summary style="cursor:pointer;color:#94a3b8;font-size:.8em">Advanced options</summary>';
+  h+='<div style="padding:.4em 0;font-size:.82em">';
+  h+='<label>Max points per camera <input id="pcadv-maxpts" type="number" value="5000" min="500" max="30000" step="500" style="width:80px;margin-left:.4em"></label><br>';
+  h+='<label style="margin-top:.3em;display:block">Stereo resolution <select id="pcadv-stereores" style="margin-left:.4em"><option value="1920x1080">1920×1080</option><option value="1280x720">1280×720</option><option value="640x480">640×480</option></select></label>';
+  h+='</div></details>';
+
+  // Status area + action buttons
+  h+='<div id="pcadv-status" style="display:none;padding:.5em;background:#0f172a;border:1px solid #1e293b;border-radius:4px;margin-bottom:.5em"></div>';
+  h+='<div id="pcadv-actions" style="display:flex;gap:.4em">';
+  h+='<button class="btn btn-on" id="pcadv-go" onclick="_pcAdvGo()">Start Scan</button>';
+  h+='<button class="btn btn-off" onclick="closeModal()">Cancel</button>';
+  h+='</div>';
+  h+='</div>';
+  document.getElementById('modal-title').textContent='Advanced Scan';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='flex';
+  _pcAdvRefresh();
+}
+
+function _pcAdvRefresh(){
+  // Enable/disable the camera picker based on method (stereo is fixed pair)
+  var method=(document.querySelector('input[name=pcmethod]:checked')||{}).value||'mono';
+  var camCard=document.getElementById('pcadv-cams');
+  if(camCard)camCard.style.opacity=method==='lite'?'0.4':'1';
+  document.querySelectorAll('.pcadv-cam').forEach(function(cb){
+    cb.disabled=(method==='lite')||cb.hasAttribute('data-force-disabled');
+  });
+}
+
+function _pcAdvGo(){
+  var method=(document.querySelector('input[name=pcmethod]:checked')||{}).value||'mono';
+  var light=(document.getElementById('pcadv-light')||{}).value||'blackout';
+  var maxPts=parseInt((document.getElementById('pcadv-maxpts')||{}).value||'5000');
+  var selected=[];
+  document.querySelectorAll('.pcadv-cam:checked').forEach(function(cb){selected.push(parseInt(cb.value));});
+  var statusEl=document.getElementById('pcadv-status');
+  statusEl.style.display='block';
+  document.getElementById('pcadv-go').disabled=true;
+
+  function _render(msg){statusEl.innerHTML=msg;}
+  _render('<span style="color:#94a3b8">Starting…</span>');
+
+  if(method==='lite'){
+    ra('POST','/api/space/scan/lite',{},function(r){
+      if(r&&r.ok){
+        _render('<span style="color:#34d399">\u2713 Lite cloud built: '+r.totalPoints+' points</span>');
+        setTimeout(function(){closeModal();loadSetup();}, 800);
+      }else{
+        _render('<span style="color:#ef4444">Failed: '+escapeHtml((r&&r.err)||'unknown')+'</span>');
+        document.getElementById('pcadv-go').disabled=false;
+      }
+    });
+    return;
+  }
+  if(method==='stereo'){
+    if(selected.length!==2){
+      _render('<span style="color:#f59e0b">Select exactly two cameras for a stereo pair.</span>');
+      document.getElementById('pcadv-go').disabled=false;
+      return;
+    }
+    var res=(document.getElementById('pcadv-stereores')||{}).value||'1920x1080';
+    var xy=res.split('x').map(function(v){return parseInt(v);});
+    ra('POST','/api/space/scan/stereo',{cameras:selected,resolution:xy,lighting:light},function(r){
+      if(r&&r.ok){
+        var warn=r.warning?'<div style="color:#f59e0b;font-size:.82em;margin-top:.3em">\u26a0 '+escapeHtml(r.warning)+'</div>':'';
+        _render('<span style="color:#34d399">\u2713 Stereo scan: '+r.totalPoints+' points from '+r.featureMatches+' matches · captureDelta '+r.captureDeltaMs+'ms · tilt\u0394 '+r.tiltDelta+'°</span>'+warn);
+        setTimeout(function(){closeModal();loadSetup();}, 1800);
+      }else{
+        _render('<span style="color:#ef4444">Failed: '+escapeHtml((r&&r.err)||'unknown')+'</span>');
+        document.getElementById('pcadv-go').disabled=false;
+      }
+    });
+    return;
+  }
+  // Monocular
+  if(selected.length===0){
+    _render('<span style="color:#f59e0b">Select at least one camera.</span>');
+    document.getElementById('pcadv-go').disabled=false;
+    return;
+  }
+  ra('POST','/api/space/scan',{maxPointsPerCamera:maxPts,cameras:selected,lighting:light},function(r){
+    if(!r||!r.ok){
+      _render('<span style="color:#ef4444">Failed: '+escapeHtml((r&&r.err)||'unknown')+'</span>');
+      document.getElementById('pcadv-go').disabled=false;
+      return;
+    }
+    _render('<span style="color:#94a3b8">Scanning '+(r.cameras||0)+' cameras · lighting='+escapeHtml(r.lighting||light)+'\u2026</span>');
+    var poll=setInterval(function(){
+      ra('GET','/api/space/scan/status',null,function(st){
+        if(!st)return;
+        var bar='<div style="background:#0a0f13;height:6px;border-radius:3px;margin:.3em 0"><div style="height:6px;background:#34d399;width:'+(st.progress||0)+'%;border-radius:3px"></div></div>';
+        _render('<span style="color:#94a3b8">'+escapeHtml(st.message||'')+'</span>'+bar+'<span style="color:#64748b;font-size:.78em">'+(st.progress||0)+'%</span>');
+        if(!st.running){
+          clearInterval(poll);
+          var cams=(st.result&&st.result.cameras)||[];
+          var summary=cams.map(function(c){
+            var q=c.anchorQuality||'—';
+            var qColor=q==='ok'?'#34d399':q==='fallback'?'#fbbf24':q==='failed'?'#ef4444':'#94a3b8';
+            return '<div style="font-size:.78em;color:#94a3b8">'+escapeHtml(c.name)+' · '+c.pointCount+' pts · anchor <span style="color:'+qColor+'">'+q+'</span></div>';
+          }).join('');
+          _render('<span style="color:#34d399">\u2713 Scan complete: '+(st.totalPoints||0)+' points</span>'+summary);
+          setTimeout(function(){closeModal();loadSetup();}, 2500);
         }
       });
     },800);

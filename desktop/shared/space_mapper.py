@@ -220,19 +220,82 @@ def anchor_depth_scale(cam_local_points, cam_pos, cam_rotation, stage_dims,
 
     if rms > rms_threshold_mm:
         log.warning("Depth anchor fit RMS %.0f mm exceeds threshold %.0f mm — "
-                    "skipping correction", rms, rms_threshold_mm)
-        return None
+                    "using fallback", rms, rms_threshold_mm)
+        return _fallback_anchor(cam_local_points, cam_pos, cam_rotation, stage_dims)
     # Sanity: a negative scale would invert the cloud through the camera,
     # which is never physically meaningful. Usually indicates that the
     # monocular depth map and the stage bounding box disagree severely
-    # (cameras pointed the wrong way, stage dims wrong, etc.).
+    # (saturated DMX hotspots, wrong rotation, untextured regions).
     if S <= 0:
         log.warning("Depth anchor fit produced negative scale %.3f — "
-                    "rejecting (check camera rotation and stage dimensions)", S)
-        return None
+                    "using fallback (see #590)", S)
+        return _fallback_anchor(cam_local_points, cam_pos, cam_rotation, stage_dims)
 
     return {"scale": S, "offset": B, "rmsErrorMm": rms,
-            "samplesUsed": len(samples)}
+            "samplesUsed": len(samples), "quality": "ok"}
+
+
+def _fallback_anchor(cam_local_points, cam_pos, cam_rotation, stage_dims):
+    """Produce a coarse anchor fit when the LSQ fit can't converge (#590).
+
+    The median of the raw cam-local depths is mapped to the median of
+    the per-ray geometric expected depths. Scale = ratio of those
+    medians, offset = 0. Much less precise than the LSQ fit, but keeps
+    the camera's cloud at a reasonable order-of-magnitude so the cross-
+    camera filter isn't seeing completely unscaled disparity.
+
+    Returns the same shape dict as `anchor_depth_scale` but tagged
+    with `quality: "fallback"` so downstream consumers can weight it.
+    Returns None if even the median can't be computed (too few points).
+    """
+    if not cam_local_points:
+        return None
+    from camera_math import build_camera_to_stage, rotation_from_layout
+    tilt, pan, roll = rotation_from_layout(cam_rotation)
+    R = build_camera_to_stage(tilt, pan, roll)
+    cx, cy, cz = cam_pos
+    sw = float(stage_dims.get("w", 0) * 1000) if stage_dims.get("w", 0) < 100 else float(stage_dims.get("w", 0))
+    sd = float(stage_dims.get("d", 0) * 1000) if stage_dims.get("d", 0) < 100 else float(stage_dims.get("d", 0))
+    sh = float(stage_dims.get("h", 0) * 1000) if stage_dims.get("h", 0) < 100 else float(stage_dims.get("h", 0))
+    if sw <= 0 or sd <= 0 or sh <= 0:
+        return None
+    raws = []
+    trues = []
+    for pt in cam_local_points:
+        x, y, z = pt[0], pt[1], pt[2]
+        if not math.isfinite(z) or z <= 50:
+            continue
+        if abs(x) > z * 1.732 or abs(y) > z * 1.732:
+            continue
+        dc = [x / z, y / z, 1.0]
+        dx = R[0][0] * dc[0] + R[0][1] * dc[1] + R[0][2] * dc[2]
+        dy = R[1][0] * dc[0] + R[1][1] * dc[1] + R[1][2] * dc[2]
+        dz = R[2][0] * dc[0] + R[2][1] * dc[1] + R[2][2] * dc[2]
+        cands = []
+        eps = 1e-6
+        if dz < -eps and -cz/dz > 0: cands.append(-cz/dz)
+        if dz > eps and (sh-cz)/dz > 0: cands.append((sh-cz)/dz)
+        if dy > eps and (sd-cy)/dy > 0: cands.append((sd-cy)/dy)
+        if dy < -eps and -cy/dy > 0: cands.append(-cy/dy)
+        if dx > eps and (sw-cx)/dx > 0: cands.append((sw-cx)/dx)
+        if dx < -eps and -cx/dx > 0: cands.append(-cx/dx)
+        if not cands:
+            continue
+        raws.append(z)
+        trues.append(min(cands))
+    if len(raws) < 10:
+        return None
+    import statistics
+    m_raw = statistics.median(raws)
+    m_true = statistics.median(trues)
+    if m_raw < 1:
+        return None
+    S = m_true / m_raw
+    B = 0.0
+    log.info("Fallback anchor: median raw=%.0f, median true=%.0f → scale=%.3f",
+             m_raw, m_true, S)
+    return {"scale": S, "offset": B, "rmsErrorMm": None,
+            "samplesUsed": len(raws), "quality": "fallback"}
 
 
 def apply_depth_correction(cam_local_points, scale, offset):
@@ -411,11 +474,32 @@ class SpaceScan:
 
             stage_points = transform_points(points, cam_pos, cam_rot)
 
+            # #590 — pass the anchor quality into the cross-cam filter
+            # so a failed / fallback camera can't veto a well-anchored
+            # camera's observations. `quality` is set by anchor_depth_scale:
+            #   "ok"       — LSQ fit succeeded, camera is a full voter
+            #   "fallback" — median-based coarse fit, camera votes with
+            #                relaxed expectations (still participates)
+            #   "failed"   — anchor attempted but produced no usable fit;
+            #                cloud is at raw disparity scale; camera does
+            #                NOT get to veto, and its points come out as
+            #                singleCam confidence
+            #   None       — no anchor attempted (e.g. stage_dims absent);
+            #                camera participates normally
+            if anchor is not None:
+                quality = anchor.get("quality", "ok")
+            elif stage_dims:
+                # stage_dims given but anchor returned None — the fit
+                # (including the fallback) couldn't produce anything.
+                quality = "failed"
+            else:
+                quality = None
             per_cam_clouds.append({
                 "fixture": cam,
                 "stage_pos": cam_pos,
                 "fov_deg": cam.get("fovDeg", 60),
                 "points": stage_points,
+                "anchorQuality": quality,
             })
             cam_info.append({
                 "fixtureId": fid,
@@ -423,6 +507,7 @@ class SpaceScan:
                 "name": cam.get("name", ""),
                 "pointCount": len(stage_points),
                 "depthAnchor": anchor,
+                "anchorQuality": quality,
             })
 
         # #582 — cross-camera consistency filter. When ≥2 cameras are
