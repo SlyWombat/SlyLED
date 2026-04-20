@@ -58,7 +58,10 @@ class DepthEstimator:
 
         Returns:
             (depth_map, inference_ms)
-            depth_map: numpy float32 array (H, W) — higher values = closer
+            depth_map: numpy float32 array (H, W) in [0, 1]
+                0 = closest observed pixel, 1 = farthest observed pixel.
+                Matches pinhole `z` convention so `z = d * max_depth_mm`
+                in pixel_to_3d / generate_point_cloud is correctly oriented.
         """
         with self._lock:
             self._load()
@@ -96,14 +99,20 @@ class DepthEstimator:
             # Resize back to original frame size
             depth = cv2.resize(depth, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
 
-            # Normalize to 0-1 range (relative depth)
-            # Depth-Anything-V2 outputs disparity (higher = closer).
-            # Keep this ordering: higher value = closer = smaller z.
-            # pixel_to_3d/generate_point_cloud use z = rel * max_depth_mm,
-            # so close objects get large z and far objects get small z. (#258)
+            # Normalize to [0, 1] with pinhole depth convention: 0 = closest,
+            # 1 = farthest. Depth-Anything-V2 outputs disparity (higher value
+            # = closer object), so we min-max normalise AND invert.
+            #
+            # Previously the code skipped the invert, which made `z = d *
+            # max_depth_mm` in generate_point_cloud / pixel_to_3d assign
+            # large z to close objects. That folded the reconstructed floor
+            # through the camera's pitch axis and produced a plane tilted by
+            # ~2× the camera's physical pitch (#589). The disparity-indexed
+            # comments above were inconsistent with the downstream code;
+            # this is the correction.
             d_min, d_max = depth.min(), depth.max()
             if d_max - d_min > 1e-6:
-                depth = (depth - d_min) / (d_max - d_min)
+                depth = 1.0 - (depth - d_min) / (d_max - d_min)
             else:
                 depth = np.zeros_like(depth)
 
@@ -120,7 +129,7 @@ class DepthEstimator:
         """Project a pixel + relative depth into approximate 3D coordinates.
 
         Args:
-            depth_map: relative depth map (0=far, 1=near / disparity)
+            depth_map: relative depth map (0=near, 1=far) — pinhole z direction
             px, py: pixel position
             fov_deg: horizontal FOV in degrees
             frame_w, frame_h: frame dimensions
