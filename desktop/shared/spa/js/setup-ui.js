@@ -466,11 +466,17 @@ function _pcAdvancedScan(){
   }else{
     cams.forEach(function(c){
       var disabled=!c.cameraIp;
-      h+='<label style="display:block;cursor:pointer;padding:.15em 0;font-size:.82em'+(disabled?';opacity:.4':'')+'">'
+      var calBadge=c.calibrated
+        ?'<span title="ArUco-calibrated — stereo will be accurate" style="background:#065f46;color:#34d399;padding:1px 6px;border-radius:8px;font-size:.7em;margin-left:.3em">\u2713 cal</span>'
+        :'<span title="No ArUco calibration — stereo accuracy limited by lens distortion" style="background:#78350f;color:#fcd34d;padding:1px 6px;border-radius:8px;font-size:.7em;margin-left:.3em">no cal</span>';
+      h+='<div style="display:flex;align-items:center;gap:.5em;padding:.15em 0;font-size:.82em'+(disabled?';opacity:.4':'')+'">'
+        +'<label style="flex:1;cursor:pointer">'
         +'<input type="checkbox" class="pcadv-cam" value="'+c.id+'"'+(disabled?' disabled':' checked')+'> '
-        +escapeHtml(c.name||('cam '+c.id))
+        +escapeHtml(c.name||('cam '+c.id))+calBadge
         +' <span style="color:#64748b">· '+escapeHtml(c.cameraIp||'no IP')+' · cam'+(c.cameraIdx||0)+' · FOV '+(c.fovDeg||'?')+'°</span>'
-        +'</label>';
+        +'</label>'
+        +(c.cameraIp?'<button class="btn" onclick="closeModal();_calWizardStart('+c.id+')" style="font-size:.72em;padding:.15em .5em;background:#7c3aed;color:#e9d5ff" title="Run ArUco calibration for this camera">Calibrate\u2026</button>':'')
+        +'</div>';
     });
   }
   h+='</div>';
@@ -573,16 +579,21 @@ function _pcAdvGo(){
           +(r.panDelta!==undefined?(' · Pan \u0394: '+r.panDelta+'°'):'')
           +'</div>';
         // Helper text if yield is suspiciously low.
+        var calButtons=selected.map(function(id){
+          return '<button class="btn" onclick="closeModal();_calWizardStart('+id+')" style="font-size:.75em;background:#7c3aed;color:#e9d5ff;margin-right:.3em">Calibrate fixture '+id+'\u2026</button>';
+        }).join('');
         if(r.totalPoints===0){
           warn=(warn||'')+'<div style="color:#f59e0b;font-size:.82em;margin-top:.3em">'
-            +'<b>No points triangulated.</b> The most common cause on consumer webcams is <b>uncalibrated lens distortion</b> — '
-            +'FOV-derived intrinsics can\'t model the 5-15% barrel distortion in wide-angle lenses, so the triangulation rays miss each other by hundreds of mm. '
-            +'Fix: run ArUco-based <b>3D Camera Calibration</b> for each camera (see the Calibration tab), then rescan. '
-            +'Other causes: large tilt/pan \u0394 between cameras, untextured scene (ORB has no features to match), or physically misaligned poses vs layout.'
+            +'<b>No points triangulated.</b> Most common cause on consumer webcams is <b>uncalibrated lens distortion</b> — '
+            +'FOV-derived intrinsics can\'t model the 5-15% barrel distortion in wide-angle lenses, so triangulation rays miss each other by hundreds of mm. '
+            +'<br><br><b>Fix:</b> run ArUco 3D calibration on each camera, then rescan.'
+            +'<div style="margin-top:.4em">'+calButtons+'</div>'
+            +'<p style="font-size:.72em;color:#64748b;margin-top:.4em">Other causes: large tilt/pan \u0394, untextured scene (ORB needs features), physically misaligned poses vs layout.</p>'
             +'</div>';
         }else if(r.totalPoints<20){
           warn=(warn||'')+'<div style="color:#f59e0b;font-size:.82em;margin-top:.3em">'
-            +'Low point count ('+r.totalPoints+'). Running ArUco-based 3D Camera Calibration on each camera will dramatically improve stereo quality.'
+            +'Low point count ('+r.totalPoints+'). ArUco camera calibration will dramatically improve stereo quality.'
+            +'<div style="margin-top:.3em">'+calButtons+'</div>'
             +'</div>';
         }
         _ok('\u2713 Stereo scan complete', details+warn);
