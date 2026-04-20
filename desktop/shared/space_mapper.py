@@ -107,15 +107,22 @@ def transform_points(points, cam_pos, cam_rotation, cam_aim=None):
         rx_rad = math.radians(cam_rotation[0]) if len(cam_rotation) > 0 else 0
         ry_rad = math.radians(cam_rotation[1]) if len(cam_rotation) > 1 else 0
 
-    # Rotation matrix: RZ(yaw) * RX(pitch)
-    # In stage coords (Z=up), yaw rotates around Z axis, pitch tilts around X axis
+    # Rotation matrix: RZ(yaw) * RX(-pitch)
+    #
+    # Input convention (shared with bake_engine._rotation_to_aim and the
+    # fixture editor UI): positive pitch = aim DOWN. In a Z-up stage
+    # frame a standard right-hand RX(+θ) rotates +Y (forward) toward
+    # +Z (up) — the opposite. So the matrix here uses RX(-pitch): cos
+    # is unchanged, sin flips sign. Without this flip, a camera pitched
+    # down 15° had its forward axis rotated UP 15°, which placed floor
+    # points (below the camera) at camera height and back-wall points
+    # at floor height — i.e. the "floor renders as back wall" bug.
     cos_p, sin_p = math.cos(rx_rad), math.sin(rx_rad)
     cos_y, sin_y = math.cos(ry_rad), math.sin(ry_rad)
 
-    # RZ(yaw) * RX(pitch)
-    r00 = cos_y;              r01 = -sin_y * cos_p;  r02 = sin_y * sin_p
-    r10 = sin_y;              r11 = cos_y * cos_p;   r12 = -cos_y * sin_p
-    r20 = 0;                  r21 = sin_p;            r22 = cos_p
+    r00 = cos_y;              r01 = -sin_y * cos_p;  r02 = -sin_y * sin_p
+    r10 = sin_y;              r11 = cos_y * cos_p;   r12 = cos_y * sin_p
+    r20 = 0;                  r21 = -sin_p;           r22 = cos_p
 
     result = []
     for pt in points:

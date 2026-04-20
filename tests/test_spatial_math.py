@@ -103,6 +103,39 @@ pts = [[100.5, 200.3, 300.7, 0, 0, 0]]
 result = transform_points(pts, (0, 0, 0), [0, 0, 0])
 ok('Output is float (not rounded)', isinstance(result[0][0], float), f'type={type(result[0][0])}')
 
+# Test 8: Pitch convention — positive pitch must aim DOWN
+# (matches bake_engine._rotation_to_aim and the fixture editor UI).
+# Camera at (0, 0, 2500) ceiling height, pitch=+30° (aim down 30°).
+# A point 1 m straight ahead of the optical axis should land LOWER
+# than the camera, not higher. Specifically: 1000*sin(30°) ≈ 500 mm
+# below the camera => stage Z ≈ 2000.
+pts = [[0, 0, 1000, 0, 0, 0]]
+result = transform_points(pts, (0, 0, 2500), [30, 0, 0])
+ok('Pitch +30°: forward point ends up below camera',
+   result[0][2] < 2500,
+   f'Z={result[0][2]:.0f} (should be < 2500)')
+ok('Pitch +30°: drop ≈ 500 mm (sin30°·1000)',
+   approx(result[0][2], 2000, 30),
+   f'Z={result[0][2]:.0f} (expected ≈ 2000)')
+
+# Test 9: Cam_aim convention — a cam-local point on the optical axis
+# at exactly the aim distance must map to the aim point itself.
+# Camera at (1500, 0, 2500), aim at (1500, 3000, 0) — floor 3 m forward.
+# sqrt(3000² + 2500²) = 3905.12 mm along the optical axis.
+import math as _m
+aim = (1500, 3000, 0)
+cam = (1500, 0, 2500)
+d = _m.sqrt((aim[0]-cam[0])**2 + (aim[1]-cam[1])**2 + (aim[2]-cam[2])**2)
+pts = [[0, 0, d, 0, 0, 0]]
+result = transform_points(pts, cam, [0, 0, 0], cam_aim=aim)
+ok('Cam_aim roundtrip: X matches aim', approx(result[0][0], aim[0], 1),
+   f'X={result[0][0]:.1f} (expected {aim[0]})')
+ok('Cam_aim roundtrip: Y matches aim', approx(result[0][1], aim[1], 1),
+   f'Y={result[0][1]:.1f} (expected {aim[1]})')
+ok('Cam_aim roundtrip: Z matches aim (on floor)',
+   approx(result[0][2], aim[2], 1),
+   f'Z={result[0][2]:.1f} (expected {aim[2]})')
+
 
 # ═══════════════════════════════════════════════════════════════════════
 print('\n=== mover_calibrator.py — pan_tilt_to_ray ===')
