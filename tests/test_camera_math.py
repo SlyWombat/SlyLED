@@ -333,5 +333,138 @@ if merged2:
        f"confs={[round(p[6],2) for p in merged2]}")
 
 
+# ═══════════════════════════════════════════════════════════════════════
+print("\n=== #583 stereo triangulation (feature-matched) ===")
+# ═══════════════════════════════════════════════════════════════════════
+
+from stereo_engine import StereoEngine
+
+# Two cameras at the basement rig's surveyed positions.
+eng = StereoEngine()
+eng.add_camera_from_fov("a", 90, 1920, 1080, (830, 120, 1930), [22, 0, 0])
+eng.add_camera_from_fov("b", 90, 1920, 1080, (1275, 120, 1930), [15, 0, 0])
+
+# Known 3D targets on the stage floor and the back wall.
+targets = [
+    (1000, 2000, 0),   # floor mid-stage
+    (1500, 3000, 0),   # floor front-of-stage
+    (2000, 1000, 0),   # floor upstage-left
+    (1000, 4000, 500), # back wall lower-stage-right
+    (2000, 4000, 1500),# back wall upper-stage-left
+]
+
+# Project each target into both cameras (synthetic correspondences)
+import numpy as np
+
+def project(eng_, cam_id, point):
+    cam = eng_._cameras[cam_id]
+    world = np.asarray(point, dtype=np.float64)
+    # R is cam→stage; use R.T for stage→cam projection
+    local = cam["R"].T @ (world - cam["pos_stage"])
+    if local[2] <= 0:
+        return None
+    u = cam["K"][0, 0] * local[0] / local[2] + cam["K"][0, 2]
+    v = cam["K"][1, 1] * local[1] / local[2] + cam["K"][1, 2]
+    return (float(u), float(v))
+
+matches = []
+for t in targets:
+    pa = project(eng, "a", t)
+    pb = project(eng, "b", t)
+    if pa and pb:
+        matches.append((pa[0], pa[1], pb[0], pb[1], 200, 200, 200))
+
+ok(f"{len(matches)} synthetic matches available", len(matches) >= 4)
+
+points = eng.triangulate_pair("a", "b", matches, max_reproject_err_mm=5.0)
+ok(f"triangulate_pair returned {len(points)} points (expected {len(matches)})",
+   len(points) == len(matches))
+
+# Each triangulated point should lie within 1 mm of its source target.
+matched_errors = []
+for t in targets:
+    best = min(points, key=lambda p: (p[0]-t[0])**2 + (p[1]-t[1])**2 + (p[2]-t[2])**2,
+               default=None)
+    if best is None: continue
+    err = math.sqrt((best[0]-t[0])**2 + (best[1]-t[1])**2 + (best[2]-t[2])**2)
+    matched_errors.append(err)
+
+worst = max(matched_errors) if matched_errors else float('inf')
+ok(f"All synthetic targets recovered within 1 mm (worst {worst:.3f})",
+   worst < 1.0)
+
+# All results carry a confidence in [0.05, 0.95]
+ok("All stereo points have confidence in [0.05, 0.95]",
+   all(0.05 <= p[6] <= 0.95 for p in points))
+
+# Bad correspondence (randomly mismatched pixels) should be rejected
+bad_matches = [(100, 100, 1800, 900, 0, 0, 0)]  # no coherent 3D point
+bad_points = eng.triangulate_pair("a", "b", bad_matches, max_reproject_err_mm=5.0)
+ok("Incoherent correspondence rejected by reprojection-error threshold",
+   len(bad_points) == 0)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+print("\n=== #584 fuse stereo + monocular with per-point confidence ===")
+# ═══════════════════════════════════════════════════════════════════════
+
+from stereo_consistency import fuse_clouds
+
+rng = random.Random(1234)
+
+# Synthetic "ground truth" 50 stage points in a small region
+truth = [(1000 + 50 * (i % 10), 2000 + 50 * (i // 10), 0)
+         for i in range(50)]
+
+# Stereo cloud: small Gaussian error ≈ 2 mm RMS, high confidence
+stereo = []
+for x, y, z in truth:
+    stereo.append([x + rng.gauss(0, 2), y + rng.gauss(0, 2), z + rng.gauss(0, 2),
+                   255, 255, 255, 0.9])
+
+# Monocular cloud: larger error ≈ 50 mm RMS, lower confidence.
+# 80% of monocular points overlap the stereo region (should be rejected
+# as duplicates). The remaining 20% cover a distinct fringe area that
+# stereo doesn't see (should be kept).
+mono = []
+for i, (x, y, z) in enumerate(truth[:40]):  # overlap — 80%
+    mono.append([x + rng.gauss(0, 50), y + rng.gauss(0, 50), z + rng.gauss(0, 50),
+                 200, 200, 200, 0.3])
+for i in range(10):  # 10 fringe points in a region stereo doesn't cover
+    fx = 3000 + 50 * i
+    mono.append([fx, 2000, 0, 200, 200, 200, 0.3])
+
+fused, stats = fuse_clouds(stereo, mono, dup_tolerance_mm=100)
+
+ok(f"Stereo points all kept (got {stats['stereoKept']}, expected {len(stereo)})",
+   stats["stereoKept"] == len(stereo))
+ok(f"Fringe monocular points retained (got {stats['monoKept']}, ≥10)",
+   stats["monoKept"] >= 10,
+   f"stats={stats}")
+# Overlap dedup: at 50mm Gaussian noise some points naturally leak past
+# 100mm dup tolerance — expect ≥85% of the 40 overlap points to be dropped.
+ok(f"Overlapping monocular points mostly deduped (got {stats['monoDropped']}, ≥34)",
+   stats["monoDropped"] >= 34)
+ok(f"No duplicates within 100 mm — fused size = {len(fused)}",
+   len(fused) == stats["stereoKept"] + stats["monoKept"])
+
+# Every fused point has 7 slots
+ok("All fused points are v2 (7 slots)", all(len(p) == 7 for p in fused))
+
+# All stereo points (confidence 0.9) come first
+stereo_first = all(p[6] >= 0.8 for p in fused[:len(stereo)])
+ok("Stereo points preserved in fused output",
+   stereo_first and all(p[6] <= 0.35 for p in fused[len(stereo):]),
+   "confidences look wrong")
+
+# v1 input (6-slot) should be normalised to 7-slot in output
+fused_v1, _ = fuse_clouds(
+    [[0, 0, 0, 0, 0, 0]],
+    [[1000, 1000, 0, 0, 0, 0]],
+    dup_tolerance_mm=10)
+ok("v1 input normalised to v2 output",
+   all(len(p) == 7 for p in fused_v1))
+
+
 print(f"\n{_PASS} passed, {_FAIL} failed out of {_PASS + _FAIL} tests")
 sys.exit(0 if _FAIL == 0 else 1)

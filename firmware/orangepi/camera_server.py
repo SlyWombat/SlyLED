@@ -1125,6 +1125,73 @@ def point_cloud():
                    inferenceMs=round(ms), camera=cam_idx, fovDeg=fov,
                    calibrated=intrinsics is not None)
 
+
+@app.post("/stereo-capture")
+def stereo_capture():
+    """Grab near-simultaneous frames from two cameras for stereo
+    triangulation (#583).
+
+    Body: {"pair": [0, 1]}  — two distinct camera indices.
+    Returns: base64 JPEGs plus the measured capture-time delta. Both
+    cameras are opened, primed (to flush stale frames), then grab()'d
+    as close together as possible; typical delta on the same V4L2 bus
+    is < 10 ms.
+    """
+    import cv2
+    import time as _time
+    import base64
+
+    body = request.get_json(silent=True) or {}
+    pair = body.get("pair", [0, 1])
+    if not isinstance(pair, list) or len(pair) != 2 or pair[0] == pair[1]:
+        return jsonify(ok=False, err="pair must be two distinct camera indices"), 400
+    cameras = _hw_info.get("cameras", [])
+    for p in pair:
+        if not isinstance(p, int) or p < 0 or p >= len(cameras):
+            return jsonify(ok=False, err=f"camera index {p} out of range"), 400
+
+    dev_a = cameras[pair[0]]["device"]
+    dev_b = cameras[pair[1]]["device"]
+    cap_a = cv2.VideoCapture(dev_a, cv2.CAP_V4L2)
+    cap_b = cv2.VideoCapture(dev_b, cv2.CAP_V4L2)
+    try:
+        if not (cap_a.isOpened() and cap_b.isOpened()):
+            return jsonify(ok=False, err="failed to open one or both cameras"), 500
+        for cap in (cap_a, cap_b):
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            cap.read()  # discard stale frame
+        t0 = _time.monotonic()
+        cap_a.grab()
+        cap_b.grab()
+        t1 = _time.monotonic()
+        ok_a, frame_a = cap_a.retrieve()
+        ok_b, frame_b = cap_b.retrieve()
+    finally:
+        cap_a.release()
+        cap_b.release()
+
+    if not (ok_a and ok_b and frame_a is not None and frame_b is not None):
+        return jsonify(ok=False, err="one or both cameras failed to return a frame"), 500
+
+    _, jpg_a = cv2.imencode('.jpg', frame_a, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    _, jpg_b = cv2.imencode('.jpg', frame_b, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return jsonify(
+        ok=True,
+        schemaVersion=1,
+        pair=pair,
+        captureDeltaMs=round((t1 - t0) * 1000, 2),
+        frames={
+            str(pair[0]): base64.b64encode(jpg_a.tobytes()).decode('ascii'),
+            str(pair[1]): base64.b64encode(jpg_b.tobytes()).decode('ascii'),
+        },
+        sizes={
+            str(pair[0]): [int(frame_a.shape[1]), int(frame_a.shape[0])],
+            str(pair[1]): [int(frame_b.shape[1]), int(frame_b.shape[0])],
+        },
+    )
+
+
 # ── Beam detection (for calibration) ───────────────────────────────────
 
 _beam_detector = None

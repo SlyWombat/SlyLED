@@ -4033,6 +4033,115 @@ def api_space_scan_lite():
                    cameras=len(_point_cloud["cameras"]))
 
 
+@app.post("/api/space/scan/stereo")
+def api_space_scan_stereo():
+    """Run a stereo-triangulation scan on a pair of cameras that share
+    an Orange Pi (#583). Unlike the monocular `/api/space/scan`, this
+    pulls two synchronised frames via `/stereo-capture`, runs ORB
+    feature matching, triangulates via the shared StereoEngine, and
+    returns a stage-frame point cloud with per-point confidence.
+
+    Body: { "cameras": [fixture_id_a, fixture_id_b] } — both cameras
+    must be registered and positioned. They should share the same
+    cameraIp for the synchronised capture to work.
+    """
+    body = request.get_json(silent=True) or {}
+    ids = body.get("cameras", [])
+    if len(ids) != 2:
+        return jsonify(err="body must include cameras=[fid_a, fid_b]"), 400
+    cams = [next((f for f in _fixtures if f.get("id") == cid
+                   and f.get("fixtureType") == "camera"), None) for cid in ids]
+    if any(c is None for c in cams):
+        return jsonify(err="one or both camera fixtures not found"), 404
+    cam_a, cam_b = cams
+    if cam_a.get("cameraIp") != cam_b.get("cameraIp"):
+        return jsonify(err="stereo pair must share cameraIp for synchronised capture"), 400
+
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    for c in (cam_a, cam_b):
+        if c.get("id") not in pos_map:
+            return jsonify(err=f"camera {c.get('name')} not positioned on layout"), 400
+
+    import base64, io
+    try:
+        import cv2
+        import numpy as _np
+    except ImportError:
+        return jsonify(err="cv2 / numpy not available on host"), 500
+
+    # Pull paired frames
+    body_payload = {"pair": [cam_a.get("cameraIdx", 0), cam_b.get("cameraIdx", 1)]}
+    try:
+        req = urllib.request.Request(
+            f"http://{cam_a['cameraIp']}:5000/stereo-capture",
+            data=json.dumps(body_payload).encode(),
+            headers={"Content-Type": "application/json"})
+        resp = urllib.request.urlopen(req, timeout=30)
+        data = json.loads(resp.read().decode())
+    except Exception as e:
+        return jsonify(err=f"stereo-capture request failed: {e}"), 502
+    if not data.get("ok"):
+        return jsonify(err=f"camera rejected request: {data.get('err')}"), 502
+
+    frames = data.get("frames", {})
+    key_a = str(cam_a.get("cameraIdx", 0))
+    key_b = str(cam_b.get("cameraIdx", 1))
+
+    def _decode(b64):
+        buf = _np.frombuffer(base64.b64decode(b64), dtype=_np.uint8)
+        return cv2.imdecode(buf, cv2.IMREAD_COLOR)
+
+    frame_a = _decode(frames[key_a])
+    frame_b = _decode(frames[key_b])
+    h_a, w_a = frame_a.shape[:2]
+    h_b, w_b = frame_b.shape[:2]
+
+    # Register both cameras with the stereo engine
+    from stereo_engine import StereoEngine, feature_match_points
+    engine = StereoEngine()
+    pos_a = pos_map[cam_a["id"]]
+    pos_b = pos_map[cam_b["id"]]
+    engine.add_camera_from_fov(
+        "a", cam_a.get("fovDeg", 90), w_a, h_a,
+        (pos_a.get("x", 0), pos_a.get("y", 0), pos_a.get("z", 0)),
+        cam_a.get("rotation", [0, 0, 0]))
+    engine.add_camera_from_fov(
+        "b", cam_b.get("fovDeg", 90), w_b, h_b,
+        (pos_b.get("x", 0), pos_b.get("y", 0), pos_b.get("z", 0)),
+        cam_b.get("rotation", [0, 0, 0]))
+
+    matches = feature_match_points(frame_a, frame_b)
+    points = engine.triangulate_pair("a", "b", matches)
+
+    global _point_cloud, _stage_surfaces_cache
+    _point_cloud = {
+        "schemaVersion": 2,
+        "timestamp": time.time(),
+        "source": "stereo",
+        "cameras": [
+            {"fixtureId": cam_a["id"], "cameraIdx": cam_a.get("cameraIdx", 0),
+             "name": cam_a.get("name"), "pointCount": len(points)},
+            {"fixtureId": cam_b["id"], "cameraIdx": cam_b.get("cameraIdx", 1),
+             "name": cam_b.get("name"), "pointCount": len(points)},
+        ],
+        "points": points,
+        "totalPoints": len(points),
+        "captureDeltaMs": data.get("captureDeltaMs"),
+        "featureMatches": len(matches),
+        "stageW": int(_stage.get("w", 3) * 1000),
+        "stageH": int(_stage.get("h", 2) * 1000),
+        "stageD": int(_stage.get("d", 4) * 1000),
+    }
+    _save("pointcloud", _point_cloud)
+    _stage_surfaces_cache = {"key": None, "value": None}
+    log.info("Stereo scan: %d matches → %d triangulated points (delta=%.1fms)",
+             len(matches), len(points), data.get("captureDeltaMs", 0))
+    return jsonify(ok=True, source="stereo",
+                   totalPoints=len(points),
+                   featureMatches=len(matches),
+                   captureDeltaMs=data.get("captureDeltaMs"))
+
+
 @app.post("/api/space/scan")
 def api_space_scan():
     """Start an async environment scan using all positioned camera sensors."""

@@ -76,6 +76,54 @@ def _nearest_distance(stage_point, cloud_xyz):
     return float(np.sqrt((diff * diff).sum(axis=1).min()))
 
 
+def fuse_clouds(stereo_points, monocular_points, dup_tolerance_mm=50.0):
+    """Merge stereo and monocular clouds into a single confidence-weighted
+    cloud (#584 Phase 4).
+
+    Stereo points are kept unconditionally (they came from geometry, not
+    learning). Monocular points are kept only where no stereo point lies
+    within `dup_tolerance_mm` — that's how we avoid duplicating the floor
+    in the two-camera overlap region while still filling in the stage
+    corners that stereo can't cover.
+
+    Both inputs are lists of 7-slot points `[x, y, z, r, g, b, confidence]`.
+    Six-slot v1 inputs are accepted and get a default confidence via
+    `camera_math.point_confidence`.
+
+    Returns `(fused_points, stats)` where stats = {stereoKept, monoKept,
+    monoDropped}.
+    """
+    from camera_math import point_confidence
+
+    def _normalise(p):
+        if len(p) >= 7:
+            return list(p[:7])
+        return list(p) + [point_confidence(p)]
+
+    stereo_norm = [_normalise(p) for p in (stereo_points or [])]
+    mono_norm = [_normalise(p) for p in (monocular_points or [])]
+
+    if not stereo_norm:
+        return mono_norm, {"stereoKept": 0, "monoKept": len(mono_norm), "monoDropped": 0}
+
+    stereo_xyz = np.array([[p[0], p[1], p[2]] for p in stereo_norm], dtype=np.float64)
+    fused = list(stereo_norm)  # all stereo points pass through
+    kept = 0
+    dropped = 0
+    tol2 = dup_tolerance_mm * dup_tolerance_mm
+    for m in mono_norm:
+        dx = stereo_xyz[:, 0] - m[0]
+        dy = stereo_xyz[:, 1] - m[1]
+        dz = stereo_xyz[:, 2] - m[2]
+        if (dx * dx + dy * dy + dz * dz).min() < tol2:
+            dropped += 1
+            continue
+        fused.append(m)
+        kept += 1
+    return fused, {"stereoKept": len(stereo_norm),
+                   "monoKept": kept, "monoDropped": dropped}
+
+
 def cross_camera_filter(per_cam, tolerance_mm=150.0,
                         confidence_confirmed=0.85, confidence_single=0.4):
     """Merge per-camera clouds with cross-camera consistency weighting.

@@ -99,12 +99,16 @@ class StereoEngine:
         if cam is None:
             raise ValueError(f"Camera {cam_id} not registered")
 
-        # Ray in camera frame
+        # Ray in camera pinhole frame (X-right, Y-down, Z-forward)
         ray_cam = cam["K_inv"] @ np.array([px, py, 1.0])
         ray_cam = ray_cam / np.linalg.norm(ray_cam)
 
-        # Transform to world/stage frame
-        ray_world = cam["R"].T @ ray_cam
+        # Transform to stage frame. `cam["R"]` is built by camera_math.
+        # build_camera_to_stage and maps cam-local → stage (#586), so
+        # apply R directly. The prior code used R.T, which was correct
+        # for an earlier world→cam semantics but wrong after the #586
+        # rotation unification.
+        ray_world = cam["R"] @ ray_cam
         ray_world = ray_world / np.linalg.norm(ray_world)
 
         origin = cam["pos_stage"].copy()
@@ -171,6 +175,99 @@ class StereoEngine:
 
         return {"x": float(P[0]), "y": float(P[1]), "z": float(P[2]),
                 "error": round(rms, 1)}
+
+
+    def triangulate_pair(self, cam_id_a, cam_id_b, matches,
+                         max_reproject_err_mm=50.0):
+        """Triangulate a list of (px_a, py_a, px_b, py_b) pixel matches
+        between two registered cameras into stage-frame 3D points (#583).
+
+        Each match becomes a 7-element point `[x, y, z, r, g, b, conf]`
+        where colour is averaged from both frames if provided, and
+        confidence is a sigmoid of the reprojection-error quality.
+        Matches with reprojection error above `max_reproject_err_mm`
+        are discarded as bad correspondences.
+
+        Args:
+            cam_id_a, cam_id_b: registered camera ids
+            matches: iterable of either
+                (px_a, py_a, px_b, py_b)  — monochrome
+                (px_a, py_a, px_b, py_b, r, g, b)  — coloured
+            max_reproject_err_mm: drop points whose ray-ray closest
+                approach exceeds this distance
+
+        Returns:
+            list of 7-element stage points sorted by reprojection error.
+        """
+        points = []
+        for m in matches:
+            if len(m) >= 7:
+                pxa, pya, pxb, pyb, r, g, b = m[:7]
+            else:
+                pxa, pya, pxb, pyb = m[:4]
+                r, g, b = 200, 200, 200
+            tri = self.triangulate_ray_ray(cam_id_a, pxa, pya, cam_id_b, pxb, pyb)
+            if not tri:
+                continue
+            err = tri.get("error", 0.0) or 0.0
+            if err > max_reproject_err_mm:
+                continue
+            # Confidence sigmoid: 0 mm error → ~0.95, 50 mm → ~0.4
+            confidence = 1.0 / (1.0 + math.exp((err - 15.0) / 8.0))
+            confidence = max(0.05, min(0.95, confidence))
+            points.append([tri["x"], tri["y"], tri["z"],
+                           r, g, b, confidence])
+        points.sort(key=lambda p: -p[6])
+        return points
+
+
+def feature_match_points(frame_a, frame_b, max_features=1500, ratio=0.75):
+    """Detect ORB features in a pair of rectified / near-rectified frames
+    and return a list of `(px_a, py_a, px_b, py_b, r, g, b)` pixel
+    matches suitable for `StereoEngine.triangulate_pair`.
+
+    Uses Lowe's ratio test at `ratio` to reject ambiguous matches.
+    Returns [] if cv2 is unavailable or either frame is empty.
+    """
+    try:
+        import cv2
+    except Exception:
+        log.warning("cv2 unavailable; feature_match_points returns empty list")
+        return []
+    if frame_a is None or frame_b is None:
+        return []
+    gray_a = cv2.cvtColor(frame_a, cv2.COLOR_BGR2GRAY) if frame_a.ndim == 3 else frame_a
+    gray_b = cv2.cvtColor(frame_b, cv2.COLOR_BGR2GRAY) if frame_b.ndim == 3 else frame_b
+
+    orb = cv2.ORB_create(nfeatures=max_features)
+    kp_a, des_a = orb.detectAndCompute(gray_a, None)
+    kp_b, des_b = orb.detectAndCompute(gray_b, None)
+    if des_a is None or des_b is None:
+        return []
+
+    # Hamming distance + knn=2 for ratio test
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+    knn = bf.knnMatch(des_a, des_b, k=2)
+    out = []
+    for pair in knn:
+        if len(pair) < 2:
+            continue
+        m, n = pair
+        if m.distance >= ratio * n.distance:
+            continue
+        a = kp_a[m.queryIdx].pt
+        b = kp_b[m.trainIdx].pt
+        if frame_a.ndim == 3:
+            x, y = int(a[0]), int(a[1])
+            if 0 <= x < frame_a.shape[1] and 0 <= y < frame_a.shape[0]:
+                bgr = frame_a[y, x]
+                r_, g_, b_ = int(bgr[2]), int(bgr[1]), int(bgr[0])
+            else:
+                r_, g_, b_ = 200, 200, 200
+        else:
+            r_, g_, b_ = 200, 200, 200
+        out.append((a[0], a[1], b[0], b[1], r_, g_, b_))
+    return out
 
 
 def _closest_approach(o1, d1, o2, d2):
