@@ -363,13 +363,13 @@ function _loadPointCloudMeta(camFixtures){
       if(!el)return;
       var pill;
       if(!hasCloud){
-        pill='<span class="badge" style="background:#334;color:#94a3b8;font-size:.7em">No cloud</span>';
+        pill='<span class="badge" title="No point cloud exists yet. Run Quick Lite Setup or Full Scan to give calibration a geometry reference." style="background:#334;color:#94a3b8;font-size:.7em">No cloud</span>';
       }else if(isLite){
-        pill='<span class="badge" style="background:#78350f;color:#fcd34d;font-size:.7em">Lite</span>';
+        pill='<span class="badge" title="The current cloud is synthesized from layout dimensions, not real depth. Run a Full Scan once the camera is usable for depth." style="background:#78350f;color:#fcd34d;font-size:.7em">Lite</span>';
       }else if(contribIds[f.id]){
-        pill='<span class="badge" style="background:#065f46;color:#34d399;font-size:.7em">\u2713 In cloud</span>';
+        pill='<span class="badge" title="This camera contributed depth points to the current scan." style="background:#065f46;color:#34d399;font-size:.7em">\u2713 In cloud</span>';
       }else{
-        pill='<span class="badge" style="background:#7c2d12;color:#fed7aa;font-size:.7em">Not in cloud</span>';
+        pill='<span class="badge" title="A real scan exists but this camera is not in it. Reason: camera was added after the scan, was not positioned on the layout at scan time, or returned no depth points. Click Rescan to include it." style="background:#7c2d12;color:#fed7aa;font-size:.7em">Not in cloud</span>';
       }
       el.innerHTML=pill;
     });
