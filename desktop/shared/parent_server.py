@@ -82,7 +82,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.35"
+VERSION = "1.5.36"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -3310,11 +3310,25 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
     # Phase 2: BFS mapping
     job["phase"] = "mapping"
     job["progress"] = 35
+    job["message"] = "Mapping visible region (BFS from discovered beam)"
+    # #576 — stream per-sample progress back to the SPA so the modal
+    # shows which pan/tilt position is being probed and how many samples
+    # have been collected. Without this the UI sat at "Mapping..." for
+    # 30-60s with no indication the thread was alive.
+    _map_target = 50
+    def _mapping_progress(sample_count, cur_pan, cur_tilt):
+        # 35-70% progress band for the mapping phase.
+        frac = min(sample_count / _map_target, 1.0)
+        job["progress"] = int(35 + frac * 35)
+        job["sampleCount"] = sample_count
+        job["message"] = (f"Mapping: {sample_count}/{_map_target} samples · "
+                          f"current pan={cur_pan:.2f} tilt={cur_tilt:.2f}")
     try:
         samples, boundaries = _mcal.map_visible(
             bridge_ip, cam_ip, addr, cam_idx, mover_color,
             start_pan=found_pan, start_tilt=found_tilt,
-            collect_3d=False, max_samples=50)
+            collect_3d=False, max_samples=_map_target,
+            progress_cb=_mapping_progress)
         if len(samples) < 6:
             job["error"] = f"Only {len(samples)} samples collected — need at least 6"
             job["status"] = "error"
@@ -4361,7 +4375,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.35" from camera_server.py source text."""
+    """Extract VERSION = "1.5.36" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
