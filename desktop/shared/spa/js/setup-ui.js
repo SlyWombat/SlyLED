@@ -764,11 +764,9 @@ function discoverChildren(){
           var addBtn;
           if(bt==='camera'){
             addBtn='<button class="btn" onclick="addDiscoveredCamera(\''+c.ip+'\',\''+escapeHtml(c.hostname||c.name||'Camera').replace(/'/g,"\\'")+
-              '\')" style="background:#0e7490;color:#fff">Add Camera</button>'
-              +' <button class="btn" onclick="window.open(\'http://'+escapeHtml(c.ip)+':5000/config\',\'_blank\')" style="background:#475569;color:#fff">Config</button>';
+              '\')" style="background:#0e7490;color:#fff">Add</button>';
           }else{
             addBtn='<button class="btn btn-on" onclick="addDiscovered(\''+c.ip+'\')">Add</button>';
-            if(bt==='dmx')addBtn+=' <button class="btn" onclick="addDiscoveredDmxBridge(\''+c.ip+'\')" style="background:#7c3aed;color:#fff">Configure</button>';
           }
           var detail=bt==='camera'?(c.resolutionW+'x'+c.resolutionH)
                     :bt==='dmx'||bt==='gyro'?'\u2014'
@@ -781,11 +779,6 @@ function discoverChildren(){
       });
     },500);
   });
-}
-
-function addDiscoveredDmxBridge(ip){
-  document.getElementById('hs').textContent='Opening DMX bridge config at '+ip+'...';
-  window.open('http://'+ip+'/config','_blank');
 }
 
 function addDiscoveredCamera(ip,name){
@@ -835,7 +828,6 @@ function _afCamRenderResults(el,cams){
       +'<td>'+(c.fovDeg||60)+'\u00b0</td>'
       +'<td>'+(c.resolutionW||'?')+'x'+(c.resolutionH||'?')+'</td>'
       +'<td><button class="btn" onclick="addDiscoveredCamera(\''+c.ip+'\',\''+escapeHtml(name).replace(/'/g,"\\'")+'\')" style="background:#0e7490;color:#fff;font-size:.82em;padding:.2em .6em">Add</button>'
-      +' <button class="btn" onclick="window.open(\'http://'+escapeHtml(c.ip)+':5000/config\',\'_blank\')" style="background:#475569;color:#fff;font-size:.82em;padding:.2em .6em">Config</button>'
       +'</td></tr>';
   });
   el.innerHTML=h+'</table>';
@@ -907,11 +899,11 @@ function discoverCameras(btn){
           el.innerHTML='<p style="color:#888;font-size:.85em;padding:.3em 0">No new cameras found on network.</p>';
           el.style.display='block';return;
         }
-        var h='<p style="color:#22d3ee;font-size:.85em;margin-bottom:.4em">Found cameras — click Register:</p>'
+        var h='<p style="color:#22d3ee;font-size:.85em;margin-bottom:.4em">Found cameras — click Add to register:</p>'
           +'<table class="tbl" style="max-width:600px"><tr><th>Name</th><th>IP</th><th>FOV</th><th></th></tr>';
         d.forEach(function(c){
           h+='<tr><td>'+escapeHtml(c.hostname||c.name||'Camera')+'</td><td>'+escapeHtml(c.ip)+'</td><td>'+(c.fovDeg||'?')+'&deg;</td>'
-            +'<td><button class="btn" onclick="registerCamera(\''+c.ip+'\',\''+escapeHtml(c.hostname||'').replace(/'/g,"\\'")+'\')" style="background:#0e7490;color:#fff">Register</button></td></tr>';
+            +'<td><button class="btn" onclick="registerCamera(\''+c.ip+'\',\''+escapeHtml(c.hostname||'').replace(/'/g,"\\'")+'\')" style="background:#0e7490;color:#fff">Add</button></td></tr>';
         });
         el.innerHTML=h+'</table>';
         el.style.display='block';
