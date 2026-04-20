@@ -3,7 +3,17 @@
 var _fixtures=[];
 
 function loadFixtures(cb){
-  ra('GET','/api/fixtures',null,function(d){_fixtures=d||[];renderFixturesSidebar();if(cb)cb();});
+  // Pull from /api/layout rather than /api/fixtures — the layout endpoint
+  // merges each fixture's saved x/y/z from _layout.children into its
+  // fixture record, so the edit modal can pre-populate position inputs
+  // without a second round-trip. /api/fixtures returns the raw record
+  // with no positions, which was causing every Edit Fixture modal to
+  // open with (0, 0, 0).
+  ra('GET','/api/layout',null,function(d){
+    _fixtures=(d&&d.fixtures)||[];
+    renderFixturesSidebar();
+    if(cb)cb();
+  });
 }
 
 function renderFixturesSidebar(){
