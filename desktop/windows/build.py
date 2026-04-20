@@ -68,11 +68,13 @@ args = [
     "--hidden-import=pystray",
     "--hidden-import=paramiko",
     "--hidden-import=numpy",
+    "--hidden-import=cv2",
     "--hidden-import=PIL._tkinter_finder",
     "--collect-submodules=flask",
     "--collect-submodules=werkzeug",
     "--collect-submodules=esptool",
     "--collect-submodules=numpy",
+    "--collect-submodules=cv2",
     "--collect-data=esptool",
     "--paths", str(SHARED),
 ]

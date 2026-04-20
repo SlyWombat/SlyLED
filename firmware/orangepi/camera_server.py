@@ -22,7 +22,7 @@ from flask import Flask, jsonify, request
 import flask.cli
 flask.cli.show_server_banner = lambda *a, **kw: None   # suppress dev-server warning (#289)
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 PORT = 5000
 UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
