@@ -103,6 +103,11 @@ Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask s
 - **Tracking:** `firmware/orangepi/tracker.py` — Continuous person detection with proximity re-ID (500mm threshold). Pushes temporal objects to orchestrator.
 - **Deploy:** SSH+SCP from the Firmware tab in the SPA; uploads `camera_server.py`, `detector.py`, `depth_estimator.py`, `beam_detector.py`, `tracker.py`, `requirements.txt`, `slyled-cam.service`, and models. Version comparison with force-reinstall option.
 - **Per-camera fixtures:** Each USB camera sensor registers as a separate placeable fixture with own FOV, resolution, and calibration data.
+- **Rotation convention (#586):** `fixture.rotation = [tilt_deg, pan_deg, roll_deg]` in stage space.
+  - `tilt > 0` — aim DOWN (the forward/optical axis tips toward stage -Z)
+  - `pan > 0` — aim toward +X (stage-left)
+  - `roll > 0` — clockwise around the optical axis as seen from behind the camera
+  - Shared across DMX fixtures and cameras. The canonical rotation matrix is built by `desktop/shared/camera_math.py::build_camera_to_stage(tilt, pan, roll)` — every caller (space_mapper.transform_points, stereo_engine.add_camera_from_fov, bake_engine._rotation_to_aim) must go through that helper.
 
 **Giga board roles:** The Giga R1 compiles in two modes:
 - `BOARD_GIGA` (default) — runtime Orchestrator with minimal SPA for start/stop

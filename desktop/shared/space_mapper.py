@@ -71,75 +71,253 @@ def fetch_point_cloud(camera_fixture, max_points=10000, max_depth_mm=5000):
     return None
 
 
+def anchor_depth_scale(cam_local_points, cam_pos, cam_rotation, stage_dims,
+                        min_samples=50, rms_threshold_mm=2000.0):
+    """Fit a 2-parameter (scale, offset) correction on a monocular point
+    cloud so that its depths agree with the known stage geometry (#581).
+
+    For each cam-local point we build its pinhole ray, project that ray
+    into stage space using the camera pose, and compute the parameter
+    `t_true` at which it first intersects a stage-bounding surface
+    (floor Z=0, walls, ceiling). Then `d_raw = z_cam` is the raw monocular
+    depth. Solving `S * d_raw + B ≈ t_true` via least-squares gives the
+    scale/offset that aligns the whole cloud to the surveyed box.
+
+    Only points whose rays actually strike a stage surface (positive t
+    toward a bounded face) contribute to the fit. Outliers beyond 2σ of
+    the initial fit are discarded and the fit is re-run once.
+
+    Args:
+        cam_local_points: list of [x, y, z, ...] in pinhole cam-local mm
+        cam_pos: (x, y, z) stage mm
+        cam_rotation: [tilt, pan, roll] degrees — see camera_math
+        stage_dims: dict with 'w', 'd', 'h' in mm (stage width / depth / height)
+        min_samples: don't attempt fit with fewer ray-surface hits
+        rms_threshold_mm: reject fits with RMS error above this (return
+            None → caller keeps the raw cloud untouched)
+
+    Returns:
+        dict with keys `scale`, `offset`, `rmsErrorMm`, `samplesUsed`,
+        or None if no reliable fit could be produced.
+    """
+    from camera_math import build_camera_to_stage, rotation_from_layout
+
+    tilt, pan, roll = rotation_from_layout(cam_rotation)
+    R = build_camera_to_stage(tilt, pan, roll)
+    cx, cy, cz = cam_pos
+    sw = float(stage_dims.get("w", 0) * 1000) if stage_dims.get("w", 0) < 100 else float(stage_dims.get("w", 0))
+    sd = float(stage_dims.get("d", 0) * 1000) if stage_dims.get("d", 0) < 100 else float(stage_dims.get("d", 0))
+    sh = float(stage_dims.get("h", 0) * 1000) if stage_dims.get("h", 0) < 100 else float(stage_dims.get("h", 0))
+    if sw <= 0 or sd <= 0 or sh <= 0:
+        return None
+
+    samples = []  # list of (d_raw, t_true)
+    # Expand stage bounds slightly so rays that clip the edges of the box
+    # still find a surface. 10% margin.
+    margin = 0.1
+    x_lo, x_hi = -sw * margin, sw * (1 + margin)
+    y_lo, y_hi = -sd * margin, sd * (1 + margin)
+    z_lo, z_hi = -sh * margin, sh * (1 + margin)
+
+    for pt in cam_local_points:
+        x, y, z = pt[0], pt[1], pt[2]
+        if not math.isfinite(z) or z <= 50:
+            continue
+        # Reject rays with extreme angular deviation. Monocular depth
+        # estimators sometimes emit points whose pinhole ratio |x/z| or
+        # |y/z| is absurdly large (image-edge artefacts). Those rays
+        # pass through the stage bounding box at grazing angles, making
+        # t_true very sensitive to the expanded-margin cutoffs. Keep
+        # only rays within a reasonable FOV cone (±60° each axis).
+        if abs(x) > z * 1.732 or abs(y) > z * 1.732:
+            continue
+        dir_cam = [x / z, y / z, 1.0]
+        dx = R[0][0] * dir_cam[0] + R[0][1] * dir_cam[1] + R[0][2] * dir_cam[2]
+        dy = R[1][0] * dir_cam[0] + R[1][1] * dir_cam[1] + R[1][2] * dir_cam[2]
+        dz = R[2][0] * dir_cam[0] + R[2][1] * dir_cam[1] + R[2][2] * dir_cam[2]
+
+        candidates = []
+        eps = 1e-6
+        # For each face, include the intersection only if the point
+        # where the ray hits the infinite plane falls inside the
+        # (margin-expanded) bounded face. This prevents e.g. a ray
+        # pointed forward-and-up from being scored against "the floor"
+        # just because dz is slightly negative.
+        if dz < -eps:
+            t = -cz / dz
+            if t > 0:
+                hx = cx + t * dx; hy = cy + t * dy
+                if x_lo <= hx <= x_hi and y_lo <= hy <= y_hi:
+                    candidates.append(t)
+        if dz > eps:
+            t = (sh - cz) / dz
+            if t > 0:
+                hx = cx + t * dx; hy = cy + t * dy
+                if x_lo <= hx <= x_hi and y_lo <= hy <= y_hi:
+                    candidates.append(t)
+        if dy > eps:
+            t = (sd - cy) / dy
+            if t > 0:
+                hx = cx + t * dx; hz = cz + t * dz
+                if x_lo <= hx <= x_hi and z_lo <= hz <= z_hi:
+                    candidates.append(t)
+        if dy < -eps:
+            t = -cy / dy
+            if t > 0:
+                hx = cx + t * dx; hz = cz + t * dz
+                if x_lo <= hx <= x_hi and z_lo <= hz <= z_hi:
+                    candidates.append(t)
+        if dx > eps:
+            t = (sw - cx) / dx
+            if t > 0:
+                hy = cy + t * dy; hz = cz + t * dz
+                if y_lo <= hy <= y_hi and z_lo <= hz <= z_hi:
+                    candidates.append(t)
+        if dx < -eps:
+            t = -cx / dx
+            if t > 0:
+                hy = cy + t * dy; hz = cz + t * dz
+                if y_lo <= hy <= y_hi and z_lo <= hz <= z_hi:
+                    candidates.append(t)
+        if not candidates:
+            continue
+        t_true = min(candidates)
+        samples.append((z, t_true))
+
+    if len(samples) < min_samples:
+        return None
+
+    # Closed-form LSQ for d_true = S * d_raw + B
+    def _fit(pairs):
+        n = len(pairs)
+        sx = sum(p[0] for p in pairs)
+        sy = sum(p[1] for p in pairs)
+        sxx = sum(p[0] * p[0] for p in pairs)
+        sxy = sum(p[0] * p[1] for p in pairs)
+        denom = n * sxx - sx * sx
+        if abs(denom) < 1e-9:
+            return None
+        S = (n * sxy - sx * sy) / denom
+        B = (sy - S * sx) / n
+        residuals = [(S * p[0] + B - p[1]) for p in pairs]
+        rms = math.sqrt(sum(r * r for r in residuals) / n)
+        return S, B, rms, residuals
+
+    fit = _fit(samples)
+    if fit is None:
+        return None
+    S, B, rms, residuals = fit
+
+    # One round of outlier rejection: drop points >2σ from the fit
+    if len(samples) >= 2 * min_samples:
+        sigma = rms
+        clean = [s for s, r in zip(samples, residuals) if abs(r) <= 2 * sigma]
+        if len(clean) >= min_samples:
+            fit2 = _fit(clean)
+            if fit2:
+                S, B, rms, _ = fit2
+                samples = clean
+
+    if rms > rms_threshold_mm:
+        log.warning("Depth anchor fit RMS %.0f mm exceeds threshold %.0f mm — "
+                    "skipping correction", rms, rms_threshold_mm)
+        return None
+    # Sanity: a negative scale would invert the cloud through the camera,
+    # which is never physically meaningful. Usually indicates that the
+    # monocular depth map and the stage bounding box disagree severely
+    # (cameras pointed the wrong way, stage dims wrong, etc.).
+    if S <= 0:
+        log.warning("Depth anchor fit produced negative scale %.3f — "
+                    "rejecting (check camera rotation and stage dimensions)", S)
+        return None
+
+    return {"scale": S, "offset": B, "rmsErrorMm": rms,
+            "samplesUsed": len(samples)}
+
+
+def apply_depth_correction(cam_local_points, scale, offset):
+    """Apply a scale+offset correction along each point's ray.
+
+    Since the cam-local (x, y, z) coords come from `x = (px-cx)*z/fx`,
+    scaling z by k requires scaling x and y by the same k so the ray
+    direction stays constant. With scale S and offset B:
+        t_new = S * z + B
+        x_new = x * t_new / z
+        y_new = y * t_new / z
+        z_new = t_new
+
+    Returns a new list; colour and confidence slots are preserved.
+    """
+    corrected = []
+    for pt in cam_local_points:
+        x, y, z = pt[0], pt[1], pt[2]
+        if z <= 0 or not math.isfinite(z):
+            continue
+        t_new = scale * z + offset
+        if t_new <= 0:
+            # Correction would put the point behind the camera — drop it.
+            continue
+        k = t_new / z
+        out = [x * k, y * k, t_new] + list(pt[3:])
+        corrected.append(out)
+    return corrected
+
+
 def transform_points(points, cam_pos, cam_rotation, cam_aim=None):
     """Transform camera-local points to stage coordinates.
 
-    Camera-local frame (pinhole convention): X-right, Y-down, Z-forward (depth).
-    Stage frame: X=width (right), Y=depth (forward), Z=height (up).
-
-    Pipeline:
-      1. Frame swap: cam(X,Y,Z) → stage-aligned axes
-         cam X-right   → stage X (width)
-         cam Z-forward → stage Y (depth)
-         cam -Y (up)   → stage Z (height)
-      2. Rotate by camera pitch (rx) and yaw (ry) in stage frame
-      3. Translate by camera position
+    Uses the canonical `camera_math.build_camera_to_stage` helper so the
+    sign convention matches stereo_engine, bake_engine._rotation_to_aim
+    and the fixture editor UI (#586).
 
     Args:
-        points: list of [x, y, z, r, g, b] in camera-local coords
+        points: list of [x, y, z, r, g, b] in camera-local pinhole coords
         cam_pos: (x, y, z) camera position in stage mm
-        cam_rotation: (rx, ry, rz) degrees — rx=pitch (tilt down), ry=yaw (pan)
-        cam_aim: optional (x, y, z) aim point — overrides rotation
+        cam_rotation: (tilt, pan, roll) degrees — see camera_math
+        cam_aim: optional (x, y, z) aim point in stage mm — when set,
+                 tilt and pan are derived from this vector instead of
+                 cam_rotation (roll falls back to rotation[2] or 0)
 
     Returns: list of [x, y, z, r, g, b] in stage mm (Z-up)
     """
+    from camera_math import build_camera_to_stage, rotation_from_layout
+
     cx, cy, cz = cam_pos
 
-    # Compute yaw and pitch
     if cam_aim:
         dx = cam_aim[0] - cx
         dy = cam_aim[1] - cy
         dz = cam_aim[2] - cz
         dist_xy = math.sqrt(dx * dx + dy * dy)
-        ry_rad = math.atan2(dx, dy)           # yaw
-        rx_rad = math.atan2(-dz, dist_xy)     # pitch (down = positive)
+        # Derive tilt and pan from the aim vector using the documented
+        # convention: pan positive = aim toward +X, tilt positive = down.
+        tilt = math.degrees(math.atan2(-dz, dist_xy))
+        pan = math.degrees(math.atan2(dx, dy))
+        roll = rotation_from_layout(cam_rotation)[2]
     else:
-        rx_rad = math.radians(cam_rotation[0]) if len(cam_rotation) > 0 else 0
-        ry_rad = math.radians(cam_rotation[1]) if len(cam_rotation) > 1 else 0
+        tilt, pan, roll = rotation_from_layout(cam_rotation)
 
-    # Rotation matrix: RZ(yaw) * RX(-pitch)
-    #
-    # Input convention (shared with bake_engine._rotation_to_aim and the
-    # fixture editor UI): positive pitch = aim DOWN. In a Z-up stage
-    # frame a standard right-hand RX(+θ) rotates +Y (forward) toward
-    # +Z (up) — the opposite. So the matrix here uses RX(-pitch): cos
-    # is unchanged, sin flips sign. Without this flip, a camera pitched
-    # down 15° had its forward axis rotated UP 15°, which placed floor
-    # points (below the camera) at camera height and back-wall points
-    # at floor height — i.e. the "floor renders as back wall" bug.
-    cos_p, sin_p = math.cos(rx_rad), math.sin(rx_rad)
-    cos_y, sin_y = math.cos(ry_rad), math.sin(ry_rad)
-
-    r00 = cos_y;              r01 = -sin_y * cos_p;  r02 = -sin_y * sin_p
-    r10 = sin_y;              r11 = cos_y * cos_p;   r12 = cos_y * sin_p
-    r20 = 0;                  r21 = -sin_p;           r22 = cos_p
+    R = build_camera_to_stage(tilt, pan, roll)
+    # R is a numpy array when numpy is available (it is here, as a hard
+    # dep via cv_engine). Index as 2-D.
+    r00, r01, r02 = R[0][0], R[0][1], R[0][2]
+    r10, r11, r12 = R[1][0], R[1][1], R[1][2]
+    r20, r21, r22 = R[2][0], R[2][1], R[2][2]
 
     result = []
     for pt in points:
-        # Step 1: Frame swap — camera → stage-aligned
-        sx = pt[0]        # cam X-right  → stage X
-        sy = pt[2]        # cam Z-forward → stage Y (depth)
-        sz = -pt[1]       # cam -Y-down  → stage Z (height)
-
-        if not (math.isfinite(sx) and math.isfinite(sy) and math.isfinite(sz)):
+        x, y, z = pt[0], pt[1], pt[2]
+        if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
             continue
-
-        # Step 2: Rotate + translate to stage position
-        wx = r00 * sx + r01 * sy + r02 * sz + cx
-        wy = r10 * sx + r11 * sy + r12 * sz + cy
-        wz = r20 * sx + r21 * sy + r22 * sz + cz
-
-        result.append([wx, wy, wz, pt[3], pt[4], pt[5]])
+        wx = r00 * x + r01 * y + r02 * z + cx
+        wy = r10 * x + r11 * y + r12 * z + cy
+        wz = r20 * x + r21 * y + r22 * z + cz
+        # Preserve the optional 7th slot (confidence, #587). v1 six-element
+        # points pass through unchanged.
+        out = [wx, wy, wz, pt[3], pt[4], pt[5]]
+        if len(pt) > 6:
+            out.append(pt[6])
+        result.append(out)
     return result
 
 
@@ -166,12 +344,16 @@ class SpaceScan:
             "result": self._result,
         }
 
-    def start(self, camera_fixtures, layout_positions, max_points_per_cam=10000):
+    def start(self, camera_fixtures, layout_positions, max_points_per_cam=10000,
+              stage_dims=None):
         """Start an async environment scan.
 
         Args:
             camera_fixtures: list of camera fixture dicts (with cameraIp, cameraIdx, rotation)
             layout_positions: dict of {fixture_id: {x, y, z}} from layout
+            stage_dims: optional dict {w, d, h} in mm for depth anchoring
+                (#581). Without it, per-camera depth correction is skipped
+                and the caller is expected to supply geometry separately.
         """
         if self._running:
             return
@@ -181,12 +363,13 @@ class SpaceScan:
         self._result = None
         self._thread = threading.Thread(
             target=self._scan, daemon=True,
-            args=(camera_fixtures, layout_positions, max_points_per_cam))
+            args=(camera_fixtures, layout_positions, max_points_per_cam, stage_dims))
         self._thread.start()
 
-    def _scan(self, cameras, positions, max_points):
+    def _scan(self, cameras, positions, max_points, stage_dims=None):
         all_points = []
         cam_info = []
+        per_cam_clouds = []  # for #582 cross-camera consistency filter
         total = len(cameras)
 
         for i, cam in enumerate(cameras):
@@ -206,20 +389,58 @@ class SpaceScan:
                 log.warning("No points from %s cam%d", ip, cam_idx)
                 continue
 
-            # Transform to stage coordinates using camera position
             pos = positions.get(fid, positions.get(str(fid), {}))
             cam_pos = (pos.get("x", 0), pos.get("y", 0), pos.get("z", 0))
             cam_rot = cam.get("rotation", [0, 0, 0])
-            # Use rotation for yaw direction
+
+            # #581 Phase 1 — anchor monocular depth to surveyed geometry.
+            # The camera endpoint returns relative depth scaled by a FOV
+            # guess that is typically off by hundreds of mm. Fitting a
+            # per-camera (scale, offset) against the stage bounding box
+            # moves the cloud into true metric coords before transform.
+            anchor = None
+            if stage_dims:
+                anchor = anchor_depth_scale(points, cam_pos, cam_rot, stage_dims)
+                if anchor:
+                    log.info("Depth anchor cam%d: scale=%.3f offset=%.0fmm "
+                             "rms=%.0fmm n=%d",
+                             cam_idx, anchor["scale"], anchor["offset"],
+                             anchor["rmsErrorMm"], anchor["samplesUsed"])
+                    points = apply_depth_correction(
+                        points, anchor["scale"], anchor["offset"])
+
             stage_points = transform_points(points, cam_pos, cam_rot)
 
-            all_points.extend(stage_points)
+            per_cam_clouds.append({
+                "fixture": cam,
+                "stage_pos": cam_pos,
+                "fov_deg": cam.get("fovDeg", 60),
+                "points": stage_points,
+            })
             cam_info.append({
                 "fixtureId": fid,
                 "cameraIdx": cam_idx,
                 "name": cam.get("name", ""),
                 "pointCount": len(stage_points),
+                "depthAnchor": anchor,
             })
+
+        # #582 — cross-camera consistency filter. When ≥2 cameras are
+        # present, dropping monocular hallucinations here adds a
+        # confidence slot and typically rejects 20-30% of noise.
+        filter_stats = None
+        if len(per_cam_clouds) >= 2:
+            try:
+                from stereo_consistency import cross_camera_filter
+                all_points, filter_stats = cross_camera_filter(per_cam_clouds)
+                log.info("Cross-cam filter: %s", filter_stats)
+            except Exception as e:
+                log.warning("Cross-cam filter failed (%s) — merging without", e)
+                for c in per_cam_clouds:
+                    all_points.extend(c["points"])
+        else:
+            for c in per_cam_clouds:
+                all_points.extend(c["points"])
 
         self._progress = 90
         self._message = f"Normalizing {len(all_points)} points to stage floor..."
@@ -268,9 +489,14 @@ class SpaceScan:
         self._progress = 95
         self._message = f"Merging {len(all_points)} points..."
 
+        # #587 — tag payload with the point-cloud schema version. v2
+        # includes a per-point confidence slot populated by the cross-
+        # camera filter (#582). Single-camera scans fall through as v1.
         self._result = {
+            "schemaVersion": 2 if filter_stats else 1,
             "timestamp": time.time(),
             "cameras": cam_info,
+            "filterStats": filter_stats,
             "points": all_points,
             "totalPoints": len(all_points),
             "floorNormalized": floor_z is not None,

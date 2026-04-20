@@ -3999,6 +3999,7 @@ def _build_lite_point_cloud():
                  "pointCount": 0, "lite": True}
                 for cid in positioned_cam_ids]
     return {
+        "schemaVersion": 1,
         "timestamp": time.time(),
         "cameras": cam_info,
         "points": points,
@@ -4046,7 +4047,15 @@ def api_space_scan():
         return jsonify(err="No camera fixtures positioned on layout"), 400
     body = request.get_json(silent=True) or {}
     max_pts = body.get("maxPointsPerCamera", 10000)
-    _space_scan.start(positioned_cams, pos_map, max_points_per_cam=max_pts)
+    # #581 — pass stage dimensions so depth anchoring can bound each
+    # camera's rays against the surveyed box. Dimensions come from the
+    # stage.json data file; values may be stored in either metres
+    # (float < 100) or millimetres (int ≥ 100) historically — the
+    # anchor_depth_scale helper normalises.
+    stage_dims = dict(_stage) if _stage else None
+    _space_scan.start(positioned_cams, pos_map,
+                      max_points_per_cam=max_pts,
+                      stage_dims=stage_dims)
     return jsonify(ok=True, pending=True, cameras=len(positioned_cams))
 
 @app.get("/api/space/scan/status")

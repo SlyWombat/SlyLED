@@ -239,11 +239,54 @@ direction = tuple(d / dlen for d in direction)
 hit3 = beam_surface_check(surfaces_ob, (0, 0, 1000), direction)
 check("Ray hits obstacle: label='obstacle'", hit3 is not None and hit3["surface"] == "obstacle")
 
-# 4d. Split detection: two surfaces within 200mm
+# 4c.1. Ray-sphere entry point (#585) — distance should be to the near
+# surface of the sphere, not the closest approach to the center.
+# Ray from origin along +X; obstacle sphere at (1000, 100, 0) r=300.
+# Entry distance = sqrt(1000²+100²) · cos(angle) − sqrt(r² − perp²)
+# Closest approach t = projection of (1000,100,0) onto (1,0,0) = 1000.
+# perp = |100| = 100. Offset = sqrt(300² − 100²) = sqrt(80000) ≈ 282.84.
+# Entry = 1000 − 282.84 ≈ 717.16.
+surfaces_sphere = {
+    "floor": None,
+    "walls": [],
+    "obstacles": [{"pos": [1000, 100, 0], "size": [600, 600, 600], "label": "pillar"}],
+}
+hit_sphere = beam_surface_check(surfaces_sphere, (0, 0, 0), (1, 0, 0))
+check("Ray-sphere: hit detected", hit_sphere is not None and hit_sphere["surface"] == "pillar")
+check("Ray-sphere: distance = entry point (not closest approach)",
+      hit_sphere is not None and approx(hit_sphere["distance"], 717.16, 1))
+# Reported point should sit on the sphere surface, 300 mm from center.
+if hit_sphere:
+    p = hit_sphere["point"]
+    d_to_center = math.sqrt((p[0]-1000)**2 + (p[1]-100)**2 + (p[2])**2)
+    check("Ray-sphere: reported point is on sphere surface", approx(d_to_center, 300, 1))
+
+# 4c.2. Ray origin inside sphere — distance clamps to 0.
+surfaces_inside = {
+    "floor": None,
+    "walls": [],
+    "obstacles": [{"pos": [0, 0, 0], "size": [600, 600, 600], "label": "shell"}],
+}
+hit_inside = beam_surface_check(surfaces_inside, (50, 0, 0), (1, 0, 0))
+check("Ray origin inside sphere: distance = 0",
+      hit_inside is not None and hit_inside["distance"] == 0.0)
+
+# 4d. Split detection: two surfaces within 200mm along the ray.
+# Obstacle bounding sphere (r=200) centred at (500, 500, 50) — near-surface
+# along a straight-down ray from Z=400 lands at t = (400-50) - 200 = 150.
+# Floor hit is at t=400. Diff 250 mm — NOT split. Move obstacle up so the
+# diff comes under threshold: centre at Z=175 → near-surface at Z=375,
+# t_obstacle = 25, t_floor = 400, diff 375. Still wrong. Use a larger
+# obstacle sphere (r=350) centred at Z=0 so near-surface is above floor:
+# t_obs = 400 − 350 = 50, t_floor = 400, diff 350 — still > 200.
+# Take a different geometry: a ceiling-mounted obstacle very close to
+# the floor with radius chosen so near-surface and floor are ≈100 mm apart.
+# Obstacle r=100 at Z=50 → near-surface Z=150, t_obs=250, t_floor=400,
+# diff 150 mm → split=True.
 surfaces_split = {
     "floor": {"z": 0, "normal": [0, 0, 1], "d": 0},
     "walls": [],
-    "obstacles": [{"pos": [500, 500, 100], "size": [400, 400, 200], "label": "obstacle"}],
+    "obstacles": [{"pos": [500, 500, 50], "size": [200, 200, 200], "label": "obstacle"}],
 }
 # Ray from above aimed at obstacle which is near the floor
 ray_down = (0, 0, -1)

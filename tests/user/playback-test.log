@@ -6,3 +6,16 @@
 18:22:18 [INFO] BAKE: 3/3 fixtures have layout positions
 18:22:18 [INFO] BAKE DONE: 3 fixtures, 0 frames, 0 LSQ bytes, preview keys=[0, 1, 2]
 18:22:18 [DEBUG] PREVIEW: timeline 0 -> 3 fixture keys, sample: [0, 1, 2]
+08:06:24 [INFO] Logging started -> D:\OneDrive\My Documents\ElectricRV\Development\Projects\Lighting Arduino\tests\user\playback-test.log
+08:06:25 [INFO] BAKE: timeline 0 'Test' dur=10s frames=400 fixtures=8 clips=1 effects=0
+08:06:25 [INFO]   fixture 0 'LED Left' type=led strings=1 leds=60 rot=[0, 0, 0] pos=(?,?)
+08:06:25 [INFO]   fixture 1 'Moving Head' type=dmx strings=0 leds=0 rot=[-20, 0, 0] pos=(?,?)
+08:06:25 [INFO]   fixture 2 'RGB Par' type=dmx strings=0 leds=0 rot=[0, 0, 0] pos=(?,?)
+08:06:25 [INFO]   fixture 3 'Sly MH 1' type=dmx strings=0 leds=0 rot=[0, 0, 0] pos=(?,?)
+08:06:25 [INFO]   fixture 4 'Sly MH 2' type=dmx strings=0 leds=0 rot=[0, 0, 0] pos=(?,?)
+08:06:25 [INFO]   fixture 5 'Left Cam Wide' type=camera strings=0 leds=0 rot=[0, 0, 0] pos=(?,?)
+08:06:25 [INFO]   fixture 6 'Right High Res' type=camera strings=0 leds=0 rot=[0, 0, 0] pos=(?,?)
+08:06:25 [INFO]   fixture 7 'RPi-Sly1' type=camera strings=0 leds=0 rot=[0, 30, 0] pos=(?,?)
+08:06:25 [INFO] BAKE: 5/8 fixtures have layout positions
+08:06:25 [INFO] BAKE DONE: 8 fixtures, 0 frames, 0 LSQ bytes, preview keys=[0, 1, 2, 3, 4]
+08:06:26 [DEBUG] PREVIEW: timeline 0 -> 8 fixture keys, sample: [0, 1, 2]

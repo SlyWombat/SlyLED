@@ -61,9 +61,15 @@ class StereoEngine:
                             stage_pos, stage_rotation=None):
         """Register camera using FOV estimate (no ArUco calibration).
 
-        Computes approximate intrinsics from FOV, builds rotation from
-        stage_rotation [rx, ry, rz] in degrees (default: looking along +Y).
+        Computes approximate intrinsics from FOV; the cam-to-stage
+        rotation comes from the shared `camera_math.build_camera_to_stage`
+        helper so the sign convention matches space_mapper and the
+        fixture editor (#586). stage_rotation is
+        `[tilt_deg, pan_deg, roll_deg]` where positive tilt = aim down
+        and positive pan = aim toward +X.
         """
+        from camera_math import build_camera_to_stage, rotation_from_layout
+
         fov_rad = math.radians(fov_deg)
         fx = (frame_w / 2.0) / math.tan(fov_rad / 2.0)
         fy = fx
@@ -72,23 +78,8 @@ class StereoEngine:
         K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
         K_inv = np.linalg.inv(K)
 
-        # Build rotation from stage rotation (degrees) — default: camera forward = +Y
-        if stage_rotation:
-            rx, ry, rz = [math.radians(a) for a in stage_rotation]
-            # Compose Rz(rz) @ Ry(ry) @ Rx(rx)
-            cz, sz = math.cos(rz), math.sin(rz)
-            cy_, sy = math.cos(ry), math.sin(ry)
-            cx_, sx = math.cos(rx), math.sin(rx)
-            Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
-            Ry = np.array([[cy_, 0, sy], [0, 1, 0], [-sy, 0, cy_]])
-            Rx = np.array([[1, 0, 0], [0, cx_, -sx], [0, sx, cx_]])
-            R = Rz @ Ry @ Rx
-        else:
-            # Default: camera looking along +Y direction
-            # Camera frame: Z-forward, Y-down, X-right
-            # Stage: Y-forward, Z-up, X-right
-            # Rotation: map camera Z to stage Y, camera -Y to stage Z
-            R = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], dtype=np.float64)
+        tilt, pan, roll = rotation_from_layout(stage_rotation)
+        R = np.asarray(build_camera_to_stage(tilt, pan, roll), dtype=np.float64)
 
         pos = np.array(stage_pos, dtype=np.float64)
         tvec = -R @ pos.reshape(3, 1)

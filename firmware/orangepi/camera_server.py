@@ -1116,7 +1116,12 @@ def point_cloud():
             pass
     points, ms = est.generate_point_cloud(frame, fov, max_points=max_points,
                                            max_depth_mm=max_depth, intrinsics=intrinsics)
-    return jsonify(ok=True, points=points, pointCount=len(points),
+    # #587 — tag response with the point-cloud schema version. v1 = 6-slot
+    # [x,y,z,r,g,b]. v2 will add a per-point confidence slot and bump this
+    # number. Orchestrator-side consumers fall back to confidence=1.0 when
+    # absent via camera_math.point_confidence.
+    return jsonify(ok=True, schemaVersion=1,
+                   points=points, pointCount=len(points),
                    inferenceMs=round(ms), camera=cam_idx, fovDeg=fov,
                    calibrated=intrinsics is not None)
 

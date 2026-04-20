@@ -305,27 +305,39 @@ def beam_surface_check(surfaces, ray_origin, ray_dir):
                   ray_origin[2] + t * ray_dir[2])
             hits.append({"surface": f"wall_{i}", "distance": t, "point": pt})
 
-    # Check obstacles — proper ray-sphere intersection (#260)
+    # Check obstacles — proper ray-sphere intersection (#260, #585)
+    #
+    # The beam hits the *near-side surface* of the obstacle, not its
+    # centerline. The previous implementation reported the closest-approach
+    # point along the ray (and its distance `t`), which always lies inside
+    # the sphere and overstates the travel distance by up to `radius`. The
+    # real entry distance is `t_mid - sqrt(r² − perp²)`.
     for obs in surfaces.get("obstacles", []):
         pos = obs["pos"]
         size = obs["size"]
         radius = max(size) / 2
-        # Vector from ray origin to obstacle center
+        r_sq = radius * radius
         oc = (pos[0] - ray_origin[0], pos[1] - ray_origin[1], pos[2] - ray_origin[2])
-        # Project onto ray direction (t = oc . dir)
-        t = oc[0] * ray_dir[0] + oc[1] * ray_dir[1] + oc[2] * ray_dir[2]
-        if t < 0:
-            continue  # obstacle is behind the ray origin
-        # Closest point on ray to obstacle center
-        cx = ray_origin[0] + t * ray_dir[0] - pos[0]
-        cy = ray_origin[1] + t * ray_dir[1] - pos[1]
-        cz = ray_origin[2] + t * ray_dir[2] - pos[2]
-        perp_dist = math.sqrt(cx * cx + cy * cy + cz * cz)
-        if perp_dist < radius:
-            pt = (ray_origin[0] + t * ray_dir[0],
-                  ray_origin[1] + t * ray_dir[1],
-                  ray_origin[2] + t * ray_dir[2])
-            hits.append({"surface": obs["label"], "distance": t, "point": pt})
+        oc_sq = oc[0] * oc[0] + oc[1] * oc[1] + oc[2] * oc[2]
+        if oc_sq < r_sq:
+            # Ray origin is inside the obstacle — immediate hit at origin.
+            hits.append({"surface": obs["label"], "distance": 0.0,
+                         "point": ray_origin})
+            continue
+        t_mid = oc[0] * ray_dir[0] + oc[1] * ray_dir[1] + oc[2] * ray_dir[2]
+        if t_mid < 0:
+            continue  # sphere is entirely behind the ray origin
+        cx = ray_origin[0] + t_mid * ray_dir[0] - pos[0]
+        cy = ray_origin[1] + t_mid * ray_dir[1] - pos[1]
+        cz = ray_origin[2] + t_mid * ray_dir[2] - pos[2]
+        perp_sq = cx * cx + cy * cy + cz * cz
+        if perp_sq >= r_sq:
+            continue  # ray misses the sphere
+        t_near = t_mid - math.sqrt(r_sq - perp_sq)
+        pt = (ray_origin[0] + t_near * ray_dir[0],
+              ray_origin[1] + t_near * ray_dir[1],
+              ray_origin[2] + t_near * ray_dir[2])
+        hits.append({"surface": obs["label"], "distance": t_near, "point": pt})
 
     if not hits:
         return None
