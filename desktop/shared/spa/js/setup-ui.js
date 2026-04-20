@@ -54,9 +54,15 @@ var TRACK_CLASSES=[
   {id:"skateboard",label:"Skateboard"},{id:"car",label:"Car"},{id:"truck",label:"Truck"}
 ];
 function _renderSetup(){
-  // Fetch both fixtures and children so we can resolve LED fixture status
-  ra('GET','/api/fixtures',null,function(fixtures){
-    _fixtures=fixtures||[];
+  // Fetch both fixtures and children so we can resolve LED fixture status.
+  // Pull from /api/layout (not /api/fixtures) — layout returns each
+  // fixture record with x/y/z merged in from _layout.children, which is
+  // what the edit modal needs to pre-populate position inputs. Using
+  // /api/fixtures drops those fields and the modal ends up showing
+  // (0, 0, 0).
+  ra('GET','/api/layout',null,function(layout){
+    var fixtures=(layout&&layout.fixtures)||[];
+    _fixtures=fixtures;
     // #503 — fire a fit-quality fetch for each calibrated mover so the
     // next repaint can render the RMS badge. Cached on the fixture
     // record itself (`_mcalFit`) so subsequent renders are free.
