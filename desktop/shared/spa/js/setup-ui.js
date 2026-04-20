@@ -575,9 +575,14 @@ function _pcAdvGo(){
         // Helper text if yield is suspiciously low.
         if(r.totalPoints===0){
           warn=(warn||'')+'<div style="color:#f59e0b;font-size:.82em;margin-top:.3em">'
-            +'No points triangulated. Common causes: cameras pointed at different regions (check pan \u0394), '
-            +'large tilt difference (check tilt \u0394), untextured scene (ORB needs features), '
-            +'or strict reprojection threshold. Matches found but rejected means cameras disagree on 3D positions.'
+            +'<b>No points triangulated.</b> The most common cause on consumer webcams is <b>uncalibrated lens distortion</b> — '
+            +'FOV-derived intrinsics can\'t model the 5-15% barrel distortion in wide-angle lenses, so the triangulation rays miss each other by hundreds of mm. '
+            +'Fix: run ArUco-based <b>3D Camera Calibration</b> for each camera (see the Calibration tab), then rescan. '
+            +'Other causes: large tilt/pan \u0394 between cameras, untextured scene (ORB has no features to match), or physically misaligned poses vs layout.'
+            +'</div>';
+        }else if(r.totalPoints<20){
+          warn=(warn||'')+'<div style="color:#f59e0b;font-size:.82em;margin-top:.3em">'
+            +'Low point count ('+r.totalPoints+'). Running ArUco-based 3D Camera Calibration on each camera will dramatically improve stereo quality.'
             +'</div>';
         }
         _ok('\u2713 Stereo scan complete', details+warn);

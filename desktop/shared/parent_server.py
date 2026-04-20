@@ -4188,7 +4188,16 @@ def api_space_scan_stereo():
         fov_type=cam_b.get("fovType", "horizontal"))
 
     matches = feature_match_points(frame_a, frame_b)
-    points = engine.triangulate_pair("a", "b", matches)
+    # Uncalibrated consumer webcams have 5-15% barrel distortion that
+    # FOV-derived intrinsics can't model — reprojection errors on the
+    # basement rig are 200-400 mm across every FOV permutation. A tight
+    # 50 mm filter would always return 0 points until proper ArUco
+    # calibration is run. Use a lenient 500 mm threshold so the
+    # operator sees a sparse cloud; the SPA warns them that calibration
+    # is needed for accuracy.
+    thr_mm = float(body.get("maxReprojErrMm", 500.0))
+    points = engine.triangulate_pair("a", "b", matches,
+                                     max_reproject_err_mm=thr_mm)
 
     global _point_cloud, _stage_surfaces_cache
     _point_cloud = {

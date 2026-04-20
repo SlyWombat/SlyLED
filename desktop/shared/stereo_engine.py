@@ -251,12 +251,21 @@ class StereoEngine:
         return points
 
 
-def feature_match_points(frame_a, frame_b, max_features=1500, ratio=0.75):
-    """Detect ORB features in a pair of rectified / near-rectified frames
-    and return a list of `(px_a, py_a, px_b, py_b, r, g, b)` pixel
-    matches suitable for `StereoEngine.triangulate_pair`.
+def feature_match_points(frame_a, frame_b, max_features=1500, ratio=0.75,
+                          use_ransac=True, ransac_thresh_px=3.0):
+    """Detect ORB features in a pair of frames and return
+    `(px_a, py_a, px_b, py_b, r, g, b)` pixel matches.
 
-    Uses Lowe's ratio test at `ratio` to reject ambiguous matches.
+    Two-stage filtering:
+      1. Lowe's ratio test (ambiguous-match rejection)
+      2. Fundamental-matrix RANSAC (epipolar-constraint rejection) —
+         ORB produces a LOT of texture-match false positives (two
+         similarly-shaped features that aren't the same 3D point);
+         those have random reprojection errors of hundreds of mm and
+         poison any downstream triangulation. `cv2.findFundamentalMat`
+         fits an F matrix that explains the geometrically-consistent
+         majority and masks the rest as outliers.
+
     Returns [] if cv2 is unavailable or either frame is empty.
     """
     try:
@@ -266,6 +275,7 @@ def feature_match_points(frame_a, frame_b, max_features=1500, ratio=0.75):
         return []
     if frame_a is None or frame_b is None:
         return []
+    import numpy as _np
     gray_a = cv2.cvtColor(frame_a, cv2.COLOR_BGR2GRAY) if frame_a.ndim == 3 else frame_a
     gray_b = cv2.cvtColor(frame_b, cv2.COLOR_BGR2GRAY) if frame_b.ndim == 3 else frame_b
 
@@ -275,10 +285,10 @@ def feature_match_points(frame_a, frame_b, max_features=1500, ratio=0.75):
     if des_a is None or des_b is None:
         return []
 
-    # Hamming distance + knn=2 for ratio test
+    # Stage 1 — ratio test
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
     knn = bf.knnMatch(des_a, des_b, k=2)
-    out = []
+    raw = []
     for pair in knn:
         if len(pair) < 2:
             continue
@@ -287,6 +297,25 @@ def feature_match_points(frame_a, frame_b, max_features=1500, ratio=0.75):
             continue
         a = kp_a[m.queryIdx].pt
         b = kp_b[m.trainIdx].pt
+        raw.append((a, b))
+
+    # Stage 2 — RANSAC fundamental-matrix filter. Needs ≥8 points for
+    # the 8-point algorithm. Skip the filter if too few matches.
+    kept_idx = list(range(len(raw)))
+    if use_ransac and len(raw) >= 8:
+        pts_a = _np.array([r[0] for r in raw], dtype=_np.float32)
+        pts_b = _np.array([r[1] for r in raw], dtype=_np.float32)
+        F, mask = cv2.findFundamentalMat(
+            pts_a, pts_b, cv2.FM_RANSAC, ransac_thresh_px, 0.99)
+        if mask is not None:
+            kept_idx = [i for i, m in enumerate(mask.ravel()) if m == 1]
+            log.info("ORB ratio test: %d matches; RANSAC F-filter kept %d (%.0f%%)",
+                     len(raw), len(kept_idx),
+                     100 * len(kept_idx) / max(len(raw), 1))
+
+    out = []
+    for i in kept_idx:
+        a, b = raw[i]
         if frame_a.ndim == 3:
             x, y = int(a[0]), int(a[1])
             if 0 <= x < frame_a.shape[1] and 0 <= y < frame_a.shape[0]:
