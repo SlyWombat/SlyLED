@@ -529,15 +529,28 @@ function _pcAdvGo(){
   function _render(msg){statusEl.innerHTML=msg;}
   _render('<span style="color:#94a3b8">Starting…</span>');
 
+  // Show a Done button instead of auto-closing so the operator can
+  // read the result. Cancel → Done flip.
+  function _finish(){
+    var acts=document.getElementById('pcadv-actions');
+    if(acts){
+      acts.innerHTML='<button class="btn btn-on" onclick="closeModal();loadSetup()">Done</button>';
+    }
+  }
+
+  function _ok(msg, extra){
+    _render('<span style="color:#34d399">'+msg+'</span>'+(extra||''));
+    _finish();
+  }
+  function _fail(err){
+    _render('<span style="color:#ef4444">Failed: '+escapeHtml(err||'unknown')+'</span>');
+    document.getElementById('pcadv-go').disabled=false;
+  }
+
   if(method==='lite'){
     ra('POST','/api/space/scan/lite',{},function(r){
-      if(r&&r.ok){
-        _render('<span style="color:#34d399">\u2713 Lite cloud built: '+r.totalPoints+' points</span>');
-        setTimeout(function(){closeModal();loadSetup();}, 800);
-      }else{
-        _render('<span style="color:#ef4444">Failed: '+escapeHtml((r&&r.err)||'unknown')+'</span>');
-        document.getElementById('pcadv-go').disabled=false;
-      }
+      if(r&&r.ok)_ok('\u2713 Lite cloud built: '+r.totalPoints+' points');
+      else _fail(r&&r.err);
     });
     return;
   }
@@ -552,11 +565,24 @@ function _pcAdvGo(){
     ra('POST','/api/space/scan/stereo',{cameras:selected,resolution:xy,lighting:light},function(r){
       if(r&&r.ok){
         var warn=r.warning?'<div style="color:#f59e0b;font-size:.82em;margin-top:.3em">\u26a0 '+escapeHtml(r.warning)+'</div>':'';
-        _render('<span style="color:#34d399">\u2713 Stereo scan: '+r.totalPoints+' points from '+r.featureMatches+' matches · captureDelta '+r.captureDeltaMs+'ms · tilt\u0394 '+r.tiltDelta+'°</span>'+warn);
-        setTimeout(function(){closeModal();loadSetup();}, 1800);
+        var details='<div style="font-size:.78em;color:#94a3b8;margin-top:.3em">'
+          +'Feature matches: <b>'+r.featureMatches+'</b> · '
+          +'Triangulated: <b>'+r.totalPoints+'</b> · '
+          +'Capture delta: '+r.captureDeltaMs+'ms · '
+          +'Tilt \u0394: '+r.tiltDelta+'°'
+          +(r.panDelta!==undefined?(' · Pan \u0394: '+r.panDelta+'°'):'')
+          +'</div>';
+        // Helper text if yield is suspiciously low.
+        if(r.totalPoints===0){
+          warn=(warn||'')+'<div style="color:#f59e0b;font-size:.82em;margin-top:.3em">'
+            +'No points triangulated. Common causes: cameras pointed at different regions (check pan \u0394), '
+            +'large tilt difference (check tilt \u0394), untextured scene (ORB needs features), '
+            +'or strict reprojection threshold. Matches found but rejected means cameras disagree on 3D positions.'
+            +'</div>';
+        }
+        _ok('\u2713 Stereo scan complete', details+warn);
       }else{
-        _render('<span style="color:#ef4444">Failed: '+escapeHtml((r&&r.err)||'unknown')+'</span>');
-        document.getElementById('pcadv-go').disabled=false;
+        _fail(r&&r.err);
       }
     });
     return;
@@ -568,11 +594,7 @@ function _pcAdvGo(){
     return;
   }
   ra('POST','/api/space/scan',{maxPointsPerCamera:maxPts,cameras:selected,lighting:light},function(r){
-    if(!r||!r.ok){
-      _render('<span style="color:#ef4444">Failed: '+escapeHtml((r&&r.err)||'unknown')+'</span>');
-      document.getElementById('pcadv-go').disabled=false;
-      return;
-    }
+    if(!r||!r.ok){ _fail(r&&r.err); return; }
     _render('<span style="color:#94a3b8">Scanning '+(r.cameras||0)+' cameras · lighting='+escapeHtml(r.lighting||light)+'\u2026</span>');
     var poll=setInterval(function(){
       ra('GET','/api/space/scan/status',null,function(st){
@@ -582,13 +604,12 @@ function _pcAdvGo(){
         if(!st.running){
           clearInterval(poll);
           var cams=(st.result&&st.result.cameras)||[];
-          var summary=cams.map(function(c){
+          var summary='<div style="margin-top:.4em">'+cams.map(function(c){
             var q=c.anchorQuality||'—';
             var qColor=q==='ok'?'#34d399':q==='fallback'?'#fbbf24':q==='failed'?'#ef4444':'#94a3b8';
             return '<div style="font-size:.78em;color:#94a3b8">'+escapeHtml(c.name)+' · '+c.pointCount+' pts · anchor <span style="color:'+qColor+'">'+q+'</span></div>';
-          }).join('');
-          _render('<span style="color:#34d399">\u2713 Scan complete: '+(st.totalPoints||0)+' points</span>'+summary);
-          setTimeout(function(){closeModal();loadSetup();}, 2500);
+          }).join('')+'</div>';
+          _ok('\u2713 Scan complete: '+(st.totalPoints||0)+' points', summary);
         }
       });
     },800);
