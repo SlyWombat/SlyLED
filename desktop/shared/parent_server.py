@@ -6275,9 +6275,12 @@ def api_dmx_blink():
     engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
     if not engine:
         return jsonify(ok=False, err="DMX engine is not running"), 400
+    dmx_count = sum(1 for f in _fixtures if f.get("fixtureType") == "dmx")
+    if dmx_count == 0:
+        return jsonify(ok=False, err="No DMX fixtures defined — add one via Add Fixture"), 400
     import threading as _thr_blink
     _thr_blink.Thread(target=_run_boot_blink, args=(engine, True), daemon=True).start()
-    return jsonify(ok=True)
+    return jsonify(ok=True, fixtures=dmx_count)
 
 @app.post("/api/dmx/channel")
 def api_dmx_set_channel():
@@ -6579,10 +6582,18 @@ def _run_boot_blink(engine, force=False):
     if _boot_blink_done and not force:
         return
     _boot_blink_done = True
+    try:
+        _run_boot_blink_body(engine, force)
+    except Exception:
+        log.exception("Boot blink crashed")
+
+
+def _run_boot_blink_body(engine, force):
     import colorsys
     # Collect DMX fixtures once before the animation
     dmx_fx = [(f, f.get("dmxProfileId")) for f in _fixtures if f.get("fixtureType") == "dmx"]
     if not dmx_fx:
+        log.info("Boot blink skipped: no DMX fixtures defined")
         return
     profiles = {}
     for f, pid in dmx_fx:
@@ -6591,6 +6602,27 @@ def _run_boot_blink(engine, force=False):
             if info:
                 profiles[pid] = {"channel_map": info.get("channel_map", {}),
                                  "channels": info.get("channels", [])}
+    log.info("Boot blink: %d DMX fixtures, %d profiles", len(dmx_fx), len(profiles))
+
+    # Seed shutter/strobe to "open" on every fixture — the profile defaults
+    # pass that runs on engine start-up sets this, but a manual Blink from
+    # Settings may fire before or after other channel writers; writing the
+    # open value here guarantees the beam is unshuttered throughout the
+    # rainbow regardless of prior state.
+    for f, pid in dmx_fx:
+        uni = f.get("dmxUniverse", 1)
+        addr = f.get("dmxStartAddr", 1)
+        prof = profiles.get(pid)
+        if not prof:
+            continue
+        info = _profile_lib.channel_info(pid)
+        if info:
+            strobe_open = dmx_profiles.strobe_open_value(info)
+            cm = prof.get("channel_map", {})
+            if "strobe" in cm:
+                engine.get_universe(uni).set_channel(addr + cm["strobe"], strobe_open)
+            if "shutter" in cm:
+                engine.get_universe(uni).set_channel(addr + cm["shutter"], 255)
 
     # Step 1: explicit blackout hold (500 ms) so the blink starts
     # against darkness — the fixture is aimed at layout-forward but
@@ -6620,6 +6652,10 @@ def _run_boot_blink(engine, force=False):
                 cm = prof.get("channel_map", {})
                 if "dimmer" in cm:
                     engine.get_universe(uni).set_channel(addr + cm["dimmer"], 255)
+                else:
+                    # RGB-only fixture with no dimmer channel — the RGB
+                    # writes in _set_fixture_color already carry brightness.
+                    pass
             else:
                 # No profile — write dimmer-only pulse to first channel
                 engine.get_universe(uni).set_channel(addr, 255)

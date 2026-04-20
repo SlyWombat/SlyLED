@@ -355,7 +355,10 @@ function dmxEngineStop(){
 
 function dmxBlink(){
   ra('POST','/api/dmx/blink',{},function(r){
-    document.getElementById('dmx-status').textContent=r&&r.ok?'Blinking...':'Blink failed — '+(r&&r.err||'engine not running');
+    var msg;
+    if(r&&r.ok)msg='Blinking '+(r.fixtures||'')+' fixture(s)...';
+    else msg='Blink failed — '+(r&&r.err||'engine not running');
+    document.getElementById('dmx-status').textContent=msg;
   });
 }
 
