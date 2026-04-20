@@ -285,8 +285,11 @@ function _renderSetup(){
         +' <button class="btn btn-on" onclick="loadSetup()" style="font-size:.75em;padding:.15em .5em">Refresh</button>'
         +'</h3>';
       h+='<div id="cam-disc-results" style="display:none;margin-bottom:.5em"></div>';
+      // Point cloud status banner (#578) — system-wide cloud built from
+      // all positioned cameras. Populated below via loadPointCloudMeta().
+      h+='<div id="pc-status" style="margin-bottom:.5em;padding:.4em .6em;background:#0f172a;border:1px solid #1e293b;border-radius:4px;font-size:.82em;color:#64748b">Loading point cloud status…</div>';
       if(camFixtures.length){
-        h+='<table class="tbl cam-status-tbl"><tr><th>#</th><th>Sensor Name</th><th>Node</th><th>FOV</th><th>Resolution</th><th>Status</th><th>Actions</th></tr>';
+        h+='<table class="tbl cam-status-tbl"><tr><th>#</th><th>Sensor Name</th><th>Node</th><th>FOV</th><th>Resolution</th><th>Point cloud</th><th>Status</th><th>Actions</th></tr>';
         camFixtures.forEach(function(f){
           var ip=f.cameraIp||'—';
           var camIdx=f.cameraIdx||0;
@@ -300,8 +303,11 @@ function _renderSetup(){
             acts+=' <button class="btn" id="setup-trk-'+f.id+'" onclick="_setupTrackToggle('+f.id+')" style="background:'+(trkActive?'#9f1239':'#be185d')+';color:#fce7f3">'+(trkActive?'Stop Track':'Track')+'</button>';
           }
           acts+=' <button class="btn btn-off" onclick="removeCamera('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
-          h+='<tr><td style="color:#64748b">cam'+camIdx+'</td><td><b>'+escapeHtml(f.name)+'</b>'+calBadge+'</td><td>'+escapeHtml(ip)+'</td><td>'+fov+'</td><td>'+res+'</td><td id="cam-st-'+f.id+'"><span class="badge" style="background:#334;color:#888">...</span></td><td>'+acts+'</td></tr>';
-          h+='<tr id="cam-snap-row-'+f.id+'" style="display:none"><td colspan="7" style="padding:.3em"><div id="cam-snap-'+f.id+'" style="text-align:center"></div></td></tr>';
+          h+='<tr><td style="color:#64748b">cam'+camIdx+'</td><td><b>'+escapeHtml(f.name)+'</b>'+calBadge+'</td><td>'+escapeHtml(ip)+'</td><td>'+fov+'</td><td>'+res+'</td>'
+            +'<td id="cam-pc-'+f.id+'"><span class="badge" style="background:#334;color:#888;font-size:.7em">—</span></td>'
+            +'<td id="cam-st-'+f.id+'"><span class="badge" style="background:#334;color:#888">...</span></td>'
+            +'<td>'+acts+'</td></tr>';
+          h+='<tr id="cam-snap-row-'+f.id+'" style="display:none"><td colspan="8" style="padding:.3em"><div id="cam-snap-'+f.id+'" style="text-align:center"></div></td></tr>';
         });
         h+='</table>';
       }else{
@@ -318,7 +324,92 @@ function _renderSetup(){
           if(el)el.innerHTML=' <span onclick="showTab(\'firmware\')" style="color:#f60;cursor:pointer;font-size:.9em" title="Update available: v'+escapeHtml(u.latestVersion)+' (click to update)">&#9650;</span>';
         });
       }).catch(function(){});
+      // Point cloud status banner + per-camera pills (#578)
+      _loadPointCloudMeta(camFixtures);
     });
+  });
+}
+
+function _loadPointCloudMeta(camFixtures){
+  var banner=document.getElementById('pc-status');
+  ra('GET','/api/space?meta=1',null,function(r){
+    var hasCloud=r&&r.ok&&r.totalPoints>0;
+    var isLite=hasCloud&&r.source==='lite';
+    var contribIds={};
+    if(hasCloud)(r.cameras||[]).forEach(function(c){contribIds[c.fixtureId]=true;});
+    // Banner
+    if(banner){
+      var bh='';
+      if(!hasCloud){
+        bh='<b style="color:#94a3b8">Point cloud:</b> <span style="color:#f59e0b">none</span> '
+          +'<span style="color:#64748b">— calibration will have no stage geometry.</span> '
+          +'<button class="btn" onclick="_pcLiteRun()" style="font-size:.75em;margin-left:.4em;background:#0e7490;color:#fff">Quick Lite Setup</button>'
+          +' <button class="btn" onclick="_pcFullScan()" style="font-size:.75em;margin-left:.3em;background:#1e3a5f;color:#93c5fd">Run Full Scan</button>';
+      }else if(isLite){
+        bh='<b style="color:#94a3b8">Point cloud:</b> <span style="color:#f59e0b">Lite only</span> '
+          +'<span style="color:#64748b">— synthesized from layout dimensions, no camera depth. Upgrade once cameras can scan.</span> '
+          +'<button class="btn" onclick="_pcFullScan()" style="font-size:.75em;margin-left:.4em;background:#0e7490;color:#fff">Run Full Scan</button>';
+      }else{
+        var ts=r.timestamp?new Date(r.timestamp*1000).toLocaleString():'unknown';
+        bh='<b style="color:#94a3b8">Point cloud:</b> <span style="color:#34d399">'+r.totalPoints+' points</span> '
+          +'<span style="color:#64748b">· '+((r.cameras||[]).length)+' cameras · '+escapeHtml(ts)+'</span> '
+          +'<button class="btn" onclick="_pcFullScan()" style="font-size:.75em;margin-left:.4em;background:#1e3a5f;color:#93c5fd">Rescan</button>';
+      }
+      banner.innerHTML=bh;
+    }
+    // Per-camera pills
+    (camFixtures||[]).forEach(function(f){
+      var el=document.getElementById('cam-pc-'+f.id);
+      if(!el)return;
+      var pill;
+      if(!hasCloud){
+        pill='<span class="badge" style="background:#334;color:#94a3b8;font-size:.7em">No cloud</span>';
+      }else if(isLite){
+        pill='<span class="badge" style="background:#78350f;color:#fcd34d;font-size:.7em">Lite</span>';
+      }else if(contribIds[f.id]){
+        pill='<span class="badge" style="background:#065f46;color:#34d399;font-size:.7em">\u2713 In cloud</span>';
+      }else{
+        pill='<span class="badge" style="background:#7c2d12;color:#fed7aa;font-size:.7em">Not in cloud</span>';
+      }
+      el.innerHTML=pill;
+    });
+  });
+}
+
+function _pcLiteRun(){
+  var banner=document.getElementById('pc-status');
+  if(banner)banner.innerHTML='<span style="color:#64748b">Building lite cloud…</span>';
+  ra('POST','/api/space/scan/lite',{},function(r){
+    if(r&&r.ok){
+      document.getElementById('hs').textContent='Lite point cloud created — '+r.totalPoints+' points';
+      loadSetup();
+    }else{
+      document.getElementById('hs').textContent='Lite cloud failed: '+(r&&r.err||'unknown');
+      loadSetup();
+    }
+  });
+}
+
+function _pcFullScan(){
+  var banner=document.getElementById('pc-status');
+  if(banner)banner.innerHTML='<span style="color:#64748b">Starting environment scan…</span>';
+  ra('POST','/api/space/scan',{maxPointsPerCamera:5000},function(r){
+    if(!r||!r.ok){
+      document.getElementById('hs').textContent='Scan failed: '+(r&&r.err||'unknown');
+      loadSetup();return;
+    }
+    document.getElementById('hs').textContent='Scan running — '+(r.cameras||0)+' cameras';
+    var poll=setInterval(function(){
+      ra('GET','/api/space/scan/status',null,function(st){
+        if(!st)return;
+        if(banner)banner.innerHTML='<span style="color:#64748b">Scanning… '+(st.progress||0)+'% · '+escapeHtml(st.message||'')+'</span>';
+        if(!st.running){
+          clearInterval(poll);
+          document.getElementById('hs').textContent='Scan complete — '+(st.totalPoints||0)+' points';
+          loadSetup();
+        }
+      });
+    },800);
   });
 }
 

@@ -82,7 +82,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.34"
+VERSION = "1.5.35"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -3079,6 +3079,26 @@ def _mover_cal_thread_v2(fid, cam, bridge_ip, mover_color,
 
 def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
                       warmup=False, warmup_seconds=30.0):
+    """Background thread wrapper — catches any unhandled exception so the
+    SPA polling loop sees `status=\"error\"` instead of a job frozen at
+    `status=\"running\"` forever. The inner `_mover_cal_thread_body` does
+    the real work. (#576)"""
+    job = _mover_cal_jobs[str(fid)]
+    try:
+        _mover_cal_thread_body(fid, cam, bridge_ip, mover_color, warmup, warmup_seconds)
+    except Exception as e:
+        log.exception("MOVER-CAL %d: unhandled exception in cal thread", fid)
+        job["error"] = f"Unhandled error: {e}"
+        job["status"] = "error"
+        try:
+            _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
+        except Exception:
+            pass
+        _set_calibrating(fid, False)
+
+
+def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
+                           warmup=False, warmup_seconds=30.0):
     """Background thread: optional warmup → discovery → mapping → save grid."""
     job = _mover_cal_jobs[str(fid)]
 
@@ -3097,6 +3117,39 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
         job["status"] = "error"
         _cal_blackout()
         return
+
+    # Pre-flight sanity log — surfaces the common "silent failure" causes
+    # (no profile, beam channels can't be resolved, fixture not positioned)
+    # before we sink time into a warmup or discovery sweep.
+    addr_pre = f.get("dmxStartAddr", 1)
+    uni_pre = f.get("dmxUniverse", 1)
+    pid_pre = f.get("dmxProfileId")
+    prof_pre = _profile_lib.channel_info(pid_pre) if pid_pre else None
+    cm_pre = (prof_pre or {}).get("channel_map", {})
+    log.info("MOVER-CAL %d: start — uni=%d addr=%d profile=%s "
+             "dimmer=%s strobe=%s color=%s",
+             fid, uni_pre, addr_pre, pid_pre,
+             cm_pre.get("dimmer"), cm_pre.get("strobe"),
+             "rgb" if "red" in cm_pre else ("wheel" if "color-wheel" in cm_pre else "none"))
+    if not prof_pre:
+        job["error"] = ("Fixture has no DMX profile — open the fixture editor "
+                        "and pick one before calibrating")
+        job["status"] = "error"
+        _cal_blackout()
+        return
+
+    # Kick the beam on right now so the operator can see DMX is flowing
+    # before the slow phases start. If any later step fails, at least the
+    # beam turning on (or not) tells them where the break is.
+    try:
+        _dmx_pre = [0] * 512
+        _mcal._set_mover_dmx(_dmx_pre, addr_pre, 0.5, 0.5,
+                             *mover_color, dimmer=255, profile=prof_pre)
+        _mcal._send_artnet(bridge_ip, uni_pre - 1, _dmx_pre)
+        log.info("MOVER-CAL %d: pre-warm beam-on sent (addr=%d uni=%d)",
+                 fid, addr_pre, uni_pre)
+    except Exception as e:
+        log.warning("MOVER-CAL %d: pre-warm beam-on failed: %s", fid, e)
 
     # #511 — engage the calibration lock. Any external pan/tilt writer
     # (show bake, mover-follow, dmx-test, profile defaults) will skip this
@@ -3878,6 +3931,90 @@ def _get_stage_geometry():
     return synthetic
 
 
+def _build_lite_point_cloud():
+    """Synthesize a point cloud from layout dimensions + positioned
+    fixtures/cameras — no depth scan, no camera pull (#577).
+
+    Produces a grid of synthetic points on the floor plane (Z=0) and the
+    back wall (Y=stage.d). Output shape matches `_space_scan._result`
+    so downstream consumers (surface_analyzer, calibration target
+    picker, IK ray-intersect) treat it identically to a real scan.
+
+    The cloud is marked with source=\"lite\" so callers that care
+    (the Setup tab status pill, the calibration wizard) can distinguish
+    \"I have real geometry\" from \"I'm using surveyed layout dimensions\".
+    """
+    sw_m = float(_stage.get("w", 6))
+    sd_m = float(_stage.get("d", 4))
+    sh_m = float(_stage.get("h", 3))
+    sw = int(sw_m * 1000)
+    sd = int(sd_m * 1000)
+    sh = int(sh_m * 1000)
+    # ~250 mm grid spacing — dense enough for RANSAC to detect planes,
+    # sparse enough that even a 20×20 m stage stays under 10k points.
+    step = 250
+    points = []
+    # Floor plane at Z=0
+    x = 0
+    while x <= sw:
+        y = 0
+        while y <= sd:
+            points.append([float(x), float(y), 0.0])
+            y += step
+        x += step
+    # Back wall at Y=sd
+    x = 0
+    while x <= sw:
+        z = 0
+        while z <= sh:
+            points.append([float(x), float(sd), float(z)])
+            z += step
+        x += step
+    # Tag each positioned camera as a contributing camera so the Setup
+    # pill (#578) can mark them "in cloud" even though no depth was
+    # collected — the operator explicitly chose the lite path and the
+    # camera's layout position is what's backing the cloud's walls.
+    cams = [f for f in _fixtures if f.get("fixtureType") == "camera"]
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    positioned_cam_ids = [c["id"] for c in cams if c["id"] in pos_map]
+    cam_info = [{"fixtureId": cid, "cameraIdx": 0,
+                 "name": next((c.get("name", "") for c in cams if c["id"] == cid), ""),
+                 "pointCount": 0, "lite": True}
+                for cid in positioned_cam_ids]
+    return {
+        "timestamp": time.time(),
+        "cameras": cam_info,
+        "points": points,
+        "totalPoints": len(points),
+        "floorNormalized": True,
+        "floorOffset": 0,
+        "source": "lite",
+        "stageW": sw,
+        "stageH": sh,
+        "stageD": sd,
+    }
+
+
+@app.post("/api/space/scan/lite")
+def api_space_scan_lite():
+    """Synthesize a point cloud from layout dimensions (#577).
+
+    Zero-scan first-pass geometry for the calibration wizard — lets new
+    users calibrate on day one before any camera scan has succeeded. A
+    subsequent real scan (`/api/space/scan`) overwrites this with
+    actual depth data.
+    """
+    global _point_cloud, _stage_surfaces_cache
+    _point_cloud = _build_lite_point_cloud()
+    _save("pointcloud", _point_cloud)
+    _stage_surfaces_cache = {"key": None, "value": None}
+    log.info("Lite point cloud synthesized: %d points, %d cameras tagged",
+             _point_cloud["totalPoints"], len(_point_cloud["cameras"]))
+    return jsonify(ok=True, source="lite",
+                   totalPoints=_point_cloud["totalPoints"],
+                   cameras=len(_point_cloud["cameras"]))
+
+
 @app.post("/api/space/scan")
 def api_space_scan():
     """Start an async environment scan using all positioned camera sensors."""
@@ -3914,9 +4051,24 @@ def api_space_scan_status():
 
 @app.get("/api/space")
 def api_space_get():
-    """Get the stored point cloud."""
+    """Get the stored point cloud.
+
+    Query `?meta=1` returns only the metadata (timestamp, source,
+    contributing cameras, counts) — used by the Setup tab (#578) so
+    the status pill doesn't have to pull 10k points on every render.
+    """
     if not _point_cloud:
         return jsonify(ok=False, err="No environment scan available"), 404
+    if request.args.get("meta"):
+        return jsonify(ok=True,
+                       timestamp=_point_cloud.get("timestamp"),
+                       source=_point_cloud.get("source", "scan"),
+                       totalPoints=_point_cloud.get("totalPoints", 0),
+                       cameras=_point_cloud.get("cameras", []),
+                       floorNormalized=_point_cloud.get("floorNormalized"),
+                       stageW=_point_cloud.get("stageW"),
+                       stageH=_point_cloud.get("stageH"),
+                       stageD=_point_cloud.get("stageD"))
     return jsonify(ok=True, **_point_cloud)
 
 @app.post("/api/space/analyze")
@@ -4209,7 +4361,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.34" from camera_server.py source text."""
+    """Extract VERSION = "1.5.35" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None

@@ -1166,6 +1166,8 @@ function _moverCalAutoStart(){
   h+='<div class="card" style="padding:.6em;margin-bottom:.6em" id="mcal-options">';
   h+='<div style="font-size:.82em;color:#f59e0b;margin-bottom:.3em">\u26a0 Ensure Art-Net engine is running and fixture responds to DMX.</div>';
   h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.5em">Dim or turn off room lights for best results.</div>';
+  // Stage geometry pre-check banner (#579) — populated by _moverCalGeometryCheck
+  h+='<div id="mcal-geom" style="font-size:.78em;margin-bottom:.5em;padding:.35em .5em;background:#0f172a;border:1px solid #1e293b;border-radius:4px;color:#64748b">Checking stage geometry…</div>';
   h+='<div style="display:grid;grid-template-columns:120px 1fr;gap:.4em;align-items:center;font-size:.82em">';
   h+='<label style="color:#94a3b8;margin:0">Beam color:</label>';
   h+='<select id="mcal-color" style="font-size:.82em;padding:2px 4px">';
@@ -1208,6 +1210,50 @@ function _moverCalAutoStart(){
       _moverCalRenderExisting(r);
     });
   }
+  // #579 — check for a point cloud before the user starts calibration so
+  // they can create a lite one if nothing exists. The BFS path works
+  // without geometry but benefits from it; v2 requires it.
+  _moverCalGeometryCheck();
+}
+
+function _moverCalGeometryCheck(){
+  var el=document.getElementById('mcal-geom');
+  if(!el)return;
+  ra('GET','/api/space?meta=1',null,function(r){
+    var hasCloud=r&&r.ok&&r.totalPoints>0;
+    if(!hasCloud){
+      el.style.borderColor='#7c2d12';
+      el.innerHTML='<b style="color:#fbbf24">Stage geometry: none.</b> '
+        +'<span style="color:#94a3b8">BFS will sweep the full pan/tilt range. v2 needs geometry.</span><br>'
+        +'<button class="btn" onclick="_moverCalLiteSetup()" style="font-size:.72em;margin-top:.3em;background:#0e7490;color:#fff">Quick Lite Setup</button>'
+        +' <button class="btn" onclick="showTab(\'calibration\')" style="font-size:.72em;margin-top:.3em;background:#1e3a5f;color:#93c5fd">Go to Calibration tab for full scan</button>';
+      return;
+    }
+    var isLite=r.source==='lite';
+    var stageW=r.stageW?(r.stageW/1000).toFixed(1)+'m':'?';
+    var stageD=r.stageD?(r.stageD/1000).toFixed(1)+'m':'?';
+    if(isLite){
+      el.style.borderColor='#78350f';
+      el.innerHTML='<b style="color:#fcd34d">Stage geometry: Lite ('+stageW+' × '+stageD+').</b> '
+        +'<span style="color:#64748b">Synthesized from layout dimensions · '+r.totalPoints+' synthetic points · BFS and v2 will use this as a fallback.</span>';
+    }else{
+      el.style.borderColor='#065f46';
+      el.innerHTML='<b style="color:#34d399">Stage geometry: '+r.totalPoints+' real points</b> '
+        +'<span style="color:#64748b">from '+((r.cameras||[]).length)+' cameras · '+stageW+' × '+stageD+' stage.</span>';
+    }
+  });
+}
+
+function _moverCalLiteSetup(){
+  var el=document.getElementById('mcal-geom');
+  if(el)el.innerHTML='<span style="color:#94a3b8">Building lite cloud from layout…</span>';
+  ra('POST','/api/space/scan/lite',{},function(r){
+    if(r&&r.ok){
+      _moverCalGeometryCheck();
+    }else if(el){
+      el.innerHTML='<span style="color:#ef4444">Lite setup failed: '+escapeHtml(r&&r.err||'unknown')+'</span>';
+    }
+  });
 }
 
 function _moverCalModeChanged(){
