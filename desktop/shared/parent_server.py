@@ -82,7 +82,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.36"
+VERSION = "1.5.37"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -3966,22 +3966,25 @@ def _build_lite_point_cloud():
     sh = int(sh_m * 1000)
     # ~250 mm grid spacing — dense enough for RANSAC to detect planes,
     # sparse enough that even a 20×20 m stage stays under 10k points.
+    # Shape [x, y, z, r, g, b] in stage millimetres (same convention as
+    # a real space scan) — the SPA renderer reads all six slots.
     step = 250
     points = []
-    # Floor plane at Z=0
+    # Floor plane at Z=0 — cyan tint so the lite cloud is visually
+    # distinct from a real colour-mapped scan.
     x = 0
     while x <= sw:
         y = 0
         while y <= sd:
-            points.append([float(x), float(y), 0.0])
+            points.append([float(x), float(y), 0.0, 34, 211, 238])
             y += step
         x += step
-    # Back wall at Y=sd
+    # Back wall at Y=sd — darker cyan.
     x = 0
     while x <= sw:
         z = 0
         while z <= sh:
-            points.append([float(x), float(sd), float(z)])
+            points.append([float(x), float(sd), float(z), 14, 116, 144])
             z += step
         x += step
     # Tag each positioned camera as a contributing camera so the Setup
@@ -4375,7 +4378,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.36" from camera_server.py source text."""
+    """Extract VERSION = "1.5.37" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None

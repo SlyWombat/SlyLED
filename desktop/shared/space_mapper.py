@@ -217,17 +217,42 @@ class SpaceScan:
         self._progress = 90
         self._message = f"Normalizing {len(all_points)} points to stage floor..."
 
-        # Floor normalization: detect floor plane, shift Z so floor = Z=0 (#246)
+        # Floor normalization — camera-anchored. Each camera's layout
+        # position has a known Z (height above floor, surveyed by the
+        # operator). After transform_points, a point directly below each
+        # camera that lies on the floor should land at stage Z=0. In
+        # practice depth noise + pitch error pushes the "floor" up or
+        # down by tens to hundreds of mm. Shift the entire cloud so the
+        # median observed floor (5th-percentile Z per camera, averaged)
+        # lands at Z=0. This uses the operator's known geometry as the
+        # anchor rather than trusting RANSAC alone.
         floor_z = None
         if len(all_points) > 100:
             try:
-                from surface_analyzer import _detect_floor
-                coords = [(p[0], p[1], p[2]) for p in all_points]
-                floor = _detect_floor(coords, tolerance=150)
-                if floor:
-                    floor_z = floor.get("z", floor.get("y", 0))
-                    log.info("Floor normalization: shifting Z by %d mm (floor was at Z=%d)",
-                             -floor_z, floor_z)
+                per_cam_floors = []
+                for cam in cameras:
+                    fid = cam.get("id")
+                    pos = positions.get(fid, positions.get(str(fid), {}))
+                    cx, cy = pos.get("x", 0), pos.get("y", 0)
+                    # Points within ±1 m of this camera's XY footprint
+                    below = [p[2] for p in all_points
+                             if abs(p[0] - cx) < 1000 and abs(p[1] - cy) < 1000]
+                    if len(below) >= 10:
+                        below.sort()
+                        per_cam_floors.append(below[len(below) // 20])  # 5th %ile
+                if per_cam_floors:
+                    floor_z = sum(per_cam_floors) / len(per_cam_floors)
+                    log.info("Floor (camera-anchored): %d cameras, shift %d mm",
+                             len(per_cam_floors), -int(floor_z))
+                else:
+                    # Fallback: RANSAC on the full cloud (#246 legacy path)
+                    from surface_analyzer import _detect_floor
+                    coords = [(p[0], p[1], p[2]) for p in all_points]
+                    floor = _detect_floor(coords, tolerance=150)
+                    if floor:
+                        floor_z = floor.get("z", floor.get("y", 0))
+                        log.info("Floor (RANSAC fallback): shift %d mm", -int(floor_z))
+                if floor_z is not None:
                     for p in all_points:
                         p[2] -= floor_z  # shift so floor = Z=0
             except Exception as e:
