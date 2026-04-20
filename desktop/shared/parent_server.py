@@ -4054,13 +4054,53 @@ def api_space_scan_stereo():
     if any(c is None for c in cams):
         return jsonify(err="one or both camera fixtures not found"), 404
     cam_a, cam_b = cams
-    if cam_a.get("cameraIp") != cam_b.get("cameraIp"):
-        return jsonify(err="stereo pair must share cameraIp for synchronised capture"), 400
+
+    # Same-hardware guard — stereo only runs when both camera sensors
+    # are on the same Orange Pi (i.e. share cameraIp), because only
+    # then can firmware grab both frames in one V4L2 round-trip with
+    # sub-10 ms sync. Cross-Pi stereo over the network drifts 30-100 ms
+    # which makes triangulation wrong for anything moving.
+    ip_a = cam_a.get("cameraIp")
+    ip_b = cam_b.get("cameraIp")
+    if not ip_a or not ip_b or ip_a != ip_b:
+        return jsonify(
+            err="stereo requires both cameras on the same node (same cameraIp)",
+            detail=f"cam_a={ip_a}  cam_b={ip_b}"), 400
+    # Must be two DIFFERENT sensor indices on that node.
+    if cam_a.get("cameraIdx") == cam_b.get("cameraIdx"):
+        return jsonify(
+            err="stereo requires two different sensor indices on the node",
+            detail=f"both cameras map to cameraIdx={cam_a.get('cameraIdx')}"), 400
 
     pos_map = {p["id"]: p for p in _layout.get("children", [])}
     for c in (cam_a, cam_b):
         if c.get("id") not in pos_map:
             return jsonify(err=f"camera {c.get('name')} not positioned on layout"), 400
+
+    # Tilt-alignment advisory (not a blocker). Classical stereo assumes
+    # the two image planes are close to parallel — large tilt deltas
+    # make rectification warp severely and ORB feature-descriptor
+    # matching falls off a cliff beyond ~10° difference.
+    rot_a = cam_a.get("rotation") or [0, 0, 0]
+    rot_b = cam_b.get("rotation") or [0, 0, 0]
+    tilt_delta = abs((rot_a[0] if len(rot_a) > 0 else 0) -
+                     (rot_b[0] if len(rot_b) > 0 else 0))
+    pan_delta = abs((rot_a[1] if len(rot_a) > 1 else 0) -
+                     (rot_b[1] if len(rot_b) > 1 else 0))
+    tilt_warning = None
+    if tilt_delta > 10:
+        tilt_warning = (f"Large tilt delta ({tilt_delta:.0f}°) between the two cameras — "
+                        "classical stereo works best when tilts are within ~5°. "
+                        "Expect a low feature-match yield.")
+    elif tilt_delta > 5:
+        tilt_warning = (f"Moderate tilt delta ({tilt_delta:.0f}°) — triangulation will "
+                        "work but match counts will be reduced.")
+    if pan_delta > 15:
+        tilt_warning = ((tilt_warning or "") +
+                        f" Pan delta ({pan_delta:.0f}°) is also large; cameras may "
+                        "cover different stage regions with little overlap.")
+    if tilt_warning:
+        log.warning("Stereo scan: %s", tilt_warning)
 
     import base64, io
     try:
@@ -4154,7 +4194,10 @@ def api_space_scan_stereo():
     return jsonify(ok=True, source="stereo",
                    totalPoints=len(points),
                    featureMatches=len(matches),
-                   captureDeltaMs=data.get("captureDeltaMs"))
+                   captureDeltaMs=data.get("captureDeltaMs"),
+                   tiltDelta=round(tilt_delta, 1),
+                   panDelta=round(pan_delta, 1),
+                   warning=tilt_warning)
 
 
 @app.post("/api/space/scan")
