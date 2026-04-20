@@ -4048,6 +4048,199 @@ def api_space_scan_lite():
                    cameras=len(_point_cloud["cameras"]))
 
 
+_zoedepth_pipeline = None  # lazy-loaded ZoeDepth host-side (#593)
+
+
+def _load_zoedepth():
+    """Lazy-load the ZoeDepth pipeline on the orchestrator host.
+
+    Host-side metric-depth path — complements the Pi-side DA-V2 Metric
+    Small model (#593 tier 1). ZoeDepth's 1.3 GB weights don't fit on
+    the Pi so this runs only on the host, giving the operator a
+    \"high quality\" scan option. Returns None if transformers/torch
+    aren't importable on this host.
+    """
+    global _zoedepth_pipeline
+    if _zoedepth_pipeline is not None:
+        return _zoedepth_pipeline
+    try:
+        import torch
+        from transformers import AutoImageProcessor, ZoeDepthForDepthEstimation
+    except Exception as e:
+        log.warning("ZoeDepth unavailable on host: %s", e)
+        return None
+    try:
+        model_id = "Intel/zoedepth-nyu-kitti"
+        processor = AutoImageProcessor.from_pretrained(model_id)
+        model = ZoeDepthForDepthEstimation.from_pretrained(model_id)
+        model.eval()
+        _zoedepth_pipeline = (processor, model)
+        log.info("ZoeDepth loaded on host (%s)", "cuda" if torch.cuda.is_available() else "cpu")
+        return _zoedepth_pipeline
+    except Exception as e:
+        log.warning("ZoeDepth load failed: %s", e)
+        return None
+
+
+@app.post("/api/space/scan/zoedepth")
+def api_space_scan_zoedepth():
+    """Host-side high-quality monocular depth scan via ZoeDepth (#593).
+
+    Pulls a raw snapshot from each selected camera, runs ZoeDepth on
+    the orchestrator host (CPU or GPU), back-projects to cam-local 3D
+    via the pinhole model, transforms through known camera poses to
+    stage coords, merges with cross-cam filter.
+
+    Body: {
+      cameras: [fid1, fid2, ...]  — optional; defaults to all positioned
+      lighting: \"blackout\" (default) | \"keep\" | \"fill\"
+      maxPoints: int per camera, default 5000
+    }
+    """
+    import urllib.request
+    global _point_cloud, _stage_surfaces_cache
+
+    body = request.get_json(silent=True) or {}
+    sel = body.get("cameras")
+    lighting_mode = body.get("lighting", "blackout")
+    max_pts = int(body.get("maxPoints", 5000))
+
+    cams = [f for f in _fixtures if f.get("fixtureType") == "camera"]
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    positioned = [c for c in cams if c["id"] in pos_map and c.get("cameraIp")]
+    if sel:
+        ids = set(int(x) for x in sel)
+        positioned = [c for c in positioned if c["id"] in ids]
+    if not positioned:
+        return jsonify(err="No positioned cameras selected"), 400
+
+    pipe = _load_zoedepth()
+    if pipe is None:
+        return jsonify(
+            err="ZoeDepth is not installed on this host",
+            detail="Install `transformers` and `torch` in the orchestrator's "
+                   "Python environment to enable high-quality host-side depth."
+        ), 501
+    processor, model = pipe
+
+    import math as _math
+    import base64, io
+    try:
+        import numpy as _np
+        from PIL import Image
+        import torch
+    except Exception as e:
+        return jsonify(err=f"ZoeDepth deps missing: {e}"), 501
+
+    from camera_math import build_camera_to_stage
+    from stereo_consistency import cross_camera_filter
+
+    # Snapshot each camera (inside blackout window)
+    per_cam_clouds = []
+    cam_info_list = []
+    t_scan = time.time()
+    with _ScanLightingWindow(lighting_mode):
+        for cam in positioned:
+            pos = pos_map[cam["id"]]
+            cam_pos = (pos.get("x", 0), pos.get("y", 0), pos.get("z", 0))
+            rot = cam.get("rotation", [0, 0, 0])
+            fov = cam.get("fovDeg", 90)
+            # Pull snapshot
+            try:
+                url = f"http://{cam['cameraIp']}:5000/snapshot?cam={cam.get('cameraIdx', 0)}"
+                jpg_bytes = urllib.request.urlopen(url, timeout=15).read()
+            except Exception as e:
+                log.warning("snapshot failed for %s: %s", cam.get("name"), e)
+                continue
+            img = Image.open(io.BytesIO(jpg_bytes)).convert("RGB")
+            # ZoeDepth inference
+            t0 = time.time()
+            inputs = processor(images=img, return_tensors="pt")
+            with torch.no_grad():
+                out = model(**inputs)
+            pred = torch.nn.functional.interpolate(
+                out.predicted_depth.unsqueeze(1),
+                size=img.size[::-1], mode="bicubic", align_corners=False
+            ).squeeze().cpu().numpy()
+            depth_mm = pred * 1000.0  # ZoeDepth outputs metres
+            t1 = time.time()
+            log.info("ZoeDepth %s: inference %.1fs, depth %.0f..%.0f mm",
+                     cam.get("name"), t1 - t0, depth_mm.min(), depth_mm.max())
+            # Back-project
+            h, w = depth_mm.shape
+            fx = (w / 2.0) / _math.tan(_math.radians(fov / 2))
+            fy = fx
+            cx, cy = w / 2.0, h / 2.0
+            step = max(1, int(_math.sqrt(h * w / max_pts)))
+            cam_local = []
+            rgb = _np.array(img)
+            for py in range(0, h, step):
+                for px in range(0, w, step):
+                    z = float(depth_mm[py, px])
+                    if z < 50 or z > 10000:
+                        continue
+                    x = (px - cx) * z / fx
+                    y = (py - cy) * z / fy
+                    r, g, b = int(rgb[py, px, 0]), int(rgb[py, px, 1]), int(rgb[py, px, 2])
+                    cam_local.append([x, y, z, r, g, b])
+            # Transform to stage coords via the canonical helper
+            R = _np.array(build_camera_to_stage(rot[0], rot[1], rot[2]))
+            stage_pts = []
+            for p in cam_local:
+                local = _np.array([p[0], p[1], p[2]])
+                stage = R @ local + _np.array(cam_pos)
+                stage_pts.append([float(stage[0]), float(stage[1]), float(stage[2]),
+                                  p[3], p[4], p[5]])
+            per_cam_clouds.append({
+                "fixture": cam,
+                "stage_pos": cam_pos,
+                "fov_deg": fov,
+                "points": stage_pts,
+                "anchorQuality": "ok",  # ZoeDepth is already metric
+            })
+            cam_info_list.append({
+                "fixtureId": cam["id"],
+                "cameraIdx": cam.get("cameraIdx", 0),
+                "name": cam.get("name"),
+                "pointCount": len(stage_pts),
+                "inferenceS": round(t1 - t0, 2),
+                "anchorQuality": "ok",
+            })
+
+    total_t = time.time() - t_scan
+    if not per_cam_clouds:
+        return jsonify(err="No cameras returned usable frames"), 502
+
+    # Cross-camera filter (same as the monocular scan)
+    if len(per_cam_clouds) >= 2:
+        merged, filter_stats = cross_camera_filter(per_cam_clouds)
+    else:
+        merged = per_cam_clouds[0]["points"]
+        filter_stats = None
+
+    _point_cloud = {
+        "schemaVersion": 2,
+        "timestamp": time.time(),
+        "source": "zoedepth",
+        "cameras": cam_info_list,
+        "filterStats": filter_stats,
+        "points": merged,
+        "totalPoints": len(merged),
+        "stageW": int(_stage.get("w", 3) * 1000),
+        "stageH": int(_stage.get("h", 2) * 1000),
+        "stageD": int(_stage.get("d", 4) * 1000),
+        "elapsedS": round(total_t, 2),
+    }
+    _save("pointcloud", _point_cloud)
+    _stage_surfaces_cache = {"key": None, "value": None}
+    log.info("ZoeDepth scan complete: %d points from %d cameras in %.1fs",
+             len(merged), len(per_cam_clouds), total_t)
+    return jsonify(ok=True, source="zoedepth",
+                   totalPoints=len(merged),
+                   cameras=cam_info_list,
+                   elapsedS=round(total_t, 2))
+
+
 @app.post("/api/space/scan/stereo")
 def api_space_scan_stereo():
     """Run a stereo-triangulation scan on a pair of cameras that share
@@ -4984,17 +5177,22 @@ def _deploy_camera_bg(ip, force=False):
             src = src_dir / fname
             if src.exists():
                 sftp.put(str(src), f"/opt/slyled/{fname}")
-        # Upload YOLO model if present locally (check both downloaded cache and bundled)
-        model_src = src_dir / "models" / "yolov8n.onnx"
-        if not model_src.exists():
-            model_src = _FW_DIR / "orangepi" / "models" / "yolov8n.onnx"
-        if model_src.exists():
-            _update(35, "Uploading detection model (~12 MB)...")
-            try:
-                sftp.stat("/opt/slyled/models")
-            except FileNotFoundError:
-                sftp.mkdir("/opt/slyled/models")
-            sftp.put(str(model_src), "/opt/slyled/models/yolov8n.onnx")
+        # Upload ML models if present locally (check both downloaded cache and bundled)
+        try:
+            sftp.stat("/opt/slyled/models")
+        except FileNotFoundError:
+            sftp.mkdir("/opt/slyled/models")
+        for model_name, desc, size_hint in [
+            ("yolov8n.onnx",                    "detection model", "~12 MB"),
+            ("depth_anything_v2_small.onnx",    "depth model (disparity)", "~95 MB"),
+            ("dav2_metric_indoor_small.onnx",   "depth model (metric, #593)", "~95 MB"),
+        ]:
+            m_src = src_dir / "models" / model_name
+            if not m_src.exists():
+                m_src = _FW_DIR / "orangepi" / "models" / model_name
+            if m_src.exists():
+                _update(35, f"Uploading {desc} ({size_hint})...")
+                sftp.put(str(m_src), f"/opt/slyled/models/{model_name}")
         sftp.close()
 
         # ── Install system packages ────────────────────────────────

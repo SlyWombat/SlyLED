@@ -445,7 +445,11 @@ function _pcAdvancedScan(){
   h+='<div class="card" style="padding:.6em;margin-bottom:.5em">';
   h+='<div style="font-size:.82em;font-weight:bold;color:#e2e8f0;margin-bottom:.3em">Method</div>';
   h+='<label style="display:block;cursor:pointer;padding:.2em 0;font-size:.85em">'
-    +'<input type="radio" name="pcmethod" value="mono" checked onchange="_pcAdvRefresh()"> Monocular — each positioned camera contributes a depth cloud.'
+    +'<input type="radio" name="pcmethod" value="mono" checked onchange="_pcAdvRefresh()"> Monocular (Pi-side) — DA-V2 Metric Small, fast.'
+    +'</label>';
+  h+='<label style="display:block;cursor:pointer;padding:.2em 0;font-size:.85em">'
+    +'<input type="radio" name="pcmethod" value="zoedepth" onchange="_pcAdvRefresh()"> <b>ZoeDepth (host)</b> — higher quality, slower.'
+    +' <span style="color:#64748b">Pulls snapshots, runs on the orchestrator host. Requires torch + transformers.</span>'
     +'</label>';
   var stereoDisabled=stereoPairs.length===0;
   h+='<label style="display:block;cursor:pointer;padding:.2em 0;font-size:.85em'+(stereoDisabled?';opacity:.4':'')+'">'
@@ -557,6 +561,29 @@ function _pcAdvGo(){
     ra('POST','/api/space/scan/lite',{},function(r){
       if(r&&r.ok)_ok('\u2713 Lite cloud built: '+r.totalPoints+' points');
       else _fail(r&&r.err);
+    });
+    return;
+  }
+  if(method==='zoedepth'){
+    if(selected.length===0){
+      _render('<span style="color:#f59e0b">Select at least one camera.</span>');
+      document.getElementById('pcadv-go').disabled=false;
+      return;
+    }
+    _render('<span style="color:#94a3b8">Running ZoeDepth on host · this takes ~15s per camera on CPU…</span>');
+    ra('POST','/api/space/scan/zoedepth',{cameras:selected,maxPoints:maxPts,lighting:light},function(r){
+      if(r&&r.ok){
+        var cams=(r.cameras||[]);
+        var summary='<div style="margin-top:.4em">'+cams.map(function(c){
+          return '<div style="font-size:.78em;color:#94a3b8">'+escapeHtml(c.name)+' · '+c.pointCount+' pts · inference '+(c.inferenceS||'?')+'s</div>';
+        }).join('')+'</div>';
+        _ok('\u2713 ZoeDepth scan complete: '+r.totalPoints+' points in '+r.elapsedS+'s', summary);
+      }else{
+        var err=(r&&r.err)||'unknown';
+        var det=(r&&r.detail)?('<div style="font-size:.8em;color:#94a3b8;margin-top:.3em">'+escapeHtml(r.detail)+'</div>'):'';
+        _render('<span style="color:#ef4444">Failed: '+escapeHtml(err)+'</span>'+det);
+        document.getElementById('pcadv-go').disabled=false;
+      }
     });
     return;
   }

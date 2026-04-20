@@ -1,0 +1,66 @@
+Summary of findings, concrete problems, and a numeric walk-through with a recommended fix.
+
+High-level summary
+
+There are no quaternions in this file, so no quaternion-convention issues.
+The main issues are: ambiguous/incorrect rotation ordering, likely axis-convention mismatches for the "aim" math, and a suspicious hand-written combined rotation matrix that does not match a standard composition (and so is likely wrong).
+Units: degrees → radians conversion is done when cam_aim is not used. When cam_aim is used, atan2 returns radians correctly. So unit handling is OK — except the code mixes degrees and an implicit aim-derived radians path without documenting frame conventions.
+Point cloud handling: points are handled as Python lists; rotation + translation is applied per-point (slow but functionally okay). Rounding to integers loses precision and may be undesired.
+Concrete problems and recommendations
+
+Incorrect / unclear rotation ordering and documentation
+Docstring & comments say "Uses full 3-axis rotation (RX pitch, RY yaw, RZ roll)" and "RY * RX * RZ (yaw, pitch, roll order)". This is confusing and nonstandard:
+Typical robotics convention is yaw (ψ) about Z, pitch (θ) about Y (or X depending on convention), roll (φ) about X, and common composition is R = Rz(ψ) * Ry(θ) * Rx(φ) (ZYX / yaw-pitch-roll).
+The code claims RX is pitch, RY yaw, RZ roll — that permutes axis meaning. You must explicitly document which physical axis each rotation variable refers to (i.e., which axis is forward/up/left for the camera-local frame).
+Recommendation: choose a single clear convention and document it; the most interoperable: roll = Rx, pitch = Ry, yaw = Rz with composition R = Rz(yaw) * Ry(pitch) * Rx(roll) (ZYX intrinsic rotations).
+The combined matrix is almost certainly wrong for any standard composition
+The code computes: r00 = cos_ry * cos_rz + sin_ry * sin_rx * sin_rz r01 = -cos_ry * sin_rz + sin_ry * sin_rx * cos_rz r02 = sin_ry * cos_rx r10 = cos_rx * sin_rz r11 = cos_rx * cos_rz r12 = -sin_rx r20 = -sin_ry * cos_rz + cos_ry * sin_rx * sin_rz r21 = sin_ry * sin_rz + cos_ry * sin_rx * cos_rz r22 = cos_ry * cos_rx
+If you assume these variables are rx=pitch, ry=yaw, rz=roll (nonstandard), this algebra still does not match any consistent R = Rα * Rβ * Rγ expansion I recognize. That means numeric outputs will be wrong or will correspond to a different, undocumented axis order.
+Recommendation: remove the hand-written combined matrix and compute R by multiplying elemental rotation matrices (explicitly) or using a tested library. Example (column-vector convention, R = Rz * Ry * Rx): Rx = [[1,0,0],[0,cosφ,-sinφ],[0,sinφ,cosφ]] Ry = [[cosθ,0,sinθ],[0,1,0],[-sinθ,0,cosθ]] Rz = [[cosψ,-sinψ,0],[sinψ,cosψ,0],[0,0,1]] R = Rz @ Ry @ Rx
+This removes algebra mistakes and makes intent obvious.
+Aim-derived yaw/pitch math may have axis swaps/sign issues
+The code computes: dist_xz = sqrt(dx^2 + dz^2) ry_rad = atan2(dx, dz) # yaw rx_rad = atan2(-dy, dist_xz) # pitch (negative because looking down = positive pitch)
+Whether atan2(dx, dz) is correct depends on your camera-local forward axis. If camera forward is +Z and +X is right, yaw = atan2(dx, dz) is equivalent to atan2(x,z) (OK if you expect that). But this is nonstandard compared to the widely used atan2(x, z) vs atan2(z, x) confusion. You must document the camera frame clearly.
+The sign on rx (pitch) is also convention-dependent. Test with known aim/orientation vectors.
+Row vs column vector convention must be explicit
+The code applies p' = R * p + t using the rXX values and treating p as a column vector. That's fine so long as R was constructed for column-vector multiplication. Given the ambiguous construction above, you must be explicit in docs and tests.
+Rounding and data handling
+result.append([round(wx), round(wy), round(wz), pt[3], pt[4], pt[5]])
+Rounds to ints — probably undesirable. Keep mm as floats or convert only for downstream consumers.
+No filtering for NaN/Inf or out-of-range depths (fetch_point_cloud has maxDepthMm but camera nodes could still return invalids). Consider masking invalid points first.
+Performance: per-point Python loop is slow for large clouds. Use numpy for vectorized transforms.
+Step-by-step numeric test (to reproduce and verify)
+
+Assumptions I will use for a test to compare expected vs code:
+
+Choose a clear standard convention: roll = rx = 10°, pitch = ry = 20°, yaw = rz = 30° with R = Rz(yaw) * Ry(pitch) * Rx(roll) (ZYX intrinsic).
+cam_pos = (0.5, -0.2, 0.1) mm units.
+point in camera-local mm: p = [1, 2, 3].
+Convert degrees → radians:
+roll φ = 10° = 0.174532925 rad
+pitch θ = 20° = 0.34906585 rad
+yaw ψ = 30° = 0.523598776 rad
+Compute Rx, Ry, Rz and R = Rz * Ry * Rx (column-vector convention). Using these trig values, R ≈
+[ [ 0.81379768, -0.44093436, 0.37875067],
+  [ 0.46984631,  0.88256412, 0.01802831],
+  [-0.34202014,  0.16317591, 0.92541658] ]
+
+Rotate and translate:
+
+R * p ≈ [1.06818096, 2.28905948, 2.76058141]
+add cam_pos → p' ≈ [1.56818096, 2.08905948, 2.86058141]
+What to check in your code
+
+Run the file's transform_points with cam_rotation=[10,20,30] and verify output for p = [1,2,3]. If the result differs substantially from [1.56818, 2.08906, 2.86058], the rotation composition in code is wrong.
+If your code must use a different ordering, construct R explicitly as the elemental matrices in that ordering and test basis vectors:
+Transform (1,0,0), (0,1,0), (0,0,1) and verify they match expected rotated axes.
+Minimal concrete fixes
+
+Replace the hand-coded combined matrix with explicit elemental matrices and a clear composition. Example (column-vector, ZYX):
+compute cos/sin of φ,θ,ψ (converted to radians)
+build Rx, Ry, Rz as above
+R = matmul(Rz, matmul(Ry, Rx))
+apply wx,wy,wz = R @ [lx,ly,lz] + cam_pos
+Remove round() (or make it optional).
+Add explicit frame/documentation: state which axis is forward/right/up for camera-local and for stage. Add unit tests using basis vectors and the numeric example above.
+Consider vectorizing with numpy and filtering invalid points before transform.

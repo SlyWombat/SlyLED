@@ -1,8 +1,18 @@
 """
-depth_estimator.py — Monocular depth estimation via Depth-Anything-V2 ONNX.
+depth_estimator.py — Monocular depth estimation via ONNX.
 
-Produces a relative depth map from a single camera frame.
-Thread-safe, lazy-loaded. Deployed via SCP alongside yolov8n.onnx.
+Supports two models, selectable at load time:
+  - "metric" (default, preferred): Depth-Anything-V2 Metric Indoor Small.
+    Outputs depth directly in metres. Same 94 MB size as the disparity
+    variant. Eliminates the #589-class disparity-direction + 1/d-vs-linear
+    errors that plagued the original DA-V2 pipeline.
+  - "disparity" (legacy): Depth-Anything-V2 Small. Outputs normalised
+    disparity (higher = closer). Kept for backward compatibility and as
+    a fallback when the metric model isn't deployed.
+
+The model choice is persisted in /opt/slyled/models/active_depth_model;
+falls back to whichever ONNX is available if the preference file is
+missing. Thread-safe, lazy-loaded. Deployed via SCP.
 """
 
 import logging
@@ -17,25 +27,60 @@ import numpy as np
 log = logging.getLogger("slyled-cam")
 
 MODEL_DIR = Path("/opt/slyled/models")
-MODEL_PATH = MODEL_DIR / "depth_anything_v2_small.onnx"
-INPUT_SIZE = 518  # Depth-Anything-V2 default input size
+MODEL_DISPARITY = MODEL_DIR / "depth_anything_v2_small.onnx"          # legacy
+MODEL_METRIC    = MODEL_DIR / "dav2_metric_indoor_small.onnx"          # preferred (#593)
+ACTIVE_PREF     = MODEL_DIR / "active_depth_model"
+INPUT_SIZE = 518  # multiple of 14 (DINOv2 patch size), standard DA-V2 size
+
+
+def _select_model():
+    """Return (path, kind) for the model to load. Preference order:
+    1. value in `active_depth_model` preference file, if the target
+       ONNX exists
+    2. metric model, if present
+    3. disparity model, if present
+    Raises FileNotFoundError if neither exists.
+    """
+    pref = None
+    if ACTIVE_PREF.exists():
+        try:
+            pref = ACTIVE_PREF.read_text().strip().lower()
+        except Exception:
+            pref = None
+    if pref == "disparity" and MODEL_DISPARITY.exists():
+        return MODEL_DISPARITY, "disparity"
+    if pref == "metric" and MODEL_METRIC.exists():
+        return MODEL_METRIC, "metric"
+    # no preference / stale preference — prefer metric, fall back to disparity
+    if MODEL_METRIC.exists():
+        return MODEL_METRIC, "metric"
+    if MODEL_DISPARITY.exists():
+        return MODEL_DISPARITY, "disparity"
+    raise FileNotFoundError(
+        f"No depth model found — expected one of {MODEL_METRIC} or "
+        f"{MODEL_DISPARITY}. Deploy from the Firmware tab.")
 
 
 class DepthEstimator:
-    """Monocular depth estimation using Depth-Anything-V2 small."""
+    """Monocular depth estimation. Defaults to DA-V2 Metric Indoor Small;
+    falls back to the disparity variant if the metric ONNX isn't deployed."""
 
     def __init__(self):
         self._session = None
         self._lock = threading.Lock()
+        self._kind = None  # "metric" | "disparity" — set at load time
+
+    @property
+    def kind(self):
+        """'metric' or 'disparity'. None until the model has loaded."""
+        return self._kind
 
     def _load(self):
         if self._session is not None:
             return
-        if not MODEL_PATH.exists():
-            raise FileNotFoundError(
-                f"Depth model not found at {MODEL_PATH} — deploy from the Firmware tab"
-            )
-        log.info("Loading depth model...")
+        path, kind = _select_model()
+        self._kind = kind
+        log.info("Loading depth model (%s) from %s", kind, path.name)
         t0 = time.monotonic()
         try:
             import onnxruntime as ort
@@ -43,25 +88,27 @@ class DepthEstimator:
             opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             opts.inter_op_num_threads = 2
             opts.intra_op_num_threads = 4
-            self._session = ort.InferenceSession(str(MODEL_PATH), opts,
+            self._session = ort.InferenceSession(str(path), opts,
                                                   providers=["CPUExecutionProvider"])
         except ImportError:
-            self._session = cv2.dnn.readNetFromONNX(str(MODEL_PATH))
+            self._session = cv2.dnn.readNetFromONNX(str(path))
         elapsed = (time.monotonic() - t0) * 1000
-        log.info("Depth model loaded in %.0f ms", elapsed)
+        log.info("Depth model loaded in %.0f ms (%s)", elapsed, kind)
 
     def estimate(self, frame):
-        """Estimate relative depth from a BGR frame.
+        """Estimate depth from a BGR frame.
 
         Args:
             frame: numpy array (H, W, 3) BGR
 
         Returns:
             (depth_map, inference_ms)
-            depth_map: numpy float32 array (H, W) in [0, 1]
-                0 = closest observed pixel, 1 = farthest observed pixel.
-                Matches pinhole `z` convention so `z = d * max_depth_mm`
-                in pixel_to_3d / generate_point_cloud is correctly oriented.
+            depth_map: numpy float32 array (H, W)
+              - if self.kind == 'metric': depth in **millimetres** directly
+              - if self.kind == 'disparity': normalised [0, 1] with 0=near,
+                1=far (matches pinhole z direction). Callers that want
+                mm multiply by their own `max_depth_mm` — the scaling is
+                a rough approximation of the disparity→depth relationship.
         """
         with self._lock:
             self._load()
@@ -99,22 +146,21 @@ class DepthEstimator:
             # Resize back to original frame size
             depth = cv2.resize(depth, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
 
-            # Normalize to [0, 1] with pinhole depth convention: 0 = closest,
-            # 1 = farthest. Depth-Anything-V2 outputs disparity (higher value
-            # = closer object), so we min-max normalise AND invert.
-            #
-            # Previously the code skipped the invert, which made `z = d *
-            # max_depth_mm` in generate_point_cloud / pixel_to_3d assign
-            # large z to close objects. That folded the reconstructed floor
-            # through the camera's pitch axis and produced a plane tilted by
-            # ~2× the camera's physical pitch (#589). The disparity-indexed
-            # comments above were inconsistent with the downstream code;
-            # this is the correction.
-            d_min, d_max = depth.min(), depth.max()
-            if d_max - d_min > 1e-6:
-                depth = 1.0 - (depth - d_min) / (d_max - d_min)
+            if self._kind == "metric":
+                # Model outputs metric depth in METRES; convert to mm.
+                # Clamp implausible values (e.g. sky → 0 or negative on
+                # indoor-trained models).
+                depth = depth * 1000.0
+                depth[~np.isfinite(depth)] = 0
+                depth[depth < 0] = 0
             else:
-                depth = np.zeros_like(depth)
+                # Disparity model — normalise to [0, 1] with
+                # 0 = closest, 1 = farthest (#589 sign fix).
+                d_min, d_max = depth.min(), depth.max()
+                if d_max - d_min > 1e-6:
+                    depth = 1.0 - (depth - d_min) / (d_max - d_min)
+                else:
+                    depth = np.zeros_like(depth)
 
             return depth.astype(np.float32), inference_ms
 
@@ -126,20 +172,17 @@ class DepthEstimator:
         return float(depth_map[py, px])
 
     def pixel_to_3d(self, depth_map, px, py, fov_deg, frame_w, frame_h, max_depth_mm=5000):
-        """Project a pixel + relative depth into approximate 3D coordinates.
+        """Project a pixel + depth into approximate 3D camera-local mm.
 
-        Args:
-            depth_map: relative depth map (0=near, 1=far) — pinhole z direction
-            px, py: pixel position
-            fov_deg: horizontal FOV in degrees
-            frame_w, frame_h: frame dimensions
-            max_depth_mm: maximum depth in mm (for scaling relative depth)
-
-        Returns:
-            (x_mm, y_mm, z_mm) in camera-local coordinates
+        Depth semantics depend on self.kind:
+          metric    → depth_map[py, px] is already in mm
+          disparity → depth_map[py, px] is normalised [0, 1]; scale by max_depth_mm
         """
-        rel_depth = self.depth_at_pixel(depth_map, px, py)
-        z = rel_depth * max_depth_mm  # depth in mm
+        sample = float(self.depth_at_pixel(depth_map, px, py))
+        if self._kind == "metric":
+            z = sample
+        else:
+            z = sample * max_depth_mm
 
         # Camera intrinsics from FOV
         fx = (frame_w / 2) / math.tan(math.radians(fov_deg / 2))
@@ -160,12 +203,16 @@ class DepthEstimator:
             frame: BGR numpy array
             fov_deg: horizontal FOV in degrees
             max_points: maximum number of points to return
-            max_depth_mm: maximum depth for scaling
-            intrinsics: optional dict with fx, fy, cx, cy from checkerboard calibration (#244)
+            max_depth_mm: max depth cap. Applied regardless of model kind —
+                the metric model occasionally predicts very large depths on
+                saturated pixels; capping keeps those out. Also doubles as
+                the disparity→mm multiplier for the disparity model.
+            intrinsics: optional dict with fx, fy, cx, cy from calibration.
 
         Returns:
-            (points, inference_ms) where points is a list of [x, y, z, r, g, b]
-            Coordinates in camera-local mm. Colors are 0-255.
+            (points, inference_ms). points is a list of [x, y, z, r, g, b].
+            Coordinates are camera-local mm (cam-local Z is forward depth,
+            X right, Y down — pinhole convention). Colors 0-255.
         """
         depth, ms = self.estimate(frame)
         h, w = depth.shape[:2]
@@ -190,13 +237,23 @@ class DepthEstimator:
         if rgb.shape[:2] != depth.shape[:2]:
             rgb = cv2.resize(rgb, (w, h))
 
+        is_metric = (self._kind == "metric")
         points = []
         for py in range(0, h, step):
             for px in range(0, w, step):
                 d = float(depth[py, px])
-                if d < 0.05 or d > 0.98:
-                    continue  # skip unreliable extremes (noise floor + saturated)
-                z = d * max_depth_mm
+                if is_metric:
+                    # Metric mm: reject obviously bad samples (0/negative
+                    # from the clamp, or beyond max_depth_mm).
+                    if d < 50 or d > max_depth_mm:
+                        continue
+                    z = d
+                else:
+                    # Normalised disparity path: [0, 1] with 0=near, 1=far.
+                    # Skip noise floor + saturation extremes.
+                    if d < 0.05 or d > 0.98:
+                        continue
+                    z = d * max_depth_mm
                 x = (px - cx_cam) * z / fx
                 y = (py - cy_cam) * z / fy
                 r, g, b = int(rgb[py, px, 0]), int(rgb[py, px, 1]), int(rgb[py, px, 2])
