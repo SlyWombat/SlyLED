@@ -88,36 +88,76 @@ function loadSettings(){
 }
 
 // #598 — Depth-runtime status row in Settings. The Install button
-// reuses the progress modal defined in setup-ui.js.
+// reuses the progress modal defined in setup-ui.js. When an install
+// is in flight (e.g. triggered silently by the installer marker),
+// the row shows inline live progress and re-polls every 2s.
+var _depthRtPollTimer=null;
 function _depthRuntimeRefresh(){
   var box=document.getElementById('depth-rt-status');
   if(!box)return;
-  ra('GET','/api/depth-runtime/status',null,function(r){
-    var iBtn=document.getElementById('depth-rt-install');
-    var rBtn=document.getElementById('depth-rt-reinstall');
-    var uBtn=document.getElementById('depth-rt-uninstall');
-    if(!r||!r.ok){
-      box.innerHTML='<span style="color:#ef4444">Unavailable: '+escapeHtml((r&&r.err)||'module missing')+'</span>';
-      if(iBtn)iBtn.style.display='none';
-      if(rBtn)rBtn.style.display='none';
-      if(uBtn)uBtn.style.display='none';
+  if(_depthRtPollTimer){clearTimeout(_depthRtPollTimer);_depthRtPollTimer=null;}
+  // First check for an in-flight install. If one's running, we short-
+  // circuit the snapshot status and show progress + auto-refresh.
+  ra('GET','/api/depth-runtime/install-status',null,function(ins){
+    if(ins&&ins.running){
+      _depthRuntimeRenderRunning(ins);
+      _depthRtPollTimer=setTimeout(_depthRuntimeRefresh,2000);
       return;
     }
-    if(r.installed){
-      var running=r.runnerRunning?' <span style="color:#34d399">· runner live on port '+(r.runnerPort||'?')+'</span>':'';
-      box.innerHTML='<span style="color:#34d399">Installed</span> · '
-        +escapeHtml(String(r.sizeMb||'?'))+' MB · '
-        +'Python '+escapeHtml(r.pythonVersion||'?')+' · '
-        +escapeHtml(r.model||'')+running;
-      if(iBtn)iBtn.style.display='none';
-      if(rBtn)rBtn.style.display='inline-block';
-      if(uBtn)uBtn.style.display='inline-block';
-    }else{
-      box.innerHTML='<span style="color:#f59e0b">Not installed</span> · click Install for ~2 GB one-time download';
-      if(iBtn)iBtn.style.display='inline-block';
-      if(rBtn)rBtn.style.display='none';
-      if(uBtn)uBtn.style.display='none';
-    }
+    ra('GET','/api/depth-runtime/status',null,function(r){
+      var iBtn=document.getElementById('depth-rt-install');
+      var rBtn=document.getElementById('depth-rt-reinstall');
+      var uBtn=document.getElementById('depth-rt-uninstall');
+      if(!r||!r.ok){
+        box.innerHTML='<span style="color:#ef4444">Unavailable: '+escapeHtml((r&&r.err)||'module missing')+'</span>';
+        if(iBtn)iBtn.style.display='none';
+        if(rBtn)rBtn.style.display='none';
+        if(uBtn)uBtn.style.display='none';
+        return;
+      }
+      if(r.installed){
+        var running=r.runnerRunning?' <span style="color:#34d399">· runner live on port '+(r.runnerPort||'?')+'</span>':'';
+        box.innerHTML='<span style="color:#34d399">Installed</span> · '
+          +escapeHtml(String(r.sizeMb||'?'))+' MB · '
+          +'Python '+escapeHtml(r.pythonVersion||'?')+' · '
+          +escapeHtml(r.model||'')+running;
+        if(iBtn)iBtn.style.display='none';
+        if(rBtn)rBtn.style.display='inline-block';
+        if(uBtn)uBtn.style.display='inline-block';
+      }else{
+        // If the previous install failed, surface the reason inline.
+        if(ins&&ins.ok===false&&ins.error){
+          box.innerHTML='<span style="color:#ef4444">Install failed:</span> '+escapeHtml(ins.error);
+        }else{
+          box.innerHTML='<span style="color:#f59e0b">Not installed</span> · click Install for ~2 GB one-time download';
+        }
+        if(iBtn)iBtn.style.display='inline-block';
+        if(rBtn)rBtn.style.display='none';
+        if(uBtn)uBtn.style.display='none';
+      }
+    });
+  });
+}
+
+function _depthRuntimeRenderRunning(ins){
+  var box=document.getElementById('depth-rt-status');
+  if(!box)return;
+  var pct=Math.round(100*(ins.progress||0));
+  var phase=escapeHtml(ins.phase||'working');
+  var msg=escapeHtml(ins.message||'');
+  box.innerHTML=''
+    +'<div style="display:flex;align-items:center;gap:.6em;margin-bottom:.3em">'
+    +  '<span style="color:#60a5fa;font-weight:600">Installing '+pct+'%</span>'
+    +  '<span style="color:#94a3b8;font-size:.82em">'+phase+'</span>'
+    +  '<button class="btn btn-nav" style="margin-left:auto;padding:.1em .6em;font-size:.82em" onclick="_depthRuntimeOpenProgress()">Details</button>'
+    +'</div>'
+    +'<div style="background:#0f172a;border:1px solid #334155;border-radius:4px;height:10px;overflow:hidden">'
+    +  '<div style="height:100%;width:'+pct+'%;background:#60a5fa;transition:width .3s"></div>'
+    +'</div>'
+    +(msg?'<div style="color:#94a3b8;font-size:.78em;margin-top:.25em">'+msg+'</div>':'');
+  // Hide the action buttons while running
+  ['depth-rt-install','depth-rt-reinstall','depth-rt-uninstall'].forEach(function(id){
+    var b=document.getElementById(id);if(b)b.style.display='none';
   });
 }
 

@@ -1802,7 +1802,15 @@ function _moverCalManualStart(fixId){
   // Ensure _fixtures have positions from layout
   ra('GET','/api/layout',null,function(lay){
     if(lay&&lay.fixtures)_fixtures=lay.fixtures;
-    _moverCalManualStart2(fixId);
+    // #614 — pull the surveyed ArUco marker registry so the "or from:"
+    // dropdown in _manCalRenderMarkers can offer the already-measured
+    // floor positions. Non-fatal on failure; the dropdown simply omits
+    // ArUco entries.
+    if(typeof _arucoLoad==='function'){
+      _arucoLoad(function(){_moverCalManualStart2(fixId);});
+    }else{
+      _moverCalManualStart2(fixId);
+    }
   });
 }
 var _calMarkers=(function(){try{var s=localStorage.getItem('slyled_cal_markers');return s?JSON.parse(s):null;}catch(e){return null;}})();
@@ -1859,6 +1867,15 @@ function _manCalRenderMarkers(fname){
       pickItems.push({id:'fix:'+f.id,name:f.name||('Fixture '+f.id),x:f.x,y:f.y,z:f.z});
     }
   });
+  // #614 — surveyed ArUco markers from the #596 registry. Physical
+  // floor-placed tags are the most reliable set of "known stage
+  // positions" in the room; offering them here means the operator
+  // doesn't re-type coordinates already entered for camera cal.
+  var aruco=(typeof _aruco_cache!=='undefined'&&_aruco_cache&&_aruco_cache.markers)||[];
+  aruco.forEach(function(m){
+    var lbl='ArUco '+m.id+(m.note?' — '+m.note:'');
+    pickItems.push({id:'aruco:'+m.id,name:lbl,x:m.x|0,y:m.y|0,z:m.z|0});
+  });
   if(pickItems.length){
     h+='<span style="font-size:.78em;color:#64748b">or from:</span>';
     h+='<select style="font-size:.8em" onchange="_manCalAddFromPick(this)">';
@@ -1894,6 +1911,15 @@ function _manCalAddFromPick(selEl){
       var p=o.transform.pos||[0,0,0];name=o.name;x=p[0];y=p[1];z=p[2];}});
   }else if(type==='fix'){
     (_fixtures||[]).forEach(function(f){if(f.id===id){name=f.name||'Fixture';x=f.x||0;y=f.y||0;z=f.z||0;}});
+  }else if(type==='aruco'){
+    // #614 — surveyed ArUco marker from the #596 registry
+    var aruco=(typeof _aruco_cache!=='undefined'&&_aruco_cache&&_aruco_cache.markers)||[];
+    aruco.forEach(function(m){
+      if(m.id===id){
+        name='ArUco '+m.id+(m.note?' — '+m.note:'');
+        x=m.x|0;y=m.y|0;z=m.z|0;
+      }
+    });
   }
   if(!name)return;
   _manCal.markers.push({x:x,y:y,z:z,name:name});

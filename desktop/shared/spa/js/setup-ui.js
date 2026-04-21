@@ -607,6 +607,23 @@ function _pcAdvRefresh(){
   // it's the default pick whenever it's available.
   if(!_pcAdvZoeProbed){
     _pcAdvZoeProbed=true;
+    // Parallel probe: availability + any in-flight install. If an install
+    // is running we surface progress instead of the Install now button,
+    // and keep polling until it finishes. Once it does, re-probe so the
+    // option flips to Recommended automatically.
+    ra('GET','/api/depth-runtime/install-status',null,function(ins){
+      if(ins&&ins.running){
+        _pcAdvRenderInstallingNote(ins);
+        _pcAdvWatchInstall();
+        return;
+      }
+      _pcAdvProbeZoe();
+    });
+    return;
+  }
+}
+
+function _pcAdvProbeZoe(){
     ra('GET','/api/space/scan/zoedepth',null,function(r){
       var noteEl=document.querySelector('.pcadv-zoe-note');
       var opt=document.getElementById('pcadv-opt-zoe');
@@ -639,13 +656,43 @@ function _pcAdvRefresh(){
         opt.style.opacity='.45';
       }
     });
-  }
+}
+
+function _pcAdvRenderInstallingNote(ins){
+  var noteEl=document.querySelector('.pcadv-zoe-note');
+  var opt=document.getElementById('pcadv-opt-zoe');
+  if(!opt||!noteEl)return;
+  var pct=Math.round(100*(ins.progress||0));
+  noteEl.innerHTML='<span style="color:#60a5fa">installing '+pct+'% — '+escapeHtml(ins.phase||'working')+'</span> '
+    +'<button type="button" class="btn btn-nav" style="margin-left:.4em;padding:.1em .6em;font-size:.85em"'
+    +' onclick="event.preventDefault();event.stopPropagation();_depthRuntimeOpenProgress()">Details</button>';
+  var zoeRadio=opt.querySelector('input[type=radio]');
+  if(zoeRadio)zoeRadio.disabled=true;
+  opt.style.opacity='.7';
+}
+
+// Poll install-status while the card is visible. Stops when the install
+// finishes (success → re-probe so Recommended flips; failure → show reason).
+function _pcAdvWatchInstall(){
+  ra('GET','/api/depth-runtime/install-status',null,function(ins){
+    if(ins&&ins.running){
+      _pcAdvRenderInstallingNote(ins);
+      setTimeout(_pcAdvWatchInstall,2000);
+      return;
+    }
+    // Install finished — re-run the availability probe.
+    _pcAdvProbeZoe();
+  });
 }
 var _pcAdvZoeProbed=false;
 
 // #598 — depth-runtime installer modal. Kicks off the background pip/HF
 // download and polls /api/depth-runtime/install-status for progress.
-function _depthRuntimeInstall(force){
+// Two entry points: _depthRuntimeInstall() POSTs then polls;
+// _depthRuntimeOpenProgress() attaches to an already-running install
+// (used when the installer marker triggered it silently or the user
+// clicks Install on a second surface while one is already live).
+function _depthRuntimeOpenProgressModal(){
   var html='<div style="min-width:480px;max-width:560px">'
     +'<h3 style="margin:0 0 .4em 0">Install ZoeDepth runtime</h3>'
     +'<div style="color:#94a3b8;font-size:.85em;margin-bottom:.8em">'
@@ -665,15 +712,31 @@ function _depthRuntimeInstall(force){
   document.getElementById('modal-title').textContent='Depth runtime';
   document.getElementById('modal-body').innerHTML=html;
   document.getElementById('modal').style.display='flex';
+}
+
+function _depthRuntimeInstall(force){
+  _depthRuntimeOpenProgressModal();
   ra('POST','/api/depth-runtime/install',{force:!!force},function(r){
-    if(!r||!r.ok){
-      document.getElementById('dri-phase').textContent='Could not start install';
-      document.getElementById('dri-msg').innerHTML='<span style="color:#ef4444">'+escapeHtml((r&&r.error)||'unknown')+'</span>';
-      document.getElementById('dri-close').disabled=false;
+    if(r&&r.ok){
+      _depthRuntimePoll();
       return;
     }
-    _depthRuntimePoll();
+    // If the server says "already running", just attach to the live job.
+    if(r&&r.error&&/already running/i.test(r.error)){
+      _depthRuntimePoll();
+      return;
+    }
+    document.getElementById('dri-phase').textContent='Could not start install';
+    document.getElementById('dri-msg').innerHTML='<span style="color:#ef4444">'+escapeHtml((r&&r.error)||'unknown')+'</span>';
+    document.getElementById('dri-close').disabled=false;
   });
+}
+
+// Attach the progress modal to a background install already in flight
+// (e.g. triggered by the installer marker on first launch).
+function _depthRuntimeOpenProgress(){
+  _depthRuntimeOpenProgressModal();
+  _depthRuntimePoll();
 }
 
 function _depthRuntimePoll(){

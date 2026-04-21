@@ -39,6 +39,17 @@ import urllib.error
 
 log = logging.getLogger(__name__)
 
+# On Windows the orchestrator exe is built with PyInstaller --windowed
+# (no parent console). When we Popen a console-subsystem python.exe
+# from a windowless parent Windows creates a fresh cmd window for each
+# child — tempting to close, which would abort the install mid-download.
+# CREATE_NO_WINDOW (0x08000000) suppresses that. On non-Windows platforms
+# the flag is an empty dict, so the call becomes a no-op kwarg.
+if sys.platform == "win32":
+    _NO_WINDOW = {"creationflags": 0x08000000}  # CREATE_NO_WINDOW
+else:
+    _NO_WINDOW = {}
+
 # ── Layout ──────────────────────────────────────────────────────────────
 
 def _runtime_root() -> str:
@@ -192,6 +203,7 @@ def _find_host_python() -> str:
             out = subprocess.check_output(
                 [c, "-c", "import sys; print(sys.version_info[:2])"],
                 stderr=subprocess.DEVNULL, timeout=5,
+                **_NO_WINDOW,
             ).decode().strip()
             if "(3," in out:
                 minor = int(out.split(",")[1].strip().rstrip(")"))
@@ -309,7 +321,7 @@ def _install_worker(force: bool):
         _phase("manifest", "Writing manifest...", 0.99)
         py_ver = subprocess.check_output(
             [p["python_exe"], "-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"],
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, **_NO_WINDOW,
         ).decode().strip()
         manifest = {
             "schemaVersion": 1,
@@ -348,6 +360,7 @@ def _run(cmd, cwd=None, heavy=False, progress_base=0.0, progress_span=0.0, env_e
             cmd, cwd=cwd, env=env,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
+            **_NO_WINDOW,
         )
     except FileNotFoundError as e:
         raise RuntimeError(f"command not found: {cmd[0]}: {e}")
@@ -433,6 +446,7 @@ def ensure_running(timeout_s: float = 30.0) -> int:
             cwd=p["runtime_dir"], env=env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
+            **_NO_WINDOW,
         )
 
         # Read the first line from stdout — must be "PORT=<n>"

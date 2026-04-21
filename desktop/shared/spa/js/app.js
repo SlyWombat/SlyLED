@@ -979,3 +979,15 @@ ra('GET','/api/settings',null,function(d){
   applyDarkMode(!d||d.darkMode!==0);
 });
 ra('GET','/api/project/name',null,function(d){if(d&&d.name)_projUpdateName(d.name);});
+
+// #598 — if the Windows installer dropped the depth.install-requested
+// marker, the orchestrator kicks off the install silently at boot.
+// Pop the progress modal once per session so the user actually sees
+// the 2 GB download happening instead of a silent 5-minute wait.
+var _depthRuntimeBootShown=false;
+ra('GET','/api/depth-runtime/install-status',null,function(ins){
+  if(ins&&ins.running&&!_depthRuntimeBootShown&&typeof _depthRuntimeOpenProgress==='function'){
+    _depthRuntimeBootShown=true;
+    _depthRuntimeOpenProgress();
+  }
+});
