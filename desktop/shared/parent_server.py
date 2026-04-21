@@ -4230,6 +4230,53 @@ _point_cloud = _load("pointcloud", None)
 _stage_surfaces_cache = {"key": None, "value": None}
 
 
+def _objects_as_obstacles():
+    """Convert user-placed Objects to obstacle dicts (#605 pillar gap).
+
+    Monocular depth models miss textureless structures (white pillars,
+    blank walls, glossy glass). The surveyed markers + auto-Z-alignment
+    (#599) fix the scale prior but not the coverage gap — a pillar
+    ZoeDepth can't see won't appear in `surface_analyzer.obstacles` no
+    matter how tightly we align the cloud. The user's escape hatch is
+    to place the obstacle manually as an Object in the Layout tab.
+
+    This helper maps such Objects into the same obstacle-dict shape
+    `surface_analyzer._cluster_obstacles` produces, so `ray_surface_
+    intersect` + `pick_calibration_targets` can consume them uniformly.
+
+    Inclusion rule — must be a structural object:
+      - `objectType in {prop, floor, wall, pillar, obstacle}`
+      - `transform.scale` has non-zero X, Y, Z (a point object with
+        zero extents has no surface to intersect).
+
+    Size convention matches `_cluster_obstacles`: `[w (X), h (Z), d (Y)]`.
+    """
+    out = []
+    structural = {"prop", "pillar", "obstacle", "wall", "floor"}
+    for o in _objects:
+        otype = o.get("objectType") or "custom"
+        if otype not in structural:
+            continue
+        tr = o.get("transform") or {}
+        pos = tr.get("pos")
+        scale = tr.get("scale")
+        if not pos or not scale or len(pos) < 3 or len(scale) < 3:
+            continue
+        w = float(scale[0] or 0)
+        h = float(scale[1] or 0)  # Z-extent (height)
+        d = float(scale[2] or 0)  # Y-extent (depth)
+        if w <= 0 or h <= 0 or d <= 0:
+            continue
+        out.append({
+            "pos": [float(pos[0]), float(pos[1]), float(pos[2])],
+            "size": [w, h, d],
+            "label": otype,
+            "source": f"object:{o.get('id')}",
+            "objectName": o.get("name"),
+        })
+    return out
+
+
 def _get_stage_geometry():
     """Return a dict of structural surfaces for calibration (#496).
 
@@ -4238,6 +4285,12 @@ def _get_stage_geometry():
          latest scan. Produces floor Z (not assumed 0), wall normals,
          obstacle clusters. Cached until the point cloud changes.
       2. Layout box — synthetic floor at Z=0 + 4 walls from stage w/d/h.
+
+    Either path has user-placed structural Objects (pillars, props,
+    walls) appended to its `obstacles` list — the cloud misses
+    textureless columns, so the operator's manual box is the only way
+    to tell the beam-solver "there's a thing here." See
+    `_objects_as_obstacles` for the schema translation.
 
     Consumers (ray_surface_intersect, target selection) accept either
     form so the fallback is safe.
@@ -4258,6 +4311,10 @@ def _get_stage_geometry():
             from surface_analyzer import analyze_surfaces
             surfaces = analyze_surfaces(pc["points"]) or {}
             surfaces["source"] = "pointcloud"
+            # Append user-placed structural objects (#605 pillar gap).
+            extras = _objects_as_obstacles()
+            if extras:
+                surfaces.setdefault("obstacles", []).extend(extras)
             _stage_surfaces_cache = {"key": key, "value": surfaces}
             return surfaces
         except Exception as e:
@@ -4280,6 +4337,11 @@ def _get_stage_geometry():
         "stage": {"w": sw, "d": sd, "h": sh},
         "source": "layout-box",
     }
+    # Still honour user-placed structural objects even when there is no
+    # point cloud — the layout-box fallback is just the room shell.
+    extras = _objects_as_obstacles()
+    if extras:
+        synthetic["obstacles"] = extras
     return synthetic
 
 
