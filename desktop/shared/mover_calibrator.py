@@ -572,7 +572,8 @@ def converge_on_stage_target(bridge_ip, camera_ip, mover_addr, cam_idx, color,
 
 def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                          seed_pan=None, seed_tilt=None, profile=None,
-                         coarse_steps=4, confirm_nudge_delta=0.02):
+                         coarse_steps=4, confirm_nudge_delta=0.02,
+                         progress_cb=None):
     """Coarse-to-fine discovery: sample a sparse `coarse_steps × coarse_
     steps` grid across pan/tilt ∈ [0, 1] first, then confirm any hit
     with a small nudge (rejects reflections).
@@ -663,6 +664,14 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     try:
         for idx, (pan, tilt) in enumerate(grid):
             _check_cancel()
+            if progress_cb:
+                try:
+                    progress_cb({"stage": "grid-probe",
+                                  "probe": idx + 1,
+                                  "total": len(grid),
+                                  "pan": pan, "tilt": tilt})
+                except Exception:
+                    pass
             # Use flash detection (beam ON → OFF diff) rather than
             # color-filter detection — the latter fails when the
             # fixture's actual beam colour differs from the requested
@@ -685,6 +694,14 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
             log.info("battleship_discover: coarse HIT %d/%d "
                      "pan=%.3f tilt=%.3f px=(%d,%d) — confirming",
                      idx + 1, len(grid), pan, tilt, px0, py0)
+            if progress_cb:
+                try:
+                    progress_cb({"stage": "beam-found",
+                                  "probe": idx + 1, "total": len(grid),
+                                  "pan": pan, "tilt": tilt,
+                                  "pixelX": int(px0), "pixelY": int(py0)})
+                except Exception:
+                    pass
             pan_shift, tilt_shift = _confirm(pan, tilt, px0, py0)
             if pan_shift > 8 or tilt_shift > 8:
                 log.info("battleship_discover: CONFIRMED at probe %d/%d "

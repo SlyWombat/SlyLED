@@ -3325,11 +3325,31 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
     _mcal_log(job, f"Camera sees markers {usable} of {sorted(reg_by_id.keys())}")
 
     # Phase 1 — battleship discovery
-    job["phase"] = "discovery"; job["progress"] = 10
+    job["phase"] = "battleship"; job["progress"] = 10
+    job["message"] = "Searching for beam (4×4 coarse grid)"
     _mcal_log(job, "Battleship discovery (4×4 coarse grid + confirm nudge)")
+
+    def _discovery_progress(ev):
+        stage = ev.get("stage")
+        if stage == "grid-probe":
+            probe = ev.get("probe"); total = ev.get("total", 16)
+            # 10% → 25% progress band for discovery
+            job["progress"] = int(10 + 15 * (probe / max(total, 1)))
+            job["message"] = (f"Grid probe {probe}/{total} "
+                              f"pan={ev.get('pan',0):.2f} "
+                              f"tilt={ev.get('tilt',0):.2f}")
+        elif stage == "beam-found":
+            job["phase"] = "confirming"; job["progress"] = 25
+            job["message"] = (f"Beam found at probe {ev.get('probe')}/"
+                              f"{ev.get('total')} — confirming with nudge")
+            _mcal_log(job, f"Beam candidate at probe {ev.get('probe')}, "
+                           f"pixel ({ev.get('pixelX')},{ev.get('pixelY')}) "
+                           f"— verifying with pan/tilt nudge")
+
     discovered = _mcal.battleship_discover(
         bridge_ip, cam_ip, addr, cam_idx, mover_color,
         profile=prof_info,
+        progress_cb=_discovery_progress,
     )
     if discovered is None:
         job["error"] = ("Battleship discovery found no beam. Check "

@@ -1175,8 +1175,9 @@ function _moverCalAutoStart(){
   h+='</select>';
   h+='<label style="color:#94a3b8;margin:0">Method:</label>';
   h+='<select id="mcal-mode" style="font-size:.82em;padding:2px 4px" onchange="_moverCalModeChanged()">';
-  h+='<option value="legacy" selected>Legacy BFS (broad sampling)</option>';
-  h+='<option value="v2">v2 target-driven (#499, requires camera ArUco cal)</option>';
+  h+='<option value="markers" selected>Markers — point at surveyed ArUco (recommended, #610)</option>';
+  h+='<option value="legacy">Legacy BFS (broad sampling, no markers needed)</option>';
+  h+='<option value="v2">v2 target-driven (#499, requires stage-map homography)</option>';
   h+='</select>';
   h+='<label style="color:#94a3b8;margin:0">Warm-up:</label>';
   h+='<label style="color:#e2e8f0;font-size:.8em;margin:0"><input type="checkbox" id="mcal-warmup" style="margin-right:.3em">Sweep pan/tilt for 30s before sampling (thermal settle — #513)</label>';
@@ -1552,9 +1553,13 @@ function _moverCalPoll(){
       starting:'Starting...',
       warmup:'Warming up fixture (thermal settle)...',
       discovery:'Discovering beam...',
+      // #610 markers-mode phases — finer-grained than the legacy BFS
+      // so the operator sees exactly where in the state machine we are.
+      battleship:'Searching for beam (battleship grid)...',
+      confirming:'Confirming beam with pan/tilt nudge...',
       mapping:'Mapping visible region...',
-      sampling:'Sampling target points...',
-      fitting:'Running Levenberg-Marquardt fit...',
+      sampling:'Nudging beam to known markers...',
+      fitting:'Fitting DMX → stage model...',
       verification:'Verifying fit on held-out points...',
       grid:'Building interpolation grid...',
       complete:'Complete'
