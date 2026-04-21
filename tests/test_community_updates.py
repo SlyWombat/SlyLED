@@ -162,11 +162,122 @@ def test_check_updates_empty_when_no_tracked_profiles():
         lib._profiles.update(snapshot)
 
 
+def test_prepare_payload_strips_all_local_bookkeeping():
+    """#605 — _prepare_community_payload must drop builtin, _community,
+    communityDownloads, communityUploadTs, communityChannelHash so they
+    don't waste bytes against the server ceiling."""
+    lib = parent_server._profile_lib
+    snapshot = dict(lib._profiles)
+    try:
+        pid = "_605_strip_test"
+        lib._profiles[pid] = {
+            "id": pid,
+            "name": "Strip Test",
+            "manufacturer": "ACME",
+            "category": "par",
+            "channelCount": 1,
+            "channels": [{"offset": 0, "type": "dimmer", "name": "D"}],
+            # Fields that must NOT appear in the outbound payload.
+            "builtin": False,
+            "_community": {"slug": pid, "channelHash": "xx",
+                            "syncedAt": 123, "uploadTs": "2026-04-01"},
+            "communityDownloads": 42,
+            "communityUploadTs": "2026-04-01 12:00:00",
+            "communityChannelHash": "abcdef",
+        }
+        p, err = parent_server._prepare_community_payload(pid)
+        _assert(err is None, f"prepare returned error: {err}")
+        for k in ("builtin", "_community", "communityDownloads",
+                   "communityUploadTs", "communityChannelHash"):
+            _assert(k not in p, f"{k} stripped from payload (found: {p.get(k)!r})")
+        # Required fields survive.
+        _assert(p.get("name") == "Strip Test", "name preserved")
+        _assert(p.get("manufacturer") == "ACME", "manufacturer preserved")
+        _assert(p.get("channelCount") == 1, "channelCount preserved")
+    finally:
+        lib._profiles.clear()
+        lib._profiles.update(snapshot)
+
+
+def test_payload_size_info_matches_wire_bytes():
+    """#605 — size-info helper must count the framed `{profile: p}`
+    payload the same way the HTTP call serializes it. Otherwise the
+    pre-flight check disagrees with reality."""
+    import json as _json
+    p = {"id": "x", "name": "Size Test", "channels": []}
+    info = parent_server._community_payload_size_info(p)
+    wire = _json.dumps({"profile": p}, separators=(",", ":")).encode("utf-8")
+    _assert(info["bytes"] == len(wire),
+            f"bytes = len(wire) (got {info['bytes']} vs {len(wire)})")
+    _assert(info["ceiling"] == 32768, f"ceiling=32768 (got {info['ceiling']})")
+    _assert(info["headroom"] == info["ceiling"] - info["bytes"],
+            "headroom = ceiling - bytes")
+    _assert(info["nearLimit"] is False, "small profile is not near limit")
+
+
+def test_payload_size_info_flags_near_limit():
+    """#605 — nearLimit flips true at ≥95% of ceiling so the SPA can
+    flag a profile that's about to bounce."""
+    # Build a payload that's >95% of ceiling by padding a label field.
+    ceiling = parent_server._COMMUNITY_UPLOAD_CEILING
+    pad = "x" * int(ceiling * 0.96)  # ~96% via a single big field
+    p = {"id": "big", "name": "Big", "channels": [], "notes": pad}
+    info = parent_server._community_payload_size_info(p)
+    _assert(info["bytes"] >= int(ceiling * 0.95),
+            f"synthetic payload large enough ({info['bytes']})")
+    _assert(info["nearLimit"] is True,
+            f"nearLimit=True when ≥95% of ceiling (got {info['nearLimit']})")
+
+
+def test_upload_route_rejects_oversize_payload_preflight():
+    """#605 — when a profile exceeds the ceiling, the route returns 413
+    with payloadBytes/ceilingBytes before attempting the HTTP round-trip.
+    Monkey-patches community_client.upload to fail the test if it's
+    called — the pre-flight must short-circuit."""
+    import community_client as _cc
+    lib = parent_server._profile_lib
+    snapshot = dict(lib._profiles)
+    real_upload = _cc.upload
+    called = {"upload": False}
+    def _trap(*a, **kw):
+        called["upload"] = True
+        return {"ok": True}
+    _cc.upload = _trap
+    try:
+        pid = "_605_oversize"
+        ceiling = parent_server._COMMUNITY_UPLOAD_CEILING
+        lib._profiles[pid] = {
+            "id": pid, "name": "Big",
+            "channels": [{"offset": 0, "type": "dimmer", "name": "D"}],
+            "notes": "x" * (ceiling + 500),  # guarantee oversize
+        }
+        with app.test_client() as c:
+            r = c.post("/api/dmx-profiles/community/upload",
+                       json={"profileId": pid})
+            _assert(r.status_code == 413,
+                    f"413 on oversize (got {r.status_code})")
+            body = r.get_json() or {}
+            _assert(body.get("payloadBytes") > ceiling,
+                    f"payloadBytes > ceiling ({body.get('payloadBytes')})")
+            _assert(body.get("ceilingBytes") == ceiling,
+                    f"ceilingBytes reported")
+            _assert(called["upload"] is False,
+                    "pre-flight short-circuited — HTTP upload NOT called")
+    finally:
+        _cc.upload = real_upload
+        lib._profiles.clear()
+        lib._profiles.update(snapshot)
+
+
 ALL = [
     test_stamp_moves_response_fields_into_community_block,
     test_stamp_no_op_when_no_provenance_fields,
     test_check_updates_route_passes_through_community_client,
     test_check_updates_empty_when_no_tracked_profiles,
+    test_prepare_payload_strips_all_local_bookkeeping,
+    test_payload_size_info_matches_wire_bytes,
+    test_payload_size_info_flags_near_limit,
+    test_upload_route_rejects_oversize_payload_preflight,
 ]
 
 

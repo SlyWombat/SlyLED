@@ -6783,19 +6783,66 @@ def api_community_stats():
     import community_client as cc
     return jsonify(cc.stats())
 
+#: Fields the community API either does not understand or regenerates
+# server-side. They only exist on the local record for bookkeeping and
+# shipping them on upload wastes bytes against the size ceiling. #605.
+_COMMUNITY_UPLOAD_STRIP = frozenset({
+    "builtin",              # local library's built-in marker
+    "_community",           # local sync state (channelHash/slug/syncedAt/uploadTs)
+    "communityDownloads",   # server-maintained counter
+    "communityUploadTs",    # server-authoritative; stamped into _community on download
+    "communityChannelHash", # server-computed hash; stamped into _community on download
+})
+
+#: Byte headroom below which we warn the operator. At 5% of ceiling a
+# small future edit is likely to bounce — worth flagging before the
+# round-trip fails opaquely. Kept as a module-level constant so #606
+# (server-side limit raise) can bump the ceiling and this stays in sync.
+_COMMUNITY_UPLOAD_CEILING = 32768  # #606 raised from 8192
+_COMMUNITY_UPLOAD_WARN_FRACTION = 0.95  # warn when ≥95% of ceiling
+
+
 def _prepare_community_payload(profile_id):
-    """Shared payload builder for community upload + update routes."""
+    """Shared payload builder for community upload + update routes.
+
+    Strips local bookkeeping fields (#605) so the outbound JSON carries
+    only what the server actually persists. Returns `(payload, None)`
+    on success or `(None, (msg, status))` on error.
+    """
     profile = _profile_lib.get_profile(profile_id)
     if not profile:
         return None, ("Profile not found locally", 404)
     import re
-    p = {k: v for k, v in profile.items() if k != "builtin"}
+    p = {k: v for k, v in profile.items() if k not in _COMMUNITY_UPLOAD_STRIP}
     slug = re.sub(r'[^a-z0-9\-]', '-', p.get("id", "").lower())
     slug = re.sub(r'-+', '-', slug).strip('-')[:128]
     if not slug:
         return None, ("Profile ID cannot be converted to a valid slug", 400)
     p["id"] = slug
     return p, None
+
+
+def _community_payload_size_info(p):
+    """Return byte-size telemetry for an outbound payload (#605).
+
+    Mirrors how `community_client.upload/update` frames the request:
+    `{"profile": p}` serialized with the same separators the Python
+    stdlib JSON defaults to. Lets the Flask route report "your profile
+    is N bytes, ceiling is M" before the HTTP round-trip, so rejections
+    don't look mysterious.
+
+    Returned keys: `bytes`, `ceiling`, `headroom`, `nearLimit` (bool).
+    """
+    wire = json.dumps({"profile": p}, separators=(",", ":"))
+    size = len(wire.encode("utf-8"))
+    headroom = _COMMUNITY_UPLOAD_CEILING - size
+    near = size >= int(_COMMUNITY_UPLOAD_CEILING * _COMMUNITY_UPLOAD_WARN_FRACTION)
+    return {
+        "bytes": size,
+        "ceiling": _COMMUNITY_UPLOAD_CEILING,
+        "headroom": headroom,
+        "nearLimit": near,
+    }
 
 
 @app.post("/api/dmx-profiles/community/upload")
@@ -6814,6 +6861,16 @@ def api_community_upload():
     if err:
         msg, code = err
         return jsonify(ok=False, err=msg), code
+    # #605 — surface payload size so operators see "7994 / 32768 bytes"
+    # instead of a generic "upload failed" when the server rejects.
+    size = _community_payload_size_info(p)
+    if size["headroom"] < 0:
+        return jsonify(ok=False,
+                        err=f"Profile too large ({size['bytes']} bytes, "
+                            f"ceiling {size['ceiling']}). Trim capability "
+                            f"annotations or open an issue to raise the limit.",
+                        payloadBytes=size["bytes"],
+                        ceilingBytes=size["ceiling"]), 413
     result = cc.upload(p)
     # Fall through to `update` when the server rejected the insert
     # because the slug already exists and the caller asked for overwrite.
@@ -6822,7 +6879,12 @@ def api_community_upload():
         if "already exists" in err_msg:
             log.info("Community upload '%s': slug exists → retrying as update", p["id"])
             result = cc.update(p)
-    log.info("Community upload '%s' (slug '%s'): %s", profile_id, p["id"], result)
+    log.info("Community upload '%s' (slug '%s'): %d bytes → %s",
+             profile_id, p["id"], size["bytes"], result)
+    if isinstance(result, dict):
+        result.setdefault("payloadBytes", size["bytes"])
+        result.setdefault("ceilingBytes", size["ceiling"])
+        result.setdefault("nearLimit", size["nearLimit"])
     return jsonify(result)
 
 
@@ -6860,8 +6922,21 @@ def api_community_update():
     if err:
         msg, code = err
         return jsonify(ok=False, err=msg), code
+    size = _community_payload_size_info(p)
+    if size["headroom"] < 0:
+        return jsonify(ok=False,
+                        err=f"Profile too large ({size['bytes']} bytes, "
+                            f"ceiling {size['ceiling']}). Trim capability "
+                            f"annotations or open an issue to raise the limit.",
+                        payloadBytes=size["bytes"],
+                        ceilingBytes=size["ceiling"]), 413
     result = cc.update(p)
-    log.info("Community update '%s' (slug '%s'): %s", profile_id, p["id"], result)
+    log.info("Community update '%s' (slug '%s'): %d bytes → %s",
+             profile_id, p["id"], size["bytes"], result)
+    if isinstance(result, dict):
+        result.setdefault("payloadBytes", size["bytes"])
+        result.setdefault("ceilingBytes", size["ceiling"])
+        result.setdefault("nearLimit", size["nearLimit"])
     return jsonify(result)
 
 def _stamp_community_provenance(profile, slug):
