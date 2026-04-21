@@ -184,7 +184,16 @@ function _depthRuntimeTest(){
         +(r.depthMeanMm||'?')+') · runner port '+(r.runnerPort||'?');
       _depthRuntimeRefresh();
     }else{
-      out.innerHTML='<span style="color:#ef4444">✗ Test failed:</span> '+escapeHtml(r.err||('HTTP '+x.status));
+      var err=r.err||('HTTP '+x.status);
+      var hint='';
+      // Dependency-level failure (wrong transformers version, missing
+      // torch, etc.) is only recoverable by wiping and reinstalling.
+      if(/cannot import name|model load failed|module .*not found|No module named/i.test(err)){
+        hint=' <button class="btn btn-nav" style="margin-left:.4em;padding:.1em .6em;font-size:.85em" onclick="_depthRuntimeInstall(true)">Reinstall</button>'
+          +'<div style="color:#94a3b8;font-size:.78em;margin-top:.25em">This looks like a dependency mismatch in the existing runtime. Reinstall will wipe '
+          +'%LOCALAPPDATA%\\SlyLED\\runtimes\\depth and pull fresh pinned versions.</div>';
+      }
+      out.innerHTML='<span style="color:#ef4444">✗ Test failed:</span> '+escapeHtml(err)+hint;
     }
   };
   x.ontimeout=function(){

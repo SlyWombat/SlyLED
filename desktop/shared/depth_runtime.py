@@ -84,16 +84,24 @@ def paths() -> dict:
 # ── Pinned dependency set ────────────────────────────────────────────────
 # CPU-only wheels keep the download small and portable; GPU support is a
 # follow-up (#598 defers CUDA/MPS detection).
+#
+# transformers ≥4.41 is required: ZoeDepthForDepthEstimation was added in
+# 4.39 but 4.41 is the first line where the Windows wheel set is stable
+# against current tokenizers / safetensors / huggingface-hub. We widen
+# the bound so pip's resolver can pick a compatible set instead of
+# failing silently.
 _PIP_INDEX = "https://download.pytorch.org/whl/cpu"
+_TORCH_PIN = "torch==2.2.2"
 _PIP_PINS = [
-    "torch==2.2.2",
-    "numpy<2",          # transformers 4.40 is not numpy-2 clean yet
+    _TORCH_PIN,
+    "numpy<2",
     "Pillow>=9",
-    "transformers==4.41.2",
+    "transformers>=4.45,<5",
     "tokenizers>=0.19",
     "safetensors>=0.4",
     "huggingface-hub>=0.23",
     "timm>=0.9",
+    "accelerate>=0.30",
     "flask>=3.0",
 ]
 
@@ -315,20 +323,59 @@ def _install_worker(force: bool):
              heavy=True, progress_base=0.78, progress_span=0.18,
              env_extra={"HF_HOME": p["hf_home"]})
 
-        _phase("runner", "Installing runner script...", 0.97)
+        _phase("runner", "Installing runner script...", 0.95)
         shutil.copy2(_source_runner_py(), p["runner_py"])
+
+        _phase("verify", "Verifying transformers has ZoeDepth...", 0.97)
+        # Fail loudly if the pinned version resolved to something that
+        # doesn't expose ZoeDepthForDepthEstimation. Previously: silent
+        # success → user hit "cannot import name" at inference time.
+        verify_script = (
+            "import sys, json\n"
+            "try:\n"
+            "    import torch, transformers\n"
+            "    from transformers import ZoeDepthForDepthEstimation, AutoImageProcessor\n"
+            "    out = {'torch': torch.__version__, 'transformers': transformers.__version__}\n"
+            "    sys.stdout.write('VERIFY_OK ' + json.dumps(out))\n"
+            "except Exception as e:\n"
+            "    sys.stderr.write(str(e) + '\\n')\n"
+            "    sys.exit(2)\n"
+        )
+        try:
+            vout = subprocess.check_output(
+                [p["python_exe"], "-c", verify_script],
+                stderr=subprocess.PIPE, timeout=60, **_NO_WINDOW,
+            ).decode().strip()
+            _log(vout)
+        except subprocess.CalledProcessError as e:
+            err = (e.stderr or b"").decode("utf-8", errors="replace").strip()
+            raise RuntimeError(
+                f"post-install verification failed: {err or 'see log above'}. "
+                "The installed transformers package does not expose "
+                "ZoeDepthForDepthEstimation — pin conflict likely."
+            )
 
         _phase("manifest", "Writing manifest...", 0.99)
         py_ver = subprocess.check_output(
             [p["python_exe"], "-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"],
             stderr=subprocess.DEVNULL, **_NO_WINDOW,
         ).decode().strip()
+        # pip freeze into the manifest so the user can see exactly what
+        # resolved when something breaks later.
+        try:
+            freeze = subprocess.check_output(
+                [p["python_exe"], "-m", "pip", "freeze"],
+                stderr=subprocess.DEVNULL, timeout=30, **_NO_WINDOW,
+            ).decode().strip().splitlines()
+        except Exception:
+            freeze = []
         manifest = {
             "schemaVersion": 1,
             "model": "Intel/zoedepth-nyu-kitti",
             "installedAt": time.time(),
             "pythonVersion": py_ver,
             "pins": _PIP_PINS,
+            "resolved": freeze,
         }
         with open(p["manifest"], "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2)
