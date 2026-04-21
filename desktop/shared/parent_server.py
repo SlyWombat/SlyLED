@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.61"
+VERSION = "1.5.62"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -5488,9 +5488,24 @@ def api_depth_runtime_install_status():
 
 @app.delete("/api/depth-runtime")
 def api_depth_runtime_uninstall():
+    """Remove the runtime. Pass ?includeWeights=1 to also wipe the
+    1.3 GB model cache (default: preserve weights so a subsequent
+    Reinstall is fast)."""
     if _depth_runtime is None:
         return jsonify(ok=False, err="depth_runtime module not bundled"), 500
-    return jsonify(**_depth_runtime.uninstall())
+    inc = request.args.get("includeWeights", "0") in ("1", "true", "yes")
+    return jsonify(**_depth_runtime.uninstall(include_weights=inc))
+
+
+@app.post("/api/depth-runtime/verify")
+def api_depth_runtime_verify():
+    """Lightweight check of the currently-installed runtime. Runs
+    pip check + the ZoeDepth import probe without reinstalling or
+    spawning the runner. Used by the Check Install button — fast
+    (a couple seconds) and doesn't touch weights."""
+    if _depth_runtime is None:
+        return jsonify(ok=False, err="depth_runtime module not bundled"), 500
+    return jsonify(**_depth_runtime.verify())
 
 
 @app.post("/api/depth-runtime/test")
@@ -6480,7 +6495,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.61" from camera_server.py source text."""
+    """Extract VERSION = "1.5.62" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None

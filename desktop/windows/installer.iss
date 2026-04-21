@@ -3,7 +3,7 @@
 ; Or:    run build.bat — it calls iscc automatically if available.
 
 #define AppName      "SlyLED Orchestrator"
-#define AppVersion   "1.5.61"
+#define AppVersion   "1.5.62"
 #define AppPublisher "Electric RV Corporation"
 #define AppExeName   "SlyLED.exe"
 ; Unique GUID for this app — keep fixed across releases so updates overwrite
@@ -134,12 +134,20 @@ begin
     // #598 — depth runtime lives in %LOCALAPPDATA%\SlyLED\runtimes\depth
     // (not {userappdata} which is roaming). Offer to remove it separately
     // since a reinstall would otherwise pick up the 2+ GB of stale weights.
+    // Weights live in a sibling dir so Reinstall can preserve them.
+    // On full uninstall we offer to remove both together.
     DepthDir := ExpandConstant('{localappdata}\SlyLED\runtimes\depth');
-    if DirExists(DepthDir) then begin
+    if DirExists(DepthDir)
+       or DirExists(ExpandConstant('{localappdata}\SlyLED\runtimes\depth-weights')) then begin
       if MsgBox(
-        'Remove the ZoeDepth runtime (~2 GB) from:'#13#10 + DepthDir + '?',
-        mbConfirmation, MB_YESNO) = IDYES then
-        DelTree(DepthDir, True, True, True);
+        'Remove the ZoeDepth runtime + cached weights (~2 GB) from:'#13#10
+        + ExpandConstant('{localappdata}\SlyLED\runtimes\') + '?',
+        mbConfirmation, MB_YESNO) = IDYES then begin
+        if DirExists(DepthDir) then
+          DelTree(DepthDir, True, True, True);
+        if DirExists(ExpandConstant('{localappdata}\SlyLED\runtimes\depth-weights')) then
+          DelTree(ExpandConstant('{localappdata}\SlyLED\runtimes\depth-weights'), True, True, True);
+      end;
     end;
     DataDir := ExpandConstant('{userappdata}\SlyLED');
     if DirExists(DataDir) then begin

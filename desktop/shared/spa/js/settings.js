@@ -117,12 +117,18 @@ function _depthRuntimeRefresh(){
       }
       if(r.installed){
         var running=r.runnerRunning?' <span style="color:#34d399">· runner live on port '+(r.runnerPort||'?')+'</span>':'';
+        // Size: show runtime venv + weights separately so the user
+        // knows Reinstall skips the 1.3 GB weight redownload.
+        var sizeBits=escapeHtml(String(r.sizeMb||'?'))+' MB venv';
+        if(r.weightsMb)sizeBits+=' + '+escapeHtml(String(r.weightsMb))+' MB weights (cached)';
         box.innerHTML='<span style="color:#34d399">Installed</span> · '
-          +escapeHtml(String(r.sizeMb||'?'))+' MB · '
+          +sizeBits+' · '
           +'Python '+escapeHtml(r.pythonVersion||'?')+' · '
           +escapeHtml(r.model||'')+running;
         if(iBtn)iBtn.style.display='none';
+        var cBtn=document.getElementById('depth-rt-check');
         var tBtn=document.getElementById('depth-rt-test');
+        if(cBtn)cBtn.style.display='inline-block';
         if(tBtn)tBtn.style.display='inline-block';
         if(rBtn)rBtn.style.display='inline-block';
         if(uBtn)uBtn.style.display='inline-block';
@@ -134,8 +140,9 @@ function _depthRuntimeRefresh(){
           box.innerHTML='<span style="color:#f59e0b">Not installed</span> · click Install for ~2 GB one-time download';
         }
         if(iBtn)iBtn.style.display='inline-block';
-        var tBtn2=document.getElementById('depth-rt-test');
-        if(tBtn2)tBtn2.style.display='none';
+        ['depth-rt-check','depth-rt-test'].forEach(function(id){
+          var b=document.getElementById(id);if(b)b.style.display='none';
+        });
         if(rBtn)rBtn.style.display='none';
         if(uBtn)uBtn.style.display='none';
       }
@@ -160,8 +167,33 @@ function _depthRuntimeRenderRunning(ins){
     +'</div>'
     +(msg?'<div style="color:#94a3b8;font-size:.78em;margin-top:.25em">'+msg+'</div>':'');
   // Hide the action buttons while running
-  ['depth-rt-install','depth-rt-test','depth-rt-reinstall','depth-rt-uninstall'].forEach(function(id){
+  ['depth-rt-install','depth-rt-check','depth-rt-test','depth-rt-reinstall','depth-rt-uninstall'].forEach(function(id){
     var b=document.getElementById(id);if(b)b.style.display='none';
+  });
+}
+
+function _depthRuntimeCheck(){
+  var btn=document.getElementById('depth-rt-check');
+  var out=document.getElementById('depth-rt-test-out');
+  if(btn){btn.disabled=true;btn.textContent='Checking...';}
+  if(out){out.style.display='block';out.innerHTML='<span style="color:#94a3b8">Running pip check + import probe...</span>';}
+  ra('POST','/api/depth-runtime/verify',{},function(r){
+    if(btn){btn.disabled=false;btn.textContent='Check Install';}
+    if(!out)return;
+    if(!r){out.innerHTML='<span style="color:#ef4444">✗ Check failed (no response)</span>';return;}
+    if(r.ok){
+      var v=r.versions||{};
+      out.innerHTML='<span style="color:#34d399">✓ Install looks healthy</span> · torch '
+        +escapeHtml(v.torch||'?')+' · transformers '+escapeHtml(v.transformers||'?')
+        +(r.pipCheckOutput?' · <span style="color:#94a3b8">'+escapeHtml(r.pipCheckOutput.split('\n')[0])+'</span>':'');
+    }else{
+      var lines=[];
+      if(!r.pipCheckOk)lines.push('<div><b>pip check:</b> '+escapeHtml((r.pipCheckOutput||'').split('\n')[0]||'failed')+'</div>');
+      if(!r.importOk)lines.push('<div><b>import probe:</b> '+escapeHtml(r.importError||'unknown')+'</div>');
+      out.innerHTML='<span style="color:#ef4444">✗ Check failed</span>'+lines.join('')
+        +'<div style="margin-top:.3em"><button class="btn btn-nav" style="padding:.1em .6em;font-size:.85em" onclick="_depthRuntimeInstall(true)">Reinstall</button>'
+        +' <span style="color:#94a3b8;font-size:.78em">Reinstall wipes the venv and re-pulls pinned versions. Weights are preserved.</span></div>';
+    }
   });
 }
 
@@ -208,11 +240,20 @@ function _depthRuntimeTest(){
 }
 
 function _depthRuntimeUninstall(){
-  if(!confirm('Remove the depth runtime? You can reinstall later. Any running cal jobs will fail.'))return;
+  // Two-step: remove venv (keeps weights) or full (wipes weights too).
+  // Default is keep-weights so re-install is fast. Users have to opt
+  // in to the 1.3 GB wipe via the confirm dialog.
+  if(!confirm('Remove the depth runtime? The venv and runner will be deleted. '
+    +'Cached model weights (~1.3 GB) are preserved for faster reinstall. '
+    +'Click OK to proceed.'))return;
+  var includeWeights=confirm('Also wipe the ~1.3 GB cached weights? '
+    +'Click OK to free the disk space (next install re-downloads). '
+    +'Click Cancel to keep the weights cached.');
   var box=document.getElementById('depth-rt-status');
-  if(box)box.innerHTML='<span style="color:#94a3b8">Removing...</span>';
+  if(box)box.innerHTML='<span style="color:#94a3b8">Removing'+(includeWeights?' (including weights)':'')+'...</span>';
   var x=new XMLHttpRequest();
-  x.open('DELETE','/api/depth-runtime',true);
+  var url='/api/depth-runtime'+(includeWeights?'?includeWeights=1':'');
+  x.open('DELETE',url,true);
   x.setRequestHeader('Content-Type','application/json');
   x.onload=function(){
     try{var r=JSON.parse(x.responseText);}catch(e){r=null;}

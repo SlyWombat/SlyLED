@@ -64,6 +64,11 @@ def paths() -> dict:
     root = _runtime_root()
     runtime_dir = os.path.join(root, "depth")
     venv_dir = os.path.join(runtime_dir, "venv")
+    # Weights live in a SIBLING directory so a plain reinstall (wipe
+    # venv, re-pip, re-verify) skips the 1.3 GB weight redownload.
+    # uninstall() by default only clears the runtime_dir. Pass
+    # include_weights=True to also clean up this dir on full removal.
+    weights_dir = os.path.join(root, "depth-weights")
     if sys.platform == "win32":
         py_exe = os.path.join(venv_dir, "Scripts", "python.exe")
         pip_exe = os.path.join(venv_dir, "Scripts", "pip.exe")
@@ -77,7 +82,8 @@ def paths() -> dict:
         "pip_exe": pip_exe,
         "runner_py": os.path.join(runtime_dir, "depth_runner.py"),
         "manifest": os.path.join(runtime_dir, "depth_runtime.json"),
-        "hf_home": os.path.join(runtime_dir, "hf_cache"),
+        "hf_home": weights_dir,
+        "weights_dir": weights_dir,
     }
 
 
@@ -173,15 +179,23 @@ def status() -> dict:
     installed = is_installed()
     manifest = _read_manifest() if installed else {}
     size_mb = None
+    weights_mb = None
     if installed:
         try:
             size_mb = round(_dir_size_bytes(p["runtime_dir"]) / (1024 * 1024), 1)
         except Exception:
             size_mb = None
+    if os.path.isdir(p["weights_dir"]):
+        try:
+            weights_mb = round(_dir_size_bytes(p["weights_dir"]) / (1024 * 1024), 1)
+        except Exception:
+            weights_mb = None
     return {
         "installed": installed,
         "runtimeDir": p["runtime_dir"],
+        "weightsDir": p["weights_dir"],
         "sizeMb": size_mb,
+        "weightsMb": weights_mb,
         "model": manifest.get("model"),
         "installedAt": manifest.get("installedAt"),
         "pythonVersion": manifest.get("pythonVersion"),
@@ -242,22 +256,50 @@ def _source_runner_py() -> str:
     raise FileNotFoundError("depth_runner.py not found in bundle or alongside depth_runtime.py")
 
 
-def uninstall() -> dict:
+def uninstall(include_weights: bool = False) -> dict:
+    """Remove the runtime's venv + runner + manifest.
+
+    By default the 1.3 GB ZoeDepth weights in the sibling
+    `depth-weights` directory are PRESERVED, so a subsequent Reinstall
+    skips the weight download. Pass include_weights=True to wipe
+    those too (used by the full-uninstall path in Inno Setup).
+    """
     stop_runner()
     p = paths()
-    if not os.path.isdir(p["runtime_dir"]):
-        return {"ok": True, "removed": False}
-    try:
-        shutil.rmtree(p["runtime_dir"], ignore_errors=False)
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-    return {"ok": True, "removed": True}
+    removed_runtime = False
+    removed_weights = False
+    if os.path.isdir(p["runtime_dir"]):
+        try:
+            shutil.rmtree(p["runtime_dir"], ignore_errors=False)
+            removed_runtime = True
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    if include_weights and os.path.isdir(p["weights_dir"]):
+        try:
+            shutil.rmtree(p["weights_dir"], ignore_errors=False)
+            removed_weights = True
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    return {"ok": True, "removed": removed_runtime, "removedWeights": removed_weights}
 
 
 def start_install(force: bool = False) -> dict:
+    """Kick off a background install. Returns immediately.
+
+    Serialization: the module-level `_install_lock` + `running` flag
+    guarantee that only one install job runs at a time. If a second
+    caller arrives while one's in flight (e.g. the installer marker
+    fires `start_install()` at boot AND the operator clicks Install
+    in the Settings card a moment later), the second call gets a
+    structured `{"ok": False, "error": "install already running"}`
+    response — NOT a parallel second job. The SPA detects that
+    error message and attaches to the existing progress stream.
+    """
     with _install_lock:
         if _install_state["running"]:
-            return {"ok": False, "error": "install already running"}
+            return {"ok": False, "error": "install already running",
+                    "phase": _install_state.get("phase"),
+                    "progress": _install_state.get("progress", 0.0)}
         if is_installed() and not force:
             return {"ok": False, "error": "already installed (pass force=true to reinstall)"}
         _install_state.update({
@@ -278,6 +320,77 @@ def start_install(force: bool = False) -> dict:
 
 def install_progress() -> dict:
     return dict(_install_state)
+
+
+def verify() -> dict:
+    """Lightweight sanity check on the currently-installed runtime.
+
+    Runs `pip check` + the same import probe the installer performs,
+    without wiping or reinstalling anything. Intended for the Check
+    Install button on the Settings card — gives a quick yes/no and,
+    on failure, a specific error the operator can use to decide
+    whether a full Reinstall is necessary.
+    """
+    if not is_installed():
+        return {"ok": False, "installed": False, "error": "runtime not installed"}
+    p = paths()
+    # pip check surfaces dependency conflicts that pip install may
+    # have glossed over (e.g. numpy version mismatch between torch
+    # and transformers).
+    pip_check_out = ""
+    pip_check_ok = True
+    try:
+        pip_check_out = subprocess.check_output(
+            [p["python_exe"], "-m", "pip", "check"],
+            stderr=subprocess.STDOUT, timeout=60, **_NO_WINDOW,
+        ).decode("utf-8", errors="replace").strip()
+    except subprocess.CalledProcessError as e:
+        pip_check_ok = False
+        pip_check_out = (e.output or b"").decode("utf-8", errors="replace").strip()
+    except Exception as e:
+        pip_check_ok = False
+        pip_check_out = f"pip check failed to run: {e}"
+
+    # Now the same import the install step does.
+    verify_script = (
+        "import sys, json\n"
+        "try:\n"
+        "    import torch, transformers\n"
+        "    from transformers import ZoeDepthForDepthEstimation, AutoImageProcessor\n"
+        "    print(json.dumps({'torch': torch.__version__, 'transformers': transformers.__version__}))\n"
+        "except Exception as e:\n"
+        "    sys.stderr.write(f'{type(e).__name__}: {e}\\n')\n"
+        "    sys.exit(2)\n"
+    )
+    import_ok = True
+    import_err = None
+    versions = {}
+    try:
+        out = subprocess.check_output(
+            [p["python_exe"], "-c", verify_script],
+            stderr=subprocess.PIPE, timeout=60, **_NO_WINDOW,
+        ).decode("utf-8", errors="replace").strip()
+        try:
+            versions = json.loads(out)
+        except Exception:
+            pass
+    except subprocess.CalledProcessError as e:
+        import_ok = False
+        import_err = (e.stderr or b"").decode("utf-8", errors="replace").strip()
+    except Exception as e:
+        import_ok = False
+        import_err = str(e)
+
+    ok = pip_check_ok and import_ok
+    return {
+        "ok": ok,
+        "installed": True,
+        "pipCheckOk": pip_check_ok,
+        "pipCheckOutput": pip_check_out,
+        "importOk": import_ok,
+        "importError": import_err,
+        "versions": versions,
+    }
 
 
 def _install_worker(force: bool):
@@ -313,7 +426,11 @@ def _install_worker(force: bool):
               *_PIP_PINS],
              cwd=p["runtime_dir"], heavy=True, progress_base=0.15, progress_span=0.60)
 
-        _phase("weights", "Downloading ZoeDepth model weights — ~1.3 GB, one-time...", 0.78)
+        _phase("weights", "Downloading ZoeDepth model weights (or reusing cached ~1.3 GB)...", 0.78)
+        # Weights live in the sibling dir so this step is a no-op on a
+        # preserved cache from a previous install. huggingface_hub sees
+        # the existing snapshot and returns the local path without a
+        # network round-trip.
         os.makedirs(p["hf_home"], exist_ok=True)
         # Pull weights via huggingface_hub inside the venv so the main
         # process never needs transformers. Any HF_HOME override points

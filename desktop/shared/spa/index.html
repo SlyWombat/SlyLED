@@ -471,8 +471,9 @@
       <div id='depth-rt-test-out' style='font-size:.78em;color:#94a3b8;margin-bottom:.4em;display:none'></div>
       <div style='display:flex;gap:.5em;flex-wrap:wrap'>
         <button id='depth-rt-install' class='btn btn-on' onclick='_depthRuntimeInstall()' style='display:none'>Install</button>
+        <button id='depth-rt-check' class='btn btn-nav' onclick='_depthRuntimeCheck()' style='display:none'>Check Install</button>
         <button id='depth-rt-test' class='btn btn-nav' onclick='_depthRuntimeTest()' style='display:none'>Test &amp; Warm Up</button>
-        <button id='depth-rt-reinstall' class='btn btn-nav' onclick='_depthRuntimeInstall(true)' style='display:none'>Reinstall</button>
+        <button id='depth-rt-reinstall' class='btn btn-nav' onclick='_depthRuntimeInstall(true)' style='display:none' title='Re-create venv and reinstall Python packages. Weights (~1.3 GB) are preserved.'>Reinstall</button>
         <button id='depth-rt-uninstall' class='btn' onclick='_depthRuntimeUninstall()' style='display:none;background:#532;color:#fca5a5'>Uninstall</button>
       </div>
     </div>
