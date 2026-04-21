@@ -474,12 +474,20 @@ def ensure_running(timeout_s: float = 30.0) -> int:
             raise RuntimeError("runner did not announce port within timeout")
 
         # Drain remaining stdout in a background thread so the pipe buffer
-        # doesn't fill and block the child
-        def _drain(stream, prefix):
+        # doesn't fill and block the child. Stderr is surfaced at INFO
+        # because that's where tracebacks land when /infer blows up —
+        # seeing them in the orchestrator log is usually how the user
+        # finds out *why* inference failed.
+        def _drain_out(stream):
             for ln in stream:
-                log.debug("[%s] %s", prefix, ln.rstrip())
-        threading.Thread(target=_drain, args=(proc.stdout, "runner-out"), daemon=True).start()
-        threading.Thread(target=_drain, args=(proc.stderr, "runner-err"), daemon=True).start()
+                log.debug("[runner-out] %s", ln.rstrip())
+        def _drain_err(stream):
+            for ln in stream:
+                s = ln.rstrip()
+                if s:
+                    log.info("[runner-err] %s", s)
+        threading.Thread(target=_drain_out, args=(proc.stdout,), daemon=True).start()
+        threading.Thread(target=_drain_err, args=(proc.stderr,), daemon=True).start()
 
         _runner_proc = proc
         _runner_port_val = port
@@ -495,7 +503,14 @@ def ensure_running(timeout_s: float = 30.0) -> int:
 
 
 def infer_jpeg(jpg_bytes: bytes, timeout_s: float = 300.0):
-    """Proxy a JPEG to the runner. Returns (depth_mm ndarray, inference_ms)."""
+    """Proxy a JPEG to the runner. Returns (depth_mm ndarray, inference_ms).
+
+    Raises RuntimeError with a specific message (including the runner's
+    Python exception class + text, not just "HTTP 500") when inference
+    fails on the subprocess side. The runner emits structured JSON for
+    its 500 responses; we unpack that here so the user sees the real
+    problem in the SPA.
+    """
     global _runner_last_use
     port = ensure_running()
     _runner_last_use = time.time()
@@ -505,7 +520,32 @@ def infer_jpeg(jpg_bytes: bytes, timeout_s: float = 300.0):
         headers={"Content-Type": "application/octet-stream"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout_s) as r:
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout_s)
+    except urllib.error.HTTPError as he:
+        body = b""
+        try:
+            body = he.read()
+        except Exception:
+            pass
+        msg = None
+        if body:
+            try:
+                obj = json.loads(body.decode("utf-8", errors="replace"))
+                if isinstance(obj, dict):
+                    msg = obj.get("err") or obj.get("error")
+                    tb = obj.get("traceback")
+                    if tb:
+                        log.warning("depth runner traceback:\n%s", tb)
+            except Exception:
+                msg = body.decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(
+            f"runner HTTP {he.code}: {msg or he.reason or 'unknown error'}"
+        )
+    except urllib.error.URLError as ue:
+        raise RuntimeError(f"runner unreachable: {ue.reason}")
+
+    with resp as r:
         raw = r.read()
         shape = r.headers.get("X-Depth-Shape")
         dtype = r.headers.get("X-Depth-Dtype", "float32")

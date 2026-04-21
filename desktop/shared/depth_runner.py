@@ -95,6 +95,7 @@ def _build_app():
             return jsonify(err="empty body — expected JPEG bytes"), 400
         try:
             import io
+            import traceback
             from PIL import Image
             import numpy as np
             import torch
@@ -104,25 +105,36 @@ def _build_app():
             processor, model, _device = _load_pipeline()
         except Exception as e:
             log.exception("model load failed")
-            return jsonify(err=f"model load failed: {e}"), 500
+            return jsonify(err=f"model load failed: {e}",
+                           traceback=traceback.format_exc()), 500
 
         try:
             img = Image.open(io.BytesIO(jpg)).convert("RGB")
         except Exception as e:
             return jsonify(err=f"bad JPEG: {e}"), 400
 
-        t0 = time.time()
-        inputs = processor(images=img, return_tensors="pt")
-        with torch.no_grad():
-            out = model(**inputs)
-        pred = torch.nn.functional.interpolate(
-            out.predicted_depth.unsqueeze(1),
-            size=img.size[::-1],
-            mode="bicubic",
-            align_corners=False,
-        ).squeeze().cpu().numpy()
-        depth_mm = (pred * 1000.0).astype(np.float32, copy=False)
-        inf_ms = int((time.time() - t0) * 1000)
+        # Wrap inference so any backend exception surfaces as structured
+        # JSON with the real Python traceback instead of Flask's default
+        # HTML 500 page. The orchestrator reads the JSON body and
+        # includes the specific error in the user-visible message.
+        try:
+            t0 = time.time()
+            inputs = processor(images=img, return_tensors="pt")
+            with torch.no_grad():
+                out = model(**inputs)
+            pred = torch.nn.functional.interpolate(
+                out.predicted_depth.unsqueeze(1),
+                size=img.size[::-1],
+                mode="bicubic",
+                align_corners=False,
+            ).squeeze().cpu().numpy()
+            depth_mm = (pred * 1000.0).astype(np.float32, copy=False)
+            inf_ms = int((time.time() - t0) * 1000)
+        except Exception as e:
+            log.exception("inference failed")
+            return jsonify(err=f"inference failed: {type(e).__name__}: {e}",
+                           traceback=traceback.format_exc()), 500
+
         _last_activity = time.time()
         h, w = depth_mm.shape
         resp = Response(depth_mm.tobytes(), mimetype="application/octet-stream")
