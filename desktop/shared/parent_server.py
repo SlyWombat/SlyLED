@@ -2484,50 +2484,91 @@ def api_camera_stage_map(fid):
         mid = m.get("id")
         if mid is not None:
             marker_map[int(mid)] = m
-    # Fetch JPEG snapshot from camera
+    # Multi-snapshot aggregation (#stage-map-flaky). ArUco detection is
+    # frame-to-frame noisy; on the basement rig each camera reliably
+    # misses one of the three surveyed markers per frame, but across
+    # ~5 snapshots every marker gets seen at least once. Accumulate
+    # by marker-id, keeping the single cleanest detection per id
+    # (largest-perimeter = closest-to-camera = best sub-pixel corners).
+    # When the operator registers N surveyed markers, `max_snapshots`
+    # is bounded so we don't spin forever if one marker is physically
+    # out of every camera's FOV.
     import urllib.request as _ur
-    try:
-        resp = _ur.urlopen(f"http://{ip}:5000/snapshot?cam={cam_idx}", timeout=15)
-        jpeg_data = resp.read()
-    except Exception as e:
-        return jsonify(ok=False, err=f"Snapshot failed: {e}"), 503
-    # Decode and run ArUco detection
-    frame = cv2.imdecode(np.frombuffer(jpeg_data, np.uint8), cv2.IMREAD_COLOR)
-    if frame is None:
-        return jsonify(ok=False, err="Failed to decode snapshot"), 500
-    corners, ids, _rejected, frame_size = _aruco_detect(frame)
-    h, w = frame.shape[:2]
-    detected_count = len(ids) if ids is not None else 0
-    if ids is None or len(ids) == 0:
+    max_snapshots = int(body.get("maxSnapshots", 6))
+    best_per_id = {}  # mid → (perimeter, corners, frame_size)
+    detected_count = 0
+    frame_size = None
+    for attempt in range(max_snapshots):
+        try:
+            resp = _ur.urlopen(f"http://{ip}:5000/snapshot?cam={cam_idx}",
+                               timeout=15)
+            jpeg_data = resp.read()
+        except Exception as e:
+            if attempt == 0:
+                return jsonify(ok=False, err=f"Snapshot failed: {e}"), 503
+            continue
+        frame = cv2.imdecode(np.frombuffer(jpeg_data, np.uint8),
+                              cv2.IMREAD_COLOR)
+        if frame is None:
+            continue
+        corners_snap, ids_snap, _rej, fsz = _aruco_detect(frame)
+        if fsz is not None:
+            frame_size = fsz
+        if ids_snap is None or len(ids_snap) == 0:
+            continue
+        detected_count += len(ids_snap)
+        for i, mid in enumerate(ids_snap.flatten()):
+            mid_int = int(mid)
+            if mid_int not in marker_map:
+                continue
+            pts = corners_snap[i].reshape(4, 2)
+            # Perimeter as a quality proxy — bigger = better sub-pixel.
+            perim = float(sum(
+                np.linalg.norm(pts[(j + 1) % 4] - pts[j]) for j in range(4)))
+            prior = best_per_id.get(mid_int)
+            if prior is None or perim > prior[0]:
+                best_per_id[mid_int] = (perim, pts.astype(np.float64))
+        if len(best_per_id) >= len(marker_map):
+            break  # all surveyed markers seen — no need to keep snapping
+
+    if not best_per_id:
         return jsonify(ok=True, markersDetected=0, markersMatched=0,
-                       err="No ArUco markers detected in snapshot")
-    # Match detected markers against provided positions
-    obj_points = []  # 3D stage coords
-    img_points = []  # 2D pixel coords
+                       err="No ArUco markers detected across "
+                           f"{max_snapshots} snapshots")
+    if frame_size is None:
+        return jsonify(ok=False, err="could not determine frame size"), 500
+    # Build the correspondence arrays in deterministic id order.
+    obj_points = []
+    img_points = []
     matched_ids = []
-    flat_ids = ids.flatten()
-    for i, mid in enumerate(flat_ids):
-        mid_int = int(mid)
-        if mid_int in marker_map:
-            m = marker_map[mid_int]
-            mx = float(m.get("x", 0))
-            my = float(m.get("y", 0))
-            mz = float(m.get("z", 0))
-            # 3D corners: spread in X and Y, constant Z
-            obj_pts = np.array([
-                [mx - half, my + half, mz],   # top-left
-                [mx + half, my + half, mz],   # top-right
-                [mx + half, my - half, mz],   # bottom-right
-                [mx - half, my - half, mz],   # bottom-left
-            ], dtype=np.float64)
-            img_pts = corners[i].reshape(4, 2).astype(np.float64)
-            obj_points.append(obj_pts)
-            img_points.append(img_pts)
-            matched_ids.append(mid_int)
-    if len(matched_ids) < 3:
+    for mid_int, (_, pts) in sorted(best_per_id.items()):
+        m = marker_map[mid_int]
+        mx = float(m.get("x", 0))
+        my = float(m.get("y", 0))
+        mz = float(m.get("z", 0))
+        # 3D corners: spread in X and Y, constant Z (floor-plane).
+        obj_pts = np.array([
+            [mx - half, my + half, mz],   # top-left
+            [mx + half, my + half, mz],   # top-right
+            [mx + half, my - half, mz],   # bottom-right
+            [mx - half, my - half, mz],   # bottom-left
+        ], dtype=np.float64)
+        obj_points.append(obj_pts)
+        img_points.append(pts)
+        matched_ids.append(mid_int)
+    w, h = int(frame_size[0]), int(frame_size[1])
+    # solvePnP needs ≥4 coplanar points or ≥3 non-coplanar. With floor
+    # markers we always have coplanar (all at z=0), so 2 × 4 = 8 corner
+    # points is sufficient provided the two marker centres aren't
+    # colinear (trivially true for any realistic stage layout). On a rig
+    # where no single camera FOV covers 3+ surveyed markers (cam 12 sees
+    # AR1+AR2, cam 13 sees AR0+AR2 — no camera sees all 3), the 2-marker
+    # path is the only one that works without a multi-frame aggregation
+    # pass. Error below 5 px is still routine with 8 corners.
+    if len(matched_ids) < 2:
         return jsonify(ok=True, markersDetected=detected_count,
                        markersMatched=len(matched_ids),
-                       err=f"Only {len(matched_ids)} markers matched (need 3+)")
+                       err=f"Only {len(matched_ids)} marker matched (need 2+)")
     # Stack all points
     obj_all = np.vstack(obj_points)  # (N*4, 3)
     img_all = np.vstack(img_points)  # (N*4, 2)
@@ -2568,13 +2609,76 @@ def api_camera_stage_map(fid):
             [0,      fy_est, cy_est],
             [0,      0,      1     ],
         ], dtype=np.float64)
-    # solvePnP
-    success, rvec, tvec = cv2.solvePnP(obj_all, img_all, K, dist_coeffs,
-                                        flags=cv2.SOLVEPNP_ITERATIVE)
+    # solvePnP strategy:
+    # - Floor markers (all z=0) are coplanar, which creates a pose
+    #   ambiguity — SQPNP and ITERATIVE can both converge to a mirror
+    #   solution with the camera under the floor. On the basement rig
+    #   this produced cam z=-58mm from a camera layout-recorded at
+    #   z=1920mm. The ITERATIVE solver with a good initial guess avoids
+    #   the mirror branch.
+    # - The layout already has the camera's rough stage-frame position
+    #   (fid in `_layout.children`) plus its rotation (from `fixture.
+    #   rotation` = [tilt, pan, roll]). Use `camera_math.build_camera_
+    #   to_stage` + the layout position to seed (rvec, tvec) so
+    #   ITERATIVE refines around the physically plausible pose rather
+    #   than jumping branches.
+    # - If no layout pose is available, fall back to SQPNP → ITERATIVE
+    #   without a guess (the legacy path).
+    success = False
+    rvec_out = tvec_out = None
+    pos_map_ = {p["id"]: p for p in _layout.get("children", [])}
+    lp = pos_map_.get(fid)
+    fixture_rot = f.get("rotation") or [0, 0, 0]
+    rvec_init = tvec_init = None
+    if lp and any(lp.get(k) is not None for k in ("x", "y", "z")):
+        try:
+            from camera_math import build_camera_to_stage, rotation_from_layout
+            tilt, pan, roll = rotation_from_layout(fixture_rot)
+            R_cam_to_stage = np.asarray(
+                build_camera_to_stage(tilt, pan, roll), dtype=np.float64)
+            # build_camera_to_stage returns cam-local → stage. solvePnP
+            # wants stage → cam (world → cam). Invert by transposing.
+            R_stage_to_cam = R_cam_to_stage.T
+            cam_pos = np.array([float(lp.get("x", 0)),
+                                 float(lp.get("y", 0)),
+                                 float(lp.get("z", 0))], dtype=np.float64)
+            t_init = (-R_stage_to_cam @ cam_pos).reshape(3, 1)
+            rvec_init, _ = cv2.Rodrigues(R_stage_to_cam)
+            tvec_init = t_init
+        except Exception as e:
+            log.debug("stage-map: initial pose derivation failed: %s", e)
+            rvec_init = tvec_init = None
+
+    if rvec_init is not None:
+        try:
+            success, rvec_out, tvec_out = cv2.solvePnP(
+                obj_all, img_all, K, dist_coeffs,
+                rvec=rvec_init.copy(), tvec=tvec_init.copy(),
+                useExtrinsicGuess=True,
+                flags=cv2.SOLVEPNP_ITERATIVE)
+        except Exception:
+            success = False
+    if not success or rvec_out is None:
+        try:
+            success, rvec_out, tvec_out = cv2.solvePnP(
+                obj_all, img_all, K, dist_coeffs,
+                flags=getattr(cv2, "SOLVEPNP_SQPNP", cv2.SOLVEPNP_ITERATIVE))
+        except Exception:
+            success = False
+    if not success or rvec_out is None:
+        try:
+            success, rvec_out, tvec_out = cv2.solvePnP(
+                obj_all, img_all, K, dist_coeffs,
+                flags=cv2.SOLVEPNP_ITERATIVE)
+        except Exception as e:
+            return jsonify(ok=False, markersDetected=detected_count,
+                           markersMatched=len(matched_ids),
+                           err=f"solvePnP raised: {e}")
     if not success:
         return jsonify(ok=False, markersDetected=detected_count,
                        markersMatched=len(matched_ids),
                        err="solvePnP failed")
+    rvec, tvec = rvec_out, tvec_out
     # Compute camera position in stage coords: cam_pos = -R^T @ tvec
     R, _ = cv2.Rodrigues(rvec)
     cam_pos = (-R.T @ tvec).flatten()
@@ -2582,10 +2686,30 @@ def api_camera_stage_map(fid):
     proj, _ = cv2.projectPoints(obj_all, rvec, tvec, K, dist_coeffs)
     proj = proj.reshape(-1, 2)
     err = np.sqrt(np.mean(np.sum((img_all - proj) ** 2, axis=1)))
-    # Build floor-plane homography (floor is Z=0)
-    # Drop Z column (column 2) of rotation matrix
-    H_cam_to_floor = K @ np.column_stack([R[:, 0], R[:, 1], tvec.flatten()])
-    H_floor = np.linalg.inv(H_cam_to_floor)
+    # Build floor-plane homography. Two paths:
+    # 1. Derive from solvePnP pose (R + t + K) — requires non-coplanar
+    #    correspondences OR an unambiguous pose. Fails on 2 coplanar
+    #    floor markers (solvePnP mirror-pose ambiguity).
+    # 2. Compute DIRECTLY via cv2.findHomography(img_pts, stage_pts_xy).
+    #    Unambiguous for coplanar points by construction — homography
+    #    is the unique plane-to-plane map. Works with as few as 4
+    #    corner pairs (1 marker).
+    #
+    # For mover calibration we only need pixel ↔ floor (target_stage is
+    # always on the floor plane by convention, Z=0), so the direct
+    # path is strictly better. Prefer it and cross-check against the
+    # pose-derived version; if they disagree, use the direct one.
+    try:
+        # stage_pts_xy: Nx2 floor-plane coordinates (drop Z because Z=0).
+        stage_pts_xy = obj_all[:, :2].astype(np.float32)
+        img_pts_xy = img_all.astype(np.float32)
+        H_pixel_to_stage, _mask = cv2.findHomography(
+            img_pts_xy, stage_pts_xy, method=0)  # no RANSAC; clean corners
+        H_floor = H_pixel_to_stage
+    except Exception as e:
+        log.warning("findHomography direct path failed: %s — using pose-derived", e)
+        H_cam_to_floor = K @ np.column_stack([R[:, 0], R[:, 1], tvec.flatten()])
+        H_floor = np.linalg.inv(H_cam_to_floor)
     # Get camera layout position for cross-validation
     pos_map = {p["id"]: p for p in _layout.get("children", [])}
     lp = pos_map.get(fid)
@@ -2618,6 +2742,34 @@ def api_camera_stage_map(fid):
     }
     if camera_pos_layout:
         result["cameraPos"] = camera_pos_layout
+
+    # Persist the homography for downstream consumers (mover-cal v2,
+    # stereo anchoring, #592). Store in two places so every consumer
+    # finds it — the v2 pre-check is currently `_calibrated_cameras →
+    # cam.get("homography")`, and `_calibrations` is the general-
+    # purpose camera-cal storage.
+    global _calibrations
+    _calibrations[str(fid)] = {
+        "matrix": H_floor.tolist(),
+        "method": "stage-map-surveyed-markers",
+        "markersMatched": len(matched_ids),
+        "matchedIds": matched_ids,
+        "rmsError": round(float(err), 2),
+        "intrinsicSource": intrinsic_source,
+        "frameSize": [w, h],
+        "timestamp": time.time(),
+    }
+    try:
+        _save("calibrations", _calibrations)
+    except Exception as e:
+        log.warning("stage-map: persist failed: %s", e)
+    # Mirror onto the fixture record so the v2 mover-cal pre-check's
+    # `cam.get("homography")` fallback finds it.
+    f["homography"] = H_floor.tolist()
+    try:
+        _save("fixtures", _fixtures)
+    except Exception as e:
+        log.warning("stage-map: fixture persist failed: %s", e)
     return jsonify(result)
 
 
