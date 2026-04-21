@@ -1,1 +1,3033 @@
-{"actions":[{"b":200,"g":40,"id":0,"minBri":20,"name":"Concert Wash \u00e2\u20ac\u201d LED Base","periodMs":5000,"r":0,"type":3},{"b":180,"dimmer":200,"g":0,"id":1,"name":"Concert Wash \u00e2\u20ac\u201d Par Wash","pan":0.5,"r":220,"tilt":0.5,"type":14},{"b":60,"dimmer":120,"g":20,"id":2,"name":"Concert Wash \u00e2\u20ac\u201d Mover Base","pan":0.5,"r":73,"tilt":0.5,"type":14},{"b":180,"dimmer":255,"g":0,"id":3,"name":"Mover 1 Sweep","panEnd":0.78,"panStart":0.22,"r":220,"speedMs":8000,"tiltEnd":0.7,"tiltStart":0.3,"type":15},{"b":40,"g":80,"id":4,"minBri":10,"name":"Aurora Borealis \u00e2\u20ac\u201d LED Base","periodMs":5000,"r":0,"type":3},{"b":80,"dimmer":200,"g":255,"id":5,"name":"Aurora Borealis \u00e2\u20ac\u201d Par Wash","pan":0.5,"r":0,"tilt":0.5,"type":14},{"b":26,"dimmer":120,"g":85,"id":6,"name":"Aurora Borealis \u00e2\u20ac\u201d Mover Base","pan":0.5,"r":20,"tilt":0.5,"type":14},{"b":80,"dimmer":255,"g":255,"id":7,"name":"Mover 1 Sweep","panEnd":0.72,"panStart":0.28,"r":0,"speedMs":10000,"tiltEnd":0.66,"tiltStart":0.34,"type":15},{"b":20,"g":100,"id":8,"minBri":30,"name":"Sunset Glow \u00e2\u20ac\u201d LED Base","periodMs":4000,"r":255,"type":3},{"b":20,"dimmer":200,"g":100,"id":9,"name":"Sunset Glow \u00e2\u20ac\u201d Par Wash","pan":0.5,"r":255,"tilt":0.5,"type":14},{"b":20,"dimmer":120,"g":33,"id":10,"name":"Sunset Glow \u00e2\u20ac\u201d Mover Base","pan":0.5,"r":85,"tilt":0.5,"type":14},{"b":20,"dimmer":255,"g":100,"id":11,"name":"Mover 1 Sweep","panEnd":0.7,"panStart":0.3,"r":255,"speedMs":11428,"tiltEnd":0.64,"tiltStart":0.36,"type":15},{"b":10,"g":15,"id":12,"name":"Spotlight Sweep \u00e2\u20ac\u201d LED Base","r":20,"type":1},{"b":66,"dimmer":120,"g":80,"id":13,"name":"Spotlight Sweep \u00e2\u20ac\u201d Mover Base","pan":0.5,"r":85,"tilt":0.5,"type":14},{"b":200,"dimmer":255,"g":240,"id":14,"name":"Mover 1 Sweep","panEnd":0.78,"panStart":0.22,"r":255,"speedMs":8000,"tiltEnd":0.7,"tiltStart":0.3,"type":15},{"b":255,"dimmer":255,"g":180,"id":15,"name":"Mover 2 Sweep","panEnd":0.22,"panStart":0.78,"r":200,"speedMs":8000,"tiltEnd":0.7,"tiltStart":0.3,"type":15},{"b":255,"colorWheel":0,"dimmer":255,"g":0,"gobo":0,"id":16,"name":"MH1 Blue Sweep","pan":0.5,"prism":0,"ptEndPos":[5000,3000,0],"ptStartPos":[500,3000,0],"r":0,"scope":"performer-selected","speedMs":5000,"strobe":0,"targetIds":[2],"tilt":0.5,"type":15},{"b":0,"colorWheel":0,"dimmer":255,"g":0,"gobo":0,"id":17,"name":"MH2 Red Sweep","pan":0.5,"prism":0,"ptEndPos":[5000,3000,0],"ptStartPos":[500,3000,0],"r":255,"scope":"performer-selected","speedMs":5000,"strobe":0,"targetIds":[7],"tilt":0.5,"type":15},{"b":255,"colorWheel":0,"dimmer":255,"g":255,"gobo":0,"id":18,"name":"Both White Sweep","pan":0.5,"prism":0,"ptEndPos":[5000,3000,0],"ptStartPos":[500,3000,0],"r":255,"scope":"performer","speedMs":5000,"strobe":0,"tilt":0.5,"type":15},{"b":30,"g":5,"id":19,"name":"Spotlight: Follow Person \u00e2\u20ac\u201d LED Base","r":10,"type":1},{"b":66,"dimmer":120,"g":80,"id":20,"name":"Spotlight: Follow Person \u00e2\u20ac\u201d Mover Base","pan":0.5,"r":85,"tilt":0.5,"type":14},{"b":200,"dimmer":255,"g":240,"id":21,"name":"Follow Person","r":255,"scope":"performer","trackAutoSpread":true,"trackCycleMs":1000,"trackDimmer":255,"trackFixedAssignment":false,"trackObjectIds":[],"trackObjectType":"person","trackOffset":[0,0,0],"type":18},{"b":30,"g":5,"id":22,"name":"Spotlight: Follow Person \u00e2\u20ac\u201d LED Base","r":10,"type":1},{"b":66,"dimmer":120,"g":80,"id":23,"name":"Spotlight: Follow Person \u00e2\u20ac\u201d Mover Base","pan":0.5,"r":85,"tilt":0.5,"type":14},{"b":200,"dimmer":255,"g":240,"id":24,"name":"Follow Person","r":255,"trackAutoSpread":true,"trackCycleMs":2000,"trackDimmer":255,"trackFixedAssignment":false,"trackObjectType":"person","type":18}],"appVersion":"1.5.55","arucoMarkers":[{"id":0,"label":"close","rx":0.0,"ry":0.0,"rz":0.0,"size":150.0,"x":500.0,"y":1400.0,"z":0.0},{"id":1,"label":"back","rx":0.0,"ry":0.0,"rz":0.0,"size":150.0,"x":1610.0,"y":3100.0,"z":0.0},{"id":2,"label":"middle","rx":0.0,"ry":0.0,"rz":0.0,"size":150.0,"x":1053.0,"y":2150.0,"z":0.0}],"calibrations":{"12":{"cx":977.23,"cy":531.86,"distCoeffs":[1.54596,-62.477407,0.193139,0.184507,602.633409],"frameCount":3,"fx":3151.49,"fy":2808.58,"imageSize":[1920,1080],"rmsError":0.5785,"source":"camera_node","type":"intrinsic"},"13":{"cx":970.44,"cy":530.69,"distCoeffs":[-0.063979,-1.05643,0.004334,0.063757,1.322455],"frameCount":4,"fx":548.55,"fy":573.72,"imageSize":[1920,1080],"rmsError":0.3593,"source":"camera_node","type":"intrinsic"}},"cameraSsh":{},"children":[{"boardType":"giga-dmx","chipModel":"STM32H747XI","desc":"","flashSize":0,"freeHeap":0,"fwVersion":"7.5.20","hostname":"SLYC-1152","id":0,"ip":"192.168.10.219","name":"SLYC-1152","rssi":-50,"sc":1,"sdkVersion":"mbed","seen":1776800096,"strings":[{"cdir":0,"cmm":0,"folded":false,"leds":30,"mm":500,"sdir":0,"type":0},{"cdir":0,"cmm":0,"folded":false,"leds":0,"mm":0,"sdir":0,"type":0},{"cdir":0,"cmm":0,"folded":false,"leds":0,"mm":0,"sdir":0,"type":0},{"cdir":0,"cmm":0,"folded":false,"leds":0,"mm":0,"sdir":0,"type":0},{"cdir":0,"cmm":0,"folded":false,"leds":0,"mm":0,"sdir":0,"type":0},{"cdir":0,"cmm":0,"folded":false,"leds":0,"mm":0,"sdir":0,"type":0},{"cdir":0,"cmm":0,"folded":false,"leds":0,"mm":0,"sdir":0,"type":0},{"cdir":0,"cmm":0,"folded":false,"leds":0,"mm":0,"sdir":0,"type":0}],"type":"dmx","uptime":21859}],"dmxSettings":{"autoStartEngine":false,"bindIp":"192.168.10.16","bootBlinkFixtures":true,"frameRate":40,"protocol":"artnet","sacnPriority":100,"sacnSourceName":"SlyLED","universeRoutes":[{"destination":"192.168.10.219","label":"giga","universe":1}]},"fixtures":[{"aoeRadius":1000,"childId":null,"childIds":[],"dmxChannelCount":13,"dmxProfileId":"slymovehead","dmxStartAddr":14,"dmxUniverse":1,"fixtureType":"dmx","id":2,"meshFile":null,"mountedInverted":true,"moverCalibrated":true,"name":"Sly MH 1","rotation":[0,0,0],"strings":[],"type":"point"},{"aoeRadius":1000,"childId":null,"childIds":[],"dmxChannelCount":13,"dmxProfileId":"slymovehead","dmxStartAddr":1,"dmxUniverse":1,"fixtureType":"dmx","id":7,"meshFile":null,"mountedInverted":true,"moverCalibrated":true,"name":"Sly MH 2","rotation":[0,0,0],"strings":[],"type":"point"},{"aoeRadius":1000,"calibrated":true,"cameraIdx":0,"cameraIp":"192.168.10.235","cameraUrl":"","childId":null,"childIds":[],"fixtureType":"camera","fovDeg":100,"id":12,"meshFile":null,"name":"Left Cam Wide","resolutionH":1080,"resolutionW":1920,"rotation":[30,0,0],"strings":[],"trackClasses":["person"],"trackFps":2,"trackReidMm":500,"trackThreshold":0.4,"trackTtl":5,"type":"point"},{"aoeRadius":1000,"calibrated":true,"cameraIdx":1,"cameraIp":"192.168.10.235","cameraUrl":"","childId":null,"childIds":[],"fixtureType":"camera","fovDeg":90,"id":13,"meshFile":null,"name":"Right High Res","resolutionH":2160,"resolutionW":3840,"rotation":[30,0,0],"strings":[],"trackClasses":["person","chair"],"trackFps":2,"trackReidMm":500,"trackThreshold":0.4,"trackTtl":5,"type":"point"},{"aoeRadius":1000,"childId":null,"childIds":[],"dmxChannelCount":16,"dmxProfileId":"beamlight-350w-16ch","dmxStartAddr":27,"dmxUniverse":1,"fixtureType":"dmx","id":14,"meshFile":null,"mountedInverted":false,"name":"350W Outdoor Waterproof BeamLight","rotation":[0,0,0],"strings":[],"type":"point"}],"layout":{"canvasH":2000,"canvasW":2000,"children":[{"id":14,"x":1605,"y":150,"z":550},{"id":2,"x":500,"y":0,"z":1690},{"id":7,"x":1605,"y":0,"z":1690},{"id":12,"x":1275,"y":120,"z":1920},{"id":13,"x":830,"y":120,"z":1920}]},"lightMaps":null,"moverCalibrations":{"2":{"boundaries":{"panMax":0.4,"panMin":0.298,"tiltMax":1,"tiltMin":0.753,"verified":false},"centerPan":0.35,"centerTarget":[2212,2625,1028],"centerTilt":0.8784,"fit":{"conditionNumber":26511830.95931786,"maxErrorDeg":2.1972640598220945,"perSampleDeg":[2.1972640598220945,1.0288612944938371,0.6912520123146976,1.2284894201702348],"rmsErrorDeg":1.4029914924806854,"sampleCount":4},"grid":{"panSteps":[0.298,0.322,0.38,0.4],"pixelX":[[1050,2000,2000,5000],[1050,2000,2000,5000],[1050,800,800,5000],[1050,800,800,5000]],"pixelY":[[2250,2350,2350,3700],[2250,2350,2350,3700],[2250,2200,2200,3700],[2250,2200,2200,3700]],"tiltSteps":[0.753,0.867,0.894,1]},"method":"manual","model":{"mountPitch":165.13595954827875,"mountRoll":34.48148872574197,"mountYaw":94.23069260713416,"panOffset":0.2508623485070905,"panRangeDeg":540,"panSign":1,"tiltOffset":1.1575249285765878,"tiltRangeDeg":180,"tiltSign":1},"sampleCount":4,"samples":[{"pan":0.4,"stageX":800,"stageY":2200,"stageZ":1250,"tilt":0.8941176470588236},{"pan":0.3215686274509804,"stageX":2000,"stageY":2350,"stageZ":860,"tilt":0.8666666666666667},{"pan":0.3803921568627451,"stageX":1050,"stageY":2250,"stageZ":0,"tilt":0.7529411764705882},{"pan":0.2980392156862745,"stageX":5000,"stageY":3700,"stageZ":2000,"tilt":1}],"timestamp":1776106558.0271337,"version":2},"7":{"boundaries":{"panMax":0.459,"panMin":0.286,"tiltMax":1,"tiltMin":0.776,"verified":false},"centerPan":0.3902,"centerTarget":[2212,2625,1028],"centerTilt":0.8941,"fit":{"conditionNumber":69593583.605231,"maxErrorDeg":10.053821615593963,"perSampleDeg":[7.97985512327786,2.133146919779257,2.251131977836582,10.053821615593963],"rmsErrorDeg":6.602562529610955,"sampleCount":4},"grid":{"panSteps":[0.286,0.373,0.443,0.459],"pixelX":[[2000,2000,5000,5000],[1050,2000,2000,5000],[1050,2000,800,800],[1050,800,800,800]],"pixelY":[[2350,2350,3700,3700],[2250,2350,2350,3700],[2250,2350,2200,2200],[2250,2200,2200,2200]],"tiltSteps":[0.776,0.863,0.937,1]},"method":"manual","model":{"mountPitch":392.77398175999286,"mountRoll":0.6870821646797319,"mountYaw":-5.465694262062625,"panOffset":0.37933106481386103,"panRangeDeg":540,"panSign":-1,"tiltOffset":1.1500637804000247,"tiltRangeDeg":180,"tiltSign":-1},"sampleCount":4,"samples":[{"pan":0.4588235294117647,"stageX":800,"stageY":2200,"stageZ":1250,"tilt":0.9372549019607843},{"pan":0.37254901960784315,"stageX":2000,"stageY":2350,"stageZ":860,"tilt":0.8627450980392157},{"pan":0.44313725490196076,"stageX":1050,"stageY":2250,"stageZ":0,"tilt":0.7764705882352941},{"pan":0.28627450980392155,"stageX":5000,"stageY":3700,"stageZ":2000,"tilt":1}],"timestamp":1776106765.2190464,"version":2}},"name":"SlyLED","objects":[{"color":"#505634","filename":"","id":1,"mobility":"static","name":"Music","objectType":"custom","opacity":18,"stageLocked":false,"transform":{"pos":[800,2200,1250],"rot":[0,0,0],"scale":[100,100,10]}},{"color":"#cccccc","filename":"","id":2,"mobility":"static","name":"Pillar","objectType":"pillar","opacity":80,"stageLocked":false,"transform":{"pos":[1053,2300,1000],"rot":[0,0,0],"scale":[210,2000,270]}}],"pointCloud":{"cameras":[{"cameraIdx":0,"fixtureId":12,"lite":true,"name":"Left Cam Wide","pointCount":0},{"cameraIdx":0,"fixtureId":13,"lite":true,"name":"Right High Res","pointCount":0}],"floorNormalized":true,"floorOffset":0,"points":{"compressed":true,"data":"H4sIAGnR52kC/42Xa04CQRAGr8IBiKG+Zm3vQrz/NcQoPoCdrj/EhM5MsXSK8nI5vZyOh9+XOh8PgetLvb0fD19vZxsGttMw0NMJnKYjGCkYMRg5MnJk5MjIkZGjRo4aOWrkqJHjvOL4S7AaWJF+v7fN1/R8CoIWQYPAQfBE8ETwRPBE8JTgKcFTgqcEz3K7/t6xGljxfo9s8zU9n4KgRdAgcBA8ETwRPBE8ETwleErwlOApwbPcrp7c1bO7enZXz+5q4a4W7mrhrhbuauGuFu5q4a4W7mrhrhbuauGuFu5q4a5/X+ZyYkV8m9nETS3OwSBjiDBIGKYYphimGKYYpjJMZZjKMJVhWq/bWGKIFEO0GCLGMDWGyTFMj2GCDFNkmCTDNBkmyjBVhskyTJdhwgxTZoxphmgzRJwh6gyTZ5g+wwQaptAwiYZpNEykYSoNk2mYTsOEGqbUMKnG2GqIWEPUGiLXML2GCTZMsWGSDdNsmGjDVBsm2zDdhgk3TLlh0g3TbhnbLaLdItotot1i2i2m3WLaLabdYtotpt1i2i2m3WLaLabdYtotpt1i2u1xgusEvH7+cX6YuMXOaub2C7WaaXHOT8gvhwwRBgnDlB2mZ90yzOyA301t6r5WZ+HgcWQ4NBzb3oN99gs9zOzg301t6r5WZ+HgcWQ4NBzb3oNtsbGtNrbVxrba2HYb225j221su41tt7FP/2WehnY+wP3Y5q5sdxryEyDpkHhIvt0nbGyL0y3OtzjhIo2LVC7SuUjpIq2L0S7Ouzjx4syLVC/SvUj5Iu2L1C/GvzgB4wyMUzDSwUgJIy2M1DDSwzEejvNwnIfjPBzp4UgPR3o40sMxHn7/AFqUyai9IQAA"},"schemaVersion":1,"source":"lite","stageD":4000,"stageH":2000,"stageW":2000,"timestamp":1776788467.7914062,"totalPoints":234},"profiles":[{"beamWidth":15,"builtin":false,"category":"moving-head","channelCount":13,"channels":[{"capabilities":[{"angleEnd":540,"angleStart":0,"label":"Pan 0-540\u00c2\u00b0","range":[0,255],"type":"Pan"}],"default":128,"name":"X Motor (Pan)","offset":0,"type":"pan"},{"capabilities":[{"angleEnd":180,"angleStart":0,"label":"Tilt 0-180\u00c2\u00b0","range":[0,255],"type":"Tilt"}],"default":128,"name":"Y Motor (Tilt)","offset":1,"type":"tilt"},{"capabilities":[{"duration":0,"label":"Vectorial (fastest)","range":[0,0],"type":"PanTiltSpeed"},{"durationEnd":3,"durationStart":0.05,"label":"P/T speed fast \u00e2\u2020\u2019 slow","range":[1,255],"type":"PanTiltSpeed"}],"name":"XY Motor Speed","offset":2,"type":"pan-tilt-speed"},{"capabilities":[{"label":"Dimmer 0-100%","range":[0,255],"type":"Intensity"}],"default":255,"name":"Dimmer","offset":3,"type":"dimmer"},{"capabilities":[{"label":"Open (no strobe)","range":[0,10],"shutterEffect":"Open","type":"ShutterStrobe"},{"label":"Strobe slow \u00e2\u2020\u2019 fast","range":[11,255],"shutterEffect":"Strobe","type":"ShutterStrobe"}],"default":0,"name":"Strobe","offset":4,"type":"strobe"},{"capabilities":[{"color":"#ff0000","label":"Red 0-100%","range":[0,255],"type":"ColorIntensity"}],"default":0,"name":"Red","offset":5,"type":"red"},{"capabilities":[{"color":"#00ff00","label":"Green 0-100%","range":[0,255],"type":"ColorIntensity"}],"default":0,"name":"Green","offset":6,"type":"green"},{"capabilities":[{"color":"#0000ff","label":"Blue 0-100%","range":[0,255],"type":"ColorIntensity"}],"default":0,"name":"Blue","offset":7,"type":"blue"},{"capabilities":[{"color":"#ffffff","label":"White 0-100%","range":[0,255],"type":"ColorIntensity"}],"default":0,"name":"White","offset":8,"type":"white"},{"capabilities":[{"label":"Laser 0-100%","range":[0,255],"type":"Intensity"}],"default":0,"name":"Laser","offset":9,"type":"dimmer"},{"capabilities":[{"label":"None","range":[0,9],"type":"NoFunction"},{"label":"Belt effect (cycles every 10 s)","range":[10,255],"type":"Effect"}],"default":0,"name":"Light Belt","offset":10,"type":"gobo"},{"capabilities":[{"label":"Belt speed slow \u00e2\u2020\u2019 fast","range":[0,255],"speedEnd":10,"speedStart":0.1,"type":"EffectSpeed"}],"default":0,"name":"Light Belt Speed","offset":11,"type":"effect-speed"},{"capabilities":[{"label":"Channels 1-12 active (manual control)","range":[0,50],"type":"NoFunction"},{"label":"Auto run program","range":[51,150],"type":"Effect"},{"label":"Voice / sound active","range":[151,250],"type":"Effect"},{"label":"3-second reset","range":[251,255],"type":"Maintenance"}],"default":0,"name":"Macro Function","offset":12,"type":"macro"}],"colorMode":"rgbw","id":"slymovehead","manufacturer":"Sly","name":"Sly Moving Head Super Mini","panRange":540,"tiltRange":180},{"_community":{"channelHash":"32ace0eae5aebda24377babcc21580c2887c2939","slug":"beamlight-350w-16ch","syncedAt":1776789274,"uploadTs":"2026-04-15 20:34:40"},"beamWidth":3,"builtin":false,"category":"moving-head","channelCount":14,"channels":[{"capabilities":[{"color":"#ffffff","label":"Open / white","range":[0,7],"slotNumber":0,"type":"WheelSlot"},{"color":"#ff0000","label":"Red","range":[8,24],"slotNumber":1,"type":"WheelSlot"},{"color":"#ff7f00","label":"Orange","range":[25,41],"slotNumber":2,"type":"WheelSlot"},{"color":"#0033ff","label":"Blue","range":[42,58],"slotNumber":3,"type":"WheelSlot"},{"color":"#00c837","label":"Green","range":[59,75],"slotNumber":4,"type":"WheelSlot"},{"color":"#7dff7d","label":"Light green","range":[76,92],"slotNumber":5,"type":"WheelSlot"},{"color":"#b093c9","label":"Lavender","range":[93,109],"slotNumber":6,"type":"WheelSlot"},{"color":"#ff4000","label":"Orangered","range":[110,126],"slotNumber":7,"type":"WheelSlot"},{"color":"#ffff00","label":"Yellow","range":[127,143],"slotNumber":8,"type":"WheelSlot"},{"color":"#c80050","label":"Magenta","range":[144,160],"slotNumber":9,"type":"WheelSlot"},{"color":"#00ffff","label":"Cyan","range":[161,177],"slotNumber":10,"type":"WheelSlot"},{"color":"#fff6c8","label":"Light yellow","range":[178,194],"slotNumber":11,"type":"WheelSlot"},{"colorTemperature":3200,"label":"CTO1 (3200K)","range":[195,211],"slotNumber":12,"type":"ColorTemperature"},{"colorTemperature":2700,"label":"CTO2 (2700K)","range":[212,228],"slotNumber":13,"type":"ColorTemperature"},{"color":"#87ceeb","label":"Sky blue","range":[229,255],"slotNumber":14,"type":"WheelSlot"}],"name":"Color Wheel","offset":0,"type":"color-wheel"},{"capabilities":[{"label":"Dimmer 0-100%","range":[0,255],"type":"Intensity"}],"default":255,"name":"Dimmer","offset":1,"type":"dimmer"},{"capabilities":[{"label":"Closed (blackout)","range":[0,7],"shutterEffect":"Closed","type":"ShutterStrobe"},{"label":"Open","range":[8,15],"shutterEffect":"Open","type":"ShutterStrobe"},{"label":"Strobe slow-fast","range":[16,131],"shutterEffect":"Strobe","type":"ShutterStrobe"},{"label":"Pulse slow-fast","range":[132,167],"shutterEffect":"Pulse","type":"ShutterStrobe"},{"label":"Ramp up slow-fast","range":[168,207],"shutterEffect":"RampUp","type":"ShutterStrobe"},{"label":"Ramp down slow-fast","range":[208,247],"shutterEffect":"RampDown","type":"ShutterStrobe"},{"label":"Open (hold)","range":[248,255],"shutterEffect":"Open","type":"ShutterStrobe"}],"default":255,"name":"Stop/Strobe","offset":2,"type":"strobe"},{"capabilities":[{"label":"Open","range":[0,6],"slotNumber":0,"type":"WheelSlot"},{"label":"Gobo 1","range":[7,13],"slotNumber":1,"type":"WheelSlot"},{"label":"Gobo 2","range":[14,20],"slotNumber":2,"type":"WheelSlot"},{"label":"Gobo 3","range":[21,27],"slotNumber":3,"type":"WheelSlot"},{"label":"Gobo 4","range":[28,34],"slotNumber":4,"type":"WheelSlot"},{"label":"Gobo 5","range":[35,41],"slotNumber":5,"type":"WheelSlot"},{"label":"Gobo 6","range":[42,48],"slotNumber":6,"type":"WheelSlot"},{"label":"Gobo 7","range":[49,55],"slotNumber":7,"type":"WheelSlot"},{"label":"Gobo 8","range":[56,62],"slotNumber":8,"type":"WheelSlot"},{"label":"Gobo 9","range":[63,69],"slotNumber":9,"type":"WheelSlot"},{"label":"Gobo 10","range":[70,76],"slotNumber":10,"type":"WheelSlot"},{"label":"Gobo 11","range":[77,83],"slotNumber":11,"type":"WheelSlot"},{"label":"Gobo 12","range":[84,90],"slotNumber":12,"type":"WheelSlot"},{"label":"Gobo 13","range":[91,97],"slotNumber":13,"type":"WheelSlot"},{"label":"Gobo 14","range":[98,104],"slotNumber":14,"type":"WheelSlot"},{"label":"Gobo 15","range":[105,111],"slotNumber":15,"type":"WheelSlot"},{"label":"Gobo 16","range":[112,118],"slotNumber":16,"type":"WheelSlot"},{"label":"Gobo 17","range":[119,125],"slotNumber":17,"type":"WheelSlot"},{"label":"Gobo 1 shake","range":[130,136],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":1,"type":"WheelShake"},{"label":"Gobo 2 shake","range":[137,143],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":2,"type":"WheelShake"},{"label":"Gobo 3 shake","range":[144,150],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":3,"type":"WheelShake"},{"label":"Gobo 4 shake","range":[151,157],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":4,"type":"WheelShake"},{"label":"Gobo 5 shake","range":[158,164],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":5,"type":"WheelShake"},{"label":"Gobo 6 shake","range":[165,171],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":6,"type":"WheelShake"},{"label":"Gobo 7 shake","range":[172,178],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":7,"type":"WheelShake"},{"label":"Gobo 8 shake","range":[179,185],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":8,"type":"WheelShake"},{"label":"Gobo 9 shake","range":[186,192],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":9,"type":"WheelShake"},{"label":"Gobo 10 shake","range":[193,199],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":10,"type":"WheelShake"},{"label":"Gobo 11 shake","range":[200,206],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":11,"type":"WheelShake"},{"label":"Gobo 12 shake","range":[207,213],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":12,"type":"WheelShake"},{"label":"Gobo 13 shake","range":[214,220],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":13,"type":"WheelShake"},{"label":"Gobo 14 shake","range":[221,227],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":14,"type":"WheelShake"},{"label":"Gobo 15 shake","range":[228,234],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":15,"type":"WheelShake"},{"label":"Gobo 16 shake","range":[235,241],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":16,"type":"WheelShake"},{"label":"Gobo 17 shake","range":[242,248],"shakeSpeedEnd":10,"shakeSpeedStart":0.5,"slotNumber":17,"type":"WheelShake"}],"name":"Static Gobo Change","offset":3,"type":"gobo"},{"capabilities":[{"label":"Prism out","range":[0,3],"type":"Prism"},{"label":"Prism in (8-face)","range":[4,255],"type":"Prism"}],"name":"Prism 1 Insertion","offset":4,"type":"prism"},{"capabilities":[{"label":"No rotation","range":[0,0],"speed":0,"type":"PrismRotation"},{"label":"Rotate CW slow-fast","range":[1,127],"speedEnd":5,"speedStart":0.1,"type":"PrismRotation"},{"label":"Stop","range":[128,128],"speed":0,"type":"PrismRotation"},{"label":"Rotate CCW slow-fast","range":[129,255],"speedEnd":-5,"speedStart":-0.1,"type":"PrismRotation"}],"name":"Prism 1 Rotation","offset":5,"type":"prism-rotation"},{"capabilities":[{"label":"Reserved","range":[0,255],"type":"NoFunction"}],"name":"Reserved 1","offset":6,"type":"macro"},{"capabilities":[{"label":"Reserved","range":[0,255],"type":"NoFunction"}],"name":"Reserved 2","offset":7,"type":"macro"},{"capabilities":[{"label":"Near \u00e2\u2020\u2019 Far","range":[0,255],"type":"Focus"}],"default":128,"name":"Focus","offset":8,"type":"focus"},{"bits":16,"capabilities":[{"angleEnd":540,"angleStart":0,"label":"Pan 0-540\u00c2\u00b0","range":[0,65535],"type":"Pan"}],"name":"Pan","offset":9,"type":"pan"},{"bits":16,"capabilities":[{"angleEnd":210,"angleStart":0,"label":"Tilt 0-210\u00c2\u00b0","range":[0,65535],"type":"Tilt"}],"name":"Tilt","offset":11,"type":"tilt"},{"capabilities":[{"duration":0,"label":"Vectorial (fastest)","range":[0,0],"type":"PanTiltSpeed"},{"durationEnd":0.1,"durationStart":5,"label":"Tracking slow-fast","range":[1,255],"type":"PanTiltSpeed"}],"name":"Pan-Tilt Speed","offset":13,"type":"pan-tilt-speed"},{"capabilities":[{"label":"Frost out","range":[0,3],"type":"Frost"},{"label":"Frost in (variable)","range":[4,255],"type":"Frost"}],"name":"Frost","offset":14,"type":"frost"},{"capabilities":[{"label":"Unused","range":[0,99],"type":"NoFunction"},{"label":"Lamp ON","range":[100,105],"type":"Maintenance"},{"label":"Lamp OFF","range":[200,205],"type":"Maintenance"},{"label":"Complete reset","range":[255,255],"type":"Maintenance"}],"default":100,"name":"Lamp Control/Reset","offset":15,"type":"reset"}],"colorMode":"single","communityDownloads":39,"id":"beamlight-350w-16ch","manufacturer":"BeamLight","name":"350W Outdoor Waterproof BeamLight","panRange":540,"tiltRange":210}],"rangeCalibrations":{},"savedAt":"2026-04-21T19:35:05.670492Z","schemaVersion":2,"settings":{"activeTimeline":-1,"autoStartShow":false,"canvasH":2000,"canvasW":2000,"darkMode":1,"globalBrightness":255,"logPath":"","logging":false,"name":"SlyLED","runnerLoop":true,"runnerStartEpoch":0,"units":0},"showPlaylist":{"loopAll":false,"order":[]},"spatialEffects":[{"b":180,"blend":"add","category":"spatial-field","fixtureIds":[],"g":0,"id":0,"motion":{"durationS":9.7,"easing":"ease-in-out","endPos":[2920,802,484],"startPos":[-1000,106,-184]},"name":"Concert Wash Sweep 1","r":220,"shape":"plane","size":{"normal":[1,0,0],"thickness":2000}},{"b":40,"blend":"add","category":"spatial-field","fixtureIds":[],"g":160,"id":1,"motion":{"durationS":9.8,"easing":"ease-out","endPos":[-1000,723,230],"startPos":[2920,385,316]},"name":"Concert Wash Sweep 2","r":255,"shape":"plane","size":{"normal":[1,0,0],"thickness":2000}},{"b":180,"blend":"add","category":"spatial-field","fixtureIds":[],"g":0,"id":2,"motion":{"durationS":10.2,"easing":"ease-out","endPos":[2920,611,-143],"startPos":[-1000,78,-459]},"name":"Concert Wash Sweep 3","r":220,"shape":"plane","size":{"normal":[1,0,0],"thickness":2000}},{"b":180,"blend":"add","category":"spatial-field","fixtureIds":[],"g":0,"id":3,"motion":{"durationS":18,"easing":"ease-in-out","endPos":[586,758,0],"startPos":[586,758,0]},"name":"Concert Wash Tracker","r":220,"shape":"sphere","size":{"radius":2000}},{"b":80,"blend":"add","category":"spatial-field","fixtureIds":[],"g":255,"id":4,"motion":{"durationS":14.3,"easing":"ease-out","endPos":[3037,292,-470],"startPos":[-1000,241,456]},"name":"Aurora Borealis Sweep 1","r":0,"shape":"plane","size":{"normal":[1,0,0],"thickness":2000}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":0,"id":5,"motion":{"durationS":13.5,"easing":"ease-in-out","endPos":[-1000,90,282],"startPos":[3037,608,40]},"name":"Aurora Borealis Sweep 2","r":120,"shape":"plane","size":{"normal":[1,0,0],"thickness":2000}},{"b":80,"blend":"add","category":"spatial-field","fixtureIds":[],"g":255,"id":6,"motion":{"durationS":22.5,"easing":"ease-in-out","endPos":[1317,781,0],"startPos":[1317,781,0]},"name":"Aurora Borealis Tracker","r":0,"shape":"sphere","size":{"radius":2000}},{"b":30,"blend":"screen","category":"spatial-field","fixtureIds":[],"g":160,"id":7,"motion":{"durationS":16.6,"easing":"ease-out","endPos":[1618,-1000,114],"startPos":[787,1803,252]},"name":"Sunset Glow Sweep 1","r":255,"shape":"plane","size":{"normal":[0,1,0],"thickness":2000}},{"b":0,"blend":"screen","category":"spatial-field","fixtureIds":[],"g":80,"id":8,"motion":{"durationS":22.8,"easing":"ease-out","endPos":[1189,-1000,-412],"startPos":[1275,1803,65]},"name":"Sunset Glow Sweep 2","r":200,"shape":"plane","size":{"normal":[0,1,0],"thickness":2000}},{"b":30,"blend":"add","category":"spatial-field","fixtureIds":[],"g":160,"id":9,"motion":{"durationS":30,"easing":"ease-in-out","endPos":[1317,781,0],"startPos":[1317,781,0]},"name":"Sunset Glow Tracker","r":255,"shape":"sphere","size":{"radius":2000}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":240,"id":10,"motion":{"durationS":9.6,"easing":"ease-in-out","endPos":[2605,494,1131],"startPos":[-500,144,1936]},"name":"Spotlight Sweep Sweep 1","r":255,"shape":"sphere","size":{"radius":1966}},{"b":255,"blend":"screen","category":"spatial-field","fixtureIds":[],"g":180,"id":11,"motion":{"durationS":7.2,"easing":"ease-out","endPos":[-500,261,1092],"startPos":[2605,-98,1610]},"name":"Spotlight Sweep Sweep 2","r":200,"shape":"sphere","size":{"radius":2324}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":240,"id":12,"motion":{"durationS":9.2,"easing":"linear","endPos":[2605,219,1732],"startPos":[-500,-470,1497]},"name":"Spotlight Sweep Sweep 3","r":255,"shape":"sphere","size":{"radius":2482}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":240,"id":13,"motion":{"durationS":12,"easing":"ease-in-out","endPos":[1605,0,1690],"startPos":[500,0,1690]},"name":"Spotlight Sweep Tracker","r":255,"shape":"sphere","size":{"radius":2000}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":240,"id":14,"motion":{"durationS":0.4,"easing":"ease-in-out","endPos":[3000,738,1480],"startPos":[-500,704,2110]},"name":"Spotlight: Follow Person Sweep 1","r":255,"shape":"sphere","size":{"radius":2202}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":240,"id":15,"motion":{"durationS":0.5,"easing":"ease-in-out","endPos":[-500,863,1980],"startPos":[3000,846,1228]},"name":"Spotlight: Follow Person Sweep 2","r":255,"shape":"sphere","size":{"radius":1756}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":240,"id":16,"motion":{"durationS":0.8,"easing":"ease-in-out","endPos":[1605,0,1690],"startPos":[500,0,1690]},"name":"Spotlight: Follow Person Tracker","r":255,"shape":"sphere","size":{"radius":2000}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":240,"id":17,"motion":{"durationS":0.3,"easing":"ease-in","endPos":[2000,-1000,860],"startPos":[2270,4350,778]},"name":"Lightning 1","r":255,"shape":"sphere","size":{"radius":2000}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":240,"id":18,"motion":{"durationS":0.3,"easing":"ease-in","endPos":[500,-1000,1690],"startPos":[747,4350,1707]},"name":"Lightning 2","r":255,"shape":"sphere","size":{"radius":2000}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":240,"id":19,"motion":{"durationS":0.3,"easing":"ease-in","endPos":[1605,-1000,1690],"startPos":[1468,4350,1934]},"name":"Lightning 3","r":255,"shape":"sphere","size":{"radius":2000}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":240,"id":20,"motion":{"durationS":0.3,"easing":"ease-in","endPos":[500,-1000,1690],"startPos":[251,4350,1333]},"name":"Lightning 4","r":255,"shape":"sphere","size":{"radius":2000}},{"b":200,"blend":"screen","category":"spatial-field","fixtureIds":[],"g":240,"id":21,"motion":{"durationS":0.5,"easing":"ease-in-out","endPos":[3000,408,1921],"startPos":[-500,124,1536]},"name":"Spotlight: Follow Person Sweep 1","r":255,"shape":"sphere","size":{"radius":1878}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":240,"id":22,"motion":{"durationS":0.4,"easing":"linear","endPos":[-500,763,1900],"startPos":[3000,83,1240]},"name":"Spotlight: Follow Person Sweep 2","r":255,"shape":"sphere","size":{"radius":1977}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":240,"id":23,"motion":{"durationS":0.8,"easing":"ease-in-out","endPos":[1605,0,1690],"startPos":[500,0,1690]},"name":"Spotlight: Follow Person Tracker","r":255,"shape":"sphere","size":{"radius":2000}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":240,"id":24,"motion":{"durationS":0.3,"easing":"ease-in","endPos":[2000,-1000,860],"startPos":[2104,4350,723]},"name":"Lightning 1","r":255,"shape":"sphere","size":{"radius":2000}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":240,"id":25,"motion":{"durationS":0.3,"easing":"ease-in","endPos":[500,-1000,1690],"startPos":[632,4350,1219]},"name":"Lightning 2","r":255,"shape":"sphere","size":{"radius":2000}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":240,"id":26,"motion":{"durationS":0.3,"easing":"ease-in","endPos":[500,-1000,1690],"startPos":[722,4350,1814]},"name":"Lightning 3","r":255,"shape":"sphere","size":{"radius":2000}},{"b":200,"blend":"add","category":"spatial-field","fixtureIds":[],"g":240,"id":27,"motion":{"durationS":0.3,"easing":"ease-in","endPos":[830,-1000,1930],"startPos":[902,4350,1857]},"name":"Lightning 4","r":255,"shape":"sphere","size":{"radius":2000}}],"stage":{"d":4,"h":2,"w":2},"timelines":[],"type":"slyled-project"}
+{
+  "actions": [
+    {
+      "b": 200,
+      "g": 40,
+      "id": 0,
+      "minBri": 20,
+      "name": "Concert Wash — LED Base",
+      "periodMs": 5000,
+      "r": 0,
+      "type": 3
+    },
+    {
+      "b": 180,
+      "dimmer": 200,
+      "g": 0,
+      "id": 1,
+      "name": "Concert Wash — Par Wash",
+      "pan": 0.5,
+      "r": 220,
+      "tilt": 0.5,
+      "type": 14
+    },
+    {
+      "b": 60,
+      "dimmer": 120,
+      "g": 20,
+      "id": 2,
+      "name": "Concert Wash — Mover Base",
+      "pan": 0.5,
+      "r": 73,
+      "tilt": 0.5,
+      "type": 14
+    },
+    {
+      "b": 180,
+      "dimmer": 255,
+      "g": 0,
+      "id": 3,
+      "name": "Mover 1 Sweep",
+      "panEnd": 0.78,
+      "panStart": 0.22,
+      "r": 220,
+      "speedMs": 8000,
+      "tiltEnd": 0.7,
+      "tiltStart": 0.3,
+      "type": 15
+    },
+    {
+      "b": 40,
+      "g": 80,
+      "id": 4,
+      "minBri": 10,
+      "name": "Aurora Borealis — LED Base",
+      "periodMs": 5000,
+      "r": 0,
+      "type": 3
+    },
+    {
+      "b": 80,
+      "dimmer": 200,
+      "g": 255,
+      "id": 5,
+      "name": "Aurora Borealis — Par Wash",
+      "pan": 0.5,
+      "r": 0,
+      "tilt": 0.5,
+      "type": 14
+    },
+    {
+      "b": 26,
+      "dimmer": 120,
+      "g": 85,
+      "id": 6,
+      "name": "Aurora Borealis — Mover Base",
+      "pan": 0.5,
+      "r": 20,
+      "tilt": 0.5,
+      "type": 14
+    },
+    {
+      "b": 80,
+      "dimmer": 255,
+      "g": 255,
+      "id": 7,
+      "name": "Mover 1 Sweep",
+      "panEnd": 0.72,
+      "panStart": 0.28,
+      "r": 0,
+      "speedMs": 10000,
+      "tiltEnd": 0.66,
+      "tiltStart": 0.34,
+      "type": 15
+    },
+    {
+      "b": 20,
+      "g": 100,
+      "id": 8,
+      "minBri": 30,
+      "name": "Sunset Glow — LED Base",
+      "periodMs": 4000,
+      "r": 255,
+      "type": 3
+    },
+    {
+      "b": 20,
+      "dimmer": 200,
+      "g": 100,
+      "id": 9,
+      "name": "Sunset Glow — Par Wash",
+      "pan": 0.5,
+      "r": 255,
+      "tilt": 0.5,
+      "type": 14
+    },
+    {
+      "b": 20,
+      "dimmer": 120,
+      "g": 33,
+      "id": 10,
+      "name": "Sunset Glow — Mover Base",
+      "pan": 0.5,
+      "r": 85,
+      "tilt": 0.5,
+      "type": 14
+    },
+    {
+      "b": 20,
+      "dimmer": 255,
+      "g": 100,
+      "id": 11,
+      "name": "Mover 1 Sweep",
+      "panEnd": 0.7,
+      "panStart": 0.3,
+      "r": 255,
+      "speedMs": 11428,
+      "tiltEnd": 0.64,
+      "tiltStart": 0.36,
+      "type": 15
+    },
+    {
+      "b": 10,
+      "g": 15,
+      "id": 12,
+      "name": "Spotlight Sweep — LED Base",
+      "r": 20,
+      "type": 1
+    },
+    {
+      "b": 66,
+      "dimmer": 120,
+      "g": 80,
+      "id": 13,
+      "name": "Spotlight Sweep — Mover Base",
+      "pan": 0.5,
+      "r": 85,
+      "tilt": 0.5,
+      "type": 14
+    },
+    {
+      "b": 200,
+      "dimmer": 255,
+      "g": 240,
+      "id": 14,
+      "name": "Mover 1 Sweep",
+      "panEnd": 0.78,
+      "panStart": 0.22,
+      "r": 255,
+      "speedMs": 8000,
+      "tiltEnd": 0.7,
+      "tiltStart": 0.3,
+      "type": 15
+    },
+    {
+      "b": 255,
+      "dimmer": 255,
+      "g": 180,
+      "id": 15,
+      "name": "Mover 2 Sweep",
+      "panEnd": 0.22,
+      "panStart": 0.78,
+      "r": 200,
+      "speedMs": 8000,
+      "tiltEnd": 0.7,
+      "tiltStart": 0.3,
+      "type": 15
+    },
+    {
+      "b": 255,
+      "colorWheel": 0,
+      "dimmer": 255,
+      "g": 0,
+      "gobo": 0,
+      "id": 16,
+      "name": "MH1 Blue Sweep",
+      "pan": 0.5,
+      "prism": 0,
+      "ptEndPos": [
+        5000,
+        3000,
+        0
+      ],
+      "ptStartPos": [
+        500,
+        3000,
+        0
+      ],
+      "r": 0,
+      "scope": "performer-selected",
+      "speedMs": 5000,
+      "strobe": 0,
+      "targetIds": [
+        2
+      ],
+      "tilt": 0.5,
+      "type": 15
+    },
+    {
+      "b": 0,
+      "colorWheel": 0,
+      "dimmer": 255,
+      "g": 0,
+      "gobo": 0,
+      "id": 17,
+      "name": "MH2 Red Sweep",
+      "pan": 0.5,
+      "prism": 0,
+      "ptEndPos": [
+        5000,
+        3000,
+        0
+      ],
+      "ptStartPos": [
+        500,
+        3000,
+        0
+      ],
+      "r": 255,
+      "scope": "performer-selected",
+      "speedMs": 5000,
+      "strobe": 0,
+      "targetIds": [
+        7
+      ],
+      "tilt": 0.5,
+      "type": 15
+    },
+    {
+      "b": 255,
+      "colorWheel": 0,
+      "dimmer": 255,
+      "g": 255,
+      "gobo": 0,
+      "id": 18,
+      "name": "Both White Sweep",
+      "pan": 0.5,
+      "prism": 0,
+      "ptEndPos": [
+        5000,
+        3000,
+        0
+      ],
+      "ptStartPos": [
+        500,
+        3000,
+        0
+      ],
+      "r": 255,
+      "scope": "performer",
+      "speedMs": 5000,
+      "strobe": 0,
+      "tilt": 0.5,
+      "type": 15
+    },
+    {
+      "b": 30,
+      "g": 5,
+      "id": 19,
+      "name": "Spotlight: Follow Person — LED Base",
+      "r": 10,
+      "type": 1
+    },
+    {
+      "b": 66,
+      "dimmer": 120,
+      "g": 80,
+      "id": 20,
+      "name": "Spotlight: Follow Person — Mover Base",
+      "pan": 0.5,
+      "r": 85,
+      "tilt": 0.5,
+      "type": 14
+    },
+    {
+      "b": 200,
+      "dimmer": 255,
+      "g": 240,
+      "id": 21,
+      "name": "Follow Person",
+      "r": 255,
+      "scope": "performer",
+      "trackAutoSpread": true,
+      "trackCycleMs": 1000,
+      "trackDimmer": 255,
+      "trackFixedAssignment": false,
+      "trackObjectIds": [],
+      "trackObjectType": "person",
+      "trackOffset": [
+        0,
+        0,
+        0
+      ],
+      "type": 18
+    },
+    {
+      "b": 30,
+      "g": 5,
+      "id": 22,
+      "name": "Spotlight: Follow Person — LED Base",
+      "r": 10,
+      "type": 1
+    },
+    {
+      "b": 66,
+      "dimmer": 120,
+      "g": 80,
+      "id": 23,
+      "name": "Spotlight: Follow Person — Mover Base",
+      "pan": 0.5,
+      "r": 85,
+      "tilt": 0.5,
+      "type": 14
+    },
+    {
+      "b": 200,
+      "dimmer": 255,
+      "g": 240,
+      "id": 24,
+      "name": "Follow Person",
+      "r": 255,
+      "trackAutoSpread": true,
+      "trackCycleMs": 2000,
+      "trackDimmer": 255,
+      "trackFixedAssignment": false,
+      "trackObjectType": "person",
+      "type": 18
+    }
+  ],
+  "appVersion": "1.5.56",
+  "arucoMarkers": [
+    {
+      "id": 0,
+      "label": "bottom left",
+      "rx": 0,
+      "ry": 0,
+      "rz": 0,
+      "size": 150,
+      "x": 1640,
+      "y": 1900,
+      "z": 0
+    },
+    {
+      "id": 1,
+      "label": "chair",
+      "rx": 0,
+      "ry": 0,
+      "rz": 0,
+      "size": 150,
+      "x": 1610,
+      "y": 3100,
+      "z": 0
+    },
+    {
+      "id": 2,
+      "label": "pillar",
+      "rx": 0,
+      "ry": 0,
+      "rz": 0,
+      "size": 150,
+      "x": 1053,
+      "y": 2150,
+      "z": 0
+    }
+  ],
+  "calibrations": {
+    "12": {
+      "cx": 977.23,
+      "cy": 531.86,
+      "distCoeffs": [
+        1.54596,
+        -62.477407,
+        0.193139,
+        0.184507,
+        602.633409
+      ],
+      "frameCount": 3,
+      "fx": 3151.49,
+      "fy": 2808.58,
+      "imageSize": [
+        1920,
+        1080
+      ],
+      "rmsError": 0.5785,
+      "source": "camera_node",
+      "type": "intrinsic"
+    },
+    "13": {
+      "cx": 970.44,
+      "cy": 530.69,
+      "distCoeffs": [
+        -0.063979,
+        -1.05643,
+        0.004334,
+        0.063757,
+        1.322455
+      ],
+      "frameCount": 4,
+      "fx": 548.55,
+      "fy": 573.72,
+      "imageSize": [
+        1920,
+        1080
+      ],
+      "rmsError": 0.3593,
+      "source": "camera_node",
+      "type": "intrinsic"
+    }
+  },
+  "cameraSsh": {},
+  "children": [
+    {
+      "boardType": "giga-dmx",
+      "chipModel": "STM32H747XI",
+      "desc": "",
+      "flashSize": 0,
+      "freeHeap": 0,
+      "fwVersion": "7.5.20",
+      "hostname": "SLYC-1152",
+      "id": 0,
+      "ip": "192.168.10.219",
+      "name": "SLYC-1152",
+      "rssi": -51,
+      "sc": 1,
+      "sdkVersion": "mbed",
+      "seen": 1776806690,
+      "strings": [
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 30,
+          "mm": 500,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        },
+        {
+          "cdir": 0,
+          "cmm": 0,
+          "folded": false,
+          "leds": 0,
+          "mm": 0,
+          "sdir": 0,
+          "type": 0
+        }
+      ],
+      "type": "dmx",
+      "uptime": 28454
+    }
+  ],
+  "dmxSettings": {
+    "autoStartEngine": true,
+    "bindIp": "192.168.10.16",
+    "bootBlinkFixtures": true,
+    "frameRate": 40,
+    "protocol": "artnet",
+    "sacnPriority": 100,
+    "sacnSourceName": "SlyLED",
+    "universeRoutes": [
+      {
+        "destination": "192.168.10.219",
+        "label": "giga",
+        "universe": 1
+      }
+    ]
+  },
+  "fixtures": [
+    {
+      "aoeRadius": 1000,
+      "childId": null,
+      "childIds": [],
+      "dmxChannelCount": 13,
+      "dmxProfileId": "slymovehead",
+      "dmxStartAddr": 14,
+      "dmxUniverse": 1,
+      "fixtureType": "dmx",
+      "id": 2,
+      "meshFile": null,
+      "mountedInverted": true,
+      "moverCalibrated": true,
+      "name": "Sly MH 1",
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "strings": [],
+      "type": "point"
+    },
+    {
+      "aoeRadius": 1000,
+      "childId": null,
+      "childIds": [],
+      "dmxChannelCount": 13,
+      "dmxProfileId": "slymovehead",
+      "dmxStartAddr": 1,
+      "dmxUniverse": 1,
+      "fixtureType": "dmx",
+      "id": 7,
+      "meshFile": null,
+      "mountedInverted": true,
+      "moverCalibrated": true,
+      "name": "Sly MH 2",
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "strings": [],
+      "type": "point"
+    },
+    {
+      "aoeRadius": 1000,
+      "calibrated": true,
+      "cameraIdx": 0,
+      "cameraIp": "192.168.10.235",
+      "cameraUrl": "",
+      "childId": null,
+      "childIds": [],
+      "fixtureType": "camera",
+      "fovDeg": 100,
+      "id": 12,
+      "meshFile": null,
+      "name": "Left Cam Wide",
+      "resolutionH": 1080,
+      "resolutionW": 1920,
+      "rotation": [
+        30,
+        0,
+        0
+      ],
+      "strings": [],
+      "trackClasses": [
+        "person"
+      ],
+      "trackFps": 2,
+      "trackReidMm": 500,
+      "trackThreshold": 0.4,
+      "trackTtl": 5,
+      "type": "point"
+    },
+    {
+      "aoeRadius": 1000,
+      "calibrated": true,
+      "cameraIdx": 1,
+      "cameraIp": "192.168.10.235",
+      "cameraUrl": "",
+      "childId": null,
+      "childIds": [],
+      "fixtureType": "camera",
+      "fovDeg": 90,
+      "id": 13,
+      "meshFile": null,
+      "name": "Right High Res",
+      "resolutionH": 2160,
+      "resolutionW": 3840,
+      "rotation": [
+        30,
+        0,
+        0
+      ],
+      "strings": [],
+      "trackClasses": [
+        "person",
+        "chair"
+      ],
+      "trackFps": 2,
+      "trackReidMm": 500,
+      "trackThreshold": 0.4,
+      "trackTtl": 5,
+      "type": "point"
+    },
+    {
+      "aoeRadius": 1000,
+      "childId": null,
+      "childIds": [],
+      "dmxChannelCount": 14,
+      "dmxProfileId": "beamlight-350w-16ch",
+      "dmxStartAddr": 27,
+      "dmxUniverse": 1,
+      "fixtureType": "dmx",
+      "id": 14,
+      "meshFile": null,
+      "mountedInverted": false,
+      "name": "350W Outdoor Waterproof BeamLight",
+      "rotation": [
+        -90,
+        0,
+        0
+      ],
+      "strings": [],
+      "type": "point"
+    }
+  ],
+  "layout": {
+    "canvasH": 2000,
+    "canvasW": 2000,
+    "children": [
+      {
+        "id": 12,
+        "x": 1275,
+        "y": 120,
+        "z": 1930
+      },
+      {
+        "id": 13,
+        "x": 830,
+        "y": 120,
+        "z": 1930
+      },
+      {
+        "id": 2,
+        "x": 500,
+        "y": 0,
+        "z": 1690
+      },
+      {
+        "id": 7,
+        "x": 1605,
+        "y": 0,
+        "z": 1690
+      },
+      {
+        "id": 14,
+        "x": 1605,
+        "y": 150,
+        "z": 550
+      }
+    ]
+  },
+  "lightMaps": null,
+  "moverCalibrations": {
+    "2": {
+      "boundaries": {
+        "panMax": 0.4,
+        "panMin": 0.298,
+        "tiltMax": 1,
+        "tiltMin": 0.753,
+        "verified": false
+      },
+      "centerPan": 0.35,
+      "centerTarget": [
+        2212,
+        2625,
+        1028
+      ],
+      "centerTilt": 0.8784,
+      "fit": {
+        "conditionNumber": 26511830.95931786,
+        "maxErrorDeg": 2.1972640598220945,
+        "perSampleDeg": [
+          2.1972640598220945,
+          1.0288612944938371,
+          0.6912520123146976,
+          1.2284894201702348
+        ],
+        "rmsErrorDeg": 1.4029914924806854,
+        "sampleCount": 4
+      },
+      "grid": {
+        "panSteps": [
+          0.298,
+          0.322,
+          0.38,
+          0.4
+        ],
+        "pixelX": [
+          [
+            1050,
+            2000,
+            2000,
+            5000
+          ],
+          [
+            1050,
+            2000,
+            2000,
+            5000
+          ],
+          [
+            1050,
+            800,
+            800,
+            5000
+          ],
+          [
+            1050,
+            800,
+            800,
+            5000
+          ]
+        ],
+        "pixelY": [
+          [
+            2250,
+            2350,
+            2350,
+            3700
+          ],
+          [
+            2250,
+            2350,
+            2350,
+            3700
+          ],
+          [
+            2250,
+            2200,
+            2200,
+            3700
+          ],
+          [
+            2250,
+            2200,
+            2200,
+            3700
+          ]
+        ],
+        "tiltSteps": [
+          0.753,
+          0.867,
+          0.894,
+          1
+        ]
+      },
+      "method": "manual",
+      "model": {
+        "mountPitch": 165.13595954827875,
+        "mountRoll": 34.48148872574197,
+        "mountYaw": 94.23069260713416,
+        "panOffset": 0.2508623485070905,
+        "panRangeDeg": 540,
+        "panSign": 1,
+        "tiltOffset": 1.1575249285765878,
+        "tiltRangeDeg": 180,
+        "tiltSign": 1
+      },
+      "sampleCount": 4,
+      "samples": [
+        {
+          "pan": 0.4,
+          "stageX": 800,
+          "stageY": 2200,
+          "stageZ": 1250,
+          "tilt": 0.8941176470588236
+        },
+        {
+          "pan": 0.3215686274509804,
+          "stageX": 2000,
+          "stageY": 2350,
+          "stageZ": 860,
+          "tilt": 0.8666666666666667
+        },
+        {
+          "pan": 0.3803921568627451,
+          "stageX": 1050,
+          "stageY": 2250,
+          "stageZ": 0,
+          "tilt": 0.7529411764705882
+        },
+        {
+          "pan": 0.2980392156862745,
+          "stageX": 5000,
+          "stageY": 3700,
+          "stageZ": 2000,
+          "tilt": 1
+        }
+      ],
+      "timestamp": 1776106558.0271337,
+      "version": 2
+    },
+    "7": {
+      "boundaries": {
+        "panMax": 0.459,
+        "panMin": 0.286,
+        "tiltMax": 1,
+        "tiltMin": 0.776,
+        "verified": false
+      },
+      "centerPan": 0.3902,
+      "centerTarget": [
+        2212,
+        2625,
+        1028
+      ],
+      "centerTilt": 0.8941,
+      "fit": {
+        "conditionNumber": 69593583.605231,
+        "maxErrorDeg": 10.053821615593963,
+        "perSampleDeg": [
+          7.97985512327786,
+          2.133146919779257,
+          2.251131977836582,
+          10.053821615593963
+        ],
+        "rmsErrorDeg": 6.602562529610955,
+        "sampleCount": 4
+      },
+      "grid": {
+        "panSteps": [
+          0.286,
+          0.373,
+          0.443,
+          0.459
+        ],
+        "pixelX": [
+          [
+            2000,
+            2000,
+            5000,
+            5000
+          ],
+          [
+            1050,
+            2000,
+            2000,
+            5000
+          ],
+          [
+            1050,
+            2000,
+            800,
+            800
+          ],
+          [
+            1050,
+            800,
+            800,
+            800
+          ]
+        ],
+        "pixelY": [
+          [
+            2350,
+            2350,
+            3700,
+            3700
+          ],
+          [
+            2250,
+            2350,
+            2350,
+            3700
+          ],
+          [
+            2250,
+            2350,
+            2200,
+            2200
+          ],
+          [
+            2250,
+            2200,
+            2200,
+            2200
+          ]
+        ],
+        "tiltSteps": [
+          0.776,
+          0.863,
+          0.937,
+          1
+        ]
+      },
+      "method": "manual",
+      "model": {
+        "mountPitch": 392.77398175999286,
+        "mountRoll": 0.6870821646797319,
+        "mountYaw": -5.465694262062625,
+        "panOffset": 0.37933106481386103,
+        "panRangeDeg": 540,
+        "panSign": -1,
+        "tiltOffset": 1.1500637804000247,
+        "tiltRangeDeg": 180,
+        "tiltSign": -1
+      },
+      "sampleCount": 4,
+      "samples": [
+        {
+          "pan": 0.4588235294117647,
+          "stageX": 800,
+          "stageY": 2200,
+          "stageZ": 1250,
+          "tilt": 0.9372549019607843
+        },
+        {
+          "pan": 0.37254901960784315,
+          "stageX": 2000,
+          "stageY": 2350,
+          "stageZ": 860,
+          "tilt": 0.8627450980392157
+        },
+        {
+          "pan": 0.44313725490196076,
+          "stageX": 1050,
+          "stageY": 2250,
+          "stageZ": 0,
+          "tilt": 0.7764705882352941
+        },
+        {
+          "pan": 0.28627450980392155,
+          "stageX": 5000,
+          "stageY": 3700,
+          "stageZ": 2000,
+          "tilt": 1
+        }
+      ],
+      "timestamp": 1776106765.2190464,
+      "version": 2
+    }
+  },
+  "name": "SlyLED",
+  "objects": [
+    {
+      "color": "#505634",
+      "filename": "",
+      "id": 1,
+      "mobility": "static",
+      "name": "Music",
+      "objectType": "custom",
+      "opacity": 18,
+      "stageLocked": false,
+      "transform": {
+        "pos": [
+          800,
+          2200,
+          1250
+        ],
+        "rot": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          100,
+          100,
+          10
+        ]
+      }
+    }
+  ],
+  "pointCloud": {
+    "cameras": [
+      {
+        "cameraIdx": 0,
+        "fixtureId": 12,
+        "lite": true,
+        "name": "Left Cam Wide",
+        "pointCount": 0
+      },
+      {
+        "cameraIdx": 0,
+        "fixtureId": 13,
+        "lite": true,
+        "name": "Right High Res",
+        "pointCount": 0
+      }
+    ],
+    "floorNormalized": true,
+    "floorOffset": 0,
+    "points": {
+      "compressed": true,
+      "data": "H4sIACPr52kC/42Xa04CQRAGr8IBiKG+Zm3vQrz/NcQoPoCdrj/EhM5MsXSK8nI5vZyOh9+XOh8PgetLvb0fD19vZxsGttMw0NMJnKYjGCkYMRg5MnJk5MjIkZGjRo4aOWrkqJHjvOL4S7AaWJF+v7fN1/R8CoIWQYPAQfBE8ETwRPBE8JTgKcFTgqcEz3K7/t6xGljxfo9s8zU9n4KgRdAgcBA8ETwRPBE8ETwleErwlOApwbPcrp7c1bO7enZXz+5q4a4W7mrhrhbuauGuFu5q4a4W7mrhrhbuauGuFu5q4a5/X+ZyYkV8m9nETS3OwSBjiDBIGKYYphimGKYYpjJMZZjKMJVhWq/bWGKIFEO0GCLGMDWGyTFMj2GCDFNkmCTDNBkmyjBVhskyTJdhwgxTZoxphmgzRJwh6gyTZ5g+wwQaptAwiYZpNEykYSoNk2mYTsOEGqbUMKnG2GqIWEPUGiLXML2GCTZMsWGSDdNsmGjDVBsm2zDdhgk3TLlh0g3TbhnbLaLdItotot1i2i2m3WLaLabdYtotpt1i2i2m3WLaLabdYtotpt1i2u1xgusEvH7+cX6YuMXOaub2C7WaaXHOT8gvhwwRBgnDlB2mZ90yzOyA301t6r5WZ+HgcWQ4NBzb3oN99gs9zOzg301t6r5WZ+HgcWQ4NBzb3oNtsbGtNrbVxrba2HYb225j221su41tt7FP/2WehnY+wP3Y5q5sdxryEyDpkHhIvt0nbGyL0y3OtzjhIo2LVC7SuUjpIq2L0S7Ouzjx4syLVC/SvUj5Iu2L1C/GvzgB4wyMUzDSwUgJIy2M1DDSwzEejvNwnIfjPBzp4UgPR3o40sMxHn7/AFqUyai9IQAA"
+    },
+    "schemaVersion": 1,
+    "source": "lite",
+    "stageD": 4000,
+    "stageH": 2000,
+    "stageW": 2000,
+    "timestamp": 1776806047.778115,
+    "totalPoints": 234
+  },
+  "profiles": [
+    {
+      "beamWidth": 3,
+      "builtin": false,
+      "category": "moving-head",
+      "channelCount": 14,
+      "channels": [
+        {
+          "capabilities": [
+            {
+              "label": "Open",
+              "range": [
+                0,
+                4
+              ],
+              "slotNumber": 0,
+              "type": "WheelSlot"
+            },
+            {
+              "color": "#ffffff",
+              "label": "White",
+              "range": [
+                5,
+                9
+              ],
+              "slotNumber": 1,
+              "type": "WheelSlot"
+            },
+            {
+              "color": "#ff0000",
+              "label": "Red",
+              "range": [
+                10,
+                14
+              ],
+              "slotNumber": 2,
+              "type": "WheelSlot"
+            },
+            {
+              "color": "#00c837",
+              "label": "Green",
+              "range": [
+                15,
+                19
+              ],
+              "slotNumber": 3,
+              "type": "WheelSlot"
+            },
+            {
+              "color": "#0033ff",
+              "label": "Blue",
+              "range": [
+                20,
+                24
+              ],
+              "slotNumber": 4,
+              "type": "WheelSlot"
+            },
+            {
+              "color": "#ffff00",
+              "label": "Yellow",
+              "range": [
+                25,
+                29
+              ],
+              "slotNumber": 5,
+              "type": "WheelSlot"
+            },
+            {
+              "color": "#ff7f00",
+              "label": "Orange",
+              "range": [
+                30,
+                34
+              ],
+              "slotNumber": 6,
+              "type": "WheelSlot"
+            },
+            {
+              "color": "#b093c9",
+              "label": "Lavender",
+              "range": [
+                35,
+                39
+              ],
+              "slotNumber": 7,
+              "type": "WheelSlot"
+            },
+            {
+              "color": "#7dff7d",
+              "label": "Light green",
+              "range": [
+                40,
+                44
+              ],
+              "slotNumber": 8,
+              "type": "WheelSlot"
+            },
+            {
+              "color": "#000080",
+              "label": "Navy",
+              "range": [
+                45,
+                49
+              ],
+              "slotNumber": 9,
+              "type": "WheelSlot"
+            },
+            {
+              "color": "#fff6c8",
+              "label": "Light yellow",
+              "range": [
+                50,
+                54
+              ],
+              "slotNumber": 10,
+              "type": "WheelSlot"
+            },
+            {
+              "colorTemperature": 3200,
+              "label": "CTO1 (3200K)",
+              "range": [
+                55,
+                59
+              ],
+              "slotNumber": 11,
+              "type": "ColorTemperature"
+            },
+            {
+              "color": "#c80050",
+              "label": "Magenta",
+              "range": [
+                60,
+                64
+              ],
+              "slotNumber": 12,
+              "type": "WheelSlot"
+            },
+            {
+              "color": "#ffbf00",
+              "label": "Amber",
+              "range": [
+                65,
+                69
+              ],
+              "slotNumber": 13,
+              "type": "WheelSlot"
+            },
+            {
+              "colorTemperature": 2700,
+              "label": "CTO2 (2700K)",
+              "range": [
+                70,
+                74
+              ],
+              "slotNumber": 14,
+              "type": "ColorTemperature"
+            }
+          ],
+          "name": "Color Wheel",
+          "offset": 0,
+          "type": "color-wheel"
+        },
+        {
+          "capabilities": [
+            {
+              "label": "Dimmer 0-100%",
+              "range": [
+                0,
+                255
+              ],
+              "type": "Intensity"
+            }
+          ],
+          "default": 0,
+          "name": "Dimmer",
+          "offset": 1,
+          "type": "dimmer"
+        },
+        {
+          "capabilities": [
+            {
+              "label": "Solid (shutter fully open)",
+              "range": [
+                255,
+                255
+              ],
+              "shutterEffect": "Open",
+              "type": "ShutterStrobe"
+            },
+            {
+              "label": "Closed (blackout)",
+              "range": [
+                0,
+                7
+              ],
+              "shutterEffect": "Closed",
+              "type": "ShutterStrobe"
+            },
+            {
+              "label": "Strobe slow-fast",
+              "range": [
+                16,
+                131
+              ],
+              "shutterEffect": "Strobe",
+              "type": "ShutterStrobe"
+            },
+            {
+              "label": "Pulse slow-fast",
+              "range": [
+                132,
+                167
+              ],
+              "shutterEffect": "Pulse",
+              "type": "ShutterStrobe"
+            },
+            {
+              "label": "Ramp up slow-fast",
+              "range": [
+                168,
+                207
+              ],
+              "shutterEffect": "RampUp",
+              "type": "ShutterStrobe"
+            },
+            {
+              "label": "Ramp down slow-fast",
+              "range": [
+                208,
+                247
+              ],
+              "shutterEffect": "RampDown",
+              "type": "ShutterStrobe"
+            },
+            {
+              "label": "Open (hold / pre-solid)",
+              "range": [
+                248,
+                254
+              ],
+              "shutterEffect": "Open",
+              "type": "ShutterStrobe"
+            }
+          ],
+          "default": 255,
+          "name": "Stop/Strobe",
+          "offset": 2,
+          "type": "strobe"
+        },
+        {
+          "capabilities": [
+            {
+              "label": "Open",
+              "range": [
+                0,
+                6
+              ],
+              "slotNumber": 0,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 1",
+              "range": [
+                7,
+                13
+              ],
+              "slotNumber": 1,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 2",
+              "range": [
+                14,
+                20
+              ],
+              "slotNumber": 2,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 3",
+              "range": [
+                21,
+                27
+              ],
+              "slotNumber": 3,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 4",
+              "range": [
+                28,
+                34
+              ],
+              "slotNumber": 4,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 5",
+              "range": [
+                35,
+                41
+              ],
+              "slotNumber": 5,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 6",
+              "range": [
+                42,
+                48
+              ],
+              "slotNumber": 6,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 7",
+              "range": [
+                49,
+                55
+              ],
+              "slotNumber": 7,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 8",
+              "range": [
+                56,
+                62
+              ],
+              "slotNumber": 8,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 9",
+              "range": [
+                63,
+                69
+              ],
+              "slotNumber": 9,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 10",
+              "range": [
+                70,
+                76
+              ],
+              "slotNumber": 10,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 11",
+              "range": [
+                77,
+                83
+              ],
+              "slotNumber": 11,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 12",
+              "range": [
+                84,
+                90
+              ],
+              "slotNumber": 12,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 13",
+              "range": [
+                91,
+                97
+              ],
+              "slotNumber": 13,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 14",
+              "range": [
+                98,
+                104
+              ],
+              "slotNumber": 14,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 15",
+              "range": [
+                105,
+                111
+              ],
+              "slotNumber": 15,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 16",
+              "range": [
+                112,
+                118
+              ],
+              "slotNumber": 16,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 17",
+              "range": [
+                119,
+                125
+              ],
+              "slotNumber": 17,
+              "type": "WheelSlot"
+            },
+            {
+              "label": "Gobo 1 shake",
+              "range": [
+                130,
+                136
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 1,
+              "type": "WheelShake"
+            },
+            {
+              "label": "Gobo 2 shake",
+              "range": [
+                137,
+                143
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 2,
+              "type": "WheelShake"
+            },
+            {
+              "label": "Gobo 3 shake",
+              "range": [
+                144,
+                150
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 3,
+              "type": "WheelShake"
+            },
+            {
+              "label": "Gobo 4 shake",
+              "range": [
+                151,
+                157
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 4,
+              "type": "WheelShake"
+            },
+            {
+              "label": "Gobo 5 shake",
+              "range": [
+                158,
+                164
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 5,
+              "type": "WheelShake"
+            },
+            {
+              "label": "Gobo 6 shake",
+              "range": [
+                165,
+                171
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 6,
+              "type": "WheelShake"
+            },
+            {
+              "label": "Gobo 7 shake",
+              "range": [
+                172,
+                178
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 7,
+              "type": "WheelShake"
+            },
+            {
+              "label": "Gobo 8 shake",
+              "range": [
+                179,
+                185
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 8,
+              "type": "WheelShake"
+            },
+            {
+              "label": "Gobo 9 shake",
+              "range": [
+                186,
+                192
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 9,
+              "type": "WheelShake"
+            },
+            {
+              "label": "Gobo 10 shake",
+              "range": [
+                193,
+                199
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 10,
+              "type": "WheelShake"
+            },
+            {
+              "label": "Gobo 11 shake",
+              "range": [
+                200,
+                206
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 11,
+              "type": "WheelShake"
+            },
+            {
+              "label": "Gobo 12 shake",
+              "range": [
+                207,
+                213
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 12,
+              "type": "WheelShake"
+            },
+            {
+              "label": "Gobo 13 shake",
+              "range": [
+                214,
+                220
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 13,
+              "type": "WheelShake"
+            },
+            {
+              "label": "Gobo 14 shake",
+              "range": [
+                221,
+                227
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 14,
+              "type": "WheelShake"
+            },
+            {
+              "label": "Gobo 15 shake",
+              "range": [
+                228,
+                234
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 15,
+              "type": "WheelShake"
+            },
+            {
+              "label": "Gobo 16 shake",
+              "range": [
+                235,
+                241
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 16,
+              "type": "WheelShake"
+            },
+            {
+              "label": "Gobo 17 shake",
+              "range": [
+                242,
+                248
+              ],
+              "shakeSpeedEnd": 10,
+              "shakeSpeedStart": 0.5,
+              "slotNumber": 17,
+              "type": "WheelShake"
+            }
+          ],
+          "name": "Static Gobo Change",
+          "offset": 3,
+          "type": "gobo"
+        },
+        {
+          "capabilities": [
+            {
+              "label": "Prism out",
+              "range": [
+                0,
+                3
+              ],
+              "type": "Prism"
+            },
+            {
+              "label": "Prism in (8-face)",
+              "range": [
+                4,
+                255
+              ],
+              "type": "Prism"
+            }
+          ],
+          "name": "Prism 1 Insertion",
+          "offset": 4,
+          "type": "prism"
+        },
+        {
+          "capabilities": [
+            {
+              "label": "No rotation",
+              "range": [
+                0,
+                0
+              ],
+              "speed": 0,
+              "type": "PrismRotation"
+            },
+            {
+              "label": "Rotate CW slow-fast",
+              "range": [
+                1,
+                127
+              ],
+              "speedEnd": 5,
+              "speedStart": 0.1,
+              "type": "PrismRotation"
+            },
+            {
+              "label": "Stop",
+              "range": [
+                128,
+                128
+              ],
+              "speed": 0,
+              "type": "PrismRotation"
+            },
+            {
+              "label": "Rotate CCW slow-fast",
+              "range": [
+                129,
+                255
+              ],
+              "speedEnd": -5,
+              "speedStart": -0.1,
+              "type": "PrismRotation"
+            }
+          ],
+          "name": "Prism 1 Rotation",
+          "offset": 5,
+          "type": "prism-rotation"
+        },
+        {
+          "capabilities": [
+            {
+              "label": "Reserved",
+              "range": [
+                0,
+                255
+              ],
+              "type": "NoFunction"
+            }
+          ],
+          "name": "Reserved 1",
+          "offset": 6,
+          "type": "macro"
+        },
+        {
+          "capabilities": [
+            {
+              "label": "Reserved",
+              "range": [
+                0,
+                255
+              ],
+              "type": "NoFunction"
+            }
+          ],
+          "name": "Reserved 2",
+          "offset": 7,
+          "type": "macro"
+        },
+        {
+          "capabilities": [
+            {
+              "label": "Near â†’ Far",
+              "range": [
+                0,
+                255
+              ],
+              "type": "Focus"
+            }
+          ],
+          "default": 128,
+          "name": "Focus",
+          "offset": 8,
+          "type": "focus"
+        },
+        {
+          "bits": 16,
+          "capabilities": [
+            {
+              "angleEnd": 540,
+              "angleStart": 0,
+              "label": "Pan 0-540Â°",
+              "range": [
+                0,
+                65535
+              ],
+              "type": "Pan"
+            }
+          ],
+          "name": "Pan",
+          "offset": 9,
+          "type": "pan"
+        },
+        {
+          "bits": 16,
+          "capabilities": [
+            {
+              "angleEnd": 210,
+              "angleStart": 0,
+              "label": "Tilt 0-210Â°",
+              "range": [
+                0,
+                65535
+              ],
+              "type": "Tilt"
+            }
+          ],
+          "name": "Tilt",
+          "offset": 11,
+          "type": "tilt"
+        },
+        {
+          "capabilities": [
+            {
+              "duration": 0,
+              "label": "Vectorial (fastest)",
+              "range": [
+                0,
+                0
+              ],
+              "type": "PanTiltSpeed"
+            },
+            {
+              "durationEnd": 0.1,
+              "durationStart": 5,
+              "label": "Tracking slow-fast",
+              "range": [
+                1,
+                255
+              ],
+              "type": "PanTiltSpeed"
+            }
+          ],
+          "name": "Pan-Tilt Speed",
+          "offset": 13,
+          "type": "pan-tilt-speed"
+        },
+        {
+          "capabilities": [
+            {
+              "label": "Frost out",
+              "range": [
+                0,
+                3
+              ],
+              "type": "Frost"
+            },
+            {
+              "label": "Frost in (variable)",
+              "range": [
+                4,
+                255
+              ],
+              "type": "Frost"
+            }
+          ],
+          "name": "Frost",
+          "offset": 14,
+          "type": "frost"
+        },
+        {
+          "capabilities": [
+            {
+              "label": "Unused",
+              "range": [
+                0,
+                99
+              ],
+              "type": "NoFunction"
+            },
+            {
+              "label": "Lamp ON",
+              "range": [
+                100,
+                105
+              ],
+              "type": "Maintenance"
+            },
+            {
+              "label": "Lamp OFF",
+              "range": [
+                200,
+                205
+              ],
+              "type": "Maintenance"
+            },
+            {
+              "label": "Complete reset",
+              "range": [
+                255,
+                255
+              ],
+              "type": "Maintenance"
+            }
+          ],
+          "default": 100,
+          "name": "Lamp Control/Reset",
+          "offset": 15,
+          "type": "reset"
+        }
+      ],
+      "colorMode": "single",
+      "id": "beamlight-350w-16ch",
+      "manufacturer": "BeamLight",
+      "name": "350W Outdoor Waterproof BeamLight",
+      "panRange": 540,
+      "tiltRange": 210
+    },
+    {
+      "beamWidth": 15,
+      "builtin": false,
+      "category": "moving-head",
+      "channelCount": 13,
+      "channels": [
+        {
+          "capabilities": [
+            {
+              "angleEnd": 540,
+              "angleStart": 0,
+              "label": "Pan 0-540°",
+              "range": [
+                0,
+                255
+              ],
+              "type": "Pan"
+            }
+          ],
+          "default": 128,
+          "name": "X Motor (Pan)",
+          "offset": 0,
+          "type": "pan"
+        },
+        {
+          "capabilities": [
+            {
+              "angleEnd": 180,
+              "angleStart": 0,
+              "label": "Tilt 0-180°",
+              "range": [
+                0,
+                255
+              ],
+              "type": "Tilt"
+            }
+          ],
+          "default": 128,
+          "name": "Y Motor (Tilt)",
+          "offset": 1,
+          "type": "tilt"
+        },
+        {
+          "capabilities": [
+            {
+              "duration": 0,
+              "label": "Vectorial (fastest)",
+              "range": [
+                0,
+                0
+              ],
+              "type": "PanTiltSpeed"
+            },
+            {
+              "durationEnd": 3,
+              "durationStart": 0.05,
+              "label": "P/T speed fast → slow",
+              "range": [
+                1,
+                255
+              ],
+              "type": "PanTiltSpeed"
+            }
+          ],
+          "name": "XY Motor Speed",
+          "offset": 2,
+          "type": "pan-tilt-speed"
+        },
+        {
+          "capabilities": [
+            {
+              "label": "Dimmer 0-100%",
+              "range": [
+                0,
+                255
+              ],
+              "type": "Intensity"
+            }
+          ],
+          "default": 255,
+          "name": "Dimmer",
+          "offset": 3,
+          "type": "dimmer"
+        },
+        {
+          "capabilities": [
+            {
+              "label": "Open (no strobe)",
+              "range": [
+                0,
+                10
+              ],
+              "shutterEffect": "Open",
+              "type": "ShutterStrobe"
+            },
+            {
+              "label": "Strobe slow → fast",
+              "range": [
+                11,
+                255
+              ],
+              "shutterEffect": "Strobe",
+              "type": "ShutterStrobe"
+            }
+          ],
+          "default": 0,
+          "name": "Strobe",
+          "offset": 4,
+          "type": "strobe"
+        },
+        {
+          "capabilities": [
+            {
+              "color": "#ff0000",
+              "label": "Red 0-100%",
+              "range": [
+                0,
+                255
+              ],
+              "type": "ColorIntensity"
+            }
+          ],
+          "default": 0,
+          "name": "Red",
+          "offset": 5,
+          "type": "red"
+        },
+        {
+          "capabilities": [
+            {
+              "color": "#00ff00",
+              "label": "Green 0-100%",
+              "range": [
+                0,
+                255
+              ],
+              "type": "ColorIntensity"
+            }
+          ],
+          "default": 0,
+          "name": "Green",
+          "offset": 6,
+          "type": "green"
+        },
+        {
+          "capabilities": [
+            {
+              "color": "#0000ff",
+              "label": "Blue 0-100%",
+              "range": [
+                0,
+                255
+              ],
+              "type": "ColorIntensity"
+            }
+          ],
+          "default": 0,
+          "name": "Blue",
+          "offset": 7,
+          "type": "blue"
+        },
+        {
+          "capabilities": [
+            {
+              "color": "#ffffff",
+              "label": "White 0-100%",
+              "range": [
+                0,
+                255
+              ],
+              "type": "ColorIntensity"
+            }
+          ],
+          "default": 0,
+          "name": "White",
+          "offset": 8,
+          "type": "white"
+        },
+        {
+          "capabilities": [
+            {
+              "label": "Laser 0-100%",
+              "range": [
+                0,
+                255
+              ],
+              "type": "Intensity"
+            }
+          ],
+          "default": 0,
+          "name": "Laser",
+          "offset": 9,
+          "type": "dimmer"
+        },
+        {
+          "capabilities": [
+            {
+              "label": "None",
+              "range": [
+                0,
+                9
+              ],
+              "type": "NoFunction"
+            },
+            {
+              "label": "Belt effect (cycles every 10 s)",
+              "range": [
+                10,
+                255
+              ],
+              "type": "Effect"
+            }
+          ],
+          "default": 0,
+          "name": "Light Belt",
+          "offset": 10,
+          "type": "gobo"
+        },
+        {
+          "capabilities": [
+            {
+              "label": "Belt speed slow → fast",
+              "range": [
+                0,
+                255
+              ],
+              "speedEnd": 10,
+              "speedStart": 0.1,
+              "type": "EffectSpeed"
+            }
+          ],
+          "default": 0,
+          "name": "Light Belt Speed",
+          "offset": 11,
+          "type": "effect-speed"
+        },
+        {
+          "capabilities": [
+            {
+              "label": "Channels 1-12 active (manual control)",
+              "range": [
+                0,
+                50
+              ],
+              "type": "NoFunction"
+            },
+            {
+              "label": "Auto run program",
+              "range": [
+                51,
+                150
+              ],
+              "type": "Effect"
+            },
+            {
+              "label": "Voice / sound active",
+              "range": [
+                151,
+                250
+              ],
+              "type": "Effect"
+            },
+            {
+              "label": "3-second reset",
+              "range": [
+                251,
+                255
+              ],
+              "type": "Maintenance"
+            }
+          ],
+          "default": 0,
+          "name": "Macro Function",
+          "offset": 12,
+          "type": "macro"
+        }
+      ],
+      "colorMode": "rgbw",
+      "id": "slymovehead",
+      "manufacturer": "Sly",
+      "name": "Sly Moving Head Super Mini",
+      "panRange": 540,
+      "tiltRange": 180
+    }
+  ],
+  "rangeCalibrations": {},
+  "savedAt": "2026-04-21T21:24:51.324820Z",
+  "schemaVersion": 2,
+  "settings": {
+    "activeTimeline": -1,
+    "autoStartShow": false,
+    "canvasH": 2000,
+    "canvasW": 2000,
+    "darkMode": 1,
+    "globalBrightness": 255,
+    "logPath": "",
+    "logging": false,
+    "name": "SlyLED",
+    "runnerLoop": true,
+    "runnerStartEpoch": 0,
+    "units": 0
+  },
+  "showPlaylist": {
+    "loopAll": false,
+    "order": []
+  },
+  "spatialEffects": [
+    {
+      "b": 180,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 0,
+      "id": 0,
+      "motion": {
+        "durationS": 9.7,
+        "easing": "ease-in-out",
+        "endPos": [
+          2920,
+          802,
+          484
+        ],
+        "startPos": [
+          -1000,
+          106,
+          -184
+        ]
+      },
+      "name": "Concert Wash Sweep 1",
+      "r": 220,
+      "shape": "plane",
+      "size": {
+        "normal": [
+          1,
+          0,
+          0
+        ],
+        "thickness": 2000
+      }
+    },
+    {
+      "b": 40,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 160,
+      "id": 1,
+      "motion": {
+        "durationS": 9.8,
+        "easing": "ease-out",
+        "endPos": [
+          -1000,
+          723,
+          230
+        ],
+        "startPos": [
+          2920,
+          385,
+          316
+        ]
+      },
+      "name": "Concert Wash Sweep 2",
+      "r": 255,
+      "shape": "plane",
+      "size": {
+        "normal": [
+          1,
+          0,
+          0
+        ],
+        "thickness": 2000
+      }
+    },
+    {
+      "b": 180,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 0,
+      "id": 2,
+      "motion": {
+        "durationS": 10.2,
+        "easing": "ease-out",
+        "endPos": [
+          2920,
+          611,
+          -143
+        ],
+        "startPos": [
+          -1000,
+          78,
+          -459
+        ]
+      },
+      "name": "Concert Wash Sweep 3",
+      "r": 220,
+      "shape": "plane",
+      "size": {
+        "normal": [
+          1,
+          0,
+          0
+        ],
+        "thickness": 2000
+      }
+    },
+    {
+      "b": 180,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 0,
+      "id": 3,
+      "motion": {
+        "durationS": 18,
+        "easing": "ease-in-out",
+        "endPos": [
+          586,
+          758,
+          0
+        ],
+        "startPos": [
+          586,
+          758,
+          0
+        ]
+      },
+      "name": "Concert Wash Tracker",
+      "r": 220,
+      "shape": "sphere",
+      "size": {
+        "radius": 2000
+      }
+    },
+    {
+      "b": 80,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 255,
+      "id": 4,
+      "motion": {
+        "durationS": 14.3,
+        "easing": "ease-out",
+        "endPos": [
+          3037,
+          292,
+          -470
+        ],
+        "startPos": [
+          -1000,
+          241,
+          456
+        ]
+      },
+      "name": "Aurora Borealis Sweep 1",
+      "r": 0,
+      "shape": "plane",
+      "size": {
+        "normal": [
+          1,
+          0,
+          0
+        ],
+        "thickness": 2000
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 0,
+      "id": 5,
+      "motion": {
+        "durationS": 13.5,
+        "easing": "ease-in-out",
+        "endPos": [
+          -1000,
+          90,
+          282
+        ],
+        "startPos": [
+          3037,
+          608,
+          40
+        ]
+      },
+      "name": "Aurora Borealis Sweep 2",
+      "r": 120,
+      "shape": "plane",
+      "size": {
+        "normal": [
+          1,
+          0,
+          0
+        ],
+        "thickness": 2000
+      }
+    },
+    {
+      "b": 80,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 255,
+      "id": 6,
+      "motion": {
+        "durationS": 22.5,
+        "easing": "ease-in-out",
+        "endPos": [
+          1317,
+          781,
+          0
+        ],
+        "startPos": [
+          1317,
+          781,
+          0
+        ]
+      },
+      "name": "Aurora Borealis Tracker",
+      "r": 0,
+      "shape": "sphere",
+      "size": {
+        "radius": 2000
+      }
+    },
+    {
+      "b": 30,
+      "blend": "screen",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 160,
+      "id": 7,
+      "motion": {
+        "durationS": 16.6,
+        "easing": "ease-out",
+        "endPos": [
+          1618,
+          -1000,
+          114
+        ],
+        "startPos": [
+          787,
+          1803,
+          252
+        ]
+      },
+      "name": "Sunset Glow Sweep 1",
+      "r": 255,
+      "shape": "plane",
+      "size": {
+        "normal": [
+          0,
+          1,
+          0
+        ],
+        "thickness": 2000
+      }
+    },
+    {
+      "b": 0,
+      "blend": "screen",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 80,
+      "id": 8,
+      "motion": {
+        "durationS": 22.8,
+        "easing": "ease-out",
+        "endPos": [
+          1189,
+          -1000,
+          -412
+        ],
+        "startPos": [
+          1275,
+          1803,
+          65
+        ]
+      },
+      "name": "Sunset Glow Sweep 2",
+      "r": 200,
+      "shape": "plane",
+      "size": {
+        "normal": [
+          0,
+          1,
+          0
+        ],
+        "thickness": 2000
+      }
+    },
+    {
+      "b": 30,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 160,
+      "id": 9,
+      "motion": {
+        "durationS": 30,
+        "easing": "ease-in-out",
+        "endPos": [
+          1317,
+          781,
+          0
+        ],
+        "startPos": [
+          1317,
+          781,
+          0
+        ]
+      },
+      "name": "Sunset Glow Tracker",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 2000
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 10,
+      "motion": {
+        "durationS": 9.6,
+        "easing": "ease-in-out",
+        "endPos": [
+          2605,
+          494,
+          1131
+        ],
+        "startPos": [
+          -500,
+          144,
+          1936
+        ]
+      },
+      "name": "Spotlight Sweep Sweep 1",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 1966
+      }
+    },
+    {
+      "b": 255,
+      "blend": "screen",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 180,
+      "id": 11,
+      "motion": {
+        "durationS": 7.2,
+        "easing": "ease-out",
+        "endPos": [
+          -500,
+          261,
+          1092
+        ],
+        "startPos": [
+          2605,
+          -98,
+          1610
+        ]
+      },
+      "name": "Spotlight Sweep Sweep 2",
+      "r": 200,
+      "shape": "sphere",
+      "size": {
+        "radius": 2324
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 12,
+      "motion": {
+        "durationS": 9.2,
+        "easing": "linear",
+        "endPos": [
+          2605,
+          219,
+          1732
+        ],
+        "startPos": [
+          -500,
+          -470,
+          1497
+        ]
+      },
+      "name": "Spotlight Sweep Sweep 3",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 2482
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 13,
+      "motion": {
+        "durationS": 12,
+        "easing": "ease-in-out",
+        "endPos": [
+          1605,
+          0,
+          1690
+        ],
+        "startPos": [
+          500,
+          0,
+          1690
+        ]
+      },
+      "name": "Spotlight Sweep Tracker",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 2000
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 14,
+      "motion": {
+        "durationS": 0.4,
+        "easing": "ease-in-out",
+        "endPos": [
+          3000,
+          738,
+          1480
+        ],
+        "startPos": [
+          -500,
+          704,
+          2110
+        ]
+      },
+      "name": "Spotlight: Follow Person Sweep 1",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 2202
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 15,
+      "motion": {
+        "durationS": 0.5,
+        "easing": "ease-in-out",
+        "endPos": [
+          -500,
+          863,
+          1980
+        ],
+        "startPos": [
+          3000,
+          846,
+          1228
+        ]
+      },
+      "name": "Spotlight: Follow Person Sweep 2",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 1756
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 16,
+      "motion": {
+        "durationS": 0.8,
+        "easing": "ease-in-out",
+        "endPos": [
+          1605,
+          0,
+          1690
+        ],
+        "startPos": [
+          500,
+          0,
+          1690
+        ]
+      },
+      "name": "Spotlight: Follow Person Tracker",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 2000
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 17,
+      "motion": {
+        "durationS": 0.3,
+        "easing": "ease-in",
+        "endPos": [
+          2000,
+          -1000,
+          860
+        ],
+        "startPos": [
+          2270,
+          4350,
+          778
+        ]
+      },
+      "name": "Lightning 1",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 2000
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 18,
+      "motion": {
+        "durationS": 0.3,
+        "easing": "ease-in",
+        "endPos": [
+          500,
+          -1000,
+          1690
+        ],
+        "startPos": [
+          747,
+          4350,
+          1707
+        ]
+      },
+      "name": "Lightning 2",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 2000
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 19,
+      "motion": {
+        "durationS": 0.3,
+        "easing": "ease-in",
+        "endPos": [
+          1605,
+          -1000,
+          1690
+        ],
+        "startPos": [
+          1468,
+          4350,
+          1934
+        ]
+      },
+      "name": "Lightning 3",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 2000
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 20,
+      "motion": {
+        "durationS": 0.3,
+        "easing": "ease-in",
+        "endPos": [
+          500,
+          -1000,
+          1690
+        ],
+        "startPos": [
+          251,
+          4350,
+          1333
+        ]
+      },
+      "name": "Lightning 4",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 2000
+      }
+    },
+    {
+      "b": 200,
+      "blend": "screen",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 21,
+      "motion": {
+        "durationS": 0.5,
+        "easing": "ease-in-out",
+        "endPos": [
+          3000,
+          408,
+          1921
+        ],
+        "startPos": [
+          -500,
+          124,
+          1536
+        ]
+      },
+      "name": "Spotlight: Follow Person Sweep 1",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 1878
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 22,
+      "motion": {
+        "durationS": 0.4,
+        "easing": "linear",
+        "endPos": [
+          -500,
+          763,
+          1900
+        ],
+        "startPos": [
+          3000,
+          83,
+          1240
+        ]
+      },
+      "name": "Spotlight: Follow Person Sweep 2",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 1977
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 23,
+      "motion": {
+        "durationS": 0.8,
+        "easing": "ease-in-out",
+        "endPos": [
+          1605,
+          0,
+          1690
+        ],
+        "startPos": [
+          500,
+          0,
+          1690
+        ]
+      },
+      "name": "Spotlight: Follow Person Tracker",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 2000
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 24,
+      "motion": {
+        "durationS": 0.3,
+        "easing": "ease-in",
+        "endPos": [
+          2000,
+          -1000,
+          860
+        ],
+        "startPos": [
+          2104,
+          4350,
+          723
+        ]
+      },
+      "name": "Lightning 1",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 2000
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 25,
+      "motion": {
+        "durationS": 0.3,
+        "easing": "ease-in",
+        "endPos": [
+          500,
+          -1000,
+          1690
+        ],
+        "startPos": [
+          632,
+          4350,
+          1219
+        ]
+      },
+      "name": "Lightning 2",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 2000
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 26,
+      "motion": {
+        "durationS": 0.3,
+        "easing": "ease-in",
+        "endPos": [
+          500,
+          -1000,
+          1690
+        ],
+        "startPos": [
+          722,
+          4350,
+          1814
+        ]
+      },
+      "name": "Lightning 3",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 2000
+      }
+    },
+    {
+      "b": 200,
+      "blend": "add",
+      "category": "spatial-field",
+      "fixtureIds": [],
+      "g": 240,
+      "id": 27,
+      "motion": {
+        "durationS": 0.3,
+        "easing": "ease-in",
+        "endPos": [
+          830,
+          -1000,
+          1930
+        ],
+        "startPos": [
+          902,
+          4350,
+          1857
+        ]
+      },
+      "name": "Lightning 4",
+      "r": 255,
+      "shape": "sphere",
+      "size": {
+        "radius": 2000
+      }
+    }
+  ],
+  "stage": {
+    "d": 4,
+    "h": 2,
+    "w": 2
+  },
+  "timelines": [],
+  "type": "slyled-project"
+}
