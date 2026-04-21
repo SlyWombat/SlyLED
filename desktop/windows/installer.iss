@@ -35,6 +35,18 @@ DisableProgramGroupPage=yes
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[Types]
+Name: "full";    Description: "Full installation"
+Name: "compact"; Description: "Compact installation"
+Name: "custom";  Description: "Custom installation"; Flags: iscustom
+
+[Components]
+; #598 — base orchestrator is always installed. Depth runtime is a
+; big optional download; left unticked by default even on Full so the
+; installer never surprises a user with a 2 GB download.
+Name: "core";  Description: "SlyLED Orchestrator (required)"; Types: full compact custom; Flags: fixed
+Name: "depth"; Description: "Host-side AI depth runtime (ZoeDepth) — adds 'ZoeDepth (host)' scan method; ~2 GB downloaded after install"
+
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
 Name: "startuprun";  Description: "Start SlyLED when &Windows starts (runs minimised to tray)"; GroupDescription: "Startup:"; Flags: unchecked
@@ -42,7 +54,7 @@ Name: "startuprun";  Description: "Start SlyLED when &Windows starts (runs minim
 
 [Files]
 ; Main executable — compiled by PyInstaller
-Source: "dist\SlyLED.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\SlyLED.exe"; DestDir: "{app}"; Flags: ignoreversion; Components: core
 
 [Icons]
 ; Start menu
@@ -83,6 +95,22 @@ Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SlyLED H
 Type: dirifempty; Name: "{app}"
 
 [Code]
+// #598 — drop a marker file if the user ticked the depth component.
+// The orchestrator reads this on first launch and kicks off the
+// install in the background so the user sees progress through the
+// normal SPA modal (no Inno Setup console window).
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  MarkerFile: String;
+begin
+  if CurStep = ssPostInstall then begin
+    if IsComponentSelected('depth') then begin
+      MarkerFile := ExpandConstant('{app}\depth.install-requested');
+      SaveStringToFile(MarkerFile, '1', False);
+    end;
+  end;
+end;
+
 // Kill running SlyLED.exe before install/upgrade
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
@@ -100,8 +128,19 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   DataDir: String;
+  DepthDir: String;
 begin
   if CurUninstallStep = usPostUninstall then begin
+    // #598 — depth runtime lives in %LOCALAPPDATA%\SlyLED\runtimes\depth
+    // (not {userappdata} which is roaming). Offer to remove it separately
+    // since a reinstall would otherwise pick up the 2+ GB of stale weights.
+    DepthDir := ExpandConstant('{localappdata}\SlyLED\runtimes\depth');
+    if DirExists(DepthDir) then begin
+      if MsgBox(
+        'Remove the ZoeDepth runtime (~2 GB) from:'#13#10 + DepthDir + '?',
+        mbConfirmation, MB_YESNO) = IDYES then
+        DelTree(DepthDir, True, True, True);
+    end;
     DataDir := ExpandConstant('{userappdata}\SlyLED');
     if DirExists(DataDir) then begin
       if MsgBox(

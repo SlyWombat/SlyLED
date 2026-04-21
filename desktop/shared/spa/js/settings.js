@@ -84,6 +84,56 @@ function loadSettings(){
     document.getElementById('s-stage-imperial').style.display=imp?'':'none';
   });
   loadPatchView();
+  _depthRuntimeRefresh();
+}
+
+// #598 — Depth-runtime status row in Settings. The Install button
+// reuses the progress modal defined in setup-ui.js.
+function _depthRuntimeRefresh(){
+  var box=document.getElementById('depth-rt-status');
+  if(!box)return;
+  ra('GET','/api/depth-runtime/status',null,function(r){
+    var iBtn=document.getElementById('depth-rt-install');
+    var rBtn=document.getElementById('depth-rt-reinstall');
+    var uBtn=document.getElementById('depth-rt-uninstall');
+    if(!r||!r.ok){
+      box.innerHTML='<span style="color:#ef4444">Unavailable: '+escapeHtml((r&&r.err)||'module missing')+'</span>';
+      if(iBtn)iBtn.style.display='none';
+      if(rBtn)rBtn.style.display='none';
+      if(uBtn)uBtn.style.display='none';
+      return;
+    }
+    if(r.installed){
+      var running=r.runnerRunning?' <span style="color:#34d399">· runner live on port '+(r.runnerPort||'?')+'</span>':'';
+      box.innerHTML='<span style="color:#34d399">Installed</span> · '
+        +escapeHtml(String(r.sizeMb||'?'))+' MB · '
+        +'Python '+escapeHtml(r.pythonVersion||'?')+' · '
+        +escapeHtml(r.model||'')+running;
+      if(iBtn)iBtn.style.display='none';
+      if(rBtn)rBtn.style.display='inline-block';
+      if(uBtn)uBtn.style.display='inline-block';
+    }else{
+      box.innerHTML='<span style="color:#f59e0b">Not installed</span> · click Install for ~2 GB one-time download';
+      if(iBtn)iBtn.style.display='inline-block';
+      if(rBtn)rBtn.style.display='none';
+      if(uBtn)uBtn.style.display='none';
+    }
+  });
+}
+
+function _depthRuntimeUninstall(){
+  if(!confirm('Remove the depth runtime? You can reinstall later. Any running cal jobs will fail.'))return;
+  var box=document.getElementById('depth-rt-status');
+  if(box)box.innerHTML='<span style="color:#94a3b8">Removing...</span>';
+  var x=new XMLHttpRequest();
+  x.open('DELETE','/api/depth-runtime',true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.onload=function(){
+    try{var r=JSON.parse(x.responseText);}catch(e){r=null;}
+    _depthRuntimeRefresh();
+  };
+  x.onerror=function(){_depthRuntimeRefresh();};
+  x.send('{}');
 }
 function _refreshLogStatus(){
   ra('GET','/api/logging/status',null,function(st){

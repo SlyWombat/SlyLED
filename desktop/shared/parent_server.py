@@ -330,6 +330,14 @@ def _graceful_dmx_shutdown():
                 eng.stop()
         except Exception:
             pass
+    # #598 — stop the depth-runtime subprocess too so it doesn't
+    # outlive us (the runner has its own idle timer but prompt exit
+    # is cleaner and frees localhost ports immediately).
+    try:
+        import depth_runtime as _dr
+        _dr.stop_runner()
+    except Exception:
+        pass
 
 atexit.register(_graceful_dmx_shutdown)
 
@@ -1010,6 +1018,7 @@ def start_background_tasks():
         threading.Thread(target=_periodic_ping, daemon=True).start()
     else:
         _startup_check_done = True
+    _check_depth_install_marker()
     # No auto-claim on boot. The UDP CMD_GYRO_ORIENT handler auto-claims
     # on the first orient packet from an enabled gyro fixture, which is
     # the operator pressing Start on the puck. That's what turns the
@@ -5390,53 +5399,98 @@ def api_space_scan_lite():
                    cameras=len(_point_cloud["cameras"]))
 
 
-_zoedepth_pipeline = None  # lazy-loaded ZoeDepth host-side (#593)
+# #598 — ZoeDepth runs in a separate venv/subprocess now. See
+# desktop/shared/depth_runtime.py. Nothing in this file imports torch
+# or transformers; the main PyInstaller bundle stays small.
 
-
-def _load_zoedepth():
-    """Lazy-load the ZoeDepth pipeline on the orchestrator host.
-
-    Host-side metric-depth path — complements the Pi-side DA-V2 Metric
-    Small model (#593 tier 1). ZoeDepth's 1.3 GB weights don't fit on
-    the Pi so this runs only on the host, giving the operator a
-    \"high quality\" scan option. Returns None if transformers/torch
-    aren't importable on this host.
-    """
-    global _zoedepth_pipeline
-    if _zoedepth_pipeline is not None:
-        return _zoedepth_pipeline
-    try:
-        import torch
-        from transformers import AutoImageProcessor, ZoeDepthForDepthEstimation
-    except Exception as e:
-        log.warning("ZoeDepth unavailable on host: %s", e)
-        return None
-    try:
-        model_id = "Intel/zoedepth-nyu-kitti"
-        processor = AutoImageProcessor.from_pretrained(model_id)
-        model = ZoeDepthForDepthEstimation.from_pretrained(model_id)
-        model.eval()
-        _zoedepth_pipeline = (processor, model)
-        log.info("ZoeDepth loaded on host (%s)", "cuda" if torch.cuda.is_available() else "cpu")
-        return _zoedepth_pipeline
-    except Exception as e:
-        log.warning("ZoeDepth load failed: %s", e)
-        return None
+try:
+    import depth_runtime as _depth_runtime
+except Exception as _e_dr:  # pragma: no cover — only fails in broken bundles
+    _depth_runtime = None
+    log.warning("depth_runtime unavailable: %s", _e_dr)
 
 
 @app.get("/api/space/scan/zoedepth")
 def api_space_scan_zoedepth_info():
-    """#594 UI — report whether ZoeDepth is importable on this host so the
-    Advanced Scan card can mark the option available/unavailable and
-    pick the right recommended default without the operator needing to
-    click Start just to find out."""
+    """#594/#598 UI — report whether the out-of-process ZoeDepth
+    runtime is installed so the Advanced Scan card can offer the
+    option and, when missing, show an 'Install now' button instead
+    of the old 'run orchestrator from source' message."""
+    if _depth_runtime is None:
+        return jsonify(ok=True, available=False, installable=False,
+                       reason="depth_runtime module not bundled")
+    installed = _depth_runtime.is_installed()
+    return jsonify(
+        ok=True,
+        available=installed,
+        installable=not installed,
+        loaded=_depth_runtime._runner_is_healthy(),
+        status=_depth_runtime.status(),
+    )
+
+
+def _check_depth_install_marker():
+    """#598 — if the Windows installer was run with the depth component
+    ticked, a marker file `depth.install-requested` is dropped next to
+    SlyLED.exe. Kick off the install in the background so the user sees
+    the progress bar through the normal Settings → Depth Runtime UI
+    instead of a blocking installer console."""
+    if _depth_runtime is None:
+        return
     try:
-        import torch  # noqa: F401
-        from transformers import ZoeDepthForDepthEstimation  # noqa: F401
-        return jsonify(ok=True, available=True,
-                       loaded=_zoedepth_pipeline is not None)
+        if getattr(sys, "frozen", False):
+            install_dir = os.path.dirname(sys.executable)
+        else:
+            return   # dev mode — no Windows installer in play
+        marker = os.path.join(install_dir, "depth.install-requested")
+        if not os.path.exists(marker):
+            return
+        try:
+            os.remove(marker)
+        except OSError:
+            pass
+        if _depth_runtime.is_installed():
+            return
+        log.info("depth.install-requested marker present — kicking off background install")
+        _depth_runtime.start_install()
     except Exception as e:
-        return jsonify(ok=True, available=False, reason=str(e))
+        log.warning("depth install-marker check failed: %s", e)
+
+
+@app.get("/api/depth-runtime/status")
+def api_depth_runtime_status():
+    if _depth_runtime is None:
+        return jsonify(ok=False, err="depth_runtime module not bundled"), 500
+    return jsonify(ok=True, **_depth_runtime.status())
+
+
+@app.post("/api/depth-runtime/install")
+def api_depth_runtime_install():
+    if _depth_runtime is None:
+        return jsonify(ok=False, err="depth_runtime module not bundled"), 500
+    body = request.get_json(silent=True) or {}
+    force = bool(body.get("force", False))
+    res = _depth_runtime.start_install(force=force)
+    code = 200 if res.get("ok") else 409
+    return jsonify(**res), code
+
+
+@app.get("/api/depth-runtime/install-status")
+def api_depth_runtime_install_status():
+    if _depth_runtime is None:
+        return jsonify(ok=False, err="depth_runtime module not bundled"), 500
+    # Return the progress dict directly — it has its own `ok` field
+    # (None while running, True/False when finished) that the SPA
+    # polling loop reads, and merging with an outer ok=True would
+    # collide.
+    return jsonify(_depth_runtime.install_progress())
+
+
+@app.delete("/api/depth-runtime")
+def api_depth_runtime_uninstall():
+    if _depth_runtime is None:
+        return jsonify(ok=False, err="depth_runtime module not bundled"), 500
+    return jsonify(**_depth_runtime.uninstall())
 
 
 @app.post("/api/space/scan/zoedepth")
@@ -5471,23 +5525,20 @@ def api_space_scan_zoedepth():
     if not positioned:
         return jsonify(err="No positioned cameras selected"), 400
 
-    pipe = _load_zoedepth()
-    if pipe is None:
+    if _depth_runtime is None or not _depth_runtime.is_installed():
         return jsonify(
-            err="ZoeDepth is not installed on this host",
-            detail="Install `transformers` and `torch` in the orchestrator's "
-                   "Python environment to enable high-quality host-side depth."
+            err="ZoeDepth runtime is not installed",
+            detail="Install it from Settings → Depth runtime or from "
+                   "the 'Install now' button in the Advanced Scan card."
         ), 501
-    processor, model = pipe
 
     import math as _math
-    import base64, io
+    import io
     try:
         import numpy as _np
         from PIL import Image
-        import torch
     except Exception as e:
-        return jsonify(err=f"ZoeDepth deps missing: {e}"), 501
+        return jsonify(err=f"numpy/Pillow missing in orchestrator: {e}"), 500
 
     from camera_math import build_camera_to_stage
     from stereo_consistency import cross_camera_filter
@@ -5510,19 +5561,25 @@ def api_space_scan_zoedepth():
                 log.warning("snapshot failed for %s: %s", cam.get("name"), e)
                 continue
             img = Image.open(io.BytesIO(jpg_bytes)).convert("RGB")
-            # ZoeDepth inference
+            # ZoeDepth inference — out-of-process (#598). Returns a
+            # float32 depth map already in millimetres.
             t0 = time.time()
-            inputs = processor(images=img, return_tensors="pt")
-            with torch.no_grad():
-                out = model(**inputs)
-            pred = torch.nn.functional.interpolate(
-                out.predicted_depth.unsqueeze(1),
-                size=img.size[::-1], mode="bicubic", align_corners=False
-            ).squeeze().cpu().numpy()
-            depth_mm = pred * 1000.0  # ZoeDepth outputs metres
+            try:
+                depth_mm, inf_ms = _depth_runtime.infer_jpeg(jpg_bytes)
+            except Exception as e:
+                log.warning("ZoeDepth subprocess failed for %s: %s", cam.get("name"), e)
+                return jsonify(err=f"ZoeDepth runtime error: {e}"), 502
             t1 = time.time()
-            log.info("ZoeDepth %s: inference %.1fs, depth %.0f..%.0f mm",
-                     cam.get("name"), t1 - t0, depth_mm.min(), depth_mm.max())
+            # Resize depth to image dims if the runner used a different
+            # input size (defensive — current runner returns full-res)
+            if depth_mm.shape[::-1] != img.size:
+                from PIL import Image as _I
+                depth_mm = _np.array(
+                    _I.fromarray(depth_mm).resize(img.size, _I.BICUBIC),
+                    dtype=_np.float32,
+                )
+            log.info("ZoeDepth %s: inference %.1fs (runner %dms), depth %.0f..%.0f mm",
+                     cam.get("name"), t1 - t0, inf_ms, depth_mm.min(), depth_mm.max())
             # Back-project
             h, w = depth_mm.shape
             fx = (w / 2.0) / _math.tan(_math.radians(fov / 2))

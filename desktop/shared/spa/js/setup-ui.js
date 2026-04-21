@@ -612,7 +612,7 @@ function _pcAdvRefresh(){
       var opt=document.getElementById('pcadv-opt-zoe');
       if(!opt)return;
       if(r&&r.available){
-        if(noteEl)noteEl.innerHTML='<span style="color:#34d399">available on host · best coverage for calibration</span>';
+        if(noteEl)noteEl.innerHTML='<span style="color:#34d399">installed on host · best coverage for calibration</span>';
         // Strip any existing badge (the initial render gave it to mono)
         // and move Recommended onto ZoeDepth. Auto-check if mono was
         // still the selected radio.
@@ -622,16 +622,92 @@ function _pcAdvRefresh(){
         var zoeRadio=opt.querySelector('input[type=radio]');
         var monoRadio=document.querySelector('#pcadv-opt-mono input[type=radio]');
         if(zoeRadio&&monoRadio&&monoRadio.checked){zoeRadio.checked=true;_pcAdvRefresh();}
-      }else{
-        if(noteEl)noteEl.innerHTML='<span style="color:#f59e0b">not installed — run orchestrator from source with torch + transformers to enable</span>';
+      }else if(r&&r.installable){
+        // #598 — offer one-click install of the optional depth runtime
+        if(noteEl){
+          noteEl.innerHTML='<span style="color:#f59e0b">not installed · ~2 GB one-time download</span> '
+            +'<button type="button" class="btn btn-on" style="margin-left:.4em;padding:.1em .6em;font-size:.85em"'
+            +' onclick="event.preventDefault();event.stopPropagation();_depthRuntimeInstall()">Install now</button>';
+        }
         var zoeRadio2=opt.querySelector('input[type=radio]');
         if(zoeRadio2)zoeRadio2.disabled=true;
+        opt.style.opacity='.7';
+      }else{
+        if(noteEl)noteEl.innerHTML='<span style="color:#ef4444">unavailable: '+escapeHtml((r&&r.reason)||'unknown')+'</span>';
+        var zoeRadio3=opt.querySelector('input[type=radio]');
+        if(zoeRadio3)zoeRadio3.disabled=true;
         opt.style.opacity='.45';
       }
     });
   }
 }
 var _pcAdvZoeProbed=false;
+
+// #598 — depth-runtime installer modal. Kicks off the background pip/HF
+// download and polls /api/depth-runtime/install-status for progress.
+function _depthRuntimeInstall(force){
+  var html='<div style="min-width:480px;max-width:560px">'
+    +'<h3 style="margin:0 0 .4em 0">Install ZoeDepth runtime</h3>'
+    +'<div style="color:#94a3b8;font-size:.85em;margin-bottom:.8em">'
+    +'Creates a separate Python environment at %LOCALAPPDATA%\\SlyLED\\runtimes\\depth\\ '
+    +'and downloads ~2 GB of dependencies + model weights. The orchestrator itself '
+    +'stays lean — the depth engine runs as a subprocess only when calibration needs it.</div>'
+    +'<div id="dri-phase" style="font-weight:600;margin-bottom:.3em">Starting...</div>'
+    +'<div style="background:#0f172a;border:1px solid #334155;border-radius:4px;height:14px;overflow:hidden;margin-bottom:.4em">'
+    +'<div id="dri-bar" style="height:100%;width:0%;background:#34d399;transition:width .3s"></div>'
+    +'</div>'
+    +'<div id="dri-msg" style="color:#94a3b8;font-size:.8em;min-height:1.4em;margin-bottom:.6em"></div>'
+    +'<div id="dri-log" style="background:#0b1220;border:1px solid #1e293b;border-radius:4px;padding:.4em;'
+    +'font-family:monospace;font-size:.72em;color:#64748b;max-height:160px;overflow:auto;margin-bottom:.6em"></div>'
+    +'<div id="dri-actions" style="text-align:right">'
+    +'<button id="dri-close" class="btn" onclick="closeModal();loadSettings&&loadSettings();" disabled>Close</button>'
+    +'</div></div>';
+  document.getElementById('modal-title').textContent='Depth runtime';
+  document.getElementById('modal-body').innerHTML=html;
+  document.getElementById('modal').style.display='flex';
+  ra('POST','/api/depth-runtime/install',{force:!!force},function(r){
+    if(!r||!r.ok){
+      document.getElementById('dri-phase').textContent='Could not start install';
+      document.getElementById('dri-msg').innerHTML='<span style="color:#ef4444">'+escapeHtml((r&&r.error)||'unknown')+'</span>';
+      document.getElementById('dri-close').disabled=false;
+      return;
+    }
+    _depthRuntimePoll();
+  });
+}
+
+function _depthRuntimePoll(){
+  ra('GET','/api/depth-runtime/install-status',null,function(r){
+    if(!r){setTimeout(_depthRuntimePoll,1500);return;}
+    var bar=document.getElementById('dri-bar');
+    var phase=document.getElementById('dri-phase');
+    var msg=document.getElementById('dri-msg');
+    var logEl=document.getElementById('dri-log');
+    if(bar)bar.style.width=Math.round(100*(r.progress||0))+'%';
+    if(phase)phase.textContent=r.phase||'working';
+    if(msg)msg.textContent=r.message||'';
+    if(logEl&&r.log){
+      logEl.innerHTML=r.log.slice(-30).map(function(e){return escapeHtml(e.m);}).join('<br>');
+      logEl.scrollTop=logEl.scrollHeight;
+    }
+    if(r.running){
+      setTimeout(_depthRuntimePoll,1500);
+      return;
+    }
+    // Done — success or failure
+    var closeBtn=document.getElementById('dri-close');
+    if(closeBtn)closeBtn.disabled=false;
+    if(r.ok){
+      if(phase)phase.innerHTML='<span style="color:#34d399">Installed</span>';
+      if(bar)bar.style.background='#34d399';
+      _pcAdvZoeProbed=false;    // re-probe so the Advanced Scan card flips to available
+    }else{
+      if(phase)phase.innerHTML='<span style="color:#ef4444">Failed</span>';
+      if(bar)bar.style.background='#ef4444';
+      if(msg)msg.innerHTML='<span style="color:#ef4444">'+escapeHtml(r.error||r.message||'install failed')+'</span>';
+    }
+  });
+}
 
 function _pcAdvGo(){
   var method=(document.querySelector('input[name=pcmethod]:checked')||{}).value||'mono';

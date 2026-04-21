@@ -65,6 +65,8 @@ args = [
     "--add-data", f"{SHARED / 'parametric_mover.py'};.",
     "--add-data", f"{SHARED / 'remote_orientation.py'};.",
     "--add-data", f"{SHARED / 'dmx_universe.py'};.",
+    "--add-data", f"{SHARED / 'depth_runtime.py'};.",
+    "--add-data", f"{SHARED / 'depth_runner.py'};.",
     "--hidden-import=pystray",
     "--hidden-import=paramiko",
     "--hidden-import=numpy",
