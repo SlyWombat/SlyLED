@@ -206,6 +206,8 @@ Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask s
 | GET | `/api/calibration/mover/<fid>` | Get saved calibration data |
 | DELETE | `/api/calibration/mover/<fid>` | Delete calibration |
 | POST | `/api/calibration/mover/<fid>/aim` | Aim using calibration grid |
+| GET/POST | `/api/aruco/markers` | List / upsert surveyed ArUco marker registry (#596) |
+| DELETE | `/api/aruco/markers/<id>` | Remove a surveyed marker |
 | GET | `/api/fixtures/live` | Per-fixture live output state (RGB, dimmer, pan/tilt, effect) |
 | GET/POST | `/api/show/playlist` | Ordered timeline playlist + loop setting |
 | POST | `/api/show/start` | Start sequential show playback (all timelines) |

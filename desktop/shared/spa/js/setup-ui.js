@@ -320,7 +320,16 @@ function _renderSetup(){
         h+='<p style="color:#555;font-size:.82em">No cameras registered. Click Discover or add via Add Fixture.</p>';
       }
 
+      // ── ArUco marker registry (#596) ───────────────────────────
+      // Surveyed tags in stage space. Both this section and the
+      // Advanced Scan card render the same editor (_arucoRenderTable).
+      h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">ArUco Markers'
+        +' <span style="color:#64748b;font-size:.78em">· surveyed ground-truth tags in stage space</span>'
+        +'</h3>';
+      h+='<div id="aruco-setup-host"><p style="color:#555;font-size:.82em">Loading markers…</p></div>';
+
       document.getElementById('t-setup').innerHTML=h;
+      _arucoLoad(function(){_arucoRenderTable('aruco-setup-host', {source:'setup'});});
       // Check firmware updates — add ▲ triangle indicator to outdated devices
       api('GET','/api/firmware/check').then(function(chk){
         if(!chk||!chk.children)return;
@@ -522,6 +531,17 @@ function _pcAdvancedScan(){
   }
   h+='</div>';
 
+  // ArUco marker registry — collapsible panel (#596). Same editor as
+  // the Setup tab; registered markers become ground-truth anchors for
+  // stereo/multi-view scans and give the mover-cal wizard absolute
+  // stage coordinates to validate against.
+  h+='<details class="card" style="padding:.4em .6em;margin-bottom:.5em" id="pcadv-aruco-details">'
+    +'<summary style="cursor:pointer;font-size:.82em;color:#e2e8f0">'
+    +'ArUco markers <span style="color:#64748b;font-weight:normal">— surveyed tags that anchor stereo/multi-view scans</span>'
+    +'</summary>'
+    +'<div id="aruco-scan-host" style="padding-top:.4em"><p style="color:#555;font-size:.82em">Loading markers…</p></div>'
+    +'</details>';
+
   // Lighting
   h+='<div class="card" style="padding:.6em;margin-bottom:.5em">';
   h+='<div style="font-size:.82em;font-weight:bold;color:#e2e8f0;margin-bottom:.3em">DMX lighting during capture</div>';
@@ -551,6 +571,8 @@ function _pcAdvancedScan(){
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='flex';
   _pcAdvRefresh();
+  // #596 — hydrate the ArUco panel inside the scan card
+  _arucoLoad(function(){_arucoRenderTable('aruco-scan-host', {source:'scan'});});
 }
 
 function _pcAdvRefresh(){
@@ -1742,4 +1764,141 @@ function setupRefreshAll(btn){
       });
     },500);
   });
+}
+
+// ── ArUco marker registry (#596) ────────────────────────────────────
+// Shared editor rendered into both the Setup tab and a collapsible panel
+// inside the Advanced Scan card. Both views edit /api/aruco/markers so
+// changes round-trip immediately.
+var _aruco_cache={markers:[], dictId:50};
+
+function _arucoLoad(then){
+  ra('GET','/api/aruco/markers',null,function(r){
+    if(r&&r.ok){
+      _aruco_cache.markers=r.markers||[];
+      _aruco_cache.dictId=r.dictId||50;
+    }
+    if(typeof then==='function')then();
+  });
+}
+
+function _arucoRenderTable(hostId, opts){
+  opts=opts||{};
+  var host=document.getElementById(hostId);
+  if(!host)return;
+  var markers=_aruco_cache.markers||[];
+  var dictMax=(_aruco_cache.dictId||50)-1;
+  var h='';
+  if(!markers.length){
+    h+='<p style="color:#64748b;font-size:.82em;margin:.3em 0">No markers surveyed yet. Place ArUco tags at known stage positions (DICT_4X4_'
+      +(dictMax+1)+', IDs 0..'+dictMax+') and add them below so cameras can use them as ground truth.</p>';
+  }else{
+    h+='<div style="overflow-x:auto">'
+      +'<table class="tbl" style="font-size:.8em">'
+      +'<tr><th>ID</th><th>Label</th><th>Size (mm)</th><th>X</th><th>Y</th><th>Z</th>'
+      +'<th>Rx°</th><th>Ry°</th><th>Rz°</th><th></th></tr>';
+    markers.forEach(function(m){
+      h+='<tr id="aruco-row-'+hostId+'-'+m.id+'">'
+        +'<td><b>'+m.id+'</b></td>'
+        +'<td><input data-fld="label" value="'+escapeHtml(m.label||'')+'" style="width:80px;font-size:.9em" placeholder="—"></td>'
+        +'<td><input data-fld="size" type="number" step="1" min="1" value="'+m.size+'" style="width:60px;font-size:.9em"></td>'
+        +'<td><input data-fld="x" type="number" step="1" value="'+m.x+'" style="width:70px;font-size:.9em"></td>'
+        +'<td><input data-fld="y" type="number" step="1" value="'+m.y+'" style="width:70px;font-size:.9em"></td>'
+        +'<td><input data-fld="z" type="number" step="1" value="'+m.z+'" style="width:70px;font-size:.9em"></td>'
+        +'<td><input data-fld="rx" type="number" step="1" value="'+m.rx+'" style="width:50px;font-size:.9em"></td>'
+        +'<td><input data-fld="ry" type="number" step="1" value="'+m.ry+'" style="width:50px;font-size:.9em"></td>'
+        +'<td><input data-fld="rz" type="number" step="1" value="'+m.rz+'" style="width:50px;font-size:.9em"></td>'
+        +'<td>'
+          +'<button class="btn" onclick="_arucoRowSave(\''+hostId+'\','+m.id+')" style="font-size:.72em;padding:.15em .5em;background:#059669;color:#fff">Save</button> '
+          +'<button class="btn btn-off" onclick="_arucoRowDelete(\''+hostId+'\','+m.id+')" style="font-size:.72em;padding:.15em .5em">Delete</button>'
+        +'</td></tr>';
+    });
+    h+='</table></div>';
+  }
+  // Add row
+  h+='<div style="margin-top:.5em;padding:.4em;background:#0f172a;border:1px dashed #334155;border-radius:4px">'
+    +'<div style="font-size:.78em;color:#94a3b8;margin-bottom:.25em">Add marker</div>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:.3em;align-items:center">'
+    +'<label style="font-size:.78em">ID <input id="aruco-add-'+hostId+'-id" type="number" step="1" min="0" max="'+dictMax+'" style="width:55px"></label>'
+    +'<label style="font-size:.78em">Label <input id="aruco-add-'+hostId+'-label" style="width:80px" placeholder="e.g. USR"></label>'
+    +'<label style="font-size:.78em">Size <input id="aruco-add-'+hostId+'-size" type="number" step="1" min="1" value="150" style="width:60px"> mm</label>'
+    +'<label style="font-size:.78em">X <input id="aruco-add-'+hostId+'-x" type="number" step="1" value="0" style="width:65px"></label>'
+    +'<label style="font-size:.78em">Y <input id="aruco-add-'+hostId+'-y" type="number" step="1" value="0" style="width:65px"></label>'
+    +'<label style="font-size:.78em">Z <input id="aruco-add-'+hostId+'-z" type="number" step="1" value="0" style="width:65px"></label>'
+    +'<button class="btn btn-on" onclick="_arucoRowAdd(\''+hostId+'\')" style="font-size:.78em;padding:.2em .6em">Add</button>'
+    +'</div></div>';
+  // Status line for validation + save feedback
+  h+='<div id="aruco-status-'+hostId+'" style="font-size:.78em;color:#64748b;margin-top:.3em">Dictionary: DICT_4X4_'+(dictMax+1)+' · IDs 0..'+dictMax+'</div>';
+  host.innerHTML=h;
+}
+
+function _arucoStatus(hostId, msg, ok){
+  var el=document.getElementById('aruco-status-'+hostId);
+  if(el)el.innerHTML='<span style="color:'+(ok?'#34d399':'#f59e0b')+'">'+escapeHtml(msg)+'</span>';
+}
+
+function _arucoRowSave(hostId, mid){
+  var row=document.getElementById('aruco-row-'+hostId+'-'+mid);
+  if(!row)return;
+  var rec={id:mid};
+  row.querySelectorAll('input[data-fld]').forEach(function(inp){
+    var k=inp.getAttribute('data-fld');
+    rec[k]=(k==='label')?inp.value:parseFloat(inp.value||0);
+  });
+  ra('POST','/api/aruco/markers',rec,function(r){
+    if(r&&r.ok){
+      _aruco_cache.markers=r.markers||[];
+      _arucoStatus(hostId,'Marker '+mid+' saved',true);
+      _arucoRefreshOther(hostId);
+    }else{
+      _arucoStatus(hostId,(r&&r.err)||'Save failed',false);
+    }
+  });
+}
+
+function _arucoRowDelete(hostId, mid){
+  if(!confirm('Delete marker '+mid+'?'))return;
+  ra('DELETE','/api/aruco/markers/'+mid,null,function(r){
+    if(r&&r.ok){
+      _aruco_cache.markers=r.markers||[];
+      _arucoRenderTable(hostId, {source:hostId.indexOf('pcadv')===0?'scan':'setup'});
+      _arucoStatus(hostId,'Marker '+mid+' removed',true);
+      _arucoRefreshOther(hostId);
+    }
+  });
+}
+
+function _arucoRowAdd(hostId){
+  var id=parseInt((document.getElementById('aruco-add-'+hostId+'-id')||{}).value);
+  if(isNaN(id)||id<0){_arucoStatus(hostId,'ID is required',false);return;}
+  var dictMax=(_aruco_cache.dictId||50)-1;
+  if(id>dictMax){_arucoStatus(hostId,'ID '+id+' outside dictionary range 0..'+dictMax,false);return;}
+  if(_aruco_cache.markers.some(function(m){return m.id===id;})){
+    _arucoStatus(hostId,'Marker ID '+id+' already registered — edit the existing row',false);return;
+  }
+  var rec={
+    id:id,
+    label:(document.getElementById('aruco-add-'+hostId+'-label')||{}).value||'',
+    size:parseFloat((document.getElementById('aruco-add-'+hostId+'-size')||{}).value||150),
+    x:parseFloat((document.getElementById('aruco-add-'+hostId+'-x')||{}).value||0),
+    y:parseFloat((document.getElementById('aruco-add-'+hostId+'-y')||{}).value||0),
+    z:parseFloat((document.getElementById('aruco-add-'+hostId+'-z')||{}).value||0),
+    rx:0,ry:0,rz:0
+  };
+  ra('POST','/api/aruco/markers',rec,function(r){
+    if(r&&r.ok){
+      _aruco_cache.markers=r.markers||[];
+      _arucoRenderTable(hostId, {source:hostId.indexOf('pcadv')===0?'scan':'setup'});
+      _arucoStatus(hostId,'Marker '+id+' added',true);
+      _arucoRefreshOther(hostId);
+    }else{
+      _arucoStatus(hostId,(r&&r.err)||'Add failed',false);
+    }
+  });
+}
+
+function _arucoRefreshOther(hostId){
+  // If Setup + Scan panels are both on the page, keep them in sync.
+  var other=(hostId==='aruco-setup-host')?'aruco-scan-host':'aruco-setup-host';
+  if(document.getElementById(other))_arucoRenderTable(other, {source:other==='aruco-scan-host'?'scan':'setup'});
 }

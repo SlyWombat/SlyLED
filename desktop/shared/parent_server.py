@@ -82,7 +82,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.51"
+VERSION = "1.5.53"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -234,6 +234,12 @@ _camera_ssh = _load("camera_ssh", {})  # {ip: {authType, user, password(encrypte
 _calibrations = _load("calibrations", {})  # {fixtureId_str: {matrix, error, points, timestamp}}
 _range_cal    = _load("range_calibrations", {})  # {fixtureId_str: {pan, tilt, timestamp}}
 _mover_cal    = _load("mover_calibrations", {})  # {fixtureId_str: {grid, samples, ...}}
+# #596 — ArUco marker registry: surveyed markers in stage space. Shared by
+# the Setup tab editor and the Advanced Scan card panel; also used as
+# ground-truth anchors by stereo scans once #592 lands.
+# Each record: {id:int, size:float(mm), x:float, y:float, z:float,
+#                rx:float(deg), ry:float(deg), rz:float(deg), label?:str}
+_aruco_markers = _load("aruco_markers", [])
 _ssh_bootstrapped = False  # deferred pre-population (needs _encrypt_pw defined later)
 
 # Live action events pushed by children (ip  -' {actionType, stepIndex, totalSteps, event, ts})
@@ -2323,6 +2329,83 @@ def api_camera_aruco_reset(fid):
     """Reset accumulated ArUco frames for a camera."""
     _aruco_frames.pop(fid, None)
     return jsonify(ok=True, frameCount=0)
+
+
+# ── ArUco marker registry (#596) ──────────────────────────────────────
+# CRUD for surveyed markers (id → stage-space pose + physical size).
+# Consumed by the Setup tab editor and the Advanced Scan card panel; used
+# as ground-truth correspondences by stereo scans once #592 lands.
+
+_ARUCO_DICT_ID = 50  # DICT_4X4_50 — matches _aruco_detect above
+
+def _aruco_marker_normalise(rec):
+    """Coerce / clamp a marker record to the canonical schema. Raises
+    ValueError on invalid input."""
+    if rec is None or "id" not in rec:
+        raise ValueError("marker record must include 'id'")
+    mid = int(rec["id"])
+    if mid < 0 or mid >= _ARUCO_DICT_ID:
+        raise ValueError(f"marker id {mid} is outside dictionary range 0..{_ARUCO_DICT_ID - 1}")
+    def _f(key, default=0.0):
+        v = rec.get(key, default)
+        try:
+            return float(v) if v is not None else float(default)
+        except (TypeError, ValueError):
+            return float(default)
+    out = {
+        "id": mid,
+        "size": max(1.0, _f("size", 100.0)),
+        "x": _f("x"), "y": _f("y"), "z": _f("z"),
+        "rx": _f("rx"), "ry": _f("ry"), "rz": _f("rz"),
+    }
+    label = rec.get("label")
+    if isinstance(label, str) and label.strip():
+        out["label"] = label.strip()[:60]
+    return out
+
+
+@app.get("/api/aruco/markers")
+def api_aruco_markers_list():
+    """Return the marker registry (all surveyed ArUco tags)."""
+    return jsonify(ok=True,
+                   dictId=_ARUCO_DICT_ID,
+                   markers=list(_aruco_markers))
+
+
+@app.post("/api/aruco/markers")
+def api_aruco_markers_upsert():
+    """Create or update a marker by id. Body = single record, or list of
+    records. Replaces by id (no dup ids). Returns the full normalized
+    registry so the caller can refresh without a second GET."""
+    body = request.get_json(silent=True)
+    if body is None:
+        return jsonify(err="JSON body required"), 400
+    records = body if isinstance(body, list) else [body]
+    try:
+        updates = [_aruco_marker_normalise(r) for r in records]
+    except ValueError as e:
+        return jsonify(err=str(e)), 400
+    # Replace-by-id
+    by_id = {m["id"]: m for m in _aruco_markers}
+    for u in updates:
+        by_id[u["id"]] = u
+    _aruco_markers.clear()
+    _aruco_markers.extend(sorted(by_id.values(), key=lambda m: m["id"]))
+    _save("aruco_markers", _aruco_markers)
+    return jsonify(ok=True, markers=list(_aruco_markers),
+                   updated=[u["id"] for u in updates])
+
+
+@app.delete("/api/aruco/markers/<int:mid>")
+def api_aruco_markers_delete(mid):
+    """Remove a marker by id. Returns {removed: bool}."""
+    before = len(_aruco_markers)
+    _aruco_markers[:] = [m for m in _aruco_markers if m.get("id") != mid]
+    removed = len(_aruco_markers) < before
+    if removed:
+        _save("aruco_markers", _aruco_markers)
+    return jsonify(ok=True, removed=removed,
+                   markers=list(_aruco_markers))
 
 
 @app.post("/api/cameras/<int:fid>/stage-map")
@@ -5020,7 +5103,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.51" from camera_server.py source text."""
+    """Extract VERSION = "1.5.53" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -10240,6 +10323,8 @@ def api_project_export():
         # Spatial data (#336)
         "pointCloud": cloud_export,
         "lightMaps": light_maps if light_maps else None,
+        # ArUco marker registry (#596) — surveyed ground-truth tags
+        "arucoMarkers": list(_aruco_markers),
     })
 
 
@@ -10250,6 +10335,7 @@ def api_project_import():
     global _actions, _spatial_fx, _timelines, _objects
     global _dmx_settings, _calibrations, _range_cal, _mover_cal
     global _nxt_c, _nxt_a, _nxt_fix, _nxt_obj, _nxt_sfx, _nxt_tl
+    global _aruco_markers  # #596 — registry round-trips through project files
     data = request.get_json(silent=True) or {}
     if data.get("type") != "slyled-project":
         return jsonify(ok=False, err="Not a SlyLED project file"), 400
@@ -10347,6 +10433,17 @@ def api_project_import():
             for fid_str, lm in light_maps.items():
                 if fid_str in _mover_cal:
                     _mover_cal[fid_str]["lightMap"] = lm
+        # #596 — restore ArUco marker registry from the project file.
+        # Silently skip records that fail schema validation rather than
+        # aborting the whole import.
+        _aruco_markers.clear()
+        for rec in data.get("arucoMarkers", []) or []:
+            try:
+                _aruco_markers.append(_aruco_marker_normalise(rec))
+            except (ValueError, TypeError):
+                continue
+        _aruco_markers.sort(key=lambda m: m["id"])
+        _save("aruco_markers", _aruco_markers)
         # Import custom DMX profiles referenced by fixtures (#337).
         # Embedded profiles may or may not exist in the community — we
         # try to stamp `_community` provenance on any that do so the
