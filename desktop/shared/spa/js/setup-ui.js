@@ -535,11 +535,22 @@ function _pcAdvancedScan(){
   // the Setup tab; registered markers become ground-truth anchors for
   // stereo/multi-view scans and give the mover-cal wizard absolute
   // stage coordinates to validate against.
-  h+='<details class="card" style="padding:.4em .6em;margin-bottom:.5em" id="pcadv-aruco-details">'
+  // #592 — inside the same panel we surface a prescan-visibility check
+  // and a minimal marker-anchored scan so operators can verify the
+  // registry is actually seeing the stage BEFORE committing to a long
+  // stereo/ORB run.
+  h+='<details class="card" style="padding:.4em .6em;margin-bottom:.5em" id="pcadv-aruco-details" open>'
     +'<summary style="cursor:pointer;font-size:.82em;color:#e2e8f0">'
     +'ArUco markers <span style="color:#64748b;font-weight:normal">— surveyed tags that anchor stereo/multi-view scans</span>'
     +'</summary>'
     +'<div id="aruco-scan-host" style="padding-top:.4em"><p style="color:#555;font-size:.82em">Loading markers…</p></div>'
+    +'<div style="padding-top:.5em;margin-top:.4em;border-top:1px solid #1e293b">'
+    +  '<div style="display:flex;gap:.4em;flex-wrap:wrap">'
+    +    '<button class="btn" onclick="_arucoPrescanVisibility()" style="font-size:.78em;background:#1e3a5f;color:#93c5fd">Prescan visibility</button>'
+    +    '<button class="btn" id="aruco-simple-btn" onclick="_arucoScanSimple()" disabled style="font-size:.78em;background:#0e7490;color:#fff" title="Enabled once a prescan finds ≥1 registered marker visible to ≥2 cameras">Scan with visible markers</button>'
+    +  '</div>'
+    +  '<div id="aruco-prescan-result" style="display:none;margin-top:.4em;padding:.4em;background:#0a0f1a;border:1px solid #1e293b;border-radius:4px;font-size:.8em"></div>'
+    +'</div>'
     +'</details>';
 
   // Lighting
@@ -1901,4 +1912,99 @@ function _arucoRefreshOther(hostId){
   // If Setup + Scan panels are both on the page, keep them in sync.
   var other=(hostId==='aruco-setup-host')?'aruco-scan-host':'aruco-setup-host';
   if(document.getElementById(other))_arucoRenderTable(other, {source:other==='aruco-scan-host'?'scan':'setup'});
+}
+
+// ── #592 ArUco prescan + marker-anchored simple scan ──────────────────
+
+// Prescan the cameras for marker visibility. Hits every registered
+// camera fixture, snapshots it, runs ArUco detection on the
+// orchestrator, and renders a per-camera banner showing which marker
+// IDs were seen and how many are both visible-to-≥2-cameras AND in the
+// surveyed registry. The "Scan with visible markers" button is enabled
+// once the shared count is ≥1.
+function _arucoPrescanVisibility(){
+  var box=document.getElementById('aruco-prescan-result');
+  if(box){box.style.display='block';box.innerHTML='<span style="color:#64748b">Snapshotting cameras…</span>';}
+  var simpleBtn=document.getElementById('aruco-simple-btn');
+  if(simpleBtn)simpleBtn.disabled=true;
+  // Honour the operator's per-camera checkbox selection in the scan card.
+  var cameraIds=Array.prototype.slice.call(document.querySelectorAll('.pcadv-cam:checked:not(:disabled)'))
+    .map(function(cb){return parseInt(cb.value);});
+  var body=cameraIds.length?{cameras:cameraIds}:{};
+  ra('POST','/api/space/scan/aruco-preview',body,function(r){
+    if(!r||!r.ok){
+      if(box)box.innerHTML='<span style="color:#ef4444">Prescan failed: '+escapeHtml((r&&r.err)||'unknown')+'</span>';
+      return;
+    }
+    var shared=r.shared||r.sharedIds||[];
+    var corresp=r.correspondences||0;
+    var lines=[];
+    (r.cameras||[]).forEach(function(c){
+      if(c.err){
+        lines.push('<div style="color:#ef4444">• '+escapeHtml(c.name||'Camera '+c.id)+' — '+escapeHtml(c.err)+'</div>');
+        return;
+      }
+      var ids=(c.markers||[]).map(function(m){return m.id;});
+      var col=ids.length?'#34d399':'#f59e0b';
+      var idTxt=ids.length?ids.join(', '):'(none)';
+      lines.push('<div style="color:'+col+'">• '+escapeHtml(c.name||'Camera '+c.id)
+                +' <span style="color:#94a3b8">sees markers</span> ['+idTxt+']</div>');
+    });
+    var bannerCol=(shared.length>=1)?'#34d399':'#f59e0b';
+    var bannerTxt;
+    if(shared.length===0){
+      bannerTxt='<b style="color:#f59e0b">No surveyed markers visible to ≥2 cameras.</b> '
+              +'<span style="color:#94a3b8">Either no markers overlap across cameras, or the visible ones are not in the registry yet.</span>';
+    }else{
+      bannerTxt='<b style="color:'+bannerCol+'">Shared markers: ['+shared.join(', ')+']</b>'
+              +' <span style="color:#94a3b8">— '+corresp+' correspondence'+(corresp===1?'':'s')+' available for stereo anchoring.</span>';
+    }
+    if(box){
+      box.innerHTML=bannerTxt+'<div style="margin-top:.3em">'+lines.join('')+'</div>';
+    }
+    if(simpleBtn)simpleBtn.disabled=(shared.length<1);
+  });
+}
+
+// Kick the marker-anchored simple scan. Produces a tiny cloud (4
+// corners × shared markers) but the points are triangulated from
+// surveyed correspondences, so the per-marker delta vs surveyed
+// position is an immediate quality number.
+function _arucoScanSimple(){
+  var box=document.getElementById('aruco-prescan-result');
+  var btn=document.getElementById('aruco-simple-btn');
+  if(btn)btn.disabled=true;
+  if(box){
+    box.style.display='block';
+    box.innerHTML='<span style="color:#64748b">Triangulating ArUco corners from registered cameras…</span>';
+  }
+  var cameraIds=Array.prototype.slice.call(document.querySelectorAll('.pcadv-cam:checked:not(:disabled)'))
+    .map(function(cb){return parseInt(cb.value);});
+  var body=cameraIds.length?{cameras:cameraIds}:{};
+  ra('POST','/api/space/scan/aruco-simple',body,function(r){
+    if(btn)btn.disabled=false;
+    if(!r||!r.ok){
+      if(box)box.innerHTML='<span style="color:#ef4444">Scan failed: '+escapeHtml((r&&r.err)||'unknown')+'</span>';
+      return;
+    }
+    var rows=(r.triangulated||[]).map(function(t){
+      var dCol=t.deltaMm<50?'#34d399':(t.deltaMm<200?'#f59e0b':'#ef4444');
+      return '<tr>'
+        +'<td style="padding:.15em .4em">'+t.id+'</td>'
+        +'<td style="padding:.15em .4em;color:#94a3b8">['+t.surveyed.map(function(v){return Math.round(v);}).join(', ')+']</td>'
+        +'<td style="padding:.15em .4em;color:#cbd5e1">['+t.triangulatedCenter.map(function(v){return Math.round(v);}).join(', ')+']</td>'
+        +'<td style="padding:.15em .4em;color:'+dCol+';font-weight:bold">'+t.deltaMm.toFixed(0)+' mm</td>'
+        +'</tr>';
+    }).join('');
+    if(box){
+      box.innerHTML='<div style="color:#34d399"><b>Scan complete:</b> '+r.totalPoints+' points from '+(r.triangulated||[]).length+' surveyed marker(s) in '+r.elapsedS+'s</div>'
+        +'<table style="margin-top:.4em;width:100%;font-size:.78em;border-collapse:collapse">'
+        +'<tr style="color:#64748b;border-bottom:1px solid #1e293b"><th style="text-align:left;padding:.15em .4em">ID</th><th style="text-align:left;padding:.15em .4em">Surveyed (mm)</th><th style="text-align:left;padding:.15em .4em">Triangulated (mm)</th><th style="text-align:left;padding:.15em .4em">Δ</th></tr>'
+        +rows
+        +'</table>'
+        +'<div style="color:#64748b;margin-top:.3em;font-size:.72em">Point cloud saved as <code>source: aruco-markers</code>. Open the Layout tab to see the anchored points; use this delta to verify each camera\'s position/rotation before running a full stereo scan.</div>';
+    }
+    // Refresh the 3D viewport if it's loaded so the new cloud shows up.
+    if(typeof s3dReloadPointCloud==='function')s3dReloadPointCloud();
+  });
 }

@@ -4341,6 +4341,331 @@ def _build_lite_point_cloud():
     }
 
 
+# ── #592 ArUco-anchored scan helpers ──────────────────────────────────
+
+def _aruco_snapshot_detect(f):
+    """Fetch a snapshot from a camera fixture and run ArUco detection.
+
+    Returns a dict `{frameSize, markers: [{id, corners[4][2], center[2]}], err?}`.
+    Never raises — errors are returned in the dict so the caller can
+    report per-camera failures without aborting the whole preview.
+    Pure function over a fixture dict — no persistence, no frame buffer.
+    """
+    try:
+        import cv2  # noqa: F401
+    except ImportError:
+        return {"err": "OpenCV not installed on orchestrator",
+                "markers": [], "frameSize": None}
+    if np is None:
+        return {"err": "NumPy not installed on orchestrator",
+                "markers": [], "frameSize": None}
+    ip = f.get("cameraIp")
+    if not ip:
+        return {"err": "Camera has no IP", "markers": [], "frameSize": None}
+    cam_idx = f.get("cameraIdx", 0)
+    import urllib.request as _ur
+    try:
+        resp = _ur.urlopen(f"http://{ip}:5000/snapshot?cam={cam_idx}", timeout=15)
+        jpeg = resp.read()
+    except Exception as e:
+        return {"err": f"Snapshot failed: {e}", "markers": [], "frameSize": None}
+    import cv2
+    frame = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        return {"err": "JPEG decode failed", "markers": [], "frameSize": None}
+    corners, ids, _rej, frame_size = _aruco_detect(frame)
+    out = []
+    if ids is not None and len(ids) > 0:
+        for i, mid in enumerate(ids.flatten().tolist()):
+            # corners[i] is shape (1, 4, 2) float32 — flatten to list of [x, y]
+            pts = corners[i].reshape(4, 2).tolist()
+            cx = sum(p[0] for p in pts) / 4.0
+            cy = sum(p[1] for p in pts) / 4.0
+            out.append({"id": int(mid),
+                         "corners": [[float(p[0]), float(p[1])] for p in pts],
+                         "center": [float(cx), float(cy)]})
+    return {"markers": out, "frameSize": list(frame_size)}
+
+
+def _aruco_visibility_report(camera_ids=None):
+    """Run `_aruco_snapshot_detect` across a set of camera fixtures and
+    build a cross-camera visibility report.
+
+    Returns `{cameras, shared, sharedIds, correspondences, registry}`
+    where `shared` is the set of marker IDs seen by >=2 cameras AND
+    registered in `_aruco_markers`, and `correspondences` is the number
+    of (camera-a, camera-b, marker, corner) quadruples available for
+    triangulation.
+    """
+    if camera_ids is None:
+        cams = [f for f in _fixtures
+                if f.get("fixtureType") == "camera" and f.get("cameraIp")]
+    else:
+        cams = [next((f for f in _fixtures
+                      if f.get("id") == cid and f.get("fixtureType") == "camera"),
+                     None)
+                for cid in camera_ids]
+        cams = [c for c in cams if c]
+    per_cam = []
+    all_seen = {}  # id → [cam_idx_in_per_cam]
+    for f in cams:
+        d = _aruco_snapshot_detect(f)
+        per_cam.append({
+            "id": f.get("id"),
+            "name": f.get("name"),
+            "cameraIp": f.get("cameraIp"),
+            "cameraIdx": f.get("cameraIdx", 0),
+            "frameSize": d.get("frameSize"),
+            "markers": d.get("markers", []),
+            "err": d.get("err"),
+        })
+        for m in d.get("markers", []):
+            all_seen.setdefault(m["id"], []).append(len(per_cam) - 1)
+    registered_ids = {int(m.get("id")) for m in _aruco_markers}
+    # A marker is "shared-anchored" only if it's visible to >=2 cameras
+    # AND present in the surveyed registry — unregistered visible markers
+    # can't be used for anchoring because we don't know their stage pos.
+    shared_ids = sorted(mid for mid, cams in all_seen.items()
+                         if len(cams) >= 2 and mid in registered_ids)
+    # Correspondences = 4 corners per shared marker per distinct camera
+    # pair that both see it. For N cameras seeing a marker, that's
+    # C(N, 2) * 4 pairs.
+    correspondences = 0
+    for mid in shared_ids:
+        n = len(all_seen[mid])
+        correspondences += (n * (n - 1) // 2) * 4
+    return {
+        "cameras": per_cam,
+        "shared": shared_ids,
+        "sharedIds": shared_ids,
+        "correspondences": correspondences,
+        "registry": list(_aruco_markers),
+    }
+
+
+@app.post("/api/space/scan/aruco-simple")
+def api_space_scan_aruco_simple():
+    """#592 — Build a minimal marker-anchored point cloud using only the
+    ArUco markers currently visible to >=2 cameras AND registered in the
+    surveyed registry.
+
+    For each shared marker, every camera pair that both see it
+    triangulates the four corners via `StereoEngine.triangulate_pair`
+    with cameras registered via `add_camera_from_fov` (works without a
+    full intrinsic/extrinsic calibration — relies on the fixture's
+    fovDeg / stage position / rotation). Multiple pairs for the same
+    marker are averaged per corner; results are tagged with the marker
+    ID so the SPA can show per-marker residuals.
+
+    This endpoint does NOT run ORB matching or consume textureless
+    regions. It produces a tiny cloud (4 × len(sharedIds) points when
+    every pair converges) but the points are ground-truth-anchored, so
+    the delta vs surveyed position gives an immediate calibration-
+    quality number without the full stereo wizard. Subsequent work
+    (#592 Phase 2) will feed these into a pose/scale correction before
+    the main stereo path runs.
+
+    Body: `{cameras: [fid, ...]}` (optional subset).
+
+    Response:
+        {
+          ok: true,
+          source: "aruco-markers",
+          sharedIds: [...],
+          triangulated: [
+            {id, surveyed: [x,y,z], triangulatedCenter: [x,y,z],
+             deltaMm: float, cornerPoints: [[x,y,z,r,g,b,conf], ...4]}
+          ],
+          totalPoints: int,
+          cameras: [...],
+          elapsedS: float
+        }
+
+    Persists as the active point cloud with source="aruco-markers".
+    """
+    try:
+        from stereo_engine import StereoEngine
+    except ImportError:
+        return jsonify(ok=False, err="stereo_engine module missing"), 500
+    t0 = time.time()
+    body = request.get_json(silent=True) or {}
+    cam_ids = body.get("cameras")
+    report = _aruco_visibility_report(cam_ids)
+    shared = report["sharedIds"]
+    if not _aruco_markers:
+        return jsonify(ok=False, err="No surveyed ArUco markers in the registry — "
+                                      "add at least one in Setup → ArUco before scanning"), 400
+    if not shared:
+        return jsonify(ok=False,
+                       err="No surveyed markers are visible to ≥2 cameras — "
+                           "move the cameras or re-seat the markers so they overlap",
+                       cameras=report["cameras"]), 400
+
+    # Build a StereoEngine with every participating camera using the
+    # FOV fallback. Cameras already have stage position + rotation from
+    # layout, and the prescan reported frameSize — enough to stand up a
+    # reasonable intrinsic/extrinsic without a full ArUco wizard run.
+    engine = StereoEngine()
+    registered = {}  # fid → per_cam entry with markers detected
+    for c in report["cameras"]:
+        if c.get("err") or not c.get("markers") or not c.get("frameSize"):
+            continue
+        fid = c["id"]
+        f = next((x for x in _fixtures if x.get("id") == fid), None)
+        if not f:
+            continue
+        pos = _fixture_position(fid)
+        if all(abs(v) < 1e-6 for v in pos):
+            log.warning("aruco-simple: camera fid=%d has no stage position — skipping", fid)
+            continue
+        fov = f.get("fovDeg", 90)
+        fov_type = f.get("fovType", "diagonal")
+        frame_w, frame_h = c["frameSize"][0], c["frameSize"][1]
+        rotation = f.get("rotation", [0, 0, 0])
+        try:
+            engine.add_camera_from_fov(
+                fid, fov, int(frame_w), int(frame_h),
+                list(pos), stage_rotation=rotation, fov_type=fov_type,
+            )
+            registered[fid] = c
+        except Exception as e:
+            log.warning("aruco-simple: add_camera_from_fov failed for fid=%d: %s", fid, e)
+
+    if len(registered) < 2:
+        return jsonify(ok=False,
+                       err=f"Need ≥2 calibratable cameras; got {len(registered)}",
+                       cameras=report["cameras"]), 400
+
+    # For each shared marker, collect (fid → corners) from prescan, then
+    # triangulate every pair of cameras that sees it. Corner ordering
+    # matters — ArUco gives us the same 4-corner order across cameras,
+    # so corner[i] in cam-A pairs with corner[i] in cam-B.
+    marker_to_corners = {}  # mid → {fid: [(x,y), x4]}
+    for c in registered.values():
+        for m in c.get("markers", []):
+            if m["id"] in shared:
+                marker_to_corners.setdefault(m["id"], {})[c["id"]] = m["corners"]
+
+    reg_by_id = {int(m.get("id")): m for m in _aruco_markers}
+    triangulated_out = []
+    all_points = []
+    for mid in shared:
+        cam_corners = marker_to_corners.get(mid, {})
+        if len(cam_corners) < 2:
+            continue
+        cam_ids_for_marker = list(cam_corners.keys())
+        # Average-per-corner across all pairs that converge.
+        corner_accums = [[] for _ in range(4)]
+        for i in range(len(cam_ids_for_marker)):
+            for j in range(i + 1, len(cam_ids_for_marker)):
+                cid_a, cid_b = cam_ids_for_marker[i], cam_ids_for_marker[j]
+                pts_a = cam_corners[cid_a]
+                pts_b = cam_corners[cid_b]
+                matches = []
+                for k in range(4):
+                    matches.append((pts_a[k][0], pts_a[k][1],
+                                     pts_b[k][0], pts_b[k][1],
+                                     180, 255, 180))  # green-ish for ArUco
+                pts = engine.triangulate_pair(cid_a, cid_b, matches,
+                                                max_reproject_err_mm=500.0)
+                for k, p in enumerate(pts[:4]):
+                    corner_accums[k].append(p)
+        # Reduce per-corner accums to a single 7-tuple.
+        corner_points = []
+        for acc in corner_accums:
+            if not acc:
+                continue
+            xs = sum(p[0] for p in acc) / len(acc)
+            ys = sum(p[1] for p in acc) / len(acc)
+            zs = sum(p[2] for p in acc) / len(acc)
+            conf = sum(p[6] for p in acc) / len(acc)
+            corner_points.append([xs, ys, zs, 180, 255, 180, conf])
+        if not corner_points:
+            continue
+        cx = sum(p[0] for p in corner_points) / len(corner_points)
+        cy = sum(p[1] for p in corner_points) / len(corner_points)
+        cz = sum(p[2] for p in corner_points) / len(corner_points)
+        surveyed = reg_by_id.get(int(mid), {})
+        sx, sy, sz = surveyed.get("x", 0), surveyed.get("y", 0), surveyed.get("z", 0)
+        delta = math.sqrt((cx - sx) ** 2 + (cy - sy) ** 2 + (cz - sz) ** 2)
+        triangulated_out.append({
+            "id": int(mid),
+            "surveyed": [sx, sy, sz],
+            "triangulatedCenter": [cx, cy, cz],
+            "deltaMm": round(delta, 1),
+            "cornerPoints": corner_points,
+        })
+        all_points.extend(corner_points)
+
+    if not all_points:
+        return jsonify(ok=False,
+                       err="All shared markers failed triangulation (reprojection err > 500 mm). "
+                           "Check camera position / FOV / rotation in the layout.",
+                       cameras=report["cameras"],
+                       sharedIds=shared), 502
+
+    elapsed = time.time() - t0
+    global _point_cloud, _stage_surfaces_cache
+    _point_cloud = {
+        "schemaVersion": 2,
+        "timestamp": time.time(),
+        "source": "aruco-markers",
+        "cameras": [{"id": c["id"], "name": c["name"],
+                     "pointCount": sum(1 for t in triangulated_out
+                                        if c["id"] in marker_to_corners.get(t["id"], {}))
+                     * 4}
+                    for c in registered.values()],
+        "points": all_points,
+        "totalPoints": len(all_points),
+        "stageW": int(_stage.get("w", 3) * 1000),
+        "stageH": int(_stage.get("h", 2) * 1000),
+        "stageD": int(_stage.get("d", 4) * 1000),
+        "elapsedS": round(elapsed, 2),
+        "arucoTriangulated": triangulated_out,
+    }
+    _save("pointcloud", _point_cloud)
+    _stage_surfaces_cache = {"key": None, "value": None}
+    log.info("ArUco-simple scan: %d shared markers → %d points in %.2fs",
+             len(triangulated_out), len(all_points), elapsed)
+    return jsonify(ok=True, source="aruco-markers",
+                   sharedIds=shared,
+                   triangulated=triangulated_out,
+                   totalPoints=len(all_points),
+                   cameras=report["cameras"],
+                   elapsedS=round(elapsed, 2))
+
+
+@app.post("/api/space/scan/aruco-preview")
+def api_space_scan_aruco_preview():
+    """#592 Pre-scan ArUco visibility report. Snapshots every registered
+    camera (or a supplied subset), runs ArUco detection, and returns a
+    per-camera marker list plus the set of marker IDs visible to >=2
+    cameras AND surveyed in the registry.
+
+    Body: `{cameras: [fid, ...]}` (optional — defaults to every camera
+    fixture with a cameraIp).
+
+    Response:
+        {
+          ok: true,
+          cameras: [
+            {id, name, cameraIp, cameraIdx, frameSize, markers: [...], err?}
+          ],
+          shared: [markerId, ...],       // visible-to-2+ AND registered
+          correspondences: int,           // pair-corner count
+          registry: [...]                 // surveyed markers snapshot
+        }
+
+    Never persists. Safe to poll. Typical latency is
+    `len(cameras) * (snapshot_rtt + aruco_detect_ms)`.
+    """
+    body = request.get_json(silent=True) or {}
+    cam_ids = body.get("cameras")
+    report = _aruco_visibility_report(cam_ids)
+    report["ok"] = True
+    return jsonify(report)
+
+
 @app.post("/api/space/scan/lite")
 def api_space_scan_lite():
     """Synthesize a point cloud from layout dimensions (#577).
