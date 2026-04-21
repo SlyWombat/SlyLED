@@ -17,6 +17,7 @@ def run():
     test_universe()
     test_profiles()
     test_artnet_packets()
+    test_artnet_stop_blackout()
     test_sacn_packets()
     test_api()
 
@@ -235,6 +236,62 @@ def test_artnet_packets():
 
     # Port constant
     ok('Art-Net port is 6454', ARTNET_PORT == 6454)
+
+
+# ── Art-Net stop-blackout test (#601) ────────────────────────────────────────
+
+def test_artnet_stop_blackout():
+    """ArtNetEngine.stop() must transmit blackout ArtDMX frames so the Giga
+    DMX bridge latches on zeros instead of the last cue (#601)."""
+    from dmx_artnet import ArtNetEngine, parse_artnet_header, OP_DMX
+
+    eng = ArtNetEngine(bind_ip="127.0.0.1",
+                       unicast_targets={1: "127.0.0.1"})
+    eng.start()
+
+    # Wrap the socket so we can observe every packet the engine emits.
+    # socket.sendto is read-only, so replace the whole _sock with a proxy
+    # that delegates every other method to the real socket.
+    captured = []
+    real_sock = eng._sock
+    class _SockProxy:
+        def sendto(self, data, addr):
+            captured.append((bytes(data), addr))
+            return real_sock.sendto(data, addr)
+        def __getattr__(self, name):
+            return getattr(real_sock, name)
+    eng._sock = _SockProxy()
+
+    # Load a visible cue into universe 1 so "blackout" is distinguishable
+    # from "never sent anything".
+    uni = eng.get_universe(1)
+    for ch in range(1, 14):
+        uni.set_channel(ch, 200 + ch)
+    time.sleep(0.1)  # let the run loop push at least one cue frame
+
+    pre_stop_count = len(captured)
+    eng.stop()
+
+    # Only look at frames produced by stop() itself.
+    stop_frames = captured[pre_stop_count:]
+    dmx_payloads = []
+    for data, addr in stop_frames:
+        hdr = parse_artnet_header(data)
+        if hdr and hdr[0] == OP_DMX and len(data) >= 18 + 13:
+            dmx_payloads.append(data[18:18 + 13])
+
+    ok('Art-Net stop emits final frames',
+       len(dmx_payloads) >= 1,
+       f'got {len(dmx_payloads)} ArtDMX frames from stop()')
+    ok('Art-Net stop frames are blackout',
+       all(p == b'\x00' * 13 for p in dmx_payloads),
+       f'non-zero payload present in {dmx_payloads}')
+    ok('Art-Net stop sends >=3 blackout frames',
+       len(dmx_payloads) >= 3,
+       f'only got {len(dmx_payloads)}')
+    ok('Art-Net stop unicasts to registered target',
+       any(addr[0] == "127.0.0.1" for _, addr in stop_frames),
+       f'destinations: {[a for _, a in stop_frames]}')
 
 
 # ── sACN packet tests ────────────────────────────────────────────────────────

@@ -121,7 +121,9 @@ function showProfileBrowser(){
       if(!p.builtin)acts+=' <button class="btn" onclick="editProfile(\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#446;color:#fff">Edit</button>'
         +' <button class="btn" onclick="_commShareProfile(\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#7c3aed;color:#e9d5ff">Share</button>'
         +(window._commStaleSet[p.id]?
-          ' <button class="btn" onclick="_commPullUpdate(\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#065f46;color:#bbf7d0">Pull update</button>':'')
+          ' <button class="btn" onclick="_commPullUpdate(\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#065f46;color:#bbf7d0">Pull update</button>':
+          (p._community&&p._community.slug?
+            ' <button class="btn" onclick="_commForceRefresh(\''+escapeHtml(p._community.slug)+'\',\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#0f766e;color:#a7f3d0" title="Force re-download from community — use when channel defaults have drifted (hash-based check-updates ignores default values)">Refresh</button>':''))
         +' <button class="btn btn-off" onclick="deleteProfile(\''+escapeHtml(p.id)+'\',\''+escapeHtml(p.name).replace(/'/g,"\\'")+'\')" style="font-size:.7em">Del</button>';
       else acts+=' <button class="btn" onclick="cloneProfile(\''+escapeHtml(p.id)+'\')" style="font-size:.7em;background:#446;color:#fff">Clone</button>';
       h+='<tr data-cat="'+escapeHtml(p.category||'')+'" data-name="'+escapeHtml((p.name||'')+(p.manufacturer||'')).toLowerCase()+'"><td>'+escapeHtml(p.name)+staleBadge+'</td><td>'+escapeHtml(p.manufacturer||'')+'</td><td>'+badge+'</td><td>'+p.channelCount+'</td><td>'+src+'</td><td>'+acts+'</td></tr>';
@@ -178,6 +180,24 @@ function _commPullUpdate(profileId){
     }
   });
 }
+// Force-refresh from community even when the hash-based check-updates says
+// the profile is up to date. Useful when a defaults-only drift slipped
+// through (e.g. local R/G/B defaults=255 vs community=0) since the channel
+// fingerprint ignores default values.
+function _commForceRefresh(slug,profileId){
+  if(!confirm('Re-download "'+profileId+'" from the community and overwrite the local copy?\n\nAny local edits will be lost.'))return;
+  document.getElementById('hs').textContent='Refreshing '+profileId+'…';
+  ra('POST','/api/dmx-profiles/community/download',{slug:slug},function(r){
+    if(r&&r.ok){
+      delete window._commStaleSet[profileId];
+      document.getElementById('hs').textContent='Refreshed '+profileId+' from community.';
+      showProfileBrowser();
+    }else{
+      document.getElementById('hs').textContent='Refresh failed: '+(r&&(r.err||r.error)||'unknown');
+    }
+  });
+}
+
 function _filterProfiles(){
   var cat=(document.getElementById('prof-cat-filter')||{}).value||'';
   var q=((document.getElementById('prof-search')||{}).value||'').toLowerCase();

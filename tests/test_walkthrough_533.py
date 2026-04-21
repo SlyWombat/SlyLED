@@ -465,6 +465,78 @@ def run():
                 bug("7", f"Calibrate check error for {fname}: {e}")
         ss(page, "07-calibrate-buttons.png")
 
+        # #602 — verify the Start/Cancel state machine: opening the auto
+        # modal then transitioning to 'running' must hide the Start button
+        # entirely (not just disable it), leaving Cancel as the sole
+        # action. Drives _moverCalUpdateActions directly — the operator
+        # UX bug was a re-submittable Start while a job was running.
+        log("Step 7b — #602 Start/Cancel state machine")
+        try:
+            # Find the first calibrate button and click it to open the
+            # method-choice modal, then jump straight into the auto
+            # calibration form.
+            cal_btn = page.locator("button[onclick='_moverCalStart(0)']").first
+            if cal_btn.count() and cal_btn.is_visible():
+                cal_btn.click()
+                page.wait_for_timeout(300)
+                page.evaluate("_moverCalAutoStart()")
+                page.wait_for_timeout(300)
+                # Baseline: Start visible, secondary is "Close"
+                go_vis_pre = page.evaluate(
+                    "(()=>{var b=document.getElementById('mcal-go');"
+                    "return b&&b.offsetParent!==null;})()"
+                )
+                cancel_txt_pre = page.evaluate(
+                    "(document.getElementById('mcal-cancel')||{}).textContent||''"
+                )
+                if not go_vis_pre:
+                    bug("7b", "Start button should be visible on modal open")
+                else:
+                    print("  ✓ Start visible on modal open")
+                # Flip to running and re-check
+                page.evaluate("_moverCalUpdateActions('running')")
+                page.wait_for_timeout(100)
+                go_vis_running = page.evaluate(
+                    "(()=>{var b=document.getElementById('mcal-go');"
+                    "return b&&b.offsetParent!==null;})()"
+                )
+                cancel_vis_running = page.evaluate(
+                    "(()=>{var b=document.getElementById('mcal-cancel');"
+                    "return b&&b.offsetParent!==null;})()"
+                )
+                cancel_txt_running = page.evaluate(
+                    "(document.getElementById('mcal-cancel')||{}).textContent||''"
+                )
+                if go_vis_running:
+                    bug("7b", "#602 Start button STILL visible during running state")
+                else:
+                    print("  ✓ Start hidden during running state")
+                if not cancel_vis_running:
+                    bug("7b", "#602 Cancel button hidden during running state")
+                elif "Cancel" not in cancel_txt_running:
+                    bug("7b", f"#602 Cancel button label wrong during running: '{cancel_txt_running}'")
+                else:
+                    print(f"  ✓ Cancel button shown during running state ('{cancel_txt_running}')")
+                # Flip back to pre and check Start re-appears
+                page.evaluate("_moverCalUpdateActions('pre')")
+                page.wait_for_timeout(100)
+                go_vis_post = page.evaluate(
+                    "(()=>{var b=document.getElementById('mcal-go');"
+                    "return b&&b.offsetParent!==null;})()"
+                )
+                if not go_vis_post:
+                    bug("7b", "Start button should reappear in 'pre' state")
+                else:
+                    print("  ✓ Start returns after state reset")
+                ss(page, "07b-state-machine.png")
+                # Close modal
+                page.evaluate("closeModal()")
+                page.wait_for_timeout(200)
+            else:
+                print("  - Skipping state-machine check (no calibrate button present)")
+        except Exception as e:
+            bug("7b", f"State machine check error: {e}")
+
         # ── STEP 8: Create "Music" stage object ──────────────────────────────
         log("Step 8 — Create stage object 'Music' at X:800 Y:2350 Z:1250")
         go(page, "layout")

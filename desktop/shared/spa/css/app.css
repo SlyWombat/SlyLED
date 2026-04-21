@@ -22,6 +22,8 @@ nav{background:#0b1120;padding:.3em 1.5em;border-bottom:1px solid rgba(51,65,85,
 .btn{display:inline-block;padding:.4em 1.1em;border-radius:5px;border:none;cursor:pointer;font-size:.8em;font-family:'Space Grotesk',sans-serif;font-weight:600;margin-left:.3em;letter-spacing:.04em;transition:all .15s}
 .btn:hover{opacity:.9;transform:translateY(-1px);box-shadow:0 0 12px rgba(34,211,238,.15)}
 .btn:active{transform:scale(.97)}
+.btn[disabled],.btn:disabled{opacity:.5;cursor:not-allowed;pointer-events:none}
+.btn[disabled]:hover,.btn:disabled:hover{transform:none;box-shadow:none}
 .btn-on{background:#14532d;color:#86efac}.btn-on:hover{box-shadow:0 0 12px rgba(34,204,102,.25)}
 .btn-off{background:#7f1d1d;color:#fca5a5}.btn-off:hover{box-shadow:0 0 12px rgba(239,68,68,.2)}
 .btn-nav{background:rgba(59,130,246,.15);color:#93c5fd;border:1px solid rgba(59,130,246,.25);text-decoration:none;padding:.4em 1.1em}

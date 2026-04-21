@@ -11,6 +11,7 @@ Usage (from project root):
 """
 
 import argparse
+import atexit
 import json
 import math
 import os
@@ -82,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.53"
+VERSION = "1.5.54"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -311,6 +312,38 @@ _lock  = threading.Lock()
 _profile_lib = ProfileLibrary(data_dir=str(DATA))
 _artnet = ArtNetEngine()
 _sacn = sACNEngine()
+
+_shutdown_blackout_done = False
+
+def _graceful_dmx_shutdown():
+    """Blackout and stop every running DMX engine so downstream bridges don't
+    latch on the last cue when the orchestrator exits. Idempotent — safe to
+    call from atexit, signal handlers, and /api/shutdown. (#601)
+    """
+    global _shutdown_blackout_done
+    if _shutdown_blackout_done:
+        return
+    _shutdown_blackout_done = True
+    for eng in (_artnet, _sacn):
+        try:
+            if eng.running:
+                eng.stop()
+        except Exception:
+            pass
+
+atexit.register(_graceful_dmx_shutdown)
+
+def _signal_shutdown_handler(signum, frame):
+    _graceful_dmx_shutdown()
+    os._exit(0)
+
+for _sig_name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+    _sig = getattr(signal, _sig_name, None)
+    if _sig is not None:
+        try:
+            signal.signal(_sig, _signal_shutdown_handler)
+        except (ValueError, OSError):
+            pass  # e.g. not on main thread, or unsupported on platform
 
 #  "  "  UDP helpers  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -2972,6 +3005,33 @@ _mcal.set_engine_snapshot_getter(_mcal_engine_snapshot)
 
 _mover_cal_jobs = {}  # fid_str → {thread, status, phase, progress, error, result}
 
+# #602 — per-job log ring buffer for the richer progress panel. Capped at
+# ~32 entries so a long-running calibration doesn't balloon the job dict.
+_MCAL_LOG_MAX = 32
+
+def _mcal_log(job, msg, level="info"):
+    """Append a status line to the job's ring-buffered log AND the main
+    log stream. Called from the calibration threads alongside existing
+    log.info/log.warning to populate the SPA's live log tail.
+    """
+    if not isinstance(job, dict):
+        return
+    buf = job.get("log")
+    if buf is None:
+        buf = []
+        job["log"] = buf
+    buf.append({"t": time.time(), "level": level, "msg": str(msg)})
+    if len(buf) > _MCAL_LOG_MAX:
+        del buf[:len(buf) - _MCAL_LOG_MAX]
+    # Mirror to the main log so legacy consumers (file log, console) still
+    # see every event.
+    if level == "warning":
+        log.warning(msg)
+    elif level == "error":
+        log.error(msg)
+    else:
+        log.info(msg)
+
 
 def _best_camera_for(fixture):
     """Pick the widest-FOV positioned camera for calibration."""
@@ -3141,6 +3201,8 @@ def _mover_cal_thread_v2_body(fid, cam, bridge_ip, mover_color,
         tstate = job["targets"][i]
         tstate["status"] = "converging"
         job["message"] = f"Converging on target {i+1}/{len(targets)}"
+        _mcal_log(job, f"Target {i+1}/{len(targets)}: "
+                       f"stage=({target[0]:.0f},{target[1]:.0f},{target[2]:.0f}) — converging")
         try:
             result = _mcal.converge_on_stage_target(
                 bridge_ip, cam_ip, addr, cam_idx, mover_color,
@@ -3374,6 +3436,8 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
     job["phase"] = "discovery"
     job["status"] = "running"
     job["progress"] = 10
+    _mcal_log(job, f"Discovery phase: addr={addr_pre} uni={uni_pre} "
+                   f"warmStart={job.get('warmStart','geometric')}")
     try:
         inverted = f.get("mountedInverted", False)  # #349
         # Positions live in _layout["children"], not in _fixtures
@@ -3482,6 +3546,8 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
     job["phase"] = "mapping"
     job["progress"] = 35
     job["message"] = "Mapping visible region (BFS from discovered beam)"
+    _mcal_log(job, f"Beam found at pan={found_pan:.3f} tilt={found_tilt:.3f} "
+                   f"px=({found_px},{found_py}) — starting BFS mapping")
     # #576 — stream per-sample progress back to the SPA so the modal
     # shows which pan/tilt position is being probed and how many samples
     # have been collected. Without this the UI sat at "Mapping..." for
@@ -3518,6 +3584,7 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
     # Phase 3: Build grid
     job["phase"] = "grid"
     job["progress"] = 80
+    _mcal_log(job, f"Mapping complete: {len(samples)} samples — building grid")
     try:
         grid = _mcal.build_grid(samples)
         if not grid:
@@ -3642,6 +3709,11 @@ def api_mover_cal_start(fid):
     # #594 — clear any stale cancel flag from a previous aborted run before
     # the new thread starts checking it.
     _mcal.arm_cancel()
+    # #602 — reset probe counter + clear last-probe so the UI starts
+    # fresh with attempt=1 on the next _send_artnet.
+    _mcal.reset_probe_counter()
+    _mcal_log(job, f"Calibration started (mode={mode}, camera={cam.get('name','?')}, "
+                   f"bridge={bridge_ip})")
     if mode == "v2":
         t = threading.Thread(
             target=_mover_cal_thread_v2,
@@ -3728,6 +3800,29 @@ def api_mover_cal_status(fid):
             return jsonify(**resp)
         return jsonify(status="none", calibrated=False,
                        calibrationLocked=bool(_fixture_is_calibrating(fid)))
+    # #602 — build currentProbe + dmxFrame from the mover_calibrator
+    # live state so the SPA can show what the fixture is being told to do
+    # right now, independent of the phase-name string.
+    probe = _mcal.get_last_probe() or {}
+    current_probe = None
+    dmx_frame = None
+    if probe:
+        current_probe = {
+            "pan": probe.get("pan"),
+            "tilt": probe.get("tilt"),
+            "dmxPan": probe.get("dmxPan"),
+            "dmxTilt": probe.get("dmxTilt"),
+            "rgb": probe.get("rgb"),
+            "dimmer": probe.get("dimmer"),
+            "attempt": probe.get("attempt"),
+            "sentAt": probe.get("sentAt"),
+        }
+        if probe.get("channels") is not None:
+            dmx_frame = {
+                "universe": probe.get("universe"),
+                "addr": probe.get("addr"),
+                "channels": probe.get("channels"),
+            }
     return jsonify(
         status=job["status"],
         phase=job.get("phase"),
@@ -3749,6 +3844,9 @@ def api_mover_cal_status(fid):
         geometrySource=job.get("geometrySource"),
         floorZ=job.get("floorZ"),
         calibrationLocked=bool(_fixture_is_calibrating(fid)),
+        currentProbe=current_probe,
+        dmxFrame=dmx_frame,
+        log=job.get("log") or [],
     )
 
 
@@ -5103,7 +5201,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.53" from camera_server.py source text."""
+    """Extract VERSION = "1.5.54" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -7164,9 +7262,42 @@ def api_dmx_stop():
 
 @app.post("/api/dmx/blackout")
 def api_dmx_blackout():
+    """Zero every universe buffer.
+
+    If a running engine exists, its 40 Hz loop picks up the dirty buffers
+    and transmits zeros on the next frame. If BOTH engines are stopped,
+    zeroing the buffer alone doesn't reach the wire — so we briefly spin
+    up Art-Net, seed it with the registered universeRoutes and any fixture
+    universes, blackout, and stop. Stop() then flushes 3 forced blackout
+    frames (#601), unsticking bridges that latched on a stale cue.
+    """
     _artnet.blackout()
     _sacn.blackout()
-    return jsonify(ok=True)
+    flushed = False
+    if not _artnet.running and not _sacn.running:
+        try:
+            _apply_dmx_settings()
+            _artnet._bind_ip = "0.0.0.0"  # stale saved IP can block bind (#345)
+            _artnet.start()
+            if _artnet.running:
+                # Register every universe we know about so stop() has
+                # something to transmit zeros on. Fixture-derived universes
+                # come from _apply_profile_defaults; route-only universes
+                # (configured but no fixtures yet) get created here.
+                for route in _dmx_settings.get("universeRoutes", []) or []:
+                    u = int(route.get("universe") or 1)
+                    _artnet.get_universe(u)
+                for f in _fixtures:
+                    if f.get("fixtureType") == "dmx":
+                        _artnet.get_universe(int(f.get("dmxUniverse", 1)))
+                _artnet.blackout()
+                # stop() sends 3 forced blackout frames (#601) and tears
+                # the socket down, leaving the bridge latched on zeros.
+                _artnet.stop()
+                flushed = True
+        except Exception:
+            pass
+    return jsonify(ok=True, flushed=flushed)
 
 @app.post("/api/dmx/blink")
 def api_dmx_blink():
@@ -11328,6 +11459,7 @@ def api_shutdown():
         return jsonify(err="Missing confirmation header"), 403
     def _kill():
         time.sleep(0.3)
+        _graceful_dmx_shutdown()
         os._exit(0)
     threading.Thread(target=_kill, daemon=True).start()
     return jsonify(ok=True)

@@ -295,7 +295,25 @@ class ArtNetEngine:
         self._thread.start()
 
     def stop(self):
-        """Stop the output thread and close socket."""
+        """Stop the output thread and close socket.
+
+        Before tearing down, zero every universe and send 3 forced ArtDMX
+        frames so downstream bridges latch on a blackout rather than the
+        last cue. The Giga DMX bridge re-transmits its last received frame
+        at 40 Hz forever once Art-Net stops arriving (by design — network
+        blips shouldn't black out a show), so without this, killing the
+        engine leaves the wire lit. Mirrors sACNEngine.stop() behaviour
+        per E1.31. (#601)
+        """
+        if self._running and self._sock is not None:
+            try:
+                for u in self._universes.values():
+                    u.blackout()
+                for _ in range(3):
+                    self._transmit_all_universes_forced()
+                    time.sleep(self._frame_interval)
+            except Exception:
+                pass
         self._running = False
         if self._thread:
             self._thread.join(timeout=2)
@@ -303,6 +321,36 @@ class ArtNetEngine:
         if self._sock:
             self._sock.close()
             self._sock = None
+
+    def _transmit_all_universes_forced(self):
+        """Send ArtDMX for every universe regardless of dirty/keep-alive state.
+
+        Used by stop() to flush final blackout frames. Routing matches
+        _send_all_universes(): unicast if a target is registered, otherwise
+        broadcast on every interface's subnet.
+        """
+        if not self._sock:
+            return
+        for uni_num, uni in list(self._universes.items()):
+            data = uni.get_data()
+            seq = self._sequences.get(uni_num, 0) + 1
+            if seq > 255:
+                seq = 1
+            self._sequences[uni_num] = seq
+            pkt = build_artdmx(uni_num - 1, seq, data)
+            target = self._unicast.get(uni_num)
+            if target:
+                try:
+                    self._sock.sendto(pkt, (target, ARTNET_PORT))
+                except Exception:
+                    pass
+            else:
+                for dest in getattr(self, "_broadcast_addrs", ["255.255.255.255"]):
+                    try:
+                        self._sock.sendto(pkt, (dest, ARTNET_PORT))
+                    except Exception:
+                        pass
+            uni.dirty = False
 
     @property
     def running(self):

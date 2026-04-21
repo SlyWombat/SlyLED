@@ -362,6 +362,22 @@ function dmxBlink(){
   });
 }
 
+// Blackout: zero every universe and force blackout frames out to the wire,
+// even if the engine was stopped — covers the case where a bridge is still
+// latched on a previous cue after an orchestrator crash. (#601)
+function dmxBlackoutAll(){
+  var el=document.getElementById('dmx-status');
+  if(el)el.textContent='Blacking out...';
+  ra('POST','/api/dmx/blackout',{},function(r){
+    if(!el)return;
+    if(r&&r.ok){
+      el.textContent='Blackout sent'+(r.flushed?' ('+r.flushed+' frame(s) flushed)':'');
+    } else {
+      el.textContent='Blackout failed'+(r&&r.err?' — '+r.err:'');
+    }
+  });
+}
+
 // ── #144: Live DMX Monitor ───────────────────────────────────────────────
 var _dmxMonTimer=null;
 function showDmxMonitor(){

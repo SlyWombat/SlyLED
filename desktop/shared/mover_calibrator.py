@@ -120,6 +120,18 @@ def _check_cancel():
 
 def _send_artnet(bridge_ip, universe, channels):
     """Send DMX — uses engine callback if available, falls back to raw UDP."""
+    global _probe_counter, _last_probe
+    _probe_counter += 1
+    if _last_probe is None:
+        _last_probe = {}
+    _last_probe["attempt"] = _probe_counter
+    _last_probe["universe"] = universe + 1  # 1-based for display
+    _last_probe["sentAt"] = time.time()
+    # Snapshot up to 64 channels; avoids shipping the full 512 on every poll.
+    try:
+        _last_probe["channels"] = list(channels[:64])
+    except Exception:
+        _last_probe["channels"] = []
     if _dmx_sender:
         # Write all non-zero channels through the engine
         _dmx_sender(universe + 1, 1, channels)  # universe is 0-based here, engine is 1-based
@@ -143,6 +155,28 @@ def _send_artnet(bridge_ip, universe, channels):
 _active_profile = None  # Set by caller before calibration; used by _set_mover_dmx
 _active_universe = None  # 1-based universe of the fixture being calibrated (#594)
 
+# #602 — per-probe telemetry so the SPA status panel can render a live view
+# of what the calibration thread is actually doing (pan/tilt normalized,
+# DMX byte values currently on the wire, attempt counter).
+_last_probe = None  # dict populated by _set_mover_dmx + _send_artnet
+_probe_counter = 0  # monotonic counter; bumped on each _send_artnet
+
+
+def get_last_probe():
+    """Return the most recently sent probe record, or None.
+
+    Used by parent_server's /status endpoint to expose currentProbe and
+    dmxFrame to the SPA. Safe to call from any thread.
+    """
+    return dict(_last_probe) if _last_probe else None
+
+
+def reset_probe_counter():
+    """Called at the start of a new calibration job to reset attempt#."""
+    global _probe_counter, _last_probe
+    _probe_counter = 0
+    _last_probe = None
+
 def _set_mover_dmx(dmx, addr, pan, tilt, r, g, b, dimmer=255, profile=None):
     """Set a mover fixture in a DMX buffer using profile channel map.
 
@@ -150,6 +184,17 @@ def _set_mover_dmx(dmx, addr, pan, tilt, r, g, b, dimmer=255, profile=None):
     correct offsets and handles 8/16-bit pan/tilt, color-wheel, strobe defaults.
     Falls back to hardcoded 13ch Slymovehead layout if no profile.
     """
+    global _last_probe
+    # #602 — record the normalized pan/tilt and the output RGB so the
+    # /status endpoint can show what the operator just asked the fixture
+    # to do, independent of the wire-level DMX bytes.
+    if _last_probe is None:
+        _last_probe = {}
+    _last_probe["pan"] = float(pan)
+    _last_probe["tilt"] = float(tilt)
+    _last_probe["addr"] = int(addr)
+    _last_probe["rgb"] = [int(r), int(g), int(b)]
+    _last_probe["dimmer"] = int(dimmer)
     base = addr - 1
     profile = profile or _active_profile
     if profile:
@@ -214,6 +259,22 @@ def _set_mover_dmx(dmx, addr, pan, tilt, r, g, b, dimmer=255, profile=None):
         dmx[base + 7] = b
         for i in range(8, 13):
             dmx[base + i] = 0
+
+    # #602 — record the actual DMX bytes that came out of the channel-map
+    # resolution so the UI can show the operator the exact numbers that
+    # will be on the wire (high-byte on 16-bit pan/tilt).
+    try:
+        if profile:
+            cm = profile.get("channel_map", {})
+            if "pan" in cm:
+                _last_probe["dmxPan"] = int(dmx[base + cm["pan"]])
+            if "tilt" in cm:
+                _last_probe["dmxTilt"] = int(dmx[base + cm["tilt"]])
+        else:
+            _last_probe["dmxPan"] = int(dmx[base + 0])
+            _last_probe["dmxTilt"] = int(dmx[base + 1])
+    except Exception:
+        pass
 
 
 def _hold_dmx(bridge_ip, dmx, duration=0.5):

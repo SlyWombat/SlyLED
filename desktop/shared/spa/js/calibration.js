@@ -1189,31 +1189,78 @@ function _moverCalAutoStart(){
   h+='</div>';
   h+='</div>';  // /mcal-options
 
-  // Run-time status
+  // Run-time status — #602: richer live view. Operators need to see
+  // pan/tilt, DMX bytes, attempt counter, beam status, and recent log
+  // to diagnose "why is this slow/stuck" without reading the server log.
   h+='<div id="mcal-status" style="display:none">';
   h+='<div class="prog-bar" style="height:8px;margin-bottom:.4em"><div class="prog-fill" id="mcal-prog" style="width:0%;transition:width .3s"></div></div>';
   h+='<div id="mcal-phase" style="font-size:.85em;color:#e2e8f0;margin-bottom:.3em"></div>';
   h+='<div id="mcal-detail" style="font-size:.78em;color:#64748b"></div>';
   h+='<div id="mcal-targets-progress" style="margin-top:.5em"></div>';
+  h+='<div id="mcal-probe" style="margin-top:.5em;font-size:.75em;color:#cbd5e1;font-family:monospace;display:none"></div>';
+  h+='<div id="mcal-dmx-strip" style="margin-top:.4em;display:none"></div>';
+  h+='<div id="mcal-log" style="margin-top:.5em;font-size:.72em;color:#64748b;font-family:monospace;max-height:120px;overflow-y:auto;background:#0a0f1a;border:1px solid #1e293b;border-radius:4px;padding:.3em .5em;display:none"></div>';
   h+='</div>';
 
+  // Actions row — #602 button state machine. Start and Cancel swap
+  // based on server job status (managed by _moverCalUpdateActions).
+  // While status=running, Start is hidden entirely so double-clicks
+  // are impossible; Cancel is the only visible action.
   h+='<div id="mcal-actions" style="display:flex;gap:.4em;margin-top:.8em">';
   h+='<button class="btn btn-on" id="mcal-go" onclick="_moverCalGo()">Start Calibration</button>';
-  h+='<button class="btn btn-off" onclick="_moverCalCancel()">Cancel</button>';
+  h+='<button class="btn btn-off" id="mcal-cancel" onclick="_moverCalCancel()">Cancel</button>';
   h+='</div></div>';
   document.getElementById('modal-title').textContent='Calibrate Mover — '+escapeHtml(f?f.name:'fixture');
   document.getElementById('modal-body').innerHTML=h;
+
+  // #602 — initial button state (Start visible, Close as secondary) and
+  // Esc handler (Cancel while running, close otherwise).
+  _moverCalUpdateActions(cal?'done':'pre');
+  _moverCalInstallEscHandler();
 
   // If already calibrated, fetch the stored fit + render the existing-fit summary.
   if(cal){
     ra('GET','/api/calibration/mover/'+_moverCalFid,null,function(r){
       _moverCalRenderExisting(r);
     });
+    // #602 — if a calibration was already running when the modal
+    // reopens (e.g. operator navigated away and came back), attach to
+    // it so the button state + probe panel are correct.
+    ra('GET','/api/calibration/mover/'+_moverCalFid+'/status',null,function(st){
+      if(st&&st.status==='running'){
+        document.getElementById('mcal-status').style.display='block';
+        _moverCalUpdateActions('running');
+        _moverCalPoll();
+      }
+    });
   }
   // #579 — check for a point cloud before the user starts calibration so
   // they can create a lite one if nothing exists. The BFS path works
   // without geometry but benefits from it; v2 requires it.
   _moverCalGeometryCheck();
+}
+
+// #602 — Esc on the calibration modal mirrors the Cancel/Close button:
+// while running, it fires _moverCalCancel (POSTs /cancel + waits for
+// confirm); otherwise it just closes the modal. Installed once per
+// modal open; the handler self-removes when the modal closes.
+function _moverCalInstallEscHandler(){
+  if(window._moverCalEscInstalled)return;
+  window._moverCalEscInstalled=true;
+  var onKey=function(ev){
+    if(ev.key!=='Escape')return;
+    var modalOpen=(document.getElementById('modal')||{}).style;
+    if(!modalOpen||modalOpen.display==='none'){
+      document.removeEventListener('keydown',onKey,true);
+      window._moverCalEscInstalled=false;
+      return;
+    }
+    if(_moverCalFid==null)return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    _moverCalCancel();
+  };
+  document.addEventListener('keydown',onKey,true);
 }
 
 function _moverCalGeometryCheck(){
@@ -1331,10 +1378,21 @@ function _moverCalFastRecal(){
   if(status)status.style.display='block';
   var phase=document.getElementById('mcal-phase');
   if(phase)phase.textContent='Starting fast re-calibration (v2 warm-start)...';
+  // #602 — apply the state machine here too: fast-recal is a Start path,
+  // so hide Start / show Cancel while the job is live.
+  _moverCalUpdateActions('running');
   ra('POST','/api/calibration/mover/'+_moverCalFid+'/start',
      {mode:'v2',warmup:false,color:[0,255,0]},function(r){
     if(!r||!r.ok){
+      // 409 means a calibration is already running — attach to it.
+      var isAlreadyRunning=(r&&/already running/i.test(r.err||''));
+      if(isAlreadyRunning){
+        if(phase)phase.textContent='Calibration already in progress — attaching';
+        _moverCalPoll();
+        return;
+      }
       if(phase)phase.innerHTML='<span style="color:#f66">'+(r&&r.err||'Failed to start')+'</span>';
+      _moverCalUpdateActions('error');
       return;
     }
     var detail=document.getElementById('mcal-detail');
@@ -1364,15 +1422,24 @@ function _moverCalGo(){
   var color=colorMap[sel?sel.value:'green']||[0,255,0];
   var mode=(document.getElementById('mcal-mode')||{}).value||'legacy';
   var warmup=(document.getElementById('mcal-warmup')||{}).checked||false;
-  var btn=document.getElementById('mcal-go');
-  if(btn)btn.disabled=true;
   document.getElementById('mcal-status').style.display='block';
   document.getElementById('mcal-phase').textContent='Starting calibration...';
+  // #602 — hide Start immediately so a stubborn click can't re-submit.
+  _moverCalUpdateActions('running');
   ra('POST','/api/calibration/mover/'+_moverCalFid+'/start',
      {color:color,mode:mode,warmup:warmup},function(r){
     if(!r||!r.ok){
+      // #602 — 409 means a calibration is already running server-side.
+      // Drop into the polling/state-machine path instead of showing a
+      // red error; the operator was just racing a prior Start.
+      var isAlreadyRunning=(r&&/already running/i.test(r.err||''));
+      if(isAlreadyRunning){
+        document.getElementById('mcal-phase').textContent='Calibration already in progress — attaching to running job';
+        _moverCalPoll();
+        return;
+      }
       document.getElementById('mcal-phase').innerHTML='<span style="color:#f66">'+(r&&r.err||'Failed to start')+'</span>';
-      if(btn)btn.disabled=false;
+      _moverCalUpdateActions('error');
       return;
     }
     var dbits=['Camera: '+(r.cameraName||'unknown'),'mode: '+(mode||'legacy')];
@@ -1380,6 +1447,98 @@ function _moverCalGo(){
     document.getElementById('mcal-detail').textContent=dbits.join(' \u00b7 ');
     _moverCalPoll();
   });
+}
+
+// #602 — drive the Start/Cancel actions row from job state. Called
+// whenever status transitions: 'running' hides Start entirely and shows
+// Cancel; 'cancelling' disables Cancel while awaiting server abort;
+// everything else (done/error/cancelled/pre) shows Start with contextual
+// label and turns the secondary button into a plain Close.
+function _moverCalUpdateActions(state){
+  var go=document.getElementById('mcal-go');
+  var cancel=document.getElementById('mcal-cancel');
+  if(!go||!cancel)return;
+  if(state==='running'){
+    go.style.display='none';
+    cancel.style.display='';
+    cancel.disabled=false;
+    cancel.textContent='Cancel Calibration';
+    return;
+  }
+  if(state==='cancelling'){
+    go.style.display='none';
+    cancel.style.display='';
+    cancel.disabled=true;
+    cancel.textContent='Cancelling…';
+    return;
+  }
+  go.style.display='';
+  go.disabled=false;
+  cancel.style.display='';
+  cancel.disabled=false;
+  cancel.textContent='Close';
+  if(state==='error')go.textContent='Retry';
+  else if(state==='cancelled')go.textContent='Start Calibration';
+  else if(state==='done')go.textContent='Re-calibrate (full)';
+  else go.textContent='Start Calibration';
+}
+
+// #602 — render currentProbe + dmxFrame + log tail sections from the
+// server's /status payload. No-op when those fields are absent (keeps
+// the panel hidden until the calibration thread actually starts probing).
+function _moverCalRenderProbe(r){
+  var probeBox=document.getElementById('mcal-probe');
+  var dmxBox=document.getElementById('mcal-dmx-strip');
+  var logBox=document.getElementById('mcal-log');
+  var cp=r.currentProbe;
+  if(probeBox){
+    if(cp&&cp.attempt){
+      var panTxt=cp.pan!=null?cp.pan.toFixed(3):'-';
+      var tiltTxt=cp.tilt!=null?cp.tilt.toFixed(3):'-';
+      var rgb=cp.rgb||[0,0,0];
+      var swatch='<span style="display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:middle;margin:0 .3em;background:rgb('+rgb[0]+','+rgb[1]+','+rgb[2]+')"></span>';
+      probeBox.innerHTML='probe #'+cp.attempt
+        +'  pan='+panTxt+' ('+(cp.dmxPan!=null?cp.dmxPan:'?')+')'
+        +'  tilt='+tiltTxt+' ('+(cp.dmxTilt!=null?cp.dmxTilt:'?')+')'
+        +swatch+'dim='+(cp.dimmer!=null?cp.dimmer:'?');
+      probeBox.style.display='';
+    }else{
+      probeBox.style.display='none';
+    }
+  }
+  if(dmxBox){
+    var df=r.dmxFrame;
+    if(df&&df.channels&&df.channels.length){
+      var chs=df.channels;
+      var addr=df.addr||1;
+      // Show the fixture's own window (first ~16 from its start addr)
+      var start=Math.max(0,addr-1);
+      var slice=chs.slice(start,start+16);
+      var cells=slice.map(function(v,i){
+        var pct=Math.min(100,Math.round((v/255)*100));
+        return '<div title="ch '+(start+i+1)+' = '+v+'" style="flex:1;min-width:14px;height:20px;background:linear-gradient(to top,#3b82f6 '+pct+'%,#1e293b '+pct+'%);border:1px solid #0f172a;font-size:.6em;color:#cbd5e1;text-align:center;line-height:20px">'+v+'</div>';
+      }).join('');
+      dmxBox.innerHTML='<div style="font-size:.7em;color:#64748b;margin-bottom:.2em">DMX uni '+(df.universe||1)+' ch '+addr+'–'+(addr+slice.length-1)+':</div>'
+        +'<div style="display:flex;gap:1px">'+cells+'</div>';
+      dmxBox.style.display='';
+    }else{
+      dmxBox.style.display='none';
+    }
+  }
+  if(logBox){
+    var entries=r.log||[];
+    if(entries.length){
+      var lines=entries.slice(-8).map(function(e){
+        var col=e.level==='warning'?'#f59e0b':(e.level==='error'?'#ef4444':'#94a3b8');
+        return '<div style="color:'+col+';white-space:pre-wrap">'+escapeHtml(e.msg||'')+'</div>';
+      }).join('');
+      logBox.innerHTML=lines;
+      logBox.scrollTop=logBox.scrollHeight;
+      logBox.style.display='';
+    }else{
+      logBox.style.display='none';
+    }
+  }
 }
 
 function _moverCalPoll(){
@@ -1432,27 +1591,34 @@ function _moverCalPoll(){
       }
     }
 
+    // #602 — live probe/dmx/log view below the phase bar.
+    _moverCalRenderProbe(r);
+
     if(r.status==='running'){
+      // #602 — keep the button state machine in sync even on the first
+      // poll (covers attach-to-running after a 409).
+      if(!_moverCalCancellingFid)_moverCalUpdateActions('running');
       _moverCalTimer=setTimeout(_moverCalPoll,1000);
     }else if(r.status==='done'){
       if(prog)prog.style.width='100%';
+      _moverCalUpdateActions('done');
       _moverCalRenderComplete(r);
       (_fixtures||[]).forEach(function(f){if(f.id===_moverCalFid)f.moverCalibrated=true;});
       renderSidebar();
     }else if(r.status==='error'){
       if(phase)phase.innerHTML='<span style="color:#f66">'+(r.error||'Unknown error')+'</span>';
-      var btn=document.getElementById('mcal-go');
-      if(btn){btn.disabled=false;btn.textContent='Retry';}
+      _moverCalUpdateActions('error');
     }else if(r.status==='cancelled'){
-      // #594 — Cancel hit. The fixture has already been blacked out and
-      // the lock released on the server. Just surface the state and let
-      // the operator retry from Start.
+      // #594/#602 — Cancel hit. The fixture has already been blacked out
+      // and the lock released on the server. Flip the button state and
+      // stop the cancel-confirmation poller if one is still running.
       if(phase)phase.innerHTML='<span style="color:#f59e0b">Cancelled</span>';
-      var cbtn=document.getElementById('mcal-go');
-      if(cbtn){cbtn.disabled=false;cbtn.textContent='Start Calibration';}
+      _moverCalUpdateActions('cancelled');
+      _moverCalCancellingFid=null;
     }
   });
 }
+var _moverCalCancellingFid=null;  // #602 — set while awaiting server abort confirmation
 
 function _moverCalRenderComplete(r){
   var status=document.getElementById('mcal-status');
@@ -1563,22 +1729,56 @@ function _moverCalCancel(){
   // background thread to abort (fixture blackout + lock release happen on
   // the server side) before closing the modal. Without this POST the
   // thread would keep sweeping the fixture after the UI was dismissed.
+  //
+  // #602 — after POSTing /cancel, keep polling /status until it flips to
+  // 'cancelled' (or an error / terminal state) before closing the modal.
+  // This means the operator can trust that closing the wizard actually
+  // means the fixture has stopped moving — no more "Cancel is a lie".
   var fid=_moverCalFid;
   var close=function(){
     if(_moverCalTimer)clearTimeout(_moverCalTimer);
+    _moverCalCancellingFid=null;
     _moverCalFid=null;closeModal();
   };
   if(!fid){close();return;}
   ra('GET','/api/calibration/mover/'+fid+'/status',null,function(st){
-    if(st&&st.status==='running'){
-      var phaseEl=document.getElementById('mcal-phase');
-      if(phaseEl)phaseEl.textContent='Cancelling…';
-      ra('POST','/api/calibration/mover/'+fid+'/cancel',{},function(){
-        close();
-      });
-    }else{
+    if(!st||st.status!=='running'){
+      // Nothing running (or done/error/cancelled) — the Cancel button has
+      // effectively become Close in those states, so just close.
       close();
+      return;
     }
+    var phaseEl=document.getElementById('mcal-phase');
+    if(phaseEl)phaseEl.textContent='Cancelling… (waiting for current probe to finish)';
+    _moverCalCancellingFid=fid;
+    _moverCalUpdateActions('cancelling');
+    ra('POST','/api/calibration/mover/'+fid+'/cancel',{},function(){
+      // Poll until the thread acknowledges cancellation (status flips
+      // from 'running' to 'cancelled' | 'error' | 'done'). Cap at ~10s
+      // of polling so a wedged thread can't block the operator forever.
+      var startedAt=Date.now(),MAX_MS=10000;
+      var tick=function(){
+        if(_moverCalCancellingFid!==fid)return;  // superseded
+        ra('GET','/api/calibration/mover/'+fid+'/status',null,function(cs){
+          if(_moverCalCancellingFid!==fid)return;
+          if(!cs||cs.status!=='running'){
+            _moverCalCancellingFid=null;
+            close();
+            return;
+          }
+          if(Date.now()-startedAt>MAX_MS){
+            // Abort the wait but stay on-screen so the operator can see
+            // the thread is genuinely stuck.
+            if(phaseEl)phaseEl.innerHTML='<span style="color:#f59e0b">Cancel POSTed but calibration thread has not acknowledged after 10s — inspect server log.</span>';
+            _moverCalCancellingFid=null;
+            return;
+          }
+          _moverCalRenderProbe(cs);
+          setTimeout(tick,500);
+        });
+      };
+      setTimeout(tick,500);
+    });
   });
 }
 
