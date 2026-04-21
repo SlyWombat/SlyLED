@@ -161,6 +161,7 @@ function _depthRuntimeRenderRunning(ins){
     +  '<span style="color:#60a5fa;font-weight:600">Installing '+pct+'%</span>'
     +  '<span style="color:#94a3b8;font-size:.82em">'+phase+'</span>'
     +  '<button class="btn btn-nav" style="margin-left:auto;padding:.1em .6em;font-size:.82em" onclick="_depthRuntimeOpenProgress()">Details</button>'
+    +  '<button class="btn" style="padding:.1em .6em;font-size:.82em;background:#532;color:#fca5a5" onclick="_depthRuntimeCancel()">Cancel</button>'
     +'</div>'
     +'<div style="background:#0f172a;border:1px solid #334155;border-radius:4px;height:10px;overflow:hidden">'
     +  '<div style="height:100%;width:'+pct+'%;background:#60a5fa;transition:width .3s"></div>'

@@ -5497,6 +5497,15 @@ def api_depth_runtime_uninstall():
     return jsonify(**_depth_runtime.uninstall(include_weights=inc))
 
 
+@app.post("/api/depth-runtime/install/cancel")
+def api_depth_runtime_install_cancel():
+    """Abort an in-progress install. The next Reinstall wipes any
+    partial venv and starts fresh."""
+    if _depth_runtime is None:
+        return jsonify(ok=False, err="depth_runtime module not bundled"), 500
+    return jsonify(**_depth_runtime.cancel_install())
+
+
 @app.post("/api/depth-runtime/verify")
 def api_depth_runtime_verify():
     """Lightweight check of the currently-installed runtime. Runs

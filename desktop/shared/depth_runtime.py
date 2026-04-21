@@ -124,11 +124,13 @@ _install_state = {
     "progress": 0.0,   # 0..1
     "ok": None,        # True / False / None while running
     "error": None,
+    "cancelRequested": False,
     "startedAt": None,
     "endedAt": None,
     "log": [],         # ring buffer
 }
 _LOG_RING = 80
+_current_install_proc = None  # the active pip/venv/hf subprocess, for cancel
 
 
 def _log(msg: str):
@@ -309,6 +311,7 @@ def start_install(force: bool = False) -> dict:
             "progress": 0.0,
             "ok": None,
             "error": None,
+            "cancelRequested": False,
             "startedAt": time.time(),
             "endedAt": None,
             "log": [],
@@ -320,6 +323,34 @@ def start_install(force: bool = False) -> dict:
 
 def install_progress() -> dict:
     return dict(_install_state)
+
+
+def cancel_install() -> dict:
+    """Request the background install to abort. Works by:
+      1. Setting cancelRequested so phase transitions bail out
+      2. Terminating the current subprocess (pip / venv / hf download)
+    pip install mid-way can leave the venv in a partial state; the next
+    Reinstall will wipe it and start fresh.
+    """
+    global _current_install_proc
+    if not _install_state["running"]:
+        return {"ok": False, "error": "no install running"}
+    _install_state["cancelRequested"] = True
+    _install_state["message"] = "Cancel requested..."
+    proc = _current_install_proc
+    if proc is not None:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    return {"ok": True}
 
 
 def verify() -> dict:
@@ -393,13 +424,72 @@ def verify() -> dict:
     }
 
 
+def _migrate_legacy_weights_cache():
+    """v1.5.56-62 kept hf_cache INSIDE runtime_dir, so it got wiped on
+    every Reinstall. v1.5.63+ uses the sibling depth-weights dir so
+    Reinstall preserves weights. If we find weights in the old
+    location and nothing in the new one, move them rather than
+    forcing a 1.3 GB redownload. Best-effort: on failure we just
+    pay the redownload instead of aborting the install."""
+    p = paths()
+    legacy = os.path.join(p["runtime_dir"], "hf_cache")
+    if not os.path.isdir(legacy):
+        return
+    if os.path.isdir(p["weights_dir"]) and os.listdir(p["weights_dir"]):
+        return  # new location already populated, leave legacy for uninstall to clean
+    try:
+        os.makedirs(os.path.dirname(p["weights_dir"]), exist_ok=True)
+        # shutil.move handles cross-drive moves; on same-drive it's just a rename.
+        shutil.move(legacy, p["weights_dir"])
+        _log(f"migrated legacy weights cache: {legacy} -> {p['weights_dir']}")
+    except Exception as e:
+        log.warning("legacy weights migration failed: %s", e)
+
+
+def _robust_rmtree(path: str, retries: int = 5, delay_s: float = 0.5):
+    """rmtree with Windows-friendly retry. python.exe in a venv can
+    hold file handles for a moment after process exit; a single
+    rmtree call fails with PermissionError / WinError 32. We retry
+    with backoff instead of either ignoring the failure or letting
+    an install silently no-op."""
+    import time as _t
+    last_err = None
+    for attempt in range(retries):
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except Exception as e:
+            last_err = e
+            _t.sleep(delay_s * (attempt + 1))
+    raise RuntimeError(f"could not remove {path} after {retries} attempts: {last_err}")
+
+
 def _install_worker(force: bool):
     try:
         if force:
             _phase("cleanup", "Removing existing runtime...", 0.01)
-            uninstall()
+            # Migrate legacy weights BEFORE wiping runtime_dir, else the
+            # rmtree below would take them out. After migration, uninstall
+            # only touches runtime_dir; the weights are safe in the sibling.
+            _migrate_legacy_weights_cache()
+            res = uninstall()
+            if not res.get("ok"):
+                # Fail loudly instead of operating on stale venv. The
+                # SPA error card surfaces this message directly.
+                raise RuntimeError(
+                    "cleanup failed: " + (res.get("error") or "unknown") +
+                    ". Close any depth-related python.exe in Task Manager and try again."
+                )
+            # Belt-and-suspenders: if uninstall said ok but runtime_dir
+            # still exists (very rare Windows race), robust-rmtree it.
+            p_tmp = paths()
+            if os.path.isdir(p_tmp["runtime_dir"]):
+                _robust_rmtree(p_tmp["runtime_dir"])
 
         p = paths()
+        _migrate_legacy_weights_cache()  # also migrate on non-force install
         os.makedirs(p["runtime_dir"], exist_ok=True)
 
         _phase("venv", "Locating host Python interpreter...", 0.03)
@@ -525,6 +615,7 @@ def _run(cmd, cwd=None, heavy=False, progress_base=0.0, progress_span=0.0, env_e
     if env_extra:
         env.update(env_extra)
     _log(f"$ {' '.join(cmd)}")
+    global _current_install_proc
     try:
         proc = subprocess.Popen(
             cmd, cwd=cwd, env=env,
@@ -534,21 +625,34 @@ def _run(cmd, cwd=None, heavy=False, progress_base=0.0, progress_span=0.0, env_e
         )
     except FileNotFoundError as e:
         raise RuntimeError(f"command not found: {cmd[0]}: {e}")
+    _current_install_proc = proc
 
-    ticks = 0
-    start = time.time()
-    for line in proc.stdout:
-        line = line.rstrip()
-        if line:
-            _log(line[:200])
-        if heavy:
-            ticks += 1
-            # asymptotic approach to progress_base + progress_span*0.95
-            elapsed = time.time() - start
-            frac = 1.0 - 1.0 / (1.0 + elapsed / 20.0)   # reaches 0.5 at 20s, 0.8 at 80s, 0.95 at 380s
-            _install_state["progress"] = progress_base + progress_span * frac * 0.95
+    try:
+        ticks = 0
+        start = time.time()
+        for line in proc.stdout:
+            if _install_state.get("cancelRequested"):
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                break
+            line = line.rstrip()
+            if line:
+                _log(line[:200])
+            if heavy:
+                ticks += 1
+                # asymptotic approach to progress_base + progress_span*0.95
+                elapsed = time.time() - start
+                frac = 1.0 - 1.0 / (1.0 + elapsed / 20.0)
+                _install_state["progress"] = progress_base + progress_span * frac * 0.95
 
-    rc = proc.wait()
+        rc = proc.wait()
+    finally:
+        _current_install_proc = None
+
+    if _install_state.get("cancelRequested"):
+        raise RuntimeError("install cancelled by user")
     if rc != 0:
         raise RuntimeError(f"subprocess failed (rc={rc}): {' '.join(cmd)}")
 

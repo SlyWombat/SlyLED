@@ -665,7 +665,9 @@ function _pcAdvRenderInstallingNote(ins){
   var pct=Math.round(100*(ins.progress||0));
   noteEl.innerHTML='<span style="color:#60a5fa">installing '+pct+'% — '+escapeHtml(ins.phase||'working')+'</span> '
     +'<button type="button" class="btn btn-nav" style="margin-left:.4em;padding:.1em .6em;font-size:.85em"'
-    +' onclick="event.preventDefault();event.stopPropagation();_depthRuntimeOpenProgress()">Details</button>';
+    +' onclick="event.preventDefault();event.stopPropagation();_depthRuntimeOpenProgress()">Details</button>'
+    +'<button type="button" class="btn" style="margin-left:.3em;padding:.1em .6em;font-size:.85em;background:#532;color:#fca5a5"'
+    +' onclick="event.preventDefault();event.stopPropagation();_depthRuntimeCancel()">Cancel</button>';
   var zoeRadio=opt.querySelector('input[type=radio]');
   if(zoeRadio)zoeRadio.disabled=true;
   opt.style.opacity='.7';
@@ -706,8 +708,9 @@ function _depthRuntimeOpenProgressModal(){
     +'<div id="dri-msg" style="color:#94a3b8;font-size:.8em;min-height:1.4em;margin-bottom:.6em"></div>'
     +'<div id="dri-log" style="background:#0b1220;border:1px solid #1e293b;border-radius:4px;padding:.4em;'
     +'font-family:monospace;font-size:.72em;color:#64748b;max-height:160px;overflow:auto;margin-bottom:.6em"></div>'
-    +'<div id="dri-actions" style="text-align:right">'
-    +'<button id="dri-close" class="btn" onclick="closeModal();loadSettings&&loadSettings();" disabled>Close</button>'
+    +'<div id="dri-actions" style="display:flex;gap:.4em;justify-content:flex-end">'
+    +'<button id="dri-cancel" class="btn" style="background:#532;color:#fca5a5" onclick="_depthRuntimeCancel()">Cancel Install</button>'
+    +'<button id="dri-close" class="btn btn-nav" onclick="closeModal();loadSettings&&loadSettings();">Close (runs in background)</button>'
     +'</div></div>';
   document.getElementById('modal-title').textContent='Depth runtime';
   document.getElementById('modal-body').innerHTML=html;
@@ -757,18 +760,31 @@ function _depthRuntimePoll(){
       setTimeout(_depthRuntimePoll,1500);
       return;
     }
-    // Done — success or failure
+    // Done — success or failure. Hide the Cancel button; Close stays.
+    var cancelBtn=document.getElementById('dri-cancel');
+    if(cancelBtn)cancelBtn.style.display='none';
     var closeBtn=document.getElementById('dri-close');
-    if(closeBtn)closeBtn.disabled=false;
+    if(closeBtn)closeBtn.textContent='Close';
     if(r.ok){
       if(phase)phase.innerHTML='<span style="color:#34d399">Installed</span>';
       if(bar)bar.style.background='#34d399';
       _pcAdvZoeProbed=false;    // re-probe so the Advanced Scan card flips to available
     }else{
-      if(phase)phase.innerHTML='<span style="color:#ef4444">Failed</span>';
+      if(phase)phase.innerHTML='<span style="color:#ef4444">'+(r.cancelRequested?'Cancelled':'Failed')+'</span>';
       if(bar)bar.style.background='#ef4444';
       if(msg)msg.innerHTML='<span style="color:#ef4444">'+escapeHtml(r.error||r.message||'install failed')+'</span>';
     }
+  });
+}
+
+function _depthRuntimeCancel(){
+  if(!confirm('Cancel the install? Any partial venv will be wiped on the next Reinstall.'))return;
+  var cancelBtn=document.getElementById('dri-cancel');
+  if(cancelBtn){cancelBtn.disabled=true;cancelBtn.textContent='Cancelling...';}
+  ra('POST','/api/depth-runtime/install/cancel',{},function(){
+    // Keep polling — the state transition to running=false happens
+    // when the subprocess actually exits, which is what
+    // _depthRuntimePoll already handles.
   });
 }
 
