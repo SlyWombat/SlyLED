@@ -1806,14 +1806,24 @@ def api_cameras_delete(fid):
 
 @app.get("/api/cameras/<int:fid>/snapshot")
 def api_camera_snapshot(fid):
-    """Proxy a snapshot from a camera node. ?cam=0 selects camera index."""
+    """Proxy a snapshot from a camera node.
+
+    The sensor index defaults to the fixture's saved `cameraIdx` — e.g.
+    fid=13 mapped to `cameraIdx=1` on a multi-sensor Orange Pi grabs
+    /dev/video2, not /dev/video0. An explicit `?cam=N` query param still
+    overrides (used by diagnostics that want to probe a specific index
+    regardless of the fixture's saved mapping). Pre-fix this always sent
+    `cam=0` regardless of fixture, so every multi-sensor node served
+    cam-0's feed for every fixture and any SPA thumbnail / ArUco overlay
+    painted detections onto the wrong frame.
+    """
     f = next((f for f in _fixtures if f["id"] == fid and f.get("fixtureType") == "camera"), None)
     if not f:
         return jsonify(err="Camera not found"), 404
     ip = f.get("cameraIp")
     if not ip:
         return jsonify(err="Camera has no IP"), 400
-    cam_idx = request.args.get("cam", 0, type=int)
+    cam_idx = request.args.get("cam", f.get("cameraIdx", 0), type=int)
     try:
         import urllib.request as _ur
         resp = _ur.urlopen(f"http://{ip}:5000/snapshot?cam={cam_idx}", timeout=15)
