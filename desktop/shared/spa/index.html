@@ -369,19 +369,6 @@
       </div>
       <div id='s-log-path' style='font-size:.72em;color:#64748b;margin-top:.3em'></div>
     </div>
-    <div class='card' id='depth-runtime-card'>
-      <div class='card-title'>Depth Runtime (optional)</div>
-      <div style='font-size:.82em;color:#94a3b8;margin-bottom:.5em'>
-        Out-of-process ZoeDepth engine for calibration scans. ~2 GB one-time download.
-        The orchestrator itself does not bundle torch — the engine only starts when cal needs it.
-      </div>
-      <div id='depth-rt-status' style='font-size:.85em;margin-bottom:.4em'>Loading...</div>
-      <div style='display:flex;gap:.5em'>
-        <button id='depth-rt-install' class='btn btn-on' onclick='_depthRuntimeInstall()' style='display:none'>Install</button>
-        <button id='depth-rt-reinstall' class='btn btn-nav' onclick='_depthRuntimeInstall(true)' style='display:none'>Reinstall</button>
-        <button id='depth-rt-uninstall' class='btn' onclick='_depthRuntimeUninstall()' style='display:none;background:#532;color:#fca5a5'>Uninstall</button>
-      </div>
-    </div>
   </div>
 
   <!-- PROFILES -->
@@ -473,6 +460,21 @@
     <div class='card' style='max-width:480px'>
       <div class='card-title'>Version</div>
       <p style='font-size:.85em;color:#aaa' id='s-version'></p>
+    </div>
+    <div class='card' id='depth-runtime-card' style='max-width:560px'>
+      <div class='card-title'>Depth Runtime (optional)</div>
+      <div style='font-size:.82em;color:#94a3b8;margin-bottom:.5em'>
+        Out-of-process ZoeDepth engine for calibration scans. ~2 GB one-time download.
+        The orchestrator itself does not bundle torch — the engine only starts when cal needs it.
+      </div>
+      <div id='depth-rt-status' style='font-size:.85em;margin-bottom:.4em'>Loading...</div>
+      <div id='depth-rt-test-out' style='font-size:.78em;color:#94a3b8;margin-bottom:.4em;display:none'></div>
+      <div style='display:flex;gap:.5em;flex-wrap:wrap'>
+        <button id='depth-rt-install' class='btn btn-on' onclick='_depthRuntimeInstall()' style='display:none'>Install</button>
+        <button id='depth-rt-test' class='btn btn-nav' onclick='_depthRuntimeTest()' style='display:none'>Test &amp; Warm Up</button>
+        <button id='depth-rt-reinstall' class='btn btn-nav' onclick='_depthRuntimeInstall(true)' style='display:none'>Reinstall</button>
+        <button id='depth-rt-uninstall' class='btn' onclick='_depthRuntimeUninstall()' style='display:none;background:#532;color:#fca5a5'>Uninstall</button>
+      </div>
     </div>
     <div class='card' style='max-width:480px;border-color:#622'>
       <div class='card-title' style='color:#c66'>Factory Reset</div>

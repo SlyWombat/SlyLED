@@ -5493,6 +5493,68 @@ def api_depth_runtime_uninstall():
     return jsonify(**_depth_runtime.uninstall())
 
 
+@app.post("/api/depth-runtime/test")
+def api_depth_runtime_test():
+    """Validate + warm-up probe for the depth runtime. Spawns the
+    runner subprocess if it's not already live, pushes a tiny
+    synthetic JPEG through /infer, returns timing + depth stats so
+    the Settings card can report "working · warm" vs the actual
+    error. Follow-up calibration scans skip the cold-start penalty
+    because the runner stays resident for 5 min after this probe.
+    """
+    if _depth_runtime is None:
+        return jsonify(ok=False, err="depth_runtime module not bundled"), 500
+    if not _depth_runtime.is_installed():
+        return jsonify(ok=False, err="runtime not installed"), 409
+
+    import io
+    import time as _t
+    try:
+        import numpy as _np
+        from PIL import Image as _I
+    except Exception as e:
+        return jsonify(ok=False, err=f"numpy/Pillow missing in orchestrator: {e}"), 500
+
+    # 256x256 synthetic gradient — gives the model something non-trivial
+    # without the overhead of pulling a real camera snapshot.
+    h, w = 256, 256
+    grid_y = _np.linspace(0, 255, h, dtype=_np.uint8)[:, None]
+    grid_x = _np.linspace(0, 255, w, dtype=_np.uint8)[None, :]
+    rgb = _np.stack([
+        _np.broadcast_to(grid_y, (h, w)),
+        _np.broadcast_to(grid_x, (h, w)),
+        _np.full((h, w), 128, dtype=_np.uint8),
+    ], axis=-1)
+    buf = io.BytesIO()
+    _I.fromarray(rgb, "RGB").save(buf, format="JPEG", quality=80)
+    jpg = buf.getvalue()
+
+    t0 = _t.time()
+    try:
+        depth_mm, inf_ms = _depth_runtime.infer_jpeg(jpg, timeout_s=120.0)
+    except Exception as e:
+        return jsonify(ok=False, err=str(e),
+                       runnerPort=_depth_runtime._runner_port()), 502
+
+    total_ms = int((_t.time() - t0) * 1000)
+    d_min = float(depth_mm.min())
+    d_max = float(depth_mm.max())
+    d_mean = float(depth_mm.mean())
+    sane = (depth_mm.shape == (h, w)
+            and not _np.isnan(depth_mm).any()
+            and d_min >= 0 and d_max > d_min)
+    return jsonify(
+        ok=bool(sane),
+        shape=list(depth_mm.shape),
+        inferenceMs=inf_ms,
+        totalMs=total_ms,
+        depthMinMm=round(d_min, 1),
+        depthMaxMm=round(d_max, 1),
+        depthMeanMm=round(d_mean, 1),
+        runnerPort=_depth_runtime._runner_port(),
+    )
+
+
 @app.post("/api/space/scan/zoedepth")
 def api_space_scan_zoedepth():
     """Host-side high-quality monocular depth scan via ZoeDepth (#593).

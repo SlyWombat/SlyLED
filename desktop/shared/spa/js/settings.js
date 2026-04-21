@@ -122,6 +122,8 @@ function _depthRuntimeRefresh(){
           +'Python '+escapeHtml(r.pythonVersion||'?')+' · '
           +escapeHtml(r.model||'')+running;
         if(iBtn)iBtn.style.display='none';
+        var tBtn=document.getElementById('depth-rt-test');
+        if(tBtn)tBtn.style.display='inline-block';
         if(rBtn)rBtn.style.display='inline-block';
         if(uBtn)uBtn.style.display='inline-block';
       }else{
@@ -132,6 +134,8 @@ function _depthRuntimeRefresh(){
           box.innerHTML='<span style="color:#f59e0b">Not installed</span> · click Install for ~2 GB one-time download';
         }
         if(iBtn)iBtn.style.display='inline-block';
+        var tBtn2=document.getElementById('depth-rt-test');
+        if(tBtn2)tBtn2.style.display='none';
         if(rBtn)rBtn.style.display='none';
         if(uBtn)uBtn.style.display='none';
       }
@@ -156,9 +160,42 @@ function _depthRuntimeRenderRunning(ins){
     +'</div>'
     +(msg?'<div style="color:#94a3b8;font-size:.78em;margin-top:.25em">'+msg+'</div>':'');
   // Hide the action buttons while running
-  ['depth-rt-install','depth-rt-reinstall','depth-rt-uninstall'].forEach(function(id){
+  ['depth-rt-install','depth-rt-test','depth-rt-reinstall','depth-rt-uninstall'].forEach(function(id){
     var b=document.getElementById(id);if(b)b.style.display='none';
   });
+}
+
+function _depthRuntimeTest(){
+  var btn=document.getElementById('depth-rt-test');
+  var out=document.getElementById('depth-rt-test-out');
+  if(btn){btn.disabled=true;btn.textContent='Testing...';}
+  if(out){out.style.display='block';out.innerHTML='<span style="color:#60a5fa">Spawning runner and running a test inference (first call may take 30-60 s to load model weights)...</span>';}
+  var x=new XMLHttpRequest();
+  x.open('POST','/api/depth-runtime/test',true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.timeout=180000; // 3 min: cold start + inference on CPU can genuinely take a couple minutes
+  x.onload=function(){
+    if(btn){btn.disabled=false;btn.textContent='Test & Warm Up';}
+    var r={};try{r=JSON.parse(x.responseText||'{}');}catch(e){}
+    if(!out)return;
+    if(r.ok){
+      out.innerHTML='<span style="color:#34d399">✓ Working</span> · inference '
+        +(r.inferenceMs||'?')+' ms · depth '+(r.depthMinMm||'?')+'..'+(r.depthMaxMm||'?')+' mm (mean '
+        +(r.depthMeanMm||'?')+') · runner port '+(r.runnerPort||'?');
+      _depthRuntimeRefresh();
+    }else{
+      out.innerHTML='<span style="color:#ef4444">✗ Test failed:</span> '+escapeHtml(r.err||('HTTP '+x.status));
+    }
+  };
+  x.ontimeout=function(){
+    if(btn){btn.disabled=false;btn.textContent='Test & Warm Up';}
+    if(out)out.innerHTML='<span style="color:#ef4444">✗ Timed out after 3 min — check orchestrator log</span>';
+  };
+  x.onerror=function(){
+    if(btn){btn.disabled=false;btn.textContent='Test & Warm Up';}
+    if(out)out.innerHTML='<span style="color:#ef4444">✗ Network error</span>';
+  };
+  x.send('{}');
 }
 
 function _depthRuntimeUninstall(){
