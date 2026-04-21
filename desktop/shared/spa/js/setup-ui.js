@@ -441,17 +441,29 @@ function _pcAdvancedScan(){
 
   // #594 — highlight the recommended method for mover calibration. The
   // scan cloud feeds the mover calibration wizard's stage-geometry model,
-  // so accuracy directly drives beam-aim quality. Recommendation order:
-  //   stereo (with ArUco-cal pair) > ZoeDepth (when available) > monocular
-  // Resolved at render time and refreshed by `_pcAdvRefresh`.
+  // so *coverage + accuracy* directly drives beam-aim quality.
+  //
+  // Empirically measured 2026-04-21 on the basement rig (2 ArUco-cal
+  // cameras, textureless walls):
+  //   ZoeDepth (host):  4976 pts / 24s   metric, dense coverage
+  //   Mono DA-V2 Metric: 2622 pts / 22s   metric, ok coverage
+  //   Stereo ORB:          52 pts /  2s   ArUco-cal but ORB fails on
+  //                                       textureless scenes
+  //
+  // So even with ArUco-calibrated pairs, stereo loses ~100x in yield on
+  // typical indoor stage geometry. ZoeDepth (when available on host)
+  // wins on coverage and metric accuracy. Stereo stays as an advanced
+  // option for scenes with rich texture but isn't the default pick.
+  //
+  // Recommendation order (resolved at render time + refreshed async):
+  //   ZoeDepth (if host has torch+transformers) > Pi-side DA-V2 Metric > Stereo > Lite
   var stereoCalibrated=stereoPairs.length>0&&stereoPairs[0].cams.every(function(c){
     var cam=cams.filter(function(x){return x.id===c.id;})[0];
     return cam&&cam.calibrated;
   });
-  // ZoeDepth availability is checked after the modal renders (it's a
-  // network round-trip). Start with a neutral default; _pcAdvRefresh
-  // updates the badge + the recommended radio once the probe returns.
-  var recommend=stereoCalibrated?'stereo':'mono';
+  // Start with mono as the deterministic baseline; the async ZoeDepth
+  // probe in _pcAdvRefresh promotes ZoeDepth to Recommended when available.
+  var recommend='mono';
 
   var h='<div style="min-width:520px">';
   h+='<div style="font-size:.85em;color:#94a3b8;margin-bottom:.4em">Build a stage-space point cloud. Pick a method, choose which cameras to include, and optionally black out DMX during capture so bright beams don\'t confuse the depth model.</div>';
@@ -476,11 +488,11 @@ function _pcAdvancedScan(){
     +'</label>';
   var stereoDisabled=stereoPairs.length===0;
   h+='<label id="pcadv-opt-stereo" style="display:block;cursor:pointer;padding:.2em 0;font-size:.85em'+(stereoDisabled?';opacity:.4':'')+'">'
-    +'<input type="radio" name="pcmethod" value="stereo"'+(stereoDisabled?' disabled':(recommend==='stereo'?' checked':''))+' onchange="_pcAdvRefresh()"> Stereo triangulation'
+    +'<input type="radio" name="pcmethod" value="stereo"'+(stereoDisabled?' disabled':'')+' onchange="_pcAdvRefresh()"> Stereo triangulation'
     +(stereoDisabled?' <span style="color:#f59e0b">— needs two cameras on the same node</span>'
                     :(stereoCalibrated?' <span style="color:#34d399">— ArUco-calibrated pair on '+escapeHtml(stereoPairs[0].ip)+'</span>'
                                       :' <span style="color:#fcd34d">— pair on '+escapeHtml(stereoPairs[0].ip)+' needs ArUco cal for best accuracy</span>'))
-    +(recommend==='stereo'?_recBadge():'')
+    +' <span style="color:#64748b;font-size:.9em">· ORB-based, can yield very few points on textureless scenes</span>'
     +'</label>';
   h+='<label id="pcadv-opt-lite" style="display:block;cursor:pointer;padding:.2em 0;font-size:.85em">'
     +'<input type="radio" name="pcmethod" value="lite" onchange="_pcAdvRefresh()"> Lite — synthesize from layout dimensions (no camera scan).'
@@ -549,10 +561,11 @@ function _pcAdvRefresh(){
   document.querySelectorAll('.pcadv-cam').forEach(function(cb){
     cb.disabled=(method==='lite')||cb.hasAttribute('data-force-disabled');
   });
-  // #594 — probe ZoeDepth availability once per modal open. If the host
-  // has torch + transformers, mark ZoeDepth as the recommended method
-  // (better geometry than Pi-side monocular for mover calibration,
-  // provided no ArUco-calibrated stereo pair is present).
+  // #594 — probe ZoeDepth availability once per modal open. When the
+  // host has torch + transformers, promote ZoeDepth to Recommended.
+  // Empirical 2026-04-21 basement rig: ZoeDepth 4976 pts vs mono 2622
+  // vs stereo 52 pts — ZoeDepth dominates on coverage AND accuracy, so
+  // it's the default pick whenever it's available.
   if(!_pcAdvZoeProbed){
     _pcAdvZoeProbed=true;
     ra('GET','/api/space/scan/zoedepth',null,function(r){
@@ -560,18 +573,16 @@ function _pcAdvRefresh(){
       var opt=document.getElementById('pcadv-opt-zoe');
       if(!opt)return;
       if(r&&r.available){
-        if(noteEl)noteEl.innerHTML='<span style="color:#34d399">available on host</span>';
-        // Promote ZoeDepth to Recommended if stereo isn't already taking
-        // that slot (stereo with ArUco cal still wins on accuracy).
-        var stereoRec=document.querySelector('#pcadv-opt-stereo .pcadv-rec-badge');
+        if(noteEl)noteEl.innerHTML='<span style="color:#34d399">available on host · best coverage for calibration</span>';
+        // Strip any existing badge (the initial render gave it to mono)
+        // and move Recommended onto ZoeDepth. Auto-check if mono was
+        // still the selected radio.
         var currentRec=document.querySelector('.pcadv-rec-badge');
-        if(!stereoRec){
-          if(currentRec)currentRec.remove();
-          opt.insertAdjacentHTML('beforeend',' <span class="pcadv-rec-badge" style="background:#065f46;color:#34d399;padding:1px 6px;border-radius:8px;font-size:.7em;margin-left:.3em">\u2605 Recommended</span>');
-          var zoeRadio=opt.querySelector('input[type=radio]');
-          var monoRadio=document.querySelector('#pcadv-opt-mono input[type=radio]');
-          if(zoeRadio&&monoRadio&&monoRadio.checked){zoeRadio.checked=true;_pcAdvRefresh();}
-        }
+        if(currentRec)currentRec.remove();
+        opt.insertAdjacentHTML('beforeend',' <span class="pcadv-rec-badge" style="background:#065f46;color:#34d399;padding:1px 6px;border-radius:8px;font-size:.7em;margin-left:.3em">\u2605 Recommended</span>');
+        var zoeRadio=opt.querySelector('input[type=radio]');
+        var monoRadio=document.querySelector('#pcadv-opt-mono input[type=radio]');
+        if(zoeRadio&&monoRadio&&monoRadio.checked){zoeRadio.checked=true;_pcAdvRefresh();}
       }else{
         if(noteEl)noteEl.innerHTML='<span style="color:#f59e0b">not installed — run orchestrator from source with torch + transformers to enable</span>';
         var zoeRadio2=opt.querySelector('input[type=radio]');
