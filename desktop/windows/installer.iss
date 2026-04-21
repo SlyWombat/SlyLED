@@ -3,7 +3,7 @@
 ; Or:    run build.bat — it calls iscc automatically if available.
 
 #define AppName      "SlyLED Orchestrator"
-#define AppVersion   "1.5.56"
+#define AppVersion   "1.5.57"
 #define AppPublisher "Electric RV Corporation"
 #define AppExeName   "SlyLED.exe"
 ; Unique GUID for this app — keep fixed across releases so updates overwrite
@@ -104,7 +104,7 @@ var
   MarkerFile: String;
 begin
   if CurStep = ssPostInstall then begin
-    if IsComponentSelected('depth') then begin
+    if WizardIsComponentSelected('depth') then begin
       MarkerFile := ExpandConstant('{app}\depth.install-requested');
       SaveStringToFile(MarkerFile, '1', False);
     end;
