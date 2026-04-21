@@ -616,30 +616,27 @@ function _dmxDetailSetAll(fid,val){
 }
 function _dmxDetailAllOn(fid){_dmxDetailSetAll(fid,255);}
 function _dmxDetailBlackout(fid){_dmxDetailSetAll(fid,0);}
-function _dmxDetailColor(fid,chTypes){
-  // Set color channels by type name
-  ra('GET','/api/dmx/fixture/'+fid+'/channels',null,function(d){
-    if(!d||!d.channels)return;
-    var chs=[];
-    d.channels.forEach(function(c){
-      var v=chTypes[c.type]!==undefined?chTypes[c.type]:(c.type==='dimmer'?255:0);
-      chs.push({offset:c.offset,value:v});
-    });
-    ra('POST','/api/dmx/fixture/'+fid+'/test',{channels:chs},function(){
-      // Update sliders
+function _dmxDetailColor(fid,r,g,b){
+  // #609 — profile-aware color. Server routes through _set_fixture_color
+  // so RGB fixtures get RGB channels and color-wheel fixtures get the
+  // nearest wheel slot. After the write, re-read channels to resync
+  // sliders so the UI reflects what actually hit the universe buffer.
+  ra('POST','/api/dmx/fixture/'+fid+'/test',{color:{r:r,g:g,b:b,dimmer:255}},function(){
+    ra('GET','/api/dmx/fixture/'+fid+'/channels',null,function(d){
+      if(!d||!d.channels)return;
       var sliders=document.querySelectorAll('.dmx-detail-slider');
       sliders.forEach(function(s){
         var off=parseInt(s.dataset.offset);
-        var ch=chs.find(function(c){return c.offset===off;});
+        var ch=d.channels.find(function(c){return c.offset===off;});
         if(ch){s.value=ch.value;s.nextElementSibling.textContent=ch.value;}
       });
     });
   });
 }
-function _dmxDetailWhite(fid){_dmxDetailColor(fid,{red:255,green:255,blue:255,white:255,dimmer:255});}
-function _dmxDetailRed(fid){_dmxDetailColor(fid,{red:255,green:0,blue:0,white:0,dimmer:255});}
-function _dmxDetailGreen(fid){_dmxDetailColor(fid,{red:0,green:255,blue:0,white:0,dimmer:255});}
-function _dmxDetailBlue(fid){_dmxDetailColor(fid,{red:0,green:0,blue:255,white:0,dimmer:255});}
+function _dmxDetailWhite(fid){_dmxDetailColor(fid,255,255,255);}
+function _dmxDetailRed(fid){_dmxDetailColor(fid,255,0,0);}
+function _dmxDetailGreen(fid){_dmxDetailColor(fid,0,255,0);}
+function _dmxDetailBlue(fid){_dmxDetailColor(fid,0,0,255);}
 function _dmxDetailDefaults(fid){
   // Load profile defaults for all channels
   ra('GET','/api/dmx/fixture/'+fid+'/channels',null,function(d){

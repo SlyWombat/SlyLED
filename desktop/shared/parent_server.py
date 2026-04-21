@@ -8570,13 +8570,41 @@ def api_dmx_fixture_channels(fid):
 
 @app.post("/api/dmx/fixture/<int:fid>/test")
 def api_dmx_fixture_test(fid):
-    """Set channel values for testing a DMX fixture. Body: {channels: [{offset, value}]}."""
+    """Set channel values for testing a DMX fixture.
+
+    Two payload shapes (may be combined):
+      {channels: [{offset, value}]}   — raw channel writes (slider path)
+      {color: {r, g, b, dimmer?}}     — profile-aware semantic color (#609).
+                                        Routes through _set_fixture_color so
+                                        color-wheel fixtures pick the right
+                                        wheel slot instead of writing RGB
+                                        channels that don't exist.
+    """
     fixture = next((f for f in _fixtures if f["id"] == fid), None)
     if not fixture or fixture.get("fixtureType") != "dmx":
         return jsonify(err="DMX fixture not found"), 404
     body = request.get_json(silent=True) or {}
     uni = fixture.get("dmxUniverse", 1)
     addr = fixture.get("dmxStartAddr", 1)
+
+    # Profile-aware semantic color (#609).
+    color = body.get("color")
+    if color is not None:
+        pid = fixture.get("dmxProfileId")
+        prof_info = _profile_lib.channel_info(pid) if pid else None
+        r = max(0, min(255, int(color.get("r", 0))))
+        g = max(0, min(255, int(color.get("g", 0))))
+        b = max(0, min(255, int(color.get("b", 0))))
+        dimmer = color.get("dimmer")
+        ch_map = (prof_info or {}).get("channel_map", {}) if prof_info else {}
+        for engine in (_artnet, _sacn):
+            if engine.running:
+                _set_fixture_color(engine, uni, addr, r, g, b, prof_info)
+                if dimmer is not None and "dimmer" in ch_map:
+                    dval = max(0, min(255, int(dimmer)))
+                    engine.get_universe(uni).set_channel(addr + ch_map["dimmer"], dval)
+
+    # Raw channel writes — used by the slider UI.
     for ch in body.get("channels", []):
         dmx_addr = addr + ch.get("offset", 0)
         val = max(0, min(255, int(ch.get("value", 0))))

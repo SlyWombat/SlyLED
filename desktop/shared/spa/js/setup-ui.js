@@ -244,7 +244,7 @@ function _renderSetup(){
             chLeds='—';
           }
           actions='<button class="btn" onclick="editFixture('+f.id+')" style="background:#446;color:#fff">Edit</button>';
-          if(ch)actions+=' <button class="btn" onclick="showDetails('+f.childId+')" style="background:#335;color:#fff">Details</button>'
+          if(ch)actions+=' <button class="btn" onclick="showDetails('+f.childId+')" style="background:#335;color:#fff">Test</button>'
             +' <button class="btn btn-on" onclick="refreshChild('+f.childId+')">Refresh</button>'
             +' <button class="btn" onclick="rebootChild('+f.childId+')" style="background:#654;color:#fff">Reboot</button>';
           actions+=' <button class="btn btn-off" onclick="removeFixture('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
@@ -274,7 +274,7 @@ function _renderSetup(){
             }
           }
           var actions='<button class="btn" onclick="editFixture('+f.id+')" style="background:#446;color:#fff">Edit</button>'
-            +' <button class="btn" onclick="showDmxDetails('+f.id+')" style="background:#3b1f7c;color:#e9d5ff">Details</button>'
+            +' <button class="btn" onclick="showDmxDetails('+f.id+')" style="background:#3b1f7c;color:#e9d5ff">Test</button>'
             +' <button class="btn" onclick="_moverCalStart('+f.id+')" style="background:#6b21a8;color:#d8b4fe">Calibrate'+calBadge+'</button>'
             +' <button class="btn btn-off" onclick="removeFixture('+f.id+',\''+escapeHtml(f.name).replace(/'/g,"\\'")+'\')">Remove</button>';
           h+='<tr><td><b>'+escapeHtml(f.name)+'</b></td><td><span class="badge" style="background:#7c3aed;color:#fff">DMX</span></td><td>'+conn+'</td><td><span class="badge" style="background:#7c3aed;color:#fff">Configured</span></td><td>'+chLeds+'</td><td>'+actions+'</td></tr>';

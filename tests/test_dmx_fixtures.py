@@ -637,6 +637,148 @@ def run():
         c.delete(f'/api/fixtures/{ch_fid}')
 
         # ================================================================
+        # 18b. DMX FIXTURE /test — profile-aware color (#609)
+        # ================================================================
+        print('── 18b. DMX /test profile-aware color (#609) ──')
+
+        # Start Art-Net so buffers are live.
+        c.post('/api/dmx/start', json={'protocol': 'artnet'})
+        try:
+            engine = parent_server._artnet
+
+            # -- RGB profile: Red button should write red channel directly. --
+            r = c.post('/api/fixtures', json={
+                'name': 'RGB Test', 'type': 'point', 'fixtureType': 'dmx',
+                'dmxUniverse': 1, 'dmxStartAddr': 20, 'dmxChannelCount': 3,
+                'dmxProfileId': 'generic-rgb'
+            })
+            rgb_fid = r.get_json().get('id')
+
+            r = c.post(f'/api/dmx/fixture/{rgb_fid}/test',
+                       json={'color': {'r': 255, 'g': 0, 'b': 0, 'dimmer': 255}})
+            ok('RGB color post ok', r.status_code == 200)
+            uni = engine.get_universe(1)
+            ok('RGB red channel = 255', uni.get_channel(20) == 255,
+               f'got {uni.get_channel(20)}')
+            ok('RGB green channel = 0',  uni.get_channel(21) == 0)
+            ok('RGB blue channel = 0',   uni.get_channel(22) == 0)
+
+            # -- Color-wheel profile: Red button should write the wheel slot,
+            #    NOT RGB channels (which don't exist on this fixture). --
+            r = c.post('/api/fixtures', json={
+                'name': 'Color-Wheel Test', 'type': 'point', 'fixtureType': 'dmx',
+                'dmxUniverse': 2, 'dmxStartAddr': 1, 'dmxChannelCount': 13,
+                'dmxProfileId': 'generic-moving-head-16bit'
+            })
+            cw_fid = r.get_json().get('id')
+
+            uni2 = engine.get_universe(2)
+            uni2.blackout()
+
+            r = c.post(f'/api/dmx/fixture/{cw_fid}/test',
+                       json={'color': {'r': 255, 'g': 0, 'b': 0, 'dimmer': 200}})
+            ok('Color-wheel-capable post ok', r.status_code == 200)
+            # generic-moving-head-16bit has BOTH RGB and a color-wheel channel.
+            # _set_fixture_color prefers the RGB path when "red" is present in
+            # the channel map — so RGB channels should carry the red write and
+            # the color-wheel channel should stay at 0. This is deliberate for
+            # fixtures that have both; the wheel-only path is exercised below
+            # with the beamlight profile.
+            ok('Mixed profile: RGB red channel written',
+               uni2.get_channel(8) == 255,
+               f'offset7(red)={uni2.get_channel(8)}')
+            ok('Mixed profile: color-wheel untouched',
+               uni2.get_channel(12) == 0,
+               f'got {uni2.get_channel(12)}')
+            # Dimmer is at offset 5 → DMX addr = 6, capped at 200.
+            ok('Mixed profile: dimmer = 200',
+               uni2.get_channel(6) == 200,
+               f'got {uni2.get_channel(6)}')
+
+            # -- Synthetic color-wheel-ONLY profile (no RGB channels) —
+            #    this is the real #609 case: raw RGB would do nothing, but
+            #    _set_fixture_color must pick the wheel slot. Mirrors the
+            #    channel layout of the user's beamlight-350w-16ch profile
+            #    so the test stays representative without depending on
+            #    user-authored JSON on disk.
+            wheel_only_profile = {
+                'id': 'test-wheel-only',
+                'name': 'Test Color-Wheel-Only',
+                'manufacturer': 'TestRig',
+                'category': 'moving-head',
+                'channels': [
+                    {'offset': 0, 'name': 'Color Wheel', 'type': 'color-wheel',
+                     'capabilities': [
+                        {'range': [0, 7],   'type': 'WheelSlot', 'color': '#ffffff', 'label': 'Open / white'},
+                        {'range': [8, 24],  'type': 'WheelSlot', 'color': '#ff0000', 'label': 'Red'},
+                        {'range': [25, 41], 'type': 'WheelSlot', 'color': '#ff7f00', 'label': 'Orange'},
+                        {'range': [42, 58], 'type': 'WheelSlot', 'color': '#0033ff', 'label': 'Blue'},
+                        {'range': [59, 75], 'type': 'WheelSlot', 'color': '#00c837', 'label': 'Green'},
+                     ]},
+                    {'offset': 1, 'name': 'Dimmer', 'type': 'dimmer',
+                     'default': 0, 'capabilities': [
+                        {'range': [0, 255], 'type': 'Intensity', 'label': 'Dimmer 0-100%'}]},
+                ],
+                'channelCount': 2,
+                'colorMode': 'single',
+            }
+            parent_server._profile_lib._profiles['test-wheel-only'] = \
+                dict(wheel_only_profile, builtin=False)
+
+            r = c.post('/api/fixtures', json={
+                'name': 'Wheel-Only Test', 'type': 'point', 'fixtureType': 'dmx',
+                'dmxUniverse': 3, 'dmxStartAddr': 1, 'dmxChannelCount': 2,
+                'dmxProfileId': 'test-wheel-only'
+            })
+            bl_fid = r.get_json().get('id')
+
+            uni3 = engine.get_universe(3)
+            uni3.blackout()
+
+            r = c.post(f'/api/dmx/fixture/{bl_fid}/test',
+                       json={'color': {'r': 255, 'g': 0, 'b': 0, 'dimmer': 255}})
+            ok('Wheel-only Red post ok', r.status_code == 200)
+            # Red slot [8,24] → midpoint 16. Channel at DMX addr 1+0 = 1.
+            bl_val = uni3.get_channel(1)
+            ok('Wheel-only Red → slot 16', bl_val == 16, f'got {bl_val}')
+            # Dimmer at offset 1 → DMX addr 2.
+            ok('Wheel-only dimmer = 255', uni3.get_channel(2) == 255,
+               f'got {uni3.get_channel(2)}')
+
+            # Blue → slot [42,58] → mid=50.
+            uni3.blackout()
+            r = c.post(f'/api/dmx/fixture/{bl_fid}/test',
+                       json={'color': {'r': 0, 'g': 0, 'b': 255, 'dimmer': 255}})
+            ok('Wheel-only Blue → slot 50',
+               uni3.get_channel(1) == 50,
+               f'got {uni3.get_channel(1)}')
+
+            # Black (0,0,0) → slot 0 (Open / white).
+            uni3.blackout()
+            r = c.post(f'/api/dmx/fixture/{bl_fid}/test',
+                       json={'color': {'r': 0, 'g': 0, 'b': 0, 'dimmer': 0}})
+            ok('Wheel-only Black → slot 0',
+               uni3.get_channel(1) == 0,
+               f'got {uni3.get_channel(1)}')
+
+            c.delete(f'/api/fixtures/{bl_fid}')
+            # Drop the synthetic profile so it doesn't linger in the library.
+            parent_server._profile_lib._profiles.pop('test-wheel-only', None)
+
+            # -- Raw channel path still works (slider UI). --
+            r = c.post(f'/api/dmx/fixture/{rgb_fid}/test',
+                       json={'channels': [{'offset': 0, 'value': 99},
+                                          {'offset': 1, 'value': 77}]})
+            ok('Raw channels post ok', r.status_code == 200)
+            ok('Raw ch0 written', uni.get_channel(20) == 99)
+            ok('Raw ch1 written', uni.get_channel(21) == 77)
+
+            c.delete(f'/api/fixtures/{rgb_fid}')
+            c.delete(f'/api/fixtures/{cw_fid}')
+        finally:
+            c.post('/api/dmx/stop')
+
+        # ================================================================
         # 19. DMX PROFILES LIST
         # ================================================================
         print('── 19. DMX profiles ──')
