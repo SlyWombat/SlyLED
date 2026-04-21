@@ -4590,6 +4590,93 @@ def _aruco_anchor_extrinsics(frame_w, frame_h, fov_deg, fov_type,
     }
 
 
+def _apply_marker_z_alignment(cloud, radius_mm=400, min_pts=3):
+    """#599 — shift a point cloud's Z so surveyed floor markers sit at z=0.
+
+    Monocular depth models (ZoeDepth, MiDaS, mono-fallback) place the
+    floor wherever their training set's prior puts it — on the basement
+    rig that's a consistent ~250 mm above reality. The surveyed ArUco
+    registry gives us the ground truth: every floor-level marker is by
+    construction at z=0. For each such marker, gather the cloud points
+    within `radius_mm` of its XY position, take their median Z, average
+    across markers, and subtract the result from every point's Z.
+
+    Robustness:
+    - Only marker records where `|z| < 50mm` AND `rx == ry == rz == 0`
+      count as "floor" (wall-mounted markers skipped).
+    - Median (not mean) per marker and across markers — one noisy
+      marker can't drag the whole correction.
+    - If no marker has ≥ `min_pts` nearby cloud points, returns without
+      modifying the cloud and flags `used=False`.
+    - Diagnostic payload returned so the SPA / tests can show which
+      markers contributed.
+
+    Returns a diagnostics dict; mutates `cloud["points"]` in place.
+    """
+    if not cloud or not cloud.get("points"):
+        return {"applied": False, "reason": "no points"}
+    floor = [m for m in _aruco_markers
+             if abs(float(m.get("z", 0) or 0)) < 50
+             and abs(float(m.get("rx", 0) or 0)) < 1
+             and abs(float(m.get("ry", 0) or 0)) < 1
+             and abs(float(m.get("rz", 0) or 0)) < 1]
+    if not floor:
+        return {"applied": False, "reason": "no floor-level markers in registry"}
+    import statistics
+    pts = cloud["points"]
+    per_marker = []
+    offsets = []
+    for m in floor:
+        mx, my = float(m["x"]), float(m["y"])
+        zs = [p[2] for p in pts
+              if abs(p[0] - mx) < radius_mm and abs(p[1] - my) < radius_mm]
+        entry = {"id": int(m["id"]), "xy": [mx, my], "nearbyPoints": len(zs)}
+        if len(zs) >= min_pts:
+            mz = statistics.median(zs)
+            entry["medianZ"] = round(mz, 1)
+            entry["used"] = True
+            offsets.append(mz)
+        else:
+            entry["used"] = False
+        per_marker.append(entry)
+    if not offsets:
+        return {"applied": False, "reason": f"no marker had ≥{min_pts} nearby points",
+                "markers": per_marker}
+    offset_z = statistics.median(offsets)
+    for p in pts:
+        p[2] -= offset_z
+    cloud["zOffsetAppliedMm"] = round(
+        (cloud.get("zOffsetAppliedMm") or 0.0) + offset_z, 2)
+    log.info("marker-Z alignment: offset=%.1f mm across %d markers "
+             "(offsets=%s)",
+             offset_z, len(offsets), [round(o, 1) for o in offsets])
+    return {"applied": True, "zOffsetMm": round(offset_z, 1),
+            "markers": per_marker, "markersUsed": len(offsets)}
+
+
+@app.post("/api/space/align-to-markers")
+def api_space_align_to_markers():
+    """Apply a Z-offset correction to the current point cloud using
+    surveyed floor-level ArUco markers. Operator-triggered version of
+    the auto-alignment that runs at the end of mono/ZoeDepth scans
+    (#599). Idempotent-ish: each call re-measures the current cloud
+    against the registry and shifts it toward z=0 again, so repeated
+    calls converge to zero offset.
+    """
+    global _point_cloud, _stage_surfaces_cache
+    body = request.get_json(silent=True) or {}
+    radius = int(body.get("radiusMm", 400))
+    min_pts = int(body.get("minPts", 3))
+    if not _point_cloud or not _point_cloud.get("points"):
+        return jsonify(ok=False, err="no point cloud loaded"), 400
+    result = _apply_marker_z_alignment(_point_cloud, radius_mm=radius,
+                                         min_pts=min_pts)
+    if result.get("applied"):
+        _save("pointcloud", _point_cloud)
+        _stage_surfaces_cache = {"key": None, "value": None}
+    return jsonify(ok=True, **result, totalPoints=len(_point_cloud["points"]))
+
+
 @app.post("/api/space/scan/aruco-simple")
 def api_space_scan_aruco_simple():
     """#592 — Build a minimal marker-anchored point cloud using only the
@@ -5031,14 +5118,24 @@ def api_space_scan_zoedepth():
         "stageD": int(_stage.get("d", 4) * 1000),
         "elapsedS": round(total_t, 2),
     }
+    # #599 — auto-align Z to the surveyed floor markers when any are
+    # registered. ZoeDepth's monocular scale-prior routinely plants the
+    # floor at 200-400 mm above truth on the basement rig; the surveyed
+    # ArUco registry is the ground-truth anchor, and this step shifts
+    # the cloud so the floor sits at z=0 per the markers.
+    align = _apply_marker_z_alignment(_point_cloud)
+    if align.get("applied"):
+        _point_cloud["markerAlignment"] = align
     _save("pointcloud", _point_cloud)
     _stage_surfaces_cache = {"key": None, "value": None}
-    log.info("ZoeDepth scan complete: %d points from %d cameras in %.1fs",
-             len(merged), len(per_cam_clouds), total_t)
+    log.info("ZoeDepth scan complete: %d points from %d cameras in %.1fs%s",
+             len(merged), len(per_cam_clouds), total_t,
+             f" (Z-aligned {align['zOffsetMm']}mm)" if align.get("applied") else "")
     return jsonify(ok=True, source="zoedepth",
                    totalPoints=len(merged),
                    cameras=cam_info_list,
-                   elapsedS=round(total_t, 2))
+                   elapsedS=round(total_t, 2),
+                   markerAlignment=align)
 
 
 @app.post("/api/space/scan/stereo")
@@ -5453,6 +5550,13 @@ def api_space_scan_status():
         _point_cloud["stageW"] = int(_stage.get("w", 3) * 1000)
         _point_cloud["stageH"] = int(_stage.get("h", 2) * 1000)
         _point_cloud["stageD"] = int(_stage.get("d", 1.5) * 1000)
+        # #599 — auto-align Z to surveyed floor markers. Same treatment
+        # ZoeDepth gets — monocular depth's scale-prior-derived floor
+        # position is pretty but arbitrary; the ArUco registry is the
+        # authoritative anchor.
+        align = _apply_marker_z_alignment(_point_cloud)
+        if align.get("applied"):
+            _point_cloud["markerAlignment"] = align
         _save("pointcloud", _point_cloud)
         # #496 — new cloud invalidates analyzed surfaces cache.
         _stage_surfaces_cache = {"key": None, "value": None}

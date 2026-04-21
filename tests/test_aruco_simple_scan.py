@@ -346,6 +346,104 @@ def test_anchor_extrinsics_insufficient_corners():
     ok(result["cornerCount"] == 0, f"cornerCount=0 (got {result['cornerCount']})")
 
 
+def test_marker_z_alignment_shifts_cloud_to_floor():
+    """#599 — given a synthetic cloud with a known Z-offset, and floor
+    markers at z=0, _apply_marker_z_alignment should recover the offset
+    and shift the cloud so the floor ends up at z≈0."""
+    _reset_world()
+    _add_marker(0, (500, 1400, 0))
+    _add_marker(1, (1610, 3100, 0))
+    _add_marker(2, (1053, 2150, 0))
+
+    # Synthetic cloud: 20 "floor" points near each marker at z ≈ 237 mm
+    # (simulating ZoeDepth's typical ~250mm prior), plus 30 "noise" points
+    # scattered high to simulate walls/ceiling.
+    import random
+    random.seed(42)
+    pts = []
+    TRUE_OFFSET = 237.0
+    for m in [(500, 1400), (1610, 3100), (1053, 2150)]:
+        for _ in range(20):
+            pts.append([m[0] + random.uniform(-50, 50),
+                        m[1] + random.uniform(-50, 50),
+                        TRUE_OFFSET + random.uniform(-5, 5),
+                        200, 200, 200, 0.9])
+    for _ in range(30):
+        pts.append([random.uniform(0, 2000),
+                    random.uniform(0, 3500),
+                    random.uniform(1500, 2200),
+                    120, 120, 120, 0.7])
+    cloud = {"points": pts, "totalPoints": len(pts)}
+    result = parent_server._apply_marker_z_alignment(cloud)
+    ok(result.get("applied") is True, f"alignment applied ({result})")
+    ok(result.get("markersUsed") == 3,
+       f"all 3 markers contributed (got {result.get('markersUsed')})")
+    # Recovered offset should match ground truth within the ±5mm jitter.
+    ok(abs(result["zOffsetMm"] - TRUE_OFFSET) < 5,
+       f"recovered offset {result['zOffsetMm']} ≈ {TRUE_OFFSET} ±5")
+    # Floor points in the cloud should now be near z=0.
+    floor_pts = [p for p in pts if abs(p[0] - 1053) < 100 and abs(p[1] - 2150) < 100]
+    median_z = sorted([p[2] for p in floor_pts])[len(floor_pts) // 2]
+    ok(abs(median_z) < 10,
+       f"floor median Z ≈ 0 after shift (got {median_z:.1f})")
+
+
+def test_marker_z_alignment_skips_wall_markers():
+    """Markers with rotation (rx/ry/rz != 0) are assumed wall-mounted and
+    should NOT contribute to the floor-plane offset."""
+    _reset_world()
+    # Only a wall marker → alignment should refuse.
+    _aruco_markers.append({"id": 5, "x": 1000, "y": 3400, "z": 1500,
+                            "size": 150, "rx": 90, "ry": 0, "rz": 0})
+    cloud = {"points": [[1000, 3400, 1487, 200, 200, 200, 0.9]] * 5}
+    result = parent_server._apply_marker_z_alignment(cloud)
+    ok(result.get("applied") is False, "wall-only registry → no alignment")
+    ok("no floor" in (result.get("reason") or "").lower(),
+       f"reason mentions no floor markers: {result.get('reason')}")
+
+
+def test_marker_z_alignment_requires_nearby_points():
+    """If no cloud point lies within the XY radius of any marker, the
+    alignment must bail out rather than divide by zero."""
+    _reset_world()
+    _add_marker(0, (500, 1400, 0))
+    # Cloud points are all on the far side of the room, nowhere near the marker.
+    pts = [[3000, 5000, 200, 200, 200, 200, 0.9] for _ in range(10)]
+    cloud = {"points": pts}
+    result = parent_server._apply_marker_z_alignment(cloud, radius_mm=100, min_pts=3)
+    ok(result.get("applied") is False,
+       f"no-nearby-points → no alignment ({result})")
+
+
+def test_align_to_markers_endpoint_persists_delta():
+    """POST /api/space/align-to-markers should shift the stored cloud and
+    return the offset + updated totalPoints."""
+    _reset_world()
+    _add_marker(0, (500, 1400, 0))
+    # Inject a cloud directly into module state so the endpoint has
+    # something to shift.
+    parent_server._point_cloud = {
+        "points": [[500, 1400, 250, 0, 0, 0, 0.9] for _ in range(10)]
+                  + [[600, 1500, 240, 0, 0, 0, 0.9] for _ in range(10)],
+        "totalPoints": 20,
+    }
+    try:
+        with app.test_client() as c:
+            r = c.post("/api/space/align-to-markers", json={})
+            d = r.get_json() or {}
+            ok(r.status_code == 200, f"200 (got {r.status_code})")
+            ok(d.get("applied") is True, f"alignment applied: {d}")
+            # Delta should be ~245 (median of the injected zs).
+            ok(abs(d.get("zOffsetMm", 0) - 245) < 10,
+               f"offset {d.get('zOffsetMm')} ≈ 245")
+            # Cloud in module state should now have zs ≈ 0.
+            zs = [p[2] for p in parent_server._point_cloud["points"]]
+            ok(all(abs(z) < 15 for z in zs),
+               f"all points shifted to z≈0 (got {zs[:3]}...)")
+    finally:
+        parent_server._point_cloud = None
+
+
 ALL = [
     test_preview_empty_world,
     test_preview_shared_detection,
@@ -357,6 +455,10 @@ ALL = [
     test_marker_stage_corners_wall_rotated,
     test_anchor_extrinsics_round_trip,
     test_anchor_extrinsics_insufficient_corners,
+    test_marker_z_alignment_shifts_cloud_to_floor,
+    test_marker_z_alignment_skips_wall_markers,
+    test_marker_z_alignment_requires_nearby_points,
+    test_align_to_markers_endpoint_persists_delta,
 ]
 
 
