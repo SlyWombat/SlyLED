@@ -6,12 +6,29 @@ env = os.environ.copy()
 env['PYTHONIOENCODING'] = 'utf-8'
 proc = subprocess.Popen([sys.executable, 'desktop/shared/parent_server.py', '--no-browser', '--port', '5559'],
                         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+# Always tear down the server subprocess on exit — exception, assertion
+# failure, Ctrl+C, anything. Abandoned parent_server processes keep
+# driving the DMX bridge at the 1 Hz Art-Net keep-alive and leave
+# venue lights glowing for hours afterwards (see memory
+# feedback_test_scripts_must_teardown).
+import atexit, signal
+def _teardown_server():
+    try: proc.kill()
+    except Exception: pass
+    try: proc.wait(timeout=3)
+    except Exception: pass
+atexit.register(_teardown_server)
+for _sig in (signal.SIGINT, signal.SIGTERM):
+    try: signal.signal(_sig, lambda *_: (_teardown_server(), sys.exit(1)))
+    except Exception: pass
+
 time.sleep(5)
 try:
     requests.get('http://localhost:5559/api/settings', timeout=5)
     print('Server up')
 except:
-    print('FAIL'); proc.kill(); sys.exit(1)
+    print('FAIL'); _teardown_server(); sys.exit(1)
 
 BASE = 'http://localhost:5559'
 requests.post(BASE + '/api/settings', json={'stageW': 600, 'stageH': 300, 'stageD': 400})
@@ -48,6 +65,28 @@ with sync_playwright() as p:
     check('Layout: Three.js inited', page.evaluate('() => !!(window._s3d && window._s3d.inited)'))
     check('Layout: canvas in #stage3d', page.evaluate('() => !!document.querySelector("#stage3d canvas")'))
     check('Layout: fixture nodes', page.evaluate('() => (window._s3d.nodes||[]).length') >= 1)
+
+    # #603 — rest-direction arrow must honour pitch (rx). Fixture above
+    # is rotation=[-30, 10, 0] (pitch up 30°, yaw 10°). Pre-fix, the arrow
+    # was computed from yaw only with Y hardcoded to 0 — any pitched
+    # fixture drew a flat arrow. Now homeDir = (sin(yaw)*cos(pitch),
+    # -sin(pitch), cos(yaw)*cos(pitch)), so Y ≈ 0.5 * vecLen(0.4) = 0.2
+    # for this fixture. Assert the absolute Y >= 0.05 (well above the
+    # <0.001 noise the old flat computation would produce).
+    rest_y = page.evaluate('''() => {
+        var maxY = 0;
+        (window._s3d && window._s3d.nodes || []).forEach(function(g) {
+            g.traverse(function(obj) {
+                if (obj.userData && obj.userData.restArrow && obj.position) {
+                    var y = Math.abs(obj.position.y);
+                    if (y > maxY) maxY = y;
+                }
+            });
+        });
+        return maxY;
+    }''')
+    check('#603 Layout: rest arrow honours pitch (|Y| = {:.3f})'.format(rest_y),
+          rest_y >= 0.05)
 
     # --- Dashboard tab ---
     print('\n--- Dashboard ---')

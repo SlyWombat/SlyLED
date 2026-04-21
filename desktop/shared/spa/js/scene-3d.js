@@ -461,9 +461,20 @@ function s3dLoadChildren(){
         var hasPanTilt=_fix3d.fixtureType==='camera'||
           (window._profileCache&&_fix3d.dmxProfileId&&window._profileCache[_fix3d.dmxProfileId]&&window._profileCache[_fix3d.dmxProfileId].panRange>0);
         if(hasPanTilt||_fix3d.fixtureType==='camera'){
+          // #603 — the rest-direction arrow previously read only rot3d[1]
+          // (yaw) and hardcoded Y=0, so a camera with rx=30° pitch-down
+          // still drew its green "home direction" arrow horizontal —
+          // looked like the camera was aimed at the horizon instead of
+          // the stage floor. Now mirrors the live-aim math at line ~287:
+          // Three.js is Y-up, positive stage pitch = tilt down = negative
+          // Y in Three.js. When #600 lands (ry↔rz swap for Z-up naming)
+          // the index into rot3d will need to update here too.
           var rot3d=_fix3d.rotation||[0,0,0];
-          var ryRad=rot3d[1]*Math.PI/180;
-          var homeDir=new THREE.Vector3(Math.sin(ryRad),0,Math.cos(ryRad)).normalize();
+          var rxRad=rot3d[0]*Math.PI/180;  // pitch (+ = down)
+          var ryRad=rot3d[1]*Math.PI/180;  // yaw
+          var cp=Math.cos(rxRad), sp=Math.sin(rxRad);
+          var cy=Math.cos(ryRad), sy=Math.sin(ryRad);
+          var homeDir=new THREE.Vector3(sy*cp,-sp,cy*cp).normalize();
           var vecLen=0.4;
           var homeEnd=homeDir.clone().multiplyScalar(vecLen);
           var restColor=_fix3d.calibrated?0x22c55e:(_fix3d.fixtureType==='camera'?0x22d3ee:0xf59e0b);
