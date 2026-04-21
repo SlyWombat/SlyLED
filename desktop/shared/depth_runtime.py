@@ -85,17 +85,19 @@ def paths() -> dict:
 # CPU-only wheels keep the download small and portable; GPU support is a
 # follow-up (#598 defers CUDA/MPS detection).
 #
-# transformers ≥4.41 is required: ZoeDepthForDepthEstimation was added in
-# 4.39 but 4.41 is the first line where the Windows wheel set is stable
-# against current tokenizers / safetensors / huggingface-hub. We widen
-# the bound so pip's resolver can pick a compatible set instead of
-# failing silently.
+# transformers ≥4.45 is required: ZoeDepthForDepthEstimation was added
+# in 4.39 but 4.45 is the first line with a settled Windows-CPU wheel
+# set. We leave torch unpinned on purpose so pip's resolver picks the
+# version that transformers + accelerate actually want (accelerate
+# ≥1.x pulls torch ≥2.4, so pinning torch==2.2 forced a wasteful
+# uninstall-reinstall round trip on the first install attempt).
+# Single combined pip install below lets the resolver see all
+# constraints at once.
 _PIP_INDEX = "https://download.pytorch.org/whl/cpu"
-_TORCH_PIN = "torch==2.2.2"
 _PIP_PINS = [
-    _TORCH_PIN,
     "numpy<2",
     "Pillow>=9",
+    "torch>=2.4,<3",
     "transformers>=4.45,<5",
     "tokenizers>=0.19",
     "safetensors>=0.4",
@@ -297,15 +299,19 @@ def _install_worker(force: bool):
         _phase("venv", "Upgrading pip in venv...", 0.10)
         _run([p["python_exe"], "-m", "pip", "install", "--upgrade", "pip"], cwd=p["runtime_dir"])
 
-        _phase("deps", "Installing torch (CPU wheel) — ~200 MB download...", 0.15)
+        # Single pip install so the resolver sees all constraints at
+        # once — previously we installed torch separately and then the
+        # second step upgraded it, wasting a 200 MB download. Using the
+        # download.pytorch.org CPU channel as the primary index (for
+        # CPU wheels on Linux) with PyPI as fallback for everything
+        # else. On Windows the default PyPI torch is already CPU-only
+        # without CUDA, so either index works.
+        _phase("deps", "Installing torch + transformers + dependencies — ~500 MB download...", 0.15)
         _run([p["python_exe"], "-m", "pip", "install",
               "--index-url", _PIP_INDEX,
               "--extra-index-url", "https://pypi.org/simple",
-              "torch==2.2.2"], cwd=p["runtime_dir"], heavy=True, progress_base=0.15, progress_span=0.40)
-
-        _phase("deps", "Installing transformers + support packages...", 0.55)
-        _run([p["python_exe"], "-m", "pip", "install", *(_p for _p in _PIP_PINS if not _p.startswith("torch"))],
-             cwd=p["runtime_dir"], heavy=True, progress_base=0.55, progress_span=0.20)
+              *_PIP_PINS],
+             cwd=p["runtime_dir"], heavy=True, progress_base=0.15, progress_span=0.60)
 
         _phase("weights", "Downloading ZoeDepth model weights — ~1.3 GB, one-time...", 0.78)
         os.makedirs(p["hf_home"], exist_ok=True)
