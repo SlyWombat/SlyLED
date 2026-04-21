@@ -569,6 +569,12 @@ function _pcAdvancedScan(){
   h+='<div style="padding:.4em 0;font-size:.82em">';
   h+='<label>Max points per camera <input id="pcadv-maxpts" type="number" value="5000" min="500" max="30000" step="500" style="width:80px;margin-left:.4em"></label><br>';
   h+='<label style="margin-top:.3em;display:block">Stereo resolution <select id="pcadv-stereores" style="margin-left:.4em"><option value="1920x1080">1920×1080</option><option value="1280x720">1280×720</option><option value="640x480">640×480</option></select></label>';
+  // #592 Phase 2 — anchor stereo with surveyed ArUco markers. Defaults
+  // ON when the prescan has already reported shared markers (we don't
+  // check that here; operator can uncheck if they want the legacy path).
+  h+='<label style="margin-top:.3em;display:block" title="Run ArUco detection on both frames and solvePnP against the surveyed registry to correct the camera poses before stereo triangulation. Reduces reprojection error from ~350 mm (FOV-only) to <50 mm on consumer cams. Needs the registry populated and ≥1 surveyed marker visible to each camera.">'
+    +'<input type="checkbox" id="pcadv-aruco-anchor" checked> <b>Anchor stereo with ArUco markers</b> '
+    +'<span style="color:#64748b">— tight 50 mm reprojection filter; falls back to 500 mm if no markers are visible</span></label>';
   h+='</div></details>';
 
   // Status area + action buttons
@@ -696,8 +702,27 @@ function _pcAdvGo(){
     }
     var res=(document.getElementById('pcadv-stereores')||{}).value||'1920x1080';
     var xy=res.split('x').map(function(v){return parseInt(v);});
-    ra('POST','/api/space/scan/stereo',{cameras:selected,resolution:xy,lighting:light},function(r){
+    var wantAnchor=(document.getElementById('pcadv-aruco-anchor')||{}).checked;
+    ra('POST','/api/space/scan/stereo',{cameras:selected,resolution:xy,lighting:light,
+                                          arucoMarkers:!!wantAnchor},function(r){
       if(r&&r.ok){
+        // #592 Phase 2 — surface the anchor state so the operator can
+        // see whether the tight 50 mm filter kicked in (and why not if
+        // it didn't).
+        var anchorLine='';
+        if(r.arucoAnchor&&r.arucoAnchor.requested){
+          if(r.arucoAnchored){
+            var aA=r.arucoAnchor.a||{}, aB=r.arucoAnchor.b||{};
+            anchorLine='<div style="font-size:.78em;color:#34d399;margin-top:.3em">'
+              +'✓ ArUco-anchored: cam A '+(aA.cornerCount||'?')+' corners RMS '+(aA.reprojectionRmsPx||'?')+'px '
+              +'· cam B '+(aB.cornerCount||'?')+' corners RMS '+(aB.reprojectionRmsPx||'?')+'px '
+              +'· threshold '+(r.reprojThresholdMm||50)+'mm</div>';
+          }else{
+            anchorLine='<div style="font-size:.78em;color:#f59e0b;margin-top:.3em">'
+              +'⚠ Anchor requested but '+escapeHtml((r.arucoAnchor.fallback||'unavailable'))
+              +' — fell back to 500 mm threshold</div>';
+          }
+        }
         var warn=r.warning?'<div style="color:#f59e0b;font-size:.82em;margin-top:.3em">\u26a0 '+escapeHtml(r.warning)+'</div>':'';
         var details='<div style="font-size:.78em;color:#94a3b8;margin-top:.3em">'
           +'Feature matches: <b>'+r.featureMatches+'</b> · '
@@ -705,7 +730,7 @@ function _pcAdvGo(){
           +'Capture delta: '+r.captureDeltaMs+'ms · '
           +'Tilt \u0394: '+r.tiltDelta+'°'
           +(r.panDelta!==undefined?(' · Pan \u0394: '+r.panDelta+'°'):'')
-          +'</div>';
+          +'</div>'+anchorLine;
         // Helper text if yield is suspiciously low.
         var calButtons=selected.map(function(id){
           return '<button class="btn" onclick="closeModal();_calWizardStart('+id+')" style="font-size:.75em;background:#7c3aed;color:#e9d5ff;margin-right:.3em">Calibrate fixture '+id+'\u2026</button>';

@@ -4443,6 +4443,143 @@ def _aruco_visibility_report(camera_ids=None):
     }
 
 
+def _marker_stage_corners(marker):
+    """Return the 4 stage-frame 3D corners for a surveyed ArUco marker
+    in the order OpenCV's detector outputs them (TL, TR, BR, BL viewed
+    from in front of the marker face).
+
+    Marker-local frame: +X right, +Y down, +Z face normal out.
+      TL = (-s/2, -s/2, 0)
+      TR = (+s/2, -s/2, 0)
+      BR = (+s/2, +s/2, 0)
+      BL = (-s/2, +s/2, 0)
+
+    Surveyed rotation is the XYZ-intrinsic Euler triple (rx, ry, rz) in
+    degrees; applied as R = Rz · Ry · Rx so the standard "marker lying
+    flat on the floor face-up" case uses rx=ry=rz=0. Translated by the
+    marker center (x, y, z) in stage mm.
+    """
+    if np is None:
+        raise RuntimeError("NumPy unavailable")
+    s = float(marker.get("size", 100)) / 2.0
+    local = np.array([
+        [-s, -s, 0.0],
+        [+s, -s, 0.0],
+        [+s, +s, 0.0],
+        [-s, +s, 0.0],
+    ], dtype=np.float64)
+    rx = math.radians(float(marker.get("rx", 0) or 0))
+    ry = math.radians(float(marker.get("ry", 0) or 0))
+    rz = math.radians(float(marker.get("rz", 0) or 0))
+    cxa, sxa = math.cos(rx), math.sin(rx)
+    cya, sya = math.cos(ry), math.sin(ry)
+    cza, sza = math.cos(rz), math.sin(rz)
+    Rx = np.array([[1, 0, 0], [0, cxa, -sxa], [0, sxa, cxa]], dtype=np.float64)
+    Ry = np.array([[cya, 0, sya], [0, 1, 0], [-sya, 0, cya]], dtype=np.float64)
+    Rz = np.array([[cza, -sza, 0], [sza, cza, 0], [0, 0, 1]], dtype=np.float64)
+    R = Rz @ Ry @ Rx
+    center = np.array([marker.get("x", 0), marker.get("y", 0), marker.get("z", 0)],
+                       dtype=np.float64)
+    corners = (R @ local.T).T + center
+    return corners  # shape (4, 3)
+
+
+def _aruco_anchor_extrinsics(frame_w, frame_h, fov_deg, fov_type,
+                              detected_by_id, registered_by_id):
+    """Run cv2.solvePnP on detected 2D corners vs surveyed 3D corners to
+    compute the camera's stage-frame extrinsics (#592 Phase 2).
+
+    Args:
+        frame_w, frame_h: actual captured resolution (V4L2 may downscale
+            silently — always trust the decoded dims, not the request).
+        fov_deg, fov_type: FOV for the intrinsic K — same convention as
+            StereoEngine.add_camera_from_fov (`horizontal`, `diagonal`,
+            `vertical`).
+        detected_by_id: dict {marker_id: [[x, y], x4]} of pixel corners
+            returned by `_aruco_detect` on this camera's frame.
+        registered_by_id: dict {marker_id: registry_record} of surveyed
+            markers the orchestrator knows the stage position of.
+
+    Returns:
+        dict with {K, rvec, tvec, reprojectionRmsPx, cornerCount} on
+        success; {err, cornerCount} on failure. `cornerCount` is the
+        number of (marker, corner) pairs used in the solve — need ≥4
+        distinct-plane correspondences for a unique solution.
+    """
+    if np is None:
+        return {"err": "NumPy unavailable", "cornerCount": 0}
+    try:
+        import cv2  # noqa: F401
+    except ImportError:
+        return {"err": "OpenCV unavailable", "cornerCount": 0}
+    import cv2
+
+    if fov_type == "diagonal":
+        diag = math.sqrt(frame_w * frame_w + frame_h * frame_h)
+        h_fov = 2.0 * math.atan(math.tan(math.radians(fov_deg) / 2.0) * (frame_w / diag))
+    elif fov_type == "vertical":
+        h_fov = 2.0 * math.atan(math.tan(math.radians(fov_deg) / 2.0) * (frame_w / frame_h))
+    else:
+        h_fov = math.radians(fov_deg)
+    fx = (frame_w / 2.0) / math.tan(h_fov / 2.0)
+    fy = fx
+    cx, cy = frame_w / 2.0, frame_h / 2.0
+    K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
+
+    obj_pts = []
+    img_pts = []
+    used_marker_ids = []
+    for mid, pix_corners in detected_by_id.items():
+        reg = registered_by_id.get(int(mid))
+        if not reg or not pix_corners or len(pix_corners) < 4:
+            continue
+        stage_corners = _marker_stage_corners(reg)
+        for i in range(4):
+            obj_pts.append(stage_corners[i])
+            img_pts.append([float(pix_corners[i][0]), float(pix_corners[i][1])])
+        used_marker_ids.append(int(mid))
+    if len(obj_pts) < 4:
+        return {"err": f"need ≥4 surveyed corners, got {len(obj_pts)}",
+                "cornerCount": len(obj_pts)}
+
+    obj = np.array(obj_pts, dtype=np.float64)
+    img = np.array(img_pts, dtype=np.float64)
+    dist = np.zeros(5, dtype=np.float64)
+    # SOLVEPNP_SQPNP is the default robust planar/non-planar solver in
+    # modern OpenCV — but it requires ≥4 points and can be brittle on
+    # exactly 4 coplanar corners from a single marker. Fall through to
+    # the iterative solver when SQPNP rejects or is unavailable.
+    ok = False
+    rvec = tvec = None
+    try:
+        ok, rvec, tvec = cv2.solvePnP(obj, img, K, dist,
+                                       flags=getattr(cv2, "SOLVEPNP_SQPNP",
+                                                      cv2.SOLVEPNP_ITERATIVE))
+    except Exception:
+        ok = False
+    if not ok or rvec is None:
+        try:
+            ok, rvec, tvec = cv2.solvePnP(obj, img, K, dist,
+                                           flags=cv2.SOLVEPNP_ITERATIVE)
+        except Exception as e:
+            return {"err": f"solvePnP raised: {e}", "cornerCount": len(obj_pts)}
+        if not ok:
+            return {"err": "solvePnP failed to converge",
+                    "cornerCount": len(obj_pts)}
+
+    # Reprojection RMS for operator feedback. Lower = tighter anchor.
+    proj, _ = cv2.projectPoints(obj, rvec, tvec, K, dist)
+    proj = proj.reshape(-1, 2)
+    diff = proj - img
+    rms_px = float(math.sqrt(float(np.mean(np.sum(diff * diff, axis=1)))))
+    return {
+        "K": K, "rvec": rvec, "tvec": tvec,
+        "reprojectionRmsPx": round(rms_px, 2),
+        "cornerCount": len(obj_pts),
+        "markerIds": used_marker_ids,
+    }
+
+
 @app.post("/api/space/scan/aruco-simple")
 def api_space_scan_aruco_simple():
     """#592 — Build a minimal marker-anchored point cloud using only the
@@ -5022,26 +5159,88 @@ def api_space_scan_stereo():
     engine = StereoEngine()
     pos_a = pos_map[cam_a["id"]]
     pos_b = pos_map[cam_b["id"]]
-    engine.add_camera_from_fov(
-        "a", cam_a.get("fovDeg", 90), w_a, h_a,
-        (pos_a.get("x", 0), pos_a.get("y", 0), pos_a.get("z", 0)),
-        cam_a.get("rotation", [0, 0, 0]),
-        fov_type=cam_a.get("fovType", "horizontal"))
-    engine.add_camera_from_fov(
-        "b", cam_b.get("fovDeg", 90), w_b, h_b,
-        (pos_b.get("x", 0), pos_b.get("y", 0), pos_b.get("z", 0)),
-        cam_b.get("rotation", [0, 0, 0]),
-        fov_type=cam_b.get("fovType", "horizontal"))
+
+    # #592 Phase 2 — ArUco-anchored extrinsics. When `arucoMarkers=true`
+    # in the body, run ArUco detection on both frames and solvePnP
+    # against the surveyed corners so the cameras register with a pose
+    # correction instead of the raw FOV fallback. Surveyed-marker
+    # anchoring corrects mount-angle miscalibration that the layout
+    # alone can't capture (consumer USB cams + hand-placed tripods
+    # routinely drift 5-10°), which on the basement rig is the
+    # difference between 350mm median reprojection error (FOV-only,
+    # 500mm threshold needed to get any points) and <50mm.
+    want_aruco = bool(body.get("arucoMarkers", False))
+    anchor_info = {"requested": want_aruco, "a": None, "b": None, "fallback": None}
+    def _detected_map(frame):
+        corners, ids, _r, _sz = _aruco_detect(frame)
+        out = {}
+        if ids is not None and len(ids) > 0:
+            for i, mid in enumerate(ids.flatten().tolist()):
+                pts = corners[i].reshape(4, 2).tolist()
+                out[int(mid)] = [[float(p[0]), float(p[1])] for p in pts]
+        return out
+
+    anchored = False
+    if want_aruco:
+        reg_by_id = {int(m.get("id")): m for m in _aruco_markers}
+        if not reg_by_id:
+            anchor_info["fallback"] = "no surveyed markers in registry"
+        else:
+            det_a = _detected_map(frame_a)
+            det_b = _detected_map(frame_b)
+            r_a = _aruco_anchor_extrinsics(
+                w_a, h_a, cam_a.get("fovDeg", 90),
+                cam_a.get("fovType", "horizontal"), det_a, reg_by_id)
+            r_b = _aruco_anchor_extrinsics(
+                w_b, h_b, cam_b.get("fovDeg", 90),
+                cam_b.get("fovType", "horizontal"), det_b, reg_by_id)
+            anchor_info["a"] = {k: v for k, v in r_a.items()
+                                  if k not in ("K", "rvec", "tvec")}
+            anchor_info["b"] = {k: v for k, v in r_b.items()
+                                  if k not in ("K", "rvec", "tvec")}
+            if "err" in r_a or "err" in r_b:
+                anchor_info["fallback"] = (
+                    f"solvePnP failed: a={r_a.get('err', 'ok')} b={r_b.get('err', 'ok')}")
+            else:
+                engine.add_camera(
+                    "a",
+                    {"fx": r_a["K"][0, 0], "fy": r_a["K"][1, 1],
+                     "cx": r_a["K"][0, 2], "cy": r_a["K"][1, 2]},
+                    {"rvec": r_a["rvec"].flatten().tolist(),
+                     "tvec": r_a["tvec"].flatten().tolist()})
+                engine.add_camera(
+                    "b",
+                    {"fx": r_b["K"][0, 0], "fy": r_b["K"][1, 1],
+                     "cx": r_b["K"][0, 2], "cy": r_b["K"][1, 2]},
+                    {"rvec": r_b["rvec"].flatten().tolist(),
+                     "tvec": r_b["tvec"].flatten().tolist()})
+                anchored = True
+                log.info("Stereo anchored: cam_a %d corners RMS=%.2fpx, "
+                         "cam_b %d corners RMS=%.2fpx",
+                         r_a.get("cornerCount", 0), r_a.get("reprojectionRmsPx", 0),
+                         r_b.get("cornerCount", 0), r_b.get("reprojectionRmsPx", 0))
+
+    if not anchored:
+        # Legacy FOV-only path — no surveyed anchor, 500 mm threshold
+        # needed to get anything out of uncalibrated consumer webcams.
+        engine.add_camera_from_fov(
+            "a", cam_a.get("fovDeg", 90), w_a, h_a,
+            (pos_a.get("x", 0), pos_a.get("y", 0), pos_a.get("z", 0)),
+            cam_a.get("rotation", [0, 0, 0]),
+            fov_type=cam_a.get("fovType", "horizontal"))
+        engine.add_camera_from_fov(
+            "b", cam_b.get("fovDeg", 90), w_b, h_b,
+            (pos_b.get("x", 0), pos_b.get("y", 0), pos_b.get("z", 0)),
+            cam_b.get("rotation", [0, 0, 0]),
+            fov_type=cam_b.get("fovType", "horizontal"))
 
     matches = feature_match_points(frame_a, frame_b)
-    # Uncalibrated consumer webcams have 5-15% barrel distortion that
-    # FOV-derived intrinsics can't model — reprojection errors on the
-    # basement rig are 200-400 mm across every FOV permutation. A tight
-    # 50 mm filter would always return 0 points until proper ArUco
-    # calibration is run. Use a lenient 500 mm threshold so the
-    # operator sees a sparse cloud; the SPA warns them that calibration
-    # is needed for accuracy.
-    thr_mm = float(body.get("maxReprojErrMm", 500.0))
+    # Threshold: tight (50 mm) when anchored, lenient (500 mm) otherwise.
+    # Anchored poses correct the 5-15% consumer-lens mount-angle error
+    # that FOV-only intrinsics can't model, so ORB matches survive a
+    # tight reprojection filter that would drop 100% of them pre-anchor.
+    default_thr = 50.0 if anchored else 500.0
+    thr_mm = float(body.get("maxReprojErrMm", default_thr))
     points = engine.triangulate_pair("a", "b", matches,
                                      max_reproject_err_mm=thr_mm)
 
@@ -5064,17 +5263,29 @@ def api_space_scan_stereo():
         "stageH": int(_stage.get("h", 2) * 1000),
         "stageD": int(_stage.get("d", 4) * 1000),
     }
+    # Attach anchor provenance into the saved cloud so the Layout tab
+    # can show a badge ("stereo · ArUco-anchored · 6 corners · RMS 2.4 px")
+    # without a second round-trip.
+    if anchored:
+        _point_cloud["arucoAnchored"] = True
+        _point_cloud["arucoAnchor"] = anchor_info
+        _point_cloud["reprojThresholdMm"] = thr_mm
     _save("pointcloud", _point_cloud)
     _stage_surfaces_cache = {"key": None, "value": None}
-    log.info("Stereo scan: %d matches → %d triangulated points (delta=%.1fms)",
-             len(matches), len(points), data.get("captureDeltaMs", 0))
+    log.info("Stereo scan: %d matches → %d triangulated points (delta=%.1fms, "
+             "thr=%.0fmm, anchored=%s)",
+             len(matches), len(points), data.get("captureDeltaMs", 0),
+             thr_mm, anchored)
     return jsonify(ok=True, source="stereo",
                    totalPoints=len(points),
                    featureMatches=len(matches),
                    captureDeltaMs=data.get("captureDeltaMs"),
                    tiltDelta=round(tilt_delta, 1),
                    panDelta=round(pan_delta, 1),
-                   warning=tilt_warning)
+                   warning=tilt_warning,
+                   arucoAnchored=anchored,
+                   arucoAnchor=anchor_info,
+                   reprojThresholdMm=thr_mm)
 
 
 def _dmx_snapshot_state():

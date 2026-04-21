@@ -7,6 +7,7 @@ detection results so the test is network-free.
 Run: python -X utf8 tests/test_aruco_simple_scan.py
 """
 
+import math
 import os
 import sys
 
@@ -208,6 +209,143 @@ def test_simple_triangulates_shared_marker():
         parent_server._aruco_snapshot_detect = saved
 
 
+def test_marker_stage_corners_flat_on_floor():
+    """A marker at (1500, 2000, 0) with size 100 and rotation=0 should
+    produce 4 corners in the XY plane at z=0 forming a 100×100 square."""
+    import numpy as np
+    m = {"id": 1, "x": 1500, "y": 2000, "z": 0,
+         "size": 100, "rx": 0, "ry": 0, "rz": 0}
+    pts = parent_server._marker_stage_corners(m)
+    ok(pts.shape == (4, 3), f"corners shape=(4,3) got {pts.shape}")
+    # All on floor
+    ok(all(abs(p[2]) < 1e-6 for p in pts), "all corners on z=0 plane")
+    # Square side length
+    side = np.linalg.norm(pts[1] - pts[0])
+    ok(abs(side - 100) < 1e-6, f"side length 100mm (got {side:.3f})")
+    # Center is marker position
+    center = pts.mean(axis=0)
+    ok(abs(center[0] - 1500) < 1e-6 and abs(center[1] - 2000) < 1e-6,
+       f"center matches marker xy (got {center[:2]})")
+
+
+def test_marker_stage_corners_wall_rotated():
+    """Marker rotated 90° around stage X (rx=90) flips its face to point
+    along +Y — corners should lie in the XZ plane."""
+    import numpy as np
+    m = {"id": 1, "x": 1000, "y": 500, "z": 1500,
+         "size": 200, "rx": 90, "ry": 0, "rz": 0}
+    pts = parent_server._marker_stage_corners(m)
+    # Y component should be close to 500 for all corners (marker face now
+    # lies in the XZ plane passing through y=500).
+    y_spread = max(p[1] for p in pts) - min(p[1] for p in pts)
+    ok(y_spread < 1e-6, f"wall-rotated corners share Y plane (spread {y_spread:.3f})")
+    # Z spread = side length (corners above/below center).
+    z_spread = max(p[2] for p in pts) - min(p[2] for p in pts)
+    ok(abs(z_spread - 200) < 1e-6, f"Z spread = side (got {z_spread:.3f})")
+
+
+def test_anchor_extrinsics_round_trip():
+    """Project 4 synthetic marker corners through a known camera pose
+    then recover that pose via _aruco_anchor_extrinsics. Recovered pose
+    should match the original within sub-mm / fractional-degree
+    accuracy for noise-free input."""
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        ok(True, "anchor round-trip skipped (cv2 unavailable)")
+        return
+    # Ground-truth: camera at (0, -3000, 1800) aimed downstage +Y,
+    # tilted down 20°. Stage +X = camera +X; stage +Y = camera +Z
+    # (optical axis forward); stage +Z = camera -Y (up in pixel frame).
+    # Build the rotation stage → camera explicitly: tilt-down by 20°
+    # puts the camera's forward axis into the Y-down-forward stage
+    # direction.
+    fov_deg, w, h = 70.0, 1280, 720
+    fov_type = "horizontal"
+    cam_pos = np.array([0, -3000, 1800], dtype=np.float64)
+    tilt_deg = 20.0
+    # R_cam_from_stage: first align cam forward with stage +Y, then
+    # tilt down by 20° around cam X. Using a synthetic construction
+    # rather than camera_math to keep the test's coordinate reasoning
+    # self-contained.
+    # Stage +X → cam +X
+    # Stage +Y → cam +Z (forward)
+    # Stage +Z → cam -Y (up)
+    R_align = np.array([
+        [1, 0, 0],
+        [0, 0, -1],
+        [0, 1, 0],
+    ], dtype=np.float64)
+    c, s = math.cos(math.radians(tilt_deg)), math.sin(math.radians(tilt_deg))
+    R_tilt = np.array([
+        [1, 0, 0],
+        [0, c, -s],
+        [0, s, c],
+    ], dtype=np.float64)
+    R_cam_from_stage = R_tilt @ R_align
+    t_truth = -R_cam_from_stage @ cam_pos.reshape(3, 1)
+    rvec_truth, _ = cv2.Rodrigues(R_cam_from_stage)
+
+    # Build K from FOV (matches _aruco_anchor_extrinsics formula).
+    h_fov = math.radians(fov_deg)
+    fx = (w / 2.0) / math.tan(h_fov / 2.0)
+    K = np.array([[fx, 0, w / 2.0], [0, fx, h / 2.0], [0, 0, 1]], dtype=np.float64)
+
+    # Two surveyed markers on the floor, well-spaced in X.
+    markers = [
+        {"id": 3, "x": -500, "y": 1500, "z": 0, "size": 150,
+         "rx": 0, "ry": 0, "rz": 0},
+        {"id": 7, "x": +500, "y": 1500, "z": 0, "size": 150,
+         "rx": 0, "ry": 0, "rz": 0},
+    ]
+    detected = {}
+    for m in markers:
+        corners_3d = parent_server._marker_stage_corners(m)
+        proj, _ = cv2.projectPoints(
+            corners_3d.astype(np.float64),
+            rvec_truth, t_truth, K, np.zeros(5))
+        detected[m["id"]] = [[float(proj[i, 0, 0]), float(proj[i, 0, 1])]
+                              for i in range(4)]
+
+    reg_by_id = {m["id"]: m for m in markers}
+    result = parent_server._aruco_anchor_extrinsics(
+        w, h, fov_deg, fov_type, detected, reg_by_id)
+    ok("err" not in result, f"anchor succeeds (got {result.get('err')})")
+    if "err" in result:
+        return
+    ok(result["cornerCount"] == 8,
+       f"uses 2 markers × 4 corners = 8 (got {result['cornerCount']})")
+    ok(result["reprojectionRmsPx"] < 1.0,
+       f"RMS reprojection <1px on noise-free (got {result['reprojectionRmsPx']})")
+
+    R_rec, _ = cv2.Rodrigues(result["rvec"])
+    t_rec = result["tvec"]
+    # Recovered camera center in stage frame.
+    cam_pos_rec = (-R_rec.T @ t_rec).flatten()
+    pos_err = float(np.linalg.norm(cam_pos_rec - cam_pos))
+    ok(pos_err < 5.0,
+       f"recovered camera pos within 5mm of truth (got {pos_err:.3f}mm)")
+    # Rotation delta — compose R_rec · R_truth^T and check angle.
+    R_delta = R_rec @ R_cam_from_stage.T
+    ang_deg = math.degrees(math.acos(
+        max(-1.0, min(1.0, (float(np.trace(R_delta)) - 1) / 2))))
+    ok(ang_deg < 0.5,
+       f"recovered rotation within 0.5° of truth (got {ang_deg:.3f}°)")
+
+
+def test_anchor_extrinsics_insufficient_corners():
+    """Fewer than 4 correspondences (e.g. only 3 markers registered but
+    2 visible with 4 corners each — wait, that IS ≥4). Here we test the
+    empty-intersection case: detections present but none registered."""
+    det = {99: [[100, 100], [200, 100], [200, 200], [100, 200]]}
+    reg = {}  # none
+    result = parent_server._aruco_anchor_extrinsics(1280, 720, 70, "horizontal",
+                                                     det, reg)
+    ok("err" in result, "empty intersection returns err")
+    ok(result["cornerCount"] == 0, f"cornerCount=0 (got {result['cornerCount']})")
+
+
 ALL = [
     test_preview_empty_world,
     test_preview_shared_detection,
@@ -215,6 +353,10 @@ ALL = [
     test_simple_rejects_empty_registry,
     test_simple_rejects_no_shared,
     test_simple_triangulates_shared_marker,
+    test_marker_stage_corners_flat_on_floor,
+    test_marker_stage_corners_wall_rotated,
+    test_anchor_extrinsics_round_trip,
+    test_anchor_extrinsics_insufficient_corners,
 ]
 
 
