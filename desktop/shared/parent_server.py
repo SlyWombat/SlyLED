@@ -3225,6 +3225,234 @@ def _get_bridge_ip():
     return None
 
 
+def _mover_cal_thread_markers(fid, cam, bridge_ip, mover_color,
+                                warmup=False, warmup_seconds=30.0):
+    """#610 marker-direct calibration. Wrapper that catches
+    CalibrationAborted cleanly (like the v2 wrapper)."""
+    job = _mover_cal_jobs[str(fid)]
+    try:
+        _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
+                                        warmup, warmup_seconds)
+    except _mcal.CalibrationAborted:
+        log.info("MOVER-CAL markers %d: cancelled by operator", fid)
+        job["error"] = "Cancelled by operator"; job["status"] = "cancelled"
+        job["phase"] = "cancelled"
+        _mcal.arm_cancel()
+        try:
+            _mcal._hold_dmx(bridge_ip, [0] * 512, 0.3)
+        except Exception:
+            pass
+        _set_calibrating(fid, False)
+    except Exception as e:
+        log.exception("MOVER-CAL markers %d: unhandled", fid)
+        job["error"] = f"Unhandled: {e}"; job["status"] = "error"
+        _mcal.arm_cancel()
+        try:
+            _mcal._hold_dmx(bridge_ip, [0] * 512, 0.3)
+        except Exception:
+            pass
+        _set_calibrating(fid, False)
+
+
+def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
+                                     warmup=False, warmup_seconds=30.0):
+    """#610 marker-direct mover calibration.
+
+    The three-step algorithm the operator described:
+
+      1. **Battleship discovery.** Sparse coarse grid across the full
+         pan/tilt plane to find where the beam lands. Fixture-position-
+         agnostic: works equally for ceiling, floor, and side mounts
+         without needing an "initial aim" hint that assumes the fixture
+         is pointing at visible floor.
+      2. **Blink-confirm.** A small pan/tilt nudge verifies the
+         detected pixel is actually the beam (it moves when we move)
+         and not a reflection or ambient-light blob.
+      3. **Per-marker convergence.** For each surveyed ArUco marker
+         visible in the current camera frame, drive the beam to that
+         marker's DETECTED pixel (no homography — the pixel IS the
+         target). Record (pan, tilt, marker.stageXYZ) at convergence.
+      4. **Fit.** With ≥3 samples, fit a `ParametricFixtureModel` so
+         show runtime can ask "what pan/tilt lands the beam at stage
+         (x, y, z)?" by inverting the model.
+
+    The whole flow is "no operator pre-knowledge" — no pre-aiming, no
+    multi-frame chessboard, no hand-specified targets. Surveyed ArUco
+    markers are the only external input.
+    """
+    import numpy as _np
+    job = _mover_cal_jobs[str(fid)]
+    f = next((x for x in _fixtures if x.get("id") == fid), None)
+    if not f:
+        job["error"] = "Fixture not found"; job["status"] = "error"; return
+
+    addr = f.get("dmxStartAddr", 1)
+    uni = f.get("dmxUniverse", 1) - 1
+    pid = f.get("dmxProfileId")
+    prof_info = _profile_lib.channel_info(pid) if pid else None
+    _mcal._active_profile = prof_info
+    _mcal._active_universe = uni + 1
+    cam_ip = cam.get("cameraIp", "")
+    cam_idx = cam.get("cameraIdx", 0)
+
+    _set_calibrating(fid, True)
+
+    # Pre-flight — surveyed markers in registry + camera can see at
+    # least one of them (prescan).
+    _mcal_log(job, "Markers-mode: checking registry + camera view")
+    reg = [m for m in _aruco_markers
+           if abs(float(m.get("z", 0) or 0)) < 50
+           and abs(float(m.get("rx", 0) or 0)) < 1
+           and abs(float(m.get("ry", 0) or 0)) < 1
+           and abs(float(m.get("rz", 0) or 0)) < 1]
+    if len(reg) < 3:
+        job["error"] = (f"Need ≥3 floor-level surveyed ArUco markers in "
+                        f"the registry; have {len(reg)}. Add via Setup → ArUco.")
+        job["status"] = "error"; _set_calibrating(fid, False); return
+
+    detect = _aruco_snapshot_detect(cam)
+    if detect.get("err"):
+        job["error"] = f"Snapshot/detect failed: {detect['err']}"
+        job["status"] = "error"; _set_calibrating(fid, False); return
+    seen_by_id = {int(m["id"]): m for m in detect.get("markers", [])}
+    reg_by_id = {int(m["id"]): m for m in reg}
+    usable = sorted(reg_by_id.keys() & seen_by_id.keys())
+    if len(usable) < 3:
+        job["error"] = (f"Camera {cam.get('name','?')} only sees "
+                        f"{len(usable)} registered marker(s) ({usable}); "
+                        f"need ≥3. Reposition markers or camera.")
+        job["status"] = "error"; _set_calibrating(fid, False); return
+    _mcal_log(job, f"Camera sees markers {usable} of {sorted(reg_by_id.keys())}")
+
+    # Phase 1 — battleship discovery
+    job["phase"] = "discovery"; job["progress"] = 10
+    _mcal_log(job, "Battleship discovery (4×4 coarse grid + confirm nudge)")
+    discovered = _mcal.battleship_discover(
+        bridge_ip, cam_ip, addr, cam_idx, mover_color,
+        profile=prof_info,
+    )
+    if discovered is None:
+        job["error"] = ("Battleship discovery found no beam. Check "
+                        "lamp, shutter, DMX wiring, and camera view "
+                        "of the fixture's reachable floor area.")
+        job["status"] = "error"; _set_calibrating(fid, False)
+        try: _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
+        except Exception: pass
+        return
+    disc_pan, disc_tilt, disc_px, disc_py = discovered
+    job["foundAt"] = {"pan": disc_pan, "tilt": disc_tilt,
+                       "pixelX": disc_px, "pixelY": disc_py}
+    _mcal_log(job, f"Beam confirmed at pan={disc_pan:.3f} tilt={disc_tilt:.3f} "
+                   f"pixel=({disc_px},{disc_py})")
+
+    # Phase 2 — per-marker convergence. Use discovered pan/tilt as the
+    # warm-start for the FIRST marker; subsequent markers warm-start
+    # from the previous converged pan/tilt (closest trajectory).
+    job["phase"] = "sampling"; job["progress"] = 30
+    job["totalTargets"] = len(usable)
+    samples = []
+    per_marker = []
+    warm_pan, warm_tilt = disc_pan, disc_tilt
+    for i, mid in enumerate(usable):
+        job["currentTarget"] = i
+        job["progress"] = int(30 + 60 * (i / len(usable)))
+        marker = reg_by_id[mid]
+        detected = seen_by_id[mid]
+        target_px = detected["center"]
+        stage_xyz = (float(marker["x"]), float(marker["y"]),
+                      float(marker["z"]))
+        job["message"] = (f"Converging on marker {mid} @ stage "
+                          f"({stage_xyz[0]:.0f},{stage_xyz[1]:.0f}) "
+                          f"pixel ({target_px[0]:.0f},{target_px[1]:.0f})")
+        _mcal_log(job, job["message"])
+        result = _mcal.converge_on_target_pixel(
+            bridge_ip, cam_ip, addr, cam_idx, mover_color,
+            target_px=target_px,
+            start_pan=warm_pan, start_tilt=warm_tilt,
+            profile=prof_info,
+        )
+        entry = {"id": mid, "stage": list(stage_xyz),
+                 "targetPixel": target_px,
+                 "converged": result["converged"],
+                 "iterations": result["iterations"],
+                 "errorPx": result.get("errorPx"),
+                 "pan": result["pan"], "tilt": result["tilt"]}
+        per_marker.append(entry)
+        if result["converged"]:
+            samples.append({
+                "pan": result["pan"], "tilt": result["tilt"],
+                "stageX": stage_xyz[0], "stageY": stage_xyz[1],
+                "stageZ": stage_xyz[2],
+                "markerId": mid, "errorPx": result["errorPx"],
+            })
+            warm_pan, warm_tilt = result["pan"], result["tilt"]
+            _mcal_log(job, f"Marker {mid}: CONVERGED "
+                           f"pan={result['pan']:.3f} tilt={result['tilt']:.3f} "
+                           f"err={result['errorPx']:.1f}px "
+                           f"({result['iterations']} iters)")
+        else:
+            # #610 — on failure, reset warm-start to the discovery
+            # position, not wherever the failed convergence ended up
+            # (likely a mechanical-limit extreme that's a poor seed
+            # for the next marker).
+            warm_pan, warm_tilt = disc_pan, disc_tilt
+            _mcal_log(job, f"Marker {mid}: did NOT converge "
+                           f"({result.get('errorPx','?')}px after "
+                           f"{result['iterations']} iters) — "
+                           f"resetting warm-start to discovery pose",
+                      level="warning")
+
+    if len(samples) < 3:
+        job["error"] = (f"Only {len(samples)}/{len(usable)} markers "
+                        "converged — cannot fit a stable model.")
+        job["status"] = "error"
+        job["targets"] = per_marker
+        _set_calibrating(fid, False)
+        try: _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
+        except Exception: pass
+        return
+
+    # Phase 3 — fit ParametricFixtureModel from the (pan, tilt, stage) samples.
+    job["phase"] = "fitting"; job["progress"] = 92
+    _mcal_log(job, f"Fitting ParametricFixtureModel from {len(samples)} samples")
+    try:
+        from parametric_mover import ParametricFixtureModel
+        model = ParametricFixtureModel()
+        fit_rms = model.fit(samples)
+    except Exception as e:
+        job["error"] = f"Model fit failed: {e}"
+        job["status"] = "error"
+        job["targets"] = per_marker
+        _set_calibrating(fid, False)
+        return
+
+    # Save to _mover_cal in the same shape v2 uses.
+    _mover_cal[str(fid)] = {
+        "version": 2,
+        "method": "markers",
+        "cameraId": cam["id"],
+        "samples": samples,
+        "sampleCount": len(samples),
+        "model": model.to_dict(),
+        "fit": {"rmsErrorDeg": fit_rms, "sampleCount": len(samples),
+                 "perMarker": per_marker},
+        "timestamp": time.time(),
+    }
+    _save("mover_calibrations", _mover_cal)
+    _invalidate_mover_model(fid)
+
+    job["phase"] = "complete"; job["progress"] = 100
+    job["status"] = "done"
+    job["fit"] = _mover_cal[str(fid)]["fit"]
+    job["sampleCount"] = len(samples)
+    job["targets"] = per_marker
+    _mcal_log(job, f"Complete. {len(samples)}/{len(usable)} markers converged, "
+                   f"RMS {fit_rms:.2f}°")
+    _set_calibrating(fid, False)
+    try: _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
+    except Exception: pass
+
+
 def _mover_cal_thread_v2(fid, cam, bridge_ip, mover_color,
                           warmup=False, warmup_seconds=30.0,
                           target_overrides=None):
@@ -3860,7 +4088,7 @@ def api_mover_cal_start(fid):
     # #499 — opt-in per-target convergence loop. Default stays on the
     # legacy BFS path until we've hardware-validated the new loop.
     mode = body.get("mode", "legacy")
-    if mode not in ("legacy", "v2"):
+    if mode not in ("legacy", "v2", "markers"):
         mode = "legacy"
     target_overrides = body.get("targets")  # optional list of [x, y, z]
     job = {"status": "running", "phase": "starting", "progress": 0,
@@ -3881,6 +4109,14 @@ def api_mover_cal_start(fid):
             target=_mover_cal_thread_v2,
             args=(fid, cam, bridge_ip, color, warmup, warmup_seconds,
                    target_overrides),
+            daemon=True)
+    elif mode == "markers":
+        # #610 — marker-direct cal. Discover beam, then drive it to
+        # each visible+surveyed marker's detected pixel, record
+        # (pan, tilt, marker.stageXYZ) per sample.
+        t = threading.Thread(
+            target=_mover_cal_thread_markers,
+            args=(fid, cam, bridge_ip, color, warmup, warmup_seconds),
             daemon=True)
     else:
         t = threading.Thread(target=_mover_cal_thread,

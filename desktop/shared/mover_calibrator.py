@@ -217,11 +217,21 @@ def _set_mover_dmx(dmx, addr, pan, tilt, r, g, b, dimmer=255, profile=None):
             # Dimmer
             if "dimmer" in cm:
                 dmx[base + cm["dimmer"]] = max(0, min(255, dimmer))
-            # Color — RGB or color-wheel
+            # Color — RGB or color-wheel. Fixtures like the BeamLight 350W
+            # have BOTH an RGB triad AND a color wheel; the wheel's default
+            # DMX value in the profile often selects a specific colored
+            # slot (e.g. 128 = cyan on 350W), which the fixture firmware
+            # applies AS A FILTER over the RGB mix. The result: RGB=(0,255,0)
+            # looks nearly-black because the wheel slot filters out green.
+            # When we drive the RGB path during calibration, force the
+            # color-wheel channel to slot 0 (open / white) so the RGB mix
+            # passes through cleanly.
             if "red" in cm:
                 dmx[base + cm["red"]] = max(0, min(255, r))
                 if "green" in cm: dmx[base + cm["green"]] = max(0, min(255, g))
                 if "blue" in cm: dmx[base + cm["blue"]] = max(0, min(255, b))
+                if "color-wheel" in cm:
+                    dmx[base + cm["color-wheel"]] = 0
             elif "color-wheel" in cm:
                 from dmx_profiles import rgb_to_wheel_slot
                 cw = rgb_to_wheel_slot(profile, r, g, b) if (r or g or b) else 0
@@ -549,6 +559,266 @@ def converge_on_stage_target(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         d_tilt = (-dpy_dp * err_x + dpx_dp * err_y) / det * gain
         pan = max(0.0, min(1.0, pan + d_pan))
         tilt = max(0.0, min(1.0, tilt + d_tilt))
+
+    return {
+        "converged": best_dist < converge_px,
+        "iterations": it + 1,
+        "pan": best_pan, "tilt": best_tilt,
+        "beamPixel": list(final_beam) if final_beam else None,
+        "targetPixel": [int(target_px[0]), int(target_px[1])],
+        "errorPx": best_dist if best_dist < 1e8 else None,
+    }
+
+
+def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
+                         seed_pan=None, seed_tilt=None, profile=None,
+                         coarse_steps=4, confirm_nudge_delta=0.02):
+    """Coarse-to-fine discovery: sample a sparse `coarse_steps × coarse_
+    steps` grid across pan/tilt ∈ [0, 1] first, then confirm any hit
+    with a small nudge (rejects reflections).
+
+    This is a #610 replacement for the spiral-from-seed `discover()` —
+    when the seed is wrong (floor-mounted fixtures where "initial aim
+    at floor centre" sends the beam into the ceiling behind the
+    camera), the spiral wastes every probe. A battleship pattern
+    covers the whole pan/tilt plane in 16 probes regardless of where
+    the beam's reachable region actually sits.
+
+    Confirmation nudge: once a candidate pixel is detected, move
+    pan and tilt each by `confirm_nudge_delta` and verify the beam
+    pixel moves in both directions. A reflection wouldn't move with
+    the beam; a mispredicted "beam" from ambient scene lighting
+    stays put. Only returns when both nudges produce detectable
+    pixel deltas.
+
+    Returns (pan, tilt, pixelX, pixelY) on confirmed discovery or
+    None if nothing confirmed. Seeds are optional — if supplied, the
+    grid is centred on the seed with small offsets rather than a
+    uniform fraction grid.
+    """
+    global _active_profile
+    prev_profile = _active_profile
+    if profile is not None:
+        _active_profile = profile
+    dmx = _fresh_buffer()
+
+    # Build the coarse grid. Prefer a uniform spread so the physical
+    # reach pattern of the fixture doesn't bias us toward the seed.
+    grid = []
+    for i in range(coarse_steps):
+        p = (i + 0.5) / coarse_steps
+        for j in range(coarse_steps):
+            t = (j + 0.5) / coarse_steps
+            grid.append((p, t))
+    # If we have a seed, visit its neighbourhood FIRST so the common
+    # case (seed was right) converges in 1-3 probes instead of 16.
+    if seed_pan is not None and seed_tilt is not None:
+        grid.sort(key=lambda xy: (xy[0] - seed_pan) ** 2 +
+                                  (xy[1] - seed_tilt) ** 2)
+
+    log.info("battleship_discover: %d coarse probes%s",
+             len(grid),
+             f" (seed=({seed_pan:.2f},{seed_tilt:.2f}))"
+             if seed_pan is not None else "")
+
+    def _confirm(pan0, tilt0, px0, py0):
+        """Confirm a candidate beam by nudging pan and tilt.
+
+        Tolerates a beam that moves OFF the frame in one direction
+        (common at coarse-grid edges) — requires ONE axis shift > 8px
+        with the beam still detected on that axis. Full blind-eye on
+        the other axis.
+        """
+        def _probe(pan, tilt):
+            _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
+            _hold_dmx(bridge_ip, dmx, 0.4)
+            return _beam_detect(camera_ip, cam_idx, color, center=True)
+
+        # Try both + and - nudges on each axis so an edge-of-frame
+        # candidate can still be confirmed via the opposite direction.
+        pan_candidates = (min(1.0, pan0 + confirm_nudge_delta),
+                           max(0.0, pan0 - confirm_nudge_delta))
+        tilt_candidates = (min(1.0, tilt0 + confirm_nudge_delta),
+                            max(0.0, tilt0 - confirm_nudge_delta))
+        pan_shift = 0.0
+        for p in pan_candidates:
+            b = _probe(p, tilt0)
+            if b is not None:
+                s = math.hypot(b[0] - px0, b[1] - py0)
+                if s > pan_shift:
+                    pan_shift = s
+                if s > 8:
+                    break
+        tilt_shift = 0.0
+        for t in tilt_candidates:
+            b = _probe(pan0, t)
+            if b is not None:
+                s = math.hypot(b[0] - px0, b[1] - py0)
+                if s > tilt_shift:
+                    tilt_shift = s
+                if s > 8:
+                    break
+        return pan_shift, tilt_shift
+
+    try:
+        for idx, (pan, tilt) in enumerate(grid):
+            _check_cancel()
+            # Use flash detection (beam ON → OFF diff) rather than
+            # color-filter detection — the latter fails when the
+            # fixture's actual beam colour differs from the requested
+            # `color` (e.g. 350W color-wheel slot doesn't match the
+            # requested RGB, and the fixture output is effectively
+            # white regardless of RGB channel values). Flash cares
+            # only about what-changed-when-we-toggled, so it works
+            # regardless of actual beam colour.
+            beam = _beam_detect_flash(bridge_ip, camera_ip, cam_idx,
+                                       mover_addr, pan, tilt, color, dmx)
+            if beam is None:
+                # Fall back to color-filtered if flash endpoint isn't
+                # available (older camera node firmware), just in case.
+                _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
+                _hold_dmx(bridge_ip, dmx, 0.3)
+                beam = _beam_detect_verified(camera_ip, cam_idx, color)
+            if beam is None:
+                continue
+            px0, py0 = beam[0], beam[1]
+            log.info("battleship_discover: coarse HIT %d/%d "
+                     "pan=%.3f tilt=%.3f px=(%d,%d) — confirming",
+                     idx + 1, len(grid), pan, tilt, px0, py0)
+            pan_shift, tilt_shift = _confirm(pan, tilt, px0, py0)
+            if pan_shift > 8 or tilt_shift > 8:
+                log.info("battleship_discover: CONFIRMED at probe %d/%d "
+                         "(pan-shift %.0fpx, tilt-shift %.0fpx)",
+                         idx + 1, len(grid), pan_shift, tilt_shift)
+                return (pan, tilt, px0, py0)
+            log.warning("battleship_discover: probe %d/%d candidate at "
+                        "(%.3f, %.3f) failed confirm (pan-shift %.0fpx, "
+                        "tilt-shift %.0fpx) — continuing search",
+                        idx + 1, len(grid), pan_shift, tilt_shift)
+    finally:
+        _active_profile = prev_profile
+
+    log.warning("battleship_discover: no confirmed beam across %d "
+                "coarse probes — fixture, camera FOV, or DMX path may "
+                "be misconfigured", len(grid))
+    return None
+
+
+def converge_on_target_pixel(bridge_ip, camera_ip, mover_addr, cam_idx, color,
+                              target_px, start_pan=0.5, start_tilt=0.5,
+                              other_mover_addrs=None, max_iterations=25,
+                              converge_px=20, profile=None):
+    """Closed-loop convergence that drives the beam to a specific CAMERA
+    PIXEL — no homography involved.
+
+    The standard v2 path (`converge_on_stage_target`) projects a stage
+    target through a pixel←stage homography to decide "aim here". That
+    works only when the homography is accurate at the target location,
+    which collapses on narrow/extrapolated marker coverage and on
+    uncalibrated consumer lenses.
+
+    This variant takes the target pixel directly — the operator's use
+    case is "drive the beam until it lands on the surveyed ArUco
+    marker at the pixel we just detected in the camera" (no stage
+    coordinate needed for the loop, only for the final sample tag).
+
+    Same Jacobian-based loop, same gain schedule, same early-exit
+    conditions as `converge_on_stage_target`. Returns identical
+    dict shape so callers can score + fit uniformly. (#610)
+    """
+    if target_px is None:
+        return {"converged": False, "iterations": 0, "pan": start_pan,
+                "tilt": start_tilt, "beamPixel": None,
+                "targetPixel": None, "errorPx": None,
+                "reason": "no target pixel"}
+
+    # Seed the engine snapshot (profile defaults like lamp-on, strobe-
+    # open) so the fixture responds correctly the first frame. Without
+    # this, _fresh_buffer would produce a 512-byte zero buffer that
+    # inadvertently blackouts other fixtures on the same universe.
+    global _active_profile
+    prev_profile = _active_profile
+    if profile is not None:
+        _active_profile = profile
+    dmx = _fresh_buffer()
+    for addr in (other_mover_addrs or []):
+        _set_mover_dmx(dmx, addr, 0.5, 0.5, 0, 0, 0, dimmer=0)
+
+    pan, tilt = start_pan, start_tilt
+    best_pan, best_tilt = pan, tilt
+    best_dist = 1e9
+    final_beam = None
+    worse_streak = 0
+    it = 0
+    try:
+        for it in range(max_iterations):
+            _check_cancel()
+            _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
+            _hold_dmx(bridge_ip, dmx, 0.6)
+            beam = _beam_detect(camera_ip, cam_idx, color, center=True)
+            if beam is None:
+                worse_streak += 1
+                if worse_streak >= 3:
+                    pan, tilt = best_pan, best_tilt
+                    break
+                continue
+
+            final_beam = beam
+            err_x = target_px[0] - beam[0]
+            err_y = target_px[1] - beam[1]
+            dist = math.hypot(err_x, err_y)
+            if dist < best_dist:
+                best_dist = dist
+                best_pan, best_tilt = pan, tilt
+                worse_streak = 0
+            else:
+                worse_streak += 1
+
+            if dist < converge_px:
+                break
+            if worse_streak >= 4:
+                pan, tilt = best_pan, best_tilt
+                break
+
+            # Two-probe numerical Jacobian — identical to the stage-target
+            # path. The Jacobian is fixture-local and only needs to be
+            # recomputed when the beam moves significantly.
+            dp = 0.005
+            probe_pan = min(1.0, pan + dp)
+            probe_tilt = min(1.0, tilt + dp)
+            _set_mover_dmx(dmx, mover_addr, probe_pan, tilt, *color, dimmer=255)
+            _hold_dmx(bridge_ip, dmx, 0.4)
+            b_p = _beam_detect(camera_ip, cam_idx, color, center=True)
+            _set_mover_dmx(dmx, mover_addr, pan, probe_tilt, *color, dimmer=255)
+            _hold_dmx(bridge_ip, dmx, 0.4)
+            b_t = _beam_detect(camera_ip, cam_idx, color, center=True)
+            if b_p is None or b_t is None:
+                pan = max(0.0, min(1.0, pan + 0.01 * (1 if err_x > 0 else -1)))
+                tilt = max(0.0, min(1.0, tilt + 0.01 * (1 if err_y > 0 else -1)))
+                continue
+            dpx_dp = (b_p[0] - beam[0]) / dp
+            dpy_dp = (b_p[1] - beam[1]) / dp
+            dpx_dt = (b_t[0] - beam[0]) / dp
+            dpy_dt = (b_t[1] - beam[1]) / dp
+            det = dpx_dp * dpy_dt - dpx_dt * dpy_dp
+            if abs(det) < 0.001:
+                break
+            gain = 0.5 if it < 8 else 0.25
+            d_pan = (dpy_dt * err_x - dpx_dt * err_y) / det * gain
+            d_tilt = (-dpy_dp * err_x + dpx_dp * err_y) / det * gain
+            # #610 — clamp per-step delta. A noisy Jacobian + large
+            # pixel error lets the unclamped step saturate to 0 or 1
+            # in a single iteration, wasting the rest of the budget
+            # bouncing off mechanical limits. 0.08 per step gives
+            # ~12 iterations of reachable motion across the full
+            # pan/tilt range — plenty of iterations to fine-tune.
+            MAX_STEP = 0.08
+            d_pan = max(-MAX_STEP, min(MAX_STEP, d_pan))
+            d_tilt = max(-MAX_STEP, min(MAX_STEP, d_tilt))
+            pan = max(0.0, min(1.0, pan + d_pan))
+            tilt = max(0.0, min(1.0, tilt + d_tilt))
+    finally:
+        _active_profile = prev_profile
 
     return {
         "converged": best_dist < converge_px,
