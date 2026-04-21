@@ -11,6 +11,7 @@ import math
 import random
 import socket
 import struct
+import threading
 import time
 import urllib.request
 
@@ -52,6 +53,71 @@ def set_dmx_sender(fn):
     _dmx_sender = fn
 
 
+# #594 — seed calibration's local DMX buffer from the running engine state
+# so `_apply_profile_defaults` (lamp-on, mode, shutter-open, other fixtures)
+# is preserved when calibration writes the full universe back. Without this,
+# calibration's `dmx = [0] * 512` clobbers every channel except the ones it
+# explicitly re-asserts — the fixture responds but its lamp/shutter/mode
+# defaults are gone, so the beam stays dark.
+_engine_snapshot_getter = None  # fn(universe_1based) -> bytes | list[int] of len 512
+
+def set_engine_snapshot_getter(fn):
+    """Register a callback the calibrator uses to seed its local DMX buffer
+    from the engine's current universe state. fn(universe_1based) returns
+    a 512-byte buffer."""
+    global _engine_snapshot_getter
+    _engine_snapshot_getter = fn
+
+
+def _fresh_buffer():
+    """Return a 512-entry DMX buffer seeded from the engine's current state
+    for `_active_universe` when a snapshot getter is registered. Falls back
+    to zeros if either the getter or the active universe isn't set. This
+    preserves lamp-on / mode / shutter defaults and other fixtures' channels
+    when the calibration path later writes the whole buffer back."""
+    try:
+        if _engine_snapshot_getter and _active_universe is not None:
+            snap = _engine_snapshot_getter(_active_universe)
+            if snap is not None:
+                buf = list(snap)
+                if len(buf) < 512:
+                    buf.extend([0] * (512 - len(buf)))
+                return buf[:512]
+    except Exception as e:
+        log.warning("Engine snapshot failed (uni=%s): %s — zero-seeding", _active_universe, e)
+    return [0] * 512
+
+
+# #594 — cooperative cancellation. The Cancel button used to only close the
+# modal; the background thread would keep sweeping the fixture. Now the
+# orchestrator sets this event, and discovery/BFS/hold_dmx loops raise
+# CalibrationAborted, unwinding cleanly to `_cal_blackout`.
+_cancel_event = threading.Event()
+
+
+class CalibrationAborted(Exception):
+    """Raised when cancellation is requested while calibration is running."""
+
+
+def arm_cancel():
+    """Clear the cancel flag at the start of a new calibration job."""
+    _cancel_event.clear()
+
+
+def request_cancel():
+    """Signal the running calibration thread to abort at its next check."""
+    _cancel_event.set()
+
+
+def is_cancel_requested():
+    return _cancel_event.is_set()
+
+
+def _check_cancel():
+    if _cancel_event.is_set():
+        raise CalibrationAborted()
+
+
 def _send_artnet(bridge_ip, universe, channels):
     """Send DMX — uses engine callback if available, falls back to raw UDP."""
     if _dmx_sender:
@@ -75,6 +141,7 @@ def _send_artnet(bridge_ip, universe, channels):
 
 
 _active_profile = None  # Set by caller before calibration; used by _set_mover_dmx
+_active_universe = None  # 1-based universe of the fixture being calibrated (#594)
 
 def _set_mover_dmx(dmx, addr, pan, tilt, r, g, b, dimmer=255, profile=None):
     """Set a mover fixture in a DMX buffer using profile channel map.
@@ -150,9 +217,17 @@ def _set_mover_dmx(dmx, addr, pan, tilt, r, g, b, dimmer=255, profile=None):
 
 
 def _hold_dmx(bridge_ip, dmx, duration=0.5):
-    """Set DMX channels and wait for the fixture to settle."""
+    """Set DMX channels and wait for the fixture to settle. Honours the
+    cancel flag (#594) so a long settle doesn't delay abort."""
+    _check_cancel()
     _send_artnet(bridge_ip, 0, dmx)
-    time.sleep(duration)
+    # Break the sleep into short slices so Cancel is responsive mid-settle.
+    remaining = max(0.0, duration)
+    while remaining > 0:
+        slice_s = 0.1 if remaining > 0.1 else remaining
+        time.sleep(slice_s)
+        remaining -= slice_s
+        _check_cancel()
 
 
 def pick_calibration_targets(fixture_pos, geometry, n=6,
@@ -341,7 +416,7 @@ def converge_on_stage_target(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                 "targetPixel": None, "errorPx": None,
                 "reason": "homography inversion failed"}
 
-    dmx = [0] * 512
+    dmx = _fresh_buffer()
     for addr in (other_mover_addrs or []):
         _set_mover_dmx(dmx, addr, 0.5, 0.5, 0, 0, 0, dimmer=0)
 
@@ -475,7 +550,7 @@ def verification_sweep(bridge_ip, camera_ip, mover_addr, cam_idx, color,
             continue
         candidates.append((p, t))
 
-    dmx = [0] * 512
+    dmx = _fresh_buffer()
     results = []
     for pan, tilt in candidates:
         expected = grid_lookup(grid, pan, tilt)
@@ -513,7 +588,7 @@ def warmup_sweep(bridge_ip, mover_addr, color=(0, 0, 0),
 
     Total wall time targets ``duration_s`` split evenly across the three
     phases with small settle pauses between DMX writes."""
-    dmx = [0] * 512
+    dmx = _fresh_buffer()
     phases = [
         # (axis, start, end) tuples — tilt locked to 0.5 during pan sweep, etc.
         ("pan",      0.0, 1.0),
@@ -628,12 +703,15 @@ def _wait_settled(camera_ip, cam_idx, color, prev_pan=None, prev_tilt=None,
         base = SETTLE_BASE
 
     for attempt, escalate in enumerate(SETTLE_ESCALATE):
+        _check_cancel()
         wait = max(base, escalate)
         time.sleep(wait)
+        _check_cancel()
         beam1 = _beam_detect(camera_ip, cam_idx, color, threshold, center)
         if not beam1:
             return None
         time.sleep(SETTLE_VERIFY_GAP)
+        _check_cancel()
         beam2 = _beam_detect(camera_ip, cam_idx, color, threshold, center)
         if not beam2:
             return None
@@ -856,7 +934,7 @@ def calibrate_fixture_orientation(bridge_ip, camera_ip, cam_idx, mover_addr,
 
     def send_dmx(pan, tilt, on=True):
         """Send DMX to position the mover."""
-        dmx = [0] * 512
+        dmx = _fresh_buffer()
         if on:
             _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
         _hold_dmx(bridge_ip, dmx, duration=2.5)
@@ -878,7 +956,7 @@ def calibrate_fixture_orientation(bridge_ip, camera_ip, cam_idx, mover_addr,
     def detect_at(pan, tilt):
         """Move to position, detect beam, return pixel coords."""
         import threading
-        dmx = [0] * 512
+        dmx = _fresh_buffer()
         _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
         t = threading.Thread(target=_hold_dmx, args=(bridge_ip, dmx, 4.0), daemon=True)
         t.start()
@@ -1235,7 +1313,7 @@ def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     else:
         initial_pan = initial_pan if initial_pan is not None else 0.5   # forward (#266)
         initial_tilt = initial_tilt if initial_tilt is not None else 0.6  # slightly down (#266)
-    dmx = [0] * 512
+    dmx = _fresh_buffer()
     # Black out other movers
     for addr in (other_mover_addrs or []):
         _set_mover_dmx(dmx, addr, 0.5, 0.5, 0, 0, 0, dimmer=0)
@@ -1335,7 +1413,7 @@ def map_visible(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         boundaries: {"panMin": float, "panMax": float,
                      "tiltMin": float, "tiltMax": float, "verified": bool}
     """
-    dmx = [0] * 512
+    dmx = _fresh_buffer()
     for addr in (other_mover_addrs or []):
         _set_mover_dmx(dmx, addr, 0.5, 0.5, 0, 0, 0, dimmer=0)
     _set_mover_dmx(dmx, mover_addr, start_pan, start_tilt, *color, dimmer=255)
@@ -1515,7 +1593,7 @@ def build_light_map(bridge_ip, camera_ip, cam_idx, mover_addr, color,
     p_step = (pmax - pmin) / max(pan_steps - 1, 1)
     t_step = (tmax - tmin) / max(tilt_steps - 1, 1)
 
-    dmx = [0] * 512
+    dmx = _fresh_buffer()
     _set_mover_dmx(dmx, mover_addr, pmin, tmin, *color, dimmer=255)
     _hold_dmx(bridge_ip, dmx, 1.5)
 
@@ -1943,7 +2021,7 @@ def converge(bridge_ip, camera_ip, cam_idx,
 
     Returns: (pan, tilt, final_dist_px) or None
     """
-    dmx = [0] * 512
+    dmx = _fresh_buffer()
     for addr in (other_mover_addrs or []):
         _set_mover_dmx(dmx, addr, 0.5, 0.5, 0, 0, 0, dimmer=0)
 

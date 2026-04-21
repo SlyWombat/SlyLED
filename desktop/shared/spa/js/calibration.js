@@ -1443,6 +1443,13 @@ function _moverCalPoll(){
       if(phase)phase.innerHTML='<span style="color:#f66">'+(r.error||'Unknown error')+'</span>';
       var btn=document.getElementById('mcal-go');
       if(btn){btn.disabled=false;btn.textContent='Retry';}
+    }else if(r.status==='cancelled'){
+      // #594 — Cancel hit. The fixture has already been blacked out and
+      // the lock released on the server. Just surface the state and let
+      // the operator retry from Start.
+      if(phase)phase.innerHTML='<span style="color:#f59e0b">Cancelled</span>';
+      var cbtn=document.getElementById('mcal-go');
+      if(cbtn){cbtn.disabled=false;cbtn.textContent='Start Calibration';}
     }
   });
 }
@@ -1552,8 +1559,27 @@ function _moverCalExcludeSample(idx){
 }
 
 function _moverCalCancel(){
-  if(_moverCalTimer)clearTimeout(_moverCalTimer);
-  _moverCalFid=null;closeModal();
+  // #594 — if a calibration job is running on the server, signal the
+  // background thread to abort (fixture blackout + lock release happen on
+  // the server side) before closing the modal. Without this POST the
+  // thread would keep sweeping the fixture after the UI was dismissed.
+  var fid=_moverCalFid;
+  var close=function(){
+    if(_moverCalTimer)clearTimeout(_moverCalTimer);
+    _moverCalFid=null;closeModal();
+  };
+  if(!fid){close();return;}
+  ra('GET','/api/calibration/mover/'+fid+'/status',null,function(st){
+    if(st&&st.status==='running'){
+      var phaseEl=document.getElementById('mcal-phase');
+      if(phaseEl)phaseEl.textContent='Cancelling…';
+      ra('POST','/api/calibration/mover/'+fid+'/cancel',{},function(){
+        close();
+      });
+    }else{
+      close();
+    }
+  });
 }
 
 function _moverCalDelete(){

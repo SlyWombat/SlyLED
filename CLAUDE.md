@@ -90,6 +90,7 @@ Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask s
 |--------|------|---------|
 | POST | `/api/calibration/mover/<fid>/start` | Start unified mover calibration (background) |
 | GET | `/api/calibration/mover/<fid>/status` | Poll calibration progress |
+| POST | `/api/calibration/mover/<fid>/cancel` | Abort running calibration (blackout + release lock) |
 | GET | `/api/calibration/mover/<fid>` | Get saved calibration data |
 | DELETE | `/api/calibration/mover/<fid>` | Delete calibration |
 | POST | `/api/calibration/mover/<fid>/aim` | Aim using calibration grid |
@@ -201,6 +202,7 @@ Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask s
 | POST | `/api/cameras/<id>/scan` | Forward camera scan to camera node |
 | POST | `/api/calibration/mover/<fid>/start` | Start unified mover calibration (background) |
 | GET | `/api/calibration/mover/<fid>/status` | Poll calibration progress |
+| POST | `/api/calibration/mover/<fid>/cancel` | Abort running calibration (blackout + release lock) |
 | GET | `/api/calibration/mover/<fid>` | Get saved calibration data |
 | DELETE | `/api/calibration/mover/<fid>` | Delete calibration |
 | POST | `/api/calibration/mover/<fid>/aim` | Aim using calibration grid |

@@ -426,6 +426,7 @@ function _pcFullScan(){
 
 function _pcAdvancedScan(){
   _modalStack=[];
+  _pcAdvZoeProbed=false;  // #594 — re-probe each time the modal opens
   var cams=(_fixtures||[]).filter(function(f){return f.fixtureType==='camera';});
   // Detect stereo-capable pair (same cameraIp, at least two entries)
   var byIp={};
@@ -438,26 +439,50 @@ function _pcAdvancedScan(){
     if(byIp[ip].length>=2)stereoPairs.push({ip:ip,cams:byIp[ip].slice(0,2)});
   });
 
+  // #594 — highlight the recommended method for mover calibration. The
+  // scan cloud feeds the mover calibration wizard's stage-geometry model,
+  // so accuracy directly drives beam-aim quality. Recommendation order:
+  //   stereo (with ArUco-cal pair) > ZoeDepth (when available) > monocular
+  // Resolved at render time and refreshed by `_pcAdvRefresh`.
+  var stereoCalibrated=stereoPairs.length>0&&stereoPairs[0].cams.every(function(c){
+    var cam=cams.filter(function(x){return x.id===c.id;})[0];
+    return cam&&cam.calibrated;
+  });
+  // ZoeDepth availability is checked after the modal renders (it's a
+  // network round-trip). Start with a neutral default; _pcAdvRefresh
+  // updates the badge + the recommended radio once the probe returns.
+  var recommend=stereoCalibrated?'stereo':'mono';
+
   var h='<div style="min-width:520px">';
-  h+='<div style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">Build a stage-space point cloud. Pick a method, choose which cameras to include, and optionally black out DMX during capture so bright beams don\'t confuse the depth model.</div>';
+  h+='<div style="font-size:.85em;color:#94a3b8;margin-bottom:.4em">Build a stage-space point cloud. Pick a method, choose which cameras to include, and optionally black out DMX during capture so bright beams don\'t confuse the depth model.</div>';
+  h+='<div style="font-size:.78em;color:#fcd34d;background:#1e293b;border-left:3px solid #f59e0b;padding:.35em .5em;margin-bottom:.6em;border-radius:3px">'
+    +'<b>For moving-head calibration:</b> the scan becomes the stage surface the mover-cal wizard aims against. A more accurate cloud = more accurate beam targeting. The <b>Recommended</b> option below gives the best geometry your hardware allows.'
+    +'</div>';
+
+  function _recBadge(){
+    return ' <span class="pcadv-rec-badge" style="background:#065f46;color:#34d399;padding:1px 6px;border-radius:8px;font-size:.7em;margin-left:.3em">\u2605 Recommended</span>';
+  }
 
   // Method picker
   h+='<div class="card" style="padding:.6em;margin-bottom:.5em">';
   h+='<div style="font-size:.82em;font-weight:bold;color:#e2e8f0;margin-bottom:.3em">Method</div>';
-  h+='<label style="display:block;cursor:pointer;padding:.2em 0;font-size:.85em">'
-    +'<input type="radio" name="pcmethod" value="mono" checked onchange="_pcAdvRefresh()"> Monocular (Pi-side) — DA-V2 Metric Small, fast.'
+  h+='<label id="pcadv-opt-mono" style="display:block;cursor:pointer;padding:.2em 0;font-size:.85em">'
+    +'<input type="radio" name="pcmethod" value="mono"'+(recommend==='mono'?' checked':'')+' onchange="_pcAdvRefresh()"> Monocular (Pi-side) — DA-V2 Metric Small, fast.'
+    +(recommend==='mono'?_recBadge():'')
     +'</label>';
-  h+='<label style="display:block;cursor:pointer;padding:.2em 0;font-size:.85em">'
+  h+='<label id="pcadv-opt-zoe" style="display:block;cursor:pointer;padding:.2em 0;font-size:.85em">'
     +'<input type="radio" name="pcmethod" value="zoedepth" onchange="_pcAdvRefresh()"> <b>ZoeDepth (host)</b> — higher quality, slower.'
-    +' <span style="color:#64748b">Pulls snapshots, runs on the orchestrator host. Requires torch + transformers.</span>'
+    +' <span class="pcadv-zoe-note" style="color:#64748b">Checking host availability…</span>'
     +'</label>';
   var stereoDisabled=stereoPairs.length===0;
-  h+='<label style="display:block;cursor:pointer;padding:.2em 0;font-size:.85em'+(stereoDisabled?';opacity:.4':'')+'">'
-    +'<input type="radio" name="pcmethod" value="stereo"'+(stereoDisabled?' disabled':'')+' onchange="_pcAdvRefresh()"> Stereo triangulation'
+  h+='<label id="pcadv-opt-stereo" style="display:block;cursor:pointer;padding:.2em 0;font-size:.85em'+(stereoDisabled?';opacity:.4':'')+'">'
+    +'<input type="radio" name="pcmethod" value="stereo"'+(stereoDisabled?' disabled':(recommend==='stereo'?' checked':''))+' onchange="_pcAdvRefresh()"> Stereo triangulation'
     +(stereoDisabled?' <span style="color:#f59e0b">— needs two cameras on the same node</span>'
-                    :' <span style="color:#34d399">— high-accuracy pair on '+escapeHtml(stereoPairs[0].ip)+'</span>')
+                    :(stereoCalibrated?' <span style="color:#34d399">— ArUco-calibrated pair on '+escapeHtml(stereoPairs[0].ip)+'</span>'
+                                      :' <span style="color:#fcd34d">— pair on '+escapeHtml(stereoPairs[0].ip)+' needs ArUco cal for best accuracy</span>'))
+    +(recommend==='stereo'?_recBadge():'')
     +'</label>';
-  h+='<label style="display:block;cursor:pointer;padding:.2em 0;font-size:.85em">'
+  h+='<label id="pcadv-opt-lite" style="display:block;cursor:pointer;padding:.2em 0;font-size:.85em">'
     +'<input type="radio" name="pcmethod" value="lite" onchange="_pcAdvRefresh()"> Lite — synthesize from layout dimensions (no camera scan).'
     +'</label>';
   h+='</div>';
@@ -524,7 +549,39 @@ function _pcAdvRefresh(){
   document.querySelectorAll('.pcadv-cam').forEach(function(cb){
     cb.disabled=(method==='lite')||cb.hasAttribute('data-force-disabled');
   });
+  // #594 — probe ZoeDepth availability once per modal open. If the host
+  // has torch + transformers, mark ZoeDepth as the recommended method
+  // (better geometry than Pi-side monocular for mover calibration,
+  // provided no ArUco-calibrated stereo pair is present).
+  if(!_pcAdvZoeProbed){
+    _pcAdvZoeProbed=true;
+    ra('GET','/api/space/scan/zoedepth',null,function(r){
+      var noteEl=document.querySelector('.pcadv-zoe-note');
+      var opt=document.getElementById('pcadv-opt-zoe');
+      if(!opt)return;
+      if(r&&r.available){
+        if(noteEl)noteEl.innerHTML='<span style="color:#34d399">available on host</span>';
+        // Promote ZoeDepth to Recommended if stereo isn't already taking
+        // that slot (stereo with ArUco cal still wins on accuracy).
+        var stereoRec=document.querySelector('#pcadv-opt-stereo .pcadv-rec-badge');
+        var currentRec=document.querySelector('.pcadv-rec-badge');
+        if(!stereoRec){
+          if(currentRec)currentRec.remove();
+          opt.insertAdjacentHTML('beforeend',' <span class="pcadv-rec-badge" style="background:#065f46;color:#34d399;padding:1px 6px;border-radius:8px;font-size:.7em;margin-left:.3em">\u2605 Recommended</span>');
+          var zoeRadio=opt.querySelector('input[type=radio]');
+          var monoRadio=document.querySelector('#pcadv-opt-mono input[type=radio]');
+          if(zoeRadio&&monoRadio&&monoRadio.checked){zoeRadio.checked=true;_pcAdvRefresh();}
+        }
+      }else{
+        if(noteEl)noteEl.innerHTML='<span style="color:#f59e0b">not installed — run orchestrator from source with torch + transformers to enable</span>';
+        var zoeRadio2=opt.querySelector('input[type=radio]');
+        if(zoeRadio2)zoeRadio2.disabled=true;
+        opt.style.opacity='.45';
+      }
+    });
+  }
 }
+var _pcAdvZoeProbed=false;
 
 function _pcAdvGo(){
   var method=(document.querySelector('input[name=pcmethod]:checked')||{}).value||'mono';

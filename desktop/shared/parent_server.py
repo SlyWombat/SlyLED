@@ -82,7 +82,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.48"
+VERSION = "1.5.51"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -2869,6 +2869,24 @@ def _mcal_dmx_sender(universe_1based, start_addr, values):
     uni.set_channels(start_addr, values)
 _mcal.set_dmx_sender(_mcal_dmx_sender)
 
+
+def _mcal_engine_snapshot(universe_1based):
+    """#594 — return the engine's current 512-byte buffer for *universe_1based*
+    so calibration can seed its local DMX buffer with the live state
+    (lamp-on, mode, shutter-open, other fixtures) rather than zeros.
+    Returns None when no engine is running — the calibrator falls back to
+    zero-seeded writes in that case."""
+    engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+    if not engine:
+        return None
+    try:
+        uni = engine.get_universe(universe_1based)
+        return uni.get_data()
+    except Exception as e:
+        log.warning("engine snapshot for uni=%d failed: %s", universe_1based, e)
+        return None
+_mcal.set_engine_snapshot_getter(_mcal_engine_snapshot)
+
 _mover_cal_jobs = {}  # fid_str → {thread, status, phase, progress, error, result}
 
 
@@ -2905,6 +2923,38 @@ def _get_bridge_ip():
 def _mover_cal_thread_v2(fid, cam, bridge_ip, mover_color,
                           warmup=False, warmup_seconds=30.0,
                           target_overrides=None):
+    """#594 — wrapper around the v2 body that catches CalibrationAborted
+    so Cancel unwinds cleanly on the target-driven path too."""
+    job = _mover_cal_jobs[str(fid)]
+    try:
+        _mover_cal_thread_v2_body(fid, cam, bridge_ip, mover_color,
+                                   warmup, warmup_seconds, target_overrides)
+    except _mcal.CalibrationAborted:
+        log.info("MOVER-CAL v2 %d: cancelled by operator", fid)
+        job["error"] = "Cancelled by operator"
+        job["status"] = "cancelled"
+        job["phase"] = "cancelled"
+        _mcal.arm_cancel()
+        try:
+            _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
+        except Exception:
+            pass
+        _set_calibrating(fid, False)
+    except Exception as e:
+        log.exception("MOVER-CAL v2 %d: unhandled exception", fid)
+        job["error"] = f"Unhandled error: {e}"
+        job["status"] = "error"
+        _mcal.arm_cancel()
+        try:
+            _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
+        except Exception:
+            pass
+        _set_calibrating(fid, False)
+
+
+def _mover_cal_thread_v2_body(fid, cam, bridge_ip, mover_color,
+                               warmup=False, warmup_seconds=30.0,
+                               target_overrides=None):
     """#499 — per-target convergence calibration.
 
     Picks N floor targets (auto or operator-supplied), drives the beam
@@ -2952,6 +3002,7 @@ def _mover_cal_thread_v2(fid, cam, bridge_ip, mover_color,
     pid = f.get("dmxProfileId")
     prof_info = _profile_lib.channel_info(pid) if pid else None
     _mcal._active_profile = prof_info
+    _mcal._active_universe = uni + 1  # #594 — for engine snapshot seeding
     cam_ip = cam.get("cameraIp", "")
     cam_idx = cam.get("cameraIdx", 0)
 
@@ -3097,14 +3148,31 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
     """Background thread wrapper — catches any unhandled exception so the
     SPA polling loop sees `status=\"error\"` instead of a job frozen at
     `status=\"running\"` forever. The inner `_mover_cal_thread_body` does
-    the real work. (#576)"""
+    the real work. (#576)
+
+    #594 — also catches CalibrationAborted so Cancel unwinds cleanly (fixture
+    is blacked out, lock released, status reported to the wizard)."""
     job = _mover_cal_jobs[str(fid)]
     try:
         _mover_cal_thread_body(fid, cam, bridge_ip, mover_color, warmup, warmup_seconds)
+    except _mcal.CalibrationAborted:
+        log.info("MOVER-CAL %d: cancelled by operator", fid)
+        job["error"] = "Cancelled by operator"
+        job["status"] = "cancelled"
+        job["phase"] = "cancelled"
+        # Clear the cancel flag before the blackout write so _hold_dmx
+        # actually runs (rather than re-raising CalibrationAborted).
+        _mcal.arm_cancel()
+        try:
+            _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
+        except Exception:
+            pass
+        _set_calibrating(fid, False)
     except Exception as e:
         log.exception("MOVER-CAL %d: unhandled exception in cal thread", fid)
         job["error"] = f"Unhandled error: {e}"
         job["status"] = "error"
+        _mcal.arm_cancel()
         try:
             _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
         except Exception:
@@ -3156,8 +3224,12 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
     # Kick the beam on right now so the operator can see DMX is flowing
     # before the slow phases start. If any later step fails, at least the
     # beam turning on (or not) tells them where the break is.
+    # #594 — set active universe before the pre-warm write so the snapshot
+    # helper seeds from the live engine buffer (preserving lamp-on / mode
+    # defaults instead of zeroing the universe).
+    _mcal._active_universe = uni_pre
     try:
-        _dmx_pre = [0] * 512
+        _dmx_pre = _mcal._fresh_buffer()
         _mcal._set_mover_dmx(_dmx_pre, addr_pre, 0.5, 0.5,
                              *mover_color, dimmer=255, profile=prof_pre)
         _mcal._send_artnet(bridge_ip, uni_pre - 1, _dmx_pre)
@@ -3199,6 +3271,7 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
     pid = f.get("dmxProfileId")
     prof_info = _profile_lib.channel_info(pid) if pid else None
     _mcal._active_profile = prof_info
+    _mcal._active_universe = uni + 1  # #594 — for engine snapshot seeding
     cam_ip = cam.get("cameraIp", "")  # #342
     cam_idx = cam.get("cameraIdx", 0)  # #342
 
@@ -3483,6 +3556,9 @@ def api_mover_cal_start(fid):
            "cameraName": cam.get("name", "Camera"), "bridgeIp": bridge_ip,
            "warmup": warmup, "mode": mode}
     _mover_cal_jobs[str(fid)] = job
+    # #594 — clear any stale cancel flag from a previous aborted run before
+    # the new thread starts checking it.
+    _mcal.arm_cancel()
     if mode == "v2":
         t = threading.Thread(
             target=_mover_cal_thread_v2,
@@ -3607,6 +3683,22 @@ def api_mover_cal_get(fid):
                    centerPan=cal.get("centerPan"),
                    centerTilt=cal.get("centerTilt"),
                    samples=cal.get("samples"))
+
+
+@app.post("/api/calibration/mover/<int:fid>/cancel")
+def api_mover_cal_cancel(fid):
+    """#594 — signal the running calibration thread to abort. The thread
+    raises CalibrationAborted at its next `_check_cancel()` point (inside
+    `_hold_dmx` or `_wait_settled`), unwinds through its exception wrapper,
+    blacks out the fixture, and releases the calibration lock. Safe to call
+    repeatedly; no-op if no job is running."""
+    job = _mover_cal_jobs.get(str(fid))
+    if not job or job.get("status") != "running":
+        return jsonify(ok=True, cancelled=False, reason="no running calibration")
+    job["cancelRequested"] = True
+    _mcal.request_cancel()
+    log.info("MOVER-CAL %d: cancel requested by operator", fid)
+    return jsonify(ok=True, cancelled=True)
 
 
 @app.delete("/api/calibration/mover/<int:fid>")
@@ -4080,6 +4172,21 @@ def _load_zoedepth():
     except Exception as e:
         log.warning("ZoeDepth load failed: %s", e)
         return None
+
+
+@app.get("/api/space/scan/zoedepth")
+def api_space_scan_zoedepth_info():
+    """#594 UI — report whether ZoeDepth is importable on this host so the
+    Advanced Scan card can mark the option available/unavailable and
+    pick the right recommended default without the operator needing to
+    click Start just to find out."""
+    try:
+        import torch  # noqa: F401
+        from transformers import ZoeDepthForDepthEstimation  # noqa: F401
+        return jsonify(ok=True, available=True,
+                       loaded=_zoedepth_pipeline is not None)
+    except Exception as e:
+        return jsonify(ok=True, available=False, reason=str(e))
 
 
 @app.post("/api/space/scan/zoedepth")
@@ -4913,7 +5020,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.48" from camera_server.py source text."""
+    """Extract VERSION = "1.5.51" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
