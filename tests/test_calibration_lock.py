@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "desktop", "sha
 import parent_server  # noqa: E402
 from parent_server import (  # noqa: E402
     app, _fixtures, _fixture_is_calibrating, _set_calibrating,
+    _mover_cal_jobs, _artnet,
 )
 
 
@@ -165,6 +166,70 @@ def test_is_calibrating_hook_threads_through_engine():
         _remove_mover(fx["id"])
 
 
+def test_cancel_immediately_blackouts_fixture_window():
+    """#604 — /cancel must zero the fixture's DMX window synchronously,
+    not wait for the background thread to notice the cancel flag. Without
+    this the moving head keeps pointing/lit for up to 30 s while the
+    thread is stuck in a camera `urlopen()` call."""
+    fx = _add_mover(fid=99997)
+    # Profile-free fixture defaults to 13-ch Slymovehead layout.
+    fx["dmxChannelCount"] = 13
+    # Give the fixture some neighbours on the same universe so we can
+    # prove the cancel doesn't clobber them.
+    _mover_cal_jobs[str(fx["id"])] = {"status": "running", "phase": "sampling"}
+    engine_was_running = _artnet.running
+    if not engine_was_running:
+        _artnet.start()
+    try:
+        uni = _artnet.get_universe(1)
+        # Simulate the mid-calibration cue: non-zero Pan/Tilt/Dimmer/RGB
+        # in the fixture's window, and a distinctive sentinel in the
+        # neighbour channel (14) that cancel must NOT touch.
+        uni.set_channels(1, [99, 246, 0, 255, 5, 255, 255, 255, 0, 0, 0, 0, 0])
+        uni.set_channel(14, 77)
+        pre = list(uni.get_data()[:14])
+        _assert(pre[:13] != [0]*13, "pre-cancel fixture window non-zero")
+        _assert(pre[13] == 77, "pre-cancel neighbour byte set")
+        with app.test_client() as c:
+            r = c.post(f"/api/calibration/mover/{fx['id']}/cancel")
+            _assert(r.status_code == 200, f"cancel returns 200 (got {r.status_code})")
+            body = r.get_json() or {}
+            _assert(body.get("cancelled") is True, "body.cancelled=True")
+        post = list(uni.get_data()[:14])
+        _assert(post[:13] == [0]*13,
+                f"fixture window zeroed synchronously (got {post[:13]})")
+        _assert(post[13] == 77, "neighbour byte preserved (not 77: " + str(post[13]) + ")")
+    finally:
+        if not engine_was_running:
+            _artnet.stop()
+        _mover_cal_jobs.pop(str(fx["id"]), None)
+        _remove_mover(fx["id"])
+
+
+def test_cancel_no_running_job_is_noop():
+    """#604 — cancel on a fixture that isn't running returns ok=True with
+    cancelled=False and does NOT clobber the universe. Guards against a
+    naive implementation that blackouts unconditionally."""
+    fx = _add_mover(fid=99996)
+    engine_was_running = _artnet.running
+    if not engine_was_running:
+        _artnet.start()
+    try:
+        uni = _artnet.get_universe(1)
+        uni.set_channels(1, [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130])
+        with app.test_client() as c:
+            r = c.post(f"/api/calibration/mover/{fx['id']}/cancel")
+            body = r.get_json() or {}
+            _assert(body.get("cancelled") is False, "cancelled=False when no job")
+        post = list(uni.get_data()[:13])
+        _assert(post == [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130],
+                f"universe untouched when no running job (got {post})")
+    finally:
+        if not engine_was_running:
+            _artnet.stop()
+        _remove_mover(fx["id"])
+
+
 ALL = [
     test_is_calibrating_default_false,
     test_set_and_clear_lock,
@@ -174,6 +239,8 @@ ALL = [
     test_lock_not_persisted_on_save,
     test_stale_lock_cleared_on_startup,
     test_is_calibrating_hook_threads_through_engine,
+    test_cancel_immediately_blackouts_fixture_window,
+    test_cancel_no_running_job_is_noop,
 ]
 
 

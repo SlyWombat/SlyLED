@@ -3868,17 +3868,57 @@ def api_mover_cal_get(fid):
 
 @app.post("/api/calibration/mover/<int:fid>/cancel")
 def api_mover_cal_cancel(fid):
-    """#594 — signal the running calibration thread to abort. The thread
-    raises CalibrationAborted at its next `_check_cancel()` point (inside
-    `_hold_dmx` or `_wait_settled`), unwinds through its exception wrapper,
-    blacks out the fixture, and releases the calibration lock. Safe to call
-    repeatedly; no-op if no job is running."""
+    """#594/#604 — signal the running calibration thread to abort AND
+    immediately zero the fixture's DMX channel range so the beam goes
+    dark right now, independent of when the background thread actually
+    unwinds.
+
+    The thread-level cancel (`_check_cancel()` inside `_hold_dmx` /
+    `_wait_settled`) is best-effort — if the thread is blocked inside a
+    camera `urlopen()` call (up to 30 s for `/depth-map`, 5 s for
+    `/beam-detect`), the flag isn't checked until the HTTP request
+    returns. Meanwhile the 40 Hz Art-Net engine keeps re-transmitting
+    whatever non-blackout frame the thread last wrote, so the moving
+    head keeps pointing/lit. Operators report "I pressed Cancel and
+    the light stayed on."
+
+    Fix: overlay a zero-seeded window on the running engine's universe
+    buffer for just this fixture's channel range. The engine's next
+    frame (within 25 ms) carries the zeros to the bridge. Other
+    fixtures sharing the universe are untouched. The thread still
+    unwinds via its own CalibrationAborted path and fires its own
+    `_cal_blackout` — redundant but harmless.
+    """
     job = _mover_cal_jobs.get(str(fid))
     if not job or job.get("status") != "running":
         return jsonify(ok=True, cancelled=False, reason="no running calibration")
     job["cancelRequested"] = True
     _mcal.request_cancel()
     log.info("MOVER-CAL %d: cancel requested by operator", fid)
+
+    # Immediate foreground blackout — don't wait for the thread.
+    try:
+        f = next((x for x in _fixtures if x.get("id") == fid), None)
+        if f and f.get("fixtureType") == "dmx":
+            uni = int(f.get("dmxUniverse", 1))
+            addr = int(f.get("dmxStartAddr", 1))
+            pid = f.get("dmxProfileId")
+            info = _profile_lib.channel_info(pid) if pid else None
+            ch_count = int((info or {}).get("channelCount") or
+                           f.get("dmxChannelCount") or 13)
+            engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+            if engine:
+                uni_buf = engine.get_universe(uni)
+                # Zero exactly this fixture's channel window — leave
+                # everything else (other fixtures on this universe,
+                # profile defaults not yet seeded) alone.
+                uni_buf.set_channels(addr, [0] * ch_count)
+                log.info("MOVER-CAL %d: immediate blackout applied to "
+                         "uni=%d addr=%d..%d",
+                         fid, uni, addr, addr + ch_count - 1)
+    except Exception as e:
+        log.warning("MOVER-CAL %d: immediate blackout failed: %s", fid, e)
+
     return jsonify(ok=True, cancelled=True)
 
 
