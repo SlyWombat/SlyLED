@@ -604,7 +604,60 @@ Closes #611 + B9.
 
 ---
 
-## 10. Change log
+## 10. Related open issues (cross-reference)
+
+Audit of 84 open issues on 2026-04-22; 43 touched camera/calibration
+keywords. This table is the actionable subset — what to close, update,
+or cross-link when each §8.1 fix lands. Everything else (#569 camera HW
+compat, #293/#291 auto-reconnect, #203 camera OTA, #573 screenshot
+chores, #307/#306 unrelated features) is orthogonal.
+
+### 10.1 Will be closed by §8.1 fixes
+
+| Issue | Title (short) | Closed by | Notes |
+|-------|--------------|-----------|-------|
+| **#611** | Fixture PUT silently drops fovType | P1 Q12 | Already cited in §8.1 Q12. Close when the PR merges. |
+| **#612** | Marker placement UI — live per-camera coverage in Layout | Q11 (when answered) | Exact duplicate of Q11. Once Q11 closes, `#612` is the implementation ticket — keep that number, close on merge. |
+| **#357** | Mover cal discovery doesn't detect beam at computed initial aim | Q6 (markers-mode default) | The legacy-discovery failure mode disappears once Q6 picks markers-mode; verify with live-test step 6, then close. |
+| **#423** | YOLO not detecting `chair` class in tracking | P1 Q4 | Chair goes into the per-class fallback table (900 mm). Update the issue to explain class filter vs model coverage — user may be hitting the allowlist, not the model. |
+
+### 10.2 Must update (comment / re-scope)
+
+| Issue | Title (short) | Why update |
+|-------|--------------|-----------|
+| **#610** | Mover cal without operator pre-knowledge | Already the motivating ticket for markers-mode. Comment with a link to §8.1 Q6 + the upcoming Q6 live-test results, so #610's "done" bar is the markers-mode default. |
+| **#600** | Swap ry ↔ rz on camera/fixture rotation (breaking) | **Coordination required.** Our P1 Q1+Q4 patch uses `_rotation_to_aim` / `camera_math.build_camera_to_stage(tilt, pan, roll)` with the **current** ordering. If #600 lands first, our fixes adopt the new order at the start; if after, a single rename sweep updates all `rotation=[tilt, pan, roll]` call-sites plus this doc's §3.4 convention. Either order is fine — just don't interleave. Comment so whoever picks it up knows. |
+| **#597** | Advanced Scan — clear per-camera intrinsic / ArUco cal | After P1 Q7 lands, "clear" has **one** store to touch (`_calibrations[str(fid)]`) instead of two. Update the spec to reflect single-store, and drop any language about `fixture.homography`. |
+| **#484** | Gyro/phone controller: stage-space orientation architecture | Downstream consumer of `ParametricFixtureModel.inverse`. Mention that P3 Q9 Phase 1 (`mover_control.affine_pan_tilt` fallback removal) will ripple into the gyro path. |
+| **#474** | Gyro controller: absolute stage-space orientation mapping | Same as #484 — one aim stack after Q9. |
+| **#427** | Android pointer mode — 3D spatial aiming | Same as #484/#474. Explicitly note it should target the v2 stack only — do not reintroduce `affine_pan_tilt` in new code. |
+| **#510** | Android calibrate locks against server-assumed aim | Peripheral but worth a comment: the single-store homography (Q7) makes the server's "known aim" less ambiguous. Re-evaluate after P1 Q7 ships. |
+
+### 10.3 Cross-link to Q14 end-to-end regression test
+
+Q14 (still open) should absorb the scope of these existing tickets
+rather than a fresh issue:
+
+| Issue | Title (short) | Fit |
+|-------|--------------|-----|
+| **#533** | End to End Testing | Parent epic — Q14's deliverable lands here. |
+| **#409** | Live show test session — simulated person tracking | Exact mocked-pipeline spec that Q14 should produce. Keep #409 as the spec issue; Q14 ticket implements it. |
+| **#277** | End-to-end show regression — weekly Playwright | Already-scoped regression harness. Q14's camera-specific tests plug into this. |
+| **#280** | Regression test runner — weekly CI harness | Infra for #277. Orthogonal but Q14's tests ride on it. |
+
+### 10.4 No action
+
+Mentioned only to confirm they were reviewed and are not affected:
+
+- **#418** — Android 3D view coordinate space wrong. May be related to
+  #600 (axis convention) but not to §8.1 fixes. No cross-link needed.
+- **#595** — Gemini AI depth/reconstruction review. Out of scope per §9.
+- **#569**, **#293**, **#291**, **#203**, **#573**, **#307**, **#306** —
+  orthogonal.
+
+---
+
+## 11. Change log
 
 - **2026-04-22** — initial draft.
 - **2026-04-22** — §8.1 static-reading round: closed Q1, Q2, Q7, Q8, Q9, Q12.
@@ -616,3 +669,8 @@ Closes #611 + B9.
   + homography; new `aimTarget` enum (`feet`/`center`/`head`) on
   track-actions. Q4 lands with Q1 (same P1 ticket). §2 (scipy
   allowed) noted from user edit 002ec14.
+- **2026-04-22** — added §10 "Related open issues" cross-reference.
+  4 issues close with §8.1 fixes (#611, #612, #357, #423); 7 need
+  updates (#610, #600, #597, #484, #474, #427, #510); 4 cross-link
+  to Q14 (#533, #409, #277, #280). No GitHub comments posted yet —
+  table is advisory until we approve §8.1.
