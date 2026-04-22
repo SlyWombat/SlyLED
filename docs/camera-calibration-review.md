@@ -40,7 +40,7 @@ prioritised fixes.
 - **Operator-first, not algorithm-first.** Per `feedback_cal_algorithm.md`: the
   operator will not run a multi-frame chessboard wizard. Survey markers once,
   reuse forever. Any proposal that requires per-session ArUco gymnastics is out.
-- **No new dependencies without justification.** numpy + cv2 are in. scipy is out
+- **No new dependencies without justification.** numpy + cv2 are in. scipy can be used if needed
   (hand-roll LM, per `project_calibration_v2_phase1.md`).
 - **No backward compatibility required.** This is the first beta release —
   there are no shipped customers, no saved projects in the wild to preserve,
