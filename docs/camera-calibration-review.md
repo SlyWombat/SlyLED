@@ -564,6 +564,150 @@ Ticket: **P3 (epic)**, six sub-tickets. Do not start until Q7 lands.
 Ticket: **P1** (ships with Q1/Q2; Q2 fallback accuracy depends on it).
 Closes #611 + B9.
 
+#### Q10 — LM sign-confirmation probe → **code-fix + new unit test**
+
+**Answer:** Add an active **one-nudge probe** at the end of every
+mover-cal run that empirically confirms `(pan_sign, tilt_sign)` against
+observed beam motion, and refits if the signs disagree. Kill the
+`<0.2° RMS` convention tie-break at `parametric_mover.py:378–384` —
+it's a heuristic and the probe replaces it with a measurement.
+
+**Root cause (recap of B5):**
+- `fit_model` at **316–385** runs LM over the 5 continuous parameters
+  for every `(pan_sign, tilt_sign) ∈ {±1}²` combination.
+- On sparse samples (markers-mode often uses 3 floor points per rig),
+  two or more combos converge to near-identical angular RMS because a
+  180° yaw flip absorbs the sign flip — it's a genuine symmetry of
+  the forward map *on the fit points*, but **the symmetry breaks
+  outside the sample hull**. So the convention tie-break picks a fit
+  that looks identical at the markers but aims the wrong way when
+  extrapolating to front-stage.
+
+**Probe design — one helper, called once per cal:**
+
+```python
+# parametric_mover.py (new)
+def verify_signs(model: ParametricFixtureModel,
+                 nudge_probe: Callable[[float, float], Optional[Tuple[float, float]]],
+                 base_aim_norm: Tuple[float, float],
+                 nudge_norm: float = 0.005,
+                 ) -> Tuple[int, int, float]:
+    """Return (pan_sign, tilt_sign, confidence_deg).
+
+    nudge_probe(pan_norm, tilt_norm) drives the fixture and returns the
+    observed beam pixel (or None on miss). Typically wired up to:
+      bridge.set_pan_tilt(); sleep; camera.beam_detect().
+
+    Algorithm:
+      1. Capture pixel p0 at base_aim.
+      2. Capture pixel p_pan at base_aim + (+nudge, 0).
+      3. Capture pixel p_tilt at base_aim + (0, +nudge).
+      4. Predict expected pixel deltas from model.forward() projected
+         through the camera's homography.
+      5. Dot product sign of (predicted, observed) tells us whether
+         each axis sign is correct.
+      6. Return the signs plus a confidence = min angle between
+         predicted and observed deltas (small = trustworthy).
+    """
+```
+
+Integration in `mover_calibrator.py` (end of every `_mover_cal_thread_*_body`):
+
+```python
+fitted, quality = parametric_mover.fit_model(...)
+# Use the camera we already used for cal; re-use beam detector.
+def _probe(pn, tn):
+    engine.set_pan_tilt(fixture, pn, tn)
+    time.sleep(0.15)  # fixture settle
+    spots = beam_detector.detect(camera_snapshot(cam))
+    return (spots[0]["x"], spots[0]["y"]) if spots else None
+
+# Probe at the centroid of the samples so the beam is guaranteed in-frame.
+cx, cy = _sample_centroid(samples)
+base = fitted.inverse(cx, cy, 0)
+p_sign, t_sign, conf = parametric_mover.verify_signs(fitted, _probe, base)
+
+if (p_sign, t_sign) != (fitted.pan_sign, fitted.tilt_sign):
+    log.warning("MOVER-CAL: sign probe disagrees with LM fit — forcing "
+                "(%d,%d) and re-running LM", p_sign, t_sign)
+    fitted, quality = parametric_mover.fit_model(
+        ..., force_signs=(p_sign, t_sign))
+```
+
+`fit_model` gets a new `force_signs` kwarg that bypasses the
+enumeration — only LM over the 5 continuous params for the given sign
+combo.
+
+**Killing the convention tie-break:** lines **378–384** become
+`candidates.sort(key=lambda c: c[0]); _, _, best, best_q = candidates[0]`.
+The probe — not a convention heuristic — decides ambiguous cases.
+
+**Nudge size:**
+- `0.005` normalized pan = **2.7°** on a 540° fixture, projecting to
+  **~230 mm** beam displacement at 5 m — comfortably above a 2–5 px
+  beam-detector noise floor and well within typical camera FOV.
+- Auto-clip: if `base + nudge > 1.0`, use `-nudge`. If
+  `base − nudge < 0.0`, use `+nudge`.
+- If either probe misses (no beam pixel), fall back to the next-best
+  RMS combo from the 4-way enumeration and flag `quality.signProbe
+  = "failed"` so the SPA shows a warning.
+
+**Scipy (newly allowed per §2):** does NOT simplify this probe — it's
+pure geometry, no optimisation involved. Scipy is still worth using
+in `_lm_solve` itself (`scipy.optimize.least_squares(method="lm",
+loss="soft_l1")`) because:
+1. Built-in robust loss handles occasional beam-flash outliers that
+   currently bias the hand-rolled LM.
+2. Analytic 3-point Jacobian is faster and more stable than our
+   central-differences.
+3. Lose ~40 lines of code.
+But: that's a **separate P3 ticket** — the probe is the Q10 answer and
+ships independently.
+
+**Synthetic unit test (no hardware):**
+
+```python
+# tests/test_parametric_sign_probe.py
+def test_probe_catches_flipped_pan_sign():
+    truth = ParametricFixtureModel(
+        fixture_pos=(1500, 0, 3000),
+        mount_yaw_deg=30, pan_sign=+1, tilt_sign=-1,
+    )
+    # 3 samples (mimics markers-mode on basement rig)
+    stage_pts = [(500, 2000, 0), (2500, 2000, 0), (1500, 2500, 0)]
+    samples = [
+        {"pan": truth.inverse(*p)[0], "tilt": truth.inverse(*p)[1],
+         "stageX": p[0], "stageY": p[1], "stageZ": p[2]} for p in stage_pts
+    ]
+    # Force a wrong-sign fit
+    bad = ParametricFixtureModel(**{**asdict(truth), "pan_sign": -1,
+                                     "mount_yaw_deg": 30 + 180})
+    # Synthetic "camera" = truth model + identity homography
+    def probe(pn, tn):
+        d = truth.forward(pn, tn)  # unit vector
+        # project to z=0
+        px, py, pz = truth.fixture_pos
+        t = -pz / d[2]
+        return (px + t * d[0], py + t * d[1])  # pixel ≡ stage in this test
+    p_sign, t_sign, _ = verify_signs(bad, probe, base_aim_norm=bad.inverse(1500, 2200, 0))
+    assert (p_sign, t_sign) == (+1, -1)
+
+def test_probe_agrees_when_fit_is_correct(): ...
+def test_probe_handles_beam_miss_gracefully(): ...
+def test_probe_auto_flips_nudge_at_dmx_boundary(): ...
+```
+
+**Acceptance criteria:**
+- On every saved cal, `mover_calibrations.json[fid].signProbe` stores
+  `{"ok": bool, "panConfidenceDeg": float, "tiltConfidenceDeg": float,
+  "nudgePx": [dx_pan, dy_pan, dx_tilt, dy_tilt]}`.
+- SPA shows a green/amber/red badge on the cal result (green: both
+  confidences < 5°; amber: < 15°; red: ≥ 15° or probe missed).
+- Synthetic test suite has ≥ 4 cases (flipped pan, flipped tilt,
+  both flipped, correct).
+
+Ticket: **P2** (isolated, self-contained, no upstream deps). B5, Q10.
+
 ### 8.2 Still-open questions (need live test or more digging)
 
 | Q | Status | Blocker |
@@ -571,7 +715,6 @@ Closes #611 + B9.
 | Q3 multi-camera fusion policy | open | Live-test step 7 (ghost-object count) |
 | Q5 UX for unmapped camera | open | Depends on Q1/Q2 landing |
 | Q6 default mover-cal mode | open | Live-test steps 6 — need per-mode residuals on basement rig |
-| Q10 LM sign-confirmation probe | open | Needs synthetic-test rig (mirror-ambiguity unit test) |
 | Q11 marker-coverage UX | open | UX-fix; scope after Q6 |
 | Q13 "camera health" dashboard | open | Scope after Q1/Q7/Q12 |
 | Q14 end-to-end regression test | open | Scope after Q1/Q7/Q12 — test shape depends on final ingest contract |
@@ -584,7 +727,9 @@ Closes #611 + B9.
 | P1 | Single-source homography: collapse to `_calibrations[str(fid)].matrix`, remove `_calibrated_cameras` dead code, migrate `fixture.homography` once | Q7, B2 | — |
 | P1 | `fovType` whitelist + unified `"diagonal"` default + honour in `_pixel_to_stage` | Q12, B9, #611 | — |
 | P2 | Demote solvePnP to diagnostic in stage-map response; rename `cameraPosition` → `cameraPositionDiagnostic`; report pnp-vs-homography disagreement | Q8, B3 | — |
+| P2 | LM sign-confirmation probe — `verify_signs()` + `force_signs` kwarg on `fit_model`; kill the `<0.2° RMS` convention tie-break; synthetic test suite | Q10, B5 | — |
 | P3 (epic) | Retire v1 legacy helpers — 5-phase plan in Q9 | Q9, B4 | Q7 must land first |
+| P3 | Swap hand-rolled `_lm_solve` for `scipy.optimize.least_squares(loss="soft_l1")` — robust to flash outliers, drops ~40 lines | B5, B6 | Q10 probe lands first (test coverage) |
 
 ---
 
@@ -674,3 +819,8 @@ Mentioned only to confirm they were reviewed and are not affected:
   updates (#610, #600, #597, #484, #474, #427, #510); 4 cross-link
   to Q14 (#533, #409, #277, #280). No GitHub comments posted yet —
   table is advisory until we approve §8.1.
+- **2026-04-22** — closed Q10: one-nudge sign-confirmation probe
+  (`verify_signs()` in `parametric_mover.py`), kill the `<0.2° RMS`
+  convention tie-break at 378–384, `force_signs` kwarg on `fit_model`,
+  synthetic test suite. Bonus P3 ticket added for scipy LM swap
+  (soft_l1 loss — robust to beam-flash outliers).
