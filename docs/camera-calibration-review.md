@@ -372,6 +372,61 @@ Depends on Q12 (FOV convention) — the fallback is currently wrong by a
 treats `fovDeg` as horizontal and most consumer spec sheets publish
 diagonal.
 
+Also depends on Q4 — the ingest path now needs to return **two** stage
+points per detection (feet + head) rather than a single center, so the
+Q1 fix must land Q4's ground-contact + height inference at the same
+time.
+
+#### Q4 — per-class height / ground-contact estimator → **code-fix (lands with Q1)**
+
+**Answer:** Yes, we need per-person height. Tracked auto-aim must be
+able to target **feet**, **center**, or **head** per action — e.g. a
+"follow-spot" action aims at the head, while a "footlight" or
+"hot-spot" action aims at the ground-contact point. A single fixed
+`z = 1700` is insufficient.
+
+**Approach (geometric, uses the calibrated camera Q1 already restores):**
+
+1. **Feet (authoritative ground point).** Project the bottom-center of
+   the YOLO bbox through the camera to the floor plane `z = 0` using
+   the homography path (when available) or the FOV ray fallback. This
+   is the stage-space point the mover aims at for "feet".
+2. **Head (inferred from bbox top).** Project the top-center pixel as
+   a ray from the camera; intersect that ray with the vertical line
+   through the feet point (same `x`, `y`, varying `z`). Solve for `z`.
+   That's the head position *and* gives us the person's height for
+   free. Works for any upright object; falls back sensibly if the ray
+   is near-parallel to the vertical.
+3. **Center.** `(feet + head) / 2`, computed on demand.
+
+**Per-class fallback (used when no homography AND camera pose
+untrusted):** static table of default heights —
+`{person: 1700, child: 1100, cat: 300, dog: 600, chair: 900,
+bicycle: 1100, suitcase: 500}` etc. Only a fallback; geometric
+inference is preferred whenever the camera is stage-mapped.
+
+**Data-model changes to `_temporal_objects[n]`:**
+- `transform.pos` — **feet** (x, y, z=0). Canonical aim-target for
+  "floor" actions and for the 3D renderer's ground footprint.
+- `transform.scale[1]` — height in mm (was hard-coded 1700).
+- New optional `_headPos` — `[x, y, z_head]` stored alongside pos when
+  the geometric inference succeeded. Missing → auto-track falls back
+  to `pos + [0, 0, scale[1]]`.
+
+**Action-model change (`/api/actions` + track-action evaluator):**
+- Add `aimTarget` enum to each track-action: `"feet" | "center" |
+  "head"` (default `"center"`).
+- `_evaluate_track_actions` at `parent_server.py:10179` resolves
+  `aimTarget` → stage XYZ from the object's `pos` / `_headPos` /
+  midpoint, then passes that to the existing mover-aim math.
+
+**Non-goal for this ticket:** bbox-height-in-pixels → real-world
+height purely from the detector (no geometry). It's tempting but
+depends on subject-to-camera distance which we don't have without the
+homography anyway. Skip.
+
+Ticket: **P1** (ships with Q1). Closes Q4 + A6.
+
 #### Q7 — homography storage: one source of truth → **code-fix**
 
 **Answer:** Collapse to `_calibrations[str(fid)]["matrix"]` as the sole
@@ -514,7 +569,6 @@ Closes #611 + B9.
 | Q | Status | Blocker |
 |---|--------|---------|
 | Q3 multi-camera fusion policy | open | Live-test step 7 (ghost-object count) |
-| Q4 per-class height / ground-contact estimator | open | Product decision — do we target non-person tracking? |
 | Q5 UX for unmapped camera | open | Depends on Q1/Q2 landing |
 | Q6 default mover-cal mode | open | Live-test steps 6 — need per-mode residuals on basement rig |
 | Q10 LM sign-confirmation probe | open | Needs synthetic-test rig (mirror-ambiguity unit test) |
@@ -526,7 +580,7 @@ Closes #611 + B9.
 
 | Priority | Ticket shape | Closes | Depends on |
 |----------|--------------|--------|------------|
-| P1 | Wire `api_objects_temporal_create` through `_pixel_to_stage` | Q1, Q2, A1, A2 | Q12 for accuracy of FOV fallback |
+| P1 | Wire `api_objects_temporal_create` through `_pixel_to_stage` + return feet/head stage points; add `aimTarget` to track-actions | Q1, Q2, Q4, A1, A2, A6 | Q12 for accuracy of FOV fallback |
 | P1 | Single-source homography: collapse to `_calibrations[str(fid)].matrix`, remove `_calibrated_cameras` dead code, migrate `fixture.homography` once | Q7, B2 | — |
 | P1 | `fovType` whitelist + unified `"diagonal"` default + honour in `_pixel_to_stage` | Q12, B9, #611 | — |
 | P2 | Demote solvePnP to diagnostic in stage-map response; rename `cameraPosition` → `cameraPositionDiagnostic`; report pnp-vs-homography disagreement | Q8, B3 | — |
@@ -558,3 +612,7 @@ Closes #611 + B9.
 - **2026-04-22** — added §2 "no backward compatibility" clause (first
   beta release). Reworded Q7 and Q9 Phase 5 to drop migration steps;
   prefer clean breaking changes over compat shims.
+- **2026-04-22** — closed Q4: geometric feet/head inference from bbox
+  + homography; new `aimTarget` enum (`feet`/`center`/`head`) on
+  track-actions. Q4 lands with Q1 (same P1 ticket). §2 (scipy
+  allowed) noted from user edit 002ec14.
