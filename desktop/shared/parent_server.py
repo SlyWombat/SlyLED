@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.64"
+VERSION = "1.5.66"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1083,6 +1083,30 @@ def api_children_add():
         _save("children", _children)
     # Try SlyLED PING first
     _ping(child)
+    # Capability-probe for camera nodes on port 5000 — don't rely on the
+    # PONG description string. /status on a camera node returns role=="camera".
+    # Routing detected cameras to type="camera" lets the SPA register them
+    # via /api/cameras (creates fixtureType="camera" per sensor) rather than
+    # auto-spawning an LED fixture.
+    is_camera = False
+    try:
+        import urllib.request as _ur
+        resp = _ur.urlopen(f"http://{ip}:5000/status", timeout=2)
+        data = json.loads(resp.read().decode("utf-8"))
+        if data.get("role") == "camera":
+            is_camera = True
+    except Exception:
+        pass
+    if is_camera:
+        # Match the Discover Cameras flow: camera nodes are represented only
+        # as camera fixtures (addressed by cameraIp), not as children. Drop
+        # the speculative child record we just wrote so Setup → Children
+        # doesn't show a dead "slyled" row next to the real camera fixture.
+        with _lock:
+            _children[:] = [c for c in _children if c["id"] != child["id"]]
+            _save("children", _children)
+        return jsonify(ok=True, id=None, type="camera", name=child.get("name", ip),
+                       hostname=child.get("hostname", ip), ip=ip)
     # If SlyLED ping failed, try WLED probe
     if child.get("status") != 1:
         wled_info = wled_probe(ip)
@@ -1103,7 +1127,8 @@ def api_children_add():
         _save("children", _children)
     ct = child.get("type", "slyled")
     return jsonify(ok=True, id=child["id"], type=ct, boardType=child.get("boardType", ""),
-                   name=child.get("name", ""), hostname=child.get("hostname", ""))
+                   name=child.get("name", ""), hostname=child.get("hostname", ""),
+                   ip=ip)
 
 @app.delete("/api/children/<int:cid>")
 def api_children_delete(cid):
@@ -6504,7 +6529,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.64" from camera_server.py source text."""
+    """Extract VERSION = "1.5.66" from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -12938,6 +12963,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

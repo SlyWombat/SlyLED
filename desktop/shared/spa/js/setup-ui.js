@@ -1480,6 +1480,19 @@ function addDiscovered(ip){
     if(ctype==='dmx'){
       document.getElementById('hs').textContent='Added DMX bridge: '+cname;
       setTimeout(loadSetup,1000);
+    }else if(ctype==='camera'){
+      // Camera node — register via /api/cameras (probes sensors, creates
+      // one fixtureType:"camera" fixture per sensor with FOV/resolution).
+      var camIp=r.ip||ip;
+      ra('POST','/api/cameras',{ip:camIp,name:cname},function(cr){
+        if(cr&&cr.ok){
+          var n=cr.count||1;
+          document.getElementById('hs').textContent='Added camera node: '+cname+' ('+n+' sensor'+(n===1?'':'s')+')';
+        }else{
+          document.getElementById('hs').textContent='Camera register failed: '+((cr&&cr.err)||'unknown');
+        }
+        setTimeout(loadSetup,1500);
+      });
     }else if(ctype==='gyro'){
       // Gyro puck — idempotent: if a gyro fixture already exists for this
       // child id, don't spawn a duplicate.

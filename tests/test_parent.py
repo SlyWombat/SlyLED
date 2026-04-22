@@ -113,6 +113,55 @@ def run():
         r = c.post('/api/children/import', json='not a list')
         ok('Import bad data → 400', r.status_code == 400)
 
+        # ── Regression: camera node added via /api/children must not become
+        #    an LED fixture. Capability-probe of :5000/status must route the
+        #    node to type="camera" with no child record persisted.
+        from unittest.mock import patch
+        import io
+
+        class _FakeResp:
+            def __init__(self, body):
+                self._body = body.encode('utf-8')
+            def read(self):
+                return self._body
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        _cam_ip = '10.0.0.77'
+        _cam_status = json.dumps({
+            'role': 'camera', 'hostname': 'RPi-Test',
+            'fwVersion': '1.3.0', 'cameraCount': 1,
+            'cameras': [{'name': '/dev/video0', 'resW': 1920, 'resH': 1080}],
+        })
+
+        def _fake_urlopen(url, timeout=None):
+            if isinstance(url, str) and f'{_cam_ip}:5000/status' in url:
+                return _FakeResp(_cam_status)
+            raise ConnectionError('refused')
+
+        with patch('urllib.request.urlopen', _fake_urlopen):
+            pre = len(parent_server._children)
+            r = c.post('/api/children', json={'ip': _cam_ip})
+            d = r.get_json()
+            ok('Camera node add returns type="camera"',
+               r.status_code == 200 and d.get('type') == 'camera')
+            ok('Camera node add returns id=None (no child persisted)',
+               d.get('id') is None)
+            ok('Camera node add does not persist child row',
+               len(parent_server._children) == pre
+               and not any(ch.get('ip') == _cam_ip for ch in parent_server._children))
+
+        # Non-camera IPs still go through the normal path (probe raises → ignored)
+        with patch('urllib.request.urlopen', _fake_urlopen):
+            r = c.post('/api/children', json={'ip': '10.0.0.78'})
+            d = r.get_json()
+            ok('Non-camera add still creates child', d.get('ok') and d.get('id') is not None
+               and d.get('type') != 'camera')
+            if d.get('id') is not None:
+                c.delete(f'/api/children/{d.get("id")}')
+
         # ── Layout ──────────────────────────────────────────────────
         r = c.get('/api/layout')
         ok('GET /api/layout', r.status_code == 200 and 'canvasW' in r.get_json())
