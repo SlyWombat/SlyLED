@@ -42,6 +42,12 @@ prioritised fixes.
   reuse forever. Any proposal that requires per-session ArUco gymnastics is out.
 - **No new dependencies without justification.** numpy + cv2 are in. scipy is out
   (hand-roll LM, per `project_calibration_v2_phase1.md`).
+- **No backward compatibility required.** This is the first beta release —
+  there are no shipped customers, no saved projects in the wild to preserve,
+  and no on-disk schema to migrate. Prefer the clean breaking change over a
+  compat shim. Fixes in §8 drop the word "migration" wherever it appeared in
+  the first draft: stale fields can simply be deleted, reused keys renamed in
+  place, and default JSON files regenerated from scratch.
 
 ---
 
@@ -383,15 +389,15 @@ matrix and one of them is dead code:
    line exists as pure dead code. Origin appears to be an abandoned
    refactor noted in the comment at **2757**.
 
-Migration (non-destructive):
-- On server start, for every fixture with a `fixture["homography"]`
-  but no corresponding `_calibrations[str(fid)]["matrix"]`, copy up to
-  `_calibrations` once, then strip `fixture["homography"]` and save.
+Breaking change (beta — no compat shim per §2):
 - Remove the `fixture["homography"]` write at 2777 and the fallback
-  read at 3553.
+  read at 3553 outright. Any existing `fixture.homography` field in a
+  saved layout is simply dropped on next load.
 - Delete the `_calibrated_cameras` branch at 3546 entirely.
 - Update the v2 pre-check comment block at 2755–2777 to reflect the
   single-store policy.
+- Operators re-run stage-map calibration once on upgrade; result lands
+  straight into `_calibrations[str(fid)].matrix`.
 
 Ticket: **P1** (small, mechanical, covered by `test_parent.py`). B2.
 
@@ -455,9 +461,15 @@ Proposed phased retirement (create as sub-issues under one epic):
 4. **Phase 4 — `structured_light`** (#236 is already parked out-of-scope
    per §9). Do not touch until #236 unparks.
 5. **Phase 5 — `_range_cal` record deletion.** Only after phases 1–4
-   confirm no live reads. Ship a one-shot migration that copies any
-   still-useful samples into `_mover_cal[fid].samples`, then drops the
-   `range_calibrations.json` file. B4.
+   confirm no live reads. Per §2 (beta, no compat), skip the sample-
+   migration step — just delete `range_calibrations.json`, the loader
+   at `parent_server.py:236`, and the four save sites (2903, 12034,
+   12581). Operators re-run range cal once. B4.
+
+Since there is no production data to preserve, Phase 1's
+"warn-but-keep" fallback can instead be a hard removal — measure hit
+rate only if it turns out we're still calling `affine_pan_tilt` from
+somewhere we didn't catch in grep.
 
 Ticket: **P3 (epic)**, six sub-tickets. Do not start until Q7 lands.
 
@@ -543,3 +555,6 @@ Closes #611 + B9.
 - **2026-04-22** — initial draft.
 - **2026-04-22** — §8.1 static-reading round: closed Q1, Q2, Q7, Q8, Q9, Q12.
   Five P1/P2 tickets + one P3 epic proposed. No code changes yet.
+- **2026-04-22** — added §2 "no backward compatibility" clause (first
+  beta release). Reworded Q7 and Q9 Phase 5 to drop migration steps;
+  prefer clean breaking changes over compat shims.
