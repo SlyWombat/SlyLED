@@ -320,9 +320,205 @@ All deliverables land either in this file (§8+) or as issues in the
 
 ---
 
-## 8. Findings (to be filled in during review)
+## 8. Findings
 
-_Empty — will be populated as each question is answered._
+### 8.1 Static-reading round (2026-04-22)
+
+Six questions closed by grep/read only — no hardware required. Each cites the
+evidence line numbers against the snapshot in §3 / §4.
+
+#### Q1 — pixel→stage mapping in the tracker-ingest endpoint → **code-fix**
+
+**Answer:** The current mapping is *not* acceptable for any real install. It
+must be replaced before further auto-track work, but the fix is trivial because
+the correct helper already exists and is used elsewhere.
+
+Evidence (`desktop/shared/parent_server.py`):
+- `api_objects_temporal_create` at **7206–7232** runs exactly the back-wall
+  proportional `pos = [sw·(1-cx), sd·(1-cy), 0]`. It ignores camera position,
+  rotation, FOV, and any persisted homography. Z hard-coded 0, height 1700,
+  depth 400.
+- `_pixel_to_stage` at **1888** already does the right thing: homography
+  first (`_calibrations[fid].matrix`), ground-plane projection fallback using
+  `_rotation_to_aim` + `fovDeg`. Identical helper chain that `/api/cameras/<id>/scan`
+  uses at **2027**.
+- Confirms A1 and A2 — the ingest path was written before `_pixel_to_stage`
+  was generalised, and the wire-up was simply missed.
+
+**Fix shape:** Replace the inline block at 7218–7232 with a single call to
+`_pixel_to_stage([{x,y,w,h,label,confidence}], cam_fixture, fw, fh)[0]`,
+using its returned stage coords. Keep the `cameraId`/`pixelBox`/`frameSize`
+contract on the wire. Ticket: **P1**, citations Q1, Q2, A1, A2.
+
+#### Q2 — calibrated fallback vs hard-gate homography → **code-fix (merges with Q1)**
+
+**Answer:** A calibrated fallback already exists inside `_pixel_to_stage`
+(homography-or-FOV-projection). Once Q1 is wired, tracking degrades
+gracefully: homography when surveyed, FOV ground-plane otherwise, raw
+pixel passthrough only when the camera has no stage position at all
+(line **1917** — `dist < 1`). Therefore the hard-gate option is
+unnecessary. Keep a UI warning when `_calibrations.get(str(fid))` is
+absent so operators know they're on the weaker fallback, but don't
+refuse to start.
+
+Depends on Q12 (FOV convention) — the fallback is currently wrong by a
+`cos(diagonal/2)/cos(horizontal/2)` factor because `_pixel_to_stage`
+treats `fovDeg` as horizontal and most consumer spec sheets publish
+diagonal.
+
+#### Q7 — homography storage: one source of truth → **code-fix**
+
+**Answer:** Collapse to `_calibrations[str(fid)]["matrix"]` as the sole
+writer and reader. There are currently **three** names for the same
+matrix and one of them is dead code:
+
+1. `_calibrations[str(fid)]["matrix"]` — written at **2761**, read by
+   `_pixel_to_stage` at **1895**.
+2. `fixture["homography"]` — written at **2777** (mirror), read at
+   **3553** as fallback in `_mover_cal_thread_v2_body`.
+3. `_calibrated_cameras` — referenced at **3546** with a
+   `if "_calibrated_cameras" in globals()` guard. `grep` shows the
+   symbol is **never defined** anywhere in `parent_server.py`. The
+   guard always evaluates False, so `cam_cal` is always None and the
+   line exists as pure dead code. Origin appears to be an abandoned
+   refactor noted in the comment at **2757**.
+
+Migration (non-destructive):
+- On server start, for every fixture with a `fixture["homography"]`
+  but no corresponding `_calibrations[str(fid)]["matrix"]`, copy up to
+  `_calibrations` once, then strip `fixture["homography"]` and save.
+- Remove the `fixture["homography"]` write at 2777 and the fallback
+  read at 3553.
+- Delete the `_calibrated_cameras` branch at 3546 entirely.
+- Update the v2 pre-check comment block at 2755–2777 to reflect the
+  single-store policy.
+
+Ticket: **P1** (small, mechanical, covered by `test_parent.py`). B2.
+
+#### Q8 — solvePnP path in stage-map → **code-fix (demote to diagnostic)**
+
+**Answer:** Keep `cv2.findHomography` as the canonical output; downgrade
+`solvePnP` to diagnostic-only, and stop exposing its derived
+`cameraPosition` as a primary field.
+
+Evidence at **2663–2721**:
+- solvePnP runs first (lines 2663–2690) purely to derive `cam_pos` for
+  "operator sanity check" display.
+- The exported homography is unconditionally overwritten by the direct
+  `cv2.findHomography(img_pts, stage_pts_xy)` result at **2715–2717**.
+  The pose-derived fallback at **2720–2721** only runs inside an
+  `except` — it's unreachable in practice for clean ArUco corners.
+- Comments at 2698–2710 explicitly state that the direct homography is
+  "strictly better" for coplanar floor markers; the code agrees.
+
+So solvePnP is already second-class; the confusion is in the response
+payload, not the math. Fix:
+- Rename `cameraPosition` / `cameraPosStage` keys to
+  `cameraPositionDiagnostic` (or nest under `diagnostics.pnp`) so SPA
+  consumers stop treating it as authoritative.
+- Keep running solvePnP (cheap) and report its reprojection error
+  alongside the findHomography RMS. If the two disagree by more than
+  ~2× expected, surface a warning — it's the best we have for catching
+  mirror-pose ambiguity.
+- Drop the stale "strategy" comment at 2621; the code no longer has
+  parallel paths the way the comment implies.
+
+Ticket: **P2**. B3.
+
+#### Q9 — retire v1 legacy helpers → **defer with deprecation schedule**
+
+**Answer:** Cannot delete yet. The legacy helpers have **seven** live
+callers across three files. Retirement is a multi-PR project.
+
+Live callers (from grep):
+
+| Symbol | Callers |
+|--------|---------|
+| `affine_pan_tilt` | `mover_control.py:363`, `bake_engine.py:672`, `parent_server.py:4502, 8606, 8610, 10301` |
+| `affine_stage_point` | `parent_server.py:8305` |
+| `pan_tilt_to_ray` | `structured_light.py:55`, `parent_server.py:7911` (import), `8320`, `9464` |
+| `_range_cal` / `range_calibrations` | `parent_server.py:236` (load), `2903`, `12034`, `12581` (saves) |
+
+Proposed phased retirement (create as sub-issues under one epic):
+
+1. **Phase 1 — `mover_control.aim_to_pan_tilt`** (user-facing aim path).
+   It already prefers `ParametricFixtureModel` when `_mover_models[fid]`
+   is fit; the `affine_pan_tilt` call at `mover_control.py:363` is the
+   last-resort fallback. Convert the fallback to emit a warning when
+   used, so we can measure real-world hit rate.
+2. **Phase 2 — `bake_engine`** (offline, so cheap to test). Swap to
+   `ParametricFixtureModel` with per-fixture cached model. Regression
+   test: `test_timeline_bake.py`.
+3. **Phase 3 — `parent_server` debug/preview routes** (`8305, 8606,
+   10301`). These back SPA "where will this aim land?" previews. The
+   v2 model's `inverse` already covers this; port and delete the imports.
+4. **Phase 4 — `structured_light`** (#236 is already parked out-of-scope
+   per §9). Do not touch until #236 unparks.
+5. **Phase 5 — `_range_cal` record deletion.** Only after phases 1–4
+   confirm no live reads. Ship a one-shot migration that copies any
+   still-useful samples into `_mover_cal[fid].samples`, then drops the
+   `range_calibrations.json` file. B4.
+
+Ticket: **P3 (epic)**, six sub-tickets. Do not start until Q7 lands.
+
+#### Q12 — `fovType` dropped by fixture PUT → **code-fix (and doc-fix)**
+
+**Answer:** Two independent bugs confirmed:
+
+1. **`fovType` is silently dropped.** The PUT whitelist at
+   `parent_server.py:1451–1458` lists `"fovDeg"` but **not** `"fovType"`.
+   Any client that sends `fovType` in the body has it ignored. This is
+   #611 as filed.
+
+2. **Default inconsistency across consumers.** `fovType` default
+   varies by reader:
+   - `parent_server.py:5235` — defaults to **`"diagonal"`**
+     (`_aruco_stage_map_simple`).
+   - `parent_server.py:5913, 5916, 5950` — default **`"horizontal"`**
+     (stereo/triangulation path).
+   - `_pixel_to_stage` at **1888–1997** uses `fovDeg` directly as
+     horizontal half-angle — ignores `fovType` entirely.
+
+   For the basement rig the EMEET 4K spec sheet publishes 90° as
+   *diagonal*. A horizontal-default consumer treating 90° as horizontal
+   overestimates horizontal FOV by cos(diag/2)/cos(horiz/2) ≈ 12–15%.
+   That's the cos-factor error flagged in B9.
+
+**Fix shape:**
+- Add `"fovType"` to the whitelist at 1454.
+- Validate: must be one of `{"diagonal", "horizontal", "vertical"}`.
+- Unify default to **`"diagonal"`** (consumer spec sheets use diagonal).
+- Make `_pixel_to_stage` read `fovType` and convert to horizontal
+  half-angle internally via `camera_math` (add `normalise_fov(fov_deg,
+  fov_type, aspect)` if it doesn't exist yet).
+- Update `docs/camera.md` and `project_basement_rig.md` to reflect
+  "diagonal is the canonical input; everything else is derived".
+
+Ticket: **P1** (ships with Q1/Q2; Q2 fallback accuracy depends on it).
+Closes #611 + B9.
+
+### 8.2 Still-open questions (need live test or more digging)
+
+| Q | Status | Blocker |
+|---|--------|---------|
+| Q3 multi-camera fusion policy | open | Live-test step 7 (ghost-object count) |
+| Q4 per-class height / ground-contact estimator | open | Product decision — do we target non-person tracking? |
+| Q5 UX for unmapped camera | open | Depends on Q1/Q2 landing |
+| Q6 default mover-cal mode | open | Live-test steps 6 — need per-mode residuals on basement rig |
+| Q10 LM sign-confirmation probe | open | Needs synthetic-test rig (mirror-ambiguity unit test) |
+| Q11 marker-coverage UX | open | UX-fix; scope after Q6 |
+| Q13 "camera health" dashboard | open | Scope after Q1/Q7/Q12 |
+| Q14 end-to-end regression test | open | Scope after Q1/Q7/Q12 — test shape depends on final ingest contract |
+
+### 8.3 Prioritised fix list (from 8.1)
+
+| Priority | Ticket shape | Closes | Depends on |
+|----------|--------------|--------|------------|
+| P1 | Wire `api_objects_temporal_create` through `_pixel_to_stage` | Q1, Q2, A1, A2 | Q12 for accuracy of FOV fallback |
+| P1 | Single-source homography: collapse to `_calibrations[str(fid)].matrix`, remove `_calibrated_cameras` dead code, migrate `fixture.homography` once | Q7, B2 | — |
+| P1 | `fovType` whitelist + unified `"diagonal"` default + honour in `_pixel_to_stage` | Q12, B9, #611 | — |
+| P2 | Demote solvePnP to diagnostic in stage-map response; rename `cameraPosition` → `cameraPositionDiagnostic`; report pnp-vs-homography disagreement | Q8, B3 | — |
+| P3 (epic) | Retire v1 legacy helpers — 5-phase plan in Q9 | Q9, B4 | Q7 must land first |
 
 ---
 
@@ -345,3 +541,5 @@ _Empty — will be populated as each question is answered._
 ## 10. Change log
 
 - **2026-04-22** — initial draft.
+- **2026-04-22** — §8.1 static-reading round: closed Q1, Q2, Q7, Q8, Q9, Q12.
+  Five P1/P2 tickets + one P3 epic proposed. No code changes yet.
