@@ -786,15 +786,255 @@ Ticket split:
 
 Closes Q5.
 
+#### Q3 — multi-camera fusion policy → **code-fix (post-Q1)**
+
+**Answer:** Hybrid weighted-cluster policy. Live-test step 7 confirms
+the constants; the structure can be designed and code-reviewed now.
+
+**Problem (A3 recap):** Each camera independently posts temporal
+objects through `api_objects_temporal_create`. Two cameras seeing one
+person create two objects; tracker auto-aim then fights itself or
+slews back-and-forth.
+
+**Three candidate policies + trade-offs:**
+
+| Policy | Pro | Con |
+|--------|-----|-----|
+| Highest-confidence wins | Trivial | Jitters at handoff zones when both YOLO scores are similar |
+| Weighted average | Smooth | Needs per-camera accuracy weight (we have it from Q5) |
+| First-camera-owns-TTL | No jitter, deterministic | Owning camera can be wrong when person walks into a zone it doesn't see |
+
+**Recommended: weighted clustering.**
+
+For each ingest call:
+1. Compute the detection's stage point (Q1 fix).
+2. Compute its weight:
+   ```
+   w = yolo_conf
+       × tier_weight[_method]            # homography 1.0 | fov 0.4 | raw 0.0
+       × hull_distance_falloff(stage_pt) # 1.0 inside marker hull,
+                                         # 0.2 at FOV edge, linear
+   ```
+3. Periodic deduplication pass (every `min(ttl)/4` seconds):
+   - Cluster all live `_temporal_objects` of the same `objectType`
+     within `trackReidMm` (default 500 mm).
+   - Each cluster collapses to a single object whose `pos` is
+     weight-averaged from its members; the surviving object inherits
+     the highest TTL in the cluster.
+   - Add a hidden `_camOrigins: [fid, fid, ...]` field for debugging.
+4. The auto-track evaluator uses the surviving cluster object — never
+   the raw per-camera detections.
+
+**Why this works:**
+- A `homography` camera near the person dominates an `fov` camera
+  far away — accuracy weight does the right thing.
+- A camera looking AT a marker hull edge falls off smoothly; no
+  cliff-edge handoff.
+- `raw` tier contributes weight 0 → its detections never poison the
+  cluster (consistent with Q5's "skip aim update on raw").
+- Code lives entirely in `parent_server.py`; `tracker.py` on the
+  Orange Pi continues to post per-camera detections — fusion is the
+  orchestrator's job.
+
+**Live-test step 7 measures:**
+- Ghost-object count per 30 s walk (target 0).
+- Handoff smoothness — pos-delta between consecutive cluster updates
+  when a person crosses between camera coverage zones (target
+  < 200 mm).
+- The two constants worth tuning live: `tier_weight["fov"]` (default
+  0.4) and the hull-falloff slope.
+
+Ticket: **P2** (depends on Q1 backend landing first; clean code split).
+Closes Q3, A3.
+
+#### Q11 — marker-coverage pre-cal UX → **ux-fix (#612 is build ticket)**
+
+**Answer:** A simple top-down overlay on the existing Layout viewport,
+rendered in the Calibration tab's stage-map section. No new graphics
+engine — reuse `scene-3d.js` orthographic top-view.
+
+**Visual elements (per camera):**
+
+1. **Stage rectangle** — full `(stage_w × stage_d)` mm, grey fill.
+2. **Marker dots** — surveyed ArUco positions from `_aruco_markers`.
+3. **Convex hull polygon** — yellow outline around the markers, with
+   "X% stage covered" badge (`hull_area / stage_area × 100`).
+4. **Per-camera FOV cone** — projected onto the floor plane via
+   `_pixel_to_stage` corner projection (call it for the four image
+   corners). Translucent green where camera sees the floor.
+5. **Coverage intersection** — region where (FOV cone) ∩ (marker
+   hull). This is the "trustworthy" zone for that camera. Solid
+   green fill.
+6. **Recommendation pin** — drop a magenta pin at the centroid of
+   the largest uncovered region inside the camera's FOV cone.
+   Tooltip: *"Place a marker here to expand coverage by ~ N%."*
+
+**Interactions:**
+- Click a marker dot → opens its edit modal (#596 marker registry).
+- Drag a phantom marker into the viewport → live-update the hull and
+  coverage-percent. Useful before the operator surveys the new pose.
+- Per-camera toggle in a sidebar lets operator see one camera at a
+  time or all overlaid.
+
+**Backend additions:**
+- `GET /api/cameras/<fid>/coverage` returns:
+  ```json
+  {
+    "fovCornersStage": [[x,y], [x,y], [x,y], [x,y]],
+    "markerHullArea": 1.2e6,
+    "stageArea": 4.5e6,
+    "coveragePct": 27,
+    "recommendedMarkerStage": [1800, 800]
+  }
+  ```
+- Pure derived data (no persistence); recompute on every call.
+
+**No-go alternatives:**
+- 3D viewport overlays — looks cool, but operator decisions are 2D
+  ("where on the floor"). Top-down is faster to read.
+- Auto-running coverage analysis on every layout edit — wait for
+  user to open the Calibration tab; cheap to compute on demand.
+
+**Build ticket already exists:** #612. Q11's spec belongs in #612's
+description; close #612 when the SPA piece ships.
+
+Ticket: **P2**. Closes Q11, B8 (operator guidance on marker placement).
+
+#### Q13 — camera-health dashboard → **ux-fix (composes Q5 endpoint)**
+
+**Answer:** Single panel showing all cameras side-by-side, reading
+the per-camera endpoint Q5 already specifies. Lives at the top of
+the Calibration tab; no new tab.
+
+**Per-camera card contents:**
+
+```
+┌─────────────────────────────────────────────────────┐
+│ EMEET-1  [🟢 calibrated]            [Run beam test] │
+│                                                     │
+│ Stage map:  3 markers · 12 mm RMS · 45 min ago     │
+│ Position:   (1500, 120, 1920) mm                    │
+│ Rotation:   tilt 30° pan 0° roll 0°                 │
+│ FOV:        90° diagonal                            │
+│ Tracking:   2.1 fps · last detection 0.3 s ago      │
+│ Last beam:  detected 12 min ago                     │
+│                                                     │
+│ Estimated tracking accuracy: ±150 mm                │
+└─────────────────────────────────────────────────────┘
+```
+
+Three new endpoint-level fields (extend the Q5
+`/api/cameras/<fid>/calibration-status` payload):
+
+```json
+{
+  "tracking": {"fps": 2.1, "lastDetectionSec": 0.3,
+               "frameCount": 1247, "errorCount": 3},
+  "lastBeamDetect": {"timestamp": ..., "ok": true,
+                     "centerPx": [320, 180]}
+}
+```
+
+`tracking.fps` and `lastBeamDetect` come from existing per-camera
+state on the Orange Pi (`tracker.py` already counts frames; beam
+detect history can be a 1-slot LRU).
+
+**Aggregate banner at top of panel:** "3 cameras: 🟢 2 calibrated,
+🟡 1 FOV fallback" — same logic as the Runtime banner from Q5.
+
+**Refresh strategy:** 5 s poll while tab visible (`document.
+visibilityState === "visible"`); pause when hidden. Each card has
+its own AbortController so tab-switch cancels in-flight requests.
+
+**No-go alternatives:**
+- WebSocket push of live tracking stats — defer; 5 s poll is fine
+  for a configuration screen, and we don't need new transport for
+  this. (Issue #2 is the WebSocket ticket; not a Q13 dependency.)
+- Dedicated "Cameras" tab — adds nav clutter for what's a 200-line
+  panel.
+
+Ticket: **P3**. Depends on Q5 backend + Q11 sharing the layout
+viewport idiom. Closes Q13.
+
+#### Q14 — end-to-end regression test → **test-fix (slots into #533/#409/#277/#280)**
+
+**Answer:** Two synthetic-pipeline tests, both pure-Python, no
+hardware, ride on the existing weekly Playwright runner (#280 infra,
+#277 epic). Q14 produces the **scope spec**; the implementation
+ticket is **#409** (already filed for the tracking half).
+
+**Test 1 — tracking pipeline (extends #409):**
+
+```
+Mock YOLO output → tracker.py post → orchestrator ingest
+  → temporal object → auto-track action → mover DMX value
+```
+
+Steps:
+1. Spin up parent server with factory-reset state + a fixture set
+   from `tests/regression/fixtures/`.
+2. POST a hand-crafted detection payload to
+   `/api/objects/temporal` (bypasses the camera node entirely;
+   simulates what `tracker.py` would post).
+3. Assert: `/api/objects` returns the temporal object at the
+   expected stage position (within 50 mm for homography case;
+   within 500 mm for fov-fallback case).
+4. Trigger an action with `aimTarget="head"`; assert the mover's
+   pan/tilt DMX values match expected within 0.5°.
+5. Repeat for: walking-line trajectory, two-cameras-one-person
+   (Q3 fusion), unmapped camera (Q5 raw tier).
+
+Expected ~150 lines, lives at `tests/regression/test_track_pipeline.py`.
+
+**Test 2 — mover-cal pipeline (extends #533):**
+
+```
+Synthetic ArUco frames + synthetic beam frames → camera_server
+  endpoint stubs → mover_calibrator → fitted ParametricFixtureModel
+```
+
+Steps:
+1. Generate 9 synthetic 640×480 frames containing ArUco markers at
+   known stage positions (use `cv2.aruco.drawMarker`); compute the
+   ground-truth homography.
+2. Generate 6 synthetic beam-spot frames at known DMX (pan, tilt)
+   pairs (white circle at the projected pixel; the projection uses
+   the truth model from Q10's test).
+3. Monkey-patch `_camera_snapshot` and `_beam_detect_flash` to
+   serve these frames in sequence.
+4. Run `_mover_cal_thread_markers_body` end-to-end.
+5. Assert: fitted model's `forward()` at any sample DMX is within
+   1.5° angular error of the truth model.
+6. Assert: `signProbe.ok == true` (Q10).
+
+Expected ~200 lines, lives at `tests/regression/test_mover_cal_pipeline.py`.
+
+**Ride-on changes:**
+- Add `tests/regression/fixtures/` with the canonical fixture set
+  used by both tests (3 cameras, 3 movers, 3 markers — mirrors the
+  basement rig).
+- `tests/regression/run_all.py` (already exists per CLAUDE.md) gets
+  the two new entries.
+
+**Cross-references** (per §10.3):
+- #533 — parent epic; Q14's deliverable lives here.
+- #409 — exact mocked-tracking spec, becomes the implementation ticket
+  for Test 1.
+- #277 — weekly Playwright harness; both tests slot in.
+- #280 — runner infra; no changes needed.
+
+Ticket: **P2**. Closes Q14, X3. Depends on Q1+Q4+Q5 (test 1 needs
+the new ingest contract) and Q10 (test 2 asserts signProbe).
+
 ### 8.2 Still-open questions (need live test or more digging)
 
 | Q | Status | Blocker |
 |---|--------|---------|
-| Q3 multi-camera fusion policy | open | Live-test step 7 (ghost-object count) |
-| Q6 default mover-cal mode | open | Live-test steps 6 — need per-mode residuals on basement rig |
-| Q11 marker-coverage UX | open | UX-fix; scope after Q6 |
-| Q13 "camera health" dashboard | open | Scope after Q1/Q7/Q12 |
-| Q14 end-to-end regression test | open | Scope after Q1/Q7/Q12 — test shape depends on final ingest contract |
+| Q6 default mover-cal mode | open | Live-test step 6 — need per-mode residuals on basement rig (only remaining hardware-bound question) |
+
+All other questions (Q1–Q5, Q7–Q14) closed in §8.1. Live-test
+constants for Q3 (tier_weight, hull-falloff slope) will be tuned
+during the basement session that closes Q6.
 
 ### 8.3 Prioritised fix list (from 8.1)
 
@@ -806,8 +1046,12 @@ Closes Q5.
 | P2 | Demote solvePnP to diagnostic in stage-map response; rename `cameraPosition` → `cameraPositionDiagnostic`; report pnp-vs-homography disagreement | Q8, B3 | — |
 | P2 | LM sign-confirmation probe — `verify_signs()` + `force_signs` kwarg on `fit_model`; kill the `<0.2° RMS` convention tie-break; synthetic test suite | Q10, B5 | — |
 | P2 | SPA badges + warning banners + track-action accuracy hint for unmapped/FOV-fallback cameras | Q5 (UX) | Q1+Q5-backend + Q12 shipped |
+| P2 | Multi-camera weighted-cluster fusion — periodic dedup pass over `_temporal_objects`; tier × confidence × hull-falloff weights | Q3, A3 | Q1 backend + Q5 `_method` stamping |
+| P2 | Marker-coverage pre-cal viewport — top-down hull + FOV cone overlay + recommendation pin; closes #612 | Q11, B8 | — |
+| P2 | E2E regression tests — synthetic tracking pipeline + synthetic mover-cal pipeline; ride on #277/#280 runner | Q14, X3 | Q1+Q4+Q5+Q10 shipped |
 | P3 (epic) | Retire v1 legacy helpers — 5-phase plan in Q9 | Q9, B4 | Q7 must land first |
 | P3 | Swap hand-rolled `_lm_solve` for `scipy.optimize.least_squares(loss="soft_l1")` — robust to flash outliers, drops ~40 lines | B5, B6 | Q10 probe lands first (test coverage) |
+| P3 | Camera-health dashboard panel at top of Calibration tab; per-camera card composing `/api/cameras/<fid>/calibration-status` + tracking/beam history | Q13 | Q5 backend + Q11 layout idiom |
 
 ---
 
@@ -910,3 +1154,13 @@ Mentioned only to confirm they were reviewed and are not affected:
   with Q1 P1 ticket; SPA badges + banners are a separate P2 UX
   ticket. Never refuse-to-start; never modal-block; always show
   best-available placement.
+- **2026-04-22** — closed Q3, Q11, Q13, Q14 (the no-hardware batch).
+  Q3: weighted-cluster fusion (tier × YOLO conf × hull falloff) +
+  periodic dedup pass over `_temporal_objects`. Q11: top-down hull
+  + FOV cone + recommendation pin overlay; #612 is the build
+  ticket. Q13: per-camera health-card panel composing the Q5
+  endpoint + tracking/beam history fields. Q14: two synthetic-
+  pipeline tests (tracking + mover-cal) riding on #277/#280
+  infrastructure; #409 becomes Test 1's implementation ticket.
+  Only **Q6** remains open — strictly hardware-bound (basement
+  rig, live-test step 6).
