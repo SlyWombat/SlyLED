@@ -708,12 +708,89 @@ def test_probe_auto_flips_nudge_at_dmx_boundary(): ...
 
 Ticket: **P2** (isolated, self-contained, no upstream deps). B5, Q10.
 
+#### Q5 — graceful degradation for unmapped camera → **code-fix (rides with Q1) + ux-fix**
+
+**Answer:** Three-tier transparent degradation; never refuse to start a
+show. The operator always sees the best placement we can compute plus
+a clear indicator of which tier is active.
+
+**Tier stack (already implemented at `_pixel_to_stage`, activated once Q1 wires it into the ingest path):**
+
+| Tier | Requires | Expected accuracy | Code path |
+|------|----------|-------------------|-----------|
+| `homography` | Surveyed ArUco stage-map in `_calibrations[fid].matrix` | ±50–150 mm inside hull, degrades outside | `_pixel_to_stage_homography` at 1859 |
+| `fov-projection` | Camera position + rotation + `fovDeg` + `fovType` (post-Q12) | ±300–800 mm at typical stage distances | `_pixel_to_stage` fallback at 1888–1997 |
+| `raw` | Nothing; `dist < 1` in the projection loop | unusable for auto-track; shown "as-is" in 3D viewport | line 1917 |
+
+**Backend contract additions (ride with the Q1 P1 ticket):**
+
+1. `_pixel_to_stage` returns the method used per detection
+   (`"homography" | "fov-projection" | "raw"`).
+2. `api_objects_temporal_create` echoes that method in the response
+   and stamps it onto the stored object: `_temporal_objects[n]._method`.
+3. Auto-track evaluator (`_evaluate_track_actions` at 10179) reads
+   `_method` and applies per-tier behaviour:
+   - `homography` — normal operation.
+   - `fov-projection` — normal operation but log a throttled warning
+     (once per 10 s per fixture) with the estimated accuracy.
+   - `raw` — **skip the aim update**; the fixture holds its last
+     good position. Prevents random slews from placing movers at
+     arbitrary spots when a camera ghost-detects. SPA shows the badge
+     red, operator knows to run stage-map.
+4. New GET endpoint `/api/cameras/<fid>/calibration-status` returns:
+   ```json
+   {
+     "tier": "homography" | "fov-projection" | "raw",
+     "stageMap": {"matchedIds": [...], "rmsError": 12.3, "ageMinutes": 45},
+     "position": {"ok": true, "x": 1500, "y": 120, "z": 1920},
+     "rotation": {"ok": true, "tilt": 30, "pan": 0, "roll": 0},
+     "fov": {"deg": 90, "type": "diagonal"},
+     "estimatedAccuracyMm": 150
+   }
+   ```
+   Feeds Q13's camera-health dashboard later; standalone endpoint now
+   so Setup-tab badges can call it without waiting on Q13.
+
+**Minimal UX (not the full Q13 dashboard — that's separate):**
+
+- **Setup-tab camera card** — single badge next to camera name:
+  🟢 Calibrated / 🟡 FOV fallback / 🔴 Not calibrated. Click →
+  opens Calibration tab pre-scrolled to this camera's stage-map
+  section.
+- **Runtime-tab Dashboard** — persistent amber banner if any active
+  camera is on tier `fov-projection`, red banner if any is on `raw`.
+  Dismissible for the session (`sessionStorage`), re-appears on
+  reload.
+- **Track-action editor** (`/api/actions` modal) — show
+  "Tracking accuracy: ~±150 mm (calibrated)" or
+  "~±600 mm (FOV fallback)" next to the camera picker, computed
+  from the tier and the stage depth. Uses same endpoint above.
+
+**What we explicitly do NOT do:**
+- Refuse to start the show when calibration is missing — operators
+  routinely tour venues where stage-map was never run; "run the show
+  anyway in 3D-preview mode" is required.
+- Silently substitute a default fixture for an uncalibrated mover.
+- Modal-block the SPA on startup if cameras are uncalibrated. It's
+  a banner, not a gate.
+
+**Depends on:** Q1 ingest wiring (returns the method), Q12 fovType
+(feeds the tier's accuracy estimate).
+
+Ticket split:
+- **P1** — backend additions (three lines in the Q1 patch to stamp
+  `_method`; one new GET endpoint; one new branch in
+  `_evaluate_track_actions`). Rolls into the Q1 P1 ticket.
+- **P2** — SPA badges + banners + track-action editor accuracy hint.
+  Small, self-contained, ships after Q1/Q12 backend.
+
+Closes Q5.
+
 ### 8.2 Still-open questions (need live test or more digging)
 
 | Q | Status | Blocker |
 |---|--------|---------|
 | Q3 multi-camera fusion policy | open | Live-test step 7 (ghost-object count) |
-| Q5 UX for unmapped camera | open | Depends on Q1/Q2 landing |
 | Q6 default mover-cal mode | open | Live-test steps 6 — need per-mode residuals on basement rig |
 | Q11 marker-coverage UX | open | UX-fix; scope after Q6 |
 | Q13 "camera health" dashboard | open | Scope after Q1/Q7/Q12 |
@@ -723,11 +800,12 @@ Ticket: **P2** (isolated, self-contained, no upstream deps). B5, Q10.
 
 | Priority | Ticket shape | Closes | Depends on |
 |----------|--------------|--------|------------|
-| P1 | Wire `api_objects_temporal_create` through `_pixel_to_stage` + return feet/head stage points; add `aimTarget` to track-actions | Q1, Q2, Q4, A1, A2, A6 | Q12 for accuracy of FOV fallback |
+| P1 | Wire `api_objects_temporal_create` through `_pixel_to_stage` + return feet/head stage points; add `aimTarget` to track-actions; stamp `_method` tier per-object; add `/api/cameras/<fid>/calibration-status` | Q1, Q2, Q4, Q5 (backend), A1, A2, A6 | Q12 for accuracy of FOV fallback |
 | P1 | Single-source homography: collapse to `_calibrations[str(fid)].matrix`, remove `_calibrated_cameras` dead code, migrate `fixture.homography` once | Q7, B2 | — |
 | P1 | `fovType` whitelist + unified `"diagonal"` default + honour in `_pixel_to_stage` | Q12, B9, #611 | — |
 | P2 | Demote solvePnP to diagnostic in stage-map response; rename `cameraPosition` → `cameraPositionDiagnostic`; report pnp-vs-homography disagreement | Q8, B3 | — |
 | P2 | LM sign-confirmation probe — `verify_signs()` + `force_signs` kwarg on `fit_model`; kill the `<0.2° RMS` convention tie-break; synthetic test suite | Q10, B5 | — |
+| P2 | SPA badges + warning banners + track-action accuracy hint for unmapped/FOV-fallback cameras | Q5 (UX) | Q1+Q5-backend + Q12 shipped |
 | P3 (epic) | Retire v1 legacy helpers — 5-phase plan in Q9 | Q9, B4 | Q7 must land first |
 | P3 | Swap hand-rolled `_lm_solve` for `scipy.optimize.least_squares(loss="soft_l1")` — robust to flash outliers, drops ~40 lines | B5, B6 | Q10 probe lands first (test coverage) |
 
@@ -824,3 +902,11 @@ Mentioned only to confirm they were reviewed and are not affected:
   convention tie-break at 378–384, `force_signs` kwarg on `fit_model`,
   synthetic test suite. Bonus P3 ticket added for scipy LM swap
   (soft_l1 loss — robust to beam-flash outliers).
+- **2026-04-22** — closed Q5: three-tier degradation
+  (`homography`/`fov-projection`/`raw`) already provided by
+  `_pixel_to_stage`; ingest path stamps `_method`; auto-track skips
+  aim update on `raw` (fixture holds last good). New
+  `/api/cameras/<fid>/calibration-status` endpoint. Backend rides
+  with Q1 P1 ticket; SPA badges + banners are a separate P2 UX
+  ticket. Never refuse-to-start; never modal-block; always show
+  best-available placement.
