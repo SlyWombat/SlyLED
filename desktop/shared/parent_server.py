@@ -1714,9 +1714,16 @@ def _cam_discover_bg():
 
 @app.get("/api/cameras")
 def api_cameras():
-    """List registered camera fixtures with live status."""
+    """List registered camera fixtures with live status.
+
+    Also syncs `fixture.name` from the node's per-sensor `customName` so
+    operator renames done on the RPi's `/config` page propagate to the
+    Setup tab without requiring re-registration. Node is source of truth
+    when online; stored name survives offline.
+    """
     cams = [f for f in _fixtures if f.get("fixtureType") == "camera"]
     result = []
+    dirty = False
     for c in cams:
         cam = dict(c)
         ip = c.get("cameraIp")
@@ -1730,11 +1737,23 @@ def api_cameras():
                 cam["hostname"] = info.get("hostname", "")
                 cam["capabilities"] = info.get("capabilities", {})
                 cam["rssi"] = info.get("rssi", 0)
+                # Sync fixture name from node customName when present.
+                sensors = info.get("cameras", [])
+                idx = c.get("cameraIdx", 0)
+                if idx < len(sensors):
+                    live_name = sensors[idx].get("customName") or ""
+                    if live_name and live_name != c.get("name"):
+                        c["name"] = live_name
+                        cam["name"] = live_name
+                        dirty = True
                 # Note: camera node trackingRunning is node-level, not per-sensor.
                 # Trust _tracking_state (per-fixture) instead of overriding from
                 # the node capability, which would mark all sensors on the same
                 # IP as tracking when only one was started.
         result.append(cam)
+    if dirty:
+        with _lock:
+            _save("fixtures", _fixtures)
     return jsonify(result)
 
 @app.get("/api/cameras/discover")
@@ -1803,9 +1822,14 @@ def api_cameras_register():
             if dup:
                 continue
             cam_info = cameras[cam_idx] if cam_idx < len(cameras) else {}
-            # Use user-set custom name from camera config page, fall back to hardware name
+            # Prefer the operator-set customName from the node's /config page.
+            # Single-sensor node → use customName directly; multi-sensor →
+            # prefix with the node name so both sensors remain distinguishable.
             cam_name = cam_info.get("customName") or cam_info.get("name", "")
-            fixture_name = f"{base_name} — {cam_name}" if len(cameras) > 1 and cam_name else base_name
+            if cam_name:
+                fixture_name = f"{base_name} — {cam_name}" if len(cameras) > 1 else cam_name
+            else:
+                fixture_name = base_name
             f = {
                 "id": _nxt_fix, "name": fixture_name,
                 "fixtureType": "camera", "type": "point",
