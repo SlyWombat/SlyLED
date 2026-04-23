@@ -2467,9 +2467,18 @@ def _compute_homography(stage_pts, pixel_pts):
 
     return H.flatten().tolist(), avg_error
 
-def _apply_homography(H_flat, px, py):
-    """Apply 3×3 homography to a pixel point → stage coords [x, z] in mm."""
-    H = [H_flat[0:3], H_flat[3:6], H_flat[6:9]]
+def _apply_homography(H_in, px, py):
+    """Apply 3×3 homography to a pixel point → stage coords [x, z] in mm.
+
+    Accepts either a flat 9-element list or a nested 3×3 list. Stage-map
+    persists nested (H_floor.tolist()) while older ArUco flows produced
+    flat; the helper now tolerates both so downstream consumers (#Q7
+    single-source homography) don't have to care which format landed."""
+    if (len(H_in) == 3 and isinstance(H_in[0], (list, tuple))
+            and len(H_in[0]) == 3):
+        H = H_in
+    else:
+        H = [H_in[0:3], H_in[3:6], H_in[6:9]]
     w = H[2][0]*px + H[2][1]*py + H[2][2]
     if abs(w) < 1e-10:
         w = 1e-10
