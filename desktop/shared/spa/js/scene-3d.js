@@ -572,19 +572,17 @@ function _s3dRenderObjects(){
     var geo=useBox?new THREE.BoxGeometry(sw,sh,sd):new THREE.PlaneGeometry(sw,sh);
     var mat=new THREE.MeshBasicMaterial({color:col,side:THREE.DoubleSide,opacity:(s.opacity||30)/100,transparent:true});
     var mesh=new THREE.Mesh(geo,mat);
-    // Position so bottom-front corner is at the object origin
-    mesh.position.set(sw/2,sh/2,useBox?(-sd/2):0);
+    // transform.pos is the object CENTER (data format); mesh stays at group origin
     grp.add(mesh);
 
     // Border edges
     var edgeMat=new THREE.LineBasicMaterial({color:col,opacity:0.8,transparent:true});
     var edge=new THREE.LineSegments(new THREE.EdgesGeometry(geo),edgeMat);
-    edge.position.copy(mesh.position);
     grp.add(edge);
 
-    // Label
+    // Label — just above the top of the object
     var lbl=_s3dLabel(s.name||'Object');
-    lbl.position.set(sw/2,sh+0.15,useBox?(-sd/2):0);
+    lbl.position.set(0,sh/2+0.15,0);
     grp.add(lbl);
 
     _s3d.scene.add(grp);
