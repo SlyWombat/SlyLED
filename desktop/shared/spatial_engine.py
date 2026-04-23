@@ -3,8 +3,14 @@ SlyLED Spatial Engine — geometry resolver and effect field evaluation.
 
 Phase 2: SpatialResolver — convert fixture geometry to per-pixel 3D coordinates.
 Phase 3: Intersector — evaluate spatial effect fields against pixel positions.
+Phase 4: Capability layer — fixture-type-agnostic response function
+    (docs/mover-alignment-review.md §0, §8.1b). A fixture at a stage-mm
+    pose evaluates any spatial effect to a bundle of primitive outputs
+    (color, intensity, aim, beam_width). The bundle is fixture-agnostic;
+    each consumer reads only the primitives it declares in `caps[]`.
 """
 
+from dataclasses import dataclass
 import math
 
 # ── Phase 2: SpatialResolver ────────────────────────────────────────────────
@@ -424,3 +430,158 @@ def blend_pixel_layers(layers, modes=None):
                 result[pi] = _blend_color(result[pi], layer[pi], mode)
 
     return result
+
+
+# ── Phase 4: Capability-layer primitive ──────────────────────────────────────
+#
+# The evaluator below is the single entry point for every spatial-effect
+# consumer: LED strings (bake path), DMX movers (bake path), and future
+# runtime consumers (Track actions, MoverControlEngine). It replaces the
+# per-shape duplication that existed in bake_engine (_compile_sphere_sweep /
+# _compile_plane_sweep / _compile_box / _compile_dmx_fixture).
+#
+# See docs/mover-alignment-review.md §8.1b Q8–Q11 for the architectural
+# decisions.
+
+# Capability tags — fixed vocabulary consumed by evaluate_primitive's caller
+# to decide which primitives to read out of the bundle. A fixture's caps[]
+# list is auto-derived from its profile by derive_caps(); no schema migration.
+CAP_COLOR_RGB     = "color.rgb"
+CAP_COLOR_WHITE   = "color.white"
+CAP_COLOR_WHEEL   = "color.wheel"
+CAP_INTENSITY     = "intensity.dimmer"
+CAP_DIRECTION     = "direction.pan-tilt"
+CAP_STROBE        = "strobe"
+CAP_BEAM_ZOOM     = "beam.zoom"
+CAP_BEAM_FOCUS    = "beam.focus"
+
+
+@dataclass
+class PrimitiveOutputs:
+    """Bundle of primitive outputs returned by evaluate_primitive.
+
+    A consumer reads only the fields its fixture's caps[] declares.
+    Unread fields are ignored — zero cost.
+
+    Fields:
+        color: (r, g, b) each in [0, 255]. Emissive primitive.
+        intensity: 0.0–1.0 dimmer value. 1.0 when the effect field covers
+            the fixture, 0.0 when out of range.
+        aim: (x, y, z) stage-mm target point, or None if the effect has no
+            directional component (e.g. a box field that isn't moving).
+            Consumed by fixtures with CAP_DIRECTION.
+        beam_width: degrees of beam cone, or None. Consumed by CAP_BEAM_ZOOM.
+    """
+    color: tuple       # (r, g, b), ints 0-255
+    intensity: float   # 0.0–1.0
+    aim: tuple = None  # (x, y, z) stage mm, or None
+    beam_width: float = None  # degrees, or None
+
+
+def evaluate_primitive(fixture_pose, effect, t):
+    """Evaluate a spatial effect at a fixture's stage-mm pose and time t.
+
+    Returns a PrimitiveOutputs bundle. Every consumer — LED strings, DMX
+    movers, floods — calls the same evaluator; the caller reads only the
+    primitives its caps[] declares.
+
+    Args:
+        fixture_pose: [x, y, z] in stage mm. For LED strings this is per-LED;
+            for DMX fixtures it's typically the fixture position (or a beam-
+            cone sample point — caller's choice).
+        effect: effect dict (shape, color, size, motion, ...).
+        t: time in seconds since effect start.
+
+    Returns:
+        PrimitiveOutputs bundle. `color` is always populated; `aim` is the
+        effect's current centre (where a mover participating in the effect
+        should point); `intensity` is 1.0 when the field covers the pose,
+        0.0 otherwise.
+    """
+    if effect is None:
+        return PrimitiveOutputs(color=(0, 0, 0), intensity=0.0, aim=None)
+
+    # Evaluate colour at this single pose by reusing the existing field
+    # evaluators — keeps one source of truth for the field geometry.
+    colors = evaluate_spatial_effect(effect, [list(fixture_pose)], t)
+    c = colors[0] if colors else [0, 0, 0]
+    color_tuple = (int(c[0]), int(c[1]), int(c[2]))
+
+    # Intensity: 1.0 when any channel is lit, 0.0 otherwise. Shape fields
+    # already do the distance-falloff; we surface the binary covered/not
+    # state here so dimmer-only fixtures (pars, washes without RGB) can
+    # participate.
+    intensity = 1.0 if any(v > 0 for v in color_tuple) else 0.0
+
+    # Aim: where a direction-capable fixture (mover) should point to
+    # participate in this effect. Re-uses effect_aim_point which returns
+    # the interpolated motion-path centre at time t.
+    aim_point = effect_aim_point(effect, t)
+    # Tuple for hashability / immutability
+    aim = (aim_point[0], aim_point[1], aim_point[2]) if aim_point else None
+
+    return PrimitiveOutputs(
+        color=color_tuple,
+        intensity=intensity,
+        aim=aim,
+        beam_width=None,
+    )
+
+
+def derive_caps(profile):
+    """Auto-derive the capability set of a DMX profile.
+
+    Scans the profile's channel list and returns the set of capability
+    tags the fixture can consume. A consumer iterates `caps` to decide
+    which primitives of a PrimitiveOutputs bundle to read.
+
+    Args:
+        profile: DMX profile dict (from dmx_profiles.py). Expects
+            `channels[]` with per-channel `type` and `capabilities[]`
+            plus optional `panRange` / `tiltRange` / `beamWidth`.
+
+    Returns:
+        list of capability tag strings (CAP_* constants). Sorted,
+        deduplicated. Empty list for a non-DMX fixture (caller passes
+        None).
+    """
+    if not profile:
+        return []
+
+    caps = set()
+    channels = profile.get("channels") or []
+
+    # Channel-type heuristics
+    has_r = any(ch.get("type") == "red" for ch in channels)
+    has_g = any(ch.get("type") == "green" for ch in channels)
+    has_b = any(ch.get("type") == "blue" for ch in channels)
+    if has_r and has_g and has_b:
+        caps.add(CAP_COLOR_RGB)
+    if any(ch.get("type") == "white" for ch in channels):
+        caps.add(CAP_COLOR_WHITE)
+    if any(ch.get("type") == "dimmer" for ch in channels):
+        caps.add(CAP_INTENSITY)
+    if any(ch.get("type") == "strobe" for ch in channels):
+        caps.add(CAP_STROBE)
+    if any(ch.get("type") in ("zoom",) for ch in channels):
+        caps.add(CAP_BEAM_ZOOM)
+    if any(ch.get("type") in ("focus",) for ch in channels):
+        caps.add(CAP_BEAM_FOCUS)
+
+    # Pan/tilt: either named channels or profile-level ranges
+    has_pan = any(ch.get("type") == "pan" for ch in channels)
+    has_tilt = any(ch.get("type") == "tilt" for ch in channels)
+    if has_pan and has_tilt:
+        caps.add(CAP_DIRECTION)
+    elif (profile.get("panRange") or 0) > 0 and (profile.get("tiltRange") or 0) > 0:
+        caps.add(CAP_DIRECTION)
+
+    # Colour wheel: any channel whose capabilities[] contains a WheelSlot
+    # with colour annotation. Re-checks the GDTF-style nested capabilities.
+    for ch in channels:
+        for cap in (ch.get("capabilities") or []):
+            if cap.get("type") == "WheelSlot" and (cap.get("color") or cap.get("colorHex")):
+                caps.add(CAP_COLOR_WHEEL)
+                break
+
+    return sorted(caps)
