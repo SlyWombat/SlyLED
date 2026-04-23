@@ -478,6 +478,58 @@ positions *before* temporal-object ingest. Legacy v1 calibration
 data is not consulted on any aim path. Pre-condition for §0
 already holds.
 
+### 8.1b Architectural-bet decisions (2026-04-23)
+
+Q8–Q11 resolved as a single coherent design. Implementation
+scoped as one PR per §2 (no backward-compat, no parallel legacy
+path).
+
+**Q8 — response-function shape (decided).** The capability-layer
+evaluator returns a **bundle of primitive outputs**, not scalar
+RGB:
+
+```
+evaluate(fixture_pose, effect, t) → {
+    color:       [r, g, b],
+    intensity:   0.0–1.0,
+    aim:         [x, y, z] | None,    # stage-mm target point
+    beam_width:  deg | None,
+}
+```
+
+Each fixture's `caps[]` (Q12) declares which primitives it
+consumes; outputs it doesn't read are discarded. Direction is a
+first-class primitive, not a separate layer — "all heads aim at
+the leading edge of the wave" is `aim` computed from the effect's
+geometry, not a bolt-on. Cost over scalar-RGB is single-digit
+microseconds per evaluation; negligible at 40 Hz × ~20 fixtures.
+
+**Q9 — bake-time vs runtime (decided).** **Runtime-first
+evaluator, bake = sample(evaluator, interval).** Same function
+drives Track actions (Fn 1), `MoverControlEngine` (Fn 2), and the
+bake path. Bake emits `ACT_DMX_SCENE` segments by sampling the
+evaluator at a configurable slice (default 0.05 s, down from the
+hard-coded 1 s today). Runtime and bake cannot drift.
+
+**Q10 — first canonical effect (decided).** **Colour wash sweep**
+(`shape: plane`). Matches operator's stated example; simplest
+geometry (linear, not radial); exercises `color` + `aim` + `intensity`
+primitives in one clip. Sphere follows as the second effect
+(exercises point-follow direction). Synthetic acceptance test
+(Q14 prototype): 10 movers at random stage XY, wash travels
+stage-left → stage-right at 1 m/s, assert each mover fires at the
+expected wall-clock time ±50 ms in the expected RGB.
+
+**Q11 — refactor scope (decided).** **One PR — all three shapes
+in a single landing.** First PR includes: new evaluator contract,
+`caps[]` auto-derived from profile, plane + sphere + box migrated
+onto the new layer, LED-string consumer rewritten, DMX consumer
+rewritten, old `_compile_sphere_sweep` / `_compile_plane_sweep`
+/ `_compile_box` / `_compile_dmx_fixture` deleted, evaluator
+unit tests, Q14 synthetic integration test, Playwright test for
+the operator flow (Timeline → add effect → bake → verify DMX
+output in emulation). Per §2, no legacy path survives the PR.
+
 ### 8.2 Cross-question synthesis
 
 - **Q3 + Q4: Fn 1 polish gap.** No smoothing on the 40 Hz runtime
