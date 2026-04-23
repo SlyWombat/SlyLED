@@ -530,6 +530,33 @@ unit tests, Q14 synthetic integration test, Playwright test for
 the operator flow (Timeline → add effect → bake → verify DMX
 output in emulation). Per §2, no legacy path survives the PR.
 
+### 8.1c Implementation landed (2026-04-23, commits on this branch)
+
+| Phase | Commit | What |
+|-------|--------|------|
+| 1 | `7a2aa0a` | `evaluate_primitive()` + `PrimitiveOutputs` + `derive_caps()` + `CAP_*` constants in `spatial_engine.py` (31 unit assertions) |
+| 2 | `94c30a2` | `shape_coverage_time()` generic over all shapes (+8 assertions; 39 total) |
+| 3–5 | `7872e63` | `_compile_capability_for_string` + `_compile_capability_for_dmx` replace the four legacy compilers; `_sphere_intersection_time` + dispatcher deleted; `bake_timeline` call sites updated; `test_dmx_moving_heads.py` updated. Net −336 lines. |
+| 6 | `745fa0c` | `test_colour_wash_sweep.py` (Q14 synthetic — 56 assertions) + `test_capability_bake_e2e.py` (Playwright-first E2E with API-only fallback — 8 assertions) |
+
+Results: 39 + 56 + 8 = **103 new assertions pass**. No regression on
+`test_dmx_moving_heads.py` (same 65/73 before and after — the 8
+pre-existing failures are in `show_generator` preset installation and
+predate this work).
+
+Behavioural changes that survive into production:
+- **Slice interval tightened from 1 s to 0.05 s** per Q9. Moving DMX
+  effects now emit ~20 segments per second instead of 1; adjacent
+  identical segments are consolidated so static regions still collapse
+  to a single segment.
+- **Box shape now participates in sweep detection** — previously
+  `_compile_box` always emitted `ACT_SOLID`; moving boxes now emit
+  `ACT_WIPE` when the field sweeps across a string.
+- **Aim vector is now computed in one place** (`effect_aim_point` via
+  the evaluator) for every consumer — future runtime consumers (Track
+  actions, `MoverControlEngine`) can plug into the same function
+  without re-deriving geometry.
+
 ### 8.2 Cross-question synthesis
 
 - **Q3 + Q4: Fn 1 polish gap.** No smoothing on the 40 Hz runtime
