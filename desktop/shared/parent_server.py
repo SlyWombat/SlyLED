@@ -3504,6 +3504,13 @@ def api_fixture_dmx_test(fid):
         return jsonify(err="Fixture has no profile"), 400
     uni = f.get("dmxUniverse", 1)
     addr = f.get("dmxStartAddr", 1)
+    # #622 — refuse to write unless the engine is running. Previously
+    # this lazy-created a universe buffer and silently returned OK; the
+    # fixture wouldn't move but keep-alive frames would start once the
+    # engine came up later.
+    if not _artnet.running:
+        return jsonify(err="Art-Net engine not running — start it from "
+                            "Settings → DMX Engine before testing a fixture"), 503
     try:
         uni_buf = _artnet.get_universe(uni)
     except Exception:
@@ -5135,7 +5142,11 @@ def api_mover_cal_aim(fid):
             pan, tilt = _mcal.grid_inverse(grid, px, py)
 
     if pan is not None:
-        # Send DMX
+        # Send DMX. #622 — only when the engine is running; otherwise
+        # get_universe would lazy-create a keep-alive-active buffer.
+        if not _artnet.running:
+            return jsonify(err="Art-Net engine not running — start it from "
+                                "Settings → DMX Engine before aiming"), 503
         pid = f.get("dmxProfileId")
         prof_info = _profile_lib.channel_info(pid) if pid else None
         if prof_info:
@@ -10230,8 +10241,12 @@ def api_fixtures_live():
                 engine = _artnet
             elif _sacn.running:
                 engine = _sacn
-            if engine:
-                uni = engine.get_universe(uni_num)
+            # #622 — peek_universe avoids conjuring a keep-alive-active
+            # universe buffer just because the dashboard polls this
+            # endpoint. If the engine hasn't been asked to write to this
+            # universe yet, uni is None and the live values stay at zero.
+            uni = engine.peek_universe(uni_num) if engine else None
+            if engine and uni is not None:
                 if ch_map:
                     if "red" in ch_map:
                         entry["r"] = uni.get_channel(addr + ch_map["red"])
@@ -10259,7 +10274,7 @@ def api_fixtures_live():
                     if count >= 4:
                         entry["dimmer"] = uni.get_channel(addr + 3)
             # Color wheel slot lookup — populate swatch color from wheel slot
-            if ch_map and "color-wheel" in ch_map and engine:
+            if ch_map and "color-wheel" in ch_map and engine and uni is not None:
                 cw_val = uni.get_channel(addr + ch_map["color-wheel"])
                 entry["colorWheelDmx"] = cw_val
                 for ch_def in (prof_info.get("channels") or []):
@@ -11301,12 +11316,15 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
     if not dmx_fixtures:
         log.info("DMX playback: no baked segments but Track actions present — loop will run for tracking")
     log.info("DMX playback: %d fixture(s), duration=%ds, loop=%s", len(dmx_fixtures), duration, loop)
-    # Auto-start Art-Net engine if not running
+    # #622 — do NOT auto-start the DMX engine. Previously a timeline
+    # targeting only LED children would still bring Art-Net up; now we
+    # run the playback loop regardless (LED output is unaffected) and
+    # only engage DMX writes if the operator already started the engine.
     proto = _dmx_settings.get("protocol", "artnet")
     engine = _artnet if proto == "artnet" else _sacn
     if not engine.running:
-        engine.start()
-        log.info("DMX playback: auto-started %s engine", proto)
+        log.info("DMX playback: engine is stopped — LED children will play, "
+                 "DMX fixtures will not receive output this cycle")
     # Wait until go_epoch
     wait = go_epoch - time.time()
     if wait > 0:
@@ -11334,6 +11352,13 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
             elapsed = elapsed % duration
         elif elapsed > duration:
             break  # show ended
+        # #622 — skip DMX writes entirely when the engine is stopped.
+        # Previously we still iterated and called engine.get_universe(),
+        # which lazy-created keep-alive-active buffers that would emit
+        # ArtDMX as soon as the engine started later.
+        if not engine.running:
+            frame_count += 1
+            continue
         # Evaluate each DMX fixture — merge ALL matching segments per-channel.
         # Higher-priority segments (_pri) override lower ones per-channel,
         # allowing e.g. a PT sweep to control pan/tilt while a base wash
@@ -11659,8 +11684,11 @@ def _dmx_playback_single(tid, go_epoch, duration):
 
     proto = _dmx_settings.get("protocol", "artnet")
     engine = _artnet if proto == "artnet" else _sacn
+    # #622 — don't auto-start. If the engine is stopped we still let the
+    # timer loop run so timeline duration is respected, but DMX writes
+    # are skipped inside the inner loop.
     if not engine.running:
-        engine.start()
+        log.info("DMX playback (single): engine stopped — DMX writes skipped")
 
     interval = 0.025
     next_frame = time.monotonic()
@@ -11680,6 +11708,10 @@ def _dmx_playback_single(tid, go_epoch, duration):
             continue
         if elapsed > duration:
             break
+        # #622 — skip DMX writes when engine is stopped (timer still ticks).
+        if not engine.running:
+            frame_count += 1
+            continue
         for fx in dmx_fixtures:
             # #511 — skip playback for fixtures mid-calibration.
             if _fixture_is_calibrating(fx.get("id")):
