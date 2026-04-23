@@ -4559,17 +4559,17 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
         log.warning("MOVER-CAL %d: verification failed (%s) — continuing", fid, e)
         job["verification"] = {"skipped": True, "reason": f"exception: {e}"}
 
-    # Save calibration data
+    # Save calibration data. Q9-P3 phase 4 — only the samples list is a
+    # schema-v2 input; `grid` / `boundaries` / `foundAt` / `centerPan` /
+    # `centerTilt` were v1-only structures whose values no longer have any
+    # read path. Dropped from the persisted cal to keep mover_calibrations.json
+    # clean. The job result still exposes sampleCount / gridSize so the SPA
+    # progress card works unchanged.
     cal_data = {
         "cameraId": cam["id"],
         "color": mover_color,
         "samples": samples,
-        "grid": grid,
-        "boundaries": boundaries,
         "sampleCount": len(samples),
-        "foundAt": found,
-        "centerPan": found_pan,    # calibrated pan center (#366)
-        "centerTilt": found_tilt,  # calibrated tilt center (#366)
         "timestamp": time.time(),
     }
     if job.get("verification"):
@@ -4577,6 +4577,15 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
     _mover_cal[str(fid)] = cal_data
     _save("mover_calibrations", _mover_cal)
     _invalidate_mover_model(fid)
+    # Q9-P3 phase 3 — fit v2 inline immediately. Previously the save left a
+    # v1 cal on disk and lazy-migrated on first _get_mover_model call.
+    # Eagerly fitting here means a successful legacy run writes v2 directly,
+    # so there's no migration state to carry across restarts.
+    try:
+        _get_mover_model(fid)
+    except Exception as _e:
+        log.warning("Q9-P3 legacy cal: inline v2 fit failed for fid=%d: %s "
+                    "(cal stays v1 until next use)", fid, _e)
     f["moverCalibrated"] = True
     # #511 — release the lock before persisting so isCalibrating doesn't
     # leak into fixtures.json.
@@ -4591,6 +4600,14 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
             job["fit"] = v2_cal["fit"]
         if "model" in v2_cal:
             job["model"] = v2_cal["model"]
+    else:
+        # Q9-P3 phase 2 — deprecation breadcrumb when a legacy cal stays v1
+        # on disk after save. A v2 fit normally happens inline above; only
+        # truly under-sampled or degenerate rigs land here. Operators see
+        # this in logs and can decide whether the cal is usable.
+        log.warning("Q9-P3: fixture %d cal saved as v1 (%d samples) — v2 fit "
+                    "deferred; SPA will surface the v1 grid until fit succeeds",
+                    fid, len(samples))
 
     job["result"] = {"sampleCount": len(samples), "gridSize": len(grid.get("panSteps", []))}
     job["progress"] = 100
