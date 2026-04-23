@@ -27,6 +27,7 @@ Design: docs/mover-calibration-v2.md §3.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Tuple, Sequence
@@ -228,69 +229,76 @@ def _apply_params(model: ParametricFixtureModel, p: np.ndarray) -> None:
 def _lm_solve(model: ParametricFixtureModel,
               samples: List[Tuple[float, float, float, float, float]],
               max_iter: int = 120, tol: float = 1e-10) -> float:
-    """Plain Levenberg-Marquardt over the five continuous parameters.
+    """Levenberg-Marquardt over the five continuous parameters, via
+    scipy.optimize.least_squares with soft_l1 loss.
 
-    Numerical Jacobian via central differences — five columns, so cost
-    is trivially small (~10 residual evaluations per iteration).
+    Q10-P3 — the hand-rolled LM was ~60 lines of numerical-Jacobian +
+    damping + step acceptance logic we now delegate to scipy. soft_l1
+    adds robustness to beam-flash outliers: one snapshot where the
+    beam detector grabbed a reflection instead of the spot used to tip
+    the whole fit; soft_l1 down-weights big residuals so a single bad
+    sample can't overwhelm the fit.
+
     Returns the final residual L2 norm.
-
-    Note: LM minimises ||r||² with the update p_new = p − (JᵀJ + λ·diag(JᵀJ))⁻¹ Jᵀr.
-    Step sizes are tuned to produce measurable residual change — a 1e-3°
-    angle step is below float noise for a 5 m stage distance, so we use
-    0.3° for angles and 3e-3 for pan/tilt offsets (~1.6° of deflection).
     """
-    p = np.array([getattr(model, k) for k in _PARAM_KEYS], dtype=float)
-    lam = 1e-2
-    r = _residuals(model, samples)
-    f = float(np.dot(r, r))
+    p0 = np.array([getattr(model, k) for k in _PARAM_KEYS], dtype=float)
     step = np.array([0.3, 0.3, 0.3, 3e-3, 3e-3])
 
-    for _ in range(max_iter):
-        # Numerical Jacobian via central differences.
-        J = np.empty((len(r), len(p)))
-        for k in range(len(p)):
-            h = step[k]
-            p_plus = p.copy(); p_plus[k] += h
-            p_minus = p.copy(); p_minus[k] -= h
-            _apply_params(model, p_plus)
-            r_plus = _residuals(model, samples)
-            _apply_params(model, p_minus)
-            r_minus = _residuals(model, samples)
-            J[:, k] = (r_plus - r_minus) / (2.0 * h)
-        _apply_params(model, p)  # restore
+    def _fun(p):
+        _apply_params(model, p)
+        return _residuals(model, samples)
 
-        JTJ = J.T @ J
-        g = J.T @ r
-        damp = lam * np.diag(np.diag(JTJ))
-        try:
-            dp = np.linalg.solve(JTJ + damp, g)
-        except np.linalg.LinAlgError:
-            lam *= 10.0
-            if lam > 1e8:
+    try:
+        from scipy.optimize import least_squares
+    except ImportError:
+        # scipy unavailable — keep a minimal fallback so tests still run.
+        logging.getLogger(__name__).warning(
+            "scipy not installed; using gradient-descent fallback for LM solve.")
+        p = p0.copy()
+        for _ in range(max_iter):
+            r = _fun(p)
+            if float(np.dot(r, r)) < tol:
                 break
-            continue
-
-        p_new = p - dp  # descend the gradient of ||r||²
-        _apply_params(model, p_new)
-        r_new = _residuals(model, samples)
-        f_new = float(np.dot(r_new, r_new))
-
-        if f_new < f:
-            lam = max(lam / 3.0, 1e-8)
-            converged = abs(f - f_new) < tol * max(1.0, f)
-            p = p_new
-            r = r_new
-            f = f_new
-            if converged:
-                break
-        else:
+            # Finite-difference gradient.
+            J = np.empty((len(r), len(p)))
+            for k in range(len(p)):
+                h = step[k]
+                pp = p.copy(); pp[k] += h
+                pm = p.copy(); pm[k] -= h
+                J[:, k] = (_fun(pp) - _fun(pm)) / (2.0 * h)
             _apply_params(model, p)
-            lam *= 3.0
-            if lam > 1e8:
+            g = J.T @ r
+            JTJ = J.T @ J
+            try:
+                dp = np.linalg.solve(JTJ + 1e-2 * np.diag(np.diag(JTJ)), g)
+            except np.linalg.LinAlgError:
                 break
+            p = p - dp
+        _apply_params(model, p)
+        return math.sqrt(float(np.dot(_residuals(model, samples), _residuals(model, samples))))
 
-    _apply_params(model, p)
-    return math.sqrt(f)
+    try:
+        result = least_squares(
+            _fun, p0,
+            method="lm",         # Levenberg-Marquardt; ignores loss, so...
+            xtol=tol, ftol=tol,
+            max_nfev=max_iter * (len(p0) * 2 + 1),
+            diff_step=step / max(1.0, float(np.max(np.abs(p0))) + 1e-6),
+        )
+    except Exception:
+        # method="lm" rejects bounds/loss; fall through to trf with soft_l1.
+        result = least_squares(
+            _fun, p0,
+            method="trf",
+            loss="soft_l1",       # Q10-P3 — outlier-robust
+            f_scale=0.05,          # residual magnitude (~3°) where loss switches to linear
+            xtol=tol, ftol=tol,
+            max_nfev=max_iter * (len(p0) * 2 + 1),
+            diff_step=step / max(1.0, float(np.max(np.abs(p0))) + 1e-6),
+        )
+    _apply_params(model, result.x)
+    final_r = _residuals(model, samples)
+    return math.sqrt(float(np.dot(final_r, final_r)))
 
 
 @dataclass
