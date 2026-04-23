@@ -13645,6 +13645,47 @@ def _check_single_instance(port):
         pass
     return False
 
+def _migrate_v1_mover_cals():
+    """Q9-P3 Phase 1 — eager v1→v2 mover-cal migration on startup.
+
+    Walks every entry in _mover_cal, attempts to fit a ParametricFixtureModel
+    (v2) for any cal still stored as v1 grid samples. Successful fits are
+    persisted inline as v2; failures log a warning and leave the v1 cal as-
+    is (lazy migration on first use will retry).
+
+    Runs once at startup. Subsequent sessions observe only v2 on disk, which
+    is the prerequisite for Q9 phases 2-5 (remove v1 read-paths, delete v1
+    grid fitting code, clean up dead dict keys).
+    """
+    v1_count = 0
+    migrated = 0
+    failed = 0
+    for fid_str, cal in list(_mover_cal.items()):
+        if cal.get("version") == 2 and cal.get("model"):
+            continue
+        if not cal.get("samples"):
+            continue
+        v1_count += 1
+        try:
+            fid = int(fid_str)
+        except (TypeError, ValueError):
+            failed += 1
+            continue
+        try:
+            model = _get_mover_model(fid)
+        except Exception as e:
+            log.warning("v1 migration failed for fid=%s: %s", fid_str, e)
+            failed += 1
+            continue
+        if model is not None and cal.get("version") == 2:
+            migrated += 1
+        else:
+            failed += 1
+    if v1_count:
+        log.info("Q9 mover-cal migration: %d v1 cals on disk — %d migrated to v2, "
+                 "%d left as v1 (will retry lazily)", v1_count, migrated, failed)
+
+
 if __name__ == "__main__":
     # #628 — re-derive stage bounds once at startup so rigs with stale
     # manually-edited stage.json self-heal without operator intervention.
@@ -13653,6 +13694,12 @@ if __name__ == "__main__":
         _apply_auto_stage_bounds()
     except Exception as _e:
         log.warning("stage auto-derive on startup failed: %s", _e)
+    # Q9-P3 Phase 1 — try to migrate any v1 mover cals eagerly so the v2
+    # pipeline is the only read path operators encounter after a restart.
+    try:
+        _migrate_v1_mover_cals()
+    except Exception as _e:
+        log.warning("v1 mover-cal migration on startup failed: %s", _e)
     ap = argparse.ArgumentParser(description="SlyLED Parent Server")
     ap.add_argument("--port",       type=int, default=8080)
     ap.add_argument("--host",       default="0.0.0.0")
