@@ -3245,6 +3245,31 @@ def api_camera_calibration_get(fid):
                    timestamp=cal.get("timestamp"))
 
 
+@app.delete("/api/cameras/<int:fid>/calibration")
+def api_camera_calibration_delete(fid):
+    """#619 — discard a camera's stage-map calibration. The rig moves, the
+    markers move, the operator needs a way to say 'this calibration is
+    stale, throw it out' without falling back to a whole-project factory
+    reset. Complements the existing DELETE /api/calibration/mover/<fid>
+    route for mover calibrations.
+
+    Q7 single-source-homography made this clean to add: there's only one
+    place the matrix lives now (``_calibrations[str(fid)]``), so clearing
+    that one key removes every downstream consumer's access.
+    """
+    f = next((x for x in _fixtures
+              if x["id"] == fid and x.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    existed = _calibrations.pop(str(fid), None) is not None
+    if existed:
+        try:
+            _save("calibrations", _calibrations)
+        except Exception as e:
+            log.warning("calibration delete: persist failed for fid=%d: %s", fid, e)
+    return jsonify(ok=True, removed=existed)
+
+
 @app.get("/api/cameras/<int:fid>/calibration-status")
 def api_camera_calibration_status(fid):
     """Q5 — return the placement-tier health for a camera so the SPA can

@@ -529,10 +529,10 @@ function showCameraHealth(){
   h+='<div style="font-size:.75em;color:#94a3b8;margin-bottom:.4em">Per-camera cal tier and fit quality. Run stage-map to update.</div>';
   h+='<table class="tbl" style="width:100%;font-size:.78em"><tr>'
     +'<th>Camera</th><th>Tier</th><th>Markers</th><th>RMS (px)</th>'
-    +'<th>Intrinsics</th><th>Pos</th><th>Last Cal</th></tr>';
+    +'<th>Intrinsics</th><th>Pos</th><th>Last Cal</th><th></th></tr>';
   cams.forEach(function(cam){
     h+='<tr id="camhealth-row-'+cam.id+'"><td>'+escapeHtml(cam.name||('cam '+cam.id))+'</td>'
-      +'<td colspan="6" style="color:#64748b">loading...</td></tr>';
+      +'<td colspan="7" style="color:#64748b">loading...</td></tr>';
   });
   h+='</table>';
   panel.innerHTML=h;
@@ -543,7 +543,7 @@ function showCameraHealth(){
       if(!row)return;
       if(!r||!r.ok){
         row.innerHTML='<td>'+escapeHtml(cam.name||('cam '+cam.id))+'</td>'
-          +'<td colspan="6" style="color:#f87171">'+escapeHtml((r&&r.err)||'query failed')+'</td>';
+          +'<td colspan="7" style="color:#f87171">'+escapeHtml((r&&r.err)||'query failed')+'</td>';
         return;
       }
       var tierBg = r.tier==='homography'?'#065f46':r.tier==='fov-projection'?'#78350f':'#7f1d1d';
@@ -556,14 +556,45 @@ function showCameraHealth(){
       var intrColor = intr==='calibrated'?'#4ade80':'#fbbf24';
       var pos = r.hasPosition?'<span style="color:#4ade80">✓</span>':'<span style="color:#f87171">✗</span>';
       var ts = r.timestamp?(new Date(r.timestamp*1000)).toLocaleString():'—';
+      // #619 — clear-cal action. Available only for calibrated cameras;
+      // confirms before firing so an accidental click doesn't blow away
+      // a good cal.
+      var clearBtn = r.calibrated
+        ? '<button class="btn" onclick="clearCameraCal('+cam.id+')" '
+          +'style="font-size:.7em;padding:.1em .35em;background:#7f1d1d;color:#fca5a5" '
+          +'title="Discard this cameras homography — use after a rig move or marker replacement">Clear</button>'
+        : '—';
       row.innerHTML='<td>'+escapeHtml(cam.name||('cam '+cam.id))+'</td>'
         +'<td>'+tierBadge+'</td>'
         +'<td>'+markers+'</td>'
         +'<td style="color:'+rmsColor+';font-family:monospace">'+rms+'</td>'
         +'<td style="color:'+intrColor+';font-size:.8em">'+escapeHtml(intr)+'</td>'
         +'<td>'+pos+'</td>'
-        +'<td style="font-size:.78em;color:#94a3b8">'+escapeHtml(ts)+'</td>';
+        +'<td style="font-size:.78em;color:#94a3b8">'+escapeHtml(ts)+'</td>'
+        +'<td>'+clearBtn+'</td>';
     });
+  });
+}
+
+
+// #619 — discard a camera's stage-map calibration so the operator can
+// re-seed after a rig move without falling back to a whole-project
+// factory reset. Refresh the panel afterward so the tier badge drops
+// from H → FOV or RAW depending on what's left.
+function clearCameraCal(fid){
+  if(!confirm('Discard this cameras calibration? The operator will need to re-run stage-map before tracking is accurate again.'))return;
+  ra('DELETE','/api/cameras/'+fid+'/calibration',null,function(r){
+    if(r&&r.ok){
+      // Reload fixtures so the H/FOV/RAW badge on the fixtures panel
+      // reflects the new cal state, then re-open health to see the row.
+      if(typeof loadFixtures==='function'){loadFixtures(function(){
+        if(_camHealthOpen){_camHealthOpen=false;showCameraHealth();}
+      });}else{
+        if(_camHealthOpen){_camHealthOpen=false;showCameraHealth();}
+      }
+    }else{
+      alert('Clear failed: '+((r&&r.err)||'unknown'));
+    }
   });
 }
 
