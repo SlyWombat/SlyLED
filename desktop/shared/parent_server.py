@@ -200,6 +200,15 @@ for _f in _fixtures:
         if "fovDeg" not in _f:
             _f["fovDeg"] = 60
             _fix_patched = True
+        # #Q12 — default existing cameras to "diagonal" (matches how most
+        # webcam manufacturers publish the spec). Whitelist enforced on
+        # write via _normalise_fov_type; this migration just backfills.
+        _valid_ft = ("horizontal", "vertical", "diagonal")
+        _stored_ft = _f.get("fovType")
+        if _stored_ft is None or (isinstance(_stored_ft, str)
+                                   and _stored_ft.strip().lower() not in _valid_ft):
+            _f["fovType"] = "diagonal"
+            _fix_patched = True
     # #484 phase 5 — strip legacy gyro-tuning fields from persisted data.
     # These were consumer-owned tunables in the delta-path era; the
     # stage-space primitive doesn't use them and the SPA no longer
@@ -1482,6 +1491,11 @@ def api_fixtures_create():
         fov = body.get("fovDeg")
         if fov is not None and (not isinstance(fov, (int, float)) or fov < 1 or fov > 180):
             return jsonify(err="fovDeg must be 1-180"), 400
+        # #Q12 — fovType whitelist
+        if "fovType" in body and body["fovType"] is not None:
+            ft_raw = body["fovType"]
+            if not isinstance(ft_raw, str) or ft_raw.strip().lower() not in _FOV_TYPE_WHITELIST:
+                return jsonify(err=f"fovType must be one of {list(_FOV_TYPE_WHITELIST)}"), 400
     with _lock:
         f = {
             "id": _nxt_fix, "name": name or f"Fixture {_nxt_fix}",
@@ -1500,6 +1514,7 @@ def api_fixtures_create():
             f["dmxProfileId"] = body.get("dmxProfileId")
         if fixture_type == "camera":
             f["fovDeg"] = body.get("fovDeg", 60)
+            f["fovType"] = _normalise_fov_type(body.get("fovType"))
             f["cameraUrl"] = body.get("cameraUrl", "")
             f["resolutionW"] = body.get("resolutionW", 1920)
             f["resolutionH"] = body.get("resolutionH", 1080)
@@ -1558,6 +1573,11 @@ def api_fixture_update(fid):
         fov = body["fovDeg"]
         if not isinstance(fov, (int, float)) or fov < 1 or fov > 180:
             return jsonify(err="fovDeg must be 1-180"), 400
+    # #Q12 — fovType whitelist
+    if ft == "camera" and "fovType" in body and body["fovType"] is not None:
+        ft_raw = body["fovType"]
+        if not isinstance(ft_raw, str) or ft_raw.strip().lower() not in _FOV_TYPE_WHITELIST:
+            return jsonify(err=f"fovType must be one of {list(_FOV_TYPE_WHITELIST)}"), 400
     if ft == "camera":
         if "trackClasses" in body:
             tc = body["trackClasses"]
@@ -1582,11 +1602,16 @@ def api_fixture_update(fid):
     for k in ("name", "type", "fixtureType", "childId", "childIds", "strings",
               "rotation", "orientation", "mountedInverted", "aoeRadius", "meshFile",
               "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId",
-              "fovDeg", "cameraUrl", "cameraIp", "cameraIdx", "resolutionW", "resolutionH",
+              "fovDeg", "fovType", "cameraUrl", "cameraIp", "cameraIdx", "resolutionW", "resolutionH",
               "trackClasses", "trackFps", "trackThreshold", "trackTtl", "trackReidMm",
               "gyroChildId", "assignedMoverId", "gyroEnabled", "smoothing"):
         if k in body:
-            f[k] = body[k]
+            # #Q12 — normalise fovType on write so stored value is always in
+            # the whitelist (inputs go through _normalise_fov_type).
+            if k == "fovType":
+                f[k] = _normalise_fov_type(body[k])
+            else:
+                f[k] = body[k]
     _save("fixtures", _fixtures)
     return jsonify(ok=True)
 
@@ -2011,6 +2036,45 @@ def api_camera_status(fid):
         return jsonify(err="Camera offline"), 503
     return jsonify(info)
 
+# ── Q12: FOV type whitelist + helper ──────────────────────────────────
+# Cameras store their FOV as a single number (fovDeg) with a type flag
+# (fovType) saying whether that number is horizontal, vertical, or
+# diagonal. Manufacturers spec different axes; diagonal is the most
+# commonly published for USB webcams so we default there. Every caller
+# that needs a horizontal FOV for ray math should go through
+# _camera_h_fov_rad() so the conversion stays consistent.
+_FOV_TYPE_WHITELIST = ("horizontal", "vertical", "diagonal")
+_FOV_TYPE_DEFAULT = "diagonal"
+
+
+def _normalise_fov_type(value, *, default=_FOV_TYPE_DEFAULT):
+    """Return a whitelist-validated fovType string. Unknown inputs map to
+    the default so a malformed fixture record never crashes a ray calc."""
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in _FOV_TYPE_WHITELIST:
+            return v
+    return default
+
+
+def _camera_h_fov_rad(cam_fixture, frame_w, frame_h):
+    """Return the camera's **horizontal** FOV in radians, derived from the
+    stored fovDeg + fovType. Falls back to a 60° horizontal FOV when the
+    fixture is missing data."""
+    fov_deg = cam_fixture.get("fovDeg", 60) or 60
+    fov_type = _normalise_fov_type(cam_fixture.get("fovType"))
+    fov_rad = math.radians(fov_deg)
+    if fov_type == "horizontal":
+        return fov_rad
+    if not frame_w or not frame_h or frame_w <= 0 or frame_h <= 0:
+        return fov_rad
+    if fov_type == "diagonal":
+        diag = math.sqrt(frame_w * frame_w + frame_h * frame_h)
+        return 2.0 * math.atan(math.tan(fov_rad / 2.0) * (frame_w / diag))
+    # vertical
+    return 2.0 * math.atan(math.tan(fov_rad / 2.0) * (frame_w / frame_h))
+
+
 def _pixel_to_stage_homography(detections, H_flat, frame_w, frame_h):
     """Transform detections using a calibrated homography matrix."""
     stage_w = _stage.get("w", 3.0) * 1000
@@ -2062,8 +2126,10 @@ def _pixel_to_stage(detections, cam_fixture, frame_w, frame_h):
     aim = _rotation_to_aim(cam_fixture.get("rotation", [0, 0, 0]), [cx, cy, cz])
     ax, ay, az = aim[0], aim[1], aim[2]
 
-    fov_deg = cam_fixture.get("fovDeg", 60)
-    fov_rad = math.radians(fov_deg)
+    # #Q12 — honour fovType so the ray math matches the manufacturer spec.
+    # Without this, a diagonal-spec 90° webcam was treated as horizontal-90°
+    # and every pixel projected ~20% too far off-axis.
+    fov_rad = _camera_h_fov_rad(cam_fixture, frame_w, frame_h)
 
     # Camera look direction (normalized)
     dx, dy, dz = ax - cx, ay - cy, az - cz
@@ -5389,7 +5455,7 @@ def api_space_scan_aruco_simple():
             log.warning("aruco-simple: camera fid=%d has no stage position — skipping", fid)
             continue
         fov = f.get("fovDeg", 90)
-        fov_type = f.get("fovType", "diagonal")
+        fov_type = _normalise_fov_type(f.get("fovType"))
         frame_w, frame_h = c["frameSize"][0], c["frameSize"][1]
         rotation = f.get("rotation", [0, 0, 0])
         try:
@@ -6067,10 +6133,10 @@ def api_space_scan_stereo():
             det_b = _detected_map(frame_b)
             r_a = _aruco_anchor_extrinsics(
                 w_a, h_a, cam_a.get("fovDeg", 90),
-                cam_a.get("fovType", "horizontal"), det_a, reg_by_id)
+                _normalise_fov_type(cam_a.get("fovType")), det_a, reg_by_id)
             r_b = _aruco_anchor_extrinsics(
                 w_b, h_b, cam_b.get("fovDeg", 90),
-                cam_b.get("fovType", "horizontal"), det_b, reg_by_id)
+                _normalise_fov_type(cam_b.get("fovType")), det_b, reg_by_id)
             anchor_info["a"] = {k: v for k, v in r_a.items()
                                   if k not in ("K", "rvec", "tvec")}
             anchor_info["b"] = {k: v for k, v in r_b.items()
@@ -6104,12 +6170,12 @@ def api_space_scan_stereo():
             "a", cam_a.get("fovDeg", 90), w_a, h_a,
             (pos_a.get("x", 0), pos_a.get("y", 0), pos_a.get("z", 0)),
             cam_a.get("rotation", [0, 0, 0]),
-            fov_type=cam_a.get("fovType", "horizontal"))
+            fov_type=_normalise_fov_type(cam_a.get("fovType")))
         engine.add_camera_from_fov(
             "b", cam_b.get("fovDeg", 90), w_b, h_b,
             (pos_b.get("x", 0), pos_b.get("y", 0), pos_b.get("z", 0)),
             cam_b.get("rotation", [0, 0, 0]),
-            fov_type=cam_b.get("fovType", "horizontal"))
+            fov_type=_normalise_fov_type(cam_b.get("fovType")))
 
     matches = feature_match_points(frame_a, frame_b)
     # Threshold: tight (50 mm) when anchored, lenient (500 mm) otherwise.
