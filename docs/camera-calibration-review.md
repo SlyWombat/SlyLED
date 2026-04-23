@@ -1289,6 +1289,85 @@ Mentioned only to confirm they were reviewed and are not affected:
   `docs/live-test-sessions/2026-04-22/`. Added §12 with follow-up
   exploration shortlist — items that surfaced during the session
   but sit outside §8.5's blocking-fix scope.
+- **2026-04-22 (live test, re-run on expanded rig)** — basement rig
+  reconfigured between runs: **3 cameras** (added Cam 16 "Out Left"
+  on RPi-Sly1 deep in the stage at (2350, 1670, 905), rotation 1°),
+  **3 movers** (added 150W MH Stage Left using the new
+  `movinghead-150w-12ch` builtin profile from 8ff9a65), and **6
+  surveyed ArUco markers** (added the elevated Pillar Post marker
+  at Z=1368 mm, plus Stairs and Patent). Prior §8.3/§8.4 numbers
+  were against the 2-cam / 2-mover / 3-marker rig and are
+  **superseded** by this session's measurements against the
+  expanded rig. Steps 1/2/3/4+5/6 re-executed; steps 7/8 still
+  deferred. Full session artifacts replace the prior-run data at
+  `docs/live-test-sessions/2026-04-22/`. Summary by step:
+    - **Step 2 stage-map** — with the elevated Pillar Post marker
+      in the registry, solvePnP produces near-mirror-pose poor
+      fits on all three cameras: Cam 12 RMS **321 px** (6/6
+      matched), Cam 13 **608 px** (6/6), Cam 16 **97 px** (2/6).
+      Worse than the 3-marker baseline: solvePnP tries to use the
+      one non-coplanar marker to resolve the mirror ambiguity and
+      ends up on the wrong side of the plane. Strengthens the §8.5
+      P1 "drop solvePnP, keep findHomography on floor markers"
+      call — Pillar Post should be excluded from the fit (Z=0
+      only) even when surveyed.
+    - **Step 3 tracking baseline (broken ingest)** — 8/10 detected
+      samples across cams 12+13 (cam 16 skipped, see §10 follow-up
+      #620). Range 948–2221 mm with **mean dy = −1202 mm**
+      (consistent Y-undershoot, same signature as the prior run's
+      −307 mm but larger magnitude because stage dimensions are
+      now correct at 4×3.6 m vs the 10×8 m the prior-session rig
+      had cached). All 8/10 land in the 1000–3000 mm predicted
+      pre-fix range. Q1 P1 fix still validated.
+    - **Step 4+5 beam→homography round-trip** — 2/12 samples pass
+      the ≤30 mm target, **both on Cam 16 at its fit markers**:
+      marker 1 @ **25 mm**, marker 5 @ **13 mm**. Everything else
+      225–2221 mm. Cam 16's homography was fit from 2 floor
+      markers only (the Pillar Post was out of its FOV), so the
+      P1-target flow of "findHomography on floor markers only"
+      is effectively what Cam 16 already does — and its at-fit
+      numbers land exactly where the fix aims to put cams 12/13.
+      **Strongest single piece of evidence that P1 will work.**
+    - **Step 6 mover-cal all modes × 3 movers** — 1/9 runs
+      completed (350W legacy, 6 samples, v1 grid — no fit metrics).
+      All 8 failures trace back to cam 12's bad H per the handoff
+      prediction ("If residuals exceed 100 mm, the homography is
+      bad and Q6 will fail regardless of mode"). Markers mode's
+      **discovery** step (battleship + flash) was the most robust
+      homography-independent component of any mode; markers mode's
+      **convergence** on #17 marker 2 landed at **1.2 px RMS in 3
+      iterations** — proving the markers-mode architecture works
+      once the H is correct. v2 is unsalvageable on a bad-H rig
+      (all targets `skipped`). Legacy's 350W success was a
+      geometry accident. **Q6 re-verdict reinforced:** markers
+      becomes default after P1; legacy → debug fallback; v2 →
+      retire or gate on H-health.
+    - **Five new camera-node ergonomics issues surfaced** and filed
+      during this session:
+      **#619** (no way to clear stale camera stage-map cal — only
+      overwrite or factory reset),
+      **#620** (RPi-Sly1 fw 1.3.0 `/scan` capture fails while
+      `/snapshot` works — blocked Cam 16 from Step 3),
+      **#621** (camera node `/scan` resolution hard-capped at
+      320/640 — small / distant objects undetectable at 4K; SAHI
+      tiling or 1280 re-export proposed),
+      **#623** (camera settings auto-tune / slots / WB+exposure+
+      gain button + optional AI evaluator — the lights-down /
+      threshold-200 iteration during Step 4+5 shouldn't be
+      manual),
+      **#624** (`movinghead-150w-12ch` builtin profile WheelSlot
+      capabilities missing `color` hex — RGB always mapped to slot
+      0 (white); patched the running orchestrator via PUT so
+      Step 6 cals emitted the requested red, permanent fix
+      pending).
+    - **Also noted (not yet filed):** v2 mode silently reports all
+      targets as `skipped` without surfacing the underlying H
+      residual; should fail loudly with "camera homography RMS
+      too high — re-run stage-map." Legacy BFS gives up when
+      neighbour moves push the beam off-camera and doesn't try
+      orthogonal nudges. Markers-mode `Nonepx` failures are
+      ambiguous — operator can't tell whether the beam flashed at
+      the requested pose or whether the mover aimed elsewhere.
 
 ---
 

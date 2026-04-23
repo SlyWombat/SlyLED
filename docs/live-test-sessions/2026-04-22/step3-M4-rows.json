@@ -1,0 +1,37 @@
+[
+  {
+    "cam": 12,
+    "label": "cam12 Stage Right",
+    "marker": 4,
+    "gt": [
+      500.0,
+      3500.0
+    ],
+    "frameSize": [
+      3840,
+      2160
+    ],
+    "bbox": [
+      2187,
+      324,
+      413,
+      1070
+    ],
+    "bboxCtrPx": [
+      2393.5,
+      859.0
+    ],
+    "chairConf": 0.713,
+    "placedStage": [
+      1506.7708333333335,
+      2168.333333333333,
+      0.0
+    ],
+    "errXyMm": 1669.4081651776496,
+    "tempObjId": 10020
+  },
+  {
+    "cam": 13,
+    "err": "no chair detection"
+  }
+]

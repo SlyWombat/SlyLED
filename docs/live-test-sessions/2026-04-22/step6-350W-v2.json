@@ -1,0 +1,178 @@
+{
+  "calibrationLocked": true,
+  "cameraId": 12,
+  "currentProbe": {
+    "attempt": 37,
+    "dimmer": 255,
+    "dmxPan": 102,
+    "dmxTilt": 10,
+    "pan": 0.4015710677084392,
+    "rgb": [
+      255,
+      0,
+      0
+    ],
+    "sentAt": 1776908420.2597492,
+    "tilt": 0.04054070700827535
+  },
+  "currentTarget": 3,
+  "debug": null,
+  "dmxFrame": {
+    "addr": 27,
+    "channels": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "universe": 1
+  },
+  "error": "Only 0 of 4 targets converged \u2014 cannot fit a stable model",
+  "fit": null,
+  "floorZ": null,
+  "foundAt": null,
+  "geometrySource": "layout-box",
+  "log": [
+    {
+      "level": "info",
+      "msg": "Calibration started (mode=v2, camera=Stage Right, bridge=192.168.10.174)",
+      "t": 1776908327.9811065
+    },
+    {
+      "level": "info",
+      "msg": "Target 1/4: stage=(600,540,0) \u2014 converging",
+      "t": 1776908328.1075194
+    },
+    {
+      "level": "info",
+      "msg": "Target 2/4: stage=(600,3060,0) \u2014 converging",
+      "t": 1776908351.7539577
+    },
+    {
+      "level": "info",
+      "msg": "Target 3/4: stage=(2000,3060,0) \u2014 converging",
+      "t": 1776908373.89985
+    },
+    {
+      "level": "info",
+      "msg": "Target 4/4: stage=(3400,3060,0) \u2014 converging",
+      "t": 1776908400.2796228
+    }
+  ],
+  "message": "Converging on target 4/4",
+  "model": null,
+  "phase": "sampling",
+  "progress": 62,
+  "result": null,
+  "sampleCount": null,
+  "status": "error",
+  "targets": [
+    {
+      "errorPx": 1986.9636249904077,
+      "idx": 0,
+      "iterations": 6,
+      "stagePos": [
+        600.0,
+        540.0,
+        0
+      ],
+      "status": "skipped"
+    },
+    {
+      "errorPx": 868.8029335383286,
+      "idx": 1,
+      "iterations": 3,
+      "stagePos": [
+        600.0,
+        3060.0,
+        0
+      ],
+      "status": "skipped"
+    },
+    {
+      "errorPx": 427.1249955333514,
+      "idx": 2,
+      "iterations": 7,
+      "stagePos": [
+        2000.0,
+        3060.0,
+        0
+      ],
+      "status": "skipped"
+    },
+    {
+      "errorPx": 1261.2247437845353,
+      "idx": 3,
+      "iterations": 4,
+      "stagePos": [
+        3400.0,
+        3060.0,
+        0
+      ],
+      "status": "skipped"
+    }
+  ],
+  "totalTargets": 4,
+  "verification": null,
+  "warmStart": null
+}

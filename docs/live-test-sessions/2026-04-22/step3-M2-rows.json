@@ -1,0 +1,37 @@
+[
+  {
+    "cam": 12,
+    "err": "no chair detection"
+  },
+  {
+    "cam": 13,
+    "label": "cam13 Stage Left",
+    "marker": 2,
+    "gt": [
+      1150.0,
+      2100.0
+    ],
+    "frameSize": [
+      3840,
+      2160
+    ],
+    "bbox": [
+      2400,
+      803,
+      627,
+      1331
+    ],
+    "bboxCtrPx": [
+      2713.5,
+      1468.5
+    ],
+    "chairConf": 0.841,
+    "placedStage": [
+      1173.4375,
+      1152.5,
+      0.0
+    ],
+    "errXyMm": 947.7898324028645,
+    "tempObjId": 10015
+  }
+]

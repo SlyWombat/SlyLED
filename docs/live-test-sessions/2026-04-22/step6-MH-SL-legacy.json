@@ -1,0 +1,154 @@
+{
+  "calibrationLocked": false,
+  "cameraId": 12,
+  "currentProbe": {
+    "attempt": 16,
+    "dimmer": 255,
+    "dmxPan": 168,
+    "dmxTilt": 12,
+    "pan": 0.66,
+    "rgb": [
+      255,
+      0,
+      0
+    ],
+    "sentAt": 1776908561.9198945,
+    "tilt": 0.05
+  },
+  "currentTarget": null,
+  "debug": {
+    "cam_fov": 100,
+    "cam_pos": [
+      940,
+      110,
+      2040
+    ],
+    "cam_rot": [
+      30,
+      0,
+      0
+    ],
+    "floor_target": [
+      1335.0,
+      2567.0033234129387,
+      0
+    ],
+    "fx_pos": [
+      1730,
+      0,
+      1760
+    ],
+    "inverted": true,
+    "stage_d": 3600,
+    "start_pan": 0.817133651222176,
+    "start_tilt": 0.6263832526816022
+  },
+  "dmxFrame": {
+    "addr": 13,
+    "channels": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "universe": 1
+  },
+  "error": "Only 1 samples collected \u2014 need at least 6",
+  "fit": null,
+  "floorZ": 0,
+  "foundAt": {
+    "pan": 0.66,
+    "pixelX": 969,
+    "pixelY": 893,
+    "tilt": 0.1
+  },
+  "geometrySource": "layout-box",
+  "log": [
+    {
+      "level": "info",
+      "msg": "Calibration started (mode=legacy, camera=Stage Right, bridge=192.168.10.174)",
+      "t": 1776908511.4661684
+    },
+    {
+      "level": "info",
+      "msg": "Discovery phase: addr=13 uni=1 warmStart=geometric",
+      "t": 1776908511.4668317
+    },
+    {
+      "level": "info",
+      "msg": "Beam found at pan=0.660 tilt=0.100 px=(969,893) \u2014 starting BFS mapping",
+      "t": 1776908540.534272
+    }
+  ],
+  "message": "Mapping: 1/50 samples \u00b7 current pan=0.66 tilt=0.10",
+  "model": null,
+  "phase": "mapping",
+  "progress": 35,
+  "result": null,
+  "sampleCount": 1,
+  "status": "error",
+  "targets": [],
+  "totalTargets": null,
+  "verification": null,
+  "warmStart": "geometric"
+}
