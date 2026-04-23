@@ -409,12 +409,35 @@ var _layView='3d'; // 'front', 'top', 'side', '3d'
 function _isPlaced(c){return c.positioned||c._placed||(c.x>0||c.y>0||c.z>0);}
 
 // ── Phase 7: Help Panel ─────────────────────────────────────────────────────
+// #546 — the "?" button now opens the full user manual (`/help`) in a
+// new tab with a deep link to the relevant section. The side panel
+// below remains as a fallback when the window.open is blocked (popup
+// blocker) or when /help returns 404.
+var _HELP_DEEP_LINKS = {
+  dash: 'getting-started',
+  setup: 'fixture-setup',
+  layout: 'layout',
+  actions: 'spatial-effects',
+  shows: 'shows',
+  runtime: 'timeline',
+  settings: 'dmx-profiles',
+  firmware: 'firmware',
+  cameras: 'cameras'
+};
+
 function toggleHelp(){
+  // Try the full manual first. If the popup is blocked or /help isn't
+  // reachable, fall back to the side-panel extract below.
+  var anchor = _HELP_DEEP_LINKS[ctab] || '';
+  var url = '/help' + (anchor ? '#' + anchor : '');
+  var w = null;
+  try { w = window.open(url, '_blank', 'noopener'); } catch (e) { w = null; }
+  if (w && !w.closed) return;
+  // Fallback — old side-panel behaviour.
   var panel=document.getElementById('help-panel');
   if(!panel)return;
   if(panel.style.display==='block'){panel.style.display='none';return;}
   panel.style.display='block';
-  // Load context-sensitive help
   var section=ctab;
   if(section==='actions')section='spatial-effects';
   if(section==='runtime')section='timeline';

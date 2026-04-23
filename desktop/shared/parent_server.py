@@ -2412,15 +2412,29 @@ def api_camera_scan(fid):
     threshold = body.get("threshold", 0.5)
     cam_idx = body.get("cam", 0)
     resolution = body.get("resolution", 320)
+    # #621 — forward SAHI-tile controls when the caller asks for them.
+    # Missing flags keep the fast single-frame path.
+    tile = bool(body.get("tile"))
+    tile_size = body.get("tileSize")
+    tile_overlap = body.get("tileOverlap")
     # Forward to camera node /scan endpoint
     try:
         import urllib.request as _ur
-        req_data = json.dumps({"threshold": threshold, "cam": cam_idx,
-                                "resolution": resolution}).encode()
+        payload = {"threshold": threshold, "cam": cam_idx,
+                   "resolution": resolution}
+        if tile:
+            payload["tile"] = True
+            if tile_size is not None:
+                payload["tileSize"] = tile_size
+            if tile_overlap is not None:
+                payload["tileOverlap"] = tile_overlap
+        req_data = json.dumps(payload).encode()
         req = _ur.Request(f"http://{ip}:5000/scan",
                           data=req_data,
                           headers={"Content-Type": "application/json"})
-        resp = _ur.urlopen(req, timeout=30)
+        # Tile mode runs N patches serially; bump the timeout proportionally.
+        timeout_s = 60 if tile else 30
+        resp = _ur.urlopen(req, timeout=timeout_s)
         raw = json.loads(resp.read().decode())
     except Exception as e:
         return jsonify(err=f"Camera scan failed: {e}"), 503
@@ -2436,6 +2450,7 @@ def api_camera_scan(fid):
         cameraId=fid,
         captureMs=raw.get("captureMs"),
         inferenceMs=raw.get("inferenceMs"),
+        tile=raw.get("tile", False),
     )
 
 # ── Camera calibration — homography math ──────────────────────────────
@@ -13447,6 +13462,64 @@ _HELP_SECTIONS = {
     "settings": "Settings",
     "firmware": "Firmware",
 }
+
+@app.get("/help")
+@app.get("/help/")
+def serve_help_index():
+    """#546 — serve the full user manual HTML at /help. Allows the '?'
+    button in the SPA nav to open the complete manual in a new tab
+    (rather than only the side-panel section extract). Works offline
+    because the manual ships inside the project tree.
+
+    Bilingual per project policy (public-facing docs must be EN+FR):
+    - ``/help`` defaults to English.
+    - ``/help?lang=fr`` serves the French translation.
+    - When no lang query is provided, Accept-Language is honoured —
+      a browser with ``Accept-Language: fr,...`` gets the French
+      version automatically.
+    """
+    # Choose language: explicit ?lang= wins, then Accept-Language.
+    lang = (request.args.get("lang") or "").strip().lower()
+    if not lang:
+        accept = (request.headers.get("Accept-Language") or "").lower()
+        if accept.startswith("fr") or ",fr" in accept.replace(" ", ""):
+            lang = "fr"
+        else:
+            lang = "en"
+    filename = "index_fr.html" if lang == "fr" else "index.html"
+    help_path = BASE.parent.parent / "docs" / "help" / filename
+    if not help_path.exists() and lang == "fr":
+        # Graceful fallback: French HTML missing → serve English HTML
+        # with a note. Users won't get a 404 page just because we
+        # haven't generated the French file yet.
+        help_path = BASE.parent.parent / "docs" / "help" / "index.html"
+    if not help_path.exists():
+        return ("<h1>User manual not found</h1>"
+                "<p>Expected at <code>docs/help/index.html</code>.</p>",
+                404, {"Content-Type": "text/html; charset=utf-8"})
+    try:
+        return (help_path.read_text(encoding="utf-8"),
+                200, {"Content-Type": "text/html; charset=utf-8"})
+    except Exception as e:
+        return (f"<h1>Failed to read manual</h1><pre>{e}</pre>", 500,
+                {"Content-Type": "text/html; charset=utf-8"})
+
+
+@app.get("/help/images/<path:filename>")
+def serve_help_image(filename):
+    """#546 — serve images referenced by the manual. Path-safe via
+    Flask's send_from_directory; falls back to 404 when the file is
+    missing (some markdown references may not have a matching PNG
+    yet)."""
+    from flask import send_from_directory
+    images_dir = BASE.parent.parent / "docs" / "help" / "images"
+    if not images_dir.exists():
+        return "", 404
+    try:
+        return send_from_directory(str(images_dir), filename)
+    except Exception:
+        return "", 404
+
 
 @app.get("/api/help/<section>")
 def api_help(section):

@@ -42,7 +42,7 @@ function newObject(){
   h+='<option value="moving">Moving</option>';
   h+='</select>';
   h+='<label>Name</label><input id="sf-name" value="" style="width:100%">';
-  h+='<label>Color</label><input id="sf-color" type="color" value="#334155">';
+  h+='<label>Colour</label><input id="sf-color" type="color" value="#334155">';
   h+='<div id="sf-lock-wrap" style="margin:.5em 0"><label style="cursor:pointer" title="Auto-size to match stage width/height — disables manual position and dimension editing"><input type="checkbox" id="sf-lock" onchange="objLockChange()" checked> Lock to stage dimensions</label></div>';
   h+='<div id="sf-dims">';
   h+='<label>Position X (mm)</label><input id="sf-x" type="number" value="0" style="width:100px">';
@@ -193,7 +193,7 @@ function editObject(id){
   var lockable=(s.objectType==='wall'||s.objectType==='floor');
   var locked=!!s.stageLocked;
   var h='<label>Name</label><input id="sf-name" value="'+escapeHtml(s.name)+'" style="width:100%">';
-  h+='<label>Color</label><input id="sf-color" type="color" value="'+(s.color||'#334155')+'">';
+  h+='<label>Colour</label><input id="sf-color" type="color" value="'+(s.color||'#334155')+'">';
   if(lockable){
     h+='<div style="margin:.5em 0"><label style="cursor:pointer"><input type="checkbox" id="sf-lock" onchange="objLockChange()"'+(locked?' checked':'')+'>  Lock to stage dimensions</label></div>';
   }
@@ -298,7 +298,7 @@ function loadSpatialFx(cb){
 function renderSfxList(){
   var el=document.getElementById('sfx-list');if(!el)return;
   if(!_spatialFx.length){el.innerHTML='<p style="color:#555;font-size:.85em">No spatial effects yet.</p>';return;}
-  var h='<table class="tbl" style="max-width:700px"><tr><th>Name</th><th>Category</th><th>Shape</th><th>Color</th><th>Actions</th></tr>';
+  var h='<table class="tbl" style="max-width:700px"><tr><th>Name</th><th>Category</th><th>Shape</th><th>Colour</th><th>Actions</th></tr>';
   _spatialFx.forEach(function(fx){
     var col=rgb2h(fx.r||0,fx.g||0,fx.b||0);
     var shape=fx.category==='fixture-local'?('Action #'+(fx.actionType||0)):((fx.shape||'sphere'));
@@ -317,7 +317,7 @@ function newSpatialFx(){
   h+='<label>Category</label><select id="sfx-cat" onchange="sfxCatChange()" style="width:100%"><option value="spatial-field">Spatial Field</option><option value="fixture-local">Fixture-Local</option></select>';
   h+='<div id="sfx-field-opts">';
   h+='<label>Shape</label><select id="sfx-shape"><option>sphere</option><option>plane</option><option>box</option></select>';
-  h+='<label>Color</label><div style="display:flex;gap:.3em"><input id="sfx-r" type="number" min="0" max="255" value="255" style="width:60px" placeholder="R"><input id="sfx-g" type="number" min="0" max="255" value="0" style="width:60px" placeholder="G"><input id="sfx-b" type="number" min="0" max="255" value="0" style="width:60px" placeholder="B"></div>';
+  h+='<label>Colour</label><div style="display:flex;gap:.3em"><input id="sfx-r" type="number" min="0" max="255" value="255" style="width:60px" placeholder="R"><input id="sfx-g" type="number" min="0" max="255" value="0" style="width:60px" placeholder="G"><input id="sfx-b" type="number" min="0" max="255" value="0" style="width:60px" placeholder="B"></div>';
   h+='<label>Radius / Size (mm)</label><input id="sfx-radius" type="number" value="1000" style="width:120px">';
   h+='<label>Motion Start (x,y,z mm)</label><div style="display:flex;gap:.3em"><input id="sfx-sx" type="number" value="0" style="width:80px"><input id="sfx-sy" type="number" value="0" style="width:80px"><input id="sfx-sz" type="number" value="0" style="width:80px"></div>';
   h+='<label>Motion End (x,y,z mm)</label><div style="display:flex;gap:.3em"><input id="sfx-ex" type="number" value="5000" style="width:80px"><input id="sfx-ey" type="number" value="0" style="width:80px"><input id="sfx-ez" type="number" value="0" style="width:80px"></div>';
@@ -326,7 +326,7 @@ function newSpatialFx(){
   h+='<label>Blend</label><select id="sfx-blend"><option>replace</option><option>add</option><option>multiply</option><option>screen</option></select>';
   h+='</div>';
   h+='<div id="sfx-local-opts" style="display:none"><label>Action Type</label><select id="sfx-atype">';
-  var aNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Wipe','Scanner','Sparkle','Gradient','DMX Scene','Pan/Tilt Move','Gobo Select','Color Wheel','Track'];
+  var aNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Wipe','Scanner','Sparkle','Gradient','DMX Scene','Pan/Tilt Move','Gobo Select','Colour Wheel','Track'];
   aNames.forEach(function(n,i){h+='<option value="'+i+'">'+n+'</option>';});
   h+='</select></div>';
   h+='<div style="margin-top:1em"><button class="btn btn-on" onclick="saveSpatialFx()">Create</button></div>';

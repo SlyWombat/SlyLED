@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>SlyLED — Manuel d'utilisation</title>
+<style>
+body { font-family: 'Space Grotesk', system-ui, sans-serif; background:#0a0f1a; color:#e2e8f0;
+        max-width: 960px; margin: 2em auto; padding: 0 1.4em; line-height: 1.6; }
+h1, h2, h3, h4 { color:#93c5fd; font-family:'Space Grotesk',sans-serif; margin-top:1.8em; }
+h1 { border-bottom: 1px solid #1e3a5f; padding-bottom:.4em; }
+h2 { color:#60a5fa; border-bottom: 1px solid #1e293b; padding-bottom:.2em; }
+a { color:#3b82f6; }
+code { background:#1e293b; padding:2px 5px; border-radius:3px; font-size:.92em; }
+pre code { display:block; padding: .8em; }
+table { border-collapse: collapse; margin: 1em 0; }
+th, td { border: 1px solid #334155; padding: .4em .8em; }
+th { background: #1e293b; color:#93c5fd; }
+img { max-width: 100%; border: 1px solid #1e293b; border-radius: 4px; margin: .8em 0; }
+.lang-switch { position:fixed; top:12px; right:16px; background:#1e3a5f; color:#93c5fd;
+                 padding:.3em .7em; border:1px solid #334155; border-radius:4px;
+                 text-decoration:none; font-size:.85em; }
+.lang-switch:hover { background:#2d4a7a; }
+</style>
+</head>
+<body>
+<a class="lang-switch" href="/help" title="English">EN</a>
+<h1 id="manuel-dutilisation-slyled-systeme-declairage-volumetrique-3d-v10">Manuel d'utilisation SlyLED — Systeme d'eclairage volumetrique 3D (v1.0)</h1>
+<h2 id="table-des-matieres">Table des matieres</h2>
+<ol>
+<li><a href="#1-premiers-pas">Premiers pas</a></li>
+<li><a href="#2-plateformes">Guide des plateformes</a></li>
+<li><a href="#3-configuration-des-projecteurs">Configuration des projecteurs</a></li>
+<li><a href="#4-mise-en-page">Mise en page de la scene</a></li>
+<li><a href="#5-objets-de-scene">Objets de scene</a></li>
+<li><a href="#6-effets-spatiaux">Effets spatiaux</a></li>
+<li><a href="#7-action-track">Action Track</a></li>
+<li><a href="#8-timeline">Construction d'une Timeline</a></li>
+<li><a href="#9-compilation">Compilation et lecture</a></li>
+<li><a href="#10-previsualisation">Emulateur de previsualisation</a></li>
+<li><a href="#11-profils-dmx">Profils de projecteurs DMX</a></li>
+<li><a href="#12-spectacles-predefinis">Spectacles predefinis</a></li>
+<li><a href="#13-calibration">Calibration des projecteurs motorises</a></li>
+<li><a href="#14-firmware">Firmware et mises a jour OTA</a></li>
+<li><a href="#15-limites">Limites du systeme</a></li>
+<li><a href="#16-depannage">Depannage</a></li>
+<li><a href="#17-api">Reference rapide API</a></li>
+</ol>
+<hr />
+<h2 id="1-premiers-pas">1. Premiers pas</h2>
+<p>SlyLED est un systeme de controle d'eclairage LED et DMX a trois niveaux :<br />
+- <strong>Orchestrateur</strong> (application de bureau Windows/Mac ou application Android) — concevoir des spectacles et controler la lecture<br />
+- <strong>Performers</strong> (ESP32/D1 Mini) — executer les effets LED sur le materiel<br />
+- <strong>Pont DMX</strong> (Giga R1 WiFi) — transmettre Art-Net/sACN vers les projecteurs DMX</p>
+<h3 id="demarrage-rapide">Demarrage rapide</h3>
+<ol>
+<li>Lancez l'application de bureau : <code>powershell -File desktop\windows\run.ps1</code> (Windows) ou <code>bash desktop/mac/run.sh</code> (Mac)</li>
+<li>Ouvrez le navigateur a l'adresse <code>http://localhost:8080</code></li>
+<li>Allez dans l'onglet <strong>Configuration</strong>, cliquez sur <strong>Decouvrir</strong> pour trouver les Performers sur votre reseau</li>
+<li>Allez dans l'onglet <strong>Mise en page</strong> pour positionner les projecteurs sur la scene</li>
+<li>Allez dans l'onglet <strong>Execution</strong>, chargez un <strong>Spectacle predefini</strong>, cliquez sur <strong>Compiler et demarrer</strong></li>
+</ol>
+<hr />
+<h2 id="2-guide-des-plateformes">2. Guide des plateformes</h2>
+<h3 id="bureau-windows-spa">Bureau Windows (SPA)</h3>
+<p>L'interface principale de conception et de controle. SPA complete a 7 onglets avec mise en page 2D/3D, editeur de Timeline, effets spatiaux, profils DMX et gestion du firmware.</p>
+<p><strong>Lancement :</strong> <code>powershell -File desktop\windows\run.ps1</code> ou executez <code>SlyLED.exe</code><br />
+<strong>Installation :</strong> Executez <code>SlyLED-Setup.exe</code> (inclut l'icone de la barre systeme)</p>
+<h3 id="application-android">Application Android</h3>
+<p>Compagnon mobile pour la surveillance et le controle de lecture. Disponible sur le meme reseau WiFi que le serveur de bureau.</p>
+<p><strong>Installation :</strong> Transferez <code>SlyLED.apk</code> sur votre telephone et installez-le.<br />
+<strong>Connexion :</strong> Entrez l'adresse IP du serveur et le port (affiches dans l'onglet Parametres du bureau).</p>
+<p><strong>Fonctionnalites Android :</strong><br />
+- <strong>Tableau de bord</strong> — statut des Performers, indicateurs en ligne/hors ligne<br />
+- <strong>Configuration</strong> — visualiser les projecteurs, decouvrir les Performers<br />
+- <strong>Mise en page</strong> — canevas 2D avec zoom par pincement, repositionnement par glissement, placement par toucher, cones de faisceau DMX, visualisation des objets, boutons d'acces rapide a la mise en page, affichage de la patrouille pour les objets mobiles<br />
+- <strong>Actions</strong> — parcourir et creer des effets LED<br />
+- <strong>Execution</strong> — emulateur de spectacle avec points LED et cones de faisceau DMX, compilation/synchronisation/lecture de Timeline, spectacles predefinis<br />
+- <strong>Parametres</strong> — nom du serveur, luminosite, reinitialisation d'usine</p>
+<h3 id="configuration-du-firmware-esp32d1-mini">Configuration du firmware (ESP32/D1 Mini)</h3>
+<p>Chaque Performer propose une page de configuration a 3 onglets a l'adresse <code>http://&lt;adresse-ip&gt;/config</code> :<br />
+- <strong>Tableau de bord</strong> — nom d'hote, version du firmware, statut de l'action active<br />
+- <strong>Parametres</strong> — nom de l'appareil, description, nombre de chaines<br />
+- <strong>Configuration</strong> — nombre de LED par chaine, longueur, direction, broche GPIO (ESP32)</p>
+<hr />
+<h2 id="3-configuration-des-projecteurs">3. Configuration des projecteurs</h2>
+<h3 id="que-sont-les-projecteurs">Que sont les projecteurs ?</h3>
+<p>Un projecteur est l'entite principale sur la scene. Il encapsule le materiel physique et ajoute des attributs au niveau de la scene :<br />
+- <strong>Projecteurs LED</strong> — lies a un Performer enfant, avec des chaines LED<br />
+- <strong>Projecteurs DMX</strong> — lies a un univers/adresse DMX, avec un profil et un point de visee</p>
+<h3 id="ajout-de-projecteurs-led">Ajout de projecteurs LED</h3>
+<ol>
+<li>Allez dans l'onglet <strong>Configuration</strong>, cliquez sur <strong>Decouvrir</strong> pour trouver les Performers</li>
+<li>Cliquez sur <strong>Ajouter un projecteur</strong> puis selectionnez le type "LED"</li>
+<li>Liez a un Performer et configurez les chaines (nombre de LED, longueur, direction)</li>
+</ol>
+<h3 id="ajout-de-projecteurs-dmx-assistant">Ajout de projecteurs DMX (assistant)</h3>
+<p>Cliquez sur <strong>+ Projecteur DMX</strong> dans l'onglet Configuration pour lancer l'assistant en 3 etapes :<br />
+1. <strong>Choisir le projecteur</strong> : Recherchez dans l'Open Fixture Library (700+ projecteurs) ou creez un projecteur personnalise<br />
+2. <strong>Definir l'adresse</strong> : Univers, adresse de depart et nom — avec detection de conflits en temps reel<br />
+3. <strong>Confirmer</strong> : Verifiez tous les parametres, cliquez sur "Creer le projecteur"</p>
+<h3 id="moniteur-dmx">Moniteur DMX</h3>
+<p>Parametres puis DMX puis <strong>Moniteur DMX</strong> ouvre une grille en temps reel de 512 canaux par univers. Cliquez sur n'importe quelle cellule pour definir une valeur. Code couleur par intensite.</p>
+<h3 id="controle-de-groupe-de-projecteurs">Controle de groupe de projecteurs</h3>
+<p>Parametres puis DMX puis <strong>Controle de groupe</strong> ouvre un panneau de controle pour les groupes de projecteurs. Curseur de variateur principal, curseurs R/V/B, et boutons de preselection rapide des couleurs (Chaud, Froid, Rouge, Eteint).</p>
+<h3 id="test-des-canaux-dmx">Test des canaux DMX</h3>
+<p>Dans l'onglet Configuration, cliquez sur <strong>Details</strong> sur n'importe quel projecteur DMX pour ouvrir le panneau de test des canaux :<br />
+- <strong>Curseurs</strong> pour chaque canal avec sortie DMX en direct<br />
+- <strong>Boutons rapides</strong> : Tout allume, Noir, Blanc, Rouge, Vert, Bleu<br />
+- <strong>Etiquettes de capacite</strong> indiquant ce que fait chaque plage de valeurs (p. ex. "Stroboscope lent vers rapide")<br />
+- Les modifications prennent effet immediatement sur le projecteur physique via Art-Net/sACN</p>
+<h3 id="types-de-projecteurs">Types de projecteurs</h3>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Lineaire</strong></td>
+<td>Bande LED. Pixels le long d'un chemin.</td>
+</tr>
+<tr>
+<td><strong>Point</strong></td>
+<td>Source lumineuse DMX avec cone de faisceau.</td>
+</tr>
+<tr>
+<td><strong>Groupe</strong></td>
+<td>Collection de projecteurs cibles comme un seul.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="4-mise-en-page-de-la-scene">4. Mise en page de la scene</h2>
+<h3 id="canevas-2d">Canevas 2D</h3>
+<p>L'onglet Mise en page affiche une vue frontale 2D de la scene. Les dimensions de la scene (largeur x hauteur) sont definies dans les Parametres.</p>
+<p>La barre d'outils de mise en page fournit : Enregistrer, bascule de mode 2D/3D (affiche le mode actuel en texte), Recentrer, Vue du dessus, Vue de face, Disposition automatique DMX, Afficher/masquer les chaines LED. Les bascules actives sont surlignees en vert.</p>
+<p>Utilisez le parametre URL <code>?tab=</code> pour un lien direct vers n'importe quel onglet (p. ex. <code>?tab=layout</code>).</p>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Bureau</th>
+<th>Android</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Placer un projecteur</strong></td>
+<td>Glisser depuis la barre laterale</td>
+<td>Toucher le projecteur puis toucher le canevas</td>
+</tr>
+<tr>
+<td><strong>Deplacer un projecteur</strong></td>
+<td>Glisser sur le canevas</td>
+<td>Glisser sur le canevas</td>
+</tr>
+<tr>
+<td><strong>Supprimer un projecteur</strong></td>
+<td>Double-clic puis Supprimer</td>
+<td>Toucher puis Modifier puis Supprimer</td>
+</tr>
+<tr>
+<td><strong>Zoom</strong></td>
+<td>Molette de la souris</td>
+<td>Geste de pincement</td>
+</tr>
+<tr>
+<td><strong>Panoramique</strong></td>
+<td>—</td>
+<td>Glissement a deux doigts</td>
+</tr>
+<tr>
+<td><strong>Modifier les coordonnees</strong></td>
+<td>Double-clic</td>
+<td>Toucher le projecteur place</td>
+</tr>
+<tr>
+<td><strong>Modifier un objet</strong></td>
+<td>Double-clic</td>
+<td>Toucher l'objet dans la liste</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Elements affiches :</strong><br />
+- Lignes de grille a espacement de 1 metre<br />
+- Etiquettes des dimensions de la scene<br />
+- <strong>Projecteurs LED</strong> : noeuds verts avec lignes de chaines colorees (fleches de direction)<br />
+- <strong>Projecteurs DMX</strong> : noeuds violets avec triangles de cone de faisceau vers le point de visee<br />
+- <strong>Objets</strong> : rectangles semi-transparents avec etiquettes de nom (rognes aux limites de la scene)<br />
+- <strong>Points de visee</strong> : cercles rouges aux points de visee DMX</p>
+<h3 id="fenetre-3d-bureau-uniquement">Fenetre 3D (bureau uniquement)</h3>
+<p>Basculez en mode 3D pour une scene Three.js interactive :<br />
+- Camera orbitale avec glissement de la souris<br />
+- Cones de faisceau en geometrie 3D<br />
+- Spheres de visee deplacables pour les projecteurs DMX<br />
+- Plans/boites d'objets avec transparence</p>
+<h3 id="systeme-de-coordonnees">Systeme de coordonnees</h3>
+<ul>
+<li><strong>aimPoint[0]</strong> = X (position horizontale, mm)</li>
+<li><strong>aimPoint[1]</strong> = Y (hauteur depuis le sol, mm) — utilise pour l'axe vertical du canevas 2D</li>
+<li><strong>aimPoint[2]</strong> = Z (profondeur, mm) — utilise uniquement dans la fenetre 3D</li>
+<li><strong>canvasW</strong> = largeur de la scene x 1000 (mm)</li>
+<li><strong>canvasH</strong> = hauteur de la scene x 1000 (mm)</li>
+</ul>
+<hr />
+<h2 id="5-objets-de-scene">5. Objets de scene</h2>
+<p>Les objets representent des elements physiques sur la scene — murs, sols, ponts d'eclairage, ecrans et accessoires/artistes.</p>
+<h3 id="types-dobjets">Types d'objets</h3>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Mobilite par defaut</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Mur</strong></td>
+<td>Statique</td>
+<td>Mur de fond, verrouille aux dimensions de la scene (largeur x hauteur)</td>
+</tr>
+<tr>
+<td><strong>Sol</strong></td>
+<td>Statique</td>
+<td>Sol de scene, verrouille aux dimensions de la scene (largeur x (profondeur + 1 m))</td>
+</tr>
+<tr>
+<td><strong>Pont</strong></td>
+<td>Statique</td>
+<td>Pont d'eclairage</td>
+</tr>
+<tr>
+<td><strong>Ecran</strong></td>
+<td>Statique</td>
+<td>Surface de projection</td>
+</tr>
+<tr>
+<td><strong>Accessoire</strong></td>
+<td>Mobile</td>
+<td>Artiste, element de decor ou element mobile</td>
+</tr>
+<tr>
+<td><strong>Personnalise</strong></td>
+<td>Mobile</td>
+<td>Objet defini par l'utilisateur</td>
+</tr>
+</tbody>
+</table>
+<h3 id="objets-verrouilles-a-la-scene">Objets verrouilles a la scene</h3>
+<p>Les objets mur et sol peuvent etre verrouilles aux dimensions de la scene. Lorsque vous modifiez la taille de la scene dans les Parametres, les objets verrouilles se redimensionnent automatiquement.</p>
+<h3 id="mobilite">Mobilite</h3>
+<ul>
+<li><strong>Statique</strong> : Position fixe. Ne peut pas etre suivi par les lyres.</li>
+<li><strong>Mobile</strong> : La position peut changer pendant la lecture. Peut etre suivi par les lyres DMX via l'action Track.</li>
+</ul>
+<h3 id="mouvement-de-patrouille">Mouvement de patrouille</h3>
+<p>Les objets mobiles peuvent patrouiller (osciller) d'avant en arriere pendant la lecture :<br />
+- <strong>Axe</strong> : Gauche-droite (X), avant-arriere (Z), ou diagonal (X+Z)<br />
+- <strong>Preselections de vitesse</strong> : Lent (cycle de 20 s), Moyen (10 s), Rapide (5 s), ou Personnalise<br />
+- <strong>Plage</strong> : Pourcentage de debut/fin de la dimension de la scene (par defaut 10 %--90 %)<br />
+- <strong>Lissage</strong> : Sinusoidal ou Lineaire</p>
+<p>La patrouille est evaluee a 40 Hz dans la boucle de lecture DMX, avant que les actions Track ne lisent les positions des objets.</p>
+<h3 id="objets-temporels">Objets temporels</h3>
+<p>Les systemes externes peuvent creer des objets ephemeres via <code>POST /api/objects/temporal</code> :<br />
+- Toujours en memoire (jamais enregistres sur disque)<br />
+- Necessitent <code>ttl</code> &gt; 0 (duree de vie en secondes)<br />
+- Expirent automatiquement a la fin du TTL<br />
+- Les mises a jour de position actualisent le TTL<br />
+- Affiches dans le visualiseur d'execution avec contour en pointilles et badge de compte a rebours<br />
+- Utiles pour l'integration de suivi par camera</p>
+<hr />
+<h2 id="6-effets-spatiaux">6. Effets spatiaux</h2>
+<h3 id="effets-spatiaux-vs-actions-classiques">Effets spatiaux vs actions classiques</h3>
+<ul>
+<li><strong>Actions classiques</strong> (Solide, Chenillard, Arc-en-ciel, etc.) : S'executent localement sur chaque Performer. Motif base sur l'index des pixels. Lorsqu'elles sont assignees a des projecteurs DMX, les actions classiques sont automatiquement converties en segments de scene DMX avec les valeurs par defaut appropriees pour le variateur, le pan/tilt.</li>
+<li><strong>Actions DMX</strong> : Controlent directement les fonctionnalites specifiques au DMX :</li>
+<li><strong>Scene DMX</strong> — Definir des valeurs exactes pour le variateur, pan, tilt, stroboscope, gobo, roue de couleurs, prisme</li>
+<li><strong>Mouvement Pan/Tilt</strong> — Animer le pan/tilt d'une position de depart a une position d'arrivee dans le temps</li>
+<li><strong>Selection de gobo</strong> — Selectionner une position de la roue de gobos</li>
+<li><strong>Roue de couleurs</strong> — Selectionner une position de la roue de couleurs</li>
+<li><strong>Track</strong> (Type 18) — Faire suivre les objets mobiles par les lyres en temps reel (voir <a href="#7-action-track">Action Track</a>)</li>
+<li><strong>Effets spatiaux</strong> : Operent dans l'espace 3D. Une sphere de lumiere balayant la scene illumine differents projecteurs a differents moments.</li>
+</ul>
+<p>SlyLED prend en charge 19 types d'actions au total : 14 actions classiques LED plus 5 actions DMX/spatiales (Scene DMX, Mouvement Pan/Tilt, Selection de gobo, Roue de couleurs, Track).</p>
+<h3 id="creation-dun-effet-spatial">Creation d'un effet spatial</h3>
+<p>Naviguez vers l'onglet <strong>Actions</strong> puis <strong>+ Nouvel effet spatial</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>Champ</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Forme</strong></td>
+<td>Sphere, Plan ou Boite</td>
+</tr>
+<tr>
+<td><strong>Couleur</strong></td>
+<td>Couleur RGB appliquee aux pixels a l'interieur du champ</td>
+</tr>
+<tr>
+<td><strong>Taille</strong></td>
+<td>Rayon (sphere), epaisseur (plan) ou dimensions (boite)</td>
+</tr>
+<tr>
+<td><strong>Debut/Fin du mouvement</strong></td>
+<td>Positions 3D en millimetres</td>
+</tr>
+<tr>
+<td><strong>Duree</strong></td>
+<td>Temps de deplacement du debut a la fin</td>
+</tr>
+<tr>
+<td><strong>Lissage</strong></td>
+<td>Lineaire, acceleration, deceleration, acceleration-deceleration</td>
+</tr>
+<tr>
+<td><strong>Melange</strong></td>
+<td>Remplacer, Ajouter, Multiplier, Ecran</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="7-action-track">7. Action Track</h2>
+<h3 id="action-track-type-18">Action Track (Type 18)</h3>
+<p>Fait suivre les objets mobiles par les lyres DMX en temps reel pendant la lecture.</p>
+<p><strong>Fonctionnement :</strong><br />
+1. Creez des objets mobiles (accessoires/artistes) dans l'onglet Mise en page<br />
+2. Creez une action Track dans l'onglet Actions<br />
+3. Selectionnez les objets cibles et configurez l'assignation<br />
+4. Pendant la lecture, la boucle a 40 Hz calcule le pan/tilt pour chaque lyre</p>
+<p><strong>Algorithme d'assignation :</strong><br />
+- Nombre egal de lyres et d'objets : correspondance 1:1<br />
+- Plus de lyres que d'objets : repartition uniforme entre les objets<br />
+- Plus d'objets que de lyres : cycle a travers les objets (2 s par cible par defaut)</p>
+<p><strong>Champs :</strong><br />
+| Champ | Description |<br />
+|-------|-------------|<br />
+| trackObjectIds | ID des objets cibles (vide = tous les objets mobiles) |<br />
+| trackCycleMs | Temps de cycle lors du cyclage (par defaut 2000 ms) |<br />
+| trackOffset | Decalage global [x,y,z] en mm |<br />
+| trackFixtureIds | ID de projecteurs specifiques (vide = toutes les lyres) |<br />
+| trackFixtureOffsets | Surcharges [x,y,z] par projecteur |<br />
+| trackAutoSpread | Repartir plusieurs lyres sur la largeur de l'objet |</p>
+<hr />
+<h2 id="8-construction-dune-timeline">8. Construction d'une Timeline</h2>
+<ol>
+<li>Allez dans l'onglet <strong>Execution</strong> puis <strong>+ Nouvelle Timeline</strong></li>
+<li>Definissez le nom et la duree</li>
+<li><strong>+ Ajouter un Track</strong> pour chaque projecteur (ou "Tous les Performers")</li>
+<li><strong>+ Ajouter un clip</strong> pour assigner des effets avec une heure de debut et une duree</li>
+<li>Les clips peuvent se chevaucher — ils se melangent selon le mode de melange de leur effet</li>
+</ol>
+<hr />
+<h2 id="9-compilation-et-lecture">9. Compilation et lecture</h2>
+<h3 id="compiler">Compiler</h3>
+<p>Compile une Timeline en instructions d'action minimales par Performer :<br />
+1. Cliquez sur <strong>Compiler</strong> — la progression affiche le nombre d'images et de segments<br />
+2. Cliquez sur <strong>Synchroniser</strong> pour envoyer les instructions aux Performers via UDP<br />
+3. Cliquez sur <strong>Demarrer</strong> pour une lecture synchronisee par NTP</p>
+<h3 id="sortie">Sortie</h3>
+<ul>
+<li><strong>Segments d'action</strong> : Sequences des 19 types d'actions (14 classiques + 5 DMX/spatiales)</li>
+<li><strong>Fichiers LSQ</strong> : Donnees RGB brutes par pixel a 40 Hz (telechargeables en ZIP)</li>
+<li><strong>Donnees de previsualisation</strong> : 1 couleur par chaine par seconde pour l'emulateur</li>
+</ul>
+<hr />
+<h2 id="10-emulateur-de-previsualisation">10. Emulateur de previsualisation</h2>
+<p>Le bureau et Android incluent une previsualisation en temps reel du spectacle :</p>
+<h3 id="previsualisation-du-tableau-de-bord">Previsualisation du tableau de bord</h3>
+<p>Lorsqu'un spectacle est en cours, l'onglet Tableau de bord affiche un canevas de previsualisation en direct de la scene a cote du tableau de statut des Performers et de la barre de progression de la lecture.</p>
+<h3 id="spa-de-bureau">SPA de bureau</h3>
+<p>Le canevas de l'emulateur apparait dans l'onglet Execution sous la Timeline. Affiche :<br />
+- <strong>Projecteurs LED</strong> : Points colores le long des chemins de chaines avec effets de halo<br />
+- <strong>Projecteurs DMX</strong> : Triangles de cone de faisceau avec couleurs pilotees par la previsualisation<br />
+- <strong>Points de visee</strong> : Cercles rouges aux points de visee<br />
+- <strong>Etiquettes des projecteurs</strong> : Noms sous chaque noeud<br />
+- <strong>Compteur de temps</strong> : MM:SS ecoule / total</p>
+<h3 id="application-android_1">Application Android</h3>
+<p>La carte <code>ShowEmulatorCanvas</code> affiche :<br />
+- Les memes points de chaines LED et cones de faisceau DMX que sur le bureau<br />
+- Les objets affiches comme rectangles d'arriere-plan<br />
+- Les couleurs de previsualisation mises a jour chaque seconde pendant la lecture</p>
+<h3 id="visualisation-des-champs-spatiaux">Visualisation des champs spatiaux</h3>
+<p>Pendant la lecture d'un spectacle, l'emulateur d'execution affiche les effets spatiaux actifs se deplacant a travers la scene :<br />
+- <strong>Sphere</strong> : cercle colore translucide se deplacant le long du chemin de mouvement<br />
+- <strong>Plan</strong> : bande translucide horizontale ou verticale balayant la scene<br />
+- <strong>Boite</strong> : rectangle translucide a la position actuelle de l'effet<br />
+- Noms des effets affiches comme etiquettes a leur position actuelle<br />
+- Mise a jour a chaque image, synchronisee avec le temps de lecture ecoule</p>
+<h3 id="installations-dmx-uniquement">Installations DMX uniquement</h3>
+<p>L'emulateur affiche correctement les installations DMX uniquement (sans Performers LED). Les cones de faisceau violets statiques sont toujours visibles, avec des couleurs en direct lorsqu'un spectacle est en cours.</p>
+<hr />
+<h2 id="11-profils-de-projecteurs-dmx">11. Profils de projecteurs DMX</h2>
+<h3 id="profils-integres">Profils integres</h3>
+<table>
+<thead>
+<tr>
+<th>Profil</th>
+<th>Canaux</th>
+<th>Fonctionnalites</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RGB generique</td>
+<td>3</td>
+<td>Rouge, Vert, Bleu</td>
+</tr>
+<tr>
+<td>RGBW generique</td>
+<td>5</td>
+<td>Rouge, Vert, Bleu, Blanc, Variateur</td>
+</tr>
+<tr>
+<td>Variateur generique</td>
+<td>1</td>
+<td>Intensite uniquement</td>
+</tr>
+<tr>
+<td>Lyre 16 bits</td>
+<td>16</td>
+<td>Pan, Tilt, Variateur, Couleur, Gobo, Prisme</td>
+</tr>
+</tbody>
+</table>
+<h3 id="editeur-de-profils">Editeur de profils</h3>
+<p>Onglet Parametres puis <strong>Profils</strong> puis <strong>Nouveau profil</strong> ou <strong>Modifier</strong> :<br />
+- Definir les canaux avec nom, type (rouge/vert/bleu/variateur/pan/tilt/etc.), valeur par defaut<br />
+- Definir la largeur du faisceau, la plage pan/tilt pour les lyres<br />
+- Importer depuis le format JSON Open Fixture Library (OFL)</p>
+<h3 id="parcourir-lopen-fixture-library">Parcourir l'Open Fixture Library</h3>
+<p>Cliquez sur <strong>Rechercher OFL</strong> dans Parametres puis Profils pour acceder a plus de 700 projecteurs de l'<a href="https://open-fixture-library.org">Open Fixture Library</a> :</p>
+<p><strong>Recherche</strong> : Tapez un nom de projecteur, un fabricant ou un mot-cle puis les resultats s'affichent avec des boutons d'importation.</p>
+<p><strong>Parcourir par fabricant</strong> : Cliquez sur <strong>Fabricants</strong> pour voir toutes les marques avec le nombre de projecteurs. Cliquez sur un fabricant pour voir tous ses projecteurs. Cliquez sur <strong>Tout importer</strong> pour importer tous les projecteurs de ce fabricant d'un coup.</p>
+<p><strong>Importation en masse</strong> : Depuis les resultats de recherche, cliquez sur <strong>Tout importer</strong> pour importer tous les projecteurs correspondants. Depuis la page d'un fabricant, cliquez sur <strong>Tout importer</strong> pour l'ensemble du catalogue de la marque.</p>
+<p>Les projecteurs multi-modes creent automatiquement un profil SlyLED par mode.</p>
+<h3 id="bibliotheque-communautaire-de-projecteurs">Bibliotheque communautaire de projecteurs</h3>
+<p>Partagez et decouvrez des profils avec d'autres utilisateurs SlyLED :</p>
+<ol>
+<li><strong>Parcourir</strong> : Cliquez sur <strong>Communaute</strong> dans Parametres &gt; Profils pour rechercher, voir les recents ou les populaires</li>
+<li><strong>Telecharger</strong> : Cliquez sur Telecharger — importe immediatement dans votre bibliotheque locale</li>
+<li><strong>Partager</strong> : Cliquez sur <strong>Partager</strong> sur n'importe quel profil personnalise pour le telecharger vers la communaute</li>
+<li><strong>Deduplication</strong> : Le serveur detecte les doublons par empreinte de canaux (memes canaux = meme projecteur)</li>
+<li><strong>Recherche unifiee</strong> : Lors de l'ajout d'un projecteur DMX, les requetes de recherche interrogent simultanement Local + Communaute + OFL</li>
+</ol>
+<p>Serveur communautaire : https://electricrv.ca/api/profiles/</p>
+<h3 id="importationexportation">Importation/Exportation</h3>
+<ul>
+<li><strong>Communaute</strong> : Partager/telecharger des profils avec d'autres utilisateurs</li>
+<li><strong>Rechercher OFL</strong> : Parcourir, rechercher et importer en masse depuis l'Open Fixture Library</li>
+<li><strong>Coller OFL</strong> : Coller du JSON OFL brut pour les projecteurs hors ligne</li>
+<li><strong>Importer un lot</strong> : Charger un pack de profils precedemment exporte</li>
+<li><strong>Exporter</strong> : Telecharger tous les profils personnalises en JSON</li>
+<li><strong>Les profils integres</strong> ne peuvent pas etre modifies ou supprimes</li>
+</ul>
+<hr />
+<h2 id="12-spectacles-predefinis">12. Spectacles predefinis</h2>
+<p>14 spectacles preconstruits disponibles depuis l'onglet Execution puis <strong>Charger un spectacle</strong> puis <strong>Predefinis</strong> :</p>
+<table>
+<thead>
+<tr>
+<th>Predefini</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Rainbow Up</td>
+<td>Plan arc-en-ciel montant du sol au plafond</td>
+</tr>
+<tr>
+<td>Rainbow Across</td>
+<td>Sphere arc-en-ciel balayant de gauche a droite</td>
+</tr>
+<tr>
+<td>Slow Fire</td>
+<td>Effet de feu chaud sur tous les projecteurs</td>
+</tr>
+<tr>
+<td>Disco</td>
+<td>Etincelles pastel scintillantes</td>
+</tr>
+<tr>
+<td>Ocean Wave</td>
+<td>Vague bleue avec teinte sarcelle</td>
+</tr>
+<tr>
+<td>Sunset Glow</td>
+<td>Respiration chaude avec balayage dore</td>
+</tr>
+<tr>
+<td>Police Lights</td>
+<td>Stroboscope rouge avec flash bleu balayant</td>
+</tr>
+<tr>
+<td>Starfield</td>
+<td>Etincelles blanches sur fond sombre</td>
+</tr>
+<tr>
+<td>Aurora Borealis</td>
+<td>Rideau vert avec miroitement violet</td>
+</tr>
+<tr>
+<td>Spotlight Sweep</td>
+<td>Orbe chaud — les lyres le suivent</td>
+</tr>
+<tr>
+<td>Concert Wash</td>
+<td>Projecteur magenta + spot ambre suiveur</td>
+</tr>
+<tr>
+<td>Figure Eight</td>
+<td>Orbes croises — les lyres tracent des chemins en X</td>
+</tr>
+<tr>
+<td>Thunderstorm</td>
+<td>Eclairs — les lyres poursuivent les impacts</td>
+</tr>
+<tr>
+<td>Dance Floor</td>
+<td>Spots orbitaux rapides — suivi rapide</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="13-calibration-des-projecteurs-motorises">13. Calibration des projecteurs motorises</h2>
+<p><strong>But.</strong> La calibration apprend a SlyLED la realite mecanique de chaque projecteur motorise DMX : comment son support est oriente dans l'espace, ou se trouvent ses axes pan/tilt, et dans quel sens un DMX croissant entraine chaque axe. Une fois calibre, toute visee en coordonnees de scene (depuis une timeline, un puck gyro ou un telephone Android) atteint la bonne combinaison pan/tilt — sans essais-erreurs par projecteur.</p>
+<h3 id="avant-de-calibrer">Avant de calibrer</h3>
+<ul>
+<li><strong>Positionnez le projecteur</strong> dans la fenetre 3D (X, Y, Z en mm) et activez <code>mountedInverted</code> s'il est suspendu.</li>
+<li><strong>Definissez le vecteur de visee de repos</strong> en faisant glisser la sphere rouge dans la vue 3D. C'est la position par defaut a l'allumage.</li>
+<li><strong>Enregistrez une camera</strong> qui voit le faisceau sur le sol. Le flux v2 par cible necessite une calibration par marqueurs ArUco (onglet Camera -&gt; Calibrer).</li>
+<li><strong>Lancez le moteur Art-Net</strong> — la calibration ecrit directement dans l'univers DMX.</li>
+<li><strong>Baissez la lumiere de salle.</strong> La detection de faisceau se fait par contraste.</li>
+</ul>
+<h3 id="lancement-de-la-calibration">Lancement de la calibration</h3>
+<p>Sur la ligne du projecteur DMX, cliquez sur <strong>Calibrer</strong>. L'assistant affiche trois blocs :</p>
+<p><strong>Calibration existante</strong> (si le projecteur est deja calibre) :<br />
+- Badge de qualite : <strong>GOOD</strong> (&lt;1,5 deg RMS), <strong>FAIR</strong> (&lt;3 deg RMS), <strong>POOR</strong> (&gt;=3 deg RMS).<br />
+- Resume : RMS, maximum, nombre d'echantillons, nombre de conditionnement.<br />
+- Resultat du balayage de verification (le cas echeant) : RMS et erreur maximale en pixels sur des points non utilises pour l'ajustement.<br />
+- <strong>Recalibrer (rapide, demarrage a chaud)</strong> relance une calibration v2 qui demarre du modele existant — typiquement moins de 10 s contre ~120 s pour une premiere calibration.<br />
+- <strong>Voir residus</strong> ouvre le tableau par echantillon (voir "Reprise d'echantillon" plus bas).</p>
+<p><strong>Options</strong> :<br />
+- <strong>Couleur de faisceau</strong> — la couleur DMX emise pendant la decouverte et l'echantillonnage. Choisissez ce qui contraste le mieux avec le sol (le vert est generalement sur).<br />
+- <strong>Methode</strong> — <em>Legacy BFS (echantillonnage etendu)</em> est le flux v1 eprouve. <em>v2 par cibles</em> exige une calibration camera ArUco et converge point par point en utilisant le modele parametrique.<br />
+- <strong>Chauffage</strong> — balayage optionnel de 30 s a dimmer 0 avant l'echantillonnage. Recommande pour des projecteurs froids : les moteurs, courroies et modules LED derivent thermiquement dans la premiere minute, et calibrer a froid produit un modele qui derive pendant le spectacle.</p>
+<p>En cliquant <strong>Start Calibration</strong>, l'assistant passe en vue d'execution :</p>
+<ul>
+<li><strong>Barre de progression</strong> avec nom de phase (<em>Chauffage -&gt; Decouverte -&gt; Echantillonnage -&gt; Ajustement -&gt; Verification</em>).</li>
+<li><strong>Tableau par cible</strong> (mode v2 uniquement) — chaque cible affiche un point d'etat : en attente (gris) -&gt; convergence (orange) -&gt; converge (vert) ou echoue (rouge). Avec nombre d'iterations et erreur finale en pixels.</li>
+<li>Compter 60 a 120 s pour une premiere calibration, moins de 10 s pour une recalibration a chaud.</li>
+</ul>
+<h3 id="que-signifie-un-bon-ajustement">Que signifie un bon ajustement</h3>
+<p>A la fin vous obtenez le <strong>resume de qualite</strong> :<br />
+- <strong>Erreur angulaire RMS</strong> — sous 1 deg c'est excellent, sous 3 deg utilisable, au-dessus de 3 deg quelque chose va mal (mauvais echantillon, mauvaise orientation de support, jeu mecanique).<br />
+- <strong>Erreur maximale sur un echantillon</strong> — signale les valeurs aberrantes. Si le max est bien plus grand que le RMS, un seul mauvais echantillon fausse l'ajustement.<br />
+- <strong>Nombre de conditionnement</strong> — sous ~20 : sain ; au-dessus de 100 : echantillons geometriquement faibles (colineaires ou groupes). Ecartez les cibles.</p>
+<p>Plus la <strong>verification</strong> sur 2-3 points tenus de cote (non vus par le solveur). Bordure verte : generalise bien ; orange/rouge : surajustement possible.</p>
+<h3 id="reprise-dun-mauvais-echantillon">Reprise d'un mauvais echantillon</h3>
+<p>Le tableau des residus liste chaque echantillon avec son erreur, colore. Cliquez sur la <strong>X</strong> a cote d'un echantillon pour l'exclure — le serveur reajuste a partir des echantillons restants et rafraichit les metriques. <strong>Afficher les residus en 3D</strong> visualise chaque echantillon comme une courte ligne coloree entre la cible voulue et le point predit au sol.</p>
+<h3 id="position-de-repos-493">Position de repos (#493)</h3>
+<p>Le vecteur de visee au repos (la sphere rouge en 3D) est maintenant la <strong>position a l'allumage</strong>. Au demarrage du moteur Art-Net, chaque projecteur amorce pan/tilt via <code>model.inverse(repos)</code> — les projecteurs s'allument pointes sur quelque chose d'utile, pas ecrases au minimum mecanique.</p>
+<h3 id="verrou-de-calibration-511">Verrou de calibration (#511)</h3>
+<p>Pendant une calibration, le projecteur est verrouille : timelines, pucks gyro, telephones Android et le panneau de test DMX sont tous bloques. Un retour HTTP 423 <em>Locked</em> est renvoye. Le verrou se libere automatiquement en fin, annulation ou erreur, et ne peut jamais fuiter entre redemarrages du serveur.</p>
+<h3 id="depannage">Depannage</h3>
+<ul>
+<li><strong>"Beam not found"</strong> — reorientez le projecteur vers la zone visible de la camera au sol et relancez.</li>
+<li><strong>"No camera homography"</strong> (mode v2) — lancez d'abord la calibration ArUco de la camera.</li>
+<li><strong>"Only N of M targets converged"</strong> — la camera ne voit pas certains angles. Deplacez-la ou utilisez le mode legacy BFS qui echantillonne toute la zone visible.</li>
+<li><strong>Badge POOR</strong> — verifiez <code>mountedInverted</code>, serrez la mecanique (un etrier lache ajoute une erreur aleatoire), relancez avec chauffage active.</li>
+</ul>
+<hr />
+<h2 id="14-firmware-et-mises-a-jour-ota">14. Firmware et mises a jour OTA</h2>
+<h3 id="flash-usb">Flash USB</h3>
+<ol>
+<li>Allez dans l'onglet <strong>Firmware</strong></li>
+<li>Selectionnez le port COM et le binaire du firmware</li>
+<li>Cliquez sur <strong>Flasher</strong> — la progression affiche le pourcentage</li>
+</ol>
+<h3 id="ota-mise-a-jour-sans-fil">OTA (mise a jour sans fil)</h3>
+<ol>
+<li>Definissez les identifiants WiFi dans l'onglet Firmware</li>
+<li>Cliquez sur <strong>Verifier les mises a jour</strong> — affiche la comparaison de version par appareil</li>
+<li>Cliquez sur <strong>Mettre a jour</strong> sur tout Performer obsolete</li>
+<li>L'appareil redemarre automatiquement apres le flash</li>
+</ol>
+<h3 id="registre-du-firmware">Registre du firmware</h3>
+<p><code>firmware/registry.json</code> liste les binaires disponibles avec le type de carte et la version. Le systeme OTA compare la version du registre avec le firmware signale par chaque Performer.</p>
+<hr />
+<h2 id="15-limites-du-systeme">15. Limites du systeme</h2>
+<table>
+<thead>
+<tr>
+<th>Ressource</th>
+<th>Teste</th>
+<th>Maximum recommande</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Projecteurs DMX</td>
+<td>120</td>
+<td>500+</td>
+</tr>
+<tr>
+<td>Performers LED</td>
+<td>12</td>
+<td>50</td>
+</tr>
+<tr>
+<td>Total des projecteurs</td>
+<td>132</td>
+<td>500+</td>
+</tr>
+<tr>
+<td>Univers</td>
+<td>4</td>
+<td>32 768 (Art-Net)</td>
+</tr>
+<tr>
+<td>LED par chaine</td>
+<td>65535</td>
+<td>Adressage uint16</td>
+</tr>
+<tr>
+<td>Chaines par enfant</td>
+<td>8</td>
+<td>Constante du protocole</td>
+</tr>
+<tr>
+<td>Clips de Timeline</td>
+<td>50</td>
+<td>200+</td>
+</tr>
+<tr>
+<td>Spectacles predefinis</td>
+<td>14</td>
+<td>Integres (extensibles)</td>
+</tr>
+<tr>
+<td>Reponse API (132 projecteurs)</td>
+<td>&lt; 1 ms</td>
+<td>Sous la milliseconde</td>
+</tr>
+<tr>
+<td>Memoire (132 projecteurs)</td>
+<td>46 Mo</td>
+<td>Mise a l'echelle lineaire</td>
+</tr>
+<tr>
+<td>Reseau (132 projecteurs)</td>
+<td>221 Ko</td>
+<td>Par cycle de test</td>
+</tr>
+</tbody>
+</table>
+<p>Voir <code>docs/STRESS_TEST.md</code> pour les donnees de benchmark completes.</p>
+<hr />
+<h2 id="16-depannage">16. Depannage</h2>
+<table>
+<thead>
+<tr>
+<th>Probleme</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Vue d'execution vide</strong></td>
+<td>Verifiez que les projecteurs sont positionnes dans la Mise en page. Les installations DMX uniquement s'affichent desormais (correctif v8.1).</td>
+</tr>
+<tr>
+<td><strong>Cone de faisceau dans la mauvaise direction</strong></td>
+<td>aimPoint[1] est la hauteur (Y), pas la profondeur (Z). Verifiez les valeurs du point de visee.</td>
+</tr>
+<tr>
+<td><strong>Crash JSON sur Android</strong></td>
+<td>Mettez a jour vers la v8.1 — aimPoint est passe de Int a Double. Reinitialisation d'usine : necessite desormais un en-tete de confirmation.</td>
+</tr>
+<tr>
+<td><strong>Erreur de sauvegarde de spectacle</strong></td>
+<td>Mettez a jour vers la v8.1 — le point de terminaison <code>/api/show/export</code> etait manquant.</td>
+</tr>
+<tr>
+<td><strong>Echec de la verification du firmware</strong></td>
+<td>Mettez a jour vers la v8.1 — bugs corriges pour le BOM UTF-8 et l'iteration de dictionnaire dans registry.json.</td>
+</tr>
+<tr>
+<td><strong>Fenetre 3D ne s'affiche pas</strong></td>
+<td>Utilisez Chrome/Firefox/Edge avec le support WebGL.</td>
+</tr>
+<tr>
+<td><strong>Performers non synchronises</strong></td>
+<td>Verifiez que tous les appareils sont sur le meme reseau WiFi. Actualisez dans l'onglet Configuration.</td>
+</tr>
+<tr>
+<td><strong>Taille du canevas incorrecte</strong></td>
+<td>Les dimensions de la scene (Parametres) determinent la taille du canevas : canvasW = scene.w x 1000.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="17-reference-rapide-api">17. Reference rapide API</h2>
+<h3 id="scene-et-mise-en-page">Scene et mise en page</h3>
+<table>
+<thead>
+<tr>
+<th>Methode</th>
+<th>Point de terminaison</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET/POST</td>
+<td><code>/api/layout</code></td>
+<td>Mise en page avec projecteurs et positions</td>
+</tr>
+<tr>
+<td>GET/POST</td>
+<td><code>/api/stage</code></td>
+<td>Dimensions de la scene (l, h, p en metres)</td>
+</tr>
+<tr>
+<td>GET/POST</td>
+<td><code>/api/objects</code></td>
+<td>Objets de scene (murs, sols, ponts, accessoires)</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/objects/temporal</code></td>
+<td>Creer des objets temporels (bases sur le TTL)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="projecteurs">Projecteurs</h3>
+<table>
+<thead>
+<tr>
+<th>Methode</th>
+<th>Point de terminaison</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET/POST</td>
+<td><code>/api/fixtures</code></td>
+<td>Lister / creer</td>
+</tr>
+<tr>
+<td>GET/PUT/DELETE</td>
+<td><code>/api/fixtures/:id</code></td>
+<td>CRUD</td>
+</tr>
+<tr>
+<td>PUT</td>
+<td><code>/api/fixtures/:id/aim</code></td>
+<td>Definir le point de visee</td>
+</tr>
+</tbody>
+</table>
+<h3 id="spectacles-et-timelines">Spectacles et Timelines</h3>
+<table>
+<thead>
+<tr>
+<th>Methode</th>
+<th>Point de terminaison</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET/POST</td>
+<td><code>/api/timelines</code></td>
+<td>Lister / creer</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/timelines/:id/bake</code></td>
+<td>Demarrer la compilation</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/timelines/:id/start</code></td>
+<td>Demarrer la lecture</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/show/presets</code></td>
+<td>Lister les spectacles predefinis</td>
+</tr>
+<tr>
+<td>GET/POST</td>
+<td><code>/api/show/export</code>, <code>/api/show/import</code></td>
+<td>Sauvegarder/charger un fichier de spectacle</td>
+</tr>
+</tbody>
+</table>
+<h3 id="dmx">DMX</h3>
+<table>
+<thead>
+<tr>
+<th>Methode</th>
+<th>Point de terminaison</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET</td>
+<td><code>/api/dmx-profiles</code></td>
+<td>Lister les profils</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/api/dmx/patch</code></td>
+<td>Carte d'adresses des univers</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/api/dmx/start</code>, <code>/api/dmx/stop</code></td>
+<td>Controle du moteur</td>
+</tr>
+</tbody>
+</table>
+</body>
+</html>

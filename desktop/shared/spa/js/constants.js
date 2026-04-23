@@ -7,7 +7,7 @@
 export const TYPE_NAMES = [
   'Blackout', 'Solid', 'Fade', 'Breathe', 'Chase', 'Rainbow', 'Fire',
   'Comet', 'Twinkle', 'Strobe', 'Color Wipe', 'Scanner', 'Sparkle',
-  'Gradient', 'DMX Scene', 'Pan/Tilt Move', 'Gobo Select', 'Color Wheel',
+  'Gradient', 'DMX Scene', 'Pan/Tilt Move', 'Gobo Select', 'Colour Wheel',
   'Track',
 ];
 

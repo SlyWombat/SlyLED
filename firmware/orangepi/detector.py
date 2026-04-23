@@ -205,3 +205,76 @@ class ObjectDetector:
                 })
 
             return detections, inference_ms
+
+
+    def detect_tiled(self, frame, threshold=0.5, classes=None,
+                     tile_size=640, overlap=0.2):
+        """#621 — SAHI-style tiled detection for high-res frames.
+
+        Slices the frame into overlapping tiles, runs self.detect() on
+        each at full model resolution, then merges the per-tile results
+        with a global NMS pass. Preserves small-object detail that
+        single-frame MODEL_SIZE downscaling washes out (a 1.8 m person
+        standing 5 m from a 4K camera occupies ~20 px after downscale
+        to 640×640, below YOLOv8n's effective floor).
+
+        Args:
+            frame: BGR numpy array.
+            threshold: confidence cutoff — same as detect().
+            classes: allowlist (same shape).
+            tile_size: edge length of each tile in frame pixels. Default
+                640 matches the model's input size so each tile runs
+                through without further downscale.
+            overlap: tile-to-tile overlap fraction (0.0-0.5 typical).
+                Catches objects straddling tile boundaries.
+
+        Returns: (detections, inference_ms) with bboxes already in
+        whole-frame coordinates.
+        """
+        import time as _time
+        import cv2 as _cv2
+        import numpy as _np
+
+        H, W = frame.shape[:2]
+        tile = int(tile_size)
+        step = max(1, int(tile * (1.0 - max(0.0, min(0.5, overlap)))))
+        xs = list(range(0, max(1, W - tile + 1), step))
+        ys = list(range(0, max(1, H - tile + 1), step))
+        if not xs or xs[-1] + tile < W:
+            xs.append(max(0, W - tile))
+        if not ys or ys[-1] + tile < H:
+            ys.append(max(0, H - tile))
+
+        all_dets = []
+        t0 = _time.monotonic()
+        for y0 in ys:
+            for x0 in xs:
+                x1_c = min(W, x0 + tile)
+                y1_c = min(H, y0 + tile)
+                patch = frame[y0:y1_c, x0:x1_c]
+                dets, _ = self.detect(patch, threshold=threshold,
+                                        classes=classes,
+                                        input_size=tile)
+                for d in dets:
+                    d2 = dict(d)
+                    d2["x"] = d["x"] + x0
+                    d2["y"] = d["y"] + y0
+                    all_dets.append(d2)
+        inference_ms = (_time.monotonic() - t0) * 1000
+
+        if not all_dets:
+            return [], inference_ms
+
+        # Global NMS across all tiles — a person seen in two overlapping
+        # tiles returns as two detections that NMS collapses to one.
+        boxes = [[d["x"], d["y"], d["w"], d["h"]] for d in all_dets]
+        scores = [float(d["confidence"]) for d in all_dets]
+        try:
+            keep = _cv2.dnn.NMSBoxes(boxes, scores, threshold, 0.45)
+        except Exception:
+            keep = list(range(len(all_dets)))
+        if len(keep) == 0:
+            return [], inference_ms
+        keep_idx = _np.array(keep).flatten()
+        merged = [all_dets[int(i)] for i in keep_idx]
+        return merged, inference_ms

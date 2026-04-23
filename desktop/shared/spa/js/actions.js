@@ -1,7 +1,7 @@
 /** actions.js — Actions library: CRUD, action editor modal, type-specific fields. Extracted from app.js Phase 2. */
 // ── Actions library ──────────────────────────────────────────────────────────
 var _acts=[];
-var _typeNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Color Wipe','Scanner','Sparkle','Gradient','DMX Scene','Pan/Tilt Move','Gobo Select','Color Wheel','Track'];
+var _typeNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Colour Wipe','Scanner','Sparkle','Gradient','DMX Scene','Pan/Tilt Move','Gobo Select','Colour Wheel','Track'];
 var _dirNames=['East','North','West','South'];
 var _palNames=['Classic','Ocean','Lava','Forest','Party','Heat','Cool','Pastel'];
 function rgb2h(r,g,b){return'#'+('0'+r.toString(16)).slice(-2)+('0'+g.toString(16)).slice(-2)+('0'+b.toString(16)).slice(-2);}
@@ -197,7 +197,7 @@ function _showActModal(a){
   h+=' <label style="display:inline;margin-left:.5em">Tilt (0.0–1.0)</label><input type="number" id="ae-tilt" value="'+(a?a.tilt||0.5:0.5)+'" min="0" max="1" step="0.01" style="width:80px">';
   h+='<label>Strobe (0=off, 1–255=slow→fast)</label><input type="number" id="ae-strobe" value="'+(a?a.strobe||0:0)+'" min="0" max="255" style="width:80px">';
   h+='<label>Gobo (0=open, 1+=gobo index)</label><input type="number" id="ae-gobo" value="'+(a?a.gobo||0:0)+'" min="0" max="255" style="width:80px">';
-  h+='<label>Color Wheel (0=open, 1+=color index)</label><input type="number" id="ae-colorwheel" value="'+(a?a.colorWheel||0:0)+'" min="0" max="255" style="width:80px">';
+  h+='<label>Colour Wheel (0=open, 1+=colour index)</label><input type="number" id="ae-colorwheel" value="'+(a?a.colorWheel||0:0)+'" min="0" max="255" style="width:80px">';
   h+='<label>Prism (0=off)</label><input type="number" id="ae-prism" value="'+(a?a.prism||0:0)+'" min="0" max="255" style="width:80px">';
   h+='</div>';
   // Pan/Tilt Move: start/end pan/tilt, speed
