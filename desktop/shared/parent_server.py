@@ -289,11 +289,11 @@ def _derive_stage_bounds():
     max_z = 0.0
     seen = False
     for c in (_layout.get("children") or []):
+        if "x" not in c and "y" not in c and "z" not in c:
+            continue  # entry without a position at all — layout registry row
         x = float(c.get("x") or 0)
         y = float(c.get("y") or 0)
         z = float(c.get("z") or 0)
-        if x == 0 and y == 0 and z == 0:
-            continue
         max_x = max(max_x, x)
         max_y = max(max_y, y)
         max_z = max(max_z, z)
@@ -2107,7 +2107,11 @@ def _pixel_point_to_stage_floor(cam_fixture, px, py, frame_w, frame_h):
         except Exception:
             pass
 
-    # Tier 2: FOV projection ray-plane intersect (needs camera pose).
+    # Tier 2: FOV projection ray-plane intersect. Uses the canonical
+    # camera_math.build_camera_to_stage(tilt, pan, roll) helper per
+    # CLAUDE.md — review flagged that the previous inline basis derivation
+    # silently dropped rotation[2] (roll), so roll-mounted cameras placed
+    # feet in the wrong stage location with tier="fov-projection".
     if cam_fixture and frame_w and frame_h:
         pos_map = {p["id"]: p for p in _layout.get("children", [])}
         cam_pos = pos_map.get(cam_fixture.get("id"), {})
@@ -2115,33 +2119,33 @@ def _pixel_point_to_stage_floor(cam_fixture, px, py, frame_w, frame_h):
         cy0 = float(cam_pos.get("y", 0) or 0)
         cz0 = float(cam_pos.get("z", 0) or 0)
         if cz0 > 1:  # camera must be off the floor for a ray-plane intersect
-            aim = _rotation_to_aim(cam_fixture.get("rotation", [0, 0, 0]),
-                                     [cx0, cy0, cz0])
-            dx0 = aim[0] - cx0
-            dy0 = aim[1] - cy0
-            dz0 = aim[2] - cz0
-            dist = math.sqrt(dx0 * dx0 + dy0 * dy0 + dz0 * dz0)
-            if dist >= 1:
-                dx0, dy0, dz0 = dx0 / dist, dy0 / dist, dz0 / dist
-                rx = dy0
-                ry = -dx0
-                r_len = math.sqrt(rx * rx + ry * ry)
-                if r_len >= 0.001:
-                    rx, ry = rx / r_len, ry / r_len
-                else:
-                    rx, ry = 1.0, 0.0
-                rz = 0.0
-                ux = ry * dz0 - rz * dy0
-                uy = rz * dx0 - rx * dz0
-                uz = rx * dy0 - ry * dx0
+            try:
+                from camera_math import build_camera_to_stage
+            except Exception:
+                build_camera_to_stage = None
+            rot = cam_fixture.get("rotation", [0, 0, 0]) or [0, 0, 0]
+            tilt_deg = float(rot[0] or 0)
+            pan_deg = float(rot[1] or 0)
+            roll_deg = float(rot[2] or 0)
+            R = build_camera_to_stage(tilt_deg, pan_deg, roll_deg) if build_camera_to_stage else None
+            if R is not None:
                 fov_rad = _camera_h_fov_rad(cam_fixture, frame_w, frame_h)
                 half_fov = fov_rad / 2.0
                 aspect = frame_w / frame_h if frame_h > 0 else 1.0
+                # Pinhole cam-local ray: +Z forward, +X right, +Y down.
                 ndc_x = (px / frame_w - 0.5) * 2.0
-                ndc_y = -(py / frame_h - 0.5) * 2.0
-                ray_x = dx0 + math.tan(half_fov) * (ndc_x * rx + ndc_y / aspect * ux)
-                ray_y = dy0 + math.tan(half_fov) * (ndc_x * ry + ndc_y / aspect * uy)
-                ray_z = dz0 + math.tan(half_fov) * (ndc_x * rz + ndc_y / aspect * uz)
+                ndc_y = (py / frame_h - 0.5) * 2.0
+                local_x = math.tan(half_fov) * ndc_x
+                local_y = math.tan(half_fov) * ndc_y / max(aspect, 1e-6)
+                local_z = 1.0
+                # R @ local  — numpy path or list-of-lists fallback
+                if hasattr(R, "shape"):  # ndarray
+                    v = R @ [local_x, local_y, local_z]
+                    ray_x, ray_y, ray_z = float(v[0]), float(v[1]), float(v[2])
+                else:
+                    ray_x = R[0][0]*local_x + R[0][1]*local_y + R[0][2]*local_z
+                    ray_y = R[1][0]*local_x + R[1][1]*local_y + R[1][2]*local_z
+                    ray_z = R[2][0]*local_x + R[2][1]*local_y + R[2][2]*local_z
                 if abs(ray_z) > 1e-4:
                     t = -cz0 / ray_z
                     if t > 0:
@@ -7840,7 +7844,13 @@ def _fuse_temporal_objects():
                 "weight": round(w, 3),
             })
         if total_w <= 0:
-            fused.append(a); continue
+            # Review-fix: every cluster member rolled past _FUSION_MAX_AGE_S
+            # so each contributed weight 0. Don't collapse to cluster[0]
+            # only — that silently drops members [1..N]. Keep every member
+            # as-is (they'll reap on the next _expiresAt tick).
+            for _i, obj in cluster:
+                fused.append(obj)
+            continue
         merged = dict(cluster[0][1])  # keep sticky id from lowest-id member
         merged["transform"] = {
             "pos": [px / total_w, py / total_w, pz / total_w],
