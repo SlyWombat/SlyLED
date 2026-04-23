@@ -7274,11 +7274,14 @@ def api_objects_temporal_create():
         sd = _stage.get("d", 4.0) * 1000  # stage depth mm
         # Pixel fraction → stage mm. Camera on back wall facing audience:
         # pixel (0,0)=top-left → stage (sw, sd), pixel (1,1)=bottom-right → stage (0, 0)
-        pos = [sw * (1.0 - cx), sd * (1.0 - cy), 0]
         # Scale order matches renderer: [width, height(Z), depth(Y)]
         scale = [pixel_box.get("w", 100) * sw / fw,
                  1700,
                  400]
+        # pos is the object CENTER (matches static-object convention used by
+        # the scene-3d renderer). For a person standing on the floor with
+        # scale[1]=1700mm tall, the centre Z is height/2 = 850mm.
+        pos = [sw * (1.0 - cx), sd * (1.0 - cy), scale[1] / 2]
     with _lock:
         obj = {
             "id": _nxt_tmp, "name": body.get("name", f"Temporal {_nxt_tmp}"),

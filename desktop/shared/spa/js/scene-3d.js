@@ -254,6 +254,8 @@ function s3dAnimate(){
     }
     scaleFactor=Math.max(0.3,Math.min(3.0,scaleFactor));
     _s3d.nodes.forEach(function(grp){
+      // Stage objects (Pillar/Music/custom props) use real-world dimensions — do not scale
+      if(grp.userData.stageObj)return;
       // Scale the node sphere (first child) but not the whole group (that would scale beams too)
       if(grp.children[0]&&grp.children[0].isMesh)grp.children[0].scale.setScalar(scaleFactor);
       // Also scale the glow ring (second child)

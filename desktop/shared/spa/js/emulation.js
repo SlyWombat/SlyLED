@@ -371,6 +371,10 @@ function emu3dRenderObjects(){
   objs.forEach(function(s){
     var t=s.transform||{pos:[0,0,0],scale:[2000,1500,1]};
     var isPerson=(s.objectType==='person'||s._temporal);
+    // Static stage objects (Pillar, Music, props) are already drawn by
+    // scene-3d.js _s3dRenderObjects. Only the animated person capsule is
+    // emulation-specific; skip everything else to avoid rendering twice.
+    if(!isPerson)return;
     // Stage→Three.js: X→X, Z(height)→Y, Y(depth)→Z
     var px=(t.pos[0]||0)/1000, py=(t.pos[2]||0)/1000, pz=(t.pos[1]||0)/1000;
 
