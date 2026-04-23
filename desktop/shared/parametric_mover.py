@@ -318,71 +318,135 @@ def fit_model(fixture_pos: Tuple[float, float, float],
               tilt_range_deg: float,
               samples: Sequence,
               mounted_inverted: bool = False,
+              force_signs: Optional[Tuple[int, int]] = None,
               ) -> Tuple[ParametricFixtureModel, FitQuality]:
     """Fit the parametric model to calibration samples.
 
     Runs LM over the five continuous parameters for every combination of
-    (pan_sign, tilt_sign) ∈ {±1}² and returns the best fit. Requires at
-    least 2 non-colinear samples for a meaningful result, though quality
-    degrades fast below 4.
+    (pan_sign, tilt_sign) ∈ {±1}² and returns the best fit by RMS.
+
+    Q10 — the previous "<0.2° RMS convention tie-break" has been removed.
+    When the mirror ambiguity produces two equal-RMS solutions, the pick
+    is now arbitrary-but-deterministic (order of iteration) unless the
+    caller supplies `force_signs` from a physical sign-confirmation probe
+    (see `verify_signs`). Relying on the convention silently picked the
+    wrong mirror on real rigs where the mount pitch/roll departed from
+    the assumed zero — use verify_signs() to lock this down.
+
+    Args:
+        force_signs: (pan_sign, tilt_sign), each ∈ {-1, +1}. Skips the
+                     ±1 × ±1 search and fits only the specified combo.
+                     Use this after a physical sign-confirmation probe
+                     to eliminate the mirror ambiguity.
+
+    Requires at least 2 non-colinear samples for a meaningful result, though
+    quality degrades fast below 4.
     """
     pts = _unpack_samples(samples)
     if len(pts) < 2:
         raise ValueError("Need at least 2 calibration samples to fit a model.")
 
-    # Collect every fit. The parametric model has a real sign ambiguity:
-    # flipping both signs and yaw by 180° produces the same forward beam, so
-    # two or more sign combos can converge to the same residual. We tie-break
-    # toward the project convention (pan_sign=+1, tilt_sign=-1) when a
-    # candidate is within 0.2° RMS of the best — the convention matches
-    # `pan_tilt_to_ray` and SPA rendering, avoiding surprising flip-outs
-    # during extrapolation.
-    candidates: List[Tuple[float, int, ParametricFixtureModel, FitQuality]] = []
+    if force_signs is not None:
+        p_s, t_s = int(force_signs[0]), int(force_signs[1])
+        if p_s not in (-1, 1) or t_s not in (-1, 1):
+            raise ValueError(f"force_signs must be ±1 pairs; got {force_signs}")
+        sign_combos = [(p_s, t_s)]
+    else:
+        sign_combos = [(1, 1), (1, -1), (-1, 1), (-1, -1)]
 
-    for pan_sign in (1, -1):
-        for tilt_sign in (1, -1):
-            m = ParametricFixtureModel(
-                fixture_pos=tuple(fixture_pos),
-                pan_range_deg=pan_range_deg,
-                tilt_range_deg=tilt_range_deg,
-                mount_yaw_deg=0.0,
-                mount_pitch_deg=180.0 if mounted_inverted else 0.0,
-                mount_roll_deg=0.0,
-                pan_offset=0.5,
-                tilt_offset=0.5,
-                pan_sign=pan_sign,
-                tilt_sign=tilt_sign,
-            )
-            try:
-                _lm_solve(m, pts)
-            except Exception:
-                continue
-            errs = _angular_error_deg(m, pts)
-            if not errs:
-                continue
-            rms = math.sqrt(sum(e * e for e in errs) / len(errs))
-            # Convention preference: 0 if (+1, -1), 1 otherwise — cheap sort key.
-            conv_dist = 0 if (pan_sign == 1 and tilt_sign == -1) else 1
-            quality = FitQuality(
-                rms_error_deg=rms,
-                max_error_deg=max(errs),
-                sample_count=len(pts),
-                condition_number=_condition_number(m, pts),
-                per_sample_deg=errs,
-            )
-            candidates.append((rms, conv_dist, m, quality))
+    candidates: List[Tuple[float, ParametricFixtureModel, FitQuality]] = []
+
+    for pan_sign, tilt_sign in sign_combos:
+        m = ParametricFixtureModel(
+            fixture_pos=tuple(fixture_pos),
+            pan_range_deg=pan_range_deg,
+            tilt_range_deg=tilt_range_deg,
+            mount_yaw_deg=0.0,
+            mount_pitch_deg=180.0 if mounted_inverted else 0.0,
+            mount_roll_deg=0.0,
+            pan_offset=0.5,
+            tilt_offset=0.5,
+            pan_sign=pan_sign,
+            tilt_sign=tilt_sign,
+        )
+        try:
+            _lm_solve(m, pts)
+        except Exception:
+            continue
+        errs = _angular_error_deg(m, pts)
+        if not errs:
+            continue
+        rms = math.sqrt(sum(e * e for e in errs) / len(errs))
+        quality = FitQuality(
+            rms_error_deg=rms,
+            max_error_deg=max(errs),
+            sample_count=len(pts),
+            condition_number=_condition_number(m, pts),
+            per_sample_deg=errs,
+        )
+        candidates.append((rms, m, quality))
 
     if not candidates:
         raise RuntimeError("LM failed on every sign combination.")
 
-    # Sort by (rms, conv_dist) then tie-break: anything within 0.2° of the
-    # best RMS is considered "equally good", so the convention winner wins.
-    candidates.sort(key=lambda c: (c[0], c[1]))
-    best_rms = candidates[0][0]
-    near = [c for c in candidates if c[0] - best_rms < 0.2]
-    near.sort(key=lambda c: (c[1], c[0]))
-    _, _, best, best_quality = near[0]
+    # Q10 — strict RMS ranking. No convention tie-break — if two mirrors
+    # fit equally, the caller should have supplied force_signs from a
+    # verify_signs() probe. Log the ambiguity so at least it's visible.
+    candidates.sort(key=lambda c: c[0])
+    if len(candidates) >= 2 and (candidates[1][0] - candidates[0][0]) < 0.2:
+        # Near-tie between mirrors — visible warning (no side-effects).
+        try:
+            import logging
+            logging.getLogger(__name__).warning(
+                "fit_model: mirror ambiguity detected — top two sign combos "
+                "within 0.2° RMS (%.3f vs %.3f). Use verify_signs() + "
+                "force_signs to disambiguate.",
+                candidates[0][0], candidates[1][0])
+        except Exception:
+            pass
+    _, best, best_quality = candidates[0]
     return best, best_quality
+
+
+def verify_signs(beam_pixel_before: Tuple[float, float],
+                 beam_pixel_after_pan_plus: Optional[Tuple[float, float]],
+                 beam_pixel_after_tilt_plus: Optional[Tuple[float, float]],
+                 pan_axis_sign_in_frame: int = 1,
+                 tilt_axis_sign_in_frame: int = -1,
+                 ) -> Tuple[int, int]:
+    """Q10 — sign-confirmation probe. Given one baseline beam pixel plus
+    one pixel from "pan+" and one from "tilt+" physical nudges, return
+    the (pan_sign, tilt_sign) the LM fit should use.
+
+    The caller performs the physical work (drive pan+0.02, observe beam,
+    return to baseline, drive tilt+0.02, observe beam). This function
+    just interprets the two beam-pixel deltas.
+
+    `pan_axis_sign_in_frame` / `tilt_axis_sign_in_frame` describe the
+    camera convention:
+      - Default: a pan+ that physically rotates stage-right should move
+        the beam +X in the frame (left→right = pan_sign +1).
+      - A tilt+ that physically aims further DOWN should move the beam
+        +Y in the frame (top→bottom = tilt_sign −1, matching the
+        project convention where tilt=0.5 is level and +tilt is down).
+    Override these if the camera is rotated 180° or the fixture has an
+    unusual frame orientation.
+    """
+    if beam_pixel_after_pan_plus is None:
+        pan_sign = +1  # probe failed; fall back to convention
+    else:
+        dpx = beam_pixel_after_pan_plus[0] - beam_pixel_before[0]
+        # If the beam moved in the expected-positive direction, sign is +1.
+        pan_sign = +1 if (dpx * pan_axis_sign_in_frame) > 0 else -1
+    if beam_pixel_after_tilt_plus is None:
+        tilt_sign = -1  # convention default
+    else:
+        dpy = beam_pixel_after_tilt_plus[1] - beam_pixel_before[1]
+        # For the default camera (down = +Y), tilt+ moving the beam down
+        # gives dpy > 0 and we interpret that as tilt_sign = -1 (matches
+        # the "tilt=0.5 level, +tilt = downward" project convention).
+        tilt_sign = -1 if (dpy * tilt_axis_sign_in_frame) > 0 else +1
+    return pan_sign, tilt_sign
 
 
 def _condition_number(model: ParametricFixtureModel,

@@ -758,7 +758,7 @@ function _calWizComputeStageMap(){
         done++;
         if(r&&r.ok){
           _calWiz.stageMap[cam.id]={
-            cameraPosition:r.cameraPosition||null,
+            cameraPositionDiagnostic:r.cameraPositionDiagnostic||null,
             rmsError:r.rmsError!=null?parseFloat(r.rmsError):null,
             distances:r.distances||null,
             // #331 — surface which intrinsics path the solver used so
@@ -784,7 +784,8 @@ function _calWizStageMapResultHtml(){
   var selCams=_calWiz.cameras.filter(function(c){return c.selected&&c.ip;});
   h+='<div style="background:rgba(34,211,238,.04);border:1px solid rgba(34,211,238,.12);border-radius:6px;padding:.8em 1em">';
   h+='<div style="font-size:.85em;color:#e2e8f0;margin-bottom:.5em;font-weight:600">Stage Map Results</div>';
-  h+='<table class="tbl" style="margin-bottom:.4em"><tr><th>Camera</th><th>Position (mm)</th><th>RMS Error</th><th>Status</th></tr>';
+  h+='<div style="font-size:.72em;color:#fbbf24;margin-bottom:.3em">Diagnostic pose is from solvePnP on coplanar markers — not authoritative. Use layout position for real placement. Homography (RMS Error) is what downstream uses.</div>';
+  h+='<table class="tbl" style="margin-bottom:.4em"><tr><th>Camera</th><th>PnP Diagnostic (mm)</th><th>RMS Error</th><th>Status</th></tr>';
   selCams.forEach(function(cam){
     var r=_calWiz.stageMap[cam.id];
     if(!r){
@@ -795,7 +796,7 @@ function _calWizStageMapResultHtml(){
       h+='<tr><td>'+escapeHtml(cam.name)+'</td><td colspan="3" style="color:#f87171">'+escapeHtml(r.error)+'</td></tr>';
       return;
     }
-    var pos=r.cameraPosition;
+    var pos=r.cameraPositionDiagnostic;
     var posStr=pos?'X:'+Math.round(pos.x)+' Y:'+Math.round(pos.y)+' Z:'+Math.round(pos.z):'N/A';
     var rmsStr=r.rmsError!=null?r.rmsError.toFixed(2)+'px':'N/A';
     var rmsColor=r.rmsError!=null?(r.rmsError<2?'#4ade80':r.rmsError<5?'#fbbf24':'#f87171'):'#64748b';
@@ -813,13 +814,13 @@ function _calWizStageMapResultHtml(){
   h+='</table>';
   if(selCams.length>1){
     // Show inter-camera distances
-    var camsWithPos=selCams.filter(function(c){var r=_calWiz.stageMap[c.id];return r&&r.cameraPosition&&!r.error;});
+    var camsWithPos=selCams.filter(function(c){var r=_calWiz.stageMap[c.id];return r&&r.cameraPositionDiagnostic&&!r.error;});
     if(camsWithPos.length>1){
       h+='<div style="font-size:.78em;color:#94a3b8;margin-top:.4em">Inter-camera distances: ';
       for(var i=0;i<camsWithPos.length;i++){
         for(var j=i+1;j<camsWithPos.length;j++){
-          var p1=_calWiz.stageMap[camsWithPos[i].id].cameraPosition;
-          var p2=_calWiz.stageMap[camsWithPos[j].id].cameraPosition;
+          var p1=_calWiz.stageMap[camsWithPos[i].id].cameraPositionDiagnostic;
+          var p2=_calWiz.stageMap[camsWithPos[j].id].cameraPositionDiagnostic;
           var dx=p1.x-p2.x,dy=p1.y-p2.y,dz=p1.z-p2.z;
           var dist=Math.sqrt(dx*dx+dy*dy+dz*dz);
           h+=escapeHtml(camsWithPos[i].name)+' \u2194 '+escapeHtml(camsWithPos[j].name)+': '+Math.round(dist)+'mm ';

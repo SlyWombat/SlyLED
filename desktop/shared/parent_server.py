@@ -3071,20 +3071,32 @@ def api_camera_stage_map(fid):
     cam_pos_rounded = [round(float(cam_pos[0]), 1),
                        round(float(cam_pos[1]), 1),
                        round(float(cam_pos[2]), 1)]
+    # Q8 — solvePnP pose is diagnostic-only. On coplanar floor markers it
+    # produces physically impossible positions (negative Z, X outside the
+    # stage). The direct findHomography above is the authoritative output;
+    # cameraPositionDiagnostic is kept for operator-visible disagreement
+    # reporting only.
+    pnp_layout_disagreement_mm = None
+    if camera_pos_layout:
+        pnp_layout_disagreement_mm = round(float(math.sqrt(
+            (cam_pos_rounded[0] - camera_pos_layout.get("x", 0)) ** 2 +
+            (cam_pos_rounded[1] - camera_pos_layout.get("y", 0)) ** 2 +
+            (cam_pos_rounded[2] - camera_pos_layout.get("z", 0)) ** 2
+        )), 1)
     result = {
         "ok": True,
         "markersDetected": detected_count,
         "markersMatched": len(matched_ids),
         "matchedIds": matched_ids,
-        # Array form for new consumers, dict form for the SPA — the SPA's
-        # stage-map wizard reads `.cameraPosition` (was previously silently
-        # undefined, blanking the results table on every run — #331).
-        "cameraPosStage": cam_pos_rounded,
-        "cameraPosition": {"x": cam_pos_rounded[0],
-                           "y": cam_pos_rounded[1],
-                           "z": cam_pos_rounded[2]},
+        # Q8 — cameraPositionDiagnostic replaces the previous cameraPosStage /
+        # cameraPosition keys. Kept as diagnostic fields only — operators
+        # should read cameraPos (layout) for the authoritative camera pose.
+        "cameraPositionDiagnostic": {"x": cam_pos_rounded[0],
+                                       "y": cam_pos_rounded[1],
+                                       "z": cam_pos_rounded[2]},
+        "pnpLayoutDisagreementMm": pnp_layout_disagreement_mm,
         "rmsError": round(float(err), 2),
-        "method": "solvePnP",
+        "method": "findHomography+solvePnPDiagnostic",
         "intrinsicSource": intrinsic_source,
         "homography": H_floor.tolist(),
         "intrinsics": {"fx": round(float(K[0, 0]), 1),

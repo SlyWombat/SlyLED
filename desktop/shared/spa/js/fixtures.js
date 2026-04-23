@@ -41,7 +41,23 @@ function renderFixturesSidebar(){
   placed.forEach(function(f){
     var ft=f.fixtureType||'led';
     var icon=f.type==='point'?'\u2b24':f.type==='group'?'\u25a3':'\u2501';
-    var ftBadge=ft==='dmx'?'<span style="font-size:.6em;background:#7c3aed;color:#fff;padding:0 3px;border-radius:2px;margin-left:2px">DMX</span>':ft==='camera'?'<span style="font-size:.6em;background:#0e7490;color:#fff;padding:0 3px;border-radius:2px;margin-left:2px">CAM</span>'+(f.calibrated?'<span style="font-size:.6em;background:#065f46;color:#34d399;padding:0 3px;border-radius:2px;margin-left:2px">\u2713 Cal</span>':''):'';
+    // Q5 - tiered placement-quality badge. H (green) = homography,
+    // FOV (amber) = camera-pose fallback, RAW (red) = no cal + no pos.
+    var ftBadge;
+    if(ft==='dmx'){
+      ftBadge='<span style="font-size:.6em;background:#7c3aed;color:#fff;padding:0 3px;border-radius:2px;margin-left:2px">DMX</span>';
+    }else if(ft==='camera'){
+      ftBadge='<span style="font-size:.6em;background:#0e7490;color:#fff;padding:0 3px;border-radius:2px;margin-left:2px">CAM</span>';
+      if(f.calibrated){
+        ftBadge+='<span style="font-size:.6em;background:#065f46;color:#34d399;padding:0 3px;border-radius:2px;margin-left:2px" title="Homography calibration from surveyed markers">H</span>';
+      }else if(f.x!=null||f.y!=null||f.z!=null){
+        ftBadge+='<span style="font-size:.6em;background:#78350f;color:#fbbf24;padding:0 3px;border-radius:2px;margin-left:2px" title="No homography - FOV projection fallback (less accurate)">FOV</span>';
+      }else{
+        ftBadge+='<span style="font-size:.6em;background:#7f1d1d;color:#fca5a5;padding:0 3px;border-radius:2px;margin-left:2px" title="No cal and no position - tracking holds last-good for this camera">RAW</span>';
+      }
+    }else{
+      ftBadge='';
+    }
     h+='<div style="padding:.2em 0;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:.3em">';
     h+='<span style="font-size:.8em">'+icon+'</span>';
     h+='<span style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer;font-size:.82em" onclick="selectOnCanvas(\'fixture\','+f.id+')">'+escapeHtml(f.name)+ftBadge+'</span>';
