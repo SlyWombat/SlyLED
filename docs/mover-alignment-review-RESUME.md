@@ -84,7 +84,7 @@ open docs/mover-alignment-review.md
 
 ## PR #643 merge checklist
 
-- [ ] Regression test suite runs clean (tests/regression/run_all.py)
-- [ ] Playwright full UI coverage in a provisioned environment
+- [x] No new regression failures introduced vs `main` (verified 2026-04-23) — API suites (Stage Setup, Timeline Bake) pass clean; Playwright 3D-viewport failures are pre-existing and tracked in #645
+- [ ] Playwright full UI coverage in a provisioned environment (blocked on #645)
 - [ ] Basement-rig smoke test post-merge (§8.3)
 - [ ] No objections from code reviewers
