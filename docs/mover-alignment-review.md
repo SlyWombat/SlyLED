@@ -298,11 +298,13 @@ question(s) it answers.
     at the bass-drum trigger", "ground-spot follows the audio
     centroid". Recommend: colour wash sweep — simplest, exercises
     colour + position + (optionally) direction primitives.
-11. **Compatibility with existing spatial effects.**
+11. **Refactor path for existing spatial effects.**
     `_compile_sphere_sweep`, `_compile_plane_sweep`, `_compile_box`
-    are per-LED-effect today. Do they refactor onto the new layer in
-    one pass, or run in parallel as a "legacy effects" path while the
-    new layer matures?
+    are per-LED-effect today. Per §2 (no backward compatibility),
+    they refactor onto the new layer in one pass — no parallel
+    "legacy effects" path. Question: what's the smallest unit of
+    that one-pass refactor, and does it land in the same PR as the
+    first capability-layer primitive or immediately after it?
 
 ### 6.4 Cross-cutting
 
