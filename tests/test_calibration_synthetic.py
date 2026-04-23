@@ -333,17 +333,24 @@ def test_four_sign_rms_gap():
 
 
 def test_verify_signs_clean():
-    """verify_signs recovers ground-truth signs from noise-free pixel deltas.
+    """verify_signs recovers ground-truth signs across all 4 combos.
 
     Preserves the §7.2 pinhole-simulation intent — this is the only path
-    through the v2 stack where pixel deltas flow end-to-end.
+    through the v2 stack where pixel deltas flow end-to-end. Tilt probe
+    is chosen per tilt_sign so the beam aims downward regardless of sign
+    (otherwise tilt_sign=+1 at t0=0.35 would aim above horizontal and
+    floor_hit returns None, silently skipping half the matrix).
     """
     print("\ntest_verify_signs_clean:")
     cam = Pinhole()
+    combos_exercised = 0
 
     for ps_truth in (1, -1):
         for ts_truth in (1, -1):
             truth = make_truth(pan_sign=ps_truth, tilt_sign=ts_truth)
+            # Pick t0 so (t0 - tilt_offset) * tilt_sign > 0 ⇒ beam tilts down.
+            t0 = 0.70 if ts_truth > 0 else 0.30
+            p0 = 0.50
 
             def pixel_at(p, t):
                 hit = floor_hit(truth, p, t)
@@ -351,18 +358,24 @@ def test_verify_signs_clean():
                     return None
                 return cam.project(hit)
 
-            p0, t0 = 0.5, 0.35
             px_before = pixel_at(p0, t0)
             px_pan = pixel_at(p0 + 0.02, t0)
             px_tilt = pixel_at(p0, t0 + 0.02)
+            check(f"verify_signs(ps={ps_truth}, ts={ts_truth}) probes reach floor",
+                  px_before is not None and px_pan is not None
+                  and px_tilt is not None,
+                  f"pre={px_before} pan+={px_pan} tilt+={px_tilt}")
             if px_before is None or px_pan is None or px_tilt is None:
-                # Skip combos where the simulated rig geometry misses the floor
                 continue
             ps, ts = verify_signs(px_before, px_pan, px_tilt)
             check(f"verify_signs(ps={ps_truth}, ts={ts_truth}) pan recovered",
                   ps == ps_truth, f"got {ps}")
             check(f"verify_signs(ps={ps_truth}, ts={ts_truth}) tilt recovered",
                   ts == ts_truth, f"got {ts}")
+            combos_exercised += 1
+
+    check("all 4 sign combos exercised",
+          combos_exercised == 4, f"got {combos_exercised}/4")
 
 
 def test_verify_signs_with_pixel_noise():
