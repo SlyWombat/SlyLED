@@ -124,6 +124,13 @@ class MoverControlEngine:
         self._lock = threading.Lock()
         self._running = False
         self._thread = None
+        # #647 observability: the 40 Hz tick silently drops writes when the
+        # Art-Net/sACN engine is not running, so the operator sees phone UI
+        # + orient streaming + state=streaming, yet no frames hit the wire.
+        # Track drops so the status endpoint can surface the condition.
+        self._dropped_writes = 0
+        self._last_drop_ts = None
+        self._last_drop_log_ts = 0.0
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
@@ -249,6 +256,36 @@ class MoverControlEngine:
     def get_status(self):
         with self._lock:
             return [c.to_dict() for c in self._claims.values()]
+
+    def get_engine_health(self):
+        """Engine-running signal for observability (#647).
+
+        Returns a dict the caller can attach to /api/mover-control/status so
+        operators can tell the difference between "phone is streaming and
+        fixture is off because the show isn't lit" and "phone is streaming
+        and the DMX engine silently stopped transmitting an hour ago."
+        """
+        engine = self._get_engine()
+        return {
+            "running": bool(engine and engine.running),
+            "engineType": ("artnet" if engine and getattr(engine, "sender_name", "") == "artnet"
+                           else "sacn" if engine and engine.running
+                           else None),
+            "droppedWrites": self._dropped_writes,
+            "lastDropTs": self._last_drop_ts,
+        }
+
+    def _note_dropped_write(self):
+        """Called inside the tick when a DMX write is silently dropped
+        because the underlying engine is not running. Rate-limited so we
+        don't flood logs at the 40 Hz tick rate."""
+        self._dropped_writes += 1
+        now = time.monotonic()
+        self._last_drop_ts = time.time()
+        if now - self._last_drop_log_ts > 5.0:
+            log.warning("mover_control: DMX write dropped — engine not running "
+                        "(total drops: %d since start)", self._dropped_writes)
+            self._last_drop_log_ts = now
 
     def get_claim(self, mover_id):
         with self._lock:
@@ -389,6 +426,7 @@ class MoverControlEngine:
     def _write_dmx(self, mover, prof_info, claim, include_pan_tilt=True):
         engine = self._get_engine()
         if not engine or not engine.running:
+            self._note_dropped_write()
             return
         if not prof_info:
             return
@@ -477,6 +515,7 @@ class MoverControlEngine:
             return
         engine = self._get_engine()
         if not engine or not engine.running:
+            self._note_dropped_write()
             return
         uni = mover.get("dmxUniverse", 1)
         addr = mover.get("dmxStartAddr", 1)

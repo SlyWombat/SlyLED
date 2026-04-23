@@ -4443,6 +4443,19 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
         _set_calibrating(fid, False)
 
 
+# #653 (review Q4) — per-phase wall-clock budgets. A wedged camera node or a
+# profile/channel-mapping mistake used to stall 80 probes × 5 s = 400 s with
+# no recourse. Each phase now has a time.monotonic() guard; on timeout the
+# thread blacks out, releases the lock, sets `error="phase_timeout"` and
+# `pendingTier2Handoff=True` so a future tier-2 operator-in-loop UI can
+# pick up where tier-1 gave up.
+CAL_BUDGET_DISCOVERY_BATTLESHIP_S = 60.0
+CAL_BUDGET_DISCOVERY_COLOUR_FALLBACK_S = 90.0
+CAL_BUDGET_MAPPING_S = 120.0
+CAL_BUDGET_FIT_S = 10.0
+CAL_BUDGET_VERIFICATION_S = 30.0
+
+
 def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
                            warmup=False, warmup_seconds=30.0):
     """Background thread: optional warmup → discovery → mapping → save grid."""
@@ -4456,6 +4469,19 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
             pass
         # #511 — always release the lock on exit.
         _set_calibrating(fid, False)
+
+    def _phase_timeout(phase_name, budget_s, elapsed_s):
+        """Record a phase timeout and hand off to tier-2. See #653."""
+        job["error"] = "phase_timeout"
+        job["status"] = "error"
+        job["phase"] = phase_name
+        job["pendingTier2Handoff"] = True
+        job["phaseTimeout"] = {"phase": phase_name,
+                                "budgetS": budget_s,
+                                "elapsedS": round(elapsed_s, 1)}
+        log.warning("MOVER-CAL %d: phase '%s' exceeded %.0fs budget (%.1fs elapsed) "
+                    "— blackout + tier-2 handoff", fid, phase_name, budget_s, elapsed_s)
+        _cal_blackout()
 
     f = next((f for f in _fixtures if f["id"] == fid), None)
     if not f:
@@ -4633,16 +4659,64 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
                         "cam_fov": cam_fov, "stage_d": stage_d, "inverted": inverted,
                         "start_pan": start_pan, "start_tilt": start_tilt,
                         "floor_target": floor_target}
-        found = _mcal.discover(
+
+        # #357 / #653 (review Q1 + Q4) — battleship flash-discovery is now
+        # the default; the legacy colour-filter `discover()` runs only as a
+        # fallback when battleship returns None (e.g., camera node firmware
+        # lacks `/beam-detect/flash`, or ambient lighting spoofs even the
+        # on/off differential). Each phase has a wall-clock budget; on
+        # timeout we hand off to tier-2 instead of stalling forever.
+        def _battleship_progress(info):
+            stg = info.get("stage")
+            if stg == "grid-probe":
+                job["message"] = (f"Discovery (flash): probe "
+                                  f"{info.get('probe')}/{info.get('total')} "
+                                  f"pan={info.get('pan', 0):.2f} tilt={info.get('tilt', 0):.2f}")
+            elif stg == "beam-found":
+                job["message"] = (f"Discovery (flash): candidate at "
+                                  f"pan={info.get('pan', 0):.2f} tilt={info.get('tilt', 0):.2f} "
+                                  f"— confirming nudge")
+
+        phase_start = time.monotonic()
+        job["discoveryMethod"] = "battleship"
+        found = _mcal.battleship_discover(
             bridge_ip, cam_ip, addr, cam_idx, mover_color,
-            universe=uni, mover_pos=fx_pos, camera_pos=cam_pos,
-            start_pan=start_pan, start_tilt=start_tilt,
-            mounted_inverted=inverted, max_probes=80,
-            camera_rotation=cam_rot, camera_fov=cam_fov,
-            stage_depth=stage_d)
+            seed_pan=start_pan, seed_tilt=start_tilt,
+            profile=prof_info, progress_cb=_battleship_progress)
+        elapsed = time.monotonic() - phase_start
+
+        if found is None and elapsed > CAL_BUDGET_DISCOVERY_BATTLESHIP_S:
+            _phase_timeout("discovery-battleship",
+                           CAL_BUDGET_DISCOVERY_BATTLESHIP_S, elapsed)
+            return
+
+        if not found:
+            # #357 fallback — legacy colour-filter discover() with its own
+            # wall-clock budget. Only reached when battleship returned None
+            # within budget (no confirmed beam despite probing the whole
+            # pan/tilt plane).
+            log.info("MOVER-CAL %d: battleship found nothing (%.1fs); "
+                     "falling back to colour-filter discover()", fid, elapsed)
+            job["discoveryMethod"] = "colour-filter-fallback"
+            job["message"] = "Discovery (colour-filter fallback)"
+            phase_start = time.monotonic()
+            found = _mcal.discover(
+                bridge_ip, cam_ip, addr, cam_idx, mover_color,
+                universe=uni, mover_pos=fx_pos, camera_pos=cam_pos,
+                start_pan=start_pan, start_tilt=start_tilt,
+                mounted_inverted=inverted, max_probes=80,
+                camera_rotation=cam_rot, camera_fov=cam_fov,
+                stage_depth=stage_d)
+            elapsed = time.monotonic() - phase_start
+            if not found and elapsed > CAL_BUDGET_DISCOVERY_COLOUR_FALLBACK_S:
+                _phase_timeout("discovery-colour-filter",
+                               CAL_BUDGET_DISCOVERY_COLOUR_FALLBACK_S, elapsed)
+                return
+
         if not found:
             job["error"] = "Beam not found — check fixture and camera positions"
             job["status"] = "error"
+            job["pendingTier2Handoff"] = True
             _cal_blackout()
             return
         job["progress"] = 30
@@ -4678,20 +4752,34 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
         job["sampleCount"] = sample_count
         job["message"] = (f"Mapping: {sample_count}/{_map_target} samples · "
                           f"current pan={cur_pan:.2f} tilt={cur_tilt:.2f}")
+    phase_start = time.monotonic()
     try:
         samples, boundaries = _mcal.map_visible(
             bridge_ip, cam_ip, addr, cam_idx, mover_color,
             start_pan=found_pan, start_tilt=found_tilt,
             collect_3d=False, max_samples=_map_target,
             progress_cb=_mapping_progress)
+        elapsed = time.monotonic() - phase_start
+        # #653 — BFS budget. Unlike discovery it can't be "interrupted mid-probe"
+        # inside _mcal, so we enforce it post-hoc: if the sweep took longer than
+        # the budget, still honour the samples (they're good data) but flag
+        # tier-2 handoff so the UI can offer the operator the click-to-sample
+        # path for future runs on this rig.
+        if elapsed > CAL_BUDGET_MAPPING_S and len(samples) < _map_target:
+            log.warning("MOVER-CAL %d: BFS exceeded %.0fs budget (%.1fs, %d samples) "
+                        "— proceeding but flagging tier-2 handoff",
+                        fid, CAL_BUDGET_MAPPING_S, elapsed, len(samples))
+            job["pendingTier2Handoff"] = True
         if len(samples) < 6:
             job["error"] = f"Only {len(samples)} samples collected — need at least 6"
             job["status"] = "error"
+            job["pendingTier2Handoff"] = True
             _cal_blackout()
             return
         job["progress"] = 70
         job["sampleCount"] = len(samples)
-        log.info("MOVER-CAL fixture %d: %d BFS samples collected", fid, len(samples))
+        log.info("MOVER-CAL fixture %d: %d BFS samples collected (%.1fs)",
+                 fid, len(samples), elapsed)
     except Exception as e:
         job["error"] = f"Mapping failed: {e}"
         job["status"] = "error"
@@ -4699,12 +4787,17 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
         _cal_blackout()
         return
 
-    # Phase 3: Build grid
+    # Phase 3: Build grid (fit phase — budgeted by CAL_BUDGET_FIT_S)
     job["phase"] = "grid"
     job["progress"] = 80
     _mcal_log(job, f"Mapping complete: {len(samples)} samples — building grid")
+    phase_start = time.monotonic()
     try:
         grid = _mcal.build_grid(samples)
+        elapsed = time.monotonic() - phase_start
+        if elapsed > CAL_BUDGET_FIT_S:
+            log.warning("MOVER-CAL %d: grid-build exceeded %.0fs budget (%.1fs)",
+                        fid, CAL_BUDGET_FIT_S, elapsed)
         if not grid:
             job["error"] = "Grid build failed — insufficient sample spread"
             job["status"] = "error"
@@ -4723,6 +4816,7 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
     job["phase"] = "verification"
     job["progress"] = 90
     verification = None
+    phase_start = time.monotonic()
     try:
         fit_keys = [(s[0], s[1]) if isinstance(s, (list, tuple)) else (s.get("pan"), s.get("tilt"))
                     for s in samples]
@@ -4730,6 +4824,10 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
             bridge_ip, cam_ip, addr, cam_idx, mover_color, grid,
             n_points=3, avoid_samples=fit_keys,
         )
+        elapsed = time.monotonic() - phase_start
+        if elapsed > CAL_BUDGET_VERIFICATION_S:
+            log.warning("MOVER-CAL %d: verification exceeded %.0fs budget (%.1fs)",
+                        fid, CAL_BUDGET_VERIFICATION_S, elapsed)
         # Summary: worst pixel error across the sweep.
         errs = [v["errorPx"] for v in (verification or []) if v.get("errorPx") is not None]
         if errs:
@@ -9059,7 +9157,10 @@ def api_mover_start():
     mid = body.get("moverId")
     did = body.get("deviceId")
     ok = _mover_engine.start_stream(mid, did)
-    return jsonify(ok=ok)
+    # #647 — flag engine-stopped condition so the client knows writes
+    # won't hit the wire even though the claim is "streaming".
+    health = _mover_engine.get_engine_health()
+    return jsonify(ok=ok, engineRunning=health["running"])
 
 @app.post("/api/mover-control/calibrate-start")
 def api_mover_cal_start_ctrl():
@@ -9139,7 +9240,9 @@ def api_mover_orient_compat():
             )
     except Exception as e:
         return jsonify(ok=False, err=str(e)), 400
-    return jsonify(ok=True)
+    # #647 — same-request engine-stopped signal for the orient path.
+    health = _mover_engine.get_engine_health()
+    return jsonify(ok=True, engineRunning=health["running"])
 
 
 @app.post("/api/mover-control/color")
@@ -9149,7 +9252,10 @@ def api_mover_color():
     did = body.get("deviceId")
     ok = _mover_engine.set_color(mid, did, body.get("r", 255), body.get("g", 255), body.get("b", 255),
                                   dimmer=body.get("dimmer"))
-    return jsonify(ok=ok)
+    # #647 — flag engine-stopped; the set_color write path sits on the tick
+    # loop which silently drops frames when the engine is down.
+    health = _mover_engine.get_engine_health()
+    return jsonify(ok=ok, engineRunning=health["running"])
 
 
 @app.post("/api/mover-control/smoothing")
@@ -9184,7 +9290,11 @@ def api_mover_flash():
 
 @app.get("/api/mover-control/status")
 def api_mover_status():
-    return jsonify(claims=_mover_engine.get_status())
+    # #647 — expose engine-running + dropped-write counters so operators can
+    # diagnose the "orient streams but nothing moves" case. Android Status
+    # tab polls this endpoint.
+    return jsonify(claims=_mover_engine.get_status(),
+                    engine=_mover_engine.get_engine_health())
 
 # ── End Mover Control ───────────────────────────────────────────────────────
 
