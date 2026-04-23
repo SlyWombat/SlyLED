@@ -3695,19 +3695,34 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
                         f"the registry; have {len(reg)}. Add via Setup → ArUco.")
         job["status"] = "error"; _set_calibrating(fid, False); return
 
-    detect = _aruco_snapshot_detect(cam)
-    if detect.get("err"):
+    # #626 — multi-snapshot aggregation + forced blackout. Single-frame
+    # detect was a coin-flip on edge markers and failed outright if a
+    # previously-lit fixture was still washing the frame. Three snapshots
+    # with blackout-between gives every surveyed marker a fair chance to
+    # land in at least one of them.
+    detect = _aruco_multi_snapshot_detect(cam, max_snapshots=3,
+                                           blackout_bridge_ip=bridge_ip)
+    if detect.get("err") and not detect.get("markers"):
         job["error"] = f"Snapshot/detect failed: {detect['err']}"
         job["status"] = "error"; _set_calibrating(fid, False); return
     seen_by_id = {int(m["id"]): m for m in detect.get("markers", [])}
     reg_by_id = {int(m["id"]): m for m in reg}
     usable = sorted(reg_by_id.keys() & seen_by_id.keys())
+    # #626 — flag unregistered detections so the operator can decide
+    # whether to add them to the registry (prevents using random ArUco
+    # tags that happen to be in the scene — a decoy-marker concern from
+    # review §12.8).
+    unregistered = sorted(set(seen_by_id.keys()) - set(reg_by_id.keys()))
+    if unregistered:
+        _mcal_log(job, f"Detected unregistered ArUco markers {unregistered} — "
+                       "ignored for calibration; add via Setup → ArUco if intended")
     if len(usable) < 3:
         job["error"] = (f"Camera {cam.get('name','?')} only sees "
                         f"{len(usable)} registered marker(s) ({usable}); "
                         f"need ≥3. Reposition markers or camera.")
         job["status"] = "error"; _set_calibrating(fid, False); return
-    _mcal_log(job, f"Camera sees markers {usable} of {sorted(reg_by_id.keys())}")
+    _mcal_log(job, f"Camera sees markers {usable} of {sorted(reg_by_id.keys())} "
+                   f"(aggregated over {detect.get('snapshotsTaken', 1)} snapshots)")
 
     # Phase 1 — battleship discovery
     job["phase"] = "battleship"; job["progress"] = 10
@@ -3796,16 +3811,26 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
                            f"err={result['errorPx']:.1f}px "
                            f"({result['iterations']} iters)")
         else:
-            # #610 — on failure, reset warm-start to the discovery
-            # position, not wherever the failed convergence ended up
-            # (likely a mechanical-limit extreme that's a poor seed
-            # for the next marker).
-            warm_pan, warm_tilt = disc_pan, disc_tilt
-            _mcal_log(job, f"Marker {mid}: did NOT converge "
-                           f"({result.get('errorPx','?')}px after "
-                           f"{result['iterations']} iters) — "
-                           f"resetting warm-start to discovery pose",
-                      level="warning")
+            # #625 — on failure, warm-start the next marker from the
+            # closest pose this one reached (result["pan"]/["tilt"] is
+            # best_pan/best_tilt from the bracket-and-retry loop, NOT
+            # the final bouncing-on-limit pose). Only fall back to the
+            # discovery pose if the loop truly never saw the beam, in
+            # which case result["errorPx"] is None.
+            if result.get("errorPx") is not None:
+                warm_pan, warm_tilt = result["pan"], result["tilt"]
+                _mcal_log(job, f"Marker {mid}: did NOT converge "
+                               f"({result['errorPx']:.1f}px after "
+                               f"{result['iterations']} iters) — "
+                               f"next marker warm-starts from best pose "
+                               f"(pan={warm_pan:.3f}, tilt={warm_tilt:.3f})",
+                          level="warning")
+            else:
+                warm_pan, warm_tilt = disc_pan, disc_tilt
+                _mcal_log(job, f"Marker {mid}: beam never re-acquired during "
+                               f"convergence ({result['iterations']} iters) — "
+                               f"resetting warm-start to discovery pose",
+                          level="warning")
 
     if len(samples) < 3:
         job["error"] = (f"Only {len(samples)}/{len(usable)} markers "
@@ -5244,6 +5269,59 @@ def _aruco_snapshot_detect(f):
                          "corners": [[float(p[0]), float(p[1])] for p in pts],
                          "center": [float(cx), float(cy)]})
     return {"markers": out, "frameSize": list(frame_size)}
+
+
+def _aruco_multi_snapshot_detect(f, max_snapshots=3, blackout_bridge_ip=None):
+    """#626 — multi-snapshot ArUco aggregation. Takes up to N snapshots and
+    keeps the best per-id by corner perimeter (largest = closest to camera =
+    best sub-pixel corners). Matches the same aggregation pattern that
+    stage-map has used since #stage-map-flaky.
+
+    If `blackout_bridge_ip` is provided, a 512-channel all-zero frame is
+    pushed to that bridge before each snapshot so whatever moving head
+    was lit from the previous step can't wash out the marker detection.
+    The engine's regular 40 Hz tick may re-light the fixture within a few
+    frames, but between those ticks there's a reliably dark window for
+    the snapshot to land in.
+    """
+    best_per_id = {}
+    frame_size = None
+    last_err = None
+    detected_total = 0
+    for attempt in range(max(1, int(max_snapshots))):
+        if blackout_bridge_ip:
+            try:
+                _mcal._hold_dmx(blackout_bridge_ip, [0] * 512, 0.15)
+            except Exception:
+                pass
+        r = _aruco_snapshot_detect(f)
+        if r.get("err"):
+            last_err = r["err"]
+            continue
+        if frame_size is None and r.get("frameSize"):
+            frame_size = r["frameSize"]
+        detected_total += len(r.get("markers", []))
+        for m in r.get("markers", []):
+            mid = int(m.get("id"))
+            corners = m.get("corners") or []
+            if len(corners) != 4:
+                continue
+            perim = 0.0
+            for i in range(4):
+                x1, y1 = corners[i]
+                x2, y2 = corners[(i + 1) % 4]
+                perim += math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+            prior = best_per_id.get(mid)
+            if prior is None or perim > prior.get("_perim", 0.0):
+                m2 = dict(m)
+                m2["_perim"] = float(perim)
+                best_per_id[mid] = m2
+    if not best_per_id and last_err:
+        return {"err": last_err, "markers": [], "frameSize": frame_size}
+    return {"frameSize": frame_size,
+            "markers": list(best_per_id.values()),
+            "detectedTotal": detected_total,
+            "snapshotsTaken": max(1, int(max_snapshots))}
 
 
 def _aruco_visibility_report(camera_ids=None):

@@ -201,6 +201,18 @@ def _set_mover_dmx(dmx, addr, pan, tilt, r, g, b, dimmer=255, profile=None):
         try:
             cm = profile.get("channel_map", {})
             channels = profile.get("channels", [])
+            # #627 — zero the fixture's address range first. Every frame of
+            # the cal sweep overwrites only the channels the profile knows
+            # about (pan/tilt/dimmer/color/strobe + defaults>0). Auxiliary
+            # channels like "Laser" (default=0), "Macro", "Reset", etc. kept
+            # whatever the engine snapshot had for them — potentially
+            # something the operator left on from a previous show. Zeroing
+            # the whole fixture band here guarantees only what we explicitly
+            # re-apply below ends up hot.
+            n_ch = len(channels) if channels else 16
+            for _i in range(n_ch):
+                if base + _i < 512:
+                    dmx[base + _i] = 0
             # Pan/tilt — detect 8 vs 16 bit
             for axis, val in [("pan", pan), ("tilt", tilt)]:
                 off = cm.get(axis)
@@ -236,12 +248,21 @@ def _set_mover_dmx(dmx, addr, pan, tilt, r, g, b, dimmer=255, profile=None):
                 from dmx_profiles import rgb_to_wheel_slot
                 cw = rgb_to_wheel_slot(profile, r, g, b) if (r or g or b) else 0
                 dmx[base + cm["color-wheel"]] = cw
-            # Apply channel defaults (strobe open, speed, etc.)
+            # #627 — apply channel defaults for every non-pan/tilt/dimmer/
+            # color channel. Previously this loop skipped default=None and
+            # default=0 entries, leaving those slots to retain whatever the
+            # snapshot carried. With the pre-zero step above, default=None
+            # and default=0 now both resolve to 0 — which is the right
+            # idle state for auxiliary channels (laser off, macro idle,
+            # reset released).
             for ch in channels:
-                default = ch.get("default")
                 ch_type = ch.get("type", "")
-                if default is not None and default > 0 and ch_type not in ("pan", "tilt", "dimmer", "red", "green", "blue", "color-wheel"):
-                    dmx[base + ch.get("offset", 0)] = max(0, min(255, int(default)))
+                if ch_type in ("pan", "pan-fine", "tilt", "tilt-fine",
+                                "dimmer", "red", "green", "blue", "color-wheel"):
+                    continue
+                default = ch.get("default")
+                val = int(default) if isinstance(default, (int, float)) and default > 0 else 0
+                dmx[base + ch.get("offset", 0)] = max(0, min(255, val))
             # #516 — ensure the shutter is OPEN during calibration so the
             # beam is always visible to the camera. strobe_open_value
             # honours the shutterEffect annotation on ShutterStrobe ranges
@@ -767,6 +788,14 @@ def converge_on_target_pixel(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     final_beam = None
     worse_streak = 0
     it = 0
+    # #625 — bracket-and-retry state. Each time _beam_detect returns None we
+    # halve the step size and fall back toward best-known-good rather than
+    # warm-starting to discovery or burning iterations at the same pose.
+    # bracket_step is in normalised pan/tilt units (1.0 = full range).
+    bracket_step = 0.08
+    BRACKET_FLOOR = 1.0 / 255.0  # give up below one 8-bit DMX increment
+    last_err_x = None
+    last_err_y = None
     try:
         for it in range(max_iterations):
             _check_cancel()
@@ -775,14 +804,39 @@ def converge_on_target_pixel(bridge_ip, camera_ip, mover_addr, cam_idx, color,
             beam = _beam_detect(camera_ip, cam_idx, color, center=True)
             if beam is None:
                 worse_streak += 1
-                if worse_streak >= 3:
+                # #625 — bracket retry. Halve bracket_step; walk back
+                # toward best-known-good offset by bracket_step in the
+                # last-seen error direction (or a diagonal nudge if we
+                # haven't seen the beam at all yet). Stop only when the
+                # step collapses below one DMX unit — every step above
+                # that is at least physically distinguishable to the
+                # fixture, so worth trying.
+                bracket_step *= 0.5
+                if bracket_step < BRACKET_FLOOR:
                     pan, tilt = best_pan, best_tilt
                     break
+                if last_err_x is not None and last_err_y is not None:
+                    sx = 1.0 if last_err_x > 0 else -1.0
+                    sy = 1.0 if last_err_y > 0 else -1.0
+                else:
+                    # Never saw the beam — spiral outward from start pose.
+                    sx = 1.0 if (worse_streak % 2 == 0) else -1.0
+                    sy = 1.0 if (worse_streak % 4 < 2) else -1.0
+                pan = max(0.0, min(1.0, best_pan + sx * bracket_step))
+                tilt = max(0.0, min(1.0, best_tilt + sy * bracket_step))
                 continue
 
             final_beam = beam
             err_x = target_px[0] - beam[0]
             err_y = target_px[1] - beam[1]
+            # #625 — remember last-seen error direction so the bracket
+            # retry knows which way to nudge when we lose the beam.
+            last_err_x = err_x
+            last_err_y = err_y
+            # Beam re-acquired: reset bracket budget for the next potential
+            # loss. Without this, a mid-run miss would have permanently
+            # collapsed the step and made recovery impossible.
+            bracket_step = 0.08
             dist = math.hypot(err_x, err_y)
             if dist < best_dist:
                 best_dist = dist
