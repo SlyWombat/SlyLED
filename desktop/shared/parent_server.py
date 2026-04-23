@@ -7921,17 +7921,30 @@ def api_object_pos(oid):
     pos = body.get("pos")
     if not pos or not isinstance(pos, list) or len(pos) != 3:
         return jsonify(err="pos must be [x, y, z]"), 400
-    # Pixel→stage conversion if camera data provided
+    # Review-fix — pixel→stage conversion now goes through the same Q1
+    # pipeline the temporal ingest uses (homography → FOV → raw fallback),
+    # stamping the result with _method. The old inline proportional hack
+    # here was the last place the broken Q1 math hid in the codebase.
     cam_id = body.get("cameraId")
     pixel_box = body.get("pixelBox")
     frame_size = body.get("frameSize")
+    method_tier = None
+    anchors = None
     if cam_id is not None and pixel_box and frame_size:
-        fw, fh = frame_size
-        cx = (pixel_box["x"] + pixel_box.get("w", 0) / 2) / fw
-        cy = (pixel_box["y"] + pixel_box.get("h", 0) / 2) / fh
-        sw = _stage.get("w", 3.0) * 1000
-        sd = _stage.get("d", 4.0) * 1000
-        pos = [sw * (1.0 - cx), sd * (1.0 - cy), 0]
+        cam_fixture = next((f for f in _fixtures
+                            if f.get("id") == cam_id
+                            and f.get("fixtureType") == "camera"), None)
+        anchors = _pixel_box_to_stage_anchors(cam_fixture, pixel_box, frame_size)
+        if anchors:
+            method_tier = anchors["method"]
+            # Treat body.pos as the anchor mode hint: z>100 → center,
+            # z==0 → feet, else honour as-provided. Default to center
+            # since that's the renderer convention (#Q1).
+            hint = float(pos[2] or 0)
+            if hint <= 1.0:
+                pos = list(anchors["feet"])
+            else:
+                pos = list(anchors["center"])
     with _lock:
         obj = next((o for o in _objects if o["id"] == oid), None)
         if not obj:
@@ -7939,9 +7952,17 @@ def api_object_pos(oid):
         if not obj:
             return jsonify(err="not found"), 404
         obj.setdefault("transform", {"pos": [0,0,0], "rot": [0,0,0], "scale": [2000,1500,1]})["pos"] = [float(p) for p in pos]
+        if method_tier:
+            obj["_method"] = method_tier
+        if anchors:
+            obj["_anchors"] = {
+                "feet": [float(v) for v in anchors["feet"]],
+                "center": [float(v) for v in anchors["center"]],
+                "head": [float(v) for v in anchors["head"]],
+            }
         if obj.get("_temporal") and obj.get("ttl"):
             obj["_expiresAt"] = time.time() + obj["ttl"]
-    return jsonify(ok=True)
+    return jsonify(ok=True, method=method_tier)
 
 @app.post("/api/objects/temporal")
 def api_objects_temporal_create():
