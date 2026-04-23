@@ -531,17 +531,26 @@ synthetic then live demo.
 ## 10. Related open issues
 
 - **#484** — Gyro/phone controller stage-space architecture. Fn 2
-  design doc; this review verifies it shipped.
-- **#474** — Gyro absolute stage-space orientation mapping. Subsumed
-  by #484; close on confirmation.
+  design doc; this review verifies the runtime shipped (§8.1 Q5).
+- **#474** — Gyro absolute stage-space orientation mapping.
+  **Closed** 2026-04-23 as duplicate of #484.
 - **#427** — Android pointer mode (phone as laser pointer).
-  Operator-facing application of Fn 2.
+  Operator-facing application of Fn 2; blocked on #633.
 - **#610** — Mover calibration discovery / blink-confirm / validation.
   Calibration scope (camera review territory); cross-link only.
 - **#488** — `ParametricFixtureModel` + LM solver. The IK primitive
   this review builds on.
-- New issues to be filed from §8 will be labelled
-  `mover-alignment-review-2026-04-23`.
+
+### Filed from §8.1 static-reading round
+
+- **#633** — 3D viewport: render remotes with position + live aim
+  ray. Closes the last open item on #474/#484; precondition for
+  #427. (Source: §8.1 Q7.)
+- **#634** — Track actions: EMA smoothing + unified loss-UX
+  (fade / hold / black). (Source: §8.1 Q3 + Q4.)
+- **#635** — Extract shared three-tier pan/tilt IK fallback
+  helper. Scoping waits for Fn 3 decisions (Q8–Q11). (Source:
+  §8.1 Q5, §8.2.)
 
 ---
 
