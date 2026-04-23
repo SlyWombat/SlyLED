@@ -12,6 +12,14 @@ The engine retains:
 - The 40 Hz DMX write tick.
 
 See docs/gyro-stage-space.md §5 for the full architecture.
+
+Future features (#427 gyro-as-pointer, analogous features for any remote):
+Gyro and phone both land on the same `orient` path — the legacy
+`gyro_engine.py` (delta-based) was removed 2026-04-23 and will not return.
+When implementing "remote as laser pointer" (project aim vector onto stage
+geometry, drive fixture at the hit point), extend this engine with a
+pointer-mode variant of `_aim_to_pan_tilt` that consumes a stage-mm target
+point instead of an aim direction. No new engine, no new UDP path.
 """
 
 import logging
