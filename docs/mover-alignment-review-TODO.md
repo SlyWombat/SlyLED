@@ -53,7 +53,7 @@ The moving-head subsystem exists for exactly these three jobs:
    primitive shipped in `aa67fc3` / `876b875`. Don't re-do
    calibration; build on top.
 - Product has not shipped; breaking changes welcome.
-- scipy allowed (see camera review §2).
+- scipy or any other new tech allowed (see camera review §2).
 
 ---
 
