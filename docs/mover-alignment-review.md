@@ -361,8 +361,155 @@ Live-test checklist (basement rig, run once per question batch):
 
 ## 8. Findings
 
-Empty — to be populated as questions are answered, mirroring camera
-review §8.1 (static-reading round) and §8.3 (live-test resolution).
+### 8.1 Static-reading round (2026-04-23)
+
+Nine code-answerable questions (Q1–Q7, Q12, Q13) resolved from the
+runtime path — `_evaluate_track_actions`, `MoverControlEngine`,
+`ParametricFixtureModel`, `dmx_profiles`, `remote_orientation`. No
+hardware required.
+
+**Q1 — per-fixture `aimTarget` (Fn 1).** `aimTarget` is one enum
+value per Track action, shared by every assigned mover
+(`parent_server.py:11077`; `_ACTION_FIELDS`, line 12157). The schema
+is trivially extensible: the action already carries per-fixture
+dicts for offsets (`trackFixtureOffsets`, line 11083), so
+`aimTargets: {fixtureId: enum}` follows the same pattern. No data
+migration. **Verdict:** ship when Fn 1 gets its next polish pass.
+
+**Q2 — head-to-target assignment (Fn 1).** Index-based, no
+travel-time minimisation. Three branches
+(`parent_server.py:11045-11065`):
+`n_heads > n_targets` → modulo spread; `fixed_assign` + excess
+targets → first-N 1:1; otherwise cycling chunk driven by
+`trackCycleMs` (default 2000 ms, line 11026). **Smell:** lines
+11045 and 11063 are literally identical (modulo fallback) — one
+path is unreachable. **Smell:** no nearest-current-aim assignment,
+so two movers can swap targets frame-to-frame under jitter,
+stressing pan/tilt mechanics unnecessarily. Hungarian assignment
+would be the targeted fix.
+
+**Q3 — loss UX (Fn 1).** Inconsistent. **Full loss** (target list
+empty): mover blacks out — dimmer written to 0
+(`parent_server.py:11193-11201`); pan/tilt simply stop being
+re-written, so they freeze by default (no explicit hold). **Raw
+tier** (low-confidence placement, `_method == "raw"`, per the
+camera review's Q5 fix): head stays assigned, aim computation is
+skipped, dimmer keeps writing — so the beam freezes in place at
+full intensity. Two different behaviours for two flavours of loss.
+Operator sees silent freeze on raw, silent blackout on full loss
+— no visual cue distinguishes "lost" from "paused". Likely new
+issue: unify on "fade dimmer to 0 over ~0.5 s" for both, or add a
+`trackLossBehaviour: hold | fade | black` enum.
+
+**Q4 — smoothing and latency (Fn 1).** Runtime ticks at **40 Hz**
+(`parent_server.py:11257`, `interval = 0.025`). No smoothing on
+the Track-action path — each tick writes pan/tilt directly to DMX
+(`parent_server.py:11171`). Camera jitter lands on the mover
+unfiltered. Contrast: `MoverControlEngine` applies an EMA via
+`claim.smoothing` (`mover_control.py:311-313`). Fn 1 should
+inherit the same primitive — likely a new issue to add a
+`trackSmoothingAlpha` field. Bake-time
+(`_compile_dmx_fixture`, 1 s time-slices) remains unchanged —
+coarser-than-runtime, which is correct for baked playback.
+
+**Q5 — Has #484 shipped? (Fn 2)** **Yes, the runtime path is
+stage-space end-to-end.** `MoverControlEngine._aim_to_pan_tilt`
+(`mover_control.py:334`) prefers `ParametricFixtureModel.inverse`
+with a stage-mm target point
+(`aim_stage * 3000 mm`, `mover_control.py:345-351`); falls back
+to affine (still stage-mm, lines 355-365) then generic
+`aim_to_pan_tilt` (stage-mm aim vector, lines 374-379). No
+`delta_pan`, `delta_tilt`, `reference_pan`, `reference_tilt`,
+`panScale`, `tiltScale` survive in the runtime consumers.
+**Dead code:** `desktop/shared/gyro_engine.py` still contains the
+old delta-based math (`panScale`/`tiltScale` at lines 12-13) but
+is **not imported** by `parent_server.py` — superseded by
+`MoverControlEngine`. Recommend deleting `gyro_engine.py` outright
+(no backward-compat concerns per §2). Likely new issue.
+
+**Q6 — multi-fixture remote claim (Fn 2).** Single claim per
+device today: `self._claims = {mover_id → MoverClaim}`
+(`mover_control.py:115`); `.claim()` takes one `mover_id`
+(`mover_control.py:138-154`); `_tick()` iterates mover-by-mover
+(`mover_control.py:264-325`). **No downstream code assumes
+one-mover-per-device**, so the minimum change is
+(1) `_claims` becomes `device_id → set[mover_id]`,
+(2) `_tick()` broadcasts the same aim/colour to every member of
+the set, (3) release-by-device releases all members. Clean
+refactor, no data-model churn.
+
+**Q7 — remote-as-stage-object (Fn 2).** Schema exists, rendering
+doesn't. `Remote` carries a `pos` field (stage mm, defaulted to
+[0, 0, 1600]; `remote_orientation.py:82-91`), persisted through
+`RemoteRegistry` into `remotes.json`
+(`parent_server.py:8704-8705`), mutable via
+`/api/remotes/*` (lines 9146-9162). **But** remotes are **not** in
+`_layout.children` and not drawn in the 3D viewport — the
+operator cannot see where the remote is placed, cannot drag it,
+cannot visually verify calibration. This is the
+precondition gap for both #484 UX and #427 (Android pointer mode):
+three steps to close — render a gizmo in the Layout tab, make the
+gizmo draggable (writes `Remote.pos`), show it in Runtime. Likely
+new issue.
+
+**Q12 — capability declaration (cross-cutting).** Profile schema
+(`dmx_profiles.py:8-27`) carries `panRange`, `tiltRange`,
+`beamWidth`, `category`, `colorMode`, and a per-channel
+`capabilities[]` list (GDTF-flavoured type names —
+`ColorIntensity`, `ShutterStrobe`, `WheelSlot`, etc., lines 34-39,
+59-70). **No top-level `caps: ["colour.rgb", "direction.pan-tilt",
+...]` list** — fixture-type-agnostic dispatch today has to
+synthesise capability from channel-map probing (e.g. runtime code
+at `parent_server.py:1176-1185` grepping the channel map for
+"red" / "color-wheel"). For §0 (capability layer) a top-level
+`caps[]` list computed once from the profile at load-time is the
+minimal change. GDTF/MVR alignment is partial — borrowing type
+names but not the full struct; a proper GDTF import would need a
+mapping layer, out of scope for first cut.
+
+**Q13 — stage-mm-only contract (cross-cutting).** Clean. Every
+path that feeds mover aim works in stage mm: Track actions
+(`parent_server.py:11082`, `11097-11099`), MoverControlEngine
+(`mover_control.py:348-350`), bake-time
+(`_compile_dmx_fixture`), and the IK primitive itself
+(`parametric_mover.py:108-131`). Pixel-relative code exists only
+in the camera-calibration / stereo path, which outputs stage-mm
+positions *before* temporal-object ingest. Legacy v1 calibration
+data is not consulted on any aim path. Pre-condition for §0
+already holds.
+
+### 8.2 Cross-question synthesis
+
+- **Q3 + Q4: Fn 1 polish gap.** No smoothing on the 40 Hz runtime
+  path plus inconsistent loss UX = Track actions feel rough next
+  to MoverControlEngine. A single-PR fix (EMA smoothing + unified
+  loss behaviour) would close both. **→ file issue.**
+- **Q5 + Q6 cleanup.** `gyro_engine.py` is dead; delete it. **→
+  file issue.**
+- **Q5 + Q1 code duplication.** Three-tier IK fallback exists in
+  both `_evaluate_track_actions` (parent_server.py) and
+  `MoverControlEngine._aim_to_pan_tilt` (mover_control.py).
+  Extract to a shared
+  `compute_pan_tilt_with_fallback(mover, aim_stage_or_point, …)`
+  helper in `parametric_mover.py` or `spatial_engine.py`. **→
+  file issue after Fn 3 architecture decisions settle** (the
+  helper may also serve the capability layer).
+- **Q7 blocks Fn 2 feel.** Until remotes render in the 3D
+  viewport, the one-phone-one-mover UX (never mind the
+  multi-mover claim in Q6) will feel ghost-like. **→ file issue;
+  precondition for #427.**
+- **§0 architectural bet is feasible.** Q12 confirms the profile
+  schema can carry a `caps[]` list with no migration; Q13
+  confirms the stage-mm contract holds end-to-end; Q6 confirms
+  the claim model isn't painted into a corner. The blocker isn't
+  plumbing — it's the design of the response function itself
+  (Q8–Q11, still open).
+
+### 8.3 Live-test resolution
+
+To be populated after the next basement-rig session. Per §7:
+Fn 1 walk-path accuracy, Fn 2 gyro/phone per-axis sweep, Fn 3
+synthetic then live demo.
 
 ---
 
