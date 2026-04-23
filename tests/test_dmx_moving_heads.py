@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'sha
 
 from spatial_engine import compute_pan_tilt, effect_aim_point
 from dmx_universe import DMXUniverse
-from bake_engine import _compile_dmx_fixture, ACT_DMX_SCENE
+from bake_engine import _compile_capability_for_dmx, ACT_DMX_SCENE
 import parent_server
 from parent_server import app
 
@@ -148,7 +148,9 @@ def run():
     profile_info = {"panRange": 540, "tiltRange": 270, "beamWidth": 15}
     clip = {"startS": 0, "durationS": 10}
 
-    segs = _compile_dmx_fixture(clip, static_effect, [0, 5000, 0], [1000, 0, 1000], profile_info, 10)
+    segs = _compile_capability_for_dmx(clip, static_effect, [0, 5000, 0],
+                                        profile_info, 10,
+                                        aim_override=[1000, 0, 1000])
     ok('Static effect -> 1 segment', len(segs) == 1)
     ok('Segment type ACT_DMX_SCENE', segs[0]["type"] == ACT_DMX_SCENE)
     ok('Segment has pan', "pan" in segs[0]["params"])
@@ -163,7 +165,8 @@ def run():
                    "durationS": 5, "easing": "linear"},
     }
     clip2 = {"startS": 0, "durationS": 5}
-    segs2 = _compile_dmx_fixture(clip2, moving_effect, [0, 3000, 0], [0, 0, 0], profile_info, 5)
+    segs2 = _compile_capability_for_dmx(clip2, moving_effect, [0, 3000, 0],
+                                         profile_info, 5)
     ok('Moving effect -> multiple segments', len(segs2) > 1, f'got {len(segs2)}')
     ok('Moving segments are time-sliced', segs2[0]["durationS"] <= 1.0)
 
@@ -172,11 +175,12 @@ def run():
     ok('Pan changes across slices', len(set(round(p, 2) for p in pans)) > 1, f'pans={[round(p,2) for p in pans]}')
 
     # No profile info -> pan/tilt defaults to 0.5
-    segs3 = _compile_dmx_fixture(clip, static_effect, [0, 5000, 0], [0, 0, 0], None, 10)
+    segs3 = _compile_capability_for_dmx(clip, static_effect, [0, 5000, 0],
+                                         None, 10)
     ok('No profile -> pan 0.5', segs3[0]["params"]["pan"] == 0.5)
 
     # No effect -> empty
-    segs4 = _compile_dmx_fixture(clip, None, [0, 0, 0], [0, 0, 0], profile_info, 10)
+    segs4 = _compile_capability_for_dmx(clip, None, [0, 0, 0], profile_info, 10)
     ok('No effect -> empty', len(segs4) == 0)
 
     # ================================================================
