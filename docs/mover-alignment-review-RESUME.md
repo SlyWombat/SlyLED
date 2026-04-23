@@ -39,6 +39,22 @@ PR #643 is open and ready for review. It bundles:
   - Fn 3 live demo: run the wash prototype on the 3-mover basement rig
 - Hardware needed: 3 DMX movers, 2 cameras, ESP32 gyro puck, Android phone. All already on the basement rig per `project_basement_rig.md`.
 
+### Fn 1 attempt — 2026-04-23 — blocked on calibration regression
+
+Current basement rig per issue #533 (fresh layout, 4000×3620×2060, 3 cameras). Loaded `tests/user/new basement/new basement.slyshow` (app v1.5.64, 6 fixtures, 6 surveyed markers). Orchestrator runs on port **5600** (8080 blocked on this machine; UDP 4210 WinError 10013 is non-fatal).
+
+MH1 (fid=17) and MH2 (fid=18) are **uncalibrated** — the 3 mover calibrations in the slyshow are from the previous rig: fids 2 and 7 are orphans, only fid 14 (350W) has a matching current calibration (6 samples, no `model`, no `method`).
+
+Started markers-mode calibration on MH1 with green beam. **Consistent false-positive pattern**: every battleship probe fired "Beam found ... — confirming with nudge" without the real beam ever entering the camera view. After 5 probes, one confirmation passed on noise and cal escalated to `sampling` phase on a fake discovery. Cancelled.
+
+Root cause (user-confirmed): `battleship_discover._confirm` in `desktop/shared/mover_calibrator.py` used to re-run the flash blink at the candidate pose; now it runs a pan/tilt nudge + plain `_beam_detect` (color filter). On a scene with greenish carpet, reflective plastic bins, and a white pillar, color-filter noise easily shifts >8 px between two nearby poses → false confirm. Patched candidate detection (`_beam_detect_flash`) is still fine; it's only the secondary confirmation that regressed.
+
+**Blocker:** Fn 1 can't produce meaningful per-mover aim-error numbers without calibrated movers. Operator will file fresh calibration issues; do not attempt the patch inside PR #643 — calibration accuracy is explicitly out-of-scope per review §1 + §9.
+
+Evidence snapshot saved at `/mnt/d/temp/live-test-session/fn1-cal-debug/stage-right-empty.jpg` (empty-frame beam-detect returned `found: false`, confirming the false-confirms are transient noise, not persistent ambient).
+
+Fn 2 (gyro/phone per-axis sweep) is unblocked — it doesn't need the Track action pipeline. Could run before Fn 1 on the next session.
+
 ## To pick up the session, useful commands
 
 ```bash
