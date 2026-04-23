@@ -1000,11 +1000,26 @@ def scan():
     threshold = body.get("threshold", 0.5)
     classes = body.get("classes", None)  # None = all classes
     resolution = body.get("resolution", 320)
+    # #621 — tiled-detection opt-in for high-res frames. When `tile: true`
+    # (or `mode: "tile"`), the detector slices the full-resolution frame
+    # into overlapping 640-tile patches and runs inference per patch.
+    # Preserves small-object detail that single-frame downscaling washes
+    # out — a 4K frame with a distant person at ~20 px after downscale
+    # becomes detectable at ~120 px in its native tile.
+    tile_mode = bool(body.get("tile") or body.get("mode") == "tile")
+    tile_size = int(body.get("tileSize", 640))
+    tile_overlap = float(body.get("tileOverlap", 0.2))
 
     if cam_idx < 0 or cam_idx >= len(cameras):
         return jsonify(ok=False, err=f"Camera index {cam_idx} out of range (0-{len(cameras)-1})"), 400
-    if resolution not in (320, 640):
-        return jsonify(ok=False, err="resolution must be 320 or 640"), 400
+    # #621 — widen the resolution allowlist. 320/640 remain the fast paths;
+    # larger values skip the pre-downscale and rely on tiling (if enabled)
+    # or the letterbox step (otherwise a no-op vs 640). Anything <320 or
+    # >3840 rejected.
+    if not (320 <= int(resolution) <= 3840):
+        return jsonify(ok=False,
+                       err="resolution must be between 320 and 3840 "
+                           "(enable `tile: true` for large frames)"), 400
 
     det = _get_detector()
     if det is None:
@@ -1022,8 +1037,14 @@ def scan():
 
     # Run detection
     try:
-        detections, inference_ms = det.detect(frame, threshold=threshold,
-                                               classes=classes, input_size=resolution)
+        if tile_mode:
+            detections, inference_ms = det.detect_tiled(
+                frame, threshold=threshold, classes=classes,
+                tile_size=tile_size, overlap=tile_overlap)
+        else:
+            detections, inference_ms = det.detect(
+                frame, threshold=threshold, classes=classes,
+                input_size=resolution)
     except Exception as e:
         log.error("Detection failed: %s", e)
         return jsonify(ok=False, err=str(e)), 500
@@ -1034,6 +1055,7 @@ def scan():
         captureMs=round(capture_ms),
         inferenceMs=round(inference_ms),
         resolution=resolution,
+        tile=tile_mode,
         camera=cam_idx,
         frameSize=[int(frame.shape[1]), int(frame.shape[0])],
     )
@@ -2020,6 +2042,9 @@ def track_start():
     threshold = body.get("threshold", 0.4)
     ttl = body.get("ttl", 5)
     classes = body.get("classes", ["person"])
+    # #423 — per-class threshold override (e.g. {"chair": 0.25}). Falls
+    # back to the global threshold when a class isn't listed.
+    class_thresholds = body.get("classThresholds") or None
     reid_mm = body.get("reidMm", 500)
     input_size = body.get("inputSize", 320)
 
@@ -2043,7 +2068,8 @@ def track_start():
 
     tracker.start(device, orch_url=orch_url,
                   camera_id=camera_id, fps=fps, threshold=threshold, ttl=ttl,
-                  classes=classes, reid_mm=reid_mm, input_size=input_size)
+                  classes=classes, class_thresholds=class_thresholds,
+                  reid_mm=reid_mm, input_size=input_size)
     # Wait briefly and verify the tracker thread actually started (#378)
     import time as _t
     _t.sleep(0.3)

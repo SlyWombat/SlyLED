@@ -272,7 +272,7 @@ function _openProfileEditor(p,isEdit){
   cats.forEach(function(c){h+='<option'+(c===p.category?' selected':'')+'>'+c+'</option>';});
   h+='</select></div>';
   var cmodes=['rgb','cmy','rgbw','rgba','color-wheel','single'];
-  h+='<div><label style="font-size:.78em">Color Mode</label><select id="pe-cm">';
+  h+='<div><label style="font-size:.78em">Colour Mode</label><select id="pe-cm">';
   cmodes.forEach(function(c){h+='<option'+(c===p.colorMode?' selected':'')+'>'+c+'</option>';});
   h+='</select></div>';
   h+='<div><label style="font-size:.78em">Beam \u00b0</label><input id="pe-bw" type="number" value="'+(p.beamWidth||0)+'" style="width:60px"></div>';
@@ -399,7 +399,7 @@ function _peRenderCaps(chIdx){
     h+='<div style="position:absolute;left:'+pct0+'%;width:'+w+'%;height:100%;background:'+col+';opacity:0.6;border-radius:2px" title="'+c.range[0]+'-'+c.range[1]+': '+(c.label||c.type)+'"></div>';
   });
   h+='</div>';
-  h+='<table class="tbl" style="font-size:.75em"><tr><th>Min</th><th>Max</th><th>Type</th>'+(isStrobe?'<th>Effect</th>':'')+'<th>Label</th>'+(isColorWheel?'<th>Color</th>':'')+'<th>Default</th><th></th></tr>';
+  h+='<table class="tbl" style="font-size:.75em"><tr><th>Min</th><th>Max</th><th>Type</th>'+(isStrobe?'<th>Effect</th>':'')+'<th>Label</th>'+(isColorWheel?'<th>Colour</th>':'')+'<th>Default</th><th></th></tr>';
   (window._peCaps||[]).forEach(function(c,j){
     var tOpts='';_profEditCapTypes.forEach(function(t){tOpts+='<option'+(t===c.type?' selected':'')+'>'+t+'</option>';});
     h+='<tr><td><input type="number" value="'+c.range[0]+'" min="0" max="'+maxVal+'" style="width:55px;font-size:.9em" onchange="window._peCaps['+j+'].range[0]=parseInt(this.value);_peRenderCaps('+chIdx+')"></td>';

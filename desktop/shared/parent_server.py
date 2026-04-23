@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.5.66"
+VERSION = "1.6.2"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -118,8 +118,12 @@ BASE = Path(__file__).parent
 # When packaged with PyInstaller --onefile, files land in sys._MEIPASS
 if getattr(sys, "frozen", False):
     SPA = Path(sys._MEIPASS) / "spa"
+    DOCS_ROOT = Path(sys._MEIPASS) / "docs"
+    DOCS_HELP = DOCS_ROOT / "help"
 else:
     SPA = BASE / "spa"
+    DOCS_ROOT = BASE.parent.parent / "docs"
+    DOCS_HELP = DOCS_ROOT / "help"
 
 # Persist data under %APPDATA%\SlyLED on Windows; fall back to BASE/data elsewhere
 if os.name == "nt" and os.environ.get("APPDATA"):
@@ -238,8 +242,14 @@ def _rotation_to_aim(rotation, pos, dist=3000):
     rx = tilt/pitch, ry = pan/yaw.  Default distance is 3000mm (3m).
     Stage coordinates: X=width, Y=depth (forward), Z=height (up).
     """
-    rx = rotation[0] if rotation else 0
-    ry = rotation[1] if rotation and len(rotation) > 1 else 0
+    # Route through rotation_from_layout so the array index→semantic
+    # mapping is single-source. #600 swap lands cleanly this way.
+    try:
+        from camera_math import rotation_from_layout
+        rx, ry, _roll = rotation_from_layout(rotation)
+    except Exception:
+        rx = rotation[0] if rotation else 0
+        ry = rotation[1] if rotation and len(rotation) > 1 else 0
     pan_rad = math.radians(ry)
     tilt_rad = math.radians(rx)
     dx = math.sin(pan_rad) * math.cos(tilt_rad) * dist
@@ -265,6 +275,56 @@ _mover_cal    = _load("mover_calibrations", {})  # {fixtureId_str: {grid, sample
 #                rx:float(deg), ry:float(deg), rz:float(deg), label?:str}
 _aruco_markers = _load("aruco_markers", [])
 _ssh_bootstrapped = False  # deferred pre-population (needs _encrypt_pw defined later)
+
+
+# #600 — rotation-convention schema version. v1 used [rx pitch, ry=pan, rz=roll];
+# v2 swaps to axis-letter-matched [rx pitch, ry=roll, rz=yaw]. Loader migrates
+# persisted data once on startup. Stored under the top-level `_layout` dict
+# because every layout-positioned fixture carries a rotation and the layout
+# write path is where migration naturally fires.
+_ROTATION_SCHEMA_VERSION = 2
+
+
+def _migrate_rotation_schema():
+    """One-shot migration: swap rotation[1] ↔ rotation[2] on every fixture
+    that still stores the pre-#600 convention. Safe to call multiple times
+    — no-op once _layout.rotationSchemaVersion is already 2.
+
+    Also handles the same swap for fixture records that carry rotation at
+    the top level (cameras / DMX movers loaded from _fixtures).
+    """
+    if (_layout or {}).get("rotationSchemaVersion") == _ROTATION_SCHEMA_VERSION:
+        return 0
+    swapped = 0
+    # Fixtures table (cameras, DMX) carries rotation on the fixture record.
+    for f in (_fixtures or []):
+        rot = f.get("rotation")
+        if isinstance(rot, list) and len(rot) >= 3:
+            f["rotation"] = [rot[0], rot[2], rot[1]]
+            swapped += 1
+    # Layout children may also carry a rotation when the operator set one
+    # via /api/fixtures/<fid>/aim.
+    for c in (_layout.get("children") or []):
+        rot = c.get("rotation")
+        if isinstance(rot, list) and len(rot) >= 3:
+            c["rotation"] = [rot[0], rot[2], rot[1]]
+            swapped += 1
+    _layout["rotationSchemaVersion"] = _ROTATION_SCHEMA_VERSION
+    if swapped:
+        try:
+            _save("fixtures", _fixtures)
+            _save("layout", _layout)
+            log.info("#600 rotation migration: swapped ry↔rz on %d records", swapped)
+        except Exception as e:
+            log.warning("#600 rotation migration persist failed: %s", e)
+    else:
+        # No swaps needed (fresh install or already migrated), but still
+        # persist the schema marker so we don't try again.
+        try:
+            _save("layout", _layout)
+        except Exception:
+            pass
+    return swapped
 
 
 # #628 — Auto-derive stage bounds from placed fixtures + surveyed markers.
@@ -1600,6 +1660,18 @@ def api_fixture_update(fid):
             v = body["trackThreshold"]
             if not isinstance(v, (int, float)) or v < 0.1 or v > 0.95:
                 return jsonify(err="trackThreshold must be 0.1-0.95"), 400
+        # #423 — per-class threshold dict. Each value must be in the
+        # same 0.1-0.95 band so an operator can't accidentally set
+        # threshold=0 and flood the tracker with noise.
+        if "trackClassThresholds" in body:
+            ct = body["trackClassThresholds"]
+            if not isinstance(ct, dict):
+                return jsonify(err="trackClassThresholds must be an object mapping class→threshold"), 400
+            for cls, thr in ct.items():
+                if not isinstance(cls, str) or not cls:
+                    return jsonify(err="trackClassThresholds keys must be non-empty class names"), 400
+                if not isinstance(thr, (int, float)) or thr < 0.1 or thr > 0.95:
+                    return jsonify(err=f"trackClassThresholds['{cls}'] must be 0.1-0.95"), 400
         if "trackTtl" in body:
             v = body["trackTtl"]
             if not isinstance(v, (int, float)) or v < 1 or v > 60:
@@ -1612,7 +1684,8 @@ def api_fixture_update(fid):
               "rotation", "orientation", "mountedInverted", "aoeRadius", "meshFile",
               "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId",
               "fovDeg", "fovType", "cameraUrl", "cameraIp", "cameraIdx", "resolutionW", "resolutionH",
-              "trackClasses", "trackFps", "trackThreshold", "trackTtl", "trackReidMm",
+              "trackClasses", "trackClassThresholds",
+              "trackFps", "trackThreshold", "trackTtl", "trackReidMm",
               "gyroChildId", "assignedMoverId", "gyroEnabled", "smoothing"):
         if k in body:
             # #Q12 — normalise fovType on write so stored value is always in
@@ -2120,13 +2193,17 @@ def _pixel_point_to_stage_floor(cam_fixture, px, py, frame_w, frame_h):
         cz0 = float(cam_pos.get("z", 0) or 0)
         if cz0 > 1:  # camera must be off the floor for a ray-plane intersect
             try:
-                from camera_math import build_camera_to_stage
+                from camera_math import build_camera_to_stage, rotation_from_layout
             except Exception:
                 build_camera_to_stage = None
+                rotation_from_layout = None
             rot = cam_fixture.get("rotation", [0, 0, 0]) or [0, 0, 0]
-            tilt_deg = float(rot[0] or 0)
-            pan_deg = float(rot[1] or 0)
-            roll_deg = float(rot[2] or 0)
+            if rotation_from_layout:
+                tilt_deg, pan_deg, roll_deg = rotation_from_layout(rot)
+            else:
+                tilt_deg = float(rot[0] or 0)
+                pan_deg = float(rot[1] or 0)
+                roll_deg = float(rot[2] or 0)
             R = build_camera_to_stage(tilt_deg, pan_deg, roll_deg) if build_camera_to_stage else None
             if R is not None:
                 fov_rad = _camera_h_fov_rad(cam_fixture, frame_w, frame_h)
@@ -2352,15 +2429,29 @@ def api_camera_scan(fid):
     threshold = body.get("threshold", 0.5)
     cam_idx = body.get("cam", 0)
     resolution = body.get("resolution", 320)
+    # #621 — forward SAHI-tile controls when the caller asks for them.
+    # Missing flags keep the fast single-frame path.
+    tile = bool(body.get("tile"))
+    tile_size = body.get("tileSize")
+    tile_overlap = body.get("tileOverlap")
     # Forward to camera node /scan endpoint
     try:
         import urllib.request as _ur
-        req_data = json.dumps({"threshold": threshold, "cam": cam_idx,
-                                "resolution": resolution}).encode()
+        payload = {"threshold": threshold, "cam": cam_idx,
+                   "resolution": resolution}
+        if tile:
+            payload["tile"] = True
+            if tile_size is not None:
+                payload["tileSize"] = tile_size
+            if tile_overlap is not None:
+                payload["tileOverlap"] = tile_overlap
+        req_data = json.dumps(payload).encode()
         req = _ur.Request(f"http://{ip}:5000/scan",
                           data=req_data,
                           headers={"Content-Type": "application/json"})
-        resp = _ur.urlopen(req, timeout=30)
+        # Tile mode runs N patches serially; bump the timeout proportionally.
+        timeout_s = 60 if tile else 30
+        resp = _ur.urlopen(req, timeout=timeout_s)
         raw = json.loads(resp.read().decode())
     except Exception as e:
         return jsonify(err=f"Camera scan failed: {e}"), 503
@@ -2376,6 +2467,7 @@ def api_camera_scan(fid):
         cameraId=fid,
         captureMs=raw.get("captureMs"),
         inferenceMs=raw.get("inferenceMs"),
+        tile=raw.get("tile", False),
     )
 
 # ── Camera calibration — homography math ──────────────────────────────
@@ -2596,6 +2688,68 @@ def api_camera_intrinsic_get(fid):
     try:
         resp = _ur.urlopen(f"http://{ip}:5000/calibrate/intrinsic?cam={cam_idx}", timeout=10)
         return jsonify(json.loads(resp.read().decode("utf-8")))
+    except Exception as e:
+        return jsonify(ok=False, err=str(e)), 503
+
+
+@app.delete("/api/cameras/<int:fid>/intrinsic")
+def api_camera_intrinsic_delete(fid):
+    """#597 — discard a camera node's saved intrinsic calibration so the
+    Advanced Scan wizard can re-run from scratch. Proxies the camera-
+    side DELETE; leaves the orchestrator's separate stage-map
+    homography in _calibrations untouched (use DELETE /api/cameras/
+    <fid>/calibration for that one, #619).
+    """
+    f = next((fx for fx in _fixtures
+              if fx["id"] == fid and fx.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    cam_idx = f.get("cameraIdx", 0)
+    import urllib.request as _ur
+    try:
+        req = _ur.Request(
+            f"http://{ip}:5000/calibrate/intrinsic?cam={cam_idx}",
+            method="DELETE")
+        resp = _ur.urlopen(req, timeout=10)
+        try:
+            body = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            body = {"ok": True}
+        return jsonify(body)
+    except Exception as e:
+        return jsonify(ok=False, err=str(e)), 503
+
+
+@app.post("/api/cameras/<int:fid>/intrinsic/reset")
+def api_camera_intrinsic_reset(fid):
+    """#597 — reset the intrinsic-capture buffer on a camera node
+    (drops accumulated ArUco / checkerboard frames without discarding
+    any saved calibration). Use before restarting a capture sequence.
+    """
+    f = next((fx for fx in _fixtures
+              if fx["id"] == fid and fx.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    cam_idx = f.get("cameraIdx", 0)
+    import urllib.request as _ur
+    try:
+        req = _ur.Request(
+            f"http://{ip}:5000/calibrate/intrinsic/reset?cam={cam_idx}",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST")
+        resp = _ur.urlopen(req, timeout=10)
+        try:
+            body = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            body = {"ok": True}
+        return jsonify(body)
     except Exception as e:
         return jsonify(ok=False, err=str(e)), 503
 
@@ -3444,6 +3598,13 @@ def api_fixture_dmx_test(fid):
         return jsonify(err="Fixture has no profile"), 400
     uni = f.get("dmxUniverse", 1)
     addr = f.get("dmxStartAddr", 1)
+    # #622 — refuse to write unless the engine is running. Previously
+    # this lazy-created a universe buffer and silently returned OK; the
+    # fixture wouldn't move but keep-alive frames would start once the
+    # engine came up later.
+    if not _artnet.running:
+        return jsonify(err="Art-Net engine not running — start it from "
+                            "Settings → DMX Engine before testing a fixture"), 503
     try:
         uni_buf = _artnet.get_universe(uni)
     except Exception:
@@ -5075,7 +5236,11 @@ def api_mover_cal_aim(fid):
             pan, tilt = _mcal.grid_inverse(grid, px, py)
 
     if pan is not None:
-        # Send DMX
+        # Send DMX. #622 — only when the engine is running; otherwise
+        # get_universe would lazy-create a keep-alive-active buffer.
+        if not _artnet.running:
+            return jsonify(err="Art-Net engine not running — start it from "
+                                "Settings → DMX Engine before aiming"), 503
         pid = f.get("dmxProfileId")
         prof_info = _profile_lib.channel_info(pid) if pid else None
         if prof_info:
@@ -6968,9 +7133,13 @@ def api_camera_track_start(fid):
     local_ip = _get_local_ip()
     port = request.host.split(":")[-1] if ":" in request.host else "8080"
     classes = body.get("classes", f.get("trackClasses", ["person"]))
+    # #423 — per-class threshold override forwarded from the fixture
+    # config (trackClassThresholds). Missing classes fall back to the
+    # global trackThreshold on the camera node side.
+    class_thresholds = body.get("classThresholds") or f.get("trackClassThresholds")
     try:
         import urllib.request as _ur
-        req_data = json.dumps({
+        payload = {
             "cam": body.get("cam", 0),
             "orchestratorUrl": f"http://{local_ip}:{port}",
             "cameraId": fid,
@@ -6980,7 +7149,10 @@ def api_camera_track_start(fid):
             "classes": classes,
             "reidMm": body.get("reidMm", f.get("trackReidMm", 500)),
             "inputSize": body.get("inputSize", f.get("trackInputSize", 320)),
-        }).encode()
+        }
+        if class_thresholds:
+            payload["classThresholds"] = class_thresholds
+        req_data = json.dumps(payload).encode()
         req = _ur.Request(f"http://{ip}:5000/track/start",
                           data=req_data,
                           headers={"Content-Type": "application/json"})
@@ -7113,7 +7285,7 @@ _github_camera_cache = {"version": None, "ts": 0}
 _GITHUB_CAMERA_TTL = 3600  # 1 hour cache
 
 def _parse_version_from_text(text):
-    """Extract VERSION = "1.5.66" from camera_server.py source text."""
+    """Extract the VERSION literal from camera_server.py source text."""
     import re
     m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', text)
     return m.group(1) if m else None
@@ -10170,8 +10342,12 @@ def api_fixtures_live():
                 engine = _artnet
             elif _sacn.running:
                 engine = _sacn
-            if engine:
-                uni = engine.get_universe(uni_num)
+            # #622 — peek_universe avoids conjuring a keep-alive-active
+            # universe buffer just because the dashboard polls this
+            # endpoint. If the engine hasn't been asked to write to this
+            # universe yet, uni is None and the live values stay at zero.
+            uni = engine.peek_universe(uni_num) if engine else None
+            if engine and uni is not None:
                 if ch_map:
                     if "red" in ch_map:
                         entry["r"] = uni.get_channel(addr + ch_map["red"])
@@ -10199,7 +10375,7 @@ def api_fixtures_live():
                     if count >= 4:
                         entry["dimmer"] = uni.get_channel(addr + 3)
             # Color wheel slot lookup — populate swatch color from wheel slot
-            if ch_map and "color-wheel" in ch_map and engine:
+            if ch_map and "color-wheel" in ch_map and engine and uni is not None:
                 cw_val = uni.get_channel(addr + ch_map["color-wheel"])
                 entry["colorWheelDmx"] = cw_val
                 for ch_def in (prof_info.get("channels") or []):
@@ -11241,12 +11417,15 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
     if not dmx_fixtures:
         log.info("DMX playback: no baked segments but Track actions present — loop will run for tracking")
     log.info("DMX playback: %d fixture(s), duration=%ds, loop=%s", len(dmx_fixtures), duration, loop)
-    # Auto-start Art-Net engine if not running
+    # #622 — do NOT auto-start the DMX engine. Previously a timeline
+    # targeting only LED children would still bring Art-Net up; now we
+    # run the playback loop regardless (LED output is unaffected) and
+    # only engage DMX writes if the operator already started the engine.
     proto = _dmx_settings.get("protocol", "artnet")
     engine = _artnet if proto == "artnet" else _sacn
     if not engine.running:
-        engine.start()
-        log.info("DMX playback: auto-started %s engine", proto)
+        log.info("DMX playback: engine is stopped — LED children will play, "
+                 "DMX fixtures will not receive output this cycle")
     # Wait until go_epoch
     wait = go_epoch - time.time()
     if wait > 0:
@@ -11274,6 +11453,13 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
             elapsed = elapsed % duration
         elif elapsed > duration:
             break  # show ended
+        # #622 — skip DMX writes entirely when the engine is stopped.
+        # Previously we still iterated and called engine.get_universe(),
+        # which lazy-created keep-alive-active buffers that would emit
+        # ArtDMX as soon as the engine started later.
+        if not engine.running:
+            frame_count += 1
+            continue
         # Evaluate each DMX fixture — merge ALL matching segments per-channel.
         # Higher-priority segments (_pri) override lower ones per-channel,
         # allowing e.g. a PT sweep to control pan/tilt while a base wash
@@ -11599,8 +11785,11 @@ def _dmx_playback_single(tid, go_epoch, duration):
 
     proto = _dmx_settings.get("protocol", "artnet")
     engine = _artnet if proto == "artnet" else _sacn
+    # #622 — don't auto-start. If the engine is stopped we still let the
+    # timer loop run so timeline duration is respected, but DMX writes
+    # are skipped inside the inner loop.
     if not engine.running:
-        engine.start()
+        log.info("DMX playback (single): engine stopped — DMX writes skipped")
 
     interval = 0.025
     next_frame = time.monotonic()
@@ -11620,6 +11809,10 @@ def _dmx_playback_single(tid, go_epoch, duration):
             continue
         if elapsed > duration:
             break
+        # #622 — skip DMX writes when engine is stopped (timer still ticks).
+        if not engine.running:
+            frame_count += 1
+            continue
         for fx in dmx_fixtures:
             # #511 — skip playback for fixtures mid-calibration.
             if _fixture_is_calibrating(fx.get("id")):
@@ -12701,6 +12894,25 @@ def api_project_import():
             c["status"] = 0  # all offline until next ping
         _fixtures = data.get("fixtures", [])
         _layout = data.get("layout", {"canvasW": 3000, "canvasH": 2000, "children": []})
+        # #600 — migrate rotation-array convention on import. Old
+        # .slyshow files used [rx, ry=pan, rz=roll]; new convention is
+        # [rx, ry=roll, rz=yaw]. Detect via layout.rotationSchemaVersion
+        # and swap ry↔rz on every persisted rotation.
+        if _layout.get("rotationSchemaVersion") != _ROTATION_SCHEMA_VERSION:
+            _swap = 0
+            for _f in _fixtures:
+                _r = _f.get("rotation")
+                if isinstance(_r, list) and len(_r) >= 3:
+                    _f["rotation"] = [_r[0], _r[2], _r[1]]
+                    _swap += 1
+            for _c in (_layout.get("children") or []):
+                _r = _c.get("rotation")
+                if isinstance(_r, list) and len(_r) >= 3:
+                    _c["rotation"] = [_r[0], _r[2], _r[1]]
+                    _swap += 1
+            _layout["rotationSchemaVersion"] = _ROTATION_SCHEMA_VERSION
+            if _swap:
+                log.info("#600 project import: migrated %d rotation arrays", _swap)
         _stage = data.get("stage", {"w": 10.0, "h": 5.0, "d": 10.0})
         _actions = data.get("actions", [])
         _spatial_fx = data.get("spatialEffects", [])
@@ -12792,15 +13004,48 @@ def api_project_import():
         # try to stamp `_community` provenance on any that do so the
         # SPA can detect staleness later (#534). Collect the slugs we
         # ended up with so we can batch check_updates after the import.
+        # #607 — the .slyshow project file IS the source of truth for
+        # profile content embedded inside it (same as fixtures, layout,
+        # calibrations, timelines). Previously the import only wrote
+        # profiles when no local copy existed, which silently dropped
+        # every user-authored edit in the embedded version. New rule:
+        # write through, but preserve any community provenance so later
+        # check-updates works. A log line records every overwrite so
+        # it's visible rather than silent.
         _imported_community_slugs = []
+        _imported_profile_diff = []  # (pid, action) for the audit log
         for p in data.get("profiles", []):
             pid = p.get("id")
             if not pid:
                 continue
-            if not _profile_lib.get_profile(pid):
+            existing = _profile_lib.get_profile(pid)
+            if existing is None:
                 _profile_lib.save_profile(p)
+                _imported_profile_diff.append((pid, "added"))
+            else:
+                # Overwrite with the embedded version — the project
+                # file is the source of truth. Preserve _community
+                # provenance if the embedded copy dropped it but the
+                # local copy had it (check-updates still works).
+                if not p.get("_community") and existing.get("_community"):
+                    p["_community"] = existing["_community"]
+                # Diff before save, ignoring stamped-by-save fields.
+                _stamped = ("builtin", "channelCount")
+                _e = {k: v for k, v in existing.items() if k not in _stamped}
+                _p = {k: v for k, v in p.items() if k not in _stamped}
+                changed = (_e != _p)
+                _profile_lib.save_profile(p)
+                _imported_profile_diff.append(
+                    (pid, "overwritten" if changed else "unchanged"))
             if p.get("_community") and p["_community"].get("slug"):
                 _imported_community_slugs.append(p["_community"]["slug"])
+        if _imported_profile_diff:
+            _overwritten = sum(1 for _, a in _imported_profile_diff if a == "overwritten")
+            _added = sum(1 for _, a in _imported_profile_diff if a == "added")
+            log.info("Project import profiles: %d added, %d overwritten, "
+                     "%d unchanged (#607 — embedded version is authoritative)",
+                     _added, _overwritten,
+                     sum(1 for _, a in _imported_profile_diff if a == "unchanged"))
         # Fetch missing profiles from community server (#351) — and
         # stamp them with _community provenance while we're at it.
         _missing_pids = set()
@@ -13265,20 +13510,92 @@ def api_fw_flash_status():
 
 #  "  "  Help (Phase 7)  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
+# #545 — map SPA tab id → actual `## N. Heading` in docs/USER_MANUAL.md.
+# The previous mapping pointed at headings that don't exist ("Dashboard",
+# "Setup", "Firmware"), and assigned wrong numeric prefixes from a pre-v1
+# manual layout. The api_help() reader does a case-insensitive substring
+# match against each line starting with "## ", so we match on the number
+# + title pair — stable across future heading-text wording tweaks.
 _HELP_SECTIONS = {
-    "dash": "Dashboard",
-    "setup": "Setup",
-    "layout": "1-getting-started",
-    "spatial-effects": "3-spatial-effects",
-    "timeline": "4-timeline",
-    "settings": "Settings",
-    "firmware": "Firmware",
+    "dash":            "1. Getting Started",
+    "setup":           "4. Fixture Setup",
+    "layout":          "5. Stage Layout",
+    "objects":         "6. Stage Objects",
+    "actions":         "7. Creating Spatial Effects",  # SPA "Actions" tab
+    "spatial-effects": "7. Creating Spatial Effects",
+    "track":           "8. Track Action",
+    "timeline":        "9. Building a Timeline",
+    "shows":           "11. Show Preview Emulator",
+    "runtime":         "9. Building a Timeline",
+    "settings":        "12. DMX Fixture Profiles",
+    "cameras":         "14. Camera Nodes",
+    "firmware":        "15. Firmware & OTA Updates",
+    "examples":        "18. Examples",
+    "api":             "19. API Quick Reference",
 }
+
+@app.get("/help")
+@app.get("/help/")
+def serve_help_index():
+    """#546 — serve the full user manual HTML at /help. Allows the '?'
+    button in the SPA nav to open the complete manual in a new tab
+    (rather than only the side-panel section extract). Works offline
+    because the manual ships inside the project tree.
+
+    Bilingual per project policy (public-facing docs must be EN+FR):
+    - ``/help`` defaults to English.
+    - ``/help?lang=fr`` serves the French translation.
+    - When no lang query is provided, Accept-Language is honoured —
+      a browser with ``Accept-Language: fr,...`` gets the French
+      version automatically.
+    """
+    # Choose language: explicit ?lang= wins, then Accept-Language.
+    lang = (request.args.get("lang") or "").strip().lower()
+    if not lang:
+        accept = (request.headers.get("Accept-Language") or "").lower()
+        if accept.startswith("fr") or ",fr" in accept.replace(" ", ""):
+            lang = "fr"
+        else:
+            lang = "en"
+    filename = "index_fr.html" if lang == "fr" else "index.html"
+    help_path = DOCS_HELP / filename
+    if not help_path.exists() and lang == "fr":
+        # Graceful fallback: French HTML missing → serve English HTML
+        # with a note. Users won't get a 404 page just because we
+        # haven't generated the French file yet.
+        help_path = DOCS_HELP / "index.html"
+    if not help_path.exists():
+        return ("<h1>User manual not found</h1>"
+                "<p>Expected at <code>docs/help/index.html</code>.</p>",
+                404, {"Content-Type": "text/html; charset=utf-8"})
+    try:
+        return (help_path.read_text(encoding="utf-8"),
+                200, {"Content-Type": "text/html; charset=utf-8"})
+    except Exception as e:
+        return (f"<h1>Failed to read manual</h1><pre>{e}</pre>", 500,
+                {"Content-Type": "text/html; charset=utf-8"})
+
+
+@app.get("/help/images/<path:filename>")
+def serve_help_image(filename):
+    """#546 — serve images referenced by the manual. Path-safe via
+    Flask's send_from_directory; falls back to 404 when the file is
+    missing (some markdown references may not have a matching PNG
+    yet)."""
+    from flask import send_from_directory
+    images_dir = DOCS_HELP / "images"
+    if not images_dir.exists():
+        return "", 404
+    try:
+        return send_from_directory(str(images_dir), filename)
+    except Exception:
+        return "", 404
+
 
 @app.get("/api/help/<section>")
 def api_help(section):
     """Return help content for a given section, extracted from USER_MANUAL.md."""
-    manual_path = BASE.parent.parent / "docs" / "USER_MANUAL.md"
+    manual_path = DOCS_ROOT / "USER_MANUAL.md"
     if not manual_path.exists():
         return jsonify(html="<p>User manual not found.</p>")
     try:
@@ -13774,6 +14091,12 @@ if __name__ == "__main__":
         _migrate_v1_mover_cals()
     except Exception as _e:
         log.warning("v1 mover-cal migration on startup failed: %s", _e)
+    # #600 — swap rotation array convention once on startup. No-op if the
+    # layout already records rotationSchemaVersion == 2.
+    try:
+        _migrate_rotation_schema()
+    except Exception as _e:
+        log.warning("#600 rotation migration on startup failed: %s", _e)
     ap = argparse.ArgumentParser(description="SlyLED Parent Server")
     ap.add_argument("--port",       type=int, default=8080)
     ap.add_argument("--host",       default="0.0.0.0")
@@ -13798,6 +14121,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

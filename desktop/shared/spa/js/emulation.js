@@ -242,7 +242,9 @@ function emu3dBuildFixtures(){
         grp.userData.panRange=prof.panRange||540;
         grp.userData.tiltRange=prof.tiltRange||270;
       }
-      grp.userData.basePan=(c.rotation&&c.rotation[1])||0;
+      // #600 — pan now lives at rotation[2] (was rotation[1]). Route
+      // through rotationFromLayout so the site reads axis-semantic.
+      grp.userData.basePan=rotationFromLayout(c.rotation).pan;
       grp.userData.mountedInverted=!!c.mountedInverted;
 
       // Sphere node

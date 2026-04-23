@@ -119,7 +119,17 @@ def _check_cancel():
 
 
 def _send_artnet(bridge_ip, universe, channels):
-    """Send DMX — uses engine callback if available, falls back to raw UDP."""
+    """Send DMX via the registered engine callback.
+
+    #622 — the raw-UDP fallback that used to live here bypassed the
+    engine's running-check, its universe-dirty tracking, and its
+    single-source routing. That made it possible to produce wire
+    traffic on port 6454 without starting the engine — e.g. during a
+    test that imported this module directly. The fallback has been
+    removed: if the caller didn't wire up the engine callback via
+    set_dmx_sender(), we raise loudly instead of silently going
+    around the abstraction.
+    """
     global _probe_counter, _last_probe
     _probe_counter += 1
     if _last_probe is None:
@@ -132,24 +142,13 @@ def _send_artnet(bridge_ip, universe, channels):
         _last_probe["channels"] = list(channels[:64])
     except Exception:
         _last_probe["channels"] = []
-    if _dmx_sender:
-        # Write all non-zero channels through the engine
-        _dmx_sender(universe + 1, 1, channels)  # universe is 0-based here, engine is 1-based
-        return
-    # Fallback: raw Art-Net UDP (legacy, may conflict with engine)
-    header = b"Art-Net\x00" + struct.pack("<H", 0x5000) + struct.pack(">H", 14)
-    header += b"\x00\x00" + struct.pack("<H", universe) + struct.pack(">H", len(channels))
-    for attempt in range(3):
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.sendto(header + bytes(channels), (bridge_ip, 6454))
-            s.close()
-            return
-        except OSError:
-            if attempt < 2:
-                time.sleep(0.2)
-            else:
-                raise
+    if _dmx_sender is None:
+        raise RuntimeError(
+            "mover_calibrator._send_artnet: no engine DMX sender registered "
+            "(parent_server.set_dmx_sender is the wiring call). Refusing to "
+            "emit raw Art-Net UDP — see #622.")
+    # Write all non-zero channels through the engine
+    _dmx_sender(universe + 1, 1, channels)  # universe is 0-based here, engine is 1-based
 
 
 _active_profile = None  # Set by caller before calibration; used by _set_mover_dmx

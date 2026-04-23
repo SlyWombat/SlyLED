@@ -259,7 +259,7 @@ function _clipPickerOpts(selectedVal){
   var h='<optgroup label="Spatial Effects">';
   _spatialFx.forEach(function(f){h+='<option value="sfx:'+f.id+'"'+(selectedVal==='sfx:'+f.id?' selected':'')+'>'+escapeHtml(f.name)+'</option>';});
   h+='</optgroup><optgroup label="Classic Actions">';
-  var aNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Wipe','Scanner','Sparkle','Gradient','DMX Scene','Pan/Tilt Move','Gobo Select','Color Wheel','Track'];
+  var aNames=['Blackout','Solid','Fade','Breathe','Chase','Rainbow','Fire','Comet','Twinkle','Strobe','Wipe','Scanner','Sparkle','Gradient','DMX Scene','Pan/Tilt Move','Gobo Select','Colour Wheel','Track'];
   _acts.forEach(function(a){
     var tn=aNames[a.type]||'Type '+a.type;
     h+='<option value="act:'+a.id+'"'+(selectedVal==='act:'+a.id?' selected':'')+'>'+escapeHtml(a.name)+' ('+tn+')</option>';

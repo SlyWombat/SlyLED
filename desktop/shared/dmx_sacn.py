@@ -181,10 +181,17 @@ class sACNEngine:
     # ── Universe management ──────────────────────────────────────
 
     def get_universe(self, universe):
-        """Get or create a DMXUniverse buffer."""
+        """Get or create a DMXUniverse buffer. See ArtNetEngine.get_universe
+        — same #622 keep-alive trap applies; use ``peek_universe`` for
+        read-only status endpoints."""
         if universe not in self._universes:
             self._universes[universe] = DMXUniverse(universe)
         return self._universes[universe]
+
+    def peek_universe(self, universe):
+        """#622 — read-only universe lookup. Returns the buffer if it
+        already exists or None otherwise."""
+        return self._universes.get(universe)
 
     def set_channel(self, universe, channel, value):
         self.get_universe(universe).set_channel(channel, value)

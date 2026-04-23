@@ -556,14 +556,18 @@ function showCameraHealth(){
       var intrColor = intr==='calibrated'?'#4ade80':'#fbbf24';
       var pos = r.hasPosition?'<span style="color:#4ade80">✓</span>':'<span style="color:#f87171">✗</span>';
       var ts = r.timestamp?(new Date(r.timestamp*1000)).toLocaleString():'—';
-      // #619 — clear-cal action. Available only for calibrated cameras;
-      // confirms before firing so an accidental click doesn't blow away
-      // a good cal.
-      var clearBtn = r.calibrated
+      // #619 / #597 — clear-cal actions. Two buttons in a row:
+      //   * "H" drops the stage-map homography (after rig move / marker reseating).
+      //   * "I" drops the camera-node intrinsic (before re-running Advanced Scan).
+      var hBtn = r.calibrated
         ? '<button class="btn" onclick="clearCameraCal('+cam.id+')" '
           +'style="font-size:.7em;padding:.1em .35em;background:#7f1d1d;color:#fca5a5" '
-          +'title="Discard this cameras homography — use after a rig move or marker replacement">Clear</button>'
-        : '—';
+          +'title="#619 Drop this cameras homography (stage-map calibration). Re-run stage-map after a rig move or marker reseating.">Clear H</button>'
+        : '';
+      var iBtn = '<button class="btn" onclick="clearCameraIntrinsic('+cam.id+')" '
+        +'style="font-size:.7em;padding:.1em .35em;background:#78350f;color:#fbbf24;margin-left:.25em" '
+        +'title="#597 Reset the camera nodes saved intrinsic calibration. Forces the Advanced Scan wizard to re-capture.">Clear I</button>';
+      var clearBtn = (hBtn || '—') + iBtn;
       row.innerHTML='<td>'+escapeHtml(cam.name||('cam '+cam.id))+'</td>'
         +'<td>'+tierBadge+'</td>'
         +'<td>'+markers+'</td>'
@@ -592,6 +596,22 @@ function clearCameraCal(fid){
       });}else{
         if(_camHealthOpen){_camHealthOpen=false;showCameraHealth();}
       }
+    }else{
+      alert('Clear failed: '+((r&&r.err)||'unknown'));
+    }
+  });
+}
+
+// #597 — drop the camera nodes saved intrinsic calibration. Prompts
+// before firing; the DELETE is proxied to the camera nodes
+// /calibrate/intrinsic endpoint. Triggers an Advanced Scan re-capture
+// next time the wizard runs.
+function clearCameraIntrinsic(fid){
+  if(!confirm('Reset this camera nodes intrinsic calibration? The Advanced Scan wizard will need to re-capture before stereo triangulation works again.'))return;
+  ra('DELETE','/api/cameras/'+fid+'/intrinsic',null,function(r){
+    if(r&&(r.ok||r.removed)){
+      if(_camHealthOpen){_camHealthOpen=false;showCameraHealth();}
+      alert('Intrinsic calibration cleared on camera.');
     }else{
       alert('Clear failed: '+((r&&r.err)||'unknown'));
     }
@@ -2415,19 +2435,33 @@ function _togglePointCloud(){
   var cb=document.getElementById('vw-cloud');
   var desired=cb?cb.checked:!_pointCloudVisible;
   if(!_pointCloudData){
-    if(!desired){_pointCloudVisible=false;_updateCloudBtn();return;}
+    if(!desired){_pointCloudVisible=false;_updateCloudBtn();_persistCloudPref(false);return;}
     _loadPointCloud(function(){
       if(!_pointCloudData){
         document.getElementById('hs').textContent='No point cloud — run environment scan first';
         if(cb)cb.checked=false;
+        _persistCloudPref(false);
+      }else{
+        _persistCloudPref(true);
       }
-      // _loadPointCloud already set _pointCloudVisible=true and rendered
     });
     return;
   }
   _pointCloudVisible=desired;
   if(_s3d.inited)_renderPointCloud();
   _updateCloudBtn();
+  _persistCloudPref(desired);
+}
+
+// #638 — persist point-cloud visibility directly (Bug 2: previously only
+// written when another toggle triggered _viewSave; could be lost on reload).
+function _persistCloudPref(visible){
+  try{
+    var raw=localStorage.getItem('slyled-view-prefs');
+    var p=raw?JSON.parse(raw):{};
+    p.cloud=!!visible;
+    localStorage.setItem('slyled-view-prefs',JSON.stringify(p));
+  }catch(e){}
 }
 
 function _updateCloudBtn(){

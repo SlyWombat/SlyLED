@@ -243,10 +243,24 @@ class ArtNetEngine:
     # ── Universe management ──────────────────────────────────────
 
     def get_universe(self, universe):
-        """Get or create a DMXUniverse buffer."""
+        """Get or create a DMXUniverse buffer.
+
+        #622 WARNING — calling this from a read-only path (e.g.
+        /api/fixtures/live, or any status endpoint the SPA polls on an
+        interval) lazily creates a universe buffer that subsequently
+        emits ArtDMX keep-alive frames at 1 Hz. Use ``peek_universe``
+        for read-only access so polling never conjures a new universe.
+        """
         if universe not in self._universes:
             self._universes[universe] = DMXUniverse(universe)
         return self._universes[universe]
+
+    def peek_universe(self, universe):
+        """#622 — read-only universe lookup. Returns the buffer if it
+        already exists (i.e. the engine has been asked to write to it)
+        or None otherwise. Never creates a new universe, so read-only
+        status polling cannot cause keep-alive broadcasts."""
+        return self._universes.get(universe)
 
     def set_channel(self, universe, channel, value):
         """Set a channel in a universe."""

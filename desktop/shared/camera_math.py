@@ -144,12 +144,28 @@ def point_coords(p):
 def rotation_from_layout(rotation):
     """Normalise a layout-stored `rotation` list to (tilt, pan, roll) degrees.
 
-    Layout format: `[rx, ry, rz]` where rx=tilt, ry=pan, rz=roll. Any
-    missing entries default to 0. See CLAUDE.md "Camera nodes" section.
+    #600 convention (Z-up axis-matched): ``[rx, ry, rz]`` where
+    rx = pitch (rotation about X),
+    ry = roll  (rotation about Y — the stage-forward axis),
+    rz = yaw   (rotation about Z — the stage-up axis, i.e. pan).
+
+    This helper is the single source of truth for the array index →
+    axis-semantic mapping. Callers only ever get back axis-semantic
+    ``(tilt, pan, roll)``; the index layout is an implementation detail
+    that moved during #600 and will stay pinned to this helper going
+    forward. Missing entries default to 0.
     """
     if not rotation:
         return 0.0, 0.0, 0.0
     tilt = float(rotation[0]) if len(rotation) > 0 else 0.0
-    pan = float(rotation[1]) if len(rotation) > 1 else 0.0
-    roll = float(rotation[2]) if len(rotation) > 2 else 0.0
+    # #600 — swapped indices. Old: ry=pan, rz=roll. New: ry=roll, rz=yaw.
+    roll = float(rotation[1]) if len(rotation) > 1 else 0.0
+    pan = float(rotation[2]) if len(rotation) > 2 else 0.0
     return tilt, pan, roll
+
+
+def rotation_to_layout(tilt, pan, roll=0.0):
+    """Inverse of rotation_from_layout. Assemble a layout-array from the
+    axis-semantic triple. #600 convention — ``[rx, ry, rz] = [tilt, roll, pan]``.
+    """
+    return [float(tilt), float(roll), float(pan)]

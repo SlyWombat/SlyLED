@@ -1,5 +1,20 @@
 // ── Localization string table (swap for i18n) ─────────────────────────────
 function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+// #600 — single source of truth for the rotation array index → axis
+// semantic mapping. Mirror of desktop/shared/camera_math.py
+// rotation_from_layout. Layout convention is [rx pitch, ry roll, rz yaw].
+function rotationFromLayout(rot){
+  if(!rot||!rot.length)return{tilt:0,pan:0,roll:0};
+  return{
+    tilt:+(rot[0]||0),
+    roll:+(rot[1]||0),
+    pan:+(rot[2]||0)
+  };
+}
+function rotationToLayout(tilt,pan,roll){
+  return[+(tilt||0),+(roll||0),+(pan||0)];
+}
 function _rssiIcon(rssi){
   // Signal bars: ▂▄▆█ based on RSSI strength
   if(!rssi||rssi===0)return '—';
@@ -223,6 +238,14 @@ function showTab(t){
   // Stop layout render loop if leaving layout
   if(ctab==='layout'&&t!=='layout'&&_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
   ctab=t;
+  // #639 — switch the 3D view context so each tab shows its own saved
+  // visibility prefs. Layout authoring, Dashboard monitoring, and
+  // Runtime playback want different overlays on the shared scene.
+  if(typeof _setViewCtx==='function'){
+    if(t==='layout')_setViewCtx('layout');
+    else if(t==='dash')_setViewCtx('dash');
+    else if(t==='runtime'||t==='shows')_setViewCtx('runtime');
+  }
   ['dash','setup','layout','actions','shows','runtime','settings','firmware'].forEach(function(id){
     var el=document.getElementById('t-'+id);
     if(el)el.style.display=id===t?'block':'none';
@@ -389,26 +412,58 @@ function showDetails(id){
 var _strCol=['#0ff','#f0f','#ff0','#0f0','#f80','#08f','#f08','#8f0'];
 var _dirDx=[1,0,-1,0],_dirDy=[0,-1,0,1]; // E,N,W,S in canvas-Y-down coords
 var _layDragId=null;
-var _layView='3d'; // 'front', 'top', 'side', '3d'
+var _layView=(function(){try{var v=localStorage.getItem('slyled-layout-view');return (v==='front'||v==='top'||v==='side'||v==='3d')?v:'3d';}catch(e){return '3d';}})(); // 'front', 'top', 'side', '3d' — persisted per #638
 
 function _isPlaced(c){return c.positioned||c._placed||(c.x>0||c.y>0||c.z>0);}
 
 // ── Phase 7: Help Panel ─────────────────────────────────────────────────────
+// The "?" button opens an in-app side panel with contextual help for the
+// current tab. The panel has a "More info" link at the bottom that
+// opens the full local user manual (`/help`) in a separate window for
+// operators who want the full document. When the panel is open, the
+// body gets a `help-open` class so the header (File menu etc.) shifts
+// left and isn't obscured by the panel.
+var _HELP_DEEP_LINKS = {
+  dash: 'getting-started',
+  setup: 'fixture-setup',
+  layout: 'layout',
+  actions: 'spatial-effects',
+  shows: 'shows',
+  runtime: 'timeline',
+  settings: 'dmx-profiles',
+  firmware: 'firmware',
+  cameras: 'cameras'
+};
+
+function _helpSectionForTab(){
+  var s = ctab;
+  if (s === 'actions') s = 'spatial-effects';
+  if (s === 'runtime') s = 'timeline';
+  return s;
+}
+
 function toggleHelp(){
-  var panel=document.getElementById('help-panel');
-  if(!panel)return;
-  if(panel.style.display==='block'){panel.style.display='none';return;}
-  panel.style.display='block';
-  // Load context-sensitive help
-  var section=ctab;
-  if(section==='actions')section='spatial-effects';
-  if(section==='runtime')section='timeline';
-  ra('GET','/api/help/'+section,null,function(d){
-    var body=document.getElementById('help-body');
-    var raw=d&&d.html?d.html:'<p style="color:#888">Help content not available.</p>';
-    raw=raw.replace(/<script[^>]*>[\s\S]*?<\/script>/gi,'');
-    if(body)body.innerHTML=raw;
+  var panel = document.getElementById('help-panel');
+  if (!panel) return;
+  if (panel.style.display === 'block'){
+    panel.style.display = 'none';
+    document.body.classList.remove('help-open');
+    return;
+  }
+  panel.style.display = 'block';
+  document.body.classList.add('help-open');
+  ra('GET', '/api/help/' + _helpSectionForTab(), null, function(d){
+    var body = document.getElementById('help-body');
+    var raw = d && d.html ? d.html : '<p style="color:#888">Help content not available.</p>';
+    raw = raw.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+    if (body) body.innerHTML = raw;
   });
+}
+
+function _openFullManual(){
+  var anchor = _HELP_DEEP_LINKS[ctab] || '';
+  var url = '/help' + (anchor ? '#' + anchor : '');
+  window.open(url, '_blank', 'noopener');
 }
 
 function _layCheckShowRunning(){
@@ -597,10 +652,14 @@ function _panelPanTiltChange(fid,axis,deg){
   if(!f)return;
   var val=parseFloat(deg)||0;
   if(!f.rotation)f.rotation=[0,0,0];
+  // #600 — rotation layout is [rx pitch, ry roll, rz yaw]. Update via the
+  // axis-semantic helper so the index layout only ever reads from one
+  // place.
+  var cur=rotationFromLayout(f.rotation);
   if(axis==='pan'){
-    f.rotation=[f.rotation[0],val,f.rotation[2]||0];
+    f.rotation=rotationToLayout(cur.tilt,val,cur.roll);
   } else {
-    f.rotation=[val,f.rotation[1],f.rotation[2]||0];
+    f.rotation=rotationToLayout(val,cur.pan,cur.roll);
   }
   _layoutDirty=true;_layDirtyUpdate();
   ra('PUT','/api/fixtures/'+fid+'/aim',{rotation:f.rotation});
