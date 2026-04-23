@@ -7589,10 +7589,136 @@ def _sync_locked_objects():
         _save("objects", _objects)
 
 def _reap_temporal_objects():
-    """Remove expired temporal objects."""
+    """Remove expired temporal objects and fuse near-duplicates across
+    cameras. Q3/#629/#630 — a person seen by two cameras should become
+    one tracked object with higher confidence, not two drifting ones."""
     now = time.time()
     global _temporal_objects
     _temporal_objects = [o for o in _temporal_objects if o.get("_expiresAt", 0) > now]
+    _fuse_temporal_objects()
+
+
+# Q3/#629/#630 — multi-camera fusion.
+# Tuning defaults. Cluster radius = "how close in XY do two placements
+# need to be before we call them the same person". 500 mm is a human
+# shoulder-width ballpark and matches the existing per-camera re-ID
+# threshold (feedback_layout_positions.md). Age gate = within the same
+# tracker-push cycle (~2 s); older clusters aren't overwritten.
+_FUSION_CLUSTER_MM = 500.0
+_FUSION_MAX_AGE_S = 2.0
+_FUSION_TIER_WEIGHT = {"homography": 1.0, "fov-projection": 0.4, "raw": 0.05}
+
+
+def _fusion_weight(obj, obj_age_s):
+    """Weight for a temporal-object placement: tier × YOLO confidence ×
+    hull-falloff × freshness. Used as the mean-fusion weight and as the
+    #630 confidence signal."""
+    tier = _FUSION_TIER_WEIGHT.get(obj.get("_method"), 0.05)
+    yolo_conf = obj.get("confidence")
+    if yolo_conf is None:
+        yolo_conf = obj.get("_yoloConfidence", 0.5)
+    # Freshness: 1.0 at t=0s, linearly decays to 0 at MAX_AGE_S.
+    freshness = max(0.0, 1.0 - (obj_age_s / _FUSION_MAX_AGE_S))
+    return max(0.0, tier * float(yolo_conf) * freshness)
+
+
+def _fuse_temporal_objects():
+    """Cluster near-duplicate temporal objects across cameras and replace
+    each cluster with a single weighted-mean object. Runs on every reap
+    (piggybacks on the existing /api/objects + bake-tick cadence).
+
+    - Clusters grouped by (objectType, XY distance <= _FUSION_CLUSTER_MM).
+    - Merge preserves the lowest id (sticky — #629 cross-camera handoff).
+    - Output object stamps the fused sources' method tiers in _fusionTier
+      (best of the cluster), total contributing cameras in _fusionCams,
+      and the overall #630 confidence signal in _fusionConfidence.
+    """
+    global _temporal_objects
+    items = list(_temporal_objects)
+    now = time.time()
+    fused = []
+    used = [False] * len(items)
+    for i, a in enumerate(items):
+        if used[i]:
+            continue
+        if not a.get("_temporal"):
+            fused.append(a); used[i] = True; continue
+        cluster = [(i, a)]
+        used[i] = True
+        ap = a.get("transform", {}).get("pos", [0, 0, 0])
+        ax, ay = float(ap[0] or 0), float(ap[1] or 0)
+        atype = a.get("objectType")
+        for j in range(i + 1, len(items)):
+            if used[j]:
+                continue
+            b = items[j]
+            if not b.get("_temporal") or b.get("objectType") != atype:
+                continue
+            bp = b.get("transform", {}).get("pos", [0, 0, 0])
+            bx, by = float(bp[0] or 0), float(bp[1] or 0)
+            d = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+            if d <= _FUSION_CLUSTER_MM:
+                cluster.append((j, b))
+                used[j] = True
+        if len(cluster) == 1:
+            fused.append(a)
+            continue
+        # Weighted mean over the cluster.
+        total_w = 0.0
+        px = py = pz = 0.0
+        sw_w = sh_w = sd_w = 0.0
+        sources = []
+        best_tier = "raw"
+        tier_order = {"homography": 2, "fov-projection": 1, "raw": 0}
+        for _idx, obj in cluster:
+            ex = obj.get("_expiresAt", now)
+            age = max(0.0, now - (ex - (obj.get("ttl") or 0)))
+            w = _fusion_weight(obj, age)
+            if w <= 0:
+                continue
+            pos = obj.get("transform", {}).get("pos", [0, 0, 0])
+            scl = obj.get("transform", {}).get("scale", [500, 1700, 500])
+            total_w += w
+            px += w * float(pos[0] or 0)
+            py += w * float(pos[1] or 0)
+            pz += w * float(pos[2] or 0)
+            sw_w += w * float(scl[0] or 0)
+            sh_w += w * float(scl[1] or 0)
+            sd_w += w * float(scl[2] or 0)
+            src_tier = obj.get("_method", "raw")
+            if tier_order.get(src_tier, -1) > tier_order.get(best_tier, -1):
+                best_tier = src_tier
+            sources.append({
+                "id": obj.get("id"),
+                "cameraId": obj.get("_cameraId"),
+                "method": src_tier,
+                "weight": round(w, 3),
+            })
+        if total_w <= 0:
+            fused.append(a); continue
+        merged = dict(cluster[0][1])  # keep sticky id from lowest-id member
+        merged["transform"] = {
+            "pos": [px / total_w, py / total_w, pz / total_w],
+            "rot": [0, 0, 0],
+            "scale": [sw_w / total_w, sh_w / total_w, sd_w / total_w],
+        }
+        merged["_method"] = best_tier
+        merged["_fusionCams"] = len(sources)
+        merged["_fusionSources"] = sources
+        # #630 confidence: mean contributing weight × breadth bonus for
+        # multi-camera agreement. Single-camera observations cap at the
+        # tier × YOLO product; multi-camera converges toward 1.0.
+        base = total_w / len(sources)
+        breadth_bonus = 1.0 - (0.5 ** max(0, len(sources) - 1))  # 0, 0.5, 0.75, 0.875, ...
+        merged["_fusionConfidence"] = round(min(1.0, base * (1.0 + breadth_bonus)), 3)
+        # #629 cross-camera handoff: persist the id across cluster merges
+        # (already sticky via merged = dict(first)), but also remember
+        # the object's last-seen absolute position for the next reap so
+        # a brief blind-zone between cameras doesn't break the identity.
+        merged["_lastXyMm"] = [px / total_w, py / total_w]
+        merged["_lastSeenAt"] = now
+        fused.append(merged)
+    _temporal_objects = fused
 
 @app.get("/api/objects")
 def api_objects_get():
@@ -7714,6 +7840,15 @@ def api_objects_temporal_create():
         # conservatively.
         if method_tier:
             obj["_method"] = method_tier
+        # Q3/#629 — track which camera pushed this placement, so the
+        # fusion pass can surface per-camera contributions in
+        # _fusionSources.
+        if cam_id is not None:
+            obj["_cameraId"] = cam_id
+        # Q3/#630 — forward the YOLO confidence if the tracker provided
+        # one. Feeds _fusion_weight alongside the method tier.
+        if "confidence" in body:
+            obj["_yoloConfidence"] = float(body["confidence"])
         # #Q4 — stash feet/head anchors so track-actions with aimTarget
         # can pick the right stage-point without recomputing.
         if anchors:
