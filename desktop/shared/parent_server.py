@@ -219,6 +219,15 @@ for _f in _fixtures:
         if _legacy in _f:
             _f.pop(_legacy, None)
             _fix_patched = True
+    # #Q7 — single-source homography. Previous versions mirrored the
+    # calibration matrix onto fixture.homography so the v2 mover-cal
+    # pre-check could find it without loading _calibrations. That store
+    # is now authoritative on its own; strip the stale fixture-side copy
+    # (which would otherwise silently lie about recalibration state).
+    for _legacy_cal in ("homography", "calibrationMatrix"):
+        if _legacy_cal in _f:
+            _f.pop(_legacy_cal, None)
+            _fix_patched = True
 if _fix_patched:
     _save("fixtures", _fixtures)
 del _fix_patched
@@ -2975,11 +2984,10 @@ def api_camera_stage_map(fid):
     if camera_pos_layout:
         result["cameraPos"] = camera_pos_layout
 
-    # Persist the homography for downstream consumers (mover-cal v2,
-    # stereo anchoring, #592). Store in two places so every consumer
-    # finds it — the v2 pre-check is currently `_calibrated_cameras →
-    # cam.get("homography")`, and `_calibrations` is the general-
-    # purpose camera-cal storage.
+    # #Q7 — single-source homography. Persist only to _calibrations; the
+    # legacy mirror onto fixture.homography (and the dead _calibrated_cameras
+    # store) is gone. Every downstream consumer reads from
+    # _calibrations[str(fid)]["matrix"].
     global _calibrations
     _calibrations[str(fid)] = {
         "matrix": H_floor.tolist(),
@@ -2995,13 +3003,6 @@ def api_camera_stage_map(fid):
         _save("calibrations", _calibrations)
     except Exception as e:
         log.warning("stage-map: persist failed: %s", e)
-    # Mirror onto the fixture record so the v2 mover-cal pre-check's
-    # `cam.get("homography")` fallback finds it.
-    f["homography"] = H_floor.tolist()
-    try:
-        _save("fixtures", _fixtures)
-    except Exception as e:
-        log.warning("stage-map: fixture persist failed: %s", e)
     return jsonify(result)
 
 
@@ -3764,16 +3765,10 @@ def _mover_cal_thread_v2_body(fid, cam, bridge_ip, mover_color,
         job["error"] = "Fixture not found"; job["status"] = "error"
         _blackout(); return
 
-    # Camera homography is required. Check before engaging lock so we can
-    # clean up quietly if it's missing.
-    cam_cal = _calibrated_cameras.get(str(cam["id"])) if "_calibrated_cameras" in globals() \
-        else None
+    # #Q7 — single-source homography. Read only from _calibrations[str(fid)];
+    # the legacy _calibrated_cameras and fixture.homography stores are gone.
+    cam_cal = _calibrations.get(str(cam["id"]))
     H_flat = (cam_cal or {}).get("matrix") if cam_cal else None
-    if H_flat is None:
-        # Look at a cam record field "homography" as a fallback — some
-        # flows store the matrix there. If still absent, bail out with a
-        # clear error so the operator knows to run camera calibration first.
-        H_flat = cam.get("homography") or cam.get("calibrationMatrix")
     if H_flat is None:
         job["error"] = ("Camera must be calibrated (ArUco homography) before "
                          "running v2 target-driven calibration")
