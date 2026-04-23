@@ -628,6 +628,69 @@ function _s3dRenderGhosts(){
   });
 }
 
+// Q11 / #612 — ArUco marker + coverage-recommendation overlay on the 3D
+// viewport. Each surveyed marker renders as a tiny yellow disc with a
+// label; the coverage endpoint's recommendation pin draws as a magenta
+// cone where an additional marker would most improve camera coverage.
+function _s3dRenderArucoMarkers(){
+  if(!_s3d.inited)return;
+  // Remove prior marker meshes.
+  var toRemove=[];
+  _s3d.scene.children.forEach(function(c){if(c.userData.arucoMarker||c.userData.arucoRecommend)toRemove.push(c);});
+  toRemove.forEach(function(c){c.traverse(function(obj){
+    if(obj.geometry)obj.geometry.dispose();
+    if(obj.material){if(obj.material.map)obj.material.map.dispose();obj.material.dispose();}
+  });_s3d.scene.remove(c);});
+  var markers=window._arucoMarkersCache||[];
+  markers.forEach(function(m){
+    var grp=new THREE.Group();
+    grp.userData.arucoMarker=true;
+    grp.userData.markerId=m.id;
+    // Small flat square on the floor; elevated slightly so it's not
+    // z-fighting with the stage grid.
+    var sz=(m.size||150)/1000;
+    var geo=new THREE.BoxGeometry(sz,0.01,sz);
+    var mat=new THREE.MeshBasicMaterial({color:0xfde047,opacity:0.7,transparent:true});
+    var mesh=new THREE.Mesh(geo,mat);
+    grp.position.set((m.x||0)/1000,((m.z||0)+5)/1000,(m.y||0)/1000);
+    grp.add(mesh);
+    var lbl=_s3dLabel('AR'+m.id+(m.label?' '+m.label:''));
+    lbl.position.set(0,0.15,0);
+    grp.add(lbl);
+    _s3d.scene.add(grp);
+  });
+  // Recommendation pin (if coverage endpoint has run).
+  var rec=window._arucoCoverageRec||null;
+  if(rec&&rec.suggestedPlacement){
+    var grp=new THREE.Group();
+    grp.userData.arucoRecommend=true;
+    var p=rec.suggestedPlacement;
+    grp.position.set((p.x||0)/1000,(p.z||0)/1000,(p.y||0)/1000);
+    // Magenta cone pointing up.
+    var coneGeo=new THREE.ConeGeometry(0.1,0.3,12);
+    var coneMat=new THREE.MeshBasicMaterial({color:0xf0abfc,opacity:0.85,transparent:true});
+    var cone=new THREE.Mesh(coneGeo,coneMat);
+    cone.position.set(0,0.15,0);
+    grp.add(cone);
+    var lbl=_s3dLabel('Suggest: add marker here');
+    lbl.position.set(0,0.45,0);
+    grp.add(lbl);
+    _s3d.scene.add(grp);
+  }
+}
+
+// Fetch markers + coverage recommendation, cache, and re-render. Called
+// from panel refresh hooks (marker edit, cal run, etc.).
+function _s3dLoadArucoOverlay(){
+  ra('GET','/api/aruco/markers',null,function(r){
+    if(r&&r.markers){window._arucoMarkersCache=r.markers;}
+    ra('GET','/api/aruco/markers/coverage',null,function(r2){
+      window._arucoCoverageRec=(r2&&r2.ok&&r2.recommendation)?r2.recommendation:null;
+      _s3dRenderArucoMarkers();
+    });
+  });
+}
+
 function _s3dPos(c){
   // Stage coordinate system: X=width, Y=depth, Z=height
   // Three.js uses Y-up, so we map: stage X→3D X, stage Y→3D Z (depth), stage Z→3D Y (height)
