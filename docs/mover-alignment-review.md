@@ -630,6 +630,18 @@ synthetic then live demo.
 - **#635** — Extract shared three-tier pan/tilt IK fallback
   helper. Scoping waits for Fn 3 decisions (Q8–Q11). (Source:
   §8.1 Q5, §8.2.)
+- **#640** — Track actions: per-fixture `aimTarget`. (Source:
+  §8.1 Q1.)
+- **#641** — Track actions: Hungarian head-to-target assignment.
+  (Source: §8.1 Q2.)
+- **#642** — Mover control: multi-fixture claim (one device →
+  N movers). (Source: §8.1 Q6.)
+
+### Capability-layer refactor PR
+
+- **#643** — review: mover-alignment review + capability-layer
+  refactor (Q8–Q11). Lands the review doc + the §8.1c
+  implementation as a single PR against `main`.
 
 ---
 
