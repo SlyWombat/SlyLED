@@ -34,15 +34,6 @@ review.md` §8.3 entry, commit subject line *"§8.3 Fn 1 attempt
 2026-04-23 blocked on cal regression"*) are live validation of this
 review's thesis.
 
-The review was born from the realisation that the mover-alignment
-review (PR #643 on branch `claude/review-mover-alignment-plan`) shipped
-a clean capability-layer architecture but **never touched calibration
-reliability**, which is the actual user-facing breakage. Alignment
-review §9 put calibration out of scope "because the camera review
-landed ParametricFixtureModel". That's true but irrelevant — the IK
-primitive is fine; the *data* it gets trained on is junk, because the
-capture pipeline never completes.
-
 ## The architectural bet (§0)
 
 Four-tier fallback ladder. Operator is never stuck.
