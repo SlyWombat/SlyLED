@@ -2084,6 +2084,117 @@ def _camera_h_fov_rad(cam_fixture, frame_w, frame_h):
     return 2.0 * math.atan(math.tan(fov_rad / 2.0) * (frame_w / frame_h))
 
 
+def _pixel_point_to_stage_floor(cam_fixture, px, py, frame_w, frame_h):
+    """Project a single pixel (px, py) onto the Z=0 stage-floor plane.
+
+    Returns (stage_x_mm, stage_y_mm, tier) where tier is one of:
+      - "homography"    — surveyed-marker cal matrix applied (best).
+      - "fov-projection" — camera pose + FOV ray-plane intersect (ok).
+      - "raw"           — camera position/FOV unavailable; uses stage-bounds
+                          proportional fallback (same broken path as pre-fix
+                          tracking; callers should treat as low-confidence).
+
+    This is the Q1/Q5 replacement for the broken proportional ingest that
+    used to live inline in api_objects_temporal_create. Callers pass the
+    bbox bottom-center for feet, bbox center for center, etc.
+    """
+    # Tier 1: calibrated homography.
+    cal = _calibrations.get(str(cam_fixture.get("id"))) if cam_fixture else None
+    if cal and cal.get("matrix"):
+        try:
+            sx, sy = _apply_homography(cal["matrix"], px, py)
+            return (float(sx), float(sy), "homography")
+        except Exception:
+            pass
+
+    # Tier 2: FOV projection ray-plane intersect (needs camera pose).
+    if cam_fixture and frame_w and frame_h:
+        pos_map = {p["id"]: p for p in _layout.get("children", [])}
+        cam_pos = pos_map.get(cam_fixture.get("id"), {})
+        cx0 = float(cam_pos.get("x", 0) or 0)
+        cy0 = float(cam_pos.get("y", 0) or 0)
+        cz0 = float(cam_pos.get("z", 0) or 0)
+        if cz0 > 1:  # camera must be off the floor for a ray-plane intersect
+            aim = _rotation_to_aim(cam_fixture.get("rotation", [0, 0, 0]),
+                                     [cx0, cy0, cz0])
+            dx0 = aim[0] - cx0
+            dy0 = aim[1] - cy0
+            dz0 = aim[2] - cz0
+            dist = math.sqrt(dx0 * dx0 + dy0 * dy0 + dz0 * dz0)
+            if dist >= 1:
+                dx0, dy0, dz0 = dx0 / dist, dy0 / dist, dz0 / dist
+                rx = dy0
+                ry = -dx0
+                r_len = math.sqrt(rx * rx + ry * ry)
+                if r_len >= 0.001:
+                    rx, ry = rx / r_len, ry / r_len
+                else:
+                    rx, ry = 1.0, 0.0
+                rz = 0.0
+                ux = ry * dz0 - rz * dy0
+                uy = rz * dx0 - rx * dz0
+                uz = rx * dy0 - ry * dx0
+                fov_rad = _camera_h_fov_rad(cam_fixture, frame_w, frame_h)
+                half_fov = fov_rad / 2.0
+                aspect = frame_w / frame_h if frame_h > 0 else 1.0
+                ndc_x = (px / frame_w - 0.5) * 2.0
+                ndc_y = -(py / frame_h - 0.5) * 2.0
+                ray_x = dx0 + math.tan(half_fov) * (ndc_x * rx + ndc_y / aspect * ux)
+                ray_y = dy0 + math.tan(half_fov) * (ndc_x * ry + ndc_y / aspect * uy)
+                ray_z = dz0 + math.tan(half_fov) * (ndc_x * rz + ndc_y / aspect * uz)
+                if abs(ray_z) > 1e-4:
+                    t = -cz0 / ray_z
+                    if t > 0:
+                        sx = cx0 + t * ray_x
+                        sy = cy0 + t * ray_y
+                        return (float(sx), float(sy), "fov-projection")
+
+    # Tier 3: raw proportional fallback. Signals the caller that this
+    # placement isn't trustworthy; consumers (tracking, track-actions)
+    # should prefer "hold last good" over acting on tier=raw data.
+    if frame_w and frame_h:
+        sw = _stage.get("w", 3.0) * 1000.0
+        sd = _stage.get("d", 1.5) * 1000.0
+        cx_f = (px / frame_w)
+        cy_f = (py / frame_h)
+        return (sw * (1.0 - cx_f), sd * (1.0 - cy_f), "raw")
+    return (0.0, 0.0, "raw")
+
+
+def _pixel_box_to_stage_anchors(cam_fixture, pixel_box, frame_size,
+                                  default_height_mm=1700.0):
+    """Project a pixel bbox to stage-space anchors {feet, center, head, method}.
+
+    Used by the Q1 tracking ingest path to replace the broken proportional
+    math. Q4's aimTarget enum reads from the returned anchors.
+
+    * `feet`  = bbox bottom-center projected to Z=0 (where the person stands).
+    * `head`  = feet + (0, 0, default_height_mm) (unless the bbox fills the
+                entire frame height, in which case we trust YOLO's height and
+                derive it via vertical-FOV + distance — not implemented here;
+                fixed estimate is fine for #488's baseline).
+    * `center` = midpoint between feet and head.
+    * `method` = the tier stamp from _pixel_point_to_stage_floor (feeds the
+                Q5 `_method` field on the temporal object record).
+    """
+    if not pixel_box or not frame_size:
+        return None
+    fw, fh = frame_size[0], frame_size[1]
+    bx = float(pixel_box.get("x", 0))
+    by = float(pixel_box.get("y", 0))
+    bw = float(pixel_box.get("w", 0))
+    bh = float(pixel_box.get("h", 0))
+    feet_px_x = bx + bw / 2.0
+    feet_px_y = by + bh  # bottom of bbox
+    sx, sy, tier = _pixel_point_to_stage_floor(
+        cam_fixture, feet_px_x, feet_px_y, fw, fh)
+    feet = [sx, sy, 0.0]
+    head = [sx, sy, float(default_height_mm)]
+    center = [sx, sy, float(default_height_mm) / 2.0]
+    return {"feet": feet, "center": center, "head": head,
+            "method": tier, "heightMm": float(default_height_mm)}
+
+
 def _pixel_to_stage_homography(detections, H_flat, frame_w, frame_h):
     """Transform detections using a calibrated homography matrix."""
     stage_w = _stage.get("w", 3.0) * 1000
@@ -3018,6 +3129,47 @@ def api_camera_calibration_get(fid):
     return jsonify(calibrated=True, error=cal.get("error"),
                    points=len(cal.get("points", [])),
                    timestamp=cal.get("timestamp"))
+
+
+@app.get("/api/cameras/<int:fid>/calibration-status")
+def api_camera_calibration_status(fid):
+    """Q5 — return the placement-tier health for a camera so the SPA can
+    show a badge (homography / fov / raw) and downstream consumers can
+    gate behaviour on tier. Never 404s for a registered camera — the
+    "no cal" case is still a valid status with tier='raw'.
+    """
+    f = next((x for x in _fixtures
+              if x["id"] == fid and x.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    cal = _calibrations.get(str(fid))
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    cam_pos = pos_map.get(fid, {})
+    has_pos = any(abs(float(cam_pos.get(k, 0) or 0)) > 1 for k in ("x", "y", "z"))
+    has_fov = bool(f.get("fovDeg"))
+    if cal and cal.get("matrix"):
+        tier = "homography"
+        quality_hint = "best"
+    elif has_pos and has_fov:
+        tier = "fov-projection"
+        quality_hint = "ok"
+    else:
+        tier = "raw"
+        quality_hint = "poor"
+    return jsonify(
+        ok=True,
+        fid=fid,
+        tier=tier,
+        qualityHint=quality_hint,
+        calibrated=bool(cal and cal.get("matrix")),
+        timestamp=(cal or {}).get("timestamp"),
+        markersMatched=(cal or {}).get("markersMatched"),
+        rmsError=(cal or {}).get("rmsError"),
+        intrinsicSource=(cal or {}).get("intrinsicSource"),
+        hasPosition=has_pos,
+        hasFov=has_fov,
+        fovType=_normalise_fov_type(f.get("fovType")),
+    )
 
 
 # ── Moving head range calibration ─────────────────────────────────────
@@ -7429,28 +7581,32 @@ def api_objects_temporal_create():
         return jsonify(err="ttl must be > 0"), 400
     pos = body.get("pos", [0, 0, 0])
     scale = body.get("scale", [500, 1800, 500])
-    # If pixel coordinates + camera ID provided, convert to stage coords
+    # Q1/Q5 — pixel ingest path. Project the bbox through the camera's
+    # calibrated homography (fallback: FOV projection, then raw). Tier
+    # stamped on the object so track-actions can hold last-good when
+    # cal is missing and so the SPA can surface accuracy.
     cam_id = body.get("cameraId")
     pixel_box = body.get("pixelBox")  # {x, y, w, h}
     frame_size = body.get("frameSize")  # [w, h]
+    method_tier = None
+    anchors = None
     if cam_id is not None and pixel_box and frame_size:
-        # Simple proportional mapping: pixel fraction → stage position
-        # Camera on back wall looking forward: left-of-frame = stage-left (high X)
-        fw, fh = frame_size
-        cx = (pixel_box["x"] + pixel_box.get("w", 0) / 2) / fw  # 0=left, 1=right
-        cy = (pixel_box["y"] + pixel_box.get("h", 0) / 2) / fh  # 0=top, 1=bottom
-        sw = _stage.get("w", 3.0) * 1000  # stage width mm
-        sd = _stage.get("d", 4.0) * 1000  # stage depth mm
-        # Pixel fraction → stage mm. Camera on back wall facing audience:
-        # pixel (0,0)=top-left → stage (sw, sd), pixel (1,1)=bottom-right → stage (0, 0)
-        # Scale order matches renderer: [width, height(Z), depth(Y)]
-        scale = [pixel_box.get("w", 100) * sw / fw,
-                 1700,
-                 400]
-        # pos is the object CENTER (matches static-object convention used by
-        # the scene-3d renderer). For a person standing on the floor with
-        # scale[1]=1700mm tall, the centre Z is height/2 = 850mm.
-        pos = [sw * (1.0 - cx), sd * (1.0 - cy), scale[1] / 2]
+        cam_fixture = next((f for f in _fixtures
+                            if f.get("id") == cam_id
+                            and f.get("fixtureType") == "camera"), None)
+        anchors = _pixel_box_to_stage_anchors(cam_fixture, pixel_box, frame_size)
+        if anchors:
+            method_tier = anchors["method"]
+            # scale: bbox-derived width & depth — best available without
+            # stereo reconstruction. Height from default 1700 mm
+            # (#Q1 sizing refinement is follow-up work, not in scope).
+            fw = frame_size[0] or 1
+            sw = _stage.get("w", 3.0) * 1000
+            obj_w_mm = max(100.0, float(pixel_box.get("w", 100)) * sw / fw)
+            scale = [obj_w_mm, anchors["heightMm"], 400.0]
+            # pos is the object CENTER. Feet-at-Z=0, head-at-height → center
+            # lives on the vertical axis through feet at height/2.
+            pos = list(anchors["center"])
     with _lock:
         obj = {
             "id": _nxt_tmp, "name": body.get("name", f"Temporal {_nxt_tmp}"),
@@ -7463,9 +7619,22 @@ def api_objects_temporal_create():
             "opacity": body.get("opacity", 40),
             "transform": {"pos": [float(p) for p in pos], "rot": [0,0,0], "scale": [float(s) for s in scale]},
         }
+        # #Q5 — record the placement method tier so downstream consumers
+        # (Track actions, SPA badges) can treat low-confidence placements
+        # conservatively.
+        if method_tier:
+            obj["_method"] = method_tier
+        # #Q4 — stash feet/head anchors so track-actions with aimTarget
+        # can pick the right stage-point without recomputing.
+        if anchors:
+            obj["_anchors"] = {
+                "feet": [float(v) for v in anchors["feet"]],
+                "center": [float(v) for v in anchors["center"]],
+                "head": [float(v) for v in anchors["head"]],
+            }
         _temporal_objects.append(obj)
         _nxt_tmp += 1
-    return jsonify(ok=True, id=obj["id"])
+    return jsonify(ok=True, id=obj["id"], method=method_tier)
 
 #  "  "  DMX Profiles  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
@@ -10493,7 +10662,22 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
             else:
                 # More heads than targets: spread heads across targets
                 obj = targets[hi % n_targets]
-            obj_pos = obj.get("transform", {}).get("pos", [0, 0, 0])
+            # Q5 — hold last good when the target placement is raw-tier
+            # (camera not calibrated + no position). Acting on tier='raw'
+            # means swinging the head to a random spot derived from a
+            # proportional pixel mapping; better to freeze the head at its
+            # current aim until the camera is calibrated or re-positioned.
+            if obj.get("_method") == "raw":
+                continue
+            # Q4 — aimTarget picks feet / center / head point on the target.
+            # Default "feet" matches the operator-preferred intuition ("aim
+            # the spot at where the person stands"). Falls back to transform.pos
+            # when _anchors isn't present (older objects or non-temporal props).
+            aim_target_mode = (ta.get("aimTarget") or "feet").lower()
+            if aim_target_mode not in ("feet", "center", "head"):
+                aim_target_mode = "feet"
+            _anchors = obj.get("_anchors") or {}
+            obj_pos = _anchors.get(aim_target_mode) or obj.get("transform", {}).get("pos", [0, 0, 0])
             # Apply offsets
             p_off = per_fx_off.get(str(fid), [0, 0, 0])
             # Auto-spread when multiple heads on same object
