@@ -464,14 +464,18 @@ BUILTIN_PROFILES = [
                 {"range": [1, 255], "type": "ShutterStrobe", "shutterEffect": "Strobe", "label": "Strobe 1-25 Hz"},
             ]},
             {"offset": 7,  "name": "Color Whl", "type": "color-wheel",    "capabilities": [
-                {"range": [0, 15],    "type": "WheelSlot",     "label": "Open / white"},
-                {"range": [16, 31],   "type": "WheelSlot",     "label": "Red"},
-                {"range": [32, 47],   "type": "WheelSlot",     "label": "Yellow"},
-                {"range": [48, 63],   "type": "WheelSlot",     "label": "Green"},
-                {"range": [64, 79],   "type": "WheelSlot",     "label": "Magenta"},
-                {"range": [80, 95],   "type": "WheelSlot",     "label": "Blue"},
-                {"range": [96, 111],  "type": "WheelSlot",     "label": "Amber"},
-                {"range": [112, 127], "type": "WheelSlot",     "label": "Light Blue"},
+                # #624 — rgb_to_wheel_slot() skips WheelSlot entries without
+                # a `color` hex, so without these the default-mode slot
+                # selection fell through to 0 (open/white) for every RGB
+                # input. Added hexes matching each label.
+                {"range": [0, 15],    "type": "WheelSlot",     "label": "Open / white", "color": "#FFFFFF"},
+                {"range": [16, 31],   "type": "WheelSlot",     "label": "Red",          "color": "#FF0000"},
+                {"range": [32, 47],   "type": "WheelSlot",     "label": "Yellow",       "color": "#FFFF00"},
+                {"range": [48, 63],   "type": "WheelSlot",     "label": "Green",        "color": "#00FF00"},
+                {"range": [64, 79],   "type": "WheelSlot",     "label": "Magenta",      "color": "#FF00FF"},
+                {"range": [80, 95],   "type": "WheelSlot",     "label": "Blue",         "color": "#0000FF"},
+                {"range": [96, 111],  "type": "WheelSlot",     "label": "Amber",        "color": "#FFBF00"},
+                {"range": [112, 127], "type": "WheelSlot",     "label": "Light Blue",   "color": "#ADD8E6"},
                 {"range": [128, 191], "type": "WheelRotation", "label": "CW cycle fast-slow"},
                 {"range": [192, 255], "type": "WheelRotation", "label": "CCW cycle slow-fast"},
             ]},
