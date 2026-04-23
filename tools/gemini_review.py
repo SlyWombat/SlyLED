@@ -13,7 +13,7 @@ Usage:
 Examples:
     python tools/gemini_review.py --key AIza... --gyro
     python tools/gemini_review.py --key AIza... --design   # review calibration v2 design (#488)
-    python tools/gemini_review.py --key AIza... --files desktop/shared/gyro_engine.py main/GyroUdp.cpp
+    python tools/gemini_review.py --key AIza... --files desktop/shared/mover_control.py main/GyroUdp.cpp
     python tools/gemini_review.py --key YOUR_API_KEY --all --out review.md
 """
 
@@ -50,12 +50,10 @@ GYRO_FILES = [
     'main/GyroUI.h',
     'main/GyroUI.cpp',
     'main/GyroLogo.h',
-    'desktop/shared/gyro_engine.py',
     'desktop/shared/remote_math.py',
     'desktop/shared/remote_orientation.py',
     'desktop/shared/mover_control.py',
     'desktop/shared/spatial_engine.py',
-    'tests/test_gyro_engine.py',
     'tests/test_gyro_protocol.py',
     'tests/test_gyro_api.py',
     'tests/test_remote_math.py',
