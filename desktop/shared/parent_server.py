@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -118,8 +118,12 @@ BASE = Path(__file__).parent
 # When packaged with PyInstaller --onefile, files land in sys._MEIPASS
 if getattr(sys, "frozen", False):
     SPA = Path(sys._MEIPASS) / "spa"
+    DOCS_ROOT = Path(sys._MEIPASS) / "docs"
+    DOCS_HELP = DOCS_ROOT / "help"
 else:
     SPA = BASE / "spa"
+    DOCS_ROOT = BASE.parent.parent / "docs"
+    DOCS_HELP = DOCS_ROOT / "help"
 
 # Persist data under %APPDATA%\SlyLED on Windows; fall back to BASE/data elsewhere
 if os.name == "nt" and os.environ.get("APPDATA"):
@@ -13554,12 +13558,12 @@ def serve_help_index():
         else:
             lang = "en"
     filename = "index_fr.html" if lang == "fr" else "index.html"
-    help_path = BASE.parent.parent / "docs" / "help" / filename
+    help_path = DOCS_HELP / filename
     if not help_path.exists() and lang == "fr":
         # Graceful fallback: French HTML missing → serve English HTML
         # with a note. Users won't get a 404 page just because we
         # haven't generated the French file yet.
-        help_path = BASE.parent.parent / "docs" / "help" / "index.html"
+        help_path = DOCS_HELP / "index.html"
     if not help_path.exists():
         return ("<h1>User manual not found</h1>"
                 "<p>Expected at <code>docs/help/index.html</code>.</p>",
@@ -13579,7 +13583,7 @@ def serve_help_image(filename):
     missing (some markdown references may not have a matching PNG
     yet)."""
     from flask import send_from_directory
-    images_dir = BASE.parent.parent / "docs" / "help" / "images"
+    images_dir = DOCS_HELP / "images"
     if not images_dir.exists():
         return "", 404
     try:
@@ -13591,7 +13595,7 @@ def serve_help_image(filename):
 @app.get("/api/help/<section>")
 def api_help(section):
     """Return help content for a given section, extracted from USER_MANUAL.md."""
-    manual_path = BASE.parent.parent / "docs" / "USER_MANUAL.md"
+    manual_path = DOCS_ROOT / "USER_MANUAL.md"
     if not manual_path.exists():
         return jsonify(html="<p>User manual not found.</p>")
     try:

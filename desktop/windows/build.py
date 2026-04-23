@@ -110,6 +110,19 @@ if reg_path.exists():
     args.append("--add-data")
     args.append(f"{reg_path};firmware")
 
+# #637 — bundle the user manual (HTML + images + markdown source) so the
+# /help route resolves in frozen/installed builds. Without these, the
+# PyInstaller bundle has no docs/ tree and /help returns 404.
+HELP_DIR  = (HERE / ".." / ".." / "docs" / "help").resolve()
+MANUAL_EN = (HERE / ".." / ".." / "docs" / "USER_MANUAL.md").resolve()
+MANUAL_FR = (HERE / ".." / ".." / "docs" / "USER_MANUAL_fr.md").resolve()
+if HELP_DIR.exists():
+    args += ["--add-data", f"{HELP_DIR};docs/help"]
+if MANUAL_EN.exists():
+    args += ["--add-data", f"{MANUAL_EN};docs"]
+if MANUAL_FR.exists():
+    args += ["--add-data", f"{MANUAL_FR};docs"]
+
 args.append(str(SHARED / "main.py"))
 
 PyInstaller.__main__.run(args)
