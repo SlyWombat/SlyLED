@@ -256,10 +256,121 @@ def test_mover_cal_pipeline():
     return total, fails
 
 
+def test_fusion_aged_cluster():
+    """Review-finding regression: when every cluster member ages past
+    _FUSION_MAX_AGE_S, total_w == 0 and the zero-weight branch used to
+    drop members [1..N]. This asserts each input survives to be reaped
+    on its own _expiresAt schedule instead."""
+    import parent_server as ps
+    import time as _t
+    print("\n=== Fusion aged-cluster (review-finding) ===")
+    fails = 0; total = 0
+    ps._temporal_objects.clear()
+    # Three detections of the same person, each aged past the 2s window
+    # but still inside their ttl (so they haven't reaped yet).
+    stale = _t.time() - 3.0  # 3s ago — past _FUSION_MAX_AGE_S = 2.0s
+    for i in range(3):
+        ps._temporal_objects.append({
+            "id": 3100 + i,
+            "_temporal": True,
+            "objectType": "person",
+            "_method": "homography",
+            "_yoloConfidence": 0.8,
+            "ttl": 10.0,
+            "_expiresAt": stale + 10.0,  # still in-flight; age bypasses freshness
+            "transform": {"pos": [1500.0, 2000.0, 850.0], "rot": [0,0,0], "scale": [500,1700,500]},
+        })
+    before = len(ps._temporal_objects)
+    ps._fuse_temporal_objects()
+    after = len(ps._temporal_objects)
+    total += 1
+    if after != before:
+        print(f"  FAIL: aged cluster shrank {before} → {after} — data loss"); fails += 1
+    else:
+        print(f"  PASS: aged cluster preserved ({before} in, {after} out)")
+    ps._temporal_objects.clear()
+    return total, fails
+
+
+def test_stage_bounds_origin_survivor():
+    """Review-finding regression: the _derive_stage_bounds zero-origin
+    filter used to drop any fixture/marker surveyed at (0, 0, 0), which
+    is the valid back-right-floor corner per project_coordinate_system.md."""
+    import parent_server as ps
+    print("\n=== Stage bounds origin-survivor (review-finding) ===")
+    fails = 0; total = 0
+    # Stash + replace _layout / _aruco_markers with controlled inputs.
+    saved_layout = ps._layout.get("children")
+    saved_markers = list(ps._aruco_markers)
+    try:
+        ps._layout["children"] = [
+            {"id": 7001, "x": 0, "y": 0, "z": 0},       # origin corner — MUST count
+            {"id": 7002, "x": 3000, "y": 4000, "z": 2000},
+        ]
+        ps._aruco_markers.clear()
+        w, h, d = ps._derive_stage_bounds()
+        total += 1
+        # origin fixture should at least keep the max values at 3/4/2 m plus padding
+        expected_w = (3000 + 500) / 1000.0
+        if abs(w - expected_w) > 1e-3:
+            print(f"  FAIL: expected w={expected_w}, got {w}"); fails += 1
+        else:
+            print(f"  PASS: w={w} honours origin-fixture presence")
+    finally:
+        if saved_layout is not None:
+            ps._layout["children"] = saved_layout
+        ps._aruco_markers[:] = saved_markers
+    return total, fails
+
+
+def test_pixel_to_stage_roll_honoured():
+    """Review-finding regression: the FOV-projection tier used to drop
+    rotation[2] (roll). A camera with tilt=0, pan=0, roll=90° should
+    produce a different feet placement than roll=0."""
+    import parent_server as ps
+    print("\n=== FOV-tier roll honour (review-finding) ===")
+    fails = 0; total = 0
+    cam_a = {"id": 9800, "fixtureType": "camera", "fovDeg": 90, "fovType": "diagonal",
+             "rotation": [30, 0, 0]}
+    cam_b = {"id": 9801, "fixtureType": "camera", "fovDeg": 90, "fovType": "diagonal",
+             "rotation": [30, 0, 90]}
+    ps._fixtures.extend([cam_a, cam_b])
+    saved_layout = ps._layout.get("children")
+    try:
+        ps._layout["children"] = [
+            {"id": 9800, "x": 1500, "y": 0, "z": 2000},
+            {"id": 9801, "x": 1500, "y": 0, "z": 2000},
+        ]
+        px, py = 800.0, 400.0
+        sx_a, sy_a, tier_a = ps._pixel_point_to_stage_floor(cam_a, px, py, 1920, 1080)
+        sx_b, sy_b, tier_b = ps._pixel_point_to_stage_floor(cam_b, px, py, 1920, 1080)
+        total += 1
+        if tier_a != "fov-projection" or tier_b != "fov-projection":
+            print(f"  FAIL: expected fov-projection tiers, got a={tier_a} b={tier_b}"); fails += 1
+        else:
+            print(f"  PASS: both cameras projected via fov-projection tier")
+        total += 1
+        delta = ((sx_a - sx_b) ** 2 + (sy_a - sy_b) ** 2) ** 0.5
+        if delta < 100.0:
+            print(f"  FAIL: roll ignored — a and b placements only {delta:.0f} mm apart"); fails += 1
+        else:
+            print(f"  PASS: roll honoured — placements differ by {delta:.0f} mm "
+                  f"(a={tuple(round(v) for v in (sx_a, sy_a))}, "
+                  f"b={tuple(round(v) for v in (sx_b, sy_b))})")
+    finally:
+        ps._fixtures = [f for f in ps._fixtures if f.get("id") not in (9800, 9801)]
+        if saved_layout is not None:
+            ps._layout["children"] = saved_layout
+    return total, fails
+
+
 if __name__ == "__main__":
     grand_total = 0
     grand_fail = 0
-    for fn in (test_tracking_pipeline, test_mover_cal_pipeline):
+    tests = (test_tracking_pipeline, test_mover_cal_pipeline,
+             test_fusion_aged_cluster, test_stage_bounds_origin_survivor,
+             test_pixel_to_stage_roll_honoured)
+    for fn in tests:
         try:
             t, f = fn()
         except Exception as e:
