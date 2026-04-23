@@ -510,10 +510,215 @@ continue to pass.
 
 ## 8. Findings
 
-Empty — to be populated as §6 questions are answered, mirroring
-`docs/mover-alignment-review.md` §8.1 (static-reading round) and
+Mirrors `docs/mover-alignment-review.md` §8.1 (static-reading round) and
 §8.3 (live-test resolution). Pipeline-audit outputs (2026-04-23) are
-already reflected in §3 and §5.1; those aren't duplicated here.
+already reflected in §3 and §5.1 and are not duplicated here.
+
+### 8.1 Static reading — tier 1 hardening (Q1–Q6)
+
+Each finding cites source code (`file:line`), states the concrete change
+in one paragraph, and flags what §7.1 live-test must resolve that
+code-reading cannot.
+
+**Note on §7.2 — sample shape.** The review spec §7.2 was drafted when
+`fit_model` consumed `(pan, tilt, pixel_u, pixel_v)`. The v2
+implementation at `parametric_mover.py:324` consumes
+`(pan, tilt, stageX, stageY, stageZ)` — the camera node's depth lookup
+and ray/floor intersection run upstream of `fit_model`, so samples
+arrive in stage-mm. The synthetic prototype
+(`tests/test_calibration_synthetic.py`) follows the code.
+`verify_signs()` at `parametric_mover.py:419` remains pixel-native and
+is where the §7.2 pinhole simulation lives.
+
+#### Q1 — Flash-detection as default discovery
+
+- **Code state.** `battleship_discover()` at `mover_calibrator.py:593`
+  implements `coarse_steps × coarse_steps` flash probes (default 4 ⇒ 16
+  probes) with a confirmation nudge (pan±0.02, tilt±0.02, require ≥ 8
+  px beam movement) to reject reflections. Seed-aware: sorts probes by
+  distance to `(seed_pan, seed_tilt)` so a good estimate hits in
+  3–5 probes. `discover()` at `:1659` is the current default and uses a
+  colour-filter 10×7 grid (70 probes) + radial spiral (up to
+  `max_probes=80` total) with no ambient-rejection guard.
+- **Finding.** Promote `battleship_discover` to the default path.
+  Colour-filter `discover()` becomes the tier-1 fallback when
+  battleship returns `None` (low-FPS camera where on/off diff blurs,
+  or high-ambient cases). Keep the seed path; battleship already
+  consumes it.
+- **Cost / risk.** Worst case 16 × 5 s = 80 s urlopen-stall on a
+  wedged camera — must land with Q4's phase timeout.
+- **Open for live-test.** Correct `coarse_steps` for basement coverage
+  (4 vs 5 vs 6) — tuning question, not a code finding.
+
+#### Q2 — Mandatory dark-reference + per-session re-capture
+
+- **Code state.** `BeamDetector.set_dark_frame` at
+  `beam_detector.py:33` stores per-camera dark frames;
+  `cv2.absdiff(frame, dark)` is applied in detect paths at lines 66,
+  75, 163, 171. The `/dark-reference` camera endpoint at
+  `camera_server.py:1271` captures a frame and calls `set_dark_frame`.
+  The helper `_dark_reference(camera_ip, cam_idx=-1)` exists at
+  `mover_calibrator.py:1193`. **No call site in
+  `parent_server.py`'s calibration thread.**
+- **Finding.** The current phase order kicks the beam on at
+  `parent_server.py:4488–4502` *before* acquiring the calibration lock
+  at `:4507`. Dark-reference must be captured with the beam **off** —
+  otherwise the frame contains the beam-reflection ambient we're
+  trying to subtract out. Restructure the thread as:
+  `pre-flight → acquire lock → dark-reference capture (beam off) →
+  kick beam on → warmup → discover`.
+- **Cost / risk.** +~1 s wall-clock per session (capture across all
+  cameras). Dark frame is per-camera — adding / moving a camera
+  mid-session invalidates it, but that's a future concern (§12).
+- **Open for live-test.** Auto-re-capture trigger on ambient change
+  needs the basement-rig ambient-delta distribution to set the
+  threshold — §7.1.
+
+#### Q3 — Sign-verification probe
+
+- **Code state.** `verify_signs()` at `parametric_mover.py:419` is
+  pure math — takes `(pixel_before, pixel_after_pan+,
+  pixel_after_tilt+)` and returns `(pan_sign, tilt_sign)` ∈
+  {-1, +1}². `fit_model()` at `:324` runs all four sign combinations
+  and picks lowest RMS; per the comment at `:400–402` the old
+  "first low-RMS" tie-break is gone and the caller is expected to
+  supply `force_signs` when the top two mirrors fit within 0.2°
+  (`:404`). **Nothing supplies `force_signs`** — it's plumbed through
+  at `:363` but no call site in the codebase invokes `verify_signs`
+  to compute it, leaving the mirror ambiguity silent (§5.1 #3).
+- **Finding.** Run `verify_signs` unconditionally at the end of
+  discovery, before BFS. After `discover()` returns
+  `(pan, tilt, pixel_x, pixel_y)`, issue two additional DMX writes
+  (`pan + 0.02`, reset; `tilt + 0.02`, reset) with beam detect at
+  each, and pass the computed signs into
+  `fit_model(..., force_signs=(ps, ts))`. Collapses the four-sign LM
+  loop into a single solve (~4× faster) and closes the silent
+  mirror-ambiguity hole.
+- **Cost / risk.** 2 additional probes (~0.5–1 s each with settle) in
+  discovery. Low risk — `battleship_discover` already uses the same
+  nudge pattern for confirmation.
+- **Open for live-test.** Sensitivity of sign recovery to nudge
+  magnitude (±0.02 vs ±0.01) on real-rig noise — the new synthetic
+  test quantifies the pixel-noise floor; §7.1 confirms the hardware
+  number.
+
+#### Q4 — Per-phase timeouts / circuit breakers
+
+- **Code state.** All camera-node calls use hardcoded urlopen
+  timeouts: beam-detect 5 s at `mover_calibrator.py:1154`, depth-map
+  30 s at `:1183`, dark-reference 10 s at `:1210`. No wall-clock
+  budget at any phase. In `_mover_cal_thread_body`
+  (`parent_server.py:4446`) discovery, BFS, fit, verification run to
+  completion; a wedged camera compounds to 80 probes × 5 s = 400 s
+  stall.
+- **Finding.** Add a `time.monotonic()` budget guard per phase inside
+  the thread. Proposed budgets as named module constants:
+  - Discovery (battleship): 60 s
+  - Discovery (colour-filter fallback): 90 s
+  - BFS: 120 s
+  - Fit: 10 s
+  - Verification: 30 s
+
+  On timeout: call `_cal_blackout()`, set thread error to
+  `"phase_timeout"`, surface captured samples so far on the status
+  endpoint, mark the fixture `pendingTier2Handoff=True` rather than
+  aborting without recourse. Tier 2's operator-in-loop UI picks up
+  that flag.
+- **Cost / risk.** Zero on the happy path — pure guard logic.
+- **Open for live-test.** Whether 60 s battleship is generous on the
+  slowest camera node (Orange Pi Zero 2) — §7.1.
+
+#### Q5 — Post-fit held-out verification
+
+- **Code state.** `verification_sweep()` at `mover_calibrator.py:903`
+  aims 3 held-out points and measures pixel error against
+  `grid_lookup()` — it validates the v1 grid, not the v2 parametric
+  model. Its pass/fail is advisory: `parent_server.py:4748–4750` logs
+  failures but does not block the unconditional
+  `f["moverCalibrated"] = True` at `:4779`.
+- **Finding.** Rewrite verification to call
+  `ParametricFixtureModel.inverse(x, y, z)` for N ≥ 3 (proposed: 5)
+  held-out stage-mm points, command the mover, capture the beam
+  pixel, and compare predicted vs observed. **Gate
+  `f["moverCalibrated"] = True` on verification pass.** Operator sees
+  per-point error + pass/fail; Accept / Retry buttons, and Retry
+  leaves `moverCalibrated` false. Threshold: 100 mm stage-space error
+  at 3 m throw (§1 tier-1 target). Pixel threshold derived inline
+  from per-camera FOV + fixture distance — not hardcoded.
+- **Cost / risk.** Held-out points must be truly held out. Select
+  from reachable regions **outside** BFS-explored boundaries
+  (`map_visible` returns them at `:1795`). If the BFS explored only a
+  narrow lobe, "outside" can exceed camera FOV — fallback rule
+  needed (e.g., sample BFS-interior if outside-region is
+  camera-invisible). Flag for §7.1.
+- **Open for live-test.** Realistic pass thresholds on basement rig.
+  100 mm is aspirational — §7.1 verification data sets the floor.
+
+#### Q6 — Backlash / oversampling
+
+- **Code state.** Each BFS probe is a single
+  `_wait_settled() + _beam_detect()`
+  (`mover_calibrator.py:1795` onward). `_wait_settled()` at `:1091`
+  waits for pixel convergence (`SETTLE_BASE=0.4 s`, escalating to
+  1.5 s via `SETTLE_ESCALATE` at `:34`) but captures a single pixel
+  once converged. No repeat-and-median logic anywhere in the probe
+  pipeline.
+- **Finding.** Oversample each BFS probe N=3 times with ~50 ms gap;
+  median-filter `(pixel_x, pixel_y)` component-wise before appending
+  to the sample list. Convergence proves drift < `SETTLE_PIXEL_THRESH
+  = 30` px (`:36`) but doesn't suppress per-capture sensor noise or
+  residual yoke backlash (~50–100 mm = ~15 px at 3 m throw on a 640
+  px frame). Median-of-3 is the pro-console aim-averaging pattern
+  (§5.3).
+- **Cost / risk.** +~100 ms/probe × 50 probes = 5 s BFS wall-clock.
+  Median-of-3 tolerates one outlier per probe — strengthens the
+  outlier-resistance behaviour already tested at
+  `test_parametric_mover.py:248`.
+- **Open for live-test.** Actual backlash magnitude on basement
+  movers — §7.1 drift retest (#7). The synthetic test validates the
+  median-filter math under simulated noise.
+
+#### Synthetic validation accompanying this round
+
+`tests/test_calibration_synthetic.py` (new, 27 assertions) exercises
+the math behind Q3 and Q6 without hardware:
+
+- noise sweep on stage-space samples (σ 0 / 10 / 50 / 200 mm)
+- sample-count sweep (3 / 10 / 50)
+- colinear-geometry degeneracy flagged by `FitQuality.condition_number`
+- four-sign RMS gap — correct signs ≫ wrong signs
+- `verify_signs` robustness under σ=3 px Gaussian pixel noise
+
+**Metric.** Accuracy is asserted via **held-out angular error** —
+`fit.forward(p, t)` vs `truth.forward(p, t)` on 20 unseen
+(pan, tilt) probes — not via raw mount-param recovery. The
+5-parameter (yaw, pitch, roll, pan_offset, tilt_offset) decomposition
+has near-equivalent tuples that produce the same beam rays; only the
+*predictions* must match truth. This also matches what downstream
+production code relies on (`ParametricFixtureModel.forward/inverse`
+called from track actions, remote-vector aim, spatial effects).
+
+**Locally convergent solver.** The test uses small mount deviations
+(yaw=5°, pitch=3°, roll=2°) matching a properly-hung fixture. The LM
+solver is locally convergent; large truth deviations (≥ 15°) can
+expose additional local minima at moderate noise. These cases fall
+through to tier 2/3 operator-in-loop calibration in the hardened
+pipeline — they are not in tier-1 synthetic scope.
+
+Together with the existing `test_parametric_mover.py` coverage (clean
+fit recovery, sign flip, inverted mount, outlier inflation), the
+parametric-fit subsystem now has end-to-end no-hardware regression
+coverage. Regression gate for every subsequent tier-1 fix.
+
+### 8.2 Tier 2–4 static reading — placeholder
+
+To be populated. Tier 2 (Q7–Q8), tier 3 (Q9–Q11), tier 4 (Q12–Q13)
+cover surfaces whose code is either stubbed or absent; most answers
+need implementation-phase decisions, not code-reading.
+
+### 8.3 Live-test resolution — placeholder
+
+To be populated after a §7.1 protocol run on the basement rig.
 
 ---
 
