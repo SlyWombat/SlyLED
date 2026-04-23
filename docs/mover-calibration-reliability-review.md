@@ -507,3 +507,90 @@ no-hardware regression that every future calibration change must
 continue to pass.
 
 ---
+
+## 8. Findings
+
+Empty — to be populated as §6 questions are answered, mirroring
+`docs/mover-alignment-review.md` §8.1 (static-reading round) and
+§8.3 (live-test resolution). Pipeline-audit outputs (2026-04-23) are
+already reflected in §3 and §5.1; those aren't duplicated here.
+
+---
+
+## 9. Out of scope
+
+- **Camera intrinsic / extrinsic calibration.** That's the camera
+  review's territory (`docs/camera-calibration-review.md`, PR #632).
+  This review assumes `(u, v) → stage-mm ray` is solved.
+- **DMX profile correctness.** Profile editor + OFL import own the
+  `panRange` / `tiltRange` / channel map. Bad profile ⇒ bad
+  calibration, but fixing profiles is a separate surface.
+- **Stage coordinate system.** Locked at X=width, Y=depth, Z=height
+  per `project_coordinate_system.md` + alignment review #600.
+- **Fixture discovery / patching.** Adding a mover to the layout is
+  upstream; this review starts once a fixture exists in `_fixtures`.
+- **Moving-head hardware-level quirks.** Pan wrap, tilt limits,
+  home-position reset, thermal-compensated backlash — the review
+  treats these as "fit absorbs them" via oversampling (Q6). Deep
+  per-fixture quirks need per-profile annotation, which is out of
+  scope here but flagged for the profile editor.
+- **Continuous drift re-calibration.** Long-term lever (§5.2). Not
+  in this review's implementation plan; filed for a future review.
+
+---
+
+## 10. Related open issues
+
+- **#488** — `ParametricFixtureModel` + LM solver. The IK primitive
+  this review feeds. This review's §6 Q3, Q6 feed back into it.
+- **#610** — Mover calibration discovery / blink-confirm /
+  validation. This review IS the concrete plan for #610 — close
+  #610 when this review's §8 lands.
+- **#486** — v1.5.8 live-test bug log (closed items already cover
+  several calibration-UX issues; re-open as needed if §8.3 surfaces
+  regressions).
+- **Alignment review (PR #643)** issues carry over as tier-1
+  dependencies: #633 (3D remote gizmo — tier 3 UX needs it), #635
+  (shared IK fallback helper — tier 4 mechanics).
+- New issues filed from §8 will be labelled
+  `mover-calibration-reliability-review-2026-04-23`.
+
+---
+
+## 11. Change log
+
+- **2026-04-23** — Initial draft (§0–§7 + §10). Born from the
+  realisation that the mover-alignment review (PR #643) shipped
+  architecture without touching the calibration-never-completes
+  operator pain. Branch
+  `claude/review-mover-calibration-reliability`. Based on a pipeline
+  audit of `mover_calibrator.py` / `beam_detector.py` /
+  `parent_server.py` and a competitor scan of 14 tools.
+
+---
+
+## 12. Recommendations for further exploration
+
+To be filled in after §8 lands. Mirrors camera review §12 and
+alignment review §12 — a place for ideas surfaced during the review
+that aren't in the immediate fix list but are worth scheduling.
+
+### 12.1 Continuous drift re-calibration (future)
+
+Once tier 1 works reliably, a camera that watches the rig can detect
+yoke slip / trim changes between shows by periodically re-verifying
+a known aim (e.g. every 30 min: command mover to stage centre,
+measure beam pixel, compare to baseline). Deviation above a
+threshold triggers an operator advisory and optional automatic
+re-cal. No incumbent ships this. Leverage we already have (cameras +
+calibration pipeline) but out of scope for the first-stable-release
+pass.
+
+### 12.2 MVR import as tier-4 seed (future)
+
+Vectorworks / Capture export an MVR with every fixture's pose.
+Consuming it pre-populates `_layout.children` + fixture rotation
+before any calibration runs — tier 4 becomes "use what the lighting
+designer drew" for free. Scope: an `/api/project/import-mvr`
+endpoint plus the MVR parser. Flagged for a future review once tier
+4 lands.
