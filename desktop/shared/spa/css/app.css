@@ -55,6 +55,13 @@ body.light .fm-item:hover{background:rgba(59,130,246,.1)}
 body.light .fm-sep{border-top-color:#e2e8f0}
 body.light .fm-sub-menu{background:#ffffff;border-color:#e2e8f0}
 body.light #proj-name-display{color:#94a3b8}
+/* When the help side panel is open, shift page content left by the
+   panel width so header controls (File menu pulldown, nav tabs, main
+   content) aren't hidden behind the panel. The ? button itself is
+   position:fixed and z-indexed above the panel, so it stays visible
+   on top as a toggle. */
+body.help-open{padding-right:360px;transition:padding-right .15s ease}
+@media (max-width:1024px){body.help-open{padding-right:0}}
 /* Fixture status grid (#303) */
 #dash-live-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:.8em}
 .flx-card{background:#0f172a;border:1px solid rgba(51,65,85,.3);border-radius:6px;padding:8px 10px;width:120px;transition:border-color .3s,box-shadow .3s;position:relative;overflow:hidden}

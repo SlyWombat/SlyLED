@@ -409,10 +409,12 @@ var _layView='3d'; // 'front', 'top', 'side', '3d'
 function _isPlaced(c){return c.positioned||c._placed||(c.x>0||c.y>0||c.z>0);}
 
 // ── Phase 7: Help Panel ─────────────────────────────────────────────────────
-// #546 — the "?" button now opens the full user manual (`/help`) in a
-// new tab with a deep link to the relevant section. The side panel
-// below remains as a fallback when the window.open is blocked (popup
-// blocker) or when /help returns 404.
+// The "?" button opens an in-app side panel with contextual help for the
+// current tab. The panel has a "More info" link at the bottom that
+// opens the full local user manual (`/help`) in a separate window for
+// operators who want the full document. When the panel is open, the
+// body gets a `help-open` class so the header (File menu etc.) shifts
+// left and isn't obscured by the panel.
 var _HELP_DEEP_LINKS = {
   dash: 'getting-started',
   setup: 'fixture-setup',
@@ -425,28 +427,35 @@ var _HELP_DEEP_LINKS = {
   cameras: 'cameras'
 };
 
+function _helpSectionForTab(){
+  var s = ctab;
+  if (s === 'actions') s = 'spatial-effects';
+  if (s === 'runtime') s = 'timeline';
+  return s;
+}
+
 function toggleHelp(){
-  // Try the full manual first. If the popup is blocked or /help isn't
-  // reachable, fall back to the side-panel extract below.
+  var panel = document.getElementById('help-panel');
+  if (!panel) return;
+  if (panel.style.display === 'block'){
+    panel.style.display = 'none';
+    document.body.classList.remove('help-open');
+    return;
+  }
+  panel.style.display = 'block';
+  document.body.classList.add('help-open');
+  ra('GET', '/api/help/' + _helpSectionForTab(), null, function(d){
+    var body = document.getElementById('help-body');
+    var raw = d && d.html ? d.html : '<p style="color:#888">Help content not available.</p>';
+    raw = raw.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+    if (body) body.innerHTML = raw;
+  });
+}
+
+function _openFullManual(){
   var anchor = _HELP_DEEP_LINKS[ctab] || '';
   var url = '/help' + (anchor ? '#' + anchor : '');
-  var w = null;
-  try { w = window.open(url, '_blank', 'noopener'); } catch (e) { w = null; }
-  if (w && !w.closed) return;
-  // Fallback — old side-panel behaviour.
-  var panel=document.getElementById('help-panel');
-  if(!panel)return;
-  if(panel.style.display==='block'){panel.style.display='none';return;}
-  panel.style.display='block';
-  var section=ctab;
-  if(section==='actions')section='spatial-effects';
-  if(section==='runtime')section='timeline';
-  ra('GET','/api/help/'+section,null,function(d){
-    var body=document.getElementById('help-body');
-    var raw=d&&d.html?d.html:'<p style="color:#888">Help content not available.</p>';
-    raw=raw.replace(/<script[^>]*>[\s\S]*?<\/script>/gi,'');
-    if(body)body.innerHTML=raw;
-  });
+  window.open(url, '_blank', 'noopener');
 }
 
 function _layCheckShowRunning(){
