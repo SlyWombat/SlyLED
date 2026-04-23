@@ -1,6 +1,6 @@
 # Camera Calibration Review Plan
 
-**Status:** **Approved 2026-04-23** — all 14 review questions closed (§8.1, §8.3). P1 implementation may proceed directly on `main` (first beta, no compat per §2). P1/P2/P3 tickets filed as GitHub issues; §10 cross-references posted.
+**Status:** **Approved 2026-04-23 · Implemented on `main` through `e5fd8dd` (2026-04-23)** — all 14 review questions closed (§8.1, §8.3). All §8.5 P1/P2/P3 tickets shipped. Independent code review of the implementation batch surfaced 3 correctness bugs + 1 ship-blocker, all fixed (`dee04de`, `e5fd8dd`, `43a647d`). §10 cross-references posted. See §11 change log for the implementation-pass commit list.
 **Date:** 2026-04-22
 **Scope owner:** Dave (operator) + Claude (implementation)
 **Related docs:** `docs/mover-calibration-v2.md` (#488), `docs/camera-review.md` (Gemini 2026-04-15), `docs/camera.md`, `docs/pointcloud.md`, `docs/camera-live-test-handoff.md` (2026-04-22 live-test brief), `docs/live-test-sessions/2026-04-22/` (raw results)
@@ -1385,6 +1385,37 @@ Mentioned only to confirm they were reviewed and are not affected:
   confidence signal (single-vs-multi-camera placement exposed to
   consumers), **#631** fusion-pass scaling benchmark (characterise
   tick budget at 2/4/8/16 cameras).
+- **2026-04-23** — **implementation complete on `main`** through
+  `e5fd8dd`. Every §8.5 P1/P2/P3 ticket shipped in a single day's
+  batch (22 commits from `f2ceece` to `e5fd8dd`):
+    - **P1 (7):** `f2ceece` #628 stage bounds · `00e5568` Q12
+      fovType · `8c36659` Q7 single-store homography · `27ac87f`
+      Q1/Q4/Q5 tracking ingest + aimTarget + cal-status · `6b96e4e`
+      #625/#626/#627 markers-mode convergence + pre-check + safety.
+    - **P2 (4):** `876b875` Q8/Q10/Q5 solvePnP diagnostic + LM
+      sign probe + SPA badges · `cd4d669` Q3/#629/#630 weighted
+      fusion + confidence signal + cross-camera handoff · `425e8d9`
+      Q14 E2E synthetic-pipeline regression tests · `a5ad28b`
+      Q11/#612 marker-coverage backend endpoint.
+    - **P3 (6):** `b97705b`+`2b20c7c`+`b8a3876` Q9 5-phase v1
+      retirement (eager v1→v2 migration, inline v2 fit on legacy
+      save, dead-code delete) · `aa67fc3` Q10-P3 scipy
+      `least_squares(loss="soft_l1")` swap · `380344b` #631
+      scaling benchmark · `318f7d6` Q13 camera-health dashboard.
+    - **Paired issue fixes:** `76d41b7` #624 profile hex ·
+      `f8794e1` #619 clear-calibration button · `a1b0211`
+      Q11/#612 3D-viewport marker overlay.
+    - **Independent code review pass:** `dee04de` 3 correctness
+      bugs (fusion aged-cluster data loss, stage-bounds
+      zero-origin filter excluding back-right-floor corner,
+      FOV-tier ignoring roll) + `e5fd8dd` ship-blocker
+      (`api_object_pos` manual drags still on pre-Q1 proportional
+      mapping) + `43a647d` three regression tests guarding the
+      fixes. Test suite 16/16 green.
+    - **Deferred:** track-action `_method=="raw"` "parked"
+      fallback — hold-last-good is safer than a random swing;
+      no issue filed without operator-side parked-direction spec.
+      File separately if the visible symptom appears in a show.
 
 ---
 
