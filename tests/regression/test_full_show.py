@@ -172,10 +172,10 @@ try:
     r = api('POST', '/api/spatial-effects', {
         'name': 'Green Sweep', 'category': 'spatial-field',
         'shape': 'sphere', 'r': 0, 'g': 255, 'b': 50,
-        'size': {'radius': 1000},
+        'size': {'radius': 2500},
         'motion': {
-            'startPos': [1000, 2000, 0],
-            'endPos': [5000, 2000, 0],
+            'startPos': [3000, 0, 2800],
+            'endPos': [3000, 0, 2800],
             'easing': 'ease-in-out',
             'durationS': 10,
         },

@@ -288,6 +288,8 @@ function showTab(t){
       emu3dInit();
       _emu3dAttach('emu-3d');
       if(!_emu3d.animId)emu3dAnimate();
+      if(!_emuStage)emuLoadStage();
+      else{_emuStartTimer();if(!_emu3d.nodes.length)emu3dBuildFixtures();}
     }
     loadRuntime();
   }

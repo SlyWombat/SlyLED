@@ -345,7 +345,7 @@ function _dashAttach3d(){
   if(_emu3d.animId){cancelAnimationFrame(_emu3d.animId);_emu3d.animId=null;}
   emu3dAnimate();
   if(!_emuStage)emuLoadStage();
-  else if(!_emu3d.nodes.length)emu3dBuildFixtures();
+  else{_emuStartTimer();if(!_emu3d.nodes.length)emu3dBuildFixtures();}
 }
 
 function _dashEmuDraw(){

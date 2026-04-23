@@ -1,8 +1,14 @@
 /** emulation.js — Stage preview, 3D runtime viewport, per-pixel rendering. Extracted from app.js Phase 3. */
 // ── Emulation / Preview ─────────────────────────────────────────────────────
-var _emuStage=null, _emuPreview=null, _emuTimer=null, _emuT=0, _emuRunning=false, _emuAnimId=null;
+var _emuStage=null, _emuPreview=null, _emuTimer=null, _emuT=0, _emuRunning=false, _emuAnimId=null, _emuStageLoading=false;
 
 function emuLoadStage(){
+  // Re-entry guard: boot runs `_dashAttach3d` → emuLoadStage on the default
+  // dashboard tab, and a fast click to Runtime would otherwise fire a second
+  // chain while the first is mid-flight, producing duplicate fixture groups
+  // (`emu3dBuildFixtures` runs in each callback's `_emuStageReady`).
+  if(_emuStageLoading)return;
+  _emuStageLoading=true;
   ra('GET','/api/layout',null,function(lay){
     ra('GET','/api/children',null,function(ch){
       ra('GET','/api/fixtures',null,function(fx){
@@ -12,13 +18,21 @@ function emuLoadStage(){
             spatialFx:sfx||[],cw:(lay||{}).canvasW||10000,ch:(lay||{}).canvasH||5000};
           // Cache profile beamWidths for beam cone rendering. Shared loader
           // coalesces parallel callers — see _loadProfileCache (#432).
-          _loadProfileCache(_emuStageReady);
+          _loadProfileCache(function(){_emuStageLoading=false;_emuStageReady();});
         });
         });
       });
     });
   });
   // Start polling for show state
+  _emuStartTimer();
+}
+
+function _emuStartTimer(){
+  // Re-entrable: every live-tab switch clears `_emuTimer` via
+  // `_clearTabTimers()`, so the poll needs to be rearmed whenever we land
+  // on Dashboard or Runtime again. Without this, `_emuT` / `_emuPreview`
+  // stay frozen after the first tab swap and the 3D cones never animate.
   if(_emuTimer)clearInterval(_emuTimer);
   _emuTimer=setInterval(function(){
     ra('GET','/api/settings',null,function(s){
