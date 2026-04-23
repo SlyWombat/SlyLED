@@ -1,9 +1,9 @@
 # Camera Calibration Review Plan
 
-**Status:** Draft — review only, no code changes until this plan is approved.
+**Status:** **Approved 2026-04-23** — all 14 review questions closed (§8.1, §8.3). P1 implementation may proceed directly on `main` (first beta, no compat per §2). P1/P2/P3 tickets filed as GitHub issues; §10 cross-references posted.
 **Date:** 2026-04-22
 **Scope owner:** Dave (operator) + Claude (implementation)
-**Related docs:** `docs/mover-calibration-v2.md` (#488), `docs/camera-review.md` (Gemini 2026-04-15), `docs/camera.md`, `docs/pointcloud.md`
+**Related docs:** `docs/mover-calibration-v2.md` (#488), `docs/camera-review.md` (Gemini 2026-04-15), `docs/camera.md`, `docs/pointcloud.md`, `docs/camera-live-test-handoff.md` (2026-04-22 live-test brief), `docs/live-test-sessions/2026-04-22/` (raw results)
 
 ---
 
@@ -1145,10 +1145,10 @@ fit was under-constrained).
 
 | Priority | Ticket shape | Closes | Depends on |
 |----------|--------------|--------|------------|
-| P1 (new, from §8.3) | Markers-mode convergence: bracket-and-retry instead of warm-start-to-discovery. On `pixelX==None` from `_beam_detect`, halve the DMX step and retry from the last known-good pose; give up only when step size ≤ 1 DMX unit | Q6 (unblocks markers-as-default) | — |
-| P1 (new, from §8.3) | Markers-mode pre-check: multi-snapshot ArUco aggregation (≥ 3 frames, best-per-id by corner perimeter) AND forced blackout of ALL fixtures before the detect loop. Matches stage-map's existing aggregation | Q6 | — |
-| P1 (new, from §8.3) | Cal safety: explicit zero of every non-Pan/Tilt/Dimmer channel at cal start; don't rely on profile `default > 0` sweep. Laser and other potentially-on channels (`slymovehead` ch 10) stay lit otherwise | Q6 (safety) | — |
-| P1 (new, from §8.3) | Stage bounds auto-derive: stop reading `stage.json` w/d from operator-settable free-form field; derive from the layout's fixture bounding box (or surveyed-marker hull). Eliminates the 5× raw-error multiplier observed at Q1 baseline | Q1 (amplifier) | — |
+| P1 #625 | Markers-mode convergence: bracket-and-retry instead of warm-start-to-discovery. On `pixelX==None` from `_beam_detect`, halve the DMX step and retry from the last known-good pose; give up only when step size ≤ 1 DMX unit | Q6 (unblocks markers-as-default) | — |
+| P1 #626 | Markers-mode pre-check: multi-snapshot ArUco aggregation (≥ 3 frames, best-per-id by corner perimeter) AND forced blackout of ALL fixtures before the detect loop. Matches stage-map's existing aggregation | Q6 | — |
+| P1 #627 | Cal safety: explicit zero of every non-Pan/Tilt/Dimmer channel at cal start; don't rely on profile `default > 0` sweep. Laser and other potentially-on channels (`slymovehead` ch 10) stay lit otherwise | Q6 (safety) | — |
+| P1 #628 | Stage bounds auto-derive: stop reading `stage.json` w/d from operator-settable free-form field; derive from the layout's fixture bounding box (or surveyed-marker hull). Eliminates the 5× raw-error multiplier observed at Q1 baseline | Q1 (amplifier) | — |
 | P1 | Wire `api_objects_temporal_create` through `_pixel_to_stage` + return feet/head stage points; add `aimTarget` to track-actions; stamp `_method` tier per-object; add `/api/cameras/<fid>/calibration-status` | Q1, Q2, Q4, Q5 (backend), A1, A2, A6 | Q12 for accuracy of FOV fallback |
 | P1 | Single-source homography: collapse to `_calibrations[str(fid)].matrix`, remove `_calibrated_cameras` dead code, migrate `fixture.homography` once | Q7, B2 | — |
 | P1 | `fovType` whitelist + unified `"diagonal"` default + honour in `_pixel_to_stage` | Q12, B9, #611 | — |
@@ -1368,6 +1368,16 @@ Mentioned only to confirm they were reviewed and are not affected:
       orthogonal nudges. Markers-mode `Nonepx` failures are
       ambiguous — operator can't tell whether the beam flashed at
       the requested pose or whether the mover aimed elsewhere.
+- **2026-04-23** — **review approved.** All 14 questions closed.
+  Four new P1 tickets filed from §8.3 live-test findings:
+  **#625** markers-mode convergence bracket-retry, **#626**
+  markers-mode multi-snapshot pre-check, **#627** cal safety
+  (zero non-pan/tilt channels), **#628** stage bounds auto-derive.
+  Cross-reference comments posted on all 15 §10 issues (#611,
+  #612, #357, #423, #610, #600, #597, #484, #474, #427, #510,
+  #533, #409, #277, #280). Per operator direction: P1
+  implementation will proceed directly on `main` since the
+  product has not shipped and §2 allows breaking changes.
 
 ---
 
