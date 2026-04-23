@@ -114,367 +114,203 @@ def _dist(a, b):
     return math.sqrt(sum((a[i] - b[i])**2 for i in range(min(len(a), len(b)))))
 
 
-def _sphere_intersection_time(pixel_pos, start_pos, end_pos, radius, duration, easing="linear"):
-    """Compute when a sphere's center is closest to a pixel (peak brightness time).
-    Returns (t_enter, t_peak, t_exit) in seconds, or None if never intersected."""
-    # Binary search for closest approach along the motion path
-    best_t = 0
-    best_dist = float('inf')
-    steps = 100
-    for i in range(steps + 1):
-        raw_t = i / steps
-        eased_t = _ease(raw_t, easing)
-        center = [_lerp(start_pos[j], end_pos[j], eased_t) for j in range(3)]
-        d = _dist(pixel_pos, center)
-        if d < best_dist:
-            best_dist = d
-            best_t = raw_t
+def _compile_capability_for_string(clip, effect, pixel_positions,
+                                   string_offset, string_count, duration):
+    """Compile a spatial effect for an LED string via the capability-layer
+    evaluator (docs/mover-alignment-review.md §8.1b).
 
-    if best_dist > radius:
-        return None  # never intersected
-
-    t_peak = best_t * duration
-
-    # Find enter/exit by scanning outward from peak
-    t_enter = t_peak
-    t_exit = t_peak
-    for i in range(steps + 1):
-        raw_t = max(0, best_t - i / steps)
-        eased_t = _ease(raw_t, easing)
-        center = [_lerp(start_pos[j], end_pos[j], eased_t) for j in range(3)]
-        if _dist(pixel_pos, center) <= radius:
-            t_enter = raw_t * duration
-        else:
-            break
-    for i in range(steps + 1):
-        raw_t = min(1, best_t + i / steps)
-        eased_t = _ease(raw_t, easing)
-        center = [_lerp(start_pos[j], end_pos[j], eased_t) for j in range(3)]
-        if _dist(pixel_pos, center) <= radius:
-            t_exit = raw_t * duration
-        else:
-            break
-
-    return (t_enter, t_peak, t_exit)
-
-
-def _compile_clip_for_string(clip, effect, pixel_positions, string_offset, string_count, duration):
-    """Compile a spatial effect clip into action steps for a single string.
-
-    Analyzes the spatial relationship between the effect's motion path and
-    the string's pixel positions to determine the optimal action type.
-
-    Returns list of action step dicts with timing.
+    Replaces the per-shape compilers (_compile_sphere_sweep,
+    _compile_plane_sweep, _compile_box) with one generic function that
+    uses shape_coverage_time() to detect sweep patterns and emits the
+    same ACT_WIPE / ACT_SOLID output shape the children already consume.
     """
+    from spatial_engine import shape_coverage_time
+
     if not pixel_positions or not effect:
         return []
 
-    shape = effect.get("shape", "sphere")
-    motion = effect.get("motion", {})
-    start_pos = motion.get("startPos", [0, 0, 0])
-    end_pos = motion.get("endPos", [0, 0, 0])
-    fx_dur = motion.get("durationS", duration) or duration
-    easing = motion.get("easing", "linear")
+    n = len(pixel_positions)
     color = [effect.get("r", 255), effect.get("g", 255), effect.get("b", 255)]
-    size = effect.get("size", {})
-
-    if shape == "sphere":
-        radius = size.get("radius", 1000)
-        return _compile_sphere_sweep(
-            pixel_positions, start_pos, end_pos, radius, color,
-            clip.get("startS", 0), clip.get("durationS", duration),
-            fx_dur, easing, string_offset, string_count
-        )
-
-    elif shape == "plane":
-        normal = size.get("normal", [0, 1, 0])
-        thickness = size.get("thickness", 400)
-        return _compile_plane_sweep(
-            pixel_positions, start_pos, end_pos, normal, thickness, color,
-            clip.get("startS", 0), clip.get("durationS", duration),
-            fx_dur, easing, string_offset, string_count
-        )
-
-    elif shape == "box":
-        return _compile_box(
-            pixel_positions, start_pos, end_pos, size, color,
-            clip.get("startS", 0), clip.get("durationS", duration),
-            fx_dur, easing, string_offset, string_count
-        )
-
-    return []
-
-
-def _compile_sphere_sweep(pixels, start_pos, end_pos, radius, color,
-                          clip_start, clip_dur, fx_dur, easing, str_offset, str_count):
-    """Compile a sphere sweep into WIPE_SEQ or SOLID steps."""
-    n = len(pixels)
-    if n == 0:
-        return []
-
-    # Compute peak time for first and last pixel
+    motion = effect.get("motion") or {}
+    fx_dur = motion.get("durationS", duration) or duration
+    clip_start = clip.get("startS", 0)
+    clip_dur = clip.get("durationS", duration)
     time_scale = clip_dur / fx_dur if fx_dur > 0 else 1
 
-    first_peak = _sphere_intersection_time(pixels[0], start_pos, end_pos, radius, fx_dur, easing)
-    last_peak = _sphere_intersection_time(pixels[-1], start_pos, end_pos, radius, fx_dur, easing)
+    # Sample coverage at first / mid / last pixels — same 3-point probe the
+    # old sphere compiler used. Finer scans are unnecessary; sweep detection
+    # only needs to know relative peak ordering.
+    probes = [(0, pixel_positions[0])]
+    if n > 2:
+        probes.append((n // 2, pixel_positions[n // 2]))
+    if n > 1:
+        probes.append((n - 1, pixel_positions[-1]))
 
-    # If neither pixel is ever intersected, this string is out of range
-    if first_peak is None and last_peak is None:
+    covs = []
+    for idx, px in probes:
+        cov = shape_coverage_time(effect, px)
+        if cov is not None:
+            covs.append((idx, cov))
+
+    if not covs:
         return []
 
-    # Check middle pixel too
-    mid_peak = _sphere_intersection_time(pixels[n // 2], start_pos, end_pos, radius, fx_dur, easing)
+    enter_times = [c[1][0] for c in covs]
+    peak_times  = [c[1][1] for c in covs]
+    exit_times  = [c[1][2] for c in covs]
 
-    # Determine if this is a sweep (peaks at different times) or simultaneous
-    peak_times = []
-    if first_peak: peak_times.append(("first", 0, first_peak))
-    if mid_peak: peak_times.append(("mid", n // 2, mid_peak))
-    if last_peak: peak_times.append(("last", n - 1, last_peak))
+    t_first_peak = peak_times[0]
+    t_last_peak = peak_times[-1]
+    sweep_duration = abs(t_last_peak - t_first_peak) if len(covs) >= 2 else 0
 
-    if len(peak_times) < 2:
-        # Only one pixel hit — emit SOLID for the lit duration
-        pt = peak_times[0][2] if peak_times else (0, 0, clip_dur)
-        enter = clip_start + pt[0] * time_scale
-        exit_t = clip_start + pt[2] * time_scale
-        return [{
-            "type": ACT_SOLID,
-            "params": {"r": color[0], "g": color[1], "b": color[2]},
-            "startS": round(enter, 2), "durationS": round(max(1, exit_t - enter), 2),
-            "ledOffset": str_offset, "ledCount": str_count, "stringIndex": 0,
-        }]
-
-    # Check if peaks are spread out (sweep) or clustered (simultaneous)
-    t_first = peak_times[0][2][1]  # peak time of first pixel
-    t_last = peak_times[-1][2][1]  # peak time of last pixel
-    sweep_duration = abs(t_last - t_first)
-
-    if sweep_duration < 0.5:
-        # All pixels peak within 0.5s — treat as SOLID (whole string at once)
-        enter = clip_start + min(p[2][0] for p in peak_times) * time_scale
-        exit_t = clip_start + max(p[2][2] for p in peak_times) * time_scale
-        return [{
-            "type": ACT_SOLID,
-            "params": {"r": color[0], "g": color[1], "b": color[2]},
-            "startS": round(enter, 2), "durationS": round(max(1, exit_t - enter), 2),
-            "ledOffset": str_offset, "ledCount": str_count, "stringIndex": 0,
-        }]
-
-    # It's a sweep! Compute WIPE_SEQ parameters
-    # Direction: which pixel peaks first?
-    if t_first < t_last:
-        direction = 0  # East (forward: pixel 0 → pixel N)
-    else:
-        direction = 2  # West (reverse: pixel N → pixel 0)
-
-    # Speed: time per pixel
-    speed_ms = max(5, int(sweep_duration * time_scale * 1000 / n))
-
-    # Start time: when first pixel enters
-    enter_times = [p[2][0] for p in peak_times]
     t_start = clip_start + min(enter_times) * time_scale
+    t_end   = clip_start + max(exit_times) * time_scale
+    seg_dur = round(max(1, t_end - t_start), 2)
 
-    # Duration: from first enter to last exit
-    exit_times = [p[2][2] for p in peak_times]
-    t_end = clip_start + max(exit_times) * time_scale
+    if sweep_duration > 0.5:
+        # WIPE — pixels peak at different times → sweep
+        direction = 0 if t_first_peak < t_last_peak else 2  # 0=forward, 2=reverse
+        speed_ms = max(5, int(sweep_duration * time_scale * 1000 / n))
+        return [{
+            "type": ACT_WIPE,
+            "params": {
+                "r": color[0], "g": color[1], "b": color[2],
+                "speedMs": speed_ms, "direction": direction,
+            },
+            "startS": round(t_start, 2),
+            "durationS": seg_dur,
+            "ledOffset": string_offset,
+            "ledCount": string_count,
+            "stringIndex": 0,
+        }]
 
-    return [{
-        "type": ACT_WIPE,
-        "params": {
-            "r": color[0], "g": color[1], "b": color[2],
-            "speedMs": speed_ms, "direction": direction,
-        },
-        "startS": round(t_start, 2), "durationS": round(max(1, t_end - t_start), 2),
-        "ledOffset": str_offset, "ledCount": str_count, "stringIndex": 0,
-    }]
-
-
-def _compile_plane_sweep(pixels, start_pos, end_pos, normal, thickness, color,
-                         clip_start, clip_dur, fx_dur, easing, str_offset, str_count):
-    """Compile a plane sweep — similar logic to sphere but with planar distance."""
-    n = len(pixels)
-    if n == 0:
-        return []
-
-    # Normalize normal
-    mag = math.sqrt(sum(x * x for x in normal)) or 1
-    norm = [x / mag for x in normal]
-
-    time_scale = clip_dur / fx_dur if fx_dur > 0 else 1
-
-    # Compute when the plane passes each pixel
-    def plane_peak_time(px):
-        # The plane moves with the motion path. Find when dot(plane_center, normal) = dot(pixel, normal)
-        px_proj = sum(px[i] * norm[i] for i in range(3))
-        best_t, best_d = 0, float('inf')
-        for step in range(101):
-            raw_t = step / 100
-            eased = _ease(raw_t, easing)
-            center = [_lerp(start_pos[j], end_pos[j], eased) for j in range(3)]
-            plane_offset = sum(center[i] * norm[i] for i in range(3))
-            d = abs(px_proj - plane_offset)
-            if d < best_d:
-                best_d = d
-                best_t = raw_t
-        if best_d > thickness:
-            return None
-        return best_t * fx_dur
-
-    first_t = plane_peak_time(pixels[0])
-    last_t = plane_peak_time(pixels[-1])
-
-    if first_t is None and last_t is None:
-        return []
-
-    # Same sweep logic as sphere
-    if first_t is not None and last_t is not None:
-        sweep = abs(last_t - first_t)
-        if sweep > 0.5:
-            direction = 0 if first_t < last_t else 2
-            speed_ms = max(5, int(sweep * time_scale * 1000 / n))
-            t_start = clip_start + min(first_t, last_t) * time_scale
-            return [{
-                "type": ACT_WIPE,
-                "params": {"r": color[0], "g": color[1], "b": color[2],
-                           "speedMs": speed_ms, "direction": direction},
-                "startS": round(t_start, 2),
-                "durationS": round(max(1, sweep * time_scale + thickness / 500), 2),
-                "ledOffset": str_offset, "ledCount": str_count, "stringIndex": 0,
-            }]
-
-    # No sweep — SOLID
-    t = first_t if first_t is not None else last_t
+    # SOLID — all pixels peak within 0.5s (includes the single-pixel-hit and
+    # non-moving-box cases the old code handled separately)
     return [{
         "type": ACT_SOLID,
         "params": {"r": color[0], "g": color[1], "b": color[2]},
-        "startS": round(clip_start + (t or 0) * time_scale, 2),
-        "durationS": round(max(1, clip_dur), 2),
-        "ledOffset": str_offset, "ledCount": str_count, "stringIndex": 0,
+        "startS": round(t_start, 2),
+        "durationS": seg_dur,
+        "ledOffset": string_offset,
+        "ledCount": string_count,
+        "stringIndex": 0,
     }]
 
 
-def _compile_box(pixels, start_pos, end_pos, size, color,
-                 clip_start, clip_dur, fx_dur, easing, str_offset, str_count):
-    """Compile a box field — SOLID for the duration it covers the string."""
-    # Simplified: just emit SOLID for the clip duration
-    return [{
-        "type": ACT_SOLID,
-        "params": {"r": color[0], "g": color[1], "b": color[2]},
-        "startS": round(clip_start, 2), "durationS": round(max(1, clip_dur), 2),
-        "ledOffset": str_offset, "ledCount": str_count, "stringIndex": 0,
-    }]
+def _compile_capability_for_dmx(clip, effect, fixture_pos, profile_info, duration,
+                                beam_pixels=None, mounted_inverted=False,
+                                aim_override=None, slice_s=0.05):
+    """Compile a spatial effect for a DMX fixture via the capability-layer
+    evaluator. Replaces _compile_dmx_fixture.
 
+    Samples evaluate_primitive at slice_s intervals (default 0.05s per Q9
+    in the review). Consecutive slices with identical output are merged,
+    so a static clip still collapses to a single segment and a slow-moving
+    clip emits only as many segments as there are distinct outputs.
 
-def _compile_dmx_fixture(clip, effect, fixture_pos, aim_point, profile_info, duration,
-                         beam_pixels=None, mounted_inverted=False):
-    """Compile a spatial effect clip for a DMX fixture (moving head / par).
-
-    beam_pixels: list of [x,y,z] sample points along the beam cone. If provided,
-    the spatial effect is evaluated against all samples and the brightest color is used.
-    This means a spatial sphere passing through the beam cone (not just the fixture
-    position) will trigger the fixture.
+    Args:
+        clip: timeline clip dict (startS, durationS, …)
+        effect: spatial effect dict (shape, color, size, motion)
+        fixture_pos: [x, y, z] stage mm — the fixture's location
+        profile_info: DMX profile dict (panRange, tiltRange, channels, …)
+        duration: fallback effect duration if the effect's motion.durationS
+            is missing
+        beam_pixels: optional list of [x, y, z] sample points along the beam
+            cone. When provided, the evaluator is run against each sample
+            and the brightest-colour output wins — so a field passing
+            through the beam cone (not just the fixture origin) triggers
+            the fixture.
+        mounted_inverted: per-fixture flag for inverted ceiling mounts
+        aim_override: force this aim point for static effects (used by the
+            bake caller to honour fixture rotation pose for non-moving fx)
+        slice_s: sample interval in seconds
     """
-    from spatial_engine import compute_pan_tilt, effect_aim_point, evaluate_spatial_effect
+    from spatial_engine import (
+        evaluate_primitive, compute_pan_tilt, derive_caps,
+        CAP_DIRECTION,
+    )
 
     if not effect:
         return []
 
-    eval_pixels = beam_pixels or [fixture_pos]
+    clip_start = clip.get("startS", 0)
+    clip_dur = clip.get("durationS", duration)
+    if clip_dur <= 0:
+        return []
 
-    def _best_color(colors_list):
-        """Return the brightest color from a list of [r,g,b] values."""
-        best = [0, 0, 0]
-        best_sum = 0
-        for c in colors_list:
-            s = c[0] + c[1] + c[2]
+    caps = derive_caps(profile_info)
+    has_pt = CAP_DIRECTION in caps
+    pan_range = profile_info.get("panRange", 0) if profile_info else 0
+    tilt_range = profile_info.get("tiltRange", 0) if profile_info else 0
+
+    motion = effect.get("motion") or {}
+    start_pos = motion.get("startPos", [0, 0, 0])
+    end_pos = motion.get("endPos", [0, 0, 0])
+    is_moving = _dist(start_pos, end_pos) > 10
+
+    eval_samples = beam_pixels if beam_pixels else [list(fixture_pos)]
+
+    def _best_at(t):
+        """Evaluate all eval_samples at time t; return the brightest
+        PrimitiveOutputs (largest sum of rgb channels)."""
+        best = None
+        best_sum = -1
+        for sample in eval_samples:
+            out = evaluate_primitive(sample, effect, t)
+            s = out.color[0] + out.color[1] + out.color[2]
             if s > best_sum:
-                best = c
+                best = out
                 best_sum = s
         return best
 
-    motion = effect.get("motion", {})
-    start_pos = motion.get("startPos", [0, 0, 0])
-    end_pos = motion.get("endPos", [0, 0, 0])
-    clip_start = clip.get("startS", 0)
-    clip_dur = clip.get("durationS", duration)
-
-    pan_range = profile_info.get("panRange", 0) if profile_info else 0
-    tilt_range = profile_info.get("tiltRange", 0) if profile_info else 0
-    has_pt = pan_range > 0 and tilt_range > 0
-
-    # Check if effect moves
-    is_moving = _dist(start_pos, end_pos) > 10  # > 10mm
-
-    if is_moving and has_pt:
-        # Time-slice into 1-second segments for smooth tracking
-        segments = []
-        slice_dur = 1.0
-        t = 0
-        while t < clip_dur:
-            seg_dur = min(slice_dur, clip_dur - t)
-            mid_t = t + seg_dur / 2
-            aim = effect_aim_point(effect, mid_t)
-            colors = evaluate_spatial_effect(effect, eval_pixels, mid_t)
-            c = _best_color(colors) if colors else [0, 0, 0]
-            pt = compute_pan_tilt(fixture_pos, aim, pan_range, tilt_range,
-                                 mounted_inverted=mounted_inverted)
-            segments.append({
-                "type": ACT_DMX_SCENE,
-                "params": {
-                    "r": c[0], "g": c[1], "b": c[2],
-                    "dimmer": 255 if any(v > 0 for v in c) else 0,
-                    "pan": pt[0] if pt else 0.5,
-                    "tilt": pt[1] if pt else 0.5,
-                },
-                "startS": round(clip_start + t, 2),
-                "durationS": round(seg_dur, 2),
-            })
-            t += slice_dur
-        return segments
-    else:
-        # Static or no pan/tilt: single or time-sliced segments
-        if is_moving:
-            # Moving effect but no pan/tilt — still time-slice color
-            segments = []
-            slice_dur = 1.0
-            t = 0
-            while t < clip_dur:
-                seg_dur = min(slice_dur, clip_dur - t)
-                mid_t = t + seg_dur / 2
-                colors = evaluate_spatial_effect(effect, eval_pixels, mid_t)
-                c = _best_color(colors) if colors else [0, 0, 0]
-                segments.append({
-                    "type": ACT_DMX_SCENE,
-                    "params": {
-                        "r": c[0], "g": c[1], "b": c[2],
-                        "dimmer": 255 if any(v > 0 for v in c) else 0,
-                        "pan": 0.5, "tilt": 0.5,
-                    },
-                    "startS": round(clip_start + t, 2),
-                    "durationS": round(seg_dur, 2),
-                })
-                t += slice_dur
-            return segments
-        # Static: single segment
-        mid_t = clip_dur / 2
-        if has_pt:
-            aim = aim_point
-            pt = compute_pan_tilt(fixture_pos, aim, pan_range, tilt_range,
-                                 mounted_inverted=mounted_inverted)
-        else:
-            pt = None
-        colors = evaluate_spatial_effect(effect, eval_pixels, mid_t)
-        c = _best_color(colors) if colors else [0, 0, 0]
-        return [{
+    def _make_segment(start_s, dur_s, prim, aim_xyz):
+        pt = None
+        if has_pt and aim_xyz:
+            pt = compute_pan_tilt(
+                fixture_pos, aim_xyz,
+                pan_range, tilt_range,
+                mounted_inverted=mounted_inverted,
+            )
+        return {
             "type": ACT_DMX_SCENE,
             "params": {
-                "r": c[0], "g": c[1], "b": c[2],
-                "dimmer": 255 if any(v > 0 for v in c) else 0,
+                "r": prim.color[0], "g": prim.color[1], "b": prim.color[2],
+                "dimmer": int(round(prim.intensity * 255)),
                 "pan": pt[0] if pt else 0.5,
                 "tilt": pt[1] if pt else 0.5,
             },
-            "startS": round(clip_start, 2),
-            "durationS": round(max(1, clip_dur), 2),
-        }]
+            "startS": round(start_s, 3),
+            "durationS": round(dur_s, 3),
+        }
+
+    # Static clip — single mid-time evaluation, one segment
+    if not is_moving:
+        mid = clip_dur / 2
+        prim = _best_at(mid)
+        aim = aim_override if aim_override else prim.aim
+        seg = _make_segment(clip_start, max(1, clip_dur), prim, aim)
+        return [seg]
+
+    # Moving clip — sample at slice_s intervals, then consolidate adjacent
+    # identical segments so static regions of a moving effect collapse.
+    segments = []
+    t = 0.0
+    while t < clip_dur:
+        seg_dur = min(slice_s, clip_dur - t)
+        mid_t = t + seg_dur / 2
+        prim = _best_at(mid_t)
+        segments.append(_make_segment(clip_start + t, seg_dur, prim, prim.aim))
+        t += slice_s
+
+    # Consolidate consecutive identical segments (same type + same params)
+    result = [segments[0]]
+    for s in segments[1:]:
+        last = result[-1]
+        if s["params"] == last["params"] and s["type"] == last["type"]:
+            last["durationS"] = round(last["durationS"] + s["durationS"], 3)
+        else:
+            result.append(s)
+    return result
 
 
 # ── Main bake function ───────────────────────────────────────────────────────
@@ -786,31 +622,33 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
                 continue
 
             if fdata.get("fixtureType") == "dmx":
-                # DMX fixture: compile with beam cone samples for intersection
+                # DMX fixture: compile via capability-layer evaluator
+                # (review §8.1b Q9 — runtime-first evaluator sampled at
+                # slice_s for bake-time segments)
                 fx_pos = pixels[0] if pixels else [0, 0, 0]
                 aim_from_rot = _rotation_to_aim(fdata.get("rotation", [0, 0, 0]), fx_pos)
-                steps = _compile_dmx_fixture(
+                steps = _compile_capability_for_dmx(
                     clip, fx, fx_pos,
-                    aim_from_rot,
                     fdata.get("profileInfo"),
                     duration,
                     beam_pixels=pixels,
                     mounted_inverted=bool(fdata.get("mountedInverted")),
+                    aim_override=aim_from_rot,
                 )
                 all_segments.extend(steps)
             elif strings:
-                # Multi-string: compile per-string
+                # Multi-string: compile per-string via capability-layer
                 for si, sinfo in enumerate(strings):
                     off = sinfo["offset"]
                     cnt = sinfo["count"]
                     str_pixels = pixels[off:off + cnt]
-                    steps = _compile_clip_for_string(clip, fx, str_pixels, off, cnt, duration)
+                    steps = _compile_capability_for_string(clip, fx, str_pixels, off, cnt, duration)
                     for step in steps:
                         step["stringIndex"] = si
                     all_segments.extend(steps)
             elif pixels:
                 # Single string
-                steps = _compile_clip_for_string(clip, fx, pixels, 0, len(pixels), duration)
+                steps = _compile_capability_for_string(clip, fx, pixels, 0, len(pixels), duration)
                 all_segments.extend(steps)
 
             # Stamp track priority on all segments produced by this clip
