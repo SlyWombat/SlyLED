@@ -8,11 +8,18 @@
 
 ## Current state
 
-Draft review doc pushed. No PR opened yet — still in review phase. Two
-commits on this branch:
+**PR #646 open** against `main` (2026-04-23):
+<https://github.com/SlyWombat/SlyLED/pull/646>.
+Branch carries §0–§7 draft, §8–§12 closing sections, §8.1 static-reading
+round (Q1–Q6 tier-1 hardening findings), and
+`tests/test_calibration_synthetic.py` (36 assertions, green).
+Five commits on the branch:
 
 - `750b29c` — §0–§7 draft
 - `557e7c1` — §8–§12 closing sections
+- `91dc282` — resume notes (this file)
+- `f840705` — §8.1 findings for Q1–Q6 + synthetic regression test
+- `958b572` — verify_signs 4-combo coverage + Q3 corroborating artifact
 
 The review was born from the realisation that the mover-alignment
 review (PR #643 on branch `claude/review-mover-alignment-plan`) shipped
@@ -76,24 +83,38 @@ Four-tier fallback ladder. Operator is never stuck.
 
 ## Next session — pick one
 
-1. **Static-reading round for §6 Q1–Q6** — tier 1 hardening
-   questions. Most are answerable by reading `mover_calibrator.py`
-   more carefully (which functions exist, what defaults they use,
-   what'd change if we promoted them). Same pattern as mover-
-   alignment-review §8.1. Likely results in 3–5 new issues filed
-   for tier-1 hardening fixes.
-2. **Synthetic prototype first** — write
-   `tests/test_calibration_synthetic.py` per §7.2. Simulate mover +
-   camera, feed `fit_model` known-good samples, assert recovered
-   params. This is the regression gate every subsequent fix must
-   pass. No hardware.
-3. **Live-test the basement rig** — cold-start, run §7.1 protocol:
+Options 1, 2, 4 from the prior menu are **done** (§8.1 landed in
+`f840705`/`958b572`; PR #646 opened). Remaining / new candidates:
+
+1. **Live-test the basement rig (§7.1 protocol)** — cold-start,
    tier-4 baseline → tier-1 auto → tier-2 operator click → tier-3
-   manual → verification. Captures the actual symptoms, measures
-   what passes / fails. Hardware-dependent.
-4. **Open a PR for the review doc** — gets the design under peer
-   review before implementation. `gh pr create` from this branch
-   against `main`.
+   manual → verification → drift retest. Produces §8.3 (live-test
+   resolution section) and ratifies the 100 mm / 200 mm accuracy
+   targets from §1. Hardware-dependent — needs the basement rig
+   (3 movers + 2 cameras + ArUco markers from camera-review §8.3).
+2. **Draft a live-test runner** — Python harness that automates the
+   §7.1 protocol against a live orchestrator (QA test-script scope).
+   Writable now without hardware; first execution on basement rig
+   reveals tweaks. Lives at `tests/test_calibration_live_basement.py`
+   (proposed).
+3. **§8.2 tier 2–4 static reading (Q7–Q13)** — code-reading pass on
+   what exists for each of:
+   - Tier 2 operator-in-loop (Q7–Q8): camera-frame UI surfaces,
+     click-to-sample wiring
+   - Tier 3 3-point manual (Q9–Q11): the stubbed
+     `/api/calibration/mover/<fid>/manual` route at
+     `parent_server.py:5260` is already wired end-to-end (review
+     §3.7 called it stubbed — recent code shows it's not; worth
+     double-checking), phone-gyro aim from alignment review Fn 2
+   - Tier 4 GDTF (Q12–Q13): `ParametricFixtureModel` as
+     geometric-only fallback; MVR import surface
+   Review flagged these as "need implementation-phase decisions" —
+   so static reading's return is lower than Q1–Q6, but it clarifies
+   the code delta each tier needs.
+4. **Respond to PR #646 review** — if reviewers leave comments.
+   Check via `gh pr view 646 --comments` before other work.
+5. **Cross-reference issues** — update status on #488, #610, #486
+   to link back to PR #646 and §8.1 findings. Light bookkeeping.
 
 ## Context to know
 
