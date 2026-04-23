@@ -82,6 +82,20 @@ function loadSettings(){
     var imp=parseInt(document.getElementById('s-un').value)===1;
     document.getElementById('s-stage-metric').style.display=imp?'none':'';
     document.getElementById('s-stage-imperial').style.display=imp?'':'none';
+    // #628 — manual override + auto-derived hint
+    var manCb=document.getElementById('s-stage-manual');
+    if(manCb)manCb.checked=!!st.stageBoundsManual;
+    var hint=document.getElementById('s-stage-auto-hint');
+    if(hint&&st.auto){
+      var aw=(st.auto.w||0).toFixed(2);
+      var ah=(st.auto.h||0).toFixed(2);
+      var ad=(st.auto.d||0).toFixed(2);
+      if(st.stageBoundsManual){
+        hint.innerHTML='Auto-derived from fixtures + markers would be <b>'+aw+' × '+ah+' × '+ad+' m</b> (W × H × D). Uncheck to apply.';
+      }else{
+        hint.innerHTML='Auto-derived from fixtures + markers: <b>'+aw+' × '+ah+' × '+ad+' m</b> — re-runs on every layout or marker change.';
+      }
+    }
   });
   loadPatchView();
   _depthRuntimeRefresh();
@@ -365,6 +379,11 @@ function saveSettings(btn){
   // Save stage dimensions (mm → meters for server)
   var stg=_getStageMm();
   var stageM={w:stg.w/1000, h:stg.h/1000, d:stg.d/1000};
+  // #628 — propagate the manual-override toggle. Unchecking it causes the
+  // server to recompute bounds from layout+markers (ignoring the w/h/d we
+  // just sent).
+  var manCb=document.getElementById('s-stage-manual');
+  stageM.stageBoundsManual=!!(manCb&&manCb.checked);
   ra('POST','/api/stage',stageM,function(){});
   ra('POST','/api/settings',{
     name:document.getElementById('s-nm').value.trim(),

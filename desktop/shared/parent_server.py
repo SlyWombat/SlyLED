@@ -161,6 +161,11 @@ if not _settings.get("autoStartShow"):
     _settings["runnerStartEpoch"] = 0
 _layout  = _load("layout",  {"canvasW": 3000, "canvasH": 2000, "children": []})
 _stage   = _load("stage",   {"w": 3.0, "h": 2.0, "d": 1.5})
+# #628 — `stageBoundsManual` defaults False. Auto-derive runs on startup
+# (after fixtures/layout/markers all load, see call below) and on each
+# layout/marker write unless the operator has explicitly opted out.
+if "stageBoundsManual" not in _stage:
+    _stage["stageBoundsManual"] = False
 _fixtures   = _load("fixtures",   [])
 
 #  "  "  Fixture migration: backfill fixtureType on old data  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
@@ -242,6 +247,84 @@ _mover_cal    = _load("mover_calibrations", {})  # {fixtureId_str: {grid, sample
 #                rx:float(deg), ry:float(deg), rz:float(deg), label?:str}
 _aruco_markers = _load("aruco_markers", [])
 _ssh_bootstrapped = False  # deferred pre-population (needs _encrypt_pw defined later)
+
+
+# #628 — Auto-derive stage bounds from placed fixtures + surveyed markers.
+# The operator-editable free-form w/h/d values in stage.json drifted
+# (live-test #628 found w=10m, d=8m against an actual 2×3.5m rig, a 5× error
+# amplifier on the tracking ingest). Auto-derive replaces that guess with
+# something grounded in actual placed geometry. Operator can opt back into
+# manual bounds with stageBoundsManual=true on /api/stage POST.
+_STAGE_PAD_MM = 500.0
+_STAGE_MIN_W_M = 1.0  # keep a sane floor if fixtures/markers are missing
+_STAGE_MIN_D_M = 1.0
+_STAGE_MIN_H_M = 1.5
+
+
+def _derive_stage_bounds():
+    """Return (w_m, h_m, d_m) derived from placed fixtures + surveyed markers
+    + 500 mm padding on each side. Values are stage X (width), Z (height),
+    Y (depth) in metres. Missing dimensions fall back to the stored value
+    then a sane minimum."""
+    max_x = 0.0
+    max_y = 0.0
+    max_z = 0.0
+    seen = False
+    for c in (_layout.get("children") or []):
+        x = float(c.get("x") or 0)
+        y = float(c.get("y") or 0)
+        z = float(c.get("z") or 0)
+        if x == 0 and y == 0 and z == 0:
+            continue
+        max_x = max(max_x, x)
+        max_y = max(max_y, y)
+        max_z = max(max_z, z)
+        seen = True
+    for m in (_aruco_markers or []):
+        x = float(m.get("x") or 0)
+        y = float(m.get("y") or 0)
+        z = float(m.get("z") or 0)
+        max_x = max(max_x, x)
+        max_y = max(max_y, y)
+        max_z = max(max_z, z)
+        seen = True
+    if not seen:
+        return (max(_stage.get("w", _STAGE_MIN_W_M), _STAGE_MIN_W_M),
+                max(_stage.get("h", _STAGE_MIN_H_M), _STAGE_MIN_H_M),
+                max(_stage.get("d", _STAGE_MIN_D_M), _STAGE_MIN_D_M))
+    w_m = max((max_x + _STAGE_PAD_MM) / 1000.0, _STAGE_MIN_W_M)
+    d_m = max((max_y + _STAGE_PAD_MM) / 1000.0, _STAGE_MIN_D_M)
+    h_m = max((max_z + _STAGE_PAD_MM) / 1000.0, _STAGE_MIN_H_M)
+    return (w_m, h_m, d_m)
+
+
+def _apply_auto_stage_bounds(*, save=True):
+    """Recompute auto bounds and write to _stage unless manual override is on.
+    Call this on startup, on /api/layout POST, on /api/aruco/markers POST,
+    and on fixture create/delete/reposition."""
+    if _stage.get("stageBoundsManual"):
+        return False
+    w_m, h_m, d_m = _derive_stage_bounds()
+    changed = (abs(_stage.get("w", 0) - w_m) > 1e-3
+               or abs(_stage.get("h", 0) - h_m) > 1e-3
+               or abs(_stage.get("d", 0) - d_m) > 1e-3)
+    if not changed:
+        return False
+    _stage["w"] = w_m
+    _stage["h"] = h_m
+    _stage["d"] = d_m
+    # Keep canvas dims (mm) in sync with stage (m) — matches /api/stage POST.
+    try:
+        _settings["canvasW"] = int(w_m * 1000)
+        _settings["canvasH"] = int(h_m * 1000)
+        _layout["canvasW"] = _settings["canvasW"]
+        _layout["canvasH"] = _settings["canvasH"]
+    except Exception:
+        pass
+    if save:
+        _save("stage", _stage)
+    return True
+
 
 # Live action events pushed by children (ip  -' {actionType, stepIndex, totalSteps, event, ts})
 _live_events = {}
@@ -1313,23 +1396,46 @@ def api_layout_save():
     fixtures = body.get("children") or body.get("fixtures") or []
     _layout["children"] = [{"id": f["id"], "x": f.get("x", 0), "y": f.get("y", 0), "z": f.get("z", 0)} for f in fixtures]
     _save("layout", _layout)
+    _apply_auto_stage_bounds()  # #628
     return jsonify(ok=True)
 
 #  "  "  Stage  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
 @app.get("/api/stage")
 def api_stage_get():
-    return jsonify(_stage)
+    # #628 — also report what auto-derive would produce right now so the UI
+    # can show a "Auto: X.XX × Y.YY m" hint alongside the active value.
+    auto_w, auto_h, auto_d = _derive_stage_bounds()
+    out = dict(_stage)
+    out["auto"] = {"w": auto_w, "h": auto_h, "d": auto_d}
+    return jsonify(out)
 
 @app.post("/api/stage")
 def api_stage_save():
     body = request.get_json(silent=True) or {}
+    # #628 — operator can toggle between auto-derived and manual bounds via
+    # stageBoundsManual. When the flag is *explicitly* in the body, honour
+    # it as-given (so the SPA can turn auto-derive back on even while the
+    # form is simultaneously sending the currently-displayed w/h/d). When
+    # it's absent, fall back to the stored value.
+    manual_flag_sent = "stageBoundsManual" in body
+    if manual_flag_sent:
+        _stage["stageBoundsManual"] = bool(body["stageBoundsManual"])
     for k in ("w", "h", "d"):
         if k in body:
             v = body[k]
             if not isinstance(v, (int, float)) or v <= 0:
                 return jsonify(err=f"Stage dimension '{k}' must be a positive number"), 400
             _stage[k] = float(v)
+            # Writing explicit dimensions without ever mentioning the flag
+            # is the legacy code path; treat that as manual intent so older
+            # callers don't get their values auto-clobbered. Newer callers
+            # set stageBoundsManual alongside and win either way.
+            if not manual_flag_sent:
+                _stage["stageBoundsManual"] = True
+    # If the operator flipped manual off, recompute from geometry.
+    if not _stage.get("stageBoundsManual"):
+        _apply_auto_stage_bounds(save=False)
     _save("stage", _stage)
     # Sync canvas dimensions (mm) from stage (meters)
     with _lock:
@@ -2493,6 +2599,7 @@ def api_aruco_markers_upsert():
     _aruco_markers.clear()
     _aruco_markers.extend(sorted(by_id.values(), key=lambda m: m["id"]))
     _save("aruco_markers", _aruco_markers)
+    _apply_auto_stage_bounds()  # #628
     return jsonify(ok=True, markers=list(_aruco_markers),
                    updated=[u["id"] for u in updates])
 
@@ -2505,6 +2612,7 @@ def api_aruco_markers_delete(mid):
     removed = len(_aruco_markers) < before
     if removed:
         _save("aruco_markers", _aruco_markers)
+        _apply_auto_stage_bounds()  # #628
     return jsonify(ok=True, removed=removed,
                    markers=list(_aruco_markers))
 
@@ -12966,6 +13074,13 @@ def _check_single_instance(port):
     return False
 
 if __name__ == "__main__":
+    # #628 — re-derive stage bounds once at startup so rigs with stale
+    # manually-edited stage.json self-heal without operator intervention.
+    # No-op if the operator has stageBoundsManual=true.
+    try:
+        _apply_auto_stage_bounds()
+    except Exception as _e:
+        log.warning("stage auto-derive on startup failed: %s", _e)
     ap = argparse.ArgumentParser(description="SlyLED Parent Server")
     ap.add_argument("--port",       type=int, default=8080)
     ap.add_argument("--host",       default="0.0.0.0")
