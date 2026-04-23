@@ -2774,6 +2774,99 @@ def api_aruco_markers_list():
                    markers=list(_aruco_markers))
 
 
+@app.get("/api/aruco/markers/coverage")
+def api_aruco_markers_coverage():
+    """Q11/#612 — pre-cal marker coverage summary.
+
+    Returns per-camera visibility (which markers each camera detects right
+    now), the marker hull's stage XY bounds, the count of markers visible
+    to ≥2 cameras (fusion-ready), and a recommendation pin for where an
+    additional marker would help most. Drives the SPA marker-coverage
+    overlay so the operator can see "Cam 16 only sees 2 markers — drop one
+    near (3000, 2500) to get coverage for stage-right" without dispatching
+    a stage-map run.
+    """
+    cam_fixtures = [f for f in _fixtures if f.get("fixtureType") == "camera"]
+    cams = []
+    for f in cam_fixtures:
+        if not f.get("cameraIp"):
+            continue
+        try:
+            r = _aruco_snapshot_detect(f)
+        except Exception as e:
+            cams.append({"id": f["id"], "name": f.get("name"),
+                         "err": str(e), "seenIds": [], "frameSize": None})
+            continue
+        seen = sorted({int(m.get("id")) for m in r.get("markers", [])
+                        if m.get("id") is not None})
+        cams.append({"id": f["id"], "name": f.get("name"),
+                      "seenIds": seen,
+                      "frameSize": r.get("frameSize"),
+                      "err": r.get("err")})
+    # Coverage stats
+    counts = {}
+    for c in cams:
+        for mid in c.get("seenIds") or []:
+            counts[mid] = counts.get(mid, 0) + 1
+    shared_ids = sorted(mid for mid, n in counts.items() if n >= 2)
+    registered_ids = sorted(int(m.get("id")) for m in _aruco_markers
+                              if m.get("id") is not None)
+    visible_ids = sorted(counts.keys())
+    # Hull stats over registered markers (XY bounds, simple).
+    if _aruco_markers:
+        xs = [float(m.get("x", 0)) for m in _aruco_markers]
+        ys = [float(m.get("y", 0)) for m in _aruco_markers]
+        hull = {
+            "xMin": min(xs), "xMax": max(xs),
+            "yMin": min(ys), "yMax": max(ys),
+            "centerXy": [(min(xs) + max(xs)) / 2.0,
+                          (min(ys) + max(ys)) / 2.0],
+            "spanX": max(xs) - min(xs),
+            "spanY": max(ys) - min(ys),
+        }
+    else:
+        hull = None
+    # Recommendation pin — where would an additional marker most help?
+    # Heuristic: pick the camera with the fewest visible-but-registered
+    # markers and recommend a position roughly at the centre of its
+    # un-covered FOV (approximated by the stage centre offset away from
+    # whichever markers it already sees).
+    recommendation = None
+    if cams and registered_ids:
+        worst = min(cams, key=lambda c: len(c.get("seenIds") or []))
+        worst_seen = set(worst.get("seenIds") or [])
+        worst_unseen = [m for m in _aruco_markers
+                          if int(m.get("id")) in (set(registered_ids) - worst_seen)]
+        if worst_unseen and hull:
+            # Average position of markers worst camera doesn't see — that
+            # area is where coverage is most likely missing.
+            ax = sum(float(m.get("x", 0)) for m in worst_unseen) / len(worst_unseen)
+            ay = sum(float(m.get("y", 0)) for m in worst_unseen) / len(worst_unseen)
+            # Pull recommendation slightly inside hull to keep it placeable.
+            recommendation = {
+                "cameraId": worst["id"],
+                "cameraName": worst.get("name"),
+                "missingCount": len(worst_unseen),
+                "suggestedPlacement": {
+                    "x": round(min(max(ax, hull["xMin"]), hull["xMax"]), 1),
+                    "y": round(min(max(ay, hull["yMin"]), hull["yMax"]), 1),
+                    "z": 0.0,
+                },
+                "rationale": (f"Cam '{worst.get('name')}' currently sees "
+                                f"{len(worst_seen)}/{len(registered_ids)} surveyed "
+                                f"markers. Adding one near the indicated XY would "
+                                f"give it a third anchor for stable findHomography."),
+            }
+    return jsonify(ok=True,
+                   cameras=cams,
+                   registeredCount=len(registered_ids),
+                   visibleCount=len(visible_ids),
+                   sharedCount=len(shared_ids),
+                   sharedIds=shared_ids,
+                   hull=hull,
+                   recommendation=recommendation)
+
+
 @app.post("/api/aruco/markers")
 def api_aruco_markers_upsert():
     """Create or update a marker by id. Body = single record, or list of
