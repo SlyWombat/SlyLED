@@ -5007,7 +5007,13 @@ def api_mover_cal_exclude_sample(fid):
 @app.post("/api/calibration/mover/<int:fid>/aim")
 def api_mover_cal_aim(fid):
     """Use calibration grid to aim a mover at a target pixel or stage position.
-    Body: {targetX, targetY} (stage mm) or {pixelX, pixelY}"""
+    Body: {targetX, targetY} (stage mm) or {pixelX, pixelY}
+
+    Q9-P3 phase 5 prep — this route still carries the legacy grid_inverse
+    pathway for operator "aim here now" flows during cal debugging. The v2
+    ParametricFixtureModel is the authoritative inverse for show bake +
+    track actions; this aim API is a diagnostic tool only.
+    """
     cal = _mover_cal.get(str(fid))
     if not cal or (not cal.get("grid") and not cal.get("samples")):
         return jsonify(err="Fixture not calibrated"), 400
@@ -5015,7 +5021,7 @@ def api_mover_cal_aim(fid):
     if not f:
         return jsonify(err="Fixture not found"), 404
     body = request.get_json(silent=True) or {}
-    grid = cal["grid"]
+    grid = cal.get("grid")  # Q9-P3 — v2 cals legitimately lack this key.
     pan = tilt = None
 
     # Stage coordinate target — use affine transform for extrapolation (#371)
@@ -5153,13 +5159,8 @@ def api_mover_cal_manual(fid):
     return jsonify(**resp)
 
 
-def pixel_to_pan_tilt(fixture_id, px, py):
-    """Direct pixel→pan/tilt lookup using mover calibration grid.
-    Returns (pan, tilt) or None if not calibrated."""
-    cal = _mover_cal.get(str(fixture_id))
-    if not cal or not cal.get("grid"):
-        return None
-    return _mcal.grid_inverse(cal["grid"], px, py)
+# Q9-P3 phase 5 — `pixel_to_pan_tilt` (pixel→pan/tilt via v1 grid_inverse)
+# had no callers left after the v2 parametric pipeline landed; deleted.
 
 
 # ── Environment point cloud ───────────────────────────────────────────
