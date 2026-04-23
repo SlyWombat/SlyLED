@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'sha
 from spatial_engine import (  # noqa: E402
     evaluate_primitive,
     derive_caps,
+    shape_coverage_time,
     PrimitiveOutputs,
     CAP_COLOR_RGB,
     CAP_COLOR_WHITE,
@@ -255,6 +256,65 @@ def test_consumer_reads_only_declared_caps():
     assert_true(mover_aim is not None, "mover consumer: aim read")
 
 
+# ── shape_coverage_time — per-pixel time-window coverage ────────────────────
+
+def test_coverage_sphere_sweep_first_pixel_fires_earliest():
+    """A sphere sweeping along +X through three pixels should cover
+    pixel_0 earlier than pixel_last (sweep direction detection)."""
+    effect = {
+        "shape": "sphere",
+        "r": 255, "g": 0, "b": 0,
+        "size": {"radius": 800},
+        "motion": {"startPos": [-3000, 0, 0], "endPos": [3000, 0, 0],
+                   "durationS": 2.0, "easing": "linear"},
+    }
+    cov_first = shape_coverage_time(effect, [-2500, 0, 0])
+    cov_last  = shape_coverage_time(effect, [2500, 0, 0])
+    assert_true(cov_first is not None, "coverage: first pixel is covered")
+    assert_true(cov_last is not None, "coverage: last pixel is covered")
+    assert_true(cov_first[1] < cov_last[1],
+                f"coverage: sweep direction detected via t_peak "
+                f"({cov_first[1]:.3f} < {cov_last[1]:.3f})")
+
+
+def test_coverage_none_when_outside_reach():
+    effect = {
+        "shape": "sphere",
+        "r": 255, "g": 255, "b": 255,
+        "size": {"radius": 200},
+        "motion": {"startPos": [0, 0, 0], "endPos": [0, 0, 0],
+                   "durationS": 1.0, "easing": "linear"},
+    }
+    cov = shape_coverage_time(effect, [5000, 0, 0])
+    assert_eq(cov, None, "coverage: distant pixel is never covered → None")
+
+
+def test_coverage_plane_sweep_window_brackets_peak():
+    """A plane sweeping past a pixel should have the pixel lit for a
+    narrow window centred on the crossing time."""
+    effect = {
+        "shape": "plane",
+        "r": 0, "g": 255, "b": 0,
+        "size": {"normal": [1, 0, 0], "thickness": 300},
+        "motion": {"startPos": [-3000, 1500, 1500],
+                   "endPos":   [ 3000, 1500, 1500],
+                   "durationS": 2.0, "easing": "linear"},
+    }
+    # Pixel at x=0 — plane crosses at t=1.0 (midway)
+    cov = shape_coverage_time(effect, [0, 1500, 1500], samples=201)
+    assert_true(cov is not None, "plane coverage: midway pixel is lit")
+    t_enter, t_peak, t_exit = cov
+    assert_true(0.85 < t_peak < 1.15,
+                f"plane coverage: t_peak brackets crossing (t_peak={t_peak:.3f})")
+    assert_true(t_enter < t_peak < t_exit,
+                "plane coverage: enter < peak < exit")
+
+
+def test_coverage_none_effect_returns_none():
+    assert_eq(shape_coverage_time(None, [0, 0, 0]), None,
+              "coverage: None effect → None")
+
+
 # ── Main ────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -272,6 +332,10 @@ if __name__ == "__main__":
         test_caps_empty_profile,
         test_caps_sorted_deduplicated,
         test_consumer_reads_only_declared_caps,
+        test_coverage_sphere_sweep_first_pixel_fires_earliest,
+        test_coverage_none_when_outside_reach,
+        test_coverage_plane_sweep_window_brackets_peak,
+        test_coverage_none_effect_returns_none,
     ]
     for t in tests:
         t()

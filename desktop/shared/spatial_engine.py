@@ -528,6 +528,49 @@ def evaluate_primitive(fixture_pose, effect, t):
     )
 
 
+def shape_coverage_time(effect, pixel_pose, samples=101):
+    """Effect-local time window during which the field covers a pixel.
+
+    Generic over shape — works for sphere, plane, box, and any future
+    field by sampling the intensity channel of the evaluator. Replaces
+    the per-shape intersect functions (_sphere_intersection_time and
+    the inline plane/box versions) in bake_engine.py.
+
+    Args:
+        effect: effect dict (shape, color, size, motion).
+        pixel_pose: [x, y, z] stage mm — the point to test.
+        samples: number of time samples across the effect duration.
+            101 gives ~10 ms resolution for a 1 s effect; scale up for
+            longer effects if tighter edge accuracy is needed.
+
+    Returns:
+        (t_enter, t_peak, t_exit) in effect-local seconds, or None if
+        the field never covers the pixel. t_peak is the midpoint of
+        the coverage window — good enough for sweep-direction detection
+        and DMX-bake hint timing.
+    """
+    if effect is None:
+        return None
+
+    fx_dur = (effect.get("motion") or {}).get("durationS", 1) or 1
+    t_enter = None
+    t_exit = None
+
+    for i in range(samples):
+        t = (i / max(samples - 1, 1)) * fx_dur
+        out = evaluate_primitive(pixel_pose, effect, t)
+        if out.intensity > 0:
+            if t_enter is None:
+                t_enter = t
+            t_exit = t
+
+    if t_enter is None:
+        return None
+
+    t_peak = (t_enter + t_exit) / 2.0
+    return (t_enter, t_peak, t_exit)
+
+
 def derive_caps(profile):
     """Auto-derive the capability set of a DMX profile.
 
