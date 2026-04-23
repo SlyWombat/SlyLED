@@ -99,6 +99,18 @@ function loadSettings(){
   });
   loadPatchView();
   _depthRuntimeRefresh();
+  // #615 — populate the Settings → Advanced "Version" card. Endpoint
+  // already exposes the orchestrator VERSION string; the HTML
+  // placeholder was never wired up to it.
+  ra('GET','/api/status',null,function(st){
+    var el=document.getElementById('s-version');
+    if(!el)return;
+    if(st&&st.version){
+      el.textContent='SlyLED '+String(st.version)+' — running on '+String(st.hostname||'unknown host');
+    }else{
+      el.textContent='Version unavailable';
+    }
+  });
 }
 
 // #598 — Depth-runtime status row in Settings. The Install button

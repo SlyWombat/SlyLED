@@ -10,9 +10,45 @@ Usage:
     python tests/test_dmx_fixtures.py
 """
 
-import sys, os, json
+import sys, os, json, shutil, tempfile, atexit
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
+
+# #613 — snapshot user-authored DMX profiles before the test imports
+# parent_server (which loads them into memory) and restore them on exit.
+# /api/reset writes the emptied _profiles dict back to
+# desktop/shared/data/dmx_profiles/, so without this snapshot any
+# contributor running this test locally silently loses their custom
+# fixture work. The snapshot also survives a test crash because atexit
+# fires on normal exits and unhandled exceptions alike.
+_SHARED_DATA_DIR = os.path.join(
+    os.path.dirname(__file__), '..', 'desktop', 'shared', 'data', 'dmx_profiles')
+_SHARED_DATA_DIR = os.path.abspath(_SHARED_DATA_DIR)
+_PROFILE_SNAPSHOT = None
+if os.path.isdir(_SHARED_DATA_DIR):
+    _PROFILE_SNAPSHOT = tempfile.mkdtemp(prefix='slyled-test-profiles-')
+    for _n in os.listdir(_SHARED_DATA_DIR):
+        _src = os.path.join(_SHARED_DATA_DIR, _n)
+        if os.path.isfile(_src):
+            shutil.copy2(_src, os.path.join(_PROFILE_SNAPSHOT, _n))
+
+    def _restore_profiles():
+        # Remove anything the test wrote, then drop the snapshot back in.
+        try:
+            for _n in os.listdir(_SHARED_DATA_DIR):
+                _p = os.path.join(_SHARED_DATA_DIR, _n)
+                if os.path.isfile(_p):
+                    os.unlink(_p)
+            for _n in os.listdir(_PROFILE_SNAPSHOT):
+                shutil.copy2(os.path.join(_PROFILE_SNAPSHOT, _n),
+                             os.path.join(_SHARED_DATA_DIR, _n))
+            shutil.rmtree(_PROFILE_SNAPSHOT, ignore_errors=True)
+            print(f'# #613 profile snapshot restored from {_PROFILE_SNAPSHOT}')
+        except Exception as _e:
+            print(f'# #613 profile restore failed: {_e} '
+                  f'(snapshot kept at {_PROFILE_SNAPSHOT})')
+
+    atexit.register(_restore_profiles)
 
 import parent_server
 from parent_server import app

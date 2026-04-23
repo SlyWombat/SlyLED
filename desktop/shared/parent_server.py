@@ -2660,6 +2660,68 @@ def api_camera_intrinsic_get(fid):
         return jsonify(ok=False, err=str(e)), 503
 
 
+@app.delete("/api/cameras/<int:fid>/intrinsic")
+def api_camera_intrinsic_delete(fid):
+    """#597 — discard a camera node's saved intrinsic calibration so the
+    Advanced Scan wizard can re-run from scratch. Proxies the camera-
+    side DELETE; leaves the orchestrator's separate stage-map
+    homography in _calibrations untouched (use DELETE /api/cameras/
+    <fid>/calibration for that one, #619).
+    """
+    f = next((fx for fx in _fixtures
+              if fx["id"] == fid and fx.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    cam_idx = f.get("cameraIdx", 0)
+    import urllib.request as _ur
+    try:
+        req = _ur.Request(
+            f"http://{ip}:5000/calibrate/intrinsic?cam={cam_idx}",
+            method="DELETE")
+        resp = _ur.urlopen(req, timeout=10)
+        try:
+            body = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            body = {"ok": True}
+        return jsonify(body)
+    except Exception as e:
+        return jsonify(ok=False, err=str(e)), 503
+
+
+@app.post("/api/cameras/<int:fid>/intrinsic/reset")
+def api_camera_intrinsic_reset(fid):
+    """#597 — reset the intrinsic-capture buffer on a camera node
+    (drops accumulated ArUco / checkerboard frames without discarding
+    any saved calibration). Use before restarting a capture sequence.
+    """
+    f = next((fx for fx in _fixtures
+              if fx["id"] == fid and fx.get("fixtureType") == "camera"), None)
+    if not f:
+        return jsonify(err="Camera not found"), 404
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    cam_idx = f.get("cameraIdx", 0)
+    import urllib.request as _ur
+    try:
+        req = _ur.Request(
+            f"http://{ip}:5000/calibrate/intrinsic/reset?cam={cam_idx}",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST")
+        resp = _ur.urlopen(req, timeout=10)
+        try:
+            body = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            body = {"ok": True}
+        return jsonify(body)
+    except Exception as e:
+        return jsonify(ok=False, err=str(e)), 503
+
+
 # -- ArUco calibration — detection runs on orchestrator, cameras only provide snapshots (#329)
 
 _aruco_frames = {}  # {fid: [(corners, ids, frame_size), ...]}
