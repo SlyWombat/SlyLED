@@ -1656,6 +1656,18 @@ def api_fixture_update(fid):
             v = body["trackThreshold"]
             if not isinstance(v, (int, float)) or v < 0.1 or v > 0.95:
                 return jsonify(err="trackThreshold must be 0.1-0.95"), 400
+        # #423 — per-class threshold dict. Each value must be in the
+        # same 0.1-0.95 band so an operator can't accidentally set
+        # threshold=0 and flood the tracker with noise.
+        if "trackClassThresholds" in body:
+            ct = body["trackClassThresholds"]
+            if not isinstance(ct, dict):
+                return jsonify(err="trackClassThresholds must be an object mapping class→threshold"), 400
+            for cls, thr in ct.items():
+                if not isinstance(cls, str) or not cls:
+                    return jsonify(err="trackClassThresholds keys must be non-empty class names"), 400
+                if not isinstance(thr, (int, float)) or thr < 0.1 or thr > 0.95:
+                    return jsonify(err=f"trackClassThresholds['{cls}'] must be 0.1-0.95"), 400
         if "trackTtl" in body:
             v = body["trackTtl"]
             if not isinstance(v, (int, float)) or v < 1 or v > 60:
@@ -1668,7 +1680,8 @@ def api_fixture_update(fid):
               "rotation", "orientation", "mountedInverted", "aoeRadius", "meshFile",
               "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId",
               "fovDeg", "fovType", "cameraUrl", "cameraIp", "cameraIdx", "resolutionW", "resolutionH",
-              "trackClasses", "trackFps", "trackThreshold", "trackTtl", "trackReidMm",
+              "trackClasses", "trackClassThresholds",
+              "trackFps", "trackThreshold", "trackTtl", "trackReidMm",
               "gyroChildId", "assignedMoverId", "gyroEnabled", "smoothing"):
         if k in body:
             # #Q12 — normalise fovType on write so stored value is always in
@@ -7116,9 +7129,13 @@ def api_camera_track_start(fid):
     local_ip = _get_local_ip()
     port = request.host.split(":")[-1] if ":" in request.host else "8080"
     classes = body.get("classes", f.get("trackClasses", ["person"]))
+    # #423 — per-class threshold override forwarded from the fixture
+    # config (trackClassThresholds). Missing classes fall back to the
+    # global trackThreshold on the camera node side.
+    class_thresholds = body.get("classThresholds") or f.get("trackClassThresholds")
     try:
         import urllib.request as _ur
-        req_data = json.dumps({
+        payload = {
             "cam": body.get("cam", 0),
             "orchestratorUrl": f"http://{local_ip}:{port}",
             "cameraId": fid,
@@ -7128,7 +7145,10 @@ def api_camera_track_start(fid):
             "classes": classes,
             "reidMm": body.get("reidMm", f.get("trackReidMm", 500)),
             "inputSize": body.get("inputSize", f.get("trackInputSize", 320)),
-        }).encode()
+        }
+        if class_thresholds:
+            payload["classThresholds"] = class_thresholds
+        req_data = json.dumps(payload).encode()
         req = _ur.Request(f"http://{ip}:5000/track/start",
                           data=req_data,
                           headers={"Content-Type": "application/json"})

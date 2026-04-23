@@ -92,13 +92,21 @@ class ObjectDetector:
             self._session.setInput(blob)
             return self._session.forward()
 
-    def detect(self, frame, threshold=0.5, classes=None, input_size=640):
+    def detect(self, frame, threshold=0.5, classes=None, input_size=640,
+               class_thresholds=None):
         """Run YOLOv8n detection on a BGR frame.
 
         Args:
             frame: numpy array (H, W, 3) BGR
-            threshold: confidence threshold (0.0-1.0)
+            threshold: default confidence threshold (0.0-1.0)
             classes: list of class names to include (None = all)
+            class_thresholds: optional dict of {class_name: threshold}
+                overriding `threshold` per class. #423 — YOLOv8n scores
+                furniture classes (chair, couch, dining table) in the
+                0.2-0.35 band; a global 0.4 threshold kills them while
+                a person-only rig is happy at 0.5. Per-class thresholds
+                let the operator lower the floor just for the class
+                that needs it.
             input_size: pre-resize cap (320 = downscale first for speed, 640 = full detail)
 
         Returns:
@@ -145,10 +153,21 @@ class ObjectDetector:
             # Transpose to (N, 84)
             preds = outputs[0].T  # (N, 84)
 
-            # Filter by confidence
+            # Filter by confidence. #423 — if class_thresholds is set
+            # we pre-filter at the minimum of any configured threshold
+            # so lower-floor classes (e.g. chair at 0.25) have material
+            # to survive the class-aware post-filter below.
             class_scores = preds[:, 4:]  # (N, 80)
             max_scores = np.max(class_scores, axis=1)
-            mask = max_scores >= threshold
+            min_pre_threshold = float(threshold)
+            if class_thresholds:
+                try:
+                    min_pre_threshold = min(
+                        min_pre_threshold,
+                        *(float(v) for v in class_thresholds.values()))
+                except Exception:
+                    pass
+            mask = max_scores >= min_pre_threshold
             preds = preds[mask]
             max_scores = max_scores[mask]
 
@@ -181,6 +200,14 @@ class ObjectDetector:
                 # Apply class filter
                 if classes and label not in classes:
                     continue
+                # #423 — per-class threshold enforcement. If the caller
+                # supplied a class-specific threshold, enforce it here
+                # (the pre-NMS mask ran at min(thresholds) so enough
+                # candidates survived for this per-label decision).
+                if class_thresholds:
+                    cls_thr = float(class_thresholds.get(label, threshold))
+                    if float(max_scores[i]) < cls_thr:
+                        continue
 
                 # Rescale from letterboxed coords to original image
                 total_scale = scale * pre_scale

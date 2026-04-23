@@ -429,7 +429,134 @@ img { max-width: 100%; border: 1px solid #1e293b; border-radius: 4px; margin: .8
 </tr>
 </tbody>
 </table>
-<h3 id="editeur-de-profils">Editeur de profils</h3>
+<h3 id="editeur-de-profils-pas-a-pas-527">Editeur de profils — pas a pas (#527)</h3>
+<p>L'editeur de profils relie un canal DMX a ce qu'il <em>fait</em> — ce canal rouge<br />
+ici, ce canal pan la — et consigne tout comportement attendu par le<br />
+micrologiciel du projecteur sur chaque canal (plages de gobos, courbes<br />
+de stroboscope, emplacements de roue de couleurs). Une fois le profil<br />
+enregistre, tout l'orchestrateur peut piloter le projecteur par appels<br />
+semantiques tels que "regler la couleur sur rouge" ou "viser la scene<br />
+(1150, 2100)" au lieu de DMX brut.</p>
+<h4 id="1-ou-le-trouver">1. Ou le trouver</h4>
+<p>Onglet Parametres puis sous-section <strong>Profils</strong>. La liste affiche tous<br />
+les profils integres et personnalises, filtrables par categorie<br />
+(par / wash / spot / lyre / laser / effet). Chaque ligne comporte :</p>
+<ul>
+<li><strong>Modifier</strong> — ouvre l'editeur sur le profil selectionne (desactive<br />
+  pour les profils integres ; clonez d'abord si vous voulez diverger).</li>
+<li><strong>Cloner</strong> — copie un profil integre ou communautaire dans votre<br />
+  bibliotheque locale sous un nouvel id ; la copie est modifiable.</li>
+<li><strong>Partager</strong> — televerse un profil personnalise vers le serveur<br />
+  communautaire (necessite Internet, debit limite par IP).</li>
+<li><strong>Supprimer</strong> — retire un profil personnalise (les profils integres<br />
+  ne peuvent pas etre supprimes).</li>
+</ul>
+<p>Cliquez sur <strong>Nouveau profil</strong> pour demarrer l'editeur sur un profil<br />
+vierge. Vous pouvez aussi atteindre l'editeur depuis la carte d'un<br />
+projecteur DMX en cliquant sur le nom du profil sous le bouton<br />
+<strong>Modifier le profil</strong>.</p>
+<h4 id="2-champs-de-haut-niveau">2. Champs de haut niveau</h4>
+<ul>
+<li><strong>Nom</strong> — libelle visible par l'operateur affiche sur les cartes de<br />
+  projecteur et dans le selecteur de profils.</li>
+<li><strong>Fabricant</strong> — texte libre ; utilise pour le regroupement dans le<br />
+  navigateur communautaire et pour la deduplication.</li>
+<li><strong>Categorie</strong> — <code>par</code>, <code>wash</code>, <code>spot</code>, <code>moving-head</code>, <code>laser</code>,<br />
+<code>effect</code>, <code>other</code>. Pilote le generateur de spectacles predefinis.</li>
+<li><strong>Nombre de canaux</strong> — total des emplacements DMX utilises.<br />
+  Mis a jour automatiquement en ajoutant des canaux ; aussi reglable<br />
+  explicitement.</li>
+<li><strong>Mode couleur</strong> — <code>rgb</code>, <code>cmy</code>, <code>rgbw</code>, <code>rgba</code>, <code>single</code> (variateur<br />
+  monochrome) ou <code>color-wheel-only</code>. Pilote la maniere dont le moteur<br />
+  de spectacles resout une couleur demandee.</li>
+<li><strong>Plage pan</strong> / <strong>Plage tilt</strong> — balayage mecanique maximal en<br />
+  degres. Utilise par la calibration des lyres pour normaliser<br />
+  DMX vers angle.</li>
+<li><strong>Largeur du faisceau</strong> — degres du cone de faisceau. Utilise pour<br />
+  le rendu 3D du cone et pour la prediction de couverture de<br />
+  marqueurs.</li>
+</ul>
+<h4 id="3-canaux">3. Canaux</h4>
+<p>Chaque canal comporte :</p>
+<ul>
+<li><strong>Offset</strong> — numero de canal 0-indexe au sein de la plage d'adresses<br />
+  du projecteur (pas de l'univers). Un projecteur 16 canaux a les<br />
+  offsets 0..15.</li>
+<li><strong>Nom</strong> — libelle visible par l'operateur. Correspond a la<br />
+  documentation du projecteur.</li>
+<li><strong>Type</strong> — le role <em>semantique</em>. Types courants :<br />
+<code>pan</code>, <code>pan-fine</code>, <code>tilt</code>, <code>tilt-fine</code>, <code>dimmer</code>, <code>red</code>, <code>green</code>,<br />
+<code>blue</code>, <code>white</code>, <code>amber</code>, <code>uv</code>, <code>color-wheel</code>, <code>gobo</code>, <code>prism</code>,<br />
+<code>focus</code>, <code>zoom</code>, <code>frost</code>, <code>strobe</code>, <code>macro</code>, <code>reset</code>.<br />
+  Le type est ce que le code en aval lit quand il veut controler "le<br />
+  variateur" — vous pouvez renommer le canal mais le type est le<br />
+  contrat.</li>
+<li><strong>Bits</strong> — 8 (un emplacement DMX) ou 16 (deux emplacements :<br />
+  grossier a cet offset + fin a offset+1). Utilisez 16 bits pour pan<br />
+  et tilt si le projecteur le supporte ; le reste est generalement<br />
+  8 bits.</li>
+<li><strong>Par defaut</strong> — valeur que le moteur ecrit lorsqu'aucun effet ne<br />
+  remplace le canal. Laissez vide pour "mettre a 0 au repos".<br />
+  Utilisez une valeur non nulle pour les canaux que le projecteur<br />
+  doit avoir actifs pour fonctionner (par exemple une macro<br />
+  d'allumage de lampe, un emplacement shutter-ouvert).</li>
+</ul>
+<h4 id="4-capacites">4. Capacites</h4>
+<p>Chaque canal peut porter une liste de capacites qui decrivent ce que<br />
+signifient les plages de valeurs DMX pour le projecteur :</p>
+<ul>
+<li><strong>WheelSlot</strong> — position de roue de couleurs ou de gobos. Plage<br />
+<code>[min, max]</code>, libelle (<code>"Rouge"</code>, <code>"Ouvert"</code>, <code>"Motif 3"</code>) et — pour<br />
+  les roues de couleurs — une <strong>hex <code>color</code></strong> optionnelle comme<br />
+<code>#FF0000</code>. Le resolveur RGB vers emplacement de l'orchestrateur<br />
+  (utilise par la compilation de spectacle et la calibration des<br />
+  lyres) choisit l'emplacement le plus proche par distance<br />
+  euclidienne en espace RGB ; chaque emplacement etiquete couleur a<br />
+  donc besoin que sa hex soit renseignee. Sans la hex, le pipeline<br />
+  RGB retombe silencieusement sur l'emplacement 0 (blanc/ouvert),<br />
+  ce qui est le piege du #624.</li>
+<li><strong>WheelRotation</strong> — plage de roue rotative pour les effets de cycle<br />
+  (<code>"Cycle CW rapide-lent"</code>, <code>"Cycle CCW lent-rapide"</code>).</li>
+<li><strong>WheelShake</strong> — plages de tremblement sur les roues de gobos.</li>
+<li><strong>ShutterStrobe</strong> — plage avec un <code>shutterEffect</code> de <code>"Open"</code>,<br />
+<code>"Closed"</code> ou <code>"Strobe"</code>. L'aide "ouvrir le shutter pendant la<br />
+  calibration" de l'orchestrateur parcourt ces capacites pour<br />
+  trouver la bonne valeur DMX.</li>
+<li><strong>Prism</strong>, <strong>PrismRotation</strong>, <strong>Effect</strong>, <strong>NoFunction</strong> — meme<br />
+  modele : <code>range</code>, libelle, champs specifiques au type optionnels.</li>
+</ul>
+<p>Chaque ligne de capacite vous laisse choisir le type dans une liste<br />
+deroulante, definir <code>min</code>/<code>max</code>, ajouter un libelle et (pour<br />
+<code>WheelSlot</code> sur les roues de couleurs) une pastille hex.</p>
+<h4 id="5-enregistrer-et-partager">5. Enregistrer et partager</h4>
+<ul>
+<li><strong>Enregistrer</strong> persiste le profil vers<br />
+<code>desktop/shared/data/dmx_profiles/</code> (gitignore par installation)<br />
+  et met a jour la liste du SPA.</li>
+<li><strong>Partager avec la communaute</strong> televerse le JSON du profil vers le<br />
+  serveur electricrv.ca. Le serveur deduplique par empreinte de<br />
+  canaux ; soumettre un profil deja televerse produit une reponse<br />
+  "ce projecteur est deja couvert" avec un lien vers l'entree<br />
+  existante.</li>
+<li><strong>Exporter</strong> telecharge tous les profils personnalises en un seul<br />
+  bundle JSON. Utilisez ceci pour transferer une bibliotheque de<br />
+  profils entre installations sans passer par le serveur<br />
+  communautaire.</li>
+</ul>
+<h4 id="6-quand-creer-le-sien-vs-importer-depuis-ofl">6. Quand creer le sien vs importer depuis OFL</h4>
+<ul>
+<li><strong>Importer depuis OFL</strong> d'abord — plus de 700 projecteurs s'y<br />
+  trouvent deja, et importer est a un clic. Les benevoles de l'Open<br />
+  Fixture Library ont passe des annees a curer les listes de<br />
+  capacites.</li>
+<li><strong>Cloner et modifier</strong> si le projecteur est proche d'un profil OFL<br />
+  mais qu'un canal ou deux different (mise a jour de micrologiciel,<br />
+  variante de mode).</li>
+<li><strong>Creer de zero</strong> uniquement quand le projecteur n'est<br />
+  vraiment ni dans OFL ni dans la communaute. Quand vous avez<br />
+  termine, partagez-le pour que personne d'autre n'ait a le refaire.</li>
+</ul>
+<h3 id="reference-rapide-heritee">Reference rapide heritee</h3>
 <p>Onglet Parametres puis <strong>Profils</strong> puis <strong>Nouveau profil</strong> ou <strong>Modifier</strong> :<br />
 - Definir les canaux avec nom, type (rouge/vert/bleu/variateur/pan/tilt/etc.), valeur par defaut<br />
 - Definir la largeur du faisceau, la plage pan/tilt pour les lyres<br />

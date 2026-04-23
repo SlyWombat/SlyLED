@@ -2042,6 +2042,9 @@ def track_start():
     threshold = body.get("threshold", 0.4)
     ttl = body.get("ttl", 5)
     classes = body.get("classes", ["person"])
+    # #423 — per-class threshold override (e.g. {"chair": 0.25}). Falls
+    # back to the global threshold when a class isn't listed.
+    class_thresholds = body.get("classThresholds") or None
     reid_mm = body.get("reidMm", 500)
     input_size = body.get("inputSize", 320)
 
@@ -2065,7 +2068,8 @@ def track_start():
 
     tracker.start(device, orch_url=orch_url,
                   camera_id=camera_id, fps=fps, threshold=threshold, ttl=ttl,
-                  classes=classes, reid_mm=reid_mm, input_size=input_size)
+                  classes=classes, class_thresholds=class_thresholds,
+                  reid_mm=reid_mm, input_size=input_size)
     # Wait briefly and verify the tracker thread actually started (#378)
     import time as _t
     _t.sleep(0.3)

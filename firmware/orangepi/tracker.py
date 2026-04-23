@@ -37,6 +37,7 @@ class Tracker:
         self._threshold = 0.4
         self._ttl = 5
         self._classes = ["person"]
+        self._class_thresholds = None  # #423 — per-class threshold override
         self._reid_mm = REID_THRESHOLD_MM
         self._running = False
         self._thread = None
@@ -72,7 +73,8 @@ class Tracker:
 
     def start(self, device, orch_url="", camera_id=0,
               fps=2, threshold=0.4, ttl=5,
-              classes=None, reid_mm=None, input_size=None):
+              classes=None, reid_mm=None, input_size=None,
+              class_thresholds=None):
         """Start tracking loop on the given camera device."""
         if self._running:
             return
@@ -82,6 +84,7 @@ class Tracker:
         self._threshold = threshold
         self._ttl = ttl
         self._classes = classes if classes else ["person"]
+        self._class_thresholds = dict(class_thresholds) if class_thresholds else None
         self._reid_mm = reid_mm if reid_mm is not None else REID_THRESHOLD_MM
         self._input_size = input_size if input_size else 320
         self._running = True
@@ -179,9 +182,11 @@ class Tracker:
         self._capture_fail_count = 0
 
         # Run detection
-        detections, _ = self._detector.detect(frame, threshold=self._threshold,
-                                                classes=self._classes,
-                                                input_size=self._input_size)
+        detections, _ = self._detector.detect(
+            frame, threshold=self._threshold,
+            classes=self._classes,
+            class_thresholds=self._class_thresholds,
+            input_size=self._input_size)
         if not detections:
             return
         self._detect_count += len(detections)
