@@ -411,3 +411,32 @@ review §8.1 (static-reading round) and §8.3 (live-test resolution).
 To be filled in after §8 lands. Mirrors camera review §12 — a place
 for ideas surfaced during the review that aren't in the immediate fix
 list but are worth scheduling.
+
+### 12.1 Velocity-lead / velocity-lag aim (future)
+
+Once tracked temporal objects expose a **motion vector** (direction +
+speed) — planned as a camera-pipeline enhancement — the Fn 1 aim
+logic gets a lead/lag modifier "for free" under the capability layer
+(§0). The moving head simply locks onto a **projected anchor**:
+
+```
+lead_anchor = obj.anchor(aimTarget) + motion_vector * lead_seconds
+```
+
+`lead_seconds` becomes a per-Track-action parameter:
+- **Positive lead** → spot arrives ahead of the performer (dramatic
+  "the light is chasing them" or "the light is waiting for them").
+- **Zero** → current behaviour (lock on current position).
+- **Negative lead** → spot trails behind (comet tail, "where they
+  were a moment ago").
+
+No new aim primitive is required — `ParametricFixtureModel.inverse`
+still takes a stage-mm point; the caller just hands it a
+velocity-projected point instead of the raw anchor. This is the kind
+of feature the capability layer (§0) is designed to make trivial:
+aim direction is a pure function of `(fixture_pose, target_point)`,
+and `target_point` can be any function of the tracked object's
+state.
+
+Depends on: temporal object ingest publishing a stable motion vector
+(camera-pipeline scope, not moving-head scope).
