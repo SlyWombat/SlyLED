@@ -500,6 +500,73 @@ function _calWizStart(){
   _loadCamCalStatus();
 }
 
+
+// Q13-P3 — camera-health dashboard. Composes the calibration-status
+// endpoint (tier / rms / marker count / timestamp) for every camera
+// into an inline panel below the fixtures list. Toggles open/closed.
+var _camHealthOpen=false;
+function showCameraHealth(){
+  var panel=document.getElementById('cam-health-panel');
+  if(!panel){
+    // First call — inject container below the fixtures panel.
+    var parent=(document.getElementById('lay-fixtures')||document.body).parentNode;
+    panel=document.createElement('div');
+    panel.id='cam-health-panel';
+    panel.style.cssText='margin-top:.6em;padding:.5em;border:1px solid #1e293b;border-radius:6px;background:#0f172a;display:none';
+    parent.appendChild(panel);
+  }
+  _camHealthOpen=!_camHealthOpen;
+  if(!_camHealthOpen){panel.style.display='none';return;}
+  panel.style.display='block';
+  var cams=(_fixtures||[]).filter(function(f){return f.fixtureType==='camera';});
+  if(!cams.length){
+    panel.innerHTML='<p style="color:#94a3b8;font-size:.82em">No cameras registered yet.</p>';
+    return;
+  }
+  var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.4em">'
+    +'<b style="color:#cbd5e1;font-size:.82em">Camera Health</b>'
+    +'<button class="btn" onclick="showCameraHealth()" style="font-size:.7em;padding:.1em .4em">Close</button></div>';
+  h+='<div style="font-size:.75em;color:#94a3b8;margin-bottom:.4em">Per-camera cal tier and fit quality. Run stage-map to update.</div>';
+  h+='<table class="tbl" style="width:100%;font-size:.78em"><tr>'
+    +'<th>Camera</th><th>Tier</th><th>Markers</th><th>RMS (px)</th>'
+    +'<th>Intrinsics</th><th>Pos</th><th>Last Cal</th></tr>';
+  cams.forEach(function(cam){
+    h+='<tr id="camhealth-row-'+cam.id+'"><td>'+escapeHtml(cam.name||('cam '+cam.id))+'</td>'
+      +'<td colspan="6" style="color:#64748b">loading...</td></tr>';
+  });
+  h+='</table>';
+  panel.innerHTML=h;
+  // Populate each row async via /api/cameras/<fid>/calibration-status.
+  cams.forEach(function(cam){
+    ra('GET','/api/cameras/'+cam.id+'/calibration-status',null,function(r){
+      var row=document.getElementById('camhealth-row-'+cam.id);
+      if(!row)return;
+      if(!r||!r.ok){
+        row.innerHTML='<td>'+escapeHtml(cam.name||('cam '+cam.id))+'</td>'
+          +'<td colspan="6" style="color:#f87171">'+escapeHtml((r&&r.err)||'query failed')+'</td>';
+        return;
+      }
+      var tierBg = r.tier==='homography'?'#065f46':r.tier==='fov-projection'?'#78350f':'#7f1d1d';
+      var tierFg = r.tier==='homography'?'#34d399':r.tier==='fov-projection'?'#fbbf24':'#fca5a5';
+      var tierBadge = '<span style="background:'+tierBg+';color:'+tierFg+';padding:1px 6px;border-radius:3px;font-size:.75em;text-transform:uppercase">'+escapeHtml(r.tier||'?')+'</span>';
+      var rms = (r.rmsError!=null?parseFloat(r.rmsError).toFixed(2):'—');
+      var rmsColor = r.rmsError!=null?(r.rmsError<2?'#4ade80':r.rmsError<10?'#fbbf24':'#f87171'):'#64748b';
+      var markers = (r.markersMatched!=null?r.markersMatched:'—');
+      var intr = r.intrinsicSource||'—';
+      var intrColor = intr==='calibrated'?'#4ade80':'#fbbf24';
+      var pos = r.hasPosition?'<span style="color:#4ade80">✓</span>':'<span style="color:#f87171">✗</span>';
+      var ts = r.timestamp?(new Date(r.timestamp*1000)).toLocaleString():'—';
+      row.innerHTML='<td>'+escapeHtml(cam.name||('cam '+cam.id))+'</td>'
+        +'<td>'+tierBadge+'</td>'
+        +'<td>'+markers+'</td>'
+        +'<td style="color:'+rmsColor+';font-family:monospace">'+rms+'</td>'
+        +'<td style="color:'+intrColor+';font-size:.8em">'+escapeHtml(intr)+'</td>'
+        +'<td>'+pos+'</td>'
+        +'<td style="font-size:.78em;color:#94a3b8">'+escapeHtml(ts)+'</td>';
+    });
+  });
+}
+
 function _calWizNext(){
   if(_calWiz.step<6)_calWiz.step++;
   if(_calWiz.step===4){

@@ -20,6 +20,12 @@ function renderFixturesSidebar(){
   var el=document.getElementById('lay-fixtures');if(!el)return;
   if(!_fixtures.length){el.innerHTML='<p style="color:#555;font-size:.82em">No fixtures. Add fixtures in the Setup tab.</p>';return;}
   var h='';
+  // Q13 — one-click Camera Health readout for all cameras.
+  if(_fixtures.some(function(f){return f.fixtureType==='camera';})){
+    h+='<div style="margin-bottom:.3em;display:flex;justify-content:flex-end">'
+      +'<button class="btn" onclick="showCameraHealth()" style="font-size:.72em;padding:.15em .5em" title="Show tier/RMS/marker count for every registered camera">Camera Health</button>'
+      +'</div>';
+  }
   // Unplaced fixtures first (draggable)
   var unplaced=_fixtures.filter(function(f){return !_isFixturePlaced(f);});
   if(unplaced.length){
