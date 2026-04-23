@@ -601,6 +601,13 @@ is where the §7.2 pinhole simulation lives.
   magnitude (±0.02 vs ±0.01) on real-rig noise — the new synthetic
   test quantifies the pixel-noise floor; §7.1 confirms the hardware
   number.
+- **Corroborating artifact.** `tests/test_parametric_mover.py:155`
+  (`test_fit_recovers_ground_truth`) fails on this branch under the
+  current `fit_model` (97/98 assertions; `pan_offset` lands at 0.56
+  vs asserted 0.48). The scipy `least_squares` warning on the same
+  run is the exact mirror-ambiguity message quoted above. This
+  pre-existing failure is evidence of the silent-mirror cost; closing
+  Q3 in implementation will also repair it.
 
 #### Q4 — Per-phase timeouts / circuit breakers
 
