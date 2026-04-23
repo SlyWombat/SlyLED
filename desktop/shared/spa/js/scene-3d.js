@@ -115,23 +115,26 @@ function s3dInit(){
   });
   _s3d.scene.add(_s3d.tctl);
 
-  // Ground grid
+  // Ground grid — visibility honours persisted _layShowGrid (#638)
   var grid=new THREE.GridHelper(20,20,0x1a2744,0x111828);
   grid.userData.isGrid=true;
+  grid.visible=_layShowGrid;
   _s3d.scene.add(grid);
 
   // Axis helper at origin (0,0,0) — stage corner
   var axes=new THREE.AxesHelper(0.5);
   axes.userData.isGrid=true;
+  axes.visible=_layShowGrid;
   _s3d.scene.add(axes);
   var originLbl=_s3dLabel('Origin (0,0,0)');
   originLbl.position.set(0,-0.08,0);
   originLbl.userData.isLabel=true;
+  originLbl.visible=_layShowLabels;
   _s3d.scene.add(originLbl);
   // Axis labels match stage coords: X=width, Y=depth(3D Z), Z=height(3D Y)
-  var xLbl=_s3dLabel('X');xLbl.position.set(0.6,0.05,0);xLbl.userData.isLabel=true;_s3d.scene.add(xLbl);
-  var zLbl=_s3dLabel('Z');zLbl.position.set(0,0.6,0);zLbl.userData.isLabel=true;_s3d.scene.add(zLbl);   // 3D Y-up = stage Z(height)
-  var yLbl=_s3dLabel('Y');yLbl.position.set(0,0.05,0.6);yLbl.userData.isLabel=true;_s3d.scene.add(yLbl); // 3D Z = stage Y(depth)
+  var xLbl=_s3dLabel('X');xLbl.position.set(0.6,0.05,0);xLbl.userData.isLabel=true;xLbl.visible=_layShowLabels;_s3d.scene.add(xLbl);
+  var zLbl=_s3dLabel('Z');zLbl.position.set(0,0.6,0);zLbl.userData.isLabel=true;zLbl.visible=_layShowLabels;_s3d.scene.add(zLbl);   // 3D Y-up = stage Z(height)
+  var yLbl=_s3dLabel('Y');yLbl.position.set(0,0.05,0.6);yLbl.userData.isLabel=true;yLbl.visible=_layShowLabels;_s3d.scene.add(yLbl); // 3D Z = stage Y(depth)
 
   // Ambient + directional light
   _s3d.scene.add(new THREE.AmbientLight(0x334466,0.8));
@@ -161,8 +164,14 @@ function s3dInit(){
 
   _s3d.inited=true;
   s3dAnimate();
-  // Apply default 3D view after init
-  setView('3d');
+  // Apply saved view preset (default '3d'); #638 persists across reloads.
+  setView(_layView||'3d');
+  // #638 — restore Point Cloud visibility if the saved pref says it was on.
+  // _togglePointCloud handles the case where no scan data exists (silent
+  // no-op) and re-syncs the checkbox.
+  if(_viewPrefs&&_viewPrefs.cloud){
+    try{_togglePointCloud();}catch(e){}
+  }
   // Start polling remote-orientation state for debug viz (#484 phase 3)
   s3dPollRemotes();
   // Live fixture aim — keeps the beam cones honest when a mover moves.
@@ -194,6 +203,7 @@ function _s3dSwitchCamera(cam){
 
 function setView(view){
   _layView=view;
+  try{localStorage.setItem('slyled-layout-view',view);}catch(e){}
   if(!_s3d.inited){s3dInit();if(!_s3d.inited)return;}
   var sw=_s3d.stageW||10,sh=_s3d.stageH||5,sd=_s3d.stageD||10;
   var el=document.getElementById('stage3d');
@@ -373,6 +383,7 @@ function s3dLoadChildren(){
     var boxLine=new THREE.LineSegments(boxEdge,new THREE.LineBasicMaterial({color:0x1e3a5f,opacity:0.4,transparent:true}));
     boxLine.position.set(_s3d.stageW/2,_s3d.stageH/2,_s3d.stageD/2);
     boxLine.userData.stageBox=true;
+    boxLine.visible=_layShowStageBox; // #638 — persist across tab-switch rebuilds
     _s3d.scene.add(boxLine);
 
     // Stage dimension labels along edges
@@ -380,9 +391,9 @@ function s3dLoadChildren(){
       if(c.material&&c.material.map)c.material.map.dispose();if(c.material)c.material.dispose();_s3d.scene.remove(c);
     }});
     var sw=_s3d.stageW,sh=_s3d.stageH,sd=_s3d.stageD;
-    var wLbl=_s3dLabel(Math.round(sw*1000)+'mm');wLbl.position.set(sw/2,-0.15,0);wLbl.userData.stageDimLabel=true;wLbl.scale.set(0.6,0.15,1);_s3d.scene.add(wLbl);
-    var dLbl=_s3dLabel(Math.round(sd*1000)+'mm');dLbl.position.set(0,-0.15,sd/2);dLbl.userData.stageDimLabel=true;dLbl.scale.set(0.6,0.15,1);_s3d.scene.add(dLbl);
-    var hLbl=_s3dLabel(Math.round(sh*1000)+'mm');hLbl.position.set(-0.15,sh/2,0);hLbl.userData.stageDimLabel=true;hLbl.scale.set(0.6,0.15,1);_s3d.scene.add(hLbl);
+    var wLbl=_s3dLabel(Math.round(sw*1000)+'mm');wLbl.position.set(sw/2,-0.15,0);wLbl.userData.stageDimLabel=true;wLbl.scale.set(0.6,0.15,1);wLbl.visible=_layShowLabels;_s3d.scene.add(wLbl);
+    var dLbl=_s3dLabel(Math.round(sd*1000)+'mm');dLbl.position.set(0,-0.15,sd/2);dLbl.userData.stageDimLabel=true;dLbl.scale.set(0.6,0.15,1);dLbl.visible=_layShowLabels;_s3d.scene.add(dLbl);
+    var hLbl=_s3dLabel(Math.round(sh*1000)+'mm');hLbl.position.set(-0.15,sh/2,0);hLbl.userData.stageDimLabel=true;hLbl.scale.set(0.6,0.15,1);hLbl.visible=_layShowLabels;_s3d.scene.add(hLbl);
 
     // Camera positioning is handled by setView() — don't reset on every reload
 
@@ -593,6 +604,7 @@ function _s3dRenderObjects(){
     var grp=new THREE.Group();
     grp.userData.stageObj=true;
     grp.userData.stageObjId=s.id;
+    grp.visible=_layShowStageObjs; // #638 — persist across tab-switch rebuilds
     // Stage→Three.js: X→X, Y(depth)→Z, Z(height)→Y (#369)
     grp.position.set((t.pos[0]||0)/1000,(t.pos[2]||0)/1000,(t.pos[1]||0)/1000);
 
@@ -675,6 +687,7 @@ function _s3dRenderArucoMarkers(){
     var grp=new THREE.Group();
     grp.userData.arucoMarker=true;
     grp.userData.markerId=m.id;
+    grp.visible=_layShowAruco; // #638 — honour ArUco toggle on rebuild
     // Small flat square on the floor; elevated slightly so it's not
     // z-fighting with the stage grid.
     var sz=(m.size||150)/1000;
@@ -693,6 +706,7 @@ function _s3dRenderArucoMarkers(){
   if(rec&&rec.suggestedPlacement){
     var grp=new THREE.Group();
     grp.userData.arucoRecommend=true;
+    grp.visible=_layShowAruco; // #638 — same toggle as ArUco markers
     var p=rec.suggestedPlacement;
     grp.position.set((p.x||0)/1000,(p.z||0)/1000,(p.y||0)/1000);
     // Magenta cone pointing up.
@@ -1022,9 +1036,27 @@ function layAlign(axis,mode){
 }
 
 // ── View preferences + toggles ─────────────────────────────────────────────
-// View prefs — loaded from localStorage, defaults per #255
-var _viewDefaults={strings:true,lightCones:false,camCones:false,orient:true,cloud:false,grid:true,labels:true,stageBox:true};
-var _viewPrefs=(function(){try{return Object.assign({},_viewDefaults,JSON.parse(localStorage.getItem('slyled-view-prefs')));}catch(e){return Object.assign({},_viewDefaults);}})();
+// #255 introduced the Layout view dropdown.
+// #638 added aruco + stageObjects toggles and fixed apply-on-build bugs.
+// #639 extended saved prefs to Dashboard + Runtime viewports — three
+// independent contexts, each with its own localStorage key and defaults
+// tuned to that tab's purpose (authoring vs monitoring vs show).
+var _viewDefaultsByCtx={
+  layout:  {strings:true, lightCones:false,camCones:false,orient:true, cloud:false,grid:true, labels:true, stageBox:true, aruco:true, stageObjects:true},
+  dash:    {strings:true, lightCones:true, camCones:false,orient:false,cloud:false,grid:false,labels:true, stageBox:false,aruco:false,stageObjects:true},
+  runtime: {strings:true, lightCones:true, camCones:false,orient:false,cloud:false,grid:false,labels:false,stageBox:false,aruco:false,stageObjects:true}
+};
+var _viewCtxKey={layout:'slyled-view-prefs',dash:'slyled-view-prefs-dash',runtime:'slyled-view-prefs-runtime'};
+function _loadCtxPrefs(ctx){
+  try{return Object.assign({},_viewDefaultsByCtx[ctx],JSON.parse(localStorage.getItem(_viewCtxKey[ctx])));}
+  catch(e){return Object.assign({},_viewDefaultsByCtx[ctx]);}
+}
+var _viewPrefsByCtx={layout:_loadCtxPrefs('layout'),dash:_loadCtxPrefs('dash'),runtime:_loadCtxPrefs('runtime')};
+var _viewCtx='layout';
+// _viewDefaults + _viewPrefs remain as references to the CURRENTLY ACTIVE
+// context so existing scene-build and toggle sites work unchanged.
+var _viewDefaults=_viewDefaultsByCtx.layout;
+var _viewPrefs=_viewPrefsByCtx.layout;
 var _layShowStrings=_viewPrefs.strings;
 var _layShowCones=_viewPrefs.lightCones;
 function _layConesToggle(){
@@ -1049,29 +1081,109 @@ function _layDetailToggle(){
   }
 }
 
-// ── View dropdown (#255) ──
+// ── View dropdown (#255, #638, #639) ──
+// _viewSave writes to the ACTIVE context's localStorage key so Dashboard,
+// Runtime and Layout can have independent prefs (#639).
 function _viewSave(){
-  _viewPrefs={strings:_layShowStrings,lightCones:_layShowCones,camCones:_layShowCamCones,orient:_layShowOrient,cloud:!!document.getElementById('vw-cloud')&&document.getElementById('vw-cloud').checked,grid:_layShowGrid,labels:_layShowLabels,stageBox:_layShowStageBox};
-  localStorage.setItem('slyled-view-prefs',JSON.stringify(_viewPrefs));
+  var p={strings:_layShowStrings,lightCones:_layShowCones,camCones:_layShowCamCones,orient:_layShowOrient,cloud:!!document.getElementById('vw-cloud')&&document.getElementById('vw-cloud').checked,grid:_layShowGrid,labels:_layShowLabels,stageBox:_layShowStageBox,aruco:_layShowAruco,stageObjects:_layShowStageObjs};
+  _viewPrefs=p;
+  _viewPrefsByCtx[_viewCtx]=p;
+  try{localStorage.setItem(_viewCtxKey[_viewCtx],JSON.stringify(p));}catch(e){}
+}
+// #639 — activate a view context. Copies that context's saved prefs into
+// the module-level _layShow* scalars, traverses the shared 3D scene once
+// to re-apply all visibility flags, and syncs the dropdown checkboxes.
+function _setViewCtx(ctx){
+  if(ctx!=='layout'&&ctx!=='dash'&&ctx!=='runtime')return;
+  _viewCtx=ctx;
+  var p=_viewPrefsByCtx[ctx];
+  _viewPrefs=p;
+  _layShowStrings=p.strings;
+  _layShowCones=p.lightCones;
+  _layShowCamCones=p.camCones;
+  _layShowOrient=p.orient;
+  _layShowGrid=p.grid;
+  _layShowLabels=p.labels;
+  _layShowStageBox=p.stageBox;
+  _layShowAruco=p.aruco;
+  _layShowStageObjs=p.stageObjects;
+  _applyAllVisibility();
+  _viewSyncCheckboxes();
+}
+// #639 — single scene traversal that applies every ctx-controlled
+// visibility flag. Called when switching view contexts (tab change) so
+// the shared Three.js scene reflects the new context's saved prefs.
+function _applyAllVisibility(){
+  if(!_s3d||!_s3d.inited)return;
+  _s3d.scene.traverse(function(c){
+    if(!c.userData)return;
+    if(c.userData.ledString)c.visible=_layShowStrings;
+    if(c.userData.beamCone||c.userData.isAimPoint)c.visible=_layShowCones;
+    if(c.userData.cameraCone)c.visible=_layShowCamCones;
+    if(c.userData.orientArrow||c.userData.restArrow)c.visible=_layShowOrient;
+    if(c.type==='GridHelper'||c.userData.isGrid)c.visible=_layShowGrid;
+    if(c.userData.isLabel||c.userData.stageDimLabel)c.visible=_layShowLabels;
+    if(c.userData.stageBox)c.visible=_layShowStageBox;
+    if(c.userData.arucoMarker||c.userData.arucoRecommend)c.visible=_layShowAruco;
+    if(c.userData.stageObj)c.visible=_layShowStageObjs;
+  });
 }
 function _viewSyncCheckboxes(){
-  var m={strings:_layShowStrings,lightcones:_layShowCones,camcones:_layShowCamCones,orient:_layShowOrient,grid:_layShowGrid,labels:_layShowLabels,stagebox:_layShowStageBox};
+  var m={strings:_layShowStrings,lightcones:_layShowCones,camcones:_layShowCamCones,orient:_layShowOrient,grid:_layShowGrid,labels:_layShowLabels,stagebox:_layShowStageBox,aruco:_layShowAruco,stageobjs:_layShowStageObjs};
   for(var k in m){var cb=document.getElementById('vw-'+k);if(cb)cb.checked=m[k];}
   var cl=document.getElementById('vw-cloud');if(cl)cl.checked=!!_viewPrefs.cloud;
 }
+// #639 — the view dropdown floats above whichever tab is active. It
+// started inside Layout's toolbar but is re-parented to <body> on first
+// open so Dashboard/Runtime can also show it (their tab content hides
+// its siblings via display:none). All openers use fixed-position
+// placement against the clicked anchor button's bounding rect.
+function _positionViewDropdown(anchorBtn){
+  var dd=document.getElementById('view-dropdown');
+  if(!dd)return;
+  if(dd.parentNode!==document.body)document.body.appendChild(dd);
+  dd.style.position='fixed';
+  if(anchorBtn){
+    var r=anchorBtn.getBoundingClientRect();
+    dd.style.top=(r.bottom+4)+'px';
+    dd.style.left=Math.max(8,r.right-200)+'px';
+  }
+}
 function _toggleViewMenu(){
   var dd=document.getElementById('view-dropdown');
-  var show=dd.style.display==='none';
-  dd.style.display=show?'':'none';
-  if(show)_viewSyncCheckboxes();
+  if(!dd)return;
+  var show=dd.style.display==='none'||dd.style.display==='';
+  if(show){
+    _setViewCtx('layout');
+    _positionViewDropdown(document.getElementById('btn-view-menu'));
+    dd.style.display='block';
+    _viewSyncCheckboxes();
+  }else{
+    dd.style.display='none';
+  }
+}
+function _openViewMenuAt(ev,ctx){
+  if(ev&&ev.stopPropagation)ev.stopPropagation();
+  _setViewCtx(ctx);
+  var btn=(ev&&ev.currentTarget)||null;
+  _positionViewDropdown(btn);
+  var dd=document.getElementById('view-dropdown');
+  if(dd)dd.style.display='block';
+  _viewSyncCheckboxes();
 }
 document.addEventListener('click',function(e){
   var dd=document.getElementById('view-dropdown');
+  if(!dd)return;
   var btn=document.getElementById('btn-view-menu');
-  if(dd&&btn&&!dd.contains(e.target)&&!btn.contains(e.target))dd.style.display='none';
+  // #639 — also treat the overlay eye-icons on Dashboard/Runtime as
+  // toggle surfaces so clicking them doesn't dismiss the dropdown.
+  var isOverlay=e.target.closest&&e.target.closest('.view-overlay-btn');
+  if(!dd.contains(e.target)&&(!btn||!btn.contains(e.target))&&!isOverlay){
+    dd.style.display='none';
+  }
 });
 
-var _layShowCamCones=_viewPrefs.camCones,_layShowOrient=_viewPrefs.orient,_layShowGrid=_viewPrefs.grid,_layShowLabels=_viewPrefs.labels,_layShowStageBox=_viewPrefs.stageBox;
+var _layShowCamCones=_viewPrefs.camCones,_layShowOrient=_viewPrefs.orient,_layShowGrid=_viewPrefs.grid,_layShowLabels=_viewPrefs.labels,_layShowStageBox=_viewPrefs.stageBox,_layShowAruco=_viewPrefs.aruco,_layShowStageObjs=_viewPrefs.stageObjects;
 
 function _layCamConesToggle(){
   var cb=document.getElementById('vw-camcones');
@@ -1111,8 +1223,9 @@ function _layLabelsToggle(){
   if(_s3d.inited){
     // Only toggle sprites explicitly tagged as labels — rest-vector labels
     // are Sprites too but belong to the Orientation Vectors toggle (#529).
+    // #638 — stage dimension labels (stageDimLabel) also follow Labels.
     _s3d.scene.traverse(function(c){
-      if(c.userData&&c.userData.isLabel)c.visible=_layShowLabels;
+      if(c.userData&&(c.userData.isLabel||c.userData.stageDimLabel))c.visible=_layShowLabels;
     });
   }
 }
@@ -1123,6 +1236,28 @@ function _layStageBoxToggle(){
   if(_s3d.inited){
     _s3d.scene.traverse(function(c){
       if(c.userData&&c.userData.stageBox)c.visible=_layShowStageBox;
+    });
+  }
+}
+// #638 — ArUco marker overlay toggle
+function _layArucoToggle(){
+  var cb=document.getElementById('vw-aruco');
+  _layShowAruco=cb?cb.checked:!_layShowAruco;
+  _viewSave();
+  if(_s3d.inited){
+    _s3d.scene.traverse(function(c){
+      if(c.userData&&(c.userData.arucoMarker||c.userData.arucoRecommend))c.visible=_layShowAruco;
+    });
+  }
+}
+// #638 — Stage Objects toggle (music stands, static props, patrol targets)
+function _layStageObjsToggle(){
+  var cb=document.getElementById('vw-stageobjs');
+  _layShowStageObjs=cb?cb.checked:!_layShowStageObjs;
+  _viewSave();
+  if(_s3d.inited){
+    _s3d.scene.traverse(function(c){
+      if(c.userData&&c.userData.stageObj)c.visible=_layShowStageObjs;
     });
   }
 }

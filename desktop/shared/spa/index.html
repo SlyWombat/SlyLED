@@ -52,7 +52,10 @@
 </nav>
 
 <div id='t-dash' class='tab'>
-  <div id='dash-3d' style='width:100%;height:350px;background:#060a12;border:1px solid #1e293b;border-radius:4px;overflow:hidden'></div>
+  <div style='position:relative'>
+    <div id='dash-3d' style='width:100%;height:350px;background:#060a12;border:1px solid #1e293b;border-radius:4px;overflow:hidden'></div>
+    <button class='view-overlay-btn' onclick='_openViewMenuAt(event,"dash")' title='View options'><svg width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z'/><circle cx='12' cy='12' r='3'/></svg></button>
+  </div>
   <div id='dash-content' style='margin-top:.6em'><p style='color:#888'>Loading...</p></div>
   <div style='margin-top:.6em'>
     <div style='display:flex;align-items:center;gap:.6em;margin-bottom:.3em'>
@@ -108,6 +111,8 @@
         <label class='ali' style='display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer'><input type='checkbox' id='vw-grid' checked onchange='_layGridToggle()'> Grid</label>
         <label class='ali' style='display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer'><input type='checkbox' id='vw-labels' checked onchange='_layLabelsToggle()'> Labels</label>
         <label class='ali' style='display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer'><input type='checkbox' id='vw-stagebox' checked onchange='_layStageBoxToggle()'> Stage Box</label>
+        <label class='ali' style='display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer'><input type='checkbox' id='vw-aruco' checked onchange='_layArucoToggle()'> ArUco Markers</label>
+        <label class='ali' style='display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer'><input type='checkbox' id='vw-stageobjs' checked onchange='_layStageObjsToggle()'> Stage Objects</label>
       </div>
     </div>
     <span style='width:1px;height:22px;background:#333;margin:0 .15em'></span>
@@ -277,7 +282,10 @@
 <!-- ── Runtime tab (playback + playlist) ── -->
 <div id='t-runtime' class='tab' style='display:none'>
   <!-- 3D Stage Preview (hero) -->
-  <div id='emu-3d' style='width:100%;height:500px;border:1px solid #334155;background:#060a12;border-radius:4px;overflow:hidden;position:relative'></div>
+  <div style='position:relative'>
+    <div id='emu-3d' style='width:100%;height:500px;border:1px solid #334155;background:#060a12;border-radius:4px;overflow:hidden;position:relative'></div>
+    <button class='view-overlay-btn' onclick='_openViewMenuAt(event,"runtime")' title='View options'><svg width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z'/><circle cx='12' cy='12' r='3'/></svg></button>
+  </div>
   <div id='emu-time' style='font-size:.72em;color:#64748b;margin-top:.2em'></div>
   <!-- Show Playlist -->
   <div style='margin-top:.8em'>

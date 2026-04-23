@@ -238,6 +238,14 @@ function showTab(t){
   // Stop layout render loop if leaving layout
   if(ctab==='layout'&&t!=='layout'&&_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
   ctab=t;
+  // #639 — switch the 3D view context so each tab shows its own saved
+  // visibility prefs. Layout authoring, Dashboard monitoring, and
+  // Runtime playback want different overlays on the shared scene.
+  if(typeof _setViewCtx==='function'){
+    if(t==='layout')_setViewCtx('layout');
+    else if(t==='dash')_setViewCtx('dash');
+    else if(t==='runtime'||t==='shows')_setViewCtx('runtime');
+  }
   ['dash','setup','layout','actions','shows','runtime','settings','firmware'].forEach(function(id){
     var el=document.getElementById('t-'+id);
     if(el)el.style.display=id===t?'block':'none';
@@ -404,7 +412,7 @@ function showDetails(id){
 var _strCol=['#0ff','#f0f','#ff0','#0f0','#f80','#08f','#f08','#8f0'];
 var _dirDx=[1,0,-1,0],_dirDy=[0,-1,0,1]; // E,N,W,S in canvas-Y-down coords
 var _layDragId=null;
-var _layView='3d'; // 'front', 'top', 'side', '3d'
+var _layView=(function(){try{var v=localStorage.getItem('slyled-layout-view');return (v==='front'||v==='top'||v==='side'||v==='3d')?v:'3d';}catch(e){return '3d';}})(); // 'front', 'top', 'side', '3d' — persisted per #638
 
 function _isPlaced(c){return c.positioned||c._placed||(c.x>0||c.y>0||c.z>0);}
 

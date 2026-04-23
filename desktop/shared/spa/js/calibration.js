@@ -2435,19 +2435,33 @@ function _togglePointCloud(){
   var cb=document.getElementById('vw-cloud');
   var desired=cb?cb.checked:!_pointCloudVisible;
   if(!_pointCloudData){
-    if(!desired){_pointCloudVisible=false;_updateCloudBtn();return;}
+    if(!desired){_pointCloudVisible=false;_updateCloudBtn();_persistCloudPref(false);return;}
     _loadPointCloud(function(){
       if(!_pointCloudData){
         document.getElementById('hs').textContent='No point cloud — run environment scan first';
         if(cb)cb.checked=false;
+        _persistCloudPref(false);
+      }else{
+        _persistCloudPref(true);
       }
-      // _loadPointCloud already set _pointCloudVisible=true and rendered
     });
     return;
   }
   _pointCloudVisible=desired;
   if(_s3d.inited)_renderPointCloud();
   _updateCloudBtn();
+  _persistCloudPref(desired);
+}
+
+// #638 — persist point-cloud visibility directly (Bug 2: previously only
+// written when another toggle triggered _viewSave; could be lost on reload).
+function _persistCloudPref(visible){
+  try{
+    var raw=localStorage.getItem('slyled-view-prefs');
+    var p=raw?JSON.parse(raw):{};
+    p.cloud=!!visible;
+    localStorage.setItem('slyled-view-prefs',JSON.stringify(p));
+  }catch(e){}
 }
 
 function _updateCloudBtn(){
