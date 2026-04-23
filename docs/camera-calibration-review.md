@@ -1378,6 +1378,13 @@ Mentioned only to confirm they were reviewed and are not affected:
   #533, #409, #277, #280). Per operator direction: P1
   implementation will proceed directly on `main` since the
   product has not shipped and §2 allows breaking changes.
+- **2026-04-23** — three multi-camera follow-ups filed (§12.10)
+  prompted by operator's decision to use more cameras rather than
+  denser per-camera markers: **#629** cross-camera object handoff
+  (preserve tracked ID across blind zones), **#630** fusion
+  confidence signal (single-vs-multi-camera placement exposed to
+  consumers), **#631** fusion-pass scaling benchmark (characterise
+  tick budget at 2/4/8/16 cameras).
 
 ---
 
@@ -1544,3 +1551,23 @@ at once is less noisy than a random trickle.
 - **Recommend:** script it: `gh issue comment <n> -F comment.md`
   batch, one comment per issue, templates from §10's table. 20-min
   task, high signal to project-tracking observers.
+
+### 12.10 Multi-camera scaling (operator plan, 2026-04-23)
+
+Operator direction is to extend stage coverage with **more cameras**
+rather than denser markers per camera. The §8 fix plan already
+supports this (Q3 fusion handles N cameras, Q11 per-camera coverage
+viewport, Q5 per-fixture tier). Three follow-ups filed to cover
+gaps that only matter at higher camera counts:
+
+- **#629** — cross-camera object handoff: preserve tracked ID when a
+  person walks through a blind zone between camera A and B. Extends
+  finding A4. P2, not blocking P1 but will surface in real shows.
+- **#630** — fusion confidence signal: expose `_clusterSize` /
+  `_accuracyMm` / `_placementConfidence` on each temporal object so
+  consumers (auto-track, timeline, Android) can distinguish
+  single-camera placements from multi-camera consensus. Opt-in
+  `minPlacementConfidence` on track-actions. P2.
+- **#631** — fusion-pass scaling benchmark: synthetic load test at
+  2/4/8/16 cameras riding on Q14 infrastructure. P3, preventative —
+  find the orchestrator tick-budget cliff before a live show does.
