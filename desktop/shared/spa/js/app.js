@@ -1,5 +1,20 @@
 // ── Localization string table (swap for i18n) ─────────────────────────────
 function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+// #600 — single source of truth for the rotation array index → axis
+// semantic mapping. Mirror of desktop/shared/camera_math.py
+// rotation_from_layout. Layout convention is [rx pitch, ry roll, rz yaw].
+function rotationFromLayout(rot){
+  if(!rot||!rot.length)return{tilt:0,pan:0,roll:0};
+  return{
+    tilt:+(rot[0]||0),
+    roll:+(rot[1]||0),
+    pan:+(rot[2]||0)
+  };
+}
+function rotationToLayout(tilt,pan,roll){
+  return[+(tilt||0),+(roll||0),+(pan||0)];
+}
 function _rssiIcon(rssi){
   // Signal bars: ▂▄▆█ based on RSSI strength
   if(!rssi||rssi===0)return '—';
@@ -597,10 +612,14 @@ function _panelPanTiltChange(fid,axis,deg){
   if(!f)return;
   var val=parseFloat(deg)||0;
   if(!f.rotation)f.rotation=[0,0,0];
+  // #600 — rotation layout is [rx pitch, ry roll, rz yaw]. Update via the
+  // axis-semantic helper so the index layout only ever reads from one
+  // place.
+  var cur=rotationFromLayout(f.rotation);
   if(axis==='pan'){
-    f.rotation=[f.rotation[0],val,f.rotation[2]||0];
+    f.rotation=rotationToLayout(cur.tilt,val,cur.roll);
   } else {
-    f.rotation=[val,f.rotation[1],f.rotation[2]||0];
+    f.rotation=rotationToLayout(val,cur.pan,cur.roll);
   }
   _layoutDirty=true;_layDirtyUpdate();
   ra('PUT','/api/fixtures/'+fid+'/aim',{rotation:f.rotation});

@@ -238,8 +238,14 @@ def _rotation_to_aim(rotation, pos, dist=3000):
     rx = tilt/pitch, ry = pan/yaw.  Default distance is 3000mm (3m).
     Stage coordinates: X=width, Y=depth (forward), Z=height (up).
     """
-    rx = rotation[0] if rotation else 0
-    ry = rotation[1] if rotation and len(rotation) > 1 else 0
+    # Route through rotation_from_layout so the array index→semantic
+    # mapping is single-source. #600 swap lands cleanly this way.
+    try:
+        from camera_math import rotation_from_layout
+        rx, ry, _roll = rotation_from_layout(rotation)
+    except Exception:
+        rx = rotation[0] if rotation else 0
+        ry = rotation[1] if rotation and len(rotation) > 1 else 0
     pan_rad = math.radians(ry)
     tilt_rad = math.radians(rx)
     dx = math.sin(pan_rad) * math.cos(tilt_rad) * dist
@@ -265,6 +271,56 @@ _mover_cal    = _load("mover_calibrations", {})  # {fixtureId_str: {grid, sample
 #                rx:float(deg), ry:float(deg), rz:float(deg), label?:str}
 _aruco_markers = _load("aruco_markers", [])
 _ssh_bootstrapped = False  # deferred pre-population (needs _encrypt_pw defined later)
+
+
+# #600 — rotation-convention schema version. v1 used [rx pitch, ry=pan, rz=roll];
+# v2 swaps to axis-letter-matched [rx pitch, ry=roll, rz=yaw]. Loader migrates
+# persisted data once on startup. Stored under the top-level `_layout` dict
+# because every layout-positioned fixture carries a rotation and the layout
+# write path is where migration naturally fires.
+_ROTATION_SCHEMA_VERSION = 2
+
+
+def _migrate_rotation_schema():
+    """One-shot migration: swap rotation[1] ↔ rotation[2] on every fixture
+    that still stores the pre-#600 convention. Safe to call multiple times
+    — no-op once _layout.rotationSchemaVersion is already 2.
+
+    Also handles the same swap for fixture records that carry rotation at
+    the top level (cameras / DMX movers loaded from _fixtures).
+    """
+    if (_layout or {}).get("rotationSchemaVersion") == _ROTATION_SCHEMA_VERSION:
+        return 0
+    swapped = 0
+    # Fixtures table (cameras, DMX) carries rotation on the fixture record.
+    for f in (_fixtures or []):
+        rot = f.get("rotation")
+        if isinstance(rot, list) and len(rot) >= 3:
+            f["rotation"] = [rot[0], rot[2], rot[1]]
+            swapped += 1
+    # Layout children may also carry a rotation when the operator set one
+    # via /api/fixtures/<fid>/aim.
+    for c in (_layout.get("children") or []):
+        rot = c.get("rotation")
+        if isinstance(rot, list) and len(rot) >= 3:
+            c["rotation"] = [rot[0], rot[2], rot[1]]
+            swapped += 1
+    _layout["rotationSchemaVersion"] = _ROTATION_SCHEMA_VERSION
+    if swapped:
+        try:
+            _save("fixtures", _fixtures)
+            _save("layout", _layout)
+            log.info("#600 rotation migration: swapped ry↔rz on %d records", swapped)
+        except Exception as e:
+            log.warning("#600 rotation migration persist failed: %s", e)
+    else:
+        # No swaps needed (fresh install or already migrated), but still
+        # persist the schema marker so we don't try again.
+        try:
+            _save("layout", _layout)
+        except Exception:
+            pass
+    return swapped
 
 
 # #628 — Auto-derive stage bounds from placed fixtures + surveyed markers.
@@ -2120,13 +2176,17 @@ def _pixel_point_to_stage_floor(cam_fixture, px, py, frame_w, frame_h):
         cz0 = float(cam_pos.get("z", 0) or 0)
         if cz0 > 1:  # camera must be off the floor for a ray-plane intersect
             try:
-                from camera_math import build_camera_to_stage
+                from camera_math import build_camera_to_stage, rotation_from_layout
             except Exception:
                 build_camera_to_stage = None
+                rotation_from_layout = None
             rot = cam_fixture.get("rotation", [0, 0, 0]) or [0, 0, 0]
-            tilt_deg = float(rot[0] or 0)
-            pan_deg = float(rot[1] or 0)
-            roll_deg = float(rot[2] or 0)
+            if rotation_from_layout:
+                tilt_deg, pan_deg, roll_deg = rotation_from_layout(rot)
+            else:
+                tilt_deg = float(rot[0] or 0)
+                pan_deg = float(rot[1] or 0)
+                roll_deg = float(rot[2] or 0)
             R = build_camera_to_stage(tilt_deg, pan_deg, roll_deg) if build_camera_to_stage else None
             if R is not None:
                 fov_rad = _camera_h_fov_rad(cam_fixture, frame_w, frame_h)
@@ -12701,6 +12761,25 @@ def api_project_import():
             c["status"] = 0  # all offline until next ping
         _fixtures = data.get("fixtures", [])
         _layout = data.get("layout", {"canvasW": 3000, "canvasH": 2000, "children": []})
+        # #600 — migrate rotation-array convention on import. Old
+        # .slyshow files used [rx, ry=pan, rz=roll]; new convention is
+        # [rx, ry=roll, rz=yaw]. Detect via layout.rotationSchemaVersion
+        # and swap ry↔rz on every persisted rotation.
+        if _layout.get("rotationSchemaVersion") != _ROTATION_SCHEMA_VERSION:
+            _swap = 0
+            for _f in _fixtures:
+                _r = _f.get("rotation")
+                if isinstance(_r, list) and len(_r) >= 3:
+                    _f["rotation"] = [_r[0], _r[2], _r[1]]
+                    _swap += 1
+            for _c in (_layout.get("children") or []):
+                _r = _c.get("rotation")
+                if isinstance(_r, list) and len(_r) >= 3:
+                    _c["rotation"] = [_r[0], _r[2], _r[1]]
+                    _swap += 1
+            _layout["rotationSchemaVersion"] = _ROTATION_SCHEMA_VERSION
+            if _swap:
+                log.info("#600 project import: migrated %d rotation arrays", _swap)
         _stage = data.get("stage", {"w": 10.0, "h": 5.0, "d": 10.0})
         _actions = data.get("actions", [])
         _spatial_fx = data.get("spatialEffects", [])
@@ -13774,6 +13853,12 @@ if __name__ == "__main__":
         _migrate_v1_mover_cals()
     except Exception as _e:
         log.warning("v1 mover-cal migration on startup failed: %s", _e)
+    # #600 — swap rotation array convention once on startup. No-op if the
+    # layout already records rotationSchemaVersion == 2.
+    try:
+        _migrate_rotation_schema()
+    except Exception as _e:
+        log.warning("#600 rotation migration on startup failed: %s", _e)
     ap = argparse.ArgumentParser(description="SlyLED Parent Server")
     ap.add_argument("--port",       type=int, default=8080)
     ap.add_argument("--host",       default="0.0.0.0")

@@ -55,7 +55,14 @@ def _rotation_to_aim(rotation, pos, dist=3000):
     Stage coordinates: X=width, Y=depth (forward), Z=height (up).
     Returns [x, y, z] in stage mm coordinates.
     """
-    rx, ry = rotation[0] if rotation else 0, rotation[1] if rotation and len(rotation) > 1 else 0
+    # Route through rotation_from_layout so the rotation[] index→semantic
+    # mapping lives in one place (camera_math). #600.
+    try:
+        from camera_math import rotation_from_layout
+        rx, ry, _roll = rotation_from_layout(rotation)
+    except Exception:
+        rx = rotation[0] if rotation else 0
+        ry = rotation[1] if rotation and len(rotation) > 1 else 0
     pan_rad = math.radians(ry)
     tilt_rad = math.radians(rx)
     dx = math.sin(pan_rad) * math.cos(tilt_rad) * dist

@@ -66,11 +66,14 @@ function s3dInit(){
             var dx=aim[0]-(f.x||0),dy=aim[1]-(f.y||0),dz=aim[2]-(f.z||0);
             var hd=Math.sqrt(dx*dx+dz*dz);
             if(hd>0.001||Math.abs(dy)>0.001){
-              f.rotation=[
-                Math.round(-Math.atan2(dy,hd)*180/Math.PI),
-                Math.round(Math.atan2(dx,dz)*180/Math.PI),
-                f.rotation?f.rotation[2]||0:0
-              ];
+              // #600 — preserve existing roll via the axis-semantic helper
+              // (roll used to live at rotation[2]; after the swap it's at
+              // rotation[1]. This read goes through the helper so the
+              // call site doesn't have to care.)
+              var cur=rotationFromLayout(f.rotation);
+              var newTilt=Math.round(-Math.atan2(dy,hd)*180/Math.PI);
+              var newPan=Math.round(Math.atan2(dx,dz)*180/Math.PI);
+              f.rotation=rotationToLayout(newTilt,newPan,cur.roll);
             }
           }});
           ra('PUT','/api/fixtures/'+_aimFid+'/aim',{aimPoint:aim},function(){

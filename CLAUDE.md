@@ -104,11 +104,12 @@ Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask s
 - **Tracking:** `firmware/orangepi/tracker.py` — Continuous person detection with proximity re-ID (500mm threshold). Pushes temporal objects to orchestrator.
 - **Deploy:** SSH+SCP from the Firmware tab in the SPA; uploads `camera_server.py`, `detector.py`, `depth_estimator.py`, `beam_detector.py`, `tracker.py`, `requirements.txt`, `slyled-cam.service`, and models. Version comparison with force-reinstall option.
 - **Per-camera fixtures:** Each USB camera sensor registers as a separate placeable fixture with own FOV, resolution, and calibration data.
-- **Rotation convention (#586):** `fixture.rotation = [tilt_deg, pan_deg, roll_deg]` in stage space.
-  - `tilt > 0` — aim DOWN (the forward/optical axis tips toward stage -Z)
-  - `pan > 0` — aim toward +X (stage-left)
-  - `roll > 0` — clockwise around the optical axis as seen from behind the camera
-  - Shared across DMX fixtures and cameras. The canonical rotation matrix is built by `desktop/shared/camera_math.py::build_camera_to_stage(tilt, pan, roll)` — every caller (space_mapper.transform_points, stereo_engine.add_camera_from_fov, bake_engine._rotation_to_aim) must go through that helper.
+- **Rotation convention (#586, #600):** `fixture.rotation = [rx, ry, rz]` degrees in stage space, axis-letter-matched to Z-up:
+  - `rx` — **pitch** (rotation about X). `rx > 0` aims DOWN (forward/optical axis tips toward stage -Z).
+  - `ry` — **roll**  (rotation about Y, the stage-forward axis). `ry > 0` rotates the image clockwise as seen from behind the camera.
+  - `rz` — **yaw / pan** (rotation about Z, the stage-up axis). `rz > 0` aims toward +X (stage-left).
+  - Shared across DMX fixtures and cameras. **Never read `rotation[1]` or `rotation[2]` directly** — route every read through `desktop/shared/camera_math.py::rotation_from_layout(rot) → (tilt, pan, roll)`. The canonical rotation matrix is built by `build_camera_to_stage(tilt, pan, roll)`. SPA code has a mirror helper `rotationFromLayout(rot)` in `spa/js/app.js`.
+  - Persisted data carries `layout.rotationSchemaVersion = 2`. The startup path + `/api/project/import` migrate pre-#600 files on load (ry=pan, rz=roll → swap to ry=roll, rz=pan).
 
 **Giga board roles:** The Giga R1 compiles in two modes:
 - `BOARD_GIGA` (default) — runtime Orchestrator with minimal SPA for start/stop
