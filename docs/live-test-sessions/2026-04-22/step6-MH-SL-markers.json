@@ -1,0 +1,252 @@
+{
+  "calibrationLocked": false,
+  "cameraId": 12,
+  "currentProbe": {
+    "attempt": 24,
+    "dimmer": 255,
+    "dmxPan": 31,
+    "dmxTilt": 31,
+    "pan": 0.125,
+    "rgb": [
+      255,
+      0,
+      0
+    ],
+    "sentAt": 1776908726.09781,
+    "tilt": 0.125
+  },
+  "currentTarget": 3,
+  "debug": null,
+  "dmxFrame": {
+    "addr": 13,
+    "channels": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "universe": 1
+  },
+  "error": "Only 0/4 markers converged \u2014 cannot fit a stable model.",
+  "fit": null,
+  "floorZ": null,
+  "foundAt": {
+    "pan": 0.125,
+    "pixelX": 3757,
+    "pixelY": 1242,
+    "tilt": 0.125
+  },
+  "geometrySource": null,
+  "log": [
+    {
+      "level": "info",
+      "msg": "Calibration started (mode=markers, camera=Stage Right, bridge=192.168.10.174)",
+      "t": 1776908613.8731349
+    },
+    {
+      "level": "info",
+      "msg": "Markers-mode: checking registry + camera view",
+      "t": 1776908613.8733652
+    },
+    {
+      "level": "info",
+      "msg": "Camera sees markers [0, 1, 2, 4] of [0, 1, 2, 4, 5]",
+      "t": 1776908618.685105
+    },
+    {
+      "level": "info",
+      "msg": "Battleship discovery (4\u00d74 coarse grid + confirm nudge)",
+      "t": 1776908618.685172
+    },
+    {
+      "level": "info",
+      "msg": "Beam candidate at probe 1, pixel (3757,1242) \u2014 verifying with pan/tilt nudge",
+      "t": 1776908623.4637964
+    },
+    {
+      "level": "info",
+      "msg": "Beam confirmed at pan=0.125 tilt=0.125 pixel=(3757,1242)",
+      "t": 1776908645.6604419
+    },
+    {
+      "level": "info",
+      "msg": "Converging on marker 0 @ stage (500,2280) pixel (2458,1968)",
+      "t": 1776908645.6604774
+    },
+    {
+      "level": "warning",
+      "msg": "Marker 0: did NOT converge (1510.9249857289408px after 5 iters) \u2014 resetting warm-start to discovery pose",
+      "t": 1776908693.5142791
+    },
+    {
+      "level": "info",
+      "msg": "Converging on marker 1 @ stage (2050,3170) pixel (1104,1368)",
+      "t": 1776908693.5144386
+    },
+    {
+      "level": "warning",
+      "msg": "Marker 1: did NOT converge (Nonepx after 3 iters) \u2014 resetting warm-start to discovery pose",
+      "t": 1776908706.4940886
+    },
+    {
+      "level": "info",
+      "msg": "Converging on marker 2 @ stage (1150,2100) pixel (1756,2082)",
+      "t": 1776908706.4942164
+    },
+    {
+      "level": "warning",
+      "msg": "Marker 2: did NOT converge (Nonepx after 3 iters) \u2014 resetting warm-start to discovery pose",
+      "t": 1776908716.2422812
+    },
+    {
+      "level": "info",
+      "msg": "Converging on marker 4 @ stage (500,3500) pixel (2383,1271)",
+      "t": 1776908716.242442
+    },
+    {
+      "level": "warning",
+      "msg": "Marker 4: did NOT converge (Nonepx after 3 iters) \u2014 resetting warm-start to discovery pose",
+      "t": 1776908726.0976212
+    }
+  ],
+  "message": "Converging on marker 4 @ stage (500,3500) pixel (2383,1271)",
+  "model": null,
+  "phase": "sampling",
+  "progress": 75,
+  "result": null,
+  "sampleCount": null,
+  "status": "error",
+  "targets": [
+    {
+      "converged": false,
+      "errorPx": 1510.9249857289408,
+      "id": 0,
+      "iterations": 5,
+      "pan": 0.125,
+      "stage": [
+        500.0,
+        2280.0,
+        0.0
+      ],
+      "targetPixel": [
+        2457.75,
+        1967.5
+      ],
+      "tilt": 0.125
+    },
+    {
+      "converged": false,
+      "errorPx": null,
+      "id": 1,
+      "iterations": 3,
+      "pan": 0.125,
+      "stage": [
+        2050.0,
+        3170.0,
+        0.0
+      ],
+      "targetPixel": [
+        1103.5,
+        1367.5
+      ],
+      "tilt": 0.125
+    },
+    {
+      "converged": false,
+      "errorPx": null,
+      "id": 2,
+      "iterations": 3,
+      "pan": 0.125,
+      "stage": [
+        1150.0,
+        2100.0,
+        0.0
+      ],
+      "targetPixel": [
+        1755.5,
+        2082.0
+      ],
+      "tilt": 0.125
+    },
+    {
+      "converged": false,
+      "errorPx": null,
+      "id": 4,
+      "iterations": 3,
+      "pan": 0.125,
+      "stage": [
+        500.0,
+        3500.0,
+        0.0
+      ],
+      "targetPixel": [
+        2383.25,
+        1271.0
+      ],
+      "tilt": 0.125
+    }
+  ],
+  "totalTargets": 4,
+  "verification": null,
+  "warmStart": null
+}

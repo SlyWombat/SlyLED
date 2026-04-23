@@ -1,9 +1,9 @@
 # Camera Calibration Review Plan
 
-**Status:** Draft — review only, no code changes until this plan is approved.
+**Status:** **Approved 2026-04-23 · Implemented on `main` through `e5fd8dd` (2026-04-23)** — all 14 review questions closed (§8.1, §8.3). All §8.5 P1/P2/P3 tickets shipped. Independent code review of the implementation batch surfaced 3 correctness bugs + 1 ship-blocker, all fixed (`dee04de`, `e5fd8dd`, `43a647d`). §10 cross-references posted. See §11 change log for the implementation-pass commit list.
 **Date:** 2026-04-22
 **Scope owner:** Dave (operator) + Claude (implementation)
-**Related docs:** `docs/mover-calibration-v2.md` (#488), `docs/camera-review.md` (Gemini 2026-04-15), `docs/camera.md`, `docs/pointcloud.md`
+**Related docs:** `docs/mover-calibration-v2.md` (#488), `docs/camera-review.md` (Gemini 2026-04-15), `docs/camera.md`, `docs/pointcloud.md`, `docs/camera-live-test-handoff.md` (2026-04-22 live-test brief), `docs/live-test-sessions/2026-04-22/` (raw results)
 
 ---
 
@@ -564,27 +564,603 @@ Ticket: **P3 (epic)**, six sub-tickets. Do not start until Q7 lands.
 Ticket: **P1** (ships with Q1/Q2; Q2 fallback accuracy depends on it).
 Closes #611 + B9.
 
+#### Q10 — LM sign-confirmation probe → **code-fix + new unit test**
+
+**Answer:** Add an active **one-nudge probe** at the end of every
+mover-cal run that empirically confirms `(pan_sign, tilt_sign)` against
+observed beam motion, and refits if the signs disagree. Kill the
+`<0.2° RMS` convention tie-break at `parametric_mover.py:378–384` —
+it's a heuristic and the probe replaces it with a measurement.
+
+**Root cause (recap of B5):**
+- `fit_model` at **316–385** runs LM over the 5 continuous parameters
+  for every `(pan_sign, tilt_sign) ∈ {±1}²` combination.
+- On sparse samples (markers-mode often uses 3 floor points per rig),
+  two or more combos converge to near-identical angular RMS because a
+  180° yaw flip absorbs the sign flip — it's a genuine symmetry of
+  the forward map *on the fit points*, but **the symmetry breaks
+  outside the sample hull**. So the convention tie-break picks a fit
+  that looks identical at the markers but aims the wrong way when
+  extrapolating to front-stage.
+
+**Probe design — one helper, called once per cal:**
+
+```python
+# parametric_mover.py (new)
+def verify_signs(model: ParametricFixtureModel,
+                 nudge_probe: Callable[[float, float], Optional[Tuple[float, float]]],
+                 base_aim_norm: Tuple[float, float],
+                 nudge_norm: float = 0.005,
+                 ) -> Tuple[int, int, float]:
+    """Return (pan_sign, tilt_sign, confidence_deg).
+
+    nudge_probe(pan_norm, tilt_norm) drives the fixture and returns the
+    observed beam pixel (or None on miss). Typically wired up to:
+      bridge.set_pan_tilt(); sleep; camera.beam_detect().
+
+    Algorithm:
+      1. Capture pixel p0 at base_aim.
+      2. Capture pixel p_pan at base_aim + (+nudge, 0).
+      3. Capture pixel p_tilt at base_aim + (0, +nudge).
+      4. Predict expected pixel deltas from model.forward() projected
+         through the camera's homography.
+      5. Dot product sign of (predicted, observed) tells us whether
+         each axis sign is correct.
+      6. Return the signs plus a confidence = min angle between
+         predicted and observed deltas (small = trustworthy).
+    """
+```
+
+Integration in `mover_calibrator.py` (end of every `_mover_cal_thread_*_body`):
+
+```python
+fitted, quality = parametric_mover.fit_model(...)
+# Use the camera we already used for cal; re-use beam detector.
+def _probe(pn, tn):
+    engine.set_pan_tilt(fixture, pn, tn)
+    time.sleep(0.15)  # fixture settle
+    spots = beam_detector.detect(camera_snapshot(cam))
+    return (spots[0]["x"], spots[0]["y"]) if spots else None
+
+# Probe at the centroid of the samples so the beam is guaranteed in-frame.
+cx, cy = _sample_centroid(samples)
+base = fitted.inverse(cx, cy, 0)
+p_sign, t_sign, conf = parametric_mover.verify_signs(fitted, _probe, base)
+
+if (p_sign, t_sign) != (fitted.pan_sign, fitted.tilt_sign):
+    log.warning("MOVER-CAL: sign probe disagrees with LM fit — forcing "
+                "(%d,%d) and re-running LM", p_sign, t_sign)
+    fitted, quality = parametric_mover.fit_model(
+        ..., force_signs=(p_sign, t_sign))
+```
+
+`fit_model` gets a new `force_signs` kwarg that bypasses the
+enumeration — only LM over the 5 continuous params for the given sign
+combo.
+
+**Killing the convention tie-break:** lines **378–384** become
+`candidates.sort(key=lambda c: c[0]); _, _, best, best_q = candidates[0]`.
+The probe — not a convention heuristic — decides ambiguous cases.
+
+**Nudge size:**
+- `0.005` normalized pan = **2.7°** on a 540° fixture, projecting to
+  **~230 mm** beam displacement at 5 m — comfortably above a 2–5 px
+  beam-detector noise floor and well within typical camera FOV.
+- Auto-clip: if `base + nudge > 1.0`, use `-nudge`. If
+  `base − nudge < 0.0`, use `+nudge`.
+- If either probe misses (no beam pixel), fall back to the next-best
+  RMS combo from the 4-way enumeration and flag `quality.signProbe
+  = "failed"` so the SPA shows a warning.
+
+**Scipy (newly allowed per §2):** does NOT simplify this probe — it's
+pure geometry, no optimisation involved. Scipy is still worth using
+in `_lm_solve` itself (`scipy.optimize.least_squares(method="lm",
+loss="soft_l1")`) because:
+1. Built-in robust loss handles occasional beam-flash outliers that
+   currently bias the hand-rolled LM.
+2. Analytic 3-point Jacobian is faster and more stable than our
+   central-differences.
+3. Lose ~40 lines of code.
+But: that's a **separate P3 ticket** — the probe is the Q10 answer and
+ships independently.
+
+**Synthetic unit test (no hardware):**
+
+```python
+# tests/test_parametric_sign_probe.py
+def test_probe_catches_flipped_pan_sign():
+    truth = ParametricFixtureModel(
+        fixture_pos=(1500, 0, 3000),
+        mount_yaw_deg=30, pan_sign=+1, tilt_sign=-1,
+    )
+    # 3 samples (mimics markers-mode on basement rig)
+    stage_pts = [(500, 2000, 0), (2500, 2000, 0), (1500, 2500, 0)]
+    samples = [
+        {"pan": truth.inverse(*p)[0], "tilt": truth.inverse(*p)[1],
+         "stageX": p[0], "stageY": p[1], "stageZ": p[2]} for p in stage_pts
+    ]
+    # Force a wrong-sign fit
+    bad = ParametricFixtureModel(**{**asdict(truth), "pan_sign": -1,
+                                     "mount_yaw_deg": 30 + 180})
+    # Synthetic "camera" = truth model + identity homography
+    def probe(pn, tn):
+        d = truth.forward(pn, tn)  # unit vector
+        # project to z=0
+        px, py, pz = truth.fixture_pos
+        t = -pz / d[2]
+        return (px + t * d[0], py + t * d[1])  # pixel ≡ stage in this test
+    p_sign, t_sign, _ = verify_signs(bad, probe, base_aim_norm=bad.inverse(1500, 2200, 0))
+    assert (p_sign, t_sign) == (+1, -1)
+
+def test_probe_agrees_when_fit_is_correct(): ...
+def test_probe_handles_beam_miss_gracefully(): ...
+def test_probe_auto_flips_nudge_at_dmx_boundary(): ...
+```
+
+**Acceptance criteria:**
+- On every saved cal, `mover_calibrations.json[fid].signProbe` stores
+  `{"ok": bool, "panConfidenceDeg": float, "tiltConfidenceDeg": float,
+  "nudgePx": [dx_pan, dy_pan, dx_tilt, dy_tilt]}`.
+- SPA shows a green/amber/red badge on the cal result (green: both
+  confidences < 5°; amber: < 15°; red: ≥ 15° or probe missed).
+- Synthetic test suite has ≥ 4 cases (flipped pan, flipped tilt,
+  both flipped, correct).
+
+Ticket: **P2** (isolated, self-contained, no upstream deps). B5, Q10.
+
+#### Q5 — graceful degradation for unmapped camera → **code-fix (rides with Q1) + ux-fix**
+
+**Answer:** Three-tier transparent degradation; never refuse to start a
+show. The operator always sees the best placement we can compute plus
+a clear indicator of which tier is active.
+
+**Tier stack (already implemented at `_pixel_to_stage`, activated once Q1 wires it into the ingest path):**
+
+| Tier | Requires | Expected accuracy | Code path |
+|------|----------|-------------------|-----------|
+| `homography` | Surveyed ArUco stage-map in `_calibrations[fid].matrix` | ±50–150 mm inside hull, degrades outside | `_pixel_to_stage_homography` at 1859 |
+| `fov-projection` | Camera position + rotation + `fovDeg` + `fovType` (post-Q12) | ±300–800 mm at typical stage distances | `_pixel_to_stage` fallback at 1888–1997 |
+| `raw` | Nothing; `dist < 1` in the projection loop | unusable for auto-track; shown "as-is" in 3D viewport | line 1917 |
+
+**Backend contract additions (ride with the Q1 P1 ticket):**
+
+1. `_pixel_to_stage` returns the method used per detection
+   (`"homography" | "fov-projection" | "raw"`).
+2. `api_objects_temporal_create` echoes that method in the response
+   and stamps it onto the stored object: `_temporal_objects[n]._method`.
+3. Auto-track evaluator (`_evaluate_track_actions` at 10179) reads
+   `_method` and applies per-tier behaviour:
+   - `homography` — normal operation.
+   - `fov-projection` — normal operation but log a throttled warning
+     (once per 10 s per fixture) with the estimated accuracy.
+   - `raw` — **skip the aim update**; the fixture holds its last
+     good position. Prevents random slews from placing movers at
+     arbitrary spots when a camera ghost-detects. SPA shows the badge
+     red, operator knows to run stage-map.
+4. New GET endpoint `/api/cameras/<fid>/calibration-status` returns:
+   ```json
+   {
+     "tier": "homography" | "fov-projection" | "raw",
+     "stageMap": {"matchedIds": [...], "rmsError": 12.3, "ageMinutes": 45},
+     "position": {"ok": true, "x": 1500, "y": 120, "z": 1920},
+     "rotation": {"ok": true, "tilt": 30, "pan": 0, "roll": 0},
+     "fov": {"deg": 90, "type": "diagonal"},
+     "estimatedAccuracyMm": 150
+   }
+   ```
+   Feeds Q13's camera-health dashboard later; standalone endpoint now
+   so Setup-tab badges can call it without waiting on Q13.
+
+**Minimal UX (not the full Q13 dashboard — that's separate):**
+
+- **Setup-tab camera card** — single badge next to camera name:
+  🟢 Calibrated / 🟡 FOV fallback / 🔴 Not calibrated. Click →
+  opens Calibration tab pre-scrolled to this camera's stage-map
+  section.
+- **Runtime-tab Dashboard** — persistent amber banner if any active
+  camera is on tier `fov-projection`, red banner if any is on `raw`.
+  Dismissible for the session (`sessionStorage`), re-appears on
+  reload.
+- **Track-action editor** (`/api/actions` modal) — show
+  "Tracking accuracy: ~±150 mm (calibrated)" or
+  "~±600 mm (FOV fallback)" next to the camera picker, computed
+  from the tier and the stage depth. Uses same endpoint above.
+
+**What we explicitly do NOT do:**
+- Refuse to start the show when calibration is missing — operators
+  routinely tour venues where stage-map was never run; "run the show
+  anyway in 3D-preview mode" is required.
+- Silently substitute a default fixture for an uncalibrated mover.
+- Modal-block the SPA on startup if cameras are uncalibrated. It's
+  a banner, not a gate.
+
+**Depends on:** Q1 ingest wiring (returns the method), Q12 fovType
+(feeds the tier's accuracy estimate).
+
+Ticket split:
+- **P1** — backend additions (three lines in the Q1 patch to stamp
+  `_method`; one new GET endpoint; one new branch in
+  `_evaluate_track_actions`). Rolls into the Q1 P1 ticket.
+- **P2** — SPA badges + banners + track-action editor accuracy hint.
+  Small, self-contained, ships after Q1/Q12 backend.
+
+Closes Q5.
+
+#### Q3 — multi-camera fusion policy → **code-fix (post-Q1)**
+
+**Answer:** Hybrid weighted-cluster policy. Live-test step 7 confirms
+the constants; the structure can be designed and code-reviewed now.
+
+**Problem (A3 recap):** Each camera independently posts temporal
+objects through `api_objects_temporal_create`. Two cameras seeing one
+person create two objects; tracker auto-aim then fights itself or
+slews back-and-forth.
+
+**Three candidate policies + trade-offs:**
+
+| Policy | Pro | Con |
+|--------|-----|-----|
+| Highest-confidence wins | Trivial | Jitters at handoff zones when both YOLO scores are similar |
+| Weighted average | Smooth | Needs per-camera accuracy weight (we have it from Q5) |
+| First-camera-owns-TTL | No jitter, deterministic | Owning camera can be wrong when person walks into a zone it doesn't see |
+
+**Recommended: weighted clustering.**
+
+For each ingest call:
+1. Compute the detection's stage point (Q1 fix).
+2. Compute its weight:
+   ```
+   w = yolo_conf
+       × tier_weight[_method]            # homography 1.0 | fov 0.4 | raw 0.0
+       × hull_distance_falloff(stage_pt) # 1.0 inside marker hull,
+                                         # 0.2 at FOV edge, linear
+   ```
+3. Periodic deduplication pass (every `min(ttl)/4` seconds):
+   - Cluster all live `_temporal_objects` of the same `objectType`
+     within `trackReidMm` (default 500 mm).
+   - Each cluster collapses to a single object whose `pos` is
+     weight-averaged from its members; the surviving object inherits
+     the highest TTL in the cluster.
+   - Add a hidden `_camOrigins: [fid, fid, ...]` field for debugging.
+4. The auto-track evaluator uses the surviving cluster object — never
+   the raw per-camera detections.
+
+**Why this works:**
+- A `homography` camera near the person dominates an `fov` camera
+  far away — accuracy weight does the right thing.
+- A camera looking AT a marker hull edge falls off smoothly; no
+  cliff-edge handoff.
+- `raw` tier contributes weight 0 → its detections never poison the
+  cluster (consistent with Q5's "skip aim update on raw").
+- Code lives entirely in `parent_server.py`; `tracker.py` on the
+  Orange Pi continues to post per-camera detections — fusion is the
+  orchestrator's job.
+
+**Live-test step 7 measures:**
+- Ghost-object count per 30 s walk (target 0).
+- Handoff smoothness — pos-delta between consecutive cluster updates
+  when a person crosses between camera coverage zones (target
+  < 200 mm).
+- The two constants worth tuning live: `tier_weight["fov"]` (default
+  0.4) and the hull-falloff slope.
+
+Ticket: **P2** (depends on Q1 backend landing first; clean code split).
+Closes Q3, A3.
+
+#### Q11 — marker-coverage pre-cal UX → **ux-fix (#612 is build ticket)**
+
+**Answer:** A simple top-down overlay on the existing Layout viewport,
+rendered in the Calibration tab's stage-map section. No new graphics
+engine — reuse `scene-3d.js` orthographic top-view.
+
+**Visual elements (per camera):**
+
+1. **Stage rectangle** — full `(stage_w × stage_d)` mm, grey fill.
+2. **Marker dots** — surveyed ArUco positions from `_aruco_markers`.
+3. **Convex hull polygon** — yellow outline around the markers, with
+   "X% stage covered" badge (`hull_area / stage_area × 100`).
+4. **Per-camera FOV cone** — projected onto the floor plane via
+   `_pixel_to_stage` corner projection (call it for the four image
+   corners). Translucent green where camera sees the floor.
+5. **Coverage intersection** — region where (FOV cone) ∩ (marker
+   hull). This is the "trustworthy" zone for that camera. Solid
+   green fill.
+6. **Recommendation pin** — drop a magenta pin at the centroid of
+   the largest uncovered region inside the camera's FOV cone.
+   Tooltip: *"Place a marker here to expand coverage by ~ N%."*
+
+**Interactions:**
+- Click a marker dot → opens its edit modal (#596 marker registry).
+- Drag a phantom marker into the viewport → live-update the hull and
+  coverage-percent. Useful before the operator surveys the new pose.
+- Per-camera toggle in a sidebar lets operator see one camera at a
+  time or all overlaid.
+
+**Backend additions:**
+- `GET /api/cameras/<fid>/coverage` returns:
+  ```json
+  {
+    "fovCornersStage": [[x,y], [x,y], [x,y], [x,y]],
+    "markerHullArea": 1.2e6,
+    "stageArea": 4.5e6,
+    "coveragePct": 27,
+    "recommendedMarkerStage": [1800, 800]
+  }
+  ```
+- Pure derived data (no persistence); recompute on every call.
+
+**No-go alternatives:**
+- 3D viewport overlays — looks cool, but operator decisions are 2D
+  ("where on the floor"). Top-down is faster to read.
+- Auto-running coverage analysis on every layout edit — wait for
+  user to open the Calibration tab; cheap to compute on demand.
+
+**Build ticket already exists:** #612. Q11's spec belongs in #612's
+description; close #612 when the SPA piece ships.
+
+Ticket: **P2**. Closes Q11, B8 (operator guidance on marker placement).
+
+#### Q13 — camera-health dashboard → **ux-fix (composes Q5 endpoint)**
+
+**Answer:** Single panel showing all cameras side-by-side, reading
+the per-camera endpoint Q5 already specifies. Lives at the top of
+the Calibration tab; no new tab.
+
+**Per-camera card contents:**
+
+```
+┌─────────────────────────────────────────────────────┐
+│ EMEET-1  [🟢 calibrated]            [Run beam test] │
+│                                                     │
+│ Stage map:  3 markers · 12 mm RMS · 45 min ago     │
+│ Position:   (1500, 120, 1920) mm                    │
+│ Rotation:   tilt 30° pan 0° roll 0°                 │
+│ FOV:        90° diagonal                            │
+│ Tracking:   2.1 fps · last detection 0.3 s ago      │
+│ Last beam:  detected 12 min ago                     │
+│                                                     │
+│ Estimated tracking accuracy: ±150 mm                │
+└─────────────────────────────────────────────────────┘
+```
+
+Three new endpoint-level fields (extend the Q5
+`/api/cameras/<fid>/calibration-status` payload):
+
+```json
+{
+  "tracking": {"fps": 2.1, "lastDetectionSec": 0.3,
+               "frameCount": 1247, "errorCount": 3},
+  "lastBeamDetect": {"timestamp": ..., "ok": true,
+                     "centerPx": [320, 180]}
+}
+```
+
+`tracking.fps` and `lastBeamDetect` come from existing per-camera
+state on the Orange Pi (`tracker.py` already counts frames; beam
+detect history can be a 1-slot LRU).
+
+**Aggregate banner at top of panel:** "3 cameras: 🟢 2 calibrated,
+🟡 1 FOV fallback" — same logic as the Runtime banner from Q5.
+
+**Refresh strategy:** 5 s poll while tab visible (`document.
+visibilityState === "visible"`); pause when hidden. Each card has
+its own AbortController so tab-switch cancels in-flight requests.
+
+**No-go alternatives:**
+- WebSocket push of live tracking stats — defer; 5 s poll is fine
+  for a configuration screen, and we don't need new transport for
+  this. (Issue #2 is the WebSocket ticket; not a Q13 dependency.)
+- Dedicated "Cameras" tab — adds nav clutter for what's a 200-line
+  panel.
+
+Ticket: **P3**. Depends on Q5 backend + Q11 sharing the layout
+viewport idiom. Closes Q13.
+
+#### Q14 — end-to-end regression test → **test-fix (slots into #533/#409/#277/#280)**
+
+**Answer:** Two synthetic-pipeline tests, both pure-Python, no
+hardware, ride on the existing weekly Playwright runner (#280 infra,
+#277 epic). Q14 produces the **scope spec**; the implementation
+ticket is **#409** (already filed for the tracking half).
+
+**Test 1 — tracking pipeline (extends #409):**
+
+```
+Mock YOLO output → tracker.py post → orchestrator ingest
+  → temporal object → auto-track action → mover DMX value
+```
+
+Steps:
+1. Spin up parent server with factory-reset state + a fixture set
+   from `tests/regression/fixtures/`.
+2. POST a hand-crafted detection payload to
+   `/api/objects/temporal` (bypasses the camera node entirely;
+   simulates what `tracker.py` would post).
+3. Assert: `/api/objects` returns the temporal object at the
+   expected stage position (within 50 mm for homography case;
+   within 500 mm for fov-fallback case).
+4. Trigger an action with `aimTarget="head"`; assert the mover's
+   pan/tilt DMX values match expected within 0.5°.
+5. Repeat for: walking-line trajectory, two-cameras-one-person
+   (Q3 fusion), unmapped camera (Q5 raw tier).
+
+Expected ~150 lines, lives at `tests/regression/test_track_pipeline.py`.
+
+**Test 2 — mover-cal pipeline (extends #533):**
+
+```
+Synthetic ArUco frames + synthetic beam frames → camera_server
+  endpoint stubs → mover_calibrator → fitted ParametricFixtureModel
+```
+
+Steps:
+1. Generate 9 synthetic 640×480 frames containing ArUco markers at
+   known stage positions (use `cv2.aruco.drawMarker`); compute the
+   ground-truth homography.
+2. Generate 6 synthetic beam-spot frames at known DMX (pan, tilt)
+   pairs (white circle at the projected pixel; the projection uses
+   the truth model from Q10's test).
+3. Monkey-patch `_camera_snapshot` and `_beam_detect_flash` to
+   serve these frames in sequence.
+4. Run `_mover_cal_thread_markers_body` end-to-end.
+5. Assert: fitted model's `forward()` at any sample DMX is within
+   1.5° angular error of the truth model.
+6. Assert: `signProbe.ok == true` (Q10).
+
+Expected ~200 lines, lives at `tests/regression/test_mover_cal_pipeline.py`.
+
+**Ride-on changes:**
+- Add `tests/regression/fixtures/` with the canonical fixture set
+  used by both tests (3 cameras, 3 movers, 3 markers — mirrors the
+  basement rig).
+- `tests/regression/run_all.py` (already exists per CLAUDE.md) gets
+  the two new entries.
+
+**Cross-references** (per §10.3):
+- #533 — parent epic; Q14's deliverable lives here.
+- #409 — exact mocked-tracking spec, becomes the implementation ticket
+  for Test 1.
+- #277 — weekly Playwright harness; both tests slot in.
+- #280 — runner infra; no changes needed.
+
+Ticket: **P2**. Closes Q14, X3. Depends on Q1+Q4+Q5 (test 1 needs
+the new ingest contract) and Q10 (test 2 asserts signProbe).
+
 ### 8.2 Still-open questions (need live test or more digging)
 
 | Q | Status | Blocker |
 |---|--------|---------|
-| Q3 multi-camera fusion policy | open | Live-test step 7 (ghost-object count) |
-| Q5 UX for unmapped camera | open | Depends on Q1/Q2 landing |
-| Q6 default mover-cal mode | open | Live-test steps 6 — need per-mode residuals on basement rig |
-| Q10 LM sign-confirmation probe | open | Needs synthetic-test rig (mirror-ambiguity unit test) |
-| Q11 marker-coverage UX | open | UX-fix; scope after Q6 |
-| Q13 "camera health" dashboard | open | Scope after Q1/Q7/Q12 |
-| Q14 end-to-end regression test | open | Scope after Q1/Q7/Q12 — test shape depends on final ingest contract |
+| Q6 default mover-cal mode | **resolved with caveats** (2026-04-22 live test) — see §8.3. Markers is the right default **after** the P1 convergence + pre-check fixes land; none of the 3 modes works out-of-the-box on this rig today. |
 
-### 8.3 Prioritised fix list (from 8.1)
+All other questions (Q1–Q5, Q7–Q14) closed in §8.1. Q3 live-test
+constants (tier_weight, hull-falloff slope) remain to be tuned —
+requires the Q1 P1 fix to land first so multi-camera fusion has
+accurate placements to cluster on (see §12 for the follow-up
+shortlist).
+
+### 8.3 Q6 live-test resolution (basement rig, 2026-04-22)
+
+Full session artifacts in `docs/live-test-sessions/2026-04-22/`.
+Six cal runs executed (3 modes × 2 fixtures — 350W floor-mount fid 14,
+MH1 ceiling-ish fid 2). **All six failed**, each with a distinct
+failure mode:
+
+| Fixture | Mode | Elapsed | Outcome |
+|---------|------|---------|---------|
+| 350W | markers | 36 s | FAIL — discovery + wiggle-confirm worked in 11 s, then convergence loop lost the beam (`Nonepx`) on the first DMX step from discovery pose toward marker 0; warm-start-to-discovery retried and failed the same way 3× on each of 3 markers (0/3 converged) |
+| 350W | v2 | <1 s | FAIL — `Only 2 targets — need at least 4 for a stable fit` (auto-target generator under-produced) |
+| 350W | legacy | 75 s | FAIL — BFS mapping stalled at 4/50 samples; floor-mount geometry pushes the beam off-camera with small pan/tilt moves, exhausting reachable BFS cells |
+| MH1 | markers | 182 s (cancelled at timeout) | PARTIAL — converged marker 0 in 78 s, was still converging marker 1 at 3-min timeout; might have finished given more time |
+| MH1 | v2 | <1 s | FAIL — same under-production of targets |
+| MH1 | legacy | 240 s | FAIL — `Beam not found` during discovery; flagged operator-observed laser channel left ON (profile ch 10, default=0), which the cal's default-apply loop doesn't reset because it only applies `default > 0` |
+
+**Q6 verdict:** markers-mode architecture is the correct default —
+only mode that uses real surveyed ground truth, matches the operator-
+preferred algorithm in `feedback_cal_algorithm.md`, and only mode that
+made forward progress. But two blocking bugs prevent "just ship it":
+
+- **Convergence loop can't recover from transient beam loss.** On the
+  first failed pixel read, it warm-starts back to the discovery pose
+  and retries the same commanded step — which fails identically. It
+  needs bracket-and-retry: halve the DMX step and re-try from the last
+  known-good pose instead of discovery. Ref: `mover_calibrator.py`
+  convergence callbacks in `_mover_cal_thread_markers_body`.
+- **Pre-flight uses a single-frame ArUco detect.** Step 2's stage-map
+  aggregates up to 6 snapshots for the same reason (markers flicker in
+  and out of detection at the edge of the frame). Markers mode
+  checks once and fails if any marker misses that one frame — even
+  though it's detectable in a neighboring snapshot. Compounded by the
+  350W beam staying ON between test steps and washing out the
+  pre-check frame.
+
+Plus a third safety issue surfaced that doesn't block markers mode but
+needs fixing regardless:
+
+- **Non-pan/tilt channels can retain stale state.** `dmx-test` and the
+  cal DMX-apply loop only apply channel defaults where `default > 0`.
+  Channels with `default == 0` (like slymovehead ch 10 "Laser") keep
+  whatever was last written. Cal should explicitly zero every non-
+  pan/tilt channel at start — don't trust the default-apply loop.
+
+See §8.5 (updated) for P1 line-items and `step6-summary.md` for the
+full log.
+
+### 8.4 Numeric baselines (2026-04-22 live test)
+
+Independent of Q6, the session captured baselines for Q1/Q2/Q7/Q8/Q12
+that the post-fix implementation should beat:
+
+**Stage-map (step 2):**
+
+| Cam | Markers matched | Reproj RMS (px) | cameraPosStage plausible? |
+|-----|-----------------|------------------|---------------------------|
+| 12  | 3 / 3           | **1226.7**       | no (X=−3857 mm, off stage) |
+| 13  | 2 / 3 (id 1 missed, past visible band) | **1045.6** | no (Z=104 mm, ~floor level) |
+
+Both solvePnP poses are physically impossible — Q8 B3 confirmed.
+The direct-findHomography fallback path at `parent_server.py:2711–2718`
+is the only usable output. `cameraPosStage` should be demoted to
+diagnostic per §8.5 P2.
+
+**Tracking ingest baseline (step 3, broken path at :7205–7232):**
+
+11 valid rows + 3 OOF rows at 7 positions (5 taped floor marks + 2
+surveyed ArUco markers). Raw error dominated by an orthogonal bug
+(`stage.json` holds w=10 m, d=8 m vs actual rig 2 × 3.5 m; drives
+≈ 5× raw-error magnitude).
+
+| Metric | Mean | Median | Min | Max |
+|--------|------|--------|-----|-----|
+| Raw error (mm) | 4638 | 4913 | 2519 | 6942 |
+| **Dims-normalized error (mm)** | 380 | 347 | 265 | 708 |
+| Dims-normalized dx bias | **+1** | — | (stdev 221) | — |
+| Dims-normalized dy bias | **−307** | — | (stdev 163) | — |
+
+Signature: zero X-bias, consistent 307 mm Y-under-shoot. Cause: bbox
+vertical centre sits at mid-body height (~900 mm above floor); tilted-
+down camera maps that pixel row to a stage-Y closer than the actual
+foot position. The Q1 P1 fix (homography-based pixel→floor + feet
+bbox-bottom instead of centre) eliminates this.
+
+**Homography round-trip (step 4+5):**
+
+Beam aimed at each surveyed marker, `/beam-detect` (brightness-only,
+per-camera threshold) → apply stored homography → compare vs
+surveyed (x, y).
+
+| Marker | Location | Cam 12 err | Cam 13 err | Notes |
+|--------|----------|------------|------------|-------|
+| 2 "middle" | **inside** 3-marker hull | **14 mm** | **4 mm** | both PASS (≤ 30 mm target) |
+| 0 "close"  | at corner of hull | 53 mm | 264 mm | cam 12 near-PASS, cam 13 FAIL (only 2-marker fit) |
+| 1 "back"   | **outside** Y-range of hull | 107 mm | 302 mm | both FAIL — extrapolation past marker hull |
+
+Findings: homography is trustworthy inside the surveyed hull, degrades
+linearly with extrapolation distance. Operator-facing implication:
+tracking UI should gate on "inside surveyed hull" and refuse / warn
+for auto-track targets beyond it. Also strongly recommend ≥ 4
+surveyed markers spread across the tracked region (cam 13's 2-marker
+fit was under-constrained).
+
+### 8.5 Prioritised fix list (from 8.1 + 8.3 live-test additions)
 
 | Priority | Ticket shape | Closes | Depends on |
 |----------|--------------|--------|------------|
-| P1 | Wire `api_objects_temporal_create` through `_pixel_to_stage` + return feet/head stage points; add `aimTarget` to track-actions | Q1, Q2, Q4, A1, A2, A6 | Q12 for accuracy of FOV fallback |
+| P1 #625 | Markers-mode convergence: bracket-and-retry instead of warm-start-to-discovery. On `pixelX==None` from `_beam_detect`, halve the DMX step and retry from the last known-good pose; give up only when step size ≤ 1 DMX unit | Q6 (unblocks markers-as-default) | — |
+| P1 #626 | Markers-mode pre-check: multi-snapshot ArUco aggregation (≥ 3 frames, best-per-id by corner perimeter) AND forced blackout of ALL fixtures before the detect loop. Matches stage-map's existing aggregation | Q6 | — |
+| P1 #627 | Cal safety: explicit zero of every non-Pan/Tilt/Dimmer channel at cal start; don't rely on profile `default > 0` sweep. Laser and other potentially-on channels (`slymovehead` ch 10) stay lit otherwise | Q6 (safety) | — |
+| P1 #628 | Stage bounds auto-derive: stop reading `stage.json` w/d from operator-settable free-form field; derive from the layout's fixture bounding box (or surveyed-marker hull). Eliminates the 5× raw-error multiplier observed at Q1 baseline | Q1 (amplifier) | — |
+| P1 | Wire `api_objects_temporal_create` through `_pixel_to_stage` + return feet/head stage points; add `aimTarget` to track-actions; stamp `_method` tier per-object; add `/api/cameras/<fid>/calibration-status` | Q1, Q2, Q4, Q5 (backend), A1, A2, A6 | Q12 for accuracy of FOV fallback |
 | P1 | Single-source homography: collapse to `_calibrations[str(fid)].matrix`, remove `_calibrated_cameras` dead code, migrate `fixture.homography` once | Q7, B2 | — |
 | P1 | `fovType` whitelist + unified `"diagonal"` default + honour in `_pixel_to_stage` | Q12, B9, #611 | — |
 | P2 | Demote solvePnP to diagnostic in stage-map response; rename `cameraPosition` → `cameraPositionDiagnostic`; report pnp-vs-homography disagreement | Q8, B3 | — |
+| P2 | LM sign-confirmation probe — `verify_signs()` + `force_signs` kwarg on `fit_model`; kill the `<0.2° RMS` convention tie-break; synthetic test suite | Q10, B5 | — |
+| P2 | SPA badges + warning banners + track-action accuracy hint for unmapped/FOV-fallback cameras | Q5 (UX) | Q1+Q5-backend + Q12 shipped |
+| P2 | Multi-camera weighted-cluster fusion — periodic dedup pass over `_temporal_objects`; tier × confidence × hull-falloff weights | Q3, A3 | Q1 backend + Q5 `_method` stamping |
+| P2 | Marker-coverage pre-cal viewport — top-down hull + FOV cone overlay + recommendation pin; closes #612 | Q11, B8 | — |
+| P2 | E2E regression tests — synthetic tracking pipeline + synthetic mover-cal pipeline; ride on #277/#280 runner | Q14, X3 | Q1+Q4+Q5+Q10 shipped |
 | P3 (epic) | Retire v1 legacy helpers — 5-phase plan in Q9 | Q9, B4 | Q7 must land first |
+| P3 | Swap hand-rolled `_lm_solve` for `scipy.optimize.least_squares(loss="soft_l1")` — robust to flash outliers, drops ~40 lines | B5, B6 | Q10 probe lands first (test coverage) |
+| P3 | Camera-health dashboard panel at top of Calibration tab; per-camera card composing `/api/cameras/<fid>/calibration-status` + tracking/beam history | Q13 | Q5 backend + Q11 layout idiom |
 
 ---
 
@@ -674,3 +1250,355 @@ Mentioned only to confirm they were reviewed and are not affected:
   updates (#610, #600, #597, #484, #474, #427, #510); 4 cross-link
   to Q14 (#533, #409, #277, #280). No GitHub comments posted yet —
   table is advisory until we approve §8.1.
+- **2026-04-22** — closed Q10: one-nudge sign-confirmation probe
+  (`verify_signs()` in `parametric_mover.py`), kill the `<0.2° RMS`
+  convention tie-break at 378–384, `force_signs` kwarg on `fit_model`,
+  synthetic test suite. Bonus P3 ticket added for scipy LM swap
+  (soft_l1 loss — robust to beam-flash outliers).
+- **2026-04-22** — closed Q5: three-tier degradation
+  (`homography`/`fov-projection`/`raw`) already provided by
+  `_pixel_to_stage`; ingest path stamps `_method`; auto-track skips
+  aim update on `raw` (fixture holds last good). New
+  `/api/cameras/<fid>/calibration-status` endpoint. Backend rides
+  with Q1 P1 ticket; SPA badges + banners are a separate P2 UX
+  ticket. Never refuse-to-start; never modal-block; always show
+  best-available placement.
+- **2026-04-22** — closed Q3, Q11, Q13, Q14 (the no-hardware batch).
+  Q3: weighted-cluster fusion (tier × YOLO conf × hull falloff) +
+  periodic dedup pass over `_temporal_objects`. Q11: top-down hull
+  + FOV cone + recommendation pin overlay; #612 is the build
+  ticket. Q13: per-camera health-card panel composing the Q5
+  endpoint + tracking/beam history fields. Q14: two synthetic-
+  pipeline tests (tracking + mover-cal) riding on #277/#280
+  infrastructure; #409 becomes Test 1's implementation ticket.
+  Only **Q6** remains open — strictly hardware-bound (basement
+  rig, live-test step 6).
+- **2026-04-22 (live test)** — basement rig, steps 1/2/3/4+5/6
+  executed (steps 7/8 deferred pending Q1 fix). Q6 resolved with
+  caveats: **markers-mode is the correct default after the four
+  new P1 fixes in §8.5 land** (convergence bracket-and-retry,
+  multi-snapshot pre-check, cal-start channel zeroing, stage-bounds
+  auto-derive). None of the three modes worked out-of-the-box; all
+  six runs failed with distinct root causes. Numeric baselines
+  captured in §8.4: stage-map RMS 1046/1227 px (solvePnP bogus,
+  direct-homography usable), tracking-ingest dims-normalized
+  error 380 mm mean with a −307 mm Y bias, beam→homography
+  round-trip 4–14 mm inside the marker hull (Q7 passes) with
+  degradation at corners (53/264 mm) and extrapolation
+  (107/302 mm past hull). Full data and per-step write-ups at
+  `docs/live-test-sessions/2026-04-22/`. Added §12 with follow-up
+  exploration shortlist — items that surfaced during the session
+  but sit outside §8.5's blocking-fix scope.
+- **2026-04-22 (live test, re-run on expanded rig)** — basement rig
+  reconfigured between runs: **3 cameras** (added Cam 16 "Out Left"
+  on RPi-Sly1 deep in the stage at (2350, 1670, 905), rotation 1°),
+  **3 movers** (added 150W MH Stage Left using the new
+  `movinghead-150w-12ch` builtin profile from 8ff9a65), and **6
+  surveyed ArUco markers** (added the elevated Pillar Post marker
+  at Z=1368 mm, plus Stairs and Patent). Prior §8.3/§8.4 numbers
+  were against the 2-cam / 2-mover / 3-marker rig and are
+  **superseded** by this session's measurements against the
+  expanded rig. Steps 1/2/3/4+5/6 re-executed; steps 7/8 still
+  deferred. Full session artifacts replace the prior-run data at
+  `docs/live-test-sessions/2026-04-22/`. Summary by step:
+    - **Step 2 stage-map** — with the elevated Pillar Post marker
+      in the registry, solvePnP produces near-mirror-pose poor
+      fits on all three cameras: Cam 12 RMS **321 px** (6/6
+      matched), Cam 13 **608 px** (6/6), Cam 16 **97 px** (2/6).
+      Worse than the 3-marker baseline: solvePnP tries to use the
+      one non-coplanar marker to resolve the mirror ambiguity and
+      ends up on the wrong side of the plane. Strengthens the §8.5
+      P1 "drop solvePnP, keep findHomography on floor markers"
+      call — Pillar Post should be excluded from the fit (Z=0
+      only) even when surveyed.
+    - **Step 3 tracking baseline (broken ingest)** — 8/10 detected
+      samples across cams 12+13 (cam 16 skipped, see §10 follow-up
+      #620). Range 948–2221 mm with **mean dy = −1202 mm**
+      (consistent Y-undershoot, same signature as the prior run's
+      −307 mm but larger magnitude because stage dimensions are
+      now correct at 4×3.6 m vs the 10×8 m the prior-session rig
+      had cached). All 8/10 land in the 1000–3000 mm predicted
+      pre-fix range. Q1 P1 fix still validated.
+    - **Step 4+5 beam→homography round-trip** — 2/12 samples pass
+      the ≤30 mm target, **both on Cam 16 at its fit markers**:
+      marker 1 @ **25 mm**, marker 5 @ **13 mm**. Everything else
+      225–2221 mm. Cam 16's homography was fit from 2 floor
+      markers only (the Pillar Post was out of its FOV), so the
+      P1-target flow of "findHomography on floor markers only"
+      is effectively what Cam 16 already does — and its at-fit
+      numbers land exactly where the fix aims to put cams 12/13.
+      **Strongest single piece of evidence that P1 will work.**
+    - **Step 6 mover-cal all modes × 3 movers** — 1/9 runs
+      completed (350W legacy, 6 samples, v1 grid — no fit metrics).
+      All 8 failures trace back to cam 12's bad H per the handoff
+      prediction ("If residuals exceed 100 mm, the homography is
+      bad and Q6 will fail regardless of mode"). Markers mode's
+      **discovery** step (battleship + flash) was the most robust
+      homography-independent component of any mode; markers mode's
+      **convergence** on #17 marker 2 landed at **1.2 px RMS in 3
+      iterations** — proving the markers-mode architecture works
+      once the H is correct. v2 is unsalvageable on a bad-H rig
+      (all targets `skipped`). Legacy's 350W success was a
+      geometry accident. **Q6 re-verdict reinforced:** markers
+      becomes default after P1; legacy → debug fallback; v2 →
+      retire or gate on H-health.
+    - **Five new camera-node ergonomics issues surfaced** and filed
+      during this session:
+      **#619** (no way to clear stale camera stage-map cal — only
+      overwrite or factory reset),
+      **#620** (RPi-Sly1 fw 1.3.0 `/scan` capture fails while
+      `/snapshot` works — blocked Cam 16 from Step 3),
+      **#621** (camera node `/scan` resolution hard-capped at
+      320/640 — small / distant objects undetectable at 4K; SAHI
+      tiling or 1280 re-export proposed),
+      **#623** (camera settings auto-tune / slots / WB+exposure+
+      gain button + optional AI evaluator — the lights-down /
+      threshold-200 iteration during Step 4+5 shouldn't be
+      manual),
+      **#624** (`movinghead-150w-12ch` builtin profile WheelSlot
+      capabilities missing `color` hex — RGB always mapped to slot
+      0 (white); patched the running orchestrator via PUT so
+      Step 6 cals emitted the requested red, permanent fix
+      pending).
+    - **Also noted (not yet filed):** v2 mode silently reports all
+      targets as `skipped` without surfacing the underlying H
+      residual; should fail loudly with "camera homography RMS
+      too high — re-run stage-map." Legacy BFS gives up when
+      neighbour moves push the beam off-camera and doesn't try
+      orthogonal nudges. Markers-mode `Nonepx` failures are
+      ambiguous — operator can't tell whether the beam flashed at
+      the requested pose or whether the mover aimed elsewhere.
+- **2026-04-23** — **review approved.** All 14 questions closed.
+  Four new P1 tickets filed from §8.3 live-test findings:
+  **#625** markers-mode convergence bracket-retry, **#626**
+  markers-mode multi-snapshot pre-check, **#627** cal safety
+  (zero non-pan/tilt channels), **#628** stage bounds auto-derive.
+  Cross-reference comments posted on all 15 §10 issues (#611,
+  #612, #357, #423, #610, #600, #597, #484, #474, #427, #510,
+  #533, #409, #277, #280). Per operator direction: P1
+  implementation will proceed directly on `main` since the
+  product has not shipped and §2 allows breaking changes.
+- **2026-04-23** — three multi-camera follow-ups filed (§12.10)
+  prompted by operator's decision to use more cameras rather than
+  denser per-camera markers: **#629** cross-camera object handoff
+  (preserve tracked ID across blind zones), **#630** fusion
+  confidence signal (single-vs-multi-camera placement exposed to
+  consumers), **#631** fusion-pass scaling benchmark (characterise
+  tick budget at 2/4/8/16 cameras).
+- **2026-04-23** — **implementation complete on `main`** through
+  `e5fd8dd`. Every §8.5 P1/P2/P3 ticket shipped in a single day's
+  batch (22 commits from `f2ceece` to `e5fd8dd`):
+    - **P1 (7):** `f2ceece` #628 stage bounds · `00e5568` Q12
+      fovType · `8c36659` Q7 single-store homography · `27ac87f`
+      Q1/Q4/Q5 tracking ingest + aimTarget + cal-status · `6b96e4e`
+      #625/#626/#627 markers-mode convergence + pre-check + safety.
+    - **P2 (4):** `876b875` Q8/Q10/Q5 solvePnP diagnostic + LM
+      sign probe + SPA badges · `cd4d669` Q3/#629/#630 weighted
+      fusion + confidence signal + cross-camera handoff · `425e8d9`
+      Q14 E2E synthetic-pipeline regression tests · `a5ad28b`
+      Q11/#612 marker-coverage backend endpoint.
+    - **P3 (6):** `b97705b`+`2b20c7c`+`b8a3876` Q9 5-phase v1
+      retirement (eager v1→v2 migration, inline v2 fit on legacy
+      save, dead-code delete) · `aa67fc3` Q10-P3 scipy
+      `least_squares(loss="soft_l1")` swap · `380344b` #631
+      scaling benchmark · `318f7d6` Q13 camera-health dashboard.
+    - **Paired issue fixes:** `76d41b7` #624 profile hex ·
+      `f8794e1` #619 clear-calibration button · `a1b0211`
+      Q11/#612 3D-viewport marker overlay.
+    - **Independent code review pass:** `dee04de` 3 correctness
+      bugs (fusion aged-cluster data loss, stage-bounds
+      zero-origin filter excluding back-right-floor corner,
+      FOV-tier ignoring roll) + `e5fd8dd` ship-blocker
+      (`api_object_pos` manual drags still on pre-Q1 proportional
+      mapping) + `43a647d` three regression tests guarding the
+      fixes. Test suite 16/16 green.
+    - **Deferred:** track-action `_method=="raw"` "parked"
+      fallback — hold-last-good is safer than a random swing;
+      no issue filed without operator-side parked-direction spec.
+      File separately if the visible symptom appears in a show.
+
+---
+
+## 12. Recommendations for further exploration
+
+Items that surfaced during the 2026-04-22 live test but fall outside
+the P1/P2 "must-land" scope in §8.5. These are hypotheses to validate,
+measurements to take, or investigations worth running before the next
+calibration rebuild. Ordered by how much they'd improve operator
+confidence in the final system.
+
+### 12.1 Effective FOV vs nameplate FOV (cameras)
+
+Observed in §8.4 and step 3 Finding 3: both cameras failed to see
+targets that should have been well inside their advertised FOV. Cam 12
+at X=1275 with advertised 100° HFOV clipped a target at X=1600 Y=1500
+(only 13° off-axis — should be trivially in-frame). Step 2's node-
+returned intrinsics imply fx values consistent with roughly 62° (cam 12)
+and 148° (cam 13) HFOV at 3840-wide frames, contradicting the advertised
+100°/90°.
+
+- Root cause unknown. Three hypotheses to test:
+  1. Node's `/calibrate/intrinsic` returns stale K from a prior sensor
+     (EMEET 4K swapped in mid-session per `project_basement_rig.md`);
+     cal data didn't follow the swap.
+  2. Advertised `fovDeg` is diagonal (per `#611` comment and
+     `project_basement_rig.md`); horizontal/vertical computations
+     should divide by the aspect-ratio factor, which we're not doing.
+  3. Lens has significant barrel distortion that's not modelled, so
+     an object 13° off-axis in the real scene is > 30° off-axis in
+     pixel space.
+- **Recommend:** run `tests/test_camera_fov.py` (doesn't exist yet; new
+  test) that places a measured-length target at known distance,
+  measures its pixel extent, and back-solves effective HFOV.
+  Write into a camera-node `/calibrate/intrinsic/report` endpoint.
+  Useful for any rig, not just basement.
+
+### 12.2 Beam detector: brightness-mode as default, per-camera threshold
+
+The color-filtered `/beam-detect` (default path) gave 1–2 M px areas
+with centroids on blue-cast static objects (shelving, walls). Only
+brightness-only mode produced usable detections (∼10 k–30 k px areas
+centred on the beam). And thresholds needed per-camera tuning
+(100 for cam 12, 80 for cam 13).
+
+- **Recommend:** change `/beam-detect` default to `mode: "brightness"`
+  when `color` is not specified; keep color-filter as opt-in.
+- **Recommend:** add `fixture.beamDetectThreshold` (per-camera override)
+  to the camera fixture record. Cal code reads it; unset → detector's
+  built-in default. Existing rigs re-tune once via §12.2's tune
+  endpoint (no compat-shim, per §2).
+- **Recommend:** add a `/beam-detect/tune` endpoint that sweeps
+  thresholds 20→200, picks the threshold where `area` first stabilises
+  below some cap (e.g. < 50 000 px) at `brightness > 230`, and stores
+  it on the fixture. One-click "tune this camera" action in Setup.
+
+### 12.3 Marker placement guidance (operator UX)
+
+Q7 round-trip showed sharp quality cliff: 4–14 mm inside the hull,
+> 100 mm outside. Cam 13's 2-marker fit was over-fit on its training
+points (4 mm at marker 2, 264 mm at marker 0). Our rig also has
+marker 1 "back" physically at Y=3100, past the computed visible band
+Y=2967 — even on cam 12's 3-marker fit, extrapolation was unreliable.
+
+- **Recommend:** surface a "coverage score" on the Setup → ArUco tab
+  that counts: (a) registered markers, (b) cameras that see each
+  marker, (c) area of the marker hull per camera, (d) **hull quality
+  warning** when < 3 markers visible to a camera or when any visible
+  marker falls outside the camera's computed floor-band.
+- **Recommend:** documentation/UX guidance "minimum 4 markers,
+  distributed across the tracking region, all inside the visible
+  floor band". Auto-validate against the floor-band formula in
+  `project_basement_rig.md` (Y = camZ / tan(camTilt + halfVFOV)).
+- **Recommend:** refuse to save a camera calibration with <3 in-frame
+  markers — make `markersMatched == 2` a hard warning the operator
+  must acknowledge, not a silent success (step 2 saved cam 13's fit
+  without any warning).
+
+### 12.4 Orphan cleanup in `calibrations.json`
+
+Step 2 Finding 1 noted fid 26 in `calibrations.json` pointing at
+fixtures 23/24/25 that no longer exist. The store has no garbage
+collection. Not a live bug today, but will gradually pollute migrations
+and imports.
+
+- **Recommend:** on `_load("calibrations", ...)` startup, drop any
+  entries whose fid isn't in `_fixtures`. Log which ones got pruned.
+- Folds into the Q7 P1 single-source-homography ticket.
+
+### 12.5 Multi-camera fusion constants (step 7, deferred)
+
+Step 7 (Q3 fusion weights) was deferred until Q1 lands. Once ingest
+produces accurate per-camera placements, we need to tune:
+
+- `tier_weight = {homography: 1.0, fov-projection: 0.3, raw: 0.05}`
+  per §8.1 Q3 proposal — confirm or adjust based on live multi-camera
+  measurements.
+- `hull_falloff_slope` — step 4+5 shows error grows ~3 mm per mm of
+  extrapolation distance past the hull edge; tune the weight
+  discount so a camera's placement at 500 mm-past-hull gets reduced
+  trust automatically.
+
+- **Recommend:** re-do step 7 on the same rig after Q1 + Q3 fixes
+  ship. Drop a person at 5 positions × 2 cameras simultaneously,
+  measure fused-placement error vs single-camera, characterise when
+  fusion helps vs hurts. This is a 30-minute protocol — cheap.
+
+### 12.6 End-to-end tracking error (step 8, deferred)
+
+Step 8 (beam-follows-person) was deferred pending Q1. Once Q1 lands:
+
+- Run a person walking a slow stage-cross along a known path (tape
+  line); log YOLO detection timestamps, ingest placements, auto-track
+  aim commands, and camera-beam-detect positions simultaneously.
+- **Latency measurement**: time from YOLO detect → beam on target.
+  Expect this to be dominated by the tracking-rate gate (1 Hz
+  default?) rather than any compute stage; confirm.
+- **Tracking-accuracy measurement**: how far behind the person does
+  the beam lag on a walk at typical-show pace (1 m/s)?
+
+### 12.7 Floor-mount fixture support in cal
+
+All three cal modes struggled with the 350W floor-mount. The BFS and
+v2 target heuristics assume "fixture points at floor from above";
+the 350W points "forward and slightly up" from Z=550. Small pan/tilt
+moves take the beam off camera faster than for ceiling-mounts.
+
+- **Recommend:** add a fixture-mount-mode field (`ceiling`/`floor`/
+  `side`) and adapt discovery/target-generation per mode. Floor-mount
+  calibration should probe along a tighter angular range near the
+  narrow floor band Y ∈ [visible_min, visible_max], not across the
+  full pan/tilt plane.
+- Markers mode partly sidesteps this (it only needs to drive-to
+  known pixels), but the convergence loop still needs tighter step
+  sizing for narrow-reach fixtures. Tie into §8.5 bracket-and-retry
+  fix.
+
+### 12.8 ArUco marker robustness under scene illumination
+
+Step 6 first attempt failed because the 350W beam stayed ON from the
+previous step and ArUco detect missed marker 1. Even with beam off,
+relaxed-params detector picks up non-registered markers (id 37) —
+suggesting scenes with incidental ArUco-like patterns (logos,
+barcodes, etc.) could cause false detections.
+
+- **Recommend:** pre-check in markers-mode + stage-map should
+  **cross-reference detected ids against the registry**. Detected
+  markers NOT in the registry are ignored for calibration but should
+  be surfaced in the UI ("saw untracked ArUco #37 — did you mean to
+  register it?") so operators can't accidentally survey a decoy.
+- **Recommend:** when pre-flight fails due to marker-invisible,
+  automatically retry with all-fixtures-blackout (like we did manually
+  in step 6) before returning the "needs ≥3 markers" error.
+
+### 12.9 Test the dependent issue list (§10)
+
+§10's table is a paper audit; after the P1 fixes land and their PRs
+merge, walk through each listed issue (#611, #612, #357, #423, #610,
+#600, #597, #484, #474, #427, #510, #533, #409, #277, #280) and post
+the close/update/cross-link comments as §10.1/10.2/10.3 specify. Do
+this in one coordinated pass — operators seeing 15 stale issues update
+at once is less noisy than a random trickle.
+
+- **Recommend:** script it: `gh issue comment <n> -F comment.md`
+  batch, one comment per issue, templates from §10's table. 20-min
+  task, high signal to project-tracking observers.
+
+### 12.10 Multi-camera scaling (operator plan, 2026-04-23)
+
+Operator direction is to extend stage coverage with **more cameras**
+rather than denser markers per camera. The §8 fix plan already
+supports this (Q3 fusion handles N cameras, Q11 per-camera coverage
+viewport, Q5 per-fixture tier). Three follow-ups filed to cover
+gaps that only matter at higher camera counts:
+
+- **#629** — cross-camera object handoff: preserve tracked ID when a
+  person walks through a blind zone between camera A and B. Extends
+  finding A4. P2, not blocking P1 but will surface in real shows.
+- **#630** — fusion confidence signal: expose `_clusterSize` /
+  `_accuracyMm` / `_placementConfidence` on each temporal object so
+  consumers (auto-track, timeline, Android) can distinguish
+  single-camera placements from multi-camera consensus. Opt-in
+  `minPlacementConfidence` on track-actions. P2.
+- **#631** — fusion-pass scaling benchmark: synthetic load test at
+  2/4/8/16 cameras riding on Q14 infrastructure. P3, preventative —
+  find the orchestrator tick-budget cliff before a live show does.

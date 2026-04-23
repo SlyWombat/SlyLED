@@ -1,0 +1,166 @@
+{
+  "calibrationLocked": false,
+  "cameraId": 12,
+  "currentProbe": {
+    "attempt": 25,
+    "dimmer": 255,
+    "dmxPan": 101,
+    "dmxTilt": 51,
+    "pan": 0.397,
+    "rgb": [
+      255,
+      0,
+      0
+    ],
+    "sentAt": 1776908327.4770045,
+    "tilt": 0.2
+  },
+  "currentTarget": null,
+  "debug": {
+    "cam_fov": 100,
+    "cam_pos": [
+      940,
+      110,
+      2040
+    ],
+    "cam_rot": [
+      30,
+      0,
+      0
+    ],
+    "floor_target": [
+      1320.0,
+      2567.0033234129387,
+      0
+    ],
+    "fx_pos": [
+      1700,
+      0,
+      550
+    ],
+    "inverted": false,
+    "stage_d": 3600,
+    "start_pan": 0.4844065058751351,
+    "start_tilt": 0.5443208548978522
+  },
+  "dmxFrame": {
+    "addr": 27,
+    "channels": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "universe": 1
+  },
+  "error": null,
+  "fit": null,
+  "floorZ": 0,
+  "foundAt": {
+    "pan": 0.44666666666666666,
+    "pixelX": 2537,
+    "pixelY": 851,
+    "tilt": 0.1
+  },
+  "geometrySource": "layout-box",
+  "log": [
+    {
+      "level": "info",
+      "msg": "Calibration started (mode=legacy, camera=Stage Right, bridge=192.168.10.174)",
+      "t": 1776908225.683958
+    },
+    {
+      "level": "info",
+      "msg": "Discovery phase: addr=27 uni=1 warmStart=geometric",
+      "t": 1776908225.6844716
+    },
+    {
+      "level": "info",
+      "msg": "Beam found at pan=0.447 tilt=0.100 px=(2537,851) \u2014 starting BFS mapping",
+      "t": 1776908252.8688269
+    },
+    {
+      "level": "info",
+      "msg": "Mapping complete: 6 samples \u2014 building grid",
+      "t": 1776908327.4685268
+    }
+  ],
+  "message": "Mapping: 6/50 samples \u00b7 current pan=0.40 tilt=0.15",
+  "model": null,
+  "phase": "complete",
+  "progress": 100,
+  "result": {
+    "gridSize": 3,
+    "sampleCount": 6
+  },
+  "sampleCount": 6,
+  "status": "done",
+  "targets": [],
+  "totalTargets": null,
+  "verification": {
+    "points": [],
+    "reason": "no beam detected on any verification point",
+    "skipped": true
+  },
+  "warmStart": "geometric"
+}
