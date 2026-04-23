@@ -55,6 +55,29 @@ function s3dInit(){
     }
     if(!e.value){
       _layoutDirty=true;_layDirtyUpdate();
+      // #612 — marker drag. If the transform-controls were attached to
+      // an ArUco marker group, POST the new XY to /api/aruco/markers
+      // and refresh the coverage overlay.
+      if(_s3dDraggingMarker!=null){
+        var _m=_s3d.tctl.object;
+        var _mid=_s3dDraggingMarker;
+        _s3dDraggingMarker=null;
+        if(_m){
+          var _wp=new THREE.Vector3();_m.getWorldPosition(_wp);
+          // 3D→stage: X→X, Y(up)→Z(height), Z(depth)→Y(depth). Z(height)
+          // stays whatever the operator surveyed (they moved XY on floor).
+          var _sx=Math.round(_wp.x*1000);
+          var _sy=Math.round(_wp.z*1000);
+          var _existing=(window._arucoMarkersCache||[]).find(function(x){return x.id===_mid;})||{id:_mid,size:150};
+          var _post={id:_mid,x:_sx,y:_sy,z:_existing.z||0,size:_existing.size||150,label:_existing.label||''};
+          ra('POST','/api/aruco/markers',_post,function(){
+            // Refresh overlay + coverage so the recommendation pin moves.
+            _s3dLoadArucoOverlay();
+          });
+        }
+        _s3d.tctl.detach();
+        return;
+      }
       if(_s3dDraggingAim){
         // Convert dragged aim point position to rotation and save
         var obj=_s3d.tctl.object;
@@ -365,6 +388,9 @@ function s3dLoadChildren(){
 
     // Load objects THEN render them (async — must wait for data)
     loadObjects(function(){_s3dRenderObjects();});
+    // #612 — refresh ArUco marker overlay + coverage recommendation on
+    // every scene rebuild. Same cadence as _s3dRenderObjects.
+    try{_s3dLoadArucoOverlay();}catch(e){}
 
     var placed=(_fixtures||[]).filter(_isFixturePlaced);
     placed.forEach(function(c){
@@ -809,6 +835,10 @@ function _s3dHitGroup(e){
 }
 
 var _s3dDraggingAim=null;
+// #612 — marker drag state. Set to the marker id when the transform
+// controls are attached to an ArUco marker group; drag-end handler
+// POSTs the new XY and clears this back to null.
+var _s3dDraggingMarker=null;
 function s3dClick(e){
   if(!_s3d.inited)return;
   // Check for aim point sphere first
@@ -824,7 +854,32 @@ function s3dClick(e){
     _s3dDraggingAim=hits[0].object.userData.fixtureId;
     return;
   }
+  // #612 — ArUco marker click. Ray-cast against marker meshes (they're
+  // not in _s3d.nodes; we iterate _s3d.scene children tagged arucoMarker).
+  var arucoMeshes=[];
+  _s3d.scene.children.forEach(function(c){
+    if(c.userData&&c.userData.arucoMarker){
+      c.traverse(function(o){if(o.isMesh){o._arucoMarkerId=c.userData.markerId;o._arucoGroup=c;arucoMeshes.push(o);}});
+    }
+  });
+  var arucoHits=_s3d.raycaster.intersectObjects(arucoMeshes);
+  if(arucoHits.length>0&&arucoHits[0].object._arucoGroup){
+    var mg=arucoHits[0].object._arucoGroup;
+    _s3d.tctl.setMode('translate');
+    // Constrain to the floor plane — hide the 3D-Y (up) handle so the
+    // operator can only drag X and depth. Markers on an elevated pillar
+    // keep their surveyed Z; no operator tries to drag a Pillar-Post
+    // marker by a few cm up or down on the 3D viewport anyway.
+    _s3d.tctl.showY = false;
+    _s3d.tctl.attach(mg);
+    _s3dDraggingMarker=mg.userData.markerId;
+    return;
+  } else {
+    // Re-enable Y axis for subsequent non-marker attachments.
+    _s3d.tctl.showY = true;
+  }
   _s3dDraggingAim=null;
+  _s3dDraggingMarker=null;
   var grp=_s3dHitGroup(e);
   if(grp){
     _s3d.selected=grp;
