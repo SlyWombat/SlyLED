@@ -12980,15 +12980,48 @@ def api_project_import():
         # try to stamp `_community` provenance on any that do so the
         # SPA can detect staleness later (#534). Collect the slugs we
         # ended up with so we can batch check_updates after the import.
+        # #607 — the .slyshow project file IS the source of truth for
+        # profile content embedded inside it (same as fixtures, layout,
+        # calibrations, timelines). Previously the import only wrote
+        # profiles when no local copy existed, which silently dropped
+        # every user-authored edit in the embedded version. New rule:
+        # write through, but preserve any community provenance so later
+        # check-updates works. A log line records every overwrite so
+        # it's visible rather than silent.
         _imported_community_slugs = []
+        _imported_profile_diff = []  # (pid, action) for the audit log
         for p in data.get("profiles", []):
             pid = p.get("id")
             if not pid:
                 continue
-            if not _profile_lib.get_profile(pid):
+            existing = _profile_lib.get_profile(pid)
+            if existing is None:
                 _profile_lib.save_profile(p)
+                _imported_profile_diff.append((pid, "added"))
+            else:
+                # Overwrite with the embedded version — the project
+                # file is the source of truth. Preserve _community
+                # provenance if the embedded copy dropped it but the
+                # local copy had it (check-updates still works).
+                if not p.get("_community") and existing.get("_community"):
+                    p["_community"] = existing["_community"]
+                # Diff before save, ignoring stamped-by-save fields.
+                _stamped = ("builtin", "channelCount")
+                _e = {k: v for k, v in existing.items() if k not in _stamped}
+                _p = {k: v for k, v in p.items() if k not in _stamped}
+                changed = (_e != _p)
+                _profile_lib.save_profile(p)
+                _imported_profile_diff.append(
+                    (pid, "overwritten" if changed else "unchanged"))
             if p.get("_community") and p["_community"].get("slug"):
                 _imported_community_slugs.append(p["_community"]["slug"])
+        if _imported_profile_diff:
+            _overwritten = sum(1 for _, a in _imported_profile_diff if a == "overwritten")
+            _added = sum(1 for _, a in _imported_profile_diff if a == "added")
+            log.info("Project import profiles: %d added, %d overwritten, "
+                     "%d unchanged (#607 — embedded version is authoritative)",
+                     _added, _overwritten,
+                     sum(1 for _, a in _imported_profile_diff if a == "unchanged"))
         # Fetch missing profiles from community server (#351) — and
         # stamp them with _community provenance while we're at it.
         _missing_pids = set()
@@ -13453,14 +13486,28 @@ def api_fw_flash_status():
 
 #  "  "  Help (Phase 7)  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
+# #545 — map SPA tab id → actual `## N. Heading` in docs/USER_MANUAL.md.
+# The previous mapping pointed at headings that don't exist ("Dashboard",
+# "Setup", "Firmware"), and assigned wrong numeric prefixes from a pre-v1
+# manual layout. The api_help() reader does a case-insensitive substring
+# match against each line starting with "## ", so we match on the number
+# + title pair — stable across future heading-text wording tweaks.
 _HELP_SECTIONS = {
-    "dash": "Dashboard",
-    "setup": "Setup",
-    "layout": "1-getting-started",
-    "spatial-effects": "3-spatial-effects",
-    "timeline": "4-timeline",
-    "settings": "Settings",
-    "firmware": "Firmware",
+    "dash":            "1. Getting Started",
+    "setup":           "4. Fixture Setup",
+    "layout":          "5. Stage Layout",
+    "objects":         "6. Stage Objects",
+    "actions":         "7. Creating Spatial Effects",  # SPA "Actions" tab
+    "spatial-effects": "7. Creating Spatial Effects",
+    "track":           "8. Track Action",
+    "timeline":        "9. Building a Timeline",
+    "shows":           "11. Show Preview Emulator",
+    "runtime":         "9. Building a Timeline",
+    "settings":        "12. DMX Fixture Profiles",
+    "cameras":         "14. Camera Nodes",
+    "firmware":        "15. Firmware & OTA Updates",
+    "examples":        "18. Examples",
+    "api":             "19. API Quick Reference",
 }
 
 @app.get("/help")

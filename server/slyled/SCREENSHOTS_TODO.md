@@ -12,6 +12,7 @@ signal than the previous "wrong screenshot with misleading caption".
 | `groups-control.png` | #574 | Settings → Group Control. At least two named groups with per-group brightness / action controls visible. |
 | `community-browser.png` | #575 | Settings → Community Profiles section, profile list loaded from electricrv.ca, 3–4 profiles visible with manufacturer / name, Import button in frame. |
 | `profile-library.png` | #575 | Profile management view (import, export, update) — NOT the Actions tab. |
+| `dmx-artnet-settings.png` | #572 | Settings → DMX Engine: Art-Net enabled/running, at least one universe configured, Art-Net IP/universe routing fields visible. |
 
 ## Capture specifications
 
