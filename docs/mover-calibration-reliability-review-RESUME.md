@@ -1,25 +1,38 @@
 # Mover-Calibration Reliability Review — Resume Notes
 
-**Branch:** `claude/review-mover-calibration-reliability` (off `main`)
-**Review doc:** `docs/mover-calibration-reliability-review.md` (596 lines, §0–§12 draft)
+**Status:** All review work lives on `main`. This machine is a
+single-user dev env — no feature branches; continuations land directly
+on main (see memory `feedback_no_branching.md`).
+**Review doc:** `docs/mover-calibration-reliability-review.md` —
+§0–§8.1 complete, §8.2 / §8.3 / §12 placeholders pending.
 **Last session:** 2026-04-23
 
 ---
 
 ## Current state
 
-**PR #646 open** against `main` (2026-04-23):
-<https://github.com/SlyWombat/SlyLED/pull/646>.
-Branch carries §0–§7 draft, §8–§12 closing sections, §8.1 static-reading
-round (Q1–Q6 tier-1 hardening findings), and
-`tests/test_calibration_synthetic.py` (36 assertions, green).
-Five commits on the branch:
+**PR #646 merged** 2026-04-23 via rebase-merge. Six commits landed on
+`main` (search `git log --oneline --grep='calibration-reliability'`).
+What's in the doc now:
 
-- `750b29c` — §0–§7 draft
-- `557e7c1` — §8–§12 closing sections
-- `91dc282` — resume notes (this file)
-- `f840705` — §8.1 findings for Q1–Q6 + synthetic regression test
-- `958b572` — verify_signs 4-combo coverage + Q3 corroborating artifact
+- §0–§7 draft + §8–§12 scaffolding
+- §8.1 static-reading round (Q1–Q6 tier-1 hardening findings) with
+  code citations (`file:line`) for every recommendation
+- `tests/test_calibration_synthetic.py` (36 assertions, green) —
+  no-hardware regression gate for tier-1 fixes
+
+The review was born from the realisation that the mover-alignment
+review (PR #643, merged 2026-04-23) shipped a clean capability-layer
+architecture but **never touched calibration reliability**, which is
+the actual user-facing breakage. Alignment review §9 put calibration
+out of scope "because the camera review landed ParametricFixtureModel".
+That's true but irrelevant — the IK primitive is fine; the *data* it
+gets trained on is junk, because the capture pipeline never completes.
+
+The alignment review's post-merge resume notes (`docs/mover-alignment-
+review.md` §8.3 entry, commit subject line *"§8.3 Fn 1 attempt
+2026-04-23 blocked on cal regression"*) are live validation of this
+review's thesis.
 
 The review was born from the realisation that the mover-alignment
 review (PR #643 on branch `claude/review-mover-alignment-plan`) shipped
@@ -81,40 +94,50 @@ Four-tier fallback ladder. Operator is never stuck.
   tools across pro / tracking / consumer / schema / camera-auto.
   Output reflected in §4. 26 URLs captured.
 
-## Next session — pick one
+## Next session — planned
 
-Options 1, 2, 4 from the prior menu are **done** (§8.1 landed in
-`f840705`/`958b572`; PR #646 opened). Remaining / new candidates:
+**User intent for 2026-04-24:** live-test on the basement rig (§7.1
+protocol). Everything else below is queued behind it.
 
-1. **Live-test the basement rig (§7.1 protocol)** — cold-start,
-   tier-4 baseline → tier-1 auto → tier-2 operator click → tier-3
-   manual → verification → drift retest. Produces §8.3 (live-test
-   resolution section) and ratifies the 100 mm / 200 mm accuracy
-   targets from §1. Hardware-dependent — needs the basement rig
-   (3 movers + 2 cameras + ArUco markers from camera-review §8.3).
-2. **Draft a live-test runner** — Python harness that automates the
-   §7.1 protocol against a live orchestrator (QA test-script scope).
-   Writable now without hardware; first execution on basement rig
-   reveals tweaks. Lives at `tests/test_calibration_live_basement.py`
-   (proposed).
-3. **§8.2 tier 2–4 static reading (Q7–Q13)** — code-reading pass on
-   what exists for each of:
-   - Tier 2 operator-in-loop (Q7–Q8): camera-frame UI surfaces,
-     click-to-sample wiring
-   - Tier 3 3-point manual (Q9–Q11): the stubbed
-     `/api/calibration/mover/<fid>/manual` route at
-     `parent_server.py:5260` is already wired end-to-end (review
-     §3.7 called it stubbed — recent code shows it's not; worth
-     double-checking), phone-gyro aim from alignment review Fn 2
-   - Tier 4 GDTF (Q12–Q13): `ParametricFixtureModel` as
-     geometric-only fallback; MVR import surface
-   Review flagged these as "need implementation-phase decisions" —
-   so static reading's return is lower than Q1–Q6, but it clarifies
-   the code delta each tier needs.
-4. **Respond to PR #646 review** — if reviewers leave comments.
-   Check via `gh pr view 646 --comments` before other work.
-5. **Cross-reference issues** — update status on #488, #610, #486
-   to link back to PR #646 and §8.1 findings. Light bookkeeping.
+### Primary — §7.1 live-test (basement rig, hardware)
+
+Cold-start, all calibrations cleared:
+
+1. **Tier-4 baseline** — aim each mover at 5 known stage points
+   without any calibration. Record pixel-error. This is the
+   never-worse-than-geometric floor.
+2. **Tier-1 auto-cal** — hit Start Calibration, measure wall-clock
+   to completion. If never completes, log the stuck phase + what
+   the camera saw. Falls back to tier 2.
+3. **Tier-2 operator-click** — live frame, operator clicks beam for
+   each BFS position. Measure operator time + resulting fit.
+4. **Tier-3 manual** — drive mover to 3 surveyed ArUco markers,
+   record. Measure operator time + fit quality.
+5. **Verification pass** — aim at 10 held-out points, measure
+   pixel-error + stage-mm-error. This is the "calibration works"
+   number.
+6. **Drift retest** — bump the yoke, re-run verification without
+   re-calibrating. Quantifies brittleness.
+
+Rig assumed ready: 3 movers + 2 cameras + ArUco markers (the
+expanded basement rig from camera-review §8.3 baseline).
+
+Output populates **§8.3 (live-test resolution)** of
+`docs/mover-calibration-reliability-review.md` and ratifies the
+100 mm / 200 mm accuracy targets in §1.
+
+### Queued (after live-test, or if hardware blocks)
+
+- **Draft a live-test runner** — `tests/test_calibration_live_basement.py`
+  automates the §7.1 protocol against a live orchestrator (QA
+  test-script scope; no server code). Safe to start pre-rig; first
+  real run reveals tweaks.
+- **§8.2 tier 2–4 static reading (Q7–Q13)** — what code exists per
+  tier. Worth double-checking `parent_server.py:5260`
+  (`/api/calibration/mover/<fid>/manual`) — review §3.7 called it
+  stubbed but recent reading suggests it's wired end-to-end.
+- **Cross-reference issues** — update #488, #610, #486 status to
+  link §8.1 findings. Light bookkeeping.
 
 ## Context to know
 
