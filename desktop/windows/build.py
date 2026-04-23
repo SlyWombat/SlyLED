@@ -13,27 +13,45 @@ HERE   = pathlib.Path(__file__).resolve().parent
 SHARED = (HERE / ".." / "shared").resolve()
 
 # ── Auto-increment app patch version and sync to installer.iss ────────────────
-try:
+# Skipped when SLYLED_SKIP_VERSION_BUMP=1 (set by build_release.ps1 so the two
+# scripts don't fight — build_release.ps1 owns the version when it's driving).
+import os
+if os.environ.get("SLYLED_SKIP_VERSION_BUMP") == "1":
     server_path = SHARED / "parent_server.py"
     server_py = server_path.read_text(encoding="utf-8")
     m = re.search(r'VERSION\s*=\s*"(\d+)\.(\d+)\.(\d+)"', server_py)
     if m:
-        major, minor, patch = m.group(1), m.group(2), int(m.group(3)) + 1
-        version = f"{major}.{minor}.{patch}"
-        server_py = re.sub(r'VERSION = "[^"]+"', f'VERSION = "{version}"', server_py)
-        server_path.write_text(server_py, encoding="utf-8")
-        print(f"[build.py] App version = {version}")
-
+        version = f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
         iss_path = HERE / "installer.iss"
         iss = iss_path.read_text(encoding="utf-8")
         iss_new = re.sub(r'#define AppVersion\s+"[^"]+"', f'#define AppVersion   "{version}"', iss)
         if iss_new != iss:
             iss_path.write_text(iss_new, encoding="utf-8")
-            print(f"[build.py] Updated installer.iss AppVersion = {version}")
-        # NOTE: All firmware versions (Arduino + camera) are independent — only
-        # incremented when their respective firmware is compiled/deployed
-except Exception as e:
-    print(f"[build.py] Warning: could not sync app version: {e}")
+            print(f"[build.py] Synced installer.iss AppVersion = {version} (bump skipped)")
+        else:
+            print(f"[build.py] App version = {version} (bump skipped)")
+else:
+    try:
+        server_path = SHARED / "parent_server.py"
+        server_py = server_path.read_text(encoding="utf-8")
+        m = re.search(r'VERSION\s*=\s*"(\d+)\.(\d+)\.(\d+)"', server_py)
+        if m:
+            major, minor, patch = m.group(1), m.group(2), int(m.group(3)) + 1
+            version = f"{major}.{minor}.{patch}"
+            server_py = re.sub(r'VERSION = "[^"]+"', f'VERSION = "{version}"', server_py)
+            server_path.write_text(server_py, encoding="utf-8")
+            print(f"[build.py] App version = {version}")
+
+            iss_path = HERE / "installer.iss"
+            iss = iss_path.read_text(encoding="utf-8")
+            iss_new = re.sub(r'#define AppVersion\s+"[^"]+"', f'#define AppVersion   "{version}"', iss)
+            if iss_new != iss:
+                iss_path.write_text(iss_new, encoding="utf-8")
+                print(f"[build.py] Updated installer.iss AppVersion = {version}")
+            # NOTE: All firmware versions (Arduino + camera) are independent — only
+            # incremented when their respective firmware is compiled/deployed
+    except Exception as e:
+        print(f"[build.py] Warning: could not sync app version: {e}")
 SPA    = SHARED / "spa"
 ICO    = (HERE / ".." / ".." / "images" / "slyled.ico").resolve()
 FWDIR  = (HERE / ".." / ".." / "firmware").resolve()
