@@ -978,6 +978,105 @@ def verification_sweep(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     return results
 
 
+def verification_sweep_parametric(bridge_ip, camera_ip, mover_addr, cam_idx,
+                                   color, model, homography, targets,
+                                   threshold_mm=100.0, profile=None):
+    """Post-fit verification against the parametric model (#654 / review Q5).
+
+    For each held-out stage-mm target:
+      1. pan, tilt = model.inverse(x, y, z)
+      2. Command the mover, capture the beam pixel with the camera
+      3. Unproject pixel → stage-mm via the floor homography
+      4. Error is the Euclidean stage-mm distance between target and
+         the observed beam-on-floor position
+
+    Unlike `verification_sweep` (grid-based, pixel-space), this tests
+    the v2 parametric inverse end-to-end — the primitive that production
+    aim uses for track actions, remote-vector aim, and spatial effects.
+
+    Args:
+        model:         ParametricFixtureModel instance (fit is complete)
+        homography:    3x3 flat matrix mapping camera pixels → stage mm
+                        on the floor plane (from _calibrations[cam])
+        targets:       iterable of (stageX, stageY, stageZ) in mm,
+                        sampled from the reachable region
+        threshold_mm:  per-point pass threshold; defaults to the review's
+                        tier-1 target of 100 mm at 3 m throw
+        profile:       optional DMX profile for multi-channel writes
+
+    Returns (overall_pass: bool, points: list) where each point is:
+        {"target": [x, y, z], "pan": float, "tilt": float,
+         "beamPixel": [x, y] | None,
+         "observedStage": [x, y] | None,
+         "errorMm": float | None,
+         "pass": bool}
+    """
+    dmx = _fresh_buffer()
+    points = []
+    passes = 0
+    with_error = 0
+
+    for tx, ty, tz in targets:
+        # 1. Ask the model where to aim.
+        try:
+            pan, tilt = model.inverse(float(tx), float(ty), float(tz))
+        except Exception:
+            points.append({"target": [float(tx), float(ty), float(tz)],
+                           "pan": None, "tilt": None,
+                           "beamPixel": None, "observedStage": None,
+                           "errorMm": None, "pass": False,
+                           "reason": "model_inverse_failed"})
+            continue
+
+        # 2. Drive the mover and wait for settle.
+        _set_mover_dmx(dmx, mover_addr, pan, tilt, *color,
+                       dimmer=255, profile=profile)
+        _hold_dmx(bridge_ip, dmx, 0.8)
+        beam = _beam_detect(camera_ip, cam_idx, color, center=True)
+        if beam is None:
+            points.append({"target": [float(tx), float(ty), float(tz)],
+                           "pan": float(pan), "tilt": float(tilt),
+                           "beamPixel": None, "observedStage": None,
+                           "errorMm": None, "pass": False,
+                           "reason": "beam_not_detected"})
+            continue
+        bx, by = beam[0], beam[1]
+
+        # 3. Unproject to stage mm if we have a floor homography.
+        observed_stage = None
+        err_mm = None
+        if homography is not None:
+            try:
+                observed_stage = pixel_to_stage(bx, by, homography)
+            except Exception:
+                observed_stage = None
+        if observed_stage is not None:
+            err_mm = math.hypot(tx - observed_stage[0], ty - observed_stage[1])
+            with_error += 1
+
+        passed = (err_mm is not None and err_mm <= threshold_mm)
+        if passed:
+            passes += 1
+
+        points.append({
+            "target": [float(tx), float(ty), float(tz)],
+            "pan": float(pan), "tilt": float(tilt),
+            "beamPixel": [int(bx), int(by)],
+            "observedStage": [float(observed_stage[0]), float(observed_stage[1])]
+            if observed_stage else None,
+            "errorMm": float(err_mm) if err_mm is not None else None,
+            "pass": passed,
+        })
+
+    # Overall pass: every point with a measurable error is under threshold,
+    # AND at least half the targets produced a measurement (otherwise the
+    # sweep degenerated into "camera can't see the beam anywhere").
+    overall_pass = (with_error >= max(2, len(points) // 2)
+                    and passes == with_error
+                    and with_error > 0)
+    return overall_pass, points
+
+
 def warmup_sweep(bridge_ip, mover_addr, color=(0, 0, 0),
                  duration_s=30.0, progress_cb=None, abort_event=None):
     """Cycle the fixture through its pan/tilt range to warm motors/belts

@@ -4936,11 +4936,103 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
     # Eagerly fitting here means a successful legacy run writes v2 directly,
     # so there's no migration state to carry across restarts.
     try:
-        _get_mover_model(fid)
+        model = _get_mover_model(fid)
     except Exception as _e:
         log.warning("Q9-P3 legacy cal: inline v2 fit failed for fid=%d: %s "
                     "(cal stays v1 until next use)", fid, _e)
-    f["moverCalibrated"] = True
+        model = None
+
+    # #654 / review Q5 — parametric held-out verification. Tests
+    # ParametricFixtureModel.inverse end-to-end on 5 stage-mm targets the
+    # fit never saw. Pass threshold is 100 mm stage-space error (review §1
+    # tier-1 target). Failure flags pendingAccept so a future Accept/Retry
+    # UI can let the operator decide, but we still persist the calibration
+    # so the live-test operator can inspect the residuals.
+    parametric_verification = None
+    if model is not None:
+        job["phase"] = "parametric-verification"
+        job["progress"] = 95
+        phase_start = time.monotonic()
+        cam_cal = _calibrations.get(str(cam["id"]))
+        H_flat = (cam_cal or {}).get("matrix") if cam_cal else None
+        try:
+            # Sample N=5 held-out stage-mm targets from the fit region.
+            # Use the samples' stage-XY bounding box, shrunk 10% inward.
+            stage_xs = [s.get("stageX", 0) for s in samples]
+            stage_ys = [s.get("stageY", 0) for s in samples]
+            stage_zs = [s.get("stageZ", 0) for s in samples]
+            if stage_xs and stage_ys:
+                xmin, xmax = min(stage_xs), max(stage_xs)
+                ymin, ymax = min(stage_ys), max(stage_ys)
+                mx = 0.1 * (xmax - xmin); my = 0.1 * (ymax - ymin)
+                import random as _rand
+                rng = _rand.Random(0x654A117)
+                vtargets = []
+                for _ in range(5):
+                    vtargets.append((
+                        rng.uniform(xmin + mx, xmax - mx),
+                        rng.uniform(ymin + my, ymax - my),
+                        sum(stage_zs) / len(stage_zs) if stage_zs else 0.0,
+                    ))
+                overall_pass, pv_points = _mcal.verification_sweep_parametric(
+                    bridge_ip, cam_ip, addr, cam_idx, mover_color,
+                    model, H_flat, vtargets,
+                    threshold_mm=100.0, profile=prof_info,
+                )
+                parametric_verification = {
+                    "pass": overall_pass,
+                    "points": pv_points,
+                    "thresholdMm": 100.0,
+                }
+                errs = [p["errorMm"] for p in pv_points if p.get("errorMm") is not None]
+                if errs:
+                    parametric_verification["rmsMm"] = math.sqrt(
+                        sum(e * e for e in errs) / len(errs))
+                    parametric_verification["maxMm"] = max(errs)
+                log.info("MOVER-CAL %d: parametric verification %s "
+                         "(%d/%d pass, rms=%.0fmm max=%.0fmm)",
+                         fid, "PASS" if overall_pass else "FAIL",
+                         sum(1 for p in pv_points if p.get("pass")),
+                         len(pv_points),
+                         parametric_verification.get("rmsMm", 0),
+                         parametric_verification.get("maxMm", 0))
+            else:
+                log.warning("MOVER-CAL %d: no samples for verification bounds", fid)
+        except Exception as e:
+            log.warning("MOVER-CAL %d: parametric verification error: %s", fid, e)
+            parametric_verification = {"pass": False, "error": str(e)}
+        elapsed = time.monotonic() - phase_start
+        if elapsed > CAL_BUDGET_VERIFICATION_S:
+            log.warning("MOVER-CAL %d: parametric verification exceeded %.0fs budget (%.1fs)",
+                        fid, CAL_BUDGET_VERIFICATION_S, elapsed)
+
+    if parametric_verification is not None:
+        job["parametricVerification"] = parametric_verification
+        _mover_cal[str(fid)]["parametricVerification"] = parametric_verification
+        _save("mover_calibrations", _mover_cal)
+
+    # #654 — gate moverCalibrated on parametric verification pass. When
+    # verification fails or couldn't run (no homography), flag the job
+    # as pendingAccept so the operator can review residuals and either
+    # Accept (mark moverCalibrated=True anyway) or Retry (re-discover).
+    # This is the "Accept / Retry" review §8.1 Q5 requires, minus the
+    # UI wiring — /accept + /retry endpoints follow in a separate PR.
+    if parametric_verification is not None and parametric_verification.get("pass"):
+        f["moverCalibrated"] = True
+        job["pendingAccept"] = False
+    else:
+        # Verification failed or couldn't run — leave moverCalibrated FALSE
+        # until the operator hits Accept. Previously this flag was set
+        # unconditionally, which is exactly the "calibration has never
+        # worked" signal (review §5.1 #4).
+        f["moverCalibrated"] = False
+        job["pendingAccept"] = True
+        if parametric_verification is None:
+            job["acceptReason"] = ("Parametric verification could not run — "
+                                    "check camera homography (ArUco cal).")
+        else:
+            job["acceptReason"] = ("Parametric verification failed — "
+                                   "residuals above 100 mm stage-space threshold.")
     # #511 — release the lock before persisting so isCalibrating doesn't
     # leak into fixtures.json.
     _set_calibrating(fid, False)
@@ -5299,6 +5391,54 @@ def api_mover_cal_residuals(fid):
     return jsonify(ok=True, samples=entries,
                    fixturePos=list(fx_pos),
                    floorZ=float(floor_z))
+
+
+@app.post("/api/calibration/mover/<int:fid>/accept")
+def api_mover_cal_accept(fid):
+    """#654 / review Q5 — operator accepts a calibration whose held-out
+    parametric verification failed (or couldn't run). Sets
+    ``fixture.moverCalibrated = True`` and clears the pendingAccept flag
+    on the job. Used when the operator has inspected the residuals and
+    decided the fit is good enough for the show, or when a camera
+    homography isn't available but the legacy grid is sufficient.
+    """
+    f = next((x for x in _fixtures if x.get("id") == fid), None)
+    if not f:
+        return jsonify(ok=False, err="Fixture not found"), 404
+    if not _mover_cal.get(str(fid)):
+        return jsonify(ok=False, err="No calibration to accept"), 400
+    f["moverCalibrated"] = True
+    _save("fixtures", _fixtures)
+    job = _mover_cal_jobs.get(str(fid))
+    if job:
+        job["pendingAccept"] = False
+        job["operatorAccepted"] = True
+    log.info("MOVER-CAL %d: operator accepted calibration despite verification", fid)
+    return jsonify(ok=True)
+
+
+@app.post("/api/calibration/mover/<int:fid>/retry")
+def api_mover_cal_retry(fid):
+    """#654 / review Q5 — operator rejects a calibration and wants to
+    re-run discovery + sampling. Clears the stored cal so the next
+    /start launches fresh, and clears moverCalibrated on the fixture.
+    Samples are discarded (operator explicitly chose not to Accept).
+    """
+    f = next((x for x in _fixtures if x.get("id") == fid), None)
+    if not f:
+        return jsonify(ok=False, err="Fixture not found"), 404
+    removed = _mover_cal.pop(str(fid), None)
+    if removed is not None:
+        _save("mover_calibrations", _mover_cal)
+    _invalidate_mover_model(fid)
+    f["moverCalibrated"] = False
+    _save("fixtures", _fixtures)
+    job = _mover_cal_jobs.get(str(fid))
+    if job:
+        job["pendingAccept"] = False
+        job["operatorRetried"] = True
+    log.info("MOVER-CAL %d: operator retried — previous cal discarded", fid)
+    return jsonify(ok=True)
 
 
 @app.post("/api/calibration/mover/<int:fid>/exclude-sample")
