@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SlyLED — 3D Volumetric LED & DMX Lighting Control</title>
+<meta name="description" content="AI-powered stage lighting that tracks people, controls moving heads, and runs entire shows automatically. Free, open source. Windows, Android, ESP32.">
+<meta property="og:title" content="SlyLED — Your lights know where the show is">
+<meta property="og:description" content="AI-powered stage lighting that tracks people, aims moving heads, and runs entire shows automatically. Free and open source.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://electricrv.ca/slyled/">
+<meta property="og:image" content="https://electricrv.ca/slyled/spa-layout-3d.png">
+<meta property="og:image:width" content="1280"><meta property="og:image:height" content="800">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://electricrv.ca/slyled/spa-layout-3d.png">
+<meta name="theme-color" content="#0A0F13">
+<link rel="icon" type="image/x-icon" href="slyled.ico">
+<link rel="icon" type="image/png" sizes="192x192" href="slyled.png">
+<link rel="apple-touch-icon" href="slyled.png">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"SlyLED","applicationCategory":"EntertainmentApplication","operatingSystem":"Windows,Android","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"license":"https://opensource.org/licenses/MIT","downloadUrl":"https://github.com/SlyWombat/SlyLED/releases/latest","url":"https://electricrv.ca/slyled/"}</script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0A0F13;--surface:#0f172a;--surface2:#1e293b;--border:#334155;
+  --text:#e2e8f0;--dim:#94a3b8;
+  --cyan:#22d3ee;--purple:#818cf8;--green:#4ade80;--amber:#fbbf24;--pink:#f472b6;--red:#f87171;--blue:#3b82f6;
+  --accent:var(--cyan);
+}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Roboto,"Helvetica Neue",Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;overflow-x:hidden}
+h1,h2,h3,h4{font-family:"Segoe UI",system-ui,-apple-system,BlinkMacSystemFont,Roboto,sans-serif;letter-spacing:-.01em}
+a{color:var(--cyan);text-decoration:none}a:hover{text-decoration:underline}
+.container{max-width:1000px;margin:0 auto;padding:0 20px}
+
+/* ── Scroll progress ── */
+#scroll-prog{position:fixed;top:0;left:0;height:2px;width:0%;background:linear-gradient(90deg,var(--cyan),var(--purple),var(--green));z-index:1000;pointer-events:none;transition:width .05s linear}
+
+/* ── Language button ── */
+.lang-btn{position:fixed;top:16px;right:16px;z-index:100;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px 12px;color:var(--dim);cursor:pointer;font-size:.85em;display:flex;align-items:center;gap:6px;transition:border-color .2s}
+.lang-btn:hover{border-color:var(--cyan);color:var(--text)}
+.lang-btn svg{width:16px;height:16px;fill:currentColor}
+
+/* ── Canvas hero ── */
+.hero-wrap{position:relative;width:100%;height:100vh;min-height:580px;overflow:hidden;background:var(--bg)}
+#hero-canvas{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;display:block}
+.hero-overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:20px;pointer-events:none}
+.hero-overlay .cta{pointer-events:all}
+.hero-eyebrow{font-size:.75rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--cyan);opacity:.75;margin-bottom:14px;font-family:inherit}
+.hero-h1{font-size:clamp(2.2rem,6vw,5rem);font-weight:800;line-height:1.06;letter-spacing:-.02em;background:linear-gradient(135deg,#fff 0%,var(--cyan) 55%,#a5f3fc 100%);background-size:200% 200%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:shimmer 6s ease-in-out infinite;margin-bottom:18px}
+@keyframes shimmer{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
+.hero-sub{font-size:clamp(.95rem,2.5vw,1.18rem);color:rgba(148,163,184,.85);max-width:540px;margin:0 auto 32px;line-height:1.65}
+.badges{display:flex;gap:8px;justify-content:center;margin-bottom:28px;flex-wrap:wrap}
+.badge{padding:5px 14px;border-radius:20px;font-size:.78em;font-weight:600;backdrop-filter:blur(8px)}
+.badge-win{background:rgba(59,130,246,.15);color:#93c5fd;border:1px solid rgba(59,130,246,.3)}
+.badge-android{background:rgba(74,222,128,.15);color:#86efac;border:1px solid rgba(74,222,128,.3)}
+.badge-esp{background:rgba(251,191,36,.15);color:#fcd34d;border:1px solid rgba(251,191,36,.3)}
+.badge-dmx{background:rgba(129,140,248,.15);color:#c4b5fd;border:1px solid rgba(129,140,248,.3)}
+.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.cta a{display:inline-flex;align-items:center;gap:8px;padding:13px 26px;border-radius:10px;font-weight:700;font-size:.95em;transition:transform .2s,box-shadow .2s;box-shadow:0 4px 15px rgba(0,0,0,.35)}
+.cta a:hover{transform:translateY(-3px);box-shadow:0 8px 28px rgba(0,0,0,.45);text-decoration:none}
+.cta-primary{background:linear-gradient(135deg,var(--blue),var(--cyan));color:#fff}
+.cta-android{background:linear-gradient(135deg,#059669,var(--green));color:#000}
+.cta-ghost{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.hero-hint{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);color:rgba(34,211,238,.38);font-size:.74rem;letter-spacing:.06em;transition:opacity 1.5s;pointer-events:none;white-space:nowrap;animation:bob 2s ease-in-out infinite}
+@keyframes bob{0%,100%{transform:translateX(-50%) translateY(0)}50%{transform:translateX(-50%) translateY(5px)}}
+
+/* ── Stats strip ── */
+.stats-strip{background:var(--surface);border-bottom:1px solid var(--border)}
+.stats-row{display:flex;align-items:stretch;max-width:1000px;margin:0 auto;padding:0 20px;flex-wrap:wrap}
+.stat-item{flex:1;min-width:120px;text-align:center;padding:16px 12px;border-right:1px solid var(--border)}
+.stat-item:last-child{border-right:none}
+.stat-num{font-family:inherit;font-size:1.5rem;font-weight:700;color:var(--cyan);display:block;line-height:1.1}
+.stat-label{font-size:.68rem;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;display:block;margin-top:3px}
+
+/* ── Three Moments ── */
+.moment{padding:90px 0;position:relative;overflow:hidden}
+.moment:nth-child(odd){background:var(--bg)}
+.moment:nth-child(even){background:var(--surface)}
+.moment-inner{max-width:1000px;margin:0 auto;padding:0 20px;display:grid;grid-template-columns:1fr 1fr;gap:64px;align-items:center}
+.moment:nth-child(even) .moment-inner{direction:rtl}
+.moment:nth-child(even) .moment-text,.moment:nth-child(even) .moment-visual{direction:ltr}
+.moment-num{font-family:inherit;font-size:5.5rem;font-weight:800;line-height:1;color:rgba(34,211,238,.09);display:block;margin-bottom:-12px}
+.moment-title{font-size:clamp(1.6rem,4vw,2.4rem);font-weight:700;line-height:1.15;margin-bottom:14px;color:var(--text)}
+.moment-title em{font-style:normal;background:linear-gradient(135deg,var(--cyan),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.moment-body{color:var(--dim);font-size:1.02rem;line-height:1.72;margin-bottom:20px}
+.moment-detail{display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:.88rem;color:var(--dim)}
+.moment-detail::before{content:'›';color:var(--cyan);flex-shrink:0;margin-top:1px}
+.moment-visual{border-radius:16px;border:1px solid var(--border);overflow:hidden;background:rgba(10,15,19,.9);aspect-ratio:4/3;position:relative}
+.moment-canvas{width:100%;height:100%;display:block}
+
+/* ── Screenshots ── */
+.screenshots{padding:70px 0;background:linear-gradient(180deg,var(--bg),var(--surface))}
+.screenshots h2{text-align:center;font-size:clamp(1.5rem,4vw,2rem);margin-bottom:10px}
+.screenshots .sub{text-align:center;color:var(--dim);margin-bottom:28px;font-size:.98rem}
+.ss-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:16px}
+.ss-grid figure{margin:0;position:relative;overflow:hidden;border-radius:10px;border:1px solid var(--border);transition:transform .3s,box-shadow .3s;transform-style:preserve-3d}
+.ss-grid figure:hover{box-shadow:0 8px 32px rgba(34,211,238,.12)}
+.ss-grid img{width:100%;display:block;cursor:zoom-in}
+.ss-grid figcaption{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,.85));padding:10px 14px;font-size:.78em;color:var(--dim)}
+.hero-screenshot{perspective:800px;margin-bottom:22px}
+.hero-screenshot img{width:100%;border-radius:12px;border:1px solid var(--border);transition:transform .4s;box-shadow:0 8px 40px rgba(0,0,0,.5);cursor:zoom-in}
+.hero-screenshot:hover img{transform:rotateY(-2deg) rotateX(1deg) scale(1.01)}
+
+/* ── Features ── */
+section{padding:64px 0}
+.section-title{font-size:clamp(1.5rem,4vw,2rem);font-weight:700;text-align:center;margin-bottom:10px}
+.section-sub{text-align:center;color:var(--dim);margin-bottom:34px;font-size:1rem}
+.features{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
+.feature{background:var(--surface);padding:26px;border-radius:12px;border:1px solid var(--border);border-left:3px solid var(--cyan);transition:box-shadow .3s,border-color .3s;position:relative;overflow:hidden}
+.feature:hover{border-left-color:var(--purple);box-shadow:0 4px 24px rgba(34,211,238,.08);text-decoration:none}
+a.feature{color:inherit;display:block}
+.feature h3{color:var(--cyan);margin-bottom:9px;font-size:1.05em}
+.feature p{color:var(--dim);font-size:.87em;line-height:1.55}
+.feature .icon{font-size:2em;margin-bottom:10px;display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;border-radius:50%;background:rgba(34,211,238,.07);border:1px solid rgba(34,211,238,.14)}
+
+/* ── Why SlyLED ── */
+.why{padding:70px 0;background:linear-gradient(180deg,var(--surface),var(--bg))}
+.why-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:22px;margin-top:36px}
+.why-card{padding:30px;border-radius:14px;border:1px solid rgba(34,211,238,.15);background:linear-gradient(135deg,rgba(34,211,238,.04),transparent);position:relative;overflow:hidden}
+.why-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--stripe,var(--cyan));opacity:.6}
+.why-icon{font-size:2.2rem;margin-bottom:12px;display:block}
+.why-card h3{font-size:1.15rem;margin-bottom:10px;color:var(--text)}
+.why-card p{color:var(--dim);font-size:.9rem;line-height:1.6}
+
+/* ── Hardware ── */
+.hw-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
+.hw-card{background:var(--surface);padding:22px;border-radius:12px;border:1px solid var(--border);text-align:center;transition:border-color .2s}
+.hw-card:hover{border-color:var(--cyan)}
+.hw-card h3{margin-bottom:7px;font-size:.97em}
+.hw-card p{color:var(--dim);font-size:.82em}
+
+/* ── Community ── */
+.community{background:linear-gradient(135deg,rgba(129,140,248,.07),rgba(34,211,238,.04));padding:64px 0}
+.comm-card{text-align:center;padding:40px;background:var(--surface);border-radius:16px;border:1px solid rgba(129,140,248,.28);max-width:480px;margin:0 auto}
+.comm-card .num{font-size:3.5em;font-weight:800;background:linear-gradient(135deg,var(--purple),var(--cyan));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+
+/* ── Install ── */
+.install{background:var(--surface)}
+.install-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:18px;margin-top:28px}
+.step{padding:22px;border-radius:12px;border:1px solid var(--border);background:var(--bg)}
+.step .num{display:inline-block;width:30px;height:30px;line-height:30px;text-align:center;border-radius:50%;background:var(--blue);color:#fff;font-weight:700;font-size:.88em;margin-bottom:10px}
+.step h4{margin-bottom:7px;font-size:.97em}
+.step p{color:var(--dim);font-size:.86em}
+.step code{background:var(--surface2);padding:2px 5px;border-radius:3px;font-size:.84em;color:var(--cyan)}
+
+/* ── Downloads CTA ── */
+.dl-section{padding:50px 0;text-align:center}
+
+/* ── Footer ── */
+footer{padding:36px 0;text-align:center;color:var(--dim);font-size:.84em;border-top:1px solid var(--surface2)}
+footer a{color:var(--cyan)}
+
+/* ── Lightbox ── */
+.lightbox{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.92);z-index:200;display:none;align-items:center;justify-content:center;cursor:zoom-out}
+.lightbox.active{display:flex}
+.lightbox img{max-width:95%;max-height:90vh;border-radius:8px;box-shadow:0 0 60px rgba(34,211,238,.2)}
+.lightbox .close{position:absolute;top:20px;right:24px;color:#fff;font-size:2em;cursor:pointer}
+
+/* ── Animations ── */
+.fade-in{opacity:0;transform:translateY(22px);transition:opacity .65s,transform .65s}
+.fade-in.visible{opacity:1;transform:translateY(0)}
+
+/* ── Responsive ── */
+@media(max-width:768px){
+  .moment-inner{grid-template-columns:1fr;gap:28px}
+  .moment:nth-child(even) .moment-inner{direction:ltr}
+  .moment{padding:56px 0}
+  .moment-num{font-size:3.5rem}
+  .stat-item{min-width:90px}
+  .hero-h1{font-size:clamp(1.9rem,8vw,2.8rem)}
+  .hero-sub{font-size:.93rem}
+  .cta a{padding:12px 20px;font-size:.9em}
+}
+@media(max-width:600px){
+  .ss-grid{grid-template-columns:1fr}
+  .lang-btn{top:8px;right:8px;font-size:.75em;padding:4px 8px}
+  .stat-item{min-width:80px;padding:12px 6px}
+  .stat-num{font-size:1.2rem}
+}
+@media(prefers-reduced-motion:reduce){
+  .hero-h1{animation:none}
+  .fade-in{opacity:1;transform:none;transition:none}
+  #scroll-prog{display:none}
+}
+</style>
+</head>
+<body>
+
+<div id="scroll-prog"></div>
+
+<button class="lang-btn" onclick="_toggleLang()" title="Switch language / Changer de langue" aria-label="Switch language">
+  <svg viewBox="0 0 24 24"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>
+  <span id="lang-label">EN</span>
+</button>
+
+<!-- ═══ HERO CANVAS ════════════════════════════════════════════════════ -->
+<div class="hero-wrap">
+  <canvas id="hero-canvas" role="img" aria-label="Interactive stage demo: beam cones from moving head fixtures track a person silhouette across the stage"></canvas>
+  <div class="hero-overlay">
+    <p class="hero-eyebrow">Open Source · Free Forever · v1.5.32</p>
+    <h1 class="hero-h1" data-i="heroH1"></h1>
+    <p class="hero-sub" data-i="heroSub"></p>
+    <div class="badges">
+      <span class="badge badge-win">&#x1F4BB; Windows</span>
+      <span class="badge badge-android">&#x1F4F1; Android</span>
+      <span class="badge badge-esp">&#x26A1; ESP32 / D1 Mini</span>
+      <span class="badge badge-dmx">&#x1F4A1; DMX / Art-Net</span>
+    </div>
+    <div class="cta">
+      <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="cta-primary" data-i="ctaWin"></a>
+      <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="cta-android" data-i="ctaAndroid"></a>
+      <a href="https://github.com/SlyWombat/SlyLED" class="cta-ghost" data-i="ctaGithub"></a>
+    </div>
+  </div>
+  <div class="hero-hint" id="hero-hint" data-i="heroHint"></div>
+</div>
+
+<!-- ═══ STATS STRIP ═══════════════════════════════════════════════════ -->
+<div class="stats-strip">
+  <div class="stats-row">
+    <div class="stat-item"><span class="stat-num" id="stat-stars">—</span><span class="stat-label">GitHub Stars</span></div>
+    <div class="stat-item"><span class="stat-num" id="stat-profiles">—</span><span class="stat-label" data-i="statProfiles"></span></div>
+    <div class="stat-item"><span class="stat-num">700+</span><span class="stat-label" data-i="statOfl"></span></div>
+    <div class="stat-item"><span class="stat-num">40 Hz</span><span class="stat-label" data-i="statHz"></span></div>
+    <div class="stat-item"><span class="stat-num">MIT</span><span class="stat-label" data-i="statLicense"></span></div>
+  </div>
+</div>
+
+<!-- ═══ THREE MOMENTS ════════════════════════════════════════════════ -->
+<div class="moment fade-in">
+  <div class="moment-inner">
+    <div class="moment-text">
+      <span class="moment-num">01</span>
+      <h2 class="moment-title"><em data-i="m1title"></em></h2>
+      <p class="moment-body" data-i="m1body"></p>
+      <p class="moment-detail" data-i="m1d1"></p>
+      <p class="moment-detail" data-i="m1d2"></p>
+    </div>
+    <div class="moment-visual">
+      <canvas id="m1-canvas" class="moment-canvas"></canvas>
+    </div>
+  </div>
+</div>
+
+<div class="moment fade-in">
+  <div class="moment-inner">
+    <div class="moment-text">
+      <span class="moment-num">02</span>
+      <h2 class="moment-title"><em data-i="m2title"></em></h2>
+      <p class="moment-body" data-i="m2body"></p>
+      <p class="moment-detail" data-i="m2d1"></p>
+      <p class="moment-detail" data-i="m2d2"></p>
+    </div>
+    <div class="moment-visual">
+      <canvas id="m2-canvas" class="moment-canvas"></canvas>
+    </div>
+  </div>
+</div>
+
+<div class="moment fade-in">
+  <div class="moment-inner">
+    <div class="moment-text">
+      <span class="moment-num">03</span>
+      <h2 class="moment-title"><em data-i="m3title"></em></h2>
+      <p class="moment-body" data-i="m3body"></p>
+      <p class="moment-detail" data-i="m3d1"></p>
+      <p class="moment-detail" data-i="m3d2"></p>
+    </div>
+    <div class="moment-visual">
+      <canvas id="m3-canvas" class="moment-canvas"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SCREENSHOTS ══════════════════════════════════════════════════ -->
+<section class="screenshots fade-in">
+  <div class="container">
+    <h2 class="section-title" data-i="ssTitle"></h2>
+    <p class="sub" data-i="ssSub"></p>
+    <a href="demo/" class="hero-screenshot fade-in" style="display:block;text-decoration:none">
+      <img src="spa-layout-3d.png" alt="3D Stage Layout with beam cones, aim spheres and stage objects" loading="eager" width="1280" height="720">
+    </a>
+    <div class="ss-grid">
+      <figure class="fade-in"><img src="spa-dashboard.png" alt="Dashboard — performer status grid and live show preview" loading="lazy" width="640" height="400"><figcaption data-i="ssDash"></figcaption></figure>
+      <figure class="fade-in"><img src="spa-layout-3d.png" alt="3D Layout — beam cones, aim spheres, drag-to-position" loading="lazy" width="640" height="400"><figcaption data-i="ss3d"></figcaption></figure>
+      <figure class="fade-in"><img src="spa-runtime.png" alt="Runtime — timeline editor with spatial effects emulator" loading="lazy" width="640" height="400"><figcaption data-i="ssRuntime"></figcaption></figure>
+      <figure class="fade-in"><img src="spa-layout-2d.png" alt="2D Layout — stage canvas with LED strings and DMX beams" loading="lazy" width="640" height="400"><figcaption data-i="ss2d"></figcaption></figure>
+      <figure class="fade-in"><img src="spa-actions.png" alt="Actions — 19 action types including Track for moving heads" loading="lazy" width="640" height="400"><figcaption data-i="ssActions"></figcaption></figure>
+      <figure class="fade-in"><img src="spa-settings-cameras.png" alt="Camera Calibration — ArUco markers, stage mapping, mover wizard" loading="lazy" width="640" height="400"><figcaption data-i="ssCameras"></figcaption></figure>
+      <figure class="fade-in"><img src="example-b-tracking-t5.png" alt="Mover Tracking — beam cones following spatial effect across stage" loading="lazy" width="640" height="400"><figcaption data-i="ssTracking"></figcaption></figure>
+      <figure class="fade-in"><img src="spa-firmware.png" alt="Firmware — OTA updates, USB flash, WiFi management" loading="lazy" width="640" height="400"><figcaption data-i="ssFirmware"></figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ FEATURES ═════════════════════════════════════════════════════ -->
+<section class="fade-in">
+  <div class="container">
+    <h2 class="section-title" data-i="featTitle"></h2>
+    <p class="section-sub" data-i="featSub"></p>
+    <div class="features">
+      <a href="person-tracking/" class="feature fade-in" style="border-left-color:var(--pink)"><div class="icon">&#x1F3AF;</div><h3 style="color:var(--pink)" data-i="feat12t"></h3><p data-i="feat12p"></p></a>
+      <a href="spatial-effects/" class="feature fade-in"><div class="icon">&#x1F30C;</div><h3 data-i="feat1t"></h3><p data-i="feat1p"></p></a>
+      <a href="dmx-artnet/" class="feature fade-in" style="border-left-color:var(--purple)"><div class="icon">&#x1F4A1;</div><h3 style="color:var(--purple)" data-i="feat2t"></h3><p data-i="feat2p"></p></a>
+      <a href="mover-calibration/" class="feature fade-in" style="border-left-color:var(--amber)"><div class="icon">&#x1F527;</div><h3 style="color:var(--amber)" data-i="feat13t"></h3><p data-i="feat13p"></p></a>
+      <a href="timeline/" class="feature fade-in"><div class="icon">&#x1F3AC;</div><h3 data-i="feat4t"></h3><p data-i="feat4p"></p></a>
+      <a href="android/" class="feature fade-in" style="border-left-color:var(--green)"><div class="icon">&#x1F4F1;</div><h3 style="color:var(--green)" data-i="feat7t"></h3><p data-i="feat7p"></p></a>
+      <a href="led-effects/" class="feature fade-in"><div class="icon">&#x1F308;</div><h3 data-i="feat3t"></h3><p data-i="feat3p"></p></a>
+      <a href="dmx-monitor/" class="feature fade-in"><div class="icon">&#x1F50D;</div><h3 data-i="feat5t"></h3><p data-i="feat5p"></p></a>
+      <a href="groups/" class="feature fade-in"><div class="icon">&#x1F91D;</div><h3 data-i="feat6t"></h3><p data-i="feat6p"></p></a>
+      <a href="3d-calibration/" class="feature fade-in" style="border-left-color:var(--red)"><div class="icon">&#x1F4D0;</div><h3 style="color:var(--red)" data-i="feat11t"></h3><p data-i="feat11p"></p></a>
+      <a href="community/" class="feature fade-in"><div class="icon">&#x1F310;</div><h3 data-i="feat8t"></h3><p data-i="feat8p"></p></a>
+      <a href="camera-tracking/" class="feature fade-in"><div class="icon">&#x1F4F7;</div><h3 data-i="feat10t"></h3><p data-i="feat10p"></p></a>
+      <a href="demo/" class="feature fade-in"><div class="icon">&#x1F3AD;</div><h3 data-i="feat9t"></h3><p data-i="feat9p"></p></a>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ HARDWARE ════════════════════════════════════════════════════ -->
+<section class="fade-in" style="background:var(--surface)">
+  <div class="container">
+    <h2 class="section-title" data-i="hwTitle"></h2>
+    <p class="section-sub" data-i="hwSub"></p>
+    <div class="hw-grid">
+      <div class="hw-card"><h3 style="color:var(--amber)">&#x26A1; ESP32</h3><p data-i="hw1"></p></div>
+      <div class="hw-card"><h3 style="color:var(--purple)">&#x1F4E6; D1 Mini</h3><p data-i="hw2"></p></div>
+      <div class="hw-card"><h3 style="color:var(--green)">&#x1F6E0; Arduino Giga R1</h3><p data-i="hw3"></p></div>
+      <div class="hw-card"><h3 style="color:var(--cyan)">&#x1F4E1; Art-Net Nodes</h3><p data-i="hw4"></p></div>
+      <div class="hw-card"><h3 style="color:var(--red)">&#x1F4F7; Camera Nodes</h3><p data-i="hw5"></p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ WHY SLYLED ══════════════════════════════════════════════════ -->
+<section class="why fade-in">
+  <div class="container">
+    <h2 class="section-title" data-i="whyTitle"></h2>
+    <p class="section-sub" data-i="whySub"></p>
+    <div class="why-grid">
+      <div class="why-card" style="--stripe:var(--pink)"><span class="why-icon">&#x1F441;&#xFE0F;</span><h3 data-i="why1t"></h3><p data-i="why1p"></p></div>
+      <div class="why-card" style="--stripe:var(--cyan)"><span class="why-icon">&#x1F4D0;</span><h3 data-i="why2t"></h3><p data-i="why2p"></p></div>
+      <div class="why-card" style="--stripe:var(--green)"><span class="why-icon">&#x1F513;</span><h3 data-i="why3t"></h3><p data-i="why3p"></p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ COMMUNITY ═══════════════════════════════════════════════════ -->
+<section class="community fade-in">
+  <div class="container">
+    <h2 class="section-title" data-i="commTitle"></h2>
+    <p class="section-sub" data-i="commSub"></p>
+    <div class="comm-card">
+      <div class="num" id="comm-count">&mdash;</div>
+      <p style="color:var(--dim);margin-top:8px" data-i="commProfiles"></p>
+      <p style="margin-top:20px;font-size:.9em" data-i="commDesc"></p>
+      <p style="margin-top:16px"><a href="https://electricrv.ca/api/profiles/index.php?action=recent" style="color:var(--purple)" data-i="commApi"></a></p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ INSTALL ══════════════════════════════════════════════════════ -->
+<section class="install fade-in">
+  <div class="container">
+    <h2 class="section-title" data-i="instTitle"></h2>
+    <div class="install-steps">
+      <div class="step fade-in"><div class="num">1</div><h4 data-i="inst1t"></h4><p data-i="inst1p"></p></div>
+      <div class="step fade-in"><div class="num">2</div><h4 data-i="inst2t"></h4><p data-i="inst2p"></p></div>
+      <div class="step fade-in"><div class="num">3</div><h4 data-i="inst3t"></h4><p data-i="inst3p"></p></div>
+      <div class="step fade-in"><div class="num">4</div><h4 data-i="inst4t"></h4><p data-i="inst4p"></p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ DOWNLOAD CTA ════════════════════════════════════════════════ -->
+<section class="dl-section fade-in">
+  <div class="container">
+    <div class="cta">
+      <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="cta-primary" data-i="ctaWin"></a>
+      <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="cta-android" data-i="ctaAndroid"></a>
+      <a href="https://github.com/SlyWombat/SlyLED" class="cta-ghost" data-i="ctaGithub"></a>
+      <a href="https://electricrv.ca/slyled/demo/" class="cta-ghost" style="border-color:var(--purple);color:var(--purple)" data-i="ctaDemo"></a>
+      <a href="SlyLED_User_Manual.pdf" class="cta-ghost" style="border-color:var(--amber);color:var(--amber)" data-i="ctaManual"></a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p style="margin-bottom:8px"><img src="slyled.png" alt="SlyLED" style="height:26px;vertical-align:middle;margin-right:8px">SlyLED &copy; 2026 Electric RV Corporation</p>
+    <p><a href="https://github.com/SlyWombat/SlyLED">GitHub</a> &bull; <a href="https://github.com/SlyWombat/SlyLED/releases" data-i="footDl"></a> &bull; <a href="SlyLED_User_Manual.pdf" data-i="footManual"></a> &bull; <a href="https://github.com/SlyWombat/SlyLED/issues" data-i="footIssues"></a> &bull; MIT License</p>
+  </div>
+</footer>
+
+<div class="lightbox" id="lightbox" onclick="this.classList.remove('active')">
+  <span class="close">&times;</span>
+  <img id="lb-img" src="" alt="">
+</div>
+
+<script>
+// ── i18n ──────────────────────────────────────────────────────────────────
+var I={
+en:{
+  heroH1:"Your lights know\u00a0where the show\u00a0is.",
+  heroSub:"AI-powered stage lighting that tracks people, controls moving heads, and runs entire shows \u2014 automatically. Free, open source, forever.",
+  heroHint:"\u2715 Move your cursor \u00b7 beams follow you",
+  ctaWin:"Get SlyLED Free \u2192",ctaAndroid:"Android APK",ctaGithub:"GitHub \u2197",ctaDemo:"See Demo \u2192",ctaManual:"User Manual (PDF)",
+  statProfiles:"Fixture Profiles",statOfl:"OFL Fixtures",statHz:"DMX Output",statLicense:"Free Forever",
+  m1title:"Point a camera. It sees everything.",
+  m1body:"Plug in any USB webcam and SlyLED\u2019s YOLOv8 AI detects performers, pets, and props in real time \u2014 in any lighting condition, at up to 10 frames per second.",
+  m1d1:"16 configurable detection classes including person, cat, dog, chair, and 12 more",m1d2:"Per-camera threshold, FPS, and re-ID distance tuning",
+  m2title:"Press Track. Heads lock on.",
+  m2body:"Every moving head on your rig locks onto detected performers automatically. Pan and tilt computed from your calibrated light map \u2014 accurate to 200\u00a0mm at 8 metres.",
+  m2d1:"Calibrated inverse lookup from light map \u2014 no manual pan/tilt guessing",m2d2:"Multiple heads, multiple people: spread, cycle, or fixed-assignment modes",
+  m3title:"Build once. Play forever.",
+  m3body:"Multi-track timelines with spatial effects, DMX scenes, and live track actions bake to per-fixture instructions and play in NTP-synchronized unison at 40\u00a0Hz.",
+  m3d1:"19 action types: Rainbow, Chase, Fire, Track, DMX Scene, Spatial Sweep, and 13 more",m3d2:"14 pre-built preset shows \u2014 or build your own in minutes",
+  ssTitle:"See It In Action",ssSub:"7-tab SPA: 2D/3D layout, timeline editor, live emulator, and full DMX control",
+  ssDash:"Dashboard \u2014 performer status, live show preview",ss3d:"3D Layout \u2014 beam cones, aim spheres, drag-to-position",
+  ssRuntime:"Runtime \u2014 timeline editor with spatial effects emulator",ss2d:"2D Layout \u2014 stage canvas with LED strings and DMX beams",
+  ssActions:"Actions \u2014 19 action types including Track for moving heads",ssFirmware:"Firmware \u2014 OTA updates, USB flash, WiFi management",
+  ssCameras:"Camera Calibration \u2014 ArUco markers, stage mapping, mover wizard",ssTracking:"Mover Tracking \u2014 beam cones following spatial effect across stage",
+  featTitle:"Everything You Need",featSub:"From a single LED strip to a full moving-head DMX rig \u2014 one app, zero subscription",
+  feat1t:"3D Spatial Effects",feat1p:"A sphere of light sweeps your stage and every fixture it passes lights up \u2014 LEDs flash, moving heads snap to aim. All without touching a fader.",
+  feat2t:"DMX + Art-Net Output",feat2p:"Full Art-Net 4 and sACN support at 40\u202FHz. Control moving heads, RGB pars, dimmers, and fog machines. Import 700+ profiles from the Open Fixture Library.",
+  feat3t:"19 Action Types",feat3p:"Rainbow, Chase, Fire, Comet, Twinkle, Strobe, Wipe, Scanner, Sparkle, Gradient, DMX Scene, Pan-Tilt, Gobo, Color Wheel \u2014 plus Track for automated moving head following.",
+  feat4t:"Timeline Editor",feat4p:"Multi-track timelines with clips, spatial effects, and action sequences. Bake to optimized per-fixture instructions. NTP-synced playback across every performer.",
+  feat5t:"Live DMX Monitor",feat5p:"Real-time 512-channel grid per universe. Click any channel to set values instantly. Quick color buttons for testing. Per-channel capability labels from your profile.",
+  feat6t:"Fixture Groups",feat6p:"Group DMX fixtures and control them as one. Master dimmer, RGB sliders, and quick color presets. Groups are fully timeline-targetable.",
+  feat7t:"Android Companion",feat7p:"Your stage in your pocket. Live 3D viewport, one-tap show control, camera tracking toggles, and gyroscope pointer mode for aiming moving heads in real time.",
+  feat8t:"Community Profiles",feat8p:"Share and download fixture profiles with the SlyLED community. Automatic duplicate detection by channel fingerprint. Browse by manufacturer or search.",
+  feat9t:"Stage Objects & Patrol",feat9p:"Place walls, floors, and performer props on stage. Moving objects patrol back-and-forth automatically. Moving heads track them in real-time via the Track action.",
+  feat10t:"AI Camera Detection",feat10p:"Orange Pi / Raspberry Pi camera nodes with YOLOv8n. 16 configurable detection classes. Depth estimation, 3D point clouds, and SSH deploy from the Firmware tab.",
+  feat11t:"3D Spatial Calibration",feat11p:"ArUco-based camera calibration, depth-estimated point clouds, stereo triangulation, per-fixture light maps. All CV processing runs on the orchestrator \u2014 any camera works.",
+  feat12t:"Object & Person Tracking",feat12p:"Walk on stage. Your lights follow you. 16 YOLO detection classes, 40\u202FHz Art-Net output, and smart multi-head assignment. That is the whole pitch.",
+  feat13t:"Mover Calibration",feat13p:"Automated calibration discovers each moving head\u2019s visible range and builds a light map from stage coordinates to exact pan/tilt. Manual mode with physical markers also available.",
+  whyTitle:"Why SlyLED?",whySub:"Three things no other lighting software gives you \u2014 for free",
+  why1t:"Lights that see",why1p:"Every other lighting console is blind. SlyLED watches your stage through AI computer vision and moves the lights to match. No programmer. No cue stack. Just presence.",
+  why2t:"Design in 3D space",why2p:"Other tools work with fixture addresses and channel values. SlyLED works with millimetres. Place an effect at X:\u20093000, Y:\u20092000 and every fixture in range responds based on its real physical position.",
+  why3t:"Free. Open. Forever.",why3p:"MIT licence. No subscription. No dongles. No feature gating. Download once, run forever, modify however you like. We believe great tools should be free.",
+  hwTitle:"Supported Hardware",hwSub:"WiFi-connected LED performers and DMX bridges",
+  hw1:"Up to 8 LED strings on independent GPIO pins. OTA firmware updates. Multi-pin FastLED.",
+  hw2:"Compact single-string controller. Perfect for portable installations. WS2812B on GPIO 2.",
+  hw3:"DMX-512 bridge via RS-485 transceiver. Art-Net receiver. Onboard RGB LED performer.",
+  hw4:"Any Art-Net compatible gateway. Automatic discovery via ArtPoll. Multi-universe routing.",
+  hw5:"Orange Pi / Raspberry Pi with USB cameras. AI object detection via YOLOv8n. SSH deploy from desktop.",
+  commTitle:"Community Fixture Library",commSub:"Share profiles, find your fixtures, grow the ecosystem",
+  commProfiles:"shared fixture profiles",commDesc:"Search by manufacturer, fixture name, or category. Upload your custom profiles to help others.",commApi:"Browse the API \u2192",
+  instTitle:"You are 30 minutes from your first tracked show",
+  inst1t:"Download & Run",inst1p:"Grab <code>SlyLED.exe</code> from GitHub Releases. No install needed for the portable version.",
+  inst2t:"Flash Firmware",inst2p:"Connect an ESP32 via USB. Go to Firmware tab, select the port, click Flash. Done in 30 seconds.",
+  inst3t:"Discover & Design",inst3p:"Click Discover to find performers on WiFi. Position them on the 2D/3D stage. Load a preset show or build your own.",
+  inst4t:"Bake & Start",inst4p:"Click Bake \u2192 Sync \u2192 Start. All performers play their parts in NTP-synced unison.",
+  footDl:"Downloads",footManual:"User Manual (PDF)",footIssues:"Issues"
+},
+fr:{
+  heroH1:"Vos lumi\u00e8res\u00a0savent o\u00f9\u00a0est le spectacle.",
+  heroSub:"Contr\u00f4le d\u2019\u00e9clairage sc\u00e9nique pilot\u00e9 par IA qui suit les personnes, vise les lyres et joue des spectacles entiers \u2014 automatiquement. Gratuit, open source, pour toujours.",
+  heroHint:"\u2715 D\u00e9placez votre curseur \u00b7 les faisceaux vous suivent",
+  ctaWin:"T\u00e9l\u00e9charger SlyLED \u2192",ctaAndroid:"APK Android",ctaGithub:"GitHub \u2197",ctaDemo:"Voir la d\u00e9mo \u2192",ctaManual:"Manuel (PDF)",
+  statProfiles:"Profils de projecteurs",statOfl:"Appareils OFL",statHz:"Sortie DMX",statLicense:"Gratuit \u00e0 vie",
+  m1title:"Pointez une cam\u00e9ra. Elle voit tout.",
+  m1body:"Branchez n\u2019importe quelle webcam USB et l\u2019IA YOLOv8 de SlyLED d\u00e9tecte les performers, animaux et accessoires en temps r\u00e9el \u2014 dans toute condition de lumi\u00e8re, jusqu\u2019\u00e0 10 images par seconde.",
+  m1d1:"16 classes de d\u00e9tection configurables dont personne, chat, chien, chaise...",m1d2:"R\u00e9glage du seuil, IPS et distance de r\u00e9-ID par cam\u00e9ra",
+  m2title:"Appuyez sur Track. Les lyres verrouillent.",
+  m2body:"Chaque lyre de votre installation se verrouille automatiquement sur les performers d\u00e9tect\u00e9s. Pan et tilt calcul\u00e9s depuis votre carte lumi\u00e8re calibr\u00e9e \u2014 pr\u00e9cis \u00e0 200\u00a0mm \u00e0 8 m\u00e8tres.",
+  m2d1:"Interpolation inverse depuis la carte lumi\u00e8re \u2014 aucun r\u00e9glage manuel pan/tilt",m2d2:"Plusieurs lyres, plusieurs personnes : modes \u00e9talement, cycle ou assignation fixe",
+  m3title:"Construisez une fois. Jouez indfiniment.",
+  m3body:"Des timelines multi-pistes avec effets spatiaux, sc\u00e8nes DMX et actions de suivi se compilent en instructions par projecteur et jouent en synchronisation NTP \u00e0 40\u202FHz.",
+  m3d1:"19 types d\u2019actions : Arc-en-ciel, Chase, Feu, Track, Sc\u00e8ne DMX, Balayage spatial, et 13 autres",m3d2:"14 spectacles pr\u00e9d\u00e9finis \u2014 ou cr\u00e9ez le v\u00f4tre en quelques minutes",
+  ssTitle:"Voyez-le en action",ssSub:"SPA 7 onglets : mise en page 2D/3D, \u00e9diteur de timeline, \u00e9mulateur en direct et contr\u00f4le DMX complet",
+  ssDash:"Tableau de bord \u2014 \u00e9tat des performers, aper\u00e7u du spectacle",ss3d:"Mise en page 3D \u2014 c\u00f4nes de faisceau, sph\u00e8res de vis\u00e9e",
+  ssRuntime:"Ex\u00e9cution \u2014 \u00e9diteur de timeline avec \u00e9mulateur d\u2019effets spatiaux",ss2d:"Mise en page 2D \u2014 sc\u00e8ne avec rubans LED et faisceaux DMX",
+  ssActions:"Actions \u2014 19 types d\u2019actions incluant Track pour les lyres",ssFirmware:"Firmware \u2014 mises \u00e0 jour OTA, flash USB, gestion WiFi",
+  ssCameras:"Calibration cam\u00e9ra \u2014 marqueurs ArUco, cartographie de sc\u00e8ne, assistant lyre",ssTracking:"Suivi de lyres \u2014 c\u00f4nes de faisceau suivant un effet spatial sur sc\u00e8ne",
+  featTitle:"Tout ce dont vous avez besoin",featSub:"D\u2019un simple ruban LED \u00e0 une installation compl\u00e8te de lyres DMX \u2014 une seule appli, z\u00e9ro abonnement",
+  feat1t:"Effets spatiaux 3D",feat1p:"Une sph\u00e8re de lumi\u00e8re balaie votre sc\u00e8ne et chaque projecteur qu\u2019elle traverse r\u00e9agit. Tout \u00e7a sans toucher un seul fader.",
+  feat2t:"Sortie DMX + Art-Net",feat2p:"Support complet Art-Net 4 et sACN \u00e0 40\u202FHz. Lyres, PAR RGB, gradateurs, machines \u00e0 brouillard. 700+ profils depuis l\u2019Open Fixture Library.",
+  feat3t:"19 types d\u2019actions",feat3p:"Arc-en-ciel, Chase, Feu, Com\u00e8te, Scintillement, Stroboscope, Balayage, Scanner, \u00c9tincelle, D\u00e9grad\u00e9, Sc\u00e8ne DMX, Pan-Tilt, Gobo, Roue de couleurs \u2014 plus Track.",
+  feat4t:"\u00c9diteur de timeline",feat4p:"Timelines multi-pistes avec clips, effets spatiaux et s\u00e9quences d\u2019actions. Compilation optimis\u00e9e par projecteur. Lecture synchronis\u00e9e NTP.",
+  feat5t:"Moniteur DMX en direct",feat5p:"Grille 512 canaux en temps r\u00e9el par univers. Cliquez sur un canal pour d\u00e9finir sa valeur. \u00c9tiquettes de capacit\u00e9 par canal.",
+  feat6t:"Groupes de projecteurs",feat6p:"Regroupez et contr\u00f4lez ensemble. Gradateur principal, curseurs RVB, pr\u00e9r\u00e9glages rapides. Les groupes sont targetables depuis les timelines.",
+  feat7t:"Application Android",feat7p:"Votre sc\u00e8ne dans votre poche. Vue 3D en direct, contr\u00f4le du spectacle en un tap, suivi cam\u00e9ra, mode pointeur gyroscopique pour viser les lyres.",
+  feat8t:"Profils communautaires",feat8p:"Partagez et t\u00e9l\u00e9chargez des profils avec la communaut\u00e9 SlyLED. D\u00e9tection automatique des doublons par empreinte de canaux.",
+  feat9t:"Objets de sc\u00e8ne & Patrouille",feat9p:"Placez murs, sols et accessoires sur sc\u00e8ne. Les objets mobiles patrouillent automatiquement. Les lyres les suivent en temps r\u00e9el.",
+  feat10t:"D\u00e9tection IA par cam\u00e9ra",feat10p:"N\u0153uds cam\u00e9ra Orange Pi avec YOLOv8n et 16 classes de d\u00e9tection configurables. Estimation de profondeur, nuages de points 3D, d\u00e9ploiement SSH.",
+  feat11t:"Calibration spatiale 3D",feat11p:"Calibration cam\u00e9ra par marqueurs ArUco, nuages de points, triangulation st\u00e9r\u00e9o, cartographies lumineuses par projecteur.",
+  feat12t:"Suivi d\u2019objets et personnes",feat12p:"Entrez en sc\u00e8ne. Vos lumi\u00e8res vous suivent. 16 classes YOLO, sortie Art-Net \u00e0 40\u202FHz, assignation intelligente multi-lyres.",
+  feat13t:"Calibration des lyres",feat13p:"La calibration automatis\u00e9e d\u00e9couvre la plage visible de chaque lyre et construit une carte lumi\u00e8re. Mode manuel avec marqueurs physiques disponible.",
+  whyTitle:"Pourquoi SlyLED\u00a0?",whySub:"Trois choses qu\u2019aucun autre logiciel d\u2019\u00e9clairage ne vous offre \u2014 gratuitement",
+  why1t:"Des lumi\u00e8res qui voient",why1p:"Toutes les consoles d\u2019\u00e9clairage sont aveugles. SlyLED regarde votre sc\u00e8ne par vision par ordinateur et d\u00e9place les lumi\u00e8res en cons\u00e9quence. Aucun programmeur n\u00e9cessaire.",
+  why2t:"Concevoir dans l\u2019espace 3D",why2p:"Les autres outils travaillent avec des adresses et des valeurs de canaux. SlyLED travaille en millim\u00e8tres. Placez un effet \u00e0 X\u00a03000, Y\u00a02000 et chaque projecteur \u00e0 port\u00e9e r\u00e9pond.",
+  why3t:"Gratuit. Ouvert. Pour toujours.",why3p:"Licence MIT. Pas d\u2019abonnement. Pas de cl\u00e9 USB. Pas de fonctions payantes. T\u00e9l\u00e9chargez une fois, utilisez \u00e0 vie, modifiez comme vous le souhaitez.",
+  hwTitle:"Mat\u00e9riel support\u00e9",hwSub:"Performers LED et ponts DMX connect\u00e9s en WiFi",
+  hw1:"Jusqu\u2019\u00e0 8 rubans LED sur des broches GPIO ind\u00e9pendantes. Mises \u00e0 jour OTA.",
+  hw2:"Contr\u00f4leur compact \u00e0 un ruban. Parfait pour les installations portables.",
+  hw3:"Pont DMX-512 via transceiver RS-485. R\u00e9cepteur Art-Net. LED RGB int\u00e9gr\u00e9e.",
+  hw4:"Tout passerelle compatible Art-Net. D\u00e9couverte automatique via ArtPoll.",
+  hw5:"Orange Pi / Raspberry Pi avec cam\u00e9ras USB. D\u00e9tection YOLOv8n. D\u00e9ploiement SSH.",
+  commTitle:"Biblioth\u00e8que communautaire",commSub:"Partagez des profils, trouvez vos projecteurs, faites grandir l\u2019\u00e9cosyst\u00e8me",
+  commProfiles:"profils de projecteurs partag\u00e9s",commDesc:"Recherchez par fabricant, nom ou cat\u00e9gorie. Partagez vos profils personnalis\u00e9s.",commApi:"Parcourir l\u2019API \u2192",
+  instTitle:"30 minutes pour votre premier spectacle de suivi",
+  inst1t:"T\u00e9l\u00e9charger et lancer",inst1p:"T\u00e9l\u00e9chargez <code>SlyLED.exe</code> depuis les GitHub Releases.",
+  inst2t:"Flasher le firmware",inst2p:"Connectez un ESP32 via USB, s\u00e9lectionnez le port, cliquez Flash. 30 secondes.",
+  inst3t:"D\u00e9couvrir et concevoir",inst3p:"Cliquez sur D\u00e9couvrir pour trouver les performers. Positionnez-les sur la sc\u00e8ne.",
+  inst4t:"Compiler et d\u00e9marrer",inst4p:"Cliquez sur Compiler \u2192 Synchroniser \u2192 D\u00e9marrer. Synchronisation NTP automatique.",
+  footDl:"T\u00e9l\u00e9chargements",footManual:"Manuel (PDF)",footIssues:"Probl\u00e8mes"
+}
+};
+var _lang=localStorage.getItem('slyled-lang')||'en';
+function _applyLang(){
+  var t=I[_lang]||I.en;
+  document.querySelectorAll('[data-i]').forEach(function(el){
+    var k=el.getAttribute('data-i');
+    if(t[k]!==undefined) el.innerHTML=t[k];
+  });
+  document.documentElement.lang=_lang;
+  var lb=document.getElementById('lang-label');
+  if(lb) lb.textContent=_lang.toUpperCase();
+  var pdf=_lang==='fr'?'SlyLED_User_Manual_fr.pdf':'SlyLED_User_Manual.pdf';
+  document.querySelectorAll('a[href*="User_Manual"]').forEach(function(a){a.href=pdf;});
+  document.title=_lang==='fr'?'SlyLED \u2014 Contr\u00f4le d\u2019\u00e9clairage LED et DMX 3D':'SlyLED \u2014 3D Volumetric LED & DMX Lighting Control';
+}
+function _toggleLang(){_lang=_lang==='en'?'fr':'en';localStorage.setItem('slyled-lang',_lang);_applyLang();}
+_applyLang();
+
+// ── Scroll progress ───────────────────────────────────────────────────────
+var _prog=document.getElementById('scroll-prog');
+window.addEventListener('scroll',function(){
+  var t=document.documentElement.scrollTop,h=document.documentElement.scrollHeight-window.innerHeight;
+  if(_prog&&h>0)_prog.style.width=(t/h*100)+'%';
+},{passive:true});
+
+// ── Data fetching ─────────────────────────────────────────────────────────
+function _animCount(el,end,dur){
+  if(!el||!end)return;
+  var start=0,step=end/(dur/16),cur=0;
+  var id=setInterval(function(){
+    cur=Math.min(cur+step,end);
+    el.textContent=Math.floor(cur).toLocaleString();
+    if(cur>=end)clearInterval(id);
+  },16);
+}
+fetch('https://electricrv.ca/api/profiles/index.php?action=stats')
+  .then(function(r){return r.json();})
+  .then(function(d){
+    if(d&&d.data){
+      var n=parseInt(d.data.total)||0;
+      document.getElementById('comm-count').textContent=n;
+      _animCount(document.getElementById('stat-profiles'),n,1200);
+    }
+  }).catch(function(){});
+fetch('https://api.github.com/repos/SlyWombat/SlyLED')
+  .then(function(r){return r.json();})
+  .then(function(d){
+    if(d&&d.stargazers_count!==undefined)
+      _animCount(document.getElementById('stat-stars'),d.stargazers_count,1000);
+  }).catch(function(){});
+
+// ── Lightbox ──────────────────────────────────────────────────────────────
+document.querySelectorAll('.ss-grid img').forEach(function(img){
+  img.onclick=function(e){
+    e.stopPropagation();
+    document.getElementById('lb-img').src=this.src;
+    document.getElementById('lightbox').classList.add('active');
+  };
+});
+document.addEventListener('keydown',function(e){if(e.key==='Escape')document.getElementById('lightbox').classList.remove('active');});
+
+// ── Scroll fade-in ────────────────────────────────────────────────────────
+var _obs=new IntersectionObserver(function(entries){
+  entries.forEach(function(e){if(e.isIntersecting)e.target.classList.add('visible');});
+},{threshold:0.08});
+document.querySelectorAll('.fade-in').forEach(function(el){_obs.observe(el);});
+
+// ── Screenshot 3D tilt ────────────────────────────────────────────────────
+document.querySelectorAll('.ss-grid figure').forEach(function(fig){
+  fig.addEventListener('mousemove',function(e){
+    var r=fig.getBoundingClientRect();
+    var rx=((e.clientY-r.top)/r.height-.5)*7;
+    var ry=((e.clientX-r.left)/r.width-.5)*-7;
+    fig.style.transform='perspective(700px) rotateX('+rx+'deg) rotateY('+ry+'deg) scale(1.015)';
+  });
+  fig.addEventListener('mouseleave',function(){
+    fig.style.transform='';
+    fig.style.transition='transform .5s cubic-bezier(.34,1.56,.64,1)';
+    setTimeout(function(){fig.style.transition='';},500);
+  });
+});
+
+// ── Magnetic CTA buttons ──────────────────────────────────────────────────
+document.querySelectorAll('.cta a').forEach(function(el){
+  el.addEventListener('mousemove',function(e){
+    var r=el.getBoundingClientRect();
+    var dx=(e.clientX-(r.left+r.width/2))*0.28;
+    var dy=(e.clientY-(r.top+r.height/2))*0.28;
+    el.style.transform='translate('+dx+'px,'+dy+'px) translateY(-3px)';
+  });
+  el.addEventListener('mouseleave',function(){
+    el.style.transition='transform .45s cubic-bezier(.34,1.56,.64,1),box-shadow .2s';
+    el.style.transform='';
+    setTimeout(function(){el.style.transition='';},450);
+  });
+});
+
+// ── Feature card cursor spotlight ─────────────────────────────────────────
+document.querySelectorAll('.feature').forEach(function(card){
+  card.addEventListener('mousemove',function(e){
+    var r=card.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;
+    card.style.background='radial-gradient(220px at '+x+'px '+y+'px,rgba(34,211,238,.09),transparent 65%),var(--surface)';
+  });
+  card.addEventListener('mouseleave',function(){card.style.background='';});
+});
+
+// ── Hero hint fade ─────────────────────────────────────────────────────────
+var _hint=document.getElementById('hero-hint');
+if(_hint)setTimeout(function(){_hint.style.opacity='0';},5500);
+
+// ══════════════════════════════════════════════════════════════════════════
+// HERO CANVAS — beam-tracking interactive stage demo
+// ══════════════════════════════════════════════════════════════════════════
+(function(){
+  var cv=document.getElementById('hero-canvas');
+  if(!cv||!cv.getContext)return;
+  var ctx=cv.getContext('2d');
+  var W,H,raf;
+  var person={x:.5,y:.82},target={x:.5,y:.82};
+  var autoT=0,mouseActive=false;
+  var fixtures=[
+    {nx:.16,ny:.14,r:34,g:211,b:238},
+    {nx:.37,ny:.11,r:244,g:63,b:94},
+    {nx:.63,ny:.11,r:251,g:191,b:36},
+    {nx:.84,ny:.14,r:74,g:222,b:128}
+  ];
+  var parts=[];
+  for(var i=0;i<48;i++)parts.push({x:Math.random(),y:Math.random(),vx:(Math.random()-.5)*.00018,vy:-(Math.random()*.00028+.00004),s:Math.random()*1.8+.4,ph:Math.random()*Math.PI*2});
+
+  function resize(){W=cv.offsetWidth;H=cv.offsetHeight;cv.width=W;cv.height=H;}
+
+  function drawGrid(){
+    ctx.strokeStyle='rgba(34,211,238,.025)';ctx.lineWidth=1;
+    for(var x=0;x<W;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+    for(var y=0;y<H;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+  }
+
+  function drawTruss(){
+    var ty=H*.145;
+    var g=ctx.createLinearGradient(W*.04,ty,W*.96,ty);
+    g.addColorStop(0,'rgba(71,85,105,0)');g.addColorStop(.1,'rgba(71,85,105,.55)');g.addColorStop(.9,'rgba(71,85,105,.55)');g.addColorStop(1,'rgba(71,85,105,0)');
+    ctx.strokeStyle=g;ctx.lineWidth=3;
+    ctx.beginPath();ctx.moveTo(W*.04,ty);ctx.lineTo(W*.96,ty);ctx.stroke();
+    ctx.strokeStyle='rgba(71,85,105,.25)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(W*.04,ty-11);ctx.lineTo(W*.96,ty-11);ctx.stroke();
+    ctx.strokeStyle='rgba(71,85,105,.18)';
+    for(var i=0;i<9;i++){
+      var x1=W*(.04+i*.102),x2=x1+W*.102;
+      ctx.beginPath();ctx.moveTo(x1,ty-11);ctx.lineTo(x2,ty);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(x1,ty);ctx.lineTo(x2,ty-11);ctx.stroke();
+    }
+  }
+
+  function drawFloor(){
+    var fy=H*.878;
+    var fg=ctx.createLinearGradient(0,fy,0,H);
+    fg.addColorStop(0,'rgba(15,23,42,.75)');fg.addColorStop(1,'rgba(10,15,19,.5)');
+    ctx.fillStyle=fg;ctx.fillRect(0,fy,W,H-fy);
+    ctx.strokeStyle='rgba(100,116,139,.35)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(W*.02,fy);ctx.lineTo(W*.98,fy);ctx.stroke();
+    var vp=W*.5;
+    ctx.strokeStyle='rgba(34,211,238,.04)';ctx.lineWidth=1;
+    for(var i=0;i<=12;i++){var gx=W*i/12;ctx.beginPath();ctx.moveTo(gx,H);ctx.lineTo(vp+(gx-vp)*.08,fy);ctx.stroke();}
+    for(var j=1;j<=3;j++){
+      var gy=fy+(H-fy)*j/3,sh=1-j*.14;
+      ctx.beginPath();ctx.moveTo(W*(.5-.47*sh),gy);ctx.lineTo(W*(.5+.47*sh),gy);ctx.stroke();
+    }
+  }
+
+  function drawBeam(f,px,py,alpha){
+    var fx=f.nx*W,fy=f.ny*H,dx=px-fx,dy=py-fy,dist=Math.sqrt(dx*dx+dy*dy);
+    var nx=-dy/dist,ny=dx/dist,hw=dist*.072,hw0=3.5;
+    var g=ctx.createLinearGradient(fx,fy,px,py);
+    var rc=''+f.r+','+f.g+','+f.b;
+    g.addColorStop(0,'rgba('+rc+','+(alpha*.88)+')');
+    g.addColorStop(.55,'rgba('+rc+','+(alpha*.32)+')');
+    g.addColorStop(1,'rgba('+rc+',0)');
+    ctx.beginPath();
+    ctx.moveTo(fx+nx*hw0,fy+ny*hw0);ctx.lineTo(fx-nx*hw0,fy-ny*hw0);
+    ctx.lineTo(px-nx*hw,py-ny*hw);ctx.lineTo(px+nx*hw,py+ny*hw);
+    ctx.closePath();ctx.fillStyle=g;ctx.fill();
+    var rg=ctx.createRadialGradient(px,py,0,px,py,hw*2.8);
+    rg.addColorStop(0,'rgba('+rc+','+(alpha*.55)+')');
+    rg.addColorStop(.4,'rgba('+rc+','+(alpha*.15)+')');
+    rg.addColorStop(1,'rgba('+rc+',0)');
+    ctx.beginPath();ctx.ellipse(px,py,hw*2.8,hw*.75,0,0,Math.PI*2);ctx.fillStyle=rg;ctx.fill();
+  }
+
+  function drawFixture(f){
+    var fx=f.nx*W,fy=f.ny*H,pulse=Math.sin(Date.now()*.002+f.nx*5)*.3+.7;
+    var rc=''+f.r+','+f.g+','+f.b;
+    var og=ctx.createRadialGradient(fx,fy,0,fx,fy,22);
+    og.addColorStop(0,'rgba('+rc+','+(pulse*.55)+')');og.addColorStop(1,'rgba('+rc+',0)');
+    ctx.beginPath();ctx.arc(fx,fy,22,0,Math.PI*2);ctx.fillStyle=og;ctx.fill();
+    ctx.beginPath();ctx.arc(fx,fy,7,0,Math.PI*2);
+    ctx.fillStyle='rgba(15,23,42,.92)';ctx.fill();
+    ctx.strokeStyle='rgba('+rc+',0.65)';ctx.lineWidth=1.5;ctx.stroke();
+    ctx.beginPath();ctx.arc(fx,fy,3.5,0,Math.PI*2);
+    ctx.fillStyle='rgb('+rc+')';ctx.fill();
+  }
+
+  function drawPerson(px,py){
+    var sc=H*.055;
+    ctx.save();ctx.translate(px,py);
+    var sg=ctx.createRadialGradient(0,sc*.4,0,0,sc*.4,sc*2.1);
+    sg.addColorStop(0,'rgba(255,255,255,.12)');sg.addColorStop(1,'rgba(255,255,255,0)');
+    ctx.beginPath();ctx.ellipse(0,sc*.4,sc*2.1,sc*.52,0,0,Math.PI*2);ctx.fillStyle=sg;ctx.fill();
+    ctx.fillStyle='rgba(220,235,255,.93)';
+    ctx.beginPath();ctx.arc(0,-sc*1.9,sc*.37,0,Math.PI*2);ctx.fill();
+    ctx.fillRect(-sc*.12,-sc*1.52,sc*.24,sc*.22);
+    ctx.beginPath();if(ctx.roundRect)ctx.roundRect(-sc*.31,-sc*1.3,sc*.62,sc*.94,[sc*.1]);else ctx.rect(-sc*.31,-sc*1.3,sc*.62,sc*.94);ctx.fill();
+    ctx.beginPath();if(ctx.roundRect)ctx.roundRect(-sc*.3,-sc*.36,sc*.25,sc*.84,[sc*.08]);else ctx.rect(-sc*.3,-sc*.36,sc*.25,sc*.84);ctx.fill();
+    ctx.beginPath();if(ctx.roundRect)ctx.roundRect(sc*.05,-sc*.36,sc*.25,sc*.84,[sc*.08]);else ctx.rect(sc*.05,-sc*.36,sc*.25,sc*.84);ctx.fill();
+    var ring=Math.sin(Date.now()*.003)*.2+.32;
+    ctx.beginPath();ctx.arc(0,-sc*.48,sc*1.32,0,Math.PI*2);
+    ctx.strokeStyle='rgba(34,211,238,'+ring+')';ctx.lineWidth=1;ctx.setLineDash([5,5]);ctx.stroke();ctx.setLineDash([]);
+    ctx.restore();
+    ctx.font='11px Inter,sans-serif';ctx.fillStyle='rgba(34,211,238,.75)';
+    ctx.fillText('\u25cf Person\u00a0#1  \u2022  40\u00a0Hz',px+sc*2.2,py-sc*1.6);
+  }
+
+  function drawParticles(){
+    var t=Date.now()*.001;
+    parts.forEach(function(p){
+      p.x+=p.vx;p.y+=p.vy;
+      if(p.y<-.04){p.y=1.02;p.x=Math.random();}
+      if(p.x<0||p.x>1)p.vx*=-1;
+      var a=(Math.sin(t+p.ph)*.38+.4)*.3;
+      ctx.beginPath();ctx.arc(p.x*W,p.y*H,p.s,0,Math.PI*2);
+      ctx.fillStyle='rgba(34,211,238,'+a+')';ctx.fill();
+    });
+  }
+
+  function draw(){
+    if(document.hidden){raf=requestAnimationFrame(draw);return;}
+    ctx.clearRect(0,0,W,H);
+    if(!mouseActive){
+      autoT+=.011;
+      target.x=.5+Math.sin(autoT)*.27;
+      target.y=.82+Math.sin(autoT*2+.5)*.032;
+    }
+    person.x+=(target.x-person.x)*.072;
+    person.y+=(target.y-person.y)*.072;
+    var px=person.x*W,py=person.y*H;
+    drawGrid();drawParticles();drawFloor();drawTruss();
+    fixtures.forEach(function(f){drawBeam(f,px,py,.67);});
+    fixtures.forEach(function(f){drawFixture(f);});
+    drawPerson(px,py);
+    raf=requestAnimationFrame(draw);
+  }
+
+  window.addEventListener('resize',function(){resize();});
+  resize();draw();
+
+  cv.addEventListener('mousemove',function(e){
+    var r=cv.getBoundingClientRect();
+    mouseActive=true;
+    target.x=Math.max(.04,Math.min(.96,(e.clientX-r.left)/W));
+    target.y=Math.max(.65,Math.min(.94,(e.clientY-r.top)/H));
+  });
+  cv.addEventListener('mouseleave',function(){mouseActive=false;});
+  var touchStartX=0,touchStartY=0,touchLocked=false;
+  cv.addEventListener('touchstart',function(e){
+    touchStartX=e.touches[0].clientX;
+    touchStartY=e.touches[0].clientY;
+    touchLocked=false;
+  },{passive:true});
+  cv.addEventListener('touchmove',function(e){
+    var t=e.touches[0];
+    var dx=Math.abs(t.clientX-touchStartX),dy=Math.abs(t.clientY-touchStartY);
+    if(!touchLocked){
+      // let vertical swipes scroll; only lock to canvas-move if horizontal-dominant
+      if(dy>dx&&dy>8){return;}
+      if(dx>8){touchLocked=true;}else{return;}
+    }
+    e.preventDefault();
+    var r=cv.getBoundingClientRect();
+    mouseActive=true;
+    target.x=Math.max(.04,Math.min(.96,(t.clientX-r.left)/W));
+    target.y=Math.max(.65,Math.min(.94,(t.clientY-r.top)/H));
+  },{passive:false});
+  cv.addEventListener('touchend',function(){mouseActive=false;touchLocked=false;});
+})();
+
+// ══════════════════════════════════════════════════════════════════════════
+// MOMENT 1 — Camera AI detection animation
+// ══════════════════════════════════════════════════════════════════════════
+(function(){
+  var cv=document.getElementById('m1-canvas');if(!cv)return;
+  var ctx=cv.getContext('2d');var t=0;
+  function r(){cv.width=cv.offsetWidth;cv.height=cv.offsetHeight;}
+  function draw(){
+    var W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);t+=.014;
+    ctx.fillStyle='rgba(10,15,19,.95)';ctx.fillRect(0,0,W,H);
+    var px=W*.5,py=H*.65,sc=H*.18;
+    ctx.fillStyle='rgba(190,210,230,.65)';
+    ctx.beginPath();ctx.arc(px,py-sc*1.6,sc*.35,0,Math.PI*2);ctx.fill();
+    if(ctx.roundRect){ctx.beginPath();ctx.roundRect(px-sc*.28,py-sc*1.25,sc*.56,sc*.85,[sc*.05]);ctx.fill();}
+    else{ctx.fillRect(px-sc*.28,py-sc*1.25,sc*.56,sc*.85);}
+    ctx.fillRect(px-sc*.26,py-sc*.4,sc*.22,sc*.76);ctx.fillRect(px+sc*.04,py-sc*.4,sc*.22,sc*.76);
+    var phase=(t%3.5)/3.5,prog=Math.min(phase*3.8,1);
+    var bx=px-sc*.62,by=py-sc*1.95,bw=sc*1.24,bh=sc*2.28;
+    var perim=(bw+bh)*2,drawn=prog*perim;
+    ctx.strokeStyle='rgba(34,211,238,.9)';ctx.lineWidth=2;ctx.setLineDash([]);
+    ctx.beginPath();ctx.moveTo(bx,by);
+    var d=drawn;
+    if(d>0){ctx.lineTo(bx+Math.min(d,bw),by);}d-=bw;
+    if(d>0){ctx.lineTo(bx+bw,by+Math.min(d,bh));}d-=bh;
+    if(d>0){ctx.lineTo(bx+bw-Math.min(d,bw),by+bh);}d-=bw;
+    if(d>0){ctx.lineTo(bx,by+bh-Math.min(d,bh));}
+    ctx.stroke();
+    if(prog>.85){
+      var ca=(prog-.85)/.15,cs=7;
+      ctx.strokeStyle='rgba(34,211,238,'+ca+')';ctx.lineWidth=2;
+      [[bx,by],[bx+bw,by],[bx,by+bh],[bx+bw,by+bh]].forEach(function(pt){
+        ctx.beginPath();ctx.moveTo(pt[0]-cs,pt[1]);ctx.lineTo(pt[0]+cs,pt[1]);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(pt[0],pt[1]-cs);ctx.lineTo(pt[0],pt[1]+cs);ctx.stroke();
+      });
+    }
+    if(prog>.65){
+      var la=(prog-.65)/.35;
+      ctx.fillStyle='rgba(34,211,238,'+la+')';ctx.font='bold 12px Inter,sans-serif';
+      ctx.fillText('person  97%',bx+2,by-7);
+    }
+    var scanY=by+(bh*((t*.42)%1));
+    if(scanY>by&&scanY<by+bh){
+      var sg=ctx.createLinearGradient(bx,scanY,bx+bw,scanY);
+      sg.addColorStop(0,'rgba(34,211,238,0)');sg.addColorStop(.5,'rgba(34,211,238,.28)');sg.addColorStop(1,'rgba(34,211,238,0)');
+      ctx.strokeStyle=sg;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(bx,scanY);ctx.lineTo(bx+bw,scanY);ctx.stroke();
+    }
+    requestAnimationFrame(draw);
+  }
+  r();draw();window.addEventListener('resize',r);
+})();
+
+// ══════════════════════════════════════════════════════════════════════════
+// MOMENT 2 — Beam lock-on animation
+// ══════════════════════════════════════════════════════════════════════════
+(function(){
+  var cv=document.getElementById('m2-canvas');if(!cv)return;
+  var ctx=cv.getContext('2d');var t=0;
+  function r(){cv.width=cv.offsetWidth;cv.height=cv.offsetHeight;}
+  function draw(){
+    var W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);t+=.013;
+    ctx.fillStyle='rgba(10,15,19,.95)';ctx.fillRect(0,0,W,H);
+    var phase=(t%5);
+    var tx=W*.54,ty=H*.74,fx=W*.46,fy=H*.11;
+    var bx,by;
+    if(phase<1.8){var sw=Math.sin(phase*Math.PI*.55)*.38;bx=W*(.28+sw);by=H*.74;}
+    else if(phase<3){var sn=(phase-1.8)/1.2;bx=W*.28+(tx-W*.28)*sn;by=ty;}
+    else{bx=tx;by=ty;}
+    var dx=bx-fx,dy=by-fy,dist=Math.sqrt(dx*dx+dy*dy);
+    var nx=-dy/dist,ny=dx/dist,hw=dist*.065;
+    var locked=phase>=3;
+    var rc=locked?'34,211,238':'251,191,36';
+    var g=ctx.createLinearGradient(fx,fy,bx,by);
+    g.addColorStop(0,'rgba('+rc+',.82)');g.addColorStop(.6,'rgba('+rc+',.3)');g.addColorStop(1,'rgba('+rc+',0)');
+    ctx.beginPath();ctx.moveTo(fx+nx*3.5,fy+ny*3.5);ctx.lineTo(fx-nx*3.5,fy-ny*3.5);ctx.lineTo(bx-nx*hw,by-ny*hw);ctx.lineTo(bx+nx*hw,by+ny*hw);ctx.closePath();ctx.fillStyle=g;ctx.fill();
+    var rg=ctx.createRadialGradient(bx,by,0,bx,by,hw*2.6);
+    rg.addColorStop(0,'rgba('+rc+','+(locked?.62:.3)+')');rg.addColorStop(1,'rgba('+rc+',0)');
+    ctx.beginPath();ctx.arc(bx,by,hw*2.6,0,Math.PI*2);ctx.fillStyle=rg;ctx.fill();
+    if(locked){
+      var lp=Math.min((phase-3)/.6,1),pulse=Math.sin(t*3.5)*.2+.8;
+      var cr=H*.11;
+      ctx.strokeStyle='rgba(34,211,238,'+(lp*pulse*.9)+')';ctx.lineWidth=2;
+      ctx.beginPath();ctx.arc(bx,ty-cr*.7,cr,0,Math.PI*2);ctx.stroke();
+      ctx.strokeStyle='rgba(34,211,238,'+(lp*.55)+')';ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(bx-cr*1.3,ty-cr*.7);ctx.lineTo(bx+cr*1.3,ty-cr*.7);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(bx,ty-cr*.7-cr*1.3);ctx.lineTo(bx,ty-cr*.7+cr*1.3);ctx.stroke();
+      if(lp>.5){ctx.fillStyle='rgba(34,211,238,'+(lp-.5)*2*.8+')';ctx.font='bold 11px Inter,sans-serif';ctx.fillText('LOCKED',bx+cr*1.1,ty-cr*.7+4);}
+    }
+    var pg=ctx.createRadialGradient(fx,fy,0,fx,fy,18);
+    pg.addColorStop(0,'rgba('+rc+',.75)');pg.addColorStop(1,'rgba('+rc+',0)');
+    ctx.beginPath();ctx.arc(fx,fy,18,0,Math.PI*2);ctx.fillStyle=pg;ctx.fill();
+    ctx.beginPath();ctx.arc(fx,fy,6,0,Math.PI*2);ctx.fillStyle='rgb('+rc+')';ctx.fill();
+    requestAnimationFrame(draw);
+  }
+  r();draw();window.addEventListener('resize',r);
+})();
+
+// ══════════════════════════════════════════════════════════════════════════
+// MOMENT 3 — Timeline playback animation
+// ══════════════════════════════════════════════════════════════════════════
+(function(){
+  var cv=document.getElementById('m3-canvas');if(!cv)return;
+  var ctx=cv.getContext('2d');var t=0;
+  function r(){cv.width=cv.offsetWidth;cv.height=cv.offsetHeight;}
+  var colors=['34,211,238','244,63,94','251,191,36','74,222,128'];
+  var labels=['MH1 SL','MH2 SR','Spot C','All LEDs'];
+  var clips=[[{s:.0,d:.35},{s:.55,d:.45}],[{s:.12,d:.65}],[{s:.0,d:.18},{s:.3,d:.22},{s:.68,d:.32}],[{s:.0,d:1}]];
+  function draw(){
+    var W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);t+=.004;
+    var prog=t%1;
+    ctx.fillStyle='rgba(10,15,19,.95)';ctx.fillRect(0,0,W,H);
+    var tlx=W*.08,tly=H*.18,tlw=W*.84,tlh=H*.68;
+    var rowH=tlh/4;
+    for(var tr=0;tr<4;tr++){
+      var ry=tly+tr*rowH,c=colors[tr];
+      ctx.fillStyle='rgba(30,41,59,.5)';ctx.fillRect(tlx,ry+2,tlw,rowH-5);
+      ctx.fillStyle='rgba(100,116,139,.55)';ctx.font='10px Inter,sans-serif';ctx.fillText(labels[tr],tlx+6,ry+rowH/2+4);
+      clips[tr].forEach(function(cl){
+        var cx=tlx+cl.s*tlw,cw=cl.d*tlw,cy=ry+5,ch=rowH-11;
+        var active=prog>=cl.s&&prog<=cl.s+cl.d;
+        ctx.fillStyle='rgba('+c+','+(active?.48:.18)+')';ctx.fillRect(cx,cy,cw,ch);
+        ctx.strokeStyle='rgba('+c+','+(active?.9:.35)+')';ctx.lineWidth=active?2:1;ctx.strokeRect(cx,cy,cw,ch);
+        if(active){
+          var ag=ctx.createLinearGradient(cx,cy,cx+cw,cy);
+          ag.addColorStop(0,'rgba('+c+',.08)');ag.addColorStop(.5,'rgba('+c+',.28)');ag.addColorStop(1,'rgba('+c+',.08)');
+          ctx.fillStyle=ag;ctx.fillRect(cx,cy,cw,ch);
+        }
+      });
+    }
+    var phx=tlx+prog*tlw;
+    ctx.strokeStyle='rgba(255,255,255,.82)';ctx.lineWidth=2;ctx.setLineDash([]);
+    ctx.beginPath();ctx.moveTo(phx,tly-8);ctx.lineTo(phx,tly+tlh+4);ctx.stroke();
+    ctx.fillStyle='rgba(255,255,255,.82)';
+    ctx.beginPath();ctx.moveTo(phx-5,tly-8);ctx.lineTo(phx+5,tly-8);ctx.lineTo(phx,tly);ctx.closePath();ctx.fill();
+    var el=Math.floor(prog*120),mm=String(Math.floor(el/60)).padStart(2,'0'),ss=String(el%60).padStart(2,'0');
+    ctx.fillStyle='rgba(34,211,238,.85)';ctx.font='bold 11px inherit';
+    ctx.fillText(mm+':'+ss+' / 02:00',tlx+tlw-80,tly-10);
+    requestAnimationFrame(draw);
+  }
+  r();draw();window.addEventListener('resize',r);
+})();
+</script>
+<script>fetch('/api/analytics/index.php?action=hit&page='+encodeURIComponent(location.pathname)+'&sw='+screen.width,{method:'POST',body:JSON.stringify({page:location.pathname,referrer:document.referrer,sw:screen.width}),headers:{'Content-Type':'application/json'}}).catch(function(){})</script>
+</body>
+</html>
