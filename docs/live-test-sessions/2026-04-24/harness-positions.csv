@@ -1,0 +1,27 @@
+# SlyLED mover-calibration harness regression positions — basement rig.
+# Format: pan_norm, tilt_norm, label
+# pan_norm = DMX_pan / 255; tilt_norm = DMX_tilt / 255  (coarse channel only).
+# Ground truth captured 2026-04-24 against fixture #17 (150W MH Stage Right,
+# 540° pan / 180° tilt / 3° beam, 12-channel profile).
+#
+# Expected outcomes documented per position for the --layout-aware flag
+# once implemented, and for use as regression / canary cases in the test
+# suite gating #682's fix acceptance.
+
+# --- TRUE POSITIVES: beam lands on visible stage geometry ---
+
+0.6275,0.1176,Floor                  # P160/T30 — carpet, visible to cam12+13
+0.6784,0.1686,ArUco                  # P173/T43 — lands on a floor ArUco marker, visible to cam12
+0.6510,0.0000,Pillar-ArUco           # P166/T0  — lands on the Pillar Post wall-mounted ArUco marker
+
+# --- TRUE NEGATIVE: beam is entirely below / outside every camera FOV ---
+
+0.5804,0.3333,Off-Camera-Canary      # P148/T85 — beam on floor below cameras' visible band;
+                                     # any detection here indicates dark-ref is broken (finding M)
+
+# --- PARTIAL: beam off-frame but backscatter visible ---
+
+0.7333,0.1294,Partial-Observation    # P187/T33 — beam just right of storage bins;
+                                     # faint green backscatter on bins;
+                                     # pan+ nudge swings beam INTO view;
+                                     # use as the calibration-boundary case for finding DD
