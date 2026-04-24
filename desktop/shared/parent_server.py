@@ -1180,6 +1180,7 @@ def start_background_tasks():
     else:
         _startup_check_done = True
     _check_depth_install_marker()
+    _check_ollama_install_marker()
     # No auto-claim on boot. The UDP CMD_GYRO_ORIENT handler auto-claims
     # on the first orient packet from an enabled gyro fixture, which is
     # the operator pressing Start on the puck. That's what turns the
@@ -3767,6 +3768,232 @@ def api_camera_beam_detect_local(fid):
         return jsonify(ok=True, **result)
     except Exception as e:
         return jsonify(ok=False, err=str(e)), 503
+
+
+# ── Camera settings + auto-tune (#623) ────────────────────────────────
+
+import camera_settings as _cam_settings
+
+# In-memory + on-disk slot registry. Structure:
+#   { "<fixture_id>": { "<slot_name>": { "controls": {...}, "intent": "..." } } }
+_camera_settings_slots = _load("camera_settings_slots", default={})
+
+_auto_tune_jobs = {}  # fixture_id (str) → job dict (result + status)
+
+
+def _camera_fixture(fid):
+    """Return the camera-type fixture record for `fid`, or None."""
+    return next((f for f in _fixtures
+                 if f.get("id") == int(fid) and f.get("fixtureType") == "camera"),
+                None)
+
+
+@app.get("/api/cameras/<int:fid>/settings")
+def api_camera_settings_get(fid):
+    """Proxy V4L2 controls from the camera node. Returns the raw
+    ``{controls, saved}`` plus stored slots for this fixture."""
+    f = _camera_fixture(fid)
+    if not f:
+        return jsonify(err="Camera fixture not found"), 404
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    cam_idx = f.get("cameraIdx", 0)
+    try:
+        raw = _cam_settings.camera_controls_get(ip, cam_idx)
+    except Exception as e:
+        return jsonify(err=f"Camera controls query failed: {e}"), 503
+    slots = _camera_settings_slots.get(str(fid), {})
+    return jsonify(ok=True, cameraId=fid, cameraIp=ip, cameraIdx=cam_idx,
+                   controls=raw.get("controls", []),
+                   saved=raw.get("saved", {}),
+                   slots=slots)
+
+
+@app.post("/api/cameras/<int:fid>/settings")
+def api_camera_settings_set(fid):
+    """Apply V4L2 controls. Body: ``{controls: {name: value, ...},
+    slot?: "name"}``. When ``slot`` is supplied, the applied set is also
+    persisted in the fixture's slot registry so callers can recall it."""
+    f = _camera_fixture(fid)
+    if not f:
+        return jsonify(err="Camera fixture not found"), 404
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    cam_idx = f.get("cameraIdx", 0)
+    body = request.get_json(silent=True) or {}
+    controls = body.get("controls") or {}
+    if not isinstance(controls, dict) or not controls:
+        return jsonify(err="controls must be a non-empty object"), 400
+    try:
+        r = _cam_settings.camera_controls_set(ip, cam_idx, controls)
+    except Exception as e:
+        return jsonify(err=f"Camera control set failed: {e}"), 503
+    slot_name = body.get("slot")
+    if slot_name:
+        slots = _camera_settings_slots.setdefault(str(fid), {})
+        slots[slot_name] = {"controls": dict(r.get("applied") or controls),
+                            "intent": body.get("intent", "general")}
+        _save("camera_settings_slots", _camera_settings_slots)
+    return jsonify(ok=True, applied=r.get("applied", {}))
+
+
+@app.get("/api/cameras/<int:fid>/settings/slots")
+def api_camera_settings_slots_list(fid):
+    """List the stored slots for one camera fixture."""
+    if not _camera_fixture(fid):
+        return jsonify(err="Camera fixture not found"), 404
+    return jsonify(ok=True, slots=_camera_settings_slots.get(str(fid), {}))
+
+
+@app.post("/api/cameras/<int:fid>/settings/slots/<name>/activate")
+def api_camera_settings_slot_activate(fid, name):
+    """Apply a stored slot's controls to the camera."""
+    f = _camera_fixture(fid)
+    if not f:
+        return jsonify(err="Camera fixture not found"), 404
+    slots = _camera_settings_slots.get(str(fid), {})
+    slot = slots.get(name)
+    if not slot:
+        return jsonify(err=f"Slot '{name}' not found"), 404
+    ip = f.get("cameraIp")
+    cam_idx = f.get("cameraIdx", 0)
+    try:
+        r = _cam_settings.camera_controls_set(ip, cam_idx,
+                                               slot["controls"])
+    except Exception as e:
+        return jsonify(err=f"Slot activation failed: {e}"), 503
+    return jsonify(ok=True, applied=r.get("applied", {}), slot=name)
+
+
+@app.delete("/api/cameras/<int:fid>/settings/slots/<name>")
+def api_camera_settings_slot_delete(fid, name):
+    """Forget a slot."""
+    slots = _camera_settings_slots.get(str(fid), {})
+    if name not in slots:
+        return jsonify(err=f"Slot '{name}' not found"), 404
+    slots.pop(name, None)
+    if not slots:
+        _camera_settings_slots.pop(str(fid), None)
+    _save("camera_settings_slots", _camera_settings_slots)
+    return jsonify(ok=True)
+
+
+@app.post("/api/cameras/<int:fid>/settings/auto-tune")
+def api_camera_settings_auto_tune(fid):
+    """Run the auto-tune loop. Synchronous; iterations run in this
+    request's thread. Returns the full before/after/history trace.
+
+    Body fields:
+      * ``intent``         "general" | "beam" | "aruco" | "yolo"
+      * ``maxIterations``  default 6
+      * ``saveSlot``       optional slot name to persist the tuned set
+      * ``evaluator``      "heuristic" (default, always works) |
+                            "ai" (local VLM via Ollama — no cloud) |
+                            "auto" (prefer AI, fall back to heuristic)
+    """
+    f = _camera_fixture(fid)
+    if not f:
+        return jsonify(err="Camera fixture not found"), 404
+    if _cv is None:
+        return jsonify(err="CVEngine not available (needed for snapshots)"), 503
+    ip = f.get("cameraIp")
+    if not ip:
+        return jsonify(err="Camera has no IP"), 400
+    cam_idx = f.get("cameraIdx", 0)
+    body = request.get_json(silent=True) or {}
+    intent = body.get("intent", "general")
+    max_it = int(body.get("maxIterations", 6))
+    evaluator_mode = body.get("evaluator", "heuristic")
+
+    def _snap(ip_, idx_):
+        return _cv.fetch_snapshot(ip_, idx_, timeout=20)
+
+    try:
+        result = _cam_settings.auto_tune_loop(
+            ip, cam_idx, intent,
+            fetch_snapshot_fn=_snap,
+            max_iterations=max_it,
+            evaluator_mode=evaluator_mode,
+        )
+    except Exception as e:
+        log.exception("auto-tune fid=%d failed", fid)
+        return jsonify(err=f"Auto-tune failed: {e}"), 500
+
+    slot_name = body.get("saveSlot")
+    if slot_name:
+        slots = _camera_settings_slots.setdefault(str(fid), {})
+        slots[slot_name] = {"controls": dict(result.get("applied") or {}),
+                            "intent": intent,
+                            "score": result.get("after", {}).get("score")}
+        _save("camera_settings_slots", _camera_settings_slots)
+
+    _auto_tune_jobs[str(fid)] = {"status": "done", **result,
+                                  "intent": intent,
+                                  "timestamp": time.time()}
+    return jsonify(ok=True, **result, intent=intent, slot=slot_name)
+
+
+@app.get("/api/cameras/settings/evaluator-status")
+def api_camera_settings_evaluator_status():
+    """Report which evaluator modes are available on this orchestrator.
+    The SPA uses this to grey out the AI option when Ollama isn't running
+    so the operator doesn't hit a runtime error from an invisible dep.
+    """
+    ok, err = _cam_settings._ollama_available()
+    return jsonify(ok=True,
+                   modes={
+                       "heuristic": {"available": True},
+                       "ai": {"available": ok, "err": err,
+                              "model": _cam_settings._OLLAMA_MODEL,
+                              "url": _cam_settings._OLLAMA_URL},
+                   })
+
+
+# ── Ollama runtime (#623) — mirrors depth_runtime pattern (#598) ──────
+
+try:
+    import ollama_runtime as _ollama_rt
+except Exception as _e:  # pragma: no cover
+    _ollama_rt = None
+    log.warning("ollama_runtime not importable: %s", _e)
+
+
+@app.get("/api/ollama-runtime/status")
+def api_ollama_runtime_status():
+    if _ollama_rt is None:
+        return jsonify(ok=False, err="ollama_runtime module not bundled"), 500
+    return jsonify(ok=True, **_ollama_rt.status())
+
+
+@app.post("/api/ollama-runtime/install")
+def api_ollama_runtime_install():
+    """Kick off Ollama install + model pull in the background.
+    Body: ``{force?: bool}`` — force re-pulls the model even if present.
+    Poll /install-status for progress."""
+    if _ollama_rt is None:
+        return jsonify(ok=False, err="ollama_runtime module not bundled"), 500
+    body = request.get_json(silent=True) or {}
+    res = _ollama_rt.start_install(force=bool(body.get("force", False)))
+    code = 200 if res.get("ok") else 409
+    return jsonify(**res), code
+
+
+@app.get("/api/ollama-runtime/install-status")
+def api_ollama_runtime_install_status():
+    if _ollama_rt is None:
+        return jsonify(ok=False, err="ollama_runtime module not bundled"), 500
+    return jsonify(ok=True, **_ollama_rt.progress())
+
+
+@app.get("/api/cameras/<int:fid>/settings/auto-tune")
+def api_camera_settings_auto_tune_last(fid):
+    """Return the last auto-tune result for this fixture (if any)."""
+    job = _auto_tune_jobs.get(str(fid))
+    if not job:
+        return jsonify(ok=False, err="No auto-tune run recorded"), 404
+    return jsonify(ok=True, **job)
 
 
 # ── Stereo 3D reconstruction (#230) ──────────────────────────────────
@@ -6568,6 +6795,24 @@ def api_space_scan_zoedepth_info():
         loaded=_depth_runtime._runner_is_healthy(),
         status=_depth_runtime.status(),
     )
+
+
+def _check_ollama_install_marker():
+    """#623 — if the Windows installer was run with the 'ai' component
+    ticked, a marker file ``ollama.install-requested`` is dropped next to
+    SlyLED.exe. Kick off the install in the background so the user sees
+    progress through the Settings → AI Runtime UI instead of the
+    installer console."""
+    if _ollama_rt is None:
+        return
+    try:
+        if getattr(sys, "frozen", False):
+            install_dir = os.path.dirname(sys.executable)
+        else:
+            return  # dev mode
+        _ollama_rt.check_install_marker(install_dir)
+    except Exception as e:
+        log.warning("ollama install-marker check failed: %s", e)
 
 
 def _check_depth_install_marker():

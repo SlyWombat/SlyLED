@@ -85,6 +85,8 @@ args = [
     "--add-data", f"{SHARED / 'dmx_universe.py'};.",
     "--add-data", f"{SHARED / 'depth_runtime.py'};.",
     "--add-data", f"{SHARED / 'depth_runner.py'};.",
+    "--add-data", f"{SHARED / 'camera_settings.py'};.",   # #623
+    "--add-data", f"{SHARED / 'ollama_runtime.py'};.",    # #623
     "--hidden-import=pystray",
     "--hidden-import=paramiko",
     "--hidden-import=numpy",

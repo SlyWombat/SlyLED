@@ -46,6 +46,10 @@ Name: "custom";  Description: "Custom installation"; Flags: iscustom
 ; installer never surprises a user with a 2 GB download.
 Name: "core";  Description: "SlyLED Orchestrator (required)"; Types: full compact custom; Flags: fixed
 Name: "depth"; Description: "Host-side AI depth runtime (ZoeDepth) — adds 'ZoeDepth (host)' scan method; ~2 GB downloaded after install"
+; #623 — local vision AI (Ollama + Moondream). Powers the camera
+; auto-tune AI evaluator. Optional, unticked by default so the Full
+; install doesn't silently fetch another ~2 GB.
+Name: "ai";    Description: "Local AI camera auto-tune (Ollama + Moondream VLM) — ~2 GB downloaded after install"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
@@ -108,6 +112,12 @@ begin
       MarkerFile := ExpandConstant('{app}\depth.install-requested');
       SaveStringToFile(MarkerFile, '1', False);
     end;
+    // #623 — AI auto-tune component drops its own marker. The orchestrator
+    // downloads + installs Ollama and pulls the vision model on first launch.
+    if WizardIsComponentSelected('ai') then begin
+      MarkerFile := ExpandConstant('{app}\ollama.install-requested');
+      SaveStringToFile(MarkerFile, '1', False);
+    end;
   end;
 end;
 
@@ -149,6 +159,15 @@ begin
           DelTree(ExpandConstant('{localappdata}\SlyLED\runtimes\depth-weights'), True, True, True);
       end;
     end;
+    // #623 — Ollama installs itself into its own directory (%LOCALAPPDATA%\
+    // Programs\Ollama by default) and owns its own uninstaller. We only
+    // offer to REMIND the user so shared models aren't silently orphaned.
+    if MsgBox(
+      'Ollama (used by SlyLED AI auto-tune) was installed separately.'#13#10
+      + 'If you want to remove it, open "Apps & Features" in Windows and '
+      + 'uninstall Ollama there. Continue?',
+      mbInformation, MB_OK) = IDOK then
+      ;  // no-op — the message box is purely informational
     DataDir := ExpandConstant('{userappdata}\SlyLED');
     if DirExists(DataDir) then begin
       if MsgBox(
