@@ -207,3 +207,15 @@ class CVEngine:
         if not self._ensure_detector():
             raise RuntimeError("Object detector not available")
         return self._detector.detect(frame, threshold, classes, input_size)
+
+    def detect_objects_tiled(self, frame, threshold=0.5, classes=None,
+                              tile_size=640, overlap=0.2):
+        """#621 — SAHI-style tiled detection. Slices frame into overlapping
+        patches, runs inference per patch, NMS-merges results. Returns
+        (detections, inference_ms). Needed for 4K frames where distant
+        targets shrink below the single-frame downscale resolution."""
+        if not self._ensure_detector():
+            raise RuntimeError("Object detector not available")
+        return self._detector.detect_tiled(
+            frame, threshold=threshold, classes=classes,
+            tile_size=tile_size, overlap=overlap)

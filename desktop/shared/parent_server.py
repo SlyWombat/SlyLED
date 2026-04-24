@@ -2418,56 +2418,64 @@ def _pixel_to_stage(detections, cam_fixture, frame_w, frame_h):
 
 @app.post("/api/cameras/<int:fid>/scan")
 def api_camera_scan(fid):
-    """Proxy scan request to camera node. Returns detections with stage coordinates."""
+    """Run object detection on a camera and return detections with stage coords.
+
+    #620 — this used to proxy POST /scan to the camera node's local
+    detector. Pi 3 + fw 1.3.0 had an OpenCV VideoCapture regression
+    that blocked /scan while /snapshot kept working. Now the
+    orchestrator-side CVEngine does detection on a snapshot it pulls
+    via GET /snapshot (the capture path that already works on every
+    camera node), matching the design the /detect + /beam-detect +
+    /depth routes already use (#333 — move CV processing to orchestrator).
+
+    Any camera node that serves /snapshot works here regardless of
+    firmware — no more camera-node detector dependency for scans.
+    """
     f = next((f for f in _fixtures if f["id"] == fid and f.get("fixtureType") == "camera"), None)
     if not f:
         return jsonify(err="Camera not found"), 404
+    if _cv is None:
+        return jsonify(err="CVEngine not available on orchestrator"), 503
     ip = f.get("cameraIp")
     if not ip:
         return jsonify(err="Camera has no IP"), 400
     body = request.get_json(silent=True) or {}
     threshold = body.get("threshold", 0.5)
-    cam_idx = body.get("cam", 0)
-    resolution = body.get("resolution", 320)
-    # #621 — forward SAHI-tile controls when the caller asks for them.
-    # Missing flags keep the fast single-frame path.
+    cam_idx = body.get("cam", f.get("cameraIdx", 0))
+    # Treat body resolution as the YOLO input size; snapshot always comes
+    # at native camera resolution. YOLO internally letterboxes.
+    input_size = int(body.get("resolution", 640))
+    classes = body.get("classes")
+    # #621 — tile mode for high-res detection of small/distant targets.
     tile = bool(body.get("tile"))
-    tile_size = body.get("tileSize")
-    tile_overlap = body.get("tileOverlap")
-    # Forward to camera node /scan endpoint
+    tile_size = int(body.get("tileSize", 640))
+    tile_overlap = float(body.get("tileOverlap", 0.2))
+
     try:
-        import urllib.request as _ur
-        payload = {"threshold": threshold, "cam": cam_idx,
-                   "resolution": resolution}
+        t0 = time.monotonic()
+        frame = _cv.fetch_snapshot(ip, cam_idx)
+        capture_ms = round((time.monotonic() - t0) * 1000)
+        frame_h, frame_w = int(frame.shape[0]), int(frame.shape[1])
         if tile:
-            payload["tile"] = True
-            if tile_size is not None:
-                payload["tileSize"] = tile_size
-            if tile_overlap is not None:
-                payload["tileOverlap"] = tile_overlap
-        req_data = json.dumps(payload).encode()
-        req = _ur.Request(f"http://{ip}:5000/scan",
-                          data=req_data,
-                          headers={"Content-Type": "application/json"})
-        # Tile mode runs N patches serially; bump the timeout proportionally.
-        timeout_s = 60 if tile else 30
-        resp = _ur.urlopen(req, timeout=timeout_s)
-        raw = json.loads(resp.read().decode())
+            detections, inference_ms = _cv.detect_objects_tiled(
+                frame, threshold=threshold, classes=classes,
+                tile_size=tile_size, overlap=tile_overlap)
+        else:
+            detections, inference_ms = _cv.detect_objects(
+                frame, threshold=threshold, classes=classes,
+                input_size=input_size)
     except Exception as e:
-        return jsonify(err=f"Camera scan failed: {e}"), 503
-    if not raw.get("ok"):
-        return jsonify(err=raw.get("err", "Scan failed")), 503
-    raw_dets = raw.get("detections", [])
-    frame_size = raw.get("frameSize", [640, 480])
-    # Transform pixel coords to stage coords
-    stage_dets = _pixel_to_stage(raw_dets, f, frame_size[0], frame_size[1])
+        return jsonify(err=f"Scan failed: {e}"), 503
+
+    stage_dets = _pixel_to_stage(detections, f, frame_w, frame_h)
     return jsonify(
         ok=True,
         detections=stage_dets,
         cameraId=fid,
-        captureMs=raw.get("captureMs"),
-        inferenceMs=raw.get("inferenceMs"),
-        tile=raw.get("tile", False),
+        captureMs=capture_ms,
+        inferenceMs=round(inference_ms) if inference_ms else None,
+        tile=tile,
+        frameSize=[frame_w, frame_h],
     )
 
 # ── Camera calibration — homography math ──────────────────────────────
