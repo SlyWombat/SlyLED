@@ -459,7 +459,102 @@ function toggleHelp(){
     var raw = d && d.html ? d.html : '<p style="color:#888">Help content not available.</p>';
     raw = raw.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
     if (body) body.innerHTML = raw;
+    // #670 — after help fragment renders, wire glossary hover cards.
+    _glossaryHoverWire(body);
   });
+}
+
+// ── Glossary hover cards (#670) ────────────────────────────────────────
+//
+// Any <abbr> (or element with data-term) inside the help panel gets a
+// floating card on hover / focus. Terms are matched case-insensitively
+// against the structured glossary at /api/glossary. Extends to any DOM
+// element the caller passes in — used by both the help panel and the
+// full-manual HTML when it's rendered in an iframe.
+var _glossaryCache = null;
+function _glossaryLoad(cb){
+  if (_glossaryCache !== null){ cb(_glossaryCache); return; }
+  ra('GET', '/api/glossary', null, function(r){
+    _glossaryCache = (r && r.ok && r.entries) ? r.entries : [];
+    cb(_glossaryCache);
+  });
+}
+function _glossaryLookup(entries, term){
+  if (!term) return null;
+  var key = term.toLowerCase();
+  for (var i=0;i<entries.length;i++){
+    if ((entries[i].term||'').toLowerCase() === key) return entries[i];
+  }
+  return null;
+}
+function _glossaryHoverWire(root){
+  if (!root) return;
+  // Find all glossary terms we can hover: <abbr>, [data-term], or bold
+  // occurrences of known glossary keys inside body text.
+  _glossaryLoad(function(entries){
+    // 1) <abbr> + [data-term] — these already opt-in.
+    var targets = root.querySelectorAll('abbr, [data-term]');
+    targets.forEach(function(el){
+      var term = el.getAttribute('data-term') || el.getAttribute('title') || el.textContent;
+      _glossaryAttach(el, term, entries);
+    });
+    // 2) Auto-decorate <code> and <strong> text that matches a known
+    //    glossary term — this way Appendix references light up without
+    //    the author needing to wrap each one in <abbr>.
+    var lang = (document.documentElement.lang || 'en').toLowerCase().startsWith('fr') ? 'fr' : 'en';
+    var vocab = {};
+    entries.forEach(function(e){ if(e && e.term) vocab[e.term.toLowerCase()] = e; });
+    root.querySelectorAll('code, strong').forEach(function(el){
+      var txt = (el.textContent||'').trim();
+      if (txt && vocab[txt.toLowerCase()] && !el.hasAttribute('data-term')){
+        el.setAttribute('data-term', txt);
+        _glossaryAttach(el, txt, entries);
+      }
+    });
+  });
+}
+function _glossaryAttach(el, term, entries){
+  var entry = _glossaryLookup(entries, term);
+  if (!entry) return;
+  el.classList.add('glossary-term');
+  el.style.cursor = 'help';
+  el.style.borderBottom = '1px dotted #a855f7';
+  el.addEventListener('mouseenter', function(){ _glossaryShow(el, entry); });
+  el.addEventListener('focus',      function(){ _glossaryShow(el, entry); });
+  el.addEventListener('mouseleave', _glossaryHide);
+  el.addEventListener('blur',       _glossaryHide);
+}
+function _glossaryShow(anchor, entry){
+  _glossaryHide();
+  var card = document.createElement('div');
+  card.id = 'glossary-card';
+  var lang = (document.documentElement.lang || 'en').toLowerCase().startsWith('fr') ? 'fr' : 'en';
+  var l = entry[lang] && (entry[lang].long || entry[lang].short) ? entry[lang] : entry.en;
+  var acronym = entry.acronym && l && l.short ? ('<div style="font-size:.75em;color:#94a3b8;margin-bottom:.2em">'+escapeHtml(l.short)+'</div>') : '';
+  var body = l && l.long ? escapeHtml(l.long) : '';
+  var see = (entry.see_also||[]).map(function(s){return escapeHtml(s);}).join(' · ');
+  card.innerHTML =
+    '<div style="font-weight:600;color:#e2e8f0;margin-bottom:.25em">'+escapeHtml(entry.term)+'</div>'
+    + acronym
+    + '<div style="color:#cbd5e1">'+body+'</div>'
+    + (see ? '<div style="color:#64748b;font-size:.75em;margin-top:.4em">See also: '+see+'</div>' : '');
+  card.style.cssText = 'position:fixed;z-index:300;max-width:320px;padding:.6em .8em;'
+    + 'background:#0b1020;border:1px solid #334155;border-left:3px solid #a855f7;'
+    + 'border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.5);'
+    + 'font-size:.82em;line-height:1.45;pointer-events:none';
+  document.body.appendChild(card);
+  var r = anchor.getBoundingClientRect();
+  var top = r.bottom + 6, left = r.left;
+  // Flip vertically when near bottom of viewport.
+  if (top + 120 > window.innerHeight) top = r.top - card.offsetHeight - 6;
+  // Clamp horizontally.
+  if (left + 320 > window.innerWidth) left = window.innerWidth - 332;
+  card.style.top = top + 'px';
+  card.style.left = left + 'px';
+}
+function _glossaryHide(){
+  var c = document.getElementById('glossary-card');
+  if (c) c.remove();
 }
 
 function _openFullManual(){
