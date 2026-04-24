@@ -333,30 +333,38 @@ def _hold_dmx(bridge_ip, dmx, duration=0.5):
 
 def pick_calibration_targets(fixture_pos, geometry, n=6,
                               camera_pos=None, camera_fov_deg=90,
-                              margin_frac=0.15):
-    """Pick N stage-space aim targets for calibration (#497).
+                              margin_frac=0.15, cameras=None,
+                              stage_bounds=None):
+    """Pick N stage-space aim targets for calibration (#497, #659).
 
-    Lays out a uniform grid inside the floor extent, clips to the
-    camera's rough visibility cone, drops anything inside the AABB of
-    a detected obstacle, then trims to N via angular-spread ranking
-    from the fixture's position (prefer points that are mutually
-    well-separated in pan/tilt angle).
+    Lays out a uniform grid inside the floor extent, drops anything
+    inside the AABB of a detected obstacle, clips to the union of each
+    camera's floor-view polygon (#659 — camera pose + FOV actually
+    projected onto the floor, not just a horizontal FOV cone), then
+    trims to N via angular-spread ranking from the fixture's position.
 
     Args:
         fixture_pos:    (x, y, z) of the mover in stage mm.
         geometry:       dict from _get_stage_geometry (floor + walls +
                         obstacles or the layout-box fallback).
         n:              number of targets to return (minimum 4).
-        camera_pos:     optional (x, y, z) — when set, the target grid
-                        is clipped to the camera's forward FOV.
-        camera_fov_deg: horizontal FOV of the camera, used for the
-                        visibility cone.
+        cameras:        optional list of ``{pos: [x, y, z],
+                         rotation: [rx, ry, rz], fov: deg}``. When
+                         supplied, the polygon-based filter runs on the
+                         union (a target kept if ANY camera can see it).
+        camera_pos:     legacy single-camera position (x, y, z). Used
+                         when `cameras` is None for backward compat.
+        camera_fov_deg: legacy single-camera horizontal FOV. Used when
+                         `cameras` is None.
+        stage_bounds:   optional ``{w, d, h}`` mm — used to clip each
+                         camera's floor polygon so targets don't get
+                         recommended outside the stage.
         margin_frac:    fraction of extent shrunk inward on all sides so
-                        targets don't land at the mechanical-range edge.
+                         targets don't land at the mechanical-range edge.
 
     Returns a list of (x, y, z) in stage mm, length ≤ n. The caller
-    must still verify each is reachable (fixture pan/tilt range) and
-    visible to the camera — this function gives a reasonable default.
+    must still verify each is reachable (fixture pan/tilt range) — this
+    function gives a reasonable default.
     """
     n = max(4, int(n))
     floor = geometry.get("floor") if geometry else None
@@ -410,10 +418,41 @@ def pick_calibration_targets(fixture_pos, geometry, n=6,
         return False
     candidates = [c for c in candidates if not _blocked(c)]
 
-    # Camera visibility: drop points outside the camera's horizontal FOV
-    # cone along the stage-forward Y axis. Uses a simple projection onto
-    # the camera-forward vector; cheap and good enough as a first filter.
-    if camera_pos is not None:
+    # Camera visibility filter.
+    #
+    # #659 — prefer the union of each camera's floor-view polygon
+    # (pose + FOV projected onto the floor plane). Falls back to the
+    # legacy horizontal-FOV cone when `cameras` is absent, which keeps
+    # older call sites working.
+    if cameras:
+        try:
+            from camera_math import camera_floor_polygon, point_in_polygon
+            polys = []
+            for c in cameras:
+                cp = c.get("pos") or c.get("position")
+                rot = c.get("rotation") or [0, 0, 0]
+                fov = c.get("fov") or c.get("fovDeg") or 90
+                if not cp:
+                    continue
+                poly = camera_floor_polygon(cp, rot, fov,
+                                             stage_bounds=stage_bounds,
+                                             floor_z=floor_z)
+                if poly:
+                    polys.append(poly)
+            if polys:
+                def _visible(pt):
+                    return any(point_in_polygon((pt[0], pt[1]), poly)
+                                for poly in polys)
+                before = len(candidates)
+                candidates = [c for c in candidates if _visible(c)]
+                log.info("pick_calibration_targets: camera floor-view filter "
+                          "kept %d/%d candidates across %d cameras",
+                          len(candidates), before, len(polys))
+        except Exception as e:
+            log.warning("pick_calibration_targets: camera polygon filter "
+                         "failed (%s) — falling back to FOV cone", e)
+            cameras = None  # trigger legacy branch below
+    if not cameras and camera_pos is not None:
         cx, cy, _ = camera_pos
         half_fov = math.radians(camera_fov_deg) / 2.0
         def _visible(pt):
@@ -600,10 +639,88 @@ def converge_on_stage_target(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     }
 
 
+def _adaptive_coarse_steps(pan_range_deg, tilt_range_deg, beam_width_deg):
+    """#661 / review gap — scale battleship grid density by the fixture's
+    reach and beam width.
+
+    A 4×4 grid on a 540° pan fixture is one probe per 135° of pan; on a
+    90° pan fixture it's one per 22.5°. At a 15° beam width both cases
+    should have roughly one beam diameter of angular spacing between
+    adjacent probes. Target step ≈ 2 × beam_width so neighbouring
+    probes land with ~one-beam gap on the floor.
+    """
+    target_step = max(30.0, 2.0 * max(5.0, float(beam_width_deg or 15.0)))
+    pan_steps = max(3, min(8, round((pan_range_deg or 540.0) / target_step)))
+    tilt_steps = max(3, min(6, round((tilt_range_deg or 270.0) / target_step)))
+    return int(pan_steps), int(tilt_steps)
+
+
+def _refine_battleship_hit(bridge_ip, camera_ip, mover_addr, cam_idx, color,
+                           seed_pan, seed_tilt, coarse_pan_span,
+                           coarse_tilt_span, profile=None,
+                           refine_steps=3):
+    """#660 / review gap — coarse-to-fine 2nd-pass around a confirmed hit.
+
+    The coarse grid cell is up to half its own span away from the true
+    beam centre. Running a finer grid at ±half-cell around the confirmed
+    seed localises the beam so BFS starts from a point near the actual
+    brightest response, not the nearest coarse-cell centre.
+
+    Picks the refine probe with the largest on/off pixel differential
+    (via `_beam_detect_flash`), falling back to `_beam_detect_verified`
+    when flash is unavailable. Returns (pan, tilt, pixelX, pixelY) or
+    the input seed when nothing in the refine grid beats it.
+    """
+    dmx = _fresh_buffer()
+    half_p = coarse_pan_span / 2.0
+    half_t = coarse_tilt_span / 2.0
+    best = None
+    best_score = -1.0
+
+    for i in range(refine_steps):
+        for j in range(refine_steps):
+            p = seed_pan + (i / max(1, refine_steps - 1) - 0.5) * coarse_pan_span
+            t = seed_tilt + (j / max(1, refine_steps - 1) - 0.5) * coarse_tilt_span
+            p = max(0.0, min(1.0, p))
+            t = max(0.0, min(1.0, t))
+            beam = _beam_detect_flash(bridge_ip, camera_ip, cam_idx,
+                                      mover_addr, p, t, color, dmx)
+            if beam is None:
+                # Fall back to verified detect at the current aim.
+                _set_mover_dmx(dmx, mover_addr, p, t, *color,
+                               dimmer=255, profile=profile)
+                _hold_dmx(bridge_ip, dmx, 0.3)
+                beam = _beam_detect_verified(camera_ip, cam_idx, color)
+            if beam is None:
+                continue
+            # Score: oversample and take the median, then reward points
+            # near image centre (camera-view priority — margins are
+            # unreliable for BFS seed).
+            over = _beam_detect_oversampled(camera_ip, cam_idx, color,
+                                            center=True, n=2,
+                                            gap_ms=30, min_valid=1)
+            if over is None:
+                bx, by = beam[0], beam[1]
+            else:
+                bx, by = over
+            # Prefer points further from the frame edge. We don't know
+            # the exact resolution, but 320 × 240 is a safe inner band.
+            score = max(0.0, min(bx - 40, 600 - bx)) + max(0.0, min(by - 40, 400 - by))
+            if score > best_score:
+                best_score = score
+                best = (p, t, bx, by)
+
+    return best
+
+
 def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                          seed_pan=None, seed_tilt=None, profile=None,
-                         coarse_steps=4, confirm_nudge_delta=0.02,
-                         progress_cb=None):
+                         coarse_steps=None, coarse_pan_steps=None,
+                         coarse_tilt_steps=None,
+                         pan_range_deg=None, tilt_range_deg=None,
+                         beam_width_deg=None,
+                         confirm_nudge_delta=0.02, refine=True,
+                         reject_reflection=True, progress_cb=None):
     """Coarse-to-fine discovery: sample a sparse `coarse_steps × coarse_
     steps` grid across pan/tilt ∈ [0, 1] first, then confirm any hit
     with a small nudge (rejects reflections).
@@ -633,23 +750,43 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         _active_profile = profile
     dmx = _fresh_buffer()
 
+    # #661 — adaptive density. Explicit coarse_pan_steps/coarse_tilt_steps
+    # win when supplied; else compute from fixture range + beam width;
+    # else fall back to the legacy uniform `coarse_steps` (default 4).
+    if coarse_pan_steps is None or coarse_tilt_steps is None:
+        if pan_range_deg is not None or tilt_range_deg is not None:
+            ps, ts = _adaptive_coarse_steps(pan_range_deg, tilt_range_deg,
+                                             beam_width_deg)
+            if coarse_pan_steps is None:
+                coarse_pan_steps = ps
+            if coarse_tilt_steps is None:
+                coarse_tilt_steps = ts
+    if coarse_pan_steps is None:
+        coarse_pan_steps = coarse_steps if coarse_steps is not None else 4
+    if coarse_tilt_steps is None:
+        coarse_tilt_steps = coarse_steps if coarse_steps is not None else 4
+    pan_span = 1.0 / max(1, coarse_pan_steps)
+    tilt_span = 1.0 / max(1, coarse_tilt_steps)
+
     # Build the coarse grid. Prefer a uniform spread so the physical
     # reach pattern of the fixture doesn't bias us toward the seed.
     grid = []
-    for i in range(coarse_steps):
-        p = (i + 0.5) / coarse_steps
-        for j in range(coarse_steps):
-            t = (j + 0.5) / coarse_steps
+    for i in range(coarse_pan_steps):
+        p = (i + 0.5) * pan_span
+        for j in range(coarse_tilt_steps):
+            t = (j + 0.5) * tilt_span
             grid.append((p, t))
     # If we have a seed, visit its neighbourhood FIRST so the common
-    # case (seed was right) converges in 1-3 probes instead of 16.
+    # case (seed was right) converges in 1-3 probes instead of N × M.
     if seed_pan is not None and seed_tilt is not None:
         grid.sort(key=lambda xy: (xy[0] - seed_pan) ** 2 +
                                   (xy[1] - seed_tilt) ** 2)
 
-    log.info("battleship_discover: %d coarse probes%s",
-             len(grid),
-             f" (seed=({seed_pan:.2f},{seed_tilt:.2f}))"
+    log.info("battleship_discover: %d×%d coarse probes (pan_range=%s° "
+             "tilt_range=%s° beam=%s°)%s",
+             coarse_pan_steps, coarse_tilt_steps,
+             pan_range_deg, tilt_range_deg, beam_width_deg,
+             f" seed=({seed_pan:.2f},{seed_tilt:.2f})"
              if seed_pan is not None else "")
 
     def _confirm(pan0, tilt0, px0, py0):
@@ -733,15 +870,52 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                 except Exception:
                     pass
             pan_shift, tilt_shift = _confirm(pan, tilt, px0, py0)
-            if pan_shift > 8 or tilt_shift > 8:
-                log.info("battleship_discover: CONFIRMED at probe %d/%d "
-                         "(pan-shift %.0fpx, tilt-shift %.0fpx)",
-                         idx + 1, len(grid), pan_shift, tilt_shift)
-                return (pan, tilt, px0, py0)
-            log.warning("battleship_discover: probe %d/%d candidate at "
-                        "(%.3f, %.3f) failed confirm (pan-shift %.0fpx, "
-                        "tilt-shift %.0fpx) — continuing search",
-                        idx + 1, len(grid), pan_shift, tilt_shift)
+            if not (pan_shift > 8 or tilt_shift > 8):
+                log.warning("battleship_discover: probe %d/%d candidate at "
+                            "(%.3f, %.3f) failed confirm (pan-shift %.0fpx, "
+                            "tilt-shift %.0fpx) — continuing search",
+                            idx + 1, len(grid), pan_shift, tilt_shift)
+                continue
+
+            # #658 / review gap — second flash-blink test at the confirmed
+            # (pan, tilt) rejects reflections that tracked the beam's
+            # nudge but came from a reflective surface (beam OFF should
+            # make the pixel go dark; a reflection of *something else*
+            # would persist). `_beam_detect_flash` already does the
+            # on-vs-off diff we need — re-run it here as a gate.
+            if reject_reflection:
+                blink = _beam_detect_flash(bridge_ip, camera_ip, cam_idx,
+                                            mover_addr, pan, tilt, color,
+                                            dmx)
+                if blink is None:
+                    log.warning("battleship_discover: probe %d/%d reflection-"
+                                "rejection blink did not recover the beam "
+                                "— candidate at (%.3f, %.3f) rejected",
+                                idx + 1, len(grid), pan, tilt)
+                    continue
+                # Flash succeeded; prefer its (higher-confidence) pixel.
+                px0, py0 = blink[0], blink[1]
+
+            # #660 — coarse-to-fine refine around the confirmed hit so
+            # BFS starts near the true beam centre, not a half-cell
+            # offset from it.
+            if refine:
+                refined = _refine_battleship_hit(
+                    bridge_ip, camera_ip, mover_addr, cam_idx, color,
+                    pan, tilt, pan_span, tilt_span, profile=profile)
+                if refined is not None:
+                    log.info("battleship_discover: CONFIRMED + refined at "
+                             "probe %d/%d: coarse (%.3f, %.3f) → refined "
+                             "(%.3f, %.3f) px=(%d, %d)",
+                             idx + 1, len(grid), pan, tilt,
+                             refined[0], refined[1],
+                             int(refined[2]), int(refined[3]))
+                    return refined
+
+            log.info("battleship_discover: CONFIRMED at probe %d/%d "
+                     "(pan-shift %.0fpx, tilt-shift %.0fpx)",
+                     idx + 1, len(grid), pan_shift, tilt_shift)
+            return (pan, tilt, px0, py0)
     finally:
         _active_profile = prev_profile
 

@@ -4290,9 +4290,18 @@ def _mover_cal_thread_v2_body(fid, cam, bridge_ip, mover_color,
         targets = [(t[0], t[1], t[2] if len(t) > 2 else 0) for t in target_overrides]
     else:
         try:
+            # #659 — pass every positioned camera so the filter can
+            # intersect target candidates with the union of all floor-
+            # view polygons. Single-cam call site keeps the legacy kwargs
+            # as fallback behind the `cameras` path.
+            cam_list = _positioned_cameras_for_target_filter()
             targets = _mcal.pick_calibration_targets(
                 fx_pos, geometry, n=6,
+                cameras=cam_list,
                 camera_pos=cam_pos, camera_fov_deg=cam.get("fovDeg", 90),
+                stage_bounds={"w": _stage.get("w", 10) * 1000,
+                               "d": _stage.get("d", 10) * 1000,
+                               "h": _stage.get("h", 5) * 1000},
             )
         except Exception as e:
             job["error"] = f"Target selection failed: {e}"; job["status"] = "error"
@@ -4441,6 +4450,29 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
         except Exception:
             pass
         _set_calibrating(fid, False)
+
+
+def _positioned_cameras_for_target_filter():
+    """#659 — assemble the camera descriptors `pick_calibration_targets`
+    needs to build floor-view polygons for target filtering. Returns a
+    list of ``{pos, rotation, fov}`` for every camera fixture that has
+    a placed position in the layout. Empty when no cameras are
+    positioned — caller falls back to legacy single-camera FOV cone.
+    """
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    out = []
+    for f in _fixtures:
+        if f.get("fixtureType") != "camera":
+            continue
+        p = pos_map.get(f["id"])
+        if not p:
+            continue
+        out.append({
+            "pos": (p.get("x", 0), p.get("y", 0), p.get("z", 0)),
+            "rotation": f.get("rotation") or [0, 0, 0],
+            "fov": f.get("fovDeg", 90),
+        })
+    return out
 
 
 # #653 (review Q4) — per-phase wall-clock budgets. A wedged camera node or a
@@ -4706,10 +4738,23 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
 
         phase_start = time.monotonic()
         job["discoveryMethod"] = "battleship"
+        # #661 — pass profile pan/tilt ranges + beam width so the grid
+        # density adapts to the fixture. 540° movers get denser probes
+        # than 90°. A 5° beam gets finer sampling than a 15° one.
+        pan_range_deg = ((prof_info or {}).get("panRange") or
+                         f.get("panRange") or 540)
+        tilt_range_deg = ((prof_info or {}).get("tiltRange") or
+                          f.get("tiltRange") or 270)
+        beam_width_deg = ((prof_info or {}).get("beamWidth") or
+                          f.get("beamWidth") or 15)
         found = _mcal.battleship_discover(
             bridge_ip, cam_ip, addr, cam_idx, mover_color,
             seed_pan=start_pan, seed_tilt=start_tilt,
-            profile=prof_info, progress_cb=_battleship_progress)
+            profile=prof_info,
+            pan_range_deg=pan_range_deg,
+            tilt_range_deg=tilt_range_deg,
+            beam_width_deg=beam_width_deg,
+            progress_cb=_battleship_progress)
         elapsed = time.monotonic() - phase_start
 
         if found is None and elapsed > CAL_BUDGET_DISCOVERY_BATTLESHIP_S:
@@ -5150,9 +5195,15 @@ def api_mover_cal_targets(fid):
     cam_pos = _fixture_position(cam["id"]) if cam else None
     cam_fov = cam.get("fovDeg", 90) if cam else 90
     try:
+        # #659 — include all positioned cameras in the polygon filter.
+        cam_list = _positioned_cameras_for_target_filter()
         targets = _mcal.pick_calibration_targets(
             fx_pos, geometry, n=n,
+            cameras=cam_list,
             camera_pos=cam_pos, camera_fov_deg=cam_fov,
+            stage_bounds={"w": _stage.get("w", 10) * 1000,
+                           "d": _stage.get("d", 10) * 1000,
+                           "h": _stage.get("h", 5) * 1000},
         )
     except Exception as e:
         log.warning("pick_calibration_targets failed for fid=%d: %s", fid, e)

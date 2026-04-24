@@ -169,3 +169,104 @@ def rotation_to_layout(tilt, pan, roll=0.0):
     axis-semantic triple. #600 convention — ``[rx, ry, rz] = [tilt, roll, pan]``.
     """
     return [float(tilt), float(roll), float(pan)]
+
+
+# ── Camera floor-view polygon (#659) ─────────────────────────────────────
+
+def camera_floor_polygon(cam_pos, rotation, fov_deg, aspect=16.0 / 9.0,
+                          stage_bounds=None, floor_z=0.0):
+    """Project the camera's viewing frustum onto the floor plane.
+
+    Returns a convex polygon in stage XY (z = floor_z) describing every
+    floor point the camera can see. Uses the four corner rays of the
+    image frustum, intersects each with the floor plane, and clips the
+    result to the stage bounding box when supplied.
+
+    Skips frustum corners that point AWAY from the floor (no intersection
+    on the forward half-space) — a camera aimed straight up produces an
+    empty polygon, not a degenerate one.
+
+    Args:
+        cam_pos:       (x, y, z) in stage mm.
+        rotation:      layout rotation array `[rx, ry, rz]`. Read via
+                        rotation_from_layout — axis-semantic tilt/pan/roll.
+        fov_deg:       horizontal field-of-view in degrees.
+        aspect:        width/height ratio (default 16:9).
+        stage_bounds:  optional dict ``{w, d, h}`` in mm to clip the
+                        polygon to stage boundaries.
+        floor_z:       floor plane z in mm (default 0).
+
+    Returns a list of (x, y) tuples in CCW order, or an empty list when
+    the camera sees no floor.
+    """
+    if not _HAS_NUMPY:
+        return []
+
+    tilt, pan, roll = rotation_from_layout(rotation)
+    R = build_camera_to_stage(tilt, pan, roll)
+
+    hfov = math.radians(fov_deg)
+    # Vertical FOV from horizontal + aspect.
+    vfov = 2.0 * math.atan(math.tan(hfov / 2.0) / max(1e-6, aspect))
+
+    # Image-plane corner rays in pinhole frame (+Z forward).
+    tx = math.tan(hfov / 2.0)
+    ty = math.tan(vfov / 2.0)
+    # Order: top-left, top-right, bottom-right, bottom-left (CCW from
+    # the floor's perspective after projection — top rays land far, bottom
+    # rays land near).
+    corners_cam = [
+        np.array([-tx, -ty, 1.0]),  # TL
+        np.array([+tx, -ty, 1.0]),  # TR
+        np.array([+tx, +ty, 1.0]),  # BR
+        np.array([-tx, +ty, 1.0]),  # BL
+    ]
+
+    cx, cy, cz = float(cam_pos[0]), float(cam_pos[1]), float(cam_pos[2])
+    hits = []
+    for c in corners_cam:
+        ray_stage = R @ c
+        rz = ray_stage[2]
+        if rz >= -1e-6:
+            # Ray points up or parallel to floor — no forward intersection.
+            continue
+        # Solve cz + t * rz = floor_z for t > 0.
+        t = (floor_z - cz) / rz
+        if t <= 0:
+            continue
+        fx = cx + t * ray_stage[0]
+        fy = cy + t * ray_stage[1]
+        hits.append((float(fx), float(fy)))
+
+    if not hits:
+        return []
+
+    # Clip to stage bounds (rectangle 0..w × 0..d).
+    if stage_bounds:
+        w = float(stage_bounds.get("w", 0) or 0)
+        d = float(stage_bounds.get("d", 0) or 0)
+        if w > 0 and d > 0:
+            hits = [(max(0.0, min(w, x)), max(0.0, min(d, y)))
+                    for x, y in hits]
+
+    return hits
+
+
+def point_in_polygon(pt, polygon):
+    """Ray-cast point-in-polygon test. Polygon is a list of (x, y).
+    Returns True when pt lies inside (or on the boundary within 1 mm).
+    """
+    if len(polygon) < 3:
+        return False
+    x, y = float(pt[0]), float(pt[1])
+    inside = False
+    n = len(polygon)
+    j = n - 1
+    for i in range(n):
+        xi, yi = polygon[i]
+        xj, yj = polygon[j]
+        if ((yi > y) != (yj > y)) and \
+                (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi):
+            inside = not inside
+        j = i
+    return inside
