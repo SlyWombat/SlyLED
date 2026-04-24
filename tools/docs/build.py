@@ -223,6 +223,13 @@ def main(argv: list[str] | None = None) -> int:
     langs = LANGS if args.lang == 'all' else (args.lang,)
     formats = FORMATS if args.format == 'all' else (args.format,)
 
+    # extractor is cheap; always run so glossary / sections.yml stay fresh.
+    try:
+        from extractor import build_schema
+        build_schema()
+    except ImportError:
+        log.info('extractor: skipped (schema YAMLs already exist)')
+
     if not args.skip_diagrams:
         try:
             from render_diagrams import render_all  # noqa: F401 — #667

@@ -14166,6 +14166,50 @@ _HELP_SECTIONS = {
     "api":             "19. API Quick Reference",
 }
 
+# #670 — SPA tab id → split-source slug (the file under docs/src/{lang}/).
+# Pre-built HTML fragments at docs/build/{lang}/help/{slug}.html win when
+# they exist; otherwise the api_help reader falls back to scanning
+# USER_MANUAL.md by the _HELP_SECTIONS heading anchor above.
+_HELP_SLUGS = {
+    "dash":            "01-getting-started",
+    "setup":           "04-fixture-setup",
+    "layout":          "05-stage-layout",
+    "objects":         "06-stage-objects",
+    "actions":         "07-spatial-effects",
+    "spatial-effects": "07-spatial-effects",
+    "track":           "08-track-actions",
+    "timeline":        "09-building-timeline",
+    "runtime":         "09-building-timeline",
+    "baking":          "10-baking-playback",
+    "shows":           "11-show-preview",
+    "settings":        "12-dmx-profiles",
+    "presets":         "13-preset-shows",
+    "cameras":         "14-camera-nodes",
+    "firmware":        "15-firmware-ota",
+    "limits":          "16-system-limits",
+    "troubleshooting": "17-troubleshooting",
+    "examples":        "18-examples",
+    "api":             "19-api-reference",
+    "glossary":        "20-glossary",
+    "appendix-a":      "appendix-a-camera-calibration",
+    "appendix-b":      "appendix-b-mover-calibration",
+    "appendix-c":      "appendix-c-maintenance",
+}
+
+
+def _resolve_lang():
+    """Pick EN or FR from ?lang= query, cookie, or Accept-Language."""
+    lang = (request.args.get("lang") or "").strip().lower()
+    if lang in ("en", "fr"):
+        return lang
+    ck = (request.cookies.get("slyled_lang") or "").strip().lower()
+    if ck in ("en", "fr"):
+        return ck
+    accept = (request.headers.get("Accept-Language") or "").lower()
+    if accept.startswith("fr") or ",fr" in accept.replace(" ", ""):
+        return "fr"
+    return "en"
+
 @app.get("/help")
 @app.get("/help/")
 def serve_help_index():
@@ -14226,13 +14270,36 @@ def serve_help_image(filename):
 
 @app.get("/api/help/<section>")
 def api_help(section):
-    """Return help content for a given section, extracted from USER_MANUAL.md."""
-    manual_path = DOCS_ROOT / "USER_MANUAL.md"
+    """Return help content for a given SPA tab or section slug.
+
+    Resolution order (#670):
+    1. If a pre-built fragment exists at
+       ``docs/build/{lang}/help/{slug}.html`` (produced by
+       ``tools/docs/build.py --format help``), return it verbatim — it
+       already has Pandoc-rendered tables, code blocks, and glossary
+       ``<abbr>`` markers the SPA hover layer consumes.
+    2. Fall back to the legacy USER_MANUAL.md heading scanner for
+       installs that haven't shipped the per-section build output yet.
+    """
+    lang = _resolve_lang()
+    slug = _HELP_SLUGS.get(section, section)
+    fragment = DOCS_ROOT / "build" / lang / "help" / f"{slug}.html"
+    if fragment.exists():
+        try:
+            return jsonify(html=fragment.read_text(encoding="utf-8"),
+                           lang=lang, slug=slug, source="fragment")
+        except Exception as e:
+            log.warning("help fragment read failed %s: %s", fragment, e)
+
+    # ── Legacy fallback: scan USER_MANUAL.md for the anchor heading ──
+    manual_path = DOCS_ROOT / ("USER_MANUAL_fr.md" if lang == "fr"
+                                else "USER_MANUAL.md")
     if not manual_path.exists():
-        return jsonify(html="<p>User manual not found.</p>")
+        manual_path = DOCS_ROOT / "USER_MANUAL.md"
+    if not manual_path.exists():
+        return jsonify(html="<p>User manual not found.</p>", lang=lang)
     try:
         text = manual_path.read_text(encoding="utf-8")
-        # Find section by heading
         anchor = _HELP_SECTIONS.get(section, section)
         lines = text.split("\n")
         collecting = False
@@ -14247,8 +14314,8 @@ def api_help(section):
             if collecting:
                 result.append(line)
         if not result:
-            return jsonify(html=f"<p>No help found for '{section}'.</p>")
-        # Simple markdown  -' HTML conversion
+            return jsonify(html=f"<p>No help found for '{section}'.</p>",
+                           lang=lang)
         html = ""
         for line in result:
             if line.startswith("### "):
@@ -14261,9 +14328,33 @@ def api_help(section):
                 html += f"<div style='padding-left:1em'>&#x2022; {line[2:]}</div>"
             elif line.strip():
                 html += f"<p style='margin:.3em 0'>{line}</p>"
-        return jsonify(html=html)
+        return jsonify(html=html, lang=lang, slug=slug, source="legacy-scan")
     except Exception as e:
-        return jsonify(html=f"<p>Error loading help: {e}</p>")
+        return jsonify(html=f"<p>Error loading help: {e}</p>", lang=lang)
+
+
+@app.get("/api/glossary")
+def api_glossary():
+    """Return the structured glossary (#670) for SPA hover cards.
+
+    Sourced from ``docs/schema/glossary.yml`` (generated by
+    ``tools/docs/extractor.py``). Each entry has both EN + FR short /
+    long definitions, an ``acronym`` flag, and cross-references.
+    """
+    lang = _resolve_lang()
+    schema = DOCS_ROOT / "schema" / "glossary.yml"
+    if not schema.exists():
+        return jsonify(ok=False, err="glossary.yml not built yet — "
+                                      "run tools/docs/build.py",
+                       entries=[], lang=lang)
+    try:
+        import yaml  # PyYAML — installed alongside python-docx
+        entries = yaml.safe_load(schema.read_text(encoding="utf-8")) or []
+        return jsonify(ok=True, lang=lang, entries=entries)
+    except ImportError:
+        return jsonify(ok=False, err="PyYAML not available on this host"), 500
+    except Exception as e:
+        return jsonify(ok=False, err=str(e)), 500
 
 @app.post("/api/reset")
 def api_reset():
