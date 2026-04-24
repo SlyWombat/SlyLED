@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.4"
+VERSION = "1.6.5"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -6846,7 +6846,7 @@ def _aruco_anchor_extrinsics(frame_w, frame_h, fov_deg, fov_type,
     }
 
 
-def _apply_marker_z_alignment(cloud, radius_mm=400, min_pts=3):
+def _apply_marker_z_alignment(cloud, radius_mm=400, min_pts=3, force=False):
     """#599 — shift a point cloud's Z so surveyed floor markers sit at z=0.
 
     Monocular depth models (ZoeDepth, MiDaS, mono-fallback) place the
@@ -6867,10 +6867,23 @@ def _apply_marker_z_alignment(cloud, radius_mm=400, min_pts=3):
     - Diagnostic payload returned so the SPA / tests can show which
       markers contributed.
 
+    #599 double-use guard: auto-apply sites (the scan endpoints) call
+    this once per scan. If the same cloud dict has already been aligned
+    in this process (markerAlignment.applied = True), a second auto call
+    would re-measure ~0 residual and record `zOffsetMm=0.x` alongside
+    the real offset — clutter, not corruption. Auto callers leave
+    `force=False` to skip the redundant work; the operator-triggered
+    endpoint passes `force=True` to explicitly re-align against a
+    possibly-updated marker registry.
+
     Returns a diagnostics dict; mutates `cloud["points"]` in place.
     """
     if not cloud or not cloud.get("points"):
         return {"applied": False, "reason": "no points"}
+    prior = cloud.get("markerAlignment")
+    if not force and isinstance(prior, dict) and prior.get("applied"):
+        return {"applied": False, "reason": "already aligned in this session",
+                "priorZOffsetMm": prior.get("zOffsetMm")}
     floor = [m for m in _aruco_markers
              if abs(float(m.get("z", 0) or 0)) < 50
              and abs(float(m.get("rx", 0) or 0)) < 1
@@ -6925,9 +6938,13 @@ def api_space_align_to_markers():
     min_pts = int(body.get("minPts", 3))
     if not _point_cloud or not _point_cloud.get("points"):
         return jsonify(ok=False, err="no point cloud loaded"), 400
+    # Operator-triggered — force re-measure even if a prior auto-align
+    # already ran in this session. Registry may have gained / lost a
+    # marker, or the operator surveyed a new floor reference.
     result = _apply_marker_z_alignment(_point_cloud, radius_mm=radius,
-                                         min_pts=min_pts)
+                                         min_pts=min_pts, force=True)
     if result.get("applied"):
+        _point_cloud["markerAlignment"] = result
         _save("pointcloud", _point_cloud)
         _stage_surfaces_cache = {"key": None, "value": None}
     return jsonify(ok=True, **result, totalPoints=len(_point_cloud["points"]))
@@ -7785,12 +7802,23 @@ def api_space_scan_stereo():
         _point_cloud["arucoAnchored"] = True
         _point_cloud["arucoAnchor"] = anchor_info
         _point_cloud["reprojThresholdMm"] = thr_mm
+    # #599 — auto-align Z to surveyed floor markers. The ZoeDepth and
+    # mono paths do this; stereo was the missing site. ORB feature
+    # matching finds few points on textureless floors, so in practice
+    # this often no-ops (fewer than min_pts nearby any floor marker)
+    # and flags `applied: false` with a usable reason. When the floor
+    # DOES have ArUco-bearing detail to match against, the correction
+    # works the same as the mono path.
+    _align = _apply_marker_z_alignment(_point_cloud)
+    if _align.get("applied"):
+        _point_cloud["markerAlignment"] = _align
     _save("pointcloud", _point_cloud)
     _stage_surfaces_cache = {"key": None, "value": None}
     log.info("Stereo scan: %d matches → %d triangulated points (delta=%.1fms, "
-             "thr=%.0fmm, anchored=%s)",
+             "thr=%.0fmm, anchored=%s)%s",
              len(matches), len(points), data.get("captureDeltaMs", 0),
-             thr_mm, anchored)
+             thr_mm, anchored,
+             f" (Z-aligned {_align['zOffsetMm']}mm)" if _align.get("applied") else "")
     return jsonify(ok=True, source="stereo",
                    totalPoints=len(points),
                    featureMatches=len(matches),

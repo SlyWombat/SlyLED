@@ -264,6 +264,42 @@ def check681_all_auto_mode():
        "#681 all-auto logs markers→legacy transition")
 
 
+def check599_floor_alignment_wired():
+    """#599 — every scan path that produces a monocular or feature-based
+    point cloud must auto-call `_apply_marker_z_alignment`. ZoeDepth +
+    mono shipped in 95b393b; stereo was the missing site, added here.
+    Operator-triggered `/align-to-markers` passes force=True; auto
+    callers leave force=False so the guard skips re-measurement.
+    """
+    src = _read(_PARENT_PATH)
+    # Helper exists and supports the force kwarg.
+    ok("def _apply_marker_z_alignment" in src,
+       "#599 _apply_marker_z_alignment helper defined")
+    ok(re.search(r"def _apply_marker_z_alignment\([^)]*force=False",
+                 src) is not None,
+       "#599 helper has force kwarg")
+    # Guard present.
+    ok('"already aligned in this session"' in src,
+       "#599 helper skips re-application when already aligned")
+    # Auto-apply sites — ZoeDepth, mono, stereo.
+    zoe = re.search(r'@app\.post\("/api/space/scan/zoedepth"\).*?(?=\n@app\.)',
+                     src, re.DOTALL)
+    zoe_body = zoe.group(0) if zoe else ""
+    ok("_apply_marker_z_alignment(_point_cloud)" in zoe_body,
+       "#599 ZoeDepth scan auto-applies marker-Z alignment")
+    stereo = re.search(r"def api_space_scan_stereo.*?(?=\n@app\.|\ndef )",
+                        src, re.DOTALL)
+    stereo_body = stereo.group(0) if stereo else ""
+    ok("_apply_marker_z_alignment(_point_cloud)" in stereo_body,
+       "#599 stereo scan auto-applies marker-Z alignment")
+    # Operator endpoint uses force=True.
+    op = re.search(r"def api_space_align_to_markers.*?(?=\n@app\.|\ndef )",
+                    src, re.DOTALL)
+    op_body = op.group(0) if op else ""
+    ok("force=True" in op_body,
+       "#599 /api/space/align-to-markers calls with force=True")
+
+
 def check681_new_tuning_keys():
     """#681 — CAL_TUNING_SPEC gains rejectReflection, refineAfterHit,
     adaptiveDensity (bool toggles) exposed to the wizard Advanced panel.
@@ -304,6 +340,8 @@ def main():
     check681_all_auto_mode()
     print("-- #681 new tuning keys --")
     check681_new_tuning_keys()
+    print("-- #599 floor-alignment wiring --")
+    check599_floor_alignment_wired()
 
     total = _passed + _failed
     print(f"\n{'=' * 56}")
