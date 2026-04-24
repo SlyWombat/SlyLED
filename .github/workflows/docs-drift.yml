@@ -1,0 +1,81 @@
+name: docs-drift
+
+# Issue #672 — catch code↔docs drift in two modes:
+#
+#  1. On every PR: lightweight grep (tools/docs/drift_check.py --mode pr)
+#     that nudges authors when a calibration source file changed without
+#     a matching docs/src/ edit. Never blocks.
+#
+#  2. Weekly semantic pass: tools/docs/drift_check.py --mode weekly runs
+#     parity + review-freshness checks and (future) a VLM-assisted
+#     comparison between appendix sections and cited code. Opens a
+#     "docs: drift report" PR when findings surface.
+
+on:
+  pull_request:
+    paths:
+      - 'desktop/shared/mover_calibrator.py'
+      - 'desktop/shared/mover_control.py'
+      - 'desktop/shared/parametric_mover.py'
+      - 'desktop/shared/camera_math.py'
+      - 'desktop/shared/space_mapper.py'
+      - 'desktop/shared/surface_analyzer.py'
+      - 'firmware/orangepi/camera_server.py'
+      - 'firmware/orangepi/beam_detector.py'
+      - 'firmware/orangepi/depth_estimator.py'
+      - 'docs/src/**'
+      - 'tools/docs/**'
+  schedule:
+    - cron: '0 14 * * 1'   # Monday 14:00 UTC — start of week, post-weekend
+  workflow_dispatch: {}
+
+jobs:
+  pr-nudge:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install deps
+        run: pip install pyyaml
+      - name: PR drift nudge
+        run: |
+          python tools/docs/drift_check.py --mode pr \
+            --base-ref origin/${{ github.base_ref }}
+
+  weekly:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install deps
+        run: pip install pyyaml anthropic
+      - name: Weekly drift check
+        env:
+          # Optional — if absent, the semantic-check step falls back to
+          # parity-only. PR is still opened when parity fails.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python tools/docs/drift_check.py --mode weekly || echo "drift detected"
+      - name: Open drift PR if needed
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: docs/drift-report
+          title: 'docs: drift report (automated)'
+          body: |
+            Automated drift-check report. See the job log for findings.
+            Label: `docs-overhaul-2026-04-24`.
+          labels: |
+            docs-overhaul-2026-04-24
