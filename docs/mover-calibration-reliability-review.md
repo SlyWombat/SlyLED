@@ -717,11 +717,197 @@ fit recovery, sign flip, inverted mount, outlier inflation), the
 parametric-fit subsystem now has end-to-end no-hardware regression
 coverage. Regression gate for every subsequent tier-1 fix.
 
-### 8.2 Tier 2–4 static reading — placeholder
+### 8.2 Tier 2–4 static reading
 
-To be populated. Tier 2 (Q7–Q8), tier 3 (Q9–Q11), tier 4 (Q12–Q13)
-cover surfaces whose code is either stubbed or absent; most answers
-need implementation-phase decisions, not code-reading.
+Code-reading pass on the surfaces each tier needs, to the same depth as
+§8.1. Mostly a map of what exists, what's stubbed, and what's missing.
+Source cites are to `desktop/shared/*.py` and `desktop/shared/spa/js/*.js`
+unless noted.
+
+#### Q7 — Tier-2 activation trigger
+
+- **Code state.** `pendingTier2Handoff` is written at
+  `parent_server.py:4478` (`_phase_timeout`) and at `:4746, :4835, :4839`
+  on sample-acquisition failures (from the Q4 work — #653). Reads: nil
+  outside the job status payload. No SPA or Android code consumes the
+  flag yet.
+- **Finding.** The backend signal is in place; tier-2 needs a second
+  activation path — operator-initiated. Add a button in the cal wizard
+  that sets `job["pendingTier2Handoff"] = True` at any point (including
+  mid-phase) and pauses the thread. Keeps the two triggers (auto on
+  timeout, manual on operator judgement) both expressed as the same
+  state flag so downstream UI has one thing to switch on.
+- **Cost / risk.** Backend: trivial — an endpoint that flips the flag.
+  Frontend: adds operator-facing state to the cal wizard. Low risk.
+- **Open for live-test (§7.1).** Operator's intuition for when to drop
+  to tier 2 on the basement rig — timeout threshold vs "I can see from
+  the camera frame it's not converging." §7.1 observations set the
+  defaults.
+
+#### Q8 — Tier-2 click UX
+
+- **Code state.** Camera-click capture exists in
+  `calibration.js:160` (`_calClickSnap`) — an `<img id="cal-snap">`
+  click handler that maps pixel coords via naturalWidth/Height and POSTs
+  `{fixtureId, pixelX, pixelY}` to `/api/cameras/{camId}/calibrate/detect`.
+  It's wired for camera-intrinsic detection, not mover-aim sampling.
+  Helpers ready: `camera_math.py:54` `build_camera_to_stage(tilt, pan,
+  roll)` and `:98` `transform_cam_to_stage`. Fully production-ready for
+  pixel → stage mm on the floor plane given a camera homography.
+- **Finding.** Add `/api/calibration/mover/<fid>/click-sample` that
+  accepts `{cameraId, pixelX, pixelY, pan, tilt}` — caller (SPA) knows
+  the commanded pan/tilt because it drove the beam there. Server
+  converts pixel → stage mm via the camera's stored homography and
+  appends `{pan, tilt, stageX, stageY, stageZ}` to the calibration's
+  samples list. Reuses the existing `/manual` route's sample schema and
+  `fit_model` downstream. Frontend: bolt a click handler onto the same
+  `<img>` element Q7's pause surfaces; no new container.
+- **Cost / risk.** ~80 LOC backend (route + homography apply +
+  persistence), ~40 LOC frontend. Existing pixel-click handler style
+  from `_calClickSnap` is the template.
+- **Open for live-test.** Operator's minimum sample count for a usable
+  click-driven fit (the review proposed ≥3); and whether a live feed
+  (MJPEG) is needed or a fresh snapshot per click is enough. The
+  `/api/cameras/<id>/snapshot` proxy already exists.
+
+#### Q9 — Tier-3 reference point source
+
+- **Code state.** `/api/aruco/markers` GET at `parent_server.py:2927`
+  returns `{markers: [...]}` with each marker carrying `id, stageX,
+  stageY, stageZ`. POST at `:3028`, DELETE at `:3053`. Per-camera
+  coverage summary at `:2937` (`/api/aruco/markers/coverage`) —
+  computes which markers each camera can currently see. No per-marker
+  confidence in the base list endpoint.
+- **Finding.** ArUco markers are the strongest tier-3 reference source —
+  they're already surveyed, coplanar on the floor, and the
+  markers-mode cal already drives the beam to them. Reuse as-is. No
+  new marker schema needed for tier-3 manual: the flow is "ask operator
+  to confirm beam is centred on marker N, record `(pan, tilt,
+  marker.stageXYZ)`." The `/coverage` endpoint is the natural input to
+  marker selection — pick markers the active camera sees.
+- **Cost / risk.** Zero incremental — the data is already there.
+- **Open for live-test.** Minimum number of visible markers for a
+  stable tier-3 fit. 3 per the review; 4 would additionally break mirror
+  ambiguity from geometry alone — see Q11.
+
+#### Q10 — Tier-3 aim drive
+
+- **Code state.** `/api/mover-control/orient` at `parent_server.py:9427`
+  routes phone-gyro quaternions/euler through `remote.update_from_*`.
+  `remote.aim_stage` at `remote_orientation.py:101` is a unit vector in
+  stage coords. `MoverControlEngine._aim_to_pan_tilt` (`mover_control.py:342`)
+  consumes the vector and drives the mover via parametric model → affine
+  fallback → geometric fallback (the #635 three-tier stack). This is
+  streaming-oriented — no point-target endpoint.
+- **Finding.** Tier-3 needs two modes:
+  1. **Gyro aim** — reuse the existing streaming path. Operator holds
+     the phone, beam tracks the phone's aim vector live, presses "record"
+     to capture a sample. No new server code needed; SPA/Android adds a
+     "record at current aim" button that POSTs to Q8's
+     `/click-sample` with the currently-commanded `(pan, tilt)` plus a
+     marker id (so the sample's stage coords come from the marker
+     registry, not a click).
+  2. **Direct aim-to-marker** — add `/api/calibration/mover/<fid>/aim-to-marker`
+     that takes `{markerId}`, uses the current best-available IK
+     fallback (GDTF-geom if uncalibrated — see Q12) to drive the mover,
+     operator nudges via a trackball/slider UI (existing DMX-test
+     slider at `settings.js` is the minimum viable path), then records.
+- **Cost / risk.** Backend: ~60 LOC for the aim-to-marker route, with
+  graceful fallback when no IK is available (tell operator to use gyro
+  mode instead). Frontend: the record-at-aim button and nudge sliders
+  (~150 LOC). All three drive options (gyro, slider, trackball) can
+  land incrementally.
+- **Open for live-test.** Operator ergonomics — gyro vs slider — on a
+  5-fixture rig, which gets to aim accuracy faster. §7.1 step 5.
+
+#### Q11 — Tier-3 point count + geometry
+
+- **Code state.** `/api/calibration/mover/<fid>/manual` at
+  `parent_server.py:5568` accepts `{samples: [{pan, tilt, stageX,
+  stageY, stageZ}, …]}`, enforces a minimum of 2 samples (line 5586),
+  builds a grid if ≥2 (lines 5593–5595), persists to `_mover_cal[fid]`.
+  **Is wired end-to-end** — the review's §3.7 flag ("stubbed but not
+  implemented") was out of date. No colinear-geometry guard, no
+  sample-count ceiling, no per-sample quality indicator.
+- **Finding.** Minimum samples should climb to 3 (to match pro-console
+  pattern and ParametricFixtureModel fit requirements). Add a
+  colinearity check: reject if the samples' stage-XY points fall within
+  a narrow line (PCA eigenvalue ratio > 10:1 flag). Prefer 4 samples so
+  the fit can resolve mirror ambiguity from geometry alone — Q3's
+  verify_signs can be skipped in tier-3 when geometry suffices. Expose
+  a "current samples" endpoint so the SPA can show operator progress
+  ("3/4 samples captured, next: marker 17").
+- **Cost / risk.** ~40 LOC of validation. The PCA colinearity check
+  needs NumPy, which is already a dependency.
+- **Open for live-test.** Pass rate with 3 vs 4 samples on the basement
+  rig — whether the 4th sample meaningfully reduces fit RMS error.
+
+#### Q12 — Tier-4 GDTF / geometric-only trust
+
+- **Code state.** `_get_mover_model` at `parent_server.py:9239` returns
+  None when no calibration samples exist (`:9257`). `parametric_mover.py:149`
+  `from_dict` needs offset/sign metadata, which come from a fit. No
+  code path constructs a ParametricFixtureModel from pan/tilt ranges
+  and fixture pose alone. `spatial_engine.py:358` `compute_pan_tilt`
+  uses geometric IK (mount rotation + ranges) — this is the de facto
+  tier-4 path already, invoked by `MoverControlEngine._aim_to_pan_tilt`
+  (`mover_control.py:382`) as the final fallback. Track actions
+  (`parent_server.py:11336`) fall through the same way.
+- **Finding.** **Tier 4 effectively already exists** — `compute_pan_tilt`
+  is tier-4 under a different name. Three gaps to promote it to a
+  first-class calibration tier:
+  1. **Surface the status.** Add a `calibrationTier` field to fixture
+     records: `"none" | "tier4-geom" | "tier1-param" | "tier2-click" |
+     "tier3-manual"`. Today `moverCalibrated` is binary, which hides
+     the geometric-only fallback from the operator.
+  2. **Advisory banner.** When `calibrationTier === "tier4-geom"`, the
+     SPA's mover card shows "Uncalibrated — aim accuracy is geometric
+     only" with an upgrade CTA. Same for the 3D viewport beam cone
+     (dashed cone vs solid).
+  3. **Bypass the verification gate.** `f["moverCalibrated"]` currently
+     gates on Q5's parametric verification. Tier 4 can't pass that —
+     no model to verify. Add an explicit `allowTier4=True` path through
+     the engine when no samples exist, so fixtures aim *something*
+     rather than being dead from the moment they're patched.
+- **Cost / risk.** Backend: ~30 LOC to thread the tier enum through
+  fixture records + one more branch in `_aim_to_pan_tilt`. Frontend:
+  banner + badge (~60 LOC). The extraction of #635 (shared IK helper)
+  naturally lands this at the same time — the tier enum is what the
+  helper returns.
+- **Open for live-test.** Tier-4 residuals on the basement rig (§7.1
+  step 2, tier-4 baseline). Expected: 200–500 mm error at 3 m throw
+  per the review's §1 prior; §7.1 confirms the real number and whether
+  that's tolerable for Fn 1 tracking's ±300 mm targets.
+
+#### Q13 — MVR import as tier-4 seed
+
+- **Code state.** No MVR code anywhere. A grep for "MVR" across the
+  repo returns only review doc references. No importer, no parser, no
+  stub endpoint.
+- **Finding.** Greenfield feature, significant scope: MVR is a ZIP
+  archive containing GDTF profile fixtures plus an XML scene description
+  with fixture poses. A minimum viable import reads the XML, extracts
+  `(name, gdtf_profile_id, position, rotation)` per fixture, and creates
+  SlyLED fixture records with `rotation` + `position` populated. The
+  GDTF profile content is a second step (fixture library import) that
+  belongs to the existing profile editor subsystem, not this review.
+- **Cost / risk.** ~400 LOC MVR XML parser + `/api/project/import-mvr`
+  route + SPA upload button. Low risk — purely additive. Out of scope
+  for this review's implementation phase; file as a separate feature
+  ticket.
+- **Open for live-test.** None until a designer actually exports an MVR
+  for the basement rig.
+
+#### Cross-cutting readiness
+
+- **Camera math helpers** (`camera_math.py:54,98`) are production-ready
+  and already used by the markers-mode cal thread; no blockers for tier-2
+  or tier-3 to adopt them.
+- **3D viewport remote rendering (#633).** `scene-3d.js` does not yet
+  render remote aim vectors or gyro orientation. Tier-3 manual aim with
+  gyro needs operator feedback on where the phone thinks it's pointing
+  — #633 is on the critical path for tier-3 UI ergonomics, not just a
+  visualisation nice-to-have.
 
 ### 8.3 Live-test resolution — placeholder
 
