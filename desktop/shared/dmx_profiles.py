@@ -515,7 +515,7 @@ BUILTIN_PROFILES = [
         ],
         "channelCount": 12,
         "colorMode": "color-wheel",
-        "beamWidth": 15,
+        "beamWidth": 3,
         "panRange": 540,
         "tiltRange": 180,
     },
