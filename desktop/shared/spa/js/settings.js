@@ -15,7 +15,7 @@ function _setSection(s){
   if(s==='dmx')loadDmxSettings();
   if(s==='profiles')loadDmxProfiles();
   if(s==='cameras')_loadCamCalStatus();
-  if(s==='advanced'){_depthRuntimeRefresh();_ollamaRuntimeRefresh();}
+  if(s==='advanced'){_depthRuntimeRefresh();_ollamaRuntimeRefresh();loadCalTuning();}
 }
 function _stageUnitsChange(){
   var imp=parseInt(document.getElementById('s-un').value)===1;
@@ -766,3 +766,129 @@ function _grpColor(gid){
   _grpCtl(gid,{r:r,g:g,b:b,dimmer:255});
 }
 function _grpPreset(gid,r,g,b,dim){_grpCtl(gid,{r:r,g:g,b:b,dimmer:dim});}
+
+// ── #680 Calibration Timeouts ───────────────────────────────────────────
+// Operator-tunable mover-calibration knobs. Grouped by phase so the
+// common "battleship too short" tune is right at the top.
+var _CAL_TUNE_GROUPS=[
+  {title:'Phase time budgets (s)',keys:[
+    'discoveryBattleshipS','discoveryColourFallbackS','mappingS','fitS','verificationS'
+  ]},
+  {title:'Warmup',keys:['warmupSeconds']},
+  {title:'Battleship grid clamps',keys:[
+    'battleshipPanStepsMin','battleshipPanStepsMax',
+    'battleshipTiltStepsMin','battleshipTiltStepsMax'
+  ]},
+  {title:'Settle timing',keys:[
+    'settleS','settleBaseS','settleEscalateS','settleVerifyGapS','settlePixelThresh'
+  ]},
+  {title:'BFS + convergence',keys:['bfsMaxSamples','convergeMaxIterations']},
+  {title:'Mover-control (non-calibration)',keys:['moverClaimTtlS']}
+];
+var _CAL_TUNE_LABELS={
+  discoveryBattleshipS:'Battleship discovery budget',
+  discoveryColourFallbackS:'Legacy discovery budget',
+  mappingS:'Mapping / BFS budget',
+  fitS:'Model-fit budget',
+  verificationS:'Verification budget',
+  warmupSeconds:'Warmup duration',
+  battleshipPanStepsMax:'Max pan probes',
+  battleshipTiltStepsMax:'Max tilt probes',
+  battleshipPanStepsMin:'Min pan probes',
+  battleshipTiltStepsMin:'Min tilt probes',
+  settleS:'Legacy settle time (s)',
+  settleBaseS:'Adaptive settle — base (s)',
+  settleEscalateS:'Adaptive settle — escalation (s list)',
+  settleVerifyGapS:'Settle verify gap (s)',
+  settlePixelThresh:'Settle drift threshold (px)',
+  bfsMaxSamples:'BFS sample cap',
+  convergeMaxIterations:'Convergence iteration cap',
+  moverClaimTtlS:'Gyro / phone claim TTL (s)'
+};
+function _calTuneInputId(k){return 'ct-'+k;}
+function loadCalTuning(){
+  ra('GET','/api/settings',null,function(d){
+    if(!d)return;
+    var spec=d.calibrationTuningSpec||{};
+    var cur=d.calibrationTuning||{};
+    var host=document.getElementById('cal-tuning-body');
+    if(!host)return;
+    var html='';
+    _CAL_TUNE_GROUPS.forEach(function(g){
+      html+='<div style="margin:.6em 0"><div style="font-weight:600;color:#e2e8f0">'+
+            escapeHtml(g.title)+'</div>';
+      g.keys.forEach(function(k){
+        var s=spec[k];if(!s)return;
+        var label=_CAL_TUNE_LABELS[k]||k;
+        var tip=s.tooltip||'';
+        var defVal=Array.isArray(s.default)?s.default.join(', '):String(s.default);
+        var cv=cur[k];
+        var curStr=cv==null?'':(Array.isArray(cv)?cv.join(', '):String(cv));
+        var clampHint='['+s.min+' – '+s.max+(s.type==='int'?', int':'')+']';
+        html+='<div style="display:flex;gap:.6em;align-items:center;margin:.25em 0">';
+        html+='<label style="flex:0 0 240px" title="'+escapeHtml(tip)+'">'+escapeHtml(label)+
+              ' <span style="color:#64748b;font-size:.82em">'+escapeHtml(clampHint)+'</span></label>';
+        html+='<input id="'+_calTuneInputId(k)+'" value="'+escapeHtml(curStr)+
+              '" placeholder="default: '+escapeHtml(defVal)+'" style="flex:1;max-width:180px">';
+        html+='<span style="color:#64748b;font-size:.78em">default '+escapeHtml(defVal)+'</span>';
+        html+='</div>';
+      });
+      html+='</div>';
+    });
+    host.innerHTML=html;
+    var st=document.getElementById('cal-tuning-status');if(st)st.textContent='';
+  });
+}
+function _collectCalTuning(){
+  var spec={};
+  // Rebuild from a cached GET; faster than round-tripping every save.
+  // For correctness we re-parse the inputs against their known keys.
+  var out={};
+  _CAL_TUNE_GROUPS.forEach(function(g){
+    g.keys.forEach(function(k){
+      var el=document.getElementById(_calTuneInputId(k));
+      if(!el)return;
+      var v=el.value.trim();
+      if(v==='')return;  // blank = use default
+      if(k==='settleEscalateS'){
+        out[k]=v.split(',').map(function(x){return parseFloat(x.trim());}).filter(function(x){return !isNaN(x);});
+      }else if(/Steps|Samples|Iterations|Thresh/i.test(k)){
+        out[k]=parseInt(v,10);
+      }else{
+        out[k]=parseFloat(v);
+      }
+    });
+  });
+  return out;
+}
+function saveCalTuning(btn){
+  var payload={calibrationTuning:_collectCalTuning()};
+  var st=document.getElementById('cal-tuning-status');
+  if(st)st.textContent='Saving…';
+  var x=new XMLHttpRequest();
+  x.open('POST','/api/settings',true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.onload=function(){
+    try{var d=JSON.parse(x.responseText);}catch(e){d={};}
+    if(x.status===200&&d.ok){
+      if(st)st.textContent='Saved';
+      loadCalTuning();
+    }else{
+      var msg='Save failed';
+      if(d&&d.details&&d.details.length)msg='Save failed: '+d.details.join('; ');
+      else if(d&&d.err)msg='Save failed: '+d.err;
+      if(st){st.textContent=msg;st.style.color='#fca5a5';}
+    }
+  };
+  x.send(JSON.stringify(payload));
+}
+function resetCalTuning(btn){
+  if(!confirm('Clear all calibration-timeout overrides and use defaults?'))return;
+  var x=new XMLHttpRequest();
+  x.open('POST','/api/settings',true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.onload=function(){
+    if(x.status===200){loadCalTuning();}
+  };
+  x.send(JSON.stringify({calibrationTuning:{}}));
+}

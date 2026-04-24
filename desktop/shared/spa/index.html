@@ -506,6 +506,20 @@
         <button id='ollama-rt-reinstall' class='btn btn-nav' onclick='_ollamaRuntimeInstall(true)' style='display:none' title='Re-pull the vision model (weights are refetched from the Ollama registry).'>Re-pull model</button>
       </div>
     </div>
+    <div class='card' id='cal-tuning-card' style='max-width:720px'>
+      <div class='card-title'>Calibration Timeouts</div>
+      <p style='font-size:.82em;color:#94a3b8;margin-bottom:.5em'>
+        Tune timing and clamp constants used by the mover-calibration pipeline
+        (#680). Leave blank to use the shipped defaults. Changes take effect
+        on the next calibration run — no restart needed.
+      </p>
+      <div id='cal-tuning-body' style='font-size:.85em'>Loading…</div>
+      <div style='display:flex;gap:.5em;margin-top:.8em'>
+        <button class='btn btn-on' onclick='saveCalTuning(this)'>Save</button>
+        <button class='btn' onclick='resetCalTuning(this)' style='background:#333'>Reset to defaults</button>
+        <span id='cal-tuning-status' style='align-self:center;font-size:.8em;color:#94a3b8'></span>
+      </div>
+    </div>
     <div class='card' style='max-width:480px;border-color:#622'>
       <div class='card-title' style='color:#c66'>Factory Reset</div>
       <p style='font-size:.85em;color:#aaa;margin-bottom:.8em'>Remove all fixtures, runners and layout data, and restore default settings.</p>

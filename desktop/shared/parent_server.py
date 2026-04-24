@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.3"
+VERSION = "1.6.4"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -4221,6 +4221,12 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
 
     _set_calibrating(fid, True)
 
+    # #680 — apply operator-tuned settle constants.
+    try:
+        _mcal.apply_tuning(_settings.get("calibrationTuning") or {})
+    except Exception:
+        pass
+
     # Pre-flight — surveyed markers in registry + camera can see at
     # least one of them (prescan).
     _mcal_log(job, "Markers-mode: checking registry + camera view")
@@ -4335,6 +4341,7 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
             target_px=target_px,
             start_pan=warm_pan, start_tilt=warm_tilt,
             profile=prof_info,
+            max_iterations=int(_cal_tuning("convergeMaxIterations")),
         )
         entry = {"id": mid, "stage": list(stage_xyz),
                  "targetPixel": target_px,
@@ -4499,6 +4506,11 @@ def _mover_cal_thread_v2_body(fid, cam, bridge_ip, mover_color,
         return  # don't blackout / no lock engaged yet
 
     _set_calibrating(fid, True)
+    # #680 — apply operator-tuned settle constants.
+    try:
+        _mcal.apply_tuning(_settings.get("calibrationTuning") or {})
+    except Exception:
+        pass
     addr = f.get("dmxStartAddr", 1)
     uni = f.get("dmxUniverse", 1) - 1
     pid = f.get("dmxProfileId")
@@ -4576,6 +4588,7 @@ def _mover_cal_thread_v2_body(fid, cam, bridge_ip, mover_color,
                 bridge_ip, cam_ip, addr, cam_idx, mover_color,
                 H_flat, target, model=model,
                 start_pan=0.5, start_tilt=0.5,
+                max_iterations=int(_cal_tuning("convergeMaxIterations")),
             )
         except Exception as e:
             log.warning("MOVER-CAL v2 %d: converge failed on target %d: %s", fid, i, e)
@@ -4729,6 +4742,121 @@ CAL_BUDGET_FIT_S = 10.0
 CAL_BUDGET_VERIFICATION_S = 30.0
 
 
+# #680 — operator-tunable calibration knobs. Each entry: default + clamp
+# (min, max) + one-line tooltip. The settings UI renders from this dict;
+# the validator in api_settings_save rejects OOR values with a 400.
+# Reads go through _cal_tuning(key) at phase start (not module load) so
+# changes take effect on the NEXT calibration run without restart.
+CAL_TUNING_SPEC = {
+    # Phase time budgets
+    "discoveryBattleshipS":      {"default": 60.0,  "min": 20.0, "max": 300.0,
+        "tooltip": "How long the battleship coarse-grid scan can run before giving up. Increase for wide-pan fixtures (540°+) or slow Art-Net bridges."},
+    "discoveryColourFallbackS":  {"default": 90.0,  "min": 30.0, "max": 300.0,
+        "tooltip": "Legacy colour-filter discovery budget (kicks in when battleship finds nothing)."},
+    "mappingS":                  {"default": 120.0, "min": 30.0, "max": 600.0,
+        "tooltip": "BFS mapping-phase budget. Soft cap — run continues if enough samples are already collected."},
+    "fitS":                      {"default": 10.0,  "min": 5.0,  "max": 60.0,
+        "tooltip": "LM solver + grid build. Rarely needs tuning."},
+    "verificationS":             {"default": 30.0,  "min": 5.0,  "max": 120.0,
+        "tooltip": "Both the grid sweep and the held-out parametric check."},
+    # Warmup
+    "warmupSeconds":             {"default": 30.0,  "min": 0.0,  "max": 120.0,
+        "tooltip": "Pre-calibration sweep to settle motor belts. Set to 0 to skip."},
+    # Battleship grid clamps (from #661 _adaptive_coarse_steps)
+    "battleshipPanStepsMax":     {"default": 8,     "min": 3,    "max": 16,  "type": "int",
+        "tooltip": "Upper cap on battleship pan-axis grid. For wide-pan (>360°) fixtures, raising this trades time for coverage."},
+    "battleshipTiltStepsMax":    {"default": 6,     "min": 3,    "max": 12,  "type": "int",
+        "tooltip": "Upper cap on battleship tilt-axis grid."},
+    "battleshipPanStepsMin":     {"default": 3,     "min": 2,    "max": 6,   "type": "int",
+        "tooltip": "Floor — below this the grid won't catch a small-reach fixture."},
+    "battleshipTiltStepsMin":    {"default": 3,     "min": 2,    "max": 6,   "type": "int",
+        "tooltip": "Floor for tilt."},
+    # Settle timing
+    "settleS":                   {"default": 0.6,   "min": 0.1,  "max": 3.0,
+        "tooltip": "Per-probe DMX hold on the legacy path."},
+    "settleBaseS":               {"default": 0.4,   "min": 0.1,  "max": 2.0,
+        "tooltip": "Starting value for adaptive-settle double-capture (#655)."},
+    "settleEscalateS":           {"default": [0.4, 0.8, 1.5], "min": 0.1, "max": 5.0,
+        "type": "floatList", "listMin": 1, "listMax": 5,
+        "tooltip": "Three retry tiers when pixel drift exceeds threshold. Comma-separated list (1–5 entries)."},
+    "settleVerifyGapS":          {"default": 0.2,   "min": 0.05, "max": 1.0,
+        "tooltip": "Gap between the two double-capture frames that prove the beam is stationary."},
+    "settlePixelThresh":         {"default": 30,    "min": 5,    "max": 200, "type": "int",
+        "tooltip": "Max inter-capture pixel drift to accept as 'settled'. Raise on noisy cameras; lower on high-res steady rigs."},
+    # BFS + convergence caps
+    "bfsMaxSamples":             {"default": 80,    "min": 20,   "max": 300, "type": "int",
+        "tooltip": "Stop mapping after this many sampled (pan, tilt, pixel) points."},
+    "convergeMaxIterations":     {"default": 25,    "min": 5,    "max": 100, "type": "int",
+        "tooltip": "Per-target bracket-and-retry iterations in markers-mode + v2 paths."},
+    # Mover-control claim TTL
+    "moverClaimTtlS":            {"default": 15.0,  "min": 2.0,  "max": 300.0,
+        "tooltip": "Auto-release if a controlling device goes silent for this long. Affects Android / gyro; not used during calibration itself."},
+}
+
+
+def _cal_tuning(key, default=None):
+    """#680 — read operator-tuned calibration knob with module-constant fallback.
+
+    Looks up `_settings["calibrationTuning"][key]`. Missing key → fall back
+    to `CAL_TUNING_SPEC[key].default` (or the caller-supplied `default` if
+    the spec doesn't know the key). Read at phase start, never cached, so
+    a settings change takes effect on the next calibration run without a
+    server restart.
+    """
+    tuning = _settings.get("calibrationTuning") or {}
+    if key in tuning:
+        return tuning[key]
+    spec = CAL_TUNING_SPEC.get(key)
+    if spec is not None:
+        return spec.get("default", default)
+    return default
+
+
+def _validate_cal_tuning(overrides):
+    """#680 — clamp-check operator overrides against CAL_TUNING_SPEC.
+
+    Returns (cleaned_dict, errors_list). Errors are "<key>: <reason>"
+    strings suitable for the POST /api/settings 400 response.
+    """
+    errors = []
+    cleaned = {}
+    for k, v in (overrides or {}).items():
+        spec = CAL_TUNING_SPEC.get(k)
+        if spec is None:
+            errors.append(f"{k}: unknown calibration tuning key")
+            continue
+        t = spec.get("type", "float")
+        mn, mx = spec["min"], spec["max"]
+        try:
+            if t == "int":
+                cv = int(v)
+                if cv < mn or cv > mx:
+                    errors.append(f"{k}: {cv} outside [{mn}, {mx}]")
+                    continue
+                cleaned[k] = cv
+            elif t == "floatList":
+                lst = v if isinstance(v, list) else [float(x) for x in str(v).split(",")]
+                lst = [float(x) for x in lst]
+                lmn = spec.get("listMin", 1)
+                lmx = spec.get("listMax", 10)
+                if len(lst) < lmn or len(lst) > lmx:
+                    errors.append(f"{k}: list length {len(lst)} outside [{lmn}, {lmx}]")
+                    continue
+                if any(x < mn or x > mx for x in lst):
+                    errors.append(f"{k}: list entry outside [{mn}, {mx}]")
+                    continue
+                cleaned[k] = lst
+            else:
+                cv = float(v)
+                if cv < mn or cv > mx:
+                    errors.append(f"{k}: {cv} outside [{mn}, {mx}]")
+                    continue
+                cleaned[k] = cv
+        except (TypeError, ValueError):
+            errors.append(f"{k}: {v!r} is not a valid {t}")
+    return cleaned, errors
+
+
 def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
                            warmup=False, warmup_seconds=30.0):
     """Background thread: optional warmup → discovery → mapping → save grid."""
@@ -4779,6 +4907,13 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
         job["status"] = "error"
         _cal_blackout()
         return
+
+    # #680 — apply operator-tuned settle constants into mover_calibrator
+    # *before* the first probe so _wait_settled etc. see fresh values.
+    try:
+        _mcal.apply_tuning(_settings.get("calibrationTuning") or {})
+    except Exception:
+        pass
 
     # Pre-flight sanity log — surfaces the common "silent failure" causes
     # (no profile, beam channels can't be resolved, fixture not positioned)
@@ -5008,6 +5143,7 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
         cam_res = None
         if cam.get("resolutionW") and cam.get("resolutionH"):
             cam_res = (int(cam["resolutionW"]), int(cam["resolutionH"]))
+        # #680 — operator-tunable battleship clamps.
         found = _mcal.battleship_discover(
             bridge_ip, cam_ip, addr, cam_idx, mover_color,
             seed_pan=start_pan, seed_tilt=start_tilt,
@@ -5016,12 +5152,17 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
             tilt_range_deg=tilt_range_deg,
             beam_width_deg=beam_width_deg,
             camera_resolution=cam_res,
+            coarse_pan_min=int(_cal_tuning("battleshipPanStepsMin")),
+            coarse_pan_max=int(_cal_tuning("battleshipPanStepsMax")),
+            coarse_tilt_min=int(_cal_tuning("battleshipTiltStepsMin")),
+            coarse_tilt_max=int(_cal_tuning("battleshipTiltStepsMax")),
             progress_cb=_battleship_progress)
         elapsed = time.monotonic() - phase_start
 
-        if found is None and elapsed > CAL_BUDGET_DISCOVERY_BATTLESHIP_S:
-            _phase_timeout("discovery-battleship",
-                           CAL_BUDGET_DISCOVERY_BATTLESHIP_S, elapsed)
+        _budget_battleship = float(_cal_tuning("discoveryBattleshipS",
+                                                 CAL_BUDGET_DISCOVERY_BATTLESHIP_S))
+        if found is None and elapsed > _budget_battleship:
+            _phase_timeout("discovery-battleship", _budget_battleship, elapsed)
             return
 
         if not found:
@@ -5042,9 +5183,10 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
                 camera_rotation=cam_rot, camera_fov=cam_fov,
                 stage_depth=stage_d)
             elapsed = time.monotonic() - phase_start
-            if not found and elapsed > CAL_BUDGET_DISCOVERY_COLOUR_FALLBACK_S:
-                _phase_timeout("discovery-colour-filter",
-                               CAL_BUDGET_DISCOVERY_COLOUR_FALLBACK_S, elapsed)
+            _budget_colour = float(_cal_tuning("discoveryColourFallbackS",
+                                                 CAL_BUDGET_DISCOVERY_COLOUR_FALLBACK_S))
+            if not found and elapsed > _budget_colour:
+                _phase_timeout("discovery-colour-filter", _budget_colour, elapsed)
                 return
 
         if not found:
@@ -5114,7 +5256,10 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
     # shows which pan/tilt position is being probed and how many samples
     # have been collected. Without this the UI sat at "Mapping..." for
     # 30-60s with no indication the thread was alive.
-    _map_target = 50
+    # #680 — cap BFS sampling via the operator-tuned knob (spec default
+    # 80). Caller previously hardcoded 50 which also doubled as the
+    # progress-bar scale; honour the override on both surfaces.
+    _map_target = int(_cal_tuning("bfsMaxSamples"))
     def _mapping_progress(sample_count, cur_pan, cur_tilt):
         # 35-70% progress band for the mapping phase.
         frac = min(sample_count / _map_target, 1.0)
@@ -5135,10 +5280,11 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
         # the budget, still honour the samples (they're good data) but flag
         # tier-2 handoff so the UI can offer the operator the click-to-sample
         # path for future runs on this rig.
-        if elapsed > CAL_BUDGET_MAPPING_S and len(samples) < _map_target:
+        _budget_mapping = float(_cal_tuning("mappingS", CAL_BUDGET_MAPPING_S))
+        if elapsed > _budget_mapping and len(samples) < _map_target:
             log.warning("MOVER-CAL %d: BFS exceeded %.0fs budget (%.1fs, %d samples) "
                         "— proceeding but flagging tier-2 handoff",
-                        fid, CAL_BUDGET_MAPPING_S, elapsed, len(samples))
+                        fid, _budget_mapping, elapsed, len(samples))
             job["pendingTier2Handoff"] = True
         if len(samples) < 6:
             job["error"] = f"Only {len(samples)} samples collected — need at least 6"
@@ -5165,9 +5311,10 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
     try:
         grid = _mcal.build_grid(samples)
         elapsed = time.monotonic() - phase_start
-        if elapsed > CAL_BUDGET_FIT_S:
+        _budget_fit = float(_cal_tuning("fitS", CAL_BUDGET_FIT_S))
+        if elapsed > _budget_fit:
             log.warning("MOVER-CAL %d: grid-build exceeded %.0fs budget (%.1fs)",
-                        fid, CAL_BUDGET_FIT_S, elapsed)
+                        fid, _budget_fit, elapsed)
         if not grid:
             job["error"] = "Grid build failed — insufficient sample spread"
             job["status"] = "error"
@@ -5195,9 +5342,10 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
             n_points=3, avoid_samples=fit_keys,
         )
         elapsed = time.monotonic() - phase_start
-        if elapsed > CAL_BUDGET_VERIFICATION_S:
+        _budget_verify = float(_cal_tuning("verificationS", CAL_BUDGET_VERIFICATION_S))
+        if elapsed > _budget_verify:
             log.warning("MOVER-CAL %d: verification exceeded %.0fs budget (%.1fs)",
-                        fid, CAL_BUDGET_VERIFICATION_S, elapsed)
+                        fid, _budget_verify, elapsed)
         # Summary: worst pixel error across the sweep.
         errs = [v["errorPx"] for v in (verification or []) if v.get("errorPx") is not None]
         if errs:
@@ -5309,9 +5457,10 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
             log.warning("MOVER-CAL %d: parametric verification error: %s", fid, e)
             parametric_verification = {"pass": False, "error": str(e)}
         elapsed = time.monotonic() - phase_start
-        if elapsed > CAL_BUDGET_VERIFICATION_S:
+        _budget_pv = float(_cal_tuning("verificationS", CAL_BUDGET_VERIFICATION_S))
+        if elapsed > _budget_pv:
             log.warning("MOVER-CAL %d: parametric verification exceeded %.0fs budget (%.1fs)",
-                        fid, CAL_BUDGET_VERIFICATION_S, elapsed)
+                        fid, _budget_pv, elapsed)
 
     if parametric_verification is not None:
         job["parametricVerification"] = parametric_verification
@@ -5392,7 +5541,10 @@ def api_mover_cal_start(fid):
     body = request.get_json(silent=True) or {}
     color = body.get("color", [0, 255, 0])  # default green
     warmup = bool(body.get("warmup", False))
-    warmup_seconds = float(body.get("warmupSeconds", 30.0))
+    # #680 — operator-tunable default for warmup duration. Explicit
+    # warmupSeconds in the request body still wins.
+    warmup_seconds = float(body.get("warmupSeconds",
+                                      _cal_tuning("warmupSeconds", 30.0)))
     # #499 — opt-in per-target convergence loop. Default stays on the
     # legacy BFS path until we've hardware-validated the new loop.
     mode = body.get("mode", "legacy")
@@ -9695,6 +9847,7 @@ _mover_engine = MoverControlEngine(
     get_mover_cal=lambda mid: _mover_cal.get(str(mid)),
     get_mover_model=_get_mover_model,
     is_calibrating=_fixture_is_calibrating,
+    get_claim_ttl_s=lambda: float(_cal_tuning("moverClaimTtlS")),
 )
 _mover_engine.start()
 
@@ -12719,16 +12872,30 @@ def api_settings_get():
     # Compute elapsed dynamically from start epoch
     if s.get("runnerRunning") and s.get("runnerStartEpoch"):
         s["runnerElapsed"] = max(0, int(time.time()) - s["runnerStartEpoch"])
+    # #680 — surface the calibration-tuning spec (defaults + clamps +
+    # tooltips) alongside the current overrides so the UI can render a
+    # single Advanced panel without a second round-trip.
+    s["calibrationTuning"] = dict(_settings.get("calibrationTuning") or {})
+    s["calibrationTuningSpec"] = CAL_TUNING_SPEC
     return jsonify(s)
 
 @app.post("/api/settings")
 def api_settings_save():
     body = request.get_json(silent=True) or {}
+    # #680 — validate calibrationTuning overrides BEFORE committing any of
+    # the simple settings fields. An OOR value rejects the whole write.
+    if "calibrationTuning" in body:
+        cleaned, errors = _validate_cal_tuning(body["calibrationTuning"])
+        if errors:
+            return jsonify(err="calibrationTuning validation failed",
+                            details=errors), 400
     with _lock:
         for k in ("name", "units", "canvasW", "canvasH", "darkMode", "runnerLoop",
                   "globalBrightness", "logging", "logPath", "autoStartShow"):
             if k in body:
                 _settings[k] = body[k]
+        if "calibrationTuning" in body:
+            _settings["calibrationTuning"] = cleaned
         _layout["canvasW"] = _settings["canvasW"]
         _layout["canvasH"] = _settings["canvasH"]
         _save("settings", _settings)

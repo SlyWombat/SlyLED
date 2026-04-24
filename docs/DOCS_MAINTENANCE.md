@@ -46,6 +46,7 @@ Any PR that touches these files should include an Appendix A or B review in the 
 - `desktop/shared/parametric_mover.py`
 - `desktop/shared/spa/js/calibration.js`
 - Orchestrator routes `/api/calibration/mover/*` in `desktop/shared/parent_server.py`
+- `CAL_TUNING_SPEC` in `desktop/shared/parent_server.py` (operator-tunable mover-cal knobs #680) — any change to defaults, clamps, keys, or tooltips MUST update Appendix B §B.7 "Tuning-parameter reference" in both EN and FR
 
 ### Camera-calibration surface
 - `firmware/orangepi/camera_server.py` — endpoints `/snapshot`, `/scan`, `/point-cloud`, `/beam-detect*`, `/dark-reference`, `/calibrate/intrinsic/*`
@@ -62,6 +63,7 @@ When reviewing a PR that touches any file above, confirm:
 
 - [ ] Phase names in `mover_calibrator.py` still match Appendix B §B.2
 - [ ] Timeout constants cited in Appendix B (`SETTLE`, `MAX_SAMPLES`, claim TTL, bracket floor, phase budgets #653) still match code
+- [ ] `CAL_TUNING_SPEC` (#680) defaults, clamps, and tooltip wording still match Appendix B §B.7
 - [ ] Endpoint paths and request/response shapes in Appendix A match the Flask route signatures
 - [ ] Rotation schema v2 (Appendix A §A.9) still matches `camera_math.py::rotation_from_layout` and the SPA mirror helper
 - [ ] Status strings written to the calibration-status dict match the state machine in `docs/diagrams/mover-calibration-states.mmd`

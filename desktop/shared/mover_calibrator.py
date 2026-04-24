@@ -35,6 +35,28 @@ SETTLE_ESCALATE = [0.4, 0.8, 1.5]  # escalation stages (faster)
 SETTLE_VERIFY_GAP = 0.2   # gap between double-capture (reduced from 0.3)
 SETTLE_PIXEL_THRESH = 30  # max pixel drift to consider settled
 
+
+def apply_tuning(tuning):
+    """#680 — override module-level settle constants from operator settings.
+
+    Called by parent_server at calibration entry so the mover-calibrator's
+    internal helpers (_wait_settled, etc.) see fresh values on the next
+    probe. `tuning` is the validated dict from CAL_TUNING_SPEC; missing
+    keys leave the current module value alone.
+    """
+    global SETTLE, SETTLE_BASE, SETTLE_ESCALATE, SETTLE_VERIFY_GAP, \
+           SETTLE_PIXEL_THRESH
+    if "settleS" in tuning:
+        SETTLE = float(tuning["settleS"])
+    if "settleBaseS" in tuning:
+        SETTLE_BASE = float(tuning["settleBaseS"])
+    if "settleEscalateS" in tuning:
+        SETTLE_ESCALATE = [float(x) for x in tuning["settleEscalateS"]]
+    if "settleVerifyGapS" in tuning:
+        SETTLE_VERIFY_GAP = float(tuning["settleVerifyGapS"])
+    if "settlePixelThresh" in tuning:
+        SETTLE_PIXEL_THRESH = int(tuning["settlePixelThresh"])
+
 # ── Oversample + median filter (#655 / review Q6) ──────────────────────
 # Each BFS probe is a single _wait_settled + _beam_detect. Convergence
 # proves drift < SETTLE_PIXEL_THRESH but doesn't suppress per-capture
@@ -639,7 +661,8 @@ def converge_on_stage_target(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     }
 
 
-def _adaptive_coarse_steps(pan_range_deg, tilt_range_deg, beam_width_deg):
+def _adaptive_coarse_steps(pan_range_deg, tilt_range_deg, beam_width_deg,
+                            pan_min=3, pan_max=8, tilt_min=3, tilt_max=6):
     """#661 / review gap — scale battleship grid density by the fixture's
     reach and beam width.
 
@@ -648,10 +671,15 @@ def _adaptive_coarse_steps(pan_range_deg, tilt_range_deg, beam_width_deg):
     should have roughly one beam diameter of angular spacing between
     adjacent probes. Target step ≈ 2 × beam_width so neighbouring
     probes land with ~one-beam gap on the floor.
+
+    #680 — `pan_min`/`pan_max`/`tilt_min`/`tilt_max` are operator-tunable
+    clamps (defaults match the legacy hardcoded values).
     """
     target_step = max(30.0, 2.0 * max(5.0, float(beam_width_deg or 15.0)))
-    pan_steps = max(3, min(8, round((pan_range_deg or 540.0) / target_step)))
-    tilt_steps = max(3, min(6, round((tilt_range_deg or 270.0) / target_step)))
+    pan_steps = max(pan_min, min(pan_max,
+                                   round((pan_range_deg or 540.0) / target_step)))
+    tilt_steps = max(tilt_min, min(tilt_max,
+                                     round((tilt_range_deg or 270.0) / target_step)))
     return int(pan_steps), int(tilt_steps)
 
 
@@ -730,7 +758,9 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                          beam_width_deg=None,
                          confirm_nudge_delta=0.02, refine=True,
                          reject_reflection=True, progress_cb=None,
-                         camera_resolution=None):
+                         camera_resolution=None,
+                         coarse_pan_min=3, coarse_pan_max=8,
+                         coarse_tilt_min=3, coarse_tilt_max=6):
     """Coarse-to-fine discovery: sample a sparse `coarse_steps × coarse_
     steps` grid across pan/tilt ∈ [0, 1] first, then confirm any hit
     with a small nudge (rejects reflections).
@@ -766,7 +796,11 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     if coarse_pan_steps is None or coarse_tilt_steps is None:
         if pan_range_deg is not None or tilt_range_deg is not None:
             ps, ts = _adaptive_coarse_steps(pan_range_deg, tilt_range_deg,
-                                             beam_width_deg)
+                                             beam_width_deg,
+                                             pan_min=coarse_pan_min,
+                                             pan_max=coarse_pan_max,
+                                             tilt_min=coarse_tilt_min,
+                                             tilt_max=coarse_tilt_max)
             if coarse_pan_steps is None:
                 coarse_pan_steps = ps
             if coarse_tilt_steps is None:

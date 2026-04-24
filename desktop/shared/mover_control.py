@@ -43,14 +43,17 @@ class MoverClaim:
     )
 
     def __init__(self, mover_id, device_id, device_name, device_type="gyro",
-                 smoothing=0.15):
+                 smoothing=0.15, ttl_s=None):
         self.mover_id = mover_id
         self.device_id = device_id
         self.device_name = device_name
         self.device_type = device_type
         self.claimed_at = time.time()
         self.last_write_ts = time.time()
-        self.ttl_s = 15.0
+        # #680 — ttl_s comes from operator settings via MoverControlEngine.
+        # Keep 15 s as a module-level default for any caller that still
+        # constructs MoverClaim directly.
+        self.ttl_s = float(ttl_s) if ttl_s is not None else 15.0
         self.state = "claimed"  # claimed | streaming | calibrating
 
         # Colour / dimmer / strobe — defaults match "white, full, no strobe"
@@ -93,7 +96,7 @@ class MoverControlEngine:
     def __init__(self, get_fixtures, get_layout, get_profile_info,
                  get_engine, set_fixture_color_fn, get_remote_by_device_id,
                  get_mover_cal=None, get_mover_model=None,
-                 is_calibrating=None):
+                 is_calibrating=None, get_claim_ttl_s=None):
         """
         Args:
             get_fixtures:             list of fixtures
@@ -119,6 +122,10 @@ class MoverControlEngine:
         self._get_mover_cal = get_mover_cal or (lambda _mid: None)
         self._get_mover_model = get_mover_model or (lambda _mid, _mv: None)
         self._is_calibrating = is_calibrating or (lambda _mid: False)
+        # #680 — operator-tunable claim TTL. Callable (not a captured
+        # value) so setting changes take effect on the next claim without
+        # engine restart.
+        self._get_claim_ttl_s = get_claim_ttl_s or (lambda: 15.0)
 
         self._claims = {}  # mover_id → MoverClaim
         self._lock = threading.Lock()
@@ -162,7 +169,8 @@ class MoverControlEngine:
                          mover_id, existing.device_id)
 
             claim = MoverClaim(mover_id, device_id, device_name, device_type,
-                               smoothing=smoothing)
+                               smoothing=smoothing,
+                               ttl_s=self._get_claim_ttl_s())
             self._claims[mover_id] = claim
             log.info("Mover %d claimed by %s (%s)",
                      mover_id, device_name, device_type)

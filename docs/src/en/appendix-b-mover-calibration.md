@@ -270,6 +270,17 @@ Cancellation can originate from three sources: operator (`POST /api/calibration/
 
 ### B.7 Tuning-parameter reference
 
+**Operator-tunable (#680) — Settings → Advanced → Calibration Timeouts.**
+The constants below are the shipped defaults; operators can override them
+via the Advanced panel, which persists into `desktop/shared/data/settings.json`
+under `calibrationTuning`. Overrides are read at phase start, so a change
+takes effect on the next calibration run without a server restart. Validation
+is centralised in `CAL_TUNING_SPEC` (`parent_server.py`); POST /api/settings
+rejects out-of-range values with a 400. Every constant below has a matching
+entry in `CAL_TUNING_SPEC` except the ones flagged "fixed" (e.g. `STEP`,
+`MAX_SAMPLES` is exposed as `bfsMaxSamples`, `BRACKET_FLOOR` is derived per
+fixture and not operator-tunable per #679).
+
 Constants in `desktop/shared/mover_calibrator.py`:
 
 | Constant | Default | Role |
@@ -289,7 +300,21 @@ Constants in `desktop/shared/mover_control.py`:
 
 | Constant | Default | Role |
 |----------|---------|------|
-| Claim TTL | 15 s | Auto-release if claim not refreshed |
+| Claim TTL (`moverClaimTtlS`, #680) | 15 s | Auto-release if claim not refreshed |
+
+Phase time budgets (from `CAL_TUNING_SPEC` in `desktop/shared/parent_server.py`, #680):
+
+| Key | Default | Clamp | Role |
+|-----|---------|-------|------|
+| `discoveryBattleshipS` | 60 s | 20 – 300 | Coarse-grid scan budget |
+| `discoveryColourFallbackS` | 90 s | 30 – 300 | Legacy colour-filter fallback budget |
+| `mappingS` | 120 s | 30 – 600 | BFS mapping budget (soft cap) |
+| `fitS` | 10 s | 5 – 60 | LM + grid build |
+| `verificationS` | 30 s | 5 – 120 | Grid + parametric held-out verify |
+| `warmupSeconds` | 30 s | 0 – 120 | Pre-cal motor warmup sweep |
+| `bfsMaxSamples` | 80 | 20 – 300 | Hard cap on BFS samples |
+| `convergeMaxIterations` | 25 | 5 – 100 | Per-target bracket-and-retry loop |
+| `battleshipPan/TiltStepsMin/Max` | 3 / 8 / 3 / 6 | see spec | Adaptive-grid clamps (#661) |
 
 ### B.8 Related features
 

@@ -41,6 +41,49 @@ def run():
         r = c.post('/api/settings', json={'runnerLoop': False})
         ok('Settings runnerLoop', r.status_code == 200)
 
+        # ── #680 Calibration tuning (clamp-validated overrides) ─────
+        r = c.get('/api/settings')
+        d = r.get_json()
+        ok('#680 GET exposes calibrationTuningSpec',
+           isinstance(d.get('calibrationTuningSpec'), dict)
+           and 'discoveryBattleshipS' in d['calibrationTuningSpec'])
+        ok('#680 calibrationTuning starts empty',
+           d.get('calibrationTuning') == {})
+
+        # Happy path — inside clamps.
+        r = c.post('/api/settings', json={'calibrationTuning': {
+            'discoveryBattleshipS': 45.0,
+            'bfsMaxSamples': 120,
+            'settleEscalateS': [0.3, 0.6, 1.2],
+        }})
+        ok('#680 accepts valid tuning', r.status_code == 200 and r.get_json().get('ok'))
+        d = c.get('/api/settings').get_json()
+        ct = d.get('calibrationTuning') or {}
+        ok('#680 override persisted (float)', ct.get('discoveryBattleshipS') == 45.0)
+        ok('#680 override persisted (int)',   ct.get('bfsMaxSamples') == 120)
+        ok('#680 override persisted (list)',  ct.get('settleEscalateS') == [0.3, 0.6, 1.2])
+
+        # OOR — rejected with 400 + per-field error.
+        r = c.post('/api/settings', json={'calibrationTuning': {
+            'discoveryBattleshipS': 9999.0,
+        }})
+        ok('#680 rejects out-of-range', r.status_code == 400)
+        d = r.get_json()
+        ok('#680 400 names the bad field',
+           any('discoveryBattleshipS' in e for e in (d.get('details') or [])))
+
+        # Unknown key — rejected.
+        r = c.post('/api/settings', json={'calibrationTuning': {
+            'fabricatedKey': 5.0,
+        }})
+        ok('#680 rejects unknown key', r.status_code == 400)
+
+        # Reset to defaults — empty dict clears overrides.
+        r = c.post('/api/settings', json={'calibrationTuning': {}})
+        ok('#680 reset clears overrides', r.status_code == 200)
+        ct2 = (c.get('/api/settings').get_json() or {}).get('calibrationTuning')
+        ok('#680 overrides cleared', ct2 == {})
+
         # ── Children CRUD ───────────────────────────────────────────
         r = c.get('/api/children')
         ok('GET /api/children', r.status_code == 200 and isinstance(r.get_json(), list))

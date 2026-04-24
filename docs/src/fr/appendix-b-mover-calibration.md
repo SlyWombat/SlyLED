@@ -270,6 +270,19 @@ L'annulation peut provenir de trois sources : opérateur (`POST /api/calibration
 
 ### B.7 Référence des paramètres de réglage
 
+**Réglable par l'opérateur (#680) — Réglages → Avancé → Délais de calibration.**
+Les constantes ci-dessous sont les valeurs par défaut livrées ; l'opérateur
+peut les surcharger via le panneau Avancé, qui persiste dans
+`desktop/shared/data/settings.json` sous `calibrationTuning`. Les
+surcharges sont lues au début de chaque phase, donc un changement prend
+effet à la prochaine calibration sans redémarrage du serveur. La
+validation est centralisée dans `CAL_TUNING_SPEC`
+(`parent_server.py`) ; POST /api/settings rejette les valeurs hors
+plage avec un 400. Chaque constante ci-dessous a une entrée
+correspondante dans `CAL_TUNING_SPEC` sauf celles marquées « fixe »
+(p. ex. `STEP`, `MAX_SAMPLES` est exposé sous `bfsMaxSamples`,
+`BRACKET_FLOOR` est dérivé par fixture et non réglable selon #679).
+
 Constantes dans `desktop/shared/mover_calibrator.py` :
 
 | Constante | Défaut | Rôle |
@@ -289,7 +302,21 @@ Constantes dans `desktop/shared/mover_control.py` :
 
 | Constante | Défaut | Rôle |
 |-----------|--------|------|
-| Claim TTL | 15 s | Libération automatique si la réservation n'est pas rafraîchie |
+| Claim TTL (`moverClaimTtlS`, #680) | 15 s | Libération automatique si la réservation n'est pas rafraîchie |
+
+Budgets de temps par phase (depuis `CAL_TUNING_SPEC` dans `desktop/shared/parent_server.py`, #680) :
+
+| Clé | Défaut | Plage | Rôle |
+|-----|--------|-------|------|
+| `discoveryBattleshipS` | 60 s | 20 – 300 | Budget du scan grille grossière |
+| `discoveryColourFallbackS` | 90 s | 30 – 300 | Budget du repli colorimétrique legacy |
+| `mappingS` | 120 s | 30 – 600 | Budget de cartographie BFS (plafond souple) |
+| `fitS` | 10 s | 5 – 60 | LM + construction de grille |
+| `verificationS` | 30 s | 5 – 120 | Vérification grille + paramétrique tenue de côté |
+| `warmupSeconds` | 30 s | 0 – 120 | Balayage de chauffe des moteurs avant calibration |
+| `bfsMaxSamples` | 80 | 20 – 300 | Plafond dur sur les échantillons BFS |
+| `convergeMaxIterations` | 25 | 5 – 100 | Boucle bracket-and-retry par cible |
+| `battleshipPan/TiltStepsMin/Max` | 3 / 8 / 3 / 6 | voir spec | Bornes de grille adaptative (#661) |
 
 ### B.8 Fonctionnalités associées
 
