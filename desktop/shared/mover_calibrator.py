@@ -760,7 +760,8 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                          reject_reflection=True, progress_cb=None,
                          camera_resolution=None,
                          coarse_pan_min=3, coarse_pan_max=8,
-                         coarse_tilt_min=3, coarse_tilt_max=6):
+                         coarse_tilt_min=3, coarse_tilt_max=6,
+                         grid_filter=None):
     """Coarse-to-fine discovery: sample a sparse `coarse_steps × coarse_
     steps` grid across pan/tilt ∈ [0, 1] first, then confirm any hit
     with a small nudge (rejects reflections).
@@ -820,8 +821,33 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         for j in range(coarse_tilt_steps):
             t = (j + 0.5) * tilt_span
             grid.append((p, t))
+    # #681-B — pre-filter candidates to those that project onto a camera-
+    # visible floor point. `grid_filter` returns True if the aim probably
+    # lands somewhere a camera can see; candidates outside every camera
+    # polygon are ranked to the back of the queue (not dropped — if we
+    # are wrong about the geometry, they give the scan a chance to find
+    # the beam anyway).
+    if grid_filter is not None:
+        inside = []
+        outside = []
+        for pt in grid:
+            try:
+                keep = bool(grid_filter(pt[0], pt[1]))
+            except Exception:
+                keep = True
+            (inside if keep else outside).append(pt)
+        if inside:
+            grid = inside + outside
+            log.info("battleship_discover: camera-FOV filter kept %d/%d "
+                     "probes in view; %d deferred to tail of queue",
+                     len(inside), len(inside) + len(outside), len(outside))
+        else:
+            log.warning("battleship_discover: camera-FOV filter rejected "
+                        "every probe — scanning full grid (filter may be "
+                        "wrong about fixture orientation)")
     # If we have a seed, visit its neighbourhood FIRST so the common
     # case (seed was right) converges in 1-3 probes instead of N × M.
+    # Within each partition (inside / outside FOV) preserve the seed order.
     if seed_pan is not None and seed_tilt is not None:
         grid.sort(key=lambda xy: (xy[0] - seed_pan) ** 2 +
                                   (xy[1] - seed_tilt) ** 2)

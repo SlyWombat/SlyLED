@@ -101,17 +101,21 @@ def check4_pixel_score_resolution():
 
 
 def check5_aruco_blackout_targeted():
-    """#5 — _aruco_multi_snapshot_detect must not blast the whole universe."""
+    """#5 / #681-A — _aruco_multi_snapshot_detect must not blast the
+    whole universe AND must not clobber bystander fixtures. Post-#681
+    the blackout targets only the `calibrating_fixture` passed by the
+    caller.
+    """
     src = _read(_PARENT_PATH)
     m = re.search(r"def _aruco_multi_snapshot_detect\(.*?\n(?=def )",
                   src, re.DOTALL)
     body = m.group(0) if m else ""
     ok(body and "[0] * 512" not in body and "[0]*512" not in body,
        "#5 pre-scan blackout does not broadcast [0]*512")
+    ok(body and "calibrating_fixture" in body,
+       "#5/#681-A pre-scan blackout is scoped to the calibrating fixture")
     ok(body and "set_channels(addr, [0] * chc)" in body,
-       "#5 pre-scan zeros only mover fixture windows on target universe")
-    ok(body and "isCalibrating" in body,
-       "#5 pre-scan skips fixtures holding a calibration lock")
+       "#5 pre-scan zeros only the calibrating fixture's channel window")
 
 
 def check6_aim_respects_lock():
@@ -185,8 +189,95 @@ def check8_startup_investigation():
        "#8 startup clears stale isCalibrating flags from fixtures")
 
 
+def check681_A_targeted_blackout():
+    """#681-A — every `_hold_dmx(bridge_ip, [0]*512, ...)` in the
+    calibration paths is replaced with `_targeted_fixture_blackout(fid)`
+    so bystander fixtures stay lit.
+    """
+    src = _read(_PARENT_PATH)
+    ok("_targeted_fixture_blackout" in src,
+       "#681-A _targeted_fixture_blackout helper defined")
+    ok(src.count("_targeted_fixture_blackout(fid)") >= 10,
+       f"#681-A helper replaces >=10 universe-wide blackout sites "
+       f"(got {src.count('_targeted_fixture_blackout(fid)')})")
+    # No remaining `_mcal._hold_dmx(bridge_ip, [0]*512, ...)` EXECUTABLE
+    # calls — comments quoting the literal are fine.
+    offending = re.findall(
+        r"^\s*_mcal\._hold_dmx\(bridge_ip,\s*\[0\]\s*\*\s*512,",
+        src, re.MULTILINE)
+    ok(not offending,
+       f"#681-A no remaining _hold_dmx(bridge_ip, [0]*512, ...) executable calls "
+       f"(found {len(offending)})")
+
+
+def check681_B_grid_filter():
+    """#681-B — battleship_discover takes a `grid_filter` predicate and
+    uses it to prioritise candidates inside any camera's floor polygon.
+    """
+    src = _read(_MCAL_PATH)
+    ok(re.search(r"def battleship_discover\([^)]*grid_filter", src, re.DOTALL),
+       "#681-B battleship_discover exposes grid_filter param")
+    ok("camera-FOV filter kept" in src,
+       "#681-B battleship logs FOV filter stats")
+    src_p = _read(_PARENT_PATH)
+    ok("_build_battleship_grid_filter" in src_p,
+       "#681-B parent_server has grid-filter builder")
+    # Filter function uses ParametricFixtureModel + camera_floor_polygon
+    ok("camera_floor_polygon" in src_p and "ParametricFixtureModel" in src_p,
+       "#681-B grid-filter builder uses camera_floor_polygon + ParametricFixtureModel")
+
+
+def check681_CD_markers_seed_and_ranges():
+    """#681-C/D — markers-mode battleship call passes seed_pan / seed_tilt
+    / pan_range_deg / tilt_range_deg / beam_width_deg (matching the
+    legacy path) so the grid is FOV-aware + adaptive-density fires.
+    """
+    src = _read(_PARENT_PATH)
+    # Locate _mover_cal_thread_markers_body and its battleship call.
+    m = re.search(r"def _mover_cal_thread_markers_body\(.*?(?=\ndef )",
+                  src, re.DOTALL)
+    body = m.group(0) if m else ""
+    ok("battleship_discover" in body,
+       "#681-C/D markers body calls battleship_discover")
+    ok("seed_pan=seed_pan" in body and "seed_tilt=seed_tilt" in body,
+       "#681-C markers path passes seed_pan + seed_tilt")
+    ok("pan_range_deg=pan_range_deg" in body and
+       "tilt_range_deg=tilt_range_deg" in body,
+       "#681-D markers path passes pan_range_deg + tilt_range_deg")
+    ok("beam_width_deg=beam_width_deg" in body,
+       "#681-D markers path passes beam_width_deg")
+    ok("compute_initial_aim" in body,
+       "#681-C markers path computes initial aim as seed")
+
+
+def check681_all_auto_mode():
+    """#681 — 'all-auto' mode runs markers first, falls back to legacy
+    on discovery failure, and logs the transition.
+    """
+    src = _read(_PARENT_PATH)
+    ok("_mover_cal_thread_all_auto" in src,
+       "#681 all-auto thread wrapper defined")
+    ok('mode == "all-auto"' in src or 'mode != "all-auto"' in src or
+       "'all-auto'" in src,
+       "#681 start endpoint accepts all-auto mode")
+    ok("falling back to Legacy BFS" in src,
+       "#681 all-auto logs markers→legacy transition")
+
+
+def check681_new_tuning_keys():
+    """#681 — CAL_TUNING_SPEC gains rejectReflection, refineAfterHit,
+    adaptiveDensity (bool toggles) exposed to the wizard Advanced panel.
+    """
+    src = _read(_PARENT_PATH)
+    for k in ("rejectReflection", "refineAfterHit", "adaptiveDensity"):
+        ok(f'"{k}":' in src,
+           f"#681 CAL_TUNING_SPEC contains {k}")
+    ok('"type": "bool"' in src or "'type': 'bool'" in src,
+       "#681 CAL_TUNING_SPEC supports bool type")
+
+
 def main():
-    print("=== #679 mover-calibration review regression checks ===\n")
+    print("=== #679 + #681 mover-calibration regression checks ===\n")
     print("-- #1 BRACKET_FLOOR --")
     check1_bracket_floor()
     print("-- #2 _cal_blackout targeted --")
@@ -203,6 +294,16 @@ def main():
     check7_mirror_ambiguity_flag()
     print("-- #8 startup investigation --")
     check8_startup_investigation()
+    print("-- #681-A targeted blackout helper --")
+    check681_A_targeted_blackout()
+    print("-- #681-B FOV-aware grid filter --")
+    check681_B_grid_filter()
+    print("-- #681-C/D markers-mode seed + ranges --")
+    check681_CD_markers_seed_and_ranges()
+    print("-- #681 All-Auto mode --")
+    check681_all_auto_mode()
+    print("-- #681 new tuning keys --")
+    check681_new_tuning_keys()
 
     total = _passed + _failed
     print(f"\n{'=' * 56}")

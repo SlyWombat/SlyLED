@@ -1294,13 +1294,21 @@ function _moverCalAutoStart(){
   h+='</select>';
   h+='<label style="color:#94a3b8;margin:0">Method:</label>';
   h+='<select id="mcal-mode" style="font-size:.82em;padding:2px 4px" onchange="_moverCalModeChanged()">';
-  h+='<option value="markers" selected>Markers — point at surveyed ArUco (recommended, #610)</option>';
-  h+='<option value="legacy">Legacy BFS (broad sampling, no markers needed)</option>';
+  h+='<option value="all-auto" selected>All Auto — markers first, fallback to Legacy BFS (#681)</option>';
+  h+='<option value="markers">Markers only — requires surveyed ArUco markers (#610)</option>';
+  h+='<option value="legacy">Legacy BFS only — broad sampling, no markers needed</option>';
   h+='<option value="v2">v2 target-driven (#499, requires stage-map homography)</option>';
   h+='</select>';
   h+='<label style="color:#94a3b8;margin:0">Warm-up:</label>';
   h+='<label style="color:#e2e8f0;font-size:.8em;margin:0"><input type="checkbox" id="mcal-warmup" style="margin-right:.3em">Sweep pan/tilt for 30s before sampling (thermal settle — #513)</label>';
   h+='</div>';
+  // #681 — Advanced options panel. Expandable, blank = use shipped default.
+  // Each row maps to a calibrationTuning key; saved against /api/settings.
+  h+='<details id="mcal-adv" style="margin-top:.5em;font-size:.82em">';
+  h+='<summary style="cursor:pointer;color:#94a3b8">Advanced options</summary>';
+  h+='<div id="mcal-adv-body" style="margin-top:.4em;display:grid;grid-template-columns:240px 1fr;gap:.3em .6em;align-items:center">Loading…</div>';
+  h+='<div style="font-size:.72em;color:#64748b;margin-top:.3em">Changes save immediately to Settings → Advanced → Calibration Timeouts (#680).</div>';
+  h+='</details>';
 
   // Target preview (populated below when mode=v2)
   h+='<div id="mcal-targets-preview" style="display:none;margin-top:.5em;border-top:1px solid #334155;padding-top:.4em">';
@@ -1337,6 +1345,7 @@ function _moverCalAutoStart(){
   // Esc handler (Cancel while running, close otherwise).
   _moverCalUpdateActions(cal?'done':'pre');
   _moverCalInstallEscHandler();
+  _moverCalLoadAdvancedOptions();
 
   // If already calibrated, fetch the stored fit + render the existing-fit summary.
   if(cal){
@@ -1420,6 +1429,103 @@ function _moverCalLiteSetup(){
     }else if(el){
       el.innerHTML='<span style="color:#ef4444">Lite setup failed: '+escapeHtml(r&&r.err||'unknown')+'</span>';
     }
+  });
+}
+
+// #681 — Advanced options panel for the wizard, wired to the same
+// calibrationTuning schema exposed at Settings → Advanced (#680). Each
+// input saves on blur so the operator's tweak carries into the next
+// run without a separate "Save" step; blank = use shipped default.
+var _MCAL_ADV_KEYS=[
+  'warmupSeconds','rejectReflection','refineAfterHit',
+  'battleshipPanStepsMax','battleshipTiltStepsMax','adaptiveDensity',
+  'settlePixelThresh','discoveryBattleshipS','mappingS'
+];
+var _MCAL_ADV_LABELS={
+  warmupSeconds:'Warm-up duration (s)',
+  rejectReflection:'Reject reflections (blink-confirm)',
+  refineAfterHit:'Refine after battleship hit',
+  battleshipPanStepsMax:'Battleship — max pan steps',
+  battleshipTiltStepsMax:'Battleship — max tilt steps',
+  adaptiveDensity:'Adaptive density (#661)',
+  settlePixelThresh:'Settle threshold (px)',
+  discoveryBattleshipS:'Discovery budget (s)',
+  mappingS:'Mapping budget (s)'
+};
+function _moverCalLoadAdvancedOptions(){
+  var body=document.getElementById('mcal-adv-body');
+  if(!body)return;
+  ra('GET','/api/settings',null,function(d){
+    if(!d){body.textContent='Failed to load';return;}
+    var spec=d.calibrationTuningSpec||{};
+    var cur=d.calibrationTuning||{};
+    var h='';
+    _MCAL_ADV_KEYS.forEach(function(k){
+      var s=spec[k];if(!s)return;
+      var label=_MCAL_ADV_LABELS[k]||k;
+      var tip=s.tooltip||'';
+      var cv=cur[k];
+      var inp;
+      if(s.type==='bool'){
+        var checked=(cv==null?!!s.default:!!cv)?' checked':'';
+        inp='<input type="checkbox" id="mcaladv-'+k+'"'+checked+
+            ' onchange="_moverCalAdvSave(\''+k+'\')">';
+      }else{
+        var def=String(s.default);
+        var val=cv==null?'':String(cv);
+        inp='<input id="mcaladv-'+k+'" value="'+escapeHtml(val)+
+            '" placeholder="default: '+escapeHtml(def)+'" '+
+            'onblur="_moverCalAdvSave(\''+k+'\')" '+
+            'style="max-width:140px">';
+      }
+      h+='<label style="color:#94a3b8" title="'+escapeHtml(tip)+'">'+escapeHtml(label)+'</label>'+inp;
+    });
+    body.innerHTML=h;
+  });
+}
+function _moverCalAdvSave(key){
+  var el=document.getElementById('mcaladv-'+key);
+  if(!el)return;
+  var payload={};
+  if(el.type==='checkbox'){
+    payload[key]=!!el.checked;
+  }else{
+    var v=el.value.trim();
+    if(v===''){
+      // Blank means "use default" — clear by sending the full current
+      // set without this key. Fetch current first.
+      ra('GET','/api/settings',null,function(d){
+        var t=(d&&d.calibrationTuning)||{};
+        delete t[key];
+        var x=new XMLHttpRequest();
+        x.open('POST','/api/settings',true);
+        x.setRequestHeader('Content-Type','application/json');
+        x.send(JSON.stringify({calibrationTuning:t}));
+      });
+      return;
+    }
+    if(/Steps|Thresh|Samples|Iterations/i.test(key)){
+      payload[key]=parseInt(v,10);
+    }else{
+      payload[key]=parseFloat(v);
+    }
+  }
+  // Merge with current overrides so we don't clobber other keys.
+  ra('GET','/api/settings',null,function(d){
+    var t=(d&&d.calibrationTuning)||{};
+    t[key]=payload[key];
+    var x=new XMLHttpRequest();
+    x.open('POST','/api/settings',true);
+    x.setRequestHeader('Content-Type','application/json');
+    x.onload=function(){
+      if(x.status!==200){
+        try{var r=JSON.parse(x.responseText);
+          alert('Advanced option rejected: '+((r&&r.details)||[]).join('; '));
+        }catch(e){alert('Advanced option rejected (see server log).');}
+        _moverCalLoadAdvancedOptions();
+      }
+    };
+    x.send(JSON.stringify({calibrationTuning:t}));
   });
 }
 

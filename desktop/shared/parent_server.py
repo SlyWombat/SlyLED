@@ -4149,6 +4149,73 @@ def _get_bridge_ip():
     return None
 
 
+def _mover_cal_thread_all_auto(fid, cam, bridge_ip, mover_color,
+                                 warmup=False, warmup_seconds=30.0):
+    """#681 — "All Auto" mode. Run markers first; if it fails at the
+    discovery phase and there is still something to fall back to (≥3
+    surveyed ArUco markers + legacy path has its own warm-start via
+    `compute_initial_aim`), retry in legacy BFS mode. Either path's
+    success terminates. Both-failed → bubble the legacy error up.
+
+    The job message carries the transition so the SPA shows
+    'Markers failed, trying Legacy BFS'.
+    """
+    job = _mover_cal_jobs[str(fid)]
+    job["modeAttempted"] = "markers"
+    _mcal_log(job, "All-Auto: attempting markers-mode first")
+    _mover_cal_thread_markers(fid, cam, bridge_ip, mover_color,
+                                warmup, warmup_seconds)
+    # Markers finished. Check what happened.
+    status = job.get("status")
+    if status == "done" or status == "cancelled":
+        return
+    # Only fall back on discovery-class failures — anything that made it
+    # past discovery (partial samples, verification fail, etc.) stays on
+    # markers mode rather than silently re-running from scratch.
+    err = (job.get("error") or "")
+    phase = (job.get("phase") or "")
+    if phase not in ("battleship", "confirming", "discovery", "prescan") \
+            and not err.startswith("Battleship discovery"):
+        return
+    _mcal_log(job, f"All-Auto: markers mode ended in {phase}/{err!r} — "
+                   "falling back to Legacy BFS")
+    # Reset the job record for a fresh legacy run.
+    job["status"] = "running"
+    job["phase"] = "starting"
+    job["progress"] = 0
+    job["error"] = None
+    job["modeAttempted"] = "legacy"
+    # Warmup already ran in the markers attempt — skip it on the legacy
+    # retry so we don't double-bill the operator's time.
+    _mover_cal_thread(fid, cam, bridge_ip, mover_color,
+                      warmup=False, warmup_seconds=warmup_seconds)
+
+
+def _targeted_fixture_blackout(fid):
+    """#681-A — zero one fixture's channel window via the engine. Safe
+    no-op if the fixture is missing or no engine is running. Preserves
+    every other fixture on the universe — replaces the old
+    `_hold_dmx(bridge_ip, [0] * 512, ...)` pattern that persistently
+    darkened bystander movers for the duration of a cal run.
+    """
+    try:
+        fx = next((f for f in _fixtures if f["id"] == fid), None)
+        if not fx:
+            return
+        engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+        if not engine:
+            return
+        uni = fx.get("dmxUniverse", 1)
+        addr = fx.get("dmxStartAddr", 1)
+        pid = fx.get("dmxProfileId")
+        info = _profile_lib.channel_info(pid) if pid else None
+        ch_count = int((info or {}).get("channelCount") or
+                       fx.get("dmxChannelCount") or 13)
+        engine.get_universe(uni).set_channels(addr, [0] * ch_count)
+    except Exception:
+        pass
+
+
 def _mover_cal_thread_markers(fid, cam, bridge_ip, mover_color,
                                 warmup=False, warmup_seconds=30.0):
     """#610 marker-direct calibration. Wrapper that catches
@@ -4162,19 +4229,13 @@ def _mover_cal_thread_markers(fid, cam, bridge_ip, mover_color,
         job["error"] = "Cancelled by operator"; job["status"] = "cancelled"
         job["phase"] = "cancelled"
         _mcal.arm_cancel()
-        try:
-            _mcal._hold_dmx(bridge_ip, [0] * 512, 0.3)
-        except Exception:
-            pass
+        _targeted_fixture_blackout(fid)
         _set_calibrating(fid, False)
     except Exception as e:
         log.exception("MOVER-CAL markers %d: unhandled", fid)
         job["error"] = f"Unhandled: {e}"; job["status"] = "error"
         _mcal.arm_cancel()
-        try:
-            _mcal._hold_dmx(bridge_ip, [0] * 512, 0.3)
-        except Exception:
-            pass
+        _targeted_fixture_blackout(fid)
         _set_calibrating(fid, False)
 
 
@@ -4246,7 +4307,8 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
     # with blackout-between gives every surveyed marker a fair chance to
     # land in at least one of them.
     detect = _aruco_multi_snapshot_detect(cam, max_snapshots=3,
-                                           blackout_bridge_ip=bridge_ip)
+                                           blackout_bridge_ip=bridge_ip,
+                                           calibrating_fixture=f)
     if detect.get("err") and not detect.get("markers"):
         job["error"] = f"Snapshot/detect failed: {detect['err']}"
         job["status"] = "error"; _set_calibrating(fid, False); return
@@ -4296,19 +4358,64 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
     ch = cam.get("resolutionH")
     if cw and ch:
         cam_res = (int(cw), int(ch))
+    # #681-C/D — markers path previously called battleship_discover with
+    # no seed and no profile range hints, so it always ran a 4×4 grid
+    # starting from the lower-left of normalised pan/tilt. Operators hit
+    # the "searches behind the stage" bug on ceiling mounts where that
+    # corner is below-and-behind the camera. Compute the same warm-start
+    # the legacy BFS path uses, feed profile ranges + beam width so #661
+    # adaptive density actually runs.
+    pan_range_deg = ((prof_info or {}).get("panRange") or
+                     f.get("panRange") or 540)
+    tilt_range_deg = ((prof_info or {}).get("tiltRange") or
+                      f.get("tiltRange") or 270)
+    beam_width_deg = ((prof_info or {}).get("beamWidth") or
+                      f.get("beamWidth") or 15)
+    try:
+        pos_map = {p["id"]: p for p in _layout.get("children", [])}
+        fp = pos_map.get(f["id"], {})
+        fx_pos = [fp.get("x", 0), fp.get("y", 0), fp.get("z", 0)]
+        # Aim at stage-centre floor as the default warm-start — same as
+        # the legacy path when no model / orientation override is available.
+        stage_centre = [float(_stage.get("w", 3.0) * 500),
+                        float(_stage.get("d", 4.0) * 500),
+                        0.0]
+        seed_pan, seed_tilt = _mcal.compute_initial_aim(
+            fx_pos, stage_centre,
+            pan_range=pan_range_deg, tilt_range=tilt_range_deg,
+            mounted_inverted=f.get("mountedInverted", False))
+    except Exception:
+        seed_pan, seed_tilt = 0.5, 0.5
+    grid_filter = _build_battleship_grid_filter(f, pan_range_deg, tilt_range_deg)
+    # #681 — adaptive-density toggle. When False, range/beam args are
+    # ignored and the grid falls back to the fixed default.
+    if not bool(_cal_tuning("adaptiveDensity")):
+        pan_range_deg = None
+        tilt_range_deg = None
+        beam_width_deg = None
     discovered = _mcal.battleship_discover(
         bridge_ip, cam_ip, addr, cam_idx, mover_color,
+        seed_pan=seed_pan, seed_tilt=seed_tilt,
         profile=prof_info,
-        progress_cb=_discovery_progress,
+        pan_range_deg=pan_range_deg,
+        tilt_range_deg=tilt_range_deg,
+        beam_width_deg=beam_width_deg,
         camera_resolution=cam_res,
+        coarse_pan_min=int(_cal_tuning("battleshipPanStepsMin")),
+        coarse_pan_max=int(_cal_tuning("battleshipPanStepsMax")),
+        coarse_tilt_min=int(_cal_tuning("battleshipTiltStepsMin")),
+        coarse_tilt_max=int(_cal_tuning("battleshipTiltStepsMax")),
+        refine=bool(_cal_tuning("refineAfterHit")),
+        reject_reflection=bool(_cal_tuning("rejectReflection")),
+        grid_filter=grid_filter,
+        progress_cb=_discovery_progress,
     )
     if discovered is None:
         job["error"] = ("Battleship discovery found no beam. Check "
                         "lamp, shutter, DMX wiring, and camera view "
                         "of the fixture's reachable floor area.")
         job["status"] = "error"; _set_calibrating(fid, False)
-        try: _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
-        except Exception: pass
+        _targeted_fixture_blackout(fid)
         return
     disc_pan, disc_tilt, disc_px, disc_py = discovered
     job["foundAt"] = {"pan": disc_pan, "tilt": disc_tilt,
@@ -4390,8 +4497,7 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
         job["status"] = "error"
         job["targets"] = per_marker
         _set_calibrating(fid, False)
-        try: _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
-        except Exception: pass
+        _targeted_fixture_blackout(fid)
         return
 
     # Phase 3 — fit ParametricFixtureModel from the (pan, tilt, stage) samples.
@@ -4431,8 +4537,7 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
     _mcal_log(job, f"Complete. {len(samples)}/{len(usable)} markers converged, "
                    f"RMS {fit_rms:.2f}°")
     _set_calibrating(fid, False)
-    try: _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
-    except Exception: pass
+    _targeted_fixture_blackout(fid)
 
 
 def _mover_cal_thread_v2(fid, cam, bridge_ip, mover_color,
@@ -4450,20 +4555,14 @@ def _mover_cal_thread_v2(fid, cam, bridge_ip, mover_color,
         job["status"] = "cancelled"
         job["phase"] = "cancelled"
         _mcal.arm_cancel()
-        try:
-            _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
-        except Exception:
-            pass
+        _targeted_fixture_blackout(fid)
         _set_calibrating(fid, False)
     except Exception as e:
         log.exception("MOVER-CAL v2 %d: unhandled exception", fid)
         job["error"] = f"Unhandled error: {e}"
         job["status"] = "error"
         _mcal.arm_cancel()
-        try:
-            _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
-        except Exception:
-            pass
+        _targeted_fixture_blackout(fid)
         _set_calibrating(fid, False)
 
 
@@ -4483,10 +4582,7 @@ def _mover_cal_thread_v2_body(fid, cam, bridge_ip, mover_color,
     job = _mover_cal_jobs[str(fid)]
 
     def _blackout():
-        try:
-            _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
-        except Exception:
-            pass
+        _targeted_fixture_blackout(fid)
         _set_calibrating(fid, False)
 
     f = next((x for x in _fixtures if x["id"] == fid), None)
@@ -4689,20 +4785,14 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
         # Clear the cancel flag before the blackout write so _hold_dmx
         # actually runs (rather than re-raising CalibrationAborted).
         _mcal.arm_cancel()
-        try:
-            _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
-        except Exception:
-            pass
+        _targeted_fixture_blackout(fid)
         _set_calibrating(fid, False)
     except Exception as e:
         log.exception("MOVER-CAL %d: unhandled exception in cal thread", fid)
         job["error"] = f"Unhandled error: {e}"
         job["status"] = "error"
         _mcal.arm_cancel()
-        try:
-            _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
-        except Exception:
-            pass
+        _targeted_fixture_blackout(fid)
         _set_calibrating(fid, False)
 
 
@@ -4727,6 +4817,83 @@ def _positioned_cameras_for_target_filter():
             "fov": f.get("fovDeg", 90),
         })
     return out
+
+
+def _build_battleship_grid_filter(fixture, pan_range_deg, tilt_range_deg):
+    """#681-B — return a predicate `(pan_norm, tilt_norm) -> bool` that
+    approximates whether an aim direction lands on the floor inside some
+    camera's visible polygon. Uses a geometric (tier-4) ParametricFixtureModel
+    seeded from fixture pose + mounted-inverted flag so the filter works
+    *before* the fixture has a calibration. Returns None when we can't
+    build a filter (no cameras, no stage bounds, missing fixture pos);
+    the caller skips pre-filtering in that case.
+    """
+    try:
+        from parametric_mover import ParametricFixtureModel
+        from camera_math import camera_floor_polygon, point_in_polygon
+    except Exception:
+        return None
+
+    cams = _positioned_cameras_for_target_filter()
+    if not cams:
+        return None
+    stage_bounds = {
+        "w": int((_stage.get("w") or 3.0) * 1000),
+        "d": int((_stage.get("d") or 4.0) * 1000),
+        "h": int((_stage.get("h") or 2.0) * 1000),
+    }
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    fp = pos_map.get(fixture.get("id"))
+    if not fp:
+        return None
+    fx_pos = (fp.get("x", 0), fp.get("y", 0), fp.get("z", 0))
+
+    polys = []
+    for c in cams:
+        try:
+            poly = camera_floor_polygon(c["pos"], c["rotation"], c["fov"],
+                                          stage_bounds=stage_bounds,
+                                          floor_z=0.0)
+        except Exception:
+            poly = None
+        if poly:
+            polys.append(poly)
+    if not polys:
+        return None
+
+    # Geometric-only model. mount_pitch_deg=180 when the fixture is
+    # mounted inverted; everything else left at default. Offsets + signs
+    # aren't calibrated, so this is an approximation — good enough to
+    # prune "aim points into the ceiling" candidates but not so strict
+    # that a slightly-off guess rejects real hits.
+    inverted = bool(fixture.get("mountedInverted"))
+    model = ParametricFixtureModel(
+        fixture_pos=fx_pos,
+        pan_range_deg=float(pan_range_deg or 540),
+        tilt_range_deg=float(tilt_range_deg or 270),
+        mount_pitch_deg=180.0 if inverted else 0.0,
+    )
+    fx, fy, fz = fx_pos
+
+    def _filter(pan_n, tilt_n):
+        try:
+            dx, dy, dz = model.forward(pan_n, tilt_n)
+        except Exception:
+            return True  # can't evaluate → keep the probe
+        # Intersect with floor plane z=0. If the beam points up or
+        # parallel to the floor, there is no intersection on the floor
+        # — treat as outside-FOV but don't drop (scanners want some
+        # coverage when we're pessimistic about geometry).
+        if dz >= -1e-6:
+            return False
+        scale = -fz / dz
+        if scale <= 0:
+            return False
+        hx = fx + dx * scale
+        hy = fy + dy * scale
+        return any(point_in_polygon((hx, hy), poly) for poly in polys)
+
+    return _filter
 
 
 # #653 (review Q4) — per-phase wall-clock budgets. A wedged camera node or a
@@ -4791,6 +4958,13 @@ CAL_TUNING_SPEC = {
     # Mover-control claim TTL
     "moverClaimTtlS":            {"default": 15.0,  "min": 2.0,  "max": 300.0,
         "tooltip": "Auto-release if a controlling device goes silent for this long. Affects Android / gyro; not used during calibration itself."},
+    # #681 — battleship behaviour toggles (exposed by the wizard's Advanced panel).
+    "rejectReflection":          {"default": True,  "type": "bool",
+        "tooltip": "After a candidate passes the nudge-confirm, re-run a flash-blink and reject it if the pixel's on/off differential is too low (rejects beam reflections off glossy walls / floors)."},
+    "refineAfterHit":            {"default": True,  "type": "bool",
+        "tooltip": "After a coarse hit, run a finer 3×3 grid around it to localise the beam centre before BFS. Improves sample quality at the cost of ~3 s per run."},
+    "adaptiveDensity":           {"default": True,  "type": "bool",
+        "tooltip": "Scale battleship grid density to the fixture's pan/tilt range and beam width (#661). Turn off to force a fixed grid regardless of fixture."},
 }
 
 
@@ -4826,6 +5000,9 @@ def _validate_cal_tuning(overrides):
             errors.append(f"{k}: unknown calibration tuning key")
             continue
         t = spec.get("type", "float")
+        if t == "bool":
+            cleaned[k] = bool(v)
+            continue
         mn, mx = spec["min"], spec["max"]
         try:
             if t == "int":
@@ -4955,9 +5132,13 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
     cam_idx_pre = cam.get("cameraIdx", 0)
     if cam_ip_pre:
         try:
-            # Ensure every fixture on the universe is actually dark before
-            # the capture — not just our mover's last DMX state.
-            _mcal._hold_dmx(bridge_ip, [0]*512, 0.5)
+            # #681-A — target only this mover. The old `[0]*512` broadcast
+            # persistently darkened every other fixture on the universe
+            # because nothing restored them afterwards. Dark-reference
+            # only needs OUR beam off; anything else lit on the rig is
+            # part of the operator's accepted ambient.
+            _targeted_fixture_blackout(fid)
+            time.sleep(0.5)
             ok_dark = _mcal._dark_reference(cam_ip_pre, cam_idx_pre)
             log.info("MOVER-CAL %d: dark-reference %s (cam=%s idx=%d)",
                      fid, "captured" if ok_dark else "failed",
@@ -5144,18 +5325,27 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
         if cam.get("resolutionW") and cam.get("resolutionH"):
             cam_res = (int(cam["resolutionW"]), int(cam["resolutionH"]))
         # #680 — operator-tunable battleship clamps.
+        # #681-B — FOV-aware grid filter.
+        _grid_filter = _build_battleship_grid_filter(f, pan_range_deg, tilt_range_deg)
+        # #681 — adaptive-density toggle.
+        _pr_deg = pan_range_deg if _cal_tuning("adaptiveDensity") else None
+        _tr_deg = tilt_range_deg if _cal_tuning("adaptiveDensity") else None
+        _bw_deg = beam_width_deg if _cal_tuning("adaptiveDensity") else None
         found = _mcal.battleship_discover(
             bridge_ip, cam_ip, addr, cam_idx, mover_color,
             seed_pan=start_pan, seed_tilt=start_tilt,
             profile=prof_info,
-            pan_range_deg=pan_range_deg,
-            tilt_range_deg=tilt_range_deg,
-            beam_width_deg=beam_width_deg,
+            pan_range_deg=_pr_deg,
+            tilt_range_deg=_tr_deg,
+            beam_width_deg=_bw_deg,
             camera_resolution=cam_res,
             coarse_pan_min=int(_cal_tuning("battleshipPanStepsMin")),
             coarse_pan_max=int(_cal_tuning("battleshipPanStepsMax")),
             coarse_tilt_min=int(_cal_tuning("battleshipTiltStepsMin")),
             coarse_tilt_max=int(_cal_tuning("battleshipTiltStepsMax")),
+            refine=bool(_cal_tuning("refineAfterHit")),
+            reject_reflection=bool(_cal_tuning("rejectReflection")),
+            grid_filter=_grid_filter,
             progress_cb=_battleship_progress)
         elapsed = time.monotonic() - phase_start
 
@@ -5548,7 +5738,14 @@ def api_mover_cal_start(fid):
     # #499 — opt-in per-target convergence loop. Default stays on the
     # legacy BFS path until we've hardware-validated the new loop.
     mode = body.get("mode", "legacy")
-    if mode not in ("legacy", "v2", "markers"):
+    # #681 — expose an "all-auto" meta-mode the wizard defaults to: run
+    # markers first, fall back to legacy BFS on discovery failure.
+    # "manual" is the jog-marker flow and uses /manual, not /start.
+    if mode == "manual":
+        return jsonify(err=("Manual (jog-marker) mode uses the jog wizard — "
+                             "POST to /api/calibration/mover/<fid>/manual with "
+                             "the recorded samples")), 400
+    if mode not in ("legacy", "v2", "markers", "all-auto"):
         mode = "legacy"
     target_overrides = body.get("targets")  # optional list of [x, y, z]
     job = {"status": "running", "phase": "starting", "progress": 0,
@@ -5578,6 +5775,13 @@ def api_mover_cal_start(fid):
             target=_mover_cal_thread_markers,
             args=(fid, cam, bridge_ip, color, warmup, warmup_seconds),
             daemon=True)
+    elif mode == "all-auto":
+        # #681 — try markers first; on discovery failure, fall back to
+        # legacy BFS so an operator who picks "All Auto" always gets the
+        # best-available completion attempt.
+        t = threading.Thread(target=_mover_cal_thread_all_auto,
+                              args=(fid, cam, bridge_ip, color, warmup, warmup_seconds),
+                              daemon=True)
     else:
         t = threading.Thread(target=_mover_cal_thread,
                              args=(fid, cam, bridge_ip, color, warmup, warmup_seconds),
@@ -6375,57 +6579,46 @@ def _aruco_snapshot_detect(f):
     return {"markers": out, "frameSize": list(frame_size)}
 
 
-def _aruco_multi_snapshot_detect(f, max_snapshots=3, blackout_bridge_ip=None):
+def _aruco_multi_snapshot_detect(f, max_snapshots=3, blackout_bridge_ip=None,
+                                   calibrating_fixture=None):
     """#626 — multi-snapshot ArUco aggregation. Takes up to N snapshots and
     keeps the best per-id by corner perimeter (largest = closest to camera =
     best sub-pixel corners). Matches the same aggregation pattern that
     stage-map has used since #stage-map-flaky.
 
-    If `blackout_bridge_ip` is provided, a 512-channel all-zero frame is
-    pushed to that bridge before each snapshot so whatever moving head
-    was lit from the previous step can't wash out the marker detection.
-    The engine's regular 40 Hz tick may re-light the fixture within a few
-    frames, but between those ticks there's a reliably dark window for
-    the snapshot to land in.
+    If `blackout_bridge_ip` is provided AND `calibrating_fixture` is the
+    dict of the mover currently under calibration, its channel window is
+    zeroed between snapshots so its beam can't wash out the markers. The
+    engine's regular 40 Hz tick keeps the beam off until the thread
+    explicitly writes a new DMX frame.
+
+    #681-A — previously (and the intermediate #679 fix) the blackout
+    targeted the whole universe or every other mover on the universe;
+    bystander fixtures stayed dark for the entire run because nothing
+    ever restored their state. Zero only what we need to zero — the
+    calibrating mover itself.
     """
     best_per_id = {}
     frame_size = None
     last_err = None
     detected_total = 0
-    # #679 — universe-wide blackout between snapshots clobbered every
-    # other fixture on the universe (a show mover, a wash) for ~150 ms
-    # per snapshot. Blackout only the movers that don't currently hold
-    # a calibration lock, limited to the target camera's universe.
-    blackout_fixtures = []
-    cam_uni = f.get("dmxUniverse")
-    if blackout_bridge_ip:
-        for fx in _fixtures:
-            if fx.get("fixtureType") != "dmx":
-                continue
-            if fx.get("isCalibrating"):
-                continue
-            if cam_uni is not None and fx.get("dmxUniverse") != cam_uni:
-                continue
-            pid = fx.get("dmxProfileId")
-            info = _profile_lib.channel_info(pid) if pid else None
-            cm = (info or {}).get("channel_map") or {}
-            # Only movers (pan+tilt present) need to be darkened for ArUco
-            # snapshot — washes and LED strings don't project a beam onto
-            # the floor that would confuse the marker detector.
-            if "pan" not in cm or "tilt" not in cm:
-                continue
-            ch_count = int((info or {}).get("channelCount") or
-                           fx.get("dmxChannelCount") or 13)
-            blackout_fixtures.append((fx.get("dmxUniverse", 1),
-                                      fx.get("dmxStartAddr", 1),
-                                      ch_count))
+    blackout_target = None
+    if blackout_bridge_ip and calibrating_fixture:
+        cf = calibrating_fixture
+        pid = cf.get("dmxProfileId")
+        info = _profile_lib.channel_info(pid) if pid else None
+        ch_count = int((info or {}).get("channelCount") or
+                       cf.get("dmxChannelCount") or 13)
+        blackout_target = (cf.get("dmxUniverse", 1),
+                           cf.get("dmxStartAddr", 1),
+                           ch_count)
     for attempt in range(max(1, int(max_snapshots))):
-        if blackout_fixtures:
+        if blackout_target:
             try:
                 engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
                 if engine:
-                    for uni, addr, chc in blackout_fixtures:
-                        engine.get_universe(uni).set_channels(addr, [0] * chc)
+                    uni, addr, chc = blackout_target
+                    engine.get_universe(uni).set_channels(addr, [0] * chc)
                 # Brief settle so the fixture has actually darkened before the snapshot.
                 time.sleep(0.15)
             except Exception:
