@@ -1,0 +1,312 @@
+example-b-action.png:
+  dark_ratio: 0.982
+  dimensions:
+  - 1280
+  - 800
+  size: 105986
+example-b-layout-3d.png:
+  dark_ratio: 0.982
+  dimensions:
+  - 1280
+  - 800
+  size: 126334
+example-b-profile.png:
+  dark_ratio: 0.995
+  dimensions:
+  - 1280
+  - 800
+  size: 66425
+example-b-timeline.png:
+  dark_ratio: 0.982
+  dimensions:
+  - 1280
+  - 800
+  size: 101366
+example-b-tracking-t0.png:
+  dark_ratio: 0.982
+  dimensions:
+  - 1280
+  - 800
+  size: 114407
+example-b-tracking-t10.png:
+  dark_ratio: 0.982
+  dimensions:
+  - 1280
+  - 800
+  size: 114407
+example-b-tracking-t5.png:
+  dark_ratio: 0.982
+  dimensions:
+  - 1280
+  - 800
+  size: 114407
+example-c-aim-verify.png:
+  dark_ratio: 0.999
+  dimensions:
+  - 1280
+  - 800
+  size: 9361
+example-c-calibrate-panel.png:
+  dark_ratio: 0.989
+  dimensions:
+  - 1280
+  - 800
+  size: 105297
+example-c-discovery.png:
+  dark_ratio: 0.999
+  dimensions:
+  - 1280
+  - 800
+  size: 9917
+example-c-grid-result.png:
+  dark_ratio: 0.999
+  dimensions:
+  - 1280
+  - 800
+  size: 9842
+example-c-light-map.png:
+  dark_ratio: 0.999
+  dimensions:
+  - 1280
+  - 800
+  size: 10044
+example-d-camera-config.png:
+  dark_ratio: 0.982
+  dimensions:
+  - 1280
+  - 800
+  size: 117093
+example-d-detection.png:
+  dark_ratio: 0.999
+  dimensions:
+  - 1280
+  - 800
+  size: 10636
+example-d-print-markers.png:
+  dark_ratio: 0.899
+  dimensions:
+  - 1280
+  - 800
+  size: 52353
+example-d-result.png:
+  dark_ratio: 0.999
+  dimensions:
+  - 1280
+  - 800
+  size: 9699
+layout-cal-warning.png:
+  dark_ratio: 0.974
+  dimensions:
+  - 1400
+  - 900
+  size: 77167
+layout-pointcloud-3d.png:
+  dark_ratio: 0.98
+  dimensions:
+  - 1400
+  - 900
+  size: 78541
+layout-pointcloud-front.png:
+  dark_ratio: 0.974
+  dimensions:
+  - 1400
+  - 900
+  size: 79147
+layout-pointcloud-top.png:
+  dark_ratio: 0.966
+  dimensions:
+  - 1400
+  - 900
+  size: 98705
+layout-real-3d.png:
+  dark_ratio: 0.97
+  dimensions:
+  - 1400
+  - 900
+  size: 91755
+layout-real-front.png:
+  dark_ratio: 0.972
+  dimensions:
+  - 1400
+  - 900
+  size: 92725
+layout-real-side.png:
+  dark_ratio: 0.955
+  dimensions:
+  - 1400
+  - 900
+  size: 77634
+layout-real-top.png:
+  dark_ratio: 0.919
+  dimensions:
+  - 1400
+  - 900
+  size: 109156
+layout-sel-clicked.png:
+  dark_ratio: 0.98
+  dimensions:
+  - 1400
+  - 900
+  size: 68579
+layout-sel-dblclick.png:
+  dark_ratio: 0.98
+  dimensions:
+  - 1400
+  - 900
+  size: 68579
+layout-sel-front.png:
+  dark_ratio: 0.98
+  dimensions:
+  - 1400
+  - 900
+  size: 68599
+layout-sel-sidebar.png:
+  dark_ratio: 0.979
+  dimensions:
+  - 1400
+  - 900
+  size: 70497
+settings-cameras.png:
+  dark_ratio: 0.992
+  dimensions:
+  - 1400
+  - 900
+  size: 40878
+spa-actions.png:
+  dark_ratio: 0.971
+  dimensions:
+  - 1280
+  - 800
+  size: 91572
+spa-cv-status.png:
+  dark_ratio: 0.986
+  dimensions:
+  - 1280
+  - 800
+  size: 51261
+spa-dash.png:
+  dark_ratio: 0.991
+  dimensions:
+  - 1400
+  - 900
+  size: 44568
+spa-dashboard.png:
+  dark_ratio: 0.994
+  dimensions:
+  - 1280
+  - 800
+  size: 71567
+spa-firmware.png:
+  dark_ratio: 0.986
+  dimensions:
+  - 1280
+  - 800
+  size: 55453
+spa-layout-2d.png:
+  dark_ratio: 0.975
+  dimensions:
+  - 1280
+  - 800
+  size: 65670
+spa-layout-3d.png:
+  dark_ratio: 0.978
+  dimensions:
+  - 1280
+  - 800
+  size: 91990
+spa-layout.png:
+  dark_ratio: 0.991
+  dimensions:
+  - 1400
+  - 900
+  size: 44568
+spa-runtime-load-show.png:
+  dark_ratio: 0.989
+  dimensions:
+  - 1280
+  - 800
+  size: 46193
+spa-runtime.png:
+  dark_ratio: 0.994
+  dimensions:
+  - 1280
+  - 800
+  size: 82446
+spa-settings-cameras.png:
+  dark_ratio: 0.986
+  dimensions:
+  - 1280
+  - 800
+  size: 51261
+spa-settings-ofl-import.png:
+  dark_ratio: 0.933
+  dimensions:
+  - 1280
+  - 800
+  size: 51910
+spa-settings-profile-editor.png:
+  dark_ratio: 0.991
+  dimensions:
+  - 1280
+  - 800
+  size: 62596
+spa-settings-profile-view.png:
+  dark_ratio: 0.984
+  dimensions:
+  - 1280
+  - 800
+  size: 85513
+spa-settings-profiles.png:
+  dark_ratio: 0.984
+  dimensions:
+  - 1280
+  - 800
+  size: 91494
+spa-settings.png:
+  dark_ratio: 0.989
+  dimensions:
+  - 1280
+  - 800
+  size: 46353
+spa-setup-add-dmx.png:
+  dark_ratio: 0.995
+  dimensions:
+  - 1280
+  - 800
+  size: 100459
+spa-setup-add-led.png:
+  dark_ratio: 0.995
+  dimensions:
+  - 1280
+  - 800
+  size: 100443
+spa-setup-edit-camera.png:
+  dark_ratio: 0.992
+  dimensions:
+  - 1280
+  - 800
+  size: 97316
+spa-setup-edit-dmx.png:
+  dark_ratio: 0.99
+  dimensions:
+  - 1280
+  - 800
+  size: 102364
+spa-setup.png:
+  dark_ratio: 0.966
+  dimensions:
+  - 1280
+  - 800
+  size: 91871
+workflow-profile-caps.png:
+  dark_ratio: 0.995
+  dimensions:
+  - 1280
+  - 800
+  size: 53346
+workflow-test-channels.png:
+  dark_ratio: 0.99
+  dimensions:
+  - 1280
+  - 800
+  size: 102686

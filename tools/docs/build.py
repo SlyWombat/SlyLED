@@ -247,6 +247,39 @@ def sync_content_to_website() -> Path:
             )
             (dest_dir / md.name).write_text(front + raw, encoding='utf-8')
 
+    # Marketing surface (#672). Flatten docs/src/marketing/**/*.md into
+    # Starlight under a single prefix so Astro routes them at
+    # /marketing/<subpath>/ (e.g. /marketing/features/01-...,
+    # /marketing/case-studies/basement-rig, /marketing/press-kit/fact-sheet).
+    import re as _re
+    marketing_src = ROOT / 'docs' / 'src' / 'marketing'
+    if marketing_src.is_dir():
+        mkt_dest = out_root / 'marketing'
+        mkt_dest.mkdir(parents=True, exist_ok=True)
+        for md in marketing_src.rglob('*.md'):
+            rel = md.relative_to(marketing_src)
+            raw = md.read_text(encoding='utf-8', errors='replace')
+            # Strip any existing frontmatter so we control the fields
+            # Starlight sees; preserve the original body verbatim.
+            body = raw
+            if body.startswith('---'):
+                parts = body.split('---', 2)
+                if len(parts) >= 3:
+                    body = parts[2].lstrip('\n')
+            # Same asset-path rewrites as the docs sync.
+            body = _re.sub(r'(!\[[^\]]*\]\()(screenshots/)', r'\1/slyled/\2', body)
+            body = _re.sub(r'(!\[[^\]]*\]\()(diagrams/)',    r'\1/slyled/\2', body)
+            title = _slug_to_title(body)
+            front = (
+                '---\n'
+                f'title: "{title.replace(chr(34), chr(39))}"\n'
+                'lang: en\n'
+                '---\n\n'
+            )
+            target = mkt_dest / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(front + body, encoding='utf-8')
+
     # Mirror screenshots + diagrams into public/ so markdown `![..](...)`
     # references resolve relative to the site root.
     for src, dst in (
@@ -260,7 +293,7 @@ def sync_content_to_website() -> Path:
                     target = dst / p.relative_to(src)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(p, target)
-    log.info('website sync: EN+FR + public assets → %s',
+    log.info('website sync: EN+FR + marketing + public assets → %s',
              site.relative_to(ROOT))
     return out_root
 

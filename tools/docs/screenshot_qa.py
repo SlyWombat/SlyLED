@@ -61,8 +61,60 @@ def dark_ratio(path: Path) -> float:
 # ── VLM check (pluggable) ──────────────────────────────────────────────
 
 def vlm_check(path: Path, expected: dict, backend: str | None) -> dict:
-    """Return {'pass': bool, 'reason': str}. Skeleton until prompt lands."""
-    return {'pass': True, 'reason': 'skeleton — VLM prompt not yet wired'}
+    """Return {'pass': bool, 'reason': str}.
+
+    Shares the translate.py backend factory (#670) once a real VLM prompt
+    is wired in. For now heuristics carry the gate; VLM stays pluggable."""
+    if backend in (None, '', 'noop'):
+        return {'pass': True, 'reason': 'VLM skipped (backend=noop/default)'}
+    # Backends are installed on demand — absence is not a failure, it's
+    # a soft skip so the build never blocks on missing optional infra.
+    try:
+        from translate import resolve_backend  # type: ignore  # sibling module
+    except ImportError:
+        return {'pass': True, 'reason': f'VLM backend {backend!r} unavailable'}
+    return {'pass': True,
+            'reason': f'VLM backend {backend!r} resolved; no semantic prompt wired yet'}
+
+
+# ── Baseline management ───────────────────────────────────────────────
+
+def build_expected(captured: list[Path]) -> dict:
+    """Derive an expected.yml payload from the current capture set.
+
+    Each entry records byte-size + dark-ratio + dimensions so the next run
+    can notice drift. Called by ``--update-expected``."""
+    out: dict[str, dict] = {}
+    for png in captured:
+        entry: dict = {'size': png.stat().st_size}
+        d = dark_ratio(png)
+        if d >= 0:
+            entry['dark_ratio'] = round(d, 3)
+        try:
+            from PIL import Image
+            with Image.open(png) as im:
+                entry['dimensions'] = list(im.size)
+        except Exception:
+            pass
+        out[png.name] = entry
+    return out
+
+
+def write_manifest(payload: dict) -> Path:
+    """Persist the expected.yml baseline. Writes YAML if pyyaml is
+    available, else JSON (the reader handles both)."""
+    MANIFEST.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import yaml
+        MANIFEST.write_text(
+            yaml.safe_dump(payload, sort_keys=True, default_flow_style=False),
+            encoding='utf-8')
+        return MANIFEST
+    except ImportError:
+        # pyyaml absent — drop a JSON fallback load_manifest will read.
+        MANIFEST.write_text(json.dumps(payload, sort_keys=True, indent=2),
+                            encoding='utf-8')
+        return MANIFEST
 
 
 # ── Main ──────────────────────────────────────────────────────────────
@@ -70,9 +122,18 @@ def vlm_check(path: Path, expected: dict, backend: str | None) -> dict:
 def load_manifest() -> dict:
     if not MANIFEST.exists():
         return {}
+    raw = MANIFEST.read_text(encoding='utf-8')
     try:
         import yaml
-        return yaml.safe_load(MANIFEST.read_text(encoding='utf-8')) or {}
+        return yaml.safe_load(raw) or {}
+    except ImportError:
+        # YAML missing — fall back to JSON (same file, format auto-detected
+        # by the `{` prefix write_manifest() leaves behind).
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            log.warning('expected.yml parse failed (no yaml, not JSON): %s', e)
+            return {}
     except Exception as e:
         log.warning('expected.yml parse failed: %s', e)
         return {}
@@ -121,11 +182,27 @@ def run_qa(backend: str | None = None) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description='screenshot QA (#671)')
-    p.add_argument('--backend', default=None, help='VLM backend for semantic check')
+    p = argparse.ArgumentParser(description='screenshot QA (#673)')
+    p.add_argument('--backend', default=None,
+                   help='VLM backend for semantic check (see translate.py backends)')
+    p.add_argument('--update-expected', action='store_true',
+                   help='Regenerate expected.yml from the current captures. '
+                        'Use after a deliberate UI change.')
     args = p.parse_args(argv or sys.argv[1:])
     logging.basicConfig(level=logging.INFO,
                          format='%(levelname)s %(name)s: %(message)s')
+
+    if args.update_expected:
+        captured = sorted([*LEGACY_SHOTS.glob('*.png'), *SHOTS.glob('*.png')])
+        if not captured:
+            log.error('no captures to baseline — run screenshot_capture.py first')
+            return 2
+        payload = build_expected(captured)
+        target = write_manifest(payload)
+        log.info('baseline refreshed: %d entries → %s', len(payload),
+                 target.relative_to(ROOT))
+        return 0
+
     return run_qa(args.backend)
 
 

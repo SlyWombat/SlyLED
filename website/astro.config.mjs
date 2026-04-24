@@ -32,9 +32,9 @@ export default defineConfig({
         { icon: 'github', label: 'GitHub',
           href: 'https://github.com/SlyWombat/SlyLED' },
       ],
-      editLink: {
-        baseUrl: 'https://github.com/SlyWombat/SlyLED/edit/main/docs/src/',
-      },
+      // No editLink — SlyLED docs are read-only to the public; contributors
+      // go through the GitHub repo directly, not through per-page "edit"
+      // shortcuts on the live site.
       lastUpdated: true,
       customCss: ['./src/styles/kinetic-prism.css'],
       // Starlight `defaultLocale: 'root'` puts EN at src/content/docs/<slug>.md,
@@ -90,6 +90,29 @@ export default defineConfig({
             { label: 'Glossary', slug: '20-glossary' },
             { label: 'API', slug: '19-api-reference' },
           ],
+        },
+        {
+          label: 'About',
+          items: [
+            { label: 'Feature overview', slug: 'marketing/hero' },
+            { label: 'PLASA 2026 submission', slug: 'marketing/plasa-2026' },
+          ],
+          collapsed: true,
+        },
+        {
+          label: 'Features',
+          autogenerate: { directory: 'marketing/features' },
+          collapsed: true,
+        },
+        {
+          label: 'Case studies',
+          autogenerate: { directory: 'marketing/case-studies' },
+          collapsed: true,
+        },
+        {
+          label: 'Press kit',
+          autogenerate: { directory: 'marketing/press-kit' },
+          collapsed: true,
         },
       ],
       head: [

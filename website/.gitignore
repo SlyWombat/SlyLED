@@ -9,6 +9,7 @@ src/env.d.ts
 src/content/docs/*.md
 !src/content/docs/index.md
 src/content/docs/fr/
+src/content/docs/marketing/
 
 # Public assets mirrored from docs/ by the sync step. Only committed
 # assets (logo, favicon) stay tracked.
