@@ -46,9 +46,14 @@ log = logging.getLogger("slyled.camera_settings")
 
 # ── V4L2 proxy ─────────────────────────────────────────────────────────
 
-def camera_controls_get(camera_ip, cam_idx=0, timeout=5):
+def camera_controls_get(camera_ip, cam_idx=0, timeout=15):
     """GET camera-node /camera/controls?cam=N. Returns the parsed JSON
     (``{ok, cam, controls: [...], saved: {...}}``) or raises on failure.
+
+    Timeout raised from 5 → 15 s because a busy Pi (running YOLO / depth
+    / another scan) routinely takes >5 s to return the v4l2-ctl list,
+    and the auto-tune caller would surface the bare "timed out" with no
+    indication of which step failed.
     """
     url = f"http://{camera_ip}:5000/camera/controls?cam={cam_idx}"
     req = urllib.request.Request(url, method="GET")
@@ -56,7 +61,7 @@ def camera_controls_get(camera_ip, cam_idx=0, timeout=5):
         return json.loads(resp.read().decode())
 
 
-def camera_controls_set(camera_ip, cam_idx, controls, timeout=10):
+def camera_controls_set(camera_ip, cam_idx, controls, timeout=15):
     """POST camera-node /camera/controls with a controls dict.
     Returns ``{ok, applied}`` from the camera."""
     url = f"http://{camera_ip}:5000/camera/controls"
@@ -406,7 +411,14 @@ def auto_tune_loop(camera_ip, cam_idx, intent,
     Returns ``{before, after, applied, history, evaluator}``.
     """
     evaluator = make_evaluator(evaluator_mode)
-    initial = camera_controls_get(camera_ip, cam_idx)
+    try:
+        initial = camera_controls_get(camera_ip, cam_idx)
+    except Exception as e:
+        raise RuntimeError(
+            f"camera controls GET timed out after 15 s "
+            f"(camera {camera_ip}:5000/camera/controls?cam={cam_idx}); "
+            f"the Pi may be busy with depth / YOLO — wait, or bump "
+            f"camera_controls_get timeout. Cause: {e}") from e
     controls = initial.get("controls", [])
     ae_ctrl = _find_control(controls, "auto_exposure")
     exp_ctrl = _find_control(controls, "exposure_time_absolute")
@@ -425,8 +437,21 @@ def auto_tune_loop(camera_ip, cam_idx, intent,
         state["white_balance_automatic"] = wb_auto_ctrl.get("value")
 
     # Snap the initial state.
-    frame0 = fetch_snapshot_fn(camera_ip, cam_idx)
-    before = evaluator(frame0, controls_meta=controls, intent=intent)
+    try:
+        frame0 = fetch_snapshot_fn(camera_ip, cam_idx)
+    except Exception as e:
+        raise RuntimeError(
+            f"baseline snapshot timed out "
+            f"(camera {camera_ip}:5000/snapshot?cam={cam_idx}); "
+            f"increase the fetch_snapshot timeout if the Pi is under "
+            f"heavy load. Cause: {e}") from e
+    try:
+        before = evaluator(frame0, controls_meta=controls, intent=intent)
+    except Exception as e:
+        raise RuntimeError(
+            f"baseline evaluator failed (mode={evaluator_mode}); "
+            f"if using AI, verify Ollama is running and the vision "
+            f"model is pulled. Cause: {e}") from e
     if progress_cb:
         progress_cb({"stage": "baseline", "iteration": 0,
                      "score": before["score"], "applied": dict(state),
@@ -539,8 +564,18 @@ def auto_tune_loop(camera_ip, cam_idx, intent,
             log.warning("auto_tune: apply %s failed (%s) — aborting", delta, e)
             break
 
-        frame = fetch_snapshot_fn(camera_ip, cam_idx)
-        score = evaluator(frame, controls_meta=controls, intent=intent)
+        try:
+            frame = fetch_snapshot_fn(camera_ip, cam_idx)
+        except Exception as e:
+            log.warning("auto_tune iter %d: snapshot timed out (%s) — "
+                        "returning best-so-far", it, e)
+            break
+        try:
+            score = evaluator(frame, controls_meta=controls, intent=intent)
+        except Exception as e:
+            log.warning("auto_tune iter %d: evaluator failed (%s) — "
+                        "returning best-so-far", it, e)
+            break
         entry = {"iteration": it, **score, "applied": dict(state)}
         history.append(entry)
         if progress_cb:

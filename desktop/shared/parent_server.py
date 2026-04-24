@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.5"
+VERSION = "1.6.6"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -3908,7 +3908,18 @@ def api_camera_settings_auto_tune(fid):
     evaluator_mode = body.get("evaluator", "heuristic")
 
     def _snap(ip_, idx_):
-        return _cv.fetch_snapshot(ip_, idx_, timeout=20)
+        # 30 s gives the Pi headroom when it's warming up a YOLO model or
+        # servicing a parallel depth scan. Auto-tune is not latency-
+        # sensitive on the orchestrator side — client XHR timeout is 5 min.
+        # One-shot retry covers transient V4L2 device hangs that the Pi's
+        # driver recovers from after a short release pause (empirically
+        # 1-5 s is enough on the basement rig).
+        try:
+            return _cv.fetch_snapshot(ip_, idx_, timeout=30)
+        except Exception as e:
+            log.warning("auto-tune: snapshot failed (%s) — pausing 3 s and retrying once", e)
+            time.sleep(3)
+            return _cv.fetch_snapshot(ip_, idx_, timeout=30)
 
     try:
         result = _cam_settings.auto_tune_loop(
