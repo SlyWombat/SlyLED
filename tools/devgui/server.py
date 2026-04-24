@@ -474,47 +474,90 @@ _manual_running = False
 
 @app.route('/api/manual/build', methods=['POST'])
 def api_manual_build():
+    """Docs build (#675) — replaces the legacy single-language
+    build_manual.py call with the new ``tools/docs/build.py`` orchestrator.
+
+    Body fields (all optional):
+      - ``lang``        : "en" | "fr" | "all"          (default "all")
+      - ``formats``     : list[str] of FORMATS constants (default ["all"])
+      - ``skip_screenshots`` : bool                     (default False)
+      - ``skip_diagrams``    : bool                     (default False)
+      - ``deploy``           : bool — push to cPanel    (default False)
+
+    Back-compat: old bodies with {lang, screenshots:true} still work.
+    """
     global _manual_process, _manual_output, _manual_running
     with _manual_lock:
         if _manual_running:
             return jsonify(ok=False, err='Manual build already running'), 409
         body = request.get_json(silent=True) or {}
-        lang = body.get('lang', 'en')
-        screenshots = body.get('screenshots', False)
+        lang = body.get('lang', 'all')
+        formats = body.get('formats') or (['all'])
+        if isinstance(formats, str):
+            formats = [formats]
+        # Legacy `screenshots: true` → skip_screenshots=False.
+        legacy_shots = body.get('screenshots')
+        skip_shots = bool(body.get('skip_screenshots',
+                                     False if legacy_shots else True))
+        skip_diagrams = bool(body.get('skip_diagrams', False))
+        deploy = bool(body.get('deploy', False))
         _manual_output = []
         _manual_running = True
 
     def _run():
         global _manual_process, _manual_running
         try:
-            # Step 1: Screenshots (optional)
-            if screenshots:
+            # Optional: fresh screenshot capture (pre-build).
+            if not skip_shots:
                 _manual_output.append('[devgui] Capturing screenshots...\n')
                 _broadcast_sse('manual', {'line': '[devgui] Capturing screenshots...'})
                 p = subprocess.Popen(
                     [sys.executable, 'tests/screenshot_capture.py'],
-                    cwd=PROJECT_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                )
+                    cwd=PROJECT_ROOT, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, text=True)
                 for line in iter(p.stdout.readline, ''):
                     _manual_output.append(line)
                     _broadcast_sse('manual', {'line': line.rstrip()})
                 p.wait()
 
-            # Step 2: Build manual
-            args = [sys.executable, 'tests/build_manual.py']
-            if lang != 'en':
-                args += ['--lang', lang]
-            _manual_output.append(f'[devgui] Building {lang.upper()} manual...\n')
-            _broadcast_sse('manual', {'line': f'[devgui] Building {lang.upper()} manual...'})
-            _manual_process = subprocess.Popen(
-                args, cwd=PROJECT_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            )
-            for line in iter(_manual_process.stdout.readline, ''):
-                _manual_output.append(line)
-                _broadcast_sse('manual', {'line': line.rstrip()})
-            _manual_process.wait()
-            rc = _manual_process.returncode
-            _broadcast_sse('manual', {'done': True, 'exitCode': rc})
+            # One invocation per format so the SSE stream reports progress
+            # by stage. When --format all is selected we still call once.
+            fmts = formats if 'all' not in formats else ['all']
+            for fmt in fmts:
+                args = [sys.executable, 'tools/docs/build.py',
+                         '--lang', lang, '--format', fmt]
+                if skip_shots:
+                    args.append('--skip-screenshots')
+                if skip_diagrams:
+                    args.append('--skip-diagrams')
+                msg = f'[devgui] build.py --lang {lang} --format {fmt}'
+                _manual_output.append(msg + '\n')
+                _broadcast_sse('manual', {'line': msg})
+                _manual_process = subprocess.Popen(
+                    args, cwd=PROJECT_ROOT, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, text=True)
+                for line in iter(_manual_process.stdout.readline, ''):
+                    _manual_output.append(line)
+                    _broadcast_sse('manual', {'line': line.rstrip()})
+                _manual_process.wait()
+                if _manual_process.returncode != 0:
+                    _broadcast_sse('manual', {'done': True,
+                                               'exitCode': _manual_process.returncode})
+                    return
+
+            if deploy:
+                _manual_output.append('[devgui] deploying to cPanel...\n')
+                _broadcast_sse('manual', {'line': '[devgui] deploying to cPanel...'})
+                p = subprocess.Popen(
+                    [sys.executable, 'tools/docs/deploy_website.py'],
+                    cwd=PROJECT_ROOT, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, text=True)
+                for line in iter(p.stdout.readline, ''):
+                    _manual_output.append(line)
+                    _broadcast_sse('manual', {'line': line.rstrip()})
+                p.wait()
+
+            _broadcast_sse('manual', {'done': True, 'exitCode': 0})
         except Exception as e:
             _broadcast_sse('manual', {'done': True, 'error': str(e)})
         finally:
@@ -522,7 +565,9 @@ def api_manual_build():
             _manual_process = None
 
     threading.Thread(target=_run, daemon=True).start()
-    return jsonify(ok=True, lang=lang, screenshots=screenshots)
+    return jsonify(ok=True, lang=lang, formats=formats,
+                   skip_screenshots=skip_shots,
+                   skip_diagrams=skip_diagrams, deploy=deploy)
 
 
 @app.route('/api/manual/status')
