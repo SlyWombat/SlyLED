@@ -1,6 +1,6 @@
 ---
 title: SlyLED
-tagline: Open, three-tier stage-lighting control with local-first AI calibration.
+tagline: Source-available three-tier stage-lighting control with local-first AI calibration.
 layout: hero
 cta_primary:
   label: Download for Windows
@@ -22,8 +22,8 @@ SlyLED is a complete orchestrator + performer + bridge stack for
 theatres, event productions, and creative-tech spaces that want the
 capabilities of a grandMA3 console without the $60 000 entry ticket.
 It ships as a single Windows installer (or macOS bundle, or Android
-APK) and open-source firmware that runs on hardware you can buy at
-your neighbourhood electronics shop.
+APK) and source-available firmware that runs on hardware you can buy
+at your neighbourhood electronics shop.
 
 ## What makes it different
 
@@ -53,3 +53,7 @@ your neighbourhood electronics shop.
   needs to do double duty as a sensor platform.
 - Integrators who want a consumer-price demo rig that reads the same
   MVR / GDTF profiles the pro world exchanges.
+
+## Licensing
+
+SlyLED is distributed under the [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/) licence — **free for personal, hobbyist, educational, research, and nonprofit use**. Paid client engagements, corporate internal use, embedded products, and paid services built on SlyLED require a separate commercial licence. See [licensing details](/slyled/licensing) or email <info@electricrv.ca>.

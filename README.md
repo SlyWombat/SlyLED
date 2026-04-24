@@ -44,7 +44,7 @@ A complete lighting-design and control stack that does the jobs grandMA3, Follow
 | Web UI + phone + gyro puck | **Yes** | Proprietary hw | Proprietary hw | Web only |
 | 3D stage model | **Yes** | Yes | Yes | No |
 | Dynamic show generator | **Yes** | No | No | No |
-| Open source | **Yes** | No | No | Yes |
+| Source-available | **Yes** (PolyForm NC) | No | No | Yes (GPL) |
 | Full bilingual manual | **EN + FR** | Multi | EN | Community |
 
 ## Hardware
@@ -139,7 +139,9 @@ Submitted for **PLASA Innovation Award 2026** — the first consumer-price light
 
 ## License
 
-Private project, All rights reserved. Contact the maintainers for commercial or evaluation access.
+SlyLED is distributed under the [PolyForm Noncommercial License 1.0.0](LICENSE) — **free for personal, hobbyist, research, educational, charitable, and nonprofit use**.
+
+**Commercial use requires a separate license.** This includes paid client engagements, for-profit corporate internal use, embedding in a commercial product, paid services built on SlyLED, and rental of SlyLED-equipped hardware. See [`COMMERCIAL_LICENSING.md`](COMMERCIAL_LICENSING.md) for terms, tiers, and contact.
 
 ---
 

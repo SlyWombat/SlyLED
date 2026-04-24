@@ -5,7 +5,7 @@ format: press-kit
 
 # SlyLED — Short boilerplate (250 words)
 
-SlyLED is an open-source stage-lighting control stack that collapses
+SlyLED is a source-available stage-lighting control stack that collapses
 the pro-console price floor. The project ships a Windows/macOS
 orchestrator, an Android operator app, and open firmware for three
 classes of performer hardware, all exchanging a single UDP binary
@@ -28,7 +28,11 @@ rooms, and houses of worship keep their footage inside the building.
 
 SlyLED is authored by an independent developer operating out of
 Ontario, Canada. It is a PLASA 2026 Innovation Award submission and
-ships under the MIT licence. Hardware choices start at consumer
+ships under the PolyForm Noncommercial 1.0.0 licence — free for
+personal, hobbyist, educational, and nonprofit use; commercial use
+(paid engagements, corporate internal use, embedded products, paid
+services) requires a separate commercial licence. Hardware choices
+start at consumer
 electronics — Arduino Giga R1 WiFi, ESP32-WROOM, Wemos D1 Mini,
 Orange Pi — rather than specialty lighting components.
 
@@ -101,14 +105,20 @@ budget wash.
 Adding a new input device — a WebMIDI fader board, a Stream Deck, a
 voice-assistant demo — is a matter of calling the six-verb engine API.
 
-## Open from top to bottom
+## Source-available from top to bottom
 
-SlyLED is MIT-licensed, every tier. The Windows installer bundles a
-Python orchestrator whose source is in the same repository; the
-Android app is Kotlin/Compose in `android/`; the firmware is standard
-Arduino C++ in `main/`. No cloud dependency gates the product. No
-firmware blob resists inspection. The UDP binary protocol v4 is
-documented in a 30-line table in `CLAUDE.md`.
+SlyLED is distributed under the PolyForm Noncommercial 1.0.0 licence
+at every tier — the orchestrator, the Android app, the firmware, and
+the tooling are all in one public repository, free to audit, modify,
+and use for personal, hobbyist, educational, and nonprofit purposes.
+Paid engagements, corporate internal use, embedded products, and paid
+services require a separate commercial licence (see
+<https://electricrv.ca/slyled/licensing>). The Windows installer
+bundles a Python orchestrator whose source is in the same repository;
+the Android app is Kotlin/Compose in `android/`; the firmware is
+standard Arduino C++ in `main/`. No cloud dependency gates the
+product. No firmware blob resists inspection. The UDP binary protocol
+v4 is documented in a 30-line table in `CLAUDE.md`.
 
 This matters most in institutional settings. A venue IT department
 can audit exactly what crosses the LAN. A computer-science educator
@@ -138,5 +148,6 @@ is the right cost floor.
 ## Contact
 
 Project lead: dave@drscapital.com
+Licensing inquiries: info@electricrv.ca
 Documentation: electricrv.ca/slyled
 Source: github.com/SlyWombat/SlyLED

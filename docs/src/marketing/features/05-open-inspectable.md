@@ -18,7 +18,9 @@ to the byte on wire is readable in a single editor session:
 4. The bridge firmware (`main/main.ino`, `BOARD_GIGA_DMX`) drives the
    UART at the right slow-break timing.
 
-Every step is MIT-licensed source in the same tree. No cloud service
+Every step is source-available in the same tree, under the PolyForm
+Noncommercial 1.0.0 licence (free for personal / nonprofit use, paid
+commercial licence for business or paid engagements). No cloud service
 you depend on, no firmware blob you can't read, no plug-in that only
 works when the vendor decides it should.
 
