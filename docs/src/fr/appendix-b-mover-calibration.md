@@ -18,7 +18,7 @@ flowchart TD
     Coarse --> MapConv
     MapConv --> Grid[4 — Grid build<br/>&lt;1s]
     Grid --> Verify[5 — Verification sweep<br/>3-5s advisory]
-    Verify --> Fit[6 — LM model fit<br/>4 sign combos + verify_signs<br/>&lt;1s]
+    Verify --> Fit[6 — LM model fit<br/>verify_signs → single-combo LM<br/>&lt;1s]
     Fit --> HoldOut{7 — Held-out<br/>parametric gate<br/>#654}
     HoldOut -->|pass| Save[8 — Save +<br/>moverCalibrated=true]
     HoldOut -->|fail| OperatorRetry[Accept / Retry prompt]
@@ -44,7 +44,7 @@ flowchart TD
 | 3′ | Convergence (v2) | `sampling` | 30–60 s (N cibles × ~1 s chacune) | 30–70 | Abandonner si la convergence échoue sur plusieurs cibles |
 | 4 | Construction de grille | `grid` | <1 s | ~80 | Abandonner si dispersion d'échantillons insuffisante |
 | 5 | Balayage de vérification | `verification` | 3–5 s (3 points tenus de côté) | ~90 | **Consultatif seulement** — ne bloque pas la sauvegarde |
-| 6 | Ajustement du modèle (LM) | `fitting` | <1 s | 85–95 | Abandonner si les 4 combinaisons de signes échouent |
+| 6 | Ajustement du modèle (LM) | `fitting` | <1 s | 85–95 | verify_signs d'abord → LM à combinaison unique ; repli complet à quatre combinaisons si une sonde de signe rate |
 | 7 | Porte paramétrique tenue de côté (#654) | `holdout` | 2–5 s (N cibles non vues) | 95–98 | Présenter une invite Accept/Retry |
 | 8 | Sauvegarde | `complete` | <1 s | 100 | Erreur d'écriture journalisée mais n'affecte pas le drapeau moverCalibrated |
 
@@ -128,7 +128,7 @@ sequenceDiagram
 
     Note over Orch: Grid build (<1s, sync)
     Note over Orch,Cam: Verification sweep (3-5s)
-    Note over Orch: LM fit — 4 sign combos + verify_signs
+    Note over Orch: verify_signs probes → single-combo LM fit
     Note over Orch,Cam: Held-out parametric gate (#654)
 
     alt within tolerance
@@ -165,7 +165,7 @@ Deux chemins de code existent. Le chemin battleship est préféré quand l'homog
 **Legacy (statut `discovery`) :**
 
 - Sonde initiale à la visée de démarrage à chaud (prédiction du modèle ou estimation géométrique d'après le FOV caméra).
-- Grille grossière 10×7 : bins pan `0,02 + 0,96·i/9`, bins tilt `0,1 + 0,85·j/6` — 70 sondes. Settle par sonde `SETTLE = 0,6 s` (la découverte legacy utilise la constante fixe ; la machinerie de settle adaptatif #655 documentée en phase de cartographie ne s'applique pas ici).
+- Grille grossière 10×7 : bins pan `0,02 + 0,96·i/9`, bins tilt `0,1 + 0,85·j/6` — 70 sondes. Chaque sonde passe par `_wait_settled`, qui réutilise la même machinerie de settle adaptatif (`SETTLE_BASE = 0,4 s` avec escalade `[0,4, 0,8, 1,5] s`) que la phase de cartographie — pas une constante `SETTLE` fixe séparée.
 - Si le balayage grossier rate, spiraler vers l'extérieur depuis la visée de démarrage à chaud en coquilles rectangulaires à `STEP = 0,05`, jusqu'à `MAX_PROBES = 80` sondes totales.
 - **Durée attendue** — 45–55 s dans le pire cas.
 - **Repli en cas d'échec** — abandonner avec `error` ; appeler `_cal_blackout()`.
@@ -184,7 +184,7 @@ Deux chemins de code existent. Le chemin battleship est préféré quand l'homog
 **Convergence v2 (statut `sampling`) :**
 
 - Pour chaque cible issue de `pick_calibration_targets` (filtrée à travers le polygone de vue sol caméra par #659), faire converger le faisceau sur le pixel cible via `converge_on_target_pixel`.
-- **Raffinement par bracket-and-retry (#660)** — `bracket_step = 0,08` initial. Quand le faisceau est perdu, diviser par deux le pas et revenir vers le meilleur offset connu dans la direction de l'erreur. Plancher de bracket `BRACKET_FLOOR = 0,002`. Réinitialiser `bracket_step` à 0,08 à la ré-acquisition du faisceau. Convergence typique : 5–10 itérations ; max 25.
+- **Raffinement par bracket-and-retry (#660)** — `bracket_step = 0,08` initial. Quand le faisceau est perdu, diviser par deux le pas et revenir vers le meilleur offset connu dans la direction de l'erreur. `BRACKET_FLOOR` dépend maintenant du fixture : `1 / (2^pan_bits − 1)` — environ `0,0039` en pan 8 bits et `0,0000153` en 16 bits, donc la boucle s'épuise à la résolution DMX réelle du fixture plutôt qu'à l'ancien plancher `1/255` réservé au 8 bits (#679). Réinitialiser `bracket_step` à 0,08 à la ré-acquisition du faisceau. Convergence typique : 5–10 itérations ; max 25.
 - **Durée attendue** — 30–60 s (N cibles × ~1 s chacune).
 
 **Repli** — si moins de 6 échantillons sont collectés, abandonner avec `error`.
@@ -204,10 +204,11 @@ Deux chemins de code existent. Le chemin battleship est préféré quand l'homog
 
 #### 6. Ajustement du modèle (paramétrique, Levenberg-Marquardt)
 
-- Essayer les quatre combinaisons de signes `(pan_sign, tilt_sign) ∈ {±1}²`. Pour chaque combinaison, exécuter `scipy.optimize.least_squares` avec perte `soft_l1` (`f_scale=0.05`) sur cinq paramètres continus (mount yaw/pitch/roll + offsets pan/tilt) ; jusqu'à 120 itérations.
-- Trier les candidats par erreur RMS ; choisir le meilleur. Si les deux premiers candidats s'accordent à 0,2° près, journaliser un avertissement d'ambiguïté miroir.
-- **Vérification de signes (§8.1)** — après ajustement, nudger pan de +0,02 et détecter le décalage pixel ; nudger tilt de +0,02 et faire de même. Calculer le signe de `Δpx · pan_axis_sign_in_frame` (défaut +1) → pan_sign ; et `Δpy · tilt_axis_sign_in_frame` (défaut −1) → tilt_sign. Ré-ajuster avec `force_signs=(pan_sign, tilt_sign)` pour résoudre le miroir.
-- **Durée attendue** — <1 s y compris les sondes verify_signs.
+- **La vérification de signes (#652 / §8.1) s'exécute AVANT l'ajustement LM.** Juste après que la découverte renvoie `(pan, tilt, pixel)`, le thread émet deux sondes supplémentaires (`pan + 0,02`, `tilt + 0,02`) et appelle `verify_signs` sur les deltas pixel pour calculer `(pan_sign, tilt_sign)`. Ces signes alimentent `fit_model(..., force_signs=(ps, ts))` de sorte que la LM n'effectue **qu'un seul** ajustement au lieu de quatre.
+- Repli — si une sonde de signe ne détecte pas de faisceau, `force_signs` reste `None` et `fit_model` exécute la recherche complète à quatre combinaisons et choisit le candidat de plus faible RMS.
+- Lorsque les deux meilleurs candidats s'accordent à 0,2° RMS près ET que l'appelant n'a pas fourni `force_signs`, `FitQuality.mirror_ambiguity` est mis à True et exposé par l'endpoint de statut (#679) afin que l'UI puisse marquer la calibration pour un nouvel essai manuel.
+- `scipy.optimize.least_squares` avec perte `soft_l1` (`f_scale=0.05`) ajuste cinq paramètres continus (mount yaw/pitch/roll + offsets pan/tilt) ; jusqu'à 120 itérations.
+- **Durée attendue** — <1 s au total (verify_signs + ajustement LM unique).
 - **Repli** — si les 4 combinaisons ne convergent pas, lever `RuntimeError` ; l'appelant abandonne avec `error`.
 
 #### 7. Porte paramétrique tenue de côté (#654)
@@ -282,7 +283,7 @@ Constantes dans `desktop/shared/mover_calibrator.py` :
 | `MAX_SAMPLES` | 80 | Plafond dur sur les échantillons BFS |
 | `COARSE_PAN` | 10 | Bins pan de grille grossière legacy |
 | `COARSE_TILT` | 7 | Bins tilt de grille grossière legacy |
-| `BRACKET_FLOOR` | 0,002 | Plancher de raffinement de convergence (~1° sur 540° de pan) |
+| `BRACKET_FLOOR` | `1 / (2^pan_bits − 1)` | Plancher de raffinement de convergence — dépend du fixture (8 bits → `≈0,0039`, 16 bits → `≈0,0000153`) (#679) |
 
 Constantes dans `desktop/shared/mover_control.py` :
 

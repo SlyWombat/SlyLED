@@ -308,6 +308,12 @@ class FitQuality:
     sample_count: int
     condition_number: float
     per_sample_deg: List[float] = field(default_factory=list)
+    # #679 — True when the top two sign-combo fits landed within 0.2° RMS
+    # of each other and the caller didn't supply `force_signs`. The fit
+    # was picked arbitrarily-but-deterministically; a 50/50 chance it's
+    # the wrong mirror. UI should surface this so the operator can
+    # re-run with verify_signs → force_signs.
+    mirror_ambiguity: bool = False
 
     def to_dict(self) -> Dict:
         return {
@@ -318,6 +324,7 @@ class FitQuality:
             # Per-sample residual in degrees — enables the wizard's
             # residual table and exclude-sample flow (#504).
             "perSampleDeg":    [float(e) for e in self.per_sample_deg],
+            "mirrorAmbiguity": bool(self.mirror_ambiguity),
         }
 
 
@@ -401,7 +408,10 @@ def fit_model(fixture_pos: Tuple[float, float, float],
     # fit equally, the caller should have supplied force_signs from a
     # verify_signs() probe. Log the ambiguity so at least it's visible.
     candidates.sort(key=lambda c: c[0])
-    if len(candidates) >= 2 and (candidates[1][0] - candidates[0][0]) < 0.2:
+    mirror_ambiguity = (len(candidates) >= 2 and
+                         (candidates[1][0] - candidates[0][0]) < 0.2 and
+                         force_signs is None)
+    if mirror_ambiguity:
         # Near-tie between mirrors — visible warning (no side-effects).
         try:
             import logging
@@ -413,6 +423,8 @@ def fit_model(fixture_pos: Tuple[float, float, float],
         except Exception:
             pass
     _, best, best_quality = candidates[0]
+    # #679 — surface the ambiguity so callers and the UI can react.
+    best_quality.mirror_ambiguity = mirror_ambiguity
     return best, best_quality
 
 

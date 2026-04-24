@@ -18,7 +18,7 @@ flowchart TD
     Coarse --> MapConv
     MapConv --> Grid[4 — Grid build<br/>&lt;1s]
     Grid --> Verify[5 — Verification sweep<br/>3-5s advisory]
-    Verify --> Fit[6 — LM model fit<br/>4 sign combos + verify_signs<br/>&lt;1s]
+    Verify --> Fit[6 — LM model fit<br/>verify_signs → single-combo LM<br/>&lt;1s]
     Fit --> HoldOut{7 — Held-out<br/>parametric gate<br/>#654}
     HoldOut -->|pass| Save[8 — Save +<br/>moverCalibrated=true]
     HoldOut -->|fail| OperatorRetry[Accept / Retry prompt]
@@ -44,7 +44,7 @@ flowchart TD
 | 3′ | Convergence (v2) | `sampling` | 30–60 s (N targets × ~1 s each) | 30–70 | Abort if convergence fails on multiple targets |
 | 4 | Grid build | `grid` | <1 s | ~80 | Abort if sample spread insufficient |
 | 5 | Verification sweep | `verification` | 3–5 s (3 held-out points) | ~90 | **Advisory only** — does not block save |
-| 6 | Model fit (LM) | `fitting` | <1 s | 85–95 | Abort if all 4 sign combos fail |
+| 6 | Model fit (LM) | `fitting` | <1 s | 85–95 | verify_signs first → single-combo LM; full four-combo fallback if a sign probe misses |
 | 7 | Held-out parametric gate (#654) | `holdout` | 2–5 s (N unseen targets) | 95–98 | Surface Accept/Retry prompt |
 | 8 | Save | `complete` | <1 s | 100 | Write error logged but does not affect moverCalibrated flag |
 
@@ -128,7 +128,7 @@ sequenceDiagram
 
     Note over Orch: Grid build (<1s, sync)
     Note over Orch,Cam: Verification sweep (3-5s)
-    Note over Orch: LM fit — 4 sign combos + verify_signs
+    Note over Orch: verify_signs probes → single-combo LM fit
     Note over Orch,Cam: Held-out parametric gate (#654)
 
     alt within tolerance
@@ -165,7 +165,7 @@ Two code paths exist. The battleship path is preferred when camera homography is
 **Legacy (`discovery` status):**
 
 - Initial probe at the warmstart aim (model prediction or geometric estimate from camera FOV).
-- Coarse 10×7 grid: pan bins `0.02 + 0.96·i/9`, tilt bins `0.1 + 0.85·j/6` — 70 probes. Per-probe settle `SETTLE = 0.6 s` (legacy discovery uses the fixed constant; the #655 adaptive-settle machinery documented in the mapping phase does not apply here).
+- Coarse 10×7 grid: pan bins `0.02 + 0.96·i/9`, tilt bins `0.1 + 0.85·j/6` — 70 probes. Each probe goes through `_wait_settled`, which reuses the same adaptive-settle machinery (`SETTLE_BASE = 0.4 s` with `[0.4, 0.8, 1.5] s` escalation) used in the mapping phase — not a separate fixed `SETTLE` constant.
 - If the coarse sweep misses, spiral outward from the warmstart aim in rectangular shells at `STEP = 0.05`, up to `MAX_PROBES = 80` total.
 - **Expected duration** — 45–55 s worst-case.
 - **Fallback on failure** — abort with `error`; call `_cal_blackout()`.
@@ -184,7 +184,7 @@ Two code paths exist. The battleship path is preferred when camera homography is
 **v2 Convergence (`sampling` status):**
 
 - For each target from `pick_calibration_targets` (filtered through the camera floor-view polygon per #659), converge the beam on the target pixel via `converge_on_target_pixel`.
-- **Bracket-and-retry refine (#660)** — initial `bracket_step = 0.08`. When the beam is lost, halve the step and walk back toward the best-known-good offset in the error direction. Bracket floor `BRACKET_FLOOR = 0.002`. Reset `bracket_step` to 0.08 on beam re-acquisition. Typical convergence: 5–10 iterations; max 25.
+- **Bracket-and-retry refine (#660)** — initial `bracket_step = 0.08`. When the beam is lost, halve the step and walk back toward the best-known-good offset in the error direction. `BRACKET_FLOOR` is fixture-dependent: `1 / (2^pan_bits − 1)` — about `0.0039` on 8-bit pan and `0.0000153` on 16-bit, so the loop exhausts to the fixture's actual DMX resolution instead of the old 8-bit-only `1/255` floor (#679). Reset `bracket_step` to 0.08 on beam re-acquisition. Typical convergence: 5–10 iterations; max 25.
 - **Expected duration** — 30–60 s (N targets × ~1 s each).
 
 **Fallback** — if fewer than 6 samples are collected, abort with `error`.
@@ -204,10 +204,11 @@ Two code paths exist. The battleship path is preferred when camera homography is
 
 #### 6. Model fit (parametric, Levenberg-Marquardt)
 
-- Try all four sign combinations `(pan_sign, tilt_sign) ∈ {±1}²`. For each combo, run `scipy.optimize.least_squares` with `soft_l1` loss (`f_scale=0.05`) over five continuous parameters (mount yaw/pitch/roll + pan/tilt offsets); up to 120 iterations.
-- Sort candidates by RMS error; pick the best. If the top two candidates agree to within 0.2°, log a mirror-ambiguity warning.
-- **Sign verification (§8.1)** — after fit, nudge pan by +0.02 and detect the pixel shift; nudge tilt +0.02 and do the same. Compute the sign of `Δpx · pan_axis_sign_in_frame` (default +1) → pan_sign; and `Δpy · tilt_axis_sign_in_frame` (default -1) → tilt_sign. Re-fit with `force_signs=(pan_sign, tilt_sign)` to resolve the mirror.
-- **Expected duration** — <1 s including verify_signs probes.
+- **Sign verification (#652 / §8.1) runs FIRST, before the LM fit.** Right after discovery returns `(pan, tilt, pixel)`, the thread issues two extra probes (`pan + 0.02`, `tilt + 0.02`) and calls `verify_signs` on the pixel deltas to compute `(pan_sign, tilt_sign)`. Those signs flow into `fit_model(..., force_signs=(ps, ts))` so the LM runs **one** solve instead of four.
+- Fallback — if any sign probe fails to detect a beam, `force_signs` is left `None` and `fit_model` runs the full four-combo search and picks the lowest-RMS candidate.
+- When the top two candidates agree to within 0.2° RMS AND the caller didn't supply `force_signs`, `FitQuality.mirror_ambiguity` is set True and surfaced on the status endpoint (#679) so the UI can flag the calibration for a manual re-run.
+- `scipy.optimize.least_squares` with `soft_l1` loss (`f_scale=0.05`) fits five continuous parameters (mount yaw/pitch/roll + pan/tilt offsets); up to 120 iterations.
+- **Expected duration** — <1 s total (verify_signs + single LM solve).
 - **Fallback** — if all 4 combos fail to converge, raise `RuntimeError`; caller aborts with `error`.
 
 #### 7. Held-out parametric gate (#654)
@@ -282,7 +283,7 @@ Constants in `desktop/shared/mover_calibrator.py`:
 | `MAX_SAMPLES` | 80 | Hard cap on BFS samples |
 | `COARSE_PAN` | 10 | Legacy coarse grid pan bins |
 | `COARSE_TILT` | 7 | Legacy coarse grid tilt bins |
-| `BRACKET_FLOOR` | 0.002 | Convergence refine floor (~1° on 540° pan) |
+| `BRACKET_FLOOR` | `1 / (2^pan_bits − 1)` | Convergence refine floor — fixture-dependent (8-bit → `≈0.0039`, 16-bit → `≈0.0000153`) (#679) |
 
 Constants in `desktop/shared/mover_control.py`:
 

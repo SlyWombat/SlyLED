@@ -658,7 +658,7 @@ def _adaptive_coarse_steps(pan_range_deg, tilt_range_deg, beam_width_deg):
 def _refine_battleship_hit(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                            seed_pan, seed_tilt, coarse_pan_span,
                            coarse_tilt_span, profile=None,
-                           refine_steps=3):
+                           refine_steps=3, camera_resolution=None):
     """#660 / review gap — coarse-to-fine 2nd-pass around a confirmed hit.
 
     The coarse grid cell is up to half its own span away from the true
@@ -693,19 +693,28 @@ def _refine_battleship_hit(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                 beam = _beam_detect_verified(camera_ip, cam_idx, color)
             if beam is None:
                 continue
-            # Score: oversample and take the median, then reward points
+            # Score: oversample and take the median (#679 — keep the
+            # module default OVERSAMPLE_N=3; n=2 in _beam_detect_oversampled
+            # hits the even-length median path which averages and undoes
+            # the outlier rejection #655 was built for), then reward points
             # near image centre (camera-view priority — margins are
             # unreliable for BFS seed).
             over = _beam_detect_oversampled(camera_ip, cam_idx, color,
-                                            center=True, n=2,
-                                            gap_ms=30, min_valid=1)
+                                            center=True, gap_ms=30, min_valid=1)
             if over is None:
                 bx, by = beam[0], beam[1]
             else:
                 bx, by = over
-            # Prefer points further from the frame edge. We don't know
-            # the exact resolution, but 320 × 240 is a safe inner band.
-            score = max(0.0, min(bx - 40, 600 - bx)) + max(0.0, min(by - 40, 400 - by))
+            # #679 — resolution-aware inner-band score. The previous 640×480
+            # formula peaked at (320, 220) and clamped to zero beyond
+            # (640, 440), so a 1080p frame centre (960, 540) scored 0 and
+            # the function biased AWAY from the real centre. When the
+            # caller doesn't know the frame size we fall back to 640×480,
+            # which at least matches the legacy behaviour on SD cameras.
+            cam_w, cam_h = camera_resolution or (640, 480)
+            margin = 40
+            score = (max(0.0, min(bx - margin, cam_w - margin - bx)) +
+                     max(0.0, min(by - margin, cam_h - margin - by)))
             if score > best_score:
                 best_score = score
                 best = (p, t, bx, by)
@@ -720,7 +729,8 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                          pan_range_deg=None, tilt_range_deg=None,
                          beam_width_deg=None,
                          confirm_nudge_delta=0.02, refine=True,
-                         reject_reflection=True, progress_cb=None):
+                         reject_reflection=True, progress_cb=None,
+                         camera_resolution=None):
     """Coarse-to-fine discovery: sample a sparse `coarse_steps × coarse_
     steps` grid across pan/tilt ∈ [0, 1] first, then confirm any hit
     with a small nudge (rejects reflections).
@@ -902,7 +912,8 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
             if refine:
                 refined = _refine_battleship_hit(
                     bridge_ip, camera_ip, mover_addr, cam_idx, color,
-                    pan, tilt, pan_span, tilt_span, profile=profile)
+                    pan, tilt, pan_span, tilt_span, profile=profile,
+                    camera_resolution=camera_resolution)
                 if refined is not None:
                     log.info("battleship_discover: CONFIRMED + refined at "
                              "probe %d/%d: coarse (%.3f, %.3f) → refined "
@@ -976,7 +987,22 @@ def converge_on_target_pixel(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     # warm-starting to discovery or burning iterations at the same pose.
     # bracket_step is in normalised pan/tilt units (1.0 = full range).
     bracket_step = 0.08
-    BRACKET_FLOOR = 1.0 / 255.0  # give up below one 8-bit DMX increment
+    # #679 — floor at one DMX increment of the fixture's actual pan
+    # resolution. The old hardcoded 1/255 was 16-bit-blind: on a 16-bit
+    # pan channel (most modern moving heads), 1/255 ≈ 257 DMX units, so
+    # the bracket-retry abandoned the search while the step was still
+    # physically coarse. Fall back to 8-bit only when the profile is
+    # absent or silent on the pan channel.
+    pan_bits = 8
+    _prof = profile if profile is not None else _active_profile
+    if _prof:
+        try:
+            pan_bits = int(next((c.get("bits", 8)
+                                  for c in _prof.get("channels", [])
+                                  if c.get("type") == "pan"), 8))
+        except Exception:
+            pan_bits = 8
+    BRACKET_FLOOR = 1.0 / float(2 ** pan_bits - 1)
     last_err_x = None
     last_err_y = None
     try:

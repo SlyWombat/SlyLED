@@ -4285,10 +4285,16 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
                            f"pixel ({ev.get('pixelX')},{ev.get('pixelY')}) "
                            f"— verifying with pan/tilt nudge")
 
+    cam_res = None
+    cw = cam.get("resolutionW")
+    ch = cam.get("resolutionH")
+    if cw and ch:
+        cam_res = (int(cw), int(ch))
     discovered = _mcal.battleship_discover(
         bridge_ip, cam_ip, addr, cam_idx, mover_color,
         profile=prof_info,
         progress_cb=_discovery_progress,
+        camera_resolution=cam_res,
     )
     if discovered is None:
         job["error"] = ("Battleship discovery found no beam. Check "
@@ -4729,9 +4735,26 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
     job = _mover_cal_jobs[str(fid)]
 
     def _cal_blackout():
-        """Blackout fixture and release the calibration lock when cal ends."""
+        """Blackout fixture and release the calibration lock when cal ends.
+
+        #679 — target only this fixture's channel window. The previous
+        version blasted `[0]*512` onto the universe, which clobbered any
+        other fixture (a show mover, a wash) currently lit on the same
+        universe. Matches the targeted path /cancel has used since #594.
+        """
         try:
-            _mcal._hold_dmx(bridge_ip, [0]*512, 0.3)
+            fx = next((f for f in _fixtures if f["id"] == fid), None)
+            if fx:
+                uni = fx.get("dmxUniverse", 1)
+                addr = fx.get("dmxStartAddr", 1)
+                pid = fx.get("dmxProfileId")
+                info = _profile_lib.channel_info(pid) if pid else None
+                ch_count = int((info or {}).get("channelCount") or
+                               fx.get("dmxChannelCount") or 13)
+                engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+                if engine:
+                    uni_buf = engine.get_universe(uni)
+                    uni_buf.set_channels(addr, [0] * ch_count)
         except Exception:
             pass
         # #511 — always release the lock on exit.
@@ -4982,6 +5005,9 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
                           f.get("tiltRange") or 270)
         beam_width_deg = ((prof_info or {}).get("beamWidth") or
                           f.get("beamWidth") or 15)
+        cam_res = None
+        if cam.get("resolutionW") and cam.get("resolutionH"):
+            cam_res = (int(cam["resolutionW"]), int(cam["resolutionH"]))
         found = _mcal.battleship_discover(
             bridge_ip, cam_ip, addr, cam_idx, mover_color,
             seed_pan=start_pan, seed_tilt=start_tilt,
@@ -4989,6 +5015,7 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
             pan_range_deg=pan_range_deg,
             tilt_range_deg=tilt_range_deg,
             beam_width_deg=beam_width_deg,
+            camera_resolution=cam_res,
             progress_cb=_battleship_progress)
         elapsed = time.monotonic() - phase_start
 
@@ -5798,6 +5825,11 @@ def api_mover_cal_aim(fid):
     ParametricFixtureModel is the authoritative inverse for show bake +
     track actions; this aim API is a diagnostic tool only.
     """
+    # #679 — respect the calibration lock: if the fixture is mid-run,
+    # writing pan/tilt through this diagnostic endpoint races the
+    # calibration thread and corrupts its samples (violates #511).
+    if _fixture_is_calibrating(fid):
+        return jsonify(err="Fixture is currently calibrating"), 409
     cal = _mover_cal.get(str(fid))
     if not cal or (not cal.get("grid") and not cal.get("samples")):
         return jsonify(err="Fixture not calibrated"), 400
@@ -6208,10 +6240,42 @@ def _aruco_multi_snapshot_detect(f, max_snapshots=3, blackout_bridge_ip=None):
     frame_size = None
     last_err = None
     detected_total = 0
+    # #679 — universe-wide blackout between snapshots clobbered every
+    # other fixture on the universe (a show mover, a wash) for ~150 ms
+    # per snapshot. Blackout only the movers that don't currently hold
+    # a calibration lock, limited to the target camera's universe.
+    blackout_fixtures = []
+    cam_uni = f.get("dmxUniverse")
+    if blackout_bridge_ip:
+        for fx in _fixtures:
+            if fx.get("fixtureType") != "dmx":
+                continue
+            if fx.get("isCalibrating"):
+                continue
+            if cam_uni is not None and fx.get("dmxUniverse") != cam_uni:
+                continue
+            pid = fx.get("dmxProfileId")
+            info = _profile_lib.channel_info(pid) if pid else None
+            cm = (info or {}).get("channel_map") or {}
+            # Only movers (pan+tilt present) need to be darkened for ArUco
+            # snapshot — washes and LED strings don't project a beam onto
+            # the floor that would confuse the marker detector.
+            if "pan" not in cm or "tilt" not in cm:
+                continue
+            ch_count = int((info or {}).get("channelCount") or
+                           fx.get("dmxChannelCount") or 13)
+            blackout_fixtures.append((fx.get("dmxUniverse", 1),
+                                      fx.get("dmxStartAddr", 1),
+                                      ch_count))
     for attempt in range(max(1, int(max_snapshots))):
-        if blackout_bridge_ip:
+        if blackout_fixtures:
             try:
-                _mcal._hold_dmx(blackout_bridge_ip, [0] * 512, 0.15)
+                engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+                if engine:
+                    for uni, addr, chc in blackout_fixtures:
+                        engine.get_universe(uni).set_channels(addr, [0] * chc)
+                # Brief settle so the fixture has actually darkened before the snapshot.
+                time.sleep(0.15)
             except Exception:
                 pass
         r = _aruco_snapshot_detect(f)
