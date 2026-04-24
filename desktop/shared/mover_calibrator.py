@@ -131,6 +131,14 @@ class CalibrationAborted(Exception):
     """Raised when cancellation is requested while calibration is running."""
 
 
+class _R_Found(Exception):
+    """#682-R — sentinel for early-exit from the multi-round refinement
+    loop in battleship_discover. Not an error; carries the confirmed
+    (pan, tilt, px, py) tuple."""
+    def __init__(self, value):
+        self.value = value
+
+
 def arm_cancel():
     """Clear the cancel flag at the start of a new calibration job."""
     _cancel_event.clear()
@@ -663,8 +671,9 @@ def converge_on_stage_target(bridge_ip, camera_ip, mover_addr, cam_idx, color,
 
 def _adaptive_coarse_steps(pan_range_deg, tilt_range_deg, beam_width_deg,
                             pan_min=3, pan_max=8, tilt_min=3, tilt_max=6):
-    """#661 / review gap — scale battleship grid density by the fixture's
-    reach and beam width.
+    """#661 + #682-Q/S — scale battleship grid density by the fixture's
+    reach and beam width, exploiting geometric redundancy on wide-range
+    fixtures.
 
     A 4×4 grid on a 540° pan fixture is one probe per 135° of pan; on a
     90° pan fixture it's one per 22.5°. At a 15° beam width both cases
@@ -672,14 +681,41 @@ def _adaptive_coarse_steps(pan_range_deg, tilt_range_deg, beam_width_deg,
     adjacent probes. Target step ≈ 2 × beam_width so neighbouring
     probes land with ~one-beam gap on the floor.
 
+    **#682-S — pan clamp to 360°.** Rotations past a full turn re-aim at
+    azimuths the first 360° already covered (a 540° fixture has 180° of
+    redundant pan; 720° has 360°). Clamp ``effective_pan`` to 360 so
+    those redundant DMX values aren't scanned.
+
+    **#682-Q — half tilt when pan ≥ 360°.** When pan can reach every
+    azimuth, any direction at ``(P, T)`` is also reachable at
+    ``((P+180°) mod 360°, 180°-T)``. One half of the tilt range exactly
+    duplicates the other — scan HALF tilt only. Net effect on a typical
+    540°/270° stage mover: 8×3 = 24 probes instead of 8×6 = 48.
+
     #680 — `pan_min`/`pan_max`/`tilt_min`/`tilt_max` are operator-tunable
     clamps (defaults match the legacy hardcoded values).
+
+    Returns ``(pan_steps, tilt_steps)``. The caller must interpret
+    ``tilt_steps`` with knowledge of whether the pan-360 branch fired —
+    see ``_adaptive_coarse_grid`` which emits normalised pan/tilt tuples
+    honouring the half-tilt convention.
     """
     target_step = max(30.0, 2.0 * max(5.0, float(beam_width_deg or 15.0)))
-    pan_steps = max(pan_min, min(pan_max,
-                                   round((pan_range_deg or 540.0) / target_step)))
-    tilt_steps = max(tilt_min, min(tilt_max,
-                                     round((tilt_range_deg or 270.0) / target_step)))
+    pr = float(pan_range_deg or 540.0)
+    tr = float(tilt_range_deg or 270.0)
+    # #682-S — pan rotations past 360° are redundant regardless of tilt.
+    effective_pan = min(pr, 360.0)
+    pan_steps = max(pan_min, min(pan_max, round(effective_pan / target_step)))
+    # #682-Q — when pan covers a full circle, half of tilt is redundant.
+    if pr >= 360.0:
+        effective_tilt = min(tr, 180.0) / 2.0
+        tilt_low = max(2, min(tilt_min, 3))   # allow 2 when caller asks for 2
+        tilt_steps = max(tilt_low, min(3,
+                                         round(effective_tilt / target_step)))
+    else:
+        effective_tilt = tr
+        tilt_steps = max(tilt_min, min(tilt_max,
+                                         round(effective_tilt / target_step)))
     return int(pan_steps), int(tilt_steps)
 
 
@@ -756,12 +792,13 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                          coarse_tilt_steps=None,
                          pan_range_deg=None, tilt_range_deg=None,
                          beam_width_deg=None,
-                         confirm_nudge_delta=0.02, refine=True,
+                         confirm_nudge_delta="auto", refine=True,
                          reject_reflection=True, progress_cb=None,
                          camera_resolution=None,
                          coarse_pan_min=3, coarse_pan_max=8,
                          coarse_tilt_min=3, coarse_tilt_max=6,
-                         grid_filter=None):
+                         grid_filter=None, mounted_inverted=False,
+                         cancel_check=None):
     """Coarse-to-fine discovery: sample a sparse `coarse_steps × coarse_
     steps` grid across pan/tilt ∈ [0, 1] first, then confirm any hit
     with a small nudge (rejects reflections).
@@ -810,8 +847,46 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         coarse_pan_steps = coarse_steps if coarse_steps is not None else 4
     if coarse_tilt_steps is None:
         coarse_tilt_steps = coarse_steps if coarse_steps is not None else 4
-    pan_span = 1.0 / max(1, coarse_pan_steps)
-    tilt_span = 1.0 / max(1, coarse_tilt_steps)
+
+    # #682-Q/S — compute the effective normalised-DMX band to scan.
+    # pan_frac: what fraction of the normalised pan range we sweep. Past
+    # 360°, the rest is redundant (duplicate azimuths), so clamp.
+    # tilt_frac + tilt_offset: when pan reaches every azimuth, one half
+    # of the tilt range duplicates the other — scan HALF. Choose which
+    # half based on how the fixture is mounted so the scanned side aims
+    # into the operator's scene, not at the fixture's own yoke.
+    pr_deg = float(pan_range_deg or 540.0)
+    tr_deg = float(tilt_range_deg or 270.0)
+    pan_frac = min(360.0, pr_deg) / pr_deg if pr_deg > 0 else 1.0
+    if pr_deg >= 360.0:
+        tilt_frac = 0.5
+        # Ceiling mount (inverted) → scan lower half of normalised tilt
+        # (DMX < 128, aims further below horizontal). Floor mount →
+        # upper half (DMX >= 128). Either way the skipped half is
+        # geometrically redundant.
+        tilt_offset = 0.0 if bool(mounted_inverted) else 0.5
+    else:
+        tilt_frac = 1.0
+        tilt_offset = 0.0
+    pan_span = pan_frac / max(1, coarse_pan_steps)
+    tilt_span = tilt_frac / max(1, coarse_tilt_steps)
+
+    # #682-H — resolve the confirm nudge amplitude. "auto" scales to a
+    # target mechanical delta of 5° (≈ one beam-width on a typical beam
+    # profile), clamped into [0.005, 0.02] normalised. Explicit numeric
+    # values pass through unchanged (operator override via #680 settings).
+    if confirm_nudge_delta in (None, "auto"):
+        target_mech_deg = 5.0
+        eff_nudge = target_mech_deg / max(1.0, pr_deg)
+        confirm_nudge_delta = max(0.005, min(0.02, eff_nudge))
+        log.info("battleship_discover: auto nudge %.4f (pan_range=%s°, "
+                 "target %g° mechanical)",
+                 confirm_nudge_delta, pan_range_deg, target_mech_deg)
+    else:
+        try:
+            confirm_nudge_delta = float(confirm_nudge_delta)
+        except (TypeError, ValueError):
+            confirm_nudge_delta = 0.02
 
     # Build the coarse grid. Prefer a uniform spread so the physical
     # reach pattern of the fixture doesn't bias us toward the seed.
@@ -819,7 +894,7 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     for i in range(coarse_pan_steps):
         p = (i + 0.5) * pan_span
         for j in range(coarse_tilt_steps):
-            t = (j + 0.5) * tilt_span
+            t = tilt_offset + (j + 0.5) * tilt_span
             grid.append((p, t))
     # #681-B — pre-filter candidates to those that project onto a camera-
     # visible floor point. `grid_filter` returns True if the aim probably
@@ -898,101 +973,237 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                     break
         return pan_shift, tilt_shift
 
-    try:
-        for idx, (pan, tilt) in enumerate(grid):
+    # #682-G — per-probe outcome counters exposed via progress_cb and
+    # returned on the `outcome_counts` attribute so the SPA can render
+    # "N candidates, M rejected as reflection, K out-of-frame".
+    outcome_counts = {"candidatesFound": 0, "candidatesConfirmed": 0,
+                       "candidatesRejectedAsReflection": 0,
+                       "candidatesRejectedOutOfFrame": 0,
+                       "probesRun": 0}
+
+    def _probe_cell(pan, tilt, idx, total):
+        """Full probe pipeline for one grid cell: flash detect → log
+        candidate → confirm nudge → reflection reject → refine.
+        Returns (pan, tilt, px, py) on confirmed beam, None otherwise.
+        Side-effects: mutates `outcome_counts` for #682-G and emits
+        per-probe events via progress_cb.
+        """
+        outcome_counts["probesRun"] += 1
+        beam = _beam_detect_flash(bridge_ip, camera_ip, cam_idx,
+                                   mover_addr, pan, tilt, color, dmx)
+        if beam is None:
+            _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
+            _hold_dmx(bridge_ip, dmx, 0.3)
+            beam = _beam_detect_verified(camera_ip, cam_idx, color)
+        if beam is None:
+            return None
+        px0, py0 = beam[0], beam[1]
+        outcome_counts["candidatesFound"] += 1
+        log.info("battleship_discover: candidate %d/%d pan=%.3f "
+                 "tilt=%.3f px=(%d,%d) — confirming",
+                 idx + 1, total, pan, tilt, px0, py0)
+        if progress_cb:
+            try:
+                progress_cb({"stage": "beam-found",
+                              "probe": idx + 1, "total": total,
+                              "pan": pan, "tilt": tilt,
+                              "pixelX": int(px0), "pixelY": int(py0)})
+            except Exception:
+                pass
+        pan_shift, tilt_shift = _confirm(pan, tilt, px0, py0)
+        if not (pan_shift > 8 or tilt_shift > 8):
+            outcome_counts["candidatesRejectedOutOfFrame"] += 1
+            log.warning("battleship_discover: probe %d/%d REJECTED "
+                        "(out-of-frame: pan-shift %.0fpx, "
+                        "tilt-shift %.0fpx, threshold 8)",
+                        idx + 1, total, pan_shift, tilt_shift)
+            if progress_cb:
+                try:
+                    progress_cb({"stage": "confirm-rejected",
+                                  "probe": idx + 1, "total": total,
+                                  "reason": "out-of-frame",
+                                  "panShiftPx": round(pan_shift, 1),
+                                  "tiltShiftPx": round(tilt_shift, 1)})
+                except Exception:
+                    pass
+            return None
+        if reject_reflection:
+            blink = _beam_detect_flash(bridge_ip, camera_ip, cam_idx,
+                                        mover_addr, pan, tilt, color, dmx)
+            if blink is None:
+                outcome_counts["candidatesRejectedAsReflection"] += 1
+                log.warning("battleship_discover: probe %d/%d REJECTED "
+                            "(reflection — blink verify failed at "
+                            "(%.3f, %.3f))",
+                            idx + 1, total, pan, tilt)
+                if progress_cb:
+                    try:
+                        progress_cb({"stage": "confirm-rejected",
+                                      "probe": idx + 1, "total": total,
+                                      "reason": "reflection"})
+                    except Exception:
+                        pass
+                return None
+            px0, py0 = blink[0], blink[1]
+        outcome_counts["candidatesConfirmed"] += 1
+        if refine:
+            refined = _refine_battleship_hit(
+                bridge_ip, camera_ip, mover_addr, cam_idx, color,
+                pan, tilt, pan_span, tilt_span, profile=profile,
+                camera_resolution=camera_resolution)
+            if refined is not None:
+                log.info("battleship_discover: CONFIRMED + refined "
+                         "probe %d/%d: (%.3f,%.3f) → (%.3f,%.3f) "
+                         "px=(%d,%d) [pan-shift %.0fpx, tilt-shift %.0fpx]",
+                         idx + 1, total, pan, tilt,
+                         refined[0], refined[1],
+                         int(refined[2]), int(refined[3]),
+                         pan_shift, tilt_shift)
+                if progress_cb:
+                    try:
+                        progress_cb({"stage": "confirmed",
+                                      "probe": idx + 1, "total": total,
+                                      "panShiftPx": round(pan_shift, 1),
+                                      "tiltShiftPx": round(tilt_shift, 1),
+                                      "refined": True})
+                    except Exception:
+                        pass
+                return refined
+        log.info("battleship_discover: CONFIRMED probe %d/%d "
+                 "(pan-shift %.0fpx, tilt-shift %.0fpx)",
+                 idx + 1, total, pan_shift, tilt_shift)
+        if progress_cb:
+            try:
+                progress_cb({"stage": "confirmed",
+                              "probe": idx + 1, "total": total,
+                              "panShiftPx": round(pan_shift, 1),
+                              "tiltShiftPx": round(tilt_shift, 1),
+                              "refined": False})
+            except Exception:
+                pass
+        return (pan, tilt, px0, py0)
+
+    def _scan_cells(cells, round_label, start_idx, total_all):
+        """Scan a batch of cells via _probe_cell. Returns confirmed
+        tuple on first hit or None."""
+        for local_idx, (pan, tilt) in enumerate(cells):
+            idx = start_idx + local_idx
             _check_cancel()
             if progress_cb:
                 try:
                     progress_cb({"stage": "grid-probe",
                                   "probe": idx + 1,
-                                  "total": len(grid),
-                                  "pan": pan, "tilt": tilt})
-                except Exception:
-                    pass
-            # Use flash detection (beam ON → OFF diff) rather than
-            # color-filter detection — the latter fails when the
-            # fixture's actual beam colour differs from the requested
-            # `color` (e.g. 350W color-wheel slot doesn't match the
-            # requested RGB, and the fixture output is effectively
-            # white regardless of RGB channel values). Flash cares
-            # only about what-changed-when-we-toggled, so it works
-            # regardless of actual beam colour.
-            beam = _beam_detect_flash(bridge_ip, camera_ip, cam_idx,
-                                       mover_addr, pan, tilt, color, dmx)
-            if beam is None:
-                # Fall back to color-filtered if flash endpoint isn't
-                # available (older camera node firmware), just in case.
-                _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
-                _hold_dmx(bridge_ip, dmx, 0.3)
-                beam = _beam_detect_verified(camera_ip, cam_idx, color)
-            if beam is None:
-                continue
-            px0, py0 = beam[0], beam[1]
-            log.info("battleship_discover: coarse HIT %d/%d "
-                     "pan=%.3f tilt=%.3f px=(%d,%d) — confirming",
-                     idx + 1, len(grid), pan, tilt, px0, py0)
-            if progress_cb:
-                try:
-                    progress_cb({"stage": "beam-found",
-                                  "probe": idx + 1, "total": len(grid),
+                                  "total": total_all,
                                   "pan": pan, "tilt": tilt,
-                                  "pixelX": int(px0), "pixelY": int(py0)})
+                                  "round": round_label})
                 except Exception:
                     pass
-            pan_shift, tilt_shift = _confirm(pan, tilt, px0, py0)
-            if not (pan_shift > 8 or tilt_shift > 8):
-                log.warning("battleship_discover: probe %d/%d candidate at "
-                            "(%.3f, %.3f) failed confirm (pan-shift %.0fpx, "
-                            "tilt-shift %.0fpx) — continuing search",
-                            idx + 1, len(grid), pan_shift, tilt_shift)
-                continue
+            found = _probe_cell(pan, tilt, idx, total_all)
+            if found is not None:
+                return found
+        return None
 
-            # #658 / review gap — second flash-blink test at the confirmed
-            # (pan, tilt) rejects reflections that tracked the beam's
-            # nudge but came from a reflective surface (beam OFF should
-            # make the pixel go dark; a reflection of *something else*
-            # would persist). `_beam_detect_flash` already does the
-            # on-vs-off diff we need — re-run it here as a gate.
-            if reject_reflection:
-                blink = _beam_detect_flash(bridge_ip, camera_ip, cam_idx,
-                                            mover_addr, pan, tilt, color,
-                                            dmx)
-                if blink is None:
-                    log.warning("battleship_discover: probe %d/%d reflection-"
-                                "rejection blink did not recover the beam "
-                                "— candidate at (%.3f, %.3f) rejected",
-                                idx + 1, len(grid), pan, tilt)
-                    continue
-                # Flash succeeded; prefer its (higher-confidence) pixel.
-                px0, py0 = blink[0], blink[1]
+    # Preserve seed-sort within Round 0 (existing behaviour).
+    try:
+        # #682-R — progressive refinement. After Round 0 (coarse) fails,
+        # split tilt axis (Round 1), then pan axis (Round 2), alternating
+        # until the per-axis step drops below half a beam-width.
+        pan_vals = sorted({p for p, _ in grid})
+        tilt_vals = sorted({t for _, t in grid})
+        bw = float(beam_width_deg or 15.0)
+        # Target: stop when grid step < bw/2 on BOTH axes. Convert to
+        # normalised units for the comparison.
+        def _pan_step_deg():
+            if len(pan_vals) < 2:
+                return pr_deg
+            return abs(pan_vals[1] - pan_vals[0]) * pr_deg
+        def _tilt_step_deg():
+            if len(tilt_vals) < 2:
+                return tr_deg
+            return abs(tilt_vals[1] - tilt_vals[0]) * tr_deg
 
-            # #660 — coarse-to-fine refine around the confirmed hit so
-            # BFS starts near the true beam centre, not a half-cell
-            # offset from it.
-            if refine:
-                refined = _refine_battleship_hit(
-                    bridge_ip, camera_ip, mover_addr, cam_idx, color,
-                    pan, tilt, pan_span, tilt_span, profile=profile,
-                    camera_resolution=camera_resolution)
-                if refined is not None:
-                    log.info("battleship_discover: CONFIRMED + refined at "
-                             "probe %d/%d: coarse (%.3f, %.3f) → refined "
-                             "(%.3f, %.3f) px=(%d, %d)",
-                             idx + 1, len(grid), pan, tilt,
-                             refined[0], refined[1],
-                             int(refined[2]), int(refined[3]))
-                    return refined
+        # Round 0: the coarse grid (grid is already sorted by seed).
+        cumulative_probes = len(grid)
+        total_estimate = cumulative_probes  # updated as rounds add cells
+        found = _scan_cells(grid, "coarse", 0, cumulative_probes)
+        if found is not None:
+            found_tuple = found
+            raise _R_Found(found)
 
-            log.info("battleship_discover: CONFIRMED at probe %d/%d "
-                     "(pan-shift %.0fpx, tilt-shift %.0fpx)",
-                     idx + 1, len(grid), pan_shift, tilt_shift)
-            return (pan, tilt, px0, py0)
+        MAX_REFINE_ROUNDS = 3
+        axes_next = "tilt"  # tilt-first per #682-R spec
+        probed_cells = list(grid)
+        for round_i in range(1, MAX_REFINE_ROUNDS + 1):
+            if axes_next == "tilt":
+                if _tilt_step_deg() < bw / 2.0:
+                    log.info("battleship_discover: refine stopped — tilt "
+                             "step %.1f° < beam_width/2 %.1f°",
+                             _tilt_step_deg(), bw / 2.0)
+                    break
+                new_tilts = []
+                for i in range(len(tilt_vals) - 1):
+                    new_tilts.append((tilt_vals[i] + tilt_vals[i + 1]) / 2.0)
+                if not new_tilts:
+                    break
+                new_cells = [(p, t) for t in new_tilts for p in pan_vals]
+                tilt_vals = sorted(set(tilt_vals) | set(new_tilts))
+                axes_next = "pan"
+            else:
+                if _pan_step_deg() < bw / 2.0:
+                    log.info("battleship_discover: refine stopped — pan "
+                             "step %.1f° < beam_width/2 %.1f°",
+                             _pan_step_deg(), bw / 2.0)
+                    break
+                new_pans = []
+                for i in range(len(pan_vals) - 1):
+                    new_pans.append((pan_vals[i] + pan_vals[i + 1]) / 2.0)
+                if not new_pans:
+                    break
+                new_cells = [(p, t) for p in new_pans for t in tilt_vals]
+                pan_vals = sorted(set(pan_vals) | set(new_pans))
+                axes_next = "tilt"
+            if not new_cells:
+                break
+            # Seed-sort within the new batch so we still pick the most
+            # promising cells first.
+            if seed_pan is not None and seed_tilt is not None:
+                new_cells.sort(key=lambda xy: (xy[0] - seed_pan) ** 2 +
+                                                (xy[1] - seed_tilt) ** 2)
+            start_idx = cumulative_probes
+            cumulative_probes += len(new_cells)
+            log.info("battleship_discover: round %d (%s-split) — %d new "
+                     "cells (cumulative %d)",
+                     round_i, axes_next, len(new_cells), cumulative_probes)
+            found = _scan_cells(new_cells, f"round-{round_i}",
+                                 start_idx, cumulative_probes)
+            probed_cells.extend(new_cells)
+            if found is not None:
+                raise _R_Found(found)
+    except _R_Found as r:
+        # Surface outcome counts so the caller can log them after the fn
+        # returns (battleship_discover doesn't have a dedicated
+        # side-channel; attach on the return tuple via an attribute isn't
+        # feasible for a bare tuple, so log here).
+        log.info("battleship_discover: outcomes %s", outcome_counts)
+        if progress_cb:
+            try:
+                progress_cb({"stage": "outcome-summary",
+                              **outcome_counts})
+            except Exception:
+                pass
+        _active_profile = prev_profile
+        return r.value
     finally:
         _active_profile = prev_profile
 
-    log.warning("battleship_discover: no confirmed beam across %d "
-                "coarse probes — fixture, camera FOV, or DMX path may "
-                "be misconfigured", len(grid))
+    log.warning("battleship_discover: no confirmed beam across %d probes "
+                "(outcomes %s) — fixture, camera FOV, or DMX path may "
+                "be misconfigured", cumulative_probes, outcome_counts)
+    if progress_cb:
+        try:
+            progress_cb({"stage": "outcome-summary", **outcome_counts})
+        except Exception:
+            pass
     return None
 
 

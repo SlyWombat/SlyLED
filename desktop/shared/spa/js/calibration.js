@@ -1835,9 +1835,14 @@ function _moverCalPoll(){
       _moverCalRenderComplete(r);
       (_fixtures||[]).forEach(function(f){if(f.id===_moverCalFid)f.moverCalibrated=true;});
       renderSidebar();
+      // #682 stale-SPA — one more delayed poll so tail-end server log
+      // entries (camera-lock restore, blackout confirmation, final fit
+      // summary) land in the SPA before the operator closes.
+      _moverCalTimer=setTimeout(_moverCalPollFinal,1500);
     }else if(r.status==='error'){
       if(phase)phase.innerHTML='<span style="color:#f66">'+(r.error||'Unknown error')+'</span>';
       _moverCalUpdateActions('error');
+      _moverCalTimer=setTimeout(_moverCalPollFinal,1500);
     }else if(r.status==='cancelled'){
       // #594/#602 — Cancel hit. The fixture has already been blacked out
       // and the lock released on the server. Flip the button state and
@@ -1845,10 +1850,27 @@ function _moverCalPoll(){
       if(phase)phase.innerHTML='<span style="color:#f59e0b">Cancelled</span>';
       _moverCalUpdateActions('cancelled');
       _moverCalCancellingFid=null;
+      // #682 stale-SPA — refresh log + DMX panel one last time so the
+      // operator sees the cancel-time blackout entry and the final
+      // camera-lock restore line instead of the pre-cancel snapshot.
+      _moverCalTimer=setTimeout(_moverCalPollFinal,1500);
     }
   });
 }
 var _moverCalCancellingFid=null;  // #602 — set while awaiting server abort confirmation
+
+// #682 stale-SPA — one-shot re-poll after terminal status to pick up
+// tail-end log entries (camera-lock restore, final blackout). Doesn't
+// re-enter the main running-state poll loop; just refreshes the probe /
+// log / DMX panels against whatever the server last wrote, even if the
+// modal is already displaying the terminal status banner.
+function _moverCalPollFinal(){
+  if(!_moverCalFid)return;
+  ra('GET','/api/calibration/mover/'+_moverCalFid+'/status',null,function(r){
+    if(!r)return;
+    _moverCalRenderProbe(r);
+  });
+}
 
 function _moverCalRenderComplete(r){
   var status=document.getElementById('mcal-status');

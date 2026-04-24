@@ -52,14 +52,14 @@ def run():
 
         # Happy path — inside clamps.
         r = c.post('/api/settings', json={'calibrationTuning': {
-            'discoveryBattleshipS': 45.0,
+            'discoveryBattleshipS': 90.0,  # #682-T raised clamp min 20 → 60
             'bfsMaxSamples': 120,
             'settleEscalateS': [0.3, 0.6, 1.2],
         }})
         ok('#680 accepts valid tuning', r.status_code == 200 and r.get_json().get('ok'))
         d = c.get('/api/settings').get_json()
         ct = d.get('calibrationTuning') or {}
-        ok('#680 override persisted (float)', ct.get('discoveryBattleshipS') == 45.0)
+        ok('#680 override persisted (float)', ct.get('discoveryBattleshipS') == 90.0)
         ok('#680 override persisted (int)',   ct.get('bfsMaxSamples') == 120)
         ok('#680 override persisted (list)',  ct.get('settleEscalateS') == [0.3, 0.6, 1.2])
 

@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.6"
+VERSION = "1.6.7"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -4233,21 +4233,43 @@ def _mover_cal_thread_markers(fid, cam, bridge_ip, mover_color,
     CalibrationAborted cleanly (like the v2 wrapper)."""
     job = _mover_cal_jobs[str(fid)]
     try:
-        _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
-                                        warmup, warmup_seconds)
-    except _mcal.CalibrationAborted:
-        log.info("MOVER-CAL markers %d: cancelled by operator", fid)
-        job["error"] = "Cancelled by operator"; job["status"] = "cancelled"
-        job["phase"] = "cancelled"
-        _mcal.arm_cancel()
-        _targeted_fixture_blackout(fid)
-        _set_calibrating(fid, False)
+        try:
+            _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
+                                            warmup, warmup_seconds)
+        except _mcal.CalibrationAborted:
+            log.info("MOVER-CAL markers %d: cancelled by operator", fid)
+            job["error"] = "Cancelled by operator"; job["status"] = "cancelled"
+            job["phase"] = "cancelled"
+            _mcal.arm_cancel()
+            _targeted_fixture_blackout(fid)
+            _set_calibrating(fid, False)
+        except Exception as e:
+            log.exception("MOVER-CAL markers %d: unhandled", fid)
+            job["error"] = f"Unhandled: {e}"; job["status"] = "error"
+            _mcal.arm_cancel()
+            _targeted_fixture_blackout(fid)
+            _set_calibrating(fid, False)
+    finally:
+        # #682-N — ALWAYS restore camera auto controls, no matter how the
+        # body exited (success, explicit error-return, abort, crash).
+        _restore_camera_lock(job, cam)
+
+
+def _restore_camera_lock(job, cam):
+    """#682-N — restore the pre-cal V4L2 auto controls saved in
+    `job.cameraLock`. Safe no-op when lock wasn't engaged."""
+    lock = (job or {}).get("cameraLock") or {}
+    if not lock.get("locked"):
+        return
+    ip = (cam or {}).get("cameraIp")
+    if not ip:
+        return
+    try:
+        r = _cam_settings.restore_auto_controls(ip, cam.get("cameraIdx", 0), lock)
+        if r.get("ok") and r.get("restored"):
+            _mcal_log(job, f"Camera auto controls restored: {r['restored']}")
     except Exception as e:
-        log.exception("MOVER-CAL markers %d: unhandled", fid)
-        job["error"] = f"Unhandled: {e}"; job["status"] = "error"
-        _mcal.arm_cancel()
-        _targeted_fixture_blackout(fid)
-        _set_calibrating(fid, False)
+        log.warning("camera lock restore failed: %s", e)
 
 
 def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
@@ -4299,14 +4321,53 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
     except Exception:
         pass
 
+    # #682-N — lock camera auto-exposure / auto-WB / auto-gain for the
+    # duration of cal so the flash-detect ON→OFF pair captures under
+    # identical sensor conditions. Restored in the cleanup path below.
+    job["cameraLock"] = None
+    if cam_ip:
+        try:
+            lock_state = _cam_settings.lock_auto_controls_for_cal(cam_ip, cam_idx)
+            job["cameraLock"] = lock_state
+            if lock_state.get("locked"):
+                _mcal_log(job, f"Camera auto controls locked: "
+                               f"{', '.join(lock_state.get('notes') or ['no-op'])}")
+            else:
+                _mcal_log(job, f"Camera auto-lock skipped: "
+                               f"{'; '.join(lock_state.get('notes') or ['unknown'])}")
+        except Exception as e:
+            log.warning("MOVER-CAL %d: camera lock failed (%s) — continuing", fid, e)
+
+    # #682-M — capture a dark reference BEFORE the beam ever comes on so
+    # flash-detect can subtract the scene's static bright features from
+    # both ON and OFF captures. Blackout our own fixture + wait 0.4 s
+    # for the sensor to settle before asking for the reference frame.
+    if cam_ip:
+        try:
+            _targeted_fixture_blackout(fid)
+            time.sleep(0.4)
+            ok_dark = _mcal._dark_reference(cam_ip, cam_idx)
+            _mcal_log(job, f"Dark-reference capture: "
+                           f"{'ok' if ok_dark else 'failed — flash-detect may see reflections'}")
+            job["darkReferenceCaptured"] = bool(ok_dark)
+        except Exception as e:
+            log.warning("MOVER-CAL %d: dark-ref failed (%s)", fid, e)
+            job["darkReferenceCaptured"] = False
+
     # Pre-flight — surveyed markers in registry + camera can see at
     # least one of them (prescan).
     _mcal_log(job, "Markers-mode: checking registry + camera view")
-    reg = [m for m in _aruco_markers
+    # #682-O — differentiate floor-level (usable) vs non-floor (wall-mounted)
+    # markers. Previously the non-floor registrations were silently
+    # treated as "unregistered" in log messages.
+    reg_all = list(_aruco_markers)
+    reg = [m for m in reg_all
            if abs(float(m.get("z", 0) or 0)) < 50
            and abs(float(m.get("rx", 0) or 0)) < 1
            and abs(float(m.get("ry", 0) or 0)) < 1
            and abs(float(m.get("rz", 0) or 0)) < 1]
+    non_floor_registered = {int(m["id"]): m for m in reg_all
+                             if m not in reg}
     if len(reg) < 3:
         job["error"] = (f"Need ≥3 floor-level surveyed ArUco markers in "
                         f"the registry; have {len(reg)}. Add via Setup → ArUco.")
@@ -4326,14 +4387,25 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
     seen_by_id = {int(m["id"]): m for m in detect.get("markers", [])}
     reg_by_id = {int(m["id"]): m for m in reg}
     usable = sorted(reg_by_id.keys() & seen_by_id.keys())
-    # #626 — flag unregistered detections so the operator can decide
-    # whether to add them to the registry (prevents using random ArUco
-    # tags that happen to be in the scene — a decoy-marker concern from
-    # review §12.8).
-    unregistered = sorted(set(seen_by_id.keys()) - set(reg_by_id.keys()))
-    if unregistered:
-        _mcal_log(job, f"Detected unregistered ArUco markers {unregistered} — "
-                       "ignored for calibration; add via Setup → ArUco if intended")
+    # #626 / #682-O — flag unknown detections + distinguish registered
+    # non-floor markers from truly unregistered ones. A wall-mounted
+    # marker in the registry isn't a decoy, it's just not usable for
+    # floor-reference mover cal — operators were getting confused by
+    # the old "unregistered" wording.
+    seen_ids = set(seen_by_id.keys())
+    truly_unregistered = sorted(seen_ids
+                                  - set(reg_by_id.keys())
+                                  - set(non_floor_registered.keys()))
+    seen_non_floor = sorted(seen_ids & set(non_floor_registered.keys()))
+    if truly_unregistered:
+        _mcal_log(job, f"Detected unregistered ArUco markers "
+                       f"{truly_unregistered}: not in registry — "
+                       f"add via Setup → ArUco if intended")
+    if seen_non_floor:
+        entries = [f"id={mid} z={int(non_floor_registered[mid].get('z',0) or 0)}mm"
+                   for mid in seen_non_floor]
+        _mcal_log(job, f"Ignoring registered non-floor markers for "
+                       f"this cal (wall-mounted): {'; '.join(entries)}")
     if len(usable) < 3:
         job["error"] = (f"Camera {cam.get('name','?')} only sees "
                         f"{len(usable)} registered marker(s) ({usable}); "
@@ -4344,8 +4416,11 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
 
     # Phase 1 — battleship discovery
     job["phase"] = "battleship"; job["progress"] = 10
-    job["message"] = "Searching for beam (4×4 coarse grid)"
-    _mcal_log(job, "Battleship discovery (4×4 coarse grid + confirm nudge)")
+    # #682-L — actual grid dimensions filled in after adaptive density
+    # computes (pan_steps, tilt_steps) below; this placeholder gets
+    # overwritten once we know the real numbers.
+    job["message"] = "Searching for beam"
+    # Leave the log entry until after the adaptive grid is computed.
 
     def _discovery_progress(ev):
         stage = ev.get("stage")
@@ -4353,7 +4428,9 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
             probe = ev.get("probe"); total = ev.get("total", 16)
             # 10% → 25% progress band for discovery
             job["progress"] = int(10 + 15 * (probe / max(total, 1)))
-            job["message"] = (f"Grid probe {probe}/{total} "
+            rnd = ev.get("round")
+            job["message"] = (f"{'[' + rnd + '] ' if rnd and rnd != 'coarse' else ''}"
+                              f"Grid probe {probe}/{total} "
                               f"pan={ev.get('pan',0):.2f} "
                               f"tilt={ev.get('tilt',0):.2f}")
         elif stage == "beam-found":
@@ -4363,6 +4440,33 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
             _mcal_log(job, f"Beam candidate at probe {ev.get('probe')}, "
                            f"pixel ({ev.get('pixelX')},{ev.get('pixelY')}) "
                            f"— verifying with pan/tilt nudge")
+        elif stage == "confirm-rejected":
+            # #682-G — per-probe outcome log. Tell the operator WHY the
+            # candidate was rejected instead of leaving a trail of
+            # identical "Beam candidate" lines.
+            reason = ev.get("reason") or "unknown"
+            if reason == "reflection":
+                _mcal_log(job, f"Probe {ev.get('probe')} confirm result: "
+                               "REJECTED (reflection — blink verify failed)")
+            else:
+                _mcal_log(job, f"Probe {ev.get('probe')} confirm result: "
+                               f"REJECTED ({reason} — "
+                               f"pan-shift {ev.get('panShiftPx')}px, "
+                               f"tilt-shift {ev.get('tiltShiftPx')}px, "
+                               f"threshold 8)")
+        elif stage == "confirmed":
+            _mcal_log(job, f"Probe {ev.get('probe')} confirm result: "
+                           f"CONFIRMED (pan-shift {ev.get('panShiftPx')}px, "
+                           f"tilt-shift {ev.get('tiltShiftPx')}px)"
+                           + (" + refined" if ev.get("refined") else ""))
+        elif stage == "outcome-summary":
+            job["candidatesFound"] = int(ev.get("candidatesFound") or 0)
+            job["candidatesConfirmed"] = int(ev.get("candidatesConfirmed") or 0)
+            job["candidatesRejectedAsReflection"] = int(
+                ev.get("candidatesRejectedAsReflection") or 0)
+            job["candidatesRejectedOutOfFrame"] = int(
+                ev.get("candidatesRejectedOutOfFrame") or 0)
+            job["probesRun"] = int(ev.get("probesRun") or 0)
 
     cam_res = None
     cw = cam.get("resolutionW")
@@ -4386,13 +4490,22 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
         pos_map = {p["id"]: p for p in _layout.get("children", [])}
         fp = pos_map.get(f["id"], {})
         fx_pos = [fp.get("x", 0), fp.get("y", 0), fp.get("z", 0)]
-        # Aim at stage-centre floor as the default warm-start — same as
-        # the legacy path when no model / orientation override is available.
+        # #682-C-v2 — aim at the centroid of the union of camera
+        # floor-view polygons, NOT the stage centre. For fixtures whose
+        # visible floor band is nowhere near the stage centre (ceiling-
+        # mount stage-right movers on a 2m wide basement rig, etc.),
+        # stage-centre targeting drove the first 48 probes entirely
+        # behind the stage. Fall back to stage centre when no cameras
+        # are positioned (legacy rigs without layout cameras).
         stage_centre = [float(_stage.get("w", 3.0) * 500),
                         float(_stage.get("d", 4.0) * 500),
                         0.0]
+        seed_target = _camera_visible_centroid(fallback=stage_centre)
+        _mcal_log(job, f"Discovery seed target: "
+                       f"({seed_target[0]:.0f},{seed_target[1]:.0f}) mm "
+                       f"({'camera-visible centroid' if seed_target is not stage_centre else 'stage centre fallback'})")
         seed_pan, seed_tilt = _mcal.compute_initial_aim(
-            fx_pos, stage_centre,
+            fx_pos, seed_target,
             pan_range=pan_range_deg, tilt_range=tilt_range_deg,
             mounted_inverted=f.get("mountedInverted", False))
     except Exception:
@@ -4404,6 +4517,20 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
         pan_range_deg = None
         tilt_range_deg = None
         beam_width_deg = None
+    # #682-L — log the actual adaptive grid dimensions (not a fake 4×4).
+    try:
+        _pan_steps, _tilt_steps = _mcal._adaptive_coarse_steps(
+            pan_range_deg, tilt_range_deg, beam_width_deg,
+            pan_min=int(_cal_tuning("battleshipPanStepsMin")),
+            pan_max=int(_cal_tuning("battleshipPanStepsMax")),
+            tilt_min=int(_cal_tuning("battleshipTiltStepsMin")),
+            tilt_max=int(_cal_tuning("battleshipTiltStepsMax")))
+        _mcal_log(job, f"Battleship discovery "
+                       f"({_pan_steps}×{_tilt_steps} = {_pan_steps * _tilt_steps} "
+                       f"probes + confirm nudge + progressive refine)")
+        job["message"] = (f"Searching for beam ({_pan_steps}×{_tilt_steps} grid)")
+    except Exception:
+        _mcal_log(job, "Battleship discovery (adaptive grid + confirm nudge)")
     discovered = _mcal.battleship_discover(
         bridge_ip, cam_ip, addr, cam_idx, mover_color,
         seed_pan=seed_pan, seed_tilt=seed_tilt,
@@ -4418,6 +4545,8 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
         coarse_tilt_max=int(_cal_tuning("battleshipTiltStepsMax")),
         refine=bool(_cal_tuning("refineAfterHit")),
         reject_reflection=bool(_cal_tuning("rejectReflection")),
+        confirm_nudge_delta=_cal_tuning("nudgeAmplitude"),
+        mounted_inverted=bool(f.get("mountedInverted")),
         grid_filter=grid_filter,
         progress_cb=_discovery_progress,
     )
@@ -4547,6 +4676,7 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
     job["targets"] = per_marker
     _mcal_log(job, f"Complete. {len(samples)}/{len(usable)} markers converged, "
                    f"RMS {fit_rms:.2f}°")
+    _restore_camera_lock(job, cam)
     _set_calibrating(fid, False)
     _targeted_fixture_blackout(fid)
 
@@ -4830,35 +4960,23 @@ def _positioned_cameras_for_target_filter():
     return out
 
 
-def _build_battleship_grid_filter(fixture, pan_range_deg, tilt_range_deg):
-    """#681-B — return a predicate `(pan_norm, tilt_norm) -> bool` that
-    approximates whether an aim direction lands on the floor inside some
-    camera's visible polygon. Uses a geometric (tier-4) ParametricFixtureModel
-    seeded from fixture pose + mounted-inverted flag so the filter works
-    *before* the fixture has a calibration. Returns None when we can't
-    build a filter (no cameras, no stage bounds, missing fixture pos);
-    the caller skips pre-filtering in that case.
+def _camera_floor_polygons_for_cal(fixture=None):
+    """#682-B-v2 — collect ``camera_floor_polygon`` per positioned camera.
+    Returns a list of (xy) polygons on the floor plane z=0. Used by
+    both the battleship grid filter and the camera-visible-centre seed.
     """
     try:
-        from parametric_mover import ParametricFixtureModel
-        from camera_math import camera_floor_polygon, point_in_polygon
+        from camera_math import camera_floor_polygon
     except Exception:
-        return None
-
+        return []
     cams = _positioned_cameras_for_target_filter()
     if not cams:
-        return None
+        return []
     stage_bounds = {
         "w": int((_stage.get("w") or 3.0) * 1000),
         "d": int((_stage.get("d") or 4.0) * 1000),
         "h": int((_stage.get("h") or 2.0) * 1000),
     }
-    pos_map = {p["id"]: p for p in _layout.get("children", [])}
-    fp = pos_map.get(fixture.get("id"))
-    if not fp:
-        return None
-    fx_pos = (fp.get("x", 0), fp.get("y", 0), fp.get("z", 0))
-
     polys = []
     for c in cams:
         try:
@@ -4869,20 +4987,75 @@ def _build_battleship_grid_filter(fixture, pan_range_deg, tilt_range_deg):
             poly = None
         if poly:
             polys.append(poly)
+    return polys
+
+
+def _camera_visible_centroid(fallback=None):
+    """#682-C-v2 — centroid of the union of camera floor-view polygons.
+    Falls back to ``fallback`` (stage-centre mm) when no polygons can
+    be computed.
+    """
+    polys = _camera_floor_polygons_for_cal()
     if not polys:
+        return fallback
+    xs = []
+    ys = []
+    for poly in polys:
+        for (px, py) in poly:
+            xs.append(float(px))
+            ys.append(float(py))
+    if not xs:
+        return fallback
+    return [sum(xs) / len(xs), sum(ys) / len(ys), 0.0]
+
+
+def _build_battleship_grid_filter(fixture, pan_range_deg, tilt_range_deg):
+    """#681-B / #682-B-v2 — predicate `(pan_norm, tilt_norm) -> bool`
+    that approximates whether an aim direction lands on the floor inside
+    some camera's visible polygon. Pre-#682 this used
+    ``mountedInverted → mount_pitch=180`` as the only geometric clue and
+    ignored ``fixture.rotation`` — so 47/48 probes landed off-camera on
+    a stage-right mover that had an explicit yaw in the layout. Fixed by
+    reading the full ``rotation = [rx, ry, rz]`` triple into mount_pitch
+    / mount_roll / mount_yaw per CLAUDE.md §Rotation schema v2.
+    """
+    try:
+        from parametric_mover import ParametricFixtureModel
+        from camera_math import point_in_polygon
+    except Exception:
         return None
 
-    # Geometric-only model. mount_pitch_deg=180 when the fixture is
-    # mounted inverted; everything else left at default. Offsets + signs
-    # aren't calibrated, so this is an approximation — good enough to
-    # prune "aim points into the ceiling" candidates but not so strict
-    # that a slightly-off guess rejects real hits.
-    inverted = bool(fixture.get("mountedInverted"))
+    polys = _camera_floor_polygons_for_cal(fixture)
+    if not polys:
+        return None
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    fp = pos_map.get(fixture.get("id"))
+    if not fp:
+        return None
+    fx_pos = (fp.get("x", 0), fp.get("y", 0), fp.get("z", 0))
+
+    # #682-B-v2 — respect fixture.rotation as the mount orientation.
+    # rx (pitch) / ry (roll) / rz (yaw) per the rotation schema v2
+    # (CLAUDE.md §Rotation convention #586/#600). Fall back to
+    # mountedInverted → mount_pitch=180 for legacy records that don't
+    # set rotation.
+    rot = fixture.get("rotation") or [0, 0, 0]
+    try:
+        rx = float(rot[0] or 0)
+        ry = float(rot[1] or 0) if len(rot) > 1 else 0.0
+        rz = float(rot[2] or 0) if len(rot) > 2 else 0.0
+    except (TypeError, ValueError):
+        rx = ry = rz = 0.0
+    if rx == 0 and ry == 0 and rz == 0 and bool(fixture.get("mountedInverted")):
+        rx = 180.0
+
     model = ParametricFixtureModel(
         fixture_pos=fx_pos,
         pan_range_deg=float(pan_range_deg or 540),
         tilt_range_deg=float(tilt_range_deg or 270),
-        mount_pitch_deg=180.0 if inverted else 0.0,
+        mount_yaw_deg=rz,
+        mount_pitch_deg=rx,
+        mount_roll_deg=ry,
     )
     fx, fy, fz = fx_pos
 
@@ -4893,8 +5066,7 @@ def _build_battleship_grid_filter(fixture, pan_range_deg, tilt_range_deg):
             return True  # can't evaluate → keep the probe
         # Intersect with floor plane z=0. If the beam points up or
         # parallel to the floor, there is no intersection on the floor
-        # — treat as outside-FOV but don't drop (scanners want some
-        # coverage when we're pessimistic about geometry).
+        # — treat as outside-FOV (don't keep).
         if dz >= -1e-6:
             return False
         scale = -fz / dz
@@ -4913,8 +5085,13 @@ def _build_battleship_grid_filter(fixture, pan_range_deg, tilt_range_deg):
 # thread blacks out, releases the lock, sets `error="phase_timeout"` and
 # `pendingTier2Handoff=True` so a future tier-2 operator-in-loop UI can
 # pick up where tier-1 gave up.
-CAL_BUDGET_DISCOVERY_BATTLESHIP_S = 60.0
-CAL_BUDGET_DISCOVERY_COLOUR_FALLBACK_S = 90.0
+CAL_BUDGET_DISCOVERY_BATTLESHIP_S = 600.0  # #682-T — up from 60 s to
+# cover #682-R progressive-refinement rounds (coarse 24 probes → split-
+# tilt 40 → split-pan 75 → split-tilt-again 135 at worst) plus the
+# per-probe time overhead from false positives the #682-M/N fixes
+# should eliminate. Operators on clean rigs still see completion in
+# 60-120 s; the headroom only matters in the adversarial case.
+CAL_BUDGET_DISCOVERY_COLOUR_FALLBACK_S = 120.0  # #682-T — up from 90 s.
 CAL_BUDGET_MAPPING_S = 120.0
 CAL_BUDGET_FIT_S = 10.0
 CAL_BUDGET_VERIFICATION_S = 30.0
@@ -4927,9 +5104,9 @@ CAL_BUDGET_VERIFICATION_S = 30.0
 # changes take effect on the NEXT calibration run without restart.
 CAL_TUNING_SPEC = {
     # Phase time budgets
-    "discoveryBattleshipS":      {"default": 60.0,  "min": 20.0, "max": 300.0,
-        "tooltip": "How long the battleship coarse-grid scan can run before giving up. Increase for wide-pan fixtures (540°+) or slow Art-Net bridges."},
-    "discoveryColourFallbackS":  {"default": 90.0,  "min": 30.0, "max": 300.0,
+    "discoveryBattleshipS":      {"default": 600.0, "min": 60.0, "max": 1800.0,
+        "tooltip": "How long the battleship coarse+refine scan can run before giving up. #682-T raised from 60 to 600 s to cover progressive-refinement rounds; drop for hobbyist rigs where long scans mean 'try a different camera angle'."},
+    "discoveryColourFallbackS":  {"default": 120.0, "min": 60.0, "max": 600.0,
         "tooltip": "Legacy colour-filter discovery budget (kicks in when battleship finds nothing)."},
     "mappingS":                  {"default": 120.0, "min": 30.0, "max": 600.0,
         "tooltip": "BFS mapping-phase budget. Soft cap — run continues if enough samples are already collected."},
@@ -4976,6 +5153,12 @@ CAL_TUNING_SPEC = {
         "tooltip": "After a coarse hit, run a finer 3×3 grid around it to localise the beam centre before BFS. Improves sample quality at the cost of ~3 s per run."},
     "adaptiveDensity":           {"default": True,  "type": "bool",
         "tooltip": "Scale battleship grid density to the fixture's pan/tilt range and beam width (#661). Turn off to force a fixed grid regardless of fixture."},
+    # #682-H — confirm-nudge amplitude. "auto" scales to ≈5° mechanical
+    # rotation, clamped [0.005, 0.02]. Operators on narrow-FOV cameras
+    # where the default pushes the beam out of frame can drop to 0.005.
+    "nudgeAmplitude":            {"default": "auto", "type": "autoFloat",
+        "min": 0.001, "max": 0.05,
+        "tooltip": "Confirm-nudge size in normalised pan/tilt. 'auto' targets ~5 degrees mechanical (recommended); explicit values override for narrow-FOV cameras (0.005) or stubborn rigs (0.04)."},
 }
 
 
@@ -5013,6 +5196,22 @@ def _validate_cal_tuning(overrides):
         t = spec.get("type", "float")
         if t == "bool":
             cleaned[k] = bool(v)
+            continue
+        if t == "autoFloat":
+            # Accept "auto" (case-insensitive string) OR a float in [min, max].
+            if isinstance(v, str) and v.strip().lower() == "auto":
+                cleaned[k] = "auto"
+                continue
+            try:
+                cv = float(v)
+            except (TypeError, ValueError):
+                errors.append(f"{k}: {v!r} must be 'auto' or a float")
+                continue
+            mn, mx = spec["min"], spec["max"]
+            if cv < mn or cv > mx:
+                errors.append(f"{k}: {cv} outside [{mn}, {mx}]")
+                continue
+            cleaned[k] = cv
             continue
         mn, mx = spec["min"], spec["max"]
         try:

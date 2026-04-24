@@ -229,21 +229,31 @@ class BeamDetector:
             "beamCount": len(components),
         }
 
-    def detect_flash(self, frame_on, frame_off, color=None, threshold=30):
+    def detect_flash(self, frame_on, frame_off, color=None, threshold=30,
+                      cam_idx=None):
         """Flash detection: find beam by comparing ON frame vs OFF frame.
 
-        This is immune to ambient light shifts because both frames share the
-        same ambient conditions. Any bright spot present in frame_on but
-        absent in frame_off is the real beam.
+        When a dark reference has been captured for this camera
+        (``cam_idx``), it is subtracted from BOTH the ON and OFF masks
+        before diffing — this removes static bright scene elements
+        (lit storage bins, pilot LEDs, ArUco markers under ambient) that
+        would otherwise leak through if the camera's auto-exposure
+        drifted between the two captures. #682-M.
+
+        Without a dark reference the function still works (back-compat)
+        but is vulnerable to the scene-baseline shift #682-M documented.
 
         Args:
             frame_on: BGR frame with beam ON
             frame_off: BGR frame with beam OFF (captured immediately after)
             color: [r, g, b] beam color to filter for
             threshold: minimum difference
+            cam_idx: int — camera this frame pair came from, used to look
+                     up the stored dark reference.
 
         Returns:
-            dict with {found, pixelX, pixelY, peakIntensity, area, brightness}
+            dict with {found, pixelX, pixelY, peakIntensity, area, brightness,
+                       darkRefApplied}
         """
         if frame_on is None or frame_off is None:
             return {"found": False}
@@ -255,6 +265,30 @@ class BeamDetector:
         else:
             on_mask = cv2.cvtColor(frame_on, cv2.COLOR_BGR2GRAY)
             off_mask = cv2.cvtColor(frame_off, cv2.COLOR_BGR2GRAY)
+
+        # #682-M — subtract dark reference from BOTH masks before diffing.
+        # This removes any static bright feature in the scene so the
+        # ON-OFF diff can't latch onto it even if exposure drifted slightly.
+        dark_applied = False
+        if cam_idx is not None:
+            dark_bgr = self._dark_frames.get(cam_idx)
+            if dark_bgr is not None:
+                try:
+                    if dark_bgr.shape[:2] != frame_on.shape[:2]:
+                        dark_resized = cv2.resize(dark_bgr,
+                                                   (frame_on.shape[1], frame_on.shape[0]))
+                    else:
+                        dark_resized = dark_bgr
+                    if color and color != [255, 255, 255]:
+                        dark_mask = self._color_mask(dark_resized, color)
+                    else:
+                        dark_mask = cv2.cvtColor(dark_resized, cv2.COLOR_BGR2GRAY)
+                    on_mask = cv2.subtract(on_mask, dark_mask)
+                    off_mask = cv2.subtract(off_mask, dark_mask)
+                    dark_applied = True
+                except Exception:
+                    # Shape mismatch / cv2 fallthrough — detect without dark ref.
+                    dark_applied = False
 
         # Diff: what's bright in ON but not in OFF
         diff = cv2.subtract(on_mask, off_mask)  # clamps to 0, no negative
@@ -307,9 +341,10 @@ class BeamDetector:
                 "peakIntensity": int(peak_val),
                 "area": int(area),
                 "brightness": int(mean_brightness),
+                "darkRefApplied": bool(dark_applied),
             }
 
-        return {"found": False}
+        return {"found": False, "darkRefApplied": bool(dark_applied)}
 
     def _color_mask(self, frame, color):
         """Create a grayscale mask emphasizing the target color."""

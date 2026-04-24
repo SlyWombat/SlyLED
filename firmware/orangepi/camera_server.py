@@ -22,7 +22,7 @@ from flask import Flask, jsonify, request
 import flask.cli
 flask.cli.show_server_banner = lambda *a, **kw: None   # suppress dev-server warning (#289)
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 PORT = 5000
 UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
@@ -1339,7 +1339,11 @@ def beam_detect_flash():
     frame_off = _cv_capture(dev)
     if frame_off is None:
         return jsonify(ok=False, err="OFF frame capture failed"), 503
-    result = det.detect_flash(frame_on, frame_off, color=color, threshold=threshold)
+    # #682-M — pass cam_idx so detect_flash can subtract the stored
+    # dark-reference from ON and OFF before diffing. If no dark ref has
+    # been captured, detect_flash falls back to the raw on-off diff.
+    result = det.detect_flash(frame_on, frame_off, color=color,
+                               threshold=threshold, cam_idx=cam_idx)
     return jsonify(ok=True, **result)
 
 @app.post("/beam-detect/center")

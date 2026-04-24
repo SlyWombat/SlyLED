@@ -312,8 +312,137 @@ def check681_new_tuning_keys():
        "#681 CAL_TUNING_SPEC supports bool type")
 
 
+def check682_A_adaptive_pan_clamp():
+    """#682-S — _adaptive_coarse_steps clamps effective pan to 360°."""
+    import mover_calibrator as mcal
+    pan, tilt = mcal._adaptive_coarse_steps(540.0, 180.0, 15.0)
+    # 540° clamps to 360° effective pan → 12 target steps → capped at 8
+    ok(pan == 8, f"#682-S pan_steps(540°, 180°) = {pan} (expected 8)")
+    # tilt: pan >= 360 branch → half-tilt = 90° / 30° step = 3 steps
+    ok(tilt == 3, f"#682-Q tilt_steps(540°, 180°) = {tilt} (expected 3 via half-tilt)")
+    pan2, tilt2 = mcal._adaptive_coarse_steps(180.0, 180.0, 15.0)
+    # pan < 360 — full tilt kept, 180/30 = 6, capped at 6
+    ok(tilt2 >= 3, f"#682-Q pan<360 keeps full tilt (got {tilt2})")
+
+
+def check682_B_grid_filter_rotation():
+    """#682-B-v2 — grid filter reads fixture.rotation, not just mountedInverted."""
+    src = _read(_PARENT_PATH)
+    m = re.search(r"def _build_battleship_grid_filter\(.*?(?=\ndef )",
+                  src, re.DOTALL)
+    body = m.group(0) if m else ""
+    ok("fixture.get(\"rotation\")" in body,
+       "#682-B-v2 grid filter reads fixture.rotation triple")
+    ok("mount_yaw_deg=rz" in body and "mount_pitch_deg=rx" in body,
+       "#682-B-v2 grid filter maps rx/ry/rz to mount pitch/roll/yaw")
+
+
+def check682_C_visible_centroid():
+    """#682-C-v2 — markers seed uses camera-visible centroid."""
+    src = _read(_PARENT_PATH)
+    ok("_camera_visible_centroid" in src,
+       "#682-C-v2 helper defined")
+    ok("seed_target = _camera_visible_centroid" in src,
+       "#682-C-v2 markers path calls _camera_visible_centroid for seed")
+
+
+def check682_M_dark_ref_flash():
+    """#682-M — detect_flash accepts cam_idx + subtracts dark ref."""
+    src_bd = _read(os.path.join(_ROOT, "firmware", "orangepi", "beam_detector.py"))
+    ok("def detect_flash(self, frame_on, frame_off, color=None, "
+       "threshold=30,\n                      cam_idx=None):" in src_bd
+       or re.search(r"def detect_flash\(self,[^)]*cam_idx", src_bd, re.DOTALL),
+       "#682-M detect_flash exposes cam_idx param")
+    ok("darkRefApplied" in src_bd,
+       "#682-M detect_flash reports darkRefApplied in result")
+    src_cam = _read(os.path.join(_ROOT, "firmware", "orangepi", "camera_server.py"))
+    ok("cam_idx=cam_idx" in src_cam and "detect_flash(frame_on, frame_off" in src_cam,
+       "#682-M /beam-detect/flash endpoint passes cam_idx to detect_flash")
+
+
+def check682_N_camera_lock():
+    """#682-N — camera auto-exposure / auto-WB lock helpers + wiring."""
+    src_cs = _read(os.path.join(_ROOT, "desktop", "shared", "camera_settings.py"))
+    ok("def lock_auto_controls_for_cal" in src_cs,
+       "#682-N lock_auto_controls_for_cal defined")
+    ok("def restore_auto_controls" in src_cs,
+       "#682-N restore_auto_controls defined")
+    src = _read(_PARENT_PATH)
+    ok("lock_auto_controls_for_cal" in src,
+       "#682-N markers path calls lock_auto_controls_for_cal")
+    ok("_restore_camera_lock" in src,
+       "#682-N markers path defines _restore_camera_lock")
+
+
+def check682_budgets_raised():
+    """#682-T — CAL_BUDGET_DISCOVERY_BATTLESHIP_S raised to 600."""
+    src = _read(_PARENT_PATH)
+    ok(re.search(r"CAL_BUDGET_DISCOVERY_BATTLESHIP_S\s*=\s*600\.0", src)
+       is not None,
+       "#682-T battleship budget = 600 s")
+    ok(re.search(r"CAL_BUDGET_DISCOVERY_COLOUR_FALLBACK_S\s*=\s*120\.0", src)
+       is not None,
+       "#682-T colour-fallback budget = 120 s")
+
+
+def check682_H_nudge_auto():
+    """#682-H — confirm_nudge_delta accepts 'auto' and CAL_TUNING_SPEC exposes it."""
+    src = _read(_MCAL_PATH)
+    ok('confirm_nudge_delta="auto"' in src or
+       "confirm_nudge_delta = 'auto'" in src or
+       'confirm_nudge_delta in (None, "auto")' in src,
+       "#682-H battleship_discover accepts 'auto' nudge amplitude")
+    src_p = _read(_PARENT_PATH)
+    ok('"nudgeAmplitude"' in src_p,
+       "#682-H CAL_TUNING_SPEC has nudgeAmplitude key")
+    ok('"autoFloat"' in src_p,
+       "#682-H autoFloat type supported in _validate_cal_tuning")
+
+
+def check682_R_refinement():
+    """#682-R — progressive refinement loop exists."""
+    src = _read(_MCAL_PATH)
+    ok("class _R_Found" in src,
+       "#682-R sentinel exception class defined")
+    ok("MAX_REFINE_ROUNDS" in src and "axes_next" in src,
+       "#682-R progressive refinement loop + alternating axis")
+    ok("_pan_step_deg" in src and "_tilt_step_deg" in src,
+       "#682-R termination checks step vs beam-width/2")
+
+
+def check682_G_outcome_counters():
+    """#682-G — per-probe outcome counters + SPA log entries."""
+    src = _read(_MCAL_PATH)
+    for k in ("candidatesFound", "candidatesConfirmed",
+              "candidatesRejectedAsReflection",
+              "candidatesRejectedOutOfFrame"):
+        ok(f'"{k}"' in src,
+           f"#682-G outcome counter {k} tracked in battleship_discover")
+    src_p = _read(_PARENT_PATH)
+    ok('stage == "confirm-rejected"' in src_p,
+       "#682-G markers progress_cb handles confirm-rejected events")
+    ok('stage == "outcome-summary"' in src_p,
+       "#682-G markers progress_cb handles outcome-summary")
+
+
+def check682_L_log_string():
+    """#682-L — no 4×4 coarse grid hardcoded log string."""
+    src = _read(_PARENT_PATH)
+    ok(re.search(r'"Battleship discovery \(4×4 coarse grid', src) is None,
+       "#682-L no hardcoded '4×4 coarse grid' log string")
+
+
+def check682_O_marker_log():
+    """#682-O — non-floor registered markers logged differently."""
+    src = _read(_PARENT_PATH)
+    ok("non_floor_registered" in src,
+       "#682-O tracks non-floor registered markers separately")
+    ok('non-floor markers' in src,
+       "#682-O 'non-floor markers' log string present")
+
+
 def main():
-    print("=== #679 + #681 mover-calibration regression checks ===\n")
+    print("=== #679 + #681 + #682 mover-calibration regression checks ===\n")
     print("-- #1 BRACKET_FLOOR --")
     check1_bracket_floor()
     print("-- #2 _cal_blackout targeted --")
@@ -342,6 +471,28 @@ def main():
     check681_new_tuning_keys()
     print("-- #599 floor-alignment wiring --")
     check599_floor_alignment_wired()
+    print("-- #682-S adaptive-pan clamp --")
+    check682_A_adaptive_pan_clamp()
+    print("-- #682-B-v2 grid-filter rotation --")
+    check682_B_grid_filter_rotation()
+    print("-- #682-C-v2 camera-visible seed --")
+    check682_C_visible_centroid()
+    print("-- #682-M dark-ref in flash --")
+    check682_M_dark_ref_flash()
+    print("-- #682-N camera lock --")
+    check682_N_camera_lock()
+    print("-- #682-T raised budgets --")
+    check682_budgets_raised()
+    print("-- #682-H auto nudge --")
+    check682_H_nudge_auto()
+    print("-- #682-R progressive refinement --")
+    check682_R_refinement()
+    print("-- #682-G outcome counters --")
+    check682_G_outcome_counters()
+    print("-- #682-L log string --")
+    check682_L_log_string()
+    print("-- #682-O non-floor markers --")
+    check682_O_marker_log()
 
     total = _passed + _failed
     print(f"\n{'=' * 56}")

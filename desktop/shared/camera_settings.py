@@ -73,6 +73,95 @@ def camera_controls_set(camera_ip, cam_idx, controls, timeout=15):
         return json.loads(resp.read().decode())
 
 
+# ── #682-N — lock camera auto controls for calibration ────────────────
+#
+# Between flash-detect ON and OFF captures (~0.4-1 s apart), the camera's
+# auto-exposure / auto-WB / auto-gain can shift the scene baseline —
+# that baseline shift then leaks into the ON-OFF diff as a spurious
+# bright delta in any steadily-lit region. Industrial vision pipelines
+# standardly lock those controls for the duration of the job. Save the
+# operator's current values so they can be restored at cal end.
+#
+# V4L2 menu conventions (as exposed by the Pi's camera_server):
+#   auto_exposure: 1 = Manual, 3 = Aperture Priority (auto)
+#   white_balance_automatic: 0 = manual, 1 = auto
+#   gain_automatic: 0 = manual, 1 = auto  (optional; not all sensors)
+_CAL_LOCK_KEYS = ("auto_exposure", "white_balance_automatic",
+                  "gain_automatic")
+
+
+def lock_auto_controls_for_cal(camera_ip, cam_idx, timeout=15):
+    """Save current values of the auto-* controls, then set them to
+    manual. Returns a dict ``{prior, applied, locked, notes}`` that the
+    caller stores and passes back to ``restore_auto_controls``.
+
+    ``locked`` is False when no auto controls were found (nothing to
+    lock) — the caller should still proceed but warn the operator that
+    ambient drift may affect flash-detect.
+    """
+    try:
+        raw = camera_controls_get(camera_ip, cam_idx, timeout=timeout)
+    except Exception as e:
+        return {"prior": {}, "applied": {}, "locked": False,
+                "notes": [f"could not read current controls ({e})"]}
+    controls = raw.get("controls") or []
+    ctrl_by_name = {c.get("name"): c for c in controls}
+    prior = {}
+    desired = {}
+    notes = []
+    for key in _CAL_LOCK_KEYS:
+        c = ctrl_by_name.get(key)
+        if c is None:
+            continue
+        cur = c.get("value")
+        prior[key] = cur
+        # auto_exposure=1 is Manual in the UVC menu; 0 is Manual on some
+        # cheap cameras. Pick whichever is currently NOT active as the
+        # "manual" target — if the camera reports an auto value we keep
+        # the opposite.
+        if key == "auto_exposure":
+            # Most UVC menus: 1=Manual, 3=Aperture. Always target 1.
+            desired[key] = 1
+        else:
+            # boolean toggle — off (0) is manual.
+            desired[key] = 0
+        if cur != desired[key]:
+            notes.append(f"{key}: {cur} → {desired[key]}")
+    if not desired:
+        return {"prior": prior, "applied": {}, "locked": False,
+                "notes": ["no auto controls exposed by this camera — "
+                           "ambient drift may affect flash-detect"]}
+    try:
+        applied = camera_controls_set(camera_ip, cam_idx, desired,
+                                        timeout=timeout)
+    except Exception as e:
+        return {"prior": prior, "applied": {}, "locked": False,
+                "notes": notes + [f"could not apply manual mode ({e})"]}
+    return {"prior": prior, "applied": applied.get("applied") or desired,
+            "locked": True, "notes": notes}
+
+
+def restore_auto_controls(camera_ip, cam_idx, lock_state, timeout=15):
+    """Restore the pre-cal state recorded by ``lock_auto_controls_for_cal``.
+
+    Safe no-op when ``lock_state`` says nothing was locked.
+    """
+    prior = (lock_state or {}).get("prior") or {}
+    if not prior:
+        return {"ok": True, "restored": {}}
+    # Only restore keys we actually changed (applied vs prior differ).
+    applied = (lock_state or {}).get("applied") or {}
+    to_restore = {k: v for k, v in prior.items()
+                   if k in applied and applied[k] != v}
+    if not to_restore:
+        return {"ok": True, "restored": {}}
+    try:
+        camera_controls_set(camera_ip, cam_idx, to_restore, timeout=timeout)
+    except Exception as e:
+        return {"ok": False, "err": str(e), "tried": to_restore}
+    return {"ok": True, "restored": to_restore}
+
+
 # ── Heuristic evaluator ────────────────────────────────────────────────
 
 def evaluate_frame(frame, intent="general"):
