@@ -1,0 +1,89 @@
+{
+  "capturedAt": "2026-04-24T16:06:32.263542+00:00",
+  "fixtures_live": {
+    "fixtures": [
+      {
+        "active": false,
+        "aim": [
+          0.1705,
+          -0.6862,
+          0.7071
+        ],
+        "b": 0,
+        "colorWheelColor": "#ff0000",
+        "colorWheelDmx": 12,
+        "colorWheelSlot": "Red",
+        "dimmer": 0,
+        "dmxAddr": "U1.27",
+        "effect": null,
+        "fixtureType": "dmx",
+        "g": 0,
+        "id": 14,
+        "name": "350W Outdoor Waterproof BeamLight",
+        "pan": 121,
+        "panNorm": 0.4742,
+        "r": 255,
+        "tilt": 0,
+        "tiltNorm": 0.0
+      },
+      {
+        "active": false,
+        "aim": [
+          -0.0185,
+          0.9998,
+          0.0092
+        ],
+        "b": 0,
+        "colorWheelColor": "#FF0000",
+        "colorWheelDmx": 23,
+        "colorWheelSlot": "Red",
+        "dimmer": 0,
+        "dmxAddr": "U1.1",
+        "effect": null,
+        "fixtureType": "dmx",
+        "g": 0,
+        "id": 17,
+        "name": "150W MH Stage Right",
+        "pan": 127,
+        "panFine": 128,
+        "panNorm": 0.498,
+        "r": 255,
+        "tilt": 127,
+        "tiltFine": 128,
+        "tiltNorm": 0.498
+      },
+      {
+        "active": true,
+        "aim": [
+          0.0642,
+          -0.0072,
+          0.9979
+        ],
+        "b": 0,
+        "colorWheelColor": "#FF0000",
+        "colorWheelDmx": 23,
+        "colorWheelSlot": "Red",
+        "dimmer": 127,
+        "dmxAddr": "U1.13",
+        "effect": null,
+        "fixtureType": "dmx",
+        "g": 0,
+        "id": 18,
+        "name": "150W MH Stage Left",
+        "pan": 173,
+        "panFine": 128,
+        "panNorm": 0.6784,
+        "r": 255,
+        "tilt": 46,
+        "tiltFine": 128,
+        "tiltNorm": 0.1804
+      }
+    ],
+    "running": false
+  },
+  "cal_status_17": {
+    "calibrated": false,
+    "calibrationLocked": false,
+    "status": "none"
+  }
+}
