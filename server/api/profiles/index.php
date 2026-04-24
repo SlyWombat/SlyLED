@@ -325,6 +325,22 @@ function validate_profile(array $p): array {
     if (empty($p['name'])) $errors[] = 'Name required';
     if (empty($p['channels']) || !is_array($p['channels'])) $errors[] = 'Channels required';
     if (isset($p['name']) && strip_tags($p['name']) !== $p['name']) $errors[] = 'Name contains HTML';
+    // Column limits — prefer a 400 with a specific field message over a
+    // bare SQLSTATE[22001] from the DB driver. Lengths MUST match
+    // schema.sql so adding a value that needs more headroom is a
+    // schema-migration decision, not a silent truncate.
+    if (isset($p['colorMode']) && strlen($p['colorMode']) > 32) {
+        $errors[] = 'colorMode too long (max 32 chars — bump schema if you add a new mode)';
+    }
+    if (isset($p['category']) && strlen($p['category']) > 20) {
+        $errors[] = 'category too long (max 20 chars)';
+    }
+    if (isset($p['manufacturer']) && strlen($p['manufacturer']) > 100) {
+        $errors[] = 'manufacturer too long (max 100 chars)';
+    }
+    if (isset($p['name']) && strlen($p['name']) > 200) {
+        $errors[] = 'name too long (max 200 chars)';
+    }
     return $errors;
 }
 

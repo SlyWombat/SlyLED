@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS profiles (
     manufacturer  VARCHAR(100) NOT NULL DEFAULT 'Generic',
     category      VARCHAR(20) NOT NULL DEFAULT 'par',
     channel_count TINYINT UNSIGNED NOT NULL,
-    color_mode    VARCHAR(10) NOT NULL DEFAULT 'rgb',
+    color_mode    VARCHAR(32) NOT NULL DEFAULT 'rgb',
     beam_width    SMALLINT UNSIGNED NOT NULL DEFAULT 0,
     pan_range     SMALLINT UNSIGNED NOT NULL DEFAULT 0,
     tilt_range    SMALLINT UNSIGNED NOT NULL DEFAULT 0,
