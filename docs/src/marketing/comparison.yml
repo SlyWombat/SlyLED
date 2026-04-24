@@ -92,14 +92,14 @@ features:
     qlcplus: "No"
     freestyler: "No"
 
-  - id: open_source
-    label: "Open source"
-    slyled: "Yes"
+  - id: source_available
+    label: "Source-available"
+    slyled: "Yes (PolyForm Noncommercial — free for personal, paid commercial licence)"
     grandma3: "No"
     chamsys_magicq: "No"
     follow_me: "No"
     zactrack: "No"
-    qlcplus: "Yes"
+    qlcplus: "Yes (GPLv2)"
     freestyler: "No"
 
   - id: bilingual

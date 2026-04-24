@@ -1,5 +1,7 @@
 # SlyLED User Manual — 3D Volumetric Lighting System (v1.0)
 
+> **Licensing.** SlyLED is distributed under the [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/) licence — **free for personal, hobbyist, educational, research, and nonprofit use**. Paid client engagements, corporate internal use, embedded products, and paid services built on SlyLED require a separate commercial licence. See <https://electricrv.ca/slyled/licensing> or write to <info@electricrv.ca>.
+
 ## Table of Contents
 1. [Getting Started](#1-getting-started)
 2. [Walkthrough: First Show in 30 Minutes](#2-walkthrough)

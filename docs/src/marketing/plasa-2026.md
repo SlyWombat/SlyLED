@@ -14,7 +14,7 @@ award_link: https://www.plasashow.com/awards
 
 ## Summary (250 words)
 
-SlyLED is an open-source, three-tier stage-lighting controller that
+SlyLED is a source-available, three-tier stage-lighting controller that
 does the jobs normally reserved for $60 000 consoles on hardware most
 community theatres can already afford. A Windows orchestrator serves
 a 3D browser UI; ESP32 and D1 Mini performers run LED effects; an
@@ -148,7 +148,7 @@ unknown project. The award accelerates conversations with:
   with commodity components.
 
 A PLASA Innovation nomination is the clearest signal that a
-consumer-priced, open-source alternative to the tracker-console
+consumer-priced, source-available alternative to the tracker-console
 monoculture is credible.
 
 ## Criteria mapping (internal notes for the submission writer)

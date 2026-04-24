@@ -1,0 +1,549 @@
+{
+  "capturedAt": "2026-04-24T16:03:21.964558Z",
+  "dmx_status": {
+    "artnet": {
+      "bindIp": "192.168.10.16",
+      "discoveredNodes": 1,
+      "frameRate": 40,
+      "localIp": "192.168.10.16",
+      "protocol": "artnet",
+      "running": true,
+      "unicastTargets": {
+        "1": "192.168.10.219"
+      },
+      "universes": [
+        1
+      ]
+    },
+    "sacn": {
+      "bindIp": "192.168.10.16",
+      "frameRate": 40,
+      "multicastAddresses": {},
+      "priority": 100,
+      "protocol": "sacn",
+      "running": false,
+      "sourceName": "SlyLED",
+      "universes": []
+    }
+  },
+  "fixtures": [
+    {
+      "aoeRadius": 1000,
+      "calibrated": true,
+      "cameraIdx": 0,
+      "cameraIp": "192.168.10.235",
+      "cameraUrl": "",
+      "childId": null,
+      "childIds": [],
+      "fixtureType": "camera",
+      "fovDeg": 100,
+      "fovType": "diagonal",
+      "id": 12,
+      "meshFile": null,
+      "name": "Stage Right",
+      "resolutionH": 1080,
+      "resolutionW": 1920,
+      "rotation": [
+        30,
+        0,
+        0
+      ],
+      "strings": [],
+      "trackClasses": [
+        "person"
+      ],
+      "trackFps": 2,
+      "trackReidMm": 500,
+      "trackThreshold": 0.4,
+      "trackTtl": 5,
+      "type": "point"
+    },
+    {
+      "aoeRadius": 1000,
+      "calibrated": true,
+      "cameraIdx": 1,
+      "cameraIp": "192.168.10.235",
+      "cameraUrl": "",
+      "childId": null,
+      "childIds": [],
+      "fixtureType": "camera",
+      "fovDeg": 90,
+      "fovType": "diagonal",
+      "id": 13,
+      "meshFile": null,
+      "name": "Stage Left",
+      "resolutionH": 2160,
+      "resolutionW": 3840,
+      "rotation": [
+        30,
+        0,
+        0
+      ],
+      "strings": [],
+      "trackClasses": [
+        "person",
+        "chair"
+      ],
+      "trackFps": 2,
+      "trackReidMm": 500,
+      "trackThreshold": 0.4,
+      "trackTtl": 5,
+      "type": "point"
+    },
+    {
+      "aoeRadius": 1000,
+      "childId": null,
+      "childIds": [],
+      "dmxChannelCount": 16,
+      "dmxProfileId": "beamlight-350w-16ch",
+      "dmxStartAddr": 27,
+      "dmxUniverse": 1,
+      "fixtureType": "dmx",
+      "id": 14,
+      "meshFile": null,
+      "mountedInverted": false,
+      "moverCalibrated": true,
+      "name": "350W Outdoor Waterproof BeamLight",
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "strings": [],
+      "type": "point"
+    },
+    {
+      "aoeRadius": 1000,
+      "cameraIdx": 0,
+      "cameraIp": "192.168.10.109",
+      "cameraUrl": "",
+      "childId": null,
+      "childIds": [],
+      "fixtureType": "camera",
+      "fovDeg": 78,
+      "fovType": "diagonal",
+      "id": 16,
+      "meshFile": null,
+      "name": "Out Left",
+      "resolutionH": 2160,
+      "resolutionW": 3840,
+      "rotation": [
+        1,
+        0,
+        0
+      ],
+      "strings": [],
+      "trackClasses": [
+        "person"
+      ],
+      "trackFps": 2,
+      "trackReidMm": 500,
+      "trackThreshold": 0.4,
+      "trackTtl": 5,
+      "type": "point"
+    },
+    {
+      "aoeRadius": 1000,
+      "childId": null,
+      "childIds": [],
+      "dmxChannelCount": 12,
+      "dmxProfileId": "movinghead-150w-12ch",
+      "dmxStartAddr": 1,
+      "dmxUniverse": 1,
+      "fixtureType": "dmx",
+      "id": 17,
+      "meshFile": null,
+      "mountedInverted": true,
+      "name": "150W MH Stage Right",
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "strings": [],
+      "type": "point"
+    },
+    {
+      "aoeRadius": 1000,
+      "childId": null,
+      "childIds": [],
+      "dmxChannelCount": 12,
+      "dmxProfileId": "movinghead-150w-12ch",
+      "dmxStartAddr": 13,
+      "dmxUniverse": 1,
+      "fixtureType": "dmx",
+      "id": 18,
+      "meshFile": null,
+      "mountedInverted": true,
+      "name": "150W MH Stage Left",
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "strings": [],
+      "type": "point"
+    }
+  ],
+  "cameras": [
+    {
+      "aoeRadius": 1000,
+      "calibrated": true,
+      "cameraIdx": 0,
+      "cameraIp": "192.168.10.235",
+      "cameraUrl": "",
+      "capabilities": {
+        "hasCamera": true,
+        "scan": true,
+        "tracking": true,
+        "trackingRunning": false
+      },
+      "childId": null,
+      "childIds": [],
+      "fixtureType": "camera",
+      "fovDeg": 100,
+      "fovType": "diagonal",
+      "fwVersion": "1.5.0",
+      "hostname": "Tracking",
+      "id": 12,
+      "meshFile": null,
+      "name": "Stage Right",
+      "online": true,
+      "resolutionH": 1080,
+      "resolutionW": 1920,
+      "rotation": [
+        30,
+        0,
+        0
+      ],
+      "rssi": 0,
+      "strings": [],
+      "trackClasses": [
+        "person"
+      ],
+      "trackFps": 2,
+      "trackReidMm": 500,
+      "trackThreshold": 0.4,
+      "trackTtl": 5,
+      "tracking": false,
+      "type": "point"
+    },
+    {
+      "aoeRadius": 1000,
+      "calibrated": true,
+      "cameraIdx": 1,
+      "cameraIp": "192.168.10.235",
+      "cameraUrl": "",
+      "capabilities": {
+        "hasCamera": true,
+        "scan": true,
+        "tracking": true,
+        "trackingRunning": false
+      },
+      "childId": null,
+      "childIds": [],
+      "fixtureType": "camera",
+      "fovDeg": 90,
+      "fovType": "diagonal",
+      "fwVersion": "1.5.0",
+      "hostname": "Tracking",
+      "id": 13,
+      "meshFile": null,
+      "name": "Stage Left",
+      "online": true,
+      "resolutionH": 2160,
+      "resolutionW": 3840,
+      "rotation": [
+        30,
+        0,
+        0
+      ],
+      "rssi": 0,
+      "strings": [],
+      "trackClasses": [
+        "person",
+        "chair"
+      ],
+      "trackFps": 2,
+      "trackReidMm": 500,
+      "trackThreshold": 0.4,
+      "trackTtl": 5,
+      "tracking": false,
+      "type": "point"
+    },
+    {
+      "aoeRadius": 1000,
+      "cameraIdx": 0,
+      "cameraIp": "192.168.10.109",
+      "cameraUrl": "",
+      "capabilities": {
+        "hasCamera": true,
+        "scan": true,
+        "tracking": true,
+        "trackingRunning": false
+      },
+      "childId": null,
+      "childIds": [],
+      "fixtureType": "camera",
+      "fovDeg": 78,
+      "fovType": "diagonal",
+      "fwVersion": "1.3.0",
+      "hostname": "RPi-Sly1",
+      "id": 16,
+      "meshFile": null,
+      "name": "Out Left",
+      "online": true,
+      "resolutionH": 2160,
+      "resolutionW": 3840,
+      "rotation": [
+        1,
+        0,
+        0
+      ],
+      "rssi": 0,
+      "strings": [],
+      "trackClasses": [
+        "person"
+      ],
+      "trackFps": 2,
+      "trackReidMm": 500,
+      "trackThreshold": 0.4,
+      "trackTtl": 5,
+      "tracking": false,
+      "type": "point"
+    }
+  ],
+  "aruco_markers": {
+    "dictId": 50,
+    "markers": [
+      {
+        "id": 0,
+        "label": "Back Right",
+        "rx": 0.0,
+        "ry": 0.0,
+        "rz": 0.0,
+        "size": 150.0,
+        "x": 500.0,
+        "y": 2280.0,
+        "z": 0.0
+      },
+      {
+        "id": 1,
+        "label": "Furnace Door",
+        "rx": 0.0,
+        "ry": 0.0,
+        "rz": 0.0,
+        "size": 150.0,
+        "x": 2050.0,
+        "y": 3170.0,
+        "z": 0.0
+      },
+      {
+        "id": 2,
+        "label": "Pillar Base",
+        "rx": 0.0,
+        "ry": 0.0,
+        "rz": 0.0,
+        "size": 150.0,
+        "x": 1150.0,
+        "y": 2100.0,
+        "z": 0.0
+      },
+      {
+        "id": 3,
+        "label": "Pillar Post",
+        "rx": 0.0,
+        "ry": 0.0,
+        "rz": 0.0,
+        "size": 150.0,
+        "x": 1150.0,
+        "y": 2280.0,
+        "z": 1368.0
+      },
+      {
+        "id": 4,
+        "label": "Stairs",
+        "rx": 0.0,
+        "ry": 0.0,
+        "rz": 0.0,
+        "size": 150.0,
+        "x": 500.0,
+        "y": 3500.0,
+        "z": 0.0
+      },
+      {
+        "id": 5,
+        "label": "Patent",
+        "rx": 0.0,
+        "ry": 0.0,
+        "rz": 0.0,
+        "size": 150.0,
+        "x": 3120.0,
+        "y": 3090.0,
+        "z": 0.0
+      }
+    ],
+    "ok": true
+  },
+  "aruco_coverage": {
+    "_error": "timed out"
+  },
+  "stage": {
+    "auto": {
+      "d": 4.0,
+      "h": 2.54,
+      "w": 3.62
+    },
+    "d": 3.6,
+    "h": 2.06,
+    "stageBoundsManual": false,
+    "w": 4
+  },
+  "fixtures_live": {
+    "fixtures": [
+      {
+        "active": false,
+        "aim": [
+          0.1705,
+          -0.6862,
+          0.7071
+        ],
+        "b": 0,
+        "colorWheelColor": "#ff0000",
+        "colorWheelDmx": 12,
+        "colorWheelSlot": "Red",
+        "dimmer": 0,
+        "dmxAddr": "U1.27",
+        "effect": null,
+        "fixtureType": "dmx",
+        "g": 0,
+        "id": 14,
+        "name": "350W Outdoor Waterproof BeamLight",
+        "pan": 121,
+        "panNorm": 0.4742,
+        "r": 255,
+        "tilt": 0,
+        "tiltNorm": 0.0
+      },
+      {
+        "active": false,
+        "aim": [
+          -0.0185,
+          0.9998,
+          0.0092
+        ],
+        "b": 0,
+        "colorWheelColor": "#FF0000",
+        "colorWheelDmx": 23,
+        "colorWheelSlot": "Red",
+        "dimmer": 0,
+        "dmxAddr": "U1.1",
+        "effect": null,
+        "fixtureType": "dmx",
+        "g": 0,
+        "id": 17,
+        "name": "150W MH Stage Right",
+        "pan": 127,
+        "panFine": 128,
+        "panNorm": 0.498,
+        "r": 255,
+        "tilt": 127,
+        "tiltFine": 128,
+        "tiltNorm": 0.498
+      },
+      {
+        "active": false,
+        "aim": [
+          -0.0185,
+          0.9998,
+          0.0092
+        ],
+        "b": 0,
+        "colorWheelColor": "#FF0000",
+        "colorWheelDmx": 23,
+        "colorWheelSlot": "Red",
+        "dimmer": 0,
+        "dmxAddr": "U1.13",
+        "effect": null,
+        "fixtureType": "dmx",
+        "g": 0,
+        "id": 18,
+        "name": "150W MH Stage Left",
+        "pan": 127,
+        "panFine": 128,
+        "panNorm": 0.498,
+        "r": 255,
+        "tilt": 127,
+        "tiltFine": 128,
+        "tiltNorm": 0.498
+      }
+    ],
+    "running": false
+  },
+  "settings_keys": [
+    "activeTimeline",
+    "autoStartShow",
+    "canvasH",
+    "canvasW",
+    "darkMode",
+    "globalBrightness",
+    "logPath",
+    "logging",
+    "name",
+    "runnerElapsed",
+    "runnerLoop",
+    "runnerRunning",
+    "runnerStartEpoch",
+    "units"
+  ],
+  "cal_status": {
+    "14": {
+      "calibrated": true,
+      "calibrationLocked": false,
+      "fit": {
+        "conditionNumber": 453959483.0794163,
+        "maxErrorDeg": 25.2290206197665,
+        "perSampleDeg": [
+          20.515821054624546,
+          25.2290206197665,
+          1.7380294928073114,
+          20.089160744294215,
+          23.384985578337957,
+          10.85469525268127
+        ],
+        "rmsErrorDeg": 18.835602284121393,
+        "sampleCount": 6
+      },
+      "model": {
+        "mountPitch": -39.516657890328084,
+        "mountRoll": -2.166534334212848,
+        "mountYaw": 9.01319396464611,
+        "panOffset": 0.4988194547477914,
+        "panRangeDeg": 540,
+        "panSign": -1,
+        "tiltOffset": 0.13863640891347656,
+        "tiltRangeDeg": 210,
+        "tiltSign": 1
+      },
+      "sampleCount": 6,
+      "status": "done",
+      "timestamp": 1776908327.46893,
+      "verification": {
+        "points": [],
+        "reason": "no beam detected on any verification point",
+        "skipped": true
+      },
+      "version": 2
+    },
+    "17": {
+      "calibrated": false,
+      "calibrationLocked": false,
+      "status": "none"
+    },
+    "18": {
+      "calibrated": false,
+      "calibrationLocked": false,
+      "status": "none"
+    }
+  }
+}
