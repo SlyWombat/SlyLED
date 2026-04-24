@@ -35,6 +35,16 @@ SETTLE_ESCALATE = [0.4, 0.8, 1.5]  # escalation stages (faster)
 SETTLE_VERIFY_GAP = 0.2   # gap between double-capture (reduced from 0.3)
 SETTLE_PIXEL_THRESH = 30  # max pixel drift to consider settled
 
+# ── Oversample + median filter (#655 / review Q6) ──────────────────────
+# Each BFS probe is a single _wait_settled + _beam_detect. Convergence
+# proves drift < SETTLE_PIXEL_THRESH but doesn't suppress per-capture
+# sensor noise or residual yoke backlash (~50-100 mm = ~15 px at 3 m
+# throw on a 640 px frame). Median-of-3 matches the pro-console aim-
+# averaging pattern (review §5.3).
+OVERSAMPLE_N = 3
+OVERSAMPLE_GAP_MS = 50
+OVERSAMPLE_MIN_VALID = 2  # need at least N-1 successful probes to accept
+
 
 # ── Art-Net helpers ───────────────────────────────────────────────────
 
@@ -1167,6 +1177,46 @@ def _beam_detect_flash(bridge_ip, camera_ip, cam_idx, mover_addr, pan, tilt,
     return None
 
 
+def _beam_detect_oversampled(camera_ip, cam_idx, color=None, threshold=50,
+                              center=False, n=None, gap_ms=None, min_valid=None):
+    """#655 / review Q6 — oversample + median-filter probe.
+
+    After `_wait_settled` confirms the head has stopped moving, the beam
+    pixel still varies frame-to-frame from sensor noise and micro-
+    backlash. A single capture bakes that noise into the fit. Median-of-N
+    suppresses per-capture noise and tolerates one outlier per probe.
+
+    Returns (px, py) median or None when fewer than `min_valid` of N
+    captures succeed — the caller treats that as a miss (does NOT
+    fabricate a sample).
+
+    Defaults come from module constants OVERSAMPLE_N / OVERSAMPLE_GAP_MS
+    / OVERSAMPLE_MIN_VALID so basement-rig live-test tuning lives in one
+    place.
+    """
+    n = n if n is not None else OVERSAMPLE_N
+    gap_ms = gap_ms if gap_ms is not None else OVERSAMPLE_GAP_MS
+    min_valid = min_valid if min_valid is not None else OVERSAMPLE_MIN_VALID
+
+    xs, ys = [], []
+    for i in range(n):
+        b = _beam_detect(camera_ip, cam_idx, color, threshold, center)
+        if b is not None:
+            xs.append(float(b[0]))
+            ys.append(float(b[1]))
+        if i < n - 1:
+            time.sleep(gap_ms / 1000.0)
+    if len(xs) < min_valid:
+        return None
+
+    def _median(values):
+        s = sorted(values)
+        m = len(s) // 2
+        return s[m] if len(s) % 2 else 0.5 * (s[m - 1] + s[m])
+
+    return (_median(xs), _median(ys))
+
+
 def _beam_detect_verified(camera_ip, cam_idx, color=None, threshold=50, center=False):
     """Double-capture beam detection — takes 2 captures 300ms apart.
     Returns position only if both agree within 30px (head has settled)."""
@@ -1940,7 +1990,17 @@ def map_visible(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                              new_pan=pan, new_tilt=tilt, center=use_center,
                              threshold=30)
         if beam:
-            px, py = beam
+            # #655 / Q6 — once settled, median-filter N captures with a
+            # small gap. Settle proves drift < SETTLE_PIXEL_THRESH, which
+            # still leaves room for per-capture sensor noise + residual
+            # yoke backlash. Falling back to the settle pixel only when
+            # oversample fails keeps the probe budget bounded.
+            over = _beam_detect_oversampled(camera_ip, cam_idx, color,
+                                             center=use_center)
+            if over is not None:
+                px, py = over
+            else:
+                px, py = beam
             # Reject stale: if pixel barely moved from a different pan/tilt, it's noise
             is_stale = False
             if samples:
