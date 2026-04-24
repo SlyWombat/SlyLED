@@ -37,6 +37,12 @@ SlyLED est un systeme de controle d'eclairage LED et DMX a trois niveaux :
 
 ---
 
+## 2. Walkthrough: First Show in 30 Minutes
+
+> **[FR — traduction en attente]**  
+> Cette section n'est pas encore traduite. Consulter la version anglaise:
+> [docs/src/en/02-walkthrough.md](../en/02-walkthrough.md).  
+> La traduction complète est suivie dans l'issue #670.
 ## 2. Guide des plateformes
 
 ### Bureau Windows (SPA)
@@ -570,6 +576,12 @@ Pendant une calibration, le projecteur est verrouille : timelines, pucks gyro, t
 
 ---
 
+## 14. Camera Nodes
+
+> **[FR — traduction en attente]**  
+> Cette section n'est pas encore traduite. Consulter la version anglaise:
+> [docs/src/en/14-camera-nodes.md](../en/14-camera-nodes.md).  
+> La traduction complète est suivie dans l'issue #670.
 ## 14. Firmware et mises a jour OTA
 
 ### Flash USB
@@ -623,6 +635,12 @@ Voir `docs/STRESS_TEST.md` pour les donnees de benchmark completes.
 
 ---
 
+## 18. Examples
+
+> **[FR — traduction en attente]**  
+> Cette section n'est pas encore traduite. Consulter la version anglaise:
+> [docs/src/en/18-examples.md](../en/18-examples.md).  
+> La traduction complète est suivie dans l'issue #670.
 ## 17. Reference rapide API
 
 ### Scene et mise en page

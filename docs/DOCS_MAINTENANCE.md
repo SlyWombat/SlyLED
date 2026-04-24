@@ -1,16 +1,40 @@
-# Docs maintenance — calibration appendices
+# Docs maintenance — calibration appendices + source split
 
-This file describes how the calibration appendices in `docs/USER_MANUAL.md` are kept in sync with the calibration source code. It was created for issue [#662](https://github.com/SlyWombat/SlyLED/issues/662).
+This file describes how every piece of generated documentation is kept in
+sync with the source code. Originally authored for issue
+[#662](https://github.com/SlyWombat/SlyLED/issues/662); expanded 2026-04-24
+to cover the full docs-overhaul series (#665–#676) and the source-file split.
 
-## Scope
+## Source tree (post-#668)
 
-- **Appendix A** — Camera calibration pipeline
-- **Appendix B** — Moving-head calibration pipeline
-- **Appendix C** — Documentation-maintenance reference
-- **§20 Glossary** — Acronym + jargon reference (issue [#663](https://github.com/SlyWombat/SlyLED/issues/663))
+Edit markdown here; everything downstream is derived.
+
+```
+docs/src/
+  en/                    English canonical — one file per top-level section
+  fr/                    French mirror — same filenames (stubs until #670)
+  marketing/             Landing hero, feature cards, press kit (#672)
+  diagrams/*.mmd         Mermaid sources — rendered by tools/docs/ (#667)
+```
+
+The committed `docs/USER_MANUAL.md` and `_fr.md` files are assembled from
+the split by `tools/docs/build.py --format assembled-md` and checked in
+so GitHub previews and legacy link anchors keep working. Do not hand-edit
+them.
+
+## Scope of this file
+
+- **Appendix A** — Camera calibration pipeline (`docs/src/en/appendix-a-camera-calibration.md`)
+- **Appendix B** — Moving-head calibration pipeline (`docs/src/en/appendix-b-mover-calibration.md`)
+- **Appendix C** — Documentation-maintenance reference (`docs/src/en/appendix-c-maintenance.md`)
+- **§20 Glossary** — `docs/src/en/20-glossary.md` (issue [#663](https://github.com/SlyWombat/SlyLED/issues/663))
 - Diagram sources — `docs/diagrams/*.mmd`
 
-The appendices are currently marked **DRAFT** because they assume all of issues #610, #651–#661, and #357 are implemented. Until that series merges, verify each claim against the current code before citing it to customers.
+The appendices were previously marked **DRAFT** because they assumed the
+calibration reliability series (#610, #651–#661, #357) had merged. With
+all of those now on `main` (2026-04-23), the DRAFT banners are candidates
+for removal on the next doc pass — reviewer should run through the "When
+to bump the DRAFT banner" list below before removing.
 
 ## Source-of-truth file list
 
