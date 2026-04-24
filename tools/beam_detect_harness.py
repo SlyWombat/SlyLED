@@ -139,18 +139,7 @@ def iso_now():
 def parse_positions(pos_arg, pos_file):
     pts = []
     if pos_file:
-        with open(pos_file) as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                # Support "pan,tilt" or "pan,tilt,label"
-                parts = [p.strip() for p in line.split(",")]
-                if len(parts) < 2:
-                    continue
-                p, t = float(parts[0]), float(parts[1])
-                label = parts[2] if len(parts) > 2 else None
-                pts.append((p, t, label))
+        pts.extend(load_positions(pos_file))
     if pos_arg:
         for chunk in pos_arg.split(";"):
             chunk = chunk.strip()
@@ -159,6 +148,40 @@ def parse_positions(pos_arg, pos_file):
             parts = [p.strip() for p in chunk.split(",")]
             p, t = float(parts[0]), float(parts[1])
             label = parts[2] if len(parts) > 2 else None
+            pts.append((p, t, label))
+    return pts
+
+
+def load_positions(path):
+    """#682-EE — importable CSV parser for the harness-positions.csv
+    ground-truth file. Returns ``[(pan_norm, tilt_norm, label), ...]``.
+    Used by the canary test to feed positions + expected verdicts into
+    ``run_one`` without shelling out.
+
+    Lines starting with ``#`` are treated as comments. Inline trailing
+    comments after the ``label`` column (``0.5,0.5,foo # notes``) are
+    stripped from the label.
+    """
+    pts = []
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 2:
+                continue
+            try:
+                p = float(parts[0])
+                t = float(parts[1])
+            except ValueError:
+                continue
+            label = None
+            if len(parts) > 2:
+                raw = parts[2]
+                if "#" in raw:
+                    raw = raw.split("#", 1)[0]
+                label = raw.strip() or None
             pts.append((p, t, label))
     return pts
 

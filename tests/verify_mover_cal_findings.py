@@ -441,6 +441,113 @@ def check682_O_marker_log():
        "#682-O 'non-floor markers' log string present")
 
 
+def check682_DD_plausibility_gate():
+    """#682-DD — `_confirm` plausibility gate: proportionality +
+    symmetry + continuity cap. Returns verdict strings, not bare floats.
+    """
+    src = _read(_MCAL_PATH)
+    for verdict in ("CONFIRMED", "PARTIAL", "REJECTED_OUT_OF_FRAME",
+                     "REJECTED_DISCONTINUOUS", "REJECTED_DISPROPORTIONATE"):
+        ok(verdict in src,
+           f"#682-DD _confirm emits {verdict} verdict")
+    ok("confirm_geom" in src,
+       "#682-DD battleship_discover accepts confirm_geom kwarg")
+    ok("_confirm_geom" in src,
+       "#682-DD _confirm consumes the per-call geom dict")
+
+    # Helpers live on camera_math.py.
+    import camera_math as cm  # noqa: WPS433 — test-side import
+    ok(hasattr(cm, "project_stage_to_pixel"),
+       "#682-DD camera_math.project_stage_to_pixel defined")
+    ok(hasattr(cm, "expected_pixel_shift_per_deg"),
+       "#682-DD camera_math.expected_pixel_shift_per_deg defined")
+
+    px_per_deg = cm.expected_pixel_shift_per_deg(
+        mover_pos=(2000, 0, 3000),
+        floor_hit=(2000, 3000, 0),
+        cam_pos=(0, 0, 2000),
+        cam_rotation=[30, 0, 0],
+        fov_deg=90,
+        cam_resolution=(640, 360),
+    )
+    ok(isinstance(px_per_deg, tuple) and len(px_per_deg) == 2,
+       "#682-DD expected_pixel_shift_per_deg returns (pan, tilt) tuple")
+    ok(all(v >= 0 for v in px_per_deg),
+       f"#682-DD per-deg values non-negative (got {px_per_deg})")
+
+    px = cm.expected_pixel_shift_per_deg(
+        mover_pos=(1000, 1000, 3000),
+        floor_hit=(1000, 1000, 0),
+        cam_pos=(0, 0, 2000),
+        cam_rotation=[30, 0, 0],
+        fov_deg=90,
+        cam_resolution=(640, 360),
+    )
+    ok(px == (0.0, 0.0),
+       f"#682-DD degenerate (fixture over its own floor-hit) → (0, 0) got {px}")
+
+    src_p = _read(_PARENT_PATH)
+    ok("confirm_geom=confirm_geom" in src_p,
+       "#682-DD parent_server passes confirm_geom to battleship_discover")
+    ok("px_per_deg_pan" in src_p and "beam_width_px" in src_p,
+       "#682-DD confirm_geom payload carries per-deg + beam-width-px")
+
+
+def check682_EE_canary_harness():
+    """#682-EE — ground-truth canary test via beam_detect_harness.
+
+    run_one must be importable; harness-positions.csv must exist; the
+    regression test must assert the labelled rows produce the right
+    verdicts.
+    """
+    import importlib.util
+    harness_path = os.path.join(_ROOT, "tools", "beam_detect_harness.py")
+    ok(os.path.isfile(harness_path),
+       "#682-EE tools/beam_detect_harness.py exists")
+    spec = importlib.util.spec_from_file_location("beam_detect_harness",
+                                                    harness_path)
+    mod = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)
+    except Exception as e:
+        ok(False, f"#682-EE harness module import failed: {e}")
+        return
+    ok(hasattr(mod, "run_one") and callable(mod.run_one),
+       "#682-EE harness.run_one is importable")
+    ok(hasattr(mod, "load_positions"),
+       "#682-EE harness.load_positions exposes CSV parser for tests")
+    csv_path = os.path.join(_ROOT, "docs", "live-test-sessions",
+                             "2026-04-24", "harness-positions.csv")
+    ok(os.path.isfile(csv_path),
+       "#682-EE harness-positions.csv ships in docs/live-test-sessions/")
+
+    test_path = os.path.join(_ROOT, "tests", "regression",
+                              "test_beam_detect_canary.py")
+    ok(os.path.isfile(test_path),
+       "#682-EE tests/regression/test_beam_detect_canary.py exists")
+    runner = _read(os.path.join(_ROOT, "tests", "regression", "run_all.py"))
+    ok("--live-rig" in runner or "SLYLED_LIVE_RIG" in runner,
+       "#682-EE run_all.py gates canary suite on live-rig flag")
+
+
+def check682_FF_post_cal_confirm():
+    """#682-FF — post-cal confirmation tool + verdict + regression."""
+    pcc_path = os.path.join(_ROOT, "tools", "post_cal_confirm.py")
+    ok(os.path.isfile(pcc_path),
+       "#682-FF tools/post_cal_confirm.py exists")
+    src = _read(pcc_path)
+    ok("def project_to_camera_pixel" in src,
+       "#682-FF project_to_camera_pixel defined")
+    ok("TODO: find the right endpoint" not in src,
+       "#682-FF project_to_camera_pixel TODO is resolved")
+    ok("beam_width_px" in src or "tolerance_px" in src,
+       "#682-FF verdict checks distance against beam-width-in-pixels")
+    test_path = os.path.join(_ROOT, "tests", "regression",
+                              "test_post_cal_confirm.py")
+    ok(os.path.isfile(test_path),
+       "#682-FF tests/regression/test_post_cal_confirm.py exists")
+
+
 def main():
     print("=== #679 + #681 + #682 mover-calibration regression checks ===\n")
     print("-- #1 BRACKET_FLOOR --")
@@ -493,6 +600,12 @@ def main():
     check682_L_log_string()
     print("-- #682-O non-floor markers --")
     check682_O_marker_log()
+    print("-- #682-DD plausibility gate --")
+    check682_DD_plausibility_gate()
+    print("-- #682-EE canary harness --")
+    check682_EE_canary_harness()
+    print("-- #682-FF post-cal confirm --")
+    check682_FF_post_cal_confirm()
 
     total = _passed + _failed
     print(f"\n{'=' * 56}")

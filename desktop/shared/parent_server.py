@@ -4543,6 +4543,49 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
     except Exception:
         seed_pan, seed_tilt = 0.5, 0.5
     grid_filter = _build_battleship_grid_filter(f, pan_range_deg, tilt_range_deg)
+    # #682-DD — pre-compute pixel-per-degree sensitivity + beam-width
+    # in pixels at the seed target. _confirm uses these for the three-
+    # part plausibility gate. None on any failure → _confirm falls back
+    # to the legacy ≥ 8 px threshold, preserving old behaviour on rigs
+    # without camera pose / resolution data.
+    confirm_geom = None
+    try:
+        from camera_math import expected_pixel_shift_per_deg as _eps
+        cw2 = int(cam.get("resolutionW") or 0)
+        ch2 = int(cam.get("resolutionH") or 0)
+        cam_fov = float(cam.get("fovDeg") or 90.0)
+        cam_rotation = cam.get("rotation") or [0, 0, 0]
+        pos_map2 = {p["id"]: p for p in _layout.get("children", [])}
+        cam_fp = pos_map2.get(cam["id"], {})
+        cam_pos = (cam_fp.get("x", 0), cam_fp.get("y", 0), cam_fp.get("z", 0))
+        fix_fp = pos_map2.get(f["id"], {})
+        mover_pos = (fix_fp.get("x", 0), fix_fp.get("y", 0), fix_fp.get("z", 0))
+        # Use the seed target as the reference beam-hit for the gate.
+        ref_hit = seed_target if 'seed_target' in dir() else (
+            float(_stage.get("w", 3.0) * 500),
+            float(_stage.get("d", 4.0) * 500),
+            0.0)
+        if cw2 and ch2:
+            px_per_deg = _eps(mover_pos, ref_hit, cam_pos, cam_rotation,
+                               cam_fov, (cw2, ch2))
+            if px_per_deg and (px_per_deg[0] > 0 or px_per_deg[1] > 0):
+                # Beam width in pixels at the reference hit:
+                # beam_width_deg × px_per_deg_pan is a reasonable stand-in
+                # (beam is axially symmetric; use the pan axis as proxy).
+                beam_px = float(beam_width_deg or 15) * max(
+                    px_per_deg[0], px_per_deg[1])
+                confirm_geom = {
+                    "px_per_deg_pan": float(px_per_deg[0]),
+                    "px_per_deg_tilt": float(px_per_deg[1]),
+                    "beam_width_px": beam_px,
+                }
+                _mcal_log(job, f"Confirm gate: "
+                               f"pan={px_per_deg[0]:.1f} tilt={px_per_deg[1]:.1f} "
+                               f"px/°; beam={beam_px:.0f}px (#682-DD)")
+    except Exception as e:
+        log.warning("MOVER-CAL %d: could not build #682-DD confirm-geom "
+                    "(%s) — falling back to legacy ≥8px gate", fid, e)
+        confirm_geom = None
     # #681 — adaptive-density toggle. When False, range/beam args are
     # ignored and the grid falls back to the fixed default.
     if not bool(_cal_tuning("adaptiveDensity")):
@@ -4580,6 +4623,7 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
         confirm_nudge_delta=_cal_tuning("nudgeAmplitude"),
         mounted_inverted=bool(f.get("mountedInverted")),
         grid_filter=grid_filter,
+        confirm_geom=confirm_geom,
         progress_cb=_discovery_progress,
     )
     if discovered is None:

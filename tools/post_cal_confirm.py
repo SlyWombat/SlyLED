@@ -31,12 +31,19 @@ Target syntax:
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Reach into desktop/shared for camera_math (project_stage_to_pixel) without
+# requiring an orchestrator endpoint we don't ship yet.
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE.parent / "desktop" / "shared"))
+from camera_math import project_stage_to_pixel as _project  # noqa: E402
 
 CAMERA_ROUTES = {
     12: ("http://192.168.10.235:5000", 0),
@@ -124,14 +131,135 @@ def aim_via_cal(orch, fid, x, y, z):
                  {"targetX": x, "targetY": y, "targetZ": z})
 
 
-def project_to_camera_pixel(orch, cam_fixture_id, x, y, z):
-    """Ask the orchestrator for the projected pixel (x,y) of stage-mm point
-    (x,y,z) in the given camera. If the orchestrator exposes such an endpoint,
-    use it. Otherwise return None — caller uses a tolerance of 'any visible'
-    instead of a specific pixel target.
+_CAM_POSE_CACHE = {}
+
+
+def _camera_pose(orch, cam_fid):
+    """Fetch + cache the camera fixture record (pos, rotation, fov, res).
+
+    Reads /api/fixtures/<fid>; falls back to the matching entry in
+    /api/fixtures if individual GET isn't routed for cameras in this build.
+    Returns ``None`` on any error so the caller skips projection rather
+    than crashing the run.
     """
-    # TODO: find the right endpoint name in this build; for now, skip.
-    return None
+    if cam_fid in _CAM_POSE_CACHE:
+        return _CAM_POSE_CACHE[cam_fid]
+    rec = http("GET", f"{orch}/api/fixtures/{cam_fid}")
+    if not isinstance(rec, dict) or rec.get("_error"):
+        rec = None
+        all_fix = http("GET", f"{orch}/api/fixtures")
+        if isinstance(all_fix, list):
+            for f in all_fix:
+                if isinstance(f, dict) and int(f.get("id", -1)) == int(cam_fid):
+                    rec = f
+                    break
+    if not isinstance(rec, dict):
+        _CAM_POSE_CACHE[cam_fid] = None
+        return None
+    pos = rec.get("position") or rec.get("pos") or [0, 0, 0]
+    rotation = rec.get("rotation") or [0, 0, 0]
+    fov = float(rec.get("fov") or rec.get("fovDeg") or 60)
+    res = rec.get("resolution") or [640, 480]
+    pose = {
+        "pos": [float(pos[0]), float(pos[1]), float(pos[2])],
+        "rotation": rotation,
+        "fov": fov,
+        "resolution": (int(res[0]), int(res[1])),
+        "label": rec.get("name") or rec.get("label") or f"cam{cam_fid}",
+    }
+    _CAM_POSE_CACHE[cam_fid] = pose
+    return pose
+
+
+def project_to_camera_pixel(orch, cam_fixture_id, x, y, z):
+    """Project stage-mm point (x, y, z) to camera ``cam_fixture_id``'s pixel.
+
+    Uses the cached camera fixture pose (position, rotation, FOV, resolution)
+    plus :func:`camera_math.project_stage_to_pixel` — the same projection
+    used by the #682-DD plausibility gate. Returns a dict with the projected
+    (px, py) plus the resolution and FOV, or ``None`` for an unknown fixture
+    or a behind-camera target.
+    """
+    pose = _camera_pose(orch, cam_fixture_id)
+    if not pose:
+        return None
+    px, py = _project((x, y, z), pose["pos"], pose["rotation"],
+                       pose["fov"], pose["resolution"])
+    if px is None or py is None:
+        return {"px": None, "py": None, "behindCamera": True,
+                 "resolution": pose["resolution"], "fov": pose["fov"]}
+    return {"px": float(px), "py": float(py),
+             "behindCamera": False,
+             "resolution": pose["resolution"],
+             "fov": pose["fov"]}
+
+
+def verdict_for_camera(detected, projected, beam_width_px, fov_tolerance_factor=5.0):
+    """Compare detected pixel vs projected pixel for one camera.
+
+    Verdict rule (per #682-FF):
+        |detected_px − projected_px| < ``fov_tolerance_factor`` × beam_width_px
+
+    Args:
+        detected: ``{"found": bool, "pixelX": int, "pixelY": int}`` from
+                  ``/beam-detect``.
+        projected: dict from :func:`project_to_camera_pixel` or ``None``.
+        beam_width_px: expected beam radius/width in image pixels at this
+                       distance (used as the ruler for tolerance).
+
+    Returns ``{"verdict": str, "distancePx": float|None, "tolerancePx": float}``.
+        verdict ∈ {NO_PROJECTION, BEHIND_CAMERA, NO_DETECTION,
+                    CONFIRMED, OFF_TARGET}.
+    """
+    tolerance_px = float(fov_tolerance_factor) * float(beam_width_px or 30.0)
+    if projected is None:
+        return {"verdict": "NO_PROJECTION", "distancePx": None,
+                 "tolerancePx": tolerance_px}
+    if projected.get("behindCamera") or projected.get("px") is None:
+        return {"verdict": "BEHIND_CAMERA", "distancePx": None,
+                 "tolerancePx": tolerance_px}
+    if not detected or not detected.get("found"):
+        return {"verdict": "NO_DETECTION", "distancePx": None,
+                 "tolerancePx": tolerance_px}
+    dx = float(detected.get("pixelX", 0)) - projected["px"]
+    dy = float(detected.get("pixelY", 0)) - projected["py"]
+    dist = (dx * dx + dy * dy) ** 0.5
+    return {
+        "verdict": "CONFIRMED" if dist < tolerance_px else "OFF_TARGET",
+        "distancePx": dist,
+        "tolerancePx": tolerance_px,
+    }
+
+
+def estimate_beam_width_px(orch, cam_fid, mover_fid, target_xyz, beam_deg):
+    """Estimate beam radius in pixels at the floor-hit, for the verdict
+    tolerance. Uses ``expected_pixel_shift_per_deg`` against the same
+    geometry the DD gate uses.
+
+    Returns 30.0 px as a safe fallback when geometry can't be resolved.
+    """
+    try:
+        from camera_math import expected_pixel_shift_per_deg
+    except Exception:
+        return 30.0
+    pose = _camera_pose(orch, cam_fid)
+    if not pose:
+        return 30.0
+    mover_rec = http("GET", f"{orch}/api/fixtures/{mover_fid}") or {}
+    mover_pos = mover_rec.get("position") or mover_rec.get("pos") or [0, 0, 0]
+    try:
+        px_pan, px_tilt = expected_pixel_shift_per_deg(
+            mover_pos=mover_pos,
+            floor_hit=target_xyz,
+            cam_pos=pose["pos"],
+            cam_rotation=pose["rotation"],
+            fov_deg=pose["fov"],
+            cam_resolution=pose["resolution"],
+        )
+    except Exception:
+        return 30.0
+    px_per_deg = max(px_pan, px_tilt) or 1.0
+    return float(beam_deg) * px_per_deg
 
 
 def format_summary(rec):
@@ -140,12 +268,22 @@ def format_summary(rec):
            else f"[{rec['target']}]  aim ERROR: {rec.get('aimResult',{}).get('_error','?')}"]
     for c in rec['cameras']:
         pri = rec.get('detect', {}).get(c) or {}
+        verdict = rec.get('verdict', {}).get(c) or {}
+        v_tag = verdict.get("verdict")
+        proj = rec.get("projected", {}).get(c) or {}
         if pri.get('_error'):
             out.append(f"  cam #{c}: ERR {pri['_error']}")
         elif not pri.get('found'):
-            out.append(f"  cam #{c}: no-beam")
+            out.append(f"  cam #{c}: no-beam ({v_tag or '?'})")
         else:
-            out.append(f"  cam #{c}: found px=({pri.get('pixelX')}, {pri.get('pixelY')})  bright={pri.get('brightness')}  area={pri.get('area')}")
+            dist = verdict.get("distancePx")
+            tol = verdict.get("tolerancePx")
+            dist_str = (f"  dist={dist:.0f}px / tol={tol:.0f}px"
+                        if dist is not None else "")
+            proj_str = (f"  proj=({proj.get('px'):.0f},{proj.get('py'):.0f})"
+                        if proj.get("px") is not None else "")
+            out.append(f"  cam #{c}: found px=({pri.get('pixelX')}, {pri.get('pixelY')})"
+                        f"{proj_str}  {v_tag or '?'}{dist_str}")
     return "\n".join(out)
 
 
@@ -167,6 +305,15 @@ def main():
     ap.add_argument("--snapshot-dir")
     ap.add_argument("--run-tag", default="postcal")
     ap.add_argument("--out")
+    ap.add_argument("--beam-deg", type=float, default=3.0,
+                    help="beam half-angle / spot diameter in deg, used as the "
+                         "ruler for projection-vs-detection tolerance "
+                         "(default 3° = 150W MH spot)")
+    ap.add_argument("--tolerance-factor", type=float, default=5.0,
+                    help="tolerance_px = factor × beam_width_px "
+                         "(default 5×)")
+    ap.add_argument("--fail-on-off-target", action="store_true",
+                    help="exit 1 if any camera reports OFF_TARGET")
     args = ap.parse_args()
 
     cameras = [int(c) for c in args.cameras.split(",") if c.strip()]
@@ -192,6 +339,8 @@ def main():
             return 2
 
     print(f"== post-cal confirm: fid={args.fid}  {len(resolved)} target(s) × {len(cameras)} camera(s)")
+
+    off_target_failures = []
 
     out_fp = None
     if args.out:
@@ -224,13 +373,23 @@ def main():
         # Detect + snapshot.
         det = {}
         snaps = {}
+        proj = {}
+        verd = {}
         for c in cameras:
             det[c] = beam_detect(c, threshold=args.threshold, use_dark=not args.no_dark_ref)
+            proj[c] = project_to_camera_pixel(args.orch, c, tx, ty, tz)
+            beam_width_px = estimate_beam_width_px(args.orch, c, args.fid,
+                                                     (tx, ty, tz), args.beam_deg)
+            verd[c] = verdict_for_camera(det[c], proj[c], beam_width_px,
+                                          fov_tolerance_factor=args.tolerance_factor)
+            verd[c]["beamWidthPx"] = beam_width_px
             if args.snapshot_dir:
                 sd = Path(args.snapshot_dir); sd.mkdir(parents=True, exist_ok=True)
                 fp = sd / f"{args.run_tag}-{t_name.replace(':','-').replace(' ','_').replace('/','-')}-cam{c}.jpg"
                 snaps[c] = save_snapshot(c, fp)
         rec["detect"] = det
+        rec["projected"] = proj
+        rec["verdict"] = verd
         if snaps: rec["snapshots"] = snaps
 
         print(format_summary(rec))
@@ -238,11 +397,24 @@ def main():
             out_fp.write(json.dumps(rec) + "\n")
             out_fp.flush()
 
+        for c, v in verd.items():
+            if v.get("verdict") == "OFF_TARGET":
+                off_target_failures.append((t_name, c, v.get("distancePx"),
+                                              v.get("tolerancePx")))
+
     set_dimmer(args.orch, args.fid, 0)
     if out_fp:
         out_fp.close()
         print(f"== wrote {args.out}")
     print("== dimmer zeroed on fixture", args.fid)
+    if off_target_failures:
+        print(f"\n== {len(off_target_failures)} OFF_TARGET verdict(s):")
+        for t, c, d, tol in off_target_failures:
+            d_s = f"{d:.0f}px" if isinstance(d, (int, float)) else "?"
+            tol_s = f"{tol:.0f}px" if isinstance(tol, (int, float)) else "?"
+            print(f"   - {t}  cam #{c}  dist={d_s} (tol={tol_s})")
+        if args.fail_on_off_target:
+            return 1
     return 0
 
 

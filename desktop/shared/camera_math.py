@@ -171,6 +171,112 @@ def rotation_to_layout(tilt, pan, roll=0.0):
     return [float(tilt), float(roll), float(pan)]
 
 
+# ── Stage → pixel projection (#682-DD) ───────────────────────────────────
+
+def project_stage_to_pixel(stage_point, cam_pos, cam_rotation,
+                            fov_deg, cam_resolution):
+    """Project a stage-mm point to a camera pixel.
+
+    Inverse of the cam→stage transform. Returns ``(px, py)`` in pixel
+    coordinates with origin at image top-left, or ``(None, None)`` when
+    the point is behind the camera (negative z in camera frame).
+
+    Assumes a centred pinhole with square pixels. Focal length derived
+    from the camera's declared horizontal FOV:
+
+        fx = fy = W / (2 × tan(fov/2))
+
+    Used by ``expected_pixel_shift_per_deg`` to build the DD plausibility
+    gate, and by ``tools/post_cal_confirm.py`` for the #682-FF
+    "projection vs detection" verdict.
+    """
+    tilt_deg, pan_deg, roll_deg = rotation_from_layout(cam_rotation)
+    R_c2s = build_camera_to_stage(tilt_deg, pan_deg, roll_deg)
+    # Invert: R_cam_to_stage is orthonormal, so R_stage_to_cam = R.T
+    sx, sy, sz = float(stage_point[0]), float(stage_point[1]), float(stage_point[2])
+    dx, dy, dz = sx - cam_pos[0], sy - cam_pos[1], sz - cam_pos[2]
+    if _HAS_NUMPY and hasattr(R_c2s, "T"):
+        R_s2c = R_c2s.T
+        cam_x = R_s2c[0, 0] * dx + R_s2c[0, 1] * dy + R_s2c[0, 2] * dz
+        cam_y = R_s2c[1, 0] * dx + R_s2c[1, 1] * dy + R_s2c[1, 2] * dz
+        cam_z = R_s2c[2, 0] * dx + R_s2c[2, 1] * dy + R_s2c[2, 2] * dz
+    else:
+        # Transpose a nested-list matrix.
+        cam_x = R_c2s[0][0] * dx + R_c2s[1][0] * dy + R_c2s[2][0] * dz
+        cam_y = R_c2s[0][1] * dx + R_c2s[1][1] * dy + R_c2s[2][1] * dz
+        cam_z = R_c2s[0][2] * dx + R_c2s[1][2] * dy + R_c2s[2][2] * dz
+    if cam_z <= 1e-6:
+        return (None, None)  # behind camera
+    w, h = cam_resolution
+    fx = float(w) / (2.0 * math.tan(math.radians(fov_deg) / 2.0))
+    fy = fx  # square pixels
+    cx = float(w) / 2.0
+    cy = float(h) / 2.0
+    px = fx * cam_x / cam_z + cx
+    py = fy * cam_y / cam_z + cy
+    return (px, py)
+
+
+def expected_pixel_shift_per_deg(mover_pos, floor_hit, cam_pos, cam_rotation,
+                                   fov_deg, cam_resolution):
+    """#682-DD — px/° sensitivity of the camera view to mover pan / tilt
+    nudges at a given beam floor-hit point.
+
+    The plausibility gate in ``battleship_discover._confirm`` uses this
+    to reject "shift too large (blob identity swap)" and
+    "shift disproportionate to expected" false positives.
+
+    Args:
+        mover_pos:       (x, y, z) fixture position in stage mm.
+        floor_hit:       (x, y, z) stage point where the beam currently
+                         lands. Typically on floor (z≈0) but the helper
+                         works for any hit plane.
+        cam_pos:         (x, y, z) camera fixture position.
+        cam_rotation:    layout-rotation triple for the camera.
+        fov_deg:         camera horizontal FOV in degrees.
+        cam_resolution:  (W, H) in pixels.
+
+    Returns ``(px_per_deg_pan, px_per_deg_tilt)``. Either entry can be
+    0.0 when the geometry is degenerate (beam behind camera, floor-hit
+    directly below the mover) — caller should treat 0.0 as "can't judge,
+    fall back to the legacy ≥ 8 px threshold".
+    """
+    mx, my, mz = float(mover_pos[0]), float(mover_pos[1]), float(mover_pos[2])
+    fx, fy, fz = float(floor_hit[0]), float(floor_hit[1]), float(floor_hit[2])
+    v_xy_mag = math.hypot(fx - mx, fy - my)
+    # Beam length fixture → floor-hit. When fixture is (nearly) over the
+    # hit point the pan arc tangent collapses; skip the gate.
+    beam_len = math.sqrt((fx - mx) ** 2 + (fy - my) ** 2 + (fz - mz) ** 2)
+    if v_xy_mag < 1e-3 or beam_len < 1e-3:
+        return (0.0, 0.0)
+    # Arc tangent for a 1° pan rotation around the stage-Z axis:
+    #   tangent direction = perp-to-radial in XY plane
+    #   arc length = r_xy × (π/180)
+    pan_arc_mm = v_xy_mag * math.pi / 180.0
+    pan_tx = -(fy - my) / v_xy_mag * pan_arc_mm
+    pan_ty = (fx - mx) / v_xy_mag * pan_arc_mm
+    pan_hit = (fx + pan_tx, fy + pan_ty, fz)
+    # Arc tangent for 1° tilt (rotation around a horizontal axis through
+    # the mover): for small angles the floor-hit moves radially along
+    # the beam direction projected on the floor by ~beam_len × (π/180).
+    tilt_arc_mm = beam_len * math.pi / 180.0
+    tilt_tx = (fx - mx) / v_xy_mag * tilt_arc_mm
+    tilt_ty = (fy - my) / v_xy_mag * tilt_arc_mm
+    tilt_hit = (fx + tilt_tx, fy + tilt_ty, fz)
+
+    p0 = project_stage_to_pixel(floor_hit, cam_pos, cam_rotation,
+                                  fov_deg, cam_resolution)
+    pp = project_stage_to_pixel(pan_hit, cam_pos, cam_rotation,
+                                  fov_deg, cam_resolution)
+    pt = project_stage_to_pixel(tilt_hit, cam_pos, cam_rotation,
+                                  fov_deg, cam_resolution)
+    if any(v is None for v in (p0[0], p0[1], pp[0], pp[1], pt[0], pt[1])):
+        return (0.0, 0.0)
+    pan_shift = math.hypot(pp[0] - p0[0], pp[1] - p0[1])
+    tilt_shift = math.hypot(pt[0] - p0[0], pt[1] - p0[1])
+    return (pan_shift, tilt_shift)
+
+
 # ── Camera floor-view polygon (#659) ─────────────────────────────────────
 
 def camera_floor_polygon(cam_pos, rotation, fov_deg, aspect=16.0 / 9.0,

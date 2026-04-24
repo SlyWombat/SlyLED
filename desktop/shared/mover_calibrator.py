@@ -798,7 +798,7 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                          coarse_pan_min=3, coarse_pan_max=8,
                          coarse_tilt_min=3, coarse_tilt_max=6,
                          grid_filter=None, mounted_inverted=False,
-                         cancel_check=None):
+                         cancel_check=None, confirm_geom=None):
     """Coarse-to-fine discovery: sample a sparse `coarse_steps × coarse_
     steps` grid across pan/tilt ∈ [0, 1] first, then confirm any hit
     with a small nudge (rejects reflections).
@@ -827,6 +827,11 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     if profile is not None:
         _active_profile = profile
     dmx = _fresh_buffer()
+    # #682-DD — caller supplies pre-computed geometry so _confirm can
+    # apply the proportionality + continuity-cap gates without repeating
+    # the camera-math projection on every probe. None → legacy ≥ 8 px
+    # threshold only.
+    _confirm_geom = confirm_geom
 
     # #661 — adaptive density. Explicit coarse_pan_steps/coarse_tilt_steps
     # win when supplied; else compute from fixture range + beam width;
@@ -937,41 +942,148 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     def _confirm(pan0, tilt0, px0, py0):
         """Confirm a candidate beam by nudging pan and tilt.
 
-        Tolerates a beam that moves OFF the frame in one direction
-        (common at coarse-grid edges) — requires ONE axis shift > 8px
-        with the beam still detected on that axis. Full blind-eye on
-        the other axis.
+        Returns a tuple ``(verdict, info)`` where verdict is one of:
+          - "CONFIRMED"                 — symmetric nudge-response plausible
+          - "PARTIAL"                   — one-sided shift only (edge of frame)
+          - "REJECTED_OUT_OF_FRAME"     — no detectable shift on either axis
+          - "REJECTED_DISCONTINUOUS"    — shift magnitude exceeds continuity
+                                           cap (blob identity swap)
+          - "REJECTED_DISPROPORTIONATE" — observed shift outside expected
+                                           range by > 3× (DD plausibility)
+
+        `info` carries per-direction pixel shifts, signed axis components,
+        and the expected-vs-observed ratios so the caller can surface
+        the reason in the SPA log (#682-G).
+
+        #682-DD — previously the gate was "any single axis shift > 8 px".
+        That passes scene-object identity swaps at the beam's camera-view
+        boundary (operator repro at P187/T33 on the basement rig: the
+        detector tracked storage bins, pan+ swung the real beam into
+        frame, confirm saw a huge shift and accepted it as "confirmed").
+        Now we require proportionality to the expected per-deg shift,
+        symmetry between + and − nudges, AND a continuity cap.
         """
         def _probe(pan, tilt):
             _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
             _hold_dmx(bridge_ip, dmx, 0.4)
             return _beam_detect(camera_ip, cam_idx, color, center=True)
 
-        # Try both + and - nudges on each axis so an edge-of-frame
-        # candidate can still be confirmed via the opposite direction.
-        pan_candidates = (min(1.0, pan0 + confirm_nudge_delta),
-                           max(0.0, pan0 - confirm_nudge_delta))
-        tilt_candidates = (min(1.0, tilt0 + confirm_nudge_delta),
-                            max(0.0, tilt0 - confirm_nudge_delta))
-        pan_shift = 0.0
-        for p in pan_candidates:
-            b = _probe(p, tilt0)
-            if b is not None:
-                s = math.hypot(b[0] - px0, b[1] - py0)
-                if s > pan_shift:
-                    pan_shift = s
-                if s > 8:
-                    break
-        tilt_shift = 0.0
-        for t in tilt_candidates:
-            b = _probe(pan0, t)
-            if b is not None:
-                s = math.hypot(b[0] - px0, b[1] - py0)
-                if s > tilt_shift:
-                    tilt_shift = s
-                if s > 8:
-                    break
-        return pan_shift, tilt_shift
+        nudge = float(confirm_nudge_delta)
+        # Probe all four directions. Unlike the legacy gate we need both
+        # + and − shifts to judge symmetry.
+        probes = {
+            "pan+":  _probe(min(1.0, pan0 + nudge), tilt0),
+            "pan-":  _probe(max(0.0, pan0 - nudge), tilt0),
+            "tilt+": _probe(pan0, min(1.0, tilt0 + nudge)),
+            "tilt-": _probe(pan0, max(0.0, tilt0 - nudge)),
+        }
+        # Re-settle on the candidate pixel so downstream refine starts
+        # from the same state we told the caller we hit.
+        _set_mover_dmx(dmx, mover_addr, pan0, tilt0, *color, dimmer=255)
+        _hold_dmx(bridge_ip, dmx, 0.2)
+
+        # Signed pixel deltas on each probe (magnitude + primary axis).
+        def _sig(b):
+            if b is None:
+                return None
+            return (b[0] - px0, b[1] - py0,
+                    math.hypot(b[0] - px0, b[1] - py0))
+        signals = {k: _sig(v) for k, v in probes.items()}
+        mag = {k: (s[2] if s else 0.0) for k, s in signals.items()}
+        pan_shift = max(mag["pan+"], mag["pan-"])
+        tilt_shift = max(mag["tilt+"], mag["tilt-"])
+
+        info = {
+            "panShift": round(pan_shift, 1),
+            "tiltShift": round(tilt_shift, 1),
+            "panPlus": round(mag["pan+"], 1),
+            "panMinus": round(mag["pan-"], 1),
+            "tiltPlus": round(mag["tilt+"], 1),
+            "tiltMinus": round(mag["tilt-"], 1),
+        }
+
+        # Gate 1 (legacy out-of-frame): at least ONE axis must actually
+        # move under nudge. If everything reads 0 px, detector is
+        # latched on a static bright scene object.
+        if pan_shift < 8 and tilt_shift < 8:
+            return ("REJECTED_OUT_OF_FRAME", info)
+
+        # Gate 2 (continuity cap): reject if any axis shift exceeds
+        # 5× the beam's floor projection in pixels. Requires knowing the
+        # camera geometry + mover pose; when unavailable fall back to a
+        # generous default so we don't reject legitimately bright rigs.
+        expected = info.setdefault("expected", {})
+        cap_mag = None
+        try:
+            if (beam_width_deg and camera_resolution and
+                    _confirm_geom is not None):
+                cap_mag = 5.0 * _confirm_geom["beam_width_px"]
+                expected["capPx"] = round(cap_mag, 1)
+                expected["beamWidthPx"] = round(_confirm_geom["beam_width_px"], 1)
+                expected["panPerDeg"] = round(_confirm_geom["px_per_deg_pan"], 2)
+                expected["tiltPerDeg"] = round(_confirm_geom["px_per_deg_tilt"], 2)
+        except Exception:
+            cap_mag = None
+        if cap_mag is not None and cap_mag > 0 and max(pan_shift, tilt_shift) > cap_mag:
+            return ("REJECTED_DISCONTINUOUS", info)
+
+        # Gate 3 (proportionality): ratio of observed to expected must
+        # be within [0.33, 3.0]. Uses the stronger axis (whichever has
+        # the larger observed shift) so an edge-of-frame case isn't
+        # penalised on the missing side.
+        if _confirm_geom is not None:
+            exp_pan = nudge * float(pan_range_deg or 540.0) * _confirm_geom["px_per_deg_pan"]
+            exp_tilt = nudge * float(tilt_range_deg or 270.0) * _confirm_geom["px_per_deg_tilt"]
+            expected["panPx"] = round(exp_pan, 1)
+            expected["tiltPx"] = round(exp_tilt, 1)
+            # Proportionality check runs against whichever axis exceeded
+            # the noise floor; if BOTH are strong, average the ratios.
+            ratios = []
+            if pan_shift >= 8 and exp_pan > 0:
+                ratios.append(pan_shift / exp_pan)
+            if tilt_shift >= 8 and exp_tilt > 0:
+                ratios.append(tilt_shift / exp_tilt)
+            if ratios:
+                ratio = sum(ratios) / len(ratios)
+                info["observedOverExpected"] = round(ratio, 2)
+                if ratio < 0.33 or ratio > 3.0:
+                    return ("REJECTED_DISPROPORTIONATE", info)
+
+        # Gate 4 (symmetry): require + and − nudges on the strong axis
+        # to both register shift AND go in opposite screen directions.
+        # When one side is near-zero → PARTIAL (beam is straddling an
+        # image edge; caller treats as REJECTED in automated cal but
+        # operator UI gets the hint).
+        def _symmetric(a, b, ax_comp):
+            """Are (a, b) opposite-signed shifts of similar magnitude?"""
+            if a is None or b is None:
+                return False
+            sa = a[ax_comp]
+            sb = b[ax_comp]
+            if abs(sa) < 4 or abs(sb) < 4:
+                return False
+            if (sa > 0) == (sb > 0):
+                return False
+            ratio = abs(sa) / max(abs(sb), 1e-3)
+            return 0.33 <= ratio <= 3.0
+
+        pan_sym = _symmetric(signals["pan+"], signals["pan-"], 0)
+        tilt_sym = _symmetric(signals["tilt+"], signals["tilt-"], 1)
+        info["panSymmetric"] = bool(pan_sym)
+        info["tiltSymmetric"] = bool(tilt_sym)
+
+        # Strong axis must be symmetric; the weaker axis is allowed to
+        # be one-sided (typical when the beam straddles a frame edge).
+        strong_pan = pan_shift >= tilt_shift
+        strong_sym = pan_sym if strong_pan else tilt_sym
+        if not strong_sym:
+            return ("PARTIAL", info)
+
+        return ("CONFIRMED", info)
+
+    # _confirm_geom is set above from the confirm_geom kwarg. Either a
+    # dict {px_per_deg_pan, px_per_deg_tilt, beam_width_px} or None
+    # (legacy single-gate behaviour).
 
     # #682-G — per-probe outcome counters exposed via progress_cb and
     # returned on the `outcome_counts` attribute so the SPA can render
@@ -1010,20 +1122,40 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                               "pixelX": int(px0), "pixelY": int(py0)})
             except Exception:
                 pass
-        pan_shift, tilt_shift = _confirm(pan, tilt, px0, py0)
-        if not (pan_shift > 8 or tilt_shift > 8):
-            outcome_counts["candidatesRejectedOutOfFrame"] += 1
-            log.warning("battleship_discover: probe %d/%d REJECTED "
-                        "(out-of-frame: pan-shift %.0fpx, "
-                        "tilt-shift %.0fpx, threshold 8)",
-                        idx + 1, total, pan_shift, tilt_shift)
+        verdict, conf_info = _confirm(pan, tilt, px0, py0)
+        pan_shift = conf_info.get("panShift", 0.0)
+        tilt_shift = conf_info.get("tiltShift", 0.0)
+        if verdict != "CONFIRMED":
+            # #682-DD — map the richer verdicts to the existing outcome
+            # counters so the SPA log stays consistent.
+            if verdict == "REJECTED_OUT_OF_FRAME":
+                outcome_counts["candidatesRejectedOutOfFrame"] += 1
+                reason = "out-of-frame"
+            elif verdict == "REJECTED_DISCONTINUOUS":
+                outcome_counts["candidatesRejectedOutOfFrame"] += 1
+                reason = "discontinuous-shift"
+            elif verdict == "REJECTED_DISPROPORTIONATE":
+                outcome_counts["candidatesRejectedOutOfFrame"] += 1
+                reason = "disproportionate-shift"
+            elif verdict == "PARTIAL":
+                outcome_counts["candidatesRejectedOutOfFrame"] += 1
+                reason = "partial-edge-of-frame"
+            else:
+                outcome_counts["candidatesRejectedOutOfFrame"] += 1
+                reason = verdict.lower()
+            log.warning("battleship_discover: probe %d/%d %s "
+                        "(pan-shift %.0fpx, tilt-shift %.0fpx; %s)",
+                        idx + 1, total, verdict, pan_shift, tilt_shift,
+                        conf_info)
             if progress_cb:
                 try:
                     progress_cb({"stage": "confirm-rejected",
                                   "probe": idx + 1, "total": total,
-                                  "reason": "out-of-frame",
+                                  "reason": reason,
+                                  "verdict": verdict,
                                   "panShiftPx": round(pan_shift, 1),
-                                  "tiltShiftPx": round(tilt_shift, 1)})
+                                  "tiltShiftPx": round(tilt_shift, 1),
+                                  "info": conf_info})
                 except Exception:
                     pass
             return None
