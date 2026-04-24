@@ -1,0 +1,123 @@
+# Feature comparison — rendered into a sortable table on the website
+# (#672) and referenced from the README (#676). Rows = competitors;
+# columns = capabilities. Populate with honest, up-to-date facts; the
+# "see" field links back to a source in the manual or an external
+# reference.
+
+products:
+  - id: slyled
+    name: SlyLED
+    website: https://electricrv.ca/slyled
+    price_approx_usd: 250
+    price_notes: "1 moving head + 1 USB camera + Windows PC — hardware is incremental."
+  - id: grandma3
+    name: grandMA3 (onPC)
+    website: https://www.malighting.com/grandma3
+    price_approx_usd: 60000
+    price_notes: "Full console pricing; onPC alone is cheaper but still desk-centric."
+  - id: chamsys_magicq
+    name: Chamsys MagicQ
+    website: https://www.chamsys.co.uk/magicq
+    price_approx_usd: 5000
+    price_notes: "Software is free; hardware wings start around $2 k, full consoles around $10 k."
+  - id: follow_me
+    name: Follow-Me 3D
+    website: https://www.follow-me.com/
+    price_approx_usd: 15000
+    price_notes: "Specialised tracking software; integrates with consoles."
+  - id: zactrack
+    name: Zactrack PRO
+    website: https://www.zactrack.com/
+    price_approx_usd: 30000
+    price_notes: "UWB-beacon tracking system — beacons + puck + server."
+  - id: qlcplus
+    name: QLC+
+    website: https://qlcplus.org/
+    price_approx_usd: 50
+    price_notes: "Free software + a USB-DMX dongle."
+  - id: freestyler
+    name: Freestyler DMX
+    website: https://freestylerdmx.be/
+    price_approx_usd: 50
+    price_notes: "Free; Windows-only."
+
+features:
+  - id: mover_cal_auto
+    label: "Camera-assisted mover calibration"
+    slyled: "Yes — fully automatic (battleship search + flash confirm + parametric fit)"
+    grandma3: "Manual (3-point per fixture)"
+    chamsys_magicq: "Manual (4 stage-corner palettes)"
+    follow_me: "Manual + per-fixture aim"
+    zactrack: "UWB puck alignment (requires beacons)"
+    qlcplus: "No"
+    freestyler: "No"
+
+  - id: ai_autotune
+    label: "Local vision AI for camera tuning"
+    slyled: "Yes — Ollama + Moondream, runs on the operator's own box"
+    grandma3: "—"
+    chamsys_magicq: "—"
+    follow_me: "—"
+    zactrack: "—"
+    qlcplus: "—"
+    freestyler: "—"
+
+  - id: control_surfaces
+    label: "Control surfaces"
+    slyled: "Web + Android + ESP32 gyro puck"
+    grandma3: "Proprietary console"
+    chamsys_magicq: "Proprietary console + iPad"
+    follow_me: "Trackball"
+    zactrack: "Alignment puck"
+    qlcplus: "Web + generic MIDI controller"
+    freestyler: "Desktop only"
+
+  - id: stage_3d
+    label: "3D stage model"
+    slyled: "Yes"
+    grandma3: "Yes"
+    chamsys_magicq: "Yes"
+    follow_me: "Yes (tracking view)"
+    zactrack: "Yes"
+    qlcplus: "No"
+    freestyler: "No"
+
+  - id: dynamic_show
+    label: "Dynamic show generator (adapts to actual fixtures)"
+    slyled: "Yes — 14 themes"
+    grandma3: "No (explicit cues)"
+    chamsys_magicq: "No"
+    follow_me: "—"
+    zactrack: "—"
+    qlcplus: "No"
+    freestyler: "No"
+
+  - id: open_source
+    label: "Open source"
+    slyled: "Yes"
+    grandma3: "No"
+    chamsys_magicq: "No"
+    follow_me: "No"
+    zactrack: "No"
+    qlcplus: "Yes"
+    freestyler: "No"
+
+  - id: bilingual
+    label: "Fully bilingual (EN + FR)"
+    slyled: "Yes — manual, UI strings, inline help"
+    grandma3: "Multi-language UI"
+    chamsys_magicq: "Multi-language UI"
+    follow_me: "EN"
+    zactrack: "Multi-language"
+    qlcplus: "Community-maintained"
+    freestyler: "EN"
+
+  - id: sync_to_hardware
+    label: "Runs against consumer hardware you can buy today"
+    slyled: "Windows PC + ESP32 + USB cam + Giga R1"
+    grandma3: "Proprietary console required for full feature set"
+    chamsys_magicq: "Software free; USB-DMX wing recommended"
+    follow_me: "Requires trackball hardware + licences"
+    zactrack: "Requires UWB beacon infrastructure"
+    qlcplus: "USB-DMX dongle"
+    freestyler: "USB-DMX dongle (Windows)"

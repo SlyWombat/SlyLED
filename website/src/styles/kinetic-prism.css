@@ -1,0 +1,360 @@
+/* Kinetic Prism — SlyLED docs theme.
+ *
+ * Mirrors the SPA design manifesto (memory: feedback_design_manifesto):
+ * dark-first, bloom accents, Space Grotesk for UI, JetBrains Mono for code,
+ * consistent colour tokens with the orchestrator's Settings / Runtime tabs.
+ *
+ * Used for:
+ *   - docs/build/<lang>/html/index.html     (full manual, single file)
+ *   - docs/build/<lang>/help/*.html         (per-section fragments)
+ *   - docs/build/pdf/SlyLED-Manual.pdf      (rendered via playwright print)
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* Background tokens */
+  --bg-0: #050814;
+  --bg-1: #0b1020;
+  --bg-2: #111730;
+  --bg-card: #0f1526;
+
+  /* Foreground tokens */
+  --fg-1: #e2e8f0;
+  --fg-2: #cbd5e1;
+  --fg-muted: #94a3b8;
+  --fg-faint: #64748b;
+
+  /* Accent tokens — the "prism" */
+  --accent-cyan: #22d3ee;
+  --accent-violet: #a855f7;
+  --accent-fuchsia: #d946ef;
+  --accent-amber: #fbbf24;
+  --accent-green: #34d399;
+  --accent-red: #f87171;
+
+  /* Strokes */
+  --border: #1e293b;
+  --border-strong: #334155;
+
+  /* Metrics */
+  --radius: 6px;
+  --radius-lg: 10px;
+  --col-max: 880px;
+}
+
+@media (prefers-color-scheme: light) {
+  /* Light-mode shift — for print (PDF) + readers who force it */
+  :root.light {
+    --bg-0: #f8fafc;
+    --bg-1: #ffffff;
+    --bg-2: #f1f5f9;
+    --bg-card: #ffffff;
+    --fg-1: #0f172a;
+    --fg-2: #1e293b;
+    --fg-muted: #475569;
+    --fg-faint: #64748b;
+    --border: #e2e8f0;
+    --border-strong: #cbd5e1;
+  }
+}
+
+/* ── Reset / base ────────────────────────────────────────────────── */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  font-size: 15.5px;
+  line-height: 1.55;
+  background: var(--bg-0);
+  color: var(--fg-1);
+  scroll-behavior: smooth;
+}
+
+body {
+  max-width: var(--col-max);
+  margin: 0 auto;
+  padding: 2rem 1.5rem 6rem;
+  background: linear-gradient(180deg, var(--bg-0) 0%, #050814 100%);
+  min-height: 100vh;
+}
+
+/* ── Typography ──────────────────────────────────────────────────── */
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 600;
+  color: var(--fg-1);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  margin: 2.5em 0 0.8em;
+}
+
+h1 {
+  font-size: 2.2rem;
+  font-weight: 700;
+  margin-top: 0;
+  background: linear-gradient(110deg, var(--accent-cyan), var(--accent-violet) 60%, var(--accent-fuchsia));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 0 40px rgba(168, 85, 247, 0.12);
+}
+
+h2 {
+  font-size: 1.65rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.3em;
+}
+
+h3 {
+  font-size: 1.25rem;
+  color: var(--accent-cyan);
+}
+
+h4 { font-size: 1.05rem; }
+h5, h6 { font-size: 0.95rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+
+p { margin: 1em 0; color: var(--fg-2); }
+
+a {
+  color: var(--accent-cyan);
+  text-decoration: none;
+  border-bottom: 1px dotted rgba(34, 211, 238, 0.35);
+  transition: color 0.15s, border-color 0.15s;
+}
+
+a:hover {
+  color: var(--accent-fuchsia);
+  border-bottom-color: var(--accent-fuchsia);
+}
+
+strong { color: var(--fg-1); font-weight: 600; }
+em { color: var(--fg-2); }
+
+blockquote {
+  border-left: 3px solid var(--accent-violet);
+  background: rgba(168, 85, 247, 0.05);
+  padding: 0.6em 1em;
+  margin: 1.2em 0;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  color: var(--fg-2);
+}
+
+blockquote p:first-child { margin-top: 0; }
+blockquote p:last-child { margin-bottom: 0; }
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 3em 0;
+}
+
+/* ── Code + keyboard ─────────────────────────────────────────────── */
+
+code, pre, kbd, samp {
+  font-family: 'JetBrains Mono', 'Consolas', 'Menlo', monospace;
+  font-size: 0.9em;
+}
+
+code {
+  background: var(--bg-2);
+  color: var(--accent-cyan);
+  padding: 0.15em 0.4em;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+
+pre {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-cyan);
+  border-radius: var(--radius);
+  padding: 1em 1.25em;
+  overflow-x: auto;
+  line-height: 1.5;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+pre code {
+  background: transparent;
+  color: var(--fg-2);
+  padding: 0;
+  border: 0;
+}
+
+kbd {
+  background: var(--bg-2);
+  color: var(--fg-1);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0.1em 0.45em;
+  font-size: 0.82em;
+}
+
+/* ── Lists ───────────────────────────────────────────────────────── */
+
+ul, ol { padding-left: 1.5em; margin: 1em 0; }
+li { margin: 0.35em 0; color: var(--fg-2); }
+li > p { margin: 0.3em 0; }
+
+/* ── Tables ──────────────────────────────────────────────────────── */
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1.5em 0;
+  font-size: 0.94em;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+th, td {
+  padding: 0.55em 0.9em;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+th {
+  background: var(--bg-2);
+  color: var(--fg-muted);
+  font-weight: 600;
+  font-size: 0.82em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: rgba(34, 211, 238, 0.03); }
+
+/* ── Images + SVG diagrams ───────────────────────────────────────── */
+
+img, svg {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius);
+  margin: 1.2em auto;
+  display: block;
+}
+
+svg[role="graphics-document"],
+figure > svg {
+  background: var(--bg-card);
+  padding: 1em;
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+figure {
+  margin: 1.8em 0;
+  text-align: center;
+}
+
+figcaption {
+  color: var(--fg-muted);
+  font-size: 0.86em;
+  margin-top: 0.4em;
+  font-style: italic;
+}
+
+/* ── Glossary-hover (#670) ──────────────────────────────────────── */
+
+abbr[data-term], abbr {
+  text-decoration: underline dotted var(--accent-violet);
+  text-underline-offset: 3px;
+  cursor: help;
+  color: var(--fg-1);
+  border: 0;
+}
+
+abbr:hover {
+  color: var(--accent-fuchsia);
+}
+
+/* ── Callouts (> Note:, > Warning:) — pandoc generic output ────── */
+
+blockquote > p:first-child > strong:first-child {
+  color: var(--accent-amber);
+}
+
+/* ── Header anchors + ToC ───────────────────────────────────────── */
+
+.header-anchor {
+  opacity: 0;
+  margin-left: 0.3em;
+  color: var(--fg-faint);
+  font-weight: 400;
+  transition: opacity 0.15s;
+}
+
+h1:hover .header-anchor,
+h2:hover .header-anchor,
+h3:hover .header-anchor,
+h4:hover .header-anchor {
+  opacity: 1;
+}
+
+#TOC, nav.toc {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1em 1.4em;
+  margin: 1.5em 0 2.5em;
+}
+
+#TOC::before, nav.toc::before {
+  content: 'Contents';
+  display: block;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+  margin-bottom: 0.4em;
+}
+
+#TOC ul, nav.toc ul { padding-left: 1.2em; }
+
+/* ── Print / PDF ────────────────────────────────────────────────── */
+
+@media print {
+  :root { --col-max: 100%; }
+  body {
+    background: #ffffff;
+    color: #0f172a;
+    padding: 0;
+  }
+  h1 {
+    background: none;
+    -webkit-text-fill-color: unset;
+    color: #0f172a;
+  }
+  h2, h3 { page-break-after: avoid; }
+  pre, table, figure { page-break-inside: avoid; }
+  a { color: #0066cc; border-bottom: 0; }
+  abbr { text-decoration: underline dotted #94a3b8; }
+  pre, code {
+    background: #f8fafc;
+    border-color: #cbd5e1;
+    color: #0f172a;
+  }
+  table, th, td { background: #ffffff; color: #0f172a; border-color: #cbd5e1; }
+  th { background: #f1f5f9; }
+}
+
+/* ── Responsive ─────────────────────────────────────────────────── */
+
+@media (max-width: 720px) {
+  body { padding: 1rem 1rem 4rem; font-size: 15px; }
+  h1 { font-size: 1.8rem; }
+  h2 { font-size: 1.35rem; }
+  h3 { font-size: 1.15rem; }
+  pre { font-size: 0.82em; }
+  table { font-size: 0.85em; }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "slyled-website",
+  "version": "0.0.1",
+  "private": true,
+  "description": "SlyLED public site — Astro Starlight. Content is symlinked from ../docs/src/ at build time; see tools/docs/build.py --format website.",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro check && astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.28.0",
+    "astro": "^4.16.0",
+    "sharp": "^0.33.0"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  }
+}
