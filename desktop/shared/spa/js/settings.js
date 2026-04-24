@@ -15,6 +15,7 @@ function _setSection(s){
   if(s==='dmx')loadDmxSettings();
   if(s==='profiles')loadDmxProfiles();
   if(s==='cameras')_loadCamCalStatus();
+  if(s==='advanced'){_depthRuntimeRefresh();_ollamaRuntimeRefresh();}
 }
 function _stageUnitsChange(){
   var imp=parseInt(document.getElementById('s-un').value)===1;
@@ -99,6 +100,7 @@ function loadSettings(){
   });
   loadPatchView();
   _depthRuntimeRefresh();
+  _ollamaRuntimeRefresh();
   // #615 — populate the Settings → Advanced "Version" card. Endpoint
   // already exposes the orchestrator VERSION string; the HTML
   // placeholder was never wired up to it.
@@ -110,6 +112,89 @@ function loadSettings(){
     }else{
       el.textContent='Version unavailable';
     }
+  });
+}
+
+// #623 — Ollama runtime status row (AI auto-tune). Same polling pattern as
+// depth-runtime (#598): check /install-status first; when an install is
+// running, render the progress bar and re-poll every 2s. When idle,
+// query /status and render installed-vs-not state.
+var _ollamaRtPollTimer=null;
+function _ollamaRuntimeRefresh(){
+  var box=document.getElementById('ollama-rt-status');
+  if(!box)return;
+  if(_ollamaRtPollTimer){clearTimeout(_ollamaRtPollTimer);_ollamaRtPollTimer=null;}
+  ra('GET','/api/ollama-runtime/install-status',null,function(ins){
+    var phase=ins&&ins.phase;
+    var running=phase&&phase!=='done'&&phase!=='error';
+    if(running){
+      _ollamaRuntimeRenderRunning(ins);
+      _ollamaRtPollTimer=setTimeout(_ollamaRuntimeRefresh,2000);
+      return;
+    }
+    ra('GET','/api/ollama-runtime/status',null,function(r){
+      var iBtn=document.getElementById('ollama-rt-install');
+      var rBtn=document.getElementById('ollama-rt-reinstall');
+      if(!r||!r.ok){
+        box.innerHTML='<span style="color:#ef4444">Unavailable: '+escapeHtml((r&&r.err)||'module missing')+'</span>';
+        if(iBtn)iBtn.style.display='none';
+        if(rBtn)rBtn.style.display='none';
+        return;
+      }
+      if(r.installed){
+        box.innerHTML='<span style="color:#34d399">Installed</span> · '
+          +'Ollama at <span style="color:#94a3b8;font-family:monospace">'+escapeHtml(r.url||'')+'</span>'
+          +' · model <span style="color:#94a3b8;font-family:monospace">'+escapeHtml(r.model||'')+'</span>';
+        if(iBtn)iBtn.style.display='none';
+        if(rBtn)rBtn.style.display='inline-block';
+      }else if(!r.running){
+        box.innerHTML='<span style="color:#f59e0b">Not installed</span> · '
+          +'click Install for ~2 GB download (Ollama + Moondream VLM)';
+        if(iBtn)iBtn.style.display='inline-block';
+        if(rBtn)rBtn.style.display='none';
+      }else{
+        box.innerHTML='<span style="color:#f59e0b">Ollama running, model not pulled</span> · '
+          +'click Install to fetch <span style="color:#94a3b8;font-family:monospace">'+escapeHtml(r.model||'')+'</span>';
+        if(iBtn)iBtn.style.display='inline-block';
+        if(rBtn)rBtn.style.display='none';
+      }
+      // Surface the last install error inline when available.
+      if(ins&&ins.phase==='error'&&ins.error){
+        box.innerHTML+='<div style="color:#ef4444;font-size:.78em;margin-top:.25em">Last install failed: '+escapeHtml(ins.error)+'</div>';
+      }
+    });
+  });
+}
+
+function _ollamaRuntimeRenderRunning(ins){
+  var box=document.getElementById('ollama-rt-status');
+  if(!box)return;
+  var pct=Math.round(ins.percent||0);
+  var phase=escapeHtml(ins.phase||'working');
+  var msg=escapeHtml(ins.message||'');
+  box.innerHTML=''
+    +'<div style="display:flex;align-items:center;gap:.6em;margin-bottom:.3em">'
+    +  '<span style="color:#60a5fa;font-weight:600">'+phase+' — '+pct+'%</span>'
+    +'</div>'
+    +'<div style="background:#0f172a;border:1px solid #334155;border-radius:4px;height:10px;overflow:hidden">'
+    +  '<div style="height:100%;width:'+pct+'%;background:#60a5fa;transition:width .3s"></div>'
+    +'</div>'
+    +(msg?'<div style="color:#94a3b8;font-size:.78em;margin-top:.25em">'+msg+'</div>':'');
+  ['ollama-rt-install','ollama-rt-reinstall'].forEach(function(id){
+    var b=document.getElementById(id);if(b)b.style.display='none';
+  });
+}
+
+function _ollamaRuntimeInstall(force){
+  var box=document.getElementById('ollama-rt-status');
+  if(box)box.innerHTML='<span style="color:#94a3b8">Starting install…</span>';
+  ra('POST','/api/ollama-runtime/install',{force:!!force},function(r){
+    if(!r||!r.ok){
+      if(box)box.innerHTML='<span style="color:#ef4444">'+escapeHtml((r&&r.message)||'Install refused')+'</span>';
+      setTimeout(_ollamaRuntimeRefresh,1500);
+      return;
+    }
+    _ollamaRuntimeRefresh();
   });
 }
 

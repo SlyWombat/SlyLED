@@ -305,6 +305,8 @@ function _renderSetup(){
           var acts='<button class="btn" onclick="editFixture('+f.id+')" style="background:#446;color:#fff">Edit</button>';
           if(ip!=='—'){
             acts+=' <button class="btn" onclick="_camSnap('+f.id+')" style="background:#059669;color:#fff">Snap</button>';
+            // #623 — per-camera settings + auto-tune wizard.
+            acts+=' <button class="btn" onclick="_camTune('+f.id+')" style="background:#1e40af;color:#dbeafe" title="Adjust V4L2 controls; auto-tune for beam / ArUco / YOLO intents">Tune</button>';
             var trkActive=_trackingCams[f.id];
             acts+=' <button class="btn" id="setup-trk-'+f.id+'" onclick="_setupTrackToggle('+f.id+')" style="background:'+(trkActive?'#9f1239':'#be185d')+';color:#fce7f3">'+(trkActive?'Stop Track':'Track')+'</button>';
           }
@@ -1602,6 +1604,198 @@ function removeCamera(id,name){
   ra('DELETE','/api/cameras/'+id,null,function(){
     document.getElementById('hs').textContent='Removed camera: '+name;
     loadSetup();
+  });
+}
+
+// ── #623 — per-camera settings + AI auto-tune wizard ──────────────────
+
+function _camTune(fid){
+  // Modal plumbing matches the rest of the SPA (fixtures.js / app.js) —
+  // no `openModal` helper; set title/body, show the element.
+  document.getElementById('modal-title').textContent='Camera settings — loading…';
+  document.getElementById('modal-body').innerHTML=
+    '<div style="color:#64748b">Fetching current V4L2 controls…</div>';
+  document.getElementById('modal').style.display='block';
+  ra('GET','/api/cameras/'+fid+'/settings',null,function(r){
+    if(!r||!r.ok){
+      document.getElementById('modal-body').innerHTML=
+        '<div style="color:#f87171">'+escapeHtml((r&&r.err)||'Settings query failed')+'</div>'
+        +'<button class="btn" onclick="closeModal()" style="margin-top:.6em">Close</button>';
+      return;
+    }
+    ra('GET','/api/cameras/settings/evaluator-status',null,function(st){
+      _camTuneRender(fid, r, st||{modes:{heuristic:{available:true},ai:{available:false}}});
+    });
+  });
+}
+
+function _camTuneRender(fid, data, evalStatus){
+  var controls=data.controls||[];
+  var slots=data.slots||{};
+  var ai=(evalStatus&&evalStatus.modes&&evalStatus.modes.ai)||{};
+  var aiOk=!!ai.available;
+  var aiLabel='Local VLM ('+(ai.model||'moondream')+')';
+
+  var rows='';
+  controls.forEach(function(c){
+    var name=c.name||'';
+    var val=c.value;
+    var lo=c.min, hi=c.max, type=c.type||'int';
+    var input='';
+    var inputId='vl-'+name;
+    if(type==='bool'){
+      input='<input id="'+inputId+'" type="checkbox" '+(val?'checked':'')+'>';
+    }else if(typeof lo==='number'&&typeof hi==='number'){
+      input='<input id="'+inputId+'" type="range" min="'+lo+'" max="'+hi+'" step="'+(c.step||1)+'" value="'+val+'" style="width:140px" '
+        +'oninput="document.getElementById(\''+inputId+'v\').textContent=this.value">'
+        +' <span id="'+inputId+'v" style="color:#94a3b8;font-family:monospace;font-size:.82em">'+val+'</span>';
+    }else{
+      input='<input id="'+inputId+'" type="text" value="'+(val!==undefined?val:'')+'" style="width:120px;font-size:.82em">';
+    }
+    var flags=c.flags?' <span style="color:#78350f;background:#fde68a;padding:0 .3em;border-radius:3px;font-size:.7em">'+escapeHtml(c.flags)+'</span>':'';
+    rows+='<tr><td style="padding:.2em .5em;color:#cbd5e1;font-family:monospace;font-size:.82em">'+escapeHtml(name)+flags+'</td>'
+       +'<td style="padding:.2em .5em">'+input+'</td>'
+       +'<td style="padding:.2em .5em;color:#64748b;font-size:.72em">'+(lo!==undefined?('['+lo+'‥'+hi+']'):'')+'</td></tr>';
+  });
+
+  var slotRows='';
+  Object.keys(slots).forEach(function(name){
+    var s=slots[name];
+    slotRows+='<tr><td style="padding:.2em .4em"><b>'+escapeHtml(name)+'</b>'
+      +'<span style="color:#64748b;font-size:.72em;margin-left:.4em">intent='+escapeHtml(s.intent||'general')+(s.score?' · score='+s.score:'')+'</span></td>'
+      +'<td><button class="btn btn-on" onclick="_camTuneActivateSlot('+fid+',\''+name.replace(/\'/g,"\\'")+'\')">Activate</button>'
+      +' <button class="btn btn-off" onclick="_camTuneDeleteSlot('+fid+',\''+name.replace(/\'/g,"\\'")+'\')">&times;</button></td></tr>';
+  });
+  if(!slotRows)slotRows='<tr><td colspan="2" style="color:#64748b;font-size:.82em;padding:.3em">No slots saved. Use Auto-Tune with "Save slot as..." or click "Apply + Save slot" below.</td></tr>';
+
+  var aiOptDisabled=aiOk?'':'disabled';
+  var aiHint=aiOk
+    ?'<span style="color:#86efac">✓ Available</span>'
+    :'<span style="color:#fbbf24">Unavailable:</span> <span style="color:#94a3b8">'+escapeHtml(ai.err||'install via Settings → AI Runtime')+'</span>';
+
+  var body=''
+    +'<div style="display:flex;gap:1em;align-items:flex-start">'
+    +'  <div style="flex:2;max-width:480px">'
+    +'    <div style="font-weight:bold;color:#e2e8f0;margin-bottom:.3em">V4L2 controls</div>'
+    +'    <table style="width:100%;border-collapse:collapse"><tbody>'+rows+'</tbody></table>'
+    +'    <div style="margin-top:.6em;display:flex;gap:.4em;flex-wrap:wrap">'
+    +'      <button class="btn" onclick="_camTuneApplyEdits('+fid+',false)" style="background:#0e7490;color:#fff">Apply</button>'
+    +'      <input id="camtune-slot-name" type="text" placeholder="Slot name…" style="font-size:.82em;width:140px">'
+    +'      <button class="btn" onclick="_camTuneApplyEdits('+fid+',true)" style="background:#1e3a5f;color:#93c5fd">Apply + Save slot</button>'
+    +'    </div>'
+    +'  </div>'
+    +'  <div style="flex:1;min-width:260px;padding:.6em;background:#0f172a;border:1px solid #1e293b;border-radius:4px">'
+    +'    <div style="font-weight:bold;color:#e2e8f0;margin-bottom:.3em">Auto-tune</div>'
+    +'    <label style="font-size:.82em;color:#94a3b8">Intent'
+    +'      <select id="camtune-intent" style="width:100%;font-size:.82em;margin-top:.15em">'
+    +'        <option value="general">General</option>'
+    +'        <option value="beam">Beam detection</option>'
+    +'        <option value="aruco">ArUco markers</option>'
+    +'        <option value="yolo">YOLO objects</option>'
+    +'      </select></label>'
+    +'    <label style="font-size:.82em;color:#94a3b8;display:block;margin-top:.4em">Evaluator'
+    +'      <select id="camtune-eval" style="width:100%;font-size:.82em;margin-top:.15em">'
+    +'        <option value="heuristic">Heuristic (histogram)</option>'
+    +'        <option value="ai" '+aiOptDisabled+'>'+aiLabel+'</option>'
+    +'        <option value="auto">Auto (AI if available)</option>'
+    +'      </select></label>'
+    +'    <div style="font-size:.72em;margin-top:.2em">'+aiHint+'</div>'
+    +'    <label style="font-size:.82em;color:#94a3b8;display:block;margin-top:.4em">Max iterations'
+    +'      <input id="camtune-iter" type="number" min="1" max="12" value="6" style="width:60px;font-size:.82em;margin-left:.4em"></label>'
+    +'    <label style="font-size:.82em;color:#94a3b8;display:block;margin-top:.4em">Save result as slot'
+    +'      <input id="camtune-autosave" type="text" placeholder="optional" style="width:100%;font-size:.82em;margin-top:.15em"></label>'
+    +'    <button class="btn btn-on" onclick="_camTuneRun('+fid+')" style="width:100%;margin-top:.6em;background:#6b21a8;color:#d8b4fe">Run Auto-Tune</button>'
+    +'    <div id="camtune-progress" style="margin-top:.4em;font-size:.78em;color:#64748b;min-height:1em"></div>'
+    +'  </div>'
+    +'</div>'
+    +'<div style="margin-top:.8em">'
+    +'  <div style="font-weight:bold;color:#e2e8f0;margin-bottom:.2em">Saved slots</div>'
+    +'  <table style="width:100%;border-collapse:collapse"><tbody>'+slotRows+'</tbody></table>'
+    +'</div>'
+    +'<div style="margin-top:.8em;display:flex;justify-content:flex-end">'
+    +'  <button class="btn" onclick="closeModal()">Close</button>'
+    +'</div>';
+
+  document.getElementById('modal-title').textContent='Camera settings — fixture '+fid;
+  document.getElementById('modal-body').innerHTML=body;
+}
+
+function _camTuneCollectEdits(controls){
+  var out={};
+  (controls||[]).forEach(function(c){
+    var el=document.getElementById('vl-'+c.name);
+    if(!el)return;
+    var v=(c.type==='bool')?(el.checked?1:0):parseInt(el.value, 10);
+    if(!isNaN(v)&&v!==c.value)out[c.name]=v;
+  });
+  return out;
+}
+
+function _camTuneApplyEdits(fid, saveSlot){
+  ra('GET','/api/cameras/'+fid+'/settings',null,function(r){
+    if(!r||!r.ok)return;
+    var delta=_camTuneCollectEdits(r.controls||[]);
+    if(!Object.keys(delta).length){
+      document.getElementById('camtune-progress')&&(document.getElementById('camtune-progress').textContent='No changes to apply.');
+      return;
+    }
+    var body={controls:delta};
+    if(saveSlot){
+      var name=(document.getElementById('camtune-slot-name')||{}).value;
+      if(!name||!name.trim()){alert('Enter a slot name first.');return;}
+      body.slot=name.trim();
+    }
+    ra('POST','/api/cameras/'+fid+'/settings',body,function(resp){
+      if(resp&&resp.ok)_camTune(fid);
+      else alert('Apply failed: '+((resp&&resp.err)||'unknown'));
+    });
+  });
+}
+
+function _camTuneRun(fid){
+  var intent=document.getElementById('camtune-intent').value;
+  var evaluator=document.getElementById('camtune-eval').value;
+  var maxIt=parseInt(document.getElementById('camtune-iter').value, 10)||6;
+  var slot=(document.getElementById('camtune-autosave')||{}).value;
+  var prog=document.getElementById('camtune-progress');
+  if(prog)prog.textContent='Running auto-tune ('+evaluator+' → '+intent+')… this may take 10–90 s.';
+  var body={intent:intent,evaluator:evaluator,maxIterations:maxIt};
+  if(slot&&slot.trim())body.saveSlot=slot.trim();
+  // Can't use ra() — its 30 s XHR timeout is shorter than an AI auto-tune
+  // (6 iterations × 10-15 s each). Roll a dedicated XHR with 5 min cap.
+  var x=new XMLHttpRequest();
+  x.open('POST','/api/cameras/'+fid+'/settings/auto-tune',true);
+  x.timeout=5*60*1000;
+  x.setRequestHeader('Content-Type','application/json');
+  x.onload=function(){
+    var r=null; try{r=JSON.parse(x.responseText);}catch(e){}
+    if(!r||r.err){
+      if(prog)prog.innerHTML='<span style="color:#f87171">'+escapeHtml((r&&r.err)||'Auto-tune failed (HTTP '+x.status+')')+'</span>';
+      return;
+    }
+    var before=(r.before||{}).score;
+    var after=(r.after||{}).score;
+    var iters=(r.history||[]).length-1;
+    var summary='Before '+before+' → after '+after+' ('+iters+' iterations, '+escapeHtml(r.evaluator||'heuristic')+')';
+    if(prog)prog.innerHTML='<span style="color:#86efac">✓ '+summary+'</span>';
+    setTimeout(function(){_camTune(fid);}, 800);
+  };
+  x.onerror=function(){if(prog)prog.innerHTML='<span style="color:#f87171">Auto-tune network error</span>';};
+  x.ontimeout=function(){if(prog)prog.innerHTML='<span style="color:#f87171">Auto-tune timed out (5 min cap)</span>';};
+  x.send(JSON.stringify(body));
+}
+
+function _camTuneActivateSlot(fid, name){
+  ra('POST','/api/cameras/'+fid+'/settings/slots/'+encodeURIComponent(name)+'/activate',{},function(r){
+    if(r&&r.ok)_camTune(fid);
+    else alert('Activate failed: '+((r&&r.err)||'unknown'));
+  });
+}
+
+function _camTuneDeleteSlot(fid, name){
+  if(!confirm('Delete slot "'+name+'"?'))return;
+  ra('DELETE','/api/cameras/'+fid+'/settings/slots/'+encodeURIComponent(name),null,function(r){
+    if(r&&r.ok)_camTune(fid);
   });
 }
 
