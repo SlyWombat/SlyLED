@@ -7,8 +7,9 @@
     short: Application Programming Interface
     long: The set of HTTP endpoints a program exposes for other programs to call.
   fr:
-    short: null
-    long: null
+    short: Application Programming Interface
+    long: L'ensemble des points de terminaison HTTP qu'un programme expose pour que
+      d'autres programmes les appellent.
   see_also:
   - §19 API Quick Reference
   - '`/api/*` routes throughout.'
@@ -19,8 +20,9 @@
     long: CPU architecture used by the Giga R1, Raspberry Pi, and Orange Pi. "Slow
       on ARM" in the manual means these boards.
   fr:
-    short: null
-    long: null
+    short: Advanced RISC Machine
+    long: Architecture CPU utilisée par la Giga R1, le Raspberry Pi et l'Orange Pi.
+      « Lent sur ARM » dans le manuel désigne ces cartes.
   see_also:
   - §14 Camera Nodes (depth-estimation runtimes).
 - term: Art-Net
@@ -31,7 +33,8 @@
       packets to an Art-Net bridge, which relays them to DMX fixtures.
   fr:
     short: null
-    long: null
+    long: Protocole DMX-sur-Ethernet par Artistic Licence. L'orchestrateur envoie
+      des paquets `ArtDMX` à un pont Art-Net, qui les relaie aux appareils DMX.
   see_also:
   - §2 Walkthrough Step 3b
   - §12 DMX Profiles.
@@ -41,8 +44,8 @@
     short: Art-Net DMX packet
     long: One 512-channel Art-Net data packet.
   fr:
-    short: null
-    long: null
+    short: Paquet DMX Art-Net
+    long: Un paquet de données Art-Net de 512 canaux.
   see_also:
   - §2 Walkthrough Step 3b.
 - term: ArtPoll
@@ -51,8 +54,8 @@
     short: Art-Net discovery packet
     long: The Art-Net discovery broadcast used to find bridges.
   fr:
-    short: null
-    long: null
+    short: Paquet de découverte Art-Net
+    long: La diffusion de découverte Art-Net utilisée pour trouver les ponts.
   see_also:
   - §2 Walkthrough Step 3a.
 - term: baking
@@ -75,7 +78,9 @@
       region is small.
   fr:
     short: null
-    long: null
+    long: Stratégie de découverte lors de l'étalonnage qui sonde une grille grossière
+      sur toute la plage pan/tilt avant de raffiner — plus rapide qu'un balayage dense
+      quand la région atteignable du faisceau est petite.
   see_also:
   - Appendix B §B.3 Discovery.
 - term: BFS
@@ -86,8 +91,11 @@
       at a time. Used in mover calibration to map the visible-region boundary from
       a first detected beam position.
   fr:
-    short: null
-    long: null
+    short: Breadth-First Search
+    long: Algorithme de parcours de graphe qui explore vers l'extérieur depuis un
+      point de départ, un anneau à la fois. Utilisé dans l'étalonnage de projecteur
+      motorisé pour cartographier la frontière de la région visible à partir d'une
+      première position de faisceau détectée.
   see_also:
   - Appendix B §B.3 Mapping.
 - term: blink-confirm
@@ -99,7 +107,9 @@
       stays put; a real beam moves.'
   fr:
     short: null
-    long: null
+    long: 'Contrôle de rejet des reflets : après détection d''un pixel candidat de
+      faisceau, nudger légèrement pan et tilt et vérifier que le pixel détecté bouge
+      réellement. Un reflet reste en place ; un vrai faisceau bouge.'
   see_also:
   - Appendix B §B.3
   - 'issue #658.'
@@ -109,8 +119,8 @@
     short: Central Processing Unit
     long: The main processor.
   fr:
-    short: null
-    long: null
+    short: Central Processing Unit
+    long: Le processeur principal.
   see_also:
   - §14 Camera Nodes.
 - term: CRGB
@@ -119,8 +129,8 @@
     short: Color RGB
     long: FastLED's C++ struct for a single RGB pixel.
   fr:
-    short: null
-    long: null
+    short: Color RGB
+    long: Structure C++ de FastLED pour un seul pixel RGB.
   see_also:
   - Firmware modules (`GigaLED.h`).
 - term: CRUD
@@ -129,8 +139,8 @@
     short: Create, Read, Update, Delete
     long: Shorthand for "all four basic database-style operations."
   fr:
-    short: null
-    long: null
+    short: Create, Read, Update, Delete
+    long: Raccourci pour « les quatre opérations de base de type base de données ».
   see_also:
   - §4 Fixture Setup
   - §12 DMX Profiles.
@@ -141,8 +151,9 @@
     long: Raspberry Pi's native ribbon-cable camera port (not supported in SlyLED
       v1.x — use USB cameras).
   fr:
-    short: null
-    long: null
+    short: Camera Serial Interface
+    long: Port natif de caméra à nappe du Raspberry Pi (non pris en charge dans SlyLED
+      v1.x — utilisez des caméras USB).
   see_also:
   - §14 Camera Nodes.
 - term: dark reference
@@ -153,7 +164,9 @@
       frames so beam detection isn't fooled by ambient lighting.
   fr:
     short: null
-    long: null
+    long: Capture prise avec tous les faisceaux d'étalonnage éteints, soustraite des
+      images suivantes afin que la détection de faisceau ne soit pas trompée par l'éclairage
+      ambiant.
   see_also:
   - Appendix A §A.5
   - 'issue #651.'
@@ -164,8 +177,9 @@
     long: How devices on a network get an IP address. The board's hostname shows up
       in DHCP so routers list it by name.
   fr:
-    short: null
-    long: null
+    short: Dynamic Host Configuration Protocol
+    long: Comment les appareils d'un réseau obtiennent une adresse IP. Le nom d'hôte
+      de la carte apparaît dans DHCP afin que les routeurs la listent par nom.
   see_also:
   - §14 Camera Nodes deployment.
 - term: DMX
@@ -175,8 +189,10 @@
     long: Industry-standard lighting-control protocol — 512 channels per universe,
       carried over a twisted-pair cable or over Ethernet (Art-Net / sACN).
   fr:
-    short: null
-    long: null
+    short: Digital Multiplex
+    long: Protocole standard de l'industrie pour le contrôle d'éclairage — 512 canaux
+      par univers, transporté sur câble à paire torsadée ou sur Ethernet (Art-Net
+      / sACN).
   see_also:
   - §2 Walkthrough
   - §12 DMX Profiles
@@ -188,8 +204,10 @@
     long: Independent axes a system can move along. SlyLED's parametric mover model
       has 6 DOF (yaw, pitch, roll, pan offset, tilt offset, plus scale).
   fr:
-    short: null
-    long: null
+    short: Degrees of Freedom
+    long: Axes indépendants selon lesquels un système peut se déplacer. Le modèle
+      paramétrique de projecteur motorisé de SlyLED a 6 DOF (yaw, pitch, roll, décalage
+      pan, décalage tilt, plus échelle).
   see_also:
   - Appendix B §B.3 Model fit.
 - term: ESP32
@@ -200,7 +218,8 @@
       up to 8 LED strings).
   fr:
     short: null
-    long: null
+    long: Famille de microcontrôleurs Espressif utilisée pour les nœuds exécutants
+      LED (WiFi + double-cœur, jusqu'à 8 chaînes LED).
   see_also:
   - §4 Fixture Setup
   - §15 Firmware.
@@ -212,7 +231,8 @@
       output. Pair with **intrinsic**.
   fr:
     short: null
-    long: null
+    long: La pose d'une caméra (position + rotation) dans l'espace scène/monde. La
+      sortie de solvePnP. À apparier avec **intrinsic**.
   see_also:
   - Appendix A §A.4.
 - term: FastLED
@@ -223,7 +243,9 @@
       ESP32 and D1 Mini; **not** reliable on the Giga R1 (custom PWM path instead).
   fr:
     short: null
-    long: null
+    long: Bibliothèque Arduino pour piloter les rubans LED adressables de type WS2812B.
+      Utilisée sur ESP32 et D1 Mini ; **non** fiable sur la Giga R1 (chemin PWM personnalisé
+      à la place).
   see_also:
   - §15 Firmware
   - CLAUDE.md hardware quirks.
@@ -247,8 +269,10 @@
       (horizontal/vertical/diagonal). Used as an intrinsic fallback when true calibrated
       intrinsics aren't available.
   fr:
-    short: null
-    long: null
+    short: Field of View
+    long: La largeur angulaire qu'une caméra ou un objectif voit. Stocké comme `fovDeg`
+      + `fovType` (horizontal/vertical/diagonal). Utilisé comme repli intrinsèque
+      lorsque de vraies intrinsèques étalonnées ne sont pas disponibles.
   see_also:
   - Appendix A §A.3.
 - term: FPS
@@ -257,8 +281,8 @@
     short: Frames Per Second
     long: Update rate for live playback or emulation.
   fr:
-    short: null
-    long: null
+    short: Frames Per Second
+    long: Fréquence de rafraîchissement pour la lecture en direct ou l'émulation.
   see_also:
   - §11 Show Preview Emulator.
 - term: FQBN
@@ -267,8 +291,8 @@
     short: Fully Qualified Board Name
     long: The arduino-cli identifier for a board target, e.g. `arduino:mbed_giga:giga`.
   fr:
-    short: null
-    long: null
+    short: Fully Qualified Board Name
+    long: L'identifiant arduino-cli pour une cible de carte, p. ex. `arduino:mbed_giga:giga`.
   see_also:
   - §15 Firmware.
 - term: GET / POST / PUT / DELETE
@@ -278,7 +302,7 @@
     long: HTTP methods. GET reads, POST creates/triggers, PUT updates, DELETE removes.
   fr:
     short: null
-    long: null
+    long: Méthodes HTTP. GET lit, POST crée/déclenche, PUT met à jour, DELETE supprime.
   see_also:
   - §19 API Quick Reference.
 - term: GPIO
@@ -288,8 +312,9 @@
     long: A configurable pin on a microcontroller — used for LED data lines on the
       ESP32.
   fr:
-    short: null
-    long: null
+    short: General-Purpose Input/Output
+    long: Broche configurable sur un microcontrôleur — utilisée pour les lignes de
+      données LED sur l'ESP32.
   see_also:
   - §4 Fixture Setup (ESP32 only).
 - term: homography
@@ -311,8 +336,10 @@
     long: A colour representation used for colour-filter beam detection (hue bands
       identify "the green beam" regardless of brightness).
   fr:
-    short: null
-    long: null
+    short: Hue, Saturation, Value
+    long: Représentation colorimétrique utilisée pour la détection de faisceau par
+      filtre colorimétrique (les bandes de teinte identifient « le faisceau vert »
+      indépendamment de la luminosité).
   see_also:
   - Appendix A §A.8 Beam detection.
 - term: HTML
@@ -321,8 +348,8 @@
     short: HyperText Markup Language
     long: The markup the SPA is built from.
   fr:
-    short: null
-    long: null
+    short: HyperText Markup Language
+    long: Le balisage dont est fait le SPA.
   see_also:
   - §3 Platform Guide.
 - term: HUD
@@ -331,8 +358,8 @@
     short: Heads-Up Display
     long: An overlay showing live state (used in the 3D viewport).
   fr:
-    short: null
-    long: null
+    short: Heads-Up Display
+    long: Superposition affichant l'état en direct (utilisé dans la vue 3D).
   see_also:
   - §5 Stage Layout.
 - term: ID
@@ -342,8 +369,9 @@
     long: Any short key that uniquely names something (fixture ID, ArUco marker ID,
       etc.).
   fr:
-    short: null
-    long: null
+    short: Identifier
+    long: Toute clé courte qui nomme quelque chose de manière unique (ID d'appareil,
+      ID de marqueur ArUco, etc.).
   see_also:
   - Throughout.
 - term: IK
@@ -353,8 +381,10 @@
     long: Given a target point, compute the pan/tilt values that aim the beam there.
       The parametric mover model provides IK once calibration completes.
   fr:
-    short: null
-    long: null
+    short: Inverse Kinematics
+    long: Étant donné un point cible, calculer les valeurs pan/tilt qui y visent le
+      faisceau. Le modèle paramétrique de projecteur motorisé fournit l'IK une fois
+      l'étalonnage terminé.
   see_also:
   - Appendix B §B.3 Model fit.
 - term: intrinsic
@@ -366,7 +396,9 @@
       — that''s the **extrinsic**.'
   fr:
     short: null
-    long: null
+    long: 'Les paramètres optiques internes d''une caméra : distance focale (`fx`,
+      `fy`), point principal (`cx`, `cy`) et distorsion de l''objectif. Indépendants
+      de l''emplacement de la caméra — cela, c''est l''**extrinsic**.'
   see_also:
   - Appendix A §A.3.
 - term: IP
@@ -375,8 +407,8 @@
     short: Internet Protocol
     long: Addressing scheme for networked devices (`192.168.x.y`).
   fr:
-    short: null
-    long: null
+    short: Internet Protocol
+    long: Schéma d'adressage des appareils en réseau (`192.168.x.y`).
   see_also:
   - §14 Camera Nodes.
 - term: JPEG
@@ -385,8 +417,8 @@
     short: Joint Photographic Experts Group
     long: Compressed image format used for camera snapshots.
   fr:
-    short: null
-    long: null
+    short: Joint Photographic Experts Group
+    long: Format d'image compressé utilisé pour les captures de caméra.
   see_also:
   - §14 Camera Nodes.
 - term: JSON
@@ -396,8 +428,9 @@
     long: The text format used for API request/response bodies and persisted data
       files.
   fr:
-    short: null
-    long: null
+    short: JavaScript Object Notation
+    long: Le format texte utilisé pour les corps de requête/réponse API et les fichiers
+      de données persistés.
   see_also:
   - §19 API Quick Reference.
 - term: kinematic model
@@ -418,8 +451,8 @@
     short: Local Area Network
     long: The physical/WiFi network the orchestrator and performers share.
   fr:
-    short: null
-    long: null
+    short: Local Area Network
+    long: Le réseau physique/WiFi que l'orchestrateur et les nœuds exécutants partagent.
   see_also:
   - §2 Walkthrough.
 - term: LED
@@ -428,8 +461,9 @@
     short: Light-Emitting Diode
     long: Addressable RGB LEDs (WS2812B and similar) are the primary fixture type.
   fr:
-    short: null
-    long: null
+    short: Light-Emitting Diode
+    long: Les LED RGB adressables (WS2812B et similaires) sont le type d'appareil
+      principal.
   see_also:
   - §4 Fixture Setup.
 - term: LM
@@ -439,8 +473,9 @@
     long: Nonlinear least-squares solver used to fit the parametric mover model to
       calibration samples.
   fr:
-    short: null
-    long: null
+    short: Levenberg–Marquardt
+    long: Solveur de moindres carrés non linéaires utilisé pour ajuster le modèle
+      paramétrique de projecteur motorisé aux échantillons d'étalonnage.
   see_also:
   - Appendix B §B.3 Model fit.
 - term: LSQ
@@ -450,8 +485,9 @@
     long: The fitting technique LM refines. When calibration falls back to "median-based"
       fitting, it's because LSQ wouldn't converge.
   fr:
-    short: null
-    long: null
+    short: Least-Squares
+    long: La technique d'ajustement que LM raffine. Lorsque l'étalonnage bascule sur
+      un ajustement « basé sur la médiane », c'est parce que LSQ n'a pas convergé.
   see_also:
   - Appendix A §A.6.
 - term: Mbed OS
@@ -462,7 +498,9 @@
       why `analogWrite()` and some libraries behave differently on the Giga.
   fr:
     short: null
-    long: null
+    long: Le système d'exploitation temps réel fonctionnant sur la Giga R1. Explique
+      pourquoi `analogWrite()` et certaines bibliothèques se comportent différemment
+      sur la Giga.
   see_also:
   - CLAUDE.md hardware quirks.
 - term: mDNS
@@ -472,8 +510,9 @@
     long: Zero-config DNS over multicast — how "SLYC-1234.local" resolves on the LAN
       without a DNS server.
   fr:
-    short: null
-    long: null
+    short: Multicast DNS
+    long: DNS sans configuration sur multicast — comment `SLYC-1234.local` se résout
+      sur le LAN sans serveur DNS.
   see_also:
   - §14 Camera Nodes deployment.
 - term: NTP
@@ -482,8 +521,9 @@
     short: Network Time Protocol
     long: How performers sync their clocks so runner start times are coordinated.
   fr:
-    short: null
-    long: null
+    short: Network Time Protocol
+    long: Comment les nœuds exécutants synchronisent leurs horloges pour que les heures
+      de démarrage soient coordonnées.
   see_also:
   - Protocol (`Globals.cpp`).
 - term: NVS
@@ -493,8 +533,9 @@
     long: ESP32 flash-backed key/value store. SlyLED uses the `"slyled"` namespace.
       Equivalent to EEPROM on the D1 Mini.
   fr:
-    short: null
-    long: null
+    short: Non-Volatile Storage
+    long: Magasin clé/valeur adossé à la flash de l'ESP32. SlyLED utilise l'espace
+      de noms `"slyled"`. Équivalent à l'EEPROM sur le D1 Mini.
   see_also:
   - §4 Fixture Setup.
 - term: ONNX
@@ -504,8 +545,9 @@
     long: Portable neural-network file format. YOLOv8n and Depth-Anything-V2 ship
       as ONNX files so they run via `onnxruntime` on ARM.
   fr:
-    short: null
-    long: null
+    short: Open Neural Network Exchange
+    long: Format portable de fichier de réseau neuronal. YOLOv8n et Depth-Anything-V2
+      sont livrés comme fichiers ONNX afin d'être exécutés via `onnxruntime` sur ARM.
   see_also:
   - §14 Camera Nodes.
 - term: OFL
@@ -515,8 +557,9 @@
     long: Community-maintained DMX-fixture profile database. SlyLED can import OFL
       JSON.
   fr:
-    short: null
-    long: null
+    short: Open Fixture Library
+    long: Base de données communautaire de profils d'appareils DMX. SlyLED peut importer
+      des JSON OFL.
   see_also:
   - §12 DMX Profiles.
 - term: orchestrator
@@ -536,8 +579,8 @@
     short: Operating System
     long: —
   fr:
-    short: null
-    long: null
+    short: Operating System
+    long: —
   see_also:
   - CLAUDE.md hardware.
 - term: OTA
@@ -546,8 +589,8 @@
     short: Over-the-Air
     long: Firmware update pushed over WiFi instead of via USB.
   fr:
-    short: null
-    long: null
+    short: Over-the-Air
+    long: Mise à jour firmware poussée par WiFi au lieu d'USB.
   see_also:
   - §15 Firmware & OTA Updates.
 - term: PDF
@@ -556,8 +599,8 @@
     short: Portable Document Format
     long: The packaged manual format. Generated by `tests/build_manual.py`.
   fr:
-    short: null
-    long: null
+    short: Portable Document Format
+    long: Le format du manuel empaqueté. Généré par `tests/build_manual.py`.
   see_also:
   - Appendix C.
 - term: performer
@@ -578,8 +621,10 @@
       correspondences. `SOLVEPNP_SQPNP` is the preferred solver; `SOLVEPNP_ITERATIVE`
       is the fallback.
   fr:
-    short: null
-    long: null
+    short: Perspective-n-Point
+    long: Algorithme OpenCV qui calcule la pose 3D d'une caméra à partir de ≥3 correspondances
+      2D↔3D connues. `SOLVEPNP_SQPNP` est le solveur préféré ; `SOLVEPNP_ITERATIVE`
+      est la solution de repli.
   see_also:
   - Appendix A §A.4.
 - term: PNG
@@ -588,8 +633,8 @@
     short: Portable Network Graphics
     long: Lossless image format used for screenshots.
   fr:
-    short: null
-    long: null
+    short: Portable Network Graphics
+    long: Format d'image sans perte utilisé pour les captures d'écran.
   see_also:
   - §2 Walkthrough.
 - term: PR
@@ -598,8 +643,9 @@
     short: Pull Request
     long: Git/GitHub workflow — a proposed change on a branch, reviewed before merge.
   fr:
-    short: null
-    long: null
+    short: Pull Request
+    long: Flux de travail Git/GitHub — changement proposé sur une branche, relu avant
+      fusion.
   see_also:
   - Appendix C §C.4.
 - term: PWM
@@ -610,8 +656,10 @@
       R1 this is implemented in software because `analogWrite()` is banned on the
       onboard RGB pins.
   fr:
-    short: null
-    long: null
+    short: Pulse-Width Modulation
+    long: Technique de variation où la LED est allumée et éteinte rapidement. Sur
+      la Giga R1, c'est implémenté en logiciel parce que `analogWrite()` est interdit
+      sur les broches RGB embarquées.
   see_also:
   - CLAUDE.md hardware quirks.
 - term: QA
@@ -621,8 +669,9 @@
     long: Testing role — in SlyLED's workflow, QA runs the Playwright + test suites
       and files issues rather than patching source.
   fr:
-    short: null
-    long: null
+    short: Quality Assurance
+    long: Rôle de test — dans le flux de travail SlyLED, la QA exécute les suites
+      Playwright + tests et ouvre des issues plutôt que de patcher le code source.
   see_also:
   - Appendix C.
 - term: QR
@@ -632,8 +681,9 @@
     long: 2D barcode. Not the same as an ArUco marker — ArUco is designed for solvePnP,
       QR for data payloads.
   fr:
-    short: null
-    long: null
+    short: Quick Response (code)
+    long: Code-barres 2D. Pas la même chose qu'un marqueur ArUco — ArUco est conçu
+      pour solvePnP, QR pour les charges utiles de données.
   see_also:
   - —
 - term: RANSAC
@@ -644,8 +694,10 @@
       model with the most inliers. SlyLED uses it to detect floor and wall planes
       in noisy point clouds.
   fr:
-    short: null
-    long: null
+    short: Random Sample Consensus
+    long: Algorithme robuste d'ajustement de plan — échantillonne de petits sous-ensembles
+      aléatoires, trouve le modèle avec le plus d'inliers. SlyLED l'utilise pour détecter
+      les plans sol et mur dans des nuages de points bruités.
   see_also:
   - Appendix A §A.7.
 - term: reprojection RMS
@@ -657,7 +709,10 @@
       all points. <2 px is excellent, 2–5 px is usable, >5 px means something is wrong.
   fr:
     short: null
-    long: null
+    long: Après solvePnP, projeter les points 3D à travers la pose résolue et mesurer
+      la distance en pixels jusqu'aux coins détectés. Rapporté comme la racine quadratique
+      moyenne sur tous les points. <2 px est excellent, 2–5 px est utilisable, >5
+      px signifie que quelque chose ne va pas.
   see_also:
   - Appendix A §A.4.
 - term: RGB / RGBW
@@ -666,8 +721,9 @@
     short: Red, Green, Blue [, White]
     long: Standard LED colour models. RGBW adds a dedicated white LED for purer whites.
   fr:
-    short: null
-    long: null
+    short: Red, Green, Blue [, White]
+    long: Modèles colorimétriques LED standard. RGBW ajoute une LED blanche dédiée
+      pour des blancs plus purs.
   see_also:
   - §4 Fixture Setup.
 - term: RMS
@@ -678,8 +734,10 @@
       to outliers than a plain mean — which is why it's used as a calibration quality
       metric.
   fr:
-    short: null
-    long: null
+    short: Root-Mean-Square
+    long: Agrégation en moyenne quadratique des erreurs (`sqrt(mean(x²))`). Plus sensible
+      aux valeurs aberrantes qu'une moyenne simple — c'est pourquoi elle est utilisée
+      comme métrique de qualité d'étalonnage.
   see_also:
   - Appendix A §A.4.
 - term: Rodrigues
@@ -690,7 +748,8 @@
       and a 3×3 rotation matrix. `cv2.Rodrigues()`.
   fr:
     short: null
-    long: null
+    long: Conversion mathématique entre un vecteur de rotation (`rvec` issu de solvePnP)
+      et une matrice de rotation 3×3. `cv2.Rodrigues()`.
   see_also:
   - Appendix A §A.4.
 - term: RSSI
@@ -700,8 +759,10 @@
     long: How strong a WiFi signal a performer is hearing. Reported in dBm; the orchestrator
       stores it as an unsigned magnitude so "69" means "−69 dBm".
   fr:
-    short: null
-    long: null
+    short: Received Signal Strength Indicator
+    long: La puissance du signal WiFi qu'un nœud exécutant entend. Rapportée en dBm
+      ; l'orchestrateur la stocke comme une magnitude non signée, donc « 69 » signifie
+      « −69 dBm ».
   see_also:
   - UDP protocol PONG payload.
 - term: RTOS
@@ -710,8 +771,9 @@
     short: Real-Time Operating System
     long: An OS with deterministic timing guarantees. Mbed OS on the Giga is an RTOS.
   fr:
-    short: null
-    long: null
+    short: Real-Time Operating System
+    long: Un OS avec des garanties de timing déterministes. Mbed OS sur la Giga est
+      un RTOS.
   see_also:
   - CLAUDE.md hardware.
 - term: runner
@@ -723,7 +785,9 @@
       with the orchestrator.
   fr:
     short: null
-    long: null
+    long: Un séquenceur d'étapes chargé dans un nœud exécutant. Chaque étape est une
+      action (couleur, motif, plage LED) avec une durée ; le runner boucle la liste
+      d'étapes en synchronisation avec l'orchestrateur.
   see_also:
   - §4 Fixture Setup
   - §13 Preset Shows.
@@ -736,7 +800,9 @@
       directly — always go through `rotation_from_layout()`.'
   fr:
     short: null
-    long: null
+    long: 'Rotations autour des axes X, Y, Z du repère de la scène, en degrés. En
+      schéma v2 : `rx` = pitch, `ry` = roll, `rz` = yaw/pan. Ne lisez jamais `rotation[1]`
+      ou `rotation[2]` directement — passez toujours par `rotation_from_layout()`.'
   see_also:
   - Appendix A §A.9.
 - term: sACN
@@ -746,8 +812,9 @@
     long: DMX-over-Ethernet alternative to Art-Net, defined by RFC 7724. SlyLED speaks
       both.
   fr:
-    short: null
-    long: null
+    short: Streaming ACN
+    long: Alternative DMX-sur-Ethernet à Art-Net, définie par la RFC 7724. SlyLED
+      parle les deux.
   see_also:
   - §12 DMX Profiles.
 - term: SCP
@@ -757,8 +824,9 @@
     long: File transfer over SSH. How camera firmware reaches the Orange Pi / Raspberry
       Pi.
   fr:
-    short: null
-    long: null
+    short: Secure Copy Protocol
+    long: Transfert de fichiers sur SSH. Comment le firmware caméra atteint l'Orange
+      Pi / Raspberry Pi.
   see_also:
   - §15 Firmware → Camera deploy.
 - term: solvePnP
@@ -768,7 +836,7 @@
     long: See **PnP**.
   fr:
     short: null
-    long: null
+    long: Voir **PnP**.
   see_also:
   - Appendix A §A.4.
 - term: SPA
@@ -778,8 +846,9 @@
     long: The desktop orchestrator UI is one HTML page that loads JavaScript modules
       instead of navigating between pages.
   fr:
-    short: null
-    long: null
+    short: Single-Page Application
+    long: L'interface d'orchestrateur de bureau est une page HTML unique qui charge
+      des modules JavaScript au lieu de naviguer entre pages.
   see_also:
   - §3 Platform Guide.
 - term: SQPNP
@@ -790,7 +859,8 @@
       it tolerates fewer correspondences than the iterative solver.
   fr:
     short: null
-    long: null
+    long: Une variante spécifique de l'algorithme solvePnP (`cv2.SOLVEPNP_SQPNP`)
+      choisie parce qu'elle tolère moins de correspondances que le solveur itératif.
   see_also:
   - Appendix A §A.4.
 - term: SRAM
@@ -800,8 +870,9 @@
     long: The fast, volatile RAM on a microcontroller. Tight budget on the D1 Mini
       — the manual warns against String objects and heap allocation.
   fr:
-    short: null
-    long: null
+    short: Static Random-Access Memory
+    long: La RAM rapide et volatile d'un microcontrôleur. Budget serré sur le D1 Mini
+      — le manuel met en garde contre les objets String et l'allocation sur le tas.
   see_also:
   - CLAUDE.md performance rules.
 - term: SSH
@@ -811,8 +882,9 @@
     long: Encrypted remote-login protocol. How the orchestrator reaches camera-node
       shells for firmware deployment.
   fr:
-    short: null
-    long: null
+    short: Secure Shell
+    long: Protocole de connexion distante chiffré. Comment l'orchestrateur atteint
+      les shells des nœuds caméra pour le déploiement firmware.
   see_also:
   - §15 Firmware → Camera deploy.
 - term: SVG
@@ -821,8 +893,8 @@
     short: Scalable Vector Graphics
     long: Vector image format used by diagram exporters.
   fr:
-    short: null
-    long: null
+    short: Scalable Vector Graphics
+    long: Format d'image vectoriel utilisé par les exportateurs de diagrammes.
   see_also:
   - Appendix C.
 - term: TCP
@@ -832,8 +904,9 @@
     long: Reliable, connection-based networking. HTTP traffic (config pages, API calls)
       rides on TCP.
   fr:
-    short: null
-    long: null
+    short: Transmission Control Protocol
+    long: Réseau fiable, orienté connexion. Le trafic HTTP (pages de configuration,
+      appels API) circule sur TCP.
   see_also:
   - UDP protocol discussion.
 - term: tiling
@@ -846,7 +919,10 @@
       option on `/scan`.'
   fr:
     short: null
-    long: null
+    long: 'Détection de style Sliced-Aided Hyper-Inference (SAHI) : découper une grande
+      image en patchs qui se chevauchent, exécuter le détecteur sur chacun, recoudre
+      les résultats. Améliore la précision de détection des petits objets au prix
+      du temps d''exécution. Contrôlé par l''option `tile` de `/scan`.'
   see_also:
   - §14 Camera Nodes.
 - term: TTL
@@ -856,8 +932,9 @@
     long: A timeout after which a resource (e.g. a mover claim) auto-expires. Mover-control
       claims have a 15 s TTL.
   fr:
-    short: null
-    long: null
+    short: Time-To-Live
+    long: Délai après lequel une ressource (p. ex. une réservation de projecteur motorisé)
+      expire automatiquement. Les réservations de mover-control ont un TTL de 15 s.
   see_also:
   - Appendix B §B.7.
 - term: UDP
@@ -868,8 +945,10 @@
       traffic (discovery, actions, runner control) because it's low-latency and the
       wire protocol tolerates occasional packet loss.
   fr:
-    short: null
-    long: null
+    short: User Datagram Protocol
+    long: Réseau sans connexion, au mieux. Utilisé pour tout le trafic orchestrateur↔nœud
+      exécutant (découverte, actions, contrôle de runner) parce qu'il est à faible
+      latence et que le protocole filaire tolère une perte occasionnelle de paquets.
   see_also:
   - Wire protocol
   - CLAUDE.md §UDP binary protocol.
@@ -879,8 +958,8 @@
     short: User Interface
     long: —
   fr:
-    short: null
-    long: null
+    short: User Interface
+    long: —
   see_also:
   - Throughout.
 - term: universe
@@ -900,8 +979,8 @@
     short: Uniform Resource Locator
     long: Web address.
   fr:
-    short: null
-    long: null
+    short: Uniform Resource Locator
+    long: Adresse web.
   see_also:
   - §14 Camera Nodes.
 - term: USB
@@ -910,8 +989,8 @@
     short: Universal Serial Bus
     long: —
   fr:
-    short: null
-    long: null
+    short: Universal Serial Bus
+    long: —
   see_also:
   - §15 Firmware USB flash.
 - term: V4L2
@@ -922,8 +1001,10 @@
       Orange Pi / Raspberry Pi). SoC ISP video nodes like `sunxi-vin` and `bcm2835-isp`
       are filtered out — only regular USB cameras register.
   fr:
-    short: null
-    long: null
+    short: Video for Linux 2
+    long: L'API de capture vidéo du noyau utilisée par les nœuds caméra (`cv2.VideoCapture`
+      sur Orange Pi / Raspberry Pi). Les nœuds vidéo SoC ISP comme `sunxi-vin` et
+      `bcm2835-isp` sont filtrés — seules les caméras USB ordinaires s'enregistrent.
   see_also:
   - §14 Camera Nodes.
 - term: WiFi
@@ -934,7 +1015,8 @@
       LAN over WiFi.
   fr:
     short: null
-    long: null
+    long: Réseau sans fil 802.11. Les nœuds exécutants et les nœuds caméra rejoignent
+      le LAN de l'orchestrateur par WiFi.
   see_also:
   - §2 Walkthrough.
 - term: WLED
@@ -945,7 +1027,9 @@
       includes a bridge so WLED devices can appear as performers.
   fr:
     short: null
-    long: null
+    long: Firmware open source populaire pour les contrôleurs LED à base d'ESP32/8266.
+      SlyLED inclut un pont pour que les appareils WLED apparaissent comme des nœuds
+      exécutants.
   see_also:
   - §4 Fixture Setup
   - '`desktop/shared/wled_bridge.py`.'
@@ -957,7 +1041,8 @@
       drives it in hardware; the D1 Mini bit-bangs it in software.
   fr:
     short: null
-    long: null
+    long: Puce LED RGB adressable courante (alias « NeoPixel »). Le périphérique RMT
+      de l'ESP32 la pilote en matériel ; le D1 Mini la bit-bang en logiciel.
   see_also:
   - §4 Fixture Setup.
 - term: YOLO
@@ -967,8 +1052,10 @@
     long: Single-pass object-detection neural network. SlyLED camera nodes run YOLOv8n
       via ONNX Runtime for person/object detection on `POST /scan`.
   fr:
-    short: null
-    long: null
+    short: You Only Look Once
+    long: Réseau neuronal de détection d'objets en une seule passe. Les nœuds caméra
+      SlyLED exécutent YOLOv8n via ONNX Runtime pour la détection de personne/objet
+      sur `POST /scan`.
   see_also:
   - §14 Camera Nodes.
 - term: ZIP
@@ -978,6 +1065,6 @@
     long: Archive file format, used for the release bundle.
   fr:
     short: null
-    long: null
+    long: Format de fichier d'archive, utilisé pour le paquet de version.
   see_also:
   - §15 Firmware Registry.

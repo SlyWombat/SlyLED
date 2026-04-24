@@ -123,7 +123,7 @@ en:
 fr:
 - slug: 00-title-toc
   file: docs/src/fr/00-title-toc.md
-  title: Manuel d'utilisation SlyLED — Systeme d'eclairage volumetrique 3D (v1.0)
+  title: Manuel d'utilisation SlyLED — Système d'éclairage volumétrique 3D (v1.0)
   lang: fr
   fragment: docs/build/fr/help/00-title-toc.html
 - slug: 01-getting-started
@@ -133,7 +133,7 @@ fr:
   fragment: docs/build/fr/help/01-getting-started.html
 - slug: 02-walkthrough
   file: docs/src/fr/02-walkthrough.md
-  title: '2. Walkthrough: First Show in 30 Minutes'
+  title: '2. Walkthrough : premier spectacle en 30 minutes'
   lang: fr
   fragment: docs/build/fr/help/02-walkthrough.html
 - slug: 03-platform-guide
@@ -148,7 +148,7 @@ fr:
   fragment: docs/build/fr/help/04-fixture-setup.html
 - slug: 05-stage-layout
   file: docs/src/fr/05-stage-layout.md
-  title: 4. Mise en page de la scene
+  title: 5. Disposition du plateau
   lang: fr
   fragment: docs/build/fr/help/05-stage-layout.html
 - slug: 06-stage-objects
@@ -193,7 +193,7 @@ fr:
   fragment: docs/build/fr/help/13-preset-shows.html
 - slug: 14-camera-nodes
   file: docs/src/fr/14-camera-nodes.md
-  title: 14. Camera Nodes
+  title: 14. Nœuds caméra
   lang: fr
   fragment: docs/build/fr/help/14-camera-nodes.html
 - slug: 15-firmware-ota
@@ -213,27 +213,27 @@ fr:
   fragment: docs/build/fr/help/17-troubleshooting.html
 - slug: 18-examples
   file: docs/src/fr/18-examples.md
-  title: 18. Examples
+  title: 18. Exemples
   lang: fr
   fragment: docs/build/fr/help/18-examples.html
 - slug: 19-api-reference
   file: docs/src/fr/19-api-reference.md
-  title: 17. Reference rapide API
+  title: 19. Référence rapide de l'API
   lang: fr
   fragment: docs/build/fr/help/19-api-reference.html
 - slug: 20-glossary
   file: docs/src/fr/20-glossary.md
-  title: Glossaire (EBAUCHE)
+  title: 20. Glossaire
   lang: fr
   fragment: docs/build/fr/help/20-glossary.html
 - slug: appendix-a-camera-calibration
   file: docs/src/fr/appendix-a-camera-calibration.md
-  title: Annexe A — Pipeline de calibration de camera (EBAUCHE)
+  title: Annexe A — Pipeline d'étalonnage de caméra (EBAUCHE)
   lang: fr
   fragment: docs/build/fr/help/appendix-a-camera-calibration.html
 - slug: appendix-b-mover-calibration
   file: docs/src/fr/appendix-b-mover-calibration.md
-  title: Annexe B — Pipeline de calibration de projecteur motorise (EBAUCHE)
+  title: Annexe B — Pipeline d'étalonnage de projecteur motorisé (EBAUCHE)
   lang: fr
   fragment: docs/build/fr/help/appendix-b-mover-calibration.html
 - slug: appendix-c-maintenance
