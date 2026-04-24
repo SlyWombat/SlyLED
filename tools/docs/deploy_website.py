@@ -39,15 +39,15 @@ DOWNLOAD_FILES = [
 ]
 
 
-def _cpanel_client():
-    """Import the shared server/deploy.py client. Kept isolated so this
-    file stays importable in environments that don't have credentials."""
+def _uploader():
+    """Return server/deploy.py's upload_file function. Isolated so this
+    file stays importable without cPanel credentials."""
     sys.path.insert(0, str(ROOT / 'server'))
     try:
-        from deploy import CPanelClient  # type: ignore
+        from deploy import upload_file  # type: ignore
     except ImportError:
         raise SystemExit('server/deploy.py missing — nothing to wrap')
-    return CPanelClient()
+    return upload_file
 
 
 def walk_dist(dist: Path) -> list[Path]:
@@ -74,21 +74,31 @@ def deploy(target_root: str = '/public_html/slyled', dry_run: bool = False) -> i
     if dry_run:
         preview(WEBSITE_DIST, download_root)
         return 0
-    client = _cpanel_client()
-    # Site tree.
+    upload = _uploader()
+    # Site tree. cPanel Fileman auto-creates missing directories when a
+    # multipart upload names a nested `dir`, so we don't mkdir ourselves.
+    ok_count = fail_count = 0
     for p in walk_dist(WEBSITE_DIST):
-        rel = p.relative_to(WEBSITE_DIST).as_posix()
-        client.upload_file(p, f'{target_root}/{rel}')
-    log.info('deployed %d site files to %s', len(walk_dist(WEBSITE_DIST)),
-              target_root)
-    # Manual downloads.
+        rel_dir = p.parent.relative_to(WEBSITE_DIST).as_posix()
+        remote_dir = target_root if rel_dir in ('', '.') else f'{target_root}/{rel_dir}'
+        ok = upload(str(p), remote_dir)
+        if ok:
+            ok_count += 1
+        else:
+            fail_count += 1
+            log.warning('upload FAIL: %s → %s', p.name, remote_dir)
+    log.info('deployed %d site file(s) to %s (%d failed)',
+             ok_count, target_root, fail_count)
+    # Manual downloads (best-effort — absent artefacts just get skipped).
     for _lang, _fmt, src in DOWNLOAD_FILES:
         p = ROOT / src
         if not p.exists():
-            log.warning('skip missing download %s', src)
+            log.info('skip missing download: %s', src)
             continue
-        client.upload_file(p, f'{download_root}/{p.name}')
-    return 0
+        ok = upload(str(p), download_root)
+        log.info('download %s: %s → %s', 'OK' if ok else 'FAIL',
+                 p.name, download_root)
+    return 0 if fail_count == 0 else 1
 
 
 def main(argv: list[str] | None = None) -> int:
