@@ -9671,7 +9671,11 @@ def api_mover_release():
     mid = body.get("moverId")
     did = body.get("deviceId")
     ok = _mover_engine.release(mid, did)
-    return jsonify(ok=ok)
+    # #647 / #650 — surface engine state so the client can tell
+    # "release + blackout wrote zeros" from "engine stopped so the
+    # blackout silently dropped". Same signal shape as /start.
+    health = _mover_engine.get_engine_health()
+    return jsonify(ok=ok, engineRunning=health["running"])
 
 @app.post("/api/mover-control/start")
 def api_mover_start():

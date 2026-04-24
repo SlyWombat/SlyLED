@@ -153,15 +153,28 @@ def _synthesize_samples(gt: ParametricFixtureModel, n: int, seed: int = 42):
 
 
 def test_fit_recovers_ground_truth():
+    # Q3 / #652 — production path supplies force_signs from a verify_signs
+    # probe. The five continuous params have gauge freedom between
+    # mount_yaw and pan_offset, so raw-param recovery is fragile; assert
+    # held-out angular error (the production metric) instead.
     gt = _make_ground_truth()
     samples = _synthesize_samples(gt, n=8)
-    fit, q = fit_model(gt.fixture_pos, gt.pan_range_deg, gt.tilt_range_deg, samples)
+    fit, q = fit_model(gt.fixture_pos, gt.pan_range_deg, gt.tilt_range_deg,
+                       samples, force_signs=(gt.pan_sign, gt.tilt_sign))
     _assert(q.rms_error_deg < 0.5,
             f"fit rms under 0.5deg: got {q.rms_error_deg:.3f}")
     _assert(fit.pan_sign == gt.pan_sign, "fit pan sign matches gt")
     _assert(fit.tilt_sign == gt.tilt_sign, "fit tilt sign matches gt")
-    _close(fit.pan_offset, gt.pan_offset, 0.01, "fit pan_offset close")
-    _close(fit.tilt_offset, gt.tilt_offset, 0.01, "fit tilt_offset close")
+    rng = random.Random(4242)
+    for _ in range(20):
+        pan_n = 0.5 + rng.uniform(-0.18, 0.18)
+        tilt_n = 0.5 + rng.uniform(-0.1, 0.1)
+        gt_dir = gt.forward(pan_n, tilt_n)
+        fit_dir = fit.forward(pan_n, tilt_n)
+        cos_ang = max(-1.0, min(1.0, sum(a * b for a, b in zip(gt_dir, fit_dir))))
+        ang_deg = math.degrees(math.acos(cos_ang))
+        _assert(ang_deg < 0.5,
+                f"held-out angle at ({pan_n:.2f},{tilt_n:.2f}): {ang_deg:.3f}deg")
 
 
 def test_fit_roundtrips_on_synthetic():

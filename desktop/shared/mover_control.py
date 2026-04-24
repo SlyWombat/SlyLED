@@ -510,6 +510,10 @@ class MoverControlEngine:
             return None
 
     def _blackout_mover(self, mover_id):
+        # #650 — zero dimmer AND RGB. Dimmer=0 is enough on fixtures that
+        # have one; fixtures without a dimmer channel (some older RGB-only
+        # movers) still need RGB=0 to actually go dark. Pan/tilt are
+        # intentionally preserved so the fixture holds position.
         mover = self._get_mover(mover_id)
         if not mover:
             return
@@ -527,3 +531,4 @@ class MoverControlEngine:
                    "channels": prof_info.get("channels", [])}
         uni_buf = engine.get_universe(uni)
         uni_buf.set_fixture_dimmer(addr, 0, profile)
+        uni_buf.set_fixture_rgb(addr, 0, 0, 0, profile)

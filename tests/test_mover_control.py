@@ -219,6 +219,42 @@ def main():
         api(c, 'POST', '/api/mover-control/release',
             {'moverId': strobe_mover, 'deviceId': 'phone-2'})
 
+        # ── Release blackout (#650) ──────────────────────────────
+        section('Release blackout — #650')
+        # Claim a fresh mover, light it up, then release and assert the
+        # fixture's dimmer+RGB channels are zero. Pan/tilt stay put.
+        r = c.post('/api/fixtures', json={
+            'name': 'Blackout MH', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxUniverse': 99, 'dmxStartAddr': 30, 'dmxChannelCount': 10,
+            'dmxProfileId': 'test-mh',
+        })
+        blackout_mover = r.get_json().get('id')
+        api(c, 'POST', '/api/mover-control/claim',
+            {'moverId': blackout_mover, 'deviceId': 'phone-3', 'deviceName': 'Pixel 8'})
+        api(c, 'POST', '/api/mover-control/start',
+            {'moverId': blackout_mover, 'deviceId': 'phone-3'})
+        api(c, 'POST', '/api/mover-control/color',
+            {'moverId': blackout_mover, 'deviceId': 'phone-3',
+             'r': 255, 'g': 128, 'b': 64})
+        time.sleep(0.1)
+        engine = parent_server._artnet
+        uni = engine.get_universe(99)
+        # Addr 30, offsets: Pan=0,1 Tilt=2,3 Dimmer=4 R=5 G=6 B=7
+        before = uni.get_data()
+        ok(before[30 + 4 - 1] > 0, f'Pre-release dimmer lit ({before[30 + 4 - 1]})')
+        ok(before[30 + 5 - 1] == 255, f'Pre-release red=255 ({before[30 + 5 - 1]})')
+
+        r = api(c, 'POST', '/api/mover-control/release',
+                {'moverId': blackout_mover, 'deviceId': 'phone-3'})
+        ok(r and r.get('ok'), 'Release → ok')
+        ok('engineRunning' in r, 'Release response surfaces engineRunning (#647)')
+        time.sleep(0.1)
+        after = uni.get_data()
+        ok(after[30 + 4 - 1] == 0, f'Post-release dimmer=0 ({after[30 + 4 - 1]})')
+        ok(after[30 + 5 - 1] == 0, f'Post-release red=0 ({after[30 + 5 - 1]})')
+        ok(after[30 + 6 - 1] == 0, f'Post-release green=0 ({after[30 + 6 - 1]})')
+        ok(after[30 + 7 - 1] == 0, f'Post-release blue=0 ({after[30 + 7 - 1]})')
+
         # ── Wrong device ────────────────────────────────────────
         section('Wrong device rejection')
 
