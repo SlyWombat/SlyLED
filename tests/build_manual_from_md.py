@@ -26,7 +26,9 @@ Needs python-docx (for .docx) and Playwright Chromium (for .pdf). The
 from __future__ import annotations
 
 import argparse
+import base64
 import html
+import mimetypes
 import os
 import re
 import sys
@@ -75,6 +77,51 @@ def parse_markdown(md: str) -> list[Block]:
         parts = [p.strip() for p in s.strip("|").split("|")]
         return bool(parts) and all(re.fullmatch(r":?-{3,}:?", p) for p in parts)
 
+    def split_table_row(s: str) -> list[str]:
+        # Token-aware split: protect pipes inside backtick code spans, link
+        # text [...](...), and explicit \| escapes. Naive split() would shred
+        # ``| `a \| b` | [x \| y](#z) |`` into 4 cells instead of 2.
+        s = s.strip().strip("|")
+        cells: list[str] = []
+        buf: list[str] = []
+        i = 0
+        in_code = False
+        in_link_text = False
+        in_link_url = False
+        while i < len(s):
+            ch = s[i]
+            if ch == "\\" and i + 1 < len(s) and s[i + 1] == "|":
+                buf.append("|")
+                i += 2
+                continue
+            if ch == "`" and not in_link_url:
+                in_code = not in_code
+                buf.append(ch)
+                i += 1
+                continue
+            if not in_code:
+                if ch == "[" and not in_link_text and not in_link_url:
+                    in_link_text = True
+                elif ch == "]" and in_link_text:
+                    in_link_text = False
+                    if i + 1 < len(s) and s[i + 1] == "(":
+                        in_link_url = True
+                        buf.append(ch)
+                        buf.append("(")
+                        i += 2
+                        continue
+                elif ch == ")" and in_link_url:
+                    in_link_url = False
+            if ch == "|" and not in_code and not in_link_text and not in_link_url:
+                cells.append("".join(buf).strip())
+                buf = []
+                i += 1
+                continue
+            buf.append(ch)
+            i += 1
+        cells.append("".join(buf).strip())
+        return cells
+
     while i < n:
         line = lines[i]
         stripped = line.strip()
@@ -119,12 +166,11 @@ def parse_markdown(md: str) -> list[Block]:
 
         # Table (header row + separator row + body)
         if "|" in stripped and i + 1 < n and is_table_sep(lines[i + 1]):
-            header = [c.strip() for c in stripped.strip("|").split("|")]
+            header = split_table_row(stripped)
             i += 2  # skip header + separator
             body_rows: list[list[str]] = []
             while i < n and "|" in lines[i] and lines[i].strip():
-                row = [c.strip() for c in lines[i].strip().strip("|").split("|")]
-                body_rows.append(row)
+                body_rows.append(split_table_row(lines[i]))
                 i += 1
             blocks.append(Block("table", rows=[header] + body_rows))
             continue
@@ -202,6 +248,7 @@ INLINE_RE = re.compile(
     r"(\*\*[^*]+\*\*|"        # bold
     r"\*[^*]+\*|"              # italic
     r"__[^_]+__|"              # bold alt
+    r"_[^_]+_|"                # italic alt
     r"`[^`]+`|"                # code
     r"\[[^\]]+\]\([^)]+\)|"    # link
     r"!\[[^\]]*\]\([^)]+\))"   # image-inline (rare)
@@ -221,6 +268,10 @@ def add_inline_runs(paragraph, text: str, base_bold: bool = False,
             run = paragraph.add_run(part[2:-2])
             run.bold = True
         elif part.startswith("*") and part.endswith("*") and not part.startswith("**"):
+            run = paragraph.add_run(part[1:-1])
+            run.italic = True
+        elif (part.startswith("_") and part.endswith("_")
+                and not part.startswith("__") and len(part) > 2):
             run = paragraph.add_run(part[1:-1])
             run.italic = True
         elif part.startswith("`") and part.endswith("`"):
@@ -404,6 +455,10 @@ def inline_to_html(text: str) -> str:
     t = re.sub(r"__([^_]+)__", r"<strong>\1</strong>", t)
     # Italic *x* (avoid matching stand-alone asterisks in code)
     t = re.sub(r"(?<!\*)\*(?!\*)([^*\n]+)\*(?!\*)", r"<em>\1</em>", t)
+    # Italic _x_ (avoid matching mid-word and __bold__ — require non-word
+    # boundaries on both sides)
+    t = re.sub(r"(?<![A-Za-z0-9_])_(?!_)([^_\n]+)_(?!_)(?![A-Za-z0-9_])",
+                r"<em>\1</em>", t)
     # Inline code `x`
     t = re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
     return t
@@ -481,7 +536,12 @@ def render_html(blocks: list[Block], title: str, lang: str = "en") -> str:
             candidates = [DOCS / block.src, ROOT / block.src]
             found = next((p for p in candidates if p.exists()), None)
             if found:
-                parts.append(f'<img src="file://{found}" alt="{html.escape(block.caption)}">')
+                # Inline as data: URI — Chromium loaded from a file:// page
+                # sometimes blocks sibling file:// resources, and data URIs
+                # also make the rendered HTML self-contained.
+                mime = mimetypes.guess_type(str(found))[0] or "application/octet-stream"
+                src_attr = f"data:{mime};base64,{base64.b64encode(found.read_bytes()).decode('ascii')}"
+                parts.append(f'<img src="{src_attr}" alt="{html.escape(block.caption)}">')
                 if block.caption:
                     parts.append(f"<p><em>{html.escape(block.caption)}</em></p>")
             else:
@@ -502,14 +562,22 @@ def render_html(blocks: list[Block], title: str, lang: str = "en") -> str:
 def render_pdf_via_playwright(html_path: Path, out_path: Path) -> None:
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        try:
+            browser = p.chromium.launch()
+        except Exception as exc:  # noqa: BLE001 — surface anything launch raises
+            raise SystemExit(
+                f"playwright chromium launch failed: {exc}\n"
+                "Hint: run `playwright install chromium` once on this machine "
+                "to install the browser binaries."
+            ) from exc
         page = browser.new_page()
-        page.goto(f"file://{html_path}")
+        page.goto(html_path.as_uri())
         page.wait_for_load_state("networkidle")
+        # Margins are owned by the @page CSS rule; don't double-declare them
+        # here (page.pdf would override CSS, which is confusing).
         page.pdf(
             path=str(out_path),
             format="Letter",
-            margin={"top": "0.75in", "bottom": "0.75in", "left": "0.75in", "right": "0.75in"},
             print_background=True,
         )
         browser.close()
@@ -519,9 +587,33 @@ def render_pdf_via_playwright(html_path: Path, out_path: Path) -> None:
 # Driver
 # ──────────────────────────────────────────────────────────────────────────
 
+def lint_known_limitations(md: str, md_path: Path) -> None:
+    """Reject markdown constructs we know the parser cannot handle.
+
+    Currently a single check (#677 finding #3): a blockquote (``> ...``)
+    immediately followed by a fenced code block (`` ``` ``) is not recursed
+    into. The fence is flattened into the quote text. The Pandoc-driven
+    pipeline in ``tools/docs/build.py`` (#665) handles this correctly; this
+    legacy renderer does not. Until the legacy fallback is retired, fail
+    loudly if a writer adds the construct.
+    """
+    pattern = re.compile(r"(?m)^> .*\n(?:> .*\n)*> ```")
+    m = pattern.search(md)
+    if m:
+        snippet = md[m.start(): m.start() + 120]
+        raise SystemExit(
+            f"lint: {md_path}: blockquote with nested code fence is not "
+            f"supported by this legacy renderer (#677 limitation). "
+            f"Move the fence outside the quote, or build via "
+            f"tools/docs/build.py (pandoc).\n"
+            f"  near: {snippet!r}"
+        )
+
+
 def build_one(md_path: Path, title: str, lang: str, make_pdf: bool) -> None:
     print(f"→ {md_path.name}")
     md = md_path.read_text(encoding="utf-8")
+    lint_known_limitations(md, md_path)
     blocks = parse_markdown(md)
     print(f"  parsed {len(blocks)} blocks")
 

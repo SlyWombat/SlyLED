@@ -21,8 +21,12 @@ def check(name, predicate, detail):
     if detail:
         print(f"       {detail}")
 
-# ── 1. Blockquote flattening — does a nested code fence inside a blockquote
-#     get parsed as a code block, or get swallowed as quote text?
+# ── 1. Blockquote flattening — documented as a known limitation of the
+#     legacy renderer (#677 finding #3). The fix is the Pandoc pipeline
+#     (#665, tools/docs/build.py); the legacy script ships a lint check
+#     that rejects the construct so writers see a clear error rather than
+#     a silently-flattened block.
+import re
 md = """> DRAFT banner
 >
 > ```mermaid
@@ -33,24 +37,28 @@ md = """> DRAFT banner
 > end of quote.
 
 Next paragraph."""
-blocks = b.parse_markdown(md)
-kinds = [b.kind for b in blocks]
-code_blocks = [b for b in blocks if b.kind == "code"]
+
+# 1a. The lint helper exists and rejects the construct.
+lint_ok = hasattr(b, "lint_known_limitations")
+lint_raised = False
+if lint_ok:
+    try:
+        b.lint_known_limitations(md, ROOT / "docs" / "USER_MANUAL.md")
+    except SystemExit:
+        lint_raised = True
 check(
-    "1. Blockquote with nested code fence",
-    len(code_blocks) == 0,  # FAIL if no code block extracted
-    f"blocks={kinds}; mermaid block should be parsed as code, got {len(code_blocks)} code blocks",
+    "1. Blockquote-with-fence: lint check rejects construct",
+    not (lint_ok and lint_raised),
+    f"lint_known_limitations exists={lint_ok}, raised on synthetic input={lint_raised}",
 )
 
-# Also check: does the actual manual currently have any blockquote containing
-# a nested fence? This tells us if finding #1 describes a CURRENT bug or a latent one.
+# 1b. The current manual is clean — no `>` immediately followed by a fence.
 manual = (ROOT / 'docs' / 'USER_MANUAL.md').read_text(encoding='utf-8')
-import re
 quote_with_fence = re.search(r'(?m)^> .*\n(?:> .*\n)*> ```', manual)
 check(
-    "1b. Current manual has nested fence in blockquote (active bug)",
+    "1b. Current manual has no nested fence inside blockquote",
     quote_with_fence is not None,
-    "no occurrence found — finding #1 is a latent risk only" if not quote_with_fence else f"match: {manual[quote_with_fence.start():quote_with_fence.start()+80]!r}",
+    "no occurrence found" if not quote_with_fence else f"match: {manual[quote_with_fence.start():quote_with_fence.start()+80]!r}",
 )
 
 # ── 2. Table pipe splitting — pipe inside inline code / link text
