@@ -4510,13 +4510,45 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
         _cal_blackout()
         return
 
-    # Kick the beam on right now so the operator can see DMX is flowing
-    # before the slow phases start. If any later step fails, at least the
-    # beam turning on (or not) tells them where the break is.
     # #594 — set active universe before the pre-warm write so the snapshot
     # helper seeds from the live engine buffer (preserving lamp-on / mode
     # defaults instead of zeroing the universe).
     _mcal._active_universe = uni_pre
+
+    # #511 — engage the calibration lock. Any external pan/tilt writer
+    # (show bake, mover-follow, dmx-test, profile defaults) will skip this
+    # fixture until we clear the flag in the finally-style cleanup below.
+    _set_calibrating(fid, True)
+
+    # #651 / review Q2 — dark-reference must be captured with the beam OFF,
+    # otherwise the frame contains the beam-reflection ambient we're
+    # trying to subtract out. New phase order:
+    #   pre-flight → acquire lock → dark-ref (beam off) → beam on → warmup → discover.
+    # Dark-ref covers ambient-spoof cases the colour-filter fallback relies on;
+    # battleship flash-discovery degrades gracefully without it.
+    cam_ip_pre = cam.get("cameraIp", "")
+    cam_idx_pre = cam.get("cameraIdx", 0)
+    if cam_ip_pre:
+        try:
+            # Ensure every fixture on the universe is actually dark before
+            # the capture — not just our mover's last DMX state.
+            _mcal._hold_dmx(bridge_ip, [0]*512, 0.5)
+            ok_dark = _mcal._dark_reference(cam_ip_pre, cam_idx_pre)
+            log.info("MOVER-CAL %d: dark-reference %s (cam=%s idx=%d)",
+                     fid, "captured" if ok_dark else "failed",
+                     cam_ip_pre, cam_idx_pre)
+            if not ok_dark:
+                # Not fatal — battleship's flash-detection tolerates no-dark
+                # scenes by comparing beam on/off deltas. Colour-filter
+                # fallback is what actually needs a good dark frame.
+                log.warning("MOVER-CAL %d: continuing without dark-reference "
+                            "— colour-filter fallback may misfire on ambient", fid)
+        except Exception as e:
+            log.warning("MOVER-CAL %d: dark-reference error (%s) — continuing", fid, e)
+
+    # Kick the beam on so the operator can see DMX is flowing before the
+    # slow phases start. If any later step fails, at least the beam turning
+    # on (or not) tells them where the break is.
     try:
         _dmx_pre = _mcal._fresh_buffer()
         _mcal._set_mover_dmx(_dmx_pre, addr_pre, 0.5, 0.5,
@@ -4526,11 +4558,6 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
                  fid, addr_pre, uni_pre)
     except Exception as e:
         log.warning("MOVER-CAL %d: pre-warm beam-on failed: %s", fid, e)
-
-    # #511 — engage the calibration lock. Any external pan/tilt writer
-    # (show bake, mover-follow, dmx-test, profile defaults) will skip this
-    # fixture until we clear the flag in the finally-style cleanup below.
-    _set_calibrating(fid, True)
 
     # #513 — optional warmup sweep before any measurement. Motors, belts,
     # and LED modules drift thermally; running the fixture through its
@@ -4727,6 +4754,42 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
                           "pixelX": found_px, "pixelY": found_py}
         log.info("MOVER-CAL fixture %d: beam discovered at pan=%.2f tilt=%.2f pixel=(%d,%d)",
                  fid, found_pan, found_tilt, found_px, found_py)
+
+        # #652 / review Q3 — capture sign-confirmation probe right after
+        # discovery so we know the pan/tilt→pixel handedness BEFORE BFS
+        # bakes any mirror-ambiguous samples. Two additional probes: pan+δ
+        # and tilt+δ from the discovered seed. verify_signs interprets the
+        # pixel deltas into (pan_sign, tilt_sign); the fit consumer passes
+        # force_signs to `parametric_mover.fit_model` so the LM solve skips
+        # the four-combo search and picks the unambiguously-correct mirror.
+        try:
+            from parametric_mover import verify_signs
+            NUDGE = 0.02
+            dmx_sign = _mcal._fresh_buffer()
+            def _sign_probe(p, t):
+                _mcal._set_mover_dmx(dmx_sign, addr, p, t,
+                                     *mover_color, dimmer=255, profile=prof_info)
+                _mcal._hold_dmx(bridge_ip, dmx_sign, 0.4)
+                return _mcal._beam_detect(cam_ip, cam_idx, mover_color, center=True)
+            px_pan = _sign_probe(min(1.0, found_pan + NUDGE), found_tilt)
+            px_tilt = _sign_probe(found_pan, min(1.0, found_tilt + NUDGE))
+            # Return beam to the found seed so BFS starts from a known state.
+            _mcal._set_mover_dmx(dmx_sign, addr, found_pan, found_tilt,
+                                 *mover_color, dimmer=255, profile=prof_info)
+            _mcal._hold_dmx(bridge_ip, dmx_sign, 0.3)
+            ps, ts = verify_signs(
+                (found_px, found_py),
+                (px_pan[0], px_pan[1]) if px_pan else None,
+                (px_tilt[0], px_tilt[1]) if px_tilt else None,
+            )
+            job["forceSigns"] = [int(ps), int(ts)]
+            log.info("MOVER-CAL %d: verify_signs → pan=%+d tilt=%+d "
+                     "(pan-probe pixel=%s, tilt-probe pixel=%s)",
+                     fid, ps, ts, px_pan, px_tilt)
+        except Exception as e:
+            log.warning("MOVER-CAL %d: verify_signs failed (%s) — fit_model "
+                        "will run the four-combo search", fid, e)
+            job["forceSigns"] = None
     except Exception as e:
         job["error"] = f"Discovery failed: {e}"
         job["status"] = "error"
@@ -4862,6 +4925,9 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
     }
     if job.get("verification"):
         cal_data["verification"] = job["verification"]
+    # #652 / Q3 — carry forceSigns through to the inline fit + future rebuilds.
+    if job.get("forceSigns"):
+        cal_data["forceSigns"] = list(job["forceSigns"])
     _mover_cal[str(fid)] = cal_data
     _save("mover_calibrations", _mover_cal)
     _invalidate_mover_model(fid)
@@ -5268,10 +5334,14 @@ def api_mover_cal_exclude_sample(fid):
         or (prof.get("panRange") if prof else None) or 540
     tilt_range = f.get("tiltRange") \
         or (prof.get("tiltRange") if prof else None) or 270
+    # #652 / Q3 — honour stored forceSigns from the original discovery.
+    fs = cal.get("forceSigns")
+    force_signs = (int(fs[0]), int(fs[1])) if fs else None
     try:
         model, quality = _fit_model(
             pos, pan_range, tilt_range, samples,
             mounted_inverted=bool(f.get("mountedInverted")),
+            force_signs=force_signs,
         )
     except Exception as e:
         # Put the sample back — we can't re-fit without it.
@@ -9072,10 +9142,18 @@ def _get_mover_model(fid, mover=None):
     if len(samples) < 2:
         return None
 
+    # #652 / Q3 — when calibration captured sign-confirmation probes,
+    # skip the four-combo LM search and lock the mirror choice to the
+    # physically-measured signs. No-op when forceSigns is absent (older cals).
+    force_signs = cal.get("forceSigns")
+    if force_signs is not None:
+        force_signs = (int(force_signs[0]), int(force_signs[1]))
+
     try:
         model, quality = _fit_model(
             pos, pan_range, tilt_range, samples,
             mounted_inverted=bool(mover.get("mountedInverted")),
+            force_signs=force_signs,
         )
     except Exception as e:
         log.warning("Mover %d v2 fit failed: %s — keeping v1 affine", fid, e)
