@@ -3833,10 +3833,36 @@ def api_camera_settings_set(fid):
     slot_name = body.get("slot")
     if slot_name:
         slots = _camera_settings_slots.setdefault(str(fid), {})
-        slots[slot_name] = {"controls": dict(r.get("applied") or controls),
-                            "intent": body.get("intent", "general")}
+        slot_entry = {"controls": dict(r.get("applied") or controls),
+                      "intent": body.get("intent", "general")}
+        # #683 — capture a thumbnail of the frame AT the moment the slot
+        # was saved so the SPA's before/after compare works without
+        # a live camera. Best-effort: skip silently on any failure so
+        # slot save never blocks on thumbnail capture.
+        thumb = _capture_slot_thumbnail(ip, cam_idx)
+        if thumb:
+            slot_entry["thumbnail"] = thumb
+        slots[slot_name] = slot_entry
         _save("camera_settings_slots", _camera_settings_slots)
     return jsonify(ok=True, applied=r.get("applied", {}))
+
+
+def _capture_slot_thumbnail(ip, cam_idx, max_bytes=80_000):
+    """#683 — fetch the camera node's current snapshot, base64 it, and
+    return a `data:image/jpeg;base64,…` string when the payload fits in
+    ``max_bytes``. Returns None on any failure or when the snapshot is
+    too large to store inline in settings.json.
+    """
+    try:
+        import base64
+        url = f"http://{ip}:5000/snapshot?cam={cam_idx}"
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = resp.read()
+    except Exception:
+        return None
+    if not data or len(data) > max_bytes:
+        return None
+    return "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")
 
 
 @app.get("/api/cameras/<int:fid>/settings/slots")
@@ -3935,9 +3961,15 @@ def api_camera_settings_auto_tune(fid):
     slot_name = body.get("saveSlot")
     if slot_name:
         slots = _camera_settings_slots.setdefault(str(fid), {})
-        slots[slot_name] = {"controls": dict(result.get("applied") or {}),
-                            "intent": intent,
-                            "score": result.get("after", {}).get("score")}
+        slot_entry = {"controls": dict(result.get("applied") or {}),
+                      "intent": intent,
+                      "score": result.get("after", {}).get("score")}
+        # #683 — attach a thumbnail captured at the end of the tune run
+        # (camera state already matches the slot's saved controls).
+        thumb = _capture_slot_thumbnail(ip, cam_idx)
+        if thumb:
+            slot_entry["thumbnail"] = thumb
+        slots[slot_name] = slot_entry
         _save("camera_settings_slots", _camera_settings_slots)
 
     _auto_tune_jobs[str(fid)] = {"status": "done", **result,
