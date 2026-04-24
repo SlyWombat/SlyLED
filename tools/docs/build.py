@@ -191,16 +191,96 @@ def build_docx(lang: str) -> Path:
     return out
 
 
+def _slug_to_title(raw: str) -> str:
+    """Pull the first meaningful heading for a front-matter title field.
+    Falls back to a slug → Title Case transform."""
+    for line in raw.splitlines():
+        s = line.strip()
+        if s.startswith('## '):
+            return s[3:].strip().strip('()')
+        if s.startswith('# '):
+            return s[2:].strip()
+    return 'SlyLED'
+
+
+def sync_content_to_website() -> Path:
+    """Copy ``docs/src/{en,fr}/*.md`` into the Astro content collection
+    with Starlight-compatible frontmatter. Also mirrors screenshots and
+    rendered diagrams into ``website/public/`` for `<img>`/`<Image>`
+    references from the docs pages.
+
+    Starlight's locale config: ``root`` = English at
+    ``src/content/docs/<slug>.md``; French at
+    ``src/content/docs/fr/<slug>.md``.
+    """
+    site = ROOT / 'website'
+    if not site.is_dir():
+        raise SystemExit('website/ not scaffolded — run tools/docs/build.py '
+                         '--format website after scaffolding')
+    out_root = site / 'src' / 'content' / 'docs'
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    for lang in ('en', 'fr'):
+        dest_dir = out_root if lang == 'en' else (out_root / 'fr')
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for md in sorted((SRC / lang).glob('*.md')):
+            raw = md.read_text(encoding='utf-8', errors='replace')
+            # Skip the implicit FR review sentinel; Starlight doesn't care.
+            if raw.startswith('<!-- review-status:'):
+                _, _, raw = raw.partition('-->')
+                raw = raw.lstrip('\n')
+            # Rewrite relative asset paths to site-absolute paths so
+            # Astro's Vite/Rollup bundler leaves them to the static /
+            # public pipeline (otherwise it tries to resolve them as
+            # bundled imports and fails).
+            import re as _re
+            raw = _re.sub(r'(!\[[^\]]*\]\()(screenshots/)', r'\1/slyled/\2', raw)
+            raw = _re.sub(r'(!\[[^\]]*\]\()(diagrams/)',    r'\1/slyled/\2', raw)
+            raw = _re.sub(r'(!\[[^\]]*\]\()(docs/screenshots/)',
+                          r'\1/slyled/screenshots/', raw)
+            title = _slug_to_title(raw)
+            front = (
+                '---\n'
+                f'title: "{title.replace(chr(34), chr(39))}"\n'
+                f'lang: {lang}\n'
+                '---\n\n'
+            )
+            (dest_dir / md.name).write_text(front + raw, encoding='utf-8')
+
+    # Mirror screenshots + diagrams into public/ so markdown `![..](...)`
+    # references resolve relative to the site root.
+    for src, dst in (
+        (ROOT / 'docs' / 'screenshots', site / 'public' / 'screenshots'),
+        (ROOT / 'docs' / 'build' / 'diagrams', site / 'public' / 'diagrams'),
+    ):
+        if src.is_dir():
+            dst.mkdir(parents=True, exist_ok=True)
+            for p in src.rglob('*'):
+                if p.is_file():
+                    target = dst / p.relative_to(src)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(p, target)
+    log.info('website sync: EN+FR + public assets → %s',
+             site.relative_to(ROOT))
+    return out_root
+
+
 def build_website(lang: str) -> Path:
-    """Astro Starlight build — placeholder until #669 scaffolds the site."""
-    site_dir = ROOT / 'website'
-    if not site_dir.is_dir():
-        log.warning('website [%s]: skipped — `%s` not yet scaffolded (#669)',
-                    lang, site_dir.relative_to(ROOT))
-        return site_dir
-    log.info('website [%s]: npm run build in %s', lang, site_dir)
-    subprocess.run(['npm', 'run', 'build'], cwd=site_dir, check=True)
-    return site_dir / 'dist'
+    """Run Starlight's build after syncing content.
+
+    ``lang`` is ignored — Starlight builds every configured locale in one
+    go. Kept as a parameter so the callsite signature stays uniform with
+    the other per-language build functions.
+    """
+    site = ROOT / 'website'
+    if not site.is_dir():
+        log.warning('website [%s]: skipped — website/ not scaffolded (#669)',
+                    lang)
+        return site
+    sync_content_to_website()
+    log.info('website: npm run build in %s', site)
+    subprocess.run(['npm', 'run', 'build'], cwd=site, check=True)
+    return site / 'dist'
 
 
 # ── Orchestration ────────────────────────────────────────────────────────

@@ -1,0 +1,16 @@
+# Astro build artefacts + cache + generated types
+node_modules/
+dist/
+.astro/
+src/env.d.ts
+
+# Content synced from docs/src/ by tools/docs/build.py --format website.
+# index.md is hand-authored (splash page); everything else is generated.
+src/content/docs/*.md
+!src/content/docs/index.md
+src/content/docs/fr/
+
+# Public assets mirrored from docs/ by the sync step. Only committed
+# assets (logo, favicon) stay tracked.
+public/screenshots/
+public/diagrams/

@@ -20,51 +20,75 @@ export default defineConfig({
       description:
         'Open, three-tier stage-lighting control with local-first AI calibration.',
       logo: {
-        src: './public/slyled-logo.svg',
+        src: './public/slyled-logo.png',
         replacesTitle: false,
       },
-      favicon: '/slyled/favicon.ico',
       defaultLocale: 'root',
       locales: {
         root: { label: 'English', lang: 'en' },
         fr: { label: 'Français', lang: 'fr' },
       },
-      social: {
-        github: 'https://github.com/SlyWombat/SlyLED',
-      },
+      social: [
+        { icon: 'github', label: 'GitHub',
+          href: 'https://github.com/SlyWombat/SlyLED' },
+      ],
       editLink: {
         baseUrl: 'https://github.com/SlyWombat/SlyLED/edit/main/docs/src/',
       },
       lastUpdated: true,
       customCss: ['./src/styles/kinetic-prism.css'],
+      // Starlight `defaultLocale: 'root'` puts EN at src/content/docs/<slug>.md,
+      // so sidebar links resolve at the site root (no /docs/en/ prefix). The
+      // `base: '/slyled'` option prefixes the final URL; DO NOT include it here.
       sidebar: [
         {
           label: 'Start here',
           items: [
-            { label: 'Overview', link: '/docs/en/01-getting-started/' },
-            { label: 'Walkthrough', link: '/docs/en/02-walkthrough/' },
-            { label: 'Platforms', link: '/docs/en/03-platform-guide/' },
+            { label: 'Overview', slug: '01-getting-started' },
+            { label: 'Walkthrough', slug: '02-walkthrough' },
+            { label: 'Platforms', slug: '03-platform-guide' },
           ],
         },
         {
           label: 'Design',
-          autogenerate: { directory: 'docs/en' },
+          items: [
+            { label: 'Fixture setup', slug: '04-fixture-setup' },
+            { label: 'Stage layout', slug: '05-stage-layout' },
+            { label: 'Stage objects', slug: '06-stage-objects' },
+            { label: 'Spatial effects', slug: '07-spatial-effects' },
+            { label: 'Track actions', slug: '08-track-actions' },
+            { label: 'Building a timeline', slug: '09-building-timeline' },
+            { label: 'Baking + playback', slug: '10-baking-playback' },
+            { label: 'Show preview', slug: '11-show-preview' },
+            { label: 'DMX profiles', slug: '12-dmx-profiles' },
+            { label: 'Preset shows', slug: '13-preset-shows' },
+          ],
+          collapsed: true,
+        },
+        {
+          label: 'Operations',
+          items: [
+            { label: 'Camera nodes', slug: '14-camera-nodes' },
+            { label: 'Firmware + OTA', slug: '15-firmware-ota' },
+            { label: 'System limits', slug: '16-system-limits' },
+            { label: 'Troubleshooting', slug: '17-troubleshooting' },
+            { label: 'Examples', slug: '18-examples' },
+          ],
           collapsed: true,
         },
         {
           label: 'Calibration (deep dive)',
           items: [
-            { label: 'Appendix A — Cameras',
-              link: '/docs/en/appendix-a-camera-calibration/' },
-            { label: 'Appendix B — Moving heads',
-              link: '/docs/en/appendix-b-mover-calibration/' },
+            { label: 'Appendix A — Cameras', slug: 'appendix-a-camera-calibration' },
+            { label: 'Appendix B — Moving heads', slug: 'appendix-b-mover-calibration' },
+            { label: 'Appendix C — Maintenance', slug: 'appendix-c-maintenance' },
           ],
         },
         {
           label: 'Reference',
           items: [
-            { label: 'Glossary', link: '/docs/en/20-glossary/' },
-            { label: 'API', link: '/docs/en/19-api-reference/' },
+            { label: 'Glossary', slug: '20-glossary' },
+            { label: 'API', slug: '19-api-reference' },
           ],
         },
       ],
