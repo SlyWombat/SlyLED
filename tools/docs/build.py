@@ -66,15 +66,24 @@ def section_files(lang: str) -> list[Path]:
 def assemble_markdown(lang: str) -> Path:
     """Concatenate split sources into a single monolithic file.
 
-    Writes `docs/USER_MANUAL.md` (EN) or `docs/USER_MANUAL_fr.md` (FR) as a
-    byte-exact concatenation so existing consumers (GitHub link previews,
-    legacy tooling) keep working.
+    Writes `docs/USER_MANUAL.md` (EN) or `docs/USER_MANUAL_fr.md` (FR).
+    Each section is decoded, CRLF-normalised, and padded to end with a
+    blank line before the next section is appended. This ensures the
+    ``---`` separators between sections are surrounded by blank lines, so
+    Pandoc doesn't misinterpret them as YAML metadata delimiters (the FR
+    sources shipped with LF-only endings and no trailing blank line,
+    which made Pandoc's markdown frontend scan lines 28-43 as YAML and
+    choke on ``**Orchestrateur**`` looking like a YAML alias).
     """
     files = section_files(lang)
     out = DOCS / ('USER_MANUAL.md' if lang == 'en' else 'USER_MANUAL_fr.md')
-    with open(out, 'wb') as fh:
+    with open(out, 'w', encoding='utf-8', newline='\n') as fh:
         for f in files:
-            fh.write(f.read_bytes())
+            txt = f.read_text(encoding='utf-8').replace('\r\n', '\n').replace('\r', '\n')
+            # Guarantee section is followed by exactly one blank line so
+            # adjacent `---` + `##` pairs are separated by a blank line.
+            txt = txt.rstrip('\n') + '\n\n'
+            fh.write(txt)
     log.info('assembled-md [%s]: %d sections → %s (%d bytes)',
              lang, len(files), out.relative_to(ROOT), out.stat().st_size)
     return out
@@ -174,18 +183,33 @@ def build_pdf(lang: str) -> Path:
         browser.close()
     log.info('pdf [%s]: %s (%.1f MB)', lang, out.relative_to(ROOT),
              out.stat().st_size / 1e6)
+    # Also publish to the canonical location that downstream tooling
+    # (deploy_website.py / downloads/ mirror, GitHub link previews)
+    # expects: docs/USER_MANUAL.pdf (EN) or docs/USER_MANUAL_fr.pdf (FR).
+    canonical = DOCS / ('USER_MANUAL.pdf' if lang == 'en' else
+                        'USER_MANUAL_fr.pdf')
+    shutil.copyfile(out, canonical)
+    log.info('pdf [%s]: canonical → %s', lang,
+             canonical.relative_to(ROOT))
     return out
 
 
 def build_docx(lang: str) -> Path:
     """Delegate to the existing markdown→docx renderer (tests/
-    build_manual_from_md.py) until #665 folds it into tools/docs/."""
+    build_manual_from_md.py) until #665 folds it into tools/docs/.
+
+    The legacy script always emits EN and tacks on FR when --fr is
+    passed; it has no --lang flag. We map our per-language loop onto
+    its CLI: lang='en' → no flag; lang='fr' → --fr (which rebuilds EN
+    too, but that's a cheap no-op on the second pass)."""
     legacy = ROOT / 'tests' / 'build_manual_from_md.py'
     if not legacy.exists():
         raise SystemExit('Legacy docx renderer not found')
     log.info('docx [%s]: delegating to %s', lang, legacy.relative_to(ROOT))
-    subprocess.run([sys.executable, str(legacy), '--lang', lang,
-                     '--no-pdf'], check=True)
+    cmd = [sys.executable, str(legacy), '--no-pdf']
+    if lang == 'fr':
+        cmd.append('--fr')
+    subprocess.run(cmd, check=True)
     out = DOCS / ('USER_MANUAL.docx' if lang == 'en' else
                   'USER_MANUAL_fr.docx')
     return out
