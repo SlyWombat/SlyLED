@@ -655,3 +655,27 @@ Voir `docs/STRESS_TEST.md` pour les donnees de benchmark completes.
 | GET | `/api/dmx-profiles` | Lister les profils |
 | GET | `/api/dmx/patch` | Carte d'adresses des univers |
 | POST | `/api/dmx/start`, `/api/dmx/stop` | Controle du moteur |
+
+---
+
+## Glossaire (EBAUCHE)
+
+> ⚠ **EBAUCHE — traduction francaise a venir.** Le glossaire complet (environ 85 entrees couvrant chaque acronyme et terme de jargon utilise dans le manuel) est actuellement disponible uniquement en anglais dans `docs/USER_MANUAL.md §20`. La traduction francaise suivra une fois que le contenu anglais sera stabilise. Voir l'issue [#663](https://github.com/SlyWombat/SlyLED/issues/663) pour le suivi.
+>
+> Reference anglaise : [Glossary](USER_MANUAL.md#glossary).
+
+## Annexe A — Pipeline de calibration de camera (EBAUCHE)
+
+> ⚠ **EBAUCHE — traduction francaise a venir.** Les annexes A (calibration de camera) et B (calibration de projecteur motorise) sont actuellement disponibles uniquement en anglais dans `docs/USER_MANUAL.md`. La traduction francaise suivra une fois que le contenu anglais sera stabilise (retrait de la banniere DRAFT). Voir l'issue [#662](https://github.com/SlyWombat/SlyLED/issues/662) pour le suivi.
+>
+> Reference anglaise : [Appendix A — Camera Calibration Pipeline](USER_MANUAL.md#appendix-a--camera-calibration-pipeline-draft).
+
+## Annexe B — Pipeline de calibration de projecteur motorise (EBAUCHE)
+
+> ⚠ **EBAUCHE — traduction francaise a venir.** Voir note ci-dessus.
+>
+> Reference anglaise : [Appendix B — Moving-Head Calibration Pipeline](USER_MANUAL.md#appendix-b--moving-head-calibration-pipeline-draft).
+
+## Annexe C — Maintenance de la documentation
+
+> La maintenance des annexes A et B est decrite dans `docs/DOCS_MAINTENANCE.md` (anglais).

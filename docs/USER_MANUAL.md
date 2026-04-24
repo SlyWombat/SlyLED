@@ -20,6 +20,10 @@
 17. [Troubleshooting](#17-troubleshooting)
 18. [Examples](#18-examples)
 19. [API Quick Reference](#19-api)
+20. [Glossary](#glossary)
+21. [Appendix A — Camera Calibration Pipeline (DRAFT)](#appendix-a)
+22. [Appendix B — Moving-Head Calibration Pipeline (DRAFT)](#appendix-b)
+23. [Appendix C — Documentation Maintenance](#appendix-c)
 
 ---
 
@@ -225,10 +229,10 @@ In the **Layout** tab, double-click `MH1 SL`. Click **Calibrate**.
 
 - Select **Green** as the beam color (good contrast on dark floors)
 - Click **Start Calibration**
-- The wizard runs automatically: coarse scan → BFS mapping → grid build
+- The wizard runs automatically through eight phases: warmup → discovery → blink-confirm → mapping/convergence → grid build → verification sweep → model fit → held-out parametric gate → save
 - Repeat for `MH2 SR`
 
-Calibration typically takes 3-5 minutes per head.
+Calibration typically takes 2–4 minutes per head. For the complete phase-by-phase reference — what each phase does, how long it should take, what fallbacks exist, and what to check when a phase stalls — see [Appendix B — Moving-Head Calibration Pipeline](#appendix-b--moving-head-calibration-pipeline-draft).
 
 ---
 
@@ -1450,3 +1454,757 @@ Use the built-in **Spotlight: Follow Person** preset to make moving heads automa
 | GET | `/snapshot?cam=N` | JPEG snapshot from camera N |
 | POST | `/scan` | Object detection (JSON: cam, threshold, resolution, classes) |
 | GET | `/health` | Health check |
+
+---
+
+<a id="glossary"></a>
+
+## 20. Glossary
+
+SlyLED touches lighting, networking, computer vision, and embedded firmware — which means a lot of acronyms and jargon. This section expands every acronym used elsewhere in the manual and defines the domain terms that don't have a literal expansion ("baking", "universe", "blink-confirm", etc.).
+
+Entries are alphabetised on the **Term** column. For acronyms that cluster around a common concept (e.g. `RX` / `RY` / `RZ`) the cluster appears under the first member.
+
+| Term | Expansion | Plain-language definition | Where it shows up |
+|------|-----------|---------------------------|-------------------|
+| **API** | Application Programming Interface | The set of HTTP endpoints a program exposes for other programs to call. | §19 API Quick Reference; `/api/*` routes throughout. |
+| **ARM** | Advanced RISC Machine | CPU architecture used by the Giga R1, Raspberry Pi, and Orange Pi. "Slow on ARM" in the manual means these boards. | §14 Camera Nodes (depth-estimation runtimes). |
+| **Art-Net** | — | DMX-over-Ethernet protocol by Artistic Licence. The orchestrator sends `ArtDMX` packets to an Art-Net bridge, which relays them to DMX fixtures. | §2 Walkthrough Step 3b; §12 DMX Profiles. |
+| **ArtDMX** | Art-Net DMX packet | One 512-channel Art-Net data packet. | §2 Walkthrough Step 3b. |
+| **ArtPoll** | Art-Net discovery packet | The Art-Net discovery broadcast used to find bridges. | §2 Walkthrough Step 3a. |
+| **baking** | — | Compiling a timeline into a pre-computed DMX scene stream so playback doesn't need to recompute effects on every frame. | §10 Baking & Playback. |
+| **battleship search** | — | Calibration-discovery strategy that probes a coarse grid across the full pan/tilt range before refining — faster than a dense scan when the beam's reachable region is small. | Appendix B §B.3 Discovery. |
+| **BFS** | Breadth-First Search | Graph-traversal algorithm that explores outward from a seed point one ring at a time. Used in mover calibration to map the visible-region boundary from a first detected beam position. | Appendix B §B.3 Mapping. |
+| **blink-confirm** | — | Reflection-rejection check: after detecting a candidate beam pixel, nudge pan and tilt slightly and verify the detected pixel actually moves. A reflection stays put; a real beam moves. | Appendix B §B.3; issue #658. |
+| **CPU** | Central Processing Unit | The main processor. | §14 Camera Nodes. |
+| **CRGB** | Color RGB | FastLED's C++ struct for a single RGB pixel. | Firmware modules (`GigaLED.h`). |
+| **CRUD** | Create, Read, Update, Delete | Shorthand for "all four basic database-style operations." | §4 Fixture Setup; §12 DMX Profiles. |
+| **CSI** | Camera Serial Interface | Raspberry Pi's native ribbon-cable camera port (not supported in SlyLED v1.x — use USB cameras). | §14 Camera Nodes. |
+| **dark reference** | — | Snapshot captured with all calibration beams off, subtracted from subsequent frames so beam detection isn't fooled by ambient lighting. | Appendix A §A.5; issue #651. |
+| **DHCP** | Dynamic Host Configuration Protocol | How devices on a network get an IP address. The board's hostname shows up in DHCP so routers list it by name. | §14 Camera Nodes deployment. |
+| **DMX** | Digital Multiplex | Industry-standard lighting-control protocol — 512 channels per universe, carried over a twisted-pair cable or over Ethernet (Art-Net / sACN). | §2 Walkthrough; §12 DMX Profiles; Appendix B. |
+| **DOF** | Degrees of Freedom | Independent axes a system can move along. SlyLED's parametric mover model has 6 DOF (yaw, pitch, roll, pan offset, tilt offset, plus scale). | Appendix B §B.3 Model fit. |
+| **ESP32** | — | Espressif microcontroller family used for LED-performer nodes (WiFi + dual-core, up to 8 LED strings). | §4 Fixture Setup; §15 Firmware. |
+| **extrinsic** | — | A camera's pose (position + rotation) in stage/world space. The solvePnP output. Pair with **intrinsic**. | Appendix A §A.4. |
+| **FastLED** | — | Arduino library for driving WS2812B-style addressable LED strips. Used on ESP32 and D1 Mini; **not** reliable on the Giga R1 (custom PWM path instead). | §15 Firmware; CLAUDE.md hardware quirks. |
+| **fixture** | — | Any addressable lighting device — an LED strip, a DMX wash, a moving head, or a camera (which registers as a placeable "fixture" so it has a layout position). | §4 Fixture Setup; throughout. |
+| **FOV** | Field of View | The angular width a camera or lens sees. Stored as `fovDeg` + `fovType` (horizontal/vertical/diagonal). Used as an intrinsic fallback when true calibrated intrinsics aren't available. | Appendix A §A.3. |
+| **FPS** | Frames Per Second | Update rate for live playback or emulation. | §11 Show Preview Emulator. |
+| **FQBN** | Fully Qualified Board Name | The arduino-cli identifier for a board target, e.g. `arduino:mbed_giga:giga`. | §15 Firmware. |
+| **GET / POST / PUT / DELETE** | — | HTTP methods. GET reads, POST creates/triggers, PUT updates, DELETE removes. | §19 API Quick Reference. |
+| **GPIO** | General-Purpose Input/Output | A configurable pin on a microcontroller — used for LED data lines on the ESP32. | §4 Fixture Setup (ESP32 only). |
+| **homography** | — | A 3×3 matrix that maps points on one plane to points on another via projective transform. SlyLED uses a pixel↔floor homography as a fast alternative to full 3D extrinsics during calibration. | Appendix A §A.4. |
+| **HSV** | Hue, Saturation, Value | A colour representation used for colour-filter beam detection (hue bands identify "the green beam" regardless of brightness). | Appendix A §A.8 Beam detection. |
+| **HTML** | HyperText Markup Language | The markup the SPA is built from. | §3 Platform Guide. |
+| **HUD** | Heads-Up Display | An overlay showing live state (used in the 3D viewport). | §5 Stage Layout. |
+| **ID** | Identifier | Any short key that uniquely names something (fixture ID, ArUco marker ID, etc.). | Throughout. |
+| **IK** | Inverse Kinematics | Given a target point, compute the pan/tilt values that aim the beam there. The parametric mover model provides IK once calibration completes. | Appendix B §B.3 Model fit. |
+| **intrinsic** | — | A camera's internal optical parameters: focal length (`fx`, `fy`), principal point (`cx`, `cy`), and lens distortion. Independent of where the camera is — that's the **extrinsic**. | Appendix A §A.3. |
+| **IP** | Internet Protocol | Addressing scheme for networked devices (`192.168.x.y`). | §14 Camera Nodes. |
+| **JPEG** | Joint Photographic Experts Group | Compressed image format used for camera snapshots. | §14 Camera Nodes. |
+| **JSON** | JavaScript Object Notation | The text format used for API request/response bodies and persisted data files. | §19 API Quick Reference. |
+| **kinematic model** | — | Mathematical model that describes how a fixture's motors translate pan/tilt DMX values into an aim direction in stage space. SlyLED fits a 6-DOF kinematic model per calibrated moving head. | Appendix B §B.3. |
+| **LAN** | Local Area Network | The physical/WiFi network the orchestrator and performers share. | §2 Walkthrough. |
+| **LED** | Light-Emitting Diode | Addressable RGB LEDs (WS2812B and similar) are the primary fixture type. | §4 Fixture Setup. |
+| **LM** | Levenberg–Marquardt | Nonlinear least-squares solver used to fit the parametric mover model to calibration samples. | Appendix B §B.3 Model fit. |
+| **LSQ** | Least-Squares | The fitting technique LM refines. When calibration falls back to "median-based" fitting, it's because LSQ wouldn't converge. | Appendix A §A.6. |
+| **Mbed OS** | — | The real-time operating system running on the Arduino Giga R1. Explains why `analogWrite()` and some libraries behave differently on the Giga. | CLAUDE.md hardware quirks. |
+| **mDNS** | Multicast DNS | Zero-config DNS over multicast — how "SLYC-1234.local" resolves on the LAN without a DNS server. | §14 Camera Nodes deployment. |
+| **NTP** | Network Time Protocol | How performers sync their clocks so runner start times are coordinated. | Protocol (`Globals.cpp`). |
+| **NVS** | Non-Volatile Storage | ESP32 flash-backed key/value store. SlyLED uses the `"slyled"` namespace. Equivalent to EEPROM on the D1 Mini. | §4 Fixture Setup. |
+| **ONNX** | Open Neural Network Exchange | Portable neural-network file format. YOLOv8n and Depth-Anything-V2 ship as ONNX files so they run via `onnxruntime` on ARM. | §14 Camera Nodes. |
+| **OFL** | Open Fixture Library | Community-maintained DMX-fixture profile database. SlyLED can import OFL JSON. | §12 DMX Profiles. |
+| **orchestrator** | — | The desktop (Windows/Mac) or Giga-parent Flask server that hosts the SPA, designs shows, and drives performers and cameras. One of the three tiers. | §1 Getting Started. |
+| **OS** | Operating System | — | CLAUDE.md hardware. |
+| **OTA** | Over-the-Air | Firmware update pushed over WiFi instead of via USB. | §15 Firmware & OTA Updates. |
+| **PDF** | Portable Document Format | The packaged manual format. Generated by `tests/build_manual.py`. | Appendix C. |
+| **performer** | — | An ESP32, D1 Mini, or Giga-child LED execution node. One of the three tiers. | §1 Getting Started. |
+| **PnP / solvePnP** | Perspective-n-Point | OpenCV algorithm that computes a camera's 3D pose from ≥3 known 2D↔3D point correspondences. `SOLVEPNP_SQPNP` is the preferred solver; `SOLVEPNP_ITERATIVE` is the fallback. | Appendix A §A.4. |
+| **PNG** | Portable Network Graphics | Lossless image format used for screenshots. | §2 Walkthrough. |
+| **PR** | Pull Request | Git/GitHub workflow — a proposed change on a branch, reviewed before merge. | Appendix C §C.4. |
+| **PWM** | Pulse-Width Modulation | Dimming technique where the LED is switched on and off fast. On the Giga R1 this is implemented in software because `analogWrite()` is banned on the onboard RGB pins. | CLAUDE.md hardware quirks. |
+| **QA** | Quality Assurance | Testing role — in SlyLED's workflow, QA runs the Playwright + test suites and files issues rather than patching source. | Appendix C. |
+| **QR** | Quick Response (code) | 2D barcode. Not the same as an ArUco marker — ArUco is designed for solvePnP, QR for data payloads. | — |
+| **RANSAC** | Random Sample Consensus | Robust plane-fitting algorithm — samples random small subsets, finds the model with the most inliers. SlyLED uses it to detect floor and wall planes in noisy point clouds. | Appendix A §A.7. |
+| **reprojection RMS** | — | After solvePnP, project the 3D points back through the solved pose and measure the pixel distance to the detected corners. Reported as root-mean-square across all points. <2 px is excellent, 2–5 px is usable, >5 px means something is wrong. | Appendix A §A.4. |
+| **RGB / RGBW** | Red, Green, Blue [, White] | Standard LED colour models. RGBW adds a dedicated white LED for purer whites. | §4 Fixture Setup. |
+| **RMS** | Root-Mean-Square | Quadratic-mean aggregation of errors (`sqrt(mean(x²))`). More sensitive to outliers than a plain mean — which is why it's used as a calibration quality metric. | Appendix A §A.4. |
+| **Rodrigues** | — | Mathematical conversion between a rotation vector (`rvec` from solvePnP) and a 3×3 rotation matrix. `cv2.Rodrigues()`. | Appendix A §A.4. |
+| **RSSI** | Received Signal Strength Indicator | How strong a WiFi signal a performer is hearing. Reported in dBm; the orchestrator stores it as an unsigned magnitude so "69" means "−69 dBm". | UDP protocol PONG payload. |
+| **RTOS** | Real-Time Operating System | An OS with deterministic timing guarantees. Mbed OS on the Giga is an RTOS. | CLAUDE.md hardware. |
+| **runner** | — | A step sequencer loaded into a performer. Each step is an action (colour, pattern, LED range) with a duration; the runner loops the step list in sync with the orchestrator. | §4 Fixture Setup; §13 Preset Shows. |
+| **RX / RY / RZ** | — | Rotations about the X, Y, Z axes of the stage frame, in degrees. In schema v2: `rx` = pitch, `ry` = roll, `rz` = yaw/pan. Never read `rotation[1]` or `rotation[2]` directly — always go through `rotation_from_layout()`. | Appendix A §A.9. |
+| **sACN** | Streaming ACN | DMX-over-Ethernet alternative to Art-Net, defined by RFC 7724. SlyLED speaks both. | §12 DMX Profiles. |
+| **SCP** | Secure Copy Protocol | File transfer over SSH. How camera firmware reaches the Orange Pi / Raspberry Pi. | §15 Firmware → Camera deploy. |
+| **solvePnP** | — | See **PnP**. | Appendix A §A.4. |
+| **SPA** | Single-Page Application | The desktop orchestrator UI is one HTML page that loads JavaScript modules instead of navigating between pages. | §3 Platform Guide. |
+| **SQPNP** | — | A specific solvePnP algorithm variant (`cv2.SOLVEPNP_SQPNP`) chosen because it tolerates fewer correspondences than the iterative solver. | Appendix A §A.4. |
+| **SRAM** | Static Random-Access Memory | The fast, volatile RAM on a microcontroller. Tight budget on the D1 Mini — the manual warns against String objects and heap allocation. | CLAUDE.md performance rules. |
+| **SSH** | Secure Shell | Encrypted remote-login protocol. How the orchestrator reaches camera-node shells for firmware deployment. | §15 Firmware → Camera deploy. |
+| **SVG** | Scalable Vector Graphics | Vector image format used by diagram exporters. | Appendix C. |
+| **TCP** | Transmission Control Protocol | Reliable, connection-based networking. HTTP traffic (config pages, API calls) rides on TCP. | UDP protocol discussion. |
+| **tiling** | — | Sliced-Aided Hyper-Inference (SAHI)-style detection: break a large image into overlapping patches, run the detector on each, stitch results. Improves small-object detection accuracy at the cost of runtime. Controlled by the `tile` option on `/scan`. | §14 Camera Nodes. |
+| **TTL** | Time-To-Live | A timeout after which a resource (e.g. a mover claim) auto-expires. Mover-control claims have a 15 s TTL. | Appendix B §B.7. |
+| **UDP** | User Datagram Protocol | Connectionless, best-effort networking. Used for all orchestrator↔performer traffic (discovery, actions, runner control) because it's low-latency and the wire protocol tolerates occasional packet loss. | Wire protocol; CLAUDE.md §UDP binary protocol. |
+| **UI** | User Interface | — | Throughout. |
+| **universe** | — | A DMX addressing space — 1–512 channels. A show typically spans multiple universes; Art-Net addresses them as `net.subnet.universe`. | §12 DMX Profiles. |
+| **URL** | Uniform Resource Locator | Web address. | §14 Camera Nodes. |
+| **USB** | Universal Serial Bus | — | §15 Firmware USB flash. |
+| **V4L2** | Video for Linux 2 | The kernel video-capture API used by camera nodes (`cv2.VideoCapture` on Orange Pi / Raspberry Pi). SoC ISP video nodes like `sunxi-vin` and `bcm2835-isp` are filtered out — only regular USB cameras register. | §14 Camera Nodes. |
+| **WiFi** | — | 802.11 wireless networking. Performers and camera nodes join the orchestrator's LAN over WiFi. | §2 Walkthrough. |
+| **WLED** | — | Popular open-source firmware for ESP32/8266-based LED controllers. SlyLED includes a bridge so WLED devices can appear as performers. | §4 Fixture Setup; `desktop/shared/wled_bridge.py`. |
+| **WS2812B** | — | Common addressable-RGB LED chip (aka "NeoPixel"). The ESP32 RMT peripheral drives it in hardware; the D1 Mini bit-bangs it in software. | §4 Fixture Setup. |
+| **YOLO** | You Only Look Once | Single-pass object-detection neural network. SlyLED camera nodes run YOLOv8n via ONNX Runtime for person/object detection on `POST /scan`. | §14 Camera Nodes. |
+| **ZIP** | — | Archive file format, used for the release bundle. | §15 Firmware Registry. |
+
+> **Not sure what something means?** If a term appears in the manual but isn't in this table, that's a bug in the glossary — open an issue or PR against [#663](https://github.com/SlyWombat/SlyLED/issues/663).
+
+---
+
+<a id="appendix-a"></a>
+
+## Appendix A — Camera Calibration Pipeline (DRAFT)
+
+> ⚠ **DRAFT — assumes all in-flight work is merged.** This appendix describes the camera-calibration pipeline under the assumption that issues #610, #651–#661, and #357 are fully implemented. Some features documented below are **partially merged** today (notably full intrinsic calibration of every camera, dark-reference integration into the mover pipeline per #651, and the floor-view polygon target filter per #659). See `docs/DOCS_MAINTENANCE.md` for the current merge status and the criteria for removing this banner. Issue [#662](https://github.com/SlyWombat/SlyLED/issues/662).
+
+Camera calibration runs as a one-time setup per camera node and must be repeated whenever a camera is physically moved or re-aimed. It produces, per camera: an [intrinsic](#glossary) matrix **K** (focal length + principal point + distortion), an [extrinsic](#glossary) pose (stage-space position + rotation), and — for stages that will run point-cloud scans — a depth-anchor fit that corrects monocular depth to stage metric.
+
+### A.1 Pipeline overview
+
+```mermaid
+%%{init: {'theme':'neutral'}}%%
+flowchart TD
+    Start([Register camera node]) --> Deploy[Deploy firmware via SSH+SCP]
+    Deploy --> Intrinsic{1 — Intrinsic calibration}
+    Intrinsic -->|Checkerboard path| CBCap[Capture 15-30 checkerboard frames<br/>~500ms/frame]
+    Intrinsic -->|ArUco path| ArCap[Capture 5-10 ArUco snapshots]
+    CBCap --> CBCompute[cv2.calibrateCamera<br/>~2s for 3 frames]
+    ArCap --> ArCompute[cv2.calibrateCamera<br/>a few seconds]
+    CBCompute --> Saved[Save intrinsic_camN.json on camera]
+    ArCompute --> Saved
+    Intrinsic -.->|skip| FOV[Fall back to FOV-derived K<br/>intrinsic_source = fov-estimate]
+
+    Saved --> Survey[2 — ArUco marker survey]
+    FOV --> Survey
+    Survey --> MarkerReg[POST /api/aruco/markers<br/>id, size, x/y/z, rx/ry/rz, label]
+    MarkerReg --> Coverage[GET /api/aruco/markers/coverage]
+    Coverage --> Enough{>= 3 markers<br/>visible per camera?}
+    Enough -->|no| AddMarker[Add marker at<br/>recommendation pin]
+    AddMarker --> Coverage
+    Enough -->|yes| DarkRef[3 — Dark-reference capture<br/>~100ms/cam]
+
+    DarkRef --> StageMap[4 — Extrinsic solve<br/>~5-10s multi-snapshot]
+    StageMap --> PnP[cv2.solvePnP SQPNP<br/>best-per-ID corners]
+    PnP --> StoreExt[Store rotation rx/ry/rz + position<br/>rotationSchemaVersion: 2]
+
+    StoreExt --> Scan[5 — Optional: space scan]
+    Scan --> PointCloud[/point-cloud per cam<br/>~6.5s/cam metric model]
+    PointCloud --> Anchor[Depth anchor fit<br/>scale + offset]
+    Anchor --> Merge[space_mapper<br/>cross-cam filter + floor normalize]
+    Merge --> Surfaces[surface_analyzer RANSAC<br/>floor + walls + obstacles]
+    Surfaces --> Done([Stage geometry ready])
+
+    Scan -.->|skip| Done
+    StageMap -.->|RMS > 5px or too few markers| Error[Calibration error]
+    PnP -.->|no convergence| Error
+    Error --> Retry[Add markers or increase snapshots]
+    Retry --> Coverage
+```
+
+### A.2 ArUco marker surveying
+
+Physical ArUco markers mounted on the stage floor, walls, or rigging define the ground-truth geometry that every subsequent camera-calibration step references.
+
+**Registry schema** — each marker is stored with:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | int (0–49) | ID within the `CV2_DICT_4X4_50` dictionary |
+| `size` | float mm (≥1) | Physical edge length; default 100 mm |
+| `x`, `y`, `z` | float mm | Stage-space position; usually `z=0` for floor markers |
+| `rx`, `ry`, `rz` | float deg | Marker orientation — see §A.9 for axis convention |
+| `label` | string (≤60 chars) | Operator annotation, e.g. `north-entrance` |
+
+**Endpoints**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/aruco/markers` | Full registry (`dictId`, `markers[]`) |
+| POST | `/api/aruco/markers` | Upsert one or more markers by ID |
+| DELETE | `/api/aruco/markers/<id>` | Remove a marker by ID |
+| GET | `/api/aruco/markers/coverage` | Per-camera visible-ID report with a placement recommendation |
+
+**Coverage pre-flight** — before starting the extrinsic solve, run `GET /api/aruco/markers/coverage`. The response lists which IDs each camera currently sees, the stage-space hull covered by the registered markers, and a `recommendation` object indicating which camera has the weakest coverage and where the operator should place the next marker.
+
+**Expected timing** — marker registration is instant (JSON write). Coverage check takes one snapshot per registered camera, typically 50–200 ms per camera.
+
+**Fallback** — none. Without surveyed markers there is no extrinsic solve; the camera defaults to identity rotation and `(0, 0, 0)` position.
+
+### A.3 Intrinsic calibration
+
+Intrinsic calibration produces the camera's **K** matrix (`fx`, `fy`, `cx`, `cy`) and distortion coefficients. It is a per-lens, per-resolution, one-time step. Two independent paths are supported:
+
+**Path A — Checkerboard (camera-side)**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/calibrate/intrinsic/capture` | Grab one frame, find ≤10 checkerboards (4×9, 25 mm squares default), accumulate corners |
+| POST | `/calibrate/intrinsic/compute` | Run `cv2.calibrateCamera` on accumulated frames; save to `/opt/slyled/calib/intrinsic_camN.json` |
+| GET | `/calibrate/intrinsic?cam=N` | Retrieve the saved calibration |
+| DELETE | `/calibrate/intrinsic` | Remove saved calibration |
+| POST | `/calibrate/intrinsic/reset` | Clear accumulated frames (does not touch saved file) |
+
+**Expected timing** — ~500 ms per frame capture, 2–5 s compute with the minimum three frames. Targets for a usable calibration: 15–30 frames, RMS < 0.3 pixels.
+
+**Path B — ArUco (orchestrator-side)**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/cameras/<fid>/aruco/capture` | Snapshot + ArUco detection, accumulate per-fixture corners |
+| POST | `/api/cameras/<fid>/aruco/compute` | Pool corners across frames, `cv2.calibrateCamera`, POST result to camera node for persistence |
+| POST | `/api/cameras/<fid>/aruco/reset` | Clear accumulated frames |
+| GET | `/api/cameras/<fid>/intrinsic` | Proxy GET to the camera node |
+| DELETE | `/api/cameras/<fid>/intrinsic` | Proxy DELETE to the camera node |
+| POST | `/api/cameras/<fid>/intrinsic/reset` | Proxy POST to the camera node |
+
+**Expected timing** — 5–10 captures × a few hundred ms each, compute in a few seconds.
+
+**Fallback** — if no calibration file is available, the orchestrator falls back to an FOV-derived K on the fly: `fx = (w/2) / tan(h_fov/2)`, `fy = fx`, `cx = w/2`, `cy = h/2`, distortion zero. The `/stage-map` response reports `intrinsic_source: "fov-estimate"` when this path is used. Accuracy drops to roughly ±15% of true focal length.
+
+**Persistence** — saved to the camera node at `/opt/slyled/calib/intrinsic_camN.json`; survives reboots.
+
+### A.4 Extrinsic solve (solvePnP)
+
+Given surveyed markers in stage space and their detected pixel corners, the orchestrator computes each camera's pose via `cv2.solvePnP` (see [PnP](#glossary), [RANSAC](#glossary) is **not** used here — PnP is a direct algebraic solve, not a consensus method).
+
+```mermaid
+%%{init: {'theme':'neutral'}}%%
+sequenceDiagram
+    actor Op as Operator
+    participant SPA as SPA (calibration.js)
+    participant Orch as Orchestrator
+    participant Cam as Camera node
+
+    Op->>SPA: Click Solve
+    SPA->>Orch: POST /api/cameras/fid/stage-map
+
+    Note over Orch,Cam: Multi-snapshot aggregation
+    loop maxSnapshots (default 6)
+        Orch->>Cam: GET /snapshot?cam=N
+        Cam-->>Orch: JPEG
+        Orch->>Orch: detectMarkers + keep best per ID
+    end
+
+    Orch->>Cam: GET /calibrate/intrinsic?cam=N
+    Cam-->>Orch: K or 404
+    alt K available
+        Orch->>Orch: intrinsic_source=calibrated
+    else fallback
+        Orch->>Orch: intrinsic_source=fov-estimate
+    end
+
+    Orch->>Orch: cv2.solvePnP SQPNP
+    alt convergence
+        Orch->>Orch: projectPoints RMS check
+        Orch->>Orch: Rodrigues -> tilt/pan/roll
+        Orch-->>SPA: ok, reprojectionRmsPx
+    else RMS > 5 or no convergence
+        Orch->>Orch: try SOLVEPNP_ITERATIVE
+        alt still fails
+            Orch-->>SPA: error
+        end
+    end
+```
+
+**Endpoint** — `POST /api/cameras/<fid>/stage-map` with `{cam, markers, markerSize, maxSnapshots}`.
+
+**Preconditions** — ≥3 surveyed markers registered (or ≥2 if all floor-coplanar), each visible in at least one snapshot. Multi-snapshot aggregation handles frame-to-frame transients; six snapshots is a good default.
+
+**Algorithm** — for each snapshot, the orchestrator detects markers and keeps the single detection with the largest perimeter per ID (largest = closest = best sub-pixel corners). Correspondences from each detected corner to the surveyed 3D point feed into `cv2.solvePnP(..., flags=SOLVEPNP_SQPNP)`, with `SOLVEPNP_ITERATIVE` as a fallback solver.
+
+**Expected timing** — one multi-snapshot run: 5–10 s (dominated by snapshot capture).
+
+**Output** — `tvec` (stage mm) → camera position; `rvec` → Rodrigues → tilt/pan/roll → stored in `camera.rotation` using schema v2 (§A.9). Also reports `reprojectionRmsPx`.
+
+**Fallbacks**
+
+| Failure | Behaviour | Operator action |
+|---------|-----------|-----------------|
+| Fewer than 3 markers matched across all snapshots | Error; pose not updated | Add markers or reposition camera |
+| SQPNP does not converge | Retry with `SOLVEPNP_ITERATIVE` | None automatic |
+| Reprojection RMS > 5 px | Pose stored but flagged | Verify surveyed marker positions and `markerSize`; recapture intrinsics |
+| No intrinsics on camera | Fall back to FOV-derived K, report `intrinsic_source: "fov-estimate"` | Run §A.3 for better accuracy |
+
+### A.5 Dark-reference capture (#651)
+
+A dark-reference frame is a snapshot taken with all calibration beams off so that beam detection in subsequent calibration steps can subtract ambient lighting.
+
+**Endpoint** — `POST /dark-reference` on the camera node, body `{cam: -1}` (all cameras) or `{cam: N}`.
+
+**Behaviour** — captures one frame per camera, stores in the `BeamDetector` in-memory buffer (not persisted across reboots).
+
+**Expected timing** — ~100 ms per camera (V4L2 frame grab).
+
+**When it runs** — automatically at the start of each mover calibration run (see Appendix B §B.3). Can also be triggered manually before running beam-detect calls.
+
+**Fallback** — if the beam detector module is not available on the node, the endpoint returns 503 and the caller proceeds without dark-reference subtraction. Beam detection still works but is more sensitive to ambient light.
+
+### A.6 Point cloud + multi-camera merge
+
+Point-cloud generation produces a 3D representation of the stage from monocular depth plus camera pose. It is optional — only needed for features that reason about stage surfaces (mover-calibration target filtering, tracking, spatial effects on arbitrary geometry).
+
+**Camera-side endpoint** — `POST /point-cloud` with `{cam, maxPoints, maxDepthMm}`. Returns `{points: [[x,y,z,r,g,b], ...], pointCount, inferenceMs, calibrated, fovDeg}`.
+
+**Depth models**
+
+| Model | File | Output | Typical inference on ARM |
+|-------|------|--------|--------------------------|
+| Metric (Depth-Anything-V2 Metric Indoor Small) | `/opt/slyled/models/depth_anything_v2_metric_indoor.onnx` | Depth in mm directly | ~6.5 s / frame |
+| Disparity (Depth-Anything-V2 Small, fallback) | `/opt/slyled/models/depth_anything_v2_small.onnx` | Normalized [0,1]; caller scales by `maxDepthMm` | ~6.5 s / frame |
+
+The camera selects the metric model by default; the disparity model is a fallback when the metric file is absent. Preference file: `/opt/slyled/models/active_depth_model`.
+
+**Multi-camera merge** — `POST /api/space/scan` on the orchestrator runs, in order:
+
+1. Fetch per-camera point clouds (try `/point-cloud` on the node; orchestrator-side depth if camera path unavailable).
+2. Per-camera depth anchor (#581) — two-parameter `scale + offset` least-squares fit so monocular depth agrees with stage geometry. Reject outliers >2σ, refit. If RMS > 2000 mm, fall back to a median-based coarse fit.
+3. Transform to stage coordinates using the camera's stored rotation + position.
+4. Cross-camera consistency filter (#582) — if ≥2 cameras are present, reject points that appear in only one camera's view where another camera should have seen them (filters monocular hallucinations).
+5. Floor normalization — compute 5th-percentile Z per camera, shift cloud so the average floor lands at Z=0; fall back to RANSAC floor detection if the camera-anchored method fails.
+6. Z-marker alignment (#599) — if any registered marker has `z < 50 mm` and zero rotation, treat it as ground truth and shift the cloud so those markers sit at Z=0.
+
+**Expected timing** — 30–60 s end-to-end for a typical two-camera setup; dominated by per-camera depth inference.
+
+**Anchor quality classification** in the response (`depthAnchor.quality`): `"ok"` (RMS ≤ 500 mm), `"degraded"` (500–2000 mm), `"fallback"` (>2000 mm, median fit used). Degraded or fallback quality means downstream features (surface fitting, tracking) may be inaccurate.
+
+### A.7 Surface analysis (RANSAC)
+
+After a merged point cloud is available, `desktop/shared/surface_analyzer.py` extracts structural surfaces so the orchestrator can reason about them (obstacle-aware target picking, beam-surface intersection for mover calibration).
+
+| Surface | Algorithm | Expected runtime | Failure mode |
+|---------|-----------|------------------|--------------|
+| Floor | RANSAC up to 200 trials, sample 3 points, plane fit, require vertical normal (dot-z > 0.95), ≥5% inlier share | 100–500 ms | Too few inliers → no floor reported |
+| Walls | RANSAC on non-floor points, 2-point vertical-plane fit, ≥50 inliers or ≥5%, max 4 walls | 500 ms–2 s total | Silent; fewer walls reported |
+| Obstacles | 300 mm XY grid + flood-fill, cluster size ≥20 points, classify as `pillar` if tall+thin else `obstacle` | 100–500 ms | Silent; sparse clusters rejected |
+
+**Ray-cast intersection** — `beam_surface_check()` answers "which surface does a beam ray hit first?" Used by mover calibration to interpret detected-beam pixels as stage points when the beam lands on a wall or pillar rather than the floor (see #585/#260). Typical runtime 10–50 ms.
+
+### A.8 Beam detection (interface used by mover calibration)
+
+Beam detection is documented here because it is *how the camera pipeline feeds moving-head calibration* (Appendix B). The endpoints live on the camera node.
+
+| Method | Path | Purpose | Typical runtime |
+|--------|------|---------|-----------------|
+| POST | `/beam-detect` | Single-frame detection; color filter + brightness + saturation + compactness | <100 ms |
+| POST | `/beam-detect/flash` | Capture ON frame → wait `offDelayMs` → capture OFF → diff; immune to ambient shifts | <100 ms + `offDelayMs` |
+| POST | `/beam-detect/center` | Multi-beam fixture: detect N beams, return cluster centre | <150 ms |
+
+Color filtering uses HSV hue ranges (`beam_detector.py`): red `[0,60] ∪ [168,180]`, green `[35,85]`, blue `[100,130]`, magenta `[140,170]`; white falls back to brightness only.
+
+**Validation checks per contour**: mean-V ≥ 160 (brightness); mean-S ≥ 80 for colored beams (saturation); aspect ≤ 5 (compactness).
+
+### A.9 Rotation schema v2 (axis convention)
+
+Camera and DMX fixture rotations share a unified convention (issues #586, #600). `fixture.rotation` is a list `[rx, ry, rz]` in **degrees**, axis-letter-matched to the Z-up stage frame:
+
+```mermaid
+%%{init: {'theme':'neutral'}}%%
+flowchart LR
+    subgraph Stage["Stage coordinate frame (Z-up)"]
+        X["+X — stage-left"]
+        Y["+Y — downstage forward"]
+        Z["+Z — up"]
+    end
+
+    subgraph Rotation["rotation = [rx, ry, rz] (deg)"]
+        RX["rx = pitch<br/>about X<br/>rx > 0 aims DOWN"]
+        RY["ry = roll<br/>about Y (stage-forward)<br/>ry > 0 rotates image clockwise<br/>(viewed from behind the camera)"]
+        RZ["rz = yaw / pan<br/>about Z (stage-up)<br/>rz > 0 aims toward +X"]
+    end
+
+    Stage --> Rotation
+```
+
+**Canonical read path** — always route through:
+
+- Python: `desktop/shared/camera_math.py::rotation_from_layout(rot) → (tilt, pan, roll)`, then `build_camera_to_stage(tilt, pan, roll)` for the 3×3 matrix.
+- SPA: `rotationFromLayout(rot)` in `spa/js/app.js`.
+
+**Never read `rotation[1]` or `rotation[2]` directly** — those indices swap between v1 and v2 files.
+
+**Schema migration** — imported project files carrying `layout.rotationSchemaVersion < 2` (or missing) have `ry` and `rz` swapped on load (v1 used `ry=pan, rz=roll`; v2 uses `ry=roll, rz=pan`). Current exports always write `rotationSchemaVersion: 2`.
+
+### A.10 Failure modes & operator expectations
+
+| Phase | Symptom | Probable cause | Operator action |
+|-------|---------|----------------|-----------------|
+| Marker survey | Coverage recommendation persists after adding markers | Marker outside every camera's FOV | Move marker toward the recommended pin, or reposition camera |
+| Intrinsic capture | "Board not found" | Lighting too low, angle too oblique, printout wavy | Flatten print, reposition, add light |
+| Intrinsic compute | RMS > 1.0 px | Too few frames, poor angle variety | Capture 10+ more frames from diverse angles |
+| Extrinsic solve | `markersMatched < 3` | Markers not visible in any snapshot | Increase `maxSnapshots`, reposition camera, add markers |
+| Extrinsic solve | `reprojectionRmsPx > 5` | Bad intrinsics or wrong `markerSize` | Run §A.3; verify physical marker size matches registry |
+| Extrinsic solve | `intrinsic_source: fov-estimate` | Camera has no saved intrinsic calibration | Optional: run §A.3 for ±2–5 px accuracy instead of ±10–20 px |
+| Dark reference | 503 response | Beam detector module missing on camera | Redeploy firmware from the Firmware tab |
+| Depth estimate | "model unavailable" | ONNX file not deployed | Deploy via Firmware → Camera tab |
+| Anchor fit | `quality: fallback` | Monocular depth disagrees strongly with stage geometry | Verify stage bounds and camera pose; may be a solvePnP error upstream |
+| Surface analysis | No floor reported | Cloud too sparse or noisy, camera aimed too high | Add cameras, aim lower, verify depth model |
+
+### A.11 File locations & persistence
+
+| Data | Location | Format | Notes |
+|------|----------|--------|-------|
+| ArUco registry | `desktop/shared/data/aruco_markers.json` | JSON list | Persisted on every marker POST/DELETE |
+| Camera fixtures | `desktop/shared/data/fixtures.json` | JSON list | Includes stored pose + rotation |
+| Layout positions | `desktop/shared/data/layout.json` | JSON | Must carry `rotationSchemaVersion: 2` |
+| Intrinsic calibration (camera-side) | `/opt/slyled/calib/intrinsic_camN.json` | JSON | `fx, fy, cx, cy, distCoeffs, imageSize, rmsError, frameCount` |
+| Point cloud cache | `desktop/shared/data/pointcloud.json` | JSON | From last `/api/space/scan` run |
+
+---
+
+<a id="appendix-b"></a>
+
+## Appendix B — Moving-Head Calibration Pipeline (DRAFT)
+
+> ⚠ **DRAFT — assumes all in-flight work is merged.** This appendix describes the moving-head-calibration pipeline as if issues #610, #651–#661, #653–#655, #658–#661, and #357 are fully implemented. Some features documented below are **partially merged** today (notably global per-phase time budgets per #653, full held-out parametric gating of the `moverCalibrated` flag per #654, adaptive battleship density scaling per #661, and the floor-view polygon target filter per #659). See `docs/DOCS_MAINTENANCE.md` for the current merge status and the criteria for removing this banner. Issue [#662](https://github.com/SlyWombat/SlyLED/issues/662).
+
+Moving-head calibration runs per [DMX](#glossary) moving-head fixture after the camera(s) covering its reachable region have been calibrated (Appendix A). It produces a sample set + parametric 6-[DOF](#glossary) [kinematic model](#glossary) that lets the orchestrator translate stage-space targets into exact pan/tilt DMX values, enabling [IK](#glossary) (inverse kinematics) for the Track action and spatial effects.
+
+### B.1 Pipeline overview
+
+```mermaid
+%%{init: {'theme':'neutral'}}%%
+flowchart TD
+    Start([Start Calibration]) --> Claim[Claim mover<br/>15s TTL]
+    Claim --> Warmup[1 — Warmup<br/>~30s]
+    Warmup --> Discovery{2 — Discovery<br/>45-55s}
+    Discovery -->|Battleship path| BS[Battleship 4x4 grid<br/>+ blink-confirm nudge<br/>~10-15s]
+    Discovery -->|Legacy path| Coarse[Coarse 10x7 scan<br/>+ fine spiral fallback<br/>~45-55s]
+    BS --> MapConv[3 — Mapping / Convergence<br/>35-50s]
+    Coarse --> MapConv
+    MapConv --> Grid[4 — Grid build<br/>&lt;1s]
+    Grid --> Verify[5 — Verification sweep<br/>3-5s advisory]
+    Verify --> Fit[6 — LM model fit<br/>4 sign combos + verify_signs<br/>&lt;1s]
+    Fit --> HoldOut{7 — Held-out<br/>parametric gate<br/>#654}
+    HoldOut -->|pass| Save[8 — Save +<br/>moverCalibrated=true]
+    HoldOut -->|fail| OperatorRetry[Accept / Retry prompt]
+    OperatorRetry -->|Retry| Discovery
+    OperatorRetry -->|Accept| Save
+    Save --> Release[Release claim + blackout]
+    Release --> Done([Complete])
+
+    Discovery -.->|no beam after 80 probes| Error
+    MapConv -.->|fewer than 6 samples| Error
+    Fit -.->|no sign combo fits| Error
+    Error[Phase error] --> Blackout[_cal_blackout<br/>512 zeros + release claim]
+```
+
+### B.2 Phase reference
+
+| # | Phase | Status string | Typical duration | Progress % | Fallback on failure |
+|---|-------|---------------|------------------|------------|---------------------|
+| 1 | Warmup | `warmup` | 30 s (configurable via `warmupSeconds`) | 2–8 | Log warning, continue without warmup |
+| 2 | Discovery (legacy) | `discovery` | 45–55 s | 10–30 | Abort with `error` status after 80 probes |
+| 2′ | Discovery (battleship) | `battleship` → `confirming` | 10–15 s | 10–25 | Abort with `error`; can fall back to legacy discovery |
+| 3 | Mapping (legacy BFS) | `mapping` | 35–50 s | 35–70 | Abort if <6 samples |
+| 3′ | Convergence (v2) | `sampling` | 30–60 s (N targets × ~1 s each) | 30–70 | Abort if convergence fails on multiple targets |
+| 4 | Grid build | `grid` | <1 s | ~80 | Abort if sample spread insufficient |
+| 5 | Verification sweep | `verification` | 3–5 s (3 held-out points) | ~90 | **Advisory only** — does not block save |
+| 6 | Model fit (LM) | `fitting` | <1 s | 85–95 | Abort if all 4 sign combos fail |
+| 7 | Held-out parametric gate (#654) | `holdout` | 2–5 s (N unseen targets) | 95–98 | Surface Accept/Retry prompt |
+| 8 | Save | `complete` | <1 s | 100 | Write error logged but does not affect moverCalibrated flag |
+
+Additional top-level statuses: `cancelled`, `error`, `done`.
+
+```mermaid
+%%{init: {'theme':'neutral'}}%%
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Claimed: POST /claim
+    Claimed --> Warmup: start
+    Warmup --> Discovery
+    Discovery --> Confirming: candidate found<br/>(battleship path)
+    Confirming --> Discovery: nudge fails<br/>(#658 reflection)
+    Confirming --> Mapping: nudge confirms
+    Discovery --> Mapping: beam found<br/>(legacy path)
+    Mapping --> Grid: samples >= 6
+    Grid --> Verification
+    Verification --> Fitting: advisory pass or skip
+    Fitting --> HeldOut: LM converged
+    HeldOut --> Complete: within tolerance
+    HeldOut --> Idle: retry (operator)
+    Complete --> Idle: released
+
+    Discovery --> Error: 80 probes exhausted
+    Mapping --> Error: insufficient spread
+    Fitting --> Error: no sign combo fits
+    Error --> Blackout
+    Warmup --> Cancelled: operator cancel
+    Discovery --> Cancelled: operator cancel
+    Mapping --> Cancelled: operator cancel
+    Confirming --> Cancelled: operator cancel
+    Cancelled --> Blackout
+
+    Warmup --> TimedOut: phase budget #653
+    Discovery --> TimedOut: phase budget #653
+    Mapping --> TimedOut: phase budget #653
+    TimedOut --> Blackout
+
+    Blackout --> Idle: claim released
+```
+
+### B.3 Phase-by-phase detail
+
+```mermaid
+%%{init: {'theme':'neutral'}}%%
+sequenceDiagram
+    actor Op as Operator
+    participant SPA as SPA (calibration.js)
+    participant Orch as Orchestrator<br/>(mover_calibrator.py)
+    participant DMX as Art-Net bridge
+    participant Cam as Camera node
+
+    Op->>SPA: Click Start Calibration
+    SPA->>Orch: POST /api/calibration/mover/fid/start
+    Orch->>Orch: _set_calibrating(fid, True)
+
+    Note over Orch,DMX: Warmup (~30s)
+    loop warmup sweep steps
+        Orch->>DMX: _hold_dmx(pan,tilt,colour)
+    end
+
+    Note over Orch,Cam: Discovery (~45-55s or ~10-15s battleship)
+    loop battleship grid or coarse 10x7
+        Orch->>DMX: set pan,tilt
+        Orch->>Cam: POST /beam-detect
+        Cam-->>Orch: pixel or null
+    end
+    opt battleship hit — blink-confirm (#658)
+        Orch->>DMX: pan + nudge
+        Orch->>Cam: /beam-detect
+        Orch->>DMX: tilt + nudge
+        Orch->>Cam: /beam-detect
+    end
+
+    Note over Orch,Cam: Mapping / Convergence (~35-50s)
+    loop BFS or per-target converge
+        Orch->>DMX: set pan,tilt
+        Orch->>Cam: /beam-detect (dual-capture #655)
+    end
+
+    Note over Orch: Grid build (<1s, sync)
+    Note over Orch,Cam: Verification sweep (3-5s)
+    Note over Orch: LM fit — 4 sign combos + verify_signs
+    Note over Orch,Cam: Held-out parametric gate (#654)
+
+    alt within tolerance
+        Orch->>Orch: fixture.moverCalibrated=true
+    else too high
+        Orch-->>SPA: prompt Accept/Retry
+    end
+
+    Orch->>DMX: blackout
+    Orch->>Orch: _set_calibrating(fid, False)
+    SPA-->>Op: complete
+```
+
+#### 1. Warmup
+
+- **Purpose** — cycle the fixture through full pan/tilt range so motor belts are thermally and mechanically settled before measurements start. Reduces backlash artifacts in early samples.
+- **Preconditions** — valid DMX profile on fixture; Art-Net engine running; calibration lock engaged.
+- **Expected duration** — 30 s by default (`warmupSeconds` parameter). Six sub-sweeps (pan±, tilt±, two diagonals) × 20 steps each, ~0.25 s per step.
+- **Operator expectation** — beam sweeps visibly across the stage; progress bar creeps from 2% to 8%.
+- **Fallback** — if warmup raises an exception, log warning and skip; calibration continues.
+- **Cancel** — `_check_cancel()` inside each `_hold_dmx` loop raises `CalibrationAborted`.
+
+#### 2. Discovery
+
+Two code paths exist. The battleship path is preferred when camera homography is reliable; legacy path is the fallback when homography is unavailable (e.g. no surveyed markers visible).
+
+**Battleship (preferred, `battleship` + `confirming` status):**
+
+- Coarse 4×4 grid at pan/tilt bin centres `{0.125, 0.375, 0.625, 0.875}²` — 16 probes. Per #661, grid density scales with pan range and expected beam width; defaults to 4×4 but can reduce to 3×3 or expand to 5×5 for wide-pan fixtures.
+- On the first detected pixel candidate, run the **blink-confirm** routine (#658): nudge pan by `confirm_nudge_delta` (≈ 0.02 of full range) and verify the detected pixel moves; nudge tilt likewise. If **both** pixel deltas exceed `min_delta`, the candidate is confirmed. Otherwise it was a reflection and is rejected — discovery resumes.
+- **Expected duration** 10–15 s (16 probes × 0.6 s settle, plus 4 nudges × 0.6 s when a candidate hits).
+- **Fallback on failure** — fall through to the legacy coarse+spiral path, or abort to `error`.
+
+**Legacy (`discovery` status):**
+
+- Initial probe at the warmstart aim (model prediction or geometric estimate from camera FOV).
+- Coarse 10×7 grid: pan bins `0.02 + 0.96·i/9`, tilt bins `0.1 + 0.85·j/6` — 70 probes. Per-probe settle `SETTLE = 0.6 s` (legacy discovery uses the fixed constant; the #655 adaptive-settle machinery documented in the mapping phase does not apply here).
+- If the coarse sweep misses, spiral outward from the warmstart aim in rectangular shells at `STEP = 0.05`, up to `MAX_PROBES = 80` total.
+- **Expected duration** — 45–55 s worst-case.
+- **Fallback on failure** — abort with `error`; call `_cal_blackout()`.
+
+**Operator expectations** — beam sweeps through a visible grid of positions. If the beam is clearly landing where the camera can see it but detection fails, check §A.5 dark-reference and §A.8 color filter config.
+
+#### 3. Mapping (legacy BFS) / Convergence (v2)
+
+**Legacy BFS (`mapping` status):**
+
+- BFS from the discovered `(pan, tilt, pixel)` seed. Each step detects the beam and, on success, enqueues four neighbours (up/down/left/right by `STEP`). Beam loss marks the current cell as a visible-region boundary; stale detections (where the pixel barely moves despite a large pan/tilt delta) are rejected as noise.
+- Adaptive settle (#655) scales per-probe settle time by movement distance, with escalation levels `[0.4, 0.8, 1.5] s`. Dual-capture with a 0.2 s verify gap and a 30-pixel drift threshold filters mid-move frames; median filtering across the capture pair rejects outliers.
+- **Targets** — `_map_target = 50` samples (hard minimum 6; bounded by `MAX_SAMPLES = 80`).
+- **Expected duration** — 35–50 s.
+
+**v2 Convergence (`sampling` status):**
+
+- For each target from `pick_calibration_targets` (filtered through the camera floor-view polygon per #659), converge the beam on the target pixel via `converge_on_target_pixel`.
+- **Bracket-and-retry refine (#660)** — initial `bracket_step = 0.08`. When the beam is lost, halve the step and walk back toward the best-known-good offset in the error direction. Bracket floor `BRACKET_FLOOR = 0.002`. Reset `bracket_step` to 0.08 on beam re-acquisition. Typical convergence: 5–10 iterations; max 25.
+- **Expected duration** — 30–60 s (N targets × ~1 s each).
+
+**Fallback** — if fewer than 6 samples are collected, abort with `error`.
+
+#### 4. Grid build
+
+- Pure compute: extract unique pan/tilt values from samples, sort, nearest-neighbour fill for missing cells.
+- **Expected duration** — <100 ms, no I/O.
+- **Fallback** — if sample spread insufficient to form a grid, abort with `error`.
+
+#### 5. Verification sweep
+
+- Pick 3 random targets inside the grid bounds, avoiding fit samples by ≥0.05 pan/tilt margin, with a 10% interior shrink to dodge weak-interpolation edges.
+- For each: predict pixel via grid lookup, detect actual beam, compute pixel error.
+- **Expected duration** — 3–5 s (3 × ~1 s settle+detect).
+- **Advisory only** — logs a warning if any point fails; does **not** block the save.
+
+#### 6. Model fit (parametric, Levenberg-Marquardt)
+
+- Try all four sign combinations `(pan_sign, tilt_sign) ∈ {±1}²`. For each combo, run `scipy.optimize.least_squares` with `soft_l1` loss (`f_scale=0.05`) over five continuous parameters (mount yaw/pitch/roll + pan/tilt offsets); up to 120 iterations.
+- Sort candidates by RMS error; pick the best. If the top two candidates agree to within 0.2°, log a mirror-ambiguity warning.
+- **Sign verification (§8.1)** — after fit, nudge pan by +0.02 and detect the pixel shift; nudge tilt +0.02 and do the same. Compute the sign of `Δpx · pan_axis_sign_in_frame` (default +1) → pan_sign; and `Δpy · tilt_axis_sign_in_frame` (default -1) → tilt_sign. Re-fit with `force_signs=(pan_sign, tilt_sign)` to resolve the mirror.
+- **Expected duration** — <1 s including verify_signs probes.
+- **Fallback** — if all 4 combos fail to converge, raise `RuntimeError`; caller aborts with `error`.
+
+#### 7. Held-out parametric gate (#654)
+
+- After fit, drive the fixture to 2–3 **unseen** targets (not used in discovery, mapping, or verification) and measure pixel-level residual against model prediction.
+- If residual is within tolerance, set `fixture["moverCalibrated"] = True`.
+- If residual exceeds tolerance, return the result to the SPA as an Accept/Retry prompt: operator may accept (flag still set, marked as degraded) or retry calibration from discovery.
+- **Expected duration** — 2–5 s.
+
+#### 8. Save + release
+
+- Persist `samples`, `model` dict, `fitQuality` metrics, and per-phase metadata to `desktop/shared/data/fixtures.json`.
+- Set `fixture["moverCalibrated"] = True` (if not already).
+- Release the calibration lock via `_set_calibrating(fid, False)` — the mover-follow engine resumes writing pan/tilt.
+- Blackout the fixture.
+
+### B.4 Time budget + blackout-on-timeout (#653)
+
+Each phase has a per-phase wall-clock budget. If exceeded, the phase raises `PhaseTimeout`, caught by the top-level calibration thread, which then:
+
+1. Calls `_cal_blackout()` — sends 512 zeros to the fixture's universe for 0.3 s.
+2. Releases the calibration lock.
+3. Sets `job["status"] = "error"`, `job["phase"] = "<phase>_timeout"`.
+4. Flags `tier-2 handoff` in the status dict so the SPA can suggest the next diagnostic tier.
+
+Default budgets (can be overridden per fixture via `calibrationBudgets` in settings):
+
+| Phase | Default budget |
+|-------|----------------|
+| Warmup | 60 s |
+| Discovery | 120 s |
+| Mapping / Convergence | 180 s |
+| Grid build | 10 s |
+| Verification sweep | 30 s |
+| Model fit | 15 s |
+| Held-out gate | 30 s |
+
+Total default budget: ~7.5 min, well above the typical 2–4 min runtime.
+
+### B.5 Abort path
+
+Cancellation can originate from three sources: operator (`POST /api/calibration/mover/<fid>/cancel`), phase timeout (§B.4), or an unhandled exception. All three converge on the same cleanup:
+
+1. **Foreground immediate blackout** (operator-initiated only): on the `/cancel` request, the orchestrator zeroes the fixture's channel window on the running Art-Net engine buffer in the foreground, so the next 25 ms frame carries zeros to the bridge — the operator sees the light go off immediately.
+2. **Background unwind**: the calibration thread sets `_cancel_event`, which `_check_cancel()` inside `_hold_dmx` picks up and raises `CalibrationAborted`. The exception propagates to `_mover_cal_thread`, which catches it, calls `_cal_blackout()` (512 zeros + release), sets `status = "cancelled"`, `phase = "cancelled"`.
+3. **Lock release** — `_set_calibrating(fid, False)` is always called in the cleanup, regardless of which path triggered the cancel.
+
+### B.6 Failure modes & operator diagnostics
+
+| Symptom | Probable cause | What to check / try |
+|---------|----------------|---------------------|
+| Discovery completes 80 probes without finding beam | Beam too dim, camera can't see it, wrong colour, mover not actually on | Verify fixture is powered and responding; increase threshold; run Fixture Orientation Test (§14); check §A.8 colour configuration; dim room lights |
+| Discovery finds beam immediately but blink-confirm always rejects | Reflective surface (mirror, glass, polished floor) being detected instead of beam | Add diffuse material over the reflector; pick a different beam colour; move the mover's warmstart aim away from the reflector |
+| Mapping / convergence aborts with "fewer than 6 samples" | BFS boundary is too narrow — camera sees only a small slice of the pan/tilt range | Reposition camera to see more of the floor; increase camera count; verify mover's position in layout matches reality |
+| `moverCalibrated` flag never sets | Held-out gate is failing | Check the Accept/Retry prompt; if residual is reported, an Accept keeps the flag but marks it degraded; a full Retry restarts from discovery |
+| Sign verification logs mirror ambiguity | Fit sees two equally good sign combos | Check physical mover pan/tilt direction against §14 Fixture Orientation Test; may need to toggle Invert Pan/Tilt or Swap Pan/Tilt flags |
+| Calibration "hangs" at a phase | Phase budget (#653) not yet triggered; or Art-Net engine stopped mid-run | Wait up to the phase budget; check engine is running (`POST /api/dmx/start` if not); if still stuck, cancel and check orchestrator log |
+| Light flashes momentarily then stops, status stays `running` | Foreground cancel happened but background thread is still unwinding | Normal; background cleanup completes within 1–2 s |
+
+### B.7 Tuning-parameter reference
+
+Constants in `desktop/shared/mover_calibrator.py`:
+
+| Constant | Default | Role |
+|----------|---------|------|
+| `SETTLE` (legacy) | 0.6 s | Per-probe settle before detection |
+| `SETTLE_BASE` (#655) | 0.4 s | Adaptive-settle base before escalation |
+| `SETTLE_ESCALATION` | `[0.4, 0.8, 1.5]` s | Escalation tiers on pixel-drift retry |
+| `SETTLE_VERIFY_GAP` | 0.2 s | Dual-capture spacing for median filter |
+| `SETTLE_PIXEL_THRESH` | 30 px | Inter-capture drift threshold for "settled" |
+| `STEP` | 0.05 | Fine spiral step size (normalized pan/tilt) |
+| `MAX_SAMPLES` | 80 | Hard cap on BFS samples |
+| `COARSE_PAN` | 10 | Legacy coarse grid pan bins |
+| `COARSE_TILT` | 7 | Legacy coarse grid tilt bins |
+| `BRACKET_FLOOR` | 0.002 | Convergence refine floor (~1° on 540° pan) |
+
+Constants in `desktop/shared/mover_control.py`:
+
+| Constant | Default | Role |
+|----------|---------|------|
+| Claim TTL | 15 s | Auto-release if claim not refreshed |
+
+### B.8 Related features
+
+- **Unified mover control** — see CLAUDE.md §"Unified mover control (gyro + Android)". Calibration must complete and `moverCalibrated` must be set before manual mover-control (gyro/phone) will use the parametric model; without it, the control layer falls back to raw DMX pan/tilt passthrough.
+- **Fixture Orientation Test** — §14 "Fixture Orientation Test". Run this first if the pan/tilt axes in the physical fixture don't match expectations.
+- **Track Action** — §8 "Track Action". Consumes the interpolation grid + parametric model to aim at moving subjects.
+
+---
+
+<a id="appendix-c"></a>
+
+## Appendix C — Documentation Maintenance
+
+> This appendix describes the contract between the calibration appendices above and the source code that implements them. It exists for issue [#662](https://github.com/SlyWombat/SlyLED/issues/662) and is kept short — full details are in `docs/DOCS_MAINTENANCE.md`.
+
+### C.1 Source-of-truth files
+
+Any PR that changes calibration behaviour in one of these files is expected to include an Appendix A or B review in the same PR:
+
+**Mover calibration:** `desktop/shared/mover_calibrator.py`, `mover_control.py`, `parametric_mover.py`, `desktop/shared/spa/js/calibration.js`, `desktop/shared/parent_server.py` (routes `/api/calibration/mover/*`).
+
+**Camera calibration:** `firmware/orangepi/camera_server.py`, `beam_detector.py`, `depth_estimator.py`, `desktop/shared/space_mapper.py`, `surface_analyzer.py`, `camera_math.py`, `desktop/shared/parent_server.py` (routes `/api/aruco/markers*`, `/api/cameras/<fid>/stage-map`, `/api/cameras/<fid>/aruco/*`, `/api/cameras/<fid>/intrinsic*`, `/api/cameras/<fid>/beam-detect`, `/api/space/scan`).
+
+### C.2 Reviewer checklist (short form)
+
+On a calibration-touching PR, confirm:
+
+- Phase names in `mover_calibrator.py` match the Appendix B §B.2 table
+- Timeout constants in the §B.7 table still match code
+- Endpoint paths + request/response shapes in Appendix A match Flask route signatures
+- Rotation-schema v2 (§A.9) still matches `camera_math.py::rotation_from_layout`
+- Status strings written to the calibration-status dict match the state machine diagram
+
+The full checklist, including render verification for the Mermaid diagrams under `docs/diagrams/` and the DRAFT-banner removal criteria, is in `docs/DOCS_MAINTENANCE.md`.
+
+### C.3 Regenerating the manual
+
+- Canonical source: `docs/USER_MANUAL.md` (this file).
+- `docs/SlyLED_User_Manual.docx` + `.pdf` are **built separately** by `tests/build_manual.py`, which constructs the document from scratch rather than parsing this markdown. The docx/PDF path does not yet include these appendices — follow-up work.
+- Diagram sources live in `docs/diagrams/*.mmd`. Mermaid blocks are embedded inline in the markdown so GitHub renders them directly; external renderers like Kroki can generate SVG/PNG from the standalone files for PDF inclusion.
+
+### C.4 Enforcement
+
+No automatic drift-check is wired up yet. Proposed options, in order of cost:
+
+1. PR-template checkbox (`.github/pull_request_template.md`)
+2. GitHub Actions grep: fail PRs that touch the source-of-truth list without touching `docs/USER_MANUAL.md`, with a skip-override label
+3. Scheduled drift agent (weekly)
+
+These require `.github/` changes and are tracked as follow-ups under #662.
+
+### C.5 DRAFT banner removal
+
+The DRAFT banners on Appendix A and B should be removed once the in-flight items listed in `docs/DOCS_MAINTENANCE.md §"When to bump the DRAFT banner"` are all confirmed merged. At the time this appendix was drafted (2026-04-23), the following are known to be partial or not yet in code: #653 time budgets, #654 held-out parametric gate, #655 full median oversample, #658 blink-confirm on non-battleship path, #659 floor-view polygon target filter, #661 adaptive battleship density.

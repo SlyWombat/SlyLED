@@ -1,0 +1,61 @@
+%%{init: {'theme':'neutral'}}%%
+sequenceDiagram
+    actor Op as Operator
+    participant SPA as SPA (calibration.js)
+    participant Orch as Orchestrator<br/>(parent_server.py)
+    participant Cam as Camera node<br/>(camera_server.py)
+
+    Note over Op,Cam: Pre-flight — marker coverage
+    Op->>SPA: Open Calibration tab
+    SPA->>Orch: GET /api/aruco/markers/coverage
+    Orch->>Cam: GET /snapshot?cam=N (each camera)
+    Cam-->>Orch: JPEG frame
+    Orch->>Orch: _aruco_snapshot_detect
+    Orch-->>SPA: per-cam visible IDs + recommendation pin
+    SPA-->>Op: show coverage gaps
+
+    opt intrinsic calibration (one-time per camera)
+        Op->>SPA: Start intrinsic capture
+        loop 15-30 frames
+            SPA->>Orch: POST /api/cameras/fid/aruco/capture
+            Orch->>Cam: GET /snapshot?cam=N
+            Orch->>Orch: cv2.aruco.detectMarkers<br/>accumulate corners
+        end
+        SPA->>Orch: POST /api/cameras/fid/aruco/compute
+        Orch->>Orch: cv2.calibrateCamera
+        Orch->>Cam: POST /calibrate/intrinsic/save
+        Cam-->>Orch: ok (persisted to disk)
+        Orch-->>SPA: fx, fy, cx, cy, rmsError
+    end
+
+    Op->>SPA: Start stage-map solve
+    SPA->>Orch: POST /api/cameras/fid/stage-map
+
+    Note over Orch,Cam: Multi-snapshot aggregation
+    loop maxSnapshots (default 6)
+        Orch->>Cam: GET /snapshot?cam=N
+        Cam-->>Orch: JPEG
+        Orch->>Orch: detectMarkers<br/>keep largest per ID
+    end
+
+    Orch->>Cam: GET /calibrate/intrinsic?cam=N
+    Cam-->>Orch: K or 404
+    alt K available
+        Orch->>Orch: intrinsic_source=calibrated
+    else fallback
+        Orch->>Orch: intrinsic_source=fov-estimate
+    end
+
+    Orch->>Orch: cv2.solvePnP SQPNP
+    alt convergence
+        Orch->>Orch: cv2.projectPoints<br/>RMS check
+        Orch->>Orch: Rodrigues -> tilt/pan/roll<br/>store rotation + tvec
+        Orch-->>SPA: ok, reprojectionRmsPx
+        SPA-->>Op: show pose + match count
+    else RMS > 5 or no convergence
+        Orch->>Orch: try SOLVEPNP_ITERATIVE
+        alt still fails
+            Orch-->>SPA: error, matched count
+            SPA-->>Op: "Add markers or reposition"
+        end
+    end

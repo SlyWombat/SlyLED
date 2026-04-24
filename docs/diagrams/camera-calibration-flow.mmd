@@ -1,0 +1,38 @@
+%%{init: {'theme':'neutral'}}%%
+flowchart TD
+    Start([Register camera node]) --> Deploy[Deploy firmware via SSH+SCP]
+    Deploy --> Intrinsic{1 — Intrinsic calibration}
+    Intrinsic -->|Checkerboard path| CBCap[Capture 15-30 checkerboard frames<br/>POST /calibrate/intrinsic/capture<br/>~500ms/frame]
+    Intrinsic -->|ArUco path| ArCap[Capture 5-10 ArUco snapshots<br/>POST /api/cameras/fid/aruco/capture]
+    CBCap --> CBCompute[POST /calibrate/intrinsic/compute<br/>cv2.calibrateCamera<br/>~2s for 3 frames]
+    ArCap --> ArCompute[POST /api/cameras/fid/aruco/compute<br/>~a few seconds]
+    CBCompute --> Saved[Save to camera:<br/>/opt/slyled/calib/intrinsic_camN.json]
+    ArCompute --> Saved
+    Intrinsic -.->|skip| FOV[Fall back to FOV-derived K<br/>intrinsic_source = fov-estimate]
+
+    Saved --> Survey[2 — ArUco marker survey]
+    FOV --> Survey
+    Survey --> MarkerReg[POST /api/aruco/markers<br/>id, size, x/y/z, rx/ry/rz, label]
+    MarkerReg --> Coverage[GET /api/aruco/markers/coverage<br/>per-camera visible IDs]
+    Coverage --> Enough{>= 3 markers<br/>visible per camera?}
+    Enough -->|no| AddMarker[Add marker at<br/>recommendation pin]
+    AddMarker --> Coverage
+    Enough -->|yes| DarkRef[3 — Dark-reference capture<br/>#651<br/>POST /dark-reference<br/>~100ms/cam]
+
+    DarkRef --> StageMap[4 — Extrinsic solve<br/>POST /api/cameras/fid/stage-map<br/>~5-10s multi-snapshot]
+    StageMap --> PnP[Multi-snapshot aggregation<br/>best-per-ID corners<br/>cv2.solvePnP SQPNP -> ITERATIVE]
+    PnP --> StoreExt[Store camera.rotation rx/ry/rz<br/>+ position x/y/z<br/>rotationSchemaVersion: 2]
+
+    StoreExt --> Scan[5 — Optional: space scan]
+    Scan --> PointCloud[POST /point-cloud per cam<br/>~6.5s/cam metric]
+    PointCloud --> Anchor[Depth anchor fit #581<br/>scale + offset]
+    Anchor --> Merge[space_mapper SpaceScan<br/>cross-cam filter #582<br/>floor normalize]
+    Merge --> Surfaces[surface_analyzer RANSAC<br/>floor + walls + obstacles]
+    Surfaces --> Done([Stage geometry ready])
+
+    Scan -.->|skip| Done
+
+    StageMap -.->|RMS > 5px or<br/>too few markers| Error[Calibration error]
+    PnP -.->|no convergence| Error
+    Error --> Retry[Operator: add markers<br/>or increase snapshots]
+    Retry --> Coverage

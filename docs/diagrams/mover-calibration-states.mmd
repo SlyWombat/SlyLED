@@ -1,0 +1,35 @@
+%%{init: {'theme':'neutral'}}%%
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Claimed: POST /claim
+    Claimed --> Warmup: start
+    Warmup --> Discovery
+    Discovery --> Confirming: candidate found<br/>(battleship path)
+    Confirming --> Discovery: nudge fails<br/>(reflection #658)
+    Confirming --> Mapping: nudge confirms
+    Discovery --> Mapping: beam found<br/>(legacy path)
+    Mapping --> Grid: samples >= 6
+    Grid --> Verification
+    Verification --> Fitting: advisory pass or skip
+    Fitting --> HeldOut: LM converged
+    HeldOut --> Complete: within tolerance
+    HeldOut --> Idle: retry (operator)
+    Complete --> Idle: released
+
+    Discovery --> Error: 80 probes exhausted
+    Mapping --> Error: insufficient spread
+    Fitting --> Error: no sign combo fits
+    Error --> Blackout
+
+    Warmup --> Cancelled: operator cancel
+    Discovery --> Cancelled: operator cancel
+    Mapping --> Cancelled: operator cancel
+    Confirming --> Cancelled: operator cancel
+    Cancelled --> Blackout
+
+    Warmup --> TimedOut: phase budget #653
+    Discovery --> TimedOut: phase budget #653
+    Mapping --> TimedOut: phase budget #653
+    TimedOut --> Blackout
+
+    Blackout --> Idle: claim released

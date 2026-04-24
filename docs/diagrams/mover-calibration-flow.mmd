@@ -1,0 +1,30 @@
+%%{init: {'theme':'neutral'}}%%
+flowchart TD
+    Start([Operator clicks<br/>Start Calibration]) --> Claim[Claim mover<br/>15s TTL]
+    Claim --> Warmup[1 — Warmup<br/>~30s]
+    Warmup --> Discovery{2 — Discovery<br/>45-55s}
+    Discovery -->|Battleship path| BS[Battleship 4x4 grid<br/>+ blink-confirm nudge<br/>~10-15s]
+    Discovery -->|Legacy path| Coarse[Coarse 10x7 scan<br/>+ fine spiral fallback<br/>~45-55s]
+    BS --> MapConv[3 — Mapping / Convergence<br/>35-50s]
+    Coarse --> MapConv
+    MapConv --> Grid[4 — Grid build<br/>&lt;1s]
+    Grid --> Verify[5 — Verification sweep<br/>3-5s advisory]
+    Verify --> Fit[6 — LM model fit<br/>4 sign combos + verify_signs<br/>&lt;1s]
+    Fit --> HoldOut{7 — Held-out<br/>parametric gate<br/>#654}
+    HoldOut -->|pass| Save[8 — Save +<br/>moverCalibrated=true]
+    HoldOut -->|fail| OperatorRetry[Accept / Retry prompt]
+    OperatorRetry -->|Retry| Discovery
+    OperatorRetry -->|Accept| Save
+    Save --> Release[Release claim<br/>blackout fixture]
+    Release --> Done([Calibration complete])
+
+    Discovery -.->|no beam 80 probes| Error
+    MapConv -.->|fewer than 6 samples| Error
+    Fit -.->|no sign combo fits| Error
+    Error[Phase error] --> Blackout[_cal_blackout<br/>512 zeros + release]
+    Blackout --> End([status=error])
+
+    Cancel([Operator cancels]) -.-> Abort[CalibrationAborted<br/>via _hold_dmx check]
+    Abort --> Blackout
+
+    TimeBudget([Phase timeout #653]) -.-> Blackout

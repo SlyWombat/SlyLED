@@ -1,0 +1,75 @@
+%%{init: {'theme':'neutral'}}%%
+sequenceDiagram
+    actor Op as Operator
+    participant SPA as SPA (calibration.js)
+    participant Orch as Orchestrator<br/>(mover_calibrator.py)
+    participant DMX as Art-Net bridge<br/>(DMX fixture)
+    participant Cam as Camera node<br/>(camera_server.py)
+
+    Op->>SPA: Click Start Calibration
+    SPA->>Orch: POST /api/calibration/mover/{fid}/start
+    Orch->>Orch: _set_calibrating(fid, True)<br/>(engine stops pan/tilt writes)
+
+    Note over Orch,DMX: Warmup (~30s)
+    loop each warmup sweep step
+        Orch->>DMX: _hold_dmx(pan,tilt,colour)
+    end
+
+    Note over Orch,Cam: Discovery (~45-55s)
+    loop battleship grid or coarse 10x7
+        Orch->>DMX: set pan,tilt
+        Orch->>Cam: POST /beam-detect
+        Cam-->>Orch: pixel or null
+    end
+    opt beam found (battleship)
+        Orch->>DMX: pan + nudge
+        Orch->>Cam: POST /beam-detect
+        Orch->>DMX: tilt + nudge
+        Orch->>Cam: POST /beam-detect
+        Note right of Orch: #658 blink-confirm<br/>rejects reflections
+    end
+
+    Note over Orch,Cam: Mapping / Convergence (~35-50s)
+    loop BFS or per-target converge
+        Orch->>DMX: set pan,tilt
+        Orch->>Cam: POST /beam-detect<br/>(dual-capture, #655)
+        Cam-->>Orch: pixel median
+    end
+
+    Note over Orch: Grid build (<1s, sync)
+    Note over Orch,Cam: Verification sweep (3-5s)
+    loop 3 held-out points
+        Orch->>DMX: set pan,tilt
+        Orch->>Cam: POST /beam-detect
+    end
+
+    Note over Orch: LM fit — try 4 sign combos
+    Note over Orch,DMX: Sign verification probes
+    Orch->>DMX: pan + delta
+    Orch->>Cam: /beam-detect
+    Orch->>DMX: tilt + delta
+    Orch->>Cam: /beam-detect
+
+    Note over Orch,Cam: Held-out parametric gate (#654)
+    Orch->>DMX: set pan,tilt (unseen target)
+    Orch->>Cam: /beam-detect
+    Orch-->>SPA: verify RMS in status
+
+    alt RMS within tolerance
+        Orch->>Orch: fixture.moverCalibrated=true
+        Orch->>Orch: _save("fixtures")
+        Orch-->>SPA: status=done
+    else RMS too high
+        Orch-->>SPA: prompt Accept/Retry
+    end
+
+    Orch->>DMX: blackout
+    Orch->>Orch: _set_calibrating(fid, False)
+    SPA-->>Op: complete
+
+    Note over Op,Orch: On cancel at any phase
+    Op->>SPA: Cancel
+    SPA->>Orch: POST /cancel
+    Orch->>DMX: immediate zero (foreground)
+    Orch->>Orch: _cancel_event.set()<br/>background raises<br/>CalibrationAborted
+    Orch->>Orch: _cal_blackout()<br/>release claim

@@ -1,0 +1,37 @@
+%%{init: {'theme':'neutral'}}%%
+flowchart LR
+    subgraph Stage["Stage coordinate frame (Z-up)"]
+        direction LR
+        X["+X — stage-left"]
+        Y["+Y — downstage forward"]
+        Z["+Z — up"]
+    end
+
+    subgraph Rotation["fixture.rotation = [rx, ry, rz] in degrees"]
+        direction TB
+        RX["rx = pitch<br/>(rotation about X)<br/>rx > 0 aims DOWN<br/>(optical axis tips toward -Z)"]
+        RY["ry = roll<br/>(rotation about Y — stage-forward axis)<br/>ry > 0 rotates image clockwise<br/>viewed from behind the camera"]
+        RZ["rz = yaw / pan<br/>(rotation about Z — stage-up axis)<br/>rz > 0 aims toward +X (stage-left)"]
+    end
+
+    subgraph Canonical["Canonical read path"]
+        direction TB
+        PY["desktop/shared/camera_math.py<br/>rotation_from_layout(rot) -> (tilt, pan, roll)"]
+        JS["spa/js/app.js<br/>rotationFromLayout(rot)"]
+        MAT["build_camera_to_stage(tilt, pan, roll)<br/>-> 3x3 rotation matrix"]
+        PY --> MAT
+        JS --> MAT
+    end
+
+    subgraph Migration["Schema v2 migration (on import)"]
+        direction TB
+        OLD["v1 file:<br/>ry = pan<br/>rz = roll"]
+        SWAP["Swap ry <-> rz"]
+        NEW["v2 file:<br/>ry = roll<br/>rz = pan<br/>rotationSchemaVersion = 2"]
+        OLD --> SWAP --> NEW
+    end
+
+    Rotation --> Canonical
+    Stage --> Rotation
+
+    NEVER["DO NOT read rotation[1] or rotation[2] directly<br/>— always route through rotation_from_layout"]
