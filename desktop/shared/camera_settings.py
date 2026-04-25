@@ -377,7 +377,7 @@ _AI_SYSTEM_PROMPT = (
 
 
 def evaluate_frame_ai(frame, intent="general", controls_meta=None,
-                       resize_long_side=None):
+                       resize_long_side=None, model=None):
     """Local VLM evaluator via Ollama.
 
     `controls_meta` is the list returned by /camera/controls so the model
@@ -417,8 +417,9 @@ def evaluate_frame_ai(frame, intent="general", controls_meta=None,
         + json.dumps(ctrl_brief, indent=2)
     )
 
+    chosen_model = model or _OLLAMA_MODEL
     payload = {
-        "model": _OLLAMA_MODEL,
+        "model": chosen_model,
         "prompt": prompt,
         "images": [b64],
         "format": "json",
@@ -460,12 +461,12 @@ def evaluate_frame_ai(frame, intent="general", controls_meta=None,
         "notes": list(notes)[:4],
         "deltaProposal": delta,
         "evaluator": "ai-local-vlm",
-        "model": _OLLAMA_MODEL,
+        "model": chosen_model,
         "evalMs": int((body.get("total_duration") or 0) / 1e6),
     }
 
 
-def make_evaluator(mode, resize_long_side=None):
+def make_evaluator(mode, resize_long_side=None, model=None):
     """Return a callable (frame, controls_meta, intent) → result-dict for
     the requested mode.
 
@@ -487,7 +488,8 @@ def make_evaluator(mode, resize_long_side=None):
     def _run_ai(frame, controls_meta=None, intent="general"):
         return evaluate_frame_ai(frame, intent=intent,
                                   controls_meta=controls_meta,
-                                  resize_long_side=resize_long_side)
+                                  resize_long_side=resize_long_side,
+                                  model=model)
 
     def _run_heuristic(frame, controls_meta=None, intent="general"):
         return evaluate_frame_heuristic(frame, intent=intent)
@@ -537,7 +539,8 @@ class AutoTuneCancelled(Exception):
 def auto_tune_loop(camera_ip, cam_idx, intent,
                     fetch_snapshot_fn, max_iterations=6, settle_s=0.5,
                     progress_cb=None, evaluator_mode="heuristic",
-                    cancel_check=None, resize_long_side=None):
+                    cancel_check=None, resize_long_side=None,
+                    model=None):
     """Iteratively adjust exposure + gain until the scored frame plateaus
     or ``max_iterations`` runs out.
 
@@ -565,7 +568,9 @@ def auto_tune_loop(camera_ip, cam_idx, intent,
 
     Returns ``{before, after, applied, history, evaluator}``.
     """
-    evaluator = make_evaluator(evaluator_mode, resize_long_side=resize_long_side)
+    evaluator = make_evaluator(evaluator_mode,
+                                 resize_long_side=resize_long_side,
+                                 model=model)
     try:
         initial = camera_controls_get(camera_ip, cam_idx)
     except Exception as e:

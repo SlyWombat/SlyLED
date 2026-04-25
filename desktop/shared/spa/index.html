@@ -522,6 +522,23 @@
         <button id='ollama-rt-install' class='btn btn-on' onclick='_ollamaRuntimeInstall()' style='display:none'>Install</button>
         <button id='ollama-rt-reinstall' class='btn btn-nav' onclick='_ollamaRuntimeInstall(true)' style='display:none' title='Re-pull the vision model (weights are refetched from the Ollama registry).'>Re-pull model</button>
       </div>
+      <!-- #685 follow-up — operator-selectable VLM. Populated from
+           /api/ollama-runtime/models (whatever Ollama already has
+           pulled locally). Vision-flagged models float to the top so
+           non-vision text models don't surprise the operator. -->
+      <div id='ollama-rt-model-row' style='margin-top:.6em;display:none'>
+        <label style='font-size:.82em;color:#cbd5e1'>Active vision model
+          <span id='ollama-rt-model-hint' style='color:#64748b;font-size:.78em'></span>
+        </label>
+        <div style='display:flex;gap:.4em;align-items:center;margin-top:.2em'>
+          <select id='ollama-rt-model-sel' onchange='_ollamaRuntimeModelChange()' style='flex:1;font-size:.85em;padding:.2em .35em'></select>
+          <button class='btn btn-nav' onclick='_ollamaRuntimeRefresh()' style='font-size:.75em;padding:.2em .5em' title='Re-poll Ollama for newly pulled models'>Refresh list</button>
+        </div>
+        <div style='font-size:.74em;color:#64748b;margin-top:.3em'>
+          See <a href='/docs/help/ai-models' target='_blank' style='color:#3b82f6'>which models suit your hardware</a> · pull via shell:
+          <code style='background:#020617;padding:.1em .35em;border-radius:3px;color:#cbd5e1'>ollama pull &lt;name&gt;</code>
+        </div>
+      </div>
     </div>
     <div class='card' id='cal-tuning-card' style='max-width:720px'>
       <div class='card-title'>Calibration Timeouts</div>

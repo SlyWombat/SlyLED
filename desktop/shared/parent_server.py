@@ -4188,6 +4188,12 @@ def api_camera_settings_auto_tune(fid):
         # Clamp to the supported preset range so a malformed request
         # can't ask for a 4 K send to the VLM.
         resize_long_side = max(160, min(1280, resize_long_side))
+    # #685 follow-up — operator-selected model for AI mode. Per-run
+    # `model` override in the body wins over the persisted setting,
+    # which wins over the env default. Heuristic mode ignores it.
+    chosen_model = (body.get("model")
+                     or _settings.get("aiAutoTuneModel")
+                     or _cam_settings._OLLAMA_MODEL)
 
     def _snap(ip_, idx_):
         # 30 s gives the Pi headroom when it's warming up a YOLO model or
@@ -4288,7 +4294,7 @@ def api_camera_settings_auto_tune(fid):
                      if resize_long_side else "default")
     _emit("info",
           f"Auto-tune started: intent={intent} evaluator={evaluator_mode} "
-          f"maxIter={max_it} model={_cam_settings._OLLAMA_MODEL} "
+          f"maxIter={max_it} model={chosen_model} "
           f"vlmResize={resize_label}")
     try:
         result = _cam_settings.auto_tune_loop(
@@ -4299,6 +4305,7 @@ def api_camera_settings_auto_tune(fid):
             cancel_check=_is_cancelled,
             progress_cb=_progress_cb,
             resize_long_side=resize_long_side,
+            model=chosen_model,
         )
     except _cam_settings.AutoTuneCancelled:
         _emit("warn", "Cancelled by operator")
@@ -4471,7 +4478,28 @@ except Exception as _e:  # pragma: no cover
 def api_ollama_runtime_status():
     if _ollama_rt is None:
         return jsonify(ok=False, err="ollama_runtime module not bundled"), 500
-    return jsonify(ok=True, **_ollama_rt.status())
+    st = _ollama_rt.status()
+    # #685 follow-up — surface the operator-selected active model so the
+    # Settings card can show "tune-active=qwen2.5vl:3b" even when the
+    # env override is set to something else.
+    st["activeModel"] = (_settings.get("aiAutoTuneModel")
+                          or st.get("model"))
+    return jsonify(ok=True, **st)
+
+
+@app.get("/api/ollama-runtime/models")
+def api_ollama_runtime_models():
+    """#685 follow-up — list every model Ollama has pulled locally so
+    the Settings AI-Runtime card can render a dropdown.
+
+    Returns ``{ok, models: [{name, sizeMb, vision, modifiedAt}], active}``
+    where ``active`` is whichever model auto-tune will use right now
+    (operator override from settings, falling back to env default)."""
+    if _ollama_rt is None:
+        return jsonify(ok=False, err="ollama_runtime module not bundled"), 500
+    models = _ollama_rt.list_models()
+    active = _settings.get("aiAutoTuneModel") or _ollama_rt.OLLAMA_MODEL
+    return jsonify(ok=True, models=models, active=active)
 
 
 @app.post("/api/ollama-runtime/install")
@@ -4505,10 +4533,18 @@ def api_ollama_runtime_warmup():
 @app.post("/api/ollama-runtime/test")
 def api_ollama_runtime_test():
     """Settings → Test button. Sends a fixed prompt and reports response
-    + latency. Used as the canonical proof the runtime works end-to-end."""
+    + latency. Used as the canonical proof the runtime works end-to-end.
+
+    Uses the operator-selected model (settings.aiAutoTuneModel) when
+    set, otherwise falls back to the env default. Body can override
+    per call via {model: "..."}."""
     if _ollama_rt is None:
         return jsonify(ok=False, err="ollama_runtime module not bundled"), 500
-    return jsonify(_ollama_rt.run_test())
+    body = request.get_json(silent=True) or {}
+    model = (body.get("model")
+             or _settings.get("aiAutoTuneModel")
+             or _ollama_rt.OLLAMA_MODEL)
+    return jsonify(_ollama_rt.run_test(model=model))
 
 
 # ── AI helpers — aggregate status + boot warm-up (settings page) ──────
@@ -14858,9 +14894,22 @@ def api_settings_save():
                             details=errors), 400
     with _lock:
         for k in ("name", "units", "canvasW", "canvasH", "darkMode", "runnerLoop",
-                  "globalBrightness", "logging", "logPath", "autoStartShow"):
+                  "globalBrightness", "logging", "logPath", "autoStartShow",
+                  # #685 follow-up — operator-selected vision model for AI
+                  # auto-tune. None / empty string falls back to the env
+                  # default. Validated minimally: must be a non-empty
+                  # string when present, else cleared.
+                  "aiAutoTuneModel"):
             if k in body:
-                _settings[k] = body[k]
+                v = body[k]
+                if k == "aiAutoTuneModel":
+                    if v is None or (isinstance(v, str) and not v.strip()):
+                        _settings.pop(k, None)
+                        continue
+                    if not isinstance(v, str):
+                        return jsonify(err="aiAutoTuneModel must be a string"), 400
+                    v = v.strip()
+                _settings[k] = v
         if "calibrationTuning" in body:
             _settings["calibrationTuning"] = cleaned
         _layout["canvasW"] = _settings["canvasW"]

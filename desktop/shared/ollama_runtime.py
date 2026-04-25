@@ -115,6 +115,62 @@ def is_installed():
     return is_ollama_running() and has_model()
 
 
+# #685 follow-up — vision-model name patterns. Used by ``list_models()``
+# to flag installed models the auto-tune evaluator can actually use.
+# A non-vision model (e.g. ``llama3.1:8b``) ingests the prompt fine but
+# the embedded image is silently dropped, so auto-tune cells produce
+# the same score every iteration. Surface the flag so the SPA can mark
+# non-vision entries in the dropdown.
+import re as _re
+_VISION_MODEL_PATTERNS = [
+    _re.compile(r"^moondream", _re.I),
+    _re.compile(r"^qwen.*vl", _re.I),
+    _re.compile(r"^llava", _re.I),
+    _re.compile(r"^bakllava", _re.I),
+    _re.compile(r"^llama.*vision", _re.I),
+    _re.compile(r"^internvl", _re.I),
+    _re.compile(r"^minicpm-?v", _re.I),
+    _re.compile(r"^paligemma", _re.I),
+    _re.compile(r"^cogvlm", _re.I),
+]
+
+
+def _is_vision_model(name: str) -> bool:
+    base = (name or "").split(":", 1)[0]
+    return any(p.match(base) for p in _VISION_MODEL_PATTERNS)
+
+
+def list_models(timeout: float = 3.0):
+    """Return ``[{name, sizeMb, vision, modifiedAt}, ...]`` for every
+    model Ollama has pulled locally. Vision flag uses a known-model
+    name regex so the SPA can group / annotate the dropdown.
+
+    Returns ``[]`` when Ollama isn't running. The SPA then falls back
+    to a "Run Test on the AI Engines card to see installed models"
+    hint.
+    """
+    try:
+        req = urllib.request.Request(f"{OLLAMA_URL}/api/tags", method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode())
+    except Exception:
+        return []
+    out = []
+    for m in body.get("models") or []:
+        name = m.get("name") or ""
+        if not name:
+            continue
+        size = int(m.get("size") or 0)
+        out.append({
+            "name": name,
+            "sizeMb": size // (1 << 20) if size else None,
+            "vision": _is_vision_model(name),
+            "modifiedAt": m.get("modified_at"),
+        })
+    out.sort(key=lambda r: (not r["vision"], r["name"].lower()))
+    return out
+
+
 def status():
     """Aggregated status for /api/ollama-runtime/status."""
     running = is_ollama_running()
@@ -301,16 +357,21 @@ def warmup(timeout_s: float = 120.0):
 
 
 def run_test(prompt: str = "Reply with the single word: pong",
-             timeout_s: float = 120.0):
-    """Fixed-prompt test harness. Returns {ok, response, ms, err}."""
-    if not (is_ollama_running() and has_model()):
-        return {"ok": False, "err": "Ollama service or model not ready"}
+             timeout_s: float = 120.0, model: str | None = None):
+    """Fixed-prompt test harness. Returns {ok, response, ms, err}.
+
+    `model` overrides the env-default ``OLLAMA_MODEL`` so the SPA's
+    Settings → AI Engines Test button exercises whichever model the
+    operator selected for auto-tune (#685 follow-up)."""
+    chosen = model or OLLAMA_MODEL
+    if not (is_ollama_running() and has_model(chosen)):
+        return {"ok": False, "err": f"Ollama service or model {chosen!r} not ready"}
     t0 = time.time()
     try:
         req = urllib.request.Request(
             f"{OLLAMA_URL}/api/generate",
             data=json.dumps({
-                "model": OLLAMA_MODEL,
+                "model": chosen,
                 "prompt": prompt,
                 "stream": False,
                 "keep_alive": "10m",
@@ -325,7 +386,7 @@ def run_test(prompt: str = "Reply with the single word: pong",
         _warm_state["warm"] = True
         _warm_state["warmedAt"] = time.time()
         return {"ok": True, "response": (data.get("response") or "").strip(),
-                "ms": ms, "model": OLLAMA_MODEL}
+                "ms": ms, "model": chosen}
     except Exception as e:
         return {"ok": False, "err": str(e),
                 "ms": int((time.time() - t0) * 1000)}

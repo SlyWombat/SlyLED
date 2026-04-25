@@ -2165,6 +2165,107 @@ Constants in `desktop/shared/mover_control.py`:
 
 ---
 
+<a id="appendix-d"></a>
+
+## Appendix D — Choosing an AI auto-tune vision model
+
+> Added 2026-04-25 (#685 follow-up). The orchestrator's camera auto-tune
+> AI mode runs a local vision model via Ollama; the operator chooses
+> which model from Settings → AI Runtime → "Active vision model".
+
+### D.1 What the model does
+
+Auto-tune sends the camera's current frame plus a JSON-schema prompt
+("score 0–100 / propose deltas to V4L2 controls") to Ollama. The model
+must **be vision-capable** AND **adhere to a constrained JSON schema**.
+A text-only model silently drops the embedded image; a poor-JSON model
+returns floats outside `0..100` or omits `deltaProposal`. Either failure
+shows up in the matrix as "AI mode applied no controls."
+
+### D.2 Built-in default
+
+Default since v1.6.x: **`qwen2.5vl:3b`** (~3.2 GB). Reliable JSON output,
+CPU-friendly, ~5–15 s per iteration on a modern laptop CPU. Prior
+default was `moondream` (1.7 GB) but its JSON adherence was poor and
+the basement-rig matrix run found AI cells produced empty `deltaProposal`
+on every try.
+
+### D.3 Picking a model for your hardware
+
+| Hardware                       | Recommended                | Pull command                              | Notes |
+|--------------------------------|----------------------------|-------------------------------------------|-------|
+| **CPU only** (laptop / mini-PC)| `qwen2.5vl:3b` (default)   | `ollama pull qwen2.5vl:3b`                | Default. Tune-modal "Tiny (320 px)" preset brings iter time to ~3 s. |
+| **CPU + 16 GB RAM**            | `qwen2.5vl:7b`             | `ollama pull qwen2.5vl:7b`                | Larger context, slightly better JSON adherence. ~25–60 s/iter on CPU. |
+| **GPU 6 GB VRAM**              | `qwen2.5vl:3b` or `llava:7b` | `ollama pull llava:7b`                  | LLaVA's classic balance of speed and quality. |
+| **GPU 12 GB+ VRAM**            | `qwen2.5vl:7b` or `llava:13b` | `ollama pull llava:13b`                | Sub-second per iteration on a discrete GPU. |
+| **Apple Silicon (M-series)**   | `qwen2.5vl:3b` or `qwen2.5vl:7b` | `ollama pull qwen2.5vl:7b`          | Metal acceleration kicks in automatically; both fit comfortably. |
+| **Arm SBC** (Pi 5, Orange Pi)  | `moondream:1.8b-v2` only   | `ollama pull moondream:1.8b-v2`           | Anything heavier OOMs. JSON adherence is shaky; "heuristic" evaluator is usually a better choice on this class. |
+
+Other vision models the orchestrator recognises in the dropdown
+(non-exhaustive — anything Ollama serves with vision support works,
+but JSON adherence varies):
+
+- `moondream`, `moondream:1.8b-v2`
+- `qwen2.5vl:3b`, `qwen2.5vl:7b`
+- `llava:7b`, `llava:13b`
+- `bakllava`
+- `internvl3:2b`
+- `minicpm-v`
+- `paligemma`
+
+### D.4 How to install another model
+
+After Ollama is installed (Settings → AI Runtime → Install button),
+open a shell on the orchestrator host and pull the model directly:
+
+```bash
+ollama pull qwen2.5vl:7b
+```
+
+Models live in Ollama's own cache (`%LOCALAPPDATA%\Programs\Ollama` on
+Windows, `~/.ollama/models` on macOS / Linux). The pull is resumable
+and parallel-safe; the orchestrator can keep running.
+
+### D.5 Switching the active model
+
+Settings → AI Runtime → **Active vision model** dropdown lists every
+model Ollama has pulled locally. Vision-capable entries float to the
+top; text-only entries are visible but flagged so you don't pick one
+by mistake. Selecting a model:
+
+1. Saves the choice to `_settings["aiAutoTuneModel"]` (persists across
+   restarts).
+2. The next click of **Test** in the AI Engines card uses the new
+   model — confirms it answers a fixed prompt within the 120 s budget.
+3. The next **Run Auto-Tune** in any camera's Tune modal uses it for
+   the iteration loop. The Tune log header line shows `model=<name>`
+   so you can verify the override took effect.
+
+### D.6 Per-run override
+
+The Tune modal's Run Auto-Tune body accepts `model: "..."` as a
+per-call override. Useful for matrix testing without changing the
+persisted setting. Operators driving the API directly:
+
+```bash
+curl -X POST http://localhost:8080/api/cameras/16/settings/auto-tune \
+  -H 'Content-Type: application/json' \
+  -d '{"intent":"aruco","evaluator":"ai","model":"llava:13b","resizeLongSide":960}'
+```
+
+### D.7 Diagnostics
+
+If a tune cell scores 0 / 100 across every iteration with `applied`
+unchanged, the model is text-only or its JSON output is malformed.
+The Tune log will show entries like `Iter 1/6: score 0.0` with no
+applied controls — switch to a vision-capable model from the table
+above. The matrix-run pattern that flagged moondream was: 8 cells × AI
+mode all returning `before == after` with `score < 1.0`.
+
+If the Test button on Settings → AI Engines hangs past 2 min, the model
+is too heavy for this hardware. Drop down to a smaller variant in the
+table.
+
 <a id="appendix-c"></a>
 
 ## Appendix C — Documentation Maintenance

@@ -246,11 +246,14 @@ function _ollamaRuntimeRefresh(){
         return;
       }
       if(r.installed){
+        var active=r.activeModel||r.model||'';
         box.innerHTML='<span style="color:#34d399">Installed</span> · '
           +'Ollama at <span style="color:#94a3b8;font-family:monospace">'+escapeHtml(r.url||'')+'</span>'
-          +' · model <span style="color:#94a3b8;font-family:monospace">'+escapeHtml(r.model||'')+'</span>';
+          +' · active model <span style="color:#94a3b8;font-family:monospace">'+escapeHtml(active)+'</span>';
         if(iBtn)iBtn.style.display='none';
         if(rBtn)rBtn.style.display='inline-block';
+        // #685 follow-up — populate the model dropdown.
+        _ollamaRuntimeRefreshModelList();
       }else if(!r.running){
         box.innerHTML='<span style="color:#f59e0b">Not installed</span> · '
           +'click Install for ~3 GB download (Ollama + qwen2.5vl:3b VLM)';
@@ -298,6 +301,54 @@ function _ollamaRuntimeInstall(force){
       setTimeout(_ollamaRuntimeRefresh,1500);
       return;
     }
+    _ollamaRuntimeRefresh();
+  });
+}
+
+// #685 follow-up — model dropdown population. Called after the status
+// row decides Ollama is installed; keeps the row hidden when it isn't.
+function _ollamaRuntimeRefreshModelList(){
+  var row=document.getElementById('ollama-rt-model-row');
+  var sel=document.getElementById('ollama-rt-model-sel');
+  var hint=document.getElementById('ollama-rt-model-hint');
+  if(!row||!sel)return;
+  ra('GET','/api/ollama-runtime/models',null,function(r){
+    if(!r||!r.ok||!Array.isArray(r.models)){
+      row.style.display='none';
+      return;
+    }
+    row.style.display='block';
+    var active=r.active||'';
+    sel.innerHTML='';
+    var visionCount=0;
+    r.models.forEach(function(m){
+      if(m.vision)visionCount++;
+      var label=m.name+' '
+        +(m.vision?'· vision':'· text-only (auto-tune may produce no delta)')
+        +(m.sizeMb?' · '+m.sizeMb+' MB':'');
+      var opt=document.createElement('option');
+      opt.value=m.name;
+      opt.textContent=label;
+      if(m.name===active)opt.selected=true;
+      sel.appendChild(opt);
+    });
+    if(hint){
+      hint.textContent='— '+r.models.length+' pulled · '+visionCount+' vision-capable';
+    }
+  });
+}
+
+function _ollamaRuntimeModelChange(){
+  var sel=document.getElementById('ollama-rt-model-sel');
+  if(!sel)return;
+  var v=sel.value||'';
+  // Persist via /api/settings so auto-tune picks it up next run.
+  ra('POST','/api/settings',{aiAutoTuneModel:v},function(r){
+    if(!r||r.err){
+      alert('Saving active model failed: '+((r&&r.err)||'unknown'));
+      return;
+    }
+    // Re-poll the runtime card so the "active model" line updates.
     _ollamaRuntimeRefresh();
   });
 }
