@@ -12303,11 +12303,28 @@ def api_dmx_start():
     if protocol == "artnet":
         _artnet.start()
         _apply_profile_defaults(_artnet)
+        engine = _artnet
     elif protocol == "sacn":
         _sacn.start()
         _apply_profile_defaults(_sacn)
+        engine = _sacn
     else:
         return jsonify(err=f"Unknown protocol: {protocol}"), 400
+    # #687 — drive movers to their saved Home anchor before any blink so
+    # the operator sees the boot animation on-axis. Skipped on engines
+    # that didn't actually come up. Done in a thread so the request
+    # returns promptly; the settle delay can run in the background.
+    if engine.running:
+        def _home_then_blink():
+            try:
+                _drive_movers_to_home(engine)
+            except Exception:
+                log.exception("drive-to-home crashed")
+            if (_dmx_settings.get("bootBlinkFixtures", True)
+                    and not _boot_blink_done):
+                _run_boot_blink(engine)
+        import threading as _thr
+        _thr.Thread(target=_home_then_blink, daemon=True).start()
     return jsonify(ok=True, protocol=protocol)
 
 @app.post("/api/dmx/stop")
@@ -12368,8 +12385,16 @@ def api_dmx_blink():
     dmx_count = sum(1 for f in _fixtures if f.get("fixtureType") == "dmx")
     if dmx_count == 0:
         return jsonify(ok=False, err="No DMX fixtures defined — add one via Add Fixture"), 400
+    # #687 — re-seed Home pose before the manual blink so the rainbow is
+    # visibly on-axis (matches auto-start behaviour).
+    def _home_then_blink():
+        try:
+            _drive_movers_to_home(engine)
+        except Exception:
+            log.exception("drive-to-home crashed")
+        _run_boot_blink(engine, True)
     import threading as _thr_blink
-    _thr_blink.Thread(target=_run_boot_blink, args=(engine, True), daemon=True).start()
+    _thr_blink.Thread(target=_home_then_blink, daemon=True).start()
     return jsonify(ok=True, fixtures=dmx_count)
 
 @app.post("/api/dmx/channel")
@@ -12655,6 +12680,54 @@ def _apply_dmx_settings():
 
 _apply_dmx_settings()
 
+def _drive_movers_to_home(engine, settle_ms=400):
+    """#687 follow-up — at engine start, send every DMX mover that has a
+    saved Home anchor to its home pan/tilt before the boot blink runs.
+
+    The operator picked these (pan, tilt) DMX values during Set Home as
+    the orientation that aims along the fixture's saved rotation vector.
+    Driving there before the rainbow blink means the boot animation is
+    visibly on-axis instead of wherever the fixture last sat — and any
+    show that starts immediately after has a known initial pose.
+
+    Fixtures without homePanDmx16 / homeTiltDmx16 set (cal-not-yet path)
+    are left alone so a fresh rig doesn't get random pan/tilt writes.
+
+    settle_ms: pause after the writes so DMX bridges actually transmit
+    the frame to the fixtures before the blink starts overwriting other
+    channels — avoids a race where the blink's strobe/dimmer writes
+    arrive with stale pan/tilt and the fixture lurches mid-blink.
+    """
+    moved = 0
+    for f in _fixtures:
+        if f.get("fixtureType") != "dmx":
+            continue
+        pan16 = f.get("homePanDmx16")
+        tilt16 = f.get("homeTiltDmx16")
+        if pan16 is None or tilt16 is None:
+            continue
+        pid = f.get("dmxProfileId")
+        info = _profile_lib.channel_info(pid) if pid else None
+        if not info:
+            continue
+        try:
+            uni = f.get("dmxUniverse", 1)
+            addr = f.get("dmxStartAddr", 1)
+            profile = {"channel_map": info.get("channel_map", {}),
+                        "channels": info.get("channels", [])}
+            engine.get_universe(uni).set_fixture_pan_tilt(
+                addr, float(pan16) / 65535.0, float(tilt16) / 65535.0,
+                profile)
+            moved += 1
+        except Exception as e:
+            log.warning("drive-to-home: fixture %s failed (%s)",
+                         f.get("id"), e)
+    if moved > 0:
+        log.info("drive-to-home: sent %d mover(s) to saved Home anchors", moved)
+        if settle_ms > 0:
+            time.sleep(settle_ms / 1000.0)
+
+
 # ── Boot blink function (#389) ────────────────────────────────────────────
 _boot_blink_done = False
 
@@ -12784,10 +12857,21 @@ if _dmx_settings.get("autoStartEngine", True) and _dmx_settings.get("universeRou
             _apply_profile_defaults(_engine)
             log.info("%s auto-started (%d routes), profile defaults applied",
                      _proto.upper(), len(_dmx_settings["universeRoutes"]))
-            # Boot blink: rainbow cycle then blackout (#389)
-            if _dmx_settings.get("bootBlinkFixtures", True) and not _boot_blink_done:
-                import threading as _thr
-                _thr.Thread(target=_run_boot_blink, args=(_engine,), daemon=True).start()
+            # #687 — send every mover with a saved Home anchor to its
+            # home pan/tilt BEFORE the boot blink runs, so the rainbow
+            # animation is visibly on-axis. Movers without Home are
+            # left untouched. Done in a background thread so a slow
+            # bridge doesn't delay engine start logging.
+            def _home_then_blink():
+                try:
+                    _drive_movers_to_home(_engine)
+                except Exception:
+                    log.exception("drive-to-home crashed")
+                if (_dmx_settings.get("bootBlinkFixtures", True)
+                        and not _boot_blink_done):
+                    _run_boot_blink(_engine)
+            import threading as _thr
+            _thr.Thread(target=_home_then_blink, daemon=True).start()
 
 # ── Auto-start show on boot (#390) ────────────────────────────────────────
 def _auto_start_show():
