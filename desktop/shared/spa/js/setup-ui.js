@@ -1991,6 +1991,17 @@ function _camTuneRenderActions(){
     +'<div style="font-size:.72em;margin-top:.2em">'+aiHint+'</div>'
     +'<label style="font-size:.82em;color:#94a3b8;display:block;margin-top:.4em">Max iterations'
     +'  <input id="camtune-iter" type="number" min="1" max="12" value="6" style="width:60px;font-size:.82em;margin-left:.4em"></label>'
+    // #685 follow-up — VLM input resolution preset. Smaller = faster
+    // inference (qwen2.5vl:3b on CPU is ~3 s @ 320 px vs ~30 s @ 4 K),
+    // larger = more detail for ArUco / fine-focus intents. Resolves
+    // to absolute pixel max-side; the orchestrator clamps server-side
+    // so a malformed request can't ask the VLM to ingest a 4 K frame.
+    +'<label style="font-size:.82em;color:#94a3b8;display:block;margin-top:.4em">VLM input size <span id="camtune-resize-hint" style="color:#64748b;font-size:.78em"></span>'
+    +'  <select id="camtune-resize" onchange="_camTuneResizeHintUpdate('+fid+')" style="width:100%;font-size:.82em;margin-top:.15em">'
+    +'    <option value="320">Tiny (320 px) — fastest, ~3 s/iter</option>'
+    +'    <option value="640" selected>Standard (640 px) — balanced (default)</option>'
+    +'    <option value="960">Detailed (960 px) — slower, more precision</option>'
+    +'  </select></label>'
     +'<label style="font-size:.82em;color:#94a3b8;display:block;margin-top:.4em">Save result as slot'
     +'  <input id="camtune-autosave" type="text" placeholder="optional" style="width:100%;font-size:.82em;margin-top:.15em"></label>'
     +'<div id="camtune-run-row" style="display:flex;gap:.4em;margin-top:.6em">'
@@ -2014,6 +2025,30 @@ function _camTuneRenderActions(){
     +'  <input id="camtune-save-name" type="text" placeholder="slot name…" style="flex:1;font-size:.78em;padding:.15em .3em">'
     +'  <button class="btn" onclick="_camTuneSaveCurrent('+fid+')" style="background:#1e3a5f;color:#93c5fd;font-size:.78em">Save current</button>'
     +'</div>';
+  // #685 follow-up — paint the resize-hint after the select renders so
+  // the operator sees the ratio relative to the camera's native res.
+  setTimeout(function(){_camTuneResizeHintUpdate(_camTuneState.fid);}, 0);
+}
+
+function _camTuneResizeHintUpdate(fid){
+  var hint = document.getElementById('camtune-resize-hint');
+  var sel = document.getElementById('camtune-resize');
+  if(!hint || !sel)return;
+  var px = parseInt(sel.value, 10) || 640;
+  // Walk _fixtures for native resolution.
+  var native = null;
+  if(typeof _fixtures !== 'undefined'){
+    _fixtures.forEach(function(f){
+      if(f.id===fid && f.resolutionW && f.resolutionH){
+        native = {w:f.resolutionW, h:f.resolutionH};
+      }
+    });
+  }
+  if(!native){hint.textContent = '(native res unknown)';return;}
+  var longSide = Math.max(native.w, native.h);
+  var ratio = px / longSide;
+  hint.textContent = '(native '+native.w+'×'+native.h+'; '
+    + Math.round(ratio*100) + '% of native long side)';
 }
 
 // ── Slot operations (diff-patched — never replace modal body) ──────────
@@ -2086,6 +2121,9 @@ function _camTuneRun(fid){
   var intent=(document.getElementById('camtune-intent')||{}).value||'general';
   var evaluator=(document.getElementById('camtune-eval')||{}).value||'heuristic';
   var maxIt=parseInt((document.getElementById('camtune-iter')||{}).value, 10)||6;
+  // #685 follow-up — VLM resize preset (Tiny / Standard / Detailed).
+  // Server clamps to [160, 1280] so a malformed value can't pass through.
+  var resizeLongSide=parseInt((document.getElementById('camtune-resize')||{}).value, 10)||640;
   var slot=((document.getElementById('camtune-autosave')||{}).value||'').trim();
   var prog=document.getElementById('camtune-progress');
   // Capture baseline snapshot for the compare strip.
@@ -2099,7 +2137,8 @@ function _camTuneRun(fid){
 
   function _kickRun(){
     _camTuneSetRunUiBusy(true, 'Running auto-tune ('+evaluator+' → '+intent+')… this may take 10–90 s.');
-    var body={intent:intent, evaluator:evaluator, maxIterations:maxIt};
+    var body={intent:intent, evaluator:evaluator, maxIterations:maxIt,
+              resizeLongSide:resizeLongSide};
     if(slot)body.saveSlot=slot;
     var x=new XMLHttpRequest();
     x.open('POST','/api/cameras/'+fid+'/settings/auto-tune', true);

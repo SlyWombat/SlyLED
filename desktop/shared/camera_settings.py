@@ -376,11 +376,16 @@ _AI_SYSTEM_PROMPT = (
 )
 
 
-def evaluate_frame_ai(frame, intent="general", controls_meta=None):
+def evaluate_frame_ai(frame, intent="general", controls_meta=None,
+                       resize_long_side=None):
     """Local VLM evaluator via Ollama.
 
     `controls_meta` is the list returned by /camera/controls so the model
     knows legal value ranges when proposing deltas.
+
+    `resize_long_side` (px) overrides the module-default ``_AI_FRAME_LONG_SIDE``
+    so the SPA Tune modal can let the operator trade VLM speed for image
+    detail per #685 follow-up.
 
     Returns the heuristic schema plus ``deltaProposal`` — a dict of
     {control_name: value} the loop applies directly, bypassing the
@@ -391,7 +396,7 @@ def evaluate_frame_ai(frame, intent="general", controls_meta=None):
     if not ok:
         raise RuntimeError(err)
 
-    b64 = _frame_to_jpeg_b64(frame)
+    b64 = _frame_to_jpeg_b64(frame, max_side=resize_long_side)
 
     # Summarise current control state so the model has concrete ranges.
     ctrl_brief = []
@@ -460,7 +465,7 @@ def evaluate_frame_ai(frame, intent="general", controls_meta=None):
     }
 
 
-def make_evaluator(mode):
+def make_evaluator(mode, resize_long_side=None):
     """Return a callable (frame, controls_meta, intent) → result-dict for
     the requested mode.
 
@@ -471,12 +476,18 @@ def make_evaluator(mode):
                                  pulled.
       * "auto"                — prefer AI, fall back silently to heuristic
                                  when the local VLM is unavailable.
+
+    ``resize_long_side`` (px) overrides the module default for AI mode
+    only — heuristic ignores it. Lets the SPA Tune modal expose 3 size
+    presets (Tiny / Standard / Detailed) so the operator can trade VLM
+    inference time for image detail per #685 follow-up.
     """
     mode = (mode or "heuristic").lower()
 
     def _run_ai(frame, controls_meta=None, intent="general"):
         return evaluate_frame_ai(frame, intent=intent,
-                                  controls_meta=controls_meta)
+                                  controls_meta=controls_meta,
+                                  resize_long_side=resize_long_side)
 
     def _run_heuristic(frame, controls_meta=None, intent="general"):
         return evaluate_frame_heuristic(frame, intent=intent)
@@ -526,7 +537,7 @@ class AutoTuneCancelled(Exception):
 def auto_tune_loop(camera_ip, cam_idx, intent,
                     fetch_snapshot_fn, max_iterations=6, settle_s=0.5,
                     progress_cb=None, evaluator_mode="heuristic",
-                    cancel_check=None):
+                    cancel_check=None, resize_long_side=None):
     """Iteratively adjust exposure + gain until the scored frame plateaus
     or ``max_iterations`` runs out.
 
@@ -554,7 +565,7 @@ def auto_tune_loop(camera_ip, cam_idx, intent,
 
     Returns ``{before, after, applied, history, evaluator}``.
     """
-    evaluator = make_evaluator(evaluator_mode)
+    evaluator = make_evaluator(evaluator_mode, resize_long_side=resize_long_side)
     try:
         initial = camera_controls_get(camera_ip, cam_idx)
     except Exception as e:

@@ -4175,6 +4175,19 @@ def api_camera_settings_auto_tune(fid):
     intent = body.get("intent", "general")
     max_it = int(body.get("maxIterations", 6))
     evaluator_mode = body.get("evaluator", "heuristic")
+    # #685 follow-up — operator-selectable VLM input resolution. Tune
+    # modal exposes 3 presets (Tiny 320 / Standard 640 / Detailed 960)
+    # so AI mode can trade inference time for image detail. None falls
+    # back to the module default (640).
+    try:
+        resize_long_side = (int(body["resizeLongSide"])
+                              if "resizeLongSide" in body else None)
+    except (TypeError, ValueError):
+        resize_long_side = None
+    if resize_long_side is not None:
+        # Clamp to the supported preset range so a malformed request
+        # can't ask for a 4 K send to the VLM.
+        resize_long_side = max(160, min(1280, resize_long_side))
 
     def _snap(ip_, idx_):
         # 30 s gives the Pi headroom when it's warming up a YOLO model or
@@ -4271,9 +4284,12 @@ def api_camera_settings_auto_tune(fid):
         except Exception:
             pass
 
+    resize_label = (str(resize_long_side) + " px"
+                     if resize_long_side else "default")
     _emit("info",
           f"Auto-tune started: intent={intent} evaluator={evaluator_mode} "
-          f"maxIter={max_it} model={_cam_settings._OLLAMA_MODEL}")
+          f"maxIter={max_it} model={_cam_settings._OLLAMA_MODEL} "
+          f"vlmResize={resize_label}")
     try:
         result = _cam_settings.auto_tune_loop(
             ip, cam_idx, intent,
@@ -4282,6 +4298,7 @@ def api_camera_settings_auto_tune(fid):
             evaluator_mode=evaluator_mode,
             cancel_check=_is_cancelled,
             progress_cb=_progress_cb,
+            resize_long_side=resize_long_side,
         )
     except _cam_settings.AutoTuneCancelled:
         _emit("warn", "Cancelled by operator")
