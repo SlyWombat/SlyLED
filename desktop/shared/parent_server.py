@@ -4636,10 +4636,16 @@ def _ai_helpers_warmup():
             # also runs warmup() at the end so a fresh boot lands on
             # "Ready · warm" by the time the operator opens Settings.
             try:
+                # #685 follow-up — only auto-pull the bootstrap installer
+                # model (Moondream by default, ~1.7 GB). The richer auto-
+                # tune default (qwen2.5vl:3b) is operator-selected from
+                # Settings, so we never silently bake a 3 GB download
+                # into a fresh boot.
                 if (_ollama_rt.is_ollama_running()
-                        and not _ollama_rt.has_model()):
-                    log.info("AI: vision model %s not pulled — kicking off "
-                              "background pull", _ollama_rt.OLLAMA_MODEL)
+                        and not _ollama_rt.has_model(
+                            _ollama_rt.INSTALLER_MODEL)):
+                    log.info("AI: bootstrap model %s not pulled — kicking "
+                              "off background pull", _ollama_rt.INSTALLER_MODEL)
                     _ollama_rt.start_install()
                     return  # _install_worker handles warmup at the end
             except Exception as e:

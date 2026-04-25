@@ -43,7 +43,17 @@ from pathlib import Path
 log = logging.getLogger("slyled.ollama_runtime")
 
 OLLAMA_URL = os.environ.get("SLYLED_OLLAMA_URL", "http://localhost:11434")
+# OLLAMA_MODEL is the AUTO-TUNE default — qwen2.5vl:3b for reliable JSON
+# adherence (#685). The orchestrator's Settings → AI Runtime page lets
+# the operator pick any pulled model at runtime.
 OLLAMA_MODEL = os.environ.get("SLYLED_OLLAMA_MODEL", "qwen2.5vl:3b")
+# INSTALLER_MODEL is what the Windows installer / Settings → Install
+# button pulls during the bootstrap. Kept at moondream (1.7 GB) so
+# the post-install download stays manageable even on slow links;
+# operators wanting the better-JSON qwen2.5vl:3b pull it later via
+# `ollama pull qwen2.5vl:3b` (documented in USER_MANUAL Appendix D)
+# or the future Settings → "Pull additional model" button.
+INSTALLER_MODEL = os.environ.get("SLYLED_INSTALLER_MODEL", "moondream")
 
 # Windows installer URL — Ollama ships a single .exe that sets up the
 # service + Start Menu entry. macOS / Linux use the shell installer.
@@ -110,9 +120,13 @@ def has_model(name=None, timeout=2.0):
 
 
 def is_installed():
-    """True when both the service is running AND the model is pulled.
-    Matches the ``_depth_runtime.is_installed()`` contract."""
-    return is_ollama_running() and has_model()
+    """True when both the service is running AND the bootstrap installer
+    model is pulled. Matches the ``_depth_runtime.is_installed()``
+    contract — used by the Settings card "Installed / Not installed"
+    badge and the orchestrator boot path. Auto-tune may use a heavier
+    model the operator pulled separately; that's a runtime concern,
+    not an "is the AI feature wired up" check."""
+    return is_ollama_running() and has_model(INSTALLER_MODEL)
 
 
 # #685 follow-up — vision-model name patterns. Used by ``list_models()``
@@ -323,19 +337,35 @@ def started_by_us():
 _warm_state = {"warm": False, "warmedAt": None, "lastError": None}
 
 
-def warmup(timeout_s: float = 120.0):
+def warmup(timeout_s: float = 120.0, model: str | None = None):
     """Send a single tiny generate request so the model is loaded into RAM
     and subsequent calls are sub-second. No-op when the service isn't
-    running or the model isn't pulled — start_install() takes precedence
-    over warmup."""
-    if not (is_ollama_running() and has_model()):
-        _warm_state["lastError"] = "service or model not ready"
+    running or no candidate model is pulled — start_install() takes
+    precedence over warmup.
+
+    `model` overrides the auto-pick. Without it, picks whichever of
+    (OLLAMA_MODEL → INSTALLER_MODEL) is actually pulled so a fresh box
+    that just got Moondream from the installer (#685 follow-up) still
+    warms successfully even though the auto-tune default points at
+    qwen2.5vl:3b.
+    """
+    if not is_ollama_running():
+        _warm_state["lastError"] = "service not ready"
+        return False
+    chosen = model
+    if chosen is None:
+        for cand in (OLLAMA_MODEL, INSTALLER_MODEL):
+            if has_model(cand):
+                chosen = cand
+                break
+    if not chosen:
+        _warm_state["lastError"] = "no pulled model to warm"
         return False
     try:
         req = urllib.request.Request(
             f"{OLLAMA_URL}/api/generate",
             data=json.dumps({
-                "model": OLLAMA_MODEL,
+                "model": chosen,
                 "prompt": "ping",
                 "stream": False,
                 "keep_alive": "10m",
@@ -530,8 +560,8 @@ def _install_worker(force):
             if not _wait_for_service(timeout_s=120):
                 raise RuntimeError("Ollama installed but service didn't come up")
 
-        if force or not has_model():
-            _pull_model()
+        if force or not has_model(INSTALLER_MODEL):
+            _pull_model(INSTALLER_MODEL)
 
         # #685 follow-up — drop one warmup call here so the model is hot
         # by the time the operator clicks Test or Run Auto-Tune. Without

@@ -256,7 +256,7 @@ function _ollamaRuntimeRefresh(){
         _ollamaRuntimeRefreshModelList();
       }else if(!r.running){
         box.innerHTML='<span style="color:#f59e0b">Not installed</span> · '
-          +'click Install for ~3 GB download (Ollama + qwen2.5vl:3b VLM)';
+          +'click Install for ~2 GB bootstrap (Ollama + Moondream VLM). Pull richer models (e.g. qwen2.5vl:3b) afterwards via Settings or `ollama pull`.';
         if(iBtn)iBtn.style.display='inline-block';
         if(rBtn)rBtn.style.display='none';
       }else{
