@@ -46,14 +46,14 @@ Name: "custom";  Description: "Custom installation"; Flags: iscustom
 ; installer never surprises a user with a 2 GB download.
 Name: "core";  Description: "SlyLED Orchestrator (required)"; Types: full compact custom; Flags: fixed
 Name: "depth"; Description: "Host-side AI depth runtime (ZoeDepth) — adds 'ZoeDepth (host)' scan method; ~2 GB downloaded after install"
-; #623 / #685 — local vision AI (Ollama). Powers the camera auto-tune
-; AI evaluator. Optional, unticked by default so the Full install
-; doesn't silently fetch another ~2 GB. The installer queues Moondream
-; (1.7 GB) as a small-footprint bootstrap; after install the operator
-; can pull richer models (qwen2.5vl:3b is the auto-tune default for
-; better JSON adherence) from Settings -> AI Runtime or via
-; `ollama pull <name>`. See USER_MANUAL Appendix D.
-Name: "ai";    Description: "Local AI camera auto-tune (Ollama + Moondream VLM bootstrap) — ~2 GB downloaded after install"
+; #623 / #685 — local vision AI (Ollama). Optional, unticked by default.
+; Auto-tune now defaults to a deterministic OpenCV `analyzer` (no AI
+; needed); this component installs Ollama itself for operators who
+; want to opt into a vision-language evaluator. NO model is pulled at
+; install time — operator picks one from USER_MANUAL Appendix D
+; (qwen2.5vl:3b, llava:7b, etc.) and pulls it via `ollama pull <name>`,
+; then selects it in Settings -> AI Runtime -> Active vision model.
+Name: "ai";    Description: "Local AI vision-language runtime (Ollama only — no model pulled; operator picks one from USER_MANUAL Appendix D)"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked

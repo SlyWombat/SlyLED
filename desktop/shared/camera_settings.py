@@ -259,6 +259,222 @@ def evaluate_frame_heuristic(frame, intent="general"):
     }
 
 
+# ── Analyzer evaluator (deterministic OpenCV — #685 default) ────────────
+#
+# Replaces moondream as the auto-tune default. The 2026-04-25 matrix run
+# proved moondream was unable to drive auto-tune — it copied prompt
+# example values regardless of input image. The CV analyzer in this
+# section is the operator-built tool ported in from
+# tools/cv_analyzer_evaluator.py: histogram + LAB cast + intent-aware
+# deltaProposal. Sub-second, deterministic, image-aware. Produced
+# 49 → 96.80 on cam16/aruco where moondream peaked at 98.28 with
+# extreme variance and required prompt fencing to avoid making the
+# well-lit cam12 cells WORSE.
+#
+# Convention matches evaluate_frame_heuristic: score 0..100,
+# `deltaProposal` keyed by V4L2 control names. The orchestrator's
+# auto_tune_loop reads `deltaProposal` and applies it directly,
+# bypassing the heuristic gradient.
+
+# Tunable thresholds — ratios of pixels at the edges of the histogram
+# that count as "clipped". Same defaults as heuristic so the score
+# numbers are comparable.
+_AN_HI_CLIP_PCT = 0.02
+_AN_LO_CLIP_PCT = 0.05
+
+# Intent-specific exposure targets in 8-bit luminance mean.
+_AN_INTENT_TARGET = {
+    "general": 128.0,
+    "beam":     80.0,    # beam needs the rest of the scene dark
+    "aruco":   128.0,
+    "yolo":    128.0,
+}
+
+
+def _control_value(controls_meta, name):
+    """Look up the current value of a V4L2 control by name. Returns
+    None when the control isn't in the meta list (camera doesn't have
+    it, or the operator passed empty meta for a one-shot eval)."""
+    for c in (controls_meta or []):
+        if c.get("name") == name:
+            return c.get("value")
+    return None
+
+
+def _control_meta(controls_meta, name):
+    for c in (controls_meta or []):
+        if c.get("name") == name:
+            return c
+    return None
+
+
+def _clamp_proposal(meta, value):
+    """Clamp a proposed control value to the camera's declared range
+    so the orchestrator never tries to write past the V4L2 limits."""
+    if meta is None:
+        return value
+    try:
+        lo = int(meta.get("min", 0) or 0)
+        hi = int(meta.get("max", 255) or 255)
+    except (TypeError, ValueError):
+        return value
+    return max(lo, min(hi, int(round(value))))
+
+
+def evaluate_frame_analyzer(frame, intent="general", controls_meta=None):
+    """#685 — deterministic CV evaluator. Reads the current V4L2 control
+    values out of ``controls_meta`` (so it knows what direction +
+    magnitude to suggest) and proposes concrete delta values.
+
+    Returns the same shape as evaluate_frame_heuristic plus a populated
+    ``deltaProposal`` when the image has actionable issues. Returns an
+    EMPTY ``deltaProposal`` when the image is already good — that's the
+    "conservative on good images" property the moondream alternative
+    couldn't honour. The auto_tune_loop then reads the empty dict and
+    stops the iteration cleanly.
+    """
+    try:
+        import numpy as np
+    except ImportError:
+        raise RuntimeError("numpy required for evaluate_frame_analyzer")
+
+    if frame is None or frame.size == 0:
+        return {"score": -1.0, "notes": ["empty frame"], "deltaProposal": {},
+                "evaluator": "analyzer"}
+
+    # ── Luminance + clipping ──────────────────────────────────────────
+    if frame.ndim == 3:
+        b = frame[:, :, 0].astype("float32")
+        g = frame[:, :, 1].astype("float32")
+        r = frame[:, :, 2].astype("float32")
+        lum = 0.114 * b + 0.587 * g + 0.299 * r
+    else:
+        lum = frame.astype("float32")
+    total = float(lum.size)
+    hi_clip = float((lum >= 250).sum()) / total
+    lo_clip = float((lum <= 5).sum()) / total
+    mean = float(lum.mean())
+    std = float(lum.std())
+
+    # ── LAB chroma cast (white-balance signal) ────────────────────────
+    # Median a* / b* deviation from neutral (128) flags a cast. Use
+    # numpy-only conversion (BGR → XYZ → LAB approximation) so the
+    # analyzer works without OpenCV when running headless tests.
+    a_med = b_med = 128.0
+    try:
+        import cv2 as _cv2
+        if frame.ndim == 3:
+            lab = _cv2.cvtColor(frame, _cv2.COLOR_BGR2LAB)
+            a_med = float(np.median(lab[:, :, 1]))
+            b_med = float(np.median(lab[:, :, 2]))
+    except Exception:
+        pass
+    # Cast magnitude (Euclidean from neutral, bounded 0..40-ish).
+    cast_a = a_med - 128.0
+    cast_b = b_med - 128.0
+    cast_mag = float(np.hypot(cast_a, cast_b))
+
+    # ── Score (matches heuristic so they're directly comparable) ──────
+    target = _AN_INTENT_TARGET.get(intent, 128.0)
+    hi_penalty = min(1.0, hi_clip / _AN_HI_CLIP_PCT) * 40.0
+    lo_penalty = min(1.0, lo_clip / _AN_LO_CLIP_PCT) * 10.0
+    bright_penalty = min(40.0, abs(mean - target) * 0.6)
+    contrast_bonus = 0.0
+    if 35.0 <= std <= 75.0:
+        contrast_bonus = 10.0
+    elif std < 20.0:
+        contrast_bonus = -20.0
+    score = 100.0 - hi_penalty - lo_penalty - bright_penalty + contrast_bonus
+
+    # ── Diagnose (intent-aware, what's actually wrong) ────────────────
+    notes = []
+    diagnoses = []
+    if hi_clip > _AN_HI_CLIP_PCT:
+        diagnoses.append("overexposed")
+        notes.append(f"highlights clipped ({hi_clip*100:.1f}% > 2%)")
+    if mean < target - 25 and hi_clip < _AN_HI_CLIP_PCT:
+        diagnoses.append("underexposed")
+        notes.append(f"mean {mean:.0f} < target {target:.0f}")
+    if (mean > target + 25 and intent != "beam"
+            and "overexposed" not in diagnoses):
+        diagnoses.append("overexposed")
+        notes.append(f"mean {mean:.0f} > target {target:.0f}")
+    if std < 25.0:
+        diagnoses.append("low_contrast")
+        notes.append(f"low contrast (std {std:.0f})")
+    if cast_mag > 12.0:
+        diagnoses.append("white_balance_cast")
+        notes.append(f"WB cast Δa={cast_a:+.0f} Δb={cast_b:+.0f}")
+    if not diagnoses:
+        notes.append("image is acceptable for this intent")
+
+    # ── Propose deltas ────────────────────────────────────────────────
+    delta = {}
+    exp_meta = _control_meta(controls_meta, "exposure_time_absolute")
+    cur_exp = _control_value(controls_meta, "exposure_time_absolute")
+    gain_meta = _control_meta(controls_meta, "gain")
+    cur_gain = _control_value(controls_meta, "gain")
+    wb_temp_meta = _control_meta(controls_meta, "white_balance_temperature")
+    cur_wb = _control_value(controls_meta, "white_balance_temperature")
+
+    if "underexposed" in diagnoses and "overexposed" not in diagnoses:
+        # Lift exposure first; if it's near rail, lift gain too.
+        if exp_meta is not None and cur_exp is not None:
+            new_exp = int(cur_exp * 2.5)
+            new_exp = _clamp_proposal(exp_meta, new_exp)
+            if new_exp != cur_exp:
+                delta["exposure_time_absolute"] = new_exp
+        # Add gain only when exposure is already past 80% of its range
+        # (lifting noise floor unnecessarily destroys detection quality
+        # on cameras that have headroom).
+        if (gain_meta is not None and cur_gain is not None and
+                exp_meta is not None and cur_exp is not None):
+            try:
+                exp_max = int(exp_meta.get("max") or 0)
+                if exp_max and cur_exp >= 0.8 * exp_max:
+                    new_gain = int(cur_gain) + 20
+                    new_gain = _clamp_proposal(gain_meta, new_gain)
+                    if new_gain != cur_gain:
+                        delta["gain"] = new_gain
+            except (TypeError, ValueError):
+                pass
+
+    elif "overexposed" in diagnoses:
+        if exp_meta is not None and cur_exp is not None:
+            new_exp = int(cur_exp * 0.6)
+            new_exp = _clamp_proposal(exp_meta, max(1, new_exp))
+            if new_exp != cur_exp:
+                delta["exposure_time_absolute"] = new_exp
+        # If already at the floor, drop gain.
+        elif gain_meta is not None and cur_gain is not None:
+            new_gain = int(cur_gain) - 10
+            new_gain = _clamp_proposal(gain_meta, max(0, new_gain))
+            if new_gain != cur_gain:
+                delta["gain"] = new_gain
+
+    if "white_balance_cast" in diagnoses and intent != "beam":
+        # b* > 0 = yellow cast → lower colour temp.  b* < 0 = blue.
+        if wb_temp_meta is not None and cur_wb is not None:
+            shift = -200 if cast_b > 0 else 200
+            new_wb = _clamp_proposal(wb_temp_meta, int(cur_wb) + shift)
+            if new_wb != cur_wb:
+                delta["white_balance_temperature"] = new_wb
+
+    return {
+        "score": round(score, 1),
+        "highlightsClipped": round(hi_clip, 4),
+        "shadowsClipped": round(lo_clip, 4),
+        "mean": round(mean, 1),
+        "std": round(std, 1),
+        "castA": round(cast_a, 1),
+        "castB": round(cast_b, 1),
+        "diagnoses": diagnoses,
+        "notes": notes,
+        "deltaProposal": delta,
+        "evaluator": "analyzer",
+    }
+
+
 # ── AI evaluator (local VLM via Ollama) ────────────────────────────────
 #
 # Runs entirely on the operator's own hardware. No cloud, no API keys, no
@@ -269,12 +485,15 @@ def evaluate_frame_heuristic(frame, intent="general"):
 # poor, so the matrix run found AI mode produced no useful deltas.
 
 _OLLAMA_URL = os.environ.get("SLYLED_OLLAMA_URL", "http://localhost:11434")
-# #685 follow-up — moondream returned scores in 0-1 floats and empty
-# deltaProposal on the basement-rig matrix run despite the JSON-schema
-# prompt; qwen2.5vl:3b is the smallest current-gen VLM that adheres to
-# constrained JSON output reliably. Operator override stays via the
-# SLYLED_OLLAMA_MODEL env var.
-_OLLAMA_MODEL = os.environ.get("SLYLED_OLLAMA_MODEL", "qwen2.5vl:3b")
+# #685 architecture decision (post 2026-04-25 matrix): the deterministic
+# `analyzer` evaluator is now the auto-tune default, AI is opt-in. No
+# model is shipped or auto-pulled. Operators who want an AI evaluator
+# pull a model via `ollama pull <name>` and select it on Settings -> AI
+# Runtime; the selection persists in _settings["aiAutoTuneModel"].
+# Empty string = no default; AI mode raises with a "select a model"
+# message until the operator picks one. Env override
+# (SLYLED_OLLAMA_MODEL) still wins for headless deployments.
+_OLLAMA_MODEL = os.environ.get("SLYLED_OLLAMA_MODEL", "")
 # #685 follow-up — moondream's vision encoder takes 30+ s per call on CPU
 # even with the existing 768-px downsample, blowing the per-call budget on
 # slower laptops. Raise the default so first-call ingestion finishes inside
@@ -305,21 +524,30 @@ _INTENT_MIN_SCORE = {
 
 def _ollama_available():
     """Probe Ollama once per auto-tune run. Returns (ok, err) so callers
-    can surface the reason the AI path was skipped."""
+    can surface the reason the AI path was skipped.
+
+    Post-#685: when no model is configured (env unset and operator hasn't
+    selected one in Settings), we report Ollama as "available" if the
+    daemon answers — the model-selection error is raised at make_evaluator
+    time so the message can name the right Settings panel."""
     try:
         req = urllib.request.Request(f"{_OLLAMA_URL}/api/tags", method="GET")
         with urllib.request.urlopen(req, timeout=3) as resp:
             tags = json.loads(resp.read().decode())
     except Exception as e:
         return False, (f"Ollama not reachable at {_OLLAMA_URL} ({e}). "
-                        f"Install: `curl -fsSL https://ollama.com/install.sh | sh` "
-                        f"then `ollama pull {_OLLAMA_MODEL}`.")
+                        f"Install Ollama from https://ollama.com, then pull "
+                        f"a vision model from USER_MANUAL Appendix D.")
+    if not _OLLAMA_MODEL:
+        # Daemon is up but no env-default model is set. Defer the
+        # "pick a model" error to the caller.
+        return True, None
     names = {m.get("name", "").split(":")[0]
              for m in tags.get("models", [])}
     if _OLLAMA_MODEL.split(":")[0] not in names:
         return False, (f"Ollama is running but model '{_OLLAMA_MODEL}' "
                         f"isn't pulled. Run `ollama pull {_OLLAMA_MODEL}` "
-                        f"to enable AI auto-tune.")
+                        f"or pick a different model in Settings → AI Runtime.")
     return True, None
 
 
@@ -470,20 +698,29 @@ def make_evaluator(mode, resize_long_side=None, model=None):
     """Return a callable (frame, controls_meta, intent) → result-dict for
     the requested mode.
 
-    Modes:
-      * "heuristic" (default) — always available, no ML dep.
-      * "ai"                  — local VLM via Ollama; raises up front when
-                                 Ollama isn't running or the model isn't
-                                 pulled.
-      * "auto"                — prefer AI, fall back silently to heuristic
-                                 when the local VLM is unavailable.
+    Modes (#685 architecture, post-2026-04-25 matrix):
+      * "analyzer" (DEFAULT) — deterministic OpenCV. No external deps.
+                                 Sub-second. Image-aware. Conservative
+                                 on good frames (returns empty
+                                 deltaProposal).
+      * "heuristic"          — histogram-only score; never proposes a
+                                 delta. Used by the auto_tune loop as
+                                 the objective gate ("did the
+                                 analyzer's delta actually help?").
+      * "ai"                 — local VLM via Ollama. Optional. Raises
+                                 up front when Ollama isn't running or
+                                 the operator hasn't selected/pulled a
+                                 model.
+      * "auto"               — analyzer first; if it returns empty
+                                 delta and AI is configured, fall
+                                 through to AI; the iteration loop
+                                 still gates every applied delta with
+                                 the heuristic.
 
     ``resize_long_side`` (px) overrides the module default for AI mode
-    only — heuristic ignores it. Lets the SPA Tune modal expose 3 size
-    presets (Tiny / Standard / Detailed) so the operator can trade VLM
-    inference time for image detail per #685 follow-up.
+    only — analyzer / heuristic ignore it.
     """
-    mode = (mode or "heuristic").lower()
+    mode = (mode or "analyzer").lower()
 
     def _run_ai(frame, controls_meta=None, intent="general"):
         return evaluate_frame_ai(frame, intent=intent,
@@ -494,20 +731,53 @@ def make_evaluator(mode, resize_long_side=None, model=None):
     def _run_heuristic(frame, controls_meta=None, intent="general"):
         return evaluate_frame_heuristic(frame, intent=intent)
 
+    def _run_analyzer(frame, controls_meta=None, intent="general"):
+        return evaluate_frame_analyzer(frame, intent=intent,
+                                        controls_meta=controls_meta)
+
+    def _run_auto(frame, controls_meta=None, intent="general"):
+        # Analyzer first. If it returned an actionable delta, use it.
+        result = _run_analyzer(frame, controls_meta=controls_meta,
+                                intent=intent)
+        if result.get("deltaProposal"):
+            return result
+        # No actionable delta from analyzer. If AI is configured AND a
+        # model is selected, fall through. Otherwise return the
+        # analyzer result so the loop's plateau check stops cleanly.
+        ai_ok, _err = _ollama_available()
+        if ai_ok and model:
+            ai_result = evaluate_frame_ai(frame, intent=intent,
+                                            controls_meta=controls_meta,
+                                            resize_long_side=resize_long_side,
+                                            model=model)
+            # Tag the chained provenance so the log shows analyzer →
+            # ai handover.
+            ai_result["evaluator"] = "auto-ai"
+            ai_result["chainedFrom"] = "analyzer"
+            return ai_result
+        result["evaluator"] = "auto-analyzer"
+        return result
+
+    if mode == "analyzer":
+        return _run_analyzer
     if mode == "heuristic":
         return _run_heuristic
     if mode == "ai":
         ok, err = _ollama_available()
         if not ok:
             raise RuntimeError(err)
+        if not model:
+            raise RuntimeError(
+                "AI evaluator requires an explicit model selection; pull "
+                "one via `ollama pull <name>` and select it in Settings → "
+                "AI Runtime → Active vision model.")
         return _run_ai
     if mode == "auto":
-        ok, _err = _ollama_available()
-        if ok:
-            return _run_ai
-        log.info("auto-tune evaluator=auto: local VLM unavailable, using heuristic")
-        return _run_heuristic
-    raise ValueError(f"unknown evaluator mode '{mode}'")
+        # `auto` always returns; the analyzer never raises and the
+        # AI-fallback inside _run_auto is gated.
+        return _run_auto
+    # Unknown mode — fall back to analyzer rather than crashing.
+    return _run_analyzer
 
 
 # ── Auto-tune loop ─────────────────────────────────────────────────────

@@ -513,8 +513,7 @@
     <div class='card' id='ollama-runtime-card' style='max-width:560px'>
       <div class='card-title'>AI Runtime (optional)</div>
       <div style='font-size:.82em;color:#94a3b8;margin-bottom:.5em'>
-        Local vision model via Ollama, powering the AI camera auto-tune evaluator (#623, #685).
-        Install ships a Moondream bootstrap (~2 GB); pick or pull a richer model (qwen2.5vl:3b is the auto-tune default for better JSON adherence) below.
+        Local vision-language runtime (Ollama). Auto-tune defaults to the deterministic CV <b>analyzer</b> evaluator (no AI required); this card lets you opt into a VLM-based AI evaluator. Install only fetches Ollama itself — pull a vision model from <a href='/docs/help/ai-models' target='_blank' style='color:#3b82f6'>USER_MANUAL Appendix D</a> (e.g. <code>ollama pull qwen2.5vl:3b</code>) and select it below.
         Runs entirely on this machine — no cloud, no API keys.
         The orchestrator falls back to the heuristic evaluator when the VLM isn't installed.
       </div>

@@ -4174,7 +4174,7 @@ def api_camera_settings_auto_tune(fid):
     body = request.get_json(silent=True) or {}
     intent = body.get("intent", "general")
     max_it = int(body.get("maxIterations", 6))
-    evaluator_mode = body.get("evaluator", "heuristic")
+    evaluator_mode = body.get("evaluator", "analyzer")
     # #685 follow-up — operator-selectable VLM input resolution. Tune
     # modal exposes 3 presets (Tiny 320 / Standard 640 / Detailed 960)
     # so AI mode can trade inference time for image detail. None falls
@@ -4636,16 +4636,18 @@ def _ai_helpers_warmup():
             # also runs warmup() at the end so a fresh boot lands on
             # "Ready · warm" by the time the operator opens Settings.
             try:
-                # #685 follow-up — only auto-pull the bootstrap installer
-                # model (Moondream by default, ~1.7 GB). The richer auto-
-                # tune default (qwen2.5vl:3b) is operator-selected from
-                # Settings, so we never silently bake a 3 GB download
-                # into a fresh boot.
-                if (_ollama_rt.is_ollama_running()
-                        and not _ollama_rt.has_model(
-                            _ollama_rt.INSTALLER_MODEL)):
+                # #685 architecture decision — boot path no longer
+                # auto-pulls any vision model. The deterministic CV
+                # `analyzer` evaluator handles auto-tune by default;
+                # AI is opt-in. Only fire the legacy auto-pull when
+                # SLYLED_INSTALLER_MODEL was explicitly set (env
+                # override) AND the model isn't already pulled.
+                installer_model = getattr(_ollama_rt, "INSTALLER_MODEL", "")
+                if (installer_model
+                        and _ollama_rt.is_ollama_running()
+                        and not _ollama_rt.has_model(installer_model)):
                     log.info("AI: bootstrap model %s not pulled — kicking "
-                              "off background pull", _ollama_rt.INSTALLER_MODEL)
+                              "off background pull", installer_model)
                     _ollama_rt.start_install()
                     return  # _install_worker handles warmup at the end
             except Exception as e:

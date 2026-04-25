@@ -43,17 +43,23 @@ from pathlib import Path
 log = logging.getLogger("slyled.ollama_runtime")
 
 OLLAMA_URL = os.environ.get("SLYLED_OLLAMA_URL", "http://localhost:11434")
-# OLLAMA_MODEL is the AUTO-TUNE default — qwen2.5vl:3b for reliable JSON
-# adherence (#685). The orchestrator's Settings → AI Runtime page lets
-# the operator pick any pulled model at runtime.
-OLLAMA_MODEL = os.environ.get("SLYLED_OLLAMA_MODEL", "qwen2.5vl:3b")
-# INSTALLER_MODEL is what the Windows installer / Settings → Install
-# button pulls during the bootstrap. Kept at moondream (1.7 GB) so
-# the post-install download stays manageable even on slow links;
-# operators wanting the better-JSON qwen2.5vl:3b pull it later via
-# `ollama pull qwen2.5vl:3b` (documented in USER_MANUAL Appendix D)
-# or the future Settings → "Pull additional model" button.
-INSTALLER_MODEL = os.environ.get("SLYLED_INSTALLER_MODEL", "moondream")
+# Post-#685 architecture: the deterministic CV `analyzer` evaluator is
+# the auto-tune default, AI is opt-in, and the orchestrator does NOT
+# bundle or auto-pull any vision model. OLLAMA_MODEL is the fallback
+# the AI evaluator uses when the operator hasn't selected one yet —
+# empty string by default so AI mode raises with a clear "pick a
+# model" message rather than silently falling back to a heavy download.
+OLLAMA_MODEL = os.environ.get("SLYLED_OLLAMA_MODEL", "")
+# INSTALLER_MODEL was previously moondream so the install component
+# would pre-pull a small VLM. The 2026-04-25 matrix run proved
+# moondream is unfit for the auto-tune task at any prompt config
+# (copies prompt examples regardless of input image), so the
+# install flow no longer auto-pulls any model. The Windows installer's
+# "ai" component now installs Ollama only; operators who want an AI
+# evaluator pick a model from USER_MANUAL Appendix D and pull it
+# manually. Empty string here means start_install() skips the
+# pull-model step.
+INSTALLER_MODEL = os.environ.get("SLYLED_INSTALLER_MODEL", "")
 
 # Windows installer URL — Ollama ships a single .exe that sets up the
 # service + Start Menu entry. macOS / Linux use the shell installer.
@@ -120,13 +126,12 @@ def has_model(name=None, timeout=2.0):
 
 
 def is_installed():
-    """True when both the service is running AND the bootstrap installer
-    model is pulled. Matches the ``_depth_runtime.is_installed()``
-    contract — used by the Settings card "Installed / Not installed"
-    badge and the orchestrator boot path. Auto-tune may use a heavier
-    model the operator pulled separately; that's a runtime concern,
-    not an "is the AI feature wired up" check."""
-    return is_ollama_running() and has_model(INSTALLER_MODEL)
+    """True when the Ollama service is running. Post-#685 the install
+    no longer auto-pulls any model, so the "installed" badge tracks
+    only the daemon's presence — operators pull whatever vision model
+    they want from USER_MANUAL Appendix D and select it in Settings →
+    AI Runtime → Active vision model."""
+    return is_ollama_running()
 
 
 # #685 follow-up — vision-model name patterns. Used by ``list_models()``
@@ -560,21 +565,22 @@ def _install_worker(force):
             if not _wait_for_service(timeout_s=120):
                 raise RuntimeError("Ollama installed but service didn't come up")
 
-        if force or not has_model(INSTALLER_MODEL):
+        # #685 architecture decision — install no longer auto-pulls any
+        # vision model. INSTALLER_MODEL is empty by default; the
+        # Settings → Install button just gets Ollama itself running.
+        # Operator pulls a model from USER_MANUAL Appendix D and selects
+        # it in Settings → AI Runtime. Env override SLYLED_INSTALLER_MODEL
+        # (or a non-empty force= path) still triggers a pull for
+        # operators who want the legacy auto-pull behaviour.
+        if INSTALLER_MODEL and (force or not has_model(INSTALLER_MODEL)):
             _pull_model(INSTALLER_MODEL)
-
-        # #685 follow-up — drop one warmup call here so the model is hot
-        # by the time the operator clicks Test or Run Auto-Tune. Without
-        # this, the first user-triggered call pays the full cold-load
-        # cost (qwen2.5vl:3b on CPU is 30-90 s) and the Settings -> AI
-        # Engines row stays stuck on "Running · warming up" until the
-        # operator's call returns.
-        _set_progress(phase="warm-up", percent=99,
-                       message="Loading vision model into RAM (first call cold-start)")
-        try:
-            warmup(timeout_s=120.0)
-        except Exception as _e:  # noqa: BLE001
-            log.warning("post-install warmup raised: %s", _e)
+            _set_progress(phase="warm-up", percent=99,
+                           message="Loading vision model into RAM "
+                                    "(first call cold-start)")
+            try:
+                warmup(timeout_s=120.0, model=INSTALLER_MODEL)
+            except Exception as _e:  # noqa: BLE001
+                log.warning("post-install warmup raised: %s", _e)
 
         _set_progress(phase="done", percent=100,
                        message="Ollama + vision model ready",

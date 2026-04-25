@@ -256,7 +256,7 @@ function _ollamaRuntimeRefresh(){
         _ollamaRuntimeRefreshModelList();
       }else if(!r.running){
         box.innerHTML='<span style="color:#f59e0b">Not installed</span> · '
-          +'click Install for ~2 GB bootstrap (Ollama + Moondream VLM). Pull richer models (e.g. qwen2.5vl:3b) afterwards via Settings or `ollama pull`.';
+          +'click Install for the Ollama runtime (~250 MB). No vision model is pulled — pick one from USER_MANUAL Appendix D and run `ollama pull <name>` afterwards, then select it in the dropdown below.';
         if(iBtn)iBtn.style.display='inline-block';
         if(rBtn)rBtn.style.display='none';
       }else{

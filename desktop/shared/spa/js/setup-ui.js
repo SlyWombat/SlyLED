@@ -1984,9 +1984,10 @@ function _camTuneRenderActions(){
     +'  </select></label>'
     +'<label style="font-size:.82em;color:#94a3b8;display:block;margin-top:.4em">Evaluator'
     +'  <select id="camtune-eval" style="width:100%;font-size:.82em;margin-top:.15em">'
-    +'    <option value="heuristic">Heuristic (histogram)</option>'
+    +'    <option value="analyzer" selected>Analyzer (CV — deterministic, default)</option>'
+    +'    <option value="heuristic">Heuristic (histogram only — gating)</option>'
     +'    <option value="ai" '+aiOptDisabled+'>'+aiLabel+'</option>'
-    +'    <option value="auto">Auto (AI if available)</option>'
+    +'    <option value="auto">Auto (analyzer → AI if configured)</option>'
     +'  </select></label>'
     +'<div style="font-size:.72em;margin-top:.2em">'+aiHint+'</div>'
     +'<label style="font-size:.82em;color:#94a3b8;display:block;margin-top:.4em">Max iterations'
@@ -2119,7 +2120,7 @@ function _camTuneRun(fid){
   if(!_camTuneState)return;
   if(_camTuneState.tuneRunning)return;  // #685 — guard against double-click.
   var intent=(document.getElementById('camtune-intent')||{}).value||'general';
-  var evaluator=(document.getElementById('camtune-eval')||{}).value||'heuristic';
+  var evaluator=(document.getElementById('camtune-eval')||{}).value||'analyzer';
   var maxIt=parseInt((document.getElementById('camtune-iter')||{}).value, 10)||6;
   // #685 follow-up — VLM resize preset (Tiny / Standard / Detailed).
   // Server clamps to [160, 1280] so a malformed value can't pass through.

@@ -2169,26 +2169,30 @@ Constants in `desktop/shared/mover_control.py`:
 
 ## Appendix D — Choosing an AI auto-tune vision model
 
-> Added 2026-04-25 (#685 follow-up). The orchestrator's camera auto-tune
-> AI mode runs a local vision model via Ollama; the operator chooses
-> which model from Settings → AI Runtime → "Active vision model".
+> Added 2026-04-25, revised after #685 architecture decision.
+> Auto-tune now defaults to a deterministic OpenCV `analyzer`
+> evaluator (no AI required). This appendix is for operators who want
+> to opt into a vision-language model as a secondary evaluator.
 
-### D.1 What the model does
+### D.1 Why opt-in
 
-Auto-tune sends the camera's current frame plus a JSON-schema prompt
-("score 0–100 / propose deltas to V4L2 controls") to Ollama. The model
-must **be vision-capable** AND **adhere to a constrained JSON schema**.
-A text-only model silently drops the embedded image; a poor-JSON model
-returns floats outside `0..100` or omits `deltaProposal`. Either failure
-shows up in the matrix as "AI mode applied no controls."
+The 2026-04-25 matrix run on the basement rig proved every small VLM
+tested (moondream-1.6B in particular) failed to drive auto-tune
+reliably — they copied prompt-example values instead of evaluating the
+image. The deterministic `analyzer` evaluator (histogram + LAB cast +
+intent-aware delta proposal) hits 96–98 / 100 on under-exposed cells
+where moondream peaked at 98 with extreme variance, and is correctly
+conservative on already-good frames. AI mode is now demoted to a
+direction-suggester for operators with a heavyweight model already
+selected; every iteration's delta is gated through the heuristic
+regardless of which evaluator proposed it.
 
-### D.2 Built-in default
+### D.2 No model is shipped or auto-pulled
 
-Default since v1.6.x: **`qwen2.5vl:3b`** (~3.2 GB). Reliable JSON output,
-CPU-friendly, ~5–15 s per iteration on a modern laptop CPU. Prior
-default was `moondream` (1.7 GB) but its JSON adherence was poor and
-the basement-rig matrix run found AI cells produced empty `deltaProposal`
-on every try.
+Since v1.6.x the orchestrator does NOT pre-pull any vision model. The
+"Local AI" installer component installs Ollama itself only. Operators
+who want an AI evaluator pull a model from the table below and select
+it in Settings → AI Runtime → Active vision model.
 
 ### D.3 Picking a model for your hardware
 
