@@ -576,7 +576,10 @@ function factoryReset(){
   x.send('{}');
 }
 
-function shutdownService(){
+// Renamed to match the onclick="shutdownServer()" attribute on the
+// Advanced Settings → Shutdown button. Keep shutdownService as an
+// alias so any other caller (or stale browser tab) still works.
+function shutdownServer(){
   if(!confirm('Stop the SlyLED service? The browser will lose connection.'))return;
   var x=new XMLHttpRequest();x.open('POST','/api/shutdown',true);
   x.setRequestHeader('Content-Type','application/json');
@@ -585,6 +588,7 @@ function shutdownService(){
   x.onerror=function(){document.getElementById('hs').textContent='Service stopped.';};
   x.send('{}');
 }
+var shutdownService = shutdownServer;
 
 function otaTrigger(childId){
   if(!confirm('Update this fixture to the latest firmware? It will reboot during the update.'))return;
