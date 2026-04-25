@@ -22,7 +22,7 @@ from flask import Flask, jsonify, request
 import flask.cli
 flask.cli.show_server_banner = lambda *a, **kw: None   # suppress dev-server warning (#289)
 
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 PORT = 5000
 UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
@@ -2361,13 +2361,32 @@ def _build_pong():
     return _udp_header(CMD_PONG) + payload
 
 def _read_wifi_rssi():
-    """Read WiFi RSSI from /proc/net/wireless. Returns negative dBm or 0."""
+    """Read WiFi RSSI from /proc/net/wireless. Returns negative dBm or 0.
+
+    `/proc/net/wireless` lines have the format::
+
+        wlan0: 0000   60.  -50.  -256        0  ...
+
+    The interface name is the first token followed by ``:``. Different
+    boards/distros use different predictable-interface-name prefixes —
+    Raspberry Pi keeps the legacy ``wlan*``, Orange Pi 4A (Armbian/
+    sun55iw3) ships with ``wlx<mac>``, Debian/Ubuntu with systemd-udev
+    rename rules emit ``wlp*``/``wls*``/``wlo*``. They all start with
+    ``wl``, so match the prefix instead of the literal ``wlan``.
+    """
     try:
         with open("/proc/net/wireless", "r") as f:
             for line in f:
-                if "wlan" in line:
-                    parts = line.split()
-                    return -abs(int(float(parts[3])))
+                stripped = line.lstrip()
+                # The header rows start with "Inter-" / "face" — skip them.
+                if not stripped or ":" not in stripped:
+                    continue
+                ifname = stripped.split(":", 1)[0]
+                if not ifname.startswith("wl"):
+                    continue
+                parts = stripped.split()
+                # parts[0] == "<ifname>:", parts[3] == link-level dBm.
+                return -abs(int(float(parts[3])))
     except Exception:
         pass
     return 0
