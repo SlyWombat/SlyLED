@@ -22,9 +22,12 @@ runtime person tracking via YOLOv8n and 3D scene understanding via
 Depth-Anything-V2.
 
 Every AI surface runs on the operator's own machine. Local-first
-vision models (Ollama, Moondream, LLaVA) handle camera auto-tune and
-scene review; nothing is shipped to a cloud API. Theatres, rehearsal
-rooms, and houses of worship keep their footage inside the building.
+vision models (Ollama with `qwen2.5vl`, LLaVA, Moondream, …) handle
+camera auto-tune and scene review; nothing is shipped to a cloud API.
+The orchestrator's Settings page lists every model Ollama has pulled
+locally so the operator picks one that suits their hardware. Theatres,
+rehearsal rooms, and houses of worship keep their footage inside the
+building.
 
 SlyLED is authored by an independent developer operating out of
 Ontario, Canada. It is a PLASA 2026 Innovation Award submission and
@@ -79,10 +82,10 @@ one unified world model.
 
 Every AI surface in SlyLED runs on the operator's own hardware. The
 camera auto-tune feature (v1.6) uses a local vision-language model via
-Ollama — Moondream by default, LLaVA and Qwen-VL interchangeable via
-a single environment variable. Nothing ships to a cloud API. The
-rehearsal footage on a theatre's security camera stays inside the
-theatre.
+Ollama — `qwen2.5vl:3b` by default, with Moondream, LLaVA, BakLLaVA,
+and any other vision model Ollama serves selectable from the Settings
+page. Nothing ships to a cloud API. The rehearsal footage on a
+theatre's security camera stays inside the theatre.
 
 This is a deliberate contrast with the broader AI tooling wave.
 Vision AI for stage lighting has to handle protected footage in

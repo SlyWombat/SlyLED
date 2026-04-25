@@ -22,9 +22,12 @@ camera stays inside your theatre.
 - **Heuristic** (default, always available) — histogram statistics.
   Penalises clipped highlights, shadow crush, off-target brightness.
   Works on any installation.
-- **Local VLM** — Moondream by default, switchable to LLaVA, Qwen-VL,
-  or BakLLaVA via a single env var. Needs 2 GB of disk space and
-  whatever GPU or CPU you already have.
+- **Local VLM** — `qwen2.5vl:3b` by default, switchable in Settings →
+  AI Runtime → Active vision model to anything Ollama has pulled
+  (LLaVA, Moondream, BakLLaVA, qwen2.5vl:7b, …). Pick a heavier model
+  on a discrete GPU, drop to a smaller one on an Arm SBC. ~3 GB of
+  disk space for the default; runs on whatever GPU or CPU you already
+  have.
 
 The installer component "Local AI camera auto-tune" drops a marker
 file; on first launch the orchestrator downloads Ollama, pulls the

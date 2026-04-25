@@ -34,9 +34,12 @@ proving ground for:
 - **Multi-camera point-cloud merge** (`space_mapper.py`). Three
   overlapping views stress the cross-camera consistency check that
   pro-tier installs would skip.
-- **Local-first auto-tune** (#623). Three cameras at 4K + one RPi
-  running Ollama's Moondream produced the reference numbers used in
-  the feature's release notes.
+- **Local-first auto-tune** (#623, #685). Three cameras at 4K + one RPi
+  running Ollama's `qwen2.5vl:3b` (default) produced the reference
+  numbers used in the feature's release notes. Earlier matrix runs
+  on Moondream surfaced its weak JSON adherence and drove the swap to
+  qwen2.5vl as the default plus the Settings → AI Runtime model
+  picker.
 
 ## Specifications
 
