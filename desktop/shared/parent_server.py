@@ -1781,7 +1781,11 @@ def api_fixture_update(fid):
               "fovDeg", "fovType", "cameraUrl", "cameraIp", "cameraIdx", "resolutionW", "resolutionH",
               "trackClasses", "trackClassThresholds",
               "trackFps", "trackThreshold", "trackTtl", "trackReidMm",
-              "gyroChildId", "assignedMoverId", "gyroEnabled", "smoothing"):
+              "gyroChildId", "assignedMoverId", "gyroEnabled", "smoothing",
+              # #687 — Set Home anchor: operator-confirmed (pan, tilt) DMX
+              # 16-bit values that aim the beam along the fixture's saved
+              # rotation vector. Replaces geometric kickoff guesswork.
+              "homePanDmx16", "homeTiltDmx16", "homeSetAt"):
         if k in body:
             # #Q12 — normalise fovType on write so stored value is always in
             # the whitelist (inputs go through _normalise_fov_type).
@@ -1833,6 +1837,55 @@ def api_fixture_set_aim(fid):
         ]
     _save("fixtures", _fixtures)
     return jsonify(ok=True, rotation=f.get("rotation", [0, 0, 0]))
+
+@app.post("/api/fixtures/<int:fid>/home")
+def api_fixture_set_home(fid):
+    """#687 — capture the operator-confirmed Home anchor for a DMX mover.
+
+    Body: ``{"panDmx16": 0..65535, "tiltDmx16": 0..65535}``. These are the
+    16-bit pan/tilt values (coarse << 8 | fine) that the operator drove
+    the fixture to during the Set Home modal — at this DMX, the beam aims
+    along the fixture's saved ``rotation`` vector.
+
+    Replaces the geometric kickoff chain (#682-LL / #682-C-v2) with a
+    single trusted observation.  Calibration kickoff downstream uses
+    this anchor instead of ``compute_initial_aim``.
+    """
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f:
+        return jsonify(err="Fixture not found"), 404
+    if f.get("fixtureType") != "dmx":
+        return jsonify(err="Set Home applies to DMX mover fixtures only"), 400
+    body = request.get_json(silent=True) or {}
+    try:
+        pan = int(body["panDmx16"])
+        tilt = int(body["tiltDmx16"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify(err="panDmx16 and tiltDmx16 are required ints"), 400
+    if not (0 <= pan <= 65535) or not (0 <= tilt <= 65535):
+        return jsonify(err="panDmx16/tiltDmx16 must be in [0, 65535]"), 400
+    f["homePanDmx16"] = pan
+    f["homeTiltDmx16"] = tilt
+    f["homeSetAt"] = datetime.utcnow().isoformat() + "Z"
+    _save("fixtures", _fixtures)
+    log.info("Set Home: fid=%d pan=%d tilt=%d rotation=%s",
+             fid, pan, tilt, f.get("rotation"))
+    return jsonify(ok=True,
+                   homePanDmx16=pan, homeTiltDmx16=tilt,
+                   homeSetAt=f["homeSetAt"])
+
+
+@app.delete("/api/fixtures/<int:fid>/home")
+def api_fixture_clear_home(fid):
+    """#687 — clear a previously-set Home anchor (forces re-prompt)."""
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f:
+        return jsonify(err="Fixture not found"), 404
+    for k in ("homePanDmx16", "homeTiltDmx16", "homeSetAt"):
+        f.pop(k, None)
+    _save("fixtures", _fixtures)
+    return jsonify(ok=True)
+
 
 @app.delete("/api/fixtures/<int:fid>")
 def api_fixture_delete(fid):
@@ -4800,6 +4853,15 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
                                f"{'; '.join(lock_state.get('notes') or ['unknown'])}")
         except Exception as e:
             log.warning("MOVER-CAL %d: camera lock failed (%s) — continuing", fid, e)
+    # #687 — log the Set Home anchor that scopes the rest of the cal.
+    # Operator can confirm against the Set-Home modal's saved values
+    # without grepping fixtures.json.
+    home_pan = f.get("homePanDmx16")
+    home_tilt = f.get("homeTiltDmx16")
+    if home_pan is not None and home_tilt is not None:
+        _mcal_log(job, f"Anchor: home (DMX pan={home_pan} tilt={home_tilt}) "
+                       f"-> world vector {f.get('rotation')}; "
+                       f"set {f.get('homeSetAt') or 'unknown'}")
 
     # #682-M — capture a dark reference BEFORE the beam ever comes on so
     # flash-detect can subtract the scene's static bright features from
@@ -6734,6 +6796,19 @@ def api_mover_cal_start(fid):
     bridge_ip = _get_bridge_ip()
     if not bridge_ip:
         return jsonify(err="No Art-Net bridge found — start the Art-Net engine"), 400
+    if (f.get("homePanDmx16") is None or
+            f.get("homeTiltDmx16") is None):
+        # #687 — Set Home is a precondition for cal kickoff. Without an
+        # operator-confirmed (pan, tilt) DMX -> world-vector anchor we
+        # fall back into the geometric chain that #682-LL / #682-C-v2
+        # traced as the source of "every probe behind the stage". The
+        # wizard greys out the Calibrate button when home is missing;
+        # this gate is the server-side enforcement so a stale SPA can't
+        # bypass it.
+        return jsonify(err=("Set Home before calibrating - open the fixture-edit "
+                             "dialog and use the Set Home button to drive the "
+                             "fixture along its rotation vector and confirm."),
+                        errType="home-not-set"), 412
     if not _artnet.running and not _sacn.running:  # #346
         return jsonify(err="DMX engine is not running — start it from Settings \u2192 DMX Engine"), 400
     body = request.get_json(silent=True) or {}

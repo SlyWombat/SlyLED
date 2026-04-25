@@ -118,22 +118,10 @@ function editFixture(id){
     h+='</div>';
     h+='<div id="fx-test-ch"></div>';
     h+='</div>';
-    // Orientation calibration panel
-    var orient=f.orientation||{};
-    h+='<div style="margin-top:.8em;border-top:1px solid #1e293b;padding-top:.6em">';
-    h+='<div style="font-weight:bold;font-size:.85em;margin-bottom:.4em">Motor Calibration '
-      +(orient.verified?'<span style="color:#4ade80">\u2713 Calibrated</span>':'<span style="color:#64748b">(optional)</span>')+'</div>';
-    if(orient.verified){
-      h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.3em">'
-        +'Pan: '+(orient.panSign>0?'normal':'\u21c4 reversed')
-        +' | Tilt: '+(orient.tiltSign<0?'normal':'\u21c5 reversed')
-        +'</div>';
-    } else {
-      h+='<div style="font-size:.78em;color:#64748b;margin-bottom:.3em">Use the upside-down checkbox above if truss-mounted. Run this test with live DMX for precise motor direction calibration.</div>';
-    }
-    h+='<button class="btn" onclick="_orientTest('+id+')" style="background:#4c1d95;color:#e9d5ff;font-size:.8em">Test with DMX</button>';
-    h+='<button class="btn" onclick="closeModal();_moverCalStart('+id+')" style="background:#6b21a8;color:#d8b4fe;margin-left:.5em">Calibrate'+(f.moverCalibrated?' \u2713':'')+'</button>';
-    h+='</div>';
+    // #687 \u2014 Motor Calibration / Set Home blocks render AFTER position +
+    // rotation in the new ordering. Marker placeholder; the actual HTML
+    // lives below the position/rotation block. Stored on a window state
+    // for editFixture to splice in at the right spot.
   }else if(ft==='camera'){
     h+='<label>Camera Node IP</label><input id="fx-cam-ip" value="'+escapeHtml(f.cameraIp||'')+'" placeholder="e.g. 192.168.10.50" style="width:100%;margin-bottom:.4em">';
     h+='<label>FOV (degrees)</label><input id="fx-fov" type="number" value="'+(f.fovDeg||60)+'" min="1" max="180" style="width:100%;margin-bottom:.4em">';
@@ -171,6 +159,41 @@ function editFixture(id){
   if(ft==='dmx'){
     h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.5em;cursor:pointer"><input id="fx-inverted" type="checkbox"'+(f.mountedInverted?' checked':'')+' style="width:auto"> <span style="font-size:.82em">Mounted upside-down (inverted)</span></label>';
     h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">Reverses pan and tilt motor direction for truss-mounted fixtures.</p>';
+    // #687 — Set Home block (between Mount and Motor Calibration)
+    var hasHome = f.homePanDmx16!=null && f.homeTiltDmx16!=null;
+    var setAt = f.homeSetAt ? new Date(f.homeSetAt).toLocaleString() : '';
+    h+='<div style="margin-top:.8em;border-top:1px solid #1e293b;padding-top:.6em">';
+    h+='<div style="font-weight:bold;font-size:.85em;margin-bottom:.4em">Set Home '
+      +(hasHome?'<span style="color:#4ade80">✓ '+escapeHtml(setAt)+'</span>'
+              :'<span style="color:#f59e0b">⚠ required for calibration</span>')+'</div>';
+    h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.4em">Drive the fixture manually until the beam aims along the Rotation vector above, then Confirm. This anchors calibration to one operator-verified observation.</div>';
+    h+='<button class="btn" onclick="_setHomeOpen('+id+')" style="background:#0e7490;color:#a5f3fc;font-size:.85em">'+(hasHome?'Re-Set Home':'Set Home')+'</button>';
+    if(hasHome){
+      h+=' <button class="btn" onclick="_setHomeClear('+id+')" style="background:#1e293b;color:#94a3b8;font-size:.78em;margin-left:.4em" title="Clear the saved home anchor (will require Set Home again before next cal)">Clear</button>';
+    }
+    h+='</div>';
+    // Motor Calibration block (moved here from above)
+    var orient=f.orientation||{};
+    h+='<div style="margin-top:.8em;border-top:1px solid #1e293b;padding-top:.6em">';
+    h+='<div style="font-weight:bold;font-size:.85em;margin-bottom:.4em">Motor Calibration '
+      +(orient.verified?'<span style="color:#4ade80">✓ Calibrated</span>':'<span style="color:#64748b">(optional)</span>')+'</div>';
+    if(orient.verified){
+      h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.3em">'
+        +'Pan: '+(orient.panSign>0?'normal':'⇄ reversed')
+        +' | Tilt: '+(orient.tiltSign<0?'normal':'⇅ reversed')
+        +'</div>';
+    } else {
+      h+='<div style="font-size:.78em;color:#64748b;margin-bottom:.3em">Use the upside-down checkbox above if truss-mounted. Run this test with live DMX for precise motor direction calibration.</div>';
+    }
+    h+='<button class="btn" onclick="_orientTest('+id+')" style="background:#4c1d95;color:#e9d5ff;font-size:.8em">Test with DMX</button>';
+    var calDisabled = !hasHome;
+    var calStyle = 'background:#6b21a8;color:#d8b4fe;margin-left:.5em' + (calDisabled?';opacity:.5;cursor:not-allowed':'');
+    var calOnClick = calDisabled
+      ? 'alert(\'Set Home before calibrating. Click Set Home above and drive the fixture along its rotation vector.\');return false;'
+      : 'closeModal();_moverCalStart('+id+')';
+    var calTitle = calDisabled ? 'Set Home first' : '';
+    h+='<button class="btn" onclick="'+calOnClick+'" style="'+calStyle+'" title="'+calTitle+'">Calibrate'+(f.moverCalibrated?' ✓':'')+'</button>';
+    h+='</div>';
   }
   h+='<div style="margin-top:.8em"><button class="btn btn-on" onclick="saveFixture('+id+',\''+ft+'\')">Save</button></div>';
   document.getElementById('modal-title').textContent='Edit Fixture: '+f.name;
@@ -677,4 +700,216 @@ function _dmxDetailDefaults(fid){
       });
     });
   });
+}
+
+
+// ── #687 — Set Home modal ──────────────────────────────────────────────
+//
+// Live pan/tilt sliders write DMX in real time via /api/fixtures/<fid>/dmx-test
+// (the existing endpoint we use for individual-channel manual control). On
+// Confirm, we POST the current 16-bit pan/tilt values to /api/fixtures/<fid>/home;
+// on Cancel we restore whatever the engine had before the modal opened.
+//
+// State is held on a window global because the modal innerHTML is rebuilt
+// per open and the close handler has to reach back out to read it.
+
+var _setHomeState = null;
+
+function _setHomeOpen(fid){
+  // Snapshot current fixture state so Cancel can restore. Use simple
+  // 0.5/0.5 + dimmer 0 as the safe default if nothing better is known.
+  var f = null;
+  _fixtures.forEach(function(fx){if(fx.id===fid)f=fx;});
+  if(!f){alert('Fixture not found');return;}
+  _setHomeState = {
+    fid: fid,
+    pan: (f.homePanDmx16!=null) ? (f.homePanDmx16/65535) : 0.5,
+    tilt: (f.homeTiltDmx16!=null) ? (f.homeTiltDmx16/65535) : 0.5,
+    dimmer: 0,
+    color: [0, 255, 0],
+    saved: false
+  };
+  document.getElementById('modal-title').textContent='Set Home — '+(f.name||'fixture '+fid);
+  document.getElementById('modal-body').innerHTML = _setHomeShellHtml(f);
+  document.getElementById('modal').style.display='block';
+  // Push initial DMX so the operator sees something on stage.
+  _setHomeWriteDmx();
+}
+
+function _setHomeShellHtml(f){
+  var rot = f.rotation || [0, 0, 0];
+  var s = '';
+  s += '<div style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">';
+  s += 'Drive the fixture until the beam aims along its <b>rotation vector</b> ';
+  s += '<span style="color:#cbd5e1">[tilt='+rot[0]+'°, pan='+rot[2]+'°, roll='+rot[1]+'°]</span>, ';
+  s += 'then Confirm. The saved DMX value becomes the cal-kickoff anchor (#687).';
+  s += '</div>';
+  // Pan slider
+  s += '<label style="font-size:.82em;color:#cbd5e1">Pan <span id="sh-pan-val" style="color:#64748b">DMX16='+Math.round(_setHomeState.pan*65535)+'</span></label>';
+  s += '<div style="display:flex;align-items:center;gap:.4em;margin-bottom:.5em">';
+  s += '<button class="btn" onclick="_setHomeNudge(\'pan\',-256)" style="font-size:.78em;padding:.1em .35em" title="-256 (1 coarse step)">«</button>';
+  s += '<button class="btn" onclick="_setHomeNudge(\'pan\',-32)" style="font-size:.78em;padding:.1em .35em">‹</button>';
+  s += '<input type="range" id="sh-pan" min="0" max="65535" step="1" value="'+Math.round(_setHomeState.pan*65535)+'" oninput="_setHomeSlide(\'pan\',this.value)" style="flex:1">';
+  s += '<button class="btn" onclick="_setHomeNudge(\'pan\',32)" style="font-size:.78em;padding:.1em .35em">›</button>';
+  s += '<button class="btn" onclick="_setHomeNudge(\'pan\',256)" style="font-size:.78em;padding:.1em .35em">»</button>';
+  s += '</div>';
+  // Tilt slider
+  s += '<label style="font-size:.82em;color:#cbd5e1">Tilt <span id="sh-tilt-val" style="color:#64748b">DMX16='+Math.round(_setHomeState.tilt*65535)+'</span></label>';
+  s += '<div style="display:flex;align-items:center;gap:.4em;margin-bottom:.5em">';
+  s += '<button class="btn" onclick="_setHomeNudge(\'tilt\',-256)" style="font-size:.78em;padding:.1em .35em">«</button>';
+  s += '<button class="btn" onclick="_setHomeNudge(\'tilt\',-32)" style="font-size:.78em;padding:.1em .35em">‹</button>';
+  s += '<input type="range" id="sh-tilt" min="0" max="65535" step="1" value="'+Math.round(_setHomeState.tilt*65535)+'" oninput="_setHomeSlide(\'tilt\',this.value)" style="flex:1">';
+  s += '<button class="btn" onclick="_setHomeNudge(\'tilt\',32)" style="font-size:.78em;padding:.1em .35em">›</button>';
+  s += '<button class="btn" onclick="_setHomeNudge(\'tilt\',256)" style="font-size:.78em;padding:.1em .35em">»</button>';
+  s += '</div>';
+  s += '<div style="display:flex;gap:.4em;margin:.6em 0">';
+  s += '<button class="btn" id="sh-beam-btn" onclick="_setHomeToggleBeam()" style="background:#1e3a5f;color:#93c5fd">Beam ON</button>';
+  s += '<button class="btn" onclick="_setHomeRecentre()" style="background:#1e293b;color:#cbd5e1">Recentre</button>';
+  s += '<div style="flex:1"></div>';
+  s += '<span id="sh-status" style="font-size:.75em;color:#64748b;align-self:center"></span>';
+  s += '</div>';
+  s += '<div style="margin-top:.8em;display:flex;gap:.4em;justify-content:flex-end">';
+  s += '<button class="btn" onclick="_setHomeCancel()" style="background:#1e293b;color:#cbd5e1">Cancel</button>';
+  s += '<button class="btn btn-on" onclick="_setHomeConfirm()" style="background:#0e7490;color:#a5f3fc">Confirm Home</button>';
+  s += '</div>';
+  return s;
+}
+
+function _setHomeWriteDmx(){
+  if(!_setHomeState)return;
+  var fid = _setHomeState.fid;
+  var body = {
+    pan: _setHomeState.pan,
+    tilt: _setHomeState.tilt,
+    dimmer: _setHomeState.dimmer,
+    red: _setHomeState.color[0]/255,
+    green: _setHomeState.color[1]/255,
+    blue: _setHomeState.color[2]/255
+  };
+  var x = new XMLHttpRequest();
+  x.open('POST', '/api/fixtures/'+fid+'/dmx-test', true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.onload = function(){
+    var st = document.getElementById('sh-status');
+    if(st)st.textContent = (x.status>=200 && x.status<300) ? 'live' : ('HTTP '+x.status);
+  };
+  x.onerror = function(){
+    var st = document.getElementById('sh-status');
+    if(st)st.textContent = 'DMX write failed';
+  };
+  x.send(JSON.stringify(body));
+}
+
+function _setHomeSlide(axis, val){
+  if(!_setHomeState)return;
+  var v = parseInt(val,10) / 65535;
+  if(axis==='pan')_setHomeState.pan = v;
+  else _setHomeState.tilt = v;
+  var lab = document.getElementById('sh-'+axis+'-val');
+  if(lab)lab.textContent='DMX16='+Math.round(_setHomeState[axis]*65535);
+  _setHomeWriteDmx();
+}
+
+function _setHomeNudge(axis, delta){
+  if(!_setHomeState)return;
+  var cur = Math.round(_setHomeState[axis]*65535) + delta;
+  cur = Math.max(0, Math.min(65535, cur));
+  _setHomeState[axis] = cur/65535;
+  var slider = document.getElementById('sh-'+axis);
+  if(slider)slider.value = cur;
+  var lab = document.getElementById('sh-'+axis+'-val');
+  if(lab)lab.textContent='DMX16='+cur;
+  _setHomeWriteDmx();
+}
+
+function _setHomeRecentre(){
+  if(!_setHomeState)return;
+  _setHomeState.pan = 0.5;
+  _setHomeState.tilt = 0.5;
+  var ps = document.getElementById('sh-pan'); if(ps)ps.value=Math.round(_setHomeState.pan*65535);
+  var ts = document.getElementById('sh-tilt'); if(ts)ts.value=Math.round(_setHomeState.tilt*65535);
+  var pl = document.getElementById('sh-pan-val'); if(pl)pl.textContent='DMX16='+Math.round(_setHomeState.pan*65535);
+  var tl = document.getElementById('sh-tilt-val'); if(tl)tl.textContent='DMX16='+Math.round(_setHomeState.tilt*65535);
+  _setHomeWriteDmx();
+}
+
+function _setHomeToggleBeam(){
+  if(!_setHomeState)return;
+  _setHomeState.dimmer = _setHomeState.dimmer > 0 ? 0 : 1;
+  var btn = document.getElementById('sh-beam-btn');
+  if(btn)btn.textContent = _setHomeState.dimmer>0 ? 'Beam OFF' : 'Beam ON';
+  _setHomeWriteDmx();
+}
+
+function _setHomeBlackout(){
+  // Drop dimmer to 0 so the beam isn't left on after Confirm/Cancel.
+  if(!_setHomeState)return;
+  var fid = _setHomeState.fid;
+  var x = new XMLHttpRequest();
+  x.open('POST', '/api/fixtures/'+fid+'/dmx-test', true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.send(JSON.stringify({pan:_setHomeState.pan, tilt:_setHomeState.tilt, dimmer:0}));
+}
+
+function _setHomeCancel(){
+  if(!_setHomeState)return;
+  _setHomeBlackout();
+  _setHomeState = null;
+  closeModal();
+}
+
+function _setHomeConfirm(){
+  if(!_setHomeState)return;
+  var fid = _setHomeState.fid;
+  var pan16 = Math.round(_setHomeState.pan * 65535);
+  var tilt16 = Math.round(_setHomeState.tilt * 65535);
+  var x = new XMLHttpRequest();
+  x.open('POST', '/api/fixtures/'+fid+'/home', true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.onload = function(){
+    var r = null; try{r=JSON.parse(x.responseText);}catch(e){}
+    if(x.status>=200 && x.status<300 && r && r.ok){
+      // Reflect on the local fixture so the next editFixture render
+      // shows the green check + new timestamp without a server round-trip.
+      _fixtures.forEach(function(fx){
+        if(fx.id===fid){
+          fx.homePanDmx16 = pan16;
+          fx.homeTiltDmx16 = tilt16;
+          fx.homeSetAt = (r && r.homeSetAt) || new Date().toISOString();
+        }
+      });
+      _setHomeBlackout();
+      _setHomeState = null;
+      closeModal();
+      // Re-open the fixture-edit modal so the operator sees the green
+      // check + Calibrate button now enabled.
+      editFixture(fid);
+    } else {
+      alert('Set Home failed: ' + ((r && r.err) || ('HTTP '+x.status)));
+    }
+  };
+  x.onerror = function(){alert('Set Home: network error');};
+  x.send(JSON.stringify({panDmx16: pan16, tiltDmx16: tilt16}));
+}
+
+function _setHomeClear(fid){
+  if(!confirm('Clear saved Home anchor for this fixture? Calibrate will be disabled until Set Home runs again.'))return;
+  var x = new XMLHttpRequest();
+  x.open('DELETE', '/api/fixtures/'+fid+'/home', true);
+  x.onload = function(){
+    if(x.status>=200 && x.status<300){
+      _fixtures.forEach(function(fx){
+        if(fx.id===fid){
+          delete fx.homePanDmx16;
+          delete fx.homeTiltDmx16;
+          delete fx.homeSetAt;
+        }
+      });
+      closeModal();
+      editFixture(fid);
+    } else {
+      alert('Clear Home failed: HTTP '+x.status);
+    }
+  };
+  x.send();
 }
