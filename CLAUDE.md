@@ -66,7 +66,7 @@ Camera Nodes (Orange Pi / Raspberry Pi)    ← video capture nodes
 
 ### Camera nodes
 
-Camera nodes run on Orange Pi or Raspberry Pi SBCs. Firmware is a Python Flask server (`firmware/orangepi/camera_server.py`) that responds to UDP PING with PONG (same binary protocol v4) and serves HTTP endpoints on port 5000:
+Camera nodes run on any **Linux SBC running Ubuntu 22.04+ or Debian Bookworm+** with a USB V4L2 camera (Orange Pi 4A is the primary dev board; Raspberry Pi 3B+/4/5 and Orange Pi Zero 3 / 5 are confirmed-working). Pi CSI ribbon cameras are **not** supported in v1.x — USB only. The repo path is `firmware/orangepi/` for historical reasons; the code is board-agnostic. See `docs/SUPPORTED_HARDWARE.md` for the full compatibility matrix. Firmware is a Python Flask server (`firmware/orangepi/camera_server.py`) that responds to UDP PING with PONG (same binary protocol v4) and serves HTTP endpoints on port 5000:
 
 | Method | Path | Purpose |
 |--------|------|---------|

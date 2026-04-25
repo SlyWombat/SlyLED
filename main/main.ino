@@ -51,6 +51,7 @@
 #ifdef BOARD_DMX_BRIDGE
 #include "DmxBridge.h"
 #include "ArtNetRecv.h"
+#include "SacnRecv.h"
 #endif
 
 #ifdef BOARD_GYRO
@@ -131,6 +132,8 @@ void setup() {
 
 #ifdef BOARD_DMX_BRIDGE
   dmxInit();
+  artnetInit();
+  sacnInit();   // #109 — passive sACN listener; dmxBuf is shared with Art-Net
 #elif defined(BOARD_ESP32)
   // Config now loaded from NVS — init FastLED with per-string GPIO pins
   esp32InitLeds();
@@ -300,19 +303,32 @@ void loop() {
   yield();
 
 #elif defined(BOARD_DMX_BRIDGE)
-  // DMX bridge: dumb node — Art-Net/sACN → dmxBuf → DMX output
-  // pollArtNet() is highest priority — must run frequently to catch 40Hz stream
-  pollArtNet();
+  // DMX bridge: dumb node — Art-Net/sACN → dmxBuf → DMX output.
+  // #110 — input mode selects which passthrough listener writes into
+  // dmxBuf. SlyLED mode renders actions via dmxUpdateFromLeds(); Art-Net,
+  // sACN and Auto skip that step and let UDP packets paint the buffer
+  // directly. dmxSendFrame() always runs at 40 Hz regardless of mode.
+  if (dmxCfg.inputMode == DMX_INPUT_ARTNET || dmxCfg.inputMode == DMX_INPUT_AUTO) {
+    pollArtNet();
+  }
+  if (dmxCfg.inputMode == DMX_INPUT_SACN || dmxCfg.inputMode == DMX_INPUT_AUTO) {
+    pollSacn();
+  }
   {
     static unsigned long lastFrame = 0;
     if (millis() - lastFrame >= (1000 / DMX_FRAME_HZ)) {
       lastFrame = millis();
+      if (dmxCfg.inputMode == DMX_INPUT_SLYLED) {
+        dmxUpdateFromLeds();   // SlyLED actions render via leds[] → dmxBuf
+      }
       dmxSendFrame();
     }
   }
-  pollArtNet();     // poll again after frame send
+  if (dmxCfg.inputMode == DMX_INPUT_ARTNET || dmxCfg.inputMode == DMX_INPUT_AUTO) pollArtNet();
+  if (dmxCfg.inputMode == DMX_INPUT_SACN   || dmxCfg.inputMode == DMX_INPUT_AUTO) pollSacn();
   pollUDP();        // SlyLED protocol — config, PING/PONG, status
-  pollArtNet();     // poll again after UDP
+  if (dmxCfg.inputMode == DMX_INPUT_ARTNET || dmxCfg.inputMode == DMX_INPUT_AUTO) pollArtNet();
+  if (dmxCfg.inputMode == DMX_INPUT_SACN   || dmxCfg.inputMode == DMX_INPUT_AUTO) pollSacn();
   handleClient();   // HTTP — config UI, /dmx/set, /dmx/channels
 
 #elif defined(BOARD_GYRO)

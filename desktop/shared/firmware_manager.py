@@ -124,6 +124,92 @@ def query_serial(port, timeout=3.0):
         pass
     return None
 
+# ── Camera-node version query (#203) ──────────────────────────────────────────
+
+def query_camera_node(ip, timeout=3.0):
+    """#203 — query a camera-node SBC over HTTP for its firmware version
+    and identity. Replaces the per-board serial path (camera nodes don't
+    have a USB serial console). Returns {"version": "1.6.0",
+    "hostname": "RPi-Sly1", "board": "camera", "role": "camera"} or None.
+    """
+    try:
+        import urllib.request
+        req = urllib.request.Request(f"http://{ip}:5000/status",
+                                     method="GET")
+        resp = urllib.request.urlopen(req, timeout=timeout)
+        data = json.loads(resp.read().decode("utf-8"))
+        if data.get("role") != "camera":
+            return None
+        return {
+            "version":  data.get("fwVersion") or data.get("version"),
+            "hostname": data.get("hostname") or "",
+            "board":    "camera",
+            "role":     "camera",
+        }
+    except Exception:
+        return None
+
+
+def push_camera_node(ip, registry_entry, cache_dir, registry_dir,
+                      ssh_user="orangepi", ssh_port=22, ssh_key=None,
+                      progress_cb=None):
+    """#203 — push a camera-node firmware bundle to an SBC over SSH+SCP.
+    The bundle is the .zip referenced by `registry_entry['releaseAsset']`;
+    we extract locally then SCP each member to /opt/slyled/. Restarts
+    the slyled-cam systemd service after upload."""
+    import paramiko, zipfile, tempfile
+    bundle = resolve_binary_path(registry_entry, cache_dir, registry_dir)
+    if not bundle or not Path(bundle).exists():
+        raise RuntimeError(f"firmware bundle not found: {bundle}")
+    extract_to = Path(tempfile.mkdtemp(prefix="slyled-cam-"))
+    try:
+        with zipfile.ZipFile(bundle, "r") as zf:
+            zf.extractall(extract_to)
+
+        cli = paramiko.SSHClient()
+        cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        kwargs = {"username": ssh_user, "port": ssh_port, "timeout": 10}
+        if ssh_key:
+            kwargs["key_filename"] = ssh_key
+        cli.connect(ip, **kwargs)
+        try:
+            sftp = cli.open_sftp()
+            try:
+                files = [p for p in extract_to.rglob("*") if p.is_file()]
+                total = max(1, len(files))
+                for i, src in enumerate(files):
+                    rel = src.relative_to(extract_to).as_posix()
+                    dst = f"/opt/slyled/{rel}"
+                    # Make sure parent dir exists
+                    parts = rel.split("/")
+                    cur = "/opt/slyled"
+                    for p in parts[:-1]:
+                        cur = f"{cur}/{p}"
+                        try: sftp.mkdir(cur)
+                        except IOError: pass
+                    sftp.put(str(src), dst)
+                    if progress_cb:
+                        progress_cb(int(((i + 1) / total) * 90),
+                                    f"Uploaded {rel}")
+            finally:
+                sftp.close()
+            # Restart the service so the new code takes effect.
+            if progress_cb:
+                progress_cb(95, "Restarting slyled-cam.service")
+            cli.exec_command("sudo systemctl restart slyled-cam.service")
+        finally:
+            cli.close()
+        if progress_cb:
+            progress_cb(100, f"Camera node v{registry_entry.get('version')} deployed")
+        return True
+    finally:
+        try:
+            import shutil
+            shutil.rmtree(extract_to, ignore_errors=True)
+        except Exception:
+            pass
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 def load_registry(firmware_dir):

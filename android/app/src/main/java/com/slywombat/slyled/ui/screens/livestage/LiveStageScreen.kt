@@ -518,12 +518,14 @@ private fun StageCanvas(
             val objColor = try { Color(android.graphics.Color.parseColor(obj.color ?: "#334155")) } catch (_: Exception) { Color(0xFF334155) }
             val alpha = (obj.opacity ?: 30) / 100f
 
-            // Draw as 3D box: front face + top face + side face
+            // #678 — transform.pos is the object centre; expand by ±scale/2
+            // along each axis (matches SPA scene-3d.js post-5c3626f).
+            val hw = ow / 2f; val hd = od / 2f; val hh = oh / 2f
             val pts = arrayOf(
-                project(ox, oy, oz), project(ox + ow, oy, oz),
-                project(ox + ow, oy + od, oz), project(ox, oy + od, oz),
-                project(ox, oy, oz + oh), project(ox + ow, oy, oz + oh),
-                project(ox + ow, oy + od, oz + oh), project(ox, oy + od, oz + oh)
+                project(ox - hw, oy - hd, oz - hh), project(ox + hw, oy - hd, oz - hh),
+                project(ox + hw, oy + hd, oz - hh), project(ox - hw, oy + hd, oz - hh),
+                project(ox - hw, oy - hd, oz + hh), project(ox + hw, oy - hd, oz + hh),
+                project(ox + hw, oy + hd, oz + hh), project(ox - hw, oy + hd, oz + hh)
             )
             // Draw top face
             val t0 = pts[4]; val t1 = pts[5]; val t2 = pts[6]; val t3 = pts[7]
@@ -638,13 +640,14 @@ private fun StageCanvas(
             val oh = (if (scl.size > 1) scl[1].toFloat() else 1700f)
             val od = (if (scl.size > 2) scl[2].toFloat() else 400f)
 
-            // 8 corners of the box centered on (ox, oy, oz)
-            val hw = ow / 2f; val hd = od / 2f
+            // #678 — pos is the box centre on all three axes (server writes
+            // temporal pos.z = scale[1]/2 since 8359b03). Expand by ±half.
+            val hw = ow / 2f; val hd = od / 2f; val hh = oh / 2f
             val corners = arrayOf(
-                project(ox - hw, oy - hd, oz),      project(ox + hw, oy - hd, oz),
-                project(ox + hw, oy + hd, oz),      project(ox - hw, oy + hd, oz),
-                project(ox - hw, oy - hd, oz + oh), project(ox + hw, oy - hd, oz + oh),
-                project(ox + hw, oy + hd, oz + oh), project(ox - hw, oy + hd, oz + oh)
+                project(ox - hw, oy - hd, oz - hh), project(ox + hw, oy - hd, oz - hh),
+                project(ox + hw, oy + hd, oz - hh), project(ox - hw, oy + hd, oz - hh),
+                project(ox - hw, oy - hd, oz + hh), project(ox + hw, oy - hd, oz + hh),
+                project(ox + hw, oy + hd, oz + hh), project(ox - hw, oy + hd, oz + hh)
             )
             // Draw 12 edges
             val edges = listOf(0 to 1, 1 to 2, 2 to 3, 3 to 0,
@@ -657,15 +660,15 @@ private fun StageCanvas(
                 }
             }
 
-            // Floor circle as ground marker
-            val floorP = project(ox, oy, oz)
+            // Floor circle as ground marker (feet — box bottom)
+            val floorP = project(ox, oy, oz - hh)
             if (floorP != null) {
                 drawCircle(col.copy(alpha = 0.3f), 12f * s, floorP)
                 drawCircle(col.copy(alpha = 0.6f), 12f * s, floorP, style = Stroke(2f))
             }
 
             // Label above box top
-            val topCenter = project(ox, oy, oz + oh)
+            val topCenter = project(ox, oy, oz + hh)
             val labelP = topCenter ?: floorP ?: continue
             val label = obj.name.ifBlank { "?" }
             val labelStyle = TextStyle(color = col, fontSize = (11f * s).coerceIn(8f, 16f).sp)

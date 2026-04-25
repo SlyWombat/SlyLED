@@ -3,6 +3,9 @@ package com.slywombat.slyled.data.model
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 
 @Serializable
 data class StatusResponse(
@@ -212,6 +215,15 @@ data class Stage(
     val w: Double = 10.0,
     val h: Double = 5.0,
     val d: Double = 10.0,
+    val stageBoundsManual: Boolean = false,
+    val auto: StageAuto? = null,
+)
+
+@Serializable
+data class StageAuto(
+    val w: Double = 0.0,
+    val h: Double = 0.0,
+    val d: Double = 0.0,
 )
 
 // ── Fixtures (Phase 2) ─────────────────────────────────────────────────
@@ -449,33 +461,28 @@ data class DmxStatus(
     val nodes: Int = 0,
 ) {
     companion object {
-        /** Parse the nested /api/dmx/status response into a flat DmxStatus. */
+        /** Parse the nested /api/dmx/status response into a flat DmxStatus.
+         *  #648 — use kotlinx booleanOrNull / intOrNull / contentOrNull
+         *  helpers so JSON booleans/numbers parse without false-negative
+         *  string compares (the previous `content == "true"` check failed
+         *  in some cases, leaving Status reading Stopped while the engine
+         *  was running). */
         fun fromJson(json: kotlinx.serialization.json.JsonObject): DmxStatus {
-            val artnet = json["artnet"]?.let {
-                if (it is kotlinx.serialization.json.JsonObject) it else null
-            }
-            val sacn = json["sacn"]?.let {
-                if (it is kotlinx.serialization.json.JsonObject) it else null
-            }
-            // Prefer artnet if running, else sacn
-            val engine = if (artnet?.get("running")?.let {
-                    it is kotlinx.serialization.json.JsonPrimitive && it.content == "true"
-                } == true) artnet else sacn
-            val running = engine?.get("running")?.let {
-                it is kotlinx.serialization.json.JsonPrimitive && it.content == "true"
-            } ?: false
+            val artnet = json["artnet"] as? kotlinx.serialization.json.JsonObject
+            val sacn = json["sacn"] as? kotlinx.serialization.json.JsonObject
+            fun running(o: kotlinx.serialization.json.JsonObject?): Boolean =
+                (o?.get("running") as? kotlinx.serialization.json.JsonPrimitive)?.booleanOrNull == true
+            val engine = if (running(artnet)) artnet else if (running(sacn)) sacn else artnet ?: sacn
+            val isRunning = running(engine)
             val uniArr = engine?.get("universes")
             val universes = if (uniArr is kotlinx.serialization.json.JsonArray) uniArr.size else 0
-            val fps = engine?.get("frameRate")?.let {
-                if (it is kotlinx.serialization.json.JsonPrimitive) it.content.toIntOrNull() else null
-            } ?: 0
-            val protocol = engine?.get("protocol")?.let {
-                if (it is kotlinx.serialization.json.JsonPrimitive) it.content else null
-            } ?: ""
-            val nodes = engine?.get("discoveredNodes")?.let {
-                if (it is kotlinx.serialization.json.JsonPrimitive) it.content.toIntOrNull() else null
-            } ?: 0
-            return DmxStatus(running, universes, fps, protocol, nodes)
+            val fps = (engine?.get("frameRate") as? kotlinx.serialization.json.JsonPrimitive)
+                ?.intOrNull ?: 0
+            val protocol = (engine?.get("protocol") as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull ?: ""
+            val nodes = (engine?.get("discoveredNodes") as? kotlinx.serialization.json.JsonPrimitive)
+                ?.intOrNull ?: 0
+            return DmxStatus(isRunning, universes, fps, protocol, nodes)
         }
     }
 }

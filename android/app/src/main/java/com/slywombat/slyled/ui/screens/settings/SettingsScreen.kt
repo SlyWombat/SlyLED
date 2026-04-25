@@ -54,15 +54,20 @@ fun SettingsScreen(
     var stageHcm by remember(settings.canvasH) { mutableStateOf((settings.canvasH / 10).toString()) }
     var stageDcm by remember { mutableStateOf("150") }
 
-    // Load stage depth from API
+    // #649 — prefer manual stage when stageBoundsManual=true; fall back to
+    // server's auto-derived values when manual is unset. Reading raw w/h/d
+    // can yield the auto bounds because the server overwrites _stage when
+    // manual is off — so always pick the right source explicitly.
     LaunchedEffect(Unit) {
         try {
             val stage = viewModel.getStage()
             if (stage != null) {
-                stageDcm = (stage.d * 100).toInt().toString()
-                // Also sync W/H from stage (authoritative source)
-                stageWcm = (stage.w * 100).toInt().toString()
-                stageHcm = (stage.h * 100).toInt().toString()
+                val w = if (stage.stageBoundsManual || stage.auto == null) stage.w else stage.auto.w
+                val h = if (stage.stageBoundsManual || stage.auto == null) stage.h else stage.auto.h
+                val d = if (stage.stageBoundsManual || stage.auto == null) stage.d else stage.auto.d
+                stageWcm = (w * 100).toInt().toString()
+                stageHcm = (h * 100).toInt().toString()
+                stageDcm = (d * 100).toInt().toString()
             }
         } catch (_: Exception) {}
     }
@@ -72,14 +77,12 @@ fun SettingsScreen(
     var showResetConfirm by remember { mutableStateOf(false) }
     var unitsExpanded by remember { mutableStateOf(false) }
 
-    // File pickers for config/show import
+    // File picker for show import (config import removed in #649 —
+    // operator app does not edit project state).
     fun readFileAsString(uri: Uri): String? {
         return try {
             context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText()
         } catch (_: Exception) { null }
-    }
-    val configPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { readFileAsString(it)?.let { json -> viewModel.importConfig(json) } }
     }
     val showPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let { readFileAsString(it)?.let { json -> viewModel.importShow(json) } }
@@ -166,7 +169,8 @@ fun SettingsScreen(
                     }
                     Spacer(Modifier.height(8.dp))
 
-                    // Stage dimensions (cm)
+                    // Stage dimensions (cm) — read-only on the operator app
+                    // (#649): editing the stage belongs in the desktop SPA.
                     Text("Stage Dimensions (${if (units == 0) "cm" else "approx cm"})",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -176,25 +180,25 @@ fun SettingsScreen(
                     ) {
                         OutlinedTextField(
                             value = stageWcm,
-                            onValueChange = { stageWcm = it.filter { c -> c.isDigit() } },
+                            onValueChange = {},
+                            readOnly = true,
                             label = { Text("W") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
                             modifier = Modifier.weight(1f)
                         )
                         OutlinedTextField(
                             value = stageHcm,
-                            onValueChange = { stageHcm = it.filter { c -> c.isDigit() } },
+                            onValueChange = {},
+                            readOnly = true,
                             label = { Text("H") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
                             modifier = Modifier.weight(1f)
                         )
                         OutlinedTextField(
                             value = stageDcm,
-                            onValueChange = { stageDcm = it.filter { c -> c.isDigit() } },
+                            onValueChange = {},
+                            readOnly = true,
                             label = { Text("D") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
                             modifier = Modifier.weight(1f)
                         )
@@ -230,19 +234,16 @@ fun SettingsScreen(
 
                     Button(
                         onClick = {
-                            val wCm = stageWcm.toIntOrNull() ?: 300
-                            val hCm = stageHcm.toIntOrNull() ?: 200
-                            val dCm = stageDcm.toIntOrNull() ?: 150
+                            // #649 — operator app does not edit stage; only
+                            // local-preference fields go through saveSettings.
                             viewModel.saveSettings(
                                 name = name,
                                 units = units,
-                                canvasW = wCm * 10,  // cm → mm
-                                canvasH = hCm * 10,
+                                canvasW = settings.canvasW,
+                                canvasH = settings.canvasH,
                                 darkMode = darkMode,
                                 logging = logging
                             )
-                            // Also save stage via stage API (cm → meters)
-                            viewModel.saveStage(wCm / 100.0, hCm / 100.0, dCm / 100.0)
                         },
                         enabled = !isSaving,
                         modifier = Modifier.fillMaxWidth()
@@ -260,38 +261,8 @@ fun SettingsScreen(
                 }
             }
 
-            // Config Save/Load Card
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        "Configuration",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { viewModel.exportConfig() },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Save Config")
-                        }
-                        OutlinedButton(
-                            onClick = { configPicker.launch("application/json") },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Load Config")
-                        }
-                    }
-                }
-            }
+            // #649 — Save/Load Config removed: editing the project belongs
+            // on the desktop SPA. Show import/export stays for live ops.
 
             // Show Save/Load Card
             Card(modifier = Modifier.fillMaxWidth()) {

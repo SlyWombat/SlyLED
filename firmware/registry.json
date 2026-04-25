@@ -109,14 +109,14 @@
             "buildFlags": "-DGYRO_BOARD"
         },
         {
-            "id": "camera-orangepi",
-            "name": "Camera Node (Orange Pi)",
-            "description": "RTSP camera streaming node with web UI and UDP discovery",
-            "board": "orangepi",
-            "version": "1.5.1",
+            "id": "camera-node",
+            "name": "Camera Node (Linux SBC)",
+            "description": "USB V4L2 camera node — Flask + UDP discovery, runs on any Debian/Ubuntu SBC (Orange Pi, Raspberry Pi)",
+            "board": "camera",
+            "version": "1.6.0",
             "file": "orangepi/camera_server.py",
-            "releaseAsset": "camera-firmware-v1.5.1.zip",
-            "sha256": "424f7dbe5209075fd17ed6601e010681e73857cfbd7982ab372141c0a9f5d581",
+            "releaseAsset": "camera-firmware-v1.6.0.zip",
+            "sha256": "",
             "flashMethod": "ssh"
         }
     ]

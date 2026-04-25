@@ -118,12 +118,15 @@ if reg_path.exists():
 HELP_DIR  = (HERE / ".." / ".." / "docs" / "help").resolve()
 MANUAL_EN = (HERE / ".." / ".." / "docs" / "USER_MANUAL.md").resolve()
 MANUAL_FR = (HERE / ".." / ".." / "docs" / "USER_MANUAL_fr.md").resolve()
+BUILD_DIR = (HERE / ".." / ".." / "docs" / "build").resolve()
 if HELP_DIR.exists():
     args += ["--add-data", f"{HELP_DIR};docs/help"]
 if MANUAL_EN.exists():
     args += ["--add-data", f"{MANUAL_EN};docs"]
 if MANUAL_FR.exists():
     args += ["--add-data", f"{MANUAL_FR};docs"]
+if BUILD_DIR.exists():
+    args += ["--add-data", f"{BUILD_DIR};docs/build"]
 
 args.append(str(SHARED / "main.py"))
 

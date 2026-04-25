@@ -17,6 +17,16 @@
 constexpr uint8_t DMX_CH_NAME_LEN    = 12;
 constexpr uint8_t DMX_MAX_CH_PER_FIX = 24;  // max channels per fixture profile
 
+// #110 — input mode selector. The bridge can either render its own
+// SlyLED actions into dmxBuf via dmxUpdateFromLeds() (mode 0), or accept
+// external Art-Net (1) / sACN (2) packets that write directly into the
+// universe buffer. Mode 3 listens for both passthrough protocols
+// simultaneously and lets the last received packet win.
+constexpr uint8_t DMX_INPUT_SLYLED = 0;
+constexpr uint8_t DMX_INPUT_ARTNET = 1;
+constexpr uint8_t DMX_INPUT_SACN   = 2;
+constexpr uint8_t DMX_INPUT_AUTO   = 3;
+
 // DMX bridge config (persisted to NVS on ESP32, RAM-only on Giga)
 struct DmxBridgeConfig {
   uint8_t  subnet;                                // Art-Net subnet (0-15, default 0)
@@ -24,6 +34,7 @@ struct DmxBridgeConfig {
   uint16_t startAddress;                          // DMX start address (1-512)
   uint8_t  channelsPerFixture;                    // channels per fixture (e.g., 13)
   uint8_t  fixtureCount;                          // number of fixtures addressed
+  uint8_t  inputMode;                              // #110 — DMX_INPUT_*
   char     channelNames[DMX_MAX_CH_PER_FIX][DMX_CH_NAME_LEN]; // per-channel labels
 };
 

@@ -22,7 +22,7 @@ from flask import Flask, jsonify, request
 import flask.cli
 flask.cli.show_server_banner = lambda *a, **kw: None   # suppress dev-server warning (#289)
 
-VERSION = "1.5.1"
+VERSION = "1.6.0"
 PORT = 5000
 UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
@@ -367,6 +367,171 @@ def camera_controls_set():
     saved_path.write_text(json.dumps(existing, indent=2))
     log.info("V4L2 cam%d: set %s, saved to %s", cam_idx, applied, saved_path)
     return jsonify(ok=True, applied=applied)
+
+
+# ── Camera settings slots + auto-tune (#623) ───────────────────────────
+
+V4L2_SLOTS_DIR = V4L2_SETTINGS_DIR  # same dir, named cam<idx>.slot.<name>.json
+
+
+def _slot_path(cam_idx, name):
+    safe = "".join(c for c in name if c.isalnum() or c in "-_")[:32] or "default"
+    return V4L2_SETTINGS_DIR / f"cam{cam_idx}.slot.{safe}.json"
+
+
+@app.get("/camera/slots")
+def camera_slots_list():
+    """List saved settings slots for a camera. Query: ?cam=0"""
+    cam_idx = int(request.args.get("cam", 0))
+    prefix = f"cam{cam_idx}.slot."
+    slots = []
+    for p in sorted(V4L2_SETTINGS_DIR.glob(f"{prefix}*.json")):
+        try:
+            settings = json.loads(p.read_text())
+            slots.append({
+                "name": p.stem.split(".slot.", 1)[-1],
+                "settings": settings,
+            })
+        except Exception:
+            pass
+    return jsonify(ok=True, cam=cam_idx, slots=slots)
+
+
+@app.post("/camera/slots")
+def camera_slots_save():
+    """Save the current V4L2 control set as a named slot.
+    Body: {cam: 0, name: "Stage Right", settings: {brightness: -10, ...}}"""
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    name = (body.get("name") or "").strip()
+    settings = body.get("settings") or {}
+    if not name:
+        return jsonify(ok=False, err="name required"), 400
+    p = _slot_path(cam_idx, name)
+    p.write_text(json.dumps(settings, indent=2))
+    return jsonify(ok=True, slot=p.name)
+
+
+@app.post("/camera/slots/load")
+def camera_slots_load():
+    """Apply a saved slot's V4L2 controls.
+    Body: {cam: 0, name: "Stage Right"}"""
+    import subprocess
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    name = (body.get("name") or "").strip()
+    p = _slot_path(cam_idx, name)
+    if not p.exists():
+        return jsonify(ok=False, err="slot not found"), 404
+    cameras = _hw_info.get("cameras", [])
+    if cam_idx >= len(cameras):
+        return jsonify(ok=False, err="Invalid camera index"), 400
+    dev = cameras[cam_idx]["device"]
+    settings = json.loads(p.read_text())
+    for k, v in settings.items():
+        try:
+            subprocess.run(["v4l2-ctl", "-d", dev, "--set-ctrl", f"{k}={v}"],
+                           capture_output=True, timeout=3)
+        except Exception as e:
+            log.warning("v4l2 slot-load %s=%s failed: %s", k, v, e)
+    # Persist as the active settings too so a reboot keeps the slot.
+    (V4L2_SETTINGS_DIR / f"cam{cam_idx}.json").write_text(
+        json.dumps(settings, indent=2))
+    return jsonify(ok=True, applied=settings)
+
+
+@app.delete("/camera/slots")
+def camera_slots_delete():
+    """Delete a slot. Query: ?cam=0&name=Stage Right"""
+    cam_idx = int(request.args.get("cam", 0))
+    name = (request.args.get("name") or "").strip()
+    p = _slot_path(cam_idx, name)
+    if p.exists():
+        p.unlink()
+        return jsonify(ok=True)
+    return jsonify(ok=False, err="slot not found"), 404
+
+
+def _frame_quality(frame):
+    """Heuristic image-quality stats used by the auto-tune feedback loop:
+    mean luminance (target ~120/255), contrast (Y std-dev), and per-channel
+    means used for a gray-world white-balance check."""
+    import cv2 as _cv
+    import numpy as _np
+    if frame is None or frame.size == 0:
+        return None
+    gray = _cv.cvtColor(frame, _cv.COLOR_BGR2GRAY)
+    mean_y = float(_np.mean(gray))
+    std_y = float(_np.std(gray))
+    b, g, r = _cv.split(frame)
+    return {
+        "meanY": mean_y,
+        "stdY": std_y,
+        "meanR": float(_np.mean(r)),
+        "meanG": float(_np.mean(g)),
+        "meanB": float(_np.mean(b)),
+        "underExp": (mean_y < 60.0),
+        "overExp":  (mean_y > 200.0),
+        "lowContrast": (std_y < 25.0),
+    }
+
+
+@app.post("/camera/auto-tune")
+def camera_auto_tune():
+    """#623 — short auto-tune loop. Captures a frame, evaluates quality,
+    nudges the V4L2 brightness/contrast/saturation controls toward target
+    ranges, and iterates up to 5 times. The converged settings are saved
+    to ``cam<idx>.json`` and (if requested) into a named slot.
+
+    Body: {cam: 0, slot: "auto", maxIters: 5}
+    """
+    import subprocess
+    import time as _time
+    body = request.get_json(silent=True) or {}
+    cam_idx = body.get("cam", 0)
+    slot_name = (body.get("slot") or "").strip()
+    max_iters = int(body.get("maxIters", 5))
+    cameras = _hw_info.get("cameras", [])
+    if cam_idx >= len(cameras):
+        return jsonify(ok=False, err="Invalid camera index"), 400
+    dev = cameras[cam_idx]["device"]
+    history = []
+    # Seed from current saved settings (if any).
+    saved_path = V4L2_SETTINGS_DIR / f"cam{cam_idx}.json"
+    settings = json.loads(saved_path.read_text()) if saved_path.exists() else {}
+    settings.setdefault("brightness", 0)
+    settings.setdefault("contrast", 32)
+    settings.setdefault("saturation", 64)
+
+    for it in range(max_iters):
+        frame = _capture_frame_bgr(dev)
+        if frame is None:
+            return jsonify(ok=False, err="capture failed"), 503
+        q = _frame_quality(frame) or {}
+        history.append({"iter": it, "quality": q, "settings": dict(settings)})
+        if not (q.get("underExp") or q.get("overExp") or q.get("lowContrast")):
+            break  # converged
+        if q.get("underExp"):
+            settings["brightness"] = min(int(settings["brightness"]) + 8, 64)
+        elif q.get("overExp"):
+            settings["brightness"] = max(int(settings["brightness"]) - 8, -64)
+        if q.get("lowContrast"):
+            settings["contrast"] = min(int(settings["contrast"]) + 6, 95)
+        for k, v in settings.items():
+            try:
+                subprocess.run(["v4l2-ctl", "-d", dev,
+                                "--set-ctrl", f"{k}={v}"],
+                               capture_output=True, timeout=3)
+            except Exception:
+                pass
+        _time.sleep(0.25)  # let the sensor settle before re-grading
+
+    # Persist final settings as the active set.
+    saved_path.write_text(json.dumps(settings, indent=2))
+    if slot_name:
+        _slot_path(cam_idx, slot_name).write_text(json.dumps(settings, indent=2))
+    return jsonify(ok=True, settings=settings, slot=slot_name or None,
+                   iterations=len(history), history=history)
 
 
 # ── mDNS advertisement ──────────────────────────────────────────────────
@@ -972,6 +1137,67 @@ def _cv_capture(device, timeout=5):
                 _time.sleep(0.5)
     return None
 
+
+def _cli_capture_jpeg(device, res):
+    """#620 — fallback capture path used when OpenCV V4L2 fails (seen on
+    Raspberry Pi 3 with fw 1.3.0). Mirrors the tool list used by /snapshot
+    and returns raw JPEG bytes; callers decode to numpy when needed."""
+    import subprocess as _sp
+    tools = [
+        (["/usr/bin/fswebcam", "-d", device, "--no-banner", "-r", res,
+          "--jpeg", "85", "-"], "fswebcam"),
+        (["/usr/bin/ffmpeg", "-y", "-f", "v4l2", "-i", device,
+          "-frames:v", "1", "-f", "image2", "-c:v", "mjpeg", "pipe:1"],
+         "ffmpeg"),
+        (["/usr/bin/v4l2-ctl", "-d", device,
+          "--set-fmt-video=pixelformat=MJPG", "--stream-mmap",
+          "--stream-count=1", "--stream-to=-"], "v4l2-ctl"),
+    ]
+    for cmd, name in tools:
+        if not os.path.exists(cmd[0]):
+            continue
+        try:
+            proc = _sp.run(cmd, capture_output=True, timeout=10)
+            if proc.returncode == 0 and proc.stdout:
+                return proc.stdout, name
+            log.warning("Fallback capture with %s failed: exit %d, stderr: %s",
+                        name, proc.returncode, proc.stderr[:200])
+        except Exception as e:
+            log.warning("Fallback capture with %s error: %s", name, e)
+    return None, None
+
+
+def _capture_frame_bgr(device, res_hint=None):
+    """#620 — OpenCV-first then CLI fallback, always returning a numpy BGR
+    frame (or None). Lets /scan succeed on hardware where V4L2 OpenCV
+    fails but fswebcam/ffmpeg still work."""
+    frame = _cv_capture(device)
+    if frame is not None:
+        return frame
+    # Build a resolution string for CLI tools — match /snapshot's logic.
+    if not res_hint:
+        cam_entry = next((c for c in _hw_info.get("cameras", [])
+                          if c.get("device") == device), None)
+        rw = (cam_entry or {}).get("resW") or _config.get("resolutionW", 1920)
+        rh = (cam_entry or {}).get("resH") or _config.get("resolutionH", 1080)
+        res_hint = f"{rw}x{rh}"
+    jpeg, tool = _cli_capture_jpeg(device, res_hint)
+    if not jpeg:
+        return None
+    try:
+        import cv2
+        import numpy as np
+        arr = np.frombuffer(jpeg, dtype=np.uint8)
+        bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if bgr is not None:
+            log.info("Capture used %s fallback for %s (%d bytes)",
+                     tool, device, len(jpeg))
+        return bgr
+    except Exception as e:
+        log.warning("Failed to decode fallback JPEG from %s: %s", device, e)
+        return None
+
+
 # ── Object detection ──────────────────────────────────────────────────
 
 _detector = None
@@ -1027,9 +1253,11 @@ def scan():
 
     dev = cameras[cam_idx]["device"]
 
-    # Capture frame via OpenCV
+    # #620 — capture via OpenCV; fall back to fswebcam/ffmpeg if V4L2 OpenCV
+    # fails (Raspberry Pi 3 fw 1.3.0 symptom). /snapshot already chains the
+    # same tools — /scan now matches.
     t0 = time.monotonic()
-    frame = _cv_capture(dev)
+    frame = _capture_frame_bgr(dev)
     capture_ms = (time.monotonic() - t0) * 1000
 
     if frame is None:

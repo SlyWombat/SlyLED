@@ -23,6 +23,7 @@
 
 #ifdef BOARD_DMX_BRIDGE
 #include "ArtNetRecv.h"
+#include "SacnRecv.h"
 #endif
 
 #ifdef BOARD_GYRO
@@ -408,9 +409,10 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
         n = dmxCfg.startAddress + dmxCfg.channelsPerFixture - 1;
     char buf[3072];
     int pos = snprintf(buf, sizeof(buf),
-      "{\"subnet\":%u,\"universe\":%u,\"start\":%u,\"chPerFix\":%u,\"fixCount\":%u,"
+      "{\"subnet\":%u,\"universe\":%u,\"inputMode\":%u,\"start\":%u,\"chPerFix\":%u,\"fixCount\":%u,"
       "\"frames\":%lu,\"active\":%s,\"selfTest\":%s,\"dePin\":%u,\"names\":[",
-      (unsigned)dmxCfg.subnet, (unsigned)dmxCfg.universe, dmxCfg.startAddress, dmxCfg.channelsPerFixture,
+      (unsigned)dmxCfg.subnet, (unsigned)dmxCfg.universe, (unsigned)dmxCfg.inputMode,
+      dmxCfg.startAddress, dmxCfg.channelsPerFixture,
       dmxCfg.fixtureCount, (unsigned long)dmxFrameCount,
       dmxOutputActive ? "true" : "false",
       dmxSelfTestOk ? "true" : "false",
@@ -423,8 +425,10 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
       pos += snprintf(buf + pos, sizeof(buf) - pos, "%s%u", i > dmxCfg.startAddress ? "," : "", dmxBuf[i]);
     }
     pos += snprintf(buf + pos, sizeof(buf) - pos, "],"
-      "\"artnetRx\":%lu,\"artnetPps\":%lu,\"artnetSender\":\"%s\"}",
-      (unsigned long)artnetRxCount, (unsigned long)artnetPps, artnetLastSender);
+      "\"artnetRx\":%lu,\"artnetPps\":%lu,\"artnetSender\":\"%s\","
+      "\"sacnRx\":%lu,\"sacnPps\":%lu,\"sacnSender\":\"%s\"}",
+      (unsigned long)artnetRxCount, (unsigned long)artnetPps, artnetLastSender,
+      (unsigned long)sacnRxCount, (unsigned long)sacnPps, sacnLastSender);
     sendBuf(client, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: %d\r\n\r\n", pos);
     // Send in chunks to avoid WiFi TX buffer truncation (~280 bytes limit)
     for (int sent = 0; sent < pos; ) {
@@ -451,11 +455,22 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
       int fc = jsonGetInt(body, "fixCount", -1);
       int sn = jsonGetInt(body, "subnet", -1);
       int uni = jsonGetInt(body, "universe", -1);
+      int im = jsonGetInt(body, "inputMode", -1);  // #110
+      bool universeChanged = false;
       if (sa >= 1 && sa <= 512) dmxCfg.startAddress = (uint16_t)sa;
       if (cpf >= 1 && cpf <= DMX_MAX_CH_PER_FIX) dmxCfg.channelsPerFixture = (uint8_t)cpf;
       if (fc >= 1 && fc <= 170) dmxCfg.fixtureCount = (uint8_t)fc;
-      if (sn >= 0 && sn <= 15) dmxCfg.subnet = (uint8_t)sn;
-      if (uni >= 0 && uni <= 15) dmxCfg.universe = (uint8_t)uni;
+      if (sn >= 0 && sn <= 15 && dmxCfg.subnet != (uint8_t)sn) {
+        dmxCfg.subnet = (uint8_t)sn;
+        universeChanged = true;
+      }
+      if (uni >= 0 && uni <= 15 && dmxCfg.universe != (uint8_t)uni) {
+        dmxCfg.universe = (uint8_t)uni;
+        universeChanged = true;
+      }
+      if (im >= DMX_INPUT_SLYLED && im <= DMX_INPUT_AUTO) {
+        dmxCfg.inputMode = (uint8_t)im;
+      }
       // Parse channel names from "names":["Motor","Dim",...]
       char* namesArr = strstr(body, "\"names\"");
       if (namesArr) {
@@ -480,6 +495,12 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
         }
       }
       dmxSaveConfig();
+      // #109/#110 — universe change requires sACN to leave the old
+      // multicast group and join the new one. Art-Net is unicast/broadcast
+      // and reads the universe live so it doesn't need rejoining.
+      if (universeChanged) {
+        sacnRejoin();
+      }
     }
     sendJsonOk(client);
 #endif

@@ -127,7 +127,79 @@ def status():
         "platform": platform.system().lower(),
         "progress": prog,
         "installed": running and model,
+        "warm": _warm_state.get("warm", False),
+        "warmedAt": _warm_state.get("warmedAt"),
+        "lastError": _warm_state.get("lastError"),
     }
+
+
+# ── Warm-up + test harness (#NEW — boot-time prefetch) ─────────────────
+
+_warm_state = {"warm": False, "warmedAt": None, "lastError": None}
+
+
+def warmup(timeout_s: float = 60.0):
+    """Send a single tiny generate request so the model is loaded into RAM
+    and subsequent calls are sub-second. No-op when the service isn't
+    running or the model isn't pulled — start_install() takes precedence
+    over warmup."""
+    if not (is_ollama_running() and has_model()):
+        _warm_state["lastError"] = "service or model not ready"
+        return False
+    try:
+        req = urllib.request.Request(
+            f"{OLLAMA_URL}/api/generate",
+            data=json.dumps({
+                "model": OLLAMA_MODEL,
+                "prompt": "ping",
+                "stream": False,
+                "keep_alive": "10m",
+                "options": {"num_predict": 1},
+            }).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            resp.read()
+        _warm_state["warm"] = True
+        _warm_state["warmedAt"] = time.time()
+        _warm_state["lastError"] = None
+        return True
+    except Exception as e:
+        _warm_state["lastError"] = str(e)
+        _warm_state["warm"] = False
+        return False
+
+
+def run_test(prompt: str = "Reply with the single word: pong",
+             timeout_s: float = 60.0):
+    """Fixed-prompt test harness. Returns {ok, response, ms, err}."""
+    if not (is_ollama_running() and has_model()):
+        return {"ok": False, "err": "Ollama service or model not ready"}
+    t0 = time.time()
+    try:
+        req = urllib.request.Request(
+            f"{OLLAMA_URL}/api/generate",
+            data=json.dumps({
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "keep_alive": "10m",
+                "options": {"num_predict": 16},
+            }).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            data = json.loads(resp.read().decode())
+        ms = int((time.time() - t0) * 1000)
+        _warm_state["warm"] = True
+        _warm_state["warmedAt"] = time.time()
+        return {"ok": True, "response": (data.get("response") or "").strip(),
+                "ms": ms, "model": OLLAMA_MODEL}
+    except Exception as e:
+        return {"ok": False, "err": str(e),
+                "ms": int((time.time() - t0) * 1000)}
 
 
 # ── Install steps ───────────────────────────────────────────────────────

@@ -83,6 +83,7 @@ void dmxLoadConfig() {
     dmxCfg.startAddress       = 1;
     dmxCfg.channelsPerFixture = 13;
     dmxCfg.fixtureCount       = 1;
+    dmxCfg.inputMode          = DMX_INPUT_AUTO;  // #110 — listen for both passthrough protocols by default
     memset(dmxCfg.channelNames, 0, sizeof(dmxCfg.channelNames));
     strncpy(dmxCfg.channelNames[0], "Pan", DMX_CH_NAME_LEN - 1);
     strncpy(dmxCfg.channelNames[1], "Tilt", DMX_CH_NAME_LEN - 1);
@@ -124,6 +125,7 @@ void dmxLoadConfig() {
   dmxCfg.startAddress       = prefs.getUShort("startAddr", 1);
   dmxCfg.channelsPerFixture = prefs.getUChar("chPerFix", 13);
   dmxCfg.fixtureCount       = prefs.getUChar("fixCount", 1);
+  dmxCfg.inputMode          = prefs.getUChar("inputMode", DMX_INPUT_AUTO);  // #110
   memset(dmxCfg.channelNames, 0, sizeof(dmxCfg.channelNames));
   for (uint8_t i = 0; i < DMX_MAX_CH_PER_FIX; i++) {
     char key[8];
@@ -143,6 +145,7 @@ void dmxSaveConfig() {
   prefs.putUShort("startAddr", dmxCfg.startAddress);
   prefs.putUChar("chPerFix", dmxCfg.channelsPerFixture);
   prefs.putUChar("fixCount", dmxCfg.fixtureCount);
+  prefs.putUChar("inputMode", dmxCfg.inputMode);  // #110
   for (uint8_t i = 0; i < DMX_MAX_CH_PER_FIX; i++) {
     char key[8];
     snprintf(key, sizeof(key), "cn%u", i);
@@ -162,6 +165,7 @@ void dmxInit() {
   dmxLoadConfig();
   if (dmxCfg.subnet > 15) dmxCfg.subnet = 0;
   if (dmxCfg.universe > 15) dmxCfg.universe = 0;
+  if (dmxCfg.inputMode > DMX_INPUT_AUTO) dmxCfg.inputMode = DMX_INPUT_AUTO;  // #110
   if (dmxCfg.startAddress < 1) dmxCfg.startAddress = 1;
   if (dmxCfg.channelsPerFixture < 1) dmxCfg.channelsPerFixture = 13;
   if (dmxCfg.fixtureCount < 1) dmxCfg.fixtureCount = 1;

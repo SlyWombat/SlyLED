@@ -477,6 +477,18 @@
         Source &amp; issue tracker: <a href='https://github.com/SlyWombat/SlyLED' target='_blank' style='color:#3b82f6'>github.com/SlyWombat/SlyLED</a>
       </p>
     </div>
+    <div class='card' id='ai-engines-card' style='max-width:720px'>
+      <div class='card-title'>AI Engines</div>
+      <div style='font-size:.82em;color:#94a3b8;margin-bottom:.5em'>
+        Status of every AI helper installed on this machine. Engines warm up automatically when the orchestrator starts.
+        Click <b>Test</b> to push a fixed harness through the engine and see end-to-end latency.
+      </div>
+      <div id='ai-engines-list' style='font-size:.85em'>Loading…</div>
+      <div style='margin-top:.5em'>
+        <button class='btn btn-nav' onclick='_aiEnginesWarmup()' title='Re-issue the boot warm-up sweep on demand'>Warm up now</button>
+        <button class='btn btn-nav' onclick='_aiEnginesRefresh()'>Refresh</button>
+      </div>
+    </div>
     <div class='card' id='depth-runtime-card' style='max-width:560px'>
       <div class='card-title'>Depth Runtime (optional)</div>
       <div style='font-size:.82em;color:#94a3b8;margin-bottom:.5em'>

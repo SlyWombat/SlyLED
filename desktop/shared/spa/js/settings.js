@@ -101,6 +101,7 @@ function loadSettings(){
   loadPatchView();
   _depthRuntimeRefresh();
   _ollamaRuntimeRefresh();
+  _aiEnginesRefresh();
   // #615 — populate the Settings → Advanced "Version" card. Endpoint
   // already exposes the orchestrator VERSION string; the HTML
   // placeholder was never wired up to it.
@@ -113,6 +114,96 @@ function loadSettings(){
       el.textContent='Version unavailable';
     }
   });
+}
+
+// ── Aggregate AI Engines card ────────────────────────────────────────
+// Reads /api/ai/status — one row per engine descriptor with installed /
+// installing / running / warm flags. Engines mid-download show their
+// install progress; engines that are installed expose a Test button that
+// runs the engine's fixed harness and prints latency next to the row.
+var _aiEnginesPollTimer=null;
+function _aiEnginesRefresh(){
+  var box=document.getElementById('ai-engines-list');
+  if(!box)return;
+  if(_aiEnginesPollTimer){clearTimeout(_aiEnginesPollTimer);_aiEnginesPollTimer=null;}
+  ra('GET','/api/ai/status',null,function(r){
+    if(!r||!r.ok){box.innerHTML='<span style="color:#ef4444">Status unavailable</span>';return;}
+    var rows=(r.engines||[]).map(_aiEngineRow);
+    box.innerHTML=rows.join('')||'<span style="color:#64748b">No AI engines bundled in this build.</span>';
+    // Re-poll while any engine is mid-install or pre-warm so the row
+    // reflects "installing" → "installed" → "warm" without manual refresh.
+    var anyInstalling=(r.engines||[]).some(function(e){return e.installing;});
+    var anyColdInstalled=(r.engines||[]).some(function(e){return e.installed && !e.warm;});
+    if(anyInstalling||anyColdInstalled){
+      _aiEnginesPollTimer=setTimeout(_aiEnginesRefresh,3000);
+    }
+  });
+}
+
+function _aiEngineRow(e){
+  var badge,colour;
+  if(e.installing){badge='Installing';colour='#f59e0b';}
+  else if(!e.installed){badge='Not installed';colour='#64748b';}
+  else if(e.warm){badge='Ready · warm';colour='#4ade80';}
+  else if(e.running){badge='Running · warming up';colour='#93c5fd';}
+  else{badge='Installed · cold';colour='#fbbf24';}
+  var prog=e.progress||{};
+  var progLine='';
+  if(e.installing){
+    var pct=prog.percent;
+    if(pct==null&&typeof prog.progress==='number')pct=Math.round(prog.progress*100);
+    progLine='<div style="font-size:.78em;color:#94a3b8;margin-top:.2em">'
+      +escapeHtml(prog.message||prog.phase||'Working...')
+      +(pct!=null?(' · '+pct+'%'):'')
+      +'</div>';
+  }
+  var meta=[];
+  if(e.model)meta.push('Model: '+escapeHtml(String(e.model)));
+  if(e.sizeMb)meta.push(e.sizeMb+' MB');
+  if(e.warmedAt){
+    var ageS=Math.round(Date.now()/1000-e.warmedAt);
+    meta.push('Warmed '+(ageS<60?ageS+'s':Math.round(ageS/60)+'m')+' ago');
+  }
+  if(e.err)meta.push('<span style="color:#f87171">'+escapeHtml(String(e.err))+'</span>');
+  var canTest=!!e.installed && !e.installing;
+  var testOutId='ai-test-out-'+e.id;
+  return '<div style="display:flex;flex-direction:column;gap:.15em;padding:.45em 0;border-bottom:1px solid #1e293b">'
+    +'<div style="display:flex;align-items:center;gap:.5em">'
+      +'<span style="flex:1;font-weight:600;color:#e2e8f0">'+escapeHtml(e.name||e.id)+'</span>'
+      +'<span style="font-size:.75em;padding:.1em .5em;border-radius:4px;background:'+colour+'22;color:'+colour+'">'+badge+'</span>'
+      +(canTest?(' <button class="btn btn-nav" style="font-size:.75em;padding:.15em .5em" onclick="_aiEngineTest(\''+e.id+'\',this)">Test</button>'):'')
+    +'</div>'
+    +(meta.length?('<div style="font-size:.74em;color:#64748b">'+meta.join(' · ')+'</div>'):'')
+    +progLine
+    +'<div id="'+testOutId+'" style="font-size:.78em;color:#94a3b8;display:none;margin-top:.2em"></div>'
+  +'</div>';
+}
+
+function _aiEngineTest(engineId,btn){
+  var out=document.getElementById('ai-test-out-'+engineId);
+  if(out){out.style.display='';out.innerHTML='Running test harness…';}
+  if(btn){btn.disabled=true;}
+  ra('POST','/api/ai/'+encodeURIComponent(engineId)+'/test',{},function(r){
+    if(btn){btn.disabled=false;}
+    if(!out)return;
+    if(!r){out.innerHTML='<span style="color:#f87171">No response</span>';return;}
+    if(r.ok===false){
+      out.innerHTML='<span style="color:#f87171">Test failed: '+escapeHtml(String(r.err||'unknown'))+'</span>';
+    }else{
+      var bits=[];
+      if(typeof r.totalMs==='number')bits.push(r.totalMs+' ms total');
+      if(typeof r.inferenceMs==='number')bits.push(r.inferenceMs+' ms inference');
+      if(typeof r.ms==='number')bits.push(r.ms+' ms');
+      if(r.response)bits.push('reply: '+escapeHtml(String(r.response).slice(0,80)));
+      if(r.depthMeanMm!=null)bits.push('depth μ='+r.depthMeanMm+' mm');
+      out.innerHTML='<span style="color:#4ade80">OK</span> · '+bits.join(' · ');
+    }
+    _aiEnginesRefresh();
+  });
+}
+
+function _aiEnginesWarmup(){
+  ra('POST','/api/ai/warmup',{},function(){_aiEnginesRefresh();});
 }
 
 // #623 — Ollama runtime status row (AI auto-tune). Same polling pattern as

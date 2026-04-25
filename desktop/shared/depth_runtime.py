@@ -203,7 +203,82 @@ def status() -> dict:
         "pythonVersion": manifest.get("pythonVersion"),
         "runnerPort": _runner_port(),
         "runnerRunning": _runner_is_healthy(),
+        "warm": _warm_state.get("warm", False),
+        "warmedAt": _warm_state.get("warmedAt"),
+        "lastError": _warm_state.get("lastError"),
     }
+
+
+# ── Warm-up + test harness (boot-time prefetch + Settings test button) ──
+
+_warm_state = {"warm": False, "warmedAt": None, "lastError": None}
+
+
+def warmup(timeout_s: float = 120.0):
+    """Spawn the runner and push a tiny synthetic frame through it so the
+    pipeline is loaded into VRAM. Subsequent /infer calls skip the
+    cold-start. No-op if the runtime is not installed."""
+    if not is_installed():
+        _warm_state["lastError"] = "runtime not installed"
+        return False
+    try:
+        ensure_running(timeout_s=min(timeout_s, 60.0))
+        import io, time as _t
+        try:
+            import numpy as _np
+            from PIL import Image as _I
+        except Exception as e:
+            _warm_state["lastError"] = f"numpy/Pillow missing: {e}"
+            return False
+        h, w = 256, 256
+        rgb = _np.full((h, w, 3), 128, dtype=_np.uint8)
+        buf = io.BytesIO()
+        _I.fromarray(rgb, "RGB").save(buf, format="JPEG", quality=80)
+        infer_jpeg(buf.getvalue(), timeout_s=timeout_s)
+        _warm_state["warm"] = True
+        _warm_state["warmedAt"] = _t.time()
+        _warm_state["lastError"] = None
+        return True
+    except Exception as e:
+        _warm_state["warm"] = False
+        _warm_state["lastError"] = str(e)
+        return False
+
+
+def run_test(timeout_s: float = 120.0):
+    """Settings → Test button. Pushes a fixed gradient through the runner
+    and reports timing + depth stats. Returns dict ready for jsonify."""
+    import io, time as _t
+    if not is_installed():
+        return {"ok": False, "err": "runtime not installed"}
+    try:
+        import numpy as _np
+        from PIL import Image as _I
+    except Exception as e:
+        return {"ok": False, "err": f"numpy/Pillow missing: {e}"}
+    h, w = 256, 256
+    grid_y = _np.linspace(0, 255, h, dtype=_np.uint8)[:, None]
+    grid_x = _np.linspace(0, 255, w, dtype=_np.uint8)[None, :]
+    rgb = _np.stack([
+        _np.broadcast_to(grid_y, (h, w)),
+        _np.broadcast_to(grid_x, (h, w)),
+        _np.full((h, w), 128, dtype=_np.uint8),
+    ], axis=-1)
+    buf = io.BytesIO()
+    _I.fromarray(rgb, "RGB").save(buf, format="JPEG", quality=80)
+    t0 = _t.time()
+    try:
+        depth_mm, inf_ms = infer_jpeg(buf.getvalue(), timeout_s=timeout_s)
+    except Exception as e:
+        return {"ok": False, "err": str(e)}
+    total_ms = int((_t.time() - t0) * 1000)
+    _warm_state["warm"] = True
+    _warm_state["warmedAt"] = _t.time()
+    return {"ok": True, "shape": list(depth_mm.shape),
+            "inferenceMs": inf_ms, "totalMs": total_ms,
+            "depthMinMm": round(float(depth_mm.min()), 1),
+            "depthMaxMm": round(float(depth_mm.max()), 1),
+            "depthMeanMm": round(float(depth_mm.mean()), 1)}
 
 
 # ── Install / uninstall ─────────────────────────────────────────────────

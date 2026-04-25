@@ -638,11 +638,18 @@ void sendChildConfigPage(WiFiClient& c) {
             "</div>"));
   c.flush();
   // Section 2: Art-Net Settings
-  c.print(F("<div class='card' style='margin-top:.5em'><h3>Art-Net</h3>"
+  c.print(F("<div class='card' style='margin-top:.5em'><h3>Network Input</h3>"
             "<div style='display:grid;grid-template-columns:auto 1fr;gap:.3em .6em;align-items:center;margin:.5em 0'>"
             "<label>Subnet</label><input type='number' id='dmx-sn' min='0' max='15' value='0' style='width:80px'>"
             "<label>Universe <span style='color:#888;font-size:.75em'>(0=Desktop U1)</span></label>"
             "<input type='number' id='dmx-uni' min='0' max='15' value='0' style='width:80px'>"
+            "<label>Input Mode</label>"
+            "<select id='dmx-im' style='width:160px'>"
+            "<option value='0'>SlyLED only</option>"
+            "<option value='1'>Art-Net</option>"
+            "<option value='2'>sACN</option>"
+            "<option value='3' selected>Auto (Art-Net + sACN)</option>"
+            "</select>"
             "</div>"
             "<button type='button' class='btn' onclick='dmxSaveGw()' style='margin:.3em 0'>Save</button>"
             "</div>"));
@@ -811,7 +818,8 @@ void sendChildConfigPage(WiFiClient& c) {
   c.print(F(
     "function dmxSaveGw(){"
     "var b={subnet:parseInt(document.getElementById('dmx-sn').value)||0,"
-    "universe:parseInt(document.getElementById('dmx-uni').value)||0};"
+    "universe:parseInt(document.getElementById('dmx-uni').value)||0,"
+    "inputMode:parseInt((document.getElementById('dmx-im')||{value:3}).value)};"
     "fetch('/dmx/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(function(){dmxRefresh();});}"
     "function dmxApplyTest(){"
     "var cpf=parseInt(document.getElementById('dmx-cpf').value)||13;"
@@ -825,6 +833,7 @@ void sendChildConfigPage(WiFiClient& c) {
     "fetch('/dmx/channels').then(function(r){return r.json();}).then(function(d){"
     "var sn=document.getElementById('dmx-sn');if(sn)sn.value=d.subnet||0;"
     "document.getElementById('dmx-uni').value=d.universe;"
+    "var im=document.getElementById('dmx-im');if(im&&typeof d.inputMode==='number')im.value=d.inputMode;"
     "document.getElementById('dmx-sa').value=d.start;"
     "document.getElementById('dmx-cpf').value=d.chPerFix;"
     "document.getElementById('dmx-fc').value=d.fixCount;"

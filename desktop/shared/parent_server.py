@@ -707,14 +707,54 @@ def _ping(child, retries=2):
         if info:
             # Don't let PONG's 2-digit fwVersion overwrite a more detailed 3-digit version
             saved_fw = child.get("fwVersion", "")
+            old_name = child.get("name") or ""
             child.update({k: v for k, v in info.items() if k != "id"})
             if saved_fw and saved_fw.count(".") >= 2 and info.get("fwVersion", "").count(".") < 2:
                 child["fwVersion"] = saved_fw
             # Always probe for full telemetry (version, board type, RSSI, etc.)
             _probe_board_type(child)
+            # #618 — node-wins-for-identity: when the operator changed
+            # altName on the child's /config page, propagate it to any
+            # fixtures still showing the old auto-generated name (the
+            # hostname or IP at registration time). Fixtures the operator
+            # explicitly renamed are left untouched.
+            new_name = child.get("name") or ""
+            if new_name and new_name != old_name:
+                _sync_fixture_names_from_child(child, old_name)
             return True
     child["status"] = 0
     return False
+
+
+def _sync_fixture_names_from_child(child, old_name):
+    """#618 — propagate child rename to its fixtures when the fixture is
+    still using the original auto-generated identity (hostname / IP /
+    previous child name). Avoids clobbering operator-customised names."""
+    cid = child.get("id")
+    if cid is None:
+        return
+    new_name = child.get("name") or ""
+    host = child.get("hostname") or ""
+    ip = child.get("ip") or ""
+    auto_names = {old_name, host, ip}
+    auto_names.discard("")
+    if not auto_names:
+        return
+    changed = False
+    for f in _fixtures:
+        if f.get("childId") != cid:
+            continue
+        cur = f.get("name") or ""
+        if cur in auto_names:
+            f["name"] = new_name
+            changed = True
+            log.info("FIXTURE-NAME-SYNC: fid %s '%s' → '%s' (child %s)",
+                     f.get("id"), cur, new_name, cid)
+    if changed:
+        try:
+            _save("fixtures", _fixtures)
+        except Exception:
+            pass
 
 def _broadcast_ping_all():
     """Send broadcast PINGs + direct pings to all known children.
@@ -1181,6 +1221,12 @@ def start_background_tasks():
         _startup_check_done = True
     _check_depth_install_marker()
     _check_ollama_install_marker()
+    # Boot-time warm-up of any AI helper that's already installed.
+    # Runs in a background thread so HTTP comes up immediately even when
+    # ZoeDepth takes 10–30 s to load weights into RAM. Helpers that are
+    # mid-download show installing=true via /api/ai/status; warmup just
+    # skips them and the operator can press Test once the install finishes.
+    threading.Thread(target=_ai_helpers_warmup, daemon=True).start()
     # No auto-claim on boot. The UDP CMD_GYRO_ORIENT handler auto-claims
     # on the first orient packet from an enabled gyro fixture, which is
     # the operator pressing Start on the puck. That's what turns the
@@ -1312,6 +1358,50 @@ def api_children_refresh(cid):
     with _lock:
         _save("children", _children)
     return jsonify(ok=True)
+
+@app.post("/api/children/<int:cid>/find")
+def api_children_find(cid):
+    """#291 — broadcast-search for a single performer by its (stable, MAC-
+    derived) hostname. Used when DHCP rotated the IP and the device shows
+    Offline. Returns ``found=true`` + the new IP when a PONG arrives whose
+    hostname matches; updates the stored child record in place."""
+    child = next((c for c in _children if c["id"] == cid), None)
+    if not child:
+        abort(404)
+    target_host = child.get("hostname") or ""
+    if not target_host:
+        return jsonify(ok=False, err="child has no hostname to match"), 400
+    # Direct ping last-known IP first (cheap; succeeds when device is up
+    # but the listener hasn't seen it lately).
+    if _ping(child):
+        with _lock:
+            _save("children", _children)
+        return jsonify(ok=True, found=True, ip=child["ip"], reason="direct")
+    # Broadcast search — collect any PONGs for ~3 s and look for hostname.
+    _recent_pongs.clear()
+    _broadcast_ping_all()
+    time.sleep(3.0)
+    matched = None
+    for ip, info in list(_recent_pongs.items()):
+        if (info.get("hostname") or "").lower() == target_host.lower():
+            matched = (ip, info)
+            break
+    if not matched:
+        return jsonify(ok=False, found=False,
+                       err="device not found on network",
+                       hostname=target_host), 200
+    new_ip, info = matched
+    old_ip = child.get("ip")
+    with _lock:
+        child["ip"] = new_ip
+        child.update({k: v for k, v in info.items() if k != "id"})
+        child["status"] = 1
+        child["seen"] = int(time.time())
+        _save("children", _children)
+    log.info("FIND: %s relocated %s → %s", target_host, old_ip, new_ip)
+    return jsonify(ok=True, found=True, ip=new_ip, oldIp=old_ip,
+                   hostname=target_host)
+
 
 @app.post("/api/children/<int:cid>/reboot")
 def api_children_reboot(cid):
@@ -4028,6 +4118,133 @@ def api_ollama_runtime_install_status():
     if _ollama_rt is None:
         return jsonify(ok=False, err="ollama_runtime module not bundled"), 500
     return jsonify(ok=True, **_ollama_rt.progress())
+
+
+@app.post("/api/ollama-runtime/warmup")
+def api_ollama_runtime_warmup():
+    if _ollama_rt is None:
+        return jsonify(ok=False, err="ollama_runtime module not bundled"), 500
+    ok = _ollama_rt.warmup()
+    return jsonify(ok=ok, **_ollama_rt.status())
+
+
+@app.post("/api/ollama-runtime/test")
+def api_ollama_runtime_test():
+    """Settings → Test button. Sends a fixed prompt and reports response
+    + latency. Used as the canonical proof the runtime works end-to-end."""
+    if _ollama_rt is None:
+        return jsonify(ok=False, err="ollama_runtime module not bundled"), 500
+    return jsonify(_ollama_rt.run_test())
+
+
+# ── AI helpers — aggregate status + boot warm-up (settings page) ──────
+
+def _ai_engine_descriptors():
+    """One descriptor per AI helper the orchestrator can host. Each entry
+    reports: installed (bool), installing (bool — install job in flight),
+    running (bool — process up), warm (bool — ready for low-latency call),
+    plus engine-specific extras. Engines that aren't bundled into the
+    PyInstaller build (depth_runtime / ollama_runtime missing) report
+    installed=False with a reason, so the SPA can still render a row."""
+    out = []
+
+    # ZoeDepth host runtime
+    if _depth_runtime is None:
+        out.append({"id": "zoedepth", "name": "ZoeDepth (host)",
+                    "installed": False, "installing": False,
+                    "running": False, "warm": False,
+                    "err": "module not bundled"})
+    else:
+        st = _depth_runtime.status()
+        prog = _depth_runtime.install_progress() or {}
+        installing = bool(prog.get("running"))
+        out.append({
+            "id": "zoedepth", "name": "ZoeDepth (host)",
+            "installed": bool(st.get("installed")),
+            "installing": installing,
+            "running":   bool(st.get("runnerRunning")),
+            "warm":      bool(st.get("warm")),
+            "warmedAt":  st.get("warmedAt"),
+            "err":       st.get("lastError"),
+            "model":     st.get("model"),
+            "sizeMb":    st.get("sizeMb"),
+            "progress":  prog,
+        })
+
+    # Ollama LLM
+    if _ollama_rt is None:
+        out.append({"id": "ollama", "name": "Ollama LLM",
+                    "installed": False, "installing": False,
+                    "running": False, "warm": False,
+                    "err": "module not bundled"})
+    else:
+        st = _ollama_rt.status()
+        prog = st.get("progress") or {}
+        installing = prog.get("phase") in ("install-ollama", "pull-model")
+        out.append({
+            "id": "ollama", "name": "Ollama LLM",
+            "installed": bool(st.get("installed")),
+            "installing": installing,
+            "running":   bool(st.get("running")),
+            "warm":      bool(st.get("warm")),
+            "warmedAt":  st.get("warmedAt"),
+            "err":       st.get("lastError"),
+            "model":     st.get("model"),
+            "progress":  prog,
+        })
+
+    return out
+
+
+def _ai_helpers_warmup():
+    """Runs once at boot. For each installed AI helper, kick a warm-up in
+    its own thread so a slow ZoeDepth load doesn't block Ollama (or vice
+    versa). Helpers mid-install are skipped — they'll be warmed when the
+    operator next opens Settings or hits Test."""
+    if _depth_runtime is not None and _depth_runtime.is_installed():
+        threading.Thread(
+            target=lambda: _ai_warmup_safe("zoedepth", _depth_runtime.warmup),
+            daemon=True).start()
+    if _ollama_rt is not None and _ollama_rt.is_installed():
+        threading.Thread(
+            target=lambda: _ai_warmup_safe("ollama", _ollama_rt.warmup),
+            daemon=True).start()
+
+
+def _ai_warmup_safe(name, fn):
+    try:
+        ok = fn()
+        log.info("AI warmup %s: %s", name, "ok" if ok else "skipped/failed")
+    except Exception as e:
+        log.warning("AI warmup %s raised: %s", name, e)
+
+
+@app.get("/api/ai/status")
+def api_ai_status():
+    """Aggregate status for the Settings → AI Engines card. Always 200,
+    so the UI can render even when individual helpers are missing."""
+    return jsonify(ok=True, engines=_ai_engine_descriptors())
+
+
+@app.post("/api/ai/warmup")
+def api_ai_warmup():
+    """Trigger a fresh warm-up sweep on demand (idempotent)."""
+    threading.Thread(target=_ai_helpers_warmup, daemon=True).start()
+    return jsonify(ok=True)
+
+
+@app.post("/api/ai/<engine>/test")
+def api_ai_test(engine):
+    """Per-engine test harness. Routes to the engine's run_test()."""
+    if engine == "zoedepth":
+        if _depth_runtime is None:
+            return jsonify(ok=False, err="depth_runtime not bundled"), 500
+        return jsonify(_depth_runtime.run_test())
+    if engine == "ollama":
+        if _ollama_rt is None:
+            return jsonify(ok=False, err="ollama_runtime not bundled"), 500
+        return jsonify(_ollama_rt.run_test())
+    return jsonify(ok=False, err=f"unknown engine '{engine}'"), 404
 
 
 @app.get("/api/cameras/<int:fid>/settings/auto-tune")

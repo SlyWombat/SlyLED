@@ -133,6 +133,10 @@ function _renderSetup(){
           var fwVer=c.fwVersion||'—';
           var fwHtml=escapeHtml(fwVer)+'<span id="fw-ind-'+c.id+'"></span>';
           var acts='<button class="btn btn-on" onclick="refreshChild('+c.id+')">Refresh</button>';
+          // #291 — when offline, expose a Find button that broadcasts a
+          // hostname-targeted PING and updates the IP if the device is
+          // still on the network at a new DHCP lease.
+          if(c.status!==1)acts+=' <button class="btn" onclick="findChild('+c.id+',this)" style="background:#1e3a5f;color:#93c5fd">Find</button>';
           if(isDmx)acts+=' <button class="btn" onclick="window.open(\'http://'+escapeHtml(c.ip)+'/config\',\'_blank\')" style="background:#446;color:#fff">Configure</button>';
           acts+=' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff">Reboot</button>';
           acts+=' <button class="btn btn-off" onclick="removeChildDevice('+c.id+')">Remove</button>';
@@ -152,8 +156,9 @@ function _renderSetup(){
           // Name: show altName as primary if set, hostname as secondary (#464)
           var primaryName=c.altName||c.name||c.hostname||'Gyro';
           var secondaryName=(c.altName&&c.hostname&&c.altName!==c.hostname)?'<br><span style="color:#64748b;font-size:.75em">'+escapeHtml(c.hostname)+'</span>':'';
-          var acts='<button class="btn btn-on" onclick="refreshChild('+c.id+')">Refresh</button>'
-            +' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff">Reboot</button>'
+          var acts='<button class="btn btn-on" onclick="refreshChild('+c.id+')">Refresh</button>';
+          if(c.status!==1)acts+=' <button class="btn" onclick="findChild('+c.id+',this)" style="background:#1e3a5f;color:#93c5fd">Find</button>';
+          acts+=' <button class="btn" onclick="rebootChild('+c.id+')" style="background:#654;color:#fff">Reboot</button>'
             +' <button class="btn btn-off" onclick="removeChildDevice('+c.id+')">Remove</button>';
           // Configure button opens modal (#465)
           acts+=' <button class="btn" onclick="_gyroConfigModal('+c.id+')" style="background:#312e81;color:#a5b4fc;font-size:.8em">Configure</button>';
@@ -2143,6 +2148,26 @@ function removeChildDevice(id){
 
 function refreshChild(id){
   ra('POST','/api/children/'+id+'/refresh',{},function(){setTimeout(_renderSetup,700);});
+}
+
+// #291 — broadcast-search a single offline performer by hostname. Updates
+// the stored IP when DHCP rotated the lease. Disables the button while
+// the request runs so the operator can't fire it twice.
+function findChild(id,btn){
+  if(btn){btn.disabled=true;btn.textContent='Searching...';}
+  document.getElementById('hs').textContent='Searching for device...';
+  ra('POST','/api/children/'+id+'/find',{},function(r){
+    if(r&&r.found){
+      var msg=r.oldIp&&r.oldIp!==r.ip
+        ? 'Found at new IP '+r.ip+' (was '+r.oldIp+')'
+        : 'Reconnected at '+r.ip;
+      document.getElementById('hs').textContent=msg;
+    }else{
+      document.getElementById('hs').textContent=(r&&r.err)||'Device not found on network';
+    }
+    if(btn){btn.disabled=false;btn.textContent='Find';}
+    setTimeout(_renderSetup,400);
+  });
 }
 
 function rebootChild(id){
