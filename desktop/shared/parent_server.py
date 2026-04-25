@@ -4216,6 +4216,64 @@ def api_camera_settings_auto_tune(fid):
     _auto_tune_cancel[str(fid)] = False
     def _is_cancelled():
         return bool(_auto_tune_cancel.get(str(fid)))
+    # #685 follow-up — initialise the live job + log buffer BEFORE the
+    # loop runs so the SPA's status poller sees state from the first
+    # iteration. The auto-tune route is synchronous in its request
+    # thread, but Flask serves each request in its own thread, so a
+    # parallel GET /auto-tune/status can read this dict mid-run.
+    job_state = {
+        "status": "running",
+        "fid": fid,
+        "intent": intent,
+        "evaluator": evaluator_mode,
+        "maxIterations": max_it,
+        "startedAt": time.time(),
+        "log": [],
+    }
+    _auto_tune_jobs[str(fid)] = job_state
+
+    def _emit(level, msg):
+        from datetime import datetime
+        job_state["log"].append({
+            "ts": datetime.utcnow().strftime("%H:%M:%S"),
+            "level": level,
+            "msg": msg,
+        })
+        # Cap log length so a long-running tune doesn't unbounded-grow.
+        if len(job_state["log"]) > 500:
+            del job_state["log"][:100]
+
+    def _progress_cb(info):
+        # Translate the auto_tune_loop progress events into operator-
+        # friendly log lines. Falls through unknown stages so future
+        # additions still surface, just generically.
+        try:
+            stage = info.get("stage", "")
+            it = info.get("iteration")
+            if stage == "baseline":
+                _emit("info",
+                      f"Baseline score {info.get('score'):.1f}/100 "
+                      f"applied: {info.get('applied') or {}}")
+            elif stage == "iterating":
+                applied = info.get("applied") or {}
+                changed = ", ".join(f"{k}={v}" for k, v in applied.items())
+                _emit("info",
+                      f"Iter {it}/{max_it}: score {info.get('score'):.1f}"
+                      + (f" - {changed}" if changed else ""))
+                notes = info.get("notes") or []
+                for n in notes[:3]:
+                    _emit("info", f"    · {n}")
+            elif stage == "converged":
+                _emit("info", f"Iter {it}/{max_it}: converged "
+                                f"(score {info.get('score'):.1f})")
+            else:
+                _emit("info", f"{stage} {info}")
+        except Exception:
+            pass
+
+    _emit("info",
+          f"Auto-tune started: intent={intent} evaluator={evaluator_mode} "
+          f"maxIter={max_it} model={_cam_settings._OLLAMA_MODEL}")
     try:
         result = _cam_settings.auto_tune_loop(
             ip, cam_idx, intent,
@@ -4223,16 +4281,28 @@ def api_camera_settings_auto_tune(fid):
             max_iterations=max_it,
             evaluator_mode=evaluator_mode,
             cancel_check=_is_cancelled,
+            progress_cb=_progress_cb,
         )
     except _cam_settings.AutoTuneCancelled:
+        _emit("warn", "Cancelled by operator")
+        job_state["status"] = "cancelled"
         _auto_tune_cancel.pop(str(fid), None)
         return jsonify(ok=False, err="Auto-tune cancelled by operator",
                         errType="cancelled"), 499
     except Exception as e:
+        _emit("err", f"Auto-tune failed: {e}")
+        job_state["status"] = "error"
         log.exception("auto-tune fid=%d failed", fid)
         _auto_tune_cancel.pop(str(fid), None)
         return jsonify(err=f"Auto-tune failed: {e}"), 500
     _auto_tune_cancel.pop(str(fid), None)
+    iters_run = max(0, len(result.get("history") or []) - 1)
+    _emit("info", f"Auto-tune completed in "
+                    f"{(time.time() - job_state['startedAt']):.1f} s "
+                    f"after {iters_run}/{max_it} iterations")
+    _emit("info", f"Final score "
+                    f"{(result.get('after') or {}).get('score', '?')}"
+                    f" / 100  applied: {result.get('applied') or {}}")
 
     slot_name = body.get("saveSlot")
     if slot_name:
@@ -4248,9 +4318,10 @@ def api_camera_settings_auto_tune(fid):
         slots[slot_name] = slot_entry
         _save("camera_settings_slots", _camera_settings_slots)
 
-    _auto_tune_jobs[str(fid)] = {"status": "done", **result,
-                                  "intent": intent,
-                                  "timestamp": time.time()}
+    job_state.update(result)
+    job_state["status"] = "done"
+    job_state["timestamp"] = time.time()
+    job_state["slot"] = slot_name
     return jsonify(ok=True, **result, intent=intent, slot=slot_name)
 
 
@@ -4306,6 +4377,36 @@ def api_cal_trace_file(name):
         return jsonify(err="trace not found"), 404
     return send_from_directory(str(CAL_TRACES_DIR), safe,
                                 mimetype="application/x-ndjson")
+
+
+@app.get("/api/cameras/<int:fid>/settings/auto-tune/status")
+def api_camera_settings_auto_tune_status(fid):
+    """#685 follow-up — live status for the in-flight auto-tune.
+
+    The auto-tune POST is synchronous in its request thread; this
+    endpoint runs in a separate Flask thread and reads the shared
+    ``_auto_tune_jobs[fid]`` dict the worker mutates. Returns the
+    current ``status`` (running / done / cancelled / error), the log
+    tail (default last 50 entries; ``?since=<idx>`` returns entries
+    appended after that index), and iteration count so the SPA's Tune
+    modal can render a scrollable log pane mirroring the cal wizard.
+    """
+    job = _auto_tune_jobs.get(str(fid))
+    if not job:
+        return jsonify(ok=True, status="idle", log=[], total=0)
+    since = request.args.get("since", default=0, type=int)
+    full_log = job.get("log") or []
+    tail = full_log[since:] if since >= 0 else full_log[-50:]
+    history = job.get("history") or []
+    return jsonify(ok=True,
+                   status=job.get("status", "running"),
+                   intent=job.get("intent"),
+                   evaluator=job.get("evaluator"),
+                   maxIterations=job.get("maxIterations"),
+                   iterations=max(0, len(history) - 1),
+                   startedAt=job.get("startedAt"),
+                   log=tail,
+                   total=len(full_log))
 
 
 @app.post("/api/cameras/<int:fid>/settings/auto-tune/cancel")
@@ -4474,6 +4575,19 @@ def _ai_helpers_warmup():
                     log.info("AI: started ollama serve (will be stopped at shutdown)")
             except Exception as e:
                 log.warning("AI: ollama auto-start failed (%s)", e)
+            # #685 follow-up — auto-pull the configured vision model when
+            # Ollama is up but the model isn't yet (e.g. operator just
+            # upgraded to the new qwen2.5vl:3b default). Same code path
+            # the Settings → Install Ollama button uses; progress is on
+            # /api/ollama-runtime/install-status.
+            try:
+                if (_ollama_rt.is_ollama_running()
+                        and not _ollama_rt.has_model()):
+                    log.info("AI: vision model %s not pulled — kicking off "
+                              "background pull", _ollama_rt.OLLAMA_MODEL)
+                    _ollama_rt.start_install()
+            except Exception as e:
+                log.warning("AI: model auto-pull check failed (%s)", e)
             if _ollama_rt.is_installed():
                 _ai_warmup_safe("ollama", _ollama_rt.warmup)
         threading.Thread(target=_ollama_boot, daemon=True).start()

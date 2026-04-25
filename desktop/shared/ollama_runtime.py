@@ -43,7 +43,7 @@ from pathlib import Path
 log = logging.getLogger("slyled.ollama_runtime")
 
 OLLAMA_URL = os.environ.get("SLYLED_OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("SLYLED_OLLAMA_MODEL", "moondream")
+OLLAMA_MODEL = os.environ.get("SLYLED_OLLAMA_MODEL", "qwen2.5vl:3b")
 
 # Windows installer URL — Ollama ships a single .exe that sets up the
 # service + Start Menu entry. macOS / Linux use the shell installer.

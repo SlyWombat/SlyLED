@@ -1998,6 +1998,15 @@ function _camTuneRenderActions(){
     +'  <button id="camtune-cancel-btn" class="btn" onclick="_camTuneCancel('+fid+')" style="display:none;background:#7f1d1d;color:#fecaca">Cancel</button>'
     +'</div>'
     +'<div id="camtune-progress" style="margin-top:.4em;font-size:.78em;color:#64748b;min-height:1em"></div>'
+    // #685 follow-up — scrollable log pane mirroring the cal wizard.
+    // Polled from /api/cameras/<fid>/settings/auto-tune/status while a
+    // run is in flight (see _camTuneLogPoll). Auto-scrolls to bottom on
+    // new entries; pauses auto-scroll when the operator scrolls up.
+    +'<div id="camtune-log" onscroll="_camTuneLogTrackScroll()" '
+    +'  style="margin-top:.4em;max-height:200px;overflow-y:auto;'
+    +'  background:#020617;border:1px solid #1e293b;border-radius:4px;'
+    +'  padding:.4em;font-family:monospace;font-size:.72em;color:#cbd5e1;'
+    +'  line-height:1.4em"></div>'
     +'<hr style="border:none;border-top:1px solid #1e293b;margin:.6em 0">'
     +'<div style="font-weight:bold;color:#e2e8f0;margin-bottom:.25em">Saved slots</div>'
     +'<div id="camtune-slots">'+slotRows+'</div>'
@@ -2095,6 +2104,9 @@ function _camTuneRun(fid){
     var x=new XMLHttpRequest();
     x.open('POST','/api/cameras/'+fid+'/settings/auto-tune', true);
     _camTuneState.tuneXhr=x;  // #685 — cancel hook abandons this XHR.
+    // #685 follow-up — start the log-pane poller. Stops itself once
+    // the XHR resolves (see _camTuneRunXhr below).
+    _camTuneLogStart(fid);
     _camTuneRunXhr(x, fid, prog, body);
   }
   function _runWithFreshStatus(){
@@ -2216,10 +2228,100 @@ function _camTuneStop(){
   if(_camTuneState.closeObserver){
     try{_camTuneState.closeObserver.disconnect();}catch(e){}
   }
+  // #685 follow-up — also stop the log poller so the modal close
+  // doesn't leak a setTimeout chain.
+  _camTuneLogStop();
   // #685 — restore default modal-box width for the next modal opener.
   var box = document.querySelector('#modal .modal-box');
   if (box) box.classList.remove('modal-tune');
   _camTuneState=null;
+}
+
+// ── #685 follow-up — auto-tune log pane ────────────────────────────────
+// Polls /api/cameras/<fid>/settings/auto-tune/status at 1 Hz while a tune
+// is running. Sends `since=<count>` so each poll only ships new entries.
+// Auto-scrolls to bottom unless the operator scrolled up to read older
+// entries (tracked via _camTuneLogTrackScroll).
+
+var _camTuneLogState = null;
+
+function _camTuneLogStart(fid){
+  _camTuneLogStop();
+  var el = document.getElementById('camtune-log');
+  if(el)el.innerHTML = '';
+  _camTuneLogState = {
+    fid: fid,
+    since: 0,
+    timer: null,
+    autoScroll: true,
+    lastDoneSeen: 0
+  };
+  _camTuneLogTick();
+}
+
+function _camTuneLogStop(){
+  if(_camTuneLogState && _camTuneLogState.timer){
+    clearTimeout(_camTuneLogState.timer);
+    _camTuneLogState.timer = null;
+  }
+  _camTuneLogState = null;
+}
+
+function _camTuneLogTick(){
+  if(!_camTuneLogState)return;
+  var fid = _camTuneLogState.fid;
+  var since = _camTuneLogState.since;
+  var url = '/api/cameras/'+fid+'/settings/auto-tune/status?since='+since;
+  fetch(url, {cache:'no-store'}).then(function(r){return r.json();}).then(function(j){
+    if(!_camTuneLogState)return;
+    var entries = (j && j.log) || [];
+    if(entries.length){
+      _camTuneLogAppend(entries);
+      _camTuneLogState.since = j.total || (since + entries.length);
+    }
+    // Stop polling once status moves out of `running`. Give one extra
+    // tick so the trailing log entries (final-score / completed) land.
+    if(j && j.status && j.status !== 'running'){
+      _camTuneLogState.lastDoneSeen += 1;
+      if(_camTuneLogState.lastDoneSeen > 1){
+        _camTuneLogStop();
+        return;
+      }
+    }
+    _camTuneLogState.timer = setTimeout(_camTuneLogTick, 1000);
+  }).catch(function(){
+    if(!_camTuneLogState)return;
+    _camTuneLogState.timer = setTimeout(_camTuneLogTick, 2000);
+  });
+}
+
+function _camTuneLogAppend(entries){
+  var el = document.getElementById('camtune-log');
+  if(!el)return;
+  var levelColor = {info:'#cbd5e1', warn:'#fbbf24', err:'#f87171'};
+  var html = '';
+  entries.forEach(function(e){
+    var col = levelColor[e.level] || '#cbd5e1';
+    html += '<div style="white-space:pre-wrap;color:'+col+'">'
+         +  '<span style="color:#475569">'+ (e.ts||'') +'</span> '
+         +  escapeHtml(String(e.msg||''))
+         +  '</div>';
+  });
+  el.insertAdjacentHTML('beforeend', html);
+  if(_camTuneLogState && _camTuneLogState.autoScroll){
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
+function _camTuneLogTrackScroll(){
+  // If the operator scrolls up more than ~30 px from the bottom, stop
+  // auto-scrolling so they can read older entries. They get
+  // auto-scroll back the moment they scroll back to the bottom.
+  if(!_camTuneLogState)return;
+  var el = document.getElementById('camtune-log');
+  if(!el)return;
+  var atBottom = (el.scrollHeight - el.clientHeight - el.scrollTop) < 30;
+  _camTuneLogState.autoScroll = atBottom;
 }
 
 function _camTuneSetDiag(msg, isErr){

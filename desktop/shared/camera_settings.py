@@ -267,7 +267,12 @@ def evaluate_frame_heuristic(frame, intent="general"):
 # when a larger GPU is available (llava:13b, qwen2-vl, bakllava).
 
 _OLLAMA_URL = os.environ.get("SLYLED_OLLAMA_URL", "http://localhost:11434")
-_OLLAMA_MODEL = os.environ.get("SLYLED_OLLAMA_MODEL", "moondream")
+# #685 follow-up — moondream returned scores in 0-1 floats and empty
+# deltaProposal on the basement-rig matrix run despite the JSON-schema
+# prompt; qwen2.5vl:3b is the smallest current-gen VLM that adheres to
+# constrained JSON output reliably. Operator override stays via the
+# SLYLED_OLLAMA_MODEL env var.
+_OLLAMA_MODEL = os.environ.get("SLYLED_OLLAMA_MODEL", "qwen2.5vl:3b")
 # #685 follow-up — moondream's vision encoder takes 30+ s per call on CPU
 # even with the existing 768-px downsample, blowing the per-call budget on
 # slower laptops. Raise the default so first-call ingestion finishes inside
@@ -281,6 +286,19 @@ _OLLAMA_TIMEOUT_S = int(os.environ.get("SLYLED_OLLAMA_TIMEOUT_S", "120"))
 # SLYLED_AI_FRAME_LONG_SIDE.
 _AI_FRAME_LONG_SIDE = int(os.environ.get("SLYLED_AI_FRAME_LONG_SIDE", "640"))
 _AI_FRAME_JPEG_QUALITY = int(os.environ.get("SLYLED_AI_FRAME_JPEG_QUALITY", "75"))
+
+# #685 follow-up — minimum acceptable score per intent before the heuristic
+# auto-tune declares "done". Below threshold, gradient-flat does NOT stop
+# the loop; it keeps exploring through max_iterations to give the next
+# proposal a chance. Aruco / yolo / general need a balanced exposure to
+# read corners and colour; beam tolerates suppressed highlights.
+_INTENT_MIN_SCORE_DEFAULT = 70
+_INTENT_MIN_SCORE = {
+    "aruco":   70,
+    "beam":    65,
+    "yolo":    70,
+    "general": 70,
+}
 
 
 def _ollama_available():
@@ -741,10 +759,24 @@ def auto_tune_loop(camera_ip, cam_idx, intent,
             best = score
             best_state = dict(state)
         else:
-            # No meaningful improvement — stop.
-            log.info("auto_tune: plateaued at iteration %d (best=%.1f, now=%.1f)",
-                     it, best["score"], score["score"])
-            break
+            # #685 follow-up — pre-fix the loop stopped on the FIRST flat
+            # gradient even when the absolute score was clearly bad
+            # (basement-rig matrix run: heuristic declared aruco "done"
+            # at score 49 / 100 with the Sly slot baseline). Now: keep
+            # exploring through max_iterations whenever best_score is
+            # below the per-intent minimum, so the heuristic can still
+            # land a workable score on under-tuned starts.
+            min_score = _INTENT_MIN_SCORE.get(intent,
+                                                _INTENT_MIN_SCORE_DEFAULT)
+            if best["score"] >= min_score:
+                log.info("auto_tune: plateaued at iteration %d (best=%.1f, "
+                         "now=%.1f) — score >= intent threshold %.0f, stopping",
+                         it, best["score"], score["score"], min_score)
+                break
+            else:
+                log.info("auto_tune: gradient flat at iteration %d (best=%.1f) "
+                         "but below intent threshold %.0f — continuing exploration",
+                         it, best["score"], min_score)
 
     # Apply best state if the final iteration regressed.
     if best_state != state:
