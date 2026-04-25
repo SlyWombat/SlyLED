@@ -187,11 +187,28 @@ def load_positions(path):
 
 
 def probe_at_aim(orch, fid, pan, tilt, *, dimmer, colour_dmx,
-                 settle_s, cameras, threshold, center, use_dark):
-    """Drive fixture, wait, beam-detect on each camera, return per-cam results."""
-    write_fixture(orch, fid, pan_norm=pan, tilt_norm=tilt,
-                   dimmer=dimmer, colour_dmx=colour_dmx)
-    time.sleep(settle_s)
+                 settle_s, cameras, threshold, center, use_dark,
+                 blink=False, dark_wait_s=1.0):
+    """Drive fixture, wait, beam-detect on each camera, return per-cam results.
+
+    If blink=True and use_dark=True, do a fresh dark-reference capture at
+    the same (pan, tilt) with dimmer=0 BEFORE turning on for the detect.
+    Mirrors the cal pipeline's flash-detect semantics — captures any scene
+    state that's relevant at the exact aim, not just the primary aim.
+    """
+    if blink and use_dark:
+        write_fixture(orch, fid, pan_norm=pan, tilt_norm=tilt,
+                       dimmer=0, colour_dmx=colour_dmx)
+        time.sleep(max(dark_wait_s, settle_s))
+        for cam_fid in cameras:
+            capture_dark_reference(cam_fid)
+        write_fixture(orch, fid, pan_norm=pan, tilt_norm=tilt,
+                       dimmer=dimmer, colour_dmx=colour_dmx)
+        time.sleep(settle_s)
+    else:
+        write_fixture(orch, fid, pan_norm=pan, tilt_norm=tilt,
+                       dimmer=dimmer, colour_dmx=colour_dmx)
+        time.sleep(settle_s)
     out = {}
     for cam_fid in cameras:
         r = beam_detect(cam_fid, threshold=threshold, center=center,
@@ -203,7 +220,7 @@ def probe_at_aim(orch, fid, pan, tilt, *, dimmer, colour_dmx,
 def run_one(orch, fid, pan, tilt, label, *,
             colour_dmx, cameras, nudge, settle_s,
             dark_wait_s, threshold, dark_ref, nudge_confirm,
-            snapshot_dir=None, run_tag="run"):
+            snapshot_dir=None, run_tag="run", nudge_blink=False):
     """Full test sequence at a single (pan, tilt): dark-ref → detect → nudge."""
     rec = {
         "ts": iso_now(),
@@ -227,7 +244,7 @@ def run_one(orch, fid, pan, tilt, label, *,
     primary = probe_at_aim(orch, fid, pan, tilt, dimmer=255,
                             colour_dmx=colour_dmx, settle_s=settle_s,
                             cameras=cameras, threshold=threshold, center=False,
-                            use_dark=dark_ref)
+                            use_dark=dark_ref, blink=False, dark_wait_s=dark_wait_s)
     rec["primary"] = primary
 
     # Snapshot capture — beam-on frame per camera, for visual verification of
@@ -245,31 +262,37 @@ def run_one(orch, fid, pan, tilt, label, *,
 
     if nudge_confirm and nudge > 0.0:
         # Four nudges; each tests pixel-shift vs the primary detection.
-        # After each nudge we return to the primary position.
+        # If nudge_blink, each nudge does a fresh dark-ref capture at the
+        # nudged position before turning the beam on (matches the cal
+        # pipeline's flash-detect semantics).
         # pan+
         pan_plus = probe_at_aim(orch, fid, min(1.0, pan + nudge), tilt,
                                  dimmer=255, colour_dmx=colour_dmx,
                                  settle_s=settle_s, cameras=cameras,
                                  threshold=threshold, center=False,
-                                 use_dark=dark_ref)
+                                 use_dark=dark_ref, blink=nudge_blink,
+                                 dark_wait_s=dark_wait_s)
         # pan-
         pan_minus = probe_at_aim(orch, fid, max(0.0, pan - nudge), tilt,
                                   dimmer=255, colour_dmx=colour_dmx,
                                   settle_s=settle_s, cameras=cameras,
                                   threshold=threshold, center=False,
-                                  use_dark=dark_ref)
+                                  use_dark=dark_ref, blink=nudge_blink,
+                                  dark_wait_s=dark_wait_s)
         # tilt+
         tilt_plus = probe_at_aim(orch, fid, pan, min(1.0, tilt + nudge),
                                   dimmer=255, colour_dmx=colour_dmx,
                                   settle_s=settle_s, cameras=cameras,
                                   threshold=threshold, center=False,
-                                  use_dark=dark_ref)
+                                  use_dark=dark_ref, blink=nudge_blink,
+                                  dark_wait_s=dark_wait_s)
         # tilt-
         tilt_minus = probe_at_aim(orch, fid, pan, max(0.0, tilt - nudge),
                                    dimmer=255, colour_dmx=colour_dmx,
                                    settle_s=settle_s, cameras=cameras,
                                    threshold=threshold, center=False,
-                                   use_dark=dark_ref)
+                                   use_dark=dark_ref, blink=nudge_blink,
+                                   dark_wait_s=dark_wait_s)
 
         rec["nudge"] = {
             "delta": nudge,
@@ -365,6 +388,10 @@ def main():
                          "(1 step = 1/256 = 0.0039 norm = 2.1° pan on 540° fixture)")
     ap.add_argument("--snapshot-dir",
                     help="save beam-on snapshot from each camera per position")
+    ap.add_argument("--nudge-blink", action="store_true",
+                    help="re-capture dark-ref at each nudged position before "
+                         "the on-frame detect (matches cal pipeline's flash-"
+                         "detect; slower but more robust against ambient drift)")
     ap.add_argument("--run-tag", default="run",
                     help="prefix for snapshot filenames")
     ap.add_argument("--settle", type=float, default=0.8,
@@ -425,7 +452,8 @@ def main():
                        dark_ref=not args.no_dark_ref,
                        nudge_confirm=not args.no_confirm,
                        snapshot_dir=args.snapshot_dir,
-                       run_tag=args.run_tag)
+                       run_tag=args.run_tag,
+                       nudge_blink=args.nudge_blink)
         print(format_summary(rec))
         if out_path:
             with out_path.open("a", encoding="utf-8") as fh:
