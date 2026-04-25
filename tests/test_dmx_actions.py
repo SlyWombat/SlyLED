@@ -127,6 +127,27 @@ def api(method, path, body=None):
         return None
 
 
+def wait_for_bake(tl_id, timeout=10.0, interval=0.2):
+    """#688 — old API was `GET /api/timelines/<id>/bake` returning the full
+    result with a `done` flag. New surface split this into:
+      - `GET /api/timelines/<id>/baked/status` → {running, done, progress}
+      - `GET /api/timelines/<id>/baked`         → full {fixtures, totalFrames, ...}
+    Polls status until done, then fetches the full result so callers keep
+    the old { done, fixtures, ... } shape and don't have to track both
+    routes individually."""
+    deadline = time.time() + timeout
+    last_status = None
+    while time.time() < deadline:
+        last_status = api('GET', f'/api/timelines/{tl_id}/baked/status') or {}
+        if last_status.get('done'):
+            break
+        time.sleep(interval)
+    result = api('GET', f'/api/timelines/{tl_id}/baked')
+    if isinstance(result, dict):
+        result.setdefault('done', last_status.get('done', False))
+    return result
+
+
 def test_classic_action_on_dmx(mh_id, par_id):
     """Classic Solid action should produce DMX_SCENE segments for DMX fixtures."""
     section('Classic Solid Action → DMX')
@@ -158,7 +179,7 @@ def test_classic_action_on_dmx(mh_id, par_id):
     time.sleep(2)
 
     # Check bake result
-    r = api('GET', f'/api/timelines/{tl_id}/bake')
+    r = wait_for_bake(tl_id)
     ok(r and r.get('done'), 'Bake completed')
 
     fixtures = r.get('fixtures', {})
@@ -212,8 +233,7 @@ def test_dmx_scene_action(mh_id):
     tl_id = r.get('id')
 
     api('POST', f'/api/timelines/{tl_id}/bake')
-    time.sleep(2)
-    r = api('GET', f'/api/timelines/{tl_id}/bake')
+    r = wait_for_bake(tl_id)
     ok(r and r.get('done'), 'Bake completed')
 
     segs = r.get('fixtures', {}).get(str(mh_id), {}).get('segments', [])
@@ -256,8 +276,7 @@ def test_pan_tilt_move(mh_id):
     tl_id = r.get('id')
 
     api('POST', f'/api/timelines/{tl_id}/bake')
-    time.sleep(2)
-    r = api('GET', f'/api/timelines/{tl_id}/bake')
+    r = wait_for_bake(tl_id)
     ok(r and r.get('done'), 'Bake completed')
 
     segs = r.get('fixtures', {}).get(str(mh_id), {}).get('segments', [])
@@ -326,8 +345,7 @@ def test_gobo_and_color_wheel(mh_id):
     tl_id = r.get('id')
 
     api('POST', f'/api/timelines/{tl_id}/bake')
-    time.sleep(2)
-    r = api('GET', f'/api/timelines/{tl_id}/bake')
+    r = wait_for_bake(tl_id)
     ok(r and r.get('done'), 'Bake completed')
 
     segs = r.get('fixtures', {}).get(str(mh_id), {}).get('segments', [])
@@ -355,7 +373,7 @@ def test_preset_show_bake(mh_id, par_id):
 
     presets = ['spotlight-sweep', 'concert-wash', 'figure-eight', 'thunderstorm', 'dance-floor']
     for preset_id in presets:
-        r = api('POST', '/api/show/preset', {'presetId': preset_id})
+        r = api('POST', '/api/show/preset', {'id': preset_id})
         ok(r and r.get('ok'), f'Loaded preset: {preset_id}')
         if not r or not r.get('ok'):
             continue
@@ -365,8 +383,7 @@ def test_preset_show_bake(mh_id, par_id):
             continue
 
         api('POST', f'/api/timelines/{tl_id}/bake')
-        time.sleep(2)
-        r = api('GET', f'/api/timelines/{tl_id}/bake')
+        r = wait_for_bake(tl_id)
         ok(r and r.get('done'), f'{preset_id}: bake completed')
 
         fixtures = r.get('fixtures', {})
@@ -400,8 +417,7 @@ def test_blackout_action(par_id):
     tl_id = r.get('id')
 
     api('POST', f'/api/timelines/{tl_id}/bake')
-    time.sleep(2)
-    r = api('GET', f'/api/timelines/{tl_id}/bake')
+    r = wait_for_bake(tl_id)
     ok(r and r.get('done'), 'Bake completed')
 
     segs = r.get('fixtures', {}).get(str(par_id), {}).get('segments', [])
@@ -435,8 +451,7 @@ def test_breathe_on_dmx(par_id):
     tl_id = r.get('id')
 
     api('POST', f'/api/timelines/{tl_id}/bake')
-    time.sleep(2)
-    r = api('GET', f'/api/timelines/{tl_id}/bake')
+    r = wait_for_bake(tl_id)
     ok(r and r.get('done'), 'Bake completed')
 
     segs = r.get('fixtures', {}).get(str(par_id), {}).get('segments', [])

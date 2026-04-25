@@ -742,6 +742,17 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
         preview[fid] = fix_preview
     result["preview"] = preview
 
+    # #688 — populate result["totalFrames"] from the segment-count sum so
+    # the /api/timelines/<id>/baked response matches what the bake-status
+    # progress endpoint already reports. Pre-fix the result dict's
+    # totalFrames was initialised to 0 and never updated, so callers
+    # checking the returned bake (like test_show_playback) saw 0 even
+    # after a successful run that emitted real segments.
+    seg_total = sum(
+        len((fd or {}).get("segments", []))
+        for fd in result.get("fixtures", {}).values())
+    result["totalFrames"] = seg_total
+
     if progress:
         progress.status = "complete"
         progress.current_frame = progress.total_frames

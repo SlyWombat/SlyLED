@@ -75,17 +75,23 @@ def seed_and_start():
             {'id': fix_par, 'x': 8000, 'y': 3000, 'z': 0},
         ]})
 
-        # Load user's exported config (children + layout)
+        # #688 — only load the user's exported config when its matching
+        # show export is also present. Pre-fix: the config import wiped
+        # the inline LED fixtures, then the inline `else`-branch show
+        # below referenced LED fixture IDs that no longer existed, so
+        # bake produced 0 frames.  Now: config + show import together
+        # (both files), or stay on the inline rig (no files).
         config_path = os.path.join(os.path.dirname(__file__), 'user', 'slyled-config.json')
-        if os.path.exists(config_path):
+        show_path = os.path.join(os.path.dirname(__file__), 'user', 'slyled-show.json')
+        have_user_pair = os.path.exists(config_path) and os.path.exists(show_path)
+        if have_user_pair:
             with open(config_path) as f:
                 config = json.load(f)
             r = c.post('/api/config/import', json=config)
             print(f'  Config import: {r.get_json()}')
 
         # Load user's exported show (actions + effects + timelines)
-        show_path = os.path.join(os.path.dirname(__file__), 'user', 'slyled-show.json')
-        if os.path.exists(show_path):
+        if have_user_pair:
             with open(show_path) as f:
                 show = json.load(f)
         else:
@@ -121,6 +127,25 @@ def api(method, path, body=None):
         return json.loads(resp.read().decode())
     except Exception as e:
         return None
+
+
+def wait_for_bake(tl_id, timeout=10.0, interval=0.2):
+    """#688 — old `GET /api/timelines/<id>/bake` was split into status +
+    result endpoints. Polls status until done, then fetches the full
+    `/baked` result so the legacy { done, fixtures, ... } shape stays
+    intact for callers."""
+    deadline = time.time() + timeout
+    last_status = None
+    while time.time() < deadline:
+        last_status = api('GET', f'/api/timelines/{tl_id}/baked/status') or {}
+        if last_status.get('done'):
+            break
+        time.sleep(interval)
+    result = api('GET', f'/api/timelines/{tl_id}/baked')
+    if isinstance(result, dict):
+        result.setdefault('done', last_status.get('done', False))
+    return result
+
 
 
 def test_show_loaded():
@@ -161,7 +186,11 @@ def test_layout_fixtures(ids):
     positioned = [f for f in fixtures if f.get('positioned')]
     ok(len(positioned) >= 1, f'Positioned fixtures ({len(positioned)})')
 
-    led = [f for f in positioned if f.get('fixtureType') != 'dmx']
+    # #688 — was `fixtureType != 'dmx'`, which silently included camera
+    # fixtures and asserted they had LEDs. Cameras enter the rig with
+    # `fixtureType='camera'` since #200 and shouldn't trip the LED-count
+    # check.  Restrict to the explicit LED type.
+    led = [f for f in positioned if f.get('fixtureType') == 'led']
     dmx = [f for f in positioned if f.get('fixtureType') == 'dmx']
     print(f'    LED: {len(led)}, DMX: {len(dmx)}, total positioned: {len(positioned)}')
 

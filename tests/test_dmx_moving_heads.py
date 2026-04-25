@@ -32,14 +32,29 @@ def run():
     # ================================================================
     print('-- 1. Pan/tilt computation --')
 
-    # Aim at +Z from origin -> centered (0.5, 0.5)
+    # #688 — earlier asserts here didn't match the documented rotation
+    # convention (CLAUDE.md: Tilt=0 horizontal, +Tilt aims DOWN, -Tilt
+    # above horizontal). Aiming +Z from origin (target at z=+5000)
+    # means the beam points STRAIGHT UP, which is tilt=-90° → over a
+    # 270° normalised range that maps to 0.5 − 90/270 = 0.167. The
+    # second case "Aim down" had pos=[0,5000,0] target=[0,0,0] — both
+    # at z=0, so it's actually a horizontal aim toward -Y (tilt=0.5),
+    # not "down". Replace both with tests that probe the convention
+    # correctly: straight UP → tilt < 0.5; straight DOWN (target at
+    # z=-5000) → tilt > 0.5.
     pt = compute_pan_tilt([0, 0, 0], [0, 0, 5000], 540, 270)
-    ok('Aim +Z: pan centered', pt is not None and abs(pt[0] - 0.5) < 0.02, f'pan={pt[0]:.3f}' if pt else 'None')
-    ok('Aim +Z: tilt centered', abs(pt[1] - 0.5) < 0.02, f'tilt={pt[1]:.3f}' if pt else '')
+    ok('Aim +Z (up): pan centered',
+       pt is not None and abs(pt[0] - 0.5) < 0.02,
+       f'pan={pt[0]:.3f}' if pt else 'None')
+    ok('Aim +Z (up): tilt < 0.5',
+       pt is not None and pt[1] < 0.5,
+       f'tilt={pt[1]:.3f}' if pt else 'None')
 
-    # Aim straight down -> tilt > 0.5
-    pt = compute_pan_tilt([0, 5000, 0], [0, 0, 0], 540, 270)
-    ok('Aim down: tilt > 0.5', pt is not None and pt[1] > 0.5, f'tilt={pt[1]:.3f}' if pt else 'None')
+    # Aim straight DOWN (target below fixture in z) -> tilt > 0.5
+    pt = compute_pan_tilt([0, 0, 5000], [0, 0, 0], 540, 270)
+    ok('Aim -Z (down): tilt > 0.5',
+       pt is not None and pt[1] > 0.5,
+       f'tilt={pt[1]:.3f}' if pt else 'None')
 
     # Aim to +X -> pan > 0.5
     pt = compute_pan_tilt([0, 0, 0], [5000, 0, 0], 540, 270)
@@ -191,6 +206,27 @@ def run():
     with app.test_client() as c:
         c.post('/api/reset', headers={'X-SlyLED-Confirm': 'true'})
 
+        # #688 — show_generator's no-fixtures fallback returns effects=[]
+        # because there's nothing to drive a spatial field. Pre-fix this
+        # test reset, then immediately exercised /api/show/preset without
+        # any fixtures, so install_preset_show's effect count came back
+        # as 0 and `<preset> has effects` failed for every preset. Seed
+        # one DMX mover + one LED so generate_show's spatial-field path
+        # runs.
+        seed_par = c.post('/api/fixtures', json={
+            'name': 'Seed Par', 'type': 'point', 'fixtureType': 'dmx',
+            'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 3,
+            'dmxProfileId': 'generic-rgb',
+        }).get_json().get('id')
+        seed_led = c.post('/api/fixtures', json={
+            'name': 'Seed LED', 'type': 'linear', 'fixtureType': 'led',
+            'strings': [{'leds': 60, 'mm': 3000, 'sdir': 0}],
+        }).get_json().get('id')
+        c.post('/api/layout', json={'children': [
+            {'id': seed_par, 'x': 5000, 'y': 2500, 'z': 3000},
+            {'id': seed_led, 'x': 2000, 'y': 4000, 'z': 0},
+        ]})
+
         # List presets — should include new moving-head presets
         r = c.get('/api/show/presets')
         presets = r.get_json()
@@ -219,12 +255,19 @@ def run():
         fxs = r.get_json()
         ok('Spatial effects created', len(fxs) >= 10, f'count={len(fxs)}')
 
-        # Verify each timeline has allPerformers track with clips
+        # #688 — generate_show now emits per-fixture tracks (one per LED
+        # / DMX fixture) plus a top-level `allPerformers` track for the
+        # spatial-effect layer; the latter isn't necessarily tracks[0]
+        # any more. Pre-fix test asserted tracks[0].allPerformers, which
+        # only holds for the legacy single-track shape.  Now: assert
+        # SOME track in the timeline has allPerformers (the effects
+        # layer) and the timeline has at least one track.
         for tl in tls:
             tracks = tl.get('tracks', [])
             ok(f'TL {tl["name"]} has track', len(tracks) >= 1)
             if tracks:
-                ok(f'TL {tl["name"]} allPerformers', tracks[0].get('allPerformers'))
+                ok(f'TL {tl["name"]} allPerformers',
+                   any(t.get('allPerformers') for t in tracks))
 
     # ================================================================
     # 5. API — AIM POINT

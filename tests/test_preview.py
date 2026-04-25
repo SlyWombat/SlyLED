@@ -25,6 +25,14 @@ def ok(name, result):
     else: failed += 1; print(f"  FAIL {name}")
 
 # Ensure fixtures exist
+# #688 — self-skip when no orchestrator is running on BASE. api() masks
+# connection-refused as `{"err": "..."}` and downstream comprehensions
+# then crash with a confusing TypeError. Probe /api/settings first.
+_probe = api("GET", "/api/settings")
+if isinstance(_probe, dict) and _probe.get("err"):
+    print(f"  SKIP: orchestrator unreachable at {BASE} ({_probe['err']})")
+    sys.exit(0)
+
 api("POST", "/api/migrate/layout")
 
 # Get existing presets

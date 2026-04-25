@@ -45,6 +45,15 @@ def section(name):
 
 # ── Setup ─────────────────────────────────────────────────────────────────
 section("SETUP")
+# #688 — guard against running offline. The api() helper masks
+# connection-refused as `(0, {"err": "..."})`, which then crashes the
+# fixture-list comprehension below with a confusing TypeError. Probe
+# /api/settings up front so the operator sees a clean skip instead.
+_status, _probe = api("GET", "/api/settings")
+if _status != 200:
+    print(f"  SKIP: /api/settings returned {_status}; need a running "
+          f"orchestrator at {BASE}.")
+    sys.exit(0)
 _, children = api("GET", "/api/children")
 _, fixtures = api("GET", "/api/fixtures")
 print(f"  {len(children)} children, {len(fixtures)} fixtures")

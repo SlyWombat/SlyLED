@@ -51,6 +51,24 @@ def api(method, path, body=None):
         return None
 
 
+def wait_for_bake(tl_id, timeout=10.0, interval=0.2):
+    """#688 — old `GET /api/timelines/<id>/bake` was split into status +
+    result endpoints. Polls status until done, then fetches the full
+    `/baked` result so the legacy { done, fixtures, ... } shape stays
+    intact for callers."""
+    deadline = time.time() + timeout
+    last_status = None
+    while time.time() < deadline:
+        last_status = api('GET', f'/api/timelines/{tl_id}/baked/status') or {}
+        if last_status.get('done'):
+            break
+        time.sleep(interval)
+    result = api('GET', f'/api/timelines/{tl_id}/baked')
+    if isinstance(result, dict):
+        result.setdefault('done', last_status.get('done', False))
+    return result
+
+
 def setup_mixed_rig():
     """Create a mixed rig: 2 LED fixtures, 2 DMX pars, 2 moving heads."""
     import parent_server
@@ -171,8 +189,7 @@ def test_mixed_rig_coverage(ids):
     if tl_id:
         # Bake it
         api('POST', f'/api/timelines/{tl_id}/bake')
-        time.sleep(3)
-        r = api('GET', f'/api/timelines/{tl_id}/bake')
+        r = wait_for_bake(tl_id)
         ok(r and r.get('done'), 'Bake completed')
 
         fixtures = r.get('fixtures', {}) if r else {}
@@ -213,8 +230,7 @@ def test_no_dark_periods(ids):
 
     if tl_id:
         api('POST', f'/api/timelines/{tl_id}/bake')
-        time.sleep(3)
-        r = api('GET', f'/api/timelines/{tl_id}/bake')
+        r = wait_for_bake(tl_id)
         ok(r and r.get('done'), 'Bake completed')
 
         fixtures = r.get('fixtures', {}) if r else {}
@@ -436,8 +452,7 @@ def test_mover_actually_moves(ids):
 
     if tl_id:
         api('POST', f'/api/timelines/{tl_id}/bake')
-        time.sleep(3)
-        r = api('GET', f'/api/timelines/{tl_id}/bake')
+        r = wait_for_bake(tl_id)
         ok(r and r.get('done'), 'Bake completed')
 
         for name in ['MH Left', 'MH Right']:
