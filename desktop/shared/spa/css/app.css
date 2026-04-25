@@ -87,6 +87,16 @@ body.light .flx-dim-bar{background:#e2e8f0}
 body.light .flx-effect{color:#475569}
 .modal-bg{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(2,6,23,.85);backdrop-filter:blur(4px);z-index:100;overflow:auto}
 .modal-box{background:#0f172a;border:1px solid #334155;border-radius:6px;max-width:540px;margin:3em auto;padding:1.5em}
+/* #685 — Camera Tune modal needs more horizontal room than the default
+   540 px shell. Clamp to 95vw so the body never overflows the viewport
+   and add a single-column fallback for narrow screens. */
+.modal-box.modal-tune{max-width:min(1600px,95vw);margin:1.5em auto;padding:1em 1.2em}
+.modal-box.modal-tune .tune-modal{display:grid;grid-template-columns:minmax(260px,1fr) minmax(340px,1.6fr) minmax(260px,1fr);gap:.6em;width:100%}
+@media (max-width: 1100px){
+    .modal-box.modal-tune .tune-modal{grid-template-columns:1fr}
+    .modal-box.modal-tune #tune-pane-controls,
+    .modal-box.modal-tune #tune-pane-actions{border-left:none;border-right:none;padding-left:0;padding-right:0}
+}
 .modal-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:.8em}
 .modal-close{background:none;border:none;color:#64748b;font-size:1.3em;cursor:pointer;line-height:1}
 .prog-bar{height:8px;background:#0f172a;border-radius:4px;margin-top:.4em}

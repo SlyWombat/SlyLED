@@ -122,8 +122,13 @@ def live_pass():
     orch = os.environ.get("SLYLED_ORCH", "http://localhost:8080")
     fid = os.environ.get("SLYLED_CANARY_FID", "17")
     cameras = os.environ.get("SLYLED_CANARY_CAMERAS", "12,13")
+    # #684 — include aruco:3 (Pillar Post, z=1368 mm on the basement
+    # rig) so the live regression exercises the surface-aware path. A
+    # cal that was contaminated by the old z=0 floor-plane assumption
+    # will project the pillar marker to a wildly wrong pixel and the
+    # tool fails-on-off-target.
     targets = os.environ.get("SLYLED_POSTCAL_TARGETS",
-                              "aruco:0,aruco:1,aruco:2,aruco:4,aruco:5")
+                              "aruco:0,aruco:1,aruco:2,aruco:3,aruco:4,aruco:5")
     cmd = [
         sys.executable, str(ROOT / "tools" / "post_cal_confirm.py"),
         "--orch", orch, "--fid", str(fid),

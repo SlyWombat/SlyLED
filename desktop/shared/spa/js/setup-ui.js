@@ -1634,6 +1634,11 @@ function _camTune(fid){
                     tuneRunning:false, iterationScores:[]};
   document.getElementById('modal-title').textContent='Camera settings — fixture '+fid;
   document.getElementById('modal-body').innerHTML=_camTuneShellHtml();
+  // #685 — widen the .modal-box for the Tune modal's three-pane layout.
+  // The class is removed in _camTuneStop() so the next non-tune modal
+  // (e.g. fixture editor) gets the default 540 px width back.
+  var box = document.querySelector('#modal .modal-box');
+  if (box) box.classList.add('modal-tune');
   document.getElementById('modal').style.display='block';
   _camTuneInstallCloseHandler();
   _camTunePreviewStart(fid);
@@ -1641,11 +1646,16 @@ function _camTune(fid){
 }
 
 function _camTuneShellHtml(){
+  // #685 — width / grid-template-columns / responsive collapse all live
+  // in `.modal-box.modal-tune .tune-modal` (app.css). The pane min-width
+  // hints below are kept so the panes still feel comfortably wide on
+  // desktop, but no inline `min-width:1100px` on the outer grid so the
+  // CSS clamp + media query can shrink + reflow on narrow viewports.
   return ''
-    +'<div class="tune-modal" style="display:grid;grid-template-columns:1fr 1.6fr 1fr;gap:.6em;min-width:1100px">'
-    +'  <div id="tune-pane-controls" style="min-width:280px;max-height:72vh;overflow:auto;padding-right:.4em;border-right:1px solid #1e293b"><div style="color:#64748b">Loading…</div></div>'
-    +'  <div id="tune-pane-preview" style="min-width:340px;display:flex;flex-direction:column;gap:.35em"></div>'
-    +'  <div id="tune-pane-actions" style="min-width:260px;padding-left:.4em;border-left:1px solid #1e293b"><div style="color:#64748b">…</div></div>'
+    +'<div class="tune-modal">'
+    +'  <div id="tune-pane-controls" style="min-width:240px;max-height:72vh;overflow:auto;padding-right:.4em;border-right:1px solid #1e293b"><div style="color:#64748b">Loading…</div></div>'
+    +'  <div id="tune-pane-preview" style="min-width:300px;display:flex;flex-direction:column;gap:.35em"></div>'
+    +'  <div id="tune-pane-actions" style="min-width:240px;padding-left:.4em;border-left:1px solid #1e293b"><div style="color:#64748b">…</div></div>'
     +'</div>'
     +'<div style="margin-top:.6em;display:flex;justify-content:space-between;align-items:center">'
     +'  <div id="camtune-diag" style="font-size:.72em;color:#64748b"></div>'
@@ -1776,7 +1786,7 @@ function _camTuneRenderPreviewShell(){
   var pp=document.getElementById('tune-pane-preview');
   if(!pp)return;
   pp.innerHTML=''
-    +'<div style="font-weight:bold;color:#e2e8f0">Live preview <span id="camtune-preview-badge" style="font-size:.7em;color:#64748b;margin-left:.3em">polling 1 Hz</span></div>'
+    +'<div style="font-weight:bold;color:#e2e8f0">Live preview <span id="camtune-preview-badge" style="font-size:.7em;color:#64748b;margin-left:.3em">polling 0.33 Hz</span></div>'
     +'<canvas id="camtune-canvas" width="640" height="360" style="width:100%;background:#000;border:1px solid #1e293b;border-radius:4px;display:block"></canvas>'
     +'<div style="display:flex;gap:.3em;align-items:center;font-size:.78em">'
     +'  <button class="btn" onclick="_camTunePreviewToggle()" id="camtune-pause-btn" style="padding:0 .4em;font-size:.78em;background:#1e293b;color:#cbd5e1">Pause</button>'
@@ -1795,9 +1805,19 @@ function _camTuneRenderPreviewShell(){
 function _camTunePreviewStart(fid){
   _camTuneRenderPreviewShell();
   _camTunePreviewTick(fid);
+  // #685 follow-up — the preview poll competes with auto-tune's V4L2
+  // capture; even with the per-camera lock the operator was hitting
+  // capture-timeout toasts when the loop ran longer than 2 s per
+  // iteration. Slow the cadence to 3 s and pause entirely while a tune
+  // run is in flight; the loop already paints fresh before/after
+  // thumbnails into the compare strip when it finishes so live preview
+  // is just a "is the camera alive?" indicator during a run.
   _camTuneState.previewTimer=setInterval(function(){
-    if(_camTuneState&&!_camTuneState.previewPaused)_camTunePreviewTick(fid);
-  }, 1000);
+    if(!_camTuneState)return;
+    if(_camTuneState.previewPaused)return;
+    if(_camTuneState.tuneRunning)return;
+    _camTunePreviewTick(fid);
+  }, 3000);
 }
 
 function _camTunePreviewStop(){
@@ -1813,37 +1833,72 @@ function _camTunePreviewToggle(){
   var btn=document.getElementById('camtune-pause-btn');
   if(btn)btn.textContent=_camTuneState.previewPaused?'Resume':'Pause';
   var badge=document.getElementById('camtune-preview-badge');
-  if(badge)badge.textContent=_camTuneState.previewPaused?'paused':'polling 1 Hz';
+  if(badge)badge.textContent=_camTuneState.previewPaused?'paused':'polling 0.33 Hz';
 }
 
 function _camTunePreviewSnap(){
   if(_camTuneState)_camTunePreviewTick(_camTuneState.fid);
 }
 
+// #685 — fetch() instead of <img>.src so a 503 with a JSON body can be
+// read; the SPA then surfaces the typed errType (capture-busy /
+// camera-unreachable / capture-timeout / capture-failed) instead of the
+// generic "camera offline?" toast. capture-busy specifically is the
+// expected mid-iteration race with auto-tune — show "device busy"
+// rather than alarming the operator about an offline camera.
+var _CAM_FETCH_HINTS = {
+  'capture-busy':       'Device busy (auto-tune capturing) — preview will catch up',
+  'capture-timeout':    'Capture timed out — camera node is slow or stuck',
+  'camera-unreachable': 'Camera node unreachable on the network',
+  'capture-failed':     'Camera capture failed',
+  'not-found':          'Camera fixture missing',
+  'not-configured':     'Camera fixture has no IP'
+};
+
 function _camTunePreviewTick(fid){
   var canvas=document.getElementById('camtune-canvas');
   if(!canvas)return;
   var url='/api/cameras/'+fid+'/snapshot?t='+Date.now();
-  var img=new Image();
-  img.onload=function(){
-    var ctx=canvas.getContext('2d');
-    // Fit preserving aspect ratio.
-    var cw=canvas.clientWidth||canvas.width;
-    var ch=cw * (img.height/img.width);
-    if(canvas.width!==cw||canvas.height!==ch){
-      canvas.width=cw; canvas.height=ch;
+  fetch(url, {cache:'no-store'}).then(function(r){
+    if(!r.ok){
+      // Server returned a typed JSON error envelope (#685).
+      return r.json().then(function(j){
+        var hint = _CAM_FETCH_HINTS[j&&j.errType] || (j&&j.err) || ('Snapshot HTTP '+r.status);
+        // capture-busy is transient — log without screaming red.
+        _camTuneSetDiag(hint, j&&j.errType!=='capture-busy');
+      }, function(){
+        _camTuneSetDiag('Snapshot HTTP '+r.status, true);
+      });
     }
-    ctx.drawImage(img, 0, 0, cw, ch);
-    if(_camTuneState){
-      _camTuneState.lastJpegSrc=url;
-      if(!_camTuneState.baselineJpeg)_camTuneState.baselineJpeg=url;
-    }
-    _camTuneRefreshScore(fid);
-  };
-  img.onerror=function(){
-    _camTuneSetDiag('Snapshot failed (camera offline?)', true);
-  };
-  img.src=url;
+    return r.blob().then(function(blob){
+      var src = URL.createObjectURL(blob);
+      var img=new Image();
+      img.onload=function(){
+        var ctx=canvas.getContext('2d');
+        var cw=canvas.clientWidth||canvas.width;
+        var ch=cw * (img.height/img.width);
+        if(canvas.width!==cw||canvas.height!==ch){
+          canvas.width=cw; canvas.height=ch;
+        }
+        ctx.drawImage(img, 0, 0, cw, ch);
+        if(_camTuneState){
+          _camTuneState.lastJpegSrc=src;
+          if(!_camTuneState.baselineJpeg)_camTuneState.baselineJpeg=src;
+        }
+        _camTuneRefreshScore(fid);
+        // Free the previous tick's blob URL once the new one paints.
+        // (No-op on first tick when prev is undefined.)
+        if(_camTuneState && _camTuneState._prevBlobSrc){
+          try{URL.revokeObjectURL(_camTuneState._prevBlobSrc);}catch(e){}
+        }
+        if(_camTuneState)_camTuneState._prevBlobSrc = src;
+      };
+      img.src=src;
+    });
+  }).catch(function(e){
+    // Network-level fail (no response) — distinct from a typed 503.
+    _camTuneSetDiag('Snapshot request failed (network)', true);
+  });
 }
 
 // Compute a quick-and-dirty heuristic score client-side by asking the
@@ -1919,7 +1974,10 @@ function _camTuneRenderActions(){
     +'  <input id="camtune-iter" type="number" min="1" max="12" value="6" style="width:60px;font-size:.82em;margin-left:.4em"></label>'
     +'<label style="font-size:.82em;color:#94a3b8;display:block;margin-top:.4em">Save result as slot'
     +'  <input id="camtune-autosave" type="text" placeholder="optional" style="width:100%;font-size:.82em;margin-top:.15em"></label>'
-    +'<button class="btn btn-on" onclick="_camTuneRun('+fid+')" style="width:100%;margin-top:.6em;background:#6b21a8;color:#d8b4fe">Run Auto-Tune</button>'
+    +'<div id="camtune-run-row" style="display:flex;gap:.4em;margin-top:.6em">'
+    +'  <button id="camtune-run-btn" class="btn btn-on" onclick="_camTuneRun('+fid+')" style="flex:1;background:#6b21a8;color:#d8b4fe">Run Auto-Tune</button>'
+    +'  <button id="camtune-cancel-btn" class="btn" onclick="_camTuneCancel('+fid+')" style="display:none;background:#7f1d1d;color:#fecaca">Cancel</button>'
+    +'</div>'
     +'<div id="camtune-progress" style="margin-top:.4em;font-size:.78em;color:#64748b;min-height:1em"></div>'
     +'<hr style="border:none;border-top:1px solid #1e293b;margin:.6em 0">'
     +'<div style="font-weight:bold;color:#e2e8f0;margin-bottom:.25em">Saved slots</div>'
@@ -1973,8 +2031,30 @@ function _camTuneSaveCurrent(fid){
 }
 
 // ── Auto-tune run (baseline → execute → compare) ───────────────────────
+
+// #685 follow-up — disable the Run button while a tune is running and
+// expose a Cancel sibling. Centralised so both onload + onerror +
+// ontimeout + cancel paths can call it without duplicating selectors.
+function _camTuneSetRunUiBusy(busy, statusText){
+  var run=document.getElementById('camtune-run-btn');
+  var cancel=document.getElementById('camtune-cancel-btn');
+  if(run){
+    run.disabled=!!busy;
+    run.style.opacity=busy?'0.55':'1';
+    run.style.cursor=busy?'not-allowed':'pointer';
+  }
+  if(cancel){
+    cancel.style.display=busy?'inline-block':'none';
+  }
+  if(statusText!=null){
+    var prog=document.getElementById('camtune-progress');
+    if(prog)prog.textContent=statusText;
+  }
+}
+
 function _camTuneRun(fid){
   if(!_camTuneState)return;
+  if(_camTuneState.tuneRunning)return;  // #685 — guard against double-click.
   var intent=(document.getElementById('camtune-intent')||{}).value||'general';
   var evaluator=(document.getElementById('camtune-eval')||{}).value||'heuristic';
   var maxIt=parseInt((document.getElementById('camtune-iter')||{}).value, 10)||6;
@@ -1986,16 +2066,80 @@ function _camTuneRun(fid){
   if(baselineImg)baselineImg.src=_camTuneState.baselineJpeg;
   var compare=document.getElementById('camtune-compare');
   if(compare)compare.style.display='block';
-  if(prog)prog.textContent='Running auto-tune ('+evaluator+' → '+intent+')… this may take 10–90 s.';
   _camTuneState.tuneRunning=true;
-  var body={intent:intent, evaluator:evaluator, maxIterations:maxIt};
-  if(slot)body.saveSlot=slot;
+  _camTuneSetRunUiBusy(true);
+
+  function _kickRun(){
+    _camTuneSetRunUiBusy(true, 'Running auto-tune ('+evaluator+' → '+intent+')… this may take 10–90 s.');
+    var body={intent:intent, evaluator:evaluator, maxIterations:maxIt};
+    if(slot)body.saveSlot=slot;
+    var x=new XMLHttpRequest();
+    x.open('POST','/api/cameras/'+fid+'/settings/auto-tune', true);
+    _camTuneState.tuneXhr=x;  // #685 — cancel hook abandons this XHR.
+    _camTuneRunXhr(x, fid, prog, body);
+  }
+  function _runWithFreshStatus(){
+    ra('GET','/api/cameras/settings/evaluator-status',null,function(st){
+      _camTuneState.evaluator = st || _camTuneState.evaluator || {modes:{}};
+      // #685 follow-up — DON'T re-render the actions pane mid-run; that
+      // wipes our Cancel button + progress strip. The evaluator-status
+      // refresh is enough to catch a stale "AI cold" state; the next
+      // open of the modal will paint the full pane.
+      _kickRun();
+    });
+  }
+  if(evaluator==='ai' || evaluator==='auto'){
+    // #685 follow-up — skip the warmup call when /api/ollama-runtime
+    // already reports `warm: true`. Operators who tested AI on the
+    // Settings tab moments ago shouldn't sit through another 30 s
+    // warmup just to start auto-tune.
+    ra('GET','/api/ollama-runtime/status',null,function(st){
+      if(st && st.warm && st.installed){
+        _runWithFreshStatus();
+        return;
+      }
+      _camTuneSetRunUiBusy(true, 'Warming up the vision model… (cold-start can take 30 s)');
+      var w=new XMLHttpRequest();
+      w.open('POST','/api/ollama-runtime/warmup', true);
+      w.timeout=60*1000;
+      w.onload=function(){_runWithFreshStatus();};
+      w.onerror=function(){_runWithFreshStatus();};
+      w.ontimeout=function(){_runWithFreshStatus();};
+      _camTuneState.tuneXhr=w;  // cancel-able during warmup window
+      w.send();
+    });
+    return;
+  }
+  // Heuristic evaluator path — no warmup needed.
+  _kickRun();
+}
+
+// #685 follow-up — best-effort cancel. The server's auto-tune route is
+// synchronous in the request thread so the underlying loop keeps going
+// until the next iteration check; we POST a cancel hint AND abandon the
+// XHR client-side so the SPA returns to the run-able state immediately.
+function _camTuneCancel(fid){
+  if(!_camTuneState||!_camTuneState.tuneRunning)return;
+  if(_camTuneState.tuneXhr){
+    try{_camTuneState.tuneXhr.abort();}catch(e){}
+    _camTuneState.tuneXhr=null;
+  }
+  // Tell the server too — the iteration loop checks for cancel between
+  // iterations so it can exit cleanly and unlock the camera device.
   var x=new XMLHttpRequest();
-  x.open('POST','/api/cameras/'+fid+'/settings/auto-tune', true);
+  x.open('POST','/api/cameras/'+fid+'/settings/auto-tune/cancel', true);
+  x.send();
+  _camTuneState.tuneRunning=false;
+  _camTuneSetRunUiBusy(false, 'Cancelled.');
+}
+
+function _camTuneRunXhr(x, fid, prog, body){
   x.timeout=5*60*1000;
   x.setRequestHeader('Content-Type','application/json');
   x.onload=function(){
     _camTuneState.tuneRunning=false;
+    _camTuneState.tuneXhr=null;
+    _camTuneSetRunUiBusy(false);
     var r=null; try{r=JSON.parse(x.responseText);}catch(e){}
     if(!r||r.err){
       if(prog)prog.innerHTML='<span style="color:#f87171">'+escapeHtml((r&&r.err)||'Auto-tune failed (HTTP '+x.status+')')+'</span>';
@@ -2018,11 +2162,18 @@ function _camTuneRun(fid){
   };
   x.onerror=function(){
     _camTuneState.tuneRunning=false;
+    _camTuneState.tuneXhr=null;
+    _camTuneSetRunUiBusy(false);
     if(prog)prog.innerHTML='<span style="color:#f87171">Auto-tune network error</span>';
   };
   x.ontimeout=function(){
     _camTuneState.tuneRunning=false;
+    _camTuneState.tuneXhr=null;
+    _camTuneSetRunUiBusy(false);
     if(prog)prog.innerHTML='<span style="color:#f87171">Auto-tune timed out (5 min cap)</span>';
+  };
+  x.onabort=function(){
+    // Cancel button path; UI already cleaned up.
   };
   x.send(JSON.stringify(body));
 }
@@ -2046,6 +2197,9 @@ function _camTuneStop(){
   if(_camTuneState.closeObserver){
     try{_camTuneState.closeObserver.disconnect();}catch(e){}
   }
+  // #685 — restore default modal-box width for the next modal opener.
+  var box = document.querySelector('#modal .modal-box');
+  if (box) box.classList.remove('modal-tune');
   _camTuneState=null;
 }
 

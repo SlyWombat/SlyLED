@@ -277,6 +277,122 @@ def expected_pixel_shift_per_deg(mover_pos, floor_hit, cam_pos, cam_rotation,
     return (pan_shift, tilt_shift)
 
 
+# ── Pixel → stage ray (#684) ─────────────────────────────────────────────
+
+def pixel_to_ray(pixel, cam_pos, cam_rotation, fov_deg, cam_resolution,
+                  aspect=None):
+    """Inverse of project_stage_to_pixel.
+
+    Given a camera pixel, return the stage-space ray ``(origin, direction)``
+    that originates at ``cam_pos`` and points toward whatever the pixel sees.
+    The ray direction is unit-length.
+
+    Used by the surface-aware mover-cal confirm gate (#684) to figure out
+    which surface a beam-detection pixel is sitting on. Pinhole assumption,
+    square pixels, focal length derived from the declared horizontal FOV
+    matching ``project_stage_to_pixel`` — so round-tripping a stage point
+    through project → pixel_to_ray returns a ray that hits the original
+    point exactly.
+
+    Args:
+        pixel:           (px, py) in image coordinates, origin at top-left.
+        cam_pos:         (x, y, z) in stage mm.
+        cam_rotation:    layout-rotation triple ``[rx, ry, rz]``.
+        fov_deg:         camera horizontal FOV in degrees.
+        cam_resolution:  (W, H) in pixels.
+        aspect:          optional W/H ratio override (default = W/H).
+
+    Returns ``((ox, oy, oz), (dx, dy, dz))`` with ``hypot(dx, dy, dz) == 1``.
+    """
+    tilt_deg, pan_deg, roll_deg = rotation_from_layout(cam_rotation)
+    R = build_camera_to_stage(tilt_deg, pan_deg, roll_deg)
+    w, h = cam_resolution
+    fx = float(w) / (2.0 * math.tan(math.radians(fov_deg) / 2.0))
+    fy = fx  # square pixels — must match project_stage_to_pixel
+    cx = float(w) / 2.0
+    cy = float(h) / 2.0
+    px, py = float(pixel[0]), float(pixel[1])
+    # Ray in pinhole-camera frame: x_cam = (px - cx) / fx, y_cam = (py - cy) / fy, z_cam = 1.
+    cam_dir = (
+        (px - cx) / fx,
+        (py - cy) / fy,
+        1.0,
+    )
+    if _HAS_NUMPY and hasattr(R, "dot"):
+        d = R.dot([cam_dir[0], cam_dir[1], cam_dir[2]])
+        dx, dy, dz = float(d[0]), float(d[1]), float(d[2])
+    else:
+        dx = R[0][0] * cam_dir[0] + R[0][1] * cam_dir[1] + R[0][2] * cam_dir[2]
+        dy = R[1][0] * cam_dir[0] + R[1][1] * cam_dir[1] + R[1][2] * cam_dir[2]
+        dz = R[2][0] * cam_dir[0] + R[2][1] * cam_dir[1] + R[2][2] * cam_dir[2]
+    mag = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if mag < 1e-12:
+        return ((float(cam_pos[0]), float(cam_pos[1]), float(cam_pos[2])),
+                (0.0, 0.0, 1.0))
+    return ((float(cam_pos[0]), float(cam_pos[1]), float(cam_pos[2])),
+            (dx / mag, dy / mag, dz / mag))
+
+
+def pan_tilt_to_ray(fixture_pos, fixture_rotation, pan_deg, tilt_deg):
+    """Build a stage-space ray from a moving-head's pan / tilt commands.
+
+    Mirrors the geometric assumption used by
+    ``parametric_mover.ParametricFixtureModel.forward`` (and the legacy
+    ``_rotation_to_aim`` in bake_engine): pan is rotation about stage-Z
+    (``+pan`` aims toward stage-left = +X), tilt is rotation about the
+    fixture-local horizontal axis with ``tilt = 0`` aiming straight DOWN
+    (the canonical hang orientation) and ``tilt = +90`` aiming horizontal.
+
+    Args:
+        fixture_pos:      (x, y, z) in stage mm.
+        fixture_rotation: layout rotation triple — applied as a body-frame
+                          pre-rotation so an upside-down fixture's beam
+                          flips correctly without sign hacks.
+        pan_deg:          pan in degrees.
+        tilt_deg:         tilt in degrees.
+
+    Returns ``((ox, oy, oz), (dx, dy, dz))`` with unit-length direction.
+    """
+    pan = math.radians(pan_deg)
+    tilt = math.radians(tilt_deg)
+    # Body-local beam direction. tilt=0 points along -Z (down), tilt=90 along +Y.
+    sin_t = math.sin(tilt)
+    cos_t = math.cos(tilt)
+    cos_p = math.cos(pan)
+    sin_p = math.sin(pan)
+    # Pan rotates the horizontal component around stage-Z.
+    body_dir = (
+        sin_t * sin_p,   # +x for +pan when tilted out
+        sin_t * cos_p,   # +y for tilt forward
+        -cos_t,          # -z (down) for tilt = 0
+    )
+    # Apply the fixture's mounting rotation (so an inverted hang flips beam).
+    # Stage-frame Euler: pitch about X, roll about Y, yaw about Z. No
+    # camera frame-swap — body_dir is already in stage axis convention.
+    fx_tilt, fx_pan, fx_roll = rotation_from_layout(fixture_rotation)
+    rx = math.radians(fx_tilt)
+    ry = math.radians(fx_roll)
+    rz = math.radians(fx_pan)
+    cx_, sx_ = math.cos(rx), math.sin(rx)
+    cy_, sy_ = math.cos(ry), math.sin(ry)
+    cz_, sz_ = math.cos(rz), math.sin(rz)
+    Rx = ((1, 0, 0), (0, cx_, -sx_), (0, sx_, cx_))
+    Ry = ((cy_, 0, sy_), (0, 1, 0), (-sy_, 0, cy_))
+    Rz = ((cz_, -sz_, 0), (sz_, cz_, 0), (0, 0, 1))
+    def _mv(m, v):
+        return (m[0][0]*v[0]+m[0][1]*v[1]+m[0][2]*v[2],
+                m[1][0]*v[0]+m[1][1]*v[1]+m[1][2]*v[2],
+                m[2][0]*v[0]+m[2][1]*v[1]+m[2][2]*v[2])
+    rotated = _mv(Rz, _mv(Ry, _mv(Rx, body_dir)))
+    dx, dy, dz = rotated[0], rotated[1], rotated[2]
+    mag = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if mag < 1e-12:
+        return ((float(fixture_pos[0]), float(fixture_pos[1]), float(fixture_pos[2])),
+                (0.0, 0.0, -1.0))
+    return ((float(fixture_pos[0]), float(fixture_pos[1]), float(fixture_pos[2])),
+            (dx / mag, dy / mag, dz / mag))
+
+
 # ── Camera floor-view polygon (#659) ─────────────────────────────────────
 
 def camera_floor_polygon(cam_pos, rotation, fov_deg, aspect=16.0 / 9.0,

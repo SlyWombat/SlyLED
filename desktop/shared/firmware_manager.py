@@ -284,22 +284,41 @@ def download_firmware(entry, cache_dir, assets_by_name=None):
     url = assets_by_name.get(asset_name)
     if not url:
         return None
+    # Zip-bundle assets (e.g. camera firmware ships every .py + service file
+    # in one archive) are downloaded to a sibling file alongside dest, then
+    # extracted into dest.parent so each member lands at its expected path.
+    is_zip = asset_name.lower().endswith(".zip")
+    archive_path = dest.parent / asset_name if is_zip else dest
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "SlyLED-Parent"})
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = resp.read()
-        dest.write_bytes(data)
+        archive_path.write_bytes(data)
     except Exception:
         return None
     expected = entry.get("sha256")
-    if expected and not _verify_sha256(dest, expected):
-        # Don't keep a binary that failed integrity check — a subsequent
-        # flash would push this straight to hardware. Delete and bail.
+    if expected and not _verify_sha256(archive_path, expected):
+        # Don't keep an archive that failed integrity check — a subsequent
+        # flash/deploy would push this straight to hardware. Delete and bail.
         try:
-            dest.unlink()
+            archive_path.unlink()
         except OSError:
             pass
         return None
+    if is_zip:
+        import zipfile
+        try:
+            with zipfile.ZipFile(archive_path) as zf:
+                zf.extractall(dest.parent)
+        except (zipfile.BadZipFile, OSError):
+            try:
+                archive_path.unlink()
+            except OSError:
+                pass
+            return None
+        if not dest.is_file():
+            # Archive didn't include the registered entry["file"] member.
+            return None
     return str(dest)
 
 

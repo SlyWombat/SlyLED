@@ -798,7 +798,8 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                          coarse_pan_min=3, coarse_pan_max=8,
                          coarse_tilt_min=3, coarse_tilt_max=6,
                          grid_filter=None, mounted_inverted=False,
-                         cancel_check=None, confirm_geom=None):
+                         cancel_check=None, confirm_geom=None,
+                         surface_check=None):
     """Coarse-to-fine discovery: sample a sparse `coarse_steps × coarse_
     steps` grid across pan/tilt ∈ [0, 1] first, then confirm any hit
     with a small nudge (rejects reflections).
@@ -943,13 +944,19 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         """Confirm a candidate beam by nudging pan and tilt.
 
         Returns a tuple ``(verdict, info)`` where verdict is one of:
-          - "CONFIRMED"                 — symmetric nudge-response plausible
-          - "PARTIAL"                   — one-sided shift only (edge of frame)
-          - "REJECTED_OUT_OF_FRAME"     — no detectable shift on either axis
-          - "REJECTED_DISCONTINUOUS"    — shift magnitude exceeds continuity
-                                           cap (blob identity swap)
-          - "REJECTED_DISPROPORTIONATE" — observed shift outside expected
-                                           range by > 3× (DD plausibility)
+          - "CONFIRMED"                       — symmetric nudge-response plausible
+          - "PARTIAL"                         — one-sided shift only (edge of frame)
+          - "REJECTED_OUT_OF_FRAME"           — no detectable shift on either axis
+          - "REJECTED_DISCONTINUOUS"          — shift magnitude exceeds continuity
+                                                  cap (blob identity swap)
+          - "REJECTED_DISPROPORTIONATE"       — observed shift outside expected
+                                                  range by > 3× (DD plausibility)
+          - "REJECTED_DEPTH_DISCONTINUITY"    — the four nudge probes land on
+                                                  different surfaces (e.g. centre
+                                                  on pillar, pan+ on back wall);
+                                                  the centroid would feed bad
+                                                  geometry into the kinematic
+                                                  fit. #684
 
         `info` carries per-direction pixel shifts, signed axis components,
         and the expected-vs-observed ratios so the caller can surface
@@ -1007,6 +1014,36 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         # latched on a static bright scene object.
         if pan_shift < 8 and tilt_shift < 8:
             return ("REJECTED_OUT_OF_FRAME", info)
+
+        # Gate 1b (#684 — depth discontinuity): when a surface_check
+        # callable was provided, label every pixel we observed (centre
+        # + four nudges) with the surface it sits on. If the centre and
+        # any nudge land on different surfaces, the four-nudge centroid
+        # straddles a depth jump and would contribute non-physical
+        # geometric error to the kinematic fit. Reject early so the
+        # caller never persists the sample.
+        if surface_check is not None:
+            try:
+                surface_centre = surface_check((px0, py0))
+                surface_probes = {
+                    k: (surface_check((b[0], b[1])) if b is not None else None)
+                    for k, b in probes.items()
+                }
+            except Exception as e:
+                # Surface lookup is advisory; don't block confirm if it crashes.
+                log.debug("battleship_discover: surface_check raised %s — "
+                          "skipping depth-discontinuity gate", e)
+                surface_centre = None
+                surface_probes = {}
+            labelled = {s for s in (surface_centre, *surface_probes.values())
+                        if s is not None}
+            if len(labelled) > 1:
+                info["surfaceCentre"] = surface_centre
+                info["surfaceProbes"] = surface_probes
+                info["surfacesHit"] = sorted(labelled)
+                return ("REJECTED_DEPTH_DISCONTINUITY", info)
+            elif surface_centre is not None:
+                info["surfaceCentre"] = surface_centre
 
         # Gate 2 (continuity cap): reject if any axis shift exceeds
         # 5× the beam's floor projection in pixels. Requires knowing the
@@ -1137,6 +1174,12 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
             elif verdict == "REJECTED_DISPROPORTIONATE":
                 outcome_counts["candidatesRejectedOutOfFrame"] += 1
                 reason = "disproportionate-shift"
+            elif verdict == "REJECTED_DEPTH_DISCONTINUITY":
+                # #684 — surface-aware reject. Counted under the same
+                # "out of frame" pool so existing SPA log still adds up,
+                # but the verdict + reason carry the specific cause.
+                outcome_counts["candidatesRejectedOutOfFrame"] += 1
+                reason = "depth-discontinuity"
             elif verdict == "PARTIAL":
                 outcome_counts["candidatesRejectedOutOfFrame"] += 1
                 reason = "partial-edge-of-frame"

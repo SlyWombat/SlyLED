@@ -469,9 +469,17 @@ def _clamp_to_range(ctrl, value):
     return max(lo, min(hi, int(value)))
 
 
+class AutoTuneCancelled(Exception):
+    """#685 follow-up — operator clicked Cancel mid-iteration. Raised by
+    the loop's cancel-check callback so the orchestrator route can map
+    it to a 499 response, release the per-camera device lock, and clean
+    up the cancel flag without conflating with a real failure."""
+
+
 def auto_tune_loop(camera_ip, cam_idx, intent,
                     fetch_snapshot_fn, max_iterations=6, settle_s=0.5,
-                    progress_cb=None, evaluator_mode="heuristic"):
+                    progress_cb=None, evaluator_mode="heuristic",
+                    cancel_check=None):
     """Iteratively adjust exposure + gain until the scored frame plateaus
     or ``max_iterations`` runs out.
 
@@ -537,10 +545,35 @@ def auto_tune_loop(camera_ip, cam_idx, intent,
     try:
         before = evaluator(frame0, controls_meta=controls, intent=intent)
     except Exception as e:
+        # #685 — distinguish the AI evaluator's failure modes so the SPA
+        # can show a useful remedy hint instead of "verify Ollama is
+        # running" when Ollama IS running but the call timed out / the
+        # model isn't pulled / etc.
+        cause = str(e)
+        cause_lower = cause.lower()
+        if evaluator_mode == "heuristic" or "ollama" not in cause_lower:
+            raise RuntimeError(
+                f"baseline evaluator failed (mode={evaluator_mode}). "
+                f"Cause: {cause}") from e
+        if "isn't pulled" in cause or "not pulled" in cause_lower:
+            hint = (f"the AI evaluator says model {_OLLAMA_MODEL!r} is not "
+                     f"pulled. Run `ollama pull {_OLLAMA_MODEL}`.")
+        elif "not reachable" in cause_lower:
+            hint = (f"the AI evaluator can't reach Ollama at {_OLLAMA_URL}. "
+                     "Start the Ollama service (`ollama serve` or system "
+                     "service) before retrying.")
+        elif "timed out" in cause_lower or "timeout" in cause_lower:
+            hint = ("the AI evaluator timed out waiting for the model to "
+                     "respond. The model may still be cold-loading; retry "
+                     "in a moment or pre-warm via Settings → AI Engines.")
+        elif "non-json" in cause_lower:
+            hint = ("the AI evaluator returned a malformed response. The "
+                     "model may not be vision-capable for this format; try "
+                     "a different vision model (moondream, llava).")
+        else:
+            hint = f"AI evaluator error: {cause}"
         raise RuntimeError(
-            f"baseline evaluator failed (mode={evaluator_mode}); "
-            f"if using AI, verify Ollama is running and the vision "
-            f"model is pulled. Cause: {e}") from e
+            f"baseline evaluator failed (mode={evaluator_mode}): {hint}") from e
     if progress_cb:
         progress_cb({"stage": "baseline", "iteration": 0,
                      "score": before["score"], "applied": dict(state),
@@ -568,6 +601,11 @@ def auto_tune_loop(camera_ip, cam_idx, intent,
     best_state = dict(state)
 
     for it in range(1, max_iterations + 1):
+        # #685 follow-up — operator-initiated cancel.  Checked ONCE per
+        # iteration before any V4L2 write so the device is left in the
+        # last applied state rather than mid-write.
+        if cancel_check is not None and cancel_check():
+            raise AutoTuneCancelled()
         prev = history[-1]
         delta = {}
 

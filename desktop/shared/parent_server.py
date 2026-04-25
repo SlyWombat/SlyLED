@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.9"
+VERSION = "1.6.15"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -953,7 +953,11 @@ app = Flask(__name__, static_folder=None)
 
 @app.get("/favicon.ico")
 def favicon():
-    abort(404)
+    return send_from_directory(str(SPA), "favicon.ico", mimetype="image/x-icon")
+
+@app.get("/favicon.png")
+def favicon_png():
+    return send_from_directory(str(SPA), "favicon.png", mimetype="image/png")
 
 @app.get("/status")
 def status():
@@ -2181,11 +2185,23 @@ def api_camera_snapshot(fid):
     """
     f = next((f for f in _fixtures if f["id"] == fid and f.get("fixtureType") == "camera"), None)
     if not f:
-        return jsonify(err="Camera not found"), 404
+        return jsonify(err="Camera not found", errType="not-found"), 404
     ip = f.get("cameraIp")
     if not ip:
-        return jsonify(err="Camera has no IP"), 400
+        return jsonify(err="Camera has no IP", errType="not-configured"), 400
     cam_idx = request.args.get("cam", f.get("cameraIdx", 0), type=int)
+    # #685 — per-camera device lock with a 2 s try-acquire. The live
+    # preview poll runs at 1 Hz; if auto-tune is mid-capture the preview
+    # frame can wait briefly. Anything past 2 s indicates a stuck capture
+    # and we'd rather return a typed busy-error than block the request
+    # thread (Flask's dev server has a small thread pool).
+    lock = _get_camera_device_lock(ip)
+    acquired = False
+    if lock is not None:
+        acquired = lock.acquire(timeout=2.0)
+        if not acquired:
+            return jsonify(err="Camera capture busy (device locked)",
+                            errType="capture-busy"), 503
     try:
         import urllib.request as _ur
         resp = _ur.urlopen(f"http://{ip}:5000/snapshot?cam={cam_idx}", timeout=15)
@@ -2193,7 +2209,11 @@ def api_camera_snapshot(fid):
         from flask import Response
         return Response(data, mimetype="image/jpeg")
     except Exception as e:
-        return jsonify(err=str(e)), 503
+        err_type, msg = _classify_camera_fetch_error(e)
+        return jsonify(err=msg, errType=err_type), 503
+    finally:
+        if acquired and lock is not None:
+            lock.release()
 
 @app.get("/api/cameras/<int:fid>/status")
 def api_camera_status(fid):
@@ -3870,6 +3890,76 @@ _camera_settings_slots = _load("camera_settings_slots", default={})
 
 _auto_tune_jobs = {}  # fixture_id (str) → job dict (result + status)
 
+# #685 follow-up — per-fixture cancel hint. Set by the cancel route; the
+# iteration loop checks it between iterations and bails out cleanly so
+# the device lock is released and the camera returns to a usable state.
+_auto_tune_cancel: dict = {}
+
+# #685 — per-camera device lock. Live-preview poller (1 Hz) and the
+# auto-tune iteration loop both pull JPEGs from the same V4L2 device on
+# the camera node. Without serialisation they race: the loop applies a
+# control write between captures, the preview tries to read mid-write,
+# the camera-node /snapshot returns 503 ("capture failed"), and the SPA
+# surfaces it as the misleading "camera offline?" toast.  The lock is
+# acquire-with-timeout so the live preview shows a stale frame instead
+# of blocking the SPA when auto-tune is running.
+_camera_device_locks: dict = {}
+_camera_device_locks_meta_lock = threading.Lock()
+
+
+def _get_camera_device_lock(camera_ip):
+    """Return a process-wide threading.Lock keyed to ``camera_ip``.
+
+    Lazy-initialised; multiple tabs / fixtures pointing at the same
+    physical camera node share one lock so the V4L2 device only sees one
+    concurrent capture, matching the camera node's actual single-stream
+    capability. Use ``acquire(timeout=...)`` rather than blocking forever
+    so a stuck capture doesn't hang every other request indefinitely.
+    """
+    if not camera_ip:
+        return None
+    with _camera_device_locks_meta_lock:
+        lk = _camera_device_locks.get(camera_ip)
+        if lk is None:
+            lk = threading.Lock()
+            _camera_device_locks[camera_ip] = lk
+    return lk
+
+
+def _classify_camera_fetch_error(exc):
+    """#685 — bucket a snapshot-fetch exception into one of the typed
+    failure modes the SPA renders into operator-facing remedy hints.
+
+    Returns ``(errType, message)``. The bucket names match the issue's
+    acceptance-criteria taxonomy: ``camera-unreachable``,
+    ``capture-timeout``, ``capture-busy``, ``capture-failed``. Anything
+    we can't classify lands in ``capture-failed`` so the SPA at least
+    shows the underlying exception.
+    """
+    import socket
+    import urllib.error
+    msg = str(exc) or exc.__class__.__name__
+    if isinstance(exc, urllib.error.HTTPError):
+        # 503 from the camera node maps to capture-busy — its capture
+        # endpoints return 503 specifically when V4L2 read fails after
+        # retries (firmware/orangepi/camera_server.py).
+        if exc.code == 503:
+            return ("capture-busy", "Camera capture device busy — retrying")
+        if exc.code == 404:
+            return ("capture-failed", f"Camera endpoint missing: {msg}")
+        return ("capture-failed", f"Camera returned HTTP {exc.code}: {msg}")
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, socket.timeout):
+            return ("capture-timeout", "Camera capture timed out")
+        return ("camera-unreachable",
+                f"Camera unreachable ({reason or msg})")
+    if isinstance(exc, socket.timeout):
+        return ("capture-timeout", "Camera capture timed out")
+    if isinstance(exc, (ConnectionRefusedError, ConnectionResetError, OSError)):
+        return ("camera-unreachable", f"Camera unreachable ({msg})")
+    return ("capture-failed", msg)
+
 
 def _camera_fixture(fid):
     """Return the camera-type fixture record for `fid`, or None."""
@@ -4030,23 +4120,56 @@ def api_camera_settings_auto_tune(fid):
         # One-shot retry covers transient V4L2 device hangs that the Pi's
         # driver recovers from after a short release pause (empirically
         # 1-5 s is enough on the basement rig).
+        # #685 — hold the per-camera device lock across the snapshot so
+        # the 1 Hz live-preview poller can't race the iteration. Lock
+        # release sits in `finally` so a snapshot exception still hands
+        # the lock back. Acquire timeout 30 s — auto-tune is the primary
+        # user during its run; the preview can wait or show stale.
+        lock_ = _get_camera_device_lock(ip_)
+        acquired_ = False
+        if lock_ is not None:
+            acquired_ = lock_.acquire(timeout=30.0)
         try:
-            return _cv.fetch_snapshot(ip_, idx_, timeout=30)
-        except Exception as e:
-            log.warning("auto-tune: snapshot failed (%s) — pausing 3 s and retrying once", e)
-            time.sleep(3)
-            return _cv.fetch_snapshot(ip_, idx_, timeout=30)
+            try:
+                return _cv.fetch_snapshot(ip_, idx_, timeout=30)
+            except Exception as e:
+                err_type, _ = _classify_camera_fetch_error(e)
+                # capture-busy (503 from camera node) typically clears in
+                # 200-500 ms once the V4L2 driver re-syncs. Bigger backoff
+                # for camera-unreachable / capture-timeout — those tend
+                # to need the device a few seconds to recover.
+                back_off = 0.2 if err_type == "capture-busy" else 3.0
+                log.warning("auto-tune: snapshot failed (%s; type=%s) — "
+                            "pausing %.1f s and retrying once",
+                            e, err_type, back_off)
+                time.sleep(back_off)
+                return _cv.fetch_snapshot(ip_, idx_, timeout=30)
+        finally:
+            if acquired_ and lock_ is not None:
+                lock_.release()
 
+    # #685 follow-up — cancel hook.  The cancel route flips the flag;
+    # the iteration loop checks it between iterations.
+    _auto_tune_cancel[str(fid)] = False
+    def _is_cancelled():
+        return bool(_auto_tune_cancel.get(str(fid)))
     try:
         result = _cam_settings.auto_tune_loop(
             ip, cam_idx, intent,
             fetch_snapshot_fn=_snap,
             max_iterations=max_it,
             evaluator_mode=evaluator_mode,
+            cancel_check=_is_cancelled,
         )
+    except _cam_settings.AutoTuneCancelled:
+        _auto_tune_cancel.pop(str(fid), None)
+        return jsonify(ok=False, err="Auto-tune cancelled by operator",
+                        errType="cancelled"), 499
     except Exception as e:
         log.exception("auto-tune fid=%d failed", fid)
+        _auto_tune_cancel.pop(str(fid), None)
         return jsonify(err=f"Auto-tune failed: {e}"), 500
+    _auto_tune_cancel.pop(str(fid), None)
 
     slot_name = body.get("saveSlot")
     if slot_name:
@@ -4066,6 +4189,76 @@ def api_camera_settings_auto_tune(fid):
                                   "intent": intent,
                                   "timestamp": time.time()}
     return jsonify(ok=True, **result, intent=intent, slot=slot_name)
+
+
+@app.get("/api/calibration/traces")
+def api_cal_traces():
+    """#686 — list recent cal-trace NDJSON files.
+
+    Returns a list of trace metadata sorted newest-first. Optional
+    ``?fid=<id>`` filter restricts to a single fixture. Useful for the
+    SPA "open last cal trace" UI; ``?limit=<n>`` defaults to 50.
+    """
+    fid = request.args.get("fid", type=int)
+    limit = request.args.get("limit", default=50, type=int)
+    if not CAL_TRACES_DIR.exists():
+        return jsonify(traces=[])
+    pattern = f"fid{fid}-*.ndjson" if fid is not None else "*.ndjson"
+    files = sorted(CAL_TRACES_DIR.glob(pattern),
+                   key=lambda p: p.stat().st_mtime,
+                   reverse=True)[:max(1, int(limit))]
+    out = []
+    for p in files:
+        try:
+            stat = p.stat()
+        except OSError:
+            continue
+        # Cheap header peek — first line only.
+        header = {}
+        try:
+            with p.open("r", encoding="utf-8") as f:
+                first = f.readline()
+            if first:
+                header = json.loads(first)
+        except Exception:
+            pass
+        out.append({
+            "path": str(p),
+            "name": p.name,
+            "sizeBytes": stat.st_size,
+            "modifiedAt": stat.st_mtime,
+            "fid": header.get("fid"),
+            "mode": header.get("mode"),
+            "schema": header.get("schema"),
+        })
+    return jsonify(traces=out)
+
+
+@app.get("/api/calibration/traces/<path:name>")
+def api_cal_trace_file(name):
+    """Stream a cal-trace NDJSON by filename (no path traversal)."""
+    safe = Path(name).name  # strip directory components
+    candidate = CAL_TRACES_DIR / safe
+    if not candidate.is_file():
+        return jsonify(err="trace not found"), 404
+    return send_from_directory(str(CAL_TRACES_DIR), safe,
+                                mimetype="application/x-ndjson")
+
+
+@app.post("/api/cameras/<int:fid>/settings/auto-tune/cancel")
+def api_camera_settings_auto_tune_cancel(fid):
+    """#685 follow-up — set the cancel flag for an in-flight auto-tune.
+
+    The auto-tune route is synchronous in its request thread, so cancel
+    here just flips the per-fixture flag the iteration loop checks
+    between iterations. Returns 200 even when there's no active run so
+    the SPA's best-effort cancel never reports a misleading error.
+    """
+    if not _camera_fixture(fid):
+        return jsonify(err="Camera fixture not found"), 404
+    _auto_tune_cancel[str(fid)] = True
+    log.info("auto-tune cancel requested for fid=%d", fid)
+    return jsonify(ok=True)
 
 
 @app.get("/api/cameras/settings/evaluator-status")
@@ -4502,6 +4695,27 @@ def _mover_cal_thread_markers(fid, cam, bridge_ip, mover_color,
         # #682-N — ALWAYS restore camera auto controls, no matter how the
         # body exited (success, explicit error-return, abort, crash).
         _restore_camera_lock(job, cam)
+        # #686 — close any open cal-trace file. The body normally hands
+        # us back the open recorder via job["_calTraceRecorder"]; the
+        # outer wrapper closes it so the trace lands on disk on every
+        # exit path (cancel, crash, normal complete).
+        _close_cal_trace(job)
+
+
+def _close_cal_trace(job):
+    """#686 — finalise the trace file owned by ``job["_calTraceRecorder"]``.
+    Idempotent; safe no-op when no recorder was attached or it's already
+    closed. The status string mirrors the job's status so the trace
+    footer captures success / error / cancelled."""
+    rec = (job or {}).pop("_calTraceRecorder", None)
+    if rec is None:
+        return
+    status = (job or {}).get("status") or "unknown"
+    error = (job or {}).get("error")
+    try:
+        rec.close(status=status, error=error)
+    except Exception as e:
+        log.debug("cal-trace close failed: %s", e)
 
 
 def _restore_camera_lock(job, cam):
@@ -4759,7 +4973,56 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
             mounted_inverted=f.get("mountedInverted", False))
     except Exception:
         seed_pan, seed_tilt = 0.5, 0.5
-    grid_filter = _build_battleship_grid_filter(f, pan_range_deg, tilt_range_deg)
+    # #684 — surface model + per-camera depth-discontinuity surface_check.
+    # Both the grid_filter and battleship_discover._confirm use the same
+    # surfaces dict; the latter wraps it in a closure that maps a camera
+    # pixel back to the surface it sits on.
+    cal_surfaces, cal_scan_age, cal_scan_warn = _surface_model_for_cal()
+    if cal_scan_warn == "missing":
+        _mcal_log(job, "Surface scan unavailable — cal will use legacy "
+                       "floor-plane projection. Wall / pillar markers "
+                       "won't be flagged as depth-discontinuous (#684).")
+        cal_surfaces = None
+    elif cal_scan_warn == "synthetic":
+        _mcal_log(job, "Surface model from layout box (no point cloud). "
+                       "Run /api/space/scan for richer pillar / obstacle "
+                       "geometry (#684).")
+    elif cal_scan_warn == "stale":
+        max_age = float(_cal_tuning("maxScanAgeMinutes", 10))
+        _mcal_log(job, f"Surface scan is {cal_scan_age:.0f} min old (>"
+                       f" {max_age:.0f} min) — cal will still run but "
+                       f"consider rescanning if rig has moved (#684).")
+    job["surfaceWarning"] = cal_scan_warn
+    job["surfaceAgeMinutes"] = (round(cal_scan_age, 1)
+                                  if cal_scan_age is not None else None)
+
+    surface_check_cb = _make_surface_check_for_camera(cam, cal_surfaces)
+    # #686 — cal-trace recorder. One NDJSON record per probe (visit OR
+    # skip-by-filter) so post-cal failures can be debugged against an
+    # exact map of the geometric walk. Closed in the success / error
+    # paths below.
+    cal_trace = None
+    try:
+        cal_trace = CalTraceRecorder(
+            fid=fid, mode="markers",
+            fixture_pos=fx_pos,
+            mover_rotation=f.get("rotation") or [0, 0, 0],
+            pan_range_deg=pan_range_deg,
+            tilt_range_deg=tilt_range_deg,
+            mounted_inverted=f.get("mountedInverted"),
+            cameras=_camera_floor_polygons_with_ids(),
+            surfaces=cal_surfaces,
+            scene_meta={"camId": cam.get("id"), "camIdx": cam_idx})
+        cal_trace.record_seed(seed_pan, seed_tilt, seed_target,
+                                source="markers-mode")
+        job["calTrace"] = cal_trace.path
+        job["_calTraceRecorder"] = cal_trace
+    except Exception as e:
+        log.warning("MOVER-CAL %d: cal-trace recorder init failed (%s) — "
+                    "continuing without trace", fid, e)
+    grid_filter = _build_battleship_grid_filter(f, pan_range_deg, tilt_range_deg,
+                                                  surfaces=cal_surfaces)
+    grid_filter = _wrap_grid_filter_for_trace(grid_filter, cal_trace)
     # #682-DD — pre-compute pixel-per-degree sensitivity + beam-width
     # in pixels at the seed target. _confirm uses these for the three-
     # part plausibility gate. None on any failure → _confirm falls back
@@ -4841,7 +5104,8 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
         mounted_inverted=bool(f.get("mountedInverted")),
         grid_filter=grid_filter,
         confirm_geom=confirm_geom,
-        progress_cb=_discovery_progress,
+        surface_check=surface_check_cb,
+        progress_cb=_wrap_progress_for_trace(_discovery_progress, cal_trace),
     )
     if discovered is None:
         job["error"] = ("Battleship discovery found no beam. Check "
@@ -4891,13 +5155,27 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
                  "pan": result["pan"], "tilt": result["tilt"]}
         per_marker.append(entry)
         if result["converged"]:
-            samples.append({
+            sample = {
                 "pan": result["pan"], "tilt": result["tilt"],
                 "stageX": stage_xyz[0], "stageY": stage_xyz[1],
                 "stageZ": stage_xyz[2],
                 "markerId": mid, "errorPx": result["errorPx"],
-            })
+            }
+            # #684 — annotate the sample with the surface this marker
+            # sits on (floor / wall_N / pillar / obstacle_N). Diagnostic
+            # only — the kinematic fit already accepts 3D points so the
+            # value of the field is downstream visibility, not behaviour.
+            if cal_surfaces is not None:
+                sample["surface"] = _classify_stage_point(
+                    cal_surfaces, stage_xyz)
+            samples.append(sample)
             warm_pan, warm_tilt = result["pan"], result["tilt"]
+            if cal_trace is not None:
+                cal_trace.record_decision(
+                    result["pan"], result["tilt"], "marker-converged",
+                    reason=f"marker {mid} err={result['errorPx']:.1f}px",
+                    markerId=mid, sampleSurface=sample.get("surface"),
+                    iterations=result["iterations"])
             _mcal_log(job, f"Marker {mid}: CONVERGED "
                            f"pan={result['pan']:.3f} tilt={result['tilt']:.3f} "
                            f"err={result['errorPx']:.1f}px "
@@ -5130,14 +5408,22 @@ def _mover_cal_thread_v2_body(fid, cam, bridge_ip, mover_color,
         tstate["errorPx"] = result.get("errorPx")
         if result.get("converged"):
             tstate["status"] = "converged"
-            samples.append({
+            sample = {
                 "pan": result["pan"], "tilt": result["tilt"],
                 "stageX": float(target[0]),
                 "stageY": float(target[1]),
                 "stageZ": float(target[2]),
                 "pixelX": (result.get("beamPixel") or [0, 0])[0],
                 "pixelY": (result.get("beamPixel") or [0, 0])[1],
-            })
+            }
+            # #684 — surface annotation. v2 uses operator-supplied targets;
+            # the surveyed stage XYZ already reflects which surface the
+            # target was placed on. Use _classify_stage_point to label
+            # for downstream diagnostics + stale-fit detection.
+            if geometry is not None:
+                sample["surface"] = _classify_stage_point(
+                    geometry, (sample["stageX"], sample["stageY"], sample["stageZ"]))
+            samples.append(sample)
         else:
             tstate["status"] = "skipped"
 
@@ -5210,24 +5496,29 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
     is blacked out, lock released, status reported to the wizard)."""
     job = _mover_cal_jobs[str(fid)]
     try:
-        _mover_cal_thread_body(fid, cam, bridge_ip, mover_color, warmup, warmup_seconds)
-    except _mcal.CalibrationAborted:
-        log.info("MOVER-CAL %d: cancelled by operator", fid)
-        job["error"] = "Cancelled by operator"
-        job["status"] = "cancelled"
-        job["phase"] = "cancelled"
-        # Clear the cancel flag before the blackout write so _hold_dmx
-        # actually runs (rather than re-raising CalibrationAborted).
-        _mcal.arm_cancel()
-        _targeted_fixture_blackout(fid)
-        _set_calibrating(fid, False)
-    except Exception as e:
-        log.exception("MOVER-CAL %d: unhandled exception in cal thread", fid)
-        job["error"] = f"Unhandled error: {e}"
-        job["status"] = "error"
-        _mcal.arm_cancel()
-        _targeted_fixture_blackout(fid)
-        _set_calibrating(fid, False)
+        try:
+            _mover_cal_thread_body(fid, cam, bridge_ip, mover_color, warmup, warmup_seconds)
+        except _mcal.CalibrationAborted:
+            log.info("MOVER-CAL %d: cancelled by operator", fid)
+            job["error"] = "Cancelled by operator"
+            job["status"] = "cancelled"
+            job["phase"] = "cancelled"
+            # Clear the cancel flag before the blackout write so _hold_dmx
+            # actually runs (rather than re-raising CalibrationAborted).
+            _mcal.arm_cancel()
+            _targeted_fixture_blackout(fid)
+            _set_calibrating(fid, False)
+        except Exception as e:
+            log.exception("MOVER-CAL %d: unhandled exception in cal thread", fid)
+            job["error"] = f"Unhandled error: {e}"
+            job["status"] = "error"
+            _mcal.arm_cancel()
+            _targeted_fixture_blackout(fid)
+            _set_calibrating(fid, False)
+    finally:
+        # #686 — close any open trace file regardless of how the body
+        # exited so the diagnostic NDJSON always lands on disk.
+        _close_cal_trace(job)
 
 
 def _positioned_cameras_for_target_filter():
@@ -5283,6 +5574,37 @@ def _camera_floor_polygons_for_cal(fixture=None):
     return polys
 
 
+def _camera_floor_polygons_with_ids():
+    """#686 — return ``[{"id": fid, "polygon": [(x, y), ...]}, ...]`` for
+    every positioned camera. The trace recorder needs the camera id per
+    polygon so the visualiser can colour-code which camera saw which
+    probe; ``_camera_floor_polygons_for_cal`` only returns the polygons
+    themselves (no provenance)."""
+    try:
+        from camera_math import camera_floor_polygon
+    except Exception:
+        return []
+    cams = _positioned_cameras_for_target_filter()
+    if not cams:
+        return []
+    stage_bounds = {
+        "w": int((_stage.get("w") or 3.0) * 1000),
+        "d": int((_stage.get("d") or 4.0) * 1000),
+        "h": int((_stage.get("h") or 2.0) * 1000),
+    }
+    out = []
+    for c in cams:
+        try:
+            poly = camera_floor_polygon(c["pos"], c["rotation"], c["fov"],
+                                          stage_bounds=stage_bounds,
+                                          floor_z=0.0)
+        except Exception:
+            poly = None
+        if poly:
+            out.append({"id": c.get("id"), "polygon": poly})
+    return out
+
+
 def _camera_visible_centroid(fallback=None):
     """#682-C-v2 — centroid of the union of camera floor-view polygons.
     Falls back to ``fallback`` (stage-centre mm) when no polygons can
@@ -5302,15 +5624,128 @@ def _camera_visible_centroid(fallback=None):
     return [sum(xs) / len(xs), sum(ys) / len(ys), 0.0]
 
 
-def _build_battleship_grid_filter(fixture, pan_range_deg, tilt_range_deg):
-    """#681-B / #682-B-v2 — predicate `(pan_norm, tilt_norm) -> bool`
-    that approximates whether an aim direction lands on the floor inside
-    some camera's visible polygon. Pre-#682 this used
-    ``mountedInverted → mount_pitch=180`` as the only geometric clue and
-    ignored ``fixture.rotation`` — so 47/48 probes landed off-camera on
-    a stage-right mover that had an explicit yaw in the layout. Fixed by
-    reading the full ``rotation = [rx, ry, rz]`` triple into mount_pitch
-    / mount_roll / mount_yaw per CLAUDE.md §Rotation schema v2.
+def _classify_stage_point(surfaces, stage_xyz, tol_mm=120.0):
+    """#684 — return a surface label for a known stage point.
+
+    Used to annotate cal samples that come from surveyed targets (markers
+    mode + v2 mode) where the stage-XYZ is already known and we just need
+    a label for diagnostics. Tolerance defaults to ~120 mm so a marker
+    stuck on the front face of a pillar still snaps to the pillar even
+    when the surveyed (x, y, z) sits a few cm proud of the surface plane.
+
+    Returns ``"floor" / "wall_N" / "obstacle_N"`` or ``"unknown"`` when no
+    surface comes within tolerance.
+    """
+    if not surfaces or stage_xyz is None:
+        return None
+    sx = float(stage_xyz[0])
+    sy = float(stage_xyz[1])
+    sz = float(stage_xyz[2])
+    # Floor first.
+    floor = surfaces.get("floor") or {}
+    floor_z = float(floor.get("z", 0) or 0)
+    if abs(sz - floor_z) <= tol_mm:
+        return "floor"
+    # Walls — point-to-plane distance against the unit-normal form.
+    for idx, w in enumerate(surfaces.get("walls") or []):
+        n = w.get("normal") or [0, 0, 0]
+        d = float(w.get("d", 0) or 0)
+        nx, ny, nz = float(n[0] or 0), float(n[1] or 0), float(n[2] or 0)
+        nm = (nx * nx + ny * ny + nz * nz) ** 0.5
+        if nm < 1e-6:
+            continue
+        signed = (nx * sx + ny * sy + nz * sz - d) / nm
+        if abs(signed) <= tol_mm:
+            return w.get("label") or f"wall_{idx}"
+    # Obstacles / pillars — bounding-box check around pos with size [w, h, d]
+    # following the surface_analyzer convention (X = w, Z = h, Y = d).
+    for idx, ob in enumerate(surfaces.get("obstacles") or []):
+        pos = ob.get("pos") or [0, 0, 0]
+        size = ob.get("size") or [0, 0, 0]
+        try:
+            ox, oy, oz = float(pos[0]), float(pos[1]), float(pos[2])
+            sw = float(size[0]) / 2.0
+            sh = float(size[1]) / 2.0
+            sd = float(size[2]) / 2.0
+        except (TypeError, ValueError, IndexError):
+            continue
+        if (ox - sw - tol_mm <= sx <= ox + sw + tol_mm and
+                oy - sd - tol_mm <= sy <= oy + sd + tol_mm and
+                oz - sh - tol_mm <= sz <= oz + sh + tol_mm):
+            return ob.get("label") or f"obstacle_{idx}"
+    return "unknown"
+
+
+def _make_surface_check_for_camera(camera_fixture, surfaces):
+    """#684 — build a ``surface_check(pixel) -> label_or_None`` closure
+    keyed to a single camera pose, for the depth-discontinuity gate in
+    ``battleship_discover._confirm``.
+
+    Returns ``None`` when the input camera is missing pose / resolution
+    / FOV, or when the supplied surfaces dict is empty — `_confirm` skips
+    the gate entirely in that case (preserving legacy behaviour). Otherwise
+    every confirm-nudge pixel is back-projected through the camera's
+    pinhole + the surveyed scene; the four nudges' surface labels then
+    drive the new ``REJECTED_DEPTH_DISCONTINUITY`` verdict.
+    """
+    if not surfaces:
+        return None
+    try:
+        from camera_math import pixel_to_ray
+        from surface_analyzer import beam_surface_check
+    except Exception as e:
+        log.debug("surface_check builder: import failed (%s)", e)
+        return None
+    pos_map = {p["id"]: p for p in _layout.get("children", [])}
+    cam_fp = pos_map.get(camera_fixture.get("id"))
+    if not cam_fp:
+        return None
+    cam_pos = (float(cam_fp.get("x", 0)),
+               float(cam_fp.get("y", 0)),
+               float(cam_fp.get("z", 0)))
+    cam_rotation = camera_fixture.get("rotation") or [0, 0, 0]
+    fov_deg = float(camera_fixture.get("fovDeg") or 90.0)
+    res_w = int(camera_fixture.get("resolutionW") or 0)
+    res_h = int(camera_fixture.get("resolutionH") or 0)
+    if res_w <= 0 or res_h <= 0:
+        return None
+    cam_res = (res_w, res_h)
+
+    def _surface_check(pixel):
+        try:
+            o, d = pixel_to_ray(pixel, cam_pos, cam_rotation, fov_deg, cam_res)
+            hit = beam_surface_check(surfaces, o, d)
+        except Exception:
+            return None
+        if hit is None:
+            return None
+        return hit.get("surface")
+
+    return _surface_check
+
+
+def _build_battleship_grid_filter(fixture, pan_range_deg, tilt_range_deg,
+                                   surfaces=None):
+    """#681-B / #682-B-v2 / #684 — predicate `(pan_norm, tilt_norm) -> bool`
+    deciding whether an aim direction lands somewhere a camera can see.
+
+    Two modes:
+      - ``surfaces is None`` (legacy): treat the scene as a flat z=0 floor.
+        Intersect the beam ray with the floor and require the hit to fall
+        inside at least one camera's floor polygon.
+      - ``surfaces`` supplied: ray-trace against the analysed scene
+        (floor + walls + pillars + obstacles). Floor hits keep the polygon
+        check (we know which cameras see the floor). Wall / obstacle hits
+        are accepted unconditionally — the beam is striking real geometry
+        the operator surveyed, even if not in any floor polygon. Probes
+        whose ray escapes the scene entirely are still rejected.
+
+    Pre-#682 this used ``mountedInverted → mount_pitch=180`` as the only
+    geometric clue and ignored ``fixture.rotation`` — so 47/48 probes
+    landed off-camera on a stage-right mover that had an explicit yaw in
+    the layout. Fixed by reading the full ``rotation = [rx, ry, rz]``
+    triple into mount_pitch / mount_roll / mount_yaw per CLAUDE.md
+    §Rotation schema v2.
     """
     try:
         from parametric_mover import ParametricFixtureModel
@@ -5352,12 +5787,37 @@ def _build_battleship_grid_filter(fixture, pan_range_deg, tilt_range_deg):
     )
     fx, fy, fz = fx_pos
 
+    # Surface-aware path: pre-import the ray-surface intersector once so
+    # the closure doesn't pay the import cost on every probe.
+    _surface_check = None
+    if surfaces:
+        try:
+            from surface_analyzer import beam_surface_check as _surface_check
+        except Exception as _e:
+            log.debug("grid_filter: surface_analyzer unavailable (%s) — "
+                      "falling back to floor-only", _e)
+            _surface_check = None
+
     def _filter(pan_n, tilt_n):
         try:
             dx, dy, dz = model.forward(pan_n, tilt_n)
         except Exception:
             return True  # can't evaluate → keep the probe
-        # Intersect with floor plane z=0. If the beam points up or
+        if _surface_check is not None:
+            hit = _surface_check(surfaces, (fx, fy, fz), (dx, dy, dz))
+            if hit is None:
+                return False  # ray escapes scene
+            label = hit.get("surface", "")
+            if label.startswith("floor"):
+                # Floor hits still need to be in some camera's floor poly.
+                pt = hit.get("point") or (None, None)
+                hx, hy = float(pt[0]), float(pt[1])
+                return any(point_in_polygon((hx, hy), poly) for poly in polys)
+            # Wall / pillar / obstacle hit: accept (the beam lands on
+            # real geometry the operator surveyed). Seed-sort favours
+            # floor hits first via #682-Q so wall samples come last.
+            return True
+        # Legacy: intersect with floor plane z=0. If the beam points up or
         # parallel to the floor, there is no intersection on the floor
         # — treat as outside-FOV (don't keep).
         if dz >= -1e-6:
@@ -5452,6 +5912,12 @@ CAL_TUNING_SPEC = {
     "nudgeAmplitude":            {"default": "auto", "type": "autoFloat",
         "min": 0.001, "max": 0.05,
         "tooltip": "Confirm-nudge size in normalised pan/tilt. 'auto' targets ~5 degrees mechanical (recommended); explicit values override for narrow-FOV cameras (0.005) or stubborn rigs (0.04)."},
+    # #684 — surface-aware sample mapping. Cal threads consume the latest
+    # /api/space/scan output to label each sample with the surface it
+    # landed on (floor / wall / pillar) and reject four-nudge probes that
+    # cross a depth discontinuity. Stale scans warn but don't abort.
+    "maxScanAgeMinutes":         {"default": 10.0,  "min": 1.0,  "max": 120.0,
+        "tooltip": "Surface scan freshness window. Older than this and the cal status pill warns 'stale geometry — consider rescanning' (the cal still runs). Raise on rigs that don't move; drop in workshops where props shift between cals."},
 }
 
 
@@ -5828,8 +6294,46 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
         if cam.get("resolutionW") and cam.get("resolutionH"):
             cam_res = (int(cam["resolutionW"]), int(cam["resolutionH"]))
         # #680 — operator-tunable battleship clamps.
-        # #681-B — FOV-aware grid filter.
-        _grid_filter = _build_battleship_grid_filter(f, pan_range_deg, tilt_range_deg)
+        # #681-B / #684 — FOV-aware grid filter + depth-discontinuity gate.
+        _cal_surfaces, _cal_age, _cal_warn = _surface_model_for_cal()
+        if _cal_warn == "missing":
+            _mcal_log(job, "Surface scan unavailable — cal will use legacy "
+                           "floor-plane projection (#684).")
+            _cal_surfaces = None
+        elif _cal_warn == "stale":
+            _max_age = float(_cal_tuning("maxScanAgeMinutes", 10))
+            _mcal_log(job, f"Surface scan {_cal_age:.0f} min old "
+                           f"(> {_max_age:.0f} min) — rescan if rig moved (#684).")
+        elif _cal_warn == "synthetic":
+            _mcal_log(job, "Surface model from layout box (no point cloud) (#684).")
+        job["surfaceWarning"] = _cal_warn
+        job["surfaceAgeMinutes"] = (round(_cal_age, 1)
+                                      if _cal_age is not None else None)
+        _surface_check = _make_surface_check_for_camera(cam, _cal_surfaces)
+        # #686 — trace recorder for the legacy path. Closed by the
+        # outer wrapper via _close_cal_trace.
+        _legacy_trace = None
+        try:
+            _legacy_trace = CalTraceRecorder(
+                fid=fid, mode="legacy",
+                fixture_pos=fx_pos,
+                mover_rotation=f.get("rotation") or [0, 0, 0],
+                pan_range_deg=pan_range_deg,
+                tilt_range_deg=tilt_range_deg,
+                mounted_inverted=inverted,
+                cameras=_camera_floor_polygons_with_ids(),
+                surfaces=_cal_surfaces,
+                scene_meta={"camId": cam.get("id"), "camIdx": cam_idx,
+                             "warmStart": job.get("warmStart")})
+            _legacy_trace.record_seed(start_pan, start_tilt, floor_target,
+                                        source="legacy-bfs")
+            job["calTrace"] = _legacy_trace.path
+            job["_calTraceRecorder"] = _legacy_trace
+        except Exception as e:
+            log.warning("MOVER-CAL %d: legacy cal-trace init failed (%s)", fid, e)
+        _grid_filter = _build_battleship_grid_filter(
+            f, pan_range_deg, tilt_range_deg, surfaces=_cal_surfaces)
+        _grid_filter = _wrap_grid_filter_for_trace(_grid_filter, _legacy_trace)
         # #681 — adaptive-density toggle.
         _pr_deg = pan_range_deg if _cal_tuning("adaptiveDensity") else None
         _tr_deg = tilt_range_deg if _cal_tuning("adaptiveDensity") else None
@@ -5849,7 +6353,8 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
             refine=bool(_cal_tuning("refineAfterHit")),
             reject_reflection=bool(_cal_tuning("rejectReflection")),
             grid_filter=_grid_filter,
-            progress_cb=_battleship_progress)
+            surface_check=_surface_check,
+            progress_cb=_wrap_progress_for_trace(_battleship_progress, _legacy_trace))
         elapsed = time.monotonic() - phase_start
 
         _budget_battleship = float(_cal_tuning("discoveryBattleshipS",
@@ -6966,6 +7471,386 @@ def _get_stage_geometry():
     if extras:
         synthetic["obstacles"] = extras
     return synthetic
+
+
+def _surface_model_for_cal():
+    """#684 — return ``(surfaces, age_minutes_or_None, warning_or_None)``
+    for the mover-cal threads.
+
+    Cal pipelines use this to decide whether to consume the surface
+    model (sample annotation + grid-filter + DEPTH_DISCONTINUITY gate)
+    or fall back to legacy floor-plane behaviour. Reasoning, in priority:
+
+      1. No analysed surfaces at all → return ``(None, None, "missing")``.
+         Caller logs a clear warning and uses the legacy code path so
+         existing rigs don't regress.
+      2. Surfaces from ``layout-box`` fallback (no point cloud) → return
+         the synthetic surfaces with ``age=None`` and warning="synthetic".
+         Better than floor-only, but the operator should run a real scan.
+      3. Surfaces from ``pointcloud`` source — compute scan age in
+         minutes. If it exceeds ``calibrationTuning.maxScanAgeMinutes``
+         (default 10), surface a "stale" warning so the cal status pill
+         can flag the issue without aborting.
+
+    The warning value is one of: ``None`` / ``"synthetic"`` / ``"stale"`` /
+    ``"missing"``.
+    """
+    try:
+        surfaces = _get_stage_geometry()
+    except Exception as e:
+        log.warning("Cal surface lookup failed: %s", e)
+        return (None, None, "missing")
+    if not surfaces:
+        return (None, None, "missing")
+    if surfaces.get("source") != "pointcloud":
+        return (surfaces, None, "synthetic")
+    captured = (_point_cloud or {}).get("capturedAt")
+    if not captured:
+        return (surfaces, None, None)
+    age_min = max(0.0, (time.time() - float(captured)) / 60.0)
+    max_age = float(_cal_tuning("maxScanAgeMinutes", 10.0))
+    warn = "stale" if age_min > max_age else None
+    return (surfaces, age_min, warn)
+
+
+# ── Cal-trace recorder (#686) ─────────────────────────────────────────
+
+CAL_TRACES_DIR = DATA / "cal_traces"
+CAL_TRACE_RETENTION_PER_FIXTURE = 20
+CAL_TRACE_SCHEMA_VERSION = 1
+
+
+class CalTraceRecorder:
+    """Per-cal-run NDJSON probe-level trace writer (#686).
+
+    One record per probe across the markers / v2 / legacy paths; consumed
+    by ``tools/cal_trace_replay.py`` to render top-down debug PNGs that
+    name a cal failure mode at a glance. The recorder owns its own file
+    handle for the duration of a cal run — caller invokes ``close()``
+    once via try/finally so the trace lands on disk even on the error
+    path.
+
+    Records share a small set of fields (ts, phase, decision, ...) that
+    the replay tool understands; phase- or decision-specific extras live
+    under their own keys (predictedFloorPoint, detectedPixel, ...). The
+    schema is documented in the issue (#686).
+
+    Skip-by-filter records are intentionally written too — the operator
+    needs to see WHY a cell was deferred, not just which cells were
+    visited.
+    """
+
+    def __init__(self, fid, mode, fixture_pos, mover_rotation,
+                  pan_range_deg, tilt_range_deg, mounted_inverted,
+                  cameras, surfaces, scene_meta=None):
+        from datetime import datetime, timezone
+        self._fid = int(fid)
+        self._mode = str(mode)
+        self._fx_pos = (float(fixture_pos[0]), float(fixture_pos[1]),
+                         float(fixture_pos[2]))
+        self._fx_rot = list(mover_rotation or [0, 0, 0])
+        self._pan_range = float(pan_range_deg or 540.0)
+        self._tilt_range = float(tilt_range_deg or 270.0)
+        self._inverted = bool(mounted_inverted)
+        # cameras: list of {id, polygon: [(x,y),...]} for the predicted-
+        # in-fov-of computation. Keep just the metadata the replay tool
+        # needs; full fixture records are heavy.
+        self._cameras = [
+            {"id": int(c.get("id")), "polygon": [
+                [float(p[0]), float(p[1])] for p in (c.get("polygon") or [])]}
+            for c in (cameras or [])
+        ]
+        self._surfaces = surfaces  # may be None
+        self._scene_meta = dict(scene_meta or {})
+
+        CAL_TRACES_DIR.mkdir(parents=True, exist_ok=True)
+        # Millisecond-precision timestamp so back-to-back cal runs don't
+        # collide on the same filename — operators retrying within a
+        # second would otherwise overwrite the previous trace.
+        now = datetime.now(timezone.utc)
+        ts = now.strftime("%Y%m%dT%H%M%S") + f"{now.microsecond // 1000:03d}Z"
+        self._path = CAL_TRACES_DIR / f"fid{self._fid}-{ts}-{mode}.ndjson"
+        self._fh = self._path.open("w", encoding="utf-8")
+        self._closed = False
+        self._counts = {"probed": 0, "skipped": 0, "confirmed": 0,
+                         "rejected": 0, "refined": 0}
+        # Header record names the schema + the static cal-context.
+        self._write({
+            "kind": "header",
+            "schema": CAL_TRACE_SCHEMA_VERSION,
+            "fid": self._fid,
+            "mode": self._mode,
+            "fxPos": list(self._fx_pos),
+            "fxRotation": list(self._fx_rot),
+            "panRangeDeg": self._pan_range,
+            "tiltRangeDeg": self._tilt_range,
+            "mountedInverted": self._inverted,
+            "cameras": self._cameras,
+            "surfacesSource": (surfaces or {}).get("source") if surfaces else None,
+            "scene": self._scene_meta,
+        })
+
+    # ── Internal write helpers ────────────────────────────────────────
+    def _write(self, rec):
+        if self._closed or self._fh is None:
+            return
+        from datetime import datetime, timezone
+        rec.setdefault("ts", datetime.now(timezone.utc).isoformat())
+        try:
+            self._fh.write(json.dumps(rec, default=str) + "\n")
+            self._fh.flush()
+        except Exception as e:
+            log.debug("cal-trace write failed: %s", e)
+
+    def _predict_floor_point(self, pan_norm, tilt_norm):
+        """Stage-mm point where the beam intersects the surface model
+        (or the floor plane when no surfaces) for a normalised pan/tilt
+        cell. Used for both predictedFloorPoint and predictedInFovOf."""
+        try:
+            from camera_math import pan_tilt_to_ray, point_in_polygon
+        except Exception:
+            return None, None, None
+        pan_deg = (pan_norm - 0.5) * self._pan_range
+        tilt_deg = (tilt_norm - 0.5) * self._tilt_range
+        if self._inverted:
+            tilt_deg = -tilt_deg
+        try:
+            o, d = pan_tilt_to_ray(self._fx_pos, self._fx_rot,
+                                     pan_deg, tilt_deg)
+        except Exception:
+            return None, None, None
+        # Try surface intersect first; fall back to z=0 floor plane.
+        if self._surfaces:
+            try:
+                from surface_analyzer import beam_surface_check
+                hit = beam_surface_check(self._surfaces, o, d)
+                if hit is not None:
+                    pt = hit.get("point") or (None, None, None)
+                    surface = hit.get("surface")
+                    in_fov = self._cameras_seeing_floor_point(
+                        float(pt[0]), float(pt[1]))
+                    return ([float(pt[0]), float(pt[1]), float(pt[2])],
+                            surface, in_fov)
+            except Exception:
+                pass
+        # Floor-plane fallback.
+        if abs(d[2]) < 1e-6 or d[2] > 0:
+            return (None, "ray-escapes", [])
+        t = (0.0 - o[2]) / d[2]
+        if t <= 0:
+            return (None, "ray-behind", [])
+        hx = o[0] + t * d[0]
+        hy = o[1] + t * d[1]
+        return ([float(hx), float(hy), 0.0], "floor",
+                self._cameras_seeing_floor_point(hx, hy))
+
+    def _cameras_seeing_floor_point(self, x, y):
+        try:
+            from camera_math import point_in_polygon
+        except Exception:
+            return []
+        hits = []
+        for cam in self._cameras:
+            poly = [(float(p[0]), float(p[1])) for p in cam["polygon"]]
+            if poly and point_in_polygon((x, y), poly):
+                hits.append(cam["id"])
+        return hits
+
+    # ── Public recording API ──────────────────────────────────────────
+    def record_seed(self, pan_norm, tilt_norm, target_xy, source=""):
+        floor_point, surface, in_fov = self._predict_floor_point(
+            pan_norm, tilt_norm)
+        self._write({
+            "kind": "seed",
+            "panNorm": float(pan_norm),
+            "tiltNorm": float(tilt_norm),
+            "targetXY": (list(target_xy[:2]) if target_xy is not None else None),
+            "source": str(source),
+            "predictedFloorPoint": floor_point,
+            "predictedSurface": surface,
+            "predictedInFovOf": in_fov,
+        })
+
+    def record_skip(self, pan_norm, tilt_norm, reason="grid-filter"):
+        self._counts["skipped"] += 1
+        floor_point, surface, in_fov = self._predict_floor_point(
+            pan_norm, tilt_norm)
+        self._write({
+            "kind": "probe",
+            "phase": "filter",
+            "panNorm": float(pan_norm),
+            "tiltNorm": float(tilt_norm),
+            "decision": "skip-by-filter",
+            "decisionReason": reason,
+            "predictedFloorPoint": floor_point,
+            "predictedSurface": surface,
+            "predictedInFovOf": in_fov,
+        })
+
+    def record_event(self, info):
+        """Map a battleship_discover progress_cb event into a probe
+        record. The events come in the existing vocabulary: grid-probe,
+        beam-found, confirm-rejected, confirmed."""
+        try:
+            stage = info.get("stage") if isinstance(info, dict) else None
+        except Exception:
+            return
+        if not stage:
+            return
+        rec = {"kind": "probe", "phase": stage}
+        # Common fields.
+        for src, dst in [("probe", "probeIdx"), ("total", "probeTotal"),
+                          ("pan", "panNorm"), ("tilt", "tiltNorm"),
+                          ("pixelX", "detectedPixelX"),
+                          ("pixelY", "detectedPixelY")]:
+            v = info.get(src)
+            if v is not None:
+                rec[dst] = v
+        if rec.get("panNorm") is not None and rec.get("tiltNorm") is not None:
+            fp, surface, in_fov = self._predict_floor_point(
+                rec["panNorm"], rec["tiltNorm"])
+            rec["predictedFloorPoint"] = fp
+            rec["predictedSurface"] = surface
+            rec["predictedInFovOf"] = in_fov
+        if stage == "beam-found":
+            rec["decision"] = "detected"
+            self._counts["probed"] += 1
+        elif stage == "confirmed":
+            rec["decision"] = "confirmed"
+            rec["refined"] = bool(info.get("refined"))
+            for src, dst in [("panShiftPx", "panShiftPx"),
+                              ("tiltShiftPx", "tiltShiftPx")]:
+                v = info.get(src)
+                if v is not None:
+                    rec[dst] = v
+            self._counts["confirmed"] += 1
+            if rec["refined"]:
+                self._counts["refined"] += 1
+        elif stage == "confirm-rejected":
+            rec["decision"] = "nudge-rejected"
+            rec["decisionReason"] = (info.get("reason") or
+                                       info.get("verdict") or "")
+            for src, dst in [("verdict", "verdict"),
+                              ("panShiftPx", "panShiftPx"),
+                              ("tiltShiftPx", "tiltShiftPx"),
+                              ("info", "confirmInfo")]:
+                v = info.get(src)
+                if v is not None:
+                    rec[dst] = v
+            self._counts["rejected"] += 1
+        elif stage == "grid-probe":
+            rec["decision"] = "probed"
+            self._counts["probed"] += 1
+        else:
+            rec["decision"] = stage
+        self._write(rec)
+
+    def record_decision(self, pan_norm, tilt_norm, decision,
+                          reason="", **extras):
+        """Free-form recorder for cal-thread-side decisions that don't
+        flow through battleship_discover (e.g. markers-mode marker
+        convergence outcomes)."""
+        rec = {
+            "kind": "probe",
+            "phase": "thread",
+            "panNorm": float(pan_norm) if pan_norm is not None else None,
+            "tiltNorm": float(tilt_norm) if tilt_norm is not None else None,
+            "decision": str(decision),
+            "decisionReason": str(reason),
+        }
+        rec.update(extras)
+        if pan_norm is not None and tilt_norm is not None:
+            fp, surface, in_fov = self._predict_floor_point(pan_norm, tilt_norm)
+            rec["predictedFloorPoint"] = fp
+            rec["predictedSurface"] = surface
+            rec["predictedInFovOf"] = in_fov
+        self._write(rec)
+
+    def close(self, status="completed", error=None, extra=None):
+        if self._closed:
+            return
+        try:
+            self._write({
+                "kind": "footer",
+                "status": str(status),
+                "error": (str(error) if error else None),
+                "counts": dict(self._counts),
+                "extra": dict(extra or {}),
+            })
+            try:
+                self._fh.close()
+            except Exception:
+                pass
+        finally:
+            self._closed = True
+            self._fh = None
+        self._prune_old_traces()
+
+    def _prune_old_traces(self):
+        """Keep only the latest CAL_TRACE_RETENTION_PER_FIXTURE traces
+        per fixture so the data dir doesn't grow without bound."""
+        try:
+            prefix = f"fid{self._fid}-"
+            existing = sorted(
+                CAL_TRACES_DIR.glob(f"{prefix}*.ndjson"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True)
+            for stale in existing[CAL_TRACE_RETENTION_PER_FIXTURE:]:
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
+        except Exception as e:
+            log.debug("cal-trace prune failed: %s", e)
+
+    @property
+    def path(self):
+        return str(self._path)
+
+    @property
+    def counts(self):
+        return dict(self._counts)
+
+
+def _wrap_grid_filter_for_trace(grid_filter, recorder):
+    """Wrap a grid-filter predicate so every False result emits a
+    record_skip. Returns the original callable when no recorder is
+    attached so the wrapping is zero-cost in production."""
+    if recorder is None:
+        return grid_filter
+
+    def _wrapped(pan_n, tilt_n):
+        try:
+            keep = bool(grid_filter(pan_n, tilt_n)) if grid_filter else True
+        except Exception:
+            keep = True
+        if not keep:
+            try:
+                recorder.record_skip(pan_n, tilt_n)
+            except Exception:
+                pass
+        return keep
+
+    return _wrapped
+
+
+def _wrap_progress_for_trace(progress_cb, recorder):
+    """Wrap a progress callback so every event also lands in the trace."""
+    if recorder is None:
+        return progress_cb
+
+    def _wrapped(info):
+        try:
+            recorder.record_event(info)
+        except Exception:
+            pass
+        if progress_cb:
+            try:
+                progress_cb(info)
+            except Exception:
+                pass
+
+    return _wrapped
 
 
 def _build_lite_point_cloud():
@@ -8489,6 +9374,10 @@ def api_space_scan_status():
         _point_cloud["stageW"] = int(_stage.get("w", 3) * 1000)
         _point_cloud["stageH"] = int(_stage.get("h", 2) * 1000)
         _point_cloud["stageD"] = int(_stage.get("d", 1.5) * 1000)
+        # #684 — stamp scan completion time so the cal-thread surface
+        # availability check (`_surface_model_for_cal`) can warn / fall
+        # back when the cloud is stale relative to calibrationTuning.
+        _point_cloud["capturedAt"] = time.time()
         # #599 — auto-align Z to surveyed floor markers. Same treatment
         # ZoeDepth gets — monocular depth's scale-prior-derived floor
         # position is pretty but arbitrary; the ArUco registry is the
@@ -8856,15 +9745,38 @@ def _camera_local_version():
                 pass
     return None
 
+def _camera_download_candidate_dirs():
+    """Every directory the camera deploy might pick up a downloaded
+    camera_server.py from, in no particular order. Both the dedicated
+    /api/firmware/camera/download path (DATA/firmware/camera/) and the
+    Firmware-Library /api/firmware/fetch path (_FW_CACHE_DIR/orangepi/)
+    extract here, so a Library download must feed the camera deploy too."""
+    return [
+        DATA / "firmware" / "camera",
+        _FW_CACHE_DIR / "orangepi",
+    ]
+
 def _camera_downloaded_version():
-    """Read VERSION from the downloaded (cached) camera_server.py if present."""
-    p = DATA / "firmware" / "camera" / "camera_server.py"
-    if p.exists():
+    """Highest VERSION found in any download candidate directory, or None."""
+    best = None
+    best_t = None
+    for d in _camera_download_candidate_dirs():
+        p = d / "camera_server.py"
+        if not p.exists():
+            continue
         try:
-            return _parse_version_from_text(p.read_text(encoding="utf-8"))
+            v = _parse_version_from_text(p.read_text(encoding="utf-8"))
         except Exception:
-            pass
-    return None
+            v = None
+        if not v:
+            continue
+        try:
+            vt = tuple(int(x) for x in v.split("."))
+        except (ValueError, AttributeError):
+            vt = (0,)
+        if best_t is None or vt > best_t:
+            best, best_t = v, vt
+    return best
 
 def _camera_deploy_version():
     """Return the version that would actually be deployed (downloaded > local)."""
@@ -8882,21 +9794,37 @@ def _camera_deploy_version():
 
 def _camera_deploy_dir():
     """Return the directory to use for camera firmware deployment.
-    Prefers downloaded cache if it has a newer version than bundled."""
-    dl_dir = DATA / "firmware" / "camera"
-    dl_ver = _camera_downloaded_version()
+    Prefers whichever download candidate has the newest camera_server.py;
+    falls back to the bundled tree when no download is newer."""
     loc_ver = _camera_local_version()
-    if dl_ver and dl_dir.exists() and (dl_dir / "camera_server.py").exists():
-        if not loc_ver:
-            return dl_dir
+    best_dir = None
+    best_t = None
+    for d in _camera_download_candidate_dirs():
+        p = d / "camera_server.py"
+        if not p.exists():
+            continue
         try:
-            dl_t = tuple(int(x) for x in dl_ver.split("."))
-            loc_t = tuple(int(x) for x in loc_ver.split("."))
-            if dl_t >= loc_t:
-                return dl_dir
+            v = _parse_version_from_text(p.read_text(encoding="utf-8"))
+        except Exception:
+            v = None
+        if not v:
+            continue
+        try:
+            vt = tuple(int(x) for x in v.split("."))
         except (ValueError, AttributeError):
-            return dl_dir
-    return _FW_DIR / "orangepi"
+            vt = (0,)
+        if best_t is None or vt > best_t:
+            best_dir, best_t = d, vt
+    if best_dir is None:
+        return _FW_DIR / "orangepi"
+    if loc_ver:
+        try:
+            loc_t = tuple(int(x) for x in loc_ver.split("."))
+            if loc_t > best_t:
+                return _FW_DIR / "orangepi"
+        except (ValueError, AttributeError):
+            pass
+    return best_dir
 
 @app.get("/api/firmware/camera/check")
 def api_firmware_camera_check():
@@ -15697,7 +16625,7 @@ def spa_css(filename):
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def spa_fallback(path):
-    if path.startswith("api/") or path in ("status", "favicon.ico"):
+    if path.startswith("api/") or path in ("status", "favicon.ico", "favicon.png"):
         abort(404)
     resp = send_from_directory(str(SPA), "index.html")
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -15803,6 +16731,9 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
+
 
 
 

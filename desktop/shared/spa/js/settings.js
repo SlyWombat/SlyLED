@@ -105,7 +105,7 @@ function loadSettings(){
   // #615 — populate the Settings → Advanced "Version" card. Endpoint
   // already exposes the orchestrator VERSION string; the HTML
   // placeholder was never wired up to it.
-  ra('GET','/api/status',null,function(st){
+  ra('GET','/status',null,function(st){
     var el=document.getElementById('s-version');
     if(!el)return;
     if(st&&st.version){
