@@ -30,6 +30,7 @@ import logging
 import os
 import platform
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -130,7 +131,135 @@ def status():
         "warm": _warm_state.get("warm", False),
         "warmedAt": _warm_state.get("warmedAt"),
         "lastError": _warm_state.get("lastError"),
+        "startedByUs": started_by_us(),
     }
+
+
+# ── Service lifecycle (start / stop on orchestrator boot + shutdown) ───
+
+# Tracks whether THIS orchestrator process spawned `ollama serve` itself,
+# vs. it was already running (system service / menu-bar app / operator
+# manually started it). We only stop the daemon on shutdown when we own
+# it — never tear down something that was running before us.
+_our_serve_proc = None  # subprocess.Popen | None
+
+
+def _resolve_ollama_binary():
+    """Find the ``ollama`` executable that's on PATH or in a known
+    install location. Returns the absolute path or None."""
+    import shutil as _shutil
+    found = _shutil.which("ollama")
+    if found:
+        return found
+    if platform.system() == "Windows":
+        for cand in (r"C:\Program Files\Ollama\ollama.exe",
+                      r"C:\Program Files (x86)\Ollama\ollama.exe",
+                      os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe")):
+            if cand and os.path.isfile(cand):
+                return cand
+    elif platform.system() == "Darwin":
+        for cand in ("/Applications/Ollama.app/Contents/Resources/ollama",
+                      "/usr/local/bin/ollama"):
+            if os.path.isfile(cand):
+                return cand
+    else:
+        for cand in ("/usr/local/bin/ollama", "/usr/bin/ollama"):
+            if os.path.isfile(cand):
+                return cand
+    return None
+
+
+def start_serve(wait_seconds: float = 8.0):
+    """Start ``ollama serve`` in the background if Ollama is installed
+    but not currently running. Idempotent — returns False with no side
+    effect when the daemon is already up (someone else owns it) or when
+    we already started it on a previous call.
+
+    Returns ``True`` when this call spawned a new ``ollama serve`` and
+    the daemon answered ``/api/tags`` within ``wait_seconds``. Records
+    the Popen handle on ``_our_serve_proc`` so ``stop_serve()`` knows
+    whether to terminate at orchestrator shutdown.
+    """
+    global _our_serve_proc
+    if _our_serve_proc is not None and _our_serve_proc.poll() is None:
+        return True  # we already own a running serve
+    if is_ollama_running():
+        # Already running but we didn't spawn it — leave it alone.
+        return False
+    binary = _resolve_ollama_binary()
+    if binary is None:
+        return False
+    try:
+        # `ollama serve` runs in foreground by design; redirect stdio so
+        # it doesn't spam stdout and detach from any terminal so closing
+        # the launching shell doesn't kill it (until WE do at shutdown).
+        kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        if platform.system() == "Windows":
+            # CREATE_NEW_PROCESS_GROUP so we can send CTRL_BREAK on stop.
+            kwargs["creationflags"] = (
+                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                | getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        else:
+            kwargs["start_new_session"] = True  # POSIX setsid()
+        _our_serve_proc = subprocess.Popen([binary, "serve"], **kwargs)
+    except Exception as e:
+        _warm_state["lastError"] = f"start_serve failed: {e}"
+        _our_serve_proc = None
+        return False
+    # Wait for the daemon to answer /api/tags.
+    deadline = time.time() + float(wait_seconds)
+    while time.time() < deadline:
+        if is_ollama_running():
+            return True
+        if _our_serve_proc.poll() is not None:
+            # Process died before responding — clean up.
+            _our_serve_proc = None
+            return False
+        time.sleep(0.5)
+    return is_ollama_running()
+
+
+def stop_serve(timeout_s: float = 5.0):
+    """Terminate the ``ollama serve`` we started, if any. Idempotent
+    no-op when we never owned the daemon (system service / menu-bar
+    app / operator-launched). Sends SIGTERM (CTRL_BREAK on Windows)
+    then escalates to SIGKILL on timeout.
+    """
+    global _our_serve_proc
+    proc = _our_serve_proc
+    _our_serve_proc = None
+    if proc is None:
+        return False
+    if proc.poll() is not None:
+        return False  # already exited
+    try:
+        if platform.system() == "Windows":
+            sig = getattr(signal, "CTRL_BREAK_EVENT", None)
+            if sig is not None:
+                proc.send_signal(sig)
+            else:
+                proc.terminate()
+        else:
+            proc.terminate()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=timeout_s)
+    except Exception:
+        try:
+            proc.kill()
+            proc.wait(timeout=2.0)
+        except Exception:
+            pass
+    return True
+
+
+def started_by_us():
+    """True when ``start_serve()`` succeeded and the daemon we spawned
+    is still alive. Used by ``status()`` so the SPA can show "ollama
+    started by orchestrator" vs. "ollama running independently"."""
+    proc = _our_serve_proc
+    return bool(proc is not None and proc.poll() is None)
 
 
 # ── Warm-up + test harness (#NEW — boot-time prefetch) ─────────────────

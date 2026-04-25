@@ -499,6 +499,16 @@ def _graceful_dmx_shutdown():
         _dr.stop_runner()
     except Exception:
         pass
+    # #687 follow-up — stop the `ollama serve` daemon if we started
+    # it. ollama_runtime.stop_serve() is a no-op when the daemon was
+    # already running before we booted (system service / menu-bar app /
+    # operator-launched), so a shared dev box's existing Ollama isn't
+    # torn down by an orchestrator restart.
+    try:
+        import ollama_runtime as _or
+        _or.stop_serve()
+    except Exception:
+        pass
 
 atexit.register(_graceful_dmx_shutdown)
 
@@ -4451,10 +4461,22 @@ def _ai_helpers_warmup():
         threading.Thread(
             target=lambda: _ai_warmup_safe("zoedepth", _depth_runtime.warmup),
             daemon=True).start()
-    if _ollama_rt is not None and _ollama_rt.is_installed():
-        threading.Thread(
-            target=lambda: _ai_warmup_safe("ollama", _ollama_rt.warmup),
-            daemon=True).start()
+    # #687 follow-up — start `ollama serve` if the binary is installed
+    # but the daemon isn't currently running. Ownership is tracked
+    # inside ollama_runtime so _graceful_dmx_shutdown only kills the
+    # daemon when WE spawned it (system-service / menu-bar instances
+    # are left alone). Warmup follows once /api/tags answers.
+    if _ollama_rt is not None:
+        def _ollama_boot():
+            try:
+                started = _ollama_rt.start_serve(wait_seconds=10.0)
+                if started:
+                    log.info("AI: started ollama serve (will be stopped at shutdown)")
+            except Exception as e:
+                log.warning("AI: ollama auto-start failed (%s)", e)
+            if _ollama_rt.is_installed():
+                _ai_warmup_safe("ollama", _ollama_rt.warmup)
+        threading.Thread(target=_ollama_boot, daemon=True).start()
 
 
 def _ai_warmup_safe(name, fn):
