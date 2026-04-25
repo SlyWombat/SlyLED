@@ -1947,7 +1947,7 @@ function _camTuneRenderActions(){
   var slots=_camTuneState.slots||{};
   var ai=(_camTuneState.evaluator&&_camTuneState.evaluator.modes&&_camTuneState.evaluator.modes.ai)||{};
   var aiOk=!!ai.available;
-  var aiLabel='Local VLM ('+escapeHtml(ai.model||'moondream')+')';
+  var aiLabel='Local VLM ('+escapeHtml(ai.model||'qwen2.5vl:3b')+')';
   var aiOptDisabled=aiOk?'':'disabled';
   var aiHint=aiOk
     ?'<span style="color:#86efac">✓ Available</span>'

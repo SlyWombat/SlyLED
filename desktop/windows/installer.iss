@@ -46,10 +46,11 @@ Name: "custom";  Description: "Custom installation"; Flags: iscustom
 ; installer never surprises a user with a 2 GB download.
 Name: "core";  Description: "SlyLED Orchestrator (required)"; Types: full compact custom; Flags: fixed
 Name: "depth"; Description: "Host-side AI depth runtime (ZoeDepth) — adds 'ZoeDepth (host)' scan method; ~2 GB downloaded after install"
-; #623 — local vision AI (Ollama + Moondream). Powers the camera
-; auto-tune AI evaluator. Optional, unticked by default so the Full
-; install doesn't silently fetch another ~2 GB.
-Name: "ai";    Description: "Local AI camera auto-tune (Ollama + Moondream VLM) — ~2 GB downloaded after install"
+; #623 / #685 — local vision AI (Ollama + qwen2.5vl:3b). Powers the
+; camera auto-tune AI evaluator. Optional, unticked by default so the
+; Full install doesn't silently fetch another ~3 GB. Model swapped from
+; moondream to qwen2.5vl:3b after the moondream JSON-adherence finding.
+Name: "ai";    Description: "Local AI camera auto-tune (Ollama + qwen2.5vl:3b VLM) — ~3 GB downloaded after install"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked

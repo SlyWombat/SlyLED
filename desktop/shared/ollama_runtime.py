@@ -20,7 +20,7 @@ poll. Re-entry is safe — concurrent ``start_install()`` calls no-op.
 
 Environment overrides (shared with camera_settings.py):
     SLYLED_OLLAMA_URL     default ``http://localhost:11434``
-    SLYLED_OLLAMA_MODEL   default ``moondream``
+    SLYLED_OLLAMA_MODEL   default ``qwen2.5vl:3b``
 """
 
 from __future__ import annotations

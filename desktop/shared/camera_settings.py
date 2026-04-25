@@ -11,20 +11,20 @@ Two evaluators ship:
 * **Heuristic** (``evaluate_frame_heuristic``) — pure histogram statistics,
   no external dependency. Default and always available.
 * **Local VLM** (``evaluate_frame_ai``) — queries a local Ollama instance
-  with a vision model (Moondream / LLaVA / qwen2-vl etc.) running entirely
-  on the operator's own hardware. No cloud, no API keys, no data leaves
-  the machine. Returns a score plus concrete V4L2-control deltas so the
-  loop converges in 1-2 iterations instead of the heuristic's gradient
-  search. Falls back to heuristic (with a logged note) if Ollama isn't
-  reachable or the model isn't installed.
+  with a vision model (qwen2.5vl / LLaVA / moondream etc.) running
+  entirely on the operator's own hardware. No cloud, no API keys, no
+  data leaves the machine. Returns a score plus concrete V4L2-control
+  deltas so the loop converges in 1-2 iterations instead of the
+  heuristic's gradient search. Falls back to heuristic (with a logged
+  note) if Ollama isn't reachable or the model isn't installed.
 
 Ollama setup (one-time):
 
     curl -fsSL https://ollama.com/install.sh | sh   # Linux / macOS
-    ollama pull moondream                           # ~1.7 GB, CPU-only OK
+    ollama pull qwen2.5vl:3b                        # ~3.2 GB, CPU-friendly
 
 Override ``SLYLED_OLLAMA_URL`` (default ``http://localhost:11434``) and
-``SLYLED_OLLAMA_MODEL`` (default ``moondream``) when running on a
+``SLYLED_OLLAMA_MODEL`` (default ``qwen2.5vl:3b``) when running on a
 different host or model.
 
 Slot storage is a simple JSON dict keyed by fixture id; the orchestrator
@@ -262,9 +262,11 @@ def evaluate_frame_heuristic(frame, intent="general"):
 # ── AI evaluator (local VLM via Ollama) ────────────────────────────────
 #
 # Runs entirely on the operator's own hardware. No cloud, no API keys, no
-# telemetry. Default model is Moondream (~1.7 GB, CPU-only OK). Any model
-# Ollama serves with vision support works — swap via SLYLED_OLLAMA_MODEL
-# when a larger GPU is available (llava:13b, qwen2-vl, bakllava).
+# telemetry. Default model is qwen2.5vl:3b (~3.2 GB, CPU-friendly). Any
+# model Ollama serves with vision support works — swap via
+# SLYLED_OLLAMA_MODEL when a larger GPU is available (llava:13b, qwen2-vl,
+# bakllava). Pre-#685 default was moondream but its JSON adherence was
+# poor, so the matrix run found AI mode produced no useful deltas.
 
 _OLLAMA_URL = os.environ.get("SLYLED_OLLAMA_URL", "http://localhost:11434")
 # #685 follow-up — moondream returned scores in 0-1 floats and empty
@@ -614,7 +616,7 @@ def auto_tune_loop(camera_ip, cam_idx, intent,
         elif "non-json" in cause_lower:
             hint = ("the AI evaluator returned a malformed response. The "
                      "model may not be vision-capable for this format; try "
-                     "a different vision model (moondream, llava).")
+                     "a different vision model (qwen2.5vl:3b, llava).")
         else:
             hint = f"AI evaluator error: {cause}"
         raise RuntimeError(

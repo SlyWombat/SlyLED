@@ -240,7 +240,7 @@ function _ollamaRuntimeRefresh(){
         if(rBtn)rBtn.style.display='inline-block';
       }else if(!r.running){
         box.innerHTML='<span style="color:#f59e0b">Not installed</span> · '
-          +'click Install for ~2 GB download (Ollama + Moondream VLM)';
+          +'click Install for ~3 GB download (Ollama + qwen2.5vl:3b VLM)';
         if(iBtn)iBtn.style.display='inline-block';
         if(rBtn)rBtn.style.display='none';
       }else{
