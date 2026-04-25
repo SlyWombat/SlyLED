@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.23"
+VERSION = "1.6.25"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -4579,13 +4579,16 @@ def _ai_helpers_warmup():
             # Ollama is up but the model isn't yet (e.g. operator just
             # upgraded to the new qwen2.5vl:3b default). Same code path
             # the Settings → Install Ollama button uses; progress is on
-            # /api/ollama-runtime/install-status.
+            # /api/ollama-runtime/install-status. _install_worker now
+            # also runs warmup() at the end so a fresh boot lands on
+            # "Ready · warm" by the time the operator opens Settings.
             try:
                 if (_ollama_rt.is_ollama_running()
                         and not _ollama_rt.has_model()):
                     log.info("AI: vision model %s not pulled — kicking off "
                               "background pull", _ollama_rt.OLLAMA_MODEL)
                     _ollama_rt.start_install()
+                    return  # _install_worker handles warmup at the end
             except Exception as e:
                 log.warning("AI: model auto-pull check failed (%s)", e)
             if _ollama_rt.is_installed():
@@ -16942,6 +16945,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

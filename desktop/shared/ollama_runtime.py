@@ -267,7 +267,7 @@ def started_by_us():
 _warm_state = {"warm": False, "warmedAt": None, "lastError": None}
 
 
-def warmup(timeout_s: float = 60.0):
+def warmup(timeout_s: float = 120.0):
     """Send a single tiny generate request so the model is loaded into RAM
     and subsequent calls are sub-second. No-op when the service isn't
     running or the model isn't pulled — start_install() takes precedence
@@ -301,7 +301,7 @@ def warmup(timeout_s: float = 60.0):
 
 
 def run_test(prompt: str = "Reply with the single word: pong",
-             timeout_s: float = 60.0):
+             timeout_s: float = 120.0):
     """Fixed-prompt test harness. Returns {ok, response, ms, err}."""
     if not (is_ollama_running() and has_model()):
         return {"ok": False, "err": "Ollama service or model not ready"}
@@ -471,6 +471,19 @@ def _install_worker(force):
 
         if force or not has_model():
             _pull_model()
+
+        # #685 follow-up — drop one warmup call here so the model is hot
+        # by the time the operator clicks Test or Run Auto-Tune. Without
+        # this, the first user-triggered call pays the full cold-load
+        # cost (qwen2.5vl:3b on CPU is 30-90 s) and the Settings -> AI
+        # Engines row stays stuck on "Running · warming up" until the
+        # operator's call returns.
+        _set_progress(phase="warm-up", percent=99,
+                       message="Loading vision model into RAM (first call cold-start)")
+        try:
+            warmup(timeout_s=120.0)
+        except Exception as _e:  # noqa: BLE001
+            log.warning("post-install warmup raised: %s", _e)
 
         _set_progress(phase="done", percent=100,
                        message="Ollama + vision model ready",

@@ -181,12 +181,25 @@ function _aiEngineRow(e){
 
 function _aiEngineTest(engineId,btn){
   var out=document.getElementById('ai-test-out-'+engineId);
-  if(out){out.style.display='';out.innerHTML='Running test harness…';}
+  if(out){out.style.display='';out.innerHTML='Running test harness… 0 s';}
   if(btn){btn.disabled=true;}
+  // #685 follow-up — tick the elapsed seconds so the operator sees the
+  // call is progressing (cold-start qwen2.5vl:3b on CPU can take 30-90 s
+  // for the first inference). Without this the row badge says "Running
+  // · warming up" and the inline output sits silent — looks stuck.
+  var t0 = Date.now();
+  var tick = setInterval(function(){
+    if(!out)return;
+    var s = Math.round((Date.now()-t0)/1000);
+    out.innerHTML = 'Running test harness… ' + s + ' s'
+      + (s > 30 ? ' <span style="color:#94a3b8">(first call cold-loads the model — can take up to 2 min)</span>' : '');
+  }, 1000);
   ra('POST','/api/ai/'+encodeURIComponent(engineId)+'/test',{},function(r){
+    clearInterval(tick);
     if(btn){btn.disabled=false;}
     if(!out)return;
-    if(!r){out.innerHTML='<span style="color:#f87171">No response</span>';return;}
+    var ms = Date.now() - t0;
+    if(!r){out.innerHTML='<span style="color:#f87171">No response after '+Math.round(ms/1000)+' s</span>';return;}
     if(r.ok===false){
       out.innerHTML='<span style="color:#f87171">Test failed: '+escapeHtml(String(r.err||'unknown'))+'</span>';
     }else{
