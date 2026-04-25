@@ -268,7 +268,19 @@ def evaluate_frame_heuristic(frame, intent="general"):
 
 _OLLAMA_URL = os.environ.get("SLYLED_OLLAMA_URL", "http://localhost:11434")
 _OLLAMA_MODEL = os.environ.get("SLYLED_OLLAMA_MODEL", "moondream")
-_OLLAMA_TIMEOUT_S = int(os.environ.get("SLYLED_OLLAMA_TIMEOUT_S", "60"))
+# #685 follow-up — moondream's vision encoder takes 30+ s per call on CPU
+# even with the existing 768-px downsample, blowing the per-call budget on
+# slower laptops. Raise the default so first-call ingestion finishes inside
+# one timeout window. Operator can drop the env var on faster GPU rigs.
+_OLLAMA_TIMEOUT_S = int(os.environ.get("SLYLED_OLLAMA_TIMEOUT_S", "120"))
+# Max long-side of the JPEG sent to the VLM. The exposure/focus/sharpness
+# judgement the auto-tune evaluator needs is unchanged below ~640 px and
+# vision-encoder cost scales quadratically. 640 lands a 16:9 frame at
+# 640×360 ≈ 230 k pixels — about half the recommended 800×600 footprint
+# but visually equivalent for tuning purposes. Operator override:
+# SLYLED_AI_FRAME_LONG_SIDE.
+_AI_FRAME_LONG_SIDE = int(os.environ.get("SLYLED_AI_FRAME_LONG_SIDE", "640"))
+_AI_FRAME_JPEG_QUALITY = int(os.environ.get("SLYLED_AI_FRAME_JPEG_QUALITY", "75"))
 
 
 def _ollama_available():
@@ -291,10 +303,21 @@ def _ollama_available():
     return True, None
 
 
-def _frame_to_jpeg_b64(frame, max_side=768, quality=80):
+def _frame_to_jpeg_b64(frame, max_side=None, quality=None):
     """BGR array → base64 JPEG. Downsizes for VLM inference speed;
     full-resolution 4K frames slow small models to a crawl without
-    improving scene assessment."""
+    improving scene assessment.
+
+    #685 follow-up — defaults moved to module-level
+    ``_AI_FRAME_LONG_SIDE`` / ``_AI_FRAME_JPEG_QUALITY`` constants
+    (env-tunable) so the basement-rig ingestion-time fix stays visible
+    in one place. Logs the resize so the orchestrator log proves the
+    downsample happened.
+    """
+    if max_side is None:
+        max_side = _AI_FRAME_LONG_SIDE
+    if quality is None:
+        quality = _AI_FRAME_JPEG_QUALITY
     try:
         import cv2
     except ImportError:
@@ -302,8 +325,12 @@ def _frame_to_jpeg_b64(frame, max_side=768, quality=80):
     h, w = frame.shape[:2]
     scale = min(1.0, max_side / max(h, w))
     if scale < 1.0:
-        frame = cv2.resize(frame, (int(w * scale), int(h * scale)),
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        frame = cv2.resize(frame, (new_w, new_h),
                            interpolation=cv2.INTER_AREA)
+        log.info("[autotune] resized snapshot %dx%d → %dx%d "
+                  "before evaluator call", w, h, new_w, new_h)
     ok, buf = cv2.imencode(".jpg", frame,
                             [int(cv2.IMWRITE_JPEG_QUALITY), quality])
     if not ok:

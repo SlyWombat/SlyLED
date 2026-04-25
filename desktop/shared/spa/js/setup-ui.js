@@ -180,7 +180,21 @@ function _renderSetup(){
       h+='<h3 style="font-size:.9em;color:#94a3b8;margin:.8em 0 .3em">Fixtures</h3>'
         +'<table class="tbl"><tr><th>Fixture</th><th>Type</th><th>Connection</th><th>Status</th><th>Channels / LEDs</th><th>Actions</th></tr>';
       // Async: fetch camera live status (don't block render)
-      if(camFixtures.length){ra('GET','/api/cameras',null,function(cams){
+      if(camFixtures.length){
+        // #687 follow-up — pull the registry's camera-node version once
+        // per setup refresh so the upgrade indicator can compare each
+        // camera's fwVersion against the published firmware, not the
+        // max-of-online-cameras (which is broken when the whole fleet
+        // is uniformly stale).
+        if(!window._camFirmwareLatest){
+          ra('GET','/api/firmware/library',null,function(lib){
+            try{
+              var entry=((lib&&lib.firmware)||[]).find(function(e){return e.id==='camera-node';});
+              if(entry&&entry.version)window._camFirmwareLatest=entry.version;
+            }catch(e){}
+          });
+        }
+        ra('GET','/api/cameras',null,function(cams){
         if(!cams||!cams.length)return;
         // Update per-sensor status + sync tracking state from server
         cams.forEach(function(c){
@@ -191,8 +205,13 @@ function _renderSetup(){
           else delete _trackingCams[c.id];
           _trackBtnSync(c.id);
         });
-        // Find latest camera firmware version across all online cameras
-        var latestCamVer='0.0.0';
+        // Find latest camera firmware version. Old impl compared each
+        // camera's fwVersion against the max across the OTHER online
+        // cameras — a fleet running uniformly old firmware would never
+        // flag an update. Now: prefer the registry's published version
+        // (read once and cached on _camFirmwareLatest) and fall back to
+        // max-of-online when the registry isn't available.
+        var latestCamVer = (window._camFirmwareLatest||'0.0.0');
         cams.forEach(function(c){if(c.online&&c.fwVersion&&_cmpVer(c.fwVersion,latestCamVer)>0)latestCamVer=c.fwVersion;});
         // Update hardware node status (grouped by IP)
         var seen={};
