@@ -1113,12 +1113,30 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         for j in range(coarse_tilt_steps):
             t = tilt_lo + (j + 0.5) * tilt_span
             grid.append((p, t))
+    # #698 — tilt-first ordering. Pre-fix used Euclidean distance to
+    # seed which mixed pan and tilt jumps freely; that produced the
+    # cross-tilt-row light-on-during-travel sequence #695 fixed and
+    # left the operator-confirmed home pan column under-explored.
+    # Now we sort by (delta_pan, delta_tilt) lexicographic — every
+    # cell in the seed's pan column is probed before any cell in a
+    # different pan column. The first ≤coarse_tilt_steps probes
+    # exhaust the home pan, sweeping tilt cleanly.
+    sort_key = (lambda xy: (
+        abs(xy[0] - (seed_pan or 0.5)),              # primary: pan distance
+        abs(xy[1] - (seed_tilt or 0.5)),             # secondary: tilt distance
+    )) if (seed_pan is not None and seed_tilt is not None) else None
     # #681-B — pre-filter candidates to those that project onto a camera-
     # visible floor point. `grid_filter` returns True if the aim probably
     # lands somewhere a camera can see; candidates outside every camera
     # polygon are ranked to the back of the queue (not dropped — if we
     # are wrong about the geometry, they give the scan a chance to find
     # the beam anyway).
+    # #702 update — sort each partition INDEPENDENTLY then concatenate.
+    # The previous code partitioned, then sorted the whole grid by
+    # distance-to-seed, which destroyed the inside/outside ordering and
+    # let off-stage probes interleave (#702 update reproed this — probe
+    # 1 landed off-stage even though grid_filter was applied).
+    fov_kept = fov_total = fov_deferred = None
     if grid_filter is not None:
         inside = []
         outside = []
@@ -1129,48 +1147,51 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                 keep = True
             (inside if keep else outside).append(pt)
         if inside:
+            if sort_key is not None:
+                inside.sort(key=sort_key)
+                outside.sort(key=sort_key)
             grid = inside + outside
+            fov_kept = len(inside)
+            fov_deferred = len(outside)
+            fov_total = fov_kept + fov_deferred
             log.info("battleship_discover: camera-FOV filter kept %d/%d "
                      "probes in view; %d deferred to tail of queue",
-                     len(inside), len(inside) + len(outside), len(outside))
+                     fov_kept, fov_total, fov_deferred)
         else:
+            if sort_key is not None:
+                grid.sort(key=sort_key)
+            fov_kept = 0
+            fov_total = len(grid)
+            fov_deferred = 0
             log.warning("battleship_discover: camera-FOV filter rejected "
                         "every probe — scanning full grid (filter may be "
                         "wrong about fixture orientation)")
-    # #698 — tilt-first ordering. Pre-fix used Euclidean distance to
-    # seed which mixed pan and tilt jumps freely; that produced the
-    # cross-tilt-row light-on-during-travel sequence #695 fixed and
-    # left the operator-confirmed home pan column under-explored.
-    # Now we sort by (delta_pan, delta_tilt) lexicographic — every
-    # cell in the seed's pan column is probed before any cell in a
-    # different pan column. The first ≤coarse_tilt_steps probes
-    # exhaust the home pan, sweeping tilt cleanly.
-    if seed_pan is not None and seed_tilt is not None:
-        grid.sort(key=lambda xy: (
-            abs(xy[0] - seed_pan),                  # primary: pan distance
-            abs(xy[1] - seed_tilt),                  # secondary: tilt distance
-        ))
+    elif sort_key is not None:
+        grid.sort(key=sort_key)
     # #698 — operator-readable first-probe log line: name the cell
     # the cal will visit FIRST, the predicted floor hit, and the
     # mech tilt angle. Operator can sanity-check against eyes
     # before committing to the sweep.
+    first_hit = None
+    first_p = first_t = None
+    mech_tilt_deg = None
     if grid and fixture_pos is not None:
         first_p, first_t = grid[0]
         first_hit = _ray_floor_hit(fixture_pos, fixture_rotation,
                                     first_p, first_t,
                                     pr_deg, tr_deg,
                                     mounted_inverted=mounted_inverted)
-        mech_tilt = (first_t - 0.5) * tr_deg
+        mech_tilt_deg = (first_t - 0.5) * tr_deg
         if first_hit is not None:
             log.info("battleship_discover: first probe pan=%.4f tilt=%.4f "
                      "(mech %.1f°) → predicted floor (%.0f, %.0f) mm",
-                     first_p, first_t, mech_tilt,
+                     first_p, first_t, mech_tilt_deg,
                      first_hit[0], first_hit[1])
         else:
             log.info("battleship_discover: first probe pan=%.4f tilt=%.4f "
                      "(mech %.1f°) → ray does not hit floor "
                      "(beam aimed up or horizontal)",
-                     first_p, first_t, mech_tilt)
+                     first_p, first_t, mech_tilt_deg)
 
     log.info("battleship_discover: %d×%d coarse probes (pan_range=%s° "
              "tilt_range=%s° beam=%s°)%s",
@@ -1178,6 +1199,46 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
              pan_range_deg, tilt_range_deg, beam_width_deg,
              f" seed=({seed_pan:.2f},{seed_tilt:.2f})"
              if seed_pan is not None else "")
+    # #706 — emit a battleship-init telemetry event so cal-status
+    # consumers can discriminate FOV-filter / IK / partition issues
+    # without reading server stdout. Surfaces fovFilter counts, the
+    # camera-polygon summary, and the first-probe predicted floor.
+    if progress_cb:
+        try:
+            init_evt = {
+                "stage": "battleship-init",
+                "gridSize": [coarse_pan_steps, coarse_tilt_steps],
+                "panRangeDeg": pr_deg, "tiltRangeDeg": tr_deg,
+                "seedPan": seed_pan, "seedTilt": seed_tilt,
+                "mountedInverted": bool(mounted_inverted),
+            }
+            if camera_polygons is not None:
+                init_evt["cameraPolygons"] = {
+                    "count": len(camera_polygons),
+                    "totalVerts": sum(len(p) for p in camera_polygons),
+                }
+            else:
+                init_evt["cameraPolygons"] = {"count": 0, "totalVerts": 0}
+            if fov_total is not None:
+                init_evt["fovFilter"] = {
+                    "kept": fov_kept,
+                    "deferred": fov_deferred,
+                    "total": fov_total,
+                }
+            else:
+                init_evt["fovFilter"] = None  # filter not applied
+            if first_p is not None:
+                init_evt["firstProbe"] = {
+                    "pan": round(first_p, 4),
+                    "tilt": round(first_t, 4),
+                    "mechTiltDeg": round(mech_tilt_deg, 1),
+                    "predictedFloor": (
+                        [round(first_hit[0], 1), round(first_hit[1], 1)]
+                        if first_hit else None),
+                }
+            progress_cb(init_evt)
+        except Exception:
+            pass
 
     def _confirm(pan0, tilt0, px0, py0):
         """Confirm a candidate beam by nudging pan and tilt.
@@ -1217,7 +1278,12 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
             # — blooms the camera, crosses operator faces, and heats the
             # head. The same atomicity that fixed `_beam_detect_flash`
             # belongs here.
-            _set_mover_dmx(dmx, mover_addr, pan, tilt, 0, 0, 0, dimmer=0)
+            # #705 — blackout passes the cal colour, not RGB=(0,0,0). On
+            # color-wheel-only profiles, RGB=(0,0,0) maps to slot 0
+            # (open/white) and the wheel mechanically rotates green→white→
+            # green every probe. Holding the colour through the blackout
+            # keeps the wheel still — only `dimmer` modulates.
+            _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=0)
             _hold_dmx(bridge_ip, dmx, 0.30)
             _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
             _hold_dmx(bridge_ip, dmx, 0.20)
@@ -1235,7 +1301,9 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         # Re-settle on the candidate pixel so downstream refine starts
         # from the same state we told the caller we hit.
         # #702 Bug C — blackout, slew, then re-light at the candidate.
-        _set_mover_dmx(dmx, mover_addr, pan0, tilt0, 0, 0, 0, dimmer=0)
+        # #705 — hold cal colour through the blackout so the wheel
+        # doesn't rotate to white (slot 0) and back.
+        _set_mover_dmx(dmx, mover_addr, pan0, tilt0, *color, dimmer=0)
         _hold_dmx(bridge_ip, dmx, 0.30)
         _set_mover_dmx(dmx, mover_addr, pan0, tilt0, *color, dimmer=255)
         _hold_dmx(bridge_ip, dmx, 0.2)
@@ -1395,7 +1463,8 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
             # #702 Bug C — fallback path also has to slew dark first.
             # Otherwise after a confirm-rejected probe we light up the
             # next cell while the head is mid-slew.
-            _set_mover_dmx(dmx, mover_addr, pan, tilt, 0, 0, 0, dimmer=0)
+            # #705 — hold cal colour to prevent wheel cycling.
+            _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=0)
             _hold_dmx(bridge_ip, dmx, 0.30)
             _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
             _hold_dmx(bridge_ip, dmx, 0.3)
@@ -1409,10 +1478,30 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                  idx + 1, total, pan, tilt, px0, py0)
         if progress_cb:
             try:
+                # #706 — surface predicted floor + on-stage flag per probe
+                # so QA can spot off-stage false positives without
+                # running the IK in their head. predictedFloor uses the
+                # same operator-relative IK the cal is using.
+                pf = None
+                on_stage = None
+                if fixture_pos is not None:
+                    pf_hit = _ray_floor_hit(
+                        fixture_pos, fixture_rotation, pan, tilt,
+                        pr_deg, tr_deg,
+                        mounted_inverted=mounted_inverted)
+                    if pf_hit is not None:
+                        pf = [round(pf_hit[0], 1), round(pf_hit[1], 1)]
+                        if grid_filter is not None:
+                            try:
+                                on_stage = bool(grid_filter(pan, tilt))
+                            except Exception:
+                                on_stage = None
                 progress_cb({"stage": "beam-found",
                               "probe": idx + 1, "total": total,
                               "pan": pan, "tilt": tilt,
-                              "pixelX": int(px0), "pixelY": int(py0)})
+                              "pixelX": int(px0), "pixelY": int(py0),
+                              "predictedFloor": pf,
+                              "onStage": on_stage})
             except Exception:
                 pass
         verdict, conf_info = _confirm(pan, tilt, px0, py0)
@@ -2047,7 +2136,11 @@ def _beam_detect_flash(bridge_ip, camera_ip, cam_idx, mover_addr, pan, tilt,
     # crosses operator faces, and heats the head needlessly. Doing the
     # blackout-and-move in a single frame matches the same-row code path
     # that already worked correctly (see DMX trace 2026-04-26).
-    _set_mover_dmx(dmx, mover_addr, pan, tilt, 0, 0, 0, dimmer=0)
+    # #705 — pass the cal colour, not RGB=(0,0,0), so the colour wheel
+    # holds at the cal slot through the blackout (the wheel's
+    # mechanical green→white→green rotation each probe added 200-400 ms
+    # of delay and made the cal visibly flicker).
+    _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=0)
     _hold_dmx(bridge_ip, dmx, 0.30)   # 300 ms — enough for typical slew
 
     # Now turn the light ON at the new aim.
@@ -2072,7 +2165,8 @@ def _beam_detect_flash(bridge_ip, camera_ip, cam_idx, mover_addr, pan, tilt,
         import threading
         def _off():
             time.sleep(0.2)
-            _set_mover_dmx(dmx, mover_addr, pan, tilt, 0, 0, 0, dimmer=0)
+            # #705 — hold cal colour through the off-frame too.
+            _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=0)
             _hold_dmx(bridge_ip, dmx, 0.1)
         threading.Thread(target=_off, daemon=True).start()
 
