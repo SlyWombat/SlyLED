@@ -147,13 +147,22 @@ def compute_pan_tilt_writes(pan, tilt, profile):
     a dict with ``channel_map`` (type → coarse offset) and ``channels``
     (list of ``{type, offset, bits, …}``).
 
+    A profile is treated as 16-bit when EITHER the coarse channel
+    declares ``bits == 16`` OR the profile carries a ``pan-fine`` /
+    ``tilt-fine`` sibling channel for the axis. The second case
+    matters: the built-in ``movinghead-150w-12ch`` and several
+    OFL-imported profiles model pan as two separate channel entries
+    (``{"type": "pan"}`` + ``{"type": "pan-fine"}``) without any
+    ``bits`` annotation. Before #691 the helper checked only ``bits``
+    and silently dropped the LSB — losing 1 part in 256 on every move
+    and stranding the operator's Set Home anchor's fine resolution.
+
     For 16-bit pan/tilt the LSB destination is read from
     ``channel_map["pan-fine"]`` / ``channel_map["tilt-fine"]`` whenever
     the profile provides one — OFL imports can place fine channels at
     arbitrary offsets via ``fineChannelAliases``. Only when no fine
     entry exists do we fall back to ``coarse_offset + 1`` (legacy
-    contiguous layouts like the built-in Slymovehead and the
-    BeamLight 350W).
+    ``bits=16``-without-explicit-fine layouts).
 
     Returns a list of ``(offset, byte)`` pairs to apply on top of the
     fixture's ``start_addr``. Returns ``[]`` if the profile lacks pan
@@ -170,6 +179,12 @@ def compute_pan_tilt_writes(pan, tilt, profile):
             continue
         ch_def = next((c for c in channels if c.get("type") == axis), None)
         bits = ch_def.get("bits", 8) if ch_def else 8
+        fine_off = ch_map.get(f"{axis}-fine")
+        # #691 — treat split-channel profiles (e.g. built-in 150w-12ch:
+        # separate "pan" and "pan-fine" entries, no bits annotation) as
+        # 16-bit. Previously they were misclassified as 8-bit and the
+        # fine byte was never written.
+        is_16 = (bits == 16) or (fine_off is not None)
         v = 0.0 if value is None else float(value)
         if v < 0.0:
             v = 0.0
@@ -177,14 +192,16 @@ def compute_pan_tilt_writes(pan, tilt, profile):
             v = 1.0
         # int() truncation (not round) matches the project's existing
         # 8-bit conversion convention; tests assert pan=0.5 → 127.
-        if bits == 16:
+        if is_16:
             v16 = int(v * 65535)
             if v16 < 0:
                 v16 = 0
             elif v16 > 65535:
                 v16 = 65535
-            fine_off = ch_map.get(f"{axis}-fine")
             if fine_off is None:
+                # bits=16 declared without an explicit fine entry.
+                # Legacy contiguous fallback only — modern profiles
+                # always carry an explicit pan-fine / tilt-fine sibling.
                 fine_off = coarse_off + 1
             writes.append((coarse_off, (v16 >> 8) & 0xFF))
             writes.append((fine_off,    v16        & 0xFF))

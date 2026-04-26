@@ -122,6 +122,43 @@ ok(not any(off == 1 for off, _ in w),
 ok(not any(off == 7 for off, _ in w),
    f'Did NOT write to strobe (off+1 trap)')
 
+section('compute_pan_tilt_writes — split-channel profile (no bits, has pan-fine) — #691')
+
+# The built-in movinghead-150w-12ch + beamlight-350w-16ch model pan/tilt
+# as two separate channel entries with NO `bits` annotation. Before #691
+# the helper saw bits=8 and silently dropped the LSB.
+profile_split = {
+    'channel_map': {'pan': 0, 'pan-fine': 1, 'tilt': 2, 'tilt-fine': 3},
+    'channels': [
+        {'offset': 0, 'type': 'pan'},        # NO bits — relies on pan-fine sibling
+        {'offset': 1, 'type': 'pan-fine'},
+        {'offset': 2, 'type': 'tilt'},       # NO bits
+        {'offset': 3, 'type': 'tilt-fine'},
+    ],
+}
+w = compute_pan_tilt_writes(0.6770, 0.0, profile_split)
+# 0.6770 × 65535 = 44367.195 → int(trunc) = 44367 = 0xAD4F → MSB=173 LSB=79
+ok((0, 173) in w, f'split profile pan MSB=173 (got {w})')
+ok((1, 79)  in w, f'split profile pan LSB=79 — written, not zero (got {w})')
+ok((2, 0)   in w, f'split profile tilt MSB=0 (got {w})')
+ok((3, 0)   in w, f'split profile tilt LSB=0 (got {w})')
+
+# Verify against the actual built-in 150W profile (regression target).
+import dmx_profiles as _dp
+prof = _dp.ProfileLibrary().channel_info('movinghead-150w-12ch')
+ok(prof is not None, 'built-in movinghead-150w-12ch loads')
+if prof:
+    real_profile = {'channel_map': prof['channel_map'], 'channels': prof['channels']}
+    w = compute_pan_tilt_writes(0.6770, 0.0, real_profile)
+    pan_msb_off = real_profile['channel_map']['pan']
+    pan_fine_off = real_profile['channel_map']['pan-fine']
+    msb_pair = next((p for p in w if p[0] == pan_msb_off), None)
+    lsb_pair = next((p for p in w if p[0] == pan_fine_off), None)
+    ok(msb_pair == (pan_msb_off, 173),
+       f'150W real profile pan MSB=173 at off {pan_msb_off} (got {msb_pair})')
+    ok(lsb_pair == (pan_fine_off, 79),
+       f'150W real profile pan LSB=79 at off {pan_fine_off} — #691 fix (got {lsb_pair})')
+
 section('compute_pan_tilt_writes — fallback: 16-bit but no pan-fine entry')
 
 # Legacy slymovehead-style: bits=16 declared on coarse channel but no

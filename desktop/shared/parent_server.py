@@ -4959,6 +4959,47 @@ def _targeted_fixture_blackout(fid):
         pass
 
 
+def _park_fixture_at_home(fid):
+    """#691 — park a moving-head fixture at its Set Home (#687) anchor
+    with the beam off (dimmer + strobe-closed if available). Used at
+    the END of a cal run (cancel / error / completion) so the fixture
+    rests where the operator originally pointed it instead of slumping
+    to mechanical (0, 0) per the universe zero-fill. Falls back to
+    :func:`_targeted_fixture_blackout` when no home anchor is set.
+    """
+    try:
+        fx = next((f for f in _fixtures if f["id"] == fid), None)
+        if not fx:
+            return
+        engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+        if not engine:
+            return
+        home_pan = fx.get("homePanDmx16")
+        home_tilt = fx.get("homeTiltDmx16")
+        if home_pan is None or home_tilt is None:
+            _targeted_fixture_blackout(fid)
+            return
+        uni = fx.get("dmxUniverse", 1)
+        addr = fx.get("dmxStartAddr", 1)
+        pid = fx.get("dmxProfileId")
+        info = _profile_lib.channel_info(pid) if pid else None
+        ch_count = int((info or {}).get("channelCount") or
+                       fx.get("dmxChannelCount") or 13)
+        uni_buf = engine.get_universe(uni)
+        # Zero the whole channel band first so any cal-time defaults
+        # (gobo, prism, colour wheel) come back to a known idle.
+        uni_buf.set_channels(addr, [0] * ch_count)
+        # Now drive pan/tilt to the operator's home via the helper —
+        # routes the LSB to the profile's pan-fine / tilt-fine offset.
+        profile = {"channel_map": (info or {}).get("channel_map", {}),
+                   "channels":     (info or {}).get("channels", [])}
+        uni_buf.set_fixture_pan_tilt(
+            addr, home_pan / 65535.0, home_tilt / 65535.0, profile)
+    except Exception:
+        # Fall back to the safe behaviour: black the fixture out.
+        _targeted_fixture_blackout(fid)
+
+
 def _mover_cal_thread_markers(fid, cam, bridge_ip, mover_color,
                                 warmup=False, warmup_seconds=30.0):
     """#610 marker-direct calibration. Wrapper that catches
@@ -4973,13 +5014,13 @@ def _mover_cal_thread_markers(fid, cam, bridge_ip, mover_color,
             job["error"] = "Cancelled by operator"; job["status"] = "cancelled"
             job["phase"] = "cancelled"
             _mcal.arm_cancel()
-            _targeted_fixture_blackout(fid)
+            _park_fixture_at_home(fid)   # #691 — return to operator's home anchor
             _set_calibrating(fid, False)
         except Exception as e:
             log.exception("MOVER-CAL markers %d: unhandled", fid)
             job["error"] = f"Unhandled: {e}"; job["status"] = "error"
             _mcal.arm_cancel()
-            _targeted_fixture_blackout(fid)
+            _park_fixture_at_home(fid)   # #691
             _set_calibrating(fid, False)
     finally:
         # #682-N — ALWAYS restore camera auto controls, no matter how the
@@ -5099,6 +5140,32 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
         _mcal_log(job, f"Anchor: home (DMX pan={home_pan} tilt={home_tilt}) "
                        f"-> world vector {f.get('rotation')}; "
                        f"set {f.get('homeSetAt') or 'unknown'}")
+
+
+def _warm_start_from_home(f):
+    """#691 — return (pan, tilt) normalised from the Set Home (#687)
+    anchor on a fixture, or None when the operator hasn't set one.
+
+    Set Home stores the anchor as ``homePanDmx16`` / ``homeTiltDmx16``
+    on the fixture record (top-level keys, 0..65535 DMX-16 units).
+    Pre-#691 the cal warm-start read ``f["orientation"]["homePan"]``
+    (nested + normalised), which has been unused by the SPA Set-Home
+    modal since #687 landed — the read silently no-op'd and the cal
+    sweep started at the geometric estimate instead of the operator's
+    manually-confirmed position.
+
+    The legacy ``orientation.homePan`` is checked by the calling code
+    only as a fall-through for fixture records that pre-date #687.
+    """
+    p = f.get("homePanDmx16")
+    t = f.get("homeTiltDmx16")
+    if p is None or t is None:
+        return None
+    try:
+        return (max(0.0, min(1.0, float(p) / 65535.0)),
+                max(0.0, min(1.0, float(t) / 65535.0)))
+    except (TypeError, ValueError):
+        return None
 
     # #682-M — capture a dark reference BEFORE the beam ever comes on so
     # flash-detect can subtract the scene's static bright features from
@@ -5272,6 +5339,15 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
             mounted_inverted=f.get("mountedInverted", False))
     except Exception:
         seed_pan, seed_tilt = 0.5, 0.5
+    # #691 — Set Home (#687) anchor takes precedence over geometric
+    # estimation. The operator manually pointed the head at a known-good
+    # starting position; the cal sweep should start there, not at the
+    # camera-visible centroid which can be 75° away.
+    home = _warm_start_from_home(f)
+    if home is not None:
+        seed_pan, seed_tilt = home
+        _mcal_log(job, f"Discovery seed: Set Home anchor pan={seed_pan:.4f} "
+                       f"tilt={seed_tilt:.4f} (overrides geometric estimate)")
     # #684 — surface model + per-camera depth-discontinuity surface_check.
     # Both the grid_filter and battleship_discover._confirm use the same
     # surfaces dict; the latter wraps it in a closure that maps a camera
@@ -5411,7 +5487,7 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
                         "lamp, shutter, DMX wiring, and camera view "
                         "of the fixture's reachable floor area.")
         job["status"] = "error"; _set_calibrating(fid, False)
-        _targeted_fixture_blackout(fid)
+        _park_fixture_at_home(fid)   # #691 — operator-friendly resting position
         return
     disc_pan, disc_tilt, disc_px, disc_py = discovered
     job["foundAt"] = {"pan": disc_pan, "tilt": disc_tilt,
@@ -5507,7 +5583,7 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
         job["status"] = "error"
         job["targets"] = per_marker
         _set_calibrating(fid, False)
-        _targeted_fixture_blackout(fid)
+        _park_fixture_at_home(fid)   # #691
         return
 
     # Phase 3 — fit ParametricFixtureModel from the (pan, tilt, stage) samples.
@@ -5548,7 +5624,7 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
                    f"RMS {fit_rms:.2f}°")
     _restore_camera_lock(job, cam)
     _set_calibrating(fid, False)
-    _targeted_fixture_blackout(fid)
+    _park_fixture_at_home(fid)   # #691 — operator-friendly rest position
 
 
 def _mover_cal_thread_v2(fid, cam, bridge_ip, mover_color,
@@ -5566,14 +5642,14 @@ def _mover_cal_thread_v2(fid, cam, bridge_ip, mover_color,
         job["status"] = "cancelled"
         job["phase"] = "cancelled"
         _mcal.arm_cancel()
-        _targeted_fixture_blackout(fid)
+        _park_fixture_at_home(fid)   # #691
         _set_calibrating(fid, False)
     except Exception as e:
         log.exception("MOVER-CAL v2 %d: unhandled exception", fid)
         job["error"] = f"Unhandled error: {e}"
         job["status"] = "error"
         _mcal.arm_cancel()
-        _targeted_fixture_blackout(fid)
+        _park_fixture_at_home(fid)   # #691
         _set_calibrating(fid, False)
 
 
@@ -5593,7 +5669,10 @@ def _mover_cal_thread_v2_body(fid, cam, bridge_ip, mover_color,
     job = _mover_cal_jobs[str(fid)]
 
     def _blackout():
-        _targeted_fixture_blackout(fid)
+        # #691 — end-of-thread cleanup parks the fixture at the operator's
+        # Set Home anchor instead of slumping to mechanical (0,0) per the
+        # universe zero-fill. Falls through to blackout when no anchor set.
+        _park_fixture_at_home(fid)
         _set_calibrating(fid, False)
 
     f = next((x for x in _fixtures if x["id"] == fid), None)
@@ -5802,17 +5881,17 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
             job["error"] = "Cancelled by operator"
             job["status"] = "cancelled"
             job["phase"] = "cancelled"
-            # Clear the cancel flag before the blackout write so _hold_dmx
+            # Clear the cancel flag before the park write so _hold_dmx
             # actually runs (rather than re-raising CalibrationAborted).
             _mcal.arm_cancel()
-            _targeted_fixture_blackout(fid)
+            _park_fixture_at_home(fid)   # #691
             _set_calibrating(fid, False)
         except Exception as e:
             log.exception("MOVER-CAL %d: unhandled exception in cal thread", fid)
             job["error"] = f"Unhandled error: {e}"
             job["status"] = "error"
             _mcal.arm_cancel()
-            _targeted_fixture_blackout(fid)
+            _park_fixture_at_home(fid)   # #691
             _set_calibrating(fid, False)
     finally:
         # #686 — close any open trace file regardless of how the body
@@ -6543,11 +6622,20 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
                 log.info("MOVER-CAL %d: starting from manual sample pan=%.3f tilt=%.3f",
                          fid, start_pan, start_tilt)
             else:
-                # Override with orientation/rotation if available
-                orient = f.get("orientation", {})
-                if orient.get("homePan") is not None:
-                    start_pan = orient["homePan"]
-                    start_tilt = orient.get("homeTilt", 0.5)
+                # #691 — operator-set Set Home anchor (#687) is the primary
+                # warm-start when present, preferred over the legacy
+                # `orientation.homePan` nested field. Set Home stores
+                # values as homePanDmx16 / homeTiltDmx16 (top-level,
+                # 0..65535 DMX-16 units). Fall through to the legacy
+                # field for compatibility with very-old fixture records.
+                home = _warm_start_from_home(f)
+                if home is not None:
+                    start_pan, start_tilt = home
+                else:
+                    orient = f.get("orientation", {})
+                    if orient.get("homePan") is not None:
+                        start_pan = orient["homePan"]
+                        start_tilt = orient.get("homeTilt", 0.5)
                 rot = f.get("rotation", [0, 0, 0])
                 if any(v != 0 for v in rot):
                     aim_pt = _rotation_to_aim(rot, fx_pos)
