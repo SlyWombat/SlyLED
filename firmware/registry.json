@@ -116,7 +116,7 @@
       "version": "1.6.3",
       "file": "orangepi/camera_server.py",
       "releaseAsset": "camera-firmware-v1.6.3.zip",
-      "sha256": "b8b372684040864fe4278c8c86102eb8867820d07444616f8ddc26fb738599b6",
+      "sha256": "9e2b61cfa36eb4cd2987a6cd36eb9b6d0cd8fd285dab0b2d65c6a794681db565",
       "flashMethod": "ssh"
     }
   ]
