@@ -9447,6 +9447,224 @@ def api_depth_runtime_test():
     )
 
 
+# #696 — ZoeDepth scan state + log. The synchronous endpoint blocked
+# longer than the 30 s XHR timeout in app.js's `ra()` helper, so the
+# SPA reported "Failed: unknown" while the orchestrator finished the
+# scan and saved the cloud. Async + per-stage log fixes both the
+# misleading error AND gives the operator visibility into progress.
+_zoe_scan_state = {
+    "running": False,
+    "progress": 0,             # 0..100
+    "message": "",             # current human-readable stage
+    "log": [],                 # list of {ts, level, message} stage events
+    "result": None,            # final scan summary (camerasMeta, totals)
+    "error": None,
+    "startedAt": 0.0,
+}
+
+
+def _zoe_log(level, message):
+    """Append a stage event to the live log buffer + mirror to log.info."""
+    import datetime as _dt
+    _zoe_scan_state["log"].append({
+        "ts": _dt.datetime.utcnow().isoformat() + "Z",
+        "level": level,
+        "message": message,
+    })
+    _zoe_scan_state["message"] = message
+    if level == "error":
+        log.warning("ZoeDepth: %s", message)
+    else:
+        log.info("ZoeDepth: %s", message)
+
+
+def _zoe_scan_thread(positioned, pos_map, lighting_mode, max_pts):
+    """Background worker for /api/space/scan/zoedepth. Drives the same
+    pipeline the synchronous version did, but updates _zoe_scan_state
+    so the SPA can poll for progress + render a stage log."""
+    global _point_cloud, _stage_surfaces_cache
+    import urllib.request
+    import math as _math
+    import io
+    try:
+        import numpy as _np
+        from PIL import Image
+    except Exception as e:
+        _zoe_scan_state["error"] = f"numpy / Pillow missing: {e}"
+        _zoe_scan_state["running"] = False
+        return
+    from camera_math import build_camera_to_stage
+    from stereo_consistency import cross_camera_filter
+
+    per_cam_clouds = []
+    cam_info_list = []
+    t_scan = time.time()
+    n_cams = len(positioned)
+
+    try:
+        with _ScanLightingWindow(lighting_mode):
+            _zoe_log("info", f"Lighting window opened (mode: {lighting_mode})")
+            for idx, cam in enumerate(positioned):
+                cam_label = cam.get("name") or cam.get("cameraIp")
+                # Per-camera progress: 5..85 % across all cameras.
+                base_pct = 5 + int(80 * idx / max(1, n_cams))
+                _zoe_scan_state["progress"] = base_pct
+                _zoe_log("info", f"[{idx + 1}/{n_cams}] {cam_label}: capturing snapshot")
+
+                pos = pos_map[cam["id"]]
+                cam_pos = (pos.get("x", 0), pos.get("y", 0), pos.get("z", 0))
+                rot = cam.get("rotation", [0, 0, 0])
+                fov = cam.get("fovDeg", 90)
+
+                try:
+                    url = f"http://{cam['cameraIp']}:5000/snapshot?cam={cam.get('cameraIdx', 0)}"
+                    jpg_bytes = urllib.request.urlopen(url, timeout=15).read()
+                except Exception as e:
+                    _zoe_log("error",
+                             f"[{idx + 1}/{n_cams}] {cam_label}: snapshot "
+                             f"failed ({e}) — skipping")
+                    continue
+
+                img = Image.open(io.BytesIO(jpg_bytes)).convert("RGB")
+                _zoe_scan_state["progress"] = base_pct + 3
+                _zoe_log("info",
+                         f"[{idx + 1}/{n_cams}] {cam_label}: snapshot "
+                         f"{img.size[0]}×{img.size[1]} px — running "
+                         f"ZoeDepth inference (CPU ~15 s)")
+
+                t0 = time.time()
+                try:
+                    depth_mm, inf_ms = _depth_runtime.infer_jpeg(jpg_bytes)
+                except Exception as e:
+                    _zoe_log("error",
+                             f"[{idx + 1}/{n_cams}] {cam_label}: ZoeDepth "
+                             f"runtime error: {e}")
+                    _zoe_scan_state["error"] = f"ZoeDepth runtime error: {e}"
+                    _zoe_scan_state["running"] = False
+                    return
+                t1 = time.time()
+
+                if depth_mm.shape[::-1] != img.size:
+                    from PIL import Image as _I
+                    depth_mm = _np.array(
+                        _I.fromarray(depth_mm).resize(img.size, _I.BICUBIC),
+                        dtype=_np.float32,
+                    )
+                _zoe_log("info",
+                         f"[{idx + 1}/{n_cams}] {cam_label}: inference "
+                         f"{t1 - t0:.1f} s, depth range "
+                         f"{depth_mm.min():.0f}..{depth_mm.max():.0f} mm")
+
+                h, w = depth_mm.shape
+                fx = (w / 2.0) / _math.tan(_math.radians(fov / 2))
+                fy = fx
+                cx, cy = w / 2.0, h / 2.0
+                step = max(1, int(_math.sqrt(h * w / max_pts)))
+                cam_local = []
+                rgb = _np.array(img)
+                for py in range(0, h, step):
+                    for px in range(0, w, step):
+                        z = float(depth_mm[py, px])
+                        if z < 50 or z > 10000:
+                            continue
+                        x = (px - cx) * z / fx
+                        y = (py - cy) * z / fy
+                        r, g, b = int(rgb[py, px, 0]), int(rgb[py, px, 1]), int(rgb[py, px, 2])
+                        cam_local.append([x, y, z, r, g, b])
+
+                R = _np.array(build_camera_to_stage(rot[0], rot[1], rot[2]))
+                stage_pts = []
+                for p in cam_local:
+                    local = _np.array([p[0], p[1], p[2]])
+                    stage = R @ local + _np.array(cam_pos)
+                    stage_pts.append([float(stage[0]), float(stage[1]), float(stage[2]),
+                                      p[3], p[4], p[5]])
+                per_cam_clouds.append({
+                    "fixture": cam,
+                    "stage_pos": cam_pos,
+                    "fov_deg": fov,
+                    "points": stage_pts,
+                    "anchorQuality": "ok",
+                })
+                cam_info_list.append({
+                    "fixtureId": cam["id"],
+                    "cameraIdx": cam.get("cameraIdx", 0),
+                    "name": cam.get("name"),
+                    "pointCount": len(stage_pts),
+                    "inferenceS": round(t1 - t0, 2),
+                    "anchorQuality": "ok",
+                })
+                _zoe_log("info",
+                         f"[{idx + 1}/{n_cams}] {cam_label}: "
+                         f"{len(stage_pts)} stage-frame points")
+
+        if not per_cam_clouds:
+            _zoe_scan_state["error"] = "No cameras returned usable frames"
+            _zoe_log("error", _zoe_scan_state["error"])
+            _zoe_scan_state["running"] = False
+            return
+
+        _zoe_scan_state["progress"] = 88
+        _zoe_log("info", f"Merging {len(per_cam_clouds)} per-camera clouds "
+                          f"with cross-camera filter")
+        if len(per_cam_clouds) >= 2:
+            merged, filter_stats = cross_camera_filter(per_cam_clouds)
+        else:
+            merged = per_cam_clouds[0]["points"]
+            filter_stats = None
+
+        total_t = time.time() - t_scan
+        _point_cloud = {
+            "schemaVersion": 2,
+            "timestamp": time.time(),
+            "source": "zoedepth",
+            "cameras": cam_info_list,
+            "filterStats": filter_stats,
+            "points": merged,
+            "totalPoints": len(merged),
+            "stageW": int(_stage.get("w", 3) * 1000),
+            "stageH": int(_stage.get("h", 2) * 1000),
+            "stageD": int(_stage.get("d", 4) * 1000),
+            "elapsedS": round(total_t, 2),
+        }
+        _zoe_scan_state["progress"] = 95
+        _zoe_log("info",
+                 f"Aligning cloud Z to surveyed ArUco floor markers")
+        align = _apply_marker_z_alignment(_point_cloud)
+        if align.get("applied"):
+            _point_cloud["markerAlignment"] = align
+            _zoe_log("info", f"Marker-Z alignment applied: "
+                              f"{align.get('zOffsetMm')} mm "
+                              f"(method {align.get('method', 'marker-median')})")
+        elif align.get("warnings"):
+            for w in align["warnings"]:
+                _zoe_log("warn", f"Alignment warning: {w}")
+        else:
+            _zoe_log("info",
+                     f"Marker-Z alignment skipped: {align.get('reason', '?')}")
+
+        _save("pointcloud", _point_cloud)
+        _stage_surfaces_cache = {"key": None, "value": None}
+
+        _zoe_scan_state["progress"] = 100
+        _zoe_scan_state["result"] = {
+            "source": "zoedepth",
+            "totalPoints": len(merged),
+            "cameras": cam_info_list,
+            "elapsedS": round(total_t, 2),
+            "markerAlignment": align,
+        }
+        _zoe_log("info",
+                 f"Scan complete: {len(merged)} points from "
+                 f"{len(per_cam_clouds)} camera(s) in {total_t:.1f} s")
+    except Exception as e:
+        log.exception("ZoeDepth scan thread crashed")
+        _zoe_scan_state["error"] = f"Scan thread crashed: {e}"
+        _zoe_log("error", str(e))
+    finally:
+        _zoe_scan_state["running"] = False
+
+
 @app.post("/api/space/scan/zoedepth")
 def api_space_scan_zoedepth():
     """Host-side high-quality monocular depth scan via ZoeDepth (#593).
@@ -9461,9 +9679,17 @@ def api_space_scan_zoedepth():
       lighting: \"blackout\" (default) | \"keep\" | \"fill\"
       maxPoints: int per camera, default 5000
     }
+
+    #696 — runs in a background thread and returns immediately. The SPA
+    polls /api/space/scan/zoedepth/status to render a per-stage log
+    and progress bar. Pre-#696 this was synchronous and any rig with
+    more than two cameras tripped the SPA's 30 s XHR timeout, surfacing
+    as the misleading "Failed: unknown" while the orchestrator silently
+    completed the scan in the background.
     """
-    import urllib.request
-    global _point_cloud, _stage_surfaces_cache
+    if _zoe_scan_state["running"]:
+        return jsonify(err="ZoeDepth scan already in progress",
+                       progress=_zoe_scan_state["progress"]), 409
 
     body = request.get_json(silent=True) or {}
     sel = body.get("cameras")
@@ -9486,137 +9712,38 @@ def api_space_scan_zoedepth():
                    "the 'Install now' button in the Advanced Scan card."
         ), 501
 
-    import math as _math
-    import io
-    try:
-        import numpy as _np
-        from PIL import Image
-    except Exception as e:
-        return jsonify(err=f"numpy/Pillow missing in orchestrator: {e}"), 500
+    # Reset state for a fresh run.
+    _zoe_scan_state["running"] = True
+    _zoe_scan_state["progress"] = 1
+    _zoe_scan_state["message"] = "Starting ZoeDepth scan…"
+    _zoe_scan_state["log"] = []
+    _zoe_scan_state["result"] = None
+    _zoe_scan_state["error"] = None
+    _zoe_scan_state["startedAt"] = time.time()
+    _zoe_log("info", f"ZoeDepth scan starting on {len(positioned)} camera(s)")
 
-    from camera_math import build_camera_to_stage
-    from stereo_consistency import cross_camera_filter
+    threading.Thread(
+        target=_zoe_scan_thread,
+        args=(positioned, pos_map, lighting_mode, max_pts),
+        daemon=True,
+    ).start()
+    return jsonify(ok=True, started=True, cameras=len(positioned))
 
-    # Snapshot each camera (inside blackout window)
-    per_cam_clouds = []
-    cam_info_list = []
-    t_scan = time.time()
-    with _ScanLightingWindow(lighting_mode):
-        for cam in positioned:
-            pos = pos_map[cam["id"]]
-            cam_pos = (pos.get("x", 0), pos.get("y", 0), pos.get("z", 0))
-            rot = cam.get("rotation", [0, 0, 0])
-            fov = cam.get("fovDeg", 90)
-            # Pull snapshot
-            try:
-                url = f"http://{cam['cameraIp']}:5000/snapshot?cam={cam.get('cameraIdx', 0)}"
-                jpg_bytes = urllib.request.urlopen(url, timeout=15).read()
-            except Exception as e:
-                log.warning("snapshot failed for %s: %s", cam.get("name"), e)
-                continue
-            img = Image.open(io.BytesIO(jpg_bytes)).convert("RGB")
-            # ZoeDepth inference — out-of-process (#598). Returns a
-            # float32 depth map already in millimetres.
-            t0 = time.time()
-            try:
-                depth_mm, inf_ms = _depth_runtime.infer_jpeg(jpg_bytes)
-            except Exception as e:
-                log.warning("ZoeDepth subprocess failed for %s: %s", cam.get("name"), e)
-                return jsonify(err=f"ZoeDepth runtime error: {e}"), 502
-            t1 = time.time()
-            # Resize depth to image dims if the runner used a different
-            # input size (defensive — current runner returns full-res)
-            if depth_mm.shape[::-1] != img.size:
-                from PIL import Image as _I
-                depth_mm = _np.array(
-                    _I.fromarray(depth_mm).resize(img.size, _I.BICUBIC),
-                    dtype=_np.float32,
-                )
-            log.info("ZoeDepth %s: inference %.1fs (runner %dms), depth %.0f..%.0f mm",
-                     cam.get("name"), t1 - t0, inf_ms, depth_mm.min(), depth_mm.max())
-            # Back-project
-            h, w = depth_mm.shape
-            fx = (w / 2.0) / _math.tan(_math.radians(fov / 2))
-            fy = fx
-            cx, cy = w / 2.0, h / 2.0
-            step = max(1, int(_math.sqrt(h * w / max_pts)))
-            cam_local = []
-            rgb = _np.array(img)
-            for py in range(0, h, step):
-                for px in range(0, w, step):
-                    z = float(depth_mm[py, px])
-                    if z < 50 or z > 10000:
-                        continue
-                    x = (px - cx) * z / fx
-                    y = (py - cy) * z / fy
-                    r, g, b = int(rgb[py, px, 0]), int(rgb[py, px, 1]), int(rgb[py, px, 2])
-                    cam_local.append([x, y, z, r, g, b])
-            # Transform to stage coords via the canonical helper
-            R = _np.array(build_camera_to_stage(rot[0], rot[1], rot[2]))
-            stage_pts = []
-            for p in cam_local:
-                local = _np.array([p[0], p[1], p[2]])
-                stage = R @ local + _np.array(cam_pos)
-                stage_pts.append([float(stage[0]), float(stage[1]), float(stage[2]),
-                                  p[3], p[4], p[5]])
-            per_cam_clouds.append({
-                "fixture": cam,
-                "stage_pos": cam_pos,
-                "fov_deg": fov,
-                "points": stage_pts,
-                "anchorQuality": "ok",  # ZoeDepth is already metric
-            })
-            cam_info_list.append({
-                "fixtureId": cam["id"],
-                "cameraIdx": cam.get("cameraIdx", 0),
-                "name": cam.get("name"),
-                "pointCount": len(stage_pts),
-                "inferenceS": round(t1 - t0, 2),
-                "anchorQuality": "ok",
-            })
 
-    total_t = time.time() - t_scan
-    if not per_cam_clouds:
-        return jsonify(err="No cameras returned usable frames"), 502
-
-    # Cross-camera filter (same as the monocular scan)
-    if len(per_cam_clouds) >= 2:
-        merged, filter_stats = cross_camera_filter(per_cam_clouds)
-    else:
-        merged = per_cam_clouds[0]["points"]
-        filter_stats = None
-
-    _point_cloud = {
-        "schemaVersion": 2,
-        "timestamp": time.time(),
-        "source": "zoedepth",
-        "cameras": cam_info_list,
-        "filterStats": filter_stats,
-        "points": merged,
-        "totalPoints": len(merged),
-        "stageW": int(_stage.get("w", 3) * 1000),
-        "stageH": int(_stage.get("h", 2) * 1000),
-        "stageD": int(_stage.get("d", 4) * 1000),
-        "elapsedS": round(total_t, 2),
-    }
-    # #599 — auto-align Z to the surveyed floor markers when any are
-    # registered. ZoeDepth's monocular scale-prior routinely plants the
-    # floor at 200-400 mm above truth on the basement rig; the surveyed
-    # ArUco registry is the ground-truth anchor, and this step shifts
-    # the cloud so the floor sits at z=0 per the markers.
-    align = _apply_marker_z_alignment(_point_cloud)
-    if align.get("applied"):
-        _point_cloud["markerAlignment"] = align
-    _save("pointcloud", _point_cloud)
-    _stage_surfaces_cache = {"key": None, "value": None}
-    log.info("ZoeDepth scan complete: %d points from %d cameras in %.1fs%s",
-             len(merged), len(per_cam_clouds), total_t,
-             f" (Z-aligned {align['zOffsetMm']}mm)" if align.get("applied") else "")
-    return jsonify(ok=True, source="zoedepth",
-                   totalPoints=len(merged),
-                   cameras=cam_info_list,
-                   elapsedS=round(total_t, 2),
-                   markerAlignment=align)
+@app.get("/api/space/scan/zoedepth/status")
+def api_space_scan_zoedepth_status():
+    """Poll the live ZoeDepth scan state. Returns running flag,
+    progress 0..100, current message, full per-stage log buffer, and
+    (when complete) the result summary or error string. #696."""
+    return jsonify(
+        running=_zoe_scan_state["running"],
+        progress=_zoe_scan_state["progress"],
+        message=_zoe_scan_state["message"],
+        log=list(_zoe_scan_state["log"]),
+        result=_zoe_scan_state["result"],
+        error=_zoe_scan_state["error"],
+        startedAt=_zoe_scan_state["startedAt"],
+    )
 
 
 @app.post("/api/space/scan/stereo")

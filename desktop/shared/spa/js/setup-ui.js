@@ -858,20 +858,100 @@ function _pcAdvGo(){
       document.getElementById('pcadv-go').disabled=false;
       return;
     }
-    _render('<span style="color:#94a3b8">Running ZoeDepth on host · this takes ~15s per camera on CPU…</span>');
-    ra('POST','/api/space/scan/zoedepth',{cameras:selected,maxPoints:maxPts,lighting:light},function(r){
-      if(r&&r.ok){
-        var cams=(r.cameras||[]);
-        var summary='<div style="margin-top:.4em">'+cams.map(function(c){
-          return '<div style="font-size:.78em;color:#94a3b8">'+escapeHtml(c.name)+' · '+c.pointCount+' pts · inference '+(c.inferenceS||'?')+'s</div>';
-        }).join('')+'</div>';
-        _ok('\u2713 ZoeDepth scan complete: '+r.totalPoints+' points in '+r.elapsedS+'s', summary);
-      }else{
-        var err=(r&&r.err)||'unknown';
-        var det=(r&&r.detail)?('<div style="font-size:.8em;color:#94a3b8;margin-top:.3em">'+escapeHtml(r.detail)+'</div>'):'';
-        _render('<span style="color:#ef4444">Failed: '+escapeHtml(err)+'</span>'+det);
+    // #696 — async kick-off + per-stage log polling. Pre-fix this used
+    // a synchronous POST that exceeded the SPA's 30 s XHR timeout on
+    // any rig with >2 cameras, surfacing as "Failed: unknown" while
+    // the server silently finished the scan.
+    _render(
+      '<div style="font-size:.85em;color:#94a3b8;margin-bottom:.4em">'
+      + 'Running ZoeDepth on host · ~15 s per camera on CPU. '
+      + 'This window shows live per-stage progress.'
+      + '</div>'
+      + '<div class="prog-bar" style="height:10px;margin:.3em 0">'
+      +   '<div class="prog-fill" id="zoe-fill" style="width:1%"></div>'
+      + '</div>'
+      + '<div id="zoe-msg" style="font-size:.82em;color:#94a3b8;margin-bottom:.3em">Starting…</div>'
+      + '<div id="zoe-log" style="max-height:240px;overflow-y:auto;font-family:monospace;'
+      +   'font-size:.72em;background:#0f172a;border:1px solid #334155;border-radius:4px;'
+      +   'padding:.5em;color:#cbd5e1;line-height:1.45"></div>'
+    );
+    ra('POST','/api/space/scan/zoedepth',
+       {cameras:selected,maxPoints:maxPts,lighting:light},
+       function(r){
+      if(!r||!r.ok){
+        var err=(r&&r.err)||
+                'request failed (orchestrator did not accept the scan kick-off)';
+        var det=(r&&r.detail)?
+                ('<div style="font-size:.8em;color:#94a3b8;margin-top:.3em">'
+                 +escapeHtml(r.detail)+'</div>'):'';
+        _render('<span style="color:#ef4444">Could not start ZoeDepth scan: '
+                +escapeHtml(err)+'</span>'+det);
         document.getElementById('pcadv-go').disabled=false;
+        return;
       }
+      var seen = 0;
+      var poll = setInterval(function(){
+        ra('GET','/api/space/scan/zoedepth/status',null,function(s){
+          if(!s){
+            clearInterval(poll);
+            _render('<span style="color:#ef4444">Status poll failed — orchestrator unreachable. The scan may still be running; check Setup tab for a fresh point cloud.</span>');
+            document.getElementById('pcadv-go').disabled=false;
+            return;
+          }
+          var fill=document.getElementById('zoe-fill');
+          var msg=document.getElementById('zoe-msg');
+          var logBox=document.getElementById('zoe-log');
+          if(fill)fill.style.width=(s.progress||0)+'%';
+          if(msg)msg.textContent=s.message||('Progress: '+s.progress+'%');
+          if(logBox && Array.isArray(s.log) && s.log.length>seen){
+            var added='';
+            for(var i=seen;i<s.log.length;i++){
+              var entry=s.log[i];
+              var color=entry.level==='error'?'#f87171'
+                       :entry.level==='warn'?'#fbbf24':'#94a3b8';
+              var ts=(entry.ts||'').slice(11,19);
+              added+='<div><span style="color:#475569">'+ts+'</span> '
+                    +'<span style="color:'+color+'">'+escapeHtml(entry.message||'')+'</span></div>';
+            }
+            logBox.innerHTML+=added;
+            logBox.scrollTop=logBox.scrollHeight;
+            seen=s.log.length;
+          }
+          if(s.running)return;
+          clearInterval(poll);
+          if(s.error){
+            _render('<span style="color:#ef4444">ZoeDepth scan failed: '
+                    +escapeHtml(s.error)+'</span>'
+                    +(logBox?logBox.outerHTML:''));
+            document.getElementById('pcadv-go').disabled=false;
+            return;
+          }
+          if(s.result){
+            var camSummary='<div style="margin-top:.4em">'
+              +(s.result.cameras||[]).map(function(c){
+                return '<div style="font-size:.78em;color:#94a3b8">'
+                      +escapeHtml(c.name)+' · '+c.pointCount+' pts · inference '
+                      +(c.inferenceS||'?')+' s</div>';
+              }).join('')+'</div>';
+            var ma=s.result.markerAlignment||{};
+            var alignLine='';
+            if(ma.applied){
+              alignLine='<div style="font-size:.78em;color:#34d399;margin-top:.2em">'
+                +'✓ Z-aligned to floor markers: '+ma.zOffsetMm+' mm '
+                +'('+(ma.method||'marker-median')+')</div>';
+            }else if(ma.reason){
+              alignLine='<div style="font-size:.78em;color:#fbbf24;margin-top:.2em">'
+                +'⚠ Marker alignment skipped: '+escapeHtml(ma.reason)+'</div>';
+            }
+            _ok('✓ ZoeDepth scan complete: '+s.result.totalPoints
+                +' points in '+s.result.elapsedS+' s',
+                camSummary+alignLine);
+          }else{
+            _render('<span style="color:#ef4444">ZoeDepth scan ended without producing a result. Check the orchestrator log.</span>');
+            document.getElementById('pcadv-go').disabled=false;
+          }
+        });
+      }, 1000);
     });
     return;
   }
