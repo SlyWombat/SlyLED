@@ -15,14 +15,19 @@ Entries are alphabetised on the **Term** column. For acronyms that cluster aroun
 | **battleship search** | — | Calibration-discovery strategy that probes a coarse grid across the full pan/tilt range before refining — faster than a dense scan when the beam's reachable region is small. | Appendix B §B.3 Discovery. |
 | **BFS** | Breadth-First Search | Graph-traversal algorithm that explores outward from a seed point one ring at a time. Used in mover calibration to map the visible-region boundary from a first detected beam position. | Appendix B §B.3 Mapping. |
 | **blink-confirm** | — | Reflection-rejection check: after detecting a candidate beam pixel, nudge pan and tilt slightly and verify the detected pixel actually moves. A reflection stays put; a real beam moves. | Appendix B §B.3; issue #658. |
-| **CPU** | Central Processing Unit | The main processor. | §14 Camera Nodes. |
+| **CLI** | Command-Line Interface | A text shell interface (e.g. `arduino-cli`, `gh`, PowerShell, bash). The orchestrator's build/flash flow is driven through CLI tools rather than IDEs. | §15 Firmware; CLAUDE.md build commands. |
+| **CPU** | Central Processing Unit | The main processor. CPU0 / CPU1 distinguish the two cores on the ESP32 (WiFi pinned to one, FastLED pinned to the other). | §14 Camera Nodes; CLAUDE.md hardware quirks. |
 | **CRGB** | Color RGB | FastLED's C++ struct for a single RGB pixel. | Firmware modules (`GigaLED.h`). |
 | **CRUD** | Create, Read, Update, Delete | Shorthand for "all four basic database-style operations." | §4 Fixture Setup; §12 DMX Profiles. |
 | **CSI** | Camera Serial Interface | Raspberry Pi's native ribbon-cable camera port (not supported in SlyLED v1.x — use USB cameras). | §14 Camera Nodes. |
+| **CV** | Computer Vision | Algorithmic image-understanding — the umbrella over solvePnP, RANSAC, beam detection, depth estimation, and YOLO. The auto-tune **analyzer** evaluator is the CV-only alternative to the AI evaluator. | Appendix A; §14 Camera Nodes; Appendix D. |
 | **dark reference** | — | Snapshot captured with all calibration beams off, subtracted from subsequent frames so beam detection isn't fooled by ambient lighting. | Appendix A §A.5; issue #651. |
+| **DFU** | Device Firmware Update | USB protocol for flashing microcontroller firmware in bootloader mode. The Giga R1 (USB ID `2341:0366`) requires the Zadig WinUSB driver installed once before DFU uploads work. | §15 Firmware; CLAUDE.md first-time setup. |
 | **DHCP** | Dynamic Host Configuration Protocol | How devices on a network get an IP address. The board's hostname shows up in DHCP so routers list it by name. | §14 Camera Nodes deployment. |
 | **DMX** | Digital Multiplex | Industry-standard lighting-control protocol — 512 channels per universe, carried over a twisted-pair cable or over Ethernet (Art-Net / sACN). | §2 Walkthrough; §12 DMX Profiles; Appendix B. |
+| **DNS** | Domain Name System | The naming layer that resolves a hostname to an IP address. SlyLED relies on **mDNS** (zero-config DNS over multicast) for peer-name resolution on the LAN. | §14 Camera Nodes deployment. |
 | **DOF** | Degrees of Freedom | Independent axes a system can move along. SlyLED's parametric mover model has 6 DOF (yaw, pitch, roll, pan offset, tilt offset, plus scale). | Appendix B §B.3 Model fit. |
+| **EEPROM** | Electrically Erasable Programmable Read-Only Memory | Flash-backed non-volatile key/value storage on the D1 Mini (the ESP32 uses NVS instead). Each child board persists its hostname, string config, and per-string GPIO/length there. | §4 Fixture Setup; CLAUDE.md per-board limits. |
 | **ESP32** | — | Espressif microcontroller family used for LED-performer nodes (WiFi + dual-core, up to 8 LED strings). | §4 Fixture Setup; §15 Firmware. |
 | **extrinsic** | — | A camera's pose (position + rotation) in stage/world space. The solvePnP output. Pair with **intrinsic**. | Appendix A §A.4. |
 | **FastLED** | — | Arduino library for driving WS2812B-style addressable LED strips. Used on ESP32 and D1 Mini; **not** reliable on the Giga R1 (custom PWM path instead). | §15 Firmware; CLAUDE.md hardware quirks. |
@@ -35,6 +40,7 @@ Entries are alphabetised on the **Term** column. For acronyms that cluster aroun
 | **homography** | — | A 3×3 matrix that maps points on one plane to points on another via projective transform. SlyLED uses a pixel↔floor homography as a fast alternative to full 3D extrinsics during calibration. | Appendix A §A.4. |
 | **HSV** | Hue, Saturation, Value | A colour representation used for colour-filter beam detection (hue bands identify "the green beam" regardless of brightness). | Appendix A §A.8 Beam detection. |
 | **HTML** | HyperText Markup Language | The markup the SPA is built from. | §3 Platform Guide. |
+| **HTTP** | HyperText Transfer Protocol | The request/response protocol behind every `/api/*` call and every config page served by the orchestrator, performers, and camera nodes. | §19 API Quick Reference; throughout. |
 | **HUD** | Heads-Up Display | An overlay showing live state (used in the 3D viewport). | §5 Stage Layout. |
 | **ID** | Identifier | Any short key that uniquely names something (fixture ID, ArUco marker ID, etc.). | Throughout. |
 | **IK** | Inverse Kinematics | Given a target point, compute the pan/tilt values that aim the beam there. The parametric mover model provides IK once calibration completes. | Appendix B §B.3 Model fit. |
@@ -47,6 +53,7 @@ Entries are alphabetised on the **Term** column. For acronyms that cluster aroun
 | **LED** | Light-Emitting Diode | Addressable RGB LEDs (WS2812B and similar) are the primary fixture type. | §4 Fixture Setup. |
 | **LM** | Levenberg–Marquardt | Nonlinear least-squares solver used to fit the parametric mover model to calibration samples. | Appendix B §B.3 Model fit. |
 | **LSQ** | Least-Squares | The fitting technique LM refines. When calibration falls back to "median-based" fitting, it's because LSQ wouldn't converge. | Appendix A §A.6. |
+| **MAC** | Media Access Control | A hardware-unique 48-bit identifier baked into every WiFi/Ethernet interface. Performer hostnames are derived from the MAC (e.g. `SLYC-XXXX`). | §4 Fixture Setup; performer naming. |
 | **Mbed OS** | — | The real-time operating system running on the Arduino Giga R1. Explains why `analogWrite()` and some libraries behave differently on the Giga. | CLAUDE.md hardware quirks. |
 | **mDNS** | Multicast DNS | Zero-config DNS over multicast — how "SLYC-1234.local" resolves on the LAN without a DNS server. | §14 Camera Nodes deployment. |
 | **NTP** | Network Time Protocol | How performers sync their clocks so runner start times are coordinated. | Protocol (`Globals.cpp`). |
@@ -66,6 +73,7 @@ Entries are alphabetised on the **Term** column. For acronyms that cluster aroun
 | **QR** | Quick Response (code) | 2D barcode. Not the same as an ArUco marker — ArUco is designed for solvePnP, QR for data payloads. | — |
 | **RANSAC** | Random Sample Consensus | Robust plane-fitting algorithm — samples random small subsets, finds the model with the most inliers. SlyLED uses it to detect floor and wall planes in noisy point clouds. | Appendix A §A.7. |
 | **reprojection RMS** | — | After solvePnP, project the 3D points back through the solved pose and measure the pixel distance to the detected corners. Reported as root-mean-square across all points. <2 px is excellent, 2–5 px is usable, >5 px means something is wrong. | Appendix A §A.4. |
+| **REST** | Representational State Transfer | An architectural style for HTTP APIs — predictable verbs (GET/POST/PUT/DELETE) acting on noun-shaped URLs. SlyLED's `/api/*` surface follows REST conventions. | §19 API Quick Reference. |
 | **RGB / RGBW** | Red, Green, Blue [, White] | Standard LED colour models. RGBW adds a dedicated white LED for purer whites. | §4 Fixture Setup. |
 | **RMS** | Root-Mean-Square | Quadratic-mean aggregation of errors (`sqrt(mean(x²))`). More sensitive to outliers than a plain mean — which is why it's used as a calibration quality metric. | Appendix A §A.4. |
 | **Rodrigues** | — | Mathematical conversion between a rotation vector (`rvec` from solvePnP) and a 3×3 rotation matrix. `cv2.Rodrigues()`. | Appendix A §A.4. |

@@ -118,7 +118,7 @@ comm -23 /tmp/used.txt /tmp/defined.txt
 
 The `comm -23` output is the set of acronyms used in the manual but missing from the Glossary. Some tokens (status strings like `OFF`, `ON`, `DOWN`; mermaid-diagram direction tokens like `TD`, `LR`; specific identifiers like `MH1`, `FF0000`) are legitimately skipped — don't blindly add every result.
 
-**French mirror:** `docs/USER_MANUAL_fr.md` carries a stub pointing to the English glossary. Full French translation is deferred until the English content stabilises. When the English glossary stops churning, translate the whole table at once rather than piecemeal — mixed-language entries in the same table are a worse operator experience than a stub.
+**French mirror:** `docs/src/fr/20-glossary.md` is a full translation kept row-for-row in sync with the English source. When you add a row to `docs/src/en/20-glossary.md`, add the matching row to `docs/src/fr/20-glossary.md` in the same PR — leaving FR untranslated breaks the spot-check ("every capitalised acronym has an entry"). Term names stay in English (DMX is DMX in French too); the Expansion / Definition / Where-it-shows-up columns are translated.
 
 ## Related issues
 
