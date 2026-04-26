@@ -556,7 +556,6 @@ def ofl_to_slyled(ofl_json, mode=None):
                 m_tilt = mf.get("tiltMax", tilt_range) or tilt_range
 
         sly_channels = []
-        offset = 0
         fine_aliases = {}  # map fine channel key -> coarse channel key
 
         # First pass: identify fine channel aliases
@@ -565,18 +564,29 @@ def ofl_to_slyled(ofl_json, mode=None):
                 for alias in ch_def.get("fineChannelAliases", []):
                     fine_aliases[alias] = ch_key
 
-        for ch_key in mode_channels:
-            if ch_key is None:
-                offset += 1
-                continue
-
-            # Skip fine channels — they're part of a 16-bit coarse channel
+        # Pre-walk: index of each fine-alias entry in mode_channels gives
+        # its actual wire offset. OFL fixtures may place the fine channel
+        # at any slot — not necessarily right after the coarse one. #689.
+        fine_wire_offset = {}  # coarse_key -> wire offset of fine alias
+        for idx, ch_key in enumerate(mode_channels):
             if ch_key in fine_aliases:
-                continue  # offset already counted by coarse channel's +2
+                coarse_key = fine_aliases[ch_key]
+                fine_wire_offset[coarse_key] = idx
+
+        # The mode list is the wire layout itself: position N == DMX offset N
+        # within the fixture's address window. Emit one entry per slot
+        # (skipping None / unknown / fine-alias slots, which are still
+        # counted in the offset by virtue of using `idx` directly).
+        for idx, ch_key in enumerate(mode_channels):
+            if ch_key is None:
+                continue
+            # Skip fine channels here — emitted alongside their coarse
+            # partner below, with the proper "pan-fine" / "tilt-fine" type.
+            if ch_key in fine_aliases:
+                continue
 
             ch_def = available_channels.get(ch_key, {})
             if not isinstance(ch_def, dict):
-                offset += 1
                 continue
 
             is_16bit = bool(ch_def.get("fineChannelAliases"))
@@ -587,7 +597,7 @@ def ofl_to_slyled(ofl_json, mode=None):
             caps = _convert_capabilities(ch_def, is_16bit)
 
             sly_ch = {
-                "offset": offset,
+                "offset": idx,
                 "name": ch_def.get("name", ch_key),
                 "type": ch_type,
                 "capabilities": caps,
@@ -596,7 +606,28 @@ def ofl_to_slyled(ofl_json, mode=None):
                 sly_ch["bits"] = 16
 
             sly_channels.append(sly_ch)
-            offset += 2 if is_16bit else 1
+
+            # #689 — only emit an explicit pan-fine / tilt-fine entry when
+            # the fine channel is NON-contiguous with its coarse partner.
+            # For contiguous fixtures the existing validator already treats
+            # `bits=16` as owning slots `[offset, offset+1]`; emitting a
+            # separate pan-fine entry at coarse+1 trips its duplicate-offset
+            # check. The compute_pan_tilt_writes helper falls back to
+            # `coarse_off + 1` when no pan-fine entry exists, so contiguous
+            # layouts keep working unchanged. Non-contiguous layouts (where
+            # the OFL mode places fine channels somewhere other than the
+            # next slot) get the explicit entry they need to route the LSB
+            # correctly.
+            fine_type_for = {"pan": "pan-fine", "tilt": "tilt-fine"}
+            if (is_16bit and ch_type in fine_type_for
+                    and ch_key in fine_wire_offset
+                    and fine_wire_offset[ch_key] != idx + 1):
+                sly_channels.append({
+                    "offset": fine_wire_offset[ch_key],
+                    "name": ch_def.get("name", ch_key) + " Fine",
+                    "type": fine_type_for[ch_type],
+                    "capabilities": [],
+                })
 
         if not sly_channels:
             continue

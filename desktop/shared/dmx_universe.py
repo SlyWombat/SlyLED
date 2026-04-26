@@ -99,24 +99,16 @@ class DMXUniverse:
                 self.set_channel(start_addr + off, value)
 
     def set_fixture_pan_tilt(self, start_addr, pan, tilt, profile=None):
-        """Set pan/tilt for a fixture. pan/tilt are normalized 0.0-1.0.
-        Handles 8-bit (0-255) and 16-bit (0-65535) channels automatically."""
+        """Set pan/tilt for a fixture at the profile's native resolution.
+
+        Thin wrapper over :func:`compute_pan_tilt_writes` so all callers
+        share one implementation of the bits + fine-channel routing rules.
+        See #689.
+        """
         if not profile:
             return
-        ch_map = profile.get("channel_map", {})
-        channels = profile.get("channels", [])
-        for axis, value in [("pan", pan), ("tilt", tilt)]:
-            offset = ch_map.get(axis)
-            if offset is None:
-                continue
-            ch_def = next((c for c in channels if c.get("type") == axis), None)
-            bits = ch_def.get("bits", 8) if ch_def else 8
-            if bits == 16:
-                val16 = max(0, min(65535, int(value * 65535)))
-                self.set_channel(start_addr + offset, val16 >> 8)
-                self.set_channel(start_addr + offset + 1, val16 & 0xFF)
-            else:
-                self.set_channel(start_addr + offset, max(0, min(255, int(value * 255))))
+        for offset, value in compute_pan_tilt_writes(pan, tilt, profile):
+            self.set_channel(start_addr + offset, value)
 
     def set_fixture_channels(self, start_addr, channel_values, profile=None):
         """Set arbitrary named channels. channel_values: {type: value}.
@@ -143,3 +135,80 @@ class DMXUniverse:
 
     def __repr__(self):
         return f"DMXUniverse(universe={self.universe})"
+
+
+# ── Pan/tilt resolution helpers (#689) ───────────────────────────────────
+
+def compute_pan_tilt_writes(pan, tilt, profile):
+    """Compute the (offset, byte) pairs to write pan/tilt at the
+    fixture's native resolution.
+
+    ``pan`` / ``tilt`` are normalized 0.0–1.0 (clamped). The profile is
+    a dict with ``channel_map`` (type → coarse offset) and ``channels``
+    (list of ``{type, offset, bits, …}``).
+
+    For 16-bit pan/tilt the LSB destination is read from
+    ``channel_map["pan-fine"]`` / ``channel_map["tilt-fine"]`` whenever
+    the profile provides one — OFL imports can place fine channels at
+    arbitrary offsets via ``fineChannelAliases``. Only when no fine
+    entry exists do we fall back to ``coarse_offset + 1`` (legacy
+    contiguous layouts like the built-in Slymovehead and the
+    BeamLight 350W).
+
+    Returns a list of ``(offset, byte)`` pairs to apply on top of the
+    fixture's ``start_addr``. Returns ``[]`` if the profile lacks pan
+    and tilt mappings or is missing.
+    """
+    if not profile:
+        return []
+    ch_map = profile.get("channel_map") or {}
+    channels = profile.get("channels") or []
+    writes = []
+    for axis, value in (("pan", pan), ("tilt", tilt)):
+        coarse_off = ch_map.get(axis)
+        if coarse_off is None:
+            continue
+        ch_def = next((c for c in channels if c.get("type") == axis), None)
+        bits = ch_def.get("bits", 8) if ch_def else 8
+        v = 0.0 if value is None else float(value)
+        if v < 0.0:
+            v = 0.0
+        elif v > 1.0:
+            v = 1.0
+        # int() truncation (not round) matches the project's existing
+        # 8-bit conversion convention; tests assert pan=0.5 → 127.
+        if bits == 16:
+            v16 = int(v * 65535)
+            if v16 < 0:
+                v16 = 0
+            elif v16 > 65535:
+                v16 = 65535
+            fine_off = ch_map.get(f"{axis}-fine")
+            if fine_off is None:
+                fine_off = coarse_off + 1
+            writes.append((coarse_off, (v16 >> 8) & 0xFF))
+            writes.append((fine_off,    v16        & 0xFF))
+        else:
+            v8 = int(v * 255)
+            if v8 < 0:
+                v8 = 0
+            elif v8 > 255:
+                v8 = 255
+            writes.append((coarse_off, v8))
+    return writes
+
+
+def write_pan_tilt_to_buffer(buf, start_addr, pan, tilt, profile):
+    """Apply :func:`compute_pan_tilt_writes` to a 512-byte ``bytearray``.
+
+    Used by the calibration sweep (``mover_calibrator``) which builds a
+    fresh universe buffer per probe rather than going through the
+    engine's ``DMXUniverse``. ``start_addr`` is 1-based.
+    """
+    if not profile:
+        return
+    base = start_addr - 1
+    for offset, value in compute_pan_tilt_writes(pan, tilt, profile):
+        idx = base + offset
+        if 0 <= idx < 512:
+            buf[idx] = value

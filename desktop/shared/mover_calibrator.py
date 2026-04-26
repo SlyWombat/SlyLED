@@ -252,19 +252,13 @@ def _set_mover_dmx(dmx, addr, pan, tilt, r, g, b, dimmer=255, profile=None):
             for _i in range(n_ch):
                 if base + _i < 512:
                     dmx[base + _i] = 0
-            # Pan/tilt — detect 8 vs 16 bit
-            for axis, val in [("pan", pan), ("tilt", tilt)]:
-                off = cm.get(axis)
-                if off is None:
-                    continue
-                ch_def = next((c for c in channels if c.get("type") == axis), None)
-                bits = ch_def.get("bits", 8) if ch_def else 8
-                if bits == 16:
-                    v16 = max(0, min(65535, int(val * 65535)))
-                    dmx[base + off] = v16 >> 8
-                    dmx[base + off + 1] = v16 & 0xFF
-                else:
-                    dmx[base + off] = max(0, min(255, int(val * 255)))
+            # Pan/tilt — fixture-native resolution via shared helper (#689).
+            # Honours `bits` and routes the 16-bit LSB to channel_map's
+            # explicit pan-fine / tilt-fine offset (OFL fixtures can put
+            # fine channels anywhere — assuming `off + 1` corrupts the
+            # fixture state when fine isn't contiguous with coarse).
+            from dmx_universe import write_pan_tilt_to_buffer
+            write_pan_tilt_to_buffer(dmx, addr, pan, tilt, profile)
             # Dimmer
             if "dimmer" in cm:
                 dmx[base + cm["dimmer"]] = max(0, min(255, dimmer))
@@ -2498,8 +2492,14 @@ def discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                      floor_target[0], floor_target[1], cam_tilt, camera_fov)
             est_pan, est_tilt = compute_initial_aim(mover_pos, floor_target,
                                                      mounted_inverted=mounted_inverted)
-            log.info("Initial aim: pan=%.3f tilt=%.3f (DMX %d,%d) inverted=%s",
-                     est_pan, est_tilt, int(est_pan*255), int(est_tilt*255), mounted_inverted)
+            # Diagnostic log shows both 8-bit and 16-bit DMX values so the
+            # number that lands on the wire is clear regardless of the
+            # active profile's pan/tilt resolution (#689).
+            log.info("Initial aim: pan=%.3f tilt=%.3f (DMX8 %d,%d / DMX16 %d,%d) inverted=%s",
+                     est_pan, est_tilt,
+                     int(est_pan*255), int(est_tilt*255),
+                     int(est_pan*65535), int(est_tilt*65535),
+                     mounted_inverted)
         else:
             est_pan, est_tilt = 0.5, 0.6
         initial_pan = initial_pan if initial_pan is not None else est_pan

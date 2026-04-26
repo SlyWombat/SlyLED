@@ -12335,6 +12335,13 @@ def _apply_profile_defaults(engine):
         profile = {"channel_map": info.get("channel_map", {}),
                    "channels": info.get("channels", [])}
         for ch in info.get("channels", []):
+            # #689 — pan / tilt (and their fine pair channels) are written
+            # at fixture-native resolution by set_fixture_pan_tilt below,
+            # not as 8-bit defaults here. Skipping prevents the legacy
+            # `off + 1` LSB assumption from corrupting non-contiguous
+            # OFL pan-fine / tilt-fine offsets.
+            if ch.get("type") in ("pan", "pan-fine", "tilt", "tilt-fine"):
+                continue
             default = ch.get("default")
             if default is not None and default > 0:
                 offset = ch.get("offset", 0)
