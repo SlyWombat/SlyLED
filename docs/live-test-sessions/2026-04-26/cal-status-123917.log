@@ -1,0 +1,29 @@
+== cal-status poller fid=17 @ 5.0 Hz -> \home\sly\slyled2\docs\live-test-sessions\2026-04-26\cal-status-123917.ndjson
+[2026-04-26T16:40:02.390134Z] none         progress=None  
+[2026-04-26T16:40:24.729520Z] starting     progress=0  
+[2026-04-26T16:45:20.741114Z] none         progress=None  
+[2026-04-26T16:46:09.796103Z] starting     progress=0  
+[2026-04-26T17:37:08.765157Z] none         progress=None  
+[2026-04-26T17:44:42.094525Z] starting     progress=0  
+[2026-04-26T17:44:53.279047Z] battleship   progress=10  Grid probe 1/24 pan=0.62 tilt=0.08 probe#1 pan=0.6250 tilt=0.0833 dim=255
+[2026-04-26T17:44:55.502499Z] battleship   progress=10  Grid probe 1/24 pan=0.62 tilt=0.08 probe#2 pan=0.6250 tilt=0.0833 dim=0
+[2026-04-26T17:44:57.738810Z] battleship   progress=10  Grid probe 1/24 pan=0.62 tilt=0.08 probe#4 pan=0.6250 tilt=0.0833 dim=255
+[2026-04-26T17:44:59.951879Z] battleship   progress=11  Grid probe 2/24 pan=0.54 tilt=0.08 probe#6 pan=0.5417 tilt=0.0833 dim=0
+[2026-04-26T17:45:02.182226Z] battleship   progress=11  Grid probe 2/24 pan=0.54 tilt=0.08 probe#8 pan=0.5417 tilt=0.0833 dim=255
+[2026-04-26T17:45:04.429462Z] battleship   progress=11  Grid probe 3/24 pan=0.46 tilt=0.08 probe#9 pan=0.4583 tilt=0.0833 dim=255
+[2026-04-26T17:45:06.664011Z] battleship   progress=11  Grid probe 3/24 pan=0.46 tilt=0.08 probe#10 pan=0.4583 tilt=0.0833 dim=0
+[2026-04-26T17:45:08.890643Z] battleship   progress=11  Grid probe 3/24 pan=0.46 tilt=0.08 probe#12 pan=0.4583 tilt=0.0833 dim=255
+[2026-04-26T17:45:11.110841Z] battleship   progress=12  Grid probe 4/24 pan=0.62 tilt=0.25 probe#14 pan=0.6250 tilt=0.2500 dim=0
+[2026-04-26T17:45:15.558843Z] battleship   progress=13  Grid probe 5/24 pan=0.54 tilt=0.25 probe#17 pan=0.5417 tilt=0.2500 dim=255
+[2026-04-26T17:45:17.797322Z] battleship   progress=13  Grid probe 5/24 pan=0.54 tilt=0.25 probe#18 pan=0.5417 tilt=0.2500 dim=0
+[2026-04-26T17:45:20.037685Z] battleship   progress=13  Grid probe 5/24 pan=0.54 tilt=0.25 probe#20 pan=0.5417 tilt=0.2500 dim=255
+[2026-04-26T17:45:22.260405Z] battleship   progress=13  Grid probe 6/24 pan=0.38 tilt=0.08 probe#22 pan=0.3750 tilt=0.0833 dim=0
+[2026-04-26T17:45:26.750663Z] battleship   progress=13  Grid probe 6/24 pan=0.38 tilt=0.08 probe#24 pan=0.3750 tilt=0.0833 dim=255
+[2026-04-26T17:45:28.972458Z] battleship   progress=14  Grid probe 7/24 pan=0.46 tilt=0.25 probe#25 pan=0.4583 tilt=0.2500 dim=255
+[2026-04-26T17:45:31.206645Z] battleship   progress=14  Grid probe 7/24 pan=0.46 tilt=0.25 probe#26 pan=0.4583 tilt=0.2500 dim=0
+[2026-04-26T17:45:33.449054Z] battleship   progress=14  Grid probe 7/24 pan=0.46 tilt=0.25 probe#28 pan=0.4583 tilt=0.2500 dim=255
+[2026-04-26T17:45:35.673612Z] battleship   progress=15  Grid probe 8/24 pan=0.38 tilt=0.25 probe#30 pan=0.3750 tilt=0.2500 dim=0
+[2026-04-26T17:45:37.908570Z] battleship   progress=15  Grid probe 8/24 pan=0.38 tilt=0.25 probe#31 pan=0.3750 tilt=0.2500 dim=255
+[2026-04-26T17:45:40.142003Z] battleship   progress=15  Grid probe 9/24 pan=0.29 tilt=0.08 probe#33 pan=0.2917 tilt=0.0833 dim=255
+[2026-04-26T17:45:42.373875Z] battleship   progress=15  Grid probe 9/24 pan=0.29 tilt=0.08 probe#34 pan=0.2917 tilt=0.0833 dim=0
+[2026-04-26T17:45:44.663275Z] cancelled    progress=15  Grid probe 9/24 pan=0.29 tilt=0.08 probe#34 pan=0.2917 tilt=0.0833 dim=255

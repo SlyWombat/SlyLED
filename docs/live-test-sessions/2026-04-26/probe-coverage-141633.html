@@ -1,0 +1,1298 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Probe coverage 3D — fixture 17</title>
+<style>
+body{margin:0;background:#0f172a;color:#e2e8f0;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+#hud{position:fixed;top:8px;left:8px;background:#1e293bcc;padding:10px 12px;border-radius:6px;
+     max-width:420px;line-height:1.5}
+#hud h2{margin:0 0 6px;font-size:13px;color:#fde047}
+#hud .row{display:flex;justify-content:space-between}
+#legend{position:fixed;bottom:8px;left:8px;background:#1e293bcc;padding:8px 10px;border-radius:6px}
+#legend .sw{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+#tbl{position:fixed;top:8px;right:8px;background:#0f172af0;border:1px solid #334155;border-radius:6px;
+     max-height:88vh;overflow-y:auto;font-size:11px;padding:6px 10px}
+#tbl table{border-collapse:collapse}
+#tbl th{position:sticky;top:0;background:#1e293b;text-align:left;padding:3px 6px}
+#tbl td{padding:2px 6px;border-bottom:1px solid #1e293b40}
+#tbl tr.cand td{color:#fbbf24}
+#tbl tr.last td{color:#22c55e;font-weight:bold}
+#tbl tr.off td{color:#94a3b8}
+canvas{display:block}
+</style>
+</head><body>
+<div id="hud">
+  <h2>Probe coverage — fixture <span id="fxname"></span></h2>
+  <div class="row"><span>fixture pos</span><span id="fxpos"></span></div>
+  <div class="row"><span>home anchor</span><span id="homepos"></span></div>
+  <div class="row"><span>probes</span><span id="np"></span></div>
+  <div class="row"><span>candidates (Beam found)</span><span id="ncand"></span></div>
+  <div class="row"><span>on-stage hits</span><span id="nstage"></span></div>
+  <div style="margin-top:6px;color:#94a3b8;font-size:11px">drag to rotate · scroll to zoom · right-click to pan</div>
+</div>
+<div id="legend">
+  <div><span class="sw" style="background:#fde047"></span>home aim</div>
+  <div><span class="sw" style="background:#fbbf24"></span>candidate (beam found)</div>
+  <div><span class="sw" style="background:#22c55e"></span>last probe</div>
+  <div><span class="sw" style="background:#94a3b8"></span>probe (no detection)</div>
+  <div><span class="sw" style="background:#0ea5e9"></span>camera</div>
+  <div><span class="sw" style="background:#fbbf24;border:1px solid #854d0e"></span>floor marker</div>
+</div>
+<div id="tbl"><table id="probetbl"><thead><tr>
+  <th>#</th><th>pan_n</th><th>off_home°</th><th>tilt_n</th><th>tilt°</th>
+  <th>X (mm)</th><th>Y (mm)</th><th>status</th>
+</tr></thead><tbody id="probetbody"></tbody></table></div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const DATA = {
+  "stage": {
+    "w": 3620.0,
+    "d": 4000.0,
+    "h": 2540.0
+  },
+  "fixture": {
+    "id": 17,
+    "name": "150W MH Stage Right",
+    "pos": [
+      600.0,
+      0.0,
+      1760.0
+    ],
+    "homePanDmx16": 44364,
+    "homeTiltDmx16": 0,
+    "homeHit": null,
+    "homeDir": [
+      0.0,
+      1.0,
+      -0.0
+    ],
+    "panRange": 540.0,
+    "tiltRange": 180.0,
+    "inverted": true
+  },
+  "cameras": [
+    {
+      "id": 12,
+      "name": "Stage Right",
+      "x": 940.0,
+      "y": 110.0,
+      "z": 2040.0,
+      "fov": 90.0,
+      "rot": [
+        30,
+        0,
+        0
+      ]
+    },
+    {
+      "id": 13,
+      "name": "Stage Left",
+      "x": 1730.0,
+      "y": 110.0,
+      "z": 2040.0,
+      "fov": 90.0,
+      "rot": [
+        30,
+        0,
+        0
+      ]
+    },
+    {
+      "id": 16,
+      "name": "Out Left",
+      "x": 2350.0,
+      "y": 1670.0,
+      "z": 905.0,
+      "fov": 90.0,
+      "rot": [
+        1,
+        0,
+        0
+      ]
+    }
+  ],
+  "markers": [
+    {
+      "id": 0,
+      "label": "Back Right",
+      "x": 500.0,
+      "y": 2280.0,
+      "z": 0.0
+    },
+    {
+      "id": 1,
+      "label": "Furnace Door",
+      "x": 2050.0,
+      "y": 3170.0,
+      "z": 0.0
+    },
+    {
+      "id": 2,
+      "label": "Pillar Base",
+      "x": 1150.0,
+      "y": 2100.0,
+      "z": 0.0
+    },
+    {
+      "id": 3,
+      "label": "Pillar Post",
+      "x": 1150.0,
+      "y": 2280.0,
+      "z": 1368.0
+    },
+    {
+      "id": 4,
+      "label": "Stairs",
+      "x": 500.0,
+      "y": 3500.0,
+      "z": 0.0
+    },
+    {
+      "id": 5,
+      "label": "Patent",
+      "x": 3120.0,
+      "y": 3090.0,
+      "z": 0.0
+    }
+  ],
+  "probes": [
+    {
+      "n": 1,
+      "attempt": 1,
+      "pan": 0.7083333333333334,
+      "tilt": 0.08333333333333333,
+      "panDeg": 382.5,
+      "tiltDeg": 15.0,
+      "panOffHomeDeg": 16.94632639047837,
+      "hit": [
+        -1314.5319194774586,
+        6283.197422921182,
+        0
+      ],
+      "phase": "battleship",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 2,
+      "attempt": 7,
+      "pan": 0.625,
+      "tilt": 0.08333333333333333,
+      "panDeg": 337.5,
+      "tiltDeg": 15.0,
+      "panOffHomeDeg": -28.05367360952165,
+      "hit": [
+        3689.1130022208017,
+        5796.6700083420155,
+        0
+      ],
+      "phase": "battleship",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 3,
+      "attempt": 13,
+      "pan": 0.7916666666666667,
+      "tilt": 0.08333333333333333,
+      "panDeg": 427.50000000000006,
+      "tiltDeg": 15.0,
+      "panOffHomeDeg": 61.94632639047839,
+      "hit": [
+        -5196.670008342017,
+        3089.1130022207976,
+        0
+      ],
+      "phase": "battleship",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 4,
+      "attempt": 17,
+      "pan": 0.5416666666666667,
+      "tilt": 0.08333333333333333,
+      "panDeg": 292.50000000000006,
+      "tiltDeg": 15.0,
+      "panOffHomeDeg": -73.05367360952161,
+      "hit": [
+        6883.197422921182,
+        1914.531919477462,
+        0
+      ],
+      "phase": "battleship",
+      "candidate": true,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 5,
+      "attempt": 20,
+      "pan": 0.550925925925926,
+      "tilt": 0.08333333333333333,
+      "panDeg": 297.50000000000006,
+      "tiltDeg": 15.0,
+      "panOffHomeDeg": -68.05367360952158,
+      "hit": [
+        6692.425508321641,
+        2454.8632857357293,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 6,
+      "attempt": 21,
+      "pan": 0.5324074074074074,
+      "tilt": 0.08333333333333333,
+      "panDeg": 287.5,
+      "tiltDeg": 15.0,
+      "panOffHomeDeg": -78.05367360952164,
+      "hit": [
+        7026.150411233959,
+        1359.629809285989,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 7,
+      "attempt": 22,
+      "pan": 0.5416666666666667,
+      "tilt": 0.09259259259259259,
+      "panDeg": 292.50000000000006,
+      "tiltDeg": 16.666666666666664,
+      "panOffHomeDeg": -73.05367360952161,
+      "hit": [
+        6223.541063029903,
+        1713.5302523499943,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 8,
+      "attempt": 23,
+      "pan": 0.5416666666666667,
+      "tilt": 0.07407407407407407,
+      "panDeg": 292.50000000000006,
+      "tiltDeg": 13.333333333333332,
+      "panOffHomeDeg": -73.05367360952161,
+      "hit": [
+        7703.572776474124,
+        2164.505729722548,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 9,
+      "attempt": 25,
+      "pan": 0.875,
+      "tilt": 0.08333333333333333,
+      "panDeg": 472.5,
+      "tiltDeg": 15.0,
+      "panOffHomeDeg": 106.94632639047835,
+      "hit": [
+        -5683.197422921183,
+        -1914.5319194774568,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": true,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 10,
+      "attempt": 32,
+      "pan": 0.45833333333333337,
+      "tilt": 0.08333333333333333,
+      "panDeg": 247.50000000000003,
+      "tiltDeg": 15.0,
+      "panOffHomeDeg": -118.05367360952162,
+      "hit": [
+        6396.670008342016,
+        -3089.1130022207994,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 11,
+      "attempt": 35,
+      "pan": 0.7083333333333334,
+      "tilt": 0.25,
+      "panDeg": 382.5,
+      "tiltDeg": 45.0,
+      "panOffHomeDeg": 16.94632639047837,
+      "hit": [
+        87.00271829240785,
+        1683.577675357042,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": true
+    },
+    {
+      "n": 12,
+      "attempt": 41,
+      "pan": 0.625,
+      "tilt": 0.25,
+      "panDeg": 337.5,
+      "tiltDeg": 45.0,
+      "panOffHomeDeg": -28.05367360952165,
+      "hit": [
+        1427.7253342735444,
+        1553.213047524952,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": true
+    },
+    {
+      "n": 13,
+      "attempt": 47,
+      "pan": 0.7916666666666667,
+      "tilt": 0.25,
+      "panDeg": 427.50000000000006,
+      "tiltDeg": 45.0,
+      "panOffHomeDeg": 61.94632639047839,
+      "hit": [
+        -953.2130475249523,
+        827.7253342735435,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": true,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 14,
+      "attempt": 50,
+      "pan": 0.7824074074074074,
+      "tilt": 0.25,
+      "panDeg": 422.5,
+      "tiltDeg": 45.0,
+      "panOffHomeDeg": 56.94632639047837,
+      "hit": [
+        -875.1615866516156,
+        959.9470262819133,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 15,
+      "attempt": 51,
+      "pan": 0.7916666666666667,
+      "tilt": 0.25925925925925924,
+      "panDeg": 427.50000000000006,
+      "tiltDeg": 46.666666666666664,
+      "panOffHomeDeg": 61.94632639047839,
+      "hit": [
+        -865.3809332264157,
+        780.918576962589,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 16,
+      "attempt": 52,
+      "pan": 0.7916666666666667,
+      "tilt": 0.24074074074074076,
+      "panDeg": 427.50000000000006,
+      "tiltDeg": 43.333333333333336,
+      "panOffHomeDeg": 61.94632639047839,
+      "hit": [
+        -1046.3096497987528,
+        877.3375985792067,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 17,
+      "attempt": 55,
+      "pan": 0.5416666666666667,
+      "tilt": 0.25,
+      "panDeg": 292.50000000000006,
+      "tiltDeg": 45.0,
+      "panOffHomeDeg": -73.05367360952161,
+      "hit": [
+        2283.5776753570417,
+        512.9972817075931,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": true
+    },
+    {
+      "n": 18,
+      "attempt": 61,
+      "pan": 0.9583333333333334,
+      "tilt": 0.08333333333333333,
+      "panDeg": 517.5,
+      "tiltDeg": 15.0,
+      "panOffHomeDeg": 151.94632639047836,
+      "hit": [
+        -2489.1130022208004,
+        -5796.6700083420155,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 19,
+      "attempt": 65,
+      "pan": 0.37500000000000006,
+      "tilt": 0.08333333333333333,
+      "panDeg": 202.50000000000003,
+      "tiltDeg": 15.0,
+      "panOffHomeDeg": -163.0536736095216,
+      "hit": [
+        2514.531919477462,
+        -6283.197422921182,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 20,
+      "attempt": 71,
+      "pan": 0.875,
+      "tilt": 0.25,
+      "panDeg": 472.5,
+      "tiltDeg": 45.0,
+      "panOffHomeDeg": 106.94632639047835,
+      "hit": [
+        -1083.577675357042,
+        -512.9972817075917,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": true,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 21,
+      "attempt": 73,
+      "pan": 0.8842592592592593,
+      "tilt": 0.25,
+      "panDeg": 477.5,
+      "tiltDeg": 45.0,
+      "panOffHomeDeg": 111.94632639047838,
+      "hit": [
+        -1032.4604949015563,
+        -657.7786349416997,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 22,
+      "attempt": 74,
+      "pan": 0.8657407407407407,
+      "tilt": 0.25,
+      "panDeg": 467.5,
+      "tiltDeg": 45.0,
+      "panOffHomeDeg": 101.94632639047833,
+      "hit": [
+        -1121.881813131066,
+        -364.31170940346107,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": true,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 23,
+      "attempt": 75,
+      "pan": 0.875,
+      "tilt": 0.25925925925925924,
+      "panDeg": 472.5,
+      "tiltDeg": 46.666666666666664,
+      "panOffHomeDeg": 106.94632639047835,
+      "hit": [
+        -988.3736162306657,
+        -483.98797358107333,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 24,
+      "attempt": 76,
+      "pan": 0.875,
+      "tilt": 0.24074074074074076,
+      "panDeg": 472.5,
+      "tiltDeg": 43.333333333333336,
+      "panOffHomeDeg": 106.94632639047835,
+      "hit": [
+        -1184.4880826508268,
+        -543.745351960269,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 25,
+      "attempt": 80,
+      "pan": 0.45833333333333337,
+      "tilt": 0.25,
+      "panDeg": 247.50000000000003,
+      "tiltDeg": 45.0,
+      "panOffHomeDeg": -118.05367360952162,
+      "hit": [
+        2153.2130475249523,
+        -827.725334273544,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 26,
+      "attempt": 85,
+      "pan": 0.9583333333333334,
+      "tilt": 0.25,
+      "panDeg": 517.5,
+      "tiltDeg": 45.0,
+      "panOffHomeDeg": 151.94632639047836,
+      "hit": [
+        -227.72533427354426,
+        -1553.2130475249521,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 27,
+      "attempt": 90,
+      "pan": 0.37500000000000006,
+      "tilt": 0.25,
+      "panDeg": 202.50000000000003,
+      "tiltDeg": 45.0,
+      "panOffHomeDeg": -163.0536736095216,
+      "hit": [
+        1112.9972817075932,
+        -1683.5776753570415,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": true,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 28,
+      "attempt": 95,
+      "pan": 0.7083333333333334,
+      "tilt": 0.41666666666666663,
+      "panDeg": 382.5,
+      "tiltDeg": 75.0,
+      "panOffHomeDeg": 16.94632639047837,
+      "hit": [
+        462.5427926470895,
+        451.1132785069862,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": true
+    },
+    {
+      "n": 29,
+      "attempt": 99,
+      "pan": 0.625,
+      "tilt": 0.41666666666666663,
+      "panDeg": 337.5,
+      "tiltDeg": 75.0,
+      "panOffHomeDeg": -28.05367360952165,
+      "hit": [
+        821.7883348733774,
+        416.1821817577939,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": true
+    },
+    {
+      "n": 30,
+      "attempt": 104,
+      "pan": 0.7916666666666667,
+      "tilt": 0.41666666666666663,
+      "panDeg": 427.50000000000006,
+      "tiltDeg": 75.0,
+      "panOffHomeDeg": 61.94632639047839,
+      "hit": [
+        183.817818242206,
+        221.78833487337707,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": true
+    },
+    {
+      "n": 31,
+      "attempt": 110,
+      "pan": 0.5416666666666667,
+      "tilt": 0.41666666666666663,
+      "panDeg": 292.50000000000006,
+      "tiltDeg": 75.0,
+      "panOffHomeDeg": -73.05367360952161,
+      "hit": [
+        1051.1132785069863,
+        137.4572073529107,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": true
+    },
+    {
+      "n": 32,
+      "attempt": 112,
+      "pan": 0.550925925925926,
+      "tilt": 0.41666666666666663,
+      "panDeg": 297.50000000000006,
+      "tiltDeg": 75.0,
+      "panOffHomeDeg": -68.05367360952158,
+      "hit": [
+        1037.4164712845827,
+        176.25125403107504,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": true
+    },
+    {
+      "n": 33,
+      "attempt": 113,
+      "pan": 0.5324074074074074,
+      "tilt": 0.41666666666666663,
+      "panDeg": 287.5,
+      "tiltDeg": 75.0,
+      "panOffHomeDeg": -78.05367360952164,
+      "hit": [
+        1061.3768412903064,
+        97.6170283278595,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": true
+    },
+    {
+      "n": 34,
+      "attempt": 114,
+      "pan": 0.5416666666666667,
+      "tilt": 0.4259259259259259,
+      "panDeg": 292.50000000000006,
+      "tiltDeg": 76.66666666666666,
+      "panOffHomeDeg": -73.05367360952161,
+      "hit": [
+        999.0152389721134,
+        121.58258923764227,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": true
+    },
+    {
+      "n": 35,
+      "attempt": 115,
+      "pan": 0.5416666666666667,
+      "tilt": 0.4074074074074074,
+      "panDeg": 292.50000000000006,
+      "tiltDeg": 73.33333333333333,
+      "panOffHomeDeg": -73.05367360952161,
+      "hit": [
+        1104.0300688110312,
+        153.58130425679062,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": true
+    },
+    {
+      "n": 36,
+      "attempt": 119,
+      "pan": 0.875,
+      "tilt": 0.41666666666666663,
+      "panDeg": 472.5,
+      "tiltDeg": 75.0,
+      "panOffHomeDeg": 106.94632639047835,
+      "hit": [
+        148.88672149301374,
+        -137.45720735291033,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 37,
+      "attempt": 122,
+      "pan": 0.45833333333333337,
+      "tilt": 0.41666666666666663,
+      "panDeg": 247.50000000000003,
+      "tiltDeg": 75.0,
+      "panOffHomeDeg": -118.05367360952162,
+      "hit": [
+        1016.182181757794,
+        -221.78833487337718,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 38,
+      "attempt": 126,
+      "pan": 0.4675925925925926,
+      "tilt": 0.41666666666666663,
+      "panDeg": 252.5,
+      "tiltDeg": 75.0,
+      "panOffHomeDeg": -113.05367360952164,
+      "hit": [
+        1033.928609966025,
+        -184.67169613001357,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 39,
+      "attempt": 127,
+      "pan": 0.4490740740740741,
+      "tilt": 0.41666666666666663,
+      "panDeg": 242.50000000000003,
+      "tiltDeg": 75.0,
+      "panOffHomeDeg": -123.05367360952162,
+      "hit": [
+        995.268355848714,
+        -257.21703046889627,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 40,
+      "attempt": 128,
+      "pan": 0.45833333333333337,
+      "tilt": 0.4259259259259259,
+      "panDeg": 247.50000000000003,
+      "tiltDeg": 76.66666666666666,
+      "panOffHomeDeg": -118.05367360952162,
+      "hit": [
+        968.1182545981075,
+        -196.17450794979695,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 41,
+      "attempt": 129,
+      "pan": 0.45833333333333337,
+      "tilt": 0.4074074074074074,
+      "panDeg": 247.50000000000003,
+      "tiltDeg": 73.33333333333333,
+      "panOffHomeDeg": -118.05367360952162,
+      "hit": [
+        1065.0014612816533,
+        -247.8046978747515,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 42,
+      "attempt": 133,
+      "pan": 0.9583333333333334,
+      "tilt": 0.41666666666666663,
+      "panDeg": 517.5,
+      "tiltDeg": 75.0,
+      "panOffHomeDeg": 151.94632639047836,
+      "hit": [
+        378.21166512662273,
+        -416.18218175779396,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 43,
+      "attempt": 137,
+      "pan": 0.37500000000000006,
+      "tilt": 0.41666666666666663,
+      "panDeg": 202.50000000000003,
+      "tiltDeg": 75.0,
+      "panOffHomeDeg": -163.0536736095216,
+      "hit": [
+        737.4572073529107,
+        -451.11327850698615,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 44,
+      "attempt": 142,
+      "pan": 0.7083333333333334,
+      "tilt": 0.16666666666666666,
+      "panDeg": 382.5,
+      "tiltDeg": 30.0,
+      "panOffHomeDeg": 16.94632639047837,
+      "hit": [
+        -288.53735606227394,
+        2916.042072207098,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 45,
+      "attempt": 146,
+      "pan": 0.625,
+      "tilt": 0.16666666666666666,
+      "panDeg": 337.5,
+      "tiltDeg": 30.0,
+      "panOffHomeDeg": -28.05367360952165,
+      "hit": [
+        2033.662333673712,
+        2690.2439132921104,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": true
+    },
+    {
+      "n": 46,
+      "attempt": 151,
+      "pan": 0.7916666666666667,
+      "tilt": 0.16666666666666666,
+      "panDeg": 427.50000000000006,
+      "tiltDeg": 30.0,
+      "panOffHomeDeg": 61.94632639047839,
+      "hit": [
+        -2090.2439132921118,
+        1433.6623336737105,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 47,
+      "attempt": 155,
+      "pan": 0.800925925925926,
+      "tilt": 0.16666666666666666,
+      "panDeg": 432.50000000000006,
+      "tiltDeg": 30.0,
+      "panOffHomeDeg": 66.94632639047842,
+      "hit": [
+        -2204.958628535865,
+        1193.736609224247,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 48,
+      "attempt": 156,
+      "pan": 0.7824074074074074,
+      "tilt": 0.16666666666666666,
+      "panDeg": 422.5,
+      "tiltDeg": 30.0,
+      "panOffHomeDeg": 56.94632639047837,
+      "hit": [
+        -1955.0548174545174,
+        1662.6770220949306,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 49,
+      "attempt": 157,
+      "pan": 0.7916666666666667,
+      "tilt": 0.17592592592592593,
+      "panDeg": 427.50000000000006,
+      "tiltDeg": 31.666666666666668,
+      "panOffHomeDeg": 61.94632639047839,
+      "hit": [
+        -1918.141894544513,
+        1341.9471621948157,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 50,
+      "attempt": 158,
+      "pan": 0.7916666666666667,
+      "tilt": 0.15740740740740738,
+      "panDeg": 427.50000000000006,
+      "tiltDeg": 28.33333333333333,
+      "panOffHomeDeg": 61.94632639047839,
+      "hit": [
+        -2280.6136117372057,
+        1535.112564556147,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": false,
+      "onStage": false
+    },
+    {
+      "n": 51,
+      "attempt": 162,
+      "pan": 0.5416666666666667,
+      "tilt": 0.16666666666666666,
+      "panDeg": 292.50000000000006,
+      "tiltDeg": 30.0,
+      "panOffHomeDeg": -73.05367360952161,
+      "hit": [
+        3516.042072207098,
+        888.5373560622755,
+        0
+      ],
+      "phase": "confirming",
+      "candidate": false,
+      "last": true,
+      "onStage": true
+    }
+  ]
+};
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0f172a);
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 10, 50000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// World-coords convention here: X right, Y forward (depth into stage), Z up.
+// Three.js default has Y up; remap so our Y-forward becomes screen Z, Z-up becomes screen Y.
+function v(x, y, z) { return new THREE.Vector3(x, z, -y); }  // (X, Y_world, Z_world) -> (X, Z_three, -Y_three)
+
+const stageW = DATA.stage.w, stageD = DATA.stage.d, stageH = DATA.stage.h;
+
+// Floor grid
+const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(stageW, stageD),
+    new THREE.MeshBasicMaterial({ color: 0x1e293b, side: THREE.DoubleSide })
+);
+floor.rotation.x = -Math.PI / 2;
+floor.position.set(stageW / 2, 0, -stageD / 2);
+scene.add(floor);
+
+const grid = new THREE.GridHelper(Math.max(stageW, stageD) * 1.2, 30, 0x334155, 0x1e293b);
+grid.position.set(stageW / 2, 0, -stageD / 2);
+scene.add(grid);
+
+// Stage outline (rectangle on floor)
+{
+    const pts = [v(0, 0, 0), v(stageW, 0, 0), v(stageW, stageD, 0), v(0, stageD, 0), v(0, 0, 0)];
+    const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(pts),
+        new THREE.LineBasicMaterial({ color: 0x60a5fa, linewidth: 2 })
+    );
+    scene.add(line);
+}
+
+// Fixture
+const fx = DATA.fixture.pos;
+{
+    const geo = new THREE.ConeGeometry(80, 160, 6);
+    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0x7c3aed }));
+    mesh.position.copy(v(fx[0], fx[1], fx[2]));
+    mesh.rotation.x = Math.PI;
+    scene.add(mesh);
+    // Vertical drop line from ceiling to floor below the fixture
+    const drop = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([v(fx[0], fx[1], fx[2]), v(fx[0], fx[1], 0)]),
+        new THREE.LineBasicMaterial({ color: 0x7c3aed, opacity: 0.4, transparent: true })
+    );
+    scene.add(drop);
+}
+
+// Home aim — always render the direction vector. If it intersects the
+// floor, mark the hit; otherwise extend to a fixed length so the operator
+// can see which way the head is aimed.
+if (DATA.fixture.homeDir) {
+    const d = DATA.fixture.homeDir;
+    const start = v(fx[0], fx[1], fx[2]);
+    let endX, endY, endZ;
+    if (DATA.fixture.homeHit) {
+        endX = DATA.fixture.homeHit[0];
+        endY = DATA.fixture.homeHit[1];
+        endZ = 0;
+    } else {
+        // No floor hit (horizontal aim) — extend a fixed 4 m ray so the
+        // direction is visible.
+        const L = 4000;
+        endX = fx[0] + d[0] * L;
+        endY = fx[1] + d[1] * L;
+        endZ = fx[2] + d[2] * L;
+    }
+    const end = v(endX, endY, endZ);
+    const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([start, end]),
+        new THREE.LineBasicMaterial({ color: 0xfde047, linewidth: 3 })
+    );
+    scene.add(line);
+    const dot = new THREE.Mesh(
+        new THREE.SphereGeometry(50, 14, 14),
+        new THREE.MeshBasicMaterial({ color: 0xfde047 })
+    );
+    dot.position.copy(end);
+    scene.add(dot);
+    // Drop indicator from terminus to floor so the operator sees the
+    // home aim's projected XY footprint even when it's "off in the air."
+    const groundFoot = v(endX, endY, 0);
+    const drop = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([end, groundFoot]),
+        new THREE.LineDashedMaterial({ color: 0xfde047, opacity: 0.4, transparent: true, dashSize: 30, gapSize: 30 })
+    );
+    drop.computeLineDistances();
+    scene.add(drop);
+    const groundDot = new THREE.Mesh(
+        new THREE.RingGeometry(40, 70, 16),
+        new THREE.MeshBasicMaterial({ color: 0xfde047, side: THREE.DoubleSide, transparent: true, opacity: 0.7 })
+    );
+    groundDot.rotation.x = -Math.PI / 2;
+    groundDot.position.copy(groundFoot);
+    scene.add(groundDot);
+}
+
+// Cameras + FOV cones
+DATA.cameras.forEach(c => {
+    const p = v(c.x, c.y, c.z);
+    const dot = new THREE.Mesh(
+        new THREE.SphereGeometry(50, 16, 16),
+        new THREE.MeshBasicMaterial({ color: 0x0ea5e9 })
+    );
+    dot.position.copy(p);
+    scene.add(dot);
+    // Drop line
+    const drop = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([p, v(c.x, c.y, 0)]),
+        new THREE.LineBasicMaterial({ color: 0x0ea5e9, opacity: 0.4, transparent: true })
+    );
+    scene.add(drop);
+});
+
+// Markers
+DATA.markers.forEach(m => {
+    const isFloor = Math.abs(m.z) < 50;
+    const dot = new THREE.Mesh(
+        new THREE.SphereGeometry(35, 12, 12),
+        new THREE.MeshBasicMaterial({ color: isFloor ? 0xfbbf24 : 0x64748b })
+    );
+    dot.position.copy(v(m.x, m.y, m.z));
+    scene.add(dot);
+});
+
+// Probes
+let onStageCount = 0, candCount = 0;
+DATA.probes.forEach(p => {
+    if (!p.hit) return;
+    if (p.onStage) onStageCount++;
+    if (p.candidate) candCount++;
+    let color = 0x94a3b8;
+    if (p.last) color = 0x22c55e;
+    else if (p.candidate) color = 0xfbbf24;
+    const start = v(fx[0], fx[1], fx[2]);
+    const end = v(p.hit[0], p.hit[1], 0);
+    const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([start, end]),
+        new THREE.LineBasicMaterial({ color: color, opacity: 0.7, transparent: true })
+    );
+    scene.add(line);
+    const dot = new THREE.Mesh(
+        new THREE.SphereGeometry(30, 10, 10),
+        new THREE.MeshBasicMaterial({ color: color })
+    );
+    dot.position.copy(end);
+    scene.add(dot);
+});
+
+// Camera position
+const cx = stageW / 2, cy = stageD * 1.4, cz = Math.max(stageH * 1.6, 3000);
+camera.position.copy(v(cx, -cy + stageD / 2, cz));
+camera.lookAt(v(stageW / 2, stageD / 2, 0));
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.copy(v(stageW / 2, stageD / 2, 0));
+controls.update();
+
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+}
+animate();
+
+// HUD
+document.getElementById('fxname').textContent = '#' + DATA.fixture.id + ' ' + DATA.fixture.name;
+document.getElementById('fxpos').textContent = '(' + fx.map(n => Math.round(n)).join(', ') + ')';
+document.getElementById('homepos').textContent = DATA.fixture.homeHit
+    ? '(' + DATA.fixture.homeHit.map(n => Math.round(n)).join(', ') + ')'
+    : 'no floor hit (tilt=horizon)';
+document.getElementById('np').textContent = DATA.probes.length;
+document.getElementById('ncand').textContent = candCount;
+document.getElementById('nstage').textContent = onStageCount + ' / ' + DATA.probes.length;
+
+// Probe table
+const tbody = document.getElementById('probetbody');
+DATA.probes.forEach(p => {
+    const tr = document.createElement('tr');
+    let cls = '';
+    if (p.last) cls = 'last';
+    else if (p.candidate) cls = 'cand';
+    if (p.hit && !p.onStage) cls = (cls ? cls + ' ' : '') + 'off';
+    tr.className = cls;
+    const fmt = (n) => n === undefined || n === null ? '—' : Math.round(n);
+    let status = '';
+    if (p.last) status = 'LAST';
+    else if (p.candidate) status = 'candidate';
+    else status = '·';
+    if (p.hit && !p.onStage) status += ' off-stage';
+    tr.innerHTML = '<td>' + p.n + '</td>' +
+        '<td>' + p.pan.toFixed(4) + '</td>' +
+        '<td>' + (p.panOffHomeDeg >= 0 ? '+' : '') + p.panOffHomeDeg.toFixed(0) + '</td>' +
+        '<td>' + p.tilt.toFixed(4) + '</td>' +
+        '<td>' + p.tiltDeg.toFixed(0) + '</td>' +
+        '<td>' + (p.hit ? fmt(p.hit[0]) : '—') + '</td>' +
+        '<td>' + (p.hit ? fmt(p.hit[1]) : '—') + '</td>' +
+        '<td>' + status + '</td>';
+    tbody.appendChild(tr);
+});
+</script>
+</body></html>
