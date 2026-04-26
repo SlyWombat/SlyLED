@@ -8634,18 +8634,32 @@ def _aruco_anchor_extrinsics(frame_w, frame_h, fov_deg, fov_type,
     }
 
 
+# #692 — when per-marker spot-checks split into opposite-sign clusters
+# (a tilted depth cloud will do this), the median of the offsets ≈ 0
+# even though the cloud is uniformly hundreds of mm off. If the marker
+# offsets disagree by more than this many millimetres, fall back to a
+# RANSAC floor-plane solve via surface_analyzer.
+_MARKER_DISAGREEMENT_MM = 200.0
+# Plane-aware neighbour band — restrict per-marker sampling to points
+# whose Z is within ±this many mm of the local floor estimate. Stops
+# obstacles, walls, and ceiling reflections from polluting the median.
+_MARKER_PLANE_BAND_MM = 100.0
+
+
 def _apply_marker_z_alignment(cloud, radius_mm=400, min_pts=3, force=False):
-    """#599 — shift a point cloud's Z so surveyed floor markers sit at z=0.
+    """#599 + #692 — shift a point cloud's Z so surveyed floor markers
+    sit at z=0.
 
     Monocular depth models (ZoeDepth, MiDaS, mono-fallback) place the
     floor wherever their training set's prior puts it — on the basement
     rig that's a consistent ~250 mm above reality. The surveyed ArUco
     registry gives us the ground truth: every floor-level marker is by
     construction at z=0. For each such marker, gather the cloud points
-    within `radius_mm` of its XY position, take their median Z, average
-    across markers, and subtract the result from every point's Z.
+    within `radius_mm` of its XY position AND within ±100 mm of the
+    local floor band (#692, plane-aware), take their median Z, then
+    take the median across markers and subtract from every point's Z.
 
-    Robustness:
+    Robustness (#599):
     - Only marker records where `|z| < 50mm` AND `rx == ry == rz == 0`
       count as "floor" (wall-mounted markers skipped).
     - Median (not mean) per marker and across markers — one noisy
@@ -8654,6 +8668,17 @@ def _apply_marker_z_alignment(cloud, radius_mm=400, min_pts=3, force=False):
       modifying the cloud and flags `used=False`.
     - Diagnostic payload returned so the SPA / tests can show which
       markers contributed.
+
+    Robustness (#692):
+    - Plane-aware neighbour filter: cull points outside ±100 mm of a
+      local floor estimate before taking the median. Smaller `radiusMm`
+      no longer flips the sign by grabbing obstacle points.
+    - Marker-disagreement gate: when `max(offsets) − min(offsets) >
+      200 mm`, the per-marker spot-checks are unreliable (cloud has
+      per-camera tilt). Fall back to a RANSAC floor-plane solve via
+      :func:`surface_analyzer.analyze_surfaces` and use its `floor.z`
+      as the offset. Also surfaces a `warnings` list so the operator
+      sees the upstream tilt diagnosis instead of silent zOffsetMm=0.
 
     #599 double-use guard: auto-apply sites (the scan endpoints) call
     this once per scan. If the same cloud dict has already been aligned
@@ -8681,34 +8706,154 @@ def _apply_marker_z_alignment(cloud, radius_mm=400, min_pts=3, force=False):
         return {"applied": False, "reason": "no floor-level markers in registry"}
     import statistics
     pts = cloud["points"]
+    warnings = []
     per_marker = []
     offsets = []
     for m in floor:
         mx, my = float(m["x"]), float(m["y"])
-        zs = [p[2] for p in pts
-              if abs(p[0] - mx) < radius_mm and abs(p[1] - my) < radius_mm]
-        entry = {"id": int(m["id"]), "xy": [mx, my], "nearbyPoints": len(zs)}
-        if len(zs) >= min_pts:
-            mz = statistics.median(zs)
+        # First pass: any cloud point in the XY radius — used to compute
+        # a robust local floor estimate before we filter to the plane band.
+        zs_xy = [p[2] for p in pts
+                  if abs(p[0] - mx) < radius_mm and abs(p[1] - my) < radius_mm]
+        entry = {"id": int(m["id"]), "xy": [mx, my], "nearbyPoints": len(zs_xy)}
+        if len(zs_xy) < min_pts:
+            entry["used"] = False
+            per_marker.append(entry)
+            continue
+        # Plane-aware second pass: restrict to a ±band around the local
+        # FLOOR estimate. Median of all XY-radius points fails when an
+        # obstacle (chair, person, lighting truss) sits over the marker
+        # and contributes more points than the floor — the median picks
+        # the obstacle. We anchor on the bottom-decile of z values (the
+        # lowest 10 % of points in the XY radius) and median that. By
+        # construction the floor is the lowest stratum, so even when
+        # obstacle points outnumber floor points 10-to-1 the bottom
+        # decile is still all-floor and gives a clean reference.
+        zs_sorted = sorted(zs_xy)
+        bottom_n = max(1, len(zs_sorted) // 10)
+        bottom = zs_sorted[:bottom_n]
+        local_floor = statistics.median(bottom)
+        zs_planar = [z for z in zs_xy
+                     if abs(z - local_floor) <= _MARKER_PLANE_BAND_MM]
+        entry["planarPoints"] = len(zs_planar)
+        if len(zs_planar) < min_pts:
+            # Plane filter starved this marker — fall back to the looser
+            # XY-only median rather than skip entirely.
+            entry["planarFallback"] = "xy-only"
+            entry["medianZ"] = round(local_floor, 1)
+            entry["used"] = True
+            offsets.append(local_floor)
+        else:
+            mz = statistics.median(zs_planar)
             entry["medianZ"] = round(mz, 1)
             entry["used"] = True
             offsets.append(mz)
-        else:
-            entry["used"] = False
         per_marker.append(entry)
     if not offsets:
         return {"applied": False, "reason": f"no marker had ≥{min_pts} nearby points",
                 "markers": per_marker}
+    spread = max(offsets) - min(offsets)
+    # #692 — disagreement gate. If markers disagree wildly the cloud has
+    # per-camera tilt and the median of opposite-sign clusters ≈ 0.
+    # Don't apply the cancelling offset; consult the RANSAC floor plane.
+    if spread > _MARKER_DISAGREEMENT_MM and len(offsets) >= 2:
+        try:
+            from surface_analyzer import analyze_surfaces
+            surf = analyze_surfaces(pts) or {}
+            floor_plane = surf.get("floor") or {}
+            ransac_z = floor_plane.get("z")
+        except Exception as e:
+            log.warning("marker-Z fallback: analyze_surfaces failed (%s)", e)
+            ransac_z = None
+        warnings.append(
+            f"floor markers span {spread:.0f} mm in z (>{_MARKER_DISAGREEMENT_MM:.0f} mm) — "
+            "cloud likely has per-camera tilt. Consider re-scanning with "
+            "improved camera-pose calibration; a z-shift alone won't "
+            "level the floor."
+        )
+        if ransac_z is not None and isinstance(ransac_z, (int, float)):
+            offset_z = float(ransac_z)
+            for p in pts:
+                p[2] -= offset_z
+            cloud["zOffsetAppliedMm"] = round(
+                (cloud.get("zOffsetAppliedMm") or 0.0) + offset_z, 2)
+            log.info("marker-Z alignment: marker disagreement %.1f mm > "
+                     "%.0f mm gate; applied RANSAC floor.z=%.1f mm instead "
+                     "(per-marker offsets=%s)",
+                     spread, _MARKER_DISAGREEMENT_MM, offset_z,
+                     [round(o, 1) for o in offsets])
+            return {"applied": True, "zOffsetMm": round(offset_z, 1),
+                    "method": "ransac-floor-fallback",
+                    "markerSpreadMm": round(spread, 1),
+                    "markers": per_marker, "markersUsed": len(offsets),
+                    "warnings": warnings}
+        # No RANSAC plane available — refuse rather than apply a
+        # cancelling-median zero. Operator can use POST /api/space/shift
+        # to apply a manual offset.
+        return {"applied": False,
+                "reason": ("marker disagreement too large and RANSAC "
+                            "floor unavailable — manual shift required"),
+                "markerSpreadMm": round(spread, 1),
+                "markers": per_marker, "markersUsed": len(offsets),
+                "warnings": warnings}
     offset_z = statistics.median(offsets)
     for p in pts:
         p[2] -= offset_z
     cloud["zOffsetAppliedMm"] = round(
         (cloud.get("zOffsetAppliedMm") or 0.0) + offset_z, 2)
     log.info("marker-Z alignment: offset=%.1f mm across %d markers "
-             "(offsets=%s)",
-             offset_z, len(offsets), [round(o, 1) for o in offsets])
-    return {"applied": True, "zOffsetMm": round(offset_z, 1),
-            "markers": per_marker, "markersUsed": len(offsets)}
+             "(offsets=%s, spread=%.1f)",
+             offset_z, len(offsets), [round(o, 1) for o in offsets], spread)
+    result = {"applied": True, "zOffsetMm": round(offset_z, 1),
+              "method": "marker-median",
+              "markerSpreadMm": round(spread, 1),
+              "markers": per_marker, "markersUsed": len(offsets)}
+    if warnings:
+        result["warnings"] = warnings
+    return result
+
+
+@app.post("/api/space/shift")
+def api_space_shift():
+    """#692 — manual escape hatch when marker alignment refuses or
+    gives the wrong answer. Apply a Z-offset of `dz` mm directly to
+    every point in the current cloud. Positive `dz` raises the cloud;
+    operator typically computes `dz = -floor.z` from
+    /api/space/analyze when marker alignment would cancel itself out.
+
+    Body: ``{"dz": <mm>}``. Returns the applied delta and the new
+    cumulative offset.
+    """
+    global _point_cloud, _stage_surfaces_cache
+    body = request.get_json(silent=True) or {}
+    try:
+        dz = float(body.get("dz"))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, err="dz (mm) required, must be a number"), 400
+    if not _point_cloud or not _point_cloud.get("points"):
+        return jsonify(ok=False, err="no point cloud loaded"), 400
+    if not (-10000 < dz < 10000):
+        return jsonify(ok=False,
+                        err="dz out of range — expected −10000 .. 10000 mm"), 400
+    pts = _point_cloud["points"]
+    for p in pts:
+        p[2] += dz
+    _point_cloud["zOffsetAppliedMm"] = round(
+        (_point_cloud.get("zOffsetAppliedMm") or 0.0) + dz, 2)
+    # Stamp the manual override so the SPA / scan auto-aligners can tell
+    # this offset came from operator intent, not a marker solve.
+    _point_cloud["markerAlignment"] = {
+        "applied": True,
+        "method": "manual-shift",
+        "zOffsetMm": round(dz, 1),
+    }
+    _save("pointcloud", _point_cloud)
+    _stage_surfaces_cache = {"key": None, "value": None}
+    log.info("manual cloud shift: dz=%.1f mm applied (cumulative=%s)",
+             dz, _point_cloud["zOffsetAppliedMm"])
+    return jsonify(ok=True, dz=dz,
+                   cumulativeOffsetMm=_point_cloud["zOffsetAppliedMm"],
+                   totalPoints=len(pts))
 
 
 @app.post("/api/space/align-to-markers")
