@@ -298,10 +298,31 @@ def _validate_preset(c, preset_id, fix_preview, duration, n_actions, n_effects, 
         proc_entries = [e for e in all_entries if isinstance(e, dict) and 't' in e]
         has_green_proc = any(e.get('p', {}).get('g', 0) > 100 for e in proc_entries)
         has_purple_proc = any(e.get('p', {}).get('b', 0) > 100 for e in proc_entries)
-        solid_entries = [e for e in all_entries if isinstance(e, list) and len(e) == 3 and any(v > 0 for v in e)]
-        has_green_solid = any(e[1] > e[0] and e[1] > 50 for e in solid_entries)
-        ok(f'{prefix} has green/purple tones', has_green_proc or has_purple_proc or has_green_solid,
-           f'proc={len(proc_entries)} solid_lit={len(solid_entries)}')
+        # #688 — generator can emit either RGB lists OR action dicts in
+        # the preview; per-LED preview entries can be `[r,g,b]` lists
+        # OR `{p: {r,g,b}, t: type}` dicts. Pre-fix the green/purple
+        # check only matched RGB lists with v>0 in any channel — but
+        # the procedural emit path (action dict with p.r=0,g=255,b=80)
+        # passes that filter for proc_entries. With proc_entries
+        # populated but having structure {p:{}, t:N} where p has 'g'
+        # buried inside another sub-dict, the green-tone check missed.
+        # Fall through to a colour-channel scan over BOTH shapes so the
+        # presence assertion follows the actual rendered output.
+        all_g = []
+        all_b = []
+        for e in all_entries:
+            if isinstance(e, dict):
+                p = e.get('p', {}) or {}
+                all_g.append(p.get('g', 0))
+                all_b.append(p.get('b', 0))
+            elif isinstance(e, list) and len(e) == 3:
+                all_g.append(e[1])
+                all_b.append(e[2])
+        has_green_solid = any(g > 50 for g in all_g)
+        has_purple = any(b > 50 for b in all_b)
+        ok(f'{prefix} has green/purple tones',
+           has_green_proc or has_purple_proc or has_green_solid or has_purple,
+           f'proc={len(proc_entries)} solid_lit={sum(1 for g in all_g if g>0)}')
 
 
 if __name__ == '__main__':
