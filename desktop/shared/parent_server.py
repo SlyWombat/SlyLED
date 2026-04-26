@@ -4915,10 +4915,17 @@ def _mover_cal_thread_all_auto(fid, cam, bridge_ip, mover_color,
     # Only fall back on discovery-class failures — anything that made it
     # past discovery (partial samples, verification fail, etc.) stays on
     # markers mode rather than silently re-running from scratch.
+    # #693 — also fall back when the markers body exited at phase=starting
+    # (orphan-detected by the wrapper: body returned without setting a
+    # terminal status; the orphan guard set status=error). The operator
+    # gets a working calibration via the legacy BFS path instead of
+    # being stuck with no progress.
     err = (job.get("error") or "")
     phase = (job.get("phase") or "")
-    if phase not in ("battleship", "confirming", "discovery", "prescan") \
-            and not err.startswith("Battleship discovery"):
+    if phase not in ("battleship", "confirming", "discovery", "prescan",
+                      "starting", "error") \
+            and not err.startswith("Battleship discovery") \
+            and "orphaned" not in err:
         return
     _mcal_log(job, f"All-Auto: markers mode ended in {phase}/{err!r} — "
                    "falling back to Legacy BFS")
@@ -5000,6 +5007,32 @@ def _park_fixture_at_home(fid):
         _targeted_fixture_blackout(fid)
 
 
+def _warm_start_from_home(f):
+    """#691 — return (pan, tilt) normalised from the Set Home (#687)
+    anchor on a fixture, or None when the operator hasn't set one.
+
+    Set Home stores the anchor as ``homePanDmx16`` / ``homeTiltDmx16``
+    on the fixture record (top-level keys, 0..65535 DMX-16 units).
+    Pre-#691 the cal warm-start read ``f["orientation"]["homePan"]``
+    (nested + normalised), which has been unused by the SPA Set-Home
+    modal since #687 landed — the read silently no-op'd and the cal
+    sweep started at the geometric estimate instead of the operator's
+    manually-confirmed position.
+
+    The legacy ``orientation.homePan`` is checked by the calling code
+    only as a fall-through for fixture records that pre-date #687.
+    """
+    p = f.get("homePanDmx16")
+    t = f.get("homeTiltDmx16")
+    if p is None or t is None:
+        return None
+    try:
+        return (max(0.0, min(1.0, float(p) / 65535.0)),
+                max(0.0, min(1.0, float(t) / 65535.0)))
+    except (TypeError, ValueError):
+        return None
+
+
 def _mover_cal_thread_markers(fid, cam, bridge_ip, mover_color,
                                 warmup=False, warmup_seconds=30.0):
     """#610 marker-direct calibration. Wrapper that catches
@@ -5031,6 +5064,21 @@ def _mover_cal_thread_markers(fid, cam, bridge_ip, mover_color,
         # outer wrapper closes it so the trace lands on disk on every
         # exit path (cancel, crash, normal complete).
         _close_cal_trace(job)
+        # #693 — orphan detection. If the body returned without setting a
+        # terminal status (e.g. a control-flow bug that exited the body
+        # silently), the lock would stay held forever and the job would
+        # show status=running phase=starting until the orchestrator
+        # restarted. Force a terminal status here so the SPA shows a
+        # clear error and the cal lock releases.
+        if job.get("status") not in ("done", "cancelled", "error"):
+            log.error("MOVER-CAL markers %d: body returned with non-terminal "
+                      "status=%r phase=%r — flagging as orphaned",
+                      fid, job.get("status"), job.get("phase"))
+            job["status"] = "error"
+            job["error"] = ("markers-mode body exited without setting status "
+                            "(orphaned; control-flow bug). Cal lock released.")
+            job["phase"] = "error"
+            _set_calibrating(fid, False)
 
 
 def _close_cal_trace(job):
@@ -5140,32 +5188,6 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
         _mcal_log(job, f"Anchor: home (DMX pan={home_pan} tilt={home_tilt}) "
                        f"-> world vector {f.get('rotation')}; "
                        f"set {f.get('homeSetAt') or 'unknown'}")
-
-
-def _warm_start_from_home(f):
-    """#691 — return (pan, tilt) normalised from the Set Home (#687)
-    anchor on a fixture, or None when the operator hasn't set one.
-
-    Set Home stores the anchor as ``homePanDmx16`` / ``homeTiltDmx16``
-    on the fixture record (top-level keys, 0..65535 DMX-16 units).
-    Pre-#691 the cal warm-start read ``f["orientation"]["homePan"]``
-    (nested + normalised), which has been unused by the SPA Set-Home
-    modal since #687 landed — the read silently no-op'd and the cal
-    sweep started at the geometric estimate instead of the operator's
-    manually-confirmed position.
-
-    The legacy ``orientation.homePan`` is checked by the calling code
-    only as a fall-through for fixture records that pre-date #687.
-    """
-    p = f.get("homePanDmx16")
-    t = f.get("homeTiltDmx16")
-    if p is None or t is None:
-        return None
-    try:
-        return (max(0.0, min(1.0, float(p) / 65535.0)),
-                max(0.0, min(1.0, float(t) / 65535.0)))
-    except (TypeError, ValueError):
-        return None
 
     # #682-M — capture a dark reference BEFORE the beam ever comes on so
     # flash-detect can subtract the scene's static bright features from
@@ -5651,6 +5673,16 @@ def _mover_cal_thread_v2(fid, cam, bridge_ip, mover_color,
         _mcal.arm_cancel()
         _park_fixture_at_home(fid)   # #691
         _set_calibrating(fid, False)
+    # #693 — orphan guard (see _mover_cal_thread_markers for rationale).
+    if job.get("status") not in ("done", "cancelled", "error"):
+        log.error("MOVER-CAL v2 %d: body returned with non-terminal status=%r "
+                  "phase=%r — flagging as orphaned",
+                  fid, job.get("status"), job.get("phase"))
+        job["status"] = "error"
+        job["error"] = ("v2 body exited without setting status "
+                        "(orphaned). Cal lock released.")
+        job["phase"] = "error"
+        _set_calibrating(fid, False)
 
 
 def _mover_cal_thread_v2_body(fid, cam, bridge_ip, mover_color,
@@ -5897,6 +5929,16 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
         # #686 — close any open trace file regardless of how the body
         # exited so the diagnostic NDJSON always lands on disk.
         _close_cal_trace(job)
+        # #693 — orphan guard.
+        if job.get("status") not in ("done", "cancelled", "error"):
+            log.error("MOVER-CAL legacy %d: body returned with non-terminal "
+                      "status=%r phase=%r — flagging as orphaned",
+                      fid, job.get("status"), job.get("phase"))
+            job["status"] = "error"
+            job["error"] = ("legacy cal body exited without setting status "
+                            "(orphaned). Cal lock released.")
+            job["phase"] = "error"
+            _set_calibrating(fid, False)
 
 
 def _positioned_cameras_for_target_filter():
@@ -7111,10 +7153,20 @@ def api_mover_cal_start(fid):
     f = next((f for f in _fixtures if f["id"] == fid), None)
     if not f or f.get("fixtureType") != "dmx":
         return jsonify(err="DMX fixture not found"), 404
-    # Check if already running
+    # Check if already running. #693 — a job marked status=running may
+    # actually be orphaned (the worker thread died without setting a
+    # terminal status). Probe the thread before refusing the start.
     existing = _mover_cal_jobs.get(str(fid))
     if existing and existing.get("status") == "running":
-        return jsonify(err="Calibration already running"), 409
+        thread = existing.get("thread")
+        if thread is not None and not thread.is_alive():
+            log.warning("MOVER-CAL %d: detected orphaned job (worker thread "
+                        "is dead but status=running) — clearing and "
+                        "starting fresh", fid)
+            _mover_cal_jobs.pop(str(fid), None)
+            _set_calibrating(fid, False)
+        else:
+            return jsonify(err="Calibration already running"), 409
     cam = _best_camera_for(f)
     if not cam:
         return jsonify(err="No camera available — register and position a camera first"), 400
@@ -7368,6 +7420,25 @@ def api_mover_cal_cancel(fid):
     job = _mover_cal_jobs.get(str(fid))
     if not job or job.get("status") != "running":
         return jsonify(ok=True, cancelled=False, reason="no running calibration")
+    # #693 — if the worker thread died silently the request_cancel flag
+    # has nobody to read it; the job sits at status=running forever and
+    # the lock never releases. Detect a dead thread and force the orphan
+    # path directly so cancel doesn't return ok-but-still-stuck.
+    thread = job.get("thread")
+    if thread is not None and not thread.is_alive():
+        log.warning("MOVER-CAL %d: cancel hit an orphaned job (thread dead) "
+                    "— forcing cleanup", fid)
+        job["status"] = "cancelled"
+        job["phase"] = "cancelled"
+        job["error"] = "Cancelled — orphaned job (worker thread had died)"
+        _mcal.arm_cancel()
+        _set_calibrating(fid, False)
+        try:
+            _park_fixture_at_home(fid)
+        except Exception:
+            pass
+        return jsonify(ok=True, cancelled=True, orphan=True,
+                       reason="worker thread was dead")
     job["cancelRequested"] = True
     _mcal.request_cancel()
     log.info("MOVER-CAL %d: cancel requested by operator", fid)
