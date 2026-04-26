@@ -129,23 +129,23 @@ d = r.json()
 ok(d.get('ok') is True, 'Stage map returns ok')
 ok(d.get('markersDetected', 0) == 6, f'6 markers detected (got {d.get("markersDetected")})')
 ok(d.get('markersMatched', 0) == 6, f'6 markers matched (got {d.get("markersMatched")})')
-ok(d.get('method') == 'solvePnP', 'Method is solvePnP')
+# #688 — endpoint switched from raw solvePnP to findHomography +
+# solvePnP-as-diagnostic per memory feedback_stage_map_coplanar.md
+# (solvePnP has a mirror-pose ambiguity on coplanar floor markers).
+ok(d.get('method', '').startswith('findHomography'),
+   f'Method starts with findHomography (got {d.get("method")!r})')
 
-# Camera position should be a 3-element array with finite values
-cam_pos = d.get('cameraPosStage', [])
-ok(isinstance(cam_pos, list) and len(cam_pos) == 3,
-   f'cameraPosStage is 3-element array: {cam_pos}')
-ok(all(isinstance(v, (int, float)) and math.isfinite(v) for v in cam_pos),
-   f'cameraPosStage values are finite: {cam_pos}')
-
-# #331 — SPA reads r.cameraPosition (dict). Previously endpoint only
-# returned cameraPosStage array, silently blanking the results table.
-cam_pos_dict = d.get('cameraPosition', {})
+# #688 — Q8 renamed cameraPosStage / cameraPosition to
+# cameraPositionDiagnostic (single dict). Authoritative camera pose
+# now comes from cameraPos (layout-stored).
+cam_pos_dict = d.get('cameraPositionDiagnostic', {})
 ok(isinstance(cam_pos_dict, dict)
    and all(k in cam_pos_dict for k in ('x','y','z')),
-   f'cameraPosition dict has x/y/z: {cam_pos_dict}')
-ok(cam_pos_dict.get('x') == cam_pos[0] and cam_pos_dict.get('z') == cam_pos[2],
-   'cameraPosition dict matches cameraPosStage array')
+   f'cameraPositionDiagnostic dict has x/y/z: {cam_pos_dict}')
+ok(all(isinstance(cam_pos_dict.get(k), (int, float))
+        and math.isfinite(cam_pos_dict.get(k))
+        for k in ('x','y','z')),
+   f'cameraPositionDiagnostic values finite: {cam_pos_dict}')
 
 # #331 — intrinsicSource flag so operators can tell an FOV estimate from
 # a proper ArUco-calibrated solve. Mock camera returns calibrated:false so

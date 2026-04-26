@@ -41,6 +41,17 @@ def load_user_files():
     user_dir = os.path.join(os.path.dirname(__file__), 'user')
     config_path = os.path.join(user_dir, 'slyled-config.json')
     show_path = os.path.join(user_dir, 'slyled-show.json')
+    # #688 — both files must exist; the test exercises the import →
+    # bake → Art-Net pipeline against an OPERATOR's exported state.
+    # When slyled-show.json is missing (the export is gitignored), the
+    # imports succeed but produce 0 timelines/actions/effects so every
+    # downstream assert fails. Self-skip cleanly so the regression run
+    # doesn't conflate missing fixtures with a real regression.
+    if not os.path.exists(config_path) or not os.path.exists(show_path):
+        print(f"  SKIP: tests/user/slyled-config.json AND slyled-show.json "
+              f"required (one or both missing). Export from your "
+              f"orchestrator and copy them into tests/user/ to run.")
+        sys.exit(0)
 
     with app.test_client() as c:
         c.post('/api/reset', headers={'X-SlyLED-Confirm': 'true'})

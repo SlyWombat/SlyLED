@@ -85,6 +85,12 @@ class MoverClaim:
             "lastWriteAge": round(time.time() - self.last_write_ts, 1),
             "panNorm":      round(self.pan_smooth, 4),
             "tiltNorm":     round(self.tilt_smooth, 4),
+            # #688 — surface the operator-confirmed-alignment flag so
+            # the SPA's status panel can show "Calibrated · streaming"
+            # vs "Streaming (uncalibrated)". Pre-fix this lived as
+            # `calibrated_here` on the claim but never made it into
+            # the wire format.
+            "calibrated":   bool(self.calibrated_here),
             "color":        {"r": self.color_r, "g": self.color_g, "b": self.color_b},
             "dimmer":       self.dimmer,
         }

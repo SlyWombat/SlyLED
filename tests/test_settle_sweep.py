@@ -50,12 +50,19 @@ def section(name):
 
 section('Settle Time Constants (#238)')
 
-ok(mc.SETTLE_BASE == 0.8, f'SETTLE_BASE = 0.8 (got {mc.SETTLE_BASE})')
+# #688 — pre-fix this asserted hard-coded values (SETTLE_BASE=0.8s,
+# escalation [0.8,1.5,2.5], verify-gap=0.3s) but the constants were
+# reduced for speed (now 0.4 / [0.4,0.8,1.5] / 0.2). Operators tune
+# these per #680 calibrationTuning anyway. Test the INVARIANTS rather
+# than the exact magic numbers.
+ok(0 < mc.SETTLE_BASE < 2.0, f'SETTLE_BASE in (0, 2) s (got {mc.SETTLE_BASE})')
 ok(len(mc.SETTLE_ESCALATE) == 3, f'3 escalation stages (got {len(mc.SETTLE_ESCALATE)})')
-ok(mc.SETTLE_ESCALATE[0] == 0.8, f'Stage 1 = 0.8s')
-ok(mc.SETTLE_ESCALATE[1] == 1.5, f'Stage 2 = 1.5s')
-ok(mc.SETTLE_ESCALATE[2] == 2.5, f'Stage 3 = 2.5s')
-ok(mc.SETTLE_VERIFY_GAP == 0.3, f'Verify gap = 0.3s')
+ok(mc.SETTLE_ESCALATE[0] <= mc.SETTLE_ESCALATE[1] <= mc.SETTLE_ESCALATE[2],
+   f'Stages monotonic non-decreasing (got {mc.SETTLE_ESCALATE})')
+ok(mc.SETTLE_ESCALATE[0] >= mc.SETTLE_BASE,
+   f'Stage 1 >= SETTLE_BASE ({mc.SETTLE_ESCALATE[0]} vs {mc.SETTLE_BASE})')
+ok(mc.SETTLE_ESCALATE[2] <= 5.0, f'Stage 3 <= 5 s (got {mc.SETTLE_ESCALATE[2]})')
+ok(0 < mc.SETTLE_VERIFY_GAP < 1.0, f'Verify gap in (0, 1) s (got {mc.SETTLE_VERIFY_GAP})')
 ok(mc.SETTLE_PIXEL_THRESH == 30, f'Pixel threshold = 30')
 
 # ── #238: _wait_settled logic ────────────────────────────────────────────

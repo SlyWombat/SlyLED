@@ -68,13 +68,20 @@ ok("Pan +20°: forward Y = cos(20)",
 # 4. Match bake_engine._rotation_to_aim for combined tilt+pan
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'desktop', 'shared'))
 from bake_engine import _rotation_to_aim
+from camera_math import rotation_from_layout
+# #688 — post-#600 the layout-stored rotation is [rx, ry, rz] = [tilt,
+# roll, pan] — pan is in slot 2, not slot 1. Pre-fix this test passed
+# `rot[1]` (= 30) directly as build_camera_to_stage's `pan` arg, but
+# rot[1] is now ROLL. Route through rotation_from_layout() so the test
+# uses the canonical axis-semantic mapping.
 rot = [15, 30, 0]
 pos = [1500, 500, 2000]
 # _rotation_to_aim returns the aim POINT at distance dist from pos
 aim_pt = _rotation_to_aim(rot, pos, dist=1000)
 dir_from_bake = [aim_pt[i] - pos[i] for i in range(3)]  # direction vector length=1000
 # build_camera_to_stage applied to pinhole +Z (forward) scaled by 1000 should match
-R = np.array(build_camera_to_stage(rot[0], rot[1], rot[2]))
+tilt_deg, pan_deg, roll_deg = rotation_from_layout(rot)
+R = np.array(build_camera_to_stage(tilt_deg, pan_deg, roll_deg))
 dir_from_math = (R @ np.array([0, 0, 1000.0])).tolist()
 ok("Match bake_engine: dx",
    approx(dir_from_bake[0], dir_from_math[0], 1e-3),

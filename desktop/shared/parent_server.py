@@ -1900,11 +1900,17 @@ def api_fixture_clear_home(fid):
 @app.delete("/api/fixtures/<int:fid>")
 def api_fixture_delete(fid):
     global _fixtures
-    if not any(f["id"] == fid for f in _fixtures):
-        return jsonify(ok=False, err="fixture not found"), 404
-    _fixtures = [f for f in _fixtures if f["id"] != fid]
-    _save("fixtures", _fixtures)
-    return jsonify(ok=True)
+    # #688 — idempotent. The SPA's bulk-delete and undo flows can
+    # legitimately call DELETE for a fid that's already gone (race
+    # between the SPA's optimistic local-state update and the
+    # subsequent server round-trip). Return 200 with `removed` to
+    # signal whether the call actually changed state, instead of
+    # erroring on the second call.
+    existed = any(f["id"] == fid for f in _fixtures)
+    if existed:
+        _fixtures = [f for f in _fixtures if f["id"] != fid]
+        _save("fixtures", _fixtures)
+    return jsonify(ok=True, removed=existed)
 
 # ── Gyro API ─────────────────────────────────────────────────────────────
 
@@ -11839,6 +11845,10 @@ def api_mover_cal_start_ctrl():
     The orientation math runs on the Remote object — if body includes
     `targetObjectId` or none is given, we also drive the primitive's
     calibrate-start through the device's Remote (via _remotes.by_device).
+
+    #688 — also surfaces the captured reference pan/tilt so the SPA
+    can display "Reference: pan=N tilt=M" — the orientation deltas
+    streamed in subsequent /orient calls are relative to this anchor.
     """
     body = request.get_json(silent=True) or {}
     mid = body.get("moverId")
@@ -11846,7 +11856,18 @@ def api_mover_cal_start_ctrl():
     ok = _mover_engine.calibrate_start(mid, did)
     if not ok:
         return jsonify(ok=False, err="Not claimed or wrong device"), 403
-    return jsonify(ok=True)
+    # Read back the claim to surface the reference pan/tilt that the
+    # subsequent /orient calls are deltas from.
+    ref_pan = ref_tilt = None
+    try:
+        for c in _mover_engine.status().get("claims", []):
+            if c.get("moverId") == mid:
+                ref_pan = c.get("panNorm")
+                ref_tilt = c.get("tiltNorm")
+                break
+    except Exception:
+        pass
+    return jsonify(ok=True, refPan=ref_pan, refTilt=ref_tilt)
 
 @app.post("/api/mover-control/calibrate-end")
 def api_mover_cal_end_ctrl():
@@ -11886,6 +11907,21 @@ def api_mover_orient_compat():
     did = body.get("deviceId")
     if not did:
         return jsonify(ok=False, err="deviceId required"), 400
+    # #688 — when a moverId is supplied (the Android app aiming a
+    # specific mover, not just a free-form orientation update), reject
+    # devices that don't own the claim. Pre-fix this endpoint always
+    # returned ok=True; the wrong-device guard only fired downstream
+    # in the tick loop, so the API surfaced a misleading "success" to
+    # tests + clients. The auto-register path below stays for the no-
+    # moverId case (free-form Android phone updating its own remote).
+    mid_check = body.get("moverId")
+    if mid_check is not None:
+        # get_claim returns a dict (via MoverClaim.to_dict()), not the
+        # MoverClaim instance — read the wire-format key.
+        claim = _mover_engine.get_claim(mid_check)
+        if claim is not None and claim.get("deviceId") != did:
+            return jsonify(ok=False, err="Wrong device — claim is held "
+                            "by another device"), 403
     dname = body.get("deviceName") or ""
     remote = _remotes.by_device(did)
     if remote is None:
@@ -14979,7 +15015,16 @@ _ACTION_FIELDS = ("name", "type", "scope", "canvasEffect", "targetIds", "r", "g"
                   "trackObjectIds", "trackCycleMs", "trackOffset",  # Track action
                   "trackFixtureIds", "trackFixtureOffsets", "trackAutoSpread", "trackFixedAssignment", "trackDimmer",
                   "dimmer", "pan", "tilt", "strobe", "gobo", "colorWheel", "prism",  # DMX channels
-                  "ptStartPos", "ptEndPos")  # Pan/Tilt Move: stage coordinate positions [x,y,z] mm
+                  "ptStartPos", "ptEndPos",  # Pan/Tilt Move: stage coordinate positions [x,y,z] mm
+                  # #688 — bake_engine still honours panStart/panEnd/
+                  # tiltStart/tiltEnd as a legacy-DMX-normalised fall-
+                  # back when ptStartPos/ptEndPos aren't supplied (line
+                  # 555-559 in bake_engine.py). Pre-fix the whitelist
+                  # didn't include them, so /api/actions silently
+                  # stripped these fields and the test action's
+                  # tiltStart=0.3 / tiltEnd=0.7 dropped to defaults
+                  # (0.5 / 0.5).
+                  "panStart", "panEnd", "tiltStart", "tiltEnd")
 
 @app.post("/api/actions")
 def api_actions_create():

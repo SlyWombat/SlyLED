@@ -44,12 +44,20 @@ def seed():
         c.post('/api/settings', json={'name': 'DMX Bake Test', 'canvasW': 10000, 'canvasH': 5000})
         c.post('/api/stage', json={'w': 10.0, 'h': 5.0, 'd': 10.0})
 
-        # Moving head at stage left, aiming center-right
+        # Moving heads at the back of the stage, aiming forward toward
+        # the sphere sweep that passes through (~5000, 2500, 2500).
+        # #688 — pre-fix the rotations didn't account for the +Y =
+        # audience direction (MH Stage Left at y=4500 with pan=+40°
+        # aimed FURTHER away from the audience than the sphere); also
+        # post-#600 schema is [rx=tilt, ry=roll, rz=pan].  MH Left at
+        # x=1000 aiming at (5000, 2500, 2500): pan = atan2(+4000,
+        # -2000) ≈ +117°, tilt = -atan2(2500, 4472) ≈ -29° (above
+        # horizontal). MH Right at x=9000 mirrors with pan=-117°.
         r = c.post('/api/fixtures', json={
             'name': 'MH Stage Left', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 16,
             'dmxProfileId': 'generic-moving-head-16bit',
-            'rotation': [-20, 40, 0]
+            'rotation': [-29, 0, 117]
         })
         mh1 = r.get_json()['id']
 
@@ -58,7 +66,7 @@ def seed():
             'name': 'MH Stage Right', 'type': 'point', 'fixtureType': 'dmx',
             'dmxUniverse': 1, 'dmxStartAddr': 17, 'dmxChannelCount': 16,
             'dmxProfileId': 'generic-moving-head-16bit',
-            'rotation': [-20, -40, 0]
+            'rotation': [-29, 0, -117]
         })
         mh2 = r.get_json()['id']
 
