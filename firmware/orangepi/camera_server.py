@@ -22,7 +22,7 @@ from flask import Flask, jsonify, request
 import flask.cli
 flask.cli.show_server_banner = lambda *a, **kw: None   # suppress dev-server warning (#289)
 
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 PORT = 5000
 UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
@@ -1519,11 +1519,22 @@ def dark_reference():
 
 @app.post("/beam-detect")
 def beam_detect():
-    """Detect a bright beam spot. Fast (<100ms), color-filtered."""
+    """Detect a bright beam spot. Fast (<100ms), color-filtered.
+
+    #700 — defaults flipped: ``useDarkReference`` now defaults to True
+    and ``threshold`` defaults to 10 (was 30). Operators got reproducibly
+    garbage centroids without dark-ref because the bright ambient
+    region dominated the image moment; the new default produces
+    plausible centroids out of the box. ``threshold`` also accepts the
+    string ``"auto"`` which adapts to per-probe peak intensity.
+
+    Body: ``{cam, color, threshold (int|"auto"), useDarkReference (bool)}``.
+    """
     body = request.get_json(silent=True) or {}
     cam_idx = body.get("cam", 0)
     color = body.get("color", None)
-    threshold = body.get("threshold", 30)
+    threshold = body.get("threshold", 10)
+    use_dark = bool(body.get("useDarkReference", True))
     cameras = _hw_info.get("cameras", [])
     if cam_idx < 0 or cam_idx >= len(cameras):
         return jsonify(ok=False, err="Invalid camera index"), 400
@@ -1533,7 +1544,9 @@ def beam_detect():
     frame = _cv_capture(cameras[cam_idx]["device"])
     if frame is None:
         return jsonify(ok=False, err="Capture failed"), 503
-    result = det.detect(frame, cam_idx=cam_idx, color=color, threshold=threshold)
+    result = det.detect(frame, cam_idx=cam_idx, color=color,
+                         threshold=threshold,
+                         use_dark_reference=use_dark)
     return jsonify(ok=True, **result)
 
 @app.post("/beam-detect/flash")
@@ -1548,7 +1561,10 @@ def beam_detect_flash():
     body = request.get_json(silent=True) or {}
     cam_idx = body.get("cam", 0)
     color = body.get("color", None)
-    threshold = body.get("threshold", 30)
+    # #700 — default lowered from 30 to 10 to admit faint far-aim beams.
+    # The detect_flash code-path already always uses dark-ref when
+    # available; no useDarkReference toggle needed here.
+    threshold = body.get("threshold", 10)
     cameras = _hw_info.get("cameras", [])
     if cam_idx < 0 or cam_idx >= len(cameras):
         return jsonify(ok=False, err="Invalid camera index"), 400
@@ -1576,11 +1592,16 @@ def beam_detect_flash():
 
 @app.post("/beam-detect/center")
 def beam_detect_center():
-    """Detect the center beam of a multi-beam fixture."""
+    """Detect the center beam of a multi-beam fixture.
+
+    #700 — ``threshold`` default lowered to 10 + accepts ``"auto"``;
+    ``useDarkReference`` defaults to True.
+    """
     body = request.get_json(silent=True) or {}
     cam_idx = body.get("cam", 0)
     color = body.get("color", None)
-    threshold = body.get("threshold", 30)
+    threshold = body.get("threshold", 10)
+    use_dark = bool(body.get("useDarkReference", True))
     beam_count = body.get("beamCount", 3)
     cameras = _hw_info.get("cameras", [])
     if cam_idx < 0 or cam_idx >= len(cameras):
@@ -1592,7 +1613,8 @@ def beam_detect_center():
     if frame is None:
         return jsonify(ok=False, err="Capture failed"), 503
     result = det.detect_center(frame, cam_idx=cam_idx, color=color,
-                                threshold=threshold, beam_count=beam_count)
+                                threshold=threshold, beam_count=beam_count,
+                                use_dark_reference=use_dark)
     return jsonify(ok=True, **result)
 
 # ── Intrinsic calibration (checkerboard) ──────────────────────────────

@@ -39,22 +39,41 @@ class BeamDetector:
     def has_dark_frame(self, cam_idx):
         return cam_idx in self._dark_frames
 
-    def detect(self, frame, cam_idx=0, color=None, threshold=30):
+    def detect(self, frame, cam_idx=0, color=None, threshold=10,
+                use_dark_reference=True):
         """Detect a bright beam spot in the frame.
 
         Args:
             frame: BGR numpy array
             cam_idx: camera index (for dark frame lookup)
             color: [r, g, b] beam color to filter for, or None for brightness-only
-            threshold: minimum difference from dark frame
+            threshold: minimum difference from dark frame. Either an int
+                       (5-255) or the string ``"auto"`` — when ``"auto"``
+                       the helper sets ``thresh_val = max(5, peak * 0.5)``
+                       so it adapts to per-probe signal strength. (#700)
+            use_dark_reference: when True (default; #700), require a
+                       captured dark-reference frame for ``cam_idx`` and
+                       subtract it from the working mask. When no
+                       dark-ref exists the result includes
+                       ``darkRefMissing: True`` so the caller can prompt
+                       the operator to run /dark-reference. When False,
+                       legacy raw-thresholding path runs (centroid
+                       dominated by ambient bright pixels — only useful
+                       for sanity-checking the dark-ref capture itself).
 
         Returns:
-            dict with {found, pixelX, pixelY, peakIntensity, area} or {found: False}
+            dict with {found, pixelX, pixelY, peakIntensity, area,
+                       darkRefApplied, darkRefMissing} or {found: False}
         """
         if frame is None:
             return {"found": False}
 
-        dark_bgr = self._dark_frames.get(cam_idx)
+        dark_bgr = self._dark_frames.get(cam_idx) if use_dark_reference else None
+        # Caller asked for dark-ref but none captured — surface the
+        # condition explicitly. The detector still runs (legacy fallback)
+        # so the caller's harness keeps working, but with a flag in the
+        # response that lets the SPA / QA tool prompt.
+        dark_ref_missing = bool(use_dark_reference) and dark_bgr is None
 
         # Step 1: Color diff between light and dark frames
         if color and color != [255, 255, 255]:
@@ -78,8 +97,19 @@ class BeamDetector:
 
         mask = cv2.GaussianBlur(mask, (15, 15), 0)
         _, peak_val, _, _ = cv2.minMaxLoc(mask)
+
+        # #700 — adaptive threshold: when caller passes threshold="auto",
+        # base the rejection floor on this frame's peak intensity. Adapts
+        # to per-probe signal strength — a faint far-aim beam (peak 12
+        # over dark ref) and a strong close-aim beam (peak 200) both pass.
+        if isinstance(threshold, str) and threshold.lower() == "auto":
+            threshold_floor = 5
+            threshold = max(threshold_floor, int(peak_val * 0.5))
         if peak_val < threshold:
-            return {"found": False}
+            result = {"found": False, "peakIntensity": float(peak_val),
+                      "darkRefApplied": dark_bgr is not None,
+                      "darkRefMissing": dark_ref_missing}
+            return result
 
         thresh_val = max(threshold, int(peak_val * 0.4))
         _, binary = cv2.threshold(mask, thresh_val, 255, cv2.THRESH_BINARY)
@@ -140,20 +170,27 @@ class BeamDetector:
                 "peakIntensity": int(peak_val),
                 "area": int(area),
                 "brightness": int(mean_brightness),
+                "darkRefApplied": dark_bgr is not None,
+                "darkRefMissing": dark_ref_missing,
             }
 
-        return {"found": False}
+        return {"found": False,
+                "darkRefApplied": dark_bgr is not None,
+                "darkRefMissing": dark_ref_missing}
 
-    def detect_center(self, frame, cam_idx=0, color=None, threshold=30, beam_count=3):
+    def detect_center(self, frame, cam_idx=0, color=None, threshold=10,
+                       beam_count=3, use_dark_reference=True):
         """Detect the center beam of a multi-beam fixture.
 
         Uses connectedComponents to identify individual beam spots,
         then returns the one with the median X position (center beam).
+        ``threshold`` accepts ``"auto"`` per #700; ``use_dark_reference``
+        is True by default.
         """
         if frame is None:
             return {"found": False}
 
-        dark_bgr = self._dark_frames.get(cam_idx)
+        dark_bgr = self._dark_frames.get(cam_idx) if use_dark_reference else None
         if color and color != [255, 255, 255]:
             light_mask = self._color_mask(frame, color)
             if dark_bgr is not None:
@@ -174,6 +211,9 @@ class BeamDetector:
 
         mask = cv2.GaussianBlur(mask, (11, 11), 0)
         _, peak_val, _, _ = cv2.minMaxLoc(mask)
+        # #700 — adaptive threshold support.
+        if isinstance(threshold, str) and threshold.lower() == "auto":
+            threshold = max(5, int(peak_val * 0.5))
         if peak_val < threshold or peak_val < 60:
             return {"found": False}
 
@@ -229,7 +269,7 @@ class BeamDetector:
             "beamCount": len(components),
         }
 
-    def detect_flash(self, frame_on, frame_off, color=None, threshold=30,
+    def detect_flash(self, frame_on, frame_off, color=None, threshold=10,
                       cam_idx=None):
         """Flash detection: find beam by comparing ON frame vs OFF frame.
 
@@ -295,6 +335,9 @@ class BeamDetector:
         diff = cv2.GaussianBlur(diff, (15, 15), 0)
         _, peak_val, _, _ = cv2.minMaxLoc(diff)
 
+        # #700 — adaptive threshold support.
+        if isinstance(threshold, str) and threshold.lower() == "auto":
+            threshold = max(5, int(peak_val * 0.5))
         if peak_val < threshold:
             return {"found": False}
 
