@@ -155,30 +155,48 @@ def start_server():
 
 def probe_js(checkbox_id):
     """Return the JS expression that evaluates True iff the visual for
-    `checkbox_id` is currently rendered in the active 3D scene."""
-    # We look at every scene we can — main viewport's _s3d, calibration's
-    # cloud-attached mesh, runtime's _s3d_rt — and OR the results.
-    scenes = ('window._s3d && window._s3d.inited && window._s3d.scene',
-              'window._s3d_rt && window._s3d_rt.inited && window._s3d_rt.scene',
-              'window._s3d_dash && window._s3d_dash.inited && window._s3d_dash.scene')
-    # Each entry: (key, predicate over child userData / type)
+    `checkbox_id` is currently VISIBLE in the active 3D scene.
+
+    The toggle handlers in scene-3d.js flip ``c.visible`` instead of
+    adding/removing children — so the probe walks the whole scene tree
+    via ``Object3D.traverse`` and checks visibility along the chain.
+    Matcher names mirror the actual ``userData`` markers used in
+    scene-3d.js / calibration.js / emulation.js.
+    """
+    # All overlays live in the single shared _s3d.scene (no separate
+    # _s3d_dash / _s3d_rt — see scene-3d.js).
     matchers = {
-        'vw-cloud':      'c=>c.userData&&c.userData.pointCloud',
-        'vw-strings':    'c=>c.userData&&c.userData.ledString',
-        'vw-lightcones': 'c=>c.userData&&c.userData.lightCone',
-        'vw-camcones':   'c=>c.userData&&c.userData.camCone',
-        'vw-orient':     'c=>c.userData&&c.userData.orientArrow',
-        'vw-grid':       'c=>c.type==="GridHelper"||(c.userData&&c.userData.gridHelper)',
-        'vw-labels':     'c=>c.userData&&c.userData.label',
-        'vw-stagebox':   'c=>c.userData&&c.userData.stageBox',
-        'vw-aruco':      'c=>c.userData&&c.userData.arucoMarker',
-        'vw-stageobjs':  'c=>c.userData&&c.userData.stageObject',
+        'vw-cloud':      'o=>o.userData&&o.userData.pointCloud',
+        'vw-strings':    'o=>o.userData&&o.userData.ledString',
+        'vw-lightcones': 'o=>o.userData&&(o.userData.beamCone||o.userData.isAimPoint)',
+        'vw-camcones':   'o=>o.userData&&o.userData.cameraCone',
+        'vw-orient':     'o=>o.userData&&(o.userData.orientArrow||o.userData.restArrow)',
+        'vw-grid':       'o=>(o.type==="GridHelper")||(o.userData&&o.userData.isGrid)',
+        'vw-labels':     'o=>o.userData&&(o.userData.isLabel||o.userData.stageDimLabel)',
+        'vw-stagebox':   'o=>o.userData&&o.userData.stageBox',
+        'vw-aruco':      'o=>o.userData&&(o.userData.arucoMarker||o.userData.arucoRecommend)',
+        'vw-stageobjs':  'o=>o.userData&&(o.userData.stageObj||o.userData.stageObject)',
     }
     pred = matchers.get(checkbox_id)
     if not pred:
         return 'null'
-    parts = [f'(({s}) ? ({s}).children.some({pred}) : false)' for s in scenes]
-    return '(' + ' || '.join(parts) + ')'
+    # Walk the whole scene; an object counts as "rendered" only if it AND
+    # every ancestor up to the root is visible.
+    return (
+        '(function(){'
+        ' if(!(window._s3d && window._s3d.inited && window._s3d.scene)) return false;'
+        ' var match=' + pred + ';'
+        ' var hit=false;'
+        ' window._s3d.scene.traverse(function(o){'
+        '   if(hit) return;'
+        '   if(!match(o)) return;'
+        '   var p=o; var ok=true;'
+        '   while(p){ if(p.visible===false){ok=false;break;} p=p.parent; }'
+        '   if(ok) hit=true;'
+        ' });'
+        ' return hit;'
+        '})()'
+    )
 
 
 def main():
@@ -239,6 +257,26 @@ def main():
                 if not exists:
                     continue
                 probe = probe_js(cb_id)
+
+                # Skip if the scene has no meshes that match this toggle's
+                # category at all (regardless of visibility) — toggling can't
+                # be observed without something to render.
+                count_match = (
+                    '(function(){'
+                    ' if(!(window._s3d && window._s3d.inited && window._s3d.scene)) return 0;'
+                    ' var m=' + probe.split("var match=")[1].split(';')[0] + ';'
+                    ' var n=0; window._s3d.scene.traverse(function(o){ if(m(o)) n++; });'
+                    ' return n;'
+                    '})()'
+                )
+                try:
+                    nmatch = int(page.evaluate(count_match) or 0)
+                except Exception:
+                    nmatch = 0
+                if nmatch == 0:
+                    if VERBOSE:
+                        print(f'  {cb_id}: no matching meshes in scene — skipping')
+                    continue
 
                 # Read initial state.
                 init_state = bool(page.evaluate(

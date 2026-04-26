@@ -169,7 +169,11 @@ function s3dInit(){
   // #638 — restore Point Cloud visibility if the saved pref says it was on.
   // _togglePointCloud handles the case where no scan data exists (silent
   // no-op) and re-syncs the checkbox.
+  // #701 — _togglePointCloud reads cb.checked, so seed it from the pref
+  // before calling. Otherwise the auto-restore was a no-op.
   if(_viewPrefs&&_viewPrefs.cloud){
+    var _cbCloud=document.getElementById('vw-cloud');
+    if(_cbCloud)_cbCloud.checked=true;
     try{_togglePointCloud();}catch(e){}
   }
   // Start polling remote-orientation state for debug viz (#484 phase 3)

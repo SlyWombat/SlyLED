@@ -2544,15 +2544,16 @@ function _envScan(){
 }
 
 function _loadPointCloud(cb){
+  // #701 — fetch cloud data only. The caller decides whether to make it
+  // visible / render / persist, based on the operator's intent at the
+  // moment the load completes (which may differ from when it started).
   ra('GET','/api/space',null,function(r){
-    if(r&&r.ok&&r.points){
+    var ok=!!(r&&r.ok&&r.points);
+    if(ok){
       _pointCloudData=r;
       document.getElementById('hs').textContent=r.totalPoints+' point cloud loaded';
-      _pointCloudVisible=true;
-      if(_s3d.inited)_renderPointCloud();
-      _updateCloudBtn();
     }
-    if(cb)cb();
+    if(cb)cb(ok);
   });
 }
 
@@ -2560,18 +2561,28 @@ function _togglePointCloud(){
   // When invoked from the View-menu checkbox, trust the checkbox state so it
   // can't desync from _pointCloudVisible. Fall back to a plain flip for the
   // legacy button-driven path (#529).
+  // #701 — async-load race fix: if a click triggers a load, re-check the
+  // checkbox at the moment the load completes and honour THAT intent. The
+  // load no longer auto-renders; only this function calls _renderPointCloud.
   var cb=document.getElementById('vw-cloud');
   var desired=cb?cb.checked:!_pointCloudVisible;
   if(!_pointCloudData){
     if(!desired){_pointCloudVisible=false;_updateCloudBtn();_persistCloudPref(false);return;}
-    _loadPointCloud(function(){
-      if(!_pointCloudData){
+    _loadPointCloud(function(ok){
+      // Re-read the checkbox NOW — operator may have toggled while loading.
+      var stillWanted=cb?cb.checked:_pointCloudVisible;
+      if(!ok){
         document.getElementById('hs').textContent='No point cloud — run environment scan first';
+        _pointCloudVisible=false;
         if(cb)cb.checked=false;
+        _updateCloudBtn();
         _persistCloudPref(false);
-      }else{
-        _persistCloudPref(true);
+        return;
       }
+      _pointCloudVisible=stillWanted;
+      if(_s3d.inited)_renderPointCloud();
+      _updateCloudBtn();
+      _persistCloudPref(stillWanted);
     });
     return;
   }

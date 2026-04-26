@@ -131,6 +131,18 @@ class CalibrationAborted(Exception):
     """Raised when cancellation is requested while calibration is running."""
 
 
+class CalibrationError(Exception):
+    """#703 — fail-loud replacement for the silent "fall back to legacy
+    half-band / hardcoded range default" patches. Raised when the cal
+    pipeline has been invoked with inputs that would only run by guessing
+    (missing fixture pose, missing camera polygons, ``panRange``/
+    ``tiltRange`` not pinned in the profile, ray geometry that never
+    intersects the floor for any tilt). The kickoff endpoint catches and
+    surfaces this as HTTP 400 with the missing-field message intact, so
+    operators see *what* is wrong instead of an unexplained 24-probe
+    sweep on the wrong scale."""
+
+
 class _R_Found(Exception):
     """#682-R — sentinel for early-exit from the multi-round refinement
     loop in battleship_discover. Not an error; carries the confirmed
@@ -800,8 +812,27 @@ def _point_in_polygon(point, polygon):
     return inside
 
 
+def _effective_mount_rotation(fx_rot, mounted_inverted):
+    """#702 Bug B — resolve fixture rotation for ray geometry.
+
+    The legacy ``mountedInverted`` flag implies a 180° flip about the
+    fixture's X axis when the explicit ``rotation`` array is all zero
+    (the same convention used in
+    ``_compute_per_fixture_polygon_set``). When ``rotation`` is set
+    explicitly, trust it — operators who hand-set rotation already
+    encoded the mount.
+    """
+    rot = list(fx_rot or [0.0, 0.0, 0.0])
+    while len(rot) < 3:
+        rot.append(0.0)
+    if mounted_inverted and rot[0] == 0 and rot[1] == 0 and rot[2] == 0:
+        return [180.0, 0.0, 0.0]
+    return rot
+
+
 def _ray_floor_hit(fx_pos, fx_rot, pan_norm, tilt_norm,
-                    pan_range_deg, tilt_range_deg):
+                    pan_range_deg, tilt_range_deg,
+                    mounted_inverted=False):
     """Compute the (x, y) floor (z=0) intersection of the beam ray for a
     fixture at ``fx_pos`` with rotation ``fx_rot`` (degrees, ZYX) aimed
     at normalised pan/tilt. Returns ``None`` when the ray is upward or
@@ -810,14 +841,21 @@ def _ray_floor_hit(fx_pos, fx_rot, pan_norm, tilt_norm,
     Used by :func:`_camera_visible_tilt_band` (#698) to find which
     tilt cells project inside camera FOV polygons. Wraps the existing
     :func:`pan_tilt_to_ray` for the direction and intersects with z=0.
+
+    #702 Bug B — accepts ``mounted_inverted`` so legacy fixtures that
+    set the inverted flag without an explicit 180° rotation still get
+    a downward ray. Without this, every floor-hit on an inverted-mount
+    fixture with ``rotation=[0,0,0]`` returned ``None`` and the band
+    fell back to the uniform-grid legacy path.
     """
     if fx_pos is None:
         return None
     fz = float(fx_pos[2])
+    rot = _effective_mount_rotation(fx_rot, mounted_inverted)
     direction = pan_tilt_to_ray(pan_norm, tilt_norm,
                                  pan_range=pan_range_deg,
                                  tilt_range=tilt_range_deg,
-                                 mount_rotation_deg=fx_rot)
+                                 mount_rotation_deg=rot)
     dx, dy, dz = direction
     if dz >= -1e-6:
         return None  # ray points up or horizontal — no floor hit
@@ -839,32 +877,49 @@ def _camera_visible_tilt_band(fx_pos, fx_rot, home_pan_norm,
     Sweeps tilt on ``[0.05, 0.95]`` at ~1° resolution (default 91
     samples), computes the floor hit per tilt, and keeps the contiguous
     cluster of in-FOV samples around the operator-confirmed home.
-    Returns ``(0.0, 1.0)`` when the geometry can't be solved (no
-    polygons, ray always above the floor, fixture pos unknown). The
-    caller logs the band so the operator can sanity-check.
+
+    #703 — the legacy half-band fallback ((0.0, 0.5) for inverted,
+    (0.5, 1.0) otherwise) is gone. Bad inputs raise
+    :class:`CalibrationError` so the cal-kickoff endpoint can surface
+    the missing field. A silent guess here is exactly what masked
+    #702's IK bug — the band silently said "back half of tilt" while
+    the rays were still aimed at the ceiling.
     """
-    if (not camera_polygons or fx_pos is None
-            or pan_range_deg is None or tilt_range_deg is None):
-        # Fall back to the legacy half-band logic.
-        if pan_range_deg is not None and pan_range_deg >= 360.0:
-            return (0.0, 0.5) if mounted_inverted else (0.5, 1.0)
-        return (0.0, 1.0)
+    if not camera_polygons:
+        raise CalibrationError(
+            "_camera_visible_tilt_band: no camera floor polygons supplied "
+            "— cannot pre-filter probes to camera-visible tilt range. "
+            "Make sure the fixture's nearest camera is registered and "
+            "positioned in the layout (its FOV polygon must reach the "
+            "floor).")
+    if fx_pos is None:
+        raise CalibrationError(
+            "_camera_visible_tilt_band: fixture position is unknown. "
+            "Place the fixture in the 3D layout before calibrating.")
+    if pan_range_deg is None or tilt_range_deg is None:
+        raise CalibrationError(
+            f"_camera_visible_tilt_band: panRange={pan_range_deg!r} "
+            f"tiltRange={tilt_range_deg!r} — both must be set on the "
+            "fixture's DMX profile before cal can run. Open the profile "
+            "editor and pin the mechanical ranges.")
     in_band = []
     for i in range(samples):
         t = 0.05 + (0.95 - 0.05) * (i / max(1, samples - 1))
         hit = _ray_floor_hit(fx_pos, fx_rot, home_pan_norm, t,
-                              pan_range_deg, tilt_range_deg)
+                              pan_range_deg, tilt_range_deg,
+                              mounted_inverted=mounted_inverted)
         if hit is None:
             continue
         if any(_point_in_polygon(hit, poly) for poly in camera_polygons):
             in_band.append(t)
     if not in_band:
-        # Beam at home_pan never lands inside a camera polygon. Likely
-        # cause: home anchor is wrong, or layout has the fixture facing
-        # away from the cameras. Caller logs a warning + falls back.
-        if pan_range_deg is not None and pan_range_deg >= 360.0:
-            return (0.0, 0.5) if mounted_inverted else (0.5, 1.0)
-        return (0.0, 1.0)
+        raise CalibrationError(
+            f"_camera_visible_tilt_band: at home pan={home_pan_norm:.3f}, "
+            "no tilt in [0.05, 0.95] projects the beam onto any camera "
+            "FOV polygon. Likely cause: Set Home anchor is wrong, or the "
+            "fixture's mountedInverted / rotation does not match its "
+            "physical mount. Re-run Set Home, or check the fixture's "
+            "rotation in the layout.")
     return (min(in_band), max(in_band))
 
 
@@ -1080,7 +1135,8 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         first_p, first_t = grid[0]
         first_hit = _ray_floor_hit(fixture_pos, fixture_rotation,
                                     first_p, first_t,
-                                    pr_deg, tr_deg)
+                                    pr_deg, tr_deg,
+                                    mounted_inverted=mounted_inverted)
         mech_tilt = (first_t - 0.5) * tr_deg
         if first_hit is not None:
             log.info("battleship_discover: first probe pan=%.4f tilt=%.4f "
@@ -1131,8 +1187,17 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         symmetry between + and − nudges, AND a continuity cap.
         """
         def _probe(pan, tilt):
+            # #702 Bug C — confirm-nudge slews must blackout first, then
+            # turn light on at the destination, to match _beam_detect_flash
+            # (#695). Writing dim=255 with a new (pan, tilt) sweeps the
+            # green beam across the room while the head physically rotates
+            # — blooms the camera, crosses operator faces, and heats the
+            # head. The same atomicity that fixed `_beam_detect_flash`
+            # belongs here.
+            _set_mover_dmx(dmx, mover_addr, pan, tilt, 0, 0, 0, dimmer=0)
+            _hold_dmx(bridge_ip, dmx, 0.30)
             _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
-            _hold_dmx(bridge_ip, dmx, 0.4)
+            _hold_dmx(bridge_ip, dmx, 0.20)
             return _beam_detect(camera_ip, cam_idx, color, center=True)
 
         nudge = float(confirm_nudge_delta)
@@ -1146,6 +1211,9 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         }
         # Re-settle on the candidate pixel so downstream refine starts
         # from the same state we told the caller we hit.
+        # #702 Bug C — blackout, slew, then re-light at the candidate.
+        _set_mover_dmx(dmx, mover_addr, pan0, tilt0, 0, 0, 0, dimmer=0)
+        _hold_dmx(bridge_ip, dmx, 0.30)
         _set_mover_dmx(dmx, mover_addr, pan0, tilt0, *color, dimmer=255)
         _hold_dmx(bridge_ip, dmx, 0.2)
 
@@ -1301,6 +1369,11 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         beam = _beam_detect_flash(bridge_ip, camera_ip, cam_idx,
                                    mover_addr, pan, tilt, color, dmx)
         if beam is None:
+            # #702 Bug C — fallback path also has to slew dark first.
+            # Otherwise after a confirm-rejected probe we light up the
+            # next cell while the head is mid-slew.
+            _set_mover_dmx(dmx, mover_addr, pan, tilt, 0, 0, 0, dimmer=0)
+            _hold_dmx(bridge_ip, dmx, 0.30)
             _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
             _hold_dmx(bridge_ip, dmx, 0.3)
             beam = _beam_detect_verified(camera_ip, cam_idx, color)

@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.55"
+VERSION = "1.6.58"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -3833,13 +3833,41 @@ def api_fixture_dmx_test(fid):
     pan = body.get("pan")
     tilt = body.get("tilt")
     dimmer = body.get("dimmer")
+    pan_tilt_written = False
     # Only update pan/tilt if provided and non-negative (skip when -1)
     if pan is not None and pan >= 0 and tilt is not None and tilt >= 0:
         uni_buf.set_fixture_pan_tilt(addr, pan, tilt, profile)
+        pan_tilt_written = True
     ch_map = prof_info.get("channel_map", {})
     # Set dimmer if provided
     if dimmer is not None and "dimmer" in ch_map:
         uni_buf.set_channel(addr + ch_map["dimmer"], int(dimmer * 255))
+    # #702 Bug E — color-wheel-aware aim: if the caller passes RGB on a
+    # color-wheel-only profile (no red/green/blue channels), pick the
+    # closest wheel slot via dmx_profiles.rgb_to_wheel_slot so the beam
+    # is actually the requested colour. Without this the wheel default
+    # (white) wins and downstream beam-detect colour filtering rejects
+    # what the camera sees.
+    color_wheel_written = False
+    has_rgb_channels = any(c in ch_map for c in ("red", "green", "blue"))
+    if not has_rgb_channels and "color-wheel" in ch_map:
+        rgb = []
+        for ch_name in ("red", "green", "blue"):
+            v = body.get(ch_name)
+            if v is not None:
+                rgb.append(int(round(v * 255)))
+            else:
+                rgb.append(None)
+        if any(c is not None for c in rgb):
+            from dmx_profiles import rgb_to_wheel_slot
+            r = rgb[0] or 0
+            g = rgb[1] or 0
+            b = rgb[2] or 0
+            slot_dmx = rgb_to_wheel_slot(prof_info, r, g, b)
+            if slot_dmx is not None:
+                uni_buf.set_channel(addr + ch_map["color-wheel"],
+                                     int(slot_dmx))
+                color_wheel_written = True
     # Set color + strobe channels if provided
     for ch_name in ("red", "green", "blue", "white", "strobe"):
         if ch_name in ch_map:
@@ -3847,11 +3875,21 @@ def api_fixture_dmx_test(fid):
             if val is not None:
                 uni_buf.set_channel(addr + ch_map[ch_name], int(val * 255))
     # Apply profile channel defaults for any channel not explicitly set above
-    # (strobe open, color wheel white, etc.) so the beam is visible
+    # (strobe open, color wheel white, etc.) so the beam is visible.
+    # #702 Bug D — when set_fixture_pan_tilt has written 16-bit pan/tilt,
+    # the LSBs live in pan-fine / tilt-fine channels. The defaults loop
+    # below MUST exclude them, otherwise the profile defaults (typically
+    # 128 = mid) clobber the LSB and the operator-driven aim drops to
+    # 8-bit precision (≈2° per coarse step on a 540° pan, vs ≈0.008°
+    # at full 16-bit).
     explicitly_set = {"pan", "tilt", "dimmer"}
+    if pan_tilt_written:
+        explicitly_set.update({"pan-fine", "tilt-fine"})
     for ch_name in ("red", "green", "blue", "white", "strobe"):
         if body.get(ch_name) is not None:
             explicitly_set.add(ch_name)
+    if color_wheel_written:
+        explicitly_set.add("color-wheel")
     for ch in prof_info.get("channels", []):
         ch_type = ch.get("type", "")
         default = ch.get("default")
@@ -5049,6 +5087,14 @@ def _mover_cal_thread_markers(fid, cam, bridge_ip, mover_color,
             _mcal.arm_cancel()
             _park_fixture_at_home(fid)   # #691 — return to operator's home anchor
             _set_calibrating(fid, False)
+        except _mcal.CalibrationError as e:
+            # #703 — operator-actionable precondition / geometry failure.
+            log.warning("MOVER-CAL markers %d: cal-error %s", fid, e)
+            job["error"] = str(e); job["status"] = "error"
+            job["errorType"] = "calibration-error"
+            _mcal.arm_cancel()
+            _park_fixture_at_home(fid)
+            _set_calibrating(fid, False)
         except Exception as e:
             log.exception("MOVER-CAL markers %d: unhandled", fid)
             job["error"] = f"Unhandled: {e}"; job["status"] = "error"
@@ -5674,6 +5720,15 @@ def _mover_cal_thread_v2(fid, cam, bridge_ip, mover_color,
         _mcal.arm_cancel()
         _park_fixture_at_home(fid)   # #691
         _set_calibrating(fid, False)
+    except _mcal.CalibrationError as e:
+        # #703 — operator-actionable precondition / geometry failure.
+        log.warning("MOVER-CAL v2 %d: cal-error %s", fid, e)
+        job["error"] = str(e)
+        job["status"] = "error"
+        job["errorType"] = "calibration-error"
+        _mcal.arm_cancel()
+        _park_fixture_at_home(fid)
+        _set_calibrating(fid, False)
     except Exception as e:
         log.exception("MOVER-CAL v2 %d: unhandled exception", fid)
         job["error"] = f"Unhandled error: {e}"
@@ -5975,6 +6030,16 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
             job["phase"] = "cancelled"
             # Clear the cancel flag before the park write so _hold_dmx
             # actually runs (rather than re-raising CalibrationAborted).
+            _mcal.arm_cancel()
+            _park_fixture_at_home(fid)   # #691
+            _set_calibrating(fid, False)
+        except _mcal.CalibrationError as e:
+            # #703 — operator-actionable precondition / geometry failure.
+            # Surface the message verbatim so the SPA shows what to fix.
+            log.warning("MOVER-CAL %d: cal-error %s", fid, e)
+            job["error"] = str(e)
+            job["errorType"] = "calibration-error"
+            job["status"] = "error"
             _mcal.arm_cancel()
             _park_fixture_at_home(fid)   # #691
             _set_calibrating(fid, False)
@@ -7250,6 +7315,41 @@ def api_mover_cal_start(fid):
                              "dialog and use the Set Home button to drive the "
                              "fixture along its rotation vector and confirm."),
                         errType="home-not-set"), 412
+    # #703 - fail fast when the fixture profile lacks pan/tilt range.
+    # The legacy code defaulted to (540, 270) silently - wrong by 50%
+    # for 150W (180) / 350W (210) heads, so 24 probes ran at the wrong
+    # mechanical scale. Validate at start so the operator sees what to
+    # fix before the head ever moves.
+    prof = (_dmx_profiles.get_profile(f.get('dmxProfileId'))
+            if f.get('dmxProfileId') else None)
+    pan_range = (f.get('panRange')
+                 or (prof.get('panRange') if prof else None))
+    tilt_range = (f.get('tiltRange')
+                  or (prof.get('tiltRange') if prof else None))
+    missing_ranges = []
+    if not pan_range:
+        missing_ranges.append('panRange')
+    if not tilt_range:
+        missing_ranges.append('tiltRange')
+    if missing_ranges:
+        return jsonify(err=(
+            f"Fixture profile is missing {', '.join(missing_ranges)}. "
+            "Open the DMX profile editor and pin the mechanical "
+            "pan/tilt ranges before calibrating - the cal refuses to "
+            "guess (the legacy 540/270 default was off by 50% on "
+            "150W/350W heads)."
+        ), errType="profile-incomplete"), 400
+    # #703 - fixture must be placed in the layout. Without (x, y, z)
+    # the camera-visibility tilt-band IK has no fixture position to
+    # ray from, and the cal would silently sweep the legacy grid.
+    pos_map = {p['id']: p for p in _layout.get('children', [])}
+    fp = pos_map.get(fid)
+    if fp is None or any(fp.get(k) is None for k in ('x', 'y', 'z')):
+        return jsonify(err=(
+            "Fixture is not placed in the layout. Drop it onto the "
+            "3D viewport (Layout tab) so it has (x, y, z) before "
+            "calibrating."
+        ), errType="fixture-not-placed"), 400
     if not _artnet.running and not _sacn.running:  # #346
         return jsonify(err="DMX engine is not running — start it from Settings \u2192 DMX Engine"), 400
     body = request.get_json(silent=True) or {}
@@ -17918,6 +18018,8 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
 
 
 
