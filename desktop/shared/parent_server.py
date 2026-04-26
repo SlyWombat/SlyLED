@@ -2093,10 +2093,11 @@ def _cam_discover_bg():
 def api_cameras():
     """List registered camera fixtures with live status.
 
-    Also syncs `fixture.name` from the node's per-sensor `customName` so
-    operator renames done on the RPi's `/config` page propagate to the
-    Setup tab without requiring re-registration. Node is source of truth
-    when online; stored name survives offline.
+    Also syncs the live sensor descriptor from the node onto the fixture
+    record so a hardware swap on a node (camera replaced, FOV/resolution
+    changed, customName edited) propagates to the Setup tab without
+    requiring re-registration. Node is source of truth when online;
+    stored values survive offline.
     """
     cams = [f for f in _fixtures if f.get("fixtureType") == "camera"]
     result = []
@@ -2114,15 +2115,45 @@ def api_cameras():
                 cam["hostname"] = info.get("hostname", "")
                 cam["capabilities"] = info.get("capabilities", {})
                 cam["rssi"] = info.get("rssi", 0)
-                # Sync fixture name from node customName when present.
                 sensors = info.get("cameras", [])
                 idx = c.get("cameraIdx", 0)
                 if idx < len(sensors):
-                    live_name = sensors[idx].get("customName") or ""
+                    s = sensors[idx]
+                    # Update operator-visible name. Prefer customName (set
+                    # via the node's /config page), fall back to the device
+                    # descriptor (e.g. "EMEET SmartCam Nova 4K"). Either
+                    # changing means the operator should see the new value.
+                    live_name = (s.get("customName") or s.get("name") or "").strip()
                     if live_name and live_name != c.get("name"):
                         c["name"] = live_name
                         cam["name"] = live_name
                         dirty = True
+                    # Hardware-descriptor sync — the actual reason a swap
+                    # would change something the operator cares about.
+                    # Camera replaced? FOV / resolution / device-string
+                    # all change. Push live values onto the fixture record
+                    # so the Setup card reflects current hardware.
+                    for field, sensor_key in (
+                            ("fovDeg",      "fovDeg"),
+                            ("resolutionW", "resW"),
+                            ("resolutionH", "resH"),
+                            ("device",      "device"),
+                            ("flip",        "flip"),
+                    ):
+                        live = s.get(sensor_key)
+                        if live is not None and c.get(field) != live:
+                            c[field] = live
+                            cam[field] = live
+                            dirty = True
+                    # Surface the device descriptor separately too so the
+                    # Setup card can show "now: EMEET 4K (was: Logitech C920)"
+                    # — useful when customName masks the actual hardware.
+                    desc = s.get("name")
+                    if desc and cam.get("hwDescriptor") != desc:
+                        cam["hwDescriptor"] = desc
+                        if c.get("hwDescriptor") != desc:
+                            c["hwDescriptor"] = desc
+                            dirty = True
                 # Note: camera node trackingRunning is node-level, not per-sensor.
                 # Trust _tracking_state (per-fixture) instead of overriding from
                 # the node capability, which would mark all sensors on the same
