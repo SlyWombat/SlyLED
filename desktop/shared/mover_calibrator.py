@@ -812,51 +812,74 @@ def _point_in_polygon(point, polygon):
     return inside
 
 
-def _effective_mount_rotation(fx_rot, mounted_inverted):
-    """#702 Bug B — resolve fixture rotation for ray geometry.
-
-    The legacy ``mountedInverted`` flag implies a 180° flip about the
-    fixture's X axis when the explicit ``rotation`` array is all zero
-    (the same convention used in
-    ``_compute_per_fixture_polygon_set``). When ``rotation`` is set
-    explicitly, trust it — operators who hand-set rotation already
-    encoded the mount.
-    """
-    rot = list(fx_rot or [0.0, 0.0, 0.0])
-    while len(rot) < 3:
-        rot.append(0.0)
-    if mounted_inverted and rot[0] == 0 and rot[1] == 0 and rot[2] == 0:
-        return [180.0, 0.0, 0.0]
-    return rot
-
-
 def _ray_floor_hit(fx_pos, fx_rot, pan_norm, tilt_norm,
                     pan_range_deg, tilt_range_deg,
                     mounted_inverted=False):
-    """Compute the (x, y) floor (z=0) intersection of the beam ray for a
-    fixture at ``fx_pos`` with rotation ``fx_rot`` (degrees, ZYX) aimed
-    at normalised pan/tilt. Returns ``None`` when the ray is upward or
-    parallel to the floor.
+    """#704 P0 #2 — operator-relative tilt-band IK matching
+    ``tools/probe_coverage_3d.py:floor_hit``.
 
-    Used by :func:`_camera_visible_tilt_band` (#698) to find which
-    tilt cells project inside camera FOV polygons. Wraps the existing
-    :func:`pan_tilt_to_ray` for the direction and intersects with z=0.
+    The inverse-kinematics in :func:`pan_tilt_to_ray` answers
+    "given mechanical (pan, tilt), what is the beam direction in
+    mount-local space?" — useful for aim-from-target. The
+    camera-visibility tilt-band sweep needs a different question:
+    "at the operator-confirmed home pan, what does varying tilt do
+    to the floor hit?" Empirically (basement rig fid #17, operator
+    drove the head to the predicted (0.6770, 0.2135) probe and
+    confirmed beam at (490, 1850)), the answer is:
 
-    #702 Bug B — accepts ``mounted_inverted`` so legacy fixtures that
-    set the inverted flag without an explicit 180° rotation still get
-    a downward ray. Without this, every floor-hit on an inverted-mount
-    fixture with ``rotation=[0,0,0]`` returned ``None`` and the band
-    fell back to the uniform-grid legacy path.
+      tilt_norm = 0.5 → beam aims along the fixture's home axis
+        (straight down for an inverted ceiling mount; horizontal
+        forward for a floor mount).
+      tilt_norm < 0.5 → for inverted: beam rotates back toward +Y
+        (audience side). For floor: beam tilts up.
+      tilt_norm > 0.5 → mirror.
+
+    The pan dimension is operator-set: ``pan_norm == home_pan`` makes
+    the head face its mounted-forward direction. Sweeping pan_norm
+    around home rotates the beam azimuth in stage space; for the
+    tilt-only band sweep it stays at home, so its dx contribution is
+    0 here. Yaw from ``fx_rot[2]`` (rz) rotates the home azimuth
+    into stage frame so a fixture mounted facing +X (rz=90°) gets
+    its home beam in +X, not +Y. Pitch / roll from fx_rot are
+    treated as small-angle and ignored — matches the empirical
+    reference.
+
+    Earlier attempts (commit 82320c8) composed Rx(180°) into the
+    mount rotation, which flipped both dy AND dz — so probes landed
+    behind the fixture mount instead of in front of it. The
+    operator-confirmed convention flips **only the tilt sense**.
     """
     if fx_pos is None:
         return None
+    if pan_range_deg is None or tilt_range_deg is None:
+        return None
     fz = float(fx_pos[2])
-    rot = _effective_mount_rotation(fx_rot, mounted_inverted)
-    direction = pan_tilt_to_ray(pan_norm, tilt_norm,
-                                 pan_range=pan_range_deg,
-                                 tilt_range=tilt_range_deg,
-                                 mount_rotation_deg=rot)
-    dx, dy, dz = direction
+    # Operator-relative tilt deviation from home (tilt_norm=0.5).
+    delta_rad = math.radians((0.5 - tilt_norm) * tilt_range_deg)
+    if mounted_inverted:
+        # Home aim: -Z (straight down). Rotate by delta about
+        # the local pitch axis: (0, sin δ, -cos δ).
+        dy_local = math.sin(delta_rad)
+        dz = -math.cos(delta_rad)
+    else:
+        # Home aim: +Y horizontal forward. Tilt brings the beam
+        # down toward the floor: (0, cos δ, -sin δ) for δ > 0.
+        delta_floor = math.radians((tilt_norm - 0.5) * tilt_range_deg)
+        dy_local = math.cos(delta_floor)
+        dz = -math.sin(delta_floor)
+    # Apply fixture yaw (rz) so a fixture mounted facing +X has its
+    # home aim in +X. The local axis here is (dx_local=0, dy_local).
+    rz_deg = 0.0
+    if fx_rot is not None and len(fx_rot) > 2 and fx_rot[2] is not None:
+        try:
+            rz_deg = float(fx_rot[2])
+        except (TypeError, ValueError):
+            rz_deg = 0.0
+    rz_rad = math.radians(rz_deg)
+    cos_yaw = math.cos(rz_rad)
+    sin_yaw = math.sin(rz_rad)
+    dx = -dy_local * sin_yaw
+    dy = dy_local * cos_yaw
     if dz >= -1e-6:
         return None  # ray points up or horizontal — no floor hit
     t = -fz / dz

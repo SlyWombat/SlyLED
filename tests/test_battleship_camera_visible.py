@@ -121,25 +121,43 @@ ok(thi - tlo < 0.5,
    f'band is tighter than full half-range '
    f'(got width {thi - tlo:.3f}, should be <0.5)')
 
-# When home pan aims AWAY from the camera (pan = 0 = stage-left),
-# beam doesn't land in the polygon → fallback band returned.
-fallback_band = mc._camera_visible_tilt_band(
-    fx_pos, fx_rot, home_pan_norm=0.0,
-    pan_range_deg=540, tilt_range_deg=270,
-    mounted_inverted=False,
-    camera_polygons=[cam_poly])
-ok(fallback_band == (0.5, 1.0),
-   f'home-pan-away → fallback to upper half on floor mount (got {fallback_band})')
+# #703 — silent (0.0, 0.5)/(0.5, 1.0) fallback removed. Bad inputs now
+# raise CalibrationError so the cal-kickoff endpoint surfaces the cause.
+# (#704 P0 #2 — the operator-relative IK now ignores pan_norm for the
+# tilt-band sweep, since pan is held at home throughout. The previous
+# "pan-away" assertion no longer applies; instead, force a no-hit case
+# by giving a polygon that's off the floor entirely.)
 
-# No polygons → fallback to legacy half-range.
-no_poly = mc._camera_visible_tilt_band(
-    fx_pos, fx_rot, 0.5, 540, 270, False, None)
-ok(no_poly == (0.5, 1.0), f'no polys → legacy half-range (got {no_poly})')
+# Polygon far from any tilt's floor projection → CalibrationError.
+unreachable_poly = [(99000, 99000), (99100, 99000),
+                    (99100, 99100), (99000, 99100)]
+try:
+    mc._camera_visible_tilt_band(
+        fx_pos, fx_rot, home_pan_norm=0.5,
+        pan_range_deg=540, tilt_range_deg=270,
+        mounted_inverted=False,
+        camera_polygons=[unreachable_poly])
+    ok(False, 'unreachable polygon should raise CalibrationError')
+except mc.CalibrationError as e:
+    ok('camera FOV polygon' in str(e),
+       f'unreachable polygon raises with descriptive message (got {e})')
 
-# 360°+ pan with no polygons → mounted_inverted picks the lower half.
-inv = mc._camera_visible_tilt_band(
-    fx_pos, fx_rot, 0.5, 540, 270, True, None)
-ok(inv == (0.0, 0.5), f'inverted mount → lower half (got {inv})')
+# No polygons → CalibrationError naming the missing input.
+try:
+    mc._camera_visible_tilt_band(fx_pos, fx_rot, 0.5, 540, 270, False, None)
+    ok(False, 'no-polygons should raise CalibrationError')
+except mc.CalibrationError as e:
+    ok('no camera floor polygons' in str(e),
+       f'no polys raises with descriptive message (got {e})')
+
+# Missing pan/tilt range → CalibrationError naming the missing field.
+try:
+    mc._camera_visible_tilt_band(fx_pos, fx_rot, 0.5, None, 270, False,
+                                  [cam_poly])
+    ok(False, 'missing panRange should raise CalibrationError')
+except mc.CalibrationError as e:
+    ok('panRange' in str(e),
+       f'missing panRange raises with descriptive message (got {e})')
 
 # ── battleship_discover with camera-visibility band ────────────────────
 
@@ -221,6 +239,47 @@ if len(captured) >= 4:
     ok(abs(max_dpan - min_dpan) < 0.001,
        f'first 4 probes share same pan column '
        f'(got pans {[round(p, 3) for p in first_4_pans]})')
+
+# ── #704 P0 #2 acceptance — operator-relative IK on basement rig #17 ───
+
+section('#704 inverted-mount IK matches probe_coverage_3d.py:floor_hit')
+
+# Basement rig fixture #17: pos=(600, 0, 1760), rotation=[0,0,0],
+# mountedInverted=True, panRange=540, tiltRange=180. Live-rig
+# operator confirmed beam at (490, 1850) for probe (0.6770, 0.2135).
+fx17 = (600, 0, 1760)
+
+# Reference table from the issue body — matches tools/probe_coverage_3d.py
+for tn, ref_y in [(0.05, 11112), (0.20, 2422), (0.50, 0), (0.70, -1279)]:
+    h = mc._ray_floor_hit(fx17, [0, 0, 0], 0.6770, tn, 540, 180,
+                           mounted_inverted=True)
+    ok(h is not None, f'inverted #17 tilt={tn}: produces floor hit')
+    ok(abs(h[0] - 600) < 1,
+       f'inverted #17 tilt={tn}: X stays at fixture X (got {h[0]:.1f})')
+    ok(abs(h[1] - ref_y) < 5,
+       f'inverted #17 tilt={tn}: Y matches reference {ref_y} '
+       f'(got {h[1]:.1f})')
+
+# Acceptance test from the issue: tilt=0.20 → audience-side, X near 600.
+h = mc._ray_floor_hit(fx_pos=(600, 0, 1760), fx_rot=[0, 0, 0],
+                       pan_norm=0.6770, tilt_norm=0.20,
+                       pan_range_deg=540, tilt_range_deg=180,
+                       mounted_inverted=True)
+ok(h is not None, '#704 acceptance: hit not None')
+ok(h[1] > 1000, f'#704 acceptance: Y > 1000 (got {h[1]:.0f})')
+ok(abs(h[0] - 600) < 100, f'#704 acceptance: X near 600 (got {h[0]:.0f})')
+
+# Yaw rotation routes the home aim into the rotated frame. Standard
+# Three.js Euler R_z(+90°) maps mount +Y → stage -X (matches
+# remote_math.euler_xyz_deg_to_matrix). So a fixture mounted with
+# rz=+90 has its home aim along -X.
+h_yaw = mc._ray_floor_hit((600, 1000, 1760), [0, 0, 90], 0.5, 0.20,
+                           540, 180, mounted_inverted=True)
+ok(h_yaw is not None, 'rz=90: hit not None')
+ok(h_yaw[0] < -1000,
+   f'rz=90 inverted: home aim rotates +Y -> -X (got X={h_yaw[0]:.0f})')
+ok(abs(h_yaw[1] - 1000) < 10,
+   f'rz=90 inverted: Y stays at fixture Y (got Y={h_yaw[1]:.0f})')
 
 # ── Summary ─────────────────────────────────────────────────────────────
 

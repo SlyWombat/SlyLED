@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.58"
+VERSION = "1.6.59"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -7320,7 +7320,10 @@ def api_mover_cal_start(fid):
     # for 150W (180) / 350W (210) heads, so 24 probes ran at the wrong
     # mechanical scale. Validate at start so the operator sees what to
     # fix before the head ever moves.
-    prof = (_dmx_profiles.get_profile(f.get('dmxProfileId'))
+    # #704 P0 #1 — the symbol is `_profile_lib`, not `_dmx_profiles`. The
+    # typo in 82320c8 raised AttributeError so every cal start returned
+    # HTTP 500. Use the same call shape every other consumer uses.
+    prof = (_profile_lib.channel_info(f.get('dmxProfileId'))
             if f.get('dmxProfileId') else None)
     pan_range = (f.get('panRange')
                  or (prof.get('panRange') if prof else None))
