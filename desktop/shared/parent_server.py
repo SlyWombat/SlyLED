@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.51"
+VERSION = "1.6.52"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -5503,6 +5503,14 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
         confirm_geom=confirm_geom,
         surface_check=surface_check_cb,
         progress_cb=_wrap_progress_for_trace(_discovery_progress, cal_trace),
+        # #698 — camera-visibility-aware tilt band + first-probe sanity
+        # log. The orchestrator already computes camera floor polygons
+        # for the grid_filter; pass them through so battleship_discover
+        # can tighten the tilt sweep to cells the cameras can actually
+        # observe.
+        camera_polygons=_camera_floor_polygons_for_cal(f),
+        fixture_pos=fx_pos,
+        fixture_rotation=f.get("rotation") or [0, 0, 0],
     )
     if discovered is None:
         job["error"] = ("Battleship discovery found no beam. Check "
@@ -6835,7 +6843,11 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
             reject_reflection=bool(_cal_tuning("rejectReflection")),
             grid_filter=_grid_filter,
             surface_check=_surface_check,
-            progress_cb=_wrap_progress_for_trace(_battleship_progress, _legacy_trace))
+            progress_cb=_wrap_progress_for_trace(_battleship_progress, _legacy_trace),
+            # #698 — camera-visibility tilt band + first-probe log.
+            camera_polygons=_camera_floor_polygons_for_cal(f),
+            fixture_pos=fx_pos,
+            fixture_rotation=f.get("rotation") or [0, 0, 0])
         elapsed = time.monotonic() - phase_start
 
         _budget_battleship = float(_cal_tuning("discoveryBattleshipS",
@@ -17693,6 +17705,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

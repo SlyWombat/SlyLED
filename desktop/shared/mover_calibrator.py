@@ -780,6 +780,94 @@ def _refine_battleship_hit(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     return best
 
 
+def _point_in_polygon(point, polygon):
+    """Even-odd ray-cast inside test for a 2-D polygon. ``polygon`` is
+    a list of (x, y) tuples; returns True when ``point`` lies strictly
+    inside or on the boundary. Pure Python — no shapely dependency."""
+    if not polygon or len(polygon) < 3:
+        return False
+    x, y = float(point[0]), float(point[1])
+    inside = False
+    n = len(polygon)
+    j = n - 1
+    for i in range(n):
+        xi, yi = float(polygon[i][0]), float(polygon[i][1])
+        xj, yj = float(polygon[j][0]), float(polygon[j][1])
+        if ((yi > y) != (yj > y)) and (
+                x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-9) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _ray_floor_hit(fx_pos, fx_rot, pan_norm, tilt_norm,
+                    pan_range_deg, tilt_range_deg):
+    """Compute the (x, y) floor (z=0) intersection of the beam ray for a
+    fixture at ``fx_pos`` with rotation ``fx_rot`` (degrees, ZYX) aimed
+    at normalised pan/tilt. Returns ``None`` when the ray is upward or
+    parallel to the floor.
+
+    Used by :func:`_camera_visible_tilt_band` (#698) to find which
+    tilt cells project inside camera FOV polygons. Wraps the existing
+    :func:`pan_tilt_to_ray` for the direction and intersects with z=0.
+    """
+    if fx_pos is None:
+        return None
+    fz = float(fx_pos[2])
+    direction = pan_tilt_to_ray(pan_norm, tilt_norm,
+                                 pan_range=pan_range_deg,
+                                 tilt_range=tilt_range_deg,
+                                 mount_rotation_deg=fx_rot)
+    dx, dy, dz = direction
+    if dz >= -1e-6:
+        return None  # ray points up or horizontal — no floor hit
+    t = -fz / dz
+    if t <= 0:
+        return None
+    return (float(fx_pos[0]) + dx * t, float(fx_pos[1]) + dy * t)
+
+
+def _camera_visible_tilt_band(fx_pos, fx_rot, home_pan_norm,
+                                pan_range_deg, tilt_range_deg,
+                                mounted_inverted, camera_polygons,
+                                samples=91):
+    """#698 — return ``(tilt_min_norm, tilt_max_norm)`` so that a beam
+    fired from the fixture at ``home_pan_norm`` lands inside the union
+    of ``camera_polygons`` (each a list of ``(x, y)`` floor points) for
+    every tilt in that band.
+
+    Sweeps tilt on ``[0.05, 0.95]`` at ~1° resolution (default 91
+    samples), computes the floor hit per tilt, and keeps the contiguous
+    cluster of in-FOV samples around the operator-confirmed home.
+    Returns ``(0.0, 1.0)`` when the geometry can't be solved (no
+    polygons, ray always above the floor, fixture pos unknown). The
+    caller logs the band so the operator can sanity-check.
+    """
+    if (not camera_polygons or fx_pos is None
+            or pan_range_deg is None or tilt_range_deg is None):
+        # Fall back to the legacy half-band logic.
+        if pan_range_deg is not None and pan_range_deg >= 360.0:
+            return (0.0, 0.5) if mounted_inverted else (0.5, 1.0)
+        return (0.0, 1.0)
+    in_band = []
+    for i in range(samples):
+        t = 0.05 + (0.95 - 0.05) * (i / max(1, samples - 1))
+        hit = _ray_floor_hit(fx_pos, fx_rot, home_pan_norm, t,
+                              pan_range_deg, tilt_range_deg)
+        if hit is None:
+            continue
+        if any(_point_in_polygon(hit, poly) for poly in camera_polygons):
+            in_band.append(t)
+    if not in_band:
+        # Beam at home_pan never lands inside a camera polygon. Likely
+        # cause: home anchor is wrong, or layout has the fixture facing
+        # away from the cameras. Caller logs a warning + falls back.
+        if pan_range_deg is not None and pan_range_deg >= 360.0:
+            return (0.0, 0.5) if mounted_inverted else (0.5, 1.0)
+        return (0.0, 1.0)
+    return (min(in_band), max(in_band))
+
+
 def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                          seed_pan=None, seed_tilt=None, profile=None,
                          coarse_steps=None, coarse_pan_steps=None,
@@ -793,7 +881,14 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                          coarse_tilt_min=3, coarse_tilt_max=6,
                          grid_filter=None, mounted_inverted=False,
                          cancel_check=None, confirm_geom=None,
-                         surface_check=None):
+                         surface_check=None,
+                         # #698 — camera-visibility-aware tilt band.
+                         # When polygons + fixture pose are supplied,
+                         # tilt range tightens to land beam inside the
+                         # union of camera FOVs at home pan.
+                         camera_polygons=None,
+                         fixture_pos=None,
+                         fixture_rotation=None):
     """Coarse-to-fine discovery: sample a sparse `coarse_steps × coarse_
     steps` grid across pan/tilt ∈ [0, 1] first, then confirm any hit
     with a small nudge (rejects reflections).
@@ -893,19 +988,47 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
     # 0 and clamped to pan_frac, so on a 540° fixture with home at
     # 0.677 the upper edge was 0.625 — home sat OUTSIDE the grid and
     # every probe pointed up to 200° away from the operator's
-    # confirmed forward direction. Sliding the window so the seed
-    # lands at (or near) its centre keeps the operator's "this
-    # direction is correct" signal load-bearing on the scan pattern.
+    # confirmed forward direction.
     if seed_pan is not None:
         half_pan = pan_frac / 2.0
         pan_lo = max(0.0, min(1.0 - pan_frac, seed_pan - half_pan))
     else:
         pan_lo = 0.0
-    if seed_tilt is not None:
-        half_tilt = tilt_frac / 2.0
-        tilt_lo = max(0.0, min(1.0 - tilt_frac, seed_tilt - half_tilt))
-    else:
-        tilt_lo = tilt_offset
+    # #698 — when the orchestrator passes camera floor-view polygons +
+    # fixture pose, derive a tilt band that lands beam inside ANY
+    # camera FOV at home pan. Tightens tilt sweep from full mechanical
+    # range to only the cells that can be observed — on basement-rig
+    # fixture #17 this drops 16/24 probes that aimed past the back
+    # wall or into the fixture's own yoke and replaces them with
+    # cells that produce real candidate detections.
+    visible_band = None
+    if (seed_pan is not None
+            and camera_polygons
+            and fixture_pos is not None):
+        visible_band = _camera_visible_tilt_band(
+            fixture_pos, fixture_rotation,
+            seed_pan, pr_deg, tr_deg,
+            mounted_inverted, camera_polygons,
+        )
+        if visible_band[1] > visible_band[0]:
+            tlo, thi = visible_band
+            t_frac = thi - tlo
+            tilt_lo = tlo
+            tilt_span = t_frac / max(1, coarse_tilt_steps)
+            log.info("battleship_discover: camera-visible tilt band "
+                     "[%.3f, %.3f] (%.1f° span on %.0f° tilt range)",
+                     tlo, thi, t_frac * tr_deg, tr_deg)
+        else:
+            log.warning("battleship_discover: home pan does NOT project "
+                         "into any camera FOV — falling back to legacy "
+                         "tilt band")
+            visible_band = None
+    if visible_band is None:
+        if seed_tilt is not None:
+            half_tilt = tilt_frac / 2.0
+            tilt_lo = max(0.0, min(1.0 - tilt_frac, seed_tilt - half_tilt))
+        else:
+            tilt_lo = tilt_offset
     grid = []
     for i in range(coarse_pan_steps):
         p = pan_lo + (i + 0.5) * pan_span
@@ -936,12 +1059,39 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
             log.warning("battleship_discover: camera-FOV filter rejected "
                         "every probe — scanning full grid (filter may be "
                         "wrong about fixture orientation)")
-    # If we have a seed, visit its neighbourhood FIRST so the common
-    # case (seed was right) converges in 1-3 probes instead of N × M.
-    # Within each partition (inside / outside FOV) preserve the seed order.
+    # #698 — tilt-first ordering. Pre-fix used Euclidean distance to
+    # seed which mixed pan and tilt jumps freely; that produced the
+    # cross-tilt-row light-on-during-travel sequence #695 fixed and
+    # left the operator-confirmed home pan column under-explored.
+    # Now we sort by (delta_pan, delta_tilt) lexicographic — every
+    # cell in the seed's pan column is probed before any cell in a
+    # different pan column. The first ≤coarse_tilt_steps probes
+    # exhaust the home pan, sweeping tilt cleanly.
     if seed_pan is not None and seed_tilt is not None:
-        grid.sort(key=lambda xy: (xy[0] - seed_pan) ** 2 +
-                                  (xy[1] - seed_tilt) ** 2)
+        grid.sort(key=lambda xy: (
+            abs(xy[0] - seed_pan),                  # primary: pan distance
+            abs(xy[1] - seed_tilt),                  # secondary: tilt distance
+        ))
+    # #698 — operator-readable first-probe log line: name the cell
+    # the cal will visit FIRST, the predicted floor hit, and the
+    # mech tilt angle. Operator can sanity-check against eyes
+    # before committing to the sweep.
+    if grid and fixture_pos is not None:
+        first_p, first_t = grid[0]
+        first_hit = _ray_floor_hit(fixture_pos, fixture_rotation,
+                                    first_p, first_t,
+                                    pr_deg, tr_deg)
+        mech_tilt = (first_t - 0.5) * tr_deg
+        if first_hit is not None:
+            log.info("battleship_discover: first probe pan=%.4f tilt=%.4f "
+                     "(mech %.1f°) → predicted floor (%.0f, %.0f) mm",
+                     first_p, first_t, mech_tilt,
+                     first_hit[0], first_hit[1])
+        else:
+            log.info("battleship_discover: first probe pan=%.4f tilt=%.4f "
+                     "(mech %.1f°) → ray does not hit floor "
+                     "(beam aimed up or horizontal)",
+                     first_p, first_t, mech_tilt)
 
     log.info("battleship_discover: %d×%d coarse probes (pan_range=%s° "
              "tilt_range=%s° beam=%s°)%s",
