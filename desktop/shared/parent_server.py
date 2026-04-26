@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.52"
+VERSION = "1.6.53"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -7780,6 +7780,219 @@ def api_mover_cal_aim(fid):
                 pass
         return jsonify(ok=True, pan=round(pan, 4), tilt=round(tilt, 4))
     return jsonify(err="Provide targetX/targetY (stage mm) or pixelX/pixelY"), 400
+
+
+# ── #699 — Verify Fixture Pose wizard ───────────────────────────────────
+#
+# Operator-driven X/Y/Z calibration before mover-cal. Layout-data drift
+# (configured fixture pose differs from physical reality) caps cal
+# accuracy regardless of grid algorithm quality. Wizard flow:
+#
+#   1. SPA opens wizard for fixture <fid>; reads current layout pose +
+#      surveyed ArUco marker registry.
+#   2. For each marker the operator picks: orchestrator computes
+#      (pan_norm, tilt_norm) from current pose's IK, drives beam.
+#   3. Operator confirms beam landed ON marker (or nudges in the SPA;
+#      observed pan/tilt at convergence are recorded).
+#   4. Wizard runs least-squares fit on all observations; returns
+#      suggested pose (X, Y, Z) + per-marker residual.
+#   5. Operator reviews + applies → layout updates.
+#
+# State machine kept in-process per fid; no DB. Survives orchestrator
+# restart only via the operator clicking Apply.
+_fixture_pose_sessions = {}   # str(fid) → {observations: [], created: ts}
+
+
+@app.post("/api/calibration/fixture/<int:fid>/verify-pose/start")
+def api_verify_pose_start(fid):
+    """Open a verify-pose session for fixture <fid>. Returns the
+    current layout pose + the list of usable floor markers from the
+    ArUco registry. Resets any stale observations from a prior run."""
+    f = next((x for x in _fixtures if x.get("id") == fid), None)
+    if not f or f.get("fixtureType") != "dmx":
+        return jsonify(err="DMX fixture not found"), 404
+    pos = _fixture_position(fid)
+    rotation = f.get("rotation") or [0.0, 0.0, 0.0]
+    floor_markers = [
+        {"id": int(m["id"]),
+         "name": m.get("name") or f"Marker {m['id']}",
+         "x": float(m["x"]), "y": float(m["y"]), "z": float(m.get("z", 0.0))}
+        for m in _aruco_markers
+        if abs(float(m.get("z", 0) or 0)) < 50
+        and abs(float(m.get("rx", 0) or 0)) < 1
+        and abs(float(m.get("ry", 0) or 0)) < 1
+        and abs(float(m.get("rz", 0) or 0)) < 1
+    ]
+    _fixture_pose_sessions[str(fid)] = {
+        "observations": [],
+        "createdAt": time.time(),
+        "fixtureRotation": list(rotation),
+    }
+    return jsonify(ok=True,
+                   currentPose={"x": pos[0], "y": pos[1], "z": pos[2],
+                                 "rotation": list(rotation)},
+                   floorMarkers=floor_markers)
+
+
+@app.post("/api/calibration/fixture/<int:fid>/verify-pose/aim")
+def api_verify_pose_aim(fid):
+    """Drive beam at a marker using the current layout pose's IK.
+    Body: {markerId}. Computes (pan_norm, tilt_norm) from
+    aim_to_pan_tilt(marker_xyz - fixture_xyz), writes DMX.
+    Returns the (pan_norm, tilt_norm) actually written so the SPA can
+    show them; operator nudges from there."""
+    body = request.get_json(silent=True) or {}
+    try:
+        marker_id = int(body["markerId"])
+    except (KeyError, ValueError):
+        return jsonify(err="markerId required"), 400
+    marker = next((m for m in _aruco_markers if int(m.get("id", -1)) == marker_id),
+                   None)
+    if marker is None:
+        return jsonify(err=f"marker {marker_id} not in registry"), 404
+    f = next((x for x in _fixtures if x.get("id") == fid), None)
+    if not f:
+        return jsonify(err="fixture not found"), 404
+    pos = _fixture_position(fid)
+    rotation = f.get("rotation") or [0.0, 0.0, 0.0]
+    mx, my, mz = float(marker["x"]), float(marker["y"]), float(marker.get("z", 0.0))
+    # Aim vector from fixture toward marker.
+    dx, dy, dz = (mx - pos[0]), (my - pos[1]), (mz - pos[2])
+    norm = (dx * dx + dy * dy + dz * dz) ** 0.5
+    if norm < 1e-3:
+        return jsonify(err="marker is at fixture position"), 400
+    aim_unit = (dx / norm, dy / norm, dz / norm)
+    pan_range = (f.get("panRange")
+                 or (_profile_lib.channel_info(f.get("dmxProfileId", "")) or {}).get("panRange")
+                 or 540)
+    tilt_range = (f.get("tiltRange")
+                  or (_profile_lib.channel_info(f.get("dmxProfileId", "")) or {}).get("tiltRange")
+                  or 270)
+    pan_n, tilt_n = _mcal.aim_to_pan_tilt(aim_unit, mount_rotation_deg=rotation,
+                                            pan_range=pan_range,
+                                            tilt_range=tilt_range)
+    # Drive the beam if the engine is running.
+    if _artnet.running or _sacn.running:
+        engine = _artnet if _artnet.running else _sacn
+        prof_info = _profile_lib.channel_info(f.get("dmxProfileId", "")) or {}
+        profile = {"channel_map": prof_info.get("channel_map", {}),
+                   "channels": prof_info.get("channels", [])}
+        try:
+            uni = f.get("dmxUniverse", 1)
+            addr = f.get("dmxStartAddr", 1)
+            uni_buf = engine.get_universe(uni)
+            uni_buf.set_fixture_pan_tilt(addr, pan_n, tilt_n, profile)
+            uni_buf.set_fixture_dimmer(addr, 255, profile)
+            uni_buf.set_fixture_rgb(addr, 0, 255, 0, profile)
+        except Exception as e:
+            log.warning("verify-pose aim DMX write failed: %s", e)
+    return jsonify(ok=True,
+                   panNorm=round(pan_n, 4), tiltNorm=round(tilt_n, 4),
+                   markerId=marker_id, markerXYZ=[mx, my, mz])
+
+
+@app.post("/api/calibration/fixture/<int:fid>/verify-pose/observe")
+def api_verify_pose_observe(fid):
+    """Record one operator-confirmed observation: marker id + the final
+    (pan_norm, tilt_norm) that landed beam on it. Body:
+    ``{markerId, panNorm, tiltNorm}``. Returns the running observation
+    count + per-marker history."""
+    sess = _fixture_pose_sessions.get(str(fid))
+    if not sess:
+        return jsonify(err="no active verify-pose session — call /start"), 400
+    body = request.get_json(silent=True) or {}
+    try:
+        marker_id = int(body["markerId"])
+        pan_n = float(body["panNorm"])
+        tilt_n = float(body["tiltNorm"])
+    except (KeyError, TypeError, ValueError) as e:
+        return jsonify(err=f"required fields: markerId, panNorm, tiltNorm ({e})"), 400
+    marker = next((m for m in _aruco_markers if int(m.get("id", -1)) == marker_id),
+                   None)
+    if marker is None:
+        return jsonify(err=f"marker {marker_id} not in registry"), 404
+    obs = {
+        "markerId": marker_id,
+        "panNorm": pan_n,
+        "tiltNorm": tilt_n,
+        "markerXYZ": [float(marker["x"]), float(marker["y"]),
+                       float(marker.get("z", 0.0))],
+        "ts": time.time(),
+    }
+    # Replace any prior observation for the same marker (operator
+    # iterating); never accumulate duplicates.
+    sess["observations"] = [
+        o for o in sess["observations"] if o["markerId"] != marker_id
+    ]
+    sess["observations"].append(obs)
+    return jsonify(ok=True,
+                   observationCount=len(sess["observations"]),
+                   observations=sess["observations"])
+
+
+@app.post("/api/calibration/fixture/<int:fid>/verify-pose/solve")
+def api_verify_pose_solve(fid):
+    """Run the least-squares solver against the current observation
+    set. Returns the suggested (X, Y, Z) + per-marker residual + RMS.
+    Operator reviews then POSTs /apply to commit."""
+    sess = _fixture_pose_sessions.get(str(fid))
+    if not sess:
+        return jsonify(err="no active session"), 400
+    f = next((x for x in _fixtures if x.get("id") == fid), None)
+    if not f:
+        return jsonify(err="fixture not found"), 404
+    pan_range = (f.get("panRange")
+                 or (_profile_lib.channel_info(f.get("dmxProfileId", "")) or {}).get("panRange")
+                 or 540)
+    tilt_range = (f.get("tiltRange")
+                  or (_profile_lib.channel_info(f.get("dmxProfileId", "")) or {}).get("tiltRange")
+                  or 270)
+    from fixture_pose_solver import solve_fixture_pose
+    result = solve_fixture_pose(
+        sess["observations"],
+        fixture_rotation_deg=sess.get("fixtureRotation", [0, 0, 0]),
+        pan_range_deg=pan_range, tilt_range_deg=tilt_range,
+    )
+    if "error" in result:
+        return jsonify(ok=False, **result), 400
+    return jsonify(ok=True, **result)
+
+
+@app.post("/api/calibration/fixture/<int:fid>/verify-pose/apply")
+def api_verify_pose_apply(fid):
+    """Save the solver's suggested pose to the layout. Body:
+    ``{x, y, z}``. Updates ``layout.children[fid]`` in place + persists.
+    The wizard session is closed."""
+    sess = _fixture_pose_sessions.pop(str(fid), None)
+    body = request.get_json(silent=True) or {}
+    try:
+        x = float(body["x"]); y = float(body["y"]); z = float(body["z"])
+    except (KeyError, TypeError, ValueError) as e:
+        return jsonify(err=f"required: x, y, z ({e})"), 400
+    f = next((x_ for x_ in _fixtures if x_.get("id") == fid), None)
+    if not f:
+        return jsonify(err="fixture not found"), 404
+    with _lock:
+        children = _layout.setdefault("children", [])
+        entry = next((c for c in children if c.get("id") == fid), None)
+        if entry is None:
+            entry = {"id": fid}
+            children.append(entry)
+        entry["x"] = x
+        entry["y"] = y
+        entry["z"] = z
+        _save("layout", _layout)
+    log.info("verify-pose: fid=%d new pose (%.1f, %.1f, %.1f) "
+             "from %d observations", fid, x, y, z,
+             len(sess["observations"]) if sess else 0)
+    return jsonify(ok=True, pose={"x": x, "y": y, "z": z})
+
+
+@app.post("/api/calibration/fixture/<int:fid>/verify-pose/cancel")
+def api_verify_pose_cancel(fid):
+    """Discard observations + close the session. Layout pose untouched."""
+    _fixture_pose_sessions.pop(str(fid), None)
+    return jsonify(ok=True)
 
 
 @app.post("/api/calibration/mover/<int:fid>/manual")
@@ -17705,6 +17918,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
