@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.47"
+VERSION = "1.6.48"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -17088,6 +17088,17 @@ def api_reset():
         _save("mover_calibrations", _mover_cal)
         _mover_cal_jobs.clear()
         _calib_state.clear()
+        # #693-followup — clear the remotes registry too. Persisted
+        # remotes from earlier sessions/tests carry old `registeredAt`
+        # timestamps; with #690's never-active staleness path, an
+        # auto-registered remote that re-uses an old deviceId would
+        # immediately be flagged hard-stale and the engine would
+        # auto-release the operator's claim before any DMX writes
+        # land. Reset must wipe this state to keep tests + boot-fresh
+        # operator sessions consistent.
+        _remotes._remotes.clear()
+        _remotes._next_id = 1
+        _remotes.save()
         _tracking_state.clear()
         # Delete custom profiles (keep built-ins)
         for p in list(_profile_lib._profiles.values()):
@@ -17503,6 +17514,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
