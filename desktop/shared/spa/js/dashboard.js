@@ -113,6 +113,13 @@ function _refreshRemotesDash(){
         +'<span style="color:'+c.dot+';font-size:1.1em">\u25cf</span>'
         +'<span style="font-weight:bold;color:#e2e8f0;font-size:.82em;flex:1">'+escapeHtml(displayName)+'</span>'
         +'<span style="color:'+c.dot+';font-size:.7em;font-weight:bold;letter-spacing:.05em">'+c.lbl+'</span>'
+        // #690 \u2014 \u00d7 button removes a remote from the registry (gyro pucks
+        // and phones alike). Useful for orphan entries that registered
+        // via UDP but never sent live data.
+        +'<button onclick="_removeRemoteDash('+r.id+',\''+escapeHtml(displayName).replace(/\x27/g,"\\x27")+'\')" '
+        +'title="Remove this remote from the registry" '
+        +'style="margin-left:.3em;background:transparent;border:none;color:#64748b;cursor:pointer;font-size:.95em;padding:0 .25em;line-height:1" '
+        +'onmouseover="this.style.color=\'#f87171\'" onmouseout="this.style.color=\'#64748b\'">\u00d7</button>'
         +'</div>'
         +'<div style="color:#64748b;font-size:.72em;font-family:monospace">'
         +kindLbl+' \u00b7 '+calLbl+' \u00b7 last '+age
@@ -124,6 +131,19 @@ function _refreshRemotesDash(){
         +'</div>';
     });
     list.innerHTML=h;
+  });
+}
+
+// #690 — Dashboard ×-button hits the existing DELETE /api/remotes/<id>
+// endpoint and refreshes the panel. confirm() guards against accidental
+// removal of an active gyro puck the operator just placed.
+function _removeRemoteDash(rid, name){
+  if(!confirm('Remove "'+name+'" from the remotes registry?\n\n'
+    +'If the device sends another orient packet later it will auto-register again.'))return;
+  ra('DELETE','/api/remotes/'+rid,null,function(){
+    var hs=document.getElementById('hs');
+    if(hs)hs.textContent='Removed remote '+name;
+    _renderRemotesDash();
   });
 }
 

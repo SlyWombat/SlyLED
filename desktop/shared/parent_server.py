@@ -12164,8 +12164,10 @@ def api_remotes_update(remote_id):
 
 @app.delete("/api/remotes/<int:remote_id>")
 def api_remotes_delete(remote_id):
+    # #690 — idempotent: 200 either way, with a `removed` flag the SPA
+    # can use to distinguish "deleted just now" from "already gone".
     r = _remotes.remove(remote_id)
-    return jsonify(ok=r is not None)
+    return jsonify(ok=True, removed=r is not None)
 
 
 @app.get("/api/remotes/live")

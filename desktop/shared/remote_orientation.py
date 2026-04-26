@@ -53,6 +53,11 @@ REMOTE_UP_LOCAL      = (0.0, 0.0, 1.0)
 STALE_AGE_SECS   = 7 * 24 * 3600
 STALE_HARD_SECS  = 60      # comms silence beyond this → hard-stale (auto-release)
 STALE_SOFT_SECS  = 5       # comms silence beyond this → soft-stale (freeze dmx)
+# #690 — orphan-pruning grace periods for remotes that registered (e.g. via
+# UDP) but never sent orientation data. Picked to err generous: an operator
+# might register a puck before turning it on. Hard prune at 1 h.
+STALE_NEVER_SOFT_SECS = 5 * 60     # 5 minutes
+STALE_NEVER_HARD_SECS = 60 * 60    # 1 hour
 
 # Backwards-compatibility alias — some call sites referenced the original
 # single threshold. Kept as the hard value.
@@ -76,7 +81,7 @@ class Remote:
         "R_world_to_stage", "calibrated", "calibrated_at",
         "calibrated_against", "stale_reason", "soft_stale",
         "last_quat_world", "aim_stage", "up_stage", "last_data",
-        "connection_state",
+        "connection_state", "registered_at",
     )
 
     def __init__(self, id, name="", kind=KIND_PUCK, device_id=None,
@@ -95,13 +100,18 @@ class Remote:
         self.calibrated = False
         self.calibrated_at = 0.0
         self.calibrated_against = None  # {"objectId": int, "kind": str}
-        self.stale_reason = None        # None | "age" | "connection-lost" | "session-ended"
+        self.stale_reason = None        # None | "age" | "connection-lost"
+                                        # | "session-ended" | "never-active"
         self.soft_stale = False         # transient: comms silent 5-60s
         self.last_quat_world = None     # last sensor orientation in remote world frame
         self.aim_stage = None           # unit vector in stage coords
         self.up_stage = None            # unit "up" in stage coords
         self.last_data = 0.0            # epoch seconds
         self.connection_state = "idle"
+        # #690 — first time this remote appeared in the registry. Used by
+        # the never-active stale path so an orphan that was registered via
+        # UDP once but never re-pinged eventually expires.
+        self.registered_at = time.time()
 
     # ── Persistence ──────────────────────────────────────────────────────
 
@@ -118,6 +128,7 @@ class Remote:
             "calibrated": self.calibrated,
             "calibratedAt": self.calibrated_at,
             "calibratedAgainst": self.calibrated_against,
+            "registeredAt": self.registered_at,
         }
 
     @classmethod
@@ -136,6 +147,9 @@ class Remote:
         r.calibrated = bool(d.get("calibrated", False))
         r.calibrated_at = float(d.get("calibratedAt", 0.0))
         r.calibrated_against = d.get("calibratedAgainst")
+        # #690 — fall back to "now" so old persisted records (no field)
+        # still get the never-active grace period before pruning.
+        r.registered_at = float(d.get("registeredAt") or time.time())
         # Persisted calibration is treated as stale on restart — the
         # operator must explicitly re-confirm alignment this session.
         # Until then: aim_stage is suppressed, viz shows no ray, and
@@ -258,14 +272,34 @@ class Remote:
         - stale_reason (hard): latched — age > N days, session-ended, or
                        comms > 60s. Requires re-calibrate/clear-stale.
         """
-        if not self.calibrated or self.R_world_to_stage is None:
-            return
         if now is None:
             now = time.time()
 
         # Hard latch already set — skip transient updates.
         if self.stale_reason:
             self.soft_stale = False
+            return
+
+        # #690 — never-active orphan: registered (often via auto-register
+        # on a single UDP packet) but no orientation data has ever arrived.
+        # Without this branch, an orphan with `calibrated=False` and
+        # `last_data=0` sits in the registry forever — the original
+        # check_staleness early-returned at the !calibrated guard.
+        if not self.calibrated and self.last_data <= 0.0:
+            silence = now - self.registered_at
+            if silence > STALE_NEVER_HARD_SECS:
+                self.stale_reason = "never-active"
+                self.connection_state = "stale"
+                self.soft_stale = False
+            elif silence > STALE_NEVER_SOFT_SECS:
+                self.soft_stale = True
+                self.connection_state = "idle"
+            else:
+                self.soft_stale = False
+                self.connection_state = "idle"
+            return
+
+        if not self.calibrated or self.R_world_to_stage is None:
             return
 
         # Age-out (hard).
@@ -448,10 +482,37 @@ class RemoteRegistry:
 
     # Aggregate views ──────────────────────────────────────────────────
 
-    def live_list(self):
+    def live_list(self, prune_hard_stale=True):
+        """Return live snapshots of every remote.
+
+        When ``prune_hard_stale`` is True (default), any remote whose
+        staleness check has just promoted to hard-stale (``stale_reason``
+        set) is removed from the registry first. Operators see the orphan
+        disappear once the pruning grace period elapses without manual
+        intervention. #690.
+        """
         now = time.time()
+        pruned = []
         with self._lock:
-            return [r.live_dict(now) for r in self._remotes.values()]
+            # First pass: tick staleness so any orphan crossings flip now.
+            for r in self._remotes.values():
+                r.check_staleness(now)
+            if prune_hard_stale:
+                for rid, r in list(self._remotes.items()):
+                    # "never-active" is the orphan path; the others
+                    # (age / connection-lost / session-ended) historically
+                    # leave the entry in place so the operator can see
+                    # what failed and recalibrate. Auto-prune only the
+                    # never-active orphan to match the issue scope.
+                    if r.stale_reason == "never-active":
+                        del self._remotes[rid]
+                        pruned.append(rid)
+            snap = [r.live_dict(now) for r in self._remotes.values()]
+        if pruned:
+            log.info("RemoteRegistry: pruned %d never-active orphan(s): %s",
+                     len(pruned), pruned)
+            self.save()
+        return snap
 
     def tick_staleness(self):
         now = time.time()
