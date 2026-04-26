@@ -1,0 +1,43 @@
+== cal-status poller fid=17 @ 5.0 Hz -> docs\live-test-sessions\2026-04-26b\cal-status-153630.ndjson
+[2026-04-26T19:36:37.654911Z] none         progress=None  
+[2026-04-26T19:36:51.041983Z] starting     progress=0  
+[2026-04-26T19:37:02.174545Z] battleship   progress=10  Grid probe 1/24 pan=0.71 tilt=0.08 probe#2 pan=0.7083 tilt=0.0833 dim=255
+[2026-04-26T19:37:04.405141Z] battleship   progress=10  Grid probe 1/24 pan=0.71 tilt=0.08 probe#3 pan=0.7083 tilt=0.0833 dim=0
+[2026-04-26T19:37:06.634762Z] confirming   progress=25  Beam found at probe 1/24 — confirming with nudge probe#5 pan=0.7176 tilt=0.0833 dim=255
+[2026-04-26T19:37:08.885003Z] confirming   progress=25  Beam found at probe 1/24 — confirming with nudge probe#6 pan=0.6991 tilt=0.0833 dim=255
+[2026-04-26T19:37:11.123158Z] confirming   progress=25  Beam found at probe 1/24 — confirming with nudge probe#7 pan=0.7083 tilt=0.0926 dim=255
+[2026-04-26T19:37:13.362062Z] confirming   progress=25  Beam found at probe 1/24 — confirming with nudge probe#8 pan=0.7083 tilt=0.0741 dim=255
+[2026-04-26T19:37:17.840117Z] confirming   progress=11  Grid probe 2/24 pan=0.71 tilt=0.25 probe#12 pan=0.7083 tilt=0.2500 dim=0
+[2026-04-26T19:37:20.062385Z] confirming   progress=11  Grid probe 2/24 pan=0.71 tilt=0.25 probe#14 pan=0.7083 tilt=0.2500 dim=255
+[2026-04-26T19:37:26.761317Z] confirming   progress=11  Grid probe 3/24 pan=0.71 tilt=0.42 probe#17 pan=0.7083 tilt=0.4167 dim=0
+[2026-04-26T19:37:31.267534Z] confirming   progress=11  Grid probe 3/24 pan=0.71 tilt=0.42 probe#19 pan=0.7083 tilt=0.4167 dim=255
+[2026-04-26T19:37:33.497193Z] confirming   progress=12  Grid probe 4/24 pan=0.62 tilt=0.08 probe#20 pan=0.6250 tilt=0.0833 dim=0
+[2026-04-26T19:37:35.738823Z] confirming   progress=12  Grid probe 4/24 pan=0.62 tilt=0.08 probe#22 pan=0.6250 tilt=0.0833 dim=0
+[2026-04-26T19:37:37.978958Z] confirming   progress=12  Grid probe 4/24 pan=0.62 tilt=0.08 probe#24 pan=0.6250 tilt=0.0833 dim=255
+[2026-04-26T19:37:42.442357Z] confirming   progress=13  Grid probe 5/24 pan=0.62 tilt=0.25 probe#27 pan=0.6250 tilt=0.2500 dim=0
+[2026-04-26T19:37:44.687435Z] confirming   progress=13  Grid probe 5/24 pan=0.62 tilt=0.25 probe#29 pan=0.6250 tilt=0.2500 dim=255
+[2026-04-26T19:37:46.908799Z] confirming   progress=13  Grid probe 6/24 pan=0.62 tilt=0.42 probe#31 pan=0.6250 tilt=0.4167 dim=255
+[2026-04-26T19:37:49.167114Z] confirming   progress=13  Grid probe 6/24 pan=0.62 tilt=0.42 probe#32 pan=0.6250 tilt=0.4167 dim=0
+[2026-04-26T19:37:51.399636Z] confirming   progress=13  Grid probe 6/24 pan=0.62 tilt=0.42 probe#34 pan=0.6250 tilt=0.4167 dim=255
+[2026-04-26T19:37:53.639556Z] confirming   progress=14  Grid probe 7/24 pan=0.79 tilt=0.08 probe#37 pan=0.7917 tilt=0.0833 dim=0
+[2026-04-26T19:37:58.092062Z] confirming   progress=15  Grid probe 8/24 pan=0.79 tilt=0.25 probe#40 pan=0.7917 tilt=0.2500 dim=0
+[2026-04-26T19:38:00.323415Z] confirming   progress=15  Grid probe 8/24 pan=0.79 tilt=0.25 probe#42 pan=0.7917 tilt=0.2500 dim=0
+[2026-04-26T19:38:02.556799Z] confirming   progress=15  Grid probe 8/24 pan=0.79 tilt=0.25 probe#44 pan=0.7917 tilt=0.2500 dim=255
+[2026-04-26T19:38:04.801458Z] confirming   progress=15  Grid probe 9/24 pan=0.79 tilt=0.42 probe#47 pan=0.7917 tilt=0.4167 dim=0
+[2026-04-26T19:38:09.267208Z] confirming   progress=15  Grid probe 9/24 pan=0.79 tilt=0.42 probe#49 pan=0.7917 tilt=0.4167 dim=255
+[2026-04-26T19:38:11.495955Z] confirming   progress=16  Grid probe 10/24 pan=0.54 tilt=0.08 probe#52 pan=0.5417 tilt=0.0833 dim=0
+[2026-04-26T19:38:13.701085Z] confirming   progress=25  Beam found at probe 10/24 — confirming with nudge probe#54 pan=0.5509 tilt=0.0833 dim=255
+[2026-04-26T19:38:15.938479Z] confirming   progress=25  Beam found at probe 10/24 — confirming with nudge probe#55 pan=0.5324 tilt=0.0833 dim=255
+[2026-04-26T19:38:20.404154Z] confirming   progress=25  Beam found at probe 10/24 — confirming with nudge probe#56 pan=0.5417 tilt=0.0926 dim=255
+[2026-04-26T19:38:22.652089Z] confirming   progress=25  Beam found at probe 10/24 — confirming with nudge probe#57 pan=0.5417 tilt=0.0741 dim=255
+[2026-04-26T19:38:24.888494Z] confirming   progress=16  Grid probe 11/24 pan=0.54 tilt=0.25 probe#61 pan=0.5417 tilt=0.2500 dim=0
+[2026-04-26T19:38:27.131553Z] confirming   progress=16  Grid probe 11/24 pan=0.54 tilt=0.25 probe#63 pan=0.5417 tilt=0.2500 dim=255
+[2026-04-26T19:38:31.606753Z] confirming   progress=17  Grid probe 12/24 pan=0.54 tilt=0.42 probe#66 pan=0.5417 tilt=0.4167 dim=0
+[2026-04-26T19:38:33.830764Z] confirming   progress=17  Grid probe 12/24 pan=0.54 tilt=0.42 probe#68 pan=0.5417 tilt=0.4167 dim=255
+[2026-04-26T19:38:36.053656Z] confirming   progress=18  Grid probe 13/24 pan=0.88 tilt=0.08 probe#70 pan=0.8750 tilt=0.0833 dim=255
+[2026-04-26T19:38:38.298962Z] confirming   progress=18  Grid probe 13/24 pan=0.88 tilt=0.08 probe#71 pan=0.8750 tilt=0.0833 dim=0
+[2026-04-26T19:38:40.566046Z] confirming   progress=18  Grid probe 13/24 pan=0.88 tilt=0.08 probe#73 pan=0.8750 tilt=0.0833 dim=255
+[2026-04-26T19:38:42.792765Z] confirming   progress=18  Grid probe 14/24 pan=0.88 tilt=0.25 probe#76 pan=0.8750 tilt=0.2500 dim=0
+[2026-04-26T19:38:47.250699Z] confirming   progress=25  Beam found at probe 14/24 — confirming with nudge probe#78 pan=0.8843 tilt=0.2500 dim=255
+[2026-04-26T19:38:49.478822Z] confirming   progress=25  Beam found at probe 14/24 — confirming with nudge probe#79 pan=0.8657 tilt=0.2500 dim=255
+[2026-04-26T19:38:53.952567Z] cancelled    progress=25  Beam found at probe 14/24 — confirming with nudge probe#79 pan=0.8750 tilt=0.2593 dim=255
