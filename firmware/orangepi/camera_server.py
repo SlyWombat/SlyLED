@@ -22,7 +22,7 @@ from flask import Flask, jsonify, request
 import flask.cli
 flask.cli.show_server_banner = lambda *a, **kw: None   # suppress dev-server warning (#289)
 
-VERSION = "1.6.2"
+VERSION = "1.6.3"
 PORT = 5000
 UDP_PORT = 4210
 CONFIG_DIR = Path("/opt/slyled")
@@ -2383,24 +2383,69 @@ def _build_pong():
     return _udp_header(CMD_PONG) + payload
 
 def _read_wifi_rssi():
-    """Read WiFi RSSI from /proc/net/wireless. Returns negative dBm or 0.
+    """Read WiFi RSSI in dBm. Returns a negative integer or 0 when no
+    signal is readable.
 
-    `/proc/net/wireless` lines have the format::
+    Two read paths in priority order — newer kernels drop one or both:
 
-        wlan0: 0000   60.  -50.  -256        0  ...
+    1. ``iw dev <iface> link``. Modern nl80211 query, present on
+       Allwinner SoCs (Orange Pi 4A kernel 5.15.147-sun55iw3 ships
+       this and NOT /proc/net/wireless). Outputs a line of the form
+       ``  signal: -60 dBm``. Cheap to parse; one subprocess call.
 
-    The interface name is the first token followed by ``:``. Different
-    boards/distros use different predictable-interface-name prefixes —
-    Raspberry Pi keeps the legacy ``wlan*``, Orange Pi 4A (Armbian/
-    sun55iw3) ships with ``wlx<mac>``, Debian/Ubuntu with systemd-udev
-    rename rules emit ``wlp*``/``wls*``/``wlo*``. They all start with
-    ``wl``, so match the prefix instead of the literal ``wlan``.
+    2. ``/proc/net/wireless`` legacy wireless-extensions interface,
+       still present on Raspberry Pi OS and most Debian/Ubuntu builds.
+       Lines look like::
+
+           wlan0: 0000   60.  -50.  -256        0  ...
+
+       The interface name is the first token followed by ``:`` —
+       boards/distros differ (``wlan*``, ``wlx<mac>``, ``wlp*``,
+       ``wls*``, ``wlo*``) so we match the ``wl`` prefix.
+
+    #700-followup: pre-fix only path 2 was tried, and on Allwinner
+    boards it fails because /proc/net/wireless doesn't exist —
+    /status returned rssi=0 even when the WiFi was perfectly fine.
     """
+    # Path 1 — `iw dev <iface> link` (preferred on modern kernels).
+    try:
+        import subprocess as _sp
+        # Find the wireless interface name. /sys/class/net is universal.
+        import os as _os
+        iface = None
+        try:
+            for name in _os.listdir("/sys/class/net"):
+                if not name.startswith("wl"):
+                    continue
+                wphy = _os.path.join("/sys/class/net", name, "phy80211")
+                if _os.path.isdir(wphy) or _os.path.islink(wphy):
+                    iface = name
+                    break
+        except Exception:
+            iface = None
+        if iface is not None:
+            try:
+                out = _sp.check_output(
+                    ["iw", "dev", iface, "link"],
+                    stderr=_sp.DEVNULL, timeout=2,
+                ).decode("utf-8", errors="replace")
+                for line in out.splitlines():
+                    line = line.strip()
+                    if line.startswith("signal:"):
+                        # "signal: -60 dBm" → -60
+                        tok = line.split(":", 1)[1].strip().split()
+                        if tok:
+                            return -abs(int(float(tok[0])))
+            except (FileNotFoundError, _sp.SubprocessError, _sp.TimeoutExpired):
+                pass
+    except Exception:
+        pass
+    # Path 2 — /proc/net/wireless (legacy distros; missing on
+    # Allwinner sun55iw3 kernels and some Mali / RKNN images).
     try:
         with open("/proc/net/wireless", "r") as f:
             for line in f:
                 stripped = line.lstrip()
-                # The header rows start with "Inter-" / "face" — skip them.
                 if not stripped or ":" not in stripped:
                     continue
                 ifname = stripped.split(":", 1)[0]

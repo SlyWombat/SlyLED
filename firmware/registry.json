@@ -113,9 +113,9 @@
       "name": "Camera Node (Linux SBC)",
       "description": "USB V4L2 camera node \u00e2\u20ac\u201d Flask + UDP discovery, runs on any Debian/Ubuntu SBC (Orange Pi, Raspberry Pi)",
       "board": "camera",
-      "version": "1.6.2",
+      "version": "1.6.3",
       "file": "orangepi/camera_server.py",
-      "releaseAsset": "camera-firmware-v1.6.2.zip",
+      "releaseAsset": "camera-firmware-v1.6.3.zip",
       "sha256": "b8b372684040864fe4278c8c86102eb8867820d07444616f8ddc26fb738599b6",
       "flashMethod": "ssh"
     }
