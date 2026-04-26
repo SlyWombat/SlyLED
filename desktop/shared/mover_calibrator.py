@@ -888,13 +888,29 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         except (TypeError, ValueError):
             confirm_nudge_delta = 0.02
 
-    # Build the coarse grid. Prefer a uniform spread so the physical
-    # reach pattern of the fixture doesn't bias us toward the seed.
+    # #694 — centre the scan window on the seed (operator's Set Home
+    # anchor when present). Pre-#694 the window started at normalised
+    # 0 and clamped to pan_frac, so on a 540° fixture with home at
+    # 0.677 the upper edge was 0.625 — home sat OUTSIDE the grid and
+    # every probe pointed up to 200° away from the operator's
+    # confirmed forward direction. Sliding the window so the seed
+    # lands at (or near) its centre keeps the operator's "this
+    # direction is correct" signal load-bearing on the scan pattern.
+    if seed_pan is not None:
+        half_pan = pan_frac / 2.0
+        pan_lo = max(0.0, min(1.0 - pan_frac, seed_pan - half_pan))
+    else:
+        pan_lo = 0.0
+    if seed_tilt is not None:
+        half_tilt = tilt_frac / 2.0
+        tilt_lo = max(0.0, min(1.0 - tilt_frac, seed_tilt - half_tilt))
+    else:
+        tilt_lo = tilt_offset
     grid = []
     for i in range(coarse_pan_steps):
-        p = (i + 0.5) * pan_span
+        p = pan_lo + (i + 0.5) * pan_span
         for j in range(coarse_tilt_steps):
-            t = tilt_offset + (j + 0.5) * tilt_span
+            t = tilt_lo + (j + 0.5) * tilt_span
             grid.append((p, t))
     # #681-B — pre-filter candidates to those that project onto a camera-
     # visible floor point. `grid_filter` returns True if the aim probably
@@ -1777,9 +1793,20 @@ def _beam_detect_flash(bridge_ip, camera_ip, cam_idx, mover_addr, pan, tilt,
                         color, dmx, threshold=30):
     """Flash detection: turn light ON → capture → turn OFF → capture → diff.
     Returns (px, py) or None."""
-    # Light ON (should already be on from the caller, but ensure)
+    # #695 — slew with the light OFF, then turn it on at the destination.
+    # The previous probe's "Restore light ON for next step" (line below)
+    # leaves dim=255 in the universe. If we write the new (pan, tilt)
+    # while dim is still 255, the head physically sweeps across the room
+    # with the green beam lit — blooms the camera sensor for 100+ ms,
+    # crosses operator faces, and heats the head needlessly. Doing the
+    # blackout-and-move in a single frame matches the same-row code path
+    # that already worked correctly (see DMX trace 2026-04-26).
+    _set_mover_dmx(dmx, mover_addr, pan, tilt, 0, 0, 0, dimmer=0)
+    _hold_dmx(bridge_ip, dmx, 0.30)   # 300 ms — enough for typical slew
+
+    # Now turn the light ON at the new aim.
     _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
-    _hold_dmx(bridge_ip, dmx, 0.3)  # brief hold to ensure DMX is sent
+    _hold_dmx(bridge_ip, dmx, 0.10)  # brief hold to ensure DMX is sent
 
     # Call flash endpoint — it captures ON frame, waits, captures OFF frame
     # We turn light OFF after a delay on our side too

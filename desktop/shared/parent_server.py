@@ -5788,6 +5788,37 @@ def _mover_cal_thread_v2_body(fid, cam, bridge_ip, mover_color,
                         "errorPx": None}
                        for i, t in enumerate(targets)]
 
+    # #686 — cal-trace recorder, parity with markers / legacy paths.
+    # v2 doesn't have a battleship grid; the natural unit is per-target
+    # (one record per converge call).
+    fx_pos = _fixture_position(fid)
+    pan_range = (f.get("panRange") or
+                 (prof_info.get("panRange") if prof_info else None) or 540)
+    tilt_range = (f.get("tiltRange") or
+                  (prof_info.get("tiltRange") if prof_info else None) or 270)
+    cal_trace = None
+    try:
+        cal_trace = CalTraceRecorder(
+            fid=fid, mode="v2",
+            fixture_pos=fx_pos,
+            mover_rotation=f.get("rotation") or [0, 0, 0],
+            pan_range_deg=pan_range,
+            tilt_range_deg=tilt_range,
+            mounted_inverted=bool(f.get("mountedInverted")),
+            cameras=[],
+            surfaces=None,
+            scene_meta={"source": "v2-convergence",
+                         "targetCount": len(targets)})
+        cal_trace.record_seed(0.5, 0.5,
+                               targets[0] if targets else None,
+                               source="v2-stage-centre")
+        job["calTrace"] = cal_trace.path
+        job["_calTraceRecorder"] = cal_trace
+    except Exception as e:
+        log.warning("MOVER-CAL v2 %d: cal-trace setup failed (%s) — "
+                    "continuing without trace", fid, e)
+        cal_trace = None
+
     # Warm-start for the first aim — use v2 model when present.
     model = _get_mover_model(fid, f)
 
@@ -5816,6 +5847,27 @@ def _mover_cal_thread_v2_body(fid, cam, bridge_ip, mover_color,
 
         tstate["iterations"] = result.get("iterations", 0)
         tstate["errorPx"] = result.get("errorPx")
+        # #686 — record the per-target outcome.
+        if cal_trace is not None:
+            try:
+                outcome = "confirmed" if result.get("converged") else "rejected"
+                reason = (f"converged in {result.get('iterations', 0)} iters"
+                          if result.get("converged")
+                          else f"did not converge: {result.get('reason') or 'unknown'}")
+                cal_trace.record_decision(
+                    pan_norm=result.get("pan", 0.5),
+                    tilt_norm=result.get("tilt", 0.5),
+                    decision=outcome,
+                    reason=reason,
+                    phase="v2-convergence",
+                    extras={"targetIdx": i,
+                            "targetXYZ": [float(target[0]), float(target[1]),
+                                           float(target[2])],
+                            "iterations": result.get("iterations", 0),
+                            "errorPx": result.get("errorPx"),
+                            "beamPixel": result.get("beamPixel")})
+            except Exception:
+                pass
         if result.get("converged"):
             tstate["status"] = "converged"
             sample = {
