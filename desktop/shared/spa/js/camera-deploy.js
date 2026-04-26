@@ -164,33 +164,44 @@ function _camScanBoards(){
     },500);
   });
 }
+// #690-followup \u2014 track unsaved edits so closeModal can warn before
+// discarding, and so _csshTest can pass live form values to the server
+// (bypassing the save-before-test trap).
+var _csshDirty = false;
+function _csshMarkDirty(){
+  _csshDirty = true;
+  var hint = document.getElementById('cssh-dirty-hint');
+  if(hint)hint.style.display = '';
+}
 function _camSshModal(ip,fid){
   var _csshIp=ip;
+  _csshDirty = false;
   document.getElementById('modal-title').textContent='SSH Configuration \u2014 '+ip;
   var h='<div style="min-width:420px">';
   h+='<div style="margin-bottom:.6em"><label style="font-size:.82em;color:#94a3b8">Authentication Type</label><br>';
-  h+='<label style="font-size:.85em;margin-right:1em"><input type="radio" name="cssh-auth" value="password" checked onchange="_csshToggle()"> Password</label>';
-  h+='<label style="font-size:.85em"><input type="radio" name="cssh-auth" value="key" onchange="_csshToggle()"> SSH Key</label>';
+  h+='<label style="font-size:.85em;margin-right:1em"><input type="radio" name="cssh-auth" value="password" checked onchange="_csshToggle();_csshMarkDirty()"> Password</label>';
+  h+='<label style="font-size:.85em"><input type="radio" name="cssh-auth" value="key" onchange="_csshToggle();_csshMarkDirty()"> SSH Key</label>';
   h+='</div>';
   h+='<div id="cssh-pw-section">';
   h+='<label style="font-size:.82em">Username</label>';
-  h+='<input id="cssh-user" value="root" style="width:100%;margin-bottom:.3em">';
+  h+='<input id="cssh-user" value="root" oninput="_csshMarkDirty()" style="width:100%;margin-bottom:.3em">';
   h+='<label style="font-size:.82em">Password</label>';
-  h+='<div style="display:flex;gap:.3em;margin-bottom:.3em"><input id="cssh-pass" type="password" placeholder="Enter password" style="flex:1">';
+  h+='<div style="display:flex;gap:.3em;margin-bottom:.3em"><input id="cssh-pass" type="password" oninput="_csshMarkDirty()" placeholder="Enter password" style="flex:1">';
   h+='<button type="button" class="btn" style="padding:.2em .4em;background:#333;font-size:.75em" onmousedown="document.getElementById(\'cssh-pass\').type=\'text\'" onmouseup="document.getElementById(\'cssh-pass\').type=\'password\'" onmouseleave="document.getElementById(\'cssh-pass\').type=\'password\'">&#128065;</button></div>';
   h+='</div>';
   h+='<div id="cssh-key-section" style="display:none">';
   h+='<label style="font-size:.82em">Username</label>';
-  h+='<input id="cssh-key-user" value="root" style="width:100%;margin-bottom:.3em">';
+  h+='<input id="cssh-key-user" value="root" oninput="_csshMarkDirty()" style="width:100%;margin-bottom:.3em">';
   h+='<label style="font-size:.82em">Key File Path</label>';
-  h+='<input id="cssh-keypath" placeholder="~/.ssh/id_ed25519" style="width:100%;margin-bottom:.3em">';
+  h+='<input id="cssh-keypath" oninput="_csshMarkDirty()" placeholder="~/.ssh/id_ed25519" style="width:100%;margin-bottom:.3em">';
   h+='<label style="font-size:.82em">Or paste key content</label>';
-  h+='<textarea id="cssh-keycontent" rows="4" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" style="width:100%;font-size:.75em;font-family:monospace;margin-bottom:.3em"></textarea>';
+  h+='<textarea id="cssh-keycontent" rows="4" oninput="_csshMarkDirty()" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" style="width:100%;font-size:.75em;font-family:monospace;margin-bottom:.3em"></textarea>';
   h+='</div>';
   h+='<div style="display:flex;gap:.5em;margin-top:.6em">';
   h+='<button class="btn btn-on" onclick="_csshSave(\''+ip+'\')">Save</button>';
   h+='<button class="btn" onclick="_csshTest(\''+ip+'\')" style="background:#1e3a5f;color:#93c5fd">Test Connection</button>';
   h+='</div>';
+  h+='<div id="cssh-dirty-hint" style="display:none;margin-top:.4em;font-size:.78em;color:#fbbf24">● Unsaved changes — click Save to persist (Test will use the form values either way).</div>';
   h+='<div id="cssh-result" style="margin-top:.5em;font-size:.85em"></div>';
   h+='</div>';
   document.getElementById('modal-body').innerHTML=h;
@@ -227,14 +238,38 @@ function _csshSave(ip){
   }
   ra('POST','/api/cameras/node/'+encodeURIComponent(ip)+'/ssh',body,function(r){
     var el=document.getElementById('cssh-result');
-    if(r&&r.ok){el.innerHTML='<span style="color:#4c4">&#x2713; Saved for '+escapeHtml(ip)+'</span>';}
+    if(r&&r.ok){
+      el.innerHTML='<span style="color:#4c4">&#x2713; Saved for '+escapeHtml(ip)+'</span>';
+      _csshDirty=false;
+      var hint=document.getElementById('cssh-dirty-hint');
+      if(hint)hint.style.display='none';
+    }
     else{el.innerHTML='<span style="color:#f66">Save failed: '+(r&&r.err||'unknown')+'</span>';}
   });
 }
 function _csshTest(ip){
   var el=document.getElementById('cssh-result');
   el.innerHTML='<span style="color:#94a3b8">Testing connection to '+escapeHtml(ip)+'...</span>';
-  ra('POST','/api/cameras/node/'+encodeURIComponent(ip)+'/ssh/test',{},function(r){
+  // #690-followup — pass the form's live values so an operator can
+  // verify credentials before deciding whether to commit them via Save.
+  // The server endpoint accepts these in the body and falls back to the
+  // saved per-node config for any field omitted.
+  var isKey=document.querySelector('input[name="cssh-auth"][value="key"]').checked;
+  var testBody;
+  if(isKey){
+    testBody={
+      user:document.getElementById('cssh-key-user').value||'root',
+      keyPath:document.getElementById('cssh-keypath').value||'',
+      password:''
+    };
+  }else{
+    testBody={
+      user:document.getElementById('cssh-user').value||'root',
+      password:document.getElementById('cssh-pass').value||'',
+      keyPath:''
+    };
+  }
+  ra('POST','/api/cameras/node/'+encodeURIComponent(ip)+'/ssh/test',testBody,function(r){
     if(!r){el.innerHTML='<span style="color:#f66">Request failed</span>';return;}
     if(r.ok){
       el.innerHTML='<span style="color:#4c4">&#x2713; '+escapeHtml(r.msg)+'</span>';

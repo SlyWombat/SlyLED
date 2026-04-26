@@ -10547,8 +10547,18 @@ def api_camera_node_ssh_save(ip):
 
 @app.post("/api/cameras/node/<path:ip>/ssh/test")
 def api_camera_node_ssh_test(ip):
-    """Test SSH connection to a camera node."""
-    ssh_cfg = _get_node_ssh(ip)
+    """Test SSH connection to a camera node.
+
+    Accepts optional ``user`` / ``password`` / ``keyPath`` in the body —
+    when present, those override the saved per-node config so the SPA
+    can test unsaved form values without committing them. Falls through
+    to the saved config when fields are omitted. #690-followup.
+    """
+    body = request.get_json(silent=True) or {}
+    saved = _get_node_ssh(ip)
+    user = body.get("user") if body.get("user") else saved["user"]
+    password = body["password"] if "password" in body else saved.get("password", "")
+    key_path = body.get("keyPath") if body.get("keyPath") else saved.get("keyPath", "")
     try:
         import paramiko
     except ImportError:
@@ -10556,14 +10566,15 @@ def api_camera_node_ssh_test(ip):
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        kwargs = {"hostname": ip, "port": 22, "username": ssh_cfg["user"], "timeout": 8}
-        if ssh_cfg.get("keyPath") and Path(os.path.expanduser(ssh_cfg["keyPath"])).exists():
-            kwargs["key_filename"] = os.path.expanduser(ssh_cfg["keyPath"])
-        elif ssh_cfg.get("password"):
-            kwargs["password"] = ssh_cfg["password"]
+        kwargs = {"hostname": ip, "port": 22, "username": user, "timeout": 8,
+                  "look_for_keys": False, "allow_agent": False}
+        if key_path and Path(os.path.expanduser(key_path)).exists():
+            kwargs["key_filename"] = os.path.expanduser(key_path)
+        elif password:
+            kwargs["password"] = password
         else:
-            return jsonify(ok=False, err="No password or key configured. Enter credentials and save first.",
-                           guidance="Set a password or provide an SSH key, then click Save.")
+            return jsonify(ok=False, err="No password or key configured.",
+                           guidance="Enter a password or provide an SSH key path, then retry.")
         client.connect(**kwargs)
         stdin, stdout, stderr = client.exec_command("whoami")
         user = stdout.read().decode().strip()

@@ -230,6 +230,22 @@ function _clearTabTimers(){
   if(_emu3d.animId){cancelAnimationFrame(_emu3d.animId);_emu3d.animId=null;}
   if(typeof _tlPlayTimer!=='undefined'&&_tlPlayTimer){clearInterval(_tlPlayTimer);_tlPlayTimer=null;_tlPlaying=false;}
 }
+// #690-followup — warn before navigating away (tab close, refresh) when
+// any dirty form is open. Currently covers the profile editor and the
+// per-node SSH config modal; extend the disjunction as more dirty-tracked
+// modals land. Browsers ignore the message string for security reasons
+// (Chrome/Edge/Firefox all show their own generic "leave site" prompt) —
+// returning a non-empty string is what triggers the dialog.
+window.addEventListener('beforeunload', function(e){
+  var dirty = (typeof _peDirty !== 'undefined' && _peDirty)
+           || (typeof _csshDirty !== 'undefined' && _csshDirty);
+  if(dirty){
+    e.preventDefault();
+    e.returnValue = '';   // required by Chrome
+    return '';
+  }
+});
+
 function showTab(t){
   var liveTab=(t==='dash'||t==='runtime'||t==='shows');
   // Only detach if going to a non-live tab (layout, setup, etc.)
@@ -371,6 +387,15 @@ function closeModal(){
     if(!_modalStack.length){
       if(!confirm('You have unsaved changes to this profile. Close and discard?'))return;
       _peDirty=false;
+    }
+  }
+  // #690-followup — same guard for the per-node SSH config modal: closing
+  // without Save means an operator's edits never reach _camera_ssh, and
+  // the deploy/test endpoints fall back to saved (or empty) credentials.
+  if(typeof _csshDirty !== 'undefined' && _csshDirty){
+    if(!_modalStack.length){
+      if(!confirm('You have unsaved SSH credentials for this camera node. Close and discard?'))return;
+      _csshDirty=false;
     }
   }
   // If there's a parent dialog on the stack, go back to it instead of closing
