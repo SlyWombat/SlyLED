@@ -21,10 +21,10 @@
                          "description":  "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
                          "board":  "d1mini",
                          "fqbn":  "esp8266:esp8266:d1_mini",
-                         "version":  "8.4.13",
+                         "version":  "8.4.14",
                          "file":  "d1mini/main.ino.bin",
                          "releaseAsset":  "d1mini-firmware.bin",
-                         "sha256":  "b8510a5b5aa01c2dfdb183506166b02ab744b4d1c21260a1e57fa3935dd419c3",
+                         "sha256":  "adaaebb0df846ef3e109891482987075bc2aeed8e792df216f0a71e99c8aada2",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "BOARD_D1MINI"
