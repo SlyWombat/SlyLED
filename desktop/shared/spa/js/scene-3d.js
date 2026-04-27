@@ -320,13 +320,13 @@ function s3dAnimate(){
         var panRange=prof?prof.panRange||540:540;
         var tiltRange=prof?prof.tiltRange||270:270;
         var rot=fx.rotation||[0,0,0];
-        var basePan=rot[1]||0;
-        var panDeg=(panNorm-0.5)*panRange;
-        var tiltDeg=(tiltNorm-0.5)*tiltRange;
-        if(fx.mountedInverted)tiltDeg=-tiltDeg;
-        var panRad=(basePan+panDeg)*Math.PI/180;
-        var tiltRad=tiltDeg*Math.PI/180;
-        var aimDir=new THREE.Vector3(Math.sin(panRad)*Math.cos(tiltRad),-Math.sin(tiltRad),Math.cos(panRad)*Math.cos(tiltRad));
+        // #715 — single shared IK via _aimUnitVector. Pre-#715 this
+        // path used a third inline convention that ignored rx
+        // entirely and disagreed with both `_rotToAim` and the
+        // live-API IK. Stage→Three.js basis swap below.
+        var v=_aimUnitVector(rot, panNorm, tiltNorm, panRange, tiltRange,
+                              !!fx.mountedInverted, 0.5);
+        var aimDir=new THREE.Vector3(v[0], v[2], v[1]);
         grp.children.forEach(function(child){
           if(child.userData.beamCone&&child.isMesh&&child.geometry.type==='ConeGeometry'){
             var beamLen=child.geometry.parameters.height||3;

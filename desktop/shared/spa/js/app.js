@@ -210,14 +210,76 @@ function cmdRedo(){
   if(typeof toastInfo==='function')toastInfo('Redo: '+c.name);
   return true;
 }
+// #715 — shared aim-unit-vector helper. Three IK conventions used to
+// live in the SPA at once (`_rotToAim`, `scene-3d.js:329` inline, plus
+// `/api/fixtures/live` server-side); the live-API matched operator
+// intent on fid #14 (rx=75 → straight up), the SPA renderers did not.
+// This helper matches the server-side IK exactly: home aim = +Y for
+// non-inverted, -Z for inverted; tilt deviation rotates in the
+// vertical plane; pan deviation rotates about local Z; mount rotation
+// [rx, ry, rz] is applied as the Three.js intrinsic XYZ Euler the
+// rotation matrix in `remote_math.euler_xyz_deg_to_matrix` uses.
+//
+// Returns a unit direction vector in STAGE coordinates
+// (X=width, Y=depth-forward, Z=height-up). Callers that render in
+// Three.js (Y-up) must swap as: three_x = stage_x, three_y = stage_z,
+// three_z = stage_y.
+function _aimUnitVector(rotation, panNorm, tiltNorm, panRange, tiltRange, inverted, homePanNorm){
+  if(panNorm == null) panNorm = 0.5;
+  if(tiltNorm == null) tiltNorm = 0.5;
+  if(panRange == null) panRange = 540;
+  if(tiltRange == null) tiltRange = 270;
+  var dx, dy, dz;
+  if(inverted){
+    // Home aim = -Z (straight down). Tilt < 0.5 rotates back toward +Y.
+    var deltaInv = (0.5 - tiltNorm) * tiltRange * Math.PI / 180;
+    dx = 0;
+    dy = Math.sin(deltaInv);
+    dz = -Math.cos(deltaInv);
+  } else {
+    // Home aim = +Y (horizontal forward). Tilt > 0.5 rotates down.
+    var dt = (tiltNorm - 0.5) * tiltRange * Math.PI / 180;
+    dx = 0;
+    dy = Math.cos(dt);
+    dz = -Math.sin(dt);
+  }
+  // Pan deviation about local Z (CCW from above; matches mover_
+  // calibrator._ray_floor_hit: dx = -dy_local * sin_p, dy = dy_local * cos_p).
+  var hp = (homePanNorm != null) ? homePanNorm : 0.5;
+  var dp = (panNorm - hp) * panRange * Math.PI / 180;
+  var cp = Math.cos(dp), sp = Math.sin(dp);
+  var dx1 = dx * cp - dy * sp;
+  var dy1 = dx * sp + dy * cp;
+  var dz1 = dz;
+  // Mount rotation [rx, ry, rz] as Rx * Ry * Rz applied to (dx1, dy1, dz1).
+  // Match `remote_math.euler_xyz_deg_to_matrix` exactly so the SPA's
+  // rendered aim and the orchestrator's live-API aim agree byte-for-byte.
+  var rx = (rotation && rotation[0] ? rotation[0] : 0) * Math.PI / 180;
+  var ry = (rotation && rotation.length > 1 && rotation[1] ? rotation[1] : 0) * Math.PI / 180;
+  var rz = (rotation && rotation.length > 2 && rotation[2] ? rotation[2] : 0) * Math.PI / 180;
+  var cx = Math.cos(rx), sx = Math.sin(rx);
+  var cy = Math.cos(ry), sy = Math.sin(ry);
+  var cz = Math.cos(rz), sz = Math.sin(rz);
+  // Rz first, then Ry, then Rx (intrinsic XYZ).
+  var x1 = cz*dx1 - sz*dy1, y1 = sz*dx1 + cz*dy1, z1 = dz1;
+  var x2 = cy*x1 + sy*z1, y2 = y1, z2 = -sy*x1 + cy*z1;
+  var x3 = x2, y3 = cx*y2 - sx*z2, z3 = sx*y2 + cx*z2;
+  var mag = Math.sqrt(x3*x3 + y3*y3 + z3*z3);
+  if(mag < 1e-9) return [0, 0, -1];
+  return [x3/mag, y3/mag, z3/mag];
+}
+
 function _rotToAim(rot,pos,dist,inverted){
-  // Convert rotation [rx,ry,rz] degrees + position to aim point [x,y,z]
-  // Stage: X=width, Y=depth(forward), Z=height(up)
-  dist=dist||3000;
-  var rx=rot?rot[0]:0,ry=rot&&rot.length>1?rot[1]:0;
-  if(inverted)rx=-rx;
-  var pr=ry*Math.PI/180,tr=rx*Math.PI/180;
-  return[pos[0]+Math.sin(pr)*Math.cos(tr)*dist,pos[1]+Math.cos(pr)*Math.cos(tr)*dist,pos[2]-Math.sin(tr)*dist];
+  // #715 — replaced inline IK with shared `_aimUnitVector`. With
+  // panNorm = tiltNorm = 0.5 the result is the home aim direction,
+  // which is what the layout viewport renders for an at-rest fixture.
+  // The pre-#715 implementation treated rx as "pitch DOWN" and
+  // disagreed with the live-API IK that produced operator-correct
+  // answers — fid #14 (rot=[75,0,0]) used to render straight DOWN
+  // when the fixture was physically tilted UP.
+  dist = dist || 3000;
+  var v = _aimUnitVector(rot, 0.5, 0.5, null, null, !!inverted, 0.5);
+  return [pos[0] + v[0]*dist, pos[1] + v[1]*dist, pos[2] + v[2]*dist];
 }
 var _layoutDirty=false;
 var _panelSections={fixtures:true,objects:false}; // collapse state (#354: fixtures expanded by default)
