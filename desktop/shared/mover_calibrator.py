@@ -824,7 +824,8 @@ def _point_in_polygon(point, polygon):
 
 def _ray_floor_hit(fx_pos, fx_rot, pan_norm, tilt_norm,
                     pan_range_deg, tilt_range_deg,
-                    mounted_inverted=False, home_pan_norm=None):
+                    mounted_inverted=False, home_pan_norm=None,
+                    tilt_offset_norm=0.5, tilt_up=False):
     """#704 P0 #2 / #710 — operator-relative IK matching
     ``tools/probe_coverage_3d.py:floor_hit``.
 
@@ -872,19 +873,33 @@ def _ray_floor_hit(fx_pos, fx_rot, pan_norm, tilt_norm,
     if pan_range_deg is None or tilt_range_deg is None:
         return None
     fz = float(fx_pos[2])
-    # Operator-relative tilt deviation from home (tilt_norm=0.5).
-    delta_rad = math.radians((0.5 - tilt_norm) * tilt_range_deg)
+    # #716 — `tilt_offset_norm` parameterises where horizontal-forward
+    # sits in the tilt DMX range (DMX 4681 / 65535 = 0.0714 for the
+    # 350W BeamLight; default 0.5 = legacy 150W behaviour where home
+    # is mid-range). `tilt_up` flips the polarity for fixtures that
+    # rotate the beam UP as tilt increases above the offset (350W);
+    # default False matches the legacy "increasing tilt > offset =
+    # DOWN" convention.
     if mounted_inverted:
         # Home aim: -Z (straight down). Rotate by delta about
         # the local pitch axis: (0, sin δ, -cos δ).
+        # tilt_offset_norm shifts WHERE in the DMX range "home" sits;
+        # at the offset position tilt_offset_norm=0.5 (default) the
+        # legacy formula `(0.5 - tilt_norm) * range` is preserved.
+        delta_rad = math.radians((tilt_offset_norm - tilt_norm) * tilt_range_deg)
         dy_local = math.sin(delta_rad)
         dz = -math.cos(delta_rad)
     else:
-        # Home aim: +Y horizontal forward. Tilt brings the beam
-        # down toward the floor: (0, cos δ, -sin δ) for δ > 0.
-        delta_floor = math.radians((tilt_norm - 0.5) * tilt_range_deg)
+        # Home aim: +Y horizontal forward. Default convention: tilt
+        # beyond the offset rotates beam DOWN (cos δ forward, -sin δ
+        # vertical). `tilt_up=True` flips the vertical sign so beam
+        # rotates UP (350W BeamLight floor-mount).
+        delta_floor = math.radians((tilt_norm - tilt_offset_norm) * tilt_range_deg)
         dy_local = math.cos(delta_floor)
-        dz = -math.sin(delta_floor)
+        if tilt_up:
+            dz = math.sin(delta_floor)
+        else:
+            dz = -math.sin(delta_floor)
     # #710 — pan deviation from home rotates the local (0, dy_local)
     # vector about Z. With home_pan_norm=None (legacy callers), no
     # rotation is applied and the result equals the home aim — same
@@ -923,7 +938,8 @@ def _ray_floor_hit(fx_pos, fx_rot, pan_norm, tilt_norm,
 def _camera_visible_tilt_band(fx_pos, fx_rot, home_pan_norm,
                                 pan_range_deg, tilt_range_deg,
                                 mounted_inverted, camera_polygons,
-                                samples=91):
+                                samples=91,
+                                tilt_offset_norm=0.5, tilt_up=False):
     """#698 — return ``(tilt_min_norm, tilt_max_norm)`` so that a beam
     fired from the fixture at ``home_pan_norm`` lands inside the union
     of ``camera_polygons`` (each a list of ``(x, y)`` floor points) for
@@ -963,7 +979,9 @@ def _camera_visible_tilt_band(fx_pos, fx_rot, home_pan_norm,
         hit = _ray_floor_hit(fx_pos, fx_rot, home_pan_norm, t,
                               pan_range_deg, tilt_range_deg,
                               mounted_inverted=mounted_inverted,
-                              home_pan_norm=home_pan_norm)
+                              home_pan_norm=home_pan_norm,
+                              tilt_offset_norm=tilt_offset_norm,
+                              tilt_up=tilt_up)
         if hit is None:
             continue
         if any(_point_in_polygon(hit, poly) for poly in camera_polygons):
@@ -1007,7 +1025,13 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                          confirm_continuity_cap_mult=8.0,
                          confirm_ratio_min=0.20,
                          confirm_ratio_max=5.0,
-                         confirm_symmetry_min_px=3):
+                         confirm_symmetry_min_px=3,
+                         # #716 — asymmetric-tilt-range support.
+                         # Defaults preserve legacy 150W behaviour
+                         # (home/horizontal at mid-range, increasing
+                         # tilt > offset rotates beam DOWN).
+                         tilt_offset_norm=0.5,
+                         tilt_up=False):
     """Coarse-to-fine discovery: sample a sparse `coarse_steps × coarse_
     steps` grid across pan/tilt ∈ [0, 1] first, then confirm any hit
     with a small nudge (rejects reflections).
@@ -1134,6 +1158,8 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
             fixture_pos, fixture_rotation,
             seed_pan, pr_deg, tr_deg,
             mounted_inverted, camera_polygons,
+            tilt_offset_norm=tilt_offset_norm,
+            tilt_up=tilt_up,
         )
         if visible_band[1] > visible_band[0]:
             tlo, thi = visible_band
@@ -1190,7 +1216,9 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         return _ray_floor_hit(fixture_pos, fixture_rotation, pan_n,
                                 tilt_n, pr_deg, tr_deg,
                                 mounted_inverted=mounted_inverted,
-                                home_pan_norm=seed_pan)
+                                home_pan_norm=seed_pan,
+                                tilt_offset_norm=tilt_offset_norm,
+                                tilt_up=tilt_up)
 
     def _cell_sort_key(xy):
         pan_n, tilt_n = xy
@@ -1294,7 +1322,9 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                                     first_p, first_t,
                                     pr_deg, tr_deg,
                                     mounted_inverted=mounted_inverted,
-                                    home_pan_norm=seed_pan)
+                                    home_pan_norm=seed_pan,
+                                    tilt_offset_norm=tilt_offset_norm,
+                                    tilt_up=tilt_up)
         mech_tilt_deg = (first_t - 0.5) * tr_deg
         if first_hit is not None:
             log.info("battleship_discover: first probe pan=%.4f tilt=%.4f "
@@ -1628,7 +1658,9 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                         fixture_pos, fixture_rotation, pan, tilt,
                         pr_deg, tr_deg,
                         mounted_inverted=mounted_inverted,
-                        home_pan_norm=seed_pan)
+                        home_pan_norm=seed_pan,
+                        tilt_offset_norm=tilt_offset_norm,
+                        tilt_up=tilt_up)
                     if pf_hit is not None:
                         pf = [round(pf_hit[0], 1), round(pf_hit[1], 1)]
                         if grid_filter is not None:

@@ -5570,6 +5570,13 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
         confirm_ratio_min=float(_cal_tuning("confirmRatioMin")),
         confirm_ratio_max=float(_cal_tuning("confirmRatioMax")),
         confirm_symmetry_min_px=int(_cal_tuning("confirmSymmetryMinPx")),
+        # #716 — asymmetric tilt-range support. profile.tiltOffsetDmx16
+        # names the DMX value at horizontal-forward (default 32768 =
+        # mid-range, legacy 150W behaviour); profile.tiltUp flips the
+        # polarity for fixtures like the 350W BeamLight where positive
+        # delta from offset rotates beam UP.
+        tilt_offset_norm=float(prof_info.get("tiltOffsetDmx16", 32768) if prof_info else 32768) / 65535.0,
+        tilt_up=bool(prof_info.get("tiltUp", False)) if prof_info else False,
     )
     if discovered is None:
         job["error"] = ("Battleship discovery found no beam. Check "
@@ -7157,6 +7164,9 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
             confirm_ratio_min=float(_cal_tuning("confirmRatioMin")),
             confirm_ratio_max=float(_cal_tuning("confirmRatioMax")),
             confirm_symmetry_min_px=int(_cal_tuning("confirmSymmetryMinPx")),
+            # #716 — asymmetric tilt-range support.
+            tilt_offset_norm=float(prof_info.get("tiltOffsetDmx16", 32768) if prof_info else 32768) / 65535.0,
+            tilt_up=bool(prof_info.get("tiltUp", False)) if prof_info else False,
         )
         elapsed = time.monotonic() - phase_start
 

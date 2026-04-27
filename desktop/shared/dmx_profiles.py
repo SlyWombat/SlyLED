@@ -710,7 +710,17 @@ class ProfileLibrary:
 
     def channel_info(self, profile_id):
         """Return everything needed for DMX output: channel_map, channels list,
-        panRange, tiltRange, beamWidth. Returns None if profile not found."""
+        panRange, tiltRange, beamWidth, tiltOffsetDmx16, tiltUp. Returns None
+        if profile not found.
+
+        #716 — `tiltOffsetDmx16` (default 32768 = mid-range = legacy 150W
+        behaviour) and `tiltUp` (default False = legacy "increasing tilt
+        beyond offset rotates beam DOWN") parameterise where horizontal-
+        forward sits in the DMX range and which way increasing tilt swings
+        the beam from that point. Required for fixtures like the 350W
+        BeamLight whose horizontal-forward sits at DMX 4681 with positive
+        tilt rotating the beam UP.
+        """
         p = self.get_profile(profile_id)
         if not p:
             return None
@@ -720,6 +730,9 @@ class ProfileLibrary:
             "panRange": p.get("panRange", 0),
             "tiltRange": p.get("tiltRange", 0),
             "beamWidth": p.get("beamWidth", 0),
+            # #716 — asymmetric tilt-range support.
+            "tiltOffsetDmx16": p.get("tiltOffsetDmx16", 32768),
+            "tiltUp": bool(p.get("tiltUp", False)),
         }
 
     def export_profiles(self, ids=None, category=None):
