@@ -270,16 +270,23 @@ function _aimUnitVector(rotation, panNorm, tiltNorm, panRange, tiltRange, invert
 }
 
 function _rotToAim(rot,pos,dist,inverted){
-  // #715 — replaced inline IK with shared `_aimUnitVector`. With
-  // panNorm = tiltNorm = 0.5 the result is the home aim direction,
-  // which is what the layout viewport renders for an at-rest fixture.
-  // The pre-#715 implementation treated rx as "pitch DOWN" and
-  // disagreed with the live-API IK that produced operator-correct
-  // answers — fid #14 (rot=[75,0,0]) used to render straight DOWN
-  // when the fixture was physically tilted UP.
-  dist = dist || 3000;
-  var v = _aimUnitVector(rot, 0.5, 0.5, null, null, !!inverted, 0.5);
-  return [pos[0] + v[0]*dist, pos[1] + v[1]*dist, pos[2] + v[2]*dist];
+  // #715 — restored the original "rx = pitch DOWN" convention here.
+  // Despite #715's earlier commit attempting to unify `_rotToAim`
+  // through `_aimUnitVector` (which uses the matrix convention where
+  // rx > 0 rotates +Y toward +Z = UP), this regressed every camera
+  // fixture in the saved data. Camera rotations were authored under
+  // the OLD CLAUDE.md schema (rx > 0 aims DOWN); cam #12 with
+  // rot=[30,0,0] expects to point its FOV cone toward the floor.
+  // Mover fixtures' live aim path (scene-3d.js:329) uses
+  // `_aimUnitVector` directly — that path matches `pan_tilt_to_ray`
+  // and the live API. Until the saved-rotation data is migrated to a
+  // single convention, this function stays at the camera-friendly
+  // schema and the live-aim updater stays at the matrix schema.
+  dist=dist||3000;
+  var rx=rot?rot[0]:0,ry=rot&&rot.length>1?rot[1]:0;
+  if(inverted)rx=-rx;
+  var pr=ry*Math.PI/180,tr=rx*Math.PI/180;
+  return[pos[0]+Math.sin(pr)*Math.cos(tr)*dist,pos[1]+Math.cos(pr)*Math.cos(tr)*dist,pos[2]-Math.sin(tr)*dist];
 }
 var _layoutDirty=false;
 var _panelSections={fixtures:true,objects:false}; // collapse state (#354: fixtures expanded by default)
