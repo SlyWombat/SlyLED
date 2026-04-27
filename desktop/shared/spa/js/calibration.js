@@ -218,129 +218,9 @@ function _calCompute(){
   });
 }
 
-// ── Moving head range calibration ─────────────────────────────────────
-var _rcalState=null;
-
-function _rangeCalStart(fixId){
-  // Find a calibrated camera
-  var cam=(_fixtures||[]).filter(function(f){return f.fixtureType==='camera'&&f.calibrated&&f.positioned;})[0];
-  if(!cam){
-    document.getElementById('hs').textContent='No calibrated camera available — calibrate a camera first';
-    return;
-  }
-  _rcalState={fixId:fixId,camId:cam.id,axis:'pan',step:0,steps:9,
-    panSamples:[],tiltSamples:[],sweepValues:[]};
-  // Generate sweep values: 0.0, 0.125, 0.25, ..., 1.0
-  for(var i=0;i<=8;i++)_rcalState.sweepValues.push(i/8);
-  _rcalState.steps=_rcalState.sweepValues.length;
-  _rangeCalShow();
-}
-
-function _rangeCalShow(){
-  var s=_rcalState;if(!s)return;
-  var fix=(_fixtures||[]).filter(function(f){return f.id===s.fixId;})[0];
-  var axisLabel=s.axis==='pan'?'Pan':'Tilt';
-  var totalSteps=s.steps*2;  // pan + tilt
-  var doneSteps=(s.axis==='pan'?0:s.steps)+s.step;
-  var h='<div style="min-width:380px">';
-  h+='<p style="color:#94a3b8;font-size:.85em;margin-bottom:.6em">Sweeping <strong>'+axisLabel+'</strong> on '+escapeHtml(fix?fix.name:'fixture')+'. The head will move through its range while the camera captures beam positions.</p>';
-  h+='<div class="prog-bar" style="height:8px;margin-bottom:.5em"><div class="prog-fill" style="width:'+Math.round(doneSteps/totalSteps*100)+'%"></div></div>';
-  h+='<div style="font-size:.82em;color:#64748b;margin-bottom:.6em">'+axisLabel+' step '+s.step+' / '+s.steps+'</div>';
-  if(s.step<s.steps){
-    var val=s.sweepValues[s.step];
-    h+='<div style="font-size:.9em;color:#e2e8f0;margin-bottom:.4em">'+axisLabel+' = '+val.toFixed(3)+' <span style="color:#64748b">(DMX '+(s.axis==="pan"?"pan":"tilt")+': '+Math.round(val*255)+')</span></div>';
-    h+='<div id="rcal-msg" style="font-size:.82em;color:#22d3ee;margin-bottom:.4em">Sending DMX + capturing...</div>';
-    h+='<img id="rcal-snap" style="width:100%;border-radius:4px;border:1px solid #334155;display:none;margin-bottom:.4em">';
-  }else if(s.axis==='pan'){
-    h+='<div style="font-size:.9em;color:#4ade80;margin-bottom:.5em">\u2713 Pan sweep complete ('+s.panSamples.length+' samples). Starting tilt...</div>';
-  }
-  h+='<div style="display:flex;gap:.5em;margin-top:.6em">';
-  if(s.step>=s.steps&&s.axis==='tilt'){
-    h+='<button class="btn btn-on" onclick="_rangeCalSubmit()">Save Calibration</button>';
-  }
-  h+='<button class="btn btn-off" onclick="_rcalState=null;closeModal()">Cancel</button>';
-  h+='</div></div>';
-  document.getElementById('modal-title').textContent='Range Calibration — '+axisLabel;
-  document.getElementById('modal-body').innerHTML=h;
-  document.getElementById('modal').style.display='block';
-  // Auto-advance: send DMX, capture, detect beam
-  if(s.step<s.steps){
-    setTimeout(function(){_rangeCalStep();},500);
-  }else if(s.axis==='pan'){
-    // Switch to tilt axis
-    setTimeout(function(){
-      s.axis='tilt';s.step=0;_rangeCalShow();
-    },1000);
-  }
-}
-
-function _rangeCalStep(){
-  var s=_rcalState;if(!s||s.step>=s.steps)return;
-  var val=s.sweepValues[s.step];
-  // Send DMX pan/tilt value to the fixture via action
-  var panVal=s.axis==='pan'?val:0.5;
-  var tiltVal=s.axis==='tilt'?val:0.5;
-  // Use direct DMX write — set pan/tilt channels
-  ra('POST','/api/fixtures/'+s.fixId+'/dmx-test',
-    {pan:panVal,tilt:tiltVal,dimmer:1.0},function(){
-    // Wait for head to move, then capture
-    setTimeout(function(){
-      // Capture snapshot from camera
-      var x=new XMLHttpRequest();
-      x.open('GET','/api/cameras/'+s.camId+'/snapshot');
-      x.responseType='blob';
-      x.onload=function(){
-        var img=document.getElementById('rcal-snap');
-        var msg=document.getElementById('rcal-msg');
-        if(x.status===200&&x.response){
-          if(img){img.src=URL.createObjectURL(x.response);img.style.display='block';}
-          // Run scan to find beam position
-          ra('POST','/api/cameras/'+s.camId+'/scan',
-            {threshold:0.1,resolution:320,cam:0},function(r){
-            // Use brightest/largest detection or center of image
-            var px=320,py=240;  // default center
-            if(r&&r.ok&&r.detections&&r.detections.length){
-              // Use the detection with highest confidence
-              var best=r.detections.sort(function(a,b){return b.confidence-a.confidence;})[0];
-              if(best.pixelBox){px=best.pixelBox.x+best.pixelBox.w/2;py=best.pixelBox.y+best.pixelBox.h/2;}
-            }
-            var sample={dmxNorm:val,pixelX:px,pixelY:py};
-            if(s.axis==='pan')s.panSamples.push(sample);
-            else s.tiltSamples.push(sample);
-            s.step++;
-            if(msg)msg.textContent='Captured at pixel ('+Math.round(px)+', '+Math.round(py)+')';
-            setTimeout(function(){_rangeCalShow();},300);
-          });
-        }else{
-          if(msg)msg.textContent='Capture failed — skipping step';
-          s.step++;
-          setTimeout(function(){_rangeCalShow();},500);
-        }
-      };
-      x.send();
-    },800);  // Wait 800ms for head to settle
-  });
-}
-
-function _rangeCalSubmit(){
-  var s=_rcalState;if(!s)return;
-  ra('POST','/api/fixtures/'+s.fixId+'/calibrate-range',
-    {cameraId:s.camId,panSamples:s.panSamples,tiltSamples:s.tiltSamples},function(r){
-    if(r&&r.ok){
-      var h='<div style="text-align:center;padding:1em">';
-      h+='<div style="font-size:2em;color:#4ade80;margin-bottom:.3em">\u2713</div>';
-      h+='<div style="font-size:1.1em;color:#e2e8f0;margin-bottom:.5em">Range Calibration Complete</div>';
-      h+='<div style="font-size:.85em;color:#94a3b8">Pan: '+s.panSamples.length+' samples, Tilt: '+s.tiltSamples.length+' samples</div>';
-      h+='<div style="margin-top:1em"><button class="btn btn-on" onclick="closeModal();_rcalState=null;loadLayout()">Done</button></div>';
-      h+='</div>';
-      document.getElementById('modal-body').innerHTML=h;
-      (_fixtures||[]).forEach(function(f){if(f.id===s.fixId)f.rangeCalibrated=true;});
-      renderSidebar();
-    }else{
-      document.getElementById('hs').textContent='Range calibration failed: '+(r&&r.err||'unknown');
-    }
-  });
-}
+// #713 B — `_rangeCalStart` family (~120 lines: rangeCalStart /
+// Show / Step / Submit) deleted as dead code. No SPA callers; the
+// wizard was superseded by profile-defined `panRange`/`tiltRange`.
 
 // ── Unified mover calibration wizard ─────────────────────────────────
 var _moverCalFid=null;
@@ -1294,9 +1174,11 @@ function _moverCalAutoStart(){
   h+='</select>';
   h+='<label style="color:#94a3b8;margin:0">Method:</label>';
   h+='<select id="mcal-mode" style="font-size:.82em;padding:2px 4px" onchange="_moverCalModeChanged()">';
-  h+='<option value="all-auto" selected>All Auto — markers first, fallback to Legacy BFS (#681)</option>';
+  // #713 C — `legacy` removed. The all-auto path still falls back to
+  // legacy server-side; a separate PR can delete the server thread
+  // body now that the SPA no longer offers `mode=legacy`.
+  h+='<option value="all-auto" selected>All Auto — markers first, fallback to legacy BFS</option>';
   h+='<option value="markers">Markers only — requires surveyed ArUco markers (#610)</option>';
-  h+='<option value="legacy">Legacy BFS only — broad sampling, no markers needed</option>';
   h+='<option value="v2">v2 target-driven (#499, requires stage-map homography)</option>';
   h+='</select>';
   h+='<label style="color:#94a3b8;margin:0">Warm-up:</label>';
@@ -1660,7 +1542,11 @@ function _moverCalGo(){
   var sel=document.getElementById('mcal-color');
   var colorMap={white:[255,255,255],green:[0,255,0],magenta:[255,0,255],red:[255,0,0],blue:[0,0,255]};
   var color=colorMap[sel?sel.value:'green']||[0,255,0];
-  var mode=(document.getElementById('mcal-mode')||{}).value||'legacy';
+  // #713 C — default to `all-auto` if the dropdown isn't found.
+  // `legacy` removed from the SPA selector; the server still accepts
+  // it for back-compat with external API callers until the #703
+  // deletion PR lands.
+  var mode=(document.getElementById('mcal-mode')||{}).value||'all-auto';
   var warmup=(document.getElementById('mcal-warmup')||{}).checked||false;
   document.getElementById('mcal-status').style.display='block';
   document.getElementById('mcal-phase').textContent='Starting calibration...';
@@ -2270,6 +2156,9 @@ function _manCalNextToJog(){
     d.channels.forEach(function(c){
       if(c.type==='pan')ch.pan=c.offset;
       if(c.type==='tilt')ch.tilt=c.offset;
+      // #714 — fine pan/tilt offsets for 16-bit drive.
+      if(c.type==='pan-fine')ch.panFine=c.offset;
+      if(c.type==='tilt-fine')ch.tiltFine=c.offset;
       if(c.type==='dimmer')ch.dimmer=c.offset;
       if(c.type==='red')ch.red=c.offset;
       if(c.type==='green')ch.green=c.offset;
@@ -2293,44 +2182,84 @@ function _manCalRenderJog(fname){
   var ch=_manCal.channels||{};
   var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===_manCal.fid)f=fx;});
   var addr=f?('U'+(f.dmxUniverse||1)+' @ '+(f.dmxStartAddr||1)):'';
+  // #714 \u2014 16-bit drive when the profile exposes pan-fine + tilt-fine.
+  // Without the fine channels the operator gets ~2.1 deg per slider step
+  // on a 540 deg pan, too coarse to land the beam on a 150 mm marker.
+  var has16 = (ch.panFine != null && ch.tiltFine != null);
   var h='<div style="min-width:460px">';
   // Progress
   h+='<div class="prog-bar" style="height:6px;margin-bottom:.5em"><div class="prog-fill" style="width:'+Math.round((idx/total)*100)+'%"></div></div>';
   h+='<div style="font-size:.9em;color:#e2e8f0;margin-bottom:.4em">Marker <strong>'+(idx+1)+' of '+total+'</strong>: aim beam at <span style="color:#22d3ee">X='+m.x+' Y='+m.y+' Z='+m.z+'</span> mm'+(m.name?' <span style="color:#94a3b8">('+escapeHtml(m.name)+')</span>':'')+'</div>';
-  h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.6em">Adjust sliders until the beam centers on the physical marker.</div>';
+  h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.6em">Adjust sliders until the beam centers on the physical marker.'+(has16?' <span style="color:#4ade80">(16-bit drive)</span>':'')+'</div>';
   // All DMX channels
   var allCh=_manCal.allChannels||[];
-  var panVal=128, tiltVal=128;
-  // Try to restore from: 1) previous sample for this marker, 2) saved calibration, 3) last confirmed sample
+  // Restore pan/tilt as a 16-bit value (or 8-bit equivalent on profiles
+  // without fine channels). Saved samples carry pan/tilt as 0..1 floats.
+  var pan16 = 32768, tilt16 = 32768;
   if(_manCal.samples[idx]){
-    panVal=Math.round(_manCal.samples[idx].pan*255);
-    tiltVal=Math.round(_manCal.samples[idx].tilt*255);
+    pan16 = Math.round(_manCal.samples[idx].pan * 65535);
+    tilt16 = Math.round(_manCal.samples[idx].tilt * 65535);
   }else if(_manCal.savedSamples){
-    // Match saved sample by stage position
-    var m=_manCal.markers[idx];
+    var mm = _manCal.markers[idx];
     _manCal.savedSamples.forEach(function(s){
-      if(s.stageX===m.x&&s.stageY===m.y&&s.stageZ===m.z){panVal=Math.round(s.pan*255);tiltVal=Math.round(s.tilt*255);}
+      if(s.stageX===mm.x && s.stageY===mm.y && s.stageZ===mm.z){
+        pan16 = Math.round(s.pan * 65535);
+        tilt16 = Math.round(s.tilt * 65535);
+      }
     });
-  }else if(idx>0&&_manCal.samples.length>0){
-    var ls=_manCal.samples[_manCal.samples.length-1];panVal=Math.round(ls.pan*255);tiltVal=Math.round(ls.tilt*255);
+  }else if(idx>0 && _manCal.samples.length>0){
+    var ls = _manCal.samples[_manCal.samples.length-1];
+    pan16 = Math.round(ls.pan * 65535);
+    tilt16 = Math.round(ls.tilt * 65535);
+  }
+  // 8-bit slider values derived from 16-bit (used by per-channel rows
+  // for pan/tilt + the no-fine fallback path).
+  var panVal = (pan16 >> 8) & 0xFF;
+  var tiltVal = (tilt16 >> 8) & 0xFF;
+  // Stash the 16-bit state so step buttons + confirm can read it back
+  // without depending on slider rounding. Initialised below.
+  _manCal._pan16 = pan16; _manCal._tilt16 = tilt16;
+  if(has16){
+    h+='<div style="display:grid;grid-template-columns:60px 1fr 60px;gap:.4em .5em;align-items:center;margin-bottom:.6em">';
+    h+='<label style="font-size:.82em;color:#22d3ee;text-align:right">Pan</label>';
+    h+='<input type="range" id="mcj-pan16" min="0" max="65535" step="1" value="'+pan16+'" oninput="_manCalJog16(\'pan\',this.value)">';
+    h+='<span id="mcj-pan16v" style="font-size:.78em;color:#e2e8f0;font-family:monospace;text-align:right">'+pan16+'</span>';
+    h+='<label style="font-size:.82em;color:#22d3ee;text-align:right">Tilt</label>';
+    h+='<input type="range" id="mcj-tilt16" min="0" max="65535" step="1" value="'+tilt16+'" oninput="_manCalJog16(\'tilt\',this.value)">';
+    h+='<span id="mcj-tilt16v" style="font-size:.78em;color:#e2e8f0;font-family:monospace;text-align:right">'+tilt16+'</span>';
+    h+='</div>';
   }
   h+='<div style="max-height:280px;overflow-y:auto;border:1px solid #1e293b;border-radius:4px;padding:.4em;background:#0a0f1a;margin-bottom:.6em">';
   if(allCh.length){
     allCh.forEach(function(c){
       var isPan=(c.type==='pan'),isTilt=(c.type==='tilt');
+      var isPanFine=(c.type==='pan-fine'),isTiltFine=(c.type==='tilt-fine');
       var isDim=(c.type==='dimmer'),isGreen=(c.type==='green'),isSpeed=(c.type==='speed');
-      var defVal=isPan?panVal:isTilt?tiltVal:isDim?255:isGreen?255:isSpeed?0:(c.default||0);
-      // Current value from last state or default
+      // #714 \u2014 when the 16-bit driver is active, pan/tilt coarse + fine
+      // rows are read-only mirrors so operators can see the wire bytes
+      // but can't desync them by dragging the per-channel slider.
+      var defVal;
+      if(isPan)      defVal = panVal;
+      else if(isTilt) defVal = tiltVal;
+      else if(isPanFine)  defVal = pan16 & 0xFF;
+      else if(isTiltFine) defVal = tilt16 & 0xFF;
+      else if(isDim)  defVal = 255;
+      else if(isGreen)defVal = 255;
+      else if(isSpeed)defVal = 0;
+      else            defVal = c.default || 0;
       var curVal=defVal;
-      var highlight=isPan||isTilt?'color:#22d3ee;font-weight:600':'color:#94a3b8';
+      var driven = has16 && (isPan||isTilt||isPanFine||isTiltFine);
+      var highlight = (isPan||isTilt||isPanFine||isTiltFine)
+                       ? 'color:#22d3ee;font-weight:600'
+                       : 'color:#94a3b8';
       h+='<div style="display:flex;align-items:center;gap:.4em;margin-bottom:.2em">';
       h+='<label style="width:90px;font-size:.78em;'+highlight+';text-align:right;overflow:hidden;white-space:nowrap;text-overflow:ellipsis" title="'+escapeHtml(c.name)+'">'+escapeHtml(c.name)+'</label>';
-      h+='<input type="range" min="0" max="255" value="'+curVal+'" style="flex:1" id="mcj-ch-'+c.offset+'" oninput="_manCalJogCh('+c.offset+',this.value)">';
+      h+='<input type="range" min="0" max="255" value="'+curVal+'" style="flex:1'+(driven?';opacity:.55;cursor:not-allowed':'')+
+         '" id="mcj-ch-'+c.offset+'"'+(driven?' disabled':' oninput="_manCalJogCh('+c.offset+',this.value)"')+'>';
       h+='<span id="mcj-chv-'+c.offset+'" style="width:28px;font-size:.78em;color:#e2e8f0;font-family:monospace;text-align:right">'+curVal+'</span>';
       h+='</div>';
     });
   } else {
-    // Fallback: just pan/tilt
     h+='<div style="display:flex;align-items:center;gap:.5em;margin-bottom:.3em">';
     h+='<label style="width:40px;font-size:.82em;color:#22d3ee;text-align:right">Pan</label>';
     h+='<input type="range" id="mcj-ch-'+(ch.pan||0)+'" min="0" max="255" value="'+panVal+'" style="flex:1" oninput="_manCalJogCh('+(ch.pan||0)+',this.value)">';
@@ -2341,13 +2270,27 @@ function _manCalRenderJog(fname){
     h+='<span id="mcj-chv-'+(ch.tilt||1)+'" style="width:28px;font-size:.78em;color:#e2e8f0;font-family:monospace">'+tiltVal+'</span></div>';
   }
   h+='</div>';
-  // Fine adjust buttons for pan/tilt
-  h+='<div style="display:flex;gap:.3em;margin-bottom:.6em;justify-content:center">';
-  h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'pan\',-1)">Pan \u2212</button>';
-  h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'pan\',1)">Pan +</button>';
-  h+='<span style="width:10px"></span>';
-  h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'tilt\',-1)">Tilt \u2212</button>';
-  h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'tilt\',1)">Tilt +</button>';
+  // Fine adjust buttons. With 16-bit drive, fine = +/-1 and coarse =
+  // +/-256 (= 1 unit of the upper byte). Without fine channels, both
+  // buttons step the 8-bit slider by 1.
+  h+='<div style="display:flex;gap:.3em;margin-bottom:.6em;justify-content:center;flex-wrap:wrap">';
+  if(has16){
+    h+='<button class="btn" style="font-size:.75em;padding:2px 6px" onclick="_manCalNudge16(\'pan\',-256)">Pan \u226a</button>';
+    h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge16(\'pan\',-1)">Pan \u2212</button>';
+    h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge16(\'pan\',1)">Pan +</button>';
+    h+='<button class="btn" style="font-size:.75em;padding:2px 6px" onclick="_manCalNudge16(\'pan\',256)">Pan \u226b</button>';
+    h+='<span style="width:14px"></span>';
+    h+='<button class="btn" style="font-size:.75em;padding:2px 6px" onclick="_manCalNudge16(\'tilt\',-256)">Tilt \u226a</button>';
+    h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge16(\'tilt\',-1)">Tilt \u2212</button>';
+    h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge16(\'tilt\',1)">Tilt +</button>';
+    h+='<button class="btn" style="font-size:.75em;padding:2px 6px" onclick="_manCalNudge16(\'tilt\',256)">Tilt \u226b</button>';
+  }else{
+    h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'pan\',-1)">Pan \u2212</button>';
+    h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'pan\',1)">Pan +</button>';
+    h+='<span style="width:10px"></span>';
+    h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'tilt\',-1)">Tilt \u2212</button>';
+    h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'tilt\',1)">Tilt +</button>';
+  }
   h+='</div>';
   // Buttons
   h+='<div style="display:flex;gap:.4em">';
@@ -2362,16 +2305,72 @@ function _manCalRenderJog(fname){
   var sendChs=[];
   if(ch.pan!=null)sendChs.push({offset:ch.pan,value:panVal});
   if(ch.tilt!=null)sendChs.push({offset:ch.tilt,value:tiltVal});
+  // #714 — write 16-bit LSB if the profile has fine channels.
+  if(has16){
+    sendChs.push({offset:ch.panFine, value: pan16 & 0xFF});
+    sendChs.push({offset:ch.tiltFine, value: tilt16 & 0xFF});
+  }
   if(ch.dimmer!=null)sendChs.push({offset:ch.dimmer,value:255});
   if(ch.red!=null)sendChs.push({offset:ch.red,value:255});
   if(ch.green!=null)sendChs.push({offset:ch.green,value:255});
   if(ch.blue!=null)sendChs.push({offset:ch.blue,value:255});
   (_manCal.allChannels||[]).forEach(function(c){
     if(c.default>0&&c.type!=='pan'&&c.type!=='tilt'&&c.type!=='dimmer'
-       &&c.type!=='red'&&c.type!=='green'&&c.type!=='blue')
+       &&c.type!=='red'&&c.type!=='green'&&c.type!=='blue'
+       &&c.type!=='pan-fine'&&c.type!=='tilt-fine')
       sendChs.push({offset:c.offset,value:c.default});
   });
   if(sendChs.length)ra('POST','/api/dmx/fixture/'+_manCal.fid+'/test',{channels:sendChs},function(){});
+}
+
+// #714 — 16-bit drive helper. Splits a 0..65535 value into coarse +
+// fine bytes, sends both together, and updates the per-channel mirror
+// sliders + readouts so the all-channels display stays in sync.
+function _manCalJog16(axis, value){
+  if(!_manCal)return;
+  var v16 = Math.max(0, Math.min(65535, parseInt(value)||0));
+  var ch = _manCal.channels || {};
+  var coarseOff = (axis === 'pan') ? ch.pan : ch.tilt;
+  var fineOff = (axis === 'pan') ? ch.panFine : ch.tiltFine;
+  if(coarseOff == null || fineOff == null) return;
+  var coarse = (v16 >> 8) & 0xFF;
+  var fine = v16 & 0xFF;
+  if(axis === 'pan') _manCal._pan16 = v16; else _manCal._tilt16 = v16;
+  // Update the 16-bit slider + readout (in case the caller adjusted via nudge).
+  var sl = document.getElementById('mcj-' + axis + '16');
+  if(sl) sl.value = v16;
+  var rd = document.getElementById('mcj-' + axis + '16v');
+  if(rd) rd.textContent = v16;
+  // Mirror to the per-channel readouts so the all-channels list is honest.
+  var cr = document.getElementById('mcj-ch-' + coarseOff);
+  var fr = document.getElementById('mcj-ch-' + fineOff);
+  if(cr) cr.value = coarse;
+  if(fr) fr.value = fine;
+  var crv = document.getElementById('mcj-chv-' + coarseOff);
+  var frv = document.getElementById('mcj-chv-' + fineOff);
+  if(crv) crv.textContent = coarse;
+  if(frv) frv.textContent = fine;
+  // Send full slider state so other channels (dimmer, color, etc.)
+  // stay at their current values.
+  var allCh = (_manCal.allChannels) || [];
+  var batch = [];
+  allCh.forEach(function(c){
+    if(c.offset === coarseOff) batch.push({offset: c.offset, value: coarse});
+    else if(c.offset === fineOff) batch.push({offset: c.offset, value: fine});
+    else {
+      var s = document.getElementById('mcj-ch-' + c.offset);
+      if(s) batch.push({offset: c.offset, value: parseInt(s.value) || 0});
+    }
+  });
+  if(batch.length) ra('POST', '/api/dmx/fixture/' + _manCal.fid + '/test',
+                       {channels: batch}, function(){});
+}
+
+function _manCalNudge16(axis, delta){
+  if(!_manCal) return;
+  var cur = (axis === 'pan') ? _manCal._pan16 : _manCal._tilt16;
+  if(cur == null) cur = 32768;
+  _manCalJog16(axis, Math.max(0, Math.min(65535, cur + delta)));
 }
 
 function _manCalJogCh(offset,value){
@@ -2411,10 +2410,21 @@ function _manCalNudge(axis,dir){
 
 function _manCalConfirm(){
   var ch=_manCal.channels||{};
-  var panEl=document.getElementById('mcj-ch-'+(ch.pan!=null?ch.pan:0));
-  var tiltEl=document.getElementById('mcj-ch-'+(ch.tilt!=null?ch.tilt:1));
-  var pan=(panEl?parseInt(panEl.value):128)/255;
-  var tilt=(tiltEl?parseInt(tiltEl.value):128)/255;
+  // #714 — read 16-bit pan/tilt when fine channels exist; saved
+  // sample's pan / tilt fields stay 0..1 floats but now carry the
+  // full 16-bit precision, matching what the cal pipeline writes
+  // since #689.
+  var pan, tilt;
+  if(ch.panFine != null && ch.tiltFine != null
+       && _manCal._pan16 != null && _manCal._tilt16 != null){
+    pan = _manCal._pan16 / 65535;
+    tilt = _manCal._tilt16 / 65535;
+  } else {
+    var panEl=document.getElementById('mcj-ch-'+(ch.pan!=null?ch.pan:0));
+    var tiltEl=document.getElementById('mcj-ch-'+(ch.tilt!=null?ch.tilt:1));
+    pan=(panEl?parseInt(panEl.value):128)/255;
+    tilt=(tiltEl?parseInt(tiltEl.value):128)/255;
+  }
   var m=_manCal.markers[_manCal.currentIdx];
   _manCal.samples.push({pan:pan,tilt:tilt,stageX:m.x,stageY:m.y,stageZ:m.z});
   _manCal.currentIdx++;
