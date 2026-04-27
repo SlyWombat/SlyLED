@@ -238,8 +238,8 @@ pan/tilt → DMX math into one place.
 | File | Change |
 |------|--------|
 | `desktop/shared/parent_server.py` | NEW route `POST /api/mover/<fid>/aim-angles` `{panDeg, tiltDeg, settleMs?}`. Resolves `(panDmx16, tiltDmx16)` via the affine model; clamps to fixture envelope; writes via the live DMX engine; optionally waits `settleMs` before returning. |
-| `desktop/shared/coverage_math.py` | NEW pure helpers `angles_to_dmx(panDeg, tiltDeg, model_or_estimate, profile) → (panDmx16, tiltDmx16)` and `dmx_to_angles(panDmx16, tiltDmx16, model_or_estimate) → (panDeg, tiltDeg)`. The first is used by the new endpoint; the second by PR-2.5 to convert calibrate-start references. |
-| `desktop/shared/parent_server.py` (existing `/api/calibration/mover/<fid>/aim`) | Refactor to: do world-XYZ → fixture-frame angles via SMART IK, then call the same `angles_to_dmx` helper. The two endpoints become two faces of one implementation. |
+| `desktop/shared/coverage_math.py` (NEW module) | Lands the full SMART canonical IK and 2-pair affine estimate in one PR so the angular aim endpoint can resolve `(panDeg, tiltDeg) → (panDmx16, tiltDmx16)` from Home+Secondary alone, with no SMART model present. Contents: `world_to_fixture_pt(world_xyz, fixture_xyz, rotation) → (panDeg, tiltDeg)`, `fixture_aim_to_world(panDeg, tiltDeg, fixture_xyz, rotation) → (axis_unit, world_aim_xyz_at_floor)`, `solve_dmx_per_degree(home, secondary, fixture, profile) → {panDmxPerDeg, tiltDmxPerDeg, panSign, tiltSign, panBiasDmx, tiltBiasDmx}` (the 2-pair affine estimate; needs the canonical IK to compute `home_tilt_deg` from `fixture.rotation`), `angles_to_dmx(panDeg, tiltDeg, model_or_estimate, profile) → (panDmx16, tiltDmx16)`, `dmx_to_angles(panDmx16, tiltDmx16, model_or_estimate) → (panDeg, tiltDeg)`. Forward IK and inverse IK must be exact inverses by construction (same module, shared constants). |
+| `desktop/shared/parent_server.py` (existing `/api/calibration/mover/<fid>/aim`) | Refactor to: do world-XYZ → fixture-frame angles via the new IK helper, then call the same `angles_to_dmx` helper. The two endpoints become two faces of one implementation. |
 
 ### Resolution priority for `model_or_estimate`
 
@@ -282,7 +282,7 @@ calibration card. No probing yet.
 
 | File | Change |
 |------|--------|
-| `desktop/shared/coverage_math.py` | NEW. Pure functions: `solve_dmx_per_degree(home, secondary, profile) → {panDmxPerDeg, tiltDmxPerDeg, panSign, tiltSign}` and `coverage_polygon(fixture_xyz, rotation, profile, floor_z) → [[x,y], ...]`. |
+| `desktop/shared/coverage_math.py` | Add `coverage_polygon(fixture_xyz, rotation, profile, floor_z) → [[x,y], ...]`. The canonical IK and `solve_dmx_per_degree` already exist from PR-1.5 — `coverage_polygon` ray-marches the fixture's pan/tilt envelope corners through `fixture_aim_to_world` and convex-hulls the floor footprint. No new IK conventions; reuses PR-1.5's helpers verbatim. |
 | `desktop/shared/parent_server.py` | NEW route `GET /api/fixtures/<fid>/coverage` → `{cone: {apex_xyz, axis, halfAngleDeg}, floorPolygon: [[x,y],...], floorZ: float}`. Reads `fixtures.json` + `_profile_lib.channel_info(profile_id)` + floor RANSAC result. |
 | `desktop/shared/spa/js/scene-3d.js` | **Preferred:** add a parallel `_mcal3d` singleton (own renderer, own scene, own canvas) that reuses the same Three.js helpers (lighting, floor grid, fixture mesh loader) as `_s3d` via extracted module-private helpers — but does **not** share `_s3d` state. Old `_s3d` and Dashboard behavior unchanged. **Alternative-A** (only if `_mcal3d` becomes a copy-paste mess): refactor `_s3d` to a `Scene3D(mountId, opts)` class — but that risks Dashboard regression and must ship Playwright coverage on Dashboard *and* SMART card before merge. |
 | `desktop/shared/spa/js/calibration.js` (~line 1175) | When mode=`smart` is selected, swap the existing snapshot panel for a `<div id="mcal-3d">` and call `_mcal3d.mount('mcal-3d')`. Render the **coverage cone** as a true 3D translucent volume: apex at `fixture.xyz`, base = `coveragePoly` extruded down to `floor.z`, side faces translucent (Three.js `BufferGeometry` from apex to each polygon vertex). Floor footprint also drawn as a slightly brighter polygon overlay so the operator can see the floor intersection clearly. |
@@ -323,9 +323,9 @@ first and then fits affine — see PR-5 for details.
 
 ### Tests
 
-- `tests/test_coverage_math.py` (NEW) — unit tests for `solve_dmx_per_degree`
-  and `coverage_polygon` with synthetic fixtures (downward-mounted, sideways,
-  asymmetric tilt range from #716).
+- `tests/test_coverage_math.py` — extend with `coverage_polygon` cases on
+  synthetic fixtures (downward-mounted, sideways, asymmetric tilt range).
+  IK + `solve_dmx_per_degree` tests already exist from PR-1.5.
 - `tests/test_parent.py` — `GET /api/fixtures/<fid>/coverage` returns a sane
   polygon for the basement fid 14 fixture.
 - `tests/test_unified_3d.py` (Playwright) — opening the calibration card with
