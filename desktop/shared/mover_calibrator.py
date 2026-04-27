@@ -824,18 +824,20 @@ def _point_in_polygon(point, polygon):
 
 def _ray_floor_hit(fx_pos, fx_rot, pan_norm, tilt_norm,
                     pan_range_deg, tilt_range_deg,
-                    mounted_inverted=False):
-    """#704 P0 #2 — operator-relative tilt-band IK matching
+                    mounted_inverted=False, home_pan_norm=None):
+    """#704 P0 #2 / #710 — operator-relative IK matching
     ``tools/probe_coverage_3d.py:floor_hit``.
 
     The inverse-kinematics in :func:`pan_tilt_to_ray` answers
     "given mechanical (pan, tilt), what is the beam direction in
-    mount-local space?" — useful for aim-from-target. The
-    camera-visibility tilt-band sweep needs a different question:
-    "at the operator-confirmed home pan, what does varying tilt do
-    to the floor hit?" Empirically (basement rig fid #17, operator
-    drove the head to the predicted (0.6770, 0.2135) probe and
-    confirmed beam at (490, 1850)), the answer is:
+    mount-local space?" — useful for aim-from-target. The cal
+    pipeline needs a different question: "for a probe at
+    (pan_norm, tilt_norm), where does the floor hit, given the
+    operator's confirmed home pan?"
+
+    Convention (basement rig fid #17, operator drove the head to
+    the predicted (0.6770, 0.2135) probe and confirmed beam at
+    (490, 1850)):
 
       tilt_norm = 0.5 → beam aims along the fixture's home axis
         (straight down for an inverted ceiling mount; horizontal
@@ -843,16 +845,22 @@ def _ray_floor_hit(fx_pos, fx_rot, pan_norm, tilt_norm,
       tilt_norm < 0.5 → for inverted: beam rotates back toward +Y
         (audience side). For floor: beam tilts up.
       tilt_norm > 0.5 → mirror.
+      pan_norm = home_pan_norm → beam azimuth = fixture's home
+        azimuth (= +Y for rz=0; rotated by ``fx_rot[2]`` for
+        non-zero yaw).
+      pan_norm ≠ home_pan_norm → beam rotates about Z by
+        ``(pan_norm - home_pan_norm) * pan_range_deg``.
 
-    The pan dimension is operator-set: ``pan_norm == home_pan`` makes
-    the head face its mounted-forward direction. Sweeping pan_norm
-    around home rotates the beam azimuth in stage space; for the
-    tilt-only band sweep it stays at home, so its dx contribution is
-    0 here. Yaw from ``fx_rot[2]`` (rz) rotates the home azimuth
-    into stage frame so a fixture mounted facing +X (rz=90°) gets
-    its home beam in +X, not +Y. Pitch / roll from fx_rot are
-    treated as small-angle and ignored — matches the empirical
-    reference.
+    #710 — earlier ship (#704 commit a5691d6) zeroed the pan
+    contribution entirely, so every probe at a given tilt projected
+    to the same floor XY (= the home-pan aim). That defeated the
+    #698 camera-FOV partition + #706 per-probe predictedFloor
+    telemetry: every probe reported "in FOV" because the home aim
+    genuinely was. ``home_pan_norm=None`` falls back to the legacy
+    "pan == home" convention so the camera-visibility tilt-band
+    sweep (which always probes at home) still produces the same
+    band; new callers must pass ``home_pan_norm`` to get the
+    operator-relative geometry.
 
     Earlier attempts (commit 82320c8) composed Rx(180°) into the
     mount rotation, which flipped both dy AND dz — so probes landed
@@ -877,8 +885,22 @@ def _ray_floor_hit(fx_pos, fx_rot, pan_norm, tilt_norm,
         delta_floor = math.radians((tilt_norm - 0.5) * tilt_range_deg)
         dy_local = math.cos(delta_floor)
         dz = -math.sin(delta_floor)
+    # #710 — pan deviation from home rotates the local (0, dy_local)
+    # vector about Z. With home_pan_norm=None (legacy callers), no
+    # rotation is applied and the result equals the home aim — same
+    # behaviour as the pre-#710 ship for the tilt-band sweep.
+    if home_pan_norm is None:
+        dx_local = 0.0
+    else:
+        delta_pan_rad = math.radians(
+            (float(pan_norm) - float(home_pan_norm)) * pan_range_deg)
+        cos_p = math.cos(delta_pan_rad)
+        sin_p = math.sin(delta_pan_rad)
+        dx_local = -dy_local * sin_p
+        dy_local = dy_local * cos_p
     # Apply fixture yaw (rz) so a fixture mounted facing +X has its
-    # home aim in +X. The local axis here is (dx_local=0, dy_local).
+    # home aim in +X. Yaw is applied AFTER the pan-from-home rotation
+    # so the rz axis stays the stage Z, not the fixture-local axis.
     rz_deg = 0.0
     if fx_rot is not None and len(fx_rot) > 2 and fx_rot[2] is not None:
         try:
@@ -888,8 +910,8 @@ def _ray_floor_hit(fx_pos, fx_rot, pan_norm, tilt_norm,
     rz_rad = math.radians(rz_deg)
     cos_yaw = math.cos(rz_rad)
     sin_yaw = math.sin(rz_rad)
-    dx = -dy_local * sin_yaw
-    dy = dy_local * cos_yaw
+    dx = dx_local * cos_yaw - dy_local * sin_yaw
+    dy = dx_local * sin_yaw + dy_local * cos_yaw
     if dz >= -1e-6:
         return None  # ray points up or horizontal — no floor hit
     t = -fz / dz
@@ -940,7 +962,8 @@ def _camera_visible_tilt_band(fx_pos, fx_rot, home_pan_norm,
         t = 0.05 + (0.95 - 0.05) * (i / max(1, samples - 1))
         hit = _ray_floor_hit(fx_pos, fx_rot, home_pan_norm, t,
                               pan_range_deg, tilt_range_deg,
-                              mounted_inverted=mounted_inverted)
+                              mounted_inverted=mounted_inverted,
+                              home_pan_norm=home_pan_norm)
         if hit is None:
             continue
         if any(_point_in_polygon(hit, poly) for poly in camera_polygons):
@@ -1204,7 +1227,8 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         first_hit = _ray_floor_hit(fixture_pos, fixture_rotation,
                                     first_p, first_t,
                                     pr_deg, tr_deg,
-                                    mounted_inverted=mounted_inverted)
+                                    mounted_inverted=mounted_inverted,
+                                    home_pan_norm=seed_pan)
         mech_tilt_deg = (first_t - 0.5) * tr_deg
         if first_hit is not None:
             log.info("battleship_discover: first probe pan=%.4f tilt=%.4f "
@@ -1537,7 +1561,8 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                     pf_hit = _ray_floor_hit(
                         fixture_pos, fixture_rotation, pan, tilt,
                         pr_deg, tr_deg,
-                        mounted_inverted=mounted_inverted)
+                        mounted_inverted=mounted_inverted,
+                        home_pan_norm=seed_pan)
                     if pf_hit is not None:
                         pf = [round(pf_hit[0], 1), round(pf_hit[1], 1)]
                         if grid_filter is not None:

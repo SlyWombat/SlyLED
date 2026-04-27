@@ -240,6 +240,50 @@ if len(captured) >= 4:
        f'first 4 probes share same pan column '
        f'(got pans {[round(p, 3) for p in first_4_pans]})')
 
+# ── #710 — pan_norm rotates the beam azimuth ──────────────────────────
+
+section('#710 _ray_floor_hit honours pan-from-home rotation')
+
+# Without home_pan_norm — legacy behaviour, dx contribution is 0 so
+# every probe at a given tilt projects to the same floor XY at home.
+fx17 = (600, 0, 1760)
+hits_legacy = [
+    mc._ray_floor_hit(fx17, [0,0,0], p, 0.2517, 540, 180,
+                       mounted_inverted=True)
+    for p in (0.375, 0.625, 0.875)
+]
+xs_legacy = sorted(set(round(h[0]) for h in hits_legacy if h))
+ok(xs_legacy == [600],
+   f'legacy call (home_pan_norm=None) collapses pan to home (got {xs_legacy})')
+
+# With home_pan_norm — different pan columns produce different floor XY.
+hits_new = [
+    mc._ray_floor_hit(fx17, [0,0,0], p, 0.2517, 540, 180,
+                       mounted_inverted=True, home_pan_norm=0.6770)
+    for p in (0.375, 0.625, 0.875)
+]
+xs_new = sorted(set(round(h[0]) for h in hits_new if h))
+ok(len(xs_new) == 3,
+   f'new call produces 3 distinct floor X values (got {xs_new})')
+
+# Issue acceptance: pan=0.625, tilt=0.252, home=0.677 → X ≈ +1419.
+h = mc._ray_floor_hit((600,0,1760), [0,0,0], 0.625, 0.252, 540, 180,
+                       mounted_inverted=True, home_pan_norm=0.677)
+ok(h is not None and abs(h[0] - 1419) < 5,
+   f'#710 acceptance: pan=0.625 tilt=0.252 home=0.677 → X≈+1419 '
+   f'(got X={h[0]:.0f})')
+
+# Tilt-band sweep at home_pan unchanged (no regression on #698 + #706
+# code paths that pass pan_norm == home_pan_norm).
+for t in (0.05, 0.20, 0.50, 0.70):
+    legacy = mc._ray_floor_hit(fx17, [0,0,0], 0.6770, t, 540, 180,
+                                 mounted_inverted=True)
+    new = mc._ray_floor_hit(fx17, [0,0,0], 0.6770, t, 540, 180,
+                             mounted_inverted=True, home_pan_norm=0.6770)
+    ok(legacy == new,
+       f'#710 no-regression at home pan tilt={t}: legacy={legacy} == new={new}')
+
+
 # ── #704 P0 #2 acceptance — operator-relative IK on basement rig #17 ───
 
 section('#704 inverted-mount IK matches probe_coverage_3d.py:floor_hit')
