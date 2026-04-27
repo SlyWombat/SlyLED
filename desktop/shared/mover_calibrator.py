@@ -966,7 +966,15 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                          # union of camera FOVs at home pan.
                          camera_polygons=None,
                          fixture_pos=None,
-                         fixture_rotation=None):
+                         fixture_rotation=None,
+                         # #697 — DD plausibility gate thresholds. Defaults
+                         # match the looser CAL_TUNING_SPEC defaults; pass
+                         # different values from parent_server to honour
+                         # operator overrides per cal run.
+                         confirm_continuity_cap_mult=8.0,
+                         confirm_ratio_min=0.20,
+                         confirm_ratio_max=5.0,
+                         confirm_symmetry_min_px=3):
     """Coarse-to-fine discovery: sample a sparse `coarse_steps × coarse_
     steps` grid across pan/tilt ∈ [0, 1] first, then confirm any hit
     with a small nudge (rejects reflections).
@@ -1373,7 +1381,11 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         try:
             if (beam_width_deg and camera_resolution and
                     _confirm_geom is not None):
-                cap_mag = 5.0 * _confirm_geom["beam_width_px"]
+                # #697 — operator-tunable cap multiplier. Was hardcoded
+                # 5.0; on basement-rig (4K cams + 3 deg beam) this floored
+                # the cap at ~15 px while real beam-axis nudges produced
+                # 50-100 px shifts, leading to false REJECTED_DISCONTINUOUS.
+                cap_mag = float(confirm_continuity_cap_mult) * _confirm_geom["beam_width_px"]
                 expected["capPx"] = round(cap_mag, 1)
                 expected["beamWidthPx"] = round(_confirm_geom["beam_width_px"], 1)
                 expected["panPerDeg"] = round(_confirm_geom["px_per_deg_pan"], 2)
@@ -1402,7 +1414,12 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
             if ratios:
                 ratio = sum(ratios) / len(ratios)
                 info["observedOverExpected"] = round(ratio, 2)
-                if ratio < 0.33 or ratio > 3.0:
+                # #697 — operator-tunable proportionality bounds. Was
+                # hardcoded [0.33, 3.0]; basement-rig live test showed
+                # legit on-stage probes coming out at ratio ~0.25 because
+                # the expected estimate doesn't account for floor-z drift.
+                if ratio < float(confirm_ratio_min) or ratio > float(confirm_ratio_max):
+                    info["ratioBounds"] = [confirm_ratio_min, confirm_ratio_max]
                     return ("REJECTED_DISPROPORTIONATE", info)
 
         # Gate 4 (symmetry): require + and − nudges on the strong axis
@@ -1411,17 +1428,20 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         # image edge; caller treats as REJECTED in automated cal but
         # operator UI gets the hint).
         def _symmetric(a, b, ax_comp):
-            """Are (a, b) opposite-signed shifts of similar magnitude?"""
+            """Are (a, b) opposite-signed shifts of similar magnitude?
+            #697 — `confirm_symmetry_min_px` (was hardcoded 4) and the
+            ratio bounds (was [0.33, 3.0]) are operator-tunable."""
             if a is None or b is None:
                 return False
             sa = a[ax_comp]
             sb = b[ax_comp]
-            if abs(sa) < 4 or abs(sb) < 4:
+            min_px = float(confirm_symmetry_min_px)
+            if abs(sa) < min_px or abs(sb) < min_px:
                 return False
             if (sa > 0) == (sb > 0):
                 return False
             ratio = abs(sa) / max(abs(sb), 1e-3)
-            return 0.33 <= ratio <= 3.0
+            return float(confirm_ratio_min) <= ratio <= float(confirm_ratio_max)
 
         pan_sym = _symmetric(signals["pan+"], signals["pan-"], 0)
         tilt_sym = _symmetric(signals["tilt+"], signals["tilt-"], 1)

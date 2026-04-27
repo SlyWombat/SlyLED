@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.59"
+VERSION = "1.6.63"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -5557,6 +5557,11 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
         camera_polygons=_camera_floor_polygons_for_cal(f),
         fixture_pos=fx_pos,
         fixture_rotation=f.get("rotation") or [0, 0, 0],
+        # #697 — operator-tunable DD plausibility gate.
+        confirm_continuity_cap_mult=float(_cal_tuning("confirmContinuityCapMult")),
+        confirm_ratio_min=float(_cal_tuning("confirmRatioMin")),
+        confirm_ratio_max=float(_cal_tuning("confirmRatioMax")),
+        confirm_symmetry_min_px=int(_cal_tuning("confirmSymmetryMinPx")),
     )
     if discovered is None:
         job["error"] = ("Battleship discovery found no beam. Check "
@@ -6463,6 +6468,19 @@ CAL_TUNING_SPEC = {
     # cross a depth discontinuity. Stale scans warn but don't abort.
     "maxScanAgeMinutes":         {"default": 10.0,  "min": 1.0,  "max": 120.0,
         "tooltip": "Surface scan freshness window. Older than this and the cal status pill warns 'stale geometry — consider rescanning' (the cal still runs). Raise on rigs that don't move; drop in workshops where props shift between cals."},
+    # #697 — DD plausibility gate thresholds. Operator-tunable so a noisy
+    # rig or a narrow-beam fixture can dial back the rejection. Defaults
+    # are looser than the original #682-DD ship (5x / [0.33, 3.0] / 4 px)
+    # because all 6 candidates on the 2026-04-26 basement-rig run got
+    # rejected, including 2 that operator visually confirmed as on-stage.
+    "confirmContinuityCapMult":  {"default": 8.0, "min": 2.0, "max": 30.0,
+        "tooltip": "Confirm-nudge continuity cap (#697): max pixel shift allowed = this multiplier x beam-width-in-pixels. Was 5x; raised to 8x because the 150W MH's 3 deg beam under 4K-camera resolution caps at 15 px and real beam-axis nudges produce 50-100 px. Drop if the gate misses true reflections; raise if it rejects legitimate on-stage probes."},
+    "confirmRatioMin":           {"default": 0.20, "min": 0.05, "max": 1.0,
+        "tooltip": "Confirm-nudge proportionality lower bound (#697): observed-pixel-shift / expected-pixel-shift must be >= this. Was 0.33; loosened to 0.20 to allow for camera-pose drift and beam scatter on textured floors."},
+    "confirmRatioMax":           {"default": 5.0, "min": 1.5, "max": 20.0,
+        "tooltip": "Confirm-nudge proportionality upper bound (#697): observed/expected must be <= this. Was 3.0; raised to 5.0 because the expected-shift estimate uses fixture pose without floor-z, so a beam landing further from the fixture than predicted (very common at edge of cal range) inflates the ratio."},
+    "confirmSymmetryMinPx":      {"default": 3,    "min": 1,    "max": 20, "type": "int",
+        "tooltip": "Confirm-nudge symmetry minimum (#697): a side counts toward symmetry only if its pixel shift exceeds this. Was 4; lowered to 3 px to admit small-but-real shifts on tight nudges."},
 }
 
 
@@ -6912,7 +6930,13 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
             # #698 — camera-visibility tilt band + first-probe log.
             camera_polygons=_camera_floor_polygons_for_cal(f),
             fixture_pos=fx_pos,
-            fixture_rotation=f.get("rotation") or [0, 0, 0])
+            fixture_rotation=f.get("rotation") or [0, 0, 0],
+            # #697 — operator-tunable DD plausibility gate.
+            confirm_continuity_cap_mult=float(_cal_tuning("confirmContinuityCapMult")),
+            confirm_ratio_min=float(_cal_tuning("confirmRatioMin")),
+            confirm_ratio_max=float(_cal_tuning("confirmRatioMax")),
+            confirm_symmetry_min_px=int(_cal_tuning("confirmSymmetryMinPx")),
+        )
         elapsed = time.monotonic() - phase_start
 
         _budget_battleship = float(_cal_tuning("discoveryBattleshipS",
@@ -18021,6 +18045,8 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
 
 
 
