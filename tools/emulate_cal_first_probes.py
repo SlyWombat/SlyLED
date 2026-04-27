@@ -146,19 +146,54 @@ def main():
             return False
         return any(_point_in_polygon((h[0], h[1]), poly) for poly in polys)
 
-    key = lambda xy: (abs(xy[0] - home_pan), abs(xy[1] - home_tilt))
+    # #711 predictive sort — mirrors mover_calibrator.battleship_discover
+    # post-3caa786. Primary bucket: in any cam FOV polygon (0) > off-FOV (1)
+    # > no-floor-hit (2). Secondary: squared distance to FOV-union centroid.
+    # Tertiary: |pan_norm - seed_pan|.
+    fov_centroid = None
+    if polys:
+        verts = [v for poly in polys for v in poly]
+        if verts:
+            fov_centroid = (sum(v[0] for v in verts) / len(verts),
+                             sum(v[1] for v in verts) / len(verts))
+
+    def cell_sort_key(xy):
+        p, t = xy
+        h = _ray_floor_hit(fx_pos, fx_rot, p, t, PR, TR,
+                            mounted_inverted=inv, home_pan_norm=home_pan)
+        if h is None:
+            return (2, 1e18, abs(p - home_pan))
+        in_fov = any(_point_in_polygon(h, poly) for poly in polys)
+        d2 = ((h[0] - fov_centroid[0]) ** 2
+              + (h[1] - fov_centroid[1]) ** 2) if fov_centroid else 0.0
+        return (0 if in_fov else 1, d2, abs(p - home_pan))
+
+    # Production path: grid_filter splits into inside/outside; #711 sorts
+    # both partitions by predictive key. On fid #17 the parametric_mover
+    # filter returns False for every cell (separate inverted-mount bug),
+    # so the fallback "drop no-floor-hit + sort survivors" path runs.
     inside, outside = [], []
     for pt in grid:
         (inside if grid_filter_prod(*pt) else outside).append(pt)
-    inside.sort(key=key)
-    outside.sort(key=key)
-    sorted_grid = inside + outside
+    inside.sort(key=cell_sort_key)
+    outside.sort(key=cell_sort_key)
+    if inside:
+        sorted_grid = inside + outside
+    else:
+        # #711 intelligent fallback: drop unreachable, sort survivors.
+        kept = [pt for pt in grid
+                if _ray_floor_hit(fx_pos, fx_rot, pt[0], pt[1], PR, TR,
+                                   mounted_inverted=inv, home_pan_norm=home_pan)
+                is not None]
+        kept.sort(key=cell_sort_key)
+        sorted_grid = kept
 
+    # Reference: predictive sort using the operator-validated IK directly.
     inside_r, outside_r = [], []
     for pt in grid:
         (inside_r if grid_filter_ref(*pt) else outside_r).append(pt)
-    inside_r.sort(key=key)
-    outside_r.sort(key=key)
+    inside_r.sort(key=cell_sort_key)
+    outside_r.sort(key=cell_sort_key)
 
     print(f"=== partition counts ===")
     print(f"  production (parametric_mover.forward): "
