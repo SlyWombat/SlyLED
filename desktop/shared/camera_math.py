@@ -395,18 +395,89 @@ def pan_tilt_to_ray(fixture_pos, fixture_rotation, pan_deg, tilt_deg):
 
 # ── Camera floor-view polygon (#659) ─────────────────────────────────────
 
+def _sutherland_hodgman_clip(subject, clip_rect):
+    """Clip a polygon (list of (x, y)) to an axis-aligned rectangle
+    ``(xmin, ymin, xmax, ymax)`` via Sutherland-Hodgman. Returns a list
+    of (x, y) tuples; empty when the subject lies entirely outside.
+
+    #712 — replaces the per-vertex `clamp(0, w, x)` clamp the previous
+    `camera_floor_polygon` used. Per-vertex clamping bends a polygon's
+    edges toward the rectangle corners in ways that include floor
+    regions the camera doesn't actually see.
+    """
+    xmin, ymin, xmax, ymax = clip_rect
+
+    def _clip_edge(poly, inside_fn, intersect_fn):
+        out = []
+        if not poly:
+            return out
+        prev = poly[-1]
+        prev_in = inside_fn(prev)
+        for cur in poly:
+            cur_in = inside_fn(cur)
+            if cur_in:
+                if not prev_in:
+                    out.append(intersect_fn(prev, cur))
+                out.append(cur)
+            elif prev_in:
+                out.append(intersect_fn(prev, cur))
+            prev, prev_in = cur, cur_in
+        return out
+
+    def _isect_x(p1, p2, x):
+        # Linear interpolation x → y.
+        if abs(p2[0] - p1[0]) < 1e-12:
+            return (x, p1[1])
+        t = (x - p1[0]) / (p2[0] - p1[0])
+        return (x, p1[1] + t * (p2[1] - p1[1]))
+
+    def _isect_y(p1, p2, y):
+        if abs(p2[1] - p1[1]) < 1e-12:
+            return (p1[0], y)
+        t = (y - p1[1]) / (p2[1] - p1[1])
+        return (p1[0] + t * (p2[0] - p1[0]), y)
+
+    out = list(subject)
+    out = _clip_edge(out, lambda p: p[0] >= xmin, lambda a, b: _isect_x(a, b, xmin))
+    out = _clip_edge(out, lambda p: p[0] <= xmax, lambda a, b: _isect_x(a, b, xmax))
+    out = _clip_edge(out, lambda p: p[1] >= ymin, lambda a, b: _isect_y(a, b, ymin))
+    out = _clip_edge(out, lambda p: p[1] <= ymax, lambda a, b: _isect_y(a, b, ymax))
+    return out
+
+
 def camera_floor_polygon(cam_pos, rotation, fov_deg, aspect=16.0 / 9.0,
-                          stage_bounds=None, floor_z=0.0):
+                          stage_bounds=None, floor_z=0.0,
+                          edge_samples_per_side=16,
+                          max_view_distance_mm=20000.0):
     """Project the camera's viewing frustum onto the floor plane.
 
-    Returns a convex polygon in stage XY (z = floor_z) describing every
-    floor point the camera can see. Uses the four corner rays of the
-    image frustum, intersects each with the floor plane, and clips the
-    result to the stage bounding box when supplied.
+    Returns a convex polygon in stage XY (z = floor_z) describing the
+    floor region the camera can physically see.
 
-    Skips frustum corners that point AWAY from the floor (no intersection
-    on the forward half-space) — a camera aimed straight up produces an
-    empty polygon, not a degenerate one.
+    #712 — pre-#712 used the four corner rays + convex hull and a
+    per-vertex stage-bounds clamp. On a high-mount camera with small
+    downward pitch, the upper corner rays project to floor at very
+    large y (we observed (0, +182093 mm) for cam #12), and the
+    per-vertex clamp pulled that to (0, stage_d) — producing a
+    polygon that included huge swaths of stage X the lens cone
+    doesn't actually cover. Operator eye-test on basement rig:
+    the polygon claimed 4 of 4 first-cal probes were in cam FOV but
+    only 1 was physically visible.
+
+    The fix:
+      1. Sample edge rays DENSELY — 16 per image edge by default,
+         not just the 4 corners. The visible region for a pitched
+         camera is a true trapezoid; corner rays alone can miss the
+         curvature of the visible boundary on the floor plane.
+      2. Reject samples whose ray points up / parallel / overshoots
+         the configurable max view distance (default 20 m). Near-
+         horizontal rays from a high mount produce nonsense
+         intersection points; capping distance keeps the polygon
+         realistic.
+      3. Sutherland-Hodgman clip against the stage rectangle, NOT
+         per-vertex clamp. Per-vertex clamp is the bug that pulled
+         the over-reaching corner inside the rectangle and misled
+         every consumer.
 
     Args:
         cam_pos:       (x, y, z) in stage mm.
@@ -417,6 +488,15 @@ def camera_floor_polygon(cam_pos, rotation, fov_deg, aspect=16.0 / 9.0,
         stage_bounds:  optional dict ``{w, d, h}`` in mm to clip the
                         polygon to stage boundaries.
         floor_z:       floor plane z in mm (default 0).
+        edge_samples_per_side: number of rays sampled along each
+                        image edge. Default 16 (= 64 rays total) is
+                        enough to capture trapezoidal shapes without
+                        oversampling.
+        max_view_distance_mm: rays whose floor intersection lies
+                        further than this from the camera are
+                        discarded as "near-horizontal overshoot".
+                        Default 20 m matches typical small-stage
+                        cameras.
 
     Returns a list of (x, y) tuples in CCW order, or an empty list when
     the camera sees no floor.
@@ -430,46 +510,61 @@ def camera_floor_polygon(cam_pos, rotation, fov_deg, aspect=16.0 / 9.0,
     hfov = math.radians(fov_deg)
     # Vertical FOV from horizontal + aspect.
     vfov = 2.0 * math.atan(math.tan(hfov / 2.0) / max(1e-6, aspect))
-
-    # Image-plane corner rays in pinhole frame (+Z forward).
     tx = math.tan(hfov / 2.0)
     ty = math.tan(vfov / 2.0)
-    # Order: top-left, top-right, bottom-right, bottom-left (CCW from
-    # the floor's perspective after projection — top rays land far, bottom
-    # rays land near).
-    corners_cam = [
-        np.array([-tx, -ty, 1.0]),  # TL
-        np.array([+tx, -ty, 1.0]),  # TR
-        np.array([+tx, +ty, 1.0]),  # BR
-        np.array([-tx, +ty, 1.0]),  # BL
-    ]
+
+    n = max(2, int(edge_samples_per_side))
+    # Sample image-edge points in CCW order from the camera's
+    # perspective: top edge L→R, right edge top→bottom, bottom edge
+    # R→L, left edge bottom→top. After projection through a pitched
+    # camera the order on the floor plane stays CCW.
+    edge_samples = []
+    for i in range(n):  # top: x ∈ [-tx, +tx], y = -ty
+        u = -1.0 + 2.0 * (i / (n - 1))
+        edge_samples.append((u * tx, -ty))
+    for i in range(n):  # right: x = +tx, y ∈ [-ty, +ty]
+        v = -1.0 + 2.0 * (i / (n - 1))
+        edge_samples.append((+tx, v * ty))
+    for i in range(n):  # bottom: x ∈ [+tx, -tx], y = +ty
+        u = 1.0 - 2.0 * (i / (n - 1))
+        edge_samples.append((u * tx, +ty))
+    for i in range(n):  # left: x = -tx, y ∈ [+ty, -ty]
+        v = 1.0 - 2.0 * (i / (n - 1))
+        edge_samples.append((-tx, v * ty))
 
     cx, cy, cz = float(cam_pos[0]), float(cam_pos[1]), float(cam_pos[2])
     hits = []
-    for c in corners_cam:
-        ray_stage = R @ c
+    for (xi, yi) in edge_samples:
+        ray = np.array([xi, yi, 1.0])
+        ray_stage = R @ ray
         rz = ray_stage[2]
         if rz >= -1e-6:
-            # Ray points up or parallel to floor — no forward intersection.
-            continue
-        # Solve cz + t * rz = floor_z for t > 0.
+            continue  # ray points up or parallel
         t = (floor_z - cz) / rz
         if t <= 0:
             continue
         fx = cx + t * ray_stage[0]
         fy = cy + t * ray_stage[1]
+        # Reject overshoot (near-horizontal rays from high mounts).
+        dist = math.hypot(fx - cx, fy - cy)
+        if dist > max_view_distance_mm:
+            # Cap at max distance: project the same direction but
+            # truncate. Keeps the polygon convex without dropping
+            # the edge entirely on cameras pitched only slightly.
+            scale = max_view_distance_mm / max(1e-6, dist)
+            fx = cx + (fx - cx) * scale
+            fy = cy + (fy - cy) * scale
         hits.append((float(fx), float(fy)))
 
     if not hits:
         return []
 
-    # Clip to stage bounds (rectangle 0..w × 0..d).
+    # Sutherland-Hodgman clip to stage bounds.
     if stage_bounds:
         w = float(stage_bounds.get("w", 0) or 0)
         d = float(stage_bounds.get("d", 0) or 0)
         if w > 0 and d > 0:
-            hits = [(max(0.0, min(w, x)), max(0.0, min(d, y)))
-                    for x, y in hits]
+            hits = _sutherland_hodgman_clip(hits, (0.0, 0.0, w, d))
 
     return hits
 

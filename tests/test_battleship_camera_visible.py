@@ -394,6 +394,60 @@ if len(captured17) >= 3:
        f'Got: {[(round(p[0], 3), round(p[1], 3), bool(p[3])) for p in first_3]}')
 
 
+# ── #712 — camera_floor_polygon edge sampling ──────────────────────────
+
+section('#712 camera_floor_polygon: edge-sample + SH clip vs corner-hull')
+
+try:
+    import sys as _sys
+    _sys.path.insert(0, 'desktop/shared')
+    from camera_math import camera_floor_polygon, point_in_polygon
+    cam_pos = (940, -200, 2040)        # cam #12-ish — high mount
+    cam_rot = [30, 0, 0]               # 30° pitch DOWN
+    fov_deg = 78.5                      # effective FOV (Track 1b)
+    stage_bounds = {"w": 6000, "d": 4000, "h": 3000}
+    poly = camera_floor_polygon(cam_pos, cam_rot, fov_deg,
+                                  stage_bounds=stage_bounds, floor_z=0.0)
+    ok(poly and len(poly) >= 4,
+       f'#712 polygon non-trivial (got {len(poly) if poly else 0} verts)')
+    # Pre-#712, a 90° corner-hull at this pose included floor regions
+    # the lens cone doesn't cover. Post-#712 with effective 78.5° FOV +
+    # edge sampling, the polygon is bounded by the actual lens cone.
+    # Spot check: a point far behind the camera (at +Y > 30 m) should
+    # NOT be in the polygon.
+    ok(not point_in_polygon((1000, 30000), poly),
+       'far-behind point excluded')
+    # Spot check: directly under camera ground projection should be in
+    # polygon for a reasonably pitched camera.
+    inside_hits = 0
+    for x in range(500, 2500, 250):
+        for y in range(800, 3500, 250):
+            if point_in_polygon((x, y), poly):
+                inside_hits += 1
+    ok(inside_hits > 0, f'polygon covers some on-stage cells (got {inside_hits} grid hits)')
+
+    # Effective-FOV reduction check: 78.5° polygon should be smaller
+    # than 90° polygon for the same pose.
+    poly_nominal = camera_floor_polygon(cam_pos, cam_rot, 90.0,
+                                          stage_bounds=stage_bounds, floor_z=0.0)
+    def _poly_area(p):
+        if not p or len(p) < 3:
+            return 0.0
+        s = 0.0
+        n = len(p)
+        for i in range(n):
+            x1, y1 = p[i]; x2, y2 = p[(i+1) % n]
+            s += x1 * y2 - x2 * y1
+        return abs(s) * 0.5
+    a_eff = _poly_area(poly)
+    a_nom = _poly_area(poly_nominal)
+    ok(a_eff < a_nom,
+       f'effective-FOV polygon area smaller than nominal '
+       f'(78.5deg={a_eff:.0f} mm² < 90deg={a_nom:.0f} mm²)')
+except ImportError as e:
+    print(f"  [SKIP] camera_math import failed: {e}")
+
+
 # ── Summary ─────────────────────────────────────────────────────────────
 
 print(f'\n{"="*60}')

@@ -5746,6 +5746,56 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
             log.warning("MOVER-CAL %d: pose-fit gate raised %s - "
                         "continuing", fid, e)
 
+    # #712 Track 1c — cam-fov-drift detector. After cal completes,
+    # check whether each confirmed beam's stage XY actually falls
+    # inside the camera FOV polygon we assumed when ordering the
+    # probe queue. A confirmed sample landing OUTSIDE its assumed
+    # polygon means the FOV polygon over-claimed coverage; record
+    # the offset so a future cal can refine the per-camera-model
+    # constants in camera_models.json. Auto-fit recommendation
+    # surfaces only after N drift events accumulate (see
+    # `_camera_fov_drift_log`); per-cal we only emit the event.
+    try:
+        from camera_math import point_in_polygon as _pip
+        cam_polys = _camera_floor_polygons_with_ids()
+        cam_poly_for_id = {p["id"]: p["polygon"] for p in cam_polys}
+        cam_poly = cam_poly_for_id.get(cam["id"])
+        if cam_poly:
+            drift_samples = []
+            for s in samples:
+                xy = (s.get("stageX"), s.get("stageY"))
+                if xy[0] is None or xy[1] is None:
+                    continue
+                if not _pip(xy, cam_poly):
+                    drift_samples.append({
+                        "stageXY": [xy[0], xy[1]],
+                        "markerId": s.get("markerId"),
+                    })
+            if drift_samples:
+                ratio = len(drift_samples) / max(1, len(samples))
+                log.warning("MOVER-CAL %d: cam-fov-drift detected - "
+                             "%d/%d confirmed beams fell OUTSIDE assumed "
+                             "FOV polygon for camera %s (%.0f%% drift)",
+                             fid, len(drift_samples), len(samples),
+                             cam["id"], ratio * 100.0)
+                job["camFovDrift"] = {
+                    "cameraId": cam["id"],
+                    "cameraHwDescriptor": next(
+                        (f.get("hwDescriptor") for f in _fixtures
+                         if f.get("id") == cam["id"]), None),
+                    "outsidePolygon": drift_samples,
+                    "totalSamples": len(samples),
+                    "driftRatio": round(ratio, 3),
+                }
+                _mcal_log(job, f"FOV polygon over-claimed: {len(drift_samples)}"
+                               f"/{len(samples)} confirmed beams landed "
+                               f"outside camera {cam['id']}'s assumed FOV. "
+                               f"Refine the per-model constants in "
+                               f"firmware/orangepi/camera_models.json.")
+    except Exception as e:
+        log.debug("MOVER-CAL %d: cam-fov-drift gate raised %s - skipping",
+                  fid, e)
+
     # Phase 3 — fit ParametricFixtureModel from the (pan, tilt, stage) samples.
     job["phase"] = "fitting"; job["progress"] = 92
     _mcal_log(job, f"Fitting ParametricFixtureModel from {len(samples)} samples")
@@ -6150,12 +6200,73 @@ def _mover_cal_thread(fid, cam, bridge_ip, mover_color,
             _set_calibrating(fid, False)
 
 
+# #712 Track 1b — per-camera-model effective-FOV registry. Loaded
+# lazily; the file ships with the orchestrator but keeps a stable
+# location under firmware/orangepi/ since the same registry is
+# consulted by camera-node deploy scripts when matching models for
+# OTA updates. Cache once on first read.
+_CAMERA_MODELS_CACHE = None
+
+
+def _load_camera_models():
+    """Return the camera-models dict (`{hwDescriptor: {effectiveFovDeg, ...}}`).
+    Empty dict on missing/unparseable file. Cached after first read."""
+    global _CAMERA_MODELS_CACHE
+    if _CAMERA_MODELS_CACHE is not None:
+        return _CAMERA_MODELS_CACHE
+    path = (Path(__file__).resolve().parent.parent.parent
+             / "firmware" / "orangepi" / "camera_models.json")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        _CAMERA_MODELS_CACHE = data.get("models") or {}
+    except Exception as e:
+        log.debug("camera_models.json unavailable (%s) - falling back "
+                  "to manufacturer FOV", e)
+        _CAMERA_MODELS_CACHE = {}
+    return _CAMERA_MODELS_CACHE
+
+
+def _effective_fov_for_camera(fixture):
+    """#712 Track 1b — look up lens-effective FOV for a camera fixture.
+
+    Manufacturer-spec ``fovDeg`` overstates the real visible region for
+    most USB webcams (V4L2 crop + USB pipeline downsampling). The
+    registry at ``firmware/orangepi/camera_models.json`` maps the
+    camera's ``hwDescriptor`` to a measured-effective FOV; orchestrator
+    uses that when building floor-coverage polygons.
+
+    Falls back to the fixture's ``fovDeg`` (manufacturer spec) when no
+    registry entry matches — keeps untested rigs running while the
+    Track 1c auto-fit collects evidence to refine.
+    """
+    nominal = float(fixture.get("fovDeg") or 90)
+    hw = fixture.get("hwDescriptor")
+    if not hw:
+        return nominal
+    models = _load_camera_models()
+    entry = models.get(hw)
+    if not entry:
+        return nominal
+    eff = entry.get("effectiveFovDeg")
+    if eff is None:
+        return nominal
+    try:
+        return float(eff)
+    except (TypeError, ValueError):
+        return nominal
+
+
 def _positioned_cameras_for_target_filter():
     """#659 — assemble the camera descriptors `pick_calibration_targets`
     needs to build floor-view polygons for target filtering. Returns a
     list of ``{pos, rotation, fov}`` for every camera fixture that has
     a placed position in the layout. Empty when no cameras are
     positioned — caller falls back to legacy single-camera FOV cone.
+
+    #712 — `fov` is the lens-effective value via
+    :func:`_effective_fov_for_camera` so floor polygons match what the
+    camera physically sees, not the over-claiming manufacturer spec.
     """
     pos_map = {p["id"]: p for p in _layout.get("children", [])}
     out = []
@@ -6166,9 +6277,12 @@ def _positioned_cameras_for_target_filter():
         if not p:
             continue
         out.append({
+            "id": f.get("id"),
             "pos": (p.get("x", 0), p.get("y", 0), p.get("z", 0)),
             "rotation": f.get("rotation") or [0, 0, 0],
-            "fov": f.get("fovDeg", 90),
+            "fov": _effective_fov_for_camera(f),
+            "fovNominal": float(f.get("fovDeg") or 90),
+            "hwDescriptor": f.get("hwDescriptor"),
         })
     return out
 

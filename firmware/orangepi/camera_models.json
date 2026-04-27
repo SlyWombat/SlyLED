@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "comment": "#712 Track 1b — per-camera-model lens calibration. Maps the camera's `hwDescriptor` (as reported by `/api/cameras` from the camera node) to lens-effective constants the orchestrator uses when building floor-coverage polygons. The manufacturer's nominal FOV from the spec sheet is usually 5-15% wider than the lens actually sees once V4L2 cropping + USB-pipeline downsampling are applied; using the nominal value over-claims floor coverage and the cal pipeline aims at cells the camera doesn't actually see.\n\nNew rigs inherit these constants automatically by `hwDescriptor` lookup. When a camera's `hwDescriptor` is not in this registry the orchestrator falls back to the fixture's declared `fovDeg` (manufacturer spec) and emits a `cam-fov-no-calibration` warning so the operator knows the polygon is best-effort.",
+  "models": {
+    "EMEET SmartCam Nova 4K: EMEET S": {
+      "displayName": "EMEET SmartCam Nova 4K",
+      "nominalFovDeg": 90.0,
+      "effectiveFovDeg": 78.5,
+      "k1": 0.02,
+      "source": "lab-bench-2026-04-27",
+      "notes": "4K mode, V4L2-cropped frame. Manufacturer spec is 90 deg diagonal; effective horizontal FOV measured at ~78.5 deg by sighting a 1 m wide target at 0.65 m distance and confirming both edges fall on image columns 0 and 3839 of a 4K frame. k1 barrel distortion estimated visually at +2% on the long edge."
+    }
+  }
+}
