@@ -85,6 +85,20 @@ def main():
             break
         except Exception:
             continue
+    # Per-camera-model effective FOV registry (#712 Track 1b). Falls back
+    # to the manufacturer `fovDeg` when no registry entry matches.
+    cam_models_registry = {}
+    for reg_path in (
+        "/home/sly/slyled2/firmware/orangepi/camera_models.json",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "..", "firmware", "orangepi", "camera_models.json"),
+    ):
+        try:
+            with open(reg_path) as _rfh:
+                cam_models_registry = json.load(_rfh).get("models", {}) or {}
+            break
+        except Exception:
+            continue
     for c in fixtures:
         if c.get("fixtureType") != "camera":
             continue
@@ -92,7 +106,14 @@ def main():
         cam_pos = [float(cp.get("x", 0)), float(cp.get("y", 0)),
                     float(cp.get("z", 0))]
         cam_rot = c.get("rotation", [0, 0, 0])
-        cam_fov = float(c.get("fovDeg", 90))
+        # #712 Track 1b — prefer lab-measured effective FOV for known camera
+        # models so the rendered floor polygon matches what the cal sees.
+        nominal_fov = float(c.get("fovDeg", 90))
+        hw = c.get("hwDescriptor") or ""
+        reg_entry = cam_models_registry.get(hw)
+        cam_fov = float(reg_entry["effectiveFovDeg"]) if (
+            reg_entry and reg_entry.get("effectiveFovDeg")
+        ) else nominal_fov
         floor_poly = []
         if camera_floor_polygon is not None:
             try:

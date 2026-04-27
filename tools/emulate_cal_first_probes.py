@@ -99,6 +99,24 @@ def main():
         mount_yaw_deg=rz, mount_pitch_deg=rx, mount_roll_deg=ry,
     )
 
+    # Camera-models registry (#712 Track 1b) — match what the cal pipeline
+    # actually uses for floor-coverage polygons. /api/cameras still returns
+    # the manufacturer-nominal `fovDeg`; production uses the lab-measured
+    # effective value via _effective_fov_for_camera. Mirror that lookup here.
+    cam_registry = {}
+    try:
+        with open("/home/sly/slyled2/firmware/orangepi/camera_models.json") as fh:
+            cam_registry = json.load(fh).get("models", {}) or {}
+    except Exception:
+        pass
+
+    def effective_fov_for(c):
+        hw = c.get("hwDescriptor") or ""
+        entry = cam_registry.get(hw)
+        if entry and entry.get("effectiveFovDeg"):
+            return float(entry["effectiveFovDeg"])
+        return float(c.get("fovDeg", 90))
+
     # camera polygons
     cams, polys = [], []
     for c in cams_api:
@@ -109,12 +127,19 @@ def main():
             continue
         pos = [le["x"], le["y"], le["z"]]
         rot = le.get("rotation")
-        poly = camera_floor_polygon(pos, rot, c.get("fovDeg", 90),
+        eff_fov = effective_fov_for(c)
+        poly = camera_floor_polygon(pos, rot, eff_fov,
                                      stage_bounds=sb, floor_z=0.0)
         if poly:
             cams.append({"id": c["id"], "pos": pos, "rotation": rot,
-                          "fov": c.get("fovDeg", 90)})
+                          "fov": eff_fov, "nominalFov": c.get("fovDeg", 90)})
             polys.append(poly)
+    print(f"=== effective FOV per camera (post-#712 registry) ===")
+    for c in cams:
+        if c["fov"] != c["nominalFov"]:
+            print(f"  cam #{c['id']}: nominal={c['nominalFov']}° -> effective={c['fov']}° (registry hit)")
+        else:
+            print(f"  cam #{c['id']}: nominal={c['nominalFov']}° (no registry entry)")
 
     print(f"=== fixture #{args.fid}: pos={fx_pos} rot={fx_rot} inverted={inv}  "
           f"home_pan_norm={home_pan:.4f} home_tilt_norm={home_tilt:.4f} ===")
