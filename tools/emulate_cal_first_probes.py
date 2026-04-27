@@ -83,10 +83,29 @@ def main():
         return 2
     fx_pos = (f["x"], f["y"], f["z"])
     fx_rot = f.get("rotation") or [0, 0, 0]
-    home_pan = f["homePanDmx16"] / 65535.0
-    home_tilt = f["homeTiltDmx16"] / 65535.0
+    home_pan_dmx16 = f.get("homePanDmx16")
+    home_tilt_dmx16 = f.get("homeTiltDmx16")
+    if home_pan_dmx16 is None or home_tilt_dmx16 is None:
+        print(f"error: fixture #{args.fid} has no Set Home anchor; can't simulate cal "
+              f"(homePanDmx16={home_pan_dmx16}, homeTiltDmx16={home_tilt_dmx16})",
+              file=sys.stderr)
+        return 2
+    home_pan = home_pan_dmx16 / 65535.0
+    home_tilt = home_tilt_dmx16 / 65535.0
     inv = bool(f.get("mountedInverted"))
-    PR, TR = 540.0, 180.0  # adjust if non-150W profile
+    # Profile-aware: pull panRange/tiltRange/tiltOffsetDmx16/tiltUp from the
+    # orchestrator. Defaults match the legacy 150W convention if a profile
+    # doesn't define the new fields (post-#716 schema).
+    profs = http_get(args.orch, "/api/dmx-profiles") or []
+    profs = profs if isinstance(profs, list) else profs.get("profiles", [])
+    pid = f.get("dmxProfileId")
+    prof = next((p for p in profs if p.get("id") == pid), {})
+    PR = float(prof.get("panRange") or 540)
+    TR = float(prof.get("tiltRange") or 180)
+    tilt_offset_norm = float(prof.get("tiltOffsetDmx16") or 32768) / 65535.0
+    tilt_up = bool(prof.get("tiltUp") or False)
+    print(f"=== profile {pid}: panRange={PR}° tiltRange={TR}° "
+          f"tiltOffsetDmx16={int(tilt_offset_norm*65535)} tiltUp={tilt_up} ===")
 
     # Production grid_filter mirror (parent_server._build_battleship_grid_filter)
     rx = float((fx_rot or [0, 0, 0])[0] or 0)
@@ -148,7 +167,7 @@ def main():
 
     # Build the same grid the cal builds
     ps, ts = _adaptive_coarse_steps(PR, TR, 12.0)
-    band = _camera_visible_tilt_band(fx_pos, fx_rot, home_pan, PR, TR, inv, polys)
+    band = _camera_visible_tilt_band(fx_pos, fx_rot, home_pan, PR, TR, inv, polys, tilt_offset_norm=tilt_offset_norm, tilt_up=tilt_up)
     tlo, thi = band
     tspan = (thi - tlo) / max(1, ts)
     pan_frac = min(360.0, PR) / PR
@@ -199,7 +218,7 @@ def main():
     def cell_sort_key(xy):
         p, t = xy
         h = _ray_floor_hit(fx_pos, fx_rot, p, t, PR, TR,
-                            mounted_inverted=inv, home_pan_norm=home_pan)
+                            mounted_inverted=inv, home_pan_norm=home_pan, tilt_offset_norm=tilt_offset_norm, tilt_up=tilt_up)
         if h is None:
             return (2, 1e18, abs(p - home_pan))
         in_fov = any(_point_in_polygon(h, poly) for poly in polys)
@@ -222,7 +241,7 @@ def main():
         # #711 intelligent fallback: drop unreachable, sort survivors.
         kept = [pt for pt in grid
                 if _ray_floor_hit(fx_pos, fx_rot, pt[0], pt[1], PR, TR,
-                                   mounted_inverted=inv, home_pan_norm=home_pan)
+                                   mounted_inverted=inv, home_pan_norm=home_pan, tilt_offset_norm=tilt_offset_norm, tilt_up=tilt_up)
                 is not None]
         kept.sort(key=cell_sort_key)
         sorted_grid = kept
@@ -248,7 +267,7 @@ def main():
     probe_records = []
     for n, (p, t) in enumerate(sorted_grid[:args.probes], 1):
         cal_h = _ray_floor_hit(fx_pos, fx_rot, p, t, PR, TR,
-                                mounted_inverted=inv, home_pan_norm=home_pan)
+                                mounted_inverted=inv, home_pan_norm=home_pan, tilt_offset_norm=tilt_offset_norm, tilt_up=tilt_up)
         ref_h = good_floor_hit(fx_pos, p, t, PR, TR, inverted=inv,
                                 home_pan_norm=home_pan)
         try:
@@ -280,7 +299,7 @@ def main():
     max_par_ref_d = 0.0
     for p, t in grid:
         cal_h = _ray_floor_hit(fx_pos, fx_rot, p, t, PR, TR,
-                                mounted_inverted=inv, home_pan_norm=home_pan)
+                                mounted_inverted=inv, home_pan_norm=home_pan, tilt_offset_norm=tilt_offset_norm, tilt_up=tilt_up)
         ref_h = good_floor_hit(fx_pos, p, t, PR, TR, inverted=inv,
                                 home_pan_norm=home_pan)
         try:

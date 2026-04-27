@@ -1,0 +1,22 @@
+== cal-status poller fid=14 @ 5.0 Hz -> docs\live-test-sessions\2026-04-27\cal-fid14\cal-status-142421.ndjson
+[2026-04-27T18:24:24.276233Z] starting     progress=0  
+[2026-04-27T18:24:39.869653Z] discovery    progress=10  Discovery (flash): probe 1/24 pan=0.57 tilt=0.08 probe#4 pan=0.5720 tilt=0.0833 dim=0
+[2026-04-27T18:24:44.337733Z] discovery    progress=10  Discovery (flash): candidate at pan=0.57 tilt=0.08 — confirm probe#7 pan=0.5812 tilt=0.0833 dim=255
+[2026-04-27T18:24:46.548887Z] discovery    progress=10  Discovery (flash): candidate at pan=0.57 tilt=0.08 — confirm probe#9 pan=0.5627 tilt=0.0833 dim=255
+[2026-04-27T18:24:48.793753Z] discovery    progress=10  Discovery (flash): candidate at pan=0.57 tilt=0.08 — confirm probe#11 pan=0.5720 tilt=0.0926 dim=255
+[2026-04-27T18:24:53.245369Z] discovery    progress=10  Discovery (flash): candidate at pan=0.57 tilt=0.08 — confirm probe#13 pan=0.5720 tilt=0.0741 dim=255
+[2026-04-27T18:24:55.461320Z] discovery    progress=10  Discovery (flash): probe 2/24 pan=0.57 tilt=0.25 probe#18 pan=0.5720 tilt=0.2500 dim=0
+[2026-04-27T18:24:57.695754Z] discovery    progress=10  Discovery (flash): probe 2/24 pan=0.57 tilt=0.25 probe#19 pan=0.5720 tilt=0.2500 dim=255
+[2026-04-27T18:24:59.911027Z] discovery    progress=10  Discovery (flash): probe 2/24 pan=0.57 tilt=0.25 probe#21 pan=0.5720 tilt=0.2500 dim=255
+[2026-04-27T18:25:02.135678Z] discovery    progress=10  Discovery (flash): probe 3/24 pan=0.57 tilt=0.42 probe#24 pan=0.5720 tilt=0.4167 dim=0
+[2026-04-27T18:25:04.379946Z] discovery    progress=10  Discovery (flash): candidate at pan=0.57 tilt=0.42 — confirm probe#27 pan=0.5812 tilt=0.4167 dim=255
+[2026-04-27T18:25:06.613790Z] discovery    progress=10  Discovery (flash): candidate at pan=0.57 tilt=0.42 — confirm probe#28 pan=0.5627 tilt=0.4167 dim=0
+[2026-04-27T18:25:08.836531Z] discovery    progress=10  Discovery (flash): candidate at pan=0.57 tilt=0.42 — confirm probe#29 pan=0.5627 tilt=0.4167 dim=255
+[2026-04-27T18:25:11.075858Z] discovery    progress=10  Discovery (flash): candidate at pan=0.57 tilt=0.42 — confirm probe#31 pan=0.5720 tilt=0.4259 dim=255
+[2026-04-27T18:25:13.293880Z] discovery    progress=10  Discovery (flash): candidate at pan=0.57 tilt=0.42 — confirm probe#33 pan=0.5720 tilt=0.4074 dim=255
+[2026-04-27T18:25:15.512879Z] discovery    progress=10  Discovery (flash): probe 4/24 pan=0.66 tilt=0.08 probe#38 pan=0.6553 tilt=0.0833 dim=0
+[2026-04-27T18:25:19.990119Z] discovery    progress=10  Discovery (flash): candidate at pan=0.66 tilt=0.08 — confirm probe#41 pan=0.6646 tilt=0.0833 dim=255
+[2026-04-27T18:25:22.196956Z] discovery    progress=10  Discovery (flash): candidate at pan=0.66 tilt=0.08 — confirm probe#43 pan=0.6461 tilt=0.0833 dim=255
+[2026-04-27T18:25:24.414257Z] discovery    progress=10  Discovery (flash): candidate at pan=0.66 tilt=0.08 — confirm probe#45 pan=0.6553 tilt=0.0926 dim=255
+[2026-04-27T18:25:26.657158Z] discovery    progress=10  Discovery (flash): candidate at pan=0.66 tilt=0.08 — confirm probe#47 pan=0.6553 tilt=0.0741 dim=255
+[2026-04-27T18:25:28.891542Z] discovery    progress=10  Discovery (flash): candidate at pan=0.66 tilt=0.08 — confirm probe#48 pan=0.6553 tilt=0.0833 dim=0
