@@ -1,123 +1,123 @@
-{
-  "firmware": [
-    {
-      "id": "child-led-esp32",
-      "name": "LED Performer (ESP32)",
-      "description": "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
-      "board": "esp32",
-      "fqbn": "esp32:esp32:esp32",
-      "version": "8.4.4",
-      "file": "esp32/main.ino.merged.bin",
-      "releaseAsset": "esp32-firmware-merged.bin",
-      "sha256": "4fba443ebed6dd03a12fbedf97dc3b5371e65c25efdb893a31a97247cc3f90ca",
-      "flashMethod": "esptool",
-      "buildDefines": [
-        "BOARD_ESP32"
-      ]
-    },
-    {
-      "id": "child-led-d1mini",
-      "name": "LED Performer (D1 Mini)",
-      "description": "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
-      "board": "d1mini",
-      "fqbn": "esp8266:esp8266:d1_mini",
-      "version": "8.4.4",
-      "file": "d1mini/main.ino.bin",
-      "releaseAsset": "d1mini-firmware.bin",
-      "sha256": "c07bd65d44439e635f3054b9d8e39b294ad1141531c9e6c3b0a18ea427d3fc9e",
-      "flashMethod": "esptool",
-      "buildDefines": [
-        "BOARD_D1MINI"
-      ]
-    },
-    {
-      "id": "dmx-bridge-esp32",
-      "name": "DMX Bridge (ESP32)",
-      "description": "DMX-512 output via RS-485 transceiver \u00e2\u20ac\u201d receives SlyLED actions, outputs DMX frames at 40Hz",
-      "board": "esp32",
-      "fqbn": "esp32:esp32:esp32",
-      "version": "8.4.4",
-      "file": "esp32-dmx/main.ino.merged.bin",
-      "releaseAsset": "esp32-dmx-bridge-firmware.bin",
-      "sha256": "d8c2e67d8fa0c4f0ae3881133dc8c65923fe78e029b13f59b69fb972a63740f1",
-      "flashMethod": "esptool",
-      "buildDefines": [
-        "DMX_BRIDGE"
-      ],
-      "buildFlags": "-DDMX_BRIDGE"
-    },
-    {
-      "id": "child-led-giga",
-      "name": "LED Performer (Giga R1)",
-      "description": "Onboard RGB LED performer \u00e2\u20ac\u201d 1 pixel, all 14 effects",
-      "board": "giga",
-      "fqbn": "arduino:mbed_giga:giga",
-      "version": "8.4.4",
-      "file": "giga/child-led.bin",
-      "releaseAsset": "giga-child-firmware.bin",
-      "sha256": "1345fc1b4d8cded341354bfd00f982bd081a628465fa742508925ab1c2b59f6b",
-      "flashMethod": "dfu",
-      "buildDefines": [
-        "GIGA_CHILD"
-      ],
-      "buildFlags": "-DGIGA_CHILD"
-    },
-    {
-      "id": "parent-giga",
-      "name": "Orchestrator Runtime (Giga R1)",
-      "description": "Minimal runtime parent for Giga R1 WiFi",
-      "board": "giga",
-      "fqbn": "arduino:mbed_giga:giga",
-      "version": "8.4.4",
-      "file": "giga/parent.bin",
-      "releaseAsset": "giga-parent-firmware.bin",
-      "sha256": "ceb4e0a9959b6d59ed22a3a76a864a875f49b19273653f96d828f439e4ef5eb6",
-      "flashMethod": "dfu",
-      "buildDefines": [
-        "BOARD_GIGA"
-      ]
-    },
-    {
-      "id": "dmx-bridge-giga",
-      "name": "DMX Bridge (Giga R1)",
-      "description": "Giga R1 with RS-485 shield \u00e2\u20ac\u201d Art-Net receiver, DMX-512 output",
-      "board": "giga",
-      "fqbn": "arduino:mbed_giga:giga",
-      "version": "8.4.4",
-      "file": "giga/dmx-bridge.bin",
-      "releaseAsset": "giga-dmx-bridge-firmware.bin",
-      "sha256": "d86dd941c689f2f07bd016bee58d00184e533e3330b3557fb818d89880fa08a5",
-      "flashMethod": "dfu",
-      "buildDefines": [
-        "GIGA_DMX"
-      ]
-    },
-    {
-      "id": "gyro-esp32s3",
-      "name": "Gyro Controller (ESP32-S3 LCD 1.28)",
-      "description": "Waveshare ESP32-S3 1.28inch round LCD \u00e2\u20ac\u201d orientation controller for DMX moving heads",
-      "board": "esp32s3",
-      "fqbn": "esp32:esp32:esp32s3",
-      "version": "1.2.0",
-      "file": "esp32s3/main.ino.merged.bin",
-      "releaseAsset": "esp32s3-gyro-firmware.bin",
-      "sha256": "0f1f82bee1f0429a831a9fb2ab3b5a3953a7d2a27902a427852b9dc689b4bf4c",
-      "flashMethod": "esptool",
-      "buildDefines": [
-        "GYRO_BOARD"
-      ],
-      "buildFlags": "-DGYRO_BOARD"
-    },
-    {
-      "id": "camera-node",
-      "name": "Camera Node (Linux SBC)",
-      "description": "USB V4L2 camera node \u00e2\u20ac\u201d Flask + UDP discovery, runs on any Debian/Ubuntu SBC (Orange Pi, Raspberry Pi)",
-      "board": "camera",
-      "version": "1.6.3",
-      "file": "orangepi/camera_server.py",
-      "releaseAsset": "camera-firmware-v1.6.3.zip",
-      "sha256": "9e2b61cfa36eb4cd2987a6cd36eb9b6d0cd8fd285dab0b2d65c6a794681db565",
-      "flashMethod": "ssh"
-    }
-  ]
+﻿{
+    "firmware":  [
+                     {
+                         "id":  "child-led-esp32",
+                         "name":  "LED Performer (ESP32)",
+                         "description":  "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
+                         "board":  "esp32",
+                         "fqbn":  "esp32:esp32:esp32",
+                         "version":  "8.4.10",
+                         "file":  "esp32/main.ino.merged.bin",
+                         "releaseAsset":  "esp32-firmware-merged.bin",
+                         "sha256":  "d5ddc83955e9305c56aab957a709c3f27208321621407d1f8c863f457be101a9",
+                         "flashMethod":  "esptool",
+                         "buildDefines":  [
+                                              "BOARD_ESP32"
+                                          ]
+                     },
+                     {
+                         "id":  "child-led-d1mini",
+                         "name":  "LED Performer (D1 Mini)",
+                         "description":  "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
+                         "board":  "d1mini",
+                         "fqbn":  "esp8266:esp8266:d1_mini",
+                         "version":  "8.4.10",
+                         "file":  "d1mini/main.ino.bin",
+                         "releaseAsset":  "d1mini-firmware.bin",
+                         "sha256":  "3c822be3c87b912491d3815c9932f6ec2c7934b77e17522583a5be860159ecba",
+                         "flashMethod":  "esptool",
+                         "buildDefines":  [
+                                              "BOARD_D1MINI"
+                                          ]
+                     },
+                     {
+                         "id":  "dmx-bridge-esp32",
+                         "name":  "DMX Bridge (ESP32)",
+                         "description":  "DMX-512 output via RS-485 transceiver â€” receives SlyLED actions, outputs DMX frames at 40Hz",
+                         "board":  "esp32",
+                         "fqbn":  "esp32:esp32:esp32",
+                         "version":  "8.4.4",
+                         "file":  "esp32-dmx/main.ino.merged.bin",
+                         "releaseAsset":  "esp32-dmx-bridge-firmware.bin",
+                         "sha256":  "d8c2e67d8fa0c4f0ae3881133dc8c65923fe78e029b13f59b69fb972a63740f1",
+                         "flashMethod":  "esptool",
+                         "buildDefines":  [
+                                              "DMX_BRIDGE"
+                                          ],
+                         "buildFlags":  "-DDMX_BRIDGE"
+                     },
+                     {
+                         "id":  "child-led-giga",
+                         "name":  "LED Performer (Giga R1)",
+                         "description":  "Onboard RGB LED performer â€” 1 pixel, all 14 effects",
+                         "board":  "giga",
+                         "fqbn":  "arduino:mbed_giga:giga",
+                         "version":  "8.4.4",
+                         "file":  "giga/child-led.bin",
+                         "releaseAsset":  "giga-child-firmware.bin",
+                         "sha256":  "1345fc1b4d8cded341354bfd00f982bd081a628465fa742508925ab1c2b59f6b",
+                         "flashMethod":  "dfu",
+                         "buildDefines":  [
+                                              "GIGA_CHILD"
+                                          ],
+                         "buildFlags":  "-DGIGA_CHILD"
+                     },
+                     {
+                         "id":  "parent-giga",
+                         "name":  "Orchestrator Runtime (Giga R1)",
+                         "description":  "Minimal runtime parent for Giga R1 WiFi",
+                         "board":  "giga",
+                         "fqbn":  "arduino:mbed_giga:giga",
+                         "version":  "8.4.4",
+                         "file":  "giga/parent.bin",
+                         "releaseAsset":  "giga-parent-firmware.bin",
+                         "sha256":  "ceb4e0a9959b6d59ed22a3a76a864a875f49b19273653f96d828f439e4ef5eb6",
+                         "flashMethod":  "dfu",
+                         "buildDefines":  [
+                                              "BOARD_GIGA"
+                                          ]
+                     },
+                     {
+                         "id":  "dmx-bridge-giga",
+                         "name":  "DMX Bridge (Giga R1)",
+                         "description":  "Giga R1 with RS-485 shield â€” Art-Net receiver, DMX-512 output",
+                         "board":  "giga",
+                         "fqbn":  "arduino:mbed_giga:giga",
+                         "version":  "8.4.4",
+                         "file":  "giga/dmx-bridge.bin",
+                         "releaseAsset":  "giga-dmx-bridge-firmware.bin",
+                         "sha256":  "d86dd941c689f2f07bd016bee58d00184e533e3330b3557fb818d89880fa08a5",
+                         "flashMethod":  "dfu",
+                         "buildDefines":  [
+                                              "GIGA_DMX"
+                                          ]
+                     },
+                     {
+                         "id":  "gyro-esp32s3",
+                         "name":  "Gyro Controller (ESP32-S3 LCD 1.28)",
+                         "description":  "Waveshare ESP32-S3 1.28inch round LCD â€” orientation controller for DMX moving heads",
+                         "board":  "esp32s3",
+                         "fqbn":  "esp32:esp32:esp32s3",
+                         "version":  "1.2.0",
+                         "file":  "esp32s3/main.ino.merged.bin",
+                         "releaseAsset":  "esp32s3-gyro-firmware.bin",
+                         "sha256":  "0f1f82bee1f0429a831a9fb2ab3b5a3953a7d2a27902a427852b9dc689b4bf4c",
+                         "flashMethod":  "esptool",
+                         "buildDefines":  [
+                                              "GYRO_BOARD"
+                                          ],
+                         "buildFlags":  "-DGYRO_BOARD"
+                     },
+                     {
+                         "id":  "camera-node",
+                         "name":  "Camera Node (Linux SBC)",
+                         "description":  "USB V4L2 camera node â€” Flask + UDP discovery, runs on any Debian/Ubuntu SBC (Orange Pi, Raspberry Pi)",
+                         "board":  "camera",
+                         "version":  "1.6.3",
+                         "file":  "orangepi/camera_server.py",
+                         "releaseAsset":  "camera-firmware-v1.6.3.zip",
+                         "sha256":  "9e2b61cfa36eb4cd2987a6cd36eb9b6d0cd8fd285dab0b2d65c6a794681db565",
+                         "flashMethod":  "ssh"
+                     }
+                 ]
 }
