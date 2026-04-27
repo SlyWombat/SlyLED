@@ -6,10 +6,10 @@
                          "description":  "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
                          "board":  "esp32",
                          "fqbn":  "esp32:esp32:esp32",
-                         "version":  "8.4.13",
+                         "version":  "8.4.14",
                          "file":  "esp32/main.ino.merged.bin",
                          "releaseAsset":  "esp32-firmware-merged.bin",
-                         "sha256":  "2d9108b8ef1eb7eb1a2ab9de98d2182f1abfdd26405dd16fde1cdf5e4c3a5415",
+                         "sha256":  "194015781c8cdb777c95e00251fcc57bde90d6e8174e6d02ae7c04343ab357ad",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "BOARD_ESP32"
@@ -21,10 +21,10 @@
                          "description":  "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
                          "board":  "d1mini",
                          "fqbn":  "esp8266:esp8266:d1_mini",
-                         "version":  "8.4.14",
+                         "version":  "8.4.15",
                          "file":  "d1mini/main.ino.bin",
                          "releaseAsset":  "d1mini-firmware.bin",
-                         "sha256":  "adaaebb0df846ef3e109891482987075bc2aeed8e792df216f0a71e99c8aada2",
+                         "sha256":  "b14467b44770ab1eaabf24417f73ca3ccd3cd437d9f21bf334c1c73548db0b1f",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "BOARD_D1MINI"
