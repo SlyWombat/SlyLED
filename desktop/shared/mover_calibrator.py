@@ -973,9 +973,30 @@ def _camera_visible_tilt_band(fx_pos, fx_rot, home_pan_norm,
             f"tiltRange={tilt_range_deg!r} — both must be set on the "
             "fixture's DMX profile before cal can run. Open the profile "
             "editor and pin the mechanical ranges.")
+    # #718 — adapt the sweep window to where the floor-aiming band
+    # actually lives. Pre-#718 always swept [0.05, 0.95] which was
+    # fine for symmetric-range fixtures (legacy 150W with offset=0.5)
+    # but completely missed the floor band on asymmetric fixtures
+    # (350W: floor-aiming band is tilt_norm in [0, 0.0714]). The sweep
+    # would visit only mech_tilt in [-4.5°, 0°], all aimed past the
+    # back wall, and raise "no tilt projects to any camera FOV".
+    if tilt_up:
+        # tilt_up=True: increasing tilt above offset = beam UP (350W).
+        # Floor band sits between [0, tilt_offset_norm]; tilt_norm at
+        # the offset is horizontal (no floor hit), and tilt_norm < 0
+        # is unreachable. Add a 2 % overshoot upward so a fixture
+        # whose offset value is slightly off still gets the sweep
+        # past horizontal-forward.
+        sweep_lo = 0.0
+        sweep_hi = min(1.0, max(0.02, tilt_offset_norm + 0.02))
+    else:
+        # Legacy 150W convention (offset=0.5, tilt_up=False). Sweep
+        # the full [0.05, 0.95] range — the floor band is one half
+        # of that and the sweep finds it.
+        sweep_lo, sweep_hi = 0.05, 0.95
     in_band = []
     for i in range(samples):
-        t = 0.05 + (0.95 - 0.05) * (i / max(1, samples - 1))
+        t = sweep_lo + (sweep_hi - sweep_lo) * (i / max(1, samples - 1))
         hit = _ray_floor_hit(fx_pos, fx_rot, home_pan_norm, t,
                               pan_range_deg, tilt_range_deg,
                               mounted_inverted=mounted_inverted,
@@ -988,12 +1009,12 @@ def _camera_visible_tilt_band(fx_pos, fx_rot, home_pan_norm,
             in_band.append(t)
     if not in_band:
         raise CalibrationError(
-            f"_camera_visible_tilt_band: at home pan={home_pan_norm:.3f}, "
-            "no tilt in [0.05, 0.95] projects the beam onto any camera "
-            "FOV polygon. Likely cause: Set Home anchor is wrong, or the "
-            "fixture's mountedInverted / rotation does not match its "
-            "physical mount. Re-run Set Home, or check the fixture's "
-            "rotation in the layout.")
+            f"_camera_visible_tilt_band: at home pan={home_pan_norm:.3f} "
+            f"(sweep [{sweep_lo:.3f}, {sweep_hi:.3f}]), no tilt projects "
+            "the beam onto any camera FOV polygon. Likely cause: Set Home "
+            "anchor is wrong, the fixture's mountedInverted / rotation does "
+            "not match its physical mount, or the profile's "
+            "tiltOffsetDmx16 / tiltUp don't match the actual fixture wiring.")
     return (min(in_band), max(in_band))
 
 
