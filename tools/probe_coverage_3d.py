@@ -10,7 +10,7 @@ Usage:
         --orch http://localhost:8080 --fid 17 \
         --out docs/live-test-sessions/2026-04-26/probe-coverage-141633.html
 """
-import argparse, json, math, sys, urllib.request
+import argparse, json, math, os, sys, urllib.request
 from pathlib import Path
 
 
@@ -71,16 +71,43 @@ def main():
     inverted = bool(f.get("mountedInverted"))
 
     cameras = []
+    camera_floor_polygon = None
+    for shared_dir in (
+        "/home/sly/slyled2/desktop/shared",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "..", "desktop", "shared"),
+    ):
+        try:
+            if shared_dir not in sys.path:
+                sys.path.insert(0, shared_dir)
+            from camera_math import camera_floor_polygon as _cfp
+            camera_floor_polygon = _cfp
+            break
+        except Exception:
+            continue
     for c in fixtures:
         if c.get("fixtureType") != "camera":
             continue
         cp = children.get(c["id"], {})
+        cam_pos = [float(cp.get("x", 0)), float(cp.get("y", 0)),
+                    float(cp.get("z", 0))]
+        cam_rot = c.get("rotation", [0, 0, 0])
+        cam_fov = float(c.get("fovDeg", 90))
+        floor_poly = []
+        if camera_floor_polygon is not None:
+            try:
+                floor_poly = camera_floor_polygon(
+                    cam_pos, cam_rot, cam_fov,
+                    stage_bounds={"w": 1e9, "d": 1e9, "h": 1e9},
+                    floor_z=0.0)
+                floor_poly = [[float(x), float(y)] for x, y in floor_poly]
+            except Exception:
+                floor_poly = []
         cameras.append({
             "id": c["id"], "name": c.get("name", ""),
-            "x": float(cp.get("x", 0)), "y": float(cp.get("y", 0)),
-            "z": float(cp.get("z", 0)),
-            "fov": float(c.get("fovDeg", 90)),
-            "rot": c.get("rotation", [0, 0, 0]),
+            "x": cam_pos[0], "y": cam_pos[1], "z": cam_pos[2],
+            "fov": cam_fov, "rot": cam_rot,
+            "floorPolygon": floor_poly,
         })
 
     markers = http_get(f"{args.orch}/api/aruco/markers").get("markers", [])
@@ -179,6 +206,20 @@ def main():
                      "z": float(m.get("z", 0) or 0)} for m in markers],
         "probes": probes,
     }
+
+    # Optional: pull point cloud from /api/space and include surfaces.
+    # Truncate to ~3000 points to keep the HTML size reasonable.
+    try:
+        space = http_get(f"{args.orch}/api/space")
+        pts = space.get("points", []) or []
+        if len(pts) > 3000:
+            step = max(1, len(pts) // 3000)
+            pts = pts[::step]
+        payload["pointCloud"] = pts
+        payload["surfaces"] = space.get("surfaces") or {}
+    except Exception:
+        payload["pointCloud"] = []
+        payload["surfaces"] = {}
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -346,22 +387,106 @@ if (DATA.fixture.homeDir) {
     scene.add(groundDot);
 }
 
-// Cameras + FOV cones
-DATA.cameras.forEach(c => {
+// Cameras + FOV cones + floor polygons (translucent coloured quads
+// per camera, clipped to the stage rectangle so the visible-floor
+// region each camera covers is obvious at a glance).
+const CAM_PALETTE = [0x0ea5e9, 0xa855f7, 0xf97316, 0x10b981, 0xef4444];
+DATA.cameras.forEach((c, idx) => {
+    const colour = CAM_PALETTE[idx %% CAM_PALETTE.length];
     const p = v(c.x, c.y, c.z);
     const dot = new THREE.Mesh(
         new THREE.SphereGeometry(50, 16, 16),
-        new THREE.MeshBasicMaterial({ color: 0x0ea5e9 })
+        new THREE.MeshBasicMaterial({ color: colour })
     );
     dot.position.copy(p);
     scene.add(dot);
     // Drop line
     const drop = new THREE.Line(
         new THREE.BufferGeometry().setFromPoints([p, v(c.x, c.y, 0)]),
-        new THREE.LineBasicMaterial({ color: 0x0ea5e9, opacity: 0.4, transparent: true })
+        new THREE.LineBasicMaterial({ color: colour, opacity: 0.4, transparent: true })
     );
     scene.add(drop);
+    // Floor polygon (clipped to stage rect by intersecting in 2D).
+    const poly = c.floorPolygon || [];
+    const clipped = clipPolyToStage(poly, stageW, stageD);
+    if (clipped.length >= 3) {
+        const shape = new THREE.Shape();
+        shape.moveTo(clipped[0][0], clipped[0][1]);
+        for (let i = 1; i < clipped.length; i++) shape.lineTo(clipped[i][0], clipped[i][1]);
+        shape.lineTo(clipped[0][0], clipped[0][1]);
+        const polyMesh = new THREE.Mesh(
+            new THREE.ShapeGeometry(shape),
+            new THREE.MeshBasicMaterial({
+                color: colour, transparent: true, opacity: 0.18,
+                side: THREE.DoubleSide, depthWrite: false,
+            })
+        );
+        polyMesh.position.z = 2;  // sit just above the floor mesh
+        scene.add(polyMesh);
+        // Outline for readability
+        const pts = clipped.map(pt => v(pt[0], pt[1], 3));
+        pts.push(pts[0]);
+        const outline = new THREE.Line(
+            new THREE.BufferGeometry().setFromPoints(pts),
+            new THREE.LineBasicMaterial({ color: colour, opacity: 0.7, transparent: true })
+        );
+        scene.add(outline);
+    }
 });
+
+// Sutherland–Hodgman polygon clip against the stage rectangle.
+function clipPolyToStage(poly, w, d) {
+    const edges = [
+        { axis: 'x', cmp: pt => pt[0] >= 0,        // left
+          intersect: (a, b) => [0, a[1] + (b[1]-a[1]) * ((0-a[0])/(b[0]-a[0])) ] },
+        { axis: 'x', cmp: pt => pt[0] <= w,        // right
+          intersect: (a, b) => [w, a[1] + (b[1]-a[1]) * ((w-a[0])/(b[0]-a[0])) ] },
+        { axis: 'y', cmp: pt => pt[1] >= 0,        // back
+          intersect: (a, b) => [a[0] + (b[0]-a[0]) * ((0-a[1])/(b[1]-a[1])), 0] },
+        { axis: 'y', cmp: pt => pt[1] <= d,        // front
+          intersect: (a, b) => [a[0] + (b[0]-a[0]) * ((d-a[1])/(b[1]-a[1])), d] },
+    ];
+    let out = poly.slice();
+    for (const e of edges) {
+        if (!out.length) break;
+        const next = [];
+        for (let i = 0; i < out.length; i++) {
+            const cur = out[i];
+            const prev = out[(i - 1 + out.length) %% out.length];
+            const cIn = e.cmp(cur), pIn = e.cmp(prev);
+            if (cIn) {
+                if (!pIn) next.push(e.intersect(prev, cur));
+                next.push(cur);
+            } else if (pIn) {
+                next.push(e.intersect(prev, cur));
+            }
+        }
+        out = next;
+    }
+    return out;
+}
+
+// Point cloud (translucent dots, coloured by their RGB).
+if (DATA.pointCloud && DATA.pointCloud.length) {
+    const positions = new Float32Array(DATA.pointCloud.length * 3);
+    const colors = new Float32Array(DATA.pointCloud.length * 3);
+    DATA.pointCloud.forEach((p, i) => {
+        positions[i*3]   = p[0];
+        positions[i*3+1] = p[1];
+        positions[i*3+2] = p[2];
+        colors[i*3]   = (p[3] || 128) / 255;
+        colors[i*3+1] = (p[4] || 128) / 255;
+        colors[i*3+2] = (p[5] || 128) / 255;
+    });
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    const mat = new THREE.PointsMaterial({
+        size: 18, vertexColors: true, transparent: true, opacity: 0.65,
+        sizeAttenuation: true,
+    });
+    scene.add(new THREE.Points(geom, mat));
+}
 
 // Markers
 DATA.markers.forEach(m => {

@@ -57,11 +57,25 @@ def main():
     layout = http_get(args.orch, "/api/layout")
     fixtures = layout.get("fixtures") or []
     cams_api = http_get(args.orch, "/api/cameras") or []
-    with open("/home/sly/slyled2/desktop/shared/data/stage.json") as fh:
-        stage_m = json.load(fh)
-    sb = {"w": int((stage_m.get("w") or 3.0) * 1000),
-          "d": int((stage_m.get("d") or 4.0) * 1000),
-          "h": int((stage_m.get("h") or 2.0) * 1000)}
+    # Stage bounds: prefer the orchestrator's authoritative values from
+    # /api/space?meta=1 (the same values the SPA + probe_coverage_3d use)
+    # over the desktop/shared/data/stage.json placeholder. The placeholder
+    # ships {w:10, h:5, d:10} which is 10000 mm — way bigger than any real
+    # rig — so reading it directly would over-clip the camera FOV
+    # polygons and report off-stage cells as on-stage.
+    try:
+        space_meta = http_get(args.orch, "/api/space?meta=1")
+        sb = {
+            "w": int(space_meta.get("stageW") or 3620),
+            "d": int(space_meta.get("stageD") or 4000),
+            "h": int(space_meta.get("stageH") or 2540),
+        }
+    except Exception:
+        with open("/home/sly/slyled2/desktop/shared/data/stage.json") as fh:
+            stage_m = json.load(fh)
+        sb = {"w": int((stage_m.get("w") or 3.0) * 1000),
+              "d": int((stage_m.get("d") or 4.0) * 1000),
+              "h": int((stage_m.get("h") or 2.0) * 1000)}
 
     f = next((f for f in fixtures if f["id"] == args.fid), None)
     if not f:
