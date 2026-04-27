@@ -1,0 +1,33 @@
+== monitoring universe 1 @ 50 Hz  fixture #17 addr=1 profile=movinghead-150w-12ch  watch=fixture-only
+[2026-04-26T22:36:51.937985Z] INIT pan=0.6770 (365.6°) tilt=0.0000 (0.0°) dim=0 col=red
+[2026-04-26T22:37:02.138835Z]  3× pan,pan,colour                  pan=0.0000(   0.0°)  tilt=0.0000(   0.0°)  dim=  0  col=white
+[2026-04-26T22:37:12.245419Z]  5× pan,pan,tilt,tilt,colour        pan=0.7083( 382.5°)  tilt=0.2650(  47.7°)  dim=  0  col=green
+[2026-04-26T22:37:16.281459Z]  1× dimmer                          pan=0.7083( 382.5°)  tilt=0.2650(  47.7°)  dim=255  col=green
+[2026-04-26T22:37:18.312890Z]  3× tilt,tilt,dimmer                pan=0.7083( 382.5°)  tilt=0.2150(  38.7°)  dim=  0  col=green
+[2026-04-26T22:37:22.352605Z]  1× dimmer                          pan=0.7083( 382.5°)  tilt=0.2150(  38.7°)  dim=255  col=green
+[2026-04-26T22:37:26.371873Z]  3× tilt,tilt,dimmer                pan=0.7083( 382.5°)  tilt=0.1650(  29.7°)  dim=  0  col=green
+[2026-04-26T22:37:30.433902Z]  1× dimmer                          pan=0.7083( 382.5°)  tilt=0.1650(  29.7°)  dim=255  col=green
+[2026-04-26T22:37:32.443573Z]  5× pan,pan,tilt,tilt,dimmer        pan=0.6250( 337.5°)  tilt=0.2650(  47.7°)  dim=  0  col=green
+[2026-04-26T22:37:36.496093Z]  3× pan,pan,dimmer                  pan=0.6343( 342.5°)  tilt=0.2650(  47.7°)  dim=255  col=green
+[2026-04-26T22:37:38.523297Z]  2× pan,pan                         pan=0.6157( 332.5°)  tilt=0.2650(  47.7°)  dim=255  col=green
+[2026-04-26T22:37:40.557620Z]  4× pan,pan,tilt,tilt               pan=0.6250( 337.5°)  tilt=0.2742(  49.4°)  dim=255  col=green
+[2026-04-26T22:37:42.576291Z]  2× tilt,tilt                       pan=0.6250( 337.5°)  tilt=0.2557(  46.0°)  dim=255  col=green
+[2026-04-26T22:37:44.586592Z]  3× tilt,tilt,dimmer                pan=0.6250( 337.5°)  tilt=0.2650(  47.7°)  dim=  0  col=green
+[2026-04-26T22:37:46.610894Z]  2× tilt,tilt                       pan=0.6250( 337.5°)  tilt=0.2150(  38.7°)  dim=  0  col=green
+[2026-04-26T22:37:48.617373Z]  1× dimmer                          pan=0.6250( 337.5°)  tilt=0.2150(  38.7°)  dim=255  col=green
+[2026-04-26T22:37:54.672112Z]  3× tilt,tilt,dimmer                pan=0.6250( 337.5°)  tilt=0.1650(  29.7°)  dim=  0  col=green
+[2026-04-26T22:37:58.697302Z]  3× pan,pan,dimmer                  pan=0.6343( 342.5°)  tilt=0.1650(  29.7°)  dim=255  col=green
+[2026-04-26T22:38:00.708443Z]  2× pan,pan                         pan=0.6157( 332.5°)  tilt=0.1650(  29.7°)  dim=255  col=green
+[2026-04-26T22:38:04.749416Z]  4× pan,pan,tilt,tilt               pan=0.6250( 337.5°)  tilt=0.1743(  31.4°)  dim=255  col=green
+[2026-04-26T22:38:06.801354Z]  2× tilt,tilt                       pan=0.6250( 337.5°)  tilt=0.1557(  28.0°)  dim=255  col=green
+[2026-04-26T22:38:10.850170Z]  5× pan,pan,tilt,tilt,dimmer        pan=0.7916( 427.5°)  tilt=0.2650(  47.7°)  dim=  0  col=green
+[2026-04-26T22:38:14.865471Z]  1× dimmer                          pan=0.7916( 427.5°)  tilt=0.2650(  47.7°)  dim=255  col=green
+[2026-04-26T22:38:16.876562Z]  3× tilt,tilt,dimmer                pan=0.7916( 427.5°)  tilt=0.2150(  38.7°)  dim=  0  col=green
+[2026-04-26T22:38:20.939677Z]  1× dimmer                          pan=0.7916( 427.5°)  tilt=0.2150(  38.7°)  dim=255  col=green
+[2026-04-26T22:38:22.975177Z]  3× tilt,tilt,dimmer                pan=0.7916( 427.5°)  tilt=0.1650(  29.7°)  dim=  0  col=green
+[2026-04-26T22:38:27.088371Z]  1× dimmer                          pan=0.7916( 427.5°)  tilt=0.1650(  29.7°)  dim=255  col=green
+[2026-04-26T22:38:29.103351Z]  5× pan,pan,tilt,tilt,dimmer        pan=0.5417( 292.5°)  tilt=0.2650(  47.7°)  dim=  0  col=green
+[2026-04-26T22:38:33.145134Z]  1× dimmer                          pan=0.5417( 292.5°)  tilt=0.2650(  47.7°)  dim=255  col=green
+[2026-04-26T22:38:37.175166Z]  3× tilt,tilt,dimmer                pan=0.5417( 292.5°)  tilt=0.2150(  38.7°)  dim=  0  col=green
+[2026-04-26T22:38:39.189422Z]  3× pan,pan,dimmer                  pan=0.5509( 297.5°)  tilt=0.2150(  38.7°)  dim=255  col=green
+[2026-04-26T22:38:43.215656Z]  6× pan,pan,tilt,tilt,dimmer,colour  pan=0.6770( 365.6°)  tilt=0.0000(   0.0°)  dim=  0  col=white

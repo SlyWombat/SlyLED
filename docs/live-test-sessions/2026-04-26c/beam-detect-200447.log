@@ -1,0 +1,15 @@
+== harness run: 3 position(s) × 3 camera(s)  colour=green dmx=55  nudge=0.00000  dark-ref=on  confirm=on  snapshots=on
+[0.62, 0.27] probe4-similar
+  cam #12: found px=(1622, 495) bright=171 area=2883  (no-nudge)
+  cam #13: found px=(96, 558) bright=171 area=2591  (no-nudge)
+  cam #16: no-beam
+[0.62, 0.27] probe6-PillarBaseArea
+  cam #12: found px=(3184, 1399) bright=178 area=980  (no-nudge)
+  cam #13: found px=(113, 562) bright=162 area=360  (no-nudge)
+  cam #16: no-beam
+[0.63, 0.17] probe11-FurnaceDoor
+  cam #12: found px=(1482, 1963) bright=255 area=31767  (no-nudge)
+  cam #13: found px=(2310, 1969) bright=255 area=30506  (no-nudge)
+  cam #16: no-beam
+== dimmer zeroed on fixture 17
+== wrote docs\live-test-sessions\2026-04-26c\beam-detect-200447.json
