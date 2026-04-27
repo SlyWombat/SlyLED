@@ -938,6 +938,15 @@ var _CAL_TUNE_GROUPS=[
     'battleshipPanStepsMin','battleshipPanStepsMax',
     'battleshipTiltStepsMin','battleshipTiltStepsMax'
   ]},
+  // #708 — DD plausibility-gate bounds (#697) + surface-aware reject
+  // toggle (#684) + auto-pose-fit drift threshold (#709). The "Lab vs
+  // Stage" preset on the panel writes these in bulk.
+  {title:'Confirm-nudge plausibility (#697)',keys:[
+    'confirmContinuityCapMult','confirmRatioMin','confirmRatioMax','confirmSymmetryMinPx'
+  ]},
+  {title:'Depth + pose (#684 / #709)',keys:[
+    'surfaceAwareReject','poseDriftThresholdMm'
+  ]},
   {title:'Settle timing',keys:[
     'settleS','settleBaseS','settleEscalateS','settleVerifyGapS','settlePixelThresh'
   ]},
@@ -962,7 +971,14 @@ var _CAL_TUNE_LABELS={
   settlePixelThresh:'Settle drift threshold (px)',
   bfsMaxSamples:'BFS sample cap',
   convergeMaxIterations:'Convergence iteration cap',
-  moverClaimTtlS:'Gyro / phone claim TTL (s)'
+  moverClaimTtlS:'Gyro / phone claim TTL (s)',
+  // #708 — labels for #697 / #684 / #709 keys.
+  confirmContinuityCapMult:'Continuity cap (× beam-width)',
+  confirmRatioMin:'Proportionality min (obs/exp)',
+  confirmRatioMax:'Proportionality max (obs/exp)',
+  confirmSymmetryMinPx:'Symmetry min (px)',
+  surfaceAwareReject:'Surface-aware reject',
+  poseDriftThresholdMm:'Pose-drift threshold (mm)'
 };
 function _calTuneInputId(k){return 'ct-'+k;}
 function loadCalTuning(){
@@ -984,11 +1000,20 @@ function loadCalTuning(){
         var cv=cur[k];
         var curStr=cv==null?'':(Array.isArray(cv)?cv.join(', '):String(cv));
         var clampHint='['+s.min+' – '+s.max+(s.type==='int'?', int':'')+']';
+        if(s.type==='bool')clampHint='[on / off]';
         html+='<div style="display:flex;gap:.6em;align-items:center;margin:.25em 0">';
         html+='<label style="flex:0 0 240px" title="'+escapeHtml(tip)+'">'+escapeHtml(label)+
               ' <span style="color:#64748b;font-size:.82em">'+escapeHtml(clampHint)+'</span></label>';
-        html+='<input id="'+_calTuneInputId(k)+'" value="'+escapeHtml(curStr)+
-              '" placeholder="default: '+escapeHtml(defVal)+'" style="flex:1;max-width:180px">';
+        if(s.type==='bool'){
+          // #708 — bool keys render as a checkbox so operators can flip
+          // surfaceAwareReject without typing 'true'/'false'.
+          var checked=(cv==null)?(!!s.default):!!cv;
+          html+='<input type="checkbox" id="'+_calTuneInputId(k)+'"'+
+                (checked?' checked':'')+' style="margin:0">';
+        }else{
+          html+='<input id="'+_calTuneInputId(k)+'" value="'+escapeHtml(curStr)+
+                '" placeholder="default: '+escapeHtml(defVal)+'" style="flex:1;max-width:180px">';
+        }
         html+='<span style="color:#64748b;font-size:.78em">default '+escapeHtml(defVal)+'</span>';
         html+='</div>';
       });
@@ -1007,11 +1032,16 @@ function _collectCalTuning(){
     g.keys.forEach(function(k){
       var el=document.getElementById(_calTuneInputId(k));
       if(!el)return;
+      // #708 — bool keys collected from .checked, not .value.
+      if(el.type==='checkbox'){
+        out[k]=!!el.checked;
+        return;
+      }
       var v=el.value.trim();
       if(v==='')return;  // blank = use default
       if(k==='settleEscalateS'){
         out[k]=v.split(',').map(function(x){return parseFloat(x.trim());}).filter(function(x){return !isNaN(x);});
-      }else if(/Steps|Samples|Iterations|Thresh/i.test(k)){
+      }else if(k==='confirmSymmetryMinPx' || /Steps|Samples|Iterations|Thresh/i.test(k)){
         out[k]=parseInt(v,10);
       }else{
         out[k]=parseFloat(v);

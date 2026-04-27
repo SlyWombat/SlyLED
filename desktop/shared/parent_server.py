@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.63"
+VERSION = "1.6.65"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -5675,6 +5675,77 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
         _park_fixture_at_home(fid)   # #691
         return
 
+    # #709 — auto-pose-fit gate. Each markers-mode sample carries
+    # (pan, tilt, surveyed marker XYZ), which is exactly what
+    # `solve_fixture_pose` consumes. Run the linear least-squares fit
+    # and, if the result diverges from the layout-recorded pose by
+    # more than the operator-tunable threshold, surface a
+    # "pose-fit-recommended" cal-status event so the SPA can offer
+    # Accept / Reject without forcing a full Verify-Pose wizard run.
+    if len(samples) >= 3:
+        try:
+            from fixture_pose_solver import solve_fixture_pose
+            obs = [{
+                "panNorm": s["pan"], "tiltNorm": s["tilt"],
+                "markerXYZ": [s["stageX"], s["stageY"],
+                                s.get("stageZ", 0.0)],
+                "markerId": s.get("markerId"),
+            } for s in samples]
+            fixture_rot = f.get("rotation") or [0.0, 0.0, 0.0]
+            pose_fit = solve_fixture_pose(
+                obs,
+                fixture_rotation_deg=fixture_rot,
+                pan_range_deg=float(pan_range_deg),
+                tilt_range_deg=float(tilt_range_deg))
+            if "error" not in pose_fit:
+                cur = pos_map.get(fid) or {}
+                dx = pose_fit["x"] - float(cur.get("x", 0))
+                dy = pose_fit["y"] - float(cur.get("y", 0))
+                dz = pose_fit["z"] - float(cur.get("z", 0))
+                drift_mm = math.sqrt(dx*dx + dy*dy + dz*dz)
+                threshold_mm = float(_cal_tuning("poseDriftThresholdMm"))
+                if drift_mm > threshold_mm:
+                    log.warning("MOVER-CAL %d: auto-pose-fit detected "
+                                 "drift %.0f mm (threshold %.0f) - "
+                                 "current=[%.0f, %.0f, %.0f] fitted="
+                                 "[%.0f, %.0f, %.0f] residualRms=%.1fmm",
+                                 fid, drift_mm, threshold_mm,
+                                 cur.get("x", 0), cur.get("y", 0),
+                                 cur.get("z", 0),
+                                 pose_fit["x"], pose_fit["y"],
+                                 pose_fit["z"],
+                                 pose_fit["residualRmsMm"])
+                    job["poseFitRecommended"] = {
+                        "currentPose": [
+                            float(cur.get("x", 0)),
+                            float(cur.get("y", 0)),
+                            float(cur.get("z", 0))],
+                        "fittedPose": [pose_fit["x"], pose_fit["y"],
+                                         pose_fit["z"]],
+                        "deltaXyzMm": round(drift_mm, 1),
+                        "residualRmsMm": pose_fit["residualRmsMm"],
+                        "sampleCount": pose_fit["observationsUsed"],
+                        "thresholdMm": threshold_mm,
+                    }
+                    _mcal_log(job, f"Pose drift detected: {drift_mm:.0f}mm "
+                                   f"from layout. Run Verify Pose to "
+                                   f"accept the fitted pose [{pose_fit['x']:.0f}, "
+                                   f"{pose_fit['y']:.0f}, {pose_fit['z']:.0f}]"
+                                   f" (residual RMS {pose_fit['residualRmsMm']:.1f}mm).")
+                else:
+                    job["poseFitConfirmed"] = {
+                        "fittedPose": [pose_fit["x"], pose_fit["y"],
+                                         pose_fit["z"]],
+                        "deltaXyzMm": round(drift_mm, 1),
+                        "residualRmsMm": pose_fit["residualRmsMm"],
+                    }
+                    log.info("MOVER-CAL %d: pose-fit confirms layout "
+                             "(drift %.0f mm < %.0f threshold)",
+                             fid, drift_mm, threshold_mm)
+        except Exception as e:
+            log.warning("MOVER-CAL %d: pose-fit gate raised %s - "
+                        "continuing", fid, e)
+
     # Phase 3 — fit ParametricFixtureModel from the (pan, tilt, stage) samples.
     job["phase"] = "fitting"; job["progress"] = 92
     _mcal_log(job, f"Fitting ParametricFixtureModel from {len(samples)} samples")
@@ -6501,6 +6572,16 @@ CAL_TUNING_SPEC = {
     # entirely.
     "surfaceAwareReject":        {"default": True, "type": "bool",
         "tooltip": "Reject confirm probes whose centre + nudge straddle a depth discontinuity (#684). Requires /api/space/scan to have run recently. Turn off if the surface model is stale or you don't have a point cloud."},
+    # #709 — auto-pose-fit gate. After a markers-mode cal completes,
+    # solve_fixture_pose runs against the (pan, tilt, surveyed XYZ)
+    # samples; if the fitted fixture position diverges from the
+    # layout-recorded position by more than this many mm, the cal
+    # surfaces a "pose-fit-recommended" event with the fitted pose so
+    # the operator can accept or reject without re-running the
+    # Verify-Pose wizard. 200 mm matches #699's empirical wizard run
+    # which caught a 933 mm layout drift.
+    "poseDriftThresholdMm":      {"default": 200.0, "min": 50.0, "max": 2000.0,
+        "tooltip": "Auto-pose-fit drift threshold (#709). Any cal-end fixture-position fit that diverges from the layout by more than this many mm raises a recommendation in the wizard. Lower = more sensitive (catches small layout drift); higher = fewer false positives on rigs with imprecise marker survey."},
 }
 
 
@@ -18071,6 +18152,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

@@ -1439,7 +1439,12 @@ function _moverCalLiteSetup(){
 var _MCAL_ADV_KEYS=[
   'warmupSeconds','rejectReflection','refineAfterHit',
   'battleshipPanStepsMax','battleshipTiltStepsMax','adaptiveDensity',
-  'settlePixelThresh','discoveryBattleshipS','mappingS'
+  'settlePixelThresh','discoveryBattleshipS','mappingS',
+  // #708 — confirm-nudge bounds (#697) + surface-aware reject (#684)
+  // + auto-pose-fit drift threshold (#709) all live next to the cal
+  // wizard so operators don't have to leave the modal to retune.
+  'confirmContinuityCapMult','confirmRatioMin','confirmRatioMax',
+  'confirmSymmetryMinPx','surfaceAwareReject','poseDriftThresholdMm'
 ];
 var _MCAL_ADV_LABELS={
   warmupSeconds:'Warm-up duration (s)',
@@ -1450,7 +1455,14 @@ var _MCAL_ADV_LABELS={
   adaptiveDensity:'Adaptive density (#661)',
   settlePixelThresh:'Settle threshold (px)',
   discoveryBattleshipS:'Discovery budget (s)',
-  mappingS:'Mapping budget (s)'
+  mappingS:'Mapping budget (s)',
+  // #708
+  confirmContinuityCapMult:'Continuity cap (× beam-width)',
+  confirmRatioMin:'Proportionality min',
+  confirmRatioMax:'Proportionality max',
+  confirmSymmetryMinPx:'Symmetry min (px)',
+  surfaceAwareReject:'Surface-aware reject',
+  poseDriftThresholdMm:'Pose-drift threshold (mm)'
 };
 function _moverCalLoadAdvancedOptions(){
   var body=document.getElementById('mcal-adv-body');
@@ -1504,7 +1516,9 @@ function _moverCalAdvSave(key){
       });
       return;
     }
-    if(/Steps|Thresh|Samples|Iterations/i.test(key)){
+    if(key==='confirmSymmetryMinPx'||/Steps|Samples|Iterations/i.test(key)){
+      // #708 — Thresh-suffixed keys are decimal mm/px and want
+      // parseFloat; only explicit-integer keys go through parseInt.
       payload[key]=parseInt(v,10);
     }else{
       payload[key]=parseFloat(v);
@@ -1872,6 +1886,44 @@ function _moverCalPollFinal(){
   });
 }
 
+// #709 — apply the auto-pose-fit recommendation by writing the fitted
+// XYZ back to the layout. The operator stays in the wizard; the next
+// cal will run against the corrected pose.
+function _moverCalApplyPoseFit(){
+  if(!_moverCalFid)return;
+  ra('GET','/api/calibration/mover/'+_moverCalFid+'/status',null,function(r){
+    if(!r||!r.poseFitRecommended){alert('No pose-fit recommendation found');return;}
+    var fp=r.poseFitRecommended.fittedPose;
+    if(!fp||fp.length<3){alert('Fitted pose missing');return;}
+    if(!confirm('Move fixture '+_moverCalFid+' to layout pose ['+
+                fp.map(function(v){return v.toFixed(0);}).join(', ')+']?'))return;
+    ra('GET','/api/layout',null,function(layout){
+      var children=(layout&&layout.children)||[];
+      var found=false;
+      children.forEach(function(c){
+        if(c.id===_moverCalFid){
+          c.x=fp[0];c.y=fp[1];c.z=fp[2];found=true;
+        }
+      });
+      if(!found){alert('Fixture not in layout');return;}
+      ra('POST','/api/layout',{children:children},function(){
+        alert('Layout updated. Re-run cal to verify.');
+        closeModal();_moverCalFid=null;loadLayout();
+      });
+    });
+  });
+}
+function _moverCalDismissPoseFit(){
+  // Pure UX — the recommendation lives on `job` in memory. Hiding the
+  // banner is enough; the underlying job status doesn't change.
+  var status=document.getElementById('mcal-status');
+  if(status){
+    var banners=status.querySelectorAll('.card');
+    banners.forEach(function(b){
+      if(b.textContent.indexOf('Layout pose drift')>=0)b.style.display='none';
+    });
+  }
+}
 function _moverCalRenderComplete(r){
   var status=document.getElementById('mcal-status');
   if(!status)return;
@@ -1908,6 +1960,36 @@ function _moverCalRenderComplete(r){
       h+='RMS '+ver.rmsErrorPx.toFixed(1)+'px \u00b7 max '+ver.maxErrorPx.toFixed(1)+'px \u00b7 '+(ver.points||[]).length+' points';
       h+='</div></div>';
     }
+  }
+  // #709 \u2014 auto-pose-fit recommendation banner. When the cal-end
+  // solver finds the layout pose differs from the fitted pose by
+  // more than `poseDriftThresholdMm`, surface the diff with a
+  // pointer at Verify Pose so the operator can correct without
+  // re-running the cal.
+  if(r.poseFitRecommended){
+    var pf=r.poseFitRecommended;
+    var cur=pf.currentPose||[0,0,0];
+    var fit2=pf.fittedPose||[0,0,0];
+    h+='<div class="card" style="padding:.6em;margin-bottom:.5em;background:#451a03;border-left:3px solid #f59e0b">';
+    h+='<div style="font-size:.85em;color:#fef3c7;font-weight:bold">\u26a0 Layout pose drift detected</div>';
+    h+='<div style="font-size:.78em;color:#fde68a;margin-top:.3em">';
+    h+='Fitted pose differs from layout by '+(pf.deltaXyzMm||0).toFixed(0)+'mm '+
+       '(residual RMS '+(pf.residualRmsMm||0).toFixed(1)+'mm, '+
+       (pf.sampleCount||0)+' markers)';
+    h+='</div>';
+    h+='<div style="font-size:.74em;color:#94a3b8;font-family:monospace;margin-top:.3em">';
+    h+='current  ['+cur.map(function(v){return v.toFixed(0);}).join(', ')+']<br>';
+    h+='fitted   ['+fit2.map(function(v){return v.toFixed(0);}).join(', ')+']';
+    h+='</div>';
+    h+='<div style="margin-top:.4em;display:flex;gap:.4em">';
+    h+='<button class="btn btn-on" onclick="_moverCalApplyPoseFit()">Apply fitted pose</button>';
+    h+='<button class="btn" style="background:#0f172a;color:#fef3c7;border:1px solid #f59e0b" onclick="_moverCalDismissPoseFit()">Dismiss</button>';
+    h+='</div></div>';
+  }else if(r.poseFitConfirmed){
+    var pfc=r.poseFitConfirmed;
+    h+='<div style="font-size:.74em;color:#4ade80;margin-bottom:.4em">'+
+       '\u2713 Pose-fit confirms layout (drift '+(pfc.deltaXyzMm||0).toFixed(0)+
+       'mm, residual RMS '+(pfc.residualRmsMm||0).toFixed(1)+'mm)</div>';
   }
   // Residual table with exclude buttons (#504)
   h+='<div id="mcal-residual-table"></div>';
