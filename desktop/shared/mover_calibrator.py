@@ -1160,29 +1160,66 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         for j in range(coarse_tilt_steps):
             t = tilt_lo + (j + 0.5) * tilt_span
             grid.append((p, t))
-    # #698 — tilt-first ordering. Pre-fix used Euclidean distance to
-    # seed which mixed pan and tilt jumps freely; that produced the
-    # cross-tilt-row light-on-during-travel sequence #695 fixed and
-    # left the operator-confirmed home pan column under-explored.
-    # Now we sort by (delta_pan, delta_tilt) lexicographic — every
-    # cell in the seed's pan column is probed before any cell in a
-    # different pan column. The first ≤coarse_tilt_steps probes
-    # exhaust the home pan, sweeping tilt cleanly.
-    sort_key = (lambda xy: (
-        abs(xy[0] - (seed_pan or 0.5)),              # primary: pan distance
-        abs(xy[1] - (seed_tilt or 0.5)),             # secondary: tilt distance
-    )) if (seed_pan is not None and seed_tilt is not None) else None
-    # #681-B — pre-filter candidates to those that project onto a camera-
-    # visible floor point. `grid_filter` returns True if the aim probably
-    # lands somewhere a camera can see; candidates outside every camera
-    # polygon are ranked to the back of the queue (not dropped — if we
-    # are wrong about the geometry, they give the scan a chance to find
-    # the beam anyway).
+    # #711 — predictive probe ordering. The pre-#711 sort used
+    # |pan - seed_pan| / |tilt - seed_tilt| lexicographic, which on
+    # inverted ceiling-mount fixtures with seed_tilt = 0.0 (mech tilt
+    # 0° = horizontal forward) prioritised cells whose beam overshot
+    # past the back wall. Now we project each cell to its predicted
+    # floor hit and sort by:
+    #   primary: in a camera FOV polygon (in-FOV first)
+    #   secondary: squared distance to the centroid of the FOV union
+    #   tertiary: |pan_norm - seed_pan| (home-pan-column tiebreaker)
+    # Cells whose ray doesn't intersect the floor (beam horizontal or
+    # up) sort to the back of the queue — they CAN'T contribute. This
+    # composes with #710 (pan-from-home rotation) — without that fix
+    # all cells would project to the same XY and the sort collapses.
+    fov_centroid = None
+    if camera_polygons:
+        verts = []
+        for poly in camera_polygons:
+            verts.extend(poly)
+        if verts:
+            fov_centroid = (
+                sum(v[0] for v in verts) / len(verts),
+                sum(v[1] for v in verts) / len(verts),
+            )
+
+    def _cell_floor_hit(pan_n, tilt_n):
+        if fixture_pos is None or pan_range_deg is None:
+            return None
+        return _ray_floor_hit(fixture_pos, fixture_rotation, pan_n,
+                                tilt_n, pr_deg, tr_deg,
+                                mounted_inverted=mounted_inverted,
+                                home_pan_norm=seed_pan)
+
+    def _cell_sort_key(xy):
+        pan_n, tilt_n = xy
+        hit = _cell_floor_hit(pan_n, tilt_n)
+        # No floor hit -> last bucket; cell can't reach the floor.
+        if hit is None:
+            return (2, 1e18, abs(pan_n - (seed_pan or 0.5)))
+        in_fov = False
+        if camera_polygons:
+            for poly in camera_polygons:
+                if _point_in_polygon(hit, poly):
+                    in_fov = True
+                    break
+        d2 = 0.0
+        if fov_centroid is not None:
+            d2 = ((hit[0] - fov_centroid[0]) ** 2
+                   + (hit[1] - fov_centroid[1]) ** 2)
+        bucket = 0 if in_fov else 1
+        return (bucket, d2, abs(pan_n - (seed_pan or 0.5)))
+
+    have_predictive_sort = (seed_pan is not None and fixture_pos is not None
+                             and pan_range_deg is not None
+                             and tilt_range_deg is not None)
+    # #681-B / #711 — pre-filter candidates to those that project onto a
+    # camera-visible floor point. With the predictive sort above,
+    # grid_filter is a defensive double-check: cells whose
+    # `_ray_floor_hit` is None or whose projected XY is outside every
+    # FOV polygon get pushed to the tail; they're never probed first.
     # #702 update — sort each partition INDEPENDENTLY then concatenate.
-    # The previous code partitioned, then sorted the whole grid by
-    # distance-to-seed, which destroyed the inside/outside ordering and
-    # let off-stage probes interleave (#702 update reproed this — probe
-    # 1 landed off-stage even though grid_filter was applied).
     fov_kept = fov_total = fov_deferred = None
     if grid_filter is not None:
         inside = []
@@ -1193,10 +1230,16 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
             except Exception:
                 keep = True
             (inside if keep else outside).append(pt)
+        # #711 — sort each side. Predictive (FOV-centroid) when we have
+        # the inputs; legacy seed-distance otherwise.
+        if have_predictive_sort:
+            inside.sort(key=_cell_sort_key)
+            outside.sort(key=_cell_sort_key)
+        elif seed_pan is not None and seed_tilt is not None:
+            sk = lambda xy: (abs(xy[0] - seed_pan),
+                             abs(xy[1] - seed_tilt))
+            inside.sort(key=sk); outside.sort(key=sk)
         if inside:
-            if sort_key is not None:
-                inside.sort(key=sort_key)
-                outside.sort(key=sort_key)
             grid = inside + outside
             fov_kept = len(inside)
             fov_deferred = len(outside)
@@ -1205,16 +1248,39 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                      "probes in view; %d deferred to tail of queue",
                      fov_kept, fov_total, fov_deferred)
         else:
-            if sort_key is not None:
-                grid.sort(key=sort_key)
+            # #711 — intelligent fallback. The pre-#711 path scanned
+            # the FULL mechanical grid here, which on inverted-mount
+            # rigs included cells projecting past the back wall. Now
+            # we sort the whole queue by predictive key (or seed-dist
+            # if the predictive inputs are missing) and TRIM cells
+            # whose ray never hits the floor. Cells the predictive
+            # sort flags as off-FOV stay in the queue (so a misconfig
+            # in camera_polygons doesn't fully brick the cal) but
+            # land at the tail.
+            kept_grid = []
+            dropped_no_floor = 0
+            for pt in grid:
+                hit = _cell_floor_hit(pt[0], pt[1])
+                if hit is None:
+                    dropped_no_floor += 1
+                    continue
+                kept_grid.append(pt)
+            if have_predictive_sort:
+                kept_grid.sort(key=_cell_sort_key)
+            grid = kept_grid
             fov_kept = 0
-            fov_total = len(grid)
-            fov_deferred = 0
+            fov_total = len(grid) + dropped_no_floor
+            fov_deferred = len(grid)
             log.warning("battleship_discover: camera-FOV filter rejected "
-                        "every probe — scanning full grid (filter may be "
-                        "wrong about fixture orientation)")
-    elif sort_key is not None:
-        grid.sort(key=sort_key)
+                         "every probe; trimmed %d unreachable cells "
+                         "(beam horizontal/up). Falling back to %d cells "
+                         "ordered by FOV-centroid distance.",
+                         dropped_no_floor, len(grid))
+    elif have_predictive_sort:
+        grid.sort(key=_cell_sort_key)
+    elif seed_pan is not None and seed_tilt is not None:
+        grid.sort(key=lambda xy: (abs(xy[0] - seed_pan),
+                                    abs(xy[1] - seed_tilt)))
     # #698 — operator-readable first-probe log line: name the cell
     # the cal will visit FIRST, the predicted floor hit, and the
     # mech tilt angle. Operator can sanity-check against eyes

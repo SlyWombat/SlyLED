@@ -207,9 +207,9 @@ ok(len(out_of_band_strict) == 0,
    f'all probes within camera-visible band ±span '
    f'(got {len(out_of_band_strict)} outside; band [{expected_lo:.3f},{expected_hi:.3f}])')
 
-# ── Tilt-first ordering ────────────────────────────────────────────────
+# ── #711 — first probes land on-stage / in-FOV ─────────────────────────
 
-section('Tilt-first ordering — seed pan column probes first')
+section('#711 first probes land in camera FOV (predictive ordering)')
 
 captured.clear()
 mc.battleship_discover(
@@ -228,17 +228,28 @@ mc.battleship_discover(
     fixture_rotation=fx_rot,
 )
 
-# First N probes (where N = coarse_tilt_steps = 4) should ALL share
-# the same pan column (closest to seed). Verify by computing each
-# probe's distance to seed_pan and checking the first N have the
-# minimum delta_pan.
-if len(captured) >= 4:
-    first_4_pans = [p for (p, _) in captured[:4]]
-    min_dpan = min(abs(p - 0.5) for p in first_4_pans)
-    max_dpan = max(abs(p - 0.5) for p in first_4_pans)
-    ok(abs(max_dpan - min_dpan) < 0.001,
-       f'first 4 probes share same pan column '
-       f'(got pans {[round(p, 3) for p in first_4_pans]})')
+# Pre-#711: first probes were ordered by |pan - seed_pan| /
+# |tilt - seed_tilt|, so the home-pan column came first regardless of
+# whether those cells hit the floor inside the camera FOV.
+# Post-#711: first probes are sorted by (in-FOV bucket, FOV centroid
+# distance, |pan - seed_pan|). For a floor-mount fixture at seed_tilt
+# = 0.5 (mech 0° horizontal), all cells with tilt < 0.5 aim UP and
+# never hit the floor; all cells with tilt > 0.5 aim DOWN. The first
+# 3 probes must be cells whose floor projection lands inside the cam
+# polygon.
+if len(captured) >= 3:
+    first_3_in_fov = []
+    for pan_n, tilt_n in captured[:3]:
+        hit = mc._ray_floor_hit(fx_pos, fx_rot, pan_n, tilt_n,
+                                 540, 270,
+                                 mounted_inverted=False,
+                                 home_pan_norm=0.5)
+        in_fov = hit is not None and mc._point_in_polygon(hit, cam_poly)
+        first_3_in_fov.append((pan_n, tilt_n, in_fov))
+    all_in = all(p[2] for p in first_3_in_fov)
+    ok(all_in,
+       f'#711: first 3 probes all land in camera FOV '
+       f'(got {[(round(p[0], 3), round(p[1], 3), p[2]) for p in first_3_in_fov]})')
 
 # ── #710 — pan_norm rotates the beam azimuth ──────────────────────────
 
@@ -324,6 +335,64 @@ ok(h_yaw[0] < -1000,
    f'rz=90 inverted: home aim rotates +Y -> -X (got X={h_yaw[0]:.0f})')
 ok(abs(h_yaw[1] - 1000) < 10,
    f'rz=90 inverted: Y stays at fixture Y (got Y={h_yaw[1]:.0f})')
+
+# ── #711 acceptance — basement-rig fid #17 first 3 probes on-stage + in-FOV
+
+section('#711 basement-rig: first 3 probes on-stage AND in cam FOV')
+
+# Basement rig fid #17: pos (600, 0, 1760), inverted, panRange=540°,
+# tiltRange=180°, home_pan=0.6770, home_tilt=0.0. The pre-#711 sort
+# put 2 of the first 3 probes off-stage (issue body shows
+# (-1004, 5278) and (-237, 2748)).
+fx17_pos = (600, 0, 1760)
+fx17_rot = [0, 0, 0]
+# Camera FOV polygons typical for the basement rig (cam #12 + cam #13
+# project floor coverage that overlaps the audience side).
+cam12_poly = [(-200, 1500), (3500, 1500), (3500, 4200), (-200, 4200)]
+cam13_poly = [(2500, 1500), (4000, 1500), (4000, 4200), (2500, 4200)]
+basement_polys = [cam12_poly, cam13_poly]
+
+captured17 = []
+def _capture17(bip, cip, ci, ma, p, t, c, dx, threshold=30):
+    captured17.append((float(p), float(t)))
+    return None
+saved_flash = mc._beam_detect_flash
+mc._beam_detect_flash = _capture17
+try:
+    mc.battleship_discover(
+        bridge_ip="0.0.0.0", camera_ip="0.0.0.0", mover_addr=1,
+        cam_idx=0, color=(0, 255, 0),
+        seed_pan=0.6770, seed_tilt=0.0,
+        pan_range_deg=540.0, tilt_range_deg=180.0,
+        beam_width_deg=3.0,
+        coarse_pan_min=8, coarse_pan_max=8,
+        coarse_tilt_min=3, coarse_tilt_max=3,
+        refine=False,
+        reject_reflection=False,
+        confirm_nudge_delta=0.01,
+        camera_polygons=basement_polys,
+        fixture_pos=fx17_pos,
+        fixture_rotation=fx17_rot,
+        mounted_inverted=True,
+    )
+finally:
+    mc._beam_detect_flash = saved_flash
+
+if len(captured17) >= 3:
+    first_3 = []
+    for pan_n, tilt_n in captured17[:3]:
+        hit = mc._ray_floor_hit(fx17_pos, fx17_rot, pan_n, tilt_n,
+                                 540, 180,
+                                 mounted_inverted=True,
+                                 home_pan_norm=0.6770)
+        in_any_fov = (hit is not None
+                       and any(mc._point_in_polygon(hit, p) for p in basement_polys))
+        first_3.append((pan_n, tilt_n, hit, in_any_fov))
+    all_in = all(p[3] for p in first_3)
+    ok(all_in,
+       f'#711 basement: first 3 probes ALL in some camera FOV. '
+       f'Got: {[(round(p[0], 3), round(p[1], 3), bool(p[3])) for p in first_3]}')
+
 
 # ── Summary ─────────────────────────────────────────────────────────────
 
