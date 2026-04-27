@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.73"
+VERSION = "1.6.74"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -7887,6 +7887,20 @@ def api_mover_cal_cancel(fid):
                          fid, uni, addr, addr + ch_count - 1)
     except Exception as e:
         log.warning("MOVER-CAL %d: immediate blackout failed: %s", fid, e)
+
+    # #717 — park the fixture at its saved Home anchor immediately. The
+    # cal-thread wrapper also calls _park_fixture_at_home when it
+    # unwinds (#691), but if the worker is blocked inside a multi-
+    # second urlopen() the operator sees the head stay at last-probe
+    # for that long. Driving home from the foreground here gives the
+    # head an immediate slew target while the thread spins down. Falls
+    # back to plain blackout when no home is set; idempotent with the
+    # thread's later call.
+    try:
+        _park_fixture_at_home(fid)
+    except Exception as e:
+        log.debug("MOVER-CAL %d: foreground park-at-home failed (%s) — "
+                  "thread will park on unwind", fid, e)
 
     return jsonify(ok=True, cancelled=True)
 
@@ -18276,6 +18290,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
