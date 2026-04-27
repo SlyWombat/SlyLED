@@ -98,6 +98,7 @@ def summarize(path):
         cp = init_event.get("cameraPolygons") or {}
         ff = init_event.get("fovFilter")
         first = init_event.get("firstProbe") or {}
+        dd = init_event.get("ddGate") or {}
         print("--- battleship-init ---")
         print(f"  camera polygons:   count={cp.get('count')!r:>5}  "
               f"totalVerts={cp.get('totalVerts')!r}")
@@ -115,6 +116,14 @@ def summarize(path):
                   f"tilt={first.get('tilt')}  "
                   f"mech_tilt={first.get('mechTiltDeg')}deg")
             print(f"  first floor hit:   {pf}")
+        if dd:
+            # #697 — surface the DD-gate thresholds. If most of the
+            # rejections come out near these bounds, that's a tuning
+            # candidate.
+            print(f"  DD gate:           "
+                  f"continuityCap={dd.get('continuityCapMult')}x  "
+                  f"ratio=[{dd.get('ratioMin')}, {dd.get('ratioMax')}]  "
+                  f"symMinPx={dd.get('symmetryMinPx')}")
         print()
     else:
         print("--- battleship-init: NOT EMITTED ---")

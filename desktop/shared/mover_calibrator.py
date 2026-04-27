@@ -1235,6 +1235,17 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                 "panRangeDeg": pr_deg, "tiltRangeDeg": tr_deg,
                 "seedPan": seed_pan, "seedTilt": seed_tilt,
                 "mountedInverted": bool(mounted_inverted),
+                # #697 — surface the DD plausibility-gate thresholds in
+                # use for this run so QA can correlate observed shifts
+                # against the bounds without inferring them from the
+                # build version. All four are operator-tunable via
+                # CAL_TUNING_SPEC (confirmContinuityCapMult etc.).
+                "ddGate": {
+                    "continuityCapMult": float(confirm_continuity_cap_mult),
+                    "ratioMin": float(confirm_ratio_min),
+                    "ratioMax": float(confirm_ratio_max),
+                    "symmetryMinPx": int(confirm_symmetry_min_px),
+                },
             }
             if camera_polygons is not None:
                 init_evt["cameraPolygons"] = {
@@ -1619,11 +1630,17 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                          pan_shift, tilt_shift)
                 if progress_cb:
                     try:
+                        # #697 — surface the full DD gate `info` (shifts +
+                        # expected + ratio + bounds) so the cal-status
+                        # NDJSON shows why this probe was accepted, not
+                        # just that it was. Lets QA correlate accept-vs-
+                        # reject decisions against the same fields.
                         progress_cb({"stage": "confirmed",
                                       "probe": idx + 1, "total": total,
                                       "panShiftPx": round(pan_shift, 1),
                                       "tiltShiftPx": round(tilt_shift, 1),
-                                      "refined": True})
+                                      "refined": True,
+                                      "info": conf_info})
                     except Exception:
                         pass
                 return refined
@@ -1632,11 +1649,14 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                  idx + 1, total, pan_shift, tilt_shift)
         if progress_cb:
             try:
+                # #697 — same `info` payload on the unrefined-confirmed
+                # path.
                 progress_cb({"stage": "confirmed",
                               "probe": idx + 1, "total": total,
                               "panShiftPx": round(pan_shift, 1),
                               "tiltShiftPx": round(tilt_shift, 1),
-                              "refined": False})
+                              "refined": False,
+                              "info": conf_info})
             except Exception:
                 pass
         return (pan, tilt, px0, py0)
