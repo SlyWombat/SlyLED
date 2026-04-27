@@ -5439,7 +5439,15 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
     job["surfaceAgeMinutes"] = (round(cal_scan_age, 1)
                                   if cal_scan_age is not None else None)
 
-    surface_check_cb = _make_surface_check_for_camera(cam, cal_surfaces)
+    # #684 — gate the surface-aware reject on the operator toggle.
+    # Default is ON; operators can disable when the surface model is
+    # known stale (e.g. cameras moved since last scan).
+    if bool(_cal_tuning("surfaceAwareReject")):
+        surface_check_cb = _make_surface_check_for_camera(cam, cal_surfaces)
+    else:
+        surface_check_cb = None
+        log.info("MOVER-CAL %d: surfaceAwareReject=False — depth "
+                 "discontinuity gate disabled", fid)
     # #686 — cal-trace recorder. One NDJSON record per probe (visit OR
     # skip-by-filter) so post-cal failures can be debugged against an
     # exact map of the geometric walk. Closed in the success / error
@@ -6481,6 +6489,18 @@ CAL_TUNING_SPEC = {
         "tooltip": "Confirm-nudge proportionality upper bound (#697): observed/expected must be <= this. Was 3.0; raised to 5.0 because the expected-shift estimate uses fixture pose without floor-z, so a beam landing further from the fixture than predicted (very common at edge of cal range) inflates the ratio."},
     "confirmSymmetryMinPx":      {"default": 3,    "min": 1,    "max": 20, "type": "int",
         "tooltip": "Confirm-nudge symmetry minimum (#697): a side counts toward symmetry only if its pixel shift exceeds this. Was 4; lowered to 3 px to admit small-but-real shifts on tight nudges."},
+    # #684 — surface-aware confirm-nudge reject. When ON (default), the
+    # cal pipeline labels each centre + nudge pixel against the latest
+    # /api/space/scan surface model. Probes whose centre + a nudge land
+    # on different surfaces (e.g. centre on the back wall, pan-+ nudge
+    # rotates onto a pillar 1.5 m closer) are rejected as
+    # REJECTED_DEPTH_DISCONTINUITY because the four-nudge centroid
+    # would otherwise feed non-physical geometry into the kinematic
+    # fit. Turn OFF when the surface model is wrong (e.g. cameras
+    # moved since the last scan) and you want the cal to ignore depth
+    # entirely.
+    "surfaceAwareReject":        {"default": True, "type": "bool",
+        "tooltip": "Reject confirm probes whose centre + nudge straddle a depth discontinuity (#684). Requires /api/space/scan to have run recently. Turn off if the surface model is stale or you don't have a point cloud."},
 }
 
 
@@ -6881,7 +6901,13 @@ def _mover_cal_thread_body(fid, cam, bridge_ip, mover_color,
         job["surfaceWarning"] = _cal_warn
         job["surfaceAgeMinutes"] = (round(_cal_age, 1)
                                       if _cal_age is not None else None)
-        _surface_check = _make_surface_check_for_camera(cam, _cal_surfaces)
+        # #684 — operator toggle.
+        if bool(_cal_tuning("surfaceAwareReject")):
+            _surface_check = _make_surface_check_for_camera(cam, _cal_surfaces)
+        else:
+            _surface_check = None
+            _mcal_log(job, "surfaceAwareReject=False — depth gate "
+                           "disabled by Settings (#684)")
         # #686 — trace recorder for the legacy path. Closed by the
         # outer wrapper via _close_cal_trace.
         _legacy_trace = None
