@@ -6446,6 +6446,17 @@ def _mover_cal_thread_smart_body(fid, cam, bridge_ip, mover_color,
             "SMART preview: sampler produced no valid probe points")
     job["totalTargets"] = len(probe_points)
     job["currentTarget"] = 0
+    # #732 — surface the full probe grid + working area to the cal
+    # status response so the SPA's 3D viewport can render every target
+    # before the loop starts.
+    job["smartProbeGrid"] = [
+        {"index": i, "x": float(p[0]), "y": float(p[1]), "z": float(floor_z),
+         "status": "pending"}
+        for i, p in enumerate(probe_points)
+    ]
+    job["smartWorkingPoly"] = list(working_poly)
+    job["smartCoveragePoly"] = list(coverage_poly)
+    job["smartFloorZ"] = float(floor_z)
 
     # Resolve the angle-to-DMX model (SMART model OR 2-pair estimate).
     model, confidence = _resolve_mover_model(fid, f)
@@ -6462,14 +6473,27 @@ def _mover_cal_thread_smart_body(fid, cam, bridge_ip, mover_color,
         if _mcal.is_cancel_requested():
             raise _mcal.CalibrationAborted("operator cancelled SMART probe")
         job["currentTarget"] = idx + 1
+        if idx < len(job["smartProbeGrid"]):
+            job["smartProbeGrid"][idx]["status"] = "probing"
+        # Surface the live probe target so the SPA viewport can highlight
+        # the cell we're currently pointed at (#732).
+        job["smartCurrentProbe"] = {
+            "index": idx,
+            "stageXYZ": [float(pt[0]), float(pt[1]), float(floor_z)],
+        }
 
         target_xyz = (float(pt[0]), float(pt[1]), float(floor_z))
         angles = world_to_fixture_pt(target_xyz, fix_pos, rot)
         if angles is None:
             samples.append({"target": list(target_xyz), "found": False,
                              "reason": "ik_degenerate"})
+            if idx < len(job["smartProbeGrid"]):
+                job["smartProbeGrid"][idx]["status"] = "ik_degenerate"
             continue
         pan_dmx16, tilt_dmx16 = angles_to_dmx(angles[0], angles[1], model)
+        if idx < len(job["smartProbeGrid"]):
+            job["smartProbeGrid"][idx]["panDmx16"] = pan_dmx16
+            job["smartProbeGrid"][idx]["tiltDmx16"] = tilt_dmx16
 
         result = _smart_probe_point(
             fid, cam, bridge_ip, mover_color,
@@ -6489,9 +6513,15 @@ def _mover_cal_thread_smart_body(fid, cam, bridge_ip, mover_color,
                 float(result.get("z", floor_z)),
             ]
             successes += 1
+            if idx < len(job["smartProbeGrid"]):
+                job["smartProbeGrid"][idx]["status"] = "hit"
+                job["smartProbeGrid"][idx]["measured"] = sample["measured"]
         else:
             sample["found"] = False
             sample["reason"] = result.get("reason", "no_beam")
+            if idx < len(job["smartProbeGrid"]):
+                job["smartProbeGrid"][idx]["status"] = "miss"
+                job["smartProbeGrid"][idx]["reason"] = sample["reason"]
         samples.append(sample)
 
     job["phase"] = "smart_solving"
@@ -8668,6 +8698,16 @@ def api_mover_cal_status(fid):
         currentProbe=current_probe,
         dmxFrame=dmx_frame,
         log=job.get("log") or [],
+        # #732 — SMART probe-loop live state for the cal card's 3D
+        # viewport. smartProbeGrid carries each cell's pending/probing/
+        # hit/miss status so the renderer can colour the points;
+        # smartCurrentProbe pinpoints the active target while the
+        # phase is smart_probing. Empty for non-SMART runs.
+        smartProbeGrid=job.get("smartProbeGrid") or [],
+        smartCurrentProbe=job.get("smartCurrentProbe"),
+        smartWorkingPoly=job.get("smartWorkingPoly") or [],
+        smartCoveragePoly=job.get("smartCoveragePoly") or [],
+        smartFloorZ=job.get("smartFloorZ"),
     )
 
 

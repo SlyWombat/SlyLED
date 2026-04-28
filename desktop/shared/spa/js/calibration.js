@@ -1474,6 +1474,18 @@ function _smartCoveragePanelHide(){
   if(typeof _mcal3dDispose==='function')_mcal3dDispose();
 }
 
+// #732 — mount the SMART 3D viewport on demand. Called by the cal-
+// status poller when the SMART probe loop starts from a non-SMART
+// initial mode (e.g. operator picked all-auto then the server
+// elevated to SMART), so the live probe overlay always has a place
+// to draw. Idempotent: a second call does nothing if the panel is
+// already mounted.
+function _smartCoverageEnsureMounted(fid){
+  var p=document.getElementById('smart-coverage-panel');
+  if(p && p.style.display!=='none' && _mcal3d && _mcal3d.inited)return;
+  _smartCoverageRender(fid);
+}
+
 function _smartCoverageRender(fid){
   var card=document.getElementById('mcal-targets-preview');
   if(!card)return;
@@ -1866,6 +1878,21 @@ function _moverCalPoll(){
 
     // #602 — live probe/dmx/log view below the phase bar.
     _moverCalRenderProbe(r);
+
+    // #732 — live SMART probe overlay on the 3D coverage viewport.
+    // The viewport is mounted by _smartCoverageRender when the
+    // operator selects mode=smart; if the probe loop started from a
+    // different mode (operator clicked Start while still on all-auto)
+    // we mount it now so the overlay has somewhere to draw. Overlay
+    // renderer is null-safe when no probe data is present.
+    if(r.smartProbeGrid && r.smartProbeGrid.length
+        && typeof _mcal3dProbeOverlay==='function'){
+      _smartCoverageEnsureMounted(_moverCalFid);
+      _mcal3dProbeOverlay(r);
+    } else if(typeof _mcal3dProbeOverlayClear==='function'
+              && r.status!=='running' && r.status!=='validating'){
+      _mcal3dProbeOverlayClear();
+    }
 
     if(r.status==='running'){
       // #602 — keep the button state machine in sync even on the first

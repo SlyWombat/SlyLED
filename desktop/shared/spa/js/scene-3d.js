@@ -1871,3 +1871,90 @@ function _mcal3dRender(coverage, preview){
     }
   }
 }
+
+
+// ── #732 — live SMART probe overlay during cal-status polling ──────────
+//
+// While the SMART probe loop runs, parent_server's cal-status response
+// carries `smartProbeGrid` (per-cell status: pending/probing/hit/miss),
+// `smartCurrentProbe` (the live target), and the working/coverage
+// polygons. Render them as a live overlay on top of the static
+// coverage cone — the SPA polls cal-status at ~1 Hz so the head's
+// motion mirrors visibly in the viewport.
+
+function _mcal3dProbeOverlayClear(){
+  if(!_mcal3d.inited)return;
+  ['liveProbesGroup','currentBeamGroup'].forEach(function(k){
+    var obj=_mcal3d[k];
+    if(obj && obj.parent)obj.parent.remove(obj);
+    if(obj){
+      obj.traverse(function(child){
+        if(child.geometry)try{child.geometry.dispose();}catch(e){}
+        if(child.material){
+          var mats=Array.isArray(child.material)?child.material:[child.material];
+          mats.forEach(function(m){try{m.dispose();}catch(e){}});
+        }
+      });
+    }
+    _mcal3d[k]=null;
+  });
+}
+
+function _mcal3dProbeOverlay(status){
+  // status is the /api/calibration/mover/<fid>/status response.
+  if(!_mcal3d.inited)return;
+  if(!status || !status.smartProbeGrid || !status.smartProbeGrid.length){
+    _mcal3dProbeOverlayClear();
+    return;
+  }
+  _mcal3dProbeOverlayClear();
+  var floorZ=(status.smartFloorZ!=null)?status.smartFloorZ:0;
+  var COLOURS={
+    pending:0x64748b,  // grey
+    probing:0xfbbf24,  // yellow
+    hit:    0x4ade80,  // green
+    miss:   0xef4444,  // red
+    ik_degenerate: 0x9333ea,  // purple
+  };
+  var grp=new THREE.Group();
+  var probeGeo=new THREE.SphereGeometry(0.05,14,12);
+  status.smartProbeGrid.forEach(function(p){
+    var c=COLOURS[p.status] || COLOURS.pending;
+    var mat=new THREE.MeshBasicMaterial({color:c});
+    var s=new THREE.Mesh(probeGeo,mat);
+    s.position.copy(_mcal3dPos([p.x, p.y, floorZ+15]));
+    grp.add(s);
+  });
+  _mcal3d.liveProbesGroup=grp;
+  _mcal3d.scene.add(grp);
+
+  // Current target → bright pulsing marker + line from fixture apex.
+  if(status.smartCurrentProbe){
+    var cur=status.smartCurrentProbe.stageXYZ;
+    var apex=_mcal3d.data && _mcal3d.data.coverage
+              && _mcal3d.data.coverage.cone
+              && _mcal3d.data.coverage.cone.apex;
+    var bgrp=new THREE.Group();
+    // Big yellow ring on the floor at the current target.
+    var ringGeo=new THREE.RingGeometry(0.10, 0.18, 24);
+    var ringMat=new THREE.MeshBasicMaterial({
+      color:0xfde047, side:THREE.DoubleSide, transparent:true, opacity:0.85
+    });
+    var ring=new THREE.Mesh(ringGeo, ringMat);
+    var p=_mcal3dPos([cur[0], cur[1], floorZ+25]);
+    ring.position.copy(p);
+    ring.rotation.x = -Math.PI/2;  // lay flat on the floor
+    bgrp.add(ring);
+    // Optical-path line from fixture apex to target.
+    if(apex){
+      var lineGeo=new THREE.BufferGeometry();
+      var apexPos=_mcal3dPos(apex);
+      lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(
+        [apexPos.x, apexPos.y, apexPos.z, p.x, p.y, p.z], 3));
+      var lineMat=new THREE.LineBasicMaterial({color:0xfde047});
+      bgrp.add(new THREE.Line(lineGeo, lineMat));
+    }
+    _mcal3d.currentBeamGroup=bgrp;
+    _mcal3d.scene.add(bgrp);
+  }
+}
