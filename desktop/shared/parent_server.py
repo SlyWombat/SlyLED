@@ -6284,31 +6284,51 @@ def _smart_probe_point_default(fid, cam, bridge_ip, mover_color,
     if not engine:
         return {"found": False, "reason": "engine_not_running"}
 
-    profile = {"channel_map": prof_info.get("channel_map", {}),
-               "channels": prof_info.get("channels", [])}
     uni = int(f.get("dmxUniverse", 1))
     addr = int(f.get("dmxStartAddr", 1))
+    pan_norm = pan_dmx16 / 65535.0
+    tilt_norm = tilt_dmx16 / 65535.0
+    color = tuple(int(c) for c in (mover_color or (0, 255, 0))[:3])
+
+    # #732 (revised) — route through _beam_detect_flash, the proven
+    # legacy detector. It owns the entire DMX-write + light-toggle
+    # sequence atomically: light-off slew settle → light-on capture →
+    # light-off capture → diff. The bare _beam_detect against a single
+    # ambient frame returns zero blobs in white-house-light conditions,
+    # which is what produced zero-of-16 on the basement live-test.
+    #
+    # The detector layer is the contract; SMART must conform to it,
+    # not the other way around. Don't modify _beam_detect_flash,
+    # beam_detector.py, or anything in firmware/orangepi/.
     try:
-        uni_buf = engine.get_universe(uni)
-        uni_buf.set_fixture_pan_tilt(
-            addr, pan_dmx16 / 65535.0, tilt_dmx16 / 65535.0, profile)
-        uni_buf.set_fixture_dimmer(addr, 255, profile)
-        if mover_color and len(mover_color) >= 3:
-            uni_buf.set_fixture_rgb(
-                addr, int(mover_color[0]), int(mover_color[1]),
-                int(mover_color[2]), profile)
+        if _mcal._active_universe is None or _mcal._active_universe != uni:
+            _mcal._active_universe = uni
+        dmx = _mcal._fresh_buffer()
+        _mcal._set_mover_dmx(
+            dmx, addr, pan_norm, tilt_norm, *color,
+            dimmer=255, profile=prof_info)
     except Exception as e:
-        log.warning("SMART probe DMX write failed: %s", e)
-        return {"found": False, "reason": f"dmx_write:{e}"}
+        log.warning("SMART probe DMX prep failed: %s", e)
+        return {"found": False, "reason": f"dmx_prep:{e}"}
 
     if settle_ms > 0:
         time.sleep(min(5000, max(0, int(settle_ms))) / 1000.0)
 
-    # Beam-detect pixel
+    # Flash-differential detection. _beam_detect_flash internally:
+    #   1. Re-writes the whole dmx buffer with dimmer=0 and slews the
+    #      head to (pan_norm, tilt_norm) with the lamp dark.
+    #   2. Lifts dimmer to 255, captures the lit frame.
+    #   3. Drops dimmer to 0 (in a side thread), captures the dark
+    #      frame, diffs, locates the beam blob.
+    #   4. Restores dimmer=255 so the head stays lit between probes.
+    # The "redundant set_fixture_dimmer(255)" of the previous version
+    # is gone — this function owns dimmer state for the duration.
     try:
-        beam = _mcal._beam_detect(cam_ip, cam_idx, mover_color)
+        beam = _mcal._beam_detect_flash(
+            bridge_ip, cam_ip, cam_idx, addr, pan_norm, tilt_norm,
+            color, dmx)
     except Exception as e:
-        log.debug("SMART beam-detect raised: %s", e)
+        log.debug("SMART _beam_detect_flash raised: %s", e)
         beam = None
     if not beam:
         return {"found": False, "reason": "no_beam"}
@@ -6465,6 +6485,42 @@ def _mover_cal_thread_smart_body(fid, cam, bridge_ip, mover_color,
             "SMART probe: fixture has neither a SMART model nor "
             "Home + Home-Secondary — run the home wizard first")
     job["confidence"] = confidence
+
+    # #732 — wire the calibrator's _active_universe so the legacy
+    # _fresh_buffer / _set_mover_dmx / _beam_detect_flash chain (used
+    # by _smart_probe_point_default) seeds its DMX buffer from the
+    # live engine snapshot rather than zeros.
+    #
+    # Pre-set the colour wheel at home for fixtures that have one so
+    # the mechanism finishes rotating BEFORE the first probe slew —
+    # SNR improvement, not the zero-of-16 fix. Profiles without a
+    # colour-wheel channel (RGB-only fixtures) skip this block; the
+    # gate is the channel_map presence check, not a profile-name
+    # heuristic.
+    try:
+        engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+        ch_map = prof_info.get("channel_map", {}) or {}
+        uni = int(f.get("dmxUniverse", 1))
+        addr = int(f.get("dmxStartAddr", 1))
+        _mcal._active_universe = uni
+        if engine and "color-wheel" in ch_map and mover_color and len(mover_color) >= 3:
+            from dmx_profiles import rgb_to_wheel_slot
+            r, g, b = int(mover_color[0]), int(mover_color[1]), int(mover_color[2])
+            slot_dmx = rgb_to_wheel_slot(prof_info, r, g, b)
+            profile = {"channel_map": ch_map,
+                       "channels": prof_info.get("channels", [])}
+            # Use the named-channel helper instead of writing the raw
+            # DMX offset — keeps the bits/8-vs-16 + start_addr math in
+            # one place (#feedback_no_direct_dmx_writes).
+            engine.get_universe(uni).set_fixture_channels(
+                addr, {"color-wheel": int(slot_dmx)}, profile)
+            log.info("SMART %d: colour-wheel pre-set to slot %d (rgb=(%d,%d,%d))",
+                     fid, slot_dmx, r, g, b)
+            # Settle the wheel before the first slew. 200 ms matches
+            # the legacy cal threads' colour-write+settle pattern.
+            time.sleep(0.2)
+    except Exception as e:
+        log.warning("SMART colour-wheel pre-set failed: %s", e)
 
     job["phase"] = "smart_probing"
     samples = []
