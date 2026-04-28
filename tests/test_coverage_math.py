@@ -241,20 +241,53 @@ def run():
                             prof_default, floor_z=0)
     ok('coverage_polygon: down-mounted fixture has polygon',
        len(poly) >= 3, f'len={len(poly)}')
-    # Centroid roughly near fixture XY
-    cx = sum(p[0] for p in poly) / len(poly)
-    cy = sum(p[1] for p in poly) / len(poly)
-    ok('coverage_polygon: centroid near fixture XY',
-       abs(cx - 1500) < 1500 and abs(cy - 1500) < 1500,
-       f'centroid=({cx}, {cy})')
+    # #731 — non-degeneracy invariants every coverage_polygon test
+    # case must satisfy: 2D extent in both axes, finite shoelace area,
+    # centroid near the fixture xy. `len(poly) >= 3` alone allowed a
+    # 1D-line polygon to pass.
+    def _poly_invariants(name, poly, fixture_xy, *, min_extent=100.0,
+                         min_area=10000.0, max_centroid_distance=None):
+        if len(poly) < 3:
+            ok(f'{name}: len(poly) >= 3', False, f'len={len(poly)}')
+            return
+        xs = [p[0] for p in poly]
+        ys = [p[1] for p in poly]
+        x_extent = max(xs) - min(xs)
+        y_extent = max(ys) - min(ys)
+        ok(f'{name}: x extent > {min_extent}mm',
+           x_extent > min_extent, f'x_extent={x_extent}')
+        ok(f'{name}: y extent > {min_extent}mm',
+           y_extent > min_extent, f'y_extent={y_extent}')
+        area = abs(_polygon_signed_area(poly))
+        ok(f'{name}: shoelace area > {min_area}mm²',
+           area > min_area, f'area={area}')
+        cx = sum(xs) / len(poly)
+        cy = sum(ys) / len(poly)
+        if max_centroid_distance is not None:
+            d = math.hypot(cx - fixture_xy[0], cy - fixture_xy[1])
+            ok(f'{name}: centroid within {max_centroid_distance}mm of fixture',
+               d < max_centroid_distance, f'd={d}')
 
-    # Sideways-mounted fixture (rx=0) at (1500, 1500, 1500) — beam
-    # aims horizontally at home, but the envelope (±135° tilt) sweeps
-    # downward enough to hit the floor.
+    _poly_invariants('down-mounted', poly, (1500, 1500),
+                      max_centroid_distance=2000.0)
+
+    # Sideways-mounted fixture (rx=0) at (1500, 1500, 1500). Pre-#731
+    # this returned a 1D line on y=0; now produces a real 2D footprint.
     poly = coverage_polygon((1500, 1500, 1500), [0, 0, 0],
                             prof_default, floor_z=0)
     ok('coverage_polygon: sideways mount hits floor',
        len(poly) >= 3, f'len={len(poly)}')
+    _poly_invariants('sideways-mount', poly, (1500, 1500))
+
+    # #731 fid-#17 regression: basement 150W MH Stage Right inputs that
+    # collapsed the polygon to a 1D line on y=0 in v1.6.80.
+    fid17_prof = {'panRange': 540, 'tiltRange': 180,
+                  'tiltOffsetDmx16': 32768, 'tiltUp': False}
+    poly_17 = coverage_polygon((600, 0, 1760), [0, 0, 0],
+                               fid17_prof, floor_z=-4.0)
+    ok('#731 fid#17 regression: polygon present',
+       len(poly_17) >= 3, f'len={len(poly_17)}')
+    _poly_invariants('#731 fid#17', poly_17, (600, 0))
 
     # Tightly upward mount: rx=-90 + tiny pan/tilt envelope — confirms
     # the helper returns [] when no edge ray crosses below horizon. (A

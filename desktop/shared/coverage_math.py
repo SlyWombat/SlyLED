@@ -327,33 +327,55 @@ def _convex_hull(points):
 
 
 def coverage_polygon(fixture_xyz, rotation, profile, floor_z,
-                     samples_per_edge=12):
+                     samples_per_edge=12, interior_grid=12):
     """Compute the floor footprint of a fixture's pan/tilt envelope.
 
-    Ray-marches the envelope's perimeter (``samples_per_edge`` points
-    per side) through ``fixture_aim_to_world``, intersecting each ray
-    with ``z = floor_z``. Returns the convex hull of all forward floor
-    intersections as a polygon ``[[x, y], ...]`` in stage XY (CCW).
-    Returns an empty list if no rays hit the floor in front of the
-    fixture (e.g. an upward-aimed mount).
+    Ray-marches the envelope through ``fixture_aim_to_world``,
+    intersecting each ray with ``z = floor_z``. Returns the convex
+    hull of all forward floor intersections as a polygon
+    ``[[x, y], ...]`` in stage XY (CCW). Returns an empty list if no
+    rays hit the floor in front of the fixture (e.g. an upward-aimed
+    mount with no panRange wrap-around).
+
+    #731 — sampling combines the envelope **perimeter** AND a regular
+    **interior grid** (``interior_grid`` × ``interior_grid``).
+    Perimeter-only sampling collapses to a 1D line whenever the
+    fixture's forward axis aligns with stage Y (e.g. ``rotation =
+    [0, 0, 0]`` ceiling-mount) AND ``panRange`` covers a full
+    revolution: the four perimeter edges all land on rays whose
+    floor-projection has either ``ay=0`` (pan=±90° mod 360) or no
+    floor hit (tilt=±90°). Interior samples cover the actual cone
+    body where ``cos(pan) ≠ 0`` and ``sin(tilt) ≠ 0``. Convex hull
+    cost stays O(n log n).
     """
     pan_min, pan_max, tilt_min, tilt_max = _profile_envelope_deg(profile)
-    n = max(2, int(samples_per_edge))
+    n_edge = max(2, int(samples_per_edge))
+    n_grid = max(2, int(interior_grid))
 
     edge_pts = []
-    # Top + bottom edges (constant tilt, varying pan)
-    for i in range(n):
-        f = i / float(n - 1)
+    # Perimeter (kept — captures the boundary on profiles where the
+    # envelope IS the bounding shape).
+    for i in range(n_edge):
+        f = i / float(n_edge - 1)
         pan = pan_min + f * (pan_max - pan_min)
         edge_pts.append((pan, tilt_min))
         edge_pts.append((pan, tilt_max))
-    # Left + right edges (constant pan, varying tilt)
-    for i in range(n):
-        f = i / float(n - 1)
+    for i in range(n_edge):
+        f = i / float(n_edge - 1)
         tilt = tilt_min + f * (tilt_max - tilt_min)
         edge_pts.append((pan_min, tilt))
         edge_pts.append((pan_max, tilt))
-    # Always include the centre (helps when the envelope is tiny)
+    # Interior grid — fills the envelope so the convex hull catches the
+    # full cone body, not just the perimeter rays. #731 fix.
+    for i in range(n_grid):
+        f = i / float(n_grid - 1)
+        pan = pan_min + f * (pan_max - pan_min)
+        for j in range(n_grid):
+            g = j / float(n_grid - 1)
+            tilt = tilt_min + g * (tilt_max - tilt_min)
+            edge_pts.append((pan, tilt))
+    # Always include the centre (helps when the envelope is tiny — the
+    # interior grid already covers it but cheap insurance).
     edge_pts.append(((pan_min + pan_max) / 2.0, (tilt_min + tilt_max) / 2.0))
 
     floor_xy = []
