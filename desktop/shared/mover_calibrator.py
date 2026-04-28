@@ -3676,7 +3676,7 @@ SMART_MAX_RMS_MM = 100.0
 
 
 def _smart_solve(samples, home, secondary, fixture_xyz, rotation,
-                  profile_pan_range_deg):
+                  profile_pan_range_deg, profile_tilt_range_deg=None):
     """Fit a SMART calibration model.
 
     ``samples`` is the per-probe list emitted by ``_smart_probe_run`` —
@@ -3713,7 +3713,8 @@ def _smart_solve(samples, home, secondary, fixture_xyz, rotation,
         raise CalibrationError("SMART solver requires Home + Home-Secondary")
 
     estimate = solve_dmx_per_degree(
-        home, secondary, rotation, profile_pan_range_deg)
+        home, secondary, rotation, profile_pan_range_deg,
+        profile_tilt_range_deg)
     pan_sign = +1 if estimate["panDmxPerDeg"] >= 0 else -1
     tilt_sign = +1 if estimate["tiltDmxPerDeg"] >= 0 else -1
 
@@ -3732,15 +3733,23 @@ def _smart_solve(samples, home, secondary, fixture_xyz, rotation,
     pan_rows = [(0.0, int(home["panDmx16"]))]
     tilt_rows = [(0.0, int(home["tiltDmx16"]))]
 
-    # Secondary pair: derive Secondary's (panDeg, tiltDeg) the same way
-    # solve_dmx_per_degree did (delta-from-DMX-fraction for pan; operator
-    # stage-tilt minus IK-derived home-tilt for tilt).
-    delta_pan_dmx = int(secondary["panDmx16"]) - int(home["panDmx16"])
-    sec_pan_deg = (delta_pan_dmx / 65535.0) * float(profile_pan_range_deg or 540)
-    sec_tilt_deg = (float(secondary["operatorTiltDeg"])
-                    - estimate["homeTiltDegStage"])
-    pan_rows.append((sec_pan_deg, int(secondary["panDmx16"])))
-    tilt_rows.append((sec_tilt_deg, int(secondary["tiltDmx16"])))
+    # #730 — Secondary pair: under direction-only inputs, the angle we'd
+    # assign to the secondary pose is whatever satisfies the estimate's
+    # affine model: pan_offset_dmx = pan_per_deg * sec_pan_deg, so
+    # sec_pan_deg = pan_offset_dmx / pan_per_deg. Same for tilt. This
+    # places the secondary row exactly on the estimate's line — it
+    # contributes no LSQ pull on the slope (probes do that), but anchors
+    # the bias against any noise-spread among probes.
+    pan_off = int(secondary.get("panOffsetDmx16", 0))
+    tilt_off = int(secondary.get("tiltOffsetDmx16", 0))
+    pan_per = float(estimate["panDmxPerDeg"]) or 1.0
+    tilt_per = float(estimate["tiltDmxPerDeg"]) or 1.0
+    sec_pan_dmx = int(home["panDmx16"]) + pan_off
+    sec_tilt_dmx = int(home["tiltDmx16"]) + tilt_off
+    sec_pan_deg = pan_off / pan_per
+    sec_tilt_deg = tilt_off / tilt_per
+    pan_rows.append((sec_pan_deg, sec_pan_dmx))
+    tilt_rows.append((sec_tilt_deg, sec_tilt_dmx))
 
     # Probe samples: re-IK each measured XYZ to (panDeg, tiltDeg).
     per_sample_residuals = []

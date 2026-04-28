@@ -624,18 +624,18 @@ for x, y in test_xy:
     })
 
 home = {"panDmx16": true_home_pan, "tiltDmx16": true_home_tilt}
-# Secondary at +25% pan range + +5° stage-frame tilt (id-rotation, so
-# stage-frame and mount-internal tilt agree at home).
-sec_pan_delta = int(round(0.25 * 65535))
-sec_tilt_delta = int(round(5.0 * true_tilt_per))
+# #730 — direction-only secondary. Operator's two binary clicks
+# (panMovedDirection / tiltMovedDirection) supply the sign;
+# magnitudes come from the profile envelope.
 secondary = {
-    "panDmx16": true_home_pan + sec_pan_delta,
-    "tiltDmx16": true_home_tilt + sec_tilt_delta,
-    "operatorTiltDeg": 5.0,
+    "panOffsetDmx16": int(round(0.25 * 65535)),
+    "tiltOffsetDmx16": int(round(0.25 * 65535)),
+    "panMovedDirection": "right",
+    "tiltMovedDirection": "up",
 }
 
 result = _smart_solve(synth_samples, home, secondary, fixture_xyz,
-                       rotation, profile_pan_range)
+                       rotation, profile_pan_range, profile_tilt_range)
 m = result["model"]
 check('#720 PR-5 model panDmxPerDeg recovers within 1%',
       abs(m["panDmxPerDeg"] - true_pan_per) / true_pan_per < 0.01,
@@ -658,14 +658,14 @@ check('#720 PR-5 residual rms is small (synthetic)',
 
 # N=2 → confidence "medium", no RMS gate
 result2 = _smart_solve(synth_samples[:2], home, secondary, fixture_xyz,
-                        rotation, profile_pan_range)
+                        rotation, profile_pan_range, profile_tilt_range)
 check('#720 PR-5 confidence medium with N=2',
       result2["confidence"] == "medium",
       f'got {result2["confidence"]}')
 
 # N=1 → confidence "low", falls back to 2-pair estimate
 result1 = _smart_solve(synth_samples[:1], home, secondary, fixture_xyz,
-                        rotation, profile_pan_range)
+                        rotation, profile_pan_range, profile_tilt_range)
 check('#720 PR-5 confidence low with N=1',
       result1["confidence"] == "low",
       f'got {result1["confidence"]}')
@@ -680,7 +680,7 @@ for s in bad_samples:
     s["measured"][0] += 500.0
 try:
     _smart_solve(bad_samples, home, secondary, fixture_xyz, rotation,
-                  profile_pan_range)
+                  profile_pan_range, profile_tilt_range)
     check('#720 PR-5 RMS gate rejects high residual', False,
           'no exception raised')
 except Exception as e:
@@ -690,10 +690,27 @@ except Exception as e:
 
 # N=0 path raises (defensive)
 try:
-    _smart_solve([], home, secondary, fixture_xyz, rotation, profile_pan_range)
+    _smart_solve([], home, secondary, fixture_xyz, rotation,
+                  profile_pan_range, profile_tilt_range)
     check('#720 PR-5 N=0 raises', False, 'no exception')
 except Exception:
     check('#720 PR-5 N=0 raises', True)
+
+# #730 — legacy operatorTiltDeg shape rejected
+legacy_secondary = {
+    "panDmx16": true_home_pan + 1000,
+    "tiltDmx16": true_home_tilt + 500,
+    "operatorTiltDeg": 5.0,
+}
+try:
+    _smart_solve(synth_samples, home, legacy_secondary, fixture_xyz,
+                  rotation, profile_pan_range, profile_tilt_range)
+    check('#730 _smart_solve rejects legacy secondary', False,
+          'no exception')
+except Exception as e:
+    check('#730 _smart_solve rejects legacy secondary',
+          'home_secondary_stale_format' in str(e),
+          f'got {e}')
 
 
 # =====================================================================

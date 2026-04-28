@@ -143,61 +143,90 @@ def fixture_aim_to_world(pan_deg, tilt_deg, fixture_xyz, rotation,
 # ── 2-pair affine estimate (Home + Home-Secondary) ──────────────────────
 
 def solve_dmx_per_degree(home, secondary, fixture_rotation,
-                         profile_pan_range_deg):
-    """Bootstrap DMX-per-degree estimate from Home + Home-Secondary.
+                         profile_pan_range_deg,
+                         profile_tilt_range_deg=None):
+    """#730 — bootstrap DMX-per-degree estimate from Home + direction-only
+    Home-Secondary.
 
-    ``home`` and ``secondary`` are dicts shaped like the fixture record's
-    persisted values:
+    ``home``      = ``{"panDmx16": int, "tiltDmx16": int}``
+    ``secondary`` = ``{"panOffsetDmx16": int, "tiltOffsetDmx16": int,
+                       "panMovedDirection": "left"|"right",
+                       "tiltMovedDirection": "down"|"up"}``
 
-        home      = {"panDmx16": int, "tiltDmx16": int}
-        secondary = {"panDmx16": int, "tiltDmx16": int,
-                     "operatorTiltDeg": float}
+    Magnitudes come from the profile's declared ranges
+    (``65535 / panRange`` and ``65535 / tiltRange``); only the sign
+    comes from the operator's binary direction calls. This is robust
+    near vertical (no ``atan2`` divide-by-near-zero) and immune to
+    operator-typed-degree errors. PR-5's LSQ refines magnitudes from
+    probes.
 
-    The pan rate uses the wizard-known offset (fraction of full DMX
-    ≡ fraction of panRange degrees, mount-internal). The tilt rate uses
-    the operator's stage-frame angle vs. the IK-derived stage tilt at
-    home; this treats stage-frame tilt rate and mount-internal tilt rate
-    as locally equivalent — exact for rotation [rx, 0, rz], a useful
-    approximation for ry ≠ 0 mounts that PR-5's solver will refine.
+    At Home the fixture mechanics are at internal ``(panDeg, tiltDeg)
+    = (0, 0)`` by construction (the operator drove the mechanics so
+    the beam aims along ``rotation``). So the bias is just the home
+    DMX values and the model satisfies ``angles_to_dmx``'s contract.
 
     Returns ``{panDmxPerDeg, tiltDmxPerDeg, homePanDmx16,
-    homeTiltDmx16, homeTiltDegStage}``. Raises ``ValueError`` if Home and
-    Secondary share the same DMX pose for either axis (degenerate fit).
+    homeTiltDmx16, homeTiltDegStage}``. Raises ``ValueError`` with
+    ``home_secondary_stale_format`` when the persisted block carries
+    only the legacy ``operatorTiltDeg`` (PR-1 shape from #721, before
+    #730).
     """
     try:
         home_pan = int(home["panDmx16"])
         home_tilt = int(home["tiltDmx16"])
-        sec_pan = int(secondary["panDmx16"])
-        sec_tilt = int(secondary["tiltDmx16"])
-        op_tilt_deg = float(secondary["operatorTiltDeg"])
     except (KeyError, TypeError, ValueError) as e:
-        raise ValueError(f"home/secondary missing required field: {e}")
+        raise ValueError(f"home missing required field: {e}")
+
+    if not isinstance(secondary, dict):
+        raise ValueError("secondary must be an object")
+
+    pan_dir = secondary.get("panMovedDirection")
+    tilt_dir = secondary.get("tiltMovedDirection")
+    if not pan_dir or not tilt_dir:
+        # Detect the legacy PR-1 shape (operatorTiltDeg-only) and emit a
+        # specific error code so /smart/preview can prompt the operator
+        # to re-run the wizard.
+        if "operatorTiltDeg" in secondary:
+            raise ValueError("home_secondary_stale_format")
+        raise ValueError(
+            "secondary missing panMovedDirection/tiltMovedDirection")
+    if pan_dir not in ("left", "right"):
+        raise ValueError("panMovedDirection must be 'left' or 'right'")
+    if tilt_dir not in ("down", "up"):
+        raise ValueError("tiltMovedDirection must be 'down' or 'up'")
 
     pan_range = float(profile_pan_range_deg) if profile_pan_range_deg else 540.0
     if pan_range <= 0:
         pan_range = 540.0
+    tilt_range = float(profile_tilt_range_deg) if profile_tilt_range_deg else 270.0
+    if tilt_range <= 0:
+        tilt_range = 270.0
 
-    # Stage-frame tilt-from-horizon at Home: aim_stage_at_home = R · [0,1,0]
+    # Magnitudes from profile envelope. Always positive.
+    pan_dmx_per_deg_mag = 65535.0 / pan_range
+    tilt_dmx_per_deg_mag = 65535.0 / tilt_range
+
+    # Sign: the operator's binary direction call.
+    #   panMovedDirection == "right" → beam swept toward stage-+X →
+    #     DMX increase corresponds to mount-internal pan-positive.
+    #     Convention matches `world_to_fixture_pt` (panDeg = atan2(mx,
+    #     my), positive panDeg pushes mount-+Y toward mount-+X).
+    #   tiltMovedDirection == "up" → beam swept above horizon → DMX
+    #     increase corresponds to mount-internal tilt-positive (UP).
+    pan_sign = +1 if pan_dir == "right" else -1
+    tilt_sign = +1 if tilt_dir == "up" else -1
+
+    pan_dmx_per_deg = pan_sign * pan_dmx_per_deg_mag
+    tilt_dmx_per_deg = tilt_sign * tilt_dmx_per_deg_mag
+
+    # Stage-frame tilt-from-horizon at Home — informational, used by
+    # PR-5 LSQ residual computation. Preserved on the model dict for
+    # backcompat with consumers that read it.
     R = _mount_rotation(fixture_rotation or [0.0, 0.0, 0.0])
     aim_home = _matvec(R, (0.0, 1.0, 0.0))
     home_tilt_deg = math.degrees(math.atan2(
         aim_home[2], math.hypot(aim_home[0], aim_home[1])
     ))
-
-    delta_pan_dmx = sec_pan - home_pan
-    delta_pan_deg = (delta_pan_dmx / 65535.0) * pan_range
-    if abs(delta_pan_dmx) < 1 or abs(delta_pan_deg) < 1e-6:
-        raise ValueError("pan secondary equals pan primary — no DMX delta")
-    pan_dmx_per_deg = float(delta_pan_dmx) / float(delta_pan_deg)
-
-    delta_tilt_dmx = sec_tilt - home_tilt
-    delta_tilt_deg = op_tilt_deg - home_tilt_deg
-    if abs(delta_tilt_deg) < 1e-3 or abs(delta_tilt_dmx) < 1:
-        raise ValueError(
-            "tilt secondary too close to primary — operator angle equals "
-            "rotation-derived tilt"
-        )
-    tilt_dmx_per_deg = float(delta_tilt_dmx) / float(delta_tilt_deg)
 
     return {
         "panDmxPerDeg": pan_dmx_per_deg,

@@ -1932,19 +1932,25 @@ def run():
         ok('#720 POST home secondary defaults null',
            r.get_json().get('homeSecondary') is None)
 
-        # POST primary + secondary atomically
+        # POST primary + secondary atomically (#730 direction-only shape)
         r = c.post(f'/api/fixtures/{home_fid}/home', json={
             'panDmx16': 32768, 'tiltDmx16': 16384,
             'secondary': {
-                'panDmx16': 49152, 'tiltDmx16': 32768, 'operatorTiltDeg': -10.0
+                'panOffsetDmx16': 16384, 'tiltOffsetDmx16': 16384,
+                'panMovedDirection': 'right',
+                'tiltMovedDirection': 'up',
             },
         })
         ok('#720 POST home with secondary', r.status_code == 200)
         sec = r.get_json().get('homeSecondary') or {}
-        ok('#720 secondary panDmx16 saved', sec.get('panDmx16') == 49152)
-        ok('#720 secondary tiltDmx16 saved', sec.get('tiltDmx16') == 32768)
-        ok('#720 secondary operatorTiltDeg saved',
-           abs((sec.get('operatorTiltDeg') or 0) - (-10.0)) < 1e-6)
+        ok('#730 secondary panOffsetDmx16 saved',
+           sec.get('panOffsetDmx16') == 16384)
+        ok('#730 secondary tiltOffsetDmx16 saved',
+           sec.get('tiltOffsetDmx16') == 16384)
+        ok('#730 secondary panMovedDirection saved',
+           sec.get('panMovedDirection') == 'right')
+        ok('#730 secondary tiltMovedDirection saved',
+           sec.get('tiltMovedDirection') == 'up')
         ok('#720 secondary capturedAt set',
            isinstance(sec.get('capturedAt'), str))
 
@@ -1954,31 +1960,36 @@ def run():
         ok('#720 GET home primary round-trip',
            d.get('primary', {}).get('panDmx16') == 32768
            and d.get('primary', {}).get('tiltDmx16') == 16384)
-        ok('#720 GET home secondary round-trip',
-           d.get('secondary', {}).get('panDmx16') == 49152
-           and d.get('secondary', {}).get('tiltDmx16') == 32768)
+        ok('#730 GET home secondary round-trip',
+           d.get('secondary', {}).get('panOffsetDmx16') == 16384
+           and d.get('secondary', {}).get('panMovedDirection') == 'right')
 
         # POST secondary directly (granular endpoint)
         r = c.post(f'/api/fixtures/{home_fid}/home/secondary', json={
-            'panDmx16': 16384, 'tiltDmx16': 49152, 'operatorTiltDeg': 22.5,
+            'panOffsetDmx16': -16384, 'tiltOffsetDmx16': -16384,
+            'panMovedDirection': 'left', 'tiltMovedDirection': 'down',
         })
         ok('#720 POST /home/secondary', r.status_code == 200)
-        ok('#720 secondary updated via direct endpoint',
-           c.get(f'/api/fixtures/{home_fid}/home').get_json()
-           .get('secondary', {}).get('operatorTiltDeg') == 22.5)
+        sec_d = c.get(f'/api/fixtures/{home_fid}/home').get_json().get('secondary', {})
+        ok('#730 secondary updated via direct endpoint',
+           sec_d.get('panMovedDirection') == 'left'
+           and sec_d.get('tiltMovedDirection') == 'down')
 
         # POST secondary requires primary first — clear primary, retry
         c.delete(f'/api/fixtures/{home_fid}/home')
         r = c.post(f'/api/fixtures/{home_fid}/home/secondary', json={
-            'panDmx16': 16384, 'tiltDmx16': 49152, 'operatorTiltDeg': 5.0,
+            'panOffsetDmx16': 16384, 'tiltOffsetDmx16': 16384,
+            'panMovedDirection': 'right', 'tiltMovedDirection': 'up',
         })
         ok('#720 secondary without primary → 400', r.status_code == 400)
 
         # Re-set primary + secondary, then DELETE clears both atomically
         c.post(f'/api/fixtures/{home_fid}/home', json={
             'panDmx16': 32768, 'tiltDmx16': 16384,
-            'secondary': {'panDmx16': 49152, 'tiltDmx16': 32768,
-                          'operatorTiltDeg': -10.0},
+            'secondary': {
+                'panOffsetDmx16': 16384, 'tiltOffsetDmx16': 16384,
+                'panMovedDirection': 'right', 'tiltMovedDirection': 'up',
+            },
         })
         r = c.delete(f'/api/fixtures/{home_fid}/home')
         ok('#720 DELETE home returns ok', r.status_code == 200)
@@ -1986,17 +1997,36 @@ def run():
         ok('#720 DELETE clears primary', d.get('primary') is None)
         ok('#720 DELETE clears secondary', d.get('secondary') is None)
 
-        # Validation: out-of-range secondary tilt → 400
+        # #730 — legacy operatorTiltDeg shape rejected as stale
         c.post(f'/api/fixtures/{home_fid}/home', json={
             'panDmx16': 32768, 'tiltDmx16': 16384})
         r = c.post(f'/api/fixtures/{home_fid}/home/secondary', json={
-            'panDmx16': 49152, 'tiltDmx16': 32768, 'operatorTiltDeg': 99.0,
+            'panDmx16': 49152, 'tiltDmx16': 32768, 'operatorTiltDeg': -10.0,
         })
-        ok('#720 secondary tilt OOR → 400', r.status_code == 400)
+        ok('#730 legacy secondary shape → 400 stale_format',
+           r.status_code == 400
+           and 'stale_format' in (r.get_json().get('err') or ''))
+
+        # Validation: bad direction string → 400
         r = c.post(f'/api/fixtures/{home_fid}/home/secondary', json={
-            'panDmx16': 70000, 'tiltDmx16': 32768, 'operatorTiltDeg': 5.0,
+            'panOffsetDmx16': 16384, 'tiltOffsetDmx16': 16384,
+            'panMovedDirection': 'sideways', 'tiltMovedDirection': 'up',
         })
-        ok('#720 secondary panDmx16 OOR → 400', r.status_code == 400)
+        ok('#730 bogus direction → 400', r.status_code == 400)
+
+        # #730 — retry endpoint accepts axis arg
+        r = c.post(f'/api/fixtures/{home_fid}/home/secondary/retry', json={
+            'axis': 'pan', 'settleMs': 0,
+        })
+        # 503 (no Art-Net engine running in test) or 200 both fine —
+        # validates the route exists and validates input.
+        ok('#730 retry endpoint reachable',
+           r.status_code in (200, 503),
+           f'status={r.status_code} body={r.get_json()}')
+        r = c.post(f'/api/fixtures/{home_fid}/home/secondary/retry', json={
+            'axis': 'bogus',
+        })
+        ok('#730 retry rejects bad axis', r.status_code == 400)
 
         # ── #720 PR-1.5 — aim-angles endpoint ─────────────────────
         # Without home + secondary → fixture_not_calibrated
@@ -2010,8 +2040,10 @@ def run():
         # With Home + Secondary → 503 (engine not running) is acceptable.
         c.post(f'/api/fixtures/{home_fid}/home', json={
             'panDmx16': 32768, 'tiltDmx16': 16384,
-            'secondary': {'panDmx16': 49152, 'tiltDmx16': 32768,
-                          'operatorTiltDeg': -10.0},
+            'secondary': {
+                'panOffsetDmx16': 16384, 'tiltOffsetDmx16': 16384,
+                'panMovedDirection': 'right', 'tiltMovedDirection': 'up',
+            },
         })
         r = c.post(f'/api/mover/{home_fid}/aim-angles',
                    json={'panDeg': 0.0, 'tiltDeg': 0.0})

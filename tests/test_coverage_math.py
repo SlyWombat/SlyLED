@@ -140,56 +140,90 @@ def run():
     ok('angles_to_dmx clamps low', pdx == 0 and tdx == 0,
        f'pdx={pdx} tdx={tdx}')
 
-    # ── 5. solve_dmx_per_degree recovers a synthetic 2-pair fit ───
+    # ── 5. #730 solve_dmx_per_degree — direction-only inputs ──────
     pan_range = 540.0
-    # Synthetic: home at (32768, 16384), rotation [0,0,0] → home_tilt=0.
-    # Choose secondary pan offset = +0.25 * 65535 = 16384 → +0.25 *
-    # 540 = +135° pan delta. Choose tilt DMX +1000 with operator
-    # reading +5° (so tilt_dmx_per_deg = 1000 / 5 = 200).
+    tilt_range = 270.0
     home = {'panDmx16': 32768, 'tiltDmx16': 16384}
-    sec = {
-        'panDmx16': 32768 + 16384,
-        'tiltDmx16': 16384 + 1000,
-        'operatorTiltDeg': 5.0,
+    # Direction-only secondary: operator answered "right" + "up".
+    sec_ru = {
+        'panOffsetDmx16': 16384,
+        'tiltOffsetDmx16': 16384,
+        'panMovedDirection': 'right',
+        'tiltMovedDirection': 'up',
     }
-    est = solve_dmx_per_degree(home, sec, [0, 0, 0], pan_range)
-    # Synthetic: full DMX maps to full panRange, so pan_dmx_per_deg ≡
-    # 65535 / panRange regardless of the chosen offset fraction.
-    expected_pan_per = 65535.0 / pan_range
-    ok('solve pan-DMX-per-deg',
-       approx(est['panDmxPerDeg'], expected_pan_per, 1e-6),
-       f"got={est['panDmxPerDeg']} expected={expected_pan_per}")
-    ok('solve tilt-DMX-per-deg',
-       approx(est['tiltDmxPerDeg'], 200.0, 1e-3),
+    est = solve_dmx_per_degree(home, sec_ru, [0, 0, 0], pan_range, tilt_range)
+    expected_pan_mag = 65535.0 / pan_range
+    expected_tilt_mag = 65535.0 / tilt_range
+    ok('#730 solve right/up: pan slope = +65535/panRange',
+       approx(est['panDmxPerDeg'], +expected_pan_mag, 1e-6),
+       f"got={est['panDmxPerDeg']}")
+    ok('#730 solve right/up: tilt slope = +65535/tiltRange',
+       approx(est['tiltDmxPerDeg'], +expected_tilt_mag, 1e-6),
        f"got={est['tiltDmxPerDeg']}")
-    ok('solve home_tilt_deg at id-rotation = 0',
-       approx(est['homeTiltDegStage'], 0.0, 1e-6),
-       f"got={est['homeTiltDegStage']}")
+    ok('#730 solve homePanDmx16 = home pan',
+       est['homePanDmx16'] == 32768)
+    ok('#730 solve homeTiltDmx16 = home tilt',
+       est['homeTiltDmx16'] == 16384)
 
-    # 6. solve with downward mount: home_tilt_deg should be -90°
-    est = solve_dmx_per_degree(home, sec, [90, 0, 0], pan_range)
-    ok('solve home_tilt at rx=90 = -90',
-       approx(est['homeTiltDegStage'], -90.0, 1e-3),
-       f"got={est['homeTiltDegStage']}")
+    # Operator answered "left" + "down" → both signs flip.
+    sec_ld = {
+        'panOffsetDmx16': -16384,
+        'tiltOffsetDmx16': -16384,
+        'panMovedDirection': 'left',
+        'tiltMovedDirection': 'down',
+    }
+    est_ld = solve_dmx_per_degree(home, sec_ld, [0, 0, 0], pan_range, tilt_range)
+    ok('#730 solve left/down: pan slope = -65535/panRange',
+       approx(est_ld['panDmxPerDeg'], -expected_pan_mag, 1e-6))
+    ok('#730 solve left/down: tilt slope = -65535/tiltRange',
+       approx(est_ld['tiltDmxPerDeg'], -expected_tilt_mag, 1e-6))
 
-    # 7. solve raises on degenerate inputs
+    # Vertical-home regression: rotation aiming straight down (the case
+    # that broke the operatorTiltDeg solver pre-#730). Direction-only
+    # inputs yield a finite, sensible model.
+    est_v = solve_dmx_per_degree(home, sec_ru, [90, 0, 0], pan_range, tilt_range)
+    ok('#730 vertical home: pan slope finite',
+       math.isfinite(est_v['panDmxPerDeg']) and est_v['panDmxPerDeg'] != 0,
+       f"got={est_v['panDmxPerDeg']}")
+    ok('#730 vertical home: tilt slope finite',
+       math.isfinite(est_v['tiltDmxPerDeg']) and est_v['tiltDmxPerDeg'] != 0,
+       f"got={est_v['tiltDmxPerDeg']}")
+    ok('#730 vertical home: homeTiltDegStage = -90',
+       approx(est_v['homeTiltDegStage'], -90.0, 1e-3),
+       f"got={est_v['homeTiltDegStage']}")
+
+    # 6. Asymmetric profile (350W BeamLight) honours its own tiltRange.
+    est_350 = solve_dmx_per_degree(home, sec_ru, [0, 0, 0], 540.0, 540.0)
+    ok('#730 solve uses provided tiltRange (350W envelope)',
+       approx(est_350['tiltDmxPerDeg'], 65535.0 / 540.0, 1e-6),
+       f"got={est_350['tiltDmxPerDeg']}")
+
+    # 7. Legacy PR-1 shape (operatorTiltDeg only) → stale-format error.
+    legacy = {'panDmx16': 49152, 'tiltDmx16': 32768, 'operatorTiltDeg': 5.0}
     try:
-        solve_dmx_per_degree(home, {'panDmx16': 32768, 'tiltDmx16': 16384,
-                                     'operatorTiltDeg': 0.0},
-                              [0, 0, 0], pan_range)
-        ok('solve rejects identical home/secondary', False, 'no raise')
-    except ValueError:
-        ok('solve rejects identical home/secondary', True)
+        solve_dmx_per_degree(home, legacy, [0, 0, 0], pan_range, tilt_range)
+        ok('#730 solve rejects legacy format', False, 'no raise')
+    except ValueError as e:
+        ok('#730 solve rejects legacy format with stale token',
+           'home_secondary_stale_format' in str(e),
+           f'got {e}')
 
-    # 8. solve uses 2-pair to feed angles_to_dmx self-consistently:
-    # at panDeg=0, tiltDeg=0 (Home) → home DMX exactly.
-    est = solve_dmx_per_degree(home, sec, [0, 0, 0], pan_range)
+    # 8. Bad direction string → ValueError.
+    try:
+        solve_dmx_per_degree(home, {**sec_ru, 'panMovedDirection': 'sideways'},
+                              [0, 0, 0], pan_range, tilt_range)
+        ok('#730 solve rejects bogus direction', False, 'no raise')
+    except ValueError:
+        ok('#730 solve rejects bogus direction', True)
+
+    # 9. solve self-consistency: angles_to_dmx(0,0) with the estimate
+    #    returns the home DMX exactly.
     pdx, tdx = angles_to_dmx(0, 0, est)
-    ok('estimate honours home DMX at (0,0)',
+    ok('#730 estimate honours home DMX at (0,0)',
        pdx == 32768 and tdx == 16384,
        f'pdx={pdx} tdx={tdx}')
 
-    # 9. Inverse model on dmx_to_angles raises if perDeg=0
+    # 10. Inverse model on dmx_to_angles raises if perDeg=0.
     try:
         dmx_to_angles(0, 0, {'panDmxPerDeg': 0, 'tiltDmxPerDeg': 1,
                              'homePanDmx16': 0, 'homeTiltDmx16': 0})

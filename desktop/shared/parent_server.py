@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.79"
+VERSION = "1.6.81"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1851,24 +1851,44 @@ def api_fixture_set_aim(fid):
     return jsonify(ok=True, rotation=f.get("rotation", [0, 0, 0]))
 
 def _validate_home_secondary(sec):
-    """#720 PR-1 — validate a Home Secondary block. Returns the cleaned
-    dict or raises ``ValueError`` with an operator-readable message."""
+    """#720 PR-1 + #730 — validate a Home Secondary block.
+
+    Post-#730 shape is direction-only::
+
+        {panOffsetDmx16: int, tiltOffsetDmx16: int,
+         panMovedDirection: "left"|"right",
+         tiltMovedDirection: "down"|"up"}
+
+    Magnitudes come from the profile envelope (panRange / tiltRange);
+    only the sign comes from the operator's binary direction calls.
+    The legacy PR-1 shape (panDmx16 / tiltDmx16 / operatorTiltDeg) is
+    rejected with ``home_secondary_stale_format`` so the SPA can prompt
+    the operator to re-run the wizard once.
+    """
     if not isinstance(sec, dict):
         raise ValueError("secondary must be an object")
+    # Reject legacy shape so /smart/preview can pinpoint the issue.
+    if "operatorTiltDeg" in sec and "panMovedDirection" not in sec:
+        raise ValueError("home_secondary_stale_format")
     try:
-        pan = int(sec["panDmx16"])
-        tilt = int(sec["tiltDmx16"])
-        op_tilt = float(sec["operatorTiltDeg"])
+        pan_off = int(sec["panOffsetDmx16"])
+        tilt_off = int(sec["tiltOffsetDmx16"])
     except (KeyError, TypeError, ValueError) as e:
-        raise ValueError(f"secondary fields panDmx16/tiltDmx16/operatorTiltDeg: {e}")
-    if not (0 <= pan <= 65535) or not (0 <= tilt <= 65535):
-        raise ValueError("secondary panDmx16/tiltDmx16 must be in [0, 65535]")
-    if op_tilt < -90.0 or op_tilt > 90.0:
-        raise ValueError("secondary operatorTiltDeg must be in [-90, +90]")
+        raise ValueError(
+            f"secondary requires panOffsetDmx16/tiltOffsetDmx16: {e}")
+    pan_dir = sec.get("panMovedDirection")
+    tilt_dir = sec.get("tiltMovedDirection")
+    if pan_dir not in ("left", "right"):
+        raise ValueError("panMovedDirection must be 'left' or 'right'")
+    if tilt_dir not in ("down", "up"):
+        raise ValueError("tiltMovedDirection must be 'down' or 'up'")
+    if not (-65535 <= pan_off <= 65535) or not (-65535 <= tilt_off <= 65535):
+        raise ValueError("offset values must be in [-65535, +65535]")
     return {
-        "panDmx16": pan,
-        "tiltDmx16": tilt,
-        "operatorTiltDeg": op_tilt,
+        "panOffsetDmx16": pan_off,
+        "tiltOffsetDmx16": tilt_off,
+        "panMovedDirection": pan_dir,
+        "tiltMovedDirection": tilt_dir,
         "capturedAt": datetime.utcnow().isoformat() + "Z",
     }
 
@@ -1963,21 +1983,39 @@ def api_fixture_set_home_secondary(fid):
     return jsonify(ok=True, homeSecondary=f["homeSecondary"])
 
 
-@app.post("/api/fixtures/<int:fid>/home/secondary/prepare")
-def api_fixture_prepare_home_secondary(fid):
-    """#720 PR-1 — slew a fixture to its computed Home Secondary pose.
+SECONDARY_PAN_OFFSET_DMX16 = 16384   # +25% of full DMX range
+SECONDARY_TILT_OFFSET_DMX16 = 16384  # +25% of full DMX range
 
-    Computes ``(panDmx16, tiltDmx16)`` from the wizard's spec
-    (``mover_control.secondary_pan_offset_dmx16`` + ``secondary_tilt_dmx16``),
-    drives the fixture there via the live DMX engine with dimmer up so
-    the operator can read the stage-frame tilt angle, optionally waits
-    ``settleMs`` (default 1200 ms), then returns the DMX values plus
-    profile envelope info for the SPA's tilt-angle prompt.
 
-    Body (all optional): ``{settleMs?: int, fraction?: float (default 0.25)}``.
-    """
-    from mover_control import secondary_pan_offset_dmx16, secondary_tilt_dmx16
-    f = next((f for f in _fixtures if f["id"] == fid), None)
+def _secondary_axis_offset(home_pan_dmx16, home_tilt_dmx16, axis):
+    """#730 — pick a fixed signed offset for the requested axis that
+    keeps the slewed pose inside ``[0, 65535]``. Prefers + first; falls
+    back to - if + would clip; clamps as last resort. Returns
+    ``(slew_pan_dmx16, slew_tilt_dmx16, signed_offset)`` where the
+    non-active axis is held at home."""
+    base_off = (SECONDARY_PAN_OFFSET_DMX16 if axis == "pan"
+                else SECONDARY_TILT_OFFSET_DMX16)
+    home_dmx = int(home_pan_dmx16 if axis == "pan" else home_tilt_dmx16)
+    pos = home_dmx + base_off
+    neg = home_dmx - base_off
+    if 0 <= pos <= 65535:
+        signed = +base_off
+        new_dmx = pos
+    elif 0 <= neg <= 65535:
+        signed = -base_off
+        new_dmx = neg
+    else:
+        signed = +base_off
+        new_dmx = max(0, min(65535, pos))
+    if axis == "pan":
+        return new_dmx, int(home_tilt_dmx16), signed
+    return int(home_pan_dmx16), new_dmx, signed
+
+
+def _do_secondary_slew(fid, axis, settle_ms):
+    """Shared helper for /home/secondary/prepare + /home/secondary/retry.
+    Returns a Flask response tuple."""
+    f = next((x for x in _fixtures if x["id"] == fid), None)
     if not f:
         return jsonify(err="Fixture not found"), 404
     if f.get("fixtureType") != "dmx":
@@ -1986,22 +2024,31 @@ def api_fixture_prepare_home_secondary(fid):
     home_tilt = f.get("homeTiltDmx16")
     if home_pan is None or home_tilt is None:
         return jsonify(err="Home primary must be set first"), 400
-    body = request.get_json(silent=True) or {}
-    try:
-        fraction = float(body.get("fraction", 0.25))
-    except (TypeError, ValueError):
-        fraction = 0.25
-    fraction = max(0.05, min(0.45, fraction))
-    settle_ms = int(body.get("settleMs", 1200))
-    settle_ms = max(0, min(5000, settle_ms))
+    if axis not in (None, "pan", "tilt"):
+        return jsonify(err="axis must be 'pan' or 'tilt' (or omitted)"), 400
 
     pid = f.get("dmxProfileId")
     prof_info = _profile_lib.channel_info(pid) if pid else None
     if not prof_info:
         return jsonify(err="Fixture has no DMX profile"), 400
 
-    sec_pan = secondary_pan_offset_dmx16(home_pan, fraction=fraction)
-    sec_tilt = secondary_tilt_dmx16(prof_info.get("tiltOffsetDmx16", 32768))
+    if axis == "pan":
+        slew_pan, slew_tilt, pan_off = _secondary_axis_offset(
+            home_pan, home_tilt, "pan")
+        tilt_off = 0
+    elif axis == "tilt":
+        slew_pan, slew_tilt, tilt_off = _secondary_axis_offset(
+            home_pan, home_tilt, "tilt")
+        pan_off = 0
+    else:
+        # Backwards-compat: no axis arg → slew both at once (PR-1
+        # legacy behaviour). Combined-axis flow can't drive the new
+        # direction-only UX, but is preserved so older clients still
+        # get a slew + envelope info response.
+        slew_pan, _stilt, pan_off = _secondary_axis_offset(
+            home_pan, home_tilt, "pan")
+        _span, slew_tilt, tilt_off = _secondary_axis_offset(
+            home_pan, home_tilt, "tilt")
 
     if not _artnet.running and not _sacn.running:
         return jsonify(err="Art-Net engine not running — start it from "
@@ -2014,22 +2061,57 @@ def api_fixture_prepare_home_secondary(fid):
         addr = f.get("dmxStartAddr", 1)
         uni_buf = engine.get_universe(uni)
         uni_buf.set_fixture_pan_tilt(addr,
-                                     sec_pan / 65535.0,
-                                     sec_tilt / 65535.0,
+                                     slew_pan / 65535.0,
+                                     slew_tilt / 65535.0,
                                      profile)
         uni_buf.set_fixture_dimmer(addr, 255, profile)
         uni_buf.set_fixture_rgb(addr, 0, 255, 0, profile)
     except Exception as e:
-        log.warning("home/secondary/prepare DMX write failed: %s", e)
+        log.warning("home/secondary slew DMX write failed: %s", e)
         return jsonify(err="dmx_write_failed", detail=str(e)), 500
     if settle_ms > 0:
         time.sleep(settle_ms / 1000.0)
     return jsonify(ok=True,
-                   panDmx16=sec_pan, tiltDmx16=sec_tilt,
+                   axis=axis,
+                   panDmx16=slew_pan,
+                   tiltDmx16=slew_tilt,
+                   panOffsetDmx16=pan_off,
+                   tiltOffsetDmx16=tilt_off,
                    panRange=prof_info.get("panRange", 540),
                    tiltRange=prof_info.get("tiltRange", 270),
-                   tiltOffsetDmx16=prof_info.get("tiltOffsetDmx16", 32768),
+                   tiltOffsetDmx16Profile=prof_info.get("tiltOffsetDmx16", 32768),
                    tiltUp=prof_info.get("tiltUp", False))
+
+
+@app.post("/api/fixtures/<int:fid>/home/secondary/prepare")
+def api_fixture_prepare_home_secondary(fid):
+    """#720 PR-1 + #730 — slew a fixture along one axis at a time so the
+    operator can call which way the beam moved.
+
+    Body: ``{axis: "pan"|"tilt", settleMs?: int}``. With ``axis``
+    omitted the legacy combined slew (#721 PR-1 behaviour) runs — kept
+    for backwards-compat with old SPA builds; the post-#730 wizard
+    always passes ``axis``. Returns the DMX values written + the
+    signed offset applied + profile envelope info.
+    """
+    body = request.get_json(silent=True) or {}
+    settle_ms = max(0, min(5000, int(body.get("settleMs", 1200))))
+    return _do_secondary_slew(fid, body.get("axis"), settle_ms)
+
+
+@app.post("/api/fixtures/<int:fid>/home/secondary/retry")
+def api_fixture_retry_home_secondary(fid):
+    """#730 — re-slew the requested axis without committing.
+
+    Body: ``{axis: "pan"|"tilt", settleMs?: int}``. Operators get
+    distracted; this endpoint exists so the wizard's "Show me again"
+    button doesn't have to abort the whole flow."""
+    body = request.get_json(silent=True) or {}
+    axis = body.get("axis")
+    if axis not in ("pan", "tilt"):
+        return jsonify(err="axis must be 'pan' or 'tilt'"), 400
+    settle_ms = max(0, min(5000, int(body.get("settleMs", 1200))))
+    return _do_secondary_slew(fid, axis, settle_ms)
 
 
 @app.get("/api/fixtures/<int:fid>/coverage")
@@ -6379,9 +6461,11 @@ def _mover_cal_thread_smart_body(fid, cam, bridge_ip, mover_color,
     }
     sec_block = f.get("homeSecondary")
     pan_range = prof_info.get("panRange", 540) or 540
+    tilt_range = prof_info.get("tiltRange", 270) or 270
     try:
         solve = _mcal._smart_solve(
-            samples, home_block, sec_block, fix_pos, rot, pan_range)
+            samples, home_block, sec_block, fix_pos, rot,
+            pan_range, tilt_range)
     except _mcal.CalibrationError:
         # RMS gate rejection — leave prior cal record untouched. The
         # wrapper's CalibrationError handler parks at home + sets
@@ -8951,6 +9035,16 @@ def api_mover_smart_preview(fid):
                        coveragePoly=[], cameraVisiblePoly=[],
                        workingPoly=[], probePoints=[])
 
+    # #730 — Detect legacy Home-Secondary records (PR-1 shape with
+    # operatorTiltDeg) and tell the operator to re-run the wizard
+    # before bothering with envelope math. Without a usable secondary
+    # the 2-pair estimate can't bootstrap and the cone collapses.
+    sec = f.get("homeSecondary") or {}
+    if "operatorTiltDeg" in sec and "panMovedDirection" not in sec:
+        return jsonify(ok=True, abortReason="home_secondary_stale_format",
+                       coveragePoly=[], cameraVisiblePoly=[],
+                       workingPoly=[], probePoints=[])
+
     fix_pos = _fixture_position(fid)
     rot = f.get("rotation") or [0.0, 0.0, 0.0]
 
@@ -9220,6 +9314,7 @@ def _resolve_mover_model(fid, fixture):
     pid = fixture.get("dmxProfileId")
     prof_info = _profile_lib.channel_info(pid) if pid else None
     pan_range = (prof_info or {}).get("panRange", 540)
+    tilt_range = (prof_info or {}).get("tiltRange", 270)
     try:
         from coverage_math import solve_dmx_per_degree
         est = solve_dmx_per_degree(
@@ -9227,7 +9322,16 @@ def _resolve_mover_model(fid, fixture):
             sec,
             fixture.get("rotation") or [0.0, 0.0, 0.0],
             pan_range,
+            tilt_range,
         )
+    except ValueError as e:
+        # #730 — surface the legacy-format diagnostic so /smart/preview
+        # can prompt re-running the wizard. Caller distinguishes via
+        # the special string.
+        if "home_secondary_stale_format" in str(e):
+            return (None, "home_secondary_stale_format")
+        log.warning("aim-angles 2-pair estimate failed for fid %s: %s", fid, e)
+        return (None, None)
     except Exception as e:
         log.warning("aim-angles 2-pair estimate failed for fid %s: %s", fid, e)
         return (None, None)
@@ -9261,6 +9365,11 @@ def api_mover_aim_angles(fid):
 
     model, confidence = _resolve_mover_model(fid, f)
     if model is None:
+        # #730 — surface the stale-secondary diagnostic so the SPA can
+        # tell the operator to re-run the wizard rather than the
+        # generic "not calibrated" message.
+        if confidence == "home_secondary_stale_format":
+            return jsonify(err="home_secondary_stale_format"), 400
         return jsonify(err="fixture_not_calibrated"), 400
 
     from coverage_math import angles_to_dmx
@@ -19483,6 +19592,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

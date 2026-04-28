@@ -843,14 +843,18 @@ function _setHomeToggleBeam(){
 
 function _setHomeBlackout(){
   // Drop dimmer to 0 so the beam isn't left on after Confirm/Cancel.
+  // #720 PR-1 + #730 — pan/tilt may not be set during the secondary
+  // step. Look up the fixture's home anchor as a fallback so the
+  // blackout doesn't snap pan/tilt to 0 (which would slew the head
+  // across the room).
   if(!_setHomeState)return;
   var fid = _setHomeState.fid;
-  // #720 PR-1 — at the secondary step _setHomeState.pan/tilt are stale
-  // (operator left them at the home pose); use secPan16/secTilt16 if set.
-  var pan = (_setHomeState.secPan16!=null)
-    ? _setHomeState.secPan16/65535 : _setHomeState.pan;
-  var tilt = (_setHomeState.secTilt16!=null)
-    ? _setHomeState.secTilt16/65535 : _setHomeState.tilt;
+  var f = null;
+  (_fixtures||[]).forEach(function(fx){if(fx.id===fid)f=fx;});
+  var pan = (_setHomeState.pan!=null) ? _setHomeState.pan
+            : (f && f.homePanDmx16!=null ? f.homePanDmx16/65535 : 0.5);
+  var tilt = (_setHomeState.tilt!=null) ? _setHomeState.tilt
+            : (f && f.homeTiltDmx16!=null ? f.homeTiltDmx16/65535 : 0.5);
   var x = new XMLHttpRequest();
   x.open('POST', '/api/fixtures/'+fid+'/dmx-test', true);
   x.setRequestHeader('Content-Type','application/json');
@@ -896,85 +900,139 @@ function _setHomeConfirm(){
   x.send(JSON.stringify({panDmx16: pan16, tiltDmx16: tilt16}));
 }
 
-// ── #720 PR-1 — Home Secondary wizard step ─────────────────────────────
+// ── #720 PR-1 + #730 — Home Secondary wizard step (direction-only) ─────
 //
-// After the operator confirms Home (primary), we drive the fixture to a
-// computed secondary pose (25% pan offset, mid tilt) via the live DMX
-// engine, then prompt the operator for the resulting stage-frame tilt
-// angle. Two known (vector, DMX) pairs let the SMART solver bootstrap
-// pan-DMX-per-degree + tilt-DMX-per-degree without probing — see PR-1.5
-// `solve_dmx_per_degree` in coverage_math.py.
+// After the operator confirms Home (primary), we slew the fixture along
+// ONE AXIS AT A TIME and ask the operator a binary question: did the
+// beam move LEFT or RIGHT (pan), then DOWN or UP (tilt). The signed
+// offset comes from the operator's two binary clicks; the magnitude
+// comes from the profile envelope. Wizard accepts unlimited "Show me
+// again" retries — operators get distracted, abort-and-restart of the
+// whole flow over a 2-second slew is unacceptable. See #730.
 
 function _setHomeOpenSecondary(fid){
   var f = null;
   _fixtures.forEach(function(fx){if(fx.id===fid)f=fx;});
   if(!f){closeModal();return;}
+  _setHomeState = _setHomeState || {};
+  _setHomeState.fid = fid;
+  _setHomeState.secStep = 'pan';
+  _setHomeState.panOffsetDmx16 = null;
+  _setHomeState.tiltOffsetDmx16 = null;
+  _setHomeState.panDir = null;
+  _setHomeState.tiltDir = null;
   document.getElementById('modal-title').textContent='Home Secondary — '+(f.name||'fixture '+fid);
-  document.getElementById('modal-body').innerHTML =
-    '<div style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">'
-    + 'Slewing fixture to a secondary pose (25% pan offset, tilt mid). '
-    + 'Once the beam settles, measure its angle from horizon — positive '
-    + 'up, negative down — and enter it below. This second known pose '
-    + 'lets SMART calibration bootstrap before any probes (#720 PR-1).'
-    + '</div>'
-    + '<div id="sh2-status" style="font-size:.78em;color:#64748b;margin-bottom:.5em">Slewing…</div>'
-    + '<div id="sh2-form" style="display:none">'
-    + '<label style="font-size:.82em;color:#cbd5e1">Stage-frame tilt at secondary pose '
-    + '<span id="sh2-range" style="color:#64748b"></span></label>'
-    + '<input type="number" id="sh2-tilt-deg" step="0.5" min="-90" max="90" '
-    + 'value="-30" style="width:100%;margin:.3em 0;padding:.3em" placeholder="degrees from horizon">'
-    + '<div style="margin-top:.6em;display:flex;gap:.4em;justify-content:flex-end">'
-    + '<button class="btn" onclick="_setHomeSecondarySkip()" style="background:#1e293b;color:#cbd5e1" '
-    + 'title="Skip — Home primary is still saved; SMART will need probes to bootstrap">Skip</button>'
-    + '<button class="btn btn-on" onclick="_setHomeSecondaryConfirm()" '
-    + 'style="background:#0e7490;color:#a5f3fc">Save Secondary</button>'
-    + '</div></div>';
   document.getElementById('modal').style.display='block';
-
-  var prep = new XMLHttpRequest();
-  prep.open('POST','/api/fixtures/'+fid+'/home/secondary/prepare', true);
-  prep.setRequestHeader('Content-Type','application/json');
-  prep.onload = function(){
-    var r = null; try{r=JSON.parse(prep.responseText);}catch(e){}
-    if(prep.status>=200 && prep.status<300 && r && r.ok){
-      _setHomeState = _setHomeState || {};
-      _setHomeState.fid = fid;
-      _setHomeState.secPan16 = r.panDmx16;
-      _setHomeState.secTilt16 = r.tiltDmx16;
-      _setHomeState.tiltUp = !!r.tiltUp;
-      var tiltRange = r.tiltRange || 270;
-      var ts = document.getElementById('sh2-status');
-      if(ts)ts.textContent = 'Beam at panDmx16='+r.panDmx16+', tiltDmx16='+r.tiltDmx16
-        + ' — tilt range ±'+(Math.round(tiltRange/2))+'°';
-      var rg = document.getElementById('sh2-range');
-      if(rg)rg.textContent = '(±'+(Math.round(tiltRange/2))+'°)';
-      var form = document.getElementById('sh2-form');
-      if(form)form.style.display='';
-    } else {
-      var ts = document.getElementById('sh2-status');
-      if(ts)ts.style.color = '#f87171';
-      if(ts)ts.textContent = 'Slew failed: ' + ((r && r.err) || ('HTTP '+prep.status));
-      var form = document.getElementById('sh2-form');
-      if(form)form.style.display='none';
-    }
-  };
-  prep.onerror = function(){
-    var ts = document.getElementById('sh2-status');
-    if(ts){ts.style.color='#f87171';ts.textContent='Network error during slew';}
-  };
-  prep.send(JSON.stringify({settleMs: 1200}));
+  _setHomeSecondaryRender();
+  _setHomeSecondarySlew('pan');
 }
 
-function _setHomeSecondaryConfirm(){
-  if(!_setHomeState || _setHomeState.secPan16==null)return;
+function _setHomeSecondaryRender(){
+  if(!_setHomeState)return;
+  var step = _setHomeState.secStep;
+  var s = '<div style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">';
+  if(step==='pan'){
+    s += 'Step 1 of 2 — pan slew. Watch the beam: did it move <b>left</b> '
+       + 'or <b>right</b>? (Looking from the front of the fixture, your '
+       + 'right side.) The wizard will sweep the head one direction by '
+       + '~25% of pan range.';
+  } else if(step==='tilt'){
+    s += 'Step 2 of 2 — tilt slew. Beam returned to home, now tilting. '
+       + 'Did the beam aim <b>down</b> (closer to floor) or <b>up</b> '
+       + '(toward ceiling)?';
+  }
+  s += '</div>';
+  s += '<div id="sh2-status" style="font-size:.78em;color:#64748b;margin-bottom:.6em">Slewing…</div>';
+  s += '<div id="sh2-buttons" style="display:none">';
+  if(step==='pan'){
+    s += '<div style="display:flex;gap:.5em;margin-bottom:.6em">';
+    s += '<button class="btn" onclick="_setHomeSecondaryAnswer(\'left\')" '
+       + 'style="flex:1;background:#1e3a5f;color:#93c5fd;padding:.5em">← Beam moved LEFT</button>';
+    s += '<button class="btn" onclick="_setHomeSecondaryAnswer(\'right\')" '
+       + 'style="flex:1;background:#1e3a5f;color:#93c5fd;padding:.5em">Beam moved RIGHT →</button>';
+    s += '</div>';
+  } else if(step==='tilt'){
+    s += '<div style="display:flex;gap:.5em;margin-bottom:.6em">';
+    s += '<button class="btn" onclick="_setHomeSecondaryAnswer(\'down\')" '
+       + 'style="flex:1;background:#1e3a5f;color:#93c5fd;padding:.5em">↓ Beam moved DOWN</button>';
+    s += '<button class="btn" onclick="_setHomeSecondaryAnswer(\'up\')" '
+       + 'style="flex:1;background:#1e3a5f;color:#93c5fd;padding:.5em">Beam moved UP ↑</button>';
+    s += '</div>';
+  }
+  s += '<div style="display:flex;gap:.4em;justify-content:space-between">';
+  s += '<button class="btn" onclick="_setHomeSecondarySlew(\''+step+'\')" '
+     + 'style="background:#334155;color:#cbd5e1">↻ Show me again</button>';
+  s += '<button class="btn" onclick="_setHomeSecondarySkip()" '
+     + 'style="background:#1e293b;color:#94a3b8" '
+     + 'title="Skip — Home primary is still saved; SMART will need probes to bootstrap">Skip</button>';
+  s += '</div></div>';
+  document.getElementById('modal-body').innerHTML = s;
+}
+
+function _setHomeSecondarySlew(axis){
+  if(!_setHomeState)return;
   var fid = _setHomeState.fid;
-  var input = document.getElementById('sh2-tilt-deg');
-  var raw = input ? input.value : '';
-  var deg = parseFloat(raw);
-  if(isNaN(deg) || deg < -90 || deg > 90){
-    alert('Enter a tilt angle in [-90, +90] degrees.');
+  // Hide the buttons until the slew settles.
+  var btns = document.getElementById('sh2-buttons');
+  if(btns)btns.style.display='none';
+  var st = document.getElementById('sh2-status');
+  if(st){st.style.color='#64748b';st.textContent='Slewing '+axis+'…';}
+  var x = new XMLHttpRequest();
+  x.open('POST','/api/fixtures/'+fid+'/home/secondary/prepare', true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.onload = function(){
+    var r = null; try{r=JSON.parse(x.responseText);}catch(e){}
+    if(x.status>=200 && x.status<300 && r && r.ok){
+      if(axis==='pan')_setHomeState.panOffsetDmx16 = r.panOffsetDmx16;
+      else _setHomeState.tiltOffsetDmx16 = r.tiltOffsetDmx16;
+      var st2 = document.getElementById('sh2-status');
+      if(st2){
+        var off = (axis==='pan'?r.panOffsetDmx16:r.tiltOffsetDmx16);
+        var pct = Math.abs(off / 65535) * 100;
+        st2.textContent = 'Slewed '+axis+' by '+(off>=0?'+':'')+off+' DMX ('
+                          +pct.toFixed(0)+'% of '+(axis==='pan'?'pan':'tilt')+' range). '
+                          +'Did the beam move?';
+      }
+      if(btns)btns.style.display='';
+    } else {
+      var st3 = document.getElementById('sh2-status');
+      if(st3){
+        st3.style.color = '#f87171';
+        st3.textContent = 'Slew failed: '+((r&&r.err)||('HTTP '+x.status));
+      }
+    }
+  };
+  x.onerror = function(){
+    var st4 = document.getElementById('sh2-status');
+    if(st4){st4.style.color='#f87171';st4.textContent='Network error during slew';}
+  };
+  x.send(JSON.stringify({axis: axis, settleMs: 1200}));
+}
+
+function _setHomeSecondaryAnswer(direction){
+  if(!_setHomeState)return;
+  if(_setHomeState.secStep==='pan'){
+    _setHomeState.panDir = direction;
+    _setHomeState.secStep = 'tilt';
+    _setHomeSecondaryRender();
+    _setHomeSecondarySlew('tilt');
     return;
   }
+  if(_setHomeState.secStep==='tilt'){
+    _setHomeState.tiltDir = direction;
+    _setHomeSecondaryCommit();
+  }
+}
+
+function _setHomeSecondaryCommit(){
+  if(!_setHomeState)return;
+  var fid = _setHomeState.fid;
+  var body = {
+    panOffsetDmx16: _setHomeState.panOffsetDmx16,
+    tiltOffsetDmx16: _setHomeState.tiltOffsetDmx16,
+    panMovedDirection: _setHomeState.panDir,
+    tiltMovedDirection: _setHomeState.tiltDir
+  };
   var x = new XMLHttpRequest();
   x.open('POST','/api/fixtures/'+fid+'/home/secondary', true);
   x.setRequestHeader('Content-Type','application/json');
@@ -989,15 +1047,11 @@ function _setHomeSecondaryConfirm(){
       closeModal();
       editFixture(fid);
     } else {
-      alert('Save Secondary failed: ' + ((r && r.err) || ('HTTP '+x.status)));
+      alert('Save Secondary failed: '+((r&&r.err)||('HTTP '+x.status)));
     }
   };
   x.onerror = function(){alert('Save Secondary: network error');};
-  x.send(JSON.stringify({
-    panDmx16: _setHomeState.secPan16,
-    tiltDmx16: _setHomeState.secTilt16,
-    operatorTiltDeg: deg
-  }));
+  x.send(JSON.stringify(body));
 }
 
 function _setHomeSecondarySkip(){

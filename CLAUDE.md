@@ -111,7 +111,7 @@ Camera nodes run on any **Linux SBC running Ubuntu 22.04+ or Debian Bookworm+** 
 | POST | `/api/calibration/mover/<fid>/smart/validate/aim` | Slew to a marker via the staged SMART model |
 | POST | `/api/calibration/mover/<fid>/smart/validate/confirm` | Operator yes/no per marker; commit gate |
 
-- **SMART pipeline:** Home Wizard captures Home + Home-Secondary (PR-1). `coverage_math.py` is the canonical IK + 2-pair affine estimate (PR-1.5). Working area = coverage cone ∩ camera-visible floor (PR-3). Bound-and-probe loop collects samples (PR-4). LSQ solver fits the corrected model with confidence ladder (PR-5). ArUco marker validation pass commits the calibration (PR-6).
+- **SMART pipeline:** Home Wizard captures Home + Home-Secondary (PR-1, redesigned #730 to direction-only L/R + D/U with retry). `coverage_math.py` is the canonical IK + 2-pair affine estimate (PR-1.5; magnitudes from profile envelope, sign from operator's binary direction calls — robust near vertical). Working area = coverage cone ∩ camera-visible floor (PR-3). Bound-and-probe loop collects samples (PR-4). LSQ solver fits the corrected model with confidence ladder (PR-5). ArUco marker validation pass commits the calibration (PR-6).
 - **SMART calibration record** in `mover_calibrations.json`: `{method:"smart", version:3, model:{panDmxPerDeg, tiltDmxPerDeg, panSign, tiltSign, panBiasDmx, tiltBiasDmx, homePanDmx16, homeTiltDmx16}, residuals:{rmsMm, maxMm, perPoint}, confidence:"low"|"medium"|"high", samples, timestamp}`. Pre-SMART records carry `legacyMethod` (set by startup migration) and surface `needsSmartRecal: true` in the cal-status response.
 
 - **Systemd service:** `slyled-cam` for auto-start on boot (tracked in `firmware/orangepi/slyled-cam.service`)
@@ -233,8 +233,9 @@ Camera nodes run on any **Linux SBC running Ubuntu 22.04+ or Debian Bookworm+** 
 | POST | `/api/mover/<fid>/aim-angles` | #720 PR-1.5 — aim by fixture-internal `(panDeg, tiltDeg)` |
 | GET | `/api/fixtures/<fid>/home` | #720 PR-1 — read Home + Home-Secondary anchors |
 | POST | `/api/fixtures/<fid>/home` | #720 PR-1 — save Home primary, optional `secondary` block |
-| POST | `/api/fixtures/<fid>/home/secondary` | #720 PR-1 — save just the Home-Secondary block |
-| POST | `/api/fixtures/<fid>/home/secondary/prepare` | #720 PR-1 — slew to computed secondary, return DMX values |
+| POST | `/api/fixtures/<fid>/home/secondary` | #720 PR-1 + #730 — save just the Home-Secondary block (direction-only shape) |
+| POST | `/api/fixtures/<fid>/home/secondary/prepare` | #720 PR-1 + #730 — slew per-axis (`{axis: "pan"|"tilt"}`), return DMX values + signed offset |
+| POST | `/api/fixtures/<fid>/home/secondary/retry` | #730 — re-slew the requested axis without committing |
 | DELETE | `/api/fixtures/<fid>/home` | #720 PR-1 — clear primary + secondary atomically |
 | GET | `/api/fixtures/<fid>/coverage` | #720 PR-2 — coverage cone + floor polygon |
 | GET/POST | `/api/aruco/markers` | List / upsert surveyed ArUco marker registry (#596) |

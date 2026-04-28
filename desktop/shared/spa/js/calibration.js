@@ -1531,7 +1531,12 @@ function _smartCoverageRender(fid){
       var floorZ=(coverage.floorZ||0).toFixed(0);
       var line='Coverage '+(ar/1e6).toFixed(2)+' m² · floor z='+floorZ+' mm';
       if(preview){
-        if(preview.abortReason){
+        if(preview.abortReason==='home_secondary_stale_format'){
+          // #730 — pre-#730 secondary records can't bootstrap. Tell the
+          // operator to re-run the wizard rather than burying it in a
+          // generic abort reason.
+          line+=' · re-run Home wizard (secondary format changed in #730)';
+        }else if(preview.abortReason){
           line+=' · preview: '+preview.abortReason;
         }else{
           var pp=(preview.probePoints||[]).length;

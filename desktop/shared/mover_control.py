@@ -530,6 +530,9 @@ class MoverControlEngine:
         pan_range = (mover.get("panRange")
                      or (prof.get("panRange") if prof else None)
                      or 540)
+        tilt_range = (mover.get("tiltRange")
+                      or (prof.get("tiltRange") if prof else None)
+                      or 270)
         try:
             from coverage_math import solve_dmx_per_degree
             return solve_dmx_per_degree(
@@ -537,6 +540,7 @@ class MoverControlEngine:
                 sec,
                 mover.get("rotation") or [0.0, 0.0, 0.0],
                 pan_range,
+                tilt_range,
             )
         except Exception as e:
             log.debug("SMART 2-pair estimate failed for mover %s: %s",
