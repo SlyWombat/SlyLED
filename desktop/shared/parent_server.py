@@ -2544,6 +2544,17 @@ def api_camera_status(fid):
     info = _probe_camera(ip, timeout=3)
     if not info:
         return jsonify(err="Camera offline"), 503
+    # #712 Track 1c — surface FOV-drift recommendation so the SPA can
+    # banner "Recalibrate camera lens" when ≥2 cal runs reported beams
+    # outside this camera's assumed FOV polygon.
+    drift = (_calibrations.get(str(fid)) or {}).get("fovDrift")
+    if isinstance(drift, dict) and drift.get("recommendRecalibrate"):
+        info = dict(info)
+        info["fovDrift"] = {
+            "recommendRecalibrate": True,
+            "events": len(drift.get("events") or []),
+            "lastDriftAt": drift.get("lastDriftAt"),
+        }
     return jsonify(info)
 
 # ── Q12: FOV type whitelist + helper ──────────────────────────────────
@@ -6002,15 +6013,28 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
                              "FOV polygon for camera %s (%.0f%% drift)",
                              fid, len(drift_samples), len(samples),
                              cam["id"], ratio * 100.0)
-                job["camFovDrift"] = {
+                event = {
                     "cameraId": cam["id"],
                     "cameraHwDescriptor": next(
+                        (f.get("hwDescriptor") for f in _fixtures
+                         if f.get("id") == cam["id"]), None),
+                    "hwDescriptor": next(
                         (f.get("hwDescriptor") for f in _fixtures
                          if f.get("id") == cam["id"]), None),
                     "outsidePolygon": drift_samples,
                     "totalSamples": len(samples),
                     "driftRatio": round(ratio, 3),
+                    "sourceFid": fid,
+                    "ranAt": time.time(),
                 }
+                job["camFovDrift"] = event
+                # #712 Track 1c — persist for /api/cameras/<id>/status.
+                try:
+                    recommend = _camera_fov_drift_log(cam["id"], event)
+                    if recommend:
+                        job["camFovDrift"]["recommendRecalibrate"] = True
+                except Exception as e:
+                    log.debug("camera_fov_drift_log persist raised %s", e)
                 _mcal_log(job, f"FOV polygon over-claimed: {len(drift_samples)}"
                                f"/{len(samples)} confirmed beams landed "
                                f"outside camera {cam['id']}'s assumed FOV. "
@@ -6409,6 +6433,44 @@ def _mover_cal_thread_smart_body(fid, cam, bridge_ip, mover_color,
                 })
     except Exception as e:
         log.debug("SMART validation marker filter failed: %s", e)
+
+    # #712 Track 1c — drift detection on SMART probe samples. For each
+    # successful beam, check whether its measured XY actually falls
+    # inside the camera FOV polygon we used when sampling. Outside =
+    # FOV polygon over-claimed; persist to the camera's drift log.
+    try:
+        from camera_math import point_in_polygon as _pip
+        cam_polys = _camera_floor_polygons_with_ids()
+        cam_id = (cam or {}).get("id")
+        cam_poly = next((p["polygon"] for p in cam_polys
+                          if p["id"] == cam_id), None)
+        if cam_poly:
+            outside = []
+            successful_smart = [s for s in samples if s.get("found")]
+            for s in successful_smart:
+                meas = s.get("measured")
+                if not meas or len(meas) < 2:
+                    continue
+                if not _pip((meas[0], meas[1]), cam_poly):
+                    outside.append({"stageXY": [meas[0], meas[1]]})
+            if outside and successful_smart:
+                ratio = len(outside) / len(successful_smart)
+                event = {
+                    "cameraId": cam_id,
+                    "hwDescriptor": next(
+                        (x.get("hwDescriptor") for x in _fixtures
+                         if x.get("id") == cam_id), None),
+                    "outsidePolygon": outside,
+                    "totalSamples": len(successful_smart),
+                    "driftRatio": round(ratio, 3),
+                    "sourceFid": fid,
+                    "method": "smart",
+                    "ranAt": time.time(),
+                }
+                _camera_fov_drift_log(cam_id, event)
+                job["camFovDrift"] = event
+    except Exception as e:
+        log.debug("SMART cam-fov-drift gate raised %s — skipping", e)
 
     if not validation_markers:
         # No markers to validate against — commit directly.
@@ -6834,6 +6896,52 @@ def _load_camera_models():
                   "to manufacturer FOV", e)
         _CAMERA_MODELS_CACHE = {}
     return _CAMERA_MODELS_CACHE
+
+
+def _camera_fov_drift_log(cam_id, drift_event):
+    """#712 Track 1c — append a cam-fov-drift event for camera ``cam_id``.
+
+    ``drift_event`` is a dict like ``{driftRatio, totalSamples,
+    outsidePolygon, ranAt, sourceFid, hwDescriptor}``. Stored in
+    ``_calibrations[str(cam_id)]["fovDrift"]`` and capped at the most
+    recent 8 events so the JSON file doesn't grow unbounded.
+
+    Returns ``True`` when the camera now has ``>= 2`` drift events
+    accumulated and a recalibration recommendation should be surfaced
+    in the next ``/api/cameras/<id>/status`` response. Idempotent: the
+    same event passed twice in a row is deduplicated by ``ranAt``.
+    """
+    key = str(cam_id)
+    rec = _calibrations.get(key)
+    if not isinstance(rec, dict):
+        rec = {}
+        _calibrations[key] = rec
+    drift = rec.get("fovDrift")
+    if not isinstance(drift, dict):
+        drift = {"events": [], "recommendRecalibrate": False,
+                  "lastDriftAt": None}
+        rec["fovDrift"] = drift
+    events = drift.get("events") or []
+    ran_at = drift_event.get("ranAt") or time.time()
+    drift_event = dict(drift_event)
+    drift_event["ranAt"] = ran_at
+    # Idempotency: drop a duplicate of the last event (same ranAt + fid).
+    if events and events[-1].get("ranAt") == ran_at \
+            and events[-1].get("sourceFid") == drift_event.get("sourceFid"):
+        return drift.get("recommendRecalibrate", False)
+    events.append(drift_event)
+    # Keep only the 8 most recent events.
+    if len(events) > 8:
+        events = events[-8:]
+    drift["events"] = events
+    drift["lastDriftAt"] = ran_at
+    drift["recommendRecalibrate"] = len(events) >= 2
+    try:
+        _save("calibrations", _calibrations)
+    except Exception as e:
+        log.warning("camera_fov_drift_log: persist failed for cam %s: %s",
+                    cam_id, e)
+    return drift["recommendRecalibrate"]
 
 
 def _effective_fov_for_camera(fixture):

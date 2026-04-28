@@ -80,6 +80,12 @@ args = [
     "--add-data", f"{SHARED / 'mover_control.py'};.",
     "--add-data", f"{SHARED / 'space_mapper.py'};.",
     "--add-data", f"{SHARED / 'surface_analyzer.py'};.",
+    # #720 — SMART canonical IK + coverage cone math + 2-pair affine
+    # estimate. Required at runtime by parent_server's /aim-angles,
+    # /smart/preview, /smart/validate/*, /coverage endpoints, and the
+    # SMART probe + solver paths. Missing → packaged exe 500s on every
+    # SMART API call.
+    "--add-data", f"{SHARED / 'coverage_math.py'};.",
     "--add-data", f"{SHARED / 'parametric_mover.py'};.",
     "--add-data", f"{SHARED / 'remote_orientation.py'};.",
     "--add-data", f"{SHARED / 'dmx_universe.py'};.",
