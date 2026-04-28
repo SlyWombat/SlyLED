@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.81"
+VERSION = "1.6.83"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1983,18 +1983,32 @@ def api_fixture_set_home_secondary(fid):
     return jsonify(ok=True, homeSecondary=f["homeSecondary"])
 
 
-SECONDARY_PAN_OFFSET_DMX16 = 16384   # +25% of full DMX range
-SECONDARY_TILT_OFFSET_DMX16 = 16384  # +25% of full DMX range
+SECONDARY_SLEW_DEG = 90.0          # axis slew amount, degrees (#732)
+SECONDARY_HOME_PAUSE_MS = 2000     # operator-visible pause at home pre-slew (#732)
 
 
-def _secondary_axis_offset(home_pan_dmx16, home_tilt_dmx16, axis):
-    """#730 — pick a fixed signed offset for the requested axis that
-    keeps the slewed pose inside ``[0, 65535]``. Prefers + first; falls
-    back to - if + would clip; clamps as last resort. Returns
-    ``(slew_pan_dmx16, slew_tilt_dmx16, signed_offset)`` where the
-    non-active axis is held at home."""
-    base_off = (SECONDARY_PAN_OFFSET_DMX16 if axis == "pan"
-                else SECONDARY_TILT_OFFSET_DMX16)
+def _secondary_axis_offset(home_pan_dmx16, home_tilt_dmx16, axis,
+                            pan_range_deg, tilt_range_deg,
+                            slew_deg=SECONDARY_SLEW_DEG):
+    """#730 + #732 — pick a signed DMX offset corresponding to
+    ``slew_deg`` degrees on the requested axis.
+
+    Magnitude is profile-aware: 90 ° on a 540 ° panRange ≈ 10 923 DMX
+    ticks (~16.7 % of the 16-bit range), versus 90 ° on a 180 °
+    tiltRange = 32 768 (50 %). Sign chosen to keep the slewed pose
+    inside ``[0, 65535]``: prefer +, fall back to -, clamp as a last
+    resort. Returns ``(slew_pan_dmx16, slew_tilt_dmx16,
+    signed_offset)`` with the non-active axis held at home.
+    """
+    if axis == "pan":
+        range_deg = float(pan_range_deg or 540)
+    else:
+        range_deg = float(tilt_range_deg or 270)
+    if range_deg <= 0:
+        range_deg = 540.0 if axis == "pan" else 270.0
+    base_off = int(round(float(slew_deg) / range_deg * 65535))
+    if base_off < 1:
+        base_off = 1
     home_dmx = int(home_pan_dmx16 if axis == "pan" else home_tilt_dmx16)
     pos = home_dmx + base_off
     neg = home_dmx - base_off
@@ -2012,9 +2026,50 @@ def _secondary_axis_offset(home_pan_dmx16, home_tilt_dmx16, axis):
     return int(home_pan_dmx16), new_dmx, signed
 
 
-def _do_secondary_slew(fid, axis, settle_ms):
+def _write_dmx_pose(fixture, prof_info, pan_dmx16, tilt_dmx16):
+    """Helper: write pan/tilt + dimmer + RGB-green to the live engine.
+
+    Centralised so the home-pause and target-slew phases share the
+    same write path. Returns ``None`` on success or an error string.
+    """
+    if not _artnet.running and not _sacn.running:
+        return ("Art-Net engine not running — start it from "
+                "Settings → DMX Engine before slewing")
+    engine = _artnet if _artnet.running else _sacn
+    profile = {"channel_map": prof_info.get("channel_map", {}),
+               "channels": prof_info.get("channels", [])}
+    try:
+        uni = fixture.get("dmxUniverse", 1)
+        addr = fixture.get("dmxStartAddr", 1)
+        uni_buf = engine.get_universe(uni)
+        uni_buf.set_fixture_pan_tilt(addr,
+                                     pan_dmx16 / 65535.0,
+                                     tilt_dmx16 / 65535.0,
+                                     profile)
+        uni_buf.set_fixture_dimmer(addr, 255, profile)
+        uni_buf.set_fixture_rgb(addr, 0, 255, 0, profile)
+        return None
+    except Exception as e:
+        return f"dmx_write_failed: {e}"
+
+
+def _do_secondary_slew(fid, axis, settle_ms,
+                        home_pause_ms=SECONDARY_HOME_PAUSE_MS):
     """Shared helper for /home/secondary/prepare + /home/secondary/retry.
-    Returns a Flask response tuple."""
+
+    #732 — every slew now executes a clean three-phase sequence so the
+    operator sees the head return to a known reference before any
+    motion they have to call:
+
+      1. Drive the head to ``(homePanDmx16, homeTiltDmx16)``.
+      2. Hold for ``home_pause_ms`` (default 2 s) so the operator's
+         eyes adjust and the previous slew's afterimage clears.
+      3. Drive the head to the target axis offset (90 ° per #732)
+         and settle for ``settle_ms``.
+
+    Combined-axis (legacy ``axis is None``) calls follow the same
+    pattern. Returns a Flask response tuple.
+    """
     f = next((x for x in _fixtures if x["id"] == fid), None)
     if not f:
         return jsonify(err="Fixture not found"), 404
@@ -2032,43 +2087,38 @@ def _do_secondary_slew(fid, axis, settle_ms):
     if not prof_info:
         return jsonify(err="Fixture has no DMX profile"), 400
 
+    pan_range = prof_info.get("panRange", 540) or 540
+    tilt_range = prof_info.get("tiltRange", 270) or 270
+
     if axis == "pan":
         slew_pan, slew_tilt, pan_off = _secondary_axis_offset(
-            home_pan, home_tilt, "pan")
+            home_pan, home_tilt, "pan", pan_range, tilt_range)
         tilt_off = 0
     elif axis == "tilt":
         slew_pan, slew_tilt, tilt_off = _secondary_axis_offset(
-            home_pan, home_tilt, "tilt")
+            home_pan, home_tilt, "tilt", pan_range, tilt_range)
         pan_off = 0
     else:
-        # Backwards-compat: no axis arg → slew both at once (PR-1
-        # legacy behaviour). Combined-axis flow can't drive the new
-        # direction-only UX, but is preserved so older clients still
-        # get a slew + envelope info response.
+        # Backwards-compat: no axis arg → slew both at once.
         slew_pan, _stilt, pan_off = _secondary_axis_offset(
-            home_pan, home_tilt, "pan")
+            home_pan, home_tilt, "pan", pan_range, tilt_range)
         _span, slew_tilt, tilt_off = _secondary_axis_offset(
-            home_pan, home_tilt, "tilt")
+            home_pan, home_tilt, "tilt", pan_range, tilt_range)
 
-    if not _artnet.running and not _sacn.running:
-        return jsonify(err="Art-Net engine not running — start it from "
-                            "Settings → DMX Engine before slewing"), 503
-    engine = _artnet if _artnet.running else _sacn
-    profile = {"channel_map": prof_info.get("channel_map", {}),
-               "channels": prof_info.get("channels", [])}
-    try:
-        uni = f.get("dmxUniverse", 1)
-        addr = f.get("dmxStartAddr", 1)
-        uni_buf = engine.get_universe(uni)
-        uni_buf.set_fixture_pan_tilt(addr,
-                                     slew_pan / 65535.0,
-                                     slew_tilt / 65535.0,
-                                     profile)
-        uni_buf.set_fixture_dimmer(addr, 255, profile)
-        uni_buf.set_fixture_rgb(addr, 0, 255, 0, profile)
-    except Exception as e:
-        log.warning("home/secondary slew DMX write failed: %s", e)
-        return jsonify(err="dmx_write_failed", detail=str(e)), 500
+    # Phase 1 — drive to home (no-op when head is already there;
+    # resets the previous axis's offset on subsequent calls).
+    err = _write_dmx_pose(f, prof_info, int(home_pan), int(home_tilt))
+    if err:
+        log.warning("home/secondary home-write failed: %s", err)
+        return jsonify(err=err), (503 if "engine" in err else 500)
+    # Phase 2 — operator-visible pause at home (#732).
+    if home_pause_ms > 0:
+        time.sleep(min(5000, max(0, int(home_pause_ms))) / 1000.0)
+    # Phase 3 — drive to target offset and settle.
+    err = _write_dmx_pose(f, prof_info, slew_pan, slew_tilt)
+    if err:
+        log.warning("home/secondary target-write failed: %s", err)
+        return jsonify(err=err), 500
     if settle_ms > 0:
         time.sleep(settle_ms / 1000.0)
     return jsonify(ok=True,
@@ -2077,8 +2127,10 @@ def _do_secondary_slew(fid, axis, settle_ms):
                    tiltDmx16=slew_tilt,
                    panOffsetDmx16=pan_off,
                    tiltOffsetDmx16=tilt_off,
-                   panRange=prof_info.get("panRange", 540),
-                   tiltRange=prof_info.get("tiltRange", 270),
+                   slewDeg=SECONDARY_SLEW_DEG,
+                   homePauseMs=home_pause_ms,
+                   panRange=pan_range,
+                   tiltRange=tilt_range,
                    tiltOffsetDmx16Profile=prof_info.get("tiltOffsetDmx16", 32768),
                    tiltUp=prof_info.get("tiltUp", False))
 
@@ -19592,6 +19644,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

@@ -930,19 +930,55 @@ function _setHomeOpenSecondary(fid){
 function _setHomeSecondaryRender(){
   if(!_setHomeState)return;
   var step = _setHomeState.secStep;
-  var s = '<div style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">';
+  var s = '';
+
+  // #732 — confirmation step before commit. Operator reviews both
+  // direction calls; can go back and re-do either axis or commit.
+  if(step==='confirm'){
+    s += '<div style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">'
+       + 'Review your answers before saving Home Secondary. The fixture '
+       + 'is now back at home; nothing has been written yet.</div>';
+    s += '<div style="background:#0f172a;border:1px solid #1e3a5f;'
+       + 'border-radius:4px;padding:.5em .7em;margin-bottom:.7em">';
+    s += '<div style="display:flex;justify-content:space-between;'
+       + 'font-size:.84em;color:#cbd5e1;margin-bottom:.3em">'
+       + '<span>Pan slew →</span>'
+       + '<span style="font-weight:bold">'+(_setHomeState.panDir||'?').toUpperCase()+'</span></div>';
+    s += '<div style="display:flex;justify-content:space-between;'
+       + 'font-size:.84em;color:#cbd5e1">'
+       + '<span>Tilt slew →</span>'
+       + '<span style="font-weight:bold">'+(_setHomeState.tiltDir||'?').toUpperCase()+'</span></div>';
+    s += '</div>';
+    s += '<div style="display:flex;gap:.4em;margin-bottom:.5em">';
+    s += '<button class="btn" onclick="_setHomeSecondaryGoBackTo(\'pan\')" '
+       + 'style="flex:1;background:#334155;color:#cbd5e1">↻ Re-do pan</button>';
+    s += '<button class="btn" onclick="_setHomeSecondaryGoBackTo(\'tilt\')" '
+       + 'style="flex:1;background:#334155;color:#cbd5e1">↻ Re-do tilt</button>';
+    s += '</div>';
+    s += '<div style="display:flex;gap:.4em;justify-content:space-between">';
+    s += '<button class="btn" onclick="_setHomeSecondarySkip()" '
+       + 'style="background:#1e293b;color:#94a3b8">Cancel</button>';
+    s += '<button class="btn btn-on" onclick="_setHomeSecondaryCommit()" '
+       + 'style="background:#0e7490;color:#a5f3fc">Confirm & save</button>';
+    s += '</div>';
+    document.getElementById('modal-body').innerHTML = s;
+    return;
+  }
+
+  s = '<div style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">';
   if(step==='pan'){
-    s += 'Step 1 of 2 — pan slew. Watch the beam: did it move <b>left</b> '
-       + 'or <b>right</b>? (Looking from the front of the fixture, your '
-       + 'right side.) The wizard will sweep the head one direction by '
-       + '~25% of pan range.';
+    s += 'Step 1 of 2 — pan slew. The fixture will return to home, '
+       + 'pause for 2 seconds, then sweep the head 90° in pan. '
+       + 'Watch the beam: did it move <b>left</b> or <b>right</b> '
+       + 'across the room?';
   } else if(step==='tilt'){
-    s += 'Step 2 of 2 — tilt slew. Beam returned to home, now tilting. '
-       + 'Did the beam aim <b>down</b> (closer to floor) or <b>up</b> '
-       + '(toward ceiling)?';
+    s += 'Step 2 of 2 — tilt slew. The fixture will return to home, '
+       + 'pause for 2 seconds, then tilt the head 90°. Did the beam '
+       + 'aim <b>down</b> (closer to the floor) or <b>up</b> (toward '
+       + 'the ceiling)?';
   }
   s += '</div>';
-  s += '<div id="sh2-status" style="font-size:.78em;color:#64748b;margin-bottom:.6em">Slewing…</div>';
+  s += '<div id="sh2-status" style="font-size:.78em;color:#64748b;margin-bottom:.6em">Returning to home…</div>';
   s += '<div id="sh2-buttons" style="display:none">';
   if(step==='pan'){
     s += '<div style="display:flex;gap:.5em;margin-bottom:.6em">';
@@ -960,7 +996,10 @@ function _setHomeSecondaryRender(){
     s += '</div>';
   }
   s += '<div style="display:flex;gap:.4em;justify-content:space-between">';
-  s += '<button class="btn" onclick="_setHomeSecondarySlew(\''+step+'\')" '
+  // #732 — Show me again now uses the /retry endpoint, which executes
+  // the same return-home → 2 s pause → 90 ° slew sequence so the
+  // operator can re-watch the motion from a known starting pose.
+  s += '<button class="btn" onclick="_setHomeSecondaryRetry(\''+step+'\')" '
      + 'style="background:#334155;color:#cbd5e1">↻ Show me again</button>';
   s += '<button class="btn" onclick="_setHomeSecondarySkip()" '
      + 'style="background:#1e293b;color:#94a3b8" '
@@ -970,15 +1009,27 @@ function _setHomeSecondaryRender(){
 }
 
 function _setHomeSecondarySlew(axis){
+  return _setHomeSecondaryDriveServer(axis,
+    '/api/fixtures/'+_setHomeState.fid+'/home/secondary/prepare');
+}
+
+function _setHomeSecondaryRetry(axis){
+  return _setHomeSecondaryDriveServer(axis,
+    '/api/fixtures/'+_setHomeState.fid+'/home/secondary/retry');
+}
+
+function _setHomeSecondaryDriveServer(axis, endpoint){
   if(!_setHomeState)return;
-  var fid = _setHomeState.fid;
-  // Hide the buttons until the slew settles.
+  // Hide the answer buttons until the slew settles.
   var btns = document.getElementById('sh2-buttons');
   if(btns)btns.style.display='none';
   var st = document.getElementById('sh2-status');
-  if(st){st.style.color='#64748b';st.textContent='Slewing '+axis+'…';}
+  if(st){
+    st.style.color='#64748b';
+    st.textContent='Returning to home, pausing 2 s, then slewing '+axis+' 90°…';
+  }
   var x = new XMLHttpRequest();
-  x.open('POST','/api/fixtures/'+fid+'/home/secondary/prepare', true);
+  x.open('POST',endpoint,true);
   x.setRequestHeader('Content-Type','application/json');
   x.onload = function(){
     var r = null; try{r=JSON.parse(x.responseText);}catch(e){}
@@ -988,10 +1039,9 @@ function _setHomeSecondarySlew(axis){
       var st2 = document.getElementById('sh2-status');
       if(st2){
         var off = (axis==='pan'?r.panOffsetDmx16:r.tiltOffsetDmx16);
-        var pct = Math.abs(off / 65535) * 100;
-        st2.textContent = 'Slewed '+axis+' by '+(off>=0?'+':'')+off+' DMX ('
-                          +pct.toFixed(0)+'% of '+(axis==='pan'?'pan':'tilt')+' range). '
-                          +'Did the beam move?';
+        var deg = r.slewDeg!=null ? r.slewDeg : 90;
+        st2.textContent = 'Slewed '+axis+' '+(off>=0?'+':'-')+deg.toFixed(0)+'° '
+                          +'('+(off>=0?'+':'')+off+' DMX). Did the beam move?';
       }
       if(btns)btns.style.display='';
     } else {
@@ -1020,8 +1070,49 @@ function _setHomeSecondaryAnswer(direction){
   }
   if(_setHomeState.secStep==='tilt'){
     _setHomeState.tiltDir = direction;
-    _setHomeSecondaryCommit();
+    // #732 — advance to confirmation step instead of committing
+    // directly. Operator reviews both calls before save.
+    _setHomeState.secStep = 'confirm';
+    _setHomeSecondaryReturnToHome();
+    _setHomeSecondaryRender();
   }
+}
+
+function _setHomeSecondaryReturnToHome(){
+  // #732 — fire-and-forget drive-to-home so the head is at the
+  // reference pose while the operator reviews the confirmation panel.
+  // Uses /dmx-test instead of the secondary endpoints so we don't
+  // re-trigger the home-pause + slew cycle.
+  if(!_setHomeState)return;
+  var fid = _setHomeState.fid;
+  var f = null;
+  (_fixtures||[]).forEach(function(fx){if(fx.id===fid)f=fx;});
+  if(!f || f.homePanDmx16==null || f.homeTiltDmx16==null)return;
+  var x = new XMLHttpRequest();
+  x.open('POST','/api/fixtures/'+fid+'/dmx-test', true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.send(JSON.stringify({
+    pan: f.homePanDmx16/65535,
+    tilt: f.homeTiltDmx16/65535,
+    dimmer: 0,
+  }));
+}
+
+function _setHomeSecondaryGoBackTo(axis){
+  // #732 — operator clicked "Re-do pan" or "Re-do tilt" on the
+  // confirmation panel. Re-enter the chosen axis step and replay
+  // its slew so the operator can re-answer.
+  if(!_setHomeState)return;
+  if(axis==='pan'){
+    _setHomeState.panDir = null;
+    _setHomeState.tiltDir = null;       // pan re-do invalidates tilt
+    _setHomeState.secStep = 'pan';
+  } else {
+    _setHomeState.tiltDir = null;
+    _setHomeState.secStep = 'tilt';
+  }
+  _setHomeSecondaryRender();
+  _setHomeSecondarySlew(axis);
 }
 
 function _setHomeSecondaryCommit(){
