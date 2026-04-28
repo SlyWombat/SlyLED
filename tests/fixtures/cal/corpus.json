@@ -149,6 +149,32 @@
       }
     },
     {
+      "id": "inverted-mount-direction-disagrees-with-dmx",
+      "description": "#735 — operator reports the beam moved in the OPPOSITE direction to the server's DMX slew sign (e.g. inverted mount). The solver MUST honour panMovedDirection / tiltMovedDirection over offset DMX sign so the resulting model has the correct slope sign. Without this, probe sampling clusters one side of home and the LSQ fit blows up.",
+      "fixture": {"id": 17, "x": 600, "y": 0, "z": 1760, "rotation": [0, 0, 0]},
+      "profile": {"panRange": 540, "tiltRange": 180, "tiltOffsetDmx16": 32768, "tiltUp": false},
+      "home": {"panDmx16": 32768, "tiltDmx16": 32768},
+      "homeSecondary": {
+        "panOffsetDmx16": 10923,
+        "tiltOffsetDmx16": 10923,
+        "panMovedDirection": "left",
+        "tiltMovedDirection": "down"
+      },
+      "cameras": [
+        {"id": 12, "x": 940, "y": 1100, "z": 2040, "rotation": [30, 0, 0], "fovDeg": 78.5}
+      ],
+      "floorZ": 0,
+      "expect": {
+        "coveragePolygonMinXExtentMm": 100,
+        "coveragePolygonMinYExtentMm": 100,
+        "coveragePolygonMinAreaMm2": 10000,
+        "solveFinite": true,
+        "solveSlopeBoundDmxPerDeg": 1000,
+        "solvePanSign": -1,
+        "solveTiltSign": -1
+      }
+    },
+    {
       "id": "legacy-secondary-format-rejection",
       "description": "Pre-#730 homeSecondary shape (operatorTiltDeg, no direction). Solver MUST raise home_secondary_stale_format.",
       "fixture": {"id": 17, "x": 600, "y": 0, "z": 1760, "rotation": [0, 0, 0]},

@@ -178,6 +178,25 @@ def run():
     ok('#730 solve left/down: tilt slope = -65535/tiltRange',
        approx(est_ld['tiltDmxPerDeg'], -expected_tilt_mag, 1e-6))
 
+    # #735 — direction takes precedence over offset DMX sign. Inverted-
+    # mount fixtures may report "left" for a +DMX slew (head physically
+    # rotates the other way). The solver MUST honour the direction
+    # answer, not the offset's DMX sign. Same offset, opposite direction
+    # → opposite slope sign.
+    sec_inverted = {
+        'panOffsetDmx16': +16384,        # server slewed +DMX
+        'tiltOffsetDmx16': +16384,
+        'panMovedDirection': 'left',     # but operator saw it go LEFT
+        'tiltMovedDirection': 'down',    # and DOWN
+    }
+    est_inv = solve_dmx_per_degree(home, sec_inverted, [0, 0, 0], pan_range, tilt_range)
+    ok('#735 inverted mount: panSign follows direction, not offset',
+       est_inv['panDmxPerDeg'] < 0,
+       f"got panDmxPerDeg={est_inv['panDmxPerDeg']} (expected < 0)")
+    ok('#735 inverted mount: tiltSign follows direction, not offset',
+       est_inv['tiltDmxPerDeg'] < 0,
+       f"got tiltDmxPerDeg={est_inv['tiltDmxPerDeg']} (expected < 0)")
+
     # Vertical-home regression: rotation aiming straight down (the case
     # that broke the operatorTiltDeg solver pre-#730). Direction-only
     # inputs yield a finite, sensible model.

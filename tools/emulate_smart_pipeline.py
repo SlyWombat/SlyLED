@@ -191,6 +191,21 @@ def _run_case(case, verbose=False):
                 if abs(est["tiltDmxPerDeg"]) > bound:
                     failures.append(
                         f"|tiltDmxPerDeg|={abs(est['tiltDmxPerDeg']):.1f} > {bound}")
+            # #735 — sign of slope must follow operator direction, not
+            # offset DMX sign. Corpus cases that exercise the inverted-
+            # mount path declare the expected sign explicitly.
+            if "solvePanSign" in expect:
+                got = 1 if est["panDmxPerDeg"] >= 0 else -1
+                if got != int(expect["solvePanSign"]):
+                    failures.append(
+                        f"panDmxPerDeg sign {got:+d} != expected "
+                        f"{int(expect['solvePanSign']):+d}")
+            if "solveTiltSign" in expect:
+                got = 1 if est["tiltDmxPerDeg"] >= 0 else -1
+                if got != int(expect["solveTiltSign"]):
+                    failures.append(
+                        f"tiltDmxPerDeg sign {got:+d} != expected "
+                        f"{int(expect['solveTiltSign']):+d}")
             # angles_to_dmx round-trip exact at home.
             pdx, tdx = angles_to_dmx(0, 0, est)
             if pdx != home["panDmx16"] or tdx != home["tiltDmx16"]:

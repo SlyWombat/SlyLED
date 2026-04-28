@@ -1211,6 +1211,10 @@ function _moverCalAutoStart(){
   h+='<div id="mcal-phase" style="font-size:.85em;color:#e2e8f0;margin-bottom:.3em"></div>';
   h+='<div id="mcal-detail" style="font-size:.78em;color:#64748b"></div>';
   h+='<div id="mcal-targets-progress" style="margin-top:.5em"></div>';
+  // #736 — SMART per-probe progress + post-run residuals table.
+  // Hidden until smartProbeGrid or result.residuals is populated by
+  // the cal-status response.
+  h+='<div id="mcal-smart-progress" style="margin-top:.5em;display:none"></div>';
   h+='<div id="mcal-probe" style="margin-top:.5em;font-size:.75em;color:#cbd5e1;font-family:monospace;display:none"></div>';
   h+='<div id="mcal-dmx-strip" style="margin-top:.4em;display:none"></div>';
   h+='<div id="mcal-log" style="margin-top:.5em;font-size:.72em;color:#64748b;font-family:monospace;max-height:120px;overflow-y:auto;background:#0a0f1a;border:1px solid #1e293b;border-radius:4px;padding:.3em .5em;display:none"></div>';
@@ -1767,10 +1771,17 @@ function _moverCalUpdateActions(state){
 // #602 — render currentProbe + dmxFrame + log tail sections from the
 // server's /status payload. No-op when those fields are absent (keeps
 // the panel hidden until the calibration thread actually starts probing).
+//
+// #736 — extend with SMART per-probe progress: probe N/16, predicted
+// stage XY, last cell result (hit / miss / probing), running tally of
+// hits vs misses across the grid. After SMART completes, render a
+// residuals table from r.result.residuals so the operator can see
+// per-probe error mm.
 function _moverCalRenderProbe(r){
   var probeBox=document.getElementById('mcal-probe');
   var dmxBox=document.getElementById('mcal-dmx-strip');
   var logBox=document.getElementById('mcal-log');
+  var smartBox=document.getElementById('mcal-smart-progress');
   var cp=r.currentProbe;
   if(probeBox){
     if(cp&&cp.attempt){
@@ -1785,6 +1796,99 @@ function _moverCalRenderProbe(r){
       probeBox.style.display='';
     }else{
       probeBox.style.display='none';
+    }
+  }
+  // #736 — SMART per-probe progress strip + post-run residuals table.
+  // Renders only when smartProbeGrid is populated (probing) or when
+  // result.residuals is present (done / error). Falls back to display
+  // none on legacy modes so we don't pollute the existing UI.
+  var grid=r.smartProbeGrid||[];
+  var smartCur=r.smartCurrentProbe;
+  var residuals=(r.result||{}).residuals;
+  var phase=r.phase||'';
+  var phaseIsSmart=phase.indexOf('smart')===0;
+  if(smartBox){
+    if(grid.length || residuals){
+      var counts={pending:0, probing:0, hit:0, miss:0, ik_degenerate:0};
+      grid.forEach(function(c){counts[c.status]=(counts[c.status]||0)+1;});
+      var total=grid.length;
+      var doneN=counts.hit+counts.miss+(counts.ik_degenerate||0);
+      var html='';
+      if(phaseIsSmart && total){
+        html+='<div style="font-size:.78em;color:#cbd5e1;margin-bottom:.3em">';
+        html+='SMART probing — <b>'+doneN+' / '+total+'</b> attempted';
+        html+=' · <span style="color:#4ade80">'+counts.hit+' hit</span>';
+        html+=' · <span style="color:#ef4444">'+counts.miss+' miss</span>';
+        if(counts.ik_degenerate)html+=' · <span style="color:#9333ea">'+counts.ik_degenerate+' degenerate</span>';
+        html+='</div>';
+        if(smartCur && smartCur.stageXYZ){
+          var sx=smartCur.stageXYZ;
+          html+='<div style="font-size:.74em;color:#94a3b8;margin-bottom:.4em">'
+              +'aiming probe #'+(smartCur.index+1)+' at floor ('
+              +Math.round(sx[0])+', '+Math.round(sx[1])+', '+Math.round(sx[2])+') mm</div>';
+        }
+        // Compact dot grid showing each cell's status.
+        var dots=grid.map(function(c){
+          var col=({pending:'#64748b', probing:'#fbbf24', hit:'#4ade80',
+                     miss:'#ef4444', ik_degenerate:'#9333ea'}[c.status])||'#64748b';
+          var title=c.status+' · ('+Math.round(c.x)+', '+Math.round(c.y)+')'
+                    +(c.reason?' · '+c.reason:'');
+          return '<span title="'+escapeHtml(title)+'" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:'+col+';margin:1px"></span>';
+        }).join('');
+        html+='<div style="margin-bottom:.4em">'+dots+'</div>';
+      }
+      if(residuals && residuals.perPoint && residuals.perPoint.length){
+        // #734 follow-up — flag any measured XYZ falling outside the
+        // configured stage bounds. A false-positive on diff-of-ambient
+        // noise (which happens when the lamp toggle is broken) projects
+        // to a random pixel and depth, often landing kilometres away
+        // from the stage. An operator scanning the residuals table can
+        // instantly tell "noise" from "biased fit" by the red flags.
+        var sw=(_layout&&_layout.stageW)?_layout.stageW*1000:99999;
+        var sd=(_layout&&_layout.stageD)?_layout.stageD*1000:99999;
+        var sm=500;  // 0.5 m slop outside the nominal stage rectangle
+        var nFlagged=residuals.perPoint.filter(function(p){
+          return p.measured && (p.measured[0] < -sm || p.measured[0] > sw+sm
+              || p.measured[1] < -sm || p.measured[1] > sd+sm);
+        }).length;
+        html+='<div style="font-size:.78em;color:#cbd5e1;margin-top:.3em">';
+        html+='Residuals — RMS '+(residuals.rmsMm||0).toFixed(1)+' mm · max '
+             +(residuals.maxMm||0).toFixed(1)+' mm · '
+             +(residuals.sampleCount||residuals.perPoint.length)+' probes';
+        if(nFlagged){
+          html+=' · <span style="color:#f87171">'+nFlagged
+              +' outside stage bounds (likely false-positive)</span>';
+        }
+        html+='</div>';
+        html+='<table style="width:100%;font-size:.72em;color:#94a3b8;margin-top:.3em;font-family:monospace;border-collapse:collapse">';
+        html+='<thead><tr style="background:#0f172a;color:#cbd5e1">'
+            +'<th style="padding:2px 4px;text-align:left">#</th>'
+            +'<th style="padding:2px 4px;text-align:right">measured</th>'
+            +'<th style="padding:2px 4px;text-align:right">predicted</th>'
+            +'<th style="padding:2px 4px;text-align:right">err mm</th>'
+            +'</tr></thead><tbody>';
+        residuals.perPoint.forEach(function(p, i){
+          var err=p.errorMm||0;
+          var col=err<50?'#4ade80':(err<100?'#fbbf24':'#ef4444');
+          var oob = p.measured && (p.measured[0] < -sm || p.measured[0] > sw+sm
+                    || p.measured[1] < -sm || p.measured[1] > sd+sm);
+          var rowBg=oob?'background:#3f1d1d':'';
+          var oobMark=oob?' <span title="outside stage bounds — likely false-positive" style="color:#f87171">⚠</span>':'';
+          html+='<tr style="'+rowBg+'"><td style="padding:2px 4px">'+(i+1)+oobMark+'</td>'
+              +'<td style="padding:2px 4px;text-align:right'+(oob?';color:#f87171':'')+'">('
+              +Math.round(p.measured[0])+', '+Math.round(p.measured[1])+')</td>'
+              +'<td style="padding:2px 4px;text-align:right">('
+              +Math.round(p.predicted[0])+', '+Math.round(p.predicted[1])+')</td>'
+              +'<td style="padding:2px 4px;text-align:right;color:'+col+'">'
+              +err.toFixed(1)+'</td></tr>';
+        });
+        html+='</tbody></table>';
+      }
+      smartBox.innerHTML=html;
+      smartBox.style.display=html?'':'none';
+    } else {
+      smartBox.innerHTML='';
+      smartBox.style.display='none';
     }
   }
   if(dmxBox){
