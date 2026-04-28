@@ -1579,3 +1579,295 @@ function s3dToggleResidualsForFixture(fid){
   s3dShowResidualsForFixture(fid);
   return true;
 }
+
+
+// ── #720 PR-2 — _mcal3d: read-only 3D viewport for the calibration card ─
+//
+// A parallel singleton to `_s3d`: own renderer, own scene, own canvas.
+// Read-only — no drag, no transform, no fixture editing. Renders the
+// SMART coverage cone (apex at fixture, lateral faces extruded down to
+// the floor footprint), the working area polygon, and the probe-point
+// spheres. The Dashboard `_s3d` viewport is untouched.
+//
+// Stage → 3D coord convention matches `_s3d`:
+//   stage X (width)  → 3D X
+//   stage Y (depth)  → 3D Z
+//   stage Z (height) → 3D Y (up)
+// Units: mm → m (divide by 1000) so OrbitControls feel right.
+
+var _mcal3d={
+  inited:false,scene:null,camera:null,renderer:null,controls:null,
+  mountId:null,animId:null,
+  // Layer groups, recreated on each render so we can swap data.
+  coneMesh:null, floorPolyMesh:null, workingPolyMesh:null,
+  probesGroup:null, fixtureMarker:null,
+  data:null
+};
+
+function _mcal3dMount(mountId){
+  if(typeof THREE==='undefined'){
+    console.warn('Three.js not loaded; SMART 3D viewport unavailable');
+    return false;
+  }
+  var el=document.getElementById(mountId);
+  if(!el)return false;
+
+  // Already mounted on this element — just resize and redraw.
+  if(_mcal3d.inited && _mcal3d.mountId===mountId && _mcal3d.renderer
+      && _mcal3d.renderer.domElement.parentNode===el){
+    _mcal3dResize();
+    return true;
+  }
+
+  // Mounting somewhere new — tear down whatever's there.
+  _mcal3dDispose();
+  _mcal3d.mountId=mountId;
+
+  var W=el.clientWidth||320;
+  var H=el.clientHeight||280;
+
+  _mcal3d.scene=new THREE.Scene();
+  _mcal3d.scene.background=new THREE.Color(0x0a0e1a);
+
+  var aspect=W/H;
+  _mcal3d.camera=new THREE.PerspectiveCamera(50,aspect,0.05,200);
+  _mcal3d.camera.position.set(6,5,7);
+  _mcal3d.camera.lookAt(0,0,0);
+
+  _mcal3d.renderer=new THREE.WebGLRenderer({antialias:true});
+  _mcal3d.renderer.setSize(W,H);
+  _mcal3d.renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+  // Clear any prior child (e.g. the legacy 2D canvas).
+  while(el.firstChild)el.removeChild(el.firstChild);
+  el.appendChild(_mcal3d.renderer.domElement);
+
+  if(typeof THREE.OrbitControls!=='undefined'){
+    _mcal3d.controls=new THREE.OrbitControls(_mcal3d.camera,_mcal3d.renderer.domElement);
+    _mcal3d.controls.enableDamping=true;
+    _mcal3d.controls.dampingFactor=0.08;
+    _mcal3d.controls.target.set(0,0,0);
+    _mcal3d.controls.update();
+  }
+
+  // Lights — mirror _s3d defaults.
+  _mcal3d.scene.add(new THREE.AmbientLight(0x334466,0.85));
+  var dl=new THREE.DirectionalLight(0xffffff,0.55);
+  dl.position.set(5,10,7);
+  _mcal3d.scene.add(dl);
+
+  // Floor grid + axes (CCW: x stage-width red, y stage-up green, z stage-depth blue)
+  var grid=new THREE.GridHelper(20,20,0x1a2744,0x111828);
+  _mcal3d.scene.add(grid);
+  var axes=new THREE.AxesHelper(0.8);
+  _mcal3d.scene.add(axes);
+
+  _mcal3d.inited=true;
+
+  // Animation loop — local to this viewport so the Dashboard's anim
+  // loop is unchanged.
+  function tick(){
+    if(!_mcal3d.inited)return;
+    _mcal3d.animId=requestAnimationFrame(tick);
+    if(_mcal3d.controls)_mcal3d.controls.update();
+    _mcal3d.renderer.render(_mcal3d.scene,_mcal3d.camera);
+  }
+  tick();
+
+  // Resize observer to keep the canvas snug as the cal panel resizes.
+  if(typeof ResizeObserver!=='undefined' && !_mcal3d._resizeObs){
+    _mcal3d._resizeObs=new ResizeObserver(function(){_mcal3dResize();});
+    _mcal3d._resizeObs.observe(el);
+  }
+
+  return true;
+}
+
+function _mcal3dResize(){
+  if(!_mcal3d.inited || !_mcal3d.renderer)return;
+  var el=document.getElementById(_mcal3d.mountId);
+  if(!el)return;
+  var W=el.clientWidth||320, H=el.clientHeight||280;
+  _mcal3d.renderer.setSize(W,H);
+  _mcal3d.camera.aspect=W/H;
+  _mcal3d.camera.updateProjectionMatrix();
+}
+
+function _mcal3dDispose(){
+  if(_mcal3d.animId){cancelAnimationFrame(_mcal3d.animId);_mcal3d.animId=null;}
+  if(_mcal3d._resizeObs){
+    try{_mcal3d._resizeObs.disconnect();}catch(e){}
+    _mcal3d._resizeObs=null;
+  }
+  if(_mcal3d.renderer){
+    try{
+      if(_mcal3d.renderer.domElement && _mcal3d.renderer.domElement.parentNode){
+        _mcal3d.renderer.domElement.parentNode.removeChild(_mcal3d.renderer.domElement);
+      }
+      _mcal3d.renderer.dispose();
+    }catch(e){}
+  }
+  _mcal3d.renderer=null;
+  _mcal3d.scene=null;
+  _mcal3d.camera=null;
+  _mcal3d.controls=null;
+  _mcal3d.inited=false;
+  _mcal3d.coneMesh=null;
+  _mcal3d.floorPolyMesh=null;
+  _mcal3d.workingPolyMesh=null;
+  _mcal3d.probesGroup=null;
+  _mcal3d.fixtureMarker=null;
+}
+
+// stage mm → 3D scene: (x,y,z) mm → (x/1000, z/1000, y/1000)
+function _mcal3dPos(stage_xyz){
+  return new THREE.Vector3(
+    (stage_xyz[0]||0)/1000,
+    (stage_xyz[2]||0)/1000,
+    (stage_xyz[1]||0)/1000
+  );
+}
+
+function _mcal3dClearLayers(){
+  ['coneMesh','floorPolyMesh','workingPolyMesh','probesGroup','fixtureMarker'].forEach(function(k){
+    var obj=_mcal3d[k];
+    if(obj && obj.parent)obj.parent.remove(obj);
+    if(obj && obj.geometry)try{obj.geometry.dispose();}catch(e){}
+    if(obj && obj.material){
+      try{(Array.isArray(obj.material)?obj.material:[obj.material]).forEach(function(m){m.dispose();});}catch(e){}
+    }
+    _mcal3d[k]=null;
+  });
+}
+
+function _mcal3dRender(coverage, preview){
+  // coverage: {cone:{apex,axis,...}, floorPolygon:[[x,y],...], floorZ}
+  // preview (optional): {workingPoly, probePoints} from /smart/preview
+  if(!_mcal3d.inited)return;
+  _mcal3dClearLayers();
+  _mcal3d.data={coverage:coverage, preview:preview||null};
+
+  if(!coverage || !coverage.cone)return;
+  var apexStage=coverage.cone.apex || [0,0,0];
+  var floorZ=(coverage.floorZ!=null)?coverage.floorZ:0;
+
+  // Fixture marker: small yellow sphere at apex.
+  var fixGeo=new THREE.SphereGeometry(0.06,16,12);
+  var fixMat=new THREE.MeshBasicMaterial({color:0xfbbf24});
+  _mcal3d.fixtureMarker=new THREE.Mesh(fixGeo,fixMat);
+  _mcal3d.fixtureMarker.position.copy(_mcal3dPos(apexStage));
+  _mcal3d.scene.add(_mcal3d.fixtureMarker);
+
+  // Coverage cone — translucent volume from apex to each floor polygon
+  // edge vertex. Built as a TRIANGLE_FAN (apex + every floor vertex,
+  // closing back to first).
+  var floorPoly=coverage.floorPolygon || [];
+  if(floorPoly.length>=3){
+    var apex=_mcal3dPos(apexStage);
+    var floorVerts=floorPoly.map(function(p){return _mcal3dPos([p[0],p[1],floorZ]);});
+
+    // Lateral faces: one triangle per polygon edge.
+    var sideGeo=new THREE.BufferGeometry();
+    var sidePositions=[];
+    for(var i=0;i<floorVerts.length;i++){
+      var a=floorVerts[i];
+      var b=floorVerts[(i+1)%floorVerts.length];
+      sidePositions.push(apex.x,apex.y,apex.z);
+      sidePositions.push(b.x,b.y,b.z);
+      sidePositions.push(a.x,a.y,a.z);
+    }
+    sideGeo.setAttribute('position',new THREE.Float32BufferAttribute(sidePositions,3));
+    sideGeo.computeVertexNormals();
+    var sideMat=new THREE.MeshBasicMaterial({
+      color:0x38bdf8, transparent:true, opacity:0.18,
+      side:THREE.DoubleSide, depthWrite:false
+    });
+    _mcal3d.coneMesh=new THREE.Mesh(sideGeo,sideMat);
+    _mcal3d.scene.add(_mcal3d.coneMesh);
+
+    // Floor footprint — convex polygon as a fan from vertex 0.
+    var floorGeo=new THREE.BufferGeometry();
+    var floorPositions=[];
+    for(var j=1;j<floorVerts.length-1;j++){
+      var v0=floorVerts[0], v1=floorVerts[j], v2=floorVerts[j+1];
+      floorPositions.push(v0.x,v0.y,v0.z);
+      floorPositions.push(v1.x,v1.y,v1.z);
+      floorPositions.push(v2.x,v2.y,v2.z);
+    }
+    floorGeo.setAttribute('position',new THREE.Float32BufferAttribute(floorPositions,3));
+    floorGeo.computeVertexNormals();
+    var floorMat=new THREE.MeshBasicMaterial({
+      color:0x38bdf8, transparent:true, opacity:0.32,
+      side:THREE.DoubleSide, depthWrite:false
+    });
+    _mcal3d.floorPolyMesh=new THREE.Mesh(floorGeo,floorMat);
+    _mcal3d.scene.add(_mcal3d.floorPolyMesh);
+
+    // Floor outline edges for clarity.
+    var outlineGeo=new THREE.BufferGeometry();
+    var outlinePos=[];
+    for(var k=0;k<floorVerts.length;k++){
+      var p1=floorVerts[k], p2=floorVerts[(k+1)%floorVerts.length];
+      outlinePos.push(p1.x,p1.y,p1.z, p2.x,p2.y,p2.z);
+    }
+    outlineGeo.setAttribute('position',new THREE.Float32BufferAttribute(outlinePos,3));
+    var outlineMat=new THREE.LineBasicMaterial({color:0x38bdf8});
+    var outline=new THREE.LineSegments(outlineGeo,outlineMat);
+    _mcal3d.scene.add(outline);
+    // Reuse coneMesh.userData to track the outline for cleanup.
+    _mcal3d.coneMesh.userData.outline=outline;
+  }
+
+  // Frame the camera on the data: target = midpoint of fixture XY +
+  // floor centroid; offset = enough distance to fit the polygon.
+  if(_mcal3d.controls && floorPoly.length>=3){
+    var cx=floorPoly.reduce(function(a,p){return a+p[0];},0)/floorPoly.length;
+    var cy=floorPoly.reduce(function(a,p){return a+p[1];},0)/floorPoly.length;
+    var tgt=_mcal3dPos([(cx+apexStage[0])/2,(cy+apexStage[1])/2,
+                          (apexStage[2]+floorZ)/2]);
+    _mcal3d.controls.target.copy(tgt);
+    // Heuristic distance: bounding sphere of polygon + apex.
+    var maxR=0;
+    floorPoly.forEach(function(p){
+      var d=Math.hypot(p[0]-apexStage[0],p[1]-apexStage[1]);
+      if(d>maxR)maxR=d;
+    });
+    var dist=Math.max(2.0,(maxR/1000)*1.6+1.0);
+    var dir=new THREE.Vector3(1,0.6,1).normalize().multiplyScalar(dist);
+    _mcal3d.camera.position.copy(tgt.clone().add(dir));
+    _mcal3d.camera.lookAt(tgt);
+    _mcal3d.controls.update();
+  }
+
+  // PR-3 overlays: working area + probe points.
+  if(preview){
+    if(preview.workingPoly && preview.workingPoly.length>=3){
+      var wpVerts=preview.workingPoly.map(function(p){return _mcal3dPos([p[0],p[1],floorZ+5]);});
+      var wpGeo=new THREE.BufferGeometry();
+      var wpPos=[];
+      for(var w=1;w<wpVerts.length-1;w++){
+        wpPos.push(wpVerts[0].x,wpVerts[0].y,wpVerts[0].z,
+                    wpVerts[w].x,wpVerts[w].y,wpVerts[w].z,
+                    wpVerts[w+1].x,wpVerts[w+1].y,wpVerts[w+1].z);
+      }
+      wpGeo.setAttribute('position',new THREE.Float32BufferAttribute(wpPos,3));
+      var wpMat=new THREE.MeshBasicMaterial({
+        color:0x4ade80, transparent:true, opacity:0.45,
+        side:THREE.DoubleSide, depthWrite:false
+      });
+      _mcal3d.workingPolyMesh=new THREE.Mesh(wpGeo,wpMat);
+      _mcal3d.scene.add(_mcal3d.workingPolyMesh);
+    }
+    if(preview.probePoints && preview.probePoints.length){
+      var grp=new THREE.Group();
+      var probeGeo=new THREE.SphereGeometry(0.04,12,10);
+      var probeMat=new THREE.MeshBasicMaterial({color:0xfbbf24});
+      preview.probePoints.forEach(function(p){
+        var s=new THREE.Mesh(probeGeo,probeMat);
+        s.position.copy(_mcal3dPos([p[0],p[1],floorZ+10]));
+        grp.add(s);
+      });
+      _mcal3d.probesGroup=grp;
+      _mcal3d.scene.add(grp);
+    }
+  }
+}

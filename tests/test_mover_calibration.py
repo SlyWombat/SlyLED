@@ -527,6 +527,176 @@ check('DMX addr=14: R at idx 18', dmx3[18] == 100,
 
 
 # =====================================================================
+# #720 PR-1 — Home Secondary helpers
+# =====================================================================
+
+from mover_control import (
+    secondary_pan_offset_dmx16,
+    secondary_tilt_dmx16,
+)
+
+# Mid-range home: +25% offset stays inside [0, 65535]
+v = secondary_pan_offset_dmx16(32768, fraction=0.25)
+check('#720 secondary pan: mid home → +25%',
+      v == 32768 + int(round(0.25 * 65535)), f'got {v}')
+
+# Near-max home: +25% would clip → falls back to -25%
+v = secondary_pan_offset_dmx16(60000, fraction=0.25)
+check('#720 secondary pan: high home → -25%',
+      v == 60000 - int(round(0.25 * 65535)), f'got {v}')
+
+# Near-min home: +25% works (never falls back since +25% < 65535)
+v = secondary_pan_offset_dmx16(1000, fraction=0.25)
+check('#720 secondary pan: low home → +25%',
+      v == 1000 + int(round(0.25 * 65535)), f'got {v}')
+
+# Exact-zero home: + works
+v = secondary_pan_offset_dmx16(0, fraction=0.25)
+check('#720 secondary pan: home=0 → +25% positive',
+      v == int(round(0.25 * 65535)) and v > 0, f'got {v}')
+
+# Smaller fractions still respect bounds
+v = secondary_pan_offset_dmx16(64000, fraction=0.10)
+check('#720 secondary pan: small fraction high home → -10%',
+      v == 64000 - int(round(0.10 * 65535)), f'got {v}')
+
+# Tilt mid: defaults to 32768 if no override
+check('#720 secondary tilt default mid', secondary_tilt_dmx16() == 32768)
+# tiltOffsetDmx16 honoured (e.g. 350W BeamLight @ 4681 per #716)
+check('#720 secondary tilt honours profile offset',
+      secondary_tilt_dmx16(4681) == 4681,
+      f'got {secondary_tilt_dmx16(4681)}')
+# Out-of-range clamps
+check('#720 secondary tilt clamps high',
+      secondary_tilt_dmx16(99999) == 65535)
+check('#720 secondary tilt clamps low',
+      secondary_tilt_dmx16(-100) == 0)
+
+
+# =====================================================================
+# #720 PR-5 — _smart_solve LSQ fit
+# =====================================================================
+
+from mover_calibrator import _smart_solve, SMART_MAX_RMS_MM
+from coverage_math import (
+    angles_to_dmx, world_to_fixture_pt, fixture_aim_to_world,
+)
+
+# Synthesize 8 probes drawn from a known model. Fixture at (0, 0, 3000),
+# rotation = [0,0,0] so mount-frame == stage-frame.
+#
+# The Home + Home-Secondary bootstrap (PR-1.5 solve_dmx_per_degree)
+# assumes uniform DMX↔degrees mapping: 65535 ticks ↔ panRange degrees,
+# i.e. true_pan_per = 65535/panRange. The synthetic must respect this
+# to make the secondary LSQ row noise-free; otherwise the bootstrap
+# pair biases the fit (a real-world property the plan accepts — at
+# N=8 the bootstrap influence is small but non-zero).
+fixture_xyz = (0.0, 0.0, 3000.0)
+rotation = [0.0, 0.0, 0.0]
+profile_pan_range = 540.0
+profile_tilt_range = 270.0
+true_pan_per = 65535.0 / profile_pan_range   # ≈ 121.36
+true_tilt_per = 65535.0 / profile_tilt_range  # ≈ 242.72
+true_home_pan = 32768
+true_home_tilt = 16384
+
+# Build samples by picking probe XYZ on the floor, computing the angles
+# the IK would emit, then computing the DMX our true model would write.
+import math
+test_xy = [
+    (1500, 2000), (-1500, 2000), (1500, -1500), (-1500, -1500),
+    (2500, 1000), (-2500, 1000), (1000, 3000), (-1000, 3000),
+]
+synth_samples = []
+for x, y in test_xy:
+    measured = (float(x), float(y), 0.0)
+    pan_deg, tilt_deg = world_to_fixture_pt(measured, fixture_xyz, rotation)
+    pan_dmx16 = int(round(true_home_pan + pan_deg * true_pan_per))
+    tilt_dmx16 = int(round(true_home_tilt + tilt_deg * true_tilt_per))
+    synth_samples.append({
+        "target": list(measured),
+        "panDmx16": pan_dmx16,
+        "tiltDmx16": tilt_dmx16,
+        "panDeg": pan_deg,
+        "tiltDeg": tilt_deg,
+        "found": True,
+        "measured": list(measured),
+    })
+
+home = {"panDmx16": true_home_pan, "tiltDmx16": true_home_tilt}
+# Secondary at +25% pan range + +5° stage-frame tilt (id-rotation, so
+# stage-frame and mount-internal tilt agree at home).
+sec_pan_delta = int(round(0.25 * 65535))
+sec_tilt_delta = int(round(5.0 * true_tilt_per))
+secondary = {
+    "panDmx16": true_home_pan + sec_pan_delta,
+    "tiltDmx16": true_home_tilt + sec_tilt_delta,
+    "operatorTiltDeg": 5.0,
+}
+
+result = _smart_solve(synth_samples, home, secondary, fixture_xyz,
+                       rotation, profile_pan_range)
+m = result["model"]
+check('#720 PR-5 model panDmxPerDeg recovers within 1%',
+      abs(m["panDmxPerDeg"] - true_pan_per) / true_pan_per < 0.01,
+      f'got {m["panDmxPerDeg"]} expected {true_pan_per}')
+check('#720 PR-5 model tiltDmxPerDeg recovers within 1%',
+      abs(m["tiltDmxPerDeg"] - true_tilt_per) / true_tilt_per < 0.01,
+      f'got {m["tiltDmxPerDeg"]} expected {true_tilt_per}')
+check('#720 PR-5 model homePan close to truth',
+      abs(m["homePanDmx16"] - true_home_pan) <= 5,
+      f'got {m["homePanDmx16"]} expected {true_home_pan}')
+check('#720 PR-5 model homeTilt close to truth',
+      abs(m["homeTiltDmx16"] - true_home_tilt) <= 5,
+      f'got {m["homeTiltDmx16"]} expected {true_home_tilt}')
+check('#720 PR-5 confidence high with N>=4',
+      result["confidence"] == "high",
+      f'got {result["confidence"]}')
+check('#720 PR-5 residual rms is small (synthetic)',
+      result["residuals"]["rmsMm"] < 5.0,
+      f'rms={result["residuals"]["rmsMm"]}')
+
+# N=2 → confidence "medium", no RMS gate
+result2 = _smart_solve(synth_samples[:2], home, secondary, fixture_xyz,
+                        rotation, profile_pan_range)
+check('#720 PR-5 confidence medium with N=2',
+      result2["confidence"] == "medium",
+      f'got {result2["confidence"]}')
+
+# N=1 → confidence "low", falls back to 2-pair estimate
+result1 = _smart_solve(synth_samples[:1], home, secondary, fixture_xyz,
+                        rotation, profile_pan_range)
+check('#720 PR-5 confidence low with N=1',
+      result1["confidence"] == "low",
+      f'got {result1["confidence"]}')
+check('#720 PR-5 N=1 fallback flagged',
+      result1.get("fallbackToEstimate") is True)
+
+# RMS gate triggers when residuals are too high (N>=4)
+import copy
+bad_samples = copy.deepcopy(synth_samples)
+# Corrupt every measured XYZ by 500 mm in X — far above the 100 mm gate
+for s in bad_samples:
+    s["measured"][0] += 500.0
+try:
+    _smart_solve(bad_samples, home, secondary, fixture_xyz, rotation,
+                  profile_pan_range)
+    check('#720 PR-5 RMS gate rejects high residual', False,
+          'no exception raised')
+except Exception as e:
+    check('#720 PR-5 RMS gate rejects high residual',
+          'high_residual' in str(e),
+          f'got {e}')
+
+# N=0 path raises (defensive)
+try:
+    _smart_solve([], home, secondary, fixture_xyz, rotation, profile_pan_range)
+    check('#720 PR-5 N=0 raises', False, 'no exception')
+except Exception:
+    check('#720 PR-5 N=0 raises', True)
+
+
+# =====================================================================
 print(f'\n{passed} passed, {failed} failed out of {passed + failed} tests')
 if failed:
     sys.exit(1)

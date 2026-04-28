@@ -31,6 +31,47 @@ from mover_calibrator import aim_to_pan_tilt, affine_pan_tilt
 log = logging.getLogger("slyled.mover_control")
 
 
+# ── #720 PR-1 — Home Secondary helpers ─────────────────────────────────
+#
+# Pure functions, no IO. Used by the home wizard's secondary slew step to
+# pick a DMX pose that is offset from primary Home by a known fraction of
+# the fixture's pan range, with the tilt at a known DMX value. Output is
+# fed back into PR-1.5's `solve_dmx_per_degree` to bootstrap the SMART
+# 2-pair affine estimate before any probes have been collected.
+
+def secondary_pan_offset_dmx16(home_pan_dmx16, fraction=0.25):
+    """Pick a secondary pan DMX16 offset by ``fraction`` of full DMX range.
+
+    The full 16-bit DMX range corresponds to the profile's full pan range
+    in degrees, so ``fraction * 65535`` ticks ≡ ``fraction * panRange``
+    degrees regardless of profile. Sign is chosen so the secondary pose
+    stays inside ``[0, 65535]``: prefer + first, then -, finally clamp.
+
+    Returns the absolute secondary DMX16 (int), already clamped to
+    ``[0, 65535]``.
+    """
+    delta = int(round(float(fraction) * 65535))
+    pos = int(home_pan_dmx16) + delta
+    neg = int(home_pan_dmx16) - delta
+    if 0 <= pos <= 65535:
+        return pos
+    if 0 <= neg <= 65535:
+        return neg
+    return max(0, min(65535, pos))
+
+
+def secondary_tilt_dmx16(profile_tilt_offset_dmx16=32768):
+    """Pick a secondary tilt DMX16 — mid-range / half-tick of the profile.
+
+    Defaults to 32768 (DMX center). Profile-aware callers can pass
+    ``tiltOffsetDmx16`` (#716) to centre on the fixture's stage-frame
+    horizon, but for the wizard's bootstrap any tilt distinct from Home is
+    sufficient — the operator measures and reports the resulting stage-
+    frame angle.
+    """
+    return max(0, min(65535, int(profile_tilt_offset_dmx16)))
+
+
 class MoverClaim:
     """Per-mover claim — ties a device id to a mover id for DMX writes."""
 
@@ -393,14 +434,41 @@ class MoverControlEngine:
     def _aim_to_pan_tilt(self, mover_id, mover, aim_stage):
         """Pan/tilt from a stage-space aim vector.
 
-        Preference order (#491):
-          1. **Parametric v2 model** (closed-form inverse, no round-trip mismatch).
-             Distance from fixture is irrelevant for a pure direction aim —
-             we project 3 m and let ``model.inverse`` normalise.
-          2. **v1 affine samples** (legacy fallback while migration lands).
-          3. **Pure ``aim_to_pan_tilt`` IK** when no calibration exists.
+        #720 PR-2.5 — preference order, SMART first:
+          0. **SMART model OR Home + Home-Secondary 2-pair estimate**:
+             world-XYZ → fixture-internal angles via
+             ``coverage_math.world_to_fixture_pt`` → DMX via
+             ``angles_to_dmx``. This is the unified path; eventually the
+             fallbacks below are deleted (PR-7).
+          1. Parametric v2 model (legacy, kept until SMART proven).
+          2. v1 affine samples (legacy).
+          3. Pure ``aim_to_pan_tilt`` IK when no calibration exists.
         """
-        # 1 — parametric model (preferred)
+        # 0 — SMART path (preferred when fixture has Home + Home-Secondary
+        # OR a saved SMART model).
+        smart_model = self._get_smart_model(mover_id, mover)
+        if smart_model is not None:
+            try:
+                from coverage_math import (
+                    world_to_fixture_pt, angles_to_dmx,
+                )
+                fix_pos = (mover.get("x", 0) or 0,
+                           mover.get("y", 0) or 0,
+                           mover.get("z", 0) or 0)
+                rot = mover.get("rotation") or [0.0, 0.0, 0.0]
+                target = (fix_pos[0] + aim_stage[0] * 3000.0,
+                          fix_pos[1] + aim_stage[1] * 3000.0,
+                          fix_pos[2] + aim_stage[2] * 3000.0)
+                angles = world_to_fixture_pt(target, fix_pos, rot)
+                if angles is not None:
+                    pan_dmx16, tilt_dmx16 = angles_to_dmx(
+                        angles[0], angles[1], smart_model)
+                    return (pan_dmx16 / 65535.0, tilt_dmx16 / 65535.0)
+            except Exception as e:
+                log.debug("SMART aim path failed for mover %s: %s — falling back",
+                          mover_id, e)
+
+        # 1 — parametric model (preferred legacy)
         model = self._get_mover_model(mover_id, mover)
         if model is not None:
             px, py, pz = model.fixture_pos
@@ -436,6 +504,44 @@ class MoverControlEngine:
             pan_range=pan_range,
             tilt_range=tilt_range,
         )
+
+    def _get_smart_model(self, mover_id, mover):
+        """#720 PR-2.5 — return a SMART model (or 2-pair estimate)
+        usable by ``coverage_math.angles_to_dmx``, or None if neither
+        is available for this fixture.
+
+        Preference: saved SMART model (``mover_calibrations[fid].model``)
+        → 2-pair estimate from Home + Home-Secondary on
+        ``fixtures.json``.
+        """
+        cal = self._get_mover_cal(mover_id) or {}
+        m = cal.get("model")
+        if m and "panDmxPerDeg" in m and "tiltDmxPerDeg" in m \
+                and "homePanDmx16" in m and "homeTiltDmx16" in m:
+            return m
+
+        home_pan = mover.get("homePanDmx16")
+        home_tilt = mover.get("homeTiltDmx16")
+        sec = mover.get("homeSecondary")
+        if home_pan is None or home_tilt is None or not sec:
+            return None
+        prof = self._get_profile_info(mover.get("dmxProfileId")) \
+            if mover.get("dmxProfileId") else None
+        pan_range = (mover.get("panRange")
+                     or (prof.get("panRange") if prof else None)
+                     or 540)
+        try:
+            from coverage_math import solve_dmx_per_degree
+            return solve_dmx_per_degree(
+                {"panDmx16": home_pan, "tiltDmx16": home_tilt},
+                sec,
+                mover.get("rotation") or [0.0, 0.0, 0.0],
+                pan_range,
+            )
+        except Exception as e:
+            log.debug("SMART 2-pair estimate failed for mover %s: %s",
+                      mover_id, e)
+            return None
 
     def _write_dmx(self, mover, prof_info, claim, include_pan_tilt=True):
         engine = self._get_engine()

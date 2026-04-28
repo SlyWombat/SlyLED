@@ -1795,7 +1795,9 @@ def api_fixture_update(fid):
               # #687 — Set Home anchor: operator-confirmed (pan, tilt) DMX
               # 16-bit values that aim the beam along the fixture's saved
               # rotation vector. Replaces geometric kickoff guesswork.
-              "homePanDmx16", "homeTiltDmx16", "homeSetAt"):
+              # #720 PR-1 — homeSecondary is the optional 2-pair affine
+              # bootstrap pose captured by the home wizard's secondary step.
+              "homePanDmx16", "homeTiltDmx16", "homeSetAt", "homeSecondary"):
         if k in body:
             # #Q12 — normalise fovType on write so stored value is always in
             # the whitelist (inputs go through _normalise_fov_type).
@@ -1848,6 +1850,48 @@ def api_fixture_set_aim(fid):
     _save("fixtures", _fixtures)
     return jsonify(ok=True, rotation=f.get("rotation", [0, 0, 0]))
 
+def _validate_home_secondary(sec):
+    """#720 PR-1 — validate a Home Secondary block. Returns the cleaned
+    dict or raises ``ValueError`` with an operator-readable message."""
+    if not isinstance(sec, dict):
+        raise ValueError("secondary must be an object")
+    try:
+        pan = int(sec["panDmx16"])
+        tilt = int(sec["tiltDmx16"])
+        op_tilt = float(sec["operatorTiltDeg"])
+    except (KeyError, TypeError, ValueError) as e:
+        raise ValueError(f"secondary fields panDmx16/tiltDmx16/operatorTiltDeg: {e}")
+    if not (0 <= pan <= 65535) or not (0 <= tilt <= 65535):
+        raise ValueError("secondary panDmx16/tiltDmx16 must be in [0, 65535]")
+    if op_tilt < -90.0 or op_tilt > 90.0:
+        raise ValueError("secondary operatorTiltDeg must be in [-90, +90]")
+    return {
+        "panDmx16": pan,
+        "tiltDmx16": tilt,
+        "operatorTiltDeg": op_tilt,
+        "capturedAt": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+@app.get("/api/fixtures/<int:fid>/home")
+def api_fixture_get_home(fid):
+    """#720 PR-1 — return the saved Home anchor and the optional Home
+    Secondary block. Either field is ``null`` when unset."""
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f:
+        return jsonify(err="Fixture not found"), 404
+    primary = None
+    if f.get("homePanDmx16") is not None and f.get("homeTiltDmx16") is not None:
+        primary = {
+            "panDmx16": int(f["homePanDmx16"]),
+            "tiltDmx16": int(f["homeTiltDmx16"]),
+            "setAt": f.get("homeSetAt"),
+        }
+    return jsonify(ok=True,
+                   primary=primary,
+                   secondary=f.get("homeSecondary"))
+
+
 @app.post("/api/fixtures/<int:fid>/home")
 def api_fixture_set_home(fid):
     """#687 — capture the operator-confirmed Home anchor for a DMX mover.
@@ -1860,6 +1904,12 @@ def api_fixture_set_home(fid):
     Replaces the geometric kickoff chain (#682-LL / #682-C-v2) with a
     single trusted observation.  Calibration kickoff downstream uses
     this anchor instead of ``compute_initial_aim``.
+
+    #720 PR-1 extension: body may also include an optional ``secondary``
+    block ``{panDmx16, tiltDmx16, operatorTiltDeg}`` captured by the
+    home wizard's secondary slew step. Used downstream (PR-1.5) by
+    ``solve_dmx_per_degree`` to bootstrap the SMART 2-pair affine
+    estimate before any probes have been collected.
     """
     f = next((f for f in _fixtures if f["id"] == fid), None)
     if not f:
@@ -1877,21 +1927,188 @@ def api_fixture_set_home(fid):
     f["homePanDmx16"] = pan
     f["homeTiltDmx16"] = tilt
     f["homeSetAt"] = datetime.utcnow().isoformat() + "Z"
+    sec_in = body.get("secondary")
+    if sec_in is not None:
+        try:
+            f["homeSecondary"] = _validate_home_secondary(sec_in)
+        except ValueError as e:
+            return jsonify(err=str(e)), 400
     _save("fixtures", _fixtures)
-    log.info("Set Home: fid=%d pan=%d tilt=%d rotation=%s",
-             fid, pan, tilt, f.get("rotation"))
+    log.info("Set Home: fid=%d pan=%d tilt=%d rotation=%s secondary=%s",
+             fid, pan, tilt, f.get("rotation"),
+             "yes" if f.get("homeSecondary") else "no")
     return jsonify(ok=True,
                    homePanDmx16=pan, homeTiltDmx16=tilt,
-                   homeSetAt=f["homeSetAt"])
+                   homeSetAt=f["homeSetAt"],
+                   homeSecondary=f.get("homeSecondary"))
+
+
+@app.post("/api/fixtures/<int:fid>/home/secondary")
+def api_fixture_set_home_secondary(fid):
+    """#720 PR-1 — set just the Home Secondary block. Requires Home
+    primary to already be set (otherwise the secondary is meaningless)."""
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f:
+        return jsonify(err="Fixture not found"), 404
+    if f.get("fixtureType") != "dmx":
+        return jsonify(err="Home applies to DMX mover fixtures only"), 400
+    if f.get("homePanDmx16") is None or f.get("homeTiltDmx16") is None:
+        return jsonify(err="Home primary must be set first"), 400
+    body = request.get_json(silent=True) or {}
+    try:
+        f["homeSecondary"] = _validate_home_secondary(body)
+    except ValueError as e:
+        return jsonify(err=str(e)), 400
+    _save("fixtures", _fixtures)
+    return jsonify(ok=True, homeSecondary=f["homeSecondary"])
+
+
+@app.post("/api/fixtures/<int:fid>/home/secondary/prepare")
+def api_fixture_prepare_home_secondary(fid):
+    """#720 PR-1 — slew a fixture to its computed Home Secondary pose.
+
+    Computes ``(panDmx16, tiltDmx16)`` from the wizard's spec
+    (``mover_control.secondary_pan_offset_dmx16`` + ``secondary_tilt_dmx16``),
+    drives the fixture there via the live DMX engine with dimmer up so
+    the operator can read the stage-frame tilt angle, optionally waits
+    ``settleMs`` (default 1200 ms), then returns the DMX values plus
+    profile envelope info for the SPA's tilt-angle prompt.
+
+    Body (all optional): ``{settleMs?: int, fraction?: float (default 0.25)}``.
+    """
+    from mover_control import secondary_pan_offset_dmx16, secondary_tilt_dmx16
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f:
+        return jsonify(err="Fixture not found"), 404
+    if f.get("fixtureType") != "dmx":
+        return jsonify(err="Home applies to DMX mover fixtures only"), 400
+    home_pan = f.get("homePanDmx16")
+    home_tilt = f.get("homeTiltDmx16")
+    if home_pan is None or home_tilt is None:
+        return jsonify(err="Home primary must be set first"), 400
+    body = request.get_json(silent=True) or {}
+    try:
+        fraction = float(body.get("fraction", 0.25))
+    except (TypeError, ValueError):
+        fraction = 0.25
+    fraction = max(0.05, min(0.45, fraction))
+    settle_ms = int(body.get("settleMs", 1200))
+    settle_ms = max(0, min(5000, settle_ms))
+
+    pid = f.get("dmxProfileId")
+    prof_info = _profile_lib.channel_info(pid) if pid else None
+    if not prof_info:
+        return jsonify(err="Fixture has no DMX profile"), 400
+
+    sec_pan = secondary_pan_offset_dmx16(home_pan, fraction=fraction)
+    sec_tilt = secondary_tilt_dmx16(prof_info.get("tiltOffsetDmx16", 32768))
+
+    if not _artnet.running and not _sacn.running:
+        return jsonify(err="Art-Net engine not running — start it from "
+                            "Settings → DMX Engine before slewing"), 503
+    engine = _artnet if _artnet.running else _sacn
+    profile = {"channel_map": prof_info.get("channel_map", {}),
+               "channels": prof_info.get("channels", [])}
+    try:
+        uni = f.get("dmxUniverse", 1)
+        addr = f.get("dmxStartAddr", 1)
+        uni_buf = engine.get_universe(uni)
+        uni_buf.set_fixture_pan_tilt(addr,
+                                     sec_pan / 65535.0,
+                                     sec_tilt / 65535.0,
+                                     profile)
+        uni_buf.set_fixture_dimmer(addr, 255, profile)
+        uni_buf.set_fixture_rgb(addr, 0, 255, 0, profile)
+    except Exception as e:
+        log.warning("home/secondary/prepare DMX write failed: %s", e)
+        return jsonify(err="dmx_write_failed", detail=str(e)), 500
+    if settle_ms > 0:
+        time.sleep(settle_ms / 1000.0)
+    return jsonify(ok=True,
+                   panDmx16=sec_pan, tiltDmx16=sec_tilt,
+                   panRange=prof_info.get("panRange", 540),
+                   tiltRange=prof_info.get("tiltRange", 270),
+                   tiltOffsetDmx16=prof_info.get("tiltOffsetDmx16", 32768),
+                   tiltUp=prof_info.get("tiltUp", False))
+
+
+@app.get("/api/fixtures/<int:fid>/coverage")
+def api_fixture_coverage(fid):
+    """#720 PR-2 — return the fixture's coverage cone + floor polygon.
+
+    Reads ``fixtures.json`` + ``_profile_lib.channel_info(profile_id)``
+    + the floor RANSAC result (when available). Floor defaults to z=0
+    when no surface scan has been run.
+
+    Response: ``{cone: {apex, axis, halfAngleDeg, panRange, tiltRange},
+    floorPolygon: [[x, y], ...], floorZ: float}``. ``floorPolygon`` is
+    empty when the fixture's envelope projects entirely upward (no
+    floor intersection in front of the fixture).
+    """
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f:
+        return jsonify(err="Fixture not found"), 404
+    if f.get("fixtureType") != "dmx":
+        return jsonify(err="coverage applies to DMX fixtures only"), 400
+    pid = f.get("dmxProfileId")
+    prof_info = _profile_lib.channel_info(pid) if pid else None
+    if not prof_info:
+        return jsonify(err="Fixture has no DMX profile"), 400
+
+    fix_pos = _fixture_position(fid)
+    rot = f.get("rotation") or [0.0, 0.0, 0.0]
+
+    # Floor z: prefer detected floor from the most recent surface scan
+    # (#684 helper). Falls back to z=0 (stage convention) when no scan
+    # is available.
+    floor_z = 0.0
+    try:
+        surfaces, _age, _warn = _surface_model_for_cal()
+        if isinstance(surfaces, dict):
+            floor = surfaces.get("floor") or {}
+            z = floor.get("z")
+            if z is None:
+                z = floor.get("y")  # legacy schema
+            if isinstance(z, (int, float)):
+                floor_z = float(z)
+    except Exception:
+        pass
+
+    from coverage_math import coverage_polygon, _profile_envelope_deg
+    poly = coverage_polygon(fix_pos, rot, prof_info, floor_z)
+    pan_min, pan_max, tilt_min, tilt_max = _profile_envelope_deg(prof_info)
+
+    # Cone description (informational) — apex at fixture, axis = home aim
+    # vector (R · [0,1,0]), half-angle = max(panRange, tiltRange)/2.
+    from coverage_math import _mount_rotation, _matvec
+    R = _mount_rotation(rot)
+    axis = _matvec(R, (0.0, 1.0, 0.0))
+    half_angle = max(prof_info.get("panRange", 540),
+                     prof_info.get("tiltRange", 270)) / 2.0
+    return jsonify(ok=True,
+                   cone={
+                       "apex": [fix_pos[0], fix_pos[1], fix_pos[2]],
+                       "axis": [axis[0], axis[1], axis[2]],
+                       "halfAngleDeg": half_angle,
+                       "panRange": prof_info.get("panRange", 540),
+                       "tiltRange": prof_info.get("tiltRange", 270),
+                       "tiltMinDeg": tilt_min,
+                       "tiltMaxDeg": tilt_max,
+                   },
+                   floorPolygon=poly,
+                   floorZ=floor_z)
 
 
 @app.delete("/api/fixtures/<int:fid>/home")
 def api_fixture_clear_home(fid):
-    """#687 — clear a previously-set Home anchor (forces re-prompt)."""
+    """#687 — clear a previously-set Home anchor (forces re-prompt).
+
+    #720 PR-1: also clears any Home Secondary block atomically — the
+    SMART 2-pair estimate becomes meaningless without primary."""
     f = next((f for f in _fixtures if f["id"] == fid), None)
     if not f:
         return jsonify(err="Fixture not found"), 404
-    for k in ("homePanDmx16", "homeTiltDmx16", "homeSetAt"):
+    for k in ("homePanDmx16", "homeTiltDmx16", "homeSetAt", "homeSecondary"):
         f.pop(k, None)
     _save("fixtures", _fixtures)
     return jsonify(ok=True)
@@ -5844,6 +6061,391 @@ def _mover_cal_thread_markers_body(fid, cam, bridge_ip, mover_color,
     _park_fixture_at_home(fid)   # #691 — operator-friendly rest position
 
 
+# ── #720 PR-4 — SMART probe loop ───────────────────────────────────────
+#
+# Runs after PR-3's preview confirms a non-empty working area. For each
+# probe point, computes mount-internal `(panDeg, tiltDeg)` via
+# `coverage_math.world_to_fixture_pt`, writes DMX via `angles_to_dmx`,
+# settles, calls `_beam_detect`, and records `(predicted_xyz,
+# measured_xyz, panDmx16, tiltDmx16)`. The PR-5 solver consumes the
+# resulting samples list to fit a corrected SMART model.
+#
+# Failure handling:
+#   - per-point: skip-and-continue; record `{found: false}`.
+#   - run-level: abort ONLY when zero probes succeed (1+ → solver runs).
+#   - cancel: shared route; SMART branch parks the fixture at its home
+#     anchor directly. The existing `_park_fixture_at_home` already
+#     does what the plan calls for, so we reuse it instead of cloning a
+#     `_smart_on_error` body.
+
+def _smart_park_at_home(fid):
+    """SMART-owned park: blackout + slew to homePanDmx16/homeTiltDmx16.
+
+    Uses `_park_fixture_at_home` under the hood — the plan calls for a
+    SMART-private variant, but the existing helper already implements
+    "zero channels then drive pan/tilt to home" which is exactly the
+    spec. Wrapping it in a named helper makes the SMART code paths
+    self-document and keeps the option to swap implementations open.
+    """
+    try:
+        _park_fixture_at_home(fid)
+    except Exception as e:
+        log.debug("SMART park-at-home failed for fid %s: %s", fid, e)
+
+
+SMART_SETTLE_MS_DEFAULT = 600
+
+
+# Hook: the actual single-point probe. Tests monkeypatch this to bypass
+# real camera HTTP. Returns ``{found: bool, x: float, y: float, z: float}``
+# in stage mm when found, ``{found: false, reason: ...}`` otherwise.
+def _smart_probe_point_default(fid, cam, bridge_ip, mover_color,
+                                pan_dmx16, tilt_dmx16,
+                                predicted_floor_xyz,
+                                settle_ms=SMART_SETTLE_MS_DEFAULT):
+    """Drive DMX to ``(pan_dmx16, tilt_dmx16)``, settle, beam-detect,
+    convert pixel to stage XYZ via depth.
+
+    Returns ``{found, x, y, z, pixelX?, pixelY?, reason?}``. Used as the
+    default ``_smart_probe_point`` hook by ``_mover_cal_thread_smart_body``.
+    """
+    f = next((x for x in _fixtures if x.get("id") == fid), None)
+    if not f:
+        return {"found": False, "reason": "fixture_missing"}
+    pid = f.get("dmxProfileId")
+    prof_info = _profile_lib.channel_info(pid) if pid else None
+    if not prof_info:
+        return {"found": False, "reason": "no_profile"}
+
+    cam_ip = (cam or {}).get("cameraIp", "")
+    cam_idx = int((cam or {}).get("cameraIdx", 0) or 0)
+    if not cam_ip:
+        return {"found": False, "reason": "no_camera_ip"}
+
+    engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+    if not engine:
+        return {"found": False, "reason": "engine_not_running"}
+
+    profile = {"channel_map": prof_info.get("channel_map", {}),
+               "channels": prof_info.get("channels", [])}
+    uni = int(f.get("dmxUniverse", 1))
+    addr = int(f.get("dmxStartAddr", 1))
+    try:
+        uni_buf = engine.get_universe(uni)
+        uni_buf.set_fixture_pan_tilt(
+            addr, pan_dmx16 / 65535.0, tilt_dmx16 / 65535.0, profile)
+        uni_buf.set_fixture_dimmer(addr, 255, profile)
+        if mover_color and len(mover_color) >= 3:
+            uni_buf.set_fixture_rgb(
+                addr, int(mover_color[0]), int(mover_color[1]),
+                int(mover_color[2]), profile)
+    except Exception as e:
+        log.warning("SMART probe DMX write failed: %s", e)
+        return {"found": False, "reason": f"dmx_write:{e}"}
+
+    if settle_ms > 0:
+        time.sleep(min(5000, max(0, int(settle_ms))) / 1000.0)
+
+    # Beam-detect pixel
+    try:
+        beam = _mcal._beam_detect(cam_ip, cam_idx, mover_color)
+    except Exception as e:
+        log.debug("SMART beam-detect raised: %s", e)
+        beam = None
+    if not beam:
+        return {"found": False, "reason": "no_beam"}
+
+    px, py = beam[0], beam[1]
+    # Pixel → stage XYZ via depth.
+    try:
+        pt = _mcal._depth_at_pixel(cam_ip, cam_idx, px, py)
+    except Exception as e:
+        log.debug("SMART depth lookup raised: %s", e)
+        pt = None
+    if not pt:
+        return {"found": False, "reason": "no_depth", "pixelX": px,
+                "pixelY": py}
+
+    return {"found": True,
+            "x": float(pt[0]), "y": float(pt[1]), "z": float(pt[2]),
+            "pixelX": px, "pixelY": py}
+
+
+def _mover_cal_thread_smart(fid, cam, bridge_ip, mover_color,
+                             warmup=False, warmup_seconds=30.0):
+    """#720 PR-4 — SMART bound-and-probe wrapper. Catches abort/error
+    so Cancel + unhandled exceptions both park the fixture at home and
+    release the cal lock. Body lives in ``_mover_cal_thread_smart_body``
+    — same wrapper pattern as the markers / v2 threads."""
+    job = _mover_cal_jobs[str(fid)]
+    job["method"] = "smart"
+    try:
+        _mover_cal_thread_smart_body(fid, cam, bridge_ip, mover_color,
+                                       warmup, warmup_seconds)
+    except _mcal.CalibrationAborted:
+        log.info("MOVER-CAL SMART %d: cancelled by operator", fid)
+        job["error"] = "Cancelled by operator"
+        job["status"] = "cancelled"
+        job["phase"] = "cancelled"
+        _mcal.arm_cancel()
+        _smart_park_at_home(fid)
+        _set_calibrating(fid, False)
+    except _mcal.CalibrationError as e:
+        log.warning("MOVER-CAL SMART %d: cal-error %s", fid, e)
+        job["error"] = str(e)
+        job["status"] = "error"
+        job["errorType"] = "calibration-error"
+        _mcal.arm_cancel()
+        _smart_park_at_home(fid)
+        _set_calibrating(fid, False)
+    except Exception as e:
+        log.exception("MOVER-CAL SMART %d: unhandled exception", fid)
+        job["error"] = f"Unhandled error: {e}"
+        job["status"] = "error"
+        _mcal.arm_cancel()
+        _smart_park_at_home(fid)
+        _set_calibrating(fid, False)
+    if job.get("status") not in ("done", "cancelled", "error"):
+        log.error("MOVER-CAL SMART %d: body returned with non-terminal "
+                  "status=%r phase=%r — flagging as orphaned",
+                  fid, job.get("status"), job.get("phase"))
+        job["status"] = "error"
+        job["error"] = "SMART body exited without setting status (orphaned)"
+        job["phase"] = "error"
+        _set_calibrating(fid, False)
+
+
+def _mover_cal_thread_smart_body(fid, cam, bridge_ip, mover_color,
+                                  warmup=False, warmup_seconds=30.0):
+    """SMART probe loop body — per-point predict / slew / detect.
+
+    1. Re-compute the working area + 16-point grid (same code path as
+       `/smart/preview` so the operator's preview matches what runs).
+    2. For each probe point: convert stage XY to fixture-internal angles
+       via ``coverage_math.world_to_fixture_pt``, then to DMX via
+       ``angles_to_dmx`` (using the SMART model OR the 2-pair estimate
+       from PR-1.5), then write DMX via the live engine, settle, and
+       call ``_smart_probe_point`` for beam-detect.
+    3. Skip-and-continue on per-point miss. Abort ONLY when zero probes
+       succeed.
+
+    The actual probe call is dispatched through ``_smart_probe_point``
+    (module-level so tests can monkeypatch it). PR-5 replaces the
+    default stub with the live beam-detect chain.
+    """
+    job = _mover_cal_jobs[str(fid)]
+    f = next((x for x in _fixtures if x.get("id") == fid), None)
+    if not f or f.get("fixtureType") != "dmx":
+        raise _mcal.CalibrationError("Fixture is not a DMX mover")
+
+    pid = f.get("dmxProfileId")
+    prof_info = _profile_lib.channel_info(pid) if pid else None
+    if not prof_info:
+        raise _mcal.CalibrationError("Fixture has no DMX profile")
+
+    fix_pos = _fixture_position(fid)
+    rot = f.get("rotation") or [0.0, 0.0, 0.0]
+
+    floor_z = 0.0
+    try:
+        surfaces, _age, _warn = _surface_model_for_cal()
+        if isinstance(surfaces, dict):
+            floor = surfaces.get("floor") or {}
+            z = floor.get("z")
+            if z is None:
+                z = floor.get("y")
+            if isinstance(z, (int, float)):
+                floor_z = float(z)
+    except Exception:
+        pass
+
+    _set_calibrating(fid, True)
+    job["phase"] = "smart_preview"
+
+    from coverage_math import (
+        coverage_polygon, working_area, sample_grid,
+        world_to_fixture_pt, angles_to_dmx, _polygon_signed_area,
+    )
+    from surface_analyzer import union_camera_floor_polygons
+
+    coverage_poly = coverage_polygon(fix_pos, rot, prof_info, floor_z)
+    cam_polys = _camera_floor_polygons_for_cal(f)
+    cam_union = union_camera_floor_polygons(cam_polys)
+    working_poly = working_area(coverage_poly, cam_union, margin_mm=150) \
+        if coverage_poly and cam_union else []
+
+    if not working_poly:
+        raise _mcal.CalibrationError(
+            "SMART preview: working area is empty — fixture cone misses "
+            "every camera's visible floor")
+    if abs(_polygon_signed_area(working_poly)) < MIN_WORKING_AREA_MM2:
+        raise _mcal.CalibrationError(
+            "SMART preview: working area too small (< 50 cm²)")
+
+    probe_points = sample_grid(working_poly, n=16, min_edge_margin_mm=150)
+    if not probe_points:
+        raise _mcal.CalibrationError(
+            "SMART preview: sampler produced no valid probe points")
+    job["totalTargets"] = len(probe_points)
+    job["currentTarget"] = 0
+
+    # Resolve the angle-to-DMX model (SMART model OR 2-pair estimate).
+    model, confidence = _resolve_mover_model(fid, f)
+    if model is None:
+        raise _mcal.CalibrationError(
+            "SMART probe: fixture has neither a SMART model nor "
+            "Home + Home-Secondary — run the home wizard first")
+    job["confidence"] = confidence
+
+    job["phase"] = "smart_probing"
+    samples = []
+    successes = 0
+    for idx, pt in enumerate(probe_points):
+        if _mcal.is_cancel_requested():
+            raise _mcal.CalibrationAborted("operator cancelled SMART probe")
+        job["currentTarget"] = idx + 1
+
+        target_xyz = (float(pt[0]), float(pt[1]), float(floor_z))
+        angles = world_to_fixture_pt(target_xyz, fix_pos, rot)
+        if angles is None:
+            samples.append({"target": list(target_xyz), "found": False,
+                             "reason": "ik_degenerate"})
+            continue
+        pan_dmx16, tilt_dmx16 = angles_to_dmx(angles[0], angles[1], model)
+
+        result = _smart_probe_point(
+            fid, cam, bridge_ip, mover_color,
+            pan_dmx16, tilt_dmx16, target_xyz)
+        sample = {
+            "target": list(target_xyz),
+            "panDmx16": pan_dmx16,
+            "tiltDmx16": tilt_dmx16,
+            "panDeg": angles[0],
+            "tiltDeg": angles[1],
+        }
+        if result.get("found"):
+            sample["found"] = True
+            sample["measured"] = [
+                float(result.get("x", 0.0)),
+                float(result.get("y", 0.0)),
+                float(result.get("z", floor_z)),
+            ]
+            successes += 1
+        else:
+            sample["found"] = False
+            sample["reason"] = result.get("reason", "no_beam")
+        samples.append(sample)
+
+    job["phase"] = "smart_solving"
+    job["samples"] = samples
+    job["successes"] = successes
+
+    if successes == 0:
+        raise _mcal.CalibrationError(
+            f"SMART probe: zero of {len(probe_points)} probes succeeded — "
+            "check camera FOV, beam color, and floor visibility")
+
+    # #720 PR-5 — fit the corrected model from samples + Home + Secondary.
+    # On RMS-gate failure (N>=4 and rmsMm > MAX_RMS_MM), the solver
+    # raises CalibrationError; the wrapper parks the fixture at home
+    # and leaves the prior calibration record untouched.
+    home_block = {
+        "panDmx16": int(f.get("homePanDmx16")),
+        "tiltDmx16": int(f.get("homeTiltDmx16")),
+    }
+    sec_block = f.get("homeSecondary")
+    pan_range = prof_info.get("panRange", 540) or 540
+    try:
+        solve = _mcal._smart_solve(
+            samples, home_block, sec_block, fix_pos, rot, pan_range)
+    except _mcal.CalibrationError:
+        # RMS gate rejection — leave prior cal record untouched. The
+        # wrapper's CalibrationError handler parks at home + sets
+        # status=error.
+        raise
+
+    # #720 PR-6 — stage the calibration record. Final commit happens
+    # after the operator confirms each surveyed ArUco marker inside the
+    # working area via the smart/validate endpoints. The thread exits
+    # here; the SPA drives the validation pass.
+    pending = {
+        "method": "smart",
+        "version": 3,
+        "samples": samples,
+        "model": solve["model"],
+        "residuals": solve["residuals"],
+        "confidence": solve["confidence"],
+        "sampleCount": solve["sampleCount"],
+        "fitRows": solve.get("fitRows"),
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+    job["pendingCommit"] = pending
+    job["result"] = {
+        "method": "smart",
+        "samples": samples,
+        "successes": successes,
+        "total": len(probe_points),
+        "model": solve["model"],
+        "residuals": solve["residuals"],
+        "confidence": solve["confidence"],
+    }
+
+    # Determine validation markers: surveyed floor markers inside the
+    # working area. If none qualify, auto-pass and commit.
+    validation_markers = []
+    try:
+        from coverage_math import _point_in_polygon
+        for m in (_aruco_markers or []):
+            if abs(float(m.get("z", 0) or 0)) > 50:
+                continue
+            mx = float(m.get("x", 0))
+            my = float(m.get("y", 0))
+            if working_poly and _point_in_polygon((mx, my), working_poly):
+                validation_markers.append({
+                    "id": int(m.get("id")),
+                    "name": m.get("name") or f"Marker {m['id']}",
+                    "x": mx, "y": my, "z": float(m.get("z", 0) or 0),
+                    "confirmed": None,  # null = pending, True/False = answered
+                })
+    except Exception as e:
+        log.debug("SMART validation marker filter failed: %s", e)
+
+    if not validation_markers:
+        # No markers to validate against — commit directly.
+        _smart_commit_pending(fid, pending)
+        job["status"] = "done"
+        job["phase"] = "smart_validating_skipped"
+        _smart_park_at_home(fid)
+        _set_calibrating(fid, False)
+        return
+
+    job["validateMarkers"] = validation_markers
+    job["validateIndex"] = 0
+    job["status"] = "validating"
+    job["phase"] = "smart_validating"
+    # Park the fixture so it stops moving until the operator clicks "aim".
+    _smart_park_at_home(fid)
+    _set_calibrating(fid, False)
+
+
+def _smart_commit_pending(fid, pending):
+    """#720 PR-6 — write a staged SMART calibration to disk and flip
+    the fixture's `moverCalibrated` flag. Used by both the auto-commit
+    (no markers) path and the operator's all-yes confirmation path."""
+    _mover_cal[str(fid)] = dict(pending)
+    _save("mover_calibrations", _mover_cal)
+    _invalidate_mover_model(fid)
+    f = next((x for x in _fixtures if x["id"] == fid), None)
+    if f is not None:
+        f["moverCalibrated"] = True
+        _save("fixtures", _fixtures)
+
+
+# Module-level alias so tests can monkeypatch the probe hook without
+# reaching into the closure of the body function.
+_smart_probe_point = _smart_probe_point_default
+
+
 def _mover_cal_thread_v2(fid, cam, bridge_ip, mover_color,
                           warmup=False, warmup_seconds=30.0,
                           target_overrides=None):
@@ -7627,7 +8229,7 @@ def api_mover_cal_start(fid):
         return jsonify(err=("Manual (jog-marker) mode uses the jog wizard — "
                              "POST to /api/calibration/mover/<fid>/manual with "
                              "the recorded samples")), 400
-    if mode not in ("legacy", "v2", "markers", "all-auto"):
+    if mode not in ("legacy", "v2", "markers", "all-auto", "smart"):
         mode = "legacy"
     target_overrides = body.get("targets")  # optional list of [x, y, z]
     job = {"status": "running", "phase": "starting", "progress": 0,
@@ -7643,7 +8245,19 @@ def api_mover_cal_start(fid):
     _mcal.reset_probe_counter()
     _mcal_log(job, f"Calibration started (mode={mode}, camera={cam.get('name','?')}, "
                    f"bridge={bridge_ip})")
-    if mode == "v2":
+    if mode == "smart":
+        # #720 PR-4 — SMART probe loop. Computes envelope + working
+        # area from PR-2/PR-3 helpers, then drives `_smart_probe_run`
+        # which collects (predicted_xyz, measured_xyz, dmx_pair) tuples
+        # for the PR-5 solver. Status strings: smart_preview /
+        # smart_probing / smart_solving / smart_validating.
+        job["method"] = "smart"
+        job["phase"] = "smart_preview"
+        t = threading.Thread(
+            target=_mover_cal_thread_smart,
+            args=(fid, cam, bridge_ip, color, warmup, warmup_seconds),
+            daemon=True)
+    elif mode == "v2":
         t = threading.Thread(
             target=_mover_cal_thread_v2,
             args=(fid, cam, bridge_ip, color, warmup, warmup_seconds,
@@ -7747,6 +8361,19 @@ def api_mover_cal_status(fid):
                     resp["model"] = cal["model"]
             if "verification" in cal:
                 resp["verification"] = cal["verification"]
+            # #720 — surface SMART metadata + the legacy-method flag so
+            # the SPA can badge fixtures that need re-running.
+            if cal.get("method") == "smart":
+                resp["method"] = "smart"
+                if "model" in cal:
+                    resp["model"] = cal["model"]
+                if "residuals" in cal:
+                    resp["residuals"] = cal["residuals"]
+                if "confidence" in cal:
+                    resp["confidence"] = cal["confidence"]
+            if cal.get("legacyMethod"):
+                resp["legacyMethod"] = cal["legacyMethod"]
+                resp["needsSmartRecal"] = True
             return jsonify(**resp)
         return jsonify(status="none", calibrated=False,
                        calibrationLocked=bool(_fixture_is_calibrating(fid)))
@@ -8088,35 +8715,62 @@ def api_mover_cal_exclude_sample(fid):
 
 @app.post("/api/calibration/mover/<int:fid>/aim")
 def api_mover_cal_aim(fid):
-    """Use calibration grid to aim a mover at a target pixel or stage position.
+    """Use calibration data to aim a mover at a target pixel or stage position.
     Body: {targetX, targetY} (stage mm) or {pixelX, pixelY}
 
-    Q9-P3 phase 5 prep — this route still carries the legacy grid_inverse
-    pathway for operator "aim here now" flows during cal debugging. The v2
-    ParametricFixtureModel is the authoritative inverse for show bake +
-    track actions; this aim API is a diagnostic tool only.
+    #720 PR-1.5: when a SMART model OR Home+Home-Secondary is present,
+    stage targets are routed through ``coverage_math`` (world →
+    fixture-internal angles via ``world_to_fixture_pt`` →
+    ``angles_to_dmx``) so this endpoint and ``/api/mover/<fid>/aim-angles``
+    share one implementation. The legacy grid_inverse / affine_pan_tilt
+    path remains as a fallback for fixtures that haven't been through the
+    home-secondary wizard yet; PR-7 deletes the fallback.
     """
     # #679 — respect the calibration lock: if the fixture is mid-run,
     # writing pan/tilt through this diagnostic endpoint races the
     # calibration thread and corrupts its samples (violates #511).
     if _fixture_is_calibrating(fid):
         return jsonify(err="Fixture is currently calibrating"), 409
-    cal = _mover_cal.get(str(fid))
-    if not cal or (not cal.get("grid") and not cal.get("samples")):
-        return jsonify(err="Fixture not calibrated"), 400
     f = next((f for f in _fixtures if f["id"] == fid), None)
     if not f:
         return jsonify(err="Fixture not found"), 404
+    cal = _mover_cal.get(str(fid))
     body = request.get_json(silent=True) or {}
-    grid = cal.get("grid")  # Q9-P3 — v2 cals legitimately lack this key.
     pan = tilt = None
 
-    # Stage coordinate target — use affine transform for extrapolation (#371)
     tx = body.get("targetX")
     ty = body.get("targetY")
     tz = body.get("targetZ", 0)
+
+    # #720 PR-1.5 — SMART path: world stage target → fixture-internal
+    # angles → DMX, all through coverage_math. Active whenever the
+    # fixture has either a SMART model or Home + Home-Secondary.
     if tx is not None and ty is not None:
-        samples = cal.get("samples", [])
+        model, _conf = _resolve_mover_model(fid, f)
+        if model is not None:
+            try:
+                from coverage_math import world_to_fixture_pt, angles_to_dmx
+                fix_pos = _fixture_position(fid)
+                rot = f.get("rotation") or [0.0, 0.0, 0.0]
+                angles = world_to_fixture_pt(
+                    (float(tx), float(ty), float(tz or 0)),
+                    fix_pos, rot)
+                if angles is not None:
+                    pan_dmx16, tilt_dmx16 = angles_to_dmx(
+                        angles[0], angles[1], model)
+                    pan = pan_dmx16 / 65535.0
+                    tilt = tilt_dmx16 / 65535.0
+            except Exception as e:
+                log.debug("/aim SMART path failed for fid %s: %s — falling back",
+                          fid, e)
+
+    # Legacy paths (PR-7 will remove these once SMART is the default).
+    if pan is None and not cal:
+        return jsonify(err="Fixture not calibrated"), 400
+    grid = (cal or {}).get("grid")  # Q9-P3 — v2 cals legitimately lack this key.
+
+    if pan is None and tx is not None and ty is not None:
+        samples = (cal or {}).get("samples", [])
         if samples and len(samples) >= 2:
             pt = _mcal.affine_pan_tilt(samples, tx, ty, tz)
             if pt:
@@ -8125,7 +8779,7 @@ def api_mover_cal_aim(fid):
         if pan is None and grid:
             pan, tilt = _mcal.grid_inverse(grid, tx, ty)
 
-    # Direct pixel target
+    # Direct pixel target — legacy only, never routed through SMART.
     if pan is None:
         px = body.get("pixelX")
         py = body.get("pixelY")
@@ -8152,6 +8806,386 @@ def api_mover_cal_aim(fid):
                 pass
         return jsonify(ok=True, pan=round(pan, 4), tilt=round(tilt, 4))
     return jsonify(err="Provide targetX/targetY (stage mm) or pixelX/pixelY"), 400
+
+
+# ── #720 PR-3 — SMART preview (working area + 16-point probe grid) ─────
+#
+# Renders, doesn't probe. Operator sees the cone ∩ camera-visible-floor
+# and the 16 probe points before any DMX is committed. ``abortReason``
+# is set when the working area is empty or smaller than 50 cm².
+
+MIN_WORKING_AREA_MM2 = 500_000  # 50 cm² — below this SMART can't sample
+
+
+@app.get("/api/calibration/mover/<int:fid>/smart/preview")
+def api_mover_smart_preview(fid):
+    """#720 PR-3 — top-down preview of the SMART working area + probe grid.
+
+    Computes:
+      coveragePoly        — fixture envelope projected onto floor
+      cameraVisiblePoly   — union of all positioned cameras' visible floor
+      workingPoly         — coveragePoly ∩ cameraVisiblePoly (inward
+                             buffer enforced per-point in sample_grid)
+      probePoints         — up to 16 points distributed across workingPoly
+      abortReason         — set when workingPoly is empty / too small,
+                             or the fixture is missing required data.
+    """
+    f = next((x for x in _fixtures if x.get("id") == fid), None)
+    if not f:
+        return jsonify(err="Fixture not found"), 404
+    if f.get("fixtureType") != "dmx":
+        return jsonify(err="SMART applies to DMX mover fixtures only"), 400
+
+    pid = f.get("dmxProfileId")
+    prof_info = _profile_lib.channel_info(pid) if pid else None
+    if not prof_info:
+        return jsonify(ok=True, abortReason="no_profile",
+                       coveragePoly=[], cameraVisiblePoly=[],
+                       workingPoly=[], probePoints=[])
+
+    fix_pos = _fixture_position(fid)
+    rot = f.get("rotation") or [0.0, 0.0, 0.0]
+
+    floor_z = 0.0
+    try:
+        surfaces, _age, _warn = _surface_model_for_cal()
+        if isinstance(surfaces, dict):
+            floor = surfaces.get("floor") or {}
+            z = floor.get("z")
+            if z is None:
+                z = floor.get("y")
+            if isinstance(z, (int, float)):
+                floor_z = float(z)
+    except Exception:
+        pass
+
+    from coverage_math import (
+        coverage_polygon, working_area, sample_grid,
+        _polygon_signed_area,
+    )
+    from surface_analyzer import union_camera_floor_polygons
+
+    coverage_poly = coverage_polygon(fix_pos, rot, prof_info, floor_z)
+    cam_polys = _camera_floor_polygons_for_cal(f)
+    cam_union = union_camera_floor_polygons(cam_polys)
+
+    if not coverage_poly:
+        return jsonify(ok=True, abortReason="no_floor_coverage",
+                       coveragePoly=[], cameraVisiblePoly=cam_union,
+                       workingPoly=[], probePoints=[])
+    if not cam_union:
+        return jsonify(ok=True, abortReason="no_camera_floor",
+                       coveragePoly=coverage_poly, cameraVisiblePoly=[],
+                       workingPoly=[], probePoints=[])
+
+    working_poly = working_area(coverage_poly, cam_union, margin_mm=150)
+    abort = None
+    if not working_poly:
+        abort = "no_overlap"
+    else:
+        area = abs(_polygon_signed_area(working_poly))
+        if area < MIN_WORKING_AREA_MM2:
+            abort = "working_area_too_small"
+
+    probe_points = []
+    insufficient = False
+    if not abort:
+        probe_points = sample_grid(working_poly, n=16,
+                                    min_edge_margin_mm=150)
+        if len(probe_points) < 16:
+            insufficient = True
+
+    return jsonify(ok=True,
+                   coveragePoly=coverage_poly,
+                   cameraVisiblePoly=cam_union,
+                   workingPoly=working_poly,
+                   probePoints=probe_points,
+                   insufficient=insufficient,
+                   abortReason=abort,
+                   floorZ=floor_z)
+
+
+# ── #720 PR-6 — SMART validation pass (operator-confirmed markers) ─────
+#
+# After the SMART solver succeeds, the cal record is *staged* (held in
+# `_mover_cal_jobs[fid]["pendingCommit"]`, not yet written to disk).
+# The SPA walks each surveyed ArUco marker inside the working area:
+#   1. POST .../smart/validate/aim {markerId} — server slews the
+#      fixture to the marker via the staged model. Returns the DMX
+#      values written so the SPA can show what it commanded.
+#   2. POST .../smart/validate/confirm {markerId, hit: bool} — operator
+#      yes/no per marker. On all-yes: pending model is committed; on
+#      any-no: pending discarded, status flips to error_validation_failed
+#      and the prior cal record (if any) stays untouched.
+
+def _smart_validate_job(fid):
+    job = _mover_cal_jobs.get(str(fid))
+    if not job:
+        return None, ("no calibration job for this fixture", 404)
+    if job.get("status") != "validating" or not job.get("pendingCommit"):
+        return None, ("job not awaiting validation — current status: "
+                       f"{job.get('status')}", 409)
+    return job, None
+
+
+@app.get("/api/calibration/mover/<int:fid>/smart/validate/state")
+def api_mover_smart_validate_state(fid):
+    """#720 PR-6 — return the current marker queue + per-marker
+    confirmation state. Used by the SPA to render the validation panel
+    after polling cal status finds ``status: validating``."""
+    job = _mover_cal_jobs.get(str(fid))
+    if not job:
+        return jsonify(err="no job for this fixture"), 404
+    return jsonify(ok=True,
+                   status=job.get("status"),
+                   phase=job.get("phase"),
+                   markers=job.get("validateMarkers", []),
+                   currentIndex=job.get("validateIndex", 0),
+                   pendingCommit=bool(job.get("pendingCommit")))
+
+
+@app.post("/api/calibration/mover/<int:fid>/smart/validate/aim")
+def api_mover_smart_validate_aim(fid):
+    """Slew to a marker via the staged SMART model. Body: ``{markerId}``."""
+    job, err = _smart_validate_job(fid)
+    if err:
+        msg, code = err
+        return jsonify(err=msg), code
+    body = request.get_json(silent=True) or {}
+    try:
+        marker_id = int(body["markerId"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify(err="markerId required"), 400
+    markers = job.get("validateMarkers", [])
+    marker = next((m for m in markers if int(m.get("id")) == marker_id), None)
+    if marker is None:
+        return jsonify(err=f"marker {marker_id} not in validation queue"), 404
+
+    f = next((x for x in _fixtures if x["id"] == fid), None)
+    if not f:
+        return jsonify(err="Fixture not found"), 404
+    pending_model = job["pendingCommit"]["model"]
+    pid = f.get("dmxProfileId")
+    prof_info = _profile_lib.channel_info(pid) if pid else None
+    if not prof_info:
+        return jsonify(err="Fixture has no DMX profile"), 400
+
+    if not _artnet.running and not _sacn.running:
+        return jsonify(err="Art-Net engine not running"), 503
+
+    from coverage_math import world_to_fixture_pt, angles_to_dmx
+    fix_pos = _fixture_position(fid)
+    rot = f.get("rotation") or [0.0, 0.0, 0.0]
+    angles = world_to_fixture_pt(
+        (float(marker["x"]), float(marker["y"]), float(marker["z"])),
+        fix_pos, rot)
+    if angles is None:
+        return jsonify(err="ik_degenerate"), 400
+    pan_dmx16, tilt_dmx16 = angles_to_dmx(angles[0], angles[1], pending_model)
+
+    engine = _artnet if _artnet.running else _sacn
+    profile = {"channel_map": prof_info.get("channel_map", {}),
+               "channels": prof_info.get("channels", [])}
+    try:
+        uni = int(f.get("dmxUniverse", 1))
+        addr = int(f.get("dmxStartAddr", 1))
+        uni_buf = engine.get_universe(uni)
+        uni_buf.set_fixture_pan_tilt(addr,
+                                     pan_dmx16 / 65535.0,
+                                     tilt_dmx16 / 65535.0,
+                                     profile)
+        uni_buf.set_fixture_dimmer(addr, 255, profile)
+        uni_buf.set_fixture_rgb(addr, 0, 255, 0, profile)
+    except Exception as e:
+        log.warning("smart/validate/aim DMX write failed: %s", e)
+        return jsonify(err="dmx_write_failed", detail=str(e)), 500
+
+    return jsonify(ok=True,
+                   markerId=marker_id,
+                   panDmx16=pan_dmx16, tiltDmx16=tilt_dmx16,
+                   panDeg=angles[0], tiltDeg=angles[1])
+
+
+@app.post("/api/calibration/mover/<int:fid>/smart/validate/confirm")
+def api_mover_smart_validate_confirm(fid):
+    """Operator yes/no for the currently-aimed marker. Body:
+    ``{markerId, hit: bool}``. After every marker is answered:
+    all-yes commits the staged model; any-no discards, sets status
+    ``error_validation_failed``."""
+    job, err = _smart_validate_job(fid)
+    if err:
+        msg, code = err
+        return jsonify(err=msg), code
+    body = request.get_json(silent=True) or {}
+    try:
+        marker_id = int(body["markerId"])
+        hit = bool(body["hit"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify(err="markerId + hit required"), 400
+    markers = job.get("validateMarkers", [])
+    marker = next((m for m in markers if int(m.get("id")) == marker_id), None)
+    if marker is None:
+        return jsonify(err=f"marker {marker_id} not in queue"), 404
+    marker["confirmed"] = hit
+
+    pending = job.get("pendingCommit") or {}
+    answered = [m for m in markers if m.get("confirmed") is not None]
+    misses = [m for m in markers if m.get("confirmed") is False]
+
+    if misses:
+        # Any miss invalidates the SMART run.
+        job["status"] = "error_validation_failed"
+        job["phase"] = "validation_failed"
+        job["error"] = (f"validation_failed: marker(s) "
+                         f"{[m['id'] for m in misses]} did not hit")
+        job.pop("pendingCommit", None)
+        # Park fixture; do NOT touch _mover_cal[str(fid)] — prior record
+        # (if any) stays exactly as it was.
+        try:
+            _smart_park_at_home(fid)
+        except Exception:
+            pass
+        return jsonify(ok=True,
+                       committed=False,
+                       failed=True,
+                       reason="validation_failed",
+                       misses=[m["id"] for m in misses])
+
+    if len(answered) < len(markers):
+        # More markers still to walk.
+        next_pending = next((m for m in markers
+                              if m.get("confirmed") is None), None)
+        next_idx = markers.index(next_pending) if next_pending else len(markers)
+        job["validateIndex"] = next_idx
+        return jsonify(ok=True,
+                       committed=False,
+                       remaining=len([m for m in markers
+                                       if m.get("confirmed") is None]),
+                       nextMarkerId=(next_pending or {}).get("id"))
+
+    # All-yes path → commit.
+    _smart_commit_pending(fid, pending)
+    job["status"] = "done"
+    job["phase"] = "validation_passed"
+    job.pop("pendingCommit", None)
+    try:
+        _smart_park_at_home(fid)
+    except Exception:
+        pass
+    return jsonify(ok=True,
+                   committed=True,
+                   confidence=pending.get("confidence"),
+                   sampleCount=pending.get("sampleCount"))
+
+
+# ── #720 PR-1.5 — Angular aim endpoint (canonical low-level move) ──────
+#
+# `POST /api/mover/<fid>/aim-angles {panDeg, tiltDeg}` is the single
+# canonical way to point a moving head at a fixture-internal angle.
+# Resolution priority (after PR-7 the legacy fallthrough is removed):
+#   1. SMART model (mover_calibrations.json `model.panDmxPerDeg`+friends)
+#   2. 2-pair Home + Home-Secondary affine estimate
+#   3. 400 fixture_not_calibrated
+# After PR-2.5 the mover-control engine and the existing /aim endpoint
+# both fold onto this primitive — collapsing the three pan/tilt → DMX
+# implementations into one.
+
+def _resolve_mover_model(fid, fixture):
+    """Return ``(model, confidence)`` for an `aim-angles` move.
+
+    Resolution: SMART model → 2-pair estimate → ``(None, None)``.
+    The caller decides what to do with ``None``.
+    """
+    cal = _mover_cal.get(str(fid)) or {}
+    model = cal.get("model")
+    if model and "panDmxPerDeg" in model and "tiltDmxPerDeg" in model:
+        # Carry the SMART solver's confidence verdict if present.
+        conf = model.get("confidence") or cal.get("confidence") or "high"
+        return (model, conf)
+
+    home_pan = fixture.get("homePanDmx16")
+    home_tilt = fixture.get("homeTiltDmx16")
+    sec = fixture.get("homeSecondary")
+    if home_pan is None or home_tilt is None or not sec:
+        return (None, None)
+
+    pid = fixture.get("dmxProfileId")
+    prof_info = _profile_lib.channel_info(pid) if pid else None
+    pan_range = (prof_info or {}).get("panRange", 540)
+    try:
+        from coverage_math import solve_dmx_per_degree
+        est = solve_dmx_per_degree(
+            {"panDmx16": home_pan, "tiltDmx16": home_tilt},
+            sec,
+            fixture.get("rotation") or [0.0, 0.0, 0.0],
+            pan_range,
+        )
+    except Exception as e:
+        log.warning("aim-angles 2-pair estimate failed for fid %s: %s", fid, e)
+        return (None, None)
+    return (est, "estimate")
+
+
+@app.post("/api/mover/<int:fid>/aim-angles")
+def api_mover_aim_angles(fid):
+    """Aim a moving-head fixture at a fixture-internal ``(panDeg, tiltDeg)``.
+
+    Body: ``{panDeg: float, tiltDeg: float, settleMs?: int}``. Internal
+    angles are mount-relative — at Home they are both 0. Output DMX is
+    resolved from the SMART model when available, else from the
+    Home + Home-Secondary 2-pair estimate (PR-1.5).
+    """
+    if _fixture_is_calibrating(fid):
+        return jsonify(err="Fixture is currently calibrating"), 409
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f:
+        return jsonify(err="Fixture not found"), 404
+    if f.get("fixtureType") != "dmx":
+        return jsonify(err="aim-angles applies to DMX mover fixtures only"), 400
+    body = request.get_json(silent=True) or {}
+    try:
+        pan_deg = float(body["panDeg"])
+        tilt_deg = float(body["tiltDeg"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify(err="panDeg and tiltDeg are required numbers"), 400
+    settle_ms = int(body.get("settleMs", 0))
+    settle_ms = max(0, min(5000, settle_ms))
+
+    model, confidence = _resolve_mover_model(fid, f)
+    if model is None:
+        return jsonify(err="fixture_not_calibrated"), 400
+
+    from coverage_math import angles_to_dmx
+    pan_dmx16, tilt_dmx16 = angles_to_dmx(pan_deg, tilt_deg, model)
+
+    if not _artnet.running and not _sacn.running:
+        return jsonify(err="Art-Net engine not running — start it from "
+                            "Settings → DMX Engine before aiming"), 503
+    engine = _artnet if _artnet.running else _sacn
+    pid = f.get("dmxProfileId")
+    prof_info = _profile_lib.channel_info(pid) if pid else None
+    if not prof_info:
+        return jsonify(err="Fixture has no DMX profile"), 400
+    profile = {"channel_map": prof_info.get("channel_map", {}),
+               "channels": prof_info.get("channels", [])}
+    try:
+        uni = f.get("dmxUniverse", 1)
+        addr = f.get("dmxStartAddr", 1)
+        uni_buf = engine.get_universe(uni)
+        uni_buf.set_fixture_pan_tilt(addr,
+                                     pan_dmx16 / 65535.0,
+                                     tilt_dmx16 / 65535.0,
+                                     profile)
+    except Exception as e:
+        log.warning("aim-angles DMX write failed: %s", e)
+        return jsonify(err="dmx_write_failed", detail=str(e)), 500
+
+    if settle_ms > 0:
+        time.sleep(settle_ms / 1000.0)
+
+    return jsonify(ok=True,
+                   panDmx16=pan_dmx16, tiltDmx16=tilt_dmx16,
+                   confidence=confidence)
 
 
 # ── #699 — Verify Fixture Pose wizard ───────────────────────────────────
@@ -18205,6 +19239,50 @@ def _check_single_instance(port):
         pass
     return False
 
+def _migrate_smart_legacy_flag():
+    """#720 PR-7 — flag pre-SMART calibration records on disk.
+
+    Records on disk that lack the canonical SMART ``model`` field
+    (``panDmxPerDeg`` / ``tiltDmxPerDeg`` / ``homePanDmx16`` /
+    ``homeTiltDmx16``) are pre-SMART. They still drive the legacy
+    ``/aim`` fallback today, but PR-7's deletion phase removes that
+    fallback. This migration tags those records with
+    ``legacyMethod: <prior method or "v1grid">`` so the SPA can show
+    a "needs SMART recalibration" badge and the operator knows to
+    re-run before the legacy path is removed.
+
+    Idempotent: once tagged, repeat runs leave the record alone.
+    """
+    flagged = 0
+    for fid_str, cal in list((_mover_cal or {}).items()):
+        if not isinstance(cal, dict):
+            continue
+        model = cal.get("model") or {}
+        is_smart = bool(model
+                         and "panDmxPerDeg" in model
+                         and "tiltDmxPerDeg" in model
+                         and "homePanDmx16" in model
+                         and "homeTiltDmx16" in model)
+        if is_smart:
+            # Modern SMART record. Make sure we haven't left a stale
+            # legacy flag on it.
+            if "legacyMethod" in cal:
+                cal.pop("legacyMethod", None)
+                flagged += 1
+            continue
+        if "legacyMethod" in cal:
+            continue
+        prior = cal.get("method") or ("v1grid" if cal.get("grid") else "unknown")
+        cal["legacyMethod"] = prior
+        flagged += 1
+    if flagged:
+        try:
+            _save("mover_calibrations", _mover_cal)
+        except Exception as e:
+            log.warning("PR-7 legacy flag persist failed: %s", e)
+        log.info("PR-7 legacy mover-cal migration: tagged %d records", flagged)
+
+
 def _migrate_v1_mover_cals():
     """Q9-P3 Phase 1 — eager v1→v2 mover-cal migration on startup.
 
@@ -18266,6 +19344,13 @@ if __name__ == "__main__":
         _migrate_rotation_schema()
     except Exception as _e:
         log.warning("#600 rotation migration on startup failed: %s", _e)
+    # #720 PR-7 — flag legacy (pre-SMART) calibration records so the SPA
+    # can prompt operators to re-run SMART before the legacy aim
+    # fallback is removed. Idempotent.
+    try:
+        _migrate_smart_legacy_flag()
+    except Exception as _e:
+        log.warning("#720 SMART legacy flag migration failed: %s", _e)
     ap = argparse.ArgumentParser(description="SlyLED Parent Server")
     ap.add_argument("--port",       type=int, default=8080)
     ap.add_argument("--host",       default="0.0.0.0")

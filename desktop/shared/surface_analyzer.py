@@ -13,6 +13,57 @@ import time
 log = logging.getLogger("slyled")
 
 
+# ── #720 PR-3 — camera-visible-floor union ─────────────────────────────
+#
+# The SMART working area is `coverage_cone ∩ union(camera_visible_floor)`.
+# Per-camera polygons live in ``camera_math.camera_floor_polygon``;
+# this helper merges them into a single visibility polygon. We use
+# convex-hull as a first-pass approximation — true polygon union is
+# significantly more code and the hull's only failure mode (claiming
+# floor between two non-overlapping cameras) is benign for SMART
+# (probes there will simply miss beam-detect and the run continues).
+
+def union_camera_floor_polygons(camera_polys):
+    """Approximate the union of multiple camera-visible-floor polygons.
+
+    Uses the convex hull of all input vertices — a minor over-claim
+    when cameras don't cover contiguous floor, intentional per
+    docstring trade-off. Returns ``[]`` when no input polygons have
+    enough vertices.
+
+    ``camera_polys`` is an iterable of polygons, each ``[(x, y), ...]``
+    or ``[[x, y], ...]``.
+    """
+    pts = []
+    for poly in (camera_polys or []):
+        if not poly:
+            continue
+        for p in poly:
+            if len(p) >= 2:
+                pts.append((float(p[0]), float(p[1])))
+    if len(pts) < 3:
+        return []
+    pts = sorted(set((round(p[0], 6), round(p[1], 6)) for p in pts))
+    if len(pts) <= 1:
+        return [list(p) for p in pts]
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower = []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    hull = lower[:-1] + upper[:-1]
+    return [[round(p[0], 3), round(p[1], 3)] for p in hull]
+
+
 def analyze_surfaces(points, floor_tolerance=100, wall_tolerance=100, min_cluster=20):
     """Analyze a point cloud to find structural surfaces.
 

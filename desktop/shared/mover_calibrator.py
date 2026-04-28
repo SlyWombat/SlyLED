@@ -3652,3 +3652,236 @@ def converge(bridge_ip, camera_ip, cam_idx,
         tilt = max(tilts[0], min(tilts[-1], tilt + d_tilt))
 
     return (best_pan, best_tilt, best_dist)
+
+
+# ── #720 PR-5 — SMART solver (IK-first LSQ fit) ────────────────────────
+#
+# Fits the corrected pan/tilt → DMX model from Home + Home-Secondary +
+# 0..16 successful probe samples. The forward IK
+# (`coverage_math.world_to_fixture_pt`) maps each `(x, y, z)` measured
+# floor point to fixture-internal `(panDeg, tiltDeg)`; we then linear-
+# least-squares fit the affine mapping
+#
+#     panDmx16  = panSign  * panDmxPerDeg  * panDeg  + panBiasDmx
+#     tiltDmx16 = tiltSign * tiltDmxPerDeg * tiltDeg + tiltBiasDmx
+#
+# Signs are seeded from the 2-pair Home+Secondary estimate (so we never
+# accidentally flip 180°) and held fixed. The four scalars
+# (panDmxPerDeg, tiltDmxPerDeg, panBiasDmx, tiltBiasDmx) are the
+# regression unknowns. Both axes are independent (separate LSQ each).
+
+# Maximum tolerated RMS residual in mm — enforced only when N >= 4
+# (statistical basis for rejection).
+SMART_MAX_RMS_MM = 100.0
+
+
+def _smart_solve(samples, home, secondary, fixture_xyz, rotation,
+                  profile_pan_range_deg):
+    """Fit a SMART calibration model.
+
+    ``samples`` is the per-probe list emitted by ``_smart_probe_run`` —
+    each entry has ``target`` (predicted floor XYZ), ``panDmx16`` /
+    ``tiltDmx16`` (DMX written), ``panDeg`` / ``tiltDeg`` (predicted
+    fixture-internal angles), and ``found``. Found samples additionally
+    carry ``measured`` (camera-detected stage XYZ).
+
+    ``home``, ``secondary`` are the persisted Home + Home-Secondary
+    blocks from ``fixtures.json`` (PR-1 shape). ``fixture_xyz`` is the
+    fixture's stage position; ``rotation`` is its layout-rotation array;
+    ``profile_pan_range_deg`` is the profile's panRange in degrees.
+
+    Returns ``{model, residuals, confidence, sampleCount}``. Confidence
+    ladder:
+
+      | N successful | Behaviour                                              |
+      |--------------|--------------------------------------------------------|
+      | 0            | Caller (PR-4) aborts before calling solver.            |
+      | 1            | Fall back to 2-pair estimate; sample logged for record |
+      | 2..3         | Affine fit, "medium", no RMS gate.                     |
+      | 4..18        | Standard LSQ, "high", RMS gate active.                 |
+
+    Raises ``CalibrationError("error_high_residual", residuals=...)``
+    when N >= 4 and RMS > SMART_MAX_RMS_MM. The caller leaves the
+    prior calibration record untouched and the SPA prompts a re-run.
+    """
+    import numpy as np
+    from coverage_math import (
+        solve_dmx_per_degree, world_to_fixture_pt,
+    )
+
+    if home is None or secondary is None:
+        raise CalibrationError("SMART solver requires Home + Home-Secondary")
+
+    estimate = solve_dmx_per_degree(
+        home, secondary, rotation, profile_pan_range_deg)
+    pan_sign = +1 if estimate["panDmxPerDeg"] >= 0 else -1
+    tilt_sign = +1 if estimate["tiltDmxPerDeg"] >= 0 else -1
+
+    successful = [s for s in (samples or []) if s.get("found")]
+    n = len(successful)
+
+    # N == 0 should not reach here (PR-4 aborts), but treat defensively.
+    if n == 0:
+        raise CalibrationError("SMART solver: zero successful samples")
+
+    # Build LSQ rows: Home (panDeg=tiltDeg=0) + Secondary + N probes.
+    # Pan axis:  rows = [(panDeg, panDmx16)]
+    # Tilt axis: rows = [(tiltDeg, tiltDmx16)]
+
+    # Home pair: (0, 0) → (homePan, homeTilt)
+    pan_rows = [(0.0, int(home["panDmx16"]))]
+    tilt_rows = [(0.0, int(home["tiltDmx16"]))]
+
+    # Secondary pair: derive Secondary's (panDeg, tiltDeg) the same way
+    # solve_dmx_per_degree did (delta-from-DMX-fraction for pan; operator
+    # stage-tilt minus IK-derived home-tilt for tilt).
+    delta_pan_dmx = int(secondary["panDmx16"]) - int(home["panDmx16"])
+    sec_pan_deg = (delta_pan_dmx / 65535.0) * float(profile_pan_range_deg or 540)
+    sec_tilt_deg = (float(secondary["operatorTiltDeg"])
+                    - estimate["homeTiltDegStage"])
+    pan_rows.append((sec_pan_deg, int(secondary["panDmx16"])))
+    tilt_rows.append((sec_tilt_deg, int(secondary["tiltDmx16"])))
+
+    # Probe samples: re-IK each measured XYZ to (panDeg, tiltDeg).
+    per_sample_residuals = []
+    for s in successful:
+        meas = s.get("measured")
+        if not meas or len(meas) < 3:
+            continue
+        angles = world_to_fixture_pt(
+            (float(meas[0]), float(meas[1]), float(meas[2])),
+            fixture_xyz, rotation)
+        if angles is None:
+            continue
+        pan_rows.append((float(angles[0]), int(s["panDmx16"])))
+        tilt_rows.append((float(angles[1]), int(s["tiltDmx16"])))
+
+    # N == 1 path: linear fit on 3 rows is over-determined for affine
+    # — but the single probe shares the bearing or tilt of Home in
+    # extreme cases, so prefer the 2-pair estimate (noise-free) and
+    # treat the probe as residual evidence.
+    if n == 1 and len(pan_rows) <= 3:
+        model = {
+            "panDmxPerDeg": float(estimate["panDmxPerDeg"]),
+            "tiltDmxPerDeg": float(estimate["tiltDmxPerDeg"]),
+            "panSign": pan_sign,
+            "tiltSign": tilt_sign,
+            "panBiasDmx": 0,
+            "tiltBiasDmx": 0,
+            "homePanDmx16": int(home["panDmx16"]),
+            "homeTiltDmx16": int(home["tiltDmx16"]),
+        }
+        residuals = _smart_compute_residuals(successful, model, fixture_xyz, rotation)
+        return {
+            "model": model,
+            "residuals": residuals,
+            "confidence": "low",
+            "sampleCount": n,
+            "fitRows": len(pan_rows),
+            "fallbackToEstimate": True,
+        }
+
+    # LSQ fit each axis independently.
+    def _fit(rows):
+        # rows = [(deg, dmx), ...]
+        A = np.array([[float(r[0]), 1.0] for r in rows], dtype=np.float64)
+        b = np.array([float(r[1]) for r in rows], dtype=np.float64)
+        # lstsq returns (coef, residuals, rank, sv)
+        sol, *_ = np.linalg.lstsq(A, b, rcond=None)
+        slope, bias = float(sol[0]), float(sol[1])
+        return slope, bias
+
+    pan_slope, pan_bias = _fit(pan_rows)
+    tilt_slope, tilt_bias = _fit(tilt_rows)
+
+    # Honour the seeded signs: the slope's sign should match the seed.
+    # If the LSQ flipped sign vs the estimate (pathological data), keep
+    # the magnitude but restore the seeded sign so downstream
+    # angles_to_dmx doesn't aim 180° wrong.
+    if (pan_slope >= 0) != (pan_sign > 0):
+        pan_slope = -pan_slope
+    if (tilt_slope >= 0) != (tilt_sign > 0):
+        tilt_slope = -tilt_slope
+
+    model = {
+        "panDmxPerDeg": pan_slope,
+        "tiltDmxPerDeg": tilt_slope,
+        "panSign": pan_sign,
+        "tiltSign": tilt_sign,
+        "panBiasDmx": pan_bias - int(home["panDmx16"]),
+        "tiltBiasDmx": tilt_bias - int(home["tiltDmx16"]),
+        # angles_to_dmx assumes panDmx = homePan + panDeg * perDeg. The
+        # LSQ bias absorbs the "homePan" offset, so for that helper we
+        # store homePanDmx16 = bias and the perDeg slope is unchanged.
+        "homePanDmx16": int(round(pan_bias)),
+        "homeTiltDmx16": int(round(tilt_bias)),
+    }
+
+    residuals = _smart_compute_residuals(successful, model, fixture_xyz, rotation)
+
+    if n >= 4 and residuals.get("rmsMm", 0.0) > SMART_MAX_RMS_MM:
+        err = CalibrationError(
+            f"error_high_residual: RMS {residuals['rmsMm']:.1f} mm > "
+            f"{SMART_MAX_RMS_MM:.0f} mm gate; {n} probes")
+        err.residuals = residuals
+        err.model = model
+        raise err
+
+    confidence = "high" if n >= 4 else ("medium" if n >= 2 else "low")
+    return {
+        "model": model,
+        "residuals": residuals,
+        "confidence": confidence,
+        "sampleCount": n,
+        "fitRows": len(pan_rows),
+        "fallbackToEstimate": False,
+    }
+
+
+def _smart_compute_residuals(samples, model, fixture_xyz, rotation):
+    """For each successful sample, re-project DMX through the model
+    back to a predicted floor XYZ and measure distance to the actual
+    measured XYZ. Returns ``{rmsMm, maxMm, perPoint}``."""
+    import math
+    from coverage_math import dmx_to_angles, fixture_aim_to_world
+
+    per = []
+    sq_sum = 0.0
+    max_d = 0.0
+    n = 0
+    for s in samples:
+        meas = s.get("measured")
+        if not meas or len(meas) < 3:
+            continue
+        try:
+            pan_deg, tilt_deg = dmx_to_angles(
+                int(s["panDmx16"]), int(s["tiltDmx16"]), model)
+        except Exception:
+            continue
+        floor_z = float(meas[2])
+        _axis, predicted = fixture_aim_to_world(
+            pan_deg, tilt_deg, fixture_xyz, rotation, floor_z=floor_z)
+        if predicted is None:
+            continue
+        dx = float(meas[0]) - predicted[0]
+        dy = float(meas[1]) - predicted[1]
+        dz = float(meas[2]) - predicted[2]
+        d = math.sqrt(dx * dx + dy * dy + dz * dz)
+        per.append({
+            "predicted": [round(predicted[0], 1), round(predicted[1], 1),
+                          round(predicted[2], 1)],
+            "measured": [round(float(meas[0]), 1), round(float(meas[1]), 1),
+                         round(float(meas[2]), 1)],
+            "errorMm": round(d, 1),
+        })
+        sq_sum += d * d
+        if d > max_d:
+            max_d = d
+        n += 1
+    rms = math.sqrt(sq_sum / n) if n else 0.0
+    return {
+        "rmsMm": round(rms, 1),
+        "maxMm": round(max_d, 1),
+        "perPoint": per,
+        "sampleCount": n,
+    }

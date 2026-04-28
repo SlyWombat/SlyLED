@@ -88,12 +88,31 @@ Camera nodes run on any **Linux SBC running Ubuntu 22.04+ or Debian Bookworm+** 
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/api/calibration/mover/<fid>/start` | Start unified mover calibration (background) |
+| POST | `/api/calibration/mover/<fid>/start` | Start unified mover calibration (background, accepts `mode=smart` for #720 SMART) |
 | GET | `/api/calibration/mover/<fid>/status` | Poll calibration progress |
 | POST | `/api/calibration/mover/<fid>/cancel` | Abort running calibration (blackout + release lock) |
 | GET | `/api/calibration/mover/<fid>` | Get saved calibration data |
 | DELETE | `/api/calibration/mover/<fid>` | Delete calibration |
-| POST | `/api/calibration/mover/<fid>/aim` | Aim using calibration grid |
+| POST | `/api/calibration/mover/<fid>/aim` | Aim using calibration model — SMART path when present, legacy grid as fallback |
+
+**SMART moving-head calibration (#720) — additional routes:**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/fixtures/<fid>/home` | Read Home + Home-Secondary anchors |
+| POST | `/api/fixtures/<fid>/home` | Save Home primary; optional `secondary` block atomically |
+| POST | `/api/fixtures/<fid>/home/secondary` | Save just the Home-Secondary block (operatorTiltDeg) |
+| POST | `/api/fixtures/<fid>/home/secondary/prepare` | Server-side slew to computed secondary pose; returns DMX values + profile envelope |
+| DELETE | `/api/fixtures/<fid>/home` | Clear Home primary + secondary atomically |
+| GET | `/api/fixtures/<fid>/coverage` | Coverage cone + floor-projection polygon |
+| POST | `/api/mover/<fid>/aim-angles` | Aim by fixture-internal `(panDeg, tiltDeg)` — canonical low-level move |
+| GET | `/api/calibration/mover/<fid>/smart/preview` | Working area + 16-point probe grid preview |
+| GET | `/api/calibration/mover/<fid>/smart/validate/state` | Marker queue state during validation pass |
+| POST | `/api/calibration/mover/<fid>/smart/validate/aim` | Slew to a marker via the staged SMART model |
+| POST | `/api/calibration/mover/<fid>/smart/validate/confirm` | Operator yes/no per marker; commit gate |
+
+- **SMART pipeline:** Home Wizard captures Home + Home-Secondary (PR-1). `coverage_math.py` is the canonical IK + 2-pair affine estimate (PR-1.5). Working area = coverage cone ∩ camera-visible floor (PR-3). Bound-and-probe loop collects samples (PR-4). LSQ solver fits the corrected model with confidence ladder (PR-5). ArUco marker validation pass commits the calibration (PR-6).
+- **SMART calibration record** in `mover_calibrations.json`: `{method:"smart", version:3, model:{panDmxPerDeg, tiltDmxPerDeg, panSign, tiltSign, panBiasDmx, tiltBiasDmx, homePanDmx16, homeTiltDmx16}, residuals:{rmsMm, maxMm, perPoint}, confidence:"low"|"medium"|"high", samples, timestamp}`. Pre-SMART records carry `legacyMethod` (set by startup migration) and surface `needsSmartRecal: true` in the cal-status response.
 
 - **Systemd service:** `slyled-cam` for auto-start on boot (tracked in `firmware/orangepi/slyled-cam.service`)
 - **Multi-camera support:** USB cameras only (V4L2). Filters SoC/ISP video nodes (sunxi-vin, bcm2835-isp). Pi CSI ribbon cameras not supported in v1.x.
@@ -201,12 +220,23 @@ Camera nodes run on any **Linux SBC running Ubuntu 22.04+ or Debian Bookworm+** 
 | GET | `/api/cameras/<id>/snapshot` | Proxy JPEG snapshot from camera node |
 | GET | `/api/cameras/<id>/status` | Live status from camera node |
 | POST | `/api/cameras/<id>/scan` | Forward camera scan to camera node |
-| POST | `/api/calibration/mover/<fid>/start` | Start unified mover calibration (background) |
-| GET | `/api/calibration/mover/<fid>/status` | Poll calibration progress |
+| POST | `/api/calibration/mover/<fid>/start` | Start unified mover calibration (`mode=smart` for #720 SMART, else legacy modes) |
+| GET | `/api/calibration/mover/<fid>/status` | Poll calibration progress (returns `method`, `confidence`, `residuals`, `legacyMethod`) |
 | POST | `/api/calibration/mover/<fid>/cancel` | Abort running calibration (blackout + release lock) |
 | GET | `/api/calibration/mover/<fid>` | Get saved calibration data |
 | DELETE | `/api/calibration/mover/<fid>` | Delete calibration |
-| POST | `/api/calibration/mover/<fid>/aim` | Aim using calibration grid |
+| POST | `/api/calibration/mover/<fid>/aim` | Aim by stage XYZ — SMART path when calibrated, legacy grid as fallback |
+| GET | `/api/calibration/mover/<fid>/smart/preview` | #720 PR-3 — working area + 16-point probe grid |
+| GET | `/api/calibration/mover/<fid>/smart/validate/state` | #720 PR-6 — marker queue during validation pass |
+| POST | `/api/calibration/mover/<fid>/smart/validate/aim` | #720 PR-6 — slew to a marker via the staged SMART model |
+| POST | `/api/calibration/mover/<fid>/smart/validate/confirm` | #720 PR-6 — operator yes/no per marker; commits on all-yes |
+| POST | `/api/mover/<fid>/aim-angles` | #720 PR-1.5 — aim by fixture-internal `(panDeg, tiltDeg)` |
+| GET | `/api/fixtures/<fid>/home` | #720 PR-1 — read Home + Home-Secondary anchors |
+| POST | `/api/fixtures/<fid>/home` | #720 PR-1 — save Home primary, optional `secondary` block |
+| POST | `/api/fixtures/<fid>/home/secondary` | #720 PR-1 — save just the Home-Secondary block |
+| POST | `/api/fixtures/<fid>/home/secondary/prepare` | #720 PR-1 — slew to computed secondary, return DMX values |
+| DELETE | `/api/fixtures/<fid>/home` | #720 PR-1 — clear primary + secondary atomically |
+| GET | `/api/fixtures/<fid>/coverage` | #720 PR-2 — coverage cone + floor polygon |
 | GET/POST | `/api/aruco/markers` | List / upsert surveyed ArUco marker registry (#596) |
 | DELETE | `/api/aruco/markers/<id>` | Remove a surveyed marker |
 | GET | `/api/fixtures/live` | Per-fixture live output state (RGB, dimmer, pan/tilt, effect) |

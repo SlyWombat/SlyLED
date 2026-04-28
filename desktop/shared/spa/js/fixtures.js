@@ -845,10 +845,16 @@ function _setHomeBlackout(){
   // Drop dimmer to 0 so the beam isn't left on after Confirm/Cancel.
   if(!_setHomeState)return;
   var fid = _setHomeState.fid;
+  // #720 PR-1 — at the secondary step _setHomeState.pan/tilt are stale
+  // (operator left them at the home pose); use secPan16/secTilt16 if set.
+  var pan = (_setHomeState.secPan16!=null)
+    ? _setHomeState.secPan16/65535 : _setHomeState.pan;
+  var tilt = (_setHomeState.secTilt16!=null)
+    ? _setHomeState.secTilt16/65535 : _setHomeState.tilt;
   var x = new XMLHttpRequest();
   x.open('POST', '/api/fixtures/'+fid+'/dmx-test', true);
   x.setRequestHeader('Content-Type','application/json');
-  x.send(JSON.stringify({pan:_setHomeState.pan, tilt:_setHomeState.tilt, dimmer:0}));
+  x.send(JSON.stringify({pan:pan, tilt:tilt, dimmer:0}));
 }
 
 function _setHomeCancel(){
@@ -878,18 +884,130 @@ function _setHomeConfirm(){
           fx.homeSetAt = (r && r.homeSetAt) || new Date().toISOString();
         }
       });
-      _setHomeBlackout();
-      _setHomeState = null;
-      closeModal();
-      // Re-open the fixture-edit modal so the operator sees the green
-      // check + Calibrate button now enabled.
-      editFixture(fid);
+      // #720 PR-1 — transition to the Home Secondary wizard step.
+      // The legacy single-step Confirm Home is still functional if the
+      // operator backs out: the secondary block is purely additive.
+      _setHomeOpenSecondary(fid);
     } else {
       alert('Set Home failed: ' + ((r && r.err) || ('HTTP '+x.status)));
     }
   };
   x.onerror = function(){alert('Set Home: network error');};
   x.send(JSON.stringify({panDmx16: pan16, tiltDmx16: tilt16}));
+}
+
+// ── #720 PR-1 — Home Secondary wizard step ─────────────────────────────
+//
+// After the operator confirms Home (primary), we drive the fixture to a
+// computed secondary pose (25% pan offset, mid tilt) via the live DMX
+// engine, then prompt the operator for the resulting stage-frame tilt
+// angle. Two known (vector, DMX) pairs let the SMART solver bootstrap
+// pan-DMX-per-degree + tilt-DMX-per-degree without probing — see PR-1.5
+// `solve_dmx_per_degree` in coverage_math.py.
+
+function _setHomeOpenSecondary(fid){
+  var f = null;
+  _fixtures.forEach(function(fx){if(fx.id===fid)f=fx;});
+  if(!f){closeModal();return;}
+  document.getElementById('modal-title').textContent='Home Secondary — '+(f.name||'fixture '+fid);
+  document.getElementById('modal-body').innerHTML =
+    '<div style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">'
+    + 'Slewing fixture to a secondary pose (25% pan offset, tilt mid). '
+    + 'Once the beam settles, measure its angle from horizon — positive '
+    + 'up, negative down — and enter it below. This second known pose '
+    + 'lets SMART calibration bootstrap before any probes (#720 PR-1).'
+    + '</div>'
+    + '<div id="sh2-status" style="font-size:.78em;color:#64748b;margin-bottom:.5em">Slewing…</div>'
+    + '<div id="sh2-form" style="display:none">'
+    + '<label style="font-size:.82em;color:#cbd5e1">Stage-frame tilt at secondary pose '
+    + '<span id="sh2-range" style="color:#64748b"></span></label>'
+    + '<input type="number" id="sh2-tilt-deg" step="0.5" min="-90" max="90" '
+    + 'value="-30" style="width:100%;margin:.3em 0;padding:.3em" placeholder="degrees from horizon">'
+    + '<div style="margin-top:.6em;display:flex;gap:.4em;justify-content:flex-end">'
+    + '<button class="btn" onclick="_setHomeSecondarySkip()" style="background:#1e293b;color:#cbd5e1" '
+    + 'title="Skip — Home primary is still saved; SMART will need probes to bootstrap">Skip</button>'
+    + '<button class="btn btn-on" onclick="_setHomeSecondaryConfirm()" '
+    + 'style="background:#0e7490;color:#a5f3fc">Save Secondary</button>'
+    + '</div></div>';
+  document.getElementById('modal').style.display='block';
+
+  var prep = new XMLHttpRequest();
+  prep.open('POST','/api/fixtures/'+fid+'/home/secondary/prepare', true);
+  prep.setRequestHeader('Content-Type','application/json');
+  prep.onload = function(){
+    var r = null; try{r=JSON.parse(prep.responseText);}catch(e){}
+    if(prep.status>=200 && prep.status<300 && r && r.ok){
+      _setHomeState = _setHomeState || {};
+      _setHomeState.fid = fid;
+      _setHomeState.secPan16 = r.panDmx16;
+      _setHomeState.secTilt16 = r.tiltDmx16;
+      _setHomeState.tiltUp = !!r.tiltUp;
+      var tiltRange = r.tiltRange || 270;
+      var ts = document.getElementById('sh2-status');
+      if(ts)ts.textContent = 'Beam at panDmx16='+r.panDmx16+', tiltDmx16='+r.tiltDmx16
+        + ' — tilt range ±'+(Math.round(tiltRange/2))+'°';
+      var rg = document.getElementById('sh2-range');
+      if(rg)rg.textContent = '(±'+(Math.round(tiltRange/2))+'°)';
+      var form = document.getElementById('sh2-form');
+      if(form)form.style.display='';
+    } else {
+      var ts = document.getElementById('sh2-status');
+      if(ts)ts.style.color = '#f87171';
+      if(ts)ts.textContent = 'Slew failed: ' + ((r && r.err) || ('HTTP '+prep.status));
+      var form = document.getElementById('sh2-form');
+      if(form)form.style.display='none';
+    }
+  };
+  prep.onerror = function(){
+    var ts = document.getElementById('sh2-status');
+    if(ts){ts.style.color='#f87171';ts.textContent='Network error during slew';}
+  };
+  prep.send(JSON.stringify({settleMs: 1200}));
+}
+
+function _setHomeSecondaryConfirm(){
+  if(!_setHomeState || _setHomeState.secPan16==null)return;
+  var fid = _setHomeState.fid;
+  var input = document.getElementById('sh2-tilt-deg');
+  var raw = input ? input.value : '';
+  var deg = parseFloat(raw);
+  if(isNaN(deg) || deg < -90 || deg > 90){
+    alert('Enter a tilt angle in [-90, +90] degrees.');
+    return;
+  }
+  var x = new XMLHttpRequest();
+  x.open('POST','/api/fixtures/'+fid+'/home/secondary', true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.onload = function(){
+    var r = null; try{r=JSON.parse(x.responseText);}catch(e){}
+    if(x.status>=200 && x.status<300 && r && r.ok){
+      _fixtures.forEach(function(fx){
+        if(fx.id===fid)fx.homeSecondary = r.homeSecondary;
+      });
+      _setHomeBlackout();
+      _setHomeState = null;
+      closeModal();
+      editFixture(fid);
+    } else {
+      alert('Save Secondary failed: ' + ((r && r.err) || ('HTTP '+x.status)));
+    }
+  };
+  x.onerror = function(){alert('Save Secondary: network error');};
+  x.send(JSON.stringify({
+    panDmx16: _setHomeState.secPan16,
+    tiltDmx16: _setHomeState.secTilt16,
+    operatorTiltDeg: deg
+  }));
+}
+
+function _setHomeSecondarySkip(){
+  // Operator opted out — Home primary is already saved on the server.
+  if(!_setHomeState)return;
+  var fid = _setHomeState.fid;
+  _setHomeBlackout();
+  _setHomeState = null;
+  closeModal();
+  if(fid!=null)editFixture(fid);
 }
 
 function _setHomeClear(fid){

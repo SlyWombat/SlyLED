@@ -1177,7 +1177,11 @@ function _moverCalAutoStart(){
   // #713 C — `legacy` removed. The all-auto path still falls back to
   // legacy server-side; a separate PR can delete the server thread
   // body now that the SPA no longer offers `mode=legacy`.
-  h+='<option value="all-auto" selected>All Auto — markers first, fallback to legacy BFS</option>';
+  // #720 PR-5 — SMART promoted to default once probe + solve landed.
+  // Legacy modes remain in the list for side-by-side validation; PR-7
+  // deletes them.
+  h+='<option value="smart" selected>SMART — automatic, camera+floor aware (#720)</option>';
+  h+='<option value="all-auto">All Auto — markers first, fallback to legacy BFS</option>';
   h+='<option value="markers">Markers only — requires surveyed ArUco markers (#610)</option>';
   h+='<option value="v2">v2 target-driven (#499, requires stage-map homography)</option>';
   h+='</select>';
@@ -1445,6 +1449,118 @@ function _moverCalModeChanged(){
   }else{
     prev.style.display='none';
   }
+  // #720 PR-2 — show the SMART coverage preview when SMART is selected.
+  if(sel.value==='smart'){
+    _smartCoverageRender(_moverCalFid);
+  }else{
+    _smartCoveragePanelHide();
+  }
+}
+
+// ── #720 PR-2 — SMART coverage preview ─────────────────────────────────
+//
+// When the operator picks SMART from the cal-method pulldown, fetch
+// /api/fixtures/<fid>/coverage and render a flat top-down floor polygon
+// preview alongside the standard cal card. The full 3D viewport (per
+// the plan's `_mcal3d` Three.js singleton) is left for a follow-up —
+// this panel ships the data path + a top-down 2D footprint on a canvas
+// so the operator can sanity-check the cone before any probing runs.
+
+function _smartCoveragePanelHide(){
+  var p=document.getElementById('smart-coverage-panel');
+  if(p)p.style.display='none';
+  // #720 PR-2 — release the parallel viewport when the operator picks
+  // a non-SMART mode so its render loop stops eating cycles.
+  if(typeof _mcal3dDispose==='function')_mcal3dDispose();
+}
+
+function _smartCoverageRender(fid){
+  var card=document.getElementById('mcal-targets-preview');
+  if(!card)return;
+  var p=document.getElementById('smart-coverage-panel');
+  if(!p){
+    p=document.createElement('div');
+    p.id='smart-coverage-panel';
+    p.style.cssText='margin-top:.5em;border-top:1px solid #334155;padding-top:.4em';
+    p.innerHTML =
+      '<div style="font-size:.78em;color:#94a3b8;margin-bottom:.3em">'
+      + 'SMART 3D coverage preview '
+      + '<span style="color:#64748b">— drag to orbit, scroll to zoom</span></div>'
+      + '<div id="mcal-3d" style="position:relative;width:100%;height:280px;'
+      + 'background:#0a0e1a;border:1px solid #1e293b;border-radius:4px;'
+      + 'overflow:hidden"></div>'
+      + '<div id="smart-coverage-status" style="font-size:.72em;color:#64748b;margin-top:.3em"></div>';
+    card.parentNode.insertBefore(p, card.nextSibling);
+  }
+  p.style.display='block';
+  var status=document.getElementById('smart-coverage-status');
+  if(status)status.textContent='Loading…';
+
+  // Mount the 3D viewport (idempotent — does nothing if already mounted
+  // on this element). Falls back to a status-only message if Three.js
+  // failed to load.
+  var mounted=false;
+  try{mounted=(typeof _mcal3dMount==='function') && _mcal3dMount('mcal-3d');}catch(e){mounted=false;}
+  if(!mounted){
+    if(status)status.textContent='3D viewport unavailable (Three.js not loaded)';
+    return;
+  }
+
+  // Fetch coverage + smart preview in parallel; render once both land
+  // (or just coverage if preview fails — the cone alone is meaningful).
+  var coverage=null, preview=null, fired=false;
+  function maybeRender(){
+    if(fired)return;
+    if(coverage===null)return;
+    // Preview is optional — render with whatever we have once coverage
+    // is in.
+    fired=true;
+    if(coverage.err){
+      if(status)status.textContent='Error: '+coverage.err;
+      return;
+    }
+    var poly=coverage.floorPolygon||[];
+    if(poly.length<3){
+      if(status)status.textContent='Coverage polygon empty (no floor intersection in front of fixture)';
+      _mcal3dRender(coverage, null);
+      return;
+    }
+    _mcal3dRender(coverage, preview);
+    if(status){
+      var ar=_smartPolygonAreaMm2(poly);
+      var floorZ=(coverage.floorZ||0).toFixed(0);
+      var line='Coverage '+(ar/1e6).toFixed(2)+' m² · floor z='+floorZ+' mm';
+      if(preview){
+        if(preview.abortReason){
+          line+=' · preview: '+preview.abortReason;
+        }else{
+          var pp=(preview.probePoints||[]).length;
+          var wpArea=preview.workingPoly?_smartPolygonAreaMm2(preview.workingPoly):0;
+          line+=' · working '+(wpArea/1e6).toFixed(2)+' m² · '+pp+' probes';
+          if(preview.insufficient)line+=' (insufficient)';
+        }
+      }
+      status.textContent=line;
+    }
+  }
+  ra('GET','/api/fixtures/'+fid+'/coverage',null,function(r){
+    coverage=r||{err:'no response'};
+    if(!coverage.ok && !coverage.err)coverage.err=coverage.err||'unknown';
+    maybeRender();
+  });
+  ra('GET','/api/calibration/mover/'+fid+'/smart/preview',null,function(r){
+    preview=(r&&r.ok)?r:null;
+    maybeRender();
+  });
+}
+
+function _smartPolygonAreaMm2(poly){
+  var a=0;
+  for(var i=0;i<poly.length;i++){
+    var j=(i+1)%poly.length;
+    a+=poly[i][0]*poly[j][1]-poly[j][0]*poly[i][1];
+  }
+  return Math.abs(a)/2;
 }
 
 function _moverCalFitBadge(fit){
@@ -1459,11 +1575,33 @@ function _moverCalFitBadge(fit){
 function _moverCalRenderExisting(r){
   var box=document.getElementById('mcal-existing');
   if(!box||!r||!r.calibrated)return;
-  var h='<div class="card" style="padding:.6em;margin-bottom:.6em;background:#0f172a;border-left:3px solid #4ade80">';
+  // #720 PR-7 — pre-SMART records get a yellow border and a "needs
+  // SMART recalibration" banner. SMART records get the green border.
+  var stale=!!r.needsSmartRecal;
+  var border=stale?'#f59e0b':(r.method==='smart'?'#4ade80':'#4ade80');
+  var h='<div class="card" style="padding:.6em;margin-bottom:.6em;background:#0f172a;border-left:3px solid '+border+'">';
   h+='<div style="display:flex;align-items:center;gap:.5em;margin-bottom:.3em">';
   h+='<div style="font-size:.85em;color:#e2e8f0;font-weight:bold">Current calibration</div>';
+  if(r.method==='smart' && r.confidence){
+    var conf=r.confidence;
+    var cc=conf==='high'?'#4ade80':(conf==='medium'?'#fbbf24':'#f87171');
+    h+='<span style="background:'+cc+';color:#0a0e1a;padding:1px 6px;border-radius:4px;font-weight:bold;font-size:.72em;letter-spacing:.05em">SMART '+conf.toUpperCase()+'</span>';
+  }
   h+=_moverCalFitBadge(r.fit);
   h+='</div>';
+  if(stale){
+    h+='<div style="font-size:.74em;color:#fbbf24;margin-bottom:.3em">';
+    h+='Needs SMART recalibration — this fixture was last calibrated with the legacy <b>'
+      +(r.legacyMethod||'unknown')+'</b> path. Re-run SMART before the legacy aim fallback is removed.';
+    h+='</div>';
+  }
+  if(r.method==='smart' && r.residuals){
+    var res=r.residuals;
+    h+='<div style="font-size:.78em;color:#94a3b8">';
+    h+='RMS '+(res.rmsMm||0).toFixed(1)+' mm · max '+(res.maxMm||0).toFixed(1)+' mm · ';
+    h+=(res.sampleCount||0)+' probes';
+    h+='</div>';
+  }
   if(r.fit){
     h+='<div style="font-size:.78em;color:#94a3b8">';
     h+='RMS '+r.fit.rmsErrorDeg.toFixed(2)+'\u00b0 \u00b7 max '+r.fit.maxErrorDeg.toFixed(2)+'\u00b0 \u00b7 ';
@@ -1729,6 +1867,19 @@ function _moverCalPoll(){
       // poll (covers attach-to-running after a 409).
       if(!_moverCalCancellingFid)_moverCalUpdateActions('running');
       _moverCalTimer=setTimeout(_moverCalPoll,1000);
+    }else if(r.status==='validating'){
+      // #720 PR-6 — SMART solver finished; render the marker
+      // confirmation pass. Polling continues so the panel updates if
+      // another tab confirms a marker or the cal aborts.
+      if(!_moverCalCancellingFid)_moverCalUpdateActions('running');
+      _smartValidateRender(_moverCalFid);
+      _moverCalTimer=setTimeout(_moverCalPoll,1500);
+    }else if(r.status==='error_validation_failed'){
+      // #720 PR-6 — operator marked at least one marker as miss.
+      if(phase)phase.innerHTML='<span style="color:#f66">SMART validation failed: '+(r.error||'')+'</span>';
+      _moverCalUpdateActions('error');
+      _smartValidateRenderFailed(_moverCalFid);
+      _moverCalTimer=setTimeout(_moverCalPollFinal,1500);
     }else if(r.status==='done'){
       if(prog)prog.style.width='100%';
       _moverCalUpdateActions('done');
@@ -2733,4 +2884,98 @@ function _renderPointCloud(){
   var cloud=new THREE.Points(geo,mat);
   cloud.userData.pointCloud=true;
   _s3d.scene.add(cloud);
+}
+
+
+// ── #720 PR-6 — SMART validation pass UI ───────────────────────────────
+//
+// After the SMART solver finishes the cal status flips to "validating"
+// with a list of surveyed ArUco markers inside the working area. The
+// operator slews to each marker via a button, eyeballs the beam against
+// the physical sticker, and answers Hit / Miss. Final commit happens
+// only after every marker is confirmed Hit. Any Miss aborts.
+
+function _smartValidateRender(fid){
+  // Mounted into the cal status box just below the phase line.
+  var status=document.getElementById('mcal-status');
+  if(!status)return;
+  var panel=document.getElementById('smart-validate-panel');
+  if(!panel){
+    panel=document.createElement('div');
+    panel.id='smart-validate-panel';
+    panel.style.cssText='margin-top:.6em;padding:.5em;background:#0f172a;border:1px solid #1e3a5f;border-radius:4px';
+    status.appendChild(panel);
+  }
+  ra('GET','/api/calibration/mover/'+fid+'/smart/validate/state',null,function(r){
+    if(!r||!r.ok){
+      panel.innerHTML='<div style="font-size:.78em;color:#f87171">Validation state unavailable</div>';
+      return;
+    }
+    var markers=r.markers||[];
+    if(!markers.length){
+      panel.innerHTML='<div style="font-size:.78em;color:#94a3b8">No surveyed markers in working area — calibration committing automatically.</div>';
+      return;
+    }
+    var h='<div style="font-size:.85em;color:#e2e8f0;font-weight:bold;margin-bottom:.4em">Confirm SMART calibration ('+markers.length+' markers)</div>';
+    h+='<div style="font-size:.74em;color:#94a3b8;margin-bottom:.5em">For each marker: Slew → check beam lands on the physical sticker → Hit (green) or Miss (red).</div>';
+    h+='<div style="display:flex;flex-direction:column;gap:.35em">';
+    for(var i=0;i<markers.length;i++){
+      var m=markers[i];
+      var col='#64748b'; var lbl='pending';
+      if(m.confirmed===true){col='#4ade80';lbl='Hit';}
+      else if(m.confirmed===false){col='#ef4444';lbl='Miss';}
+      var dis=(m.confirmed===null)?'':'disabled';
+      h+='<div style="display:flex;align-items:center;gap:.4em;padding:.3em;background:#0a0e1a;border-left:3px solid '+col+';border-radius:3px">';
+      h+='<span style="flex:1;font-size:.78em;color:#cbd5e1">'+m.name+' <span style="color:#64748b">('+Math.round(m.x)+', '+Math.round(m.y)+', '+Math.round(m.z)+') mm</span></span>';
+      h+='<span style="font-size:.74em;color:'+col+';min-width:50px">'+lbl+'</span>';
+      h+='<button class="btn" '+dis+' onclick="_smartValidateAim('+fid+','+m.id+')" style="font-size:.74em;padding:2px 8px;background:#1e3a5f;color:#93c5fd">Slew</button>';
+      h+='<button class="btn" '+dis+' onclick="_smartValidateConfirm('+fid+','+m.id+',true)" style="font-size:.74em;padding:2px 8px;background:#064e3b;color:#86efac">Hit</button>';
+      h+='<button class="btn" '+dis+' onclick="_smartValidateConfirm('+fid+','+m.id+',false)" style="font-size:.74em;padding:2px 8px;background:#7f1d1d;color:#fca5a5">Miss</button>';
+      h+='</div>';
+    }
+    h+='</div>';
+    panel.innerHTML=h;
+  });
+}
+
+function _smartValidateAim(fid,markerId){
+  ra('POST','/api/calibration/mover/'+fid+'/smart/validate/aim',
+     {markerId:markerId},function(r){
+    if(!r||!r.ok){
+      alert('Slew failed: '+((r&&r.err)||'unknown'));
+      return;
+    }
+  });
+}
+
+function _smartValidateConfirm(fid,markerId,hit){
+  ra('POST','/api/calibration/mover/'+fid+'/smart/validate/confirm',
+     {markerId:markerId,hit:hit},function(r){
+    if(!r||!r.ok){
+      alert('Confirm failed: '+((r&&r.err)||'unknown'));
+      return;
+    }
+    // Server has updated job state; re-render the panel.
+    _smartValidateRender(fid);
+    // If commit landed, refresh the cal card so it shows the green
+    // "Current calibration" block.
+    if(r.committed){
+      (_fixtures||[]).forEach(function(f){if(f.id===fid)f.moverCalibrated=true;});
+      renderSidebar();
+    }
+  });
+}
+
+function _smartValidateRenderFailed(fid){
+  var status=document.getElementById('mcal-status');
+  if(!status)return;
+  var panel=document.getElementById('smart-validate-panel');
+  if(!panel){
+    panel=document.createElement('div');
+    panel.id='smart-validate-panel';
+    panel.style.cssText='margin-top:.6em;padding:.5em;background:#3f1d1d;border:1px solid #7f1d1d;border-radius:4px';
+    status.appendChild(panel);
+  }
+  panel.innerHTML='<div style="font-size:.85em;color:#fca5a5;font-weight:bold">SMART validation failed</div>'
+    +'<div style="font-size:.78em;color:#f87171;margin-top:.3em">At least one marker did not hit. Calibration was discarded; the prior calibration record (if any) is preserved. Re-run SMART after checking the home anchor and the working area.</div>';
 }
