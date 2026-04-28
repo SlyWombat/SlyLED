@@ -1,0 +1,170 @@
+{
+  "_comment": "#733 — synthetic SMART cal-pipeline corpus. Each entry stamps a fixture pose + profile envelope + home + homeSecondary + camera placements that the emulator drives end-to-end. The cases were chosen to lock down each known regression class (#730/#731/#732) and the parent #720 contract.",
+  "_schema": {
+    "id": "stable identifier — referenced by the emulator's expectation map",
+    "description": "what the case stresses",
+    "fixture": "{ id, x, y, z, rotation: [rx, ry, rz] degrees }",
+    "profile": "{ panRange, tiltRange, tiltOffsetDmx16, tiltUp }",
+    "home": "{ panDmx16, tiltDmx16 }",
+    "homeSecondary": "post-#730 {panOffsetDmx16, tiltOffsetDmx16, panMovedDirection, tiltMovedDirection} OR null",
+    "cameras": "list of { id, x, y, z, rotation, fovDeg } — empty list = no positioned cameras (zero-overlap case)",
+    "floorZ": "stage mm",
+    "expect": "what the emulator must verify (non-degeneracy gates + acceptance fields)"
+  },
+  "cases": [
+    {
+      "id": "fid17-ceiling-symmetric",
+      "description": "Basement 150W MH Stage Right (fid #17). rotation=[0,0,0] ceiling mount + 540° pan range — the exact shape that collapsed coverage_polygon to a 1D line on y=0 pre-#731.",
+      "fixture": {"id": 17, "x": 600, "y": 0, "z": 1760, "rotation": [0, 0, 0]},
+      "profile": {"panRange": 540, "tiltRange": 180, "tiltOffsetDmx16": 32768, "tiltUp": false},
+      "home": {"panDmx16": 44364, "tiltDmx16": 0},
+      "homeSecondary": {
+        "panOffsetDmx16": 10923,
+        "tiltOffsetDmx16": 32768,
+        "panMovedDirection": "right",
+        "tiltMovedDirection": "up"
+      },
+      "cameras": [
+        {"id": 12, "x": 940, "y": 1100, "z": 2040, "rotation": [30, 0, 0], "fovDeg": 78.5},
+        {"id": 13, "x": 2400, "y": 1100, "z": 2040, "rotation": [30, 0, -10], "fovDeg": 78.5},
+        {"id": 16, "x": 1800, "y": 3000, "z": 2040, "rotation": [40, 0, 0], "fovDeg": 78.5}
+      ],
+      "floorZ": 0,
+      "expect": {
+        "coveragePolygonMinXExtentMm": 100,
+        "coveragePolygonMinYExtentMm": 100,
+        "coveragePolygonMinAreaMm2": 10000,
+        "coveragePolygonCentroidMaxDistanceFromFixtureMm": 5000,
+        "workingPolyNonEmpty": true,
+        "probePointsMin": 1,
+        "solveFinite": true,
+        "solveSlopeBoundDmxPerDeg": 1000
+      }
+    },
+    {
+      "id": "fid14-350w-asymmetric-tilt",
+      "description": "350W BeamLight (fid #14). Asymmetric tilt range via tiltOffsetDmx16=4681 + tiltUp=true; floor-mount low z aimed up 30°. tests #716 envelope path through coverage_polygon. Centroid bound omitted: a fixture aimed up sweeps through near-horizontal rays whose floor projections are kilometres away — the convex hull captures them, working_area clip handles the practical bounds.",
+      "fixture": {"id": 14, "x": 1700, "y": 0, "z": 550, "rotation": [-30, 0, 0]},
+      "profile": {"panRange": 540, "tiltRange": 270, "tiltOffsetDmx16": 4681, "tiltUp": true},
+      "home": {"panDmx16": 32768, "tiltDmx16": 4681},
+      "homeSecondary": {
+        "panOffsetDmx16": 10923,
+        "tiltOffsetDmx16": 21845,
+        "panMovedDirection": "right",
+        "tiltMovedDirection": "up"
+      },
+      "cameras": [
+        {"id": 12, "x": 940, "y": 1100, "z": 2040, "rotation": [30, 0, 0], "fovDeg": 78.5},
+        {"id": 13, "x": 2400, "y": 1100, "z": 2040, "rotation": [30, 0, -10], "fovDeg": 78.5},
+        {"id": 16, "x": 1800, "y": 3000, "z": 2040, "rotation": [40, 0, 0], "fovDeg": 78.5}
+      ],
+      "floorZ": 0,
+      "expect": {
+        "coveragePolygonMinXExtentMm": 100,
+        "coveragePolygonMinYExtentMm": 100,
+        "coveragePolygonMinAreaMm2": 10000,
+        "workingPolyNonEmpty": true,
+        "probePointsMin": 1,
+        "solveFinite": true,
+        "solveSlopeBoundDmxPerDeg": 1000
+      }
+    },
+    {
+      "id": "fid18-stage-left-symmetric",
+      "description": "Basement 150W MH Stage Left (fid #18). Mirrors fid #17 on the opposite side; ensures coverage math is rotation-symmetric.",
+      "fixture": {"id": 18, "x": 1730, "y": 0, "z": 1760, "rotation": [0, 0, 0]},
+      "profile": {"panRange": 540, "tiltRange": 180, "tiltOffsetDmx16": 32768, "tiltUp": false},
+      "home": {"panDmx16": 32768, "tiltDmx16": 0},
+      "homeSecondary": {
+        "panOffsetDmx16": -10923,
+        "tiltOffsetDmx16": 32768,
+        "panMovedDirection": "left",
+        "tiltMovedDirection": "up"
+      },
+      "cameras": [
+        {"id": 12, "x": 940, "y": 1100, "z": 2040, "rotation": [30, 0, 0], "fovDeg": 78.5},
+        {"id": 13, "x": 2400, "y": 1100, "z": 2040, "rotation": [30, 0, -10], "fovDeg": 78.5},
+        {"id": 16, "x": 1800, "y": 3000, "z": 2040, "rotation": [40, 0, 0], "fovDeg": 78.5}
+      ],
+      "floorZ": 0,
+      "expect": {
+        "coveragePolygonMinXExtentMm": 100,
+        "coveragePolygonMinYExtentMm": 100,
+        "coveragePolygonMinAreaMm2": 10000,
+        "coveragePolygonCentroidMaxDistanceFromFixtureMm": 5000,
+        "workingPolyNonEmpty": true,
+        "probePointsMin": 1,
+        "solveFinite": true,
+        "solveSlopeBoundDmxPerDeg": 1000
+      }
+    },
+    {
+      "id": "near-vertical-home",
+      "description": "Home aim is ~5° from vertical — pre-#730 operatorTiltDeg-based solver divided by near-zero on this case. Direction-only solver MUST stay finite. Centroid bound omitted: a near-vertical home with full pan/tilt envelope projects huge floor area through near-horizontal envelope corners.",
+      "fixture": {"id": 99, "x": 1500, "y": 1500, "z": 3000, "rotation": [85, 0, 0]},
+      "profile": {"panRange": 540, "tiltRange": 270, "tiltOffsetDmx16": 32768, "tiltUp": false},
+      "home": {"panDmx16": 32768, "tiltDmx16": 32768},
+      "homeSecondary": {
+        "panOffsetDmx16": 10923,
+        "tiltOffsetDmx16": 16384,
+        "panMovedDirection": "right",
+        "tiltMovedDirection": "up"
+      },
+      "cameras": [
+        {"id": 12, "x": 940, "y": 1100, "z": 2040, "rotation": [30, 0, 0], "fovDeg": 78.5}
+      ],
+      "floorZ": 0,
+      "expect": {
+        "coveragePolygonMinXExtentMm": 100,
+        "coveragePolygonMinYExtentMm": 100,
+        "coveragePolygonMinAreaMm2": 10000,
+        "solveFinite": true,
+        "solveSlopeBoundDmxPerDeg": 1000
+      }
+    },
+    {
+      "id": "zero-overlap-no-cameras",
+      "description": "No positioned cameras → cameraVisiblePoly is empty → /smart/preview returns abortReason=no_camera_floor. coverage_polygon should still be valid (non-degenerate).",
+      "fixture": {"id": 17, "x": 600, "y": 0, "z": 1760, "rotation": [0, 0, 0]},
+      "profile": {"panRange": 540, "tiltRange": 180, "tiltOffsetDmx16": 32768, "tiltUp": false},
+      "home": {"panDmx16": 44364, "tiltDmx16": 0},
+      "homeSecondary": {
+        "panOffsetDmx16": 10923,
+        "tiltOffsetDmx16": 32768,
+        "panMovedDirection": "right",
+        "tiltMovedDirection": "up"
+      },
+      "cameras": [],
+      "floorZ": 0,
+      "expect": {
+        "coveragePolygonMinXExtentMm": 100,
+        "coveragePolygonMinYExtentMm": 100,
+        "coveragePolygonMinAreaMm2": 10000,
+        "coveragePolygonCentroidMaxDistanceFromFixtureMm": 5000,
+        "workingPolyNonEmpty": false,
+        "probePointsMin": 0,
+        "solveFinite": true,
+        "solveSlopeBoundDmxPerDeg": 1000,
+        "abortReason": "no_camera_floor"
+      }
+    },
+    {
+      "id": "legacy-secondary-format-rejection",
+      "description": "Pre-#730 homeSecondary shape (operatorTiltDeg, no direction). Solver MUST raise home_secondary_stale_format.",
+      "fixture": {"id": 17, "x": 600, "y": 0, "z": 1760, "rotation": [0, 0, 0]},
+      "profile": {"panRange": 540, "tiltRange": 180, "tiltOffsetDmx16": 32768, "tiltUp": false},
+      "home": {"panDmx16": 44364, "tiltDmx16": 0},
+      "homeSecondary": {
+        "panDmx16": 55287,
+        "tiltDmx16": 32768,
+        "operatorTiltDeg": -10
+      },
+      "cameras": [],
+      "floorZ": 0,
+      "expect": {
+        "solveFinite": false,
+        "solveErrorMustContain": "home_secondary_stale_format"
+      }
+    }
+  ]
+}

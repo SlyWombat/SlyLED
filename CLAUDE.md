@@ -384,6 +384,16 @@ powershell.exe -Command "python -X utf8 tests/test_surface_analyzer.py"      # 4
 
 Covers: coordinate transforms, pan/tilt math, grid interpolation, Newton inverse, RANSAC floor/wall detection, obstacle clustering, beam detection with synthetic frames, DMX buffer layout.
 
+### Cal-pipeline change checklist (#733)
+
+Any PR that touches the cal pipeline (`mover_calibrator.py`, `coverage_math.py`, `parent_server.py` cal routes, `mover_control.py`, `surface_analyzer.py` cal helpers, `dmx_profiles.py` channel-map shape) **must**:
+
+1. Run `python tools/emulate_smart_pipeline.py --verbose` against `tests/fixtures/cal/corpus.json` and confirm exit 0 — the emulator mirrors the SMART pipeline at HEAD and asserts non-degeneracy on every geometric output.
+2. Add a corpus case if the PR introduces a new failure mode (e.g. a new fixture geometry, a new coverage edge case). The corpus is the spec for "what we never want to ship again."
+3. Land the test alongside the fix in the same commit. Tests-first if the fix is a regression of an existing case.
+
+The weekly `tests/regression/run_all.py` includes the emulator (`test_smart_pipeline_emulator.py` wrapper). A red emulator fails the regression run.
+
 ### Test suites (visual — Playwright)
 
 ```

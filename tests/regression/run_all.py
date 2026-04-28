@@ -21,6 +21,11 @@ TESTS = [
     ('test_timeline_bake.py',   'Timeline Bake (API)'),
     ('test_runtime_3d_show.py', 'Runtime 3D Show (Playwright)'),
     ('test_full_show.py',       'Full Show Integration'),
+    # #733 — SMART cal-pipeline emulator. Offline (no orchestrator,
+    # no rig). Reproduces #730/#731/#732 in <1s if any future PR
+    # regresses the cal pipeline; gates the weekly regression on a
+    # green corpus.
+    ('test_smart_pipeline_emulator.py', 'SMART Cal-Pipeline Emulator'),
 ]
 
 # Live-rig regression tests (gated, see module docstring).
