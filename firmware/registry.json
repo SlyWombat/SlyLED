@@ -6,14 +6,15 @@
                          "description":  "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
                          "board":  "esp32",
                          "fqbn":  "esp32:esp32:esp32",
-                         "version":  "8.4.18",
+                         "version":  "8.4.19",
                          "file":  "esp32/main.ino.merged.bin",
                          "releaseAsset":  "esp32-firmware-merged.bin",
-                         "sha256":  "45555687d4092340db5e9433274da006c561525857618b3caa40544d02f74068",
+                         "sha256":  "102293c55fc7595f03293d4f49534473cb1bc977a73c557d790a55707d9ff337",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "BOARD_ESP32"
-                                          ]
+                                          ],
+                         "sourceHash":  "d615705d39cd75e71377e33cf3ef0b49ad063b1f526855961e65857ad650f04e"
                      },
                      {
                          "id":  "child-led-d1mini",
@@ -21,14 +22,15 @@
                          "description":  "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
                          "board":  "d1mini",
                          "fqbn":  "esp8266:esp8266:d1_mini",
-                         "version":  "8.4.19",
+                         "version":  "8.4.20",
                          "file":  "d1mini/main.ino.bin",
                          "releaseAsset":  "d1mini-firmware.bin",
-                         "sha256":  "ad555b0576ae5c7637f07f1686933621eeba6d5b0dd106299652fd8b4dcd3563",
+                         "sha256":  "196eefa938223f35baa43b85e55cf6274e6438fc188c86de16c9835be0d3d4eb",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "BOARD_D1MINI"
-                                          ]
+                                          ],
+                         "sourceHash":  "d615705d39cd75e71377e33cf3ef0b49ad063b1f526855961e65857ad650f04e"
                      },
                      {
                          "id":  "dmx-bridge-esp32",

@@ -2141,6 +2141,47 @@ def run():
         # a camera fixture; we rely on the thread's CalibrationError
         # path catching the missing-cameras case quickly.
 
+        # ── #737 — lamp / beam / blackout helper endpoints ─────────
+        # Engine-not-running path (most common in test). Each endpoint
+        # validates the fixture + profile before checking the engine,
+        # so we can exercise the routes even without DMX wired up.
+        r = c.post(f'/api/fixtures/{home_fid}/lamp', json={'on': True})
+        ok('#737 lamp endpoint reachable',
+           r.status_code in (200, 503),
+           f'status={r.status_code} body={r.get_json()}')
+        r = c.post(f'/api/fixtures/{home_fid}/beam', json={'dim': 0.5})
+        ok('#737 beam endpoint reachable',
+           r.status_code in (200, 503),
+           f'status={r.status_code} body={r.get_json()}')
+        r = c.post(f'/api/fixtures/{home_fid}/blackout', json={})
+        ok('#737 blackout endpoint reachable',
+           r.status_code in (200, 503),
+           f'status={r.status_code} body={r.get_json()}')
+
+        # Validation: bad dim value. In the test environment the
+        # engine isn't running, so the resolve helper returns 503
+        # before body validation; either status is acceptable as long
+        # as the request doesn't 5xx-other or 200.
+        r = c.post(f'/api/fixtures/{home_fid}/beam', json={'dim': 'bogus'})
+        ok('#737 beam handles non-numeric dim cleanly',
+           r.status_code in (400, 503),
+           f'status={r.status_code}')
+
+        # LED fixture → 404
+        r = c.post('/api/fixtures', json={
+            'name': 'led-737', 'type': 'point', 'fixtureType': 'led',
+            'childId': -1,
+        })
+        led_fid_737 = r.get_json().get('id')
+        r = c.post(f'/api/fixtures/{led_fid_737}/lamp', json={'on': True})
+        ok('#737 lamp on LED fixture → 404',
+           r.status_code == 404)
+        c.delete(f'/api/fixtures/{led_fid_737}')
+
+        # Unknown fid → 404
+        r = c.post('/api/fixtures/99999/lamp', json={'on': True})
+        ok('#737 lamp unknown fid → 404', r.status_code == 404)
+
         # Cleanup home test fixture
         c.delete(f'/api/fixtures/{home_fid}')
 

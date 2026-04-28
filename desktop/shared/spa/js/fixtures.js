@@ -834,11 +834,41 @@ function _setHomeRecentre(){
 }
 
 function _setHomeToggleBeam(){
+  // #737 — Beam ON/OFF goes through /api/fixtures/<fid>/lamp so the
+  // server-side _set_fixture_lamp helper handles every profile quirk
+  // (RGB-only with no master dimmer, colour-wheel-with-closed-strobe-
+  // default, hybrid RGB+wheel filtering). Pre-#737 this wrote
+  // {dimmer: 1, red: 0, green: 1, blue: 0} via /dmx-test which only
+  // worked on profiles whose lamp gates happened to match the dmx-test
+  // endpoint's per-channel write pattern; RGB fixtures with a closed-
+  // default shutter never lit. State stays on _setHomeState so the
+  // pan/tilt sliders keep using their existing /dmx-test path.
   if(!_setHomeState)return;
-  _setHomeState.dimmer = _setHomeState.dimmer > 0 ? 0 : 1;
+  var fid = _setHomeState.fid;
+  var on = !(_setHomeState.dimmer > 0);
+  _setHomeState.dimmer = on ? 1 : 0;
   var btn = document.getElementById('sh-beam-btn');
-  if(btn)btn.textContent = _setHomeState.dimmer>0 ? 'Beam OFF' : 'Beam ON';
-  _setHomeWriteDmx();
+  if(btn)btn.textContent = on ? 'Beam OFF' : 'Beam ON';
+  var x = new XMLHttpRequest();
+  x.open('POST', '/api/fixtures/'+fid+'/lamp', true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.onload = function(){
+    var st = document.getElementById('sh-status');
+    if(st){
+      var r=null; try{r=JSON.parse(x.responseText);}catch(e){}
+      st.textContent = (x.status>=200 && x.status<300)
+        ? ('Beam '+(on?'ON':'OFF'))
+        : ('Lamp HTTP '+x.status+(r&&r.err?': '+r.err:''));
+    }
+    // Re-write current pan/tilt so the head doesn't drift between
+    // engine snapshots when the lamp toggle reseeds defaults.
+    _setHomeWriteDmx();
+  };
+  x.onerror = function(){
+    var st = document.getElementById('sh-status');
+    if(st)st.textContent='Lamp toggle: network error';
+  };
+  x.send(JSON.stringify({on: on}));
 }
 
 function _setHomeBlackout(){

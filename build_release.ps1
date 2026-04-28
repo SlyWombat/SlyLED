@@ -17,6 +17,7 @@ param(
     [switch]$SkipFirmware,
     [switch]$SkipWindows,
     [switch]$SkipAndroid,
+    [switch]$ForceFirmware,
     [string]$SetAppVersion = ""
 )
 
@@ -49,6 +50,54 @@ function Set-FwVersion([string]$id, [string]$ver) {
     $entry = $reg.firmware | Where-Object { $_.id -eq $id }
     if ($entry) { $entry.version = $ver }
     Save-Registry $reg
+}
+
+function Set-FwSourceHash([string]$id, [string]$hash) {
+    $reg = Read-Registry
+    $entry = $reg.firmware | Where-Object { $_.id -eq $id }
+    if (-not $entry) { return }
+    if ($entry.PSObject.Properties['sourceHash']) {
+        $entry.sourceHash = $hash
+    } else {
+        $entry | Add-Member -MemberType NoteProperty -Name sourceHash -Value $hash
+    }
+    Save-Registry $reg
+}
+
+function Get-FwSourceHash([string]$id) {
+    $reg = Read-Registry
+    $entry = $reg.firmware | Where-Object { $_.id -eq $id }
+    if ($entry -and $entry.PSObject.Properties['sourceHash']) { return $entry.sourceHash }
+    return ""
+}
+
+# Hash the firmware source tree the arduino-cli compiler actually consumes.
+# Includes main/*.{ino,h,cpp,c,hpp} + libraries/**/*.{h,cpp,c,hpp,ino} +
+# arduino_secrets.h is intentionally excluded (gitignored, not part of release).
+# version.h is excluded — it's an *output* of the bump, not an input.
+function Get-FirmwareSourceHash {
+    $files = @()
+    $files += Get-ChildItem -Path "$root\main" -Include *.ino,*.h,*.cpp,*.c,*.hpp -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne 'version.h' -and $_.Name -ne 'arduino_secrets.h' }
+    if (Test-Path "$root\libraries") {
+        $files += Get-ChildItem -Path "$root\libraries" -Include *.ino,*.h,*.cpp,*.c,*.hpp -File -Recurse -ErrorAction SilentlyContinue
+    }
+    $files = $files | Sort-Object FullName
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $combined = New-Object System.IO.MemoryStream
+    foreach ($f in $files) {
+        $rel = $f.FullName.Substring($root.Length).TrimStart('\','/').Replace('\','/')
+        $relBytes = [System.Text.Encoding]::UTF8.GetBytes($rel + "`n")
+        $combined.Write($relBytes, 0, $relBytes.Length)
+        $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
+        $combined.Write($bytes, 0, $bytes.Length)
+        $combined.WriteByte(0)
+    }
+    $combined.Position = 0
+    $hashBytes = $sha.ComputeHash($combined)
+    $combined.Dispose()
+    $sha.Dispose()
+    return ($hashBytes | ForEach-Object { $_.ToString('x2') }) -join ''
 }
 
 # ── Helper: write version.h from a version string ─────────────────────────
@@ -101,38 +150,62 @@ Write-Host "App version: $appVersion" -ForegroundColor Green
 
 Write-Host "App versions synced to $appVersion" -ForegroundColor Green
 
-# ── Step 3: Compile firmware (each board increments independently) ─────────
+# ── Step 3: Compile firmware (per-board, only when source changed) ─────────
+# Source-hash gate: each board entry in registry.json carries `sourceHash`
+# (sha256 of every firmware-input file). We rebuild + bump only when the
+# current hash differs. -SkipFirmware skips the entire step. -ForceFirmware
+# rebuilds every board regardless of hash.
 if (-not $SkipFirmware) {
     $cli = "$env:LOCALAPPDATA\Arduino\arduino-cli.exe"
     $env:ARDUINO_DIRECTORIES_USER = $root
 
+    $srcHash = Get-FirmwareSourceHash
+    Write-Host "`nFirmware source hash: $($srcHash.Substring(0,12))..." -ForegroundColor Gray
+
     # --- ESP32 ---
-    $espVer = Increment-Patch (Get-FwVersion "child-led-esp32")
-    Write-VersionH $espVer
-    Write-Host "`n--- ESP32 Firmware v$espVer ---" -ForegroundColor Yellow
-    & $cli compile --clean --fqbn esp32:esp32:esp32 "$root\main" --output-dir "$root\firmware\esp32"
-    if ($LASTEXITCODE -ne 0) { Write-Host "ESP32 FAILED" -ForegroundColor Red; exit 1 }
-    Set-FwVersion "child-led-esp32" $espVer
+    $espStored = Get-FwSourceHash "child-led-esp32"
+    if (-not $ForceFirmware -and $espStored -eq $srcHash) {
+        Write-Host "ESP32 firmware: source unchanged - skipping (v$(Get-FwVersion 'child-led-esp32'))" -ForegroundColor Gray
+    } else {
+        $espVer = Increment-Patch (Get-FwVersion "child-led-esp32")
+        Write-VersionH $espVer
+        Write-Host "`n--- ESP32 Firmware v$espVer ---" -ForegroundColor Yellow
+        & $cli compile --clean --fqbn esp32:esp32:esp32 "$root\main" --output-dir "$root\firmware\esp32"
+        if ($LASTEXITCODE -ne 0) { Write-Host "ESP32 FAILED" -ForegroundColor Red; exit 1 }
+        Set-FwVersion "child-led-esp32" $espVer
+        Set-FwSourceHash "child-led-esp32" $srcHash
+    }
 
     # --- D1 Mini ---
-    $d1Ver = Increment-Patch (Get-FwVersion "child-led-d1mini")
-    Write-VersionH $d1Ver
-    Write-Host "`n--- D1 Mini Firmware v$d1Ver ---" -ForegroundColor Yellow
-    & $cli compile --clean --fqbn esp8266:esp8266:d1_mini "$root\main" --output-dir "$root\firmware\d1mini"
-    if ($LASTEXITCODE -ne 0) { Write-Host "D1 Mini FAILED" -ForegroundColor Red; exit 1 }
-    Set-FwVersion "child-led-d1mini" $d1Ver
+    $d1Stored = Get-FwSourceHash "child-led-d1mini"
+    if (-not $ForceFirmware -and $d1Stored -eq $srcHash) {
+        Write-Host "D1 Mini firmware: source unchanged - skipping (v$(Get-FwVersion 'child-led-d1mini'))" -ForegroundColor Gray
+    } else {
+        $d1Ver = Increment-Patch (Get-FwVersion "child-led-d1mini")
+        Write-VersionH $d1Ver
+        Write-Host "`n--- D1 Mini Firmware v$d1Ver ---" -ForegroundColor Yellow
+        & $cli compile --clean --fqbn esp8266:esp8266:d1_mini "$root\main" --output-dir "$root\firmware\d1mini"
+        if ($LASTEXITCODE -ne 0) { Write-Host "D1 Mini FAILED" -ForegroundColor Red; exit 1 }
+        Set-FwVersion "child-led-d1mini" $d1Ver
+        Set-FwSourceHash "child-led-d1mini" $srcHash
+    }
 
     # Note: Giga boards (child-led-giga, parent-giga, dmx-bridge-esp32) compile
     # separately — increment their registry entry when building those targets.
 
-    Write-Host "`nFirmware compiled: ESP32 v$espVer, D1 Mini v$d1Ver" -ForegroundColor Green
+    Write-Host "`nFirmware step complete (rebuild only on source change)" -ForegroundColor Green
 }
 
 # ── Step 4: Windows Desktop (PyInstaller + Inno Setup) ────────────────────
 if (-not $SkipWindows) {
     Write-Host "`n--- Windows Desktop (App v$appVersion) ---" -ForegroundColor Yellow
     Set-Location "$root\desktop\windows"
+    # Master script owns the app version — block build.py's auto-patch-bump
+    # so parent_server.py stays at the version we just synced (else they
+    # drift apart from android/build.gradle.kts).
+    $env:SLYLED_SKIP_VERSION_BUMP = "1"
     python build.py
+    Remove-Item Env:SLYLED_SKIP_VERSION_BUMP -ErrorAction SilentlyContinue
     if ($LASTEXITCODE -ne 0) { Write-Host "Windows build FAILED" -ForegroundColor Red; exit 1 }
     $exeSize = (Get-Item "$root\desktop\windows\dist\SlyLED.exe").Length
     Write-Host "SlyLED.exe: $([math]::Round($exeSize/1MB, 1)) MB" -ForegroundColor Green

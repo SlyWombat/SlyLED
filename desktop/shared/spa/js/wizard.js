@@ -165,7 +165,81 @@ function _wizCreate(){
   ra('POST','/api/fixtures',body,function(r){
     if(r&&r.ok){
       document.getElementById('hs').textContent='Created: '+w.name+' (U'+w.uni+' @'+w.addr+')';
-      closeModal();loadSetup();
+      // #737 Issue 1 — if the new fixture's profile carries pan + tilt
+      // (it's a moving head), prompt the operator to set Home now.
+      // SMART, mover-control, and gyro/Android remote all hard-require
+      // Home before they'll start; surfacing the prompt right at
+      // creation time saves the operator from chasing the wizard
+      // separately and getting stuck on a fixture_not_calibrated error
+      // later.
+      var fid = r.id;
+      if(w.profId && fid){
+        _wizMaybePromptHome(fid, w.profId, w.name);
+      } else {
+        closeModal();
+        loadSetup();
+      }
     }else{document.getElementById('hs').textContent='Failed: '+(r&&r.err||'unknown');}
   });
+}
+
+function _wizMaybePromptHome(fid, profileId, fixtureName){
+  // Fetch the profile to determine if it's a mover (has pan + tilt).
+  // Falls through to closeModal() on any error or non-mover profile so
+  // the LED-bar / par-can / camera flows aren't slowed by a 404 prompt.
+  ra('GET','/api/dmx-profiles/'+encodeURIComponent(profileId),null,function(prof){
+    var channels = (prof && prof.channels) || [];
+    var hasPan = channels.some(function(c){return c.type==='pan';});
+    var hasTilt = channels.some(function(c){return c.type==='tilt';});
+    if(!hasPan || !hasTilt){
+      closeModal();
+      loadSetup();
+      return;
+    }
+    _wizShowHomePrompt(fid, fixtureName);
+  });
+}
+
+function _wizShowHomePrompt(fid, fixtureName){
+  // The wizard modal is still open — replace its body with the Home
+  // prompt and let the operator decide. Skipping leaves the fixture
+  // in fixtures.json with no homePanDmx16 / homeTiltDmx16; the
+  // calibration card will surface "Home not set" until they run the
+  // wizard.
+  document.getElementById('modal-title').textContent='Set Home for '+fixtureName+'?';
+  var s = '<div style="font-size:.85em;color:#cbd5e1;margin-bottom:.6em">'
+        + '<b>'+escapeHtml(fixtureName)+'</b> is a moving head. SMART '
+        + 'calibration, gyro / Android remote control, and aim-by-XYZ '
+        + 'all require a <b>Home position</b> — the DMX values where '
+        + 'the beam aims along the fixture\'s saved rotation vector.'
+        + '</div>'
+        + '<div style="font-size:.78em;color:#94a3b8;margin-bottom:.8em">'
+        + 'Set it now (≈30 seconds — drive the beam to its forward '
+        + 'reference, then walk through the new direction-only Home '
+        + 'Secondary capture), or skip and you\'ll get prompted again '
+        + 'when you try to calibrate or remote-control this fixture.'
+        + '</div>'
+        + '<div style="display:flex;gap:.5em;justify-content:flex-end">'
+        + '<button class="btn" onclick="_wizSkipHome()" '
+        + 'style="background:#1e293b;color:#cbd5e1">Skip — set later</button>'
+        + '<button class="btn btn-on" onclick="_wizStartHome('+fid+')" '
+        + 'style="background:#0e7490;color:#a5f3fc">Set Home now</button>'
+        + '</div>';
+  document.getElementById('modal-body').innerHTML = s;
+}
+
+function _wizSkipHome(){
+  closeModal();
+  loadSetup();
+}
+
+function _wizStartHome(fid){
+  // Close the wizard modal and chain into the existing Set Home
+  // wizard for the new fixture. _setHomeOpen lives in fixtures.js
+  // and walks Primary capture → direction-only Secondary (#730).
+  closeModal();
+  loadSetup();
+  if(typeof _setHomeOpen === 'function'){
+    setTimeout(function(){_setHomeOpen(fid);}, 150);
+  }
 }

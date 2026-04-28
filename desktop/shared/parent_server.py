@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.6.85"
+VERSION = "1.7.0"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -4257,6 +4257,92 @@ def api_fixture_dmx_test(fid):
         default = ch.get("default")
         if default is not None and default > 0 and ch_type not in explicitly_set:
             uni_buf.set_channel(addr + ch.get("offset", 0), int(default))
+    return jsonify(ok=True)
+
+
+def _resolve_dmx_fixture_engine(fid):
+    """Shared helper for the lamp/beam/blackout endpoints. Returns
+    ``(fixture, engine, prof_info, uni, addr)`` or a Flask response
+    tuple to short-circuit out of the caller."""
+    f = next((f for f in _fixtures if f["id"] == fid), None)
+    if not f or f.get("fixtureType") != "dmx":
+        return None, jsonify(err="DMX fixture not found"), 404
+    if f.get("isCalibrating"):
+        return None, jsonify(err="Fixture is being calibrated"), 423
+    pid = f.get("dmxProfileId")
+    prof_info = _profile_lib.channel_info(pid) if pid else None
+    if not prof_info:
+        return None, jsonify(err="Fixture has no profile"), 400
+    if not _artnet.running and not _sacn.running:
+        return None, jsonify(err="Art-Net engine not running — start it from "
+                                  "Settings → DMX Engine"), 503
+    engine = _artnet if _artnet.running else _sacn
+    uni = int(f.get("dmxUniverse", 1))
+    addr = int(f.get("dmxStartAddr", 1))
+    return (f, engine, prof_info, uni, addr), None, None
+
+
+@app.post("/api/fixtures/<int:fid>/lamp")
+def api_fixture_lamp(fid):
+    """#737 — turn a fixture's lamp on or off in a profile-aware way.
+
+    Body: ``{on: bool}``. The helper deals with every per-profile
+    quirk (RGB-only without a master dimmer, colour-wheel-only with
+    closed-shutter default, hybrid RGB+wheel filters) so call sites
+    don't have to.
+    """
+    state, err, code = _resolve_dmx_fixture_engine(fid)
+    if err is not None:
+        return err, code
+    f, engine, prof_info, uni, addr = state
+    body = request.get_json(silent=True) or {}
+    on = bool(body.get("on", True))
+    try:
+        _set_fixture_lamp(engine, uni, addr, on, prof_info)
+    except Exception as e:
+        log.warning("/api/fixtures/%d/lamp failed: %s", fid, e)
+        return jsonify(err="dmx_write_failed", detail=str(e)), 500
+    return jsonify(ok=True, on=on)
+
+
+@app.post("/api/fixtures/<int:fid>/beam")
+def api_fixture_beam(fid):
+    """#737 — set a fixture's beam intensity 0..1 in a profile-aware way.
+
+    Body: ``{dim: 0..1}``. Routes through dimmer when present, scales
+    RGB on RGB-only fixtures, falls back to lamp on/off on wheel-only
+    fixtures with no dimmer."""
+    state, err, code = _resolve_dmx_fixture_engine(fid)
+    if err is not None:
+        return err, code
+    f, engine, prof_info, uni, addr = state
+    body = request.get_json(silent=True) or {}
+    try:
+        dim = float(body.get("dim", 1.0))
+    except (TypeError, ValueError):
+        return jsonify(err="dim must be a number 0..1"), 400
+    try:
+        _set_fixture_beam(engine, uni, addr, dim, prof_info)
+    except Exception as e:
+        log.warning("/api/fixtures/%d/beam failed: %s", fid, e)
+        return jsonify(err="dmx_write_failed", detail=str(e)), 500
+    return jsonify(ok=True, dim=max(0.0, min(1.0, dim)))
+
+
+@app.post("/api/fixtures/<int:fid>/blackout")
+def api_fixture_blackout(fid):
+    """#737 — drive a fixture into its safe state (dimmer 0, shutter
+    closed if present, strobe off, RGB 0). Used by Stop-All and the
+    SMART error / cancel parking path. Idempotent."""
+    state, err, code = _resolve_dmx_fixture_engine(fid)
+    if err is not None:
+        return err, code
+    f, engine, prof_info, uni, addr = state
+    try:
+        _set_fixture_blackout(engine, uni, addr, prof_info)
+    except Exception as e:
+        log.warning("/api/fixtures/%d/blackout failed: %s", fid, e)
+        return jsonify(err="dmx_write_failed", detail=str(e)), 500
     return jsonify(ok=True)
 
 
@@ -14140,6 +14226,149 @@ def _set_fixture_color(engine_or_buf, uni_or_addr, addr_or_none, r, g, b, prof_i
             cw = rgb_to_wheel_slot(prof_info, r, g, b) if (r or g or b) else 0
             uni_buf.set_channel(addr + cm["color-wheel"], cw)
 
+
+# ── #737 — Lamp / beam / blackout helpers ──────────────────────────────
+#
+# Per #737, every "turn this fixture on" / "turn this fixture off" code
+# path goes through these helpers — NOT direct uni_buf.set_fixture_*
+# writes — so the per-profile quirks (RGB-only with no master dimmer,
+# colour-wheel-only with closed-shutter default, hybrid RGB+wheel
+# fixtures whose wheel filters out the RGB mix) live in one place.
+# The helpers branch on `channel_map` and the profile's `channels`
+# list to figure out exactly which channels need touching.
+
+def _set_fixture_lamp(engine, uni, addr, on, prof_info):
+    """Turn a fixture's lamp on or off across every profile variant.
+
+    On:
+      - Dimmer to 255 (if profile has one).
+      - Shutter / strobe to its "open" value (honours ShutterStrobe
+        capabilities when present, else channel default, else 255).
+      - RGB to white (255, 255, 255) when the profile has RGB.
+      - Colour-wheel to slot 0 (open / white) when wheel-only.
+      - Channel defaults applied for non-touched channels with default>0
+        (matches the dmx-test endpoint's existing behaviour).
+
+    Off:
+      - Dimmer to 0 (if profile has one).
+      - Shutter / strobe to "closed" (range with shutterEffect=Closed)
+        when the profile distinguishes; else 0.
+      - RGB to (0, 0, 0) so RGB-only fixtures (no master dimmer) go
+        dark too.
+
+    Idempotent — calling repeatedly with the same `on` value writes the
+    same channels.
+    """
+    if not prof_info or not engine:
+        return
+    cm = prof_info.get("channel_map", {}) or {}
+    channels = prof_info.get("channels", []) or []
+    uni_buf = engine.get_universe(uni)
+    if on:
+        if "dimmer" in cm:
+            uni_buf.set_channel(addr + cm["dimmer"], 255)
+        # Shutter open: honour the ShutterStrobe Open capability when
+        # the profile spells it out, else default, else 255.
+        if "strobe" in cm:
+            try:
+                from dmx_profiles import strobe_open_value
+                uni_buf.set_channel(addr + cm["strobe"],
+                                     strobe_open_value(prof_info))
+            except Exception:
+                # Fallback: channel default if >0 else 255.
+                strobe_ch = next((c for c in channels
+                                   if c.get("type") == "strobe"), None)
+                default = (strobe_ch or {}).get("default")
+                val = int(default) if isinstance(default, (int, float)) and default > 0 else 255
+                uni_buf.set_channel(addr + cm["strobe"], val)
+        # RGB to white if present, else colour-wheel to open slot.
+        if "red" in cm:
+            _set_fixture_color(engine, uni, addr, 255, 255, 255, prof_info)
+        elif "color-wheel" in cm:
+            uni_buf.set_channel(addr + cm["color-wheel"], 0)
+        # Apply channel defaults > 0 for any other channels we haven't
+        # explicitly written. Skip channel types we own here.
+        owned = {"dimmer", "strobe", "red", "green", "blue", "white",
+                 "color-wheel", "pan", "tilt", "pan-fine", "tilt-fine"}
+        for ch in channels:
+            ch_type = ch.get("type", "")
+            if ch_type in owned:
+                continue
+            default = ch.get("default")
+            if isinstance(default, (int, float)) and default > 0:
+                uni_buf.set_channel(addr + ch.get("offset", 0), int(default))
+    else:
+        # Lamp off — dim to 0, RGB to 0, shutter closed if profile knows.
+        if "dimmer" in cm:
+            uni_buf.set_channel(addr + cm["dimmer"], 0)
+        if "red" in cm:
+            for ch_name in ("red", "green", "blue", "white"):
+                if ch_name in cm:
+                    uni_buf.set_channel(addr + cm[ch_name], 0)
+        if "strobe" in cm:
+            # Try to find a "Closed" range; fall back to 0.
+            try:
+                strobe_ch = next((c for c in channels
+                                   if c.get("type") == "strobe"), {})
+                closed_val = 0
+                for cap in (strobe_ch.get("capabilities") or []):
+                    if cap.get("shutterEffect") == "Closed":
+                        rng = cap.get("range", [0, 0])
+                        closed_val = (rng[0] + rng[1]) // 2
+                        break
+                uni_buf.set_channel(addr + cm["strobe"], int(closed_val))
+            except Exception:
+                uni_buf.set_channel(addr + cm["strobe"], 0)
+
+
+def _set_fixture_beam(engine, uni, addr, dim_norm, prof_info):
+    """Set beam intensity 0..1 across every profile variant.
+
+    Profile has a dedicated dimmer channel → write that.
+    No dimmer channel (RGB-only) → scale RGB by dim_norm; current
+    colour preserved if the engine already has it, else default to
+    white.
+    Wheel-only with no dimmer → can't dim continuously; treat
+    ``dim_norm < 0.05`` as off (lamp-off path) and anything else as on.
+    """
+    if not prof_info or not engine:
+        return
+    cm = prof_info.get("channel_map", {}) or {}
+    uni_buf = engine.get_universe(uni)
+    dim_norm = max(0.0, min(1.0, float(dim_norm)))
+    if "dimmer" in cm:
+        uni_buf.set_channel(addr + cm["dimmer"], int(round(dim_norm * 255)))
+        return
+    if "red" in cm:
+        # Scale current colour by dim. Read what's already on the wire
+        # so we don't clobber the operator's chosen hue.
+        try:
+            cur_r = uni_buf.get_channel(addr + cm["red"])
+            cur_g = uni_buf.get_channel(addr + cm["green"])
+            cur_b = uni_buf.get_channel(addr + cm["blue"])
+        except Exception:
+            cur_r, cur_g, cur_b = 255, 255, 255
+        if cur_r == 0 and cur_g == 0 and cur_b == 0:
+            cur_r = cur_g = cur_b = 255
+        scale = dim_norm
+        _set_fixture_color(engine, uni, addr,
+                            int(cur_r * scale),
+                            int(cur_g * scale),
+                            int(cur_b * scale), prof_info)
+        return
+    # Wheel-only with no dimmer — binary on/off only.
+    _set_fixture_lamp(engine, uni, addr, dim_norm > 0.05, prof_info)
+
+
+def _set_fixture_blackout(engine, uni, addr, prof_info):
+    """Atomic safe state — dimmer 0, shutter closed, strobe off, RGB 0,
+    pan/tilt left where they are. Used by Stop-All and SMART
+    error/cancel parking. Equivalent to ``_set_fixture_lamp(on=False)``
+    today; kept as a separate name so future safe-state additions
+    (e.g. lamp-off command on profiles that have one) land here without
+    revisiting every call site."""
+    _set_fixture_lamp(engine, uni, addr, False, prof_info)
+
 # ── Remote-orientation primitive (#484) — initialised first so the
 #    mover-follow engine below can read it. ────────────────────────────────
 
@@ -19731,6 +19960,14 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
+
+
+
+
+
+
 
 
 

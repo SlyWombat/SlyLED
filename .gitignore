@@ -93,3 +93,22 @@ android/*.jks
 android/*.keystore
 android/keystore.properties
 *.onnx
+
+# Local environment / secrets / SSH (never commit)
+.ssh/
+Env.txt
+*.env
+
+# User-local working files at project root (PDFs, screenshots, deb installers, scratch dirs)
+*.pdf
+*.docx
+*.deb
+*.jpg
+prototypes/
+dmx_debug/
+claude-yolo.bat
+6.3
+tests/regression/runtime_3d_stopped.png
+tests/regression/view-toggle-shots/
+tests/user/
+

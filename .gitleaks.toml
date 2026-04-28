@@ -1,0 +1,50 @@
+# Gitleaks configuration for SlyLED
+# https://github.com/gitleaks/gitleaks
+
+title = "SlyLED secret scan"
+
+[extend]
+# Inherit all default rules (AWS keys, GH tokens, private keys, etc.)
+useDefault = true
+
+# ── Project-specific rules ────────────────────────────────────────────────────
+
+[[rules]]
+id          = "arduino-secrets"
+description = "Arduino secrets header with WiFi credentials"
+regex       = '''(SSID|PASSWORD|WIFI_PASS)\s*=\s*"[^"]+'''''
+tags        = ["wifi", "arduino"]
+
+[[rules]]
+id          = "slyled-wifi-json"
+description = "Plain-text WiFi password in wifi.json"
+regex       = '''"password"\s*:\s*"[^"]{4,}"'''
+path        = '''wifi\.json'''
+tags        = ["wifi", "json"]
+
+[[rules]]
+id          = "ssh-password"
+description = "SSH password field with a value"
+regex       = '''"sshPassword"\s*:\s*"[^"]{2,}"'''
+tags        = ["ssh"]
+
+# ── Allowlist — known-safe files / patterns ───────────────────────────────────
+
+[allowlist]
+description = "Safe paths and test fixtures"
+
+paths = [
+  '''.gitleaks\.toml''',           # this file
+  '''Env\.txt''',                   # local-only, gitignored
+  '''desktop/shared/data/wifi\.json''',   # gitignored; scanned locally only
+  '''desktop/shared/data/ssh\.json''',    # gitignored
+]
+
+regexes = [
+  # Encrypted blobs stored in wifi.json — not plaintext secrets
+  '''"(ssid|password)"\s*:\s*"gAAAA''',
+  # Placeholder / example values in test files
+  '''(your[-_]?ssid|your[-_]?password|changeme|example\.com)''',
+  # MAC-derived hostnames that look like hex keys
+  '''SLYC-[0-9A-Fa-f]{4}''',
+]
