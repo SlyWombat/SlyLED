@@ -6498,6 +6498,34 @@ def _smart_probe_point_default(fid, cam, bridge_ip, mover_color,
         return {"found": False, "reason": "no_beam"}
 
     px, py = beam[0], beam[1]
+
+    # #747 — nudge-confirm gate. Pre-#747 the SMART probe path stopped
+    # at _beam_detect_flash and committed every flash candidate as a
+    # hit, silently regressing every false-positive guard from
+    # #658 / #682-DD / #684. Now route through the same module-level
+    # confirm_candidate_with_nudge that battleship's _confirm uses, so
+    # bright-pixel false positives (storage bins, ambient highlights,
+    # detector latches) are rejected before being fed to the LSQ.
+    pan_range = float(prof_info.get("panRange") or 540.0)
+    tilt_range = float(prof_info.get("tiltRange") or 270.0)
+    nudge = max(0.005, min(0.02, 5.0 / max(1.0, pan_range)))
+    try:
+        verdict, conf_info = _mcal.confirm_candidate_with_nudge(
+            pan_norm, tilt_norm, px, py,
+            bridge_ip=bridge_ip, camera_ip=cam_ip, cam_idx=cam_idx,
+            mover_addr=addr, color=color, dmx=dmx,
+            confirm_nudge_delta=nudge,
+            pan_range_deg=pan_range, tilt_range_deg=tilt_range)
+    except Exception as e:
+        log.warning("SMART confirm_candidate raised: %s", e)
+        return {"found": False, "reason": "confirm_error",
+                "pixelX": px, "pixelY": py}
+    if verdict not in ("CONFIRMED",):
+        return {"found": False,
+                "reason": verdict.lower() if verdict else "rejected",
+                "pixelX": px, "pixelY": py,
+                "confirmInfo": conf_info}
+
     # Pixel → stage XYZ via depth.
     try:
         pt = _mcal._depth_at_pixel(cam_ip, cam_idx, px, py)
@@ -6508,9 +6536,27 @@ def _smart_probe_point_default(fid, cam, bridge_ip, mover_color,
         return {"found": False, "reason": "no_depth", "pixelX": px,
                 "pixelY": py}
 
+    # #746 — floor-plane sanity gate. A beam emitted from a fixture and
+    # striking the floor must measure at z ≈ floor_z. Detections at
+    # |z - floor_z| > 200 mm are physically impossible for a real
+    # floor strike (beam aimed at fixture itself, into a wall, or a
+    # detector false-positive that survived the nudge gate). Reject
+    # so the LSQ never sees the bad sample.
+    measured_z = float(pt[2])
+    job_floor_z = predicted_floor_xyz[2] if predicted_floor_xyz else 0.0
+    if abs(measured_z - job_floor_z) > 200.0:
+        log.warning("SMART probe z=%.0f outside ±200mm of floor_z=%.0f "
+                    "for fid=%s — rejecting as off-floor false positive",
+                    measured_z, job_floor_z, fid)
+        return {"found": False, "reason": "reject_offfloor",
+                "x": float(pt[0]), "y": float(pt[1]), "z": measured_z,
+                "pixelX": px, "pixelY": py,
+                "floorZ": job_floor_z}
+
     return {"found": True,
             "x": float(pt[0]), "y": float(pt[1]), "z": float(pt[2]),
-            "pixelX": px, "pixelY": py}
+            "pixelX": px, "pixelY": py,
+            "confirmInfo": conf_info}
 
 
 def _mover_cal_thread_smart(fid, cam, bridge_ip, mover_color,
@@ -6687,6 +6733,12 @@ def _mover_cal_thread_smart_body(fid, cam, bridge_ip, mover_color,
     job["phase"] = "smart_probing"
     samples = []
     successes = 0
+    # #746 — track consecutive off-floor rejections so we can abort the
+    # run early when the detector is hallucinating bright pixels at
+    # impossible heights (every accepted "hit" landing well above the
+    # floor plane indicates either a wrong-sign tilt slew or a static
+    # bright object the gate didn't catch). Bail after 2 in a row.
+    consecutive_offfloor = 0
     for idx, pt in enumerate(probe_points):
         if _mcal.is_cancel_requested():
             raise _mcal.CalibrationAborted("operator cancelled SMART probe")
@@ -6730,16 +6782,38 @@ def _mover_cal_thread_smart_body(fid, cam, bridge_ip, mover_color,
                 float(result.get("y", 0.0)),
                 float(result.get("z", floor_z)),
             ]
+            if "confirmInfo" in result:
+                sample["confirmInfo"] = result["confirmInfo"]
             successes += 1
+            consecutive_offfloor = 0
             if idx < len(job["smartProbeGrid"]):
                 job["smartProbeGrid"][idx]["status"] = "hit"
                 job["smartProbeGrid"][idx]["measured"] = sample["measured"]
         else:
             sample["found"] = False
             sample["reason"] = result.get("reason", "no_beam")
+            if "confirmInfo" in result:
+                sample["confirmInfo"] = result["confirmInfo"]
+            if "x" in result and "y" in result and "z" in result:
+                sample["measured"] = [float(result["x"]), float(result["y"]),
+                                       float(result["z"])]
             if idx < len(job["smartProbeGrid"]):
                 job["smartProbeGrid"][idx]["status"] = "miss"
                 job["smartProbeGrid"][idx]["reason"] = sample["reason"]
+                if "confirmInfo" in result:
+                    job["smartProbeGrid"][idx]["confirmInfo"] = result["confirmInfo"]
+            # #746 — count consecutive off-floor false positives.
+            if sample["reason"] == "reject_offfloor":
+                consecutive_offfloor += 1
+                if consecutive_offfloor >= 2:
+                    samples.append(sample)
+                    raise _mcal.CalibrationError(
+                        "detection_above_floor: 2 consecutive probes "
+                        "measured above the floor plane — likely a tilt-"
+                        "sign mismatch or detector hallucination. Re-run "
+                        "Set Home Secondary and verify mountedInverted.")
+            else:
+                consecutive_offfloor = 0
         samples.append(sample)
 
     job["phase"] = "smart_solving"

@@ -2225,6 +2225,105 @@ def run():
         ok('#745 cameraLayoutDriftIds reports unplaced camera',
            999 not in (r.get('cameraLayoutDriftIds') or []))  # not in drift since no x/y/z
 
+        # ── #746/#747: SMART probe routes through confirm + floor-z gate ──
+        # _smart_probe_point_default calls _beam_detect_flash → confirm →
+        # depth → floor-z gate. We monkey-patch _beam_detect_flash to
+        # return a fake pixel and confirm_candidate_with_nudge to inject
+        # the verdict, then verify the result obeys the gate.
+        import mover_calibrator as mcal_mod
+
+        # Save originals
+        orig_flash = mcal_mod._beam_detect_flash
+        orig_depth = mcal_mod._depth_at_pixel
+        orig_confirm = mcal_mod.confirm_candidate_with_nudge
+
+        # The probe path requires a running engine. `running` is a
+        # property — patch the underlying flag on the engine instance.
+        # Most ArtNet engines expose `_running` as the storage for the
+        # property; if not, swap to a stub engine.
+        orig_artnet = parent_server._artnet
+        class _StubEng:
+            running = True
+            _running = True
+            def get_universe(self, u):
+                class _U:
+                    def set_fixture_pan_tilt(self, *a, **kw): pass
+                    def set_fixture_dimmer(self, *a, **kw): pass
+                    def set_fixture_rgb(self, *a, **kw): pass
+                return _U()
+        parent_server._artnet = _StubEng()
+        parent_server._mcal._active_universe = 1
+
+        # Stub: flash always returns a pixel; confirm verdict and depth
+        # are pluggable per-test.
+        mcal_mod._beam_detect_flash = lambda *a, **kw: (320, 240)
+        try:
+            # Case 1 — confirm rejects → SMART probe returns found:False
+            mcal_mod.confirm_candidate_with_nudge = (
+                lambda *a, **kw: ("REJECTED_OUT_OF_FRAME",
+                                   {"panShift": 0, "tiltShift": 0}))
+            mcal_mod._depth_at_pixel = lambda *a, **kw: (1000.0, 500.0, 0.0)
+            # Need a mover fixture with a profile + camera
+            for f in parent_server._fixtures:
+                if f.get('id') == 2:
+                    f['fixtureType'] = 'dmx'
+                    f['dmxStartAddr'] = 1
+                    f['dmxUniverse'] = 1
+                    f['rotation'] = [89.0, 0.0, 0.0]
+            # Add a camera with an IP
+            cam_stub = {'cameraIp': '10.0.0.99', 'cameraIdx': 0,
+                         'id': 999, 'name': 'h747-cam'}
+            res = parent_server._smart_probe_point_default(
+                fid=2, cam=cam_stub, bridge_ip='10.0.0.1',
+                mover_color=(0, 255, 0),
+                pan_dmx16=32768, tilt_dmx16=16384,
+                predicted_floor_xyz=(1000.0, 500.0, 0.0),
+                settle_ms=0)
+            ok('#747 confirm reject → found=False',
+               res.get('found') is False)
+            ok('#747 confirm reject → reason carries verdict',
+               'rejected' in (res.get('reason') or '').lower()
+               or 'out_of_frame' in (res.get('reason') or '').lower())
+
+            # Case 2 — confirm OK + measured z near floor → found=True
+            mcal_mod.confirm_candidate_with_nudge = (
+                lambda *a, **kw: ("CONFIRMED",
+                                   {"panShift": 20, "tiltShift": 20}))
+            mcal_mod._depth_at_pixel = lambda *a, **kw: (1000.0, 500.0, 5.0)
+            res = parent_server._smart_probe_point_default(
+                fid=2, cam=cam_stub, bridge_ip='10.0.0.1',
+                mover_color=(0, 255, 0),
+                pan_dmx16=32768, tilt_dmx16=16384,
+                predicted_floor_xyz=(1000.0, 500.0, 0.0),
+                settle_ms=0)
+            ok('#747 confirm ok + on-floor → found=True',
+               res.get('found') is True)
+            ok('#747 confirm ok carries confirmInfo',
+               'confirmInfo' in res)
+
+            # Case 3 — #746 floor-z gate: confirm OK but z=1700 → reject
+            mcal_mod.confirm_candidate_with_nudge = (
+                lambda *a, **kw: ("CONFIRMED",
+                                   {"panShift": 20, "tiltShift": 20}))
+            mcal_mod._depth_at_pixel = lambda *a, **kw: (1000.0, 500.0, 1700.0)
+            res = parent_server._smart_probe_point_default(
+                fid=2, cam=cam_stub, bridge_ip='10.0.0.1',
+                mover_color=(0, 255, 0),
+                pan_dmx16=32768, tilt_dmx16=16384,
+                predicted_floor_xyz=(1000.0, 500.0, 0.0),
+                settle_ms=0)
+            ok('#746 above-floor measurement → found=False',
+               res.get('found') is False)
+            ok('#746 above-floor reason=reject_offfloor',
+               res.get('reason') == 'reject_offfloor')
+            ok('#746 above-floor reports measured z',
+               res.get('z') == 1700.0)
+        finally:
+            mcal_mod._beam_detect_flash = orig_flash
+            mcal_mod._depth_at_pixel = orig_depth
+            mcal_mod.confirm_candidate_with_nudge = orig_confirm
+            parent_server._artnet = orig_artnet
+
         # ── #728: SMART validate-pass commit gate ──────────────────────
         # Endpoint round-trip: stage a fake job in `validating` status
         # with two markers, drive the confirm endpoint twice (yes+yes),

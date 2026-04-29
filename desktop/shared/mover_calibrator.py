@@ -1018,6 +1018,176 @@ def _camera_visible_tilt_band(fx_pos, fx_rot, home_pan_norm,
     return (min(in_band), max(in_band))
 
 
+# ── #747 — module-level extraction of _confirm so SMART can reuse it ─────
+#
+# The legacy battleship_discover pipeline runs every flash-detect candidate
+# through a four-direction nudge-confirm gate before accepting it. The gate
+# checks that the candidate pixel actually moves under pan/tilt nudges
+# (rejects detector latching on static bright objects), the move is
+# proportional to the per-degree pixel rate (rejects identity swaps at
+# frame edges), and the four nudge probes land on the same depth surface
+# (rejects pillar-vs-back-wall straddles).
+#
+# Pre-#747 this gate lived as a closure inside battleship_discover. The
+# SMART probing path (parent_server._smart_probe_point_default) skipped
+# it entirely and committed every flash-detect candidate as a hit — every
+# false-positive guard from #658 / #682-DD / #684 / #702 Bug C / #705
+# silently regressed. Extracting to a module-level function with an
+# explicit context lets both call sites share the exact same gate.
+
+def confirm_candidate_with_nudge(pan0, tilt0, px0, py0, *, bridge_ip,
+                                  camera_ip, cam_idx, mover_addr, color, dmx,
+                                  confirm_nudge_delta,
+                                  pan_range_deg, tilt_range_deg,
+                                  beam_width_deg=None,
+                                  camera_resolution=None,
+                                  surface_check=None,
+                                  confirm_geom=None,
+                                  confirm_continuity_cap_mult=5.0,
+                                  confirm_ratio_min=0.33,
+                                  confirm_ratio_max=3.0,
+                                  confirm_symmetry_min_px=4):
+    """Four-direction nudge-confirm gate. See module docstring above for
+    history. Returns ``(verdict, info)`` where verdict is one of
+    CONFIRMED / PARTIAL / REJECTED_OUT_OF_FRAME / REJECTED_DISCONTINUOUS /
+    REJECTED_DISPROPORTIONATE / REJECTED_DEPTH_DISCONTINUITY.
+
+    All DMX writes go through the existing ``_set_mover_dmx`` /
+    ``_hold_dmx`` / ``_beam_detect`` helpers — the gate is sequence
+    logic only, no new I/O primitives.
+    """
+    def _probe(pan, tilt):
+        # #702 Bug C — confirm-nudge slews must blackout first, then
+        # turn light on at the destination, to match _beam_detect_flash
+        # (#695). #705 — pass the cal colour through the blackout so
+        # the wheel doesn't rotate to slot 0 and back every probe.
+        _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=0)
+        _hold_dmx(bridge_ip, dmx, 0.30)
+        _set_mover_dmx(dmx, mover_addr, pan, tilt, *color, dimmer=255)
+        _hold_dmx(bridge_ip, dmx, 0.20)
+        return _beam_detect(camera_ip, cam_idx, color, center=True)
+
+    nudge = float(confirm_nudge_delta)
+    probes = {
+        "pan+":  _probe(min(1.0, pan0 + nudge), tilt0),
+        "pan-":  _probe(max(0.0, pan0 - nudge), tilt0),
+        "tilt+": _probe(pan0, min(1.0, tilt0 + nudge)),
+        "tilt-": _probe(pan0, max(0.0, tilt0 - nudge)),
+    }
+    # Re-settle on the candidate so downstream refine starts from the
+    # same state we told the caller we hit. Blackout-relight pattern.
+    _set_mover_dmx(dmx, mover_addr, pan0, tilt0, *color, dimmer=0)
+    _hold_dmx(bridge_ip, dmx, 0.30)
+    _set_mover_dmx(dmx, mover_addr, pan0, tilt0, *color, dimmer=255)
+    _hold_dmx(bridge_ip, dmx, 0.2)
+
+    def _sig(b):
+        if b is None:
+            return None
+        return (b[0] - px0, b[1] - py0,
+                math.hypot(b[0] - px0, b[1] - py0))
+    signals = {k: _sig(v) for k, v in probes.items()}
+    mag = {k: (s[2] if s else 0.0) for k, s in signals.items()}
+    pan_shift = max(mag["pan+"], mag["pan-"])
+    tilt_shift = max(mag["tilt+"], mag["tilt-"])
+
+    info = {
+        "panShift": round(pan_shift, 1),
+        "tiltShift": round(tilt_shift, 1),
+        "panPlus": round(mag["pan+"], 1),
+        "panMinus": round(mag["pan-"], 1),
+        "tiltPlus": round(mag["tilt+"], 1),
+        "tiltMinus": round(mag["tilt-"], 1),
+    }
+
+    # Gate 1 — out-of-frame: at least ONE axis must move under nudge.
+    if pan_shift < 8 and tilt_shift < 8:
+        return ("REJECTED_OUT_OF_FRAME", info)
+
+    # Gate 1b — depth discontinuity (#684).
+    if surface_check is not None:
+        try:
+            surface_centre = surface_check((px0, py0))
+            surface_probes = {
+                k: (surface_check((b[0], b[1])) if b is not None else None)
+                for k, b in probes.items()
+            }
+        except Exception as e:
+            log.debug("confirm_candidate: surface_check raised %s — "
+                      "skipping depth-discontinuity gate", e)
+            surface_centre = None
+            surface_probes = {}
+        labelled = {s for s in (surface_centre, *surface_probes.values())
+                    if s is not None}
+        if len(labelled) > 1:
+            info["surfaceCentre"] = surface_centre
+            info["surfaceProbes"] = surface_probes
+            info["surfacesHit"] = sorted(labelled)
+            return ("REJECTED_DEPTH_DISCONTINUITY", info)
+        elif surface_centre is not None:
+            info["surfaceCentre"] = surface_centre
+
+    # Gate 2 — continuity cap (#697 multiplier).
+    expected = info.setdefault("expected", {})
+    cap_mag = None
+    try:
+        if (beam_width_deg and camera_resolution and
+                confirm_geom is not None):
+            cap_mag = float(confirm_continuity_cap_mult) * confirm_geom["beam_width_px"]
+            expected["capPx"] = round(cap_mag, 1)
+            expected["beamWidthPx"] = round(confirm_geom["beam_width_px"], 1)
+            expected["panPerDeg"] = round(confirm_geom["px_per_deg_pan"], 2)
+            expected["tiltPerDeg"] = round(confirm_geom["px_per_deg_tilt"], 2)
+    except Exception:
+        cap_mag = None
+    if cap_mag is not None and cap_mag > 0 and max(pan_shift, tilt_shift) > cap_mag:
+        return ("REJECTED_DISCONTINUOUS", info)
+
+    # Gate 3 — proportionality (#682-DD + #697 bounds).
+    if confirm_geom is not None:
+        exp_pan = nudge * float(pan_range_deg) * confirm_geom["px_per_deg_pan"]
+        exp_tilt = nudge * float(tilt_range_deg) * confirm_geom["px_per_deg_tilt"]
+        expected["panPx"] = round(exp_pan, 1)
+        expected["tiltPx"] = round(exp_tilt, 1)
+        ratios = []
+        if pan_shift >= 8 and exp_pan > 0:
+            ratios.append(pan_shift / exp_pan)
+        if tilt_shift >= 8 and exp_tilt > 0:
+            ratios.append(tilt_shift / exp_tilt)
+        if ratios:
+            ratio = sum(ratios) / len(ratios)
+            info["observedOverExpected"] = round(ratio, 2)
+            if ratio < float(confirm_ratio_min) or ratio > float(confirm_ratio_max):
+                info["ratioBounds"] = [confirm_ratio_min, confirm_ratio_max]
+                return ("REJECTED_DISPROPORTIONATE", info)
+
+    # Gate 4 — symmetry (#697 bounds).
+    def _symmetric(a, b, ax_comp):
+        if a is None or b is None:
+            return False
+        sa = a[ax_comp]
+        sb = b[ax_comp]
+        min_px = float(confirm_symmetry_min_px)
+        if abs(sa) < min_px or abs(sb) < min_px:
+            return False
+        if (sa > 0) == (sb > 0):
+            return False
+        ratio = abs(sa) / max(abs(sb), 1e-3)
+        return float(confirm_ratio_min) <= ratio <= float(confirm_ratio_max)
+
+    pan_sym = _symmetric(signals["pan+"], signals["pan-"], 0)
+    tilt_sym = _symmetric(signals["tilt+"], signals["tilt-"], 1)
+    info["panSymmetric"] = bool(pan_sym)
+    info["tiltSymmetric"] = bool(tilt_sym)
+
+    strong_pan = pan_shift >= tilt_shift
+    strong_sym = pan_sym if strong_pan else tilt_sym
+    if not strong_sym:
+        return ("PARTIAL", info)
+
+    return ("CONFIRMED", info)
+
+
 def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
                          seed_pan=None, seed_tilt=None, profile=None,
                          coarse_steps=None, coarse_pan_steps=None,

@@ -714,6 +714,74 @@ except Exception as e:
 
 
 # =====================================================================
+# #747 — confirm_candidate_with_nudge: false-positive gate, monkeypatched
+# =====================================================================
+import mover_calibrator as mcal
+
+# A static-bright-pixel detector: returns the same pixel regardless of
+# pan/tilt. _beam_detect is patched to ALWAYS return (320, 240). Under
+# nudge-confirm, all four probes report the same pixel → zero shift →
+# REJECTED_OUT_OF_FRAME.
+_orig_beam_detect = mcal._beam_detect
+_orig_set = mcal._set_mover_dmx
+_orig_hold = mcal._hold_dmx
+mcal._beam_detect = lambda ip, idx, color=None, threshold=50, center=False: (320, 240)
+mcal._set_mover_dmx = lambda *a, **kw: None
+mcal._hold_dmx = lambda *a, **kw: None
+try:
+    verdict, info = mcal.confirm_candidate_with_nudge(
+        0.5, 0.5, 320, 240,
+        bridge_ip="x", camera_ip="x", cam_idx=0, mover_addr=1,
+        color=(0,255,0), dmx=bytearray(512),
+        confirm_nudge_delta=0.02,
+        pan_range_deg=540.0, tilt_range_deg=270.0)
+    check('#747 static-bright-pixel rejected as REJECTED_OUT_OF_FRAME',
+          verdict == "REJECTED_OUT_OF_FRAME",
+          f'got verdict={verdict} info={info}')
+finally:
+    mcal._beam_detect = _orig_beam_detect
+    mcal._set_mover_dmx = _orig_set
+    mcal._hold_dmx = _orig_hold
+
+# A fake detector that DOES move under nudge with proportionate symmetric
+# shifts → CONFIRMED.
+_real_pan = [0.5]
+_real_tilt = [0.5]
+def _moving_beam_detect(ip, idx, color=None, threshold=50, center=False):
+    pan = _real_pan[0]
+    tilt = _real_tilt[0]
+    # 1000 px per normalised unit. At nudge=0.02 → ±20 px shift, well
+    # above the 8 px out-of-frame floor.
+    px = 320 + int(round((pan - 0.5) * 1000))
+    py = 240 + int(round((tilt - 0.5) * 1000))
+    return (px, py)
+def _capture_pan_tilt(dmx, addr, pan, tilt, *args, **kw):
+    _real_pan[0] = pan
+    _real_tilt[0] = tilt
+mcal._beam_detect = _moving_beam_detect
+mcal._set_mover_dmx = _capture_pan_tilt
+mcal._hold_dmx = lambda *a, **kw: None
+try:
+    verdict, info = mcal.confirm_candidate_with_nudge(
+        0.5, 0.5, 320, 240,
+        bridge_ip="x", camera_ip="x", cam_idx=0, mover_addr=1,
+        color=(0,255,0), dmx=bytearray(512),
+        confirm_nudge_delta=0.02,
+        pan_range_deg=540.0, tilt_range_deg=270.0)
+    check('#747 moving-beam confirmed',
+          verdict == "CONFIRMED",
+          f'got verdict={verdict} info={info}')
+    check('#747 panShift > 0 on CONFIRMED',
+          info.get("panShift", 0) > 0)
+    check('#747 tiltShift > 0 on CONFIRMED',
+          info.get("tiltShift", 0) > 0)
+finally:
+    mcal._beam_detect = _orig_beam_detect
+    mcal._set_mover_dmx = _orig_set
+    mcal._hold_dmx = _orig_hold
+
+
+# =====================================================================
 print(f'\n{passed} passed, {failed} failed out of {passed + failed} tests')
 if failed:
     sys.exit(1)
