@@ -1,0 +1,37 @@
+== cal-status poller fid=17 @ 5.0 Hz -> docs\live-test-sessions\2026-04-28\cal-fid17-smart-attempt2\cal-status-172236.ndjson
+[2026-04-28T17:22:47.344309Z] none         progress=None  
+[2026-04-28T17:23:18.705325Z] smart_preview progress=0  
+[2026-04-28T17:23:20.945442Z] smart_probing progress=0   probe#3 pan=0.6675 tilt=0.2596 dim=0
+[2026-04-28T17:23:23.164847Z] smart_probing progress=0   probe#4 pan=0.6675 tilt=0.2596 dim=255
+[2026-04-28T17:23:36.733195Z] smart_probing progress=0   probe#7 pan=0.6702 tilt=0.2063 dim=0
+[2026-04-28T17:23:41.180279Z] smart_probing progress=0   probe#11 pan=0.6717 tilt=0.1693 dim=0
+[2026-04-28T17:23:46.168603Z] smart_probing progress=0   probe#12 pan=0.6717 tilt=0.1693 dim=255
+[2026-04-28T17:23:55.112172Z] smart_probing progress=0   probe#12 pan=0.6727 tilt=0.1427 dim=255
+[2026-04-28T17:23:57.448630Z] smart_probing progress=0   probe#15 pan=0.6727 tilt=0.1427 dim=0
+[2026-04-28T17:23:59.684993Z] smart_probing progress=0   probe#16 pan=0.6727 tilt=0.1427 dim=255
+[2026-04-28T17:24:08.616046Z] smart_probing progress=0   probe#16 pan=0.7225 tilt=0.2451 dim=255
+[2026-04-28T17:24:10.852213Z] smart_probing progress=0   probe#19 pan=0.7225 tilt=0.2451 dim=0
+[2026-04-28T17:24:13.080905Z] smart_probing progress=0   probe#20 pan=0.7104 tilt=0.1990 dim=255
+[2026-04-28T17:24:15.521097Z] smart_probing progress=0   probe#23 pan=0.7104 tilt=0.1990 dim=0
+[2026-04-28T17:24:17.748570Z] smart_probing progress=0   probe#24 pan=0.7104 tilt=0.1990 dim=255
+[2026-04-28T17:24:28.917535Z] smart_probing progress=0   probe#27 pan=0.7032 tilt=0.1652 dim=0
+[2026-04-28T17:24:31.166968Z] smart_probing progress=0   probe#28 pan=0.6986 tilt=0.1402 dim=255
+[2026-04-28T17:24:33.403857Z] smart_probing progress=0   probe#31 pan=0.6986 tilt=0.1402 dim=0
+[2026-04-28T17:24:35.650771Z] smart_probing progress=0   probe#32 pan=0.6986 tilt=0.1402 dim=255
+[2026-04-28T17:24:44.638901Z] smart_probing progress=0   probe#33 pan=0.7606 tilt=0.2053 dim=0
+[2026-04-28T17:24:46.863528Z] smart_probing progress=0   probe#35 pan=0.7606 tilt=0.2053 dim=0
+[2026-04-28T17:24:49.098723Z] smart_probing progress=0   probe#36 pan=0.7428 tilt=0.1760 dim=255
+[2026-04-28T17:24:51.326879Z] smart_probing progress=0   probe#39 pan=0.7428 tilt=0.1760 dim=0
+[2026-04-28T17:24:53.553407Z] smart_probing progress=0   probe#40 pan=0.7428 tilt=0.1760 dim=255
+[2026-04-28T17:25:02.588459Z] smart_probing progress=0   probe#40 pan=0.7307 tilt=0.1514 dim=255
+[2026-04-28T17:25:04.811398Z] smart_probing progress=0   probe#43 pan=0.7307 tilt=0.1514 dim=0
+[2026-04-28T17:25:07.201677Z] smart_probing progress=0   probe#44 pan=0.7221 tilt=0.1315 dim=255
+[2026-04-28T17:25:09.425726Z] smart_probing progress=0   probe#47 pan=0.7221 tilt=0.1315 dim=0
+[2026-04-28T17:25:11.657204Z] smart_probing progress=0   probe#49 pan=0.7829 tilt=0.1667 dim=0
+[2026-04-28T17:25:13.887115Z] smart_probing progress=0   probe#51 pan=0.7829 tilt=0.1667 dim=0
+[2026-04-28T17:25:16.119269Z] smart_probing progress=0   probe#53 pan=0.7656 tilt=0.1500 dim=0
+[2026-04-28T17:25:18.351263Z] smart_probing progress=0   probe#55 pan=0.7656 tilt=0.1500 dim=0
+[2026-04-28T17:25:20.594379Z] smart_probing progress=0   probe#59 pan=0.7522 tilt=0.1339 dim=0
+[2026-04-28T17:25:25.046800Z] smart_probing progress=0   probe#63 pan=0.7418 tilt=0.1195 dim=0
+[2026-04-28T17:25:27.274030Z] smart_probing progress=0   probe#64 pan=0.7418 tilt=0.1195 dim=255
+[2026-04-28T17:25:29.503494Z] smart_solving progress=0   probe#64 pan=0.7418 tilt=0.1195 dim=255
