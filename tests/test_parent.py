@@ -1771,6 +1771,270 @@ def run():
             ok('#739 force=true position is (0,0,0)',
                cur2 is not None and cur2.get('x') == 0 and cur2.get('y') == 0 and cur2.get('z') == 0)
 
+        # ── #741: expanded save/restore regression coverage ────────────
+        # #741 plugs the holes #739 fell through. The existing #739 block
+        # above asserts the stale-cache wipe fix; this block adds:
+        #   Group 1 — basic round-trip of layout.children positions
+        #   Group 2 — race coverage (empty/partial body contracts)
+        #   Group 4 — scope of show/import + config/import + project/import
+        # Group 3 (Playwright SPA) lives in tests/test_save_restore_spa.py.
+        # Group 5 (end-to-end) lives in tests/regression/test_save_restore.py.
+        from pathlib import Path as _P741Path
+
+        # Each sub-block resets to a known state so it can run independently
+        # of every preceding test (and so future re-orderings don't break).
+
+        def _h741_reset():
+            c.post('/api/reset', headers={'X-SlyLED-Confirm': 'true'})
+
+        def _h741_seed_positioned():
+            """Create 3 positioned LED fixtures and return [(id,x,y,z), ...]."""
+            seeded = []
+            for i, (px, py, pz) in enumerate(
+                    [(500, 0, 1690), (1500, 800, 1690), (2500, 1600, 1700)]):
+                rr = c.post('/api/fixtures', json={
+                    'name': f'h741-led-{i}', 'fixtureType': 'led',
+                    'strings': [{'leds': 30, 'mm': 1000, 'sdir': 0}],
+                })
+                fid = rr.get_json()['id']
+                seeded.append((fid, px, py, pz))
+            c.post('/api/layout', json={
+                'children': [{'id': fid, 'x': x, 'y': y, 'z': z}
+                             for (fid, x, y, z) in seeded],
+            })
+            return seeded
+
+        # ── Group 1.1 — export preserves positions byte-identical ──────
+        _h741_reset()
+        seeded = _h741_seed_positioned()
+        proj741 = c.get('/api/project/export').get_json()
+        export_kids = {ch['id']: ch
+                       for ch in (proj741.get('layout') or {}).get('children') or []}
+        ok('#741 G1: export contains all seeded fixture positions',
+           len(export_kids) == len(seeded))
+        export_match = all(
+            export_kids.get(fid, {}).get('x') == x
+            and export_kids.get(fid, {}).get('y') == y
+            and export_kids.get(fid, {}).get('z') == z
+            for (fid, x, y, z) in seeded)
+        ok('#741 G1: export positions byte-identical', export_match,
+           f'export_kids={export_kids} seeded={seeded}')
+
+        # ── Group 1.2 — import restores positions to memory (GET /api/layout)
+        _h741_reset()
+        r = c.post('/api/project/import', json=proj741)
+        ok('#741 G1: import returns ok', r.status_code == 200
+           and r.get_json().get('ok'))
+        mem_layout = c.get('/api/layout').get_json()
+        mem_fixs = {f['id']: f for f in (mem_layout.get('fixtures') or [])}
+        mem_match = all(
+            mem_fixs.get(fid, {}).get('x') == x
+            and mem_fixs.get(fid, {}).get('y') == y
+            and mem_fixs.get(fid, {}).get('z') == z
+            and mem_fixs.get(fid, {}).get('positioned') is True
+            for (fid, x, y, z) in seeded)
+        ok('#741 G1: import restored positions to memory', mem_match,
+           f'mem_fixs={mem_fixs} seeded={seeded}')
+
+        # ── Group 1.3 — import persists positions to disk ──────────────
+        _data741 = _P741Path(parent_server.DATA)
+        disk_layout = json.loads((_data741 / 'layout.json').read_text())
+        disk_kids = {ch['id']: ch for ch in (disk_layout.get('children') or [])}
+        disk_match = all(
+            disk_kids.get(fid, {}).get('x') == x
+            and disk_kids.get(fid, {}).get('y') == y
+            and disk_kids.get(fid, {}).get('z') == z
+            for (fid, x, y, z) in seeded)
+        ok('#741 G1: import persisted positions to disk (layout.json)',
+           disk_match, f'disk_kids={disk_kids} seeded={seeded}')
+        disk_fixtures = json.loads((_data741 / 'fixtures.json').read_text())
+        ok('#741 G1: fixtures.json on disk matches seed count',
+           len(disk_fixtures) == len(seeded))
+
+        # ── Group 1.4 — simulated restart: re-_load() from disk matches
+        # We simulate a process restart by calling _load("layout") /
+        # _load("fixtures") directly on the same DATA directory. This is
+        # exactly what parent_server does at module import — a fresh
+        # process would see the same JSON files we just wrote.
+        reload_layout = parent_server._load('layout', None)
+        reload_fixtures = parent_server._load('fixtures', None)
+        ok('#741 G1: _load("layout") survives simulated restart',
+           reload_layout is not None
+           and len(reload_layout.get('children') or []) == len(seeded))
+        ok('#741 G1: _load("fixtures") survives simulated restart',
+           reload_fixtures is not None and len(reload_fixtures) == len(seeded))
+        reload_kids = {ch['id']: ch
+                       for ch in (reload_layout.get('children') or [])}
+        reload_match = all(
+            reload_kids.get(fid, {}).get('x') == x
+            and reload_kids.get(fid, {}).get('y') == y
+            and reload_kids.get(fid, {}).get('z') == z
+            for (fid, x, y, z) in seeded)
+        ok('#741 G1: simulated-restart positions match seed', reload_match)
+
+        # ── Group 2.1 — stale layout POST refused (already covered above
+        # by the existing #739 block, but #741 explicitly asks for it
+        # codified once more in the all-zeros-body shape with multiple
+        # fids so future regressions to a per-fid loop are caught).
+        _h741_reset()
+        seeded = _h741_seed_positioned()
+        r = c.post('/api/layout', json={
+            'children': [{'id': fid, 'x': 0, 'y': 0, 'z': 0}
+                         for (fid, _x, _y, _z) in seeded],
+        })
+        d = r.get_json()
+        wipes = d.get('wipesBlocked') or []
+        ok('#741 G2: all-zeros body reports every wipe blocked',
+           sorted(wipes) == sorted(fid for (fid, _, _, _) in seeded),
+           f'wipes={wipes}')
+        after = c.get('/api/layout').get_json()
+        after_kids = {ch['id']: ch for ch in (after.get('children') or [])}
+        all_preserved = all(
+            after_kids.get(fid, {}).get('x') == x
+            and after_kids.get(fid, {}).get('y') == y
+            and after_kids.get(fid, {}).get('z') == z
+            for (fid, x, y, z) in seeded)
+        ok('#741 G2: all-zeros body preserved every position', all_preserved,
+           f'after_kids={after_kids} seeded={seeded}')
+
+        # ── Group 2.2 — empty body {children: []} after populated import
+        # Current contract is REPLACE-ALL: fixtures absent from the body
+        # drop out of _layout.children. This preserves the
+        # remove-from-canvas SPA flow. #741 explicitly asks us to codify
+        # this so the contract is locked down and any future shift to a
+        # partial-update model produces a red test instead of silent
+        # behaviour change.
+        _h741_reset()
+        seeded = _h741_seed_positioned()
+        r = c.post('/api/layout', json={'children': []})
+        ok('#741 G2: empty children body returns 200', r.status_code == 200)
+        ok('#741 G2: empty body reports no wipesBlocked',
+           not (r.get_json().get('wipesBlocked')))
+        after = c.get('/api/layout').get_json()
+        ok('#741 G2: empty children body clears _layout.children'
+           ' (replace-all contract)',
+           (after.get('children') or []) == [])
+
+        # ── Group 2.3 — partial body {children: [one]}: others drop ────
+        # Same contract — codify replace-all. If we ever flip to
+        # partial-update, this assertion fires and forces a deliberate
+        # contract change with new tests.
+        _h741_reset()
+        seeded = _h741_seed_positioned()
+        keep_fid = seeded[0][0]
+        r = c.post('/api/layout', json={
+            'children': [{'id': keep_fid, 'x': 99, 'y': 0, 'z': 0}],
+        })
+        ok('#741 G2: partial body returns 200', r.status_code == 200)
+        # x=99 with y=z=0 is non-zero so the wipe-block doesn't trip.
+        after = c.get('/api/layout').get_json()
+        ids_now = sorted(ch['id'] for ch in (after.get('children') or []))
+        ok('#741 G2: partial body drops unmentioned ids (replace-all)',
+           ids_now == [keep_fid])
+        kept = next((ch for ch in (after.get('children') or [])
+                     if ch['id'] == keep_fid), None)
+        ok('#741 G2: partial body updates kept id to new (x,y,z)',
+           kept is not None and kept.get('x') == 99
+           and kept.get('y') == 0 and kept.get('z') == 0)
+
+        # ── Group 4.1 — /api/show/import does NOT touch fixtures/layout
+        _h741_reset()
+        seeded = _h741_seed_positioned()
+        before = c.get('/api/layout').get_json()
+        before_kids = sorted([(ch['id'], ch.get('x'), ch.get('y'),
+                               ch.get('z'))
+                              for ch in (before.get('children') or [])])
+        before_fix_ids = sorted(f['id'] for f in (before.get('fixtures') or []))
+        show_payload = {
+            'type': 'slyled-show', 'version': 1,
+            'actions': [{'id': 0, 'name': 'h741-show-act', 'type': 1,
+                         'r': 10, 'g': 20, 'b': 30}],
+            'spatialEffects': [],
+            'timelines': [],
+        }
+        r = c.post('/api/show/import', json=show_payload)
+        ok('#741 G4: /api/show/import returns ok',
+           r.status_code == 200 and r.get_json().get('ok'))
+        after = c.get('/api/layout').get_json()
+        after_kids = sorted([(ch['id'], ch.get('x'), ch.get('y'),
+                              ch.get('z'))
+                             for ch in (after.get('children') or [])])
+        after_fix_ids = sorted(f['id'] for f in (after.get('fixtures') or []))
+        ok('#741 G4: /api/show/import did not touch layout.children',
+           after_kids == before_kids,
+           f'before={before_kids} after={after_kids}')
+        ok('#741 G4: /api/show/import did not touch fixtures',
+           after_fix_ids == before_fix_ids,
+           f'before={before_fix_ids} after={after_fix_ids}')
+
+        # ── Group 4.2 — /api/config/import does NOT clobber positions
+        # Config import remaps layout IDs but only for children that
+        # match by hostname AND for layout entries that are in the
+        # imported config. Since our config payload below carries no
+        # children/fixtures/layout (just an empty container), a
+        # well-behaved import must leave existing fixtures + positions
+        # alone. We codify that here.
+        _h741_reset()
+        seeded = _h741_seed_positioned()
+        before = c.get('/api/layout').get_json()
+        before_kids = sorted([(ch['id'], ch.get('x'), ch.get('y'),
+                               ch.get('z'))
+                              for ch in (before.get('children') or [])])
+        before_fix_ids = sorted(f['id'] for f in (before.get('fixtures') or []))
+        # Empty config (no children, no fixtures, no layout) — must be
+        # an import-no-op for anything not in the payload. The 'layout'
+        # field is omitted entirely so the import has nothing to remap.
+        cfg_payload = {
+            'type': 'slyled-config', 'schemaVersion': 3, 'version': 3,
+            'children': [], 'fixtures': [],
+        }
+        r = c.post('/api/config/import', json=cfg_payload)
+        ok('#741 G4: /api/config/import returns ok',
+           r.status_code == 200 and r.get_json().get('ok'))
+        after = c.get('/api/layout').get_json()
+        after_fix_ids = sorted(f['id'] for f in (after.get('fixtures') or []))
+        ok('#741 G4: /api/config/import did not drop existing fixtures',
+           after_fix_ids == before_fix_ids,
+           f'before={before_fix_ids} after={after_fix_ids}')
+        after_kids = sorted([(ch['id'], ch.get('x'), ch.get('y'),
+                              ch.get('z'))
+                             for ch in (after.get('children') or [])])
+        ok('#741 G4: /api/config/import did not zero positions',
+           after_kids == before_kids,
+           f'before={before_kids} after={after_kids}')
+
+        # ── Group 4.3 — /api/project/import rejects mismatched type ────
+        # POSTing a slyled-show payload to /api/project/import must 400
+        # AND must leave state untouched (the rejection happens before
+        # any _lock acquisition / state replacement).
+        _h741_reset()
+        seeded = _h741_seed_positioned()
+        before = c.get('/api/layout').get_json()
+        before_kids = sorted([(ch['id'], ch.get('x'), ch.get('y'),
+                               ch.get('z'))
+                              for ch in (before.get('children') or [])])
+        before_fix_ids = sorted(f['id'] for f in (before.get('fixtures') or []))
+        bad_payload = {'type': 'slyled-show', 'schemaVersion': 1,
+                       'actions': [], 'spatialEffects': [], 'timelines': []}
+        r = c.post('/api/project/import', json=bad_payload)
+        ok('#741 G4: project/import rejects type=slyled-show with 400',
+           r.status_code == 400)
+        after = c.get('/api/layout').get_json()
+        after_fix_ids = sorted(f['id'] for f in (after.get('fixtures') or []))
+        after_kids = sorted([(ch['id'], ch.get('x'), ch.get('y'),
+                              ch.get('z'))
+                             for ch in (after.get('children') or [])])
+        ok('#741 G4: project/import 400 left fixtures untouched',
+           after_fix_ids == before_fix_ids,
+           f'before={before_fix_ids} after={after_fix_ids}')
+        ok('#741 G4: project/import 400 left layout.children untouched',
+           after_kids == before_kids,
+           f'before={before_kids} after={after_kids}')
+
+        # Final cleanup so later assertions (e.g. firmware section,
+        # final factory reset) start from a known-empty state.
+        _h741_reset()
+
         # ── #737 Issue 1: import surfaces movers missing Home ──
         # Build a minimal mover-profile + import a project with one
         # un-homed mover; the response should call it out so the SPA

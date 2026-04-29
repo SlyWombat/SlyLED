@@ -26,6 +26,12 @@ TESTS = [
     # regresses the cal pipeline; gates the weekly regression on a
     # green corpus.
     ('test_smart_pipeline_emulator.py', 'SMART Cal-Pipeline Emulator'),
+    # #741 (#739 follow-up) — save/restore round-trip. Builds a
+    # non-trivial scene, exports to .slyshow, factory-resets, imports,
+    # asserts every category survived to disk. Catches the next #739:
+    # any future change that drops/zeros a state category on import
+    # produces a red regression here, not a red show on stage.
+    ('test_save_restore.py',    'Save/Restore Round-Trip (#741)'),
 ]
 
 # Live-rig regression tests (gated, see module docstring).
