@@ -430,7 +430,7 @@ function _dashEmuDraw(){
     var aim=_rotToAim(fix.rotation||[0,0,0],[fix.x||0,fix.y||0,fix.z||0]);
     var ax=(aim[0]||0)*W/stgW,ay=H-(aim[2]||0)*H/stgH;
     var bLen=Math.sqrt((ax-fx)*(ax-fx)+(ay-fy)*(ay-fy));if(bLen<2)bLen=60;
-    var halfW=Math.tan((fix.fovDeg||60)*Math.PI/360)*bLen;
+    var halfW=Math.tan((fix.effectiveFovDeg||fix.fovDeg||60)*Math.PI/360)*bLen;
     var angle=Math.atan2(ay-fy,ax-fx);
     ctx.beginPath();ctx.moveTo(fx,fy);
     ctx.lineTo(ax+Math.cos(angle+Math.PI/2)*halfW,ay+Math.sin(angle+Math.PI/2)*halfW);

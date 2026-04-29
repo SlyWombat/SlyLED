@@ -1705,6 +1705,27 @@ def run():
         r = c.get('/api/settings')
         ok('Project restored settings name', r.get_json().get('name') == 'Test Show')
 
+        # ── #739: import must persist fixtures + layout to disk ──
+        # Symptom: operator imports a project, restart wipes layout.
+        # Root cause guard: every state-replacing route hits _save() so a
+        # restart re-loads the imported state. We verify by reading the
+        # JSON files directly off DATA after the import returns.
+        from pathlib import Path as _PPath
+        _data_dir = _PPath(parent_server.DATA)
+        _disk_fixtures = json.loads((_data_dir / 'fixtures.json').read_text())
+        _disk_layout   = json.loads((_data_dir / 'layout.json').read_text())
+        _disk_children = json.loads((_data_dir / 'children.json').read_text())
+        _mem_layout = c.get('/api/layout').get_json()
+        _mem_fixture_ids = sorted(f['id'] for f in (_mem_layout.get('fixtures') or []))
+        _disk_fixture_ids = sorted(f['id'] for f in _disk_fixtures)
+        ok('#739 import → fixtures.json matches memory',
+           _disk_fixture_ids == _mem_fixture_ids and len(_disk_fixture_ids) >= 1)
+        _disk_layout_kids = sorted(c2['id'] for c2 in (_disk_layout.get('children') or []))
+        _mem_layout_kids = sorted(c2['id'] for c2 in (_mem_layout.get('children') or []))
+        ok('#739 import → layout.json children matches memory',
+           _disk_layout_kids == _mem_layout_kids)
+        ok('#739 import → children.json non-empty', len(_disk_children) >= 1)
+
         # ── Profile round-trip in project export/import (#337) ──
         # Create a custom profile and a DMX fixture referencing it
         test_profile = {

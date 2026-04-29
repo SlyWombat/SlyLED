@@ -449,7 +449,7 @@ function s3dLoadChildren(){
         // Cone shown for DMX and camera fixtures with non-zero rotation
         var showCone=(_fRot[0]!==0||_fRot[1]!==0)||_fix3d.fixtureType==='camera';
         if(beamLen>0.01&&showCone){
-          var bwDeg=_fix3d.fixtureType==='camera'?(_fix3d.fovDeg||60):15;
+          var bwDeg=_fix3d.fixtureType==='camera'?(_fix3d.effectiveFovDeg||_fix3d.fovDeg||60):15;
           // Use cached profile beamWidth (sync) — _profileCache populated by emulator/layout
           if(_fix3d.fixtureType==='dmx'&&_fix3d.dmxProfileId&&window._profileCache&&window._profileCache[_fix3d.dmxProfileId]){
             bwDeg=window._profileCache[_fix3d.dmxProfileId].beamWidth||15;

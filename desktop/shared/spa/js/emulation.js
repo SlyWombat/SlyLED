@@ -1001,7 +1001,7 @@ function emuDraw(){
     fx=Math.max(6,Math.min(W-6,fx));fy=Math.max(6,Math.min(H-6,fy));
     var aim=_rotToAim(fix.rotation||[0,0,0],[fix.x||0,fix.y||0,fix.z||0]);
     var ax=aim[0]*W/emuCW,ay=H-aim[1]*H/emuCH;
-    var bwDeg=fix.fovDeg||60;
+    var bwDeg=fix.effectiveFovDeg||fix.fovDeg||60;
     var bLen=Math.sqrt((ax-fx)*(ax-fx)+(ay-fy)*(ay-fy));
     if(bLen<2)bLen=80;
     var halfW=Math.tan(bwDeg*Math.PI/360)*bLen;

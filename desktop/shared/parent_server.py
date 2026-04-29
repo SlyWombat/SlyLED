@@ -1557,6 +1557,10 @@ def api_layout_get():
             if child:
                 fixture_data["strings"] = child.get("strings", [])
                 fixture_data["sc"] = child.get("sc", 0)
+        # #712 — surface lens-effective FOV on camera fixtures so the 3D
+        # viewport draws the polygon the cal pipeline actually uses.
+        if f.get("fixtureType") == "camera":
+            fixture_data["effectiveFovDeg"] = _effective_fov_for_camera(f)
         layout["fixtures"].append({
             **fixture_data,
             "x": pos.get("x", 0),
@@ -2509,6 +2513,10 @@ def api_cameras():
                 # Trust _tracking_state (per-fixture) instead of overriding from
                 # the node capability, which would mark all sensors on the same
                 # IP as tracking when only one was started.
+        # #712 — surface the lens-effective FOV the cal pipeline actually
+        # uses, so the SPA dashboard 3D viewport draws the real visible
+        # polygon instead of the over-claiming manufacturer spec.
+        cam["effectiveFovDeg"] = _effective_fov_for_camera(c)
         result.append(cam)
     if dirty:
         with _lock:
