@@ -4,7 +4,9 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.slywombat.slyled.data.model.*
+import com.slywombat.slyled.data.repository.ServerPreferences
 import com.slywombat.slyled.data.repository.SlyLedRepository
+import com.slywombat.slyled.data.repository.UserPosition
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,7 +17,8 @@ import javax.inject.Inject
 
 @HiltViewModel
 class ControlViewModel @Inject constructor(
-    private val repository: SlyLedRepository
+    private val repository: SlyLedRepository,
+    private val serverPrefs: ServerPreferences,
 ) : ViewModel() {
 
     private val _timelines = MutableStateFlow<List<Timeline>>(emptyList())
@@ -57,6 +60,19 @@ class ControlViewModel @Inject constructor(
     private val _engineRunning = MutableStateFlow(true)
     val engineRunning: StateFlow<Boolean> = _engineRunning.asStateFlow()
 
+    // #427 — Pointer mode session state. Independent of controllerFixtureId
+    // so the overlay branch in ControlScreen can pick the right composable.
+    private val _pointerFixtureId = MutableStateFlow<Int?>(null)
+    val pointerFixtureId: StateFlow<Int?> = _pointerFixtureId.asStateFlow()
+
+    private val _pointerReady = MutableStateFlow(false)
+    val pointerReady: StateFlow<Boolean> = _pointerReady.asStateFlow()
+
+    // #427 — operator stage position (mm). Backed by ServerPreferences so
+    // it survives across sessions; defaults to stage centre at standing height.
+    private val _userPosition = MutableStateFlow(UserPosition(2000f, 2000f, 1700f))
+    val userPosition: StateFlow<UserPosition> = _userPosition.asStateFlow()
+
     private var orientErrorCount = 0
 
     private var initialized = false
@@ -70,6 +86,9 @@ class ControlViewModel @Inject constructor(
             try { _timelines.value = repository.getTimelines() } catch (e: Exception) { Log.e(TAG, "getTimelines", e) }
             try { _playlist.value = repository.getShowPlaylist() } catch (_: Exception) {}
             try { _fixtures.value = repository.getFixtures() } catch (_: Exception) {}
+            // #427 — restore the operator's saved stage position so pointer
+            // mode is usable without re-entering it every launch.
+            try { _userPosition.value = serverPrefs.loadUserPosition() } catch (_: Exception) {}
         }
 
         // Poll settings every 3s
@@ -105,12 +124,13 @@ class ControlViewModel @Inject constructor(
         }
 
         // #479 — poll /api/mover-control/status every 2s while a
-        // controller session is active. Surfaces the engine-running
-        // signal + claim freshness so the operator can see whether
-        // the server is actually receiving + transmitting their input.
+        // controller OR pointer session is active. Surfaces the
+        // engine-running signal + claim freshness so the operator can
+        // see whether the server is actually receiving + transmitting
+        // their input.
         viewModelScope.launch {
             while (true) {
-                val activeFid = _controllerFixtureId.value
+                val activeFid = _controllerFixtureId.value ?: _pointerFixtureId.value
                 if (activeFid != null) {
                     try {
                         val status = repository.getMoverControlStatus()
@@ -321,6 +341,125 @@ class ControlViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.w(TAG, "setMoverColor failed: ${e.message}")
             }
+        }
+    }
+
+    // ── Pointer mode (#427) ────────────────────────────────────────────
+    //
+    // Pointer mode treats the phone as a laser pointer in stage space.
+    // The overlay computes phone-aim → ray-floor intersection client side
+    // and POSTs {targetX,targetY,targetZ} (mm) to /api/calibration/mover/
+    // <fid>/aim. The server runs the SMART path when present (#720) or
+    // returns 400 fixture_not_calibrated when world-XYZ aim isn't
+    // supported yet — we gate the toggle on the capability check.
+
+    fun enterPointerMode(fixtureId: Int) {
+        _pointerFixtureId.value = fixtureId
+        _pointerReady.value = false
+
+        viewModelScope.launch {
+            // Pre-flight: pointer mode aims by world XYZ, which requires
+            // a SMART calibration (#738). Bounce out cleanly if the
+            // fixture is angular-only or has no home anchors yet.
+            try {
+                val cal = repository.getMoverCalibrationStatus(fixtureId)
+                if (!cal.capabilities.worldXYZ) {
+                    _message.value = "Pointer mode needs SMART calibration on this fixture"
+                    _pointerFixtureId.value = null
+                    return@launch
+                }
+            } catch (e: Exception) {
+                _message.value = "Couldn't read calibration status: ${e.message}"
+                _pointerFixtureId.value = null
+                return@launch
+            }
+
+            try {
+                // Same claim+start dance as Controller mode — exclusivity
+                // + light on so the operator sees the beam land.
+                val claimResult = repository.moverClaim(fixtureId)
+                if (!claimResult.ok) {
+                    _message.value = claimResult.err ?: "Mover claimed by another device"
+                    _pointerFixtureId.value = null
+                    return@launch
+                }
+                val startResult = repository.moverStart(fixtureId)
+                if (!startResult.ok) {
+                    _message.value = "Failed to start mover stream"
+                    try { repository.moverRelease(fixtureId) } catch (_: Exception) {}
+                    _pointerFixtureId.value = null
+                    return@launch
+                }
+                _pointerReady.value = true
+            } catch (e: Exception) {
+                Log.e(TAG, "enterPointerMode", e)
+                _message.value = "Error entering pointer mode: ${e.message}"
+                _pointerFixtureId.value = null
+                try { repository.moverRelease(fixtureId) } catch (_: Exception) {}
+            }
+        }
+    }
+
+    fun exitPointerMode() {
+        val fid = _pointerFixtureId.value
+        _pointerFixtureId.value = null
+        _pointerReady.value = false
+        _controllerConnected.value = true
+        orientErrorCount = 0
+        if (fid != null) {
+            viewModelScope.launch {
+                try { repository.moverRelease(fid) } catch (_: Exception) {}
+            }
+        }
+    }
+
+    /** POST stage-XYZ target (mm) to /api/calibration/mover/<fid>/aim. The
+     *  overlay calls this at ~20 Hz from its sensor listener. Bounces back
+     *  to the mode selector on fixture_not_calibrated (the SMART model was
+     *  cleared mid-session). */
+    fun aimPointerTarget(fixtureId: Int, targetX: Double, targetY: Double,
+                          targetZ: Double) {
+        viewModelScope.launch {
+            try {
+                val res = repository.moverAim(fixtureId, targetX, targetY, targetZ)
+                if (!res.ok) {
+                    val err = res.err ?: ""
+                    if (err.contains("not calibrated", ignoreCase = true)) {
+                        _message.value = "Pointer mode needs SMART calibration on this fixture"
+                        exitPointerMode()
+                    }
+                }
+                if (!_controllerConnected.value) {
+                    _controllerConnected.value = true
+                    orientErrorCount = 0
+                }
+            } catch (e: retrofit2.HttpException) {
+                // Server returns HTTP 400 {err:"Fixture not calibrated"} when
+                // the SMART model was deleted between toggle and aim — bounce
+                // out gracefully so the operator isn't stuck in a dead overlay.
+                val body = try { e.response()?.errorBody()?.string().orEmpty() } catch (_: Exception) { "" }
+                if (e.code() == 400 && body.contains("not calibrated", ignoreCase = true)) {
+                    _message.value = "Pointer mode needs SMART calibration on this fixture"
+                    exitPointerMode()
+                } else {
+                    orientErrorCount++
+                    if (orientErrorCount >= 3) _controllerConnected.value = false
+                    Log.w(TAG, "aimPointerTarget HTTP ${e.code()}: $body")
+                }
+            } catch (e: Exception) {
+                orientErrorCount++
+                if (orientErrorCount >= 3) _controllerConnected.value = false
+                Log.w(TAG, "aimPointerTarget failed: ${e.message}")
+            }
+        }
+    }
+
+    /** Persist the operator's stage position in mm for the next session. */
+    fun setUserPosition(xMm: Float, yMm: Float, zMm: Float) {
+        val pos = UserPosition(xMm, yMm, zMm)
+        _userPosition.value = pos
+        viewModelScope.launch {
+            try { serverPrefs.saveUserPosition(pos) } catch (_: Exception) {}
         }
     }
 

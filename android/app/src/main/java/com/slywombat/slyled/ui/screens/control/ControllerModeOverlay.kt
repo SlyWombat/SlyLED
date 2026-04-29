@@ -198,35 +198,11 @@ fun ControllerModeOverlay(
                 }
             }
 
-            // #479 — live status row. Green dot when fresh + state, dim
-            // amber when stale/no-data, red when engine isn't running.
+            // #479 — live status row (shared with PointerModeOverlay via
+            // MoverStatusRow.kt). Green dot when fresh + state, dim amber
+            // when stale/no-data, red when engine isn't running.
             Spacer(Modifier.height(8.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                val (dotColor, label) = when {
-                    !engineRunning -> Color(0xFFEF4444) to "DMX engine stopped"
-                    statusClaim == null -> Color(0xFF94A3B8) to "Waiting for server…"
-                    statusClaim.lastWriteAge > 5f ->
-                        Color(0xFFFBBF24) to "Stale ${statusClaim.lastWriteAge.toInt()}s · ${statusClaim.state}"
-                    else ->
-                        Color(0xFF4ADE80) to ("${statusClaim.state}" +
-                            if (statusClaim.calibrated) " · calibrated" else "")
-                }
-                Box(modifier = Modifier
-                    .size(8.dp)
-                    .background(dotColor, RoundedCornerShape(4.dp)))
-                Text(label, style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFFCBD5E1))
-                Spacer(Modifier.weight(1f))
-                if (statusClaim?.deviceName?.isNotEmpty() == true) {
-                    Text(statusClaim.deviceName,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF64748B))
-                }
-            }
+            MoverStatusRow(statusClaim = statusClaim, engineRunning = engineRunning)
 
             Spacer(Modifier.height(16.dp))
 

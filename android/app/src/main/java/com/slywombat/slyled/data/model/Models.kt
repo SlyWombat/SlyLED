@@ -513,3 +513,22 @@ data class MoverControlStatus(
     val claims: List<MoverControlClaim> = emptyList(),
     val engine: MoverControlEngineHealth = MoverControlEngineHealth(),
 )
+
+// #427 / #738 — capability badge surfaced by /api/calibration/mover/<fid>/status.
+// state: "no_home" | "angular_only" | "smart"
+@Serializable
+data class MoverCapabilities(
+    val state: String = "no_home",
+    val angular: Boolean = false,
+    val worldXYZ: Boolean = false,
+)
+
+// #427 — minimal subset of the cal status that pointer mode needs: just
+// the world-XYZ capability. Other fields are tolerated and ignored via
+// ignoreUnknownKeys = true on the repository's Json instance.
+@Serializable
+data class MoverCalibrationStatus(
+    val status: String = "none",
+    val calibrated: Boolean = false,
+    val capabilities: MoverCapabilities = MoverCapabilities(),
+)

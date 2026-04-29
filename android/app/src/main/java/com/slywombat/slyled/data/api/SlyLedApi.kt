@@ -144,6 +144,16 @@ interface SlyLedApi {
     @GET("api/mover-control/status")
     suspend fun getMoverControlStatus(): MoverControlStatus
 
+    // #427 — pointer mode aims by stage XYZ (mm). Body: {targetX,targetY,targetZ}.
+    // Server routes through SMART model when present, returns 400
+    // {err:"Fixture not calibrated"} when world-XYZ aim isn't supported yet.
+    @POST("api/calibration/mover/{id}/aim")
+    suspend fun moverAim(@Path("id") id: Int, @Body body: JsonObject): OkResponse
+
+    // #427 — gate pointer mode on the SMART capability flag (#738).
+    @GET("api/calibration/mover/{id}/status")
+    suspend fun getMoverCalibrationStatus(@Path("id") id: Int): MoverCalibrationStatus
+
     // ── Fixtures Live ────────────────────────────────────────────────
     @GET("api/fixtures/live")
     suspend fun getFixturesLive(): Map<String, kotlinx.serialization.json.JsonElement>

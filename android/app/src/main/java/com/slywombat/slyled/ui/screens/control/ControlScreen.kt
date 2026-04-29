@@ -35,6 +35,10 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
     // #479 — live mover-control status (engine + this claim).
     val controllerStatus by viewModel.controllerStatus.collectAsState()
     val engineRunning by viewModel.engineRunning.collectAsState()
+    // #427 — pointer-mode session state.
+    val pointerFixtureId by viewModel.pointerFixtureId.collectAsState()
+    val pointerReady by viewModel.pointerReady.collectAsState()
+    val userPosition by viewModel.userPosition.collectAsState()
     val dmxFixtures = fixtures.filter { it.fixtureType == "dmx" }
 
     val isRunning = settings.runnerRunning
@@ -153,37 +157,60 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
                 }
             }
 
-            // Controller mode — DMX moving head fixture picker
+            // Phone control modes — DMX moving head per-fixture row with
+            // Controller / Pointer toggle (#427).
             if (dmxFixtures.isNotEmpty()) {
                 item {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text(
-                                "Controller Mode",
+                                "Phone Control",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                "Use your phone to control moving head fixtures",
+                                "Controller = phone mimics the head. Pointer = phone aims like a laser pointer (needs SMART calibration).",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Spacer(Modifier.height(8.dp))
                             dmxFixtures.forEach { f ->
-                                OutlinedButton(
-                                    onClick = { viewModel.enterControllerMode(f.id) },
+                                Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(vertical = 2.dp)
+                                        .padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Icon(
-                                        Icons.Default.ControlCamera,
-                                        contentDescription = null,
-                                        tint = DmxPurple,
-                                        modifier = Modifier.size(18.dp)
+                                    Text(
+                                        f.name ?: "Fixture ${f.id}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.weight(1f)
                                     )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(f.name ?: "Fixture ${f.id}")
+                                    OutlinedButton(
+                                        onClick = { viewModel.enterControllerMode(f.id) }
+                                    ) {
+                                        Icon(
+                                            Icons.Default.ControlCamera,
+                                            contentDescription = null,
+                                            tint = DmxPurple,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Controller")
+                                    }
+                                    OutlinedButton(
+                                        onClick = { viewModel.enterPointerMode(f.id) }
+                                    ) {
+                                        Icon(
+                                            Icons.Default.MyLocation,
+                                            contentDescription = null,
+                                            tint = CyanSecondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Pointer")
+                                    }
                                 }
                             }
                         }
@@ -265,6 +292,25 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
                 viewModel.setSmoothing(controllerFix.id, sm)
             },
             onDismiss = { viewModel.exitControllerMode() }
+        )
+    }
+
+    // #427 — Full-screen pointer overlay.
+    val pointerFix = pointerFixtureId?.let { id -> fixtures.find { it.id == id } }
+    if (pointerFix != null && pointerReady) {
+        PointerModeOverlay(
+            fixtureName = pointerFix.name ?: "Fixture ${pointerFix.id}",
+            connected = controllerConnected,
+            statusClaim = controllerStatus,
+            engineRunning = engineRunning,
+            userPosition = userPosition,
+            onSetUserPosition = { x, y, z ->
+                viewModel.setUserPosition(x, y, z)
+            },
+            onAimTarget = { tx, ty, tz ->
+                viewModel.aimPointerTarget(pointerFix.id, tx, ty, tz)
+            },
+            onDismiss = { viewModel.exitPointerMode() }
         )
     }
 }

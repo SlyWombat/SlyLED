@@ -271,6 +271,23 @@ class SlyLedRepository @Inject constructor(
     // by ControlViewModel while a controller-mode session is active.
     suspend fun getMoverControlStatus() = requireApi().getMoverControlStatus()
 
+    // #427 — pointer mode: aim a mover by stage XYZ (mm). Server runs the
+    // SMART path when available, returns 400 fixture_not_calibrated otherwise.
+    suspend fun moverAim(moverId: Int, targetX: Double, targetY: Double,
+                          targetZ: Double): OkResponse {
+        val body = buildJsonObject {
+            put("targetX", targetX)
+            put("targetY", targetY)
+            put("targetZ", targetZ)
+        }
+        return requireApi().moverAim(moverId, body)
+    }
+
+    // #427 — pre-flight check used to gate the pointer-mode toggle on the
+    // SMART capability (#738). Returns {capabilities:{worldXYZ:bool…}}.
+    suspend fun getMoverCalibrationStatus(moverId: Int) =
+        requireApi().getMoverCalibrationStatus(moverId)
+
     // Fixtures Live
     suspend fun getFixturesLive() = requireApi().getFixturesLive()
 
