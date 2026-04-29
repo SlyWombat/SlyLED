@@ -1726,6 +1726,49 @@ def run():
            _disk_layout_kids == _mem_layout_kids)
         ok('#739 import → children.json non-empty', len(_disk_children) >= 1)
 
+        # ── #737 Issue 1: import surfaces movers missing Home ──
+        # Build a minimal mover-profile + import a project with one
+        # un-homed mover; the response should call it out so the SPA
+        # can toast a warning instead of letting the operator discover
+        # it via fixture_not_calibrated later.
+        mover_prof = {
+            'id': 'h737-mover-prof', 'name': 'h737 Mover', 'category': 'movinghead',
+            'channels': [
+                {'offset': 0, 'name': 'Pan', 'type': 'pan'},
+                {'offset': 1, 'name': 'Tilt', 'type': 'tilt'},
+                {'offset': 2, 'name': 'Dim', 'type': 'dimmer'},
+            ],
+        }
+        c.post('/api/dmx-profiles', json=mover_prof)
+        c.post('/api/reset', headers={'X-SlyLED-Confirm': 'true'})
+        c.post('/api/dmx-profiles', json=mover_prof)  # reset wipes profiles
+        proj_h737 = {
+            'type': 'slyled-project', 'schemaVersion': 1, 'name': 'h737',
+            'children': [], 'actions': [], 'timelines': [], 'objects': [],
+            'spatialEffects': [], 'calibrations': {}, 'rangeCalibrations': {},
+            'moverCalibrations': {},
+            'showPlaylist': {'order': [], 'loopAll': False},
+            'settings': {}, 'stage': {'w': 5, 'h': 3, 'd': 4}, 'dmxSettings': {},
+            'fixtures': [
+                {'id': 1, 'name': 'NoHomeMover', 'fixtureType': 'dmx',
+                 'dmxProfileId': 'h737-mover-prof', 'rotation': [0,0,0]},
+                {'id': 2, 'name': 'HomedMover', 'fixtureType': 'dmx',
+                 'dmxProfileId': 'h737-mover-prof', 'rotation': [0,0,0],
+                 'homePanDmx16': 32768, 'homeTiltDmx16': 16384},
+            ],
+            'layout': {'canvasW': 3000, 'canvasH': 2000,
+                       'children': [{'id': 1, 'x': 0, 'y': 0, 'z': 0},
+                                    {'id': 2, 'x': 100, 'y': 0, 'z': 0}]},
+            'profiles': [mover_prof],
+        }
+        r = c.post('/api/project/import', json=proj_h737)
+        d = r.get_json()
+        need = d.get('moversNeedHome') or []
+        ok('#737 import flags un-homed mover', len(need) == 1)
+        ok('#737 un-homed mover id matches', need and need[0].get('id') == 1)
+        ok('#737 homed mover NOT flagged',
+           all(m.get('id') != 2 for m in need))
+
         # ── Profile round-trip in project export/import (#337) ──
         # Create a custom profile and a DMX fixture referencing it
         test_profile = {

@@ -258,6 +258,19 @@ function _fmImportJson(txt,filename){
             +' community updates. Open Profiles → "Check community updates" to review.',{timeout:15000});
         },900);
       }
+      // #737 Issue 1 — flag mover fixtures imported without a Home
+      // anchor. Operator needs to set Home on each before SMART cal /
+      // mover-control / gyro+Android remote will work.
+      if(r.moversNeedHome&&r.moversNeedHome.length){
+        var names=r.moversNeedHome.map(function(m){return m.name||('fid '+m.id);}).join(', ');
+        setTimeout(function(){
+          toastWarn(r.moversNeedHome.length+' moving head'
+            +(r.moversNeedHome.length===1?'':'s')
+            +' missing Home: '+names
+            +'. Open the fixture editor on each and click "Set Home" '
+            +'before calibration or remote control.',{timeout:18000});
+        },300);
+      }
       // Guide user to re-enter SSH credentials for camera nodes
       if(r.sshNeeded&&r.sshNeeded.length){
         var ips=r.sshNeeded.map(function(n){return n.ip;}).join(', ');

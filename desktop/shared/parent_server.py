@@ -18810,12 +18810,29 @@ def api_project_import():
                 stale_profiles = len(stale_detail)
         except Exception as e:
             log.warning("Project import: community check_updates failed: %s", e)
+    # #737 Issue 1 — surface mover fixtures that landed without a Home
+    # anchor. SMART cal, mover-control, and gyro/Android remote all
+    # hard-require home; flagging at import time saves the operator from
+    # discovering it later via a fixture_not_calibrated error.
+    movers_need_home = []
+    for f in _fixtures:
+        if f.get("fixtureType") != "dmx":
+            continue
+        pid = f.get("dmxProfileId")
+        if not pid:
+            continue
+        cmap = _profile_lib.channel_map(pid) or {}
+        if "pan" not in cmap or "tilt" not in cmap:
+            continue
+        if f.get("homePanDmx16") is None or f.get("homeTiltDmx16") is None:
+            movers_need_home.append({"id": f.get("id"), "name": f.get("name", "")})
     return jsonify(ok=True, name=name,
                    children=len(_children), fixtures=len(_fixtures),
                    actions=len(_actions), timelines=len(_timelines),
                    objects=len(_objects), sshNeeded=ssh_needed,
                    communityStaleProfiles=stale_profiles,
-                   communityStaleDetail=stale_detail)
+                   communityStaleDetail=stale_detail,
+                   moversNeedHome=movers_need_home)
 
 
 @app.get("/api/project/name")
