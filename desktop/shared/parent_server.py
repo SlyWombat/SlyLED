@@ -1826,19 +1826,25 @@ def api_fixture_update(fid):
             v = body["trackReidMm"]
             if not isinstance(v, (int, float)) or v < 50 or v > 5000:
                 return jsonify(err="trackReidMm must be 50-5000"), 400
+    # #742 — `homePanDmx16` / `homeTiltDmx16` / `homeSetAt` / `homeSecondary`
+    # are deliberately **NOT** in the generic-PUT writable list. They have
+    # dedicated endpoints with validation:
+    #   POST /api/fixtures/<fid>/home
+    #   POST /api/fixtures/<fid>/home/secondary
+    #   POST /api/fixtures/<fid>/home/secondary/retry
+    #   DELETE /api/fixtures/<fid>/home
+    # Routing those writes through the generic PUT bypassed
+    # _validate_home_secondary() and silently corrupted operator-captured
+    # home anchors when a SPA edit-modal save round-tripped a stale
+    # fixture object. The dedicated endpoints stay the single source of
+    # truth for all home-anchor mutations.
     for k in ("name", "type", "fixtureType", "childId", "childIds", "strings",
               "rotation", "orientation", "mountedInverted", "aoeRadius", "meshFile",
               "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId",
               "fovDeg", "fovType", "cameraUrl", "cameraIp", "cameraIdx", "resolutionW", "resolutionH",
               "trackClasses", "trackClassThresholds",
               "trackFps", "trackThreshold", "trackTtl", "trackReidMm",
-              "gyroChildId", "assignedMoverId", "gyroEnabled", "smoothing",
-              # #687 — Set Home anchor: operator-confirmed (pan, tilt) DMX
-              # 16-bit values that aim the beam along the fixture's saved
-              # rotation vector. Replaces geometric kickoff guesswork.
-              # #720 PR-1 — homeSecondary is the optional 2-pair affine
-              # bootstrap pose captured by the home wizard's secondary step.
-              "homePanDmx16", "homeTiltDmx16", "homeSetAt", "homeSecondary"):
+              "gyroChildId", "assignedMoverId", "gyroEnabled", "smoothing"):
         if k in body:
             # #Q12 — normalise fovType on write so stored value is always in
             # the whitelist (inputs go through _normalise_fov_type).
@@ -1846,6 +1852,17 @@ def api_fixture_update(fid):
                 f[k] = _normalise_fov_type(body[k])
             else:
                 f[k] = body[k]
+    # #742 — log when a request tries to mutate a home anchor through
+    # the generic PUT so post-hoc forensics on "who nuked my home" has
+    # an audit trail. We do not honour the write — caller must use the
+    # dedicated home endpoints.
+    rejected_home_keys = [k for k in
+                          ("homePanDmx16", "homeTiltDmx16", "homeSetAt", "homeSecondary")
+                          if k in body]
+    if rejected_home_keys:
+        log.warning("PUT /api/fixtures/%d ignored home-anchor field(s) %s — "
+                    "use /api/fixtures/<fid>/home or /home/secondary instead",
+                    fid, rejected_home_keys)
     _save("fixtures", _fixtures)
     return jsonify(ok=True)
 
@@ -1985,6 +2002,28 @@ def api_fixture_set_home(fid):
         return jsonify(err="panDmx16 and tiltDmx16 are required ints"), 400
     if not (0 <= pan <= 65535) or not (0 <= tilt <= 65535):
         return jsonify(err="panDmx16/tiltDmx16 must be in [0, 65535]"), 400
+    # #743 — re-saving the primary anchor at a meaningfully different DMX
+    # invalidates the previously-captured homeSecondary: the L/R + D/U
+    # direction calls were anchored to the OLD primary, so the affine
+    # estimate would be geometrically wrong. Auto-clear secondary here
+    # and surface a flag so the SPA prompts the operator to redo the
+    # secondary step. Tolerance is ±5 LSB-16 (≈0.03° at 540°/65535)
+    # which is well below operator hand-jog noise but catches genuine
+    # re-anchors after a mount adjustment.
+    SECONDARY_INVALIDATE_LSB = 5
+    secondary_invalidated = False
+    prior_pan = f.get("homePanDmx16")
+    prior_tilt = f.get("homeTiltDmx16")
+    if (f.get("homeSecondary") is not None
+            and prior_pan is not None and prior_tilt is not None
+            and (abs(int(prior_pan) - pan) > SECONDARY_INVALIDATE_LSB
+                 or abs(int(prior_tilt) - tilt) > SECONDARY_INVALIDATE_LSB)
+            and body.get("secondary") is None):
+        f["homeSecondary"] = None
+        secondary_invalidated = True
+        log.info("Set Home: fid=%d primary moved (%d,%d→%d,%d) — "
+                 "auto-cleared stale homeSecondary",
+                 fid, prior_pan, prior_tilt, pan, tilt)
     f["homePanDmx16"] = pan
     f["homeTiltDmx16"] = tilt
     f["homeSetAt"] = datetime.utcnow().isoformat() + "Z"
@@ -2001,7 +2040,8 @@ def api_fixture_set_home(fid):
     return jsonify(ok=True,
                    homePanDmx16=pan, homeTiltDmx16=tilt,
                    homeSetAt=f["homeSetAt"],
-                   homeSecondary=f.get("homeSecondary"))
+                   homeSecondary=f.get("homeSecondary"),
+                   secondaryInvalidated=secondary_invalidated)
 
 
 @app.post("/api/fixtures/<int:fid>/home/secondary")
@@ -9379,14 +9419,39 @@ def api_mover_smart_preview(fid):
     cam_polys = _camera_floor_polygons_for_cal(f)
     cam_union = union_camera_floor_polygons(cam_polys)
 
+    # #745 — distinguish "no cameras placed at all" from "cameras placed
+    # but their FOV doesn't reach the floor". The first is operator-
+    # actionable via "drag a camera onto the layout"; the second via
+    # "re-aim or reposition a camera". Lumping them under
+    # `no_camera_floor` left operators dead-ended in the wizard.
+    # Also surface the camera/layout drift as part of the reason payload
+    # so the SPA can prompt the operator to reconcile.
+    pos_map = {p["id"]: p for p in (_layout.get("children") or [])}
+    cameras_in_fixtures = [x for x in _fixtures
+                            if x.get("fixtureType") == "camera"]
+    cameras_positioned = [x for x in cameras_in_fixtures
+                           if x.get("id") in pos_map]
+    drift_camera_ids = [x.get("id") for x in cameras_in_fixtures
+                         if x.get("id") not in pos_map
+                         and (x.get("x") or x.get("y") or x.get("z"))]
+
     if not coverage_poly:
         return jsonify(ok=True, abortReason="no_floor_coverage",
                        coveragePoly=[], cameraVisiblePoly=cam_union,
                        workingPoly=[], probePoints=[])
     if not cam_union:
-        return jsonify(ok=True, abortReason="no_camera_floor",
+        if not cameras_in_fixtures:
+            reason = "no_cameras_registered"
+        elif not cameras_positioned:
+            reason = "no_cameras_positioned"
+        else:
+            reason = "no_camera_floor"
+        return jsonify(ok=True, abortReason=reason,
                        coveragePoly=coverage_poly, cameraVisiblePoly=[],
-                       workingPoly=[], probePoints=[])
+                       workingPoly=[], probePoints=[],
+                       camerasRegistered=len(cameras_in_fixtures),
+                       camerasPositioned=len(cameras_positioned),
+                       cameraLayoutDriftIds=drift_camera_ids)
 
     working_poly = working_area(coverage_poly, cam_union, margin_mm=150)
     abort = None

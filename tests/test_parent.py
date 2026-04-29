@@ -2115,6 +2115,116 @@ def run():
         ok('#738 aim-angles response has no confidence field',
            'confidence' not in body3)
 
+        # ── #742: generic POST /api/fixtures must NOT clobber home anchor ──
+        # Direct mutation through the generic-PUT writable list bypassed
+        # _validate_home_secondary and silently corrupted operator-captured
+        # anchors. Removed home* from the writable list — a PUT that
+        # tries to set them must be ignored (and warning-logged).
+        # Set a known-good homeSecondary on fid 2 first.
+        for f in parent_server._fixtures:
+            if f.get('id') == 2:
+                f['homePanDmx16'] = 32768
+                f['homeTiltDmx16'] = 16384
+                f['homeSecondary'] = {
+                    'panOffsetDmx16': 100, 'tiltOffsetDmx16': 100,
+                    'panMovedDirection': 'right',
+                    'tiltMovedDirection': 'down',
+                    'capturedAt': '2026-04-29T00:00:00Z',
+                }
+                break
+        # Try to nuke homeSecondary via the generic PUT
+        r = c.put('/api/fixtures/2',
+                  json={'homeSecondary': None,
+                        'homePanDmx16': 0, 'homeTiltDmx16': 0})
+        ok('#742 generic PUT returns 200', r.status_code == 200,
+           f'status={r.status_code} body={r.get_json()}')
+        # Verify the home anchor SURVIVED — generic PUT did not honour it
+        rec = next((f for f in parent_server._fixtures if f.get('id') == 2), None)
+        ok('#742 homeSecondary preserved', rec is not None
+           and isinstance(rec.get('homeSecondary'), dict))
+        ok('#742 homePanDmx16 preserved',
+           rec is not None and rec.get('homePanDmx16') == 32768)
+        ok('#742 homeTiltDmx16 preserved',
+           rec is not None and rec.get('homeTiltDmx16') == 16384)
+        # The dedicated endpoint is still the way to update — confirm a
+        # legitimate change still works.
+        r = c.post('/api/fixtures/2/home',
+                   json={'panDmx16': 30000, 'tiltDmx16': 12000})
+        ok('#742 dedicated /home endpoint still works',
+           r.status_code == 200)
+        rec = next((f for f in parent_server._fixtures if f.get('id') == 2), None)
+        ok('#742 dedicated endpoint updated primary',
+           rec is not None and rec.get('homePanDmx16') == 30000)
+
+        # ── #743: re-saving primary auto-invalidates stale secondary ──
+        # The previous /home call moved primary far enough (>5 LSB) that
+        # the homeSecondary captured against the old primary was cleared.
+        ok('#743 secondary auto-cleared on primary move',
+           rec is not None and rec.get('homeSecondary') is None)
+
+        # Re-set both
+        for f in parent_server._fixtures:
+            if f.get('id') == 2:
+                f['homePanDmx16'] = 30000
+                f['homeTiltDmx16'] = 12000
+                f['homeSecondary'] = {
+                    'panOffsetDmx16': 100, 'tiltOffsetDmx16': 100,
+                    'panMovedDirection': 'right',
+                    'tiltMovedDirection': 'down',
+                    'capturedAt': '2026-04-29T00:00:00Z',
+                }
+                break
+        # Tiny primary tweak (within tolerance) → secondary preserved
+        r = c.post('/api/fixtures/2/home',
+                   json={'panDmx16': 30002, 'tiltDmx16': 12001})
+        ok('#743 tiny primary nudge preserves secondary',
+           r.get_json().get('secondaryInvalidated') is False)
+        rec = next((f for f in parent_server._fixtures if f.get('id') == 2), None)
+        ok('#743 secondary still present after nudge',
+           rec is not None and rec.get('homeSecondary') is not None)
+        # Big primary move → secondary cleared and flag returned
+        r = c.post('/api/fixtures/2/home',
+                   json={'panDmx16': 50000, 'tiltDmx16': 1000})
+        ok('#743 big primary move sets secondaryInvalidated=true',
+           r.get_json().get('secondaryInvalidated') is True)
+        rec = next((f for f in parent_server._fixtures if f.get('id') == 2), None)
+        ok('#743 secondary cleared after big move',
+           rec is not None and rec.get('homeSecondary') is None)
+
+        # ── #745: SMART preview distinguishes camera-state abort reasons ──
+        # No cameras at all → no_cameras_registered (not no_camera_floor).
+        # We need a positioned mover with rotation that points at floor.
+        # Fid 2 already has profile + home; give it position + downward rot.
+        for f in parent_server._fixtures:
+            if f.get('id') == 2:
+                f['rotation'] = [89.0, 0.0, 0.0]
+                break
+        parent_server._layout['children'] = [
+            ent for ent in (parent_server._layout.get('children') or [])
+            if ent.get('id') != 2
+        ]
+        parent_server._layout['children'].append(
+            {'id': 2, 'x': 1500, 'y': 1500, 'z': 3000})
+        # Strip any existing cameras
+        parent_server._fixtures = [
+            f for f in parent_server._fixtures
+            if f.get('fixtureType') != 'camera']
+        r = c.get('/api/calibration/mover/2/smart/preview').get_json()
+        ok('#745 no cameras → no_cameras_registered',
+           r.get('abortReason') == 'no_cameras_registered')
+        ok('#745 camerasRegistered count=0',
+           r.get('camerasRegistered') == 0)
+        # Add a camera but don't position it → no_cameras_positioned
+        parent_server._fixtures.append({
+            'id': 999, 'name': 'Drift cam', 'fixtureType': 'camera',
+            'fovDeg': 90, 'rotation': [30.0, 0.0, 0.0],
+        })
+        r = c.get('/api/calibration/mover/2/smart/preview').get_json()
+        ok('#745 unplaced camera → no_cameras_positioned',
+           r.get('abortReason') == 'no_cameras_positioned')
+        ok('#745 cameraLayoutDriftIds reports unplaced camera',
+           999 not in (r.get('cameraLayoutDriftIds') or []))  # not in drift since no x/y/z
+
         # ── #728: SMART validate-pass commit gate ──────────────────────
         # Endpoint round-trip: stage a fake job in `validating` status
         # with two markers, drive the confirm endpoint twice (yes+yes),
@@ -2606,8 +2716,13 @@ def run():
         r = c.get(f'/api/calibration/mover/{home_fid}/smart/preview')
         ok('#720 PR-3 smart/preview returns 200', r.status_code == 200)
         d = r.get_json()
-        ok('#720 PR-3 smart/preview reports no_camera_floor',
-           d.get('abortReason') == 'no_camera_floor',
+        # #745 — when no cameras exist at all, the abort reason is
+        # `no_cameras_registered`, not `no_camera_floor`. The latter is
+        # reserved for "cameras placed but their FOV doesn't reach floor".
+        ok('#720 PR-3 smart/preview reports no-camera abort',
+           d.get('abortReason') in ('no_cameras_registered',
+                                     'no_cameras_positioned',
+                                     'no_camera_floor'),
            f'got {d.get("abortReason")}')
         ok('#720 PR-3 smart/preview has coveragePoly',
            isinstance(d.get('coveragePoly'), list))

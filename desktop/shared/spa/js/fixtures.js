@@ -159,16 +159,28 @@ function editFixture(id){
   if(ft==='dmx'){
     h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.5em;cursor:pointer"><input id="fx-inverted" type="checkbox"'+(f.mountedInverted?' checked':'')+' style="width:auto"> <span style="font-size:.82em">Mounted upside-down (inverted)</span></label>';
     h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">Reverses pan and tilt motor direction for truss-mounted fixtures.</p>';
-    // #687 — Set Home block (between Mount and Motor Calibration)
-    var hasHome = f.homePanDmx16!=null && f.homeTiltDmx16!=null;
+    // #687 + #744 — Set Home block (between Mount and Motor Calibration).
+    // The badge reflects the THREE-state capability gate from #738 — a
+    // primary-only fixture (homeSetAt truthy but homeSecondary null) is
+    // not Calibrate-ready. Showing "✓ Home set" for that state misled
+    // operators into thinking they were ready when Calibrate would
+    // refuse with state:no_home.
+    var hasPrimary = f.homePanDmx16!=null && f.homeTiltDmx16!=null;
+    var hasSecondary = !!f.homeSecondary;
     var setAt = f.homeSetAt ? new Date(f.homeSetAt).toLocaleString() : '';
     h+='<div style="margin-top:.8em;border-top:1px solid #1e293b;padding-top:.6em">';
-    h+='<div style="font-weight:bold;font-size:.85em;margin-bottom:.4em">Set Home '
-      +(hasHome?'<span style="color:#4ade80">✓ '+escapeHtml(setAt)+'</span>'
-              :'<span style="color:#f59e0b">⚠ required for calibration</span>')+'</div>';
+    var badge;
+    if(hasPrimary && hasSecondary){
+      badge='<span style="color:#4ade80">✓ '+escapeHtml(setAt)+'</span>';
+    } else if(hasPrimary){
+      badge='<span style="color:#fbbf24">◐ Primary set, secondary missing — re-run Set Home</span>';
+    } else {
+      badge='<span style="color:#f59e0b">⚠ required for calibration</span>';
+    }
+    h+='<div style="font-weight:bold;font-size:.85em;margin-bottom:.4em">Set Home '+badge+'</div>';
     h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.4em">Drive the fixture manually until the beam aims along the Rotation vector above, then Confirm. This anchors calibration to one operator-verified observation.</div>';
-    h+='<button class="btn" onclick="_setHomeOpen('+id+')" style="background:#0e7490;color:#a5f3fc;font-size:.85em">'+(hasHome?'Re-Set Home':'Set Home')+'</button>';
-    if(hasHome){
+    h+='<button class="btn" onclick="_setHomeOpen('+id+')" style="background:#0e7490;color:#a5f3fc;font-size:.85em">'+(hasPrimary?'Re-Set Home':'Set Home')+'</button>';
+    if(hasPrimary){
       h+=' <button class="btn" onclick="_setHomeClear('+id+')" style="background:#1e293b;color:#94a3b8;font-size:.78em;margin-left:.4em" title="Clear the saved home anchor (will require Set Home again before next cal)">Clear</button>';
     }
     h+='</div>';
