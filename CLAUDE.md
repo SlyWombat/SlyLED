@@ -105,7 +105,7 @@ Camera nodes run on any **Linux SBC running Ubuntu 22.04+ or Debian Bookworm+** 
 | POST | `/api/fixtures/<fid>/home/secondary/prepare` | Server-side slew to computed secondary pose; returns DMX values + profile envelope |
 | DELETE | `/api/fixtures/<fid>/home` | Clear Home primary + secondary atomically |
 | GET | `/api/fixtures/<fid>/coverage` | Coverage cone + floor-projection polygon |
-| POST | `/api/mover/<fid>/aim-angles` | Aim by fixture-internal `(panDeg, tiltDeg)` — canonical low-level move |
+| POST | `/api/mover/<fid>/aim-angles` | Aim by fixture-internal `(panDeg, tiltDeg)`. Per #738 angular control is exact (profile spec + operator-confirmed sign + home anchor) — response is `{ok, panDmx16, tiltDmx16}`, no `confidence` field. Returns 400 `fixture_not_calibrated` when Home + Secondary aren't set. |
 | GET | `/api/calibration/mover/<fid>/smart/preview` | Working area + 16-point probe grid preview |
 | GET | `/api/calibration/mover/<fid>/smart/validate/state` | Marker queue state during validation pass |
 | POST | `/api/calibration/mover/<fid>/smart/validate/aim` | Slew to a marker via the staged SMART model |
@@ -230,7 +230,7 @@ Camera nodes run on any **Linux SBC running Ubuntu 22.04+ or Debian Bookworm+** 
 | GET | `/api/calibration/mover/<fid>/smart/validate/state` | #720 PR-6 — marker queue during validation pass |
 | POST | `/api/calibration/mover/<fid>/smart/validate/aim` | #720 PR-6 — slew to a marker via the staged SMART model |
 | POST | `/api/calibration/mover/<fid>/smart/validate/confirm` | #720 PR-6 — operator yes/no per marker; commits on all-yes |
-| POST | `/api/mover/<fid>/aim-angles` | #720 PR-1.5 — aim by fixture-internal `(panDeg, tiltDeg)` |
+| POST | `/api/mover/<fid>/aim-angles` | #720 PR-1.5 + #738 — aim by fixture-internal `(panDeg, tiltDeg)`. Returns deterministic `{ok, panDmx16, tiltDmx16}` (no `confidence` — angular is exact) or 400 `fixture_not_calibrated`. |
 | GET | `/api/fixtures/<fid>/home` | #720 PR-1 — read Home + Home-Secondary anchors |
 | POST | `/api/fixtures/<fid>/home` | #720 PR-1 — save Home primary, optional `secondary` block |
 | POST | `/api/fixtures/<fid>/home/secondary` | #720 PR-1 + #730 — save just the Home-Secondary block (direction-only shape) |

@@ -175,6 +175,25 @@
       }
     },
     {
+      "id": "angular-only-no-smart",
+      "description": "#738 — fixture with valid Home + post-#730 direction-only Secondary but NO SMART model. Per the corrected angular-is-exact policy, the affine output from solve_dmx_per_degree (which is what /api/mover/<fid>/aim-angles falls back to) must be deterministic and exact: panDmxPerDeg = 65535/panRange, tiltDmxPerDeg = 65535/tiltRange, sign matches operator direction calls, home pair round-trips byte-identical. No grading, no estimate confidence — fixture is either Home+Secondary (this case) or fixture_not_calibrated.",
+      "fixture": {"id": 17, "x": 600, "y": 0, "z": 1760, "rotation": [0, 0, 0]},
+      "profile": {"panRange": 540, "tiltRange": 180, "tiltOffsetDmx16": 32768, "tiltUp": false},
+      "home": {"panDmx16": 44364, "tiltDmx16": 0},
+      "homeSecondary": {
+        "panOffsetDmx16": 10923,
+        "tiltOffsetDmx16": 32768,
+        "panMovedDirection": "right",
+        "tiltMovedDirection": "up"
+      },
+      "cameras": [],
+      "floorZ": 0,
+      "expect": {
+        "solveFinite": true,
+        "solveSlopeBoundDmxPerDeg": 1000
+      }
+    },
+    {
       "id": "legacy-secondary-format-rejection",
       "description": "Pre-#730 homeSecondary shape (operatorTiltDeg, no direction). Solver MUST raise home_secondary_stale_format.",
       "fixture": {"id": 17, "x": 600, "y": 0, "z": 1760, "rotation": [0, 0, 0]},
