@@ -238,6 +238,15 @@ function _fmImportJson(txt,filename){
   var summary='Project: '+(data.name||'Untitled')+'\nSaved: '+(data.savedAt||'unknown')+'\nApp version: '+(data.appVersion||'unknown')+'\n\nThis will replace ALL current data.';
   if(!confirm('Load project?\n\n'+summary))return;
   toastInfo('Loading project...');
+  // #739 — clear SPA-cached state BEFORE the import POST so any
+  // in-flight save (e.g. a Save Layout button the operator clicks
+  // mid-import) early-outs on the `if(!_fixtures) return;` guards
+  // and can't write a pre-import snapshot back to /api/layout.
+  // loadAll() at the bottom of the success path repopulates these
+  // from /api/layout's post-import state.
+  if(typeof _fixtures !== 'undefined')_fixtures=null;
+  if(typeof ld !== 'undefined')ld=null;
+  if(typeof _layoutDirty !== 'undefined')_layoutDirty=false;
   ra('POST','/api/project/import',data,function(r){
     if(r&&r.ok){
       _projRecentAdd(r.name||data.name||'Untitled',filename);

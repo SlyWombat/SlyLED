@@ -1581,8 +1581,14 @@ def api_layout_save():
     # fixture registry and has x/y/z pinned at 0 from the server side.
     # Reading `fixtures` first silently discarded every position edit.
     fixtures = body.get("children") or body.get("fixtures") or []
-    _layout["children"] = [{"id": f["id"], "x": f.get("x", 0), "y": f.get("y", 0), "z": f.get("z", 0)} for f in fixtures]
-    _save("layout", _layout)
+    # #739 — acquire _lock so a stale layout-save fired by the SPA during
+    # /api/project/import (or any other state-replacing route) can't race
+    # the import's persist block and write a pre-import snapshot back to
+    # disk after import completed. _lock serialises every state-replacing
+    # path; layout-save was the holdout.
+    with _lock:
+        _layout["children"] = [{"id": f["id"], "x": f.get("x", 0), "y": f.get("y", 0), "z": f.get("z", 0)} for f in fixtures]
+        _save("layout", _layout)
     _apply_auto_stage_bounds()  # #628
     return jsonify(ok=True)
 
