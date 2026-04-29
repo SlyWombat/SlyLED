@@ -1237,20 +1237,24 @@ function _moverCalAutoStart(){
   _moverCalInstallEscHandler();
   _moverCalLoadAdvancedOptions();
 
-  // If already calibrated, fetch the stored fit + render the existing-fit summary.
-  if(cal){
-    ra('GET','/api/calibration/mover/'+_moverCalFid,null,function(r){
-      _moverCalRenderExisting(r);
-    });
-    // #602 — if a calibration was already running when the modal
-    // reopens (e.g. operator navigated away and came back), attach to
-    // it so the button state + probe panel are correct.
-    ra('GET','/api/calibration/mover/'+_moverCalFid+'/status',null,function(st){
-      if(st&&st.status==='running'){
+  // #738 — always fetch cal-status so the three-state capabilities
+  // badge (no_home / angular_only / smart) renders even when no SMART
+  // model has been committed yet. Render the angular-only banner when
+  // applicable; the existing-cal card still appears underneath if
+  // SMART data is present.
+  ra('GET','/api/calibration/mover/'+_moverCalFid+'/status',null,function(st){
+    if(st){
+      _moverCalRenderCapabilities(st);
+      if(st.status==='running'){
         document.getElementById('mcal-status').style.display='block';
         _moverCalUpdateActions('running');
         _moverCalPoll();
       }
+    }
+  });
+  if(cal){
+    ra('GET','/api/calibration/mover/'+_moverCalFid,null,function(r){
+      _moverCalRenderExisting(r);
     });
   }
   // #579 — check for a point cloud before the user starts calibration so
@@ -1591,6 +1595,40 @@ function _moverCalFitBadge(fit){
   if(rms>1.5){col='#f59e0b';lbl='FAIR';}
   if(rms>3.0){col='#ef4444';lbl='POOR';}
   return '<span style="background:'+col+';color:#0a0e1a;padding:1px 6px;border-radius:4px;font-weight:bold;font-size:.72em;letter-spacing:.05em">'+lbl+' '+rms.toFixed(2)+'\u00b0</span>';
+}
+
+// #738 — three-state capability banner: no Home / angular only / SMART.
+// Rendered above the existing-cal card. The angular-only state is the
+// new one — a fixture with Home + Secondary works for gyro / aim-angles
+// / manual jog / angular bake cues right now without SMART; only world-
+// XYZ tracking needs SMART.
+function _moverCalRenderCapabilities(r){
+  var box=document.getElementById('mcal-existing');
+  if(!box||!r)return;
+  var caps=r.capabilities||{};
+  var state=caps.state||'no_home';
+  // SMART-committed path is fully covered by _moverCalRenderExisting —
+  // skip the banner so we don't double-render.
+  if(state==='smart')return;
+  var bg, border, badge, msg;
+  if(state==='angular_only'){
+    bg='#1e1f00'; border='#fbbf24'; badge='ANGULAR ONLY';
+    msg='Ready for cues — gyro, manual jog, aim-angles, and angular '
+       +'bake cues all work exactly. <b>Run SMART to enable object '
+       +'tracking and world-XYZ aim.</b>';
+  } else {
+    bg='#1f0a0a'; border='#ef4444'; badge='SET HOME';
+    msg='Home not set — calibration and remote control unavailable. '
+       +'Open the fixture editor and click "Set Home".';
+  }
+  var h='<div class="card" style="padding:.6em;margin-bottom:.6em;background:'+bg+';border-left:3px solid '+border+'">';
+  h+='<div style="display:flex;align-items:center;gap:.5em;margin-bottom:.3em">';
+  h+='<span style="background:'+border+';color:#0a0e1a;padding:1px 6px;border-radius:4px;font-weight:bold;font-size:.72em;letter-spacing:.05em">'+badge+'</span>';
+  h+='</div>';
+  h+='<div style="font-size:.78em;color:#cbd5e1">'+msg+'</div>';
+  h+='</div>';
+  box.innerHTML=h;
+  box.style.display='block';
 }
 
 function _moverCalRenderExisting(r){

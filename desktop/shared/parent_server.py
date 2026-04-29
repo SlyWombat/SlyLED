@@ -8747,6 +8747,35 @@ def api_mover_cal_targets(fid):
     )
 
 
+def _mover_capabilities(fid):
+    """#738 — return the three-state capability badge for a mover fixture.
+
+    Returns a dict with:
+      ``state``: ``"no_home"`` | ``"angular_only"`` | ``"smart"``
+      ``angular``: bool (gyro / aim-angles / manual jog / angular cues OK)
+      ``worldXYZ``: bool (object tracking / world-XYZ aim / XYZ cues OK)
+
+    Angular requires Home + Secondary. World-XYZ additionally requires a
+    committed SMART model. Per #738 angular is **exact** when home+secondary
+    are set — there is no graded "estimate" state.
+    """
+    f = next((x for x in _fixtures if x["id"] == fid), None)
+    if not f or f.get("fixtureType") != "dmx":
+        return {"state": "no_home", "angular": False, "worldXYZ": False}
+    has_home = (f.get("homePanDmx16") is not None
+                and f.get("homeTiltDmx16") is not None)
+    has_secondary = bool(f.get("homeSecondary"))
+    cal = _mover_cal.get(str(fid)) or {}
+    has_smart = (cal.get("method") == "smart"
+                 and isinstance(cal.get("model"), dict)
+                 and "panDmxPerDeg" in cal["model"])
+    if has_smart:
+        return {"state": "smart", "angular": True, "worldXYZ": True}
+    if has_home and has_secondary:
+        return {"state": "angular_only", "angular": True, "worldXYZ": False}
+    return {"state": "no_home", "angular": False, "worldXYZ": False}
+
+
 @app.get("/api/calibration/mover/<int:fid>/status")
 def api_mover_cal_status(fid):
     """Poll calibration progress.
@@ -8756,14 +8785,21 @@ def api_mover_cal_status(fid):
     in #499) and `currentTarget`/`totalTargets` counters. Done jobs
     return the v2 fit quality metrics and model parameters so the wizard
     can show residuals without a second round-trip.
+
+    #738 — every response (running, done, or none) now also carries a
+    `capabilities` dict with the three-state badge so the SPA can show
+    "Angular only — run SMART to enable tracking" without a second
+    round trip.
     """
     job = _mover_cal_jobs.get(str(fid))
+    capabilities = _mover_capabilities(fid)
     if not job:
         cal = _mover_cal.get(str(fid))
         if cal:
             resp = {
                 "status": "done",
                 "calibrated": True,
+                "capabilities": capabilities,
                 "sampleCount": cal.get("sampleCount"),
                 "timestamp": cal.get("timestamp"),
                 "calibrationLocked": bool(_fixture_is_calibrating(fid)),
@@ -8791,6 +8827,7 @@ def api_mover_cal_status(fid):
                 resp["needsSmartRecal"] = True
             return jsonify(**resp)
         return jsonify(status="none", calibrated=False,
+                       capabilities=capabilities,
                        calibrationLocked=bool(_fixture_is_calibrating(fid)))
     # #602 — build currentProbe + dmxFrame from the mover_calibrator
     # live state so the SPA can show what the fixture is being told to do
@@ -8835,6 +8872,7 @@ def api_mover_cal_status(fid):
         warmStart=job.get("warmStart"),
         geometrySource=job.get("geometrySource"),
         floorZ=job.get("floorZ"),
+        capabilities=capabilities,
         calibrationLocked=bool(_fixture_is_calibrating(fid)),
         currentProbe=current_probe,
         dmxFrame=dmx_frame,
@@ -9633,9 +9671,15 @@ def api_mover_aim_angles(fid):
     if settle_ms > 0:
         time.sleep(settle_ms / 1000.0)
 
+    # #738 — angular control is exact, not confidence-graded. The 2-pair
+    # Home+Secondary affine is fully determined by the manufacturer's
+    # mechanical spec (panRange/tiltRange), the operator's binary L/R+D/U
+    # signs, and the home anchor — there is nothing to estimate. SMART
+    # only refines the world-XYZ projection, which this endpoint doesn't
+    # do. Drop the confidence field to stop the UI showing "estimate"
+    # badges for angular paths.
     return jsonify(ok=True,
-                   panDmx16=pan_dmx16, tiltDmx16=tilt_dmx16,
-                   confidence=confidence)
+                   panDmx16=pan_dmx16, tiltDmx16=tilt_dmx16)
 
 
 # ── #699 — Verify Fixture Pose wizard ───────────────────────────────────

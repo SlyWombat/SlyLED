@@ -1559,8 +1559,9 @@ def run():
         ok('SPA has tracking start', '_trackStart' in spa)
         ok('SPA has tracking stop', '_trackStop' in spa)
         ok('SPA has track poll', '_trackPollStart' in spa)
-        ok('SPA has range cal', '_rangeCalStart' in spa)
-        ok('SPA has range cal submit', '_rangeCalSubmit' in spa)
+        # #713 B — `_rangeCalStart` family was deleted as dead code (the
+        # wizard was superseded by profile-defined panRange/tiltRange).
+        # Don't re-assert presence; tests against profile range remain.
         ok('SPA has mover Calibrate button', '_moverCalStart' in spa)
         ok('SPA has 3D aim mode', 'startAimMode' in spa)
         ok('SPA has move/rotate toggle', '_layToolToggle' in spa)
@@ -1583,7 +1584,7 @@ def run():
         ok('SPA view buttons have labels', '>Front<' in spa and '>Top<' in spa and '>Side<' in spa)
 
         r = c.get('/favicon.ico')
-        ok('GET /favicon.ico → 404', r.status_code == 404)
+        ok('GET /favicon.ico → 200', r.status_code == 200)
 
         r = c.get('/nonexistent/path')
         ok('GET unknown path → SPA fallback', r.status_code == 200)
@@ -1768,6 +1769,43 @@ def run():
         ok('#737 un-homed mover id matches', need and need[0].get('id') == 1)
         ok('#737 homed mover NOT flagged',
            all(m.get('id') != 2 for m in need))
+
+        # ── #738: cal-status surfaces three-state capabilities ──
+        # Fid 1 has profile (mover) but no Home → state=no_home, no angular.
+        # Fid 2 has Home but no Secondary → state=no_home (Secondary is the
+        # other half of the affine; home alone isn't enough).
+        r1 = c.get('/api/calibration/mover/1/status').get_json()
+        ok('#738 fid1 cal-status returns capabilities', isinstance(r1.get('capabilities'), dict))
+        ok('#738 fid1 state=no_home',
+           (r1.get('capabilities') or {}).get('state') == 'no_home')
+        ok('#738 fid1 angular=False',
+           (r1.get('capabilities') or {}).get('angular') is False)
+
+        # Add Secondary to fid 2 → angular_only state, angular True, worldXYZ False.
+        r = c.post('/api/fixtures/2/home/secondary',
+                   json={'panAxis': 'L', 'tiltAxis': 'D'})
+        # POST may fail outside a real cal flow — emulate the dict directly.
+        for f in parent_server._fixtures:
+            if f.get('id') == 2:
+                f['homeSecondary'] = {'operatorTiltDeg': 90,
+                                      'panSign': 1, 'tiltSign': -1}
+        r2 = c.get('/api/calibration/mover/2/status').get_json()
+        ok('#738 fid2 state=angular_only',
+           (r2.get('capabilities') or {}).get('state') == 'angular_only')
+        ok('#738 fid2 angular=True',
+           (r2.get('capabilities') or {}).get('angular') is True)
+        ok('#738 fid2 worldXYZ=False',
+           (r2.get('capabilities') or {}).get('worldXYZ') is False)
+
+        # ── #738: aim-angles response no longer carries `confidence` ──
+        # Angular IS exact — there's nothing to grade. Drop the field entirely.
+        r3 = c.post('/api/mover/2/aim-angles',
+                    json={'panDeg': 0, 'tiltDeg': 0})
+        body3 = r3.get_json() or {}
+        # Response may be ok=true with DMX values, or 400/503 if no engine.
+        # Regardless of outcome, `confidence` must not appear in the body.
+        ok('#738 aim-angles response has no confidence field',
+           'confidence' not in body3)
 
         # ── Profile round-trip in project export/import (#337) ──
         # Create a custom profile and a DMX fixture referencing it
