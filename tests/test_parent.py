@@ -1807,6 +1807,87 @@ def run():
         ok('#738 aim-angles response has no confidence field',
            'confidence' not in body3)
 
+        # ── #728: SMART validate-pass commit gate ──────────────────────
+        # Endpoint round-trip: stage a fake job in `validating` status
+        # with two markers, drive the confirm endpoint twice (yes+yes),
+        # assert the staged calibration commits to _mover_cal. Then redo
+        # with one no answer, assert _mover_cal stays untouched and
+        # status flips to error_validation_failed.
+        # The validate routes don't run threads — they read/write
+        # _mover_cal_jobs directly, so we can stage by hand.
+        parent_server._mover_cal.pop('99', None)
+        parent_server._mover_cal_jobs['99'] = {
+            'status': 'validating', 'phase': 'smart_validating',
+            'pendingCommit': {
+                'method': 'smart', 'version': 3,
+                'model': {'panDmxPerDeg': 220.0, 'tiltDmxPerDeg': 305.0,
+                          'panSign': 1, 'tiltSign': -1,
+                          'panBiasDmx': 0, 'tiltBiasDmx': 0,
+                          'homePanDmx16': 32768, 'homeTiltDmx16': 16384},
+                'samples': [], 'residuals': {'rmsMm': 30, 'maxMm': 50},
+                'confidence': 'high', 'sampleCount': 4,
+                'timestamp': '2026-04-29T00:00:00Z',
+            },
+            'validateMarkers': [
+                {'id': 1, 'name': 'M1', 'x': 1000, 'y': 1500, 'z': 0, 'confirmed': None},
+                {'id': 2, 'name': 'M2', 'x': 2000, 'y': 2500, 'z': 0, 'confirmed': None},
+            ],
+            'validateIndex': 0,
+        }
+        # Need a fixture record so commit_pending can flip moverCalibrated.
+        if not any(f.get('id') == 99 for f in parent_server._fixtures):
+            parent_server._fixtures.append({
+                'id': 99, 'name': 'h728-fixture', 'fixtureType': 'dmx',
+                'rotation': [0, 0, 0],
+            })
+
+        r = c.get('/api/calibration/mover/99/smart/validate/state').get_json()
+        ok('#728 validate/state returns markers', len(r.get('markers') or []) == 2)
+
+        r = c.post('/api/calibration/mover/99/smart/validate/confirm',
+                   json={'markerId': 1, 'hit': True}).get_json()
+        ok('#728 first yes does not commit', r.get('committed') is False)
+        ok('#728 calibration not yet written to _mover_cal',
+           '99' not in parent_server._mover_cal)
+
+        r = c.post('/api/calibration/mover/99/smart/validate/confirm',
+                   json={'markerId': 2, 'hit': True}).get_json()
+        ok('#728 all-yes commits via response',
+           r.get('committed') is True or r.get('ok') is True)
+        ok('#728 _mover_cal[99] populated after all-yes',
+           '99' in parent_server._mover_cal
+           and parent_server._mover_cal['99'].get('method') == 'smart')
+
+        # Abort path: re-stage and answer one no.
+        parent_server._mover_cal.pop('99', None)
+        parent_server._mover_cal_jobs['99'] = {
+            'status': 'validating', 'phase': 'smart_validating',
+            'pendingCommit': {
+                'method': 'smart', 'version': 3,
+                'model': {'panDmxPerDeg': 220.0, 'tiltDmxPerDeg': 305.0,
+                          'panSign': 1, 'tiltSign': -1,
+                          'panBiasDmx': 0, 'tiltBiasDmx': 0,
+                          'homePanDmx16': 32768, 'homeTiltDmx16': 16384},
+                'samples': [], 'residuals': {'rmsMm': 30, 'maxMm': 50},
+                'confidence': 'high', 'sampleCount': 4,
+                'timestamp': '2026-04-29T00:00:00Z',
+            },
+            'validateMarkers': [
+                {'id': 1, 'name': 'M1', 'x': 1000, 'y': 1500, 'z': 0, 'confirmed': None},
+                {'id': 2, 'name': 'M2', 'x': 2000, 'y': 2500, 'z': 0, 'confirmed': None},
+            ],
+            'validateIndex': 0,
+        }
+        c.post('/api/calibration/mover/99/smart/validate/confirm',
+               json={'markerId': 1, 'hit': False})
+        ok('#728 no answer flips status to error_validation_failed',
+           parent_server._mover_cal_jobs['99'].get('status')
+           == 'error_validation_failed')
+        ok('#728 abort leaves _mover_cal[99] uncommitted',
+           '99' not in parent_server._mover_cal)
+        ok('#728 abort drops pendingCommit',
+           'pendingCommit' not in parent_server._mover_cal_jobs['99'])
+
         # ── Profile round-trip in project export/import (#337) ──
         # Create a custom profile and a DMX fixture referencing it
         test_profile = {
