@@ -163,6 +163,7 @@ def _color_hex_to_type(hex_color):
         b = int(h[5:7], 16)
     except (ValueError, IndexError):
         return "dimmer"
+    # Pure-primary fast path (kept from pre-#749 behaviour).
     if r > 200 and g < 50 and b < 50:
         return "red"
     if g > 200 and r < 50 and b < 50:
@@ -175,6 +176,20 @@ def _color_hex_to_type(hex_color):
         return "amber"
     if b > 150 and r > 80 and g < 30:
         return "uv"
+    # #749 — dominant-component fallback. Strict primary thresholds miss
+    # off-pure greens/reds (e.g. `#80ff00` = yellow-green: r=128 fails
+    # the r<50 green test → falls to "dimmer" → collides with master
+    # intensity → channel never gets RGB writes, beam renders magenta).
+    # Pick the channel by its largest component when the primary tests
+    # fail, instead of dropping to "dimmer".
+    if max(r, g, b) > 100:
+        m = max(r, g, b)
+        if m == g:
+            return "green"
+        if m == r:
+            return "red" if b < g else "amber" if g >= b else "red"
+        if m == b:
+            return "blue"
     return "dimmer"
 
 
@@ -193,9 +208,31 @@ def _resolve_channel_type(ofl_channel):
         if ct == "ColorIntensity":
             color = cap.get("color")
             if isinstance(color, str):
-                return _color_hex_to_type(color)
-            if isinstance(color, list) and color:
-                return _color_hex_to_type(color[0] if isinstance(color[0], str) else "")
+                t = _color_hex_to_type(color)
+                if t != "dimmer":
+                    return t
+                # Color hex didn't classify cleanly — try the channel
+                # name as a fallback hint (#749).
+            elif isinstance(color, list) and color:
+                t = _color_hex_to_type(color[0] if isinstance(color[0], str) else "")
+                if t != "dimmer":
+                    return t
+            # #749 — name-based fallback so a ColorIntensity channel
+            # with a missing or ambiguous `color` still maps to the
+            # right primary instead of colliding with master Intensity.
+            name = (ofl_channel.get("name") or "").lower()
+            if "red" in name:
+                return "red"
+            if "green" in name:
+                return "green"
+            if "blue" in name:
+                return "blue"
+            if "white" in name:
+                return "white"
+            if "amber" in name:
+                return "amber"
+            if "uv" in name:
+                return "uv"
             return "dimmer"
         if ct == "WheelSlot":
             # Check if it's a color wheel or gobo wheel

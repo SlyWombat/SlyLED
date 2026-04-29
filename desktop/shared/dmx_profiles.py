@@ -699,13 +699,29 @@ class ProfileLibrary:
 
     def channel_map(self, profile_id):
         """Return a type->offset dict for quick channel lookup.
-        For 16-bit channels, returns the coarse offset."""
+        For 16-bit channels, returns the coarse offset.
+
+        #749 — when multiple channels share the same `type` (e.g. the
+        slymovehead profile has two `dimmer` channels: ch4 master at
+        default=255 and ch10 secondary at default=0), the dict can only
+        hold one offset. Pick the channel whose `default` is highest —
+        that's the master channel by convention. Last-write-wins
+        previously routed dimmer writes to the secondary slot which
+        never lights the lamp.
+        """
         p = self.get_profile(profile_id)
         if not p:
             return {}
-        m = {}
+        m = {}            # type -> offset
+        defaults = {}     # type -> default value of the channel currently in m
         for ch in p.get("channels", []):
-            m[ch["type"]] = ch["offset"]
+            t = ch.get("type")
+            if not t:
+                continue
+            d = ch.get("default", 0) or 0
+            if t not in m or d > defaults[t]:
+                m[t] = ch["offset"]
+                defaults[t] = d
         return m
 
     def channel_info(self, profile_id):

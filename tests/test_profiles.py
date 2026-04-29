@@ -88,6 +88,55 @@ def run():
 
     ok('channel_map nonexistent=empty', lib.channel_map("bogus") == {})
 
+    # ── #749: channel_map disambiguates duplicate types by `default` ──
+    # Pre-#749: last-write-wins. The slymovehead profile has two
+    # `dimmer` channels (master at default=255 and secondary at
+    # default=0) and the engine routed to the secondary slot — beam
+    # never lit. Now picks the channel with highest default.
+    lib.save_profile({
+        "id": "h749-multi-dimmer",
+        "name": "h749 Multi-Dimmer",
+        "category": "moving-head",
+        "channels": [
+            {"offset": 0, "type": "pan", "name": "Pan"},
+            {"offset": 1, "type": "tilt", "name": "Tilt"},
+            {"offset": 2, "type": "dimmer", "name": "Master Intensity",
+             "default": 255},
+            {"offset": 3, "type": "red", "name": "R"},
+            {"offset": 4, "type": "green", "name": "G"},
+            {"offset": 5, "type": "blue", "name": "B"},
+            {"offset": 6, "type": "dimmer", "name": "Secondary Intensity",
+             "default": 0},
+        ],
+    })
+    cm749 = lib.channel_map("h749-multi-dimmer")
+    ok('#749 channel_map picks master (default=255) not secondary',
+       cm749.get("dimmer") == 2,
+       f'got dimmer offset={cm749.get("dimmer")} (expected 2)')
+    ok('#749 channel_map keeps RGB intact',
+       cm749.get("red") == 3 and cm749.get("green") == 4 and cm749.get("blue") == 5)
+    lib.delete_profile("h749-multi-dimmer")
+
+    # ── #749: OFL importer dominant-component fallback ──
+    # An OFL ColorIntensity capability with off-pure green like #80ff00
+    # used to fall through to "dimmer" — now classifies as "green".
+    from ofl_importer import _color_hex_to_type, _resolve_channel_type
+    ok('#749 #00ff00 → green (pure)',
+       _color_hex_to_type("#00ff00") == "green")
+    ok('#749 #80ff00 → green (off-pure dominant)',
+       _color_hex_to_type("#80ff00") == "green",
+       f'got {_color_hex_to_type("#80ff00")}')
+    ok('#749 #20a040 → green (low-saturation dominant)',
+       _color_hex_to_type("#20a040") == "green",
+       f'got {_color_hex_to_type("#20a040")}')
+    # OFL channel with name="Green" + ColorIntensity but no color hex
+    # → name-based fallback classifies as green instead of dimmer.
+    ofl_ch = {"name": "Green", "capabilities": [
+        {"type": "ColorIntensity", "label": "Green 0-100%"}]}
+    ok('#749 OFL ColorIntensity name=Green falls back to green',
+       _resolve_channel_type(ofl_ch) == "green",
+       f'got {_resolve_channel_type(ofl_ch)}')
+
     # ── 3. Category filter ────────────────────────────────────────
     print('── 3. Category filter ──')
     pars = lib.list_profiles(category="par")
