@@ -17,7 +17,8 @@
 <link rel="icon" type="image/x-icon" href="slyled.ico">
 <link rel="icon" type="image/png" sizes="192x192" href="slyled.png">
 <link rel="apple-touch-icon" href="slyled.png">
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"SlyLED","applicationCategory":"EntertainmentApplication","operatingSystem":"Windows,Android","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"license":"https://opensource.org/licenses/MIT","downloadUrl":"https://github.com/SlyWombat/SlyLED/releases/latest","url":"https://electricrv.ca/slyled/"}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"SlyLED","applicationCategory":"EntertainmentApplication","operatingSystem":"Windows,Android,macOS","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"license":"https://polyformproject.org/licenses/noncommercial/1.0.0/","downloadUrl":"https://github.com/SlyWombat/SlyLED/releases/latest","url":"https://electricrv.ca/slyled/"}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"Organization","name":"SlyWombat","url":"https://electricrv.ca/slyled/","logo":"https://electricrv.ca/slyled/slyled-logo.png","sameAs":["https://github.com/SlyWombat/SlyLED"]}</script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
@@ -196,7 +197,7 @@ footer a{color:var(--cyan)}
 <div class="hero-wrap">
   <canvas id="hero-canvas" role="img" aria-label="Interactive stage demo: beam cones from moving head fixtures track a person silhouette across the stage"></canvas>
   <div class="hero-overlay">
-    <p class="hero-eyebrow">Open Source · Free Forever · v1.5.32</p>
+    <p class="hero-eyebrow">Open Source · Free for non-profit · v1.7.6</p>
     <h1 class="hero-h1" data-i="heroH1"></h1>
     <p class="hero-sub" data-i="heroSub"></p>
     <div class="badges">
@@ -221,7 +222,7 @@ footer a{color:var(--cyan)}
     <div class="stat-item"><span class="stat-num" id="stat-profiles">—</span><span class="stat-label" data-i="statProfiles"></span></div>
     <div class="stat-item"><span class="stat-num">700+</span><span class="stat-label" data-i="statOfl"></span></div>
     <div class="stat-item"><span class="stat-num">40 Hz</span><span class="stat-label" data-i="statHz"></span></div>
-    <div class="stat-item"><span class="stat-num">MIT</span><span class="stat-label" data-i="statLicense"></span></div>
+    <div class="stat-item"><span class="stat-num">PolyForm NC</span><span class="stat-label" data-i="statLicense"></span></div>
   </div>
 </div>
 
@@ -386,7 +387,7 @@ footer a{color:var(--cyan)}
 <footer>
   <div class="container">
     <p style="margin-bottom:8px"><img src="slyled.png" alt="SlyLED" style="height:26px;vertical-align:middle;margin-right:8px">SlyLED &copy; 2026 Electric RV Corporation</p>
-    <p><a href="https://github.com/SlyWombat/SlyLED">GitHub</a> &bull; <a href="https://github.com/SlyWombat/SlyLED/releases" data-i="footDl"></a> &bull; <a href="SlyLED_User_Manual.pdf" data-i="footManual"></a> &bull; <a href="https://github.com/SlyWombat/SlyLED/issues" data-i="footIssues"></a> &bull; MIT License</p>
+    <p><a href="https://github.com/SlyWombat/SlyLED">GitHub</a> &bull; <a href="https://github.com/SlyWombat/SlyLED/releases" data-i="footDl"></a> &bull; <a href="SlyLED_User_Manual.pdf" data-i="footManual"></a> &bull; <a href="https://github.com/SlyWombat/SlyLED/issues" data-i="footIssues"></a> &bull; <a href="https://polyformproject.org/licenses/noncommercial/1.0.0/">PolyForm Noncommercial</a> &bull; <a href="mailto:dave@drscapital.com?subject=SlyLED%20commercial%20license%20inquiry" data-i="footCommercial"></a></p>
   </div>
 </footer>
 
@@ -403,7 +404,7 @@ en:{
   heroSub:"AI-powered stage lighting that tracks people, controls moving heads, and runs entire shows \u2014 automatically. Free, open source, forever.",
   heroHint:"\u2715 Move your cursor \u00b7 beams follow you",
   ctaWin:"Get SlyLED Free \u2192",ctaAndroid:"Android APK",ctaGithub:"GitHub \u2197",ctaDemo:"See Demo \u2192",ctaManual:"User Manual (PDF)",
-  statProfiles:"Fixture Profiles",statOfl:"OFL Fixtures",statHz:"DMX Output",statLicense:"Free Forever",
+  statProfiles:"Fixture Profiles",statOfl:"OFL Fixtures",statHz:"DMX Output",statLicense:"Free for non-profit",
   m1title:"Point a camera. It sees everything.",
   m1body:"Plug in any USB webcam and SlyLED\u2019s YOLOv8 AI detects performers, pets, and props in real time \u2014 in any lighting condition, at up to 10 frames per second.",
   m1d1:"16 configurable detection classes including person, cat, dog, chair, and 12 more",m1d2:"Per-camera threshold, FPS, and re-ID distance tuning",
@@ -435,7 +436,7 @@ en:{
   whyTitle:"Why SlyLED?",whySub:"Three things no other lighting software gives you \u2014 for free",
   why1t:"Lights that see",why1p:"Every other lighting console is blind. SlyLED watches your stage through AI computer vision and moves the lights to match. No programmer. No cue stack. Just presence.",
   why2t:"Design in 3D space",why2p:"Other tools work with fixture addresses and channel values. SlyLED works with millimetres. Place an effect at X:\u20093000, Y:\u20092000 and every fixture in range responds based on its real physical position.",
-  why3t:"Free. Open. Forever.",why3p:"MIT licence. No subscription. No dongles. No feature gating. Download once, run forever, modify however you like. We believe great tools should be free.",
+  why3t:"Free for non-profit use.",why3p:"PolyForm Noncommercial licence — free for personal, hobbyist, educational, and nonprofit use. Commercial licence available on request. No subscription. No dongles. No feature gating. Download once, run forever, modify however you like.",
   hwTitle:"Supported Hardware",hwSub:"WiFi-connected LED performers and DMX bridges",
   hw1:"Up to 8 LED strings on independent GPIO pins. OTA firmware updates. Multi-pin FastLED.",
   hw2:"Compact single-string controller. Perfect for portable installations. WS2812B on GPIO 2.",
@@ -449,14 +450,14 @@ en:{
   inst2t:"Flash Firmware",inst2p:"Connect an ESP32 via USB. Go to Firmware tab, select the port, click Flash. Done in 30 seconds.",
   inst3t:"Discover & Design",inst3p:"Click Discover to find performers on WiFi. Position them on the 2D/3D stage. Load a preset show or build your own.",
   inst4t:"Bake & Start",inst4p:"Click Bake \u2192 Sync \u2192 Start. All performers play their parts in NTP-synced unison.",
-  footDl:"Downloads",footManual:"User Manual (PDF)",footIssues:"Issues"
+  footDl:"Downloads",footManual:"User Manual (PDF)",footIssues:"Issues",footCommercial:"Commercial licence inquiry"
 },
 fr:{
   heroH1:"Vos lumi\u00e8res\u00a0savent o\u00f9\u00a0est le spectacle.",
   heroSub:"Contr\u00f4le d\u2019\u00e9clairage sc\u00e9nique pilot\u00e9 par IA qui suit les personnes, vise les lyres et joue des spectacles entiers \u2014 automatiquement. Gratuit, open source, pour toujours.",
   heroHint:"\u2715 D\u00e9placez votre curseur \u00b7 les faisceaux vous suivent",
   ctaWin:"T\u00e9l\u00e9charger SlyLED \u2192",ctaAndroid:"APK Android",ctaGithub:"GitHub \u2197",ctaDemo:"Voir la d\u00e9mo \u2192",ctaManual:"Manuel (PDF)",
-  statProfiles:"Profils de projecteurs",statOfl:"Appareils OFL",statHz:"Sortie DMX",statLicense:"Gratuit \u00e0 vie",
+  statProfiles:"Profils de projecteurs",statOfl:"Appareils OFL",statHz:"Sortie DMX",statLicense:"Gratuit (non-commercial)",
   m1title:"Pointez une cam\u00e9ra. Elle voit tout.",
   m1body:"Branchez n\u2019importe quelle webcam USB et l\u2019IA YOLOv8 de SlyLED d\u00e9tecte les performers, animaux et accessoires en temps r\u00e9el \u2014 dans toute condition de lumi\u00e8re, jusqu\u2019\u00e0 10 images par seconde.",
   m1d1:"16 classes de d\u00e9tection configurables dont personne, chat, chien, chaise...",m1d2:"R\u00e9glage du seuil, IPS et distance de r\u00e9-ID par cam\u00e9ra",
@@ -488,7 +489,7 @@ fr:{
   whyTitle:"Pourquoi SlyLED\u00a0?",whySub:"Trois choses qu\u2019aucun autre logiciel d\u2019\u00e9clairage ne vous offre \u2014 gratuitement",
   why1t:"Des lumi\u00e8res qui voient",why1p:"Toutes les consoles d\u2019\u00e9clairage sont aveugles. SlyLED regarde votre sc\u00e8ne par vision par ordinateur et d\u00e9place les lumi\u00e8res en cons\u00e9quence. Aucun programmeur n\u00e9cessaire.",
   why2t:"Concevoir dans l\u2019espace 3D",why2p:"Les autres outils travaillent avec des adresses et des valeurs de canaux. SlyLED travaille en millim\u00e8tres. Placez un effet \u00e0 X\u00a03000, Y\u00a02000 et chaque projecteur \u00e0 port\u00e9e r\u00e9pond.",
-  why3t:"Gratuit. Ouvert. Pour toujours.",why3p:"Licence MIT. Pas d\u2019abonnement. Pas de cl\u00e9 USB. Pas de fonctions payantes. T\u00e9l\u00e9chargez une fois, utilisez \u00e0 vie, modifiez comme vous le souhaitez.",
+  why3t:"Gratuit pour usage non-commercial.",why3p:"Licence PolyForm Noncommercial \u2014 gratuite pour usage personnel, amateur, \u00e9ducatif et \u00e0 but non lucratif. Licence commerciale disponible sur demande. Pas d\u2019abonnement. Pas de cl\u00e9 USB. Pas de fonctions payantes. T\u00e9l\u00e9chargez une fois, utilisez \u00e0 vie, modifiez comme vous le souhaitez.",
   hwTitle:"Mat\u00e9riel support\u00e9",hwSub:"Performers LED et ponts DMX connect\u00e9s en WiFi",
   hw1:"Jusqu\u2019\u00e0 8 rubans LED sur des broches GPIO ind\u00e9pendantes. Mises \u00e0 jour OTA.",
   hw2:"Contr\u00f4leur compact \u00e0 un ruban. Parfait pour les installations portables.",
@@ -502,7 +503,7 @@ fr:{
   inst2t:"Flasher le firmware",inst2p:"Connectez un ESP32 via USB, s\u00e9lectionnez le port, cliquez Flash. 30 secondes.",
   inst3t:"D\u00e9couvrir et concevoir",inst3p:"Cliquez sur D\u00e9couvrir pour trouver les performers. Positionnez-les sur la sc\u00e8ne.",
   inst4t:"Compiler et d\u00e9marrer",inst4p:"Cliquez sur Compiler \u2192 Synchroniser \u2192 D\u00e9marrer. Synchronisation NTP automatique.",
-  footDl:"T\u00e9l\u00e9chargements",footManual:"Manuel (PDF)",footIssues:"Probl\u00e8mes"
+  footDl:"T\u00e9l\u00e9chargements",footManual:"Manuel (PDF)",footIssues:"Probl\u00e8mes",footCommercial:"Demande de licence commerciale"
 }
 };
 var _lang=localStorage.getItem('slyled-lang')||'en';
