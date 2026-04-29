@@ -15040,6 +15040,30 @@ def _mover_current_aim_stage(mover):
         pan_norm = _read("pan")
         tilt_norm = _read("tilt")
 
+    # 0 — #748: SMART model OR Home + Home-Secondary 2-pair estimate.
+    # The mover-control engine's _aim_to_pan_tilt prefers this same path
+    # for angular_only fixtures. Calibrate-end captures aim_stage HERE
+    # and the next tick converts it back via the SAME IK in
+    # _aim_to_pan_tilt — pre-#748 this fell through to _pan_tilt_to_ray
+    # (step 3), which does not round-trip with angles_to_dmx for
+    # angular_only fixtures, causing pan to jump on release.
+    smart_model, _conf = _resolve_mover_model(mover.get("id"), mover)
+    if smart_model is not None:
+        try:
+            from coverage_math import dmx_to_angles, fixture_aim_to_world
+            pan_dmx16 = int(round(pan_norm * 65535))
+            tilt_dmx16 = int(round(tilt_norm * 65535))
+            pan_deg, tilt_deg = dmx_to_angles(pan_dmx16, tilt_dmx16, smart_model)
+            fix_pos = (mover.get("x", 0) or 0,
+                       mover.get("y", 0) or 0,
+                       mover.get("z", 0) or 0)
+            rot = mover.get("rotation") or [0.0, 0.0, 0.0]
+            axis_unit, _ = fixture_aim_to_world(pan_deg, tilt_deg, fix_pos, rot)
+            return axis_unit
+        except Exception as e:
+            log.debug("aim_stage SMART path failed for fid %s: %s — "
+                      "falling back to legacy", mover.get("id"), e)
+
     # 1 — parametric model (preferred when calibration exists).
     model = _get_mover_model(mover.get("id"), mover)
     if model is not None:

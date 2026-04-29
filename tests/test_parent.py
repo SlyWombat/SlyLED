@@ -2324,6 +2324,57 @@ def run():
             mcal_mod.confirm_candidate_with_nudge = orig_confirm
             parent_server._artnet = orig_artnet
 
+        # ── #748: angular_only mover-control aim_stage round-trip exact ──
+        # Pre-#748 _mover_current_aim_stage fell to _pan_tilt_to_ray for
+        # angular_only fixtures (no SMART model, no parametric v2),
+        # which doesn't round-trip with _aim_to_pan_tilt's SMART path.
+        # Calibrate-end captured aim_stage via path A; next tick wrote
+        # DMX via path B; pan jumped 89° on release with the phone
+        # unmoved. Now both paths share the same SMART/2-pair IK so
+        # the round-trip is exact.
+        from coverage_math import (dmx_to_angles, fixture_aim_to_world,
+                                    world_to_fixture_pt, angles_to_dmx)
+        # Build a fixture matching the bug repro (Sly Moving Head Super
+        # Mini, fid 19) — Home + post-#730 direction-only Secondary, no
+        # SMART model.
+        h748_mover = {
+            "id": 19, "name": "h748", "fixtureType": "dmx",
+            "dmxStartAddr": 43, "dmxUniverse": 1, "dmxChannelCount": 13,
+            "dmxProfileId": "h737-mover-prof",
+            "rotation": [0, 0, 0],
+            "x": 1500, "y": 0, "z": 2000,
+            "homePanDmx16": 32768, "homeTiltDmx16": 32768,
+            "homeSecondary": {
+                "panOffsetDmx16": 10923,
+                "tiltOffsetDmx16": 7281,
+                "panMovedDirection": "right",
+                "tiltMovedDirection": "down",
+            },
+        }
+        h748_model, _conf = parent_server._resolve_mover_model(19, h748_mover)
+        ok('#748 _resolve_mover_model returns 2-pair affine for angular_only',
+           h748_model is not None
+           and "panDmxPerDeg" in h748_model and "tiltDmxPerDeg" in h748_model)
+        # Round-trip: arbitrary DMX → aim_stage → DMX should be exact.
+        h748_max_err = 0
+        for pn, tn in [(0.5, 0.5), (0.6, 0.5), (0.7, 0.4), (0.4, 0.6)]:
+            pdx = int(round(pn * 65535))
+            tdx = int(round(tn * 65535))
+            pdeg, tdeg = dmx_to_angles(pdx, tdx, h748_model)
+            fix_pos = (h748_mover["x"], h748_mover["y"], h748_mover["z"])
+            rot = h748_mover["rotation"]
+            axis, _ = fixture_aim_to_world(pdeg, tdeg, fix_pos, rot)
+            target = (fix_pos[0] + axis[0] * 3000.0,
+                      fix_pos[1] + axis[1] * 3000.0,
+                      fix_pos[2] + axis[2] * 3000.0)
+            angles = world_to_fixture_pt(target, fix_pos, rot)
+            rt_pdx, rt_tdx = angles_to_dmx(angles[0], angles[1], h748_model)
+            h748_max_err = max(h748_max_err, abs(pdx - rt_pdx),
+                                abs(tdx - rt_tdx))
+        ok('#748 SMART aim_stage→DMX round-trip exact (<5 LSB)',
+           h748_max_err < 5,
+           f'max err = {h748_max_err} LSB')
+
         # ── #728: SMART validate-pass commit gate ──────────────────────
         # Endpoint round-trip: stage a fake job in `validating` status
         # with two markers, drive the confirm endpoint twice (yes+yes),
