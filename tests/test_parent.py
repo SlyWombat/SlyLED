@@ -1727,6 +1727,50 @@ def run():
            _disk_layout_kids == _mem_layout_kids)
         ok('#739 import → children.json non-empty', len(_disk_children) >= 1)
 
+        # ── #739 hardening: refuse-to-wipe defense at /api/layout POST ──
+        # A stale POST that sends (0,0,0) for a fid currently positioned
+        # at non-zero coords must be ignored (the position stays). Pass
+        # force=true to actually zero a position.
+        # Re-establish a known-good positioned layout. We reuse the
+        # imported state from the round-trip test above — fixtures with
+        # non-zero positions are already in _layout.children. Pick any
+        # one and try to wipe it.
+        layout_now = c.get('/api/layout').get_json()
+        positioned = [c2 for c2 in (layout_now.get('children') or [])
+                       if c2.get('x') or c2.get('y') or c2.get('z')]
+        if positioned:
+            wipe_fid = positioned[0]['id']
+            ox = positioned[0].get('x', 0)
+            oy = positioned[0].get('y', 0)
+            oz = positioned[0].get('z', 0)
+            r = c.post('/api/layout', json={
+                'children': [{'id': wipe_fid, 'x': 0, 'y': 0, 'z': 0}],
+            })
+            ok('#739 wipe POST returns 200', r.status_code == 200)
+            d = r.get_json()
+            ok('#739 wipe was reported as blocked',
+               wipe_fid in (d.get('wipesBlocked') or []))
+            after = c.get('/api/layout').get_json()
+            cur = next((c2 for c2 in (after.get('children') or [])
+                        if c2.get('id') == wipe_fid), None)
+            ok('#739 fixture position preserved after stale wipe',
+               cur is not None and (cur.get('x', 0) == ox
+                                    and cur.get('y', 0) == oy
+                                    and cur.get('z', 0) == oz))
+
+            # force:true legitimately zeroes the position
+            r = c.post('/api/layout', json={
+                'children': [{'id': wipe_fid, 'x': 0, 'y': 0, 'z': 0}],
+                'force': True,
+            })
+            ok('#739 force=true zeroes position',
+               r.status_code == 200 and not (r.get_json().get('wipesBlocked')))
+            after2 = c.get('/api/layout').get_json()
+            cur2 = next((c2 for c2 in (after2.get('children') or [])
+                         if c2.get('id') == wipe_fid), None)
+            ok('#739 force=true position is (0,0,0)',
+               cur2 is not None and cur2.get('x') == 0 and cur2.get('y') == 0 and cur2.get('z') == 0)
+
         # ── #737 Issue 1: import surfaces movers missing Home ──
         # Build a minimal mover-profile + import a project with one
         # un-homed mover; the response should call it out so the SPA

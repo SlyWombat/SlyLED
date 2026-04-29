@@ -1581,16 +1581,47 @@ def api_layout_save():
     # fixture registry and has x/y/z pinned at 0 from the server side.
     # Reading `fixtures` first silently discarded every position edit.
     fixtures = body.get("children") or body.get("fixtures") or []
-    # #739 — acquire _lock so a stale layout-save fired by the SPA during
-    # /api/project/import (or any other state-replacing route) can't race
-    # the import's persist block and write a pre-import snapshot back to
-    # disk after import completed. _lock serialises every state-replacing
-    # path; layout-save was the holdout.
+    force = bool(body.get("force"))
+    # #739 — two defenses against stale-cache layout writes wiping
+    # imported positions:
+    #
+    # 1. Acquire _lock so a layout-save fired during /api/project/import
+    #    can't race the import's persist block.
+    # 2. Refuse-to-wipe: if the body sends (0,0,0) for a fid that
+    #    currently has a non-zero position, keep the existing position
+    #    instead of zeroing it (and log a warning). Pass {force: true}
+    #    in the body to override — required for tests / operators that
+    #    legitimately want a fixture at the origin.
+    #
+    # Fixtures absent from the body still drop out of _layout.children
+    # (preserves the remove-from-canvas SPA flow). Non-zero coords
+    # always replace whatever was there (preserves drag-to-reposition).
+    wipes_blocked = []
     with _lock:
-        _layout["children"] = [{"id": f["id"], "x": f.get("x", 0), "y": f.get("y", 0), "z": f.get("z", 0)} for f in fixtures]
+        existing = {c["id"]: c for c in (_layout.get("children") or [])}
+        new_children = []
+        for f in fixtures:
+            fid = f["id"]
+            x = f.get("x", 0)
+            y = f.get("y", 0)
+            z = f.get("z", 0)
+            if (not force
+                    and x == 0 and y == 0 and z == 0
+                    and fid in existing):
+                cur = existing[fid]
+                if cur.get("x") or cur.get("y") or cur.get("z"):
+                    new_children.append(cur)
+                    wipes_blocked.append(fid)
+                    continue
+            new_children.append({"id": fid, "x": x, "y": y, "z": z})
+        _layout["children"] = new_children
         _save("layout", _layout)
+    if wipes_blocked:
+        log.warning("/api/layout suppressed (0,0,0) wipe of non-zero "
+                    "positions for fid(s) %s; pass force=true to override",
+                    wipes_blocked)
     _apply_auto_stage_bounds()  # #628
-    return jsonify(ok=True)
+    return jsonify(ok=True, wipesBlocked=wipes_blocked or None)
 
 #  "  "  Stage  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
