@@ -267,6 +267,10 @@ class SlyLedRepository @Inject constructor(
         return requireApi().moverColor(body)
     }
 
+    // #479 — Mover-Control live status (claims + engine health). Polled
+    // by ControlViewModel while a controller-mode session is active.
+    suspend fun getMoverControlStatus() = requireApi().getMoverControlStatus()
+
     // Fixtures Live
     suspend fun getFixturesLive() = requireApi().getFixturesLive()
 

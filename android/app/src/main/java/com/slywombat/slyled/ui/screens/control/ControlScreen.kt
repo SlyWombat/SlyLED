@@ -32,6 +32,9 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
     val controllerFixtureId by viewModel.controllerFixtureId.collectAsState()
     val controllerReady by viewModel.controllerReady.collectAsState()
     val controllerConnected by viewModel.controllerConnected.collectAsState()
+    // #479 — live mover-control status (engine + this claim).
+    val controllerStatus by viewModel.controllerStatus.collectAsState()
+    val engineRunning by viewModel.engineRunning.collectAsState()
     val dmxFixtures = fixtures.filter { it.fixtureType == "dmx" }
 
     val isRunning = settings.runnerRunning
@@ -241,6 +244,8 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
         ControllerModeOverlay(
             fixtureName = controllerFix.name ?: "Fixture ${controllerFix.id}",
             connected = controllerConnected,
+            statusClaim = controllerStatus,
+            engineRunning = engineRunning,
             onOrient = { roll, pitch, yaw, quat ->
                 viewModel.sendOrientation(controllerFix.id, roll, pitch, yaw, quat)
             },

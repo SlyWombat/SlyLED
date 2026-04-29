@@ -140,6 +140,10 @@ interface SlyLedApi {
     @POST("api/mover-control/smoothing")
     suspend fun moverSmoothing(@Body body: JsonObject): OkResponse
 
+    // #479 — live status card poll.
+    @GET("api/mover-control/status")
+    suspend fun getMoverControlStatus(): MoverControlStatus
+
     // ── Fixtures Live ────────────────────────────────────────────────
     @GET("api/fixtures/live")
     suspend fun getFixturesLive(): Map<String, kotlinx.serialization.json.JsonElement>

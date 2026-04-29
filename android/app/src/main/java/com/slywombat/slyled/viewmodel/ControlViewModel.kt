@@ -49,6 +49,14 @@ class ControlViewModel @Inject constructor(
     private val _controllerConnected = MutableStateFlow(true)
     val controllerConnected: StateFlow<Boolean> = _controllerConnected.asStateFlow()
 
+    // #479 — live mover-control status (engine + my claim). Null when
+    // no controller session is active or the poll hasn't returned yet.
+    private val _controllerStatus = MutableStateFlow<MoverControlClaim?>(null)
+    val controllerStatus: StateFlow<MoverControlClaim?> = _controllerStatus.asStateFlow()
+
+    private val _engineRunning = MutableStateFlow(true)
+    val engineRunning: StateFlow<Boolean> = _engineRunning.asStateFlow()
+
     private var orientErrorCount = 0
 
     private var initialized = false
@@ -93,6 +101,31 @@ class ControlViewModel @Inject constructor(
                     }
                 } catch (_: Exception) {}
                 delay(1000)
+            }
+        }
+
+        // #479 — poll /api/mover-control/status every 2s while a
+        // controller session is active. Surfaces the engine-running
+        // signal + claim freshness so the operator can see whether
+        // the server is actually receiving + transmitting their input.
+        viewModelScope.launch {
+            while (true) {
+                val activeFid = _controllerFixtureId.value
+                if (activeFid != null) {
+                    try {
+                        val status = repository.getMoverControlStatus()
+                        _engineRunning.value = status.engine.running
+                        _controllerStatus.value = status.claims
+                            .firstOrNull { it.moverId == activeFid }
+                    } catch (_: Exception) {
+                        // Don't blank out on transient errors — keep
+                        // last good values; the orient streamer's own
+                        // disconnect signal handles hard staleness.
+                    }
+                } else {
+                    _controllerStatus.value = null
+                }
+                delay(2000)
             }
         }
     }

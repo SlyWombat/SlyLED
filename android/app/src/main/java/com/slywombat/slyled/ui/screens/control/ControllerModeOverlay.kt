@@ -47,6 +47,11 @@ import com.slywombat.slyled.ui.theme.*
 fun ControllerModeOverlay(
     fixtureName: String,
     connected: Boolean = true,
+    // #479 — live mover-control status. Null when no claim is yet
+    // visible from the server's perspective (e.g. first 2 s before the
+    // ControlViewModel poll lands its first response).
+    statusClaim: com.slywombat.slyled.data.model.MoverControlClaim? = null,
+    engineRunning: Boolean = true,
     onOrient: (roll: Float, pitch: Float, yaw: Float, quat: FloatArray) -> Unit,
     onCalibrateStart: (roll: Float, pitch: Float, yaw: Float) -> Unit,
     onCalibrateEnd: (roll: Float, pitch: Float, yaw: Float) -> Unit,
@@ -190,6 +195,36 @@ fun ControllerModeOverlay(
                 }
                 IconButton(onClick = onDismiss) {
                     Icon(Icons.Default.Close, "Exit", tint = Color(0xFF64748B))
+                }
+            }
+
+            // #479 — live status row. Green dot when fresh + state, dim
+            // amber when stale/no-data, red when engine isn't running.
+            Spacer(Modifier.height(8.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                val (dotColor, label) = when {
+                    !engineRunning -> Color(0xFFEF4444) to "DMX engine stopped"
+                    statusClaim == null -> Color(0xFF94A3B8) to "Waiting for server…"
+                    statusClaim.lastWriteAge > 5f ->
+                        Color(0xFFFBBF24) to "Stale ${statusClaim.lastWriteAge.toInt()}s · ${statusClaim.state}"
+                    else ->
+                        Color(0xFF4ADE80) to ("${statusClaim.state}" +
+                            if (statusClaim.calibrated) " · calibrated" else "")
+                }
+                Box(modifier = Modifier
+                    .size(8.dp)
+                    .background(dotColor, RoundedCornerShape(4.dp)))
+                Text(label, style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFCBD5E1))
+                Spacer(Modifier.weight(1f))
+                if (statusClaim?.deviceName?.isNotEmpty() == true) {
+                    Text(statusClaim.deviceName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF64748B))
                 }
             }
 

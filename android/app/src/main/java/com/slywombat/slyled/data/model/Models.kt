@@ -486,3 +486,30 @@ data class DmxStatus(
         }
     }
 }
+
+// #479 — Mover-Control live status (polled while a fixture is claimed).
+@Serializable
+data class MoverControlClaim(
+    val moverId: Int = -1,
+    val deviceId: String = "",
+    val deviceName: String = "",
+    val deviceType: String = "",
+    val state: String = "",          // "claimed" | "streaming" | "calibrating"
+    val lastWriteAge: Float = 0f,    // seconds since last DMX write
+    val calibrated: Boolean = false,
+    val panNorm: Float = 0.5f,
+    val tiltNorm: Float = 0.5f,
+)
+
+@Serializable
+data class MoverControlEngineHealth(
+    val running: Boolean = false,
+    val engineType: String? = null,
+    val droppedWrites: Int = 0,
+)
+
+@Serializable
+data class MoverControlStatus(
+    val claims: List<MoverControlClaim> = emptyList(),
+    val engine: MoverControlEngineHealth = MoverControlEngineHealth(),
+)
