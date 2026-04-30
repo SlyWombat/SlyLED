@@ -27,6 +27,11 @@ import threading
 import time
 
 from mover_calibrator import aim_to_pan_tilt, affine_pan_tilt
+from remote_orientation import (
+    OrientConvention,
+    _coerce_convention,
+    default_convention_for_kind,
+)
 
 log = logging.getLogger("slyled.mover_control")
 
@@ -81,10 +86,19 @@ class MoverClaim:
         "color_r", "color_g", "color_b", "dimmer", "strobe_active",
         "pan_smooth", "tilt_smooth", "have_pan_tilt",
         "calibrated_here", "smoothing",
+        # #762 — convention this claim runs under. Resolved at claim time
+        # from (per-claim override > per-fixture orientConvention > engine
+        # default > per-kind default). Surfaced via /api/mover-control/
+        # status so the SPA can label the active grip.
+        "convention",
+        # Convention the Remote was using *before* the claim took effect.
+        # Restored on release so the Remote falls back to its persisted /
+        # per-kind default when no claim is overriding it.
+        "_prior_remote_convention",
     )
 
     def __init__(self, mover_id, device_id, device_name, device_type="gyro",
-                 smoothing=0.15, ttl_s=None):
+                 smoothing=0.15, ttl_s=None, convention=None):
         self.mover_id = mover_id
         self.device_id = device_id
         self.device_name = device_name
@@ -115,6 +129,11 @@ class MoverClaim:
         # layout-forward position until then.
         self.calibrated_here = False
         self.smoothing = smoothing
+        # #762 — convention is resolved by MoverControlEngine.claim() and
+        # passed in here. None = leave the Remote on whatever convention
+        # it was already running (per-kind default or persisted override).
+        self.convention = _coerce_convention(convention)
+        self._prior_remote_convention = None
 
     def to_dict(self):
         return {
@@ -134,6 +153,10 @@ class MoverClaim:
             "calibrated":   bool(self.calibrated_here),
             "color":        {"r": self.color_r, "g": self.color_g, "b": self.color_b},
             "dimmer":       self.dimmer,
+            # #762 — surface the convention so SPA / Android can show the
+            # operator which axis-set the active claim is using.
+            "orientConvention": (self.convention.value
+                                  if self.convention else None),
         }
 
 
@@ -143,7 +166,8 @@ class MoverControlEngine:
     def __init__(self, get_fixtures, get_layout, get_profile_info,
                  get_engine, set_fixture_color_fn, get_remote_by_device_id,
                  get_mover_cal=None, get_mover_model=None,
-                 is_calibrating=None, get_claim_ttl_s=None):
+                 is_calibrating=None, get_claim_ttl_s=None,
+                 get_default_convention=None):
         """
         Args:
             get_fixtures:             list of fixtures
@@ -173,6 +197,12 @@ class MoverControlEngine:
         # value) so setting changes take effect on the next claim without
         # engine restart.
         self._get_claim_ttl_s = get_claim_ttl_s or (lambda: 15.0)
+        # #762 — engine-wide default OrientConvention from settings.json.
+        # Returns None when the operator hasn't pinned one, in which case
+        # the per-kind default applies. Callable so setting changes take
+        # effect on the next claim without engine restart.
+        self._get_default_convention = (
+            get_default_convention or (lambda: None))
 
         self._claims = {}  # mover_id → MoverClaim
         self._lock = threading.Lock()
@@ -205,7 +235,13 @@ class MoverControlEngine:
     # ── Claim / Release ──────────────────────────────────────────────
 
     def claim(self, mover_id, device_id, device_name, device_type="gyro",
-              smoothing=0.15):
+              smoothing=0.15, convention=None):
+        # #762 — resolve OrientConvention precedence outside the lock so we
+        # can read the fixture / remote without holding it. Order:
+        #   per-claim arg > per-fixture > engine default > remote default.
+        resolved_conv = self._resolve_convention(
+            mover_id, device_id, requested=convention)
+
         with self._lock:
             existing = self._claims.get(mover_id)
             if existing and existing.device_id != device_id:
@@ -217,11 +253,44 @@ class MoverControlEngine:
 
             claim = MoverClaim(mover_id, device_id, device_name, device_type,
                                smoothing=smoothing,
-                               ttl_s=self._get_claim_ttl_s())
+                               ttl_s=self._get_claim_ttl_s(),
+                               convention=resolved_conv)
             self._claims[mover_id] = claim
-            log.info("Mover %d claimed by %s (%s)",
-                     mover_id, device_name, device_type)
-            return True, "ok"
+            log.info("Mover %d claimed by %s (%s) — convention=%s",
+                     mover_id, device_name, device_type,
+                     resolved_conv.value if resolved_conv else "remote-default")
+
+        # Apply the convention to the Remote *outside* the engine lock —
+        # set_convention() may discard a stale calibration, which clears
+        # aim_stage, and we don't want that to race with the tick loop's
+        # read. The Remote's own state is internally synchronised.
+        if resolved_conv is not None:
+            remote = self._get_remote(device_id)
+            if remote is not None and remote.convention != resolved_conv:
+                claim._prior_remote_convention = remote.convention
+                remote.set_convention(resolved_conv)
+        return True, "ok"
+
+    def _resolve_convention(self, mover_id, device_id, requested=None):
+        """#762 — resolve which OrientConvention this claim should run.
+
+        Precedence (most-specific wins):
+          1. Per-claim ``requested`` (body field on /api/mover-control/claim).
+          2. Per-fixture ``orientConvention`` field.
+          3. Engine-wide setting (settings.json moverControl.orientConvention).
+          4. None — let the Remote's own per-kind default stand.
+
+        Returns an OrientConvention or None.
+        """
+        conv = _coerce_convention(requested)
+        if conv is not None:
+            return conv
+        mover = self._get_mover(mover_id)
+        if mover is not None:
+            conv = _coerce_convention(mover.get("orientConvention"))
+            if conv is not None:
+                return conv
+        return _coerce_convention(self._get_default_convention())
 
     def release(self, mover_id, device_id=None, blackout=True):
         with self._lock:
@@ -231,6 +300,14 @@ class MoverControlEngine:
             if device_id and claim.device_id != device_id:
                 return False
             del self._claims[mover_id]
+        # #762 — if this claim overrode the Remote's convention, restore
+        # the Remote's prior convention so a subsequent claim picks up its
+        # per-kind default (or persisted override) rather than the previous
+        # operator's per-claim choice. Done outside the engine lock.
+        if claim._prior_remote_convention is not None:
+            remote = self._get_remote(claim.device_id)
+            if remote is not None:
+                remote.set_convention(claim._prior_remote_convention)
         if blackout:
             self._blackout_mover(mover_id)
         log.info("Mover %d released", mover_id)
@@ -443,7 +520,27 @@ class MoverControlEngine:
           1. Parametric v2 model (legacy, kept until SMART proven).
           2. v1 affine samples (legacy).
           3. Pure ``aim_to_pan_tilt`` IK when no calibration exists.
+
+        #760 — ``mountedInverted=True`` represents an upside-down ceiling
+        mount. ``aim_stage`` is a stage-frame unit vector (where the beam
+        should land in world space) and is independent of mount
+        orientation; the inversion only changes the world→fixture-frame
+        transform that converts that aim into mechanical (pan, tilt). We
+        bake it into the rotation handed to the world→fixture transforms
+        as a 180° roll about the fixture's forward axis (stage-Y). The
+        parametric path's `model.inverse` already holds inversion in
+        ``mount_pitch_deg``; do NOT augment its rotation.
         """
+        mounted_inv = bool(mover.get("mountedInverted"))
+        rot_raw = mover.get("rotation") or [0.0, 0.0, 0.0]
+        rot_eff = list(rot_raw) + [0.0, 0.0, 0.0]
+        rot_eff = rot_eff[:3]
+        if mounted_inv:
+            # Inverted mount = +180° roll about stage-Y. Wraps to keep
+            # values in a sensible range; downstream rotation builders
+            # only care about modulo 360°.
+            rot_eff[1] = (float(rot_eff[1]) + 180.0)
+
         # 0 — SMART path (preferred when fixture has Home + Home-Secondary
         # OR a saved SMART model).
         smart_model = self._get_smart_model(mover_id, mover)
@@ -455,11 +552,10 @@ class MoverControlEngine:
                 fix_pos = (mover.get("x", 0) or 0,
                            mover.get("y", 0) or 0,
                            mover.get("z", 0) or 0)
-                rot = mover.get("rotation") or [0.0, 0.0, 0.0]
                 target = (fix_pos[0] + aim_stage[0] * 3000.0,
                           fix_pos[1] + aim_stage[1] * 3000.0,
                           fix_pos[2] + aim_stage[2] * 3000.0)
-                angles = world_to_fixture_pt(target, fix_pos, rot)
+                angles = world_to_fixture_pt(target, fix_pos, rot_eff)
                 if angles is not None:
                     pan_dmx16, tilt_dmx16 = angles_to_dmx(
                         angles[0], angles[1], smart_model)
@@ -468,7 +564,9 @@ class MoverControlEngine:
                 log.debug("SMART aim path failed for mover %s: %s — falling back",
                           mover_id, e)
 
-        # 1 — parametric model (preferred legacy)
+        # 1 — parametric model (preferred legacy). The model bakes
+        # mountedInverted into mount_pitch_deg internally; no rotation
+        # augmentation needed here.
         model = self._get_mover_model(mover_id, mover)
         if model is not None:
             px, py, pz = model.fixture_pos
@@ -478,7 +576,9 @@ class MoverControlEngine:
             return model.inverse(tx, ty, tz)
 
         # 2 — legacy affine (only reached if migration helper returns None
-        # despite samples being present — e.g. < 2 samples).
+        # despite samples being present — e.g. < 2 samples). Affine
+        # samples were recorded in the fixture's mounted orientation, so
+        # they already encode the inversion physically.
         cal = self._get_mover_cal(mover_id)
         if cal and cal.get("samples") and len(cal["samples"]) >= 2:
             fx = mover.get("x", 0)
@@ -491,7 +591,9 @@ class MoverControlEngine:
             if pt is not None:
                 return pt
 
-        # 3 — no calibration; generic geometric IK against mount rotation.
+        # 3 — no calibration; generic geometric IK using the augmented
+        # rotation so an inverted mount aims at the same world point as
+        # an upright one (just with mirrored DMX values).
         prof = self._get_profile_info(mover.get("dmxProfileId")) \
             if mover.get("dmxProfileId") else None
         pan_range = mover.get("panRange") \
@@ -500,7 +602,7 @@ class MoverControlEngine:
             or (prof.get("tiltRange") if prof else None) or 270
         return aim_to_pan_tilt(
             aim_stage,
-            mount_rotation_deg=mover.get("rotation") or [0, 0, 0],
+            mount_rotation_deg=rot_eff,
             pan_range=pan_range,
             tilt_range=tilt_range,
         )

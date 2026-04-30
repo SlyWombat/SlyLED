@@ -30,6 +30,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.slywombat.slyled.data.repository.UserPosition
 import com.slywombat.slyled.ui.theme.*
 import kotlin.math.atan2
@@ -71,7 +73,8 @@ fun PointerModeOverlay(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    BackHandler { onDismiss() }
+    // #759 — back gesture is a no-op while the claim is active.
+    BackHandler { /* swallow */ }
 
     val sensorManager = remember { context.getSystemService(Context.SENSOR_SERVICE) as SensorManager }
     val rotationSensor = remember { sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) }
@@ -165,6 +168,18 @@ fun PointerModeOverlay(
     // composition (#483, mirrored from ControllerModeOverlay).
     DisposableEffect(Unit) { onDispose { onDismiss() } }
 
+    // #759 — render in a Dialog so the surface covers MainScaffold's
+    // bottom nav and TopAppBar; only the X button (or sustained network
+    // failure in ControlViewModel) exits the overlay.
+    Dialog(
+        onDismissRequest = { /* swallow */ },
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -403,6 +418,7 @@ fun PointerModeOverlay(
             Spacer(Modifier.height(24.dp))
         }
     }
+    }  // close Dialog
 }
 
 @Composable

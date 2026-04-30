@@ -29,6 +29,9 @@ KNOWN_BOARDS = {
     # Waveshare ESP32-S3 LCD 1.28 — native USB (303A:1001) or USB-UART (303A:0002)
     "303A:1001": [{"board": "esp32s3", "chip": "ESP32-S3", "name": "Waveshare ESP32-S3 LCD 1.28 (native USB)"}],
     "303A:0002": [{"board": "esp32s3", "chip": "ESP32-S3", "name": "Waveshare ESP32-S3 LCD 1.28 (USB-UART)"}],
+    # WCH CH343 USB-UART variants seen on Waveshare ESP32-S3 batches.
+    # 55D3 confirmed live 2026-04-30 with a SLYG-FC98 gyro (#761).
+    "1A86:55D3": [{"board": "esp32s3", "chip": "CH343", "name": "Waveshare ESP32-S3 LCD 1.28 (CH343)"}],
 }
 
 FQBN_MAP = {
@@ -367,8 +370,86 @@ def get_flash_status():
     with _flash_lock:
         return dict(_flash_status)
 
-def flash_esp(port, bin_path, board="esp32", progress_cb=None):
-    """Flash an ESP32 or ESP8266 using esptool in-process (no subprocess needed)."""
+
+def _query_version_quick(status_url, timeout=2.0):
+    """Return device's reported `version` from a /status JSON endpoint, or
+    None if the device is unreachable. Used as the pre-flash baseline for
+    #761 §C-4 verification — failure to reach the device pre-flash is fine
+    (a board in the bootloader has no HTTP server)."""
+    if not status_url:
+        return None
+    try:
+        import urllib.request
+        with urllib.request.urlopen(status_url, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+        return data.get("version") or data.get("fwVersion") or data.get("fw")
+    except Exception:
+        return None
+
+
+def _verify_post_flash_version(status_url, pre_version, timeout_s=12):
+    """#761 §C-4 — poll the device's /status until it reports a `version`
+    different from `pre_version`. Returns None on success, a human-readable
+    error string on failure. Polls every 500ms up to `timeout_s`.
+
+    A "different version" check (rather than "matches expected X.Y.Z")
+    avoids tight coupling to whatever build metadata the firmware happens
+    to expose and still proves a successful boot of new code. If
+    `pre_version` is None (device was unreachable before the flash), we
+    just confirm the device comes back online with any version."""
+    if not status_url:
+        return None
+    import time as _time
+    deadline = _time.time() + max(2.0, float(timeout_s))
+    last_seen = None
+    while _time.time() < deadline:
+        v = _query_version_quick(status_url, timeout=1.5)
+        if v is not None:
+            last_seen = v
+            if pre_version is None or v != pre_version:
+                return None
+        _time.sleep(0.5)
+    if last_seen is None:
+        return f"device did not respond at {status_url} within {int(timeout_s)}s of flash"
+    return (f"device at {status_url} still reports version {last_seen!r} "
+            f"after flash (was {pre_version!r}); board did not reboot with "
+            f"new firmware")
+
+_ESPTOOL_CHIP_FOR_BOARD = {
+    "esp32":   "esp32",
+    "esp32s3": "esp32s3",
+    "d1mini":  "esp8266",
+}
+
+def _esptool_supports_chip(chip):
+    """#761 §C-1 — return True iff the imported esptool can program `chip`.
+    Old esptool (3.0) doesn't recognise production ESP32-S3 magic 0x09 and
+    the silent-success failure mode in flash_esp was the root cause of the
+    'Flash complete' lie. Refuse to start a flash we can't actually do."""
+    try:
+        import esptool
+    except ImportError:
+        return False
+    ver = getattr(esptool, "__version__", "0.0")
+    try:
+        major = int(str(ver).split(".")[0])
+    except (ValueError, IndexError):
+        major = 0
+    if chip == "esp32s3" and major < 4:
+        return False
+    return True
+
+
+def flash_esp(port, bin_path, board="esp32", progress_cb=None,
+              verify_status_url=None):
+    """Flash an ESP32 or ESP8266 using esptool in-process (no subprocess needed).
+
+    #761 §C — esp32s3 needs --chip esp32s3 + esptool>=4.0; flash failures must
+    surface as `error != None` (esptool argparse can sys.exit() with a string
+    or None which the previous mapping treated as success). When
+    `verify_status_url` is provided, after a successful flash we poll the URL
+    for ~10s and confirm `version` differs from the pre-flash baseline so
+    "Flash complete" actually means the device rebooted with new code."""
     with _flash_lock:
         _flash_status.update(running=True, progress=0, message="Preparing esptool...", error=None)
 
@@ -377,6 +458,15 @@ def flash_esp(port, bin_path, board="esp32", progress_cb=None):
     except ImportError:
         with _flash_lock:
             _flash_status.update(error="esptool not available in this build", message="Error", running=False)
+        return False
+
+    chip = _ESPTOOL_CHIP_FOR_BOARD.get(board)
+    if chip and not _esptool_supports_chip(chip):
+        ver = getattr(esptool, "__version__", "?")
+        with _flash_lock:
+            _flash_status.update(
+                error=f"Installed esptool {ver} cannot program {chip}. Upgrade to esptool>=4.0.",
+                message="Error", running=False)
         return False
 
     try:
@@ -388,8 +478,20 @@ def flash_esp(port, bin_path, board="esp32", progress_cb=None):
         with _flash_lock:
             _flash_status.update(progress=5, message=f"Connecting to {port}...")
 
+        # #761 §C-4 — capture pre-flash version so we can prove the device
+        # actually accepted the new firmware after the reset.
+        pre_version = _query_version_quick(verify_status_url) if verify_status_url else None
+
         baud = "460800" if board == "d1mini" else "921600"
-        args = ["--port", port, "--baud", baud, "write_flash", "0x0", str(bin_path)]
+        # #761 §C-2 — pass --chip explicitly. Old esptool auto-detect fails on
+        # production ESP32-S3 (chip magic 0x09); even on new esptool it adds
+        # round-trip latency. Always specify the chip when we know it.
+        args = []
+        if chip:
+            args += ["--chip", chip]
+        args += ["--port", port, "--baud", baud,
+                 "--before", "default_reset", "--after", "hard_reset",
+                 "write_flash", "0x0", str(bin_path)]
 
         # Capture esptool output by redirecting stdout/stderr to a pipe
         import io
@@ -448,20 +550,66 @@ def flash_esp(port, bin_path, board="esp32", progress_cb=None):
         sys.argv = ["esptool"] + args
         sys.stdout = writer
         sys.stderr = writer
+        flash_exception = None
         try:
             esptool.main()
         except SystemExit as e:
-            exit_code = e.code if isinstance(e.code, int) else (1 if e.code else 0)
+            # #761 §C-3 — esptool's argparse / fatal_error path calls
+            # sys.exit() with the error message string, not an int. The old
+            # mapping (`1 if e.code else 0`) treated an empty/None code as
+            # success even when esptool aborted before touching flash.
+            if e.code is None:
+                exit_code = 0
+            elif isinstance(e.code, int):
+                exit_code = e.code
+            else:
+                # Non-int code = error message; preserve the text.
+                exit_code = 1
+                flash_exception = str(e.code)
+        except Exception as e:
+            exit_code = 1
+            flash_exception = f"{type(e).__name__}: {e}"
         finally:
             sys.argv = old_argv
             sys.stdout = old_stdout
             sys.stderr = old_stderr
 
-        if exit_code != 0:
-            detail = "\n".join(writer.last_lines(5))
+        # Even with exit_code == 0, scan captured output for the failure
+        # signatures esptool emits before exiting cleanly (a few error paths
+        # log "A fatal error occurred" then return). If we never saw a
+        # successful "Hard resetting" / "Hash of data verified", treat it as
+        # a flash failure regardless of exit code.
+        captured_text = captured.getvalue()
+        flash_visibly_succeeded = (
+            "Hash of data verified" in captured_text
+            or "Hard resetting" in captured_text
+            or "Leaving..." in captured_text
+        )
+        flash_visibly_failed = (
+            "A fatal error occurred" in captured_text
+            or "Failed to autodetect" in captured_text
+            or "Unexpected CHIP magic value" in captured_text
+        )
+
+        if exit_code != 0 or flash_visibly_failed or not flash_visibly_succeeded:
+            detail = flash_exception or "\n".join(writer.last_lines(5)) or "esptool exited without writing flash"
             with _flash_lock:
                 _flash_status.update(error=f"Flash failed: {detail}", message="Error")
             return False
+
+        # #761 §C-4 — confirm the device actually accepted the new code by
+        # re-querying its HTTP /status. If `version` is unchanged after the
+        # reset, esptool's "Hard resetting" was a lie about a stale binary.
+        if verify_status_url:
+            with _flash_lock:
+                _flash_status.update(progress=98, message="Verifying flash...")
+            verify_err = _verify_post_flash_version(
+                verify_status_url, pre_version, timeout_s=12)
+            if verify_err:
+                with _flash_lock:
+                    _flash_status.update(error=f"Flash verify failed: {verify_err}",
+                                          message="Error")
+                return False
 
         with _flash_lock:
             _flash_status.update(progress=100, message="Flash complete — board is rebooting")
@@ -544,10 +692,16 @@ def flash_giga(port, bin_path, progress_cb=None):
         with _flash_lock:
             _flash_status["running"] = False
 
-def flash_board(port, bin_path, board, wifi_ssid=None, wifi_pass=None, progress_cb=None):
-    """Flash firmware to a board. Dispatches to the correct method."""
+def flash_board(port, bin_path, board, wifi_ssid=None, wifi_pass=None,
+                progress_cb=None, verify_status_url=None):
+    """Flash firmware to a board. Dispatches to the correct method.
+
+    `verify_status_url` (optional) — HTTP /status endpoint of the target
+    device. When provided, ESP flashes are verified post-reset (#761 §C-4)
+    by confirming `version` differs from the pre-flash baseline."""
     if board in ("esp32", "d1mini", "esp32s3"):
-        return flash_esp(port, bin_path, board, progress_cb)
+        return flash_esp(port, bin_path, board, progress_cb,
+                          verify_status_url=verify_status_url)
     elif board == "giga":
         return flash_giga(port, bin_path, progress_cb)
     else:

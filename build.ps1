@@ -40,12 +40,23 @@ if ($Board -eq "") {
     }
 }
 
-$extraFlags = ""
+$extraFlags = @()
 switch ($Board.ToLower()) {
     "giga"   { $fqbn = "arduino:mbed_giga:giga" }
     "esp32"  { $fqbn = "esp32:esp32:esp32" }
     "d1mini" { $fqbn = "esp8266:esp8266:d1_mini" }
-    "gyro"   { $fqbn = "esp32:esp32:esp32s3"; $extraFlags = "--build-property build.extra_flags=-DGYRO_BOARD" }
+    "gyro"   {
+        $fqbn = "esp32:esp32:esp32s3"
+        # Use compiler.{cpp,c}.extra_flags — `build.extra_flags` overwrites
+        # core defines on the ESP32 platform. Pass each --build-property
+        # entry as a separate arg pair so PowerShell doesn't collapse them
+        # into a single quoted token (arduino-cli rejects that as
+        # "unknown flag: --build-property build.extra_flags").
+        $extraFlags = @(
+            "--build-property", "compiler.cpp.extra_flags=-DGYRO_BOARD",
+            "--build-property", "compiler.c.extra_flags=-DGYRO_BOARD"
+        )
+    }
     default  { Write-Error "Unknown board '$Board'. Use 'giga', 'esp32', 'd1mini', or 'gyro'" }
 }
 
@@ -80,15 +91,7 @@ $buildPath = "$PSScriptRoot\build\$Board"
 New-Item -ItemType Directory -Force -Path $buildPath | Out-Null
 
 if ($NoUpload) {
-    if ($extraFlags) {
-        & $cli compile --fqbn $fqbn --build-path $buildPath $extraFlags main
-    } else {
-        & $cli compile --fqbn $fqbn --build-path $buildPath main
-    }
+    & $cli compile --fqbn $fqbn --build-path $buildPath @extraFlags main
 } else {
-    if ($extraFlags) {
-        & $cli compile --upload --port $Port --fqbn $fqbn --build-path $buildPath $extraFlags main
-    } else {
-        & $cli compile --upload --port $Port --fqbn $fqbn --build-path $buildPath main
-    }
+    & $cli compile --upload --port $Port --fqbn $fqbn --build-path $buildPath @extraFlags main
 }

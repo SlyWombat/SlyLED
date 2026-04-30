@@ -18,6 +18,7 @@ See docs/gyro-stage-space.md §4, §7 for the architecture.
 
 from __future__ import annotations
 
+import enum
 import json
 import logging
 import os
@@ -33,6 +34,60 @@ from remote_math import (
 )
 
 log = logging.getLogger("slyled.remote_orientation")
+
+
+# ── #762 Orient axis conventions ──────────────────────────────────────────
+#
+# Selects which Euler axes from the remote's IMU drive the fixture aim. The
+# gyro puck (Waveshare ESP32-S3 LCD 1.28" — QMI8658, 6-axis, NO magnetometer)
+# has *integrating* yaw that drifts indefinitely; only roll and pitch are
+# gravity-anchored and absolute. The Android phone has Sensor.TYPE_ROTATION_
+# VECTOR which is magnetometer-fused, so it does keep usable yaw.
+#
+# The convention is a per-remote attribute. Per-fixture / per-claim overrides
+# are scaffolded (MoverClaim.convention, /api/mover-control/claim body field)
+# but the engine default per-kind table below is the only path with UI today.
+
+class OrientConvention(str, enum.Enum):
+    # Bottom-forward grip (puck/phone held vertical, charging port toward
+    # stage). Roll → pan, pitch → tilt. Yaw is dropped before the orientation
+    # quaternion is built — drift becomes a no-op because the world frame
+    # stays anchored to the calibrate-time pose. Default for the gyro puck.
+    BOTTOM_FORWARD_ROLL_PITCH = "bottom_forward"
+    # Legacy convention — full (roll, pitch, yaw) → quaternion → R_world_to
+    # _stage. Yaw is consumed; works for any controller that has a usable
+    # absolute yaw source (compass-fused rotation vector, magnetometer).
+    # Default for the Android phone.
+    FLAT_PITCH_YAW = "flat_pitch_yaw"
+
+
+def _coerce_convention(value, default=None):
+    """Map a raw value (Enum, string, None) onto an OrientConvention.
+    Unknown strings fall back to ``default`` and emit a debug log."""
+    if value is None:
+        return default
+    if isinstance(value, OrientConvention):
+        return value
+    try:
+        return OrientConvention(str(value))
+    except ValueError:
+        log.debug("unknown orient convention %r; using default %s", value, default)
+        return default
+
+
+# Per-kind default. Future-flag: an engine-wide setting (settings.json
+# ``moverControl.orientConvention``) overrides this; per-fixture or
+# per-claim overrides win over the engine default in turn.
+_DEFAULT_CONVENTION_BY_KIND = {
+    "gyro-puck": OrientConvention.BOTTOM_FORWARD_ROLL_PITCH,
+    "phone":     OrientConvention.FLAT_PITCH_YAW,
+}
+
+
+def default_convention_for_kind(kind):
+    """Engine default convention for a remote of the given ``kind``."""
+    return _DEFAULT_CONVENTION_BY_KIND.get(
+        kind, OrientConvention.FLAT_PITCH_YAW)
 
 # ── Constants ─────────────────────────────────────────────────────────────
 
@@ -82,14 +137,21 @@ class Remote:
         "calibrated_against", "stale_reason", "soft_stale",
         "last_quat_world", "aim_stage", "up_stage", "last_data",
         "connection_state", "registered_at",
+        # #762 — orient axis convention (puck defaults to roll+pitch only,
+        # yaw dropped to immunise against compassless drift; phone defaults
+        # to legacy roll+pitch+yaw quaternion).
+        "convention",
     )
 
     def __init__(self, id, name="", kind=KIND_PUCK, device_id=None,
-                 pos=None, rot=None):
+                 pos=None, rot=None, convention=None):
         self.id = int(id)
         self.name = name or f"Remote {id}"
         self.kind = kind if kind in VALID_KINDS else KIND_PUCK
         self.device_id = device_id
+        # #762 — pick per-kind default if no explicit convention was given.
+        self.convention = (_coerce_convention(convention)
+                           or default_convention_for_kind(self.kind))
         # Default position: stage centre at head height (decision #4).
         # The registry/API layer may override this with a layout-driven value.
         self.pos = list(pos) if pos is not None else [0.0, 0.0, 1600.0]
@@ -129,6 +191,12 @@ class Remote:
             "calibratedAt": self.calibrated_at,
             "calibratedAgainst": self.calibrated_against,
             "registeredAt": self.registered_at,
+            # #762 — only persist if the operator has overridden the per-
+            # kind default; otherwise rely on the kind→default table so a
+            # future flip of the global default propagates to old records.
+            "orientConvention": (self.convention.value
+                                 if self.convention != default_convention_for_kind(self.kind)
+                                 else None),
         }
 
     @classmethod
@@ -140,6 +208,7 @@ class Remote:
             device_id=d.get("deviceId"),
             pos=d.get("pos"),
             rot=d.get("rot"),
+            convention=d.get("orientConvention"),
         )
         q = d.get("R_world_to_stage")
         if q and len(q) == 4:
@@ -176,8 +245,14 @@ class Remote:
         (must have been populated by an `update_*` call).
         """
         if quat is None and (roll is not None or pitch is not None or yaw is not None):
+            # #762 — bottom-forward grip ignores yaw entirely (no compass on
+            # the puck IMU; yaw integrates and drifts). Calibrate-time pose
+            # is built from roll+pitch only, so the resulting R_world_to
+            # _stage maps a yaw=0 world frame onto stage. All subsequent
+            # orient updates use yaw=0 too — see update_from_euler_deg.
+            yaw_for_calib = 0.0 if self.convention == OrientConvention.BOTTOM_FORWARD_ROLL_PITCH else (yaw or 0.0)
             quat = quat_from_euler_zyx_deg(
-                roll or 0.0, pitch or 0.0, yaw or 0.0,
+                roll or 0.0, pitch or 0.0, yaw_for_calib,
             )
         if quat is None:
             if self.last_quat_world is None:
@@ -226,7 +301,18 @@ class Remote:
 
         The ESP32 puck's roll/pitch/yaw and the Android phone's Euler
         fallback both use this convention.
+
+        #762 — under ``BOTTOM_FORWARD_ROLL_PITCH`` (default for the gyro
+        puck) yaw is dropped before the quaternion is built. The puck's
+        QMI8658 IMU has no magnetometer, so its yaw integrates indefinitely
+        and drifts; both the calibrate-time R_world_to_stage and the live
+        orient stream use yaw=0, which leaves the world frame anchored to
+        gravity-only roll+pitch. Operator gestures around the gravity axis
+        (pure yaw motion) are deliberately ignored — there is no compass to
+        anchor them, so they would only show up as drift.
         """
+        if self.convention == OrientConvention.BOTTOM_FORWARD_ROLL_PITCH:
+            yaw = 0.0
         self._apply_quat(quat_from_euler_zyx_deg(roll, pitch, yaw))
 
     def update_from_quat(self, quat):
@@ -353,7 +439,31 @@ class Remote:
             "up": list(self.up_stage) if self.up_stage else None,
             "connectionState": self.connection_state,
             "lastDataAge": (now - self.last_data) if self.last_data else None,
+            # #762 — surface so the dashboard can show "puck (roll+pitch)" vs
+            # "phone (roll+pitch+yaw)" without inferring it from kind.
+            "orientConvention": self.convention.value,
         }
+
+    def set_convention(self, value):
+        """#762 — change convention at runtime (per-claim override path).
+        Recomputes derived state so aim_stage reflects the new mapping
+        immediately without waiting for the next orient packet."""
+        new_conv = _coerce_convention(value, default=self.convention)
+        if new_conv == self.convention:
+            return
+        self.convention = new_conv
+        # If we're already calibrated, the existing R_world_to_stage was
+        # built under the previous convention. Don't silently keep using
+        # it — force the operator to recalibrate by clearing it. (A more
+        # invasive option would be to project last_quat_world to the new
+        # convention's yaw-zero plane, but the safer call is "reset and
+        # ask for a fresh anchor".)
+        if self.calibrated:
+            self.calibrated = False
+            self.R_world_to_stage = None
+            self.connection_state = "armed" if self.last_data else "idle"
+            self.aim_stage = None
+            self.up_stage = None
 
 
 # ── RemoteRegistry ────────────────────────────────────────────────────────

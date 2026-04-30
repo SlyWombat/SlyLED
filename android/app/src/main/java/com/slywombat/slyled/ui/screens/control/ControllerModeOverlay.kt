@@ -33,6 +33,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.slywombat.slyled.ui.theme.*
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -64,8 +66,12 @@ fun ControllerModeOverlay(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    // Intercept back gesture / swipe so the overlay doesn't close accidentally
-    BackHandler { onDismiss() }
+    // #759 — back gesture is a no-op while the claim is active. The
+    // operator's hands are busy aiming the mover; only the explicit X
+    // tear-down (or sustained network failure, see ControlViewModel)
+    // exits the overlay. The wrapping Dialog also covers the bottom nav
+    // so accidental tab taps can't dispose the composition.
+    BackHandler { /* swallow */ }
 
     val sensorManager = remember { context.getSystemService(Context.SENSOR_SERVICE) as SensorManager }
     val rotationSensor = remember { sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) }
@@ -163,6 +169,21 @@ fun ControllerModeOverlay(
         onDispose { onDismiss() }
     }
 
+    // #759 — render inside a Dialog so the surface covers the bottom nav
+    // / TopAppBar of MainScaffold. Without this, accidental taps on the
+    // bottom-nav tabs (which sit above the overlay in z-order) dispose
+    // the overlay and tear down the claim mid-show. The Dialog swallows
+    // dismiss-on-click-outside and dismiss-on-back-press; only the X
+    // button or a sustained-network-error release exits.
+    Dialog(
+        onDismissRequest = { /* swallow — no automatic dismiss path */ },
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
     // Full-screen overlay
     Box(
         modifier = Modifier
@@ -482,6 +503,7 @@ fun ControllerModeOverlay(
             Spacer(Modifier.height(24.dp))
         }
     }
+    }  // close Dialog
 }
 
 @Composable

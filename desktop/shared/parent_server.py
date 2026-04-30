@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.8"
+VERSION = "1.7.11"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -14750,6 +14750,13 @@ _mover_engine = MoverControlEngine(
     get_mover_model=_get_mover_model,
     is_calibrating=_fixture_is_calibrating,
     get_claim_ttl_s=lambda: float(_cal_tuning("moverClaimTtlS")),
+    # #762 — engine-wide default OrientConvention (settings.json
+    # ``moverControl.orientConvention``). None = no engine-level pin, fall
+    # through to per-fixture / per-remote defaults. Read live so a settings
+    # toggle doesn't require a server restart.
+    get_default_convention=lambda: (
+        _settings.get("moverControl", {}).get("orientConvention")
+        if isinstance(_settings.get("moverControl"), dict) else None),
 )
 _mover_engine.start()
 
@@ -14761,9 +14768,15 @@ def api_mover_claim():
     dname = body.get("deviceName", "Unknown")
     dtype = body.get("deviceType", "android")
     sm = body.get("smoothing", 0.15)
+    # #762 — optional per-claim OrientConvention override. Accepts the enum
+    # string ("bottom_forward" / "flat_pitch_yaw") so an operator/UI can
+    # request a non-default grip for this session without changing the
+    # fixture or settings. Unknown values fall back to the resolved default.
+    conv = body.get("orientConvention")
     if mid is None:
         return jsonify(ok=False, err="moverId required"), 400
-    ok, reason = _mover_engine.claim(mid, did, dname, dtype, smoothing=sm)
+    ok, reason = _mover_engine.claim(mid, did, dname, dtype,
+                                     smoothing=sm, convention=conv)
     if not ok:
         return jsonify(ok=False, err=reason), 409
     # #492 — when an Android phone claims a mover it supplies its own
@@ -19463,6 +19476,13 @@ def api_fw_flash():
     port = body.get("port", "")
     fw_id = body.get("firmwareId", "")
     board = body.get("board", "")
+    # #761 §C-4 — optional device IP for post-flash verification. When the
+    # SPA passes the IP of the target device (it usually knows from the
+    # Setup tab / firmware-query flow), we'll poll http://<ip>/status after
+    # esptool reports success and confirm the device's reported `version`
+    # actually changed. Skipping this loses the only signal that
+    # distinguishes "esptool wrote flash" from "esptool aborted silently".
+    verify_ip = (body.get("verifyIp") or "").strip()
     if not port or not fw_id:
         return jsonify(ok=False, err="port and firmwareId required"), 400
     reg = load_registry(_FW_DIR)
@@ -19480,10 +19500,13 @@ def api_fw_flash():
                        err=f"binary not found locally and release asset "
                            f"'{fw.get('releaseAsset') or fw.get('file')}' "
                            "could not be downloaded"), 502
+    verify_url = f"http://{verify_ip}/status" if verify_ip else None
     # Flash in background thread
     def _do_flash():
         flash_board(port, bin_path_str, board or fw["board"],
-                    wifi_ssid=_wifi.get("ssid"), wifi_pass=_decrypt_pw(_wifi.get("password", "")))
+                    wifi_ssid=_wifi.get("ssid"),
+                    wifi_pass=_decrypt_pw(_wifi.get("password", "")),
+                    verify_status_url=verify_url)
     threading.Thread(target=_do_flash, daemon=True).start()
     return jsonify(ok=True, message="Flashing started")
 
@@ -20259,6 +20282,9 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
+
 
 
 

@@ -100,10 +100,10 @@
                          "description":  "Waveshare ESP32-S3 1.28inch round LCD â€” orientation controller for DMX moving heads",
                          "board":  "esp32s3",
                          "fqbn":  "esp32:esp32:esp32s3",
-                         "version":  "1.2.0",
+                         "version":  "8.5.20",
                          "file":  "esp32s3/main.ino.merged.bin",
                          "releaseAsset":  "esp32s3-gyro-firmware.bin",
-                         "sha256":  "0f1f82bee1f0429a831a9fb2ab3b5a3953a7d2a27902a427852b9dc689b4bf4c",
+                         "sha256":  "3a56ed088fc5aa4562c2928146b81d351ec18005240b72ddfb29ac833ccb9839",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "GYRO_BOARD"

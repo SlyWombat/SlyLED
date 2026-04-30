@@ -74,6 +74,13 @@ class ControlViewModel @Inject constructor(
     val userPosition: StateFlow<UserPosition> = _userPosition.asStateFlow()
 
     private var orientErrorCount = 0
+    // #759 — first failure timestamp of the current sustained-error window.
+    // Cleared on the next successful orient. After kReleaseAfterFailureMs of
+    // continuous failures, the active overlay is exited (claim release +
+    // blackout) so an unreachable orchestrator doesn't leave the operator
+    // stuck on a frozen screen.
+    private var firstOrientFailureTs: Long = 0L
+    private val kReleaseAfterFailureMs = 5_000L
 
     private var initialized = false
 
@@ -257,6 +264,7 @@ class ControlViewModel @Inject constructor(
         _controllerReady.value = false
         _controllerConnected.value = true
         orientErrorCount = 0
+        firstOrientFailureTs = 0L
         // Release claim — server handles blackout. #754 BUG-C: also fire
         // the going-offline signal so the SPA dashboard hides the row
         // immediately instead of falling through to "slow/reconnecting".
@@ -302,6 +310,7 @@ class ControlViewModel @Inject constructor(
                     _controllerConnected.value = true
                     orientErrorCount = 0
                 }
+                firstOrientFailureTs = 0L
             } catch (e: Exception) {
                 orientErrorCount++
                 // Show disconnected after 3 consecutive failures (~150ms)
@@ -309,6 +318,19 @@ class ControlViewModel @Inject constructor(
                     _controllerConnected.value = false
                 }
                 Log.w(TAG, "sendOrientation failed: ${e.message}")
+
+                // #759 — release the claim only after a SUSTAINED failure
+                // window so a single dropped packet (or a 200 ms WiFi hiccup)
+                // doesn't blackout the fixture mid-show.
+                val now = System.currentTimeMillis()
+                if (firstOrientFailureTs == 0L) {
+                    firstOrientFailureTs = now
+                } else if (now - firstOrientFailureTs > kReleaseAfterFailureMs) {
+                    Log.w(TAG, "sustained orient failure (>${kReleaseAfterFailureMs}ms) — releasing claim")
+                    firstOrientFailureTs = 0L
+                    if (_controllerFixtureId.value != null) exitControllerMode()
+                    if (_pointerFixtureId.value != null) exitPointerMode()
+                }
             }
         }
     }
@@ -409,6 +431,7 @@ class ControlViewModel @Inject constructor(
         _pointerReady.value = false
         _controllerConnected.value = true
         orientErrorCount = 0
+        firstOrientFailureTs = 0L
         // Same #754 BUG-C disconnect signal as Controller mode.
         if (fid != null) {
             viewModelScope.launch {

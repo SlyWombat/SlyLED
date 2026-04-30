@@ -20,6 +20,7 @@ from remote_orientation import (  # noqa: E402
     REMOTE_FORWARD_LOCAL, REMOTE_UP_LOCAL, STALE_AGE_SECS, STALE_COMMS_SECS,
     STALE_SOFT_SECS, STALE_HARD_SECS,
     Remote, RemoteRegistry, KIND_PUCK, KIND_PHONE,
+    OrientConvention,
 )
 
 
@@ -102,8 +103,11 @@ def test_calibrate_identity():
 def test_calibrate_then_rotate():
     """Calibrate remote at identity aiming +Y. Yaw +90° = rotation about
     body +Z, which by the right-hand rule takes body +Y to world -X.
+
+    #762 — only valid when the convention consumes yaw. Pucks default to
+    BOTTOM_FORWARD_ROLL_PITCH and would freeze aim under yaw rotation.
     """
-    r = Remote(id=11)
+    r = Remote(id=11, convention=OrientConvention.FLAT_PITCH_YAW)
     r.update_from_euler_deg(0, 0, 0)
     r.calibrate(target_aim_stage=(0, 1, 0))
     r.update_from_euler_deg(0, 0, 90)
@@ -186,7 +190,10 @@ def test_full_user_model():
     n = norm3(aim_target)
     aim_unit = (aim_target[0]/n, aim_target[1]/n, aim_target[2]/n)
 
-    r = Remote(id=20, name="Stage Left Puck")
+    # #762 — exercise the legacy yaw-consuming convention; the puck-default
+    # BOTTOM_FORWARD_ROLL_PITCH would (correctly) freeze aim under pure yaw.
+    r = Remote(id=20, name="Stage Left Puck",
+               convention=OrientConvention.FLAT_PITCH_YAW)
     # Operator physically rotates remote to match the aim direction.
     # We simulate this by saying: the remote's current sensor reading is
     # some arbitrary orientation q_at_calib, and at that moment the remote
@@ -442,6 +449,110 @@ def test_body_axis_constants():
         tol=1e-12, msg="identity keeps forward")
 
 
+# ── #762 OrientConvention defaults + yaw-drop semantics ──────────────────
+
+def test_762_puck_default_convention_is_bottom_forward():
+    """Pucks default to BOTTOM_FORWARD_ROLL_PITCH (no compass = no yaw)."""
+    r = Remote(id=200, kind=KIND_PUCK)
+    _eq(r.convention, OrientConvention.BOTTOM_FORWARD_ROLL_PITCH,
+        msg="puck default convention")
+
+
+def test_762_phone_default_convention_is_flat_pitch_yaw():
+    """Phones keep the legacy FLAT_PITCH_YAW (rotation_vector is fused)."""
+    r = Remote(id=201, kind=KIND_PHONE)
+    _eq(r.convention, OrientConvention.FLAT_PITCH_YAW,
+        msg="phone default convention")
+
+
+def test_762_bottom_forward_drops_yaw_in_orient():
+    """Two updates with same roll+pitch but different yaw yield the same
+    quaternion under BOTTOM_FORWARD_ROLL_PITCH — drift is a no-op."""
+    r = Remote(id=202, kind=KIND_PUCK)
+    r.update_from_euler_deg(0, 0, 0)
+    r.calibrate(target_aim_stage=(0, 1, 0))
+    r.update_from_euler_deg(15, 25, 0)
+    aim_no_yaw = r.aim_stage
+    r.update_from_euler_deg(15, 25, 180)  # huge yaw drift
+    aim_drifted = r.aim_stage
+    _eq(aim_no_yaw, aim_drifted, tol=1e-12,
+        msg="yaw drift produces no aim change under BOTTOM_FORWARD")
+
+
+def test_762_flat_pitch_yaw_consumes_yaw():
+    """Same setup under FLAT_PITCH_YAW: yaw moves aim — i.e. without the
+    convention switch, drift would silently accumulate."""
+    r = Remote(id=203, convention=OrientConvention.FLAT_PITCH_YAW)
+    r.update_from_euler_deg(0, 0, 0)
+    r.calibrate(target_aim_stage=(0, 1, 0))
+    r.update_from_euler_deg(15, 25, 0)
+    aim_no_yaw = r.aim_stage
+    r.update_from_euler_deg(15, 25, 90)
+    aim_yawed = r.aim_stage
+    dx = aim_no_yaw[0] - aim_yawed[0]
+    dy = aim_no_yaw[1] - aim_yawed[1]
+    dz = aim_no_yaw[2] - aim_yawed[2]
+    moved = math.sqrt(dx*dx + dy*dy + dz*dz)
+    _true(moved > 0.5,
+          "FLAT_PITCH_YAW: 90° yaw moves aim (proves test setup, not just yaw-drop")
+
+
+def test_762_bottom_forward_calibrate_pitch_anchors_pose():
+    """Calibrate with arbitrary yaw under BOTTOM_FORWARD: the recorded
+    R_world_to_stage must be built from yaw=0 so subsequent yaw=0 orient
+    streams stay aligned. Repeating the same orient should reproduce the
+    target aim."""
+    r = Remote(id=204, kind=KIND_PUCK)
+    # Operator's phone happened to have a wildly drifted yaw at calibrate.
+    r.calibrate(target_aim_stage=(1, 0, 0), roll=10.0, pitch=5.0, yaw=137.0)
+    r.update_from_euler_deg(10, 5, 0)
+    _eq(r.aim_stage, (1, 0, 0), tol=1e-9,
+        msg="orient at calib pose (yaw stripped) reproduces target aim")
+    # And the next moment the puck's yaw drifts by 200° — aim must not move.
+    r.update_from_euler_deg(10, 5, -200)
+    _eq(r.aim_stage, (1, 0, 0), tol=1e-9,
+        msg="yaw drift after calib doesn't move aim")
+
+
+def test_762_set_convention_clears_calibration():
+    """Switching convention mid-session invalidates the calibration: the
+    R_world_to_stage was computed under the old yaw treatment, so the
+    operator must re-anchor before the fixture follows again."""
+    r = Remote(id=205, kind=KIND_PHONE)
+    r.update_from_euler_deg(0, 0, 0)
+    r.calibrate(target_aim_stage=(0, 1, 0))
+    _true(r.calibrated, "calibrated under default convention")
+    r.set_convention(OrientConvention.BOTTOM_FORWARD_ROLL_PITCH)
+    _eq(r.calibrated, False, msg="calibration cleared on convention switch")
+    _eq(r.aim_stage, None, msg="aim cleared on convention switch")
+
+
+def test_762_persist_roundtrip_default_omitted_override_kept():
+    """Default convention isn't persisted (so flipping the per-kind default
+    later propagates to old records). An explicit override IS persisted."""
+    r1 = Remote(id=206, kind=KIND_PUCK)  # default = BOTTOM_FORWARD
+    d1 = r1.to_persisted_dict()
+    _eq(d1["orientConvention"], None,
+        msg="default convention not pinned in persisted dict")
+    r2 = Remote(id=207, kind=KIND_PUCK,
+                convention=OrientConvention.FLAT_PITCH_YAW)
+    d2 = r2.to_persisted_dict()
+    _eq(d2["orientConvention"], "flat_pitch_yaw",
+        msg="explicit override IS persisted")
+    # Round-trip
+    r2_back = Remote.from_persisted_dict(d2)
+    _eq(r2_back.convention, OrientConvention.FLAT_PITCH_YAW,
+        msg="persisted override restored")
+
+
+def test_762_live_dict_exposes_convention():
+    """Dashboard / status panel needs to render which convention is active."""
+    r = Remote(id=208, kind=KIND_PUCK)
+    d = r.live_dict()
+    _eq(d["orientConvention"], "bottom_forward",
+        msg="live_dict surfaces active convention")
+
+
 # ── Run everything ────────────────────────────────────────────────────────
 
 ALL = [
@@ -471,6 +582,15 @@ ALL = [
     test_registry_handles_corrupt_entries,
     test_registry_live_list,
     test_body_axis_constants,
+    # #762 OrientConvention coverage
+    test_762_puck_default_convention_is_bottom_forward,
+    test_762_phone_default_convention_is_flat_pitch_yaw,
+    test_762_bottom_forward_drops_yaw_in_orient,
+    test_762_flat_pitch_yaw_consumes_yaw,
+    test_762_bottom_forward_calibrate_pitch_anchors_pose,
+    test_762_set_convention_clears_calibration,
+    test_762_persist_roundtrip_default_omitted_override_kept,
+    test_762_live_dict_exposes_convention,
 ]
 
 
