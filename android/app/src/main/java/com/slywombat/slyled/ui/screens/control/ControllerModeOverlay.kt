@@ -34,6 +34,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.slywombat.slyled.ui.theme.*
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Controller mode — full-screen overlay with compact crosshair,
@@ -91,6 +94,12 @@ fun ControllerModeOverlay(
     var green by remember { mutableFloatStateOf(1f) }
     var blue by remember { mutableFloatStateOf(1f) }
     var smoothing by remember { mutableFloatStateOf(0.15f) }
+
+    // #755 BUG-D — 100 ms lift debounce for hold-to-calibrate so brief
+    // unintentional finger lifts (operator drift, hand tremor) do not fire
+    // a premature /api/mover-control/calibrate-end + release cascade.
+    val calibrateScope = rememberCoroutineScope()
+    val pendingCalibrateEnd = remember { java.util.concurrent.atomic.AtomicReference<Job?>(null) }
 
     DisposableEffect(rotationSensor) {
         val listener = object : SensorEventListener {
@@ -250,53 +259,100 @@ fun ControllerModeOverlay(
                         }
                     }
                     Spacer(Modifier.height(10.dp))
-                    // A plain Box rather than Material Button so the hold
-                    // gesture actually reaches our pointerInput — the Button
-                    // composable consumes first-down events for its ripple
-                    // + click handling, which was swallowing the press.
+                    // #755 BUG-D — large hit area + drift-tolerant gesture
+                    // (initial down is consumed so the parent verticalScroll
+                    // can't claim it during a vertical drift) + 100 ms lift
+                    // debounce so brief finger lifts don't fire calibrate-end.
+                    // Yellow halo while held = strong visual feedback that
+                    // the press is captured even past the visible button.
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(40.dp)
-                            .clip(RoundedCornerShape(8.dp))
+                            .height(96.dp)
+                            .clip(RoundedCornerShape(14.dp))
                             .background(
-                                if (holdingCalibrate) CyanSecondary.copy(alpha = 0.3f)
-                                else Color(0xFF1E293B)
+                                if (holdingCalibrate)
+                                    Color(0xFFFBBF24).copy(alpha = 0.22f)
+                                else Color.Transparent
                             )
                             .pointerInput(Unit) {
                                 awaitEachGesture {
-                                    awaitFirstDown()
-                                    holdingCalibrate = true
-                                    holdingCalibrateRef.set(true)
-                                    onCalibrateStart(
-                                        latestRoll.get(),
-                                        latestPitch.get(),
-                                        latestYaw.get()
-                                    )
-                                    waitForUpOrCancellation()
-                                    onCalibrateEnd(
-                                        latestRoll.get(),
-                                        latestPitch.get(),
-                                        latestYaw.get()
-                                    )
-                                    hasRef = false
-                                    holdingCalibrate = false
-                                    holdingCalibrateRef.set(false)
+                                    val firstDown = awaitFirstDown(requireUnconsumed = false)
+                                    firstDown.consume()  // claim ownership; parent scroll can't steal it
+
+                                    val pending = pendingCalibrateEnd.getAndSet(null)
+                                    if (pending != null && pending.isActive) {
+                                        // Re-press inside 100 ms debounce — cancel pending end
+                                        pending.cancel()
+                                    } else {
+                                        // Fresh hold start
+                                        holdingCalibrate = true
+                                        holdingCalibrateRef.set(true)
+                                        onCalibrateStart(
+                                            latestRoll.get(),
+                                            latestPitch.get(),
+                                            latestYaw.get()
+                                        )
+                                    }
+
+                                    // Track pointer; consume every event to keep ownership
+                                    var stillPressed = true
+                                    while (stillPressed) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == firstDown.id }
+                                        change?.consume()
+                                        stillPressed = change?.pressed == true
+                                    }
+
+                                    // Schedule debounced calibrate-end. A fresh down within
+                                    // 100 ms will cancel this and continue the same hold.
+                                    val endJob = calibrateScope.launch {
+                                        delay(100L)
+                                        onCalibrateEnd(
+                                            latestRoll.get(),
+                                            latestPitch.get(),
+                                            latestYaw.get()
+                                        )
+                                        hasRef = false
+                                        holdingCalibrate = false
+                                        holdingCalibrateRef.set(false)
+                                        pendingCalibrateEnd.set(null)
+                                    }
+                                    pendingCalibrateEnd.set(endJob)
                                 }
                             }
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.MyLocation, null,
-                                tint = CyanSecondary, modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                if (holdingCalibrate) "Reposition..." else "Hold to Calibrate",
-                                color = CyanSecondary,
-                                style = MaterialTheme.typography.labelMedium
-                            )
+                        // Inner visible button (small, centred) — purely visual
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(40.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(
+                                    if (holdingCalibrate)
+                                        Color(0xFFFBBF24).copy(alpha = 0.85f)
+                                    else Color(0xFF1E293B)
+                                )
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.MyLocation, null,
+                                    tint = if (holdingCalibrate) Color(0xFF0F0F10)
+                                           else CyanSecondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    if (holdingCalibrate) "Hold steady…" else "Hold to Calibrate",
+                                    color = if (holdingCalibrate) Color(0xFF0F0F10)
+                                            else CyanSecondary,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = if (holdingCalibrate) FontWeight.Bold
+                                                 else FontWeight.Normal
+                                )
+                            }
                         }
                     }
                 }

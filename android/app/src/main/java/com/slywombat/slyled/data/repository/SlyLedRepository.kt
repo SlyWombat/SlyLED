@@ -271,6 +271,17 @@ class SlyLedRepository @Inject constructor(
     // by ControlViewModel while a controller-mode session is active.
     suspend fun getMoverControlStatus() = requireApi().getMoverControlStatus()
 
+    // #754 BUG-C — going-offline signal fired on the X-dismiss path so
+    // the SPA dashboard hides the row within 1 s instead of showing the
+    // soft-stale "slow / reconnecting" label for the next 5–60 s.
+    suspend fun disconnectRemote(): OkResponse {
+        val id = requireIdentity()
+        val body = buildJsonObject {
+            put("deviceId", id.deviceId)
+        }
+        return requireApi().disconnectRemote(body)
+    }
+
     // #427 — pointer mode: aim a mover by stage XYZ (mm). Server runs the
     // SMART path when available, returns 400 fixture_not_calibrated otherwise.
     suspend fun moverAim(moverId: Int, targetX: Double, targetY: Double,

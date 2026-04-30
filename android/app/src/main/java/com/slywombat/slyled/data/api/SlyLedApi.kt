@@ -144,6 +144,12 @@ interface SlyLedApi {
     @GET("api/mover-control/status")
     suspend fun getMoverControlStatus(): MoverControlStatus
 
+    // #754 BUG-C — explicit going-offline signal so the SPA dashboard
+    // shows the device as gone (not "slow / reconnecting") immediately
+    // after the operator presses X.
+    @POST("api/remotes/disconnect")
+    suspend fun disconnectRemote(@Body body: JsonObject): OkResponse
+
     // #427 — pointer mode aims by stage XYZ (mm). Body: {targetX,targetY,targetZ}.
     // Server routes through SMART model when present, returns 400
     // {err:"Fixture not calibrated"} when world-XYZ aim isn't supported yet.
