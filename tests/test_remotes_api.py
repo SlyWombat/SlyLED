@@ -262,6 +262,59 @@ def test_end_session_and_clear_stale():
         _remove_mover_fixture(fx["id"])
 
 
+def test_disconnect_endpoint():
+    """#754 BUG-C — POST /api/remotes/disconnect marks the matching remote as
+    session-ended so live_list prunes it from the SPA dashboard within 1 s.
+    """
+    _clear_remotes()
+    with app.test_client() as c:
+        # No body — 400.
+        r = c.post("/api/remotes/disconnect", json={})
+        _assert(r.status_code == 400, "missing deviceId rejected")
+
+        # Idempotent for unknown deviceId — 200 found:false.
+        r = c.post("/api/remotes/disconnect", json={"deviceId": "nope-123"})
+        _assert(r.status_code == 200, "unknown deviceId returns 200")
+        _assert(r.get_json().get("found") is False, "found=false for unknown")
+
+        # Register a fresh phone via UDP-style auto-register, then disconnect.
+        rem = parent_server._auto_register_remote("phone-test-guid",
+                                                  kind=parent_server.KIND_PHONE)
+        _assert(rem is not None, "auto-register sets up remote")
+
+        # Before disconnect: appears in live_list.
+        live = c.get("/api/remotes/live").get_json()["remotes"]
+        live_ids = [r["id"] for r in live]
+        _assert(rem.id in live_ids, "remote present in live_list before disconnect")
+
+        # Disconnect.
+        r = c.post("/api/remotes/disconnect", json={"deviceId": "phone-test-guid"})
+        _assert(r.status_code == 200, "disconnect status")
+        body = r.get_json()
+        _assert(body.get("found") is True, "found=true on existing")
+        _assert(body.get("remoteId") == rem.id, "remoteId echoed back")
+
+        # Phones are removed entirely on disconnect so a subsequent claim
+        # re-registers cleanly (without `mover_control._tick` evicting the
+        # new claim because of latched stale_reason="session-ended").
+        body = r.get_json()
+        _assert(body.get("removed") is True, "phone disconnect → removed=true")
+        live = c.get("/api/remotes/live").get_json()["remotes"]
+        live_ids = [r["id"] for r in live]
+        _assert(rem.id not in live_ids, "phone removed from live_list after disconnect")
+        all_remotes = c.get("/api/remotes").get_json()["remotes"]
+        _assert(rem.id not in [r["id"] for r in all_remotes],
+                "phone removed from /api/remotes registry too")
+
+        # Re-register via auto-register path: should get a NEW remote with
+        # stale_reason=None so claims survive.
+        rem2 = parent_server._auto_register_remote("phone-test-guid",
+                                                   kind=parent_server.KIND_PHONE)
+        _assert(rem2.id != rem.id, "auto-register after disconnect makes a fresh id")
+        _assert(rem2.stale_reason is None,
+                "fresh remote has no stale_reason (no latched session-ended)")
+
+
 def test_auto_register_from_udp_path():
     """Simulate the UDP listener's auto-register logic (not actually sending
     UDP, but invoking _auto_register_remote + update_from_euler_deg).
@@ -290,6 +343,7 @@ ALL = [
     test_calibrate_non_mover_rejected,
     test_diagnostic_endpoint,
     test_end_session_and_clear_stale,
+    test_disconnect_endpoint,
     test_auto_register_from_udp_path,
 ]
 

@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.6"
+VERSION = "1.7.8"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -15168,6 +15168,36 @@ def api_remotes_live():
     return jsonify(remotes=_remotes.live_list())
 
 
+@app.post("/api/remotes/disconnect")
+def api_remotes_disconnect():
+    """#754 BUG-C — explicit "device-going-offline" signal.
+
+    Body: {"deviceId": "<guid>"}. Phones (auto-registered, ephemeral) are
+    *removed* from the registry so a subsequent claim re-registers cleanly
+    without the latched `stale_reason="session-ended"` causing
+    `mover_control._tick` to immediately auto-release the new claim. Gyro
+    pucks (persistent hardware in the operator's setup) just get
+    `end_session()` — same SPA "gone within 1s" effect, but without losing
+    their saved position/rot/calibration record.
+    """
+    body = request.get_json(silent=True) or {}
+    did = (body.get("deviceId") or "").strip()
+    if not did:
+        return jsonify(ok=False, err="deviceId required"), 400
+    r = _remotes.by_device(did)
+    if r is None:
+        # Idempotent: nothing to disconnect — return ok so the client's
+        # cleanup path doesn't have to special-case "already gone".
+        return jsonify(ok=True, found=False)
+    if r.kind == KIND_PHONE:
+        rid = r.id
+        _remotes.remove(rid)
+        return jsonify(ok=True, found=True, remoteId=rid, removed=True)
+    r.end_session()
+    _remotes.save()
+    return jsonify(ok=True, found=True, remoteId=r.id, removed=False)
+
+
 @app.get("/api/remotes/<int:remote_id>/diagnostic")
 def api_remote_diagnostic(remote_id):
     """Raw + transformed orientation for axis-convention verification (#477).
@@ -20229,6 +20259,8 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
 
 
 

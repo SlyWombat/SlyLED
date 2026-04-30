@@ -35,6 +35,9 @@ import com.slywombat.slyled.ui.theme.*
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * #427 — Pointer mode. Phone acts as a laser pointer in stage space.
@@ -98,6 +101,10 @@ fun PointerModeOverlay(
     var userXText by remember(userPosition) { mutableStateOf(userPosition.xMm.toInt().toString()) }
     var userYText by remember(userPosition) { mutableStateOf(userPosition.yMm.toInt().toString()) }
     var userZText by remember(userPosition) { mutableStateOf(userPosition.zMm.toInt().toString()) }
+
+    // #755 BUG-D — 100 ms lift debounce for hold-to-calibrate.
+    val calibrateScope = rememberCoroutineScope()
+    val pendingCalibrateEnd = remember { java.util.concurrent.atomic.AtomicReference<Job?>(null) }
 
     DisposableEffect(rotationSensor) {
         val listener = object : SensorEventListener {
@@ -259,55 +266,96 @@ fun PointerModeOverlay(
 
             Spacer(Modifier.height(16.dp))
 
-            // Hold-to-calibrate. While held, freeze updates. On release,
-            // capture the world-yaw of the phone's forward vector as the
-            // stage-forward offset.
+            // Hold-to-calibrate. While held, freeze updates. On release (after
+            // 100 ms lift debounce — #755 BUG-D), capture the world-yaw of the
+            // phone's forward vector as the stage-forward offset. The taller
+            // hit area + initial-down consume keeps the parent verticalScroll
+            // from stealing the gesture during finger drift.
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .height(120.dp)
+                    .clip(RoundedCornerShape(14.dp))
                     .background(
-                        if (holdingCalibrate) CyanSecondary.copy(alpha = 0.3f)
-                        else Color(0xFF1E293B)
+                        if (holdingCalibrate)
+                            Color(0xFFFBBF24).copy(alpha = 0.22f)
+                        else Color.Transparent
                     )
                     .pointerInput(Unit) {
                         awaitEachGesture {
-                            awaitFirstDown()
-                            holdingCalibrate = true
-                            holdingCalibrateRef.set(true)
-                            waitForUpOrCancellation()
-                            // Snapshot the world-frame forward vector at the
-                            // moment the operator releases — they're aiming
-                            // at "stage forward" from their position. Yaw
-                            // = atan2(fx, fy): atan2(East, North) = 0 when
-                            // forward points north.
-                            val fwd = latestWorldForward.get()
-                            val yaw = atan2(fwd[0], fwd[1])
-                            headingOffsetRad = yaw
-                            headingOffsetRef.set(yaw)
-                            hasHeading = true
-                            hasHeadingRef.set(true)
-                            holdingCalibrate = false
-                            holdingCalibrateRef.set(false)
+                            val firstDown = awaitFirstDown(requireUnconsumed = false)
+                            firstDown.consume()
+
+                            val pending = pendingCalibrateEnd.getAndSet(null)
+                            if (pending != null && pending.isActive) {
+                                pending.cancel()
+                            } else {
+                                holdingCalibrate = true
+                                holdingCalibrateRef.set(true)
+                            }
+
+                            var stillPressed = true
+                            while (stillPressed) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == firstDown.id }
+                                change?.consume()
+                                stillPressed = change?.pressed == true
+                            }
+
+                            // Schedule the heading-capture after 100 ms; a
+                            // re-press inside the window cancels and continues
+                            // the same hold without committing.
+                            val endJob = calibrateScope.launch {
+                                delay(100L)
+                                val fwd = latestWorldForward.get()
+                                // atan2(fx, fy): atan2(East, North) = 0 when
+                                // forward points north.
+                                val yaw = atan2(fwd[0], fwd[1])
+                                headingOffsetRad = yaw
+                                headingOffsetRef.set(yaw)
+                                hasHeading = true
+                                hasHeadingRef.set(true)
+                                holdingCalibrate = false
+                                holdingCalibrateRef.set(false)
+                                pendingCalibrateEnd.set(null)
+                            }
+                            pendingCalibrateEnd.set(endJob)
                         }
                     }
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.MyLocation, null,
-                        tint = CyanSecondary, modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        if (holdingCalibrate) "Aim at stage forward, then release"
-                        else if (hasHeading) "Re-calibrate heading"
-                        else "Hold + aim at stage forward",
-                        color = CyanSecondary,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold
-                    )
+                // Inner visible button — purely visual. The wrapping Box is
+                // the actual hit area + drift-tolerant gesture region.
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (holdingCalibrate)
+                                Color(0xFFFBBF24).copy(alpha = 0.85f)
+                            else Color(0xFF1E293B)
+                        )
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.MyLocation, null,
+                            tint = if (holdingCalibrate) Color(0xFF0F0F10)
+                                   else CyanSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (holdingCalibrate) "Aim at stage forward, then release"
+                            else if (hasHeading) "Re-calibrate heading"
+                            else "Hold + aim at stage forward",
+                            color = if (holdingCalibrate) Color(0xFF0F0F10)
+                                    else CyanSecondary,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
 

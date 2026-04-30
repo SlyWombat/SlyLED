@@ -257,10 +257,13 @@ class ControlViewModel @Inject constructor(
         _controllerReady.value = false
         _controllerConnected.value = true
         orientErrorCount = 0
-        // Release claim — server handles blackout
+        // Release claim — server handles blackout. #754 BUG-C: also fire
+        // the going-offline signal so the SPA dashboard hides the row
+        // immediately instead of falling through to "slow/reconnecting".
         if (fid != null) {
             viewModelScope.launch {
                 try { repository.moverRelease(fid) } catch (_: Exception) {}
+                try { repository.disconnectRemote() } catch (_: Exception) {}
             }
         }
     }
@@ -406,9 +409,11 @@ class ControlViewModel @Inject constructor(
         _pointerReady.value = false
         _controllerConnected.value = true
         orientErrorCount = 0
+        // Same #754 BUG-C disconnect signal as Controller mode.
         if (fid != null) {
             viewModelScope.launch {
                 try { repository.moverRelease(fid) } catch (_: Exception) {}
+                try { repository.disconnectRemote() } catch (_: Exception) {}
             }
         }
     }

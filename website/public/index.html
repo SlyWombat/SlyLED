@@ -61,6 +61,10 @@ a{color:var(--cyan);text-decoration:none}a:hover{text-decoration:underline}
 .cta-primary{background:linear-gradient(135deg,var(--blue),var(--cyan));color:#fff}
 .cta-android{background:linear-gradient(135deg,#059669,var(--green));color:#000}
 .cta-ghost{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.cta-star{background:linear-gradient(135deg,#f59e0b,var(--amber));color:#0f0f10;border:1px solid rgba(251,191,36,.45)}
+.cta-star-glyph{width:18px;height:18px;fill:currentColor;flex-shrink:0;filter:drop-shadow(0 0 6px rgba(251,191,36,.55))}
+.cta-star-count{display:inline-flex;align-items:center;padding:2px 9px;border-radius:999px;background:rgba(0,0,0,.22);font-size:.85em;font-weight:800;font-variant-numeric:tabular-nums;color:#0f0f10;margin-left:2px}
+.cta-star-count:empty{display:none}
 .hero-hint{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);color:rgba(34,211,238,.38);font-size:.74rem;letter-spacing:.06em;transition:opacity 1.5s;pointer-events:none;white-space:nowrap;animation:bob 2s ease-in-out infinite}
 @keyframes bob{0%,100%{transform:translateX(-50%) translateY(0)}50%{transform:translateX(-50%) translateY(5px)}}
 
@@ -209,6 +213,7 @@ footer a{color:var(--cyan)}
     <div class="cta">
       <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="cta-primary" data-i="ctaWin"></a>
       <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="cta-android" data-i="ctaAndroid"></a>
+      <a href="https://github.com/SlyWombat/SlyLED" target="_blank" rel="noopener" class="cta-star" aria-label="Star SlyLED on GitHub"><svg class="cta-star-glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 22 12 18.56 5.82 22 7 14.14l-5-4.87 6.91-1.01L12 2z"/></svg><span data-i="ctaStar"></span><span class="cta-star-count"></span></a>
       <a href="https://github.com/SlyWombat/SlyLED" class="cta-ghost" data-i="ctaGithub"></a>
     </div>
   </div>
@@ -377,6 +382,7 @@ footer a{color:var(--cyan)}
     <div class="cta">
       <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="cta-primary" data-i="ctaWin"></a>
       <a href="https://github.com/SlyWombat/SlyLED/releases/latest" class="cta-android" data-i="ctaAndroid"></a>
+      <a href="https://github.com/SlyWombat/SlyLED" target="_blank" rel="noopener" class="cta-star" aria-label="Star SlyLED on GitHub"><svg class="cta-star-glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 22 12 18.56 5.82 22 7 14.14l-5-4.87 6.91-1.01L12 2z"/></svg><span data-i="ctaStar"></span><span class="cta-star-count"></span></a>
       <a href="https://github.com/SlyWombat/SlyLED" class="cta-ghost" data-i="ctaGithub"></a>
       <a href="https://electricrv.ca/slyled/demo/" class="cta-ghost" style="border-color:var(--purple);color:var(--purple)" data-i="ctaDemo"></a>
       <a href="SlyLED_User_Manual.pdf" class="cta-ghost" style="border-color:var(--amber);color:var(--amber)" data-i="ctaManual"></a>
@@ -403,7 +409,7 @@ en:{
   heroH1:"Your lights know\u00a0where the show\u00a0is.",
   heroSub:"AI-powered stage lighting that tracks people, controls moving heads, and runs entire shows \u2014 automatically. Free, open source, forever.",
   heroHint:"\u2715 Move your cursor \u00b7 beams follow you",
-  ctaWin:"Get SlyLED Free \u2192",ctaAndroid:"Android APK",ctaGithub:"GitHub \u2197",ctaDemo:"See Demo \u2192",ctaManual:"User Manual (PDF)",
+  ctaWin:"Get SlyLED Free \u2192",ctaAndroid:"Android APK",ctaGithub:"GitHub \u2197",ctaStar:"Star on GitHub",ctaDemo:"See Demo \u2192",ctaManual:"User Manual (PDF)",
   statProfiles:"Fixture Profiles",statOfl:"OFL Fixtures",statHz:"DMX Output",statLicense:"Free for non-profit",
   m1title:"Point a camera. It sees everything.",
   m1body:"Plug in any USB webcam and SlyLED\u2019s YOLOv8 AI detects performers, pets, and props in real time \u2014 in any lighting condition, at up to 10 frames per second.",
@@ -456,7 +462,7 @@ fr:{
   heroH1:"Vos lumi\u00e8res\u00a0savent o\u00f9\u00a0est le spectacle.",
   heroSub:"Contr\u00f4le d\u2019\u00e9clairage sc\u00e9nique pilot\u00e9 par IA qui suit les personnes, vise les lyres et joue des spectacles entiers \u2014 automatiquement. Gratuit, open source, pour toujours.",
   heroHint:"\u2715 D\u00e9placez votre curseur \u00b7 les faisceaux vous suivent",
-  ctaWin:"T\u00e9l\u00e9charger SlyLED \u2192",ctaAndroid:"APK Android",ctaGithub:"GitHub \u2197",ctaDemo:"Voir la d\u00e9mo \u2192",ctaManual:"Manuel (PDF)",
+  ctaWin:"T\u00e9l\u00e9charger SlyLED \u2192",ctaAndroid:"APK Android",ctaGithub:"GitHub \u2197",ctaStar:"\u00c9toiler sur GitHub",ctaDemo:"Voir la d\u00e9mo \u2192",ctaManual:"Manuel (PDF)",
   statProfiles:"Profils de projecteurs",statOfl:"Appareils OFL",statHz:"Sortie DMX",statLicense:"Gratuit (non-commercial)",
   m1title:"Pointez une cam\u00e9ra. Elle voit tout.",
   m1body:"Branchez n\u2019importe quelle webcam USB et l\u2019IA YOLOv8 de SlyLED d\u00e9tecte les performers, animaux et accessoires en temps r\u00e9el \u2014 dans toute condition de lumi\u00e8re, jusqu\u2019\u00e0 10 images par seconde.",
@@ -552,8 +558,11 @@ fetch('https://electricrv.ca/api/profiles/index.php?action=stats')
 fetch('https://api.github.com/repos/SlyWombat/SlyLED')
   .then(function(r){return r.json();})
   .then(function(d){
-    if(d&&d.stargazers_count!==undefined)
+    if(d&&d.stargazers_count!==undefined){
       _animCount(document.getElementById('stat-stars'),d.stargazers_count,1000);
+      var n=String(d.stargazers_count);
+      document.querySelectorAll('.cta-star-count').forEach(function(el){el.textContent=n;});
+    }
   }).catch(function(){});
 
 // ── Lightbox ──────────────────────────────────────────────────────────────
