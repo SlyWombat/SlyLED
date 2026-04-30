@@ -1,0 +1,8 @@
+== monitoring universe 1 @ 50 Hz  fixture #19 addr=43 profile=movinghead-150w-12ch  watch=fixture-only
+[2026-04-30T17:57:21.321496Z] INIT pan=0.7891 (426.1°) tilt=0.0000 (0.0°) dim=0 col=white
+[2026-04-30T17:58:00.904056Z]  3× tilt,strobe,colour              pan=0.7891( 426.1°)  tilt=0.0039(   0.7°)  dim=  0  col=raw:153
+[2026-04-30T17:58:02.958074Z]  3× tilt,strobe,colour              pan=0.7891( 426.1°)  tilt=0.0000(   0.0°)  dim=  0  col=white
+[2026-04-30T18:06:48.048924Z]  2× tilt,dimmer                     pan=0.7891( 426.1°)  tilt=0.0039(   0.7°)  dim=255  col=white
+[2026-04-30T18:06:52.094352Z]  1× pan                             pan=0.7031( 379.7°)  tilt=0.0039(   0.7°)  dim=255  col=white
+[2026-04-30T18:06:54.111198Z]  1× pan                             pan=0.9531( 514.7°)  tilt=0.0039(   0.7°)  dim=255  col=white
+[2026-04-30T18:06:58.129647Z]  2× tilt,dimmer                     pan=0.9531( 514.7°)  tilt=0.0000(   0.0°)  dim=  0  col=white

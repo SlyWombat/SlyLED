@@ -1,0 +1,72 @@
+DID=qa-curl-140645  TS=140645
+[A] PRE-status
+----- 18:06:45.618 pre-status -----
+{"claims":[],"engine":{"droppedWrites":0,"engineType":"sacn","lastDropTs":null,"running":true}}
+
+[B] CLAIM fid 19
+----- 18:06:45.673 claim -----
+{"ok":true}
+
+----- 18:06:46.245 post-claim status -----
+{"claims":[{"calibrated":false,"color":{"b":255,"g":255,"r":255},"deviceId":"qa-curl-140645","deviceName":"qa-curl","deviceType":"android","dimmer":255,"lastWriteAge":0.6,"moverId":19,"panNorm":0.5,"state":"claimed","tiltNorm":0.5}],"engine":{"droppedWrites":0,"engineType":"sacn","lastDropTs":null,"running":true}}
+
+[C] START stream
+----- 18:06:46.296 start -----
+{"engineRunning":true,"ok":true}
+
+----- 18:06:47.838 post-start status -----
+{"claims":[{"calibrated":false,"color":{"b":255,"g":255,"r":255},"deviceId":"qa-curl-140645","deviceName":"qa-curl","deviceType":"android","dimmer":255,"lastWriteAge":0.0,"moverId":19,"panNorm":0.5,"state":"streaming","tiltNorm":0.5}],"engine":{"droppedWrites":0,"engineType":"sacn","lastDropTs":null,"running":true}}
+
+[D] COLOR red+dim
+----- 18:06:47.886 color red -----
+{"engineRunning":true,"ok":true}
+
+----- 18:06:49.435 post-color status -----
+{"claims":[{"calibrated":false,"color":{"b":0,"g":0,"r":255},"deviceId":"qa-curl-140645","deviceName":"qa-curl","deviceType":"android","dimmer":255,"lastWriteAge":0.0,"moverId":19,"panNorm":0.5,"state":"streaming","tiltNorm":0.5}],"engine":{"droppedWrites":0,"engineType":"sacn","lastDropTs":null,"running":true}}
+
+[E] CALIBRATE-START (capture ref)
+----- 18:06:49.775 cal-start -----
+{"ok":true,"refPan":null,"refTilt":null}
+
+[F] ORIENT (yaw 0 / pitch 0 / roll 0 -- baseline)
+----- 18:06:50.240 orient zero -----
+{"engineRunning":true,"ok":true}
+
+[G] CALIBRATE-END
+----- 18:06:50.677 cal-end -----
+{"aim":[0.014524591478542234,0.9998945125573905,0.0],"ok":true}
+
+[H] ORIENT sweep yaw -90, +0, +90, +180
+----- 18:06:51.228 orient yaw=-90 -----
+{"engineRunning":true,"ok":true}
+
+----- 18:06:51.798 orient yaw=-45 -----
+{"engineRunning":true,"ok":true}
+
+----- 18:06:52.236 orient yaw=0 -----
+{"engineRunning":true,"ok":true}
+
+----- 18:06:52.806 orient yaw=45 -----
+{"engineRunning":true,"ok":true}
+
+----- 18:06:53.267 orient yaw=90 -----
+{"engineRunning":true,"ok":true}
+
+----- 18:06:54.831 post-sweep status -----
+{"claims":[{"calibrated":true,"color":{"b":0,"g":0,"r":255},"deviceId":"qa-curl-140645","deviceName":"qa-curl","deviceType":"android","dimmer":255,"lastWriteAge":0.0,"moverId":19,"panNorm":0.9588,"state":"streaming","tiltNorm":0.0}],"engine":{"droppedWrites":0,"engineType":"sacn","lastDropTs":null,"running":true}}
+
+[I] FLASH on
+----- 18:06:54.879 flash on -----
+{"ok":true}
+
+----- 18:06:55.938 flash off -----
+{"ok":true}
+
+[J] RELEASE
+----- 18:06:56.481 release -----
+{"engineRunning":true,"ok":true}
+
+[K] FINAL status
+----- 18:06:56.530 final status -----
+{"claims":[],"engine":{"droppedWrites":0,"engineType":"sacn","lastDropTs":null,"running":true}}
+
