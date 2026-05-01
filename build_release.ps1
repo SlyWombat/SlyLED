@@ -100,6 +100,67 @@ function Get-FirmwareSourceHash {
     return ($hashBytes | ForEach-Object { $_.ToString('x2') }) -join ''
 }
 
+# ── Helper: hash Android app source for the build gate ───────────────────
+# Excludes versionCode / versionName lines from build.gradle.kts so a
+# version-bump-only release doesn't kick off a 5-minute Gradle rebuild.
+# Excludes build outputs, the gradle cache, and the IDE caches.
+function Get-AndroidSourceHash {
+    $files = @()
+    $files += Get-ChildItem -Path "$root\android\app\src" -Include *.kt,*.java,*.xml -File -Recurse -ErrorAction SilentlyContinue
+    $extra = @(
+        "$root\android\app\build.gradle.kts",
+        "$root\android\app\proguard-rules.pro",
+        "$root\android\build.gradle.kts",
+        "$root\android\settings.gradle.kts",
+        "$root\android\gradle.properties"
+    )
+    foreach ($e in $extra) {
+        if (Test-Path $e) { $files += Get-Item $e }
+    }
+    $files = $files | Sort-Object FullName
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $combined = New-Object System.IO.MemoryStream
+    foreach ($f in $files) {
+        $rel = $f.FullName.Substring($root.Length).TrimStart('\','/').Replace('\','/')
+        $relBytes = [System.Text.Encoding]::UTF8.GetBytes($rel + "`n")
+        $combined.Write($relBytes, 0, $relBytes.Length)
+        if ($rel -eq 'android/app/build.gradle.kts') {
+            # Strip versionCode / versionName so a version-only bump doesn't
+            # invalidate the cache. Match the assignment lines regardless of
+            # whitespace.
+            $lines = Get-Content $f.FullName |
+                     Where-Object { $_ -notmatch '^\s*versionCode\s*=' -and `
+                                    $_ -notmatch '^\s*versionName\s*=' }
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes(($lines -join "`n"))
+        } else {
+            $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
+        }
+        $combined.Write($bytes, 0, $bytes.Length)
+        $combined.WriteByte(0)
+    }
+    $combined.Position = 0
+    $hashBytes = $sha.ComputeHash($combined)
+    $combined.Dispose()
+    $sha.Dispose()
+    return ($hashBytes | ForEach-Object { $_.ToString('x2') }) -join ''
+}
+
+# Cache file lives outside firmware/registry.json (which only tracks board
+# firmware) but follows the same gating idea — tracked in git so a fresh
+# checkout knows what was last built.
+$androidCachePath = "$root\android\.build-cache.json"
+function Get-AndroidStoredHash {
+    if (-not (Test-Path $androidCachePath)) { return "" }
+    try {
+        $j = Get-Content $androidCachePath -Raw | ConvertFrom-Json
+        return $j.sourceHash
+    } catch { return "" }
+}
+function Set-AndroidStoredHash([string]$hash, [string]$ver) {
+    $obj = [pscustomobject]@{ sourceHash = $hash; lastBuiltVersion = $ver; lastBuiltTs = (Get-Date -Format 'o') }
+    $obj | ConvertTo-Json | Set-Content $androidCachePath -Encoding UTF8
+}
+
 # ── Helper: write version.h from a version string ─────────────────────────
 function Write-VersionH([string]$ver) {
     $parts = $ver.Split(".")
@@ -253,15 +314,27 @@ if (-not $SkipAndroid) {
     Write-Host "`n--- Android APK (App v$appVersion) ---" -ForegroundColor Yellow
     $env:JAVA_HOME = 'C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot'
     $env:ANDROID_SDK_ROOT = 'C:\Android\Sdk'
-    Set-Location "$root\android"
-    .\gradlew.bat assembleRelease --no-daemon
-    if ($LASTEXITCODE -ne 0) { Write-Host "Android FAILED" -ForegroundColor Red; exit 1 }
-    $apkPath = Get-ChildItem -Path "C:\Android\build\slyled-app" -Recurse -Filter "app-release.apk" | Select-Object -First 1
-    if ($apkPath) {
-        $apkSize = $apkPath.Length
-        Write-Host "APK: $([math]::Round($apkSize/1MB, 1)) MB at $($apkPath.FullName)" -ForegroundColor Green
+
+    # Source-hash gate (mirrors the firmware gates above). Skips the
+    # 5-minute Gradle / R8 / lint pipeline when nothing under android/app/src/
+    # has changed and only the version got bumped. -ForceFirmware also
+    # forces an Android rebuild for symmetry with the firmware path.
+    $androidSrcHash = Get-AndroidSourceHash
+    $androidStored = Get-AndroidStoredHash
+    if (-not $ForceFirmware -and $androidStored -eq $androidSrcHash) {
+        Write-Host "Android APK: source unchanged - skipping (cached APK from $((Get-Item $androidCachePath).LastWriteTime))" -ForegroundColor Gray
+    } else {
+        Set-Location "$root\android"
+        .\gradlew.bat assembleRelease --no-daemon
+        if ($LASTEXITCODE -ne 0) { Write-Host "Android FAILED" -ForegroundColor Red; exit 1 }
+        $apkPath = Get-ChildItem -Path "C:\Android\build\slyled-app" -Recurse -Filter "app-release.apk" | Select-Object -First 1
+        if ($apkPath) {
+            $apkSize = $apkPath.Length
+            Write-Host "APK: $([math]::Round($apkSize/1MB, 1)) MB at $($apkPath.FullName)" -ForegroundColor Green
+        }
+        Set-AndroidStoredHash $androidSrcHash $appVersion
+        Set-Location $root
     }
-    Set-Location $root
 }
 
 # ── Step 6: Copy to dist/ ─────────────────────────────────────────────────
