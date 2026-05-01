@@ -18,7 +18,12 @@ param(
     [switch]$SkipWindows,
     [switch]$SkipAndroid,
     [switch]$ForceFirmware,
-    [string]$SetAppVersion = ""
+    [string]$SetAppVersion = "",
+    # #version-clobber-guard: required to step a firmware's major version up.
+    # Without this the script refuses any v7→v8 (etc.) bump because that's how
+    # the registry got contaminated by the legacy unified-track era. See
+    # memory/reference_firmware_field_versions.md for the per-board truth.
+    [switch]$AllowMajorBump
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,7 +54,40 @@ function Set-FwVersion([string]$id, [string]$ver) {
     $reg = Read-Registry
     $entry = $reg.firmware | Where-Object { $_.id -eq $id }
     if ($entry) { $entry.version = $ver }
+    # Operator owns firmware versions (see memory/feedback_firmware_version_
+    # authority.md). When the script auto-bumps, also update releaseTag so it
+    # stays in sync with the new version label.
+    if ($entry -and $entry.releaseTag) {
+        $tagPrefix = ($entry.releaseTag -replace 'v[0-9]+\.[0-9]+\.[0-9]+$', '')
+        if ($tagPrefix) { $entry.releaseTag = "${tagPrefix}v${ver}" }
+    }
     Save-Registry $reg
+}
+
+# #version-clobber-guard — block accidental v8.x contamination.
+# The legacy unified-build era (pre-2026-04-04) parked every firmware on
+# v8.x. The actual per-board independent tracks are LED v7.5.x, DMX bridge
+# v7.5.x, gyro v1.x, camera v1.x. If Increment-Patch ever proposes a v8.x
+# bump, that's the unified-track ghost coming back; refuse unless
+# -AllowMajorBump is explicitly passed.
+function Assert-NoMajorBumpRegression([string]$id, [string]$current, [string]$proposed) {
+    $maj = [int]($proposed.Split('.')[0])
+    $curMaj = [int]($current.Split('.')[0])
+    if ($maj -ge 8 -and $curMaj -lt 8) {
+        Write-Host "ABORT: would bump $id from v$current to v$proposed (v8.x track is" -ForegroundColor Red
+        Write-Host "       permanently retired — see memory/reference_firmware_field_" -ForegroundColor Red
+        Write-Host "       versions.md). Pass -AllowMajorBump if you really mean it." -ForegroundColor Red
+        throw "v8 bump blocked for $id"
+    }
+}
+
+# True when the registry entry has been flagged on hold by the operator
+# (e.g. parent-giga). On-hold entries are skipped entirely — no compile,
+# no version bump, no source-hash update, no release publish.
+function Test-FwOnHold([string]$id) {
+    $reg = Read-Registry
+    $entry = $reg.firmware | Where-Object { $_.id -eq $id }
+    return ($entry -and $entry.PSObject.Properties['onHold'] -and $entry.onHold)
 }
 
 function Set-FwSourceHash([string]$id, [string]$hash) {
@@ -224,11 +262,16 @@ if (-not $SkipFirmware) {
     Write-Host "`nFirmware source hash: $($srcHash.Substring(0,12))..." -ForegroundColor Gray
 
     # --- ESP32 ---
+    if (Test-FwOnHold "child-led-esp32") {
+        Write-Host "ESP32 firmware: onHold flag set - skipping" -ForegroundColor Gray
+    } else {
     $espStored = Get-FwSourceHash "child-led-esp32"
     if (-not $ForceFirmware -and $espStored -eq $srcHash) {
         Write-Host "ESP32 firmware: source unchanged - skipping (v$(Get-FwVersion 'child-led-esp32'))" -ForegroundColor Gray
     } else {
-        $espVer = Increment-Patch (Get-FwVersion "child-led-esp32")
+        $espCur = Get-FwVersion "child-led-esp32"
+        $espVer = Increment-Patch $espCur
+        if (-not $AllowMajorBump) { Assert-NoMajorBumpRegression "child-led-esp32" $espCur $espVer }
         Write-VersionH $espVer
         Write-Host "`n--- ESP32 Firmware v$espVer ---" -ForegroundColor Yellow
         & $cli compile --clean --fqbn esp32:esp32:esp32 "$root\main" --output-dir "$root\firmware\esp32"
@@ -236,13 +279,19 @@ if (-not $SkipFirmware) {
         Set-FwVersion "child-led-esp32" $espVer
         Set-FwSourceHash "child-led-esp32" $srcHash
     }
+    }
 
     # --- D1 Mini ---
+    if (Test-FwOnHold "child-led-d1mini") {
+        Write-Host "D1 Mini firmware: onHold flag set - skipping" -ForegroundColor Gray
+    } else {
     $d1Stored = Get-FwSourceHash "child-led-d1mini"
     if (-not $ForceFirmware -and $d1Stored -eq $srcHash) {
         Write-Host "D1 Mini firmware: source unchanged - skipping (v$(Get-FwVersion 'child-led-d1mini'))" -ForegroundColor Gray
     } else {
-        $d1Ver = Increment-Patch (Get-FwVersion "child-led-d1mini")
+        $d1Cur = Get-FwVersion "child-led-d1mini"
+        $d1Ver = Increment-Patch $d1Cur
+        if (-not $AllowMajorBump) { Assert-NoMajorBumpRegression "child-led-d1mini" $d1Cur $d1Ver }
         Write-VersionH $d1Ver
         Write-Host "`n--- D1 Mini Firmware v$d1Ver ---" -ForegroundColor Yellow
         & $cli compile --clean --fqbn esp8266:esp8266:d1_mini "$root\main" --output-dir "$root\firmware\d1mini"
@@ -250,17 +299,23 @@ if (-not $SkipFirmware) {
         Set-FwVersion "child-led-d1mini" $d1Ver
         Set-FwSourceHash "child-led-d1mini" $srcHash
     }
+    }
 
     # --- Gyro (ESP32-S3, BOARD_GYRO) ---
     # Same source-hash gate as ESP32/D1 — without this the gyro version drifted
     # silently because build_release.ps1 never tracked it (1.2.0 → 8.5.20
     # hand-bumped on 2026-04-30; see follow-up #769 / #768 context). Now its
     # version moves only when main/ or libraries/ actually change.
+    if (Test-FwOnHold "gyro-esp32s3") {
+        Write-Host "Gyro firmware: onHold flag set - skipping" -ForegroundColor Gray
+    } else {
     $gyroStored = Get-FwSourceHash "gyro-esp32s3"
     if (-not $ForceFirmware -and $gyroStored -eq $srcHash) {
         Write-Host "Gyro firmware: source unchanged - skipping (v$(Get-FwVersion 'gyro-esp32s3'))" -ForegroundColor Gray
     } else {
-        $gyroVer = Increment-Patch (Get-FwVersion "gyro-esp32s3")
+        $gyroCur = Get-FwVersion "gyro-esp32s3"
+        $gyroVer = Increment-Patch $gyroCur
+        if (-not $AllowMajorBump) { Assert-NoMajorBumpRegression "gyro-esp32s3" $gyroCur $gyroVer }
         Write-VersionH $gyroVer
         Write-Host "`n--- Gyro Firmware v$gyroVer (BOARD_GYRO) ---" -ForegroundColor Yellow
         & $cli compile --clean --fqbn esp32:esp32:esp32s3 "$root\main" `
@@ -269,6 +324,7 @@ if (-not $SkipFirmware) {
         if ($LASTEXITCODE -ne 0) { Write-Host "Gyro FAILED" -ForegroundColor Red; exit 1 }
         Set-FwVersion "gyro-esp32s3" $gyroVer
         Set-FwSourceHash "gyro-esp32s3" $srcHash
+    }
     }
 
     # Note: Giga boards (child-led-giga, parent-giga, dmx-bridge-esp32) compile
