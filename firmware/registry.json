@@ -40,8 +40,8 @@
                          "description":  "DMX-512 output via RS-485 transceiver — receives SlyLED actions, outputs DMX frames at 40Hz",
                          "board":  "esp32",
                          "fqbn":  "esp32:esp32:esp32",
-                         "version":  "8.4.4",
-                         "releaseTag":  "esp32-dmx-bridge-v8.4.4",
+                         "version":  "7.5.20",
+                         "releaseTag":  "esp32-dmx-bridge-v7.5.20",
                          "file":  "esp32-dmx/main.ino.merged.bin",
                          "releaseAsset":  "esp32-dmx-bridge-firmware.bin",
                          "sha256":  "d8c2e67d8fa0c4f0ae3881133dc8c65923fe78e029b13f59b69fb972a63740f1",
@@ -71,18 +71,18 @@
                      {
                          "id":  "parent-giga",
                          "name":  "Orchestrator Runtime (Giga R1)",
-                         "description":  "Minimal runtime parent for Giga R1 WiFi",
+                         "description":  "Minimal runtime parent for Giga R1 WiFi (on hold — not actively built or released)",
                          "board":  "giga",
                          "fqbn":  "arduino:mbed_giga:giga",
-                         "version":  "8.4.4",
-                         "releaseTag":  "giga-parent-v8.4.4",
+                         "version":  "7.5.24",
                          "file":  "giga/parent.bin",
                          "releaseAsset":  "giga-parent-firmware.bin",
                          "sha256":  "ceb4e0a9959b6d59ed22a3a76a864a875f49b19273653f96d828f439e4ef5eb6",
                          "flashMethod":  "dfu",
                          "buildDefines":  [
                                               "BOARD_GIGA"
-                                          ]
+                                          ],
+                         "onHold":  true
                      },
                      {
                          "id":  "dmx-bridge-giga",
@@ -90,8 +90,8 @@
                          "description":  "Giga R1 with RS-485 shield — Art-Net receiver, DMX-512 output",
                          "board":  "giga",
                          "fqbn":  "arduino:mbed_giga:giga",
-                         "version":  "8.4.4",
-                         "releaseTag":  "giga-dmx-bridge-v8.4.4",
+                         "version":  "7.5.20",
+                         "releaseTag":  "giga-dmx-bridge-v7.5.20",
                          "file":  "giga/dmx-bridge.bin",
                          "releaseAsset":  "giga-dmx-bridge-firmware.bin",
                          "sha256":  "d86dd941c689f2f07bd016bee58d00184e533e3330b3557fb818d89880fa08a5",
