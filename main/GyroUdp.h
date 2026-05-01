@@ -55,9 +55,30 @@ void gyroUdpSendColor(uint8_t r, uint8_t g, uint8_t b, uint8_t flags);
 // calibrating: 1 = hold started, 0 = hold released
 void gyroUdpSendCalibrate(bool calibrating);
 
+// #775 — variant that sends a caller-supplied (roll, pitch, yaw) instead
+// of reading the IMU at packet-build time. Used on calibrate-end so the
+// reference sample is the last-stable orientation captured during the
+// hold, not whatever post-lift jiggle the IMU sees after the finger
+// leaves the screen. Angles in degrees, same convention as the orient
+// stream (roll = X, pitch = Y, yaw = Z, sensor frame).
+void gyroUdpSendCalibrateWith(bool calibrating, float roll, float pitch, float yaw);
+
+// #772 — explicit START packet. Press-release of the IDLE START button
+// sends this once before any orient frames; server replies with claim+
+// start_stream and gates the orient stream on success. Mirrors Android's
+// /api/mover-control/claim → /api/mover-control/start sequence so the
+// puck gets explicit deny feedback when another device already holds the
+// mover instead of silently reaching ACTIVE with no DMX output.
+void gyroUdpSendStart();
+
 // #476 — heartbeat state accessors. UI polls these to show reconnecting.
 uint32_t gyroGetLastHeartbeatMs();  // millis() of last CMD_GYRO_HEARTBEAT, 0 if never
 bool     gyroServerClaimActive();   // server-reported claim-active flag
+
+// #772 — one-shot read of the CMD_GYRO_CLAIM_DENIED flag. Returns true the
+// first time it's polled after a deny packet arrives, then resets so the
+// UI doesn't loop on it. UI uses this to revert ACTIVE → IDLE.
+bool gyroUdpClaimDeniedConsume();
 
 #endif  // BOARD_GYRO
 #endif  // GYROUDP_H

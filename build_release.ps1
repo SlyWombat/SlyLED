@@ -74,15 +74,15 @@ function Assert-NoMajorBumpRegression([string]$id, [string]$current, [string]$pr
     $maj = [int]($proposed.Split('.')[0])
     $curMaj = [int]($current.Split('.')[0])
     if ($maj -ge 8 -and $curMaj -lt 8) {
-        Write-Host "ABORT: would bump $id from v$current to v$proposed (v8.x track is" -ForegroundColor Red
-        Write-Host "       permanently retired — see memory/reference_firmware_field_" -ForegroundColor Red
-        Write-Host "       versions.md). Pass -AllowMajorBump if you really mean it." -ForegroundColor Red
+        Write-Host ("ABORT: would bump " + $id + " from v" + $current + " to v" + $proposed) -ForegroundColor Red
+        Write-Host "       v8.x track is permanently retired (see memory/reference_firmware_field_versions.md)" -ForegroundColor Red
+        Write-Host "       Pass -AllowMajorBump if you really mean it." -ForegroundColor Red
         throw "v8 bump blocked for $id"
     }
 }
 
 # True when the registry entry has been flagged on hold by the operator
-# (e.g. parent-giga). On-hold entries are skipped entirely — no compile,
+# (e.g. parent-giga). On-hold entries are skipped entirely - no compile,
 # no version bump, no source-hash update, no release publish.
 function Test-FwOnHold([string]$id) {
     $reg = Read-Registry
@@ -318,9 +318,12 @@ if (-not $SkipFirmware) {
         if (-not $AllowMajorBump) { Assert-NoMajorBumpRegression "gyro-esp32s3" $gyroCur $gyroVer }
         Write-VersionH $gyroVer
         Write-Host "`n--- Gyro Firmware v$gyroVer (BOARD_GYRO) ---" -ForegroundColor Yellow
+        # ESP32 Arduino core honours compiler.cpp/c.extra_flags, not
+        # build.extra_flags — same pattern build.ps1 uses for the gyro target.
         & $cli compile --clean --fqbn esp32:esp32:esp32s3 "$root\main" `
             --output-dir "$root\firmware\esp32s3" `
-            --build-property "build.extra_flags=-DGYRO_BOARD"
+            --build-property "compiler.cpp.extra_flags=-DGYRO_BOARD" `
+            --build-property "compiler.c.extra_flags=-DGYRO_BOARD"
         if ($LASTEXITCODE -ne 0) { Write-Host "Gyro FAILED" -ForegroundColor Red; exit 1 }
         Set-FwVersion "gyro-esp32s3" $gyroVer
         Set-FwSourceHash "gyro-esp32s3" $srcHash

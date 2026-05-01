@@ -27,6 +27,9 @@ constexpr uint16_t GC_MAGENTA = 0xF81F;
 constexpr uint16_t GC_GREY    = 0x7BEF;
 constexpr uint16_t GC_DKGREY  = 0x39E7;
 constexpr uint16_t GC_ORANGE  = 0xFD20;
+// #773 — Android calibrate halo colour (#FBBF24); used for the
+// full-screen flood while hold-to-calibrate is active.
+constexpr uint16_t GC_AMBER   = 0xFD80;  // gc9a01_rgb565(251,191,36)
 
 // Convert 8-bit R, G, B components to RGB565.
 inline uint16_t gc9a01_rgb565(uint8_t r, uint8_t g, uint8_t b) {

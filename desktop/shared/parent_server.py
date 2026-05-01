@@ -110,6 +110,8 @@ CMD_GYRO_RECAL  = 0x62   # parent→gyro: zero IMU reference (no payload)
 CMD_GYRO_COLOR  = 0x63   # gyro→parent: GyroColorPayload (r, g, b, flags)
 CMD_GYRO_CALIBRATE = 0x64  # gyro→parent: calibrate start/end + orientation
 CMD_GYRO_HEARTBEAT = 0x65  # parent→gyro: 2s cadence while claim active (#476)
+CMD_GYRO_START         = 0x66  # gyro→parent: explicit press-START — claim + start_stream (#772)
+CMD_GYRO_CLAIM_DENIED  = 0x67  # parent→gyro: claim refused, puck reverts to IDLE (#772)
 
 #  "  "  Paths  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1198,19 +1200,45 @@ def _udp_listener():
                 remote.update_from_euler_deg(
                     roll100/100.0, pitch100/100.0, yaw100/100.0,
                 )
-                # Auto-claim on first orient if the fixture is enabled but
-                # the claim was lost (e.g. after Stop). Avoids forcing the
-                # user back to the SPA to click Send Lock again — pressing
-                # START on the puck re-engages DMX output.
+                # #772 — explicit START packet now drives the claim. The
+                # auto-claim-on-first-orient path stays as a back-compat
+                # safety net (older firmware that doesn't send CMD_GYRO_START
+                # still works), but new firmware sends CMD_GYRO_START first
+                # and the orient handler is a no-op for the claim side.
                 if _mover_engine and not _mover_engine.get_claim(
                         _gyro_assigned_mover_id(ip) or -1):
                     gf = _gyro_fixture_for_ip(ip)
                     if gf and gf.get("gyroEnabled") and gf.get("assignedMoverId") is not None:
                         dname = _gyro_device_name(ip, gf)
-                        _mover_engine.claim(gf["assignedMoverId"], device_id,
+                        ok, _reason = _mover_engine.claim(gf["assignedMoverId"], device_id,
                                               dname, "gyro",
                                               smoothing=gf.get("smoothing", 0.15))
-                        _mover_engine.start_stream(gf["assignedMoverId"], device_id)
+                        if ok:
+                            _mover_engine.start_stream(gf["assignedMoverId"], device_id)
+        elif cmd == CMD_GYRO_START:
+            # #772 — explicit press-START. Resolve fixture + mover, run
+            # claim + start_stream synchronously, send CMD_GYRO_CLAIM_DENIED
+            # back on refusal so the puck can revert ACTIVE → IDLE with a
+            # BUSY indication (Android parity).
+            gf = _gyro_fixture_for_ip(ip)
+            target_mover_id = gf.get("assignedMoverId") if gf else None
+            device_id = f"gyro-{ip}"
+            if target_mover_id is None:
+                log.info("GYRO_START from %s — no assigned mover, ignoring", ip)
+            elif _mover_engine is None:
+                log.warning("GYRO_START from %s — mover engine not available", ip)
+            else:
+                dname = _gyro_device_name(ip, gf)
+                ok, reason = _mover_engine.claim(target_mover_id, device_id,
+                                                 dname, "gyro",
+                                                 smoothing=gf.get("smoothing", 0.15))
+                if not ok:
+                    log.info("GYRO_START from %s — claim DENIED (%s)", ip, reason)
+                    _send_gyro_claim_denied(ip)
+                else:
+                    _mover_engine.start_stream(target_mover_id, device_id)
+                    log.info("GYRO_START from %s — claim+start_stream ok mover=%d",
+                             ip, target_mover_id)
         elif cmd == CMD_GYRO_COLOR and len(data) >= 12:
             # GyroColorPayload: r(1) g(1) b(1) flags(1)
             r, g, b, flags = struct.unpack_from("<BBBB", data, 8)
@@ -1290,6 +1318,20 @@ def _bootstrap_ssh_defaults():
             _ssh["sshKeyPath"] = key_path
         _save("ssh", _ssh)
         log.info("SSH defaults set: root/orangepi, key=%s", _ssh.get("sshKeyPath") or "(none)")
+
+def _send_gyro_claim_denied(ip):
+    """#772 — fire-and-forget CMD_GYRO_CLAIM_DENIED to a puck whose START
+    we just refused. Header-only payload; the puck's UDP dispatcher sets
+    a one-shot flag that the UI consumes on the next tick to bounce
+    ACTIVE → IDLE with a brief "BUSY" indication (Android parity)."""
+    try:
+        pkt = _hdr(CMD_GYRO_CLAIM_DENIED)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.sendto(pkt, (ip, UDP_PORT))
+        sock.close()
+    except Exception as e:
+        log.debug("claim-denied to %s failed: %s", ip, e)
+
 
 def _heartbeat_loop():
     """#476 — Emit CMD_GYRO_HEARTBEAT to every puck with an active claim.
@@ -20520,6 +20562,9 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
+
 
 
 

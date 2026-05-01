@@ -120,6 +120,22 @@ static bool s_calibHeld = false;
 static bool s_flashHeld = false;
 static bool s_stopHeld  = false;
 
+// #774 — calibrate-end debounce. When the finger lifts off the calibrate
+// button we don't fire the END packet immediately; instead we wait
+// CALIB_RELEASE_DEBOUNCE_MS for a re-press (capacitive noise / brief
+// finger drift). A re-press inside the window cancels the pending end
+// and continues the existing hold; window expiry commits the end.
+//
+// #775 — `s_calibLastRoll/Pitch/Yaw` latches the IMU sample taken WHILE
+// the finger was still on the screen, so the END packet ships the
+// orientation captured during the hold rather than whatever post-lift
+// jiggle the IMU sees a few ms after the finger leaves.
+static unsigned long s_calibReleasePendingMs = 0;
+static constexpr uint16_t CALIB_RELEASE_DEBOUNCE_MS = 100;
+static float s_calibLastRoll  = 0.0f;
+static float s_calibLastPitch = 0.0f;
+static float s_calibLastYaw   = 0.0f;
+
 // #565 — when true, the IDLE state has been swiped into Settings. This
 // keeps the app in UIState::IDLE (so the server isn't claimed) but
 // paints the Settings page so operators can reach battery info and
@@ -230,17 +246,21 @@ static void drawIdle() {
 // ── ACTIVE page 0 — Calibrate ───────────────────────────────────────────────
 
 static void drawCalibratePage() {
+    // #773 — full-screen yellow flood while the calibrate button is held.
+    // Mirrors Android's #FBBF24 halo so the operator gets an unmistakable
+    // "device locked, hold steady" cue. Skip page-dot + button rendering
+    // entirely — the flood owns the screen until release.
+    if (s_calibHeld) {
+        gyroClearScreen(GC_AMBER);
+        gyroDrawText(CX - 36, CY - 8,  "HOLD STEADY",        2, GC_BLACK);
+        gyroDrawText(CX - 60, CY + 16, "Release to set zero", 1, GC_BLACK);
+        return;
+    }
+
     gyroClearScreen(GC_BLACK);
     bool live = gyroUdpStreaming();
 
-    if (s_calibHeld) {
-        // Holding — orange button, release hint
-        gyroFillCircle(CX, BTN_CAL_Y, BTN_CAL_R, GC_ORANGE);
-        gyroDrawCircle(CX, BTN_CAL_Y, BTN_CAL_R, GC_WHITE);
-        gyroDrawText(CX - 24, BTN_CAL_Y - 7, "HOLD", 2, GC_WHITE);
-        // "Release to set zero" = 19 chars × 6px = 114px → center
-        gyroDrawText(CX - 57, 168, "Release to set zero", 1, GC_CYAN);
-    } else if (live) {
+    if (live) {
         // Live — green calibrate button
         gyroFillCircle(CX, BTN_CAL_Y, BTN_CAL_R, (uint16_t)0x0360u);
         gyroDrawCircle(CX, BTN_CAL_Y, BTN_CAL_R, GC_GREEN);
@@ -726,9 +746,25 @@ void gyroUIUpdate() {
         if (s_page == 0 && held && hitCircle(tx, ty, CX, BTN_CAL_Y, BTN_CAL_R)) {
             if (!s_calibHeld) {
                 s_calibHeld = true;
+                s_calibReleasePendingMs = 0;  // #774 — clear any stale debounce
+                // #775 — seed the latched orientation with the start-of-hold
+                // sample. The tick loop refreshes it on every cycle while
+                // held so the END packet ships the last-stable pose.
+                gyroIMURead(&s_calibLastRoll, &s_calibLastPitch, &s_calibLastYaw);
                 gyroUdpSendCalibrate(true);  // calibrate START — server captures orientation
                 gyroUdpSetStreaming(false, 0);
                 drawCalibratePage();
+            } else {
+                // #775 — refresh the latched sample while the finger is
+                // still on the button. Cheap (one I2C read per UI tick,
+                // ~10 Hz), keeps the pose fresh up to the lift instant.
+                gyroIMURead(&s_calibLastRoll, &s_calibLastPitch, &s_calibLastYaw);
+            }
+            // #774 — re-press inside the debounce window cancels the pending
+            // release: operator's brief finger lift / capacitive scuff doesn't
+            // commit a premature calibrate-end.
+            if (s_calibReleasePendingMs != 0) {
+                s_calibReleasePendingMs = 0;
             }
         }
         // Page 1: continuous colour tracking on ring
@@ -806,16 +842,24 @@ void gyroUIUpdate() {
             s_state = UIState::ACTIVE;
             s_page  = 0;
             s_calibHeld = false;
+            // #772 — explicit claim+start before any orient flows. Server
+            // replies with CMD_GYRO_CLAIM_DENIED if another device holds
+            // the mover; that path is handled in the periodic tick below
+            // and bounces us back to IDLE.
+            gyroUdpSendStart();
             gyroUdpSetStreaming(true, 0);
             drawCurrentPage();
         }
         if (s_calibHeld) {
-            s_calibHeld = false;
-            gyroUdpSendCalibrate(false);  // calibrate END — server captures reference
-            gyroUdpSetStreaming(true, 0);
-            gyroFillCircle(CX, BTN_CAL_Y, BTN_CAL_R, GC_CYAN);
-            delay(120);
-            drawCalibratePage();
+            // #774 — don't commit calibrate-end yet. Start the debounce
+            // timer; if the finger comes back inside CALIB_RELEASE_DEBOUNCE_MS,
+            // the hold-branch above will clear s_calibReleasePendingMs and
+            // we keep the existing hold. Otherwise the periodic-tick path
+            // below commits the end on window expiry, using the latched
+            // (last-stable) orientation captured during the hold (#775).
+            if (s_calibReleasePendingMs == 0) {
+                s_calibReleasePendingMs = millis();
+            }
         }
         if (s_flashHeld) {
             s_flashHeld = false;
@@ -854,6 +898,43 @@ void gyroUIUpdate() {
     }
 
     s_wasTouching = touching;
+
+    // #774 — calibrate-end debounce expiry. Runs every loop (not gated on
+    // the periodic-redraw timer) so the actual commit happens within ~1 ms
+    // of the window closing, not on the next 100 ms UI tick.
+    if (s_calibHeld && s_calibReleasePendingMs != 0
+        && !touching
+        && (millis() - s_calibReleasePendingMs) >= CALIB_RELEASE_DEBOUNCE_MS) {
+        s_calibHeld = false;
+        s_calibReleasePendingMs = 0;
+        // #775 — ship the latched (last-stable) sample, NOT a fresh IMU
+        // read. The fresh read would catch post-lift jiggle and produce
+        // an off-axis reference — root cause of #775's vector mis-alignment.
+        gyroUdpSendCalibrateWith(false,
+                                 s_calibLastRoll,
+                                 s_calibLastPitch,
+                                 s_calibLastYaw);
+        gyroUdpSetStreaming(true, 0);
+        gyroFillCircle(CX, BTN_CAL_Y, BTN_CAL_R, GC_CYAN);
+        delay(120);
+        drawCalibratePage();
+    }
+
+    // #772 — server refused the claim (another device holds the mover).
+    // Bounce back to IDLE with a brief BUSY indication so the operator
+    // gets the same feedback Android shows ("Mover claimed by another
+    // device" toast). Polled here once per loop; one-shot read.
+    if (gyroUdpClaimDeniedConsume()) {
+        gyroUdpSetStreaming(false, 0);
+        s_state = UIState::IDLE;
+        s_calibHeld = false;
+        s_startHeld = false;
+        gyroClearScreen(GC_RED);
+        gyroDrawText(CX - 18, CY - 8, "BUSY", 2, GC_WHITE);
+        gyroDrawText(CX - 60, CY + 16, "Mover held by other", 1, GC_WHITE);
+        delay(700);
+        drawIdle();
+    }
 
 periodic:
     // ── Periodic display update ─────────────────────────────────────────────

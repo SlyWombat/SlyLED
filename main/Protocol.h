@@ -44,6 +44,8 @@ constexpr uint8_t CMD_GYRO_RECAL     = 0x62;   // parent→gyro: zero IMU refere
 constexpr uint8_t CMD_GYRO_COLOR     = 0x63;   // gyro→parent: colour preset / flash command
 constexpr uint8_t CMD_GYRO_CALIBRATE = 0x64;   // gyro→parent: calibrate start/end + orientation
 constexpr uint8_t CMD_GYRO_HEARTBEAT = 0x65;   // parent→gyro: keep-alive (2 s cadence while a claim is active)
+constexpr uint8_t CMD_GYRO_START         = 0x66; // gyro→parent: explicit press-START (#772) — claim + start_stream
+constexpr uint8_t CMD_GYRO_CLAIM_DENIED  = 0x67; // parent→gyro: claim refused, revert puck to IDLE (#772)
 
 // ── Action type codes ─────────────────────────────────────────────────────────
 // (uint8_t — avoids Mbed prototype-generator issues with enums)

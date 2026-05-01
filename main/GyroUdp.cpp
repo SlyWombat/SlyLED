@@ -48,6 +48,9 @@ static uint8_t  s_actualFps   = 0;
 // decide whether to show "Reconnecting..." or drop out of the active page.
 static uint32_t s_lastHeartbeatMs = 0;
 static uint8_t  s_serverClaimActive = 0;   // mirrored from the heartbeat payload
+// #772 — set when the server refuses a claim attempt; consumed by the UI
+// on the next tick to revert to IDLE with a brief "BUSY" indication.
+static bool     s_claimDenied = false;
 
 uint32_t gyroGetLastHeartbeatMs() { return s_lastHeartbeatMs; }
 bool     gyroServerClaimActive()  { return s_serverClaimActive != 0; }
@@ -175,6 +178,14 @@ void gyroUdpHandleCmd(uint8_t cmd, IPAddress sender,
             s_serverClaimActive = 1;
         }
 
+    } else if (cmd == CMD_GYRO_CLAIM_DENIED) {
+        // #772 — server refused our claim. UI polls
+        // gyroUdpClaimDeniedConsume() and reverts to IDLE with a brief
+        // BUSY indication, mirroring Android's "Mover claimed by another
+        // device" toast.
+        s_claimDenied = true;
+        if (Serial) Serial.println("[GyroUDP] CLAIM_DENIED — mover busy");
+
     } else if (cmd == CMD_OTA_UPDATE && plen > 5) {
         uint8_t  newMaj = payload[0];
         uint8_t  newMin = payload[1];
@@ -207,6 +218,15 @@ void gyroUdpHandleCmd(uint8_t cmd, IPAddress sender,
 bool    gyroUdpStreaming()  { return s_streaming; }
 bool    gyroUdpHasLock()   { return s_parentIP != IPAddress(255, 255, 255, 255); }
 uint8_t gyroUdpTargetFps() { return s_targetFps; }
+
+bool gyroUdpClaimDeniedConsume() {
+    // #772 — one-shot read: returns true exactly once after the server
+    // sent CMD_GYRO_CLAIM_DENIED. Lets the UI revert to IDLE without a
+    // dedicated polling channel.
+    bool denied = s_claimDenied;
+    s_claimDenied = false;
+    return denied;
+}
 
 void gyroUdpSetStreaming(bool enabled, uint8_t fps) {
     s_streaming = enabled;
@@ -266,9 +286,15 @@ void gyroUdpSendColor(uint8_t r, uint8_t g, uint8_t b, uint8_t flags) {
 }
 
 void gyroUdpSendCalibrate(bool calibrating) {
+    // #775 — back-compat path: read IMU at packet-build time. Used for
+    // calibrate START (operator is still holding steady, sample is fine)
+    // and any caller that doesn't have a latched value to pass in.
     float roll = 0.0f, pitch = 0.0f, yaw = 0.0f;
     gyroIMURead(&roll, &pitch, &yaw);
+    gyroUdpSendCalibrateWith(calibrating, roll, pitch, yaw);
+}
 
+void gyroUdpSendCalibrateWith(bool calibrating, float roll, float pitch, float yaw) {
     UdpHeader hdr;
     hdr.magic   = UDP_MAGIC;
     hdr.version = UDP_VERSION;
@@ -292,6 +318,24 @@ void gyroUdpSendCalibrate(bool calibrating) {
     if (Serial)
         Serial.printf("[GyroUDP] CALIBRATE: %s orient=(%.1f,%.1f,%.1f)\n",
                       calibrating ? "START" : "END", roll, pitch, yaw);
+}
+
+void gyroUdpSendStart() {
+    // #772 — explicit START packet. Header-only payload; server resolves
+    // (mover, device) from the (gyro_fixture, source IP) tuple, runs
+    // claim + start_stream, and returns CMD_GYRO_CLAIM_DENIED on refusal.
+    UdpHeader hdr;
+    hdr.magic   = UDP_MAGIC;
+    hdr.version = UDP_VERSION;
+    hdr.cmd     = CMD_GYRO_START;
+    hdr.epoch   = (uint32_t)currentEpoch();
+
+    cmdUDP.beginPacket(s_parentIP, UDP_PORT);
+    cmdUDP.write((const uint8_t*)&hdr, sizeof(hdr));
+    cmdUDP.endPacket();
+
+    if (Serial)
+        Serial.println("[GyroUDP] START sent");
 }
 
 #endif  // BOARD_GYRO
