@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.12"
+VERSION = "1.7.13"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -14738,6 +14738,7 @@ def _invalidate_mover_model(fid):
 
 # ── Mover-follow engine (#468) — consumer of the primitive (#484 phase 4) ──
 from mover_control import MoverControlEngine
+from claim_arbiter import ClaimArbiter
 
 _mover_engine = MoverControlEngine(
     get_fixtures=lambda: _fixtures,
@@ -14759,6 +14760,13 @@ _mover_engine = MoverControlEngine(
         if isinstance(_settings.get("moverControl"), dict) else None),
 )
 _mover_engine.start()
+
+# #763 — arbiter facade between the show writer and the universe buffer.
+# Reads claim state from the engine, exposes is_muted() so the playback +
+# track loops can skip writes for claimed fixtures, and tracks a 750 ms
+# post-release slew window for smooth handover via pan-tilt-speed.
+_claim_arbiter = ClaimArbiter(_mover_engine.get_status)
+
 
 @app.post("/api/mover-control/claim")
 def api_mover_claim():
@@ -14803,6 +14811,11 @@ def api_mover_release():
     mid = body.get("moverId")
     did = body.get("deviceId")
     ok = _mover_engine.release(mid, did)
+    # #763 — start the smooth-handover slew window. Show writer will cap
+    # pan-tilt-speed for the next 750 ms so the fixture eases from the
+    # operator's last pose to the show's current pose instead of snapping.
+    if ok and mid is not None:
+        _claim_arbiter.on_release(mid)
     # #647 / #650 — surface engine state so the client can tell
     # "release + blackout wrote zeros" from "engine stopped so the
     # blackout silently dropped". Same signal shape as /start.
@@ -16262,6 +16275,10 @@ def api_fixtures_live():
     Returns a list of fixture status objects, one per fixture.
     """
     running = bool(_settings.get("runnerRunning"))
+    # #763 — snapshot claim state once per request so every entry sees a
+    # consistent view, and so we can populate `claimedFixtures` in the
+    # response without re-reading the engine.
+    claim_snap = _claim_arbiter.snapshot()
     result = []
     for f in _fixtures:
         fid = f["id"]
@@ -16274,7 +16291,16 @@ def api_fixtures_live():
             "dimmer": 0,
             "active": False,
             "effect": None,
+            # #763 — output origin: "claim" while held by mover-control,
+            # "show" while the timeline is running, "idle" otherwise.
+            "source": "idle",
+            "claimedBy": None,
         }
+        if _claim_arbiter.is_muted(fid, claim_snap):
+            entry["source"] = "claim"
+            entry["claimedBy"] = _claim_arbiter.claim_info(fid, claim_snap)
+        elif running:
+            entry["source"] = "show"
         if ft == "dmx":
             uni_num = f.get("dmxUniverse", 1)
             addr = f.get("dmxStartAddr", 1)
@@ -16405,7 +16431,8 @@ def api_fixtures_live():
             entry["online"] = bool(f.get("ip"))
             continue  # cameras aren't light-emitting fixtures
         result.append(entry)
-    return jsonify({"running": running, "fixtures": result})
+    return jsonify({"running": running, "fixtures": result,
+                    "claimedFixtures": _claim_arbiter.claimed_fids(claim_snap)})
 
 
 # -- Spatial Effects (Phase 3) ------------------------------------------------
@@ -17088,6 +17115,27 @@ def _evaluate_object_patrols(elapsed):
 
         obj.setdefault("transform", {})["pos"] = new_pos
 
+def _apply_handover_slew(fid, uni, addr, ch_map, engine):
+    """#763 — cap pan-tilt-speed during the post-release slew window so the
+    fixture's motors ease toward the show's commanded pose instead of
+    snapping from the operator's last pose. Writes the slow DMX value while
+    the window is active and a single 'fast' (0) write the frame after it
+    expires. No-op for fixtures whose profile lacks a pan-tilt-speed channel.
+    """
+    if not ch_map or "pan-tilt-speed" not in ch_map:
+        # Drain the just-ended flag so it doesn't leak into the next
+        # release window. Cheap, idempotent.
+        _claim_arbiter.pop_handover_just_ended(fid)
+        return
+    pts_offset = ch_map["pan-tilt-speed"]
+    handover = _claim_arbiter.handover_state(fid)
+    if handover:
+        engine.get_universe(uni).set_channel(
+            addr + pts_offset, int(handover["slowDmx"]))
+    elif _claim_arbiter.pop_handover_just_ended(fid):
+        engine.get_universe(uni).set_channel(addr + pts_offset, 0)
+
+
 def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
     """Evaluate active Track actions -- compute real-time pan/tilt for moving heads."""
     track_actions = [a for a in _actions if a.get("type") == 18]
@@ -17152,6 +17200,10 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
         assigned_heads = set()
         if not targets:
             n_targets = 0  # will blackout all heads below
+        # #763 — claim-arbiter snapshot for this evaluation pass. Tracker
+        # action keeps computing (Q2-(a)) but skips the DMX write for
+        # claimed fixtures so re-acquisition is instant on release.
+        track_claim_snap = _claim_arbiter.snapshot()
         for hi, head_info in enumerate(heads):
             if not targets:
                 break  # skip aim loop, go to blackout
@@ -17159,6 +17211,12 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
             fid = f["id"]
             # #511 — skip show output for fixtures mid-calibration.
             if f.get("isCalibrating"):
+                continue
+            # #763 — keep computing target pose (so re-acquisition is
+            # instant on release) but skip the universe write while a
+            # mover-control claim holds the fixture.
+            if _claim_arbiter.is_muted(fid, track_claim_snap):
+                assigned_heads.add(hi)  # don't blackout below — claim owns it
                 continue
             fx_pos = head_info["pos"]
             # Assignment: 1 person = all heads aim at them,
@@ -17287,8 +17345,13 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
             prof_info = head_info["prof_info"]
             if prof_info:
                 profile = {"channel_map": prof_info.get("channel_map"), "channels": prof_info.get("channels", [])}
-                uni_buf = engine.get_universe(f.get("dmxUniverse", 1))
+                uni = f.get("dmxUniverse", 1)
+                uni_buf = engine.get_universe(uni)
                 addr = f.get("dmxStartAddr", 1)
+                # #763 — apply post-release slew cap before show writes
+                # so a tracker-driven head also eases back smoothly.
+                _apply_handover_slew(fid, uni, addr,
+                                     prof_info.get("channel_map"), engine)
                 uni_buf.set_fixture_pan_tilt(addr, pan, tilt, profile)
                 # Track action also sets dimmer + color so the beam is visible
                 tr = ta.get("trackDimmer", 255)
@@ -17315,6 +17378,10 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
         for hi, head_info in enumerate(heads):
             if hi not in assigned_heads:
                 f = head_info["fixture"]
+                # #763 — never blackout a fixture held by mover-control;
+                # the operator is driving its dimmer.
+                if _claim_arbiter.is_muted(f["id"], track_claim_snap):
+                    continue
                 prof_info = head_info["prof_info"]
                 if prof_info:
                     profile = {"channel_map": prof_info.get("channel_map"), "channels": prof_info.get("channels", [])}
@@ -17405,6 +17472,9 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
         if not engine.running:
             frame_count += 1
             continue
+        # #763 — claim-arbiter snapshot, frozen for the duration of this
+        # ~25 ms frame so every per-fixture decision sees a consistent set.
+        claim_snap = _claim_arbiter.snapshot()
         # Evaluate each DMX fixture — merge ALL matching segments per-channel.
         # Higher-priority segments (_pri) override lower ones per-channel,
         # allowing e.g. a PT sweep to control pan/tilt while a base wash
@@ -17413,6 +17483,15 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
             # #511 — skip playback for fixtures mid-calibration.
             if _fixture_is_calibrating(fx.get("id")):
                 continue
+            # #763 — skip show writes for fixtures held by mover-control.
+            # Bake values are still computed (above) but never reach the
+            # universe buffer. Mover-control writes through unchanged.
+            if _claim_arbiter.is_muted(fx["fid"], claim_snap):
+                continue
+            # #763 — smooth-handover slew window: cap pan-tilt-speed for
+            # ~750 ms after release so motors ease toward the show's pose
+            # instead of snapping. Released once when the window expires.
+            _apply_handover_slew(fx, engine)
             # Collect per-channel values: {channel_name: (value, priority)}
             ch_vals = {}
             for seg in fx["segs"]:
@@ -17479,8 +17558,12 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
         if frame_count == 1:
             log.info("DMX playback: first frame sent at elapsed=%.1fs", elapsed)
     log.info("DMX playback: stopped after %d frames", frame_count)
-    # Blackout DMX fixtures on stop (#364) — zero all channels
+    # Blackout DMX fixtures on stop (#364) — zero all channels.
+    # #763 — leave claimed fixtures alone; the operator owns their output.
+    final_snap = _claim_arbiter.snapshot()
     for fx in dmx_fixtures:
+        if _claim_arbiter.is_muted(fx["fid"], final_snap):
+            continue
         profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
         uni_buf = engine.get_universe(fx["uni"])
         uni_buf.set_fixture_rgb(fx["addr"], 0, 0, 0, profile)
@@ -17758,10 +17841,18 @@ def _dmx_playback_single(tid, go_epoch, duration):
         if not engine.running:
             frame_count += 1
             continue
+        # #763 — claim-arbiter snapshot, frozen for the duration of this frame.
+        claim_snap = _claim_arbiter.snapshot()
         for fx in dmx_fixtures:
             # #511 — skip playback for fixtures mid-calibration.
             if _fixture_is_calibrating(fx.get("id")):
                 continue
+            # #763 — skip show writes for fixtures held by mover-control.
+            if _claim_arbiter.is_muted(fx["fid"], claim_snap):
+                continue
+            # #763 — smooth-handover slew window after release.
+            _apply_handover_slew(fx["fid"], fx["uni"], fx["addr"],
+                                 fx["ch_map"], engine)
             ch_vals = {}
             for seg in fx["segs"]:
                 ss = seg.get("startS", 0)
@@ -17811,8 +17902,12 @@ def _dmx_playback_single(tid, go_epoch, duration):
             _reap_temporal_objects()
         _evaluate_track_actions(elapsed, engine, dmx_fixtures)
         frame_count += 1
-    # Blackout on segment end (#364) — zero RGB, dimmer, pan/tilt, and all extras
+    # Blackout on segment end (#364) — zero RGB, dimmer, pan/tilt, and all extras.
+    # #763 — leave claimed fixtures alone; the operator owns their output.
+    seg_snap = _claim_arbiter.snapshot()
     for fx in dmx_fixtures:
+        if _claim_arbiter.is_muted(fx["fid"], seg_snap):
+            continue
         profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
         uni_buf = engine.get_universe(fx["uni"])
         uni_buf.set_fixture_rgb(fx["addr"], 0, 0, 0, profile)
@@ -17953,6 +18048,9 @@ def api_show_status():
         "totalElapsed": total_elapsed,
         "totalDurationS": total_duration,
         "items": items,
+        # #763 — fixtures currently held by mover-control. Operator-facing
+        # SPA renders a green-ring slow-blink badge on these.
+        "claimedFixtures": _claim_arbiter.claimed_fids(),
     })
 
 

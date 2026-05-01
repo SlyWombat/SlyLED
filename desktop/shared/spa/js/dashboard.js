@@ -206,14 +206,18 @@ function refreshLiveGrid(){
         var rgb='rgb('+f.r+','+f.g+','+f.b+')';
         var dim=f.dimmer!==undefined?Math.round(f.dimmer/2.55):0;
         var intensity=Math.max(dim,Math.round(Math.max(f.r,f.g,f.b)/2.55));
-        var cls='flx-card'+(f.active?' flx-active':'')+((!f.active&&!d.running)?' flx-off':'');
+        var claimed=(f.source==='claim');
+        var cls='flx-card'+(f.active?' flx-active':'')+((!f.active&&!d.running&&!claimed)?' flx-off':'')+(claimed?' flx-claimed':'');
         var online=f.online!==undefined?f.online:f.active;
-        h+='<div class="'+cls+'" id="flx-'+f.id+'" data-fid="'+f.id+'">';
+        // #763 — operator-friendly tooltip when held by mover-control
+        var claimTip=claimed&&f.claimedBy?(' — held by '+(f.claimedBy.deviceName||f.claimedBy.deviceId||'remote')):'';
+        h+='<div class="'+cls+'" id="flx-'+f.id+'" data-fid="'+f.id+'" title="'+escapeHtml(f.name+claimTip)+'">';
         h+='<div class="flx-badge '+(online?'flx-badge-on':'flx-badge-off')+'"></div>';
+        if(claimed)h+='<div class="flx-claim-icon" title="Held by '+escapeHtml(f.claimedBy?(f.claimedBy.deviceName||f.claimedBy.deviceId||'remote'):'remote')+'">◉</div>';
         h+='<div class="flx-name" title="'+escapeHtml(f.name)+'">'+escapeHtml(f.name)+'</div>';
         h+='<div class="flx-swatch" style="background:'+rgb+'"></div>';
         h+='<div class="flx-dim-bar"><div class="flx-dim-fill" style="width:'+intensity+'%"></div></div>';
-        h+='<div class="flx-effect">'+(f.effect||'Idle')+'</div>';
+        h+='<div class="flx-effect">'+(claimed?'Mover Control':(f.effect||'Idle'))+'</div>';
         if(f.dmxAddr)h+='<div class="flx-dmx-addr">'+escapeHtml(f.dmxAddr)+'</div>';
         if(f.pan!==undefined)h+='<div class="flx-dmx-addr">P:'+f.pan+(f.panFine!==undefined?'.'+f.panFine:'')+' T:'+f.tilt+(f.tiltFine!==undefined?'.'+f.tiltFine:'')+'</div>';
         h+='</div>';
@@ -238,8 +242,28 @@ function refreshLiveGrid(){
         // Update effect label
         var eff=card.querySelector('.flx-effect');
         if(eff)eff.textContent=f.effect||'Idle';
-        // Update active class
-        card.className='flx-card'+(f.active?' flx-active':'')+((!f.active&&!d.running)?' flx-off':'');
+        // Update active class — #763 includes flx-claimed for mover-control
+        var claimed=(f.source==='claim');
+        card.className='flx-card'+(f.active?' flx-active':'')+((!f.active&&!d.running&&!claimed)?' flx-off':'')+(claimed?' flx-claimed':'');
+        // #763 — toggle the green claim-icon overlay
+        var icon=card.querySelector('.flx-claim-icon');
+        if(claimed){
+          if(!icon){
+            icon=document.createElement('div');
+            icon.className='flx-claim-icon';
+            icon.textContent='◉';
+            card.appendChild(icon);
+          }
+          var tip='Held by '+(f.claimedBy?(f.claimedBy.deviceName||f.claimedBy.deviceId||'remote'):'remote');
+          icon.title=tip;
+          card.title=f.name+' — held by '+(f.claimedBy?(f.claimedBy.deviceName||f.claimedBy.deviceId||'remote'):'remote');
+          // Effect label shows ownership instead of show effect
+          var effEl=card.querySelector('.flx-effect');
+          if(effEl)effEl.textContent='Mover Control';
+        }else if(icon){
+          icon.remove();
+          card.title=f.name;
+        }
         // Update badge
         var badge=card.querySelector('.flx-badge');
         if(badge)badge.className='flx-badge '+(online?'flx-badge-on':'flx-badge-off');

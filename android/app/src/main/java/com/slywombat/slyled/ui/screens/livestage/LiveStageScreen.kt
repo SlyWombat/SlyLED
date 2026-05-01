@@ -38,6 +38,12 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.contentOrNull
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.RepeatMode
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
@@ -259,6 +265,13 @@ private fun StageCanvas(
     var zoomFactor by remember { mutableFloatStateOf(1f) }
     var panX by remember { mutableFloatStateOf(0f) }
     var panY by remember { mutableFloatStateOf(0f) }
+
+    // #763 — slow pulse alpha for the green claim ring on mover-control-held fixtures.
+    val claimPulse by rememberInfiniteTransition(label = "claimPulse").animateFloat(
+        initialValue = 0.35f, targetValue = 0.95f,
+        animationSpec = infiniteRepeatable(tween(1000), RepeatMode.Reverse),
+        label = "claimPulseAlpha",
+    )
 
     Canvas(
         modifier = modifier
@@ -563,6 +576,9 @@ private fun StageCanvas(
 
             val liveData = fixturesLive[fixture.id.toString()]
             val liveColor = parseLiveColor(liveData)
+            // #763 — flag fixtures held by mover-control so the canvas can
+            // draw a green slow-blink ring (operator parity with SPA badge).
+            val isClaimed = parseLiveSource(liveData) == "claim"
 
             when (fixture.fixtureType) {
                 "camera" -> {
@@ -606,6 +622,13 @@ private fun StageCanvas(
                     drawCircle(Color.White.copy(alpha = 0.2f), 6f * s, p, style = Stroke(1f))
                     if (liveColor != null) drawCircle(liveColor.copy(alpha = 0.15f), 12f * s, p)
                 }
+            }
+
+            // #763 — green pulsing ring when this fixture is held by mover-control.
+            if (isClaimed) {
+                val claimGreen = Color(0xFF22C55E)
+                drawCircle(claimGreen.copy(alpha = claimPulse), 22f * s, p, style = Stroke(3f))
+                drawCircle(claimGreen.copy(alpha = claimPulse * 0.25f), 28f * s, p)
             }
 
             // Selection highlight ring
@@ -679,6 +702,27 @@ private fun StageCanvas(
 }
 
 // ---- Utility functions ----
+
+// #763 — read /api/fixtures/live source field; "claim" while held by mover-control.
+private fun parseLiveSource(element: JsonElement?): String? {
+    if (element == null) return null
+    return try {
+        element.jsonObject["source"]?.jsonPrimitive?.contentOrNull
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private fun parseLiveClaimedBy(element: JsonElement?): String? {
+    if (element == null) return null
+    return try {
+        val cb = element.jsonObject["claimedBy"]?.jsonObject ?: return null
+        cb["deviceName"]?.jsonPrimitive?.contentOrNull
+            ?: cb["deviceId"]?.jsonPrimitive?.contentOrNull
+    } catch (_: Exception) {
+        null
+    }
+}
 
 private fun parseLiveColor(element: JsonElement?): Color? {
     if (element == null) return null
@@ -795,6 +839,19 @@ private fun FixtureInfoCard(
                         FixtureDetail("Channels", "${fixture.dmxChannelCount}")
                     }
                 }
+            }
+
+            // #763 — show "Held by <device>" when this fixture is currently
+            // controlled by a phone/gyro via mover-control.
+            if (parseLiveSource(liveData) == "claim") {
+                Spacer(Modifier.height(6.dp))
+                val who = parseLiveClaimedBy(liveData) ?: "remote"
+                Text(
+                    "◉ Held by $who",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color(0xFF22C55E),
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
 
             // Live output (RGB + dimmer)

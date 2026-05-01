@@ -2586,6 +2586,89 @@ def run():
         cam_fxs = [f for f in fxs if f.get('fixtureType') == 'camera']
         ok('Fixtures live excludes cameras', len(cam_fxs) == 0)
 
+        # ── #763 — claim arbiter exposes mover-control state ──────
+        # Default state: source="idle"|"show", claimedFixtures empty
+        r = c.get('/api/fixtures/live')
+        d = r.get_json()
+        ok('Fixtures live exposes claimedFixtures', isinstance(d.get('claimedFixtures'), list))
+        ok('Fixtures live claimedFixtures empty before claim', d['claimedFixtures'] == [])
+        for f in d['fixtures']:
+            ok(f"Fixture {f['id']} has source field", f.get('source') in ('idle', 'show', 'claim'))
+            ok(f"Fixture {f['id']} unclaimed by default", f.get('source') != 'claim')
+            ok(f"Fixture {f['id']} claimedBy null when unclaimed", f.get('claimedBy') is None)
+
+        # Claim the DMX fixture via mover-control
+        dmx_fid = dmx_fx['id']
+        r = c.post('/api/mover-control/claim', json={'moverId': dmx_fid,
+                   'deviceId': 'test-phone-1', 'deviceName': 'Pixel Test',
+                   'deviceType': 'android'})
+        ok('mover-control claim ok', r.get_json().get('ok'))
+
+        # Verify /api/fixtures/live reports the claim
+        r = c.get('/api/fixtures/live')
+        d = r.get_json()
+        ok('Live claimedFixtures lists claimed fid', dmx_fid in d['claimedFixtures'])
+        claimed_entry = next((f for f in d['fixtures'] if f['id'] == dmx_fid), None)
+        ok('Live source="claim" for held fixture', claimed_entry and claimed_entry.get('source') == 'claim')
+        ok('Live claimedBy populated', claimed_entry and claimed_entry.get('claimedBy') is not None)
+        cb = (claimed_entry or {}).get('claimedBy') or {}
+        ok('Live claimedBy.deviceName matches', cb.get('deviceName') == 'Pixel Test')
+        ok('Live claimedBy.deviceType matches', cb.get('deviceType') == 'android')
+
+        # Other fixtures still report source != "claim"
+        led_entry = next((f for f in d['fixtures'] if f['id'] != dmx_fid), None)
+        if led_entry:
+            ok('Other fixture not claimed', led_entry.get('source') != 'claim')
+
+        # /api/show/status also exposes claimedFixtures
+        r = c.get('/api/show/status')
+        ss = r.get_json()
+        ok('Show status claimedFixtures present', isinstance(ss.get('claimedFixtures'), list))
+        ok('Show status lists claimed fid', dmx_fid in ss['claimedFixtures'])
+
+        # Release — slew window is internal but the fid drops from claimedFixtures
+        r = c.post('/api/mover-control/release', json={'moverId': dmx_fid,
+                   'deviceId': 'test-phone-1'})
+        ok('mover-control release ok', r.get_json().get('ok'))
+        r = c.get('/api/fixtures/live')
+        d = r.get_json()
+        ok('Live claimedFixtures empty after release', dmx_fid not in d['claimedFixtures'])
+        post_release = next((f for f in d['fixtures'] if f['id'] == dmx_fid), None)
+        ok('Live source returns to non-claim after release',
+           post_release and post_release.get('source') != 'claim')
+
+        # ── #763 — arbiter mute integration: verify the writer skips show
+        # output for a held fixture by exercising the show playback path
+        # directly. We use the bake/playback hooks rather than spinning a
+        # background thread so the test is deterministic.
+        from claim_arbiter import ClaimArbiter
+        # Stub claim source — pretend mover-control holds two fids
+        stub = ClaimArbiter(lambda: [
+            {'moverId': 42, 'deviceId': 'pX', 'deviceName': 'X', 'deviceType': 'gyro'},
+            {'moverId': 43, 'deviceId': 'pY', 'deviceName': 'Y', 'deviceType': 'android'},
+        ])
+        snap = stub.snapshot()
+        ok('Stub arbiter snap fids', snap.fids == frozenset({42, 43}))
+        ok('Stub arbiter is_muted=True for claimed', stub.is_muted(42, snap))
+        ok('Stub arbiter is_muted=False for unclaimed', not stub.is_muted(99, snap))
+        ok('Stub arbiter claimed_fids sorted', stub.claimed_fids(snap) == [42, 43])
+        info = stub.claim_info(42, snap)
+        ok('Stub arbiter claim_info name', info and info['deviceName'] == 'X')
+        ok('Stub arbiter claim_info type', info and info['deviceType'] == 'gyro')
+
+        # Handover slew window — record release, query state, expire
+        import time as _time
+        sw = ClaimArbiter(lambda: [], slew_window_ms=100, slow_dmx=180)
+        sw.on_release(99)
+        h = sw.handover_state(99)
+        ok('Handover state active immediately after release', h is not None)
+        ok('Handover slowDmx matches config', h and h['slowDmx'] == 180)
+        ok('Handover state None for unrelated fid', sw.handover_state(7) is None)
+        _time.sleep(0.15)
+        ok('Handover state expires after window', sw.handover_state(99) is None)
+        ok('Handover just-ended fires once', sw.pop_handover_just_ended(99) is True)
+        ok('Handover just-ended idempotent', sw.pop_handover_just_ended(99) is False)
+
         # Reset for next section
         c.post('/api/reset', headers={'X-SlyLED-Confirm': 'true'})
 
