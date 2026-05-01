@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.15"
+VERSION = "1.7.16"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -19385,20 +19385,35 @@ def api_fw_registry():
 def api_fw_library():
     """#567 — return every registry entry annotated with its local
     availability so the Firmware Library section can render Download
-    buttons for the missing ones."""
+    buttons for the missing ones.
+
+    #769 — `local` is sha256-aware. A row is only "Local" when an on-disk
+    candidate's sha256 matches the registry's pinned `sha256`; a stale
+    file (present but mismatched) reports `local=False` so the SPA
+    renders Download exactly like a missing entry. Without this, the
+    Library said "Local" for the gyro entry while the flash path
+    deleted the stale cache and failed to find the asset.
+    """
+    from firmware_manager import _verify_sha256
     reg = load_registry(_FW_DIR)
     entries = []
     for e in reg.get("firmware", []):
         fname = e.get("file") or ""
         cache_path = _FW_CACHE_DIR / fname if fname else None
         bundle_path = _FW_DIR / fname if fname else None
+        expected = e.get("sha256")
         local = False
         local_path = ""
         for p in (cache_path, bundle_path):
-            if p and p.is_file():
-                local = True
-                local_path = str(p)
-                break
+            if not (p and p.is_file()):
+                continue
+            if expected and not _verify_sha256(p, expected):
+                # File exists but doesn't match the registry pin — flash
+                # path will refuse it and re-download. Don't claim "Local".
+                continue
+            local = True
+            local_path = str(p)
+            break
         entries.append({**e, "local": local, "localPath": local_path,
                         "hasReleaseAsset": bool(e.get("releaseAsset"))})
     return jsonify(firmware=entries)
@@ -19408,7 +19423,14 @@ def api_fw_library():
 def api_fw_fetch():
     """#567 — download a single registry entry's binary from the matching
     GitHub release asset into the writable cache directory. Idempotent:
-    a redownload overwrites the cached copy."""
+    a redownload overwrites the cached copy.
+
+    #768 — when the entry pins a `releaseTag`, fail loudly with the tag
+    name when the GitHub release is missing or doesn't carry the asset.
+    The previous generic "asset missing or network error" sent operators
+    chasing whether GitHub was down when the real cause was a registry
+    bump that pointed at a release that was never published.
+    """
     from firmware_manager import download_firmware, _registry_fetch_assets
     body = request.get_json(silent=True) or {}
     fid = body.get("id") or ""
@@ -19418,9 +19440,25 @@ def api_fw_fetch():
         return jsonify(ok=False, err="unknown firmware id"), 404
     if not entry.get("releaseAsset"):
         return jsonify(ok=False, err="registry entry has no releaseAsset"), 400
+    release_tag = entry.get("releaseTag")
+    asset_name = entry.get("releaseAsset")
+    if release_tag:
+        # Pre-flight: surface "tag not found" / "asset missing from tag"
+        # distinctly so the operator (and a future Library 'why' tooltip)
+        # can tell the cases apart without reading server logs.
+        per_release = _registry_fetch_assets(release_tag=release_tag)
+        if per_release is None:
+            return jsonify(ok=False,
+                           err=f"release tag '{release_tag}' not found on GitHub "
+                               "(check firmware/registry.json against published releases)"), 502
+        if asset_name not in per_release:
+            return jsonify(ok=False,
+                           err=f"release '{release_tag}' has no asset named "
+                               f"'{asset_name}' (publish the asset or fix releaseAsset)"), 502
     path = download_firmware(entry, _FW_CACHE_DIR)
     if not path:
-        return jsonify(ok=False, err="download failed — asset missing or network error"), 502
+        return jsonify(ok=False,
+                       err="download or sha256 verification failed — see server log"), 502
     log.info("Firmware library fetch: %s → %s", fid, path)
     return jsonify(ok=True, id=fid, path=path)
 

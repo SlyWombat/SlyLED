@@ -226,14 +226,25 @@ def load_registry(firmware_dir):
     return {"firmware": []}
 
 
-def _registry_fetch_assets(timeout=10):
-    """Fetch GitHub /releases/latest asset list. Returns {name: url} or None."""
+def _registry_fetch_assets(timeout=10, release_tag=None):
+    """Fetch a GitHub release's asset list. Returns ``{name: url}`` or None.
+
+    #768 — when ``release_tag`` is given, fetch ``/releases/tags/<tag>`` so
+    each registry entry resolves to the per-firmware release that owns its
+    pinned version. Without an explicit tag we fall back to the app's
+    ``/releases/latest`` (legacy callers); registry-driven downloads must
+    pass ``release_tag`` so they never accidentally read the app release.
+    """
     import urllib.request
+    if release_tag:
+        url = ("https://api.github.com/repos/SlyWombat/SlyLED/releases/tags/"
+               + urllib.parse.quote(str(release_tag), safe=""))
+    else:
+        url = "https://api.github.com/repos/SlyWombat/SlyLED/releases/latest"
     try:
         req = urllib.request.Request(
-            "https://api.github.com/repos/SlyWombat/SlyLED/releases/latest",
-            headers={"Accept": "application/vnd.github.v3+json",
-                     "User-Agent": "SlyLED-Parent"})
+            url, headers={"Accept": "application/vnd.github.v3+json",
+                          "User-Agent": "SlyLED-Parent"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception:
@@ -274,6 +285,15 @@ def download_firmware(entry, cache_dir, assets_by_name=None):
       - Entries that omit `sha256` fall back to the pre-verification
         behaviour (log a warning via debug channel — upgrading paths not
         yet pinned is the responsibility of the release workflow).
+
+    #768 — release-tag resolution: each registry entry should pin a
+    ``releaseTag`` (e.g. ``"gyro-v1.2.1"``) so we fetch from the right
+    per-firmware release, not the app's ``releases/latest``. When ``entry``
+    sets ``releaseTag``, we ignore any pre-fetched ``assets_by_name`` (it
+    was almost certainly fetched for the wrong release) and re-fetch
+    against the entry's tag. Entries without ``releaseTag`` keep the
+    legacy app-release fallback for backwards compat — but they should
+    be migrated.
     """
     import urllib.request
     fname = entry.get("file")
@@ -282,9 +302,17 @@ def download_firmware(entry, cache_dir, assets_by_name=None):
         return None
     dest = Path(cache_dir) / fname
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if assets_by_name is None:
-        assets_by_name = _registry_fetch_assets() or {}
-    url = assets_by_name.get(asset_name)
+    release_tag = entry.get("releaseTag")
+    if release_tag:
+        # Registry pinned a tag — always resolve against THAT release, never
+        # whatever happens to be /releases/latest. Pre-fetched assets from a
+        # different (likely app) release are irrelevant here.
+        per_release = _registry_fetch_assets(release_tag=release_tag) or {}
+        url = per_release.get(asset_name)
+    else:
+        if assets_by_name is None:
+            assets_by_name = _registry_fetch_assets() or {}
+        url = assets_by_name.get(asset_name)
     if not url:
         return None
     # Zip-bundle assets (e.g. camera firmware ships every .py + service file

@@ -190,6 +190,26 @@ if (-not $SkipFirmware) {
         Set-FwSourceHash "child-led-d1mini" $srcHash
     }
 
+    # --- Gyro (ESP32-S3, BOARD_GYRO) ---
+    # Same source-hash gate as ESP32/D1 — without this the gyro version drifted
+    # silently because build_release.ps1 never tracked it (1.2.0 → 8.5.20
+    # hand-bumped on 2026-04-30; see follow-up #769 / #768 context). Now its
+    # version moves only when main/ or libraries/ actually change.
+    $gyroStored = Get-FwSourceHash "gyro-esp32s3"
+    if (-not $ForceFirmware -and $gyroStored -eq $srcHash) {
+        Write-Host "Gyro firmware: source unchanged - skipping (v$(Get-FwVersion 'gyro-esp32s3'))" -ForegroundColor Gray
+    } else {
+        $gyroVer = Increment-Patch (Get-FwVersion "gyro-esp32s3")
+        Write-VersionH $gyroVer
+        Write-Host "`n--- Gyro Firmware v$gyroVer (BOARD_GYRO) ---" -ForegroundColor Yellow
+        & $cli compile --clean --fqbn esp32:esp32:esp32s3 "$root\main" `
+            --output-dir "$root\firmware\esp32s3" `
+            --build-property "build.extra_flags=-DGYRO_BOARD"
+        if ($LASTEXITCODE -ne 0) { Write-Host "Gyro FAILED" -ForegroundColor Red; exit 1 }
+        Set-FwVersion "gyro-esp32s3" $gyroVer
+        Set-FwSourceHash "gyro-esp32s3" $srcHash
+    }
+
     # Note: Giga boards (child-led-giga, parent-giga, dmx-bridge-esp32) compile
     # separately — increment their registry entry when building those targets.
 

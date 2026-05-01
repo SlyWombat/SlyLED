@@ -7,6 +7,7 @@
                          "board":  "esp32",
                          "fqbn":  "esp32:esp32:esp32",
                          "version":  "8.4.20",
+                         "releaseTag":  "esp32-v8.4.20",
                          "file":  "esp32/main.ino.merged.bin",
                          "releaseAsset":  "esp32-firmware-merged.bin",
                          "sha256":  "082ff54885657e7a2c0606b0a36ba740bc3e696ba7224272d8a1d9118026a0d6",
@@ -23,6 +24,7 @@
                          "board":  "d1mini",
                          "fqbn":  "esp8266:esp8266:d1_mini",
                          "version":  "8.4.21",
+                         "releaseTag":  "d1mini-v8.4.21",
                          "file":  "d1mini/main.ino.bin",
                          "releaseAsset":  "d1mini-firmware.bin",
                          "sha256":  "19c2f91ca9fa34eb24945ccca65dd21f394e19c1cb9840146d68a93fcfed595e",
@@ -39,6 +41,7 @@
                          "board":  "esp32",
                          "fqbn":  "esp32:esp32:esp32",
                          "version":  "8.4.4",
+                         "releaseTag":  "esp32-dmx-bridge-v8.4.4",
                          "file":  "esp32-dmx/main.ino.merged.bin",
                          "releaseAsset":  "esp32-dmx-bridge-firmware.bin",
                          "sha256":  "d8c2e67d8fa0c4f0ae3881133dc8c65923fe78e029b13f59b69fb972a63740f1",
@@ -55,6 +58,7 @@
                          "board":  "giga",
                          "fqbn":  "arduino:mbed_giga:giga",
                          "version":  "8.4.4",
+                         "releaseTag":  "giga-child-v8.4.4",
                          "file":  "giga/child-led.bin",
                          "releaseAsset":  "giga-child-firmware.bin",
                          "sha256":  "1345fc1b4d8cded341354bfd00f982bd081a628465fa742508925ab1c2b59f6b",
@@ -71,6 +75,7 @@
                          "board":  "giga",
                          "fqbn":  "arduino:mbed_giga:giga",
                          "version":  "8.4.4",
+                         "releaseTag":  "giga-parent-v8.4.4",
                          "file":  "giga/parent.bin",
                          "releaseAsset":  "giga-parent-firmware.bin",
                          "sha256":  "ceb4e0a9959b6d59ed22a3a76a864a875f49b19273653f96d828f439e4ef5eb6",
@@ -86,6 +91,7 @@
                          "board":  "giga",
                          "fqbn":  "arduino:mbed_giga:giga",
                          "version":  "8.4.4",
+                         "releaseTag":  "giga-dmx-bridge-v8.4.4",
                          "file":  "giga/dmx-bridge.bin",
                          "releaseAsset":  "giga-dmx-bridge-firmware.bin",
                          "sha256":  "d86dd941c689f2f07bd016bee58d00184e533e3330b3557fb818d89880fa08a5",
@@ -101,6 +107,7 @@
                          "board":  "esp32s3",
                          "fqbn":  "esp32:esp32:esp32s3",
                          "version":  "1.2.1",
+                         "releaseTag":  "gyro-v1.2.1",
                          "file":  "esp32s3/main.ino.merged.bin",
                          "releaseAsset":  "esp32s3-gyro-firmware.bin",
                          "sha256":  "3a56ed088fc5aa4562c2928146b81d351ec18005240b72ddfb29ac833ccb9839",
@@ -108,7 +115,8 @@
                          "buildDefines":  [
                                               "GYRO_BOARD"
                                           ],
-                         "buildFlags":  "-DGYRO_BOARD"
+                         "buildFlags":  "-DGYRO_BOARD",
+                         "sourceHash":  "26190cb04740a088e8b93e55e31cc8adb0692ef85a5d5a343d61e811060ed92b"
                      },
                      {
                          "id":  "camera-node",
@@ -116,6 +124,7 @@
                          "description":  "USB V4L2 camera node â€” Flask + UDP discovery, runs on any Debian/Ubuntu SBC (Orange Pi, Raspberry Pi)",
                          "board":  "camera",
                          "version":  "1.6.3",
+                         "releaseTag":  "cam-v1.6.3",
                          "file":  "orangepi/camera_server.py",
                          "releaseAsset":  "camera-firmware-v1.6.3.zip",
                          "sha256":  "9e2b61cfa36eb4cd2987a6cd36eb9b6d0cd8fd285dab0b2d65c6a794681db565",

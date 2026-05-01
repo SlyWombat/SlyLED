@@ -28,8 +28,8 @@ android {
         applicationId = "com.slywombat.slyled"
         minSdk = 26
         targetSdk = 35
-        versionCode = 208
-        versionName = "1.7.15"
+        versionCode = 209
+        versionName = "1.7.16"
     }
 
     signingConfigs {
