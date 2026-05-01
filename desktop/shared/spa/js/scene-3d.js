@@ -35,17 +35,37 @@ function _s3dResizeForHost(hostId){
   var el = document.getElementById(hostId); if(!el) return;
   var W = el.clientWidth || 900, H = el.clientHeight || 500;
   _s3d.renderer.setSize(W, H, false);
-  if(_s3d.perspCam){
-    _s3d.perspCam.aspect = W / H;
-    _s3d.perspCam.updateProjectionMatrix();
-  }
-  if(_s3d.orthoCam){
-    var frustumH = 12, aspect = W / H;
-    _s3d.orthoCam.left = -frustumH * aspect / 2;
-    _s3d.orthoCam.right = frustumH * aspect / 2;
-    _s3d.orthoCam.top = frustumH / 2;
-    _s3d.orthoCam.bottom = -frustumH / 2;
-    _s3d.orthoCam.updateProjectionMatrix();
+  // Layout tab: re-run setView to recompute the stage-aware ortho frustum
+  // (Math.max(sh, sw/aspect) * 1.05 — see setView). The hardcoded
+  // frustumH = 12 here meant the grid + stage box stayed the same
+  // virtual size while the canvas grew, so a fullscreen viewport showed
+  // the same 12-m world scaled up instead of more of the world. Calling
+  // setView refits both the ortho frustum and the perspective camera
+  // position to the new aspect.
+  if(hostId === 'stage3d' && typeof setView === 'function'){
+    try { setView(_layView || 'front'); } catch(e) {}
+  } else {
+    // Runtime tabs use the perspective `_emu3d.camera` rendered into the
+    // shared scene. Update its aspect so the grid + fixtures fill the
+    // new canvas instead of rendering at the old projection matrix.
+    if(typeof _emu3d !== 'undefined' && _emu3d && _emu3d.camera){
+      _emu3d.camera.aspect = W / H;
+      _emu3d.camera.updateProjectionMatrix();
+    }
+    // Defensive fallback for any code path that still rendered through
+    // _s3d.perspCam/orthoCam directly.
+    if(_s3d.perspCam){
+      _s3d.perspCam.aspect = W / H;
+      _s3d.perspCam.updateProjectionMatrix();
+    }
+    if(_s3d.orthoCam){
+      var frustumH = 12, aspect = W / H;
+      _s3d.orthoCam.left = -frustumH * aspect / 2;
+      _s3d.orthoCam.right = frustumH * aspect / 2;
+      _s3d.orthoCam.top = frustumH / 2;
+      _s3d.orthoCam.bottom = -frustumH / 2;
+      _s3d.orthoCam.updateProjectionMatrix();
+    }
   }
 }
 function _s3dAttachResizeObserver(hostId){
