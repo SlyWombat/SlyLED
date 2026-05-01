@@ -67,6 +67,15 @@ body.help-open{padding-right:360px;transition:padding-right .15s ease}
    tab's visibility prefs can be edited without leaving the tab. */
 .view-overlay-btn{position:absolute;top:8px;right:8px;z-index:10;background:rgba(15,23,42,.85);color:#93c5fd;border:1px solid rgba(51,65,85,.6);border-radius:4px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .15s,border-color .15s}
 .view-overlay-btn:hover{background:rgba(30,58,95,.95);border-color:#3b82f6}
+/* #770 — 3D host containers get a native CSS resize handle + a corner
+   maximize button. Heights persist via localStorage; mobile breakpoint
+   below disables resize so phones stay aspect-ratio-locked. */
+#stage3d,#dash-3d,#shows-3d,#emu-3d{resize:vertical;overflow:auto;position:relative;min-height:240px;max-height:90vh}
+.s3d-host-max{position:absolute;top:8px;right:46px;z-index:11;background:rgba(15,23,42,.85);color:#93c5fd;border:1px solid rgba(51,65,85,.6);border-radius:4px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:14px;line-height:1;transition:background .15s,border-color .15s;user-select:none}
+.s3d-host-max:hover{background:rgba(30,58,95,.95);border-color:#3b82f6}
+.s3d-host-fullscreen{position:fixed!important;inset:0!important;z-index:50!important;width:auto!important;height:auto!important;max-height:none!important;border-radius:0!important;border:none!important;resize:none!important;background:#080810}
+.s3d-fullscreen-hint{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:12;background:rgba(15,23,42,.92);color:#e2e8f0;border:1px solid rgba(34,211,238,.4);box-shadow:0 0 12px rgba(34,211,238,.18);border-radius:6px;padding:.45em 1em;font-size:.78em;letter-spacing:.04em;font-family:'Space Grotesk',sans-serif;pointer-events:none;opacity:1;transition:opacity .6s ease}
+.s3d-fullscreen-hint-fade{opacity:0}
 /* Fixture status grid (#303) */
 #dash-live-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:.8em}
 .flx-card{background:#0f172a;border:1px solid rgba(51,65,85,.3);border-radius:6px;padding:8px 10px;width:120px;transition:border-color .3s,box-shadow .3s;position:relative;overflow:hidden}
@@ -158,6 +167,10 @@ html{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
   #lay-fixtures{width:100%!important;max-width:100%!important;margin-top:.8em}
   /* 3D canvas scales with viewport width. */
   #s3d-host,#s3d-container{height:auto!important;aspect-ratio:16/10;min-height:320px}
+  /* #770 — disable native resize handle on small screens so the canvas
+     stays locked to the aspect-ratio rule above. Maximize button still
+     works for "go full window" if the operator wants it. */
+  #stage3d,#dash-3d,#shows-3d,#emu-3d{resize:none}
 }
 
 @media (max-width:640px){

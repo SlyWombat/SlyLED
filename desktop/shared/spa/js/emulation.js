@@ -135,6 +135,12 @@ function _emu3dAttach(containerId){
   var cid=containerId||'emu-3d';
   var el=document.getElementById(cid);if(!el||!_s3d.renderer)return;
   if(!_emu3d.camera||!_emu3d.controls)return;
+  // #770 — restore persisted height + re-attach ResizeObserver to this host
+  // before sizing the canvas, so the saved height takes effect on first paint.
+  if(typeof _s3dRestoreHostHeight==='function'){
+    _s3dRestoreHostHeight(cid);
+    _s3dAttachResizeObserver(cid);
+  }
   // Reparent canvas
   if(!el.contains(_s3d.renderer.domElement)){
     el.appendChild(_s3d.renderer.domElement);
@@ -157,6 +163,12 @@ function _emu3dAttach(containerId){
 function _emu3dDetach(){
   // Move renderer canvas back to layout container
   var el=document.getElementById('stage3d');if(!el||!_s3d.renderer)return;
+  // #770 — re-attach ResizeObserver to the Layout host since we're moving
+  // the canvas back there. Restore its persisted height too.
+  if(typeof _s3dRestoreHostHeight==='function'){
+    _s3dRestoreHostHeight('stage3d');
+    _s3dAttachResizeObserver('stage3d');
+  }
   _emu3d.activeTab=false;
   _emu3d.controls.enabled=false;
   // Stop runtime render loop

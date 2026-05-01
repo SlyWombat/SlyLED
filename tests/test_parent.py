@@ -25,6 +25,42 @@ def run():
         d = r.get_json()
         ok('GET /status', r.status_code == 200 and d.get('role') == 'parent')
 
+        # ── #771 UDP listener health surfaced on /status + /api/status ──
+        ok('Status exposes udpListener block', isinstance(d.get('udpListener'), dict))
+        u = d.get('udpListener') or {}
+        ok('udpListener.ok present', 'ok' in u)
+        ok('udpListener.port present', 'port' in u)
+        ok('udpListener.lastError key present', 'lastError' in u)
+        ok('udpListener.attempts present', 'attempts' in u)
+
+        r = c.get('/api/status')
+        d2 = r.get_json()
+        ok('GET /api/status', r.status_code == 200 and d2.get('role') == 'parent')
+        ok('/api/status mirrors udpListener', isinstance(d2.get('udpListener'), dict))
+
+        # Diagnostics restart endpoint exists. We don't assert ok=True
+        # because the listener thread runs only when start_background_tasks()
+        # has fired (driven by main, not the test client) — the field is
+        # what matters; a real bind failure during a live run would show
+        # ok=False + a populated lastError.
+        r = c.post('/api/diagnostics/restart-udp-listener')
+        ok('POST /api/diagnostics/restart-udp-listener returns 200', r.status_code == 200)
+        diag = r.get_json() or {}
+        ok('restart-udp-listener has udpListener field', isinstance(diag.get('udpListener'), dict))
+
+        # Listener-down → diagnostics path works. Force the global into a
+        # failed state and verify /api/status reports it back faithfully.
+        import parent_server as _ps
+        with _ps._udp_status_lock:
+            _ps._udp_status['ok'] = False
+            _ps._udp_status['port'] = 4210
+            _ps._udp_status['lastError'] = 'simulated EADDRINUSE'
+            _ps._udp_status['attempts'] = 5
+        r = c.get('/api/status')
+        u3 = (r.get_json() or {}).get('udpListener') or {}
+        ok('udpListener reports simulated failure', u3.get('ok') is False)
+        ok('udpListener.lastError surfaces', 'simulated' in (u3.get('lastError') or ''))
+
         # ── Settings CRUD ───────────────────────────────────────────
         r = c.get('/api/settings')
         ok('GET /api/settings', r.status_code == 200 and 'name' in r.get_json())

@@ -374,6 +374,11 @@ function _dashAttach3d(){
   emu3dInit();
   if(!_emu3d.camera||!_emu3d.controls)return;
   if(_s3d.animId){cancelAnimationFrame(_s3d.animId);_s3d.animId=null;}
+  // #770 — restore persisted height + re-attach ResizeObserver to this host.
+  if(typeof _s3dRestoreHostHeight==='function'){
+    _s3dRestoreHostHeight('dash-3d');
+    _s3dAttachResizeObserver('dash-3d');
+  }
   // Directly append canvas — don't go through _emu3dAttach to avoid race
   el.appendChild(_s3d.renderer.domElement);
   var W=el.clientWidth||900,H=el.clientHeight||350;

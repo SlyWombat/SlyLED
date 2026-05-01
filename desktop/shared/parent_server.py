@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.16"
+VERSION = "1.7.17"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -971,7 +971,32 @@ def favicon_png():
 
 @app.get("/status")
 def status():
-    return jsonify(role="parent", hostname=socket.gethostname(), version=VERSION)
+    # #771 — surface the UDP listener's bind state so the SPA can render a
+    # Setup-tab banner when the orchestrator looks alive over HTTP but its
+    # UDP listener silently bailed at startup (HNS / Hyper-V / WSL2 phantom
+    # port reservation on Windows is the known trigger).
+    udp = get_udp_listener_status()
+    return jsonify(role="parent", hostname=socket.gethostname(),
+                   version=VERSION, udpListener=udp)
+
+
+@app.get("/api/status")
+def api_status():
+    """Same payload as /status — the SPA's Setup tab polls this to render
+    the listener-health banner (#771)."""
+    udp = get_udp_listener_status()
+    return jsonify(role="parent", hostname=socket.gethostname(),
+                   version=VERSION, udpListener=udp)
+
+
+@app.post("/api/diagnostics/restart-udp-listener")
+def api_diagnostics_restart_udp_listener():
+    """#771 — operator-visible recovery for the silent-UDP-bind case.
+    The SPA's Setup-tab banner exposes this as a one-click 'Retry' button
+    after the operator has freed the port (e.g. Stop-Service winnat).
+    Returns the listener status after one rebind attempt."""
+    ok = restart_udp_listener()
+    return jsonify(ok=ok, udpListener=get_udp_listener_status())
 
 #  "  "  Children  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1017,15 +1042,91 @@ def _periodic_ping():
                     c["status"] = 0
             _save("children", _children)
 
+# #771 — UDP listener health, exposed on /api/status so the SPA can render
+# a Setup-tab banner when the listener thread can't own UDP_PORT. The
+# Windows HNS / Hyper-V / WSL2 phantom-reservation case was silently
+# turning every discover into a permanent no-op.
+_udp_status = {
+    "ok": False,
+    "port": None,
+    "lastError": None,
+    "attemptedAt": None,
+    "boundAt": None,
+    "attempts": 0,
+}
+_udp_status_lock = threading.Lock()
+_udp_listener_thread = None
+
+def get_udp_listener_status():
+    """Snapshot of the UDP listener's bind state. JSON-safe; consumed by
+    /api/status and the Setup-tab banner."""
+    with _udp_status_lock:
+        return dict(_udp_status)
+
+def _try_bind_udp(port, max_attempts=5):
+    """Attempt to bind UDP `port` with bounded backoff. Returns the bound
+    socket on success, or None on terminal failure. Updates `_udp_status`
+    on every attempt so the SPA can show the operator what's going on
+    instead of staring at a silently-empty discover list (#771)."""
+    backoff = [0.5, 1, 2, 4, 8]  # one entry per max_attempts
+    for attempt in range(1, max_attempts + 1):
+        with _udp_status_lock:
+            _udp_status["port"] = port
+            _udp_status["attemptedAt"] = time.time()
+            _udp_status["attempts"] = attempt
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("", port))
+            s.settimeout(1.0)
+            with _udp_status_lock:
+                _udp_status["ok"] = True
+                _udp_status["lastError"] = None
+                _udp_status["boundAt"] = time.time()
+            log.info("UDP listener bound to port %d on attempt %d", port, attempt)
+            return s
+        except OSError as e:
+            with _udp_status_lock:
+                _udp_status["ok"] = False
+                _udp_status["lastError"] = str(e)
+            if attempt < max_attempts:
+                wait = backoff[min(attempt - 1, len(backoff) - 1)]
+                log.warning("UDP listener bind attempt %d/%d on port %d "
+                            "failed (%s) — retrying in %.1fs",
+                            attempt, max_attempts, port, e, wait)
+                time.sleep(wait)
+            else:
+                log.error("UDP listener bind to port %d FAILED after %d "
+                          "attempts (last error: %s). Discover and PONG "
+                          "flows will not work until the port is free. "
+                          "On Windows: Stop-Service winnat -Force, then "
+                          "POST /api/diagnostics/restart-udp-listener.",
+                          port, max_attempts, e)
+    return None
+
+def restart_udp_listener():
+    """Operator-triggered rebind. Spawns a fresh listener thread if the
+    previous one bailed. Returns True iff the new bind succeeded.
+    Used by the SPA's /api/diagnostics/restart-udp-listener route."""
+    global _udp_listener_thread
+    if _udp_status.get("ok"):
+        # Already bound — nothing to do, but report the state so the SPA
+        # can clear any stale "listener offline" banner.
+        return True
+    log.info("Operator requested UDP listener restart")
+    t = threading.Thread(target=_udp_listener, daemon=True)
+    _udp_listener_thread = t
+    t.start()
+    # Give the bind retry loop one slow attempt before we report back so
+    # the API response can carry the new state instead of always returning
+    # "still down" for the first call.
+    time.sleep(0.6)
+    return _udp_status.get("ok", False)
+
 def _udp_listener():
     """Background daemon: persistent bind on UDP_PORT, receives ACTION_EVENT packets from children."""
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("", UDP_PORT))
-        s.settimeout(1.0)
-    except OSError as e:
-        print(f"[udp-listener] Could not bind port {UDP_PORT}: {e}")
+    s = _try_bind_udp(UDP_PORT)
+    if s is None:
         return
     while True:
         try:
@@ -1225,9 +1326,10 @@ def _heartbeat_loop():
 
 def start_background_tasks():
     """Call once after import to kick off periodic ping and UDP listener threads."""
-    global _startup_check_done
+    global _startup_check_done, _udp_listener_thread
     _bootstrap_ssh_defaults()
-    threading.Thread(target=_udp_listener, daemon=True).start()
+    _udp_listener_thread = threading.Thread(target=_udp_listener, daemon=True)
+    _udp_listener_thread.start()
     threading.Thread(target=_heartbeat_loop, daemon=True).start()
     if _children:
         threading.Thread(target=_periodic_ping, daemon=True).start()

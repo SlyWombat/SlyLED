@@ -10,6 +10,57 @@ function loadSetup(){
     window._gyroLockPollTimer=setInterval(_gyroLockBadgeRefresh,1500);
     _gyroLockBadgeRefresh();
   }
+  // #771 — UDP listener health banner. Polled at 4 s so a successful
+  // restart-udp-listener click clears the banner promptly. Lazy-create
+  // a top-of-tab container the first time we render.
+  if(!window._udpHealthPollTimer){
+    window._udpHealthPollTimer=setInterval(_udpHealthRefresh, 4000);
+    _udpHealthRefresh();
+  }
+}
+
+// #771 — render or hide the UDP listener offline banner on Setup tab.
+function _udpHealthRefresh(){
+  var tab=document.getElementById('t-setup');
+  if(!tab||tab.style.display==='none')return;
+  ra('GET','/api/status',null,function(r){
+    var u=r&&r.udpListener||null;
+    var bar=document.getElementById('udp-listener-banner');
+    if(!u||u.ok){
+      if(bar)bar.remove();
+      return;
+    }
+    if(!bar){
+      bar=document.createElement('div');
+      bar.id='udp-listener-banner';
+      bar.style.cssText='background:#7f1d1d;color:#fef2f2;border:1px solid #ef4444;border-radius:6px;padding:.7em 1em;margin-bottom:.8em;font-size:.85em;line-height:1.5;display:flex;align-items:flex-start;gap:.7em;box-shadow:0 0 12px rgba(239,68,68,.2)';
+      tab.insertBefore(bar, tab.firstChild);
+    }
+    var port=u.port||'?';
+    var err=u.lastError||(L&&L.udpListenerNoBind)||'bind failed';
+    var title=(L&&L.udpListenerOffline)||'UDP listener offline';
+    var hint=(L&&L.udpListenerHint)||'Discover and PONG flows will not work until UDP '+port+' is free. On Windows, Stop-Service winnat -Force usually frees an HNS-held port; then click Retry.';
+    var btn=(L&&L.udpListenerRetry)||'Retry bind';
+    bar.innerHTML='<div style="font-size:1.4em;line-height:1">⚠</div>'
+      +'<div style="flex:1">'
+      +'<div style="font-weight:600;margin-bottom:.2em">'+escapeHtml(title)+' (UDP '+escapeHtml(port)+')</div>'
+      +'<div style="opacity:.85;font-size:.92em">'+escapeHtml(err)+'</div>'
+      +'<div style="opacity:.7;font-size:.85em;margin-top:.4em">'+escapeHtml(hint)+'</div>'
+      +'</div>'
+      +'<button class="btn" onclick="_udpListenerRetry()" style="background:#fef2f2;color:#7f1d1d;font-size:.78em;flex-shrink:0">'+escapeHtml(btn)+'</button>';
+  });
+}
+
+function _udpListenerRetry(){
+  ra('POST','/api/diagnostics/restart-udp-listener',null,function(r){
+    if(r&&r.ok){
+      if(typeof toastSuccess==='function')toastSuccess((L&&L.udpListenerRestored)||'UDP listener bound — discover should work now');
+    }else if(typeof toastWarn==='function'){
+      var err=(r&&r.udpListener&&r.udpListener.lastError)||'';
+      toastWarn(((L&&L.udpListenerStillFailing)||'UDP listener still cannot bind')+(err?': '+err:''));
+    }
+    _udpHealthRefresh();
+  });
 }
 
 function _gyroLockBadgeRefresh(){

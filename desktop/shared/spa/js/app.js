@@ -26,6 +26,17 @@ function _rssiIcon(rssi){
   return '░░░░ '+rssi;
 }
 var L={
+  // 3D viewport (#770)
+  viewMaximize:'Maximize 3D viewport',
+  viewRestore:'Restore 3D viewport',
+  viewExitFullscreen:'Press ESC to leave fullscreen',
+  // UDP listener health (#771)
+  udpListenerOffline:'UDP listener offline',
+  udpListenerNoBind:'bind failed',
+  udpListenerHint:'Discover and PONG flows will not work until UDP 4210 is free. On Windows, Stop-Service winnat -Force usually frees an HNS-held port; then click Retry.',
+  udpListenerRetry:'Retry bind',
+  udpListenerRestored:'UDP listener bound — discover should work now',
+  udpListenerStillFailing:'UDP listener still cannot bind',
   // Tab navigation
   tabDash:'View live status of all connected fixtures',
   tabSetup:'Register, discover, and manage LED fixture nodes',

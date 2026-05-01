@@ -6,10 +6,111 @@ var _s3d={
   animId:null,stageW:10,stageH:5,stageD:10
 };
 
+// #770 — ResizeObserver + localStorage persistence for the shared
+// renderer's host containers. Each tab parents the same renderer into a
+// different div (#stage3d / #dash-3d / #shows-3d / #emu-3d); each div gets
+// its own resize handle (CSS resize:vertical) and remembers its height
+// across reloads. A tiny window resize listener mirrors the same recompute
+// so plain browser-resize events also keep the canvas honest.
+var _s3dResizeState = {observer: null, hostId: null, saveTimer: null};
+function _s3dHostHeightKey(id){return 'slyled-3d-h-' + id;}
+function _s3dRestoreHostHeight(hostId){
+  var el = document.getElementById(hostId); if(!el) return;
+  try{
+    var raw = localStorage.getItem(_s3dHostHeightKey(hostId));
+    var h = raw ? parseInt(raw, 10) : 0;
+    if(h && h >= 200 && h <= 4000) el.style.height = h + 'px';
+  }catch(e){}
+}
+function _s3dPersistHostHeight(hostId){
+  if(!hostId) return;
+  if(_s3dResizeState.saveTimer) clearTimeout(_s3dResizeState.saveTimer);
+  _s3dResizeState.saveTimer = setTimeout(function(){
+    var el = document.getElementById(hostId); if(!el) return;
+    try{ localStorage.setItem(_s3dHostHeightKey(hostId), String(el.clientHeight)); }catch(e){}
+  }, 250);
+}
+function _s3dResizeForHost(hostId){
+  if(!_s3d.inited || !_s3d.renderer) return;
+  var el = document.getElementById(hostId); if(!el) return;
+  var W = el.clientWidth || 900, H = el.clientHeight || 500;
+  _s3d.renderer.setSize(W, H, false);
+  if(_s3d.perspCam){
+    _s3d.perspCam.aspect = W / H;
+    _s3d.perspCam.updateProjectionMatrix();
+  }
+  if(_s3d.orthoCam){
+    var frustumH = 12, aspect = W / H;
+    _s3d.orthoCam.left = -frustumH * aspect / 2;
+    _s3d.orthoCam.right = frustumH * aspect / 2;
+    _s3d.orthoCam.top = frustumH / 2;
+    _s3d.orthoCam.bottom = -frustumH / 2;
+    _s3d.orthoCam.updateProjectionMatrix();
+  }
+}
+function _s3dAttachResizeObserver(hostId){
+  if(typeof ResizeObserver === 'undefined') return;
+  var el = document.getElementById(hostId); if(!el) return;
+  if(_s3dResizeState.observer){
+    try{ _s3dResizeState.observer.disconnect(); }catch(e){}
+  }
+  _s3dResizeState.hostId = hostId;
+  _s3dResizeState.observer = new ResizeObserver(function(){
+    _s3dResizeForHost(hostId);
+    _s3dPersistHostHeight(hostId);
+  });
+  _s3dResizeState.observer.observe(el);
+}
+window.addEventListener('resize', function(){
+  if(_s3dResizeState.hostId) _s3dResizeForHost(_s3dResizeState.hostId);
+});
+window.addEventListener('keydown', function(e){
+  if(e.key === 'Escape'){
+    var fs = document.querySelector('.s3d-host-fullscreen');
+    if(fs) _s3dToggleFullscreen(fs.id);
+  }
+});
+
+// #770 — toggle host between persisted-inline-height and full window. The
+// shared ResizeObserver picks up the size change automatically. Stays at
+// z-index:50, below modals (z-index:100) per app.css. Surfaces a temporary
+// "Press ESC to leave fullscreen" hint on entry, auto-fades after 3 s. All
+// strings flow through `L.*` so the SPA is ready for i18n.
+function _s3dToggleFullscreen(hostId){
+  var el = document.getElementById(hostId); if(!el) return;
+  var on = !el.classList.contains('s3d-host-fullscreen');
+  el.classList.toggle('s3d-host-fullscreen', on);
+  // Update the maximize button's tooltip + glyph for the new state.
+  var btn = el.querySelector('.s3d-host-max');
+  if(btn){
+    btn.title = (on ? L.viewRestore : L.viewMaximize) || (on ? 'Restore' : 'Maximize');
+    btn.textContent = on ? '⤤' : '⛶';
+  }
+  // Hint overlay — only on entry. Removes on exit / Esc.
+  var oldHint = el.querySelector('.s3d-fullscreen-hint');
+  if(oldHint && oldHint.parentNode) oldHint.parentNode.removeChild(oldHint);
+  if(on){
+    var hint = document.createElement('div');
+    hint.className = 's3d-fullscreen-hint';
+    hint.textContent = L.viewExitFullscreen || 'Press ESC to leave fullscreen';
+    el.appendChild(hint);
+    setTimeout(function(){
+      if(hint.parentNode) hint.classList.add('s3d-fullscreen-hint-fade');
+    }, 2400);
+    setTimeout(function(){
+      if(hint.parentNode) hint.parentNode.removeChild(hint);
+    }, 3200);
+  }
+  // Force a resize tick — ResizeObserver fires async; nudge so the canvas
+  // updates within the same frame as the click.
+  if(_s3dResizeState.hostId === hostId) _s3dResizeForHost(hostId);
+}
+
 function s3dInit(){
   if(_s3d.inited)return;
   if(typeof THREE==='undefined'){console.warn('Three.js not loaded');return;}
   var el=document.getElementById('stage3d');if(!el)return;
+  _s3dRestoreHostHeight('stage3d');
   var W=el.clientWidth||900,H=el.clientHeight||500;
 
   _s3d.scene=new THREE.Scene();
@@ -32,6 +133,9 @@ function s3dInit(){
   _s3d.renderer.setSize(W,H);
   _s3d.renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
   el.appendChild(_s3d.renderer.domElement);
+  // #770 — install ResizeObserver for the Layout host. Tab-attach
+  // functions on Dashboard / Shows / Runtime re-install on their own host.
+  _s3dAttachResizeObserver('stage3d');
 
   // Orbit controls (attached to current camera)
   _s3d.controls=new THREE.OrbitControls(_s3d.camera,_s3d.renderer.domElement);
