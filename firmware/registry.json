@@ -1,4 +1,4 @@
-{
+﻿{
     "firmware":  [
                      {
                          "id":  "child-led-esp32",
@@ -6,8 +6,8 @@
                          "description":  "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
                          "board":  "esp32",
                          "fqbn":  "esp32:esp32:esp32",
-                         "version":  "7.5.3",
-                         "releaseTag":  "esp32-v7.5.3",
+                         "version":  "7.5.5",
+                         "releaseTag":  "esp32-v7.5.5",
                          "file":  "esp32/main.ino.merged.bin",
                          "releaseAsset":  "esp32-firmware-merged.bin",
                          "sha256":  "b8551553566c285a87a09add11357cf29ddffd02f61f203c6a38c8db3e895062",
@@ -15,7 +15,7 @@
                          "buildDefines":  [
                                               "BOARD_ESP32"
                                           ],
-                         "sourceHash":  "323b47148fde57b0ee5ba6175eb35d6f5d9122160aa08d16c9444c802d61cbf6"
+                         "sourceHash":  "fd66a7a8b1364a7f94789fe4ff66a5df78126cdd398bb76262a9c9b1ade6400b"
                      },
                      {
                          "id":  "child-led-d1mini",
@@ -23,8 +23,8 @@
                          "description":  "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
                          "board":  "d1mini",
                          "fqbn":  "esp8266:esp8266:d1_mini",
-                         "version":  "7.5.3",
-                         "releaseTag":  "d1mini-v7.5.3",
+                         "version":  "7.5.4",
+                         "releaseTag":  "d1mini-v7.5.4",
                          "file":  "d1mini/main.ino.bin",
                          "releaseAsset":  "d1mini-firmware.bin",
                          "sha256":  "7f1ee7f0205377331c79501396fbfed801a776fe27d2f4e8d95880ba7df2272d",
@@ -32,12 +32,12 @@
                          "buildDefines":  [
                                               "BOARD_D1MINI"
                                           ],
-                         "sourceHash":  "323b47148fde57b0ee5ba6175eb35d6f5d9122160aa08d16c9444c802d61cbf6"
+                         "sourceHash":  "193e0012ab896e20e070b65c16a6e55451892c5abb8e3db751c82a5114824ffe"
                      },
                      {
                          "id":  "dmx-bridge-esp32",
                          "name":  "DMX Bridge (ESP32)",
-                         "description":  "DMX-512 output via RS-485 transceiver — receives SlyLED actions, outputs DMX frames at 40Hz",
+                         "description":  "DMX-512 output via RS-485 transceiver â€” receives SlyLED actions, outputs DMX frames at 40Hz",
                          "board":  "esp32",
                          "fqbn":  "esp32:esp32:esp32",
                          "version":  "7.5.20",
@@ -54,7 +54,7 @@
                      {
                          "id":  "child-led-giga",
                          "name":  "LED Performer (Giga R1)",
-                         "description":  "Onboard RGB LED performer — 1 pixel, all 14 effects",
+                         "description":  "Onboard RGB LED performer â€” 1 pixel, all 14 effects",
                          "board":  "giga",
                          "fqbn":  "arduino:mbed_giga:giga",
                          "version":  "7.5.2",
@@ -71,7 +71,7 @@
                      {
                          "id":  "parent-giga",
                          "name":  "Orchestrator Runtime (Giga R1)",
-                         "description":  "Minimal runtime parent for Giga R1 WiFi (on hold — not actively built or released)",
+                         "description":  "Minimal runtime parent for Giga R1 WiFi (on hold â€” not actively built or released)",
                          "board":  "giga",
                          "fqbn":  "arduino:mbed_giga:giga",
                          "version":  "7.5.24",
@@ -87,7 +87,7 @@
                      {
                          "id":  "dmx-bridge-giga",
                          "name":  "DMX Bridge (Giga R1)",
-                         "description":  "Giga R1 with RS-485 shield — Art-Net receiver, DMX-512 output",
+                         "description":  "Giga R1 with RS-485 shield â€” Art-Net receiver, DMX-512 output",
                          "board":  "giga",
                          "fqbn":  "arduino:mbed_giga:giga",
                          "version":  "7.5.20",
@@ -103,11 +103,11 @@
                      {
                          "id":  "gyro-esp32s3",
                          "name":  "Gyro Controller (ESP32-S3 LCD 1.28)",
-                         "description":  "Waveshare ESP32-S3 1.28inch round LCD — orientation controller for DMX moving heads",
+                         "description":  "Waveshare ESP32-S3 1.28inch round LCD â€” orientation controller for DMX moving heads",
                          "board":  "esp32s3",
                          "fqbn":  "esp32:esp32:esp32s3",
-                         "version":  "1.2.1",
-                         "releaseTag":  "gyro-v1.2.1",
+                         "version":  "1.2.2",
+                         "releaseTag":  "gyro-v1.2.2",
                          "file":  "esp32s3/main.ino.merged.bin",
                          "releaseAsset":  "esp32s3-gyro-firmware.bin",
                          "sha256":  "47b2feceb31f24b60ec83cb54dbe2614d96192e75d1bdb854f850d5faca12065",
@@ -116,12 +116,30 @@
                                               "GYRO_BOARD"
                                           ],
                          "buildFlags":  "-DGYRO_BOARD",
-                         "sourceHash":  "323b47148fde57b0ee5ba6175eb35d6f5d9122160aa08d16c9444c802d61cbf6"
+                         "sourceHash":  "193e0012ab896e20e070b65c16a6e55451892c5abb8e3db751c82a5114824ffe"
+                     },
+                     {
+                         "id":  "gyro-test-esp32s3",
+                         "name":  "Gyro Controller â€” Diagnostic Build (ESP32-S3 LCD 1.28)",
+                         "description":  "#776 test firmware â€” exposes raw IMU chip values via /imu HTTP + on-screen LCD readout. Same hardware as gyro-esp32s3; OTA-replaceable in either direction.",
+                         "board":  "esp32s3",
+                         "fqbn":  "esp32:esp32:esp32s3",
+                         "version":  "1.0.0",
+                         "releaseTag":  "gyro-test-v1.0.0",
+                         "file":  "esp32s3-test/main.ino.merged.bin",
+                         "releaseAsset":  "esp32s3-gyro-test-firmware.bin",
+                         "sha256":  "",
+                         "flashMethod":  "esptool",
+                         "buildDefines":  [
+                                              "GYRO_BOARD",
+                                              "GYRO_TEST_BOARD"
+                                          ],
+                         "buildFlags":  "-DGYRO_BOARD -DGYRO_TEST_BOARD"
                      },
                      {
                          "id":  "camera-node",
                          "name":  "Camera Node (Linux SBC)",
-                         "description":  "USB V4L2 camera node — Flask + UDP discovery, runs on any Debian/Ubuntu SBC (Orange Pi, Raspberry Pi)",
+                         "description":  "USB V4L2 camera node â€” Flask + UDP discovery, runs on any Debian/Ubuntu SBC (Orange Pi, Raspberry Pi)",
                          "board":  "camera",
                          "version":  "1.6.3",
                          "releaseTag":  "cam-v1.6.3",

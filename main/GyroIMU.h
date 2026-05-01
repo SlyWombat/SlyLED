@@ -45,5 +45,22 @@ bool gyroIMURead(float* roll, float* pitch, float* yaw);
 // After this call, gyroIMURead() returns angles relative to the new reference.
 void gyroIMUZero();
 
+// ── Raw chip access (#776 diagnostic firmware) ───────────────────────────────
+// Read the unfiltered, un-zeroed chip values. Useful for diagnosing axis
+// convention + amplification issues without the complementary filter +
+// zero-reference offset masking what the hardware actually sees. Each
+// successful call also feeds the complementary filter so subsequent
+// gyroIMURead() calls are coherent with these readings.
+struct GyroImuRaw {
+    int16_t rawAx, rawAy, rawAz;       // raw chip counts (signed 16-bit)
+    int16_t rawGx, rawGy, rawGz;       // raw chip counts (signed 16-bit)
+    float   accelG[3];                 // converted to g
+    float   gyroDps[3];                // converted to deg/s
+    float   filteredEulerDeg[3];       // {roll, pitch, yaw} after CF + zero
+    float   absoluteEulerDeg[3];       // {roll, pitch, yaw} after CF, NO zero-ref
+    float   dtSec;                     // dt used for this filter step
+};
+bool gyroIMUReadRaw(GyroImuRaw* out);
+
 #endif  // BOARD_GYRO
 #endif  // GYROIM_H

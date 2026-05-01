@@ -61,6 +61,9 @@
 #include "GyroIMU.h"
 #include "GyroUdp.h"
 #include "GyroUI.h"
+#ifdef GYRO_TEST_BOARD
+#include "TestGyro.h"
+#endif
 #endif
 
 // ── setup ─────────────────────────────────────────────────────────────────────
@@ -95,7 +98,14 @@ void setup() {
   gyroTouchInit();   // Wire.begin() happens here — must come before IMU
   gyroIMUInit();
   gyroDisplayInit();  // display before WiFi so LOGO screen is visible
+#ifdef GYRO_TEST_BOARD
+  // #776 — diagnostic build skips the regular UI / claim flow. The OTA
+  // receive path (in gyroUdpHandleCmd) still runs so the regular gyro
+  // firmware can be flashed back over OTA when diagnostics are done.
+  testGyroSetup();
+#else
   gyroUIInit();       // draws LOGO with progress bar
+#endif
   connectWiFi();     // blocking — LOGO visible during connect
   gyroUdpInit();
 
@@ -333,9 +343,13 @@ void loop() {
 
 #elif defined(BOARD_GYRO)
   pollUDP();        // receive PING, CMD_GYRO_CTRL, RECAL, OTA
+#ifdef GYRO_TEST_BOARD
+  testGyroUpdate();
+#else
   gyroUIUpdate();
-  yield();  // feed watchdog between heavy operations
   gyroUdpUpdate();
+#endif
+  yield();  // feed watchdog between heavy operations
   handleClient();
   delay(5);
 

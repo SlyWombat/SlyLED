@@ -176,6 +176,62 @@ bool gyroIMURead(float* roll, float* pitch, float* yaw) {
     return true;
 }
 
+// #776 — diagnostic-firmware accessor. Mirrors gyroIMURead() (same chip
+// read, same CF advance) but also fills out the raw chip counts so a
+// test firmware can show the operator what axes the hardware is actually
+// reporting before any convention/zeroing/filter masks the picture.
+bool gyroIMUReadRaw(GyroImuRaw* out) {
+    if (!s_initialised || !out) return false;
+    uint8_t buf[12];
+    if (!imuReadRegs(QMI_ACCEL_X_L, buf, 12)) return false;
+
+    int16_t rawAx = (int16_t)((buf[1]  << 8) | buf[0]);
+    int16_t rawAy = (int16_t)((buf[3]  << 8) | buf[2]);
+    int16_t rawAz = (int16_t)((buf[5]  << 8) | buf[4]);
+    int16_t rawGx = (int16_t)((buf[7]  << 8) | buf[6]);
+    int16_t rawGy = (int16_t)((buf[9]  << 8) | buf[8]);
+    int16_t rawGz = (int16_t)((buf[11] << 8) | buf[10]);
+
+    float ax = (float)rawAx / ACCEL_SENS;
+    float ay = (float)rawAy / ACCEL_SENS;
+    float az = (float)rawAz / ACCEL_SENS;
+    float gx = (float)rawGx / GYRO_SENS;
+    float gy = (float)rawGy / GYRO_SENS;
+    float gz = (float)rawGz / GYRO_SENS;
+
+    unsigned long nowUs = micros();
+    float dt = (float)(nowUs - s_lastUs) * 1e-6f;
+    s_lastUs = nowUs;
+    if (dt <= 0.0f || dt > 0.5f) dt = 0.01f;
+
+    float accelRoll  = atan2f(ay, az) * IMU_RAD2DEG;
+    float accelPitch = atan2f(-ax, sqrtf(ay * ay + az * az)) * IMU_RAD2DEG;
+
+    s_roll  = CF_ALPHA * (s_roll  + gx * dt) + (1.0f - CF_ALPHA) * accelRoll;
+    s_pitch = CF_ALPHA * (s_pitch + gy * dt) + (1.0f - CF_ALPHA) * accelPitch;
+    s_yaw  += gz * dt;
+    while (s_yaw >  180.0f) s_yaw -= 360.0f;
+    while (s_yaw < -180.0f) s_yaw += 360.0f;
+
+    out->rawAx = rawAx; out->rawAy = rawAy; out->rawAz = rawAz;
+    out->rawGx = rawGx; out->rawGy = rawGy; out->rawGz = rawGz;
+    out->accelG[0]  = ax; out->accelG[1]  = ay; out->accelG[2]  = az;
+    out->gyroDps[0] = gx; out->gyroDps[1] = gy; out->gyroDps[2] = gz;
+    out->absoluteEulerDeg[0] = s_roll;
+    out->absoluteEulerDeg[1] = s_pitch;
+    out->absoluteEulerDeg[2] = s_yaw;
+    float fr = s_roll - s_rollRef, fp = s_pitch - s_pitchRef, fy = s_yaw - s_yawRef;
+    while (fr >  180.0f) fr -= 360.0f;
+    while (fr < -180.0f) fr += 360.0f;
+    while (fy >  180.0f) fy -= 360.0f;
+    while (fy < -180.0f) fy += 360.0f;
+    out->filteredEulerDeg[0] = fr;
+    out->filteredEulerDeg[1] = fp;
+    out->filteredEulerDeg[2] = fy;
+    out->dtSec = dt;
+    return true;
+}
+
 // ── Calibration ──────────────────────────────────────────────────────────────
 
 void gyroIMUZero() {

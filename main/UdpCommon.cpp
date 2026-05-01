@@ -227,6 +227,15 @@ void serveClient(WiFiClient& client, unsigned int waitMs) {
   if (strstr(req, " /status ")) {
     sendStatus(client);
 
+#if defined(BOARD_GYRO) && defined(GYRO_TEST_BOARD)
+  } else if (strstr(req, " /imu ")) {
+    // #776 — diagnostic /imu endpoint exposed only by the gyro test
+    // build. Returns the raw chip values + filter output as JSON so a
+    // laptop can poll the puck while the operator tilts each axis.
+    extern void testGyroSendImuJson(WiFiClient&);
+    testGyroSendImuJson(client);
+#endif
+
   } else if (strstr(req, " /favicon.ico ")) {
     client.print("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
     client.flush();

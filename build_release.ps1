@@ -330,6 +330,31 @@ if (-not $SkipFirmware) {
     }
     }
 
+    # --- Gyro Test (ESP32-S3, GYRO_BOARD + GYRO_TEST_BOARD) — issue #776 ---
+    # Diagnostic build: same hardware as the regular gyro firmware; swaps
+    # in the TestGyro UI + /imu HTTP route. Source-hash gate identical.
+    if (Test-FwOnHold "gyro-test-esp32s3") {
+        Write-Host "Gyro-Test firmware: onHold flag set - skipping" -ForegroundColor Gray
+    } else {
+    $gyroTestStored = Get-FwSourceHash "gyro-test-esp32s3"
+    if (-not $ForceFirmware -and $gyroTestStored -eq $srcHash) {
+        Write-Host "Gyro-Test firmware: source unchanged - skipping (v$(Get-FwVersion 'gyro-test-esp32s3'))" -ForegroundColor Gray
+    } else {
+        $gyroTestCur = Get-FwVersion "gyro-test-esp32s3"
+        $gyroTestVer = Increment-Patch $gyroTestCur
+        if (-not $AllowMajorBump) { Assert-NoMajorBumpRegression "gyro-test-esp32s3" $gyroTestCur $gyroTestVer }
+        Write-VersionH $gyroTestVer
+        Write-Host "`n--- Gyro-Test Firmware v$gyroTestVer (GYRO_TEST_BOARD) ---" -ForegroundColor Yellow
+        & $cli compile --clean --fqbn esp32:esp32:esp32s3 "$root\main" `
+            --output-dir "$root\firmware\esp32s3-test" `
+            --build-property "compiler.cpp.extra_flags=-DGYRO_BOARD -DGYRO_TEST_BOARD" `
+            --build-property "compiler.c.extra_flags=-DGYRO_BOARD -DGYRO_TEST_BOARD"
+        if ($LASTEXITCODE -ne 0) { Write-Host "Gyro-Test FAILED" -ForegroundColor Red; exit 1 }
+        Set-FwVersion "gyro-test-esp32s3" $gyroTestVer
+        Set-FwSourceHash "gyro-test-esp32s3" $srcHash
+    }
+    }
+
     # Note: Giga boards (child-led-giga, parent-giga, dmx-bridge-esp32) compile
     # separately — increment their registry entry when building those targets.
 
