@@ -234,6 +234,11 @@ function emu3dBuildFixtures(){
     var boxEdge=new THREE.EdgesGeometry(boxGeo);
     var boxLine=new THREE.LineSegments(boxEdge,new THREE.LineBasicMaterial({color:0x1e3a5f,opacity:0.4,transparent:true}));
     boxLine.position.set(sw/2,sh/2,sd/2);
+    // #765 — tag the runtime stage box so the View-menu Stage Box toggle on
+    // Dashboard / Runtime can flip its visibility. Honour the persisted pref
+    // so a tab-roundtrip doesn't re-show a hidden box.
+    boxLine.userData.stageBox=true;
+    if(typeof _layShowStageBox!=='undefined')boxLine.visible=_layShowStageBox;
     _s3d.scene.add(boxLine);
     _emu3d.stageBox=boxLine;
 
@@ -273,8 +278,11 @@ function emu3dBuildFixtures(){
       var ringMat=new THREE.MeshBasicMaterial({color:col,side:THREE.DoubleSide,opacity:0.3,transparent:true});
       grp.add(new THREE.Mesh(ringGeo,ringMat));
 
-      // DMX beam cone (skip cameras — not useful during runtime)
-      if(ft==='dmx'){
+      // DMX beam cone + camera FOV cone. Camera cones used to be skipped
+      // here so the View-menu "Camera Cones" toggle on Dashboard had nothing
+      // to find (#765). Build them with the correct userData tag so the
+      // shared toggle traversal in scene-3d.js picks them up.
+      if(ft==='dmx'||ft==='camera'){
         var _fRot=c.rotation||[0,0,0];
         var aim=_rotToAim(_fRot,[c.x||0,c.y||0,c.z||0],3000,c.mountedInverted);
         var aimLocal=new THREE.Vector3((aim[0]-(c.x||0))/1000,(aim[2]-(c.z||0))/1000,(aim[1]-(c.y||0))/1000);
@@ -283,20 +291,66 @@ function emu3dBuildFixtures(){
         if(beamLen<0.01){aimLocal.set(0,-1,0);beamLen=3;}
         grp.userData.beamLen=beamLen;
         var bwDeg=15;
-        if(c.dmxProfileId&&window._profileCache&&window._profileCache[c.dmxProfileId]){
+        if(ft==='camera'){
+          bwDeg=c.effectiveFovDeg||c.fovDeg||60;
+        }else if(c.dmxProfileId&&window._profileCache&&window._profileCache[c.dmxProfileId]){
           bwDeg=window._profileCache[c.dmxProfileId].beamWidth||15;
         }
         var bwRad=bwDeg*Math.PI/180;
         var topR=Math.tan(bwRad/2)*beamLen;
         var coneGeo=new THREE.ConeGeometry(topR,beamLen,16,1,true);
-        var coneMat=new THREE.MeshBasicMaterial({color:0xffff88,opacity:0.1,transparent:true,side:THREE.DoubleSide,depthWrite:false});
+        var coneCol=ft==='camera'?0x22d3ee:0xffff88;
+        var coneMat=new THREE.MeshBasicMaterial({color:coneCol,opacity:ft==='camera'?0.12:0.1,transparent:true,side:THREE.DoubleSide,depthWrite:false});
         var cone=new THREE.Mesh(coneGeo,coneMat);
-        cone.userData.beamCone=true;
+        // #765 — tag matches the toggle the operator expects to control it.
+        if(ft==='camera'){
+          cone.userData.cameraCone=true;
+          if(typeof _layShowCamCones!=='undefined')cone.visible=_layShowCamCones;
+        }else{
+          cone.userData.beamCone=true;
+          if(typeof _layShowCones!=='undefined')cone.visible=_layShowCones;
+        }
         var midPt=aimLocal.clone().multiplyScalar(0.5);
         cone.position.copy(midPt);
         var dir=aimLocal.clone().normalize();
         cone.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,-1,0),dir));
         grp.add(cone);
+      }
+
+      // #765 — Orientation Vectors: dashed home-direction arrow + label for
+      // DMX movers and cameras. Tagged `restArrow` so the shared toggle in
+      // scene-3d.js controls visibility on Dashboard / Runtime as well as
+      // Layout. Mirrors the math in scene-3d.js:518–544 — keep in sync if
+      // either side changes.
+      if(ft==='dmx'||ft==='camera'){
+        var hasPanTilt=ft==='camera'||
+          (window._profileCache&&c.dmxProfileId&&window._profileCache[c.dmxProfileId]&&window._profileCache[c.dmxProfileId].panRange>0);
+        if(hasPanTilt){
+          var _ro=c.rotation||[0,0,0];
+          var rxR=_ro[0]*Math.PI/180;
+          var ryR=_ro[1]*Math.PI/180;
+          var cp=Math.cos(rxR), sp=Math.sin(rxR);
+          var cy=Math.cos(ryR), sy=Math.sin(ryR);
+          var homeDir=new THREE.Vector3(sy*cp,-sp,cy*cp).normalize();
+          var vecLen=0.4;
+          var homeEnd=homeDir.clone().multiplyScalar(vecLen);
+          var restCol=c.calibrated?0x22c55e:(ft==='camera'?0x22d3ee:0xf59e0b);
+          var restGeo=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0),homeEnd]);
+          var restMat=new THREE.LineDashedMaterial({color:restCol,dashSize:0.04,gapSize:0.02,opacity:0.7,transparent:true});
+          var restLine=new THREE.Line(restGeo,restMat);
+          restLine.computeLineDistances();
+          restLine.userData.restArrow=true;
+          if(typeof _layShowOrient!=='undefined')restLine.visible=_layShowOrient;
+          grp.add(restLine);
+          var arrowGeo=new THREE.ConeGeometry(0.02,0.06,8);
+          var arrowMat=new THREE.MeshBasicMaterial({color:restCol,opacity:0.8,transparent:true});
+          var arrow=new THREE.Mesh(arrowGeo,arrowMat);
+          arrow.position.copy(homeEnd);
+          arrow.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),homeDir));
+          arrow.userData.restArrow=true;
+          if(typeof _layShowOrient!=='undefined')arrow.visible=_layShowOrient;
+          grp.add(arrow);
+        }
       }
 
       // LED string dots (stored for color updates)
@@ -340,6 +394,11 @@ function emu3dBuildFixtures(){
 
     // Render stage objects (including tracked persons) (#383)
     emu3dRenderObjects();
+    // #765 — refresh ArUco overlay so the Dashboard / Runtime tabs render
+    // marker quads in the shared scene. _s3dRenderArucoMarkers cleans up
+    // any previous markers before re-adding, so this is idempotent across
+    // tab switches and project imports.
+    try{if(typeof _s3dLoadArucoOverlay==='function')_s3dLoadArucoOverlay();}catch(e){}
     emu3dZoomToFit();
   };
   // Use cached stage data if available, otherwise fetch

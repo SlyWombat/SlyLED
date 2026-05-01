@@ -2968,41 +2968,54 @@ function _loadPointCloud(cb){
     var ok=!!(r&&r.ok&&r.points);
     if(ok){
       _pointCloudData=r;
-      document.getElementById('hs').textContent=r.totalPoints+' point cloud loaded';
+      var hs=document.getElementById('hs');
+      if(hs)hs.textContent=r.totalPoints+' point cloud loaded';
     }
+    // #766 — sync the View-menu Point Cloud row's enabled/disabled state
+    // with whether scan data is now available.
+    _refreshPointCloudGate();
     if(cb)cb(ok);
   });
 }
 
-function _togglePointCloud(){
-  // When invoked from the View-menu checkbox, trust the checkbox state so it
-  // can't desync from _pointCloudVisible. Fall back to a plain flip for the
-  // legacy button-driven path (#529).
-  // #701 — async-load race fix: if a click triggers a load, re-check the
-  // checkbox at the moment the load completes and honour THAT intent. The
-  // load no longer auto-renders; only this function calls _renderPointCloud.
+// #766 — gate the Point Cloud checkbox on scan-data availability so the
+// operator can't toggle into a state the SPA must immediately revert. The
+// previous "allow click → async load → silent revert" flow desynced both
+// the checkbox state and the persisted pref. Now the row is plainly
+// disabled with a hover tooltip when no scan exists; click-while-loading
+// is also blocked so the second-click race in #766 is impossible.
+function _refreshPointCloudGate(){
   var cb=document.getElementById('vw-cloud');
-  var desired=cb?cb.checked:!_pointCloudVisible;
+  if(!cb)return;
+  var have=!!_pointCloudData;
+  cb.disabled=!have;
+  // Place the tooltip on the row (parent label) so the hint is visible
+  // when the operator hovers the disabled checkbox or its label.
+  var row=cb.closest?(cb.closest('label')||cb.parentElement):cb.parentElement;
+  if(row){
+    row.title=have?'':'Run environment scan first to enable Point Cloud view';
+    if(have){row.classList&&row.classList.remove('vw-row-disabled');}
+    else{row.classList&&row.classList.add('vw-row-disabled');}
+  }
+}
+
+function _togglePointCloud(){
+  // #766 — checkbox is gated on scan-data availability. If we somehow get
+  // here with no data (e.g. legacy button-driven path), disable+early-return
+  // instead of kicking off an async load that races a second click.
+  var cb=document.getElementById('vw-cloud');
   if(!_pointCloudData){
-    if(!desired){_pointCloudVisible=false;_updateCloudBtn();_persistCloudPref(false);return;}
-    _loadPointCloud(function(ok){
-      // Re-read the checkbox NOW — operator may have toggled while loading.
-      var stillWanted=cb?cb.checked:_pointCloudVisible;
-      if(!ok){
-        document.getElementById('hs').textContent='No point cloud — run environment scan first';
-        _pointCloudVisible=false;
-        if(cb)cb.checked=false;
-        _updateCloudBtn();
-        _persistCloudPref(false);
-        return;
-      }
-      _pointCloudVisible=stillWanted;
-      if(_s3d.inited)_renderPointCloud();
-      _updateCloudBtn();
-      _persistCloudPref(stillWanted);
-    });
+    if(cb)cb.checked=false;
+    _pointCloudVisible=false;
+    _updateCloudBtn();
+    _refreshPointCloudGate();
+    // Do NOT call _persistCloudPref(false) — the operator never asked for
+    // OFF; transient unavailability shouldn't overwrite their saved pref.
+    var hs=document.getElementById('hs');
+    if(hs)hs.textContent='No point cloud — run environment scan first';
     return;
   }
+  var desired=cb?cb.checked:!_pointCloudVisible;
   _pointCloudVisible=desired;
   if(_s3d.inited)_renderPointCloud();
   _updateCloudBtn();

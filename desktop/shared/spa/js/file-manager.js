@@ -295,6 +295,12 @@ function _fmImportJson(txt,filename){
           },1200);
         }
       });
+      // #766 — drop any stale point-cloud data from the previous project
+      // and re-gate the View-menu Point Cloud row. Otherwise the checkbox
+      // stays enabled across imports even though the new project has no
+      // scan, which is exactly the silent-revert path #766 is closing.
+      if(typeof _pointCloudData!=='undefined')_pointCloudData=null;
+      try{if(typeof _refreshPointCloudGate==='function')_refreshPointCloudGate();}catch(e){}
       loadAll();
     }else{
       toastError('Project load failed: '+(r&&r.err||'unknown error'));

@@ -111,6 +111,12 @@ document.addEventListener('DOMContentLoaded',function(){
   // Also observe tab content area for tab switches
   var appEl=document.getElementById('app');
   if(appEl)_tipObs.observe(appEl,{childList:true,subtree:false});
+  // #766 — gate the View-menu Point Cloud row at boot. The dropdown is
+  // built early in the SPA shell; without an explicit refresh the
+  // checkbox is enabled even when no scan exists, so the operator can
+  // click it into a state the SPA must immediately revert (silent revert
+  // bug). Calls into calibration.js once the function is defined.
+  try{if(typeof _refreshPointCloudGate==='function')_refreshPointCloudGate();}catch(e){}
   // Toast container — stacks in bottom-right, never blocks interaction.
   if(!document.getElementById('toast-stack')){
     var ts=document.createElement('div');
