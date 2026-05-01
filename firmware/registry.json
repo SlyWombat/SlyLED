@@ -128,7 +128,7 @@
                          "releaseTag":  "gyro-test-v1.0.0",
                          "file":  "esp32s3-test/main.ino.merged.bin",
                          "releaseAsset":  "esp32s3-gyro-test-firmware.bin",
-                         "sha256":  "",
+                         "sha256":  "65fbd6241b9d075d30c36e6e8266de477688f42821649369535e78793e2e3a39",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "GYRO_BOARD",
