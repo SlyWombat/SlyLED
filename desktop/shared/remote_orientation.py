@@ -78,8 +78,16 @@ def _coerce_convention(value, default=None):
 # Per-kind default. Future-flag: an engine-wide setting (settings.json
 # ``moverControl.orientConvention``) overrides this; per-fixture or
 # per-claim overrides win over the engine default in turn.
+#
+# #777 — gyro-puck switched from BOTTOM_FORWARD_ROLL_PITCH (yaw-dropped)
+# to FLAT_PITCH_YAW (full Euler). The yaw-drop was a workaround for the
+# old "stick-mounted, forward through the bottom" pose that put the puck
+# in continuous gimbal lock. Live test on 2026-05-01 (see
+# docs/imu-axis-test-2026-05-01.md) confirmed yaw is the cleanest signal
+# for pan when the puck is held LCD-up / +X-forward, so the workaround
+# is no longer the right default.
 _DEFAULT_CONVENTION_BY_KIND = {
-    "gyro-puck": OrientConvention.BOTTOM_FORWARD_ROLL_PITCH,
+    "gyro-puck": OrientConvention.FLAT_PITCH_YAW,
     "phone":     OrientConvention.FLAT_PITCH_YAW,
 }
 
@@ -91,10 +99,19 @@ def default_convention_for_kind(kind):
 
 # ── Constants ─────────────────────────────────────────────────────────────
 
-# Body-frame axes of a remote (decision #1): forward = +Y, up = +Z. Both
-# puck and phone use the same convention. Android controller mode locks
-# landscape so the phone's top edge is forward.
-REMOTE_FORWARD_LOCAL = (0.0, 1.0, 0.0)
+# Body-frame axes of a remote: forward = +X, right = +Y, up = +Z (right-
+# handed). Confirmed against the QMI8658 chip's native frame on the
+# Waveshare ESP32-S3 puck — when the puck is held LCD-up with its +X
+# axis along the wand's pointing direction, pan = yaw (rotation around
+# +Z, drifts) and tilt = pitch (rotation around +Y, accel-anchored).
+# Live test 2026-05-01: docs/imu-axis-test-2026-05-01.md (#777).
+#
+# Earlier convention was forward = +Y; flipped to +X on 2026-05-01
+# alongside switching the gyro-puck default OrientConvention from
+# BOTTOM_FORWARD_ROLL_PITCH to FLAT_PITCH_YAW. Android phones in
+# controller mode also produce X-forward Euler now (landscape grip with
+# the device's top edge — the +X side — pointing toward the stage).
+REMOTE_FORWARD_LOCAL = (1.0, 0.0, 0.0)
 REMOTE_UP_LOCAL      = (0.0, 0.0, 1.0)
 
 # Staleness thresholds. Decision #7 says "N days" — N=7 initially.
