@@ -35,6 +35,14 @@ $env:ARDUINO_DIRECTORIES_USER = (Get-Location).Path
 
 **First-time Windows setup:** The Giga's DFU bootloader (USB ID `2341:0366`) requires the WinUSB driver installed via [Zadig](https://zadig.akeo.ie) before uploads will work. Double-press reset to enter bootloader mode, then install the driver once.
 
+**ESP32-S3 (gyro puck) USB flash — bricking-prevention rules.** The Waveshare round-LCD gyro puck implements USB-CDC in firmware (no hardware UART bridge). A wedged firmware = no USB serial = no `esptool` recovery without manual button-combo bootloader entry. Rules:
+
+1. **Always `erase_flash` before `write_flash` when switching between distinct builds** (e.g. test-firmware ↔ regular gyro firmware). Two builds can have the same merged-binary sha256 yet different bootloader/partition-table layouts; landing one on top of the other without erase leaves `ota_data` markers + partition state inconsistent → dark boot.
+2. **Prefer OTA over USB whenever the device is on WiFi.** OTA uses the dual-partition scheme + `otaConfirmBoot()`'s 60-s rollback timer — a bad image auto-reverts. USB `write_flash` has no rollback.
+3. **Flash from `firmware/<board>/main.ino.merged.bin` (just-built), not from `dist/` (cached snapshot).** `dist/` is for distribution; re-flashing the dev rig from a stale cached binary built against a different SDK version risks the same partition mismatch.
+4. **Manual-bootloader recovery on the Waveshare ESP32-S3 1.28″:** hold the BOOT button, press+release RESET (or unplug+replug USB while holding BOOT), release BOOT. LCD stays dark in download mode — that's expected. Then `esptool erase_flash` followed by `write_flash` of a known-good bin recovers a wedged device.
+5. **For production fleets**: USB-flash only at first-time provisioning. After that, OTA-only via `firmware/registry.json` + per-firmware GitHub release tags (`gyro-vX.Y.Z`).
+
 **Versioning — two independent version tracks:**
 - **Firmware version** (`main/version.h`): `APP_MAJOR` / `APP_MINOR` / `APP_PATCH`. Only changes when firmware code (`.ino`, `.h`, `.cpp`) changes. `build.ps1` increments `APP_MINOR` on compile+upload. Firmware registry (`firmware/registry.json`) tracks firmware versions per board.
 - **App version** (orchestrator + Android): Set in `desktop/shared/parent_server.py` (`VERSION`), `android/app/build.gradle.kts` (`versionName`/`versionCode`), `desktop/windows/installer.iss` (`AppVersion`). Changes on app/SPA/server releases. Independent of firmware version.
