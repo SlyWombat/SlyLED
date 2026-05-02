@@ -271,54 +271,41 @@ def _set_mover_dmx(dmx, addr, pan, tilt, r, g, b, dimmer=255, profile=None):
             # fixture state when fine isn't contiguous with coarse).
             from dmx_universe import write_pan_tilt_to_buffer
             write_pan_tilt_to_buffer(dmx, addr, pan, tilt, profile)
-            # Dimmer
-            if "dimmer" in cm:
-                dmx[base + cm["dimmer"]] = max(0, min(255, dimmer))
-            # Color — RGB or color-wheel. Fixtures like the BeamLight 350W
-            # have BOTH an RGB triad AND a color wheel; the wheel's default
-            # DMX value in the profile often selects a specific colored
-            # slot (e.g. 128 = cyan on 350W), which the fixture firmware
-            # applies AS A FILTER over the RGB mix. The result: RGB=(0,255,0)
-            # looks nearly-black because the wheel slot filters out green.
-            # When we drive the RGB path during calibration, force the
-            # color-wheel channel to slot 0 (open / white) so the RGB mix
-            # passes through cleanly.
-            if "red" in cm:
-                dmx[base + cm["red"]] = max(0, min(255, r))
-                if "green" in cm: dmx[base + cm["green"]] = max(0, min(255, g))
-                if "blue" in cm: dmx[base + cm["blue"]] = max(0, min(255, b))
-                if "color-wheel" in cm:
-                    dmx[base + cm["color-wheel"]] = 0
-            elif "color-wheel" in cm:
-                from dmx_profiles import rgb_to_wheel_slot
-                cw = rgb_to_wheel_slot(profile, r, g, b) if (r or g or b) else 0
-                dmx[base + cm["color-wheel"]] = cw
+            # Intensity-class (dimmer + strobe-Open) and colour writes go
+            # through `lamp_on` / `lamp_off` so every fixture with multiple
+            # intensity channels (e.g. slymovehead's master ch4 + secondary
+            # ch10 dimmer pair) lights all of them in one step — see #749 /
+            # #780 Principle 3. The intensity passed into the calibrator is
+            # full-on or zero in practice, but a partial value still picks
+            # the on-branch so a custom dim-mode can override 255 below.
+            from dmx_profiles import lamp_on, lamp_off
+            color = (r, g, b)
+            if dimmer > 0:
+                lamp_on(profile, dmx, addr, color=color)
+                # Honour caller-supplied dimmer values (< 255) by writing
+                # over the master dimmer slot. Secondary dimmers stay at
+                # 255 so the lamp gate stays open.
+                if "dimmer" in cm and dimmer != 255:
+                    dmx[base + cm["dimmer"]] = max(0, min(255, dimmer))
+            else:
+                lamp_off(profile, dmx, addr, color=color)
             # #627 — apply channel defaults for every non-pan/tilt/dimmer/
-            # color channel. Previously this loop skipped default=None and
-            # default=0 entries, leaving those slots to retain whatever the
-            # snapshot carried. With the pre-zero step above, default=None
-            # and default=0 now both resolve to 0 — which is the right
+            # color/strobe channel. Previously this loop skipped default=None
+            # and default=0 entries, leaving those slots to retain whatever
+            # the snapshot carried. With the pre-zero step above, default=
+            # None and default=0 now both resolve to 0 — which is the right
             # idle state for auxiliary channels (laser off, macro idle,
-            # reset released).
+            # reset released). `strobe` and `intensity` are excluded because
+            # `lamp_on` / `lamp_off` already wrote them.
             for ch in channels:
                 ch_type = ch.get("type", "")
                 if ch_type in ("pan", "pan-fine", "tilt", "tilt-fine",
-                                "dimmer", "red", "green", "blue", "color-wheel"):
+                                "dimmer", "intensity", "red", "green", "blue",
+                                "color-wheel", "strobe"):
                     continue
                 default = ch.get("default")
                 val = int(default) if isinstance(default, (int, float)) and default > 0 else 0
                 dmx[base + ch.get("offset", 0)] = max(0, min(255, val))
-            # #516 — ensure the shutter is OPEN during calibration so the
-            # beam is always visible to the camera. strobe_open_value
-            # honours the shutterEffect annotation on ShutterStrobe ranges
-            # (Open vs Closed) and overrides any channel default that
-            # would leave the fixture strobing or blacked out.
-            if "strobe" in cm:
-                try:
-                    from dmx_profiles import strobe_open_value
-                    dmx[base + cm["strobe"]] = strobe_open_value(profile)
-                except Exception:
-                    pass
         except Exception as e:
             log.warning("Profile-aware DMX write failed (addr=%d): %s — falling back to legacy", addr, e)
             # Fall through to legacy
@@ -1161,27 +1148,46 @@ def confirm_candidate_with_nudge(pan0, tilt0, px0, py0, *, bridge_ip,
                 info["ratioBounds"] = [confirm_ratio_min, confirm_ratio_max]
                 return ("REJECTED_DISPROPORTIONATE", info)
 
-    # Gate 4 — symmetry (#697 bounds).
+    # Gate 4 — symmetry (#697 bounds, #780 P2 sign-collapse).
     def _symmetric(a, b, ax_comp):
+        """Returns (verdict, (sa, sb)). Verdict ∈
+        {"ok", "one_sided", "sign_collapse", "asymmetric"}."""
         if a is None or b is None:
-            return False
+            return ("one_sided", (None, None))
         sa = a[ax_comp]
         sb = b[ax_comp]
         min_px = float(confirm_symmetry_min_px)
         if abs(sa) < min_px or abs(sb) < min_px:
-            return False
+            return ("one_sided", (sa, sb))
         if (sa > 0) == (sb > 0):
-            return False
+            return ("sign_collapse", (sa, sb))
         ratio = abs(sa) / max(abs(sb), 1e-3)
-        return float(confirm_ratio_min) <= ratio <= float(confirm_ratio_max)
+        if float(confirm_ratio_min) <= ratio <= float(confirm_ratio_max):
+            return ("ok", (sa, sb))
+        return ("asymmetric", (sa, sb))
 
-    pan_sym = _symmetric(signals["pan+"], signals["pan-"], 0)
-    tilt_sym = _symmetric(signals["tilt+"], signals["tilt-"], 1)
-    info["panSymmetric"] = bool(pan_sym)
-    info["tiltSymmetric"] = bool(tilt_sym)
+    pan_verdict, pan_pair = _symmetric(signals["pan+"], signals["pan-"], 0)
+    tilt_verdict, tilt_pair = _symmetric(signals["tilt+"], signals["tilt-"], 1)
+    info["panSymmetric"] = (pan_verdict == "ok")
+    info["tiltSymmetric"] = (tilt_verdict == "ok")
+    # #780 P2 — surface the per-axis verdict so the SMART loop can
+    # distinguish a sign-collapse abort (pan± OR tilt± both shifted in
+    # the same screen direction → axis-sign mismatch with the operator's
+    # reported direction) from a partial-edge reject (one nudge near zero,
+    # typical when the beam straddles a frame edge).
+    info["panSymVerdict"] = pan_verdict
+    info["tiltSymVerdict"] = tilt_verdict
+    info["panNudgeDx"] = [pan_pair[0], pan_pair[1]]
+    info["tiltNudgeDy"] = [tilt_pair[0], tilt_pair[1]]
+    if pan_verdict == "sign_collapse" or tilt_verdict == "sign_collapse":
+        info["signCollapseAxes"] = [
+            a for a, v in (("pan", pan_verdict), ("tilt", tilt_verdict))
+            if v == "sign_collapse"
+        ]
+        return ("REJECTED_SIGN_COLLAPSE", info)
 
     strong_pan = pan_shift >= tilt_shift
-    strong_sym = pan_sym if strong_pan else tilt_sym
+    strong_sym = (pan_verdict == "ok") if strong_pan else (tilt_verdict == "ok")
     if not strong_sym:
         return ("PARTIAL", info)
 
@@ -1766,32 +1772,53 @@ def battleship_discover(bridge_ip, camera_ip, mover_addr, cam_idx, color,
         # to both register shift AND go in opposite screen directions.
         # When one side is near-zero → PARTIAL (beam is straddling an
         # image edge; caller treats as REJECTED in automated cal but
-        # operator UI gets the hint).
+        # operator UI gets the hint). When both register shift in the
+        # SAME direction → sign-collapse (#780 P2): the detector latched
+        # on a static bright object and the small slew didn't actually
+        # move it, so both nudges produce the same delta-vector. SMART
+        # treats this as a single-occurrence abort because it points at
+        # an axis-sign mismatch the operator should see.
         def _symmetric(a, b, ax_comp):
-            """Are (a, b) opposite-signed shifts of similar magnitude?
-            #697 — `confirm_symmetry_min_px` (was hardcoded 4) and the
-            ratio bounds (was [0.33, 3.0]) are operator-tunable."""
+            """Returns (verdict, axis_dx_pair). Verdict ∈
+            {"ok", "one_sided", "sign_collapse", "asymmetric"}.
+            #697 — confirm_symmetry_min_px (was hardcoded 4) and the
+            ratio bounds (was [0.33, 3.0]) are operator-tunable.
+            """
             if a is None or b is None:
-                return False
+                return ("one_sided", (None, None))
             sa = a[ax_comp]
             sb = b[ax_comp]
             min_px = float(confirm_symmetry_min_px)
             if abs(sa) < min_px or abs(sb) < min_px:
-                return False
+                return ("one_sided", (sa, sb))
             if (sa > 0) == (sb > 0):
-                return False
+                return ("sign_collapse", (sa, sb))
             ratio = abs(sa) / max(abs(sb), 1e-3)
-            return float(confirm_ratio_min) <= ratio <= float(confirm_ratio_max)
+            if float(confirm_ratio_min) <= ratio <= float(confirm_ratio_max):
+                return ("ok", (sa, sb))
+            return ("asymmetric", (sa, sb))
 
-        pan_sym = _symmetric(signals["pan+"], signals["pan-"], 0)
-        tilt_sym = _symmetric(signals["tilt+"], signals["tilt-"], 1)
-        info["panSymmetric"] = bool(pan_sym)
-        info["tiltSymmetric"] = bool(tilt_sym)
+        pan_verdict, pan_pair = _symmetric(signals["pan+"], signals["pan-"], 0)
+        tilt_verdict, tilt_pair = _symmetric(signals["tilt+"], signals["tilt-"], 1)
+        info["panSymmetric"] = (pan_verdict == "ok")
+        info["tiltSymmetric"] = (tilt_verdict == "ok")
+        # #780 P2 — surface the per-axis verdict so the SMART loop can
+        # distinguish a sign-collapse abort from a partial-edge reject.
+        info["panSymVerdict"] = pan_verdict
+        info["tiltSymVerdict"] = tilt_verdict
+        info["panNudgeDx"] = [pan_pair[0], pan_pair[1]]
+        info["tiltNudgeDy"] = [tilt_pair[0], tilt_pair[1]]
+        if pan_verdict == "sign_collapse" or tilt_verdict == "sign_collapse":
+            info["signCollapseAxes"] = [
+                a for a, v in (("pan", pan_verdict), ("tilt", tilt_verdict))
+                if v == "sign_collapse"
+            ]
+            return ("REJECTED_SIGN_COLLAPSE", info)
 
         # Strong axis must be symmetric; the weaker axis is allowed to
         # be one-sided (typical when the beam straddles a frame edge).
         strong_pan = pan_shift >= tilt_shift
-        strong_sym = pan_sym if strong_pan else tilt_sym
+        strong_sym = (pan_verdict == "ok") if strong_pan else (tilt_verdict == "ok")
         if not strong_sym:
             return ("PARTIAL", info)
 

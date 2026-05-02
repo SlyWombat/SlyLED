@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""test_mover_inverted.py — #760 regression: inverted mount must AIM AT THE
-SAME world point as an upright mount when given the same stage-frame aim.
+"""test_mover_inverted.py — #760 / #780 P1 regression: an inverted mount
+must AIM AT THE SAME world point as an upright mount when given the same
+stage-frame aim.
 
 The bug-shaped invariant: ``aim_stage`` is a stage-frame unit vector — the
 direction the beam should go in the world. Whether the head is upright or
@@ -9,14 +10,14 @@ reach it change. So for an inverted-mount fixture, we expect:
 
     fixture_aim_to_world(_aim_to_pan_tilt(aim_stage)) ≈ aim_stage
 
-just like for an upright fixture. Without consuming ``mountedInverted`` in
-the world↔fixture transforms, the inverted fixture aims somewhere else.
+just like for an upright fixture.
 
-Earlier shape of this test (post-flip on pan_norm/tilt_norm) was wrong: it
-mirrored DMX about 0.5, which only happens to land on the right answer if
-Home is at the mechanical centre. With a real Home pose like
-``homeTiltDmx16=0`` the symmetric flip puts the beam in a totally
-different direction.
+#780 Principle 1 changed the encoding: ``mountedInverted`` is no longer
+read at runtime. The flag is folded at save / startup migration into
+``rotation[1] += 180°`` (a roll about the fixture's forward axis). These
+tests build records in the post-migration shape — ``mountedInverted=False,
+rotation=[0, 180, 0]`` — to exercise the runtime path that the SMART /
+generic-IK pipelines actually see.
 """
 import os
 import sys
@@ -81,6 +82,9 @@ def test_no_cal_path_inverted_aims_at_same_world_target():
     aim, an inverted-mount fixture must land its beam on the same world
     direction as an upright one (the DMX numbers will differ; the world
     aim must not).
+
+    Post-#780 the inversion lives in rotation[1] = 180° (the bake done
+    by `_normalise_mounted_inverted`), not in mountedInverted=True.
     """
     upright = {
         "id": 1, "fixtureType": "dmx",
@@ -90,7 +94,9 @@ def test_no_cal_path_inverted_aims_at_same_world_target():
         "mountedInverted": False,
     }
     inverted = dict(upright); inverted["id"] = 2
-    inverted["mountedInverted"] = True
+    # Save-time baked encoding (#780 P1).
+    inverted["rotation"] = [0.0, 180.0, 0.0]
+    inverted["mountedInverted"] = False
 
     eng = _make_engine(lambda: [upright, inverted])
 
@@ -103,10 +109,10 @@ def test_no_cal_path_inverted_aims_at_same_world_target():
     pn_up, tn_up = eng._aim_to_pan_tilt(1, upright, aim)
     pn_in, tn_in = eng._aim_to_pan_tilt(2, inverted, aim)
 
-    # Round-trip both back to world aim using their (effective) rotation.
-    aim_up = _fixture_pan_tilt_to_world_aim(pn_up, tn_up, [0.0, 0.0, 0.0])
-    rot_inv_eff = [0.0, 180.0, 0.0]  # what _aim_to_pan_tilt feeds for inverted
-    aim_in = _fixture_pan_tilt_to_world_aim(pn_in, tn_in, rot_inv_eff)
+    # Round-trip both back to world aim using each fixture's rotation —
+    # _aim_to_pan_tilt now reads rotation directly, no augmentation.
+    aim_up = _fixture_pan_tilt_to_world_aim(pn_up, tn_up, upright["rotation"])
+    aim_in = _fixture_pan_tilt_to_world_aim(pn_in, tn_in, inverted["rotation"])
 
     # Both should reproduce the input aim (within IK numerical tolerance).
     for c, label in zip(range(3), ["x", "y", "z"]):
@@ -119,8 +125,8 @@ def test_no_cal_path_inverted_aims_at_same_world_target():
 def test_inverted_dmx_differs_from_upright():
     """The DMX numbers (pan/tilt norms) for upright vs inverted SHOULD
     differ for any aim that is not directly along the rotation axis —
-    inverting the mount changes the motor commands required to hit the
-    same world direction."""
+    the +180° roll changes the motor commands required to hit the same
+    world direction."""
     upright = {
         "id": 1, "fixtureType": "dmx",
         "x": 0, "y": 0, "z": 3000,
@@ -129,7 +135,8 @@ def test_inverted_dmx_differs_from_upright():
         "mountedInverted": False,
     }
     inverted = dict(upright); inverted["id"] = 2
-    inverted["mountedInverted"] = True
+    inverted["rotation"] = [0.0, 180.0, 0.0]
+    inverted["mountedInverted"] = False
 
     eng = _make_engine(lambda: [upright, inverted])
     aim = (0.4, 0.7, -0.6)  # off-axis
@@ -159,10 +166,36 @@ def test_no_mountedinverted_field_defaults_false():
             "missing mountedInverted ≡ False")
 
 
+def test_runtime_ignores_mountedInverted_flag():
+    """#780 P1 — runtime IK never reads `mountedInverted`. A record
+    with rotation=[0,0,0] but mountedInverted=True (impossible after the
+    bake migration) should produce the SAME DMX as a true upright. This
+    locks in that the augmentation deletion isn't quietly re-introduced.
+    """
+    upright = {
+        "id": 1, "fixtureType": "dmx",
+        "x": 0, "y": 0, "z": 3000,
+        "rotation": [0.0, 0.0, 0.0],
+        "panRange": 540, "tiltRange": 270,
+        "mountedInverted": False,
+    }
+    stale_inverted = dict(upright); stale_inverted["id"] = 2
+    # Pre-migration record shape, intentionally — should NOT alter runtime.
+    stale_inverted["mountedInverted"] = True
+    eng = _make_engine(lambda: [upright, stale_inverted])
+    aim = (0.4, 0.6, -0.7)
+    pn_up, tn_up = eng._aim_to_pan_tilt(1, upright, aim)
+    pn_st, tn_st = eng._aim_to_pan_tilt(2, stale_inverted, aim)
+    _assert(abs(pn_up - pn_st) < 1e-12 and abs(tn_up - tn_st) < 1e-12,
+            f"#780 P1: runtime must ignore mountedInverted "
+            f"(pn:{pn_up:.6f}/{pn_st:.6f} tn:{tn_up:.6f}/{tn_st:.6f})")
+
+
 ALL = [
     test_no_cal_path_inverted_aims_at_same_world_target,
     test_inverted_dmx_differs_from_upright,
     test_no_mountedinverted_field_defaults_false,
+    test_runtime_ignores_mountedInverted_flag,
 ]
 
 

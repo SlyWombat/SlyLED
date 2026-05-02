@@ -81,6 +81,26 @@ def test_universe():
     u.set_fixture_dimmer(10, 255, profile)
     ok('Profile dimmer at offset 0', u.get_channel(10) == 255)
 
+    # #780 P3 — when the profile has a `channels` list with two
+    # `dimmer`-typed channels (slymovehead master + secondary), both
+    # must be written. The legacy bare-channel_map path keeps working
+    # for backwards compat (above), and the `channels` path drives both.
+    u.blackout()
+    dual_profile = {
+        "channel_map": {"dimmer": 0},
+        "channels": [
+            {"offset": 0, "name": "Master",     "type": "dimmer", "default": 255},
+            {"offset": 5, "name": "Lamp Gate",  "type": "dimmer", "default": 0},
+            {"offset": 1, "name": "Red",        "type": "red"},
+        ],
+    }
+    u.set_fixture_dimmer(20, 200, dual_profile)
+    ok('Dual dimmer master ch20 = 200', u.get_channel(20) == 200)
+    ok('Dual dimmer secondary ch25 = 200', u.get_channel(25) == 200)
+    u.set_fixture_dimmer(20, 0, dual_profile)
+    ok('Dual dimmer master ch20 = 0', u.get_channel(20) == 0)
+    ok('Dual dimmer secondary ch25 = 0', u.get_channel(25) == 0)
+
     # Thread safety — just verify no crash
     import threading
     def writer():

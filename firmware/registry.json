@@ -10,7 +10,7 @@
                          "releaseTag":  "esp32-v7.5.5",
                          "file":  "esp32/main.ino.merged.bin",
                          "releaseAsset":  "esp32-firmware-merged.bin",
-                         "sha256":  "b8551553566c285a87a09add11357cf29ddffd02f61f203c6a38c8db3e895062",
+                         "sha256":  "80e34cbe208f4aff61b75ea9ba9dd7eeeb51d10fbd890459b41cfc51c1e8e11e",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "BOARD_ESP32"
@@ -27,7 +27,7 @@
                          "releaseTag":  "d1mini-v7.5.4",
                          "file":  "d1mini/main.ino.bin",
                          "releaseAsset":  "d1mini-firmware.bin",
-                         "sha256":  "7f1ee7f0205377331c79501396fbfed801a776fe27d2f4e8d95880ba7df2272d",
+                         "sha256":  "6b63ee1a491cb1c3e7881e12b467a0c80eda360c5b3c991fc906ecf60b9e7aad",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "BOARD_D1MINI"

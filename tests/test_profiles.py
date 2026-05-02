@@ -778,6 +778,71 @@ def run():
         total = len(r.get_json())
         ok('Total profiles includes bulk', total >= 62, f'total={total}')
 
+        # ── 21. #783 PR-α — sphere-model sign metadata ────────────
+        print('── 21. #783 PR-α sign metadata ──')
+
+        from dmx_profiles import has_sign_metadata
+
+        # All moving-head builtins must carry both sign fields.
+        mh_builtins = [p for p in BUILTIN_PROFILES if p.get("category") == "moving-head"]
+        ok('#783 PR-α has 3 moving-head builtins', len(mh_builtins) == 3, f'got {len(mh_builtins)}')
+        for p in mh_builtins:
+            ok(f'#783 PR-α {p["id"]} has panSignFromDmx',
+               "panSignFromDmx" in p, f'profile keys: {list(p.keys())}')
+            ok(f'#783 PR-α {p["id"]} has tiltSignFromDmx',
+               "tiltSignFromDmx" in p)
+            ok(f'#783 PR-α {p["id"]} panSign in {{-1, +1}}',
+               p["panSignFromDmx"] in (-1, 1))
+            ok(f'#783 PR-α {p["id"]} tiltSign in {{-1, +1}}',
+               p["tiltSignFromDmx"] in (-1, 1))
+
+        # has_sign_metadata distinguishes confirmed vs default-fallback.
+        ok('#783 PR-α has_sign_metadata: confirmed profile',
+           has_sign_metadata({"panSignFromDmx": 1, "tiltSignFromDmx": -1}))
+        ok('#783 PR-α has_sign_metadata: missing pan',
+           not has_sign_metadata({"tiltSignFromDmx": 1}))
+        ok('#783 PR-α has_sign_metadata: missing both',
+           not has_sign_metadata({}))
+        ok('#783 PR-α has_sign_metadata: non-dict',
+           not has_sign_metadata(None))
+
+        # channel_info() surfaces the signs with +1 default for stubs.
+        lib = ProfileLibrary()
+        info_150w = lib.channel_info("movinghead-150w-12ch")
+        ok('#783 PR-α channel_info exposes panSignFromDmx',
+           info_150w.get("panSignFromDmx") == 1)
+        ok('#783 PR-α channel_info exposes tiltSignFromDmx',
+           info_150w.get("tiltSignFromDmx") == 1)
+
+        # Custom profile import preserves the sign fields verbatim.
+        r = c.post('/api/dmx-profiles/import', json=[{
+            "id": "test-inverted-pan-mh",
+            "name": "Test Inverted-Pan Moving Head",
+            "category": "moving-head",
+            "panSignFromDmx": -1,
+            "tiltSignFromDmx": 1,
+            "channels": [
+                {"offset": 0, "type": "pan", "name": "Pan", "default": 128, "capabilities": [
+                    {"range": [0, 255], "type": "Pan", "label": "Pan"}
+                ]},
+                {"offset": 1, "type": "tilt", "name": "Tilt", "default": 128, "capabilities": [
+                    {"range": [0, 255], "type": "Tilt", "label": "Tilt"}
+                ]},
+                {"offset": 2, "type": "dimmer", "name": "D", "default": 255, "capabilities": [
+                    {"range": [0, 255], "type": "Intensity", "label": "D"}
+                ]},
+            ],
+            "panRange": 540, "tiltRange": 270,
+        }])
+        ok('#783 PR-α custom inverted-pan profile imported',
+           r.get_json().get("imported") == 1, f'got {r.get_json()}')
+        r = c.get('/api/dmx-profiles/test-inverted-pan-mh')
+        rec = r.get_json()
+        ok('#783 PR-α custom profile preserves panSignFromDmx=-1',
+           rec.get("panSignFromDmx") == -1)
+        ok('#783 PR-α custom profile preserves tiltSignFromDmx=+1',
+           rec.get("tiltSignFromDmx") == 1)
+
     # ── Print results ───────────────────────────────────────────────
     passed = sum(1 for _, v, _ in results if v)
     failed = sum(1 for _, v, _ in results if not v)

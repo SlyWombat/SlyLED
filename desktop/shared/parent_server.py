@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.17"
+VERSION = "1.7.20"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -327,6 +327,86 @@ def _migrate_rotation_schema():
         except Exception:
             pass
     return swapped
+
+
+# #780 Principle 1 — `mountedInverted` becomes save-time only.
+#
+# The flag previously survived to runtime, where every world-XYZ → DMX
+# call site re-applied an "inverted ⇒ +180° roll" augmentation. With
+# SMART (Home + Home-Secondary) deriving sign conventions from the
+# operator's direction calls, the runtime augmentation double-counted
+# the inversion — visible as fid 17 (inverted) and fid 19 (upright)
+# refusing to mirror under the same phone-yaw input (#779).
+#
+# The fix: at fixture save / project import / startup migration, fold
+# `mountedInverted=True` into `rotation[1] += 180°` (a roll about the
+# fixture's forward axis — the stage-Y axis under the #600 convention)
+# and clear the flag. After that, every IK path consumes a single
+# rotation source of truth.
+#
+# Cosmetic 3D-viewport code may still read `mountedInverted`; once
+# migrated it is uniformly False, and the same upside-down yoke render
+# is reachable from `rotation[1] ≈ 180°` directly.
+
+_MOUNTED_INVERTED_SCHEMA_VERSION = 1
+
+
+def _normalise_mounted_inverted(fixture):
+    """If `fixture["mountedInverted"]` is truthy, fold the inversion
+    into `fixture["rotation"][1] += 180°` and set the flag to False.
+    Returns True when the record was changed.
+
+    Idempotent — safe to call on already-migrated records (the flag is
+    False so nothing happens). Preserves any rx/rz the operator set
+    manually.
+    """
+    if not isinstance(fixture, dict):
+        return False
+    if not bool(fixture.get("mountedInverted")):
+        return False
+    rot = fixture.get("rotation") or [0.0, 0.0, 0.0]
+    if not isinstance(rot, list) or len(rot) < 3:
+        rot = [0.0, 0.0, 0.0]
+    try:
+        rx = float(rot[0])
+        ry = float(rot[1])
+        rz = float(rot[2])
+    except (TypeError, ValueError):
+        rx = ry = rz = 0.0
+    ry_new = (ry + 180.0) % 360.0
+    if ry_new > 180.0:
+        ry_new -= 360.0
+    fixture["rotation"] = [rx, ry_new, rz]
+    fixture["mountedInverted"] = False
+    return True
+
+
+def _migrate_mounted_inverted_schema():
+    """One-shot migration: bake `mountedInverted=True` into
+    `rotation[1] += 180°` for every fixture record. No-op once
+    `_layout.mountedInvertedSchemaVersion` is already current.
+    """
+    if (_layout or {}).get("mountedInvertedSchemaVersion") == _MOUNTED_INVERTED_SCHEMA_VERSION:
+        return 0
+    baked = 0
+    for f in (_fixtures or []):
+        if _normalise_mounted_inverted(f):
+            baked += 1
+    _layout["mountedInvertedSchemaVersion"] = _MOUNTED_INVERTED_SCHEMA_VERSION
+    if baked:
+        try:
+            _save("fixtures", _fixtures)
+            _save("layout", _layout)
+            log.info("#780 P1 mountedInverted migration: baked %d fixture(s) "
+                     "into rotation[1]", baked)
+        except Exception as e:
+            log.warning("#780 P1 mountedInverted migration persist failed: %s", e)
+    else:
+        try:
+            _save("layout", _layout)
+        except Exception:
+            pass
+    return baked
 
 
 # #628 — Auto-derive stage bounds from placed fixtures + surveyed markers.
@@ -1996,6 +2076,10 @@ def api_fixture_update(fid):
                 f[k] = _normalise_fov_type(body[k])
             else:
                 f[k] = body[k]
+    # #780 P1 — fold any newly-set `mountedInverted=True` into
+    # `rotation[1] += 180°` so runtime IK never sees the flag. Idempotent
+    # for records the startup migration already processed.
+    _normalise_mounted_inverted(f)
     # #742 — log when a request tries to mutate a home anchor through
     # the generic PUT so post-hoc forensics on "who nuked my home" has
     # an audit trail. We do not honour the write — caller must use the
@@ -6665,8 +6749,15 @@ def _smart_probe_point_default(fid, cam, bridge_ip, mover_color,
         return {"found": False, "reason": "confirm_error",
                 "pixelX": px, "pixelY": py}
     if verdict not in ("CONFIRMED",):
+        # #780 P2 — distinguish sign-collapse (axis-sign disagreement; SMART
+        # aborts on the first occurrence) from generic edge-of-frame
+        # PARTIAL (per-probe reject only). REJECTED_SIGN_COLLAPSE is the
+        # nudge_sign_mismatch verdict in #780's per-probe contract.
+        reason = verdict.lower() if verdict else "rejected"
+        if verdict == "REJECTED_SIGN_COLLAPSE":
+            reason = "nudge_sign_mismatch"
         return {"found": False,
-                "reason": verdict.lower() if verdict else "rejected",
+                "reason": reason,
                 "pixelX": px, "pixelY": py,
                 "confirmInfo": conf_info}
 
@@ -6958,6 +7049,34 @@ def _mover_cal_thread_smart_body(fid, cam, bridge_ip, mover_color,
                         "Set Home Secondary and verify mountedInverted.")
             else:
                 consecutive_offfloor = 0
+            # #780 P2 — single-occurrence abort on nudge_sign_mismatch:
+            # both pan± nudges (or both tilt±) registered pixel shifts in
+            # the SAME direction, which means the small slew didn't move
+            # the detected pixel — the operator's reported direction calls
+            # disagree with the mechanics, or the detector is latched on a
+            # static bright object. Surface the expected-vs-measured
+            # frame in the cal log so the operator can see which axis
+            # flipped without re-running the whole probe set.
+            if sample["reason"] == "nudge_sign_mismatch":
+                samples.append(sample)
+                conf = sample.get("confirmInfo") or {}
+                axes = conf.get("signCollapseAxes") or []
+                job.setdefault("log", []).append({
+                    "ts": time.time(),
+                    "level": "error",
+                    "phase": "smart_probing",
+                    "msg": "nudge_sign_mismatch",
+                    "axes": axes,
+                    "panNudgeDx": conf.get("panNudgeDx"),
+                    "tiltNudgeDy": conf.get("tiltNudgeDy"),
+                    "probeIdx": idx,
+                })
+                raise _mcal.CalibrationError(
+                    f"nudge_sign_mismatch on axis {axes}: pan± / tilt± "
+                    "nudges registered shifts in the same screen direction. "
+                    "Re-run Set Home Secondary; the operator's reported "
+                    "panMovedDirection / tiltMovedDirection disagree with "
+                    "the mechanics.")
         samples.append(sample)
 
     job["phase"] = "smart_solving"
@@ -9883,6 +10002,44 @@ def api_mover_smart_validate_confirm(fid):
 # both fold onto this primitive — collapsing the three pan/tilt → DMX
 # implementations into one.
 
+# #783 PR-β/PR-γ — sphere-model gate. When True, the sphere model owns
+# every world-XYZ → DMX conversion that flows through `aim_world_xyz`
+# and the `/api/mover/<fid>/aim-angles` endpoint. Legacy
+# `solve_dmx_per_degree` + the 2-pair affine remain available as a
+# fallback for fixtures whose profile doesn't yet carry sign metadata
+# (PR-α). PR-ε flips the gate to "always sphere" and deletes the affine.
+_USE_SPHERE_MODEL = True
+
+
+def _sphere_for_fixture(fid, fixture):
+    """Build a SphereModel for the fixture, or None when prerequisites
+    are missing (Home not set, no profile, profile lacks sign metadata).
+    Cheap to call repeatedly — the model is reconstructed each time so
+    edits to fixture / profile / rotation propagate immediately."""
+    if not _USE_SPHERE_MODEL:
+        return None
+    if not isinstance(fixture, dict):
+        return None
+    pid = fixture.get("dmxProfileId")
+    if not pid:
+        return None
+    prof_info = _profile_lib.channel_info(pid)
+    if not prof_info:
+        return None
+    if fixture.get("homePanDmx16") is None or fixture.get("homeTiltDmx16") is None:
+        return None
+    # Only moving-head profiles carry sign metadata; non-moving profiles
+    # have no aim sphere.
+    if prof_info.get("panRange", 0) <= 0 or prof_info.get("tiltRange", 0) <= 0:
+        return None
+    try:
+        from sphere_model import SphereModel
+        return SphereModel.from_fixture(fixture, prof_info)
+    except Exception as e:
+        log.debug("sphere_for_fixture(%s) build failed: %s", fid, e)
+        return None
+
+
 def _resolve_mover_model(fid, fixture):
     """Return ``(model, confidence)`` for an `aim-angles` move.
 
@@ -9954,17 +10111,24 @@ def api_mover_aim_angles(fid):
     settle_ms = int(body.get("settleMs", 0))
     settle_ms = max(0, min(5000, settle_ms))
 
-    model, confidence = _resolve_mover_model(fid, f)
-    if model is None:
-        # #730 — surface the stale-secondary diagnostic so the SPA can
-        # tell the operator to re-run the wizard rather than the
-        # generic "not calibrated" message.
-        if confidence == "home_secondary_stale_format":
-            return jsonify(err="home_secondary_stale_format"), 400
-        return jsonify(err="fixture_not_calibrated"), 400
-
-    from coverage_math import angles_to_dmx
-    pan_dmx16, tilt_dmx16 = angles_to_dmx(pan_deg, tilt_deg, model)
+    # #783 PR-γ — sphere model is the canonical IK. Built from Home +
+    # profile metadata + rotation; no Home-Secondary or probe grid
+    # required. Legacy SMART model / 2-pair affine remain as fallback
+    # for fixtures whose profile doesn't yet carry the PR-α sign fields.
+    sphere = _sphere_for_fixture(fid, f)
+    if sphere is not None:
+        pan_dmx16, tilt_dmx16 = sphere.angles_to_dmx(pan_deg, tilt_deg, clamp=True)
+    else:
+        model, confidence = _resolve_mover_model(fid, f)
+        if model is None:
+            # #730 — surface the stale-secondary diagnostic so the SPA
+            # can tell the operator to re-run the wizard rather than the
+            # generic "not calibrated" message.
+            if confidence == "home_secondary_stale_format":
+                return jsonify(err="home_secondary_stale_format"), 400
+            return jsonify(err="fixture_not_calibrated"), 400
+        from coverage_math import angles_to_dmx
+        pan_dmx16, tilt_dmx16 = angles_to_dmx(pan_deg, tilt_deg, model)
 
     if not _artnet.running and not _sacn.running:
         return jsonify(err="Art-Net engine not running — start it from "
@@ -14636,14 +14800,19 @@ def _set_fixture_lamp(engine, uni, addr, on, prof_info):
     cm = prof_info.get("channel_map", {}) or {}
     channels = prof_info.get("channels", []) or []
     uni_buf = engine.get_universe(uni)
+    # #780 P3 — iterate every dimmer/intensity-typed channel, not just
+    # cm["dimmer"], so fixtures with master + secondary dimmer pairs
+    # (slymovehead's ch4 + ch10) light all of them in one step. The
+    # bytearray-side equivalent is `dmx_profiles.lamp_on / lamp_off`.
+    from dmx_profiles import INTENSITY_TYPES, strobe_open_value
     if on:
-        if "dimmer" in cm:
-            uni_buf.set_channel(addr + cm["dimmer"], 255)
+        for ch in channels:
+            if ch.get("type") in INTENSITY_TYPES:
+                uni_buf.set_channel(addr + ch.get("offset", 0), 255)
         # Shutter open: honour the ShutterStrobe Open capability when
         # the profile spells it out, else default, else 255.
         if "strobe" in cm:
             try:
-                from dmx_profiles import strobe_open_value
                 uni_buf.set_channel(addr + cm["strobe"],
                                      strobe_open_value(prof_info))
             except Exception:
@@ -14660,8 +14829,8 @@ def _set_fixture_lamp(engine, uni, addr, on, prof_info):
             uni_buf.set_channel(addr + cm["color-wheel"], 0)
         # Apply channel defaults > 0 for any other channels we haven't
         # explicitly written. Skip channel types we own here.
-        owned = {"dimmer", "strobe", "red", "green", "blue", "white",
-                 "color-wheel", "pan", "tilt", "pan-fine", "tilt-fine"}
+        owned = {"dimmer", "intensity", "strobe", "red", "green", "blue",
+                 "white", "color-wheel", "pan", "tilt", "pan-fine", "tilt-fine"}
         for ch in channels:
             ch_type = ch.get("type", "")
             if ch_type in owned:
@@ -14670,9 +14839,11 @@ def _set_fixture_lamp(engine, uni, addr, on, prof_info):
             if isinstance(default, (int, float)) and default > 0:
                 uni_buf.set_channel(addr + ch.get("offset", 0), int(default))
     else:
-        # Lamp off — dim to 0, RGB to 0, shutter closed if profile knows.
-        if "dimmer" in cm:
-            uni_buf.set_channel(addr + cm["dimmer"], 0)
+        # Lamp off — dim every intensity channel to 0, RGB to 0, shutter
+        # closed if profile knows.
+        for ch in channels:
+            if ch.get("type") in INTENSITY_TYPES:
+                uni_buf.set_channel(addr + ch.get("offset", 0), 0)
         if "red" in cm:
             for ch_name in ("red", "green", "blue", "white"):
                 if ch_name in cm:
@@ -19136,6 +19307,15 @@ def api_project_import():
             _layout["rotationSchemaVersion"] = _ROTATION_SCHEMA_VERSION
             if _swap:
                 log.info("#600 project import: migrated %d rotation arrays", _swap)
+        # #780 P1 — bake mountedInverted into rotation[1] on import.
+        if _layout.get("mountedInvertedSchemaVersion") != _MOUNTED_INVERTED_SCHEMA_VERSION:
+            _baked = 0
+            for _f in _fixtures:
+                if _normalise_mounted_inverted(_f):
+                    _baked += 1
+            _layout["mountedInvertedSchemaVersion"] = _MOUNTED_INVERTED_SCHEMA_VERSION
+            if _baked:
+                log.info("#780 P1 project import: baked %d mountedInverted into rotation[1]", _baked)
         _stage = data.get("stage", {"w": 10.0, "h": 5.0, "d": 10.0})
         _actions = data.get("actions", [])
         _spatial_fx = data.get("spatialEffects", [])
@@ -20531,6 +20711,12 @@ if __name__ == "__main__":
         _migrate_rotation_schema()
     except Exception as _e:
         log.warning("#600 rotation migration on startup failed: %s", _e)
+    # #780 P1 — bake mountedInverted=True into rotation[1] += 180°. No-op
+    # once mountedInvertedSchemaVersion == 1.
+    try:
+        _migrate_mounted_inverted_schema()
+    except Exception as _e:
+        log.warning("#780 P1 mountedInverted migration on startup failed: %s", _e)
     # #720 PR-7 — flag legacy (pre-SMART) calibration records so the SPA
     # can prompt operators to re-run SMART before the legacy aim
     # fallback is removed. Idempotent.
@@ -20562,6 +20748,9 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
+
 
 
 

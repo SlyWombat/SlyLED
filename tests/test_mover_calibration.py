@@ -782,6 +782,240 @@ finally:
 
 
 # =====================================================================
+# #780 P2 — confirm_candidate_with_nudge: sign-collapse rejection
+# =====================================================================
+# A "sign-collapse" detector: every probe returns the SAME positive shift
+# in pixel-x, regardless of pan direction. That mimics a static bright
+# scene object the operator-direction calls disagree with — pan+ AND pan-
+# both report a positive dx. The new symmetry gate rejects this with
+# REJECTED_SIGN_COLLAPSE so the SMART loop can abort with
+# nudge_sign_mismatch (#780 P2).
+
+_sc_pan = [0.5]
+_sc_tilt = [0.5]
+def _sign_collapse_detect(ip, idx, color=None, threshold=50, center=False):
+    # Drift in pixel-x equally on every probe — same direction for pan+ and pan-.
+    # Tilt nudges produce proper opposite shifts in pixel-y.
+    p = _sc_pan[0]; t = _sc_tilt[0]
+    px = 320 + 30
+    py = 240 + int(round((t - 0.5) * 1000))
+    return (px, py)
+def _sc_capture(dmx, addr, pan, tilt, *args, **kw):
+    _sc_pan[0] = pan; _sc_tilt[0] = tilt
+mcal._beam_detect = _sign_collapse_detect
+mcal._set_mover_dmx = _sc_capture
+mcal._hold_dmx = lambda *a, **kw: None
+try:
+    verdict, info = mcal.confirm_candidate_with_nudge(
+        0.5, 0.5, 320, 240,
+        bridge_ip="x", camera_ip="x", cam_idx=0, mover_addr=1,
+        color=(0,255,0), dmx=bytearray(512),
+        confirm_nudge_delta=0.02,
+        pan_range_deg=540.0, tilt_range_deg=270.0)
+    check('#780 P2 sign-collapse rejected',
+          verdict == "REJECTED_SIGN_COLLAPSE",
+          f'got verdict={verdict} info={info}')
+    check('#780 P2 sign-collapse axes surfaced',
+          "pan" in (info.get("signCollapseAxes") or []),
+          f'got axes={info.get("signCollapseAxes")}')
+    check('#780 P2 panSymVerdict == sign_collapse',
+          info.get("panSymVerdict") == "sign_collapse",
+          f'got {info.get("panSymVerdict")}')
+finally:
+    mcal._beam_detect = _orig_beam_detect
+    mcal._set_mover_dmx = _orig_set
+    mcal._hold_dmx = _orig_hold
+
+# Legitimate symmetric beam still confirms (regression: don't accidentally
+# tighten the gate so true beams get rejected as sign-collapse).
+mcal._beam_detect = _moving_beam_detect
+mcal._set_mover_dmx = _capture_pan_tilt
+mcal._hold_dmx = lambda *a, **kw: None
+try:
+    verdict, info = mcal.confirm_candidate_with_nudge(
+        0.5, 0.5, 320, 240,
+        bridge_ip="x", camera_ip="x", cam_idx=0, mover_addr=1,
+        color=(0,255,0), dmx=bytearray(512),
+        confirm_nudge_delta=0.02,
+        pan_range_deg=540.0, tilt_range_deg=270.0)
+    check('#780 P2 true beam still CONFIRMED with new sym verdict',
+          verdict == "CONFIRMED",
+          f'got verdict={verdict} info={info}')
+    check('#780 P2 panSymVerdict == ok on true beam',
+          info.get("panSymVerdict") == "ok",
+          f'got {info.get("panSymVerdict")}')
+finally:
+    mcal._beam_detect = _orig_beam_detect
+    mcal._set_mover_dmx = _orig_set
+    mcal._hold_dmx = _orig_hold
+
+
+# =====================================================================
+print('\n=== lamp_on / lamp_off (#749, #780 P3) ===')
+# =====================================================================
+
+from dmx_profiles import lamp_on, lamp_off, BUILTIN_PROFILES
+
+# Find the 150W profile in builtins (the live-test fid 17 fixture).
+prof_150w = next(p for p in BUILTIN_PROFILES if p["id"] == "movinghead-150w-12ch")
+
+# 150W is wheel-only (no RGB triad). Dimmer at offset 5, strobe at offset 6
+# (Open range [0,0] → midpoint 0), wheel at offset 7. lamp_on at addr=1 with
+# RGB=(255,0,0) drives the wheel onto a Red slot (range [16,31] → mid 23).
+dmx = [0] * 512
+lamp_on(prof_150w, dmx, 1, color=(255, 0, 0))
+check('150W lamp_on: dimmer (ch5) = 255', dmx[5] == 255, f'got {dmx[5]}')
+check('150W lamp_on: strobe (ch6) = 0 (Open)', dmx[6] == 0, f'got {dmx[6]}')
+wheel_off = next(c["offset"] for c in prof_150w["channels"] if c["type"] == "color-wheel")
+check('150W lamp_on: wheel-only RGB(255,0,0) maps to Red slot (16-31)',
+      16 <= dmx[wheel_off] <= 31, f'wheel ch{wheel_off}={dmx[wheel_off]}')
+
+# lamp_off mirrors: dimmer goes to 0, strobe stays at Open.
+dmx2 = [0] * 512
+lamp_off(prof_150w, dmx2, 1, color=(0, 0, 0))
+check('150W lamp_off: dimmer (ch5) = 0', dmx2[5] == 0, f'got {dmx2[5]}')
+check('150W lamp_off: strobe (ch6) still 0 (Open)', dmx2[6] == 0, f'got {dmx2[6]}')
+
+# lamp_on without color leaves wheel and auxiliary channels untouched.
+dmx3 = [99] * 512
+lamp_on(prof_150w, dmx3, 1)  # no color
+check('150W lamp_on(no color): dimmer = 255', dmx3[5] == 255)
+check('150W lamp_on(no color): wheel untouched',
+      dmx3[wheel_off] == 99, f'got {dmx3[wheel_off]}')
+
+# Synthetic RGB-and-wheel profile (mirrors a 350W BeamLight-style fixture):
+# wheel must be forced to slot 0 when RGB drives, so the wheel-default
+# doesn't filter the RGB mix (#624 / #780 P3).
+prof_rgb_and_wheel = {
+    "id": "test-rgb-and-wheel",
+    "channels": [
+        {"offset": 0, "name": "Dimmer", "type": "dimmer", "default": 255, "capabilities": []},
+        {"offset": 1, "name": "Red",    "type": "red",    "capabilities": []},
+        {"offset": 2, "name": "Green",  "type": "green",  "capabilities": []},
+        {"offset": 3, "name": "Blue",   "type": "blue",   "capabilities": []},
+        {"offset": 4, "name": "Wheel",  "type": "color-wheel", "default": 128, "capabilities": [
+            {"range": [0, 15],   "type": "WheelSlot", "label": "White", "color": "#FFFFFF"},
+            {"range": [128, 143], "type": "WheelSlot", "label": "Cyan", "color": "#00FFFF"},
+        ]},
+    ],
+}
+dmx_rw = [0] * 512
+lamp_on(prof_rgb_and_wheel, dmx_rw, 1, color=(0, 255, 0))
+check('RGB+wheel lamp_on: dimmer = 255', dmx_rw[0] == 255)
+check('RGB+wheel lamp_on: R=0', dmx_rw[1] == 0)
+check('RGB+wheel lamp_on: G=255', dmx_rw[2] == 255)
+check('RGB+wheel lamp_on: B=0', dmx_rw[3] == 0)
+check('RGB+wheel lamp_on: wheel forced to 0 (no filter)', dmx_rw[4] == 0,
+      f'got {dmx_rw[4]}')
+
+# Synthetic profile with TWO `dimmer` channels (slymovehead-style master +
+# secondary). lamp_on must drive BOTH to 255 — the bug behind #749 was that
+# only cm["dimmer"] (single offset) got written, leaving the secondary at 0.
+prof_dual_dim = {
+    "id": "test-dual-dimmer",
+    "channels": [
+        {"offset": 0, "name": "Pan", "type": "pan", "default": 128, "capabilities": []},
+        {"offset": 1, "name": "Tilt", "type": "tilt", "default": 128, "capabilities": []},
+        {"offset": 2, "name": "Master", "type": "dimmer", "default": 255, "capabilities": []},
+        {"offset": 3, "name": "Red", "type": "red", "capabilities": []},
+        {"offset": 4, "name": "Green", "type": "green", "capabilities": []},
+        {"offset": 5, "name": "Blue", "type": "blue", "capabilities": []},
+        {"offset": 6, "name": "Lamp Gate", "type": "dimmer", "default": 0, "capabilities": []},
+    ],
+}
+dmx4 = [0] * 512
+lamp_on(prof_dual_dim, dmx4, 1, color=(255, 128, 64))
+check('dual-dimmer lamp_on: master ch2 = 255', dmx4[2] == 255, f'got {dmx4[2]}')
+check('dual-dimmer lamp_on: secondary ch6 = 255', dmx4[6] == 255, f'got {dmx4[6]}')
+check('dual-dimmer lamp_on: red ch3 = 255', dmx4[3] == 255)
+check('dual-dimmer lamp_on: green ch4 = 128', dmx4[4] == 128)
+check('dual-dimmer lamp_on: blue ch5 = 64', dmx4[5] == 64)
+
+dmx5 = [0] * 512
+lamp_off(prof_dual_dim, dmx5, 1)
+check('dual-dimmer lamp_off: master ch2 = 0', dmx5[2] == 0)
+check('dual-dimmer lamp_off: secondary ch6 = 0', dmx5[6] == 0)
+
+# Profile with a non-zero strobe Open range — the 150W has [0,0] which
+# obscures whether `_write_intensity` is actually consulting `strobe_open_value`.
+# This synthetic profile has Open at [200, 220] so the midpoint (210) is
+# distinguishable from "left at default 0" or "left at default 100".
+prof_open_strobe = {
+    "id": "test-open-strobe",
+    "channels": [
+        {"offset": 0, "name": "Dimmer", "type": "dimmer", "default": 255, "capabilities": []},
+        {"offset": 1, "name": "Strobe", "type": "strobe", "default": 100, "capabilities": [
+            {"range": [0, 199],   "type": "ShutterStrobe", "shutterEffect": "Strobe", "label": "Strobe"},
+            {"range": [200, 220], "type": "ShutterStrobe", "shutterEffect": "Open",   "label": "Open"},
+            {"range": [221, 255], "type": "ShutterStrobe", "shutterEffect": "Strobe", "label": "Strobe fast"},
+        ]},
+    ],
+}
+dmx6 = [0] * 512
+lamp_on(prof_open_strobe, dmx6, 1)
+check('open-strobe lamp_on: dimmer = 255', dmx6[0] == 255)
+check('open-strobe lamp_on: strobe = Open midpoint (210)', dmx6[1] == 210, f'got {dmx6[1]}')
+
+# Wheel-only profile (no RGB): RGB drive should map onto a wheel slot.
+# Reuse the 150W wheel definition stand-alone.
+prof_wheel_only = {
+    "id": "test-wheel-only",
+    "channels": [
+        {"offset": 0, "name": "Dimmer", "type": "dimmer", "default": 255, "capabilities": []},
+        {"offset": 1, "name": "Wheel", "type": "color-wheel", "capabilities": [
+            {"range": [0, 15],  "type": "WheelSlot", "label": "White", "color": "#FFFFFF"},
+            {"range": [16, 31], "type": "WheelSlot", "label": "Red",   "color": "#FF0000"},
+            {"range": [48, 63], "type": "WheelSlot", "label": "Green", "color": "#00FF00"},
+            {"range": [80, 95], "type": "WheelSlot", "label": "Blue",  "color": "#0000FF"},
+        ]},
+    ],
+}
+dmx7 = [0] * 512
+lamp_on(prof_wheel_only, dmx7, 1, color=(0, 255, 0))
+check('wheel-only lamp_on: dimmer = 255', dmx7[0] == 255)
+check('wheel-only lamp_on: wheel maps green → green slot mid (~55)',
+      48 <= dmx7[1] <= 63, f'got {dmx7[1]}')
+
+# Address offsetting — lamp_on at addr=14 lands at base index 13.
+dmx8 = [0] * 512
+lamp_on(prof_150w, dmx8, 14, color=(255, 255, 255))
+check('addr=14 lamp_on: master dimmer at idx 18 (13 + 5)',
+      dmx8[18] == 255, f'got {dmx8[18]}')
+
+# Legacy 13ch fallback (profile=None) — preserves the historical
+# `_set_mover_dmx` no-profile shape so existing tests above still pass.
+dmx9 = [0] * 512
+lamp_on(None, dmx9, 1, color=(50, 100, 200))
+check('legacy lamp_on: dimmer at ch3 = 255', dmx9[3] == 255)
+check('legacy lamp_on: strobe at ch4 = 0', dmx9[4] == 0)
+check('legacy lamp_on: R at ch5 = 50', dmx9[5] == 50)
+check('legacy lamp_on: G at ch6 = 100', dmx9[6] == 100)
+check('legacy lamp_on: B at ch7 = 200', dmx9[7] == 200)
+
+dmx10 = [99] * 512
+lamp_off(None, dmx10, 1)
+check('legacy lamp_off: dimmer at ch3 = 0', dmx10[3] == 0)
+check('legacy lamp_off(no color): R at ch5 untouched', dmx10[5] == 99)
+
+# Integration: _set_mover_dmx with a dual-dimmer profile must write 255
+# to BOTH dimmer slots — proves the refactor wired the helper in (#780 P3).
+mcal._active_profile = prof_dual_dim
+try:
+    dmx11 = [0] * 512
+    _set_mover_dmx(dmx11, 1, 0.5, 0.5, 255, 0, 0, dimmer=255, profile=prof_dual_dim)
+    check('integration: _set_mover_dmx writes BOTH dimmers via lamp_on',
+          dmx11[2] == 255 and dmx11[6] == 255,
+          f'master ch2={dmx11[2]} secondary ch6={dmx11[6]}')
+    dmx12 = [0] * 512
+    _set_mover_dmx(dmx12, 1, 0.5, 0.5, 0, 0, 0, dimmer=0, profile=prof_dual_dim)
+    check('integration: _set_mover_dmx dimmer=0 zeroes BOTH dimmers',
+          dmx12[2] == 0 and dmx12[6] == 0,
+          f'master ch2={dmx12[2]} secondary ch6={dmx12[6]}')
+finally:
+    mcal._active_profile = None
+
+
+# =====================================================================
 print(f'\n{passed} passed, {failed} failed out of {passed + failed} tests')
 if failed:
     sys.exit(1)

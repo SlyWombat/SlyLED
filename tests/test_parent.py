@@ -3231,6 +3231,103 @@ def run():
         ok('#531: preset reload does not duplicate actions', n1 == n2,
            f'first={n1} second={n2}')
 
+        # ── #780 P1 — mountedInverted bakes into rotation[1] on save ──
+        from parent_server import _normalise_mounted_inverted
+
+        # Pure helper: True + rotation=[0,0,0] → rotation=[0,180,0], flag clear.
+        rec = {"rotation": [0.0, 0.0, 0.0], "mountedInverted": True}
+        ok('#780 P1 normalise returns True on first call', _normalise_mounted_inverted(rec))
+        ok('#780 P1 rotation[1] baked to 180', abs(rec["rotation"][1] - 180.0) < 1e-9,
+           f'got {rec["rotation"]}')
+        ok('#780 P1 flag cleared', rec["mountedInverted"] is False)
+        # Idempotent: second call no-ops because flag is now False.
+        ok('#780 P1 normalise idempotent', not _normalise_mounted_inverted(rec))
+        ok('#780 P1 rotation unchanged on idempotent call',
+           abs(rec["rotation"][1] - 180.0) < 1e-9)
+
+        # When rx/rz already set, only ry changes.
+        rec2 = {"rotation": [10.0, 0.0, 45.0], "mountedInverted": True}
+        _normalise_mounted_inverted(rec2)
+        ok('#780 P1 preserves rx', abs(rec2["rotation"][0] - 10.0) < 1e-9)
+        ok('#780 P1 preserves rz', abs(rec2["rotation"][2] - 45.0) < 1e-9)
+        ok('#780 P1 ry shifted by 180', abs(rec2["rotation"][1] - 180.0) < 1e-9)
+
+        # When ry already at 180, +180 wraps to 0 (mod 360, range -180..180).
+        rec3 = {"rotation": [0.0, 180.0, 0.0], "mountedInverted": True}
+        _normalise_mounted_inverted(rec3)
+        ok('#780 P1 ry=180 + flag → 0 wrap', abs(rec3["rotation"][1]) < 1e-9,
+           f'got {rec3["rotation"][1]}')
+
+        # Save-time hook: PUT /api/fixtures/<fid> with mountedInverted=True
+        # bakes into rotation and clears the flag.
+        c.post('/api/reset')
+        c.post('/api/fixtures', json={
+            'name': 'inv-mover', 'fixtureType': 'dmx', 'type': 'point',
+            'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 12,
+            'rotation': [0.0, 0.0, 0.0],
+        })
+        all_fx = c.get('/api/fixtures').get_json()
+        new_fid = all_fx[-1]['id']
+        c.put(f'/api/fixtures/{new_fid}', json={'mountedInverted': True})
+        saved = c.get(f'/api/fixtures/{new_fid}').get_json()
+        ok('#780 P1 PUT mountedInverted=True clears flag',
+           saved.get('mountedInverted') is False,
+           f'got {saved.get("mountedInverted")}')
+        ok('#780 P1 PUT bakes rotation[1]=180',
+           abs(saved.get('rotation', [0,0,0])[1] - 180.0) < 1e-9,
+           f'got {saved.get("rotation")}')
+
+        # ── #783 PR-γ — aim-angles routes through sphere model ────
+        # Fixture with Home + profile sign metadata uses the sphere
+        # model. Without homeSecondary, legacy resolve would have
+        # returned fixture_not_calibrated; sphere succeeds.
+        c.post('/api/reset')
+        c.post('/api/fixtures', json={
+            'name': 'sphere-mover', 'fixtureType': 'dmx', 'type': 'point',
+            'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 12,
+            'dmxProfileId': 'movinghead-150w-12ch',
+            'rotation': [0.0, 0.0, 0.0],
+        })
+        all_fx = c.get('/api/fixtures').get_json()
+        smover_fid = all_fx[-1]['id']
+        # Home setup: drive at midpoint, save Home.
+        c.post(f'/api/fixtures/{smover_fid}/home', json={
+            'panDmx16': 32768, 'tiltDmx16': 32768,
+        })
+        # NO Home-Secondary — would block the legacy path.
+        # Bring up engine so aim-angles can write DMX.
+        c.post('/api/dmx/start', json={'protocol': 'artnet'})
+        # Aim panDeg=10, tiltDeg=0. Sphere: pan_dmx16 = 32768 + 10 *
+        # (65535/540) ≈ 33982; tilt_dmx16 = 32768.
+        r = c.post(f'/api/mover/{smover_fid}/aim-angles',
+                   json={'panDeg': 10.0, 'tiltDeg': 0.0})
+        d = r.get_json() or {}
+        ok('#783 PR-γ aim-angles via sphere returns ok',
+           r.status_code == 200 and d.get('ok') is True,
+           f'status={r.status_code} body={d}')
+        if d.get('ok'):
+            expected_pan = 32768 + int(round(10.0 * 65535 / 540))
+            ok('#783 PR-γ sphere DMX matches expected (pan)',
+               abs(d.get('panDmx16', 0) - expected_pan) <= 2,
+               f'got {d.get("panDmx16")} expected {expected_pan}')
+            ok('#783 PR-γ sphere DMX tilt at home',
+               abs(d.get('tiltDmx16', 0) - 32768) <= 2,
+               f'got {d.get("tiltDmx16")}')
+
+        # Negative case: a fixture WITHOUT Home → fixture_not_calibrated
+        # (legacy fallback path, sphere can't build).
+        c.post('/api/fixtures', json={
+            'name': 'no-home', 'fixtureType': 'dmx', 'type': 'point',
+            'dmxUniverse': 1, 'dmxStartAddr': 50, 'dmxChannelCount': 12,
+            'dmxProfileId': 'movinghead-150w-12ch',
+            'rotation': [0.0, 0.0, 0.0],
+        })
+        nh_fid = c.get('/api/fixtures').get_json()[-1]['id']
+        r = c.post(f'/api/mover/{nh_fid}/aim-angles',
+                   json={'panDeg': 0.0, 'tiltDeg': 0.0})
+        ok('#783 PR-γ no-Home fixture → fixture_not_calibrated',
+           r.status_code == 400, f'status={r.status_code}')
+
     # ── Print results ───────────────────────────────────────────────
     passed = sum(1 for _, v, _ in results if v)
     failed = sum(1 for _, v, _ in results if not v)

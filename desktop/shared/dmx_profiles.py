@@ -24,6 +24,10 @@ Profile schema:
   "beamWidth": 25,             # degrees (0 = wash/flood)
   "panRange": 0,               # degrees (0 = no pan)
   "tiltRange": 0,              # degrees (0 = no tilt)
+  "tiltOffsetDmx16": 32768,    # #716 — DMX value at horizontal-forward (default mid-range)
+  "tiltUp": false,             # #716 — does +DMX-tilt move beam UP from offset?
+  "panSignFromDmx": 1,         # #783 — +1 = +DMX rotates yoke CCW from above
+  "tiltSignFromDmx": 1,        # #783 — +1 = +DMX raises beam relative to fixture-up
 }
 
 Channel types (primary function): dimmer, red, green, blue, white, amber, uv,
@@ -244,6 +248,157 @@ def shutter_effect_at(prof_info, dmx_value):
     return None
 
 
+# -- Sphere-model sign metadata (#783 PR-α) -----------------------------------
+#
+# Moving-head profiles carry two new keys: ``panSignFromDmx`` and
+# ``tiltSignFromDmx``. Each is +1 or -1 and tells the sphere model which
+# direction increasing DMX rotates the mechanics, in the FIXTURE FRAME
+# (not stage frame — mount inversion lives in fixture.rotation per #780
+# Principle 1).
+#
+# Convention:
+#   panSignFromDmx = +1  → +DMX-pan rotates the yoke counter-clockwise
+#                          when viewed looking down the fixture's mount-up
+#                          axis. With rotation=[0,0,0] (mount upright,
+#                          beam aimed along stage +Y at horizon level),
+#                          +DMX-pan sweeps the beam toward stage +X.
+#   tiltSignFromDmx = +1 → +DMX-tilt raises the beam relative to the
+#                          fixture's mount-forward axis. With rotation
+#                          =[0,0,0] this aims the beam toward stage +Z.
+#
+# Defaults: both +1. Profiles missing the field fall through to +1 — the
+# common wiring convention. The SPA cal flow prompts the operator to
+# confirm before SMART runs against an unsigned moving-head profile.
+
+
+def has_sign_metadata(prof_info):
+    """True when the profile carries explicit panSignFromDmx +
+    tiltSignFromDmx fields (i.e. the operator / OFL import has confirmed
+    them rather than the loader defaulting to +1). The SPA gates SMART
+    on this for moving-head profiles to avoid blind sign assumptions."""
+    if not isinstance(prof_info, dict):
+        return False
+    return ("panSignFromDmx" in prof_info
+            and "tiltSignFromDmx" in prof_info)
+
+
+# -- Lamp-on / lamp-off helpers (#749, #780 Principle 3) ----------------------
+#
+# "Lamp-on means lamp-on": every intensity-class channel a profile defines
+# is written in lock-step. Splitting this off as a pure-buffer function makes
+# the per-probe contract testable in isolation and gives non-cal callers
+# (Set Home wizard, Beam-On — see #737) one place to ask for a lit beam.
+#
+# Intensity-class types: "dimmer", "intensity" (synonym some custom profiles
+# use), and "strobe" (driven to its Open range so the shutter doesn't gate
+# the beam). Some fixtures publish a master + secondary dimmer pair where
+# both must be hot for the lamp to read full — channels are iterated by
+# `type`, not by channel-map slot, so duplicates are honoured (the
+# slymovehead profile's ch4 master + ch10 secondary case from #749).
+
+INTENSITY_TYPES = ("dimmer", "intensity")
+
+
+def _write_intensity(profile, dmx, addr, on):
+    """Write every dimmer/intensity-typed channel and the strobe Open value.
+    `on=True` writes 255 to dimmers; `on=False` writes 0. Strobe is held at
+    its Open value in both cases — strobe is not the blackout mechanism on
+    any fixture in the current corpus, and leaving it Open keeps the cal
+    pipeline's `_dark_reference()` step from racing the shutter."""
+    base = addr - 1
+    on_value = 255 if on else 0
+    strobe_open = strobe_open_value(profile)
+    for ch in (profile.get("channels") or []):
+        offset = ch.get("offset", 0)
+        if base + offset >= 512:
+            continue
+        ch_type = ch.get("type", "")
+        if ch_type in INTENSITY_TYPES:
+            dmx[base + offset] = on_value
+        elif ch_type == "strobe":
+            dmx[base + offset] = strobe_open
+
+
+def _write_color(profile, dmx, addr, color):
+    """Write RGB / colour-wheel channels for `color = (r, g, b)`. When the
+    profile carries BOTH an RGB triad and a colour wheel, the wheel is
+    forced to slot 0 (open / white) so a coloured wheel-default doesn't
+    filter out the RGB mix — same logic `_set_mover_dmx` relied on, hoisted
+    out so a unit test can prove it without driving the whole calibrator."""
+    base = addr - 1
+    r, g, b = (max(0, min(255, int(v))) for v in color)
+    cm = {}
+    for ch in (profile.get("channels") or []):
+        t = ch.get("type")
+        if t and t not in cm:
+            cm[t] = ch.get("offset", 0)
+    if "red" in cm:
+        if base + cm["red"] < 512:
+            dmx[base + cm["red"]] = r
+        if "green" in cm and base + cm["green"] < 512:
+            dmx[base + cm["green"]] = g
+        if "blue" in cm and base + cm["blue"] < 512:
+            dmx[base + cm["blue"]] = b
+        if "color-wheel" in cm and base + cm["color-wheel"] < 512:
+            dmx[base + cm["color-wheel"]] = 0
+    elif "color-wheel" in cm and base + cm["color-wheel"] < 512:
+        slot = rgb_to_wheel_slot(profile, r, g, b) if (r or g or b) else 0
+        dmx[base + cm["color-wheel"]] = slot
+
+
+def lamp_on(profile, dmx, addr, color=None):
+    """Write all intensity-class channels of `profile` to lamp-ON values
+    in `dmx` at 1-based `addr`. When `color=(r, g, b)` is supplied, also
+    writes RGB / colour-wheel channels using the profile's channel map.
+
+    Pan/tilt and auxiliary channels (gobo, prism, macro, etc.) are not
+    touched — the caller wires those separately around this helper."""
+    if not profile:
+        # Legacy 13ch slymovehead fallback shape (mirrors `_set_mover_dmx`'s
+        # no-profile branch): dimmer ch3, strobe ch4, RGB ch5-7.
+        base = addr - 1
+        if base + 3 < 512:
+            dmx[base + 3] = 255
+        if base + 4 < 512:
+            dmx[base + 4] = 0
+        if color is not None:
+            r, g, b = (max(0, min(255, int(v))) for v in color)
+            if base + 5 < 512:
+                dmx[base + 5] = r
+            if base + 6 < 512:
+                dmx[base + 6] = g
+            if base + 7 < 512:
+                dmx[base + 7] = b
+        return
+    _write_intensity(profile, dmx, addr, on=True)
+    if color is not None:
+        _write_color(profile, dmx, addr, color)
+
+
+def lamp_off(profile, dmx, addr, color=None):
+    """Write all intensity-class channels of `profile` to lamp-OFF values.
+    Mirrors `lamp_on`: dimmers go to 0, strobe stays in its Open range
+    (the dimmer write is the actual blackout)."""
+    if not profile:
+        base = addr - 1
+        if base + 3 < 512:
+            dmx[base + 3] = 0
+        if base + 4 < 512:
+            dmx[base + 4] = 0
+        if color is not None:
+            r, g, b = (max(0, min(255, int(v))) for v in color)
+            if base + 5 < 512:
+                dmx[base + 5] = r
+            if base + 6 < 512:
+                dmx[base + 6] = g
+            if base + 7 < 512:
+                dmx[base + 7] = b
+        return
+    _write_intensity(profile, dmx, addr, on=False)
+    if color is not None:
+        _write_color(profile, dmx, addr, color)
+
+
 # -- Capability helper --------------------------------------------------------
 
 def _simple_cap(label, cap_type="Intensity"):
@@ -383,6 +538,13 @@ BUILTIN_PROFILES = [
         "beamWidth": 15,
         "panRange": 540,
         "tiltRange": 270,
+        # #783 PR-α — sphere-model sign metadata. +1 = "increasing DMX
+        # rotates yoke counter-clockwise viewed from above" (pan) /
+        # "increasing DMX raises the beam" (tilt). Most generic 8-bit
+        # moving heads follow this convention; profiles that wire the
+        # mechanics opposite override to -1.
+        "panSignFromDmx": 1,
+        "tiltSignFromDmx": 1,
     },
     {
         "id": "generic-moving-head-16bit",
@@ -436,6 +598,8 @@ BUILTIN_PROFILES = [
         "beamWidth": 12,
         "panRange": 540,
         "tiltRange": 270,
+        "panSignFromDmx": 1,   # #783 PR-α — see generic-moving-head note
+        "tiltSignFromDmx": 1,
     },
     {
         "id": "movinghead-150w-12ch",
@@ -518,6 +682,21 @@ BUILTIN_PROFILES = [
         "beamWidth": 3,
         "panRange": 540,
         "tiltRange": 180,
+        # #783 PR-α — empirical from 2026-04-29 fid 17 Home wizard:
+        # operator drove panMovedDirection="right" with +10922 DMX delta
+        # from home, beam swept stage-+X. With rotation=[0,0,0] that
+        # matches the "+DMX → +panDeg-internal" default convention.
+        "panSignFromDmx": 1,
+        # Empirical: operator drove tiltMovedDirection="down" with
+        # +32768 delta from home (which sat at tiltDmx16=0). +DMX moved
+        # beam DOWN — the inverse of the "+DMX raises beam" default,
+        # because this profile parks tilt at "all the way up" (tiltDmx16
+        # = 0 = horizon-level for a ceiling mount with rotation=[0,0,0]).
+        # tiltSignFromDmx still tracks the mechanics-frame convention
+        # (does +DMX raise the beam relative to fixture-up?), kept as +1
+        # because rotation does the inversion bookkeeping. The asymmetric
+        # tilt range is parameterised via tiltUp / tiltOffsetDmx16 (#716).
+        "tiltSignFromDmx": 1,
     },
     {
         "id": "generic-spot-6ch",
@@ -749,6 +928,14 @@ class ProfileLibrary:
             # #716 — asymmetric tilt-range support.
             "tiltOffsetDmx16": p.get("tiltOffsetDmx16", 32768),
             "tiltUp": bool(p.get("tiltUp", False)),
+            # #783 PR-α — sphere-model sign metadata. Default +1 matches
+            # the most common wiring convention (increasing DMX rotates
+            # yoke CCW from above / raises the beam relative to fixture-
+            # up). Profiles missing the field fall through to +1; the
+            # SPA prompts the operator to confirm on first SMART use of
+            # an unsigned profile (PR-α follow-up).
+            "panSignFromDmx": int(p.get("panSignFromDmx", 1)),
+            "tiltSignFromDmx": int(p.get("tiltSignFromDmx", 1)),
         }
 
     def export_profiles(self, ids=None, category=None):
