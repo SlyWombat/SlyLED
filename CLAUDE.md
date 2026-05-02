@@ -1,565 +1,175 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code working in this repo. Subsystem detail (full route tables, file
+inventories, struct layouts, per-tab UI structure) lives in the source — not here.
 
 ## Target hardware
 
-- **Board:** Arduino Giga R1 WiFi
-- **FQBN:** `arduino:mbed_giga:giga`
-- **Onboard RGB LED pins:** `LEDR` (86), `LEDG` (87), `LEDB` (88) — **active-low** (LOW = on, HIGH = off)
+- **Giga R1 WiFi** — `arduino:mbed_giga:giga`. Onboard RGB on `LEDR/LEDG/LEDB` (86/87/88), **active-low**.
+- **ESP32** — `esp32:esp32:esp32` (FastLED multi-string performer).
+- **D1 Mini** — `esp8266:esp8266:d1_mini` (FastLED, ≤2 strings).
+- **ESP32-S3 (Waveshare round-LCD gyro puck)** — USB-CDC in firmware; a wedged build = no serial = no `esptool` recovery without manual BOOT-button bootloader entry. Always `esptool erase_flash` before `write_flash` between distinct builds; prefer OTA.
 
-## Build & upload commands
+## Build & upload
 
-`arduino-cli` is installed at `%LOCALAPPDATA%\Arduino\arduino-cli.exe` (not on PATH — use the full path or add it).
+`arduino-cli` is at `%LOCALAPPDATA%\Arduino\arduino-cli.exe` (not on PATH). Find ports with
+`arduino-cli board list`. Set `ARDUINO_DIRECTORIES_USER = (Get-Location).Path` so `./libraries`
+resolves before manual compile. **First-time Giga DFU upload** needs the WinUSB driver
+installed via Zadig (USB ID `2341:0366`).
 
-Find the board port:
-```powershell
-& "$env:LOCALAPPDATA\Arduino\arduino-cli.exe" board list
-```
-
-Compile and upload using the build script (auto-increments minor version):
+Standard path is the build script:
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File build.ps1 -Port COM7
 ```
 
-Or manually — set `ARDUINO_DIRECTORIES_USER` first so `./libraries` is found:
-```powershell
-$env:ARDUINO_DIRECTORIES_USER = (Get-Location).Path
-# Giga R1 WiFi (COM7):
-& "$env:LOCALAPPDATA\Arduino\arduino-cli.exe" compile --upload --port COM7 --fqbn arduino:mbed_giga:giga main
-# ESP32:
-& "$env:LOCALAPPDATA\Arduino\arduino-cli.exe" compile --fqbn esp32:esp32:esp32 main
-# D1 Mini:
-& "$env:LOCALAPPDATA\Arduino\arduino-cli.exe" compile --fqbn esp8266:esp8266:d1_mini main
-```
-
-**First-time Windows setup:** The Giga's DFU bootloader (USB ID `2341:0366`) requires the WinUSB driver installed via [Zadig](https://zadig.akeo.ie) before uploads will work. Double-press reset to enter bootloader mode, then install the driver once.
-
-**ESP32-S3 (gyro puck) USB flash — bricking-prevention rules.** The Waveshare round-LCD gyro puck implements USB-CDC in firmware (no hardware UART bridge). A wedged firmware = no USB serial = no `esptool` recovery without manual button-combo bootloader entry. Rules:
-
-1. **Always `erase_flash` before `write_flash` when switching between distinct builds** (e.g. test-firmware ↔ regular gyro firmware). Two builds can have the same merged-binary sha256 yet different bootloader/partition-table layouts; landing one on top of the other without erase leaves `ota_data` markers + partition state inconsistent → dark boot.
-2. **Prefer OTA over USB whenever the device is on WiFi.** OTA uses the dual-partition scheme + `otaConfirmBoot()`'s 60-s rollback timer — a bad image auto-reverts. USB `write_flash` has no rollback.
-3. **Flash from `firmware/<board>/main.ino.merged.bin` (just-built), not from `dist/` (cached snapshot).** `dist/` is for distribution; re-flashing the dev rig from a stale cached binary built against a different SDK version risks the same partition mismatch.
-4. **Manual-bootloader recovery on the Waveshare ESP32-S3 1.28″:** hold the BOOT button, press+release RESET (or unplug+replug USB while holding BOOT), release BOOT. LCD stays dark in download mode — that's expected. Then `esptool erase_flash` followed by `write_flash` of a known-good bin recovers a wedged device.
-5. **For production fleets**: USB-flash only at first-time provisioning. After that, OTA-only via `firmware/registry.json` + per-firmware GitHub release tags (`gyro-vX.Y.Z`).
-
-**Versioning — two independent version tracks:**
-- **Firmware version** (`main/version.h`): `APP_MAJOR` / `APP_MINOR` / `APP_PATCH`. Only changes when firmware code (`.ino`, `.h`, `.cpp`) changes. `build.ps1` increments `APP_MINOR` on compile+upload. Firmware registry (`firmware/registry.json`) tracks firmware versions per board.
-- **App version** (orchestrator + Android): Set in `desktop/shared/parent_server.py` (`VERSION`), `android/app/build.gradle.kts` (`versionName`/`versionCode`), `desktop/windows/installer.iss` (`AppVersion`). Changes on app/SPA/server releases. Independent of firmware version.
+**Versioning — two independent tracks:**
+- **Firmware** (`main/version.h`, per-board entries in `firmware/registry.json`): only bumps when firmware code changes. `build.ps1` increments `APP_MINOR` on compile+upload.
+- **App** (orchestrator + Android — `desktop/shared/parent_server.py` `VERSION`, `android/app/build.gradle.kts`, `desktop/windows/installer.iss`): bumps on app/SPA/server releases.
 
 ## Critical hardware quirks
 
-- **Never use `analogWrite()`** on the onboard LED pins — it crashes Mbed OS (symptom: red LED blinks 4 fast + 4 slow).
-- **Use `digitalWrite()` only.** For smooth dimming/fading, implement software PWM: toggle pins in a tight loop with `delayMicroseconds()`.
-- **FastLED is not reliable on the Giga R1** (crashes/compatibility issues). The current sketch uses custom `hueToRGB()` + software PWM instead.
+- **Never `analogWrite()` the Giga onboard LED pins** — crashes Mbed OS (4 fast + 4 slow red blink). Use `digitalWrite()` + software PWM.
+- **FastLED is unreliable on the Giga R1.** The Giga Child uses custom `hueToRGB()` + software PWM (`GigaLED.h/cpp`).
+- **ESP32: never `noInterrupts()` around `FastLED.show()`** — RMT handles WS2812B timing; disabling interrupts with WiFi active triggers Interrupt WDT on CPU1. Only D1 Mini needs `noInterrupts()` (bit-banged). `showSafe()` is board-split.
+- **ESP32: FastLED init must happen after WiFi/config loads** (per-string GPIO comes from NVS). D1 Mini inits FastLED before WiFi (hardcoded GPIO 2).
+- **`WiFiClient::print()` silently truncates** at ~280–400 bytes on the Giga. Data past the limit is dropped permanently — `flush()` does not recover it. Use `spa(WiFiClient&, const char*)` in `Parent.cpp` for any string > ~256 bytes.
+- **Mbed auto-prototype gen** fails on `enum` parameters — use `uint8_t` and cast internally. Sketch-level functions must omit `static`.
+- **`Serial.print()` blocks forever** on Mbed if no CDC terminal is attached — guard with `if (Serial)`.
+- **`WiFi.setHostname()`** must be called *before* `WiFi.begin()` so DHCP option 12 carries it.
+- **`rtos::Thread` requires `#include <mbed.h>`** (not pulled by Arduino.h on Giga). `volatile bool` is sufficient for cross-thread flags on Cortex-M7.
+- **Never name a sketch header `Network.h`** on ESP32 core 3.x — silently shadows the core's `Network.h` and breaks `WiFiGeneric.h`. Use `NetUtils.h` etc.
 
 ## System architecture (three-tier)
 
 ```
-The Orchestrator (Windows/Mac Flask)  ← primary design + control UI + firmware manager
-    desktop/shared/parent_server.py
-    desktop/shared/firmware_manager.py
-    desktop/shared/spa/              ← 7-tab SPA (22 files: HTML shell + 16 JS modules + CSS)
-    desktop/windows/run.ps1  (Windows launcher)
-    desktop/mac/run.sh        (Mac launcher)
-         │  UDP port 4210 binary protocol v4
-         ▼
-Performers (ESP32 / D1 Mini / Giga Child)  ← LED execution nodes
-    (managed via Setup tab, UDP PING/PONG/ACTION/LOAD_STEP)
-         │
-Camera Nodes (Orange Pi / Raspberry Pi)    ← video capture nodes
-    firmware/orangepi/camera_server.py
-    (Flask HTTP :5000 + UDP PONG :4210, deployed via SSH+SCP from Firmware tab)
+Orchestrator (Windows/Mac Flask)         desktop/shared/parent_server.py
+  primary design + control UI + firmware mgr; 7-tab SPA in desktop/shared/spa/
+       │  UDP 4210 binary protocol v4
+       ▼
+Performers (ESP32 / D1 Mini / Giga Child)   main/main.ino (board-gated)
+  LED execution nodes; PING/PONG/ACTION/LOAD_STEP
+       │
+Camera Nodes (Linux SBC + USB V4L2 cam)     firmware/orangepi/camera_server.py
+  Flask :5000 + UDP PONG :4210 (deployed via SSH+SCP from Firmware tab)
 ```
 
-### Camera nodes
+The **Giga R1 also compiles as a Performer** (`BOARD_GIGA_CHILD`, define `GIGA_CHILD`) using the onboard RGB via software PWM. Default Giga build (`BOARD_GIGA`) is a minimal runtime — design/control UI lives in the desktop orchestrator.
 
-Camera nodes run on any **Linux SBC running Ubuntu 22.04+ or Debian Bookworm+** with a USB V4L2 camera (Orange Pi 4A is the primary dev board; Raspberry Pi 3B+/4/5 and Orange Pi Zero 3 / 5 are confirmed-working). Pi CSI ribbon cameras are **not** supported in v1.x — USB only. The repo path is `firmware/orangepi/` for historical reasons; the code is board-agnostic. See `docs/SUPPORTED_HARDWARE.md` for the full compatibility matrix. Firmware is a Python Flask server (`firmware/orangepi/camera_server.py`) that responds to UDP PING with PONG (same binary protocol v4) and serves HTTP endpoints on port 5000:
+**Camera nodes:** Ubuntu 22.04+ / Debian Bookworm+ on any Linux SBC (Orange Pi 4A primary; RPi 3B+/4/5 and Orange Pi Zero 3/5 confirmed). USB V4L2 only — Pi CSI ribbon not supported in v1.x. Repo path is `firmware/orangepi/` for historical reasons; code is board-agnostic. Each USB sensor is a separate placeable fixture. Compatibility matrix in `docs/SUPPORTED_HARDWARE.md`.
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/status` | JSON status (hostname, cameras, capabilities, uptime) |
-| GET | `/config` | HTML config SPA (dashboard + settings, detection UI) |
-| GET | `/snapshot?cam=N` | JPEG snapshot from camera N (OpenCV → fswebcam fallback) |
-| POST | `/scan` | Object detection — YOLOv8n via ONNX Runtime |
-| POST | `/depth-map` | Monocular depth estimation (Depth-Anything-V2) |
-| POST | `/point-cloud` | Generate 3D point cloud from depth + camera |
-| POST | `/beam-detect` | Fast beam spot detection (for calibration) |
-| POST | `/beam-detect/center` | Center beam of multi-beam fixture |
-| POST | `/dark-reference` | Capture dark reference frame |
-| POST | `/track/start` | Start continuous person tracking |
-| POST | `/track/stop` | Stop tracking |
-| GET | `/track/status` | Tracking state |
-| GET | `/health` | Health check |
+**"Surfaces" was renamed to "Objects"** across all platforms. Use `/api/objects` only.
 
-**Orchestrator calibration API routes (served by `desktop/shared/parent_server.py`):**
+## Rotation convention (#586, #600)
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | `/api/calibration/mover/<fid>/start` | Start unified mover calibration (background, accepts `mode=smart` for #720 SMART) |
-| GET | `/api/calibration/mover/<fid>/status` | Poll calibration progress |
-| POST | `/api/calibration/mover/<fid>/cancel` | Abort running calibration (blackout + release lock) |
-| GET | `/api/calibration/mover/<fid>` | Get saved calibration data |
-| DELETE | `/api/calibration/mover/<fid>` | Delete calibration |
-| POST | `/api/calibration/mover/<fid>/aim` | Aim using calibration model — SMART path when present, legacy grid as fallback |
+`fixture.rotation = [rx, ry, rz]` degrees in stage space, axis-letter-matched to Z-up:
 
-**SMART moving-head calibration (#720) — additional routes:**
+- `rx` — **pitch** (about X). `rx > 0` aims **down** (forward axis tips toward stage -Z).
+- `ry` — **roll**  (about Y, stage-forward). `ry > 0` rotates the image clockwise as seen from behind.
+- `rz` — **yaw / pan** (about Z, stage-up). `rz > 0` aims toward +X (stage-left).
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/fixtures/<fid>/home` | Read Home + Home-Secondary anchors |
-| POST | `/api/fixtures/<fid>/home` | Save Home primary; optional `secondary` block atomically |
-| POST | `/api/fixtures/<fid>/home/secondary` | Save just the Home-Secondary block (operatorTiltDeg) |
-| POST | `/api/fixtures/<fid>/home/secondary/prepare` | Server-side slew to computed secondary pose; returns DMX values + profile envelope |
-| DELETE | `/api/fixtures/<fid>/home` | Clear Home primary + secondary atomically |
-| GET | `/api/fixtures/<fid>/coverage` | Coverage cone + floor-projection polygon |
-| POST | `/api/mover/<fid>/aim-angles` | Aim by fixture-internal `(panDeg, tiltDeg)`. Per #738 angular control is exact (profile spec + operator-confirmed sign + home anchor) — response is `{ok, panDmx16, tiltDmx16}`, no `confidence` field. Returns 400 `fixture_not_calibrated` when Home + Secondary aren't set. |
-| GET | `/api/calibration/mover/<fid>/smart/preview` | Working area + 16-point probe grid preview |
-| GET | `/api/calibration/mover/<fid>/smart/validate/state` | Marker queue state during validation pass |
-| POST | `/api/calibration/mover/<fid>/smart/validate/aim` | Slew to a marker via the staged SMART model |
-| POST | `/api/calibration/mover/<fid>/smart/validate/confirm` | Operator yes/no per marker; commit gate |
+Shared by DMX fixtures *and* cameras. **Never read `rotation[1]` or `rotation[2]` directly** — route every read through `desktop/shared/camera_math.py::rotation_from_layout(rot) → (tilt, pan, roll)`. Canonical matrix from `build_camera_to_stage(tilt, pan, roll)`. SPA mirror helper is `rotationFromLayout(rot)` in `spa/js/app.js`. Persisted data carries `layout.rotationSchemaVersion = 2`; startup + `/api/project/import` migrate pre-#600 files.
 
-- **SMART pipeline:** Home Wizard captures Home + Home-Secondary (PR-1, redesigned #730 to direction-only L/R + D/U with retry). `coverage_math.py` is the canonical IK + 2-pair affine estimate (PR-1.5; magnitudes from profile envelope, sign from operator's binary direction calls — robust near vertical). Working area = coverage cone ∩ camera-visible floor (PR-3). Bound-and-probe loop collects samples (PR-4). LSQ solver fits the corrected model with confidence ladder (PR-5). ArUco marker validation pass commits the calibration (PR-6).
-- **SMART calibration record** in `mover_calibrations.json`: `{method:"smart", version:3, model:{panDmxPerDeg, tiltDmxPerDeg, panSign, tiltSign, panBiasDmx, tiltBiasDmx, homePanDmx16, homeTiltDmx16}, residuals:{rmsMm, maxMm, perPoint}, confidence:"low"|"medium"|"high", samples, timestamp}`. Pre-SMART records carry `legacyMethod` (set by startup migration) and surface `needsSmartRecal: true` in the cal-status response.
+## Angular-aim convention (#783)
 
-- **Systemd service:** `slyled-cam` for auto-start on boot (tracked in `firmware/orangepi/slyled-cam.service`)
-- **Multi-camera support:** USB cameras only (V4L2). Filters SoC/ISP video nodes (sunxi-vin, bcm2835-isp). Pi CSI ribbon cameras not supported in v1.x.
-- **Object detection:** `firmware/orangepi/detector.py` — YOLOv8n ONNX model via onnxruntime (falls back to OpenCV DNN). Model deployed via SCP (`models/yolov8n.onnx`, 12 MB, gitignored). Returns bounding boxes with labels and confidence scores.
-- **Config page:** Per-camera cards with Capture Frame + Detect Objects buttons, threshold slider, resolution toggle (320/640), auto-refresh, canvas overlay with bounding boxes
-- **Depth estimation:** `firmware/orangepi/depth_estimator.py` — Depth-Anything-V2 small (95 MB ONNX). 6.5s on ARM. Produces relative depth maps and 3D point clouds.
-- **Beam detection:** `firmware/orangepi/beam_detector.py` — Color-filtered beam detection for moving head calibration. Brightness + saturation + compactness checks. 3-beam center identification.
-- **Tracking:** `firmware/orangepi/tracker.py` — Continuous person detection with proximity re-ID (500mm threshold). Pushes temporal objects to orchestrator.
-- **Deploy:** SSH+SCP from the Firmware tab in the SPA; uploads `camera_server.py`, `detector.py`, `depth_estimator.py`, `beam_detector.py`, `tracker.py`, `requirements.txt`, `slyled-cam.service`, and models. Version comparison with force-reinstall option.
-- **Per-camera fixtures:** Each USB camera sensor registers as a separate placeable fixture with own FOV, resolution, and calibration data.
-- **Rotation convention (#586, #600):** `fixture.rotation = [rx, ry, rz]` degrees in stage space, axis-letter-matched to Z-up:
-  - `rx` — **pitch** (rotation about X). `rx > 0` aims DOWN (forward/optical axis tips toward stage -Z).
-  - `ry` — **roll**  (rotation about Y, the stage-forward axis). `ry > 0` rotates the image clockwise as seen from behind the camera.
-  - `rz` — **yaw / pan** (rotation about Z, the stage-up axis). `rz > 0` aims toward +X (stage-left).
-  - Shared across DMX fixtures and cameras. **Never read `rotation[1]` or `rotation[2]` directly** — route every read through `desktop/shared/camera_math.py::rotation_from_layout(rot) → (tilt, pan, roll)`. The canonical rotation matrix is built by `build_camera_to_stage(tilt, pan, roll)`. SPA code has a mirror helper `rotationFromLayout(rot)` in `spa/js/app.js`.
-  - Persisted data carries `layout.rotationSchemaVersion = 2`. The startup path + `/api/project/import` migrate pre-#600 files on load (ry=pan, rz=roll → swap to ry=roll, rz=pan).
+Moving-head aim uses **stage-frame fixture-internal angles**, not mechanical yoke angles.
 
-**Giga board roles:** The Giga R1 compiles in two modes:
-- `BOARD_GIGA` (default) — runtime Orchestrator with minimal SPA for start/stop
-- `BOARD_GIGA_CHILD` (define `GIGA_CHILD`) — LED Performer using onboard RGB LED via software PWM (GigaLED.h/cpp provides CRGB-compatible interface)
+- **`panDeg > 0`** = beam swept toward `+X` (stage-left, matching `rz > 0` in the rotation convention above).
+- **`tiltDeg > 0`** = beam **above horizon** (toward `+Z`, sky/ceiling). **`tiltDeg < 0`** = beam **below horizon** (toward `-Z`, floor).
+- The canonical reference implementation is `desktop/shared/coverage_math.py::world_to_fixture_pt(target, fix_pos, rotation)` — `tilt_deg = atan2(mz, hypot(mx, my))`, `pan_deg = atan2(mx, my)`. Anything that produces or consumes `(panDeg, tiltDeg)` must round-trip with this function.
+- The fixture-internal-to-DMX direction (whether DMX-up rotates the yoke clockwise or CCW; whether mechanical tilt-up = beam-up for top-mount or beam-down for pendant-mount) is **profile metadata's job** (`panSignFromDmx`, `tiltSignFromDmx` on the DMX profile). Call sites and tests express angles in stage convention only — never in mechanical or DMX terms.
+- `POST /api/mover/<fid>/aim-angles {panDeg, tiltDeg}` is the canonical low-level move endpoint and obeys this convention end-to-end.
 
-### Desktop parent files
+## UDP binary protocol (port 4210)
 
-| Path | Purpose |
-|------|---------|
-| `desktop/shared/parent_server.py` | Flask server — all `/api/*` routes + UDP child protocol + WiFi + firmware API |
-| `desktop/shared/firmware_manager.py` | Board detection (VID:PID), serial version query, esptool/arduino-cli flash |
-| `desktop/shared/spa/index.html` | HTML shell (592 lines) — 7-tab SPA structure |
-| `desktop/shared/spa/css/app.css` | Extracted stylesheet (102 lines) |
-| `desktop/shared/spa/js/app.js` | Core JS (797 lines) — layout, navigation, utils, modal, init |
-| `desktop/shared/spa/js/dashboard.js` | Dashboard tab — live grid, runner status, gyro |
-| `desktop/shared/spa/js/setup-ui.js` | Setup tab — fixture CRUD, discovery, cameras, gyro config |
-| `desktop/shared/spa/js/scene-3d.js` | Three.js 3D viewport, view controls, alignment |
-| `desktop/shared/spa/js/timelines.js` | Timeline editor, preview (performance.now), bake |
-| `desktop/shared/spa/js/actions.js` | Action library, editor modal |
-| `desktop/shared/spa/js/objects-effects.js` | Stage objects, spatial effects |
-| `desktop/shared/spa/js/fixtures.js` | Fixture editor, orientation test |
-| `desktop/shared/spa/js/profiles.js` | Profile browser/editor, OFL import, community |
-| `desktop/shared/spa/js/emulation.js` | Stage preview, 3D runtime emulator |
-| `desktop/shared/spa/js/calibration.js` | Camera/mover calibration, tracking, point cloud |
-| `desktop/shared/spa/js/settings.js` | Settings, DMX engine, monitor, group control |
-| `desktop/shared/spa/js/firmware.js` | OTA, flash, ports, GitHub firmware |
-| `desktop/shared/spa/js/camera-deploy.js` | SSH config, key gen, camera deploy |
-| `desktop/shared/spa/js/show-runtime.js` | Playlist, show playback |
-| `desktop/shared/spa/js/wizard.js` | Fixture creation wizard |
-| `desktop/shared/spa/js/file-manager.js` | Project file I/O, File System API |
-| `desktop/shared/mover_control.py` | Unified mover control engine — claim/release, calibrate, orient, color |
-| `desktop/shared/data/` | JSON persistence (children, layout, runners, settings, actions, wifi) — gitignored |
-| `desktop/windows/run.ps1` | PowerShell launcher — installs deps, starts server |
-| `desktop/windows/requirements.txt` | `flask, pystray, pillow, pyserial, esptool` |
-| `desktop/mac/run.sh` | Bash launcher — installs deps, starts server |
-| `desktop/mac/requirements.txt` | `flask>=3.0` |
-| `desktop/shared/wled_bridge.py` | WLED device HTTP communication (probe, state, action mapping) |
-| `desktop/shared/bake_engine.py` | Timeline bake — spatial math, DMX scene conversion, track priority |
-| `desktop/shared/show_generator.py` | Dynamic show generation — 14 themes adapt to actual fixtures |
-| `desktop/shared/dmx_profiles.py` | DMX fixture profile library — CRUD, validation, OFL import |
-| `desktop/shared/dmx_artnet.py` | Art-Net engine — universe buffers, ArtDMX/ArtPoll output |
-| `desktop/shared/community_client.py` | Community profile server client (electricrv.ca) |
-| `firmware/registry.json` | Firmware binary registry (board, version, file) |
-| `firmware/orangepi/camera_server.py` | Camera node firmware — Flask HTTP + UDP PONG + all endpoints |
-| `firmware/orangepi/detector.py` | YOLOv8n object detection via ONNX Runtime |
-| `firmware/orangepi/depth_estimator.py` | Depth-Anything-V2 monocular depth + point cloud |
-| `firmware/orangepi/beam_detector.py` | Color-filtered beam detection for calibration |
-| `firmware/orangepi/tracker.py` | Continuous person tracking with proximity re-ID |
-| `firmware/orangepi/slyled-cam.service` | Systemd unit file for camera service |
-| `firmware/orangepi/flash.ps1` | SSH+SCP deploy script for camera nodes |
-| `desktop/shared/mover_calibrator.py` | Moving head calibration — discovery, BFS, grid, convergence |
-| `desktop/shared/space_mapper.py` | Multi-camera point cloud merge + transform |
-| `desktop/shared/surface_analyzer.py` | RANSAC floor/wall/obstacle detection from point cloud |
+8-byte header: `struct.pack("<HBBI", magic=0x534C, version=4, cmd, epoch)`.
 
-**Running on Windows:** `powershell.exe -ExecutionPolicy Bypass -File desktop\windows\run.ps1`
+| Cmd  | Name         | Direction      | Payload |
+|------|--------------|----------------|---------|
+| 0x01 | PING         | parent→child   | header only |
+| 0x02 | PONG         | child→parent   | 133 bytes (see below) |
+| 0x10 | ACTION       | parent→child   | 42 bytes (type/rgb/p16a/p8a-d + ledStart[8×u16] + ledEnd[8×u16]) |
+| 0x11 | ACTION_STOP  | parent→child   | header only |
+| 0x12 | ACTION_EVENT | child→parent   | 4 bytes (actionType, stepIndex, totalSteps, event) |
+| 0x20 | LOAD_STEP    | parent→child   | 48 bytes (idx/total/type/rgb/p16a/p8a-d/durS/delayMs + ledStart/End[8×u16]) |
+| 0x21 | LOAD_ACK     | child→parent   | 1 byte (step index) |
+| 0x22 | SET_BRIGHTNESS | parent→child | 1 byte |
+| 0x30 | RUNNER_GO    | parent→child   | 5 bytes (u32 startEpoch + u8 loopFlag) |
+| 0x31 | RUNNER_STOP  | parent→child   | header only |
+| 0x40 | STATUS_REQ   | parent→child   | header only |
+| 0x41 | STATUS_RESP  | child→parent   | 8 bytes `<BBBBI` (activeAction, runnerActive, currentStep, rssi, uptime) |
 
-**Running on Mac:** `bash desktop/mac/run.sh`
+**v3→v4:** `ledStart[]` / `ledEnd[]` upgraded uint8 → uint16 (8 entries each, +16 bytes per ACTION/LOAD_STEP). Parent accepts both v3 and v4 PONGs.
 
-### Desktop API routes
+**PONG (133 bytes / 141 total):** `hostname[10] altName[16] description[32] stringCount(1) PongStrings×8 fwMajor(1) fwMinor(1)` where `PongString = <HHBBHB>` (`ledCount, lengthMm, ledType, cableDir, cableMm, stripDir`). `cableDir` bit 0 = folded.
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET/POST | `/api/children` | List / add performer nodes |
-| GET | `/api/children/<id>/status` | Poll performer via UDP STATUS |
-| DELETE/POST | `/api/children/<id>` | Remove / refresh performer |
-| POST | `/api/children/<id>/reboot` | Remote reboot performer via HTTP |
-| GET | `/api/children/discover` | Broadcast PING, return unregistered performers |
-| GET/POST | `/api/children/export` | Bulk export/import JSON |
-| GET/POST | `/api/layout` | LED layout config |
-| GET/POST | `/api/settings` | App settings (dark mode, runnerLoop, etc.) |
-| POST | `/api/action` | Send ACTION packet to performer (9 types) |
-| POST | `/api/action/stop` | Send STOP to all performers |
-| GET/POST | `/api/actions` | List / create action presets (library) |
-| GET/PUT/DELETE | `/api/actions/<id>` | Get / update / delete action preset |
-| GET/POST | `/api/runners` | List / create runners |
-| GET/PUT/DELETE | `/api/runners/<id>` | Get / update / delete runner |
-| POST | `/api/runners/<id>/compute` | Compute runner steps (canvas-scoped delays) |
-| POST | `/api/runners/<id>/sync` | Sync runner to performer via LOAD_STEP |
-| POST | `/api/runners/<id>/start` | Start runner on performer (with loop flag) |
-| GET | `/api/runners/live` | Per-child live action state (from pushed ACTION_EVENTs) |
-| POST | `/api/runners/stop` | Stop all runners |
-| GET/POST | `/api/wifi` | WiFi credential management (encrypted storage) |
-| GET | `/api/firmware/ports` | List COM ports with board detection |
-| POST | `/api/firmware/query` | Serial version + WiFi hash query |
-| GET | `/api/firmware/registry` | List available firmware binaries |
-| POST | `/api/firmware/detect` | Detect chip type via esptool |
-| POST | `/api/firmware/flash` | Flash firmware (background thread) |
-| GET | `/api/firmware/flash/status` | Poll flash progress |
-| GET | `/api/cameras/<id>/snapshot` | Proxy JPEG snapshot from camera node |
-| GET | `/api/cameras/<id>/status` | Live status from camera node |
-| POST | `/api/cameras/<id>/scan` | Forward camera scan to camera node |
-| POST | `/api/calibration/mover/<fid>/start` | Start unified mover calibration (`mode=smart` for #720 SMART, else legacy modes) |
-| GET | `/api/calibration/mover/<fid>/status` | Poll calibration progress (returns `method`, `confidence`, `residuals`, `legacyMethod`) |
-| POST | `/api/calibration/mover/<fid>/cancel` | Abort running calibration (blackout + release lock) |
-| GET | `/api/calibration/mover/<fid>` | Get saved calibration data |
-| DELETE | `/api/calibration/mover/<fid>` | Delete calibration |
-| POST | `/api/calibration/mover/<fid>/aim` | Aim by stage XYZ — SMART path when calibrated, legacy grid as fallback |
-| GET | `/api/calibration/mover/<fid>/smart/preview` | #720 PR-3 — working area + 16-point probe grid |
-| GET | `/api/calibration/mover/<fid>/smart/validate/state` | #720 PR-6 — marker queue during validation pass |
-| POST | `/api/calibration/mover/<fid>/smart/validate/aim` | #720 PR-6 — slew to a marker via the staged SMART model |
-| POST | `/api/calibration/mover/<fid>/smart/validate/confirm` | #720 PR-6 — operator yes/no per marker; commits on all-yes |
-| POST | `/api/mover/<fid>/aim-angles` | #720 PR-1.5 + #738 — aim by fixture-internal `(panDeg, tiltDeg)`. Returns deterministic `{ok, panDmx16, tiltDmx16}` (no `confidence` — angular is exact) or 400 `fixture_not_calibrated`. |
-| GET | `/api/fixtures/<fid>/home` | #720 PR-1 — read Home + Home-Secondary anchors |
-| POST | `/api/fixtures/<fid>/home` | #720 PR-1 — save Home primary, optional `secondary` block |
-| POST | `/api/fixtures/<fid>/home/secondary` | #720 PR-1 + #730 — save just the Home-Secondary block (direction-only shape) |
-| POST | `/api/fixtures/<fid>/home/secondary/prepare` | #720 PR-1 + #730 — slew per-axis (`{axis: "pan"|"tilt"}`), return DMX values + signed offset |
-| POST | `/api/fixtures/<fid>/home/secondary/retry` | #730 — re-slew the requested axis without committing |
-| DELETE | `/api/fixtures/<fid>/home` | #720 PR-1 — clear primary + secondary atomically |
-| GET | `/api/fixtures/<fid>/coverage` | #720 PR-2 — coverage cone + floor polygon |
-| GET/POST | `/api/aruco/markers` | List / upsert surveyed ArUco marker registry (#596) |
-| DELETE | `/api/aruco/markers/<id>` | Remove a surveyed marker |
-| GET | `/api/fixtures/live` | Per-fixture live output state (RGB, dimmer, pan/tilt, effect) |
-| GET/POST | `/api/show/playlist` | Ordered timeline playlist + loop setting |
-| POST | `/api/show/start` | Start sequential show playback (all timelines) |
-| POST | `/api/show/stop` | Stop show playback |
-| GET | `/api/show/status` | Sequential playback status (current timeline, progress) |
-| GET | `/api/project/export` | Bundle ALL state into `.slyshow` project file |
-| POST | `/api/project/import` | Load complete project file, replace ALL state |
-| GET | `/api/project/name` | Current project name |
-| POST | `/api/project/name` | Set project name |
-| POST | `/api/reset` | Factory reset all data |
-| POST | `/api/shutdown` | Terminate parent process |
+`wifiRssi` is stored as `uint8_t` absolute magnitude (e.g. 69 → -69 dBm); check `> 0`.
 
-**Naming:** The "Surfaces" concept has been renamed to **"Objects"** across all platforms. Use `/api/objects` only — the `/api/surfaces` alias has been removed.
+**Per-board limits** (`MAX_STR_PER_CHILD = 8` is a *protocol* constant — all wire structs are sized for 8 strings regardless of board):
 
-### Unified mover control (gyro + Android)
+| Board               | `CHILD_MAX_STRINGS` | Storage                            |
+|---------------------|---------------------|------------------------------------|
+| D1 Mini             | 2                   | EEPROM (flash-backed)              |
+| ESP32               | 8                   | NVS Preferences (`"slyled"` ns)    |
+| Giga Child          | 1                   | NVS Preferences; 1 onboard RGB LED |
 
-Both ESP32-S3 gyro boards and Android phones control moving heads through a single `MoverControlEngine` (`desktop/shared/mover_control.py`). Key concepts:
+## Cal-pipeline change checklist (#733)
 
-- **Claim/Release**: Only one device controls a mover at a time. TTL auto-release (30s).
-- **Calibrate (hold-to-align)**: User holds calibrate button → server captures device orientation + current mover pan/tilt as reference pair. On release, device delta maps to mover delta.
-- **Orient**: 20fps updates → delta from reference → normalized pan/tilt → profile-aware DMX.
-- **Color**: RGB auto-resolved to color-wheel slot for color-wheel fixtures.
+Any PR touching `mover_calibrator.py`, `coverage_math.py`, `parent_server.py` cal routes,
+`mover_control.py`, `surface_analyzer.py` cal helpers, or `dmx_profiles.py` channel-map shape **must**:
 
-| API | Purpose |
-|-----|---------|
-| POST `/api/mover-control/claim` | Claim a mover (device exclusivity) |
-| POST `/api/mover-control/release` | Release a mover |
-| POST `/api/mover-control/start` | Turn on light, enter streaming |
-| POST `/api/mover-control/calibrate-start` | Capture reference orientation + position |
-| POST `/api/mover-control/calibrate-end` | Lock reference, resume streaming |
-| POST `/api/mover-control/orient` | Orientation update (20fps) |
-| POST `/api/mover-control/color` | Set beam color |
-| GET `/api/mover-control/status` | Active claims status |
+1. Run `python tools/emulate_smart_pipeline.py --verbose` against `tests/fixtures/cal/corpus.json` and confirm exit 0.
+2. Add a corpus case if the PR introduces a new failure mode.
+3. Land the test alongside the fix in the same commit.
 
-ESP32 gyro uses UDP (CMD_GYRO_ORIENT 0x60, CMD_GYRO_CALIBRATE 0x64) → server translates to engine calls.
-Android uses HTTP POST to the same endpoints.
+The weekly `tests/regression/run_all.py` includes the emulator (`test_smart_pipeline_emulator.py`).
 
-### UDP binary protocol (port 4210)
+## Tests
 
-All packets share an 8-byte header: `struct.pack("<HBBI", magic=0x534C, version=4, cmd, epoch)`.
+All commands run from project root. Wrap with `powershell.exe -Command "python -X utf8 …"` on Windows.
 
-| Cmd byte | Name | Direction | Payload |
-|---------|------|-----------|---------|
-| 0x01 | PING | parent→child | header only |
-| 0x02 | PONG | child→parent | 133 bytes — see PONG layout below |
-| 0x10 | ACTION | parent→child | 42 bytes: type(1)+r/g/b(3)+p16a(2)+p8a-p8d(4)+ledStart[8×uint16](16)+ledEnd[8×uint16](16) |
-| 0x11 | ACTION_STOP | parent→child | header only |
-| 0x12 | ACTION_EVENT | child→parent | 4 bytes (actionType, stepIndex, totalSteps, event) |
-| 0x20 | LOAD_STEP | parent→child | 48 bytes: idx/total/type/r/g/b/p16a/p8a-d/durS/delayMs(16) + ledStart[8×uint16](16)+ledEnd[8×uint16](16) |
-| 0x21 | LOAD_ACK | child→parent | 1 byte (step index) |
-| 0x22 | SET_BRIGHTNESS | parent→child | 1 byte (brightness 0–255) |
-| 0x30 | RUNNER_GO | parent→child | 5 bytes (uint32_t startEpoch + uint8_t loopFlag) |
-| 0x31 | RUNNER_STOP | parent→child | header only |
-| 0x40 | STATUS_REQ | parent→child | header only |
-| 0x41 | STATUS_RESP | child→parent | 8 bytes `<BBBBI` (activeAction, runnerActive, currentStep, rssi, uptime) |
+| Suite                                  | Coverage |
+|----------------------------------------|----------|
+| `tests/test_parent.py`                 | Parent API, action types, WLED, runners, schema (523 assertions) |
+| `tests/test_spatial_math.py`           | Coordinate transforms, pan/tilt math (47) |
+| `tests/test_mover_calibration.py`      | Initial aim, grid interp, DMX buffer (99) |
+| `tests/test_beam_detector.py`          | Synthetic frame detection (35, requires OpenCV) |
+| `tests/test_surface_analyzer.py`       | RANSAC walls, obstacle clustering (42) |
+| `tests/test_unified_3d.py` etc.        | Playwright visual checks |
+| `tests/regression/run_all.py`          | Stage setup → layout → bake → 3D runtime end-to-end |
+| `tests/test_camera.py [host]`          | Camera node firmware (81) |
+| `tests/test_child.py 192.168.10.x`     | Child firmware (factory-reset before/after) |
 
-**v3→v4 change:** `ledStart[]` and `ledEnd[]` upgraded from uint8 to uint16 arrays (8 entries each), adding 16 bytes to ACTION and LOAD_STEP payloads. Parent accepts both v3 and v4 PONGs for backward compatibility.
+Discover children first via `python tests/discover.py`. Dev GUI for browsing / running suites
+is `python tools/devgui/server.py` → http://localhost:9090.
 
-**PONG payload (133 bytes = total packet 141):**
-```
-hostname[10]  altName[16]  description[32]  stringCount(1)  PongStrings×8  fwMajor(1)  fwMinor(1)
-PongString = <HHBBHB>: ledCount(2) + lengthMm(2) + ledType(1) + cableDir(1) + cableMm(2) + stripDir(1) = 9 bytes
-8 × 9 = 72  →  10+16+32+1+72+2 = 133
-cableDir bit 0 = folded flag (string folds back on itself)
+## Code constraints (firmware)
+
+Sketch code must be tight on heap and Flash:
+
+- **Zero dynamic allocation.** No `malloc`, `new`, or `String` — fixed-size `char` buffers.
+- **`F()` macro** for every literal (forces Flash, not SRAM).
+- **Smallest types:** `uint8_t`/`int8_t` for ≤255 values, `const`/`constexpr` for fixed values.
+- **Integer math only** — no `float`/`double` in hot paths.
+- **Refactor when a file passes 500 lines** into `.h`/`.cpp` modules.
+- **Buffer responses, minimize `client.print()` calls** to reduce TCP packet count.
+
+Web UI is a strict SPA: the device is a JSON API, the browser owns rendering.
+
+## Android
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot'
+$env:ANDROID_SDK_ROOT = 'C:\Android\Sdk'
+cd android; .\gradlew.bat assembleDebug --no-daemon
 ```
 
-**wifiRssi** is stored as `uint8_t` absolute magnitude (e.g. 69 → -69 dBm). Check `> 0`.
-
----
-
-## Child node architecture (ESP32 / D1 Mini / Giga Child)
-
-The same `main/main.ino` sketch compiles for ESP32, D1 Mini, and Giga Child via `#ifdef BOARD_CHILD` (which includes both `BOARD_FASTLED` and `BOARD_GIGA_CHILD`).
-
-### Per-board limits
-
-| Board | `CHILD_MAX_STRINGS` | EEPROM / storage |
-|-------|---------------------|-----------------|
-| D1 Mini (`BOARD_D1MINI`) | 2 | EEPROM (flash-backed) |
-| ESP32 (`BOARD_ESP32`) | 8 | NVS Preferences (`"slyled"` namespace) |
-| Giga Child (`BOARD_GIGA_CHILD`) | 1 | NVS Preferences; 1 onboard RGB LED (NUM_LEDS=1) |
-
-`MAX_STR_PER_CHILD = 8` is a **protocol constant** — all protocol structs (PongPayload, ActionPayload, LoadStepPayload) are sized for 8 strings regardless of board. `CHILD_MAX_STRINGS` only affects EEPROM layout and the config UI.
-
-### HTTP routes (child)
-
-| Method | Path | Response |
-|--------|------|----------|
-| GET | `/` | 302 redirect → `/config` |
-| GET | `/status` | JSON: `{"role":"child","hostname":…,"action":…,"udpRx":…}` |
-| GET | `/config` | 3-tab HTML SPA |
-| POST | `/config` | 200 JSON (saves to EEPROM; auto-reboots if pin changed) |
-| POST | `/config/reset` | 303 redirect → `/config` (factory reset) |
-| POST | `/reboot` | 200 JSON then ESP.restart() / NVIC_SystemReset() |
-| GET | `/test/pin?p=16` | ESP32 only: flash single pixel R/G/B on GPIO (neopixelWrite) |
-| GET | `/favicon.ico` | 404 |
-
-### Config SPA (3 tabs)
-
-- **Dashboard** — hostname, altName, stringCount (server-rendered); live action status (XHR poll `/status` every 3 s)
-- **Settings** (inside `<form id='cf' action='/config' method='POST'>`): `name='an'` altName, `name='desc'` description, `name='sc'` string count (1..`CHILD_MAX_STRINGS`)
-- **Config** — string selector dropdown; per-string fieldsets with `lc/lm/lt/sd/dp` (ledCount, lengthMm, ledType, stripDir, dataPin); GPIO pin dropdown (ESP32 only) with Test button; auto-reboots on pin change
-- **Factory Reset** — separate `<form id='rf' action='/config/reset' method='POST'>` (never nested inside `cf`)
-
-### ChildSelfConfig struct
-
-```cpp
-struct ChildSelfConfig {
-    char hostname[HOSTNAME_LEN];        // "SLYC-XXXX" (MAC-derived)
-    char altName[CHILD_NAME_LEN];       // defaults to hostname if blank
-    char description[CHILD_DESC_LEN];
-    uint8_t stringCount;
-    ChildStringCfg strings[CHILD_MAX_STRINGS];
-};
-struct ChildStringCfg {
-    uint16_t ledCount; uint16_t lengthMm;
-    uint8_t  ledType;  uint8_t  flags;     // bit 0 = folded
-    uint16_t cableMm;                       // cableMm always 0
-    uint8_t  stripDir;
-    uint8_t  dataPin;                       // GPIO pin (ESP32 only; 0 = default GPIO 2)
-};
-```
-
-`EEPROM_MAGIC = 0xA8` — bump when struct layout changes to force re-initialisation.
-
-### Test suite (parent — 523 assertions)
-
-```
-powershell.exe -Command "python -X utf8 tests/test_parent.py"
-```
-
-Covers all API endpoints, all 14 action types, WLED bridge mapping, children CRUD, runners lifecycle, settings, WiFi, layout, action dispatch, schema versioning (v3 export, future version rejection), edge cases, and factory reset.
-
-### Test suites (calibration — 223 assertions)
-
-```
-powershell.exe -Command "python -X utf8 tests/test_spatial_math.py"          # 47 assertions
-powershell.exe -Command "python -X utf8 tests/test_mover_calibration.py"     # 99 assertions
-powershell.exe -Command "python -X utf8 tests/test_beam_detector.py"         # 35 (requires OpenCV)
-powershell.exe -Command "python -X utf8 tests/test_surface_analyzer.py"      # 42 assertions
-```
-
-Covers: coordinate transforms, pan/tilt math, grid interpolation, Newton inverse, RANSAC floor/wall detection, obstacle clustering, beam detection with synthetic frames, DMX buffer layout.
-
-### Cal-pipeline change checklist (#733)
-
-Any PR that touches the cal pipeline (`mover_calibrator.py`, `coverage_math.py`, `parent_server.py` cal routes, `mover_control.py`, `surface_analyzer.py` cal helpers, `dmx_profiles.py` channel-map shape) **must**:
-
-1. Run `python tools/emulate_smart_pipeline.py --verbose` against `tests/fixtures/cal/corpus.json` and confirm exit 0 — the emulator mirrors the SMART pipeline at HEAD and asserts non-degeneracy on every geometric output.
-2. Add a corpus case if the PR introduces a new failure mode (e.g. a new fixture geometry, a new coverage edge case). The corpus is the spec for "what we never want to ship again."
-3. Land the test alongside the fix in the same commit. Tests-first if the fix is a regression of an existing case.
-
-The weekly `tests/regression/run_all.py` includes the emulator (`test_smart_pipeline_emulator.py` wrapper). A red emulator fails the regression run.
-
-### Test suites (visual — Playwright)
-
-```
-powershell.exe -Command "python -X utf8 tests/test_unified_3d.py"           # 17 assertions
-powershell.exe -Command "python -X utf8 tests/test_edit_rotation.py"        # 17 assertions
-powershell.exe -Command "python -X utf8 tests/test_aruco_click.py"          # 9 assertions
-powershell.exe -Command "python -X utf8 tests/test_fixture_grid.py"        # 24 assertions
-```
-
-Covers: 3D viewport on Dashboard/Runtime/Layout, tab switching round-trip, fixture edit rotation persistence, ArUco marker modal.
-
-### Regression tests (weekly — tests/regression/)
-
-```
-powershell.exe -Command "python -X utf8 tests/regression/run_all.py"        # runs all 4
-powershell.exe -Command "python -X utf8 tests/regression/test_stage_setup.py"    # 11
-powershell.exe -Command "python -X utf8 tests/regression/test_layout_edit.py"    # 8
-powershell.exe -Command "python -X utf8 tests/regression/test_timeline_bake.py"  # 10
-powershell.exe -Command "python -X utf8 tests/regression/test_mover_tracking.py" # 11
-```
-
-End-to-end: fixture creation → layout → timeline → bake → show playback → 3D runtime verification. Each test is self-contained with own server + factory reset.
-
-### Developer Management GUI
-
-```
-python tools/devgui/server.py    # http://localhost:9090
-```
-
-Standalone Flask app for running tests (auto-discovery, SSE live output), building releases (PyInstaller + Inno Setup), version dashboard (10 tracked sources), manual build (EN/FR), and website deploy.
-
-### Test suite (child)
-
-```
-powershell.exe -Command "python -X utf8 tests/test_child.py 192.168.10.x"
-# D1 Mini (max 2 strings — default)
-# For ESP32: python tests/test_child.py 192.168.10.x 80 4210 8
-```
-
-Discover children first:
-```
-powershell.exe -Command "python tests/discover.py"
-```
-
-Tests restore factory state before and after string config tests. If a test run is interrupted, factory-reset the child manually via `POST /config/reset`.
-
-### Test suite (camera — 81 assertions)
-
-```
-powershell.exe -Command "python -X utf8 tests/test_camera.py [host] [http_port] [udp_port]"
-```
-
-Covers camera node HTTP endpoints, UDP PONG response, snapshot capture, object detection `/scan`, config page UI, and detection overlay controls.
-
----
-
-## Sketch module structure
-
-The sketch is split into modular `.h`/`.cpp` files, all in `main/`. `main/main.ino` contains only `setup()` and `loop()`.
-
-### Module files
-
-| File | Board(s) | Purpose |
-|------|----------|---------|
-| `BoardConfig.h` | all | Board detection macros (`BOARD_GIGA`, `BOARD_ESP32`, `BOARD_D1MINI`, `BOARD_FASTLED`), board-specific includes, LED hardware constants |
-| `Protocol.h` | all | UDP wire-protocol constants and packed structs (`UdpHeader`, `PongPayload`, `ActionPayload`, `LoadStepPayload`, …) |
-| `Globals.h` / `Globals.cpp` | all | Shared globals: `WiFiServer server`, `WiFiUDP ntpUDP/cmdUDP`, `udpBuf[]`, NTP state |
-| `NetUtils.h` / `NetUtils.cpp` | all | `connectWiFi()`, `syncNTP()`, `currentEpoch()`, `printStatus()` |
-| `HttpUtils.h` / `HttpUtils.cpp` | all | `sendBuf()`, `sendJsonOk()`, `sendJsonErr()`, `sendStatus()` |
-| `JsonUtils.h` / `JsonUtils.cpp` | all | `jsonGetInt()`, `jsonGetStr()` — lightweight JSON field extraction |
-| `UdpCommon.h` / `UdpCommon.cpp` | all | `handleUdpPacket()`, `pollUDP()`, `serveClient()`, `handleClient()` — full HTTP route dispatch and UDP receive loop |
-| `Child.h` / `Child.cpp` | ESP32, D1 Mini, Giga Child | Child config structs, EEPROM load/save, `sendPong()`, `sendStatusResp()`, `sendActionEvent()`, `esp32InitLeds()` (ESP32 multi-pin FastLED init), `sendChildConfigPage()`, `handlePostChildConfig()`, `handleFactoryReset()` |
-| `ChildLED.h` / `ChildLED.cpp` | ESP32, D1 Mini, Giga Child | `applyRunnerStep()` (shared), `ledTask()` (ESP32 FreeRTOS Core 0), `updateLED()` (D1 Mini non-blocking); 14 action types with generic params |
-| `GigaLED.h` / `GigaLED.cpp` | Giga Child | CRGB-compatible struct, `hsv2rgb_rainbow()`, `showSafe()` (software PWM on active-low RGB pins), `fill_solid()`, random helpers |
-| `Parent.h` / `Parent.cpp` | Giga | Parent data structures (`ChildNode`, `Runner`, `AppSettings`, …), all `/api/*` handlers, `sendParentSPA()`, runner compute/sync/start/stop |
-
-All board-specific headers use both include guards (`#ifndef FILE_H`) and content guards (`#ifdef BOARD_XXX`) so they are safe to include unconditionally on any board.
-
-### Giga HTTP routes
-
-| Method | Path | Handler |
-|--------|------|---------|
-| GET | `/` | `sendParentSPA()` — full 7-tab SPA |
-| GET | `/status` | `sendStatus()` |
-| GET/POST | `/api/children` | `sendApiChildren()` / inline IP parse → `sendPing()` |
-| GET | `/api/children/export` | `sendApiChildrenExport()` |
-| POST | `/api/children/import` | `handleApiChildrenImport()` |
-| * | `/api/children/:id` | `handleChildIdRoute()` |
-| GET/POST | `/api/layout` | `sendApiLayout()` / `handlePostLayout()` |
-| GET/POST | `/api/settings` | `sendApiSettings()` / `handlePostSettings()` |
-| POST | `/api/action` | `handleApiAction()` |
-| POST | `/api/action/stop` | `handleApiActionStop()` |
-| GET/POST | `/api/runners` | `sendApiRunners()` / `handlePostRunners()` |
-| GET/PUT/DELETE | `/api/runners/:id` | `handleRunnerIdRoute()` |
-| POST | `/api/runners/stop` | `stopAllRunners()` |
-
-### loop() per board
-
-| Board | loop() body |
-|-------|------------|
-| Giga (parent) | `printStatus()` → `pollUDP()` → periodic `sendPing(broadcast)` every 30 s → `handleClient()` → `delay(10)` |
-| Giga (child) | `printStatus()` → `pollUDP()` → `updateLED()` → `handleClient()` → `delay(10)` |
-| ESP32 | `printStatus()` → `pollUDP()` (drains ACTION_EVENT) → `handleClient()` → `delay(10)` |
-| D1 Mini | `printStatus()` → `pollUDP()` → `updateLED()` → `handleClient()` → `yield()` |
+APK lands at `android/app/build/outputs/apk/debug/app-debug.apk`. App is operator-only
+(no editing) — Stage / Control / Status tabs. Phase tracking in issues #15–#19.
 
 ## Git / GitHub
 
 - Remote: `https://github.com/SlyWombat/SlyLED`
-- After a successful upload, offer to sync: `git add . && git commit -m "<message>" && git push origin main`
-- `arduino_secrets.h` is gitignored — never commit credentials or WiFi passwords
-- Commit messages follow: `feat: <short description>`
-- **Feature tracking:** All features and enhancements are managed via [GitHub Issues](https://github.com/SlyWombat/SlyLED/issues). Reference issues in commits where applicable (e.g. `feat: mDNS discovery (closes #1)`)
-- **Releases:** Published via `gh release create` with binaries attached. App version reset to v1.0 (April 2026). Firmware versions track independently per board in `firmware/registry.json`.
-
-## Android app
-
-Native Android client at `android/`. Kotlin + Jetpack Compose + Material 3. Consumes the same REST API as the desktop SPA.
-
-**Build (from project root):**
-```powershell
-$env:JAVA_HOME = 'C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot'
-$env:ANDROID_SDK_ROOT = 'C:\Android\Sdk'
-cd android
-.\gradlew.bat assembleDebug --no-daemon
-```
-
-**APK output:** `android/app/build/outputs/apk/debug/app-debug.apk`
-
-**Structure:** `android/app/src/main/java/com/slywombat/slyled/` — data layer (Retrofit API, models, repository), DI (Hilt), UI screens (6 tabs: Dashboard, Setup, Layout, Actions, Runtime, Settings), ViewModels.
-
-**Phase tracking:** Issues #15–#19.
-
-# Arduino Web App Performance Rules
-
-## Core Architectural Principles
-- **Data-Only API**: Use the Arduino as a JSON/XML API endpoint. The web UI should be a Single Page Application (SPA) that fetches only raw data.
-- **Minimal TCP Overhead**: Consolidate `client.print()` calls. Buffer responses to reduce the number of packets sent.
-
-## Code Constraints for Memory & Speed
-- **Zero Dynamic Allocation**: Strictly avoid `malloc()`, `new`, or `String` objects to prevent heap fragmentation. Use fixed-size `char` buffers.
-- **SRAM Optimization**: Force use of the `F()` macro for all literal strings (e.g., `client.print(F("HTTP/1.1 200 OK"));`).
-- **Smallest Data Types**: Always use `uint8_t` or `int8_t` for values under 255. Use `const` or `constexpr` for all fixed values.
-- **Integer Math Only**: Avoid `float` or `double`. Use fixed-point arithmetic or integer scaling for sensor data.
-
-## AI Workflow Instructions
-- **Check Constraints First**: Before generating code, analyze SRAM and Flash impact.
-- **Refactor Cycle**: If code exceeds 500 lines, break it into modular, specialized files.
-
-## Known Arduino Giga / Mbed GCC quirks
-- **Auto-prototype generator** fails on functions whose parameters use `enum` types — use `uint8_t` in the signature and cast internally (e.g. `e.source = (LogSource)src`).
-- **`static` functions** can conflict with auto-generated prototypes — omit `static` from sketch-level functions.
-- **`Serial.print()` blocks forever** on Mbed OS if no USB CDC terminal is connected — guard every print with `if (Serial)`.
-- **`WiFi.setHostname()`** must be called *before* `WiFi.begin()` so the hostname appears in DHCP DISCOVER/REQUEST packets (option 12).
-- **Browser prefetch / favicon race**: Chrome/Edge open a second TCP connection for `favicon.ico` when loading any page. Fixed by the **SPA+AJAX architecture** — buttons use `XMLHttpRequest`, no page navigation, no favicon request on button press.
-- **`rtos::Thread` requires `#include <mbed.h>`** — not pulled in automatically by Arduino.h on the Giga.
-- **`volatile bool` for cross-thread state** — bool writes are atomic on Cortex-M7; `volatile` prevents register caching. Sufficient for simple flag sharing between two threads without a mutex.
-- **`WiFiClient::print()` silently truncates** strings longer than the internal TX buffer (~280–400 bytes on the Giga R1 WiFi). Data past the limit is **dropped permanently** — `flush()` after the call does NOT recover it. Symptom: SPA JavaScript arrives with mid-string cuts, causing browser syntax errors and pages stuck at "Loading...". **Fix**: use the `spa(WiFiClient&, const char*)` chunked-write helper (in `Parent.cpp`) for any `c.print()` call whose string exceeds ~256 bytes. Small strings (JSON responses, HTTP headers) can use `c.print()` safely.
-- **ESP32: never use `noInterrupts()` around `FastLED.show()`** — the ESP32 RMT peripheral handles WS2812B timing in hardware. Disabling interrupts with WiFi active triggers an Interrupt WDT timeout on CPU1. Only D1 Mini needs `noInterrupts()` (bit-banged output). The `showSafe()` function in `ChildLED.cpp` is split by board.
-- **ESP32: FastLED init must happen after WiFi/config loads** — `esp32InitLeds()` reads per-string GPIO pin assignments from NVS, so it runs after `connectWiFi()` → `initChildConfig()`. D1 Mini inits FastLED before WiFi (hardcoded GPIO 2).
-- **ESP32: `neopixelWrite(pin, r, g, b)`** is available in ESP32 Arduino core 3.x for driving a single WS2812B pixel on any GPIO without FastLED. Used by the `/test/pin` endpoint for GPIO testing.
-- **Never name a sketch header `Network.h`** when targeting ESP32 (Arduino core 3.x). The core ships `libraries/Network/src/Network.h` which defines `network_event_handle_t`, `NetworkEventCb`, etc. used internally by `WiFiGeneric.h`. The sketch directory is searched first, so a custom `Network.h` silently shadows the library header and causes cryptic `'network_event_handle_t' does not name a type` build failures. Use a unique name (e.g. `NetUtils.h`).
+- `arduino_secrets.h` is gitignored — never commit credentials.
+- Commits: `feat: <short description>`; reference issues (`feat: mDNS discovery (closes #1)`).
+- All features tracked in [GitHub Issues](https://github.com/SlyWombat/SlyLED/issues).
+- Releases: `gh release create` with binaries. App reset to v1.0 (April 2026); firmware tracks per-board in `firmware/registry.json`.
