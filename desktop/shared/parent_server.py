@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.36"
+VERSION = "1.7.37"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -15173,8 +15173,60 @@ _mover_engine = MoverControlEngine(
     get_default_convention=lambda: (
         _settings.get("moverControl", {}).get("orientConvention")
         if isinstance(_settings.get("moverControl"), dict) else None),
+    # #800 — park-at-home on claim transition to streaming + on
+    # release. `_park_fixture_at_home` already runs the canonical
+    # `aim.park.go_home` (pan/tilt) + `lamp_off` (intensity-class
+    # only) per #781/#782; reusing it keeps a single park primitive.
+    park_fn=lambda mid: _park_fixture_at_home(mid),
 )
 _mover_engine.start()
+
+
+def _cold_start_park_calibrated_movers():
+    """#800 — at orchestrator boot, walk every calibrated DMX mover and
+    drive it to its Home anchor. Without this the universe buffer holds
+    whatever was last on the wire (or zero / saved snapshot), and
+    fixtures sit at stale poses until an operator claims them. Runs
+    after the engine is up; non-fatal per-fixture so one broken fixture
+    can't block the rest."""
+    parked = 0
+    for f in _fixtures:
+        try:
+            if f.get("fixtureType") != "dmx":
+                continue
+            if f.get("homePanDmx16") is None or f.get("homeTiltDmx16") is None:
+                continue
+            if not f.get("homeSecondary"):
+                continue
+            _park_fixture_at_home(int(f["id"]))
+            parked += 1
+        except Exception as e:
+            log.debug("cold-start park: fid=%s failed: %s", f.get("id"), e)
+    if parked:
+        log.info("Cold-start: parked %d calibrated mover(s) at Home", parked)
+
+
+# Defer the cold-start park until the engine has settled — it lives at
+# the bottom of orchestrator init alongside the other deferred startup
+# tasks. The DMX engine has to be running before the writes hit the
+# wire; `_aim_get_engine()` returns None until then.
+def _cold_start_park_when_engine_ready():
+    """Run `_cold_start_park_calibrated_movers` once the DMX engine is
+    actually pumping. Polls every 250 ms for up to 10 s — typical
+    ArtNet bind is sub-second; the long ceiling tolerates slow boots
+    on the embedded targets."""
+    deadline = time.time() + 10.0
+    while time.time() < deadline:
+        if _aim_get_engine() is not None:
+            _cold_start_park_calibrated_movers()
+            return
+        time.sleep(0.25)
+    log.info("Cold-start park skipped: DMX engine never came up "
+             "within 10 s of orchestrator boot")
+
+
+threading.Thread(target=_cold_start_park_when_engine_ready,
+                 daemon=True, name="cold-start-park").start()
 
 # #763 — arbiter facade between the show writer and the universe buffer.
 # Reads claim state from the engine, exposes is_muted() so the playback +
@@ -15434,27 +15486,24 @@ def _mover_current_aim_stage(mover):
     """Read the mover's current pan/tilt from the universe buffer and
     convert it to a unit aim vector in stage coordinates.
 
-    Preference order (#491):
-      1. **Parametric v2 model** — closed-form forward kinematics against
-         the fitted mount + offsets. Round-trips with ``model.inverse``,
-         so calibrate-end locks against the fixture's *actual*
-         DMX-commanded aim instead of a guessed layout-forward (#510).
-      2. **Calibration grid** (v1 affine) — legacy fallback if the fit
-         failed or no v2 data yet.
-      3. **Pure ``pan_tilt_to_ray``** — assumes DMX centre = mount-local
-         forward. Used when no calibration exists at all.
+    #757 Issue B / #800 (2026-05-03): rewritten to route through the
+    new `aim.sphere.AimSphere`. Calibrate-end locks the phone's pose
+    against this stage direction; if `_mover_current_aim_stage` and
+    `mover_control._aim_to_pan_tilt` produce different stage frames
+    for the same DMX, the lock anchors against one IK and the next
+    orient packet runs against the other — head appears to "jump" on
+    release. Single-source via `AimSphere.dmx_to_aim` closes that gap.
 
-    Falls back to ``(0.5, 0.5)`` centre when the DMX buffer has no data or
-    the profile lookup fails. Decision #6 scopes v1 to movers only.
+    Falls back to a generic mount-relative ray when the fixture has
+    no Home / Secondary anchor (the sphere can't construct without
+    them) so unconfigured fixtures still produce SOMETHING the
+    calibrate path can lock against.
     """
     pan_norm = 0.5
     tilt_norm = 0.5
     pid = mover.get("dmxProfileId")
     prof = _profile_lib.channel_info(pid) if pid else None
     engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
-    # Fixture instance may have panRange/tiltRange as None — prefer the
-    # profile's declared ranges (Slymovehead = 540° pan / 180° tilt) and
-    # fall back to generic moving-head defaults only as a last resort.
     pan_range = mover.get("panRange") \
         or (prof.get("panRange") if prof else None) or 540
     tilt_range = mover.get("tiltRange") \
@@ -15481,55 +15530,41 @@ def _mover_current_aim_stage(mover):
         pan_norm = _read("pan")
         tilt_norm = _read("tilt")
 
-    # 0 — #748: SMART model OR Home + Home-Secondary 2-pair estimate.
-    # The mover-control engine's _aim_to_pan_tilt prefers this same path
-    # for angular_only fixtures. Calibrate-end captures aim_stage HERE
-    # and the next tick converts it back via the SAME IK in
-    # _aim_to_pan_tilt — pre-#748 this fell through to _pan_tilt_to_ray
-    # (step 3), which does not round-trip with angles_to_dmx for
-    # angular_only fixtures, causing pan to jump on release.
-    smart_model, _conf = _resolve_mover_model(mover.get("id"), mover)
-    if smart_model is not None:
-        try:
-            from coverage_math import dmx_to_angles, fixture_aim_to_world
+    # #757 B / #800 — single-IK path through AimSphere. Patch fixture
+    # xyz from layout (per #785 QA r2) so the sphere builds with the
+    # right position.
+    try:
+        if (prof and mover.get("homePanDmx16") is not None
+                and mover.get("homeTiltDmx16") is not None
+                and mover.get("homeSecondary")):
+            mover_xyz = dict(mover)
+            for c in (_layout.get("children") or []):
+                if c.get("id") == mover.get("id"):
+                    mover_xyz["x"] = c.get("x", 0) or 0
+                    mover_xyz["y"] = c.get("y", 0) or 0
+                    mover_xyz["z"] = c.get("z", 0) or 0
+                    break
+            from aim.routes import _get_or_build_sphere
+            sphere = _get_or_build_sphere(mover_xyz, prof)
             pan_dmx16 = int(round(pan_norm * 65535))
             tilt_dmx16 = int(round(tilt_norm * 65535))
-            pan_deg, tilt_deg = dmx_to_angles(pan_dmx16, tilt_dmx16, smart_model)
-            fix_pos = (mover.get("x", 0) or 0,
-                       mover.get("y", 0) or 0,
-                       mover.get("z", 0) or 0)
-            rot = mover.get("rotation") or [0.0, 0.0, 0.0]
-            axis_unit, _ = fixture_aim_to_world(pan_deg, tilt_deg, fix_pos, rot)
-            return axis_unit
-        except Exception as e:
-            log.debug("aim_stage SMART path failed for fid %s: %s — "
-                      "falling back to legacy", mover.get("id"), e)
+            az_deg, el_deg = sphere.dmx_to_aim(pan_dmx16, tilt_dmx16)
+            ar = math.radians(az_deg)
+            er = math.radians(el_deg)
+            cer = math.cos(er)
+            return (math.sin(ar) * cer,
+                    math.cos(ar) * cer,
+                    math.sin(er))
+    except Exception as e:
+        log.debug("aim_stage sphere path failed for fid %s: %s — "
+                  "falling back to generic ray",
+                  mover.get("id"), e)
 
-    # 1 — parametric model (preferred when calibration exists).
-    model = _get_mover_model(mover.get("id"), mover)
-    if model is not None:
-        return model.forward(pan_norm, tilt_norm)
-
-    # 2 — legacy affine grid (pre-migration fallback).
-    cal = _mover_cal.get(str(mover.get("id")))
-    if cal and cal.get("samples") and len(cal["samples"]) >= 2:
-        try:
-            from mover_calibrator import affine_stage_point
-            pt = affine_stage_point(cal["samples"], pan_norm, tilt_norm)
-            if pt is not None:
-                layout_pos = next((c for c in (_layout.get("children") or [])
-                                   if c.get("id") == mover.get("id")), None) or {}
-                fx = layout_pos.get("x", mover.get("x", 0))
-                fy = layout_pos.get("y", mover.get("y", 0))
-                fz = layout_pos.get("z", mover.get("z", 0))
-                vx, vy, vz = pt[0] - fx, pt[1] - fy, pt[2] - fz
-                mag = math.sqrt(vx*vx + vy*vy + vz*vz)
-                if mag > 1e-6:
-                    return (vx/mag, vy/mag, vz/mag)
-        except Exception:
-            pass
-
-    # 3 — no calibration; generic mount-relative IK.
+    # No Home / no Secondary / no profile → generic mount-relative IK.
+    # Used for unconfigured fixtures so calibrate has SOMETHING to
+    # lock against; behaviour-wise this returns the layout-forward
+    # vector when DMX = home-centre (which is the operator's intent
+    # before they capture a real Home anchor).
     return _pan_tilt_to_ray(
         pan_norm, tilt_norm,
         pan_range=pan_range,

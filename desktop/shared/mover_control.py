@@ -171,7 +171,7 @@ class MoverControlEngine:
                  get_engine, set_fixture_color_fn, get_remote_by_device_id,
                  get_mover_cal=None, get_mover_model=None,
                  is_calibrating=None, get_claim_ttl_s=None,
-                 get_default_convention=None):
+                 get_default_convention=None, park_fn=None):
         """
         Args:
             get_fixtures:             list of fixtures
@@ -207,6 +207,15 @@ class MoverControlEngine:
         # effect on the next claim without engine restart.
         self._get_default_convention = (
             get_default_convention or (lambda: None))
+        # #800 — `park_fn(mover_id)` drives the head to its Home anchor
+        # (and turns the lamp off, matching parent_server's
+        # `_park_fixture_at_home`). Called on `start_stream` (so the
+        # head is at home before any orient packet lands and
+        # `calibrate-end` snapshots a deterministic forward reference)
+        # and on `release` (so an idle fixture sits at home rather
+        # than the previous operator's last aim). None at unit-test
+        # time falls back to the RGB+dimmer-only blackout helper.
+        self._park_fn = park_fn
 
         self._claims = {}  # mover_id → MoverClaim
         self._lock = threading.Lock()
@@ -313,7 +322,20 @@ class MoverControlEngine:
             if remote is not None:
                 remote.set_convention(claim._prior_remote_convention)
         if blackout:
-            self._blackout_mover(mover_id)
+            # #800 — claim release parks the head at home AND turns the
+            # lamp off (operator expectation: idle = home pose, dark).
+            # Falls back to RGB+dimmer-only blackout when no `park_fn`
+            # is wired (e.g. unit tests instantiating the engine
+            # without parent_server's `_park_fixture_at_home`).
+            if self._park_fn is not None:
+                try:
+                    self._park_fn(mover_id)
+                except Exception as e:
+                    log.debug("Mover %d release park failed: %s",
+                              mover_id, e)
+                    self._blackout_mover(mover_id)
+            else:
+                self._blackout_mover(mover_id)
         log.info("Mover %d released", mover_id)
         return True
 
@@ -324,6 +346,20 @@ class MoverControlEngine:
                 return False
             claim.state = "streaming"
             claim.last_write_ts = time.time()
+        # #800 — park the head at home before any orient packets can
+        # land. `calibrate-end` snapshots the head's stage-frame aim as
+        # the reference the phone's pose is locked to; if the head was
+        # at a stale pose from a previous test, the lock anchors to
+        # that direction and the very next orient update appears to
+        # "jump" the head. Parking pins the reference to home so the
+        # operator's calibrate-with-phone-steady gives a deterministic
+        # forward anchor.
+        if self._park_fn is not None:
+            try:
+                self._park_fn(mover_id)
+            except Exception as e:
+                log.debug("Mover %d start_stream park failed: %s",
+                          mover_id, e)
         log.info("Mover %d: streaming started by %s", mover_id, device_id)
         return True
 
