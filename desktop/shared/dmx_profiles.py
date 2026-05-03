@@ -24,10 +24,18 @@ Profile schema:
   "beamWidth": 25,             # degrees (0 = wash/flood)
   "panRange": 0,               # degrees (0 = no pan)
   "tiltRange": 0,              # degrees (0 = no tilt)
-  "tiltOffsetDmx16": 32768,    # #716 — DMX value at horizontal-forward (default mid-range)
-  "tiltUp": false,             # #716 — does +DMX-tilt move beam UP from offset?
-  "panSignFromDmx": 1,         # #783 — +1 = +DMX rotates yoke CCW from above
-  "tiltSignFromDmx": 1,        # #783 — +1 = +DMX raises beam relative to fixture-up
+  "tiltOffsetDmx16": 32768,    # #716 legacy — DMX value at horizontal-forward
+  "tiltUp": false,             # #716 legacy — does +DMX-tilt move beam UP from offset?
+  "panSignFromDmx": 1,         # #783 legacy — +1 = +DMX rotates yoke CCW from above
+  "tiltSignFromDmx": 1,        # #783 legacy — +1 = +DMX raises beam relative to fixture-up
+
+  # NOTE (#784 comment 3): the new aim/ package derives DMX↔mechanical
+  # entirely from `panRange` + `tiltRange` + the fixture's
+  # `homePanDmx16`/`homeTiltDmx16` + `rotation`. NO `dmxToMechanical`
+  # block. NO sign metadata. Mount inversion lives in `fixture.rotation`,
+  # period. The legacy fields above are retained for backwards
+  # compatibility with the old `sphere_model.py` until #784 PR-7 deletes
+  # that file; the new aim package never reads any of them.
 }
 
 Channel types (primary function): dimmer, red, green, blue, white, amber, uv,
@@ -280,6 +288,13 @@ def has_sign_metadata(prof_info):
         return False
     return ("panSignFromDmx" in prof_info
             and "tiltSignFromDmx" in prof_info)
+
+
+# NOTE (#784 comment 3): the `has_dmx_to_mechanical` helper from #784
+# PR-1 was removed. The new aim/ package derives DMX↔mechanical from
+# `panRange` + the fixture's home anchor; no profile metadata is
+# required. Profiles still expose `panRange` and `tiltRange` (the
+# original schema fields) for moving-head detection and aim work.
 
 
 # -- Lamp-on / lamp-off helpers (#749, #780 Principle 3) ----------------------
@@ -538,13 +553,12 @@ BUILTIN_PROFILES = [
         "beamWidth": 15,
         "panRange": 540,
         "tiltRange": 270,
-        # #783 PR-α — sphere-model sign metadata. +1 = "increasing DMX
-        # rotates yoke counter-clockwise viewed from above" (pan) /
-        # "increasing DMX raises the beam" (tilt). Most generic 8-bit
-        # moving heads follow this convention; profiles that wire the
-        # mechanics opposite override to -1.
+        # #783 PR-α — sphere-model sign metadata (legacy, kept for
+        # sphere_model.py until #784 PR-7 deletes that file).
         "panSignFromDmx": 1,
         "tiltSignFromDmx": 1,
+        # #784 comment 3 — `dmxToMechanical` removed; aim/ derives the
+        # mapping from `panRange` + `homePanDmx16/TiltDmx16` + rotation.
     },
     {
         "id": "generic-moving-head-16bit",
@@ -598,7 +612,7 @@ BUILTIN_PROFILES = [
         "beamWidth": 12,
         "panRange": 540,
         "tiltRange": 270,
-        "panSignFromDmx": 1,   # #783 PR-α — see generic-moving-head note
+        "panSignFromDmx": 1,   # #783 PR-α legacy — see generic-moving-head note
         "tiltSignFromDmx": 1,
     },
     {
@@ -682,20 +696,14 @@ BUILTIN_PROFILES = [
         "beamWidth": 3,
         "panRange": 540,
         "tiltRange": 180,
-        # #783 PR-α — empirical from 2026-04-29 fid 17 Home wizard:
-        # operator drove panMovedDirection="right" with +10922 DMX delta
-        # from home, beam swept stage-+X. With rotation=[0,0,0] that
-        # matches the "+DMX → +panDeg-internal" default convention.
+        # #783 PR-α legacy — empirical from 2026-04-29 + 2026-05-02
+        # fid 17 wizard captures (mountedInverted=true, post-#780 P1
+        # bake to rotation=[0,180,0]). Both axes verified through the
+        # three-pose sphere emulation (operator's panMovedDirection
+        # "right" matches stage_pan<0 = stage-RIGHT under
+        # CLAUDE.md +X=stage-left; tiltMovedDirection "down" matches
+        # stage_tilt<0). Kept for sphere_model.py until #784 PR-7.
         "panSignFromDmx": 1,
-        # Empirical: operator drove tiltMovedDirection="down" with
-        # +32768 delta from home (which sat at tiltDmx16=0). +DMX moved
-        # beam DOWN — the inverse of the "+DMX raises beam" default,
-        # because this profile parks tilt at "all the way up" (tiltDmx16
-        # = 0 = horizon-level for a ceiling mount with rotation=[0,0,0]).
-        # tiltSignFromDmx still tracks the mechanics-frame convention
-        # (does +DMX raise the beam relative to fixture-up?), kept as +1
-        # because rotation does the inversion bookkeeping. The asymmetric
-        # tilt range is parameterised via tiltUp / tiltOffsetDmx16 (#716).
         "tiltSignFromDmx": 1,
     },
     {
@@ -920,6 +928,7 @@ class ProfileLibrary:
         if not p:
             return None
         return {
+            "id": profile_id,
             "channel_map": self.channel_map(profile_id),
             "channels": p.get("channels", []),
             "panRange": p.get("panRange", 0),
@@ -928,12 +937,9 @@ class ProfileLibrary:
             # #716 — asymmetric tilt-range support.
             "tiltOffsetDmx16": p.get("tiltOffsetDmx16", 32768),
             "tiltUp": bool(p.get("tiltUp", False)),
-            # #783 PR-α — sphere-model sign metadata. Default +1 matches
-            # the most common wiring convention (increasing DMX rotates
-            # yoke CCW from above / raises the beam relative to fixture-
-            # up). Profiles missing the field fall through to +1; the
-            # SPA prompts the operator to confirm on first SMART use of
-            # an unsigned profile (PR-α follow-up).
+            # #783 PR-α legacy sign metadata. The new aim/ package never
+            # reads these — kept on the channel_info dict for the legacy
+            # `sphere_model.py` until #784 PR-7 deletes that file.
             "panSignFromDmx": int(p.get("panSignFromDmx", 1)),
             "tiltSignFromDmx": int(p.get("tiltSignFromDmx", 1)),
         }

@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.20"
+VERSION = "1.7.24"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -2092,6 +2092,9 @@ def api_fixture_update(fid):
                     "use /api/fixtures/<fid>/home or /home/secondary instead",
                     fid, rejected_home_keys)
     _save("fixtures", _fixtures)
+    # #785 — rotation / profile / orientation may have changed; drop
+    # the cached aim sphere so the next /api/mover/<fid>/aim rebuilds.
+    _aim_invalidate_sphere(fid)
     return jsonify(ok=True)
 
 @app.put("/api/fixtures/<int:fid>/aim")
@@ -2113,6 +2116,7 @@ def api_fixture_set_aim(fid):
         except (TypeError, ValueError):
             return jsonify(err="rotation values must be numbers"), 400
         _save("fixtures", _fixtures)
+        _aim_invalidate_sphere(fid)  # #785 — rotation changed.
         return jsonify(ok=True)
     # Legacy aimPoint → convert to rotation
     ap = body.get("aimPoint")
@@ -2134,6 +2138,7 @@ def api_fixture_set_aim(fid):
             f.get("rotation", [0, 0, 0])[2] if f.get("rotation") else 0
         ]
     _save("fixtures", _fixtures)
+    _aim_invalidate_sphere(fid)  # #785 — rotation derived from aimPoint changed.
     return jsonify(ok=True, rotation=f.get("rotation", [0, 0, 0]))
 
 def _validate_home_secondary(sec):
@@ -2262,6 +2267,8 @@ def api_fixture_set_home(fid):
         except ValueError as e:
             return jsonify(err=str(e)), 400
     _save("fixtures", _fixtures)
+    # #785 — Home anchor changed; drop cached aim sphere.
+    _aim_invalidate_sphere(fid)
     log.info("Set Home: fid=%d pan=%d tilt=%d rotation=%s secondary=%s",
              fid, pan, tilt, f.get("rotation"),
              "yes" if f.get("homeSecondary") else "no")
@@ -2554,6 +2561,8 @@ def api_fixture_clear_home(fid):
     for k in ("homePanDmx16", "homeTiltDmx16", "homeSetAt", "homeSecondary"):
         f.pop(k, None)
     _save("fixtures", _fixtures)
+    # #785 — Home cleared; drop cached sphere (next aim returns 400 no_home).
+    _aim_invalidate_sphere(fid)
     return jsonify(ok=True)
 
 
@@ -10113,11 +10122,18 @@ def api_mover_aim_angles(fid):
 
     # #783 PR-γ — sphere model is the canonical IK. Built from Home +
     # profile metadata + rotation; no Home-Secondary or probe grid
-    # required. Legacy SMART model / 2-pair affine remain as fallback
-    # for fixtures whose profile doesn't yet carry the PR-α sign fields.
+    # required. The API contract (per CLAUDE.md angular-aim convention):
+    # `panDeg` and `tiltDeg` are STAGE-FRAME — `tiltDeg > 0` is above
+    # horizon, `panDeg > 0` is beam toward stage +X. `aim_stage_angles`
+    # applies `fixture.rotation` to translate to mount frame, then the
+    # profile's pan/tilt sign + tiltUp metadata translates mount-frame
+    # angles to DMX. Inversion is encoded entirely in `rotation`; the
+    # math here doesn't branch on whether the fixture is upright or
+    # ceiling-mounted. Legacy SMART model / 2-pair affine remain as
+    # fallback for fixtures whose profile lacks the PR-α sign fields.
     sphere = _sphere_for_fixture(fid, f)
     if sphere is not None:
-        pan_dmx16, tilt_dmx16 = sphere.angles_to_dmx(pan_deg, tilt_deg, clamp=True)
+        pan_dmx16, tilt_dmx16 = sphere.aim_stage_angles(pan_deg, tilt_deg, clamp=True)
     else:
         model, confidence = _resolve_mover_model(fid, f)
         if model is None:
@@ -10164,6 +10180,57 @@ def api_mover_aim_angles(fid):
     # badges for angular paths.
     return jsonify(ok=True,
                    panDmx16=pan_dmx16, tiltDmx16=tilt_dmx16)
+
+
+# ── #784 PR-4 — new canonical aim endpoint via aim/ package ─────────
+#
+# `POST /api/mover/<fid>/aim {x,y,z} | {azDeg,elDeg}` is the canonical
+# moving-head aim path. Routes through `desktop/shared/aim/sphere.AimSphere`,
+# which reads ONLY `homePanDmx16`/`homeTiltDmx16`, `rotation`, and the
+# profile's `dmxToMechanical` block. No legacy IK fallbacks.
+#
+# `aim-angles` (above) stays as a backwards-compat alias for one
+# release; PR-7 deletes it.
+
+def _aim_write_pose(uni, addr, pan_dmx16, tilt_dmx16, prof_info):
+    """Engine-side DMX writer plugged into aim.routes.register. Mirrors
+    the body of `/api/mover/<fid>/aim-angles` (uni_buf.set_fixture_pan_tilt
+    with normalised pan/tilt). Kept identical so the new endpoint
+    produces identical wire output for the same target."""
+    engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+    if engine is None:
+        raise RuntimeError("engine_not_running")
+    profile = {"channel_map": prof_info.get("channel_map", {}),
+               "channels": prof_info.get("channels", [])}
+    uni_buf = engine.get_universe(uni)
+    uni_buf.set_fixture_pan_tilt(addr,
+                                  pan_dmx16 / 65535.0,
+                                  tilt_dmx16 / 65535.0,
+                                  profile)
+
+
+def _aim_get_engine():
+    if _artnet.running:
+        return _artnet
+    if _sacn.running:
+        return _sacn
+    return None
+
+
+from aim.routes import register as _register_aim_routes  # noqa: E402
+from aim.routes import invalidate_sphere as _aim_invalidate_sphere  # noqa: E402
+from aim.routes import invalidate_all_spheres as _aim_invalidate_all_spheres  # noqa: E402
+
+_register_aim_routes(
+    app,
+    get_fixtures=lambda: _fixtures,
+    profile_lib=_profile_lib,
+    write_pose=_aim_write_pose,
+    get_engine=_aim_get_engine,
+    # Lambda defers the lookup — `_fixture_is_calibrating` is defined
+    # later in this module (alongside the cal threads).
+    check_calibrating=lambda fid: _fixture_is_calibrating(fid),
+)
 
 
 # ── #699 — Verify Fixture Pose wizard ───────────────────────────────────
@@ -19535,6 +19602,10 @@ def api_project_import():
             continue
         if f.get("homePanDmx16") is None or f.get("homeTiltDmx16") is None:
             movers_need_home.append({"id": f.get("id"), "name": f.get("name", "")})
+    # #785 — project import replaces every fixture / profile / layout
+    # record. Drop the entire aim-sphere cache so the next /aim call
+    # rebuilds against the fresh state.
+    _aim_invalidate_all_spheres()
     return jsonify(ok=True, name=name,
                    children=len(_children), fixtures=len(_fixtures),
                    actions=len(_actions), timelines=len(_timelines),
@@ -20252,6 +20323,9 @@ def api_reset():
         _save("spatial_fx", _spatial_fx)
         _save("timelines",  _timelines)
         _save("dmx_settings", _dmx_settings)
+        # #785 — drop every cached aim sphere; fixtures table just got
+        # wiped, any residual cache entries point at non-existent fids.
+        _aim_invalidate_all_spheres()
         _show_playlist.clear()
         _show_playlist.update({"order": [], "loopAll": False})
         _save("show_playlist", _show_playlist)
@@ -20748,6 +20822,10 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
+
+
 
 
 

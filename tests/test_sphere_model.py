@@ -52,40 +52,38 @@ def vec_approx(a, b, tol=1e-3):
 print('\n=== construction ===')
 # ─────────────────────────────────────────────────────────────────────
 
-# Default upright 150W-style: pan range 540°, tilt range 270°, home at
+# Default upright moving-head: pan range 540°, tilt range 270°, home at
 # (32768, 32768) — mechanical centre, beam aimed forward (+Y) level.
-# tiltUp=True so +tiltDeg (above horizon, stage convention) → +DMX.
+# Profile signs (`pan_sign`, `tilt_sign`) describe mount-frame mechanics
+# only; rotation handles stage-frame inversion. The math composes the
+# two with no inversion-aware special cases (#783).
 sphere = SphereModel(
     fixture_xyz=(0, 0, 3000),
     fixture_rotation=[0, 0, 0],
     home_pan_dmx16=32768, home_tilt_dmx16=32768,
     pan_range_deg=540, tilt_range_deg=270,
-    pan_sign=+1, tilt_sign=+1, tilt_up=True,
+    pan_sign=+1, tilt_sign=+1,
 )
 check('home pan stored', sphere.home_pan_dmx16 == 32768)
 check('rotation list normalised', sphere.fixture_rotation == [0.0, 0.0, 0.0])
-# DMX-per-deg should be ±121.36 (= 65535 / 540).
-check('pan_dmx_per_deg = 65535/540 (signed +)',
+check('pan_dmx_per_deg = +65535/540 (pan_sign=+1)',
       approx(sphere._pan_dmx_per_deg, 65535.0 / 540.0))
-# tiltUp=True → effective tilt sign is +1 → rate is +65535/270.
-check('tilt_dmx_per_deg = +65535/270 (tiltUp=True)',
-      approx(sphere._tilt_dmx_per_deg, 65535.0 / 270.0),
-      f'got {sphere._tilt_dmx_per_deg}')
+check('tilt_dmx_per_deg = +65535/270 (tilt_sign=+1)',
+      approx(sphere._tilt_dmx_per_deg, 65535.0 / 270.0))
 
-# Companion sphere with tiltUp=False (e.g. 150W default mechanical
-# convention: +DMX physically tilts the beam DOWN). Stage convention
-# requires +tiltDeg = above horizon, so the effective tilt rate is
-# *negative* — feeding tiltDeg=+30 produces a DMX BELOW home.
-sphere_tilt_down = SphereModel(
+# Companion sphere with tilt_sign=-1 — fixtures wired so +DMX rotates
+# the beam in the opposite mount direction. The math doesn't branch on
+# tilt-up/down; the profile sign IS the source of truth.
+sphere_neg_tilt = SphereModel(
     fixture_xyz=(0, 0, 3000),
     fixture_rotation=[0, 0, 0],
     home_pan_dmx16=32768, home_tilt_dmx16=32768,
     pan_range_deg=540, tilt_range_deg=270,
-    pan_sign=+1, tilt_sign=+1, tilt_up=False,
+    pan_sign=+1, tilt_sign=-1,
 )
-check('tilt_dmx_per_deg = -65535/270 (tiltUp=False inverts)',
-      approx(sphere_tilt_down._tilt_dmx_per_deg, -65535.0 / 270.0),
-      f'got {sphere_tilt_down._tilt_dmx_per_deg}')
+check('tilt_dmx_per_deg = -65535/270 (tilt_sign=-1)',
+      approx(sphere_neg_tilt._tilt_dmx_per_deg, -65535.0 / 270.0),
+      f'got {sphere_neg_tilt._tilt_dmx_per_deg}')
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -127,36 +125,55 @@ check('+90° pan from home → stage-+X (rotation=0)',
       vec_approx(direction, (1, 0, 0), tol=0.01),
       f'got {direction}')
 
-# Tilt up 45° (stage convention: above horizon). With tiltUp=True the
-# effective rate is positive, so the corresponding DMX is home + Δ.
-tilt_dmx_for_45_up = 32768 + int(round(45 * 65535 / 270))
-direction = sphere.dmx_to_direction(32768, tilt_dmx_for_45_up)
-check('tiltUp=True: home+Δ → 45° above horizon',
-      vec_approx(direction,
-                  (0, math.cos(math.radians(45)), math.sin(math.radians(45))),
-                  tol=0.01),
+# Tilt 45° (mount frame). With tilt_sign=+1, +DMX → mount-+Z. The
+# stage-frame interpretation depends on rotation: for an upright fixture
+# (rotation=0), mount-+Z = stage-+Z = above horizon.
+tilt_dmx_for_45 = 32768 + int(round(45 * 65535 / 270))
+direction = sphere.dmx_to_direction(32768, tilt_dmx_for_45)
+check('upright + tilt_sign=+1: +DMX-tilt → above horizon',
+      direction[2] > 0 and approx(direction[2], math.sin(math.radians(45)), 0.01),
       f'got {direction}')
 
-# Same DMX delta on a tiltUp=False sphere produces the OPPOSITE physical
-# tilt (45° below horizon) — the bug the fix corrects (#783 comment).
-direction_inv = sphere_tilt_down.dmx_to_direction(32768, tilt_dmx_for_45_up)
-check('tiltUp=False: home+Δ → 45° BELOW horizon (opposite of stage tilt+)',
+# Same DMX on a tilt_sign=-1 fixture: opposite mount-frame motion.
+# +DMX → mount-(-Z) → for upright (rotation=0), stage-(-Z) = below
+# horizon. Profile sign IS the mount-mechanic source; rotation
+# (which is identity here) doesn't enter.
+direction_inv = sphere_neg_tilt.dmx_to_direction(32768, tilt_dmx_for_45)
+check('upright + tilt_sign=-1: +DMX-tilt → below horizon',
       direction_inv[2] < 0 and approx(direction_inv[2], -math.sin(math.radians(45)), 0.01),
       f'got {direction_inv}')
 
-# stage tiltDeg=+30 (above horizon) on a tiltUp=False fixture must yield
-# DMX BELOW home (since +DMX would mechanically point the beam down).
-# This is the operator-reported bug from run3-1638-sphere-checkpoint.
-p_dmx, t_dmx = sphere_tilt_down.angles_to_dmx(0.0, 30.0)
-check('tiltUp=False: stage tiltDeg=+30 → DMX < home (bug fix)',
-      t_dmx < sphere_tilt_down.home_tilt_dmx16,
-      f'got tilt_dmx={t_dmx} home={sphere_tilt_down.home_tilt_dmx16}')
+# Stage-frame API contract — `aim_stage_angles(0, +30)` on an upright
+# fixture must produce a DMX whose physical aim is 30° above horizon.
+# The rotation transform (identity here) and the profile sign compose;
+# the math doesn't branch on inversion.
+p_dmx, t_dmx = sphere.aim_stage_angles(0.0, 30.0, clamp=True)
+direction = sphere.dmx_to_direction(p_dmx, t_dmx)
+check('aim_stage_angles(0, +30) upright → physical el ≈ +30°',
+      direction[2] > 0 and approx(direction[2], math.sin(math.radians(30)), 0.01),
+      f'got {direction}')
 
-# stage tiltDeg=-30 (below horizon) on the same fixture → DMX ABOVE home.
-p_dmx, t_dmx = sphere_tilt_down.angles_to_dmx(0.0, -30.0)
-check('tiltUp=False: stage tiltDeg=-30 → DMX > home',
-      t_dmx > sphere_tilt_down.home_tilt_dmx16,
-      f'got tilt_dmx={t_dmx} home={sphere_tilt_down.home_tilt_dmx16}')
+p_dmx, t_dmx = sphere.aim_stage_angles(0.0, -30.0, clamp=True)
+direction = sphere.dmx_to_direction(p_dmx, t_dmx)
+check('aim_stage_angles(0, -30) upright → physical el ≈ -30°',
+      direction[2] < 0 and approx(direction[2], -math.sin(math.radians(30)), 0.01),
+      f'got {direction}')
+
+# Inverted (rotation=[0,180,0]). aim_stage_angles still produces the
+# correct physical aim — rotation handles the inversion in the math
+# without any mount-frame sign juggling.
+sphere_inv_for_stage = SphereModel(
+    fixture_xyz=(0, 0, 3000),
+    fixture_rotation=[0, 180, 0],
+    home_pan_dmx16=32768, home_tilt_dmx16=32768,
+    pan_range_deg=540, tilt_range_deg=270,
+    pan_sign=+1, tilt_sign=+1,
+)
+p_dmx, t_dmx = sphere_inv_for_stage.aim_stage_angles(0.0, +30.0, clamp=True)
+direction = sphere_inv_for_stage.dmx_to_direction(p_dmx, t_dmx)
+check('aim_stage_angles(0, +30) inverted → physical el ≈ +30° (rotation handles inversion)',
+      direction[2] > 0 and approx(direction[2], math.sin(math.radians(30)), 0.01),
+      f'got {direction}')
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -353,31 +370,25 @@ check('aim_world_xyz: +Y target → tilt at home (level)',
       pose is not None and abs(pose[1] - 32768) <= 2,
       f'pose={pose}')
 
-# Target above the fixture (Z+): stage convention says +tiltDeg
-# (above horizon). The tilt-DMX direction depends on the sphere's
-# tiltUp flag — sphere_origin defaults to tilt_up=False, so reaching
-# above horizon means DMX < home.
+# Target above the fixture (Z+): on an upright fixture (sphere_origin
+# rotation=[0,0,0]) with tilt_sign=+1, mount tilt-up = +DMX delta.
 pose = aim_world_xyz((0, 100, 5000), sphere_origin)
-check('aim_world_xyz: high target → tilt away from home (stage +tilt)',
-      pose is not None and pose[1] != 32768,
-      f'pose={pose}')
-# With tiltUp=False (default), high target → DMX BELOW home.
-check('aim_world_xyz: high target on tiltUp=False sphere → DMX < home',
-      pose is not None and pose[1] < 32768,
+check('aim_world_xyz: high target → DMX > home (upright, tilt_sign=+1)',
+      pose is not None and pose[1] > 32768,
       f'pose={pose}')
 
-# Same target on a tiltUp=True sphere → DMX ABOVE home (round-trip
-# correctness; only the mechanical convention differs).
-sphere_origin_up = SphereModel(
+# tilt_sign=-1 fixture: +DMX rotates the beam in the opposite mount
+# direction, so reaching the same high target requires DMX < home.
+sphere_origin_neg = SphereModel(
     fixture_xyz=(0, 0, 0), fixture_rotation=[0, 0, 0],
     home_pan_dmx16=32768, home_tilt_dmx16=32768,
     pan_range_deg=540, tilt_range_deg=270,
-    tilt_up=True,
+    pan_sign=+1, tilt_sign=-1,
 )
-pose_up = aim_world_xyz((0, 100, 5000), sphere_origin_up)
-check('aim_world_xyz: high target on tiltUp=True sphere → DMX > home',
-      pose_up is not None and pose_up[1] > 32768,
-      f'pose={pose_up}')
+pose_neg = aim_world_xyz((0, 100, 5000), sphere_origin_neg)
+check('aim_world_xyz: high target → DMX < home (upright, tilt_sign=-1)',
+      pose_neg is not None and pose_neg[1] < 32768,
+      f'pose={pose_neg}')
 
 # Coincident with fixture position → None (degenerate).
 pose = aim_world_xyz((0, 0, 0), sphere_origin)
@@ -461,72 +472,103 @@ def _round_trip_check(label, sphere, target_xyz):
 
 # Round-trip uses fixtures whose Home is driven to the convention
 # (rotation_forward at horizon level). Operator-broken Homes (e.g. fid
-# 17's homeTiltDmx16=0 with tiltUp=False parking the head at the
-# mechanical extreme rather than horizon) are not valid acceptance
-# inputs — they're workflow bugs the operator must correct in the SPA,
-# not sphere-model bugs.
+# 17's homeTiltDmx16=0 parking the head at a mechanical extreme rather
+# than horizon) are not valid acceptance inputs — they're workflow bugs
+# the operator must correct in the SPA, not sphere-model bugs.
 
-# Upright tiltUp=True (350W BeamLight-style):
+# Upright tilt_sign=+1 (most moving heads):
 sphere_upright = SphereModel(
     fixture_xyz=(0, 0, 3000), fixture_rotation=[0, 0, 0],
     home_pan_dmx16=32768, home_tilt_dmx16=32768,
     pan_range_deg=540, tilt_range_deg=270,
-    tilt_up=True,
+    pan_sign=+1, tilt_sign=+1,
 )
-_round_trip_check('upright tiltUp=True forward', sphere_upright, (0.0, 5000.0, 3000.0))
-_round_trip_check('upright tiltUp=True +X target', sphere_upright, (3000.0, 5000.0, 1000.0))
-_round_trip_check('upright tiltUp=True floor target', sphere_upright, (0.0, 5000.0, 0.0))
+_round_trip_check('upright tilt_sign=+1 forward', sphere_upright, (0.0, 5000.0, 3000.0))
+_round_trip_check('upright tilt_sign=+1 +X target', sphere_upright, (3000.0, 5000.0, 1000.0))
+_round_trip_check('upright tilt_sign=+1 floor target', sphere_upright, (0.0, 5000.0, 0.0))
 
-# Upright tiltUp=False (150W-style, home driven to horizon at midpoint):
-sphere_upright_down = SphereModel(
+# Upright tilt_sign=-1 (fixtures wired so +DMX rotates beam opposite):
+sphere_upright_neg = SphereModel(
     fixture_xyz=(0, 0, 3000), fixture_rotation=[0, 0, 0],
     home_pan_dmx16=32768, home_tilt_dmx16=32768,
     pan_range_deg=540, tilt_range_deg=180,
-    tilt_up=False,
+    pan_sign=+1, tilt_sign=-1,
 )
-_round_trip_check('upright tiltUp=False forward', sphere_upright_down, (0.0, 5000.0, 3000.0))
-_round_trip_check('upright tiltUp=False floor target', sphere_upright_down, (0.0, 5000.0, 0.0))
+_round_trip_check('upright tilt_sign=-1 forward', sphere_upright_neg, (0.0, 5000.0, 3000.0))
+_round_trip_check('upright tilt_sign=-1 floor target', sphere_upright_neg, (0.0, 5000.0, 0.0))
+
+# Inverted ceiling-mount (rotation handles inversion; profile signs
+# stay mount-frame). Beam aims at floor markers — same DMX math as
+# upright, just composed through the rotation matrix.
+sphere_ceiling = SphereModel(
+    fixture_xyz=(600, 0, 1760), fixture_rotation=[0, 180, 0],
+    home_pan_dmx16=32768, home_tilt_dmx16=32768,
+    pan_range_deg=540, tilt_range_deg=180,
+    pan_sign=+1, tilt_sign=+1,
+)
+_round_trip_check('ceiling-inverted floor-forward', sphere_ceiling, (600.0, 2000.0, 0.0))
+_round_trip_check('ceiling-inverted +X floor', sphere_ceiling, (1500.0, 2000.0, 0.0))
 
 
 # ─────────────────────────────────────────────────────────────────────
-print('\n=== stage convention: tiltDeg+ ≡ above horizon ===')
+print('\n=== stage convention: aim_stage_angles ≡ above horizon ===')
 # ─────────────────────────────────────────────────────────────────────
 #
-# Operator's bug report (2026-05-02): aim-angles {tiltDeg:+30} on the
-# 150W (tiltUp=False) was producing DMX 10922 — head went DOWN. After
-# the fix, +tiltDeg must always produce a physical aim above horizon.
+# Operator's bug report (2026-05-02): aim-angles {tiltDeg:+30} was
+# producing physical aim DOWN on inverted fid 17. The fix is at the API
+# surface — `aim_stage_angles` builds a stage-frame direction, applies
+# `fixture.rotation` to get mount-frame, then translates mount-frame to
+# DMX via profile signs. Rotation handles inversion; the math doesn't
+# branch on whether the fixture is upright or ceiling-mounted.
 
-# 150W-style: tiltUp=False, home at midpoint (32768) so both tilt
-# directions are reachable (operator drove Home to horizon).
-sphere_150w = SphereModel(
+# Upright fixture: aim_stage_angles(0, +30) must produce above-horizon.
+sphere_up = SphereModel(
     fixture_xyz=(0, 0, 3000), fixture_rotation=[0, 0, 0],
     home_pan_dmx16=32768, home_tilt_dmx16=32768,
     pan_range_deg=540, tilt_range_deg=180,
-    pan_sign=+1, tilt_sign=+1, tilt_up=False,
+    pan_sign=+1, tilt_sign=+1,
 )
-# tiltDeg=+30 (above horizon) on tiltUp=False fixture → DMX below home.
-direction_up = sphere_150w.dmx_to_direction(*sphere_150w.angles_to_dmx(0, 30, clamp=True))
-check('150W tiltDeg=+30 → physical aim above horizon (z>0)',
-      direction_up[2] > 0,
-      f'got direction={direction_up}')
+direction_up = sphere_up.dmx_to_direction(
+    *sphere_up.aim_stage_angles(0, 30, clamp=True))
+check('upright aim_stage_angles(0, +30) → physical aim above horizon (z>0)',
+      direction_up[2] > 0, f'got direction={direction_up}')
 
-# tiltDeg=-30 → DMX above home → physical aim below horizon.
-direction_down = sphere_150w.dmx_to_direction(*sphere_150w.angles_to_dmx(0, -30, clamp=True))
-check('150W tiltDeg=-30 → physical aim below horizon (z<0)',
-      direction_down[2] < 0,
-      f'got direction={direction_down}')
+direction_down = sphere_up.dmx_to_direction(
+    *sphere_up.aim_stage_angles(0, -30, clamp=True))
+check('upright aim_stage_angles(0, -30) → physical aim below horizon (z<0)',
+      direction_down[2] < 0, f'got direction={direction_down}')
 
-# Same convention on a tiltUp=True fixture (BeamLight 350W-style).
+# Inverted fixture: same stage-frame angles must produce same physical
+# direction. Rotation handles the inversion in the math; no profile or
+# sphere-model branching.
+sphere_inv = SphereModel(
+    fixture_xyz=(0, 0, 3000), fixture_rotation=[0, 180, 0],
+    home_pan_dmx16=32768, home_tilt_dmx16=32768,
+    pan_range_deg=540, tilt_range_deg=180,
+    pan_sign=+1, tilt_sign=+1,
+)
+direction_inv_up = sphere_inv.dmx_to_direction(
+    *sphere_inv.aim_stage_angles(0, 30, clamp=True))
+check('inverted aim_stage_angles(0, +30) → physical aim above horizon (z>0)',
+      direction_inv_up[2] > 0, f'got direction={direction_inv_up}')
+
+direction_inv_down = sphere_inv.dmx_to_direction(
+    *sphere_inv.aim_stage_angles(0, -30, clamp=True))
+check('inverted aim_stage_angles(0, -30) → physical aim below horizon (z<0)',
+      direction_inv_down[2] < 0, f'got direction={direction_inv_down}')
+
+# Mount-frame `angles_to_dmx` (the low-level helper) takes mount-frame
+# angles directly. For an upright fixture with tilt_sign=+1, mount
+# tilt+30 = mount-+Z = stage-+Z above horizon (rotation is identity).
 sphere_350w = SphereModel(
     fixture_xyz=(0, 0, 0), fixture_rotation=[0, 0, 0],
     home_pan_dmx16=32768, home_tilt_dmx16=32768,
     pan_range_deg=540, tilt_range_deg=270,
-    pan_sign=+1, tilt_sign=+1, tilt_up=True,
+    pan_sign=+1, tilt_sign=+1,
 )
-direction_up = sphere_350w.dmx_to_direction(*sphere_350w.angles_to_dmx(0, 30, clamp=True))
-check('350W tiltDeg=+30 (tiltUp=True) → physical aim above horizon',
-      direction_up[2] > 0,
-      f'got direction={direction_up}')
+direction_mount = sphere_350w.dmx_to_direction(*sphere_350w.angles_to_dmx(0, 30, clamp=True))
+check('upright + tilt_sign=+1: mount tiltDeg=+30 → above horizon',
+      direction_mount[2] > 0, f'got direction={direction_mount}')
 
 
 # ─────────────────────────────────────────────────────────────────────

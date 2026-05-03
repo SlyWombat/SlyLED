@@ -843,6 +843,30 @@ def run():
         ok('#783 PR-α custom profile preserves tiltSignFromDmx=+1',
            rec.get("tiltSignFromDmx") == 1)
 
+        # ── 22. #784 comment 3 — dmxToMechanical metadata DROPPED ──
+        # Operator-clarified: the new aim/ package derives DMX↔mechanical
+        # from `panRange` + `tiltRange` + the fixture's home anchor
+        # only. There is no `dmxToMechanical` block on profiles. The
+        # PR-1 schema is reverted; profiles that imported the block
+        # before this revert simply ignore it.
+        print('── 22. #784 comment 3 — no dmxToMechanical metadata ──')
+        for p in mh_builtins:
+            ok(f'#784 c3 {p["id"]} has no dmxToMechanical block',
+               "dmxToMechanical" not in p,
+               f'unexpected: {list(p.keys())}')
+        # `has_dmx_to_mechanical` is removed from the public surface.
+        try:
+            from dmx_profiles import has_dmx_to_mechanical  # noqa: F401
+            ok('#784 c3 has_dmx_to_mechanical helper removed', False,
+               'still importable')
+        except ImportError:
+            ok('#784 c3 has_dmx_to_mechanical helper removed', True)
+        # channel_info() does NOT carry a dmxToMechanical entry.
+        info_150w = lib.channel_info("movinghead-150w-12ch")
+        ok('#784 c3 channel_info no longer surfaces dmxToMechanical',
+           "dmxToMechanical" not in info_150w,
+           f'unexpected: {list(info_150w.keys())}')
+
     # ── Print results ───────────────────────────────────────────────
     passed = sum(1 for _, v, _ in results if v)
     failed = sum(1 for _, v, _ in results if not v)

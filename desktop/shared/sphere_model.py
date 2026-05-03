@@ -53,7 +53,7 @@ class SphereModel:
         "fixture_xyz", "fixture_rotation",
         "home_pan_dmx16", "home_tilt_dmx16",
         "pan_range_deg", "tilt_range_deg",
-        "pan_sign", "tilt_sign", "tilt_up",
+        "pan_sign", "tilt_sign",
         "pan_min_dmx16", "pan_max_dmx16",
         "tilt_min_dmx16", "tilt_max_dmx16",
         "_pan_dmx_per_deg", "_tilt_dmx_per_deg",
@@ -62,7 +62,7 @@ class SphereModel:
     def __init__(self, fixture_xyz, fixture_rotation,
                  home_pan_dmx16, home_tilt_dmx16,
                  pan_range_deg, tilt_range_deg,
-                 pan_sign=1, tilt_sign=1, tilt_up=False,
+                 pan_sign=1, tilt_sign=1,
                  pan_min_dmx16=0, pan_max_dmx16=65535,
                  tilt_min_dmx16=0, tilt_max_dmx16=65535):
         self.fixture_xyz = (float(fixture_xyz[0]),
@@ -77,17 +77,6 @@ class SphereModel:
         self.tilt_range_deg = float(tilt_range_deg)
         self.pan_sign = +1 if int(pan_sign) >= 0 else -1
         self.tilt_sign = +1 if int(tilt_sign) >= 0 else -1
-        # #783 PR-γ tilt-sign fix — profile's `tiltUp` (#716) tells us
-        # whether +DMX physically raises the beam relative to the
-        # fixture's mount-up axis. Stage convention requires +tiltDeg =
-        # above horizon (per CLAUDE.md angular-aim section). For a
-        # `tiltUp=false` fixture (e.g. 150W, where +DMX physically
-        # tilts DOWN), the stage→DMX direction must be inverted —
-        # otherwise `aim-angles {tiltDeg:+30}` drives the head down.
-        # Folded into the effective tilt sign rather than fanning out
-        # branches: every tilt_dmx_per_deg consumer naturally honours
-        # both the profile sign field and the up/down mechanical flag.
-        self.tilt_up = bool(tilt_up)
         self.pan_min_dmx16 = int(pan_min_dmx16)
         self.pan_max_dmx16 = int(pan_max_dmx16)
         self.tilt_min_dmx16 = int(tilt_min_dmx16)
@@ -95,14 +84,16 @@ class SphereModel:
         # DMX-per-degree, signed. Zero range → zero rate (degenerate
         # fixtures with panRange=0 / tiltRange=0 still construct cleanly
         # so a non-moving-head profile doesn't crash the loader).
+        # Mount-frame mechanics live entirely in `pan_sign` / `tilt_sign`.
+        # Stage-frame inversion lives entirely in `fixture_rotation`. The
+        # math composes them; nothing here special-cases inverted vs
+        # upright (#783 design — "the math doesn't know about inversion").
         if self.pan_range_deg > 0:
             self._pan_dmx_per_deg = 65535.0 * self.pan_sign / self.pan_range_deg
         else:
             self._pan_dmx_per_deg = 0.0
         if self.tilt_range_deg > 0:
-            tilt_up_factor = +1.0 if self.tilt_up else -1.0
-            self._tilt_dmx_per_deg = (65535.0 * self.tilt_sign * tilt_up_factor
-                                       / self.tilt_range_deg)
+            self._tilt_dmx_per_deg = 65535.0 * self.tilt_sign / self.tilt_range_deg
         else:
             self._tilt_dmx_per_deg = 0.0
 
@@ -134,7 +125,6 @@ class SphereModel:
             tilt_range_deg=float(_coalesce(profile_info.get("tiltRange"), 270) or 270),
             pan_sign=int(_coalesce(profile_info.get("panSignFromDmx"), 1)),
             tilt_sign=int(_coalesce(profile_info.get("tiltSignFromDmx"), 1)),
-            tilt_up=bool(profile_info.get("tiltUp", False)),
         )
 
     # ── DMX ↔ angle conversion ─────────────────────────────────────
@@ -203,6 +193,49 @@ class SphereModel:
         pan_deg, tilt_deg = self.dmx_to_angles(pan_dmx16, tilt_dmx16)
         return self.aim_mount_to_stage(
             self.angles_to_aim_mount(pan_deg, tilt_deg))
+
+    # ── Stage-convention API (#783 angular-aim CLAUDE.md) ─────────
+
+    def aim_stage_angles(self, stage_pan_deg, stage_tilt_deg, *, clamp=True):
+        """Stage-convention angles → DMX pose.
+
+        Per CLAUDE.md `## Angular-aim convention (#783)`:
+          - `stage_tilt_deg > 0` = beam above horizon (toward stage +Z).
+          - `stage_pan_deg > 0`  = beam swept toward stage +X.
+
+        The transform: build a stage-frame unit aim from the stage angles,
+        rotate into the fixture's mount frame, then apply profile-sign
+        metadata to translate mount-frame angles to DMX. Inversion lives
+        ENTIRELY in `fixture.rotation` — neither the math here nor the
+        profile metadata branches on whether the fixture is upright or
+        ceiling-mounted; the rotation matrix handles it transparently.
+
+        Companion to `aim_world_xyz`, which takes a stage-XYZ target;
+        `aim_stage_angles` takes stage-frame angles directly. Both flow
+        through `direction_to_poses` semantics (pose clamping, no
+        multi-valued-pan resolution — caller passes specific angles).
+        """
+        pr = math.radians(float(stage_pan_deg))
+        tr = math.radians(float(stage_tilt_deg))
+        ct = math.cos(tr)
+        stage_aim = (math.sin(pr) * ct,
+                      math.cos(pr) * ct,
+                      math.sin(tr))
+        mount_aim = self.aim_stage_to_mount(stage_aim)
+        mx, my, mz = mount_aim
+        mount_pan_deg = math.degrees(math.atan2(mx, my))
+        mount_tilt_deg = math.degrees(math.atan2(mz, math.hypot(mx, my)))
+        return self.angles_to_dmx(mount_pan_deg, mount_tilt_deg, clamp=clamp)
+
+    def dmx_to_stage_angles(self, pan_dmx16, tilt_dmx16):
+        """Inverse of `aim_stage_angles`: DMX pose → stage-convention
+        (panDeg, tiltDeg). Useful for the SPA's "show me what stage
+        direction this pose aims at" readouts."""
+        direction = self.dmx_to_direction(pan_dmx16, tilt_dmx16)
+        dx, dy, dz = direction
+        stage_pan_deg = math.degrees(math.atan2(dx, dy))
+        stage_tilt_deg = math.degrees(math.atan2(dz, math.hypot(dx, dy)))
+        return (stage_pan_deg, stage_tilt_deg)
 
     def direction_to_poses(self, target_direction):
         """stage-frame unit aim → list of (panDmx16, tiltDmx16) poses.
