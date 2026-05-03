@@ -35,9 +35,11 @@ TESTS = [
 ]
 
 # Live-rig regression tests (gated, see module docstring).
+# `test_post_cal_confirm.py` was deleted under #789 (Tier 1 SMART-
+# pipeline sweep, 2026-05-03) — the post-cal confirm flow no longer
+# exists under the #784/#785/#798 anchor-sphere model.
 LIVE_RIG_TESTS = [
     ('test_beam_detect_canary.py',  'Beam-Detect Canary (live rig)'),
-    ('test_post_cal_confirm.py',    'Post-Cal Confirm (live rig)'),
 ]
 
 

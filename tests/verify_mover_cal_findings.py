@@ -531,7 +531,14 @@ def check682_EE_canary_harness():
 
 
 def check682_FF_post_cal_confirm():
-    """#682-FF — post-cal confirmation tool + verdict + regression."""
+    """#682-FF — post-cal confirmation tool + verdict.
+
+    `tests/regression/test_post_cal_confirm.py` was deleted under #789
+    (Tier 1 SMART-pipeline test sweep, 2026-05-03). The remaining
+    checks here cover the standalone `tools/post_cal_confirm.py`
+    operator utility, which still ships independent of the cal
+    pipeline.
+    """
     pcc_path = os.path.join(_ROOT, "tools", "post_cal_confirm.py")
     ok(os.path.isfile(pcc_path),
        "#682-FF tools/post_cal_confirm.py exists")
@@ -542,10 +549,6 @@ def check682_FF_post_cal_confirm():
        "#682-FF project_to_camera_pixel TODO is resolved")
     ok("beam_width_px" in src or "tolerance_px" in src,
        "#682-FF verdict checks distance against beam-width-in-pixels")
-    test_path = os.path.join(_ROOT, "tests", "regression",
-                              "test_post_cal_confirm.py")
-    ok(os.path.isfile(test_path),
-       "#682-FF tests/regression/test_post_cal_confirm.py exists")
 
 
 def main():
