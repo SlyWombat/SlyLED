@@ -26,7 +26,10 @@ import logging
 import threading
 import time
 
-from mover_calibrator import aim_to_pan_tilt, affine_pan_tilt
+# #784 PR-5 — `aim_to_pan_tilt` and `affine_pan_tilt` from
+# mover_calibrator are no longer consulted. AimSphere replaces both.
+# Kept only the import-side note here so the next reader knows the
+# legacy IK ladder was deliberately removed, not forgotten.
 from remote_orientation import (
     OrientConvention,
     _coerce_convention,
@@ -480,15 +483,20 @@ class MoverControlEngine:
                     pan_norm, tilt_norm = self._aim_to_pan_tilt(
                         mover_id, mover, remote.aim_stage,
                     )
-                    if not claim.have_pan_tilt:
-                        claim.pan_smooth  = pan_norm
-                        claim.tilt_smooth = tilt_norm
-                        claim.have_pan_tilt = True
-                    else:
-                        alpha = max(0.0, min(1.0, 1.0 - claim.smoothing))
-                        claim.pan_smooth  += alpha * (pan_norm  - claim.pan_smooth)
-                        claim.tilt_smooth += alpha * (tilt_norm - claim.tilt_smooth)
-                    have_aim = True
+                    # #784 PR-5 — fixture without Home or signed profile
+                    # returns (None, None); skip the pan/tilt claim write
+                    # for this tick. Non-pan/tilt state (dimmer, colour)
+                    # still flows below.
+                    if pan_norm is not None and tilt_norm is not None:
+                        if not claim.have_pan_tilt:
+                            claim.pan_smooth  = pan_norm
+                            claim.tilt_smooth = tilt_norm
+                            claim.have_pan_tilt = True
+                        else:
+                            alpha = max(0.0, min(1.0, 1.0 - claim.smoothing))
+                            claim.pan_smooth  += alpha * (pan_norm  - claim.pan_smooth)
+                            claim.tilt_smooth += alpha * (tilt_norm - claim.tilt_smooth)
+                        have_aim = True
 
             # Always write the non-pan/tilt claim state (dimmer, colour,
             # strobe, channel defaults) while streaming or calibrating —
@@ -509,177 +517,60 @@ class MoverControlEngine:
         return None
 
     def _aim_to_pan_tilt(self, mover_id, mover, aim_stage):
-        """Pan/tilt from a stage-space aim vector.
+        """Pan/tilt-norm `(0..1, 0..1)` from a stage-space aim vector.
 
-        #720 PR-2.5 / #780 Principle 1 — preference order, SMART first:
-          0. **SMART model OR Home + Home-Secondary 2-pair estimate**:
-             world-XYZ → fixture-internal angles via
-             ``coverage_math.world_to_fixture_pt`` → DMX via
-             ``angles_to_dmx``. This is the unified path; eventually the
-             fallbacks below are deleted (PR-7).
-          1. Parametric v2 model (legacy, kept until SMART proven).
-          2. v1 affine samples (legacy).
-          3. Pure ``aim_to_pan_tilt`` IK when no calibration exists.
+        #784 PR-5 (2026-05-03) — every world-XYZ aim path goes through
+        `aim.sphere.AimSphere` via the per-fixture cache shared with
+        `/api/mover/<fid>/aim`. No SMART / parametric / affine /
+        generic-IK fallback ladder; without Home anchor + a moving-head
+        profile (`panRange` + `tiltRange`) the fixture refuses to aim
+        and this returns `(None, None)` so the caller can skip the
+        pan/tilt claim write. That's correct per #738 — angular
+        control needs only Home.
 
-        #780 Principle 1 — ``mountedInverted`` is **save-time only**: the
-        flag is baked into ``fixture.rotation[1] += 180`` at fixture-record
-        save / startup migration (see ``_normalise_mounted_inverted`` in
-        parent_server.py). Runtime IK reads ``rotation`` and nothing else.
-        The pre-#780 augmentation that re-applied a +180° roll here was
-        double-counting the inversion already encoded in the SMART model's
-        operator-direction-derived signs — see issue #779 / fid 17 vs 19
-        mirror-aim live test.
+        Mount inversion lives in `fixture.rotation` (`#780 P1` bake);
+        the math composes rotation through the AimSphere transparently.
+        Multi-valued azimuth (540° pan + off-centre Home) resolves via
+        `prefer="closest"` against the claim's current DMX pose — a
+        track-update never crosses the pan A/B branch on a fixture
+        already settled on one side.
         """
-        rot_raw = mover.get("rotation") or [0.0, 0.0, 0.0]
-        rot_eff = list(rot_raw) + [0.0, 0.0, 0.0]
-        rot_eff = rot_eff[:3]
-
-        # 0a — Sphere model (#783 PR-γ): preferred path. Home + profile
-        # sign metadata + rotation fully determines the aim sphere — no
-        # Home-Secondary or probe grid required. When the sphere can
-        # build (fixture has Home + a moving-head profile with the PR-α
-        # sign fields), it OWNS world-XYZ → DMX. Multi-valued azimuth
-        # (540° pan fixtures) is resolved via "closest current pose" by
-        # default. Legacy SMART / parametric / affine paths remain as
-        # fallback for unsigned profiles until PR-ε flips the gate.
         pid = mover.get("dmxProfileId")
         prof_info = self._get_profile_info(pid) if pid else None
-        if (prof_info is not None
-                and mover.get("homePanDmx16") is not None
-                and mover.get("homeTiltDmx16") is not None
-                and (prof_info.get("panRange", 0) or 0) > 0
-                and (prof_info.get("tiltRange", 0) or 0) > 0):
-            try:
-                from sphere_model import SphereModel, aim_world_xyz
-                sphere = SphereModel.from_fixture(mover, prof_info)
-                fix_pos = sphere.fixture_xyz
-                target = (fix_pos[0] + aim_stage[0] * 3000.0,
-                          fix_pos[1] + aim_stage[1] * 3000.0,
-                          fix_pos[2] + aim_stage[2] * 3000.0)
-                # Current pose = last DMX written for this mover, when
-                # available, so multi-valued aim picks the side closest
-                # to current. Falls through to Home-anchor when the
-                # claim hasn't pushed a DMX write yet.
-                claim = self._claims.get(mover_id)
-                if claim and getattr(claim, "have_pan_tilt", False):
-                    cur_pose = (int(claim.pan_smooth * 65535),
-                                 int(claim.tilt_smooth * 65535))
-                else:
-                    cur_pose = None
-                pose = aim_world_xyz(target, sphere, current_pose=cur_pose)
-                if pose is not None:
-                    return (pose[0] / 65535.0, pose[1] / 65535.0)
-            except Exception as e:
-                log.debug("sphere aim failed for mover %s: %s — falling back",
-                          mover_id, e)
-
-        # 0 — SMART path (preferred when fixture has Home + Home-Secondary
-        # OR a saved SMART model).
-        smart_model = self._get_smart_model(mover_id, mover)
-        if smart_model is not None:
-            try:
-                from coverage_math import (
-                    world_to_fixture_pt, angles_to_dmx,
-                )
-                fix_pos = (mover.get("x", 0) or 0,
-                           mover.get("y", 0) or 0,
-                           mover.get("z", 0) or 0)
-                target = (fix_pos[0] + aim_stage[0] * 3000.0,
-                          fix_pos[1] + aim_stage[1] * 3000.0,
-                          fix_pos[2] + aim_stage[2] * 3000.0)
-                angles = world_to_fixture_pt(target, fix_pos, rot_eff)
-                if angles is not None:
-                    pan_dmx16, tilt_dmx16 = angles_to_dmx(
-                        angles[0], angles[1], smart_model)
-                    return (pan_dmx16 / 65535.0, tilt_dmx16 / 65535.0)
-            except Exception as e:
-                log.debug("SMART aim path failed for mover %s: %s — falling back",
-                          mover_id, e)
-
-        # 1 — parametric model (preferred legacy). The model bakes
-        # mountedInverted into mount_pitch_deg internally; no rotation
-        # augmentation needed here.
-        model = self._get_mover_model(mover_id, mover)
-        if model is not None:
-            px, py, pz = model.fixture_pos
-            tx = px + aim_stage[0] * 3000.0
-            ty = py + aim_stage[1] * 3000.0
-            tz = pz + aim_stage[2] * 3000.0
-            return model.inverse(tx, ty, tz)
-
-        # 2 — legacy affine (only reached if migration helper returns None
-        # despite samples being present — e.g. < 2 samples). Affine
-        # samples were recorded in the fixture's mounted orientation, so
-        # they already encode the inversion physically.
-        cal = self._get_mover_cal(mover_id)
-        if cal and cal.get("samples") and len(cal["samples"]) >= 2:
-            fx = mover.get("x", 0)
-            fy = mover.get("y", 0)
-            fz = mover.get("z", 0)
-            tx = fx + aim_stage[0] * 3000.0
-            ty = fy + aim_stage[1] * 3000.0
-            tz = fz + aim_stage[2] * 3000.0
-            pt = affine_pan_tilt(cal["samples"], tx, ty, tz)
-            if pt is not None:
-                return pt
-
-        # 3 — no calibration; generic geometric IK using the augmented
-        # rotation so an inverted mount aims at the same world point as
-        # an upright one (just with mirrored DMX values).
-        prof = self._get_profile_info(mover.get("dmxProfileId")) \
-            if mover.get("dmxProfileId") else None
-        pan_range = mover.get("panRange") \
-            or (prof.get("panRange") if prof else None) or 540
-        tilt_range = mover.get("tiltRange") \
-            or (prof.get("tiltRange") if prof else None) or 270
-        return aim_to_pan_tilt(
-            aim_stage,
-            mount_rotation_deg=rot_eff,
-            pan_range=pan_range,
-            tilt_range=tilt_range,
-        )
-
-    def _get_smart_model(self, mover_id, mover):
-        """#720 PR-2.5 — return a SMART model (or 2-pair estimate)
-        usable by ``coverage_math.angles_to_dmx``, or None if neither
-        is available for this fixture.
-
-        Preference: saved SMART model (``mover_calibrations[fid].model``)
-        → 2-pair estimate from Home + Home-Secondary on
-        ``fixtures.json``.
-        """
-        cal = self._get_mover_cal(mover_id) or {}
-        m = cal.get("model")
-        if m and "panDmxPerDeg" in m and "tiltDmxPerDeg" in m \
-                and "homePanDmx16" in m and "homeTiltDmx16" in m:
-            return m
-
-        home_pan = mover.get("homePanDmx16")
-        home_tilt = mover.get("homeTiltDmx16")
-        sec = mover.get("homeSecondary")
-        if home_pan is None or home_tilt is None or not sec:
-            return None
-        prof = self._get_profile_info(mover.get("dmxProfileId")) \
-            if mover.get("dmxProfileId") else None
-        pan_range = (mover.get("panRange")
-                     or (prof.get("panRange") if prof else None)
-                     or 540)
-        tilt_range = (mover.get("tiltRange")
-                      or (prof.get("tiltRange") if prof else None)
-                      or 270)
+        if (prof_info is None
+                or mover.get("homePanDmx16") is None
+                or mover.get("homeTiltDmx16") is None
+                or not ((prof_info.get("panRange", 0) or 0) > 0)
+                or not ((prof_info.get("tiltRange", 0) or 0) > 0)):
+            return (None, None)
         try:
-            from coverage_math import solve_dmx_per_degree
-            return solve_dmx_per_degree(
-                {"panDmx16": home_pan, "tiltDmx16": home_tilt},
-                sec,
-                mover.get("rotation") or [0.0, 0.0, 0.0],
-                pan_range,
-                tilt_range,
-            )
+            from aim.routes import _get_or_build_sphere
+            sphere = _get_or_build_sphere(mover, prof_info)
+            fix_pos = sphere.fixture_xyz
+            target = (fix_pos[0] + aim_stage[0] * 3000.0,
+                      fix_pos[1] + aim_stage[1] * 3000.0,
+                      fix_pos[2] + aim_stage[2] * 3000.0)
+            claim = self._claims.get(mover_id)
+            if claim and getattr(claim, "have_pan_tilt", False):
+                cur_pose = (int(claim.pan_smooth * 65535),
+                             int(claim.tilt_smooth * 65535))
+            else:
+                cur_pose = None
+            pose = sphere.aim_xyz(target, current_pose=cur_pose)
+            if pose is None:
+                return (None, None)
+            return (pose[0] / 65535.0, pose[1] / 65535.0)
         except Exception as e:
-            log.debug("SMART 2-pair estimate failed for mover %s: %s",
+            log.debug("aim_to_pan_tilt: AimSphere failed for mover %s: %s",
                       mover_id, e)
-            return None
+            return (None, None)
+
+    # #784 PR-5 (2026-05-03) — `_get_smart_model` removed. The SMART
+    # model / 2-pair-affine path is no longer consulted; `AimSphere` is
+    # the canonical IK and only needs Home + a moving-head profile.
+    # `_get_mover_cal` is still alive for `mover_calibrations` lookups
+    # (light-map data lives there); only the angular-IK consultation is
+    # gone.
 
     def _write_dmx(self, mover, prof_info, claim, include_pan_tilt=True):
         engine = self._get_engine()

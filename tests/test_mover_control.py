@@ -65,6 +65,13 @@ def main():
             'dmxProfileId': 'test-mh'
         })
         mover_id = r.get_json().get('id')
+        # #784 PR-5 — `_aim_to_pan_tilt` is now sphere-only and needs a
+        # Home anchor + a moving-head profile (`panRange`/`tiltRange`).
+        # Without Home it correctly refuses to aim, so the orient/streaming
+        # tests below would assert against (None, None). Save Home at the
+        # mid-range pose so the sphere can build.
+        c.post(f'/api/fixtures/{mover_id}/home',
+                json={'panDmx16': 32768, 'tiltDmx16': 32768})
 
         # Start DMX engine, then swap its socket for a no-op proxy so the
         # test never emits Art-Net frames onto the LAN — we only need the
@@ -137,8 +144,12 @@ def main():
                  'roll': 20.0, 'pitch': -30.0, 'yaw': 50.0})
         ok(r and r.get('ok'), 'Orient → ok')
 
-        # Wait for tick to process
-        time.sleep(0.1)
+        # Wait for tick to process. The engine tick loop is daemon-threaded
+        # at 40 Hz (#784 PR-5 path: aim builds a sphere lookup table once
+        # per fixture, ~6 ms; subsequent ticks reuse the cache); 1.5 s
+        # gives the orient effect ample time to propagate even with
+        # interleaved Flask test-client requests on the same process.
+        time.sleep(1.5)
 
         r = api(c, 'GET', '/api/mover-control/status')
         claim = r['claims'][0] if r.get('claims') else {}
@@ -188,6 +199,11 @@ def main():
             'dmxProfileId': 'test-strobe',
         })
         strobe_mover = r.get_json().get('id')
+        # #784 PR-5 — sphere needs Home to compute pan/tilt; strobe
+        # write itself is independent but the claim flow still calls
+        # _aim_to_pan_tilt during orient. Home at midpoint.
+        c.post(f'/api/fixtures/{strobe_mover}/home',
+                json={'panDmx16': 32768, 'tiltDmx16': 32768})
         api(c, 'POST', '/api/mover-control/claim',
             {'moverId': strobe_mover, 'deviceId': 'phone-2', 'deviceName': 'Pixel'})
         api(c, 'POST', '/api/mover-control/start',
@@ -201,13 +217,13 @@ def main():
         api(c, 'POST', '/api/mover-control/orient',
             {'moverId': strobe_mover, 'deviceId': 'phone-2',
              'roll': 5, 'pitch': 5, 'yaw': 5})
-        time.sleep(0.1)
+        time.sleep(1.0)
         engine = parent_server._artnet
         uni = engine.get_universe(99)
         shutter_dmx = lambda: uni.get_data()[20 + 4 - 1]  # addr 20 + offset 4
         api(c, 'POST', '/api/mover-control/flash',
             {'moverId': strobe_mover, 'deviceId': 'phone-2', 'on': True})
-        time.sleep(0.15)
+        time.sleep(1.0)
         on_val = shutter_dmx()
         ok(50 <= on_val <= 200, f'Flash on → shutter in Strobe range ({on_val})')
         api(c, 'POST', '/api/mover-control/flash',
