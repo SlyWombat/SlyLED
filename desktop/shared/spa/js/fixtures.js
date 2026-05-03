@@ -173,8 +173,17 @@ function editFixture(id){
   // source of truth for index → axis semantics).
   h+='<label>Rotation (degrees) <span style="color:#64748b;font-size:.75em">Tilt, Roll, Pan</span></label>';
   var rot=f.rotation||[0,0,0];
-  h+='<div style="display:flex;gap:.3em"><label style="font-size:.75em;color:#64748b">Tilt</label><input id="fx-rx" type="number" value="'+rot[0]+'" style="width:70px"> <label style="font-size:.75em;color:#64748b">Roll</label><input id="fx-ry" type="number" value="'+rot[1]+'" style="width:70px"> <label style="font-size:.75em;color:#64748b">Pan</label><input id="fx-rz" type="number" value="'+rot[2]+'" style="width:70px"></div>';
-  h+='<p style="color:#64748b;font-size:.75em;margin-top:.3em">Pan=0 faces forward (+Y depth). Pan=90 faces stage left (+X).<br>Tilt=0 is horizontal. <b>Positive Tilt aims down toward the floor</b> (Tilt=90 is straight down); negative Tilt aims above horizontal.</p>';
+  // #788 follow-up — display Tilt as -rotation[0]. Internal rx>0 aims
+  // down (#586/#600); operator-facing convention is tilt+ = above
+  // horizon (#783). saveFixture negates on read to round-trip cleanly.
+  h+='<div style="display:flex;gap:.3em"><label style="font-size:.75em;color:#64748b">Tilt</label><input id="fx-rx" type="number" value="'+(-rot[0])+'" style="width:70px"> <label style="font-size:.75em;color:#64748b">Roll</label><input id="fx-ry" type="number" value="'+rot[1]+'" style="width:70px"> <label style="font-size:.75em;color:#64748b">Pan</label><input id="fx-rz" type="number" value="'+rot[2]+'" style="width:70px"></div>';
+  // #788 follow-up — tilt convention reads with the operator-facing
+  // angular-aim convention (CLAUDE.md ## Angular-aim convention #783):
+  // tilt+ = above horizon. The internal `rotation[0]` (rx) follows the
+  // CLAUDE.md ## Rotation convention (#586, #600) where rx>0 = aims
+  // down; the form negates on display + save (see fx-rx handling in
+  // saveFixture) so the operator-typed value matches the prompt.
+  h+='<p style="color:#64748b;font-size:.75em;margin-top:.3em">Pan=0 faces forward (+Y). Pan=90 faces stage-left (+X).<br>Tilt=0 is horizontal. <b>Positive Tilt aims above horizon</b> (Tilt=+90 is straight up); negative Tilt aims below horizon (Tilt=-90 is straight down).</p>';
   if(ft==='dmx'){
     h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.5em;cursor:pointer"><input id="fx-inverted" type="checkbox"'+(f.mountedInverted?' checked':'')+' style="width:auto"> <span style="font-size:.82em">Mounted upside-down (inverted)</span></label>';
     h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">Reverses pan and tilt motor direction for truss-mounted fixtures.</p>';
@@ -536,10 +545,12 @@ function _orientCleanup(){
 }
 
 function saveFixture(id,ft){
+  // #788 follow-up — Tilt input uses operator-facing tilt+ = above
+  // horizon (#783); store as rx>0 = aims down (#586/#600) by negating.
   var body={
     name:document.getElementById('fx-name').value,
     type:document.getElementById('fx-type').value,
-    rotation:[parseFloat(document.getElementById('fx-rx').value)||0,parseFloat(document.getElementById('fx-ry').value)||0,parseFloat(document.getElementById('fx-rz').value)||0]
+    rotation:[-(parseFloat(document.getElementById('fx-rx').value)||0),parseFloat(document.getElementById('fx-ry').value)||0,parseFloat(document.getElementById('fx-rz').value)||0]
   };
   if(ft==='dmx'){
     body.dmxUniverse=parseInt(document.getElementById('fx-uni').value)||1;
@@ -1031,17 +1042,23 @@ function _setHomeSecondaryRender(){
     return;
   }
 
+  // #788 follow-up — ask "which way did the beam START to move", not
+  // "which way did it move". The 90° slew can swing past mechanical
+  // extremes (e.g. a fixture already tilted +75° at home that gets
+  // tilted +90° more pushes the head past vertical and ends up
+  // tilted backward); the operator's correct answer is the INITIAL
+  // direction of motion, not the final beam pose.
   s = '<div style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">';
   if(step==='pan'){
     s += 'Step 1 of 2 — pan slew. The fixture will return to home, '
        + 'pause for 2 seconds, then sweep the head 90° in pan. '
-       + 'Watch the beam: did it move <b>left</b> or <b>right</b> '
-       + 'across the room?';
+       + 'Watch the beam: which way did it <b>START</b> to move — '
+       + '<b>left</b> or <b>right</b> across the room?';
   } else if(step==='tilt'){
     s += 'Step 2 of 2 — tilt slew. The fixture will return to home, '
-       + 'pause for 2 seconds, then tilt the head 90°. Did the beam '
-       + 'aim <b>down</b> (closer to the floor) or <b>up</b> (toward '
-       + 'the ceiling)?';
+       + 'pause for 2 seconds, then tilt the head 90°. Which way did '
+       + 'the beam <b>START</b> to move — <b>down</b> (toward the '
+       + 'floor) or <b>up</b> (toward the ceiling)?';
   }
   s += '</div>';
   s += '<div id="sh2-status" style="font-size:.78em;color:#64748b;margin-bottom:.6em">Returning to home…</div>';
@@ -1049,16 +1066,16 @@ function _setHomeSecondaryRender(){
   if(step==='pan'){
     s += '<div style="display:flex;gap:.5em;margin-bottom:.6em">';
     s += '<button class="btn" onclick="_setHomeSecondaryAnswer(\'left\')" '
-       + 'style="flex:1;background:#1e3a5f;color:#93c5fd;padding:.5em">← Beam moved LEFT</button>';
+       + 'style="flex:1;background:#1e3a5f;color:#93c5fd;padding:.5em">← Beam started LEFT</button>';
     s += '<button class="btn" onclick="_setHomeSecondaryAnswer(\'right\')" '
-       + 'style="flex:1;background:#1e3a5f;color:#93c5fd;padding:.5em">Beam moved RIGHT →</button>';
+       + 'style="flex:1;background:#1e3a5f;color:#93c5fd;padding:.5em">Beam started RIGHT →</button>';
     s += '</div>';
   } else if(step==='tilt'){
     s += '<div style="display:flex;gap:.5em;margin-bottom:.6em">';
     s += '<button class="btn" onclick="_setHomeSecondaryAnswer(\'down\')" '
-       + 'style="flex:1;background:#1e3a5f;color:#93c5fd;padding:.5em">↓ Beam moved DOWN</button>';
+       + 'style="flex:1;background:#1e3a5f;color:#93c5fd;padding:.5em">↓ Beam started DOWN</button>';
     s += '<button class="btn" onclick="_setHomeSecondaryAnswer(\'up\')" '
-       + 'style="flex:1;background:#1e3a5f;color:#93c5fd;padding:.5em">Beam moved UP ↑</button>';
+       + 'style="flex:1;background:#1e3a5f;color:#93c5fd;padding:.5em">Beam started UP ↑</button>';
     s += '</div>';
   }
   s += '<div style="display:flex;gap:.4em;justify-content:space-between">';
