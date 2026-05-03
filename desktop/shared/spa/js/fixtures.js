@@ -86,8 +86,22 @@ function autoCreateFixtures(){
 }
 
 function editFixture(id){
+  // #788 — defensive rehydrate: if `_fixtures` is empty (early click,
+  // tab-switch race, or a sibling tab clobbered the cache) re-fetch the
+  // layout and retry once. Previously a stale cache silently dropped the
+  // click and the modal never opened.
+  if(!_fixtures||!_fixtures.length){
+    if(!window._editFixtureRetry){
+      window._editFixtureRetry=true;
+      loadFixtures(function(){window._editFixtureRetry=false;editFixture(id);});
+    }
+    return;
+  }
   var f=null;_fixtures.forEach(function(fx){if(fx.id===id)f=fx;});
-  if(!f)return;
+  if(!f){
+    if(typeof console!=='undefined'&&console.warn)console.warn('editFixture: id',id,'not found in _fixtures (',_fixtures.length,'entries)');
+    return;
+  }
   var ft=f.fixtureType||'led';
   var h='<label>Name</label><input id="fx-name" value="'+escapeHtml(f.name)+'" style="width:100%">';
   h+='<label>Geometry</label><select id="fx-type"><option value="linear"'+(f.type==='linear'?' selected':'')+'>Linear</option><option value="point"'+(f.type==='point'?' selected':'')+'>Point</option><option value="group"'+(f.type==='group'?' selected':'')+'>Group</option></select>';
@@ -152,9 +166,14 @@ function editFixture(id){
   // Position (mm)
   h+='<label>Position (mm)</label>';
   h+='<div style="display:flex;gap:.3em;margin-bottom:.6em"><label style="font-size:.75em;color:#64748b">X</label><input id="fx-px" type="number" value="'+(f.x||0)+'" style="width:80px"> <label style="font-size:.75em;color:#64748b">Y</label><input id="fx-py" type="number" value="'+(f.y||0)+'" style="width:80px"> <label style="font-size:.75em;color:#64748b">Z</label><input id="fx-pz" type="number" value="'+(f.z||0)+'" style="width:80px"></div>';
-  h+='<label>Rotation (degrees) <span style="color:#64748b;font-size:.75em">Tilt, Pan, Roll</span></label>';
+  // #788 — rotation array is [rx=Tilt, ry=Roll, rz=Pan] per #600. Earlier
+  // labels read "Tilt, Pan, Roll" which bound Pan→fx-ry (=Roll) and
+  // Roll→fx-rz (=Pan), so operator-entered values landed on the wrong
+  // axis. Labels now match camera_math.rotation_from_layout (the single
+  // source of truth for index → axis semantics).
+  h+='<label>Rotation (degrees) <span style="color:#64748b;font-size:.75em">Tilt, Roll, Pan</span></label>';
   var rot=f.rotation||[0,0,0];
-  h+='<div style="display:flex;gap:.3em"><label style="font-size:.75em;color:#64748b">Tilt</label><input id="fx-rx" type="number" value="'+rot[0]+'" style="width:70px"> <label style="font-size:.75em;color:#64748b">Pan</label><input id="fx-ry" type="number" value="'+rot[1]+'" style="width:70px"> <label style="font-size:.75em;color:#64748b">Roll</label><input id="fx-rz" type="number" value="'+rot[2]+'" style="width:70px"></div>';
+  h+='<div style="display:flex;gap:.3em"><label style="font-size:.75em;color:#64748b">Tilt</label><input id="fx-rx" type="number" value="'+rot[0]+'" style="width:70px"> <label style="font-size:.75em;color:#64748b">Roll</label><input id="fx-ry" type="number" value="'+rot[1]+'" style="width:70px"> <label style="font-size:.75em;color:#64748b">Pan</label><input id="fx-rz" type="number" value="'+rot[2]+'" style="width:70px"></div>';
   h+='<p style="color:#64748b;font-size:.75em;margin-top:.3em">Pan=0 faces forward (+Y depth). Pan=90 faces stage left (+X).<br>Tilt=0 is horizontal. <b>Positive Tilt aims down toward the floor</b> (Tilt=90 is straight down); negative Tilt aims above horizontal.</p>';
   if(ft==='dmx'){
     h+='<label style="display:flex;align-items:center;gap:.4em;margin-top:.5em;cursor:pointer"><input id="fx-inverted" type="checkbox"'+(f.mountedInverted?' checked':'')+' style="width:auto"> <span style="font-size:.82em">Mounted upside-down (inverted)</span></label>';

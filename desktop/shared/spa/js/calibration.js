@@ -225,7 +225,10 @@ function _calCompute(){
 // ── Unified mover calibration wizard ─────────────────────────────────
 var _moverCalFid=null;
 var _moverCalTimer=null;
-var _manCal=null; // manual calibration state: {fid, markers:[], step, currentIdx, samples:[], channels:null}
+// #788 — manual jog-to-markers cal flow + state removed. The sphere model
+// (#784/#785) makes the operator-aimed jog wizard obsolete; the only
+// operator cal step left is Set Home + Movement Direction (handled by
+// _setHomeOpen) plus the new _aimVerifyStart marker walk.
 
 // ── Printable checkerboard + camera calibration status ───────────────
 
@@ -1111,34 +1114,160 @@ function _intrinsicCalStart(fid){
 function _moverCalStart(fixId){
   _moverCalFid=fixId;
   var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===fixId)f=fx;});
-  var hasCams=(_fixtures||[]).some(function(fx){return fx.fixtureType==='camera'&&fx.cameraIp;});
-  var h='<div style="min-width:400px">';
-  h+='<div style="font-size:.85em;color:#94a3b8;margin-bottom:.8em">Choose calibration method for <strong>'+escapeHtml(f?f.name:'fixture')+'</strong>:</div>';
+  var hasPrimary=f&&f.homePanDmx16!=null&&f.homeTiltDmx16!=null;
+  var hasSecondary=f&&!!f.homeSecondary;
+  var h='<div style="min-width:420px">';
+  h+='<div style="font-size:.85em;color:#94a3b8;margin-bottom:.8em">Calibrate <strong>'+escapeHtml(f?f.name:'fixture')+'</strong>. Pick an action:</div>';
   h+='<div style="display:flex;gap:.6em;flex-direction:column">';
-  // Automatic option
-  h+='<div class="card" style="padding:.8em;cursor:'+(hasCams?'pointer':'default')+';opacity:'+(hasCams?'1':'.5')+'" '+(hasCams?'onclick="_moverCalAutoStart()"':'')+' >';
-  h+='<div style="font-size:.95em;color:#e2e8f0;font-weight:600">\ud83d\udcf7 Automatic (Camera)</div>';
-  h+='<div style="font-size:.8em;color:#94a3b8;margin-top:.2em">Uses camera beam detection to discover and map the fixture automatically.</div>';
-  if(!hasCams)h+='<div style="font-size:.78em;color:#f59e0b;margin-top:.2em">No cameras in layout \u2014 add a camera fixture first.</div>';
+  // Set Home + Movement Direction \u2014 drives the existing two-step Home wizard
+  // (primary anchor \u2192 secondary direction calls). This is the only operator
+  // task left under the #784 sphere model \u2014 there is no automatic camera-
+  // confirmed pass and no manual jog-to-markers wizard.
+  var homeBadge='';
+  if(hasPrimary&&hasSecondary)homeBadge=' <span style="color:#4ade80;font-size:.78em">\u2713 set</span>';
+  else if(hasPrimary)homeBadge=' <span style="color:#fbbf24;font-size:.78em">\u25d0 secondary missing</span>';
+  else homeBadge=' <span style="color:#f59e0b;font-size:.78em">\u26a0 required</span>';
+  h+='<div class="card" style="padding:.8em;cursor:pointer" onclick="closeModal();_setHomeOpen('+fixId+')">';
+  h+='<div style="font-size:.95em;color:#e2e8f0;font-weight:600">\u2699 Set Home and Movement Direction'+homeBadge+'</div>';
+  h+='<div style="font-size:.8em;color:#94a3b8;margin-top:.2em">Drive the head to its rotation-forward pose with the 16-bit pan/tilt sliders, then confirm. The wizard then nudges pan + tilt and asks which direction the beam moved.</div>';
   h+='</div>';
-  // Manual option
-  h+='<div class="card" style="padding:.8em;cursor:pointer" onclick="_moverCalManualStart('+fixId+')">';
-  h+='<div style="font-size:.95em;color:#e2e8f0;font-weight:600">\ud83c\udfaf Manual (Jog to Markers)</div>';
-  h+='<div style="font-size:.8em;color:#94a3b8;margin-top:.2em">Place markers at known positions, then aim the beam at each one. Works without cameras.</div>';
-  h+='</div></div>';
-  // Verify existing calibration option
-  if(f&&f.moverCalibrated){
-    h+='<div class="card" style="padding:.8em;cursor:pointer" onclick="_manCalVerifyExisting('+fixId+')">';
-    h+='<div style="font-size:.95em;color:#e2e8f0;font-weight:600">\u2705 Verify Existing Calibration</div>';
-    h+='<div style="font-size:.8em;color:#94a3b8;margin-top:.2em">Test saved calibration positions. Send the beam to each recorded marker to confirm accuracy.</div>';
-    h+='</div>';
-  }
+  // Verify \u2014 walk surveyed ArUco markers (or operator-defined XYZ list)
+  // via /api/mover/<fid>/aim. No camera detection step; operator visually
+  // confirms each hit. Read-only \u2014 never mutates the fixture record.
+  var verifyDisabled=!hasPrimary||!hasSecondary;
+  var verifyStyle='padding:.8em;cursor:'+(verifyDisabled?'default':'pointer')+';opacity:'+(verifyDisabled?'.55':'1');
+  var verifyOnclick=verifyDisabled?'':'onclick="_aimVerifyStart('+fixId+')"';
+  h+='<div class="card" style="'+verifyStyle+'" '+verifyOnclick+'>';
+  h+='<div style="font-size:.95em;color:#e2e8f0;font-weight:600">\u2705 Verify</div>';
+  h+='<div style="font-size:.8em;color:#94a3b8;margin-top:.2em">Walk the surveyed ArUco markers one-by-one. The orchestrator aims the head at each marker via <code>/api/mover/'+fixId+'/aim</code>; you confirm Hit / Miss visually.</div>';
+  if(verifyDisabled)h+='<div style="font-size:.78em;color:#f59e0b;margin-top:.2em">Set Home + Movement Direction first.</div>';
+  h+='</div>';
   h+='</div>';
   h+='<div style="margin-top:.6em"><button class="btn btn-off" onclick="closeModal()">Cancel</button></div>';
   h+='</div>';
   document.getElementById('modal-title').textContent='Calibrate Mover';
   document.getElementById('modal-body').innerHTML=h;
   document.getElementById('modal').style.display='block';
+}
+
+// \u2500\u2500 Verify flow (#788) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// Walks the surveyed ArUco marker registry via POST /api/mover/<fid>/aim
+// {x,y,z}. Lamp on per marker via /api/fixtures/<fid>/lamp. No automatic
+// detection \u2014 operator clicks Hit / Miss / Skip.
+
+var _aimVerify=null;
+
+function _aimVerifyStart(fid){
+  _moverCalFid=fid;
+  ra('GET','/api/aruco/markers',null,function(r){
+    var markers=(r&&r.markers)||[];
+    if(!markers.length){
+      alert('No surveyed ArUco markers \u2014 register markers in the Setup tab before running Verify.');
+      return;
+    }
+    _aimVerify={fid:fid,markers:markers,idx:0,results:[]};
+    _aimVerifyRender();
+  });
+}
+
+function _aimVerifyRender(){
+  if(!_aimVerify){closeModal();return;}
+  var fid=_aimVerify.fid;
+  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===fid)f=fx;});
+  var fname=f?f.name:'Fixture '+fid;
+  var i=_aimVerify.idx, total=_aimVerify.markers.length;
+  if(i>=total){_aimVerifySummary(fname);return;}
+  var m=_aimVerify.markers[i];
+  var x=Math.round(m.stage&&m.stage[0]||m.x||0);
+  var y=Math.round(m.stage&&m.stage[1]||m.y||0);
+  var z=Math.round(m.stage&&m.stage[2]||m.z||0);
+  var h='<div style="min-width:420px">';
+  h+='<div style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">Verify aim for <strong>'+escapeHtml(fname)+'</strong> \u2014 marker '+(i+1)+' of '+total+'.</div>';
+  h+='<div class="card" style="padding:.7em;margin-bottom:.6em">';
+  h+='<div style="font-size:.85em;color:#e2e8f0">Marker <b>#'+escapeHtml(String(m.id))+'</b></div>';
+  h+='<div style="font-size:.78em;color:#94a3b8;margin-top:.2em;font-family:monospace">stage = ('+x+', '+y+', '+z+') mm</div>';
+  h+='<div id="aimv-status" style="font-size:.78em;color:#64748b;margin-top:.4em">Ready to aim.</div>';
+  h+='</div>';
+  if(_aimVerify.results.length){
+    h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.3em">Progress:</div>';
+    h+='<div style="font-size:.75em;font-family:monospace;color:#cbd5e1;margin-bottom:.5em">';
+    _aimVerify.results.forEach(function(r){
+      var icon=r.hit==='hit'?'\u2705':r.hit==='miss'?'\u274c':'\u23ed';
+      h+='<div>'+icon+' '+escapeHtml(String(r.id))+' \u2014 '+r.hit+(r.detail?' ('+escapeHtml(r.detail)+')':'')+'</div>';
+    });
+    h+='</div>';
+  }
+  h+='<div style="display:flex;gap:.4em;flex-wrap:wrap;margin-top:.6em">';
+  h+='<button class="btn btn-on" onclick="_aimVerifyAim()">Aim &amp; Lamp On</button>';
+  h+='<button class="btn" style="background:#15803d;color:#bbf7d0" onclick="_aimVerifyMark(\'hit\')">Hit</button>';
+  h+='<button class="btn" style="background:#7f1d1d;color:#fecaca" onclick="_aimVerifyMark(\'miss\')">Miss</button>';
+  h+='<button class="btn" style="background:#334155;color:#94a3b8" onclick="_aimVerifyMark(\'skip\')">Skip</button>';
+  h+='<button class="btn btn-off" style="margin-left:auto" onclick="_aimVerifyEnd()">End</button>';
+  h+='</div></div>';
+  document.getElementById('modal-title').textContent='Verify Aim';
+  document.getElementById('modal-body').innerHTML=h;
+  document.getElementById('modal').style.display='block';
+}
+
+function _aimVerifyAim(){
+  if(!_aimVerify)return;
+  var fid=_aimVerify.fid;
+  var m=_aimVerify.markers[_aimVerify.idx];
+  if(!m)return;
+  var x=Number(m.stage&&m.stage[0]!=null?m.stage[0]:m.x||0);
+  var y=Number(m.stage&&m.stage[1]!=null?m.stage[1]:m.y||0);
+  var z=Number(m.stage&&m.stage[2]!=null?m.stage[2]:m.z||0);
+  var st=document.getElementById('aimv-status');
+  if(st)st.innerHTML='<span style="color:#fbbf24">Sending aim\u2026</span>';
+  ra('POST','/api/mover/'+fid+'/aim',{x:x,y:y,z:z},function(r){
+    if(!r||r.err){
+      if(st)st.innerHTML='<span style="color:#f87171">Aim failed: '+escapeHtml(r&&(r.err||r.detail)||'unknown')+'</span>';
+      return;
+    }
+    ra('POST','/api/fixtures/'+fid+'/lamp',{on:true},function(){
+      if(st)st.innerHTML='<span style="color:#34d399">Aimed \u2192 pan='+(r.panDmx16||'?')+' tilt='+(r.tiltDmx16||'?')+'. Lamp on. Click Hit or Miss.</span>';
+    });
+  });
+}
+
+function _aimVerifyMark(verdict){
+  if(!_aimVerify)return;
+  var m=_aimVerify.markers[_aimVerify.idx];
+  if(m)_aimVerify.results.push({id:m.id,hit:verdict});
+  _aimVerify.idx++;
+  _aimVerifyRender();
+}
+
+function _aimVerifySummary(fname){
+  var hits=_aimVerify.results.filter(function(r){return r.hit==='hit';}).length;
+  var miss=_aimVerify.results.filter(function(r){return r.hit==='miss';}).length;
+  var skip=_aimVerify.results.filter(function(r){return r.hit==='skip';}).length;
+  var total=_aimVerify.results.length;
+  var pass=miss===0&&hits>0;
+  var h='<div style="min-width:420px">';
+  h+='<div style="font-size:.95em;font-weight:600;margin-bottom:.4em;color:'+(pass?'#34d399':'#fbbf24')+'">'+(pass?'\u2705 Verify PASS':'\u26a0 Verify \u2014 operator review needed')+'</div>';
+  h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.6em">Fixture: <strong>'+escapeHtml(fname)+'</strong> \u2014 '+hits+' hit / '+miss+' miss / '+skip+' skip ('+total+' markers).</div>';
+  if(miss>0){
+    h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.4em">Suggested next step: re-run <em>Set Home and Movement Direction</em>, or revisit fixture <code>rotation</code> in the Edit modal.</div>';
+  }
+  h+='<div style="font-size:.75em;font-family:monospace;color:#cbd5e1;background:#0a0f1a;border:1px solid #1e293b;border-radius:4px;padding:.4em;max-height:160px;overflow:auto">';
+  _aimVerify.results.forEach(function(r){
+    var icon=r.hit==='hit'?'\u2705':r.hit==='miss'?'\u274c':'\u23ed';
+    h+='<div>'+icon+' '+escapeHtml(String(r.id))+' \u2014 '+r.hit+'</div>';
+  });
+  h+='</div>';
+  h+='<div style="display:flex;gap:.4em;margin-top:.6em">';
+  h+='<button class="btn btn-on" onclick="_aimVerifyEnd()">Done</button>';
+  h+='</div></div>';
+  document.getElementById('modal-title').textContent='Verify Aim \u2014 Results';
+  document.getElementById('modal-body').innerHTML=h;
+}
+
+function _aimVerifyEnd(){
+  var fid=_aimVerify?_aimVerify.fid:null;
+  _aimVerify=null;
+  if(fid!=null)ra('POST','/api/fixtures/'+fid+'/lamp',{on:false},function(){});
+  closeModal();
 }
 // #502 — calibration wizard modal (v2). Shows:
 //   - fixture name + current fit quality badge (if already calibrated)
@@ -2335,521 +2464,13 @@ function _moverCalDelete(){
   });
 }
 
-// ── Manual mover calibration (#368) ──────────────────────────────────
-
-function _moverCalManualStart(fixId){
-  _moverCalFid=fixId;
-  // Ensure _fixtures have positions from layout
-  ra('GET','/api/layout',null,function(lay){
-    if(lay&&lay.fixtures)_fixtures=lay.fixtures;
-    // #614 — pull the surveyed ArUco marker registry so the "or from:"
-    // dropdown in _manCalRenderMarkers can offer the already-measured
-    // floor positions. Non-fatal on failure; the dropdown simply omits
-    // ArUco entries.
-    if(typeof _arucoLoad==='function'){
-      _arucoLoad(function(){_moverCalManualStart2(fixId);});
-    }else{
-      _moverCalManualStart2(fixId);
-    }
-  });
-}
-var _calMarkers=(function(){try{var s=localStorage.getItem('slyled_cal_markers');return s?JSON.parse(s):null;}catch(e){return null;}})();
-function _moverCalManualStart2(fixId){
-  // Reuse persisted markers or start empty
-  var markers=_calMarkers?JSON.parse(JSON.stringify(_calMarkers)):[];
-  _manCal={fid:fixId,markers:markers,step:'markers',currentIdx:0,samples:[],channels:null,savedSamples:null};
-  // Load existing calibration samples for this fixture (for restoring positions)
-  ra('GET','/api/calibration/mover/'+fixId,null,function(cal){
-    if(cal&&cal.samples)_manCal.savedSamples=cal.samples;
-    _manCalRender();
-  });
-}
-
-function _manCalRender(){
-  if(!_manCal)return;
-  var fid=_manCal.fid;
-  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===fid)f=fx;});
-  var fname=f?f.name:'Fixture';
-  if(_manCal.step==='markers')_manCalRenderMarkers(fname);
-  else if(_manCal.step==='jog')_manCalRenderJog(fname);
-  else if(_manCal.step==='verify')_manCalRenderVerify(fname);
-  else if(_manCal.step==='done')_manCalRenderDone(fname);
-}
-
-function _manCalRenderMarkers(fname){
-  var h='<div style="min-width:420px">';
-  h+='<div style="font-size:.85em;color:#94a3b8;margin-bottom:.6em">Place physical markers (tape, objects) at known stage positions. You\'ll aim <strong>'+escapeHtml(fname)+'</strong> at each one.</div>';
-  h+='<div style="font-size:.78em;color:#64748b;margin-bottom:.6em">Spread markers across the stage floor for best results. Minimum 2, recommended 4+.</div>';
-  h+='<table style="width:100%;font-size:.82em;border-collapse:collapse">';
-  h+='<tr style="color:#94a3b8"><th style="text-align:left;padding:2px 4px">#</th><th>Name</th><th>X (mm)</th><th>Y (mm)</th><th>Z (mm)</th><th></th></tr>';
-  _manCal.markers.forEach(function(m,i){
-    h+='<tr><td style="padding:2px 4px;color:#94a3b8">'+(i+1)+'</td>';
-    h+='<td style="font-size:.78em;color:#22d3ee;max-width:80px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">'+(m.name?escapeHtml(m.name):'')+'</td>';
-    h+='<td><input type="number" value="'+m.x+'" style="width:70px" onchange="_manCal.markers['+i+'].x=parseInt(this.value)||0"></td>';
-    h+='<td><input type="number" value="'+m.y+'" style="width:70px" onchange="_manCal.markers['+i+'].y=parseInt(this.value)||0"></td>';
-    h+='<td><input type="number" value="'+m.z+'" style="width:70px" onchange="_manCal.markers['+i+'].z=parseInt(this.value)||0"></td>';
-    h+='<td><button class="btn" style="font-size:.75em;padding:1px 6px;background:#7f1d1d;color:#fca5a5" onclick="_manCal.markers.splice('+i+',1);_manCalRender()">&#x2715;</button></td></tr>';
-  });
-  h+='</table>';
-  h+='<div style="margin-top:.4em;display:flex;gap:.5em;align-items:center;flex-wrap:wrap">';
-  h+='<button class="btn" style="font-size:.8em;background:#1e3a5f;color:#93c5fd" onclick="_manCalAddMarker()">+ Add Marker</button>';
-  // Dropdown — pick position from a layout object or fixture
-  var pickItems=[];
-  (_objects||[]).filter(function(o){return o.transform&&o.transform.pos;}).forEach(function(o){
-    var p=o.transform.pos;
-    pickItems.push({id:'obj:'+o.id,name:o.name,x:p[0],y:p[1],z:p[2]});
-  });
-  // Also include positioned fixtures (cameras, other movers — not the one being calibrated)
-  // _fixtures already have x/y/z merged from layout by loadLayout()
-  (_fixtures||[]).forEach(function(f){
-    if(f.id===_manCal.fid)return; // skip self
-    if(f.x||f.y||f.z){
-      pickItems.push({id:'fix:'+f.id,name:f.name||('Fixture '+f.id),x:f.x,y:f.y,z:f.z});
-    }
-  });
-  // #614 — surveyed ArUco markers from the #596 registry. Physical
-  // floor-placed tags are the most reliable set of "known stage
-  // positions" in the room; offering them here means the operator
-  // doesn't re-type coordinates already entered for camera cal.
-  var aruco=(typeof _aruco_cache!=='undefined'&&_aruco_cache&&_aruco_cache.markers)||[];
-  aruco.forEach(function(m){
-    var lbl='ArUco '+m.id+(m.note?' — '+m.note:'');
-    pickItems.push({id:'aruco:'+m.id,name:lbl,x:m.x|0,y:m.y|0,z:m.z|0});
-  });
-  if(pickItems.length){
-    h+='<span style="font-size:.78em;color:#64748b">or from:</span>';
-    h+='<select style="font-size:.8em" onchange="_manCalAddFromPick(this)">';
-    h+='<option value="">— pick —</option>';
-    pickItems.forEach(function(it){
-      h+='<option value="'+it.id+'">'+escapeHtml(it.name)+' ('+it.x+','+it.y+','+it.z+')</option>';
-    });
-    h+='</select>';
-  }
-  h+='</div>';
-  h+='<div style="display:flex;gap:.4em;margin-top:.8em">';
-  var canNext=_manCal.markers.length>=2;
-  h+='<button class="btn btn-on" onclick="_manCalNextToJog()"'+(canNext?'':' disabled')+'>Next: Jog to Markers</button>';
-  h+='<button class="btn btn-off" onclick="_manCal=null;closeModal()">Cancel</button>';
-  h+='</div></div>';
-  document.getElementById('modal-title').textContent='Manual Calibration \u2014 Markers';
-  document.getElementById('modal-body').innerHTML=h;
-  document.getElementById('modal').style.display='block';
-}
-
-function _manCalAddMarker(){
-  var sm=_sfStageMm();
-  _manCal.markers.push({x:Math.round(sm.sw/2),y:Math.round(sm.sd/2),z:0});
-  _manCalRender();
-}
-function _manCalAddFromPick(selEl){
-  var val=selEl.value;if(!val)return;
-  selEl.value='';
-  var parts=val.split(':');var type=parts[0];var id=parseInt(parts[1]);
-  var name='',x=0,y=0,z=0;
-  if(type==='obj'){
-    (_objects||[]).forEach(function(o){if(o.id===id&&o.transform){
-      var p=o.transform.pos||[0,0,0];name=o.name;x=p[0];y=p[1];z=p[2];}});
-  }else if(type==='fix'){
-    (_fixtures||[]).forEach(function(f){if(f.id===id){name=f.name||'Fixture';x=f.x||0;y=f.y||0;z=f.z||0;}});
-  }else if(type==='aruco'){
-    // #614 — surveyed ArUco marker from the #596 registry
-    var aruco=(typeof _aruco_cache!=='undefined'&&_aruco_cache&&_aruco_cache.markers)||[];
-    aruco.forEach(function(m){
-      if(m.id===id){
-        name='ArUco '+m.id+(m.note?' — '+m.note:'');
-        x=m.x|0;y=m.y|0;z=m.z|0;
-      }
-    });
-  }
-  if(!name)return;
-  _manCal.markers.push({x:x,y:y,z:z,name:name});
-  _manCalRender();
-}
-
-function _manCalNextToJog(){
-  if(_manCal.markers.length<2)return;
-  // Persist markers for reuse across fixtures and sessions
-  _calMarkers=JSON.parse(JSON.stringify(_manCal.markers));
-  try{localStorage.setItem('slyled_cal_markers',JSON.stringify(_calMarkers));}catch(e){}
-  _manCal.step='jog';
-  _manCal.currentIdx=0;
-  _manCal.samples=[];
-  // Fetch channel info for pan/tilt/dimmer offsets
-  ra('GET','/api/dmx/fixture/'+_manCal.fid+'/channels',null,function(d){
-    if(!d||!d.channels){_manCal.channels={};_manCalRender();return;}
-    var ch={};
-    d.channels.forEach(function(c){
-      if(c.type==='pan')ch.pan=c.offset;
-      if(c.type==='tilt')ch.tilt=c.offset;
-      // #714 — fine pan/tilt offsets for 16-bit drive.
-      if(c.type==='pan-fine')ch.panFine=c.offset;
-      if(c.type==='tilt-fine')ch.tiltFine=c.offset;
-      if(c.type==='dimmer')ch.dimmer=c.offset;
-      if(c.type==='red')ch.red=c.offset;
-      if(c.type==='green')ch.green=c.offset;
-      if(c.type==='blue')ch.blue=c.offset;
-      if(c.type==='white')ch.white=c.offset;
-      if(c.type==='speed')ch.speed=c.offset;
-      if(c.type==='strobe')ch.strobe=c.offset;
-      if(c.type==='gobo')ch.gobo=c.offset;
-    });
-    _manCal.channels=ch;
-    _manCal.allChannels=d.channels; // full channel list for DMX display
-    // Render handles DMX send — it restores saved pan/tilt per marker + defaults
-    _manCalRender();
-  });
-}
-
-function _manCalRenderJog(fname){
-  var idx=_manCal.currentIdx;
-  var total=_manCal.markers.length;
-  var m=_manCal.markers[idx];
-  var ch=_manCal.channels||{};
-  var f=null;(_fixtures||[]).forEach(function(fx){if(fx.id===_manCal.fid)f=fx;});
-  var addr=f?('U'+(f.dmxUniverse||1)+' @ '+(f.dmxStartAddr||1)):'';
-  // #714 \u2014 16-bit drive when the profile exposes pan-fine + tilt-fine.
-  // Without the fine channels the operator gets ~2.1 deg per slider step
-  // on a 540 deg pan, too coarse to land the beam on a 150 mm marker.
-  var has16 = (ch.panFine != null && ch.tiltFine != null);
-  var h='<div style="min-width:460px">';
-  // Progress
-  h+='<div class="prog-bar" style="height:6px;margin-bottom:.5em"><div class="prog-fill" style="width:'+Math.round((idx/total)*100)+'%"></div></div>';
-  h+='<div style="font-size:.9em;color:#e2e8f0;margin-bottom:.4em">Marker <strong>'+(idx+1)+' of '+total+'</strong>: aim beam at <span style="color:#22d3ee">X='+m.x+' Y='+m.y+' Z='+m.z+'</span> mm'+(m.name?' <span style="color:#94a3b8">('+escapeHtml(m.name)+')</span>':'')+'</div>';
-  h+='<div style="font-size:.78em;color:#94a3b8;margin-bottom:.6em">Adjust sliders until the beam centers on the physical marker.'+(has16?' <span style="color:#4ade80">(16-bit drive)</span>':'')+'</div>';
-  // All DMX channels
-  var allCh=_manCal.allChannels||[];
-  // Restore pan/tilt as a 16-bit value (or 8-bit equivalent on profiles
-  // without fine channels). Saved samples carry pan/tilt as 0..1 floats.
-  var pan16 = 32768, tilt16 = 32768;
-  if(_manCal.samples[idx]){
-    pan16 = Math.round(_manCal.samples[idx].pan * 65535);
-    tilt16 = Math.round(_manCal.samples[idx].tilt * 65535);
-  }else if(_manCal.savedSamples){
-    var mm = _manCal.markers[idx];
-    _manCal.savedSamples.forEach(function(s){
-      if(s.stageX===mm.x && s.stageY===mm.y && s.stageZ===mm.z){
-        pan16 = Math.round(s.pan * 65535);
-        tilt16 = Math.round(s.tilt * 65535);
-      }
-    });
-  }else if(idx>0 && _manCal.samples.length>0){
-    var ls = _manCal.samples[_manCal.samples.length-1];
-    pan16 = Math.round(ls.pan * 65535);
-    tilt16 = Math.round(ls.tilt * 65535);
-  }
-  // 8-bit slider values derived from 16-bit (used by per-channel rows
-  // for pan/tilt + the no-fine fallback path).
-  var panVal = (pan16 >> 8) & 0xFF;
-  var tiltVal = (tilt16 >> 8) & 0xFF;
-  // Stash the 16-bit state so step buttons + confirm can read it back
-  // without depending on slider rounding. Initialised below.
-  _manCal._pan16 = pan16; _manCal._tilt16 = tilt16;
-  if(has16){
-    h+='<div style="display:grid;grid-template-columns:60px 1fr 60px;gap:.4em .5em;align-items:center;margin-bottom:.6em">';
-    h+='<label style="font-size:.82em;color:#22d3ee;text-align:right">Pan</label>';
-    h+='<input type="range" id="mcj-pan16" min="0" max="65535" step="1" value="'+pan16+'" oninput="_manCalJog16(\'pan\',this.value)">';
-    h+='<span id="mcj-pan16v" style="font-size:.78em;color:#e2e8f0;font-family:monospace;text-align:right">'+pan16+'</span>';
-    h+='<label style="font-size:.82em;color:#22d3ee;text-align:right">Tilt</label>';
-    h+='<input type="range" id="mcj-tilt16" min="0" max="65535" step="1" value="'+tilt16+'" oninput="_manCalJog16(\'tilt\',this.value)">';
-    h+='<span id="mcj-tilt16v" style="font-size:.78em;color:#e2e8f0;font-family:monospace;text-align:right">'+tilt16+'</span>';
-    h+='</div>';
-  }
-  h+='<div style="max-height:280px;overflow-y:auto;border:1px solid #1e293b;border-radius:4px;padding:.4em;background:#0a0f1a;margin-bottom:.6em">';
-  if(allCh.length){
-    allCh.forEach(function(c){
-      var isPan=(c.type==='pan'),isTilt=(c.type==='tilt');
-      var isPanFine=(c.type==='pan-fine'),isTiltFine=(c.type==='tilt-fine');
-      var isDim=(c.type==='dimmer'),isGreen=(c.type==='green'),isSpeed=(c.type==='speed');
-      // #714 \u2014 when the 16-bit driver is active, pan/tilt coarse + fine
-      // rows are read-only mirrors so operators can see the wire bytes
-      // but can't desync them by dragging the per-channel slider.
-      var defVal;
-      if(isPan)      defVal = panVal;
-      else if(isTilt) defVal = tiltVal;
-      else if(isPanFine)  defVal = pan16 & 0xFF;
-      else if(isTiltFine) defVal = tilt16 & 0xFF;
-      else if(isDim)  defVal = 255;
-      else if(isGreen)defVal = 255;
-      else if(isSpeed)defVal = 0;
-      else            defVal = c.default || 0;
-      var curVal=defVal;
-      var driven = has16 && (isPan||isTilt||isPanFine||isTiltFine);
-      var highlight = (isPan||isTilt||isPanFine||isTiltFine)
-                       ? 'color:#22d3ee;font-weight:600'
-                       : 'color:#94a3b8';
-      h+='<div style="display:flex;align-items:center;gap:.4em;margin-bottom:.2em">';
-      h+='<label style="width:90px;font-size:.78em;'+highlight+';text-align:right;overflow:hidden;white-space:nowrap;text-overflow:ellipsis" title="'+escapeHtml(c.name)+'">'+escapeHtml(c.name)+'</label>';
-      h+='<input type="range" min="0" max="255" value="'+curVal+'" style="flex:1'+(driven?';opacity:.55;cursor:not-allowed':'')+
-         '" id="mcj-ch-'+c.offset+'"'+(driven?' disabled':' oninput="_manCalJogCh('+c.offset+',this.value)"')+'>';
-      h+='<span id="mcj-chv-'+c.offset+'" style="width:28px;font-size:.78em;color:#e2e8f0;font-family:monospace;text-align:right">'+curVal+'</span>';
-      h+='</div>';
-    });
-  } else {
-    h+='<div style="display:flex;align-items:center;gap:.5em;margin-bottom:.3em">';
-    h+='<label style="width:40px;font-size:.82em;color:#22d3ee;text-align:right">Pan</label>';
-    h+='<input type="range" id="mcj-ch-'+(ch.pan||0)+'" min="0" max="255" value="'+panVal+'" style="flex:1" oninput="_manCalJogCh('+(ch.pan||0)+',this.value)">';
-    h+='<span id="mcj-chv-'+(ch.pan||0)+'" style="width:28px;font-size:.78em;color:#e2e8f0;font-family:monospace">'+panVal+'</span></div>';
-    h+='<div style="display:flex;align-items:center;gap:.5em;margin-bottom:.3em">';
-    h+='<label style="width:40px;font-size:.82em;color:#22d3ee;text-align:right">Tilt</label>';
-    h+='<input type="range" id="mcj-ch-'+(ch.tilt||1)+'" min="0" max="255" value="'+tiltVal+'" style="flex:1" oninput="_manCalJogCh('+(ch.tilt||1)+',this.value)">';
-    h+='<span id="mcj-chv-'+(ch.tilt||1)+'" style="width:28px;font-size:.78em;color:#e2e8f0;font-family:monospace">'+tiltVal+'</span></div>';
-  }
-  h+='</div>';
-  // Fine adjust buttons. With 16-bit drive, fine = +/-1 and coarse =
-  // +/-256 (= 1 unit of the upper byte). Without fine channels, both
-  // buttons step the 8-bit slider by 1.
-  h+='<div style="display:flex;gap:.3em;margin-bottom:.6em;justify-content:center;flex-wrap:wrap">';
-  if(has16){
-    h+='<button class="btn" style="font-size:.75em;padding:2px 6px" onclick="_manCalNudge16(\'pan\',-256)">Pan \u226a</button>';
-    h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge16(\'pan\',-1)">Pan \u2212</button>';
-    h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge16(\'pan\',1)">Pan +</button>';
-    h+='<button class="btn" style="font-size:.75em;padding:2px 6px" onclick="_manCalNudge16(\'pan\',256)">Pan \u226b</button>';
-    h+='<span style="width:14px"></span>';
-    h+='<button class="btn" style="font-size:.75em;padding:2px 6px" onclick="_manCalNudge16(\'tilt\',-256)">Tilt \u226a</button>';
-    h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge16(\'tilt\',-1)">Tilt \u2212</button>';
-    h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge16(\'tilt\',1)">Tilt +</button>';
-    h+='<button class="btn" style="font-size:.75em;padding:2px 6px" onclick="_manCalNudge16(\'tilt\',256)">Tilt \u226b</button>';
-  }else{
-    h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'pan\',-1)">Pan \u2212</button>';
-    h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'pan\',1)">Pan +</button>';
-    h+='<span style="width:10px"></span>';
-    h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'tilt\',-1)">Tilt \u2212</button>';
-    h+='<button class="btn" style="font-size:.75em;padding:2px 8px" onclick="_manCalNudge(\'tilt\',1)">Tilt +</button>';
-  }
-  h+='</div>';
-  // Buttons
-  h+='<div style="display:flex;gap:.4em">';
-  h+='<button class="btn btn-on" onclick="_manCalConfirm()">Confirm Position</button>';
-  if(idx>0)h+='<button class="btn" style="background:#334155;color:#94a3b8" onclick="_manCal.currentIdx--;_manCal.samples.pop();_manCalRender()">Back</button>';
-  h+='<button class="btn btn-off" onclick="_manCalBlackout();_manCal=null;closeModal()">Cancel</button>';
-  h+='</div></div>';
-  document.getElementById('modal-title').textContent=escapeHtml(fname)+' \u2014 '+addr+' \u2014 Jog';
-  document.getElementById('modal-body').innerHTML=h;
-  // Send pan/tilt + defaults to DMX so fixture aims at saved/restored position
-  var ch=_manCal.channels||{};
-  var sendChs=[];
-  if(ch.pan!=null)sendChs.push({offset:ch.pan,value:panVal});
-  if(ch.tilt!=null)sendChs.push({offset:ch.tilt,value:tiltVal});
-  // #714 — write 16-bit LSB if the profile has fine channels.
-  if(has16){
-    sendChs.push({offset:ch.panFine, value: pan16 & 0xFF});
-    sendChs.push({offset:ch.tiltFine, value: tilt16 & 0xFF});
-  }
-  if(ch.dimmer!=null)sendChs.push({offset:ch.dimmer,value:255});
-  if(ch.red!=null)sendChs.push({offset:ch.red,value:255});
-  if(ch.green!=null)sendChs.push({offset:ch.green,value:255});
-  if(ch.blue!=null)sendChs.push({offset:ch.blue,value:255});
-  (_manCal.allChannels||[]).forEach(function(c){
-    if(c.default>0&&c.type!=='pan'&&c.type!=='tilt'&&c.type!=='dimmer'
-       &&c.type!=='red'&&c.type!=='green'&&c.type!=='blue'
-       &&c.type!=='pan-fine'&&c.type!=='tilt-fine')
-      sendChs.push({offset:c.offset,value:c.default});
-  });
-  if(sendChs.length)ra('POST','/api/dmx/fixture/'+_manCal.fid+'/test',{channels:sendChs},function(){});
-}
-
-// #714 — 16-bit drive helper. Splits a 0..65535 value into coarse +
-// fine bytes, sends both together, and updates the per-channel mirror
-// sliders + readouts so the all-channels display stays in sync.
-function _manCalJog16(axis, value){
-  if(!_manCal)return;
-  var v16 = Math.max(0, Math.min(65535, parseInt(value)||0));
-  var ch = _manCal.channels || {};
-  var coarseOff = (axis === 'pan') ? ch.pan : ch.tilt;
-  var fineOff = (axis === 'pan') ? ch.panFine : ch.tiltFine;
-  if(coarseOff == null || fineOff == null) return;
-  var coarse = (v16 >> 8) & 0xFF;
-  var fine = v16 & 0xFF;
-  if(axis === 'pan') _manCal._pan16 = v16; else _manCal._tilt16 = v16;
-  // Update the 16-bit slider + readout (in case the caller adjusted via nudge).
-  var sl = document.getElementById('mcj-' + axis + '16');
-  if(sl) sl.value = v16;
-  var rd = document.getElementById('mcj-' + axis + '16v');
-  if(rd) rd.textContent = v16;
-  // Mirror to the per-channel readouts so the all-channels list is honest.
-  var cr = document.getElementById('mcj-ch-' + coarseOff);
-  var fr = document.getElementById('mcj-ch-' + fineOff);
-  if(cr) cr.value = coarse;
-  if(fr) fr.value = fine;
-  var crv = document.getElementById('mcj-chv-' + coarseOff);
-  var frv = document.getElementById('mcj-chv-' + fineOff);
-  if(crv) crv.textContent = coarse;
-  if(frv) frv.textContent = fine;
-  // Send full slider state so other channels (dimmer, color, etc.)
-  // stay at their current values.
-  var allCh = (_manCal.allChannels) || [];
-  var batch = [];
-  allCh.forEach(function(c){
-    if(c.offset === coarseOff) batch.push({offset: c.offset, value: coarse});
-    else if(c.offset === fineOff) batch.push({offset: c.offset, value: fine});
-    else {
-      var s = document.getElementById('mcj-ch-' + c.offset);
-      if(s) batch.push({offset: c.offset, value: parseInt(s.value) || 0});
-    }
-  });
-  if(batch.length) ra('POST', '/api/dmx/fixture/' + _manCal.fid + '/test',
-                       {channels: batch}, function(){});
-}
-
-function _manCalNudge16(axis, delta){
-  if(!_manCal) return;
-  var cur = (axis === 'pan') ? _manCal._pan16 : _manCal._tilt16;
-  if(cur == null) cur = 32768;
-  _manCalJog16(axis, Math.max(0, Math.min(65535, cur + delta)));
-}
-
-function _manCalJogCh(offset,value){
-  var v=parseInt(value);
-  var el=document.getElementById('mcj-chv-'+offset);
-  if(el)el.textContent=v;
-  // Send ALL current slider values as a batch so fixture gets consistent state
-  var allCh=(_manCal&&_manCal.allChannels)||[];
-  var batch=[];
-  allCh.forEach(function(c){
-    var sl=document.getElementById('mcj-ch-'+c.offset);
-    if(sl)batch.push({offset:c.offset,value:parseInt(sl.value)||0});
-  });
-  if(batch.length)ra('POST','/api/dmx/fixture/'+_manCal.fid+'/test',{channels:batch},function(){});
-}
-
-function _manCalJog(axis,value){
-  var ch=_manCal.channels||{};
-  var offset=axis==='pan'?ch.pan:ch.tilt;
-  if(offset==null)return;
-  var v=parseInt(value);
-  _manCalJogCh(offset,v);
-  var sl=document.getElementById('mcj-ch-'+offset);
-  if(sl)sl.value=v;
-}
-
-function _manCalNudge(axis,dir){
-  var ch=_manCal.channels||{};
-  var offset=axis==='pan'?ch.pan:ch.tilt;
-  if(offset==null)return;
-  var sl=document.getElementById('mcj-ch-'+offset);
-  if(!sl)return;
-  var v=Math.max(0,Math.min(255,parseInt(sl.value)+dir));
-  sl.value=v;
-  _manCalJogCh(offset,v);
-}
-
-function _manCalConfirm(){
-  var ch=_manCal.channels||{};
-  // #714 — read 16-bit pan/tilt when fine channels exist; saved
-  // sample's pan / tilt fields stay 0..1 floats but now carry the
-  // full 16-bit precision, matching what the cal pipeline writes
-  // since #689.
-  var pan, tilt;
-  if(ch.panFine != null && ch.tiltFine != null
-       && _manCal._pan16 != null && _manCal._tilt16 != null){
-    pan = _manCal._pan16 / 65535;
-    tilt = _manCal._tilt16 / 65535;
-  } else {
-    var panEl=document.getElementById('mcj-ch-'+(ch.pan!=null?ch.pan:0));
-    var tiltEl=document.getElementById('mcj-ch-'+(ch.tilt!=null?ch.tilt:1));
-    pan=(panEl?parseInt(panEl.value):128)/255;
-    tilt=(tiltEl?parseInt(tiltEl.value):128)/255;
-  }
-  var m=_manCal.markers[_manCal.currentIdx];
-  _manCal.samples.push({pan:pan,tilt:tilt,stageX:m.x,stageY:m.y,stageZ:m.z});
-  _manCal.currentIdx++;
-  if(_manCal.currentIdx>=_manCal.markers.length){
-    // All markers done — save
-    _manCalSave();
-  }else{
-    _manCalRender();
-  }
-}
-
-function _manCalSave(){
-  _manCal.step='saving';
-  document.getElementById('modal-body').innerHTML='<div style="text-align:center;padding:1em;color:#94a3b8">Saving calibration...</div>';
-  ra('POST','/api/calibration/mover/'+_manCal.fid+'/manual',{samples:_manCal.samples},function(r){
-    if(r&&r.ok){
-      (_fixtures||[]).forEach(function(f){if(f.id===_manCal.fid)f.moverCalibrated=true;});
-      _manCal.step='verify';
-      _manCalRender();
-    }else{
-      document.getElementById('modal-body').innerHTML='<div style="color:#f66;padding:1em">'+(r&&r.err||'Save failed')+'</div>';
-    }
-  });
-}
-
-function _manCalRenderVerify(fname){
-  var h='<div style="min-width:400px;text-align:center;padding:.5em">';
-  h+='<div style="font-size:2em;color:#4ade80;margin-bottom:.3em">\u2713</div>';
-  h+='<div style="font-size:1.1em;color:#e2e8f0;margin-bottom:.3em">Manual Calibration Complete</div>';
-  h+='<div style="font-size:.85em;color:#94a3b8;margin-bottom:.8em">'+_manCal.samples.length+' positions recorded for '+escapeHtml(fname)+'</div>';
-  h+='<div style="font-size:.82em;color:#94a3b8;margin-bottom:.6em">Test each marker \u2014 the beam should aim at the physical position:</div>';
-  h+='<div style="text-align:left;max-height:200px;overflow-y:auto">';
-  _manCal.samples.forEach(function(s,i){
-    h+='<div style="display:flex;align-items:center;gap:.4em;padding:.3em;border-bottom:1px solid #1e293b">';
-    h+='<span style="color:#94a3b8;font-size:.82em;width:20px">'+(i+1)+'</span>';
-    h+='<span style="font-size:.82em;color:#e2e8f0;flex:1">X='+s.stageX+' Y='+s.stageY+'</span>';
-    h+='<button class="btn" style="font-size:.75em;padding:2px 10px;background:#1e3a5f;color:#93c5fd" onclick="_manCalTest('+i+')">Test</button>';
-    h+='</div>';
-  });
-  h+='</div>';
-  h+='<div style="display:flex;gap:.4em;margin-top:.8em;justify-content:center">';
-  h+='<button class="btn btn-on" onclick="_manCalBlackout();closeModal();_manCal=null;loadLayout()">Done</button>';
-  h+='<button class="btn" style="background:#334155;color:#94a3b8" onclick="_moverCalDelete()">Recalibrate</button>';
-  h+='</div></div>';
-  document.getElementById('modal-title').textContent='Calibration \u2014 Verify';
-  document.getElementById('modal-body').innerHTML=h;
-}
-
-function _manCalTest(idx){
-  var s=_manCal.samples[idx];
-  var ch=_manCal.channels||{};
-  var chs=[];
-  if(ch.pan!=null)chs.push({offset:ch.pan,value:Math.round(s.pan*255)});
-  if(ch.tilt!=null)chs.push({offset:ch.tilt,value:Math.round(s.tilt*255)});
-  if(ch.dimmer!=null)chs.push({offset:ch.dimmer,value:255});
-  if(ch.red!=null)chs.push({offset:ch.red,value:255});
-  if(ch.green!=null)chs.push({offset:ch.green,value:255});
-  if(ch.blue!=null)chs.push({offset:ch.blue,value:255});
-  // Also send channel defaults (strobe open, color wheel white, etc.)
-  (_manCal.allChannels||[]).forEach(function(c){
-    if(c.default>0&&c.type!=='pan'&&c.type!=='tilt'&&c.type!=='dimmer'
-       &&c.type!=='red'&&c.type!=='green'&&c.type!=='blue'){
-      chs.push({offset:c.offset,value:c.default});
-    }
-  });
-  ra('POST','/api/dmx/fixture/'+_manCal.fid+'/test',{channels:chs},function(){});
-}
-
-function _manCalBlackout(){
-  var ch=_manCal?_manCal.channels:{};
-  if(!ch)return;
-  var chs=[];
-  for(var k in ch)if(ch[k]!=null)chs.push({offset:ch[k],value:0});
-  if(chs.length)ra('POST','/api/dmx/fixture/'+_manCal.fid+'/test',{channels:chs},function(){});
-}
-
-function _manCalVerifyExisting(fixId){
-  _moverCalFid=fixId;
-  // Fetch saved calibration and channel info
-  ra('GET','/api/calibration/mover/'+fixId,null,function(cal){
-    if(!cal||!cal.calibrated){
-      document.getElementById('modal-body').innerHTML='<div style="color:#f66;padding:1em">No calibration data found.</div>';
-      return;
-    }
-    ra('GET','/api/dmx/fixture/'+fixId+'/channels',null,function(d){
-      var ch={};
-      if(d&&d.channels)d.channels.forEach(function(c){
-        if(c.type==='pan')ch.pan=c.offset;
-        if(c.type==='tilt')ch.tilt=c.offset;
-        if(c.type==='dimmer')ch.dimmer=c.offset;
-        if(c.type==='red')ch.red=c.offset;
-        if(c.type==='green')ch.green=c.offset;
-        if(c.type==='blue')ch.blue=c.offset;
-      });
-      _manCal={fid:fixId,samples:cal.samples||[],channels:ch,step:'verify',
-               allChannels:d&&d.channels?d.channels:[]};
-      _manCalRender();
-    });
-  });
-}
+// ── Manual mover calibration (#368) — DELETED in #788 ──────────────
+// Replaced by sphere-model aim + Set Home + Movement Direction (#784)
+// + _aimVerifyStart marker walk (above). Old _moverCalManualStart /
+// _manCal* render+jog+save chain (~515 lines) lived here; the chain
+// has no remaining callers and the SMART pipeline it wrapped no
+// longer exists. Do not re-add jog-to-markers without consulting
+// CLAUDE.md and #784/#785.
 
 // ── Tracking mode — live person markers ──────────────────────────────
 var _trackingCams={};  // {camId: true}
