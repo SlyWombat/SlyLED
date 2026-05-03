@@ -249,9 +249,29 @@ def register(app, *, get_fixtures, profile_lib, write_pose, get_engine,
         body = request.get_json(silent=True) or {}
         f = next((x for x in get_fixtures() if x.get("id") == fid), None)
         prof_info = profile_lib.channel_info(f.get("dmxProfileId"))
-        # Resolve current_pose using query overrides → engine read → home.
         current_pose = _resolve_current_pose(
             f, prof_info, request.args, get_engine, sphere)
+
+        # #798 Fix 2 — `?return=poses` exposes the multi-valued
+        # enumeration. Caller picks which branch to write (or none).
+        # Default behaviour is unchanged: pick + write.
+        return_mode = request.args.get("return", "")
+        if return_mode == "poses":
+            try:
+                poses = _enumerate_poses(body, request.args, sphere)
+            except _AimBodyError as ae:
+                return jsonify(**ae.payload), ae.status
+            picked = sphere._pick_pose(
+                poses, current_pose,
+                request.args.get("prefer", "closest"))
+            return jsonify(
+                ok=True,
+                poses=[{"panDmx16": p, "tiltDmx16": t, "branchId": b}
+                        for p, t, b in poses],
+                picked={"panDmx16": picked[0],
+                         "tiltDmx16": picked[1]} if picked else None,
+            )
+
         pose, err, status = _aim_from_body(body, request.args, sphere, current_pose)
         if err is not None:
             return jsonify(**err), status
@@ -266,3 +286,39 @@ def register(app, *, get_fixtures, profile_lib, write_pose, get_engine,
                         panDmx16=pan_dmx16, tiltDmx16=tilt_dmx16)
 
     return api_mover_aim
+
+
+class _AimBodyError(Exception):
+    """Raised by `_enumerate_poses` for body / query validation errors."""
+    def __init__(self, payload, status):
+        super().__init__(payload.get("detail") or payload.get("err"))
+        self.payload = payload
+        self.status = status
+
+
+def _enumerate_poses(body, query_args, sphere):
+    """Resolve a `{x,y,z}` or `{azDeg,elDeg}` body into the full
+    `[(panDmx16, tiltDmx16, branchId), ...]` enumeration. Raises
+    `_AimBodyError` for invalid input."""
+    if not isinstance(body, dict):
+        raise _AimBodyError({"err": "invalid_body"}, 400)
+    if "x" in body and "y" in body and "z" in body:
+        try:
+            target = (float(body["x"]), float(body["y"]), float(body["z"]))
+        except (TypeError, ValueError):
+            raise _AimBodyError(
+                {"err": "invalid_body",
+                  "detail": "x/y/z must be numbers"}, 400)
+        return list(sphere.poses_for_xyz(target))
+    if "azDeg" in body and "elDeg" in body:
+        try:
+            az = float(body["azDeg"])
+            el = float(body["elDeg"])
+        except (TypeError, ValueError):
+            raise _AimBodyError(
+                {"err": "invalid_body",
+                  "detail": "azDeg/elDeg must be numbers"}, 400)
+        return list(sphere.poses_for_direction(az, el))
+    raise _AimBodyError(
+        {"err": "invalid_body",
+          "detail": "body must contain {x,y,z} or {azDeg,elDeg}"}, 400)

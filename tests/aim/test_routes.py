@@ -81,9 +81,15 @@ with app.test_client() as c:
         "rotation": [0, 0, 0],
     })
     fix_fid = c.get('/api/fixtures').get_json()[-1]["id"]
-    # Set Home.
+    # Set Home + Home Secondary. The #798 anchor-based sphere needs
+    # both — Secondary supplies the second pan + second tilt anchor
+    # the bracketing interp uses to compute slope.
     c.post(f'/api/fixtures/{fix_fid}/home',
            json={"panDmx16": 32768, "tiltDmx16": 32768})
+    c.post(f'/api/fixtures/{fix_fid}/home/secondary', json={
+        "panOffsetDmx16": 10000, "tiltOffsetDmx16": 10000,
+        "panMovedDirection": "left", "tiltMovedDirection": "down",
+    })
     # Place the fixture at origin so the target's stage XYZ is unambiguous.
     c.post('/api/layout', json={"fixtures": [
         {"id": fix_fid, "x": 0, "y": 0, "z": 3000}
@@ -165,6 +171,10 @@ with app.test_client() as c:
     nd_fid = c.get('/api/fixtures').get_json()[-1]["id"]
     c.post(f'/api/fixtures/{nd_fid}/home',
            json={"panDmx16": 32768, "tiltDmx16": 32768})
+    c.post(f'/api/fixtures/{nd_fid}/home/secondary', json={
+        "panOffsetDmx16": 10000, "tiltOffsetDmx16": 10000,
+        "panMovedDirection": "left", "tiltMovedDirection": "down",
+    })
     r = c.post(f'/api/mover/{nd_fid}/aim', json={"x": 0, "y": 5000, "z": 0})
     body = r.get_json() or {}
     ok('profile without dmxToMechanical aims fine (200)',
@@ -223,14 +233,43 @@ with app.test_client() as c:
 
     # ── 12. cache invalidation on Home re-save ──
     print('── 12. Home invalidation ──')
-    # Re-save Home at a different DMX; cached sphere goes stale.
+    # Re-save Home at a different DMX; cached sphere goes stale, and
+    # parent_server (#743) auto-clears the prior homeSecondary because
+    # it was anchored to the OLD primary. Operator re-runs the wizard;
+    # we replay that re-capture inline.
     c.post(f'/api/fixtures/{fix_fid}/home',
            json={"panDmx16": 40000, "tiltDmx16": 32768})
+    c.post(f'/api/fixtures/{fix_fid}/home/secondary', json={
+        "panOffsetDmx16": 10000, "tiltOffsetDmx16": 10000,
+        "panMovedDirection": "left", "tiltMovedDirection": "down",
+    })
     r3 = c.post(f'/api/mover/{fix_fid}/aim', json={"azDeg": 30, "elDeg": 0})
     pose3 = r3.get_json() if r3.status_code == 200 else None
     ok('aim after Home re-save returns ok',
        pose3 is not None and pose3.get("ok") is True,
        f'status={r3.status_code} body={pose3}')
+
+    # ── 13. ?return=poses multi-valued enumeration (#798 Fix 2) ──
+    print('── 13. ?return=poses (#798 Fix 2) ──')
+    r = c.post(f'/api/mover/{fix_fid}/aim?return=poses',
+                json={"azDeg": 0, "elDeg": 0})
+    body = r.get_json() or {}
+    ok('?return=poses → 200 + ok=True',
+       r.status_code == 200 and body.get("ok") is True,
+       f'status={r.status_code} body={body}')
+    poses = body.get("poses") or []
+    ok('?return=poses returns a list',
+       isinstance(poses, list) and len(poses) >= 1,
+       f'poses={poses}')
+    if poses:
+        first = poses[0]
+        ok('pose entries carry panDmx16 / tiltDmx16 / branchId',
+           {"panDmx16", "tiltDmx16", "branchId"}.issubset(first.keys()),
+           f'first={first}')
+    ok('?return=poses includes picked',
+       isinstance(body.get("picked"), dict)
+       and "panDmx16" in body["picked"],
+       f'picked={body.get("picked")}')
 
 
 print(f'\n{_passed} passed, {_failed} failed out of {_passed + _failed} tests')
