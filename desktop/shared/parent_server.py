@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.24"
+VERSION = "1.7.25"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -5775,18 +5775,23 @@ def _targeted_fixture_blackout(fid):
 
 
 def _park_fixture_at_home(fid):
-    """#691 — park a moving-head fixture at its Set Home (#687) anchor
-    with the beam off (dimmer + strobe-closed if available). Used at
-    the END of a cal run (cancel / error / completion) so the fixture
-    rests where the operator originally pointed it instead of slumping
-    to mechanical (0, 0) per the universe zero-fill. Falls back to
-    :func:`_targeted_fixture_blackout` when no home anchor is set.
+    """#691 — park a moving-head fixture at its Set Home (#687) anchor.
+
+    #781 / #782 PR-β rewrite (2026-05-03): the slew goes through the
+    canonical angular path (`aim.park.go_home`), not a direct pan/tilt
+    DMX write. Home is the angular zero per #784 c3, so the helper
+    aims at `(azDeg=0, elDeg=0)` and the AimSphere cell index lands at
+    the recorded `(homePanDmx16, homeTiltDmx16)`. Lamps are turned off
+    via `lamp_off()` per the #782 operator decision (intensity-class
+    only; pan/tilt and non-intensity defaults preserved). Falls back to
+    `_targeted_fixture_blackout` only when the fixture lacks a Home
+    anchor (which means the angular path can't run).
     """
     try:
         fx = next((f for f in _fixtures if f["id"] == fid), None)
         if not fx:
             return
-        engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
+        engine = _aim_get_engine()
         if not engine:
             return
         home_pan = fx.get("homePanDmx16")
@@ -5794,22 +5799,49 @@ def _park_fixture_at_home(fid):
         if home_pan is None or home_tilt is None:
             _targeted_fixture_blackout(fid)
             return
-        uni = fx.get("dmxUniverse", 1)
-        addr = fx.get("dmxStartAddr", 1)
-        pid = fx.get("dmxProfileId")
-        info = _profile_lib.channel_info(pid) if pid else None
-        ch_count = int((info or {}).get("channelCount") or
-                       fx.get("dmxChannelCount") or 13)
-        uni_buf = engine.get_universe(uni)
-        # Zero the whole channel band first so any cal-time defaults
-        # (gobo, prism, colour wheel) come back to a known idle.
-        uni_buf.set_channels(addr, [0] * ch_count)
-        # Now drive pan/tilt to the operator's home via the helper —
-        # routes the LSB to the profile's pan-fine / tilt-fine offset.
-        profile = {"channel_map": (info or {}).get("channel_map", {}),
-                   "channels":     (info or {}).get("channels", [])}
-        uni_buf.set_fixture_pan_tilt(
-            addr, home_pan / 65535.0, home_tilt / 65535.0, profile)
+        # Canonical angular slew to home.
+        from aim.park import go_home as _aim_go_home
+        _aim_go_home(fid,
+                      get_fixtures=lambda: _fixtures,
+                      profile_lib=_profile_lib,
+                      write_pose=_aim_write_pose,
+                      get_engine=_aim_get_engine)
+        # Lamp off via the profile-aware helper (per #780 P3 + #782
+        # blackout decision). Reads the same universe buffer the
+        # angular path just wrote into.
+        try:
+            from dmx_profiles import lamp_off
+            uni = int(fx.get("dmxUniverse", 1) or 1)
+            addr = int(fx.get("dmxStartAddr", 1) or 1)
+            pid = fx.get("dmxProfileId")
+            info = _profile_lib.channel_info(pid) if pid else None
+            if info:
+                profile = {"channel_map": info.get("channel_map", {}),
+                            "channels":    info.get("channels", [])}
+                # Pull the live universe buffer view as a list, mutate
+                # the intensity-class channels, then write back.
+                buf = engine.get_universe(uni)
+                # set_channel is the supported per-byte write — call it
+                # for each lamp_off-affected offset. Build a small
+                # bytearray to feed lamp_off, then push the changed
+                # bytes through set_channel.
+                tmp = bytearray(512)
+                for ch in (profile.get("channels") or []):
+                    off = ch.get("offset", 0)
+                    if 0 <= addr - 1 + off < 512:
+                        try:
+                            tmp[addr - 1 + off] = int(buf.get_channel(addr + off))
+                        except Exception:
+                            tmp[addr - 1 + off] = 0
+                lamp_off(profile, tmp, addr, color=None)
+                for ch in (profile.get("channels") or []):
+                    ch_type = ch.get("type", "")
+                    if ch_type in ("dimmer", "intensity", "strobe"):
+                        off = ch.get("offset", 0)
+                        if 0 <= addr - 1 + off < 512:
+                            buf.set_channel(addr + off, int(tmp[addr - 1 + off]))
+        except Exception:
+            log.debug("park %d: lamp_off step skipped", fid, exc_info=True)
     except Exception:
         # Fall back to the safe behaviour: black the fixture out.
         _targeted_fixture_blackout(fid)
@@ -15876,41 +15908,94 @@ def api_dmx_stop():
 
 @app.post("/api/dmx/blackout")
 def api_dmx_blackout():
-    """Zero every universe buffer.
+    """Lamps off across every fixture.
 
-    If a running engine exists, its 40 Hz loop picks up the dirty buffers
-    and transmits zeros on the next frame. If BOTH engines are stopped,
-    zeroing the buffer alone doesn't reach the wire — so we briefly spin
-    up Art-Net, seed it with the registered universeRoutes and any fixture
-    universes, blackout, and stop. Stop() then flushes 3 forced blackout
-    frames (#601), unsticking bridges that latched on a stale cue.
+    #781 / #782 operator-decision rewrite (2026-05-03): blackout means
+    "no lights." It must NOT zero pan/tilt and MUST NOT zero non-
+    intensity channels (a wheel sitting at default=128 must not be
+    clobbered to 0 by blackout). Implementation: iterate every DMX
+    fixture, call `lamp_off(profile, dmx, addr, color=None)` to drive
+    intensity-class channels (dimmer, intensity, strobe-Open) to off,
+    leave everything else alone. Heads stay where they are; the lamps
+    go off.
+
+    A future "park heads home AND lights off" command builds from
+    `aim.park.go_home(fid)` + `lamp_off()` together — separate helper.
     """
-    _artnet.blackout()
-    _sacn.blackout()
+    from dmx_profiles import lamp_off
+    engines_to_use = []
+    if _artnet.running:
+        engines_to_use.append(_artnet)
+    if _sacn.running:
+        engines_to_use.append(_sacn)
     flushed = False
-    if not _artnet.running and not _sacn.running:
+    # If nothing is running, briefly spin up Art-Net so the lamp-off
+    # frames reach the wire — same flush-on-stop pattern (#601).
+    if not engines_to_use:
         try:
             _apply_dmx_settings()
             _artnet._bind_ip = "0.0.0.0"  # stale saved IP can block bind (#345)
             _artnet.start()
             if _artnet.running:
-                # Register every universe we know about so stop() has
-                # something to transmit zeros on. Fixture-derived universes
-                # come from _apply_profile_defaults; route-only universes
-                # (configured but no fixtures yet) get created here.
                 for route in _dmx_settings.get("universeRoutes", []) or []:
                     u = int(route.get("universe") or 1)
                     _artnet.get_universe(u)
                 for f in _fixtures:
                     if f.get("fixtureType") == "dmx":
                         _artnet.get_universe(int(f.get("dmxUniverse", 1)))
-                _artnet.blackout()
-                # stop() sends 3 forced blackout frames (#601) and tears
-                # the socket down, leaving the bridge latched on zeros.
-                _artnet.stop()
+                engines_to_use.append(_artnet)
                 flushed = True
         except Exception:
             pass
+
+    # Apply lamp_off per fixture on every running engine. The 40 Hz
+    # loop picks up the dirty buffers and transmits the next frame.
+    for engine in engines_to_use:
+        for f in _fixtures:
+            if f.get("fixtureType") != "dmx":
+                continue
+            try:
+                uni = int(f.get("dmxUniverse", 1) or 1)
+                addr = int(f.get("dmxStartAddr", 1) or 1)
+                pid = f.get("dmxProfileId")
+                info = _profile_lib.channel_info(pid) if pid else None
+                if not info:
+                    continue
+                profile = {"channel_map": info.get("channel_map", {}),
+                            "channels":    info.get("channels", [])}
+                buf = engine.get_universe(uni)
+                # Stage the current intensity-channel values into a
+                # scratch bytearray, run lamp_off, then push the
+                # changed bytes back through set_channel. set_channel
+                # is the supported per-byte write that flags the buffer
+                # dirty for the engine's transmit loop.
+                tmp = bytearray(512)
+                for ch in (profile.get("channels") or []):
+                    off = ch.get("offset", 0)
+                    if 0 <= addr - 1 + off < 512:
+                        try:
+                            tmp[addr - 1 + off] = int(buf.get_channel(addr + off))
+                        except Exception:
+                            tmp[addr - 1 + off] = 0
+                lamp_off(profile, tmp, addr, color=None)
+                for ch in (profile.get("channels") or []):
+                    if ch.get("type") in ("dimmer", "intensity", "strobe"):
+                        off = ch.get("offset", 0)
+                        if 0 <= addr - 1 + off < 512:
+                            buf.set_channel(addr + off, int(tmp[addr - 1 + off]))
+            except Exception as e:
+                log.warning("blackout: lamp_off skipped for fid %s: %s",
+                            f.get("id"), e)
+
+    # If we spun up an engine just for the flush, stop it now — stop()
+    # sends 3 forced frames (#601) and tears down. Heads' pan/tilt
+    # bytes stay at whatever was last written; lamps are off.
+    if flushed:
+        try:
+            _artnet.stop()
+        except Exception:
+            pass
+
     return jsonify(ok=True, flushed=flushed)
 
 @app.post("/api/dmx/blink")
@@ -20822,6 +20907,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
