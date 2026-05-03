@@ -144,116 +144,9 @@ def test_tracking_pipeline():
     return total, fails
 
 
-def test_mover_cal_pipeline():
-    print("\n=== Mover-cal pipeline (Q10 + ParametricFixtureModel) ===")
-    fails = 0; total = 0
-    from parametric_mover import ParametricFixtureModel, fit_model, verify_signs
-
-    # Ground-truth model: ceiling-mounted, level, no roll. pan_sign=+1
-    # (default), tilt_sign=-1 (project convention for "tilt up = toward
-    # ceiling, tilt down = toward floor").
-    gt = ParametricFixtureModel(
-        fixture_pos=(1500.0, 0.0, 2000.0),
-        pan_range_deg=540.0,
-        tilt_range_deg=270.0,
-        mount_yaw_deg=0.0,
-        mount_pitch_deg=0.0,
-        mount_roll_deg=0.0,
-        pan_offset=0.5,
-        tilt_offset=0.5,
-        pan_sign=1,
-        tilt_sign=-1,
-    )
-
-    # Generate 6 synthetic samples by ray-marching from gt across a small
-    # pan/tilt grid and intersecting with the floor (z=0).
-    samples = []
-    ray_origin = gt.fixture_pos
-    for pan in (0.4, 0.5, 0.6):
-        for tilt in (0.2, 0.35):  # tilt_sign=-1 ceiling fixture: aim DOWN = tilt<0.5
-            ray_dir = gt.forward(pan, tilt)
-            # Solve for t such that origin.z + t*dir.z = 0
-            if abs(ray_dir[2]) < 1e-6:
-                continue
-            t = -ray_origin[2] / ray_dir[2]
-            if t <= 0:
-                continue
-            sx = ray_origin[0] + t * ray_dir[0]
-            sy = ray_origin[1] + t * ray_dir[1]
-            samples.append({"pan": pan, "tilt": tilt,
-                            "stageX": sx, "stageY": sy, "stageZ": 0.0})
-    total += 1
-    if len(samples) < 4:
-        print(f"  FAIL: synthetic sample generation produced only {len(samples)}"); fails += 1
-    else:
-        print(f"  PASS: synthetic sample generation produced {len(samples)} samples")
-
-    # Fit without forced signs — should pick up the right combo from RMS
-    # alone (no convention tie-break post-Q10).
-    fitted, q = fit_model(
-        fixture_pos=(1500.0, 0.0, 2000.0),
-        pan_range_deg=540.0, tilt_range_deg=270.0,
-        samples=samples)
-    total += 1
-    if q.rms_error_deg > 1.0:
-        print(f"  FAIL: fit RMS {q.rms_error_deg:.3f}° > 1° on synthetic data"); fails += 1
-    else:
-        print(f"  PASS: fit RMS {q.rms_error_deg:.4f}° on synthetic samples")
-
-    total += 1
-    # The fit should land on the ground-truth signs (pan_sign=+1,
-    # tilt_sign=-1) because the RMS is unique on noise-free data.
-    if fitted.pan_sign != 1 or fitted.tilt_sign != -1:
-        print(f"  FAIL: fit picked wrong mirror "
-              f"(pan_sign={fitted.pan_sign}, tilt_sign={fitted.tilt_sign})"); fails += 1
-    else:
-        print("  PASS: fit recovered ground-truth (pan_sign=+1, tilt_sign=-1)")
-
-    # force_signs path — give it the wrong signs and assert the fit honours
-    # them (RMS will be terrible, but the API must respect the request).
-    forced, fq = fit_model(
-        fixture_pos=(1500.0, 0.0, 2000.0),
-        pan_range_deg=540.0, tilt_range_deg=270.0,
-        samples=samples, force_signs=(-1, +1))
-    total += 1
-    if forced.pan_sign != -1 or forced.tilt_sign != +1:
-        print(f"  FAIL: force_signs ignored "
-              f"(got pan_sign={forced.pan_sign}, tilt_sign={forced.tilt_sign})"); fails += 1
-    else:
-        print(f"  PASS: force_signs honoured (RMS={fq.rms_error_deg:.2f}°)")
-
-    # verify_signs: simulate a ceiling fixture with the project default
-    # convention (tilt_sign=-1 = "+tilt DMX aims beam toward ceiling,
-    # so on a downward-looking camera +tilt moves beam UP on screen").
-    # Scenario: pan+ moves beam +X in frame (standard), tilt+ moves
-    # beam UP in frame (dpy negative) — that's the -1 convention.
-    pan_sign, tilt_sign = verify_signs(
-        beam_pixel_before=(960.0, 540.0),
-        beam_pixel_after_pan_plus=(1100.0, 540.0),  # moved +X (right)
-        beam_pixel_after_tilt_plus=(960.0, 380.0),  # moved -Y (up on screen)
-    )
-    total += 1
-    if pan_sign != 1 or tilt_sign != -1:
-        print(f"  FAIL: verify_signs returned ({pan_sign}, {tilt_sign}); expected (+1, -1)"); fails += 1
-    else:
-        print(f"  PASS: verify_signs returned (+1, -1) for ceiling-fixture rig "
-              f"(tilt+ = beam up)")
-
-    # Inverse scenario — fixture where tilt+ sends beam DOWN on screen.
-    # verify_signs should flip to +1.
-    pan_sign2, tilt_sign2 = verify_signs(
-        beam_pixel_before=(960.0, 540.0),
-        beam_pixel_after_pan_plus=(1100.0, 540.0),
-        beam_pixel_after_tilt_plus=(960.0, 700.0),  # moved +Y (down)
-    )
-    total += 1
-    if pan_sign2 != 1 or tilt_sign2 != +1:
-        print(f"  FAIL: inverse tilt-sign scenario returned ({pan_sign2}, {tilt_sign2}); "
-              f"expected (+1, +1)"); fails += 1
-    else:
-        print("  PASS: verify_signs returned (+1, +1) for tilt-flipped rig")
-
-    return total, fails
+# #784 PR-7 — `test_mover_cal_pipeline` deleted along with the
+# `parametric_mover` module. The new aim model
+# (`desktop/shared/aim/sphere.py`) is covered by `tests/aim/`.
 
 
 def test_fusion_aged_cluster():
@@ -367,7 +260,7 @@ def test_pixel_to_stage_roll_honoured():
 if __name__ == "__main__":
     grand_total = 0
     grand_fail = 0
-    tests = (test_tracking_pipeline, test_mover_cal_pipeline,
+    tests = (test_tracking_pipeline,
              test_fusion_aged_cluster, test_stage_bounds_origin_survivor,
              test_pixel_to_stage_roll_honoured)
     for fn in tests:

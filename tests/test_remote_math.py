@@ -21,8 +21,10 @@ from remote_math import (  # noqa: E402
     frame_align,
     euler_xyz_deg_to_matrix, matrix_vec_mul, matrix_transpose,
 )
-from mover_calibrator import aim_to_pan_tilt, pan_tilt_to_ray  # noqa: E402
-
+# #784 PR-7: `mover_calibrator` deleted. The legacy
+# `pan_tilt_to_ray` / `aim_to_pan_tilt` round-trip tests below were
+# removed when their target module disappeared; the new aim model
+# (`desktop/shared/aim/sphere.py`) is covered by `tests/aim/`.
 
 # ── Tiny test harness ─────────────────────────────────────────────────────
 
@@ -238,99 +240,9 @@ def test_matrix_transpose_inverse():
     _eq(v_roundtrip, v, tol=1e-9, msg="R^T R v = v")
 
 
-# ── pan_tilt_to_ray / aim_to_pan_tilt ─────────────────────────────────────
-
-def test_pan_tilt_to_ray_forward():
-    # pan=0.5, tilt=0.5 → forward +Y
-    _eq(pan_tilt_to_ray(0.5, 0.5), (0, 1, 0), tol=1e-9, msg="center → +Y")
-
-
-def test_pan_tilt_to_ray_legacy_no_mount():
-    # Legacy call shape (no mount arg) still works.
-    v = pan_tilt_to_ray(0.6, 0.4)
-    _eq(norm3(v), 1.0, tol=1e-9, msg="legacy unit length")
-
-
-def test_pan_tilt_to_ray_with_mount_identity():
-    v_no_mount = pan_tilt_to_ray(0.3, 0.6)
-    v_id = pan_tilt_to_ray(0.3, 0.6, mount_rotation_deg=[0, 0, 0])
-    _eq(v_id, v_no_mount, tol=1e-9, msg="identity mount == no mount")
-
-
-def test_pan_tilt_to_ray_ceiling():
-    # Inverted mount [180, 0, 0] + mover aiming "forward in mount" (+Y local)
-    # → aim points to -Y in stage (180° flip about X keeps X, flips Y and Z).
-    v = pan_tilt_to_ray(0.5, 0.5, mount_rotation_deg=[180, 0, 0])
-    _eq(v, (0, -1, 0), tol=1e-9, msg="ceiling mount flips forward")
-
-
-def test_aim_to_pan_tilt_centered():
-    pan_norm, tilt_norm = aim_to_pan_tilt((0, 1, 0))
-    _eq((pan_norm, tilt_norm), (0.5, 0.5), tol=1e-9, msg="aim +Y → center")
-
-
-def test_aim_to_pan_tilt_pure_pan():
-    # 45° pan right, no tilt → aim along stage +X direction (mostly)
-    # pan_deg = 45 → pan_norm = 0.5 + 45/540 ≈ 0.5833
-    pan_rad = math.radians(45)
-    aim = (math.sin(pan_rad), math.cos(pan_rad), 0)
-    pan_norm, tilt_norm = aim_to_pan_tilt(aim)
-    _eq(pan_norm, 0.5 + 45.0 / 540.0, tol=1e-9, msg="45° pan norm")
-    _eq(tilt_norm, 0.5, tol=1e-9, msg="zero tilt")
-
-
-def test_aim_to_pan_tilt_pure_tilt():
-    # 30° tilt down (aim toward +Y, -Z)
-    tilt_rad = math.radians(30)
-    aim = (0, math.cos(tilt_rad), -math.sin(tilt_rad))
-    pan_norm, tilt_norm = aim_to_pan_tilt(aim)
-    _eq(pan_norm, 0.5, tol=1e-9, msg="zero pan")
-    _eq(tilt_norm, 0.5 + 30.0 / 270.0, tol=1e-9, msg="30° tilt norm")
-
-
-def test_roundtrip_no_mount():
-    random.seed(1)
-    for _ in range(50):
-        p = random.uniform(0.3, 0.7)
-        t = random.uniform(0.3, 0.7)
-        aim = pan_tilt_to_ray(p, t)
-        p2, t2 = aim_to_pan_tilt(aim)
-        _eq(p2, p, tol=1e-9, msg=f"roundtrip pan p={p}")
-        _eq(t2, t, tol=1e-9, msg=f"roundtrip tilt t={t}")
-
-
-def test_roundtrip_with_mount():
-    mount = [180, 0, 0]  # ceiling mount — most interesting case
-    random.seed(2)
-    for _ in range(30):
-        p = random.uniform(0.3, 0.7)
-        t = random.uniform(0.3, 0.7)
-        aim = pan_tilt_to_ray(p, t, mount_rotation_deg=mount)
-        p2, t2 = aim_to_pan_tilt(aim, mount_rotation_deg=mount)
-        _eq(p2, p, tol=1e-9, msg=f"roundtrip ceiling pan p={p}")
-        _eq(t2, t, tol=1e-9, msg=f"roundtrip ceiling tilt t={t}")
-
-
-def test_roundtrip_with_arbitrary_mount():
-    mount = [30, -25, 40]
-    random.seed(3)
-    for _ in range(30):
-        p = random.uniform(0.4, 0.6)
-        t = random.uniform(0.4, 0.6)
-        aim = pan_tilt_to_ray(p, t, mount_rotation_deg=mount)
-        p2, t2 = aim_to_pan_tilt(aim, mount_rotation_deg=mount)
-        _eq(p2, p, tol=1e-8, msg=f"roundtrip arb pan p={p}")
-        _eq(t2, t, tol=1e-8, msg=f"roundtrip arb tilt t={t}")
-
-
-def test_aim_to_pan_tilt_clamps():
-    # Aim sharply sideways — pan_deg near ±90°, well within 540° range.
-    # Aim nearly straight down — tilt near 90°, within 270° range.
-    # Extreme case: aim straight back (-Y) with 540° pan range is out of
-    # sensible reach with centered convention; clipping must engage.
-    pan_norm, tilt_norm = aim_to_pan_tilt((0, -1, 0))
-    _true(0.0 <= pan_norm <= 1.0, "pan clamped")
-    _true(0.0 <= tilt_norm <= 1.0, "tilt clamped")
+# #784 PR-7: pan_tilt_to_ray / aim_to_pan_tilt tests removed when
+# `mover_calibrator` was deleted. The new aim model
+# (`desktop/shared/aim/sphere.py`) is covered by `tests/aim/test_sphere.py`.
 
 
 # ── Run everything ────────────────────────────────────────────────────────
@@ -347,12 +259,6 @@ ALL = [
     test_euler_xyz_identity,
     test_euler_xyz_pure_rx, test_euler_xyz_pure_ry, test_euler_xyz_pure_rz,
     test_euler_xyz_180x, test_matrix_transpose_inverse,
-    test_pan_tilt_to_ray_forward, test_pan_tilt_to_ray_legacy_no_mount,
-    test_pan_tilt_to_ray_with_mount_identity, test_pan_tilt_to_ray_ceiling,
-    test_aim_to_pan_tilt_centered,
-    test_aim_to_pan_tilt_pure_pan, test_aim_to_pan_tilt_pure_tilt,
-    test_roundtrip_no_mount, test_roundtrip_with_mount,
-    test_roundtrip_with_arbitrary_mount, test_aim_to_pan_tilt_clamps,
 ]
 
 

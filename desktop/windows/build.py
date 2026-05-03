@@ -125,17 +125,13 @@ args = [
     "--add-data", f"{SHARED / 'dmx_sacn.py'};.",
     "--add-data", f"{SHARED / 'show_generator.py'};.",
     "--add-data", f"{SHARED / 'community_client.py'};.",
-    "--add-data", f"{SHARED / 'mover_calibrator.py'};.",
     "--add-data", f"{SHARED / 'mover_control.py'};.",
     "--add-data", f"{SHARED / 'space_mapper.py'};.",
     "--add-data", f"{SHARED / 'surface_analyzer.py'};.",
-    # #720 — SMART canonical IK + coverage cone math + 2-pair affine
-    # estimate. Required at runtime by parent_server's /aim-angles,
-    # /smart/preview, /smart/validate/*, /coverage endpoints, and the
-    # SMART probe + solver paths. Missing → packaged exe 500s on every
-    # SMART API call.
-    "--add-data", f"{SHARED / 'coverage_math.py'};.",
-    "--add-data", f"{SHARED / 'parametric_mover.py'};.",
+    # #784 PR-7 — `mover_calibrator.py`, `coverage_math.py`,
+    # `parametric_mover.py`, `sphere_model.py`, `structured_light.py`
+    # deleted. The canonical aim path is the `aim/` package below.
+    "--add-data", f"{SHARED / 'aim'};aim",
     "--add-data", f"{SHARED / 'remote_orientation.py'};.",
     "--add-data", f"{SHARED / 'dmx_universe.py'};.",
     "--add-data", f"{SHARED / 'depth_runtime.py'};.",

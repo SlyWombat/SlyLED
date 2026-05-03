@@ -77,48 +77,11 @@ def run():
         r = c.post('/api/settings', json={'runnerLoop': False})
         ok('Settings runnerLoop', r.status_code == 200)
 
-        # ── #680 Calibration tuning (clamp-validated overrides) ─────
-        r = c.get('/api/settings')
-        d = r.get_json()
-        ok('#680 GET exposes calibrationTuningSpec',
-           isinstance(d.get('calibrationTuningSpec'), dict)
-           and 'discoveryBattleshipS' in d['calibrationTuningSpec'])
-        ok('#680 calibrationTuning starts empty',
-           d.get('calibrationTuning') == {})
-
-        # Happy path — inside clamps.
-        r = c.post('/api/settings', json={'calibrationTuning': {
-            'discoveryBattleshipS': 90.0,  # #682-T raised clamp min 20 → 60
-            'bfsMaxSamples': 120,
-            'settleEscalateS': [0.3, 0.6, 1.2],
-        }})
-        ok('#680 accepts valid tuning', r.status_code == 200 and r.get_json().get('ok'))
-        d = c.get('/api/settings').get_json()
-        ct = d.get('calibrationTuning') or {}
-        ok('#680 override persisted (float)', ct.get('discoveryBattleshipS') == 90.0)
-        ok('#680 override persisted (int)',   ct.get('bfsMaxSamples') == 120)
-        ok('#680 override persisted (list)',  ct.get('settleEscalateS') == [0.3, 0.6, 1.2])
-
-        # OOR — rejected with 400 + per-field error.
-        r = c.post('/api/settings', json={'calibrationTuning': {
-            'discoveryBattleshipS': 9999.0,
-        }})
-        ok('#680 rejects out-of-range', r.status_code == 400)
-        d = r.get_json()
-        ok('#680 400 names the bad field',
-           any('discoveryBattleshipS' in e for e in (d.get('details') or [])))
-
-        # Unknown key — rejected.
-        r = c.post('/api/settings', json={'calibrationTuning': {
-            'fabricatedKey': 5.0,
-        }})
-        ok('#680 rejects unknown key', r.status_code == 400)
-
-        # Reset to defaults — empty dict clears overrides.
-        r = c.post('/api/settings', json={'calibrationTuning': {}})
-        ok('#680 reset clears overrides', r.status_code == 200)
-        ct2 = (c.get('/api/settings').get_json() or {}).get('calibrationTuning')
-        ok('#680 overrides cleared', ct2 == {})
+        # ── #784 PR-7 — #680 calibration-tuning override tests deleted
+        # along with the SMART pipeline they tuned. The surviving
+        # `CAL_TUNING_SPEC` only carries `maxScanAgeMinutes` +
+        # `moverClaimTtlS`; if a future PR re-enriches it, port the
+        # validation tests here.
 
         # ── Children CRUD ───────────────────────────────────────────
         r = c.get('/api/children')
@@ -884,31 +847,10 @@ def run():
         r = c.post(f'/api/fixtures/99999/dmx-test', json={'pan': 0.5})
         ok('DMX test unknown → 404', r.status_code == 404)
 
-        # ── Mover calibration routes ──
-        # GET calibration status when none exists
-        r = c.get(f'/api/calibration/mover/{dmx_fid}/status')
-        ok('Mover cal status → none', r.get_json().get('status') == 'none')
-
-        # GET calibration data when uncalibrated
-        r = c.get(f'/api/calibration/mover/{dmx_fid}')
-        ok('Mover cal not calibrated', r.get_json().get('calibrated') is False)
-
-        # Start calibration on non-existent fixture → 404
-        r = c.post('/api/calibration/mover/99999/start', json={})
-        ok('Mover cal unknown fixture → 404', r.status_code == 404)
-
-        # Start calibration without camera → 400
-        r = c.post(f'/api/calibration/mover/{dmx_fid}/start', json={})
-        ok('Mover cal no camera → 400', r.status_code == 400)
-
-        # Delete calibration (no-op when none exists)
-        r = c.delete(f'/api/calibration/mover/{dmx_fid}')
-        ok('Mover cal delete → ok', r.status_code == 200)
-
-        # Aim without calibration → 400
-        r = c.post(f'/api/calibration/mover/{dmx_fid}/aim',
-                    json={'pixelX': 100, 'pixelY': 200})
-        ok('Mover cal aim uncalibrated → 400', r.status_code == 400)
+        # ── #784 PR-7 — legacy `/api/calibration/mover/<fid>/*` routes
+        # deleted along with the rest of the SMART pipeline. The new
+        # canonical aim endpoint is `POST /api/mover/<fid>/aim` (see
+        # tests/aim/test_routes.py).
 
         # Clean up
         c.delete(f'/api/fixtures/{dmx_fid}')
@@ -2114,42 +2056,9 @@ def run():
         ok('#737 homed mover NOT flagged',
            all(m.get('id') != 2 for m in need))
 
-        # ── #738: cal-status surfaces three-state capabilities ──
-        # Fid 1 has profile (mover) but no Home → state=no_home, no angular.
-        # Fid 2 has Home but no Secondary → state=no_home (Secondary is the
-        # other half of the affine; home alone isn't enough).
-        r1 = c.get('/api/calibration/mover/1/status').get_json()
-        ok('#738 fid1 cal-status returns capabilities', isinstance(r1.get('capabilities'), dict))
-        ok('#738 fid1 state=no_home',
-           (r1.get('capabilities') or {}).get('state') == 'no_home')
-        ok('#738 fid1 angular=False',
-           (r1.get('capabilities') or {}).get('angular') is False)
-
-        # Add Secondary to fid 2 → angular_only state, angular True, worldXYZ False.
-        r = c.post('/api/fixtures/2/home/secondary',
-                   json={'panAxis': 'L', 'tiltAxis': 'D'})
-        # POST may fail outside a real cal flow — emulate the dict directly.
-        for f in parent_server._fixtures:
-            if f.get('id') == 2:
-                f['homeSecondary'] = {'operatorTiltDeg': 90,
-                                      'panSign': 1, 'tiltSign': -1}
-        r2 = c.get('/api/calibration/mover/2/status').get_json()
-        ok('#738 fid2 state=angular_only',
-           (r2.get('capabilities') or {}).get('state') == 'angular_only')
-        ok('#738 fid2 angular=True',
-           (r2.get('capabilities') or {}).get('angular') is True)
-        ok('#738 fid2 worldXYZ=False',
-           (r2.get('capabilities') or {}).get('worldXYZ') is False)
-
-        # ── #738: aim-angles response no longer carries `confidence` ──
-        # Angular IS exact — there's nothing to grade. Drop the field entirely.
-        r3 = c.post('/api/mover/2/aim-angles',
-                    json={'panDeg': 0, 'tiltDeg': 0})
-        body3 = r3.get_json() or {}
-        # Response may be ok=true with DMX values, or 400/503 if no engine.
-        # Regardless of outcome, `confidence` must not appear in the body.
-        ok('#738 aim-angles response has no confidence field',
-           'confidence' not in body3)
+        # ── #738 cal-status / aim-angles checks deleted under #784 PR-7
+        # along with the underlying SMART routes. The new aim endpoint
+        # is `POST /api/mover/<fid>/aim` (see tests/aim/test_routes.py).
 
         # ── #742: generic POST /api/fixtures must NOT clobber home anchor ──
         # Direct mutation through the generic-PUT writable list bypassed
@@ -2227,270 +2136,9 @@ def run():
         ok('#743 secondary cleared after big move',
            rec is not None and rec.get('homeSecondary') is None)
 
-        # ── #745: SMART preview distinguishes camera-state abort reasons ──
-        # No cameras at all → no_cameras_registered (not no_camera_floor).
-        # We need a positioned mover with rotation that points at floor.
-        # Fid 2 already has profile + home; give it position + downward rot.
-        for f in parent_server._fixtures:
-            if f.get('id') == 2:
-                f['rotation'] = [89.0, 0.0, 0.0]
-                break
-        parent_server._layout['children'] = [
-            ent for ent in (parent_server._layout.get('children') or [])
-            if ent.get('id') != 2
-        ]
-        parent_server._layout['children'].append(
-            {'id': 2, 'x': 1500, 'y': 1500, 'z': 3000})
-        # Strip any existing cameras
-        parent_server._fixtures = [
-            f for f in parent_server._fixtures
-            if f.get('fixtureType') != 'camera']
-        r = c.get('/api/calibration/mover/2/smart/preview').get_json()
-        ok('#745 no cameras → no_cameras_registered',
-           r.get('abortReason') == 'no_cameras_registered')
-        ok('#745 camerasRegistered count=0',
-           r.get('camerasRegistered') == 0)
-        # Add a camera but don't position it → no_cameras_positioned
-        parent_server._fixtures.append({
-            'id': 999, 'name': 'Drift cam', 'fixtureType': 'camera',
-            'fovDeg': 90, 'rotation': [30.0, 0.0, 0.0],
-        })
-        r = c.get('/api/calibration/mover/2/smart/preview').get_json()
-        ok('#745 unplaced camera → no_cameras_positioned',
-           r.get('abortReason') == 'no_cameras_positioned')
-        ok('#745 cameraLayoutDriftIds reports unplaced camera',
-           999 not in (r.get('cameraLayoutDriftIds') or []))  # not in drift since no x/y/z
-
-        # ── #746/#747: SMART probe routes through confirm + floor-z gate ──
-        # _smart_probe_point_default calls _beam_detect_flash → confirm →
-        # depth → floor-z gate. We monkey-patch _beam_detect_flash to
-        # return a fake pixel and confirm_candidate_with_nudge to inject
-        # the verdict, then verify the result obeys the gate.
-        import mover_calibrator as mcal_mod
-
-        # Save originals
-        orig_flash = mcal_mod._beam_detect_flash
-        orig_depth = mcal_mod._depth_at_pixel
-        orig_confirm = mcal_mod.confirm_candidate_with_nudge
-
-        # The probe path requires a running engine. `running` is a
-        # property — patch the underlying flag on the engine instance.
-        # Most ArtNet engines expose `_running` as the storage for the
-        # property; if not, swap to a stub engine.
-        orig_artnet = parent_server._artnet
-        class _StubEng:
-            running = True
-            _running = True
-            def get_universe(self, u):
-                class _U:
-                    def set_fixture_pan_tilt(self, *a, **kw): pass
-                    def set_fixture_dimmer(self, *a, **kw): pass
-                    def set_fixture_rgb(self, *a, **kw): pass
-                return _U()
-        parent_server._artnet = _StubEng()
-        parent_server._mcal._active_universe = 1
-
-        # Stub: flash always returns a pixel; confirm verdict and depth
-        # are pluggable per-test.
-        mcal_mod._beam_detect_flash = lambda *a, **kw: (320, 240)
-        try:
-            # Case 1 — confirm rejects → SMART probe returns found:False
-            mcal_mod.confirm_candidate_with_nudge = (
-                lambda *a, **kw: ("REJECTED_OUT_OF_FRAME",
-                                   {"panShift": 0, "tiltShift": 0}))
-            mcal_mod._depth_at_pixel = lambda *a, **kw: (1000.0, 500.0, 0.0)
-            # Need a mover fixture with a profile + camera
-            for f in parent_server._fixtures:
-                if f.get('id') == 2:
-                    f['fixtureType'] = 'dmx'
-                    f['dmxStartAddr'] = 1
-                    f['dmxUniverse'] = 1
-                    f['rotation'] = [89.0, 0.0, 0.0]
-            # Add a camera with an IP
-            cam_stub = {'cameraIp': '10.0.0.99', 'cameraIdx': 0,
-                         'id': 999, 'name': 'h747-cam'}
-            res = parent_server._smart_probe_point_default(
-                fid=2, cam=cam_stub, bridge_ip='10.0.0.1',
-                mover_color=(0, 255, 0),
-                pan_dmx16=32768, tilt_dmx16=16384,
-                predicted_floor_xyz=(1000.0, 500.0, 0.0),
-                settle_ms=0)
-            ok('#747 confirm reject → found=False',
-               res.get('found') is False)
-            ok('#747 confirm reject → reason carries verdict',
-               'rejected' in (res.get('reason') or '').lower()
-               or 'out_of_frame' in (res.get('reason') or '').lower())
-
-            # Case 2 — confirm OK + measured z near floor → found=True
-            mcal_mod.confirm_candidate_with_nudge = (
-                lambda *a, **kw: ("CONFIRMED",
-                                   {"panShift": 20, "tiltShift": 20}))
-            mcal_mod._depth_at_pixel = lambda *a, **kw: (1000.0, 500.0, 5.0)
-            res = parent_server._smart_probe_point_default(
-                fid=2, cam=cam_stub, bridge_ip='10.0.0.1',
-                mover_color=(0, 255, 0),
-                pan_dmx16=32768, tilt_dmx16=16384,
-                predicted_floor_xyz=(1000.0, 500.0, 0.0),
-                settle_ms=0)
-            ok('#747 confirm ok + on-floor → found=True',
-               res.get('found') is True)
-            ok('#747 confirm ok carries confirmInfo',
-               'confirmInfo' in res)
-
-            # Case 3 — #746 floor-z gate: confirm OK but z=1700 → reject
-            mcal_mod.confirm_candidate_with_nudge = (
-                lambda *a, **kw: ("CONFIRMED",
-                                   {"panShift": 20, "tiltShift": 20}))
-            mcal_mod._depth_at_pixel = lambda *a, **kw: (1000.0, 500.0, 1700.0)
-            res = parent_server._smart_probe_point_default(
-                fid=2, cam=cam_stub, bridge_ip='10.0.0.1',
-                mover_color=(0, 255, 0),
-                pan_dmx16=32768, tilt_dmx16=16384,
-                predicted_floor_xyz=(1000.0, 500.0, 0.0),
-                settle_ms=0)
-            ok('#746 above-floor measurement → found=False',
-               res.get('found') is False)
-            ok('#746 above-floor reason=reject_offfloor',
-               res.get('reason') == 'reject_offfloor')
-            ok('#746 above-floor reports measured z',
-               res.get('z') == 1700.0)
-        finally:
-            mcal_mod._beam_detect_flash = orig_flash
-            mcal_mod._depth_at_pixel = orig_depth
-            mcal_mod.confirm_candidate_with_nudge = orig_confirm
-            parent_server._artnet = orig_artnet
-
-        # ── #748: angular_only mover-control aim_stage round-trip exact ──
-        # Pre-#748 _mover_current_aim_stage fell to _pan_tilt_to_ray for
-        # angular_only fixtures (no SMART model, no parametric v2),
-        # which doesn't round-trip with _aim_to_pan_tilt's SMART path.
-        # Calibrate-end captured aim_stage via path A; next tick wrote
-        # DMX via path B; pan jumped 89° on release with the phone
-        # unmoved. Now both paths share the same SMART/2-pair IK so
-        # the round-trip is exact.
-        from coverage_math import (dmx_to_angles, fixture_aim_to_world,
-                                    world_to_fixture_pt, angles_to_dmx)
-        # Build a fixture matching the bug repro (Sly Moving Head Super
-        # Mini, fid 19) — Home + post-#730 direction-only Secondary, no
-        # SMART model.
-        h748_mover = {
-            "id": 19, "name": "h748", "fixtureType": "dmx",
-            "dmxStartAddr": 43, "dmxUniverse": 1, "dmxChannelCount": 13,
-            "dmxProfileId": "h737-mover-prof",
-            "rotation": [0, 0, 0],
-            "x": 1500, "y": 0, "z": 2000,
-            "homePanDmx16": 32768, "homeTiltDmx16": 32768,
-            "homeSecondary": {
-                "panOffsetDmx16": 10923,
-                "tiltOffsetDmx16": 7281,
-                "panMovedDirection": "right",
-                "tiltMovedDirection": "down",
-            },
-        }
-        h748_model, _conf = parent_server._resolve_mover_model(19, h748_mover)
-        ok('#748 _resolve_mover_model returns 2-pair affine for angular_only',
-           h748_model is not None
-           and "panDmxPerDeg" in h748_model and "tiltDmxPerDeg" in h748_model)
-        # Round-trip: arbitrary DMX → aim_stage → DMX should be exact.
-        h748_max_err = 0
-        for pn, tn in [(0.5, 0.5), (0.6, 0.5), (0.7, 0.4), (0.4, 0.6)]:
-            pdx = int(round(pn * 65535))
-            tdx = int(round(tn * 65535))
-            pdeg, tdeg = dmx_to_angles(pdx, tdx, h748_model)
-            fix_pos = (h748_mover["x"], h748_mover["y"], h748_mover["z"])
-            rot = h748_mover["rotation"]
-            axis, _ = fixture_aim_to_world(pdeg, tdeg, fix_pos, rot)
-            target = (fix_pos[0] + axis[0] * 3000.0,
-                      fix_pos[1] + axis[1] * 3000.0,
-                      fix_pos[2] + axis[2] * 3000.0)
-            angles = world_to_fixture_pt(target, fix_pos, rot)
-            rt_pdx, rt_tdx = angles_to_dmx(angles[0], angles[1], h748_model)
-            h748_max_err = max(h748_max_err, abs(pdx - rt_pdx),
-                                abs(tdx - rt_tdx))
-        ok('#748 SMART aim_stage→DMX round-trip exact (<5 LSB)',
-           h748_max_err < 5,
-           f'max err = {h748_max_err} LSB')
-
-        # ── #728: SMART validate-pass commit gate ──────────────────────
-        # Endpoint round-trip: stage a fake job in `validating` status
-        # with two markers, drive the confirm endpoint twice (yes+yes),
-        # assert the staged calibration commits to _mover_cal. Then redo
-        # with one no answer, assert _mover_cal stays untouched and
-        # status flips to error_validation_failed.
-        # The validate routes don't run threads — they read/write
-        # _mover_cal_jobs directly, so we can stage by hand.
-        parent_server._mover_cal.pop('99', None)
-        parent_server._mover_cal_jobs['99'] = {
-            'status': 'validating', 'phase': 'smart_validating',
-            'pendingCommit': {
-                'method': 'smart', 'version': 3,
-                'model': {'panDmxPerDeg': 220.0, 'tiltDmxPerDeg': 305.0,
-                          'panSign': 1, 'tiltSign': -1,
-                          'panBiasDmx': 0, 'tiltBiasDmx': 0,
-                          'homePanDmx16': 32768, 'homeTiltDmx16': 16384},
-                'samples': [], 'residuals': {'rmsMm': 30, 'maxMm': 50},
-                'confidence': 'high', 'sampleCount': 4,
-                'timestamp': '2026-04-29T00:00:00Z',
-            },
-            'validateMarkers': [
-                {'id': 1, 'name': 'M1', 'x': 1000, 'y': 1500, 'z': 0, 'confirmed': None},
-                {'id': 2, 'name': 'M2', 'x': 2000, 'y': 2500, 'z': 0, 'confirmed': None},
-            ],
-            'validateIndex': 0,
-        }
-        # Need a fixture record so commit_pending can flip moverCalibrated.
-        if not any(f.get('id') == 99 for f in parent_server._fixtures):
-            parent_server._fixtures.append({
-                'id': 99, 'name': 'h728-fixture', 'fixtureType': 'dmx',
-                'rotation': [0, 0, 0],
-            })
-
-        r = c.get('/api/calibration/mover/99/smart/validate/state').get_json()
-        ok('#728 validate/state returns markers', len(r.get('markers') or []) == 2)
-
-        r = c.post('/api/calibration/mover/99/smart/validate/confirm',
-                   json={'markerId': 1, 'hit': True}).get_json()
-        ok('#728 first yes does not commit', r.get('committed') is False)
-        ok('#728 calibration not yet written to _mover_cal',
-           '99' not in parent_server._mover_cal)
-
-        r = c.post('/api/calibration/mover/99/smart/validate/confirm',
-                   json={'markerId': 2, 'hit': True}).get_json()
-        ok('#728 all-yes commits via response',
-           r.get('committed') is True or r.get('ok') is True)
-        ok('#728 _mover_cal[99] populated after all-yes',
-           '99' in parent_server._mover_cal
-           and parent_server._mover_cal['99'].get('method') == 'smart')
-
-        # Abort path: re-stage and answer one no.
-        parent_server._mover_cal.pop('99', None)
-        parent_server._mover_cal_jobs['99'] = {
-            'status': 'validating', 'phase': 'smart_validating',
-            'pendingCommit': {
-                'method': 'smart', 'version': 3,
-                'model': {'panDmxPerDeg': 220.0, 'tiltDmxPerDeg': 305.0,
-                          'panSign': 1, 'tiltSign': -1,
-                          'panBiasDmx': 0, 'tiltBiasDmx': 0,
-                          'homePanDmx16': 32768, 'homeTiltDmx16': 16384},
-                'samples': [], 'residuals': {'rmsMm': 30, 'maxMm': 50},
-                'confidence': 'high', 'sampleCount': 4,
-                'timestamp': '2026-04-29T00:00:00Z',
-            },
-            'validateMarkers': [
-                {'id': 1, 'name': 'M1', 'x': 1000, 'y': 1500, 'z': 0, 'confirmed': None},
-                {'id': 2, 'name': 'M2', 'x': 2000, 'y': 2500, 'z': 0, 'confirmed': None},
-            ],
-            'validateIndex': 0,
-        }
-        c.post('/api/calibration/mover/99/smart/validate/confirm',
-               json={'markerId': 1, 'hit': False})
-        ok('#728 no answer flips status to error_validation_failed',
-           parent_server._mover_cal_jobs['99'].get('status')
-           == 'error_validation_failed')
-        ok('#728 abort leaves _mover_cal[99] uncommitted',
-           '99' not in parent_server._mover_cal)
-        ok('#728 abort drops pendingCommit',
-           'pendingCommit' not in parent_server._mover_cal_jobs['99'])
+        # ── #745 / #746 / #747 / #748 / #728 SMART-pipeline tests deleted
+        # under #784 PR-7 along with the legacy IK modules. The new aim
+        # path is `desktop/shared/aim/sphere.py` (covered by tests/aim/).
 
         # ── Profile round-trip in project export/import (#337) ──
         # Create a custom profile and a DMX fixture referencing it
@@ -2898,123 +2546,10 @@ def run():
         })
         ok('#730 retry rejects bad axis', r.status_code == 400)
 
-        # ── #720 PR-1.5 — aim-angles endpoint ─────────────────────
-        # Without home + secondary → fixture_not_calibrated
-        c.delete(f'/api/fixtures/{home_fid}/home')
-        r = c.post(f'/api/mover/{home_fid}/aim-angles',
-                   json={'panDeg': 0.0, 'tiltDeg': 0.0})
-        ok('#720 aim-angles without cal → 400', r.status_code == 400)
-        ok('#720 aim-angles 400 has fixture_not_calibrated',
-           'not_calibrated' in (r.get_json().get('err') or ''))
-
-        # With Home + Secondary → 503 (engine not running) is acceptable.
-        c.post(f'/api/fixtures/{home_fid}/home', json={
-            'panDmx16': 32768, 'tiltDmx16': 16384,
-            'secondary': {
-                'panOffsetDmx16': 16384, 'tiltOffsetDmx16': 16384,
-                'panMovedDirection': 'right', 'tiltMovedDirection': 'up',
-            },
-        })
-        r = c.post(f'/api/mover/{home_fid}/aim-angles',
-                   json={'panDeg': 0.0, 'tiltDeg': 0.0})
-        # Either 503 (no engine) or 200 (engine running) is fine; either
-        # way confirms the path is wired through coverage_math without
-        # raising. 400 means the resolve step rejected the estimate.
-        ok('#720 aim-angles with Home+Secondary not 400/404',
-           r.status_code in (200, 503),
-           f'status={r.status_code} body={r.get_json()}')
-
-        # Validation: missing panDeg → 400
-        r = c.post(f'/api/mover/{home_fid}/aim-angles',
-                   json={'tiltDeg': 0.0})
-        ok('#720 aim-angles missing panDeg → 400', r.status_code == 400)
-
-        # Non-DMX fixture → 400
-        r = c.post('/api/fixtures', json={
-            'name': 'led-test', 'type': 'point', 'fixtureType': 'led',
-            'childId': -1,
-        })
-        led_fid = r.get_json().get('id')
-        r = c.post(f'/api/mover/{led_fid}/aim-angles',
-                   json={'panDeg': 0.0, 'tiltDeg': 0.0})
-        ok('#720 aim-angles on LED fixture → 400', r.status_code == 400)
-        c.delete(f'/api/fixtures/{led_fid}')
-
-        # Unknown fid → 404
-        r = c.post('/api/mover/99999/aim-angles',
-                   json={'panDeg': 0.0, 'tiltDeg': 0.0})
-        ok('#720 aim-angles unknown fid → 404', r.status_code == 404)
-
-        # ── #720 PR-2 — coverage endpoint ─────────────────────────
-        # GET coverage on the home test fixture (rotation [0,0,0],
-        # default 150W profile) — should return a polygon when the
-        # fixture is positioned so its envelope reaches the floor.
-        r = c.post('/api/layout', json={
-            'children': [{'id': home_fid, 'x': 1500, 'y': 1500, 'z': 3000}],
-        })
-        ok('#720 PR-2 layout positioned for coverage', r.status_code == 200)
-        r = c.get(f'/api/fixtures/{home_fid}/coverage')
-        ok('#720 PR-2 GET coverage 200', r.status_code == 200)
-        d = r.get_json()
-        ok('#720 PR-2 coverage has cone', isinstance(d.get('cone'), dict))
-        ok('#720 PR-2 cone has apex',
-           d.get('cone', {}).get('apex') == [1500, 1500, 3000])
-        ok('#720 PR-2 cone has axis vector',
-           len(d.get('cone', {}).get('axis') or []) == 3)
-        ok('#720 PR-2 floorPolygon present',
-           isinstance(d.get('floorPolygon'), list))
-        ok('#720 PR-2 floorZ present',
-           isinstance(d.get('floorZ'), (int, float)))
-
-        # GET coverage on unknown fid → 404
-        r = c.get('/api/fixtures/99999/coverage')
-        ok('#720 PR-2 coverage unknown fid → 404', r.status_code == 404)
-
-        # GET coverage on LED fixture → 400
-        r = c.post('/api/fixtures', json={
-            'name': 'led-cov', 'type': 'point', 'fixtureType': 'led',
-            'childId': -1,
-        })
-        led_fid = r.get_json().get('id')
-        r = c.get(f'/api/fixtures/{led_fid}/coverage')
-        ok('#720 PR-2 coverage on LED → 400', r.status_code == 400)
-        c.delete(f'/api/fixtures/{led_fid}')
-
-        # ── #720 PR-3 — smart/preview endpoint ────────────────────
-        # No cameras positioned → abortReason "no_camera_floor"
-        r = c.get(f'/api/calibration/mover/{home_fid}/smart/preview')
-        ok('#720 PR-3 smart/preview returns 200', r.status_code == 200)
-        d = r.get_json()
-        # #745 — when no cameras exist at all, the abort reason is
-        # `no_cameras_registered`, not `no_camera_floor`. The latter is
-        # reserved for "cameras placed but their FOV doesn't reach floor".
-        ok('#720 PR-3 smart/preview reports no-camera abort',
-           d.get('abortReason') in ('no_cameras_registered',
-                                     'no_cameras_positioned',
-                                     'no_camera_floor'),
-           f'got {d.get("abortReason")}')
-        ok('#720 PR-3 smart/preview has coveragePoly',
-           isinstance(d.get('coveragePoly'), list))
-        ok('#720 PR-3 smart/preview has empty workingPoly',
-           d.get('workingPoly') == [])
-        ok('#720 PR-3 smart/preview has empty probePoints',
-           d.get('probePoints') == [])
-
-        # smart/preview on unknown fid → 404
-        r = c.get('/api/calibration/mover/99999/smart/preview')
-        ok('#720 PR-3 smart/preview unknown fid → 404',
-           r.status_code == 404)
-
-        # ── #720 PR-4 — smart cal mode wiring ─────────────────────
-        # Start cal with mode=smart on a fixture without a working area
-        # → starts the SMART thread, which raises CalibrationError
-        # because no cameras are positioned. The thread exits cleanly
-        # with status=error and parks the fixture at home.
-        # (The thread is mocked-camera-free; we just verify the dispatch
-        # accepts mode=smart and the start handler returns 200.)
-        # Note: this test would race with the actual probe thread without
-        # a camera fixture; we rely on the thread's CalibrationError
-        # path catching the missing-cameras case quickly.
+        # ── #720 PR-1.5 / PR-2 / PR-3 / PR-4 deleted under #784 PR-7
+        # along with the legacy aim-angles endpoint, the coverage route,
+        # and the SMART preview / cal mode. The new aim path is
+        # `POST /api/mover/<fid>/aim` (see tests/aim/test_routes.py).
 
         # ── #737 — lamp / beam / blackout helper endpoints ─────────
         # Engine-not-running path (most common in test). Each endpoint
@@ -3277,56 +2812,9 @@ def run():
            abs(saved.get('rotation', [0,0,0])[1] - 180.0) < 1e-9,
            f'got {saved.get("rotation")}')
 
-        # ── #783 PR-γ — aim-angles routes through sphere model ────
-        # Fixture with Home + profile sign metadata uses the sphere
-        # model. Without homeSecondary, legacy resolve would have
-        # returned fixture_not_calibrated; sphere succeeds.
-        c.post('/api/reset')
-        c.post('/api/fixtures', json={
-            'name': 'sphere-mover', 'fixtureType': 'dmx', 'type': 'point',
-            'dmxUniverse': 1, 'dmxStartAddr': 1, 'dmxChannelCount': 12,
-            'dmxProfileId': 'movinghead-150w-12ch',
-            'rotation': [0.0, 0.0, 0.0],
-        })
-        all_fx = c.get('/api/fixtures').get_json()
-        smover_fid = all_fx[-1]['id']
-        # Home setup: drive at midpoint, save Home.
-        c.post(f'/api/fixtures/{smover_fid}/home', json={
-            'panDmx16': 32768, 'tiltDmx16': 32768,
-        })
-        # NO Home-Secondary — would block the legacy path.
-        # Bring up engine so aim-angles can write DMX.
-        c.post('/api/dmx/start', json={'protocol': 'artnet'})
-        # Aim panDeg=10, tiltDeg=0. Sphere: pan_dmx16 = 32768 + 10 *
-        # (65535/540) ≈ 33982; tilt_dmx16 = 32768.
-        r = c.post(f'/api/mover/{smover_fid}/aim-angles',
-                   json={'panDeg': 10.0, 'tiltDeg': 0.0})
-        d = r.get_json() or {}
-        ok('#783 PR-γ aim-angles via sphere returns ok',
-           r.status_code == 200 and d.get('ok') is True,
-           f'status={r.status_code} body={d}')
-        if d.get('ok'):
-            expected_pan = 32768 + int(round(10.0 * 65535 / 540))
-            ok('#783 PR-γ sphere DMX matches expected (pan)',
-               abs(d.get('panDmx16', 0) - expected_pan) <= 2,
-               f'got {d.get("panDmx16")} expected {expected_pan}')
-            ok('#783 PR-γ sphere DMX tilt at home',
-               abs(d.get('tiltDmx16', 0) - 32768) <= 2,
-               f'got {d.get("tiltDmx16")}')
-
-        # Negative case: a fixture WITHOUT Home → fixture_not_calibrated
-        # (legacy fallback path, sphere can't build).
-        c.post('/api/fixtures', json={
-            'name': 'no-home', 'fixtureType': 'dmx', 'type': 'point',
-            'dmxUniverse': 1, 'dmxStartAddr': 50, 'dmxChannelCount': 12,
-            'dmxProfileId': 'movinghead-150w-12ch',
-            'rotation': [0.0, 0.0, 0.0],
-        })
-        nh_fid = c.get('/api/fixtures').get_json()[-1]['id']
-        r = c.post(f'/api/mover/{nh_fid}/aim-angles',
-                   json={'panDeg': 0.0, 'tiltDeg': 0.0})
-        ok('#783 PR-γ no-Home fixture → fixture_not_calibrated',
-           r.status_code == 400, f'status={r.status_code}')
+        # ── #783 PR-γ aim-angles tests deleted under #784 PR-7 along
+        # with the legacy `aim-angles` endpoint. The new aim path is
+        # `POST /api/mover/<fid>/aim` (see tests/aim/test_routes.py).
 
     # ── Print results ───────────────────────────────────────────────
     passed = sum(1 for _, v, _ in results if v)

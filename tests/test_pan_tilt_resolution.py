@@ -223,16 +223,11 @@ buf2 = bytearray(512)
 write_pan_tilt_to_buffer(buf2, 17, 0.5, 0.0, profile_16_contig)
 ok(buf2[16] == 127 and buf2[17] == 255, f'start_addr=17 lands pan at index 16 (got {buf2[16]}, {buf2[17]})')
 
-# ── _set_mover_dmx integration (mover_calibrator) ──────────────────────
+# #784 PR-7 — `mover_calibrator._set_mover_dmx` deleted along with the
+# rest of the legacy IK module. The DMX-side write path is the one
+# exercised above (`compute_pan_tilt_writes` / `write_pan_tilt_to_buffer`)
+# in `dmx_universe`; nothing in the new aim model duplicates it.
 
-section('_set_mover_dmx routes pan/tilt through helper')
-
-import mover_calibrator as mc
-buf = bytearray(512)
-mc._set_mover_dmx(buf, 1, 0.5, 1.0, 0, 0, 0, dimmer=0, profile=profile_non_contig)
-ok(buf[0] == 127, f'mover_calibrator pan MSB = 127 (got {buf[0]})')
-ok(buf[5] == 255, f'mover_calibrator pan LSB at non-contig offset 5 (got {buf[5]})')
-ok(buf[9] == 255, f'mover_calibrator tilt LSB at non-contig offset 9 (got {buf[9]})')
 
 # ── OFL importer emits pan-fine / tilt-fine ─────────────────────────────
 

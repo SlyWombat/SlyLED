@@ -137,108 +137,10 @@ ok('Cam_aim roundtrip: Z matches aim (on floor)',
    f'Z={result[0][2]:.1f} (expected {aim[2]})')
 
 
-# ═══════════════════════════════════════════════════════════════════════
-print('\n=== mover_calibrator.py — pan_tilt_to_ray ===')
-# ═══════════════════════════════════════════════════════════════════════
-
-from mover_calibrator import (compute_initial_aim, pan_tilt_to_ray,
-                               ray_surface_intersect, build_grid, grid_inverse,
-                               grid_3d_inverse, grid_3d_lookup, build_grid_3d)
-
-# Test: Home position (0.5, 0.5) → forward along +Y (depth)
-dx, dy, dz = pan_tilt_to_ray(0.5, 0.5)
-ok('Home ray: dx=0', approx(dx, 0, 0.01), f'dx={dx}')
-ok('Home ray: dy=1 (forward)', approx(dy, 1, 0.01), f'dy={dy}')
-ok('Home ray: dz=0', approx(dz, 0, 0.01), f'dz={dz}')
-
-# Test: Pan full right (pan=0.5 + 90°/540° ≈ 0.667) → should have +X component
-dx, dy, dz = pan_tilt_to_ray(0.667, 0.5)
-ok('Pan right: +X component', dx > 0.5, f'dx={dx}')
-
-# Test: Tilt down (tilt > 0.5) → -Z component (height)
-dx, dy, dz = pan_tilt_to_ray(0.5, 0.6)
-ok('Tilt down: -Z component', dz < -0.1, f'dz={dz}')
-
-# Test: Unit vector
-dx, dy, dz = pan_tilt_to_ray(0.3, 0.7)
-length = math.sqrt(dx*dx + dy*dy + dz*dz)
-ok('Ray is unit vector', approx(length, 1.0, 0.001), f'length={length}')
-
-# Test: Roundtrip compute_initial_aim → pan_tilt_to_ray
-# Stage: X=width, Y=depth, Z=height.  mover at (2000, 500, 4000), target at (5000, 3000, 0)
-mover = [2000, 500, 4000]
-target = [5000, 3000, 0]
-pan, tilt = compute_initial_aim(mover, target)
-dx, dy, dz = pan_tilt_to_ray(pan, tilt)
-# Direction from mover to target
-ex = target[0] - mover[0]
-ey = target[1] - mover[1]
-ez = target[2] - mover[2]
-elen = math.sqrt(ex*ex + ey*ey + ez*ez)
-ex, ey, ez = ex/elen, ey/elen, ez/elen
-dot = dx*ex + dy*ey + dz*ez
-ok('Roundtrip: direction dot > 0.99', dot > 0.99, f'dot={dot:.4f}')
-
-
-# ═══════════════════════════════════════════════════════════════════════
-print('\n=== mover_calibrator.py — ray_surface_intersect ===')
-# ═══════════════════════════════════════════════════════════════════════
-
-# Test: Ray aimed at floor from height (floor at Z=0, origin at Z=4500)
-surfaces = {"floor": {"z": 0, "normal": [0, 0, 1]}, "walls": [], "obstacles": []}
-origin = (2000, 0, 4500)
-direction = (0.3, 0.5, -0.8)  # going forward (+Y) and down (-Z)
-# Normalize direction
-dlen = math.sqrt(sum(d*d for d in direction))
-direction = tuple(d/dlen for d in direction)
-pt = ray_surface_intersect(origin, direction, surfaces)
-ok('Floor hit: Z ≈ 0', pt is not None and approx(pt[2], 0, 5), f'pt={pt}')
-ok('Floor hit: X > origin X', pt is not None and pt[0] > origin[0], f'X={pt[0] if pt else None}')
-
-# Test: Ray aimed upward should NOT hit floor (positive Z = away from floor)
-direction_up = (0, 0, 1)
-pt = ray_surface_intersect(origin, direction_up, surfaces)
-ok('Upward ray: no floor hit', pt is None, f'pt={pt}')
-
-# Test: Ray aimed at wall (wall normal in XY plane)
-surfaces_wall = {"floor": None, "walls": [{"normal": [0, 1, 0], "d": -3000}], "obstacles": []}
-direction_fwd = (0, 1, 0)  # forward along +Y (depth)
-pt = ray_surface_intersect((1000, 0, 2000), direction_fwd, surfaces_wall)
-ok('Wall hit: Y = 3000', pt is not None and approx(pt[1], 3000, 5), f'pt={pt}')
-
-
-# ═══════════════════════════════════════════════════════════════════════
-print('\n=== mover_calibrator.py — build_grid + grid_inverse ===')
-# ═══════════════════════════════════════════════════════════════════════
-
-# Create synthetic linear mapping: px = pan * 1000, py = tilt * 500
-samples = []
-for p in [0.2, 0.3, 0.4, 0.5, 0.6]:
-    for t in [0.3, 0.4, 0.5, 0.6]:
-        samples.append((p, t, p * 1000, t * 500))
-
-grid = build_grid(samples)
-ok('Grid built', grid is not None)
-
-if grid:
-    from mover_calibrator import grid_lookup
-    # Lookup a known point
-    px, py = grid_lookup(grid, 0.4, 0.5)
-    ok('Grid lookup (0.4, 0.5): px ≈ 400', approx(px, 400, 5), f'px={px}')
-    ok('Grid lookup (0.4, 0.5): py ≈ 250', approx(py, 250, 5), f'py={py}')
-
-    # Inverse: pixel (350, 200) → pan ≈ 0.35, tilt ≈ 0.4
-    result = grid_inverse(grid, 350, 200)
-    if result:
-        ok('Grid inverse: pan ≈ 0.35', approx(result[0], 0.35, 0.02), f'pan={result[0]:.3f}')
-        ok('Grid inverse: tilt ≈ 0.4', approx(result[1], 0.4, 0.02), f'tilt={result[1]:.3f}')
-    else:
-        ok('Grid inverse returned result', False, 'returned None')
-
-# Test: build_grid with 7-tuple samples (collect_3d=True) (#264)
-samples_7 = [(p, t, p*1000, t*500, p*2000, 0, t*3000) for p, t, _, _ in samples]
-grid7 = build_grid(samples_7)
-ok('Grid from 7-tuple samples: built', grid7 is not None)
+# #784 PR-7: `mover_calibrator` deleted. The legacy `pan_tilt_to_ray`,
+# `compute_initial_aim`, `ray_surface_intersect`, `build_grid`, and
+# `grid_inverse` tests below have been removed; the new aim model
+# (`desktop/shared/aim/sphere.py`) is covered by `tests/aim/`.
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -344,29 +246,8 @@ ok('Weighted lookup: X dominates', approx(result, 0.305, 0.02), f'got {result:.4
 ok('Weighted != unweighted', abs(result - 0.55) > 0.1, f'would have been 0.55, got {result:.4f}')
 
 
-# ═══════════════════════════════════════════════════════════════════════
-print('\n=== grid_3d_inverse convergence check ===')
-# ═══════════════════════════════════════════════════════════════════════
-
-# Create a 3D grid where wx = pan*5000, wy = tilt*3000, wz = 0
-# Stage: X=width, Y=depth, Z=height. Convergence on XY (horizontal).
-samples_3d = []
-for p in [0.2, 0.3, 0.4, 0.5, 0.6]:
-    for t in [0.3, 0.4, 0.5, 0.6]:
-        samples_3d.append((p, t, p*1000, t*500, p*5000, t*3000, 0))
-grid3d = build_grid_3d(samples_3d)
-ok('3D grid built', grid3d is not None)
-
-if grid3d:
-    # Inverse: target (2000, 1350, 0) → pan ≈ 0.4, tilt ≈ 0.45
-    pan, tilt = grid_3d_inverse(grid3d, 2000, 1350, 0)
-    ok('3D inverse: pan ≈ 0.4', approx(pan, 0.4, 0.03), f'pan={pan:.3f}')
-    ok('3D inverse: tilt ≈ 0.45', approx(tilt, 0.45, 0.03), f'tilt={tilt:.3f}')
-
-    # Verify convergence uses XY only (#265)
-    # Target with large Z offset but matching XY — should still converge
-    pan2, tilt2 = grid_3d_inverse(grid3d, 2000, 1350, 9999)  # Z=9999 (huge Z error)
-    ok('3D inverse ignores Z: pan still ≈ 0.4', approx(pan2, 0.4, 0.05), f'pan={pan2:.3f}')
+# #784 PR-7: `build_grid_3d` / `grid_3d_inverse` deleted with
+# `mover_calibrator`.
 
 
 # ═══════════════════════════════════════════════════════════════════════

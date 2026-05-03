@@ -506,51 +506,22 @@ def bake_timeline(timeline, fixtures, spatial_fx, layout,
                         if start_pos and end_pos and pan_range > 0 and tilt_range > 0:
                             fx_pos = fdata.get("position", [0, 0, 0])
                             mounted_inv = bool(fdata.get("mountedInverted"))
-                            # Prefer calibration data when available (#366, #368)
-                            _mcal_data = (mover_calibrations or {}).get(str(fid))
-                            _grid = _mcal_data.get("grid") if _mcal_data else None
-                            _cal_used = False
-                            if _mcal_data and _mcal_data.get("method") == "manual":
-                                # Manual calibration: use affine transform for full extrapolation (#371)
-                                from mover_calibrator import affine_pan_tilt as _apt
-                                _samples = _mcal_data.get("samples", [])
-                                pt_s = _apt(_samples, start_pos[0], start_pos[1])
-                                pt_e = _apt(_samples, end_pos[0], end_pos[1])
-                                if pt_s and pt_e:
-                                    ps, ts = pt_s
-                                    pe, te = pt_e
-                                    _cal_used = True
-                                    log.info("Bake PT Move fid=%s: manual affine pan=%.3f→%.3f tilt=%.3f→%.3f",
-                                             fid, ps, pe, ts, te)
-                            if not _cal_used and _grid and _mcal_data:
-                                # Camera-based calibration: apply center offset
-                                _cal_center = (_mcal_data.get("centerPan", 0.5),
-                                               _mcal_data.get("centerTilt", 0.5))
-                                from spatial_engine import compute_pan_tilt as _cpt
-                                _center_target = _mcal_data.get("centerTarget", fx_pos)
-                                pt_s_geo = _cpt(fx_pos, start_pos, pan_range, tilt_range,
-                                                mounted_inverted=mounted_inv)
-                                pt_e_geo = _cpt(fx_pos, end_pos, pan_range, tilt_range,
-                                                mounted_inverted=mounted_inv)
-                                pt_c_geo = _cpt(fx_pos, _center_target, pan_range, tilt_range,
-                                                mounted_inverted=mounted_inv)
-                                if pt_s_geo and pt_e_geo and pt_c_geo:
-                                    dp = _cal_center[0] - pt_c_geo[0]
-                                    dt = _cal_center[1] - pt_c_geo[1]
-                                    ps = max(0, min(1, pt_s_geo[0] + dp))
-                                    ts = max(0, min(1, pt_s_geo[1] + dt))
-                                    pe = max(0, min(1, pt_e_geo[0] + dp))
-                                    te = max(0, min(1, pt_e_geo[1] + dt))
-                                    _cal_used = True
-                                    log.info("Bake PT Move fid=%s: camera cal offset dp=%.3f dt=%.3f", fid, dp, dt)
-                            if not _cal_used:
-                                from spatial_engine import compute_pan_tilt as _cpt
-                                pt_s = _cpt(fx_pos, start_pos, pan_range, tilt_range,
-                                            mounted_inverted=mounted_inv)
-                                pt_e = _cpt(fx_pos, end_pos, pan_range, tilt_range,
-                                            mounted_inverted=mounted_inv)
-                                ps, ts = pt_s if pt_s else (0.0, 0.5)
-                                pe, te = pt_e if pt_e else (1.0, 0.5)
+                            # #784 PR-7 — bake-time IK now goes straight
+                            # through `spatial_engine.compute_pan_tilt`.
+                            # The legacy manual-cal affine + camera-cal
+                            # offset blends were deleted with
+                            # `mover_calibrator`. Operators wanting world-
+                            # XYZ fidelity at bake time should set Home
+                            # anchors and route through the new
+                            # AimSphere via mover_control / aim/routes
+                            # instead of manual cal samples.
+                            from spatial_engine import compute_pan_tilt as _cpt
+                            pt_s = _cpt(fx_pos, start_pos, pan_range, tilt_range,
+                                        mounted_inverted=mounted_inv)
+                            pt_e = _cpt(fx_pos, end_pos, pan_range, tilt_range,
+                                        mounted_inverted=mounted_inv)
+                            ps, ts = pt_s if pt_s else (0.0, 0.5)
+                            pe, te = pt_e if pt_e else (1.0, 0.5)
                         else:
                             # Fallback for legacy actions without stage coords
                             ps = act.get("panStart", 0)

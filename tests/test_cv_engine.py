@@ -160,22 +160,9 @@ except RuntimeError as e:
 except Exception as e:
     ok(True, f'Object detection not ready (expected on some envs): {e}')
 
-# ── Mover calibrator integration ─────────────────────────────────────────
+# #784 PR-7 — `mover_calibrator` (and its `set_cv_engine` / `_cv_engine`
+# wiring) deleted along with the rest of the legacy IK pipeline.
 
-section('Mover Calibrator Integration (#333)')
-
-import mover_calibrator as mc
-
-ok(hasattr(mc, 'set_cv_engine'), 'mover_calibrator has set_cv_engine()')
-ok(hasattr(mc, '_cv_engine'), 'mover_calibrator has _cv_engine attribute')
-
-# Set and verify
-mc.set_cv_engine(cv)
-ok(mc._cv_engine is cv, 'CVEngine wired into mover_calibrator')
-
-# Reset
-mc.set_cv_engine(None)
-ok(mc._cv_engine is None, 'CVEngine can be reset to None')
 
 # ── API routes (Flask test client) ───────────────────────────────────────
 

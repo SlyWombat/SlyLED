@@ -21,11 +21,11 @@ TESTS = [
     ('test_timeline_bake.py',   'Timeline Bake (API)'),
     ('test_runtime_3d_show.py', 'Runtime 3D Show (Playwright)'),
     ('test_full_show.py',       'Full Show Integration'),
-    # #733 — SMART cal-pipeline emulator. Offline (no orchestrator,
-    # no rig). Reproduces #730/#731/#732 in <1s if any future PR
-    # regresses the cal pipeline; gates the weekly regression on a
-    # green corpus.
-    ('test_smart_pipeline_emulator.py', 'SMART Cal-Pipeline Emulator'),
+    # #784 PR-7 — SMART cal-pipeline emulator deleted along with the
+    # legacy IK modules (mover_calibrator, coverage_math, sphere_model,
+    # parametric_mover). The new `aim/` package is the only IK now;
+    # `tests/aim/test_sphere.py` + `tests/aim/test_routes.py` are the
+    # offline gates.
     # #741 (#739 follow-up) — save/restore round-trip. Builds a
     # non-trivial scene, exports to .slyshow, factory-resets, imports,
     # asserts every category survived to disk. Catches the next #739:
