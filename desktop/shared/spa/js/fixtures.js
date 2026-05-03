@@ -217,10 +217,15 @@ function editFixture(id){
       h+='<div style="font-size:.78em;color:#64748b;margin-bottom:.3em">Use the upside-down checkbox above if truss-mounted. Run this test with live DMX for precise motor direction calibration.</div>';
     }
     h+='<button class="btn" onclick="_orientTest('+id+')" style="background:#4c1d95;color:#e9d5ff;font-size:.8em">Test with DMX</button>';
-    var calDisabled = !hasHome;
+    // #738 capability gate: Calibrate-ready needs primary Home + Secondary
+    // direction calls. Pre-#788 this read an undefined `hasHome` which
+    // raised ReferenceError mid-render and blanked the modal for every
+    // DMX fixture (LED fixtures skipped this block entirely so the bug
+    // looked like "Edit only works for LEDs").
+    var calDisabled = !(hasPrimary && hasSecondary);
     var calStyle = 'background:#6b21a8;color:#d8b4fe;margin-left:.5em' + (calDisabled?';opacity:.5;cursor:not-allowed':'');
     var calOnClick = calDisabled
-      ? 'alert(\'Set Home before calibrating. Click Set Home above and drive the fixture along its rotation vector.\');return false;'
+      ? 'alert(\'Set Home + Movement Direction before calibrating. Click Set Home above and drive the fixture along its rotation vector.\');return false;'
       : 'closeModal();_moverCalStart('+id+')';
     var calTitle = calDisabled ? 'Set Home first' : '';
     h+='<button class="btn" onclick="'+calOnClick+'" style="'+calStyle+'" title="'+calTitle+'">Calibrate'+(f.moverCalibrated?' ✓':'')+'</button>';
