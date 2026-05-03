@@ -23,6 +23,7 @@ point instead of an aim direction. No new engine, no new UDP path.
 """
 
 import logging
+import math
 import threading
 import time
 
@@ -517,21 +518,23 @@ class MoverControlEngine:
         return None
 
     def _aim_to_pan_tilt(self, mover_id, mover, aim_stage):
-        """Pan/tilt-norm `(0..1, 0..1)` from a stage-space aim vector.
+        """Pan/tilt-norm `(0..1, 0..1)` from a stage-frame aim direction.
 
-        #784 PR-5 (2026-05-03) — every world-XYZ aim path goes through
-        `aim.sphere.AimSphere` via the per-fixture cache shared with
-        `/api/mover/<fid>/aim`. No SMART / parametric / affine /
-        generic-IK fallback ladder; without Home anchor + a moving-head
-        profile (`panRange` + `tiltRange`) the fixture refuses to aim
-        and this returns `(None, None)` so the caller can skip the
-        pan/tilt claim write. That's correct per #738 — angular
-        control needs only Home.
+        #784 PR-5 — surgical rewire to `aim.sphere.AimSphere`. No
+        SMART / parametric / affine / generic-IK fallback ladder;
+        without Home + Secondary + a moving-head profile (`panRange` +
+        `tiltRange`) the fixture refuses to aim and this returns
+        `(None, None)` so the caller can skip the pan/tilt claim write
+        (correct per #738 — angular control needs only Home).
 
-        Mount inversion lives in `fixture.rotation` (`#780 P1` bake);
-        the math composes rotation through the AimSphere transparently.
-        Multi-valued azimuth (540° pan + off-centre Home) resolves via
-        `prefer="closest"` against the claim's current DMX pose — a
+        `aim_stage` is a stage-frame unit aim vector; converting to
+        `(az_deg, el_deg)` lets us call `aim_direction` directly,
+        sidestepping any need to know fixture_xyz (the synthetic-
+        target dance was a relic of the pre-#785 generic-IK path).
+        Mount inversion + home-aim direction live in `fixture.rotation`
+        (composed inside the sphere's `home_az_stage` /
+        `home_el_stage` derivation). Multi-valued azimuth resolves via
+        `prefer="closest"` against the claim's current DMX pose so a
         track-update never crosses the pan A/B branch on a fixture
         already settled on one side.
         """
@@ -544,36 +547,19 @@ class MoverControlEngine:
                 or not ((prof_info.get("tiltRange", 0) or 0) > 0)):
             return (None, None)
         try:
-            # #785 QA r2 — patch mover xyz from layout before sphere
-            # build (fixture record's `x/y/z` is empty; `_layout.children`
-            # holds the real position). aim_xyz reduces target XYZ
-            # against `sphere.fixture_xyz`, so without this patch
-            # `aim_stage * 3000` is computed from origin and the
-            # absolute target lands wrong.
-            layout = self._get_layout() or {}
-            for c in (layout.get("children") or []):
-                if c.get("id") == mover_id:
-                    mover = dict(mover)
-                    mover["x"] = c.get("x", 0) or 0
-                    mover["y"] = c.get("y", 0) or 0
-                    mover["z"] = c.get("z", 0) or 0
-                    break
             from aim.routes import _get_or_build_sphere
             sphere = _get_or_build_sphere(mover, prof_info)
-            fix_pos = sphere.fixture_xyz
-            target = (fix_pos[0] + aim_stage[0] * 3000.0,
-                      fix_pos[1] + aim_stage[1] * 3000.0,
-                      fix_pos[2] + aim_stage[2] * 3000.0)
+            az_deg = math.degrees(math.atan2(aim_stage[0], aim_stage[1]))
+            el_deg = math.degrees(math.atan2(
+                aim_stage[2], math.hypot(aim_stage[0], aim_stage[1])))
             claim = self._claims.get(mover_id)
-            if claim and getattr(claim, "have_pan_tilt", False):
-                cur_pose = (int(claim.pan_smooth * 65535),
-                             int(claim.tilt_smooth * 65535))
-            else:
-                cur_pose = None
-            pose = sphere.aim_xyz(target, current_pose=cur_pose)
-            if pose is None:
-                return (None, None)
-            return (pose[0] / 65535.0, pose[1] / 65535.0)
+            cur_pose = ((int(claim.pan_smooth * 65535),
+                          int(claim.tilt_smooth * 65535))
+                         if claim and getattr(claim, "have_pan_tilt", False)
+                         else None)
+            pose = sphere.aim_direction(az_deg, el_deg, current_pose=cur_pose)
+            return ((pose[0] / 65535.0, pose[1] / 65535.0)
+                     if pose is not None else (None, None))
         except Exception as e:
             log.debug("aim_to_pan_tilt: AimSphere failed for mover %s: %s",
                       mover_id, e)
