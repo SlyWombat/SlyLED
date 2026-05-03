@@ -213,23 +213,24 @@ with app.test_client() as c:
     # ── 11. sphere cache invalidation on rotation change ──
     print('── 11. cache invalidation ──')
     # First aim — builds and caches the sphere.
-    r1 = c.post(f'/api/mover/{fix_fid}/aim', json={"azDeg": 30, "elDeg": 0})
+    r1 = c.post(f'/api/mover/{fix_fid}/aim',
+                 json={"azDeg": 0, "elDeg": -30})
     pose1 = r1.get_json() if r1.status_code == 200 else None
     ok('first aim caches sphere', pose1 is not None and pose1.get("ok") is True)
-    # Mutate rotation via PUT; the cached sphere is now stale.
-    c.put(f'/api/fixtures/{fix_fid}', json={"rotation": [0, 180, 0]})
-    # Second aim with the same target — sphere should rebuild against the
-    # new rotation, producing a different DMX (rotation flips X axis).
-    r2 = c.post(f'/api/mover/{fix_fid}/aim', json={"azDeg": 30, "elDeg": 0})
+    # Mutate rotation to tilt-mount-up by 30°; the cached sphere goes
+    # stale. Under #799 slope-from-home, rotation [-30, 0, 0] shifts
+    # home_el_stage from 0 → +30, so a target at el=-30 now sits 60°
+    # below home and produces a different tilt DMX.
+    c.put(f'/api/fixtures/{fix_fid}', json={"rotation": [-30, 0, 0]})
+    r2 = c.post(f'/api/mover/{fix_fid}/aim',
+                 json={"azDeg": 0, "elDeg": -30})
     pose2 = r2.get_json() if r2.status_code == 200 else None
-    ok('second aim returns ok after rotation change', pose2 is not None and pose2.get("ok"))
+    ok('second aim returns ok after rotation change',
+       pose2 is not None and pose2.get("ok"))
     if pose1 and pose2 and pose1.get("ok") and pose2.get("ok"):
-        # Pose-A (upright, az=+30) and Pose-B (inverted, az=+30) should
-        # have different pan DMX because mount-+X maps to opposite stage
-        # axes under Ry(180).
-        ok('rotation change produces different pan DMX',
-           pose1.get("panDmx16") != pose2.get("panDmx16"),
-           f'before={pose1.get("panDmx16")} after={pose2.get("panDmx16")}')
+        ok('rotation change shifts home_el_stage → different tilt DMX',
+           pose1.get("tiltDmx16") != pose2.get("tiltDmx16"),
+           f'before={pose1.get("tiltDmx16")} after={pose2.get("tiltDmx16")}')
 
     # ── 12. cache invalidation on Home re-save ──
     print('── 12. Home invalidation ──')
