@@ -315,22 +315,32 @@ INTENSITY_TYPES = ("dimmer", "intensity")
 
 
 def _write_intensity(profile, dmx, addr, on):
-    """Write every dimmer/intensity-typed channel and the strobe Open value.
-    `on=True` writes 255 to dimmers; `on=False` writes 0. Strobe is held at
-    its Open value in both cases — strobe is not the blackout mechanism on
-    any fixture in the current corpus, and leaving it Open keeps the cal
-    pipeline's `_dark_reference()` step from racing the shutter."""
+    """Write the MASTER dimmer channel and the strobe Open value.
+    `on=True` writes 255 to the master dimmer; `on=False` writes 0.
+    Strobe is held at its Open value in both cases — strobe is not the
+    blackout mechanism on any fixture in the current corpus, and
+    leaving it Open keeps the cal pipeline's `_dark_reference()` step
+    from racing the shutter.
+
+    Operator clarification 2026-05-03: the previous behaviour
+    iterated EVERY ``INTENSITY_TYPES`` channel, but profiles like
+    slymovehead have a second channel mistyped as ``dimmer`` that is
+    actually the LASER (ch10, default=0). Iterating wrote 255 to the
+    laser on every lamp-on. Master-only via ``channel_map["dimmer"]``
+    leaves the laser untouched.
+    """
     base = addr - 1
     on_value = 255 if on else 0
     strobe_open = strobe_open_value(profile)
+    cm = profile.get("channel_map") or {}
+    master_off = cm.get("dimmer")
+    if master_off is not None and base + master_off < 512:
+        dmx[base + master_off] = on_value
     for ch in (profile.get("channels") or []):
         offset = ch.get("offset", 0)
         if base + offset >= 512:
             continue
-        ch_type = ch.get("type", "")
-        if ch_type in INTENSITY_TYPES:
-            dmx[base + offset] = on_value
-        elif ch_type == "strobe":
+        if ch.get("type") == "strobe":
             dmx[base + offset] = strobe_open
 
 

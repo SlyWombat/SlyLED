@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.37"
+VERSION = "1.7.38"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -10360,15 +10360,18 @@ def _set_fixture_lamp(engine, uni, addr, on, prof_info):
     cm = prof_info.get("channel_map", {}) or {}
     channels = prof_info.get("channels", []) or []
     uni_buf = engine.get_universe(uni)
-    # #780 P3 — iterate every dimmer/intensity-typed channel, not just
-    # cm["dimmer"], so fixtures with master + secondary dimmer pairs
-    # (slymovehead's ch4 + ch10) light all of them in one step. The
-    # bytearray-side equivalent is `dmx_profiles.lamp_on / lamp_off`.
-    from dmx_profiles import INTENSITY_TYPES, strobe_open_value
+    # Operator clarification 2026-05-03: write the MASTER dimmer only,
+    # not every INTENSITY_TYPES channel. Profiles like slymovehead
+    # carry a second channel mistyped as `dimmer` (ch10) that is
+    # actually the LASER (default=0); iterating wrote 255 to the laser
+    # on every lamp-on. `channel_map["dimmer"]` already disambiguates
+    # by picking the highest-default channel as the master (ch4 on
+    # slymovehead).
+    from dmx_profiles import strobe_open_value
     if on:
-        for ch in channels:
-            if ch.get("type") in INTENSITY_TYPES:
-                uni_buf.set_channel(addr + ch.get("offset", 0), 255)
+        master_off = cm.get("dimmer")
+        if master_off is not None:
+            uni_buf.set_channel(addr + master_off, 255)
         # Shutter open: honour the ShutterStrobe Open capability when
         # the profile spells it out, else default, else 255.
         if "strobe" in cm:
@@ -10399,11 +10402,12 @@ def _set_fixture_lamp(engine, uni, addr, on, prof_info):
             if isinstance(default, (int, float)) and default > 0:
                 uni_buf.set_channel(addr + ch.get("offset", 0), int(default))
     else:
-        # Lamp off — dim every intensity channel to 0, RGB to 0, shutter
-        # closed if profile knows.
-        for ch in channels:
-            if ch.get("type") in INTENSITY_TYPES:
-                uni_buf.set_channel(addr + ch.get("offset", 0), 0)
+        # Lamp off — master dimmer to 0, RGB to 0, shutter closed if
+        # profile knows. Aux/effect channels mistyped as `dimmer` are
+        # left untouched (matches the lamp-on path).
+        master_off = cm.get("dimmer")
+        if master_off is not None:
+            uni_buf.set_channel(addr + master_off, 0)
         if "red" in cm:
             for ch_name in ("red", "green", "blue", "white"):
                 if ch_name in cm:
@@ -11023,6 +11027,40 @@ def api_remotes_update(remote_id):
     return jsonify(ok=True, remote=r.to_persisted_dict())
 
 
+@app.post("/api/remotes/<int:remote_id>/grip")
+def api_remote_grip(remote_id):
+    """#757 Issue A — set per-remote body-frame `forward_local` /
+    `up_local`. Call from the Android app at session start (or when
+    the operator changes grip), or from the gyro puck's mount-config
+    flow. Both vectors are 3-element lists of floats. Either may be
+    omitted to leave the corresponding axis unchanged.
+
+    Body: ``{forwardLocal: [x,y,z], upLocal: [x,y,z]}``.
+
+    Calibration is invalidated if either vector changes — the prior
+    R_world_to_stage was computed with the old axes baked in, so the
+    operator must re-run calibrate against a known target.
+    """
+    r = _remotes.get(remote_id)
+    if r is None:
+        return jsonify(ok=False, err="not found"), 404
+    body = request.get_json(silent=True) or {}
+    fwd = body.get("forwardLocal")
+    up = body.get("upLocal")
+    if fwd is None and up is None:
+        return jsonify(ok=False, err="forwardLocal and/or upLocal required"), 400
+    try:
+        if fwd is not None and (not isinstance(fwd, (list, tuple)) or len(fwd) != 3):
+            return jsonify(ok=False, err="forwardLocal must be [x,y,z]"), 400
+        if up is not None and (not isinstance(up, (list, tuple)) or len(up) != 3):
+            return jsonify(ok=False, err="upLocal must be [x,y,z]"), 400
+        r.set_grip(forward_local=fwd, up_local=up)
+    except (TypeError, ValueError) as e:
+        return jsonify(ok=False, err=str(e)), 400
+    _remotes.save()
+    return jsonify(ok=True, remote=r.to_persisted_dict())
+
+
 @app.delete("/api/remotes/<int:remote_id>")
 def api_remotes_delete(remote_id):
     # #690 — idempotent: 200 either way, with a `removed` flag the SPA
@@ -11076,18 +11114,20 @@ def api_remote_diagnostic(remote_id):
     r = _remotes.get(remote_id)
     if r is None:
         return jsonify(ok=False, err="not found"), 404
+    # #757 Issue A — diagnostic reads per-remote axes, not the legacy
+    # module constants, so a portrait-grip phone shows its own grip in
+    # the trace.
     from remote_math import quat_rotate_vec
-    from remote_orientation import REMOTE_FORWARD_LOCAL, REMOTE_UP_LOCAL
     q = r.last_quat_world
-    body_fwd_world = list(quat_rotate_vec(q, REMOTE_FORWARD_LOCAL)) if q else None
-    body_up_world  = list(quat_rotate_vec(q, REMOTE_UP_LOCAL))      if q else None
+    body_fwd_world = list(quat_rotate_vec(q, r.forward_local)) if q else None
+    body_up_world  = list(quat_rotate_vec(q, r.up_local))      if q else None
     return jsonify({
         "id":                 r.id,
         "deviceId":           r.device_id,
         "kind":               r.kind,
         "rawQuat":            list(q) if q else None,
-        "bodyForwardLocal":   list(REMOTE_FORWARD_LOCAL),
-        "bodyUpLocal":        list(REMOTE_UP_LOCAL),
+        "bodyForwardLocal":   list(r.forward_local),
+        "bodyUpLocal":        list(r.up_local),
         "bodyForwardInWorld": body_fwd_world,
         "bodyUpInWorld":      body_up_world,
         "rWorldToStage":      list(r.R_world_to_stage) if r.R_world_to_stage else None,

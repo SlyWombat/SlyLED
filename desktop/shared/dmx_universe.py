@@ -92,30 +92,29 @@ class DMXUniverse:
             self.set_channels(start_addr, [r, g, b])
 
     def set_fixture_dimmer(self, start_addr, value, profile=None):
-        """Set dimmer channel(s) for a fixture.
+        """Set the master dimmer channel for a fixture.
 
-        Profiles can define more than one ``dimmer``-typed channel — the
-        slymovehead has a master at ch4 and a secondary lamp gate at ch10
-        (#749). Both must hit the same value or the lamp stays dark, so
-        every ``INTENSITY_TYPES`` channel in the profile's ``channels``
-        list is written here, not just ``cm["dimmer"]``. Mirrors
-        :func:`dmx_profiles.lamp_on` for the engine-buffer surface
-        (#780 Principle 3).
+        Operator clarification 2026-05-03: a profile with multiple
+        ``dimmer``-typed channels has one MASTER (the lamp gate) and
+        one or more aux/effect channels mistyped as dimmer (e.g.
+        slymovehead's ch10 is the LASER, not a secondary lamp gate).
+        Iterating every ``INTENSITY_TYPES`` channel — the previous
+        #749 behaviour — wrote 255 to the laser whenever the lamp
+        came on. Master-only is the correct semantic.
 
-        Profiles supplied without a ``channels`` list (legacy callers that
-        build a bare ``channel_map``) fall back to the single ``dimmer``
-        offset so existing stub-driven tests keep working.
+        ``channel_map["dimmer"]`` already disambiguates: per
+        :class:`dmx_profiles.ProfileLibrary.channel_map`, the channel
+        with the highest ``default`` wins, which on slymovehead picks
+        ch4 (default=255) over ch10 (default=0).
+
+        Aux/effect channels mistyped as ``dimmer`` are left untouched
+        and stay at whatever value the engine pump's per-channel
+        default loop wrote (zero on cold start, profile default
+        otherwise).
         """
         if not profile:
             return
         v = max(0, min(255, int(value)))
-        channels = profile.get("channels") or []
-        if channels:
-            from dmx_profiles import INTENSITY_TYPES
-            for ch in channels:
-                if ch.get("type") in INTENSITY_TYPES:
-                    self.set_channel(start_addr + ch.get("offset", 0), v)
-            return
         off = profile.get("channel_map", {}).get("dimmer")
         if off is not None:
             self.set_channel(start_addr + off, v)

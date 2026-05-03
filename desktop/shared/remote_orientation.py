@@ -99,20 +99,30 @@ def default_convention_for_kind(kind):
 
 # ── Constants ─────────────────────────────────────────────────────────────
 
-# Body-frame axes of a remote: forward = +X, right = +Y, up = +Z (right-
-# handed). Confirmed against the QMI8658 chip's native frame on the
-# Waveshare ESP32-S3 puck — when the puck is held LCD-up with its +X
-# axis along the wand's pointing direction, pan = yaw (rotation around
-# +Z, drifts) and tilt = pitch (rotation around +Y, accel-anchored).
-# Live test 2026-05-01: docs/imu-axis-test-2026-05-01.md (#777).
+# Default body-frame axes of a remote: forward = +X, right = +Y, up =
+# +Z (right-handed). Confirmed against the QMI8658 chip's native frame
+# on the Waveshare ESP32-S3 puck — when the puck is held LCD-up with
+# its +X axis along the wand's pointing direction, pan = yaw (rotation
+# around +Z, drifts) and tilt = pitch (rotation around +Y, accel-
+# anchored). Live test 2026-05-01: docs/imu-axis-test-2026-05-01.md
+# (#777).
 #
 # Earlier convention was forward = +Y; flipped to +X on 2026-05-01
 # alongside switching the gyro-puck default OrientConvention from
-# BOTTOM_FORWARD_ROLL_PITCH to FLAT_PITCH_YAW. Android phones in
-# controller mode also produce X-forward Euler now (landscape grip with
-# the device's top edge — the +X side — pointing toward the stage).
-REMOTE_FORWARD_LOCAL = (1.0, 0.0, 0.0)
-REMOTE_UP_LOCAL      = (0.0, 0.0, 1.0)
+# BOTTOM_FORWARD_ROLL_PITCH to FLAT_PITCH_YAW.
+#
+# #757 Issue A — these are now DEFAULTS only; each Remote instance
+# carries its own ``forward_local`` / ``up_local`` so a phone in
+# portrait grip can override "forward" without a fixed module-level
+# assumption that bakes in the operator's grip. Persisted on the
+# Remote record and exposed via ``POST /api/remotes/<id>/grip``.
+DEFAULT_REMOTE_FORWARD_LOCAL = (1.0, 0.0, 0.0)
+DEFAULT_REMOTE_UP_LOCAL      = (0.0, 0.0, 1.0)
+# Backwards-compatibility aliases — some external callers may import
+# these directly. Kept pointing at the defaults; new runtime code
+# reads `Remote.forward_local` / `Remote.up_local`.
+REMOTE_FORWARD_LOCAL = DEFAULT_REMOTE_FORWARD_LOCAL
+REMOTE_UP_LOCAL      = DEFAULT_REMOTE_UP_LOCAL
 
 # Staleness thresholds. Decision #7 says "N days" — N=7 initially.
 #
@@ -158,10 +168,14 @@ class Remote:
         # yaw dropped to immunise against compassless drift; phone defaults
         # to legacy roll+pitch+yaw quaternion).
         "convention",
+        # #757 Issue A — per-remote body-frame forward + up axes. Defaults
+        # cover landscape phone / LCD-up puck; portrait phones override.
+        "forward_local", "up_local",
     )
 
     def __init__(self, id, name="", kind=KIND_PUCK, device_id=None,
-                 pos=None, rot=None, convention=None):
+                 pos=None, rot=None, convention=None,
+                 forward_local=None, up_local=None):
         self.id = int(id)
         self.name = name or f"Remote {id}"
         self.kind = kind if kind in VALID_KINDS else KIND_PUCK
@@ -169,6 +183,15 @@ class Remote:
         # #762 — pick per-kind default if no explicit convention was given.
         self.convention = (_coerce_convention(convention)
                            or default_convention_for_kind(self.kind))
+        # #757 Issue A — per-remote body-frame axes. Default to the
+        # X-forward / Z-up convention (landscape phone, LCD-up puck);
+        # portrait phones / sideways grips override via the grip API.
+        self.forward_local = (tuple(float(v) for v in forward_local)
+                              if forward_local is not None
+                              else DEFAULT_REMOTE_FORWARD_LOCAL)
+        self.up_local = (tuple(float(v) for v in up_local)
+                         if up_local is not None
+                         else DEFAULT_REMOTE_UP_LOCAL)
         # Default position: stage centre at head height (decision #4).
         # The registry/API layer may override this with a layout-driven value.
         self.pos = list(pos) if pos is not None else [0.0, 0.0, 1600.0]
@@ -196,6 +219,12 @@ class Remote:
 
     def to_persisted_dict(self):
         """Fields saved to remotes.json. Transient runtime state is not persisted."""
+        # #757 Issue A — only persist forward_local / up_local when they
+        # differ from the canonical defaults so a future flip of the
+        # default propagates to legacy records.
+        nondefault_grip = (
+            self.forward_local != DEFAULT_REMOTE_FORWARD_LOCAL
+            or self.up_local != DEFAULT_REMOTE_UP_LOCAL)
         return {
             "id": self.id,
             "name": self.name,
@@ -214,6 +243,8 @@ class Remote:
             "orientConvention": (self.convention.value
                                  if self.convention != default_convention_for_kind(self.kind)
                                  else None),
+            "forwardLocal": list(self.forward_local) if nondefault_grip else None,
+            "upLocal": list(self.up_local) if nondefault_grip else None,
         }
 
     @classmethod
@@ -226,6 +257,9 @@ class Remote:
             pos=d.get("pos"),
             rot=d.get("rot"),
             convention=d.get("orientConvention"),
+            # #757 Issue A — restore per-remote grip if persisted.
+            forward_local=d.get("forwardLocal"),
+            up_local=d.get("upLocal"),
         )
         q = d.get("R_world_to_stage")
         if q and len(q) == 4:
@@ -282,8 +316,11 @@ class Remote:
         self.last_quat_world = tuple(quat)
 
         # Remote forward and up, in the remote's own world frame.
-        f_remote = quat_rotate_vec(quat, REMOTE_FORWARD_LOCAL)
-        u_remote = quat_rotate_vec(quat, REMOTE_UP_LOCAL)
+        # #757 Issue A — read from per-remote attributes so a portrait-
+        # grip phone can override without changing the orchestrator
+        # math.
+        f_remote = quat_rotate_vec(quat, self.forward_local)
+        u_remote = quat_rotate_vec(quat, self.up_local)
 
         # Stage "up" reference: stage +Z projected onto the plane
         # perpendicular to the target aim. See §4.1 step 2.
@@ -358,8 +395,9 @@ class Remote:
         if self.last_quat_world is None:
             self.connection_state = "armed"
             return
-        f_world = quat_rotate_vec(self.last_quat_world, REMOTE_FORWARD_LOCAL)
-        u_world = quat_rotate_vec(self.last_quat_world, REMOTE_UP_LOCAL)
+        # #757 Issue A — per-remote forward/up axes (grip-aware).
+        f_world = quat_rotate_vec(self.last_quat_world, self.forward_local)
+        u_world = quat_rotate_vec(self.last_quat_world, self.up_local)
         self.aim_stage = quat_rotate_vec(self.R_world_to_stage, f_world)
         self.up_stage = quat_rotate_vec(self.R_world_to_stage, u_world)
         self.connection_state = "streaming"
@@ -476,6 +514,35 @@ class Remote:
         # convention's yaw-zero plane, but the safer call is "reset and
         # ask for a fresh anchor".)
         if self.calibrated:
+            self.calibrated = False
+            self.R_world_to_stage = None
+            self.connection_state = "armed" if self.last_data else "idle"
+            self.aim_stage = None
+            self.up_stage = None
+
+    def set_grip(self, forward_local=None, up_local=None):
+        """#757 Issue A — override the device's body-frame forward / up
+        axes. Used when the operator's grip differs from the
+        kind-default (portrait phone instead of landscape, sideways
+        puck mount, etc.). Either argument may be None to leave that
+        axis at its current value.
+
+        Calibration is invalidated when grip changes — the prior
+        ``R_world_to_stage`` was built with the old axes baked in, so
+        re-aligning is required for orient packets to make sense.
+        """
+        changed = False
+        if forward_local is not None:
+            new_fwd = tuple(float(v) for v in forward_local)
+            if new_fwd != self.forward_local:
+                self.forward_local = new_fwd
+                changed = True
+        if up_local is not None:
+            new_up = tuple(float(v) for v in up_local)
+            if new_up != self.up_local:
+                self.up_local = new_up
+                changed = True
+        if changed and self.calibrated:
             self.calibrated = False
             self.R_world_to_stage = None
             self.connection_state = "armed" if self.last_data else "idle"
