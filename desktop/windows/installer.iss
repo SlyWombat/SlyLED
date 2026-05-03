@@ -3,7 +3,7 @@
 ; Or:    run build.bat — it calls iscc automatically if available.
 
 #define AppName      "SlyLED Orchestrator"
-#define AppVersion   "1.7.26"
+#define AppVersion   "1.7.31"
 #define AppPublisher "Electric RV Corporation"
 #define AppExeName   "SlyLED.exe"
 ; Unique GUID for this app — keep fixed across releases so updates overwrite
@@ -14,7 +14,25 @@ AppId={#AppId}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
+AppPublisherURL=https://electricrv.ca/slyled
+AppCopyright=© Electric RV Corporation
 AppUpdatesURL=https://github.com/SlyWombat/SlyLED
+
+; Embed Windows VERSIONINFO into SlyLED-Setup.exe so File Version /
+; Product Version / Copyright fields all reflect the release rather
+; than Inno Setup's compiler defaults. `VersionInfoVersion` requires
+; a 4-component a.b.c.d string — the build script's AppVersion is 3
+; components, so we suffix `.0`. ProductVersion mirrors FileVersion
+; (operator-visible "Product version" matches "File version").
+VersionInfoVersion={#AppVersion}.0
+VersionInfoProductVersion={#AppVersion}.0
+VersionInfoCompany={#AppPublisher}
+VersionInfoProductName={#AppName}
+VersionInfoDescription={#AppName} Setup
+VersionInfoCopyright=© Electric RV Corporation
+; (Don't override the displayed string — without VersionInfoTextVersion,
+; Inno Setup populates FileVersion from VersionInfoVersion, so File
+; Version + Product Version both show the 4-component a.b.c.d string.)
 
 ; Install without elevation when possible (no UAC for user-space install)
 DefaultDirName={autopf}\SlyLED

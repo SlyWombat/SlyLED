@@ -56,6 +56,54 @@ SPA    = SHARED / "spa"
 ICO    = (HERE / ".." / ".." / "images" / "slyled.ico").resolve()
 FWDIR  = (HERE / ".." / ".." / "firmware").resolve()
 
+# Embed Windows VERSIONINFO into SlyLED.exe so its file properties
+# show File version / Product version matching the release plus the
+# ElectricRV copyright. PyInstaller consumes the file via
+# `--version-file`. Generated freshly each build from `parent_server.VERSION`
+# so the resource never drifts from the orchestrator's runtime version.
+def _read_app_version():
+    server_path = SHARED / "parent_server.py"
+    try:
+        m = re.search(r'VERSION\s*=\s*"(\d+)\.(\d+)\.(\d+)"',
+                       server_path.read_text(encoding="utf-8"))
+        if m:
+            return f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+    except Exception:
+        pass
+    return "0.0.0"
+
+_app_version = _read_app_version()
+_a, _b, _c = (int(x) for x in _app_version.split("."))
+_VERSION_FILE = HERE / "version_info.txt"
+_VERSION_FILE.write_text(
+    "VSVersionInfo(\n"
+    "  ffi=FixedFileInfo(\n"
+    f"    filevers=({_a}, {_b}, {_c}, 0),\n"
+    f"    prodvers=({_a}, {_b}, {_c}, 0),\n"
+    "    mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0,\n"
+    "    date=(0, 0),\n"
+    "  ),\n"
+    "  kids=[\n"
+    "    StringFileInfo([\n"
+    "      StringTable(\n"
+    "        u'040904b0',\n"
+    "        [StringStruct(u'CompanyName', u'Electric RV Corporation'),\n"
+    "         StringStruct(u'FileDescription', u'SlyLED Orchestrator'),\n"
+    f"         StringStruct(u'FileVersion', u'{_app_version}.0'),\n"
+    "         StringStruct(u'InternalName', u'SlyLED'),\n"
+    "         StringStruct(u'LegalCopyright', u'\\u00a9 Electric RV Corporation'),\n"
+    "         StringStruct(u'OriginalFilename', u'SlyLED.exe'),\n"
+    "         StringStruct(u'ProductName', u'SlyLED Orchestrator'),\n"
+    f"         StringStruct(u'ProductVersion', u'{_app_version}.0')])\n"
+    "    ]),\n"
+    "    VarFileInfo([VarStruct(u'Translation', [1033, 1200])])\n"
+    "  ]\n"
+    ")\n",
+    encoding="utf-8",
+)
+print(f"[build.py] PyInstaller version_info.txt written: file/prod = {_app_version}.0, "
+      "copyright = © Electric RV Corporation")
+
 args = [
     "--onefile",
     "--windowed",
@@ -64,6 +112,7 @@ args = [
     "--workpath", str(HERE / "build"),
     "--specpath", str(HERE),
     "--icon", str(ICO),
+    "--version-file", str(_VERSION_FILE),
     "--add-data", f"{SPA};spa",
     # Bundle local modules alongside the exe so they're importable
     "--add-data", f"{SHARED / 'parent_server.py'};.",

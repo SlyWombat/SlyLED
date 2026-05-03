@@ -62,6 +62,7 @@ class AimSphere:
         "fixture_xyz", "fixture_rotation",
         "home_pan_dmx16", "home_tilt_dmx16",
         "pan_range_deg", "tilt_range_deg",
+        "pan_sign", "tilt_sign",
         "_step",
         "_cell_index",     # dict[(int_az, int_el)] → list of rows
         "_all_rows",       # flat list of all rows (clipped fallback)
@@ -116,6 +117,32 @@ class AimSphere:
         self.home_pan_dmx16 = h_pan
         self.home_tilt_dmx16 = h_tilt
 
+        # #785 QA — derive per-axis sign by SIMULATING the operator's
+        # Secondary capture against the current rotation. Naïve mapping
+        # (`-1 if "right" else +1`) is only correct for upright mounts;
+        # for inverted fixtures (rotation[1]=180° from #780 P1 bake) the
+        # rotation matrix already mirrors mount-axis direction, so the
+        # same operator call requires the opposite sign. Rotation-aware
+        # derivation: assume sign=+1, compute what stage direction the
+        # captured +DMX delta produces, compare to the operator's call.
+        # Flip when mismatched.
+        sec = fixture.get("homeSecondary") or {}
+        pan_dir = sec.get("panMovedDirection")
+        tilt_dir = sec.get("tiltMovedDirection")
+        pan_off = sec.get("panOffsetDmx16")
+        tilt_off = sec.get("tiltOffsetDmx16")
+        if (pan_dir not in ("left", "right")
+                or tilt_dir not in ("up", "down")
+                or not pan_off or not tilt_off):
+            raise ValueError(
+                f"fixture {fixture.get('id', '<unknown>')} has no "
+                "homeSecondary direction calls + offsets — Home Secondary "
+                "must carry both panMovedDirection / tiltMovedDirection "
+                "and panOffsetDmx16 / tiltOffsetDmx16 (per-axis sign "
+                "cannot be derived from Home alone)")
+        self.pan_sign, self.tilt_sign = self._derive_signs(
+            pan_dir, tilt_dir, int(pan_off), int(tilt_off))
+
         if int(step) < 1:
             raise ValueError("step must be >= 1")
         self._step = int(step)
@@ -126,6 +153,40 @@ class AimSphere:
 
     # ── Construction ───────────────────────────────────────────────
 
+    def _derive_signs(self, pan_dir, tilt_dir, pan_off, tilt_off):
+        """Simulate the operator's Secondary capture against the
+        current rotation; flip the sign when the produced stage direction
+        disagrees with the operator's call. Returns
+        `(pan_sign, tilt_sign)`."""
+        # Pan probe — simulate `home + pan_off` with sign=+1.
+        sim_pan, sim_tilt = dmx_to_mechanical(
+            self.home_pan_dmx16 + pan_off, self.home_tilt_dmx16,
+            self.pan_range_deg, self.tilt_range_deg,
+            self.home_pan_dmx16, self.home_tilt_dmx16,
+            +1, +1)
+        sim_az, _ = mechanical_to_stage_aim(
+            sim_pan, sim_tilt, self.fixture_rotation)
+        # Operator's pan_dir tells us the expected sign of stage_az:
+        #   "right" → stage-right per CLAUDE +X=stage-left → az < 0.
+        #   "left"  → stage-left → az > 0.
+        expected_az_sign = -1 if pan_dir == "right" else +1
+        actual_az_sign = +1 if sim_az > 0 else -1
+        pan_sign = +1 if expected_az_sign == actual_az_sign else -1
+
+        # Tilt probe — simulate `home + tilt_off` with sign=+1.
+        sim_pan, sim_tilt = dmx_to_mechanical(
+            self.home_pan_dmx16, self.home_tilt_dmx16 + tilt_off,
+            self.pan_range_deg, self.tilt_range_deg,
+            self.home_pan_dmx16, self.home_tilt_dmx16,
+            +1, +1)
+        _, sim_el = mechanical_to_stage_aim(
+            sim_pan, sim_tilt, self.fixture_rotation)
+        # "down" → below horizon → el < 0. "up" → el > 0.
+        expected_el_sign = -1 if tilt_dir == "down" else +1
+        actual_el_sign = +1 if sim_el > 0 else -1
+        tilt_sign = +1 if expected_el_sign == actual_el_sign else -1
+        return (pan_sign, tilt_sign)
+
     def _build_table(self):
         step = self._step
         rot = self.fixture_rotation
@@ -133,6 +194,8 @@ class AimSphere:
         h_tilt = self.home_tilt_dmx16
         pan_range = self.pan_range_deg
         tilt_range = self.tilt_range_deg
+        ps = self.pan_sign
+        ts = self.tilt_sign
 
         pan_grid = list(range(0, 65536, step))
         if pan_grid[-1] != 65535:
@@ -144,7 +207,7 @@ class AimSphere:
         for pdmx in pan_grid:
             for tdmx in tilt_grid:
                 mech_p, mech_t = dmx_to_mechanical(
-                    pdmx, tdmx, pan_range, tilt_range, h_pan, h_tilt)
+                    pdmx, tdmx, pan_range, tilt_range, h_pan, h_tilt, ps, ts)
                 az, el = mechanical_to_stage_aim(mech_p, mech_t, rot)
                 row = (pdmx, tdmx, az, el)
                 self._all_rows.append(row)

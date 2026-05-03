@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.25"
+VERSION = "1.7.31"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -10259,9 +10259,10 @@ _register_aim_routes(
     profile_lib=_profile_lib,
     write_pose=_aim_write_pose,
     get_engine=_aim_get_engine,
-    # Lambda defers the lookup — `_fixture_is_calibrating` is defined
-    # later in this module (alongside the cal threads).
+    # Lambda defers the lookup — `_fixture_is_calibrating` and
+    # `_fixture_position` are defined later in this module.
     check_calibrating=lambda fid: _fixture_is_calibrating(fid),
+    get_fixture_xyz=lambda fid: _fixture_position(fid),
 )
 
 
@@ -20907,6 +20908,11 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
+
+
+
 
 
 

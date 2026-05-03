@@ -544,6 +544,20 @@ class MoverControlEngine:
                 or not ((prof_info.get("tiltRange", 0) or 0) > 0)):
             return (None, None)
         try:
+            # #785 QA r2 — patch mover xyz from layout before sphere
+            # build (fixture record's `x/y/z` is empty; `_layout.children`
+            # holds the real position). aim_xyz reduces target XYZ
+            # against `sphere.fixture_xyz`, so without this patch
+            # `aim_stage * 3000` is computed from origin and the
+            # absolute target lands wrong.
+            layout = self._get_layout() or {}
+            for c in (layout.get("children") or []):
+                if c.get("id") == mover_id:
+                    mover = dict(mover)
+                    mover["x"] = c.get("x", 0) or 0
+                    mover["y"] = c.get("y", 0) or 0
+                    mover["z"] = c.get("z", 0) or 0
+                    break
             from aim.routes import _get_or_build_sphere
             sphere = _get_or_build_sphere(mover, prof_info)
             fix_pos = sphere.fixture_xyz

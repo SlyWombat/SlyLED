@@ -52,7 +52,7 @@ print('=== construction ===')
 upright_fix = {
     "id": 1, "x": 0, "y": 0, "z": 3000,
     "rotation": [0, 0, 0],
-    "homePanDmx16": 32768, "homeTiltDmx16": 32768,
+    "homePanDmx16": 32768, "homeTiltDmx16": 32768, "homeSecondary": {"panMovedDirection": "right", "tiltMovedDirection": "down", "panOffsetDmx16": 1000, "tiltOffsetDmx16": 1000},
 }
 sphere = AimSphere(upright_fix, PROF_150W, step=256)
 check('construction succeeds', sphere is not None)
@@ -107,7 +107,7 @@ print('\n=== multi-valued cell: ≥2 rows from different DMX areas ===')
 fix_off_centre = {
     "id": 1, "x": 0, "y": 0, "z": 3000,
     "rotation": [0, 0, 0],
-    "homePanDmx16": 10923,   # near low end
+    "homePanDmx16": 10923, "homeSecondary": {"panMovedDirection": "right", "tiltMovedDirection": "down", "panOffsetDmx16": 1000, "tiltOffsetDmx16": 1000},   # near low end
     "homeTiltDmx16": 32768,
 }
 sphere_off = AimSphere(fix_off_centre, PROF_150W, step=128)
@@ -250,7 +250,7 @@ narrow_prof = {
 narrow_fix = {
     "id": 3, "x": 0, "y": 0, "z": 0,
     "rotation": [0, 0, 0],
-    "homePanDmx16": 32768, "homeTiltDmx16": 32768,
+    "homePanDmx16": 32768, "homeTiltDmx16": 32768, "homeSecondary": {"panMovedDirection": "right", "tiltMovedDirection": "down", "panOffsetDmx16": 1000, "tiltOffsetDmx16": 1000},
 }
 sphere_narrow = AimSphere(narrow_fix, narrow_prof, step=256)
 # Reachable mech-tilt is ±20°; ask for el=+45° (way past the cone).
@@ -298,7 +298,7 @@ print('\n=== inverted fixture (rotation handles inversion) ===')
 inverted_fix = {
     "id": 2, "x": 600, "y": 0, "z": 1760,
     "rotation": [0, 180, 0],
-    "homePanDmx16": 32768, "homeTiltDmx16": 32768,
+    "homePanDmx16": 32768, "homeTiltDmx16": 32768, "homeSecondary": {"panMovedDirection": "right", "tiltMovedDirection": "down", "panOffsetDmx16": 1000, "tiltOffsetDmx16": 1000},
 }
 sphere_inv = AimSphere(inverted_fix, PROF_150W, step=256)
 
@@ -361,7 +361,7 @@ except ValueError:
 # Out-of-range Home → raises with offending DMX value.
 try:
     AimSphere({"id": "bad-home", "x": 0, "y": 0, "z": 0, "rotation": [0, 0, 0],
-                "homePanDmx16": 99999, "homeTiltDmx16": 32768},
+                "homePanDmx16": 99999, "homeTiltDmx16": 32768, "homeSecondary": {"panMovedDirection": "right", "tiltMovedDirection": "down", "panOffsetDmx16": 1000, "tiltOffsetDmx16": 1000}},
                PROF_150W)
     check('out-of-range Home pan raises', False)
 except ValueError as e:
@@ -376,7 +376,7 @@ print('\n=== fid 17 emulation ===')
 fid17 = {
     "id": 17, "x": 600, "y": 0, "z": 1760,
     "rotation": [0, 180, 0],
-    "homePanDmx16": 44364, "homeTiltDmx16": 0,
+    "homePanDmx16": 44364, "homeTiltDmx16": 0, "homeSecondary": {"panMovedDirection": "right", "tiltMovedDirection": "down", "panOffsetDmx16": 10922, "tiltOffsetDmx16": 32768},
 }
 sphere_fid17 = AimSphere(fid17, PROF_150W, step=128)
 
