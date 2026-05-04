@@ -447,13 +447,30 @@ class MoverControlEngine:
         operators can tell the difference between "phone is streaming and
         fixture is off because the show isn't lit" and "phone is streaming
         and the DMX engine silently stopped transmitting an hour ago."
+
+        #802 — `engineType` is detected by the engine's class name
+        (`ArtNetEngine` / `sACNEngine`), not a non-existent `sender_name`
+        attribute. The previous code's `getattr(engine, "sender_name",
+        "") == "artnet"` always evaluated False (neither class has that
+        attribute), so the type fell through to "sacn" for ANY running
+        engine — leading to operator-visible "engineType: sacn" even
+        when art-net was the only engine ever started. Mover_engine's
+        actual write path uses `self._get_engine()` (a lookup-at-call-
+        time lambda from parent_server) so writes hit the right engine
+        regardless of this label, but the cosmetic mislabel made
+        `/api/mover-control/status` misleading.
         """
         engine = self._get_engine()
+        cls = type(engine).__name__ if engine is not None else ""
+        if "ArtNet" in cls:
+            engine_type = "artnet"
+        elif "sACN" in cls or "Sacn" in cls or "SACN" in cls:
+            engine_type = "sacn"
+        else:
+            engine_type = None
         return {
             "running": bool(engine and engine.running),
-            "engineType": ("artnet" if engine and getattr(engine, "sender_name", "") == "artnet"
-                           else "sacn" if engine and engine.running
-                           else None),
+            "engineType": engine_type,
             "droppedWrites": self._dropped_writes,
             "lastDropTs": self._last_drop_ts,
         }
