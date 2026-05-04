@@ -2651,6 +2651,41 @@ function _gyroConfigModalRender(childId, c){
   var gf=gyroFixtures.find(function(gfx){return gfx.gyroChildId===childId;});
 
   var h='<div style="margin-bottom:1em">';
+
+  // #801 — Active/Inactive toggle is the FIRST control on the page
+  // (operator-directed UX polish 2026-05-04). Operator scans for
+  // "is this gyro on?" first; everything else (name, mover
+  // assignment, smoothing) is configuration that only matters once
+  // the controller is enabled.
+  //
+  // Visual: iOS/Material-style toggle switch (track + sliding thumb)
+  // built from a hidden native checkbox + sibling-styled track and
+  // thumb spans. CSS is inline so the modal works without an
+  // app.css redeploy. Active = emerald track, Inactive = slate.
+  var isActive=!!(gf&&gf.gyroEnabled);
+  h+='<div id="gcfg-active-row" style="display:flex;align-items:center;gap:.7em;padding:.7em .9em;background:#0f172a;border:1px solid '
+    +(isActive?'#059669':'#334155')+';border-radius:8px;margin-bottom:1em;'
+    +(isActive?'box-shadow:0 0 12px rgba(16,185,129,.18);':'')+'">';
+  h+='<label style="position:relative;display:inline-block;width:44px;height:24px;cursor:pointer;flex-shrink:0;margin:0">';
+  h+='<input id="gcfg-active" type="checkbox"'+(isActive?' checked':'')
+    +' onchange="_gyroConfigToggleVisual(this)"'
+    +' style="opacity:0;width:0;height:0;position:absolute">';
+  h+='<span id="gcfg-active-track" style="position:absolute;top:0;left:0;right:0;bottom:0;'
+    +'background:'+(isActive?'#10b981':'#334155')+';border-radius:24px;'
+    +'transition:background .18s ease;display:block"></span>';
+  h+='<span id="gcfg-active-thumb" style="position:absolute;top:2px;'
+    +'left:'+(isActive?'22px':'2px')+';width:20px;height:20px;'
+    +'background:#fff;border-radius:50%;'
+    +'box-shadow:0 1px 3px rgba(0,0,0,.4);'
+    +'transition:left .18s ease,background .18s ease"></span>';
+  h+='</label>';
+  h+='<div style="flex:1;min-width:0">';
+  h+='<div id="gcfg-active-label" style="font-weight:600;color:'+(isActive?'#34d399':'#cbd5e1')+';font-size:1em;letter-spacing:.02em">'
+    +(isActive?'Active':'Inactive')+'</div>';
+  h+='<div id="gcfg-active-hint" style="font-size:.75em;color:#64748b;margin-top:.15em">'
+    +(isActive?'Auto-lock every 5s while disconnected':'Orchestrator will not contact this gyro')+'</div>';
+  h+='</div>';
+  h+='</div>';
   // Device info
   h+='<div style="display:flex;gap:1em;flex-wrap:wrap;margin-bottom:.8em">';
   h+='<div><label style="font-size:.78em;color:#94a3b8">Hostname</label><div style="font-size:.9em;color:#e2e8f0">'+escapeHtml(c.hostname||c.ip)+'</div></div>';
@@ -2669,20 +2704,6 @@ function _gyroConfigModalRender(childId, c){
   });
   h+='<label>Assigned Mover</label>';
   h+='<select id="gcfg-mover" style="width:100%;margin-bottom:.6em">'+moverOpts+'</select>';
-
-  // #801 — Enable switch. Default Inactive for newly-added gyros;
-  // toggling Active wires the orchestrator's auto-lock-every-5s loop.
-  // The old "Send Lock" button is gone — the orchestrator handles
-  // lock packets automatically based on Active state.
-  var isActive=!!(gf&&gf.gyroEnabled);
-  h+='<label style="display:flex;align-items:center;gap:.5em;padding:.5em .6em;background:#0f172a;border:1px solid '
-    +(isActive?'#059669':'#1e293b')+';border-radius:4px;margin-bottom:.6em;cursor:pointer">';
-  h+='<input id="gcfg-active" type="checkbox"'+(isActive?' checked':'')+' style="width:auto;margin:0">';
-  h+='<span style="font-weight:600;color:'+(isActive?'#34d399':'#94a3b8')+';font-size:.9em">'
-    +(isActive?'● Active':'○ Inactive')+'</span>';
-  h+='<span style="margin-left:auto;font-size:.72em;color:#64748b">'
-    +(isActive?'Auto-lock every 5s while disconnected':'No connection attempts')+'</span>';
-  h+='</label>';
 
   // Tuning (only if fixture exists)
   if(gf){
@@ -2801,6 +2822,32 @@ function _gyroLivePoll(childId,gf){
       el.style.borderColor=border;
     });
   });
+}
+
+// #801 polish — animate the toggle-switch visuals on every change so
+// the operator sees immediate feedback before pressing Save. Slides
+// the thumb, swaps the track colour, updates the label/hint text.
+// Save is still required to persist; this helper only repaints UI.
+function _gyroConfigToggleVisual(input){
+  var on=!!(input&&input.checked);
+  var row=document.getElementById('gcfg-active-row');
+  var track=document.getElementById('gcfg-active-track');
+  var thumb=document.getElementById('gcfg-active-thumb');
+  var label=document.getElementById('gcfg-active-label');
+  var hint=document.getElementById('gcfg-active-hint');
+  if(row){
+    row.style.borderColor=on?'#059669':'#334155';
+    row.style.boxShadow=on?'0 0 12px rgba(16,185,129,.18)':'';
+  }
+  if(track)track.style.background=on?'#10b981':'#334155';
+  if(thumb)thumb.style.left=on?'22px':'2px';
+  if(label){
+    label.textContent=on?'Active':'Inactive';
+    label.style.color=on?'#34d399':'#cbd5e1';
+  }
+  if(hint)hint.textContent=on
+    ?'Auto-lock every 5s while disconnected'
+    :'Orchestrator will not contact this gyro';
 }
 
 function _gyroConfigSave(childId){
