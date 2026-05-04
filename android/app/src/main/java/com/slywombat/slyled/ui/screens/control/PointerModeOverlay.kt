@@ -5,6 +5,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.view.Surface
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -109,19 +110,57 @@ fun PointerModeOverlay(
     val calibrateScope = rememberCoroutineScope()
     val pendingCalibrateEnd = remember { java.util.concurrent.atomic.AtomicReference<Job?>(null) }
 
+    // #757 Issue A — capture the display rotation so we can remap
+    // the rotation matrix into the operator's grip frame each tick.
+    // Without this, "forward" is anchored to the device's natural
+    // (typically portrait) rotation, so a landscape grip ends up
+    // sending sideways pointing rays. Same fix as ControllerMode.
+    @Suppress("DEPRECATION")
+    val display = remember(context) {
+        (context as? android.app.Activity)?.windowManager?.defaultDisplay
+    }
+
     DisposableEffect(rotationSensor) {
         val listener = object : SensorEventListener {
             private val rotationMatrix = FloatArray(9)
+            private val remappedMatrix = FloatArray(9)
             private var lastSendMs = 0L
 
             override fun onSensorChanged(event: SensorEvent) {
                 SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
+                // #757 Issue A — pick the matrix already aligned to
+                // the operator's grip.
+                val rotation = display?.rotation ?: Surface.ROTATION_0
+                val matrixForForward = when (rotation) {
+                    Surface.ROTATION_90 -> {
+                        SensorManager.remapCoordinateSystem(
+                            rotationMatrix,
+                            SensorManager.AXIS_Y, SensorManager.AXIS_MINUS_X,
+                            remappedMatrix)
+                        remappedMatrix
+                    }
+                    Surface.ROTATION_180 -> {
+                        SensorManager.remapCoordinateSystem(
+                            rotationMatrix,
+                            SensorManager.AXIS_MINUS_X, SensorManager.AXIS_MINUS_Y,
+                            remappedMatrix)
+                        remappedMatrix
+                    }
+                    Surface.ROTATION_270 -> {
+                        SensorManager.remapCoordinateSystem(
+                            rotationMatrix,
+                            SensorManager.AXIS_MINUS_Y, SensorManager.AXIS_X,
+                            remappedMatrix)
+                        remappedMatrix
+                    }
+                    else -> rotationMatrix
+                }
 
                 // World-frame forward = R * [0,1,0]. Column-major in
                 // SensorManager's matrix: matrix[1], matrix[4], matrix[7].
-                val fxWorld = rotationMatrix[1]
-                val fyWorld = rotationMatrix[4]
-                val fzWorld = rotationMatrix[7]
+                val fxWorld = matrixForForward[1]
+                val fyWorld = matrixForForward[4]
+                val fzWorld = matrixForForward[7]
                 latestWorldForward.set(floatArrayOf(fxWorld, fyWorld, fzWorld))
 
                 if (holdingCalibrateRef.get()) return

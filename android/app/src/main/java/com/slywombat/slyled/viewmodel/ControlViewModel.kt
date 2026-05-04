@@ -225,6 +225,19 @@ class ControlViewModel @Inject constructor(
     // ── Controller mode (unified mover-control API) ───────────────────
 
     fun enterControllerMode(fixtureId: Int) {
+        // #752 — explicit clear of stale per-fixture state from any
+        // previous session. Without this, `_controllerStatus`,
+        // `_controllerConnected`, and the orient-failure counters
+        // retain their values from the last fixture and the operator
+        // sees the wrong status for the new claim until the 2 s poll
+        // lands. Sometimes long enough that the gyro times out and
+        // the claim reverts before the UI catches up — exactly the
+        // "per-fixture stale-state inversion" the issue describes.
+        _controllerStatus.value = null
+        _controllerConnected.value = true
+        _engineRunning.value = true
+        orientErrorCount = 0
+        firstOrientFailureTs = 0L
         _controllerFixtureId.value = fixtureId
         _controllerReady.value = false
 
@@ -379,6 +392,15 @@ class ControlViewModel @Inject constructor(
     // supported yet — we gate the toggle on the capability check.
 
     fun enterPointerMode(fixtureId: Int) {
+        // #752 — clear stale per-fixture state (matches the
+        // controller-mode entry's reset). Same flow shares the
+        // mover-control status poller, so leaks from the previous
+        // session would surface here too.
+        _controllerStatus.value = null
+        _controllerConnected.value = true
+        _engineRunning.value = true
+        orientErrorCount = 0
+        firstOrientFailureTs = 0L
         _pointerFixtureId.value = fixtureId
         _pointerReady.value = false
 

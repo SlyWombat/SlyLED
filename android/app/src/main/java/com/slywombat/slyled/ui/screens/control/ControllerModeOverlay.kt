@@ -5,6 +5,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.view.Surface
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -107,9 +108,27 @@ fun ControllerModeOverlay(
     val calibrateScope = rememberCoroutineScope()
     val pendingCalibrateEnd = remember { java.util.concurrent.atomic.AtomicReference<Job?>(null) }
 
+    // #757 Issue A — display rotation captured each tick so the
+    // orient packet's roll/pitch/yaw stays consistent regardless of
+    // whether the operator is holding the phone in landscape or
+    // portrait. Without remapping, the device's sensor frame is
+    // anchored to its NATURAL rotation (typically portrait); a
+    // landscape grip means the operator's "yaw" maps to device-roll,
+    // their "pitch" stays as pitch, and "roll" maps to device-yaw —
+    // exactly the symptom the operator reported ("phone roll → head
+    // tilt, phone pitch → no movement"). `remapCoordinateSystem`
+    // rotates the matrix into the operator-facing grip frame before
+    // we extract roll/pitch/yaw.
+    val context = LocalContext.current
+    @Suppress("DEPRECATION")
+    val display = remember(context) {
+        (context as? android.app.Activity)?.windowManager?.defaultDisplay
+    }
+
     DisposableEffect(rotationSensor) {
         val listener = object : SensorEventListener {
             private val rotationMatrix = FloatArray(9)
+            private val remappedMatrix = FloatArray(9)
             private val orientation = FloatArray(3)
             // Android's getQuaternionFromVector returns [w, x, y, z] — matches wire order.
             private val quat = FloatArray(4)
@@ -117,7 +136,35 @@ fun ControllerModeOverlay(
 
             override fun onSensorChanged(event: SensorEvent) {
                 SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
-                SensorManager.getOrientation(rotationMatrix, orientation)
+                // #757 Issue A — remap based on display rotation so
+                // the extracted roll/pitch/yaw is always in the
+                // operator-facing grip frame.
+                val rotation = display?.rotation ?: Surface.ROTATION_0
+                val matrixForOrientation = when (rotation) {
+                    Surface.ROTATION_90 -> {
+                        SensorManager.remapCoordinateSystem(
+                            rotationMatrix,
+                            SensorManager.AXIS_Y, SensorManager.AXIS_MINUS_X,
+                            remappedMatrix)
+                        remappedMatrix
+                    }
+                    Surface.ROTATION_180 -> {
+                        SensorManager.remapCoordinateSystem(
+                            rotationMatrix,
+                            SensorManager.AXIS_MINUS_X, SensorManager.AXIS_MINUS_Y,
+                            remappedMatrix)
+                        remappedMatrix
+                    }
+                    Surface.ROTATION_270 -> {
+                        SensorManager.remapCoordinateSystem(
+                            rotationMatrix,
+                            SensorManager.AXIS_MINUS_Y, SensorManager.AXIS_X,
+                            remappedMatrix)
+                        remappedMatrix
+                    }
+                    else -> rotationMatrix
+                }
+                SensorManager.getOrientation(matrixForOrientation, orientation)
                 val azimuth = Math.toDegrees(orientation[0].toDouble()).toFloat()
                 val pitch = Math.toDegrees(orientation[1].toDouble()).toFloat()
                 val roll = Math.toDegrees(orientation[2].toDouble()).toFloat()
