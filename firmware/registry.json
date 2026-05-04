@@ -6,16 +6,16 @@
                          "description":  "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
                          "board":  "esp32",
                          "fqbn":  "esp32:esp32:esp32",
-                         "version":  "7.5.6",
-                         "releaseTag":  "esp32-v7.5.6",
+                         "version":  "7.5.7",
+                         "releaseTag":  "esp32-v7.5.7",
                          "file":  "esp32/main.ino.merged.bin",
                          "releaseAsset":  "esp32-firmware-merged.bin",
-                         "sha256":  "22f438516db3554bca37ef00fd8e27d5022118dc0d6c0ebe79754c13831143eb",
+                         "sha256":  "7a547d9e273c1ca32cdf8f96c3c68452addadd2fcc3ea0c4df46a355a14784a9",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "BOARD_ESP32"
                                           ],
-                         "sourceHash":  "fd66a7a8b1364a7f94789fe4ff66a5df78126cdd398bb76262a9c9b1ade6400b"
+                         "sourceHash":  "623748e722f31ea3510e80f946908c8a5b361610b76def2c88a14acc628e6fbd"
                      },
                      {
                          "id":  "child-led-d1mini",
@@ -23,16 +23,16 @@
                          "description":  "WS2812B / WS2811 / APA102 LED strip controller with 14 effects + OTA",
                          "board":  "d1mini",
                          "fqbn":  "esp8266:esp8266:d1_mini",
-                         "version":  "7.5.5",
-                         "releaseTag":  "d1mini-v7.5.5",
+                         "version":  "7.5.6",
+                         "releaseTag":  "d1mini-v7.5.6",
                          "file":  "d1mini/main.ino.bin",
                          "releaseAsset":  "d1mini-firmware.bin",
-                         "sha256":  "a854d6094c9615c6a7bfbc0a5921d468da6e12930cedc1d0ec5a78868397757a",
+                         "sha256":  "01d85114ae1668451c6134225d6931a9e9ea9d207ae03f5306153794db6f376e",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "BOARD_D1MINI"
                                           ],
-                         "sourceHash":  "193e0012ab896e20e070b65c16a6e55451892c5abb8e3db751c82a5114824ffe"
+                         "sourceHash":  "623748e722f31ea3510e80f946908c8a5b361610b76def2c88a14acc628e6fbd"
                      },
                      {
                          "id":  "dmx-bridge-esp32",
@@ -61,7 +61,7 @@
                          "releaseTag":  "giga-child-v7.5.2",
                          "file":  "giga/child-led.bin",
                          "releaseAsset":  "giga-child-firmware.bin",
-                         "sha256":  "1345fc1b4d8cded341354bfd00f982bd081a628465fa742508925ab1c2b59f6b",
+                         "sha256":  "f3b0798b5c261bd08398cd76de846fc2e9e4180ae042b41a8b6a9a8a41ca296c",
                          "flashMethod":  "dfu",
                          "buildDefines":  [
                                               "GIGA_CHILD"
@@ -77,7 +77,7 @@
                          "version":  "7.5.24",
                          "file":  "giga/parent.bin",
                          "releaseAsset":  "giga-parent-firmware.bin",
-                         "sha256":  "ceb4e0a9959b6d59ed22a3a76a864a875f49b19273653f96d828f439e4ef5eb6",
+                         "sha256":  "d902dae0e334d9933334fe5f92649fe56bb5ebbc87adaafdf877ba5d13498e7c",
                          "flashMethod":  "dfu",
                          "buildDefines":  [
                                               "BOARD_GIGA"
@@ -106,8 +106,8 @@
                          "description":  "Waveshare ESP32-S3 1.28inch round LCD â€” orientation controller for DMX moving heads",
                          "board":  "esp32s3",
                          "fqbn":  "esp32:esp32:esp32s3",
-                         "version":  "1.2.3",
-                         "releaseTag":  "gyro-v1.2.3",
+                         "version":  "1.2.4",
+                         "releaseTag":  "gyro-v1.2.4",
                          "file":  "esp32s3/main.ino.merged.bin",
                          "releaseAsset":  "esp32s3-gyro-firmware.bin",
                          "sha256":  "23bf35cc208e9de9b45ca82543371d84b6d14c996d50136de3fea30d7d9014f4",
@@ -116,7 +116,7 @@
                                               "GYRO_BOARD"
                                           ],
                          "buildFlags":  "-DGYRO_BOARD",
-                         "sourceHash":  "193e0012ab896e20e070b65c16a6e55451892c5abb8e3db751c82a5114824ffe"
+                         "sourceHash":  "623748e722f31ea3510e80f946908c8a5b361610b76def2c88a14acc628e6fbd"
                      },
                      {
                          "id":  "gyro-test-esp32s3",
@@ -124,8 +124,8 @@
                          "description":  "#776 test firmware â€” exposes raw IMU chip values via /imu HTTP + on-screen LCD readout. Same hardware as gyro-esp32s3; OTA-replaceable in either direction.",
                          "board":  "esp32s3",
                          "fqbn":  "esp32:esp32:esp32s3",
-                         "version":  "1.0.1",
-                         "releaseTag":  "gyro-test-v1.0.1",
+                         "version":  "1.0.2",
+                         "releaseTag":  "gyro-test-v1.0.2",
                          "file":  "esp32s3-test/main.ino.merged.bin",
                          "diagnostic":  true,
                          "releaseAsset":  "esp32s3-gyro-test-firmware.bin",
@@ -135,7 +135,8 @@
                                               "GYRO_BOARD",
                                               "GYRO_TEST_BOARD"
                                           ],
-                         "buildFlags":  "-DGYRO_BOARD -DGYRO_TEST_BOARD"
+                         "buildFlags":  "-DGYRO_BOARD -DGYRO_TEST_BOARD",
+                         "sourceHash":  "623748e722f31ea3510e80f946908c8a5b361610b76def2c88a14acc628e6fbd"
                      },
                      {
                          "id":  "camera-node",
@@ -146,7 +147,7 @@
                          "releaseTag":  "cam-v1.6.3",
                          "file":  "orangepi/camera_server.py",
                          "releaseAsset":  "camera-firmware-v1.6.3.zip",
-                         "sha256":  "9e2b61cfa36eb4cd2987a6cd36eb9b6d0cd8fd285dab0b2d65c6a794681db565",
+                         "sha256":  "166cd2edecbd4ad56dcdf33f8f7c9e6eb8d72621e9306e8ac30f6bc457a89491",
                          "flashMethod":  "ssh"
                      }
                  ]

@@ -430,10 +430,11 @@ Copy-Item "$root\firmware\esp32\main.ino.merged.bin" "$distDir\esp32-firmware-me
 Copy-Item "$root\firmware\d1mini\main.ino.bin" "$distDir\d1mini-firmware.bin" -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\desktop\windows\dist\SlyLED.exe" "$distDir\SlyLED.exe" -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\desktop\windows\dist\SlyLED-Setup.exe" "$distDir\SlyLED-Setup.exe" -Force -ErrorAction SilentlyContinue
+# Operator-canonical APK output: `dist/slyled-android.apk` (release-
+# signed). The release variant is the operator-facing artifact;
+# debug APK is a build-only intermediate and stays out of dist/.
 $apk = Get-ChildItem -Path "C:\Android\build\slyled-app" -Recurse -Filter "app-release.apk" -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($apk) { Copy-Item $apk.FullName "$distDir\SlyLED.apk" -Force }
-$dbgApk = Get-ChildItem -Path "C:\Android\build\slyled-app" -Recurse -Filter "app-debug.apk" -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($dbgApk) { Copy-Item $dbgApk.FullName "$distDir\SlyLED-debug.apk" -Force }
+if ($apk) { Copy-Item $apk.FullName "$distDir\slyled-android.apk" -Force }
 Write-Host "dist/ updated" -ForegroundColor Green
 
 # Step 6b: Refresh registry SHA-256 hashes (#568 security review).
