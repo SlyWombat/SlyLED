@@ -2670,20 +2670,28 @@ function _gyroConfigModalRender(childId, c){
   h+='<label>Assigned Mover</label>';
   h+='<select id="gcfg-mover" style="width:100%;margin-bottom:.6em">'+moverOpts+'</select>';
 
+  // #801 — Enable switch. Default Inactive for newly-added gyros;
+  // toggling Active wires the orchestrator's auto-lock-every-5s loop.
+  // The old "Send Lock" button is gone — the orchestrator handles
+  // lock packets automatically based on Active state.
+  var isActive=!!(gf&&gf.gyroEnabled);
+  h+='<label style="display:flex;align-items:center;gap:.5em;padding:.5em .6em;background:#0f172a;border:1px solid '
+    +(isActive?'#059669':'#1e293b')+';border-radius:4px;margin-bottom:.6em;cursor:pointer">';
+  h+='<input id="gcfg-active" type="checkbox"'+(isActive?' checked':'')+' style="width:auto;margin:0">';
+  h+='<span style="font-weight:600;color:'+(isActive?'#34d399':'#94a3b8')+';font-size:.9em">'
+    +(isActive?'● Active':'○ Inactive')+'</span>';
+  h+='<span style="margin-left:auto;font-size:.72em;color:#64748b">'
+    +(isActive?'Auto-lock every 5s while disconnected':'No connection attempts')+'</span>';
+  h+='</label>';
+
   // Tuning (only if fixture exists)
   if(gf){
     var f=gf;
-    // ── Send Lock + Live Status ──────────────────────────────────
+    // ── Live status (#801: Send Lock button gone) ─────────────────
     h+='<div style="border-top:1px solid #1e293b;padding-top:.6em;margin-top:.4em">';
-    h+='<div style="display:flex;gap:.5em;align-items:center;margin-bottom:.5em">';
-    h+='<button id="gcfg-lock-btn" class="btn btn-on" onclick="_gyroSendLock('+childId+','+f.id+')" style="font-size:.85em">Send Lock</button>';
-    h+='</div>';
+    h+='<label style="font-size:.78em;color:#94a3b8;display:block;margin-bottom:.3em">Live status</label>';
     h+='<div id="gcfg-live" style="padding:.4em .6em;border:1px solid #1e293b;border-radius:4px;font-size:.82em;color:#94a3b8;margin-bottom:.6em">';
     h+='\u25cb Not connected</div>';
-    h+='<div style="font-size:.72em;color:#64748b;margin-bottom:.8em">'
-      +'Send Lock tells the gyro controller which moving head to control. '
-      +'Once locked, press START on the gyro device to begin streaming orientation data. '
-      +'The status above updates live while this card is open.</div>';
 
     // ── Smoothing (the only operator-facing preference in the
     //    stage-space architecture; pan/tilt mapping comes from the
@@ -2704,10 +2712,14 @@ function _gyroConfigModalRender(childId, c){
   }
   h+='</div>';
 
-  // Action buttons
+  // #801 — Action buttons. Save updates IN PLACE (modal stays open
+  // so the operator can toggle Active and adjust assignment without
+  // re-navigating). Unassign clears the mover assignment without
+  // deleting the fixture record.
   h+='<div style="display:flex;gap:.4em;margin-top:.8em">';
   h+='<button class="btn btn-on" onclick="_gyroConfigSave('+childId+')">Save</button>';
-  if(gf)h+='<button class="btn btn-off" onclick="_gyroUnassign('+gf.id+',\''+escapeHtml(gf.name).replace(/'/g,"\\'")+'\')">Unassign Mover</button>';
+  if(gf)h+='<button class="btn" onclick="_gyroConfigUnassign('+childId+','+gf.id+')" style="background:#334155;color:#cbd5e1">Unassign</button>';
+  h+='<button class="btn btn-off" onclick="closeModal()" style="margin-left:auto">Close</button>';
   h+='</div>';
 
   document.getElementById('modal-title').textContent='Configure: '+(c.altName||c.name||c.hostname);
@@ -2727,21 +2739,11 @@ function _gyroConfigModalRender(childId, c){
   }
 }
 
-function _gyroSendLock(childId,fixtureId){
-  // Send CMD_GYRO_CTRL + auto-claim mover
-  var gf=(_fixtures||[]).find(function(f){return f.id===fixtureId;});
-  if(!gf)return;
-  _gyroToggleEnabled(fixtureId,true);
-  // Brief visual feedback then revert
-  var btn=document.getElementById('gcfg-lock-btn');
-  if(btn){
-    btn.textContent='Sent \u2713';btn.style.background='#059669';
-    setTimeout(function(){
-      var b=document.getElementById('gcfg-lock-btn');
-      if(b){b.textContent='Send Lock';b.style.background='';}
-    },2000);
-  }
-}
+// #801 \u2014 `_gyroSendLock` deleted. The orchestrator's auto-lock-
+// every-5s loop handles lock packets while the controller is Active.
+// Operators toggle Active via the gyro-config modal's Enable switch,
+// which round-trips through `_gyroConfigSave` \u2192 `PUT /api/fixtures/
+// <fid> {gyroEnabled}`.
 
 function _gyroLivePoll(childId,gf){
   var el=document.getElementById('gcfg-live');
@@ -2788,7 +2790,7 @@ function _gyroLivePoll(childId,gf){
           +' <button class="btn btn-off" onclick="ra(\'POST\',\'/api/mover-control/release\',{moverId:'
           +gf.assignedMoverId+'},function(){_gyroConfigModal('+childId+')})" style="font-size:.72em;margin-left:.4em">Release</button>');
       }else if(remote){
-        parts.push('<span style="color:#64748b">No lock \u2014 press <b>Send Lock</b> to control a mover.</span>');
+        parts.push('<span style="color:#64748b">No lock \u2014 controller is Inactive or auto-lock pending.</span>');
       }
       if(!parts.length){
         el.innerHTML='\u25cb Not connected';
@@ -2812,27 +2814,62 @@ function _gyroConfigSave(childId){
   // Find existing gyro fixture for this child
   var gf=(_fixtures||[]).find(function(f){return f.fixtureType==='gyro'&&f.gyroChildId===childId;});
 
+  // #801 — single-pass save: Active toggle + mover assignment +
+  // smoothing all persist together; modal stays open and re-renders
+  // with the saved state so the operator can keep tweaking without
+  // re-navigating.
+  var activeEl=document.getElementById('gcfg-active');
+  var active=!!(activeEl&&activeEl.checked);
+  var smEl=document.getElementById('gcfg-sm');
+  var smoothing=smEl?parseFloat(smEl.value):null;
+
   if(!gf&&moverId!=null){
-    // Create new gyro fixture with mover assignment
     var mover=(_fixtures||[]).find(function(f){return f.id===moverId;});
-    ra('POST','/api/fixtures',{name:(name||'Gyro')+' \u2192 '+(mover?mover.name:'Mover'),fixtureType:'gyro',type:'point',gyroChildId:childId,assignedMoverId:moverId,gyroEnabled:false},function(r){
-      if(r&&r.ok){document.getElementById('hs').textContent='Gyro configured';closeModal();loadSetup();}
-      else document.getElementById('hs').textContent='Failed: '+(r&&r.err||'unknown');
+    ra('POST','/api/fixtures',{
+      name:(name||'Gyro')+' \u2192 '+(mover?mover.name:'Mover'),
+      fixtureType:'gyro',type:'point',gyroChildId:childId,
+      assignedMoverId:moverId,gyroEnabled:active,
+      smoothing:smoothing!=null?smoothing:0.15,
+    },function(r){
+      if(r&&r.ok){
+        document.getElementById('hs').textContent='Gyro configured';
+        loadFixtures(function(){_gyroConfigModal(childId);});
+      }else{
+        document.getElementById('hs').textContent='Failed: '+(r&&r.err||'unknown');
+      }
     });
   }else if(gf){
-    // Update existing fixture — mover assignment + smoothing
-    var body={};
+    var body={gyroEnabled:active};
     if(moverId!==undefined)body.assignedMoverId=moverId;
-    var sm=document.getElementById('gcfg-sm');if(sm)body.smoothing=parseFloat(sm.value);
+    if(smoothing!=null)body.smoothing=smoothing;
     ra('PUT','/api/fixtures/'+gf.id,body,function(r){
-      if(r&&r.ok){document.getElementById('hs').textContent='Gyro configuration saved';closeModal();loadSetup();}
-      else document.getElementById('hs').textContent='Save failed: '+(r&&r.err||'unknown');
+      if(r&&r.ok){
+        document.getElementById('hs').textContent=active
+          ?'Saved · Active (auto-lock running)'
+          :'Saved · Inactive';
+        loadFixtures(function(){_gyroConfigModal(childId);});
+      }else{
+        document.getElementById('hs').textContent='Save failed: '+(r&&r.err||'unknown');
+      }
     });
   }else{
-    // No mover selected and no existing fixture — just save name
     document.getElementById('hs').textContent='Device name saved';
-    closeModal();loadSetup();
+    loadFixtures(function(){_gyroConfigModal(childId);});
   }
+}
+
+function _gyroConfigUnassign(childId,fixtureId){
+  // #801 — clear the mover assignment without deleting the fixture
+  // record. Operator stays on the config page; auto-lock loop will
+  // skip this gyro until they reassign + Save.
+  ra('PUT','/api/fixtures/'+fixtureId,{assignedMoverId:null},function(r){
+    if(r&&r.ok){
+      document.getElementById('hs').textContent='Mover unassigned';
+      loadFixtures(function(){_gyroConfigModal(childId);});
+    }else{
+      document.getElementById('hs').textContent='Unassign failed: '+(r&&r.err||'unknown');
+    }
+  });
 }
 
 function _gyroToggleEnabled(fixtureId,enable){

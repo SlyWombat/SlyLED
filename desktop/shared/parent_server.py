@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.38"
+VERSION = "1.7.40"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -513,6 +513,127 @@ def _gyro_device_name(ip: str, gf=None):
         if c:
             return c.get("altName") or c.get("name") or c.get("hostname") or ip
     return ip
+
+
+# ── #801 — gyro Active/Inactive lifecycle ────────────────────────────────
+#
+# Active state owns the auto-lock-every-5s loop. While Active +
+# disconnected, the loop sends `CMD_GYRO_CTRL(enabled=1)` to the gyro's
+# IP every 5 seconds; the gyro firmware receives the lock, registers a
+# claim against its `assignedMoverId`, and resumes orient streaming.
+# Disconnected = no orient packet received in the last 7 seconds (matches
+# the puck's hard-stale threshold from `remote_orientation.STALE_HARD_SECS`).
+#
+# Inactive state means: zero outgoing lock packets, refuse incoming
+# GYRO_START / orient-driven auto-claim, release any live claim and
+# send `CMD_GYRO_CTRL(enabled=0)` on the transition.
+#
+# Operator-facing terminology is "Active" / "Inactive"; the on-disk
+# field name remains `gyroEnabled` (bool) for backward compat.
+
+_GYRO_AUTO_LOCK_PERIOD_S  = 5.0   # cadence between lock packets
+_GYRO_DISCONNECTED_AFTER_S = 7.0  # no orient → "disconnected" — re-lock
+
+
+def _gyro_child_ip_for_fixture(gf):
+    """Resolve a gyro fixture's child → IP. Returns None when the child
+    is missing or has no IP yet (gyro never PONG'd in)."""
+    cid = gf.get("gyroChildId")
+    if cid is None:
+        return None
+    c = next((ch for ch in _children if ch["id"] == cid), None)
+    return c.get("ip") if c else None
+
+
+def _gyro_is_connected(ip):
+    """True when the orchestrator has received a GYRO_ORIENT packet from
+    `ip` within the last `_GYRO_DISCONNECTED_AFTER_S` seconds."""
+    if not ip:
+        return False
+    with _gyro_lock:
+        st = _gyro_state.get(ip)
+    if not st:
+        return False
+    return (time.time() - st.get("ts", 0)) < _GYRO_DISCONNECTED_AFTER_S
+
+
+def _gyro_send_lock_packet(ip, fps=20):
+    """Send `CMD_GYRO_CTRL(enabled=1, fps)` — the orchestrator → gyro
+    handshake the firmware uses to (re-)bind its claim. No protocol
+    change from the legacy "Send Lock" button — just automation."""
+    fps = max(1, min(50, int(fps)))
+    pkt = _hdr(CMD_GYRO_CTRL) + struct.pack("<BB", 1, fps)
+    _send(ip, pkt)
+
+
+def _gyro_send_release_packet(ip):
+    """Send `CMD_GYRO_CTRL(enabled=0)` — tells the gyro to stop its
+    orient stream. Used on Active → Inactive transitions."""
+    pkt = _hdr(CMD_GYRO_CTRL) + struct.pack("<BB", 0, 0)
+    _send(ip, pkt)
+
+
+def _gyro_inactive_transition(gf):
+    """#801 — Active → Inactive: release claim + send CMD_GYRO_CTRL(0)."""
+    ip = _gyro_child_ip_for_fixture(gf)
+    if ip:
+        try:
+            _gyro_send_release_packet(ip)
+        except Exception:
+            log.debug("gyro Inactive: release packet to %s failed", ip,
+                      exc_info=True)
+    mid = gf.get("assignedMoverId")
+    if mid is not None and _mover_engine:
+        try:
+            _mover_engine.release(mid, f"gyro-{ip}" if ip else None,
+                                   blackout=True)
+        except Exception:
+            log.debug("gyro Inactive: claim release for mover %s failed",
+                      mid, exc_info=True)
+    log.info("Gyro fid=%s set Inactive — claim released, gyro CTRL(0) sent",
+             gf.get("id"))
+
+
+def _gyro_active_lock_loop_tick():
+    """One pass of the 5 s auto-lock cadence. Walks every Active gyro
+    fixture; for any disconnected one, sends a fresh lock packet."""
+    if not _mover_engine:
+        return
+    for f in list(_fixtures):
+        if f.get("fixtureType") != "gyro":
+            continue
+        if not f.get("gyroEnabled"):
+            continue
+        ip = _gyro_child_ip_for_fixture(f)
+        if not ip:
+            # Gyro hasn't PONG'd in yet — no IP to send a lock to.
+            # When it pings the discover socket, the next tick after
+            # the IP populates will fire a lock.
+            continue
+        if _gyro_is_connected(ip):
+            continue
+        try:
+            _gyro_send_lock_packet(ip)
+            log.debug("Gyro auto-lock: sent CTRL(1) to %s (fid=%s)",
+                      ip, f.get("id"))
+        except Exception:
+            log.debug("Gyro auto-lock: send to %s failed", ip,
+                      exc_info=True)
+
+
+def _gyro_active_lock_loop():
+    """Daemon thread — fires `_gyro_active_lock_loop_tick` every
+    `_GYRO_AUTO_LOCK_PERIOD_S` seconds for the lifetime of the
+    orchestrator. Cheap: skips Inactive gyros and connected ones, so
+    the worst-case work is one UDP send per Active+disconnected gyro
+    every 5 s. Started by the deferred init block (after
+    `_mover_engine` + `_send` are defined)."""
+    while True:
+        try:
+            _gyro_active_lock_loop_tick()
+        except Exception:
+            log.debug("gyro auto-lock tick crashed", exc_info=True)
+        time.sleep(_GYRO_AUTO_LOCK_PERIOD_S)
 
 def _apply_gyro_color(gyro_ip: str, r: int, g: int, b: int, flash: bool):
     """Route gyro colour through unified MoverControlEngine. Legacy direct-write removed."""
@@ -1303,6 +1424,14 @@ def _udp_listener():
             gf = _gyro_fixture_for_ip(ip)
             target_mover_id = gf.get("assignedMoverId") if gf else None
             device_id = f"gyro-{ip}"
+            # #801 — refuse GYRO_START when the controller is Inactive
+            # at the orchestrator level. Mirrors the Inactive contract
+            # ("Connections accepted? No"). Same DENIED packet as the
+            # claim-busy refusal; puck UI shows the same retry path.
+            if gf is not None and not gf.get("gyroEnabled"):
+                log.info("GYRO_START from %s — controller Inactive, refusing", ip)
+                _send_gyro_claim_denied(ip)
+                continue
             if target_mover_id is None:
                 log.info("GYRO_START from %s — no assigned mover, ignoring", ip)
             elif _mover_engine is None:
@@ -2062,6 +2191,11 @@ def api_fixture_update(fid):
     # home anchors when a SPA edit-modal save round-tripped a stale
     # fixture object. The dedicated endpoints stay the single source of
     # truth for all home-anchor mutations.
+    # #801 — capture prior Active state so we can fire the
+    # transition hook AFTER the write. Active→Inactive must release
+    # the claim and send a CMD_GYRO_CTRL(0) packet so the gyro stops
+    # streaming.
+    prior_gyro_active = bool(f.get("gyroEnabled")) if f.get("fixtureType") == "gyro" else None
     for k in ("name", "type", "fixtureType", "childId", "childIds", "strings",
               "rotation", "orientation", "mountedInverted", "aoeRadius", "meshFile",
               "dmxUniverse", "dmxStartAddr", "dmxChannelCount", "dmxProfileId",
@@ -2076,6 +2210,21 @@ def api_fixture_update(fid):
                 f[k] = _normalise_fov_type(body[k])
             else:
                 f[k] = body[k]
+    # #801 — gyro Active state transitions:
+    #   True  → False (Active → Inactive): release claim, send
+    #          CMD_GYRO_CTRL(disabled) so the gyro stops streaming.
+    #   False → True  (Inactive → Active): nothing to do here — the
+    #          5s auto-lock loop picks it up on its next tick. (No
+    #          one-shot lock fired here on purpose; the loop handles
+    #          immediate + retry uniformly.)
+    if prior_gyro_active is not None and "gyroEnabled" in body:
+        new_active = bool(f.get("gyroEnabled"))
+        if prior_gyro_active and not new_active:
+            try:
+                _gyro_inactive_transition(f)
+            except Exception:
+                log.debug("gyro Inactive transition failed for fid %s",
+                          fid, exc_info=True)
     # #780 P1 — fold any newly-set `mountedInverted=True` into
     # `rotation[1] += 180°` so runtime IK never sees the flag. Idempotent
     # for records the startup migration already processed.
@@ -5622,6 +5771,40 @@ def _targeted_fixture_blackout(fid):
         pass
 
 
+def _park_fixture_pan_tilt_only(fid):
+    """#800 (operator clarification 2026-05-03) — pan/tilt-only park.
+
+    Drives the head to its Home anchor without touching the lamp. Used
+    by:
+      - cold-start parking (existing cold-start rainbow blink owns
+        the lamp; we must NOT lamp_off here or we wipe the blink's
+        terminal state).
+      - claim transition to streaming (the engine pump's `_write_dmx`
+        will write `claim.dimmer` on the next tick anyway; lamp_off
+        here would cause a one-tick flicker).
+      - timeline-end + track-end snap-to-home.
+
+    `_park_fixture_at_home` (full park + `lamp_off`) remains the right
+    helper for explicit `/release` paths where idle = home + dark.
+    """
+    try:
+        fx = next((f for f in _fixtures if f["id"] == fid), None)
+        if not fx:
+            return
+        if _aim_get_engine() is None:
+            return
+        if fx.get("homePanDmx16") is None or fx.get("homeTiltDmx16") is None:
+            return
+        from aim.park import go_home as _aim_go_home
+        _aim_go_home(fid,
+                      get_fixtures=lambda: _fixtures,
+                      profile_lib=_profile_lib,
+                      write_pose=_aim_write_pose,
+                      get_engine=_aim_get_engine)
+    except Exception:
+        log.debug("park (pan/tilt only) %s failed", fid, exc_info=True)
+
+
 def _park_fixture_at_home(fid):
     """#691 — park a moving-head fixture at its Set Home (#687) anchor.
 
@@ -5634,6 +5817,10 @@ def _park_fixture_at_home(fid):
     only; pan/tilt and non-intensity defaults preserved). Falls back to
     `_targeted_fixture_blackout` only when the fixture lacks a Home
     anchor (which means the angular path can't run).
+
+    For the cold-start / claim-transition cases that should NOT
+    lamp_off, see `_park_fixture_pan_tilt_only` (#800 operator
+    clarification).
     """
     try:
         fx = next((f for f in _fixtures if f["id"] == fid), None)
@@ -10560,10 +10747,12 @@ _mover_engine = MoverControlEngine(
     get_default_convention=lambda: (
         _settings.get("moverControl", {}).get("orientConvention")
         if isinstance(_settings.get("moverControl"), dict) else None),
-    # #800 — park-at-home on claim transition to streaming + on
-    # release. `_park_fixture_at_home` already runs the canonical
-    # `aim.park.go_home` (pan/tilt) + `lamp_off` (intensity-class
-    # only) per #781/#782; reusing it keeps a single park primitive.
+    # #800 — split park primitives per operator clarification:
+    # `park_pan_tilt_fn` (pan/tilt only, no lamp) for `start_stream`
+    # so the engine pump's claim.dimmer write isn't immediately
+    # contradicted; `park_fn` (full park + lamp_off) for explicit
+    # `release` where idle = home + dark.
+    park_pan_tilt_fn=lambda mid: _park_fixture_pan_tilt_only(mid),
     park_fn=lambda mid: _park_fixture_at_home(mid),
 )
 _mover_engine.start()
@@ -10573,9 +10762,16 @@ def _cold_start_park_calibrated_movers():
     """#800 — at orchestrator boot, walk every calibrated DMX mover and
     drive it to its Home anchor. Without this the universe buffer holds
     whatever was last on the wire (or zero / saved snapshot), and
-    fixtures sit at stale poses until an operator claims them. Runs
-    after the engine is up; non-fatal per-fixture so one broken fixture
-    can't block the rest."""
+    fixtures sit at stale poses until an operator claims them.
+
+    Operator clarification 2026-05-03: pan/tilt-only — the existing
+    cold-start rainbow-blink routine owns lamp behaviour. Calling
+    `_park_fixture_at_home` (which also runs `lamp_off`) would clobber
+    the blink's terminal state. The home-write fires here BEFORE the
+    blink runs; the blink keeps its existing lamp choreography.
+
+    Non-fatal per-fixture so one broken fixture can't block the rest.
+    """
     parked = 0
     for f in _fixtures:
         try:
@@ -10585,7 +10781,7 @@ def _cold_start_park_calibrated_movers():
                 continue
             if not f.get("homeSecondary"):
                 continue
-            _park_fixture_at_home(int(f["id"]))
+            _park_fixture_pan_tilt_only(int(f["id"]))
             parked += 1
         except Exception as e:
             log.debug("cold-start park: fid=%s failed: %s", f.get("id"), e)
@@ -10614,6 +10810,13 @@ def _cold_start_park_when_engine_ready():
 
 threading.Thread(target=_cold_start_park_when_engine_ready,
                  daemon=True, name="cold-start-park").start()
+
+# #801 — gyro auto-lock loop started after `_mover_engine` is up so
+# `_gyro_inactive_transition` (used by both the loop's release path
+# and the PUT /api/fixtures gyroEnabled=False handler) can call
+# `_mover_engine.release` safely.
+threading.Thread(target=_gyro_active_lock_loop,
+                 daemon=True, name="gyro-auto-lock").start()
 
 # #763 — arbiter facade between the show writer and the universe buffer.
 # Reads claim state from the engine, exposes is_muted() so the playback +
@@ -13437,12 +13640,34 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
         if frame_count == 1:
             log.info("DMX playback: first frame sent at elapsed=%.1fs", elapsed)
     log.info("DMX playback: stopped after %d frames", frame_count)
-    # Blackout DMX fixtures on stop (#364) — zero all channels.
-    # #763 — leave claimed fixtures alone; the operator owns their output.
+    # Timeline end (#800 idle definition): each mover the timeline was
+    # driving snaps to home + lamp off, so the head doesn't sit at the
+    # last cue's pose indefinitely. Non-mover DMX fixtures still get
+    # the legacy zero-channel blackout (LEDs / generic dimmers don't
+    # carry a Home anchor).
+    # #763 — leave claimed fixtures alone; the operator owns their
+    # output.
     final_snap = _claim_arbiter.snapshot()
     for fx in dmx_fixtures:
         if _claim_arbiter.is_muted(fx["fid"], final_snap):
             continue
+        # Mover with Home + Secondary captured → snap to home + lamp off
+        # via the canonical helper. Aux/effect channels mistyped as
+        # `dimmer` (e.g. slymovehead's laser at ch10) are left
+        # untouched — `_park_fixture_at_home` writes only the master.
+        rec = next((r for r in _fixtures if r.get("id") == fx["fid"]), None)
+        if (rec is not None
+                and rec.get("homePanDmx16") is not None
+                and rec.get("homeTiltDmx16") is not None
+                and rec.get("homeSecondary")):
+            try:
+                _park_fixture_at_home(fx["fid"])
+                continue
+            except Exception:
+                log.debug("timeline-end park fid=%s failed", fx["fid"],
+                          exc_info=True)
+        # Non-mover DMX fixture (or mover without Home set): legacy
+        # zero-everything blackout.
         profile = {"channel_map": fx["ch_map"], "channels": fx.get("channels", [])} if fx["ch_map"] else None
         uni_buf = engine.get_universe(fx["uni"])
         uni_buf.set_fixture_rgb(fx["addr"], 0, 0, 0, profile)

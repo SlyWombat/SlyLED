@@ -171,7 +171,8 @@ class MoverControlEngine:
                  get_engine, set_fixture_color_fn, get_remote_by_device_id,
                  get_mover_cal=None, get_mover_model=None,
                  is_calibrating=None, get_claim_ttl_s=None,
-                 get_default_convention=None, park_fn=None):
+                 get_default_convention=None,
+                 park_fn=None, park_pan_tilt_fn=None):
         """
         Args:
             get_fixtures:             list of fixtures
@@ -207,15 +208,18 @@ class MoverControlEngine:
         # effect on the next claim without engine restart.
         self._get_default_convention = (
             get_default_convention or (lambda: None))
-        # #800 — `park_fn(mover_id)` drives the head to its Home anchor
-        # (and turns the lamp off, matching parent_server's
-        # `_park_fixture_at_home`). Called on `start_stream` (so the
-        # head is at home before any orient packet lands and
-        # `calibrate-end` snapshots a deterministic forward reference)
-        # and on `release` (so an idle fixture sits at home rather
-        # than the previous operator's last aim). None at unit-test
-        # time falls back to the RGB+dimmer-only blackout helper.
+        # #800 — split park primitives (operator clarification
+        # 2026-05-03):
+        #   `park_fn(mover_id)` — full park: pan/tilt to home + lamp
+        #     off. Used by `release` where idle = home + dark.
+        #   `park_pan_tilt_fn(mover_id)` — pan/tilt only, no lamp
+        #     touch. Used by `start_stream` so the engine pump's
+        #     immediate `claim.dimmer` write isn't contradicted by a
+        #     park-time `lamp_off` (was a one-tick flicker).
+        # Both are optional; missing fns degrade to RGB+dimmer-only
+        # blackout (release) or no-op (start_stream).
         self._park_fn = park_fn
+        self._park_pan_tilt_fn = park_pan_tilt_fn
 
         self._claims = {}  # mover_id → MoverClaim
         self._lock = threading.Lock()
@@ -347,16 +351,23 @@ class MoverControlEngine:
             claim.state = "streaming"
             claim.last_write_ts = time.time()
         # #800 — park the head at home before any orient packets can
-        # land. `calibrate-end` snapshots the head's stage-frame aim as
-        # the reference the phone's pose is locked to; if the head was
-        # at a stale pose from a previous test, the lock anchors to
-        # that direction and the very next orient update appears to
-        # "jump" the head. Parking pins the reference to home so the
-        # operator's calibrate-with-phone-steady gives a deterministic
-        # forward anchor.
-        if self._park_fn is not None:
+        # land. `calibrate-end` snapshots the head's stage-frame aim
+        # as the reference the phone's pose is locked to; if the head
+        # was at a stale pose from a previous test, the lock anchors
+        # to that direction and the very next orient update appears
+        # to "jump" the head. Parking pins the reference to home so
+        # the operator's calibrate-with-phone-steady gives a
+        # deterministic forward anchor.
+        #
+        # Operator clarification 2026-05-03: pan/tilt-only here. The
+        # engine pump's next `_write_dmx` will write `claim.dimmer`
+        # (255 by default) so the operator can see the beam; calling
+        # the full `park_fn` (which includes `lamp_off`) would cause
+        # a one-tick flicker.
+        park = self._park_pan_tilt_fn or self._park_fn
+        if park is not None:
             try:
-                self._park_fn(mover_id)
+                park(mover_id)
             except Exception as e:
                 log.debug("Mover %d start_stream park failed: %s",
                           mover_id, e)

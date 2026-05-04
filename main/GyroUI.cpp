@@ -538,9 +538,25 @@ static void drawSettingsPage() {
 
     drawBatteryInfo();
 
-    // WiFi info
-    gyroDrawText(52, 125, wifiOk() ? "WiFi: Connected" : "WiFi: Disconnected", 1,
-                 wifiOk() ? GC_GREEN : GC_RED);
+    // WiFi info — #778: when connected, render hostname + RSSI + IP
+    // beneath the status line so the operator can read the puck's
+    // DHCP-assigned address right off the LCD instead of `arp -a`-ing
+    // from the workstation.
+    if (wifiOk()) {
+        gyroDrawText(52, 125, "WiFi: Connected", 1, GC_GREEN);
+        char hostLine[40];
+        const char* hn = WiFi.getHostname();
+        int8_t rssi = (int8_t)WiFi.RSSI();
+        snprintf(hostLine, sizeof(hostLine), "%s (%d dBm)",
+                 (hn && *hn) ? hn : "?", rssi);
+        gyroDrawText(52, 138, hostLine, 1, GC_GREY);
+        // localIP().toString() returns a transient String; c_str() is
+        // valid for the duration of this draw call.
+        String ipStr = WiFi.localIP().toString();
+        gyroDrawText(52, 151, ipStr.c_str(), 1, GC_WHITE);
+    } else {
+        gyroDrawText(52, 125, "WiFi: Disconnected", 1, GC_RED);
+    }
 
     // Sleep arc at bottom — filled red when held for feedback, dark red
     // otherwise. Label sits inside the arc just below yTop (y=180).
@@ -966,13 +982,32 @@ periodic:
     batterySample();
     // When the operator is staring at the Settings page, repaint only
     // the battery block (rows 60-112) so the charging indicator flips
-    // live. Full-page redraw caused a visible flicker every 2 s.
+    // live, plus the WiFi block (rows 125-160) so RSSI updates and
+    // the IP/hostname appears as soon as WiFi associates (#778). Full-
+    // page redraw caused a visible flicker every 2 s, so we repaint
+    // just those rows.
     static uint32_t s_settingsRedrawMs = 0;
     bool onSettings = (s_state == UIState::IDLE && s_idleSettings) ||
                       (s_state == UIState::ACTIVE && s_page == 4);
     if (onSettings && !s_sleepHeld && (now - s_settingsRedrawMs) >= 2000) {
         s_settingsRedrawMs = now;
         drawBatteryInfo();
+        // #778 — repaint the WiFi block. Cover rows 125-160 first so
+        // stale text doesn't bleed through, then redraw.
+        gyroFillRect(0, 125, GYRO_LCD_W, 35, GC_BLACK);
+        if (wifiOk()) {
+            gyroDrawText(52, 125, "WiFi: Connected", 1, GC_GREEN);
+            char hostLine[40];
+            const char* hn = WiFi.getHostname();
+            int8_t rssi = (int8_t)WiFi.RSSI();
+            snprintf(hostLine, sizeof(hostLine), "%s (%d dBm)",
+                     (hn && *hn) ? hn : "?", rssi);
+            gyroDrawText(52, 138, hostLine, 1, GC_GREY);
+            String ipStr = WiFi.localIP().toString();
+            gyroDrawText(52, 151, ipStr.c_str(), 1, GC_WHITE);
+        } else {
+            gyroDrawText(52, 125, "WiFi: Disconnected", 1, GC_RED);
+        }
     }
 
     // Page 2 (status park): only redraw dot if status changed
