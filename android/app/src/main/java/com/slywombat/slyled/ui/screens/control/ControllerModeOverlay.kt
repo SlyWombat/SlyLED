@@ -118,8 +118,8 @@ fun ControllerModeOverlay(
     // exactly the symptom the operator reported ("phone roll → head
     // tilt, phone pitch → no movement"). `remapCoordinateSystem`
     // rotates the matrix into the operator-facing grip frame before
-    // we extract roll/pitch/yaw.
-    val context = LocalContext.current
+    // we extract roll/pitch/yaw. `context` is already declared
+    // earlier in this composable for sensorManager — reuse it.
     @Suppress("DEPRECATION")
     val display = remember(context) {
         (context as? android.app.Activity)?.windowManager?.defaultDisplay
