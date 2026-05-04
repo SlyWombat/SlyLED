@@ -191,37 +191,46 @@ def _read_axis_dmx16(buf, addr, cm, channels, axis_type):
 
 
 def _aim_from_body(body, query_args, sphere, current_pose):
-    """Resolve the request body to a `(panDmx16, tiltDmx16)` pose.
-    Returns `(pose_or_none, err_dict_or_none, status_code)`."""
+    """Resolve the request body to a `((panDmx16, tiltDmx16),
+    clamped_axes)` pair plus an optional error.
+
+    Returns `(pose_or_none, clamped_axes, err_dict_or_none, status_code)`.
+    Per #803 a target outside the fixture's reachable cone clamps to
+    the cone-boundary pose with `clamped_axes` indicating which axes
+    were clamped — no longer an error. Only zero-vector aim
+    (target XYZ coincident with the fixture position) returns
+    `degenerate_target`.
+    """
     if not isinstance(body, dict):
-        return None, {"err": "invalid_body"}, 400
+        return None, (), {"err": "invalid_body"}, 400
     prefer = query_args.get("prefer", "closest")
     if prefer not in ("closest", "A", "B"):
-        return None, {"err": "invalid_body",
+        return None, (), {"err": "invalid_body",
                        "detail": f"prefer must be closest|A|B, got {prefer!r}"}, 400
     if "x" in body and "y" in body and "z" in body:
         try:
             target = (float(body["x"]), float(body["y"]), float(body["z"]))
         except (TypeError, ValueError):
-            return None, {"err": "invalid_body",
+            return None, (), {"err": "invalid_body",
                            "detail": "x/y/z must be numbers"}, 400
-        pose = sphere.aim_xyz(target, current_pose=current_pose, prefer=prefer)
+        pose, axes = sphere.aim_xyz_with_clamp(
+            target, current_pose=current_pose, prefer=prefer)
         if pose is None:
-            return None, {"err": "degenerate_target"}, 400
-        return pose, None, 200
+            return None, (), {"err": "degenerate_target"}, 400
+        return pose, axes, None, 200
     if "azDeg" in body and "elDeg" in body:
         try:
             az = float(body["azDeg"])
             el = float(body["elDeg"])
         except (TypeError, ValueError):
-            return None, {"err": "invalid_body",
+            return None, (), {"err": "invalid_body",
                            "detail": "azDeg/elDeg must be numbers"}, 400
-        pose = sphere.aim_direction(az, el, current_pose=current_pose,
-                                      prefer=prefer)
+        pose, axes = sphere.aim_direction_with_clamp(
+            az, el, current_pose=current_pose, prefer=prefer)
         if pose is None:
-            return None, {"err": "degenerate_target"}, 400
-        return pose, None, 200
-    return None, {"err": "invalid_body",
+            return None, (), {"err": "degenerate_target"}, 400
+        return pose, axes, None, 200
+    return None, (), {"err": "invalid_body",
                    "detail": "body must contain {x,y,z} or {azDeg,elDeg}"}, 400
 
 
@@ -266,13 +275,15 @@ def register(app, *, get_fixtures, profile_lib, write_pose, get_engine,
                 request.args.get("prefer", "closest"))
             return jsonify(
                 ok=True,
-                poses=[{"panDmx16": p, "tiltDmx16": t, "branchId": b}
-                        for p, t, b in poses],
+                poses=[{"panDmx16": p, "tiltDmx16": t, "branchId": b,
+                          "clampedAxes": list(c) if c else []}
+                        for p, t, b, c in poses],
                 picked={"panDmx16": picked[0],
                          "tiltDmx16": picked[1]} if picked else None,
             )
 
-        pose, err, status = _aim_from_body(body, request.args, sphere, current_pose)
+        pose, clamped_axes, err, status = _aim_from_body(
+            body, request.args, sphere, current_pose)
         if err is not None:
             return jsonify(**err), status
         pan_dmx16, tilt_dmx16 = pose
@@ -282,8 +293,13 @@ def register(app, *, get_fixtures, profile_lib, write_pose, get_engine,
                         pan_dmx16, tilt_dmx16, prof_info)
         except Exception as e:
             return jsonify(err="dmx_write_failed", detail=str(e)), 500
-        return jsonify(ok=True,
-                        panDmx16=pan_dmx16, tiltDmx16=tilt_dmx16)
+        # #803 — surface clamped flag + axes when the target was
+        # outside the cone and we landed on the boundary.
+        resp = {"ok": True, "panDmx16": pan_dmx16, "tiltDmx16": tilt_dmx16}
+        if clamped_axes:
+            resp["clamped"] = True
+            resp["axes"] = list(clamped_axes)
+        return jsonify(**resp)
 
     return api_mover_aim
 

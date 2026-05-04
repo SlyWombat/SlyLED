@@ -272,6 +272,45 @@ with app.test_client() as c:
        and "panDmx16" in body["picked"],
        f'picked={body.get("picked")}')
 
+    # ── 14. #803 — unreachable target clamps to cone boundary ──
+    print('── 14. unreachable clamp (#803) ──')
+    # Test 11 left rotation=[-30, 0, 0] which tilts home_el_stage to
+    # +30°; reset to [0,0,0] so el=+30 is genuinely above-cone.
+    # tiltRange=180 + home_tilt=0 + slope_tilt=-364.08 means reachable
+    # el ∈ [-90°, +0°]; el=+89° is firmly out-of-cone and must clamp
+    # to tilt=0.
+    c.put(f'/api/fixtures/{fix_fid}', json={"rotation": [0, 0, 0]})
+    c.post(f'/api/fixtures/{fix_fid}/home',
+           json={"panDmx16": 32768, "tiltDmx16": 0})
+    c.post(f'/api/fixtures/{fix_fid}/home/secondary', json={
+        "panOffsetDmx16": 10000, "tiltOffsetDmx16": 10000,
+        "panMovedDirection": "left", "tiltMovedDirection": "down",
+    })
+    r = c.post(f'/api/mover/{fix_fid}/aim',
+                json={"azDeg": 0, "elDeg": 89})
+    body = r.get_json() or {}
+    ok('aim above cone returns 200, not degenerate_target',
+       r.status_code == 200 and body.get("ok") is True,
+       f'status={r.status_code} body={body}')
+    ok('aim above cone clamps tilt to 0',
+       body.get("tiltDmx16") == 0,
+       f'body={body}')
+    ok('aim above cone surfaces clamped:true',
+       body.get("clamped") is True,
+       f'body={body}')
+    ok('aim above cone names clamped axes',
+       isinstance(body.get("axes"), list) and "tilt" in body.get("axes", []),
+       f'body={body}')
+
+    # In-cone target — no clamped flag.
+    r = c.post(f'/api/mover/{fix_fid}/aim',
+                json={"azDeg": 0, "elDeg": -30})
+    body = r.get_json() or {}
+    ok('aim in-cone target has no clamped flag',
+       r.status_code == 200 and body.get("ok") is True
+       and "clamped" not in body,
+       f'body={body}')
+
 
 print(f'\n{_passed} passed, {_failed} failed out of {_passed + _failed} tests')
 sys.exit(0 if _failed == 0 else 1)

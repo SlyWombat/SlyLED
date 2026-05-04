@@ -142,16 +142,52 @@ check('fid17 aim_direction(-90, 0, current_pose=home) picks 55286 (closer)',
 
 
 # ─────────────────────────────────────────────────────────────────────
-print('\n=== #799 acceptance 4 — unreachable target → None / [] ===')
+print('\n=== #803 — unreachable target clamps to cone boundary ===')
 # ─────────────────────────────────────────────────────────────────────
+# Supersedes #799 acceptance 4. Operator-facing behaviour is "head
+# moves to the closest reachable pose"; the prior `None` / `[]`
+# return was UX-wrong because the head sat motionless on a
+# slightly-out-of-cone target. Clamping puts the beam on the cone
+# boundary at the requested azimuth.
 
+# fid17 at home_tilt=0 has reachable el ∈ [-180°, 0°] (everything
+# below horizon). Target el=+30° is unreachable. Should clamp.
+pose, axes = s17.aim_direction_with_clamp(0, 30)
+check('fid17 aim_direction_with_clamp(0, +30) returns a pose, not None',
+      pose is not None, f'got {pose}')
+check('fid17 above-horizon target clamps tilt to 0',
+      pose is not None and pose[1] == 0,
+      f'got {pose}')
+check('fid17 above-horizon target reports clamped_axes=("tilt",)',
+      axes == ('tilt',), f'got {axes}')
+
+# back-compat: aim_direction silently drops clamp info, returns pose.
 p = s17.aim_direction(0, 30)
-check('fid17 aim_direction(0, +30) → None (above-horizon, tilt-DMX-extreme home)',
-      p is None, f'got {p}')
+check('fid17 aim_direction(0, +30) returns pose (clamped)',
+      p is not None and p[1] == 0, f'got {p}')
 
 poses = s17.poses_for_direction(0, 30)
-check('fid17 poses_for_direction(0, +30) → []',
-      poses == [], f'got {poses}')
+check('fid17 poses_for_direction(0, +30) returns clamped pose, not []',
+      len(poses) >= 1 and all(p[1] == 0 for p in poses),
+      f'got {poses}')
+check('fid17 poses_for_direction(0, +30) tags every pose tilt-clamped',
+      len(poses) >= 1 and all('tilt' in p[3] for p in poses),
+      f'got {poses}')
+
+# dmx_to_aim round-trip on clamped pose returns cone-boundary
+# direction, not the requested out-of-cone direction.
+clamp_pose, _ = s17.aim_direction_with_clamp(0, 30)
+az_back, el_back = s17.dmx_to_aim(*clamp_pose)
+check('dmx_to_aim on clamped pose returns cone-boundary el (≈ 0)',
+      approx(el_back, 0.0, 0.05), f'got el={el_back:+.2f}')
+
+# Coincident target — still degenerate (zero-vector aim).
+xyz_at_fixture = (0, 0, 0)  # synthetic fixture has fixture_xyz=(0,0,0)
+xyz_fix2 = {**fid17, "x": 0, "y": 0, "z": 0}
+s_zero = AimSphere(xyz_fix2, PROF_150W)
+pose, _ = s_zero.aim_xyz_with_clamp((0, 0, 0))
+check('coincident XYZ → still None (zero-vector aim)',
+      pose is None, f'got {pose}')
 
 
 # ─────────────────────────────────────────────────────────────────────

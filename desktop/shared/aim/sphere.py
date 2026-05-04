@@ -184,10 +184,31 @@ class AimSphere:
 
     def aim_direction(self, az_deg, el_deg, current_pose=None,
                        prefer="closest"):
-        """Stage-frame aim → `(panDmx16, tiltDmx16)` or `None` when
-        unreachable. `current_pose` and `prefer` matter only for
-        multi-valued fixtures (`panRange > 360°`); single-valued
-        fixtures return the same pose regardless."""
+        """Stage-frame aim → `(panDmx16, tiltDmx16)`. Always returns
+        a pose (#803): targets outside the fixture's cone clamp to
+        the nearest cone-boundary pose instead of erroring. Use
+        `aim_direction_with_clamp` to know which axes were clamped.
+
+        `current_pose` and `prefer` matter only for multi-valued
+        fixtures (`panRange > 360°`); single-valued fixtures return
+        the same pose regardless.
+        """
+        pose, _clamped_axes = self.aim_direction_with_clamp(
+            az_deg, el_deg, current_pose=current_pose, prefer=prefer)
+        return pose
+
+    def aim_direction_with_clamp(self, az_deg, el_deg, current_pose=None,
+                                  prefer="closest"):
+        """Stage-frame aim → `((panDmx16, tiltDmx16), clamped_axes)`.
+        `clamped_axes` is a tuple of `"pan"` / `"tilt"` strings naming
+        any axis whose computed DMX fell outside `[0, 65535]` and was
+        clamped to the cone boundary. Empty tuple = exact reachable.
+
+        Routes / SPA use this to surface a `clamped: true` flag in
+        the HTTP response so the operator sees "limit reached" UX
+        when the head can't quite hit the requested target. Per #803
+        the pose itself is always returned.
+        """
         assert -180.0 <= float(az_deg) <= 180.0, (
             f"az_deg out of [-180, 180]: {az_deg}")
         assert -90.0 <= float(el_deg) <= 90.0, (
@@ -199,43 +220,96 @@ class AimSphere:
             current_pose = (int(current_pose[0]), int(current_pose[1]))
 
         poses = self.poses_for_direction(az_deg, el_deg)
-        return self._pick_pose(poses, current_pose, prefer)
+        chosen = self._pick_pose(poses, current_pose, prefer)
+        if chosen is None:
+            return (None, ())
+        # Find the clamped_axes tuple of the chosen pose by matching
+        # (pan, tilt). Branch_id may differ; pick the first match.
+        clamped_axes = ()
+        for p, t, _b, axes in poses:
+            if p == chosen[0] and t == chosen[1]:
+                clamped_axes = axes
+                break
+        return (chosen, clamped_axes)
 
     def aim_xyz(self, target_xyz, current_pose=None, prefer="closest"):
-        """Stage-mm target → `(panDmx16, tiltDmx16)` or `None`."""
+        """Stage-mm target → `(panDmx16, tiltDmx16)`. Returns `None`
+        only when target coincides with the fixture position
+        (zero-vector aim, undefined direction). Targets outside the
+        cone clamp to the boundary per #803."""
+        pose, _ = self.aim_xyz_with_clamp(
+            target_xyz, current_pose=current_pose, prefer=prefer)
+        return pose
+
+    def aim_xyz_with_clamp(self, target_xyz, current_pose=None,
+                            prefer="closest"):
+        """Stage-mm target → `((panDmx16, tiltDmx16), clamped_axes)`
+        or `(None, ())` for coincident target. Same contract as
+        `aim_direction_with_clamp`."""
         dx = float(target_xyz[0]) - self.fixture_xyz[0]
         dy = float(target_xyz[1]) - self.fixture_xyz[1]
         dz = float(target_xyz[2]) - self.fixture_xyz[2]
         norm2 = dx * dx + dy * dy + dz * dz
         if norm2 < 1e-12:
-            return None
+            return (None, ())
         norm = math.sqrt(norm2)
         az_deg, el_deg = _angles_from_unit_vec((dx / norm, dy / norm, dz / norm))
-        return self.aim_direction(az_deg, el_deg, current_pose=current_pose,
-                                    prefer=prefer)
+        return self.aim_direction_with_clamp(
+            az_deg, el_deg, current_pose=current_pose, prefer=prefer)
 
     def poses_for_direction(self, az_deg, el_deg):
-        """All `(panDmx16, tiltDmx16, branch_id)` poses landing inside
-        DMX `[0, 65535]`. Returns `[]` when unreachable (no branch)."""
+        """All candidate `(panDmx16, tiltDmx16, branch_id, clamped_axes)`
+        poses for the target stage direction.
+
+        #803 — instead of dropping unreachable branches, clamp them to
+        the [0, 65535] DMX boundary and tag which axes were clamped:
+
+        - **Tilt out of range** → tilt clamped to 0 or 65535. Every
+          returned pose carries `"tilt"` in `clamped_axes`.
+        - **All pan branches out of range** → primary branch (k=0)
+          pan clamped; returned with `"pan"` in `clamped_axes`.
+        - **At least one pan branch in range** → only those branches
+          returned (each without `"pan"` in clamped_axes); the
+          out-of-range branches are dropped because the in-range ones
+          dominate them.
+        - **Both axes in range** → exact reachable pose, empty
+          `clamped_axes`.
+
+        Return is non-empty for every direction except the
+        constructor-level "no fixture" / "no profile" failures (which
+        raise at __init__, not here).
+        """
         daz = float(az_deg) - self.home_az_stage
         dele = float(el_deg) - self.home_el_stage
-        tilt_dmx_f = self.home_tilt_dmx16 + self.slope_tilt * dele
-        if not (0 <= round(tilt_dmx_f) <= 65535):
-            return []
-        tilt_dmx16 = int(round(tilt_dmx_f))
 
-        out = []
+        tilt_dmx_f = self.home_tilt_dmx16 + self.slope_tilt * dele
+        tilt_in_range = 0 <= round(tilt_dmx_f) <= 65535
+        tilt_dmx16 = max(0, min(65535, int(round(tilt_dmx_f))))
+        tilt_axes = () if tilt_in_range else ("tilt",)
+
+        in_range = []
+        primary_pan_f = None
         for k in _BRANCH_RANGE:
             cand_pan_f = (self.home_pan_dmx16
                            + self.slope_pan * (daz + 360.0 * k))
+            if k == 0:
+                primary_pan_f = cand_pan_f
             cand_pan = int(round(cand_pan_f))
             if 0 <= cand_pan <= 65535:
-                out.append((cand_pan, tilt_dmx16, k))
-        return out
+                in_range.append((cand_pan, tilt_dmx16, k, tilt_axes))
+
+        if in_range:
+            return in_range
+        # No pan branch reachable — clamp the primary (k=0) branch and
+        # mark "pan" alongside any tilt clamp.
+        clamped_pan = max(0, min(65535,
+                                  int(round(primary_pan_f or self.home_pan_dmx16))))
+        return [(clamped_pan, tilt_dmx16, 0, tilt_axes + ("pan",))]
 
     def poses_for_xyz(self, target_xyz):
-        """Stage-mm target → `[(panDmx16, tiltDmx16, branch_id), ...]`.
-        Empty list for coincident target or unreachable direction."""
+        """Stage-mm target → `[(panDmx16, tiltDmx16, branch_id, clamped_axes), ...]`.
+        Empty list for coincident target. Otherwise always non-empty
+        (clamped fallback per #803)."""
         dx = float(target_xyz[0]) - self.fixture_xyz[0]
         dy = float(target_xyz[1]) - self.fixture_xyz[1]
         dz = float(target_xyz[2]) - self.fixture_xyz[2]
@@ -247,8 +321,9 @@ class AimSphere:
         return self.poses_for_direction(az_deg, el_deg)
 
     def direction_to_poses(self, az_deg, el_deg):
-        """Pre-#798 compat shim — strip branch_id."""
-        return sorted([(p, t) for p, t, _b in self.poses_for_direction(az_deg, el_deg)])
+        """Pre-#798 compat shim — strip branch_id + clamped_axes."""
+        return sorted([(p, t)
+                        for p, t, _b, _c in self.poses_for_direction(az_deg, el_deg)])
 
     def dmx_to_aim(self, pan_dmx16, tilt_dmx16):
         """Inverse of `aim_direction` — DMX pose → stage `(az, el)`.
