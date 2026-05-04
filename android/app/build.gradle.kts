@@ -65,6 +65,29 @@ android {
     }
 }
 
+// Operator-canonical APK output: every assembleDebug / assembleRelease
+// finalizes by copying the freshly-built APK to <repo>/dist/slyled-android.apk
+// (debug build, the live-test target). The dist/ directory is the
+// single source of truth for "the latest binaries"; SPA + firmware
+// updates already land there via build_release.ps1, and Android joins
+// the same convention. Operator directive 2026-05-04: "the final .apk
+// named slyled-android.apk, if it is not current in /dist build it".
+val distApk = rootProject.rootDir.parentFile.resolve("dist/slyled-android.apk")
+afterEvaluate {
+    tasks.named("assembleDebug").configure {
+        doLast {
+            val src = layout.buildDirectory.file("outputs/apk/debug/app-debug.apk").get().asFile
+            if (src.exists()) {
+                distApk.parentFile.mkdirs()
+                src.copyTo(distApk, overwrite = true)
+                logger.lifecycle("Copied ${src.absolutePath} → ${distApk.absolutePath}")
+            } else {
+                logger.warn("assembleDebug finished but ${src.absolutePath} not found; dist/slyled-android.apk NOT updated")
+            }
+        }
+    }
+}
+
 dependencies {
     // Compose
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
