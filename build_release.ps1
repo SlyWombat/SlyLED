@@ -428,6 +428,14 @@ if (-not (Test-Path $distDir)) { New-Item -ItemType Directory -Path $distDir | O
 
 Copy-Item "$root\firmware\esp32\main.ino.merged.bin" "$distDir\esp32-firmware-merged.bin" -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\firmware\d1mini\main.ino.bin" "$distDir\d1mini-firmware.bin" -Force -ErrorAction SilentlyContinue
+# Bins that the prior build_release.ps1 forgot — the SHA-refresh step
+# below walks dist/ and re-pins registry.json sha256 from whatever's
+# there, so missing copies meant the registry stayed pinned to the
+# previous release's hashes. Add gyro / gyro-test / dmx-bridge so
+# every firmware entry's dist/ artifact matches the just-rebuilt bin.
+Copy-Item "$root\firmware\esp32s3\main.ino.merged.bin" "$distDir\esp32s3-gyro-firmware.bin" -Force -ErrorAction SilentlyContinue
+Copy-Item "$root\firmware\esp32s3-test\main.ino.merged.bin" "$distDir\esp32s3-gyro-test-firmware.bin" -Force -ErrorAction SilentlyContinue
+Copy-Item "$root\firmware\esp32-dmx\main.ino.merged.bin" "$distDir\esp32-dmx-bridge-firmware.bin" -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\desktop\windows\dist\SlyLED.exe" "$distDir\SlyLED.exe" -Force -ErrorAction SilentlyContinue
 Copy-Item "$root\desktop\windows\dist\SlyLED-Setup.exe" "$distDir\SlyLED-Setup.exe" -Force -ErrorAction SilentlyContinue
 # Operator-canonical APK output: `dist/slyled-android.apk` (release-

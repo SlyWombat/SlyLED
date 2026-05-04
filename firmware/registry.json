@@ -110,7 +110,7 @@
                          "releaseTag":  "gyro-v1.2.4",
                          "file":  "esp32s3/main.ino.merged.bin",
                          "releaseAsset":  "esp32s3-gyro-firmware.bin",
-                         "sha256":  "23bf35cc208e9de9b45ca82543371d84b6d14c996d50136de3fea30d7d9014f4",
+                         "sha256":  "feb3f74c52173ca80a0a8e1b4c5813b48b5d7dd99f32487629d1d0116e259793",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "GYRO_BOARD"
@@ -129,7 +129,7 @@
                          "file":  "esp32s3-test/main.ino.merged.bin",
                          "diagnostic":  true,
                          "releaseAsset":  "esp32s3-gyro-test-firmware.bin",
-                         "sha256":  "202e784deabe83b8c7921630b54cdd4136733ed8cfc3e18f34702195b6305153",
+                         "sha256":  "c8bd6ea24e0539a804c99c60ecb13386c49e83b1d5345fee6ccc591855cfff95",
                          "flashMethod":  "esptool",
                          "buildDefines":  [
                                               "GYRO_BOARD",
