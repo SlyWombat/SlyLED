@@ -15489,7 +15489,14 @@ def api_fw_query_port():
 
 @app.get("/api/firmware/registry")
 def api_fw_registry():
-    return jsonify(load_registry(_FW_DIR))
+    """Return the registry, with `diagnostic: true` entries filtered
+    out so developer-only builds (e.g. `gyro-test-esp32s3`) never
+    surface in operator-facing OTA UI. Diagnostic builds stay in the
+    on-disk registry.json for the build pipeline; this endpoint just
+    hides them from the SPA + Android."""
+    reg = load_registry(_FW_DIR)
+    public = [e for e in reg.get("firmware", []) if not e.get("diagnostic")]
+    return jsonify({**reg, "firmware": public})
 
 
 @app.get("/api/firmware/library")
@@ -15504,11 +15511,18 @@ def api_fw_library():
     renders Download exactly like a missing entry. Without this, the
     Library said "Local" for the gyro entry while the flash path
     deleted the stale cache and failed to find the asset.
+
+    2026-05-04 — entries flagged `diagnostic: true` (e.g. the
+    gyro-test build) are stripped here so the operator never sees a
+    developer-only firmware in the OTA install list. Build pipeline
+    keeps building them; only the public surface is filtered.
     """
     from firmware_manager import _verify_sha256
     reg = load_registry(_FW_DIR)
     entries = []
     for e in reg.get("firmware", []):
+        if e.get("diagnostic"):
+            continue
         fname = e.get("file") or ""
         cache_path = _FW_CACHE_DIR / fname if fname else None
         bundle_path = _FW_DIR / fname if fname else None
