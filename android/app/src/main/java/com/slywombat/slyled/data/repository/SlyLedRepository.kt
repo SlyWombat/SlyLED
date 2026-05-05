@@ -303,6 +303,27 @@ class SlyLedRepository @Inject constructor(
         return requireApi().disconnectRemote(body)
     }
 
+    // #816 — publish phone grip (forward / up body-frame axes) so the
+    // server's quat→aim math uses the right pointer axis. ControlVM
+    // calls this on every Controller-mode entry so a re-grip mid-session
+    // (portrait → landscape) is reflected on the next claim.
+    suspend fun publishRemoteGrip(
+        forward: FloatArray,
+        up: FloatArray,
+    ): OkResponse {
+        val id = requireIdentity()
+        val body = buildJsonObject {
+            put("deviceId", id.deviceId)
+            putJsonArray("forwardLocal") {
+                forward.forEach { add(it.toDouble()) }
+            }
+            putJsonArray("upLocal") {
+                up.forEach { add(it.toDouble()) }
+            }
+        }
+        return requireApi().publishRemoteGrip(body)
+    }
+
     // #427 — pointer mode: aim a mover by stage XYZ (mm). Server runs the
     // SMART path when available, returns 400 fixture_not_calibrated otherwise.
     suspend fun moverAim(moverId: Int, targetX: Double, targetY: Double,

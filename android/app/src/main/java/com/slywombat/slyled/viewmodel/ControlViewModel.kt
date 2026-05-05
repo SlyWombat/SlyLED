@@ -271,6 +271,35 @@ class ControlViewModel @Inject constructor(
         }
     }
 
+    // #816 — publish per-grip body-frame pointer axes so the server's
+    // quat→aim path uses (0,1,0) for a portrait phone instead of the
+    // default (1,0,0). Without this, pitching the phone forward
+    // produces no head tilt and pan reads reversed. Called by the
+    // Controller-mode overlay every time it composes (display rotation
+    // change → fresh publish), so a portrait→landscape mid-session
+    // updates server-side mapping without operator action.
+    fun publishGripFromSurfaceRotation(surfaceRotation: Int) {
+        // Android `Surface.ROTATION_*` values: 0/1/2/3 — mapped to the
+        // pointer axis in the phone's NATURAL device frame, which is
+        // what `getQuaternionFromVector` produces (the orient/quat the
+        // server consumes is in the natural frame, NOT the
+        // remapCoordinateSystem-rotated operator frame).
+        val (forward, up) = when (surfaceRotation) {
+            1 /* Surface.ROTATION_90  */ -> floatArrayOf(1f, 0f, 0f) to floatArrayOf(0f, 0f, 1f)
+            2 /* Surface.ROTATION_180 */ -> floatArrayOf(0f, -1f, 0f) to floatArrayOf(0f, 0f, 1f)
+            3 /* Surface.ROTATION_270 */ -> floatArrayOf(-1f, 0f, 0f) to floatArrayOf(0f, 0f, 1f)
+            else /* ROTATION_0, default portrait */ ->
+                floatArrayOf(0f, 1f, 0f) to floatArrayOf(0f, 0f, 1f)
+        }
+        viewModelScope.launch {
+            try {
+                repository.publishRemoteGrip(forward, up)
+            } catch (e: Exception) {
+                Log.w(TAG, "publishRemoteGrip failed (non-fatal): ${e.message}")
+            }
+        }
+    }
+
     fun exitControllerMode() {
         val fid = _controllerFixtureId.value
         _controllerFixtureId.value = null

@@ -445,11 +445,11 @@ function showCameraHealth(){
       var hBtn = r.calibrated
         ? '<button class="btn" onclick="clearCameraCal('+cam.id+')" '
           +'style="font-size:.7em;padding:.1em .35em;background:#7f1d1d;color:#fca5a5" '
-          +'title="#619 Drop this cameras homography (stage-map calibration). Re-run stage-map after a rig move or marker reseating.">Clear H</button>'
+          +'title="Clear this camera’s stage-map calibration. Re-run stage-map after a rig move or marker reseating.">Clear H</button>'
         : '';
       var iBtn = '<button class="btn" onclick="clearCameraIntrinsic('+cam.id+')" '
         +'style="font-size:.7em;padding:.1em .35em;background:#78350f;color:#fbbf24;margin-left:.25em" '
-        +'title="#597 Reset the camera nodes saved intrinsic calibration. Forces the Advanced Scan wizard to re-capture.">Clear I</button>';
+        +'title="Reset this camera’s saved intrinsic calibration. Forces the Advanced Scan wizard to re-capture.">Clear I</button>';
       var clearBtn = (hBtn || '—') + iBtn;
       row.innerHTML='<td>'+escapeHtml(cam.name||('cam '+cam.id))+'</td>'
         +'<td>'+tierBadge+'</td>'
@@ -1309,20 +1309,20 @@ function _moverCalAutoStart(){
   // #720 PR-5 — SMART promoted to default once probe + solve landed.
   // Legacy modes remain in the list for side-by-side validation; PR-7
   // deletes them.
-  h+='<option value="smart" selected>SMART — automatic, camera+floor aware (#720)</option>';
+  h+='<option value="smart" selected>SMART — automatic, camera+floor aware</option>';
   h+='<option value="all-auto">All Auto — markers first, fallback to legacy BFS</option>';
-  h+='<option value="markers">Markers only — requires surveyed ArUco markers (#610)</option>';
-  h+='<option value="v2">v2 target-driven (#499, requires stage-map homography)</option>';
+  h+='<option value="markers">Markers only — requires surveyed ArUco markers</option>';
+  h+='<option value="v2">v2 target-driven (requires stage-map homography)</option>';
   h+='</select>';
   h+='<label style="color:#94a3b8;margin:0">Warm-up:</label>';
-  h+='<label style="color:#e2e8f0;font-size:.8em;margin:0"><input type="checkbox" id="mcal-warmup" style="margin-right:.3em">Sweep pan/tilt for 30s before sampling (thermal settle — #513)</label>';
+  h+='<label style="color:#e2e8f0;font-size:.8em;margin:0"><input type="checkbox" id="mcal-warmup" style="margin-right:.3em">Sweep pan/tilt for 30s before sampling (thermal settle)</label>';
   h+='</div>';
   // #681 — Advanced options panel. Expandable, blank = use shipped default.
   // Each row maps to a calibrationTuning key; saved against /api/settings.
   h+='<details id="mcal-adv" style="margin-top:.5em;font-size:.82em">';
   h+='<summary style="cursor:pointer;color:#94a3b8">Advanced options</summary>';
   h+='<div id="mcal-adv-body" style="margin-top:.4em;display:grid;grid-template-columns:240px 1fr;gap:.3em .6em;align-items:center">Loading…</div>';
-  h+='<div style="font-size:.72em;color:#64748b;margin-top:.3em">Changes save immediately to Settings → Advanced → Calibration Timeouts (#680).</div>';
+  h+='<div style="font-size:.72em;color:#64748b;margin-top:.3em">Changes save immediately to Settings → Advanced → Calibration Timeouts.</div>';
   h+='</details>';
 
   // Target preview (populated below when mode=v2)

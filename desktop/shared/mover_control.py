@@ -115,12 +115,18 @@ class MoverClaim:
         self.ttl_s = float(ttl_s) if ttl_s is not None else 15.0
         self.state = "claimed"  # claimed | streaming | calibrating
 
-        # Colour / dimmer / strobe — defaults match "white, full, no strobe"
-        self.color_r = 255
-        self.color_g = 255
-        self.color_b = 255
-        self.dimmer = 255
-        self.strobe_active = False
+        # #814 — Colour / dimmer / strobe inherit from whatever writer
+        # held the wire before the claim arrived (Track action, scene,
+        # SET_BRIGHTNESS, …). `None` means "claim hasn't decided" and
+        # `_write_dmx` skips that channel entirely. As soon as the
+        # operator calls `/api/mover-control/color` or `…/flash`, the
+        # corresponding fields become real values and the engine pump
+        # starts writing them on every tick.
+        self.color_r = None
+        self.color_g = None
+        self.color_b = None
+        self.dimmer = None
+        self.strobe_active = None
 
         # Smoothed pan/tilt in normalised [0,1]. Initialised to centre but
         # not considered valid until the first aim sample arrives.
@@ -668,10 +674,17 @@ class MoverControlEngine:
         if include_pan_tilt:
             uni_buf.set_fixture_pan_tilt(addr, claim.pan_smooth,
                                          claim.tilt_smooth, profile)
-        uni_buf.set_fixture_dimmer(addr, claim.dimmer, profile)
-        self._set_fixture_color(engine, uni, addr,
-                                claim.color_r, claim.color_g, claim.color_b,
-                                prof_info)
+        # #814 — only stamp dimmer / color when the operator has set them
+        # explicitly (set_color / flash). Tristate `None` means "inherit
+        # whatever's on the wire" so a Track-action show keeps its color
+        # while the operator drives pan/tilt from a phone.
+        if claim.dimmer is not None:
+            uni_buf.set_fixture_dimmer(addr, claim.dimmer, profile)
+        if (claim.color_r is not None and claim.color_g is not None
+                and claim.color_b is not None):
+            self._set_fixture_color(engine, uni, addr,
+                                    claim.color_r, claim.color_g, claim.color_b,
+                                    prof_info)
 
         # Channel defaults + strobe override.
         for ch in prof_info.get("channels", []):
@@ -687,6 +700,11 @@ class MoverControlEngine:
             # visible beam — the raw channel default may be 0, which on
             # "closed at 0" wirings would blacken the fixture.
             if ch_type == "strobe":
+                # #814 — leave the wire alone until the operator has made
+                # an explicit strobe decision (set_color / flash). Inherit
+                # whatever the previous writer (Track action, scene) left.
+                if claim.strobe_active is None:
+                    continue
                 if claim.strobe_active:
                     uni_buf.set_channel(addr + ch.get("offset", 0),
                                         self._find_strobe_value(ch))

@@ -638,7 +638,7 @@ function _pcAdvancedScan(){
   h+='<option value="fill">Dim fill light (low ambient, no moving beams)</option>';
   h+='<option value="keep">Keep current lighting (don\'t touch DMX)</option>';
   h+='</select>';
-  h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">Bright DMX beams on walls/ceiling saturate the monocular depth model. Blackout restores prior state after capture (#591).</p>';
+  h+='<p style="color:#64748b;font-size:.72em;margin-top:.2em">Bright DMX beams on walls/ceiling saturate the monocular depth model. Blackout restores prior state after capture.</p>';
   h+='</div>';
 
   // Advanced options

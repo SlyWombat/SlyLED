@@ -276,6 +276,9 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
             onOrient = { roll, pitch, yaw, quat ->
                 viewModel.sendOrientation(controllerFix.id, roll, pitch, yaw, quat)
             },
+            onPublishGrip = { rotation ->
+                viewModel.publishGripFromSurfaceRotation(rotation)
+            },
             onCalibrateStart = { roll, pitch, yaw ->
                 viewModel.calibrateStart(controllerFix.id, roll, pitch, yaw)
             },

@@ -59,6 +59,10 @@ fun ControllerModeOverlay(
     statusClaim: com.slywombat.slyled.data.model.MoverControlClaim? = null,
     engineRunning: Boolean = true,
     onOrient: (roll: Float, pitch: Float, yaw: Float, quat: FloatArray) -> Unit,
+    // #816 — publish phone grip (Surface.ROTATION_*) so the server's
+    // quat→aim path uses the right pointer axis. Fired on entry and on
+    // every device-rotation change.
+    onPublishGrip: (surfaceRotation: Int) -> Unit = {},
     onCalibrateStart: (roll: Float, pitch: Float, yaw: Float) -> Unit,
     // #805 — calibrate-end now also carries the native rotation-vector
     // quaternion. The server prefers it because Android's
@@ -133,6 +137,14 @@ fun ControllerModeOverlay(
     @Suppress("DEPRECATION")
     val display = remember(context) {
         (context as? android.app.Activity)?.windowManager?.defaultDisplay
+    }
+
+    // #816 — publish grip on entry + whenever the device rotates. The
+    // configuration recomposes us on rotation change so re-keying on
+    // configuration.orientation re-fires this LaunchedEffect.
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    LaunchedEffect(configuration.orientation) {
+        onPublishGrip(display?.rotation ?: Surface.ROTATION_0)
     }
 
     DisposableEffect(rotationSensor) {

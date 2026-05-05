@@ -154,6 +154,13 @@ interface SlyLedApi {
     @POST("api/remotes/disconnect")
     suspend fun disconnectRemote(@Body body: JsonObject): OkResponse
 
+    // #816 — publish phone grip (forward / up body-frame axes) so the
+    // server's quat→aim math uses the right pointer axis. Without this,
+    // pitching the phone forward fails to tilt the head and pan reads
+    // reversed because the server defaults forward_local = (1,0,0).
+    @POST("api/remotes/grip")
+    suspend fun publishRemoteGrip(@Body body: JsonObject): OkResponse
+
     // #427 — pointer mode aims by stage XYZ (mm). Body: {targetX,targetY,targetZ}.
     // Server routes through SMART model when present, returns 400
     // {err:"Fixture not calibrated"} when world-XYZ aim isn't supported yet.

@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.60"
+VERSION = "1.7.61"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -11411,6 +11411,37 @@ def api_remote_grip(remote_id):
     return jsonify(ok=True, remote=r.to_persisted_dict())
 
 
+@app.post("/api/remotes/grip")
+def api_remote_grip_by_device():
+    """#816 — deviceId-keyed sibling of `/api/remotes/<remote_id>/grip`.
+    Phone clients only know their own ``deviceId`` (not the integer
+    remote-row id), so they POST here with ``{deviceId, forwardLocal,
+    upLocal}`` when entering Controller mode. Auto-registers a phone
+    Remote if one doesn't exist yet — same shape as the orient handler's
+    auto-register so the first claim from a fresh device works without
+    a separate /api/remotes POST.
+    """
+    body = request.get_json(silent=True) or {}
+    did = (body.get("deviceId") or "").strip()
+    if not did:
+        return jsonify(ok=False, err="deviceId required"), 400
+    fwd = body.get("forwardLocal")
+    up = body.get("upLocal")
+    if fwd is None and up is None:
+        return jsonify(ok=False, err="forwardLocal and/or upLocal required"), 400
+    if fwd is not None and (not isinstance(fwd, (list, tuple)) or len(fwd) != 3):
+        return jsonify(ok=False, err="forwardLocal must be [x,y,z]"), 400
+    if up is not None and (not isinstance(up, (list, tuple)) or len(up) != 3):
+        return jsonify(ok=False, err="upLocal must be [x,y,z]"), 400
+    r = _remotes.by_device(did) or _auto_register_remote(did, kind=KIND_PHONE)
+    try:
+        r.set_grip(forward_local=fwd, up_local=up)
+    except (TypeError, ValueError) as e:
+        return jsonify(ok=False, err=str(e)), 400
+    _remotes.save()
+    return jsonify(ok=True, remote=r.to_persisted_dict())
+
+
 @app.delete("/api/remotes/<int:remote_id>")
 def api_remotes_delete(remote_id):
     # #690 — idempotent: 200 either way, with a `removed` flag the SPA
@@ -16129,8 +16160,22 @@ def api_fw_flash():
     verify_ip = (body.get("verifyIp") or "").strip()
     if not port or not fw_id:
         return jsonify(ok=False, err="port and firmwareId required"), 400
-    reg = load_registry(_FW_DIR)
-    fw = next((f for f in reg.get("firmware", []) if f["id"] == fw_id), None)
+    # Prefer the live GitHub-main registry — the bundled `registry.json`
+    # baked into the installer is built BEFORE the SHA refresh step in
+    # build_release.ps1, so its sha256 lags one release behind the
+    # firmware bins it ships. That stale sha makes both the bundled bin
+    # AND the freshly-downloaded release asset fail verification ("binary
+    # not found locally and release asset … could not be downloaded").
+    # Pulling the live registry gives us the correct sha + version + tag
+    # and matches what `/api/firmware/library` and `/api/firmware/fetch`
+    # already do.
+    fw = None
+    remote = _fetch_remote_registry()
+    if remote and isinstance(remote.get("firmware"), list):
+        fw = next((f for f in remote["firmware"] if f.get("id") == fw_id), None)
+    if fw is None:
+        reg = load_registry(_FW_DIR)
+        fw = next((f for f in reg.get("firmware", []) if f.get("id") == fw_id), None)
     if not fw:
         return jsonify(ok=False, err="firmware not found in registry"), 404
     # #568 — if the binary is missing locally, auto-download it from the
@@ -16913,6 +16958,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
