@@ -119,25 +119,6 @@
                          "sourceHash":  "1ebee1ed95a9439ed35aa09d10addaf961966f886eeb57b5164d460beae9b7e2"
                      },
                      {
-                         "id":  "gyro-test-esp32s3",
-                         "name":  "Gyro Controller â€” Diagnostic Build (ESP32-S3 LCD 1.28)",
-                         "description":  "#776 test firmware â€” exposes raw IMU chip values via /imu HTTP + on-screen LCD readout. Same hardware as gyro-esp32s3; OTA-replaceable in either direction.",
-                         "board":  "esp32s3",
-                         "fqbn":  "esp32:esp32:esp32s3",
-                         "version":  "1.0.3",
-                         "releaseTag":  "gyro-test-v1.0.3",
-                         "file":  "esp32s3-test/main.ino.merged.bin",
-                         "diagnostic":  true,
-                         "releaseAsset":  "esp32s3-gyro-test-firmware.bin",
-                         "sha256":  "c61a9b56cf7960b8862521e8ae75eca3ea5a754d15f1fb7c9db4df79d3066a1a",
-                         "flashMethod":  "esptool",
-                         "buildDefines":  [
-                                              "GYRO_BOARD",
-                                              "GYRO_TEST_BOARD"
-                                          ],
-                         "buildFlags":  "-DGYRO_BOARD -DGYRO_TEST_BOARD",
-                         "sourceHash":  "1ebee1ed95a9439ed35aa09d10addaf961966f886eeb57b5164d460beae9b7e2"
-                     },
                      {
                          "id":  "camera-node",
                          "name":  "Camera Node (Linux SBC)",
