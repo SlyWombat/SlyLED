@@ -231,13 +231,24 @@ function _showActModal(a){
   h+='<div id="ae-track-temporal"></div>';
   if(!(_objects||[]).length)h+='<p id="ae-track-empty" style="color:#555;font-size:.8em">No objects defined. Add objects on the Layout tab, or camera-tracked people appear live below.</p>';
   h+='</div>';
-  h+='<label>Cycle Time (ms)</label><input type="number" id="ae-trk-cycle" value="'+(a?a.trackCycleMs||2000:2000)+'" min="100" max="60000" style="width:100px">';
+  // #811 — Track action Advanced section. trackCycleMs etc. used to
+  // sit outside the Track div which meant they showed for every action
+  // type; grouping them in an Advanced expander keeps the simple case
+  // uncluttered while still letting the operator tune cycle / offset /
+  // assignment without API calls.
+  var advOpen=!!(a&&(a.trackCycleMs||(a.trackOffset&&(a.trackOffset[0]||a.trackOffset[1]||a.trackOffset[2]))||a.trackAutoSpread||a.trackFixedAssignment));
+  h+='<details id="ae-trk-adv" style="margin-top:.6em;border:1px solid #444;border-radius:6px;padding:.4em .6em"'+(advOpen?' open':'')+'>';
+  h+='<summary style="cursor:pointer;font-weight:bold;color:#f60">Advanced</summary>';
+  h+='<div style="padding-top:.5em">';
+  h+='<label title="How often the head re-aims at its assigned target. Lower = snappier tracking, higher = smoother but laggier.">Cycle Time (ms)</label>';
+  h+='<input type="number" id="ae-trk-cycle" value="'+(a?a.trackCycleMs||2000:2000)+'" min="100" max="10000" step="100" style="width:100px" title="How often the head re-aims at its assigned target. Lower = snappier tracking, higher = smoother but laggier.">';
   var tOff=a&&a.trackOffset?a.trackOffset:[0,0,0];
   h+='<label>Offset X (mm)</label><input type="number" id="ae-trk-ox" value="'+tOff[0]+'" style="width:80px">';
   h+=' <label style="display:inline;margin-left:.5em">Y (mm)</label><input type="number" id="ae-trk-oy" value="'+tOff[1]+'" style="width:80px">';
   h+=' <label style="display:inline;margin-left:.5em">Z (mm)</label><input type="number" id="ae-trk-oz" value="'+tOff[2]+'" style="width:80px">';
   h+='<div style="margin-top:.4em"><label style="cursor:pointer"><input type="checkbox" id="ae-trk-spread"'+(a&&a.trackAutoSpread?' checked':'')+'>  Auto-spread across targets</label></div>';
   h+='<div style="margin-top:.3em"><label style="cursor:pointer"><input type="checkbox" id="ae-trk-fixed"'+(a&&a.trackFixedAssignment?' checked':'')+'>  Fixed assignment (1:1 — extra targets ignored)</label></div>';
+  h+='</div></details>';
   h+='</div>';
   // WLED Overrides section (hidden by default, shown if WLED devices exist)
   h+='<div id="ae-wled-section" style="display:none;margin-top:1em;border:1px solid #444;border-radius:6px;padding:.6em">';
@@ -410,7 +421,9 @@ function _aeSubmit(id,btn){
     var tcbs=document.querySelectorAll('.ae-track-cb:checked');
     var tids=[];tcbs.forEach(function(cb){tids.push(parseInt(cb.value));});
     body.trackObjectIds=tids;
-    body.trackCycleMs=parseInt(document.getElementById('ae-trk-cycle').value)||2000;
+    // #811 — clamp to [100, 10000] ms per the issue's recommended range.
+    var _cyc=parseInt(document.getElementById('ae-trk-cycle').value)||2000;
+    body.trackCycleMs=Math.max(100, Math.min(10000, _cyc));
     body.trackOffset=[parseInt(document.getElementById('ae-trk-ox').value)||0,parseInt(document.getElementById('ae-trk-oy').value)||0,parseInt(document.getElementById('ae-trk-oz').value)||0];
     body.trackAutoSpread=!!document.getElementById('ae-trk-spread').checked;
     body.trackFixedAssignment=!!document.getElementById('ae-trk-fixed').checked;

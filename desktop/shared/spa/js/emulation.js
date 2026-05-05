@@ -1,6 +1,13 @@
 /** emulation.js — Stage preview, 3D runtime viewport, per-pixel rendering. Extracted from app.js Phase 3. */
 // ── Emulation / Preview ─────────────────────────────────────────────────────
 var _emuStage=null, _emuPreview=null, _emuTimer=null, _emuT=0, _emuRunning=false, _emuAnimId=null, _emuStageLoading=false;
+// #810 — live canonical aim cache for the Dashboard/Runtime 3D viz.
+// `_emuPreview` is the BAKED timeline preview; Track-action moves that
+// happen live-only (`_evaluate_track_actions`) aren't in the bake, so
+// cone direction post-#806/#809 must read `/api/fixtures/live`'s `aim`
+// field, which the server populates from the canonical aim_stage store.
+// Map: fid (string) → {aim:[vx,vy,vz], r,g,b, dimmer, source}.
+var _emuLive={data:{}, pollId:null};
 
 function emuLoadStage(){
   // Re-entry guard: boot runs `_dashAttach3d` → emuLoadStage on the default
@@ -28,12 +35,37 @@ function emuLoadStage(){
   _emuStartTimer();
 }
 
+// #810 — 5 Hz poll of /api/fixtures/live so the 3D viz cone direction
+// follows Track-action sweeps (which aren't in the bake) and any other
+// live mover-control or /api/mover/<fid>/aim writes.
+function _emuStartLivePoll(){
+  if(_emuLive.pollId)return;
+  var tick=function(){
+    ra('GET','/api/fixtures/live',null,function(d){
+      if(!d||!Array.isArray(d.fixtures)){_emuLive.data={};return;}
+      var next={};
+      d.fixtures.forEach(function(f){if(f&&f.id!==undefined)next[String(f.id)]=f;});
+      _emuLive.data=next;
+    });
+  };
+  tick();
+  _emuLive.pollId=setInterval(tick, 200);   // 5 Hz
+}
+
+function _emuStopLivePoll(){
+  if(_emuLive.pollId){clearInterval(_emuLive.pollId);_emuLive.pollId=null;}
+  _emuLive.data={};
+}
+
 function _emuStartTimer(){
   // Re-entrable: every live-tab switch clears `_emuTimer` via
   // `_clearTabTimers()`, so the poll needs to be rearmed whenever we land
   // on Dashboard or Runtime again. Without this, `_emuT` / `_emuPreview`
   // stay frozen after the first tab swap and the 3D cones never animate.
   if(_emuTimer)clearInterval(_emuTimer);
+  // #810 — live aim poll runs whenever the emu lifecycle is active so
+  // the cone follows live writes whether or not a timeline is running.
+  _emuStartLivePoll();
   _emuTimer=setInterval(function(){
     ra('GET','/api/settings',null,function(s){
       if(s&&s.runnerRunning&&s.activeTimeline>=0){
@@ -567,26 +599,52 @@ function emu3dUpdateColors(){
     }
 
     if(ft==='dmx'){
-      // Update sphere + cone color from preview
+      // #810 — prefer the live canonical aim from /api/fixtures/live so
+      // Track-action sweeps (live-only, not in the bake) animate the
+      // cone. Live colour also wins when present so the cone tint
+      // matches the wire while a claim/track is running. Fall back to
+      // the baked preview when no live entry exists yet.
+      var liveEntry=_emuLive&&_emuLive.data?_emuLive.data[String(fid)]:null;
+      var src=null;
+      if(liveEntry&&typeof liveEntry==='object')src=liveEntry;
+      else if(pd&&typeof pd==='object')src=pd;
+
+      // Update sphere + cone color
       var br=0x7c,bg=0x3a,bb=0xed,dimmer=0.1;
-      if(pd&&typeof pd==='object'){
-        if(pd.r!==undefined){br=pd.r;bg=pd.g;bb=pd.b;}
-        if(pd.dimmer>0)dimmer=(pd.dimmer/255)*0.4;
+      if(src){
+        if(src.r!==undefined){br=src.r;bg=src.g;bb=src.b;}
+        if(src.dimmer>0)dimmer=(src.dimmer/255)*0.4;
         else if(br+bg+bb>10)dimmer=0.3;
       }
       var hexCol=(br<<16)|(bg<<8)|bb;
-      // Update beam cone direction from pan/tilt if available
-      if(pd&&pd.pan!==undefined&&pd.tilt!==undefined){
-        var panRange=grp.userData.panRange||540;
-        var tiltRange=grp.userData.tiltRange||270;
-        var panDeg=(pd.pan-0.5)*panRange;
-        var tiltDeg=(pd.tilt-0.5)*tiltRange;
-        if(grp.userData.mountedInverted)tiltDeg=-tiltDeg;
-        var basePan=(grp.userData.basePan||0);
-        var panRad=(basePan+panDeg)*Math.PI/180;
-        var tiltRad=tiltDeg*Math.PI/180;
-        var aimDir=new THREE.Vector3(Math.sin(panRad)*Math.cos(tiltRad),
-          -Math.sin(tiltRad),Math.cos(panRad)*Math.cos(tiltRad));
+
+      // Update beam cone direction. Order: live.aim (canonical, post-#806/#809)
+      // → live pan/tilt forward IK → baked-preview pan/tilt forward IK.
+      var aimDir=null;
+      if(liveEntry&&Array.isArray(liveEntry.aim)&&liveEntry.aim.length>=3){
+        // Stage (X, Y, Z) → Three.js Y-up (X, Z_stage, Y_stage)
+        var a=liveEntry.aim;
+        aimDir=new THREE.Vector3(a[0]||0, a[2]||0, a[1]||0);
+        if(aimDir.lengthSq()>1e-6)aimDir.normalize();
+        else aimDir=null;
+      }
+      if(!aimDir){
+        var ptSrc=(liveEntry&&liveEntry.pan!==undefined&&liveEntry.tilt!==undefined)
+          ? liveEntry : (pd&&pd.pan!==undefined&&pd.tilt!==undefined ? pd : null);
+        if(ptSrc){
+          var panRange=grp.userData.panRange||540;
+          var tiltRange=grp.userData.tiltRange||270;
+          var panDeg=(ptSrc.pan-0.5)*panRange;
+          var tiltDeg=(ptSrc.tilt-0.5)*tiltRange;
+          if(grp.userData.mountedInverted)tiltDeg=-tiltDeg;
+          var basePan=(grp.userData.basePan||0);
+          var panRad=(basePan+panDeg)*Math.PI/180;
+          var tiltRad=tiltDeg*Math.PI/180;
+          aimDir=new THREE.Vector3(Math.sin(panRad)*Math.cos(tiltRad),
+            -Math.sin(tiltRad),Math.cos(panRad)*Math.cos(tiltRad));
+        }
+      }
+      if(aimDir){
         var beamLen=grp.userData.beamLen||3;
         grp.children.forEach(function(child){
           if(child.userData.beamCone){
@@ -600,11 +658,11 @@ function emu3dUpdateColors(){
       grp.children.forEach(function(child){
         if(child.userData.nodeSphere){
           child.material.color.setHex(hexCol||0x7c3aed);
-          child.material.opacity=pd?0.95:0.5;
+          child.material.opacity=src?0.95:0.5;
         }
         if(child.userData.beamCone){
           child.material.color.setHex(hexCol||0xffff88);
-          child.material.opacity=pd?dimmer:0.08;
+          child.material.opacity=src?dimmer:0.08;
         }
       });
     } else if(ft==='led'){

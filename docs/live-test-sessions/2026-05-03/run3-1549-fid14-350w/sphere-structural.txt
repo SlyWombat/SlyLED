@@ -1,0 +1,22 @@
+=== fid 14: 350W Outdoor Waterproof BeamLight ===
+  x: None
+  y: None
+  z: None
+  rotation: [75, 0, 0]
+  mountedInverted: False
+  dmxProfileId: beamlight-350w-16ch
+  dmxStartAddr: 27
+  dmxUniverse: 1
+  homePanDmx16: 32768
+  homeTiltDmx16: 28099
+  homeSecondary: None
+
+=== profile: beamlight-350w-16ch ===
+  panRange: 540  tiltRange: 210  channelCount: 14
+
+FAILED: ValueError: fixture 14 has no homeSecondary direction calls + offsets — Home Secondary must carry both panMovedDirection / tiltMovedDirection and panOffsetDmx16 / tiltOffsetDmx16 (per-axis sign cannot be derived from Home alone)
+Traceback (most recent call last):
+  File "<stdin>", line 18, in <module>
+  File "desktop/shared\aim\sphere.py", line 137, in __init__
+    raise ValueError(
+ValueError: fixture 14 has no homeSecondary direction calls + offsets — Home Secondary must carry both panMovedDirection / tiltMovedDirection and panOffsetDmx16 / tiltOffsetDmx16 (per-axis sign cannot be derived from Home alone)

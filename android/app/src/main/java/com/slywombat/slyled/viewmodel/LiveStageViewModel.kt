@@ -3,9 +3,11 @@ package com.slywombat.slyled.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.slywombat.slyled.audio.MicAutoBrightness
 import com.slywombat.slyled.data.model.*
 import com.slywombat.slyled.data.repository.SlyLedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,8 +18,26 @@ import javax.inject.Inject
 
 @HiltViewModel
 class LiveStageViewModel @Inject constructor(
-    private val repository: SlyLedRepository
+    private val repository: SlyLedRepository,
+    private val mic: MicAutoBrightness,
 ) : ViewModel() {
+
+    // #804 — Auto Brightness state mirrors mic driver and feeds Stage button.
+    val autoBrightnessState: StateFlow<MicAutoBrightness.Mode> = mic.state
+    val autoBrightnessEnvelope: StateFlow<Float> = mic.envelope
+    // Tunables exposed as flows so Stage and Settings UIs both recompose
+    // when the *other* surface (or the persisted-prefs load) changes them.
+    val autoBrightnessSensitivityFlow: StateFlow<Float> = mic.sensitivityFlow
+    val autoBrightnessFloorFlow: StateFlow<Float> = mic.floorFlow
+    val autoBrightnessCeilingFlow: StateFlow<Float> = mic.ceilingFlow
+    val autoBrightnessAttackMsFlow: StateFlow<Float> = mic.attackMsFlow
+    val autoBrightnessReleaseMsFlow: StateFlow<Float> = mic.releaseMsFlow
+
+    private val _autoBrightnessEnabled = MutableStateFlow(false)
+    val autoBrightnessEnabled: StateFlow<Boolean> = _autoBrightnessEnabled.asStateFlow()
+
+    // Drop new fast-path hops if the previous POST is still in flight.
+    private var lastBrightnessJob: Job? = null
 
     private val _fixtures = MutableStateFlow<List<Fixture>>(emptyList())
     val fixtures: StateFlow<List<Fixture>> = _fixtures.asStateFlow()
@@ -144,6 +164,52 @@ class LiveStageViewModel @Inject constructor(
                 repository.saveSettings(Settings(globalBrightness = value))
             } catch (e: Exception) { Log.e(TAG, "setBrightness", e) }
         }
+    }
+
+    // #804 — auto-brightness control surface.
+    fun configureAutoBrightness(
+        sensitivity: Float? = null,
+        floor: Float? = null,
+        ceiling: Float? = null,
+        attackMs: Float? = null,
+        releaseMs: Float? = null,
+    ) = mic.configure(sensitivity, floor, ceiling, attackMs, releaseMs)
+
+    fun setAutoBrightnessEnabled(enabled: Boolean) {
+        if (enabled == _autoBrightnessEnabled.value) return
+        if (enabled) {
+            val started = mic.start(viewModelScope) { master ->
+                // Drop hop if previous fast-path still in flight.
+                if (lastBrightnessJob?.isActive == true) return@start
+                lastBrightnessJob = viewModelScope.launch {
+                    try {
+                        repository.setMasterBrightness(master)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "fast brightness POST", e)
+                    }
+                }
+            }
+            _autoBrightnessEnabled.value = started
+            // #804 — persist intent so the next app launch resumes mic
+            // capture without operator action (subject to permission).
+            mic.setPersistedEnabled(started)
+        } else {
+            mic.stop()
+            _autoBrightnessEnabled.value = false
+            mic.setPersistedEnabled(false)
+        }
+    }
+
+    fun autoBrightnessHasPermission(): Boolean = mic.hasPermission()
+    fun autoBrightnessSensitivity(): Float = mic.sensitivity
+    fun autoBrightnessFloor(): Float = mic.floor
+    fun autoBrightnessCeiling(): Float = mic.ceiling
+    fun autoBrightnessAttackMs(): Float = mic.attackMs
+    fun autoBrightnessReleaseMs(): Float = mic.releaseMs
+
+    override fun onCleared() {
+        mic.stop()
+        super.onCleared()
     }
 
     companion object {

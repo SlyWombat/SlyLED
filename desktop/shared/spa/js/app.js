@@ -315,6 +315,8 @@ function _clearTabTimers(){
   if(typeof _emuAnimId!=='undefined'&&_emuAnimId){cancelAnimationFrame(_emuAnimId);_emuAnimId=null;}
   if(_emu3d.animId){cancelAnimationFrame(_emu3d.animId);_emu3d.animId=null;}
   if(typeof _tlPlayTimer!=='undefined'&&_tlPlayTimer){clearInterval(_tlPlayTimer);_tlPlayTimer=null;_tlPlaying=false;}
+  // #810 — stop the live aim poll when leaving a live tab; restarts on next _emuStartTimer().
+  if(typeof _emuStopLivePoll==='function')_emuStopLivePoll();
 }
 // #690-followup — warn before navigating away (tab close, refresh) when
 // any dirty form is open. Currently covers the profile editor and the

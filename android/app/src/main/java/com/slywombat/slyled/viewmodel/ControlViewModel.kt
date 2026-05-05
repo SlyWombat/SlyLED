@@ -300,11 +300,21 @@ class ControlViewModel @Inject constructor(
         }
     }
 
-    /** Called when user releases the calibrate button (finger up). */
-    fun calibrateEnd(fixtureId: Int, roll: Float, pitch: Float, yaw: Float) {
+    /** Called when user releases the calibrate button (finger up).
+     *  #805 — accepts the native rotation-vector quaternion alongside
+     *  Euler. The server prefers `quat` because Android's
+     *  `getOrientation` is in a different axis convention than
+     *  aerospace ZYX, so locking against Euler at calibrate-end
+     *  produces a different physical orientation than the next /orient
+     *  packet (which sends the native quat). */
+    fun calibrateEnd(
+        fixtureId: Int,
+        roll: Float, pitch: Float, yaw: Float,
+        quat: FloatArray? = null,
+    ) {
         viewModelScope.launch {
             try {
-                repository.moverCalibrateEnd(fixtureId, roll, pitch, yaw)
+                repository.moverCalibrateEnd(fixtureId, roll, pitch, yaw, quat)
             } catch (e: Exception) {
                 Log.w(TAG, "calibrateEnd failed: ${e.message}")
             }

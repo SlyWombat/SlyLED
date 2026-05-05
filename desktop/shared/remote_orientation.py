@@ -380,6 +380,18 @@ class Remote:
     def _apply_quat(self, q):
         self.last_quat_world = q
         self.last_data = time.time()
+        # #812 — auto-recover from a transient comms drop. The "connection
+        # -lost" latch fires after 60s of silence (STALE_HARD_SECS) but a
+        # transient WiFi drop / brief deep-sleep / firmware reset is not a
+        # deliberate retirement — when the puck or phone resumes streaming
+        # we should treat its first orient packet as a recovery signal,
+        # not require a manual POST /api/remotes/<id>/clear-stale to
+        # unjam the press-Start flow. Other hard-stale reasons (`age`,
+        # `session-ended`, `never-active`) represent operator intent and
+        # stay latched until clear_stale() / recalibrate.
+        if self.stale_reason == "connection-lost":
+            self.stale_reason = None
+            self.soft_stale = False
         self._recompute_derived()
 
     def _recompute_derived(self):

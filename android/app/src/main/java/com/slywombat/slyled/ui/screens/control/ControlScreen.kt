@@ -279,8 +279,8 @@ fun ControlScreen(viewModel: ControlViewModel = hiltViewModel()) {
             onCalibrateStart = { roll, pitch, yaw ->
                 viewModel.calibrateStart(controllerFix.id, roll, pitch, yaw)
             },
-            onCalibrateEnd = { roll, pitch, yaw ->
-                viewModel.calibrateEnd(controllerFix.id, roll, pitch, yaw)
+            onCalibrateEnd = { roll, pitch, yaw, quat ->
+                viewModel.calibrateEnd(controllerFix.id, roll, pitch, yaw, quat)
             },
             onColorChange = { r, g, b, dimmer ->
                 viewModel.setMoverColor(controllerFix.id, r, g, b, dimmer)

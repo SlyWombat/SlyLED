@@ -1,5 +1,8 @@
 package com.slywombat.slyled.ui.screens.livestage
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -8,6 +11,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
@@ -31,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.slywombat.slyled.audio.MicAutoBrightness
 import com.slywombat.slyled.data.model.*
 import com.slywombat.slyled.ui.theme.*
 import com.slywombat.slyled.viewmodel.LiveStageViewModel
@@ -65,12 +70,17 @@ fun LiveStageScreen(viewModel: LiveStageViewModel = hiltViewModel()) {
     var selectedFixtureId by remember { mutableStateOf<Int?>(null) }
 
     val isRunning = settings.runnerRunning
-    val brightness = settings.globalBrightness ?: 255
-    var brightnessSlider by remember { mutableFloatStateOf(brightness.toFloat()) }
 
-    // Sync slider when server value changes
-    LaunchedEffect(brightness) {
-        brightnessSlider = brightness.toFloat()
+    // #804 — Auto Brightness state.
+    val autoEnabled by viewModel.autoBrightnessEnabled.collectAsState()
+    val autoState by viewModel.autoBrightnessState.collectAsState()
+    val autoEnvelope by viewModel.autoBrightnessEnvelope.collectAsState()
+    var showAutoModal by remember { mutableStateOf(false) }
+
+    val micPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) viewModel.setAutoBrightnessEnabled(true)
     }
 
     Box(modifier = Modifier.fillMaxSize().background(DeepSlate)) {
@@ -123,42 +133,47 @@ fun LiveStageScreen(viewModel: LiveStageViewModel = hiltViewModel()) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Brightness slider
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
-                ),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "Brightness",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.width(80.dp)
-                    )
-                    Slider(
-                        value = brightnessSlider,
-                        onValueChange = { brightnessSlider = it },
-                        onValueChangeFinished = {
-                            viewModel.setBrightness(brightnessSlider.toInt())
-                        },
-                        valueRange = 0f..255f,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        "${brightnessSlider.toInt()}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.width(36.dp)
-                    )
-                }
+            // #804 — Auto Brightness modal button (replaces master slider).
+            AutoBrightnessButton(
+                enabled = autoEnabled,
+                state = autoState,
+                envelope = autoEnvelope,
+                onTap = {
+                    if (!autoEnabled && !viewModel.autoBrightnessHasPermission()) {
+                        micPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    } else {
+                        showAutoModal = true
+                    }
+                },
+            )
+
+            if (showAutoModal) {
+                // #804 — pull tunables from flows so the modal reflects
+                // persisted-load values and any edits made elsewhere.
+                val modalSens by viewModel.autoBrightnessSensitivityFlow.collectAsState()
+                val modalFl by viewModel.autoBrightnessFloorFlow.collectAsState()
+                val modalCe by viewModel.autoBrightnessCeilingFlow.collectAsState()
+                AutoBrightnessModal(
+                    enabled = autoEnabled,
+                    state = autoState,
+                    envelope = autoEnvelope,
+                    sensitivity = modalSens,
+                    floor = modalFl,
+                    ceiling = modalCe,
+                    onToggleEnabled = { want ->
+                        if (want && !viewModel.autoBrightnessHasPermission()) {
+                            micPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        } else {
+                            viewModel.setAutoBrightnessEnabled(want)
+                        }
+                    },
+                    onConfigure = { s, fl, ce ->
+                        viewModel.configureAutoBrightness(
+                            sensitivity = s, floor = fl, ceiling = ce,
+                        )
+                    },
+                    onDismiss = { showAutoModal = false },
+                )
             }
 
             // Play/Stop FAB
@@ -896,5 +911,191 @@ private fun FixtureDetail(label: String, value: String) {
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurface
         )
+    }
+}
+
+// #804 — Auto Brightness modal button (Stage tab). Compact card showing
+// current state + a thin envelope progress fill behind the label.
+@Composable
+private fun AutoBrightnessButton(
+    enabled: Boolean,
+    state: MicAutoBrightness.Mode,
+    envelope: Float,
+    onTap: () -> Unit,
+) {
+    val (label, accent) = autoBrightnessLabelAndColor(enabled, state)
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) },
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Box(modifier = Modifier.fillMaxWidth()) {
+            // Envelope fill — thin bar behind the label.
+            if (enabled) {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(accent.copy(alpha = 0.0f))
+                ) {
+                    Canvas(modifier = Modifier.matchParentSize()) {
+                        val w = size.width * envelope.coerceIn(0f, 1f)
+                        drawRect(
+                            color = accent.copy(alpha = 0.18f),
+                            topLeft = Offset(0f, 0f),
+                            size = Size(w, size.height),
+                        )
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Default.GraphicEq,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(22.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Auto Brightness",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = accent,
+                    )
+                }
+                if (enabled) {
+                    Text(
+                        "${(envelope * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun autoBrightnessLabelAndColor(
+    enabled: Boolean,
+    state: MicAutoBrightness.Mode,
+): Pair<String, Color> {
+    return when {
+        !enabled && state == MicAutoBrightness.Mode.PermissionDenied ->
+            "Tap to grant mic" to Color(0xFFF59E0B)
+        !enabled -> "Off — tap to enable" to MaterialTheme.colorScheme.onSurfaceVariant
+        state == MicAutoBrightness.Mode.NoMic -> "No mic available" to RedError
+        state == MicAutoBrightness.Mode.Clipping -> "Clipping" to Color(0xFFF59E0B)
+        state == MicAutoBrightness.Mode.Listening -> "Listening" to GreenOnline
+        state == MicAutoBrightness.Mode.PermissionDenied -> "Permission denied" to RedError
+        else -> "Idle" to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+}
+
+// #804 — Compact tunable modal launched from the Stage button.
+// Settings tab carries the full panel (mode, mic source, attack/release).
+@Composable
+private fun AutoBrightnessModal(
+    enabled: Boolean,
+    state: MicAutoBrightness.Mode,
+    envelope: Float,
+    sensitivity: Float,
+    floor: Float,
+    ceiling: Float,
+    onToggleEnabled: (Boolean) -> Unit,
+    onConfigure: (sensitivity: Float?, floor: Float?, ceiling: Float?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    // #804 — drive the slider position from the canonical prop directly
+    // so a Settings-tab edit (or a persisted-prefs load) is reflected
+    // immediately while the modal is still open.
+    val sens = sensitivity
+    val fl = floor
+    val ce = ceiling
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+        title = { Text("Auto Brightness") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(checked = enabled, onCheckedChange = { onToggleEnabled(it) })
+                    Spacer(Modifier.width(12.dp))
+                    val (label, accent) = autoBrightnessLabelAndColor(enabled, state)
+                    Text(label, style = MaterialTheme.typography.labelMedium, color = accent)
+                }
+                // Live envelope meter
+                Column {
+                    Text(
+                        "Envelope",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    LinearProgressIndicator(
+                        progress = { envelope.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth().height(8.dp),
+                        color = CyanSecondary,
+                        trackColor = MaterialTheme.colorScheme.outlineVariant,
+                    )
+                }
+                LabelledSlider(
+                    label = "Sensitivity",
+                    value = sens, range = 0.5f..4f,
+                    onChange = { onConfigure(it, null, null) },
+                )
+                LabelledSlider(
+                    label = "Floor",
+                    value = fl, range = 0f..1f,
+                    onChange = { onConfigure(null, it.coerceAtMost(ce), null) },
+                )
+                LabelledSlider(
+                    label = "Ceiling",
+                    value = ce, range = 0f..1f,
+                    onChange = { onConfigure(null, null, it.coerceAtLeast(fl)) },
+                )
+            }
+        }
+    )
+}
+
+@Composable
+private fun LabelledSlider(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onChange: (Float) -> Unit,
+) {
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "%.2f".format(value),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        Slider(value = value, onValueChange = onChange, valueRange = range)
     }
 }

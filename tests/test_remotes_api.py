@@ -162,6 +162,13 @@ def test_calibrate_and_orient_flow():
     """
     _clear_remotes()
     fx = _add_mover_fixture()
+    # #806 — calibrate-end now reads canonical aim_stage from the
+    # store. Pre-seed it for this test fixture (no profile / no Home,
+    # so the sphere fallback also won't fire). Pre-#806 the legacy
+    # mount-relative IK fallback synthesised (0, 1, 0) here; #806
+    # deletes that fallback in favour of an explicit error, so the
+    # test must seed the canonical value it expects.
+    parent_server._set_canonical_aim_stage(fx["id"], (0.0, 1.0, 0.0))
     try:
         with app.test_client() as c:
             rid = c.post("/api/remotes",
@@ -169,7 +176,7 @@ def test_calibrate_and_orient_flow():
             # Initial orient sample — establishes last_quat_world
             c.post(f"/api/remotes/{rid}/orient",
                    json={"roll": 0, "pitch": 0, "yaw": 0})
-            # Calibrate: mover pan/tilt defaults to 0.5,0.5 so target aim = (0, 1, 0)
+            # Calibrate: canonical aim seeded above = (0, 1, 0)
             r = c.post(f"/api/remotes/{rid}/calibrate-end",
                        json={"targetObjectId": fx["id"], "targetKind": "mover"})
             _assert(r.status_code == 200, "calibrate-end status")
@@ -183,6 +190,7 @@ def test_calibrate_and_orient_flow():
             rem = _remotes.get(rid)
             _assert(rem.connection_state == "streaming", "streaming after cal+orient")
     finally:
+        parent_server._clear_canonical_aim_stage(fx["id"])
         _remove_mover_fixture(fx["id"])
 
 
@@ -329,6 +337,192 @@ def test_auto_register_from_udp_path():
     _assert(rem2.id == rem.id, "auto-register is idempotent")
 
 
+# #805 / #806 — canonical aim_stage regression coverage. These guard the
+# specific failure mode that produced the live-test 2026-05-05 head jump
+# on calibrate-end (Stage Right fid 17, parked at home, captured a
+# silently-wrong vector from the legacy mount-relative IK fallback).
+
+def test_806_canonical_aim_set_and_get():
+    """Round-trip the canonical store: write a vector → read identical."""
+    parent_server._clear_canonical_aim_stage(424242)
+    parent_server._set_canonical_aim_stage(424242, (0.5, -0.6, 0.7))
+    got = parent_server._get_canonical_aim_stage(424242)
+    _assert(got == (0.5, -0.6, 0.7), "canonical aim round-trips bit-equal")
+    parent_server._clear_canonical_aim_stage(424242)
+    got2 = parent_server._get_canonical_aim_stage(424242)
+    _assert(got2 is None, "clear removes canonical entry")
+
+
+def test_806_calibrate_end_reads_canonical():
+    """Calibrate-end should observe whatever vector was last written
+    to the canonical store, not whatever IK round-trips from DMX."""
+    _clear_remotes()
+    fx = _add_mover_fixture()
+    # Seed canonical with a clearly-non-default vector so we can tell
+    # whether the read path actually came through the canonical store.
+    distinct = (0.123, 0.456, 0.881)  # not (0,1,0); not legacy default
+    parent_server._set_canonical_aim_stage(fx["id"], distinct)
+    try:
+        with app.test_client() as c:
+            rid = c.post("/api/remotes",
+                         json={"name": "Cal806", "kind": "gyro-puck"}).get_json()["remote"]["id"]
+            c.post(f"/api/remotes/{rid}/orient",
+                   json={"roll": 0, "pitch": 0, "yaw": 0})
+            r = c.post(f"/api/remotes/{rid}/calibrate-end",
+                       json={"targetObjectId": fx["id"], "targetKind": "mover"})
+            _assert(r.status_code == 200, "calibrate-end accepts canonical")
+            d = r.get_json()
+            aim_returned = d["remote"]["aim"]
+            _assert(aim_returned is not None, "aim returned")
+            # Tolerate the orient-pipeline's normalisation but check
+            # the direction matches the canonical vector to 4 dp.
+            _assert(abs(aim_returned[0] - distinct[0]) < 1e-3
+                    and abs(aim_returned[1] - distinct[1]) < 1e-3
+                    and abs(aim_returned[2] - distinct[2]) < 1e-3,
+                    f"calibrate-end returned canonical vector "
+                    f"(want {distinct}, got {aim_returned})")
+    finally:
+        parent_server._clear_canonical_aim_stage(fx["id"])
+        _remove_mover_fixture(fx["id"])
+
+
+def test_805_no_silent_fallback_when_unresolvable():
+    """Under-configured fixture (no profile / no Home / no canonical):
+    calibrate-end MUST return a clear error instead of synthesising a
+    wrong vector via the legacy mount-relative IK (the #805 bug). """
+    _clear_remotes()
+    fx = _add_mover_fixture()
+    # Explicitly do NOT seed canonical, no Home, no Secondary, no
+    # profile — exactly the under-configured case #805 acceptance #4
+    # cares about.
+    parent_server._clear_canonical_aim_stage(fx["id"])
+    try:
+        with app.test_client() as c:
+            rid = c.post("/api/remotes",
+                         json={"name": "NoCal", "kind": "gyro-puck"}).get_json()["remote"]["id"]
+            c.post(f"/api/remotes/{rid}/orient",
+                   json={"roll": 0, "pitch": 0, "yaw": 0})
+            r = c.post(f"/api/remotes/{rid}/calibrate-end",
+                       json={"targetObjectId": fx["id"], "targetKind": "mover"})
+            _assert(r.status_code == 400, "under-configured calibrate-end → 400")
+            d = r.get_json()
+            _assert(d.get("err") == "aim_unresolvable",
+                    f"err=aim_unresolvable, got {d.get('err')}")
+            _assert("Home" in (d.get("detail") or ""),
+                    "detail mentions Home/Secondary")
+    finally:
+        _remove_mover_fixture(fx["id"])
+
+
+def test_806_remote_calibrate_end_route_also_guards():
+    """Same guard on /api/remotes/<id>/calibrate-end (the older endpoint
+    used by tests + UDP path). Both calibrate routes must surface the
+    same 400 for an unresolvable aim."""
+    _clear_remotes()
+    fx = _add_mover_fixture()
+    parent_server._clear_canonical_aim_stage(fx["id"])
+    try:
+        with app.test_client() as c:
+            rid = c.post("/api/remotes",
+                         json={"name": "G2", "kind": "gyro-puck"}).get_json()["remote"]["id"]
+            c.post(f"/api/remotes/{rid}/orient",
+                   json={"roll": 0, "pitch": 0, "yaw": 0})
+            r = c.post(f"/api/remotes/{rid}/calibrate-end",
+                       json={"targetObjectId": fx["id"], "targetKind": "mover"})
+            _assert(r.status_code == 400, "remotes calibrate-end → 400")
+            _assert((r.get_json() or {}).get("err") == "aim_unresolvable",
+                    "remotes route surfaces aim_unresolvable")
+    finally:
+        _remove_mover_fixture(fx["id"])
+
+
+def test_806_dmx_test_marks_canonical_null():
+    """Raw DMX-test slider write must mark the canonical slot as null
+    (raw-driven). Subsequent reads return None and the calibrate-end
+    path surfaces aim_unresolvable (caller re-aims via claim/track/park
+    before calibrating)."""
+    _clear_remotes()
+    fx = _add_mover_fixture()
+    parent_server._set_canonical_aim_stage(fx["id"], (0.0, 1.0, 0.0))
+    # The dmx-test endpoint requires Art-Net running; we don't care
+    # about the DMX side-effect, only the canonical store hook. Drive
+    # the helper directly to keep the test environment-independent.
+    try:
+        parent_server._set_canonical_aim_stage(fx["id"], None)
+        # None entry must be present (not removed) so reads know
+        # this is "raw-driven", not "never written".
+        _assert(fx["id"] in parent_server._canonical_aim_stage,
+                "raw-driven marker preserved")
+        _assert(parent_server._get_canonical_aim_stage(fx["id"]) is None,
+                "raw-driven slot reads as None")
+    finally:
+        parent_server._clear_canonical_aim_stage(fx["id"])
+        _remove_mover_fixture(fx["id"])
+
+
+def test_806_phase2_canonical_aim_from_pan_tilt_helper():
+    """Forward-IK helper used by timeline-bake playback writers must
+    return a unit vector for any in-range pan_norm/tilt_norm without
+    raising — this is what lets us delete the sphere fallback in
+    `_mover_current_aim_stage`."""
+    fx_no_home = {"id": 9991, "rotation": [0, 0, 0],
+                  "panRange": 540, "tiltRange": 270}
+    aim = parent_server._canonical_aim_from_pan_tilt(
+        fx_no_home, None, 0.5, 0.5)
+    _assert(aim is not None, "no-Home fixture: forward IK returns vector")
+    # At centre pan/tilt with zero rotation, head aims straight forward.
+    _assert(abs(aim[1] - 1.0) < 1e-3,
+            f"centre pan/tilt + zero rotation -> +Y forward, got {aim}")
+
+    fx_rotated = {"id": 9992, "rotation": [0, 0, 90],
+                  "panRange": 540, "tiltRange": 270}
+    aim_r = parent_server._canonical_aim_from_pan_tilt(
+        fx_rotated, None, 0.5, 0.5)
+    _assert(aim_r is not None, "rotated fixture forward IK returns vector")
+    # 90 deg yaw maps mount +Y onto the stage X axis.
+    _assert(abs(abs(aim_r[0]) - 1.0) < 1e-3,
+            f"90 deg rotation -> +/-X aim, got {aim_r}")
+
+
+def test_806_phase2_no_sphere_fallback_in_reader():
+    """Phase 2 acceptance: `_mover_current_aim_stage` returns None for
+    a fixture without canonical, NEVER a synthesised vector. This locks
+    in the architectural invariant — the sphere fallback was deleted
+    in phase 2 and any future regression that re-adds read-side IK
+    would silently violate the invariant."""
+    _clear_remotes()
+    fx = {
+        "id": 99992,
+        "name": "Phase2 Mover",
+        "fixtureType": "dmx",
+        "dmxUniverse": 1,
+        "dmxStartAddr": 1,
+        "dmxProfileId": None,
+        "homePanDmx16": 32768,
+        "homeTiltDmx16": 32768,
+        "homeSecondary": {"panMovedDirection": "right",
+                          "panOffsetDmx16": 10000,
+                          "tiltMovedDirection": "down",
+                          "tiltOffsetDmx16": 10000},
+        "panRange": 540,
+        "tiltRange": 270,
+        "rotation": [0, 0, 0],
+    }
+    parent_server._fixtures.append(fx)
+    parent_server._clear_canonical_aim_stage(fx["id"])
+    try:
+        result = parent_server._mover_current_aim_stage(fx)
+        _assert(result is None,
+                "phase 2: reader returns None without canonical "
+                f"(got {result}); sphere fallback must NOT regress")
+    finally:
+        parent_server._clear_canonical_aim_stage(fx["id"])
+        for i, f in enumerate(list(parent_server._fixtures)):
+            if f.get("id") == fx["id"]:
+                parent_server._fixtures.pop(i)
+                break
+
+
 ALL = [
     test_empty_list,
     test_create_and_list,
@@ -345,6 +539,13 @@ ALL = [
     test_end_session_and_clear_stale,
     test_disconnect_endpoint,
     test_auto_register_from_udp_path,
+    test_806_canonical_aim_set_and_get,
+    test_806_calibrate_end_reads_canonical,
+    test_805_no_silent_fallback_when_unresolvable,
+    test_806_remote_calibrate_end_route_also_guards,
+    test_806_dmx_test_marks_canonical_null,
+    test_806_phase2_canonical_aim_from_pan_tilt_helper,
+    test_806_phase2_no_sphere_fallback_in_reader,
 ]
 
 

@@ -297,6 +297,192 @@ def test_fresh_calibration_clears_stale():
     _eq(r.stale_reason, None, msg="re-cal clears stale")
 
 
+def test_812_connection_lost_auto_clears_on_fresh_orient():
+    """#812 — when a hard `connection-lost` latch is in place because the
+    puck's WiFi dropped for >60s, the next orient packet that arrives must
+    auto-clear the latch and resume streaming. Pre-#812 the operator had
+    to POST /api/remotes/<id>/clear-stale manually before the press-Start
+    flow on the puck firmware would unjam."""
+    r = Remote(id=812)
+    r.update_from_euler_deg(0, 0, 0)
+    r.calibrate(target_aim_stage=(0, 1, 0))
+    # Force the comms-lost latch as if the watchdog had just fired.
+    r.last_data = time.time() - (STALE_HARD_SECS + 1)
+    r.check_staleness()
+    _eq(r.stale_reason, "connection-lost", msg="latch fired after 60s silence")
+    _eq(r.connection_state, "stale", msg="state stuck stale before recovery")
+
+    # Puck reconnects + sends one orient packet.
+    r.update_from_euler_deg(1.0, 2.0, 3.0)
+    _eq(r.stale_reason, None,
+        msg="connection-lost latch auto-cleared by fresh orient")
+    _eq(r.connection_state, "streaming",
+        msg="streaming resumed without manual clear_stale")
+
+
+def test_805_steady_quat_calibrate_then_orient_invariant():
+    """#805 — steady-phone calibrate-end → next orient must produce
+    aim_stage == target_aim_stage.
+
+    Pre-#805 the Android client sent `getOrientation` Euler at
+    calibrate-end and a `getQuaternionFromVector` quat in /orient.
+    Those are different conventions (Android: −Z·X·Y composition;
+    server's `quat_from_euler_zyx_deg`: aerospace ZYX intrinsic). The
+    same physical pose produced different `f_remote` at calibrate vs
+    the next orient, breaking the steady-phone cancellation.
+
+    Post-fix the calibrate route accepts a native quat. With the same
+    quat at both calibrate and the next orient, `aim_stage` must
+    bit-equal the captured `target_aim_stage` (within float rounding).
+    """
+    # Pick a quat that is decidedly NOT identity, so the test would
+    # fail with any axis-convention regression (identity would mask
+    # most mismatches because both conventions agree at the origin).
+    # Quat: 47° rotation around (0.4, 0.7, -0.6), normalised.
+    import math as _math
+    angle = _math.radians(47.0)
+    ax, ay, az = 0.4, 0.7, -0.6
+    n = _math.sqrt(ax*ax + ay*ay + az*az)
+    ax, ay, az = ax/n, ay/n, az/n
+    half = angle * 0.5
+    s = _math.sin(half)
+    q = (_math.cos(half), ax*s, ay*s, az*s)
+
+    target = (0.123, 0.456, 0.881)
+    n2 = _math.sqrt(sum(c*c for c in target))
+    target = tuple(c/n2 for c in target)
+
+    r = Remote(id=805)
+    # Calibrate against `target` using the native quat path.
+    r.calibrate(target_aim_stage=target, quat=q)
+    # The very next orient ingests the same physical pose (steady phone).
+    r.update_from_quat(q)
+
+    # aim_stage must equal target — that's the steady-phone invariant.
+    for i in range(3):
+        diff = abs(r.aim_stage[i] - target[i])
+        _eq(True, diff < 1e-6,
+            msg=f"steady-quat invariant axis {i}: aim={r.aim_stage[i]} "
+                f"target={target[i]} diff={diff}")
+
+
+def test_805_calibrate_end_route_accepts_quat():
+    """#805 — POST /api/mover-control/calibrate-end with `quat` in the
+    body must reach `Remote.calibrate(quat=...)` and skip the Euler
+    reinterpretation. We assert this end-to-end through the Flask test
+    client + the same non-trivial quat as the math test above."""
+    # Local imports to avoid pulling parent_server at module import time
+    # (it spawns threads / sockets); keep this lazy.
+    import os as _os
+    import sys as _sys
+    import math as _math
+    _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), "..",
+                                       "desktop", "shared"))
+    import parent_server  # noqa: E402
+    from parent_server import app, _fixtures, _remotes  # noqa: E402
+
+    # Clean slate.
+    for _r in _remotes.list():
+        _remotes.remove(_r.id)
+
+    # Mover fixture with seeded canonical aim so calibrate-end
+    # passes the post-#806 aim_unresolvable guard.
+    fid = 805805
+    fx = {
+        "id": fid,
+        "name": "805 test mover",
+        "fixtureType": "dmx",
+        "dmxUniverse": 1,
+        "dmxStartAddr": 1,
+        "dmxProfileId": None,
+        "panRange": 540, "tiltRange": 270,
+        "rotation": [0, 0, 0],
+    }
+    _fixtures.append(fx)
+    target = (0.123, 0.456, 0.881)
+    n2 = _math.sqrt(sum(c*c for c in target))
+    target = tuple(c/n2 for c in target)
+    parent_server._set_canonical_aim_stage(fid, target)
+
+    # Build the same quat the math test uses.
+    angle = _math.radians(47.0)
+    ax, ay, az = 0.4, 0.7, -0.6
+    n = _math.sqrt(ax*ax + ay*ay + az*az)
+    ax, ay, az = ax/n, ay/n, az/n
+    half = angle * 0.5
+    s = _math.sin(half)
+    q = [_math.cos(half), ax*s, ay*s, az*s]
+
+    try:
+        with app.test_client() as c:
+            # Register a remote first.
+            rid = c.post("/api/remotes", json={"name": "805", "kind": "phone",
+                                                  "deviceId": "test-805"}).get_json()["remote"]["id"]
+            # Send a Euler orient that's INTENTIONALLY different from
+            # the quat — this seeds last_quat_world with a ZYX-quat
+            # which would be wrong if calibrate-end fell back to
+            # Euler. Pre-#805 with quat-less calibrate-end the bug
+            # ate the wrong-axis Euler and produced a mismatched aim.
+            c.post(f"/api/remotes/{rid}/orient",
+                   json={"roll": 0.0, "pitch": 0.0, "yaw": 0.0})
+            # Calibrate WITH quat in body.
+            resp = c.post("/api/mover-control/claim",
+                          json={"moverId": fid, "deviceId": "test-805",
+                                "deviceName": "Test"})
+            _eq(True, resp.status_code == 200,
+                msg=f"claim status {resp.status_code}")
+            resp = c.post("/api/mover-control/calibrate-end",
+                          json={"moverId": fid, "deviceId": "test-805",
+                                "quat": q})
+            _eq(True, resp.status_code == 200,
+                msg=f"calibrate-end with quat status {resp.status_code}: {resp.get_json()}")
+
+            # Same quat in next orient — aim_stage must equal target.
+            c.post("/api/mover-control/orient",
+                   json={"moverId": fid, "deviceId": "test-805", "quat": q})
+            r = _remotes.by_device("test-805")
+            _eq(True, r is not None, msg="remote exists")
+            _eq(True, r.aim_stage is not None, msg="aim_stage set")
+            for i in range(3):
+                diff = abs(r.aim_stage[i] - target[i])
+                _eq(True, diff < 1e-6,
+                    msg=f"end-to-end steady-quat axis {i}: "
+                        f"aim={r.aim_stage[i]} target={target[i]} diff={diff}")
+    finally:
+        for i, f in enumerate(list(_fixtures)):
+            if f.get("id") == fid:
+                _fixtures.pop(i); break
+        parent_server._clear_canonical_aim_stage(fid)
+        for _r in _remotes.list():
+            _remotes.remove(_r.id)
+
+
+def test_812_other_hard_stale_reasons_stay_latched():
+    """#812 — only `connection-lost` auto-clears. `age`, `session-ended`
+    and `never-active` represent operator-deliberate retirement and must
+    stay latched even if a fresh orient packet arrives."""
+    # session-ended
+    rs = Remote(id=8121)
+    rs.update_from_euler_deg(0, 0, 0)
+    rs.calibrate(target_aim_stage=(0, 1, 0))
+    rs.end_session()
+    _eq(rs.stale_reason, "session-ended", msg="session-ended latched")
+    rs.update_from_euler_deg(0, 0, 0)
+    _eq(rs.stale_reason, "session-ended",
+        msg="session-ended NOT cleared by fresh orient")
+
+    # age
+    ra = Remote(id=8122)
+    ra.update_from_euler_deg(0, 0, 0)
+    ra.calibrate(target_aim_stage=(0, 1, 0))
+    ra.calibrated_at = time.time() - STALE_AGE_SECS - 10
+    ra.check_staleness()
+    _eq(ra.stale_reason, "age", msg="age latched")
+    ra.update_from_euler_deg(0, 0, 0)
+    _eq(ra.stale_reason, "age",
+        msg="age NOT cleared by fresh orient")
+
+
 # ── Live dict ─────────────────────────────────────────────────────────────
 
 def test_live_dict_shape():
@@ -573,6 +759,10 @@ ALL = [
     test_staleness_session_ended,
     test_clear_stale_recomputes,
     test_fresh_calibration_clears_stale,
+    test_812_connection_lost_auto_clears_on_fresh_orient,
+    test_805_steady_quat_calibrate_then_orient_invariant,
+    test_805_calibrate_end_route_accepts_quat,
+    test_812_other_hard_stale_reasons_stay_latched,
     test_live_dict_shape,
     test_remote_persist_roundtrip,
     test_registry_add_get_list_remove,

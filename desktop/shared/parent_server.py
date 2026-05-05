@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.44"
+VERSION = "1.7.52"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -515,24 +515,27 @@ def _gyro_device_name(ip: str, gf=None):
     return ip
 
 
-# ── #801 — gyro Active/Inactive lifecycle ────────────────────────────────
+# ── #813 — gyro Active/Inactive lifecycle (operator-driven claim) ─────────
 #
-# Active state owns the auto-lock-every-5s loop. While Active +
-# disconnected, the loop sends `CMD_GYRO_CTRL(enabled=1)` to the gyro's
-# IP every 5 seconds; the gyro firmware receives the lock, registers a
-# claim against its `assignedMoverId`, and resumes orient streaming.
-# Disconnected = no orient packet received in the last 7 seconds (matches
-# the puck's hard-stale threshold from `remote_orientation.STALE_HARD_SECS`).
+# Press-Start on the puck firmware sends `CMD_GYRO_START` (#772). The
+# orchestrator looks up the matching gyro fixture, validates Active
+# (`gyroEnabled`), and runs `MoverControlEngine.claim` + `start_stream`.
+# On refusal the orchestrator answers `CMD_GYRO_CLAIM_DENIED` so the
+# puck can revert its UI to IDLE.
 #
-# Inactive state means: zero outgoing lock packets, refuse incoming
-# GYRO_START / orient-driven auto-claim, release any live claim and
-# send `CMD_GYRO_CTRL(enabled=0)` on the transition.
+# Inactive state (#801): refuse incoming `CMD_GYRO_START`, release any
+# live claim, and send `CMD_GYRO_CTRL(enabled=0)` on the Active→Inactive
+# transition so the puck firmware reverts its UI immediately.
 #
 # Operator-facing terminology is "Active" / "Inactive"; the on-disk
 # field name remains `gyroEnabled` (bool) for backward compat.
-
-_GYRO_AUTO_LOCK_PERIOD_S  = 5.0   # cadence between lock packets
-_GYRO_DISCONNECTED_AFTER_S = 7.0  # no orient → "disconnected" — re-lock
+#
+# Pre-#813 the orchestrator also ran a 5 s auto-lock loop that fired
+# `CMD_GYRO_CTRL(enabled=1)` to every Active+disconnected gyro. That
+# loop has been removed entirely: it raced with the press-Start flow,
+# caused stale-state cascades (#812), and produced constant idle UDP
+# traffic with no real benefit now that the puck self-initiates via
+# `CMD_GYRO_START`.
 
 
 def _gyro_child_ip_for_fixture(gf):
@@ -543,27 +546,6 @@ def _gyro_child_ip_for_fixture(gf):
         return None
     c = next((ch for ch in _children if ch["id"] == cid), None)
     return c.get("ip") if c else None
-
-
-def _gyro_is_connected(ip):
-    """True when the orchestrator has received a GYRO_ORIENT packet from
-    `ip` within the last `_GYRO_DISCONNECTED_AFTER_S` seconds."""
-    if not ip:
-        return False
-    with _gyro_lock:
-        st = _gyro_state.get(ip)
-    if not st:
-        return False
-    return (time.time() - st.get("ts", 0)) < _GYRO_DISCONNECTED_AFTER_S
-
-
-def _gyro_send_lock_packet(ip, fps=20):
-    """Send `CMD_GYRO_CTRL(enabled=1, fps)` — the orchestrator → gyro
-    handshake the firmware uses to (re-)bind its claim. No protocol
-    change from the legacy "Send Lock" button — just automation."""
-    fps = max(1, min(50, int(fps)))
-    pkt = _hdr(CMD_GYRO_CTRL) + struct.pack("<BB", 1, fps)
-    _send(ip, pkt)
 
 
 def _gyro_send_release_packet(ip):
@@ -594,46 +576,10 @@ def _gyro_inactive_transition(gf):
              gf.get("id"))
 
 
-def _gyro_active_lock_loop_tick():
-    """One pass of the 5 s auto-lock cadence. Walks every Active gyro
-    fixture; for any disconnected one, sends a fresh lock packet."""
-    if not _mover_engine:
-        return
-    for f in list(_fixtures):
-        if f.get("fixtureType") != "gyro":
-            continue
-        if not f.get("gyroEnabled"):
-            continue
-        ip = _gyro_child_ip_for_fixture(f)
-        if not ip:
-            # Gyro hasn't PONG'd in yet — no IP to send a lock to.
-            # When it pings the discover socket, the next tick after
-            # the IP populates will fire a lock.
-            continue
-        if _gyro_is_connected(ip):
-            continue
-        try:
-            _gyro_send_lock_packet(ip)
-            log.debug("Gyro auto-lock: sent CTRL(1) to %s (fid=%s)",
-                      ip, f.get("id"))
-        except Exception:
-            log.debug("Gyro auto-lock: send to %s failed", ip,
-                      exc_info=True)
+# #813 — `_gyro_active_lock_loop` / `_tick` deleted. Press-Start on
+# the puck (`CMD_GYRO_START`) is the sole claim trigger; orchestrator
+# never spontaneously reaches out to a puck during idle.
 
-
-def _gyro_active_lock_loop():
-    """Daemon thread — fires `_gyro_active_lock_loop_tick` every
-    `_GYRO_AUTO_LOCK_PERIOD_S` seconds for the lifetime of the
-    orchestrator. Cheap: skips Inactive gyros and connected ones, so
-    the worst-case work is one UDP send per Active+disconnected gyro
-    every 5 s. Started by the deferred init block (after
-    `_mover_engine` + `_send` are defined)."""
-    while True:
-        try:
-            _gyro_active_lock_loop_tick()
-        except Exception:
-            log.debug("gyro auto-lock tick crashed", exc_info=True)
-        time.sleep(_GYRO_AUTO_LOCK_PERIOD_S)
 
 def _apply_gyro_color(gyro_ip: str, r: int, g: int, b: int, flash: bool):
     """Route gyro colour through unified MoverControlEngine. Legacy direct-write removed."""
@@ -1401,21 +1347,13 @@ def _udp_listener():
                 remote.update_from_euler_deg(
                     roll100/100.0, pitch100/100.0, yaw100/100.0,
                 )
-                # #772 — explicit START packet now drives the claim. The
-                # auto-claim-on-first-orient path stays as a back-compat
-                # safety net (older firmware that doesn't send CMD_GYRO_START
-                # still works), but new firmware sends CMD_GYRO_START first
-                # and the orient handler is a no-op for the claim side.
-                if _mover_engine and not _mover_engine.get_claim(
-                        _gyro_assigned_mover_id(ip) or -1):
-                    gf = _gyro_fixture_for_ip(ip)
-                    if gf and gf.get("gyroEnabled") and gf.get("assignedMoverId") is not None:
-                        dname = _gyro_device_name(ip, gf)
-                        ok, _reason = _mover_engine.claim(gf["assignedMoverId"], device_id,
-                                              dname, "gyro",
-                                              smoothing=gf.get("smoothing", 0.15))
-                        if ok:
-                            _mover_engine.start_stream(gf["assignedMoverId"], device_id)
+                # #813 — orient handler is no longer a claim source.
+                # Press-Start (`CMD_GYRO_START`) is the only path that
+                # establishes a claim. An orient packet without a prior
+                # claim updates the Remote's last_quat_world (which is
+                # cheap + stale-clearing per #812) but never spontaneously
+                # claims. The back-compat auto-claim-on-first-orient path
+                # (#772 era) was deleted — green-field reflash assumed.
         elif cmd == CMD_GYRO_START:
             # #772 — explicit press-START. Resolve fixture + mover, run
             # claim + start_stream synchronously, send CMD_GYRO_CLAIM_DENIED
@@ -1480,17 +1418,28 @@ def _udp_listener():
                     remote = _remotes.by_device(did) or _auto_register_remote(did, kind=KIND_PUCK)
                     if mover is not None:
                         aim_stage = _mover_current_aim_stage(mover)
-                        try:
-                            remote.calibrate(
-                                target_aim_stage=aim_stage,
-                                target_info={"objectId": mover["id"], "kind": "mover"},
-                                roll=roll, pitch=pitch, yaw=yaw,
-                            )
-                            _remotes.save()
-                            log.info("Remote %d calibrated via UDP against mover %d aim=%s",
-                                     remote.id, mover["id"], aim_stage)
-                        except Exception as e:
-                            log.error("Remote %d calibrate failed: %s", remote.id, e)
+                        if aim_stage is None:
+                            # #806 — UDP calibrate-end with no canonical aim;
+                            # surface in the log so live-test can spot it. Skip
+                            # the calibrate call instead of locking against a
+                            # wrong vector (the #805 silent-fallback bug).
+                            log.warning(
+                                "Remote %d UDP calibrate skipped for mover %d: "
+                                "aim_unresolvable (no canonical aim, sphere "
+                                "read failed). Confirm Home/Secondary saved.",
+                                remote.id, mover["id"])
+                        else:
+                            try:
+                                remote.calibrate(
+                                    target_aim_stage=aim_stage,
+                                    target_info={"objectId": mover["id"], "kind": "mover"},
+                                    roll=roll, pitch=pitch, yaw=yaw,
+                                )
+                                _remotes.save()
+                                log.info("Remote %d calibrated via UDP against mover %d aim=%s",
+                                         remote.id, mover["id"], aim_stage)
+                            except Exception as e:
+                                log.error("Remote %d calibrate failed: %s", remote.id, e)
                     _mover_engine.calibrate_end(target_mover_id, did)
         elif cmd == CMD_PONG:
             # Handle PONGs from broadcast/direct pings
@@ -4608,6 +4557,15 @@ def api_fixture_dmx_test(fid):
     if pan is not None and pan >= 0 and tilt is not None and tilt >= 0:
         uni_buf.set_fixture_pan_tilt(addr, pan, tilt, profile)
         pan_tilt_written = True
+        # #806 — raw-DMX override: we don't have a clean stage-frame
+        # aim vector for this slider write. Mark the canonical slot
+        # null so the next read goes back through the sphere once and
+        # caches a fresh result. Calibrate-end on a fixture that just
+        # got DMX-test'd will surface "aim_unresolvable" if the sphere
+        # also can't resolve, which is the correct behaviour (the
+        # operator overrode the head with raw DMX; canonical aim is
+        # legitimately unknown).
+        _set_canonical_aim_stage(fid, None)
     ch_map = prof_info.get("channel_map", {})
     # Set dimmer if provided
     if dimmer is not None and "dimmer" in ch_map:
@@ -5801,6 +5759,15 @@ def _park_fixture_pan_tilt_only(fid):
                       profile_lib=_profile_lib,
                       write_pose=_aim_write_pose,
                       get_engine=_aim_get_engine)
+        # #806 — seed the canonical aim store with the home aim direction
+        # in stage frame (R · (0, 1, 0)). Without this, the next
+        # calibrate-end on a parked head would fall through to the
+        # sphere `dmx_to_aim` path and any glitch there reproduces #805.
+        pid = fx.get("dmxProfileId")
+        prof = _profile_lib.channel_info(pid) if pid else None
+        home_aim = _home_aim_stage_vector(fx, prof)
+        if home_aim is not None:
+            _set_canonical_aim_stage(fid, home_aim)
     except Exception:
         log.debug("park (pan/tilt only) %s failed", fid, exc_info=True)
 
@@ -5841,6 +5808,14 @@ def _park_fixture_at_home(fid):
                       profile_lib=_profile_lib,
                       write_pose=_aim_write_pose,
                       get_engine=_aim_get_engine)
+        # #806 — seed the canonical aim store. See note in
+        # `_park_fixture_pan_tilt_only`. Without this, calibrate-end
+        # post-park reads through the sphere fallback and #805 reopens.
+        pid_full = fx.get("dmxProfileId")
+        prof_full = _profile_lib.channel_info(pid_full) if pid_full else None
+        home_aim = _home_aim_stage_vector(fx, prof_full)
+        if home_aim is not None:
+            _set_canonical_aim_stage(fid, home_aim)
         # Lamp off via the profile-aware helper (per #780 P3 + #782
         # blackout decision). Reads the same universe buffer the
         # angular path just wrote into.
@@ -5895,6 +5870,139 @@ def _park_fixture_at_home(fid):
 # `dmxToMechanical` block. No legacy IK fallbacks.
 
 
+# #806 — Canonical aim_stage store. Populated by every writer that has a
+# stage-frame aim vector in hand (claim/orient, /api/mover/<fid>/aim,
+# park-at-home). Read by calibrate-end / /api/fixtures/live / 3D viz via
+# `_mover_current_aim_stage` (defined further down). Eliminates the
+# round-trip risk of `dmx_to_aim` / `aim_direction` disagreement that
+# surfaced as #805 / #757-B / #748 — when the canonical vector exists
+# the read path is a direct dictionary lookup instead of an IK inversion
+# that may silently fall through a fallback ladder.
+#
+# In-memory only; not persisted. On process restart, the engine pump's
+# park-at-home (or the first claim/aim/track write) repopulates it before
+# calibrate-end can be called. Callers that find a None entry get the
+# legacy sphere read path as a migration safety net (track / bake writers
+# don't update the canonical store yet — phase 2 of #806).
+#
+# Defined here (instead of next to `_mover_current_aim_stage`) so the
+# `_register_aim_routes(...)` call below can pass `_set_canonical_aim_stage`
+# as the route's writer hook.
+_canonical_aim_stage = {}   # int(fid) → (vx, vy, vz) | None ("raw-driven")
+
+
+def _set_canonical_aim_stage(fid, aim_stage):
+    """Record the canonical aim direction for moving-head <fid>.
+
+    Pass `None` to mark the slot as 'raw-DMX-driven' (operator overrode
+    the head from the DMX-test page; we don't have a clean vector to
+    cache and the read path falls back to the sphere). Pass a 3-tuple
+    for normal aim writes."""
+    if fid is None:
+        return
+    if aim_stage is None:
+        _canonical_aim_stage[int(fid)] = None
+        return
+    try:
+        _canonical_aim_stage[int(fid)] = (
+            float(aim_stage[0]), float(aim_stage[1]), float(aim_stage[2]))
+    except (TypeError, ValueError, IndexError):
+        return
+
+
+def _get_canonical_aim_stage(fid):
+    """Return the canonical aim vector for <fid>, or `None` when no
+    canonical write has happened yet (caller falls back to sphere)."""
+    return _canonical_aim_stage.get(int(fid))
+
+
+def _clear_canonical_aim_stage(fid):
+    """Drop the canonical aim entry — used on fixture delete / factory
+    reset / project import."""
+    _canonical_aim_stage.pop(int(fid), None)
+
+
+def _canonical_aim_from_pan_tilt(fixture, prof_info, pan_norm, tilt_norm):
+    """#806 phase 2 — forward IK from a JUST-WRITTEN normalized pan/tilt to
+    a stage-frame unit aim vector, used by timeline-bake playback writers
+    to populate the canonical store.
+
+    Forward computation (no fallback ladder, no silent swallow). Prefers
+    the AimSphere `dmx_to_aim` path when the fixture has Home + Secondary,
+    else mount-relative spherical math via the fixture's rotation. Either
+    way the result is the direction the head physically points after the
+    given (pan_norm, tilt_norm) DMX write — no inverse-IK round-trip.
+
+    Returns `None` only on explicit math failure (caller skips canonical
+    update; existing canonical stays in place).
+    """
+    try:
+        if (prof_info
+                and fixture.get("homePanDmx16") is not None
+                and fixture.get("homeTiltDmx16") is not None
+                and fixture.get("homeSecondary")):
+            mover_xyz = dict(fixture)
+            for c in (_layout.get("children") or []):
+                if c.get("id") == fixture.get("id"):
+                    mover_xyz["x"] = c.get("x", 0) or 0
+                    mover_xyz["y"] = c.get("y", 0) or 0
+                    mover_xyz["z"] = c.get("z", 0) or 0
+                    break
+            from aim.routes import _get_or_build_sphere
+            sphere = _get_or_build_sphere(mover_xyz, prof_info)
+            pan_dmx16 = int(round(pan_norm * 65535))
+            tilt_dmx16 = int(round(tilt_norm * 65535))
+            az_deg, el_deg = sphere.dmx_to_aim(pan_dmx16, tilt_dmx16)
+            ar = math.radians(az_deg)
+            er = math.radians(el_deg)
+            cer = math.cos(er)
+            return (math.sin(ar) * cer,
+                    math.cos(ar) * cer,
+                    math.sin(er))
+        # Mount-relative forward calc — same math /api/fixtures/live uses
+        # for un-canonicalised heads. Forward only; not a fallback for an
+        # inverse-IK call that just failed.
+        pr_deg = (pan_norm - 0.5) * (fixture.get("panRange") or 540)
+        tr_deg = (tilt_norm - 0.5) * (fixture.get("tiltRange") or 270)
+        pr = math.radians(pr_deg)
+        tr = math.radians(tr_deg)
+        cos_t = math.cos(tr)
+        dx = math.sin(pr) * cos_t
+        dy = math.cos(pr) * cos_t
+        dz = -math.sin(tr)
+        rot = fixture.get("rotation") or [0, 0, 0]
+        if rot[0] == 0 and rot[1] == 0 and rot[2] == 0:
+            return (dx, dy, dz)
+        from remote_math import euler_xyz_deg_to_matrix, matrix_vec_mul
+        R = euler_xyz_deg_to_matrix(rot)
+        return matrix_vec_mul(R, (dx, dy, dz))
+    except Exception:
+        return None
+
+
+def _home_aim_stage_vector(mover, prof_info):
+    """Compute the stage-frame aim direction the head points in when its
+    DMX equals (homePanDmx16, homeTiltDmx16). #806 — used by park-at-home
+    paths to seed the canonical store *without* going through
+    `sphere.dmx_to_aim` (the IK we're eliminating from the read path).
+
+    The math is just the rotated mount-forward direction: home aim in
+    stage frame = R_fixture · (0, 1, 0). Mirrors `AimSphere.__init__`.
+    Returns `None` when fixture rotation is missing/invalid; caller then
+    skips the canonical store seed and falls through to the sphere."""
+    try:
+        rot = mover.get("rotation") or [0, 0, 0]
+        if (not isinstance(rot, (list, tuple))) or len(rot) < 3:
+            return None
+        if rot[0] == 0 and rot[1] == 0 and rot[2] == 0:
+            return (0.0, 1.0, 0.0)
+        from remote_math import euler_xyz_deg_to_matrix, matrix_vec_mul
+        R = euler_xyz_deg_to_matrix(rot)
+        return matrix_vec_mul(R, (0.0, 1.0, 0.0))
+    except Exception:
+        return None
+
+
 def _aim_write_pose(uni, addr, pan_dmx16, tilt_dmx16, prof_info):
     """Engine-side DMX writer plugged into aim.routes.register. Mirrors
     the body of `/api/mover/<fid>/aim-angles` (uni_buf.set_fixture_pan_tilt
@@ -5934,6 +6042,8 @@ _register_aim_routes(
     # `_fixture_position` are defined later in this module.
     check_calibrating=lambda fid: _fixture_is_calibrating(fid),
     get_fixture_xyz=lambda fid: _fixture_position(fid),
+    # #806 — canonical-aim store hook for /api/mover/<fid>/aim writes.
+    set_canonical_aim_fn=_set_canonical_aim_stage,
 )
 
 
@@ -10754,6 +10864,11 @@ _mover_engine = MoverControlEngine(
     # `release` where idle = home + dark.
     park_pan_tilt_fn=lambda mid: _park_fixture_pan_tilt_only(mid),
     park_fn=lambda mid: _park_fixture_at_home(mid),
+    # #806 — every claim/orient tick that produces a stage-frame aim
+    # vector pushes it through here, so calibrate-end / live-render
+    # observe the same vector the engine pump used (root-cause fix
+    # for the #805 head-jump on calibrate-end).
+    set_canonical_aim_fn=_set_canonical_aim_stage,
 )
 _mover_engine.start()
 
@@ -10811,12 +10926,12 @@ def _cold_start_park_when_engine_ready():
 threading.Thread(target=_cold_start_park_when_engine_ready,
                  daemon=True, name="cold-start-park").start()
 
-# #801 — gyro auto-lock loop started after `_mover_engine` is up so
-# `_gyro_inactive_transition` (used by both the loop's release path
-# and the PUT /api/fixtures gyroEnabled=False handler) can call
-# `_mover_engine.release` safely.
-threading.Thread(target=_gyro_active_lock_loop,
-                 daemon=True, name="gyro-auto-lock").start()
+# #813 — gyro auto-lock loop deleted. Press-Start on the puck firmware
+# (`CMD_GYRO_START`) is the sole claim trigger; the orchestrator never
+# spontaneously reaches out to a puck during idle. `_gyro_inactive_transition`
+# is still wired into the PUT /api/fixtures gyroEnabled=False handler so
+# operator-initiated Active→Inactive transitions still release the claim
+# and notify the puck via `CMD_GYRO_CTRL(0)`.
 
 # #763 — arbiter facade between the show writer and the universe buffer.
 # Reads claim state from the engine, exposes is_muted() so the playback +
@@ -10937,12 +11052,45 @@ def api_mover_cal_end_ctrl():
     if remote is None:
         return jsonify(ok=False, err="no remote for this device"), 404
     aim_stage = _mover_current_aim_stage(mover)
+    if aim_stage is None:
+        # #806 — the canonical store had nothing for this fixture and
+        # the sphere read path also failed. Surface a clear error so
+        # the operator can fix the underlying data (Home/Secondary not
+        # set) instead of locking the remote against a wrong vector
+        # (the #805 silent-fallback bug).
+        return jsonify(
+            ok=False,
+            err="aim_unresolvable",
+            detail=("Could not determine the head's current aim direction. "
+                    "Confirm Home + Secondary are saved and the fixture "
+                    "has been parked or aimed at least once this session."),
+        ), 400
     try:
-        remote.calibrate(
-            target_aim_stage=aim_stage,
-            target_info={"objectId": mover["id"], "kind": "mover"},
-            roll=body.get("roll"), pitch=body.get("pitch"), yaw=body.get("yaw"),
-        )
+        # #805 — prefer the native (w, x, y, z) quaternion when the
+        # client supplies one. Android's roll/pitch/yaw is extracted
+        # via `getOrientation` (Android-specific axis + composition
+        # convention) but its orient stream sends a raw quaternion.
+        # Routing the calibrate snapshot through `quat_from_euler_zyx_deg`
+        # (aerospace ZYX intrinsic) describes a different physical
+        # orientation than the next /orient packet — the phone's
+        # post-calibrate aim flips by ~117° as a result. Quaternions
+        # carry no axis-convention ambiguity. Falls back to roll/pitch
+        # /yaw for the gyro puck (IMU-native ZYX) and older clients.
+        quat = body.get("quat")
+        if isinstance(quat, list) and len(quat) == 4:
+            remote.calibrate(
+                target_aim_stage=aim_stage,
+                target_info={"objectId": mover["id"], "kind": "mover"},
+                quat=quat,
+            )
+        else:
+            remote.calibrate(
+                target_aim_stage=aim_stage,
+                target_info={"objectId": mover["id"], "kind": "mover"},
+                roll=body.get("roll"),
+                pitch=body.get("pitch"),
+                yaw=body.get("yaw"),
+            )
         _remotes.save()
     except ValueError as e:
         return jsonify(ok=False, err=str(e)), 400
@@ -11073,103 +11221,49 @@ def _mover_fixture(object_id):
 
 
 def _mover_current_aim_stage(mover):
-    """Read the mover's current pan/tilt from the universe buffer and
-    convert it to a unit aim vector in stage coordinates.
+    """Read the mover's current aim direction in stage coordinates.
 
-    #757 Issue B / #800 (2026-05-03): rewritten to route through the
-    new `aim.sphere.AimSphere`. Calibrate-end locks the phone's pose
-    against this stage direction; if `_mover_current_aim_stage` and
-    `mover_control._aim_to_pan_tilt` produce different stage frames
-    for the same DMX, the lock anchors against one IK and the next
-    orient packet runs against the other — head appears to "jump" on
-    release. Single-source via `AimSphere.dmx_to_aim` closes that gap.
+    #806 phase 2 (final): this is now a pure canonical-store lookup.
+    Every writer that drives a moving head's pan/tilt populates the
+    canonical store as part of the same DMX commit (claim/orient,
+    `/api/mover/<fid>/aim`, park-at-home, Track action, timeline-bake
+    playback). The reader has zero IK responsibility — there's no
+    `dmx_to_aim` round-trip and no mount-relative fallback ladder, so
+    the silent-wrong-vector failure mode behind #805 / #757-B / #748
+    is structurally impossible.
 
-    Falls back to a generic mount-relative ray when the fixture has
-    no Home / Secondary anchor (the sphere can't construct without
-    them) so unconfigured fixtures still produce SOMETHING the
-    calibrate path can lock against.
+    Three return states:
+      - 3-tuple `(vx, vy, vz)`: canonical aim is set; head is
+        committed to this stage-frame direction.
+      - `None` because the slot was explicitly nulled by a raw
+        DMX-test write: the operator overrode the head outside the
+        canonical pipeline; calibrate-end correctly returns
+        `aim_unresolvable` so the operator re-aims first.
+      - `None` because no writer has run yet for this fixture this
+        session (cold-start before park, fresh-imported fixture
+        before its first claim/aim/track tick): same `aim_unresolvable`
+        path. Operator parks-or-aims and retries.
     """
-    pan_norm = 0.5
-    tilt_norm = 0.5
-    pid = mover.get("dmxProfileId")
-    prof = _profile_lib.channel_info(pid) if pid else None
-    engine = _artnet if _artnet.running else (_sacn if _sacn.running else None)
-    pan_range = mover.get("panRange") \
-        or (prof.get("panRange") if prof else None) or 540
-    tilt_range = mover.get("tiltRange") \
-        or (prof.get("tiltRange") if prof else None) or 270
-    if prof and engine:
-        ch_map = prof.get("channel_map", {})
-        channels = prof.get("channels", [])
-        addr = mover.get("dmxStartAddr", 1)
-        uni = mover.get("dmxUniverse", 1)
-        uni_buf = engine.get_universe(uni)
-
-        def _read(axis):
-            offset = ch_map.get(axis)
-            if offset is None:
-                return 0.5
-            ch_def = next((c for c in channels if c.get("type") == axis), None)
-            bits = ch_def.get("bits", 8) if ch_def else 8
-            if bits == 16:
-                hi = uni_buf.get_channel(addr + offset)
-                lo = uni_buf.get_channel(addr + offset + 1)
-                return ((hi << 8) | lo) / 65535.0
-            return uni_buf.get_channel(addr + offset) / 255.0
-
-        pan_norm = _read("pan")
-        tilt_norm = _read("tilt")
-
-    # #757 B / #800 — single-IK path through AimSphere. Patch fixture
-    # xyz from layout (per #785 QA r2) so the sphere builds with the
-    # right position.
-    try:
-        if (prof and mover.get("homePanDmx16") is not None
-                and mover.get("homeTiltDmx16") is not None
-                and mover.get("homeSecondary")):
-            mover_xyz = dict(mover)
-            for c in (_layout.get("children") or []):
-                if c.get("id") == mover.get("id"):
-                    mover_xyz["x"] = c.get("x", 0) or 0
-                    mover_xyz["y"] = c.get("y", 0) or 0
-                    mover_xyz["z"] = c.get("z", 0) or 0
-                    break
-            from aim.routes import _get_or_build_sphere
-            sphere = _get_or_build_sphere(mover_xyz, prof)
-            pan_dmx16 = int(round(pan_norm * 65535))
-            tilt_dmx16 = int(round(tilt_norm * 65535))
-            az_deg, el_deg = sphere.dmx_to_aim(pan_dmx16, tilt_dmx16)
-            ar = math.radians(az_deg)
-            er = math.radians(el_deg)
-            cer = math.cos(er)
-            return (math.sin(ar) * cer,
-                    math.cos(ar) * cer,
-                    math.sin(er))
-    except Exception as e:
-        log.debug("aim_stage sphere path failed for fid %s: %s — "
-                  "falling back to generic ray",
-                  mover.get("id"), e)
-
-    # No Home / no Secondary / no profile → generic mount-relative IK.
-    # Used for unconfigured fixtures so calibrate has SOMETHING to lock
-    # against; behaviour-wise this returns the layout-forward vector
-    # when DMX = home-centre (which is the operator's intent before they
-    # capture a real Home anchor). #784 PR-7: `pan_tilt_to_ray` deleted
-    # along with `mover_calibrator` — inline the equivalent math.
-    pan_deg = (pan_norm - 0.5) * pan_range
-    tilt_deg = (tilt_norm - 0.5) * tilt_range
-    pr = math.radians(pan_deg)
-    tr = math.radians(tilt_deg)
-    cos_t = math.cos(tr)
-    dx = math.sin(pr) * cos_t
-    dy = math.cos(pr) * cos_t
-    dz = -math.sin(tr)
-    rot = mover.get("rotation") or [0, 0, 0]
-    if rot[0] == 0 and rot[1] == 0 and rot[2] == 0:
-        return (dx, dy, dz)
-    from remote_math import euler_xyz_deg_to_matrix, matrix_vec_mul
-    R = euler_xyz_deg_to_matrix(rot)
-    return matrix_vec_mul(R, (dx, dy, dz))
+    fid = mover.get("id")
+    if fid is None:
+        return None
+    cached = _get_canonical_aim_stage(int(fid))
+    if cached is not None:
+        return cached
+    # Slot might be explicitly None (raw-DMX-driven) or absent
+    # entirely (no writer has fired yet). Both surface as None — the
+    # caller's `aim_unresolvable` path handles them identically.
+    if int(fid) not in _canonical_aim_stage:
+        log.warning(
+            "_mover_current_aim_stage(fid=%s): no canonical aim recorded "
+            "for this fixture this session. Park / claim / aim it once "
+            "before calibrate-end.", fid)
+    else:
+        log.warning(
+            "_mover_current_aim_stage(fid=%s): canonical slot is null "
+            "(raw DMX-test override active). Re-aim via claim/track/park "
+            "before calibrate-end.", fid)
+    return None
 
 
 def _auto_register_remote(device_id, kind=KIND_PUCK):
@@ -11385,15 +11479,35 @@ def api_remote_calibrate_end(remote_id):
         return jsonify(ok=False, err="target mover not found"), 404
 
     aim_stage = _mover_current_aim_stage(mover)
+    if aim_stage is None:
+        # #806 — see /api/mover-control/calibrate-end for rationale. We
+        # never lock the remote against a silently-derived wrong vector.
+        return jsonify(
+            ok=False,
+            err="aim_unresolvable",
+            detail=("Could not determine the head's current aim direction. "
+                    "Confirm Home + Secondary are saved and the fixture "
+                    "has been parked or aimed at least once this session."),
+        ), 400
 
     try:
-        r.calibrate(
-            target_aim_stage=aim_stage,
-            target_info={"objectId": mover["id"], "kind": "mover"},
-            roll=body.get("roll"),
-            pitch=body.get("pitch"),
-            yaw=body.get("yaw"),
-        )
+        # #805 — prefer native quaternion when supplied (see the
+        # /api/mover-control/calibrate-end handler for the full rationale).
+        quat = body.get("quat")
+        if isinstance(quat, list) and len(quat) == 4:
+            r.calibrate(
+                target_aim_stage=aim_stage,
+                target_info={"objectId": mover["id"], "kind": "mover"},
+                quat=quat,
+            )
+        else:
+            r.calibrate(
+                target_aim_stage=aim_stage,
+                target_info={"objectId": mover["id"], "kind": "mover"},
+                roll=body.get("roll"),
+                pitch=body.get("pitch"),
+                yaw=body.get("yaw"),
+            )
     except ValueError as e:
         return jsonify(ok=False, err=str(e)), 400
     _remotes.save()
@@ -12493,8 +12607,13 @@ def api_fixtures_live():
             # DMX address info for display
             entry["dmxAddr"] = f"U{uni_num}.{addr}"
             # Live aim vector in stage coords for the 3D viewport cone.
-            # Reads current pan/tilt from the universe buffer (including 16-bit
-            # pairs) and runs pan_tilt_to_ray with the fixture's mount rotation.
+            # #806 — prefer the canonical aim_stage store so the viz
+            # cone matches whatever the engine pump / aim API / park
+            # last committed (and therefore matches calibrate-end's
+            # captured anchor — acceptance #3 of #806). Fall back to
+            # legacy mount-relative math from the live DMX buffer for
+            # fixtures that don't yet have a canonical entry, so the
+            # viz never goes blank on a fresh fixture.
             if ch_map and "pan" in ch_map and "tilt" in ch_map and engine:
                 try:
                     def _read_norm(axis):
@@ -12511,26 +12630,31 @@ def api_fixtures_live():
                         return uni.get_channel(addr + offset) / 255.0
                     pan_norm = _read_norm("pan")
                     tilt_norm = _read_norm("tilt")
-                    # #784 PR-7 — `pan_tilt_to_ray` deleted with
-                    # `mover_calibrator`. Inline the same math (mount-frame
-                    # spherical → stage-frame via euler_xyz rotation).
-                    _pr_deg = (pan_norm - 0.5) * (f.get("panRange") or 540)
-                    _tr_deg = (tilt_norm - 0.5) * (f.get("tiltRange") or 270)
-                    _pr = math.radians(_pr_deg)
-                    _tr = math.radians(_tr_deg)
-                    _cos_t = math.cos(_tr)
-                    _dx = math.sin(_pr) * _cos_t
-                    _dy = math.cos(_pr) * _cos_t
-                    _dz = -math.sin(_tr)
-                    _rot = f.get("rotation") or [0, 0, 0]
-                    if _rot[0] == 0 and _rot[1] == 0 and _rot[2] == 0:
-                        aim = (_dx, _dy, _dz)
+                    canonical = _get_canonical_aim_stage(f.get("id"))
+                    if canonical is not None:
+                        aim = canonical
                     else:
-                        from remote_math import (
-                            euler_xyz_deg_to_matrix, matrix_vec_mul,
-                        )
-                        _R = euler_xyz_deg_to_matrix(_rot)
-                        aim = matrix_vec_mul(_R, (_dx, _dy, _dz))
+                        # Best-guess for un-canonicalised fixtures (no
+                        # park / aim / claim has fired since startup).
+                        # Mount-relative math from raw DMX — same as the
+                        # pre-#806 default.
+                        _pr_deg = (pan_norm - 0.5) * (f.get("panRange") or 540)
+                        _tr_deg = (tilt_norm - 0.5) * (f.get("tiltRange") or 270)
+                        _pr = math.radians(_pr_deg)
+                        _tr = math.radians(_tr_deg)
+                        _cos_t = math.cos(_tr)
+                        _dx = math.sin(_pr) * _cos_t
+                        _dy = math.cos(_pr) * _cos_t
+                        _dz = -math.sin(_tr)
+                        _rot = f.get("rotation") or [0, 0, 0]
+                        if _rot[0] == 0 and _rot[1] == 0 and _rot[2] == 0:
+                            aim = (_dx, _dy, _dz)
+                        else:
+                            from remote_math import (
+                                euler_xyz_deg_to_matrix, matrix_vec_mul,
+                            )
+                            _R = euler_xyz_deg_to_matrix(_rot)
+                            aim = matrix_vec_mul(_R, (_dx, _dy, _dz))
                     entry["aim"] = [round(aim[0], 4),
                                     round(aim[1], 4),
                                     round(aim[2], 4)]
@@ -13402,20 +13526,85 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
             aim[0] = max(0, min(sw, aim[0]))
             aim[1] = max(0, min(sd, aim[1]))
             aim[2] = max(0, min(sh, aim[2]))
-            # Compute pan/tilt. #784 PR-7 — the hybrid affine + geometric
-            # blend was deleted with `mover_calibrator`. Track-action IK
-            # now goes: range cal → geometric. Sphere-based world-XYZ
-            # aim is available via `mover_control` (claim path) and the
-            # `/api/mover/<fid>/aim` endpoint; the bake-side track action
-            # below uses the simpler geometric IK that doesn't require
-            # operator-saved Home anchors.
+            # Compute pan/tilt. #809 fix — for fixtures with the full
+            # canonical data (Home + Secondary + sized profile) we now
+            # route through `AimSphere.aim_xyz`, the same IK used by
+            # the claim writer (`mover_control._aim_to_pan_tilt`) and
+            # `/api/mover/<fid>/aim`. Pre-#809 Track action used legacy
+            # geometric IK only, which produced DMX that disagreed with
+            # the rest of the system for a configured mover — physical
+            # head aimed off-target while 3D viz showed correct aim.
+            #
+            # Order: AimSphere (canonical) → range-calibration override
+            # → geometric fallback. Geometric stays for movers without
+            # Home + Secondary; deleting it would break unconfigured
+            # fixtures that worked before.
             pan = tilt = None
             inverted = head_info.get("mounted_inverted", False)
-            # 1. Range calibration (automated axis mapping)
-            pt_cal = compute_pan_tilt_calibrated(fid, aim)
-            if pt_cal:
-                pan, tilt = pt_cal
-            # 2. Geometric fallback (no calibration data at all)
+            # 1. AimSphere — the same IK every other writer uses.
+            if (f.get("homePanDmx16") is not None
+                    and f.get("homeTiltDmx16") is not None
+                    and f.get("homeSecondary")
+                    and (head_info.get("pan_range") or 0) > 0
+                    and (head_info.get("tilt_range") or 0) > 0
+                    and head_info.get("prof_info")):
+                try:
+                    from aim.routes import _get_or_build_sphere
+                    # Patch xyz from layout (same pattern as
+                    # `_resolve_sphere` in aim/routes.py).
+                    _sf = dict(f)
+                    _sf["x"] = fx_pos[0]
+                    _sf["y"] = fx_pos[1]
+                    _sf["z"] = fx_pos[2]
+                    _sphere = _get_or_build_sphere(
+                        _sf, head_info["prof_info"])
+                    # current_pose for branch picking — read live DMX
+                    # from the engine buffer (matches the claim writer's
+                    # use of claim.pan_smooth/tilt_smooth as anchor).
+                    _cur = None
+                    try:
+                        _cm = head_info["prof_info"].get("channel_map", {})
+                        _channels = head_info["prof_info"].get("channels", [])
+                        _addr = f.get("dmxStartAddr", 1)
+                        _uni_buf = engine.get_universe(
+                            f.get("dmxUniverse", 1))
+
+                        def _read16(axis):
+                            offset = _cm.get(axis)
+                            if offset is None:
+                                return None
+                            ch_def = next(
+                                (c for c in _channels
+                                 if c.get("type") == axis), None)
+                            bits = (ch_def or {}).get("bits", 8)
+                            if bits >= 16:
+                                hi = _uni_buf.get_channel(_addr + offset)
+                                fine_off = _cm.get(f"{axis}-fine",
+                                                   offset + 1)
+                                lo = _uni_buf.get_channel(_addr + fine_off)
+                                return ((hi << 8) | (lo & 0xFF))
+                            return _uni_buf.get_channel(_addr + offset) << 8
+                        _p16 = _read16("pan")
+                        _t16 = _read16("tilt")
+                        if _p16 is not None and _t16 is not None:
+                            _cur = (_p16, _t16)
+                    except Exception:
+                        _cur = None
+                    _pose = _sphere.aim_xyz(
+                        tuple(aim), current_pose=_cur, prefer="closest")
+                    if _pose is not None:
+                        pan = _pose[0] / 65535.0
+                        tilt = _pose[1] / 65535.0
+                except Exception as e:
+                    log.debug("Track AimSphere failed for fid %s: %s — "
+                               "falling back to range-cal / geometric",
+                               fid, e)
+            # 2. Range calibration (automated axis mapping)
+            if pan is None:
+                pt_cal = compute_pan_tilt_calibrated(fid, aim)
+                if pt_cal:
+                    pan, tilt = pt_cal
+            # 3. Geometric fallback (no calibration data at all)
             if pan is None:
                 pt = compute_pan_tilt(fx_pos, aim, head_info["pan_range"],
                                        head_info["tilt_range"],
@@ -13435,6 +13624,21 @@ def _evaluate_track_actions(elapsed, engine, dmx_fixtures):
                 _apply_handover_slew(fid, uni, addr,
                                      prof_info.get("channel_map"), engine)
                 uni_buf.set_fixture_pan_tilt(addr, pan, tilt, profile)
+                # #806 phase 2 — store the canonical aim direction this
+                # Track-action commit is driving toward. Source of truth
+                # is the operator's `aim` (target stage-mm), not the
+                # post-IK pan/tilt — no inverse-IK round-trip risk.
+                try:
+                    fp = head_info["pos"]
+                    _dx = aim[0] - fp[0]
+                    _dy = aim[1] - fp[1]
+                    _dz = aim[2] - fp[2]
+                    _n = math.sqrt(_dx * _dx + _dy * _dy + _dz * _dz)
+                    if _n > 1e-6:
+                        _set_canonical_aim_stage(
+                            fid, (_dx / _n, _dy / _n, _dz / _n))
+                except Exception:
+                    pass
                 # Track action also sets dimmer + color so the beam is visible
                 tr = ta.get("trackDimmer", 255)
                 uni_buf.set_fixture_dimmer(addr, tr, profile)
@@ -13613,6 +13817,22 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
             # Pan/Tilt
             if pan is not None and tilt is not None and profile:
                 uni_buf.set_fixture_pan_tilt(fx["addr"], pan, tilt, profile)
+                # #806 phase 2 — record canonical aim_stage for this
+                # baked-playback write so calibrate-end during a running
+                # show observes the head's true direction without an
+                # inverse-IK round-trip on the read path.
+                try:
+                    _f_full = next((_x for _x in _fixtures
+                                    if _x.get("id") == fx["fid"]), None)
+                    _prof_full = (_profile_lib.channel_info(_f_full.get("dmxProfileId"))
+                                  if _f_full and _f_full.get("dmxProfileId") else None)
+                    if _f_full is not None:
+                        _aim_v = _canonical_aim_from_pan_tilt(
+                            _f_full, _prof_full, pan, tilt)
+                        if _aim_v is not None:
+                            _set_canonical_aim_stage(fx["fid"], _aim_v)
+                except Exception:
+                    pass
             # Extra DMX channels via set_fixture_channels
             # Channel types use hyphenated names (color-wheel, gobo-rotation)
             extra_ch = {}
@@ -13992,6 +14212,20 @@ def _dmx_playback_single(tid, go_epoch, duration):
                 uni_buf.set_fixture_dimmer(fx["addr"], dim, profile)
             if pan is not None and tilt is not None and profile:
                 uni_buf.set_fixture_pan_tilt(fx["addr"], pan, tilt, profile)
+                # #806 phase 2 — segment-mode playback canonical hook
+                # (mirrors the main playback loop above).
+                try:
+                    _f_full = next((_x for _x in _fixtures
+                                    if _x.get("id") == fx["fid"]), None)
+                    _prof_full = (_profile_lib.channel_info(_f_full.get("dmxProfileId"))
+                                  if _f_full and _f_full.get("dmxProfileId") else None)
+                    if _f_full is not None:
+                        _aim_v = _canonical_aim_from_pan_tilt(
+                            _f_full, _prof_full, pan, tilt)
+                        if _aim_v is not None:
+                            _set_canonical_aim_stage(fx["fid"], _aim_v)
+                except Exception:
+                    pass
             extra_ch = {}
             if strobe is not None: extra_ch["strobe"] = strobe
             if gobo is not None: extra_ch["gobo"] = gobo
@@ -14214,6 +14448,20 @@ def api_settings_save():
     if "logging" in body:
         _apply_logging(body["logging"], body.get("logPath"))
     return jsonify(ok=True)
+
+# #804 — fast-path master brightness for Android auto-brightness (mic-driven).
+# Updates the live in-memory value at high cadence (~20 Hz) without rewriting
+# settings.json on every call. Manual slider keeps using POST /api/settings.
+@app.post("/api/brightness")
+def api_brightness_fast():
+    body = request.get_json(silent=True) or {}
+    v = body.get("value")
+    if not isinstance(v, (int, float)):
+        return jsonify(ok=False, err="value must be 0..255"), 400
+    iv = int(max(0, min(255, v)))
+    with _lock:
+        _settings["globalBrightness"] = iv
+    return jsonify(ok=True, value=iv)
 
 @app.post("/api/logging/start")
 def api_logging_start():
@@ -16462,6 +16710,10 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
+
+
 
 
 

@@ -172,7 +172,8 @@ class MoverControlEngine:
                  get_mover_cal=None, get_mover_model=None,
                  is_calibrating=None, get_claim_ttl_s=None,
                  get_default_convention=None,
-                 park_fn=None, park_pan_tilt_fn=None):
+                 park_fn=None, park_pan_tilt_fn=None,
+                 set_canonical_aim_fn=None):
         """
         Args:
             get_fixtures:             list of fixtures
@@ -220,6 +221,12 @@ class MoverControlEngine:
         # blackout (release) or no-op (start_stream).
         self._park_fn = park_fn
         self._park_pan_tilt_fn = park_pan_tilt_fn
+        # #806 — callback to record the canonical aim_stage vector each
+        # time the engine commits a pan/tilt write. Lets calibrate-end
+        # / live-render observe the same vector the engine pump used,
+        # eliminating the dmx_to_aim / aim_direction round-trip risk
+        # that produced #805. Optional; missing fn → no canonical write.
+        self._set_canonical_aim = set_canonical_aim_fn or (lambda _fid, _v: None)
 
         self._claims = {}  # mover_id → MoverClaim
         self._lock = threading.Lock()
@@ -562,6 +569,15 @@ class MoverControlEngine:
                             claim.pan_smooth  += alpha * (pan_norm  - claim.pan_smooth)
                             claim.tilt_smooth += alpha * (tilt_norm - claim.tilt_smooth)
                         have_aim = True
+                        # #806 — this orient tick has a clean stage-frame
+                        # aim vector in hand. Push it to the canonical
+                        # store so calibrate-end / live-render skip the
+                        # sphere round-trip (root cause of #805).
+                        try:
+                            self._set_canonical_aim(
+                                mover_id, tuple(remote.aim_stage))
+                        except Exception:
+                            pass
 
             # Always write the non-pan/tilt claim state (dimmer, colour,
             # strobe, channel defaults) while streaming or calibrating —

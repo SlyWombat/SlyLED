@@ -1,0 +1,24 @@
+fid 17: home=(44364,0) rotation=[0, 0, 0]
+  homeSecondary: pan=right/10922 tilt=down/32768
+profile: panRange=540 tiltRange=180 dmxToMechanical=None
+
+AimSphere built OK. step=128
+
+=== STRUCTURE ===
+  rows: 263169  cells populated: 8280/8100
+  rows/cell min/median/max: 1/30/42
+  az range: [-179.72, +179.93]  expect [-180, +180]
+  el range: [ -90.00,   +0.00]  expect [-90, 0] for fid 17 (tilt='down')
+
+=== SIGN CHECK against operator's secondary calls ===
+  Home DMX (44364,0) -> (az=-0.00, el=+0.00)  expect (0,0)
+  Pan-secondary (55286,0) -> (az=-90.00, el=+0.00)  operator='right'  OK (az<0=stage-right)
+  Tilt-secondary (44364,32768) -> (az=+33.75, el=-90.00)  operator='down'  OK (el<0=below horizon)
+
+=== REVERSE: Pillar Base direction (az=+14.68, el=-39.03) ===
+  cell (7, -20): 25 rows
+    DMX=(20608,51072)  az=+15.75 el=-39.72
+    DMX=(20608,51200)  az=+15.75 el=-39.37
+    DMX=(20608,51328)  az=+15.75 el=-39.02
+
+=== VERDICT: sphere cloud sign CORRECT ===

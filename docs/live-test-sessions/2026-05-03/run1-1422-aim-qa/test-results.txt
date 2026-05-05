@@ -1,0 +1,38 @@
+fid 17: xyz=(600,0,1760) rotation=[0, 0, 0]
+Home anchor: panDmx16=44364 tiltDmx16=0
+Secondary: pan=right (10922 DMX) / tilt=down (32768 DMX)
+Profile: panRange=540 tiltRange=180
+
+Stage convention: +X stage-left, +Y forward, +Z up. tilt+ above horizon.
+Sign expectation from secondary direction calls:
+  pan_dir="right" + dmx-up shifted right => for target with az_stage<0 (toward stage-right per math), need pan_sign such that az_stage<0 => panDmx<home
+  tilt_dir="down" + dmx-up shifted beam down (below horizon) => tilt_sign such that target_el<0 => tiltDmx>home
+
+=== TEST 1: ArUco markers ===
+id label          target xyz             az,el (computed)       DMX response           verdict             
+ 0 Back Right     (500.0,2280.0,  0.0)   -2.51, -37.64  pan16=45871 tilt16=    0  wire-match
+ 1 Furnace Door   (2050.0,3170.0,  0.0)  +24.58, -26.79  pan16=48498 tilt16=    0  wire-match
+ 2 Pillar Base    (1150.0,2100.0,  0.0)  +14.68, -39.03  pan16=47962 tilt16=    0  wire-match
+ 3 Pillar Post    (1150.0,2280.0,1368.0)  +13.56,  -9.49  pan16=47714 tilt16=10309  wire-match
+ 4 Stairs         (500.0,3500.0,  0.0)   -1.64, -26.69  pan16=42737 tilt16=  512  wire-match
+ 5 Patent         (3120.0,3090.0,  0.0)  +39.20, -23.82  pan16=50083 tilt16=  512  wire-match
+
+=== TEST 2: known angular values via azDeg/elDeg ===
+ azDeg  elDeg label                                    DMX response                 wire                  
+    +0     +0 Home (rot forward, level)                pan16=44544 tilt16=  512  wire=(44544,512)
+    +0    -45 forward + 45 below horizon (toward floor) pan16=22528 tilt16=65535  wire=(22528,65535)
+    +0    +45 forward + 45 above horizon (toward ceiling) pan16=22528 tilt16=49024  wire=(22528,49024)
+   -30     +0 pan -30 (stage-RIGHT per CLAUDE +X=stage-left) pan16=18944 tilt16=65024  wire=(18944,65024)
+   +30     +0 pan +30 (stage-LEFT)                     pan16=26368 tilt16=65024  wire=(26368,65024)
+   -30    -30 pan-right + tilt-down                    pan16=40704 tilt16=    0  wire=(40704,0)
+   +30    -30 pan-left + tilt-down                     pan16= 4352 tilt16=    0  wire=(4352,0)
+
+=== TEST 3: edge cases ===
+target == fixture xyz: {'ok': True, 'panDmx16': 11776, 'tiltDmx16': 26051}
+target far above (el~+89): {'ok': True, 'panDmx16': 10565, 'tiltDmx16': 31887}
+target far below (el~-89): {'ok': True, 'panDmx16': 32256, 'tiltDmx16': 65535}
+
+=== TEST 4: round-trip — feed result back and check ===
+XYZ aim Pillar Base ((1150, 2100, 0)) -> {'ok': True, 'panDmx16': 26202, 'tiltDmx16': 65280}
+az/el aim Pillar Base (14.68,-39.03) -> {'ok': True, 'panDmx16': 24320, 'tiltDmx16': 65535}
+  match? False

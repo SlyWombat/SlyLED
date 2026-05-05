@@ -1,0 +1,14 @@
+=== preflight 2026-05-02T16:38:58Z ===
+--- /api/dmx/monitor/1 baseline ---
+{"channels":[173,76,0,0,0,0,0,23,0,0,0,0,127,255,127,255,0,0,0,23,0,0,0,0,0,0,12,0,255,0,0,0,0,0,128,128,0,109,195,0,0,100,202,0,0,0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"universe":1}
+
+--- /api/fixtures/17 ---
+{"aoeRadius":1000,"childId":null,"childIds":[],"dmxChannelCount":12,"dmxProfileId":"movinghead-150w-12ch","dmxStartAddr":1,"dmxUniverse":1,"fixtureType":"dmx","homePanDmx16":44364,"homeSecondary":{"capturedAt":"2026-04-29T16:52:10.124163Z","panMovedDirection":"right","panOffsetDmx16":10922,"tiltMovedDirection":"down","tiltOffsetDmx16":32768},"homeSetAt":"2026-04-29T16:51:56.216218Z","homeTiltDmx16":0,"id":17,"meshFile":null,"mountedInverted":true,"name":"150W MH Stage Right","rotation":[0,0,0],"strings":[],"type":"point"}
+
+--- /api/fixtures/17/home ---
+{"ok":true,"primary":{"panDmx16":44364,"setAt":"2026-04-29T16:51:56.216218Z","tiltDmx16":0},"secondary":{"capturedAt":"2026-04-29T16:52:10.124163Z","panMovedDirection":"right","panOffsetDmx16":10922,"tiltMovedDirection":"down","tiltOffsetDmx16":32768}}
+
+--- /api/dmx-profiles ---
+movinghead-150w-12ch panRange= 540 tiltRange= 180 panSignFromDmx= None tiltSignFromDmx= None tiltUp= None
+beamlight-350w-16ch panRange= 540 tiltRange= 210 panSignFromDmx= None tiltSignFromDmx= None tiltUp= None
+slymovehead panRange= 540 tiltRange= 180 panSignFromDmx= None tiltSignFromDmx= None tiltUp= None

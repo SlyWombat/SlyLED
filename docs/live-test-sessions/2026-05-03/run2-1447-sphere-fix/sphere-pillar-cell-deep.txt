@@ -1,0 +1,30 @@
+=== rows in 4 bracketing cells around (az=14.68, el=-39.03) ===
+
+cell (  7,-20): 25 rows  pan_dmx range [20608, 64384]
+  unique panDmx values in cell: [20608, 20736, 42496, 42624, 64384]
+
+cell (  7,-19): 30 rows  pan_dmx range [20608, 64384]
+  unique panDmx values in cell: [20608, 20736, 42496, 42624, 64384]
+
+cell (  8,-20): 30 rows  pan_dmx range [20352, 64256]
+  unique panDmx values in cell: [20352, 20480, 42240, 42368, 64128, 64256]
+
+cell (  8,-19): 36 rows  pan_dmx range [20352, 64256]
+  unique panDmx values in cell: [20352, 20480, 42240, 42368, 64128, 64256]
+
+=== rows with panDmx in [42400, 42800] (the pan-A branch for az~14.68) ===
+  1539 matches
+    DMX=(42496,32768)  az=-164.61 el= -90.00  cell=(-83, -45)
+    DMX=(42624,32768)  az=-165.66 el= -90.00  cell=(-83, -45)
+    DMX=(42752,32768)  az=-166.72 el= -90.00  cell=(-84, -45)
+    DMX=(42496,32640)  az= +15.39 el= -89.65  cell=(7, -45)
+    DMX=(42624,32640)  az= +14.34 el= -89.65  cell=(7, -45)
+    DMX=(42752,32640)  az= +13.28 el= -89.65  cell=(6, -45)
+    DMX=(42496,32896)  az=-164.61 el= -89.65  cell=(-83, -45)
+    DMX=(42624,32896)  az=-165.66 el= -89.65  cell=(-83, -45)
+    DMX=(42752,32896)  az=-166.72 el= -89.65  cell=(-84, -45)
+    DMX=(42496,32512)  az= +15.39 el= -89.30  cell=(7, -45)
+
+=== aim_xyz from sphere directly ===
+  aim_xyz Pillar Base from home pose: (40870, 0)
+    -> stage (az=+28.79, el=+0.00)

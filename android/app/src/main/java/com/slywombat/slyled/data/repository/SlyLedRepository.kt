@@ -87,6 +87,11 @@ class SlyLedRepository @Inject constructor(
     suspend fun getSettings() = requireApi().getSettings()
     suspend fun saveSettings(settings: Settings) = requireApi().saveSettings(settings)
 
+    // #804 — fast-path master brightness (auto-brightness loop, ~20 Hz).
+    suspend fun setMasterBrightness(value: Int) = requireApi().setMasterBrightness(
+        buildJsonObject { put("value", value.coerceIn(0, 255)) }
+    )
+
     // Actions
     suspend fun getActions() = requireApi().getActions()
     suspend fun createAction(action: Action) = requireApi().createAction(action)
@@ -200,11 +205,27 @@ class SlyLedRepository @Inject constructor(
         return requireApi().moverCalibrateStart(body)
     }
 
-    suspend fun moverCalibrateEnd(moverId: Int, roll: Float, pitch: Float, yaw: Float): OkResponse {
+    suspend fun moverCalibrateEnd(
+        moverId: Int,
+        roll: Float, pitch: Float, yaw: Float,
+        quat: FloatArray? = null,
+    ): OkResponse {
         val id = requireIdentity()
         val body = buildJsonObject {
             put("moverId", moverId)
             put("deviceId", id.deviceId)
+            // #805 — Android roll/pitch/yaw is `getOrientation` output
+            // (Android-specific axis + composition convention); the
+            // server's Euler→quat path is aerospace ZYX intrinsic, so
+            // the two describe different physical orientations of the
+            // same sensor frame. Sending the raw quaternion alongside
+            // lets the server skip Euler entirely and align against
+            // the same pose the orient stream is reporting.
+            if (quat != null && quat.size == 4) {
+                putJsonArray("quat") {
+                    quat.forEach { add(JsonPrimitive(it.toDouble())) }
+                }
+            }
             put("roll", roll.toDouble())
             put("pitch", pitch.toDouble())
             put("yaw", yaw.toDouble())

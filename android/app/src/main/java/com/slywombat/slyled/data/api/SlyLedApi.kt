@@ -48,6 +48,10 @@ interface SlyLedApi {
     @POST("api/settings")
     suspend fun saveSettings(@Body body: Settings): OkResponse
 
+    // #804 — fast-path master brightness for auto-brightness loop (~20 Hz).
+    @POST("api/brightness")
+    suspend fun setMasterBrightness(@Body body: JsonObject): OkResponse
+
     // Actions
     @GET("api/actions")
     suspend fun getActions(): List<Action>

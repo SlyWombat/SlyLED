@@ -426,53 +426,13 @@ function s3dAnimate(){
       if(grp.children[1]&&grp.children[1].isMesh)grp.children[1].scale.setScalar(scaleFactor);
     });
   }
-  // Live beam cone update from /api/fixtures/live (#355)
-  if(!_s3d._liveT)_s3d._liveT=0;
-  var now=Date.now();
-  if(now-_s3d._liveT>500&&ctab==='layout'){
-    _s3d._liveT=now;
-    ra('GET','/api/fixtures/live',null,function(liveData){
-      if(!liveData||typeof liveData!=='object')return;
-      _s3d.nodes.forEach(function(grp){
-        var fid=grp.userData.childId;if(fid===undefined)return;
-        var live=liveData[String(fid)];if(!live)return;
-        var panNorm=live.pan,tiltNorm=live.tilt;
-        if(panNorm===undefined||tiltNorm===undefined)return;
-        var fx=null;(_fixtures||[]).forEach(function(f){if(f.id===fid)fx=f;});
-        if(!fx||fx.fixtureType!=='dmx')return;
-        var prof=window._profileCache&&fx.dmxProfileId?window._profileCache[fx.dmxProfileId]:null;
-        var panRange=prof?prof.panRange||540:540;
-        var tiltRange=prof?prof.tiltRange||270:270;
-        var rot=fx.rotation||[0,0,0];
-        // #715 — single shared IK via _aimUnitVector. Pre-#715 this
-        // path used a third inline convention that ignored rx
-        // entirely and disagreed with both `_rotToAim` and the
-        // live-API IK. Stage→Three.js basis swap below.
-        var v=_aimUnitVector(rot, panNorm, tiltNorm, panRange, tiltRange,
-                              !!fx.mountedInverted, 0.5);
-        var aimDir=new THREE.Vector3(v[0], v[2], v[1]);
-        grp.children.forEach(function(child){
-          if(child.userData.beamCone&&child.isMesh&&child.geometry.type==='ConeGeometry'){
-            var beamLen=child.geometry.parameters.height||3;
-            var mid=aimDir.clone().multiplyScalar(beamLen/2);
-            child.position.copy(mid);
-            child.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,-1,0),aimDir.clone().normalize()));
-          }
-        });
-        // Update cone color from live dimmer/RGB
-        if(live.dimmer!==undefined){
-          var dimVal=live.dimmer/255;
-          var hexCol=((live.r||0)<<16)|((live.g||0)<<8)|(live.b||0);
-          grp.children.forEach(function(child){
-            if(child.userData.beamCone&&child.isMesh&&child.geometry.type==='ConeGeometry'){
-              if(hexCol>0)child.material.color.setHex(hexCol);
-              child.material.opacity=dimVal>0.01?dimVal*0.4:0.08;
-            }
-          });
-        }
-      });
-    });
-  }
+  // #810 — old inline /api/fixtures/live polling deleted. The response
+  // shape was `{running, fixtures:[...]}` (a list) but the old code
+  // read `liveData[String(fid)]` (a dict lookup) so it never matched —
+  // dead code since that response shape change. The cone update path
+  // is now `s3dPollFixturesLive` → `_s3dUpdateFixtureAim`, which reads
+  // the canonical `aim` field from the live API and applies it
+  // directly. Cone-colour-from-live still lives there too.
   if(_s3d.renderer&&_s3d.scene&&_s3d.camera)_s3d.renderer.render(_s3d.scene,_s3d.camera);
   // Info overlay
   var info=document.getElementById('s3d-info');
@@ -1590,7 +1550,7 @@ function _s3dAimStageToLocal(aim){
   return new THREE.Vector3(aim[0]||0, aim[2]||0, aim[1]||0).normalize();
 }
 
-function _s3dUpdateFixtureAim(fid, aim){
+function _s3dUpdateFixtureAim(fid, aim, liveEntry){
   if(!aim||!_s3d.nodes)return;
   // Find the scene group for this fixture/child.
   var grp=null;
@@ -1606,6 +1566,18 @@ function _s3dUpdateFixtureAim(fid, aim){
     }
   });
   var aimLocal=dir.clone().multiplyScalar(beamLen);
+  // #810 — pre-compute live cone color/opacity so the same traverse
+  // pass re-orients AND retints (was split into two API roundtrips
+  // before the inline poll got deleted).
+  var coneHex=null, coneOpacity=null;
+  if(liveEntry){
+    var hex=((liveEntry.r||0)<<16)|((liveEntry.g||0)<<8)|(liveEntry.b||0);
+    if(hex>0)coneHex=hex;
+    if(liveEntry.dimmer!==undefined){
+      var dim=liveEntry.dimmer/255;
+      coneOpacity=dim>0.01?dim*0.4:0.08;
+    }
+  }
   grp.traverse(function(o){
     if(!o.userData)return;
     if(o.userData.beamCone&&o.geometry&&o.geometry.type==='ConeGeometry'){
@@ -1613,6 +1585,8 @@ function _s3dUpdateFixtureAim(fid, aim){
       o.position.copy(aimLocal.clone().multiplyScalar(0.5));
       var q=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,-1,0),dir);
       o.quaternion.copy(q);
+      if(coneHex!==null&&o.material)o.material.color.setHex(coneHex);
+      if(coneOpacity!==null&&o.material)o.material.opacity=coneOpacity;
     }else if(o.userData.isAimPoint){
       o.position.copy(aimLocal);
     }else if(o.userData.beamCone&&o.geometry&&o.geometry.type==='RingGeometry'){
@@ -1626,7 +1600,7 @@ function _s3dUpdateFixtureAim(fid, aim){
 function s3dRenderFixturesLive(list){
   if(!_s3d.inited||!list)return;
   list.forEach(function(f){
-    if(f.aim)_s3dUpdateFixtureAim(f.id, f.aim);
+    if(f.aim)_s3dUpdateFixtureAim(f.id, f.aim, f);
   });
 }
 
@@ -1639,7 +1613,10 @@ function s3dPollFixturesLive(){
     });
   };
   fetchOne();
-  _s3dFixLive.pollId=setInterval(fetchOne,500);  // 2 Hz — enough for a viewport
+  // #810 — 5 Hz so figure-8 / patrol Track sweeps animate smoothly.
+  // Pre-#810 cadence was 2 Hz; live-test confirmed the cone visibly
+  // stutters at that rate when the patrol cycle is sub-second.
+  _s3dFixLive.pollId=setInterval(fetchOne,200);  // 5 Hz
 }
 
 function s3dStopPollFixturesLive(){

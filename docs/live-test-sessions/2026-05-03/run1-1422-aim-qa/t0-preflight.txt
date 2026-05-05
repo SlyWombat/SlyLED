@@ -1,0 +1,19 @@
+=== preflight 2026-05-03T14:22:02Z ===
+--- fid 17 ---
+{"aoeRadius":1000,"childId":null,"childIds":[],"dmxChannelCount":12,"dmxProfileId":"movinghead-150w-12ch","dmxStartAddr":1,"dmxUniverse":1,"fixtureType":"dmx","homePanDmx16":44364,"homeSecondary":{"capturedAt":"2026-04-29T16:52:10.124163Z","panMovedDirection":"right","panOffsetDmx16":10922,"tiltMovedDirection":"down","tiltOffsetDmx16":32768},"homeSetAt":"2026-04-29T16:51:56.216218Z","homeTiltDmx16":0,"id":17,"meshFile":null,"mountedInverted":true,"name":"150W MH Stage Right","rotation":[0,0,0],"strings":[],"type":"point"}
+
+--- 150W profile ---
+{
+  "id": "movinghead-150w-12ch",
+  "panRange": 540,
+  "tiltRange": 180,
+  "dmxToMechanical": null,
+  "panSignFromDmx": null,
+  "tiltSignFromDmx": null,
+  "tiltUp": null
+}
+--- DMX universe baseline ---
+fid17 ch0..7: pan=(173,76) tilt=(0,0) speed=0 dim=0 strobe=0 wheel=23
+
+--- aim endpoint smoke probe ---
+POST /api/mover/17/aim {x:0,y:1000,z:0}: HTTP 000

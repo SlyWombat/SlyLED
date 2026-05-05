@@ -1,8 +1,12 @@
 package com.slywombat.slyled.di
 
+import android.content.Context
+import com.slywombat.slyled.audio.MicAutoBrightness
+import com.slywombat.slyled.data.repository.ServerPreferences
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -22,4 +26,14 @@ object NetworkModule {
             level = HttpLoggingInterceptor.Level.BASIC
         })
         .build()
+
+    // #804 — singleton mic-driven auto-brightness driver. Survives screen
+    // rotation; lifecycle is owned by LiveStageViewModel start()/stop().
+    // Takes ServerPreferences so tunables persist across app restart.
+    @Provides
+    @Singleton
+    fun provideMicAutoBrightness(
+        @ApplicationContext ctx: Context,
+        prefs: ServerPreferences,
+    ): MicAutoBrightness = MicAutoBrightness(ctx, prefs)
 }

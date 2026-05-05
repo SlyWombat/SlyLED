@@ -247,8 +247,14 @@ class OverhaulTest {
 
     @Test
     fun `GET dmx status`() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"running":true,"universes":2,"fps":40}"""))
-        val st = api.getDmxStatus()
+        // #648 — getDmxStatus now returns the raw nested JsonObject; the
+        // SettingsViewModel parses it via DmxStatus.fromJson(). Mirror that
+        // flow in the test instead of asserting on a flat shape.
+        server.enqueue(MockResponse().setBody(
+            """{"artnet":{"running":true,"universes":[1,2],"frameRate":40,"protocol":"artnet"}}"""
+        ))
+        val raw = api.getDmxStatus()
+        val st = DmxStatus.fromJson(raw)
         assertTrue(st.running)
         assertEquals(2, st.universes)
         assertEquals("/api/dmx/status", server.takeRequest().path)
@@ -388,7 +394,7 @@ class OverhaulTest {
             put("pan", kotlinx.serialization.json.JsonPrimitive(180.5f))
             put("tilt", kotlinx.serialization.json.JsonPrimitive(90.0f))
         }
-        val resp = api.aimFixture(5, body)
+        val resp = api.moverAim(5, body)
         assertTrue(resp.ok)
         val req = server.takeRequest()
         assertEquals("POST", req.method)
@@ -403,7 +409,7 @@ class OverhaulTest {
         server.enqueue(MockResponse().setResponseCode(400).setBody("""{"ok":false,"err":"Not calibrated"}"""))
         try {
             val body = kotlinx.serialization.json.buildJsonObject {}
-            api.aimFixture(99, body)
+            api.moverAim(99, body)
             fail("Expected exception for 400")
         } catch (e: Exception) {
             // Expected

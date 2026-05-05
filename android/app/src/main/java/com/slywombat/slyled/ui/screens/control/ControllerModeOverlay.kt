@@ -60,7 +60,13 @@ fun ControllerModeOverlay(
     engineRunning: Boolean = true,
     onOrient: (roll: Float, pitch: Float, yaw: Float, quat: FloatArray) -> Unit,
     onCalibrateStart: (roll: Float, pitch: Float, yaw: Float) -> Unit,
-    onCalibrateEnd: (roll: Float, pitch: Float, yaw: Float) -> Unit,
+    // #805 — calibrate-end now also carries the native rotation-vector
+    // quaternion. The server prefers it because Android's
+    // `getOrientation` uses a different axis + composition convention
+    // than aerospace ZYX intrinsic. Using the same quat the orient
+    // stream sends eliminates the calibrate-vs-orient pose mismatch
+    // that produced the post-release head jump.
+    onCalibrateEnd: (roll: Float, pitch: Float, yaw: Float, quat: FloatArray?) -> Unit,
     onColorChange: (r: Int, g: Int, b: Int, dimmer: Int?) -> Unit,
     onFlash: (on: Boolean) -> Unit,
     onSmoothing: (smoothing: Float) -> Unit,
@@ -95,6 +101,10 @@ fun ControllerModeOverlay(
     val latestRoll = remember { java.util.concurrent.atomic.AtomicReference(0f) }
     val latestPitch = remember { java.util.concurrent.atomic.AtomicReference(0f) }
     val latestYaw = remember { java.util.concurrent.atomic.AtomicReference(0f) }
+    // #805 — latch the most recent native quaternion so calibrate-end
+    // can send it. Captured from `getQuaternionFromVector` in the same
+    // sensor tick as roll/pitch/yaw.
+    val latestQuat = remember { java.util.concurrent.atomic.AtomicReference<FloatArray?>(null) }
 
     var dimmer by remember { mutableFloatStateOf(1f) }
     var red by remember { mutableFloatStateOf(1f) }
@@ -175,6 +185,9 @@ fun ControllerModeOverlay(
                 latestRoll.set(roll)
                 latestPitch.set(pitch)
                 latestYaw.set(azimuth)
+                // #805 — latch the native quat too. Copy because the
+                // sensor framework may reuse this array on next event.
+                latestQuat.set(quat.copyOf())
 
                 // While holding calibrate: freeze display — no movement, no sending
                 if (holdingCalibrateRef.get()) return
@@ -380,7 +393,8 @@ fun ControllerModeOverlay(
                                         onCalibrateEnd(
                                             latestRoll.get(),
                                             latestPitch.get(),
-                                            latestYaw.get()
+                                            latestYaw.get(),
+                                            latestQuat.get(),
                                         )
                                         hasRef = false
                                         holdingCalibrate = false

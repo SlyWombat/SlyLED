@@ -1,5 +1,6 @@
 package com.slywombat.slyled.ui.screens.settings
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -27,7 +28,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.slywombat.slyled.BuildConfig
+import com.slywombat.slyled.audio.MicAutoBrightness
 import com.slywombat.slyled.data.model.DmxProfile
+import com.slywombat.slyled.ui.theme.GreenOnline
 import com.slywombat.slyled.ui.theme.RedError
 import com.slywombat.slyled.viewmodel.SettingsViewModel
 import kotlinx.coroutines.flow.collectLatest
@@ -263,6 +266,9 @@ fun SettingsScreen(
 
             // #649 — Save/Load Config removed: editing the project belongs
             // on the desktop SPA. Show import/export stays for live ops.
+
+            // #804 — Auto Brightness section.
+            AutoBrightnessSection(viewModel = viewModel, settings = settings)
 
             // Show Save/Load Card
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -734,6 +740,215 @@ private fun DmxProfileBrowserDialog(
             }
         }
     )
+}
+
+// #804 — Auto Brightness Settings card. Mirrors the Stage modal toggle and
+// adds the full tunable surface: mode (LiteRT greyed = coming-soon, DSP
+// fallback active), mic source picker, sensitivity, floor/ceiling,
+// attack/release, live envelope meter, manual brightness fallback slider,
+// and the RECORD_AUDIO permission gate.
+@Composable
+private fun AutoBrightnessSection(
+    viewModel: SettingsViewModel,
+    settings: com.slywombat.slyled.data.model.Settings,
+) {
+    val enabled by viewModel.autoBrightnessEnabled.collectAsState()
+    val state by viewModel.autoBrightnessState.collectAsState()
+    val envelope by viewModel.autoBrightnessEnvelope.collectAsState()
+
+    // #804 — read tunables from StateFlows so the panel always shows the
+    // current value (including persisted load + edits made on the Stage
+    // modal). Slider drags push back through configureAutoBrightness().
+    val sens by viewModel.autoBrightnessSensitivityFlow.collectAsState()
+    val fl by viewModel.autoBrightnessFloorFlow.collectAsState()
+    val ce by viewModel.autoBrightnessCeilingFlow.collectAsState()
+    val atk by viewModel.autoBrightnessAttackMsFlow.collectAsState()
+    val rel by viewModel.autoBrightnessReleaseMsFlow.collectAsState()
+
+    val manualBrightness = settings.globalBrightness ?: 255
+    var manualSlider by remember(manualBrightness) { mutableFloatStateOf(manualBrightness.toFloat()) }
+    var modeLite by remember { mutableStateOf(false) }  // LiteRT greyed for v1
+
+    val micPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> if (granted) viewModel.setAutoBrightnessEnabled(true) }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "Auto Brightness",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(12.dp))
+
+            // Enable + state badge
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Enable", style = MaterialTheme.typography.bodyMedium)
+                    val (lab, col) = autoBrightnessSettingsLabel(enabled, state)
+                    Text(lab, style = MaterialTheme.typography.labelSmall, color = col)
+                }
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = { want ->
+                        if (want && !viewModel.autoBrightnessHasPermission()) {
+                            micPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        } else {
+                            viewModel.setAutoBrightnessEnabled(want)
+                        }
+                    },
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // Mode segment — LiteRT disabled in v1 (no model bundled).
+            Text(
+                "Mode",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                SegmentedButton(
+                    selected = modeLite,
+                    onClick = { /* coming soon */ },
+                    enabled = false,
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                ) { Text("LiteRT (soon)") }
+                SegmentedButton(
+                    selected = !modeLite,
+                    onClick = { modeLite = false },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                ) { Text("DSP fallback") }
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // Mic source — placeholder; v1 always uses default mic.
+            Text(
+                "Mic Source",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                value = "Built-in (default)",
+                onValueChange = {},
+                readOnly = true,
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(12.dp))
+
+            // Live meter
+            Text(
+                "Envelope",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            LinearProgressIndicator(
+                progress = { envelope.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth().height(10.dp),
+                color = if (state == MicAutoBrightness.Mode.Clipping) RedError else GreenOnline,
+                trackColor = MaterialTheme.colorScheme.outlineVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+
+            // Tunables — single source of truth is the StateFlow on the
+            // viewmodel; the slider's onChange writes back through
+            // configureAutoBrightness which mutates the flow + persists.
+            SettingsLabelledSlider("Sensitivity", sens, 0.5f..4f) {
+                viewModel.configureAutoBrightness(sensitivity = it)
+            }
+            SettingsLabelledSlider("Floor", fl, 0f..1f) {
+                viewModel.configureAutoBrightness(floor = it.coerceAtMost(ce))
+            }
+            SettingsLabelledSlider("Ceiling", ce, 0f..1f) {
+                viewModel.configureAutoBrightness(ceiling = it.coerceAtLeast(fl))
+            }
+            SettingsLabelledSlider("Attack (ms)", atk, 1f..200f) {
+                viewModel.configureAutoBrightness(attackMs = it)
+            }
+            SettingsLabelledSlider("Release (ms)", rel, 20f..2000f) {
+                viewModel.configureAutoBrightness(releaseMs = it)
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "Manual Brightness (used when Auto is off)",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Slider(
+                    value = manualSlider,
+                    onValueChange = { manualSlider = it },
+                    onValueChangeFinished = { viewModel.setManualBrightness(manualSlider.toInt()) },
+                    valueRange = 0f..255f,
+                    enabled = !enabled,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "${manualSlider.toInt()}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(start = 8.dp).width(40.dp),
+                )
+            }
+
+            if (state == MicAutoBrightness.Mode.PermissionDenied) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Mic permission denied. Tap Enable to retry.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = RedError,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun autoBrightnessSettingsLabel(
+    enabled: Boolean,
+    state: MicAutoBrightness.Mode,
+): Pair<String, androidx.compose.ui.graphics.Color> = when {
+    !enabled && state == MicAutoBrightness.Mode.PermissionDenied ->
+        "Tap to grant mic permission" to androidx.compose.ui.graphics.Color(0xFFF59E0B)
+    !enabled -> "Off" to MaterialTheme.colorScheme.onSurfaceVariant
+    state == MicAutoBrightness.Mode.NoMic -> "No mic available" to RedError
+    state == MicAutoBrightness.Mode.Clipping -> "Clipping — reduce sensitivity" to androidx.compose.ui.graphics.Color(0xFFF59E0B)
+    state == MicAutoBrightness.Mode.Listening -> "Listening" to GreenOnline
+    else -> "Idle" to MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+@Composable
+private fun SettingsLabelledSlider(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onChange: (Float) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "%.2f".format(value),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        Slider(value = value, onValueChange = onChange, valueRange = range)
+    }
 }
 
 @Composable

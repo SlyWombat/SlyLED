@@ -38,6 +38,38 @@ from .sphere import AimSphere
 _sphere_cache = {}   # fid → ((cache_key_tuple), AimSphere)
 
 
+def _aim_vec_from_body(body, fixture):
+    """#806 — derive the canonical stage-frame aim vector from the request
+    body. Either `{azDeg, elDeg}` (already a stage-frame direction) or
+    `{x, y, z}` (stage-mm world target → unit vector from fixture pos).
+    Returns `None` for malformed bodies; caller skips the canonical write.
+    """
+    if not isinstance(body, dict):
+        return None
+    if "azDeg" in body and "elDeg" in body:
+        try:
+            az = math.radians(float(body["azDeg"]))
+            el = math.radians(float(body["elDeg"]))
+        except (TypeError, ValueError):
+            return None
+        cer = math.cos(el)
+        return (math.sin(az) * cer, math.cos(az) * cer, math.sin(el))
+    if "x" in body and "y" in body and "z" in body:
+        try:
+            tx = float(body["x"]); ty = float(body["y"]); tz = float(body["z"])
+            fx = float(fixture.get("x") or 0)
+            fy = float(fixture.get("y") or 0)
+            fz = float(fixture.get("z") or 0)
+        except (TypeError, ValueError):
+            return None
+        dx, dy, dz = tx - fx, ty - fy, tz - fz
+        n = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if n <= 1e-9:
+            return None
+        return (dx / n, dy / n, dz / n)
+    return None
+
+
 def _sphere_cache_key(f, prof_info):
     """Build the cache key for a fixture + profile pair. Includes the
     layout xyz because fixture position lives in `_layout.children`,
@@ -236,7 +268,8 @@ def _aim_from_body(body, query_args, sphere, current_pose):
 
 def register(app, *, get_fixtures, profile_lib, write_pose, get_engine,
              check_calibrating=lambda fid: False,
-             get_fixture_xyz=None):
+             get_fixture_xyz=None,
+             set_canonical_aim_fn=None):
     """Plug the aim routes into the Flask `app`. `get_fixture_xyz(fid)`
     is the layout-position lookup callable (parent_server's
     `_fixture_position` does the `_layout.children` traversal). Without
@@ -293,6 +326,18 @@ def register(app, *, get_fixtures, profile_lib, write_pose, get_engine,
                         pan_dmx16, tilt_dmx16, prof_info)
         except Exception as e:
             return jsonify(err="dmx_write_failed", detail=str(e)), 500
+        # #806 — propagate the canonical aim vector to the parent's
+        # aim_stage store. Computed from the request body (which is the
+        # operator's intent in stage frame), not via dmx_to_aim of the
+        # written pose, so we skip the IK round-trip entirely. Errors
+        # here are non-fatal (cache stays at its previous value).
+        if set_canonical_aim_fn is not None:
+            try:
+                aim_vec = _aim_vec_from_body(body, f)
+                if aim_vec is not None:
+                    set_canonical_aim_fn(fid, aim_vec)
+            except Exception:
+                pass
         # #803 — surface clamped flag + axes when the target was
         # outside the cone and we landed on the boundary.
         resp = {"ok": True, "panDmx16": pan_dmx16, "tiltDmx16": tilt_dmx16}

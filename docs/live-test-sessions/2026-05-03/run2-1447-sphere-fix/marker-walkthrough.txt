@@ -1,0 +1,24 @@
+id label          target                 (az,el)            expected       got            err pan/tilt    verdict
+ 0 Back Right     (  500, 2280,    0) ( -2.51,-37.64)  (44669,13704)  (42705,    0)  1964/13704      FAIL
+ 1 Furnace Door   ( 2050, 3170,    0) (+24.58,-26.79)  (41381, 9753)  (40334,    0)  1047/9753      FAIL
+ 2 Pillar Base    ( 1150, 2100,    0) (+14.68,-39.03)  (42583,14211)  (40870,    0)  1713/14211      FAIL
+ 3 Pillar Post    ( 1150, 2280, 1368) (+13.56, -9.49)  (42718, 3455)  (62976,65535)  20258/62080      FAIL
+ 4 Stairs         (  500, 3500,    0) ( -1.64,-26.69)  (44563, 9716)  (43247,    0)  1316/9716      FAIL
+ 5 Patent         ( 3120, 3090,    0) (+39.20,-23.82)  (39607, 8671)  (38749,    0)   858/8671      FAIL
+
+VERDICT: marker walkthrough FAIL  (tolerance: 2° ~ 800 DMX/axis)
+
+=== Round-trip XYZ vs azDeg/elDeg (Pillar Base) ===
+  aim_xyz   -> {'ok': True, 'panDmx16': 40870, 'tiltDmx16': 0}
+  aim_az/el (+14.68,-39.03) -> {'ok': True, 'panDmx16': 42409, 'tiltDmx16': 13709}
+  match: False
+
+=== Edge cases ===
+  target == fixture xyz: {'ok': True, 'panDmx16': 55296, 'tiltDmx16': 65535}
+  far above (el~+89):    {'ok': True, 'panDmx16': 34560, 'tiltDmx16': 0}
+  far below (el~-89):    {'ok': True, 'panDmx16': 34491, 'tiltDmx16': 30919}
+
+=== current_pose determinism (Pillar Base from cold-park vs from far-pose) ===
+  from cold park: {'ok': True, 'panDmx16': 40870, 'tiltDmx16': 0}
+  from far pose:  {'ok': True, 'panDmx16': 40870, 'tiltDmx16': 0}
+  deterministic: True
