@@ -545,6 +545,14 @@ class MoverControlEngine:
             if remote is not None:
                 remote.check_staleness()
                 if remote.stale_reason is not None and claim.state == "streaming":
+                    # #823 — grace period for freshly-created claims.
+                    # Press-Start handlers clear stale BEFORE creating
+                    # the claim, but if any future code path lands a
+                    # streaming claim on a stale remote without clearing,
+                    # give it 200 ms to do so before tearing down. Belt-
+                    # and-suspenders against future regressions.
+                    if time.time() - claim.claimed_at < 0.2:
+                        continue
                     log.info("Mover %d auto-released: remote %s %s",
                              mover_id, claim.device_id, remote.stale_reason)
                     self.release(mover_id, claim.device_id, blackout=True)

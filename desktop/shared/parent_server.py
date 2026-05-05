@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.62"
+VERSION = "1.7.63"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1399,6 +1399,21 @@ def _udp_listener():
             elif _mover_engine is None:
                 log.warning("GYRO_START from %s — mover engine not available", ip)
             else:
+                # #823 — press-Start IS the operator's "I'm using this
+                # remote now" gesture; clear any hard-stale flag on the
+                # matching Remote BEFORE the claim lands. Without this,
+                # the engine tick auto-releases the brand-new claim on
+                # its very next iteration (~25 ms later) when the Remote
+                # still carries `stale_reason="session-ended"` from the
+                # prior press-Stop. Same architectural argument as #812
+                # cleared `connection-lost` on resume — except press-
+                # Start is more explicit and shouldn't wait for an orient
+                # packet to do the clearing.
+                remote_pre = _remotes.by_device(device_id)
+                if remote_pre is not None and remote_pre.stale_reason is not None:
+                    log.info("GYRO_START from %s — clearing stale_reason=%s",
+                             ip, remote_pre.stale_reason)
+                    remote_pre.clear_stale()
                 dname = _gyro_device_name(ip, gf)
                 ok, reason = _mover_engine.claim(target_mover_id, device_id,
                                                  dname, "gyro",
@@ -11008,6 +11023,17 @@ def api_mover_claim():
     conv = body.get("orientConvention")
     if mid is None:
         return jsonify(ok=False, err="moverId required"), 400
+    # #823 — explicit claim API call IS the operator's "I'm using this
+    # remote now" gesture; clear any hard-stale flag on the matching
+    # Remote BEFORE the claim lands so the engine tick won't auto-
+    # release the new claim on its next iteration. Mirrors the
+    # CMD_GYRO_START handler.
+    if did:
+        remote_pre = _remotes.by_device(did)
+        if remote_pre is not None and remote_pre.stale_reason is not None:
+            log.info("MOVER_CLAIM from %s — clearing stale_reason=%s",
+                     did, remote_pre.stale_reason)
+            remote_pre.clear_stale()
     ok, reason = _mover_engine.claim(mid, did, dname, dtype,
                                      smoothing=sm, convention=conv)
     if not ok:
@@ -16994,6 +17020,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 
