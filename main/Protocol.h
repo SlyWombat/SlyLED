@@ -20,7 +20,7 @@ constexpr uint8_t MAX_STR_PER_CHILD = 8;    // protocol constant — same on all
 
 constexpr uint16_t UDP_PORT    = 4210;
 constexpr uint16_t UDP_MAGIC   = 0x534C;
-constexpr uint8_t  UDP_VERSION = 4;         // v4: uint16 LED ranges for multi-string
+constexpr uint8_t  UDP_VERSION = 5;         // v5 (#819): CMD_GYRO_STOP split out from CMD_GYRO_ORIENT bit-3
 
 // Command bytes
 constexpr uint8_t CMD_PING           = 0x01;
@@ -47,6 +47,7 @@ constexpr uint8_t CMD_GYRO_HEARTBEAT = 0x65;   // parent→gyro: keep-alive (2 s
 constexpr uint8_t CMD_GYRO_START         = 0x66; // gyro→parent: explicit press-START (#772) — claim + start_stream
 constexpr uint8_t CMD_GYRO_CLAIM_DENIED  = 0x67; // parent→gyro: claim refused, revert puck to IDLE (#772)
 constexpr uint8_t CMD_GYRO_BATT          = 0x68; // gyro→parent: battery telemetry (vbat100 + pct + flags), 10 s cadence
+constexpr uint8_t CMD_GYRO_STOP          = 0x69; // gyro→parent: explicit press-STOP (#819) — release claim + park + end session. No payload.
 
 // ── Action type codes ─────────────────────────────────────────────────────────
 // (uint8_t — avoids Mbed prototype-generator issues with enums)
@@ -183,7 +184,9 @@ struct __attribute__((packed)) GyroOrientPayload {
   int16_t pitch100;   // pitch × 100
   int16_t yaw100;     // yaw   × 100
   uint8_t fps;        // actual transmit rate achieved this second
-  uint8_t flags;      // bit0=streaming, bit1=imuOk, bit2=wifiOk
+  uint8_t flags;      // bit0=streaming, bit1=imuOk, bit2=wifiOk,
+                      // bit3=RESERVED (#819 — was STOP in v1.2.5/proto-v4; MUST be 0),
+                      // bits[5:4]=ui-mode preset, bits[7:6]=reserved
 };  // 8 bytes; total packet = header(8) + 8 = 16 bytes
 
 // GyroCtrlPayload — parent→gyro (2 bytes)

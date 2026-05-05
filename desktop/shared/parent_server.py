@@ -83,12 +83,12 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.55"
+VERSION = "1.7.60"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
 UDP_MAGIC   = 0x534C
-UDP_VERSION = 4
+UDP_VERSION = 5   # #819 — added CMD_GYRO_STOP (0x69); orient-flags bit 3 retired
 UDP_PORT    = 4210
 
 CMD_PING        = 0x01
@@ -113,6 +113,7 @@ CMD_GYRO_HEARTBEAT = 0x65  # parent→gyro: 2s cadence while claim active (#476)
 CMD_GYRO_START         = 0x66  # gyro→parent: explicit press-START — claim + start_stream (#772)
 CMD_GYRO_CLAIM_DENIED  = 0x67  # parent→gyro: claim refused, puck reverts to IDLE (#772)
 CMD_GYRO_BATT          = 0x68  # gyro→parent: battery telemetry (vbat100 + pct + flags), 10 s cadence (#813 follow-up)
+CMD_GYRO_STOP          = 0x69  # gyro→parent: discrete press-STOP — release claim + park + end_session (#819). Header only, no payload.
 
 #  "  "  Paths  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1291,7 +1292,11 @@ def _udp_listener():
             magic, ver, cmd = struct.unpack_from("<HBB", data, 0)
         except Exception:
             continue
-        if magic != UDP_MAGIC or ver not in (3, UDP_VERSION):
+        # #819 — proto bumped 4→5 (CMD_GYRO_STOP added). Accept legacy v3/v4
+        # frames so field-deployed children that haven't been re-flashed yet
+        # still talk to the orchestrator. CMD_GYRO_STOP itself is rejected
+        # below if it arrives on v3/v4 — old gyros can't have generated it.
+        if magic != UDP_MAGIC or ver not in (3, 4, UDP_VERSION):
             continue
         ip = addr[0]
         if cmd == CMD_ACTION_EVENT and len(data) >= 12:
@@ -1307,56 +1312,72 @@ def _udp_listener():
             # GyroOrientPayload: roll100(2) pitch100(2) yaw100(2) fps(1) flags(1)
             roll100, pitch100, yaw100, fps, flags = struct.unpack_from("<hhhBB", data, 8)
 
-            # flags bit 3 = stop signal → release claim + blackout + stale cal
-            if flags & 0x08:
-                try:
-                    log.info("GYRO_STOP from %s — releasing claim, clearing cal", ip)
-                    did_stop = f"gyro-{ip}"
-                    if _mover_engine:
-                        gf_stop = _gyro_fixture_for_ip(ip)
-                        if gf_stop and gf_stop.get("assignedMoverId") is not None:
-                            _mover_engine.release(gf_stop["assignedMoverId"],
-                                                  did_stop, blackout=True)
-                    # Invalidate the primitive's calibration too — next Start
-                    # must re-align before the fixture can follow again.
-                    remote_stop = _remotes.by_device(did_stop)
-                    if remote_stop is not None:
-                        remote_stop.end_session()
-                        try:
-                            _remotes.save()
-                        except Exception as e:
-                            log.error("remotes.save() during stop failed: %s", e)
-                except Exception as e:
-                    log.error("GYRO_STOP handler failed: %s", e, exc_info=True)
-            else:
-                with _gyro_lock:
-                    # #813 follow-up — merge instead of overwrite so the
-                    # battery-telemetry fields populated by CMD_GYRO_BATT
-                    # survive a subsequent orient packet.
-                    st = _gyro_state.setdefault(ip, {})
-                    st["roll"]  = roll100  / 100.0
-                    st["pitch"] = pitch100 / 100.0
-                    st["yaw"]   = yaw100   / 100.0
-                    st["fps"]   = fps
-                    st["flags"] = flags
-                    st["ts"]    = time.time()
-                log.debug("GYRO_ORIENT from %s: R=%.1f P=%.1f Y=%.1f fps=%d",
-                          ip, roll100/100.0, pitch100/100.0, yaw100/100.0, fps)
-                # Primitive owns orientation (#484 phase 4). Mover-follow
-                # reads Remote.aim_stage via its tick loop — no legacy call
-                # here any more.
-                device_id = f"gyro-{ip}"
-                remote = _auto_register_remote(device_id, kind=KIND_PUCK)
-                remote.update_from_euler_deg(
-                    roll100/100.0, pitch100/100.0, yaw100/100.0,
-                )
-                # #813 — orient handler is no longer a claim source.
-                # Press-Start (`CMD_GYRO_START`) is the only path that
-                # establishes a claim. An orient packet without a prior
-                # claim updates the Remote's last_quat_world (which is
-                # cheap + stale-clearing per #812) but never spontaneously
-                # claims. The back-compat auto-claim-on-first-orient path
-                # (#772 era) was deleted — green-field reflash assumed.
+            # #819 — bit 3 of orient flags used to mean STOP in proto-v4
+            # (puck firmware ≤v1.2.5). That overload mis-fired on every
+            # orient packet a v1.2.5 puck sent, auto-releasing the live
+            # claim ~25 ms after CMD_GYRO_START. Bit 3 is now reserved;
+            # STOP moved to a discrete CMD_GYRO_STOP (0x69). We only warn
+            # if the bit is observed and continue processing the orient —
+            # never tear down the claim from this code path. (Acceptance
+            # criterion: grepping desktop/shared/*.py for the old bitmask
+            # literal must return nothing.)
+            if ((flags >> 3) & 1):
+                log.warning(
+                    "GYRO_ORIENT from %s with bit 3 set (flags=0x%02x) — "
+                    "protocol mismatch; expected CMD_GYRO_STOP. Ignoring "
+                    "the bit and processing orient. Reflash puck firmware "
+                    "to v1.2.6+ to clear this warning.", ip, flags)
+            with _gyro_lock:
+                # #813 follow-up — merge instead of overwrite so the
+                # battery-telemetry fields populated by CMD_GYRO_BATT
+                # survive a subsequent orient packet.
+                st = _gyro_state.setdefault(ip, {})
+                st["roll"]  = roll100  / 100.0
+                st["pitch"] = pitch100 / 100.0
+                st["yaw"]   = yaw100   / 100.0
+                st["fps"]   = fps
+                st["flags"] = flags
+                st["ts"]    = time.time()
+            log.debug("GYRO_ORIENT from %s: R=%.1f P=%.1f Y=%.1f fps=%d",
+                      ip, roll100/100.0, pitch100/100.0, yaw100/100.0, fps)
+            # Primitive owns orientation (#484 phase 4). Mover-follow
+            # reads Remote.aim_stage via its tick loop — no legacy call
+            # here any more.
+            device_id = f"gyro-{ip}"
+            remote = _auto_register_remote(device_id, kind=KIND_PUCK)
+            remote.update_from_euler_deg(
+                roll100/100.0, pitch100/100.0, yaw100/100.0,
+            )
+            # #813 — orient handler is no longer a claim source.
+            # Press-Start (`CMD_GYRO_START`) is the only path that
+            # establishes a claim. An orient packet without a prior
+            # claim updates the Remote's last_quat_world (which is
+            # cheap + stale-clearing per #812) but never spontaneously
+            # claims. The back-compat auto-claim-on-first-orient path
+            # (#772 era) was deleted — green-field reflash assumed.
+        elif cmd == CMD_GYRO_STOP:
+            # #819 — discrete press-STOP. Replaces the v1.2.5-and-earlier
+            # bit-3-on-orient overload (which mis-fired and auto-released
+            # the live claim ~25 ms after start). Same teardown as before:
+            # release claim w/ blackout, end the puck's primitive session
+            # so the next press-Start re-aligns from a known state.
+            try:
+                log.info("GYRO_STOP from %s — releasing claim, clearing cal", ip)
+                did_stop = f"gyro-{ip}"
+                if _mover_engine:
+                    gf_stop = _gyro_fixture_for_ip(ip)
+                    if gf_stop and gf_stop.get("assignedMoverId") is not None:
+                        _mover_engine.release(gf_stop["assignedMoverId"],
+                                              did_stop, blackout=True)
+                remote_stop = _remotes.by_device(did_stop)
+                if remote_stop is not None:
+                    remote_stop.end_session()
+                    try:
+                        _remotes.save()
+                    except Exception as e:
+                        log.error("remotes.save() during stop failed: %s", e)
+            except Exception as e:
+                log.error("GYRO_STOP handler failed: %s", e, exc_info=True)
         elif cmd == CMD_GYRO_START:
             # #772 — explicit press-START. Resolve fixture + mover, run
             # claim + start_stream synchronously, send CMD_GYRO_CLAIM_DENIED
@@ -15861,7 +15882,16 @@ def api_fw_library():
     keeps building them; only the public surface is filtered.
     """
     from firmware_manager import _verify_sha256
-    reg = load_registry(_FW_DIR)
+    # Prefer the live GitHub-main registry so an installer that's a few
+    # releases behind shows the current pinned versions when the operator
+    # clicks "Reload list". `/api/firmware/fetch` already does this for
+    # downloads (see #807 GitHub-registry OTA fallback); the library
+    # listing was missed and froze at install-time bundle versions.
+    remote = _fetch_remote_registry()
+    if remote and isinstance(remote.get("firmware"), list):
+        reg = remote
+    else:
+        reg = load_registry(_FW_DIR)
     entries = []
     for e in reg.get("firmware", []):
         if e.get("diagnostic"):
@@ -16883,6 +16913,11 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
+
+
+
 
 
 

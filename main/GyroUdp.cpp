@@ -293,23 +293,20 @@ void gyroUdpSetStreaming(bool enabled, uint8_t fps) {
 }
 
 void gyroUdpSendStop() {
-    // Send one final orient with flags bit 3 = stop signal → server releases claim
+    // #819 — discrete CMD_GYRO_STOP packet (header only, no payload). Replaces
+    // the v1.2.5-and-earlier "orient with flags bit 3" overload, which the
+    // orchestrator could mis-fire on any orient packet that happened to set
+    // bit 3 — auto-releasing the live claim ~25 ms after CMD_GYRO_START.
+    // Bit 3 of GyroOrientPayload.flags is now reserved-for-future and MUST
+    // remain 0 in regular orient packets.
     UdpHeader hdr;
     hdr.magic   = UDP_MAGIC;
     hdr.version = UDP_VERSION;
-    hdr.cmd     = CMD_GYRO_ORIENT;
+    hdr.cmd     = CMD_GYRO_STOP;
     hdr.epoch   = (uint32_t)currentEpoch();
 
-    GyroOrientPayload op;
-    memset(&op, 0, sizeof(op));
-    op.flags = 0x08u;  // bit 3 = stop
-
-    uint8_t buf[sizeof(hdr) + sizeof(op)];
-    memcpy(buf,               &hdr, sizeof(hdr));
-    memcpy(buf + sizeof(hdr), &op,  sizeof(op));
-
     cmdUDP.beginPacket(s_parentIP, UDP_PORT);
-    cmdUDP.write(buf, sizeof(buf));
+    cmdUDP.write((const uint8_t*)&hdr, sizeof(hdr));
     cmdUDP.endPacket();
 
     if (Serial) Serial.println(F("[GyroUDP] Sent STOP signal to parent"));

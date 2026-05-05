@@ -1049,13 +1049,16 @@ void handleApiChildStatus(WiFiClient& c, uint8_t id) {
       if (nn >= (int)(sizeof(UdpHeader) + sizeof(StatusRespPayload))) {
         UdpHeader rh;
         memcpy(&rh, udpBuf, sizeof(rh));
-        if (rh.magic == UDP_MAGIC && rh.version == UDP_VERSION
+        // #819 — accept v4 alongside v5 so a Giga parent built against
+        // protocol v5 still validates STATUS_RESP / side-effect packets
+        // from field children that haven't been re-flashed yet.
+        if (rh.magic == UDP_MAGIC && (rh.version == UDP_VERSION || rh.version == 4)
             && rh.cmd == CMD_STATUS_RESP
             && from[0] == children[id].ip[0] && from[1] == children[id].ip[1]
             && from[2] == children[id].ip[2] && from[3] == children[id].ip[3]) {
           memcpy(&resp, udpBuf + sizeof(rh), sizeof(resp));
           got = true;
-        } else if (rh.magic == UDP_MAGIC && rh.version == UDP_VERSION) {
+        } else if (rh.magic == UDP_MAGIC && (rh.version == UDP_VERSION || rh.version == 4)) {
           // Dispatch side-effect packets so nothing is lost
           handleUdpPacket(rh.cmd, from, udpBuf + sizeof(rh), nn - (int)sizeof(rh));
         }

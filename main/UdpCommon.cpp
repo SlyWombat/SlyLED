@@ -175,14 +175,16 @@ void pollUDP() {
   UdpHeader hdr;
   memcpy(&hdr, udpBuf, sizeof(hdr));
   // #761 §A — accept legacy v3 frames as well as UDP_VERSION (mirrors the
-  // orchestrator's `ver in (3, UDP_VERSION)` shape). Header-only commands
-  // (PING, STATUS_REQ, RUNNER_STOP) are wire-identical across v3/v4.
+  // orchestrator's `ver in (3, 4, UDP_VERSION)` shape). Header-only commands
+  // (PING, STATUS_REQ, RUNNER_STOP) are wire-identical across v3/v4/v5.
   // ACTION / LOAD_STEP layouts changed in v4 (uint16 LED ranges) but their
   // dispatchers gate on `plen >= sizeof(payload)`, so a smaller v3 payload
   // is rejected there. Without this relaxation a single protocol bump
   // strands every field-deployed device on the older version.
+  // #819 — v5 adds CMD_GYRO_STOP (0x69) but keeps every existing payload
+  // shape, so accept v3/v4/v5 here.
   if (hdr.magic != UDP_MAGIC) return;
-  if (hdr.version != UDP_VERSION && hdr.version != 3) return;
+  if (hdr.version != UDP_VERSION && hdr.version != 3 && hdr.version != 4) return;
 
   handleUdpPacket(hdr.cmd, sender, udpBuf + sizeof(hdr), n - (int)sizeof(hdr));
 }
