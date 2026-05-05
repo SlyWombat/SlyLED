@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.61"
+VERSION = "1.7.62"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -15933,18 +15933,32 @@ def api_fw_library():
         expected = e.get("sha256")
         local = False
         local_path = ""
+        unreadable_path = ""
         for p in (cache_path, bundle_path):
             if not (p and p.is_file()):
                 continue
-            if expected and not _verify_sha256(p, expected):
-                # File exists but doesn't match the registry pin — flash
-                # path will refuse it and re-download. Don't claim "Local".
+            # #821 — tristate. True = Local, False = mismatched (skip),
+            # None = present-but-unreadable (locked / ACL / OneDrive
+            # cloud-only). Surface unreadable distinctly so the SPA can
+            # show "Local but unreadable — check file lock / OneDrive
+            # availability" rather than the misleading "Not downloaded"
+            # that pre-fix sent operators on a wild-goose chase.
+            v = _verify_sha256(p, expected) if expected else True
+            if v is True:
+                local = True
+                local_path = str(p)
+                break
+            if v is False:
                 continue
-            local = True
-            local_path = str(p)
+            # v is None
+            unreadable_path = str(p)
             break
-        entries.append({**e, "local": local, "localPath": local_path,
-                        "hasReleaseAsset": bool(e.get("releaseAsset"))})
+        entry_out = {**e, "local": local, "localPath": local_path,
+                     "hasReleaseAsset": bool(e.get("releaseAsset"))}
+        if not local and unreadable_path:
+            entry_out["unreadable"] = True
+            entry_out["localPath"] = unreadable_path
+        entries.append(entry_out)
     return jsonify(firmware=entries)
 
 
@@ -16182,9 +16196,31 @@ def api_fw_flash():
     # matching GitHub release asset before kicking off the flash. The
     # installer no longer bundles binaries, so the first flash of any
     # given board will pull from the cloud on demand.
-    from firmware_manager import resolve_binary_path
+    from firmware_manager import resolve_binary_path, _verify_sha256
     bin_path_str = resolve_binary_path(fw, _FW_CACHE_DIR, _FW_DIR, auto_download=True)
     if not bin_path_str:
+        # #821 — distinguish the genuine missing case from "file is
+        # there but unreadable" (locked / ACL / OneDrive cloud-only).
+        # Pre-fix the error always said "binary not found locally" even
+        # when the operator was looking right at the file in Explorer.
+        fname = fw.get("file") or ""
+        expected = fw.get("sha256")
+        unreadable_hits = []
+        for label, base in (("cache", _FW_CACHE_DIR), ("bundle", _FW_DIR)):
+            p = base / fname if fname else None
+            if not (p and p.is_file()):
+                continue
+            v = _verify_sha256(p, expected) if expected else True
+            if v is None:
+                unreadable_hits.append(f"{label} ({p})")
+        if unreadable_hits:
+            return jsonify(ok=False,
+                           err=("binary exists at " + ", ".join(unreadable_hits)
+                                + " but the orchestrator could not read it. "
+                                "Check file lock / antivirus / OneDrive "
+                                "cloud-only placeholder; copy the file via "
+                                "Windows Explorer to ensure local "
+                                "availability.")), 502
         return jsonify(ok=False,
                        err=f"binary not found locally and release asset "
                            f"'{fw.get('releaseAsset') or fw.get('file')}' "
@@ -16958,6 +16994,7 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
 
 
 

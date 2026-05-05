@@ -254,8 +254,19 @@ def _registry_fetch_assets(timeout=10, release_tag=None):
 
 
 def _verify_sha256(path, expected):
-    """Return True when SHA-256 of `path` matches `expected` (case-insensitive).
-    Streams in 64 KB chunks to keep memory bounded on large binaries."""
+    """Return ``True`` when SHA-256 of ``path`` matches ``expected``,
+    ``False`` on confirmed mismatch, ``None`` when the file couldn't be
+    read at all (locked, ACL denial, OneDrive cloud-only placeholder,
+    transient I/O error). Streams in 64 KB chunks to keep memory bounded
+    on large binaries.
+
+    #821 — tristate. Pre-fix this returned ``False`` for both mismatch
+    and read-failure, so callers couldn't tell a tampered/stale binary
+    from a temporarily-unreadable one. ``resolve_binary_path`` then
+    deleted valid cached files on transient read errors. Callers now
+    only delete on confirmed ``False``; ``None`` means "leave it alone,
+    surface the read failure instead."
+    """
     if not expected:
         return True  # no hash pinned — caller decided to skip verification
     import hashlib
@@ -265,7 +276,7 @@ def _verify_sha256(path, expected):
             for chunk in iter(lambda: f.read(65536), b""):
                 h.update(chunk)
     except OSError:
-        return False
+        return None
     return h.hexdigest().lower() == expected.strip().lower()
 
 
@@ -328,14 +339,21 @@ def download_firmware(entry, cache_dir, assets_by_name=None):
     except Exception:
         return None
     expected = entry.get("sha256")
-    if expected and not _verify_sha256(archive_path, expected):
-        # Don't keep an archive that failed integrity check — a subsequent
-        # flash/deploy would push this straight to hardware. Delete and bail.
-        try:
-            archive_path.unlink()
-        except OSError:
-            pass
-        return None
+    if expected:
+        v = _verify_sha256(archive_path, expected)
+        if v is False:
+            # Don't keep an archive that failed integrity check — a subsequent
+            # flash/deploy would push this straight to hardware. Delete and bail.
+            try:
+                archive_path.unlink()
+            except OSError:
+                pass
+            return None
+        if v is None:
+            # #821 — couldn't read the freshly-downloaded file. Don't delete
+            # (it's almost certainly fine; the read failure is transient or
+            # AV-related), but don't claim success either.
+            return None
     if is_zip:
         import zipfile
         try:
@@ -371,19 +389,27 @@ def resolve_binary_path(entry, cache_dir, registry_dir, auto_download=True):
     expected = entry.get("sha256")
     # Cache first — if a cached file exists but fails hash, delete it so
     # the download path below will try again with a fresh fetch.
+    # #821 — only delete on a CONFIRMED hash mismatch. _verify_sha256
+    # returns None when the file is unreadable (locked / ACL / OneDrive
+    # cloud-only / transient I/O); pre-fix we deleted on every False
+    # return, including transient read failures, destroying valid cached
+    # binaries the next attempt would have used.
     if cache_dir:
         cache_p = Path(cache_dir) / fname
         if cache_p.is_file():
-            if _verify_sha256(cache_p, expected):
+            v = _verify_sha256(cache_p, expected)
+            if v is True:
                 return str(cache_p)
-            try:
-                cache_p.unlink()
-            except OSError:
-                pass
+            if v is False:
+                try:
+                    cache_p.unlink()
+                except OSError:
+                    pass
+            # v is None: leave the file alone, fall through to bundle.
     # Bundled / dev-tree copy — only trust if hash matches (or no hash set).
     if registry_dir:
         bundle_p = Path(registry_dir) / fname
-        if bundle_p.is_file() and _verify_sha256(bundle_p, expected):
+        if bundle_p.is_file() and _verify_sha256(bundle_p, expected) is True:
             return str(bundle_p)
     if not auto_download:
         return None
