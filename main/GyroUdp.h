@@ -37,7 +37,11 @@ void gyroUdpHandleCmd(uint8_t cmd, IPAddress sender,
 // ── State accessors / setters ─────────────────────────────────────────────────
 
 bool    gyroUdpStreaming();   // true while sending GYRO_ORIENT
-bool    gyroUdpHasLock();    // true after CMD_GYRO_CTRL received (parent IP known)
+// #813 — `gyroUdpHasLock()` retired. The Start button no longer waits
+// for an orchestrator-pushed CMD_GYRO_CTRL packet; press-Start is sent
+// to the broadcast address and the orchestrator answers on its bound
+// UDP 4210 listener. Parent IP is captured opportunistically from
+// CMD_GYRO_HEARTBEAT after the claim establishes.
 uint8_t gyroUdpTargetFps();  // configured target fps
 
 // Direct local control — used by GyroUI to toggle streaming without a UDP

@@ -94,12 +94,59 @@ void gyroUdpInit() {
     }
 }
 
+// #813 follow-up — battery telemetry. Sent every ~10 s regardless of
+// streaming state so the orchestrator can surface battery level (and
+// later, charging) without operator interaction. Defined as a free
+// function so it can be called from gyroUdpUpdate() (always) AND from
+// gyroUdpInit() once the WiFi is up (one immediate sample).
+extern float gyroReadBatteryVoltage();   // forward — defined in GyroUI.cpp
+extern int   gyroReadBatteryPercent();   // forward — same
+extern bool  gyroReadBatteryCharging();  // forward — same
+static uint32_t s_lastBattSendMs = 0;
+static void sendBatteryTelemetry(IPAddress dest) {
+    UdpHeader hdr;
+    hdr.magic   = UDP_MAGIC;
+    hdr.version = UDP_VERSION;
+    hdr.cmd     = CMD_GYRO_BATT;
+    hdr.epoch   = (uint32_t)currentEpoch();
+
+    GyroBattPayload bp;
+    float v = gyroReadBatteryVoltage();
+    if (v < 0) {
+        bp.vbat100 = 0;
+        bp.pct = 0xFFu;
+        bp.flags = 0;
+    } else {
+        bp.vbat100 = (uint16_t)(v * 100.0f);
+        int pct = gyroReadBatteryPercent();
+        bp.pct = (pct < 0) ? 0xFFu : (uint8_t)pct;
+        bp.flags = gyroReadBatteryCharging() ? 0x01u : 0u;
+    }
+
+    uint8_t buf[sizeof(hdr) + sizeof(bp)];
+    memcpy(buf,               &hdr, sizeof(hdr));
+    memcpy(buf + sizeof(hdr), &bp,  sizeof(bp));
+
+    cmdUDP.beginPacket(dest, UDP_PORT);
+    cmdUDP.write(buf, sizeof(buf));
+    cmdUDP.endPacket();
+}
+
 void gyroUdpUpdate() {
+    // #813 follow-up — battery telemetry runs every 10 s regardless of
+    // whether the orient stream is active. Cheap (~16 ADC reads + one
+    // 12-byte UDP packet); lets the orchestrator surface battery state
+    // continuously.
+    uint32_t now = (uint32_t)millis();
+    if (now - s_lastBattSendMs >= 10000u) {
+        s_lastBattSendMs = now;
+        sendBatteryTelemetry(s_parentIP);
+    }
+
     if (!s_streaming) return;
 
     uint32_t intervalMs = (s_targetFps > 0) ? (1000u / s_targetFps) : 50u;  // 20 Hz default
     static uint32_t s_lastSendMs = 0;
-    uint32_t now = (uint32_t)millis();
     if (now - s_lastSendMs < intervalMs) return;
     s_lastSendMs = now;
 
@@ -177,6 +224,15 @@ void gyroUdpHandleCmd(uint8_t cmd, IPAddress sender,
         } else {
             s_serverClaimActive = 1;
         }
+        // #813 green-field — capture parent IP from heartbeats so
+        // post-claim outbound packets switch from broadcast (default)
+        // to unicast. The orchestrator no longer sends CMD_GYRO_CTRL
+        // periodically, so this heartbeat is the puck's only learned-
+        // address signal during a claim. First heartbeat arrives ~2 s
+        // after CMD_GYRO_START is accepted.
+        if (sender != IPAddress(255, 255, 255, 255)) {
+            s_parentIP = sender;
+        }
 
     } else if (cmd == CMD_GYRO_CLAIM_DENIED) {
         // #772 — server refused our claim. UI polls
@@ -216,7 +272,6 @@ void gyroUdpHandleCmd(uint8_t cmd, IPAddress sender,
 }
 
 bool    gyroUdpStreaming()  { return s_streaming; }
-bool    gyroUdpHasLock()   { return s_parentIP != IPAddress(255, 255, 255, 255); }
 uint8_t gyroUdpTargetFps() { return s_targetFps; }
 
 bool gyroUdpClaimDeniedConsume() {

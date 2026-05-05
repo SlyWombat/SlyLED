@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.52"
+VERSION = "1.7.54"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -112,6 +112,7 @@ CMD_GYRO_CALIBRATE = 0x64  # gyro→parent: calibrate start/end + orientation
 CMD_GYRO_HEARTBEAT = 0x65  # parent→gyro: 2s cadence while claim active (#476)
 CMD_GYRO_START         = 0x66  # gyro→parent: explicit press-START — claim + start_stream (#772)
 CMD_GYRO_CLAIM_DENIED  = 0x67  # parent→gyro: claim refused, puck reverts to IDLE (#772)
+CMD_GYRO_BATT          = 0x68  # gyro→parent: battery telemetry (vbat100 + pct + flags), 10 s cadence (#813 follow-up)
 
 #  "  "  Paths  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -1329,14 +1330,16 @@ def _udp_listener():
                     log.error("GYRO_STOP handler failed: %s", e, exc_info=True)
             else:
                 with _gyro_lock:
-                    _gyro_state[ip] = {
-                        "roll":  roll100  / 100.0,
-                        "pitch": pitch100 / 100.0,
-                        "yaw":   yaw100   / 100.0,
-                        "fps":   fps,
-                        "flags": flags,
-                        "ts":    time.time(),
-                    }
+                    # #813 follow-up — merge instead of overwrite so the
+                    # battery-telemetry fields populated by CMD_GYRO_BATT
+                    # survive a subsequent orient packet.
+                    st = _gyro_state.setdefault(ip, {})
+                    st["roll"]  = roll100  / 100.0
+                    st["pitch"] = pitch100 / 100.0
+                    st["yaw"]   = yaw100   / 100.0
+                    st["fps"]   = fps
+                    st["flags"] = flags
+                    st["ts"]    = time.time()
                 log.debug("GYRO_ORIENT from %s: R=%.1f P=%.1f Y=%.1f fps=%d",
                           ip, roll100/100.0, pitch100/100.0, yaw100/100.0, fps)
                 # Primitive owns orientation (#484 phase 4). Mover-follow
@@ -1386,6 +1389,22 @@ def _udp_listener():
                     _mover_engine.start_stream(target_mover_id, device_id)
                     log.info("GYRO_START from %s — claim+start_stream ok mover=%d",
                              ip, target_mover_id)
+        elif cmd == CMD_GYRO_BATT and len(data) >= 12:
+            # #813 follow-up — GyroBattPayload: vbat100(2) pct(1) flags(1).
+            # Stamp into _gyro_state so /api/gyros and the SPA can surface
+            # battery without operator intervention. Voltage is signed-
+            # safe at 16 bits (~655 V max), pct is 0..100 or 0xFF for
+            # "no battery", flags bit0 = charging.
+            vbat100, pct, bflags = struct.unpack_from("<HBB", data, 8)
+            charging = bool(bflags & 0x01)
+            with _gyro_lock:
+                st = _gyro_state.setdefault(ip, {})
+                st["vbat"] = vbat100 / 100.0
+                st["batPct"] = (None if pct == 0xFF else int(pct))
+                st["batCharging"] = charging
+                st["batTs"] = time.time()
+            log.debug("GYRO_BATT from %s: %.2fV pct=%s charging=%s",
+                      ip, vbat100/100.0, pct, charging)
         elif cmd == CMD_GYRO_COLOR and len(data) >= 12:
             # GyroColorPayload: r(1) g(1) b(1) flags(1)
             r, g, b, flags = struct.unpack_from("<BBBB", data, 8)
@@ -2629,20 +2648,33 @@ def api_gyro_state():
     with _gyro_lock:
         result = []
         for ip, g in _gyro_state.items():
-            stale = (now - g["ts"]) > GYRO_STALE_S
+            ts = g.get("ts") or g.get("batTs") or 0
+            stale = (now - ts) > GYRO_STALE_S if ts else True
             flags = g.get("flags", 0)
-            result.append({
+            entry = {
                 "ip":        ip,
-                "roll":      round(g["roll"], 2),
-                "pitch":     round(g["pitch"], 2),
-                "yaw":       round(g["yaw"], 2),
-                "fps":       g["fps"],
+                "roll":      round(g.get("roll", 0.0), 2),
+                "pitch":     round(g.get("pitch", 0.0), 2),
+                "yaw":       round(g.get("yaw", 0.0), 2),
+                "fps":       g.get("fps", 0),
                 "streaming": bool(flags & 0x01),
                 "imuOk":     bool(flags & 0x02),
                 "mode":      (flags >> 4) & 0x03,
                 "stale":     stale,
-                "ts":        g["ts"],
-            })
+                "ts":        ts,
+            }
+            # #813 follow-up — surface battery telemetry when CMD_GYRO_BATT
+            # has been seen for this IP. None on the orient-only path so
+            # SPA / consumers can distinguish "no telemetry yet" from
+            # "telemetry says 0%". batAge lets the SPA grey-out a stale
+            # battery readout (e.g. puck rebooted, battery channel quiet).
+            if "vbat" in g:
+                entry["vbat"] = round(g["vbat"], 2)
+                entry["batPct"] = g.get("batPct")
+                entry["batCharging"] = bool(g.get("batCharging", False))
+                entry["batTs"] = g.get("batTs", 0)
+                entry["batAge"] = max(0.0, now - g.get("batTs", 0))
+            result.append(entry)
     return jsonify(result)
 
 def _gyro_child_ip(child_id):
@@ -16710,6 +16742,8 @@ if __name__ == "__main__":
     print(f"  UI   -> http://localhost:{args.port}")
     print(f"  Data -> {DATA}")
     app.run(host=args.host, port=args.port, threaded=True)
+
+
 
 
 

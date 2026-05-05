@@ -46,6 +46,7 @@ constexpr uint8_t CMD_GYRO_CALIBRATE = 0x64;   // gyro→parent: calibrate start
 constexpr uint8_t CMD_GYRO_HEARTBEAT = 0x65;   // parent→gyro: keep-alive (2 s cadence while a claim is active)
 constexpr uint8_t CMD_GYRO_START         = 0x66; // gyro→parent: explicit press-START (#772) — claim + start_stream
 constexpr uint8_t CMD_GYRO_CLAIM_DENIED  = 0x67; // parent→gyro: claim refused, revert puck to IDLE (#772)
+constexpr uint8_t CMD_GYRO_BATT          = 0x68; // gyro→parent: battery telemetry (vbat100 + pct + flags), 10 s cadence
 
 // ── Action type codes ─────────────────────────────────────────────────────────
 // (uint8_t — avoids Mbed prototype-generator issues with enums)
@@ -205,5 +206,15 @@ struct __attribute__((packed)) GyroCalibratePayload {
   int16_t pitch100;
   int16_t yaw100;
 };  // 7 bytes
+
+// GyroBattPayload — gyro→parent every ~10 s (4 bytes)
+// Lets the orchestrator surface battery state in /api/gyros + future SPA
+// without the operator swiping to the puck Settings page. Voltage is
+// scaled ×100 (e.g. 4128 → 4.128 V) to keep an integer wire format.
+struct __attribute__((packed)) GyroBattPayload {
+  uint16_t vbat100;     // cell voltage × 100 (e.g. 4128 = 4.128 V)
+  uint8_t  pct;         // 0..100, 0xFF = unknown
+  uint8_t  flags;       // bit0 = charging, bits[1:7] reserved
+};  // 4 bytes
 
 #endif  // PROTOCOL_H

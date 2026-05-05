@@ -47,13 +47,17 @@ constexpr uint8_t GYRO_IMU_INT1 =  4;  // data-ready interrupt (optional)
 constexpr uint32_t GYRO_I2C_FREQ = 400000UL;
 
 // ── Battery voltage ADC (optional — set to 0 if no battery circuit) ─────
-// Waveshare ESP32-S3-Touch-LCD-1.28 with battery: per the vendor schematic
-// (waveshare.com/wiki/ESP32-S3-Touch-LCD-1.28) the divider is 200 kΩ + 100 kΩ
-// to GND, so the ADC sees Vbat × (100/(200+100)) = Vbat / 3. Max for a 4.2 V
-// LiPo is 1.4 V at the ADC — comfortably inside 11 dB attenuation range.
-// Vendor reference formula: voltage = 3.3 / (1<<12) * 3 * adc_raw.
+// Waveshare ESP32-S3-Touch-LCD-1.28 with battery. The vendor schematic
+// nominally lists a 200k/100k divider (×3.0), but live calibration on
+// a known-full puck (2026-05-05) showed the firmware reading 3.87 V at
+// ~62% off the LCD when the cell was actually freshly charged — that's
+// a ~7% under-read, consistent with shipping-hardware divider value
+// 220k/100k (×3.2). Bump the constant accordingly; the Vbat-derived
+// percent curve in GyroUI.cpp::batteryPercent was also retuned to the
+// settled-LiPo full point (~4.10 V) instead of the charging plateau
+// (4.20 V) so a "I just unplugged it" cell reads ~100% instead of 92%.
 constexpr uint8_t GYRO_BAT_PIN = 1;        // GPIO1 ADC, 0 = disabled
-constexpr float   GYRO_BAT_DIVIDER = 3.0f; // 200k/100k → divide by 3
+constexpr float   GYRO_BAT_DIVIDER = 3.2f; // 220k/100k → divide by 3.2
 
 #endif  // BOARD_GYRO
 #endif  // GYROBOARD_H

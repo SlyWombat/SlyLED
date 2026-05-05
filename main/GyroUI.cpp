@@ -27,6 +27,7 @@
 #include "GyroUdp.h"
 #include "GyroLogo.h"
 #include <Arduino.h>
+#include <WiFi.h>            // #813 — WiFi.status() drives Start-button gate
 #include <esp_sleep.h>
 
 // ── Forward declaration ──────────────────────────────────────────────────────
@@ -212,9 +213,15 @@ static void updateLogoProgress(float progress) {
 
 static void drawIdle() {
     gyroClearScreen(GC_BLACK);
-    bool locked = gyroUdpHasLock();
+    // #813 green-field — Start button no longer waits for an orchestrator
+    // CTRL(1) "lock" packet. WiFi connectivity is the operator-visible
+    // gate: if the puck has a network it can broadcast `CMD_GYRO_START`
+    // on press; the orchestrator binds UDP 4210 and replies (CLAIM_ACK
+    // is implicit — claim transitions to streaming silently; CLAIM_DENIED
+    // arrives only on refusal, handled by gyroUdpClaimDeniedConsume()).
+    bool ready = (WiFi.status() == WL_CONNECTED);
 
-    if (s_startHeld && locked) {
+    if (s_startHeld && ready) {
         // Holding — bright green, visual feedback
         gyroFillCircle(CX, CY, BTN_MAIN_R, GC_GREEN);
         gyroDrawCircle(CX, CY, BTN_MAIN_R, GC_WHITE);
@@ -222,9 +229,9 @@ static void drawIdle() {
         int16_t tw = (int16_t)(strlen(lbl) * 6 * 2);
         gyroDrawText(CX - tw / 2, CY - 7, lbl, 2, GC_WHITE);
     } else {
-        // START button — yellow (waiting for lock) or green (locked by orchestrator)
-        uint16_t btnFill = locked ? (uint16_t)0x0360u : (uint16_t)0x4200u;
-        uint16_t btnRing = locked ? GC_GREEN : GC_YELLOW;
+        // START button — yellow (no WiFi) or green (ready)
+        uint16_t btnFill = ready ? (uint16_t)0x0360u : (uint16_t)0x4200u;
+        uint16_t btnRing = ready ? GC_GREEN : GC_YELLOW;
         gyroFillCircle(CX, CY, BTN_MAIN_R, btnFill);
         gyroDrawCircle(CX, CY, BTN_MAIN_R, btnRing);
         const char* lbl = "START";
@@ -232,8 +239,8 @@ static void drawIdle() {
         gyroDrawText(CX - tw / 2, CY - 7, lbl, 2, GC_WHITE);
     }
 
-    if (!locked) {
-        const char* hint = "Waiting for lock...";
+    if (!ready) {
+        const char* hint = "Connecting WiFi...";
         int16_t hw = (int16_t)(strlen(hint) * 6);
         gyroDrawText(CX - hw / 2, CY + 65, hint, 1, GC_GREY);
     } else if (!s_startHeld) {
@@ -389,7 +396,12 @@ static void drawStatusPage() {
 // ESP32 core returns calibrated mV (applies the TwoPoint / VRef
 // calibration written to eFuse at Espressif's factory test). 16-sample
 // average smooths the ~±20 mV ADC noise.
-static float readBatteryVoltage() {
+// #813 follow-up — exposed as gyroReadBatteryVoltage() (non-static) so
+// the CMD_GYRO_BATT sender in GyroUdp.cpp can sample without a UDP
+// round-trip back through the UI layer. Same body as the original
+// `static readBatteryVoltage`; kept the static alias below for the
+// existing file-local callers.
+float gyroReadBatteryVoltage() {
     if (GYRO_BAT_PIN == 0) return -1.0f;  // no battery pin
     // Explicitly pick 11 dB attenuation — max divider-output of a 4.2 V
     // LiPo through a 2:1 divider is 2.1 V, comfortably inside 11 dB's
@@ -404,13 +416,23 @@ static float readBatteryVoltage() {
     float mv = (float)mvSum / 16.0f;
     return (mv / 1000.0f) * GYRO_BAT_DIVIDER;
 }
+// File-local alias kept so existing callers in this file don't need to
+// be renamed.
+static inline float readBatteryVoltage() { return gyroReadBatteryVoltage(); }
 
 static int batteryPercent(float voltage) {
-    // LiPo: 4.2V=100%, 3.7V=50%, 3.3V=0%
+    // LiPo discharge curve (calibrated 2026-05-05). 4.20 V is the
+    // charging plateau the cell holds only while USB is supplying
+    // current; a freshly-charged cell unplugged settles at ~4.10 V
+    // within minutes. Mapping 4.10 V → 100% (instead of the
+    // physically-unreachable 4.20 V) makes "just charged" read 100%
+    // on the LCD instead of 92%, matching every consumer LiPo gauge.
+    // 3.30 V remains the empty cutoff (cell protection circuit
+    // disconnects at ~3.0 V; 3.30 V leaves a small headroom).
     if (voltage < 0) return -1;  // no battery
-    if (voltage >= 4.2f) return 100;
-    if (voltage <= 3.3f) return 0;
-    return (int)((voltage - 3.3f) / 0.9f * 100.0f);
+    if (voltage >= 4.10f) return 100;
+    if (voltage <= 3.30f) return 0;
+    return (int)((voltage - 3.30f) / 0.80f * 100.0f);
 }
 
 // #566 follow-up — charging detection without a dedicated CHRG GPIO.
@@ -447,6 +469,10 @@ static bool batteryCharging() {
     if (oldest <= 0) return false;            // buffer not full yet
     return (curr - oldest) > 0.02f;           // >20 mV rise over 20 s
 }
+
+// #813 follow-up — non-static thunks for CMD_GYRO_BATT in GyroUdp.cpp.
+int  gyroReadBatteryPercent()  { return batteryPercent(readBatteryVoltage()); }
+bool gyroReadBatteryCharging() { return batteryCharging(); }
 
 static bool s_sleepHeld = false;
 
@@ -749,7 +775,8 @@ void gyroUIUpdate() {
     // IDLE: hold-to-start — only fires on the START screen, not when
     // the user has swiped into the IDLE Settings view (#565).
     if (s_state == UIState::IDLE && !s_idleSettings && touching
-        && gesture == TOUCH_GEST_NONE && held && gyroUdpHasLock()
+        && gesture == TOUCH_GEST_NONE && held
+        && (WiFi.status() == WL_CONNECTED)   // #813 green-field gate
         && hitCircle(tx, ty, CX, CY, BTN_MAIN_R)) {
         if (!s_startHeld) {
             s_startHeld = true;
@@ -963,15 +990,16 @@ periodic:
     float r, p, y;
     gyroIMURead(&r, &p, &y);
 
-    // IDLE: redraw when lock status changes (yellow → green). Only when
-    // the START page is showing — skip the redraw when the operator
-    // swiped into the Settings view (#565) so we don't clobber it every
-    // time the lock flips.
+    // IDLE: redraw when WiFi-ready status changes (yellow → green).
+    // Only when the START page is showing — skip the redraw when the
+    // operator swiped into the Settings view (#565) so we don't
+    // clobber it every time the gate flips. #813 — gate is WiFi
+    // connectivity now, not the deleted CMD_GYRO_CTRL "lock" packet.
     if (s_state == UIState::IDLE && !s_idleSettings) {
-        static bool s_prevLock = false;
-        bool locked = gyroUdpHasLock();
-        if (locked != s_prevLock) {
-            s_prevLock = locked;
+        static bool s_prevReady = false;
+        bool ready = (WiFi.status() == WL_CONNECTED);
+        if (ready != s_prevReady) {
+            s_prevReady = ready;
             drawIdle();
         }
     }
