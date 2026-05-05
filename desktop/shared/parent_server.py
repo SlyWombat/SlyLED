@@ -83,7 +83,7 @@ def _apply_logging(enabled, log_path=None):
 
 #  "  "  Version  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "
 
-VERSION = "1.7.54"
+VERSION = "1.7.55"
 
 #  "  "  UDP protocol  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  "  " 
 
@@ -13746,6 +13746,30 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
         return
     if not dmx_fixtures:
         log.info("DMX playback: no baked segments but Track actions present — loop will run for tracking")
+
+    # #807 — track-driven movers don't contribute baked segments (they're
+    # computed live by `_evaluate_track_actions`), so they were absent
+    # from `dmx_fixtures` and the post-loop park step at natural-end
+    # never reached them. Build the union of every mover this timeline
+    # could drive — baked-segment fixtures + every fixture targeted by
+    # an active Track action — so the natural-end park snaps every
+    # involved head to home.
+    track_driven_fids = set()
+    for ta in (a for a in _actions if a.get("type") == 18):
+        listed = ta.get("trackFixtureIds") or []
+        if listed:
+            for tfid in listed:
+                track_driven_fids.add(int(tfid))
+        else:
+            # Auto-discover Track action — every Home + Secondary mover
+            # is eligible (matches `_evaluate_track_actions`'s candidate
+            # set when `trackFixtureIds` is empty).
+            for f in _fixtures:
+                if (f.get("fixtureType") == "dmx"
+                        and f.get("homePanDmx16") is not None
+                        and f.get("homeTiltDmx16") is not None):
+                    track_driven_fids.add(int(f["id"]))
+
     log.info("DMX playback: %d fixture(s), duration=%ds, loop=%s", len(dmx_fixtures), duration, loop)
     # #622 — do NOT auto-start the DMX engine. Previously a timeline
     # targeting only LED children would still bring Art-Net up; now we
@@ -13900,6 +13924,7 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
     # #763 — leave claimed fixtures alone; the operator owns their
     # output.
     final_snap = _claim_arbiter.snapshot()
+    parked_fids = set()
     for fx in dmx_fixtures:
         if _claim_arbiter.is_muted(fx["fid"], final_snap):
             continue
@@ -13914,6 +13939,7 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
                 and rec.get("homeSecondary")):
             try:
                 _park_fixture_at_home(fx["fid"])
+                parked_fids.add(int(fx["fid"]))
                 continue
             except Exception:
                 log.debug("timeline-end park fid=%s failed", fx["fid"],
@@ -13932,6 +13958,43 @@ def _dmx_playback_loop(tid, go_epoch, duration, loop):
                     zero_ch[ch_type] = 0
             if zero_ch:
                 uni_buf.set_fixture_channels(fx["addr"], zero_ch, profile)
+
+    # #807 — park Track-action-driven movers the baked-segment loop
+    # above missed. These fixtures never appear in `dmx_fixtures`
+    # because `_evaluate_track_actions` produces their pan/tilt at
+    # runtime instead of from a baked segment, so without this loop
+    # they sat at their last commanded pose forever after natural-end.
+    for tfid in track_driven_fids:
+        if tfid in parked_fids:
+            continue
+        if _claim_arbiter.is_muted(tfid, final_snap):
+            continue
+        rec = next((r for r in _fixtures if r.get("id") == tfid), None)
+        if (rec is not None
+                and rec.get("homePanDmx16") is not None
+                and rec.get("homeTiltDmx16") is not None
+                and rec.get("homeSecondary")):
+            try:
+                _park_fixture_at_home(tfid)
+                parked_fids.add(tfid)
+            except Exception:
+                log.debug("timeline-end park (track) fid=%s failed", tfid,
+                          exc_info=True)
+
+    # #807 — clear running flags on natural end. Pre-fix the
+    # /api/timelines/<tid>/status endpoint kept reporting `running:
+    # true` indefinitely past durationS because nothing flipped
+    # `runnerRunning` back to False on the loop's natural exit (manual
+    # `/stop` cleared it; natural end did not). With this in place the
+    # SPA "Show running" indicator clears within the next status poll.
+    with _lock:
+        if (_settings.get("runnerRunning")
+                and _settings.get("activeTimeline") == tid):
+            _settings["runnerRunning"] = False
+            _settings["activeTimeline"] = -1
+            _settings["runnerStartEpoch"] = 0
+            _save("settings", _settings)
+            log.info("DMX playback: timeline %d natural-end — runner status cleared", tid)
 
 @app.post("/api/timelines/<int:tid>/start")
 def api_timeline_start(tid):
@@ -15839,8 +15902,18 @@ def api_fw_fetch():
     from firmware_manager import download_firmware, _registry_fetch_assets
     body = request.get_json(silent=True) or {}
     fid = body.get("id") or ""
-    reg = load_registry(_FW_DIR)
-    entry = next((e for e in reg.get("firmware", []) if e.get("id") == fid), None)
+    # Prefer the live GitHub-main registry so an old installer fetching
+    # firmware after an OTA-check pulls the pinned-version + sha256 the
+    # current main-branch points at, not the snapshot the installer
+    # bundled. Falls back to the local bundle on network failure.
+    remote = _fetch_remote_registry()
+    if remote and isinstance(remote.get("firmware"), list):
+        entry = next((e for e in remote["firmware"] if e.get("id") == fid), None)
+    else:
+        entry = None
+    if entry is None:
+        reg = load_registry(_FW_DIR)
+        entry = next((e for e in reg.get("firmware", []) if e.get("id") == fid), None)
     if not entry:
         return jsonify(ok=False, err="unknown firmware id"), 404
     if not entry.get("releaseAsset"):
@@ -16371,6 +16444,68 @@ def api_reset():
 _github_release_cache = {"data": None, "ts": 0}
 _GITHUB_RELEASE_TTL = 3600  # 1 hour cache
 
+# Cached remote registry pulled from raw.githubusercontent. The orchestrator
+# bundle (PyInstaller) ships a snapshot of `firmware/registry.json` at
+# build time, so an installer that's a few releases behind would compare
+# its puck against an outdated pinned-version. Pulling the live registry
+# from GitHub at OTA-check time means an old orchestrator can still
+# discover newer firmware bumps without reinstalling — just hits "Check
+# for updates" and gets the current main-branch versions.
+_remote_registry_cache = {"data": None, "ts": 0, "ok": False}
+_REMOTE_REGISTRY_TTL = 300   # 5 min cache; OTA check is operator-driven, low traffic
+_REMOTE_REGISTRY_URL = (
+    "https://raw.githubusercontent.com/SlyWombat/SlyLED/main/firmware/registry.json"
+)
+
+
+def _fetch_remote_registry():
+    """Pull `firmware/registry.json` from main branch on GitHub. Returns
+    the parsed dict on success, or None on network/parse failure (caller
+    falls back to the locally-bundled registry). TTL-cached so a single
+    "Check for updates" click doesn't issue multiple HTTP requests.
+    """
+    import urllib.request as _ur
+    now = time.time()
+    cache = _remote_registry_cache
+    if cache["data"] is not None and now - cache["ts"] < _REMOTE_REGISTRY_TTL:
+        return cache["data"]
+    try:
+        req = _ur.Request(
+            _REMOTE_REGISTRY_URL,
+            headers={"User-Agent": "SlyLED-Parent",
+                     "Accept": "application/json"})
+        resp = _ur.urlopen(req, timeout=10)
+        raw = resp.read().decode("utf-8-sig")  # strip BOM if present
+        data = json.loads(raw)
+        if not isinstance(data, dict) or "firmware" not in data:
+            log.warning("Remote registry: unexpected shape — falling back to local")
+            cache["ok"] = False
+            return None
+        cache["data"] = data
+        cache["ts"] = now
+        cache["ok"] = True
+        log.info("Remote registry: fetched %d firmware entries from main",
+                 len(data.get("firmware", [])))
+        return data
+    except Exception as e:
+        log.debug("Remote registry fetch failed: %s — using local bundle", e)
+        cache["ok"] = False
+        # Return the stale cache if we have one, so a transient network
+        # blip doesn't immediately drop the operator back to a stale
+        # bundled registry mid-session.
+        return cache["data"]
+
+
+def _load_registry_for_ota():
+    """Return the firmware list to use for OTA-version comparison: the
+    GitHub-main copy when available, else the locally-bundled snapshot.
+    """
+    remote = _fetch_remote_registry()
+    if remote and isinstance(remote.get("firmware"), list):
+        return remote.get("firmware", [])
+    return load_registry(_FW_DIR).get("firmware", [])
+
+
 def _fetch_github_release():
     """Fetch latest release info from GitHub API. Returns dict or None."""
     import urllib.request as _ur
@@ -16407,12 +16542,15 @@ def api_firmware_latest():
     rel = _fetch_github_release()
     if not rel:
         return jsonify(ok=False, err="Could not fetch release info from GitHub"), 502
-    # Include registry firmware version + whether release has firmware binaries
-    registry = load_registry(_FW_DIR).get("firmware", [])
+    # Include registry firmware version + whether release has firmware binaries.
+    # Use the live GitHub registry so an installer that's a few releases
+    # behind sees the actual current firmware versions.
+    registry = _load_registry_for_ota()
     reg_versions = {e.get("board"): e.get("version", "0.0") for e in registry}
     has_fw = any(a.get("name", "").endswith(".bin") for a in rel.get("assets", []))
     return jsonify(**rel, registryVersion=max(reg_versions.values(), default="0.0"),
-                   hasFirmware=has_fw)
+                   hasFirmware=has_fw,
+                   registrySource=("github-main" if _remote_registry_cache.get("ok") else "local-bundle"))
 
 @app.get("/api/firmware/check")
 def api_firmware_check():
@@ -16424,7 +16562,10 @@ def api_firmware_check():
     rel = _fetch_github_release()
     if not rel:
         return jsonify(ok=False, err="Could not fetch release info"), 502
-    registry = load_registry(_FW_DIR).get("firmware", [])
+    # Pull the live GitHub-main registry so an old installer can still
+    # discover current firmware versions without reinstalling. Falls
+    # back to the locally-bundled registry on network failure.
+    registry = _load_registry_for_ota()
     # Index registry entries by their `id` (e.g. "gyro-esp32s3", "child-led-esp32").
     reg_by_id = {e.get("id"): e for e in registry}
 
