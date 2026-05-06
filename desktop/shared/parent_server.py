@@ -16315,6 +16315,47 @@ def api_fw_query_port():
                    wifiHash=info.get("wifiHash"),
                    wifiMatch=(info.get("wifiHash") == parent_hash) if info.get("wifiHash") else None)
 
+def _resolve_registry():
+    """#832 — single source of truth for "which `firmware/registry.json`
+    do I read?". Returns the parsed dict using a fixed precedence:
+
+      1. APPDATA override (`_FW_CACHE_DIR/registry.json`) — what
+         `build_release.ps1` writes after a local firmware bump, so a
+         freshly-built version is visible without committing to git.
+      2. GitHub `main` branch (`_fetch_remote_registry`) — covers the
+         "installed exe is N releases behind" case from #807.
+      3. PyInstaller-bundled `_FW_DIR/registry.json` — install-time
+         fallback, also handled by `firmware_manager.load_registry`.
+
+    All four firmware endpoints (`api_fw_library`, `api_fw_fetch`,
+    `api_fw_refresh_all`, `api_fw_flash`) MUST go through this helper.
+    Pre-fix the same precedence block was copy-pasted into three of
+    them and forgotten in `api_fw_flash`, so USB flash silently used
+    GitHub-main's stale sha256 even when the APPDATA override pointed
+    at a freshly-built v1.2.7 binary. Centralising the precedence
+    eliminates that class of omission entirely (#832 pass-3).
+    """
+    override = _FW_CACHE_DIR / "registry.json"
+    if override.exists():
+        try:
+            data = json.loads(override.read_text(encoding="utf-8-sig"))
+            if isinstance(data.get("firmware"), list):
+                return data
+        except Exception:
+            pass
+    remote = _fetch_remote_registry()
+    if remote and isinstance(remote.get("firmware"), list):
+        return remote
+    return load_registry(_FW_DIR, _FW_CACHE_DIR)
+
+
+def _resolve_registry_entry(fw_id):
+    """Convenience wrapper — return the single `firmware[]` entry whose
+    `id` matches `fw_id`, or None. Same precedence as `_resolve_registry`."""
+    reg = _resolve_registry()
+    return next((e for e in reg.get("firmware", []) if e.get("id") == fw_id), None)
+
+
 @app.get("/api/firmware/registry")
 def api_fw_registry():
     """Return the registry, with `diagnostic: true` entries filtered
@@ -16322,7 +16363,7 @@ def api_fw_registry():
     surface in operator-facing OTA UI. Diagnostic builds stay in the
     on-disk registry.json for the build pipeline; this endpoint just
     hides them from the SPA + Android."""
-    reg = load_registry(_FW_DIR, _FW_CACHE_DIR)
+    reg = _resolve_registry()
     public = [e for e in reg.get("firmware", []) if not e.get("diagnostic")]
     return jsonify({**reg, "firmware": public})
 
@@ -16346,30 +16387,7 @@ def api_fw_library():
     keeps building them; only the public surface is filtered.
     """
     from firmware_manager import _verify_sha256
-    # Registry source precedence (#832 / #807):
-    #   1. APPDATA override (`_FW_CACHE_DIR/registry.json`) — what
-    #      `build_release.ps1` writes after a local firmware bump, so the
-    #      Library reflects locally-built versions ahead of GitHub.
-    #   2. GitHub main branch — covers the "installed exe is two releases
-    #      behind" case where the bundle has stale pins; #807 added this.
-    #   3. PyInstaller-bundled `_FW_DIR/registry.json` — install-time
-    #      fallback when there's no internet and no local override.
-    # Pre-#832-bugfix the GitHub fetch ran first and shadowed the APPDATA
-    # override, so `Reload list` quietly displayed the main-branch view
-    # while the operator's freshly-built v1.2.7 sat ignored next door.
-    override = _FW_CACHE_DIR / "registry.json"
-    reg = None
-    if override.exists():
-        try:
-            reg = json.loads(override.read_text(encoding="utf-8-sig"))
-        except Exception:
-            reg = None
-    if reg is None:
-        remote = _fetch_remote_registry()
-        if remote and isinstance(remote.get("firmware"), list):
-            reg = remote
-        else:
-            reg = load_registry(_FW_DIR, _FW_CACHE_DIR)
+    reg = _resolve_registry()  # #832 pass-3 — single helper for all four endpoints
     entries = []
     for e in reg.get("firmware", []):
         if e.get("diagnostic"):
@@ -16424,26 +16442,7 @@ def api_fw_fetch():
     from firmware_manager import download_firmware, _registry_fetch_assets
     body = request.get_json(silent=True) or {}
     fid = body.get("id") or ""
-    # Registry source precedence (#832 / #807): see api_fw_library above.
-    # Local APPDATA override wins so a freshly-built local firmware can
-    # be flashed via the Library Download button without first pushing
-    # to GitHub.
-    entry = None
-    override = _FW_CACHE_DIR / "registry.json"
-    if override.exists():
-        try:
-            override_reg = json.loads(override.read_text(encoding="utf-8-sig"))
-            entry = next((e for e in override_reg.get("firmware", [])
-                          if e.get("id") == fid), None)
-        except Exception:
-            entry = None
-    if entry is None:
-        remote = _fetch_remote_registry()
-        if remote and isinstance(remote.get("firmware"), list):
-            entry = next((e for e in remote["firmware"] if e.get("id") == fid), None)
-    if entry is None:
-        reg = load_registry(_FW_DIR, _FW_CACHE_DIR)
-        entry = next((e for e in reg.get("firmware", []) if e.get("id") == fid), None)
+    entry = _resolve_registry_entry(fid)  # #832 pass-3
     if not entry:
         return jsonify(ok=False, err="unknown firmware id"), 404
     if not entry.get("releaseAsset"):
@@ -16480,19 +16479,7 @@ def api_fw_refresh_all():
     assets = _registry_fetch_assets()
     if assets is None:
         return jsonify(ok=False, err="could not reach GitHub releases"), 502
-    # Mirror api_fw_library's source precedence so a freshly-bumped
-    # local registry drives downloads. Without this, refresh-all would
-    # see only the install-bundled registry and report "already local"
-    # for the version the operator just rebuilt past.
-    reg = None
-    override = _FW_CACHE_DIR / "registry.json"
-    if override.exists():
-        try:
-            reg = json.loads(override.read_text(encoding="utf-8-sig"))
-        except Exception:
-            reg = None
-    if reg is None:
-        reg = load_registry(_FW_DIR, _FW_CACHE_DIR)
+    reg = _resolve_registry()  # #832 pass-3
     results = []
     for e in reg.get("firmware", []):
         fname = e.get("file") or ""
@@ -16656,22 +16643,12 @@ def api_fw_flash():
     verify_ip = (body.get("verifyIp") or "").strip()
     if not port or not fw_id:
         return jsonify(ok=False, err="port and firmwareId required"), 400
-    # Prefer the live GitHub-main registry — the bundled `registry.json`
-    # baked into the installer is built BEFORE the SHA refresh step in
-    # build_release.ps1, so its sha256 lags one release behind the
-    # firmware bins it ships. That stale sha makes both the bundled bin
-    # AND the freshly-downloaded release asset fail verification ("binary
-    # not found locally and release asset … could not be downloaded").
-    # Pulling the live registry gives us the correct sha + version + tag
-    # and matches what `/api/firmware/library` and `/api/firmware/fetch`
-    # already do.
-    fw = None
-    remote = _fetch_remote_registry()
-    if remote and isinstance(remote.get("firmware"), list):
-        fw = next((f for f in remote["firmware"] if f.get("id") == fw_id), None)
-    if fw is None:
-        reg = load_registry(_FW_DIR, _FW_CACHE_DIR)
-        fw = next((f for f in reg.get("firmware", []) if f.get("id") == fw_id), None)
+    # #832 pass-3 — single helper so USB Flash sees the same registry
+    # snapshot the Library does. Pre-fix this route ran a separate
+    # GitHub-first lookup, so a freshly-built local v1.2.7 was visible
+    # in the Library (post-pass-2) but Flash silently used main's stale
+    # v1.2.6 sha and failed the post-download verification.
+    fw = _resolve_registry_entry(fw_id)
     if not fw:
         return jsonify(ok=False, err="firmware not found in registry"), 404
     # #568 — if the binary is missing locally, auto-download it from the

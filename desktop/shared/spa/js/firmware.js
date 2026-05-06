@@ -27,8 +27,8 @@ function checkOtaUpdates(){
       api('POST','/api/firmware/download',{board:'esp32'}).catch(function(){return null;}),
       api('POST','/api/firmware/download',{board:'d1mini'}).catch(function(){return null;})
     ]).then(function(){
-      // Refresh USB section — registry was updated by download
-      _fetchGithubFirmware();
+      // Refresh USB section — registry/library was updated by download
+      _fetchFwLibrary();
       loadFirmwarePorts();
       el.innerHTML='<p style="color:#888">Refreshing fixture status...</p>';
       return api('POST','/api/children/refresh-all').then(function(){return pollResults('/api/children/refresh-all/results');}).catch(function(){return null;});
@@ -209,7 +209,7 @@ function otaUpdateAll(){
 function loadFirmware(){
   // Full firmware tab load — OTA + USB + WiFi + Camera Setup + Library
   checkOtaUpdates();
-  _fetchGithubFirmware();
+  _fetchFwLibrary();  // #833 — populate USB dropdown from /api/firmware/library
   // Load WiFi creds
   ra('GET','/api/wifi',null,function(d){
     if(d){
@@ -353,47 +353,61 @@ function loadFirmwarePorts(){
 }
 
 var _fwRegistry=[];
-var _fwGithubRelease=null;
+// #833 — drive USB flash dropdown from /api/firmware/library, which carries
+// the registry's semantic version + a sha-verified `local` flag + the
+// `releaseAsset` filename per entry. The previous `_fwGithubRelease` path
+// fetched a single GitHub /releases/latest and tried to map one asset name
+// onto every board (esp32s3 → 'esp32s3-firmware-merged.bin' which doesn't
+// exist; the gyro asset is 'esp32s3-gyro-firmware.bin'). With per-firmware
+// release tags now in place (gyro-vX.Y.Z, esp32-vA.B.C …) one "latest"
+// fetch is meaningless across multiple boards. Library has all the data
+// already and is correctly per-board.
+var _fwLibrary=[];
 function updateFwImages(){
   var board=document.getElementById('fw-board').value;
   var dfuNote=document.getElementById('fw-dfu-note');
   if(dfuNote)dfuNote.style.display=board==='giga'?'block':'none';
   var sel=document.getElementById('fw-image');sel.innerHTML='';
-  // Add local firmware from registry
-  _fwRegistry.forEach(function(f){
-    if(f.board===board){
-      var o=document.createElement('option');o.value=f.id;o.text=f.name+' v'+f.version+' (local)';sel.add(o);
+  // Library is authoritative; fall back to registry only while the
+  // library fetch is still in flight (first paint before it lands).
+  var entries=_fwLibrary.length?_fwLibrary:_fwRegistry;
+  entries.forEach(function(f){
+    if(f.board!==board)return;
+    if(f.local){
+      // Cached + sha-verified — flash immediately.
+      var o=document.createElement('option');
+      o.value=f.id;
+      o.text=f.name+' v'+f.version+' (local)';
+      sel.add(o);
+    } else if(f.hasReleaseAsset){
+      // No cached binary, but a release asset exists — server-side
+      // api_fw_flash will auto-download via resolve_binary_path on
+      // submit. Pre-#833 the SPA POSTed /api/firmware/download FIRST
+      // (with a stale single-release assumption), then flashed; the
+      // server already does that download as part of flash, so we
+      // just submit the firmwareId and let the server handle it.
+      var o=document.createElement('option');
+      o.value=f.id;
+      o.text=f.name+' v'+f.version+' — download required';
+      sel.add(o);
     }
+    // entries with no local binary AND no release asset are skipped
+    // (e.g. parent-giga onHold) — there is nothing to flash.
   });
-  // Add latest from GitHub if available and newer
-  if(_fwGithubRelease){
-    var assetMap={'esp32':'esp32-firmware-merged.bin','d1mini':'d1mini-firmware.bin','esp32s3':'esp32s3-firmware-merged.bin'};
-    var assetName=assetMap[board];
-    if(assetName){
-      var found=false;
-      _fwGithubRelease.assets.forEach(function(a){if(a.name===assetName)found=true;});
-      if(found){
-        var o=document.createElement('option');
-        o.value='github:'+board;
-        o.text='Latest v'+_fwGithubRelease.version+' (download from cloud)';
-        sel.add(o);
-        // Select GitHub option if it's newer than local
-        var localVer='0.0';
-        _fwRegistry.forEach(function(f){if(f.board===board)localVer=f.version;});
-        if(_cmpVer(_fwGithubRelease.version,localVer)>0)sel.value='github:'+board;
-      }
-    }
-  }
   if(!sel.options.length){
     var o=document.createElement('option');o.value='';o.text='No firmware available for '+board;sel.add(o);
   }
 }
-// Fetch GitHub release info on firmware tab load
-function _fetchGithubFirmware(){
-  api('GET','/api/firmware/latest').then(function(d){
-    _fwGithubRelease=d;
+// #833 — fetch /api/firmware/library on firmware tab load. Replaces
+// _fetchGithubFirmware(). Library carries per-entry local + version
+// already resolved by the orchestrator (which honours the APPDATA
+// override + GitHub fallback per #832 pass-3), so we never have to
+// guess which release tag covers which board on the SPA side.
+function _fetchFwLibrary(){
+  ra('GET','/api/firmware/library',null,function(r){
+    _fwLibrary=(r&&r.firmware)||[];
     updateFwImages();
-  }).catch(function(){});
+  });
 }
 
 function saveWifi(btn){
@@ -426,28 +440,12 @@ function doFlash(btn){
   if(!ssid){toastWarn('WiFi credentials required. Enter SSID + password above and click Save WiFi before flashing.',{timeout:10000});return;}
   _btnSaving(btn);
   document.getElementById('fw-progress').style.display='block';
-  // If GitHub firmware selected, download first then flash
-  if(fwId.indexOf('github:')===0){
-    document.getElementById('fw-prog-msg').textContent='Downloading latest from cloud...';
-    document.getElementById('fw-prog-fill').style.width='10%';
-    api('POST','/api/firmware/download',{board:board}).then(function(r){
-      document.getElementById('fw-prog-msg').textContent='Downloaded v'+r.version+' — flashing...';
-      document.getElementById('fw-prog-fill').style.width='20%';
-      // Find the local registry ID for this board
-      var localId='';
-      _fwRegistry.forEach(function(f){if(f.board===board)localId=f.id;});
-      if(!localId){_btnSaved(btn,false);document.getElementById('fw-prog-msg').textContent='No local firmware ID found';return;}
-      // Reload registry then flash
-      ra('GET','/api/firmware/registry',null,function(reg){
-        _fwRegistry=reg&&reg.firmware?reg.firmware:_fwRegistry;
-        _doFlashLocal(btn,port,board,localId);
-      });
-    }).catch(function(e){
-      _btnSaved(btn,false);
-      document.getElementById('fw-prog-msg').textContent='Download failed: '+e.message;
-    });
-    return;
-  }
+  // #833 — single flash path. Server-side api_fw_flash already
+  // auto-downloads via resolve_binary_path(auto_download=True) when
+  // the binary isn't cached locally, so we don't need a separate
+  // SPA-side cloud-download step. The previous `github:` value path
+  // was tied to a stale single-release assumption that broke once
+  // per-firmware release tags landed.
   _doFlashLocal(btn,port,board,fwId);
 }
 function _doFlashLocal(btn,port,board,fwId){
