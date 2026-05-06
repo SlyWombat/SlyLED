@@ -48,7 +48,9 @@ uint8_t gyroUdpTargetFps();  // configured target fps
 // round-trip.  Does not change the stored parent IP.
 void gyroUdpSetStreaming(bool enabled, uint8_t fps = 0);
 
-// Send one final CMD_GYRO_ORIENT with stop flag → server releases claim + blackout.
+// Send a discrete CMD_GYRO_STOP with a fresh nonce. Stamps the pending-stop
+// retry slot so gyroUdpUpdate() retransmits up to GYRO_RETRY_MAX times if
+// no CMD_GYRO_STOP_ACK arrives within GYRO_RETRY_INTERVAL_MS.
 void gyroUdpSendStop();
 
 // Send CMD_GYRO_COLOR (0x63) to parent — colour preset or flash pulse.
@@ -83,6 +85,48 @@ bool     gyroServerClaimActive();   // server-reported claim-active flag
 // first time it's polled after a deny packet arrives, then resets so the
 // UI doesn't loop on it. UI uses this to revert ACTIVE → IDLE.
 bool gyroUdpClaimDeniedConsume();
+
+// #825 — rock-solid press-Start/Stop handshake.
+//
+// Retry budget for outbound START/STOP. 5 × 150 ms = 750 ms total — long
+// enough to cover one network blip yet short enough that the operator
+// gives up before they think the device is wedged.
+constexpr uint16_t GYRO_RETRY_INTERVAL_MS = 150;
+constexpr uint8_t  GYRO_RETRY_MAX         = 5;
+
+// Press-Start variant that ships an explicit nonce. The puck advances UI
+// only when CMD_GYRO_CLAIM_ACK arrives carrying this same nonce; stale
+// ACKs from a prior START packet replay are silently dropped. Returns
+// the nonce that was actually sent (= argument unless the slot was busy).
+uint16_t gyroUdpSendStartWithNonce(uint16_t nonce);
+
+// One-shot read of the "the server ACKed our latest START" flag. Returns
+// true the first time it's polled after a matching CLAIM_ACK arrives;
+// also exposes the mover-id the server bound the claim to via *outMover
+// (optional). Pairs with gyroUdpClaimDeniedConsume().
+bool gyroUdpStartAckedConsume(uint16_t* outMover = nullptr);
+
+// True while we have an outstanding START that hasn't been ACKed or
+// timed out yet. UI uses this to keep a "connecting" indicator on screen.
+bool gyroUdpStartPending();
+
+// Forces the pending-start retry slot back to "no pending" without
+// sending anything. UI calls this after a timeout/denied so a future
+// START doesn't see a stale slot.
+void gyroUdpClearStartPending();
+
+// One-shot read of "STOP got an ACK".
+bool gyroUdpStopAckedConsume();
+
+// True while a STOP retry is still in flight.
+bool gyroUdpStopPending();
+
+void gyroUdpClearStopPending();
+
+// UI tells GyroUdp what state to advertise in the next CMD_GYRO_HEARTBEAT_REP.
+// Values mirror Protocol.h's GYRO_UI_* constants. The UDP layer caches the
+// last value and stamps it into outgoing HB_REPs at 2 s cadence.
+void gyroUdpSetUiState(uint8_t uiState, uint16_t claimNonce);
 
 #endif  // BOARD_GYRO
 #endif  // GYROUDP_H

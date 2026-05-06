@@ -33,6 +33,13 @@ data class AutoBrightnessPrefs(
     val ceiling: Float,
     val attackMs: Float,
     val releaseMs: Float,
+    // #820 — semantic audio source. See com.slywombat.slyled.audio.AudioSourceKind.
+    // Persisted as enum name string. Old `audioSource` int pref (now
+    // unused) is left in DataStore for one release in case a downgrade
+    // installation needs to read it; new code only writes / reads the
+    // string key.
+    val audioSourceKind: com.slywombat.slyled.audio.AudioSourceKind =
+        com.slywombat.slyled.audio.AudioSourceKind.DEFAULT,
 )
 
 @Singleton
@@ -54,6 +61,8 @@ class ServerPreferences @Inject constructor(
     private val AB_CEILING_KEY = floatPreferencesKey("auto_brightness_ceiling")
     private val AB_ATTACK_KEY = floatPreferencesKey("auto_brightness_attack_ms")
     private val AB_RELEASE_KEY = floatPreferencesKey("auto_brightness_release_ms")
+    // #820 — semantic audio source kind, persisted as enum name string.
+    private val AB_AUDIO_SOURCE_KIND_KEY = stringPreferencesKey("auto_brightness_audio_source_kind")
 
     suspend fun save(host: String, port: Int) {
         context.dataStore.edit { prefs ->
@@ -105,6 +114,7 @@ class ServerPreferences @Inject constructor(
             p[AB_CEILING_KEY] = prefs.ceiling
             p[AB_ATTACK_KEY] = prefs.attackMs
             p[AB_RELEASE_KEY] = prefs.releaseMs
+            p[AB_AUDIO_SOURCE_KIND_KEY] = prefs.audioSourceKind.name
         }
     }
 
@@ -117,6 +127,8 @@ class ServerPreferences @Inject constructor(
             ceiling = p[AB_CEILING_KEY] ?: 1.0f,
             attackMs = p[AB_ATTACK_KEY] ?: 8f,
             releaseMs = p[AB_RELEASE_KEY] ?: 220f,
+            audioSourceKind = com.slywombat.slyled.audio.AudioSourceKind
+                .fromName(p[AB_AUDIO_SOURCE_KIND_KEY]),
         )
     }
 }

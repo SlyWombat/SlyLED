@@ -5,6 +5,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import kotlin.math.pow
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
@@ -75,6 +77,13 @@ fun LiveStageScreen(viewModel: LiveStageViewModel = hiltViewModel()) {
     val autoEnabled by viewModel.autoBrightnessEnabled.collectAsState()
     val autoState by viewModel.autoBrightnessState.collectAsState()
     val autoEnvelope by viewModel.autoBrightnessEnvelope.collectAsState()
+    // #820 — operator-meaningful signals on the Stage tab (not just in
+    // the modal). master is the actual brightness sent to the lights;
+    // beatPulse drives the inline beat dot; bpm carries the rolling
+    // tempo so it persists between beats.
+    val autoMaster by viewModel.autoBrightnessMaster.collectAsState()
+    val autoBeatPulse by viewModel.autoBrightnessBeatPulse.collectAsState()
+    val autoBpm by viewModel.autoBrightnessBpm.collectAsState()
     var showAutoModal by remember { mutableStateOf(false) }
 
     val micPermLauncher = rememberLauncherForActivityResult(
@@ -134,10 +143,18 @@ fun LiveStageScreen(viewModel: LiveStageViewModel = hiltViewModel()) {
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // #804 — Auto Brightness modal button (replaces master slider).
+            // #820 — drive the inline meter from `master` (post-floor/
+            // ceiling), NOT raw envelope, so when the operator sets a
+            // higher floor the bar baselines there and visibly swings
+            // up on each beat. The pre-#820 readout showed envelope*100
+            // which is the post-LPF RMS — typically 0.005, rendered
+            // "0%" even with audio playing.
             AutoBrightnessButton(
                 enabled = autoEnabled,
                 state = autoState,
-                envelope = autoEnvelope,
+                master = autoMaster,
+                beatPulse = autoBeatPulse,
+                bpm = autoBpm,
                 onTap = {
                     if (!autoEnabled && !viewModel.autoBrightnessHasPermission()) {
                         micPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -153,13 +170,45 @@ fun LiveStageScreen(viewModel: LiveStageViewModel = hiltViewModel()) {
                 val modalSens by viewModel.autoBrightnessSensitivityFlow.collectAsState()
                 val modalFl by viewModel.autoBrightnessFloorFlow.collectAsState()
                 val modalCe by viewModel.autoBrightnessCeilingFlow.collectAsState()
+                val modalRawPeak by viewModel.autoBrightnessRawPeak.collectAsState()
+                val modalKind by viewModel.autoBrightnessAudioSourceKindFlow.collectAsState()
+                // #820 — Playback Capture consent launcher. Fires when the
+                // operator selects PLAYBACK_CAPTURE so the system screen-
+                // recording prompt appears. On grant we hand the
+                // MediaProjection to the VM, which restarts capture.
+                val requestPlaybackConsent =
+                    com.slywombat.slyled.audio.rememberPlaybackCaptureLauncher { mp ->
+                        viewModel.setAutoBrightnessMediaProjection(mp)
+                    }
+                // #820 — preview lifecycle: start capture in preview mode
+                // while the modal is open (and Auto Brightness is off) so
+                // the operator can audition each Audio Source via the raw
+                // meter without enabling brightness control. No-op while
+                // Auto Brightness is already live (capture is already on).
+                DisposableEffect(showAutoModal) {
+                    if (showAutoModal && !autoEnabled
+                        && viewModel.autoBrightnessHasPermission()) {
+                        viewModel.startAutoBrightnessPreview()
+                    }
+                    onDispose { viewModel.stopAutoBrightnessPreview() }
+                }
+                val modalBeatPulse by viewModel.autoBrightnessBeatPulse.collectAsState()
+                val modalBpm by viewModel.autoBrightnessBpm.collectAsState()
+                val modalBeatCount by viewModel.autoBrightnessBeatCount.collectAsState()
+                val modalMaster by viewModel.autoBrightnessMaster.collectAsState()
                 AutoBrightnessModal(
                     enabled = autoEnabled,
                     state = autoState,
                     envelope = autoEnvelope,
+                    rawPeak = modalRawPeak,
+                    master = modalMaster,
+                    beatPulse = modalBeatPulse,
+                    bpm = modalBpm,
+                    beatCount = modalBeatCount,
                     sensitivity = modalSens,
                     floor = modalFl,
                     ceiling = modalCe,
+                    audioSourceKind = modalKind,
                     onToggleEnabled = { want ->
                         if (want && !viewModel.autoBrightnessHasPermission()) {
                             micPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -167,10 +216,19 @@ fun LiveStageScreen(viewModel: LiveStageViewModel = hiltViewModel()) {
                             viewModel.setAutoBrightnessEnabled(want)
                         }
                     },
-                    onConfigure = { s, fl, ce ->
+                    onConfigure = { s, fl, ce, kind ->
                         viewModel.configureAutoBrightness(
                             sensitivity = s, floor = fl, ceiling = ce,
+                            audioSourceKind = kind,
                         )
+                        // #820 — selecting PLAYBACK_CAPTURE fires the
+                        // system screen-recording consent dialog
+                        // immediately. On grant the VM gets a
+                        // MediaProjection and the capture pipeline
+                        // restarts.
+                        if (kind == com.slywombat.slyled.audio.AudioSourceKind.PLAYBACK_CAPTURE) {
+                            requestPlaybackConsent()
+                        }
                     },
                     onDismiss = { showAutoModal = false },
                 )
@@ -914,13 +972,20 @@ private fun FixtureDetail(label: String, value: String) {
     }
 }
 
-// #804 — Auto Brightness modal button (Stage tab). Compact card showing
-// current state + a thin envelope progress fill behind the label.
+// #804 — Auto Brightness modal button (Stage tab). #820 reworked: now
+// shows the actual brightness output bar (post-floor/ceiling, matches
+// the bar in the modal) plus a small pulsing beat dot and BPM readout.
+// Tapping the card opens the full modal for tuning.
+private val AutoBrightnessAmber = Color(0xFFFB923C)
+private val AutoBrightnessBeatPink = Color(0xFFFB7185)
+
 @Composable
 private fun AutoBrightnessButton(
     enabled: Boolean,
     state: MicAutoBrightness.Mode,
-    envelope: Float,
+    master: Float,
+    beatPulse: Float,
+    bpm: Float,
     onTap: () -> Unit,
 ) {
     val (label, accent) = autoBrightnessLabelAndColor(enabled, state)
@@ -933,30 +998,11 @@ private fun AutoBrightnessButton(
         ),
         shape = RoundedCornerShape(12.dp)
     ) {
-        Box(modifier = Modifier.fillMaxWidth()) {
-            // Envelope fill — thin bar behind the label.
-            if (enabled) {
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .background(accent.copy(alpha = 0.0f))
-                ) {
-                    Canvas(modifier = Modifier.matchParentSize()) {
-                        val w = size.width * envelope.coerceIn(0f, 1f)
-                        drawRect(
-                            color = accent.copy(alpha = 0.18f),
-                            topLeft = Offset(0f, 0f),
-                            size = Size(w, size.height),
-                        )
-                    }
-                }
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     Icons.Default.GraphicEq,
                     contentDescription = null,
@@ -978,12 +1024,47 @@ private fun AutoBrightnessButton(
                     )
                 }
                 if (enabled) {
+                    // Pulsing beat dot — same logic as the modal's
+                    // BeatIndicator, scaled smaller for the inline tile.
+                    Canvas(modifier = Modifier.size(18.dp)) {
+                        val r = 3f + 12f * beatPulse.coerceIn(0f, 1f)
+                        drawCircle(
+                            color = Color(0xFF334155),
+                            radius = size.minDimension / 2f,
+                            style = Stroke(width = 1f),
+                        )
+                        drawCircle(
+                            color = AutoBrightnessBeatPink,
+                            radius = r.coerceAtMost(size.minDimension / 2f),
+                            alpha = 0.4f + 0.6f * beatPulse.coerceIn(0f, 1f),
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
                     Text(
-                        "${(envelope * 100).toInt()}%",
+                        if (bpm > 0f) "${bpm.toInt()} BPM" else "— BPM",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "${(master * 255f).toInt()}",
                         style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                 }
+            }
+            // Brightness output bar — matches the modal's "Brightness
+            // output (sent to lights)" bar. Linear scale because the
+            // bar IS the brightness 1:1 with what's POSTed to
+            // /api/brightness. Hidden when disabled (no data to show).
+            if (enabled) {
+                LinearProgressIndicator(
+                    progress = { master.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().height(8.dp),
+                    color = AutoBrightnessAmber,
+                    trackColor = MaterialTheme.colorScheme.outlineVariant,
+                )
             }
         }
     }
@@ -1013,11 +1094,18 @@ private fun AutoBrightnessModal(
     enabled: Boolean,
     state: MicAutoBrightness.Mode,
     envelope: Float,
+    rawPeak: Float,
+    master: Float,
+    beatPulse: Float,
+    bpm: Float,
+    beatCount: Int,
     sensitivity: Float,
     floor: Float,
     ceiling: Float,
+    audioSourceKind: com.slywombat.slyled.audio.AudioSourceKind,
     onToggleEnabled: (Boolean) -> Unit,
-    onConfigure: (sensitivity: Float?, floor: Float?, ceiling: Float?) -> Unit,
+    onConfigure: (sensitivity: Float?, floor: Float?, ceiling: Float?,
+                   audioSourceKind: com.slywombat.slyled.audio.AudioSourceKind?) -> Unit,
     onDismiss: () -> Unit,
 ) {
     // #804 — drive the slider position from the canonical prop directly
@@ -1039,38 +1127,274 @@ private fun AutoBrightnessModal(
                     val (label, accent) = autoBrightnessLabelAndColor(enabled, state)
                     Text(label, style = MaterialTheme.typography.labelMedium, color = accent)
                 }
-                // Live envelope meter
+                // #820 — raw mic peak (pre-follower) so the operator can
+                // tell at a glance whether the source is reading audio.
+                // Linear scale was unreadable: typical music in a room
+                // peaks at 0.05–0.15 / 1.0, so the bar barely moved and
+                // the operator only saw the leading colour pip change.
+                // sqrt() is the perceptual mapping used in audio meters
+                // — 0.05 → 22 % bar fill, 0.25 → 50 %, 1.0 → 100 %.
                 Column {
-                    Text(
-                        "Envelope",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            "Raw audio input (peak)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "%.4f".format(rawPeak),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (rawPeak > 0.0005f) GreenOnline else RedError,
+                        )
+                    }
+                    // Cube-root scaling: typical room ambient with music
+                    // peaks at 0.005–0.05 (post-AGC); cube root maps that
+                    // to 17 %–37 % bar fill — visibly moving without
+                    // saturating on louder content.
                     LinearProgressIndicator(
-                        progress = { envelope.coerceIn(0f, 1f) },
+                        progress = { rawPeak.coerceIn(0f, 1f).toDouble().pow(1.0 / 3.0).toFloat() },
+                        modifier = Modifier.fillMaxWidth().height(8.dp),
+                        color = if (rawPeak > 0.0005f) GreenOnline else RedError,
+                        trackColor = MaterialTheme.colorScheme.outlineVariant,
+                    )
+                }
+                // Live envelope meter (post-follower). Cube-root scaled
+                // so the post-LPF RMS values (typically 0.005–0.05 even
+                // for moderately loud music — the band-limited bass-only
+                // signal is much smaller than peak) fill a visible
+                // portion of the bar instead of disappearing into a
+                // sub-1 % sliver.
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            "Envelope (after sensitivity / floor / ceiling)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "%.4f".format(envelope),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    LinearProgressIndicator(
+                        progress = { envelope.coerceIn(0f, 1f).toDouble().pow(1.0 / 3.0).toFloat() },
                         modifier = Modifier.fillMaxWidth().height(8.dp),
                         color = CyanSecondary,
                         trackColor = MaterialTheme.colorScheme.outlineVariant,
                     )
                 }
+                // #820 — Brightness output. The operator-meaningful
+                // signal: floor + (ceiling-floor) * max(envelope,
+                // beatPulse), normalised 0..1. With floor=0.4, the bar
+                // baselines at 40 % and swings up to 100 % on each beat
+                // — the actual rhythm the lights produce. Linear scale
+                // here (NOT cube root) because the bar IS the brightness
+                // — it should match what the lights are doing 1:1.
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            "Brightness output (sent to lights)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "%d / 255".format((master * 255f).toInt()),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    LinearProgressIndicator(
+                        progress = { master.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth().height(12.dp),
+                        color = androidx.compose.ui.graphics.Color(0xFFFB923C), // amber
+                        trackColor = MaterialTheme.colorScheme.outlineVariant,
+                    )
+                }
+                // Beat indicator — dot scales from 4 dp → 28 dp with
+                // the beatPulse decay; BPM text persists between beats
+                // so the operator sees the tempo carry forward even
+                // during quiet passages. Beats counter doubles as a
+                // sanity check that the detector is firing.
+                BeatIndicator(
+                    beatPulse = beatPulse,
+                    bpm = bpm,
+                    beatCount = beatCount,
+                )
                 LabelledSlider(
                     label = "Sensitivity",
                     value = sens, range = 0.5f..4f,
-                    onChange = { onConfigure(it, null, null) },
+                    onChange = { onConfigure(it, null, null, null) },
                 )
                 LabelledSlider(
                     label = "Floor",
                     value = fl, range = 0f..1f,
-                    onChange = { onConfigure(null, it.coerceAtMost(ce), null) },
+                    onChange = { onConfigure(null, it.coerceAtMost(ce), null, null) },
                 )
                 LabelledSlider(
                     label = "Ceiling",
                     value = ce, range = 0f..1f,
-                    onChange = { onConfigure(null, null, it.coerceAtLeast(fl)) },
+                    onChange = { onConfigure(null, null, it.coerceAtLeast(fl), null) },
+                )
+                AudioSourcePicker(
+                    selected = audioSourceKind,
+                    state = state,
+                    onSelect = { onConfigure(null, null, null, it) },
                 )
             }
         }
     )
+}
+
+// #820 — Audio Sources picker. Replaces the prior six-AudioSource-constant
+// dropdown ("Unprocessed", "Voice Recognition", …) with the four semantic
+// sources operators actually think in:
+//   • Microphone        — built-in mic (Unprocessed → Mic fallback)
+//   • Playback Capture  — loopback of audio playing on this device
+//   • Remote Submix     — privileged on most consumer Android (often denied)
+//   • USB Audio         — USB-attached input device
+// State hints under each option warn when the source is unavailable on
+// this device (no USB plugged in, Remote Submix denied, MediaProjection
+// consent still required for Playback Capture).
+@Composable
+private fun AudioSourcePicker(
+    selected: com.slywombat.slyled.audio.AudioSourceKind,
+    state: MicAutoBrightness.Mode,
+    onSelect: (com.slywombat.slyled.audio.AudioSourceKind) -> Unit,
+) {
+    val options = listOf(
+        com.slywombat.slyled.audio.AudioSourceKind.MICROPHONE to "Microphone",
+        com.slywombat.slyled.audio.AudioSourceKind.PLAYBACK_CAPTURE to
+            "Playback Capture (loopback)",
+        com.slywombat.slyled.audio.AudioSourceKind.REMOTE_SUBMIX to "Remote Submix",
+        com.slywombat.slyled.audio.AudioSourceKind.USB_AUDIO to "USB Audio",
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            "Audio Sources",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            "If the raw bar above stays empty during music, try a different source.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        options.forEach { (kind, label) ->
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(kind) }
+                        .padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = selected == kind, onClick = { onSelect(kind) })
+                    Spacer(Modifier.width(8.dp))
+                    Text(label, style = MaterialTheme.typography.bodyMedium)
+                }
+                // Per-source diagnostic when this option is selected and
+                // the capture pipeline has surfaced a known limitation.
+                if (selected == kind) {
+                    // (hint, isError). Informational hints (not errors)
+                    // render in the muted on-surface variant; failure
+                    // hints render in the error colour so the operator
+                    // notices.
+                    val (hint, isError) = when {
+                        kind == com.slywombat.slyled.audio.AudioSourceKind.PLAYBACK_CAPTURE
+                            && state == MicAutoBrightness.Mode.NeedsPlaybackConsent ->
+                                "Consent declined or pending. Tap Playback Capture again to retry." to true
+                        kind == com.slywombat.slyled.audio.AudioSourceKind.PLAYBACK_CAPTURE ->
+                                ("Captures audio from apps playing through the device speakers " +
+                                "(Spotify, YouTube, etc.). Android shares the screen-recording " +
+                                "consent dialog for this — SlyLED only reads the audio stream, " +
+                                "not screen content.") to false
+                        kind == com.slywombat.slyled.audio.AudioSourceKind.REMOTE_SUBMIX
+                            && state == MicAutoBrightness.Mode.RemoteSubmixDenied ->
+                                "Remote Submix isn't available on this device — the AudioRecord ctor was denied by the OS." to true
+                        kind == com.slywombat.slyled.audio.AudioSourceKind.USB_AUDIO
+                            && state == MicAutoBrightness.Mode.NoUsbDevice ->
+                                "No USB input device detected. Plug in a USB mic or audio interface." to true
+                        else -> null to false
+                    }
+                    if (hint != null) {
+                        Text(
+                            hint,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isError) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 32.dp, top = 2.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// #820 — visual beat indicator. The dot snaps to full size + colour on
+// each detected onset and decays to a faint ring; the BPM number
+// persists between beats (driven by the rolling-median tracker) so the
+// operator sees the tempo carry forward through quiet passages and
+// silences. Beats counter is a sanity check ("am I getting any
+// detections at all?") for live diagnostics.
+@Composable
+private fun BeatIndicator(
+    beatPulse: Float,
+    bpm: Float,
+    beatCount: Int,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // Pulsing dot — Canvas so we can scale + alpha smoothly with
+        // the StateFlow updates without a separate Animatable.
+        Canvas(modifier = Modifier.size(28.dp)) {
+            val r = 4f + 24f * beatPulse.coerceIn(0f, 1f)
+            // Ring at full size for visual reference; filled circle for
+            // the live pulse so even a small beatPulse value remains
+            // visible against the modal background.
+            drawCircle(
+                color = androidx.compose.ui.graphics.Color(0xFF334155),
+                radius = size.minDimension / 2f,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1f),
+            )
+            drawCircle(
+                color = androidx.compose.ui.graphics.Color(0xFFFB7185),
+                radius = r.coerceAtMost(size.minDimension / 2f),
+                alpha = 0.4f + 0.6f * beatPulse.coerceIn(0f, 1f),
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                "Beat",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                if (bpm > 0f) "${bpm.toInt()} BPM" else "— BPM",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Text(
+            "$beatCount beats",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 @Composable

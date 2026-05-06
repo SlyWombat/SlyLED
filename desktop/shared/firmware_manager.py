@@ -215,8 +215,24 @@ def push_camera_node(ip, registry_entry, cache_dir, registry_dir,
 
 # ── Registry ──────────────────────────────────────────────────────────────────
 
-def load_registry(firmware_dir):
-    """Load firmware/registry.json."""
+def load_registry(firmware_dir, cache_dir=None):
+    """Load firmware/registry.json.
+
+    #832 — when `cache_dir` is supplied, an APPDATA-side `registry.json`
+    takes precedence over the bundle. Pre-fix the orchestrator only
+    read the PyInstaller-extracted copy, so locally-compiled firmware
+    that landed in `_FW_CACHE_DIR` was advertised by no-one and the
+    Firmware tab never offered the new version for OTA. The cache
+    override + binary cache together are the dev-loop path; the
+    bundled registry is the install-time fallback.
+    """
+    if cache_dir:
+        override = Path(cache_dir) / "registry.json"
+        if override.exists():
+            try:
+                return json.loads(override.read_text(encoding="utf-8-sig"))
+            except Exception:
+                pass
     p = Path(firmware_dir) / "registry.json"
     if p.exists():
         try:

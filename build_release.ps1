@@ -4,8 +4,11 @@
 #        powershell -ExecutionPolicy Bypass -File build_release.ps1 -SkipFirmware -SkipAndroid
 #        powershell -ExecutionPolicy Bypass -File build_release.ps1 -SetAppVersion "1.2.0"
 #
-# Version tracks (all independent):
-#   App (desktop + Android):  parent_server.py VERSION → installer.iss, build.gradle.kts
+# Version tracks (all independent — see #824):
+#   Orchestrator (desktop):   parent_server.py VERSION → installer.iss
+#   Android APK:              android/app/build.gradle.kts versionName/versionCode
+#                             (own track since #824 — was previously synced
+#                              to orchestrator, hiding half-shipped releases)
 #   ESP32 firmware:           registry.json "child-led-esp32"
 #   D1 Mini firmware:         registry.json "child-led-d1mini"
 #   Giga DMX bridge:          registry.json "dmx-bridge-esp32"
@@ -199,6 +202,62 @@ function Set-AndroidStoredHash([string]$hash, [string]$ver) {
     $obj | ConvertTo-Json | Set-Content $androidCachePath -Encoding UTF8
 }
 
+# ── Helper: hash orchestrator (desktop) source for the version-bump gate ─
+# Excludes the VERSION line in parent_server.py so a version-only bump
+# doesn't invalidate its own gate. Without this gate, the orchestrator
+# patch number drifted upward on every build_release.ps1 run regardless
+# of whether anything actually changed (logged as "release: vX" git tags
+# with empty diffs); see operator complaint 2026-05-05.
+function Get-OrchestratorSourceHash {
+    $files = @()
+    $files += Get-ChildItem -Path "$root\desktop" -Include *.py,*.html,*.js,*.css -File -Recurse -ErrorAction SilentlyContinue
+    $extra = @(
+        "$root\desktop\windows\installer.iss",
+        "$root\desktop\windows\build.py",
+        "$root\desktop\windows\run.ps1"
+    )
+    foreach ($e in $extra) {
+        if (Test-Path $e) { $files += Get-Item $e }
+    }
+    $files = $files | Sort-Object FullName -Unique
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $combined = New-Object System.IO.MemoryStream
+    foreach ($f in $files) {
+        $rel = $f.FullName.Substring($root.Length).TrimStart('\','/').Replace('\','/')
+        $relBytes = [System.Text.Encoding]::UTF8.GetBytes($rel + "`n")
+        $combined.Write($relBytes, 0, $relBytes.Length)
+        if ($rel -eq 'desktop/shared/parent_server.py') {
+            # Strip VERSION = "..." so a version-only bump doesn't
+            # invalidate the cache.
+            $lines = Get-Content $f.FullName |
+                     Where-Object { $_ -notmatch '^\s*VERSION\s*=\s*"' }
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes(($lines -join "`n"))
+        } else {
+            $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
+        }
+        $combined.Write($bytes, 0, $bytes.Length)
+        $combined.WriteByte(0)
+    }
+    $combined.Position = 0
+    $hashBytes = $sha.ComputeHash($combined)
+    $combined.Dispose()
+    $sha.Dispose()
+    return ($hashBytes | ForEach-Object { $_.ToString('x2') }) -join ''
+}
+
+$orchCachePath = "$root\desktop\.build-cache.json"
+function Get-OrchStoredHash {
+    if (-not (Test-Path $orchCachePath)) { return "" }
+    try {
+        $j = Get-Content $orchCachePath -Raw | ConvertFrom-Json
+        return $j.sourceHash
+    } catch { return "" }
+}
+function Set-OrchStoredHash([string]$hash, [string]$ver) {
+    $obj = [pscustomobject]@{ sourceHash = $hash; lastBuiltVersion = $ver; lastBuiltTs = (Get-Date -Format 'o') }
+    $obj | ConvertTo-Json | Set-Content $orchCachePath -Encoding UTF8
+}
+
 # ── Helper: write version.h from a version string ─────────────────────────
 function Write-VersionH([string]$ver) {
     $parts = $ver.Split(".")
@@ -211,13 +270,25 @@ function Write-VersionH([string]$ver) {
 }
 
 # ── Step 1: Determine app version ──────────────────────────────────────────
+# Source-hash-gate the orchestrator like Android: only bump the patch
+# number when something under desktop/ actually changed. Pre-#824, this
+# script bumped every run regardless, leaking empty version tags into
+# git. The Android source-hash cache lives next to its source; mirror
+# that for desktop/.
 $serverPy = Get-Content "$root\desktop\shared\parent_server.py" -Raw
-if ($serverPy -match 'VERSION = "([^"]+)"') { $appVersion = $Matches[1] } else { $appVersion = "1.0.0" }
+if ($serverPy -match 'VERSION = "([^"]+)"') { $orchCurVer = $Matches[1] } else { $orchCurVer = "1.0.0" }
+
+$orchSrcHash = Get-OrchestratorSourceHash
+$orchStored = Get-OrchStoredHash
+$orchSourceUnchanged = ($orchStored -eq $orchSrcHash) -and (-not $SetAppVersion)
 
 if ($SetAppVersion) {
     $appVersion = $SetAppVersion
+} elseif ($orchSourceUnchanged) {
+    $appVersion = $orchCurVer
+    Write-Host "Orchestrator source unchanged - keeping v$appVersion" -ForegroundColor Gray
 } else {
-    $appVersion = Increment-Patch $appVersion
+    $appVersion = Increment-Patch $orchCurVer
 }
 
 # Validate no regression against git tags
@@ -240,14 +311,17 @@ if ($gitCmd) {
 
 Write-Host "App version: $appVersion" -ForegroundColor Green
 
-# ── Step 2: Sync app version to all app platform files ─────────────────────
-# parent_server.py
+# ── Step 2: Sync orchestrator version (Android tracks independently) ──────
+# `$appVersion` is the orchestrator (desktop) track only — parent_server.py
+# + installer.iss + the SPA. Android has its OWN version in
+# android/app/build.gradle.kts → versionName, bumped by the source-hash
+# gate in Step 5 below. The two tracks deliberately drift: a server-only
+# bug fix bumps orchestrator without touching Android, and vice-versa,
+# so the operator's mismatch banner (#824) actually surfaces something
+# real instead of always reading "matched".
 (Get-Content "$root\desktop\shared\parent_server.py" -Raw) -replace 'VERSION = "[^"]+"', "VERSION = `"$appVersion`"" | Set-Content "$root\desktop\shared\parent_server.py" -Encoding UTF8
 
-# Android build.gradle.kts
-(Get-Content "$root\android\app\build.gradle.kts" -Raw) -replace 'versionName = "[^"]+"', "versionName = `"$appVersion`"" | Set-Content "$root\android\app\build.gradle.kts" -Encoding UTF8
-
-Write-Host "App versions synced to $appVersion" -ForegroundColor Green
+Write-Host "Orchestrator version: $appVersion (Android tracks independently)" -ForegroundColor Green
 
 # ── Step 3: Compile firmware (per-board, only when source changed) ─────────
 # Source-hash gate: each board entry in registry.json carries `sourceHash`
@@ -343,51 +417,80 @@ if (-not $SkipFirmware) {
 
 # ── Step 4: Windows Desktop (PyInstaller + Inno Setup) ────────────────────
 if (-not $SkipWindows) {
-    Write-Host "`n--- Windows Desktop (App v$appVersion) ---" -ForegroundColor Yellow
-    Set-Location "$root\desktop\windows"
-    # Master script owns the app version — block build.py's auto-patch-bump
-    # so parent_server.py stays at the version we just synced (else they
-    # drift apart from android/build.gradle.kts).
-    $env:SLYLED_SKIP_VERSION_BUMP = "1"
-    python build.py
-    Remove-Item Env:SLYLED_SKIP_VERSION_BUMP -ErrorAction SilentlyContinue
-    if ($LASTEXITCODE -ne 0) { Write-Host "Windows build FAILED" -ForegroundColor Red; exit 1 }
-    $exeSize = (Get-Item "$root\desktop\windows\dist\SlyLED.exe").Length
-    Write-Host "SlyLED.exe: $([math]::Round($exeSize/1MB, 1)) MB" -ForegroundColor Green
-
-    # Build installer via Inno Setup
-    $iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
-    if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" }
-    if (Test-Path $iscc) {
-        Write-Host "Building installer..." -ForegroundColor Yellow
-        & $iscc "$root\desktop\windows\installer.iss"
-        if ($LASTEXITCODE -eq 0) {
-            $setupSize = (Get-Item "$root\desktop\windows\dist\SlyLED-Setup.exe").Length
-            Write-Host "SlyLED-Setup.exe: $([math]::Round($setupSize/1MB, 1)) MB" -ForegroundColor Green
-        } else {
-            Write-Host "Installer build FAILED (non-fatal)" -ForegroundColor Yellow
-        }
+    if ($orchSourceUnchanged -and -not $ForceFirmware) {
+        Write-Host "`n--- Windows Desktop ---" -ForegroundColor Yellow
+        Write-Host "Windows: orchestrator source unchanged - skipping (v$appVersion, cached SlyLED-Setup.exe in dist/)" -ForegroundColor Gray
     } else {
-        Write-Host "Inno Setup not found - skipping installer (exe still available)" -ForegroundColor Yellow
+        Write-Host "`n--- Windows Desktop (App v$appVersion) ---" -ForegroundColor Yellow
+        Set-Location "$root\desktop\windows"
+        # Master script owns the app version — block build.py's auto-patch-bump
+        # so parent_server.py stays at the version we just synced.
+        $env:SLYLED_SKIP_VERSION_BUMP = "1"
+        python build.py
+        Remove-Item Env:SLYLED_SKIP_VERSION_BUMP -ErrorAction SilentlyContinue
+        if ($LASTEXITCODE -ne 0) { Write-Host "Windows build FAILED" -ForegroundColor Red; exit 1 }
+        $exeSize = (Get-Item "$root\desktop\windows\dist\SlyLED.exe").Length
+        Write-Host "SlyLED.exe: $([math]::Round($exeSize/1MB, 1)) MB" -ForegroundColor Green
+
+        # Build installer via Inno Setup
+        $iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+        if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" }
+        if (Test-Path $iscc) {
+            Write-Host "Building installer..." -ForegroundColor Yellow
+            & $iscc "$root\desktop\windows\installer.iss"
+            if ($LASTEXITCODE -eq 0) {
+                $setupSize = (Get-Item "$root\desktop\windows\dist\SlyLED-Setup.exe").Length
+                Write-Host "SlyLED-Setup.exe: $([math]::Round($setupSize/1MB, 1)) MB" -ForegroundColor Green
+            } else {
+                Write-Host "Installer build FAILED (non-fatal)" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "Inno Setup not found - skipping installer (exe still available)" -ForegroundColor Yellow
+        }
+        Set-Location $root
+        # Pin the orchestrator source-hash now that the rebuild succeeded.
+        Set-OrchStoredHash $orchSrcHash $appVersion
     }
-    Set-Location $root
 }
 
 # ── Step 5: Android APK ───────────────────────────────────────────────────
 if (-not $SkipAndroid) {
-    Write-Host "`n--- Android APK (App v$appVersion) ---" -ForegroundColor Yellow
     $env:JAVA_HOME = 'C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot'
     $env:ANDROID_SDK_ROOT = 'C:\Android\Sdk'
 
-    # Source-hash gate (mirrors the firmware gates above). Skips the
-    # 5-minute Gradle / R8 / lint pipeline when nothing under android/app/src/
-    # has changed and only the version got bumped. -ForceFirmware also
-    # forces an Android rebuild for symmetry with the firmware path.
+    # Read Android's CURRENT versionName as the source of truth — mirrors
+    # how firmware boards read from registry.json. Android tracks its own
+    # patch level independently from $appVersion (orchestrator).
+    $androidGradle = Get-Content "$root\android\app\build.gradle.kts" -Raw
+    if ($androidGradle -match 'versionName\s*=\s*"([^"]+)"') {
+        $androidCurVer = $Matches[1]
+    } else {
+        $androidCurVer = "1.0.0"
+    }
+
     $androidSrcHash = Get-AndroidSourceHash
     $androidStored = Get-AndroidStoredHash
     if (-not $ForceFirmware -and $androidStored -eq $androidSrcHash) {
-        Write-Host "Android APK: source unchanged - skipping (cached APK from $((Get-Item $androidCachePath).LastWriteTime))" -ForegroundColor Gray
+        Write-Host "`n--- Android APK ---" -ForegroundColor Yellow
+        Write-Host "Android APK: source unchanged - skipping (v$androidCurVer, cached $((Get-Item $androidCachePath).LastWriteTime))" -ForegroundColor Gray
+        $androidVer = $androidCurVer
     } else {
+        # Bump the Android patch independently — same Increment-Patch logic
+        # firmware boards use. Operator can hand-edit build.gradle.kts to
+        # set a specific version (e.g. for a major bump) and this picks it
+        # up as the new baseline.
+        $androidVer = Increment-Patch $androidCurVer
+        Write-Host "`n--- Android APK v$androidVer (was v$androidCurVer) ---" -ForegroundColor Yellow
+
+        # Bump versionCode too so Play Store / sideload upgrade detection
+        # works. versionCode lives next to versionName.
+        if ($androidGradle -match 'versionCode\s*=\s*(\d+)') {
+            $newCode = [int]$Matches[1] + 1
+            $androidGradle = $androidGradle -replace 'versionCode\s*=\s*\d+', "versionCode = $newCode"
+        }
+        $androidGradle = $androidGradle -replace 'versionName = "[^"]+"', "versionName = `"$androidVer`""
+        Set-Content "$root\android\app\build.gradle.kts" -Value $androidGradle -Encoding UTF8
+
         Set-Location "$root\android"
         .\gradlew.bat assembleRelease --no-daemon
         if ($LASTEXITCODE -ne 0) { Write-Host "Android FAILED" -ForegroundColor Red; exit 1 }
@@ -396,7 +499,7 @@ if (-not $SkipAndroid) {
             $apkSize = $apkPath.Length
             Write-Host "APK: $([math]::Round($apkSize/1MB, 1)) MB at $($apkPath.FullName)" -ForegroundColor Green
         }
-        Set-AndroidStoredHash $androidSrcHash $appVersion
+        Set-AndroidStoredHash $androidSrcHash $androidVer
         Set-Location $root
     }
 }
@@ -424,6 +527,26 @@ Copy-Item "$root\desktop\windows\dist\SlyLED-Setup.exe" "$distDir\SlyLED-Setup.e
 $apk = Get-ChildItem -Path "C:\Android\build\slyled-app" -Recurse -Filter "app-release.apk" -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($apk) { Copy-Item $apk.FullName "$distDir\slyled-android.apk" -Force }
 Write-Host "dist/ updated" -ForegroundColor Green
+
+# Mirror dist/ to the OneDrive pickup folder so the operator finds the
+# finals where they always look for them. The work tree is now
+# /mnt/d/SlyLED (D:\SlyLED) per 2026-05-06 directive; OneDrive holds
+# only the operator-facing /dist mirror, no source.
+$onedriveDist = "D:\OneDrive\My Documents\ElectricRV\Development\Projects\Lighting Arduino\dist"
+if (Test-Path (Split-Path $onedriveDist -Parent)) {
+    if (-not (Test-Path $onedriveDist)) {
+        New-Item -ItemType Directory -Path $onedriveDist -Force | Out-Null
+    }
+    # Copy every artifact in $distDir to the OneDrive mirror. Force-
+    # overwrite so a stale OneDrive copy from before the migration is
+    # replaced cleanly.
+    Get-ChildItem -Path $distDir -File | ForEach-Object {
+        Copy-Item $_.FullName (Join-Path $onedriveDist $_.Name) -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "dist/ mirrored to $onedriveDist (operator pickup)" -ForegroundColor Green
+} else {
+    Write-Host "OneDrive parent path not present; skipping mirror" -ForegroundColor Yellow
+}
 
 # Step 6b: Refresh registry SHA-256 hashes (#568 security review).
 # Any binary we just rebuilt needs its `sha256` in registry.json re-pinned
@@ -459,6 +582,20 @@ if ($anyChanged) {
     Write-Host "All SHAs already match dist/ binaries" -ForegroundColor Gray
 }
 
+# Step 6c — #832: copy firmware/registry.json to %APPDATA%\SlyLED\firmware\
+# so a running orchestrator (frozen exe or python) sees freshly-bumped
+# versions without a reinstall. Pre-fix the bundled registry inside the
+# PyInstaller exe was the only source — newly-built local firmware was
+# invisible to the Firmware tab + OTA. Mirrors the binary-cache layout
+# already used by `_FW_CACHE_DIR`, so the override-path read from
+# `firmware_manager.load_registry(..., cache_dir=_FW_CACHE_DIR)` finds it.
+$appDataFw = Join-Path $env:APPDATA "SlyLED\firmware"
+if (-not (Test-Path $appDataFw)) {
+    New-Item -ItemType Directory -Path $appDataFw -Force | Out-Null
+}
+Copy-Item $regPath (Join-Path $appDataFw "registry.json") -Force
+Write-Host "registry.json copied to $appDataFw (live-OTA visibility)" -ForegroundColor Green
+
 # ── Step 7: Create git tag (app version only) ─────────────────────────────
 if ($gitCmd) {
     Write-Host "`n--- Git tag ---" -ForegroundColor Yellow
@@ -477,7 +614,10 @@ if ($gitCmd) {
 
 # ── Summary ────────────────────────────────────────────────────────────────
 Write-Host "`n=== Build Complete ===" -ForegroundColor Cyan
-Write-Host "  App:       v$appVersion (desktop + Android)" -ForegroundColor White
+Write-Host "  Orchestrator (desktop): v$appVersion" -ForegroundColor White
+if ($androidVer) {
+    Write-Host "  Android APK:            v$androidVer" -ForegroundColor White
+}
 $reg = Read-Registry
 foreach ($fw in $reg.firmware) {
     Write-Host "  $($fw.id): v$($fw.version)" -ForegroundColor Gray

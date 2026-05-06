@@ -47,7 +47,10 @@ constexpr uint8_t CMD_GYRO_HEARTBEAT = 0x65;   // parent→gyro: keep-alive (2 s
 constexpr uint8_t CMD_GYRO_START         = 0x66; // gyro→parent: explicit press-START (#772) — claim + start_stream
 constexpr uint8_t CMD_GYRO_CLAIM_DENIED  = 0x67; // parent→gyro: claim refused, revert puck to IDLE (#772)
 constexpr uint8_t CMD_GYRO_BATT          = 0x68; // gyro→parent: battery telemetry (vbat100 + pct + flags), 10 s cadence
-constexpr uint8_t CMD_GYRO_STOP          = 0x69; // gyro→parent: explicit press-STOP (#819) — release claim + park + end session. No payload.
+constexpr uint8_t CMD_GYRO_STOP          = 0x69; // gyro→parent: explicit press-STOP (#819) — release claim + park + end session. Nonce(2) since #825 (legacy header-only still accepted).
+constexpr uint8_t CMD_GYRO_CLAIM_ACK     = 0x6A; // parent→gyro: claim established (#825) — { nonce(2), moverId(2) }. Puck advances UI on matching nonce.
+constexpr uint8_t CMD_GYRO_STOP_ACK      = 0x6B; // parent→gyro: stop confirmed (#825) — { nonce(2) }. Puck stops retrying STOP on matching nonce.
+constexpr uint8_t CMD_GYRO_HEARTBEAT_REP = 0x6C; // gyro→parent: heartbeat reply (#825) — { uiState(1), claimNonce(2), seq(2) }. 2 s cadence; reconciles divergent claim state and bootstraps after orchestrator restart.
 
 // ── Action type codes ─────────────────────────────────────────────────────────
 // (uint8_t — avoids Mbed prototype-generator issues with enums)
@@ -219,5 +222,53 @@ struct __attribute__((packed)) GyroBattPayload {
   uint8_t  pct;         // 0..100, 0xFF = unknown
   uint8_t  flags;       // bit0 = charging, bits[1:7] reserved
 };  // 4 bytes
+
+// #825 — rock-solid press-START/STOP handshake.
+//
+// CMD_GYRO_START / CMD_GYRO_STOP gain a 2-byte nonce so the puck can match
+// orchestrator ACKs against the gesture that produced them and retransmit
+// the same packet on timeout without doubling-up on the engine.
+//
+// Header-only legacy variants (puck firmware ≤ v1.2.6) still parse — the
+// orchestrator treats absent nonce as 0 and replies with no ACK, matching
+// pre-#825 behaviour.
+struct __attribute__((packed)) GyroStartStopPayload {
+  uint16_t nonce;       // puck-generated, monotonic across gestures
+};  // 2 bytes
+
+// CMD_GYRO_CLAIM_ACK (parent→gyro) — confirms claim+start_stream succeeded.
+struct __attribute__((packed)) GyroClaimAckPayload {
+  uint16_t nonce;       // echoes the START nonce
+  uint16_t moverId;     // mover the claim is bound to (sanity check on the puck)
+};  // 4 bytes
+
+// CMD_GYRO_STOP_ACK (parent→gyro) — confirms claim release.
+struct __attribute__((packed)) GyroStopAckPayload {
+  uint16_t nonce;       // echoes the STOP nonce
+};  // 2 bytes
+
+// CMD_GYRO_HEARTBEAT_REP (gyro→parent) — 2 s cadence reply to the existing
+// parent→gyro CMD_GYRO_HEARTBEAT (0x65). Carries the puck's current UI
+// state and the nonce of the claim it considers "current". Server compares
+// against its own _claims dict; divergence triggers reconciliation
+// (release if puck went IDLE without sending STOP; reconstruct the claim
+// from the heartbeat payload if puck is ACTIVE but server has no record —
+// the orchestrator-restart bootstrap path).
+//
+// uiState values:
+//   0 = IDLE          (no active claim, on START screen)
+//   1 = WAITING_ACK   (sent START, waiting for CLAIM_ACK or timeout)
+//   2 = ACTIVE        (claim live, streaming orient)
+//   3 = STOPPING      (sent STOP, waiting for STOP_ACK or timeout)
+struct __attribute__((packed)) GyroHeartbeatRepPayload {
+  uint8_t  uiState;
+  uint16_t claimNonce;  // nonce of the claim the puck considers current; 0 if none
+  uint16_t seq;         // monotonic per-puck counter for log/debug
+};  // 5 bytes
+
+constexpr uint8_t GYRO_UI_IDLE        = 0;
+constexpr uint8_t GYRO_UI_WAITING_ACK = 1;
+constexpr uint8_t GYRO_UI_ACTIVE      = 2;
+constexpr uint8_t GYRO_UI_STOPPING    = 3;
 
 #endif  // PROTOCOL_H

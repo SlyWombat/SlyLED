@@ -52,6 +52,29 @@ static uint8_t  s_serverClaimActive = 0;   // mirrored from the heartbeat payloa
 // on the next tick to revert to IDLE with a brief "BUSY" indication.
 static bool     s_claimDenied = false;
 
+// #825 — rock-solid handshake bookkeeping.
+//
+// pendingStart/pendingStop slots track outbound packets that haven't
+// been ACKed yet. While set, gyroUdpUpdate() retransmits at
+// GYRO_RETRY_INTERVAL_MS cadence up to GYRO_RETRY_MAX retries. The UI
+// reads the *Acked* flags to decide when to advance / revert state.
+static uint16_t s_pendingStartNonce  = 0;
+static uint32_t s_pendingStartLastMs = 0;
+static uint8_t  s_pendingStartTries  = 0;
+static bool     s_startAcked         = false;
+static uint16_t s_startAckedMover    = 0;
+
+static uint16_t s_pendingStopNonce  = 0;
+static uint32_t s_pendingStopLastMs = 0;
+static uint8_t  s_pendingStopTries  = 0;
+static bool     s_stopAcked         = false;
+
+// HB_REP advertised state (set by UI via gyroUdpSetUiState; sent every 2 s).
+static uint8_t  s_hbUiState     = 0;     // GYRO_UI_IDLE
+static uint16_t s_hbClaimNonce  = 0;
+static uint16_t s_hbSeq         = 0;
+static uint32_t s_hbRepLastMs   = 0;
+
 uint32_t gyroGetLastHeartbeatMs() { return s_lastHeartbeatMs; }
 bool     gyroServerClaimActive()  { return s_serverClaimActive != 0; }
 
@@ -132,6 +155,59 @@ static void sendBatteryTelemetry(IPAddress dest) {
     cmdUDP.endPacket();
 }
 
+// #825 — low-level helpers that build + ship a single START or STOP frame
+// with the supplied nonce. Used both by the public send-with-nonce entry
+// points and by the internal retransmit path in gyroUdpUpdate().
+static void txStartFrame(uint16_t nonce) {
+    UdpHeader hdr;
+    hdr.magic   = UDP_MAGIC;
+    hdr.version = UDP_VERSION;
+    hdr.cmd     = CMD_GYRO_START;
+    hdr.epoch   = (uint32_t)currentEpoch();
+    GyroStartStopPayload p;
+    p.nonce = nonce;
+    uint8_t buf[sizeof(hdr) + sizeof(p)];
+    memcpy(buf,               &hdr, sizeof(hdr));
+    memcpy(buf + sizeof(hdr), &p,   sizeof(p));
+    cmdUDP.beginPacket(s_parentIP, UDP_PORT);
+    cmdUDP.write(buf, sizeof(buf));
+    cmdUDP.endPacket();
+}
+
+static void txStopFrame(uint16_t nonce) {
+    UdpHeader hdr;
+    hdr.magic   = UDP_MAGIC;
+    hdr.version = UDP_VERSION;
+    hdr.cmd     = CMD_GYRO_STOP;
+    hdr.epoch   = (uint32_t)currentEpoch();
+    GyroStartStopPayload p;
+    p.nonce = nonce;
+    uint8_t buf[sizeof(hdr) + sizeof(p)];
+    memcpy(buf,               &hdr, sizeof(hdr));
+    memcpy(buf + sizeof(hdr), &p,   sizeof(p));
+    cmdUDP.beginPacket(s_parentIP, UDP_PORT);
+    cmdUDP.write(buf, sizeof(buf));
+    cmdUDP.endPacket();
+}
+
+static void txHeartbeatRep() {
+    UdpHeader hdr;
+    hdr.magic   = UDP_MAGIC;
+    hdr.version = UDP_VERSION;
+    hdr.cmd     = CMD_GYRO_HEARTBEAT_REP;
+    hdr.epoch   = (uint32_t)currentEpoch();
+    GyroHeartbeatRepPayload p;
+    p.uiState    = s_hbUiState;
+    p.claimNonce = s_hbClaimNonce;
+    p.seq        = ++s_hbSeq;
+    uint8_t buf[sizeof(hdr) + sizeof(p)];
+    memcpy(buf,               &hdr, sizeof(hdr));
+    memcpy(buf + sizeof(hdr), &p,   sizeof(p));
+    cmdUDP.beginPacket(s_parentIP, UDP_PORT);
+    cmdUDP.write(buf, sizeof(buf));
+    cmdUDP.endPacket();
+}
+
 void gyroUdpUpdate() {
     // #813 follow-up — battery telemetry runs every 10 s regardless of
     // whether the orient stream is active. Cheap (~16 ADC reads + one
@@ -141,6 +217,41 @@ void gyroUdpUpdate() {
     if (now - s_lastBattSendMs >= 10000u) {
         s_lastBattSendMs = now;
         sendBatteryTelemetry(s_parentIP);
+    }
+
+    // #825 — START retransmission. Each retry reuses the same nonce so
+    // the orchestrator dedupes; we just keep prodding the wire until an
+    // ACK arrives or we burn the retry budget.
+    if (s_pendingStartNonce != 0
+        && (now - s_pendingStartLastMs) >= GYRO_RETRY_INTERVAL_MS) {
+        if (s_pendingStartTries >= GYRO_RETRY_MAX) {
+            // Budget exhausted. Caller's UI tick will notice via the
+            // pending-still-set + stale lastMs and fall back to a
+            // "no response" indication; we don't escalate from here.
+        } else {
+            s_pendingStartTries++;
+            s_pendingStartLastMs = now;
+            txStartFrame(s_pendingStartNonce);
+        }
+    }
+
+    // #825 — STOP retransmission. Same shape as START.
+    if (s_pendingStopNonce != 0
+        && (now - s_pendingStopLastMs) >= GYRO_RETRY_INTERVAL_MS) {
+        if (s_pendingStopTries < GYRO_RETRY_MAX) {
+            s_pendingStopTries++;
+            s_pendingStopLastMs = now;
+            txStopFrame(s_pendingStopNonce);
+        }
+    }
+
+    // #825 — heartbeat reply at 2 s cadence. Sent regardless of streaming
+    // state so the orchestrator can detect divergence (puck rolled back,
+    // orchestrator restarted) without needing the orient stream. Default
+    // advertised state is IDLE; UI updates it via gyroUdpSetUiState().
+    if (now - s_hbRepLastMs >= 2000u) {
+        s_hbRepLastMs = now;
+        txHeartbeatRep();
     }
 
     if (!s_streaming) return;
@@ -238,9 +349,50 @@ void gyroUdpHandleCmd(uint8_t cmd, IPAddress sender,
         // #772 — server refused our claim. UI polls
         // gyroUdpClaimDeniedConsume() and reverts to IDLE with a brief
         // BUSY indication, mirroring Android's "Mover claimed by another
-        // device" toast.
+        // device" toast. Also clear the pending-start retry slot so the
+        // wire goes quiet (#825).
         s_claimDenied = true;
+        s_pendingStartNonce = 0;
+        s_pendingStartTries = 0;
         if (Serial) Serial.println("[GyroUDP] CLAIM_DENIED — mover busy");
+
+    } else if (cmd == CMD_GYRO_CLAIM_ACK
+               && plen >= (int)sizeof(GyroClaimAckPayload)) {
+        // #825 — server confirmed claim+start_stream succeeded. Match the
+        // echoed nonce against our outstanding START so a replayed stale
+        // ACK from a prior gesture can't accidentally advance the UI.
+        GyroClaimAckPayload ack;
+        memcpy(&ack, payload, sizeof(ack));
+        if (s_pendingStartNonce != 0 && ack.nonce == s_pendingStartNonce) {
+            s_startAcked       = true;
+            s_startAckedMover  = ack.moverId;
+            s_pendingStartNonce = 0;
+            s_pendingStartTries = 0;
+            // Capture parent IP so further unicast packets find the server
+            // even before the first parent→gyro HEARTBEAT arrives.
+            if (sender != IPAddress(255, 255, 255, 255)) {
+                s_parentIP = sender;
+            }
+            if (Serial)
+                Serial.printf("[GyroUDP] CLAIM_ACK nonce=%u mover=%u\n",
+                              ack.nonce, ack.moverId);
+        } else if (Serial) {
+            Serial.printf("[GyroUDP] CLAIM_ACK stale (got=%u pending=%u)\n",
+                          ack.nonce, s_pendingStartNonce);
+        }
+
+    } else if (cmd == CMD_GYRO_STOP_ACK
+               && plen >= (int)sizeof(GyroStopAckPayload)) {
+        // #825 — server confirmed claim release. Stop retransmitting.
+        GyroStopAckPayload ack;
+        memcpy(&ack, payload, sizeof(ack));
+        if (s_pendingStopNonce != 0 && ack.nonce == s_pendingStopNonce) {
+            s_stopAcked        = true;
+            s_pendingStopNonce = 0;
+            s_pendingStopTries = 0;
+            if (Serial)
+                Serial.printf("[GyroUDP] STOP_ACK nonce=%u\n", ack.nonce);
+        }
 
     } else if (cmd == CMD_OTA_UPDATE && plen > 5) {
         uint8_t  newMaj = payload[0];
@@ -293,23 +445,68 @@ void gyroUdpSetStreaming(bool enabled, uint8_t fps) {
 }
 
 void gyroUdpSendStop() {
-    // #819 — discrete CMD_GYRO_STOP packet (header only, no payload). Replaces
-    // the v1.2.5-and-earlier "orient with flags bit 3" overload, which the
-    // orchestrator could mis-fire on any orient packet that happened to set
-    // bit 3 — auto-releasing the live claim ~25 ms after CMD_GYRO_START.
-    // Bit 3 of GyroOrientPayload.flags is now reserved-for-future and MUST
-    // remain 0 in regular orient packets.
-    UdpHeader hdr;
-    hdr.magic   = UDP_MAGIC;
-    hdr.version = UDP_VERSION;
-    hdr.cmd     = CMD_GYRO_STOP;
-    hdr.epoch   = (uint32_t)currentEpoch();
+    // #819 — discrete CMD_GYRO_STOP packet. #825 — payload now carries a
+    // 2-byte nonce so the orchestrator can ACK and we can stop retrying
+    // once it lands. Nonce 0 is reserved for "no nonce" so the server
+    // can distinguish legacy header-only STOPs.
+    static uint16_t s_stopNonceCounter = 0;
+    if (++s_stopNonceCounter == 0) s_stopNonceCounter = 1;
+    s_pendingStopNonce  = s_stopNonceCounter;
+    s_pendingStopLastMs = (uint32_t)millis();
+    s_pendingStopTries  = 1;
+    s_stopAcked         = false;
+    txStopFrame(s_pendingStopNonce);
+    if (Serial) Serial.printf("[GyroUDP] STOP nonce=%u\n", s_pendingStopNonce);
+}
 
-    cmdUDP.beginPacket(s_parentIP, UDP_PORT);
-    cmdUDP.write((const uint8_t*)&hdr, sizeof(hdr));
-    cmdUDP.endPacket();
+uint16_t gyroUdpSendStartWithNonce(uint16_t nonce) {
+    // #825 — UI hands in a fresh nonce; we stamp the pending-start slot
+    // and ship the first frame. Subsequent retries fire from
+    // gyroUdpUpdate() at GYRO_RETRY_INTERVAL_MS cadence.
+    if (nonce == 0) nonce = 1;
+    s_pendingStartNonce  = nonce;
+    s_pendingStartLastMs = (uint32_t)millis();
+    s_pendingStartTries  = 1;
+    s_startAcked         = false;
+    s_startAckedMover    = 0;
+    s_claimDenied        = false;
+    txStartFrame(nonce);
+    if (Serial) Serial.printf("[GyroUDP] START nonce=%u\n", nonce);
+    return nonce;
+}
 
-    if (Serial) Serial.println(F("[GyroUDP] Sent STOP signal to parent"));
+bool gyroUdpStartAckedConsume(uint16_t* outMover) {
+    bool acked = s_startAcked;
+    if (acked && outMover) *outMover = s_startAckedMover;
+    s_startAcked = false;
+    return acked;
+}
+
+bool gyroUdpStartPending() { return s_pendingStartNonce != 0; }
+
+void gyroUdpClearStartPending() {
+    s_pendingStartNonce = 0;
+    s_pendingStartTries = 0;
+    s_startAcked        = false;
+}
+
+bool gyroUdpStopAckedConsume() {
+    bool acked = s_stopAcked;
+    s_stopAcked = false;
+    return acked;
+}
+
+bool gyroUdpStopPending() { return s_pendingStopNonce != 0; }
+
+void gyroUdpClearStopPending() {
+    s_pendingStopNonce = 0;
+    s_pendingStopTries = 0;
+    s_stopAcked        = false;
+}
+
+void gyroUdpSetUiState(uint8_t uiState, uint16_t claimNonce) {
+    s_hbUiState    = uiState;
+    s_hbClaimNonce = claimNonce;
 }
 
 void gyroUdpSendColor(uint8_t r, uint8_t g, uint8_t b, uint8_t flags) {
@@ -373,21 +570,13 @@ void gyroUdpSendCalibrateWith(bool calibrating, float roll, float pitch, float y
 }
 
 void gyroUdpSendStart() {
-    // #772 — explicit START packet. Header-only payload; server resolves
-    // (mover, device) from the (gyro_fixture, source IP) tuple, runs
-    // claim + start_stream, and returns CMD_GYRO_CLAIM_DENIED on refusal.
-    UdpHeader hdr;
-    hdr.magic   = UDP_MAGIC;
-    hdr.version = UDP_VERSION;
-    hdr.cmd     = CMD_GYRO_START;
-    hdr.epoch   = (uint32_t)currentEpoch();
-
-    cmdUDP.beginPacket(s_parentIP, UDP_PORT);
-    cmdUDP.write((const uint8_t*)&hdr, sizeof(hdr));
-    cmdUDP.endPacket();
-
-    if (Serial)
-        Serial.println("[GyroUDP] START sent");
+    // #772 / #825 — back-compat entry. Auto-allocates a nonce and
+    // delegates to gyroUdpSendStartWithNonce() so callers that don't
+    // need to track the nonce (e.g. tests) still get the rock-solid
+    // retransmit + ACK-matching behaviour.
+    static uint16_t s_startNonceCounter = 0;
+    if (++s_startNonceCounter == 0) s_startNonceCounter = 1;
+    gyroUdpSendStartWithNonce(s_startNonceCounter);
 }
 
 #endif  // BOARD_GYRO
